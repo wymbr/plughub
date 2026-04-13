@@ -1,0 +1,24 @@
+{
+  "name": "@plughub/skill-flow-engine",
+  "version": "1.0.0",
+  "description": "PlugHub Platform — Interpretador de Skill Flow (orquestração multi-agente)",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build":     "tsc",
+    "typecheck": "tsc --noEmit",
+    "test":      "vitest run"
+  },
+  "dependencies": {
+    "@plughub/schemas": "file:../schemas",
+    "ioredis":          "^5.3.0",
+    "jsonpath-plus":    "^9.0.0",
+    "zod":              "^3.23.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "typescript":  "^5.4.0",
+    "vitest":      "^1.5.0"
+  },
+  "homepage": "https://plughub.io"
+}

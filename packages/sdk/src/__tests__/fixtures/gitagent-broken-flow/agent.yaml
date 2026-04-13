@@ -1,0 +1,8 @@
+agent_type_id: agente_broken_v1
+framework: proprietary
+execution_model: stateless
+pools:
+  - suporte_humano
+permissions:
+  - mcp-server-crm:customer_get
+version: "1.0.0"

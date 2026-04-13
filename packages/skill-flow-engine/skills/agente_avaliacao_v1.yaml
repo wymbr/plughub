@@ -1,0 +1,196 @@
+# agente_avaliacao_v1.yaml
+# Skill Flow do Agente de Avaliação Genérico — PlugHub v24.0 seção 10.2
+#
+# Este flow é o agente nativo que substitui o serviço Python evaluation-agent.
+# É genérico: nenhum detalhe do formulário de avaliação está aqui.
+# O formulário (itens, seções, pesos, requires_context, requires_agent) fica no
+# skill de avaliação do pool (ex.: eval_retencao_humano_v1).
+#
+# session_context recebido do Routing Engine (payload evaluation.requested):
+#   evaluation_id, tenant_id, skill_id, transcript_id,
+#   agent.{agent_id, agent_session_id, agent_type, pool_id},
+#   contact.{contact_id, ...}, context_package.{...}
+#
+# Fluxo principal:
+#   1. get_transcript           → busca transcript do PostgreSQL
+#   2. resolve_context          → filtra seções, executa requires_context via proxy sidecar
+#                                 e monta agent_context_queue com todos os agentes declarados
+#   3. init_agent_loop          → inicializa a fila (primeira chamada a evaluation_agent_context_next
+#                                 sem task_result) para obter current_skill_id e has_next
+#   4. check_agent_pending      → choice: has_next?
+#   5a. gather_agent_context    → task A2A: delega ao agente especialista indicado
+#   5b. advance_agent_loop      → invoke evaluation_agent_context_next (pop + acumula resultado)
+#                                 volta para check_agent_pending até fila vazia
+#   6. evaluate                 → reason: LLM pontua cada item do formulário
+#                                 agent_context = acumulado de todos os agentes especialistas
+#   7. publish_result           → calcula scores bottom-up, publica evaluation.completed
+#
+# Diagrama:
+#
+#   get_transcript
+#       │
+#   resolve_context
+#       │
+#   init_agent_loop ◄─────────────────────────────────────────┐
+#       │                                                      │
+#   check_agent_pending ──── has_next=false ──► evaluate      │
+#       │ has_next=true                                        │
+#   gather_agent_context                                       │
+#       │                                                      │
+#   advance_agent_loop ────────────────────────────────────────┘
+#       (pop próximo, acumula resultado, volta ao check)
+#
+# Invariante do loop:
+#   - pipeline_state.agent_context_next.accumulated cresce a cada iteração
+#   - pipeline_state.agent_context_next.remaining é a fila residual passada ao próximo invoke
+#   - o step gather_agent_context sempre lê current_skill_id do state anterior
+
+entry: get_transcript
+
+steps:
+
+  # ── Step 1: busca transcript ──────────────────────────────────────────────────
+  - id:   get_transcript
+    type: invoke
+    tool:  transcript_get
+    input:
+      transcript_id: "$.session.transcript_id"
+    output_as:  transcript
+    on_success: resolve_context
+    on_failure: resolve_context   # prossegue sem transcript (LLM notará ausência)
+
+  # ── Step 2: resolve contexto externo + monta fila de agentes especialistas ───
+  # evaluation_context_resolve:
+  #   - carrega o skill do pool (skill_id)
+  #   - filtra seções ativas por applies_when (agent_type, flags, intent)
+  #   - busca dados externos via requires_context usando proxy sidecar
+  #   - monta agent_context_queue: [{skill_id, output_key}] para todas as seções
+  #     ativas que declarem requires_agent (pode ser vazio, um ou muitos)
+  - id:   resolve_context
+    type: invoke
+    tool:  evaluation_context_resolve
+    input:
+      skill_id:        "$.session.skill_id"
+      context_package: "$.session.context_package"
+      template_vars:
+        evaluation_id: "$.session.evaluation_id"
+        agent:         "$.session.agent"
+        contact:       "$.session.contact"
+        context:       "$.session.context_package"
+    output_as:  evaluation_context
+    on_success: init_agent_loop
+    on_failure: init_agent_loop   # prossegue mesmo sem contexto externo
+
+  # ── Step 3: inicializa fila (sem task_result — primeira entrada no loop) ──────
+  # Chama evaluation_agent_context_next com a fila recém-construída e sem
+  # task_result, obtendo o primeiro agente a executar (ou has_next=false
+  # se o formulário não declarou nenhum requires_agent).
+  - id:   init_agent_loop
+    type: invoke
+    tool:  evaluation_agent_context_next
+    input:
+      queue:       "$.pipeline_state.evaluation_context.agent_context_queue"
+      accumulated: {}
+    output_as:  agent_context_next
+    on_success: check_agent_pending
+    on_failure: evaluate   # sem fila → vai direto para avaliação
+
+  # ── Step 4: ramificação — ainda há agentes pendentes na fila? ─────────────────
+  - id:   check_agent_pending
+    type: choice
+    conditions:
+      - field:    "$.pipeline_state.agent_context_next.has_next"
+        operator: eq
+        value:    true
+        next:     gather_agent_context
+    default: evaluate
+
+  # ── Step 5a: delega ao agente especialista atual da fila ─────────────────────
+  # target.skill_id é resolvido em tempo de execução via JSONPath:
+  # o executor de task lê $.pipeline_state.agent_context_next.current_skill_id.
+  # execution_mode sync: aguarda conclusão do agente (até 5 min).
+  - id:   gather_agent_context
+    type: task
+    target:
+      skill_id: "$.pipeline_state.agent_context_next.current_skill_id"
+    execution_mode: sync
+    on_success: advance_agent_loop
+    on_failure: advance_agent_loop   # avança mesmo se o agente especialista falhar
+
+  # ── Step 5b: pop + acumula resultado, avança o loop ──────────────────────────
+  # evaluation_agent_context_next (segunda chamada em diante):
+  #   - mescla $.pipeline_state.gather_agent_context (resultado do task) no acumulador
+  #     usando current_output_key da iteração atual
+  #   - desempilha o próximo agente de remaining
+  #   - devolve has_next, current_skill_id, current_output_key, remaining, accumulated
+  # O step sobrescreve agent_context_next, permitindo que check_agent_pending
+  # avalie has_next novamente — criando o loop.
+  - id:   advance_agent_loop
+    type: invoke
+    tool:  evaluation_agent_context_next
+    input:
+      queue:              "$.pipeline_state.agent_context_next.remaining"
+      task_result:        "$.pipeline_state.gather_agent_context"
+      current_output_key: "$.pipeline_state.agent_context_next.current_output_key"
+      accumulated:        "$.pipeline_state.agent_context_next.accumulated"
+    output_as:  agent_context_next
+    on_success: check_agent_pending
+    on_failure: evaluate   # falha no gerenciamento de fila → avalia com o que tem
+
+  # ── Step 6: LLM avalia os itens do formulário ─────────────────────────────────
+  # O AI Gateway usa o prompt evaluation_rubric_v1, que monta a rubrica
+  # a partir das seções filtradas e instruções de cada item.
+  # agent_context contém o acumulado de TODOS os agentes especialistas executados.
+  # Retorna: { items: [{item_id, section_id, subsection_id, value, justification}],
+  #            overall_observation }
+  - id:         evaluate
+    type:       reason
+    prompt_id:  evaluation_rubric_v1
+    input:
+      transcript:       "$.pipeline_state.transcript"
+      external_context: "$.pipeline_state.evaluation_context.external_context"
+      agent_context:    "$.pipeline_state.agent_context_next.accumulated"
+      context_package:  "$.session.context_package"
+      agent_type:       "$.session.agent.agent_type"
+    output_schema:
+      items:
+        type: array
+        required: true
+      overall_observation:
+        type: string
+        required: false
+    output_as:  llm_evaluation
+    on_success: publish_result
+    on_failure: complete_error
+
+  # ── Step 7: calcula scores e publica evaluation.completed ─────────────────────
+  # evaluation_publish:
+  #   - recalcula scores ponderados bottom-up a partir dos itens LLM
+  #   - publica no tópico evaluation.results
+  - id:   publish_result
+    type: invoke
+    tool:  evaluation_publish
+    input:
+      evaluation_id:       "$.session.evaluation_id"
+      tenant_id:           "$.session.tenant_id"
+      skill_id:            "$.session.skill_id"
+      agent_id:            "$.session.agent.agent_id"
+      agent_type:          "$.session.agent.agent_type"
+      pool_id:             "$.session.agent.pool_id"
+      contact_id:          "$.session.contact.contact_id"
+      triggered_by:        "$.session.triggered_by"
+      llm_items:           "$.pipeline_state.llm_evaluation.items"
+      overall_observation: "$.pipeline_state.llm_evaluation.overall_observation"
+      context_package:     "$.session.context_package"
+    output_as:  publish_result
+    on_success: complete_ok
+    on_failure: complete_error
+
+  # ── Terminadores ──────────────────────────────────────────────────────────────
+  - id:      complete_ok
+    type:    complete
+    outcome: resolved
+
+  - id:      complete_error
+    type:    complete
+    outcome: failed

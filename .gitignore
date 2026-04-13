@@ -1,0 +1,58 @@
+# ── Node ──────────────────────────────────────────────────────────────────────
+node_modules/
+dist/
+build/
+.npm/
+*.tsbuildinfo
+
+# ── Python ────────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+env/
+*.egg-info/
+.eggs/
+dist/
+build/
+*.dist-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# ── Environment / secrets ─────────────────────────────────────────────────────
+.env
+.env.*
+!.env.example
+scripts/linux/set-env.local.sh
+
+# ── Logs ──────────────────────────────────────────────────────────────────────
+*.log
+logs/
+pm2-logs/
+.pm2/
+
+# ── OS ────────────────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ── Editors ───────────────────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# ── Prisma ────────────────────────────────────────────────────────────────────
+packages/agent-registry/prisma/migrations/**/migration_lock.toml
+
+# ── Test / coverage ───────────────────────────────────────────────────────────
+coverage/
+.nyc_output/
+test-results/
+
+# ── Docker volumes (se commitados por engano) ─────────────────────────────────
+data/
+volumes/

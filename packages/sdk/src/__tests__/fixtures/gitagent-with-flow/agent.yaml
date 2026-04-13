@@ -1,0 +1,11 @@
+agent_type_id: agente_suporte_flow_v1
+framework: proprietary
+execution_model: stateless
+pools:
+  - suporte_humano
+  - supervisor
+permissions:
+  - mcp-server-crm:customer_get
+  - mcp-server-crm:ticket_create
+version: "1.0.0"
+description: Agente de suporte com flow de atendimento

@@ -1,0 +1,25 @@
+agent_type_id:   agente_retencao_v2
+framework:       langgraph
+execution_model: stateless
+max_concurrent_sessions: 1
+
+pools:
+  - retencao_humano
+
+skills:
+  - skill_id:       skill_portabilidade_telco_v2
+    version_policy: stable
+
+permissions:
+  - mcp-server-crm:customer_get
+  - mcp-server-telco:portability_check
+
+classification:
+  type:     vertical
+  industry: telco
+
+profile:
+  ingles:       1
+  portabilidade: 3
+  retencao:     3
+  fibra:        2

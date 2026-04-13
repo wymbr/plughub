@@ -1,0 +1,166 @@
+# docker-compose.infra.yml
+# Infraestrutura local do PlugHub Platform
+# Uso: docker compose -f docker-compose.infra.yml up -d
+
+name: plughub-infra
+
+networks:
+  plughub-infra:
+    driver: bridge
+
+volumes:
+  redis-data:
+  postgres-data:
+  clickhouse-data:
+  kafka-data:
+
+services:
+
+  # ─────────────────────────────────────────────
+  # Redis 7
+  # Usado por: skill-flow-engine, routing-engine, rules-engine, ai-gateway, mcp-server
+  # ─────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: plughub-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    command: redis-server --save 60 1 --loglevel warning
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    networks:
+      - plughub-infra
+    restart: unless-stopped
+
+  # ─────────────────────────────────────────────
+  # Kafka 3.7 (KRaft — sem Zookeeper)
+  # Usado por: routing-engine, mcp-server-plughub
+  # Topics: conversations.inbound, conversations.routed, conversations.completed,
+  #         agent.lifecycle, conference.joined
+  # ─────────────────────────────────────────────
+  kafka:
+    image: apache/kafka:3.7.0
+    container_name: plughub-kafka
+    ports:
+      - "9092:9092"
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,INTERNAL://0.0.0.0:29092,CONTROLLER://0.0.0.0:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092,INTERNAL://kafka:29092
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,INTERNAL:PLAINTEXT,CONTROLLER:PLAINTEXT
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
+      KAFKA_LOG_DIRS: /var/lib/kafka/data
+    volumes:
+      - kafka-data:/var/lib/kafka/data
+    healthcheck:
+      test: ["CMD", "/opt/kafka/bin/kafka-broker-api-versions.sh", "--bootstrap-server", "localhost:9092"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+    networks:
+      - plughub-infra
+    restart: unless-stopped
+
+  # Cria os topics necessários após o Kafka estar pronto
+  kafka-init:
+    image: apache/kafka:3.7.0
+    container_name: plughub-kafka-init
+    depends_on:
+      kafka:
+        condition: service_healthy
+    networks:
+      - plughub-infra
+    entrypoint: ["/bin/bash", "-c"]
+    command:
+      - |
+        KAFKA=/opt/kafka/bin/kafka-topics.sh
+        BROKER=kafka:29092
+        for topic in conversations.inbound conversations.routed conversations.completed agent.lifecycle conference.joined; do
+          $$KAFKA --bootstrap-server $$BROKER --create --if-not-exists \
+            --topic $$topic --partitions 3 --replication-factor 1
+          echo "topic $$topic OK"
+        done
+    restart: "no"
+
+  # ─────────────────────────────────────────────
+  # PostgreSQL 16
+  # Usado por: agent-registry (Prisma)
+  # Tabelas: pools, agent_types, agent_type_pools, skills
+  # ─────────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    container_name: plughub-postgres
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_DB: plughub
+      POSTGRES_USER: plughub
+      POSTGRES_PASSWORD: plughub
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U plughub -d plughub"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks:
+      - plughub-infra
+    restart: unless-stopped
+
+  # ─────────────────────────────────────────────
+  # ClickHouse 24
+  # Usado por: rules-engine (métricas de disparo), mcp-server (rule_dry_run)
+  # ─────────────────────────────────────────────
+  clickhouse:
+    image: clickhouse/clickhouse-server:24-alpine
+    container_name: plughub-clickhouse
+    ports:
+      - "8123:8123"   # HTTP
+      - "9000:9000"   # Native
+    environment:
+      CLICKHOUSE_DB: plughub_metrics
+      CLICKHOUSE_USER: plughub
+      CLICKHOUSE_PASSWORD: plughub
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: 1
+    volumes:
+      - clickhouse-data:/var/lib/clickhouse
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--spider", "http://localhost:8123/ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks:
+      - plughub-infra
+    restart: unless-stopped
+
+  # ─────────────────────────────────────────────
+  # Kafka UI — visualização de topics e mensagens
+  # Acesso: http://localhost:8080
+  # ─────────────────────────────────────────────
+  kafka-ui:
+    image: provectuslabs/kafka-ui:latest
+    container_name: plughub-kafka-ui
+    ports:
+      - "8080:8080"
+    environment:
+      KAFKA_CLUSTERS_0_NAME: plughub-local
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:9092
+    depends_on:
+      kafka:
+        condition: service_healthy
+    networks:
+      - plughub-infra
+    restart: unless-stopped

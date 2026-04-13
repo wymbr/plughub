@@ -1,0 +1,245 @@
+"""
+kafka_listener.py
+Kafka consumer that populates the Routing Engine Redis cache.
+Spec: PlugHub v24.0 sections 3.3, 4.5
+
+Consumes two topics:
+
+1. agent.registry.events — Agent Registry events (pools, agent types)
+   Expected formats:
+     { "event": "pool.registered"|"pool.updated", "tenant_id": str, "pool": {...} }
+     { "event": "agent_type.registered", "tenant_id": str, "agent_type": {...} }
+
+   Action: updates Redis cache {tenant_id}:pool_config:{pool_id}
+
+2. agent.lifecycle — mcp-server-plughub events (agent_ready, agent_busy, etc.)
+   Expected formats:
+     { "event": "agent_ready"|"agent_busy"|"agent_paused"|"agent_logout"|"agent_heartbeat"|"agent_done",
+       "tenant_id": str, "instance_id": str, "agent_type_id": str,
+       "status": str, "current_sessions": int, "pools": [...],
+       "max_concurrent_sessions": int,
+       "conversation_id": str  (agent_busy and agent_done only) }
+
+   Action: updates {tenant_id}:instance:{instance_id} with TTL 30s
+           maintains {tenant_id}:pool:{pool_id}:instances (set of ready instance_ids)
+           maintains no-TTL meta and active conversations set (agent_ready/busy/done)
+"""
+
+from __future__ import annotations
+import asyncio
+import json
+import logging
+
+import redis.asyncio as aioredis
+
+from .models import AgentInstance, PoolConfig, RoutingExpression
+from .registry import InstanceRegistry, PoolRegistry
+from .config import get_settings
+
+logger = logging.getLogger("plughub.routing.kafka_listener")
+
+
+class RegistryEventHandler:
+    """
+    Processes Agent Registry events and populates the Redis pool config cache.
+    """
+
+    def __init__(self, pool_registry: PoolRegistry) -> None:
+        self._pools = pool_registry
+
+    async def handle(self, event: dict) -> None:
+        event_type = event.get("event", "")
+        tenant_id  = event.get("tenant_id", "")
+
+        if event_type in ("pool.registered", "pool.updated"):
+            await self._handle_pool_event(tenant_id, event.get("pool", {}))
+        else:
+            logger.debug("Registry event ignored: %s", event_type)
+
+    async def _handle_pool_event(self, tenant_id: str, pool_data: dict) -> None:
+        if not pool_data or not pool_data.get("pool_id"):
+            return
+        try:
+            expr_data = pool_data.get("routing_expression") or {}
+            config = PoolConfig(
+                pool_id        = pool_data["pool_id"],
+                tenant_id      = tenant_id,
+                channel_types  = pool_data.get("channel_types", []),
+                sla_target_ms  = pool_data.get("sla_target_ms", 480_000),
+                routing_expression = RoutingExpression(**expr_data),
+                is_human_pool  = bool(pool_data.get("supervisor_config")),
+            )
+            await self._pools.save_pool_config(config)
+            logger.info(
+                "Pool cache updated: tenant=%s pool=%s channels=%s",
+                tenant_id, config.pool_id, config.channel_types,
+            )
+        except Exception as exc:
+            logger.error("Error processing pool event: %s — %s", pool_data, exc)
+
+
+class LifecycleEventHandler:
+    """
+    Processes agent.lifecycle events and maintains instance state in Redis.
+    Key: {tenant_id}:instance:{instance_id}  TTL: 30s (spec 4.5).
+    """
+
+    def __init__(self, instance_registry: InstanceRegistry) -> None:
+        self._instances = instance_registry
+
+    async def handle(self, event: dict) -> None:
+        event_type = event.get("event", "")
+        tenant_id  = event.get("tenant_id", "")
+        instance_id= event.get("instance_id", "")
+
+        if not tenant_id or not instance_id:
+            return
+
+        if event_type == "agent_ready":
+            await self._upsert_instance(tenant_id, instance_id, event)
+            await self._instances.update_instance_meta(
+                tenant_id, instance_id,
+                pools         = event.get("pools") or [],
+                agent_type_id = event.get("agent_type_id", ""),
+            )
+        elif event_type in ("agent_busy", "agent_heartbeat"):
+            await self._upsert_instance(tenant_id, instance_id, event)
+            if event_type == "agent_busy":
+                conversation_id = event.get("conversation_id", "")
+                if conversation_id:
+                    await self._instances.add_conversation(tenant_id, instance_id, conversation_id)
+        elif event_type == "agent_done":
+            conversation_id = event.get("conversation_id", "")
+            if conversation_id:
+                await self._instances.remove_conversation(tenant_id, instance_id, conversation_id)
+        elif event_type in ("agent_paused", "agent_logout"):
+            await self._deactivate_instance(tenant_id, instance_id, event)
+        else:
+            logger.debug("Lifecycle event ignored: %s", event_type)
+
+    async def _upsert_instance(
+        self, tenant_id: str, instance_id: str, event: dict
+    ) -> None:
+        """
+        Creates or updates an instance in Redis with TTL 30s.
+        Called on agent_ready and agent_busy — spec: "TTL renewed on each agent_ready or agent_busy".
+        """
+        try:
+            status = event.get("status", "ready")
+            # Map mcp-server status to internal state
+            internal_state = _map_status_to_state(status)
+
+            instance = AgentInstance(
+                instance_id      = instance_id,
+                agent_type_id    = event.get("agent_type_id", ""),
+                tenant_id        = tenant_id,
+                pool_id          = (event.get("pools") or [""])[0],
+                pools            = event.get("pools") or [],
+                execution_model  = event.get("execution_model", "stateless"),
+                max_concurrent   = event.get("max_concurrent_sessions", 1),
+                current_sessions = event.get("current_sessions", 0),
+                state            = internal_state,
+                last_seen        = event.get("timestamp"),
+                registered_at    = event.get("timestamp", ""),
+            )
+            await self._instances.set_instance(instance)
+            logger.debug(
+                "Instance updated: tenant=%s instance=%s state=%s sessions=%d",
+                tenant_id, instance_id, internal_state, instance.current_sessions,
+            )
+        except Exception as exc:
+            logger.error(
+                "Error updating instance: tenant=%s instance=%s — %s",
+                tenant_id, instance_id, exc,
+            )
+
+    async def _deactivate_instance(
+        self, tenant_id: str, instance_id: str, event: dict
+    ) -> None:
+        """Removes instance from all pool sets (paused/logout)."""
+        try:
+            instance = await self._instances.get_instance(tenant_id, instance_id)
+            if not instance:
+                return
+            status = event.get("event", "")
+            instance.state = "paused" if status == "agent_paused" else "logged_out"
+            await self._instances.set_instance(instance)
+            logger.debug(
+                "Instance deactivated: tenant=%s instance=%s state=%s",
+                tenant_id, instance_id, instance.state,
+            )
+        except Exception as exc:
+            logger.error(
+                "Error deactivating instance: tenant=%s instance=%s — %s",
+                tenant_id, instance_id, exc,
+            )
+
+
+def _map_status_to_state(status: str) -> str:
+    """Normalises mcp-server status to internal routing-engine state."""
+    mapping = {
+        "login":   "login",
+        "ready":   "ready",
+        "busy":    "busy",
+        "paused":  "paused",
+        "logout":  "logged_out",
+        "draining":"logged_out",
+    }
+    return mapping.get(status, status)
+
+
+async def run_listeners(
+    redis_client:       aioredis.Redis,
+    instance_registry:  InstanceRegistry,
+    pool_registry:      PoolRegistry,
+    kafka_topic_lifecycle: str,
+    kafka_topic_registry:  str,
+    kafka_brokers:         str,
+    kafka_group_id:        str,
+) -> None:
+    """
+    Starts Kafka consumers for agent.lifecycle and agent.registry.events.
+    Called by main.py during Routing Engine startup.
+    """
+    from aiokafka import AIOKafkaConsumer
+
+    registry_handler  = RegistryEventHandler(pool_registry)
+    lifecycle_handler = LifecycleEventHandler(instance_registry)
+
+    consumer = AIOKafkaConsumer(
+        kafka_topic_lifecycle,
+        kafka_topic_registry,
+        bootstrap_servers = kafka_brokers,
+        group_id          = kafka_group_id + "-listener",
+        value_deserializer= lambda v: json.loads(v.decode("utf-8")),
+        auto_offset_reset = "latest",
+    )
+    await consumer.start()
+    logger.info(
+        "Kafka listeners started: topics=%s, %s",
+        kafka_topic_lifecycle, kafka_topic_registry,
+    )
+
+    try:
+        async for msg in consumer:
+            payload = msg.value
+            topic   = msg.topic
+            asyncio.create_task(_dispatch(payload, topic, registry_handler, lifecycle_handler))
+    finally:
+        await consumer.stop()
+
+
+async def _dispatch(
+    payload:           dict,
+    topic:             str,
+    registry_handler:  RegistryEventHandler,
+    lifecycle_handler: LifecycleEventHandler,
+) -> None:
+    try:
+        settings = get_settings()
+        if topic == settings.kafka_topic_registry:
+            await registry_handler.handle(payload)
+        elif topic == settings.kafka_topic_lifecycle:
+            await lifecycle_handler.handle(payload)
+    except Exception as exc:
+        logger.error("Error in Kafka dispatch: topic=%s — %s", topic, exc)

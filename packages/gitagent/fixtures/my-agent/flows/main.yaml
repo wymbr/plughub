@@ -1,0 +1,45 @@
+entry: classificar_intencao
+steps:
+  - id:        classificar_intencao
+    type:      reason
+    prompt_id: prompt_classificacao_v1
+    input:
+      mensagem: "$.session.last_message"
+    output_schema:
+      intencao:
+        type: string
+        enum: [portabilidade, retencao, suporte]
+      confianca:
+        type: number
+        minimum: 0
+        maximum: 1
+    output_as:          classificacao
+    max_format_retries: 1
+    on_success: rotear
+    on_failure: escalar
+
+  - id:   rotear
+    type:  choice
+    conditions:
+      - field:    "$.pipeline_state.classificacao.intencao"
+        operator: eq
+        value:    portabilidade
+        next:     delegar_portabilidade
+    default: concluir
+
+  - id:     delegar_portabilidade
+    type:   task
+    target:
+      skill_id: skill_portabilidade_telco_v2
+    on_success: concluir
+    on_failure: escalar
+
+  - id:      concluir
+    type:    complete
+    outcome: resolved
+
+  - id:     escalar
+    type:   escalate
+    target:
+      pool: retencao_humano
+    context: pipeline_state

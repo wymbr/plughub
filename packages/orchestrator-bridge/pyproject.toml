@@ -1,0 +1,31 @@
+[project]
+name            = "plughub-orchestrator-bridge"
+version         = "1.0.0"
+description     = "PlugHub Platform — Orchestrator Bridge (liga Routing Engine a agentes AI e humanos)"
+requires-python = ">=3.11"
+dependencies    = [
+    "aiokafka>=0.11.0",
+    "redis[hiredis]>=5.2.0",
+    "aiohttp>=3.10.0",
+    "pyyaml>=6.0.0",
+]
+
+[project.scripts]
+plughub-bridge = "plughub_orchestrator_bridge.main:main"
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.24.0",
+]
+
+[build-system]
+requires      = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths    = ["src/plughub_orchestrator_bridge/tests"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/plughub_orchestrator_bridge"]

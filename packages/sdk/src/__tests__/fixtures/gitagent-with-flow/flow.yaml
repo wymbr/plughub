@@ -1,0 +1,15 @@
+entry: check_customer
+steps:
+  - id: check_customer
+    type: task
+    agent_pool: suporte_humano
+    on_success: done
+    on_failure: escalate_step
+  - id: escalate_step
+    type: escalate
+    target:
+      pool: supervisor
+    error_reason: falha no atendimento
+  - id: done
+    type: complete
+    outcome: resolved

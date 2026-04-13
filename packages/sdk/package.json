@@ -1,0 +1,25 @@
+{
+  "name": "@plughub/sdk",
+  "version": "1.0.0",
+  "description": "PlugHub Platform — SDK de Integração (Bring-Your-Agent)",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "bin": {
+    "plughub-sdk": "dist/cli/index.js"
+  },
+  "scripts": {
+    "build":     "tsc",
+    "typecheck": "tsc --noEmit",
+    "test":      "vitest run"
+  },
+  "dependencies": {
+    "@plughub/schemas": "workspace:*",
+    "zod":              "^3.23.0",
+    "commander":        "^12.0.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.4.0",
+    "vitest":     "^1.5.0"
+  },
+  "homepage": "https://plughub.io"
+}

@@ -1,0 +1,36 @@
+{
+  "name": "@plughub/agent-registry",
+  "version": "1.0.0",
+  "description": "PlugHub Platform — Agent Registry (pools, agent types, skills)",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "ts-node src/index.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:integration": "vitest run --config vitest.integration.config.ts",
+    "db:push": "prisma db push",
+    "db:migrate": "prisma migrate dev",
+    "db:generate": "prisma generate"
+  },
+  "dependencies": {
+    "@plughub/gitagent": "file:../gitagent",
+    "@plughub/schemas": "file:../schemas",
+    "@prisma/client": "^5.22.0",
+    "express": "^4.21.0",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@testcontainers/postgresql": "^10.13.0",
+    "@types/express": "^4.17.0",
+    "@types/supertest": "^6.0.0",
+    "prisma": "^5.22.0",
+    "supertest": "^7.0.0",
+    "testcontainers": "^10.13.0",
+    "ts-node": "^10.9.0",
+    "typescript": "^5.4.0",
+    "vitest": "^1.5.0"
+  },
+  "homepage": "https://plughub.io"
+}

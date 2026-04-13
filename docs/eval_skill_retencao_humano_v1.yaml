@@ -1,0 +1,422 @@
+# PlugHub — Evaluation Skill
+# Piloto: Central de Atendimento — Pool retencao_humano
+#
+# MODELO DE SCORING
+# ─────────────────
+# Cada item recebe um valor numérico de 0 a 10 pelo Evaluation Agent (LLM).
+# Itens do tipo boolean: false = 0, true = 10.
+#
+# Score de qualquer nível (subsection, section) é sempre média ponderada:
+#
+#   score = Σ(valor_i × peso_i) / Σ(peso_i)
+#
+# Pesos são inteiros relativos — só o ratio importa, não a soma.
+# Adicionar ou remover itens não exige rebalancear os demais.
+# Itens excluídos por applies_to ou applies_when saem automaticamente
+# do numerador e do denominador — sem ajuste manual.
+#
+# SCORES PRODUZIDOS POR AVALIAÇÃO
+# ────────────────────────────────
+# base_score     — seção mandatory (sempre calculado, sempre comparável)
+# context_score  — uma entrada por seção contextual que disparou
+#                  acumulado por agente ao longo do tempo, comparável
+#                  apenas dentro da mesma seção e do mesmo pool
+#
+# Não existe score total único por formulário — por design.
+# Ver discussão em docs/eval_model_decisoes.md
+
+skill_id: eval_retencao_humano_v1
+version: 1
+pool: retencao_humano
+description: >
+  Formulário de avaliação de qualidade para o pool de retenção de clientes.
+  Cobre postura geral de atendimento (sempre aplicável), conformidade
+  operacional, qualidade específica de agente IA, e critérios contextuais
+  para churn, portabilidade e autenticação complexa.
+
+scoring:
+  item_scale: 10                # domínio de valor de cada item: 0–10
+  min_sample_context: 5         # n mínimo para exibir context_score no dashboard
+  aqs_source: base_score        # campo que alimenta o AQS do Routing Engine
+  aqs_context_override:
+    enabled: true               # routing engine usa context_score relevante
+    min_sample: 5               # quando n >= min_sample por seção/agente
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SEÇÕES
+# Sem applies_when → sempre avaliada (compõe o base_score)
+# Com applies_when → avaliada apenas quando condição satisfeita no context_package
+# ─────────────────────────────────────────────────────────────────────────────
+sections:
+
+  # ── MANDATORY ────────────────────────────────────────────────────────────────
+  # Sempre avaliada. base_score = score desta seção.
+  # Contém apenas itens applies_to: all ou applies_to: human,
+  # garantindo denominador comparável entre atendimentos.
+  # Itens applies_to: human são excluídos automaticamente na avaliação de agente IA.
+
+  - id: mandatory
+    label: Qualidade Geral de Atendimento
+    subsections:
+
+      - id: postura_atendimento
+        label: Postura de Atendimento
+        weight: 4
+        items:
+
+          - id: saudacao_adequada
+            label: Saudação adequada e identificação do atendente
+            applies_to: all
+            type: boolean
+            weight: 1
+            instruction: >
+              Verifique se o atendente se identificou corretamente no início
+              da conversa e utilizou uma saudação adequada ao canal de chat.
+              true se ambos os critérios foram atendidos, false caso contrário.
+
+          - id: escuta_ativa
+            label: Escuta ativa e compreensão da necessidade
+            applies_to: all
+            type: scale
+            weight: 3
+            instruction: >
+              Avalie se o atendente demonstrou compreensão clara da necessidade
+              do cliente antes de propor qualquer solução. Considere perguntas
+              de sondagem, reformulação e confirmação de entendimento.
+              0 = nenhuma tentativa de compreensão; 10 = compreensão exemplar.
+
+          - id: clareza_comunicacao
+            label: Clareza e objetividade na comunicação
+            applies_to: all
+            type: scale
+            weight: 3
+            instruction: >
+              Avalie se as mensagens foram claras, sem ambiguidade e com
+              linguagem adequada ao perfil do cliente observado no transcript.
+              0 = comunicação confusa ou inadequada; 10 = comunicação exemplar.
+
+          - id: empatia
+            label: Demonstração de empatia e tom adequado
+            applies_to: human
+            type: scale
+            weight: 2
+            instruction: >
+              Avalie se o agente humano demonstrou empatia em momentos de
+              frustração do cliente. Considere tom, escolha de palavras e
+              reconhecimento explícito da situação. Não aplicável a agentes IA.
+              0 = ausência de empatia ou tom inadequado; 10 = empatia exemplar.
+
+          - id: encerramento_adequado
+            label: Encerramento com confirmação de resolução
+            applies_to: all
+            type: boolean
+            weight: 1
+            instruction: >
+              Verifique se o atendente confirmou com o cliente que a necessidade
+              foi atendida antes de encerrar o contato.
+              true se houve confirmação explícita, false caso contrário.
+
+      - id: conformidade
+        label: Conformidade Operacional
+        weight: 3
+        items:
+
+          - id: identificacao_cliente
+            label: Identificação do cliente antes de qualquer ação
+            applies_to: all
+            type: boolean
+            weight: 3
+            instruction: >
+              Verifique se o cliente foi corretamente identificado conforme
+              o procedimento do pool antes de qualquer acesso a dados ou
+              execução de ação.
+              true se a identificação foi realizada corretamente, false caso contrário.
+
+          - id: registro_issue_status
+            label: issue_status registrado corretamente no encerramento
+            applies_to: all
+            type: boolean
+            weight: 3
+            instruction: >
+              Verifique no context_package se issue_status foi preenchido com
+              valor não vazio ao registrar agent_done, e se o valor é coerente
+              com o que ocorreu no atendimento.
+              true se correto e coerente, false caso contrário.
+
+          - id: handoff_reason_adequado
+            label: handoff_reason adequado quando outcome não foi resolved
+            applies_to: all
+            type: boolean
+            weight: 2
+            instruction: >
+              Aplicável apenas quando outcome != "resolved". Verifique se
+              handoff_reason declara claramente o motivo do encaminhamento
+              com informação suficiente para o próximo agente.
+              Se outcome == "resolved", atribuir 10 automaticamente.
+
+  # ── QUALIDADE IA ─────────────────────────────────────────────────────────────
+  # Contextual: aplica-se apenas a agentes IA.
+  # Mantido fora do mandatory para que o base_score seja comparável
+  # entre agentes humanos e IA sem renormalização de denominador.
+
+  - id: qualidade_ia
+    label: Qualidade Específica de Agente IA
+    applies_when:
+      agent_type: ai
+    subsections:
+
+      - id: precisao_execucao
+        label: Precisão de Execução
+        weight: 5
+        items:
+
+          - id: coerencia_entre_turns
+            label: Coerência e consistência entre turnos
+            applies_to: ai
+            type: scale
+            weight: 4
+            instruction: >
+              Avalie se o agente IA manteve consistência nas informações ao
+              longo de toda a conversa. Identifique contradições ou mudanças
+              de posição não justificadas.
+              0 = contradições graves; 10 = consistência exemplar.
+
+          - id: uso_correto_tools
+            label: Uso correto e pertinente das tools MCP
+            applies_to: ai
+            type: scale
+            weight: 3
+            instruction: >
+              Avalie se as chamadas de tool registradas no context_package foram
+              pertinentes, executadas na sequência correta e com parâmetros
+              adequados. Penalize chamadas desnecessárias ou ausência de chamadas
+              esperadas.
+              0 = uso inadequado; 10 = uso exemplar.
+
+          - id: ausencia_alucinacao
+            label: Ausência de informações não fundamentadas
+            applies_to: ai
+            type: boolean
+            weight: 5
+            instruction: >
+              Verifique se o agente forneceu apenas informações rastreáveis ao
+              context_package, resultado de tools ou histórico de insights.
+              true se nenhuma alucinação identificada, false caso contrário.
+
+  # ── GESTÃO DE CHURN ──────────────────────────────────────────────────────────
+
+  - id: gestao_churn
+    label: Gestão de Risco de Churn
+    applies_when:
+      flags_include: churn_signal
+    subsections:
+
+      - id: identificacao_motivador
+        label: Identificação do Motivador Real
+        weight: 4
+        items:
+
+          - id: sondagem_motivador
+            label: Sondagem ativa para identificar causa raiz
+            applies_to: all
+            type: scale
+            weight: 3
+            instruction: >
+              Avalie se o atendente buscou ativamente entender o motivador
+              real do churn antes de apresentar proposta de retenção.
+              0 = nenhuma sondagem; 10 = sondagem exemplar.
+
+          - id: identificou_motivador_real
+            label: Identificou corretamente o motivador principal
+            applies_to: all
+            type: boolean
+            weight: 5
+            instruction: >
+              Com base no transcript e nos conversation_insights, avalie se
+              o atendente chegou à compreensão correta do motivador principal.
+              true se identificou corretamente, false caso contrário.
+
+      - id: proposta_retencao
+        label: Proposta de Retenção
+        weight: 6
+        items:
+
+          - id: conhecimento_portfolio
+            label: Conhecimento do portfólio de retenção disponível
+            applies_to: all
+            type: scale
+            weight: 3
+            instruction: >
+              Avalie se o atendente demonstrou conhecimento das ofertas e
+              condições disponíveis para retenção sem oferecer condições
+              inexistentes.
+              0 = desconhecimento evidente; 10 = conhecimento exemplar.
+
+          - id: personalizacao_oferta
+            label: Personalização da oferta ao perfil e motivador do cliente
+            applies_to: all
+            type: scale
+            weight: 4
+            instruction: >
+              Avalie se a proposta foi adequada ao motivador identificado e
+              ao perfil do cliente (historical_insights). Penalize propostas
+              genéricas quando o contexto permitia personalização.
+              0 = proposta completamente genérica; 10 = proposta exemplarmente personalizada.
+
+          - id: tratamento_objecoes
+            label: Tratamento de objeções à proposta
+            applies_to: all
+            type: scale
+            weight: 3
+            instruction: >
+              Avalie como o atendente tratou objeções do cliente.
+              Considere argumentação, reformulação da oferta e capacidade
+              de manter o engajamento.
+              0 = sem manejo de objeções; 10 = manejo exemplar.
+
+          - id: resultado_retencao
+            label: Cliente aceitou permanência ou entrou em negociação
+            applies_to: all
+            type: boolean
+            weight: 1
+            instruction: >
+              Avalie o resultado final com base no outcome e no transcript.
+              true se cliente aceitou permanecer ou entrou em negociação ativa.
+              Peso reduzido intencionalmente: resultado negativo com boa execução
+              não deve penalizar o atendente de forma significativa.
+
+  # ── PORTABILIDADE ────────────────────────────────────────────────────────────
+
+  - id: resolucao_portabilidade
+    label: Resolução de Portabilidade
+    applies_when:
+      intent: portability_check
+    subsections:
+
+      - id: instrucao_processo
+        label: Instrução sobre o Processo
+        weight: 4
+        items:
+
+          - id: explicou_processo_corretamente
+            label: Explicou o processo de portabilidade corretamente
+            applies_to: all
+            type: boolean
+            weight: 4
+            instruction: >
+              Verifique se o atendente descreveu corretamente as etapas do
+              processo, incluindo prazo regulatório (até 3 dias úteis),
+              documentação necessária e o que o cliente deve fazer.
+
+          - id: informou_prazo
+            label: Informou prazo correto conforme regulamentação
+            applies_to: all
+            type: boolean
+            weight: 3
+            instruction: >
+              Verifique se o prazo informado está correto conforme a
+              regulamentação de portabilidade numérica vigente no Brasil.
+
+          - id: clareza_proximos_passos
+            label: Clareza sobre documentação e próximos passos
+            applies_to: all
+            type: scale
+            weight: 3
+            instruction: >
+              Avalie se as instruções sobre documentação e próximos passos
+              foram claras e completas.
+              0 = instruções confusas ou incompletas; 10 = instruções exemplares.
+
+      - id: resolucao_efetiva
+        label: Resolução Efetiva da Solicitação
+        weight: 6
+        items:
+
+          - id: consulta_status_realizada
+            label: Consultou status de portabilidade existente quando pertinente
+            applies_to: all
+            type: boolean
+            weight: 3
+            instruction: >
+              Se o cliente tinha solicitação em andamento, verifique se o
+              atendente consultou o status via tool antes de responder.
+              Se não havia solicitação prévia, atribuir 10 automaticamente.
+
+          - id: solucao_adequada
+            label: Solução ou encaminhamento adequado à situação
+            applies_to: all
+            type: scale
+            weight: 5
+            instruction: >
+              Avalie se a solução foi adequada à situação específica —
+              abertura de solicitação, acompanhamento de processo existente
+              ou esclarecimento de dúvida.
+              0 = solução inadequada ou inexistente; 10 = solução exemplar.
+
+          - id: cliente_confirmou_entendimento
+            label: Cliente confirmou entendimento antes do encerramento
+            applies_to: all
+            type: boolean
+            weight: 2
+            instruction: >
+              Verifique se o atendente confirmou que o cliente entendeu
+              as informações e próximos passos antes de encerrar.
+
+  # ── AUTENTICAÇÃO COMPLEXA ────────────────────────────────────────────────────
+
+  - id: autenticacao_complexa
+    label: Autenticação em Cenário Complexo
+    applies_when:
+      flags_include: authentication_required
+    subsections:
+
+      - id: execucao_autenticacao
+        label: Execução do Processo de Autenticação
+        weight: 6
+        items:
+
+          - id: seguiu_protocolo
+            label: Seguiu o protocolo de autenticação do pool
+            applies_to: all
+            type: boolean
+            weight: 5
+            instruction: >
+              Verifique se o atendente executou o processo de autenticação
+              conforme o protocolo declarado no supervisor_config do pool,
+              sem pular etapas ou aceitar dados insuficientes.
+
+          - id: tratamento_falha_autenticacao
+            label: Tratamento adequado de falha ou recusa de autenticação
+            applies_to: all
+            type: scale
+            weight: 3
+            instruction: >
+              Se houve falha ou recusa, avalie como o atendente conduziu a
+              situação: clareza sobre os motivos, alternativas oferecidas e
+              encerramento sem expor dados. Se não houve falha, atribuir 10.
+              0 = tratamento inadequado; 10 = tratamento exemplar.
+
+      - id: seguranca_informacao
+        label: Segurança da Informação
+        weight: 4
+        items:
+
+          - id: nao_expos_dados_sensiveis
+            label: Não expôs dados sensíveis do cliente no canal
+            applies_to: all
+            type: boolean
+            weight: 6
+            instruction: >
+              Verifique se o atendente evitou transmitir dados sensíveis
+              (CPF completo, dados financeiros, senhas) pelo canal de chat.
+              true se nenhuma exposição indevida identificada no transcript.
+
+          - id: orientou_sobre_seguranca
+            label: Orientou o cliente sobre segurança quando pertinente
+            applies_to: all
+            type: boolean
+            weight: 2
+            instruction: >
+              Avalie se o atendente aproveitou o contexto para orientar o
+              cliente sobre boas práticas de segurança, quando pertinente.
+              true se orientou adequadamente ou se não era pertinente orientar.

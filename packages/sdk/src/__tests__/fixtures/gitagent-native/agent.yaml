@@ -1,0 +1,9 @@
+agent_type_id: agente_native_v1
+framework: native
+execution_model: stateless
+pools:
+  - suporte_humano
+permissions:
+  - mcp-server-crm:customer_get
+version: "1.0.0"
+description: Agente nativo PlugHub (não requer proxy sidecar)

@@ -1,0 +1,21 @@
+{
+  "name": "@plughub/gitagent",
+  "version": "1.0.0",
+  "description": "PlugHub GitAgent — parser e importer de repositórios GitAgent",
+  "main": "dist/gitagent/index.js",
+  "types": "dist/gitagent/index.d.ts",
+  "scripts": {
+    "build":     "tsc",
+    "typecheck": "tsc --noEmit",
+    "test":      "vitest run"
+  },
+  "dependencies": {
+    "@plughub/schemas": "workspace:*",
+    "js-yaml":          "^4.1.0"
+  },
+  "devDependencies": {
+    "@types/js-yaml":  "^4.0.0",
+    "typescript":      "^5.4.0",
+    "vitest":          "^1.5.0"
+  }
+}

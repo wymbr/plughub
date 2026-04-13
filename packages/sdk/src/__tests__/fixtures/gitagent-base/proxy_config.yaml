@@ -1,0 +1,9 @@
+port: 7422
+session_token_env: PLUGHUB_SESSION_TOKEN
+audit_buffer_size: 1000
+audit_flush_interval_ms: 500
+circuit_breaker:
+  timeout_ms: 50
+  mode_on_failure: error_clear
+routes:
+  mcp-server-crm: ${MCP_CRM_URL}

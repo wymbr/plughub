@@ -1,0 +1,10 @@
+entry: check_customer
+steps:
+  - id: check_customer
+    type: task
+    agent_pool: suporte_humano
+    on_success: nonexistent_step
+    on_failure: done
+  - id: done
+    type: complete
+    outcome: resolved

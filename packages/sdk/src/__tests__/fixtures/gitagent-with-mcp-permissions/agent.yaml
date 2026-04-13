@@ -1,0 +1,12 @@
+agent_type_id: agente_retencao_v1
+framework: proprietary
+execution_model: stateless
+pools:
+  - retencao_humano
+permissions:
+  - mcp-server-crm:customer_get
+  - mcp-server-crm:ticket_create
+  - mcp-server-telco:plan_get
+  - mcp-server-telco:plan_upgrade
+version: "1.0.0"
+description: Agente de retenção com dois MCP Servers

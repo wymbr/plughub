@@ -1,0 +1,259 @@
+# docker-compose.test.yml
+# E2E test environment for PlugHub Platform.
+# Build context is the monorepo root (context: ../..).
+# Usage: docker compose -f packages/e2e-tests/docker-compose.test.yml up --build
+
+name: plughub-e2e
+
+networks:
+  plughub-test:
+    driver: bridge
+
+services:
+
+  # ─────────────────────────────────────────────
+  # Redis 7
+  # ─────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    command: redis-server --save "" --loglevel warning
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks:
+      - plughub-test
+
+  # ─────────────────────────────────────────────
+  # PostgreSQL 16
+  # Uses a separate DB (plughub_test) for isolation from dev DB.
+  # ─────────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_DB: plughub_test
+      POSTGRES_USER: plughub
+      POSTGRES_PASSWORD: plughub
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U plughub -d plughub_test"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks:
+      - plughub-test
+
+  # ─────────────────────────────────────────────
+  # Kafka 3.7 (KRaft — no Zookeeper)
+  # ─────────────────────────────────────────────
+  kafka:
+    image: apache/kafka:3.7.0
+    ports:
+      - "9092:9092"
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,INTERNAL://0.0.0.0:29092,CONTROLLER://0.0.0.0:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092,INTERNAL://kafka:29092
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,INTERNAL:PLAINTEXT,CONTROLLER:PLAINTEXT
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
+      KAFKA_LOG_DIRS: /var/lib/kafka/data
+    healthcheck:
+      test: ["CMD", "/opt/kafka/bin/kafka-broker-api-versions.sh", "--bootstrap-server", "localhost:9092"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+    networks:
+      - plughub-test
+
+  # Creates the required Kafka topics after broker is healthy
+  kafka-init:
+    image: apache/kafka:3.7.0
+    depends_on:
+      kafka:
+        condition: service_healthy
+    networks:
+      - plughub-test
+    entrypoint: ["/bin/bash", "-c"]
+    command:
+      - |
+        KAFKA=/opt/kafka/bin/kafka-topics.sh
+        BROKER=kafka:29092
+        for topic in conversations.inbound conversations.routed conversations.queued conversations.events agent.lifecycle agent.registry.events; do
+          $$KAFKA --bootstrap-server $$BROKER --create --if-not-exists \
+            --topic $$topic --partitions 3 --replication-factor 1
+          echo "topic $$topic OK"
+        done
+    restart: "no"
+
+  # ─────────────────────────────────────────────
+  # Agent Registry (TypeScript/Express/PostgreSQL)
+  # ─────────────────────────────────────────────
+  agent-registry:
+    build:
+      context: ../..
+      dockerfile: packages/agent-registry/Dockerfile
+    ports:
+      - "3300:3300"
+    environment:
+      DATABASE_URL: postgresql://plughub:plughub@postgres:5432/plughub_test
+      PORT: "3300"
+      JWT_SECRET: test_e2e_secret_32chars
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget --quiet --spider http://localhost:3300/v1/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    networks:
+      - plughub-test
+
+  # ─────────────────────────────────────────────
+  # MCP Server — Agent Runtime + BPM tools
+  # ─────────────────────────────────────────────
+  mcp-server-plughub:
+    build:
+      context: ../..
+      dockerfile: packages/mcp-server-plughub/Dockerfile
+    ports:
+      - "3100:3100"
+    environment:
+      REDIS_URL: redis://redis:6379
+      PORT: "3100"
+      JWT_SECRET: test_e2e_secret_32chars
+      KAFKA_BROKERS: kafka:29092
+      AGENT_REGISTRY_URL: http://agent-registry:3300
+    depends_on:
+      redis:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
+      agent-registry:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget --quiet --spider http://localhost:3100/sse || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+    networks:
+      - plughub-test
+
+  # ─────────────────────────────────────────────
+  # Routing Engine (Python/Kafka consumer — no HTTP port)
+  # ─────────────────────────────────────────────
+  routing-engine:
+    build:
+      context: ../..
+      dockerfile: packages/routing-engine/Dockerfile
+    environment:
+      PLUGHUB_REDIS_URL: redis://redis:6379
+      PLUGHUB_KAFKA_BROKERS: kafka:29092
+      PLUGHUB_AGENT_REGISTRY_URL: http://agent-registry:3300
+    depends_on:
+      redis:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
+      agent-registry:
+        condition: service_healthy
+    networks:
+      - plughub-test
+    restart: on-failure
+
+  # ─────────────────────────────────────────────
+  # AI Gateway (Python/FastAPI)
+  # ─────────────────────────────────────────────
+  ai-gateway:
+    build:
+      context: ../..
+      dockerfile: packages/ai-gateway/Dockerfile
+    ports:
+      - "3200:3200"
+    environment:
+      PLUGHUB_REDIS_URL: redis://redis:6379
+      PLUGHUB_PORT: "3200"
+      PLUGHUB_ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      PLUGHUB_WORKERS: "1"
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget --quiet --spider http://localhost:3200/v1/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+    networks:
+      - plughub-test
+
+  # ─────────────────────────────────────────────
+  # Rules Engine (Python/FastAPI + Redis pub/sub)
+  # ─────────────────────────────────────────────
+  rules-engine:
+    build:
+      context: ../..
+      dockerfile: packages/rules-engine/Dockerfile
+    ports:
+      - "3201:3201"
+    environment:
+      PLUGHUB_REDIS_URL: redis://redis:6379
+      PLUGHUB_MCP_SERVER_URL: http://mcp-server-plughub:3100
+      PLUGHUB_API_PORT: "3201"
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget --quiet --spider 'http://localhost:3201/rules?tenant_id=health_probe' || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+    networks:
+      - plughub-test
+
+  # ─────────────────────────────────────────────
+  # Skill Flow Service — test harness HTTP wrapper
+  # ─────────────────────────────────────────────
+  skill-flow-service:
+    build:
+      context: ../..
+      dockerfile: packages/e2e-tests/services/skill-flow-service/Dockerfile
+    ports:
+      - "3400:3400"
+    environment:
+      REDIS_URL: redis://redis:6379
+      MCP_SERVER_URL: http://mcp-server-plughub:3100
+      AI_GATEWAY_URL: http://ai-gateway:3200
+      PORT: "3400"
+    depends_on:
+      redis:
+        condition: service_healthy
+      mcp-server-plughub:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget --quiet --spider http://localhost:3400/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    networks:
+      - plughub-test

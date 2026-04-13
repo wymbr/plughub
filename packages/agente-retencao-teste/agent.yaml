@@ -1,0 +1,23 @@
+agent_type_id:           agente_retencao_teste_v1
+framework:               plughub-native
+execution_model:         stateless
+max_concurrent_sessions: 2
+
+pools:
+  - retencao_humano
+
+skills:
+  - skill_id:       skill_retencao_oferta_v1
+    version_policy: stable
+
+permissions:
+  - mcp-server-plughub:insight_register
+  - mcp-server-plughub:insight_list
+
+classification:
+  type:     vertical
+  industry: telco
+
+profile:
+  retencao:  3
+  ofertas:   2

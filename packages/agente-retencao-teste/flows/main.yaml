@@ -1,0 +1,33 @@
+entry: verificar_elegibilidade
+steps:
+
+  # ── Step 1: verifica se o cliente é elegível para oferta ──────────────────
+  - id:   verificar_elegibilidade
+    type: task
+    target:
+      skill_id: skill_retencao_oferta_v1
+    on_success: registrar_oferta
+    on_failure: escalar_humano
+
+  # ── Step 2: registra o resultado da oferta como insight de sessão ─────────
+  - id:   registrar_oferta
+    type: invoke
+    tool: insight_register
+    input:
+      category:    insight.conversa.oferta_aceita
+      content:     "$.pipeline_state.resultado_oferta"
+      priority:    1
+    on_success: concluir
+    on_failure: escalar_humano
+
+  # ── Step 3: happy path — resolve sem escalação ────────────────────────────
+  - id:      concluir
+    type:    complete
+    outcome: resolved
+
+  # ── Step 4: escalação — aciona pool humano com contexto completo ──────────
+  - id:     escalar_humano
+    type:   escalate
+    target:
+      pool: retencao_humano
+    context: pipeline_state

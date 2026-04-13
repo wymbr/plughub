@@ -1,0 +1,36 @@
+# agente_retencao_v1.yaml
+# Skill Flow de demonstração — Agente de Retenção
+# Fluxo: captura intenção do cliente → saudação → escalada para pool humano retencao_humano
+
+entry: captura_intencao
+
+steps:
+
+  - id: captura_intencao
+    type: menu
+    prompt: "como posso te ajudar ?"
+    interaction: text
+    output_as: intencao_cliente
+    timeout_ms: 300000
+    on_success: saudacao
+    on_failure: finalizar
+    on_timeout: saudacao
+    on_disconnect: finalizar
+
+  - id: saudacao
+    type: notify
+    message: "Olá! Sou o assistente virtual da PlugHub. Identificamos que você pode precisar de suporte especializado. Aguarde um momento enquanto conecto você ao nosso especialista de retenção."
+    channel: session
+    on_success: escalar
+    on_failure: escalar
+
+  - id: escalar
+    type: escalate
+    target:
+      pool: retencao_humano
+    context: pipeline_state
+    error_reason: escalated_to_human
+
+  - id: finalizar
+    type: complete
+    outcome: resolved

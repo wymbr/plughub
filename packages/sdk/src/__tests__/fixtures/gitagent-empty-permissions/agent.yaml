@@ -1,0 +1,9 @@
+agent_type_id: agente_simples_v1
+framework: proprietary
+execution_model: stateless
+pools:
+  - suporte_humano
+permissions:
+  - internal:read_only
+version: "1.0.0"
+description: Agente sem permissions declaradas

@@ -1,0 +1,182 @@
+// schema.prisma
+// PlugHub Agent Registry — modelos de dados
+// Spec: PlugHub v24.0 seções 4.5 e 4.7
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─────────────────────────────────────────────
+// Pool — entidade operacional
+// Spec 4.5: registro de pool separado do registro de tipo
+// ─────────────────────────────────────────────
+
+model Pool {
+  id        String   @id @default(uuid())
+  pool_id   String
+  tenant_id String
+  status    PoolStatus @default(active)
+
+  description            String?
+  channel_types          String[]
+  sla_target_ms          Int
+  routing_expression     Json?
+  evaluation_template_id String?
+  supervisor_config      Json?
+
+  created_at  DateTime @default(now())
+  updated_at  DateTime @updatedAt
+  created_by  String
+
+  // Tipos de agente registrados neste pool
+  agent_types AgentTypePool[]
+
+  @@unique([pool_id, tenant_id])
+  @@index([tenant_id])
+  @@map("pools")
+}
+
+enum PoolStatus {
+  active
+  inactive
+  maintenance
+}
+
+// ─────────────────────────────────────────────
+// AgentType — registro de tipo de agente
+// Spec 4.5: registro de tipo separado do pool
+// ─────────────────────────────────────────────
+
+model AgentType {
+  id              String   @id @default(uuid())
+  agent_type_id   String
+  tenant_id       String
+  status          AgentTypeStatus @default(active)
+
+  framework        String
+  execution_model  String
+  role             String   @default("executor")
+  max_concurrent_sessions Int @default(1)
+
+  skills       Json     @default("[]")   // SkillRef[]
+  permissions  String[] @default([])
+  capabilities Json     @default("{}")
+  prompt_id    String?
+
+  agent_classification Json?
+
+  // ── Canário: peso de tráfego para rollout gradual
+  // Spec 4.5: progressão 0.10 → 0.20 → 0.50 → 1.00
+  traffic_weight Float   @default(1.0)
+
+  created_at  DateTime @default(now())
+  updated_at  DateTime @updatedAt
+  created_by  String
+
+  pools     AgentTypePool[]
+  instances AgentInstance[]
+
+  @@unique([agent_type_id, tenant_id])
+  @@index([tenant_id])
+  @@index([tenant_id, status])
+  @@map("agent_types")
+}
+
+enum AgentTypeStatus {
+  active
+  inactive
+  deprecated
+}
+
+// Tabela de junção Pool ↔ AgentType
+model AgentTypePool {
+  agent_type    AgentType @relation(fields: [agent_type_id], references: [id], onDelete: Cascade)
+  agent_type_id String
+  pool          Pool      @relation(fields: [pool_id], references: [id], onDelete: Cascade)
+  pool_id       String
+  registered_at DateTime  @default(now())
+
+  @@id([agent_type_id, pool_id])
+  @@map("agent_type_pools")
+}
+
+// ─────────────────────────────────────────────
+// AgentInstance — instâncias de agentes em execução
+// Spec 4.5: ciclo de vida de instância
+// Criadas pelo mcp-server-plughub via agent_login
+// ─────────────────────────────────────────────
+
+model AgentInstance {
+  id           String              @id @default(uuid())
+  instance_id  String
+  tenant_id    String
+  agent_type_id String
+
+  /// JWT emitido pelo agent_login — nulo quando logout
+  session_token    String?             @unique
+  current_sessions Int                 @default(0)
+  status           AgentInstanceStatus @default(login)
+
+  created_at  DateTime @default(now())
+  updated_at  DateTime @updatedAt
+
+  agent_type AgentType @relation(fields: [agent_type_id, tenant_id], references: [agent_type_id, tenant_id])
+
+  @@unique([instance_id, tenant_id])
+  @@index([tenant_id])
+  @@index([tenant_id, status])
+  @@map("agent_instances")
+}
+
+enum AgentInstanceStatus {
+  login
+  ready
+  busy
+  paused
+  logout
+}
+
+// ─────────────────────────────────────────────
+// Skill — unidade de capacidade reutilizável
+// Spec 4.7
+// ─────────────────────────────────────────────
+
+model Skill {
+  id        String   @id @default(uuid())
+  skill_id  String
+  tenant_id String
+  status    SkillStatus @default(active)
+
+  name        String
+  version     String
+  description String
+
+  classification     Json
+  instruction        Json
+  tools              Json    @default("[]")
+  interface_schema   Json?
+  evaluation         Json?
+  knowledge_domains  String[] @default([])
+  compatibility      Json?
+  flow               Json?   // presente apenas para type: orchestrator
+
+  created_at  DateTime @default(now())
+  updated_at  DateTime @updatedAt
+  created_by  String
+
+  @@unique([skill_id, tenant_id])
+  @@index([tenant_id])
+  @@index([tenant_id, status])
+  @@map("skills")
+}
+
+enum SkillStatus {
+  active
+  inactive
+  deprecated
+}
