@@ -206,7 +206,10 @@ class WebchatAdapter:
             timestamp=event.timestamp,
         )
         await self._publish_inbound(event.model_dump())
-        logger.debug("inbound text contact_id=%s turn=%s", self._contact_id, snapshot.turn_number)
+        logger.info(
+            "inbound text published: contact_id=%s session_id=%s turn=%s",
+            self._contact_id, self._session_id, snapshot.turn_number,
+        )
 
     async def _handle_menu_submit(self, msg: WsMenuSubmit) -> None:
         snapshot = await self._context_reader.get_snapshot(self._session_id)

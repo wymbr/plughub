@@ -707,6 +707,11 @@ async def process_inbound(
     if not session_id or author.get("type") != "customer":
         return
 
+    logger.info(
+        "Inbound customer message: session=%s content_type=%s",
+        session_id, content.get("type"),
+    )
+
     try:
         msg_type = content.get("type")
 
@@ -717,14 +722,38 @@ async def process_inbound(
             result_value = content.get("payload", {}).get("result", "")
             reply_text = json.dumps(result_value)
         else:
+            logger.warning(
+                "Unknown content type in inbound message: session=%s type=%s",
+                session_id, msg_type,
+            )
             return  # unknown content type — ignore
 
         # ── Check which agent types are active for this session ──────────────
         # In a conference, both flags can be set simultaneously.
         # Deliver to each channel independently — do not short-circuit.
 
-        is_human      = await redis_client.get(f"session:{session_id}:human_agent")
-        menu_waiting  = await redis_client.get(f"menu:waiting:{session_id}")
+        is_human = await redis_client.get(f"session:{session_id}:human_agent")
+
+        # menu:waiting may not be set yet if the skill flow is still initialising
+        # (race: customer message arrives before the menu step executes).
+        # Retry for up to 3 seconds with 200ms intervals before giving up.
+        menu_waiting = await redis_client.get(f"menu:waiting:{session_id}")
+        if not menu_waiting and not is_human:
+            for _ in range(15):   # 15 × 200ms = 3s window
+                await asyncio.sleep(0.2)
+                menu_waiting = await redis_client.get(f"menu:waiting:{session_id}")
+                is_human     = await redis_client.get(f"session:{session_id}:human_agent")
+                if menu_waiting or is_human:
+                    logger.info(
+                        "menu:waiting appeared after retry: session=%s menu=%s human=%s",
+                        session_id, bool(menu_waiting), bool(is_human),
+                    )
+                    break
+
+        logger.info(
+            "Inbound routing: session=%s menu_waiting=%s is_human=%s",
+            session_id, bool(menu_waiting), bool(is_human),
+        )
 
         delivered = False
 
@@ -740,19 +769,25 @@ async def process_inbound(
                 "contact_id": contact_id,
             }
             await redis_client.publish(f"agent:events:{session_id}", json.dumps(event))
-            logger.debug("Forwarded %s to human agent: session=%s", msg_type, session_id)
+            logger.info("Forwarded %s to human agent: session=%s", msg_type, session_id)
             delivered = True
 
         if menu_waiting:
             # ── AI agent in menu step: unblock BLPOP with customer reply ─────
             await redis_client.lpush(f"menu:result:{session_id}", reply_text)
-            logger.debug("Pushed menu reply to AI session: session=%s text=%r", session_id, reply_text[:80])
+            logger.info(
+                "Pushed menu reply to AI session: session=%s text=%r",
+                session_id, reply_text[:80],
+            )
             delivered = True
 
         if not delivered:
             # No active agent recognised for this session — message dropped.
             # This is normal when the AI is between steps (not in menu).
-            logger.debug("No active agent for inbound message: session=%s msg_type=%s", session_id, msg_type)
+            logger.warning(
+                "No active agent for inbound message (dropped): session=%s msg_type=%s",
+                session_id, msg_type,
+            )
 
     except Exception as exc:
         logger.error("Error forwarding inbound message: session=%s — %s", session_id, exc)
