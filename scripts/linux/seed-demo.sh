@@ -102,14 +102,16 @@ REDIS_PORT=$(echo "$REDIS_URL" | sed 's|redis://||' | cut -d: -f2)
 REDIS_CLI_CMD=""
 
 # Try docker-based redis-cli first, then local redis-cli
-if docker ps --format "{{.Names}}" | grep -q "plughub-redis" 2>/dev/null; then
-  REDIS_CLI_CMD="docker exec plughub-redis redis-cli"
-elif command -v redis-cli >/dev/null 2>&1; then
+if command -v redis-cli >/dev/null 2>&1; then
   REDIS_CLI_CMD="redis-cli -h $REDIS_HOST -p $REDIS_PORT"
+elif docker ps --format "{{.Names}}" 2>/dev/null | grep -q "plughub-redis"; then
+  REDIS_CLI_CMD="docker exec plughub-redis redis-cli"
 else
-  warn "redis-cli não encontrado — instâncias de agente não registradas no Redis"
-  warn "O Routing Engine pode não alocar sessões até que um agente faça agent_login via SDK."
-  warn "Para registrar manualmente: redis-cli HSET agent:orquestrador_demo_v1:inst-01 status ready pool_id demo_ia tenant_id $TENANT_ID"
+  warn "redis-cli não encontrado — instale com: sudo apt install redis-tools"
+  warn "Depois registre manualmente:"
+  warn "  redis-cli HSET agent:orquestrador_demo_v1:inst-01 status ready pool_id demo_ia tenant_id $TENANT_ID"
+  warn "  redis-cli HSET agent:agente_suporte_humano_v1:inst-01 status ready pool_id suporte_humano tenant_id $TENANT_ID"
+  warn "  redis-cli SADD pools:$TENANT_ID demo_ia suporte_humano"
 fi
 
 if [ -n "$REDIS_CLI_CMD" ]; then
