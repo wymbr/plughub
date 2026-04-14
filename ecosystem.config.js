@@ -21,15 +21,40 @@
  */
 
 "use strict"
-const path = require("path")
+const path        = require("path")
+const { execSync } = require("child_process")
 const ROOT = __dirname
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Python interpreter — override with PLUGHUB_PYTHON env var for venv users:
+// Resolve a command to its absolute path via `which`.
+// Falls back to the raw name so the error message from PM2 is still readable.
+// Override any command by setting the corresponding env var before pm2 start:
 //   export PLUGHUB_PYTHON=.venv/bin/python3
+//   export PLUGHUB_UVICORN=.venv/bin/uvicorn
 // ─────────────────────────────────────────────────────────────────────────────
-const PYTHON = process.env.PLUGHUB_PYTHON || "python3"
-const UVICORN = process.env.PLUGHUB_UVICORN || "uvicorn"
+function which(cmd) {
+  if (!cmd) return cmd
+  try {
+    return execSync(`which ${cmd} 2>/dev/null`, { encoding: "utf8" }).trim() || cmd
+  } catch (_) {
+    return cmd
+  }
+}
+
+const PYTHON  = process.env.PLUGHUB_PYTHON  || which("python3")
+const UVICORN = process.env.PLUGHUB_UVICORN || which("uvicorn")
+
+// Python entry-point scripts installed by pip (plughub-routing, etc.)
+// which() returns the absolute path so PM2 finds them regardless of cwd.
+const CMD = {
+  routing:    which("plughub-routing"),
+  rules:      which("plughub-rules"),
+  channel:    which("plughub-channel-gateway"),
+  writer:     which("plughub-conversation-writer"),
+  clickhouse: which("plughub-clickhouse-consumer"),
+  bridge:     which("plughub-bridge"),
+  dashboard:  which("plughub-dashboard-api"),
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Shared environment — injected into every service.
@@ -144,7 +169,7 @@ module.exports = {
     {
       ...COMMON,
       name:        "routing-engine",
-      script:      "plughub-routing",
+      script:      CMD.routing,
       interpreter: "none",
       ...logPaths("routing-engine"),
       env:         ENV,
@@ -165,7 +190,7 @@ module.exports = {
     {
       ...COMMON,
       name:        "rules-engine-monitor",
-      script:      "plughub-rules",
+      script:      CMD.rules,
       interpreter: "none",
       ...logPaths("rules-engine-monitor"),
       env:         ENV,
@@ -175,7 +200,7 @@ module.exports = {
     {
       ...COMMON,
       name:        "channel-gateway",
-      script:      "plughub-channel-gateway",
+      script:      CMD.channel,
       interpreter: "none",
       ...logPaths("channel-gateway"),
       env:         ENV,
@@ -185,7 +210,7 @@ module.exports = {
     {
       ...COMMON,
       name:        "conversation-writer",
-      script:      "plughub-conversation-writer",
+      script:      CMD.writer,
       interpreter: "none",
       ...logPaths("conversation-writer"),
       env:         ENV,
@@ -205,7 +230,7 @@ module.exports = {
     {
       ...COMMON,
       name:        "clickhouse-consumer",
-      script:      "plughub-clickhouse-consumer",
+      script:      CMD.clickhouse,
       interpreter: "none",
       ...logPaths("clickhouse-consumer"),
       env:         ENV,
@@ -215,7 +240,7 @@ module.exports = {
     {
       ...COMMON,
       name:        "orchestrator-bridge",
-      script:      "plughub-bridge",
+      script:      CMD.bridge,
       interpreter: "none",
       ...logPaths("orchestrator-bridge"),
       env:         ENV,
@@ -225,7 +250,7 @@ module.exports = {
     {
       ...COMMON,
       name:        "dashboard-api",
-      script:      "plughub-dashboard-api",
+      script:      CMD.dashboard,
       interpreter: "none",
       ...logPaths("dashboard-api"),
       env:         ENV,
