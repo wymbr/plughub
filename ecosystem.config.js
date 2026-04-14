@@ -253,7 +253,7 @@ module.exports = {
       script:      CMD.dashboard,
       interpreter: "none",
       ...logPaths("dashboard-api"),
-      env:         ENV,
+      env:         { ...ENV, PLUGHUB_DASHBOARD_API_PORT: "8082" },
     },
 
     // ── 12. Agent Assist UI (Vite dev server — porta 5173) ────────────────────
