@@ -49,7 +49,7 @@ info "Aguardando agent-registry ficar disponível…"
 
 MAX_WAIT=60
 elapsed=0
-until curl -sf "$REGISTRY_URL/health" >/dev/null 2>&1; do
+until curl -sf "$REGISTRY_URL/v1/health" >/dev/null 2>&1; do
   if [ "$elapsed" -ge "$MAX_WAIT" ]; then
     die "agent-registry não respondeu em ${MAX_WAIT}s. Verifique: pm2 logs agent-registry"
   fi
