@@ -148,7 +148,10 @@ async function aiGatewayCall(payload: {
     )
   }
 
-  return res.json() as Promise<unknown>
+  // The AI gateway returns a ReasonResponse wrapper: { session_id, result, model_used, ... }
+  // executeReason validates against the *inner* result, so unwrap it here.
+  const data = await res.json() as { result?: unknown }
+  return data.result !== undefined ? data.result : data
 }
 
 // ── Engine ────────────────────────────────────────────────────────────────────
