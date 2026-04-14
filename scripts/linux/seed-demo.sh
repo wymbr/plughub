@@ -85,63 +85,73 @@ TENANT_ID="$TENANT_ID" \
   && success "seed_demo.ts concluído" \
   || die "seed_demo.ts falhou — veja o erro acima"
 
-# ── Step 3: register agent instances in Redis ─────────────────────────────────
-# The Routing Engine tracks available agent slots in Redis.
-# For demo purposes we register one AI orchestrator instance and two human agents.
-# Key schema (from routing-engine): agent:{agent_type_id}:{instance_id}
-# The engine reads these to determine pool capacity.
+# ── Step 3: register pools and agent instances in Redis ───────────────────────
+# The Routing Engine reads pool configs and agent instances directly from Redis.
+# Key schema (routing-engine registry.py):
+#   {tenant}:pool_config:{pool_id}         — PoolConfig JSON (TTL 24h)
+#   {tenant}:pool:{pool_id}:instances      — SET of instance_ids
+#   {tenant}:pools                         — SET of all pool_ids
+#   {tenant}:instance:{instance_id}        — AgentInstance JSON (TTL 24h)
 #
-# Note: in a real deployment the Bridge/SDK publishes agent_login/agent_ready
-# via Kafka; these Redis writes are only for demo convenience.
+# Note: in production the agent SDK publishes agent_login/agent_ready via Kafka
+# and the agent-registry publishes pool configs via agent.registry.events.
+# These Redis writes replace both for demo convenience.
 
-info "Registrando instâncias de agente no Redis para o demo…"
+info "Registrando pools e instâncias de agente no Redis…"
 
 REDIS_URL="${REDIS_URL:-redis://localhost:6379}"
 REDIS_HOST=$(echo "$REDIS_URL" | sed 's|redis://||' | cut -d: -f1)
 REDIS_PORT=$(echo "$REDIS_URL" | sed 's|redis://||' | cut -d: -f2)
 REDIS_CLI_CMD=""
 
-# Try docker-based redis-cli first, then local redis-cli
 if command -v redis-cli >/dev/null 2>&1; then
   REDIS_CLI_CMD="redis-cli -h $REDIS_HOST -p $REDIS_PORT"
 elif docker ps --format "{{.Names}}" 2>/dev/null | grep -q "plughub-redis"; then
   REDIS_CLI_CMD="docker exec plughub-redis redis-cli"
 else
-  warn "redis-cli não encontrado — instale com: sudo apt install redis-tools"
-  warn "Depois registre manualmente:"
-  warn "  redis-cli HSET agent:orquestrador_demo_v1:inst-01 status ready pool_id demo_ia tenant_id $TENANT_ID"
-  warn "  redis-cli HSET agent:agente_suporte_humano_v1:inst-01 status ready pool_id suporte_humano tenant_id $TENANT_ID"
-  warn "  redis-cli SADD pools:$TENANT_ID demo_ia suporte_humano"
+  warn "redis-cli não encontrado — instale com: sudo apt install redis-tools -y"
 fi
 
 if [ -n "$REDIS_CLI_CMD" ]; then
-  # Register AI orchestrator instance (plughub-native — active when Bridge is running)
-  $REDIS_CLI_CMD HSET "agent:orquestrador_demo_v1:inst-01" \
-    status "ready" \
-    pool_id "demo_ia" \
-    tenant_id "$TENANT_ID" \
-    agent_type_id "orquestrador_demo_v1" \
-    framework "plughub-native" \
-    max_concurrent_sessions "10" \
-    current_sessions "0" \
-    >/dev/null && success "Instância orquestrador_demo_v1:inst-01 registrada (pool: demo_ia)"
+  NOW=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+  ROUTING_EXPR='{"weight_sla":0.4,"weight_wait":0.2,"weight_tier":0.2,"weight_churn":0.1,"weight_business":0.1}'
 
-  # Register two human agent instances for the suporte_humano pool
-  for i in 01 02; do
-    $REDIS_CLI_CMD HSET "agent:agente_suporte_humano_v1:inst-${i}" \
-      status "ready" \
-      pool_id "suporte_humano" \
-      tenant_id "$TENANT_ID" \
-      agent_type_id "agente_suporte_humano_v1" \
-      framework "human" \
-      max_concurrent_sessions "3" \
-      current_sessions "0" \
-      >/dev/null && success "Instância agente_suporte_humano_v1:inst-${i} registrada (pool: suporte_humano)"
-  done
+  # ── Pool configs (lidos por get_pool / _get_pool_config) ──────────────────
+  $REDIS_CLI_CMD SET "${TENANT_ID}:pool_config:demo_ia" \
+    "{\"pool_id\":\"demo_ia\",\"tenant_id\":\"${TENANT_ID}\",\"channel_types\":[\"chat\",\"whatsapp\"],\"sla_target_ms\":300000,\"routing_expression\":${ROUTING_EXPR},\"competency_weights\":{},\"aging_factor\":0.4,\"breach_factor\":0.8,\"remote_sites\":[],\"is_human_pool\":false}" \
+    EX 86400 >/dev/null \
+    && success "Pool config demo_ia registrado"
 
-  # Register pool entries
-  $REDIS_CLI_CMD SADD "pools:$TENANT_ID" "demo_ia" "suporte_humano" >/dev/null \
-    && success "Pools registrados no Redis: demo_ia, suporte_humano"
+  $REDIS_CLI_CMD SET "${TENANT_ID}:pool_config:suporte_humano" \
+    "{\"pool_id\":\"suporte_humano\",\"tenant_id\":\"${TENANT_ID}\",\"channel_types\":[\"chat\",\"whatsapp\"],\"sla_target_ms\":300000,\"routing_expression\":${ROUTING_EXPR},\"competency_weights\":{},\"aging_factor\":0.4,\"breach_factor\":0.8,\"remote_sites\":[],\"is_human_pool\":true}" \
+    EX 86400 >/dev/null \
+    && success "Pool config suporte_humano registrado"
+
+  # ── Pool sets ─────────────────────────────────────────────────────────────
+  $REDIS_CLI_CMD SADD "${TENANT_ID}:pools" "demo_ia" "suporte_humano" >/dev/null \
+    && success "Pool set registrado: demo_ia, suporte_humano"
+
+  # ── Agent instances (AgentInstance JSON — lidos por get_ready_instances) ──
+  $REDIS_CLI_CMD SET "${TENANT_ID}:instance:inst-01" \
+    "{\"instance_id\":\"inst-01\",\"agent_type_id\":\"orquestrador_demo_v1\",\"tenant_id\":\"${TENANT_ID}\",\"pool_id\":\"demo_ia\",\"pools\":[\"demo_ia\"],\"execution_model\":\"stateless\",\"max_concurrent\":10,\"current_sessions\":0,\"status\":\"ready\",\"registered_at\":\"${NOW}\"}" \
+    EX 86400 >/dev/null \
+    && success "Instância inst-01 registrada (pool: demo_ia)"
+
+  $REDIS_CLI_CMD SET "${TENANT_ID}:instance:inst-02" \
+    "{\"instance_id\":\"inst-02\",\"agent_type_id\":\"agente_suporte_humano_v1\",\"tenant_id\":\"${TENANT_ID}\",\"pool_id\":\"suporte_humano\",\"pools\":[\"suporte_humano\"],\"execution_model\":\"stateful\",\"max_concurrent\":3,\"current_sessions\":0,\"status\":\"ready\",\"registered_at\":\"${NOW}\"}" \
+    EX 86400 >/dev/null \
+    && success "Instância inst-02 registrada (pool: suporte_humano)"
+
+  $REDIS_CLI_CMD SET "${TENANT_ID}:instance:inst-03" \
+    "{\"instance_id\":\"inst-03\",\"agent_type_id\":\"agente_suporte_humano_v1\",\"tenant_id\":\"${TENANT_ID}\",\"pool_id\":\"suporte_humano\",\"pools\":[\"suporte_humano\"],\"execution_model\":\"stateful\",\"max_concurrent\":3,\"current_sessions\":0,\"status\":\"ready\",\"registered_at\":\"${NOW}\"}" \
+    EX 86400 >/dev/null \
+    && success "Instância inst-03 registrada (pool: suporte_humano)"
+
+  # ── Pool instance sets ────────────────────────────────────────────────────
+  $REDIS_CLI_CMD SADD "${TENANT_ID}:pool:demo_ia:instances" "inst-01" >/dev/null \
+    && success "Pool demo_ia:instances → inst-01"
+  $REDIS_CLI_CMD SADD "${TENANT_ID}:pool:suporte_humano:instances" "inst-02" "inst-03" >/dev/null \
+    && success "Pool suporte_humano:instances → inst-02, inst-03"
 fi
 
 # ── Done ──────────────────────────────────────────────────────────────────────
