@@ -91,8 +91,8 @@ class OutputFieldSchema(BaseModel):
 
 class ReasonRequest(BaseModel):
     session_id:    str
-    agent_id:      str
-    tenant_id:     str
+    agent_id:      str = ""   # optional — forwarded for audit, not used in inference logic
+    tenant_id:     str = ""   # optional — used for session-param analytics (best-effort)
     prompt_id:     str = Field(..., description="Ref ao Prompt Registry")
     input:         dict[str, Any]
     output_schema: dict[str, OutputFieldSchema]

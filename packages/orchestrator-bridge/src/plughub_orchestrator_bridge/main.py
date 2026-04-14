@@ -487,6 +487,40 @@ async def process_routed(
             except Exception:
                 pass
 
+        # ── Persist snapshot to Redis before blocking call ────────────────────
+        # activate_native_agent blocks for the entire session duration (up to hours
+        # for menus with timeout_s=0). If the bridge process is killed mid-session,
+        # the in-memory snapshot is lost and the instance is never restored.
+        # We persist the snapshot now so a restart can recover it.
+        # Key: session:{session_id}:routing:{instance_id} (same pattern as human agents)
+        if native_instance_id and native_snapshot and tenant_id:
+            try:
+                await redis_client.setex(
+                    f"session:{session_id}:routing:{native_instance_id}",
+                    14400,
+                    json.dumps({
+                        "tenant_id":   tenant_id,
+                        "instance_id": native_instance_id,
+                        "pool_id":     pool_id,
+                        "snapshot":    native_snapshot,
+                    }),
+                )
+                # Track instance_id in a SET so process_contact_event can restore
+                # ALL AI instances on contact_closed (mirrors session:{id}:human_agents).
+                await redis_client.sadd(
+                    f"session:{session_id}:ai_agents", native_instance_id,
+                )
+                await redis_client.expire(f"session:{session_id}:ai_agents", 14400)
+                logger.debug(
+                    "AI instance snapshot persisted: session=%s instance=%s",
+                    session_id, native_instance_id,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "Could not persist AI instance snapshot: session=%s — %s",
+                    session_id, exc,
+                )
+
         agent_result = await activate_native_agent(
             http=http, redis_client=redis_client,
             session_id=session_id, customer_id=customer_id,
@@ -645,6 +679,20 @@ async def process_contact_event(
                 # ── Clean up all human-agent tracking for this session ────────
                 await redis_client.delete(f"session:{session_id}:human_agent")
                 await redis_client.delete(f"session:{session_id}:human_agents")
+
+            # ── Restore all AI agent instances for this session ───────────────
+            # AI agents are tracked in session:{session_id}:ai_agents SET,
+            # persisted in process_routed before the blocking activate_native_agent call.
+            # This ensures instances are freed even if the bridge was restarted mid-session.
+            ai_members = await redis_client.smembers(f"session:{session_id}:ai_agents")
+            if ai_members:
+                for ai_inst_id in ai_members:
+                    await _restore_instance(redis_client, session_id, ai_inst_id)
+                await redis_client.delete(f"session:{session_id}:ai_agents")
+                logger.info(
+                    "AI instance(s) restored on contact_closed: session=%s count=%d",
+                    session_id, len(ai_members),
+                )
 
         else:
             # reason == "agent_closed": one specific agent ended their session.
