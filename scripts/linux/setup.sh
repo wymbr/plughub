@@ -71,34 +71,47 @@ fi
 
 # ── Step 2: Node packages — install + build ───────────────────────────────────
 info "Instalando dependências Node e compilando TypeScript…"
+info "  (ordem respeita dependências internas via file: references)"
 
-NODE_PACKAGES=(
+# Packages that need install + tsc build, in strict dependency order:
+#   schemas (base) → sdk, skill-flow-engine, mcp-server, agent-registry
+#   → skill-flow-service (depends on skill-flow-engine)
+# UIs run in dev mode via vite — only need npm install, no tsc build.
+BUILD_PACKAGES=(
   "packages/schemas"
   "packages/sdk"
-  "packages/mcp-server-plughub"
   "packages/skill-flow-engine"
+  "packages/mcp-server-plughub"
   "packages/agent-registry"
   "packages/e2e-tests/services/skill-flow-service"
+)
+
+INSTALL_ONLY_PACKAGES=(
   "packages/e2e-tests"
   "packages/agent-assist-ui"
   "packages/dashboard/ui"
 )
 
-for pkg in "${NODE_PACKAGES[@]}"; do
+for pkg in "${BUILD_PACKAGES[@]}"; do
   dir="$ROOT/$pkg"
   if [ -f "$dir/package.json" ]; then
-    info "  npm install  →  $pkg"
-    npm install --prefix "$dir" --silent
-    # Build only packages that have a dist/ (i.e. TypeScript that needs compiling)
-    if grep -q '"build"' "$dir/package.json" 2>/dev/null; then
-      # Skip Vite UIs — they run in dev mode via PM2 (npm run dev)
-      if ! grep -q '"vite"' "$dir/package.json" 2>/dev/null || [ "$pkg" = "packages/agent-assist-ui" ] || [ "$pkg" = "packages/dashboard/ui" ]; then
-        if grep -q '"tsc"' "$dir/package.json" 2>/dev/null || grep -q '"build": "tsc"' "$dir/package.json" 2>/dev/null; then
-          info "  tsc build    →  $pkg"
-          (cd "$dir" && npm run build --silent) || warn "Build falhou para $pkg (pode ser normal se tipos externos não instalados)"
-        fi
-      fi
-    fi
+    info "  npm install + build  →  $pkg"
+    npm install --prefix "$dir" --silent \
+      || die "npm install falhou em $pkg"
+    (cd "$dir" && npm run build --silent) \
+      || die "tsc build falhou em $pkg — veja o erro acima"
+    success "  $pkg"
+  else
+    warn "  Ignorando $pkg (sem package.json)"
+  fi
+done
+
+for pkg in "${INSTALL_ONLY_PACKAGES[@]}"; do
+  dir="$ROOT/$pkg"
+  if [ -f "$dir/package.json" ]; then
+    info "  npm install          →  $pkg"
+    npm install --prefix "$dir" --silent \
+      || warn "npm install falhou em $pkg"
     success "  $pkg"
   else
     warn "  Ignorando $pkg (sem package.json)"
