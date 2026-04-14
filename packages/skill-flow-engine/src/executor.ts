@@ -74,8 +74,11 @@ export interface StepContext {
    * o step deve abortar graciosamente e retornar on_failure.
    *
    * @param ttlSeconds - novo TTL em segundos a partir de agora
+   *
+   * Opcional — apenas o menu step utiliza. Outros steps não precisam implementar.
+   * Se ausente, o menu step assume que o lock não expira (safe default).
    */
-  renewLock(ttlSeconds: number): Promise<boolean>
+  renewLock?(ttlSeconds: number): Promise<boolean>
 }
 
 export interface StepResult {

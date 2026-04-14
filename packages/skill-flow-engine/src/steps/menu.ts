@@ -81,7 +81,8 @@ export async function executeMenu(
   //    Se renewLock retornar false, o lock foi tomado por outra instância durante
   //    uma janela de crash recovery — abortar graciosamente evita que duas instâncias
   //    avancem o pipeline_state simultaneamente.
-  const lockStillHeld = await ctx.renewLock(timeoutSec + 60)
+  // renewLock é opcional na interface — se não fornecido, assume que o lock está válido
+  const lockStillHeld = ctx.renewLock ? await ctx.renewLock(timeoutSec + 60) : true
   if (!lockStillHeld) {
     // Outra instância assumiu o lock (crash recovery) — abortar sem erros
     return {
