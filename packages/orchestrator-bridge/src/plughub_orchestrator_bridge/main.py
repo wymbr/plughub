@@ -483,13 +483,79 @@ async def process_routed(
                 "Agent type %s not found in Agent Registry — activating via YAML fallback",
                 agent_type_id,
             )
+            # Mirror the plughub-native snapshot/restore logic so current_sessions is
+            # decremented after the skill flow completes.  Without this, each session
+            # leaks +1 on the AI instance; after max_concurrent runs the instance is
+            # removed from the pool set and all new contacts go silently to queue.
+            yaml_instance_id = result.get("instance_id", "")
+            yaml_snapshot: dict | None = None
+            if yaml_instance_id and tenant_id:
+                try:
+                    raw_inst = await redis_client.get(f"{tenant_id}:instance:{yaml_instance_id}")
+                    if raw_inst:
+                        yaml_snapshot = json.loads(raw_inst)
+                except Exception:
+                    pass
+            if yaml_instance_id and yaml_snapshot and tenant_id:
+                try:
+                    await redis_client.setex(
+                        f"session:{session_id}:routing:{yaml_instance_id}",
+                        14400,
+                        json.dumps({
+                            "tenant_id":   tenant_id,
+                            "instance_id": yaml_instance_id,
+                            "pool_id":     pool_id,
+                            "snapshot":    yaml_snapshot,
+                        }),
+                    )
+                    await redis_client.sadd(f"session:{session_id}:ai_agents", yaml_instance_id)
+                    await redis_client.expire(f"session:{session_id}:ai_agents", 14400)
+                    logger.debug(
+                        "YAML fallback: AI snapshot persisted: session=%s instance=%s",
+                        session_id, yaml_instance_id,
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "YAML fallback: could not persist AI snapshot: session=%s — %s",
+                        session_id, exc,
+                    )
+
             await activate_native_agent(
                 http=http, redis_client=redis_client,
                 session_id=session_id, customer_id=customer_id,
                 agent_type_id=agent_type_id, tenant_id=tenant_id,
                 skills=[],       # no skills list; resolve_flow_for_agent will use YAML directly
-                instance_id="",  # YAML fallback — no routing instance to track in lock
+                instance_id=yaml_instance_id,  # pass actual id so engine lock includes it
             )
+
+            # Restore instance after skill flow completes (mirrors plughub-native path).
+            # process_contact_event may have already restored it via ai_agents SET on
+            # customer disconnect — double restore is idempotent (max(0, …) guards against
+            # going negative and status is idempotently set to "ready").
+            if yaml_instance_id and yaml_snapshot:
+                try:
+                    yaml_snapshot["current_sessions"] = max(
+                        0, int(yaml_snapshot.get("current_sessions", 1)) - 1
+                    )
+                    yaml_snapshot["status"] = "ready"
+                    await redis_client.set(
+                        f"{tenant_id}:instance:{yaml_instance_id}",
+                        json.dumps(yaml_snapshot),
+                        ex=3600,
+                    )
+                    if pool_id:
+                        await redis_client.sadd(
+                            f"{tenant_id}:pool:{pool_id}:instances", yaml_instance_id
+                        )
+                    logger.info(
+                        "YAML fallback: AI instance restored: tenant=%s instance=%s pool=%s",
+                        tenant_id, yaml_instance_id, pool_id,
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "YAML fallback: could not restore AI instance: session=%s — %s",
+                        session_id, exc,
+                    )
             return
 
         # Best-effort fallback 2: check execution_model from Redis instance.
