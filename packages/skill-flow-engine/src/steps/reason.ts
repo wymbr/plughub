@@ -85,7 +85,8 @@ function validateAgainstSchema(
   for (const [field, def] of Object.entries(schema) as Array<[string, OutputFieldDef]>) {
     const value = obj[field]
 
-    if (value === undefined) {
+    // Treat JSON null the same as absent: Claude may return null for optional fields.
+    if (value === undefined || value === null) {
       if (def.required !== false) {
         return { success: false, error: `required field missing: ${field}` }
       }

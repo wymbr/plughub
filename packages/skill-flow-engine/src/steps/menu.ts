@@ -56,8 +56,8 @@ export async function executeMenu(
   //    responder ou desconectar (idle timeout da sessão dispara on_disconnect).
   //    Nesse caso usamos o TTL máximo de sessão (14400s = 4h) como limite superior
   //    para waitingKey e execution lock — suficiente para cobrir qualquer sessão ativa.
-  const isInfinite  = step.timeout_s === 0
-  const timeoutSec  = isInfinite ? 14400 : step.timeout_s
+  const isInfinite  = step.timeout_ms === 0
+  const timeoutSec  = isInfinite ? 14400 : Math.ceil(step.timeout_ms / 1000)
   const resultKey   = `menu:result:${ctx.sessionId}`
   const closedKey   = `session:closed:${ctx.sessionId}`
   const waitingKey  = `menu:waiting:${ctx.sessionId}`
