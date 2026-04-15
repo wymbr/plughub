@@ -74,6 +74,7 @@ _default_skills_dir = str(Path(__file__).parent.parent / "skill-flow-engine" / "
 SKILLS_DIR          = os.getenv("SKILLS_DIR", _default_skills_dir)
 
 TOPIC_ROUTED  = "conversations.routed"
+TOPIC_QUEUED  = "conversations.queued"
 TOPIC_INBOUND = "conversations.inbound"
 TOPIC_EVENTS  = "conversations.events"
 GROUP_ID      = "orchestrator-bridge"
@@ -119,6 +120,32 @@ async def get_agent_type(
     except Exception as exc:
         logger.warning("Agent Registry unreachable (%s): %s", url, exc)
 
+    return None
+
+
+async def get_pool_config(
+    http: aiohttp.ClientSession,
+    tenant_id: str,
+    pool_id: str,
+) -> dict | None:
+    """
+    Fetch pool configuration from Agent Registry.
+    Not cached — pool config may change at runtime (queue_config can be added/removed).
+    """
+    url     = f"{AGENT_REGISTRY_URL}/v1/pools/{pool_id}"
+    headers = {"x-tenant-id": tenant_id}
+    try:
+        async with http.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=5)) as resp:
+            if resp.status == 200:
+                return await resp.json()
+            if resp.status == 404:
+                logger.debug("Pool not found in registry: tenant=%s pool=%s", tenant_id, pool_id)
+            else:
+                logger.warning(
+                    "Agent Registry returned HTTP %d for pool=%s", resp.status, pool_id
+                )
+    except Exception as exc:
+        logger.warning("Agent Registry unreachable (pool config %s): %s", pool_id, exc)
     return None
 
 
@@ -220,6 +247,7 @@ async def activate_native_agent(
     skills: list[dict],
     instance_id: str = "",
     conference_id: str = "",
+    extra_context: dict | None = None,
 ) -> dict:
     """
     Activate a plughub-native orchestrator agent by calling skill-flow-service.
@@ -262,10 +290,13 @@ async def activate_native_agent(
         "channel":     channel,
         "tenant_id":   tenant_id,
         "agent_type":  agent_type_id,
+        "session_id":  session_id,   # exposed so invoke step inputs can reference $.session.session_id
     }
     if conference_id:
         session_context["conference_id"]  = conference_id
         session_context["is_conference"]  = True
+    if extra_context:
+        session_context.update(extra_context)
 
     payload = {
         "tenant_id":       tenant_id,
@@ -604,6 +635,135 @@ async def process_routed(
         )
 
 
+# ── Process conversations.queued — Queue Agent Pattern ────────────────────────
+
+async def process_queued(
+    msg: dict,
+    http: aiohttp.ClientSession,
+    redis_client: aioredis.Redis,
+) -> None:
+    """
+    Handle a ConversationRoutedEvent where result.allocated=False (queued contact).
+
+    Queue Agent Pattern (spec Queue Agent):
+      If the pool has a queue_config, activate a native skill-flow agent that
+      interacts with the customer while they wait.  When a human agent becomes
+      available, the Routing Engine's kafka_listener sets a Redis marker and
+      signals the queue agent via LPUSH '__agent_available__' to
+      menu:result:{session_id}, which unblocks the menu step and causes the
+      skill flow to execute an escalate step to the human pool.
+
+    Redis marker set here:
+      queue:agent_active:{session_id} → JSON  (TTL 4h)
+      Checked by kafka_listener._drain_queue_for_agent() to decide whether to
+      signal the queue agent (LPUSH) or re-publish to conversations.inbound.
+
+    If queue_config is absent or the agent type cannot be resolved, the contact
+    waits silently (original behaviour — routing engine drain still works).
+    """
+    session_id = msg.get("session_id", "")
+    tenant_id  = msg.get("tenant_id", "")
+    result     = msg.get("result", {})
+    pool_id    = result.get("pool_id", "")
+
+    if not session_id or not tenant_id or not pool_id:
+        logger.warning("Queued event missing required fields: %s", msg)
+        return
+
+    # Fetch pool config to check for queue_config
+    pool = await get_pool_config(http, tenant_id, pool_id)
+    if not pool:
+        logger.warning(
+            "Could not fetch pool config for queue agent activation: pool=%s tenant=%s",
+            pool_id, tenant_id,
+        )
+        return
+
+    queue_cfg = pool.get("queue_config")
+    if not queue_cfg:
+        logger.debug("No queue_config for pool=%s — customer waits silently", pool_id)
+        return
+
+    agent_type_id = queue_cfg.get("agent_type_id", "")
+    explicit_skill_id = queue_cfg.get("skill_id")   # optional — overrides agent's default skill
+    if not agent_type_id:
+        logger.warning("queue_config.agent_type_id is empty for pool=%s", pool_id)
+        return
+
+    # Resolve agent type metadata (framework, skills list)
+    agent_type = await get_agent_type(http, tenant_id, agent_type_id)
+    if agent_type is None:
+        # YAML fallback (dev environment without Agent Registry)
+        flow = _load_yaml_fallback(agent_type_id)
+        if not flow:
+            logger.error(
+                "Queue agent %s not found in Agent Registry and no YAML fallback in %s",
+                agent_type_id, SKILLS_DIR,
+            )
+            return
+        skills: list[dict] = []
+    else:
+        skills = agent_type.get("skills", [])
+
+    # Prepend explicit skill_id if given and not already in the list
+    if explicit_skill_id and not any(s.get("skill_id") == explicit_skill_id for s in skills):
+        skills = [{"skill_id": explicit_skill_id}] + skills
+
+    # Resolve customer_id from session meta
+    customer_id = session_id
+    try:
+        raw = await redis_client.get(f"session:{session_id}:meta")
+        if raw:
+            customer_id = json.loads(raw).get("customer_id", customer_id)
+    except Exception:
+        pass
+
+    # Set Redis marker so kafka_listener knows to signal the queue agent
+    # instead of re-publishing to conversations.inbound when an agent becomes ready.
+    marker_value = json.dumps({
+        "pool_id":       pool_id,
+        "agent_type_id": agent_type_id,
+        "activated_at":  datetime.now(timezone.utc).isoformat(),
+    })
+    try:
+        await redis_client.set(
+            f"queue:agent_active:{session_id}", marker_value, ex=14_400
+        )
+        logger.debug("Queue agent marker set: session=%s pool=%s", session_id, pool_id)
+    except Exception as exc:
+        logger.warning(
+            "Could not set queue agent marker: session=%s — %s", session_id, exc
+        )
+
+    logger.info(
+        "Activating queue agent: session=%s pool=%s agent=%s",
+        session_id, pool_id, agent_type_id,
+    )
+
+    # Activate the queue agent — this call blocks for the entire wait duration
+    # because the skill flow contains a menu step with timeout_s=0.
+    # It returns only when the queue agent's skill flow completes (either via
+    # '__agent_available__' signal or customer disconnect / max_wait_s timeout).
+    # extra_context exposes pool_id and session_id so the YAML's invoke step can
+    # dynamically call conversation_escalate with the correct target pool.
+    await activate_native_agent(
+        http=http, redis_client=redis_client,
+        session_id=session_id, customer_id=customer_id,
+        agent_type_id=agent_type_id, tenant_id=tenant_id,
+        skills=skills,
+        instance_id="",   # queue agents don't hold a routing slot
+        extra_context={"pool_id": pool_id},
+    )
+
+    # Clean up marker after the queue agent completes
+    try:
+        await redis_client.delete(f"queue:agent_active:{session_id}")
+    except Exception:
+        pass
+
+    logger.info("Queue agent completed: session=%s pool=%s", session_id, pool_id)
+
+
 # ── Process conversations.events — notify human agent on contact_closed ───────
 
 async def process_contact_event(
@@ -898,6 +1058,7 @@ async def run() -> None:
     redis_client = aioredis.from_url(REDIS_URL, decode_responses=True)
     consumer = AIOKafkaConsumer(
         TOPIC_ROUTED,
+        TOPIC_QUEUED,
         TOPIC_INBOUND,
         TOPIC_EVENTS,
         bootstrap_servers=KAFKA_BROKERS,
@@ -907,8 +1068,8 @@ async def run() -> None:
     )
     await consumer.start()
     logger.info(
-        "✅ Orchestrator Bridge started — topics: %s, %s, %s",
-        TOPIC_ROUTED, TOPIC_INBOUND, TOPIC_EVENTS,
+        "✅ Orchestrator Bridge started — topics: %s, %s, %s, %s",
+        TOPIC_ROUTED, TOPIC_QUEUED, TOPIC_INBOUND, TOPIC_EVENTS,
     )
     logger.info("   skill-flow-service: %s", SKILL_FLOW_URL)
     logger.info("   agent-registry:     %s", AGENT_REGISTRY_URL)
@@ -932,6 +1093,8 @@ async def _dispatch(
     try:
         if topic == TOPIC_ROUTED:
             await process_routed(payload, http, redis_client)
+        elif topic == TOPIC_QUEUED:
+            await process_queued(payload, http, redis_client)
         elif topic == TOPIC_INBOUND:
             await process_inbound(payload, redis_client)
         elif topic == TOPIC_EVENTS:

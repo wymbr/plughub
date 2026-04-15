@@ -30,6 +30,7 @@ poolsRouter.post("/", async (req: Request, res: Response, next: NextFunction) =>
     // Validar evaluation_template_id se fornecido
     // TODO: consultar tabela evaluation_templates
 
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const pool = await prisma.pool.create({
       data: {
         pool_id:               body.pool_id,
@@ -40,8 +41,9 @@ poolsRouter.post("/", async (req: Request, res: Response, next: NextFunction) =>
         routing_expression:    body.routing_expression ?? Prisma.DbNull,
         evaluation_template_id: body.evaluation_template_id ?? null,
         supervisor_config:     body.supervisor_config ?? Prisma.DbNull,
+        queue_config:          body.queue_config ?? Prisma.DbNull,
         created_by:            createdBy,
-      },
+      } as any,
     })
 
     return res.status(201).json(_formatPool(pool))
@@ -100,6 +102,7 @@ poolsRouter.put("/:pool_id", async (req: Request, res: Response, next: NextFunct
     })
     if (!existing) return res.status(404).json({ error: "Pool não encontrado" })
 
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const updated = await prisma.pool.update({
       where: { id: existing.id },
       data: {
@@ -109,7 +112,8 @@ poolsRouter.put("/:pool_id", async (req: Request, res: Response, next: NextFunct
         ...(body.routing_expression    !== undefined && { routing_expression:    body.routing_expression }),
         ...(body.evaluation_template_id !== undefined && { evaluation_template_id: body.evaluation_template_id }),
         ...(body.supervisor_config     !== undefined && { supervisor_config:     body.supervisor_config }),
-      },
+        ...(body.queue_config          !== undefined && { queue_config:          body.queue_config }),
+      } as any,
     })
 
     return res.json(_formatPool(updated))

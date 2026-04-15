@@ -66,6 +66,30 @@ export const SupervisorConfigSchema = z.object({
 })
 export type SupervisorConfig = z.infer<typeof SupervisorConfigSchema>
 
+export const QueueConfigSchema = z.object({
+  /**
+   * agent_type_id of the native skill-flow agent that handles the customer
+   * while they wait in queue (Queue Agent Pattern).
+   * The agent must be registered in the same pool or a virtual "queue" pool.
+   */
+  agent_type_id: z.string(),
+
+  /**
+   * Maximum wait time in seconds before the queue agent gives up and sends
+   * a final apology / callback message. 0 = wait forever.
+   * Default: 1800 (30 minutes).
+   */
+  max_wait_s: z.number().int().min(0).default(1800),
+
+  /**
+   * Optional explicit skill_id to use when activating the queue agent.
+   * If omitted, the routing engine resolves the skill via the agent type's
+   * default skill.
+   */
+  skill_id: z.string().optional(),
+})
+export type QueueConfig = z.infer<typeof QueueConfigSchema>
+
 export const PoolEvaluationConfigSchema = z.object({
   /**
    * Fraction of closed contacts that should be evaluated (0.0 – 1.0).
@@ -93,6 +117,7 @@ export const PoolRegistrationSchema = z.object({
   /** ID explícito do evaluation template (alternativa ao template resolvido por skill_id_template). */
   evaluation_template_id: z.string().optional(),
   supervisor_config:      SupervisorConfigSchema.optional(),
+  queue_config:           QueueConfigSchema.optional(),
 })
 export type PoolRegistration = z.infer<typeof PoolRegistrationSchema>
 

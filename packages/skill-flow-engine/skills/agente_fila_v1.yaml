@@ -1,0 +1,122 @@
+# agente_fila_v1.yaml
+# Queue Agent — Queue Agent Pattern (spec: Queue Agent)
+#
+# Ativado pelo Orchestrator Bridge quando um contato entra em fila e o pool
+# está configurado com queue_config.agent_type_id.
+#
+# Fluxo:
+#   1. boas_vindas       — notifica o cliente que está em fila
+#   2. aguardar_mensagem — menu timeout_s:0, aguarda mensagem do cliente ou sinal
+#                          '__agent_available__' injetado pelo kafka_listener drain
+#   3. verificar_sinal   — choice: sinal → transferir | mensagem → responder
+#   4. responder_cliente — reason: Claude gera resposta contextual sobre a fila
+#   5. enviar_resposta   — notify: entrega a resposta ao cliente
+#   (loop volta para aguardar_mensagem)
+#   6. avisar_transferencia — notify: informa que o agente humano está disponível
+#   7. escalar           — invoke conversation_escalate → target_pool vem de
+#                          $.session.pool_id (injetado pelo process_queued)
+#   8. finalizar         — complete outcome: escalated_human
+#
+# O session_context exposto pelo Orchestrator Bridge (extras):
+#   $.session.pool_id     — pool de destino para a escalada
+#   $.session.session_id  — ID da sessão corrente
+#
+# Para usar este fluxo em um pool:
+#   1. Registre um agent_type_id (ex: agente_fila_retencao_v1) com
+#      framework: plughub-native e skill: skill_agente_fila_v1
+#   2. Configure queue_config.agent_type_id no pool desejado
+#   3. Opcionalmente configure queue_config.skill_id com o skill_id específico
+
+entry: boas_vindas
+
+steps:
+
+  # ── Etapa 1: boas-vindas ─────────────────────────────────────────────────
+  - id: boas_vindas
+    type: notify
+    message: "Olá! No momento todos os nossos especialistas estão ocupados. Você está na fila de atendimento e será atendido em breve. Se quiser, pode enviar uma mensagem e responderei enquanto aguarda."
+    channel: session
+    on_success: aguardar_mensagem
+    on_failure: aguardar_mensagem
+
+  # ── Etapa 2: aguardar mensagem ou sinal de disponibilidade ────────────────
+  # timeout_s: 0 → aguarda indefinidamente até que o cliente envie uma mensagem
+  # ou o kafka_listener injete '__agent_available__' via LPUSH menu:result:{session_id}.
+  - id: aguardar_mensagem
+    type: menu
+    prompt: ""
+    interaction: text
+    output_as: ultima_mensagem
+    timeout_s: 0
+    on_success: verificar_sinal
+    on_failure: finalizar
+    on_timeout: finalizar
+    on_disconnect: finalizar
+
+  # ── Etapa 3: verificar se é sinal de disponibilidade ou mensagem real ─────
+  - id: verificar_sinal
+    type: choice
+    conditions:
+      - field: "$.pipeline_state.ultima_mensagem"
+        operator: eq
+        value: "__agent_available__"
+        next: avisar_transferencia
+    default: responder_cliente
+
+  # ── Etapa 4: gerar resposta para a mensagem do cliente com IA ─────────────
+  - id: responder_cliente
+    type: reason
+    prompt: |
+      O cliente está aguardando atendimento humano na fila.
+      Mensagem do cliente: {{pipeline_state.ultima_mensagem}}
+
+      Responda de forma amigável e empática. Você pode:
+      - Confirmar que a mensagem foi recebida
+      - Dar dicas sobre o assunto se for algo simples de esclarecer
+      - Tranquilizar o cliente sobre o tempo de espera
+      - Informar que um especialista humano atenderá em breve
+
+      Seja breve (2-3 frases). Não resolva problemas complexos — apenas acolha e
+      mantenha o cliente informado enquanto aguarda.
+    output_schema:
+      type: object
+      properties:
+        resposta:
+          type: string
+    output_as: resposta_ia
+    on_success: enviar_resposta
+    on_failure: aguardar_mensagem
+
+  # ── Etapa 5: entregar resposta ao cliente e voltar ao loop ────────────────
+  - id: enviar_resposta
+    type: notify
+    message: "$.pipeline_state.resposta_ia.resposta"
+    channel: session
+    on_success: aguardar_mensagem
+    on_failure: aguardar_mensagem
+
+  # ── Etapa 6: avisar o cliente que o agente humano está disponível ─────────
+  - id: avisar_transferencia
+    type: notify
+    message: "Ótima notícia! Um de nossos especialistas está disponível agora. Vou transferir você imediatamente. Aguarde um instante..."
+    channel: session
+    on_success: escalar
+    on_failure: escalar
+
+  # ── Etapa 7: escalar para o pool humano ───────────────────────────────────
+  # Usa invoke para chamar conversation_escalate com target_pool resolvido
+  # dinamicamente de $.session.pool_id (injetado pelo Orchestrator Bridge via
+  # extra_context ao ativar o agente de fila).
+  - id: escalar
+    type: invoke
+    tool: conversation_escalate
+    input:
+      session_id: "$.session.session_id"
+      target_pool: "$.session.pool_id"
+    on_success: finalizar
+    on_failure: finalizar
+
+  # ── Etapa 8: finalizar ────────────────────────────────────────────────────
+  - id: finalizar
+    type: complete
+    outcome: escalated_human

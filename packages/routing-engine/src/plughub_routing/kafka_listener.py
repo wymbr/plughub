@@ -223,19 +223,39 @@ class LifecycleEventHandler:
                 )
                 continue
 
-            # Remove from queue before re-publishing — prevents double-routing
+            # Remove from queue before signalling/re-publishing — prevents double-routing
             await self._instances.remove_queued_contact(
                 tenant_id, pool_id, contact.session_id
             )
 
-            # Re-publish to conversations.inbound — Routing Engine will allocate it
-            assert self._producer is not None
-            await self._producer.send(self._topic_inbound, value=full_data)
+            # Check whether a Queue Agent is currently active for this session.
+            # If so, signal the agent via LPUSH '__agent_available__' to unblock its
+            # menu:result BLPOP — the queue agent's skill flow then executes an
+            # escalate step to hand over to the now-available human agent.
+            # If not, re-publish to conversations.inbound so the Routing Engine
+            # allocates it directly (original drain behaviour).
+            queue_agent_key   = f"queue:agent_active:{contact.session_id}"
+            queue_agent_active = await self._instances._redis.get(queue_agent_key)
 
-            logger.info(
-                "Queue drain: re-routing session=%s to pool=%s tenant=%s (agent=%s became ready)",
-                contact.session_id, pool_id, tenant_id, instance_id,
-            )
+            assert self._producer is not None
+            if queue_agent_active:
+                # Signal the queue agent's menu step to proceed to escalation
+                await self._instances._redis.lpush(
+                    f"menu:result:{contact.session_id}", "__agent_available__"
+                )
+                logger.info(
+                    "Queue drain: signalled queue agent for session=%s pool=%s tenant=%s "
+                    "(agent=%s became ready)",
+                    contact.session_id, pool_id, tenant_id, instance_id,
+                )
+            else:
+                # No active queue agent — re-publish directly to conversations.inbound
+                await self._producer.send(self._topic_inbound, value=full_data)
+                logger.info(
+                    "Queue drain: re-routing session=%s to pool=%s tenant=%s "
+                    "(agent=%s became ready, no queue agent active)",
+                    contact.session_id, pool_id, tenant_id, instance_id,
+                )
             # One contact per agent activation — stop here; if the agent has
             # capacity for more, subsequent agent_ready/agent_busy cycles will
             # trigger additional drains.

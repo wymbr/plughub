@@ -28,6 +28,7 @@ model Pool {
   routing_expression     Json?
   evaluation_template_id String?
   supervisor_config      Json?
+  queue_config           Json?
 
   created_at  DateTime @default(now())
   updated_at  DateTime @updatedAt
