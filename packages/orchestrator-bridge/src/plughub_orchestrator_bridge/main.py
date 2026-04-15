@@ -375,8 +375,11 @@ async def activate_human_agent(
         if instance_id:
             await redis_client.sadd(f"session:{session_id}:human_agents", instance_id)
             await redis_client.expire(f"session:{session_id}:human_agents", 14400)
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.error(
+            "Failed to set human_agent flag — bidirectional messaging will not work: "
+            "session=%s — %s", session_id, exc
+        )
 
     # ── Save instance snapshot for restore on contact_closed ─────────────────
     # The routing engine marks the instance busy (TTL=30s). Without heartbeats
@@ -865,6 +868,15 @@ async def process_contact_event(
                 # ── Clean up all human-agent tracking for this session ────────
                 await redis_client.delete(f"session:{session_id}:human_agent")
                 await redis_client.delete(f"session:{session_id}:human_agents")
+
+            # ── Clear conversation history so next agent doesn't see stale data ──
+            try:
+                await redis_client.delete(f"session:{session_id}:messages")
+                logger.debug("Message history cleared: session=%s", session_id)
+            except Exception as exc:
+                logger.warning(
+                    "Could not delete message history: session=%s — %s", session_id, exc
+                )
 
             # ── Restore all AI agent instances for this session ───────────────
             # AI agents are tracked in session:{session_id}:ai_agents SET,

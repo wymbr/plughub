@@ -348,15 +348,27 @@ export async function startServer(config: ServerConfig): Promise<void> {
         if (msg["type"] !== "message.text") return   // ignore pong, etc.
         if (!activeSessionId) return                  // lobby mode, no session yet
 
-        // Look up contact_id and channel from session metadata
-        let contactId = activeSessionId  // fallback: use session_id
+        // Look up contact_id and channel from session metadata.
+        // Try two sources in order:
+        //   1. session:{session_id}:meta (written by channel-gateway on connect)
+        //   2. session:{session_id}:contact_id (dedicated key, also by channel-gateway)
+        // Only fall back to activeSessionId (session_id) if both are absent —
+        // that fallback is wrong because channel-gateway registers WebSockets under
+        // contact_id, not session_id, and registry.send(session_id) would find nothing.
+        let contactId: string | null = null
         try {
           const metaRaw = await redis.get(`session:${activeSessionId}:meta`)
           if (metaRaw) {
             const meta = JSON.parse(metaRaw) as Record<string, string>
             if (meta["contact_id"]) contactId = meta["contact_id"]
           }
-        } catch { /* use fallback */ }
+        } catch { /* try next source */ }
+        if (!contactId) {
+          try {
+            contactId = await redis.get(`session:${activeSessionId}:contact_id`)
+          } catch { /* use final fallback */ }
+        }
+        if (!contactId) contactId = activeSessionId  // last-resort fallback
 
         const msgText = typeof msg["text"] === "string" ? msg["text"] : ""
         const msgTs   = typeof msg["timestamp"] === "string"
