@@ -80,79 +80,114 @@ export function createServer(allDeps?: AllDeps): McpServer {
 //
 // In demo/dev environments agents do not publish Kafka agent_ready events, so
 // the Routing Engine relies on the static seed (seed-demo.sh) for instance state.
-// After a session where _restore_instance wasn't called (e.g. bridge restart,
-// crashed session, or the now-fixed silent-exception bug), the instance can be
-// left with current_sessions > 0 or even removed from the pool:instances set.
+// Problems that can leave the pool without a ready instance:
+//   1. Instance key expired (TTL ran out — now fixed in seed: no TTL for instances)
+//   2. mark_busy incremented current_sessions; _restore_instance never ran → key
+//      may have status=busy or current_sessions > 0
+//   3. Instance was removed from pool:instances set by mark_busy srem
 //
-// Calling this when the Agent Assist UI connects guarantees the instance is
-// available for routing as long as Carlos is online — matching the intent of
-// "human agent is ready to accept conversations".
+// Recovery strategy (three sources for instance IDs, in priority order):
+//   A. pool:instances set   — managed by routing engine
+//   B. pool_roster:{poolId} — permanent set written by seed-demo.sh (no TTL)
+//   C. KEYS instance:*      — full scan (last resort)
+//
+// For each instance found, the function:
+//   - Resets current_sessions=0, status=ready
+//   - Preserves the existing TTL (KEEPTTL via pre-read); if TTL=-1 (no TTL,
+//     as written by the new seed), the SET is done without EX so it stays permanent
+//   - If instance key is missing but a template exists (instance_template:{id},
+//     also written by seed-demo.sh), recreates it from the template
+//   - Ensures the ID is in pool:instances set (idempotent SADD)
 //
 // In production this function is harmless: lifecycle events keep state current,
-// and the write here is quickly overwritten by the next agent_ready heartbeat.
+// and any write here is quickly overwritten by the next agent_ready heartbeat.
 async function refreshPoolInstances(
   poolId: string,
   redis: import("ioredis").default,
 ): Promise<void> {
-  const tenantId = process.env["PLUGHUB_TENANT_ID"] ?? "default"
+  const tenantId    = process.env["PLUGHUB_TENANT_ID"] ?? "default"
   const poolInstKey = `${tenantId}:pool:${poolId}:instances`
 
-  // Collect candidate instance IDs: start from the pool's instances set …
-  const setMembers = await redis.smembers(poolInstKey)
-  const candidateIds = new Set<string>(setMembers)
+  // ── Collect candidate instance IDs ────────────────────────────────────────
+  const candidateIds = new Set<string>()
 
-  // … then also scan for instance keys whose 'pools' list includes this pool
-  // (handles the case where mark_busy removed the instance from the set).
-  // KEYS is O(N) but acceptable for demo environments with a small keyspace.
-  const allInstanceKeys = await redis.keys(`${tenantId}:instance:*`)
-  for (const key of allInstanceKeys) {
-    try {
-      const raw = await redis.get(key)
-      if (!raw) continue
-      const inst = JSON.parse(raw) as Record<string, unknown>
-      const pools = Array.isArray(inst["pools"]) ? (inst["pools"] as string[]) : []
-      const singlePool = typeof inst["pool_id"] === "string" ? inst["pool_id"] : ""
-      if (pools.includes(poolId) || singlePool === poolId) {
-        const iid = inst["instance_id"] as string | undefined
-        if (iid) candidateIds.add(iid)
-      }
-    } catch { /* skip malformed key */ }
-  }
+  // Source A: pool:instances set (routing engine managed)
+  for (const id of await redis.smembers(poolInstKey)) candidateIds.add(id)
 
-  for (const instanceId of candidateIds) {
-    const key = `${tenantId}:instance:${instanceId}`
-    try {
-      const raw = await redis.get(key)
-      if (raw) {
+  // Source B: pool_roster:{poolId} (permanent, written by seed-demo.sh)
+  for (const id of await redis.smembers(`${tenantId}:pool_roster:${poolId}`)) candidateIds.add(id)
+
+  // Source C: KEYS scan — O(N) but acceptable in demo with small keyspace
+  try {
+    for (const key of await redis.keys(`${tenantId}:instance:*`)) {
+      try {
+        const raw = await redis.get(key)
+        if (!raw) continue
         const inst = JSON.parse(raw) as Record<string, unknown>
-        // Only reset if the instance belongs to this pool
         const pools = Array.isArray(inst["pools"]) ? (inst["pools"] as string[]) : []
-        const singlePool = typeof inst["pool_id"] === "string" ? inst["pool_id"] : ""
-        if (!pools.includes(poolId) && singlePool !== poolId) continue
-
-        inst["current_sessions"] = 0
-        inst["status"] = "ready"
-
-        // Preserve existing TTL so we don't accidentally shorten a 24h seed TTL.
-        const ttl = await redis.ttl(key)
-        if (ttl > 0) {
-          await redis.set(key, JSON.stringify(inst), "EX", ttl)
-        } else {
-          // Key had no TTL or was already expired — restore with 24h (matches seed)
-          await redis.set(key, JSON.stringify(inst), "EX", 86400)
+        const pid   = typeof inst["pool_id"] === "string" ? inst["pool_id"] : ""
+        if (pools.includes(poolId) || pid === poolId) {
+          const iid = inst["instance_id"] as string | undefined
+          if (iid) candidateIds.add(iid)
         }
-      } else {
-        // Key doesn't exist (expired) — nothing to refresh
-        continue
-      }
-    } catch { /* skip, non-fatal */ }
+      } catch { /* skip malformed key */ }
+    }
+  } catch { /* KEYS scan failed — continue with what we have */ }
 
-    // Always ensure the instance is in the pool's instances set
-    await redis.sadd(poolInstKey, instanceId)
+  // ── Refresh / recreate each instance ─────────────────────────────────────
+  let refreshed = 0
+  for (const instanceId of candidateIds) {
+    const key      = `${tenantId}:instance:${instanceId}`
+    const tmplKey  = `${tenantId}:instance_template:${instanceId}`
+
+    try {
+      let raw = await redis.get(key)
+
+      if (!raw) {
+        // Instance key expired — try to recover from the permanent template
+        raw = await redis.get(tmplKey)
+        if (!raw) {
+          console.warn(`[agent-ws] No template found for instance ${instanceId} — skipping`)
+          continue
+        }
+        console.log(`[agent-ws] Recreating expired instance ${instanceId} from template`)
+      }
+
+      const inst = JSON.parse(raw) as Record<string, unknown>
+
+      // Filter: only process instances that actually belong to this pool
+      const pools = Array.isArray(inst["pools"]) ? (inst["pools"] as string[]) : []
+      const pid   = typeof inst["pool_id"] === "string" ? inst["pool_id"] : ""
+      if (!pools.includes(poolId) && pid !== poolId) continue
+
+      inst["current_sessions"] = 0
+      inst["status"]           = "ready"
+
+      // Preserve TTL: -1 means no TTL (permanent — new seed behaviour).
+      // >0 means key exists with a TTL; preserve it.
+      // -2 means key was expired (we're recreating from template) → write permanent.
+      const ttl = await redis.ttl(key)
+      if (ttl > 0) {
+        await redis.set(key, JSON.stringify(inst), "EX", ttl)
+      } else {
+        // No TTL (permanent) or key was expired → write without TTL
+        await redis.set(key, JSON.stringify(inst))
+      }
+      refreshed++
+    } catch (err) {
+      console.error(`[agent-ws] Failed to refresh instance ${instanceId}:`, err)
+    }
+
+    // Always ensure the instance is in the routing pool set
+    try {
+      await redis.sadd(poolInstKey, instanceId)
+    } catch { /* non-fatal */ }
   }
 
   if (candidateIds.size > 0) {
-    console.log(`[agent-ws] Refreshed ${candidateIds.size} instance(s) for pool=${poolId}`)
+    console.log(`[agent-ws] Pool ${poolId}: found ${candidateIds.size} candidate(s), refreshed ${refreshed}`)
+  } else {
+    console.warn(`[agent-ws] Pool ${poolId}: no instances found — run seed-demo.sh`)
   }
 }
 

@@ -111,28 +111,41 @@ if [ -n "$REDIS_CLI_CMD" ]; then
   $REDIS_CLI_CMD SADD "${TENANT_ID}:pools" "demo_ia" "sac_ia" "fila_humano" "retencao_humano" >/dev/null \
     && success "Pool set registrado: demo_ia, sac_ia, fila_humano, retencao_humano"
 
-  # ── Agent instances (TTL 24h) ─────────────────────────────────────────────
-  $REDIS_CLI_CMD SET "${TENANT_ID}:instance:demo-ia-001" \
-    "{\"instance_id\":\"demo-ia-001\",\"agent_type_id\":\"agente_demo_ia_v1\",\"tenant_id\":\"${TENANT_ID}\",\"pool_id\":\"demo_ia\",\"pools\":[\"demo_ia\"],\"execution_model\":\"stateless\",\"max_concurrent\":10,\"current_sessions\":0,\"status\":\"ready\",\"registered_at\":\"${NOW}\"}" \
-    EX 86400 >/dev/null \
-    && success "Instância demo-ia-001 registrada (pool: demo_ia)"
+  # ── Agent instances (sem TTL — instâncias demo são permanentes) ──────────────
+  # Instâncias de agentes IA têm o TTL renovado pelo mark_busy (KEEPTTL).
+  # A instância humana (retencao-humano-001) nunca recebe mark_busy enquanto
+  # estiver em fila, portanto não deve ter TTL — caso contrário expira após 24h
+  # e o routing engine não encontra capacidade.
+  #
+  # Para cada instância também gravamos um template permanente
+  # (instance_template:{id}) usado por refreshPoolInstances para recriar
+  # a chave se ela expirar ou for deletada acidentalmente.
 
-  $REDIS_CLI_CMD SET "${TENANT_ID}:instance:sac-ia-001" \
-    "{\"instance_id\":\"sac-ia-001\",\"agent_type_id\":\"agente_sac_ia_v1\",\"tenant_id\":\"${TENANT_ID}\",\"pool_id\":\"sac_ia\",\"pools\":[\"sac_ia\"],\"execution_model\":\"stateless\",\"max_concurrent\":10,\"current_sessions\":0,\"status\":\"ready\",\"registered_at\":\"${NOW}\"}" \
-    EX 86400 >/dev/null \
-    && success "Instância sac-ia-001 registrada (pool: sac_ia)"
+  INST_DEMO_IA="{\"instance_id\":\"demo-ia-001\",\"agent_type_id\":\"agente_demo_ia_v1\",\"tenant_id\":\"${TENANT_ID}\",\"pool_id\":\"demo_ia\",\"pools\":[\"demo_ia\"],\"execution_model\":\"stateless\",\"max_concurrent\":10,\"current_sessions\":0,\"status\":\"ready\",\"registered_at\":\"${NOW}\"}"
+  INST_SAC_IA="{\"instance_id\":\"sac-ia-001\",\"agent_type_id\":\"agente_sac_ia_v1\",\"tenant_id\":\"${TENANT_ID}\",\"pool_id\":\"sac_ia\",\"pools\":[\"sac_ia\"],\"execution_model\":\"stateless\",\"max_concurrent\":10,\"current_sessions\":0,\"status\":\"ready\",\"registered_at\":\"${NOW}\"}"
+  INST_FILA="{\"instance_id\":\"fila-ia-001\",\"agent_type_id\":\"agente_fila_v1\",\"tenant_id\":\"${TENANT_ID}\",\"pool_id\":\"fila_humano\",\"pools\":[\"fila_humano\"],\"execution_model\":\"stateless\",\"max_concurrent\":50,\"current_sessions\":0,\"status\":\"ready\",\"registered_at\":\"${NOW}\"}"
+  INST_RETENCAO="{\"instance_id\":\"retencao-humano-001\",\"agent_type_id\":\"agente_retencao_humano_v1\",\"tenant_id\":\"${TENANT_ID}\",\"pool_id\":\"retencao_humano\",\"pools\":[\"retencao_humano\"],\"execution_model\":\"stateful\",\"max_concurrent\":3,\"current_sessions\":0,\"status\":\"ready\",\"registered_at\":\"${NOW}\"}"
 
-  $REDIS_CLI_CMD SET "${TENANT_ID}:instance:fila-ia-001" \
-    "{\"instance_id\":\"fila-ia-001\",\"agent_type_id\":\"agente_fila_v1\",\"tenant_id\":\"${TENANT_ID}\",\"pool_id\":\"fila_humano\",\"pools\":[\"fila_humano\"],\"execution_model\":\"stateless\",\"max_concurrent\":50,\"current_sessions\":0,\"status\":\"ready\",\"registered_at\":\"${NOW}\"}" \
-    EX 86400 >/dev/null \
-    && success "Instância fila-ia-001 registrada (pool: fila_humano)"
+  $REDIS_CLI_CMD SET "${TENANT_ID}:instance:demo-ia-001"         "$INST_DEMO_IA"    >/dev/null && success "Instância demo-ia-001 registrada (pool: demo_ia)"
+  $REDIS_CLI_CMD SET "${TENANT_ID}:instance:sac-ia-001"          "$INST_SAC_IA"    >/dev/null && success "Instância sac-ia-001 registrada (pool: sac_ia)"
+  $REDIS_CLI_CMD SET "${TENANT_ID}:instance:fila-ia-001"         "$INST_FILA"      >/dev/null && success "Instância fila-ia-001 registrada (pool: fila_humano)"
+  $REDIS_CLI_CMD SET "${TENANT_ID}:instance:retencao-humano-001" "$INST_RETENCAO"  >/dev/null && success "Instância retencao-humano-001 registrada (pool: retencao_humano)"
 
-  $REDIS_CLI_CMD SET "${TENANT_ID}:instance:retencao-humano-001" \
-    "{\"instance_id\":\"retencao-humano-001\",\"agent_type_id\":\"agente_retencao_humano_v1\",\"tenant_id\":\"${TENANT_ID}\",\"pool_id\":\"retencao_humano\",\"pools\":[\"retencao_humano\"],\"execution_model\":\"stateful\",\"max_concurrent\":3,\"current_sessions\":0,\"status\":\"ready\",\"registered_at\":\"${NOW}\"}" \
-    EX 86400 >/dev/null \
-    && success "Instância retencao-humano-001 registrada (pool: retencao_humano)"
+  # ── Templates permanentes (usados por refreshPoolInstances para auto-recovery) ──
+  $REDIS_CLI_CMD SET "${TENANT_ID}:instance_template:demo-ia-001"         "$INST_DEMO_IA"   >/dev/null
+  $REDIS_CLI_CMD SET "${TENANT_ID}:instance_template:sac-ia-001"          "$INST_SAC_IA"    >/dev/null
+  $REDIS_CLI_CMD SET "${TENANT_ID}:instance_template:fila-ia-001"         "$INST_FILA"      >/dev/null
+  $REDIS_CLI_CMD SET "${TENANT_ID}:instance_template:retencao-humano-001" "$INST_RETENCAO"  >/dev/null
+  success "Templates de instância gravados (sem TTL)"
 
-  # ── Pool instance sets ────────────────────────────────────────────────────
+  # ── Pool rosters permanentes (mapeamento pool → instance_ids, sem TTL) ───────
+  $REDIS_CLI_CMD SADD "${TENANT_ID}:pool_roster:demo_ia"        "demo-ia-001"         >/dev/null
+  $REDIS_CLI_CMD SADD "${TENANT_ID}:pool_roster:sac_ia"         "sac-ia-001"          >/dev/null
+  $REDIS_CLI_CMD SADD "${TENANT_ID}:pool_roster:fila_humano"    "fila-ia-001"         >/dev/null
+  $REDIS_CLI_CMD SADD "${TENANT_ID}:pool_roster:retencao_humano" "retencao-humano-001" >/dev/null
+  success "Pool rosters gravados (sem TTL)"
+
+  # ── Pool instance sets (dinâmicos — gerenciados pelo routing engine) ──────────
   $REDIS_CLI_CMD SADD "${TENANT_ID}:pool:demo_ia:instances"        "demo-ia-001"         >/dev/null && success "Pool demo_ia:instances → demo-ia-001"
   $REDIS_CLI_CMD SADD "${TENANT_ID}:pool:sac_ia:instances"         "sac-ia-001"          >/dev/null && success "Pool sac_ia:instances → sac-ia-001"
   $REDIS_CLI_CMD SADD "${TENANT_ID}:pool:fila_humano:instances"    "fila-ia-001"         >/dev/null && success "Pool fila_humano:instances → fila-ia-001"
