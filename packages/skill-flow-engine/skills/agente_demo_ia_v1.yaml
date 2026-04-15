@@ -1,0 +1,103 @@
+# agente_demo_ia_v1.yaml
+# Demo IA — Agente IVR com fluxo fixo (menu de botões)
+#
+# Pool: demo_ia
+# Escalada para: retencao_humano
+#
+# Fluxo:
+#   1. menu_principal     — menu button: 3 opções (informacoes, status, especialista)
+#   2. roteador           — choice: encaminha conforme opção escolhida
+#   3. resposta_info      — notify: resposta sobre informações do produto/serviço
+#   4. resposta_status    — notify: resposta sobre status do serviço
+#   5. avisar_especialista — notify: informa transferência para especialista humano
+#   6. escalar            — escalate → pool retencao_humano
+#   7. finalizar          — complete outcome: resolved (encerrou pelo menu)
+#
+# Este agente não usa IA para gerar respostas — apenas roteamento declarativo.
+# Ideal para demonstrações rápidas, testes de integração e validação de fluxo.
+#
+# Canais suportados:
+#   - Web chat: renderiza botões nativos (3 opções ≤ limite WhatsApp)
+#   - WhatsApp: renderiza botões nativos
+#   - Outros canais: fallback textual com numeração automática (channel-gateway)
+
+entry: menu_principal
+
+steps:
+
+  # ── Etapa 1: menu principal ───────────────────────────────────────────────
+  # Apresenta 3 opções ao cliente via botões.
+  # Channel-gateway renderiza como botões nativos em WebChat/WhatsApp;
+  # em outros canais, exibe lista numerada e aguarda digitação.
+  - id: menu_principal
+    type: menu
+    prompt: "Olá! Bem-vindo ao atendimento PlugHub Demo. Como posso ajudar?"
+    interaction: button
+    options:
+      - id: informacoes
+        label: "📋 Informações"
+      - id: status
+        label: "🔍 Status do serviço"
+      - id: especialista
+        label: "👤 Falar com especialista"
+    output_as: opcao_escolhida
+    timeout_s: 120
+    on_success: roteador
+    on_failure: finalizar
+    on_timeout: finalizar
+    on_disconnect: finalizar
+
+  # ── Etapa 2: roteador por opção ───────────────────────────────────────────
+  - id: roteador
+    type: choice
+    conditions:
+      - field: "$.pipeline_state.opcao_escolhida"
+        operator: eq
+        value: "informacoes"
+        next: resposta_info
+      - field: "$.pipeline_state.opcao_escolhida"
+        operator: eq
+        value: "status"
+        next: resposta_status
+      - field: "$.pipeline_state.opcao_escolhida"
+        operator: eq
+        value: "especialista"
+        next: avisar_especialista
+    default: menu_principal
+
+  # ── Etapa 3: informações do serviço ──────────────────────────────────────
+  - id: resposta_info
+    type: notify
+    message: "A PlugHub é uma plataforma de orquestração de agentes que conecta equipes humanas e IA aos seus sistemas de negócio. Para mais detalhes, acesse docs.plughub.io ou fale com um especialista."
+    channel: session
+    on_success: menu_principal
+    on_failure: menu_principal
+
+  # ── Etapa 4: status do serviço ────────────────────────────────────────────
+  - id: resposta_status
+    type: notify
+    message: "✅ Todos os serviços PlugHub estão operando normalmente. Última verificação: há menos de 1 minuto. Para verificar o status em tempo real, acesse status.plughub.io."
+    channel: session
+    on_success: menu_principal
+    on_failure: menu_principal
+
+  # ── Etapa 5: avisar sobre transferência para especialista ─────────────────
+  - id: avisar_especialista
+    type: notify
+    message: "Perfeito! Vou conectar você agora com um dos nossos especialistas. Aguarde um instante..."
+    channel: session
+    on_success: escalar
+    on_failure: escalar
+
+  # ── Etapa 6: escalar para pool de atendimento humano ─────────────────────
+  - id: escalar
+    type: escalate
+    target:
+      pool: retencao_humano
+    context: pipeline_state
+    error_reason: escalated_to_human
+
+  # ── Etapa 7: finalizar (timeout ou on_failure do menu) ────────────────────
+  - id: finalizar
+    type: complete
+    outcome: resolved

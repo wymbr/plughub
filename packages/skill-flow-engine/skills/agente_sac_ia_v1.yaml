@@ -1,0 +1,137 @@
+# agente_sac_ia_v1.yaml
+# SAC IA — Agente LLM de Atendimento ao Cliente
+#
+# Pool: sac_ia
+# Escalada para: retencao_humano
+#
+# Fluxo:
+#   1. saudacao           — notify: boas-vindas e instrução inicial
+#   2. aguardar_mensagem  — menu text timeout_s:300, espera mensagem do cliente
+#   3. analisar           — reason: analisa intenção, sentimento e decide se escala
+#                           output: { resposta, escalar, sentimento }
+#   4. verificar_escalada — choice: escalar == true → avisar_escalada | false → responder
+#   5. responder          — notify: entrega resposta gerada pelo Claude
+#   (loop: responder → aguardar_mensagem)
+#   6. avisar_escalada    — notify: informa transferência para especialista
+#   7. escalar            — escalate → pool retencao_humano
+#   8. finalizar          — complete outcome: resolved (sem escalada) ou escalated_human
+#
+# Critérios de escalada automática (avaliados pelo step reason):
+#   - sentimento negativo intenso (frustração, raiva)
+#   - cliente solicita explicitamente falar com humano
+#   - problema técnico que exige ação em sistema de backend
+#   - terceira mensagem consecutiva sem resolução
+#
+# Timeout por inatividade: 5 minutos (timeout_s: 300). Se o cliente não responder,
+# a conversa é encerrada com outcome: resolved.
+
+entry: saudacao
+
+steps:
+
+  # ── Etapa 1: saudação inicial ─────────────────────────────────────────────
+  - id: saudacao
+    type: notify
+    message: "Olá! Sou o assistente virtual do SAC. Estou aqui para ajudar você. Como posso te atender hoje?"
+    channel: session
+    on_success: aguardar_mensagem
+    on_failure: aguardar_mensagem
+
+  # ── Etapa 2: aguardar mensagem do cliente ─────────────────────────────────
+  # timeout_s: 300 = 5 minutos de inatividade antes de encerrar
+  - id: aguardar_mensagem
+    type: menu
+    prompt: "Pode enviar sua mensagem sempre que quiser."
+    interaction: text
+    output_as: ultima_mensagem
+    timeout_s: 300
+    on_success: analisar
+    on_failure: finalizar
+    on_timeout: finalizar
+    on_disconnect: finalizar
+
+  # ── Etapa 3: analisar mensagem com IA ────────────────────────────────────
+  # Usa prompt_id como identificador de auditoria; o conteúdo é passado via input.
+  # O ReasonEngine vê o input como JSON e gera o output seguindo o output_schema.
+  #
+  # Campos do output:
+  #   resposta  — texto de resposta ao cliente
+  #   escalar   — true se deve transferir para agente humano
+  #   sentimento — positivo | neutro | negativo
+  - id: analisar
+    type: reason
+    prompt_id: sac_ia_turn_analysis_v1
+    input:
+      instrucoes: |
+        Você é um assistente virtual de SAC (Serviço de Atendimento ao Cliente) de uma empresa de telecomunicações.
+        Analise a mensagem do cliente e forneça:
+        1. Uma resposta clara e empática em português
+        2. Se deve escalar para um atendente humano (true/false)
+        3. O sentimento detectado na mensagem
+
+        Escalade para humano quando:
+        - O cliente expressa frustração intensa ou raiva
+        - O cliente pede explicitamente para falar com uma pessoa
+        - O problema requer acesso a sistemas internos (fatura, débito, cancelamento)
+        - A situação é urgente (serviço cortado, emergência)
+
+        Não escale para humano quando:
+        - É uma dúvida informacional simples
+        - É uma reclamação amena que pode ser acolhida com empatia
+        - O cliente só quer confirmar informações
+
+        Responda de forma breve e direta (2 a 4 frases).
+      mensagem_cliente: "$.pipeline_state.ultima_mensagem"
+    output_schema:
+      resposta:
+        type: string
+      escalar:
+        type: boolean
+      sentimento:
+        type: string
+        enum:
+          - positivo
+          - neutro
+          - negativo
+    output_as: analise
+    on_success: verificar_escalada
+    on_failure: aguardar_mensagem
+
+  # ── Etapa 4: verificar se deve escalar ───────────────────────────────────
+  - id: verificar_escalada
+    type: choice
+    conditions:
+      - field: "$.pipeline_state.analise.escalar"
+        operator: eq
+        value: true
+        next: avisar_escalada
+    default: responder
+
+  # ── Etapa 5: responder ao cliente e voltar ao loop ────────────────────────
+  - id: responder
+    type: notify
+    message: "{{$.pipeline_state.analise.resposta}}"
+    channel: session
+    on_success: aguardar_mensagem
+    on_failure: aguardar_mensagem
+
+  # ── Etapa 6: avisar sobre transferência para especialista ─────────────────
+  - id: avisar_escalada
+    type: notify
+    message: "Entendi sua situação. Para melhor atendê-lo, vou transferi-lo agora para um dos nossos especialistas. Aguarde um instante, por favor."
+    channel: session
+    on_success: escalar
+    on_failure: escalar
+
+  # ── Etapa 7: escalar para pool de atendimento humano ─────────────────────
+  - id: escalar
+    type: escalate
+    target:
+      pool: retencao_humano
+    context: pipeline_state
+    error_reason: escalated_to_human
+
+  # ── Etapa 8: finalizar sem escalada (timeout ou resolução) ────────────────
+  - id: finalizar
+    type: complete
+    outcome: resolved

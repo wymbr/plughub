@@ -231,10 +231,13 @@ python -m plughub_rules.main
 ```powershell
 . .\scripts\set-env.ps1
 $env:PLUGHUB_ROUTING_ENGINE_URL  = "http://localhost:3200"
-# Pool de entrada — o canal webchat serve o pool de IA do SAC
-# Quando o cliente conecta, o adapter publica automaticamente um ConversationInboundEvent
-# com pool_id = sac_ia, eliminando o passo manual de publicação via kafka-console-producer.
-$env:PLUGHUB_ENTRY_POINT_POOL_ID = "sac_ia"
+# pool_id é passado via URL: ws://localhost:8010/ws/chat/{pool_id}
+# PLUGHUB_ENTRY_POINT_POOL_ID é fallback para deploys legados sem pool_id na URL.
+# Em desenvolvimento, deixe em branco e use a URL com pool_id para testar múltiplos pools:
+#   ws://localhost:8010/ws/chat/demo_ia        # IVR fixo
+#   ws://localhost:8010/ws/chat/sac_ia         # LLM
+#   ws://localhost:8010/ws/chat/retencao_humano # Humano direto (testes)
+$env:PLUGHUB_ENTRY_POINT_POOL_ID = ""
 $env:PLUGHUB_TENANT_ID           = "default"
 plughub-channel-gateway
 ```
@@ -300,7 +303,7 @@ Set-Location packages\agent-assist-ui
 npm run dev
 ```
 
-Acesse: `http://localhost:5173?agent=NOME&pool=sac_humano`
+Acesse: `http://localhost:5173?agent=NOME&pool=retencao_humano`
 
 - [ ] **[7.2] Abrir aba → Dashboard UI (porta 5174)**
 
@@ -466,35 +469,39 @@ Depois recompile os pacotes afetados: `npm run build` em cada um.
 
 ---
 
-## Demo Completo — Fluxo AI → Escalar → Agente Humano
+## Pools padronizados (4 pools)
 
-Este roteiro testa o fluxo ponta-a-ponta: cliente conecta → agente AI atende → escala para pool humano → agente humano vê a conversa no Agent Assist UI.
+| Pool | Tipo | Skill/Agente | Descrição |
+|---|---|---|---|
+| `demo_ia` | IA (plughub-native) | `agente_demo_ia_v1.yaml` | IVR fixo com menu de botões — sem LLM |
+| `sac_ia` | IA (plughub-native) | `agente_sac_ia_v1.yaml` | Agente LLM com análise de sentimento e escalada condicional |
+| `fila_humano` | IA (plughub-native) | `agente_fila_v1.yaml` | Queue Agent — ativa quando `retencao_humano` não tem agentes disponíveis |
+| `retencao_humano` | Humano | — | Atendimento humano; `queue_config` aponta para `fila_humano` |
+
+Pools de IA e humano são **sempre separados** — garante que a escalação nunca re-aloca um agente IA para uma sessão já escalada para humano.
+
+---
+
+## Demo Completo 1 — Fluxo IVR (demo_ia → retencao_humano)
+
+Este roteiro testa o fluxo ponta-a-ponta com o agente IVR de botões: cliente conecta → recebe menu → seleciona "Especialista" → escala para pool humano.
 
 ### Pré-requisitos
 
 Todos os serviços dos passos 6.1–6.11 devem estar rodando, incluindo o **Orchestrator Bridge (6.10)**.
 
-### Convenção de nomenclatura de pools
-
-| Pool | Serviço | Recurso | Entry point |
-|---|---|---|---|
-| `sac_ia` | SAC | IA (plughub-native) | webchat configurado com `PLUGHUB_ENTRY_POINT_POOL_ID=sac_ia` |
-| `sac_humano` | SAC | Humano | escalação via step `escalate → target.pool: sac_humano` |
-
-Pools de IA e humano do mesmo serviço são **sempre separados** — garante que a escalação nunca re-aloca um agente IA para uma sessão já escalada para humano.
-
-### Passo 1 — Registrar pools, skill e tipos de agentes
+### Passo 1 — Registrar pools e tipos de agentes
 
 Abra uma aba PowerShell e execute:
 
 ```powershell
 . .\scripts\set-env.ps1
 
-# 1a. Registrar pool IA do SAC
+# 1a. Registrar pool IVR demo_ia
 Invoke-RestMethod -Method POST http://localhost:3300/v1/pools -ContentType "application/json" `
   -Headers @{"x-tenant-id"="default"} -Body '{
-  "pool_id": "sac_ia",
-  "name": "SAC — IA",
+  "pool_id": "demo_ia",
+  "name": "Demo IA — IVR",
   "channel_types": ["chat"],
   "sla_target_ms": 480000,
   "routing_expression": {
@@ -503,152 +510,92 @@ Invoke-RestMethod -Method POST http://localhost:3300/v1/pools -ContentType "appl
   }
 }' | ConvertTo-Json
 
-# 1b. Registrar pool Humano do SAC
+# 1b. Registrar pool humano retencao_humano
+#     queue_config aponta para agente_fila_v1 — ativado quando não há humano disponível.
 Invoke-RestMethod -Method POST http://localhost:3300/v1/pools -ContentType "application/json" `
   -Headers @{"x-tenant-id"="default"} -Body '{
-  "pool_id": "sac_humano",
-  "name": "SAC — Humano",
+  "pool_id": "retencao_humano",
+  "name": "Retenção — Humano",
   "channel_types": ["chat"],
   "sla_target_ms": 480000,
   "routing_expression": {
     "weight_sla": 1.0, "weight_wait": 0.8,
     "weight_tier": 0.6, "weight_churn": 0.9, "weight_business": 0.4
   },
-  "supervisor_config": { "enabled": true }
+  "supervisor_config": { "enabled": true },
+  "queue_config": { "agent_type_id": "agente_fila_v1", "max_wait_s": 1800 }
 }' | ConvertTo-Json
 
-# 1c. Registrar skill com o flow do agente IA
-#     O Orchestrator Bridge busca GET /v1/skills/skill_sac_v1 para obter o flow.
-#     O step menu captura a intenção do cliente antes de saudar e escalar.
-#     Use PUT para upsert (cria se não existe, substitui se já existe).
-Invoke-RestMethod -Method PUT http://localhost:3300/v1/skills/skill_sac_v1 -ContentType "application/json" `
-  -Headers @{"x-tenant-id"="default"} -Body '{
-  "skill_id":    "skill_sac_v1",
-  "name":        "Skill SAC v1",
-  "version":     "1.0",
-  "description": "Skill de atendimento SAC — captura intenção, sauda o cliente e escala para agente humano.",
-  "classification": { "type": "orchestrator" },
-  "instruction": { "prompt_id": "skill_sac_v1", "language": "pt-BR" },
-  "flow": {
-    "entry": "captura_intencao",
-    "steps": [
-      {
-        "id": "captura_intencao",
-        "type": "menu",
-        "prompt": "como posso te ajudar ?",
-        "interaction": "text",
-        "output_as": "intencao_cliente",
-        "timeout_s": 300,
-        "on_success": "saudacao",
-        "on_failure": "finalizar",
-        "on_timeout": "saudacao",
-        "on_disconnect": "finalizar"
-      },
-      {
-        "id": "saudacao",
-        "type": "notify",
-        "message": "Olá! Sou o assistente virtual da PlugHub. Vou conectar você a um especialista.",
-        "channel": "session",
-        "on_success": "escalar",
-        "on_failure": "escalar"
-      },
-      {
-        "id": "escalar",
-        "type": "escalate",
-        "target": { "pool": "sac_humano" },
-        "context": "pipeline_state",
-        "error_reason": "escalated_to_human"
-      },
-      {
-        "id": "finalizar",
-        "type": "complete",
-        "outcome": "resolved"
-      }
-    ]
-  }
-}' | ConvertTo-Json
-
-# 1d. Registrar tipo de agente IA
-#     framework = "plughub-native" → Bridge ativa via Skill Flow Service
+# 1c. Registrar tipo de agente IVR (framework=plughub-native → carrega agente_demo_ia_v1.yaml)
 Invoke-RestMethod -Method POST http://localhost:3300/v1/agent-types -ContentType "application/json" `
   -Headers @{"x-tenant-id"="default"} -Body '{
-  "agent_type_id": "agente_sac_ia_v1",
-  "name": "Agente SAC IA v1",
+  "agent_type_id": "agente_demo_ia_v1",
+  "name": "Demo IA — IVR v1",
   "framework": "plughub-native",
-  "pools": ["sac_ia"],
-  "skills": [{ "skill_id": "skill_sac_v1" }],
+  "pools": ["demo_ia"],
+  "skills": [],
   "max_concurrent_sessions": 10,
   "execution_model": "stateless"
 }' | ConvertTo-Json
 
-# 1e. Registrar tipo de agente humano
-#     framework = "human" → Bridge publica conversation.assigned via Redis pub/sub
+# 1d. Registrar tipo de agente humano (framework=human → Bridge publica conversation.assigned)
 Invoke-RestMethod -Method POST http://localhost:3300/v1/agent-types -ContentType "application/json" `
   -Headers @{"x-tenant-id"="default"} -Body '{
-  "agent_type_id": "agente_sac_humano_v1",
-  "name": "Atendente SAC",
+  "agent_type_id": "agente_retencao_humano_v1",
+  "name": "Atendente de Retenção",
   "framework": "human",
-  "pools": ["sac_humano"],
+  "pools": ["retencao_humano"],
   "skills": [],
   "max_concurrent_sessions": 3,
   "execution_model": "stateful"
 }' | ConvertTo-Json
 ```
 
-### Passo 2 — Registrar agente IA no Redis (para Routing Engine)
+> **Nota:** o Orchestrator Bridge carrega automaticamente o YAML de fallback `packages/skill-flow-engine/skills/agente_demo_ia_v1.yaml` quando `skills: []` e nenhuma skill está registrada no Agent Registry para o `agent_type_id`. Não é necessário registrar a skill inline.
+
+### Passo 2 — Registrar instâncias no Redis (para Routing Engine)
 
 ```powershell
 . .\scripts\set-env.ps1
-
-# Pool IA do SAC (TTL 24h — não expira entre reinicializações)
-docker exec plughub-redis redis-cli SET "default:pool_config:sac_ia" '{"pool_id":"sac_ia","tenant_id":"default","channel_types":["webchat"],"sla_target_ms":480000,"routing_expression":{"weight_sla":1.0,"weight_wait":0.8,"weight_tier":0.6,"weight_churn":0.9,"weight_business":0.4}}' EX 86400
-
-# Instância do agente IA (TTL 1h — suficiente para o demo sem heartbeat real)
 $ts = (Get-Date -Format "o")
-$iaJson = '{"instance_id":"sac-ia-001","agent_type_id":"agente_sac_ia_v1","tenant_id":"default","pool_id":"sac_ia","pools":["sac_ia"],"execution_model":"stateless","max_concurrent":10,"current_sessions":0,"state":"ready","registered_at":"' + $ts + '"}'
-docker exec plughub-redis redis-cli SET "default:instance:sac-ia-001" $iaJson EX 3600
 
-docker exec plughub-redis redis-cli SADD "default:pool:sac_ia:instances" "sac-ia-001"
-docker exec plughub-redis redis-cli HSET "default:routing:instance:sac-ia-001:meta" pools '["sac_ia"]' agent_type_id "agente_sac_ia_v1"
+# Pool demo_ia + instância do agente IVR (TTL 24h/1h)
+docker exec plughub-redis redis-cli SET "default:pool_config:demo_ia" '{"pool_id":"demo_ia","tenant_id":"default","channel_types":["webchat"],"sla_target_ms":480000,"routing_expression":{"weight_sla":1.0,"weight_wait":0.8,"weight_tier":0.6,"weight_churn":0.9,"weight_business":0.4}}' EX 86400
+
+$iaJson = '{"instance_id":"demo-ia-001","agent_type_id":"agente_demo_ia_v1","tenant_id":"default","pool_id":"demo_ia","pools":["demo_ia"],"execution_model":"stateless","max_concurrent":10,"current_sessions":0,"state":"ready","registered_at":"' + $ts + '"}'
+docker exec plughub-redis redis-cli SET "default:instance:demo-ia-001" $iaJson EX 3600
+docker exec plughub-redis redis-cli SADD "default:pool:demo_ia:instances" "demo-ia-001"
+docker exec plughub-redis redis-cli HSET "default:routing:instance:demo-ia-001:meta" pools '["demo_ia"]' agent_type_id "agente_demo_ia_v1"
+
+# Pool retencao_humano + instância do agente humano (TTL 24h/1h)
+docker exec plughub-redis redis-cli SET "default:pool_config:retencao_humano" '{"pool_id":"retencao_humano","tenant_id":"default","channel_types":["webchat"],"sla_target_ms":480000,"routing_expression":{"weight_sla":1.0,"weight_wait":0.8,"weight_tier":0.6,"weight_churn":0.9,"weight_business":0.4}}' EX 86400
+
+$humJson = '{"instance_id":"retencao-humano-001","agent_type_id":"agente_retencao_humano_v1","tenant_id":"default","pool_id":"retencao_humano","pools":["retencao_humano"],"execution_model":"stateful","max_concurrent":3,"current_sessions":0,"state":"ready","registered_at":"' + $ts + '"}'
+docker exec plughub-redis redis-cli SET "default:instance:retencao-humano-001" $humJson EX 3600
+docker exec plughub-redis redis-cli SADD "default:pool:retencao_humano:instances" "retencao-humano-001"
+docker exec plughub-redis redis-cli HSET "default:routing:instance:retencao-humano-001:meta" pools '["retencao_humano"]' agent_type_id "agente_retencao_humano_v1"
 ```
 
-### Passo 3 — Registrar agente humano no Redis (para Routing Engine)
+> **Importante:** as instâncias têm TTL de 1 hora. Se o routing falhar com "no agents available", repita o bloco acima para renovar as chaves.
 
-```powershell
-. .\scripts\set-env.ps1
-
-# Pool Humano do SAC (TTL 24h)
-docker exec plughub-redis redis-cli SET "default:pool_config:sac_humano" '{"pool_id":"sac_humano","tenant_id":"default","channel_types":["webchat"],"sla_target_ms":480000,"routing_expression":{"weight_sla":1.0,"weight_wait":0.8,"weight_tier":0.6,"weight_churn":0.9,"weight_business":0.4}}' EX 86400
-
-# Instância do agente humano (TTL 1h — suficiente para o demo sem heartbeat real)
-$ts = (Get-Date -Format "o")
-$humJson = '{"instance_id":"sac-humano-001","agent_type_id":"agente_sac_humano_v1","tenant_id":"default","pool_id":"sac_humano","pools":["sac_humano"],"execution_model":"stateful","max_concurrent":3,"current_sessions":0,"state":"ready","registered_at":"' + $ts + '"}'
-docker exec plughub-redis redis-cli SET "default:instance:sac-humano-001" $humJson EX 3600
-
-docker exec plughub-redis redis-cli SADD "default:pool:sac_humano:instances" "sac-humano-001"
-docker exec plughub-redis redis-cli HSET "default:routing:instance:sac-humano-001:meta" pools '["sac_humano"]' agent_type_id "agente_sac_humano_v1"
-```
-
-> **Importante:** o TTL da instância é 300 segundos. Se o routing falhar com "no agents available", repita o bloco acima para renovar as chaves.
-
-### Passo 4 — Abrir o Agent Assist UI para o agente humano
+### Passo 3 — Abrir o Agent Assist UI para o agente humano
 
 Abra o Agent Assist UI **antes** de iniciar a conversa do cliente:
 
 ```
-http://localhost:5173?session_id=&contact_id=&agent=Carlos&pool=sac_humano
+http://localhost:5173?agent=Carlos&pool=retencao_humano
 ```
 
-O `session_id` não é fixo — o Agent Assist UI ficará aguardando o evento `conversation.assigned` que chega via Redis pub/sub quando o Routing Engine alocar a sessão para o pool `sac_humano`. O status deve aparecer como **connected**.
+O Agent Assist UI ficará aguardando o evento `conversation.assigned` que chega via Redis pub/sub quando o Routing Engine alocar a sessão para `retencao_humano`. O status deve aparecer como **connected**.
 
-### Passo 5 — Simular cliente conectando via WebSocket
+### Passo 4 — Simular cliente conectando via WebSocket
 
 ```powershell
 # Instala wscat se não tiver
 npm install -g wscat
 
-# Conecta como cliente
-wscat -c "ws://localhost:8010/ws/chat"
+# Conecta como cliente ao pool demo_ia (IVR)
+wscat -c "ws://localhost:8010/ws/chat/demo_ia"
 ```
 
 Ao conectar, o channel-gateway responde com:
@@ -656,30 +603,33 @@ Ao conectar, o channel-gateway responde com:
 {"type":"connection.accepted","contact_id":"<UUID>","session_id":"<UUID>"}
 ```
 
-**Neste momento o channel-gateway já publica automaticamente o `ConversationInboundEvent` com `pool_id: "sac_ia"` para o Routing Engine** — não é mais necessário publicar manualmente.
+**Neste momento o channel-gateway já publica automaticamente o `ConversationInboundEvent` com `pool_id: "demo_ia"` para o Routing Engine** — não é necessário publicar manualmente.
 
-### Passo 6 — Observar o fluxo automático
+Logo em seguida a IA envia o menu com 3 botões. Escolha "especialista" para acionar a escalada:
+```json
+{"type":"menu.submit","menu_id":"menu_principal","interaction":"button","result":"especialista"}
+```
+
+### Passo 5 — Observar o fluxo automático
 
 Monitore os logs das abas dos serviços. A sequência esperada é:
 
-1. **Channel Gateway** → `routing_event published: session=<ID> pool=sac_ia`
-2. **Routing Engine** → `Routed session=<ID> → instance=sac-ia-001 pool=sac_ia`
-3. **Orchestrator Bridge** → `Routing: session=<ID> agent=agente_sac_ia_v1 pool=sac_ia framework=plughub-native`
-4. **Skill Flow Service** → executa `agente_sac_ia_v1`
-5. **MCP Server** → `notification_send` → publica `message.text` em `conversations.outbound`
-6. **Channel Gateway** → entrega mensagem ao cliente via WebSocket
-7. No `wscat`, o cliente recebe: `{"type":"message.text","text":"Olá! Sou o assistente virtual..."}`
-8. **Skill Flow Service** → executa step `escalate` → chama `conversation_escalate`
-9. **MCP Server** → `conversation_escalate` → publica em `conversations.inbound` com `pool_id: sac_humano`
-10. **Routing Engine** → `Routed session=<ID> → instance=sac-humano-001 pool=sac_humano`
-11. **Orchestrator Bridge** → `Routing: session=<ID> agent=agente_sac_humano_v1 pool=sac_humano framework=human`
-12. **Agent Assist UI** (aba do navegador) → recebe evento `conversation.assigned`
+1. **Channel Gateway** → `routing_event published: session=<ID> pool=demo_ia`
+2. **Routing Engine** → `Routed session=<ID> → instance=demo-ia-001 pool=demo_ia`
+3. **Orchestrator Bridge** → `Routing: session=<ID> agent=agente_demo_ia_v1 pool=demo_ia framework=plughub-native`
+4. **Skill Flow Service** → carrega `agente_demo_ia_v1.yaml` (fallback), executa step `menu_principal`
+5. **MCP Server** → `notification_send` → envia menu de botões ao cliente via WebSocket
+6. **Skill Flow Service** → cliente seleciona "especialista" → step `avisar_especialista` → step `escalar`
+7. **MCP Server** → `conversation_escalate` → publica em `conversations.inbound` com `pool_id: retencao_humano`
+8. **Routing Engine** → `Routed session=<ID> → instance=retencao-humano-001 pool=retencao_humano`
+9. **Orchestrator Bridge** → `framework=human` → publica `conversation.assigned` via Redis pub/sub
+10. **Agent Assist UI** (aba do navegador) → recebe evento `conversation.assigned`
 
-### Passo 7 — Conversar como agente humano
+### Passo 6 — Conversar como agente humano
 
 Após o `conversation.assigned` aparecer no Agent Assist UI, o agente humano pode enviar mensagens diretamente pelo campo de texto.
 
-Para enviar uma mensagem como cliente no `wscat`:
+Para enviar uma mensagem como cliente no `wscat` (enquanto aguarda o menu ou depois de escalado):
 ```json
 {"type":"message.text","text":"Quero cancelar meu plano"}
 ```
@@ -723,88 +673,90 @@ O Orchestrator Bridge usa a presença de `author` para distinguir mensagens de c
 
 ---
 
-## Demo Completo 2 — Fluxo LLM com Sentimento em Tempo Real
+## Demo Completo 2 — Fluxo LLM com Sentimento em Tempo Real (sac_ia)
 
-Este roteiro usa a `skill_demo_chat_v1` — um orquestrador que conversa com o cliente via LLM (step `reason`), analisa sentimento, e pode escalar para humano. O Agent Assist UI exibe o sentimento detectado em tempo real na strip acima do histórico de mensagens.
+Este roteiro usa `agente_sac_ia_v1.yaml` — agente LLM que conversa com o cliente via `reason` step, analisa sentimento e intenção, e escala condicionalmente para `retencao_humano`.
 
 ### Diferença em relação ao Demo 1
 
-| | Demo 1 (`skill_sac_v1`) | Demo 2 (`skill_demo_chat_v1`) |
+| | Demo 1 (`agente_demo_ia_v1`) | Demo 2 (`agente_sac_ia_v1`) |
 |---|---|---|
-| Interação IA | Saudação fixa + escalação | Loop de conversa real via LLM |
+| Pool | `demo_ia` | `sac_ia` |
+| Interação IA | Menu de botões fixo (IVR) | Loop de conversa real via LLM |
 | Sentimento | Não alimentado | Atualizado a cada turno pelo AI Gateway |
-| Escalação | Automática após saudação | Condicional — só se `deve_escalar=true` |
-| Seed | Manual (passos 1a–1e) | Script `seed_demo.ts` |
+| Escalação | Opção "especialista" no menu | Condicional — só se `escalar=true` na análise |
+| Seed | Manual (passos 1–2) | Registra pool `sac_ia` + agent type |
 
 ### Pré-requisitos
 
 Todos os serviços dos passos 6.1–6.11 devem estar rodando.
 `PLUGHUB_ANTHROPIC_API_KEY` deve estar configurada — o step `reason` chama o AI Gateway.
 
-### Passo 1 — Seed automático
+### Passo 1 — Registrar pool sac_ia e tipo de agente
 
 ```powershell
 . .\scripts\set-env.ps1
-$env:AGENT_REGISTRY_URL = "http://localhost:3300"
-$env:TENANT_ID          = "default"
 
-npx ts-node packages\e2e-tests\fixtures\seed_demo.ts
+# Pool sac_ia (LLM)
+Invoke-RestMethod -Method POST http://localhost:3300/v1/pools -ContentType "application/json" `
+  -Headers @{"x-tenant-id"="default"} -Body '{
+  "pool_id": "sac_ia",
+  "name": "SAC IA — LLM",
+  "channel_types": ["chat"],
+  "sla_target_ms": 480000,
+  "routing_expression": {
+    "weight_sla": 1.0, "weight_wait": 0.8,
+    "weight_tier": 0.6, "weight_churn": 0.9, "weight_business": 0.4
+  }
+}' | ConvertTo-Json
+
+# Tipo de agente LLM (carrega agente_sac_ia_v1.yaml como fallback)
+Invoke-RestMethod -Method POST http://localhost:3300/v1/agent-types -ContentType "application/json" `
+  -Headers @{"x-tenant-id"="default"} -Body '{
+  "agent_type_id": "agente_sac_ia_v1",
+  "name": "SAC IA LLM v1",
+  "framework": "plughub-native",
+  "pools": ["sac_ia"],
+  "skills": [],
+  "max_concurrent_sessions": 10,
+  "execution_model": "stateless"
+}' | ConvertTo-Json
 ```
 
-O seed cria:
-- Pool `demo_ia` — entry point do orquestrador
-- Pool `suporte_humano` — destino das escalações
-- Skill `skill_demo_chat_v1` — flow com reason + sentiment + loop
-- AgentType `orquestrador_demo_v1` (`framework: plughub-native`, pool: `demo_ia`)
-- AgentType `agente_suporte_humano_v1` (`framework: human`, pool: `suporte_humano`)
+> O pool `retencao_humano` e seu agent type já foram registrados no Demo 1 — não precisa repetir.
 
 ### Passo 2 — Registrar instâncias no Redis
 
 ```powershell
 . .\scripts\set-env.ps1
-
-docker exec plughub-redis redis-cli SET "default:pool_config:demo_ia" `
-  '{"pool_id":"demo_ia","tenant_id":"default","channel_types":["webchat"],"sla_target_ms":480000,"routing_expression":{"weight_sla":1.0,"weight_wait":0.8,"weight_tier":0.6,"weight_churn":0.9,"weight_business":0.4}}' EX 86400
-
 $ts = (Get-Date -Format "o")
-$iaJson = '{"instance_id":"demo-ia-001","agent_type_id":"orquestrador_demo_v1","tenant_id":"default","pool_id":"demo_ia","pools":["demo_ia"],"execution_model":"stateless","max_concurrent":10,"current_sessions":0,"state":"ready","registered_at":"' + $ts + '"}'
-docker exec plughub-redis redis-cli SET "default:instance:demo-ia-001" $iaJson EX 3600
-docker exec plughub-redis redis-cli SADD "default:pool:demo_ia:instances" "demo-ia-001"
-docker exec plughub-redis redis-cli HSET "default:routing:instance:demo-ia-001:meta" pools '["demo_ia"]' agent_type_id "orquestrador_demo_v1"
 
-docker exec plughub-redis redis-cli SET "default:pool_config:suporte_humano" `
-  '{"pool_id":"suporte_humano","tenant_id":"default","channel_types":["webchat"],"sla_target_ms":300000,"routing_expression":{"weight_sla":1.0,"weight_wait":0.8,"weight_tier":0.6,"weight_churn":0.9,"weight_business":0.4}}' EX 86400
+# Pool sac_ia + instância
+docker exec plughub-redis redis-cli SET "default:pool_config:sac_ia" `
+  '{"pool_id":"sac_ia","tenant_id":"default","channel_types":["webchat"],"sla_target_ms":480000,"routing_expression":{"weight_sla":1.0,"weight_wait":0.8,"weight_tier":0.6,"weight_churn":0.9,"weight_business":0.4}}' EX 86400
 
-$humJson = '{"instance_id":"demo-humano-001","agent_type_id":"agente_suporte_humano_v1","tenant_id":"default","pool_id":"suporte_humano","pools":["suporte_humano"],"execution_model":"stateful","max_concurrent":3,"current_sessions":0,"state":"ready","registered_at":"' + $ts + '"}'
-docker exec plughub-redis redis-cli SET "default:instance:demo-humano-001" $humJson EX 3600
-docker exec plughub-redis redis-cli SADD "default:pool:suporte_humano:instances" "demo-humano-001"
-docker exec plughub-redis redis-cli HSET "default:routing:instance:demo-humano-001:meta" pools '["suporte_humano"]' agent_type_id "agente_suporte_humano_v1"
+$iaJson = '{"instance_id":"sac-ia-001","agent_type_id":"agente_sac_ia_v1","tenant_id":"default","pool_id":"sac_ia","pools":["sac_ia"],"execution_model":"stateless","max_concurrent":10,"current_sessions":0,"state":"ready","registered_at":"' + $ts + '"}'
+docker exec plughub-redis redis-cli SET "default:instance:sac-ia-001" $iaJson EX 3600
+docker exec plughub-redis redis-cli SADD "default:pool:sac_ia:instances" "sac-ia-001"
+docker exec plughub-redis redis-cli HSET "default:routing:instance:sac-ia-001:meta" pools '["sac_ia"]' agent_type_id "agente_sac_ia_v1"
+
+# Renovar instância humana de retencao_humano se necessário (TTL 1h)
+$humJson = '{"instance_id":"retencao-humano-001","agent_type_id":"agente_retencao_humano_v1","tenant_id":"default","pool_id":"retencao_humano","pools":["retencao_humano"],"execution_model":"stateful","max_concurrent":3,"current_sessions":0,"state":"ready","registered_at":"' + $ts + '"}'
+docker exec plughub-redis redis-cli SET "default:instance:retencao-humano-001" $humJson EX 3600
 ```
 
-### Passo 3 — Channel Gateway com entry point demo_ia
+### Passo 3 — Abrir o Agent Assist UI
 
-Reinicie o Channel Gateway (aba 6.6) apontando para o pool do orquestrador:
+```
+http://localhost:5173?agent=Carlos&pool=retencao_humano
+```
+
+O UI fica no lobby aguardando `conversation.assigned`. Quando `agente_sac_ia_v1` decidir escalar (`escalar=true`), a sessão é atribuída automaticamente ao `retencao_humano`.
+
+### Passo 4 — Simular cliente e conversar com a IA
 
 ```powershell
-. .\scripts\set-env.ps1
-$env:PLUGHUB_ROUTING_ENGINE_URL  = "http://localhost:3200"
-$env:PLUGHUB_ENTRY_POINT_POOL_ID = "demo_ia"
-$env:PLUGHUB_TENANT_ID           = "default"
-plughub-channel-gateway
-```
-
-### Passo 4 — Abrir o Agent Assist UI para o agente humano
-
-```
-http://localhost:5173?agent=Carlos&pool=suporte_humano
-```
-
-O UI fica no lobby aguardando `conversation.assigned`. Quando o orquestrador escalar (`deve_escalar=true`), a sessão é atribuída automaticamente.
-
-### Passo 5 — Simular cliente e conversar com a IA
-
-```powershell
-wscat -c "ws://localhost:8010/ws/chat"
+wscat -c "ws://localhost:8010/ws/chat/sac_ia"
 ```
 
 Responda ao prompt da IA com texto livre:
@@ -812,7 +764,7 @@ Responda ao prompt da IA com texto livre:
 {"type":"message.text","text":"Quero cancelar meu plano"}
 ```
 
-O Skill Flow executa o loop: `coleta_msg` → `analisar` (AI Gateway) → `responder` ou `escalar`.
+O Skill Flow executa o loop: `aguardar_mensagem` → `analisar` (AI Gateway reason step) → `responder` ou `avisar_escalada` → `escalar`.
 
 ### O que observar no Agent Assist UI
 
@@ -823,7 +775,79 @@ O Skill Flow executa o loop: `coleta_msg` → `analisar` (AI Gateway) → `respo
 
 ### Nota sobre timeout_s
 
-O campo `timeout_ms` foi renomeado para `timeout_s` (segundos, inteiro >= 0). O valor `0` significa espera indefinida — o menu só desbloqueia quando o cliente responde ou desconecta. A skill `skill_sac_v1` do Demo 1 já usa `timeout_s: 300` neste documento.
+O campo `timeout_ms` foi renomeado para `timeout_s` (segundos, inteiro >= 0). O valor `0` significa espera indefinida — o menu só desbloqueia quando o cliente responde ou desconecta. `agente_sac_ia_v1` usa `timeout_s: 300` (5 min de inatividade) e `agente_fila_v1` usa `timeout_s: 0` (espera indefinida até `__agent_available__`).
+
+---
+
+## Demo Completo 3 — Queue Agent Pattern (fila_humano)
+
+Este roteiro demonstra o Queue Agent Pattern: cliente conecta via `sac_ia` → IA decide escalar → `retencao_humano` não tem agentes disponíveis → Routing Engine publica em `conversations.queued` → Orchestrator Bridge ativa `agente_fila_v1` → cliente interage com o agente de fila enquanto aguarda → quando agente humano fica disponível, `agente_fila_v1` escalona para `retencao_humano`.
+
+### Pré-requisitos
+
+Todos os serviços dos passos 6.1–6.11 devem estar rodando, incluindo o **Orchestrator Bridge (6.10)**.
+Os pools `sac_ia` e `retencao_humano` já devem estar registrados (Demos 1 e 2).
+`PLUGHUB_ANTHROPIC_API_KEY` configurada — `agente_fila_v1` usa o AI Gateway para gerar respostas de fila.
+
+### Passo 1 — Registrar pool fila_humano e tipo de agente de fila
+
+```powershell
+. .\scripts\set-env.ps1
+
+# Pool fila_humano — usado como staging do agente de fila
+Invoke-RestMethod -Method POST http://localhost:3300/v1/pools -ContentType "application/json" `
+  -Headers @{"x-tenant-id"="default"} -Body '{
+  "pool_id": "fila_humano",
+  "name": "Fila Humano — Queue Agent",
+  "channel_types": ["chat"],
+  "sla_target_ms": 1800000,
+  "routing_expression": {
+    "weight_sla": 1.0, "weight_wait": 0.8,
+    "weight_tier": 0.6, "weight_churn": 0.9, "weight_business": 0.4
+  }
+}' | ConvertTo-Json
+
+# Tipo de agente de fila (carrega agente_fila_v1.yaml como fallback)
+Invoke-RestMethod -Method POST http://localhost:3300/v1/agent-types -ContentType "application/json" `
+  -Headers @{"x-tenant-id"="default"} -Body '{
+  "agent_type_id": "agente_fila_v1",
+  "name": "Agente de Fila v1",
+  "framework": "plughub-native",
+  "pools": ["fila_humano"],
+  "skills": [],
+  "max_concurrent_sessions": 50,
+  "execution_model": "stateless"
+}' | ConvertTo-Json
+```
+
+### Passo 2 — Testar o Queue Agent
+
+Para simular fila (sem agente humano disponível), NÃO registre a instância `retencao-humano-001` no Redis. Sem instâncias no pool, o Routing Engine publicará em `conversations.queued` e o Orchestrator Bridge ativará `agente_fila_v1`.
+
+```powershell
+# Conectar como cliente ao SAC IA
+wscat -c "ws://localhost:8010/ws/chat/sac_ia"
+
+# Enviar mensagem que acione escalada
+{"type":"message.text","text":"Preciso cancelar meu contrato urgente"}
+```
+
+Sequência esperada:
+1. `agente_sac_ia_v1` analisa → `escalar=true` → step `escalar` → `retencao_humano`
+2. Routing Engine não encontra instâncias em `retencao_humano` → publica em `conversations.queued`
+3. Orchestrator Bridge consome `conversations.queued` → ativa `agente_fila_v1` com `extra_context.pool_id=retencao_humano`
+4. Cliente recebe: "Olá! No momento todos os especialistas estão ocupados..."
+5. Cliente pode enviar mensagens — `agente_fila_v1` responde com IA
+
+Para simular agente humano disponível:
+```powershell
+$ts = (Get-Date -Format "o")
+$humJson = '{"instance_id":"retencao-humano-001","agent_type_id":"agente_retencao_humano_v1","tenant_id":"default","pool_id":"retencao_humano","pools":["retencao_humano"],"execution_model":"stateful","max_concurrent":3,"current_sessions":0,"state":"ready","registered_at":"' + $ts + '"}'
+docker exec plughub-redis redis-cli SET "default:instance:retencao-humano-001" $humJson EX 3600
+docker exec plughub-redis redis-cli SADD "default:pool:retencao_humano:instances" "retencao-humano-001"
+# Publicar sinal de disponibilidade (kafka_listener faz isso automaticamente quando agent_ready chega)
+# o cliente receberá: "Ótima notícia! Um especialista está disponível..."
+```
 
 ---
 
@@ -871,7 +895,7 @@ pm2 start ecosystem.config.js
 bash scripts/linux/seed-demo.sh
 ```
 
-Registra os pools `demo_ia` e `suporte_humano`, a skill `skill_demo_chat_v1`, os AgentTypes e as instâncias no Redis.
+Registra os pools `demo_ia`, `sac_ia` e `retencao_humano`, os AgentTypes e as instâncias no Redis.
 
 ### Uso diário
 
@@ -939,21 +963,23 @@ Na próxima vez que o servidor reiniciar, o PM2 sobe automaticamente todos os se
 | `scripts/linux/seed-demo.sh` | Seed do Demo 2 — fluxo LLM com sentimento |
 | `ecosystem.config.js` | Configuração PM2 (raiz do repositório) |
 
-### Alternando entre Demo 1 (IVR) e Demo 2 (LLM)
+### Alternando entre demos
 
-O `PLUGHUB_ENTRY_POINT_POOL_ID` no `set-env.sh` define qual pool recebe as conversas inbound:
+O `pool_id` agora é passado diretamente na URL do WebSocket — não é mais necessário reiniciar o `channel-gateway` para testar pools diferentes:
 
 ```bash
-# Demo 2 — fluxo LLM com sentimento em tempo real (padrão)
-export PLUGHUB_ENTRY_POINT_POOL_ID="demo_ia"
+# Demo 1 — IVR com menu de botões
+wscat -c "ws://localhost:8010/ws/chat/demo_ia"
 
-# Demo 1 — fluxo IVR baseado em regras
-export PLUGHUB_ENTRY_POINT_POOL_ID="sac_ia"
+# Demo 2 — Agente LLM com sentimento
+wscat -c "ws://localhost:8010/ws/chat/sac_ia"
+
+# Demo 3 — Fila direta (testa Queue Agent Pattern)
+wscat -c "ws://localhost:8010/ws/chat/sac_ia"   # escala → retencao_humano sem instâncias → fila
 ```
 
-Após alterar, reinicie o `channel-gateway`:
+O `PLUGHUB_ENTRY_POINT_POOL_ID` em `set-env.sh` é apenas um fallback para deploys legados. Para desenvolvimento, deixe em branco:
 
 ```bash
-source scripts/linux/set-env.sh
-pm2 restart channel-gateway
+export PLUGHUB_ENTRY_POINT_POOL_ID=""
 ```

@@ -5,27 +5,25 @@
 # está configurado com queue_config.agent_type_id.
 #
 # Fluxo:
-#   1. boas_vindas       — notifica o cliente que está em fila
-#   2. aguardar_mensagem — menu timeout_s:0, aguarda mensagem do cliente ou sinal
-#                          '__agent_available__' injetado pelo kafka_listener drain
-#   3. verificar_sinal   — choice: sinal → transferir | mensagem → responder
-#   4. responder_cliente — reason: Claude gera resposta contextual sobre a fila
-#   5. enviar_resposta   — notify: entrega a resposta ao cliente
-#   (loop volta para aguardar_mensagem)
+#   1. boas_vindas          — notifica o cliente que está em fila
+#   2. aguardar_mensagem    — menu text timeout_s:0, aguarda mensagem do cliente ou
+#                             sinal '__agent_available__' injetado via LPUSH pelo
+#                             kafka_listener drain quando agente humano fica disponível
+#   3. verificar_sinal      — choice: sinal → avisar_transferencia | mensagem → responder_cliente
+#   4. responder_cliente    — reason: gera resposta empática usando input contextual
+#   5. enviar_resposta      — notify: entrega a resposta ao cliente
+#   (loop: enviar_resposta → aguardar_mensagem)
 #   6. avisar_transferencia — notify: informa que o agente humano está disponível
-#   7. escalar           — invoke conversation_escalate → target_pool vem de
-#                          $.session.pool_id (injetado pelo process_queued)
-#   8. finalizar         — complete outcome: escalated_human
+#   7. escalar              — invoke conversation_escalate → target_pool via $.session.pool_id
+#   8. finalizar            — complete outcome: escalated_human
 #
-# O session_context exposto pelo Orchestrator Bridge (extras):
-#   $.session.pool_id     — pool de destino para a escalada
+# Contexto de sessão exposto pelo Orchestrator Bridge (extra_context):
+#   $.session.pool_id     — pool de destino para a escalada final
 #   $.session.session_id  — ID da sessão corrente
 #
 # Para usar este fluxo em um pool:
-#   1. Registre um agent_type_id (ex: agente_fila_retencao_v1) com
-#      framework: plughub-native e skill: skill_agente_fila_v1
-#   2. Configure queue_config.agent_type_id no pool desejado
-#   3. Opcionalmente configure queue_config.skill_id com o skill_id específico
+#   1. Configure queue_config.agent_type_id no pool com o valor "agente_fila_v1"
+#   2. O Orchestrator Bridge carregará este YAML como fallback de dev automaticamente
 
 entry: boas_vindas
 
@@ -34,17 +32,21 @@ steps:
   # ── Etapa 1: boas-vindas ─────────────────────────────────────────────────
   - id: boas_vindas
     type: notify
-    message: "Olá! No momento todos os nossos especialistas estão ocupados. Você está na fila de atendimento e será atendido em breve. Se quiser, pode enviar uma mensagem e responderei enquanto aguarda."
+    message: "Olá! No momento todos os nossos especialistas estão ocupados. Você está na fila de atendimento e será atendido em breve. Enquanto aguarda, pode enviar mensagens — vou te acompanhar."
     channel: session
     on_success: aguardar_mensagem
     on_failure: aguardar_mensagem
 
   # ── Etapa 2: aguardar mensagem ou sinal de disponibilidade ────────────────
-  # timeout_s: 0 → aguarda indefinidamente até que o cliente envie uma mensagem
-  # ou o kafka_listener injete '__agent_available__' via LPUSH menu:result:{session_id}.
+  # timeout_s: 0 → aguarda indefinidamente até que:
+  #   a) o cliente envie uma mensagem  — kafka_listener faz LPUSH menu:result:{session_id}
+  #   b) agente humano disponível      — kafka_listener faz LPUSH menu:result:{session_id}
+  #                                      com valor "__agent_available__"
+  #   c) cliente desconecta            — bridge faz LPUSH session:closed:{session_id}
+  # O prompt é exibido somente quando necessário (looping após resposta anterior).
   - id: aguardar_mensagem
     type: menu
-    prompt: ""
+    prompt: "Se tiver mais alguma dúvida, pode enviar sua mensagem."
     interaction: text
     output_as: ultima_mensagem
     timeout_s: 0
@@ -64,25 +66,17 @@ steps:
     default: responder_cliente
 
   # ── Etapa 4: gerar resposta para a mensagem do cliente com IA ─────────────
+  # Usa prompt_id como identificador de auditoria; o conteúdo real é passado
+  # via input (instrucoes + mensagem_cliente) e visto pelo ReasonEngine como JSON.
   - id: responder_cliente
     type: reason
-    prompt: |
-      O cliente está aguardando atendimento humano na fila.
-      Mensagem do cliente: {{pipeline_state.ultima_mensagem}}
-
-      Responda de forma amigável e empática. Você pode:
-      - Confirmar que a mensagem foi recebida
-      - Dar dicas sobre o assunto se for algo simples de esclarecer
-      - Tranquilizar o cliente sobre o tempo de espera
-      - Informar que um especialista humano atenderá em breve
-
-      Seja breve (2-3 frases). Não resolva problemas complexos — apenas acolha e
-      mantenha o cliente informado enquanto aguarda.
+    prompt_id: queue_agent_response_v1
+    input:
+      instrucoes: "O cliente está aguardando atendimento humano na fila. Responda de forma amigável e empática em português. Confirme o recebimento da mensagem. Se o assunto for simples de esclarecer brevemente, faça isso. Tranquilize o cliente sobre o tempo de espera. Informe que um especialista atenderá em breve. Seja breve (2 a 3 frases). Não resolva problemas complexos — apenas acolha e mantenha o cliente informado."
+      mensagem_cliente: "$.pipeline_state.ultima_mensagem"
     output_schema:
-      type: object
-      properties:
-        resposta:
-          type: string
+      resposta:
+        type: string
     output_as: resposta_ia
     on_success: enviar_resposta
     on_failure: aguardar_mensagem
@@ -90,7 +84,7 @@ steps:
   # ── Etapa 5: entregar resposta ao cliente e voltar ao loop ────────────────
   - id: enviar_resposta
     type: notify
-    message: "$.pipeline_state.resposta_ia.resposta"
+    message: "{{$.pipeline_state.resposta_ia.resposta}}"
     channel: session
     on_success: aguardar_mensagem
     on_failure: aguardar_mensagem
@@ -106,7 +100,7 @@ steps:
   # ── Etapa 7: escalar para o pool humano ───────────────────────────────────
   # Usa invoke para chamar conversation_escalate com target_pool resolvido
   # dinamicamente de $.session.pool_id (injetado pelo Orchestrator Bridge via
-  # extra_context ao ativar o agente de fila).
+  # extra_context ao ativar o agente de fila com process_queued).
   - id: escalar
     type: invoke
     tool: conversation_escalate
