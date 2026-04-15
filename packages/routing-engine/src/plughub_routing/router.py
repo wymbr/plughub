@@ -269,6 +269,7 @@ class Router:
         return RoutingResult(
             session_id=event.session_id, tenant_id=event.tenant_id,
             allocated=False, queued=True, routing_mode="supervised", routed_at=now,
+            pool_id=event.pool_id,
         )
 
 

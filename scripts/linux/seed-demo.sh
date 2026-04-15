@@ -1,14 +1,17 @@
 #!/usr/bin/env bash
-# seed-demo.sh — Seed do Demo 2 (fluxo LLM com sentimento em tempo real)
+# seed-demo.sh — Seed dos 4 pools padronizados do PlugHub Demo
 #
 # O que faz:
 #   1. Aguarda o agent-registry estar saudável (até 60s)
-#   2. Executa packages/e2e-tests/fixtures/seed_demo.ts via ts-node
-#      → cria pools demo_ia e suporte_humano
-#      → registra skill_demo_chat_v1 (skill flow com reason step)
-#      → registra agentTypes orquestrador_demo_v1 e agente_suporte_humano_v1
-#   3. Registra instâncias de agente no Redis para que o Routing Engine
-#      saiba que existem slots disponíveis nos dois pools
+#   2. Registra pools e instâncias no Redis para que o Routing Engine
+#      saiba que existem slots disponíveis:
+#        demo_ia        → demo-ia-001   (agente_demo_ia_v1,  stateless, max 10)
+#        sac_ia         → sac-ia-001    (agente_sac_ia_v1,   stateless, max 10)
+#        fila_humano    → fila-ia-001   (agente_fila_v1,     stateless, max 50)
+#        retencao_humano → retencao-humano-001 (agente_retencao_humano_v1, stateful, max 3)
+#
+#   Os fluxos IA são carregados via YAML fallback (SKILLS_DIR) — não é necessário
+#   registrar skills no Agent Registry para ambiente de desenvolvimento.
 #
 # Uso:
 #   bash scripts/linux/seed-demo.sh
@@ -60,32 +63,7 @@ done
 echo ""
 success "agent-registry disponível"
 
-# ── Step 2: run seed_demo.ts ──────────────────────────────────────────────────
-info "Executando seed_demo.ts…"
-
-E2E_DIR="$ROOT/packages/e2e-tests"
-
-if [ ! -d "$E2E_DIR/node_modules" ]; then
-  info "  Instalando dependências de e2e-tests…"
-  npm install --prefix "$E2E_DIR" --silent
-fi
-
-# ts-node from e2e-tests node_modules
-TS_NODE="$E2E_DIR/node_modules/.bin/ts-node"
-if [ ! -f "$TS_NODE" ]; then
-  info "  ts-node não encontrado — instalando…"
-  npm install --prefix "$E2E_DIR" ts-node --save-dev --silent
-fi
-
-AGENT_REGISTRY_URL="$REGISTRY_URL" \
-TENANT_ID="$TENANT_ID" \
-  "$TS_NODE" \
-  --project "$E2E_DIR/tsconfig.json" \
-  "$E2E_DIR/fixtures/seed_demo.ts" \
-  && success "seed_demo.ts concluído" \
-  || die "seed_demo.ts falhou — veja o erro acima"
-
-# ── Step 3: register pools and agent instances in Redis ───────────────────────
+# ── Step 2: register pools and agent instances in Redis ───────────────────────
 # The Routing Engine reads pool configs and agent instances directly from Redis.
 # Key schema (routing-engine registry.py):
 #   {tenant}:pool_config:{pool_id}         — PoolConfig JSON (TTL 24h)
@@ -116,42 +94,49 @@ if [ -n "$REDIS_CLI_CMD" ]; then
   NOW=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
   ROUTING_EXPR='{"weight_sla":0.4,"weight_wait":0.2,"weight_tier":0.2,"weight_churn":0.1,"weight_business":0.1}'
 
-  # ── Pool configs (lidos por get_pool / _get_pool_config) ──────────────────
-  $REDIS_CLI_CMD SET "${TENANT_ID}:pool_config:demo_ia" \
-    "{\"pool_id\":\"demo_ia\",\"tenant_id\":\"${TENANT_ID}\",\"channel_types\":[\"chat\",\"whatsapp\"],\"sla_target_ms\":300000,\"routing_expression\":${ROUTING_EXPR},\"competency_weights\":{},\"aging_factor\":0.4,\"breach_factor\":0.8,\"remote_sites\":[],\"is_human_pool\":false}" \
-    EX 86400 >/dev/null \
-    && success "Pool config demo_ia registrado"
+  # ── Pool configs (TTL 24h) ────────────────────────────────────────────────
+  for pool_id in demo_ia sac_ia fila_humano; do
+    $REDIS_CLI_CMD SET "${TENANT_ID}:pool_config:${pool_id}" \
+      "{\"pool_id\":\"${pool_id}\",\"tenant_id\":\"${TENANT_ID}\",\"channel_types\":[\"chat\",\"whatsapp\"],\"sla_target_ms\":300000,\"routing_expression\":${ROUTING_EXPR},\"competency_weights\":{},\"aging_factor\":0.4,\"breach_factor\":0.8,\"remote_sites\":[],\"is_human_pool\":false}" \
+      EX 86400 >/dev/null \
+      && success "Pool config ${pool_id} registrado"
+  done
 
-  $REDIS_CLI_CMD SET "${TENANT_ID}:pool_config:suporte_humano" \
-    "{\"pool_id\":\"suporte_humano\",\"tenant_id\":\"${TENANT_ID}\",\"channel_types\":[\"chat\",\"whatsapp\"],\"sla_target_ms\":300000,\"routing_expression\":${ROUTING_EXPR},\"competency_weights\":{},\"aging_factor\":0.4,\"breach_factor\":0.8,\"remote_sites\":[],\"is_human_pool\":true}" \
+  $REDIS_CLI_CMD SET "${TENANT_ID}:pool_config:retencao_humano" \
+    "{\"pool_id\":\"retencao_humano\",\"tenant_id\":\"${TENANT_ID}\",\"channel_types\":[\"chat\",\"whatsapp\"],\"sla_target_ms\":300000,\"routing_expression\":${ROUTING_EXPR},\"competency_weights\":{},\"aging_factor\":0.4,\"breach_factor\":0.8,\"remote_sites\":[],\"is_human_pool\":true}" \
     EX 86400 >/dev/null \
-    && success "Pool config suporte_humano registrado"
+    && success "Pool config retencao_humano registrado"
 
   # ── Pool sets ─────────────────────────────────────────────────────────────
-  $REDIS_CLI_CMD SADD "${TENANT_ID}:pools" "demo_ia" "suporte_humano" >/dev/null \
-    && success "Pool set registrado: demo_ia, suporte_humano"
+  $REDIS_CLI_CMD SADD "${TENANT_ID}:pools" "demo_ia" "sac_ia" "fila_humano" "retencao_humano" >/dev/null \
+    && success "Pool set registrado: demo_ia, sac_ia, fila_humano, retencao_humano"
 
-  # ── Agent instances (AgentInstance JSON — lidos por get_ready_instances) ──
-  $REDIS_CLI_CMD SET "${TENANT_ID}:instance:inst-01" \
-    "{\"instance_id\":\"inst-01\",\"agent_type_id\":\"orquestrador_demo_v1\",\"tenant_id\":\"${TENANT_ID}\",\"pool_id\":\"demo_ia\",\"pools\":[\"demo_ia\"],\"execution_model\":\"stateless\",\"max_concurrent\":10,\"current_sessions\":0,\"status\":\"ready\",\"registered_at\":\"${NOW}\"}" \
+  # ── Agent instances (TTL 24h) ─────────────────────────────────────────────
+  $REDIS_CLI_CMD SET "${TENANT_ID}:instance:demo-ia-001" \
+    "{\"instance_id\":\"demo-ia-001\",\"agent_type_id\":\"agente_demo_ia_v1\",\"tenant_id\":\"${TENANT_ID}\",\"pool_id\":\"demo_ia\",\"pools\":[\"demo_ia\"],\"execution_model\":\"stateless\",\"max_concurrent\":10,\"current_sessions\":0,\"status\":\"ready\",\"registered_at\":\"${NOW}\"}" \
     EX 86400 >/dev/null \
-    && success "Instância inst-01 registrada (pool: demo_ia)"
+    && success "Instância demo-ia-001 registrada (pool: demo_ia)"
 
-  $REDIS_CLI_CMD SET "${TENANT_ID}:instance:inst-02" \
-    "{\"instance_id\":\"inst-02\",\"agent_type_id\":\"agente_suporte_humano_v1\",\"tenant_id\":\"${TENANT_ID}\",\"pool_id\":\"suporte_humano\",\"pools\":[\"suporte_humano\"],\"execution_model\":\"stateful\",\"max_concurrent\":3,\"current_sessions\":0,\"status\":\"ready\",\"registered_at\":\"${NOW}\"}" \
+  $REDIS_CLI_CMD SET "${TENANT_ID}:instance:sac-ia-001" \
+    "{\"instance_id\":\"sac-ia-001\",\"agent_type_id\":\"agente_sac_ia_v1\",\"tenant_id\":\"${TENANT_ID}\",\"pool_id\":\"sac_ia\",\"pools\":[\"sac_ia\"],\"execution_model\":\"stateless\",\"max_concurrent\":10,\"current_sessions\":0,\"status\":\"ready\",\"registered_at\":\"${NOW}\"}" \
     EX 86400 >/dev/null \
-    && success "Instância inst-02 registrada (pool: suporte_humano)"
+    && success "Instância sac-ia-001 registrada (pool: sac_ia)"
 
-  $REDIS_CLI_CMD SET "${TENANT_ID}:instance:inst-03" \
-    "{\"instance_id\":\"inst-03\",\"agent_type_id\":\"agente_suporte_humano_v1\",\"tenant_id\":\"${TENANT_ID}\",\"pool_id\":\"suporte_humano\",\"pools\":[\"suporte_humano\"],\"execution_model\":\"stateful\",\"max_concurrent\":3,\"current_sessions\":0,\"status\":\"ready\",\"registered_at\":\"${NOW}\"}" \
+  $REDIS_CLI_CMD SET "${TENANT_ID}:instance:fila-ia-001" \
+    "{\"instance_id\":\"fila-ia-001\",\"agent_type_id\":\"agente_fila_v1\",\"tenant_id\":\"${TENANT_ID}\",\"pool_id\":\"fila_humano\",\"pools\":[\"fila_humano\"],\"execution_model\":\"stateless\",\"max_concurrent\":50,\"current_sessions\":0,\"status\":\"ready\",\"registered_at\":\"${NOW}\"}" \
     EX 86400 >/dev/null \
-    && success "Instância inst-03 registrada (pool: suporte_humano)"
+    && success "Instância fila-ia-001 registrada (pool: fila_humano)"
+
+  $REDIS_CLI_CMD SET "${TENANT_ID}:instance:retencao-humano-001" \
+    "{\"instance_id\":\"retencao-humano-001\",\"agent_type_id\":\"agente_retencao_humano_v1\",\"tenant_id\":\"${TENANT_ID}\",\"pool_id\":\"retencao_humano\",\"pools\":[\"retencao_humano\"],\"execution_model\":\"stateful\",\"max_concurrent\":3,\"current_sessions\":0,\"status\":\"ready\",\"registered_at\":\"${NOW}\"}" \
+    EX 86400 >/dev/null \
+    && success "Instância retencao-humano-001 registrada (pool: retencao_humano)"
 
   # ── Pool instance sets ────────────────────────────────────────────────────
-  $REDIS_CLI_CMD SADD "${TENANT_ID}:pool:demo_ia:instances" "inst-01" >/dev/null \
-    && success "Pool demo_ia:instances → inst-01"
-  $REDIS_CLI_CMD SADD "${TENANT_ID}:pool:suporte_humano:instances" "inst-02" "inst-03" >/dev/null \
-    && success "Pool suporte_humano:instances → inst-02, inst-03"
+  $REDIS_CLI_CMD SADD "${TENANT_ID}:pool:demo_ia:instances"        "demo-ia-001"         >/dev/null && success "Pool demo_ia:instances → demo-ia-001"
+  $REDIS_CLI_CMD SADD "${TENANT_ID}:pool:sac_ia:instances"         "sac-ia-001"          >/dev/null && success "Pool sac_ia:instances → sac-ia-001"
+  $REDIS_CLI_CMD SADD "${TENANT_ID}:pool:fila_humano:instances"    "fila-ia-001"         >/dev/null && success "Pool fila_humano:instances → fila-ia-001"
+  $REDIS_CLI_CMD SADD "${TENANT_ID}:pool:retencao_humano:instances" "retencao-humano-001" >/dev/null && success "Pool retencao_humano:instances → retencao-humano-001"
 fi
 
 # ── Done ──────────────────────────────────────────────────────────────────────
@@ -159,13 +144,13 @@ echo ""
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 printf "${GREEN}  Seed concluído!${RESET}\n"
 echo ""
-echo "  O fluxo demo está pronto. Para testar:"
+echo "  Pools registrados: demo_ia, sac_ia, fila_humano, retencao_humano"
 echo ""
-echo "    Webchat (cliente)   →  conecte no Channel Gateway (porta configurada)"
-echo "    Agent Assist (humano) →  http://localhost:5173?pool_id=suporte_humano"
-echo "    Dashboard           →  http://localhost:5174"
+echo "  Próximos passos:"
 echo ""
-echo "  Para o fluxo LLM (Demo 2), o PLUGHUB_ENTRY_POINT_POOL_ID deve ser 'demo_ia'."
-echo "  Para o fluxo IVR (Demo 1), use 'sac_ia' e execute seed.ts no lugar deste script."
+echo "    Agent Assist (humano) →  http://localhost:5173?agent=Carlos&pool=retencao_humano"
+echo ""
+echo "    Cliente demo_ia (IVR) →  wscat -c ws://localhost:8010/ws/chat/demo_ia"
+echo "    Cliente sac_ia  (LLM) →  wscat -c ws://localhost:8010/ws/chat/sac_ia"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo ""
