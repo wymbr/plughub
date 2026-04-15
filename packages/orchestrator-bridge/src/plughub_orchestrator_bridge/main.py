@@ -1065,7 +1065,10 @@ async def _restore_instance(
         if tenant and inst and snapshot:
             snapshot["current_sessions"] = max(0, int(snapshot.get("current_sessions", 1)) - 1)
             snapshot["status"] = "ready"
-            await redis_client.set(f"{tenant}:instance:{inst}", json.dumps(snapshot), ex=3600)
+            # Use 24h TTL — matches seed-demo.sh so the instance survives across sessions.
+            # Previous code used 1h; after restoration the key expired, routing couldn't find
+            # the instance (key gone but ID still in pool instances set), causing contacts to queue.
+            await redis_client.set(f"{tenant}:instance:{inst}", json.dumps(snapshot), ex=86400)
             if pool:
                 await redis_client.sadd(f"{tenant}:pool:{pool}:instances", inst)
             logger.info("Instance restored: tenant=%s instance=%s pool=%s", tenant, inst, pool)

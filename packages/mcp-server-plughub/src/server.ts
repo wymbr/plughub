@@ -74,6 +74,88 @@ export function createServer(allDeps?: AllDeps): McpServer {
   return server
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// refreshPoolInstances — reset stuck instance state when an agent connects
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// In demo/dev environments agents do not publish Kafka agent_ready events, so
+// the Routing Engine relies on the static seed (seed-demo.sh) for instance state.
+// After a session where _restore_instance wasn't called (e.g. bridge restart,
+// crashed session, or the now-fixed silent-exception bug), the instance can be
+// left with current_sessions > 0 or even removed from the pool:instances set.
+//
+// Calling this when the Agent Assist UI connects guarantees the instance is
+// available for routing as long as Carlos is online — matching the intent of
+// "human agent is ready to accept conversations".
+//
+// In production this function is harmless: lifecycle events keep state current,
+// and the write here is quickly overwritten by the next agent_ready heartbeat.
+async function refreshPoolInstances(
+  poolId: string,
+  redis: import("ioredis").default,
+): Promise<void> {
+  const tenantId = process.env["PLUGHUB_TENANT_ID"] ?? "default"
+  const poolInstKey = `${tenantId}:pool:${poolId}:instances`
+
+  // Collect candidate instance IDs: start from the pool's instances set …
+  const setMembers = await redis.smembers(poolInstKey)
+  const candidateIds = new Set<string>(setMembers)
+
+  // … then also scan for instance keys whose 'pools' list includes this pool
+  // (handles the case where mark_busy removed the instance from the set).
+  // KEYS is O(N) but acceptable for demo environments with a small keyspace.
+  const allInstanceKeys = await redis.keys(`${tenantId}:instance:*`)
+  for (const key of allInstanceKeys) {
+    try {
+      const raw = await redis.get(key)
+      if (!raw) continue
+      const inst = JSON.parse(raw) as Record<string, unknown>
+      const pools = Array.isArray(inst["pools"]) ? (inst["pools"] as string[]) : []
+      const singlePool = typeof inst["pool_id"] === "string" ? inst["pool_id"] : ""
+      if (pools.includes(poolId) || singlePool === poolId) {
+        const iid = inst["instance_id"] as string | undefined
+        if (iid) candidateIds.add(iid)
+      }
+    } catch { /* skip malformed key */ }
+  }
+
+  for (const instanceId of candidateIds) {
+    const key = `${tenantId}:instance:${instanceId}`
+    try {
+      const raw = await redis.get(key)
+      if (raw) {
+        const inst = JSON.parse(raw) as Record<string, unknown>
+        // Only reset if the instance belongs to this pool
+        const pools = Array.isArray(inst["pools"]) ? (inst["pools"] as string[]) : []
+        const singlePool = typeof inst["pool_id"] === "string" ? inst["pool_id"] : ""
+        if (!pools.includes(poolId) && singlePool !== poolId) continue
+
+        inst["current_sessions"] = 0
+        inst["status"] = "ready"
+
+        // Preserve existing TTL so we don't accidentally shorten a 24h seed TTL.
+        const ttl = await redis.ttl(key)
+        if (ttl > 0) {
+          await redis.set(key, JSON.stringify(inst), "EX", ttl)
+        } else {
+          // Key had no TTL or was already expired — restore with 24h (matches seed)
+          await redis.set(key, JSON.stringify(inst), "EX", 86400)
+        }
+      } else {
+        // Key doesn't exist (expired) — nothing to refresh
+        continue
+      }
+    } catch { /* skip, non-fatal */ }
+
+    // Always ensure the instance is in the pool's instances set
+    await redis.sadd(poolInstKey, instanceId)
+  }
+
+  if (candidateIds.size > 0) {
+    console.log(`[agent-ws] Refreshed ${candidateIds.size} instance(s) for pool=${poolId}`)
+  }
+}
+
 export async function startServer(config: ServerConfig): Promise<void> {
   const app = express()
   app.use(express.json())
@@ -333,6 +415,16 @@ export async function startServer(config: ServerConfig): Promise<void> {
       subscriber.subscribe(`pool:events:${poolId}`, (err) => {
         if (err) console.error("Redis subscribe error:", err)
       })
+
+      // Refresh pool instance readiness in Redis.
+      // In demo/dev environments, agents connect directly (no Kafka agent_ready events),
+      // so the Routing Engine never learns the agent is available via its normal lifecycle
+      // path.  When Carlos (re)connects here, we reset all instances that belong to this
+      // pool back to ready=0-sessions so the Routing Engine can allocate waiting contacts.
+      // This is a no-op in production where lifecycle events keep state accurate.
+      refreshPoolInstances(poolId, redis).catch((err) =>
+        console.error(`refreshPoolInstances pool=${poolId}:`, err)
+      )
     }
 
     subscriber.on("message", forward)

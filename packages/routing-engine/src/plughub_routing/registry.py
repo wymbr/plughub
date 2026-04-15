@@ -94,6 +94,9 @@ class InstanceRegistry:
         for iid in instance_ids:
             raw = await self._redis.get(_instance_key(tenant_id, iid))
             if not raw:
+                # Instance key expired (TTL ran out) but ID is still in the pool set.
+                # Remove the stale entry to keep the set consistent.
+                await self._redis.srem(_pool_instances_key(tenant_id, pool_id), iid)
                 continue
             try:
                 data = json.loads(raw)
