@@ -232,7 +232,15 @@ class InstanceRegistry:
     async def mark_busy(
         self, tenant_id: str, pool_id: str, instance_id: str
     ) -> None:
-        """Increments current_sessions on the instance."""
+        """
+        Increments current_sessions on the instance.
+
+        Uses KEEPTTL so the original TTL (e.g. 24h for demo-seeded instances or 30s
+        for live-registered agents) is preserved.  Production agents renew their TTL
+        via subsequent agent_busy/agent_heartbeat events (which call set_instance).
+        Without KEEPTTL, mark_busy would overwrite a 24h seed TTL with 30s — causing
+        the instance to vanish before the next escalation could be routed to it.
+        """
         key = _instance_key(tenant_id, instance_id)
         raw = await self._redis.get(key)
         if not raw:
@@ -244,7 +252,17 @@ class InstanceRegistry:
         inst.current_sessions += 1
         if inst.current_sessions >= inst.max_concurrent:
             inst.state = "busy"
-        await self.set_instance(inst)
+
+        # Serialize and update in Redis — preserve the existing TTL
+        out = inst.model_dump()
+        out["status"] = out.pop("state")   # alias for mcp-server compat
+        await self._redis.set(key, json.dumps(out), keepttl=True)
+
+        # Sync pool membership: remove if at capacity or not ready
+        pool_key = _pool_instances_key(tenant_id, pool_id)
+        if inst.state != "ready" or inst.current_sessions >= inst.max_concurrent:
+            await self._redis.srem(pool_key, instance_id)
+        # (no sadd needed — the instance was already in the set before mark_busy)
 
     async def add_queued_contact(
         self,

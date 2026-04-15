@@ -78,6 +78,15 @@ async def run() -> None:
     )
     crash_detector_task = asyncio.create_task(crash_detector.run())
 
+    # Periodic queue drain — fallback for environments where agent_ready Kafka
+    # events are not published (e.g. demo mode where Agent Assist UI subscribes
+    # directly to Redis without going through the agent_login/agent_ready flow).
+    # Every QUEUE_DRAIN_INTERVAL_S seconds, scan all pools with queued contacts
+    # and re-publish any contact whose pool has a ready instance available.
+    periodic_drain_task = asyncio.create_task(
+        _periodic_queue_drain(redis_client, producer, settings)
+    )
+
     # Start evaluation consumer in background (triggers SkillFlowEngine for sampled contacts)
     evaluation_flow = await load_evaluation_flow(
         skill_flow_service_url = settings.skill_flow_service_url,
@@ -107,6 +116,7 @@ async def run() -> None:
     finally:
         listener_task.cancel()
         crash_detector_task.cancel()
+        periodic_drain_task.cancel()
         evaluation_task.cancel()
         await consumer.stop()
         await producer.stop()
@@ -250,6 +260,136 @@ async def _persist_queued_contact(
             "Could not send waiting notification to customer: session=%s — %s",
             event.session_id, exc,
         )
+
+
+async def _periodic_queue_drain(
+    redis_client: aioredis.Redis,
+    producer:     "AIOKafkaProducer",
+    settings,
+) -> None:
+    """
+    Periodic fallback queue drain — runs every QUEUE_DRAIN_INTERVAL_S seconds.
+
+    This supplements the event-driven drain (triggered by agent_ready Kafka events)
+    for deployment environments where agents do not publish agent_ready — notably
+    the demo/dev environment where Agent Assist UI connects directly to Redis pub/sub
+    without going through the agent_login → agent_ready lifecycle.
+
+    Algorithm:
+      1. SCAN Redis for all keys matching *:pool:*:queue (sorted sets)
+      2. For each non-empty queue, check if any instance in the pool is ready
+      3. If yes: pop the oldest session_id from the queue, retrieve the full
+         contact JSON, remove the entry, and re-publish to conversations.inbound
+         so the Routing Engine allocates it in the normal processing loop.
+      4. Stop after draining one contact per pool per cycle — if the agent has
+         capacity for more, the allocation will succeed and the routing event
+         will trigger a subsequent drain cycle.
+    """
+    interval = getattr(settings, "queue_drain_interval_s", 15)
+    if interval <= 0:
+        return   # disabled
+    await asyncio.sleep(interval)   # initial delay — let all services start first
+
+    while True:
+        try:
+            # Scan for all queue sorted-set keys
+            cursor     = 0
+            drained    = 0
+            while True:
+                cursor, keys = await redis_client.scan(
+                    cursor, match="*:pool:*:queue", count=50
+                )
+                for key in keys:
+                    parts = key.split(":")
+                    # Expected format: {tenant_id}:pool:{pool_id}:queue
+                    if len(parts) < 4 or parts[-1] != "queue" or parts[-3] != "pool":
+                        continue
+                    tenant_id = parts[0]
+                    pool_id   = ":".join(parts[2:-1])   # handles pool ids without colons
+
+                    # Check if queue is non-empty
+                    oldest = await redis_client.zrange(key, 0, 0, withscores=False)
+                    if not oldest:
+                        continue
+
+                    # Check if any instance in the pool is ready
+                    pool_inst_key = f"{tenant_id}:pool:{pool_id}:instances"
+                    instance_ids  = await redis_client.smembers(pool_inst_key)
+                    has_capacity  = False
+                    for iid in instance_ids:
+                        raw = await redis_client.get(f"{tenant_id}:instance:{iid}")
+                        if not raw:
+                            continue
+                        try:
+                            data = json.loads(raw)
+                            status = data.get("status") or data.get("state", "")
+                            current  = int(data.get("current_sessions", 0))
+                            max_conc = int(data.get("max_concurrent", 1))
+                            if status == "ready" and current < max_conc:
+                                has_capacity = True
+                                break
+                        except Exception:
+                            continue
+
+                    if not has_capacity:
+                        continue
+
+                    # Dequeue oldest contact
+                    session_id = oldest[0]
+                    contact_key = f"{tenant_id}:queue_contact:{session_id}"
+                    raw_contact = await redis_client.get(contact_key)
+                    if not raw_contact:
+                        # Stale entry — remove and skip
+                        await redis_client.zrem(key, session_id)
+                        continue
+
+                    # Check if a queue agent is active (signal it instead of re-publishing)
+                    queue_agent_active = await redis_client.get(
+                        f"queue:agent_active:{session_id}"
+                    )
+
+                    # Remove from queue before acting — prevents double-routing
+                    await redis_client.zrem(key, session_id)
+                    await redis_client.delete(contact_key)
+
+                    if queue_agent_active:
+                        # Signal the queue agent's menu:result BLPOP
+                        await redis_client.lpush(
+                            f"menu:result:{session_id}", "__agent_available__"
+                        )
+                        logger.info(
+                            "Periodic drain: signalled queue agent session=%s pool=%s",
+                            session_id, pool_id,
+                        )
+                    else:
+                        # Re-publish to conversations.inbound for normal routing
+                        try:
+                            contact_data = json.loads(raw_contact)
+                            await producer.send(settings.kafka_topic_inbound, value=contact_data)
+                            logger.info(
+                                "Periodic drain: re-routing session=%s pool=%s tenant=%s",
+                                session_id, pool_id, tenant_id,
+                            )
+                        except Exception as exc:
+                            logger.warning(
+                                "Periodic drain: failed to re-publish session=%s — %s",
+                                session_id, exc,
+                            )
+
+                    drained += 1
+
+                if cursor == 0:
+                    break  # SCAN complete
+
+            if drained:
+                logger.info("Periodic drain: drained %d contact(s)", drained)
+
+        except asyncio.CancelledError:
+            return
+        except Exception as exc:
+            logger.warning("Periodic drain error: %s", exc)
+
+        await asyncio.sleep(interval)
 
 
 def main() -> None:

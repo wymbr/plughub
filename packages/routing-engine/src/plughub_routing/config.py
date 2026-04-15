@@ -50,6 +50,11 @@ class Settings(BaseSettings):
     # Crash detection — scan interval for orphaned instances
     crash_check_interval_s: int = 15
 
+    # Periodic queue drain — fallback for environments without agent_ready Kafka events
+    # (e.g. demo/dev where Agent Assist UI connects directly to Redis pub/sub).
+    # Set to 0 to disable. Default: 15s.
+    queue_drain_interval_s: int = 15
+
     # Evaluation consumer — evaluation.requested → SkillFlowEngine
     kafka_topic_evaluation:  str = "evaluation.events"
     # HTTP endpoint of the skill-flow-service (TypeScript wrapper around SkillFlowEngine)
