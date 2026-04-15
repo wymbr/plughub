@@ -47,10 +47,14 @@ export SKILL_FLOW_URL="http://localhost:3400"
 export MCP_PROXY_URL="http://localhost:7422"
 export PLUGHUB_INSTANCE_TTL_SECONDS="3600"
 
+# ── Orchestrator Bridge ───────────────────────────────────────────────────────
+# YAML skill flow fallback directory (loaded when Agent Registry has no skill for the agent type)
+export SKILLS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)/packages/skill-flow-engine/skills"
+
 # ── Channel Gateway ───────────────────────────────────────────────────────────
-# demo_ia  = Demo 2 (LLM flow with sentiment)
-# sac_ia   = Demo 1 (rule-based IVR flow)
-export PLUGHUB_ENTRY_POINT_POOL_ID="demo_ia"
+# pool_id is passed via WebSocket URL (/ws/chat/{pool_id}) — leave empty for development
+# Only set PLUGHUB_ENTRY_POINT_POOL_ID for legacy single-pool deployments without pool_id in URL
+export PLUGHUB_ENTRY_POINT_POOL_ID=""
 export PLUGHUB_TENANT_ID="default"
 
 # ── Python (optional) ─────────────────────────────────────────────────────────

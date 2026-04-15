@@ -70,7 +70,7 @@ REDIS_URL           = os.getenv("REDIS_URL",            "redis://localhost:6379"
 SKILL_FLOW_URL      = os.getenv("SKILL_FLOW_URL",       "http://localhost:3400")
 AGENT_REGISTRY_URL  = os.getenv("AGENT_REGISTRY_URL",  "http://localhost:3300")
 
-_default_skills_dir = str(Path(__file__).parent.parent / "skill-flow-engine" / "skills")
+_default_skills_dir = str(Path(__file__).parent.parent.parent.parent / "skill-flow-engine" / "skills")
 SKILLS_DIR          = os.getenv("SKILLS_DIR", _default_skills_dir)
 
 TOPIC_ROUTED  = "conversations.routed"

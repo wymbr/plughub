@@ -102,8 +102,12 @@ const ENV = {
   MCP_PROXY_URL:                    "http://localhost:7422",
   PLUGHUB_INSTANCE_TTL_SECONDS:     "3600",
 
-  // Channel Gateway — entry point pool for demo 2 (change to sac_ia for demo 1)
-  PLUGHUB_ENTRY_POINT_POOL_ID:      process.env.PLUGHUB_ENTRY_POINT_POOL_ID || "demo_ia",
+  // Orchestrator Bridge — YAML skill flow fallback directory
+  SKILLS_DIR:                       path.join(ROOT, "packages/skill-flow-engine/skills"),
+
+  // Channel Gateway — pool_id comes from WebSocket URL path (/ws/chat/{pool_id})
+  // PLUGHUB_ENTRY_POINT_POOL_ID is a legacy fallback for single-pool deployments without pool_id in URL
+  PLUGHUB_ENTRY_POINT_POOL_ID:      process.env.PLUGHUB_ENTRY_POINT_POOL_ID || "",
   PLUGHUB_TENANT_ID:                process.env.PLUGHUB_TENANT_ID           || "default",
 }
 
