@@ -10,7 +10,7 @@
     "test":      "vitest run"
   },
   "dependencies": {
-    "@plughub/schemas": "workspace:*",
+    "@plughub/schemas": "file:../schemas",
     "js-yaml":          "^4.1.0"
   },
   "devDependencies": {
