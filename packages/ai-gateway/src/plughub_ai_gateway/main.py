@@ -15,8 +15,13 @@ import time
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator
 
+import logging
+
 from fastapi import FastAPI, HTTPException, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+
+logger = logging.getLogger(__name__)
 
 from .cache      import SemanticCache
 from .config     import get_settings
@@ -106,8 +111,19 @@ async def provider_error_handler(request: Request, exc: ProviderError) -> JSONRe
         },
     )
 
+@app.exception_handler(RequestValidationError)
+async def request_validation_error_handler(request: Request, exc: RequestValidationError) -> JSONResponse:
+    print(f"[ai-gateway] RequestValidationError: {exc.errors()}", flush=True)
+    return JSONResponse(
+        status_code=422,
+        content={"detail": exc.errors()},
+    )
+
 @app.exception_handler(ValueError)
 async def validation_error_handler(request: Request, exc: ValueError) -> JSONResponse:
+    import traceback
+    print(f"[ai-gateway] ValueError in /v1/reason: {exc}", flush=True)
+    traceback.print_exc()
     return JSONResponse(
         status_code=422,
         content={"error": "validation_error", "detail": str(exc)},

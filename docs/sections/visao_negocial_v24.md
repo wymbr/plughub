@@ -43,7 +43,7 @@ O resultado prático é que uma empresa não precisa escolher entre os agentes q
 
 **O diferencial:**
 
-O PlugHub funciona como o coach do seu time de agentes. Não substitui nenhum jogador — posiciona cada um onde rende mais, avalia performance com os mesmos critérios para IA e humanos, e deixa o operador no comando das regras do jogo. Você traz o elenco que já tem, conecta o que falta, e opera tudo sob um único sistema de controle. Os dados pertencem a você. O lock-in não existe porque o contrato de integração é aberto. O time-to-operation se mede em semanas porque a infraestrutura já está pronta.
+O PlugHub funciona como um clube de esporte profissional, tem coach para seu time de agentes, que monta estratégias de atendimento e escala os agentes nas posições de melhor rendimento, tem Performance Analysis para estudar os dados estatísticos e avaliar a qualidade, efetividade e desempenho de seus agentes IA e humanos de forma padronizada nos diversos cenários práticos de atuação e gerando informações para reciclagem e curadoria. Você traz o elenco que já tem, conecta o que falta, e opera tudo sob um único sistema de controle. Os dados pertencem a você. O lock-in não existe porque o contrato de integração é aberto. O time-to-operation se mede em semanas porque a infraestrutura já está pronta.
 
 ---
 
