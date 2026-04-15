@@ -96,6 +96,10 @@ for pkg in "${BUILD_PACKAGES[@]}"; do
   dir="$ROOT/$pkg"
   if [ -f "$dir/package.json" ]; then
     info "  npm install + build  →  $pkg"
+    # Remove local @plughub packages from node_modules before installing so that
+    # file: dependencies are always re-copied from the current dist/ — npm does
+    # not re-copy file: deps on subsequent installs if node_modules already exists.
+    rm -rf "$dir/node_modules/@plughub"
     npm install --prefix "$dir" --silent \
       || die "npm install falhou em $pkg"
     (cd "$dir" && npm run build --silent) \
