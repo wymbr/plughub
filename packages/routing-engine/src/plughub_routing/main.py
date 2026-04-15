@@ -8,6 +8,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import uuid
 from datetime import datetime, timezone
 
 import httpx
@@ -62,6 +63,10 @@ async def run() -> None:
             kafka_topic_registry  = settings.kafka_topic_registry,
             kafka_brokers         = settings.kafka_brokers,
             kafka_group_id        = settings.kafka_group_id,
+            # Queue drain — on agent_ready, pull waiting contacts from queue
+            router                = router,
+            kafka_producer        = producer,
+            kafka_topic_inbound   = settings.kafka_topic_inbound,
         )
     )
 
@@ -96,7 +101,8 @@ async def run() -> None:
     try:
         async for msg in consumer:
             asyncio.create_task(
-                _process_message(msg.value, router, producer, settings)
+                _process_message(msg.value, router, producer, settings,
+                                 redis_client, instance_registry)
             )
     finally:
         listener_task.cancel()
@@ -109,10 +115,12 @@ async def run() -> None:
 
 
 async def _process_message(
-    payload:  dict,
-    router:   Router,
-    producer: AIOKafkaProducer,
+    payload:           dict,
+    router:            Router,
+    producer:          AIOKafkaProducer,
     settings,
+    redis_client:      aioredis.Redis,
+    instance_registry: InstanceRegistry,
 ) -> None:
     from pydantic import ValidationError
 
@@ -160,9 +168,88 @@ async def _process_message(
                 "Queued session=%s channel=%s tenant=%s pool=%s — no agents available",
                 event.session_id, event.channel, event.tenant_id, event.pool_id,
             )
+            # Persist contact to queue for drain-on-agent-ready
+            now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+            await _persist_queued_contact(
+                event, producer, redis_client, instance_registry, now_ms, settings
+            )
 
     except Exception as exc:
         logger.error("Error routing session: %s — %s", payload.get("session_id"), exc)
+
+
+async def _persist_queued_contact(
+    event:             ConversationInboundEvent,
+    producer:          AIOKafkaProducer,
+    redis_client:      aioredis.Redis,
+    instance_registry: InstanceRegistry,
+    now_ms:            int,
+    settings,
+) -> None:
+    """
+    Stores contact in the pool queue sorted set and notifies the customer.
+    Full original event is preserved so it can be re-published verbatim when
+    an agent becomes available (drain-on-ready).
+    """
+    pool_id = event.pool_id or ""
+    if not pool_id:
+        logger.warning(
+            "Cannot enqueue: no pool_id in event for session=%s", event.session_id
+        )
+        return
+
+    # Store the full event dict + queue metadata so drain can re-publish it intact
+    contact_data = event.model_dump()
+    contact_data["queued_at_ms"] = now_ms
+    contact_data["tier"]         = event.customer_profile.tier
+
+    try:
+        await instance_registry.add_queued_contact(
+            tenant_id    = event.tenant_id,
+            pool_id      = pool_id,
+            session_id   = event.session_id,
+            contact_data = contact_data,
+            queued_at_ms = now_ms,
+        )
+        logger.info(
+            "Contact persisted to queue: session=%s pool=%s tenant=%s",
+            event.session_id, pool_id, event.tenant_id,
+        )
+    except Exception as exc:
+        logger.error(
+            "Failed to persist queued contact: session=%s — %s", event.session_id, exc
+        )
+
+    # Notify customer via conversations.outbound so channel-gateway delivers
+    # a "waiting" message to the customer WebSocket while they're in queue.
+    try:
+        contact_id_raw = await redis_client.get(
+            f"session:{event.session_id}:contact_id"
+        )
+        contact_id = contact_id_raw or event.session_id
+        await producer.send(
+            settings.kafka_topic_outbound,
+            value={
+                "type":       "message.text",
+                "contact_id": contact_id,
+                "session_id": event.session_id,
+                "message_id": str(uuid.uuid4()),
+                "channel":    event.channel,
+                "direction":  "outbound",
+                "author":     {"type": "system", "id": "routing-engine"},
+                "content":    {
+                    "type": "text",
+                    "text": "Aguardando agente disponível. Por favor, aguarde...",
+                },
+                "text":      "Aguardando agente disponível. Por favor, aguarde...",
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            },
+        )
+    except Exception as exc:
+        logger.warning(
+            "Could not send waiting notification to customer: session=%s — %s",
+            event.session_id, exc,
+        )
 
 
 def main() -> None:

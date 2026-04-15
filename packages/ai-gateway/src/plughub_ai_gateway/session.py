@@ -101,10 +101,26 @@ class SessionManager:
     ) -> None:
         """
         Updates partial parameters of the current_turn.
-        Called on every LLM response — not only at the end of the turn.
+        Called on every LLM response — each call is treated as one monitoring
+        turn: the previous current_turn is consolidated to history before the
+        new data is written, so consolidated_turns grows with every step.
         Spec 2.2a: Rules Engine can evaluate current_turn in real time.
         """
         state = await self.get(session_id)
+
+        # Close the previous turn: move current_turn data → consolidated_turns.
+        # Only close if there was meaningful data (avoid empty initial turn).
+        prev = state.current_turn.partial_params
+        if prev.get("intent") is not None or prev.get("sentiment_score", 0.0) != 0.0:
+            state.consolidated_turns.append(ConsolidatedTurn(
+                turn_number     = len(state.consolidated_turns) + 1,
+                intent          = prev.get("intent"),
+                confidence      = float(prev.get("confidence", 0.0)),
+                sentiment_score = float(prev.get("sentiment_score", 0.0)),
+                flags           = list(state.current_turn.detected_flags),
+            ))
+
+        # Update current turn with new data
         state.current_turn.partial_params = {
             "intent":          intent,
             "confidence":      confidence,
@@ -113,19 +129,41 @@ class SessionManager:
         state.current_turn.detected_flags = flags
         await self.save(session_id, state)
 
+        turn_count = len(state.consolidated_turns)
+
         # Publish to Rules Engine pub/sub channel (fire-and-forget).
         # A Rules Engine outage must never block the AI Gateway response path.
-        channel = f"{self._settings.redis_session_channel}:{session_id}"
-        payload = json.dumps({
+        rules_channel = f"{self._settings.redis_session_channel}:{session_id}"
+        rules_payload = json.dumps({
             "session_id":        session_id,
             "tenant_id":         tenant_id,
             "sentiment_score":   sentiment_score,
             "intent_confidence": confidence,
             "flags":             flags,
-            "turn_count":        len(state.consolidated_turns),
+            "turn_count":        turn_count,
             "elapsed_ms":        elapsed_ms,
         })
         try:
-            await self._redis.publish(channel, payload)
+            await self._redis.publish(rules_channel, rules_payload)
         except Exception as exc:
-            logger.warning("Failed to publish session update for %s: %s", session_id, exc)
+            logger.warning("Failed to publish Rules Engine update for %s: %s", session_id, exc)
+
+        # Also notify the Agent Assist UI supervisor dashboard via the agent
+        # WebSocket channel (agent:events:{session_id}).  This triggers a
+        # re-fetch of GET /supervisor_state/:sessionId so the UI stays live
+        # even for AI-handled sessions where no message.text event is published.
+        try:
+            await self._redis.publish(
+                f"agent:events:{session_id}",
+                json.dumps({
+                    "type":            "supervisor_state.updated",
+                    "session_id":      session_id,
+                    "turn_count":      turn_count,
+                    "sentiment_score": sentiment_score,
+                    "intent":          intent,
+                }),
+            )
+        except Exception as exc:
+            logger.warning(
+                "Failed to publish supervisor_state.updated for %s: %s", session_id, exc
+            )

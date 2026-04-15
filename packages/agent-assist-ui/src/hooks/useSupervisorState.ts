@@ -39,12 +39,15 @@ export function useSupervisorState(
     fetchState();
   }, [fetchState]);
 
-  // Re-fetch on every inbound WS event (message or menu submit)
+  // Re-fetch on events that signal new content or updated AI analysis.
+  // supervisor_state.updated is published by the AI Gateway after every
+  // reason step so AI-handled sessions stay live in the supervisor dashboard.
   useEffect(() => {
     if (!lastEvent) return;
     if (
       lastEvent.type === "message.text" ||
-      lastEvent.type === "menu.render"
+      lastEvent.type === "menu.render" ||
+      lastEvent.type === "supervisor_state.updated"
     ) {
       fetchState();
     }

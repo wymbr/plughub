@@ -29,12 +29,18 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from datetime import datetime, timezone
+from typing import TYPE_CHECKING
 
 import redis.asyncio as aioredis
 
 from .models import AgentInstance, PoolConfig, RoutingExpression
 from .registry import InstanceRegistry, PoolRegistry
 from .config import get_settings
+
+if TYPE_CHECKING:
+    from aiokafka import AIOKafkaProducer
+    from .router import Router
 
 logger = logging.getLogger("plughub.routing.kafka_listener")
 
@@ -82,10 +88,24 @@ class LifecycleEventHandler:
     """
     Processes agent.lifecycle events and maintains instance state in Redis.
     Key: {tenant_id}:instance:{instance_id}  TTL: 30s (spec 4.5).
+
+    When router + producer + pool_registry are provided, automatically drains
+    the pool queue when an agent transitions to ready (Scenario 2 — spec 3.3b).
     """
 
-    def __init__(self, instance_registry: InstanceRegistry) -> None:
-        self._instances = instance_registry
+    def __init__(
+        self,
+        instance_registry:  InstanceRegistry,
+        router:             "Router | None"         = None,
+        producer:           "AIOKafkaProducer | None" = None,
+        pool_registry:      PoolRegistry | None     = None,
+        kafka_topic_inbound: str                    = "conversations.inbound",
+    ) -> None:
+        self._instances      = instance_registry
+        self._router         = router
+        self._producer       = producer
+        self._pools          = pool_registry
+        self._topic_inbound  = kafka_topic_inbound
 
     async def handle(self, event: dict) -> None:
         event_type = event.get("event", "")
@@ -102,6 +122,13 @@ class LifecycleEventHandler:
                 pools         = event.get("pools") or [],
                 agent_type_id = event.get("agent_type_id", ""),
             )
+            # Drain queue — if an agent becomes ready and there are contacts
+            # waiting in any of its pools, dequeue the highest-priority one
+            # and re-publish it to conversations.inbound for re-routing.
+            if self._router and self._producer and self._pools:
+                asyncio.create_task(
+                    self._drain_queue_for_agent(tenant_id, instance_id, event)
+                )
         elif event_type in ("agent_busy", "agent_heartbeat"):
             await self._upsert_instance(tenant_id, instance_id, event)
             if event_type == "agent_busy":
@@ -153,6 +180,67 @@ class LifecycleEventHandler:
                 tenant_id, instance_id, exc,
             )
 
+    async def _drain_queue_for_agent(
+        self, tenant_id: str, instance_id: str, event: dict
+    ) -> None:
+        """
+        Scenario 2 (spec 3.3b): agent becomes ready → check all its pools for
+        queued contacts, dequeue the highest-priority compatible one, and
+        re-publish it to conversations.inbound so the Routing Engine allocates
+        it in the next loop iteration.
+
+        Only one contact is dequeued per agent activation — the routing engine
+        will run again for that contact and allocate it to this agent or another.
+        """
+        pools = event.get("pools") or []
+        if not pools:
+            return
+
+        now_ms   = int(datetime.now(timezone.utc).timestamp() * 1000)
+        instance = await self._instances.get_instance(tenant_id, instance_id)
+        if not instance or instance.state != "ready":
+            return
+
+        for pool_id in pools:
+            assert self._pools is not None
+            pool = await self._pools.get_pool(tenant_id, pool_id)
+            if not pool:
+                continue
+
+            assert self._router is not None
+            contact = await self._router.dequeue(instance, pool, now_ms)
+            if not contact:
+                continue
+
+            # Retrieve the full event dict that was stored when the contact was queued
+            full_data = await self._instances.get_full_queued_contact(
+                tenant_id, contact.session_id
+            )
+            if not full_data:
+                # Stale sorted set entry — remove and continue
+                await self._instances.remove_queued_contact(
+                    tenant_id, pool_id, contact.session_id
+                )
+                continue
+
+            # Remove from queue before re-publishing — prevents double-routing
+            await self._instances.remove_queued_contact(
+                tenant_id, pool_id, contact.session_id
+            )
+
+            # Re-publish to conversations.inbound — Routing Engine will allocate it
+            assert self._producer is not None
+            await self._producer.send(self._topic_inbound, value=full_data)
+
+            logger.info(
+                "Queue drain: re-routing session=%s to pool=%s tenant=%s (agent=%s became ready)",
+                contact.session_id, pool_id, tenant_id, instance_id,
+            )
+            # One contact per agent activation — stop here; if the agent has
+            # capacity for more, subsequent agent_ready/agent_busy cycles will
+            # trigger additional drains.
+            return
+
     async def _deactivate_instance(
         self, tenant_id: str, instance_id: str, event: dict
     ) -> None:
@@ -189,22 +277,35 @@ def _map_status_to_state(status: str) -> str:
 
 
 async def run_listeners(
-    redis_client:       aioredis.Redis,
-    instance_registry:  InstanceRegistry,
-    pool_registry:      PoolRegistry,
+    redis_client:          aioredis.Redis,
+    instance_registry:     InstanceRegistry,
+    pool_registry:         PoolRegistry,
     kafka_topic_lifecycle: str,
     kafka_topic_registry:  str,
     kafka_brokers:         str,
     kafka_group_id:        str,
+    # Optional: when provided, enables queue-drain on agent_ready (Scenario 2)
+    router:                "Router | None"          = None,
+    kafka_producer:        "AIOKafkaProducer | None" = None,
+    kafka_topic_inbound:   str                      = "conversations.inbound",
 ) -> None:
     """
     Starts Kafka consumers for agent.lifecycle and agent.registry.events.
     Called by main.py during Routing Engine startup.
+
+    When router + kafka_producer are supplied, agent_ready events trigger an
+    automatic queue drain (Scenario 2 — spec 3.3b).
     """
     from aiokafka import AIOKafkaConsumer
 
     registry_handler  = RegistryEventHandler(pool_registry)
-    lifecycle_handler = LifecycleEventHandler(instance_registry)
+    lifecycle_handler = LifecycleEventHandler(
+        instance_registry   = instance_registry,
+        router              = router,
+        producer            = kafka_producer,
+        pool_registry       = pool_registry,
+        kafka_topic_inbound = kafka_topic_inbound,
+    )
 
     consumer = AIOKafkaConsumer(
         kafka_topic_lifecycle,

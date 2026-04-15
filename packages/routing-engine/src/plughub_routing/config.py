@@ -17,6 +17,7 @@ class Settings(BaseSettings):
     kafka_topic_inbound:    str = "conversations.inbound"
     kafka_topic_routed:     str = "conversations.routed"
     kafka_topic_queued:     str = "conversations.queued"
+    kafka_topic_outbound:   str = "conversations.outbound"
     # Agent Registry events — populate Redis cache of pool configs and instances
     kafka_topic_lifecycle:  str = "agent.lifecycle"
     kafka_topic_registry:   str = "agent.registry.events"

@@ -246,6 +246,53 @@ class InstanceRegistry:
             inst.state = "busy"
         await self.set_instance(inst)
 
+    async def add_queued_contact(
+        self,
+        tenant_id:    str,
+        pool_id:      str,
+        session_id:   str,
+        contact_data: dict,
+        queued_at_ms: int,
+        ttl:          int = 14_400,
+    ) -> None:
+        """
+        Persist a queued contact.
+        Sorted set score = queued_at_ms (lowest = oldest = served first for FIFO
+        base, though queue_scorer may override with priority).
+        Full event JSON is stored separately so it can be re-published verbatim
+        to conversations.inbound when the contact is dequeued.
+        """
+        await self._redis.zadd(
+            _queue_key(tenant_id, pool_id), {session_id: queued_at_ms}
+        )
+        await self._redis.set(
+            _queue_contact_key(tenant_id, session_id),
+            json.dumps(contact_data),
+            ex=ttl,
+        )
+
+    async def remove_queued_contact(
+        self, tenant_id: str, pool_id: str, session_id: str
+    ) -> None:
+        """Remove contact from sorted set and delete stored JSON."""
+        await self._redis.zrem(_queue_key(tenant_id, pool_id), session_id)
+        await self._redis.delete(_queue_contact_key(tenant_id, session_id))
+
+    async def get_full_queued_contact(
+        self, tenant_id: str, session_id: str
+    ) -> dict | None:
+        """
+        Returns the full stored dict for a queued contact (used for re-routing).
+        Includes all original ConversationInboundEvent fields plus queued_at_ms.
+        """
+        raw = await self._redis.get(_queue_contact_key(tenant_id, session_id))
+        if not raw:
+            return None
+        try:
+            return json.loads(raw)
+        except Exception:
+            return None
+
     async def get_oldest_queue_wait_ms(
         self, tenant_id: str, pool_id: str
     ) -> int | None:
