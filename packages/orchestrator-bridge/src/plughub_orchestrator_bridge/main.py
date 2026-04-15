@@ -473,7 +473,7 @@ async def process_routed(
 
     if agent_type is None:
         # Registry unavailable or agent not registered.
-        # Best-effort fallback: if a YAML skill exists, treat as plughub-native.
+        # Best-effort fallback 1: if a YAML skill exists, treat as plughub-native.
         flow = _load_yaml_fallback(agent_type_id)
         if flow:
             logger.warning(
@@ -486,6 +486,32 @@ async def process_routed(
                 agent_type_id=agent_type_id, tenant_id=tenant_id,
                 skills=[],       # no skills list; resolve_flow_for_agent will use YAML directly
                 instance_id="",  # YAML fallback — no routing instance to track in lock
+            )
+            return
+
+        # Best-effort fallback 2: check execution_model from Redis instance.
+        # Human agents (execution_model=stateful) are never registered in the
+        # Agent Registry in dev — activate them directly without a skill flow.
+        instance_id_for_check = result.get("instance_id", "")
+        execution_model = ""
+        if instance_id_for_check:
+            try:
+                raw_inst = await redis_client.get(f"{tenant_id}:instance:{instance_id_for_check}")
+                if raw_inst:
+                    execution_model = json.loads(raw_inst).get("execution_model", "")
+            except Exception:
+                pass
+
+        if execution_model == "stateful":
+            logger.warning(
+                "Agent type %s not in registry — activating as human agent (execution_model=stateful)",
+                agent_type_id,
+            )
+            await activate_human_agent(
+                redis_client=redis_client,
+                session_id=session_id, pool_id=pool_id,
+                tenant_id=tenant_id,
+                routing_result=result,
             )
         else:
             logger.error(
