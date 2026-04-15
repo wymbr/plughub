@@ -18,6 +18,16 @@ from .models import ContactMeta, InboundMessage
 
 logger = logging.getLogger("plughub.conversation-writer.postgres")
 
+
+def _try_uuid(value: str | None) -> uuid.UUID | None:
+    """Parse value as UUID, returning None if absent or not a valid UUID."""
+    if not value:
+        return None
+    try:
+        return uuid.UUID(value)
+    except ValueError:
+        return None
+
 # ── DDL (reference — run once via migration) ─────────────────────────────────
 DDL = """
 CREATE TABLE IF NOT EXISTS transcripts (
@@ -133,7 +143,7 @@ class PostgresWriter:
                         _parse_ts(msg.timestamp),
                         msg.direction,
                         msg.author.type,
-                        uuid.UUID(msg.author.id) if msg.author.id else None,
+                        _try_uuid(msg.author.id),
                         msg.author.display_name,
                         msg.content.type,
                         msg.content.text,
