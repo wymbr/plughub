@@ -93,20 +93,51 @@ export function registerBpmTools(server: McpServer, deps?: BpmDeps): void {
     "Inicia um atendimento na plataforma. Retorna session_id para rastreamento.",
     ConversationStartInputSchema.shape as any,
     async (input: Record<string, unknown>) => {
-      const parsed = ConversationStartInputSchema.parse(input)
-
-      // TODO: publicar evento em Kafka conversations.inbound
-      // TODO: acionar Routing Engine para alocação inicial
-      // TODO: criar sessão no Redis com context_package inicial
-
+      const parsed    = ConversationStartInputSchema.parse(input)
       const session_id = crypto.randomUUID()
+      const contact_id = crypto.randomUUID()
       const started_at = new Date().toISOString()
+      const ttl        = 14_400  // 4h — aligned with session TTL across services
+
+      // 1. Persist session meta to Redis (mirrors channel-gateway on WebSocket connect)
+      const meta = {
+        contact_id,
+        session_id,
+        tenant_id:   parsed.tenant_id,
+        customer_id: parsed.customer_id,
+        channel:     parsed.channel,
+        started_at,
+        ...(parsed.process_context ? { process_context: parsed.process_context } : {}),
+      }
+      await deps!.redis.setex(`session:${session_id}:contact_id`, ttl, contact_id)
+      await deps!.redis.setex(`session:${session_id}:meta`,       ttl, JSON.stringify(meta))
+
+      // 2. Publish contact_open lifecycle event
+      await deps!.kafka.publish("conversations.events", {
+        event_type:  "contact_open",
+        contact_id,
+        session_id,
+        channel:     parsed.channel,
+        started_at,
+      })
+
+      // 3. Publish routing event to conversations.inbound so Routing Engine allocates agent
+      await deps!.kafka.publish("conversations.inbound", {
+        session_id,
+        tenant_id:   parsed.tenant_id,
+        customer_id: parsed.customer_id,
+        channel:     parsed.channel,
+        started_at,
+        elapsed_ms:  0,
+        ...(parsed.intent ? { intent: parsed.intent } : {}),
+      })
 
       return {
         content: [{
           type: "text" as const,
           text: JSON.stringify({
             session_id,
+            contact_id,
             customer_id: parsed.customer_id,
             channel:     parsed.channel,
             status:      "routing",
@@ -125,22 +156,67 @@ export function registerBpmTools(server: McpServer, deps?: BpmDeps): void {
     async (input: Record<string, unknown>) => {
       const parsed = ConversationStatusInputSchema.parse(input)
 
-      // TODO: ler sessão do Redis
-      // TODO: retornar estado atual: status, agent_type_id alocado, sentiment, SLA
+      // Read session meta written by channel-gateway or conversation_start
+      const metaRaw = await deps!.redis.get(`session:${parsed.session_id}:meta`)
+      if (!metaRaw) {
+        return {
+          content: [{
+            type: "text" as const,
+            text: JSON.stringify({
+              error:      "session_not_found",
+              session_id: parsed.session_id,
+            }),
+          }],
+        }
+      }
+      const meta = JSON.parse(metaRaw) as Record<string, string>
+
+      // Compute elapsed SLA from started_at
+      const startedAt  = meta["started_at"] ? new Date(meta["started_at"]).getTime() : Date.now()
+      const elapsedMs  = Date.now() - startedAt
+      const targetMs   = 480_000  // 8 min default SLA target
+      const urgency    = Math.min(elapsedMs / targetMs, 1)
+
+      // Determine active agent type from routing snapshot in Redis
+      // orchestrator-bridge writes session:{id}:routing:{instance_id} after allocation
+      let agentTypeId: string | null = null
+      let agentStatus = "routing"
+      const aiAgents  = await deps!.redis.smembers(`session:${parsed.session_id}:ai_agents`)
+      const humAgents = await deps!.redis.smembers(`session:${parsed.session_id}:human_agents`)
+      if (aiAgents.length > 0 || humAgents.length > 0) {
+        agentStatus = "in_progress"
+        // Read first routing snapshot to get agent_type_id
+        const firstInstance = aiAgents[0] ?? humAgents[0]
+        const snapRaw = await deps!.redis.get(
+          `session:${parsed.session_id}:routing:${firstInstance}`
+        )
+        if (snapRaw) {
+          const snap = JSON.parse(snapRaw) as Record<string, unknown>
+          agentTypeId = (snap["snapshot"] as Record<string, unknown>)?.["agent_type_id"] as string ?? null
+        }
+      }
+
+      // Read context (insights + sentiment) from routing engine
+      const ctxKey = `${parsed.tenant_id}:session:${parsed.session_id}:context`
+      const ctxRaw = await deps!.redis.get(ctxKey)
+      const ctx    = ctxRaw ? JSON.parse(ctxRaw) as Record<string, unknown> : null
 
       return {
         content: [{
           type: "text" as const,
           text: JSON.stringify({
-            session_id:     parsed.session_id,
-            status:         "in_progress",  // routing | in_progress | completed | failed
-            agent_type_id:  null,           // preenchido após alocação
-            sentiment:      null,
+            session_id:    parsed.session_id,
+            contact_id:    meta["contact_id"] ?? null,
+            channel:       meta["channel"]    ?? null,
+            status:        agentStatus,
+            agent_type_id: agentTypeId,
+            sentiment:     null,  // populated by AI Gateway per turn — read from context if needed
+            context_loaded: ctx !== null,
             sla: {
-              elapsed_ms:       0,
-              target_ms:        480000,
-              urgency:          0,
-              breach_imminent:  false,
+              elapsed_ms:      elapsedMs,
+              target_ms:       targetMs,
+              urgency:         Math.round(urgency * 100) / 100,
+              breach_imminent: urgency > 0.85,
             },
             snapshot_at: new Date().toISOString(),
           }),
@@ -155,20 +231,60 @@ export function registerBpmTools(server: McpServer, deps?: BpmDeps): void {
     "Encerra forçado uma conversa (timeout, cancelamento, erro de sistema).",
     ConversationEndInputSchema.shape as any,
     async (input: Record<string, unknown>) => {
-      const parsed = ConversationEndInputSchema.parse(input)
+      const parsed  = ConversationEndInputSchema.parse(input)
+      const ended_at = new Date().toISOString()
 
-      // TODO: publicar evento de encerramento forçado no Kafka
-      // TODO: notificar agente ativo para graceful shutdown
-      // TODO: registrar no audit log
+      // 1. Look up contact_id and channel from session meta
+      let contactId = parsed.session_id  // fallback
+      let channel   = "chat"
+      let startedAt = ended_at
+      try {
+        const metaRaw = await deps!.redis.get(`session:${parsed.session_id}:meta`)
+        if (metaRaw) {
+          const meta = JSON.parse(metaRaw) as Record<string, string>
+          if (meta["contact_id"]) contactId = meta["contact_id"]
+          if (meta["channel"])    channel   = meta["channel"]
+          if (meta["started_at"]) startedAt = meta["started_at"]
+        }
+      } catch { /* use fallback */ }
+
+      // 2. Notify active agent via Redis pub/sub so it can do graceful shutdown
+      await deps!.redis.publish(`agent:events:${parsed.session_id}`, JSON.stringify({
+        type:    "session.closed",
+        reason:  parsed.reason,
+        ended_at,
+      }))
+
+      // 3. Publish contact_closed lifecycle event (conversation-writer persists transcript)
+      await deps!.kafka.publish("conversations.events", {
+        event_type: "contact_closed",
+        contact_id: contactId,
+        session_id: parsed.session_id,
+        channel,
+        reason:     "agent_done",   // closest standard reason for forced end
+        started_at: startedAt,
+        ended_at,
+        forced_by:  parsed.reason,  // audit: original force reason
+      })
+
+      // 4. Notify channel-gateway to close WebSocket
+      await deps!.kafka.publish("conversations.outbound", {
+        type:       "session.closed",
+        contact_id: contactId,
+        session_id: parsed.session_id,
+        channel,
+        reason:     parsed.reason,
+      })
 
       return {
         content: [{
           type: "text" as const,
           text: JSON.stringify({
             session_id: parsed.session_id,
+            contact_id: contactId,
             terminated: true,
             reason:     parsed.reason,
-            ended_at:   new Date().toISOString(),
+            ended_at,
           }),
         }],
       }
@@ -183,9 +299,27 @@ export function registerBpmTools(server: McpServer, deps?: BpmDeps): void {
     async (input: Record<string, unknown>) => {
       const parsed = RuleDryRunInputSchema.parse(input)
 
-      // TODO: consultar ClickHouse com janela histórica
-      // TODO: avaliar expressão da regra contra cada conversa
-      // TODO: retornar: quantas disparariam, quando, e para qual pool
+      // Delegate to Rules Engine REST API — it has the ClickHouse connection
+      const rulesEngineUrl = process.env["RULES_ENGINE_URL"] ?? "http://localhost:3500"
+      let simulation: Record<string, unknown>
+      try {
+        const res = await fetch(`${rulesEngineUrl}/v1/rules/dry-run`, {
+          method:  "POST",
+          headers: { "Content-Type": "application/json" },
+          body:    JSON.stringify({
+            tenant_id:           parsed.tenant_id,
+            rule:                parsed.rule,
+            history_window_days: parsed.history_window_days,
+          }),
+        })
+        if (!res.ok) throw new Error(`rules-engine responded ${res.status}`)
+        simulation = await res.json() as Record<string, unknown>
+      } catch (err) {
+        simulation = {
+          error:   "rules_engine_unavailable",
+          message: err instanceof Error ? err.message : "unknown error",
+        }
+      }
 
       return {
         content: [{
@@ -194,14 +328,8 @@ export function registerBpmTools(server: McpServer, deps?: BpmDeps): void {
             rule_name:           parsed.rule.name,
             target_pool:         parsed.rule.target_pool,
             history_window_days: parsed.history_window_days,
-            simulation: {
-              total_conversations: 0,    // TODO: consultar ClickHouse
-              would_trigger:       0,
-              trigger_rate:        0,
-              sample_triggers:     [],
-            },
+            simulation,
             simulated_at: new Date().toISOString(),
-            status: "stub — implementação requer conexão com ClickHouse",
           }),
         }],
       }

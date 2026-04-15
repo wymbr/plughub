@@ -65,40 +65,100 @@ export function registerSupervisorTools(server: McpServer, deps: SupervisorDeps)
     async (input: Record<string, unknown>) => {
       const parsed = SupervisorStateInputSchema.parse(input)
 
-      // TODO: validar que pool da sessão tem supervisor_config.enabled: true
-      // TODO: ler diretamente do Redis da sessão — sem cálculo adicional
-      // TODO: retornar is_stale: true se snapshot > 30s
+      // 1. Read session metadata (tenant, started_at, pool, sla target)
+      let tenantId   = ""
+      let startedAt  = Date.now()
+      let slaTargetMs = 480_000  // 8 min default
+
+      try {
+        const metaRaw = await redis.get(`session:${parsed.session_id}:meta`)
+        if (metaRaw) {
+          const meta = JSON.parse(metaRaw) as Record<string, string>
+          tenantId  = meta["tenant_id"] ?? ""
+          if (meta["started_at"]) startedAt = new Date(meta["started_at"]).getTime()
+        }
+      } catch { /* use defaults */ }
+
+      // 2. Read AI state written by orchestrator-bridge per turn
+      //    Key: session:{id}:ai → { current_turn: { partial_params, snapshot_at }, consolidated_turns: [...] }
+      const raw = await redis.get(`session:${parsed.session_id}:ai`).catch(() => null)
+      const ai  = raw ? JSON.parse(raw) as Record<string, unknown> : null
+
+      const currentTurn = (ai?.["current_turn"] as Record<string, unknown>) ?? {}
+      const partials    = (currentTurn["partial_params"] as Record<string, unknown>) ?? {}
+      const turns       = (ai?.["consolidated_turns"] as Record<string, unknown>[]) ?? []
+      const snapshotAt  = (currentTurn["snapshot_at"] as string) ?? new Date().toISOString()
+
+      // 3. Check staleness — snapshot older than 30s means no recent AI activity
+      const snapshotAge = Date.now() - new Date(snapshotAt).getTime()
+      const isStale     = snapshotAge > 30_000
+
+      // 4. Build sentiment trajectory from completed turns + current partial
+      const trajectory: number[] = [
+        ...turns.map((t) => Number(t["sentiment_score"] ?? 0)),
+        Number(partials["sentiment_score"] ?? 0),
+      ]
+      const currentSentiment = Number(partials["sentiment_score"] ?? 0)
+
+      // 5. Compute trend over last vs first window of trajectory
+      let trend: "improving" | "stable" | "declining" = "stable"
+      if (trajectory.length >= 3) {
+        const window    = Math.min(3, Math.floor(trajectory.length / 2))
+        const firstAvg  = trajectory.slice(0, window).reduce((a, b) => a + b, 0) / window
+        const recentAvg = trajectory.slice(-window).reduce((a, b) => a + b, 0) / window
+        const delta     = recentAvg - firstAvg
+        if      (delta >  0.1) trend = "improving"
+        else if (delta < -0.1) trend = "declining"
+      }
+
+      // 6. Read additional context (historical insights) if available
+      //    Key: {tenant_id}:session:{id}:context — written by routing-engine insights consumer
+      let ctxInsights: unknown[] = []
+      if (tenantId) {
+        try {
+          const ctxRaw = await redis.get(`${tenantId}:session:${parsed.session_id}:context`)
+          if (ctxRaw) {
+            const ctx = JSON.parse(ctxRaw) as Record<string, unknown>
+            ctxInsights = (ctx["historical_insights"] as unknown[]) ?? []
+          }
+        } catch { /* non-fatal */ }
+      }
+
+      // 7. SLA calculation
+      const elapsedMs      = Date.now() - startedAt
+      const urgency        = Math.min(elapsedMs / slaTargetMs, 1)
+      const breachImminent = urgency > 0.85
 
       return {
         content: [{
           type: "text" as const,
           text: JSON.stringify({
             session_id: parsed.session_id,
+            turn_count: turns.length,
+            is_stale:   isStale,
             sentiment: {
-              current:    0,        // TODO: ler do Redis
-              trajectory: [],
-              trend:      "stable", // improving | stable | declining
-              alert:      false,
+              current:    currentSentiment,
+              trajectory: trajectory.slice(0, -1),  // exclude current partial from history
+              trend,
+              alert:      currentSentiment < -0.5,
             },
             intent: {
-              current:    null,     // TODO: ler do Redis
-              confidence: null,
-              history:    [],
+              current:    partials["intent"]     ?? null,
+              confidence: partials["confidence"] ?? 0,
+              history:    turns.map((t) => t["intent"]).filter(Boolean),
             },
-            flags:        [],       // ex: ["churn_signal", "high_value"]
+            flags: (partials["flags"] as string[]) ?? [],
             sla: {
-              elapsed_ms:      0,
-              target_ms:       480000,
-              urgency:         0,
-              breach_imminent: false,
+              elapsed_ms:      elapsedMs,
+              target_ms:       slaTargetMs,
+              urgency:         Math.round(urgency * 100) / 100,
+              breach_imminent: breachImminent,
             },
-            turn_count:   0,
-            snapshot_at:  new Date().toISOString(),
-            is_stale:     false,
+            snapshot_at: snapshotAt,
             customer_context: {
-              history_window_days:  30,
-              historical_insights:  [],
-              conversation_insights: [],
+              historical_insights:   ctxInsights,
+              conversation_insights: turns
+                .flatMap((t) => (t["insights"] as unknown[]) ?? []),
             },
           }),
         }],
@@ -114,20 +174,111 @@ export function registerSupervisorTools(server: McpServer, deps: SupervisorDeps)
     async (input: Record<string, unknown>) => {
       const parsed = SupervisorCapabilitiesInputSchema.parse(input)
 
-      // TODO: ler intent_capability_map do supervisor_config do pool
-      // TODO: filtrar por intent atual
-      // TODO: aplicar relevance_model se configurado
-      // TODO: retornar apenas capacidades relevantes para o momento
+      // 1. Read session meta to get tenant_id and pool_id
+      let tenantId = ""
+      let poolId   = ""
+
+      try {
+        const metaRaw = await redis.get(`session:${parsed.session_id}:meta`)
+        if (metaRaw) {
+          const meta = JSON.parse(metaRaw) as Record<string, string>
+          tenantId = meta["tenant_id"] ?? ""
+          poolId   = meta["pool_id"]   ?? ""
+        }
+      } catch { /* non-fatal */ }
+
+      // If no pool_id in meta, try routing snapshot to find pool
+      if (!poolId) {
+        try {
+          const aiAgents  = await redis.smembers(`session:${parsed.session_id}:ai_agents`)
+          const humAgents = await redis.smembers(`session:${parsed.session_id}:human_agents`)
+          const firstInst = aiAgents[0] ?? humAgents[0]
+          if (firstInst) {
+            const snapRaw = await redis.get(
+              `session:${parsed.session_id}:routing:${firstInst}`
+            )
+            if (snapRaw) {
+              const snap = JSON.parse(snapRaw) as Record<string, unknown>
+              const snapshot = snap["snapshot"] as Record<string, unknown> | undefined
+              poolId = (snapshot?.["pool_id"] as string) ?? ""
+            }
+          }
+        } catch { /* non-fatal */ }
+      }
+
+      // 2. Fetch pool config from agent-registry to get supervisor_config.intent_capability_map
+      const registryUrl = process.env["AGENT_REGISTRY_URL"] ?? "http://localhost:3200"
+      let capabilities: unknown[] = []
+      let escalations:  unknown[] = []
+      let conferenceAgents: unknown[] = []
+
+      if (poolId && tenantId) {
+        try {
+          const res = await fetch(`${registryUrl}/v1/pools/${poolId}`, {
+            headers: { "x-tenant-id": tenantId },
+          })
+          if (res.ok) {
+            const pool = await res.json() as Record<string, unknown>
+            const supervisorCfg = pool["supervisor_config"] as Record<string, unknown> | null
+
+            if (supervisorCfg) {
+              // intent_capability_map: Record<intent, capability[]>
+              const capMap = supervisorCfg["intent_capability_map"] as
+                Record<string, unknown[]> | undefined
+
+              if (capMap) {
+                if (parsed.intent && capMap[parsed.intent]) {
+                  // Filter to current intent only
+                  capabilities = capMap[parsed.intent] ?? []
+                } else {
+                  // No intent filter — return all capabilities (deduplicated)
+                  const allCaps = Object.values(capMap).flat()
+                  const seen    = new Set<string>()
+                  capabilities  = allCaps.filter((c) => {
+                    const key = JSON.stringify(c)
+                    if (seen.has(key)) return false
+                    seen.add(key)
+                    return true
+                  })
+                }
+              }
+
+              // escalation_pools: list of pool_ids available for escalation
+              const escalPools = supervisorCfg["escalation_pools"] as string[] | undefined
+              if (escalPools) {
+                escalations = escalPools.map((pid) => ({ pool_id: pid }))
+              }
+            }
+
+            // agent_types in this pool that can be invited to conference
+            const agentTypes = pool["agent_types"] as Array<Record<string, unknown>> | undefined
+            if (agentTypes) {
+              conferenceAgents = agentTypes
+                .filter((at) => (at["agent_type"] as Record<string, unknown>)?.["type"] === "ai")
+                .map((at) => {
+                  const agentType = at["agent_type"] as Record<string, unknown>
+                  return {
+                    agent_type_id: agentType["agent_type_id"],
+                    name:          agentType["name"],
+                    pool_id:       poolId,
+                  }
+                })
+            }
+          }
+        } catch { /* agent-registry unavailable — return empty */ }
+      }
 
       return {
         content: [{
           type: "text" as const,
           text: JSON.stringify({
             session_id:   parsed.session_id,
+            pool_id:      poolId   || null,
+            tenant_id:    tenantId || null,
             intent:       parsed.intent ?? null,
-            capabilities: [],  // TODO: filtrar do intent_capability_map
-            agents:       [],  // agentes IA disponíveis para conferência
-            escalations:  [],  // pools disponíveis para escalação
+            capabilities,
+            agents:       conferenceAgents,
+            escalations,
             snapshot_at:  new Date().toISOString(),
           }),
         }],
