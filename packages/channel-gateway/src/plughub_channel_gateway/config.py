@@ -22,12 +22,12 @@ class Settings(BaseSettings):
     # Redis
     redis_url:                  str = "redis://localhost:6379"
 
-    # Entry point configuration — the service pool this channel entry point serves.
-    # Set via PLUGHUB_ENTRY_POINT_POOL_ID in the environment.
-    # When set, the webchat adapter publishes a ConversationInboundEvent with
-    # this pool_id on every new contact, so the Routing Engine routes immediately
-    # to the correct service pool without any inference.
-    # Example: "sac_ia" for the SAC AI entry point, "vendas_ia" for Sales.
+    # Entry point pool — backward-compat fallback for single-pool deployments.
+    # The preferred way to set the pool is via the URL path: /ws/chat/{pool_id}.
+    # This env var is only used when pool_id is absent from the URL (e.g. older
+    # docker-compose configs that use a fixed /ws/chat endpoint).
+    # Set via PLUGHUB_ENTRY_POINT_POOL_ID.
+    # Example: "sac_ia" — clients connecting to /ws/chat are routed to sac_ia.
     entry_point_pool_id:        str = ""
 
     # Tenant identifier published in routing events.

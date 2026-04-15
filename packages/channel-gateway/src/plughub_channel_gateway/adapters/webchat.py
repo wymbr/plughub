@@ -47,6 +47,7 @@ class WebchatAdapter:
         registry:         SessionRegistry,
         context_reader:   ContextReader,
         settings:         Settings,
+        pool_id:          str = "",
     ) -> None:
         self._ws             = ws
         self._contact_id     = contact_id
@@ -55,6 +56,9 @@ class WebchatAdapter:
         self._registry       = registry
         self._context_reader = context_reader
         self._settings       = settings
+        # pool_id passed explicitly from the URL path takes precedence over
+        # the env-level entry_point_pool_id (backward compat fallback).
+        self._pool_id        = pool_id or settings.entry_point_pool_id
         self._started_at     = datetime.now(timezone.utc).isoformat()
 
     # ── Lifecycle ─────────────────────────────────────────────────────────
@@ -93,7 +97,7 @@ class WebchatAdapter:
                 "tenant_id":   tenant_id,
                 "customer_id": self._contact_id,
                 "channel":     "chat",
-                "pool_id":     self._settings.entry_point_pool_id,
+                "pool_id":     self._pool_id,
                 "started_at":  self._started_at,
             }),
         )
@@ -106,31 +110,33 @@ class WebchatAdapter:
                 started_at=self._started_at,
             ).model_dump()
         )
-        logger.info("contact_open contact_id=%s session_id=%s", self._contact_id, self._session_id)
+        logger.info(
+            "contact_open contact_id=%s session_id=%s pool=%s",
+            self._contact_id, self._session_id, self._pool_id,
+        )
 
         # Publish routing event so the Routing Engine allocates an agent immediately.
-        # pool_id comes from the entry point configuration (PLUGHUB_ENTRY_POINT_POOL_ID).
-        # If not configured, the routing event is omitted — useful for channels that
-        # require a menu/IVR step before routing (pool determined by customer choice).
-        if self._settings.entry_point_pool_id:
+        # pool_id comes from the URL path (/ws/chat/{pool_id}) or falls back to
+        # PLUGHUB_ENTRY_POINT_POOL_ID env var for legacy single-pool deployments.
+        if self._pool_id:
             routing_event = {
                 "session_id":  self._session_id,
                 "tenant_id":   tenant_id,
                 "customer_id": self._contact_id,
                 "channel":     "chat",
-                "pool_id":     self._settings.entry_point_pool_id,
+                "pool_id":     self._pool_id,
                 "started_at":  self._started_at,
                 "elapsed_ms":  0,
             }
             await self._publish_inbound(routing_event)
             logger.info(
                 "routing_event published: session=%s pool=%s",
-                self._session_id, self._settings.entry_point_pool_id,
+                self._session_id, self._pool_id,
             )
         else:
             logger.warning(
-                "PLUGHUB_ENTRY_POINT_POOL_ID not configured — routing event not published "
-                "for session=%s. Set this env var to enable automatic routing on connect.",
+                "pool_id not set (URL path and PLUGHUB_ENTRY_POINT_POOL_ID both empty) — "
+                "routing event not published for session=%s",
                 self._session_id,
             )
 

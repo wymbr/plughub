@@ -75,13 +75,20 @@ app = FastAPI(title="PlugHub Channel Gateway", lifespan=lifespan)
 
 # ── WebSocket endpoint ────────────────────────────────────────────────────
 
-@app.websocket("/ws/chat")
+@app.websocket("/ws/chat/{pool_id}")
 async def websocket_endpoint(
     ws:         WebSocket,
+    pool_id:    str,
     contact_id: str | None = Query(default=None),
 ) -> None:
     """
     WebSocket endpoint for web chat contacts.
+
+    Path params:
+      pool_id    — service pool to route this contact to (e.g. "retencao_humano").
+                   Determines which agent pool the Routing Engine allocates from.
+                   Validated against the Agent Registry on connect; unknown pools
+                   are rejected with close code 4004.
 
     Query params:
       contact_id (optional) — existing contact to reconnect to.
@@ -93,8 +100,18 @@ async def websocket_endpoint(
       3. Sends connection.accepted to client
       4. Publishes contact_open to conversations.events
       5. Enters receive loop
+
+    Dev/test: connect to different pools without changing env vars —
+      ws://localhost:8010/ws/chat/retencao_humano
+      ws://localhost:8010/ws/chat/suporte_ia
+      ws://localhost:8010/ws/chat/fila_demo
     """
     settings   = get_settings()
+
+    # URL pool_id takes precedence; fall back to env for deployments that still
+    # use the single-pool env var (e.g. older infra / docker-compose configs).
+    resolved_pool = pool_id or settings.entry_point_pool_id
+
     cid        = contact_id or str(uuid.uuid4())
     session_id = str(uuid.uuid4())
 
@@ -102,6 +119,7 @@ async def websocket_endpoint(
         ws=ws,
         contact_id=cid,
         session_id=session_id,
+        pool_id=resolved_pool,
         producer=_producer,
         registry=_registry,
         context_reader=_context,
