@@ -234,8 +234,10 @@ export function registerBpmTools(server: McpServer, deps?: BpmDeps): void {
         session_id: parsed.session_id,
         message_id: crypto.randomUUID(),
         channel:    "chat",
+        direction:  "outbound",
         author:     { type: "agent_ai", id: "orchestrator" },
-        text:       parsed.message,
+        content:    { type: "text", text: parsed.message },
+        text:       parsed.message,   // kept for channel-gateway backward compat
         timestamp:  new Date().toISOString(),
       }
 

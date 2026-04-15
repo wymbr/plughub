@@ -358,17 +358,21 @@ export async function startServer(config: ServerConfig): Promise<void> {
           }
         } catch { /* use fallback */ }
 
+        const msgText = typeof msg["text"] === "string" ? msg["text"] : ""
+        const msgTs   = typeof msg["timestamp"] === "string"
+          ? msg["timestamp"]
+          : new Date().toISOString()
         await kafka.publish("conversations.outbound", {
           type:       "message.text",
           contact_id: contactId,
           session_id: activeSessionId,
           message_id: crypto.randomUUID(),
           channel:    "chat",
+          direction:  "outbound",
           author:     { type: "agent_human", id: "human_agent" },
-          text:       typeof msg["text"] === "string" ? msg["text"] : "",
-          timestamp:  typeof msg["timestamp"] === "string"
-            ? msg["timestamp"]
-            : new Date().toISOString(),
+          content:    { type: "text", text: msgText },
+          text:       msgText,   // kept for channel-gateway backward compat
+          timestamp:  msgTs,
         })
       } catch (err) {
         console.error(`Agent WS message error session=${activeSessionId}:`, err)
