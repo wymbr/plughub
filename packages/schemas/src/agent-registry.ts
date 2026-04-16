@@ -127,6 +127,7 @@ export type PoolRegistration = z.infer<typeof PoolRegistrationSchema>
 
 export const AgentFrameworkSchema = z.enum([
   "plughub-native",   // Orchestrador nativo da plataforma — executa via Skill Flow
+  "external-mcp",     // Agente externo integrado via MCP (spec 4.6k) — bridge faz LPUSH
   "langgraph",
   "crewai",
   "anthropic_sdk",
