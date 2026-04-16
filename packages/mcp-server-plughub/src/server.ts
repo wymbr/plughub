@@ -200,19 +200,44 @@ export async function startServer(config: ServerConfig): Promise<void> {
   const app = express()
   app.use(express.json())
 
-  // Redis shared for Agent Assist REST + WS endpoints
-  const redis = createRedisClient()
-  // Kafka producer for publishing human-agent outbound messages
-  const kafka = createKafkaProducer()
+  // Dependências compartilhadas entre todas as conexões SSE.
+  // Criadas uma única vez — não por conexão — para reutilizar pools Redis/Kafka.
+  const redis    = createRedisClient()
+  const kafka    = createKafkaProducer()
+  const registry = createRegistryClient(
+    process.env["AGENT_REGISTRY_URL"] ?? "http://localhost:3300"
+  )
+  const postgres  = createPostgresClient()
 
-  const mcpServer = createServer(undefined)
+  const sharedRuntimeDeps: RuntimeDeps         = { redis, kafka, registry }
+  const sharedBpmDeps: BpmDeps                 = { kafka, redis }
+  const sharedSupervisorDeps: SupervisorDeps   = { redis, kafka }
+  const sharedExternalAgentDeps: ExternalAgentDeps = { redis, kafka }
+  const sharedEvalDeps: EvaluationDeps         = {
+    kafka,
+    postgres,
+    proxyUrl:         process.env["MCP_PROXY_URL"]      ?? "http://localhost:7422",
+    skillRegistryUrl: process.env["SKILL_REGISTRY_URL"] ?? "http://localhost:3400",
+  }
 
-  // Map sessionId → transport para suportar conexões simultâneas
+  // Map sessionId → transport para suportar conexões simultâneas.
+  // O MCP SDK não permite compartilhar uma instância McpServer entre conexões —
+  // cada GET /sse cria uma instância própria, mas compartilha os deps acima.
   const transports = new Map<string, SSEServerTransport>()
 
   // GET /sse — cliente abre conexão SSE
   app.get("/sse", async (req: Request, res: Response) => {
     const transport = new SSEServerTransport("/messages", res)
+
+    // Nova instância McpServer por conexão — exigência do SDK (Protocol.connect
+    // lança "Already connected" se a mesma instância for reutilizada).
+    const mcpServer = new McpServer({ name: "mcp-server-plughub", version: "1.0.0" })
+    registerBpmTools(mcpServer, sharedBpmDeps)
+    registerRuntimeTools(mcpServer, sharedRuntimeDeps)
+    registerSupervisorTools(mcpServer, sharedSupervisorDeps)
+    registerEvaluationTools(mcpServer, sharedEvalDeps)
+    registerExternalAgentTools(mcpServer, sharedExternalAgentDeps)
+
     transports.set(transport.sessionId, transport)
 
     res.on("close", () => {
