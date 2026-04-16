@@ -254,7 +254,7 @@ PoolConfig {
 }
 ```
 
-> **Importante:** `PoolConfig` nunca é lido do PostgreSQL diretamente — é populado no Redis pelo `kafka_listener` a partir de eventos do `agent-registry`. O Routing Engine nunca acessa o banco relacional.
+> **Importante:** `PoolConfig` nunca é lido do PostgreSQL diretamente — é populado no Redis pelo `kafka_listener` a partir dos eventos `pool.registered` e `pool.updated` publicados pelo `agent-registry` no tópico `agent.registry.events`. O Routing Engine nunca acessa o banco relacional. O TTL padrão do cache é 24h (configurável via `PLUGHUB_POOL_CONFIG_TTL_SECONDS`) — suficiente para cobrir reinicios normais sem perda de visibilidade de pools.
 
 ---
 

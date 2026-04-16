@@ -230,7 +230,7 @@ Cache de configuração de pool, populado por `kafka_listener` ao receber evento
 }
 ```
 
-TTL: `pool_config_ttl_seconds` (padrão 5 minutos).
+TTL: `pool_config_ttl_seconds` (padrão 24 horas — configurável via `PLUGHUB_POOL_CONFIG_TTL_SECONDS`). Pool configs são estáticas durante a operação normal; o TTL longo evita que o routing engine perca visibilidade de pools entre reinicios do agent-registry.
 
 ---
 

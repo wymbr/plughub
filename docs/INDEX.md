@@ -1,6 +1,6 @@
 # PlugHub — Documentação Técnica
 
-> Spec de referência: v24.0 · Última atualização: 2026-04-15
+> Spec de referência: v24.0 · Última atualização: 2026-04-16
 
 ---
 
@@ -64,6 +64,7 @@ Documentação de workflows e padrões que cruzam múltiplos módulos.
 |---|---|---|---|
 | [guias/gitagent.md](guias/gitagent.md) | GitAgent — ciclo de vida completo: estrutura do repositório, artefatos, certificação, regeneração, registro e deploy | `sdk`, `schemas`, `skill-flow-engine`, `agent-registry` | ✅ |
 | [guias/changelog-2026-04-15.md](guias/changelog-2026-04-15.md) | Changelog 2026-04-15 — ferramentas MCP BPM/supervisor, fila de agentes humanos, Queue Agent Pattern, pool_id via URL | `mcp-server`, `routing-engine`, `ai-gateway`, `agent-assist-ui`, `orchestrator-bridge`, `schemas`, `agent-registry`, `skill-flow-engine`, `channel-gateway` | ✅ |
+| [guias/changelog-2026-04-16.md](guias/changelog-2026-04-16.md) | Changelog 2026-04-16 — integração end-to-end framework external-mcp (spec 4.6k): roteamento, heartbeats, wait_for_message, pool_config TTL | `mcp-server-plughub`, `routing-engine`, `agent-registry` | ✅ |
 
 ---
 

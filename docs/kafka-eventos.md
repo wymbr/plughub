@@ -342,7 +342,7 @@ Regras de `outcome` e `handoff_reason` (espelham o Zod refinement de `AgentDoneS
 **Produtor**: `agent-registry` — após criação ou atualização de Pool ou AgentType
 
 **Consumidores**:
-- `routing-engine` (kafka_listener) — atualiza `{tenant_id}:pool_config:{pool_id}` no Redis (TTL 5min)
+- `routing-engine` (kafka_listener) — atualiza `{tenant_id}:pool_config:{pool_id}` no Redis (TTL 24h, via `PLUGHUB_POOL_CONFIG_TTL_SECONDS`)
 
 **Grupo de consumo**: `routing-engine-listener`
 

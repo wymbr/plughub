@@ -56,7 +56,7 @@ zod                    ← validação de input
 
 ## Grupos de Tools
 
-O servidor expõe 18 tools organizadas em quatro grupos com consumidores distintos.
+O servidor expõe 22 tools organizadas em cinco grupos com consumidores distintos.
 
 ### Grupo 1: BPM (4 tools)
 
@@ -123,11 +123,11 @@ Consumidas pelos agentes durante o atendimento. São o contrato operacional entr
 agent_login     → emite session_token, registra instância no Redis (estado: logged_in)
      ↓
 agent_ready     → coloca nos pools declarados, disponível para alocação (estado: ready)
-     ↓
+     ↓             [idempotente: aceita também estado 'ready' — renova Kafka event e TTL]
 agent_busy      → registra conversa ativa, incrementa current_sessions (estado: busy)
      ↓             se atingiu max_concurrent_sessions → remove dos pools temporariamente
 agent_done      → decrementa current_sessions, publica em conversations.events
-     ↓             se current_sessions == 0 → volta para ready
+     ↓             se current_sessions == 0 → volta para ready (→ agente chama agent_ready novamente)
      ↓             se state == "draining" && current_sessions == 0 → logged_out + cleanup
 agent_pause     → remove dos pools sem interromper sessões ativas (estado: paused)
      ↓             retorna ao ciclo via agent_ready
@@ -136,6 +136,8 @@ agent_logout    → drain: para novas alocações. Se sem sessões: logged_out i
 ```
 
 Além do ciclo principal, `agent_heartbeat` deve ser chamado a cada ~10s quando `ready` ou `busy`. A ausência de heartbeat por 30s é detectada pelo Routing Engine como crash da instância.
+
+**Ciclo contínuo (agentes stateless):** após `agent_done` com `current_sessions == 0`, a instância retorna ao estado `ready` automaticamente. O agente então chama `agent_ready` novamente para renovar o evento Kafka e manter o TTL da instância no Routing Engine. Esta chamada é idempotente — o `agent_ready` aceita estado `ready` além de `logged_in` e `paused`.
 
 #### `agent_login` — schema de input
 
@@ -494,6 +496,65 @@ O Supervisor não é um agente — não tem ciclo de vida. Lê o estado já disp
 
 ---
 
+### Grupo 5: External Agent (4 tools)
+
+Consumidas por **agentes externos** (LangGraph, CrewAI, Anthropic SDK direto, ou qualquer framework) que se conectam ao mcp-server-plughub via SSE e gerenciam seu próprio ciclo de atendimento. Spec 4.6k.
+
+| Tool | O que faz |
+|---|---|
+| `wait_for_assignment` | BLPOP em `{tenant_id}:agent:queue:{instance_id}` aguardando `context_package` do Routing Engine. Envia `agent_heartbeat` a cada 15s para renovar TTL da instância. |
+| `send_message` | Publica mensagem em `conversations.outbound` → Channel Gateway entrega ao cliente. |
+| `wait_for_message` | Aguarda resposta do cliente. Seta `menu:waiting:{session_id}` antes do BLPOP — sinal obrigatório para o Orchestrator Bridge entregar a mensagem. Monitora também `session:closed:{session_id}` para detectar desconexão. |
+| `invoke` | Chama uma tool de um domain MCP server com validação de permissão JWT local (~0.1ms). Registro de audit em `audit.mcp_calls`. |
+
+#### Fluxo completo de um ciclo external-mcp
+
+```
+1. agent_login    → obtém session_token com permissions[] no JWT
+2. agent_ready    → anuncia disponibilidade nos pools declarados (Kafka agent_ready)
+3. wait_for_assignment → BLPOP aguarda context_package
+                         [envia agent_heartbeat a cada 15s para manter TTL=30s no routing engine]
+4. agent_busy     → sinaliza sessão ativa (Kafka agent_busy)
+5. send_message   → envia mensagem ao cliente (Kafka conversations.outbound)
+6. wait_for_message → aguarda resposta do cliente
+                      [seta menu:waiting:{session_id} antes do BLPOP]
+                      [monitora session:closed:{session_id} — retorna client_disconnected]
+7. agent_done     → encerra conversa (Kafka agent_done)
+8. → estado retorna para 'ready' → voltar ao passo 2
+```
+
+#### `wait_for_assignment` — mecanismo de heartbeat
+
+O Routing Engine mantém instâncias com TTL de 30s no Redis. Durante o BLPOP de `wait_for_assignment`, o agente deve renovar esse TTL ou será removido do pool. A tool resolve isso internamente: faz BLPOP por intervalos de 15s e, ao expirar sem contato, publica `agent_heartbeat` no Kafka antes de reiniciar o BLPOP. O agente não precisa gerenciar isso.
+
+```
+BLPOP(agent:queue:{instance_id}, 15s)
+  ├── recebeu contato → retorna context_package
+  └── timeout 15s    → publica agent_heartbeat → BLPOP novamente
+                        (repete até contato chegar ou timeout total atingido)
+```
+
+#### `wait_for_message` — convenção menu:waiting
+
+O Orchestrator Bridge só entrega mensagens de texto do cliente ao BLPOP de `wait_for_message` se a chave `menu:waiting:{session_id}` estiver presente no Redis. Esta é a mesma convenção usada pelo `menu` step do skill-flow. Sem essa chave, o bridge descarta a mensagem com "No active agent".
+
+A tool seta `menu:waiting:{session_id}` com TTL = `timeout_s + 10` antes do BLPOP e remove no `finally`. O agente não precisa gerenciar isso.
+
+#### `invoke` — validação local de permissões (spec 4.6k)
+
+```typescript
+{
+  session_token: string    // JWT com permissions[] declaradas
+  mcp_server:   string    // ex: "mcp-server-crm"
+  tool:         string    // ex: "customer_get"
+  params:       object    // passados sem modificação ao domain server
+}
+```
+
+A permissão `{mcp_server}:{tool}` deve estar no JWT (emitido por `agent_login`). Validação é local — sem rede, ~0.1ms. Audit publicado em `audit.mcp_calls` (Kafka, assíncrono). O domain server é chamado via SSE reutilizando conexão em pool.
+
+---
+
 ## Fluxo de Autenticação
 
 Todas as tools de Agent Runtime e Supervisor usam JWT. O fluxo:
@@ -606,6 +667,10 @@ Todas as chaves são prefixadas com `{tenant_id}:` para isolamento multi-tenant.
 | `supervisor_state` | ⚠️ Stub — leitura do Redis pendente |
 | `supervisor_capabilities` | ⚠️ Stub — leitura do `intent_capability_map` do pool pendente |
 | `agent_join_conference` | ⚠️ Stub — publicação `conference.joined` no Kafka pendente |
+| `wait_for_assignment` | ✅ Implementado (com heartbeat periódico) |
+| `send_message` | ✅ Implementado |
+| `wait_for_message` | ✅ Implementado (com menu:waiting + session:closed) |
+| `invoke` | ✅ Implementado (validação JWT local + audit Kafka) |
 
 ---
 
@@ -622,6 +687,8 @@ mcp-server-plughub
   ├── publica → Kafka               (agent.lifecycle, conversations.events, evaluation.results)
   └── é consumido por:
         ├── agentes nativos via SDK (@plughub/sdk)
+        ├── agentes externos via SSE direta (framework external-mcp — spec 4.6k)
+        │     invoke, wait_for_assignment, send_message, wait_for_message
         ├── agentes externos via proxy sidecar (plughub-sdk proxy)
         ├── skill-flow-engine       (agent_delegate, agent_done, transcript_get,
         │                            evaluation_context_resolve, evaluation_publish)

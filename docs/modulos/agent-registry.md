@@ -241,6 +241,39 @@ Todas as rotas exigem JWT. O middleware `auth.ts` extrai e valida o token e popu
 
 ---
 
+## Integração Kafka
+
+O `agent-registry` publica eventos no tópico `agent.registry.events` após operações de escrita em pools. Isso permite que o `routing-engine` mantenha seu cache Redis sempre sincronizado sem acesso direto ao PostgreSQL.
+
+### Eventos publicados
+
+| Operação | Evento |
+|---|---|
+| `POST /v1/pools` | `pool.registered` |
+| `PUT /v1/pools/:pool_id` | `pool.updated` |
+
+**Schema:**
+
+```json
+{
+  "event":     "pool.registered | pool.updated",
+  "tenant_id": "string",
+  "pool": {
+    "pool_id":            "string",
+    "channel_types":      ["chat"],
+    "sla_target_ms":      300000,
+    "routing_expression": { ... },
+    "supervisor_config":  null
+  }
+}
+```
+
+**Comportamento:** publicação é fire-and-forget — erros de Kafka são logados mas não impedem a resposta HTTP. A operação de persistência no PostgreSQL não é afetada por falhas de Kafka.
+
+**Efeito no routing-engine:** ao receber `pool.registered` ou `pool.updated`, o `kafka_listener` chama `save_pool_config()` que atualiza `{tenant_id}:pool_config:{pool_id}` no Redis com TTL 24h. Sem este evento, o routing engine não enxerga o pool e trata todos os contatos como sem agente disponível.
+
+---
+
 ## Dependências
 
 ```
@@ -248,6 +281,7 @@ agent-registry
   ├── schemas      ← tipos de domínio (AgentTypeRegistration, PoolRegistration, etc.)
   ├── PostgreSQL   ← persistência principal (via Prisma)
   ├── Prisma ORM   ← acesso ao banco
+  ├── KafkaJS      ← publicação de eventos de configuração
   └── Express      ← framework HTTP
 ```
 
@@ -264,4 +298,8 @@ agent-registry ← consultado por
 
 agent-registry → persiste em
   → PostgreSQL (pools, agent-types, skills, instances)
+
+agent-registry → publica em
+  → Kafka: agent.registry.events (pool.registered, pool.updated)
+     ← consumido por routing-engine para sincronizar cache Redis
 ```
