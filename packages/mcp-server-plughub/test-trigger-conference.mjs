@@ -27,11 +27,14 @@ import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js"
 
 // ── Configuração ─────────────────────────────────────────────────────────────
 
-const MCP_URL      = process.env["MCP_URL"]       ?? "http://localhost:3100"
-const AGENT_TYPE   = process.env["AGENT_TYPE_ID"] ?? "agente_especialista_v1"
-const POOL_ID      = process.env["POOL_ID"]       ?? "especialista_ia"
-const TENANT_ID    = process.env["TENANT_ID"]     ?? "default"
-const IDENTITY_TXT = process.env["IDENTITY"]      ?? "Especialista"
+const MCP_URL      = process.env["MCP_URL"]             ?? "http://localhost:3100"
+const AGENT_TYPE   = process.env["AGENT_TYPE_ID"]       ?? "agente_especialista_v1"
+const POOL_ID      = process.env["POOL_ID"]             ?? "especialista_ia"
+const TENANT_ID    = process.env["TENANT_ID"]           ?? "default"
+const IDENTITY_TXT = process.env["IDENTITY"]            ?? "Especialista"
+// Agent type used only to obtain a session_token for agent_join_conference.
+// Must exist in the agent registry — defaults to the seeded retencao_humano type.
+const TRIGGER_AGENT_TYPE = process.env["TRIGGER_AGENT_TYPE"] ?? "agente_retencao_humano_v1"
 
 // Aceita --session-id como argumento CLI ou SESSION_ID env
 let SESSION_ID = process.env["SESSION_ID"] ?? ""
@@ -40,9 +43,12 @@ for (let i = 0; i < args.length; i++) {
   if (args[i] === "--session-id" && args[i + 1]) SESSION_ID = args[i + 1]
 }
 
+// Strip curly braces if user accidentally copied the placeholder literally: {UUID} → UUID
+SESSION_ID = SESSION_ID.replace(/^\{|\}$/g, "").trim()
+
 if (!SESSION_ID) {
   console.error("Erro: session_id obrigatório.")
-  console.error("  node test-trigger-conference.mjs --session-id {UUID}")
+  console.error("  node test-trigger-conference.mjs --session-id SESSION_ID")
   console.error("  SESSION_ID=xxx node test-trigger-conference.mjs")
   process.exit(1)
 }
@@ -100,9 +106,9 @@ async function main() {
   await client.connect(transport)
   ok("Conectado ao MCP server")
 
-  step("agent_login (humano temporário para autorizar agent_join_conference)")
+  step(`agent_login como ${TRIGGER_AGENT_TYPE} (humano temporário para autorizar agent_join_conference)`)
   const loginResult = await call(client, "agent_login", {
-    agent_type_id: "agente_humano_trigger_v1",
+    agent_type_id: TRIGGER_AGENT_TYPE,
     instance_id:   `trigger-${Date.now()}`,
     tenant_id:     TENANT_ID,
   })
