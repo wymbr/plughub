@@ -217,13 +217,17 @@ export function registerRuntimeTools(server: McpServer, deps: RuntimeDeps): void
         if (!state) {
           return mcpError("instance_not_found", `Instância '${instance_id}' não encontrada`)
         }
-        if (state !== "logged_in" && state !== "paused") {
+        if (state !== "logged_in" && state !== "paused" && state !== "ready") {
           return mcpError(
             "invalid_state",
-            `Instância está em estado '${state}' — esperado 'logged_in' ou 'paused'`
+            `Instância está em estado '${state}' — esperado 'logged_in', 'paused' ou 'ready'`
           )
         }
 
+        // Idempotente quando já em 'ready': apenas renova o Kafka event para que
+        // o Routing Engine atualize o TTL da instância e a mantenha no pool.
+        // Ocorre naturalmente no ciclo contínuo: agent_done (current_sessions=0)
+        // transiciona para 'ready', e agent_ready reanuncia no pool seguinte.
         await redis.hset(instanceKey, "state", "ready")
 
         // Adiciona aos pools declarados
