@@ -101,6 +101,7 @@ const ENV = {
   SKILL_FLOW_URL:                   "http://localhost:3400",
   MCP_PROXY_URL:                    "http://localhost:7422",
   PLUGHUB_INSTANCE_TTL_SECONDS:     "3600",
+  PLUGHUB_POOL_CONFIG_TTL_SECONDS:  "86400",   // 24h — pool configs são estáticas
 
   // Orchestrator Bridge — YAML skill flow fallback directory
   SKILLS_DIR:                       path.join(ROOT, "packages/skill-flow-engine/skills"),
