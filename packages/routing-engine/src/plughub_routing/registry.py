@@ -10,7 +10,7 @@ Instance state read from Redis (populated by kafka_listener from agent.lifecycle
 Redis key structure:
   {tenant_id}:instance:{instance_id}                        — instance state (TTL 30s)
   {tenant_id}:pool:{pool_id}:instances                      — set of instance_ids in pool
-  {tenant_id}:pool_config:{pool_id}                         — pool config JSON (TTL 5min)
+  {tenant_id}:pool_config:{pool_id}                         — pool config JSON (TTL 24h, via PLUGHUB_POOL_CONFIG_TTL_SECONDS)
   {tenant_id}:pools                                         — set of pool_ids for the tenant
   {tenant_id}:pool:{pool_id}:queue                          — sorted set of contacts (score = queued_at_ms)
   {tenant_id}:queue_contact:{session_id}                    — queued contact JSON
@@ -427,9 +427,10 @@ class PoolRegistry:
     async def get_queued_contacts(
         self, tenant_id: str, pool_id: str, top_n: int = 10
     ) -> list[QueuedContact]:
-        """Returns top_n contacts from the pool queue (highest score first)."""
-        members = await self._redis.zrange(
-            _queue_key(tenant_id, pool_id), 0, top_n - 1, rev=True
+        """Returns top_n contacts from the pool queue (highest score first).
+        Uses ZREVRANGE for backwards compatibility with redis-py < 4.2."""
+        members = await self._redis.zrevrange(
+            _queue_key(tenant_id, pool_id), 0, top_n - 1
         )
         contacts: list[QueuedContact] = []
         for session_id in members:

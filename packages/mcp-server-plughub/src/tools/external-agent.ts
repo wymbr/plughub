@@ -311,33 +311,62 @@ export function registerExternalAgentTools(server: McpServer, deps: ExternalAgen
   server.tool(
     "wait_for_message",
     "Aguarda mensagem do cliente. " +
-    "Bloqueia em BLPOP na chave menu:result:{session_id} até receber resposta ou timeout. " +
+    "Seta menu:waiting:{session_id} (TTL=timeout_s+10) antes do BLPOP para que o " +
+    "Orchestrator Bridge entregue a resposta do cliente. " +
+    "Monitoriza também session:closed:{session_id} para detectar desconexão. " +
     "Usa o mesmo mecanismo do passo menu do skill-flow. Spec 4.6k.",
     WaitForMessageInputSchema.shape as any,
     async (input: Record<string, unknown>) => {
       try {
         const { session_token, session_id, timeout_s } = WaitForMessageInputSchema.parse(input)
-        const { tenant_id } = verifySessionTokenSafe(session_token)
+        verifySessionTokenSafe(session_token)  // validates JWT; tenant context not needed for key
 
-        const resultKey = `${tenant_id}:menu:result:${session_id}`
-        const result    = await redis.blpop(resultKey, timeout_s)
+        // Bridge pushes to menu:result:{session_id} WITHOUT tenant prefix — same
+        // convention as the skill-flow menu step. The bridge only delivers to this
+        // key when menu:waiting:{session_id} is set (checked before LPUSH). Without
+        // this flag the bridge drops the customer message with "No active agent".
+        const resultKey  = `menu:result:${session_id}`
+        const closedKey  = `session:closed:${session_id}`
+        const waitingKey = `menu:waiting:${session_id}`
 
-        if (!result) {
-          return mcpError(
-            "timeout",
-            `Nenhuma mensagem recebida em ${timeout_s}s. Considere send_message e aguardar novamente.`
-          )
-        }
+        // Register waiting flag — TTL slightly larger than timeout to cover network latency.
+        // The bridge checks this key to decide whether to push to menu:result.
+        await redis.set(waitingKey, "1", "EX", timeout_s + 10)
 
-        const [, raw] = result
-        let message: unknown
         try {
-          message = JSON.parse(raw)
-        } catch {
-          message = raw // se não for JSON, retorna string crua
-        }
+          // Monitor both: customer reply OR customer disconnect — whichever comes first.
+          // ioredis blpop API: redis.blpop(key1, key2, ..., timeout)
+          const result = await redis.blpop(resultKey, closedKey, timeout_s)
 
-        return ok({ message })
+          if (!result) {
+            return mcpError(
+              "timeout",
+              `Nenhuma mensagem recebida em ${timeout_s}s. Considere send_message e aguardar novamente.`
+            )
+          }
+
+          const [key, raw] = result
+
+          if (key === closedKey) {
+            return mcpError(
+              "client_disconnected",
+              "Cliente desconectou durante a espera. Chame agent_done para encerrar."
+            )
+          }
+
+          // key === resultKey — customer replied
+          let message: unknown
+          try {
+            message = JSON.parse(raw)
+          } catch {
+            message = raw  // if not JSON, return raw string
+          }
+
+          return ok({ message })
+        } finally {
+          // Always remove waiting flag — regardless of outcome
+          redis.del(waitingKey).catch(() => { /* non-fatal */ })
+        }
       } catch (e) {
         return handleCaughtError(e)
       }
