@@ -120,73 +120,93 @@ async function runCycle(client, session_token, cycleNum) {
   const session_id = context_package.session_id
   const contact_id = context_package.contact_id
 
-  // ── agent_busy ─────────────────────────────────────────────────────────────
-  step("agent_busy")
-  const busy = await call(client, "agent_busy", {
-    session_token,
-    conversation_id: session_id,
-  })
-  ok("Em atendimento", { current_sessions: busy.current_sessions })
-
-  // ── send_message (saudação) ────────────────────────────────────────────────
-  step("send_message → saudação ao cliente")
-  const sent = await call(client, "send_message", {
-    session_token,
-    session_id,
-    contact_id,
-    text: "Olá! Sou um agente externo integrado via MCP. Como posso ajudar?",
-    channel: context_package.channel ?? "chat",
-  })
-  ok("Mensagem enviada", { message_id: sent.message_id })
-
-  // ── wait_for_message (resposta do cliente) ─────────────────────────────────
-  wait("Aguardando resposta do cliente (timeout: 60s)...")
-
-  let customer_message
+  // A partir daqui a instância fica busy. Se qualquer erro ocorrer, o loop
+  // principal precisa do session_id para chamar agent_done de recuperação.
+  // Enriquecemos o erro com sessionId antes de relançar.
   try {
-    const reply = await call(client, "wait_for_message", {
+    // ── agent_busy ───────────────────────────────────────────────────────────
+    step("agent_busy")
+    const busy = await call(client, "agent_busy", {
       session_token,
-      session_id,
-      timeout_s: 60,
+      conversation_id: session_id,
     })
-    customer_message = reply.message
-    ok("Mensagem do cliente recebida", { message: customer_message })
-  } catch (e) {
-    err("wait_for_message timeout", e.data ?? e.message)
-    info("Encerrando sem resposta do cliente...")
-  }
+    ok("Em atendimento", { current_sessions: busy.current_sessions })
 
-  // ── send_message (resposta final) ──────────────────────────────────────────
-  if (customer_message) {
-    step("send_message → resposta final")
-    const msgText = typeof customer_message === "string"
-      ? customer_message
-      : customer_message?.text ?? JSON.stringify(customer_message)
-    await call(client, "send_message", {
+    // ── send_message (saudação) ──────────────────────────────────────────────
+    step("send_message → saudação ao cliente")
+    const sent = await call(client, "send_message", {
       session_token,
       session_id,
       contact_id,
-      text: `Recebi sua mensagem: "${msgText}". Encerrando atendimento. Até logo!`,
+      text: "Olá! Sou um agente externo integrado via MCP. Como posso ajudar?",
       channel: context_package.channel ?? "chat",
     })
-    ok("Resposta final enviada")
-  }
+    ok("Mensagem enviada", { message_id: sent.message_id })
 
-  // ── agent_done ─────────────────────────────────────────────────────────────
-  step("agent_done")
-  const done = await call(client, "agent_done", {
-    session_token,
-    conversation_id:    session_id,
-    outcome:            "resolved",
-    issue_status:       [{ issue: "external_mcp_test", status: "resolved" }],
-    resolution_summary: "Teste de agente externo via MCP — fluxo completo validado.",
-  })
-  ok("Atendimento encerrado", {
-    outcome:      done.outcome,
-    acknowledged: done.acknowledged,
-    completed_at: done.completed_at,
-  })
-  console.log()
+    // ── wait_for_message (resposta do cliente) ───────────────────────────────
+    wait("Aguardando resposta do cliente (timeout: 60s)...")
+
+    let customer_message
+    try {
+      const reply = await call(client, "wait_for_message", {
+        session_token,
+        session_id,
+        timeout_s: 60,
+      })
+      customer_message = reply.message
+      ok("Mensagem do cliente recebida", { message: customer_message })
+    } catch (e) {
+      if (e.data?.error === "client_disconnected") {
+        info("Cliente desconectou — encerrando ciclo.")
+      } else {
+        err("wait_for_message", e.data ?? e.message)
+        info("Encerrando sem resposta do cliente...")
+      }
+    }
+
+    // ── send_message (resposta final) ────────────────────────────────────────
+    if (customer_message) {
+      step("send_message → resposta final")
+      const msgText = typeof customer_message === "string"
+        ? customer_message
+        : customer_message?.text ?? JSON.stringify(customer_message)
+      await call(client, "send_message", {
+        session_token,
+        session_id,
+        contact_id,
+        text: `Recebi sua mensagem: "${msgText}". Encerrando atendimento. Até logo!`,
+        channel: context_package.channel ?? "chat",
+      })
+      ok("Resposta final enviada")
+    }
+
+    // ── agent_done ───────────────────────────────────────────────────────────
+    step("agent_done")
+    const done = await call(client, "agent_done", {
+      session_token,
+      conversation_id:    session_id,
+      outcome:            customer_message ? "resolved" : "unresolved",
+      issue_status: [{
+        issue_id:    "external_mcp_test",
+        description: "Teste de integração do agente externo via MCP (spec 4.6k).",
+        status:      customer_message ? "resolved" : "unresolved",
+      }],
+      ...(customer_message ? {} : { handoff_reason: "Timeout aguardando resposta do cliente." }),
+      resolution_summary: "Teste de agente externo via MCP — fluxo concluído.",
+    })
+    ok("Atendimento encerrado", {
+      outcome:      done.outcome,
+      acknowledged: done.acknowledged,
+      completed_at: done.completed_at,
+    })
+    console.log()
+
+  } catch (e) {
+    // Enriquece o erro com sessionId para que o loop de recuperação saiba qual
+    // sessão estava aberta quando o erro ocorreu.
+    e.sessionId = session_id
+    throw e
+  }
 }
 
 // ── Main ──────────────────────────────────────────────────────────────────────
@@ -219,6 +239,11 @@ async function main() {
 
   const session_token = login.session_token
 
+  // ── Variável de estado inter-ciclo ─────────────────────────────────────────
+  // Rastreia o session_id do ciclo que falhou — para tentar agent_done antes
+  // do próximo agent_ready (recuperação de estado 'busy' após erro).
+  let lastFailedSessionId = null
+
   // ── Loop de atendimento ────────────────────────────────────────────────────
   let cycle = 0
   while (true) {
@@ -228,10 +253,38 @@ async function main() {
       break
     }
 
+    // Recuperação: se o ciclo anterior falhou com sessão aberta, tentar agent_done
+    // para devolver a instância ao estado 'ready' antes de iniciar o próximo ciclo.
+    if (lastFailedSessionId) {
+      info(`Recuperando estado: tentando agent_done para sessão ${lastFailedSessionId}...`)
+      try {
+        await call(client, "agent_done", {
+          session_token,
+          conversation_id: lastFailedSessionId,
+          outcome:         "unresolved",
+          issue_status: [{
+            issue_id:    "recovery",
+            description: "Encerramento de recuperação após erro interno.",
+            status:      "unresolved",
+          }],
+          handoff_reason:     "Erro interno no agente de teste.",
+          resolution_summary: "Ciclo encerrado por erro — recuperação automática.",
+        })
+        info("Estado recuperado com sucesso.")
+      } catch (recErr) {
+        err("Falha na recuperação de estado", recErr.data ?? recErr.message)
+        info("Aguardando 5s antes de tentar novamente...")
+        await new Promise(r => setTimeout(r, 5000))
+      }
+      lastFailedSessionId = null
+    }
+
     try {
       await runCycle(client, session_token, cycle)
     } catch (e) {
       err(`Ciclo ${cycle} encerrado com erro`, e.data ?? e.message)
+      // Se o erro carrega session_id, armazenar para recuperação no próximo ciclo
+      if (e.sessionId) lastFailedSessionId = e.sessionId
       // Pausa breve antes de tentar novamente
       await new Promise(r => setTimeout(r, 2000))
     }
