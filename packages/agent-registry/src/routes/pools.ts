@@ -7,6 +7,7 @@ import { Router, Request, Response, NextFunction } from "express"
 import { prisma, Prisma }    from "../db"
 import { CreatePoolSchema, UpdatePoolSchema } from "../validators/pool"
 import { ZodError }          from "zod"
+import { publishRegistryEvent } from "../infra/kafka"
 
 export const poolsRouter = Router()
 
@@ -46,7 +47,16 @@ poolsRouter.post("/", async (req: Request, res: Response, next: NextFunction) =>
       } as any,
     })
 
-    return res.status(201).json(_formatPool(pool))
+    const formatted = _formatPool(pool)
+
+    // Publica evento para o Routing Engine atualizar o cache Redis (pool_config)
+    await publishRegistryEvent({
+      event:     "pool.registered",
+      tenant_id: tenantId,
+      pool:      formatted,
+    })
+
+    return res.status(201).json(formatted)
   } catch (err) {
     return next(err)
   }
@@ -116,7 +126,16 @@ poolsRouter.put("/:pool_id", async (req: Request, res: Response, next: NextFunct
       } as any,
     })
 
-    return res.json(_formatPool(updated))
+    const formatted = _formatPool(updated)
+
+    // Publica evento de atualização para o Routing Engine invalidar/atualizar cache
+    await publishRegistryEvent({
+      event:     "pool.updated",
+      tenant_id: tenantId,
+      pool:      formatted,
+    })
+
+    return res.json(formatted)
   } catch (err) {
     return next(err)
   }

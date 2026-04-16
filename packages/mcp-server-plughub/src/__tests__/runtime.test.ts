@@ -49,6 +49,7 @@ describe("Tools Agent Runtime — integração com Redis", () => {
       {
         agent_type_id:           AGENT_TYPE_ID,
         max_concurrent_sessions: 2,
+        execution_model:         "stateless",
         pools:                   ["retencao_humano", "retencao_bot"],
         permissions:             ["mcp-server-crm:customer_get"],
       },

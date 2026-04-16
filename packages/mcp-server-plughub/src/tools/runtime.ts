@@ -172,6 +172,7 @@ export function registerRuntimeTools(server: McpServer, deps: RuntimeDeps): void
           agent_type_id,
           current_sessions:        "0",
           max_concurrent_sessions: String(agentType.max_concurrent_sessions),
+          execution_model:         agentType.execution_model ?? "stateless",
           pools:                   JSON.stringify(agentType.pools),
           logged_in_at:            new Date().toISOString(),
         })
@@ -232,12 +233,23 @@ export function registerRuntimeTools(server: McpServer, deps: RuntimeDeps): void
           await redis.sadd(keys.poolAvailable(tenant_id, poolId), instance_id)
         }
 
+        // Ler campos necessários para o Routing Engine poder criar a instância corretamente
+        const agentTypeId      = await redis.hget(instanceKey, "agent_type_id")      ?? ""
+        const executionModel   = await redis.hget(instanceKey, "execution_model")    ?? "stateless"
+        const maxConcurrentRaw = await redis.hget(instanceKey, "max_concurrent_sessions") ?? "1"
+        const currentSessRaw   = await redis.hget(instanceKey, "current_sessions")   ?? "0"
+
         await kafka.publish("agent.lifecycle", {
-          event:       "agent_ready",
+          event:                   "agent_ready",
           tenant_id,
           instance_id,
+          agent_type_id:           agentTypeId,
           pools,
-          timestamp:   new Date().toISOString(),
+          status:                  "ready",
+          execution_model:         executionModel,
+          max_concurrent_sessions: parseInt(maxConcurrentRaw, 10),
+          current_sessions:        parseInt(currentSessRaw, 10),
+          timestamp:               new Date().toISOString(),
         })
 
         return ok({ status: "ready", timestamp: new Date().toISOString() })
