@@ -39,10 +39,16 @@ export function createRegistryClient(baseUrl: string): RegistryClient {
       }
       const data = await res.json() as Record<string, unknown>
 
-      // Extrair pools: o endpoint retorna { pools: [{ pool_id, ... }] }
+      // Extrair pools: o endpoint retorna { pools: [{ pool_id: UUID, pool: { pool_id: string } }] }
+      // pool_id na join table é o UUID interno — o string identificador está em pool.pool_id.
       const rawPools = data["pools"] as Array<Record<string, unknown>> | undefined
       const pools = rawPools
-        ? rawPools.map(p => (p["pool_id"] as string | undefined) ?? "").filter(Boolean)
+        ? rawPools.map(p => {
+            const nested = p["pool"] as Record<string, unknown> | undefined
+            return (nested?.["pool_id"] as string | undefined)
+                ?? (p["pool_id"] as string | undefined)
+                ?? ""
+          }).filter(Boolean)
         : []
 
       const rawPerms  = data["permissions"] as string[] | undefined
