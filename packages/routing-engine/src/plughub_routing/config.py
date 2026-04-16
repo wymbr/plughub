@@ -41,8 +41,10 @@ class Settings(BaseSettings):
     # Redis TTL
     # Spec: "TTL: 30s, renewed on each agent_ready or agent_busy"
     instance_ttl_seconds:   int = 30
-    # Pool configuration cache — renewed when agent-registry publishes an event
-    pool_config_ttl_seconds: int = 300   # 5 min
+    # Pool configuration cache — renewed when agent-registry publishes a pool.registered/pool.updated event.
+    # Pool configs are essentially static (changed only via REST API) — 24h TTL is safe.
+    # Set PLUGHUB_POOL_CONFIG_TTL_SECONDS=0 to disable expiry entirely (not supported by Redis SET ex=0).
+    pool_config_ttl_seconds: int = 86400  # 24h (was 5 min — too short for long-running agents)
 
     # Capacity alert: time before triggering oncall (spec 3.3a)
     keda_alert_timeout_seconds: int = 60
