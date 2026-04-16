@@ -28,11 +28,15 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 import { Client }         from "@modelcontextprotocol/sdk/client/index.js"
 import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js"
 import type { RedisClient }   from "../infra/redis"
+import { keys }               from "../infra/redis"
 import type { KafkaProducer } from "../infra/kafka"
 import {
   verifySessionTokenSafe,
   InvalidTokenError,
 } from "../infra/jwt"
+
+/** Intervalo de heartbeat em segundos — deve ser menor que o instance TTL do routing engine (30s). */
+const HEARTBEAT_INTERVAL_S = 15
 
 // ─── Dependências injetadas ───────────────────────────────────────────────────
 
@@ -204,6 +208,7 @@ export function registerExternalAgentTools(server: McpServer, deps: ExternalAgen
     "wait_for_assignment",
     "Aguarda alocação de conversa pelo Routing Engine. " +
     "Bloqueia em BLPOP na fila agent:queue:{instance_id} até receber context_package ou timeout. " +
+    "Envia agent_heartbeat a cada 15s para renovar o TTL de instância no Routing Engine. " +
     "O Routing Engine faz LPUSH nesta chave ao alocar o agente. Spec 4.6k.",
     WaitForAssignmentInputSchema.shape as any,
     async (input: Record<string, unknown>) => {
@@ -212,24 +217,54 @@ export function registerExternalAgentTools(server: McpServer, deps: ExternalAgen
         const { tenant_id, instance_id }   = verifySessionTokenSafe(session_token)
 
         const queueKey = `${tenant_id}:agent:queue:${instance_id}`
-        const result   = await redis.blpop(queueKey, timeout_s)
 
-        if (!result) {
-          return mcpError(
-            "timeout",
-            `Nenhuma conversa alocada em ${timeout_s}s. Chame wait_for_assignment novamente.`
-          )
+        // Ler campos da instância para incluir nos heartbeats
+        const instanceKey      = keys.agentInstance(tenant_id, instance_id)
+        const poolsRaw         = await redis.hget(instanceKey, "pools")
+        const pools: string[]  = poolsRaw ? (JSON.parse(poolsRaw) as string[]) : []
+        const executionModel   = await redis.hget(instanceKey, "execution_model") ?? "stateless"
+        const maxConcurrentRaw = await redis.hget(instanceKey, "max_concurrent_sessions") ?? "1"
+        const currentSessRaw   = await redis.hget(instanceKey, "current_sessions") ?? "0"
+
+        // Loop com heartbeats periódicos para manter o TTL do routing engine ativo.
+        // O instance TTL do routing engine é 30s — o heartbeat a cada 15s garante
+        // que o agente permaneça visível enquanto aguarda um contato.
+        const deadline = Date.now() + timeout_s * 1000
+
+        while (true) {
+          const remainingMs = deadline - Date.now()
+          if (remainingMs <= 0) {
+            return mcpError(
+              "timeout",
+              `Nenhuma conversa alocada em ${timeout_s}s. Chame wait_for_assignment novamente.`
+            )
+          }
+
+          // BLPOP por no máximo HEARTBEAT_INTERVAL_S ou o tempo restante
+          const waitSecs = Math.min(HEARTBEAT_INTERVAL_S, Math.ceil(remainingMs / 1000))
+          const result   = await redis.blpop(queueKey, waitSecs)
+
+          if (result) {
+            const [, raw] = result
+            let context_package: unknown
+            try   { context_package = JSON.parse(raw) }
+            catch { context_package = { raw } }
+            return ok({ context_package })
+          }
+
+          // Sem contato — enviar heartbeat para renovar TTL de 30s no routing engine
+          kafka.publish("agent.lifecycle", {
+            event:                   "agent_heartbeat",
+            tenant_id,
+            instance_id,
+            pools,
+            status:                  "ready",
+            execution_model:         executionModel,
+            max_concurrent_sessions: parseInt(maxConcurrentRaw, 10),
+            current_sessions:        parseInt(currentSessRaw, 10),
+            timestamp:               new Date().toISOString(),
+          }).catch(() => { /* não bloqueia o wait */ })
         }
-
-        const [, raw] = result
-        let context_package: unknown
-        try {
-          context_package = JSON.parse(raw)
-        } catch {
-          context_package = { raw }
-        }
-
-        return ok({ context_package })
       } catch (e) {
         return handleCaughtError(e)
       }
