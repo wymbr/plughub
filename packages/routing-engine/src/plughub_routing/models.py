@@ -69,8 +69,11 @@ class ConversationInboundEvent(BaseModel):
     # specific AI agent into an active session).
     # conference_id is propagated to RoutingResult → bridge → session_context
     # so the activated AI agent knows it is operating in a supervised conference.
-    agent_type_id: str | None = None
-    conference_id: str | None = None
+    # channel_identity declares how the AI agent appears to the customer:
+    #   { "text": "Assistente", "voice_profile": "assistant_pt_br" }
+    agent_type_id:    str | None = None
+    conference_id:    str | None = None
+    channel_identity: dict[str, str] | None = None  # { text, voice_profile }
 
 
 # ─────────────────────────────────────────────
@@ -187,7 +190,8 @@ class RoutingResult(BaseModel):
     routed_at:      str
     # Passed through from ConversationInboundEvent when this routing was
     # triggered by an agent_join_conference invite (conference mode).
-    conference_id:  str | None = None
+    conference_id:    str | None = None
+    channel_identity: dict[str, str] | None = None  # { text, voice_profile }
 
 
 class ConversationRoutedEvent(BaseModel):

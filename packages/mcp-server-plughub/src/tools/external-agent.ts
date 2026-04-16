@@ -13,14 +13,18 @@
  *   4. wait_for_assignment → BLPOP em agent:queue:{instance_id} aguarda context_package
  *   5. invoke       → valida permission, chama domain MCP server (sem proxy sidecar)
  *   6. send_message → publica em conversations.outbound → Channel Gateway → cliente
- *   7. wait_for_message → BLPOP em menu:result:{session_id} aguarda resposta do cliente
+ *   7. wait_for_message → XREADGROUP em session:{session_id}:messages — fan-out nativo
+ *                         para múltiplos participantes (modelo de conferência). Cada agente
+ *                         tem seu próprio consumer group keyed por instance_id.
+ *                         Desconexão sinalizada por item {type: session_closed} no stream.
  *   8. agent_done   → encerra conversa
  *
  * Invariantes:
  *   - Validação de permissão em invoke é local (JWT) — sem rede, ~0.1ms
  *   - Toda tool valida JWT antes de qualquer operação
- *   - BLPOP usa timeout_s; responde mcpError("timeout") quando esgotado
+ *   - wait_for_message usa XREADGROUP BLOCK; responde mcpError("timeout") quando esgotado
  *   - Audit de chamadas de domínio publicado em audit.mcp_calls (Kafka, assíncrono)
+ *   - Consumer group por instance_id: idempotente, criado com MKSTREAM na primeira chamada
  */
 
 import { z }            from "zod"
@@ -77,6 +81,13 @@ const WaitForMessageInputSchema = z.object({
   session_id:    z.string().uuid(),
   /** Timeout em segundos (1–300). Default: 60. */
   timeout_s:     z.number().int().min(1).max(300).default(60),
+  /**
+   * ID de conferência — opcional. Quando presente, o consumer group é criado
+   * com offset 0 (lê desde o início do stream) para não perder mensagens
+   * enviadas antes do agente IA entrar na conferência.
+   * Ausente ou vazio: consumer group começa no final ($), modelo standard.
+   */
+  conference_id: z.string().uuid().optional(),
 })
 
 // ─── Helpers de resposta ──────────────────────────────────────────────────────
@@ -308,65 +319,121 @@ export function registerExternalAgentTools(server: McpServer, deps: ExternalAgen
   )
 
   // ── wait_for_message ──────────────────────────────────────────────────────
+  //
+  // Mecanismo: Redis Streams (XREADGROUP) em vez de BLPOP.
+  //
+  // Por que Streams em vez de BLPOP:
+  //   - Fan-out nativo: o bridge faz um único XADD e TODOS os participantes
+  //     da conferência recebem a mensagem de forma independente via consumer groups.
+  //   - Sem race condition de mensagem perdida: o stream persiste mesmo antes
+  //     do consumer group existir (MKSTREAM); não há janela onde o LPUSH chega
+  //     antes do BLPOP e a mensagem é descartada silenciosamente.
+  //   - Sem coordenação explícita: o bridge não precisa conhecer quais agentes
+  //     estão esperando — faz XADD cego; cada agente consome do seu grupo.
+  //   - session_closed: item especial no próprio stream (type=session_closed)
+  //     em vez de chave separada; garante que o sinal de desconexão respeita
+  //     a mesma ordem de entrega das mensagens normais.
+  //
+  // Estrutura Redis:
+  //   stream:  session:{session_id}:messages         (XADD pelo bridge)
+  //   grupo:   agent:{instance_id}                   (um por instância de agente)
+  //   offset:  $ (standard) | 0 (conferência — lê histórico desde o join)
+  //
+  // TTL do stream: 4h (setado pelo bridge no XADD; renovado a cada mensagem).
+  // O grupo é deletado automaticamente com a chave quando o TTL expira.
   server.tool(
     "wait_for_message",
-    "Aguarda mensagem do cliente. " +
-    "Seta menu:waiting:{session_id} (TTL=timeout_s+10) antes do BLPOP para que o " +
-    "Orchestrator Bridge entregue a resposta do cliente. " +
-    "Monitoriza também session:closed:{session_id} para detectar desconexão. " +
-    "Usa o mesmo mecanismo do passo menu do skill-flow. Spec 4.6k.",
+    "Aguarda mensagem do cliente via Redis Streams (XREADGROUP). " +
+    "Fan-out nativo: múltiplos agentes em conferência recebem a mesma mensagem " +
+    "de forma independente sem coordenação. " +
+    "Desconexão sinalizada por item {type: session_closed} no stream. " +
+    "Spec 4.6k.",
     WaitForMessageInputSchema.shape as any,
     async (input: Record<string, unknown>) => {
       try {
-        const { session_token, session_id, timeout_s } = WaitForMessageInputSchema.parse(input)
-        verifySessionTokenSafe(session_token)  // validates JWT; tenant context not needed for key
+        const { session_token, session_id, timeout_s, conference_id } =
+          WaitForMessageInputSchema.parse(input)
 
-        // Bridge pushes to menu:result:{session_id} WITHOUT tenant prefix — same
-        // convention as the skill-flow menu step. The bridge only delivers to this
-        // key when menu:waiting:{session_id} is set (checked before LPUSH). Without
-        // this flag the bridge drops the customer message with "No active agent".
-        const resultKey  = `menu:result:${session_id}`
-        const closedKey  = `session:closed:${session_id}`
-        const waitingKey = `menu:waiting:${session_id}`
+        const { instance_id } = verifySessionTokenSafe(session_token)
 
-        // Register waiting flag — TTL slightly larger than timeout to cover network latency.
-        // The bridge checks this key to decide whether to push to menu:result.
-        await redis.set(waitingKey, "1", "EX", timeout_s + 10)
+        const streamKey = `session:${session_id}:messages`
+        const groupName = `agent:${instance_id}`
 
+        // ── Criar consumer group (idempotente) ───────────────────────────────
+        // MKSTREAM cria o stream se não existir.
+        // Offset $ = só mensagens novas (padrão).
+        // Offset 0 = lê desde o início do stream quando em modo conferência —
+        //   garante que o agente IA receba mensagens enviadas pelo cliente
+        //   entre o agent_join_conference e o primeiro wait_for_message.
+        const startOffset = conference_id ? "0" : "$"
         try {
-          // Monitor both: customer reply OR customer disconnect — whichever comes first.
-          // ioredis blpop API: redis.blpop(key1, key2, ..., timeout)
-          const result = await redis.blpop(resultKey, closedKey, timeout_s)
-
-          if (!result) {
-            return mcpError(
-              "timeout",
-              `Nenhuma mensagem recebida em ${timeout_s}s. Considere send_message e aguardar novamente.`
-            )
+          await redis.xgroup("CREATE", streamKey, groupName, startOffset, "MKSTREAM")
+        } catch (e: unknown) {
+          // BUSYGROUP = grupo já existe (chamada repetida / reconexão) — ok, continua
+          if (!(e instanceof Error) || !e.message.includes("BUSYGROUP")) {
+            throw e
           }
-
-          const [key, raw] = result
-
-          if (key === closedKey) {
-            return mcpError(
-              "client_disconnected",
-              "Cliente desconectou durante a espera. Chame agent_done para encerrar."
-            )
-          }
-
-          // key === resultKey — customer replied
-          let message: unknown
-          try {
-            message = JSON.parse(raw)
-          } catch {
-            message = raw  // if not JSON, return raw string
-          }
-
-          return ok({ message })
-        } finally {
-          // Always remove waiting flag — regardless of outcome
-          redis.del(waitingKey).catch(() => { /* non-fatal */ })
         }
+
+        // ── Bloquear até mensagem ou timeout ─────────────────────────────────
+        // XREADGROUP retorna null quando BLOCK expira sem mensagem.
+        // Formato de retorno: [[streamKey, [[id, [field, value, ...]]]]]
+        const timeoutMs = timeout_s * 1000
+        const xResult = await (redis as any).xreadgroup(
+          "GROUP", groupName, "consumer1",
+          "COUNT",  "1",
+          "BLOCK",  String(timeoutMs),
+          "STREAMS", streamKey, ">",
+        ) as Array<[string, Array<[string, string[]]>]> | null
+
+        if (!xResult || xResult.length === 0) {
+          return mcpError(
+            "timeout",
+            `Nenhuma mensagem recebida em ${timeout_s}s. Considere send_message e aguardar novamente.`
+          )
+        }
+
+        // ── Parsear entrada do stream ─────────────────────────────────────────
+        // xResult[0] = [streamKey, entries]
+        // entries[0] = [messageId, fieldsArray]
+        // fieldsArray = ["type", "message.text", "text", "...", ...]  (interleaved key-value)
+        const streamEntries = xResult[0]?.[1]
+        const entry         = streamEntries?.[0]
+        if (!entry) {
+          return mcpError("timeout", `Stream retornou vazio em ${timeout_s}s.`)
+        }
+
+        const messageId = entry[0]!
+        const fields    = entry[1]!   // flat array: [key, val, key, val, ...]
+
+        // Converter array interleaved em objeto
+        const item: Record<string, string> = {}
+        for (let i = 0; i < fields.length - 1; i += 2) {
+          item[fields[i]!] = fields[i + 1]!
+        }
+
+        // ── ACK — confirma processamento ─────────────────────────────────────
+        // Permite que o stream faça GC de itens já processados por todos os grupos.
+        redis.xack(streamKey, groupName, messageId).catch(() => { /* non-fatal */ })
+
+        // ── Detectar sinal de sessão encerrada ───────────────────────────────
+        if (item["type"] === "session_closed") {
+          return mcpError(
+            "client_disconnected",
+            "Cliente desconectou durante a espera. Chame agent_done para encerrar."
+          )
+        }
+
+        // ── Mensagem normal do cliente ────────────────────────────────────────
+        const raw = item["text"] ?? item["payload"] ?? JSON.stringify(item)
+        let message: unknown
+        try {
+          message = JSON.parse(raw)
+        } catch {
+          message = raw
+        }
+
+        return ok({ message })
       } catch (e) {
         return handleCaughtError(e)
       }

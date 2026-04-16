@@ -65,6 +65,7 @@ Documentação de workflows e padrões que cruzam múltiplos módulos.
 | [guias/gitagent.md](guias/gitagent.md) | GitAgent — ciclo de vida completo: estrutura do repositório, artefatos, certificação, regeneração, registro e deploy | `sdk`, `schemas`, `skill-flow-engine`, `agent-registry` | ✅ |
 | [guias/changelog-2026-04-15.md](guias/changelog-2026-04-15.md) | Changelog 2026-04-15 — ferramentas MCP BPM/supervisor, fila de agentes humanos, Queue Agent Pattern, pool_id via URL | `mcp-server`, `routing-engine`, `ai-gateway`, `agent-assist-ui`, `orchestrator-bridge`, `schemas`, `agent-registry`, `skill-flow-engine`, `channel-gateway` | ✅ |
 | [guias/changelog-2026-04-16.md](guias/changelog-2026-04-16.md) | Changelog 2026-04-16 — integração end-to-end framework external-mcp (spec 4.6k): roteamento, heartbeats, wait_for_message, pool_config TTL | `mcp-server-plughub`, `routing-engine`, `agent-registry` | ✅ |
+| [guias/timeouts-e-deteccao-de-falhas.md](guias/timeouts-e-deteccao-de-falhas.md) | Timeouts e detecção de falhas — instance TTL 30s, CrashDetector 15s, heartbeat por tipo de agente, desconexão de cliente, menu:waiting, session:closed, tabela de TTLs | `routing-engine`, `mcp-server-plughub`, `channel-gateway` | ✅ |
 
 ---
 
@@ -101,4 +102,5 @@ A spec técnica original e as seções extraídas para consulta permanecem em `s
 |---|---|
 | `sections/spec_completa.md` | Spec técnica v24.0 completa em markdown |
 | `sections/INDEX.md` | Índice das seções extraídas da spec |
+| `sections/conferencia-e-historico.md` | **v25.0 proposta** — modelo unificado de conferência, tiers de dados, mascaramento centralizado, event sourcing para histórico | ✅ |
 | `spec_omnichannel_tecnico_v24.docx` | Documento original (fonte histórica) |

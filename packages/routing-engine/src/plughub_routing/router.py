@@ -182,7 +182,8 @@ class Router:
             routing_mode=mode,   # type: ignore[arg-type]
             allocated_site=self._local_site,
             routed_at=now,
-            conference_id=event.conference_id,   # None for regular contacts
+            conference_id=event.conference_id,       # None for regular contacts
+            channel_identity=event.channel_identity, # None for regular contacts
         )
 
     # ─────────────────────────────────────────────

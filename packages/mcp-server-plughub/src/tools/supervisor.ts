@@ -327,22 +327,67 @@ export function registerSupervisorTools(server: McpServer, deps: SupervisorDeps)
         }
       }
 
-      // ── Publish routing invite to conversations.inbound ───────────────────
-      // The Routing Engine consumes this topic and treats it as a new contact.
-      // Fields agent_type_id + conference_id signal a conference invite:
-      //   - Routing is restricted to the specified agent_type_id within pool_id
-      //   - conference_id is propagated through RoutingResult → bridge →
-      //     session_context so the AI agent knows it is in a conference
+      const SESSION_TTL = 14400  // 4h — mesma janela dos outros dados de sessão
+
+      // ── Persistir registro do participante no Redis ───────────────────────
+      // O bridge consulta estes dados para:
+      //   - rotular mensagens do agente IA com channel_identity ao entregar ao cliente
+      //   - espelhar mensagens em agent:events:{session_id} (humano vê tudo)
+      //   - publicar conference.agent_completed ao agent_done
+      //   - atribuir tier de stream (:full/:masked) baseado em data_policy
+      const participantKey = `conference:${conference_id}:participant:${participant_id}`
+      const identityKey    = `conference:${conference_id}:identity`
+      const participantsKey = `conference:${conference_id}:participants`
+
+      const channelIdentity = parsed.channel_identity ?? { text: "Assistente" }
+
+      await Promise.all([
+        // Registro completo do participante
+        redis.set(participantKey, JSON.stringify({
+          participant_id,
+          conference_id,
+          session_id:       parsed.session_id,
+          agent_type_id:    parsed.agent_type_id,
+          pool_id:          parsed.pool_id,
+          interaction_model: parsed.interaction_model,
+          role:             "sender",
+          visibility:       "customer_visible",
+          channel_identity: channelIdentity,
+          joined_at,
+        }), "EX", SESSION_TTL),
+
+        // Identidade para lookup rápido no outbound_consumer (channel_identity.text)
+        redis.set(identityKey, JSON.stringify(channelIdentity), "EX", SESSION_TTL),
+
+        // SET de participant_ids — permite iterar participantes sem conhecer UUIDs
+        redis.sadd(participantsKey, participant_id),
+        redis.expire(participantsKey, SESSION_TTL),
+
+        // Mapeamento inverso: session → conference_id (para bridge encontrar conferência)
+        redis.set(
+          `session:${parsed.session_id}:conference_id`,
+          conference_id,
+          "EX", SESSION_TTL,
+        ),
+      ])
+
+      // ── Publicar convite de roteamento em conversations.inbound ──────────
+      // O Routing Engine consome este tópico e trata como novo contato.
+      // agent_type_id + conference_id + channel_identity sinalizam conferência:
+      //   - Routing restrito ao agent_type_id declarado dentro do pool_id
+      //   - conference_id propagado via RoutingResult → bridge → context_package
+      //   - channel_identity propagado via RoutingResult → bridge → context_package
       await kafka.publish("conversations.inbound", {
-        session_id:    parsed.session_id,
-        tenant_id:     tenantId,
-        customer_id:   customerId,
+        session_id:       parsed.session_id,
+        tenant_id:        tenantId,
+        customer_id:      customerId,
         channel,
-        pool_id:       parsed.pool_id,
-        agent_type_id: parsed.agent_type_id,
+        pool_id:          parsed.pool_id,
+        agent_type_id:    parsed.agent_type_id,
         conference_id,
-        started_at:    joined_at,
-        elapsed_ms:    0,
+        channel_identity: channelIdentity,
+        started_at:       joined_at,
+        elapsed_ms:       0,
       })
 
       return {
@@ -355,6 +400,7 @@ export function registerSupervisorTools(server: McpServer, deps: SupervisorDeps)
             agent_type_id:     parsed.agent_type_id,
             pool_id:           parsed.pool_id,
             interaction_model: parsed.interaction_model,
+            channel_identity:  channelIdentity,
             status:            "joining",
             joined_at,
           }),

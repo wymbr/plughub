@@ -458,12 +458,20 @@ async def activate_external_mcp_agent(
     The bridge tracks the instance in session:{session_id}:ai_agents so that
     the existing contact_closed handler restores it when the contact ends.
 
+    Conference fields (conference_id, channel_identity, participant_id, is_conference)
+    are included when the routing was triggered by agent_join_conference.
+    The agent uses is_conference to adapt its behaviour (specialist vs primary).
+
     Spec: 4.6k — external-mcp framework branch.
     """
-    instance_id = routing_result.get("instance_id", "")
-    queue_key   = f"{tenant_id}:agent:queue:{instance_id}"
+    import uuid as _uuid
 
-    context_package = {
+    instance_id      = routing_result.get("instance_id", "")
+    conference_id    = routing_result.get("conference_id") or ""
+    channel_identity = routing_result.get("channel_identity")  # dict | None
+    queue_key        = f"{tenant_id}:agent:queue:{instance_id}"
+
+    context_package: dict = {
         "session_id":    session_id,
         "contact_id":    customer_id,
         "customer_id":   customer_id,
@@ -473,6 +481,26 @@ async def activate_external_mcp_agent(
         "pool_id":       pool_id,
         "assigned_at":   datetime.now(timezone.utc).isoformat(),
     }
+
+    # ── Conferência — enriquecer context_package ──────────────────────────────
+    # O agente externo usa is_conference para saber que está como especialista
+    # convidado, não como atendente principal. conference_id é necessário para:
+    #   - wait_for_message: offset 0 no consumer group (lê histórico desde o join)
+    #   - send_message: inclui conference_id no evento Kafka (labeling + mirror)
+    #   - agent_done: bridge publica conference.agent_completed sem fechar sessão
+    if conference_id:
+        participant_id = str(_uuid.uuid4())
+        context_package.update({
+            "is_conference":    True,
+            "conference_id":    conference_id,
+            "participant_id":   participant_id,
+            "channel_identity": channel_identity or {"text": "Assistente"},
+        })
+        logger.info(
+            "Conference context_package: session=%s conference=%s participant=%s identity=%s",
+            session_id, conference_id, participant_id,
+            (channel_identity or {}).get("text", "Assistente"),
+        )
 
     try:
         await redis_client.lpush(queue_key, json.dumps(context_package))
@@ -1004,12 +1032,39 @@ async def process_contact_event(
 
     try:
         if customer_side:
-            # ── Signal menu BLPOP to unblock immediately ──────────────────────
+            # ── Signal session closed — dois mecanismos em paralelo ───────────
+            #
+            # 1. LPUSH session:closed:{session_id}   — desbloqueia BLPOP legado
+            #    (Skill Flow menu step, wait_for_message de versões anteriores).
+            #    TTL 10s — consumo imediato esperado.
+            #
+            # 2. XADD session:{session_id}:messages  — desbloqueia XREADGROUP de
+            #    agentes external-mcp usando wait_for_message com Streams.
+            #    Item {type: session_closed} na mesma fila de mensagens garante
+            #    que o sinal respeita a ordem de entrega — não chega antes de
+            #    mensagens do cliente já enfileiradas.
             try:
                 await redis_client.lpush(f"session:closed:{session_id}", reason)
                 await redis_client.expire(f"session:closed:{session_id}", 10)
             except Exception as exc:
                 logger.warning("Could not push session:closed: session=%s — %s", session_id, exc)
+
+            stream_key = f"session:{session_id}:messages"
+            try:
+                groups = await redis_client.xinfo_groups(stream_key)
+                if groups:
+                    await redis_client.xadd(
+                        stream_key,
+                        {"type": "session_closed", "reason": reason},
+                    )
+                    logger.info(
+                        "XADD session_closed to stream: session=%s reason=%s groups=%d",
+                        session_id, reason, len(groups),
+                    )
+            except Exception as exc:
+                logger.warning(
+                    "Could not XADD session_closed to stream: session=%s — %s", session_id, exc
+                )
 
             # ── Notify all active human agents that the session ended ─────────
             is_human = await redis_client.get(f"session:{session_id}:human_agent")
@@ -1135,30 +1190,49 @@ async def process_inbound(
             return  # unknown content type — ignore
 
         # ── Check which agent types are active for this session ──────────────
-        # In a conference, both flags can be set simultaneously.
+        # In a conference, multiple agent types can be active simultaneously.
         # Deliver to each channel independently — do not short-circuit.
+        #
+        # Three delivery channels, checked independently:
+        #   1. Human agent   → Redis pub/sub  agent:events:{session_id}
+        #   2. Native AI     → Redis LPUSH    menu:result:{session_id}    (Skill Flow menu step)
+        #   3. External-MCP  → Redis Streams  session:{session_id}:messages (XADD, fan-out)
 
-        is_human = await redis_client.get(f"session:{session_id}:human_agent")
-
-        # menu:waiting may not be set yet if the skill flow is still initialising
-        # (race: customer message arrives before the menu step executes).
-        # Retry for up to 3 seconds with 200ms intervals before giving up.
+        is_human     = await redis_client.get(f"session:{session_id}:human_agent")
         menu_waiting = await redis_client.get(f"menu:waiting:{session_id}")
-        if not menu_waiting and not is_human:
+
+        # Detect external-mcp agents: stream exists and has at least one consumer group.
+        # XINFO GROUPS returns [] when the stream doesn't exist or has no groups.
+        stream_key = f"session:{session_id}:messages"
+        has_stream_consumers = False
+        try:
+            groups = await redis_client.xinfo_groups(stream_key)
+            has_stream_consumers = len(groups) > 0
+        except Exception:
+            pass  # stream may not exist yet — treat as no consumers
+
+        # Legacy retry window: only for native AI agents waiting in menu step.
+        # External-MCP agents don't need it — XADD persists even before XREADGROUP.
+        if not menu_waiting and not is_human and not has_stream_consumers:
             for _ in range(15):   # 15 × 200ms = 3s window
                 await asyncio.sleep(0.2)
-                menu_waiting = await redis_client.get(f"menu:waiting:{session_id}")
-                is_human     = await redis_client.get(f"session:{session_id}:human_agent")
-                if menu_waiting or is_human:
+                menu_waiting         = await redis_client.get(f"menu:waiting:{session_id}")
+                is_human             = await redis_client.get(f"session:{session_id}:human_agent")
+                try:
+                    groups               = await redis_client.xinfo_groups(stream_key)
+                    has_stream_consumers = len(groups) > 0
+                except Exception:
+                    pass
+                if menu_waiting or is_human or has_stream_consumers:
                     logger.info(
-                        "menu:waiting appeared after retry: session=%s menu=%s human=%s",
-                        session_id, bool(menu_waiting), bool(is_human),
+                        "Agent appeared after retry: session=%s menu=%s human=%s stream=%s",
+                        session_id, bool(menu_waiting), bool(is_human), has_stream_consumers,
                     )
                     break
 
         logger.info(
-            "Inbound routing: session=%s menu_waiting=%s is_human=%s",
-            session_id, bool(menu_waiting), bool(is_human),
+            "Inbound routing: session=%s menu_waiting=%s is_human=%s stream_consumers=%s",
+            session_id, bool(menu_waiting), bool(is_human), has_stream_consumers,
         )
 
         delivered = False
@@ -1179,13 +1253,43 @@ async def process_inbound(
             delivered = True
 
         if menu_waiting:
-            # ── AI agent in menu step: unblock BLPOP with customer reply ─────
+            # ── Native AI agent in Skill Flow menu step: unblock BLPOP ───────
             await redis_client.lpush(f"menu:result:{session_id}", reply_text)
             logger.info(
-                "Pushed menu reply to AI session: session=%s text=%r",
+                "Pushed menu reply to native AI session: session=%s text=%r",
                 session_id, reply_text[:80],
             )
             delivered = True
+
+        if has_stream_consumers:
+            # ── External-MCP agents: XADD to session stream ───────────────────
+            # Fan-out nativo: cada consumer group (um por instance_id) recebe
+            # uma cópia independente da mensagem via XREADGROUP no wait_for_message.
+            # Não é necessário conhecer quais instâncias estão esperando — o stream
+            # persiste e cada agente consome no seu próprio ritmo.
+            try:
+                await redis_client.xadd(
+                    stream_key,
+                    {
+                        "type":       "message.text",
+                        "text":       reply_text,
+                        "author":     json.dumps(author),
+                        "message_id": msg.get("message_id", str(uuid.uuid4())),
+                        "timestamp":  msg.get("timestamp", datetime.now(timezone.utc).isoformat()),
+                        "contact_id": contact_id or "",
+                    },
+                    maxlen=500,   # descarta itens mais antigos se stream crescer demais
+                )
+                await redis_client.expire(stream_key, 14400)  # renova TTL 4h a cada mensagem
+                logger.info(
+                    "XADD to session stream: session=%s groups=%d text=%r",
+                    session_id, len(groups), reply_text[:80],
+                )
+                delivered = True
+            except Exception as exc:
+                logger.error(
+                    "Failed to XADD to session stream: session=%s — %s", session_id, exc
+                )
 
         if not delivered:
             # No active agent recognised for this session — message dropped.
