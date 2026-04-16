@@ -333,9 +333,10 @@ class InstanceRegistry:
     async def get_queued_contacts(
         self, tenant_id: str, pool_id: str, top_n: int = 10
     ) -> list[QueuedContact]:
-        """Returns top_n contacts from queue by score (highest priority first)."""
-        members = await self._redis.zrange(
-            _queue_key(tenant_id, pool_id), 0, top_n - 1, rev=True
+        """Returns top_n contacts from queue by score (highest priority first).
+        Uses ZREVRANGE for backwards compatibility with redis-py < 4.2."""
+        members = await self._redis.zrevrange(
+            _queue_key(tenant_id, pool_id), 0, top_n - 1
         )
         contacts: list[QueuedContact] = []
         for session_id in members:

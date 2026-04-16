@@ -2,50 +2,49 @@
  * test-external-agent.mjs
  * Smoke test para o fluxo completo de agente externo via MCP (spec 4.6k).
  *
- * Fluxo testado:
+ * Fluxo testado (em loop contínuo até Ctrl+C ou MAX_CYCLES):
  *   agent_login → agent_ready → wait_for_assignment → agent_busy
- *   → send_message → wait_for_message → agent_done
+ *   → send_message → wait_for_message → agent_done → agent_ready → ...
  *
  * Pré-requisitos (rodar uma vez antes):
- *   curl -s -X POST http://localhost:3200/v1/pools \
+ *   curl -s -X POST http://localhost:3300/v1/pools \
  *     -H "Content-Type: application/json" -H "x-tenant-id: default" \
- *     -d '{"pool_id":"externo_teste","display_name":"Externo Teste","capacity":1}'
+ *     -d '{
+ *       "pool_id":"externo_teste","display_name":"Externo Teste",
+ *       "channel_types":["chat"],"sla_target_ms":300000
+ *     }'
  *
- *   curl -s -X POST http://localhost:3200/v1/agent-types \
+ *   curl -s -X POST http://localhost:3300/v1/agent-types \
  *     -H "Content-Type: application/json" -H "x-tenant-id: default" \
- *     -d '{"agent_type_id":"agente_externo_v1","framework":"external-mcp",
- *           "execution_model":"stateless","role":"executor",
- *           "max_concurrent_sessions":1,"pools":["externo_teste"],
- *           "permissions":["mcp-server-crm:customer_get"]}'
- *
- *   redis-cli HSET default:agent:instance:externo-001 \
- *     agent_type_id agente_externo_v1 status ready \
- *     current_sessions 0 max_concurrent_sessions 1 \
- *     pools '["externo_teste"]'
- *   redis-cli SADD default:pool:externo_teste:instances externo-001
+ *     -d '{
+ *       "agent_type_id":"agente_externo_v1","framework":"external-mcp",
+ *       "execution_model":"stateless","role":"executor",
+ *       "max_concurrent_sessions":1,"pools":["externo_teste"],
+ *       "permissions":["mcp-server-crm:customer_get"]
+ *     }'
  *
  * Uso:
  *   node test-external-agent.mjs
  *
  * Enquanto o script aguarda (wait_for_assignment), dispare um contato de teste:
- *   wscat -c "ws://localhost:3000/ws?contact_id=cliente-teste&channel=chat"
+ *   wscat -c "ws://localhost:8010/ws/chat/externo_teste" \
+ *     -H "x-customer-id: cliente-teste" -H "x-tenant-id: default"
  *   > {"type":"message.text","text":"olá"}
- *
- * O script responde automaticamente e encerra após 1 troca de mensagem.
  */
 
-import { Client }           from "@modelcontextprotocol/sdk/client/index.js"
+import { Client }             from "@modelcontextprotocol/sdk/client/index.js"
 import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js"
 
-// ── Configuração ────────────────────────────────────────────────────────────
+// ── Configuração ─────────────────────────────────────────────────────────────
 
 const MCP_URL      = process.env["MCP_URL"]       ?? "http://localhost:3100"
 const AGENT_TYPE   = process.env["AGENT_TYPE"]    ?? "agente_externo_v1"
 const INSTANCE_ID  = process.env["INSTANCE_ID"]   ?? "externo-001"
 const TENANT_ID    = process.env["TENANT_ID"]     ?? "default"
 const WAIT_TIMEOUT = parseInt(process.env["WAIT_TIMEOUT"] ?? "120", 10)
+const MAX_CYCLES   = parseInt(process.env["MAX_CYCLES"]   ?? "0",   10)  // 0 = infinito
 
-// ── Helpers ──────────────────────────────────────────────────────────────────
+// ── Helpers ───────────────────────────────────────────────────────────────────
 
 const c = {
   reset:  "\x1b[0m",
@@ -69,6 +68,7 @@ function step(name)   { log(`${c.cyan}▶${c.reset}`, `${c.bold}${name}${c.reset
 function ok(name, d)  { log(`${c.green}✓${c.reset}`, name, d) }
 function err(name, d) { log(`${c.red}✗${c.reset}`,   name, d) }
 function wait(msg)    { log(`${c.yellow}⏳${c.reset}`, msg) }
+function info(msg)    { log(`${c.dim}ℹ${c.reset}`,    msg) }
 
 /** Chama uma MCP tool e retorna o resultado parseado. Lança se isError=true. */
 async function call(client, tool, args) {
@@ -82,44 +82,17 @@ async function call(client, tool, args) {
   return parsed
 }
 
-// ── Main ─────────────────────────────────────────────────────────────────────
+// ── Um ciclo de atendimento ───────────────────────────────────────────────────
 
-async function main() {
-  console.log()
-  console.log(`${c.bold}PlugHub — Teste de Agente Externo via MCP (spec 4.6k)${c.reset}`)
-  console.log(`${c.dim}MCP Server: ${MCP_URL}  |  Agent: ${AGENT_TYPE}  |  Instance: ${INSTANCE_ID}${c.reset}`)
-  console.log()
+async function runCycle(client, session_token, cycleNum) {
+  // ── agent_ready ────────────────────────────────────────────────────────────
+  step(`[ciclo ${cycleNum}] agent_ready`)
+  await call(client, "agent_ready", { session_token })
+  ok("Pronto para receber contatos")
 
-  // ── Conectar ao mcp-server-plughub via SSE ──────────────────────────────
-  step("Conectando ao mcp-server-plughub...")
-  const client    = new Client({ name: "test-external-agent", version: "1.0.0" }, { capabilities: {} })
-  const transport = new SSEClientTransport(new URL(`${MCP_URL}/sse`))
-  await client.connect(transport)
-  ok("Conectado", { endpoint: `${MCP_URL}/sse` })
-
-  // ── agent_login ──────────────────────────────────────────────────────────
-  step("agent_login")
-  const login = await call(client, "agent_login", {
-    agent_type_id: AGENT_TYPE,
-    instance_id:   INSTANCE_ID,
-    tenant_id:     TENANT_ID,
-  })
-  ok("Logado", {
-    instance_id:      login.instance_id,
-    token_expires_at: login.token_expires_at,
-  })
-
-  const session_token = login.session_token
-
-  // ── agent_ready ──────────────────────────────────────────────────────────
-  step("agent_ready")
-  const ready = await call(client, "agent_ready", { session_token })
-  ok("Pronto", { pools: ready.pools })
-
-  // ── wait_for_assignment ──────────────────────────────────────────────────
-  wait(`Aguardando contato em '${AGENT_TYPE}' (timeout: ${WAIT_TIMEOUT}s)...`)
-  console.log(`${c.dim}         Dica: wscat -c "ws://localhost:3000/ws?contact_id=cliente-teste&channel=chat"${c.reset}`)
-  console.log(`${c.dim}         Depois envie: {"type":"message.text","text":"olá"}${c.reset}`)
+  // ── wait_for_assignment ────────────────────────────────────────────────────
+  wait(`Aguardando contato no pool '${AGENT_TYPE}' (timeout: ${WAIT_TIMEOUT}s)...`)
+  info(`wscat -c "ws://localhost:8010/ws/chat/externo_teste" -H "x-customer-id: cliente-teste" -H "x-tenant-id: default"`)
   console.log()
 
   let context_package
@@ -136,14 +109,18 @@ async function main() {
       pool_id:       context_package.pool_id,
     })
   } catch (e) {
+    if (e.data?.error === "timeout") {
+      info("Timeout sem contato — chamando agent_ready novamente...")
+      return  // volta ao loop externo que chama runCycle de novo
+    }
     err("wait_for_assignment", e.data ?? e.message)
-    process.exit(1)
+    throw e
   }
 
-  const session_id  = context_package.session_id
-  const contact_id  = context_package.contact_id
+  const session_id = context_package.session_id
+  const contact_id = context_package.contact_id
 
-  // ── agent_busy ───────────────────────────────────────────────────────────
+  // ── agent_busy ─────────────────────────────────────────────────────────────
   step("agent_busy")
   const busy = await call(client, "agent_busy", {
     session_token,
@@ -151,7 +128,7 @@ async function main() {
   })
   ok("Em atendimento", { current_sessions: busy.current_sessions })
 
-  // ── send_message (saudação) ──────────────────────────────────────────────
+  // ── send_message (saudação) ────────────────────────────────────────────────
   step("send_message → saudação ao cliente")
   const sent = await call(client, "send_message", {
     session_token,
@@ -162,7 +139,7 @@ async function main() {
   })
   ok("Mensagem enviada", { message_id: sent.message_id })
 
-  // ── wait_for_message (resposta do cliente) ───────────────────────────────
+  // ── wait_for_message (resposta do cliente) ─────────────────────────────────
   wait("Aguardando resposta do cliente (timeout: 60s)...")
 
   let customer_message
@@ -176,23 +153,26 @@ async function main() {
     ok("Mensagem do cliente recebida", { message: customer_message })
   } catch (e) {
     err("wait_for_message timeout", e.data ?? e.message)
-    console.log(`${c.yellow}         Encerrando sem resposta do cliente...${c.reset}`)
+    info("Encerrando sem resposta do cliente...")
   }
 
-  // ── send_message (resposta final) ────────────────────────────────────────
+  // ── send_message (resposta final) ──────────────────────────────────────────
   if (customer_message) {
     step("send_message → resposta final")
+    const msgText = typeof customer_message === "string"
+      ? customer_message
+      : customer_message?.text ?? JSON.stringify(customer_message)
     await call(client, "send_message", {
       session_token,
       session_id,
       contact_id,
-      text: `Recebi sua mensagem: "${typeof customer_message === "string" ? customer_message : customer_message?.text ?? JSON.stringify(customer_message)}". Encerrando atendimento. Até logo!`,
+      text: `Recebi sua mensagem: "${msgText}". Encerrando atendimento. Até logo!`,
       channel: context_package.channel ?? "chat",
     })
     ok("Resposta final enviada")
   }
 
-  // ── agent_done ───────────────────────────────────────────────────────────
+  // ── agent_done ─────────────────────────────────────────────────────────────
   step("agent_done")
   const done = await call(client, "agent_done", {
     session_token,
@@ -206,14 +186,70 @@ async function main() {
     acknowledged: done.acknowledged,
     completed_at: done.completed_at,
   })
+  console.log()
+}
+
+// ── Main ──────────────────────────────────────────────────────────────────────
+
+async function main() {
+  console.log()
+  console.log(`${c.bold}PlugHub — Agente Externo MCP (spec 4.6k) — Modo Contínuo${c.reset}`)
+  console.log(`${c.dim}MCP: ${MCP_URL}  |  Agente: ${AGENT_TYPE}  |  Instância: ${INSTANCE_ID}${c.reset}`)
+  console.log(`${c.dim}MAX_CYCLES=${MAX_CYCLES || "∞"}  WAIT_TIMEOUT=${WAIT_TIMEOUT}s${c.reset}`)
+  console.log()
+
+  // ── Conectar ao mcp-server-plughub via SSE ─────────────────────────────────
+  step("Conectando ao mcp-server-plughub...")
+  const client    = new Client({ name: "test-external-agent", version: "1.0.0" }, { capabilities: {} })
+  const transport = new SSEClientTransport(new URL(`${MCP_URL}/sse`))
+  await client.connect(transport)
+  ok("Conectado", { endpoint: `${MCP_URL}/sse` })
+
+  // ── agent_login (uma vez por sessão) ───────────────────────────────────────
+  step("agent_login")
+  const login = await call(client, "agent_login", {
+    agent_type_id: AGENT_TYPE,
+    instance_id:   INSTANCE_ID,
+    tenant_id:     TENANT_ID,
+  })
+  ok("Logado", {
+    instance_id:      login.instance_id,
+    token_expires_at: login.token_expires_at,
+  })
+
+  const session_token = login.session_token
+
+  // ── Loop de atendimento ────────────────────────────────────────────────────
+  let cycle = 0
+  while (true) {
+    cycle++
+    if (MAX_CYCLES > 0 && cycle > MAX_CYCLES) {
+      info(`MAX_CYCLES=${MAX_CYCLES} atingido — encerrando.`)
+      break
+    }
+
+    try {
+      await runCycle(client, session_token, cycle)
+    } catch (e) {
+      err(`Ciclo ${cycle} encerrado com erro`, e.data ?? e.message)
+      // Pausa breve antes de tentar novamente
+      await new Promise(r => setTimeout(r, 2000))
+    }
+  }
 
   console.log()
-  console.log(`${c.green}${c.bold}✅ Teste concluído — ciclo externo-mcp validado com sucesso!${c.reset}`)
+  console.log(`${c.green}${c.bold}✅ Agente encerrado após ${cycle - 1} ciclo(s).${c.reset}`)
   console.log()
 
   await client.close()
   process.exit(0)
 }
+
+// Ctrl+C gracioso
+process.on("SIGINT", () => {
+  console.log(`\n${c.yellow}${c.bold}Interrompido pelo usuário (Ctrl+C).${c.reset}\n`)
+  process.exit(0)
+})
 
 main().catch(e => {
   console.error(`\n${c.red}${c.bold}Erro fatal:${c.reset}`, e.message ?? e)
