@@ -6,20 +6,23 @@
  * O agente test-conference-agent.mjs deve estar rodando antes de executar este script.
  *
  * Uso:
- *   node test-trigger-conference.mjs --session-id {SESSION_ID}
+ *   node test-trigger-conference.mjs --session-id SESSION_ID
  *
  * Ou via variáveis de ambiente:
  *   SESSION_ID=xxx POOL_ID=especialista_ia node test-trigger-conference.mjs
  *
  * Fluxo completo de teste:
  *   Terminal 1: node test-conference-agent.mjs
- *   Terminal 2: wscat -c "ws://localhost:8010/ws/chat/externo_teste" \
+ *   Terminal 2: wscat -c "ws://localhost:8010/ws/chat/demo_ia" \
  *                 -H "x-customer-id: cliente-teste" -H "x-tenant-id: default"
- *               > {"type":"message.text","text":"olá"}   ← abre sessão com agente primário
- *   Terminal 3: node test-trigger-conference.mjs --session-id {SESSION_ID_DO_TERMINAL_2}
+ *               ← copie o session_id do connection.accepted
+ *   Terminal 3: node test-trigger-conference.mjs --session-id SESSION_ID
  *               ← conferência disparada; test-conference-agent entra na sessão
  *   Terminal 2: > {"type":"message.text","text":"preciso de ajuda com autenticação"}
  *               ← mensagem chega ao agente humano E ao especialista IA
+ *
+ * Nota: agent_join_conference não requer autenticação do chamador — é uma ferramenta
+ * de supervisor que o Agent Assist UI invoca diretamente. Nenhum agent_login é necessário.
  */
 
 import { Client }             from "@modelcontextprotocol/sdk/client/index.js"
@@ -27,14 +30,10 @@ import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js"
 
 // ── Configuração ─────────────────────────────────────────────────────────────
 
-const MCP_URL      = process.env["MCP_URL"]             ?? "http://localhost:3100"
-const AGENT_TYPE   = process.env["AGENT_TYPE_ID"]       ?? "agente_especialista_v1"
-const POOL_ID      = process.env["POOL_ID"]             ?? "especialista_ia"
-const TENANT_ID    = process.env["TENANT_ID"]           ?? "default"
-const IDENTITY_TXT = process.env["IDENTITY"]            ?? "Especialista"
-// Agent type used only to obtain a session_token for agent_join_conference.
-// Must exist in the agent registry — defaults to the seeded retencao_humano type.
-const TRIGGER_AGENT_TYPE = process.env["TRIGGER_AGENT_TYPE"] ?? "agente_retencao_humano_v1"
+const MCP_URL      = process.env["MCP_URL"]       ?? "http://localhost:3100"
+const AGENT_TYPE   = process.env["AGENT_TYPE_ID"] ?? "agente_especialista_v1"
+const POOL_ID      = process.env["POOL_ID"]       ?? "especialista_ia"
+const IDENTITY_TXT = process.env["IDENTITY"]      ?? "Especialista"
 
 // Aceita --session-id como argumento CLI ou SESSION_ID env
 let SESSION_ID = process.env["SESSION_ID"] ?? ""
@@ -43,7 +42,7 @@ for (let i = 0; i < args.length; i++) {
   if (args[i] === "--session-id" && args[i + 1]) SESSION_ID = args[i + 1]
 }
 
-// Strip curly braces if user accidentally copied the placeholder literally: {UUID} → UUID
+// Strip curly braces se o usuário copiou o placeholder literalmente: {UUID} → UUID
 SESSION_ID = SESSION_ID.replace(/^\{|\}$/g, "").trim()
 
 if (!SESSION_ID) {
@@ -97,31 +96,19 @@ async function main() {
   conf(`agent_type: ${AGENT_TYPE}  pool: ${POOL_ID}  identity: "${IDENTITY_TXT}"`)
   console.log()
 
-  // ── Conectar ao MCP como agente humano (precisa de session_token) ─────────
-  // Usamos um agent_login temporário de tipo humano para obter o token que
-  // autoriza o agent_join_conference. Em produção, o Agent Assist UI já tem
-  // o token do agente humano logado.
   const transport = new SSEClientTransport(new URL(`${MCP_URL}/sse`))
   const client    = new Client({ name: "conference-trigger", version: "1.0.0" })
   await client.connect(transport)
   ok("Conectado ao MCP server")
 
-  step(`agent_login como ${TRIGGER_AGENT_TYPE} (humano temporário para autorizar agent_join_conference)`)
-  const loginResult = await call(client, "agent_login", {
-    agent_type_id: TRIGGER_AGENT_TYPE,
-    instance_id:   `trigger-${Date.now()}`,
-    tenant_id:     TENANT_ID,
-  })
-  const session_token = loginResult.session_token
-  ok("session_token obtido")
-
   // ── agent_join_conference ─────────────────────────────────────────────────
+  // Não requer agent_login — agent_join_conference é uma ferramenta de supervisor
+  // que o Agent Assist UI invoca sem autenticação adicional do chamador.
   step("agent_join_conference")
   const result = await call(client, "agent_join_conference", {
-    session_token,
-    session_id:       SESSION_ID,
-    agent_type_id:    AGENT_TYPE,
-    pool_id:          POOL_ID,
+    session_id:        SESSION_ID,
+    agent_type_id:     AGENT_TYPE,
+    pool_id:           POOL_ID,
     interaction_model: "conference",
     channel_identity: {
       text:          IDENTITY_TXT,
