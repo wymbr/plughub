@@ -199,11 +199,25 @@ class InstanceRegistry:
         if not raw_meta:
             return None
 
-        conversations = await self._redis.smembers(conv_key)
+        # Decode bytes keys/values — hgetall returns bytes when decode_responses=False.
+        # This ensures .get("pools") and .get("agent_type_id") work regardless of
+        # the Redis client configuration.
+        decoded_meta: dict[str, str] = {
+            (k.decode() if isinstance(k, bytes) else k): (v.decode() if isinstance(v, bytes) else v)
+            for k, v in raw_meta.items()
+        }
+
+        conversations_raw = await self._redis.smembers(conv_key)
+        # Decode bytes from smembers — same reason as above.
+        conversations = [
+            v.decode() if isinstance(v, bytes) else v
+            for v in conversations_raw
+        ]
+
         return InstanceMeta(
-            pools                = json.loads(raw_meta.get("pools", "[]")),
-            agent_type_id        = raw_meta.get("agent_type_id", ""),
-            active_conversations = list(conversations),
+            pools                = json.loads(decoded_meta.get("pools", "[]")),
+            agent_type_id        = decoded_meta.get("agent_type_id", ""),
+            active_conversations = conversations,
         )
 
     async def delete_instance_meta(
