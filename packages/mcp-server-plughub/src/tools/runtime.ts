@@ -156,8 +156,13 @@ export function registerRuntimeTools(server: McpServer, deps: RuntimeDeps): void
           )
         }
 
-        // Emite session_token JWT
-        const session_token    = signSessionToken({ tenant_id, agent_type_id, instance_id })
+        // Emite session_token JWT (inclui permissions para validação local em invoke)
+        const session_token    = signSessionToken({
+          tenant_id,
+          agent_type_id,
+          instance_id,
+          permissions: agentType.permissions,
+        })
         const token_expires_at = new Date(Date.now() + SESSION_TOKEN_TTL_S * 1000).toISOString()
 
         // Persiste estado da instância no Redis

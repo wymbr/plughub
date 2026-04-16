@@ -12,14 +12,16 @@ import express, { Request, Response } from "express"
 import { WebSocketServer, WebSocket } from "ws"
 import { McpServer }              from "@modelcontextprotocol/sdk/server/mcp.js"
 import { SSEServerTransport }     from "@modelcontextprotocol/sdk/server/sse.js"
-import { registerBpmTools }        from "./tools/bpm"
-import type { BpmDeps }            from "./tools/bpm"
-import { registerRuntimeTools }    from "./tools/runtime"
-import type { RuntimeDeps }        from "./tools/runtime"
-import { registerSupervisorTools } from "./tools/supervisor"
-import type { SupervisorDeps }     from "./tools/supervisor"
-import { registerEvaluationTools } from "./tools/evaluation"
-import type { EvaluationDeps }     from "./tools/evaluation"
+import { registerBpmTools }           from "./tools/bpm"
+import type { BpmDeps }               from "./tools/bpm"
+import { registerRuntimeTools }       from "./tools/runtime"
+import type { RuntimeDeps }           from "./tools/runtime"
+import { registerSupervisorTools }    from "./tools/supervisor"
+import type { SupervisorDeps }        from "./tools/supervisor"
+import { registerEvaluationTools }    from "./tools/evaluation"
+import type { EvaluationDeps }        from "./tools/evaluation"
+import { registerExternalAgentTools } from "./tools/external-agent"
+import type { ExternalAgentDeps }     from "./tools/external-agent"
 import { createRedisClient }       from "./infra/redis"
 import { createKafkaProducer }     from "./infra/kafka"
 import { createRegistryClient }    from "./infra/registry-client"
@@ -65,11 +67,14 @@ export function createServer(allDeps?: AllDeps): McpServer {
 
   const supervisorDeps: SupervisorDeps = { redis, kafka }
 
+  const externalAgentDeps: ExternalAgentDeps = { redis, kafka }
+
   // Registrar todas as tools
   registerBpmTools(server, bpmDeps)
   registerRuntimeTools(server, runtimeDeps)
   registerSupervisorTools(server, supervisorDeps)
   registerEvaluationTools(server, evalDeps)
+  registerExternalAgentTools(server, externalAgentDeps)
 
   return server
 }
@@ -543,9 +548,10 @@ export async function startServer(config: ServerConfig): Promise<void> {
       console.log(`   Endpoint:   http://${config.host}:${config.port}/sse`)
       console.log(`   Agent WS:   ws://${config.host}:${config.port}/agent/ws`)
       console.log(`   Tools BPM:        conversation_start, conversation_status, conversation_end, rule_dry_run, notification_send, conversation_escalate`)
-      console.log(`   Tools Runtime:    agent_login, agent_ready, agent_busy, agent_done, agent_pause, agent_logout, insight_register`)
-      console.log(`   Tools Supervisor: supervisor_state, supervisor_capabilities, agent_join_conference`)
-      console.log(`   Tools Evaluation: transcript_get, evaluation_context_resolve, evaluation_publish`)
+      console.log(`   Tools Runtime:       agent_login, agent_ready, agent_busy, agent_done, agent_pause, agent_logout, insight_register`)
+      console.log(`   Tools Supervisor:    supervisor_state, supervisor_capabilities, agent_join_conference`)
+      console.log(`   Tools Evaluation:    transcript_get, evaluation_context_resolve, evaluation_publish`)
+      console.log(`   Tools ExternalAgent: invoke, wait_for_assignment, send_message, wait_for_message`)
       resolve()
     })
   })

@@ -13,6 +13,8 @@ export interface AgentTypeInfo {
   agent_type_id:           string
   max_concurrent_sessions: number
   pools:                   string[]
+  /** Permissões MCP autorizadas — ex: ["mcp-server-crm:customer_get"]. Spec 4.6k. */
+  permissions:             string[]
 }
 
 export interface RegistryClient {
@@ -43,10 +45,14 @@ export function createRegistryClient(baseUrl: string): RegistryClient {
         ? rawPools.map(p => (p["pool_id"] as string | undefined) ?? "").filter(Boolean)
         : []
 
+      const rawPerms  = data["permissions"] as string[] | undefined
+      const permissions = Array.isArray(rawPerms) ? rawPerms : []
+
       return {
         agent_type_id:           data["agent_type_id"] as string,
         max_concurrent_sessions: (data["max_concurrent_sessions"] as number | undefined) ?? 1,
         pools,
+        permissions,
       }
     },
   }
@@ -57,7 +63,11 @@ export function createRegistryClient(baseUrl: string): RegistryClient {
 export function createStubRegistryClient(agentTypes: AgentTypeInfo[]): RegistryClient {
   return {
     async getAgentType(_tenantId, agentTypeId) {
-      return agentTypes.find(a => a.agent_type_id === agentTypeId) ?? null
+      const found = agentTypes.find(a => a.agent_type_id === agentTypeId)
+      if (!found) return null
+      // Garante que permissions existe mesmo em stubs criados antes de 4.6k
+      if (!found.permissions) found.permissions = []
+      return found
     },
   }
 }

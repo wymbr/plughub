@@ -10,6 +10,8 @@ Consumes two topics:
    framework == "plughub-native"  → fetch skill flow → POST /execute on skill-flow-service
    framework == "human"           → publish conversation.assigned to Redis pub/sub
                                     so Agent Assist UI receives it via WebSocket
+   framework == "external-mcp"   → LPUSH context_package to agent:queue:{instance_id}
+                                    so the agent blocked in wait_for_assignment unblocks
    other frameworks               → logged as warning (LangGraph, CrewAI, etc. — NYI)
 
 2. conversations.inbound (NormalizedInboundEvent from channel-gateway)
@@ -434,6 +436,84 @@ async def activate_human_agent(
         logger.error("Redis publish error: session=%s — %s", session_id, exc)
 
 
+# ── external-mcp activation: LPUSH context_package → agent:queue ─────────────
+
+async def activate_external_mcp_agent(
+    redis_client: aioredis.Redis,
+    session_id: str,
+    pool_id: str,
+    tenant_id: str,
+    customer_id: str,
+    agent_type_id: str,
+    routing_result: dict,
+) -> None:
+    """
+    Activate an external-mcp agent by pushing a context_package to its queue.
+
+    The external agent is already running and blocked in wait_for_assignment
+    (BLPOP on agent:queue:{instance_id}).  This LPUSH unblocks it so it can
+    start handling the conversation.
+
+    The agent manages its own lifecycle and calls agent_done when finished.
+    The bridge tracks the instance in session:{session_id}:ai_agents so that
+    the existing contact_closed handler restores it when the contact ends.
+
+    Spec: 4.6k — external-mcp framework branch.
+    """
+    instance_id = routing_result.get("instance_id", "")
+    queue_key   = f"{tenant_id}:agent:queue:{instance_id}"
+
+    context_package = {
+        "session_id":    session_id,
+        "contact_id":    customer_id,
+        "customer_id":   customer_id,
+        "tenant_id":     tenant_id,
+        "agent_type_id": agent_type_id,
+        "instance_id":   instance_id,
+        "pool_id":       pool_id,
+        "assigned_at":   datetime.now(timezone.utc).isoformat(),
+    }
+
+    try:
+        await redis_client.lpush(queue_key, json.dumps(context_package))
+        logger.info(
+            "External-MCP agent notified: session=%s instance=%s queue=%s",
+            session_id, instance_id, queue_key,
+        )
+    except Exception as exc:
+        logger.error(
+            "Failed to push context_package to external-mcp queue: session=%s — %s",
+            session_id, exc,
+        )
+        return
+
+    # Track instance in ai_agents SET so contact_closed restores it.
+    # Uses the same cleanup path as plughub-native agents.
+    if instance_id:
+        try:
+            await redis_client.sadd(f"session:{session_id}:ai_agents", instance_id)
+            await redis_client.expire(f"session:{session_id}:ai_agents", 14400)
+
+            # Persist routing snapshot for recovery on bridge restart.
+            raw_inst = await redis_client.get(f"{tenant_id}:instance:{instance_id}")
+            if raw_inst:
+                await redis_client.setex(
+                    f"session:{session_id}:routing:{instance_id}",
+                    14400,
+                    json.dumps({
+                        "tenant_id":   tenant_id,
+                        "instance_id": instance_id,
+                        "pool_id":     pool_id,
+                        "snapshot":    json.loads(raw_inst),
+                    }),
+                )
+        except Exception as exc:
+            logger.warning(
+                "Could not track external-mcp instance: session=%s instance=%s — %s",
+                session_id, instance_id, exc,
+            )
+
+
 # ── Process conversations.routed ──────────────────────────────────────────────
 
 async def process_routed(
@@ -716,6 +796,20 @@ async def process_routed(
             redis_client=redis_client,
             session_id=session_id, pool_id=pool_id,
             tenant_id=tenant_id,
+            routing_result=result,
+        )
+
+    elif framework == "external-mcp":
+        # Agentes externos integrados via MCP (spec 4.6k).
+        # O agente já está conectado ao mcp-server-plughub aguardando em
+        # wait_for_assignment (BLPOP). O bridge faz LPUSH do context_package
+        # e retorna imediatamente — o agente gerencia seu próprio ciclo de vida
+        # e chama agent_done ao concluir.
+        await activate_external_mcp_agent(
+            redis_client=redis_client,
+            session_id=session_id, pool_id=pool_id,
+            tenant_id=tenant_id, customer_id=customer_id,
+            agent_type_id=agent_type_id,
             routing_result=result,
         )
 

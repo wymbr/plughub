@@ -12,6 +12,8 @@ export interface SessionTokenPayload {
   tenant_id:     string
   agent_type_id: string
   instance_id:   string
+  /** Permissões MCP autorizadas — validadas localmente em invoke (~0.1ms). Spec 4.6k. */
+  permissions:   string[]
   iat:           number
   exp:           number
 }
@@ -52,6 +54,19 @@ export function verifySessionToken(token: string): SessionTokenPayload {
   } catch {
     throw new InvalidTokenError()
   }
+}
+
+/**
+ * Versão backward-compatible de verifySessionToken.
+ * JWTs emitidos antes de 4.6k não têm permissions — defaulta para [].
+ */
+export function verifySessionTokenSafe(token: string): SessionTokenPayload {
+  const p = verifySessionToken(token)
+  if (!Array.isArray(p.permissions)) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (p as unknown as Record<string, unknown>)["permissions"] = []
+  }
+  return p
 }
 
 /** Duração do session_token em milissegundos (para calcular TTL do Redis). */
