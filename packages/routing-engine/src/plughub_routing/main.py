@@ -154,8 +154,23 @@ async def _process_message(
             )
         return
 
+    # TEMP DEBUG — remove after confirming conference_id propagation end-to-end
+    if event.conference_id or event.agent_type_id:
+        logger.info(
+            "DEBUG _process_message: session=%s conference_id=%r agent_type_id=%r pool_id=%r",
+            event.session_id, event.conference_id, event.agent_type_id, event.pool_id,
+        )
+
     try:
         result = await router.route(event)
+
+        # TEMP DEBUG — check conference_id survived routing
+        if event.conference_id or getattr(result, "conference_id", None):
+            logger.info(
+                "DEBUG post-route: session=%s event.conference_id=%r result.conference_id=%r allocated=%s",
+                event.session_id, event.conference_id,
+                getattr(result, "conference_id", "ATTR_MISSING"), result.allocated,
+            )
 
         routed_event = ConversationRoutedEvent(
             session_id=event.session_id,

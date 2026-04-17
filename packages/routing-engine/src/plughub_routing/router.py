@@ -261,6 +261,8 @@ class Router:
                     agent_type_id=inst.agent_type_id, pool_id=pool.pool_id,
                     resource_score=rscore, routing_mode="autonomous",
                     allocated_site=self._local_site, routed_at=now,
+                    conference_id=event.conference_id,       # propagate conference context
+                    channel_identity=event.channel_identity, # propagate channel identity
                 )
         return None
 
