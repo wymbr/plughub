@@ -156,16 +156,17 @@ class CrashDetector:
             recovered.append(conversation_id)
 
         # 3. Publish audit event
+        # NOTE: producer has value_serializer=json.dumps().encode — pass dict, NOT bytes
         await self._producer.send(
             self._settings.kafka_topic_lifecycle,
-            value=json.dumps({
+            value={
                 "event":                    "agent_crash",
                 "tenant_id":                tenant_id,
                 "instance_id":              instance_id,
                 "agent_type_id":            meta.agent_type_id,
                 "recovered_conversation_ids": recovered,
                 "timestamp":                datetime.now(timezone.utc).isoformat(),
-            }).encode(),
+            },
         )
 
         # 4. Clean up metadata
@@ -194,9 +195,10 @@ class CrashDetector:
         all pools from scratch (which may route to the wrong pool if the inbound
         event lacks intent context).
         """
+        # NOTE: producer has value_serializer=json.dumps().encode — pass dict, NOT bytes
         await self._producer.send(
             self._settings.kafka_topic_inbound,
-            value=json.dumps({
+            value={
                 "session_id":    conversation_id,
                 "tenant_id":     tenant_id,
                 "customer_id":   "",
@@ -207,7 +209,7 @@ class CrashDetector:
                 "pool_id":       pool_id,
                 "agent_type_id": agent_type_id,
                 # No intent/confidence/profile — Router will use defaults and queue if necessary
-            }).encode(),
+            },
         )
 
     async def _remove_from_all_pools_by_scan(
