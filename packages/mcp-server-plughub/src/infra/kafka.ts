@@ -28,6 +28,15 @@ export function createKafkaProducer(): KafkaProducer {
   const producer: Producer = kafka.producer()
   let connected = false
 
+  // Conecta o produtor imediatamente ao ser criado — evita latência de
+  // 10-25s na primeira publicação (custo de handshake KafkaJS com o broker).
+  // connect() é chamado em background; se o broker ainda não estiver
+  // disponível, a Promise rejeita mas `connected` permanece false e a
+  // reconexão acontece no primeiro publish() subsequente.
+  producer.connect().then(() => {
+    connected = true
+  }).catch(() => { /* broker indisponível no start — reconecta no primeiro publish */ })
+
   return {
     async publish(topic, message) {
       if (!connected) {
