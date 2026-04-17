@@ -229,10 +229,14 @@ export function registerExternalAgentTools(server: McpServer, deps: ExternalAgen
 
         const queueKey = `${tenant_id}:agent:queue:${instance_id}`
 
-        // Ler campos da instância para incluir nos heartbeats
+        // Ler campos da instância para incluir nos heartbeats.
+        // agent_type_id DEVE ser incluído — sem ele o routing engine sobrescreve
+        // a instância com agent_type_id="" a cada heartbeat, fazendo o router
+        // ignorar o agente em routings que especificam agent_type_id (ex: conferência).
         const instanceKey      = keys.agentInstance(tenant_id, instance_id)
         const poolsRaw         = await redis.hget(instanceKey, "pools")
         const pools: string[]  = poolsRaw ? (JSON.parse(poolsRaw) as string[]) : []
+        const agentTypeId      = await redis.hget(instanceKey, "agent_type_id") ?? ""
         const executionModel   = await redis.hget(instanceKey, "execution_model") ?? "stateless"
         const maxConcurrentRaw = await redis.hget(instanceKey, "max_concurrent_sessions") ?? "1"
         const currentSessRaw   = await redis.hget(instanceKey, "current_sessions") ?? "0"
@@ -268,6 +272,7 @@ export function registerExternalAgentTools(server: McpServer, deps: ExternalAgen
             event:                   "agent_heartbeat",
             tenant_id,
             instance_id,
+            agent_type_id:           agentTypeId,
             pools,
             status:                  "ready",
             execution_model:         executionModel,
