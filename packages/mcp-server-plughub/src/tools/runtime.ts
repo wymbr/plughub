@@ -68,6 +68,14 @@ const AgentDoneInputSchema = z.object({
   resolution_summary: z.string().optional(),
   /** Se omitido, o servidor usa o timestamp atual */
   completed_at:       z.string().datetime().optional(),
+  /**
+   * ID de conferência — opcional. Quando presente, indica que este agent_done
+   * encerra apenas a PARTICIPAÇÃO do especialista na conferência, não a sessão
+   * do cliente. Omite a publicação de session.closed em conversations.outbound,
+   * preservando o WebSocket do cliente e a sessão do atendente principal.
+   * Spec 4.6k — conference mode agent_done.
+   */
+  conference_id:      z.string().uuid().optional(),
 })
 
 const AgentPauseInputSchema = z.object({
@@ -332,6 +340,7 @@ export function registerRuntimeTools(server: McpServer, deps: RuntimeDeps): void
         const {
           session_token, conversation_id, outcome,
           issue_status, handoff_reason, resolution_summary,
+          conference_id,   // presente em modo conferência — omite session.closed
         } = parsed
         const completed_at = parsed.completed_at ?? new Date().toISOString()
 
@@ -389,7 +398,13 @@ export function registerRuntimeTools(server: McpServer, deps: RuntimeDeps): void
         // Notifica o cliente via conversations.outbound — envia session.closed
         // para que o channel-gateway encerre o WebSocket do cliente imediatamente.
         // Busca contact_id do Redis (gravado pelo channel-gateway no connect).
-        if (redis) {
+        //
+        // EXCEÇÃO (modo conferência): quando conference_id está presente, este
+        // agent_done encerra apenas a participação do especialista — NÃO a sessão
+        // do cliente. O WebSocket do cliente deve permanecer aberto para que o
+        // atendente principal (humano ou AI) continue o atendimento.
+        // Spec 4.6k — conference mode agent_done.
+        if (redis && !conference_id) {
           try {
             let contactId  = conversation_id  // fallback
             let channel    = "chat"
@@ -408,6 +423,25 @@ export function registerRuntimeTools(server: McpServer, deps: RuntimeDeps): void
             })
           } catch {
             // Non-fatal — customer WS will timeout on its own
+          }
+        }
+
+        // Modo conferência: notifica o bridge via conversations.events para que
+        // o Agent Assist UI saiba que o especialista IA concluiu sua participação.
+        // O bridge faz publish em agent:events:{session_id} com type=conference.agent_completed,
+        // permitindo que o atendente humano retome o controle imediatamente.
+        if (conference_id) {
+          try {
+            await kafka.publish("conversations.events", {
+              event_type:    "conference_agent_completed",
+              session_id:    conversation_id,
+              conference_id,
+              instance_id,
+              outcome:       payload.outcome,
+              timestamp:     new Date().toISOString(),
+            })
+          } catch {
+            // Non-fatal
           }
         }
 

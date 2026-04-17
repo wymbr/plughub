@@ -142,8 +142,9 @@ async function runCycle(client, session_token, cycleNum) {
   })
 
   // ── agent_busy ────────────────────────────────────────────────────────────
+  // runtime.ts espera `conversation_id`, não `session_id`
   step("agent_busy")
-  await call(client, "agent_busy", { session_token, session_id })
+  await call(client, "agent_busy", { session_token, conversation_id: session_id })
   ok("agent_busy confirmado")
 
   let customer_message = null
@@ -202,11 +203,14 @@ async function runCycle(client, session_token, cycleNum) {
   // ── agent_done ────────────────────────────────────────────────────────────
   // Em modo conferência, agent_done encerra a PARTICIPAÇÃO do especialista,
   // não a sessão do cliente. O humano e o cliente continuam conectados.
+  // conference_id sinaliza ao runtime que NÃO deve publicar session.closed —
+  // o WebSocket do cliente permanece aberto para o atendente principal continuar.
   step("agent_done → encerrando participação na conferência")
   try {
     await call(client, "agent_done", {
       session_token,
-      session_id,
+      conversation_id: session_id,   // runtime.ts espera conversation_id
+      conference_id,                  // omite session.closed — não encerra a sessão do cliente
       outcome: customer_message ? "resolved" : "unresolved",
       ...(customer_message ? {} : { handoff_reason: "Timeout aguardando cliente." }),
       issue_status: [{

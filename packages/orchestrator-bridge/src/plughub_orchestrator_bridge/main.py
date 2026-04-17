@@ -999,6 +999,52 @@ async def process_contact_event(
     up here so subsequent messages for this session are no longer forwarded.
     """
     event_type = msg.get("event_type")
+
+    # ── Conference specialist completed ───────────────────────────────────────
+    # Published by runtime.ts agent_done when conference_id is present.
+    # Notifies the human agent's Agent Assist UI that the AI specialist is done,
+    # and removes the specialist instance from the ai_agents tracking SET.
+    if event_type == "conference_agent_completed":
+        session_id    = msg.get("session_id", "")
+        conference_id = msg.get("conference_id", "")
+        instance_id   = msg.get("instance_id", "")
+        outcome       = msg.get("outcome", "")
+        if session_id:
+            # Notify human agent (if active) that the specialist finished
+            try:
+                await redis_client.publish(
+                    f"agent:events:{session_id}",
+                    json.dumps({
+                        "type":          "conference.agent_completed",
+                        "session_id":    session_id,
+                        "conference_id": conference_id,
+                        "instance_id":   instance_id,
+                        "outcome":       outcome,
+                        "completed_at":  msg.get("timestamp", datetime.now(timezone.utc).isoformat()),
+                    }),
+                )
+                logger.info(
+                    "Conference specialist completed: session=%s conference=%s instance=%s outcome=%s",
+                    session_id, conference_id, instance_id, outcome,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "Could not publish conference.agent_completed: session=%s — %s",
+                    session_id, exc,
+                )
+            # Remove specialist from ai_agents tracking SET
+            if instance_id:
+                try:
+                    await redis_client.srem(f"session:{session_id}:ai_agents", instance_id)
+                    # Restore specialist instance (routing snapshot cleanup)
+                    await _restore_instance(redis_client, session_id, instance_id)
+                except Exception as exc:
+                    logger.warning(
+                        "Could not clean up specialist instance: session=%s instance=%s — %s",
+                        session_id, instance_id, exc,
+                    )
+        return
+
     if event_type != "contact_closed":
         return
 
