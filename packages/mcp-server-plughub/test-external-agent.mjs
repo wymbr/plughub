@@ -70,9 +70,18 @@ function err(name, d) { log(`${c.red}✗${c.reset}`,   name, d) }
 function wait(msg)    { log(`${c.yellow}⏳${c.reset}`, msg) }
 function info(msg)    { log(`${c.dim}ℹ${c.reset}`,    msg) }
 
-/** Chama uma MCP tool e retorna o resultado parseado. Lança se isError=true. */
-async function call(client, tool, args) {
-  const res = await client.callTool({ name: tool, arguments: args })
+/**
+ * Chama uma MCP tool e retorna o resultado parseado. Lança se isError=true.
+ * clientTimeoutMs: timeout do SDK (não da tool). Default 30s.
+ * Para tools bloqueantes (wait_for_assignment, wait_for_message), passar
+ * um valor maior que o timeout_s da tool + margem de 30s.
+ */
+async function call(client, tool, args, clientTimeoutMs = 30_000) {
+  const res = await client.callTool(
+    { name: tool, arguments: args },
+    undefined,
+    { timeout: clientTimeoutMs },
+  )
   const raw = res?.content?.[0]?.text ?? "{}"
   let parsed
   try { parsed = JSON.parse(raw) } catch { parsed = { raw } }
@@ -100,7 +109,7 @@ async function runCycle(client, session_token, cycleNum) {
     const assignment = await call(client, "wait_for_assignment", {
       session_token,
       timeout_s: WAIT_TIMEOUT,
-    })
+    }, (WAIT_TIMEOUT + 30) * 1000)
     context_package = assignment.context_package
     ok("Contato atribuído", {
       session_id:    context_package.session_id,
@@ -152,7 +161,7 @@ async function runCycle(client, session_token, cycleNum) {
         session_token,
         session_id,
         timeout_s: 60,
-      })
+      }, 90_000)
       customer_message = reply.message
       ok("Mensagem do cliente recebida", { message: customer_message })
     } catch (e) {

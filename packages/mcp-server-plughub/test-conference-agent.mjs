@@ -87,11 +87,19 @@ const conf  = (label, data) => log("⬡", c.magenta, label, data)
 const wait  = (label)       => log("…", c.yellow,  label)
 
 // ── Chamada MCP ───────────────────────────────────────────────────────────────
+//
+// clientTimeoutMs controla o timeout do lado do SDK MCP (cancelamento da request).
+// Para tools bloqueantes (wait_for_assignment, wait_for_message), deve ser maior
+// que o timeout_s da tool + margem. O default do SDK é 60s — insuficiente.
 
-async function call(client, tool, params) {
-  const result = await client.callTool({ name: tool, arguments: params })
-  const raw    = result.content?.[0]?.text ?? "{}"
-  const data   = JSON.parse(raw)
+async function call(client, tool, params, clientTimeoutMs = 30_000) {
+  const result = await client.callTool(
+    { name: tool, arguments: params },
+    undefined,                          // resultSchema — não usado
+    { timeout: clientTimeoutMs },       // timeout do SDK, não da tool
+  )
+  const raw  = result.content?.[0]?.text ?? "{}"
+  const data = JSON.parse(raw)
   if (data.error) {
     const e = new Error(data.message ?? data.error)
     e.data  = data
@@ -107,11 +115,14 @@ async function runCycle(client, session_token, cycleNum) {
   conf(`═══ Ciclo #${cycleNum} — aguardando assignment ═══`)
 
   // ── wait_for_assignment ───────────────────────────────────────────────────
+  // clientTimeoutMs = WAIT_TIMEOUT + 30s de margem para o SDK não cancelar
+  // antes da tool responder. O SDK tem default de 60s — insuficiente para
+  // ciclos longos.
   wait(`wait_for_assignment (timeout: ${WAIT_TIMEOUT}s)...`)
   const assignment  = await call(client, "wait_for_assignment", {
     session_token,
     timeout_s: WAIT_TIMEOUT,
-  })
+  }, (WAIT_TIMEOUT + 30) * 1000)
   ok("Assignment recebido", assignment)
 
   // wait_for_assignment retorna { context_package: {...} }
@@ -165,13 +176,14 @@ async function runCycle(client, session_token, cycleNum) {
     // conference_id passado para que o consumer group use offset 0:
     // lê desde o início do stream — garante que mensagens enviadas pelo cliente
     // entre o agent_join_conference e este wait_for_message não sejam perdidas.
+    // clientTimeoutMs = 120s + 30s margem para não cancelar antes do XREADGROUP.
     wait("wait_for_message (aguardando pergunta do cliente, timeout: 120s)...")
     const reply = await call(client, "wait_for_message", {
       session_token,
       session_id,
       timeout_s:    120,
       conference_id,   // ← offset 0 no consumer group
-    })
+    }, 150_000)
     customer_message = reply.message
     ok("Mensagem do cliente recebida", { message: customer_message })
 
