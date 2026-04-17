@@ -75,10 +75,20 @@ const ok   = (l, d) => log("✓", c.green,   l, d)
 const err  = (l, d) => log("✗", c.red,     l, d)
 const conf = (l, d) => log("⬡", c.magenta, l, d)
 
-async function call(client, tool, params) {
-  const result = await client.callTool({ name: tool, arguments: params })
-  const raw    = result.content?.[0]?.text ?? "{}"
-  const data   = JSON.parse(raw)
+async function call(client, tool, params, clientTimeoutMs = 30_000) {
+  const result = await client.callTool(
+    { name: tool, arguments: params },
+    undefined,
+    { timeout: clientTimeoutMs },
+  )
+  const raw = result?.content?.[0]?.text ?? "{}"
+  let data
+  try { data = JSON.parse(raw) } catch { data = { raw } }
+  if (result?.isError) {
+    const e = new Error(`${tool} falhou: ${data.message ?? raw}`)
+    e.data  = data
+    throw e
+  }
   if (data.error) {
     const e  = new Error(data.message ?? data.error)
     e.data   = data

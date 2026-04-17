@@ -1091,24 +1091,36 @@ async def process_contact_event(
 
     try:
         if customer_side:
+            # ── Marcar sessão como encerrada (para rejeitar context_packages obsoletos) ─
+            # wait_for_assignment verifica a AUSÊNCIA desta chave antes de retornar
+            # um context_package ao agente externo. Usando marcador de fechamento
+            # (em vez de checar presença de session:meta, que tem TTL de 4h) porque
+            # meta persiste muito tempo após o encerramento e causaria falso-positivo.
+            # TTL 4h: cobre a janela onde itens obsoletos podem estar na fila.
+            try:
+                await redis_client.setex(f"session:{session_id}:closed", 14400, reason)
+            except Exception as exc:
+                logger.warning("Could not set session:closed marker: session=%s — %s", session_id, exc)
+
             # ── Signal session closed — dois mecanismos em paralelo ───────────
             #
             # 1. LPUSH session:closed:{session_id}   — desbloqueia BLPOP legado
             #    (Skill Flow menu step, wait_for_message de versões anteriores).
             #    TTL 10s — consumo imediato esperado.
             #
-            # 2. XADD session:{session_id}:messages  — desbloqueia XREADGROUP de
+            # 2. XADD session:{session_id}:stream  — desbloqueia XREADGROUP de
             #    agentes external-mcp usando wait_for_message com Streams.
             #    Item {type: session_closed} na mesma fila de mensagens garante
             #    que o sinal respeita a ordem de entrega — não chega antes de
             #    mensagens do cliente já enfileiradas.
+            #    NOTA: usa :stream (não :messages) — :messages é uma List do canal-gateway.
             try:
                 await redis_client.lpush(f"session:closed:{session_id}", reason)
                 await redis_client.expire(f"session:closed:{session_id}", 10)
             except Exception as exc:
                 logger.warning("Could not push session:closed: session=%s — %s", session_id, exc)
 
-            stream_key = f"session:{session_id}:messages"
+            stream_key = f"session:{session_id}:stream"
             try:
                 groups = await redis_client.xinfo_groups(stream_key)
                 if groups:
@@ -1143,13 +1155,18 @@ async def process_contact_event(
                 await redis_client.delete(f"session:{session_id}:human_agent")
                 await redis_client.delete(f"session:{session_id}:human_agents")
 
-            # ── Clear conversation history so next agent doesn't see stale data ──
+            # ── Clear conversation data so next agent doesn't see stale data ───
+            # session:{id}:messages — List (channel-gateway conversation history)
+            # session:{id}:stream   — Redis Stream (external-mcp wait_for_message)
             try:
-                await redis_client.delete(f"session:{session_id}:messages")
-                logger.debug("Message history cleared: session=%s", session_id)
+                await redis_client.delete(
+                    f"session:{session_id}:messages",
+                    f"session:{session_id}:stream",
+                )
+                logger.debug("Message data cleared: session=%s", session_id)
             except Exception as exc:
                 logger.warning(
-                    "Could not delete message history: session=%s — %s", session_id, exc
+                    "Could not delete message data: session=%s — %s", session_id, exc
                 )
 
             # ── Restore all AI agent instances for this session ───────────────
@@ -1289,14 +1306,17 @@ async def process_inbound(
         # Three delivery channels, checked independently:
         #   1. Human agent   → Redis pub/sub  agent:events:{session_id}
         #   2. Native AI     → Redis LPUSH    menu:result:{session_id}    (Skill Flow menu step)
-        #   3. External-MCP  → Redis Streams  session:{session_id}:messages (XADD, fan-out)
+        #   3. External-MCP  → Redis Streams  session:{session_id}:stream   (XADD, fan-out)
 
         is_human     = await redis_client.get(f"session:{session_id}:human_agent")
         menu_waiting = await redis_client.get(f"menu:waiting:{session_id}")
 
         # Detect external-mcp agents: stream exists and has at least one consumer group.
         # XINFO GROUPS returns [] when the stream doesn't exist or has no groups.
-        stream_key = f"session:{session_id}:messages"
+        # NOTE: session:{id}:stream (not :messages) — :messages is a List used by
+        # the channel-gateway for conversation history; using the same key for a Stream
+        # would cause WRONGTYPE errors.
+        stream_key = f"session:{session_id}:stream"
         has_stream_consumers = False
         try:
             groups = await redis_client.xinfo_groups(stream_key)

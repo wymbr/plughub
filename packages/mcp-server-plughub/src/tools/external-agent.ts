@@ -255,9 +255,17 @@ export function registerExternalAgentTools(server: McpServer, deps: ExternalAgen
             )
           }
 
-          // BLPOP por no máximo HEARTBEAT_INTERVAL_S ou o tempo restante
-          const waitSecs = Math.min(HEARTBEAT_INTERVAL_S, Math.ceil(remainingMs / 1000))
-          const result   = await redis.blpop(queueKey, waitSecs)
+          // BLPOP por no máximo HEARTBEAT_INTERVAL_S ou o tempo restante.
+          // BLPOP mantém a conexão Redis ocupada durante o wait — usar duplicate()
+          // para não bloquear o cliente Redis compartilhado com outras tools.
+          const waitSecs     = Math.min(HEARTBEAT_INTERVAL_S, Math.ceil(remainingMs / 1000))
+          const blpopClient  = redis.duplicate()
+          let result: [string, string] | null
+          try {
+            result = await blpopClient.blpop(queueKey, waitSecs)
+          } finally {
+            blpopClient.quit().catch(() => { /* non-fatal */ })
+          }
 
           if (result) {
             const [, raw] = result
@@ -265,18 +273,20 @@ export function registerExternalAgentTools(server: McpServer, deps: ExternalAgen
             try   { context_package = JSON.parse(raw) as Record<string, unknown> }
             catch { context_package = { raw } }
 
-            // Validar que a sessão ainda existe no Redis.
+            // Validar que a sessão ainda está ativa.
             // Protege contra context_packages obsoletos que ficaram na fila
             // quando o agente foi reiniciado antes de consumi-los (race condition
-            // estrutural: o bridge faz LPUSH antes do agente consumir — não há
-            // contact_closed confiável para limpar a fila nesses casos).
-            // Se session:{session_id}:meta não existe, a sessão foi encerrada:
-            // descartar silenciosamente e continuar aguardando.
+            // estrutural: o bridge faz LPUSH antes do agente consumir).
+            //
+            // Usa session:{id}:closed (gravado pelo bridge no contact_closed) em
+            // vez de checar session:{id}:meta, porque meta tem TTL de 4h e persiste
+            // muito tempo após o encerramento — geraria falso-positivo.
+            // TTL do marcador: 4h (mesmo que meta) — cobre janela de itens obsoletos.
             const sessionId = context_package["session_id"] as string | undefined
             if (sessionId) {
-              const sessionMeta = await redis.get(`session:${sessionId}:meta`)
-              if (!sessionMeta) {
-                // Sessão não existe mais — descartar e continuar
+              const sessionClosed = await redis.get(`session:${sessionId}:closed`)
+              if (sessionClosed !== null) {
+                // Sessão já foi encerrada — descartar e continuar aguardando
                 continue
               }
             }
@@ -357,9 +367,13 @@ export function registerExternalAgentTools(server: McpServer, deps: ExternalAgen
   //     a mesma ordem de entrega das mensagens normais.
   //
   // Estrutura Redis:
-  //   stream:  session:{session_id}:messages         (XADD pelo bridge)
+  //   stream:  session:{session_id}:stream           (XADD pelo bridge)
   //   grupo:   agent:{instance_id}                   (um por instância de agente)
   //   offset:  $ (standard) | 0 (conferência — lê histórico desde o join)
+  //
+  // ATENÇÃO: a chave do Stream é session:{id}:STREAM, não session:{id}:messages.
+  // session:{id}:messages é uma List (RPUSH/LRANGE) usada pelo channel-gateway
+  // para histórico de conversa — tipos incompatíveis na mesma chave causariam WRONGTYPE.
   //
   // TTL do stream: 4h (setado pelo bridge no XADD; renovado a cada mensagem).
   // O grupo é deletado automaticamente com a chave quando o TTL expira.
@@ -378,7 +392,9 @@ export function registerExternalAgentTools(server: McpServer, deps: ExternalAgen
 
         const { instance_id } = verifySessionTokenSafe(session_token)
 
-        const streamKey = `session:${session_id}:messages`
+        // ATENÇÃO: session:{id}:stream (não :messages) — :messages é uma List usada
+        // pelo channel-gateway para histórico. Tipos Redis incompatíveis → WRONGTYPE.
+        const streamKey = `session:${session_id}:stream`
         const groupName = `agent:${instance_id}`
 
         // ── Criar consumer group (idempotente) ───────────────────────────────
@@ -391,28 +407,27 @@ export function registerExternalAgentTools(server: McpServer, deps: ExternalAgen
         try {
           await redis.xgroup("CREATE", streamKey, groupName, startOffset, "MKSTREAM")
         } catch (e: unknown) {
-          if (e instanceof Error && e.message.includes("BUSYGROUP")) {
-            // Grupo já existe (chamada repetida / reconexão) — ok, continua
-          } else if (e instanceof Error && e.message.includes("WRONGTYPE")) {
-            // Chave existe como tipo incompatível (ex: List criado por implementação
-            // anterior à migração para Streams). Deletar e recriar como Stream.
-            await redis.del(streamKey)
-            await redis.xgroup("CREATE", streamKey, groupName, startOffset, "MKSTREAM")
-          } else {
-            throw e
-          }
+          // BUSYGROUP = grupo já existe (chamada repetida / reconexão) — ok
+          if (!(e instanceof Error) || !e.message.includes("BUSYGROUP")) throw e
         }
 
         // ── Bloquear até mensagem ou timeout ─────────────────────────────────
-        // XREADGROUP retorna null quando BLOCK expira sem mensagem.
-        // Formato de retorno: [[streamKey, [[id, [field, value, ...]]]]]
-        const timeoutMs = timeout_s * 1000
-        const xResult = await (redis as any).xreadgroup(
-          "GROUP", groupName, "consumer1",
-          "COUNT",  "1",
-          "BLOCK",  String(timeoutMs),
-          "STREAMS", streamKey, ">",
-        ) as Array<[string, Array<[string, string[]]>]> | null
+        // XREADGROUP BLOCK mantém a conexão Redis ocupada durante todo o timeout.
+        // Usar redis.duplicate() garante que o comando bloqueante não impeça outras
+        // tools de usar o cliente Redis compartilhado enquanto aguarda.
+        const timeoutMs   = timeout_s * 1000
+        const blockClient = redis.duplicate()
+        let xResult: Array<[string, Array<[string, string[]]>]> | null
+        try {
+          xResult = await (blockClient as any).xreadgroup(
+            "GROUP", groupName, "consumer1",
+            "COUNT",  "1",
+            "BLOCK",  String(timeoutMs),
+            "STREAMS", streamKey, ">",
+          ) as Array<[string, Array<[string, string[]]>]> | null
+        } finally {
+          blockClient.quit().catch(() => { /* non-fatal */ })
+        }
 
         if (!xResult || xResult.length === 0) {
           return mcpError(
@@ -440,7 +455,7 @@ export function registerExternalAgentTools(server: McpServer, deps: ExternalAgen
           item[fields[i]!] = fields[i + 1]!
         }
 
-        // ── ACK — confirma processamento ─────────────────────────────────────
+        // ── ACK — confirma processamento (cliente regular, não bloqueante) ─────
         // Permite que o stream faça GC de itens já processados por todos os grupos.
         redis.xack(streamKey, groupName, messageId).catch(() => { /* non-fatal */ })
 
