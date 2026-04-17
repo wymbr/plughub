@@ -374,8 +374,14 @@ export function registerExternalAgentTools(server: McpServer, deps: ExternalAgen
         try {
           await redis.xgroup("CREATE", streamKey, groupName, startOffset, "MKSTREAM")
         } catch (e: unknown) {
-          // BUSYGROUP = grupo já existe (chamada repetida / reconexão) — ok, continua
-          if (!(e instanceof Error) || !e.message.includes("BUSYGROUP")) {
+          if (e instanceof Error && e.message.includes("BUSYGROUP")) {
+            // Grupo já existe (chamada repetida / reconexão) — ok, continua
+          } else if (e instanceof Error && e.message.includes("WRONGTYPE")) {
+            // Chave existe como tipo incompatível (ex: List criado por implementação
+            // anterior à migração para Streams). Deletar e recriar como Stream.
+            await redis.del(streamKey)
+            await redis.xgroup("CREATE", streamKey, groupName, startOffset, "MKSTREAM")
+          } else {
             throw e
           }
         }

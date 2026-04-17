@@ -98,14 +98,21 @@ async function call(client, tool, params, clientTimeoutMs = 30_000) {
     undefined,                          // resultSchema — não usado
     { timeout: clientTimeoutMs },       // timeout do SDK, não da tool
   )
-  const raw  = result.content?.[0]?.text ?? "{}"
-  const data = JSON.parse(raw)
-  if (data.error) {
-    const e = new Error(data.message ?? data.error)
-    e.data  = data
+  const raw = result?.content?.[0]?.text ?? "{}"
+  let parsed
+  try { parsed = JSON.parse(raw) } catch { parsed = { raw } }
+  // Trata tanto isError (MCP protocol errors) quanto { error } (tool errors)
+  if (result?.isError) {
+    const e = new Error(`${tool} falhou: ${parsed.message ?? raw}`)
+    e.data  = parsed
     throw e
   }
-  return data
+  if (parsed.error) {
+    const e = new Error(parsed.message ?? parsed.error)
+    e.data  = parsed
+    throw e
+  }
+  return parsed
 }
 
 // ── Ciclo de conferência ──────────────────────────────────────────────────────
