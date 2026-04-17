@@ -261,9 +261,26 @@ export function registerExternalAgentTools(server: McpServer, deps: ExternalAgen
 
           if (result) {
             const [, raw] = result
-            let context_package: unknown
-            try   { context_package = JSON.parse(raw) }
+            let context_package: Record<string, unknown>
+            try   { context_package = JSON.parse(raw) as Record<string, unknown> }
             catch { context_package = { raw } }
+
+            // Validar que a sessão ainda existe no Redis.
+            // Protege contra context_packages obsoletos que ficaram na fila
+            // quando o agente foi reiniciado antes de consumi-los (race condition
+            // estrutural: o bridge faz LPUSH antes do agente consumir — não há
+            // contact_closed confiável para limpar a fila nesses casos).
+            // Se session:{session_id}:meta não existe, a sessão foi encerrada:
+            // descartar silenciosamente e continuar aguardando.
+            const sessionId = context_package["session_id"] as string | undefined
+            if (sessionId) {
+              const sessionMeta = await redis.get(`session:${sessionId}:meta`)
+              if (!sessionMeta) {
+                // Sessão não existe mais — descartar e continuar
+                continue
+              }
+            }
+
             return ok({ context_package })
           }
 

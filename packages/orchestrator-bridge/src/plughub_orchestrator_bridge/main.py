@@ -502,8 +502,9 @@ async def activate_external_mcp_agent(
             (channel_identity or {}).get("text", "Assistente"),
         )
 
+    context_package_json = json.dumps(context_package)
     try:
-        await redis_client.lpush(queue_key, json.dumps(context_package))
+        await redis_client.lpush(queue_key, context_package_json)
         logger.info(
             "External-MCP agent notified: session=%s instance=%s queue=%s",
             session_id, instance_id, queue_key,
@@ -535,6 +536,18 @@ async def activate_external_mcp_agent(
                         "snapshot":    json.loads(raw_inst),
                     }),
                 )
+
+            # Guardar o JSON do context_package para permitir LREM na limpeza.
+            # Se a sessão encerrar antes do agente consumir (ex: reinício do agente),
+            # o contact_closed handler usa este valor para remover o item da fila via
+            # LREM — evitando que o próximo agente consuma um context_package obsoleto.
+            # Chave com TTL curto (10min): se o agente consumir normalmente, a chave
+            # expira sozinha sem necessidade de limpeza ativa.
+            await redis_client.setex(
+                f"session:{session_id}:pending_queue:{instance_id}",
+                600,   # 10min — suficiente para o agente consumir (BLPOP típico < 2min)
+                context_package_json,
+            )
         except Exception as exc:
             logger.warning(
                 "Could not track external-mcp instance: session=%s instance=%s — %s",
@@ -1151,6 +1164,40 @@ async def process_contact_event(
                 logger.info(
                     "AI instance(s) restored on contact_closed: session=%s count=%d",
                     session_id, len(ai_members),
+                )
+
+            # ── Remover context_packages pendentes de agentes external-mcp ─────
+            # Quando a sessão encerra antes do agente consumir o context_package
+            # (ex: agente reiniciado entre LPUSH e BLPOP), o item fica obsoleto
+            # na fila. Usamos o JSON guardado em pending_queue para LREM exato.
+            # Sem isso, o próximo ciclo do agente consumiria um context_package
+            # de sessão inexistente. (Defesa adicional: wait_for_assignment valida
+            # session:meta antes de retornar — belt-and-suspenders.)
+            try:
+                pending_keys = await redis_client.keys(f"session:{session_id}:pending_queue:*")
+                for pk in pending_keys:
+                    inst_id = pk.split(":")[-1]
+                    pending_json = await redis_client.get(pk)
+                    if pending_json:
+                        tenant = "default"   # extrair do JSON para suporte multi-tenant
+                        try:
+                            pkg = json.loads(pending_json)
+                            tenant = pkg.get("tenant_id", tenant)
+                        except Exception:
+                            pass
+                        queue_key = f"{tenant}:agent:queue:{inst_id}"
+                        removed = await redis_client.lrem(queue_key, 0, pending_json)
+                        if removed:
+                            logger.info(
+                                "Removed stale context_package from queue: "
+                                "session=%s instance=%s removed=%d",
+                                session_id, inst_id, removed,
+                            )
+                    await redis_client.delete(pk)
+            except Exception as exc:
+                logger.warning(
+                    "Could not clean pending_queue on contact_closed: session=%s — %s",
+                    session_id, exc,
                 )
 
         else:
