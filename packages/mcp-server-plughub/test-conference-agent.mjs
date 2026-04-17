@@ -114,6 +114,10 @@ async function runCycle(client, session_token, cycleNum) {
   })
   ok("Assignment recebido", assignment)
 
+  // wait_for_assignment retorna { context_package: {...} }
+  // — os campos estão dentro de context_package, não no nível raiz.
+  const pkg = assignment.context_package ?? assignment
+
   const {
     session_id,
     contact_id,
@@ -121,7 +125,7 @@ async function runCycle(client, session_token, cycleNum) {
     participant_id,
     channel_identity,
     is_conference,
-  } = assignment
+  } = pkg
 
   if (!is_conference || !conference_id) {
     warn("Assignment sem conference_id — este agente é apenas para conferência.")
@@ -152,7 +156,7 @@ async function runCycle(client, session_token, cycleNum) {
       session_id,
       contact_id,
       text: `Olá! Sou o ${identity}. Em que posso ajudá-lo?`,
-      channel: assignment.channel ?? "chat",
+      channel: pkg.channel ?? "chat",
     })
     ok("Saudação enviada")
 
@@ -181,7 +185,7 @@ async function runCycle(client, session_token, cycleNum) {
       session_id,
       contact_id,
       text: `[${identity}] Entendido: "${msgText}". Vou verificar isso para você.`,
-      channel: assignment.channel ?? "chat",
+      channel: pkg.channel ?? "chat",
     })
     ok("Resposta enviada")
 

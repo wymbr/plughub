@@ -471,13 +471,6 @@ async def activate_external_mcp_agent(
     channel_identity = routing_result.get("channel_identity")  # dict | None
     queue_key        = f"{tenant_id}:agent:queue:{instance_id}"
 
-    # TEMP DEBUG — remove after confirming conference_id propagation
-    logger.info(
-        "DEBUG activate_external_mcp_agent: session=%s instance=%s "
-        "conference_id=%r routing_result_keys=%s",
-        session_id, instance_id, conference_id, list(routing_result.keys()),
-    )
-
     context_package: dict = {
         "session_id":    session_id,
         "contact_id":    customer_id,
@@ -573,13 +566,6 @@ async def process_routed(
     if not result.get("allocated"):
         logger.debug("Routing queued (not allocated): session=%s", session_id)
         return
-
-    # TEMP DEBUG — remove after confirming conference_id propagation
-    logger.info(
-        "DEBUG process_routed ALLOCATED: session=%s pool=%s agent=%s conference_id=%r",
-        session_id, result.get("pool_id"), result.get("agent_type_id"),
-        result.get("conference_id"),
-    )
 
     agent_type_id = result.get("agent_type_id", "")
     pool_id       = result.get("pool_id", "")
