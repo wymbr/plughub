@@ -241,6 +241,16 @@ export function registerExternalAgentTools(server: McpServer, deps: ExternalAgen
         const maxConcurrentRaw = await redis.hget(instanceKey, "max_concurrent_sessions") ?? "1"
         const currentSessRaw   = await redis.hget(instanceKey, "current_sessions") ?? "0"
 
+        // ── Wait-key (nonce de ciclo) ─────────────────────────────────────────
+        // Gerado uma vez por chamada wait_for_assignment (instance_id + timestamp).
+        // Gravado na instância Redis para que o bridge o inclua no context_package.
+        // Ao consumir um item da fila, wait_for_assignment verifica se a wait_key
+        // do context_package bate com a atual — itens obsoletos de reinícios
+        // anteriores têm wait_key diferente e são descartados automaticamente.
+        // Sem dependência de cleanup externo (session:closed, LREM, etc.).
+        const waitKey = `${instance_id}:${Date.now()}`
+        await redis.hset(instanceKey, "wait_key", waitKey)
+
         // Loop com heartbeats periódicos para manter o TTL do routing engine ativo.
         // O instance TTL do routing engine é 30s — o heartbeat a cada 15s garante
         // que o agente permaneça visível enquanto aguarda um contato.
@@ -273,22 +283,16 @@ export function registerExternalAgentTools(server: McpServer, deps: ExternalAgen
             try   { context_package = JSON.parse(raw) as Record<string, unknown> }
             catch { context_package = { raw } }
 
-            // Validar que a sessão ainda está ativa.
-            // Protege contra context_packages obsoletos que ficaram na fila
-            // quando o agente foi reiniciado antes de consumi-los (race condition
-            // estrutural: o bridge faz LPUSH antes do agente consumir).
-            //
-            // Usa session:{id}:closed (gravado pelo bridge no contact_closed) em
-            // vez de checar session:{id}:meta, porque meta tem TTL de 4h e persiste
-            // muito tempo após o encerramento — geraria falso-positivo.
-            // TTL do marcador: 4h (mesmo que meta) — cobre janela de itens obsoletos.
-            const sessionId = context_package["session_id"] as string | undefined
-            if (sessionId) {
-              const sessionClosed = await redis.get(`session:${sessionId}:closed`)
-              if (sessionClosed !== null) {
-                // Sessão já foi encerrada — descartar e continuar aguardando
-                continue
-              }
+            // ── Validar wait_key (nonce de ciclo) ────────────────────────────
+            // O bridge grava a wait_key atual da instância no context_package ao
+            // fazer LPUSH. Se o item foi enfileirado antes de um restart do agente,
+            // a wait_key do context_package não bate com a atual → descartar.
+            // Solução self-contained: não depende de cleanup externo (session:closed,
+            // LREM, etc.) — o nonce expira naturalmente com o ciclo.
+            const pkgWaitKey = context_package["wait_key"] as string | undefined
+            if (pkgWaitKey !== waitKey) {
+              // wait_key ausente (item pré-feature) ou diferente (restart anterior)
+              continue
             }
 
             return ok({ context_package })

@@ -471,6 +471,19 @@ async def activate_external_mcp_agent(
     channel_identity = routing_result.get("channel_identity")  # dict | None
     queue_key        = f"{tenant_id}:agent:queue:{instance_id}"
 
+    # Ler wait_key da instância — gravada pelo mcp-server no wait_for_assignment.
+    # Incluir no context_package para que wait_for_assignment possa rejeitar itens
+    # obsoletos (de reinícios anteriores) que têm wait_key diferente da atual.
+    wait_key = ""
+    if instance_id:
+        try:
+            raw_wait = await redis_client.hget(
+                f"{tenant_id}:agent:instance:{instance_id}", "wait_key"
+            )
+            wait_key = raw_wait or ""
+        except Exception:
+            pass
+
     context_package: dict = {
         "session_id":    session_id,
         "contact_id":    customer_id,
@@ -480,6 +493,11 @@ async def activate_external_mcp_agent(
         "instance_id":   instance_id,
         "pool_id":       pool_id,
         "assigned_at":   datetime.now(timezone.utc).isoformat(),
+        # wait_key: nonce de ciclo gerado pelo mcp-server no wait_for_assignment.
+        # wait_for_assignment rejeita itens cujo wait_key != wait_key atual da
+        # instância — elimina context_packages obsoletos de reinícios anteriores
+        # sem depender de cleanup externo.
+        "wait_key":      wait_key,
     }
 
     # ── Conferência — enriquecer context_package ──────────────────────────────
