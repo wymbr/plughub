@@ -21,7 +21,7 @@ RUN npm install && npm run build
 
 # Build agent-registry
 WORKDIR /app/packages/agent-registry
-RUN npm install && npm run build && npx prisma generate
+RUN npm install && NODE_OPTIONS="--max-old-space-size=4096" npm run build && npx prisma generate
 
 # ── Runtime stage ─────────────────────────────────────────────────────────────
 FROM node:20-slim AS runtime

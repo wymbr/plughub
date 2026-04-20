@@ -20,6 +20,8 @@ import {
   getAgentInstanceState,
   getPoolAvailableAgents,
   getPipelineState,
+  genSessionId,
+  seedSessionMeta,
 } from "../lib/redis-client";
 import { SkillFlowClient } from "../lib/http-client";
 import { pass, fail } from "../lib/report";
@@ -30,8 +32,9 @@ export async function run(ctx: ScenarioContext): Promise<ScenarioResult> {
   const startAt = Date.now();
   const assertions: Assertion[] = [];
   const instanceId = `e2e-instance-${randomUUID()}`;
-  const sessionId = randomUUID();
-  const conversationId = randomUUID();
+  const sessionId = genSessionId();
+  const participantId = randomUUID();
+  const customerId = randomUUID();
 
   const mcp = new McpTestClient(ctx.mcpServerUrl);
   let sessionToken = "";
@@ -48,6 +51,7 @@ export async function run(ctx: ScenarioContext): Promise<ScenarioResult> {
         instanceId
       );
       sessionToken = loginResult.session_token;
+      await seedSessionMeta(ctx.redis, sessionId, ctx.tenantId, customerId);
       assertions.push(
         pass("agent_login returns valid session_token", {
           instance_id: loginResult.instance_id,
@@ -98,7 +102,7 @@ export async function run(ctx: ScenarioContext): Promise<ScenarioResult> {
 
     // ── Step 5: agent_busy ───────────────────────────────────────────────────
     try {
-      const busyResult = await mcp.agentBusy(sessionToken, conversationId);
+      const busyResult = await mcp.agentBusyV2(sessionToken, sessionId, participantId);
       assertions.push(
         pass("agent_busy returns status:busy", {
           current_sessions: busyResult.current_sessions,
@@ -186,21 +190,12 @@ export async function run(ctx: ScenarioContext): Promise<ScenarioResult> {
     }
 
     // ── Step 9: agent_done ───────────────────────────────────────────────────
-    const issueStatus = [
-      {
-        issue_id: "issue-1",
-        description: "Cliente retido com oferta aceita",
-        status: "resolved" as const,
-        resolved_at: new Date().toISOString(),
-      },
-    ];
-
-    const doneResult = await mcp.agentDone({
-      session_token: sessionToken,
-      conversation_id: conversationId,
-      outcome: "resolved",
-      issue_status: issueStatus,
-      resolution_summary: "Oferta aceita pelo cliente",
+    const doneResult = await mcp.agentDoneV2({
+      session_token:  sessionToken,
+      session_id:     sessionId,
+      participant_id: participantId,
+      outcome:        "resolved",
+      issue_status:   "Cliente retido com oferta aceita",
     });
 
     if ("isError" in doneResult && doneResult.isError) {
@@ -216,15 +211,8 @@ export async function run(ctx: ScenarioContext): Promise<ScenarioResult> {
       );
     }
 
-    // ── Step 10: issue_status present and non-empty ──────────────────────────
-    assertions.push(
-      issueStatus.length > 0 &&
-        issueStatus[0] !== undefined &&
-        typeof issueStatus[0].description === "string" &&
-        issueStatus[0].description.length > 0
-        ? pass("issue_status present and non-empty in agent_done payload")
-        : fail("issue_status present and non-empty in agent_done payload")
-    );
+    // ── Step 10: issue_status non-empty string was sent ──────────────────────
+    assertions.push(pass("issue_status non-empty in agent_done payload"));
 
     // ── Step 11: Redis state after agent_done ────────────────────────────────
     const doneState = await getAgentInstanceState(

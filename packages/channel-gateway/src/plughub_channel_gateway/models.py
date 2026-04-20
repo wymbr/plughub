@@ -91,7 +91,7 @@ class NormalizedInboundEvent(BaseModel):
     session_id: str
     timestamp: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     direction: Literal["inbound"] = "inbound"
-    channel: Literal["chat"] = "chat"
+    channel: Literal["webchat"] = "webchat"
     author: MessageAuthor
     content: MessageContent
     context_snapshot: ContextSnapshot = Field(default_factory=ContextSnapshot)
@@ -103,7 +103,7 @@ class ContactOpenEvent(BaseModel):
     event_type: Literal["contact_open"] = "contact_open"
     contact_id: str
     session_id: str
-    channel: Literal["chat"] = "chat"
+    channel: Literal["webchat"] = "webchat"
     started_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
 
@@ -111,7 +111,7 @@ class ContactClosedEvent(BaseModel):
     event_type: Literal["contact_closed"] = "contact_closed"
     contact_id: str
     session_id: str
-    channel: Literal["chat"] = "chat"
+    channel: Literal["webchat"] = "webchat"
     reason: Literal["agent_done", "client_disconnect", "timeout"]
     started_at: str
     ended_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())

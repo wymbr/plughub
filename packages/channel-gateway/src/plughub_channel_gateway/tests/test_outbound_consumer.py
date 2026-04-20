@@ -38,7 +38,7 @@ class TestDispatchFiltering:
     async def test_ignores_missing_contact_id(self, consumer, registry):
         payload = {
             "type": "message.text",
-            "channel": "chat",
+            "channel": "webchat",
             "text": "Olá",
         }
         await consumer._dispatch(payload)
@@ -48,7 +48,7 @@ class TestDispatchFiltering:
         payload = {
             "type": "unknown.event",
             "contact_id": "c1",
-            "channel": "chat",
+            "channel": "webchat",
         }
         await consumer._dispatch(payload)
         registry.send.assert_not_called()
@@ -59,7 +59,7 @@ class TestMessageTextDispatch:
         payload = {
             "type": "message.text",
             "contact_id": "c1",
-            "channel": "chat",
+            "channel": "webchat",
             "message_id": "msg-001",
             "author": {"type": "agent_ai"},
             "text": "Posso ajudar com sua solicitação.",
@@ -79,7 +79,7 @@ class TestMessageTextDispatch:
         payload = {
             "type": "message.text",
             "contact_id": "c1",
-            "channel": "chat",
+            "channel": "webchat",
         }
         await consumer._dispatch(payload)
         registry.send.assert_called_once()
@@ -93,7 +93,7 @@ class TestMenuPayloadDispatch:
         payload = {
             "type": "menu.payload",
             "contact_id": "c1",
-            "channel": "chat",
+            "channel": "webchat",
             "menu_id": "menu-001",
             "interaction": "button",
             "prompt": "Deseja continuar?",
@@ -112,7 +112,7 @@ class TestMenuPayloadDispatch:
         payload = {
             "type": "menu.payload",
             "contact_id": "c1",
-            "channel": "chat",
+            "channel": "webchat",
             "menu_id": "form-001",
             "interaction": "form",
             "prompt": "Preencha seus dados:",
@@ -129,7 +129,7 @@ class TestMenuPayloadDispatch:
         payload = {
             "type": "menu.payload",
             "contact_id": "c1",
-            "channel": "chat",
+            "channel": "webchat",
             "menu_id": "menu-text",
             "interaction": "text",
             "prompt": "Digite sua resposta:",
@@ -144,7 +144,7 @@ class TestAgentTypingDispatch:
         payload = {
             "type": "agent.typing",
             "contact_id": "c1",
-            "channel": "chat",
+            "channel": "webchat",
             "author_type": "agent_ai",
         }
         await consumer._dispatch(payload)
@@ -158,7 +158,7 @@ class TestAgentTypingDispatch:
         payload = {
             "type": "agent.typing",
             "contact_id": "c1",
-            "channel": "chat",
+            "channel": "webchat",
         }
         await consumer._dispatch(payload)
         _, ws_payload = registry.send.call_args.args
@@ -170,7 +170,7 @@ class TestSessionClosedDispatch:
         payload = {
             "type": "session.closed",
             "contact_id": "c1",
-            "channel": "chat",
+            "channel": "webchat",
             "reason": "agent_done",
         }
         await consumer._dispatch(payload)
@@ -184,7 +184,7 @@ class TestSessionClosedDispatch:
         payload = {
             "type": "session.closed",
             "contact_id": "c1",
-            "channel": "chat",
+            "channel": "webchat",
         }
         await consumer._dispatch(payload)
         _, ws_payload = registry.send.call_args.args
@@ -198,7 +198,7 @@ class TestDispatchErrorHandling:
         payload = {
             "type": "message.text",
             "contact_id": "c1",
-            "channel": "chat",
+            "channel": "webchat",
             "message_id": "m1",
             "author": {},
             "text": "Olá",

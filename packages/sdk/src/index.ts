@@ -61,3 +61,12 @@ export type {
   PortabilityReport,
   PortabilityCheck,
 }                                      from "./portability"
+
+// ── Interceptação MCP (em-processo) ──────────
+export { McpInterceptor }              from "./mcp-interceptor"
+export type {
+  McpInterceptorConfig,
+  McpDelegate,
+  CallOptions,
+  McpInterceptorError,
+}                                      from "./mcp-interceptor"

@@ -28,6 +28,8 @@ import {
   getPipelineState,
   setPipelineState,
   getAgentInstanceState,
+  genSessionId,
+  seedSessionMeta,
 } from "../lib/redis-client";
 import { SkillFlowClient } from "../lib/http-client";
 import {
@@ -84,8 +86,8 @@ export async function run(ctx: ScenarioContext): Promise<ScenarioResult> {
   const startAt = Date.now();
   const assertions: Assertion[] = [];
   const instanceId = `e2e-instance-${randomUUID()}`;
-  const sessionId = randomUUID();
-  const conversationId = randomUUID();
+  const sessionId = genSessionId();
+  const participantId = randomUUID();
   const skillId = "skill_retencao_oferta_v1";
 
   const mcp = new McpTestClient(ctx.mcpServerUrl);
@@ -103,8 +105,9 @@ export async function run(ctx: ScenarioContext): Promise<ScenarioResult> {
         instanceId
       );
       sessionToken = loginResult.session_token;
+      await seedSessionMeta(ctx.redis, sessionId, ctx.tenantId, randomUUID());
       await mcp.agentReady(sessionToken);
-      await mcp.agentBusy(sessionToken, conversationId);
+      await mcp.agentBusyV2(sessionToken, sessionId, participantId);
     } catch (err) {
       return buildResult(
         [fail("login/ready/busy setup", String(err))],

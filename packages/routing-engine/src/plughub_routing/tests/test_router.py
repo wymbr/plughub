@@ -17,7 +17,7 @@ def make_event(**kwargs) -> ConversationInboundEvent:
         "session_id":  "session-001",
         "tenant_id":   "tenant_test",
         "customer_id": "customer-001",
-        "channel":     "chat",
+        "channel":     "webchat",
         "confidence":  0.90,
         "customer_profile": CustomerProfile(),
         "started_at":  "2026-03-16T14:00:00Z",
@@ -46,7 +46,7 @@ def make_pool() -> PoolConfig:
     return PoolConfig(
         pool_id="retencao_humano",
         tenant_id="tenant_test",
-        channel_types=["chat", "whatsapp"],
+        channel_types=["webchat", "whatsapp"],
         sla_target_ms=480_000,
         routing_expression=RoutingExpression(),
     )

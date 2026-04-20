@@ -22,7 +22,7 @@ def _pool(pool_id: str = "retencao_humano", channel_types=None, **kwargs) -> Poo
     return PoolConfig(
         pool_id            = pool_id,
         tenant_id          = "tenant_test",
-        channel_types      = channel_types or ["voice", "chat"],
+        channel_types      = channel_types or ["voice", "webchat"],
         sla_target_ms      = 480_000,
         routing_expression = RoutingExpression(
             weight_sla=1.0, weight_wait=0.8,
@@ -132,9 +132,9 @@ class TestChatWhatsAppSaturation:
         Spec 3.3a: "Wait message + async callback option."
         """
         handler = SaturationHandler()
-        pool = _pool(channel_types=["chat"])
+        pool = _pool(channel_types=["webchat"])
 
-        action = handler.handle("chat", 1.3, pool, _profile())
+        action = handler.handle("webchat", 1.3, pool, _profile())
 
         assert action.action_type == "queue_with_callback"
         assert action.alert_keda   is False
@@ -154,9 +154,9 @@ class TestChatWhatsAppSaturation:
     def test_estimated_eta_is_150_percent_of_sla_target(self):
         """Estimated ETA = sla_target_ms × 1.5 for chat and voice."""
         handler = SaturationHandler()
-        pool = _pool(channel_types=["chat"])  # sla_target_ms = 480_000
+        pool = _pool(channel_types=["webchat"])  # sla_target_ms = 480_000
 
-        action = handler.handle("chat", 1.0, pool, _profile())
+        action = handler.handle("webchat", 1.0, pool, _profile())
 
         assert action.estimated_eta_ms == int(480_000 * 1.5)
 

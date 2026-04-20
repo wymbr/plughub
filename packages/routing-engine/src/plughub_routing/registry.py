@@ -21,6 +21,7 @@ Redis key structure:
 
 from __future__ import annotations
 import json
+from datetime import datetime, timezone
 
 import redis.asyncio as aioredis
 
@@ -66,6 +67,10 @@ def _instance_meta_key(tenant_id: str, instance_id: str) -> str:
 def _instance_conversations_key(tenant_id: str, instance_id: str) -> str:
     """SET with no TTL of active conversation_ids on the instance. Used by CrashDetector."""
     return f"{tenant_id}:routing:instance:{instance_id}:conversations"
+
+def _pool_snapshot_key(tenant_id: str, pool_id: str) -> str:
+    """Operational snapshot — written by router after each routing event. TTL 120s."""
+    return f"{tenant_id}:pool:{pool_id}:snapshot"
 
 
 # ─────────────────────────────────────────────
@@ -362,6 +367,56 @@ class InstanceRegistry:
             except Exception:
                 continue
         return contacts
+
+    async def get_available_count(self, tenant_id: str, pool_id: str) -> int:
+        """Returns count of ready instances in the pool."""
+        return await self._redis.scard(_pool_instances_key(tenant_id, pool_id))
+
+    async def get_queue_length(self, tenant_id: str, pool_id: str) -> int:
+        """Returns the number of contacts waiting in the pool queue."""
+        return await self._redis.zcard(_queue_key(tenant_id, pool_id))
+
+    async def write_pool_snapshot(
+        self,
+        tenant_id:     str,
+        pool_id:       str,
+        sla_target_ms: int,
+        channel_types: list[str],
+        snapshot_ttl:  int = 120,
+    ) -> None:
+        """
+        Writes an operational pool snapshot to Redis after each routing event.
+        TTL: 120s — refreshed on every route() or dequeue() call.
+        Key: {tenant_id}:pool:{pool_id}:snapshot
+        """
+        available    = await self.get_available_count(tenant_id, pool_id)
+        queue_length = await self.get_queue_length(tenant_id, pool_id)
+        snapshot = {
+            "pool_id":       pool_id,
+            "tenant_id":     tenant_id,
+            "available":     available,
+            "queue_length":  queue_length,
+            "sla_target_ms": sla_target_ms,
+            "channel_types": channel_types,
+            "updated_at":    datetime.now(timezone.utc).isoformat(),
+        }
+        await self._redis.set(
+            _pool_snapshot_key(tenant_id, pool_id),
+            json.dumps(snapshot),
+            ex=snapshot_ttl,
+        )
+
+    async def get_pool_snapshot(
+        self, tenant_id: str, pool_id: str
+    ) -> dict | None:
+        """Returns the most recent operational snapshot for a pool."""
+        raw = await self._redis.get(_pool_snapshot_key(tenant_id, pool_id))
+        if not raw:
+            return None
+        try:
+            return json.loads(raw)
+        except Exception:
+            return None
 
 
 # ─────────────────────────────────────────────

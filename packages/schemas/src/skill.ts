@@ -94,9 +94,19 @@ const ConditionSchema = z.object({
 // ── Os 8 tipos de step ──
 
 export const TaskStepSchema = z.object({
-  id:             z.string(),
-  type:           z.literal("task"),
-  target:         TaskTargetSchema,
+  id:     z.string(),
+  type:   z.literal("task"),
+  target: TaskTargetSchema,
+
+  /**
+   * Modo de delegação da tarefa:
+   *   assist   → session_invite: especialista entra como participante paralelo
+   *              (role: "specialist"). Sessão continua com múltiplos agentes.
+   *   transfer → session_escalate: handoff completo para outro agente/pool.
+   *              Agente atual é removido da sessão ao confirmar a transferência.
+   */
+  mode: z.enum(["assist", "transfer"]).default("transfer"),
+
   /**
    * sync  — fire-and-poll: engine aguarda conclusão na mesma chamada.
    * async — fire-and-return: engine persiste job_id e retorna; webhook via
@@ -201,42 +211,54 @@ export const NotifyStepSchema = z.object({
 })
 
 /**
- * MenuStep — sends a prompt to the customer and suspends until a reply arrives.
- * Spec: PlugHub v24.0 seção 4.7 — step type "menu"
+ * MenuStep — envia um prompt ao cliente e suspende a execução até receber resposta.
+ * Spec: plughub_spec_v1.docx seção 9 — step type "menu"
  *
- * The channel-gateway is responsible for rendering buttons/lists when the
- * channel supports it. skill-flow always receives a single normalised text
- * result regardless of how many channel turns were needed.
+ * O Channel Gateway é responsável por renderizar botões/listas quando o canal
+ * suporta. O Skill Flow Engine sempre recebe um único interaction_result
+ * normalizado, independentemente de quantos turnos de canal foram necessários.
  *
- * Timeout: if no customer response arrives within timeout_s seconds (default 300 = 5 min),
- * execution transitions to on_timeout (falls back to on_failure if not set).
- * Set timeout_s = 0 to wait indefinitely — the menu will block until the customer
- * replies or disconnects (session idle timeout triggers on_disconnect naturally).
+ * Semântica do timeout_s:
+ *   0    → retorno imediato — não aguarda resposta (fire-and-forget)
+ *   > 0  → bloqueia N segundos; se não houver resposta, transita para on_timeout
+ *   -1   → bloqueia indefinidamente — só avança quando o cliente responder
+ *          ou quando a sessão expirar (TTL do Redis aciona on_disconnect)
+ *
+ * Default: 300 (5 min).
  */
 export const MenuStepSchema = z.object({
-  id:           z.string(),
-  type:         z.literal("menu"),
-  /** Question / prompt sent to the customer before waiting for their reply */
-  prompt:       z.string().min(1),
-  interaction:  z.enum(["text", "button", "list", "checklist", "form"]).default("text"),
-  /** Optional list of choices (used by button/list/checklist interactions) */
-  options:      z.array(z.object({
+  id:          z.string(),
+  type:        z.literal("menu"),
+  /** Prompt enviado ao cliente antes de aguardar a resposta */
+  prompt:      z.string().min(1),
+  interaction: z.enum(["text", "button", "list", "checklist", "form"]).default("text"),
+  /** Opções de interação (button/list/checklist) */
+  options:     z.array(z.object({
     id:    z.string(),
     label: z.string(),
   })).optional(),
-  /** Key to store the customer's reply in pipeline_state.results */
-  output_as:    z.string().optional(),
+  /** Campos de formulário (form) */
+  fields: z.array(z.object({
+    id:       z.string(),
+    label:    z.string(),
+    type:     z.string(),
+    required: z.boolean().default(false),
+  })).optional(),
+  /** Chave para armazenar a resposta do cliente em pipeline_state.results */
+  output_as: z.string().optional(),
   /**
-   * How long to wait for a reply before timing out (seconds).
-   * 0 = wait indefinitely — session idle timeout triggers on_disconnect.
-   * Default: 300 (5 min).
+   * Tempo limite para aguardar a resposta (segundos).
+   *   0  → retorno imediato (sem espera)
+   *  >0  → bloqueia N segundos
+   *  -1  → bloqueia indefinidamente
+   * Default: 300
    */
-  timeout_s:    z.number().int().min(0).default(300),
+  timeout_s:     z.number().int().min(-1).default(300),
   on_success:    z.string(),
   on_failure:    z.string(),
-  /** Step to go to on timeout — defaults to on_failure if not specified */
+  /** Step para timeout — usa on_failure se não especificado */
   on_timeout:    z.string().optional(),
-  /** Step to go to when the customer disconnects mid-wait — defaults to on_failure if not specified */
+  /** Step para desconexão do cliente — usa on_failure se não especificado */
   on_disconnect: z.string().optional(),
 })
 

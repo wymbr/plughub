@@ -17,12 +17,18 @@ import { z }             from "zod"
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 import type { KafkaProducer }  from "../infra/kafka"
 import type { PostgresClient } from "../infra/postgres"
+import type { RedisClient }    from "../infra/redis"
+import {
+  verifySessionToken,
+  InvalidTokenError,
+} from "../infra/jwt"
 
 // ─── Dependências injetadas ───────────────────────────────────────────────────
 
 export interface EvaluationDeps {
   kafka:       KafkaProducer
   postgres:    PostgresClient
+  redis:       RedisClient
   /** URL do proxy sidecar MCP para chamadas requires_context */
   proxyUrl:    string
   /** URL do Skill Registry para carregar evaluation skills */
@@ -287,10 +293,41 @@ function calculateScores(
   return { scores, itemsExcluded }
 }
 
+// ─── Schemas — Session Replayer tools ────────────────────────────────────────
+
+const EvaluationContextGetInputSchema = z.object({
+  session_token:  z.string().min(1),
+  session_id:     z.string().min(1),
+  participant_id: z.string().uuid(),
+})
+
+const EvaluationDimensionInputSchema = z.object({
+  dimension_id: z.string().min(1),
+  name:         z.string().min(1),
+  score:        z.number().min(0).max(10),
+  weight:       z.number().min(0).max(1).default(1),
+  notes:        z.string().optional(),
+  flags:        z.array(z.string()).default([]),
+})
+
+const EvaluationSubmitInputSchema = z.object({
+  session_token:      z.string().min(1),
+  session_id:         z.string().min(1),
+  participant_id:     z.string().uuid(),
+  evaluation_id:      z.string().uuid(),
+  composite_score:    z.number().min(0).max(10),
+  dimensions:         z.array(EvaluationDimensionInputSchema).default([]),
+  summary:            z.string().min(1),
+  highlights:         z.array(z.string()).default([]),
+  improvement_points: z.array(z.string()).default([]),
+  compliance_flags:   z.array(z.string()).default([]),
+  is_benchmark:       z.boolean().default(false),
+})
+
 // ─── Registro das tools ───────────────────────────────────────────────────────
 
 export function registerEvaluationTools(server: McpServer, deps: EvaluationDeps): void {
-  const { kafka, postgres, proxyUrl, skillRegistryUrl } = deps
+  const { kafka, postgres, redis, proxyUrl, skillRegistryUrl } = deps
 
   // ── transcript_get ────────────────────────────────────────────────────────
   server.tool(
@@ -507,6 +544,154 @@ export function registerEvaluationTools(server: McpServer, deps: EvaluationDeps)
         await kafka.publish("evaluation.results", event)
 
         return ok({ evaluation_id, evaluated_at, sections_scored: scores.length })
+      } catch (e) {
+        return handleCaughtError(e)
+      }
+    }
+  )
+
+  // ── evaluation_context_get (Session Replayer) ─────────────────────────────
+  server.tool(
+    "evaluation_context_get",
+    "Retorna o ReplayContext completo para avaliação de qualidade pós-sessão. " +
+    "Inclui todos os eventos do stream com original_content desmascarado, " +
+    "sentimento, participantes e metadados da sessão original. " +
+    "Disponível apenas para agentes com role evaluator ou reviewer. " +
+    "Requer que o Session Replayer tenha processado a sessão previamente. " +
+    "Spec: Session Replayer.",
+    EvaluationContextGetInputSchema.shape as any,
+    async (input: Record<string, unknown>) => {
+      try {
+        const { session_token, session_id, participant_id } =
+          EvaluationContextGetInputSchema.parse(input)
+
+        const { tenant_id } = verifySessionToken(session_token)
+
+        // Verifica role do participante
+        let role = ""
+        try {
+          const roleRaw = await redis.hget(
+            `${tenant_id}:agent:instance:${participant_id}`,
+            "role"
+          )
+          if (roleRaw) role = roleRaw
+        } catch { /* non-fatal */ }
+
+        if (role && role !== "evaluator" && role !== "reviewer") {
+          return mcpError(
+            "unauthorized",
+            `evaluation_context_get requer role evaluator ou reviewer (atual: ${role || "unknown"})`
+          )
+        }
+
+        // Lê ReplayContext do Redis — escrito pelo Replayer
+        const contextKey = `${tenant_id}:replay:${session_id}:context`
+        const raw = await redis.get(contextKey)
+
+        if (!raw) {
+          return mcpError(
+            "replay_not_ready",
+            `ReplayContext não encontrado para sessão '${session_id}'. ` +
+            "O Session Replayer pode ainda não ter processado esta sessão."
+          )
+        }
+
+        let context: unknown
+        try {
+          context = JSON.parse(raw)
+        } catch {
+          return mcpError("parse_error", "ReplayContext inválido no Redis")
+        }
+
+        return ok({
+          session_id,
+          participant_id,
+          context,
+          retrieved_at: new Date().toISOString(),
+        })
+      } catch (e) {
+        return handleCaughtError(e)
+      }
+    }
+  )
+
+  // ── evaluation_submit (Session Replayer) ──────────────────────────────────
+  server.tool(
+    "evaluation_submit",
+    "Submete o resultado de avaliação de qualidade pós-sessão. " +
+    "Publica EvaluationResult em evaluation.events (Kafka). " +
+    "A persistência no PostgreSQL é responsabilidade de um consumer dedicado — " +
+    "esta tool nunca escreve diretamente no banco. " +
+    "Reduz o TTL do ReplayContext no Redis após submissão. " +
+    "Spec: Session Replayer.",
+    EvaluationSubmitInputSchema.shape as any,
+    async (input: Record<string, unknown>) => {
+      try {
+        const parsed = EvaluationSubmitInputSchema.parse(input)
+        const {
+          session_token, session_id, participant_id, evaluation_id,
+          composite_score, dimensions, summary, highlights,
+          improvement_points, compliance_flags, is_benchmark,
+        } = parsed
+
+        const { tenant_id } = verifySessionToken(session_token)
+
+        // Lê agent_type_id do avaliador
+        let agent_type_id = "evaluator_unknown"
+        try {
+          const typeRaw = await redis.hget(
+            `${tenant_id}:agent:instance:${participant_id}`,
+            "agent_type_id"
+          )
+          if (typeRaw) agent_type_id = typeRaw
+        } catch { /* non-fatal */ }
+
+        // Lê outcome da sessão original do ReplayContext
+        let session_outcome: string | undefined
+        try {
+          const ctxRaw = await redis.get(`${tenant_id}:replay:${session_id}:context`)
+          if (ctxRaw) {
+            const ctx  = JSON.parse(ctxRaw) as Record<string, unknown>
+            const meta = ctx["session_meta"] as Record<string, unknown> | undefined
+            session_outcome = meta?.["outcome"] as string | undefined
+          }
+        } catch { /* non-fatal */ }
+
+        const evaluated_at = new Date().toISOString()
+
+        const result = {
+          event_type:         "evaluation.completed",
+          evaluation_id,
+          session_id,
+          tenant_id,
+          evaluator_id:       participant_id,
+          agent_type_id,
+          composite_score,
+          dimensions,
+          summary,
+          highlights,
+          improvement_points,
+          compliance_flags,
+          session_outcome,
+          is_benchmark,
+          evaluated_at,
+        }
+
+        // Publica em evaluation.events — consumer persiste no PostgreSQL
+        await kafka.publish("evaluation.events", result)
+
+        // Reduz TTL do ReplayContext — já foi consumido
+        try {
+          await redis.expire(`${tenant_id}:replay:${session_id}:context`, 60)
+        } catch { /* non-fatal */ }
+
+        return ok({
+          submitted:      true,
+          evaluation_id,
+          session_id,
+          composite_score,
+          evaluated_at,
+        })
       } catch (e) {
         return handleCaughtError(e)
       }

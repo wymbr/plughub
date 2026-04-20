@@ -19,7 +19,10 @@ import type { ScenarioContext, ScenarioResult, Assertion } from "./types";
 import { McpTestClient } from "../lib/mcp-client";
 import {
   writeAiSessionState,
+  writeTurnParams,
   getAgentInstanceState,
+  genSessionId,
+  seedSessionMeta,
 } from "../lib/redis-client";
 import { RulesEngineClient } from "../lib/http-client";
 import { pass, fail } from "../lib/report";
@@ -28,8 +31,8 @@ export async function run(ctx: ScenarioContext): Promise<ScenarioResult> {
   const startAt = Date.now();
   const assertions: Assertion[] = [];
   const instanceId = `e2e-instance-${randomUUID()}`;
-  const sessionId = randomUUID();
-  const conversationId = randomUUID();
+  const sessionId = genSessionId();
+  const participantId = randomUUID();
   const ruleId = `rule_e2e_sentiment_${randomUUID().slice(0, 8)}`;
 
   const mcp = new McpTestClient(ctx.mcpServerUrl);
@@ -47,8 +50,9 @@ export async function run(ctx: ScenarioContext): Promise<ScenarioResult> {
         instanceId
       );
       sessionToken = loginResult.session_token;
+      await seedSessionMeta(ctx.redis, sessionId, ctx.tenantId, randomUUID());
       await mcp.agentReady(sessionToken);
-      await mcp.agentBusy(sessionToken, conversationId);
+      await mcp.agentBusyV2(sessionToken, sessionId, participantId);
     } catch (err) {
       return buildResult(
         [fail("login/ready/busy setup", String(err))],
@@ -129,6 +133,15 @@ export async function run(ctx: ScenarioContext): Promise<ScenarioResult> {
       [],    // flags
       3600
     );
+
+    // ── Write turn params — primary key read by Rules Engine /evaluate ─────────
+    // Key: {tenantId}:session:{sessionId}:turn:{turnId}:params
+    await writeTurnParams(ctx.redis, ctx.tenantId, sessionId, "turn_1", {
+      sentiment_score: -0.7,
+      confidence:      0.5,
+      intent:          "retention",
+      flags:           [],
+    });
 
     // ── Verify agent session still active before escalation ──────────────────
     const instanceStateBeforeEval = await getAgentInstanceState(

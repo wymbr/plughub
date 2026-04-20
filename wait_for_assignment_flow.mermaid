@@ -1,0 +1,79 @@
+sequenceDiagram
+    autonumber
+
+    participant AG  as Agente Externo<br/>(test-conference-agent)
+    participant MCP as mcp-server-plughub<br/>(external-agent.ts)
+    participant RDS as Redis
+    participant KFK as Kafka
+    participant RE  as Routing Engine<br/>(Python)
+    participant BR  as Orchestrator Bridge<br/>(Python)
+    participant CG  as Channel Gateway<br/>— ou trigger —
+
+    Note over AG,CG: ── FASE 1: Agente se registra e aguarda ──────────────────────────────────────
+
+    AG->>MCP: wait_for_assignment(session_token, timeout_s=120)
+
+    MCP->>MCP: gera wait_key = "especialista-001:1713356789"
+    MCP->>RDS: HSET default:agent:instance:especialista-001<br/>wait_key = "especialista-001:1713356789"
+
+    loop a cada 15s (HEARTBEAT_INTERVAL_S)
+        MCP->>RDS: BLPOP default:agent:queue:especialista-001 15s<br/>(duplicate connection — não bloqueia outros tools)
+        Note right of RDS: timeout → sem contato
+        MCP->>KFK: PUBLISH agent.lifecycle<br/>{event:"agent_heartbeat", instance_id, agent_type_id,<br/>pools, status:"ready", ...}
+        KFK-->>RE: consome agent_heartbeat
+        RE->>RDS: renova TTL da instância (30s)<br/>garante visibilidade no pool
+    end
+
+    Note over AG,CG: ── FASE 2: Contato chega ─────────────────────────────────────────────────────
+
+    alt Contato normal (cliente conecta via WebSocket)
+        CG->>RDS: SETEX session:{id}:meta<br/>{customer_id, channel, tenant_id, ...}  TTL 4h
+        CG->>KFK: PUBLISH conversations.inbound<br/>{session_id, tenant_id, pool_id, customer_id, ...}
+    else Conferência (trigger agent_join_conference)
+        AG->>MCP: agent_join_conference(session_id, agent_type_id, pool_id)
+        MCP->>RDS: SET conference:{id}:participant:{pid} (metadata)
+        MCP->>RDS: SET session:{id}:conference_id = conference_id
+        MCP->>KFK: PUBLISH conversations.inbound<br/>{session_id, pool_id, agent_type_id,<br/>conference_id, channel_identity, ...}
+        MCP-->>AG: {conference_id, participant_id, status:"joining"}
+    end
+
+    Note over AG,CG: ── FASE 3: Routing Engine roteia ──────────────────────────────────────────────
+
+    KFK-->>RE: consome conversations.inbound
+    RE->>RDS: SMEMBERS default:pool:especialista_ia:instances
+    Note right of RE: filtra por agent_type_id se presente<br/>(conferência restringe ao tipo declarado)
+    RE->>RDS: HGETALL default:agent:instance:especialista-001<br/>verifica: status=ready, current_sessions < max
+    RE->>RDS: HMSET default:agent:instance:especialista-001<br/>status=busy, current_sessions++
+    RE->>KFK: PUBLISH conversations.routed<br/>{session_id, result:{allocated:true,<br/>instance_id, agent_type_id, pool_id,<br/>conference_id?, channel_identity?}}
+
+    Note over AG,CG: ── FASE 4: Bridge ativa o agente ──────────────────────────────────────────────
+
+    KFK-->>BR: consome conversations.routed
+    BR->>BR: result.allocated == True?<br/>framework == "external-mcp"?
+
+    BR->>RDS: HGET default:agent:instance:especialista-001 wait_key
+    Note right of RDS: retorna "especialista-001:1713356789"
+
+    BR->>BR: monta context_package =<br/>{session_id, contact_id, tenant_id,<br/>agent_type_id, pool_id, assigned_at,<br/>wait_key: "especialista-001:1713356789",<br/>is_conference, conference_id?,<br/>channel_identity?, participant_id?}
+
+    BR->>RDS: LPUSH default:agent:queue:especialista-001<br/>JSON(context_package)
+    BR->>RDS: SADD session:{id}:ai_agents "especialista-001"
+    BR->>RDS: SETEX session:{id}:routing:especialista-001<br/>{snapshot da instância para restore no contact_closed}
+    BR->>RDS: SETEX session:{id}:pending_queue:especialista-001<br/>JSON(context_package)  TTL 10min<br/>(para LREM se sessão fechar antes do agente consumir)
+
+    Note over AG,CG: ── FASE 5: BLPOP retorna e valida wait_key ───────────────────────────────────
+
+    RDS-->>MCP: BLPOP retorna [queue_key, JSON(context_package)]
+    MCP->>MCP: context_package.wait_key == waitKey?
+    alt wait_key diverge (item obsoleto de restart anterior)
+        Note over MCP: descarta silenciosamente → continue no loop
+    else wait_key bate
+        MCP-->>AG: return {context_package}
+    end
+
+    Note over AG,CG: ── FASE 6: Agente inicia atendimento ─────────────────────────────────────────
+
+    AG->>MCP: agent_busy(session_token, conversation_id=session_id)
+    AG->>MCP: send_message(text="Olá! Como posso ajudar?")
+    AG->>MCP: wait_for_message(session_id, timeout_s=120, conference_id?)
+    Note over AG,MCP: XREADGROUP BLOCK em session:{id}:stream<br/>(duplicate connection — não bloqueia outros tools)

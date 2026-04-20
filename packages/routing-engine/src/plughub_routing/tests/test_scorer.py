@@ -20,7 +20,7 @@ from ..models import (
 
 def make_pool(**kwargs) -> PoolConfig:
     defaults = dict(
-        pool_id="p1", tenant_id="t1", channel_types=["chat"],
+        pool_id="p1", tenant_id="t1", channel_types=["webchat"],
         sla_target_ms=480_000, competency_weights={},
         aging_factor=0.4, breach_factor=0.8,
     )
@@ -40,7 +40,7 @@ def make_instance(profile: dict) -> AgentInstance:
 def make_event(requirements: dict, confidence: float = 0.9) -> ConversationInboundEvent:
     return ConversationInboundEvent(
         session_id="s1", tenant_id="t1", customer_id="c1",
-        channel="chat", confidence=confidence,
+        channel="webchat", confidence=confidence,
         customer_profile=CustomerProfile(),
         requirements=requirements,
         started_at="2026-03-16T14:00:00Z",

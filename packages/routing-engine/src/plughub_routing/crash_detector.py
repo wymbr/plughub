@@ -202,7 +202,7 @@ class CrashDetector:
                 "session_id":    conversation_id,
                 "tenant_id":     tenant_id,
                 "customer_id":   "",
-                "channel":       "chat",
+                "channel":       "webchat",
                 "started_at":    datetime.now(timezone.utc).isoformat(),
                 "elapsed_ms":    0,
                 # Direct hints for the Router — avoids rescoring and misrouting

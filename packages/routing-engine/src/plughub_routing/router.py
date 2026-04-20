@@ -6,7 +6,10 @@ Spec: PlugHub v24.0 section 3.3b
 
 from __future__ import annotations
 import asyncio
+import json
+import logging
 from datetime import datetime, timezone
+from typing import TYPE_CHECKING
 
 from .models import (
     ConversationInboundEvent,
@@ -25,6 +28,11 @@ from .scorer import (
 from .registry import InstanceRegistry, PoolRegistry
 from .config import get_settings
 
+if TYPE_CHECKING:
+    from aiokafka import AIOKafkaProducer
+
+logger = logging.getLogger("plughub.routing.router")
+
 
 class Router:
     def __init__(
@@ -32,11 +40,15 @@ class Router:
         instance_registry: InstanceRegistry,
         pool_registry:     PoolRegistry,
         local_site:        str = "site_local",
+        kafka_producer:    "AIOKafkaProducer | None" = None,
+        kafka_topic_queue_positions: str = "queue.position_updated",
     ) -> None:
-        self._instances  = instance_registry
-        self._pools      = pool_registry
-        self._local_site = local_site
-        self._settings   = get_settings()
+        self._instances       = instance_registry
+        self._pools           = pool_registry
+        self._local_site      = local_site
+        self._settings        = get_settings()
+        self._producer        = kafka_producer
+        self._topic_positions = kafka_topic_queue_positions
 
     # ─────────────────────────────────────────────
     # SCENARIO 1 — Contact arrives
@@ -77,6 +89,12 @@ class Router:
                 timeout=self._settings.routing_timeout_ms / 1000,
             )
             if result.allocated:
+                # Fire-and-forget snapshot update after successful allocation
+                if pools:
+                    _matched = next((p for p in pools if p.pool_id == result.pool_id), pools[0])
+                    asyncio.create_task(
+                        self._write_snapshot(event.tenant_id, _matched.pool_id, _matched)
+                    )
                 return result
         except asyncio.TimeoutError:
             pass
@@ -96,7 +114,78 @@ class Router:
             except asyncio.TimeoutError:
                 continue
 
-        return self._build_queued_result(event, now)
+        # Contact could not be allocated — queued
+        queued_result = self._build_queued_result(event, now)
+
+        # Publish queue.position_updated so subscribers (UI, channel-gateway)
+        # can inform the customer of their queue position and estimated wait time.
+        if event.pool_id and pools:
+            _pool = next((p for p in pools if p.pool_id == event.pool_id), pools[0])
+            asyncio.create_task(self._publish_queue_position(event, _pool))
+            asyncio.create_task(self._write_snapshot(event.tenant_id, _pool.pool_id, _pool))
+
+        return queued_result
+
+    async def _publish_queue_position(
+        self,
+        event: ConversationInboundEvent,
+        pool:  PoolConfig,
+    ) -> None:
+        """
+        Publishes queue.position_updated to Kafka after a contact is queued.
+        Subscribers: channel-gateway (to inform customer), rules-engine, analytics.
+        """
+        if not self._producer:
+            return
+        try:
+            queue_length = await self._instances.get_queue_length(
+                event.tenant_id, pool.pool_id
+            )
+            available = await self._instances.get_available_count(
+                event.tenant_id, pool.pool_id
+            )
+            avg_handle_ms    = int(pool.sla_target_ms * 0.7)
+            estimated_wait_ms = queue_length * avg_handle_ms
+
+            payload = {
+                "event":              "queue.position_updated",
+                "tenant_id":          event.tenant_id,
+                "session_id":         event.session_id,
+                "pool_id":            pool.pool_id,
+                "queue_length":       queue_length,
+                "available_agents":   available,
+                "estimated_wait_ms":  estimated_wait_ms,
+                "sla_target_ms":      pool.sla_target_ms,
+                "published_at":       datetime.now(timezone.utc).isoformat(),
+            }
+            await self._producer.send_and_wait(
+                self._topic_positions,
+                value=json.dumps(payload).encode(),
+            )
+        except Exception as exc:
+            logger.warning(
+                "Failed to publish queue.position_updated for session %s: %s",
+                event.session_id, exc,
+            )
+
+    async def _write_snapshot(
+        self,
+        tenant_id: str,
+        pool_id:   str,
+        pool:      PoolConfig,
+    ) -> None:
+        """Writes pool operational snapshot to Redis after a routing event."""
+        try:
+            await self._instances.write_pool_snapshot(
+                tenant_id=     tenant_id,
+                pool_id=       pool_id,
+                sla_target_ms= pool.sla_target_ms,
+                channel_types= pool.channel_types,
+            )
+        except Exception as exc:
+            logger.warning(
+                "Failed to write pool snapshot for pool %s: %s", pool_id, exc
+            )
 
     async def _allocate(
         self,
@@ -282,7 +371,7 @@ def _contact_to_event(contact: QueuedContact) -> ConversationInboundEvent:
         session_id=contact.session_id,
         tenant_id=contact.tenant_id,
         customer_id="",
-        channel="chat",
+        channel="webchat",
         requirements=contact.requirements,
         started_at="",
     )

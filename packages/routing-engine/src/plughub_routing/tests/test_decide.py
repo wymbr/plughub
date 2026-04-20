@@ -41,7 +41,7 @@ def _pool(pool_id: str = "retencao_humano", **kwargs) -> PoolConfig:
     defaults = dict(
         pool_id       = pool_id,
         tenant_id     = "tenant_test",
-        channel_types = ["chat", "whatsapp"],
+        channel_types = ["webchat", "whatsapp"],
         sla_target_ms = 480_000,
         routing_expression = _expr(),
     )
@@ -117,7 +117,7 @@ class TestRoutingMode:
         )
         result = await decider.decide(
             conversation_id="c1", tenant_id="tenant_test",
-            intent="cancelamento", confidence=0.92, channel="chat",
+            intent="cancelamento", confidence=0.92, channel="webchat",
             customer_profile=_profile(),
         )
         assert result.mode == "autonomous"
@@ -131,7 +131,7 @@ class TestRoutingMode:
         )
         result = await decider.decide(
             conversation_id="c1", tenant_id="tenant_test",
-            intent="portabilidade", confidence=0.73, channel="chat",
+            intent="portabilidade", confidence=0.73, channel="webchat",
             customer_profile=_profile(),
         )
         assert result.mode == "hybrid"
@@ -145,7 +145,7 @@ class TestRoutingMode:
         )
         result = await decider.decide(
             conversation_id="c1", tenant_id="tenant_test",
-            intent="reclamacao", confidence=0.45, channel="chat",
+            intent="reclamacao", confidence=0.45, channel="webchat",
             customer_profile=_profile(),
         )
         assert result.mode == "supervised"
@@ -160,7 +160,7 @@ class TestRoutingMode:
         )
         result = await decider.decide(
             conversation_id="c1", tenant_id="tenant_test",
-            intent="fraude", confidence=0.95, channel="chat",
+            intent="fraude", confidence=0.95, channel="webchat",
             customer_profile=_profile(risk_flag=True),
         )
         assert result.mode == "supervised"
@@ -179,7 +179,7 @@ class TestAllocation:
         )
         result = await decider.decide(
             conversation_id="c1", tenant_id="tenant_test",
-            intent="cancelamento", confidence=0.90, channel="chat",
+            intent="cancelamento", confidence=0.90, channel="webchat",
             customer_profile=_profile(),
         )
         assert result.primary is not None
@@ -192,7 +192,7 @@ class TestAllocation:
         decider = _make_decider(pools=[], instances_by_pool={})
         result = await decider.decide(
             conversation_id="c1", tenant_id="tenant_test",
-            intent="cancelamento", confidence=0.90, channel="chat",
+            intent="cancelamento", confidence=0.90, channel="webchat",
             customer_profile=_profile(),
         )
         assert result.primary is None
@@ -206,7 +206,7 @@ class TestAllocation:
         )
         result = await decider.decide(
             conversation_id="c1", tenant_id="tenant_test",
-            intent="cancelamento", confidence=0.90, channel="chat",
+            intent="cancelamento", confidence=0.90, channel="webchat",
             customer_profile=_profile(),
         )
         assert result.primary is None
@@ -231,7 +231,7 @@ class TestAllocation:
         )
         result = await decider.decide(
             conversation_id="c1", tenant_id="tenant_test",
-            intent="cancelamento", confidence=0.90, channel="chat",
+            intent="cancelamento", confidence=0.90, channel="webchat",
             customer_profile=_profile(),
         )
         assert result.primary is not None
@@ -250,7 +250,7 @@ class TestAllocation:
         )
         result = await decider.decide(
             conversation_id="c1", tenant_id="tenant_test",
-            intent="portabilidade", confidence=0.88, channel="chat",
+            intent="portabilidade", confidence=0.88, channel="webchat",
             customer_profile=_profile(),
         )
         assert result.primary is not None
@@ -265,7 +265,7 @@ class TestAllocation:
         )
         result = await decider.decide(
             conversation_id="c1", tenant_id="tenant_test",
-            intent="cancelamento", confidence=0.90, channel="chat",
+            intent="cancelamento", confidence=0.90, channel="webchat",
             customer_profile=_profile(),
         )
         assert result.fallback is None
@@ -307,7 +307,7 @@ class TestPriorityScoreInfluence:
 
         result = await decider.decide(
             conversation_id="c1", tenant_id="tenant_test",
-            intent="cancelamento", confidence=0.90, channel="chat",
+            intent="cancelamento", confidence=0.90, channel="webchat",
             customer_profile=_profile(),
             elapsed_ms=0,
         )
@@ -363,7 +363,7 @@ class TestPriorityScoreInfluence:
 
         result = await decider.decide(
             conversation_id="c_urgente", tenant_id="tenant_test",
-            intent="cancelamento", confidence=0.92, channel="chat",
+            intent="cancelamento", confidence=0.92, channel="webchat",
             # Platinum customer with max churn: all pool_premium weights at maximum
             customer_profile=_profile(tier="platinum", churn_risk=1.0, business_score=1.0),
         )
@@ -397,14 +397,14 @@ class TestPriorityScoreInfluence:
         # Platinum + high churn
         r_plat = await decider.decide(
             conversation_id="c1", tenant_id="tenant_test",
-            intent="retencao", confidence=0.90, channel="chat",
+            intent="retencao", confidence=0.90, channel="webchat",
             customer_profile=_profile(tier="platinum", churn_risk=0.9),
         )
 
         # Standard + zero churn
         r_std = await decider.decide(
             conversation_id="c2", tenant_id="tenant_test",
-            intent="retencao", confidence=0.90, channel="chat",
+            intent="retencao", confidence=0.90, channel="webchat",
             customer_profile=_profile(tier="standard", churn_risk=0.0),
         )
 
@@ -440,7 +440,7 @@ class TestTimeout:
         with pytest.raises(RoutingTimeoutError) as exc_info:
             await decider.decide(
                 conversation_id="c_timeout", tenant_id="tenant_test",
-                intent="cancelamento", confidence=0.90, channel="chat",
+                intent="cancelamento", confidence=0.90, channel="webchat",
                 customer_profile=_profile(),
             )
 
@@ -465,7 +465,7 @@ class TestTimeout:
         with pytest.raises(RoutingTimeoutError):
             await decider.decide(
                 conversation_id="c_timeout2", tenant_id="tenant_test",
-                intent="cancelamento", confidence=0.90, channel="chat",
+                intent="cancelamento", confidence=0.90, channel="webchat",
                 customer_profile=_profile(),
             )
 
@@ -489,7 +489,7 @@ class TestTimeout:
         with pytest.raises(RoutingTimeoutError):
             await decider.decide(
                 conversation_id="c_200ms", tenant_id="tenant_test",
-                intent="cancelamento", confidence=0.90, channel="chat",
+                intent="cancelamento", confidence=0.90, channel="webchat",
                 customer_profile=_profile(),
             )
 
@@ -508,7 +508,7 @@ class TestTimeout:
         # Must not raise RoutingTimeoutError
         result = await decider.decide(
             conversation_id="c_fast", tenant_id="tenant_test",
-            intent="cancelamento", confidence=0.90, channel="chat",
+            intent="cancelamento", confidence=0.90, channel="webchat",
             customer_profile=_profile(),
         )
         assert result is not None
@@ -537,12 +537,12 @@ class TestSaturation:
     @pytest.mark.asyncio
     async def test_saturated_chat_returns_queue_with_callback_action(self):
         decider = _make_decider(
-            pools=[_pool(channel_types=["chat"])],
+            pools=[_pool(channel_types=["webchat"])],
             instances_by_pool={"retencao_humano": []},
         )
         result = await decider.decide(
             conversation_id="c1", tenant_id="tenant_test",
-            intent="cancelamento", confidence=0.90, channel="chat",
+            intent="cancelamento", confidence=0.90, channel="webchat",
             customer_profile=_profile(),
         )
         assert result.saturated is True

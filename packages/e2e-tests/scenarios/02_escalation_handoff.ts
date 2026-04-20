@@ -14,13 +14,15 @@
 import { randomUUID } from "crypto";
 import type { ScenarioContext, ScenarioResult, Assertion } from "./types";
 import { McpTestClient } from "../lib/mcp-client";
+import { genSessionId, seedSessionMeta } from "../lib/redis-client";
 import { pass, fail } from "../lib/report";
 
 export async function run(ctx: ScenarioContext): Promise<ScenarioResult> {
   const startAt = Date.now();
   const assertions: Assertion[] = [];
   const instanceId = `e2e-instance-${randomUUID()}`;
-  const conversationId = randomUUID();
+  const sessionId   = genSessionId();
+  const participantId = randomUUID();
 
   const mcp = new McpTestClient(ctx.mcpServerUrl);
   let sessionToken = "";
@@ -36,6 +38,7 @@ export async function run(ctx: ScenarioContext): Promise<ScenarioResult> {
         instanceId
       );
       sessionToken = loginResult.session_token;
+      await seedSessionMeta(ctx.redis, sessionId, ctx.tenantId, randomUUID());
       await mcp.agentReady(sessionToken);
     } catch (err) {
       return buildResult(
@@ -47,7 +50,7 @@ export async function run(ctx: ScenarioContext): Promise<ScenarioResult> {
 
     // ── Simulate routing (agent_busy) ────────────────────────────────────────
     try {
-      await mcp.agentBusy(sessionToken, conversationId);
+      await mcp.agentBusyV2(sessionToken, sessionId, participantId);
     } catch (err) {
       return buildResult(
         [fail("agent_busy setup", String(err))],
@@ -57,18 +60,13 @@ export async function run(ctx: ScenarioContext): Promise<ScenarioResult> {
     }
 
     // ── Test 1: agent_done WITHOUT handoff_reason ─────────────────────────────
-    // outcome = "escalated_human" — handoff_reason is REQUIRED
-    const doneWithoutHandoff = await mcp.agentDone({
-      session_token: sessionToken,
-      conversation_id: conversationId,
-      outcome: "escalated_human",
-      issue_status: [
-        {
-          issue_id: "issue-2",
-          description: "Retenção não concluída",
-          status: "unresolved",
-        },
-      ],
+    // outcome = "transferred" — handoff_reason is REQUIRED
+    const doneWithoutHandoff = await mcp.agentDoneV2({
+      session_token:  sessionToken,
+      session_id:     sessionId,
+      participant_id: participantId,
+      outcome:        "transferred",
+      issue_status:   "Retenção não concluída",
       // handoff_reason intentionally omitted
     });
 
@@ -110,19 +108,13 @@ export async function run(ctx: ScenarioContext): Promise<ScenarioResult> {
     // We can proceed directly to the second agent_done attempt.
 
     // ── Test 2: agent_done WITH handoff_reason ───────────────────────────────
-    const doneWithHandoff = await mcp.agentDone({
-      session_token: sessionToken,
-      conversation_id: conversationId,
-      outcome: "escalated_human",
-      issue_status: [
-        {
-          issue_id: "issue-2",
-          description: "Retenção não concluída — aguardando humano",
-          status: "transferred",
-        },
-      ],
+    const doneWithHandoff = await mcp.agentDoneV2({
+      session_token:  sessionToken,
+      session_id:     sessionId,
+      participant_id: participantId,
+      outcome:        "transferred",
+      issue_status:   "Retenção não concluída — aguardando humano",
       handoff_reason: "Cliente solicitou falar com humano",
-      resolution_summary: "Transferindo para atendimento humano",
     });
 
     const isAccepted =

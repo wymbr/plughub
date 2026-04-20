@@ -17,13 +17,21 @@ export interface CircuitBreakerConfig {
 }
 
 export interface ProxyConfig {
-  port:                   number
-  session_token_env:      string
-  audit_buffer_size:      number
+  port:                    number
+  session_token_env:       string
+  audit_buffer_size:       number
   audit_flush_interval_ms: number
-  circuit_breaker:        CircuitBreakerConfig
+  circuit_breaker:         CircuitBreakerConfig
   /** server name → resolved URL (env vars expanded) */
-  routes:                 Record<string, string>
+  routes:                  Record<string, string>
+  /**
+   * Brokers Kafka para escrita de AuditRecords (tópico mcp.audit).
+   * Se omitido, os registros são escritos em stdout (modo MVP / desenvolvimento).
+   * Exemplo: ["kafka:9092"]
+   */
+  kafka_brokers?: string[]
+  /** Tópico Kafka para AuditRecords (default: "mcp.audit") */
+  audit_topic?:   string
 }
 
 // ─────────────────────────────────────────────
@@ -59,6 +67,17 @@ export function loadProxyConfig(configPath: string): ProxyConfig {
     routes[server] = resolved
   }
 
+  // kafka_brokers (optional)
+  const rawBrokers = parsed["kafka_brokers"]
+  let kafka_brokers: string[] | undefined
+  if (Array.isArray(rawBrokers) && rawBrokers.length > 0) {
+    kafka_brokers = rawBrokers.map(b =>
+      String(b).replace(/\$\{([^}]+)\}/g, (_, name: string) => process.env[name] ?? b as string)
+    )
+  }
+
+  const audit_topic = parsed["audit_topic"] ? String(parsed["audit_topic"]) : undefined
+
   const config: ProxyConfig = {
     port,
     session_token_env,
@@ -66,6 +85,8 @@ export function loadProxyConfig(configPath: string): ProxyConfig {
     audit_flush_interval_ms,
     circuit_breaker,
     routes,
+    kafka_brokers,
+    audit_topic,
   }
 
   validateProxyConfig(config)

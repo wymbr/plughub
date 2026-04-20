@@ -138,6 +138,10 @@ class InferenceRequest(BaseModel):
     model_profile: ModelProfile = Field(default="balanced")
     messages:      list[InferenceMessage]       = Field(default_factory=list)
     tools:         list[dict[str, Any]] | None  = Field(default=None)
+    # Tool permission filter — populated from session_token JWT permissions[].
+    # When non-empty, only tools whose 'name' appears in this list are forwarded
+    # to the LLM. An empty list means no filtering (all tools visible).
+    permissions:   list[str]                    = Field(default_factory=list)
 
 
 class InferenceResponse(BaseModel):

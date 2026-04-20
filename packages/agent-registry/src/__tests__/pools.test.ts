@@ -7,7 +7,13 @@ import { describe, it, expect, vi, beforeEach } from "vitest"
 import request from "supertest"
 import { app }  from "../app"
 
-// Mock do Prisma
+// Mock do Kafka — evita conexão real a localhost:9092 nos unit tests
+vi.mock("../infra/kafka", () => ({
+  publishRegistryEvent: vi.fn().mockResolvedValue(undefined),
+  disconnectKafka:      vi.fn().mockResolvedValue(undefined),
+}))
+
+// Mock do Prisma — inclui Prisma.DbNull usado nos campos JSON opcionais
 vi.mock("../db", () => ({
   prisma: {
     pool: {
@@ -17,13 +23,14 @@ vi.mock("../db", () => ({
       update:     vi.fn(),
     },
   },
+  Prisma: { DbNull: null },
 }))
 
 import { prisma } from "../db"
 
 const validPool = {
   pool_id:       "retencao_humano",
-  channel_types: ["chat", "whatsapp"],
+  channel_types: ["webchat", "whatsapp"],
   sla_target_ms: 480000,
 }
 
@@ -31,7 +38,7 @@ const dbPool = {
   pool_id:               "retencao_humano",
   tenant_id:             "tenant_test",
   status:                "active",
-  channel_types:         ["chat", "whatsapp"],
+  channel_types:         ["webchat", "whatsapp"],
   sla_target_ms:         480000,
   description:           null,
   routing_expression:    null,
@@ -84,16 +91,17 @@ describe("POST /v1/pools", () => {
     const res = await request(app)
       .post("/v1/pools")
       .set(headers)
-      .send({ pool_id: "test", channel_types: ["chat"] })
+      .send({ pool_id: "test", channel_types: ["webchat"] })
 
     expect(res.status).toBe(422)
   })
 
   it("retorna 422 quando channel inválido", async () => {
+    // "chat" era o enum antigo — inválido no schema v2 (use "webchat")
     const res = await request(app)
       .post("/v1/pools")
       .set(headers)
-      .send({ ...validPool, channel_types: ["telegram"] })
+      .send({ ...validPool, channel_types: ["chat"] })
 
     expect(res.status).toBe(422)
   })

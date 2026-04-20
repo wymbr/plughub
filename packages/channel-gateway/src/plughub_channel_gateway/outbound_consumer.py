@@ -51,7 +51,7 @@ class OutboundConsumer:
         channel     = payload.get("channel")
 
         # Only process chat messages
-        if channel != "chat" or not contact_id:
+        if channel != "webchat" or not contact_id:
             return
 
         try:

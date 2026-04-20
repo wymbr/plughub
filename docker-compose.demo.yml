@@ -1,0 +1,384 @@
+# docker-compose.demo.yml
+# PlugHub Platform — Demo Environment
+#
+# Inclui toda a stack de infra e aplicação + ferramentas de observabilidade:
+#   - Kafdrop  → UI do Kafka     http://localhost:9000
+#   - Redis Commander → UI do Redis  http://localhost:8081
+#
+# O runner de testes (e2e-runner) executa automaticamente após todos os serviços
+# estarem prontos e encerra ao finalizar. Sua saída é o relatório da demo.
+#
+# Uso:
+#   docker compose -f docker-compose.demo.yml up --build
+#   docker compose -f docker-compose.demo.yml logs -f e2e-runner   # acompanhar saída
+#   docker compose -f docker-compose.demo.yml down -v              # limpar ambiente
+#
+# Flags do runner (via E2E_EXTRA_ARGS):
+#   E2E_EXTRA_ARGS="--demo"          # todos os cenários 01–10 (padrão)
+#   E2E_EXTRA_ARGS="--only 07"       # apenas cenário 07 (inbound full)
+#   E2E_EXTRA_ARGS="--only 08"       # apenas cenário 08 (outbound)
+#   E2E_EXTRA_ARGS="--conference"    # cenários 01–04 + 06
+#
+# Variáveis de ambiente requeridas (copie .env.demo.example → .env.demo):
+#   ANTHROPIC_API_KEY — necessária apenas se ai-gateway for usado em testes reais
+
+name: plughub-demo
+
+networks:
+  plughub-demo:
+    driver: bridge
+
+volumes:
+  kafka-data:
+  postgres-data:
+  redis-data:
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Infra
+# ─────────────────────────────────────────────────────────────────────────────
+
+services:
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6380:6379"   # 6379 pode estar em uso pela infra existente
+    command: redis-server --save "" --loglevel warning
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks:
+      - plughub-demo
+
+  postgres:
+    image: postgres:16-alpine
+    ports:
+      - "5433:5432"   # 5432 pode estar em uso pela infra existente
+    environment:
+      POSTGRES_DB: plughub_demo
+      POSTGRES_USER: plughub
+      POSTGRES_PASSWORD: plughub
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U plughub -d plughub_demo"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks:
+      - plughub-demo
+
+  kafka:
+    image: apache/kafka:3.7.0
+    ports:
+      - "9093:9092"   # 9092 pode estar em uso pela infra existente
+    volumes:
+      - kafka-data:/var/lib/kafka/data
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,INTERNAL://0.0.0.0:29092,CONTROLLER://0.0.0.0:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092,INTERNAL://kafka:29092
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,INTERNAL:PLAINTEXT,CONTROLLER:PLAINTEXT
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
+      KAFKA_LOG_DIRS: /var/lib/kafka/data
+    healthcheck:
+      test: ["CMD", "/opt/kafka/bin/kafka-broker-api-versions.sh", "--bootstrap-server", "localhost:9092"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+    networks:
+      - plughub-demo
+
+  # Cria todos os tópicos Kafka necessários para a demo
+  kafka-init:
+    image: apache/kafka:3.7.0
+    depends_on:
+      kafka:
+        condition: service_healthy
+    networks:
+      - plughub-demo
+    entrypoint: ["/bin/bash", "-c"]
+    command:
+      - |
+        KAFKA=/opt/kafka/bin/kafka-topics.sh
+        BROKER=kafka:29092
+        TOPICS="
+          conversations.inbound
+          conversations.outbound
+          conversations.routed
+          conversations.queued
+          conversations.dequeued
+          conversations.abandoned
+          conversations.events
+          conversations.message_sent
+          conversations.session_opened
+          conversations.session_closed
+          agent.lifecycle
+          agent.done
+          agent.registry.events
+          queue.position_updated
+          rules.escalation_triggered
+          rules.notification_triggered
+          rules.session_tagged
+          gateway.heartbeat
+          mcp.audit
+          registry.changed
+          evaluation.events
+        "
+        for topic in $$TOPICS; do
+          $$KAFKA --bootstrap-server $$BROKER --create --if-not-exists \
+            --topic $$topic --partitions 3 --replication-factor 1
+          echo "topic $$topic OK"
+        done
+        echo "All Kafka topics created."
+    restart: "no"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Application Services
+# ─────────────────────────────────────────────────────────────────────────────
+
+  agent-registry:
+    build:
+      context: .
+      dockerfile: packages/agent-registry/Dockerfile
+    ports:
+      - "3300:3300"
+    environment:
+      DATABASE_URL: postgresql://plughub:plughub@postgres:5432/plughub_demo
+      PORT: "3300"
+      JWT_SECRET: demo_plughub_secret_32chars__
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"require('http').get('http://localhost:3300/v1/health',r=>{process.exit(r.statusCode===200?0:1)}).on('error',()=>process.exit(1))\""]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 25s
+    networks:
+      - plughub-demo
+
+  mcp-server-plughub:
+    build:
+      context: .
+      dockerfile: packages/mcp-server-plughub/Dockerfile
+    ports:
+      - "3100:3100"
+    environment:
+      REDIS_URL: redis://redis:6379
+      PORT: "3100"
+      JWT_SECRET: demo_plughub_secret_32chars__
+      KAFKA_BROKERS: kafka:29092
+      AGENT_REGISTRY_URL: http://agent-registry:3300
+    depends_on:
+      redis:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
+      agent-registry:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"const r=require('http').get('http://localhost:3100/sse');r.on('response',s=>{s.destroy();process.exit(s.statusCode<500?0:1)});r.on('error',()=>process.exit(1));setTimeout(()=>{r.destroy();process.exit(1)},2000)\""]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    networks:
+      - plughub-demo
+
+  routing-engine:
+    build:
+      context: .
+      dockerfile: packages/routing-engine/Dockerfile
+    environment:
+      PLUGHUB_REDIS_URL: redis://redis:6379
+      PLUGHUB_KAFKA_BROKERS: kafka:29092
+      PLUGHUB_AGENT_REGISTRY_URL: http://agent-registry:3300
+    depends_on:
+      redis:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
+      agent-registry:
+        condition: service_healthy
+    networks:
+      - plughub-demo
+    restart: on-failure
+
+  ai-gateway:
+    build:
+      context: .
+      dockerfile: packages/ai-gateway/Dockerfile
+    ports:
+      - "3200:3200"
+    environment:
+      PLUGHUB_REDIS_URL: redis://redis:6379
+      PLUGHUB_PORT: "3200"
+      PLUGHUB_ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      PLUGHUB_WORKERS: "1"
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:3200/v1/health', timeout=3)\" 2>/dev/null && echo ok || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    networks:
+      - plughub-demo
+
+  rules-engine:
+    build:
+      context: .
+      dockerfile: packages/rules-engine/Dockerfile
+    ports:
+      - "3201:3201"
+    environment:
+      PLUGHUB_REDIS_URL: redis://redis:6379
+      PLUGHUB_MCP_SERVER_URL: http://mcp-server-plughub:3100
+      PLUGHUB_API_PORT: "3201"
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:3201/rules?tenant_id=health_probe', timeout=3)\" 2>/dev/null && echo ok || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+    networks:
+      - plughub-demo
+
+  skill-flow-service:
+    build:
+      context: .
+      dockerfile: packages/e2e-tests/services/skill-flow-service/Dockerfile
+    ports:
+      - "3400:3400"
+    environment:
+      REDIS_URL: redis://redis:6379
+      MCP_SERVER_URL: http://mcp-server-plughub:3100
+      AI_GATEWAY_URL: http://ai-gateway:3200
+      PORT: "3400"
+    depends_on:
+      redis:
+        condition: service_healthy
+      mcp-server-plughub:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"require('http').get('http://localhost:3400/health',r=>{process.exit(r.statusCode===200?0:1)}).on('error',()=>process.exit(1))\""]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 25s
+    networks:
+      - plughub-demo
+
+  session-replayer:
+    build:
+      context: .
+      dockerfile: packages/session-replayer/Dockerfile
+    environment:
+      KAFKA_BROKERS:   kafka:29092
+      REDIS_URL:       redis://redis:6379
+      DATABASE_URL:    postgresql://plughub:plughub@postgres:5432/plughub_demo
+      EVALUATOR_POOL:  avaliador_qualidade
+      REPLAY_SPEED_FACTOR: "10.0"
+    depends_on:
+      kafka:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    networks:
+      - plughub-demo
+    restart: on-failure
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Observability
+# ─────────────────────────────────────────────────────────────────────────────
+
+  # Kafdrop — Kafka UI. Acesse: http://localhost:9001
+  kafdrop:
+    image: obsidiandynamics/kafdrop:4.0.2
+    ports:
+      - "9001:9000"   # 9000 pode estar em uso pela infra existente
+    environment:
+      KAFKA_BROKERCONNECT: kafka:29092
+      JVM_OPTS: "-Xms32M -Xmx64M"
+      SERVER_SERVLET_CONTEXTPATH: "/"
+    depends_on:
+      kafka:
+        condition: service_healthy
+    networks:
+      - plughub-demo
+
+  # Redis Commander — Redis UI. Acesse: http://localhost:8081
+  redis-commander:
+    image: ghcr.io/joeferner/redis-commander:latest
+    ports:
+      - "8081:8081"
+    environment:
+      REDIS_HOSTS: "local:redis:6379"
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - plughub-demo
+
+# ─────────────────────────────────────────────────────────────────────────────
+# E2E Test Runner — executa os cenários e encerra
+# ─────────────────────────────────────────────────────────────────────────────
+
+  e2e-runner:
+    build:
+      context: .
+      dockerfile: packages/e2e-tests/Dockerfile
+    environment:
+      MCP_SERVER_URL:     http://mcp-server-plughub:3100
+      AGENT_REGISTRY_URL: http://agent-registry:3300
+      SKILL_FLOW_URL:     http://skill-flow-service:3400
+      RULES_ENGINE_URL:   http://rules-engine:3201
+      AI_GATEWAY_URL:     http://ai-gateway:3200
+      REDIS_URL:          redis://redis:6379
+      KAFKA_BROKERS:      kafka:29092
+      TENANT_ID:          tenant_demo
+      JWT_SECRET:         demo_plughub_secret_32chars__
+      E2E_REPORT_PATH:    /app/e2e-report.json
+      # Mude para --only 07, --only 08, --conference, etc.
+      E2E_EXTRA_ARGS:     ${E2E_EXTRA_ARGS:---demo}
+    depends_on:
+      mcp-server-plughub:
+        condition: service_healthy
+      agent-registry:
+        condition: service_healthy
+      skill-flow-service:
+        condition: service_healthy
+      rules-engine:
+        condition: service_healthy
+    networks:
+      - plughub-demo
+    restart: "no"

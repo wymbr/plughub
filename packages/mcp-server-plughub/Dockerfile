@@ -17,8 +17,9 @@ WORKDIR /app/packages/schemas
 RUN npm install && npm run build
 
 # Build mcp-server-plughub
+# NODE_OPTIONS aumenta o heap do TypeScript — o grafo de dependências é grande
 WORKDIR /app/packages/mcp-server-plughub
-RUN npm install && npm run build
+RUN npm install && NODE_OPTIONS="--max-old-space-size=4096" npm run build
 
 # ── Runtime stage ─────────────────────────────────────────────────────────────
 FROM node:20-slim AS runtime

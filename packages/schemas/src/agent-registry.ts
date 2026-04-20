@@ -6,7 +6,7 @@
 
 import { z } from "zod"
 import { SkillRefSchema } from "./skill"
-import { ChannelSchema }  from "./context-package"
+import { ChannelSchema }  from "./common"
 
 // ─────────────────────────────────────────────
 // Pool Registration — PlugHub spec 4.5 Registro de Pool

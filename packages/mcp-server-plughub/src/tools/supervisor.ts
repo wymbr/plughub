@@ -37,7 +37,7 @@ const SupervisorCapabilitiesInputSchema = z.object({
 })
 
 const AgentJoinConferenceInputSchema = z.object({
-  session_id:    z.string().uuid(),
+  session_id:    z.string().min(1),   // accepts both UUID and sess_YYYYMMDDTHHMMSS_ULID formats
   agent_type_id: z.string(),
   /** Pool ao qual o agente IA pertence — fornecido pela UI com base em supervisor_capabilities */
   pool_id:       z.string(),

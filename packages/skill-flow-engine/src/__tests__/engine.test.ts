@@ -65,6 +65,7 @@ const taskFlow: SkillFlow = {
     {
       id:             "delegar",
       type:           "task",
+      mode:           "transfer",
       target:         { skill_id: "skill_retencao_v1" },
       execution_mode: "sync",
       on_success:     "concluir",
@@ -81,6 +82,7 @@ const asyncTaskFlow: SkillFlow = {
     {
       id:             "delegar",
       type:           "task",
+      mode:           "transfer",
       target:         { skill_id: "skill_retencao_v1" },
       execution_mode: "async",
       on_success:     "concluir",

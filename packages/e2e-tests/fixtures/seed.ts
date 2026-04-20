@@ -22,15 +22,15 @@ export async function seedBaseFixtures(config: SeedConfig): Promise<void> {
   await registry.createSkill({
     skill_id: "skill_retencao_oferta_v1",
     name: "Retenção com Oferta",
-    version: "1",
+    version: "1.0",
     description: "Skill de retenção de clientes com oferta personalizada",
     classification: {
-      type: "executor",
-      domains: ["retencao"],
+      type: "vertical",
+      vertical: "telecom",
+      domain: "retencao",
     },
     instruction: {
-      system_prompt:
-        "Você é um agente de retenção. Ofereça soluções para manter o cliente.",
+      prompt_id: "prompt_retencao_oferta_v1",
     },
     tools: [],
   });
@@ -38,15 +38,15 @@ export async function seedBaseFixtures(config: SeedConfig): Promise<void> {
   await registry.createSkill({
     skill_id: "skill_analise_credito_v1",
     name: "Análise de Crédito",
-    version: "1",
+    version: "1.0",
     description: "Skill de análise e concessão de crédito",
     classification: {
-      type: "executor",
-      domains: ["credito"],
+      type: "vertical",
+      vertical: "finserv",
+      domain: "credito",
     },
     instruction: {
-      system_prompt:
-        "Você é um analista de crédito. Avalie o perfil de crédito do cliente.",
+      prompt_id: "prompt_analise_credito_v1",
     },
     tools: [],
   });
@@ -55,7 +55,7 @@ export async function seedBaseFixtures(config: SeedConfig): Promise<void> {
   await registry.createPool({
     pool_id: "retencao_humano",
     description: "Pool de agentes humanos de retenção",
-    channel_types: ["chat", "whatsapp"],
+    channel_types: ["webchat", "whatsapp"],
     sla_target_ms: 300000,
     max_concurrent_sessions: 2,
   });
@@ -63,7 +63,7 @@ export async function seedBaseFixtures(config: SeedConfig): Promise<void> {
   await registry.createPool({
     pool_id: "especialista_onboarding",
     description: "Pool de especialistas de onboarding",
-    channel_types: ["chat"],
+    channel_types: ["webchat"],
     sla_target_ms: 600000,
     max_concurrent_sessions: 1,
   });
@@ -71,7 +71,7 @@ export async function seedBaseFixtures(config: SeedConfig): Promise<void> {
   // Agent Types
   await registry.createAgentType({
     agent_type_id: "agente_retencao_v1",
-    framework: "anthropic",
+    framework: "anthropic_sdk",
     execution_model: "stateless",
     role: "executor",
     max_concurrent_sessions: 2,
@@ -82,7 +82,7 @@ export async function seedBaseFixtures(config: SeedConfig): Promise<void> {
 
   await registry.createAgentType({
     agent_type_id: "agente_credito_v3",
-    framework: "anthropic",
+    framework: "anthropic_sdk",
     execution_model: "stateless",
     role: "executor",
     max_concurrent_sessions: 1,
@@ -105,10 +105,10 @@ export async function seedPerfFixtures(config: SeedConfig): Promise<void> {
   await registry.createSkill({
     skill_id: "skill_perf_test_v1",
     name: "Performance Test Skill",
-    version: "1",
+    version: "1.0",
     description: "Skill used by performance test agents",
-    classification: { type: "executor", domains: ["perf"] },
-    instruction: { system_prompt: "Performance test agent." },
+    classification: { type: "horizontal" },
+    instruction: { prompt_id: "prompt_perf_test_v1" },
     tools: [],
   });
 
@@ -117,7 +117,7 @@ export async function seedPerfFixtures(config: SeedConfig): Promise<void> {
     await registry.createPool({
       pool_id: `pool_perf_${i}`,
       description: `Performance test pool ${i}`,
-      channel_types: ["chat"],
+      channel_types: ["webchat"],
       sla_target_ms: 30000,
       max_concurrent_sessions: 10,
     });
@@ -130,7 +130,7 @@ export async function seedPerfFixtures(config: SeedConfig): Promise<void> {
     createPromises.push(
       registry.createAgentType({
         agent_type_id: `agent_perf_${i}`,
-        framework: "anthropic",
+        framework: "anthropic_sdk",
         execution_model: "stateless",
         role: "executor",
         max_concurrent_sessions: 5,

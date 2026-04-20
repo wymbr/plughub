@@ -22,7 +22,7 @@ import {
 describe("PoolRegistrationSchema", () => {
   const basePool = {
     pool_id:       "retencao_humano",
-    channel_types: ["chat", "whatsapp"],
+    channel_types: ["webchat", "whatsapp"],
     sla_target_ms: 480000,
   }
 
@@ -44,7 +44,7 @@ describe("PoolRegistrationSchema", () => {
 
   it("rejects invalid channel", () => {
     expect(() =>
-      PoolRegistrationSchema.parse({ ...basePool, channel_types: ["telegram"] })
+      PoolRegistrationSchema.parse({ ...basePool, channel_types: ["chat"] })
     ).toThrow()
   })
 

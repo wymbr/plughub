@@ -7,6 +7,13 @@
  *   ts-node runner.ts --only 03       — run only scenario 03
  *   ts-node runner.ts --perf          — run scenarios 01–04 + 05 (performance)
  *   ts-node runner.ts --only 05       — run only scenario 05 (performance)
+ *   ts-node runner.ts --conference    — run scenarios 01–04 + 06 (conference + reconnect)
+ *   ts-node runner.ts --only 06       — run only scenario 06 (conference + reconnect)
+ *   ts-node runner.ts --demo          — run all scenarios 01–10 (full demo suite)
+ *   ts-node runner.ts --only 07       — run only scenario 07 (full inbound flow)
+ *   ts-node runner.ts --only 08       — run only scenario 08 (outbound flow)
+ *   ts-node runner.ts --only 09       — run only scenario 09 (session replayer)
+ *   ts-node runner.ts --only 10       — run only scenario 10 (message masking)
  *
  * Environment variables (all optional — defaults work with docker-compose.test.yml):
  *   MCP_SERVER_URL        (default: http://localhost:3100)
@@ -39,6 +46,11 @@ import { run as scenario02 } from "./scenarios/02_escalation_handoff";
 import { run as scenario03 } from "./scenarios/03_resume_after_failure";
 import { run as scenario04 } from "./scenarios/04_rules_engine";
 import { run as scenario05 } from "./scenarios/05_routing_latency";
+import { run as scenario06 } from "./scenarios/06_conference";
+import { run as scenario07 } from "./scenarios/07_inbound_full";
+import { run as scenario08 } from "./scenarios/08_outbound";
+import { run as scenario09 } from "./scenarios/09_session_replayer";
+import { run as scenario10 } from "./scenarios/10_masking";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Configuration
@@ -64,7 +76,9 @@ const config = {
 const args = process.argv.slice(2);
 const onlyFlag = args.indexOf("--only");
 const onlyScenario = onlyFlag >= 0 ? args[onlyFlag + 1] : null;
-const runPerf = args.includes("--perf") || onlyScenario === "05";
+const runPerf       = args.includes("--perf")       || onlyScenario === "05";
+const runConference = args.includes("--conference") || onlyScenario === "06";
+const runDemo       = args.includes("--demo");  // runs all scenarios 01–10
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Scenario registry
@@ -79,6 +93,26 @@ const ALL_SCENARIOS: Array<{ id: string; fn: (ctx: ScenarioContext) => Promise<S
 
 if (runPerf) {
   ALL_SCENARIOS.push({ id: "05", fn: scenario05 });
+}
+
+if (runConference || runDemo) {
+  ALL_SCENARIOS.push({ id: "06", fn: scenario06 });
+}
+
+if (runDemo || onlyScenario === "07") {
+  ALL_SCENARIOS.push({ id: "07", fn: scenario07 });
+}
+
+if (runDemo || onlyScenario === "08") {
+  ALL_SCENARIOS.push({ id: "08", fn: scenario08 });
+}
+
+if (runDemo || onlyScenario === "09") {
+  ALL_SCENARIOS.push({ id: "09", fn: scenario09 });
+}
+
+if (runDemo || onlyScenario === "10") {
+  ALL_SCENARIOS.push({ id: "10", fn: scenario10 });
 }
 
 const SCENARIOS_TO_RUN = onlyScenario

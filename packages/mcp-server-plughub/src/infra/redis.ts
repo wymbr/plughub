@@ -35,6 +35,18 @@ export const keys = {
   /** Insight de sessão: chave → JSON da SessionItem */
   insight: (tenantId: string, conversationId: string, itemId: string) =>
     `${tenantId}:insight:${conversationId}:${itemId}`,
+
+  /** Snapshot operacional de pool — escrito pelo Routing Engine após cada roteamento */
+  poolQueueSnapshot: (tenantId: string, poolId: string) =>
+    `${tenantId}:pool:${poolId}:snapshot`,
+
+  /** ZSET de sessões na fila de um pool (score = queued_at_ms) */
+  poolQueue: (tenantId: string, poolId: string) =>
+    `${tenantId}:pool:${poolId}:queue`,
+
+  /** SET de instance_ids disponíveis (prontos) num pool */
+  poolInstances: (tenantId: string, poolId: string) =>
+    `${tenantId}:pool:${poolId}:instances`,
 }
 
 // ─── Estado canônico da instância ──────────────────────────────────────────────

@@ -117,7 +117,7 @@ class TestConnectionLifecycle:
         first_event = json.loads(event_calls[0].kwargs["value"].decode())
         assert first_event["event_type"] == "contact_open"
         assert first_event["contact_id"] == CONTACT_ID
-        assert first_event["channel"] == "chat"
+        assert first_event["channel"] == "webchat"
 
     async def test_publishes_contact_closed_on_disconnect(
         self, mock_producer, registry, context_reader, settings
@@ -165,7 +165,7 @@ class TestInboundTextMessage:
         assert len(inbound_calls) == 1
         event = json.loads(inbound_calls[0].kwargs["value"].decode())
         assert event["direction"] == "inbound"
-        assert event["channel"] == "chat"
+        assert event["channel"] == "webchat"
         assert event["contact_id"] == CONTACT_ID
         assert event["session_id"] == SESSION_ID
         assert event["author"]["type"] == "customer"

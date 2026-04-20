@@ -7,10 +7,26 @@
  * Nunca implementam lógica de negócio — roteiam para os componentes internos.
  */
 
-import { z } from "zod"
+import { z }       from "zod"
+import * as crypto  from "crypto"
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 import type { KafkaProducer } from "../infra/kafka"
 import type { RedisClient }   from "../infra/redis"
+import { withGuard }          from "../infra/tool-guard"
+
+/**
+ * Generates a session ID that satisfies SessionIdSchema:
+ * sess_{YYYYMMDD}T{HHMMSS}_{[A-Z0-9]{22}}
+ */
+function genSessionId(): string {
+  const now  = new Date()
+  const pad  = (n: number, len = 2) => String(n).padStart(len, "0")
+  const date = `${pad(now.getUTCFullYear(), 4)}${pad(now.getUTCMonth() + 1)}${pad(now.getUTCDate())}`
+  const time = `${pad(now.getUTCHours())}${pad(now.getUTCMinutes())}${pad(now.getUTCSeconds())}`
+  const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+  const rand  = Array.from(crypto.randomBytes(22), b => chars[b % 36]).join("")
+  return `sess_${date}T${time}_${rand}`
+}
 
 // ─── Dependências injetadas ───────────────────────────────────────────────────
 
@@ -24,7 +40,7 @@ export interface BpmDeps {
 // ─────────────────────────────────────────────
 
 const ConversationStartInputSchema = z.object({
-  channel:      z.enum(["chat", "whatsapp", "sms", "voice", "email", "webrtc"]),
+  channel:      z.enum(["whatsapp", "webchat", "voice", "email", "sms", "instagram", "telegram", "webrtc"]),
   customer_id:  z.string().uuid(),
   tenant_id:    z.string(),
   /** Contexto inicial — intent detectado pelo Channel Layer */
@@ -61,6 +77,18 @@ const RuleDryRunInputSchema = z.object({
   history_window_days: z.number().int().min(1).max(90).default(30),
 })
 
+const OutboundContactRequestInputSchema = z.object({
+  tenant_id:    z.string(),
+  customer_id:  z.string().uuid(),
+  channel:      z.enum(["whatsapp", "webchat", "voice", "email", "sms", "instagram", "telegram", "webrtc"]),
+  /** Tipo de agente que deve atender quando o cliente aceitar o contato */
+  agent_type_id: z.string().optional(),
+  /** Pool de destino (inferido pelo Routing Engine se omitido) */
+  pool_id:       z.string().optional(),
+  /** Metadados livres — passados ao agente via SessionContext */
+  metadata:      z.record(z.unknown()).optional(),
+})
+
 const NotificationSendInputSchema = z.object({
   /** session_id da conversa ativa */
   session_id: z.string(),
@@ -92,9 +120,9 @@ export function registerBpmTools(server: McpServer, deps?: BpmDeps): void {
     "conversation_start",
     "Inicia um atendimento na plataforma. Retorna session_id para rastreamento.",
     ConversationStartInputSchema.shape as any,
-    async (input: Record<string, unknown>) => {
+    withGuard("conversation_start", async (input: Record<string, unknown>) => {
       const parsed    = ConversationStartInputSchema.parse(input)
-      const session_id = crypto.randomUUID()
+      const session_id = genSessionId()
       const contact_id = crypto.randomUUID()
       const started_at = new Date().toISOString()
       const ttl        = 14_400  // 4h — aligned with session TTL across services
@@ -145,7 +173,7 @@ export function registerBpmTools(server: McpServer, deps?: BpmDeps): void {
           }),
         }],
       }
-    }
+    }),
   )
 
   // ── conversation_status ─────────────────────
@@ -153,7 +181,7 @@ export function registerBpmTools(server: McpServer, deps?: BpmDeps): void {
     "conversation_status",
     "Retorna o estado atual de uma conversa em andamento.",
     ConversationStatusInputSchema.shape as any,
-    async (input: Record<string, unknown>) => {
+    withGuard("conversation_status", async (input: Record<string, unknown>) => {
       const parsed = ConversationStatusInputSchema.parse(input)
 
       // Read session meta written by channel-gateway or conversation_start
@@ -222,7 +250,7 @@ export function registerBpmTools(server: McpServer, deps?: BpmDeps): void {
           }),
         }],
       }
-    }
+    }),
   )
 
   // ── conversation_end ────────────────────────
@@ -230,7 +258,7 @@ export function registerBpmTools(server: McpServer, deps?: BpmDeps): void {
     "conversation_end",
     "Encerra forçado uma conversa (timeout, cancelamento, erro de sistema).",
     ConversationEndInputSchema.shape as any,
-    async (input: Record<string, unknown>) => {
+    withGuard("conversation_end", async (input: Record<string, unknown>) => {
       const parsed  = ConversationEndInputSchema.parse(input)
       const ended_at = new Date().toISOString()
 
@@ -288,7 +316,7 @@ export function registerBpmTools(server: McpServer, deps?: BpmDeps): void {
           }),
         }],
       }
-    }
+    }),
   )
 
   // ── rule_dry_run ────────────────────────────
@@ -296,7 +324,7 @@ export function registerBpmTools(server: McpServer, deps?: BpmDeps): void {
     "rule_dry_run",
     "Simula uma regra do Rules Engine contra histórico de conversas. Spec 3.2b.",
     RuleDryRunInputSchema.shape as any,
-    async (input: Record<string, unknown>) => {
+    withGuard("rule_dry_run", async (input: Record<string, unknown>) => {
       const parsed = RuleDryRunInputSchema.parse(input)
 
       // Delegate to Rules Engine REST API — it has the ClickHouse connection
@@ -333,7 +361,7 @@ export function registerBpmTools(server: McpServer, deps?: BpmDeps): void {
           }),
         }],
       }
-    }
+    }),
   )
 
   // ── notification_send ───────────────────────
@@ -341,7 +369,7 @@ export function registerBpmTools(server: McpServer, deps?: BpmDeps): void {
     "notification_send",
     "Envia mensagem de texto ao cliente via canal da sessão. Usado pelo step notify do Skill Flow. Spec 4.7.",
     NotificationSendInputSchema.shape as any,
-    async (input: Record<string, unknown>) => {
+    withGuard("notification_send", async (input: Record<string, unknown>) => {
       const parsed = NotificationSendInputSchema.parse(input)
 
       // Look up contact_id via Redis key written by channel-gateway on connect.
@@ -385,7 +413,71 @@ export function registerBpmTools(server: McpServer, deps?: BpmDeps): void {
           }),
         }],
       }
-    }
+    }),
+  )
+
+  // ── outbound_contact_request ────────────────
+  server.tool(
+    "outbound_contact_request",
+    "Solicita ao Channel Gateway que contacte um cliente (fluxo outbound). " +
+    "Publica em conversations.outbound com type outbound.contact_request. " +
+    "O Channel Gateway persiste o contato no Redis e publica conversations.inbound quando aceito. Spec 9.4.",
+    OutboundContactRequestInputSchema.shape as any,
+    withGuard("outbound_contact_request", async (input: Record<string, unknown>) => {
+      const parsed       = OutboundContactRequestInputSchema.parse(input)
+      const contact_id   = crypto.randomUUID()
+      const requested_at = new Date().toISOString()
+      const ttl          = 14_400  // 4h — same as session TTL
+
+      // 1. Persist outbound request meta so Channel Gateway can enrich the session on accept
+      if (deps?.redis) {
+        await deps.redis.setex(
+          `outbound:${contact_id}:meta`,
+          ttl,
+          JSON.stringify({
+            contact_id,
+            tenant_id:     parsed.tenant_id,
+            customer_id:   parsed.customer_id,
+            channel:       parsed.channel,
+            agent_type_id: parsed.agent_type_id ?? null,
+            pool_id:       parsed.pool_id       ?? null,
+            metadata:      parsed.metadata      ?? {},
+            requested_at,
+            status:        "pending",
+          })
+        )
+      }
+
+      // 2. Publish outbound contact request to conversations.outbound
+      //    Channel Gateway subscribes and initiates the outbound call/message
+      if (deps?.kafka) {
+        await deps.kafka.publish("conversations.outbound", {
+          type:          "outbound.contact_request",
+          contact_id,
+          tenant_id:     parsed.tenant_id,
+          customer_id:   parsed.customer_id,
+          channel:       parsed.channel,
+          agent_type_id: parsed.agent_type_id ?? undefined,
+          pool_id:       parsed.pool_id       ?? undefined,
+          metadata:      parsed.metadata      ?? {},
+          requested_at,
+        })
+      }
+
+      return {
+        content: [{
+          type: "text" as const,
+          text: JSON.stringify({
+            contact_id,
+            status:      "pending",
+            channel:     parsed.channel,
+            customer_id: parsed.customer_id,
+            tenant_id:   parsed.tenant_id,
+            requested_at,
+          }),
+        }],
+      }
+    }),
   )
 
   // ── conversation_escalate ───────────────────
@@ -393,7 +485,7 @@ export function registerBpmTools(server: McpServer, deps?: BpmDeps): void {
     "conversation_escalate",
     "Escala a conversa para um pool humano via Routing Engine. Usado pelo step escalate do Skill Flow. Spec 4.7 + 9.5i.",
     ConversationEscalateInputSchema.shape as any,
-    async (input: Record<string, unknown>) => {
+    withGuard("conversation_escalate", async (input: Record<string, unknown>) => {
       const parsed = ConversationEscalateInputSchema.parse(input)
 
       // Retrieve stored session metadata from Redis (written by channel-gateway + orchestrator bridge)
@@ -453,6 +545,6 @@ export function registerBpmTools(server: McpServer, deps?: BpmDeps): void {
           }),
         }],
       }
-    }
+    }),
   )
 }

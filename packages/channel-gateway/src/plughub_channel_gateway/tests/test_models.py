@@ -127,7 +127,7 @@ class TestNormalizedInboundEvent:
             content=MessageContent(type="text", text="Oi"),
         )
         assert event.direction == "inbound"
-        assert event.channel == "chat"
+        assert event.channel == "webchat"
         assert event.message_id  # uuid generated
         assert event.timestamp   # iso timestamp generated
         assert event.context_snapshot.turn_number == 0
@@ -140,7 +140,7 @@ class TestNormalizedInboundEvent:
             content=MessageContent(type="text", text="Oi"),
         )
         d = event.model_dump()
-        assert d["channel"] == "chat"
+        assert d["channel"] == "webchat"
         assert d["author"]["type"] == "customer"
         assert d["content"]["type"] == "text"
 
@@ -176,7 +176,7 @@ class TestLifecycleEvents:
     def test_contact_open_event(self):
         ev = ContactOpenEvent(contact_id="c1", session_id="s1", started_at="2024-01-01T10:00:00Z")
         assert ev.event_type == "contact_open"
-        assert ev.channel == "chat"
+        assert ev.channel == "webchat"
 
     def test_contact_closed_event(self):
         ev = ContactClosedEvent(

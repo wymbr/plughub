@@ -16,12 +16,16 @@ import { registerBpmTools }           from "./tools/bpm"
 import type { BpmDeps }               from "./tools/bpm"
 import { registerRuntimeTools }       from "./tools/runtime"
 import type { RuntimeDeps }           from "./tools/runtime"
+import { registerSessionTools }       from "./tools/session"
+import type { SessionDeps }           from "./tools/session"
 import { registerSupervisorTools }    from "./tools/supervisor"
 import type { SupervisorDeps }        from "./tools/supervisor"
 import { registerEvaluationTools }    from "./tools/evaluation"
 import type { EvaluationDeps }        from "./tools/evaluation"
 import { registerExternalAgentTools } from "./tools/external-agent"
 import type { ExternalAgentDeps }     from "./tools/external-agent"
+import { registerOperationalTools }  from "./tools/operational"
+import type { OperationalDeps }      from "./tools/operational"
 import { createRedisClient }       from "./infra/redis"
 import { createKafkaProducer }     from "./infra/kafka"
 import { createRegistryClient }    from "./infra/registry-client"
@@ -58,6 +62,7 @@ export function createServer(allDeps?: AllDeps): McpServer {
 
   const evalDeps: EvaluationDeps = allDeps?.evaluation ?? {
     kafka,
+    redis,
     postgres:         createPostgresClient(),
     proxyUrl:         process.env["MCP_PROXY_URL"]      ?? "http://localhost:7422",
     skillRegistryUrl: process.env["SKILL_REGISTRY_URL"] ?? "http://localhost:3400",
@@ -65,16 +70,22 @@ export function createServer(allDeps?: AllDeps): McpServer {
 
   const bpmDeps: BpmDeps = { kafka, redis }
 
+  const sessionDeps: SessionDeps = { redis, kafka }
+
   const supervisorDeps: SupervisorDeps = { redis, kafka }
 
   const externalAgentDeps: ExternalAgentDeps = { redis, kafka }
 
+  const operationalDeps: OperationalDeps = { redis }
+
   // Registrar todas as tools
   registerBpmTools(server, bpmDeps)
   registerRuntimeTools(server, runtimeDeps)
+  registerSessionTools(server, sessionDeps)
   registerSupervisorTools(server, supervisorDeps)
   registerEvaluationTools(server, evalDeps)
   registerExternalAgentTools(server, externalAgentDeps)
+  registerOperationalTools(server, operationalDeps)
 
   return server
 }
@@ -215,6 +226,7 @@ export async function startServer(config: ServerConfig): Promise<void> {
   const sharedExternalAgentDeps: ExternalAgentDeps = { redis, kafka }
   const sharedEvalDeps: EvaluationDeps         = {
     kafka,
+    redis,
     postgres,
     proxyUrl:         process.env["MCP_PROXY_URL"]      ?? "http://localhost:7422",
     skillRegistryUrl: process.env["SKILL_REGISTRY_URL"] ?? "http://localhost:3400",
@@ -234,9 +246,11 @@ export async function startServer(config: ServerConfig): Promise<void> {
     const mcpServer = new McpServer({ name: "mcp-server-plughub", version: "1.0.0" })
     registerBpmTools(mcpServer, sharedBpmDeps)
     registerRuntimeTools(mcpServer, sharedRuntimeDeps)
+    registerSessionTools(mcpServer, { redis, kafka })
     registerSupervisorTools(mcpServer, sharedSupervisorDeps)
     registerEvaluationTools(mcpServer, sharedEvalDeps)
     registerExternalAgentTools(mcpServer, sharedExternalAgentDeps)
+    registerOperationalTools(mcpServer, { redis })
 
     transports.set(transport.sessionId, transport)
 

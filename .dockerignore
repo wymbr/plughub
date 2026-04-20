@@ -1,0 +1,33 @@
+# .dockerignore
+# Exclui node_modules e artefatos de build do contexto Docker.
+# Sem este arquivo, o Docker tenta transferir symlinks de .bin/ que causam erros.
+# Também reduz drasticamente o tamanho do contexto (de ~250MB para ~5MB).
+
+**/node_modules
+**/.pnpm-store
+**/dist
+**/.next
+**/__pycache__
+**/*.pyc
+**/.pytest_cache
+**/.mypy_cache
+**/.venv
+**/venv
+**/.env
+**/.env.*
+!.env.demo.example
+
+# Build artifacts
+**/build
+**/.turbo
+**/.cache
+
+# Test reports
+**/e2e-report.json
+**/coverage
+
+# Editor / OS
+**/.DS_Store
+**/Thumbs.db
+**/.idea
+**/.vscode

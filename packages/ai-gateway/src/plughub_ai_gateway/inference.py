@@ -82,6 +82,23 @@ class InferenceEngine:
 
         tools_list = [t.model_dump() if hasattr(t, "model_dump") else t for t in (req.tools or [])]
 
+        # Filter tools to only those permitted by the session token.
+        # req.permissions comes from JWT permissions[] — populated by the proxy sidecar
+        # or PlugHubAdapter before the inference call.
+        # Empty permissions list → no filtering (backward compatible).
+        if req.permissions:
+            tools_list = [
+                t for t in tools_list
+                if t.get("name") in req.permissions
+            ]
+            logger.debug(
+                "Tool permission filter applied: session=%s kept=%d/%d tools=%s",
+                req.session_id,
+                len(tools_list),
+                len(req.tools or []),
+                [t.get("name") for t in tools_list],
+            )
+
         # 4. Call provider with automatic fallback
         llm_response, effective_provider = await self._call_with_fallback(
             profile=profile,

@@ -13,6 +13,7 @@ vi.mock("../db", () => ({
     skill:      { findUnique: vi.fn(), findMany: vi.fn() },
     agentType:  { findUnique: vi.fn(), findMany: vi.fn(), create: vi.fn() },
   },
+  Prisma: { DbNull: null },
 }))
 
 import { prisma } from "../db"

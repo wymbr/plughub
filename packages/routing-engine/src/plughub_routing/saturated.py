@@ -104,8 +104,8 @@ class SaturationHandler:
                 ),
             )
 
-        # Chat / WhatsApp — wait message + callback option
-        if channel in ("chat", "whatsapp"):
+        # Async text channels (webchat / WhatsApp / SMS / etc.) — wait message + callback option
+        if channel in ("webchat", "whatsapp", "sms", "instagram", "telegram"):
             congestion_sla = int(pool.sla_target_ms * 1.5)
             return SaturationAction(
                 action_type      = "queue_with_callback",
