@@ -104,12 +104,15 @@ export async function run(ctx: ScenarioContext): Promise<ScenarioResult> {
 
     // Start consuming conversations.inbound BEFORE sending the message to avoid
     // missing the event due to Kafka consumer lag.
+    // 400ms delay allows KafkaJS consumer group to be assigned partitions before
+    // the message is published — without this the consumer often misses the event.
     const inboundPromise = consumeEvents(
       ctx.kafka,
       "conversations.inbound",
       1,
       6000
     )
+    await new Promise((r) => setTimeout(r, 400))
 
     const textId  = randomUUID()
     const textMsg = "Olá, preciso de ajuda com minha fatura"
@@ -144,6 +147,8 @@ export async function run(ctx: ScenarioContext): Promise<ScenarioResult> {
     const reqId     = randomUUID()
 
     // C1: upload.request → upload.ready
+    // Use receiveTyped to skip any stream delivery messages (e.g. routing engine
+    // "Aguardando agente" messages) that may arrive before upload.ready.
     client.send({
       type:       "upload.request",
       id:         reqId,
@@ -152,7 +157,7 @@ export async function run(ctx: ScenarioContext): Promise<ScenarioResult> {
       size_bytes: imageData.byteLength,
     })
 
-    const uploadReady = asMsg(await client.receive(6000))
+    const uploadReady = asMsg(await client.receiveTyped("upload.ready", 6000))
     const fileId      = uploadReady["file_id"] as string | undefined
 
     assertions.push(
@@ -180,8 +185,8 @@ export async function run(ctx: ScenarioContext): Promise<ScenarioResult> {
         : fail("C: HTTP POST upload falhou", { status: httpResp.status, body: await httpResp.text() })
     )
 
-    // C3: Server sends upload.committed over WS
-    const committed = asMsg(await client.receive(6000))
+    // C3: Server sends upload.committed over WS (skip interleaved stream events)
+    const committed = asMsg(await client.receiveTyped("upload.committed", 6000))
     assertions.push(
       committed["type"]    === "upload.committed" &&
       committed["file_id"] === fileId  &&

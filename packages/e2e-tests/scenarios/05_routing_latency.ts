@@ -53,7 +53,7 @@ export async function run(ctx: ScenarioContext): Promise<ScenarioResult> {
       const poolId = `pool_perf_${poolIndex}`;
       for (let instIndex = 0; instIndex < INSTANCES_PER_POOL; instIndex++) {
         const instanceId = `perf-inst-${poolIndex}-${instIndex}`;
-        const agentTypeId = `agent_perf_${poolIndex * INSTANCES_PER_POOL + instIndex}`;
+        const agentTypeId = `agent_perf_${poolIndex * INSTANCES_PER_POOL + instIndex}_v1`;
         writePromises.push(
           writeAgentInstanceDirect(
             ctx.redis,

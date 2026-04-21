@@ -129,7 +129,7 @@ export async function seedPerfFixtures(config: SeedConfig): Promise<void> {
     const poolIndex = i % 5;
     createPromises.push(
       registry.createAgentType({
-        agent_type_id: `agent_perf_${i}`,
+        agent_type_id: `agent_perf_${i}_v1`,
         framework: "anthropic_sdk",
         execution_model: "stateless",
         role: "executor",

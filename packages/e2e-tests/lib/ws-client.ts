@@ -102,6 +102,31 @@ export class WsTestClient {
     })
   }
 
+  /**
+   * Wait for the next incoming message of a specific `type`, skipping any
+   * interleaved messages of other types (e.g. stream delivery events).
+   */
+  async receiveTyped(expectedType: string, timeoutMs = 5000): Promise<unknown> {
+    const deadline = Date.now() + timeoutMs
+    while (true) {
+      const remaining = deadline - Date.now()
+      if (remaining <= 0) {
+        throw new Error(
+          `WS receive timeout waiting for type="${expectedType}" after ${timeoutMs}ms`
+        )
+      }
+      const msg = await this.receive(remaining)
+      if (
+        msg &&
+        typeof msg === "object" &&
+        (msg as Record<string, unknown>)["type"] === expectedType
+      ) {
+        return msg
+      }
+      // discard and keep waiting
+    }
+  }
+
   /** Send a JSON-serialisable payload. */
   send(data: unknown): void {
     this.ws.send(JSON.stringify(data))
