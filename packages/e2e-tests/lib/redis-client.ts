@@ -123,8 +123,12 @@ export async function getPoolAvailableAgents(
 }
 
 /**
- * Directly writes an agent instance state to Redis.
- * Used in Scenario 5 for fast test setup (bypasses MCP).
+ * Directly writes an agent instance state to Redis using the Routing Engine's
+ * key layout. Used in Scenario 5 for fast test setup (bypasses MCP + agent.lifecycle).
+ *
+ * Routing Engine keys:
+ *   GET  {tenantId}:instance:{instanceId}       — JSON string (AgentInstance model)
+ *   SADD {tenantId}:pool:{poolId}:instances     — SET of instance_ids per pool
  */
 export async function writeAgentInstanceDirect(
   redis: Redis,
@@ -135,19 +139,34 @@ export async function writeAgentInstanceDirect(
   maxConcurrentSessions: number = 5,
   ttlSeconds: number = 3600
 ): Promise<void> {
-  const key = `${tenantId}:agent:instance:${instanceId}`;
-  await redis.hset(key, {
-    state: "ready",
-    agent_type_id: agentTypeId,
-    current_sessions: "0",
-    max_concurrent_sessions: String(maxConcurrentSessions),
-    pools: JSON.stringify(pools),
-    logged_in_at: new Date().toISOString(),
+  const now = new Date().toISOString();
+  const primaryPool = pools[0] ?? "";
+
+  // AgentInstance JSON — matches routing-engine Pydantic model exactly
+  const instanceData = JSON.stringify({
+    instance_id:      instanceId,
+    agent_type_id:    agentTypeId,
+    tenant_id:        tenantId,
+    pool_id:          primaryPool,
+    pools,
+    execution_model:  "stateless",
+    max_concurrent:   maxConcurrentSessions,
+    current_sessions: 0,
+    state:            "ready",
+    registered_at:    now,
+    last_seen:        now,
+    profile:          {},
   });
-  await redis.expire(key, ttlSeconds);
+
+  await redis.set(
+    `${tenantId}:instance:${instanceId}`,
+    instanceData,
+    "EX",
+    ttlSeconds
+  );
 
   for (const poolId of pools) {
-    await redis.sadd(`${tenantId}:pool:${poolId}:available`, instanceId);
+    await redis.sadd(`${tenantId}:pool:${poolId}:instances`, instanceId);
   }
 }
 
