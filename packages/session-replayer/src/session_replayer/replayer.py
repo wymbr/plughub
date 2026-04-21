@@ -94,15 +94,16 @@ class Replayer:
         replay_id     = str(uuid.uuid4())
 
         context = ReplayContext(
-            session_id   = session_id,
-            tenant_id    = tenant_id,
-            replay_id    = replay_id,
-            session_meta = session_meta,
-            events       = raw_events,
-            sentiment    = sentiment,
-            participants = participants,
-            speed_factor = sf,
-            source       = source,
+            session_id      = session_id,
+            tenant_id       = tenant_id,
+            replay_id       = replay_id,
+            session_meta    = session_meta,
+            events          = raw_events,
+            sentiment       = sentiment,
+            participants    = participants,
+            speed_factor    = sf,
+            source          = source,
+            comparison_mode = comparison_mode,
         )
 
         # ── 5. Persiste ReplayContext no Redis ────────────────────────────────

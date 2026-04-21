@@ -338,6 +338,7 @@ adapter. Skill Flow always receives a single normalised `interaction_result`.
 | `agent.done` | Routing Engine | Rules Engine, Analytics |
 | `queue.position_updated` | Routing Engine | Channel Gateway, Analytics |
 | `mcp.audit` | McpInterceptor / proxy sidecar | Analytics, LGPD |
+| `sentiment.updated` | AI Gateway (`sentiment_emitter.py`) | analytics-api (Arc 3) |
 
 ## Naming conventions
 
@@ -483,23 +484,285 @@ conversations.session_closed
 | `evaluation_context_get` | MCP Tool — evaluator lê `ReplayContext` (inclui `original_content`) |
 | `evaluation_submit`   | MCP Tool — publica `EvaluationResult` em `evaluation.events` |
 
+### Componentes adicionais (Comparison Mode)
+
+| Módulo | Responsabilidade |
+|--------|-----------------|
+| `comparator.py` | Jaccard similarity turn-a-turn, produz `ComparisonReport` — sem I/O |
+| `ReplayContext.comparison_mode` | Flag que sinaliza ao evaluator para fornecer `comparison_turns` |
+| `evaluation_submit.comparison_turns` | Input opcional com pares (production_text, replay_text) |
+| `buildComparisonReport()` | Função TypeScript inline em `evaluation.ts` — computa similarity + deltas |
+
 ### Schemas novos em `@plughub/schemas`
 
 `EvaluationDimension`, `EvaluationResult`, `ReplayEvent`, `ReplayContext`,
-`EvaluationRequest`, `ComparisonReport` (schema definido, comparator pendente)
+`EvaluationRequest`, `ComparisonReport`
+
+### Comparison Mode — fluxo completo
+
+```
+ReplayContext.comparison_mode: true
+  → evaluator recebe flag via evaluation_context_get
+  → evaluator gera comparison_turns: [{turn_index, production_text, replay_text, latency_ms?}]
+  → evaluation_submit(comparison_turns, comparison_replay_outcome?, comparison_replay_sentiment?)
+      → buildComparisonReport() — Jaccard, divergence_points (threshold=0.4), deltas
+      → EvaluationResult.comparison = ComparisonReport
+      → event_type: "evaluation.completed" publicado com .comparison presente
+  → resultado retorna comparison_included: true
+```
+
+### Jaccard similarity
+
+Coeficiente J(A,B) = |A ∩ B| / |A ∪ B| sobre tokens normalizados (lowercase, sem pontuação).
+Sem dependências externas. Determinístico. Threshold default: 0.4.
+Casos especiais: ambos vazios → 1.0; um vazio → 0.0.
 
 ### Timing fiel
 
 `ReplayEvent.delta_ms` preserva o intervalo original entre eventos.
 `speed_factor` escala o timing: `1.0` = real-time, `10.0` = default batch.
 
+### Tests
+
+- `session-replayer/tests/test_comparator.py` — 22 unit tests (pytest): Jaccard, compare, deltas, to_dict, threshold inválido
+
+## Usage Metering — metering ≠ pricing
+
+Implementado em `packages/usage-aggregator/`. Princípio: cada componente registra o que consumiu;
+um módulo de pricing separado (a construir) lê esses dados e decide o que cobrar.
+
+### Tópico Kafka: usage.events
+
+Schema em `@plughub/schemas/usage.ts` — `UsageEventSchema`. Campos: `event_id`, `tenant_id`,
+`session_id`, `dimension`, `quantity`, `timestamp`, `source_component`, `metadata`.
+Sem `unit_price_cents` ou `plan_id` — esses campos pertencem ao módulo de pricing.
+
+### Dimensões implementadas
+
+| Dimensão | Unidade | Publicado por |
+|---|---|---|
+| `sessions` | por sessão atendida | Core (`agent_busy`) — guard SET NX anti-duplicata |
+| `messages` | por mensagem `visibility: "all"` | Core (`message_send`) |
+| `llm_tokens_input` | tokens de prompt | AI Gateway (`inference.py`) |
+| `llm_tokens_output` | tokens de resposta | AI Gateway (`inference.py`) |
+| `whatsapp_conversations`, `voice_minutes`, `sms_segments`, `email_messages` | por canal | Channel Gateway (pendente) |
+
+### Componentes
+
+| Arquivo | Responsabilidade |
+|---|---|
+| `schemas/usage.ts` | `UsageEventSchema`, `QuotaLimitSchema`, `UsageCycleResetSchema` + schemas de metadata por dimensão |
+| `mcp-server/lib/usage-emitter.ts` | `emitSessionOpened`, `emitMessageSent` — fire-and-forget via Kafka |
+| `ai-gateway/usage_emitter.py` | `emit_llm_tokens` — dois eventos separados (input/output) por inferência |
+| `providers/base.py` | `LLMResponse` com `input_tokens` e `output_tokens` |
+| `usage-aggregator/aggregator.py` | `UsageAggregator.process()` — INCRBY Redis + INSERT PostgreSQL |
+| `usage-aggregator/consumer.py` | Kafka consumer `usage.events` + `_ensure_schema()` para DDL |
+| `mcp-server/lib/quota-check.ts` | `assertQuota` (INCRBY-check-rollback) + `checkConcurrentSessions` |
+
+### Redis keys de metering
+
+| Chave | Conteúdo | TTL |
+|---|---|---|
+| `{t}:usage:current:{dimension}` | Counter INCRBY por ciclo | 45 dias |
+| `{t}:usage:cycle_start` | ISO 8601 início do ciclo | 45 dias |
+| `{t}:quota:limit:{dimension}` | Limite operacional (escrito pelo operador ou pricing) | sem TTL |
+| `{t}:quota:max_concurrent_sessions` | Limite de sessões simultâneas | sem TTL |
+| `{t}:quota:concurrent_sessions` | Gauge atual (INCR/DECR pelo Core) | 6h |
+| `{t}:usage:session:{session_id}:counted` | Guard de idempotência para `sessions` | 5h |
+
+### Tests
+
+- `usage-aggregator/tests/test_aggregator.py` — 10 unit tests (pytest): Redis INCRBY, idempotência, graceful degradation, `_truncate_to_hour`
+- `mcp-server/src/__tests__/quota-check.test.ts` — 13 unit tests (vitest): `assertQuota` + `checkConcurrentSessions`
+- `e2e-tests/scenarios/regressions.ts` — 2 regression cases documentados (R1: ZodError em `session_context_get`, R2: parsing de `callTool()`)
+
 ### Pendente neste módulo
 
-- Comparison mode (`comparison_mode: true`) — comparator turn-a-turn produção vs replay
+- Publicação de `usage.events` no Channel Gateway (voice, WhatsApp, SMS)
+- Módulo de pricing: lê contadores + aplica planos + escreve `{t}:quota:limit:*`
+- `usage.cycle_reset` — reset mensal de contadores
+
+## WebChat Channel — hybrid stream model
+
+Implementado em `packages/channel-gateway/`. Três canais distintos: `webchat`, `webrtc`, `whatsapp` — mantidos separados porque `channel` é filtro hard no roteamento.
+
+### Protocolo WebSocket (typed envelope)
+
+```
+Cliente → Servidor
+  conn.authenticate  {token, cursor?}   — primeira mensagem após conn.hello
+  msg.text           {id, text}
+  msg.image          {id, file_id, caption?}
+  msg.document       {id, file_id, caption?}
+  msg.video          {id, file_id, caption?}
+  upload.request     {id, file_name, mime_type, size_bytes}
+  menu.submit        {menu_id, interaction, result}
+  conn.ping                             — keepalive do cliente
+
+Servidor → Cliente
+  conn.hello         {server_version}   — imediato após accept
+  conn.authenticated {contact_id, session_id, stream_cursor}
+  conn.error         {code, message}    — falha de autenticação
+  conn.pong                             — resposta ao conn.ping
+  upload.ready       {request_id, file_id, upload_url}
+  upload.committed   {file_id, url, mime_type, size_bytes, content_type}
+  msg.text / msg.image / msg.document / msg.video  — entrega do stream
+  interaction.request {menu_id, interaction, prompt, options?, fields?}
+  presence.typing_start  {participant_id, role}
+  presence.agent_joined  {participant_id, role}
+  conn.session_ended {reason}
+```
+
+Token (JWT HS256) vai no corpo da mensagem — nunca na URL (evita logs de acesso).
+
+### Hybrid stream model — por que não participante nomeado
+
+O cliente webchat NÃO é registrado como participante na sessão. Em vez disso, o Channel Gateway faz XREAD bloqueante direto no `session:{id}:stream`. Vantagens:
+- Reconnect por cursor: `XRANGE session:{id}:stream {cursor} +` — zero mensagens perdidas
+- Sem propagação de role `customer` por todas as MCP Tools
+- Sem complexidade de multi-tab (cada tab tem cursor próprio)
+- Typing indicators efêmeros ficam no pub/sub `session:{id}:typing` — não poluem o stream
+
+### WebchatAdapter — três tasks concorrentes
+
+```python
+receive_task  = _receive_loop()         # inbound do cliente → conversations.inbound
+delivery_task = _stream_delivery_loop() # XREAD session stream → ws.send_json
+typing_task   = _typing_listener()      # pub/sub typing → presence.*
+asyncio.wait({receive, delivery, typing}, FIRST_COMPLETED) → cancel outros → _close
+```
+
+### Upload de arquivos — dois estágios
+
+```
+1. WS:  upload.request {file_name, mime_type, size_bytes}
+2. WS:  upload.ready   {request_id, file_id, upload_url}
+3. HTTP: POST /webchat/v1/upload/{file_id} (binary)
+4. WS:  upload.committed {file_id, url, content_type}
+5. WS:  msg.image|document|video {file_id, caption?}
+```
+
+### AttachmentStore — interface estável
+
+| Fase | Implementação | Storage |
+|---|---|---|
+| Fase 1 | `FilesystemAttachmentStore` | Disco local + PostgreSQL (metadata) |
+| Fase 2 | `S3AttachmentStore` | S3/MinIO (interface inalterada) |
+
+Path: `{STORAGE_ROOT}/{tenant_id}/{YYYY}/{MM}/{DD}/{session_id}/{file_id}.{ext}`
+
+MIME allowlist: image/jpeg, image/png, image/webp, image/gif (16 MB), application/pdf (100 MB), video/mp4, video/webm (512 MB).
+
+Cron de expurgo dois estágios: Estágio 1 (horário) soft-delete; Estágio 2 (diário, grace 24h) delete físico.
+
+### Rotas HTTP
+
+| Rota | Descrição |
+|---|---|
+| `POST /webchat/v1/upload/{file_id}` | Recebe binário, chama `store.commit()`, envia `upload.committed` via WS |
+| `GET  /webchat/v1/attachments/{file_id}` | Streaming do arquivo; 410 Gone se expirado |
+
+### Tests
+
+- `tests/test_webchat_adapter.py` — 28 testes pytest (auth handshake, lifecycle, text/media/upload/menu, heartbeat, close_from_platform)
+- `tests/test_stream_subscriber.py` — 25 testes pytest (cursor tracking, filtro de visibilidade, mapeamento de todos os tipos de evento, resiliência a erros e cancelamento)
+- `tests/test_attachment_store.py` — 30 testes pytest (validate_mime, reserve, commit, resolve, soft_expire, stream_bytes — asyncpg mockado, filesystem real via tmp_path)
+- `tests/test_models.py` — 136 testes totais no pacote channel-gateway
+
+### Usage Metering — Channel Gateway
+
+Implementado em `usage_emitter.py`. Dimensões publicadas em `usage.events`:
+
+| Dimensão | Quantidade | Publicado por | Quando |
+|---|---|---|---|
+| `whatsapp_conversations` | 1 por conversa | adapter WhatsApp (futuro) | contact_open |
+| `voice_minutes` | ceil(segundos/60) | adapter WebRTC/Voice (futuro) | contact_close |
+| `sms_segments` | 1 por segmento | adapter SMS (futuro) | inbound/outbound |
+| `email_messages` | 1 por mensagem | adapter Email (futuro) | inbound/outbound |
+| `webchat_attachments` | 1 por arquivo | `upload_router.py` | após store.commit() |
+
+`webchat_attachments` é a única dimensão atualmente wired (commit de arquivo no upload flow).
+As demais funções estão implementadas e documentadas, prontas para os adapters futuros.
+
+Tests: `tests/test_usage_emitter.py` — 22 testes (todas as dimensões + error path).
+
+### Novas dependências
+
+`PyJWT>=2.8.0`, `asyncpg>=0.29.0`, `aiofiles>=23.2.1`
+
+### Novos campos em Settings
+
+| Campo | Padrão | Descrição |
+|---|---|---|
+| `jwt_secret` | `changeme_...` | Segredo HS256 para validar tokens de cliente |
+| `ws_auth_timeout_s` | `30` | Timeout para receber conn.authenticate |
+| `storage_root` | `/var/plughub/attachments` | Raiz dos arquivos de upload |
+| `attachment_expiry_days` | `30` | TTL dos uploads |
+| `database_url` | `postgresql://...` | DSN PostgreSQL para metadados |
+| `webchat_serving_base_url` | `http://localhost:8010/...` | URL pública de download |
+| `webchat_upload_base_url` | `http://localhost:8010/...` | URL de upload HTTP |
+
+### Reconexão — casos pendentes (fase 2)
+
+- **Stream TTL expirado pós-session_ended**: se o Redis stream expirou (TTL do `session:{id}:stream` venceu após a sessão ser encerrada), o XREAD em stream inexistente retorna `nil` e o adapter fica aguardando eventos que nunca chegam. Solução: ao iniciar o `StreamSubscriber`, verificar se o stream existe (`XLEN`); se não existir, enviar `conn.session_ended` imediatamente e fechar a conexão.
+- **jwt_secret por tenant**: fase 1 usa segredo único por instância (`settings.jwt_secret`). Produção multi-tenant exige secret por tenant ou validação via JWKS endpoint.
 
 ## Pending (next iteration)
 
-- Comparison mode: comparator turn-a-turn produção vs replay (EvaluationRequest.comparison_mode)
+### Arc 2 — fechamento
+
+- ~~E2E scenario 12: webchat auth flow + media upload end-to-end~~ ✅
+- ~~Usage Metering no Channel Gateway (voice_minutes, whatsapp_conversations, sms_segments)~~ ✅
+- WebChat reconexão fase 2: tratar stream TTL expirado + jwt_secret por tenant
+- AttachmentStore fase 2: S3/MinIO
+- Magic bytes validation no upload (phase 2)
+- Pricing Module v1: planos, tarifas, ciclo de billing
+
+### Arc 3 — Analytics, Dashboard Operacional e Relatórios
+
+**Dependência prévia:** ~~AI Gateway deve publicar `sentiment.updated` no Kafka antes da analytics-api poder agregar sentimento por pool em real-time.~~ ✅ Implementado: `sentiment_emitter.py` publica `sentiment.updated` no Kafka e mantém `{tenant_id}:pool:{pool_id}:sentiment_live` no Redis após cada turno LLM.
+
+**Novos pacotes:**
+- `packages/analytics-api/` — consumer Kafka→ClickHouse, API REST, SSE
+- `packages/operator-console/` — React app: heatmap, drill-down, intervenção
+
+**Tasks:**
+
+1. ~~**AI Gateway — publicar sentiment.updated**~~: ✅ `sentiment_emitter.py` — `emit_sentiment_updated` (Kafka topic `sentiment.updated`) + `update_sentiment_live` (Redis hash `{tenant_id}:pool:{pool_id}:sentiment_live`, TTL 300s, avg_score + distribuição por categoria). Wired em `SessionManager.update_partial_params`. Tests: `test_sentiment_emitter.py` (41 assertions).
+
+2. ~~**analytics-api — consumer + ClickHouse schema**~~: ✅ `packages/analytics-api/` — 6 tabelas ClickHouse (`sessions`, `queue_events`, `agent_events`, `messages`, `usage_events`, `sentiment_events`), todas `ReplacingMergeTree` para idempotência. Consumer multi-topic (8 tópicos) com commit manual após batch. Parsers por topic (models.py). ClickHouse + analytics-api adicionados ao docker-compose.test.yml. Tests: `test_consumer.py` (30 assertions).
+
+3. ~~**analytics-api — endpoints dashboard**~~: ✅ `GET /dashboard/operational` (SSE, Redis snapshots, 5s interval, `event: pools`), `GET /dashboard/metrics` (ClickHouse últimas 24h — sessions/agent_events/usage/sentiment agregados, retorna 503 em erro), `GET /dashboard/sentiment` (Redis `sentiment_live` por pool). Query helpers em `query.py`: `get_metrics_24h` (4 queries CH, `asyncio.to_thread`), `get_pool_snapshots` (scan+mget), `get_sentiment_live` (scan+hgetall). Tests: `test_dashboard.py` (18 assertions).
+
+4. ~~**analytics-api — endpoints reports + BI export**~~: ✅ `GET /reports/sessions`, `/reports/agents`, `/reports/quality`, `/reports/usage`. Filtros opcionais por endpoint (channel, outcome, close_reason, pool_id, agent_type_id, event_type, dimension, source_component, category). Paginação (`page`, `page_size`): max 1000 JSON / 10000 CSV. `format=csv` retorna `text/csv` com `Content-Disposition: attachment`. Helpers em `reports_query.py` (`asyncio.to_thread`, count + data query, `_to_csv`). Tests: `test_reports.py` (26 assertions).
+
+5. ~~**analytics-api — camada admin consolidada**~~: ✅ `GET /admin/consolidated` com agregação cross-tenant por canal e por pool; RBAC: tenant operator vê apenas `tenant_id = X`, admin vê tudo. Auth Bearer JWT HS256 (`admin_jwt_secret`). `Principal.effective_tenant()` aplica o filtro correto por role. `admin_query.py`: 3 queries CH (`by_channel` com breakdown por outcome, `by_pool` sessions + sentinel overlay de `sentiment_events`). Tests: `test_admin.py` (21 assertions — `TestPrincipal`, `TestRequirePrincipal`, `TestQueryConsolidated`).
+
+6. ~~**operator-console fase 1 — heatmap + métricas realtime**~~: ✅ heatmap de sentimento por pool (tiles coloridos por avg_score, ordered worst-first), painel lateral com métricas do pool (available/queue/SLA/distribuição) e resumo 24h; atualização via SSE ~5s. `packages/operator-console/` — React 18 + TypeScript + Vite. Hooks: `usePoolSnapshots` (SSE EventSource), `useSentimentLive` (poll 10s), `useMetrics24h` (poll 60s), `usePoolViews` (merge). Componentes: `HeatmapGrid`, `PoolTile` (cor interpolada, badge SLA breach), `MetricsPanel` (pool detail + distribution bars + 24h summary), `Header` (tenant input, status dot). Build: `tsc -b && vite build` → 157 kB JS gzip 50 kB.
+
+7. ~~**operator-console fase 2 — drill-down read-only**~~: ✅ pool → lista de sessões ativas → transcrição ao vivo. Backend: `sessions.py` em `analytics-api` — `GET /sessions/active` (ClickHouse `closed_at IS NULL` + Redis pipeline LRANGE sentiment, sorted worst-first) e `GET /sessions/{id}/stream` (SSE: evento `history` com XRANGE + eventos `entry` via XREAD bloqueante, keepalive 15s). Frontend: `useActiveSessions` (poll 10s), `useSessionStream` (EventSource SSE), `SessionList` (lista com accent colorido, badge de categoria, handle time, botão drill-in), `SessionTranscript` (auto-scroll, message bubbles diferenciados por role, system events com linha separadora, `agents_only` destacado, status dot ao vivo). `HeatmapGrid`/`PoolTile` atualizados com botão "sessions →" para drill-down. `App.tsx` refatorado para 3 níveis: heatmap → sessions → transcript. Build: 168 kB JS gzip 53 kB. Tests: `test_sessions.py` (39 assertions — TestClassify, TestSafeJson, TestParseEntry, TestFetchActiveSessions, TestOverlaySentiment, TestListActiveSessionsEndpoint). Total analytics-api: 134/134.
+
+8. **operator-console fase 3 — intervenção ativa**: botão "entrar como supervisor" → agent_login → agent_ready → session_invite (role=supervisor); canal WebSocket bidirecional; mensagens `agents_only` e intervenção direta; auditoria via `mcp.audit`.
+
+9. **Metabase setup**: configuração de conexão ao ClickHouse, queries base por tenant, sandboxing multi-tenant por `tenant_id`, dashboards de relatório self-service.
+
+10. ~~**Config Management Module — separação env vars × configuração de módulo**~~: ✅ `packages/config-api/` com tabela PostgreSQL `platform_config (tenant_id, namespace, key, value JSONB, updated_at)` + API REST CRUD (`GET/PUT/DELETE /config/{namespace}/{key}`) + seed de todos os valores atuais hardcoded. Leitura com cache Redis (TTL 60s) para não adicionar latência no hot path. Fase 2: UI de visualização no operator-console.
+    - **Dois níveis**: `tenant_id = '__global__'` para defaults de plataforma; tenant real para overrides específicos. Lookup: tenant wins over global.
+    - **8 namespaces seedados**: `sentiment` (thresholds, live_ttl_s), `routing` (snapshot_ttl_s, sla_default_ms, score_weights, estimated_wait_factor, congestion_sla_factor), `session` (ai_gateway_ttl_s, channel_gateway_ttl_s), `consumer` (batch_size, timeout_ms, restart_delay_s, max_restart_delay_s), `dashboard` (sse_interval_s, sse_retry_ms), `webchat` (auth_timeout_s, attachment_expiry_days, upload_limits_mb), `masking` (authorized_roles, default_retention_days, capture_input_default, capture_output_default), `quota` (max_concurrent_sessions, llm_tokens_daily, messages_daily).
+    - **`ConfigStore`**: `get()` (cache hit → DB miss), `get_or_default()`, `list_namespace()` (com cache de namespace), `list_all()`, `set()` (upsert + invalidação imediata), `delete()`. Invalidação global faz SCAN para limpar variantes de tenant.
+    - Tests: `test_store.py` (27 assertions — TestConfigCache, TestConfigStoreGet, TestConfigStoreSet, TestConfigStoreDelete, TestConfigStoreList, TestSeedData).
+
+**Arquitetura de dados:**
+```
+Kafka topics → analytics-api consumer → ClickHouse
+  (conversations.*, agent.done, usage.events, queue.position_updated, sentiment.updated)
+
+Redis snapshots + sentiment_live → analytics-api → SSE → operator-console
+PostgreSQL (evaluation, sentiment_timeline) → analytics-api (queries pontuais)
+
+ClickHouse → Metabase (relatórios self-service)
+analytics-api REST → BI externos (PowerBI, Looker, Tableau)
+```
 
 ## E2E test suite — scenarios
 
@@ -515,8 +778,11 @@ conversations.session_closed
 | 08 | `08_outbound.ts` | outbound contact: request → AI open → human close |
 | 09 | `09_session_replayer.ts` | session replayer pipeline: session_closed → ReplayContext → evaluation_submit (11 assertions) |
 | 10 | `10_masking.ts` | message masking: MaskingConfig → tokens inline → role-based original_content (9 assertions) |
+| 11 | `11_comparison_mode.ts` | comparison mode: ReplayContext.comparison_mode → evaluation_submit com comparison_turns → ComparisonReport (12 assertions) |
+| 12 | `12_webchat_channel.ts` | webchat channel: auth handshake WS, text message → Kafka, upload flow completo (upload.request→ready→HTTP→committed→msg.image), reconnect com cursor (14 assertions) |
+| R  | `regressions.ts` | regression suite: ZodError em session_context_get, parsing de callTool (--regression flag) |
 
-Run with: `ts-node runner.ts --conference` or `ts-node runner.ts --only 06`
+Run with: `ts-node runner.ts --conference` or `ts-node runner.ts --only 06` or `ts-node runner.ts --only 12` or `ts-node runner.ts --webchat`
 
 Scenario 06 covers two parts:
 - **Part A** — Conference happy path: primary agent busy → supervisor calls `agent_join_conference` → Redis `conference:*` keys verified → specialist `agent_done` with `conference_id` (session stays open) → primary `agent_done` closes session

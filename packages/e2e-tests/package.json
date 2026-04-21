@@ -12,11 +12,13 @@
     "jsonwebtoken": "^9.0.2",
     "kafkajs": "^2.2.4",
     "node-fetch": "^3.3.2",
+    "ws": "^8.20.0",
     "zod": "^3.23.0"
   },
   "devDependencies": {
     "@types/jsonwebtoken": "^9.0.6",
     "@types/node": "^20.0.0",
+    "@types/ws": "^8.18.1",
     "ts-node": "^10.9.0",
     "typescript": "^5.4.0"
   }

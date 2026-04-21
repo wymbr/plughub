@@ -11,6 +11,11 @@ dependencies    = [
     "redis[hiredis]>=5.2.0",
     "pydantic>=2.9.0",
     "pydantic-settings>=2.6.0",
+    # Attachment storage
+    "asyncpg>=0.29.0",
+    "aiofiles>=23.2.1",
+    # JWT customer token validation
+    "PyJWT>=2.8.0",
 ]
 
 [project.scripts]

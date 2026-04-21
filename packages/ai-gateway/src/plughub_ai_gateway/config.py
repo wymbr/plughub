@@ -54,6 +54,10 @@ class Settings(BaseSettings):
     # Inference max_tokens default
     inference_max_tokens: int = 1024
 
+    # Kafka — metering (usage.events)
+    kafka_brokers: str = "kafka:9092"
+    gateway_id:    str = "ai-gateway"
+
     def model_for_profile(self, profile: str) -> str:
         """Backward compat with /v1/turn and /v1/reason."""
         return {

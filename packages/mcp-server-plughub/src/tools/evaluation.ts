@@ -293,6 +293,115 @@ function calculateScores(
   return { scores, itemsExcluded }
 }
 
+// ─── Helpers — comparação turn-a-turn ────────────────────────────────────────
+
+/**
+ * Jaccard similarity sobre tokens normalizados.
+ * Coeficiente J(A,B) = |A ∩ B| / |A ∪ B|
+ * Sem dependências externas. Determinístico.
+ */
+function jaccardSimilarity(a: string, b: string): number {
+  const tokenize = (s: string): Set<string> => {
+    const normalized = s.toLowerCase().replace(/[^\w\s]/g, " ")
+    const tokens = new Set<string>()
+    for (const t of normalized.split(/\s+/)) {
+      if (t) tokens.add(t)
+    }
+    return tokens
+  }
+
+  const ta = tokenize(a)
+  const tb = tokenize(b)
+
+  if (ta.size === 0 && tb.size === 0) return 1.0
+  if (ta.size === 0 || tb.size === 0) return 0.0
+
+  let intersectionSize = 0
+  for (const token of ta) {
+    if (tb.has(token)) intersectionSize++
+  }
+  const unionSize = ta.size + tb.size - intersectionSize
+
+  return intersectionSize / unionSize
+}
+
+/**
+ * Computa ComparisonReport a partir dos pares (production_text, replay_text).
+ * Threshold padrão: 0.4 — distingue paráfrases de respostas completamente diferentes.
+ */
+function buildComparisonReport(
+  turns: Array<{
+    turn_index:             number
+    production_text:        string
+    replay_text:            string
+    production_latency_ms?: number
+    replay_latency_ms?:     number
+  }>,
+  opts?: {
+    threshold?:                  number
+    production_outcome?:         string
+    replay_outcome?:             string
+    production_final_sentiment?: number
+    replay_final_sentiment?:     number
+  }
+): Record<string, unknown> {
+  const threshold = opts?.threshold ?? 0.4
+
+  if (turns.length === 0) {
+    return { similarity_score: 1.0, divergence_points: [] }
+  }
+
+  const similarities = turns.map(t => jaccardSimilarity(t.production_text, t.replay_text))
+  const avgSimilarity = similarities.reduce((a, b) => a + b, 0) / similarities.length
+
+  const divergencePoints = turns
+    .map((t, i) => ({ ...t, similarity: similarities[i] }))
+    .filter(t => t.similarity < threshold)
+    .map(t => ({
+      turn_index:      t.turn_index,
+      production_text: t.production_text,
+      replay_text:     t.replay_text,
+      similarity:      Math.round(t.similarity * 10000) / 10000,
+    }))
+
+  const report: Record<string, unknown> = {
+    similarity_score:  Math.round(avgSimilarity * 10000) / 10000,
+    divergence_points: divergencePoints,
+  }
+
+  if (opts?.production_outcome !== undefined && opts?.replay_outcome !== undefined) {
+    report["outcome_delta"] = {
+      production_outcome: opts.production_outcome,
+      replay_outcome:     opts.replay_outcome,
+      diverged:           opts.production_outcome !== opts.replay_outcome,
+    }
+  }
+
+  if (opts?.production_final_sentiment !== undefined && opts?.replay_final_sentiment !== undefined) {
+    const delta = opts.replay_final_sentiment - opts.production_final_sentiment
+    report["sentiment_delta"] = {
+      production_final: Math.round(opts.production_final_sentiment * 10000) / 10000,
+      replay_final:     Math.round(opts.replay_final_sentiment * 10000)    / 10000,
+      delta:            Math.round(delta * 10000) / 10000,
+    }
+  }
+
+  const prodLatencies  = turns.map(t => t.production_latency_ms).filter((v): v is number => v !== undefined)
+  const replayLatencies = turns.map(t => t.replay_latency_ms).filter((v): v is number => v !== undefined)
+
+  if (prodLatencies.length > 0 && replayLatencies.length > 0) {
+    const prodAvg   = prodLatencies.reduce((a, b) => a + b, 0)   / prodLatencies.length
+    const replayAvg = replayLatencies.reduce((a, b) => a + b, 0) / replayLatencies.length
+    report["latency_delta"] = {
+      production_avg_ms: Math.round(prodAvg * 100)   / 100,
+      replay_avg_ms:     Math.round(replayAvg * 100)  / 100,
+      delta_ms:          Math.round((replayAvg - prodAvg) * 100) / 100,
+    }
+  }
+
+  return report
+}
+
 // ─── Schemas — Session Replayer tools ────────────────────────────────────────
 
 const EvaluationContextGetInputSchema = z.object({
@@ -310,6 +419,14 @@ const EvaluationDimensionInputSchema = z.object({
   flags:        z.array(z.string()).default([]),
 })
 
+const ComparisonTurnInputSchema = z.object({
+  turn_index:             z.number().int().nonnegative(),
+  production_text:        z.string(),
+  replay_text:            z.string(),
+  production_latency_ms:  z.number().nonnegative().optional(),
+  replay_latency_ms:      z.number().nonnegative().optional(),
+})
+
 const EvaluationSubmitInputSchema = z.object({
   session_token:      z.string().min(1),
   session_id:         z.string().min(1),
@@ -322,6 +439,18 @@ const EvaluationSubmitInputSchema = z.object({
   improvement_points: z.array(z.string()).default([]),
   compliance_flags:   z.array(z.string()).default([]),
   is_benchmark:       z.boolean().default(false),
+
+  /**
+   * Pares (produção vs replay) fornecidos pelo agente evaluator quando
+   * comparison_mode: true no ReplayContext.
+   * Quando presente, evaluation_submit computa o ComparisonReport e o
+   * inclui no EvaluationResult publicado.
+   */
+  comparison_turns:           z.array(ComparisonTurnInputSchema).optional(),
+  /** Outcome que o agente avaliaria para o replay (ex: "resolved", "abandoned") */
+  comparison_replay_outcome:  z.string().optional(),
+  /** Sentimento final estimado para o replay (−1 a 1) */
+  comparison_replay_sentiment: z.number().min(-1).max(1).optional(),
 })
 
 // ─── Registro das tools ───────────────────────────────────────────────────────
@@ -632,6 +761,7 @@ export function registerEvaluationTools(server: McpServer, deps: EvaluationDeps)
           session_token, session_id, participant_id, evaluation_id,
           composite_score, dimensions, summary, highlights,
           improvement_points, compliance_flags, is_benchmark,
+          comparison_turns, comparison_replay_outcome, comparison_replay_sentiment,
         } = parsed
 
         const { tenant_id } = verifySessionToken(session_token)
@@ -646,20 +776,39 @@ export function registerEvaluationTools(server: McpServer, deps: EvaluationDeps)
           if (typeRaw) agent_type_id = typeRaw
         } catch { /* non-fatal */ }
 
-        // Lê outcome da sessão original do ReplayContext
-        let session_outcome: string | undefined
+        // Lê ReplayContext para enriquecer o resultado
+        let session_outcome: string   | undefined
+        let production_final_sentiment: number | undefined
+
         try {
           const ctxRaw = await redis.get(`${tenant_id}:replay:${session_id}:context`)
           if (ctxRaw) {
             const ctx  = JSON.parse(ctxRaw) as Record<string, unknown>
             const meta = ctx["session_meta"] as Record<string, unknown> | undefined
             session_outcome = meta?.["outcome"] as string | undefined
+
+            // Sentimento final da produção (último entry do array)
+            const sentiment = ctx["sentiment"] as Array<{ score: number }> | undefined
+            if (Array.isArray(sentiment) && sentiment.length > 0) {
+              production_final_sentiment = sentiment[sentiment.length - 1]?.score
+            }
           }
         } catch { /* non-fatal */ }
 
         const evaluated_at = new Date().toISOString()
 
-        const result = {
+        // ── Comparison Mode: computa ComparisonReport se turns fornecidos ──────
+        let comparison: Record<string, unknown> | undefined
+        if (comparison_turns && comparison_turns.length > 0) {
+          comparison = buildComparisonReport(comparison_turns, {
+            production_outcome:         session_outcome,
+            replay_outcome:             comparison_replay_outcome,
+            production_final_sentiment: production_final_sentiment,
+            replay_final_sentiment:     comparison_replay_sentiment,
+          })
+        }
+
+        const result: Record<string, unknown> = {
           event_type:         "evaluation.completed",
           evaluation_id,
           session_id,
@@ -677,6 +826,11 @@ export function registerEvaluationTools(server: McpServer, deps: EvaluationDeps)
           evaluated_at,
         }
 
+        // Inclui comparison apenas quando presente (comparison_mode: true)
+        if (comparison !== undefined) {
+          result["comparison"] = comparison
+        }
+
         // Publica em evaluation.events — consumer persiste no PostgreSQL
         await kafka.publish("evaluation.events", result)
 
@@ -686,11 +840,12 @@ export function registerEvaluationTools(server: McpServer, deps: EvaluationDeps)
         } catch { /* non-fatal */ }
 
         return ok({
-          submitted:      true,
+          submitted:            true,
           evaluation_id,
           session_id,
           composite_score,
           evaluated_at,
+          comparison_included:  comparison !== undefined,
         })
       } catch (e) {
         return handleCaughtError(e)

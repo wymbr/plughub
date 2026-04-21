@@ -1,94 +1,183 @@
 """
 adapters/webchat.py
-WebSocket adapter for the web chat channel.
-Handles the full lifecycle of a webchat contact:
-  - WebSocket connection → contact_open
-  - Inbound messages/menu submits → conversations.inbound
-  - Outbound messages/menus from conversations.outbound → WebSocket
-  - WebSocket disconnect → contact_closed
+WebSocket adapter for the web chat channel — hybrid stream model.
+Spec: PlugHub v24.0 sections 3.5, 4.7
 
-Spec: PlugHub v24.0 section 3.5 / channel-gateway-webchat.md
+Protocol flow (new typed envelope):
+  1. WS accept (no credentials in URL — safe for access logs)
+  2. Server → client: conn.hello
+  3. Client → server: conn.authenticate {token, cursor?}
+  4. Server validates JWT → derives contact_id, session_id, tenant_id
+  5. Server → client: conn.authenticated {contact_id, session_id, stream_cursor}
+  6. Three concurrent tasks run until first exits:
+       a. _receive_loop        — inbound messages from client
+       b. _stream_delivery_loop— outbound events via XREAD on session stream
+       c. _typing_listener     — ephemeral typing indicators via Redis pub/sub
+  7. On first task exit → cancel others → _close(reason)
+
+Upload lifecycle (within _receive_loop):
+  client → upload.request  {id, file_name, mime_type, size_bytes}
+  server → upload.ready    {request_id, file_id, upload_url}
+  client → POST upload_url (binary, handled by upload_router.py)
+  server → upload.committed{file_id, url, mime_type, size_bytes, content_type}
+  client → msg.image|document|video {file_id, caption?}
+  (adapter normalises → conversations.inbound)
+
+Reconnect:
+  Client passes cursor=<last_event_id> in conn.authenticate.
+  StreamSubscriber resumes from that cursor — no missed events.
+
+Backward compat:
+  Legacy message types (message.text, pong) still accepted in _receive_loop.
 """
 
 from __future__ import annotations
+
 import asyncio
 import json
 import logging
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+from typing import Any, Callable
 
-from fastapi import WebSocket, WebSocketDisconnect
+import jwt as pyjwt
+import redis.asyncio as aioredis
 from aiokafka import AIOKafkaProducer
+from fastapi import WebSocket, WebSocketDisconnect
 
+from ..attachment_store import AttachmentStore, FilesystemAttachmentStore
 from ..config import Settings
 from ..context_reader import ContextReader
 from ..models import (
-    NormalizedInboundEvent, MessageAuthor, MessageContent, ContextSnapshot,
-    ContactOpenEvent, ContactClosedEvent,
-    WsConnectionAccepted, WsMessageText, WsMenuSubmit,
+    ContactClosedEvent,
+    ContactOpenEvent,
+    ContextSnapshot,
+    MessageAuthor,
+    MessageContent,
+    NormalizedInboundEvent,
+    WsAuthError,
+    WsAuthenticate,
+    WsAuthenticated,
+    WsHello,
+    WsMediaMessage,
+    WsMenuSubmit,
+    WsMessageText,
+    WsPong,
+    WsTypingStart,
+    WsTypingStop,
+    WsUploadReady,
+    WsUploadRequest,
 )
 from ..session_registry import SessionRegistry
+from ..stream_subscriber import StreamSubscriber
 
 logger = logging.getLogger("plughub.channel-gateway.webchat")
+
+# JWT claims expected in customer tokens
+_CLAIM_SUB        = "sub"           # contact_id
+_CLAIM_SESSION    = "session_id"    # present on reconnect tokens
+_CLAIM_TENANT     = "tenant_id"
+
+
+class AuthError(Exception):
+    """Raised during the auth handshake with a structured code."""
+    def __init__(self, code: str, message: str) -> None:
+        super().__init__(message)
+        self.code    = code
+        self.message = message
 
 
 class WebchatAdapter:
     """
     Handles a single WebSocket connection for the duration of a contact.
-    One instance per active connection.
+    One instance per active WebSocket connection.
+
+    Args:
+        ws:               Active FastAPI WebSocket connection.
+        pool_id:          Service pool to route this contact to.
+        producer:         Kafka producer for publishing normalised events.
+        registry:         SessionRegistry for cross-instance delivery tracking.
+        context_reader:   Reads per-session NLP context snapshot from Redis.
+        settings:         Gateway settings.
+        redis:            Async Redis client (for stream XREAD + pub/sub).
+        attachment_store: Optional — enables file upload flow.  If None, upload.request
+                          responses with an error.
+        _token_validator: Optional override for JWT validation — used in tests to
+                          bypass PyJWT.  Signature: (token: str) -> dict.
     """
 
     def __init__(
         self,
-        ws:               WebSocket,
-        contact_id:       str,
-        session_id:       str,
-        producer:         AIOKafkaProducer,
-        registry:         SessionRegistry,
-        context_reader:   ContextReader,
-        settings:         Settings,
-        pool_id:          str = "",
+        *,
+        ws:                WebSocket,
+        pool_id:           str,
+        producer:          AIOKafkaProducer,
+        registry:          SessionRegistry,
+        context_reader:    ContextReader,
+        settings:          Settings,
+        redis:             aioredis.Redis,
+        attachment_store:  AttachmentStore | None = None,
+        _token_validator:  Callable[[str], dict] | None = None,
     ) -> None:
-        self._ws             = ws
-        self._contact_id     = contact_id
-        self._session_id     = session_id
-        self._producer       = producer
-        self._registry       = registry
-        self._context_reader = context_reader
-        self._settings       = settings
-        # pool_id passed explicitly from the URL path takes precedence over
-        # the env-level entry_point_pool_id (backward compat fallback).
-        self._pool_id        = pool_id or settings.entry_point_pool_id
-        self._started_at     = datetime.now(timezone.utc).isoformat()
+        self._ws               = ws
+        self._pool_id          = pool_id or settings.entry_point_pool_id
+        self._producer         = producer
+        self._registry         = registry
+        self._context_reader   = context_reader
+        self._settings         = settings
+        self._redis            = redis
+        self._attachment_store = attachment_store
+        self._token_validator  = _token_validator
 
-    # ── Lifecycle ─────────────────────────────────────────────────────────
+        # Set during _auth_handshake
+        self._contact_id:     str = ""
+        self._session_id:     str = ""
+        self._initial_cursor: str = "0"
+        self._started_at:     str = ""
+
+    # ── Lifecycle ──────────────────────────────────────────────────────────────
 
     async def handle(self) -> None:
+        """Entry point: full connection lifecycle from accept to close."""
         await self._ws.accept()
+
+        # ── Auth handshake ─────────────────────────────────────────────────────
+        try:
+            await asyncio.wait_for(
+                self._auth_handshake(),
+                timeout=float(self._settings.ws_auth_timeout_s),
+            )
+        except asyncio.TimeoutError:
+            logger.warning("auth_timeout — no conn.authenticate received")
+            try:
+                await self._ws.close(code=4001, reason="auth_timeout")
+            except Exception:
+                pass
+            return
+        except AuthError as exc:
+            logger.warning("auth_error code=%s: %s", exc.code, exc.message)
+            try:
+                await self._ws.send_json(
+                    WsAuthError(code=exc.code, message=exc.message).model_dump()
+                )
+                await self._ws.close(code=4003, reason=exc.code)
+            except Exception:
+                pass
+            return
+
+        # ── Session setup ──────────────────────────────────────────────────────
+        tenant_id    = self._settings.tenant_id
+        ttl          = self._settings.session_ttl_seconds
+        self._started_at = datetime.now(timezone.utc).isoformat()
+
         await self._registry.register(self._contact_id, self._ws)
 
-        # Announce connection to client
-        await self._ws.send_json(
-            WsConnectionAccepted(
-                contact_id=self._contact_id,
-                session_id=self._session_id,
-            ).model_dump()
-        )
-
-        tenant_id = self._settings.tenant_id
-
-        # Store session metadata in Redis so MCP tools (notification_send, conversation_escalate)
-        # can look up contact_id, tenant_id, pool_id, and channel from session_id.
-        # Keys:
-        #   session:{session_id}:contact_id  — fast lookup (used by notification_send)
-        #   session:{session_id}:meta        — full metadata JSON (used by conversation_escalate)
-        ttl = self._settings.session_ttl_seconds
-        await self._registry._redis.setex(
+        await self._redis.setex(
             f"session:{self._session_id}:contact_id",
             ttl,
             self._contact_id,
         )
-        await self._registry._redis.setex(
+        await self._redis.setex(
             f"session:{self._session_id}:meta",
             ttl,
             json.dumps({
@@ -102,7 +191,6 @@ class WebchatAdapter:
             }),
         )
 
-        # Announce contact lifecycle to platform
         await self._publish_event(
             ContactOpenEvent(
                 contact_id=self._contact_id,
@@ -111,15 +199,12 @@ class WebchatAdapter:
             ).model_dump()
         )
         logger.info(
-            "contact_open contact_id=%s session_id=%s pool=%s",
-            self._contact_id, self._session_id, self._pool_id,
+            "contact_open contact_id=%s session_id=%s pool=%s cursor=%s",
+            self._contact_id, self._session_id, self._pool_id, self._initial_cursor,
         )
 
-        # Publish routing event so the Routing Engine allocates an agent immediately.
-        # pool_id comes from the URL path (/ws/chat/{pool_id}) or falls back to
-        # PLUGHUB_ENTRY_POINT_POOL_ID env var for legacy single-pool deployments.
         if self._pool_id:
-            routing_event = {
+            await self._publish_inbound({
                 "session_id":  self._session_id,
                 "tenant_id":   tenant_id,
                 "customer_id": self._contact_id,
@@ -127,146 +212,430 @@ class WebchatAdapter:
                 "pool_id":     self._pool_id,
                 "started_at":  self._started_at,
                 "elapsed_ms":  0,
-            }
-            await self._publish_inbound(routing_event)
-            logger.info(
-                "routing_event published: session=%s pool=%s",
-                self._session_id, self._pool_id,
-            )
-        else:
-            logger.warning(
-                "pool_id not set (URL path and PLUGHUB_ENTRY_POINT_POOL_ID both empty) — "
-                "routing event not published for session=%s",
-                self._session_id,
-            )
+            })
 
+        # ── Concurrent tasks ───────────────────────────────────────────────────
+        receive_task  = asyncio.create_task(self._receive_loop(),         name="webchat_recv")
+        delivery_task = asyncio.create_task(self._stream_delivery_loop(), name="webchat_deliver")
+        typing_task   = asyncio.create_task(self._typing_listener(),      name="webchat_typing")
+
+        close_reason = "client_disconnect"
         try:
-            await self._receive_loop()
-        except WebSocketDisconnect:
-            logger.info("client_disconnect contact_id=%s", self._contact_id)
-            await self._close(reason="client_disconnect")
-        except asyncio.TimeoutError:
-            logger.info("timeout contact_id=%s", self._contact_id)
-            await self._close(reason="timeout")
-        except Exception as exc:
-            logger.error("error in webchat handler contact_id=%s: %s", self._contact_id, exc)
-            await self._close(reason="client_disconnect")
+            done, pending = await asyncio.wait(
+                {receive_task, delivery_task, typing_task},
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            # Infer close reason from the first finished task
+            for task in done:
+                if task.cancelled():
+                    close_reason = "client_disconnect"
+                elif task.exception() is not None:
+                    exc = task.exception()
+                    if isinstance(exc, asyncio.TimeoutError):
+                        close_reason = "session_timeout"
+                    elif isinstance(exc, WebSocketDisconnect):
+                        close_reason = "client_disconnect"
+                    else:
+                        logger.error(
+                            "unexpected error in task %s: %s",
+                            task.get_name(), exc, exc_info=exc,
+                        )
+                        close_reason = "client_disconnect"
+                break
+        finally:
+            for task in [receive_task, delivery_task, typing_task]:
+                if not task.done():
+                    task.cancel()
+                    try:
+                        await task
+                    except (asyncio.CancelledError, Exception):
+                        pass
+
+        await self._close(reason=close_reason)
 
     async def close_from_platform(self, reason: str = "agent_done") -> None:
-        """Called by the outbound consumer when session.closed arrives from platform."""
+        """Called externally (e.g. by OutboundConsumer) to close a session."""
         await self._close(reason=reason)
         try:
             await self._ws.close()
         except Exception:
             pass
 
-    # ── Inbound loop ──────────────────────────────────────────────────────
+    # ── Auth handshake ─────────────────────────────────────────────────────────
+
+    async def _auth_handshake(self) -> None:
+        """
+        Sends conn.hello, waits for conn.authenticate, validates token,
+        and sends conn.authenticated.  Sets self._contact_id / _session_id /
+        _initial_cursor on success or raises AuthError.
+        """
+        await self._ws.send_json(WsHello().model_dump())
+
+        raw = await self._ws.receive_text()
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            raise AuthError("bad_request", f"invalid JSON: {exc}") from exc
+
+        if data.get("type") != "conn.authenticate":
+            raise AuthError("bad_request", "expected conn.authenticate")
+
+        auth_msg = WsAuthenticate.model_validate(data)
+
+        try:
+            claims = self._decode_token(auth_msg.token)
+        except pyjwt.ExpiredSignatureError:
+            raise AuthError("token_expired", "token has expired")
+        except pyjwt.InvalidTokenError as exc:
+            raise AuthError("invalid_token", str(exc))
+
+        contact_id = str(claims.get(_CLAIM_SUB) or "")
+        if not contact_id:
+            raise AuthError("invalid_token", "missing 'sub' claim")
+
+        session_id = str(claims.get(_CLAIM_SESSION) or "") or str(uuid.uuid4())
+        cursor     = auth_msg.cursor or "0"
+
+        self._contact_id     = contact_id
+        self._session_id     = session_id
+        self._initial_cursor = cursor
+
+        await self._ws.send_json(
+            WsAuthenticated(
+                contact_id    = contact_id,
+                session_id    = session_id,
+                stream_cursor = cursor,
+            ).model_dump()
+        )
+        logger.debug(
+            "conn.authenticated contact_id=%s session_id=%s cursor=%s",
+            contact_id, session_id, cursor,
+        )
+
+    def _decode_token(self, token: str) -> dict:
+        """
+        Decodes and validates the customer JWT.
+        Override via _token_validator constructor param (used in tests).
+        """
+        if self._token_validator is not None:
+            return self._token_validator(token)
+        return pyjwt.decode(
+            token,
+            self._settings.jwt_secret,
+            algorithms=["HS256"],
+        )
+
+    # ── Inbound receive loop ───────────────────────────────────────────────────
 
     async def _receive_loop(self) -> None:
-        timeout = self._settings.ws_connection_timeout_s
+        """
+        Reads inbound WebSocket messages and dispatches them.
+        Raises WebSocketDisconnect on client disconnect.
+        Raises asyncio.TimeoutError if a heartbeat ping goes unanswered.
+        """
+        timeout = float(self._settings.ws_connection_timeout_s)
         while True:
             try:
                 raw = await asyncio.wait_for(
                     self._ws.receive_text(),
-                    timeout=float(timeout),
+                    timeout=timeout,
                 )
             except asyncio.TimeoutError:
-                # Send ping to check liveness before giving up
+                # No activity — send a ping to check liveness
                 try:
-                    await self._ws.send_json({"type": "ping"})
+                    await self._ws.send_json({"type": "conn.ping"})
                     raw = await asyncio.wait_for(
                         self._ws.receive_text(),
                         timeout=10.0,
                     )
-                except Exception:
-                    raise asyncio.TimeoutError
+                except asyncio.TimeoutError:
+                    raise  # propagate → session_timeout
 
-            data = json.loads(raw)
-            msg_type = data.get("type")
+            try:
+                data = json.loads(raw)
+            except json.JSONDecodeError:
+                logger.warning("invalid JSON from contact_id=%s", self._contact_id)
+                continue
 
-            if msg_type == "message.text":
-                await self._handle_text(WsMessageText.model_validate(data))
+            msg_type = data.get("type", "")
+
+            if msg_type in ("msg.text", "message.text"):       # new + legacy
+                await self._handle_text(data)
+            elif msg_type in ("msg.image", "msg.document", "msg.video"):
+                await self._handle_media(data)
+            elif msg_type == "upload.request":
+                await self._handle_upload_request(data)
             elif msg_type == "menu.submit":
                 await self._handle_menu_submit(WsMenuSubmit.model_validate(data))
-            elif msg_type == "pong":
-                pass  # heartbeat response
+            elif msg_type == "conn.ping":
+                await self._ws.send_json(WsPong().model_dump())
+            elif msg_type in ("conn.pong", "pong"):
+                pass  # heartbeat response — no-op
             else:
-                logger.warning("unknown message type=%s contact_id=%s", msg_type, self._contact_id)
+                logger.warning(
+                    "unknown message type=%s contact_id=%s", msg_type, self._contact_id
+                )
 
-    async def _handle_text(self, msg: WsMessageText) -> None:
-        snapshot = await self._context_reader.get_snapshot(self._session_id)
-        event = NormalizedInboundEvent(
-            contact_id=self._contact_id,
-            session_id=self._session_id,
-            author=MessageAuthor(type="customer"),
-            content=MessageContent(type="text", text=msg.text),
-            context_snapshot=snapshot,
+    # ── Outbound stream delivery ───────────────────────────────────────────────
+
+    async def _stream_delivery_loop(self) -> None:
+        """
+        Subscribes to the session's canonical Redis Stream and delivers events
+        to the client via WebSocket.  Cursor-based — survives reconnects without
+        missing events.
+        """
+        subscriber = StreamSubscriber(
+            redis      = self._redis,
+            session_id = self._session_id,
+            cursor     = self._initial_cursor,
         )
-        # Persist to conversation history before publishing so the record exists
-        # even if downstream consumers are temporarily unavailable.
+        async for msg in subscriber.messages():
+            try:
+                await self._ws.send_json(msg)
+            except Exception:
+                # WebSocket closed — stop delivery
+                return
+
+    # ── Typing indicators ──────────────────────────────────────────────────────
+
+    async def _typing_listener(self) -> None:
+        """
+        Subscribes to the session's ephemeral typing pub/sub channel and
+        forwards typing start/stop notifications to the client.
+
+        Channel key: session:{session_id}:typing
+        Expected message payload: {"type": "typing_start"|"typing_stop",
+                                    "participant_id": "...", "role": "..."}
+        """
+        channel = f"session:{self._session_id}:typing"
+        pubsub  = self._redis.pubsub()
+        await pubsub.subscribe(channel)
+        try:
+            async for msg in pubsub.listen():
+                if msg.get("type") != "message":
+                    continue
+                try:
+                    payload = json.loads(msg["data"])
+                except (json.JSONDecodeError, TypeError):
+                    continue
+                typing_type = payload.get("type")
+                try:
+                    if typing_type == "typing_start":
+                        await self._ws.send_json(
+                            WsTypingStart(
+                                participant_id = payload.get("participant_id", ""),
+                                role           = payload.get("role", "primary"),
+                            ).model_dump()
+                        )
+                    elif typing_type == "typing_stop":
+                        await self._ws.send_json(
+                            WsTypingStop(
+                                participant_id = payload.get("participant_id", ""),
+                            ).model_dump()
+                        )
+                except Exception:
+                    return  # WS closed
+        except asyncio.CancelledError:
+            pass
+        finally:
+            try:
+                await pubsub.unsubscribe(channel)
+                await pubsub.aclose()
+            except Exception:
+                pass
+
+    # ── Inbound handlers ───────────────────────────────────────────────────────
+
+    async def _handle_text(self, data: dict) -> None:
+        """Normalises a text message and publishes to conversations.inbound."""
+        text     = data.get("text", "")
+        msg_id   = data.get("id") or str(uuid.uuid4())
+        snapshot = await self._context_reader.get_snapshot(self._session_id)
+        event    = NormalizedInboundEvent(
+            message_id       = msg_id,
+            contact_id       = self._contact_id,
+            session_id       = self._session_id,
+            author           = MessageAuthor(type="customer"),
+            content          = MessageContent(type="text", text=text),
+            context_snapshot = snapshot,
+        )
         await self._registry.append_message(
-            session_id=self._session_id,
-            message_id=event.message_id,
-            author="customer",
-            text=msg.text,
-            timestamp=event.timestamp,
+            session_id = self._session_id,
+            message_id = event.message_id,
+            author     = "customer",
+            text       = text,
+            timestamp  = event.timestamp,
         )
         await self._publish_inbound(event.model_dump())
         logger.info(
-            "inbound text published: contact_id=%s session_id=%s turn=%s",
+            "inbound text contact_id=%s session_id=%s turn=%d",
             self._contact_id, self._session_id, snapshot.turn_number,
         )
 
-    async def _handle_menu_submit(self, msg: WsMenuSubmit) -> None:
+    async def _handle_media(self, data: dict) -> None:
+        """
+        Validates that the referenced file_id is committed and publishes a
+        media inbound event to conversations.inbound.
+        """
+        file_id  = data.get("file_id", "")
+        msg_type = data.get("type", "")
+
+        # Map WebSocket message type → media_type string
+        content_type_map = {
+            "msg.image":    "image",
+            "msg.document": "document",
+            "msg.video":    "video",
+        }
+        media_type = content_type_map.get(msg_type, "document")
+
+        # Validate that the file was committed (if store is wired)
+        if self._attachment_store is not None:
+            meta = await self._attachment_store.resolve(
+                file_id   = file_id,
+                tenant_id = self._settings.tenant_id,
+            )
+            if meta is None:
+                logger.warning(
+                    "media msg references unknown file_id=%s contact_id=%s",
+                    file_id, self._contact_id,
+                )
+                return
+            if meta.deleted_at is not None:
+                logger.warning(
+                    "media msg references expired file_id=%s contact_id=%s",
+                    file_id, self._contact_id,
+                )
+                return
+
         snapshot = await self._context_reader.get_snapshot(self._session_id)
-        event = NormalizedInboundEvent(
-            contact_id=self._contact_id,
-            session_id=self._session_id,
-            author=MessageAuthor(type="customer"),
-            content=MessageContent(
-                type="menu_result",
-                payload={
+        event    = NormalizedInboundEvent(
+            contact_id       = self._contact_id,
+            session_id       = self._session_id,
+            author           = MessageAuthor(type="customer"),
+            content          = MessageContent(
+                type    = "media",
+                payload = {
+                    "media_type": media_type,
+                    "file_id":    file_id,
+                    "caption":    data.get("caption"),
+                },
+            ),
+            context_snapshot = snapshot,
+        )
+        await self._publish_inbound(event.model_dump())
+        logger.info(
+            "inbound media type=%s file_id=%s contact_id=%s",
+            media_type, file_id, self._contact_id,
+        )
+
+    async def _handle_upload_request(self, data: dict) -> None:
+        """
+        Reserves an upload slot in the AttachmentStore and replies with
+        upload.ready so the client can POST the binary.
+        """
+        if self._attachment_store is None:
+            await self._ws.send_json(
+                WsAuthError(
+                    code    = "upload_not_supported",
+                    message = "file upload is not enabled on this gateway",
+                ).model_dump()
+            )
+            return
+
+        try:
+            req = WsUploadRequest.model_validate(data)
+        except Exception as exc:
+            await self._ws.send_json(
+                WsAuthError(code="bad_request", message=str(exc)).model_dump()
+            )
+            return
+
+        err = FilesystemAttachmentStore.validate_mime(req.mime_type, req.size_bytes)
+        if err is not None:
+            await self._ws.send_json(
+                WsAuthError(code="upload_rejected", message=err).model_dump()
+            )
+            return
+
+        expires_at = datetime.now(timezone.utc) + timedelta(
+            days=self._settings.attachment_expiry_days
+        )
+        try:
+            file_id, upload_url = await self._attachment_store.reserve(
+                tenant_id  = self._settings.tenant_id,
+                session_id = self._session_id,
+                file_name  = req.file_name,
+                mime_type  = req.mime_type,
+                size_bytes = req.size_bytes,
+                expires_at = expires_at,
+            )
+        except Exception as exc:
+            logger.error("attachment reserve failed: %s", exc)
+            await self._ws.send_json(
+                WsAuthError(code="upload_error", message="could not reserve upload slot").model_dump()
+            )
+            return
+
+        await self._ws.send_json(
+            WsUploadReady(
+                request_id = req.id,
+                file_id    = file_id,
+                upload_url = upload_url,
+            ).model_dump()
+        )
+        logger.debug(
+            "upload.ready file_id=%s contact_id=%s", file_id, self._contact_id
+        )
+
+    async def _handle_menu_submit(self, msg: WsMenuSubmit) -> None:
+        """Normalises a menu/form submission and publishes to conversations.inbound."""
+        snapshot = await self._context_reader.get_snapshot(self._session_id)
+        event    = NormalizedInboundEvent(
+            contact_id       = self._contact_id,
+            session_id       = self._session_id,
+            author           = MessageAuthor(type="customer"),
+            content          = MessageContent(
+                type    = "menu_result",
+                payload = {
                     "menu_id":     msg.menu_id,
                     "interaction": msg.interaction,
                     "result":      msg.result,
                 },
             ),
-            context_snapshot=snapshot,
+            context_snapshot = snapshot,
         )
-        # Serialise result to a readable string for the history display.
-        # Mirrors the format the bridge uses when forwarding to human agents.
         result_str = (
-            msg.result if isinstance(msg.result, str)
+            msg.result
+            if isinstance(msg.result, str)
             else json.dumps(msg.result, ensure_ascii=False)
         )
         await self._registry.append_message(
-            session_id=self._session_id,
-            message_id=event.message_id,
-            author="customer",
-            text=f"[Seleção: {result_str}]",
-            timestamp=event.timestamp,
+            session_id = self._session_id,
+            message_id = event.message_id,
+            author     = "customer",
+            text       = f"[Seleção: {result_str}]",
+            timestamp  = event.timestamp,
         )
         await self._publish_inbound(event.model_dump())
-        logger.debug("menu_submit interaction=%s contact_id=%s", msg.interaction, self._contact_id)
+        logger.debug(
+            "menu_submit interaction=%s contact_id=%s", msg.interaction, self._contact_id
+        )
 
-    # ── Close ─────────────────────────────────────────────────────────────
+    # ── Close ──────────────────────────────────────────────────────────────────
 
     async def _close(self, reason: str) -> None:
         started_at = await self._registry.unregister(self._contact_id)
         await self._publish_event(
             ContactClosedEvent(
-                contact_id=self._contact_id,
-                session_id=self._session_id,
-                reason=reason,  # type: ignore[arg-type]
-                started_at=started_at or self._started_at,
+                contact_id = self._contact_id,
+                session_id = self._session_id,
+                reason     = reason,  # type: ignore[arg-type]
+                started_at = started_at or self._started_at,
             ).model_dump()
         )
-        logger.info(
-            "contact_closed contact_id=%s reason=%s",
-            self._contact_id, reason,
-        )
+        logger.info("contact_closed contact_id=%s reason=%s", self._contact_id, reason)
 
-    # ── Kafka helpers ─────────────────────────────────────────────────────
+    # ── Kafka helpers ──────────────────────────────────────────────────────────
 
     async def _publish_inbound(self, payload: dict) -> None:
         await self._producer.send(

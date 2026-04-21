@@ -275,6 +275,41 @@ export type {
   MenuStep,
 } from "./skill"
 
+// ── Usage Metering ───────────────────────────
+export {
+  UsageDimensionSchema,
+  SessionUsageMetaSchema,
+  MessageUsageMetaSchema,
+  LlmTokenUsageMetaSchema,
+  WhatsappConversationMetaSchema,
+  VoiceMinutesMetaSchema,
+  SmsSegmentsMetaSchema,
+  EmailMessageMetaSchema,
+  UsageSourceComponentSchema,
+  UsageEventSchema,
+  UsageCounterSchema,
+  UsageHourlySchema,
+  QuotaLimitSchema,
+  UsageCycleResetSchema,
+} from "./usage"
+
+export type {
+  UsageDimension,
+  SessionUsageMeta,
+  MessageUsageMeta,
+  LlmTokenUsageMeta,
+  WhatsappConversationMeta,
+  VoiceMinutesMeta,
+  SmsSegmentsMeta,
+  EmailMessageMeta,
+  UsageSourceComponent,
+  UsageEvent,
+  UsageCounter,
+  UsageHourly,
+  QuotaLimit,
+  UsageCycleReset,
+} from "./usage"
+
 // ── Agent Registry ───────────────────────────
 export {
   RoutingExpressionSchema,

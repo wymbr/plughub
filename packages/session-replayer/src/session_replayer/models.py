@@ -55,16 +55,19 @@ class ParticipantSummary(BaseModel):
 
 
 class ReplayContext(BaseModel):
-    session_id:   str
-    tenant_id:    str
-    replay_id:    str
-    session_meta: SessionMeta
-    events:       list[ReplayEvent]        = Field(default_factory=list)
-    sentiment:    list[SentimentEntry]     = Field(default_factory=list)
-    participants: list[ParticipantSummary] = Field(default_factory=list)
-    speed_factor: float                    = 1.0
-    source:       Literal["redis", "postgres"] = "redis"
-    created_at:   datetime                 = Field(default_factory=datetime.utcnow)
+    session_id:      str
+    tenant_id:       str
+    replay_id:       str
+    session_meta:    SessionMeta
+    events:          list[ReplayEvent]        = Field(default_factory=list)
+    sentiment:       list[SentimentEntry]     = Field(default_factory=list)
+    participants:    list[ParticipantSummary] = Field(default_factory=list)
+    speed_factor:    float                    = 1.0
+    source:          Literal["redis", "postgres"] = "redis"
+    created_at:      datetime                 = Field(default_factory=datetime.utcnow)
+    #: Quando True, o agente evaluator deve fornecer comparison_turns em evaluation_submit
+    #: para que o Comparator produza um ComparisonReport junto ao EvaluationResult.
+    comparison_mode: bool                     = False
 
 
 # ─────────────────────────────────────────────

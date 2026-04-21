@@ -1,0 +1,293 @@
+"""
+seed.py
+Platform configuration seed — all values currently hardcoded across packages.
+
+Running this script populates the platform_config table with global defaults.
+Existing entries are NOT overwritten (ON CONFLICT DO NOTHING logic via store).
+Tenant-specific overrides are never set by the seed — only global defaults.
+
+Namespaces:
+  sentiment      — AI Gateway sentiment scoring
+  routing        — Routing Engine scheduling and SLA
+  session        — Session TTLs per component
+  consumer       — Analytics API Kafka consumer
+  dashboard      — Analytics API dashboard SSE
+  webchat        — Channel Gateway webchat adapter
+  masking        — Message masking access policies
+  quota          — Default quota limits
+
+Run:
+  PLUGHUB_CONFIG_DATABASE_URL=... PLUGHUB_CONFIG_REDIS_URL=... python -m plughub_config_api.seed
+"""
+from __future__ import annotations
+
+import asyncio
+import logging
+
+import asyncpg
+import redis.asyncio as aioredis
+
+from .cache import ConfigCache
+from .config import get_settings
+from .store import ConfigStore
+
+logger = logging.getLogger("plughub.config.seed")
+
+# ─── seed data ────────────────────────────────────────────────────────────────
+# Format: (namespace, key, value, description)
+# All entries are global defaults (tenant_id = None → '__global__').
+
+_SEED: list[tuple[str, str, object, str]] = [
+
+    # ── sentiment ─────────────────────────────────────────────────────────────
+    # Source: ai-gateway/sentiment_emitter.py (_classify function)
+    (
+        "sentiment", "thresholds",
+        {
+            "satisfied":  [0.3,  1.0],
+            "neutral":    [-0.3, 0.3],
+            "frustrated": [-0.6, -0.3],
+            "angry":      [-1.0, -0.6],
+        },
+        "Score ranges per category. Boundaries: lower inclusive, upper exclusive "
+        "(except angry which is lower inclusive). Applied at read time."
+    ),
+    (
+        "sentiment", "live_ttl_s",
+        300,
+        "Redis TTL (seconds) for the sentiment_live hash "
+        "({tenant}:pool:{pool}:sentiment_live). Source: ai-gateway/sentiment_emitter.py"
+    ),
+
+    # ── routing ───────────────────────────────────────────────────────────────
+    # Source: routing-engine/registry.py, router.py, kafka_listener.py
+    (
+        "routing", "snapshot_ttl_s",
+        120,
+        "Redis TTL (seconds) for pool operational snapshots "
+        "({tenant}:pool:{pool}:snapshot). Stale snapshots are excluded from the "
+        "dashboard automatically."
+    ),
+    (
+        "routing", "sla_default_ms",
+        480_000,
+        "Default SLA target in milliseconds (8 minutes) used when a pool "
+        "does not define its own sla_target_ms. Source: routing-engine/kafka_listener.py"
+    ),
+    (
+        "routing", "estimated_wait_factor",
+        0.7,
+        "Conservative factor applied to sla_target_ms to compute estimated_wait_ms "
+        "when a contact is queued. estimated_wait = queue_length × sla_target × factor. "
+        "Source: routing-engine/router.py"
+    ),
+    (
+        "routing", "score_weights",
+        {
+            "skill_match":    1.0,
+            "availability":   1.0,
+            "aging_factor":   0.5,
+            "breach_factor":  2.0,
+        },
+        "Scoring algorithm weight factors for agent allocation. "
+        "breach_factor amplifies priority for contacts that have exceeded SLA."
+    ),
+    (
+        "routing", "congestion_sla_factor",
+        1.5,
+        "Multiplier applied to sla_target_ms to define the congestion SLA threshold. "
+        "When queue wait exceeds sla × factor, the pool is considered congested. "
+        "Source: routing-engine/saturated.py"
+    ),
+
+    # ── session ───────────────────────────────────────────────────────────────
+    # Source: ai-gateway/config.py, channel-gateway/config.py
+    (
+        "session", "ai_gateway_ttl_s",
+        86_400,
+        "Redis TTL (seconds) for AI Gateway session state (pipeline_state, history). "
+        "24 hours. Source: ai-gateway/config.py"
+    ),
+    (
+        "session", "channel_gateway_ttl_s",
+        14_400,
+        "Redis TTL (seconds) for Channel Gateway session references. "
+        "4 hours. Source: channel-gateway/config.py"
+    ),
+
+    # ── consumer ──────────────────────────────────────────────────────────────
+    # Source: analytics-api/config.py, consumer.py
+    (
+        "consumer", "batch_size",
+        200,
+        "Maximum number of Kafka records fetched per getmany() call in the "
+        "analytics-api consumer. Tune for throughput vs latency. "
+        "Source: analytics-api/config.py"
+    ),
+    (
+        "consumer", "timeout_ms",
+        500,
+        "Kafka consumer poll timeout in milliseconds (getmany). "
+        "Source: analytics-api/config.py"
+    ),
+    (
+        "consumer", "restart_delay_s",
+        5,
+        "Initial delay before restarting the consumer after a crash. "
+        "Doubles on each failure up to max_restart_delay_s. "
+        "Source: analytics-api/main.py (_run_consumer_safe)"
+    ),
+    (
+        "consumer", "max_restart_delay_s",
+        60,
+        "Maximum delay between consumer restarts. "
+        "Source: analytics-api/main.py (_run_consumer_safe)"
+    ),
+
+    # ── dashboard ─────────────────────────────────────────────────────────────
+    # Source: analytics-api/dashboard.py
+    (
+        "dashboard", "sse_interval_s",
+        5,
+        "Interval in seconds between SSE pushes on GET /dashboard/operational. "
+        "Source: analytics-api/dashboard.py"
+    ),
+    (
+        "dashboard", "sse_retry_ms",
+        3_000,
+        "SSE retry hint sent to the client (milliseconds). "
+        "Tells the browser how long to wait before reconnecting on disconnect. "
+        "Source: analytics-api/dashboard.py"
+    ),
+
+    # ── webchat ───────────────────────────────────────────────────────────────
+    # Source: channel-gateway/config.py, adapters/webchat.py
+    (
+        "webchat", "auth_timeout_s",
+        30,
+        "Seconds the server waits for a conn.authenticate message after WebSocket "
+        "connection is accepted. Connection is dropped on timeout. "
+        "Source: channel-gateway/config.py"
+    ),
+    (
+        "webchat", "attachment_expiry_days",
+        30,
+        "Days before uploaded attachments are soft-deleted (stage 1 expiry). "
+        "Physical deletion occurs 24h later (stage 2). "
+        "Source: channel-gateway/config.py"
+    ),
+    (
+        "webchat", "upload_limits_mb",
+        {
+            "image":    16,
+            "pdf":      100,
+            "video":    512,
+        },
+        "Maximum upload size in MB per content type. "
+        "MIME allowlist: image/jpeg, image/png, image/webp, image/gif, "
+        "application/pdf, video/mp4, video/webm."
+    ),
+
+    # ── masking ───────────────────────────────────────────────────────────────
+    # Source: schemas/audit.ts (DEFAULT_MASKING_RULES, MaskingAccessPolicy)
+    (
+        "masking", "authorized_roles",
+        ["evaluator", "reviewer"],
+        "Roles that can read original_content (unmasked) in session_context_get. "
+        "primary and specialist always receive masked (display_partial) content. "
+        "Source: schemas/audit.ts MaskingAccessPolicy"
+    ),
+    (
+        "masking", "default_retention_days",
+        90,
+        "Default number of days masked tokens are retained in the audit trail. "
+        "After this period, token resolution may return null."
+    ),
+    (
+        "masking", "capture_input_default",
+        False,
+        "Whether MCP tool call inputs are captured in audit records by default. "
+        "Can be overridden per tool via audit_policy. "
+        "Source: schemas/audit.ts DEFAULT_MASKING_RULES"
+    ),
+    (
+        "masking", "capture_output_default",
+        False,
+        "Whether MCP tool call outputs are captured in audit records by default."
+    ),
+
+    # ── quota ─────────────────────────────────────────────────────────────────
+    # Source: mcp-server/lib/quota-check.ts
+    (
+        "quota", "max_concurrent_sessions",
+        100,
+        "Platform-wide default maximum concurrent sessions per tenant. "
+        "Enforced by assertQuota() in mcp-server before session_open. "
+        "Can be overridden per tenant. Source: mcp-server/lib/quota-check.ts"
+    ),
+    (
+        "quota", "llm_tokens_daily",
+        10_000_000,
+        "Default daily LLM token budget (input + output combined) per tenant. "
+        "Usage tracked by analytics-api consumer from usage.events topic."
+    ),
+    (
+        "quota", "messages_daily",
+        500_000,
+        "Default daily message quota (visibility=all messages) per tenant."
+    ),
+]
+
+
+# ─── seed runner ─────────────────────────────────────────────────────────────
+
+async def seed(store: ConfigStore, *, overwrite: bool = False) -> dict[str, int]:
+    """
+    Seeds all global default values.
+
+    If overwrite=False (default): skips entries that already exist.
+    If overwrite=True: updates all entries (useful for schema migrations).
+
+    Returns {"inserted": N, "skipped": N}.
+    """
+    inserted = 0
+    skipped  = 0
+
+    for namespace, key, value, description in _SEED:
+        if not overwrite:
+            existing = await store.get_entry("__global__", namespace, key)
+            if existing is not None:
+                skipped += 1
+                continue
+        await store.set(None, namespace, key, value, description)
+        inserted += 1
+        logger.info("seeded %s.%s", namespace, key)
+
+    logger.info("seed complete: inserted=%d skipped=%d", inserted, skipped)
+    return {"inserted": inserted, "skipped": skipped}
+
+
+async def _run() -> None:
+    logging.basicConfig(level=logging.INFO)
+    settings = get_settings()
+
+    pool  = await asyncpg.create_pool(settings.database_url, min_size=1, max_size=3)
+    redis = aioredis.from_url(settings.redis_url, decode_responses=True)
+
+    cache = ConfigCache(redis, ttl=settings.cache_ttl_s)
+    store = ConfigStore(pool, cache)
+    await store.setup()
+
+    result = await seed(store)
+    print(f"Done: inserted={result['inserted']}  skipped={result['skipped']}")
+
+    await pool.close()
+    await redis.aclose()
+
+
+def main() -> None:
+    asyncio.run(_run())
+
+
+if __name__ == "__main__":
+    main()

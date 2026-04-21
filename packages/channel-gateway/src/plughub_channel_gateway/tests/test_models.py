@@ -9,7 +9,7 @@ import json
 import pytest
 
 from plughub_channel_gateway.models import (
-    WsMessageText, WsMenuSubmit,
+    WsMessageText, WsMessageTextLegacy, WsMenuSubmit,
     WsConnectionAccepted, WsMessageOutbound, WsMenuRender,
     WsAgentTyping, WsSessionClosed,
     ContextSnapshot, MessageAuthor, MessageContent,
@@ -21,16 +21,24 @@ from plughub_channel_gateway.models import (
 
 class TestClientMessages:
     def test_ws_message_text_valid(self):
-        raw = {"type": "message.text", "text": "Olá, quero cancelar meu plano"}
+        """New msg.text typed envelope."""
+        raw = {"type": "msg.text", "text": "Olá, quero cancelar meu plano"}
         msg = WsMessageText.model_validate(raw)
-        assert msg.type == "message.text"
+        assert msg.type == "msg.text"
         assert msg.text == "Olá, quero cancelar meu plano"
 
     def test_ws_message_text_serializes(self):
-        msg = WsMessageText(type="message.text", text="teste")
+        msg = WsMessageText(type="msg.text", text="teste")
         d = msg.model_dump()
-        assert d["type"] == "message.text"
+        assert d["type"] == "msg.text"
         assert d["text"] == "teste"
+
+    def test_ws_message_text_legacy_accepted(self):
+        """Legacy message.text still parses via WsMessageTextLegacy."""
+        raw = {"type": "message.text", "text": "legacy format"}
+        msg = WsMessageTextLegacy.model_validate(raw)
+        assert msg.type == "message.text"
+        assert msg.text == "legacy format"
 
     def test_ws_menu_submit_button(self):
         raw = {

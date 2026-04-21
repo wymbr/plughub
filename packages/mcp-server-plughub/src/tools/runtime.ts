@@ -31,6 +31,7 @@ import {
   InvalidTokenError,
   SESSION_TOKEN_TTL_S,
 } from "../infra/jwt"
+import { emitSessionOpened } from "../lib/usage-emitter"
 
 // ─── Dependências injetadas ───────────────────────────────────────────────────
 
@@ -341,6 +342,18 @@ export function registerRuntimeTools(server: McpServer, deps: RuntimeDeps): void
           current_sessions: currentSessions,
           timestamp:        new Date().toISOString(),
         })
+
+        // Metering: emite sessions na primeira vez que esta sessão é servida.
+        // Lê o canal da sessão do Redis; fallback "webchat" se meta não disponível.
+        let sessionChannel = "webchat"
+        try {
+          const metaRaw = await redis.get(`session:${session_id}:meta`)
+          if (metaRaw) {
+            const meta = JSON.parse(metaRaw) as Record<string, unknown>
+            if (typeof meta["channel"] === "string") sessionChannel = meta["channel"]
+          }
+        } catch { /* non-fatal — usa fallback */ }
+        void emitSessionOpened(kafka, redis, { tenant_id, session_id, channel: sessionChannel })
 
         return ok({ status: "busy", session_id, participant_id, current_sessions: currentSessions, timestamp: new Date().toISOString() })
       } catch (e) {

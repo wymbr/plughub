@@ -10,6 +10,7 @@ dependencies    = [
     "pydantic>=2.9.0",
     "pydantic-settings>=2.6.0",
     "redis[hiredis]>=5.2.0",
+    "aiokafka>=0.11.0",
 ]
 
 [project.scripts]

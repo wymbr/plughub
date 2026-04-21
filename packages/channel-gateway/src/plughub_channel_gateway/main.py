@@ -1,23 +1,25 @@
 """
 main.py
 Channel Gateway entry point.
-FastAPI app with WebSocket endpoint + Kafka producer/consumer startup.
+FastAPI app with WebSocket endpoint, Kafka producer/consumer, and attachment HTTP routes.
 Spec: PlugHub v24.0 section 3.5 / channel-gateway-webchat.md
 """
 
 from __future__ import annotations
+
 import asyncio
-import json
 import logging
 import uuid
 from contextlib import asynccontextmanager
 
+import asyncpg
 import redis.asyncio as aioredis
 import uvicorn
 from aiokafka import AIOKafkaProducer
-from fastapi import FastAPI, Query, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, WebSocket
 
 from .adapters.webchat import WebchatAdapter
+from .attachment_store import FilesystemAttachmentStore
 from .config import get_settings
 from .context_reader import ContextReader
 from .outbound_consumer import OutboundConsumer
@@ -25,128 +27,124 @@ from .session_registry import SessionRegistry
 
 logger = logging.getLogger("plughub.channel-gateway")
 
-# ── Application state (shared across requests) ────────────────────────────
+# ── Application state (shared across requests) ────────────────────────────────
 
-_producer:  AIOKafkaProducer | None = None
-_registry:  SessionRegistry  | None = None
-_context:   ContextReader     | None = None
+_producer:         AIOKafkaProducer        | None = None
+_registry:         SessionRegistry         | None = None
+_context:          ContextReader            | None = None
+_redis:            aioredis.Redis           | None = None
+_attachment_store: FilesystemAttachmentStore | None = None
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global _producer, _registry, _context
+    global _producer, _registry, _context, _redis, _attachment_store
 
-    settings  = get_settings()
+    settings    = get_settings()
     instance_id = str(uuid.uuid4())
 
-    redis_client = aioredis.from_url(settings.redis_url, decode_responses=True)
+    _redis = aioredis.from_url(settings.redis_url, decode_responses=True)
 
-    _producer = AIOKafkaProducer(
-        bootstrap_servers=settings.kafka_brokers,
-    )
+    _producer = AIOKafkaProducer(bootstrap_servers=settings.kafka_brokers)
     await _producer.start()
 
     _registry = SessionRegistry(
-        redis=redis_client,
-        instance_id=instance_id,
-        ttl=settings.session_ttl_seconds,
+        redis       = _redis,
+        instance_id = instance_id,
+        ttl         = settings.session_ttl_seconds,
     )
-    _context = ContextReader(redis=redis_client)
+    _context = ContextReader(redis=_redis)
+
+    # PostgreSQL pool for attachment metadata
+    db_pool = await asyncpg.create_pool(settings.database_url, min_size=1, max_size=10)
+
+    _attachment_store = FilesystemAttachmentStore(
+        storage_root     = settings.storage_root,
+        db_pool          = db_pool,
+        serving_base_url = settings.webchat_serving_base_url,
+        upload_base_url  = settings.webchat_upload_base_url,
+    )
+    await _attachment_store.ensure_schema()
 
     outbound = OutboundConsumer(registry=_registry, settings=settings)
 
-    # Background tasks
-    pubsub_task  = asyncio.create_task(_registry.start_pubsub_listener())
+    pubsub_task   = asyncio.create_task(_registry.start_pubsub_listener())
     outbound_task = asyncio.create_task(outbound.run())
 
     logger.info("✅ Channel Gateway started (instance=%s)", instance_id)
     yield
 
-    # Shutdown
+    # ── Shutdown ──────────────────────────────────────────────────────────────
     pubsub_task.cancel()
     outbound_task.cancel()
     await _producer.stop()
-    await redis_client.aclose()
+    await db_pool.close()
+    await _redis.aclose()
     logger.info("Channel Gateway stopped")
 
 
 app = FastAPI(title="PlugHub Channel Gateway", lifespan=lifespan)
 
+# ── Import and mount upload routes ────────────────────────────────────────────
+# Deferred import so the router can reference module-level state set in lifespan.
+from .upload_router import router as upload_router  # noqa: E402  (post-app creation import)
+app.include_router(upload_router)
 
-# ── WebSocket endpoint ────────────────────────────────────────────────────
+
+# ── WebSocket endpoint ────────────────────────────────────────────────────────
 
 @app.websocket("/ws/chat/{pool_id}")
-async def websocket_endpoint(
-    ws:         WebSocket,
-    pool_id:    str,
-    contact_id: str | None = Query(default=None),
-) -> None:
+async def websocket_endpoint(ws: WebSocket, pool_id: str) -> None:
     """
     WebSocket endpoint for web chat contacts.
 
     Path params:
-      pool_id    — service pool to route this contact to (e.g. "retencao_humano").
-                   Determines which agent pool the Routing Engine allocates from.
-                   Validated against the Agent Registry on connect; unknown pools
-                   are rejected with close code 4004.
+      pool_id  — service pool to route this contact to (e.g. "retencao_humano").
 
-    Query params:
-      contact_id (optional) — existing contact to reconnect to.
-                              If omitted, a new contact_id is generated.
+    Protocol:
+      After accept the server sends conn.hello; the client must reply with
+      conn.authenticate {token, cursor?} within ws_auth_timeout_s seconds.
+      On success the server sends conn.authenticated and the session begins.
 
-    On connect:
-      1. Assigns/validates contact_id and session_id
-      2. Registers in SessionRegistry
-      3. Sends connection.accepted to client
-      4. Publishes contact_open to conversations.events
-      5. Enters receive loop
-
-    Dev/test: connect to different pools without changing env vars —
-      ws://localhost:8010/ws/chat/retencao_humano
-      ws://localhost:8010/ws/chat/suporte_ia
-      ws://localhost:8010/ws/chat/fila_demo
+    Reconnect:
+      Include cursor=<last_event_id> in conn.authenticate to resume the stream
+      from the last received event — no messages are missed.
     """
-    settings   = get_settings()
-
-    # URL pool_id takes precedence; fall back to env for deployments that still
-    # use the single-pool env var (e.g. older infra / docker-compose configs).
+    settings      = get_settings()
     resolved_pool = pool_id or settings.entry_point_pool_id
 
-    cid        = contact_id or str(uuid.uuid4())
-    session_id = str(uuid.uuid4())
-
     adapter = WebchatAdapter(
-        ws=ws,
-        contact_id=cid,
-        session_id=session_id,
-        pool_id=resolved_pool,
-        producer=_producer,
-        registry=_registry,
-        context_reader=_context,
-        settings=settings,
+        ws               = ws,
+        pool_id          = resolved_pool,
+        producer         = _producer,
+        registry         = _registry,
+        context_reader   = _context,
+        settings         = settings,
+        redis            = _redis,
+        attachment_store = _attachment_store,
     )
     await adapter.handle()
 
 
-# ── Health check ──────────────────────────────────────────────────────────
+# ── Health check ──────────────────────────────────────────────────────────────
 
 @app.get("/health")
 async def health() -> dict:
     return {"status": "ok", "service": "channel-gateway"}
 
 
-# ── Entry point ───────────────────────────────────────────────────────────
+# ── Entry point ───────────────────────────────────────────────────────────────
 
 def run() -> None:
     logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s %(levelname)s %(name)s — %(message)s",
+        level  = logging.INFO,
+        format = "%(asctime)s %(levelname)s %(name)s — %(message)s",
     )
     uvicorn.run(
         "plughub_channel_gateway.main:app",
-        host="0.0.0.0",
-        port=8010,
-        reload=False,
+        host   = "0.0.0.0",
+        port   = 8010,
+        reload = False,
     )
 
 

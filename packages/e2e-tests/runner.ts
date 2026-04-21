@@ -9,23 +9,29 @@
  *   ts-node runner.ts --only 05       — run only scenario 05 (performance)
  *   ts-node runner.ts --conference    — run scenarios 01–04 + 06 (conference + reconnect)
  *   ts-node runner.ts --only 06       — run only scenario 06 (conference + reconnect)
- *   ts-node runner.ts --demo          — run all scenarios 01–10 (full demo suite)
+ *   ts-node runner.ts --demo          — run all scenarios 01–12 (full demo suite)
  *   ts-node runner.ts --only 07       — run only scenario 07 (full inbound flow)
  *   ts-node runner.ts --only 08       — run only scenario 08 (outbound flow)
  *   ts-node runner.ts --only 09       — run only scenario 09 (session replayer)
  *   ts-node runner.ts --only 10       — run only scenario 10 (message masking)
+ *   ts-node runner.ts --only 11       — run only scenario 11 (comparison mode)
+ *   ts-node runner.ts --only 12       — run only scenario 12 (webchat channel)
+ *   ts-node runner.ts --webchat       — run scenarios 01–04 + 12 (includes webchat)
  *
  * Environment variables (all optional — defaults work with docker-compose.test.yml):
- *   MCP_SERVER_URL        (default: http://localhost:3100)
- *   AGENT_REGISTRY_URL    (default: http://localhost:3300)
- *   SKILL_FLOW_URL        (default: http://localhost:3400)
- *   RULES_ENGINE_URL      (default: http://localhost:3201)
- *   AI_GATEWAY_URL        (default: http://localhost:3200)
- *   REDIS_URL             (default: redis://localhost:6379)
- *   KAFKA_BROKERS         (default: localhost:9092)
- *   TENANT_ID             (default: tenant_e2e_test)
- *   JWT_SECRET            (default: test_e2e_secret_32chars)
- *   E2E_REPORT_PATH       (default: ./e2e-report.json)
+ *   MCP_SERVER_URL            (default: http://localhost:3100)
+ *   AGENT_REGISTRY_URL        (default: http://localhost:3300)
+ *   SKILL_FLOW_URL            (default: http://localhost:3400)
+ *   RULES_ENGINE_URL          (default: http://localhost:3201)
+ *   AI_GATEWAY_URL            (default: http://localhost:3200)
+ *   CHANNEL_GATEWAY_WS_URL    (default: ws://localhost:8010)
+ *   CHANNEL_GATEWAY_HTTP_URL  (default: http://localhost:8010)
+ *   REDIS_URL                 (default: redis://localhost:6379)
+ *   KAFKA_BROKERS             (default: localhost:9092)
+ *   TENANT_ID                 (default: tenant_e2e_test)
+ *   JWT_SECRET                (default: test_e2e_secret_32chars)
+ *   WEBCHAT_JWT_SECRET        (default: test_e2e_webchat_secret_32chars)
+ *   E2E_REPORT_PATH           (default: ./e2e-report.json)
  */
 
 import { join } from "path";
@@ -51,22 +57,27 @@ import { run as scenario07 } from "./scenarios/07_inbound_full";
 import { run as scenario08 } from "./scenarios/08_outbound";
 import { run as scenario09 } from "./scenarios/09_session_replayer";
 import { run as scenario10 } from "./scenarios/10_masking";
+import { run as scenario11 } from "./scenarios/11_comparison_mode";
+import { run as scenario12 } from "./scenarios/12_webchat_channel";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Configuration
 // ─────────────────────────────────────────────────────────────────────────────
 
 const config = {
-  mcpServerUrl:       process.env["MCP_SERVER_URL"]     ?? "http://localhost:3100",
-  agentRegistryUrl:   process.env["AGENT_REGISTRY_URL"] ?? "http://localhost:3300",
-  skillFlowUrl:       process.env["SKILL_FLOW_URL"]     ?? "http://localhost:3400",
-  rulesEngineUrl:     process.env["RULES_ENGINE_URL"]   ?? "http://localhost:3201",
-  aiGatewayUrl:       process.env["AI_GATEWAY_URL"]     ?? "http://localhost:3200",
-  redisUrl:           process.env["REDIS_URL"]          ?? "redis://localhost:6379",
-  kafkaBrokers:       (process.env["KAFKA_BROKERS"]     ?? "localhost:9092").split(","),
-  tenantId:           process.env["TENANT_ID"]          ?? "tenant_e2e_test",
-  jwtSecret:          process.env["JWT_SECRET"]         ?? "test_e2e_secret_32chars",
-  reportPath:         process.env["E2E_REPORT_PATH"]    ?? join(__dirname, "e2e-report.json"),
+  mcpServerUrl:          process.env["MCP_SERVER_URL"]           ?? "http://localhost:3100",
+  agentRegistryUrl:      process.env["AGENT_REGISTRY_URL"]       ?? "http://localhost:3300",
+  skillFlowUrl:          process.env["SKILL_FLOW_URL"]           ?? "http://localhost:3400",
+  rulesEngineUrl:        process.env["RULES_ENGINE_URL"]         ?? "http://localhost:3201",
+  aiGatewayUrl:          process.env["AI_GATEWAY_URL"]           ?? "http://localhost:3200",
+  channelGatewayWsUrl:   process.env["CHANNEL_GATEWAY_WS_URL"]   ?? "ws://localhost:8010",
+  channelGatewayHttpUrl: process.env["CHANNEL_GATEWAY_HTTP_URL"] ?? "http://localhost:8010",
+  redisUrl:              process.env["REDIS_URL"]                ?? "redis://localhost:6379",
+  kafkaBrokers:          (process.env["KAFKA_BROKERS"]           ?? "localhost:9092").split(","),
+  tenantId:              process.env["TENANT_ID"]                ?? "tenant_e2e_test",
+  jwtSecret:             process.env["JWT_SECRET"]               ?? "test_e2e_secret_32chars",
+  webchatJwtSecret:      process.env["WEBCHAT_JWT_SECRET"]       ?? "test_e2e_webchat_secret_32chars",
+  reportPath:            process.env["E2E_REPORT_PATH"]          ?? join(__dirname, "e2e-report.json"),
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -78,7 +89,8 @@ const onlyFlag = args.indexOf("--only");
 const onlyScenario = onlyFlag >= 0 ? args[onlyFlag + 1] : null;
 const runPerf       = args.includes("--perf")       || onlyScenario === "05";
 const runConference = args.includes("--conference") || onlyScenario === "06";
-const runDemo       = args.includes("--demo");  // runs all scenarios 01–10
+const runWebchat    = args.includes("--webchat")    || onlyScenario === "12";
+const runDemo       = args.includes("--demo");  // runs all scenarios 01–12
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Scenario registry
@@ -113,6 +125,14 @@ if (runDemo || onlyScenario === "09") {
 
 if (runDemo || onlyScenario === "10") {
   ALL_SCENARIOS.push({ id: "10", fn: scenario10 });
+}
+
+if (runDemo || onlyScenario === "11") {
+  ALL_SCENARIOS.push({ id: "11", fn: scenario11 });
+}
+
+if (runDemo || runWebchat || onlyScenario === "12") {
+  ALL_SCENARIOS.push({ id: "12", fn: scenario12 });
 }
 
 const SCENARIOS_TO_RUN = onlyScenario
@@ -170,15 +190,18 @@ async function main(): Promise<void> {
 
     // Build context (fresh Redis per scenario via shared client, flushed above)
     const ctx: ScenarioContext = {
-      mcpServerUrl:     config.mcpServerUrl,
-      agentRegistryUrl: config.agentRegistryUrl,
-      skillFlowUrl:     config.skillFlowUrl,
-      rulesEngineUrl:   config.rulesEngineUrl,
-      aiGatewayUrl:     config.aiGatewayUrl,
+      mcpServerUrl:          config.mcpServerUrl,
+      agentRegistryUrl:      config.agentRegistryUrl,
+      skillFlowUrl:          config.skillFlowUrl,
+      rulesEngineUrl:        config.rulesEngineUrl,
+      aiGatewayUrl:          config.aiGatewayUrl,
+      channelGatewayWsUrl:   config.channelGatewayWsUrl,
+      channelGatewayHttpUrl: config.channelGatewayHttpUrl,
       redis,
       kafka,
-      tenantId:         config.tenantId,
-      jwtSecret:        config.jwtSecret,
+      tenantId:              config.tenantId,
+      jwtSecret:             config.jwtSecret,
+      webchatJwtSecret:      config.webchatJwtSecret,
     };
 
     // Run with 60s timeout

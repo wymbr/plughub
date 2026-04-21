@@ -1,0 +1,36 @@
+[project]
+name            = "plughub-analytics-api"
+version         = "1.0.0"
+description     = "PlugHub Platform — Analytics API (Kafka→ClickHouse consumer + REST)"
+requires-python = ">=3.11"
+dependencies    = [
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.32.0",
+    "aiokafka>=0.11.0",
+    "clickhouse-connect>=0.7.0",
+    "pydantic>=2.9.0",
+    "pydantic-settings>=2.6.0",
+    "redis[hiredis]>=5.2.0",
+    "PyJWT>=2.8.0",
+]
+
+[project.scripts]
+plughub-analytics-api = "plughub_analytics_api.main:run"
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.24.0",
+    "httpx>=0.27.0",
+]
+
+[build-system]
+requires      = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths    = ["src/plughub_analytics_api/tests"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/plughub_analytics_api"]

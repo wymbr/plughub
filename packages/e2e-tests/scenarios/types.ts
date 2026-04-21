@@ -15,10 +15,16 @@ export interface ScenarioContext {
   skillFlowUrl: string;
   rulesEngineUrl: string;
   aiGatewayUrl: string;
+  /** WebSocket base URL for the Channel Gateway (e.g. ws://localhost:8010) */
+  channelGatewayWsUrl: string;
+  /** HTTP base URL for the Channel Gateway (e.g. http://localhost:8010) */
+  channelGatewayHttpUrl: string;
   redis: Redis;
   kafka: Kafka;
   tenantId: string;
   jwtSecret: string;
+  /** HS256 secret used by Channel Gateway to validate webchat JWTs */
+  webchatJwtSecret: string;
 }
 
 export type ScenarioFn = (ctx: ScenarioContext) => Promise<ScenarioResult>;

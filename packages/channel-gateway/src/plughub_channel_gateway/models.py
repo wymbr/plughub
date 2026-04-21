@@ -2,6 +2,11 @@
 models.py
 Channel Gateway data models.
 Spec: PlugHub v24.0 sections 3.5, 4.7m
+
+Evolução (modelo híbrido):
+  - Novos tipos de mensagem: media (image, document, video), upload lifecycle,
+    auth flow (conn.*), presença (presence.*)
+  - Tipos legados mantidos para backward compat com OutboundConsumer
 """
 
 from __future__ import annotations
@@ -11,57 +16,159 @@ from pydantic import BaseModel, Field
 import uuid
 
 
-# ── WebSocket — client → server ────────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════════════════════
+# WebSocket — cliente → servidor
+# ══════════════════════════════════════════════════════════════════════════════
+
+class WsAuthenticate(BaseModel):
+    """Primeira mensagem do cliente após conn.hello."""
+    type:   Literal["conn.authenticate"]
+    token:  str
+    # ID do último evento do stream recebido (para reconnect sem perda).
+    # Omitido em conexões novas → servidor usa cursor "0" (início da sessão).
+    cursor: str | None = None
+
 
 class WsMessageText(BaseModel):
-    """Plain text message from client."""
+    """Mensagem de texto simples do cliente."""
+    type: Literal["msg.text"]
+    id:   str = Field(default_factory=lambda: str(uuid.uuid4()))
+    text: str
+
+
+class WsUploadRequest(BaseModel):
+    """Cliente solicita slot de upload antes de enviar o arquivo via HTTP."""
+    type:       Literal["upload.request"]
+    id:         str = Field(default_factory=lambda: str(uuid.uuid4()))
+    file_name:  str
+    mime_type:  str
+    size_bytes: int
+
+
+class WsMediaMessage(BaseModel):
+    """Mensagem de mídia após upload.committed — referencia o file_id."""
+    type:    Literal["msg.image", "msg.document", "msg.video"]
+    id:      str = Field(default_factory=lambda: str(uuid.uuid4()))
+    file_id: str
+    caption: str | None = None
+
+
+class WsMenuSubmit(BaseModel):
+    """Cliente submete resultado de interação (menu/carousel/formulário)."""
+    type:        Literal["menu.submit"]
+    menu_id:     str
+    interaction: Literal["text", "button", "list", "checklist", "form"]
+    result:      str | list[str] | dict[str, Any]
+
+
+class WsPing(BaseModel):
+    type: Literal["conn.ping"]
+
+
+# ── Legado (mantido para backward compat) ─────────────────────────────────────
+class WsMessageTextLegacy(BaseModel):
+    """Formato legado — type='message.text' (antes do envelope tipado)."""
     type: Literal["message.text"]
     text: str
 
 
-class WsMenuSubmit(BaseModel):
-    """Client submits a menu interaction result."""
-    type: Literal["menu.submit"]
-    menu_id: str
-    interaction: Literal["text", "button", "list", "checklist", "form"]
-    result: str | list[str] | dict[str, Any]
+# ══════════════════════════════════════════════════════════════════════════════
+# WebSocket — servidor → cliente
+# ══════════════════════════════════════════════════════════════════════════════
+
+class WsHello(BaseModel):
+    """Enviado pelo servidor imediatamente após aceitar a conexão WebSocket."""
+    type:           Literal["conn.hello"] = "conn.hello"
+    server_version: str                   = "1.0"
 
 
-WsClientEvent = WsMessageText | WsMenuSubmit
+class WsAuthenticated(BaseModel):
+    """Confirmação de autenticação bem-sucedida."""
+    type:       Literal["conn.authenticated"] = "conn.authenticated"
+    contact_id: str
+    session_id: str
+    # Cursor atual do stream — cliente usa para reconnect
+    stream_cursor: str = "0"
 
 
-# ── WebSocket — server → client ────────────────────────────────────────────
+class WsAuthError(BaseModel):
+    """Falha de autenticação."""
+    type:    Literal["conn.error"] = "conn.error"
+    code:    str
+    message: str
+
+
+class WsUploadReady(BaseModel):
+    """Slot de upload reservado — cliente pode fazer POST no upload_url."""
+    type:            Literal["upload.ready"] = "upload.ready"
+    request_id:      str    # id da WsUploadRequest correspondente
+    file_id:         str
+    upload_url:      str
+    expires_in_secs: int = 300
+
+
+class WsUploadCommitted(BaseModel):
+    """Upload processado e salvo — cliente pode enviar a mensagem de mídia."""
+    type:          Literal["upload.committed"] = "upload.committed"
+    file_id:       str
+    url:           str
+    mime_type:     str
+    size_bytes:    int
+    content_type:  Literal["image", "document", "video"]  # para o cliente saber qual msg.* enviar
+
+
+class WsPong(BaseModel):
+    type: Literal["conn.pong"] = "conn.pong"
+
+
+class WsSessionEnded(BaseModel):
+    type:   Literal["conn.session_ended"] = "conn.session_ended"
+    reason: str
+
+
+class WsTypingStart(BaseModel):
+    type:           Literal["presence.typing_start"] = "presence.typing_start"
+    participant_id: str
+    role:           str
+
+
+class WsTypingStop(BaseModel):
+    type:           Literal["presence.typing_stop"] = "presence.typing_stop"
+    participant_id: str
+
+
+# ── Legado (mantido para backward compat com OutboundConsumer) ────────────────
 
 class WsConnectionAccepted(BaseModel):
-    type: Literal["connection.accepted"] = "connection.accepted"
+    type:       Literal["connection.accepted"] = "connection.accepted"
     contact_id: str
     session_id: str
 
 
 class WsMessageOutbound(BaseModel):
-    type: Literal["message.text"] = "message.text"
+    type:       Literal["message.text"] = "message.text"
     message_id: str
-    author: dict[str, Any]
-    text: str
-    timestamp: str
+    author:     dict[str, Any]
+    text:       str
+    timestamp:  str
 
 
 class WsMenuRender(BaseModel):
-    type: Literal["menu.render"] = "menu.render"
-    menu_id: str
+    type:        Literal["menu.render"] = "menu.render"
+    menu_id:     str
     interaction: Literal["text", "button", "list", "checklist", "form"]
-    prompt: str
-    options: list[dict[str, str]] | None = None
-    fields: list[dict[str, Any]] | None = None
+    prompt:      str
+    options:     list[dict[str, str]] | None = None
+    fields:      list[dict[str, Any]] | None = None
 
 
 class WsAgentTyping(BaseModel):
-    type: Literal["agent.typing"] = "agent.typing"
+    type:        Literal["agent.typing"] = "agent.typing"
     author_type: str
 
 
 class WsSessionClosed(BaseModel):
-    type: Literal["session.closed"] = "session.closed"
+    type:   Literal["session.closed"] = "session.closed"
     reason: str
 
 
@@ -80,7 +187,7 @@ class MessageAuthor(BaseModel):
 
 
 class MessageContent(BaseModel):
-    type: Literal["text", "menu_result", "system_event"]
+    type: Literal["text", "menu_result", "system_event", "media"]
     text: str | None = None
     payload: dict[str, Any] | None = None
 

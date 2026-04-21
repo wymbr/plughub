@@ -90,7 +90,7 @@ services:
       - |
         KAFKA=/opt/kafka/bin/kafka-topics.sh
         BROKER=kafka:29092
-        for topic in conversations.inbound conversations.routed conversations.queued conversations.events agent.lifecycle agent.registry.events; do
+        for topic in conversations.inbound conversations.routed conversations.queued conversations.events agent.lifecycle agent.registry.events usage.events sentiment.updated; do
           $$KAFKA --bootstrap-server $$BROKER --create --if-not-exists \
             --topic $$topic --partitions 3 --replication-factor 1
           echo "topic $$topic OK"
@@ -227,6 +227,100 @@ services:
       timeout: 5s
       retries: 10
       start_period: 15s
+    networks:
+      - plughub-test
+
+  # ─────────────────────────────────────────────
+  # Channel Gateway (Python/FastAPI + WebSocket)
+  # Required for scenario 12 (webchat channel).
+  # ─────────────────────────────────────────────
+  channel-gateway:
+    build:
+      context: ../..
+      dockerfile: packages/channel-gateway/Dockerfile
+    ports:
+      - "8010:8010"
+    environment:
+      PLUGHUB_REDIS_URL: redis://redis:6379
+      PLUGHUB_KAFKA_BROKERS: kafka:29092
+      PLUGHUB_JWT_SECRET: test_e2e_webchat_secret_32chars
+      PLUGHUB_WS_AUTH_TIMEOUT_S: "10"
+      PLUGHUB_DATABASE_URL: postgresql://plughub:plughub@postgres:5432/plughub_test
+      PLUGHUB_STORAGE_ROOT: /tmp/plughub-attachments
+      PLUGHUB_WEBCHAT_SERVING_BASE_URL: http://localhost:8010/webchat/v1/attachments
+      PLUGHUB_WEBCHAT_UPLOAD_BASE_URL: http://localhost:8010/webchat/v1/upload
+      PLUGHUB_ENTRY_POINT_POOL_ID: retencao_humano
+    depends_on:
+      redis:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget --quiet --spider http://localhost:8010/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    networks:
+      - plughub-test
+
+  # ─────────────────────────────────────────────
+  # ClickHouse 24 (analytics storage)
+  # ─────────────────────────────────────────────
+  clickhouse:
+    image: clickhouse/clickhouse-server:24-alpine
+    ports:
+      - "8123:8123"
+    environment:
+      CLICKHOUSE_DB: plughub
+      CLICKHOUSE_USER: plughub
+      CLICKHOUSE_PASSWORD: plughub
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: 1
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--spider", "http://localhost:8123/ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks:
+      - plughub-test
+
+  # ─────────────────────────────────────────────
+  # Analytics API (Kafka→ClickHouse consumer + REST)
+  # ─────────────────────────────────────────────
+  analytics-api:
+    build:
+      context: ../..
+      dockerfile: packages/analytics-api/Dockerfile
+    ports:
+      - "3500:3500"
+    environment:
+      PLUGHUB_KAFKA_BROKERS: kafka:29092
+      PLUGHUB_CLICKHOUSE_HOST: clickhouse
+      PLUGHUB_CLICKHOUSE_PORT: "8123"
+      PLUGHUB_CLICKHOUSE_USER: plughub
+      PLUGHUB_CLICKHOUSE_PASSWORD: plughub
+      PLUGHUB_CLICKHOUSE_DATABASE: plughub
+      PLUGHUB_REDIS_URL: redis://redis:6379
+      PLUGHUB_PORT: "3500"
+    depends_on:
+      kafka:
+        condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
+      clickhouse:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget --quiet --spider http://localhost:3500/v1/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
     networks:
       - plughub-test
 

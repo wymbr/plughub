@@ -15,11 +15,13 @@ from dataclasses import dataclass
 @dataclass
 class LLMResponse:
     """Normalised response from any LLM provider."""
-    content:     str
-    model_used:  str        # actual model id returned by the provider
-    raw:         dict       # original payload for observability
-    stop_reason: str
-    tool_calls:  list[dict] = None  # populated when stop_reason == "tool_use"
+    content:       str
+    model_used:    str        # actual model id returned by the provider
+    raw:           dict       # original payload for observability
+    stop_reason:   str
+    tool_calls:    list[dict] = None  # populated when stop_reason == "tool_use"
+    input_tokens:  int = 0    # tokens in the prompt — populated by provider when available
+    output_tokens: int = 0    # tokens in the response — populated by provider when available
 
     def __post_init__(self) -> None:
         if self.tool_calls is None:

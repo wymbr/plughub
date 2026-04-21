@@ -110,6 +110,8 @@ class AnthropicProvider(LLMProvider):
                 raw=raw,
                 stop_reason=response.stop_reason or "end_turn",
                 tool_calls=tool_calls,
+                input_tokens=response.usage.input_tokens,
+                output_tokens=response.usage.output_tokens,
             )
 
         except anthropic.RateLimitError as e:

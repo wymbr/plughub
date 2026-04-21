@@ -38,6 +38,12 @@ from .rate_limit import RateLimiter, RateLimitExceeded
 from .reason     import ReasonEngine
 from .session    import SessionManager, get_redis
 
+try:
+    from aiokafka import AIOKafkaProducer  # type: ignore[import-untyped]
+    _AIOKAFKA_AVAILABLE = True
+except ImportError:
+    _AIOKAFKA_AVAILABLE = False
+
 
 # ─────────────────────────────────────────────
 # Lifespan — startup and teardown
@@ -50,12 +56,24 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # Shared infrastructure
     redis = await get_redis()
 
+    # Kafka producer — optional, graceful degradation if broker unavailable
+    kafka_producer = None
+    kafka_brokers  = settings.kafka_brokers if hasattr(settings, "kafka_brokers") else "kafka:9092"
+    if _AIOKAFKA_AVAILABLE:
+        try:
+            kafka_producer = AIOKafkaProducer(bootstrap_servers=kafka_brokers)
+            await kafka_producer.start()
+            logger.info("Kafka producer connected to %s", kafka_brokers)
+        except Exception as exc:
+            logger.warning("Kafka producer unavailable — metering disabled: %s", exc)
+            kafka_producer = None
+
     # Provider registry — one provider per vendor
     anthropic_provider = AnthropicProvider(api_key=settings.anthropic_api_key)
     providers = {"anthropic": anthropic_provider}
 
     # Shared session manager — used by both /inference and /v1/turn
-    session_mgr = SessionManager(redis)
+    session_mgr = SessionManager(redis, kafka_producer=kafka_producer)
 
     # InferenceEngine — orchestrates /inference
     app.state.inference_engine = InferenceEngine(
@@ -67,11 +85,14 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         session_ttl=     settings.session_ttl_seconds,
         max_tokens=      settings.inference_max_tokens,
         session_manager= session_mgr,
+        kafka_producer=  kafka_producer,
+        gateway_id=      getattr(settings, "gateway_id", "ai-gateway"),
     )
 
     # Legacy components (/v1/turn, /v1/reason) — share the same provider
-    app.state.redis       = redis
-    app.state.gateway     = AIGateway(
+    app.state.redis          = redis
+    app.state.kafka_producer = kafka_producer
+    app.state.gateway        = AIGateway(
         provider=anthropic_provider,
         model_profiles=settings.model_profiles,
     )
@@ -83,6 +104,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     yield
 
+    if kafka_producer is not None:
+        await kafka_producer.stop()
     await redis.aclose()
 
 

@@ -19,6 +19,7 @@ import redis.asyncio as aioredis
 logger = logging.getLogger("plughub.ai_gateway.session")
 
 from .config import get_settings
+from .sentiment_emitter import emit_sentiment_updated, update_sentiment_live
 
 
 async def get_redis() -> aioredis.Redis:
@@ -62,8 +63,9 @@ class SessionAIState:
 
 
 class SessionManager:
-    def __init__(self, redis_client: aioredis.Redis) -> None:
-        self._redis = redis_client
+    def __init__(self, redis_client: aioredis.Redis, kafka_producer: Any = None) -> None:
+        self._redis    = redis_client
+        self._producer = kafka_producer
         self._settings = get_settings()
 
     def _key(self, session_id: str) -> str:
@@ -130,6 +132,29 @@ class SessionManager:
         await self.save(session_id, state)
 
         turn_count = len(state.consolidated_turns)
+
+        # Publish sentiment.updated to Kafka + update sentiment_live in Redis (fire-and-forget).
+        # pool_id is stored in session:{session_id}:meta under key "pool_id".
+        # Missing key is normal for new sessions routed before first turn — silently skipped.
+        try:
+            pool_id_raw = await self._redis.hget(f"session:{session_id}:meta", "pool_id")
+            pool_id = pool_id_raw if pool_id_raw else "unknown"
+            await emit_sentiment_updated(
+                producer   = self._producer,
+                tenant_id  = tenant_id,
+                session_id = session_id,
+                pool_id    = pool_id,
+                score      = sentiment_score,
+            )
+            await update_sentiment_live(
+                redis      = self._redis,
+                tenant_id  = tenant_id,
+                pool_id    = pool_id,
+                score      = sentiment_score,
+                session_id = session_id,
+            )
+        except Exception as exc:
+            logger.warning("Sentiment pipeline failed for %s: %s", session_id, exc)
 
         # Publish to Rules Engine pub/sub channel (fire-and-forget).
         # A Rules Engine outage must never block the AI Gateway response path.

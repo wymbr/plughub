@@ -20,12 +20,13 @@ import logging
 import time
 from typing import Any
 
-from .cache      import SemanticCache
-from .context    import extract_context_from_response
-from .models     import InferenceRequest, InferenceResponse
-from .providers  import LLMProvider, LLMResponse, ProviderError
-from .rate_limit import RateLimiter, RateLimitExceeded
-from .session    import SessionManager
+from .cache          import SemanticCache
+from .context        import extract_context_from_response
+from .models         import InferenceRequest, InferenceResponse
+from .providers      import LLMProvider, LLMResponse, ProviderError
+from .rate_limit     import RateLimiter, RateLimitExceeded
+from .session        import SessionManager
+from .usage_emitter  import emit_llm_tokens
 
 logger = logging.getLogger("plughub.ai_gateway.inference")
 
@@ -41,14 +42,16 @@ class InferenceEngine:
 
     def __init__(
         self,
-        providers:       dict[str, LLMProvider],
-        model_profiles:  dict[str, Any],     # ModelProfileConfig
-        rate_limiter:    RateLimiter,
-        cache:           SemanticCache,
-        redis:           Any,
-        session_ttl:     int = 86_400,
-        max_tokens:      int = 1024,
-        session_manager: SessionManager | None = None,
+        providers:        dict[str, LLMProvider],
+        model_profiles:   dict[str, Any],     # ModelProfileConfig
+        rate_limiter:     RateLimiter,
+        cache:            SemanticCache,
+        redis:            Any,
+        session_ttl:      int = 86_400,
+        max_tokens:       int = 1024,
+        session_manager:  SessionManager | None = None,
+        kafka_producer:   Any | None = None,   # aiokafka.AIOKafkaProducer ou duck-type
+        gateway_id:       str = "ai-gateway",
     ) -> None:
         self._providers        = providers
         self._model_profiles   = model_profiles
@@ -58,6 +61,8 @@ class InferenceEngine:
         self._session_ttl      = session_ttl
         self._max_tokens       = max_tokens
         self._session_manager  = session_manager
+        self._kafka_producer   = kafka_producer
+        self._gateway_id       = gateway_id
 
     async def infer(self, req: InferenceRequest) -> InferenceResponse:
         """
@@ -105,6 +110,20 @@ class InferenceEngine:
             messages=messages_list,
             tools=tools_list or None,
         )
+
+        # 4b. Metering — publica tokens consumidos em usage.events (fire-and-forget)
+        if self._kafka_producer is not None and not (llm_response.input_tokens == 0 and llm_response.output_tokens == 0):
+            import asyncio
+            asyncio.ensure_future(emit_llm_tokens(
+                producer=       self._kafka_producer,
+                tenant_id=      req.tenant_id,
+                session_id=     req.session_id,
+                model_id=       llm_response.model_used,
+                agent_type_id=  req.agent_type_id,
+                input_tokens=   llm_response.input_tokens,
+                output_tokens=  llm_response.output_tokens,
+                gateway_id=     self._gateway_id,
+            ))
 
         # 5. Extract session parameters
         last_user_content = ""

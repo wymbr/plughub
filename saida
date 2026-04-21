@@ -1,0 +1,56 @@
+e2e-runner-1  | 
+e2e-runner-1  | ════════════════════════════════════════════════════════════
+e2e-runner-1  |   PlugHub E2E Test Runner
+e2e-runner-1  | ════════════════════════════════════════════════════════════
+e2e-runner-1  |   Tenant:      tenant_demo
+e2e-runner-1  |   MCP Server:  http://mcp-server-plughub:3100
+e2e-runner-1  |   Registry:    http://agent-registry:3300
+e2e-runner-1  |   Kafka:       kafka:29092
+e2e-runner-1  |   Redis:       redis://redis:6379
+e2e-runner-1  |   Scenarios:   01, 02, 03, 04, 06, 07, 08
+e2e-runner-1  | ────────────────────────────────────────────────────────────
+e2e-runner-1  | 
+e2e-runner-1  | [runner] Waiting for services to be ready...
+e2e-runner-1  | [wait-for] agent-registry is ready (http://agent-registry:3300/v1/health)
+e2e-runner-1  | [wait-for] skill-flow-service is ready (http://skill-flow-service:3400/health)
+e2e-runner-1  | [wait-for] rules-engine is ready (http://rules-engine:3201/rules?tenant_id=tenant_demo)
+e2e-runner-1  | [wait-for] Redis is ready (redis://redis:6379)
+e2e-runner-1  | [wait-for] Kafka is ready (kafka:29092)
+e2e-runner-1  | [wait-for] mcp-server-plughub is ready (http://mcp-server-plughub:3100/sse)
+e2e-runner-1  | [runner] All services ready.
+e2e-runner-1  | 
+e2e-runner-1  | [runner] Seeding base fixtures...
+e2e-runner-1  | [runner] Fatal error: Error: POST http://agent-registry:3300/v1/skills → 422: {"error":"validation_error","detail":[{"validation":"regex","code":"invalid_string","message":"Formato: major.minor","path":["version"]},{"received":"executor","code":"invalid_enum_value","options":["vertical","horizontal","orchestrator"],"path":["classification","type"],"message":"Invalid enum value. Expected 'vertical' | 'horizontal' | 'orchestrator', received 'executor'"},{"code":"invalid_type","expected":"string","received":"undefined","path":["instruction","prompt_id"],"message":"Required"}]}
+e2e-runner-1  |     at post (/app/packages/e2e-tests/lib/http-client.ts:14:11)
+e2e-runner-1  |     at processTicksAndRejections (node:internal/process/task_queues:95:5)
+e2e-runner-1  |     at async RegistryClient.createSkill (/app/packages/e2e-tests/lib/http-client.ts:91:14)
+e2e-runner-1  |     at async seedBaseFixtures (/app/packages/e2e-tests/fixtures/seed.ts:22:3)
+e2e-runner-1  |     at async main (/app/packages/e2e-tests/runner.ts:142:3)
+e2e-runner-1  | 
+e2e-runner-1  | ════════════════════════════════════════════════════════════
+e2e-runner-1  |   PlugHub E2E Test Runner
+e2e-runner-1  | ════════════════════════════════════════════════════════════
+e2e-runner-1  |   Tenant:      tenant_demo
+e2e-runner-1  |   MCP Server:  http://mcp-server-plughub:3100
+e2e-runner-1  |   Registry:    http://agent-registry:3300
+e2e-runner-1  |   Kafka:       kafka:29092
+e2e-runner-1  |   Redis:       redis://redis:6379
+e2e-runner-1  |   Scenarios:   01, 02, 03, 04, 06, 07, 08
+e2e-runner-1  | ────────────────────────────────────────────────────────────
+e2e-runner-1  | 
+e2e-runner-1  | [runner] Waiting for services to be ready...
+e2e-runner-1  | [wait-for] agent-registry is ready (http://agent-registry:3300/v1/health)
+e2e-runner-1  | [wait-for] skill-flow-service is ready (http://skill-flow-service:3400/health)
+e2e-runner-1  | [wait-for] Redis is ready (redis://redis:6379)
+e2e-runner-1  | [wait-for] rules-engine is ready (http://rules-engine:3201/rules?tenant_id=tenant_demo)
+e2e-runner-1  | [wait-for] mcp-server-plughub is ready (http://mcp-server-plughub:3100/sse)
+e2e-runner-1  | [wait-for] Kafka is ready (kafka:29092)
+e2e-runner-1  | [runner] All services ready.
+e2e-runner-1  | 
+e2e-runner-1  | [runner] Seeding base fixtures...
+e2e-runner-1  | [runner] Fatal error: Error: POST http://agent-registry:3300/v1/skills → 422: {"error":"validation_error","detail":[{"validation":"regex","code":"invalid_string","message":"Formato: major.minor","path":["version"]},{"received":"executor","code":"invalid_enum_value","options":["vertical","horizontal","orchestrator"],"path":["classification","type"],"message":"Invalid enum value. Expected 'vertical' | 'horizontal' | 'orchestrator', received 'executor'"},{"code":"invalid_type","expected":"string","received":"undefined","path":["instruction","prompt_id"],"message":"Required"}]}
+e2e-runner-1  |     at post (/app/packages/e2e-tests/lib/http-client.ts:14:11)
+e2e-runner-1  |     at processTicksAndRejections (node:internal/process/task_queues:95:5)
+e2e-runner-1  |     at async RegistryClient.createSkill (/app/packages/e2e-tests/lib/http-client.ts:91:14)
+e2e-runner-1  |     at async seedBaseFixtures (/app/packages/e2e-tests/fixtures/seed.ts:22:3)
+e2e-runner-1  |     at async main (/app/packages/e2e-tests/runner.ts:142:3)

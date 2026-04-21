@@ -33,8 +33,9 @@ import {
   verifySessionToken,
   InvalidTokenError,
 } from "../infra/jwt"
-import { MaskingService } from "../lib/masking"
-import { TokenVault }     from "../lib/token-vault"
+import { MaskingService }  from "../lib/masking"
+import { TokenVault }      from "../lib/token-vault"
+import { emitMessageSent } from "../lib/usage-emitter"
 
 // ─── Dependências injetadas ───────────────────────────────────────────────────
 
@@ -440,6 +441,18 @@ export function registerSessionTools(server: McpServer, deps: SessionDeps): void
           visibility: Array.isArray(visibility) ? visibility : visibility,
           timestamp,
         })
+
+        // Metering: emite messages para mensagens visíveis ao cliente (visibility: "all").
+        // Lê o canal da sessão para enriquecer o metadata; fallback "webchat".
+        let sessionChannel = "webchat"
+        try {
+          const metaRaw = await redis.get(`session:${session_id}:meta`)
+          if (metaRaw) {
+            const meta = JSON.parse(metaRaw) as Record<string, unknown>
+            if (typeof meta["channel"] === "string") sessionChannel = meta["channel"]
+          }
+        } catch { /* non-fatal */ }
+        void emitMessageSent(kafka, { tenant_id, session_id, channel: sessionChannel, visibility })
 
         return ok({ message_id, event_id, session_id, timestamp })
       } catch (e) {

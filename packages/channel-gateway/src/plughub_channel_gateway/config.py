@@ -42,6 +42,26 @@ class Settings(BaseSettings):
     # Session Redis TTL (matches contact max duration)
     session_ttl_seconds:        int = 14400
 
+    # WebSocket auth
+    # JWT HS256 secret used to validate customer tokens.
+    # In production, override via PLUGHUB_JWT_SECRET env var.
+    jwt_secret:                 str = "changeme_32chars_webchat_secret!"
+    # How long the server waits for conn.authenticate after conn.hello.
+    ws_auth_timeout_s:          int = 30
+
+    # Attachment storage (filesystem phase 1)
+    # Root directory for uploaded attachments.  Override via PLUGHUB_STORAGE_ROOT.
+    storage_root:               str = "/var/plughub/attachments"
+    # Files are soft-deleted after this many days (matched to session TTL policy).
+    attachment_expiry_days:     int = 30
+    # PostgreSQL DSN for attachment metadata (session_attachments table).
+    database_url:               str = "postgresql://plughub:plughub@localhost:5432/plughub"
+
+    # Public-facing URLs for attachment serving and upload endpoints.
+    # Override to match the actual host/TLS termination layer.
+    webchat_serving_base_url:   str = "http://localhost:8010/webchat/v1/attachments"
+    webchat_upload_base_url:    str = "http://localhost:8010/webchat/v1/upload"
+
 
 @lru_cache
 def get_settings() -> Settings:
