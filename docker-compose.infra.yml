@@ -176,7 +176,7 @@ services:
     restart: "no"
 
   metabase:
-    image: metabase/metabase:v0.50.0
+    image: metabase/metabase:latest
     container_name: plughub-metabase
     ports:
       - "3000:3000"
