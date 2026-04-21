@@ -90,11 +90,18 @@ services:
       CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: 1
     volumes:
       - clickhouse-data:/var/lib/clickhouse
+    # get_mempolicy (NUMA syscall) is blocked by Docker Desktop's default
+    # seccomp profile on Windows/WSL2. Unconfined allows it to start normally.
+    security_opt:
+      - seccomp:unconfined
+    cap_add:
+      - SYS_NICE
     healthcheck:
       test: ["CMD", "wget", "--quiet", "--spider", "http://localhost:8123/ping"]
       interval: 5s
       timeout: 3s
-      retries: 10
+      retries: 15
+      start_period: 20s
     networks:
       - plughub-visual
 
