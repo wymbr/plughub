@@ -99,8 +99,8 @@ services:
       test: ["CMD-SHELL", "curl -sf http://localhost:8123/ping || exit 1"]
       interval: 10s
       timeout: 5s
-      retries: 15
-      start_period: 30s
+      retries: 20
+      start_period: 90s
     networks:
       - plughub-visual
 
