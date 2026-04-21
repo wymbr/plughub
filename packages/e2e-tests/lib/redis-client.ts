@@ -171,6 +171,37 @@ export async function writeAgentInstanceDirect(
 }
 
 /**
+ * Writes pool configuration to Redis using the Routing Engine's key layout.
+ * Used in Scenario 5 to seed pool_config without waiting for registry.changed events.
+ *
+ * Key: {tenantId}:pool_config:{poolId}  (24h TTL)
+ * Also registers the pool_id in: {tenantId}:pools  (SET)
+ */
+export async function writePoolConfigDirect(
+  redis: Redis,
+  tenantId: string,
+  poolId: string,
+  channelTypes: string[],
+  slaTargetMs: number = 30000,
+  ttlSeconds: number = 86400
+): Promise<void> {
+  const config = JSON.stringify({
+    pool_id:       poolId,
+    tenant_id:     tenantId,
+    channel_types: channelTypes,
+    sla_target_ms: slaTargetMs,
+    routing_expression: { weights: {} },
+    competency_weights: {},
+    aging_factor:       0.4,
+    breach_factor:      0.8,
+    remote_sites:       [],
+    is_human_pool:      false,
+  });
+  await redis.set(`${tenantId}:pool_config:${poolId}`, config, "EX", ttlSeconds);
+  await redis.sadd(`${tenantId}:pools`, poolId);
+}
+
+/**
  * Writes session metadata to Redis.
  * Required by agent_join_conference (reads tenant_id from this key).
  * Key: `session:{sessionId}:meta`

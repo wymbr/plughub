@@ -17,7 +17,7 @@
 
 import { randomUUID } from "crypto";
 import type { ScenarioContext, ScenarioResult, Assertion } from "./types";
-import { writeAgentInstanceDirect } from "../lib/redis-client";
+import { writeAgentInstanceDirect, writePoolConfigDirect } from "../lib/redis-client";
 import {
   publishInboundEventsBatch,
   waitForRoutedEventsBatch,
@@ -39,9 +39,18 @@ export async function run(ctx: ScenarioContext): Promise<ScenarioResult> {
       agentRegistryUrl: ctx.agentRegistryUrl,
       tenantId: ctx.tenantId,
     });
+    // Seed pool_config directly in Redis so the routing engine can resolve pools
+    // without waiting for registry.changed Kafka events (may lag on test infra).
+    for (let i = 0; i < POOLS_COUNT; i++) {
+      await writePoolConfigDirect(
+        ctx.redis,
+        ctx.tenantId,
+        `pool_perf_${i}`,
+        ["webchat"],
+        30000
+      );
+    }
     assertions.push(pass("Perf fixtures seeded (50 agent types, 5 pools)"));
-    // Allow routing engine to update its cache from registry.changed Kafka events
-    await new Promise((r) => setTimeout(r, 1500));
   } catch (err) {
     assertions.push(fail("Perf fixtures seeded", String(err)));
     return buildResult(assertions, startAt, "Seed failed: " + String(err));
