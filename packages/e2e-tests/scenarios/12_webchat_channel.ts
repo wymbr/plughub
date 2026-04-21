@@ -29,7 +29,7 @@ import fetch from "node-fetch"
 import type { ScenarioContext, ScenarioResult, Assertion } from "./types"
 import { WsTestClient }              from "../lib/ws-client"
 import { mintFreshWebchatToken }     from "../lib/jwt-helper"
-import { consumeEvents }             from "../lib/kafka-client"
+import { waitForInboundEvent }        from "../lib/kafka-client"
 import { seedSessionMeta }           from "../lib/redis-client"
 import { pass, fail }                from "../lib/report"
 
@@ -102,24 +102,17 @@ export async function run(ctx: ScenarioContext): Promise<ScenarioResult> {
 
     // ── Part B — Text message inbound ─────────────────────────────────────────
 
-    // Start consuming conversations.inbound BEFORE sending the message to avoid
-    // missing the event due to Kafka consumer lag.
-    // 400ms delay allows KafkaJS consumer group to be assigned partitions before
-    // the message is published — without this the consumer often misses the event.
-    const inboundPromise = consumeEvents(
-      ctx.kafka,
-      "conversations.inbound",
-      1,
-      6000
-    )
-    await new Promise((r) => setTimeout(r, 400))
+    // Two-phase waiter: start consumer → await GROUP_JOIN (ready) → send WS
+    // message → await Kafka event (result).  This eliminates the race between
+    // consumer partition assignment and the channel gateway publishing the event.
+    const inboundWaiter = waitForInboundEvent(ctx.kafka, sessionId, 15000, "text")
+    await inboundWaiter.ready   // consumer is now live — safe to publish
 
     const textId  = randomUUID()
     const textMsg = "Olá, preciso de ajuda com minha fatura"
     client.send({ type: "msg.text", id: textId, text: textMsg })
 
-    const events = await inboundPromise
-    const evt    = events[0] as Record<string, unknown> | undefined
+    const evt = await inboundWaiter.result as Record<string, unknown> | null
 
     assertions.push(
       evt && (evt["channel"] as string) === "webchat"
@@ -199,12 +192,13 @@ export async function run(ctx: ScenarioContext): Promise<ScenarioResult> {
     )
 
     // C4: Client sends msg.image with committed file_id → Kafka event
-    const mediaInboundPromise = consumeEvents(ctx.kafka, "conversations.inbound", 1, 6000)
+    // Two-phase waiter: await GROUP_JOIN before sending WS to avoid race.
+    const mediaWaiter = waitForInboundEvent(ctx.kafka, sessionId, 15000, "media")
+    await mediaWaiter.ready   // consumer live before publishing
 
     client.send({ type: "msg.image", id: randomUUID(), file_id: fileId, caption: "foto da fatura" })
 
-    const mediaEvents = await mediaInboundPromise
-    const mediaEvt    = mediaEvents[0] as Record<string, unknown> | undefined
+    const mediaEvt    = await mediaWaiter.result as Record<string, unknown> | null
     const mediaContent = mediaEvt?.["content"] as Record<string, unknown> | undefined
 
     assertions.push(
@@ -233,31 +227,73 @@ export async function run(ctx: ScenarioContext): Promise<ScenarioResult> {
     // reconnect test can verify cursor-based replay without needing the Core.
     const agentText  = "Olá! Como posso ajudar você hoje?"
     const streamKey  = `session:${sessionId}:stream`
+
+    // Capture the last stream entry ID BEFORE seeding so the reconnect cursor
+    // points to just before our agent message.  This ensures the stream delivery
+    // loop replays ONLY the seeded message and not earlier system messages (e.g.
+    // "Aguardando agente" published by the routing engine during Part B).
+    const latestBefore = await ctx.redis.xrevrange(streamKey, "+", "-", "COUNT", 1)
+    const cursorBeforeAgent = latestBefore.length > 0 ? (latestBefore[0] as string[])[0] : "0-0"
+
+    // Field names and structure must match StreamSubscriber._map_event():
+    //   type      → event type ("message")
+    //   author    → JSON {"role", "participant_id"}
+    //   payload   → JSON {"content": {"type", "text"}}
+    //   event_id  → message id
+    // (The routing engine's "Aguardando agente" goes via Kafka outbound, not this
+    //  stream path — so it arrives as type=message.text from a different mechanism.)
     await ctx.redis.xadd(
       streamKey,
       "*",
-      "event_type", "message",
+      "type",       "message",
       "visibility", "all",
-      "author_role", "agent_ai",
-      "author_participant_id", "part-e2e-agent",
-      "content", JSON.stringify({ type: "text", text: agentText }),
-      "message_id", randomUUID(),
-      "timestamp", new Date().toISOString()
+      "author",     JSON.stringify({ role: "agent_ai", participant_id: "part-e2e-agent" }),
+      "payload",    JSON.stringify({ content: { type: "text", text: agentText } }),
+      "event_id",   randomUUID(),
+      "timestamp",  new Date().toISOString()
     )
 
     // Disconnect client (simulate network drop)
     client.disconnect()
     await new Promise((r) => setTimeout(r, 200))
 
-    // Reconnect with the original cursor — the stream delivery loop should
-    // replay the seeded message immediately.
+    // Reconnect with cursor = last entry before our seed.  Stream delivery will
+    // start from AFTER that entry, delivering only the seeded agent message.
     await client.reconnect()
 
-    client.send({ type: "conn.authenticate", token, cursor: streamCursor })
+    // Server sends conn.hello immediately on connect — consume it first, then
+    // authenticate. If we send auth before reading conn.hello, the first receive()
+    // call returns conn.hello instead of conn.authenticated.
+    await client.receiveTyped("conn.hello", 5000)
 
-    const reAuthed = asMsg(await client.receive(8000))
+    client.send({ type: "conn.authenticate", token, cursor: cursorBeforeAgent })
+
+    // Collect ALL messages until conn.authenticated, preserving any stream replay
+    // messages the gateway may send BEFORE conn.authenticated.  receiveTyped()
+    // would silently discard those early stream messages, so we do it manually.
+    const preCollected: Record<string, unknown>[] = []
+    let reAuthed: Record<string, unknown> | null = null
+    {
+      const authDeadline = Date.now() + 8000
+      while (Date.now() < authDeadline) {
+        const remaining = authDeadline - Date.now()
+        if (remaining <= 0) break
+        let raw: Record<string, unknown>
+        try {
+          raw = asMsg(await client.receive(remaining))
+        } catch {
+          break
+        }
+        if (raw["type"] === "conn.authenticated") {
+          reAuthed = raw
+          break
+        }
+        preCollected.push(raw) // stream replay msg that arrived before auth
+      }
+    }
+
     assertions.push(
-      reAuthed["type"] === "conn.authenticated" &&
+      reAuthed !== null &&
       reAuthed["session_id"] === sessionId
         ? pass("D: reconexão bem-sucedida — conn.authenticated com mesmo session_id", {
             session_id:    reAuthed["session_id"],
@@ -266,22 +302,64 @@ export async function run(ctx: ScenarioContext): Promise<ScenarioResult> {
         : fail("D: reconexão falhou ou session_id diferente", { reAuthed })
     )
 
-    // D2: Stream delivery task replays the seeded agent message
-    // (First incoming frame after conn.authenticated should be the seeded msg)
-    const replayed = asMsg(await client.receive(6000))
-    const replayedType = replayed["type"] as string
-    assertions.push(
-      (replayedType === "msg.text" || replayedType === "message.text") &&
-      (replayed["text"] === agentText ||
-        (replayed["content"] as Record<string, unknown>)?.["text"] === agentText)
-        ? pass("D: mensagem do agente entregue via replay após reconexão com cursor", {
-            type: replayedType,
+    // D2: Stream delivery task replays messages after the cursor.
+    // Check preCollected first (stream messages that arrived before conn.authenticated),
+    // then continue reading from the socket.  Skip interleaved system messages
+    // (e.g. routing engine's "Aguardando agente") until the seeded agent message
+    // is found or the 8-second deadline expires.
+    const matchesAgentMsg = (msg: Record<string, unknown>): boolean => {
+      const t = msg["type"] as string
+      const text =
+        (msg["text"] as string | undefined) ??
+        ((msg["content"] as Record<string, unknown>)?.["text"] as string | undefined)
+      return (t === "msg.text" || t === "message.text") && text === agentText
+    }
+
+    let foundAgentMsg = false
+
+    for (const msg of preCollected) {
+      if (matchesAgentMsg(msg)) {
+        foundAgentMsg = true
+        assertions.push(
+          pass("D: mensagem do agente entregue via replay após reconexão com cursor", {
+            type: msg["type"],
           })
-        : fail("D: replay de mensagem não entregue após reconexão", { replayed, agentText })
-    )
+        )
+        break
+      }
+    }
+
+    if (!foundAgentMsg) {
+      const deadline = Date.now() + 8000
+      while (Date.now() < deadline) {
+        const remaining = deadline - Date.now()
+        if (remaining <= 100) break
+        let msg: Record<string, unknown>
+        try {
+          msg = asMsg(await client.receive(remaining))
+        } catch {
+          break
+        }
+        if (matchesAgentMsg(msg)) {
+          foundAgentMsg = true
+          assertions.push(
+            pass("D: mensagem do agente entregue via replay após reconexão com cursor", {
+              type: msg["type"],
+            })
+          )
+          break
+        }
+      }
+    }
+
+    if (!foundAgentMsg) {
+      assertions.push(
+        fail("D: replay de mensagem não entregue após reconexão", { agentText })
+      )
+    }
 
     // D3: New cursor in reAuthed is ≥ old cursor (has advanced or stayed same)
-    const newCursor = (reAuthed["stream_cursor"] as string) || ""
+    const newCursor = (reAuthed?.["stream_cursor"] as string) || ""
     assertions.push(
       newCursor.length > 0
         ? pass("D: novo stream_cursor presente após reconexão", { cursor: newCursor })

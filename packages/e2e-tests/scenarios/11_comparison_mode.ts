@@ -288,7 +288,7 @@ export async function run(ctx: ScenarioContext): Promise<ScenarioResult> {
     )
 
     assertions.push(
-      sim0 > 0.4
+      sim0 >= 0.4  // threshold=0.4 is the divergence boundary — at or above = similar
         ? pass("D: Turn 0 — alta similaridade (paráfrase detectada corretamente)", {
             similarity: Math.round(sim0 * 1000) / 1000,
           })

@@ -22,7 +22,6 @@ import {
   publishInboundEventsBatch,
   waitForRoutedEventsBatch,
 } from "../lib/kafka-client";
-import { seedPerfFixtures } from "../fixtures/seed";
 import { pass, fail } from "../lib/report";
 
 const CONCURRENT_REQUESTS = 10;
@@ -33,49 +32,74 @@ export async function run(ctx: ScenarioContext): Promise<ScenarioResult> {
   const startAt = Date.now();
   const assertions: Assertion[] = [];
 
-  // ── Seed perf fixtures (50 agent types, 5 pools) ──────────────────────────
+  // ── Generate a unique run ID to isolate Redis keys from previous runs ──────
+  // This prevents stale queued sessions from earlier runs from consuming the
+  // capacity of instances freshly seeded for this run (periodic drain races).
+  const runId = randomUUID().replace(/-/g, "").substring(0, 8);
+  const poolIds = Array.from({ length: POOLS_COUNT }, (_, i) => `pool_perf_${runId}_${i}`);
+
+  // ── Flush ALL stale routing state for this tenant ────────────────────────
+  // Previous failed runs leave sessions queued in pool drain loops forever.
+  // The drain cycle processes those old sessions before new ones, causing
+  // the consumer to time out waiting for the current run's routed events.
+  // Wiping all queue/instance keys gives us a clean slate every run.
   try {
-    await seedPerfFixtures({
-      agentRegistryUrl: ctx.agentRegistryUrl,
-      tenantId: ctx.tenantId,
-    });
+    const patterns = [
+      `${ctx.tenantId}:pool:*:queue`,
+      `${ctx.tenantId}:pool:*:instances`,
+      `${ctx.tenantId}:instance:*`,
+      `${ctx.tenantId}:queue_contact:*`,
+    ];
+    const keysToFlush: string[] = [];
+    for (const pattern of patterns) {
+      let cursor = "0";
+      do {
+        const [nextCursor, keys] = await ctx.redis.scan(
+          cursor, "MATCH", pattern, "COUNT", "200"
+        );
+        cursor = nextCursor;
+        keysToFlush.push(...keys);
+      } while (cursor !== "0");
+    }
+    if (keysToFlush.length > 0) {
+      // DEL accepts up to ~1M keys; split into chunks to be safe
+      for (let i = 0; i < keysToFlush.length; i += 500) {
+        await ctx.redis.del(...keysToFlush.slice(i, i + 500));
+      }
+    }
+    console.log(`[05] Flushed ${keysToFlush.length} stale routing keys for tenant ${ctx.tenantId}`);
+  } catch (err) {
+    // Non-fatal: log and continue — worst case old sessions slow things down
+    console.warn(`[05] Warning: stale key flush failed: ${String(err)}`);
+  }
+
+  // ── Seed pool configs and agent instances directly in Redis ───────────────
+  try {
     // Seed pool_config directly in Redis so the routing engine can resolve pools
     // without waiting for registry.changed Kafka events (may lag on test infra).
-    for (let i = 0; i < POOLS_COUNT; i++) {
+    for (const poolId of poolIds) {
       await writePoolConfigDirect(
         ctx.redis,
         ctx.tenantId,
-        `pool_perf_${i}`,
+        poolId,
         ["webchat"],
         30000
       );
     }
-    assertions.push(pass("Perf fixtures seeded (50 agent types, 5 pools)"));
+    assertions.push(pass(`Perf pool configs seeded (${POOLS_COUNT} pools, runId=${runId})`));
   } catch (err) {
-    assertions.push(fail("Perf fixtures seeded", String(err)));
+    assertions.push(fail("Perf pool configs seeded", String(err)));
     return buildResult(assertions, startAt, "Seed failed: " + String(err));
   }
 
   // ── Seed 50 agent instances directly in Redis (fast path) ─────────────────
-  // Bypass MCP to avoid MCP overhead in performance setup.
+  // Bypass registry/MCP to avoid overhead and use run-isolated pool IDs.
   try {
-    // Flush leftover queues from previous test runs — stale queued sessions
-    // consume instance capacity via periodic drain before the test's events
-    // arrive, leaving no agents available for the current run.
-    const flushPromises: Promise<unknown>[] = [];
-    for (let i = 0; i < POOLS_COUNT; i++) {
-      flushPromises.push(
-        ctx.redis.del(`${ctx.tenantId}:pool:pool_perf_${i}:queue`),
-        ctx.redis.del(`${ctx.tenantId}:pool:pool_perf_${i}:instances`)
-      );
-    }
-    await Promise.all(flushPromises);
-
     const writePromises: Promise<void>[] = [];
     for (let poolIndex = 0; poolIndex < POOLS_COUNT; poolIndex++) {
-      const poolId = `pool_perf_${poolIndex}`;
+      const poolId = poolIds[poolIndex]!;
       for (let instIndex = 0; instIndex < INSTANCES_PER_POOL; instIndex++) {
-        const instanceId = `perf-inst-${poolIndex}-${instIndex}`;
+        const instanceId = `perf-${runId}-${poolIndex}-${instIndex}`;
         const agentTypeId = `agent_perf_${poolIndex * INSTANCES_PER_POOL + instIndex}_v1`;
         writePromises.push(
           writeAgentInstanceDirect(
@@ -105,10 +129,10 @@ export async function run(ctx: ScenarioContext): Promise<ScenarioResult> {
   const sessionIds = Array.from({ length: CONCURRENT_REQUESTS }, () => randomUUID());
   const customerId = randomUUID(); // shared customer for all requests
 
-  // ── Start Kafka consumer BEFORE publishing — avoids race where routed events
-  //    arrive before the consumer joins the group (fromBeginning: false).
-  //    400ms delay ensures partition assignment is complete.
-  // ─────────────────────────────────────────────────────────────────────────
+  // ── Start Kafka consumer — two-phase: await GROUP_JOIN before publishing ──
+  // waitForRoutedEventsBatch returns { ready, result }.  We await `ready` (GROUP_JOIN
+  // or 4 s fallback) before publishing to conversations.inbound so the routing
+  // engine's response to conversations.routed is guaranteed to be captured.
   let routingResults: Map<
     string,
     {
@@ -120,8 +144,11 @@ export async function run(ctx: ScenarioContext): Promise<ScenarioResult> {
     }
   >;
 
-  const routedPromise = waitForRoutedEventsBatch(ctx.kafka, sessionIds, 8000);
-  await new Promise((r) => setTimeout(r, 400)); // wait for consumer partition assignment
+  // 20 s budget: up to 5 s for GROUP_JOIN + 15 s for the routing engine to respond.
+  const routedWaiter = waitForRoutedEventsBatch(ctx.kafka, sessionIds, 20000);
+
+  // Wait for consumer to join the group before publishing inbound events
+  await routedWaiter.ready;
 
   // ── Publish all 10 events simultaneously ──────────────────────────────────
   const publishStart = Date.now();
@@ -133,7 +160,7 @@ export async function run(ctx: ScenarioContext): Promise<ScenarioResult> {
         tenant_id:        ctx.tenantId,
         channel:          "webchat",
         customer_id:      customerId,
-        pool_id:          `pool_perf_${i % POOLS_COUNT}`,
+        pool_id:          poolIds[i % POOLS_COUNT],
         intent:           "perf_test",
         confidence:       0.9,
         customer_profile: { tier: "standard" },
@@ -153,7 +180,7 @@ export async function run(ctx: ScenarioContext): Promise<ScenarioResult> {
   const publishedAt = Date.now();
 
   try {
-    routingResults = await routedPromise;
+    routingResults = await routedWaiter.result;
   } catch (err) {
     assertions.push(
       fail("All routing responses received within 5s", String(err))
@@ -173,16 +200,18 @@ export async function run(ctx: ScenarioContext): Promise<ScenarioResult> {
         })
   );
 
-  // Calculate per-request latency: time from publish to receive
+  // Calculate per-request latency: time from publish to receive.
+  // waitForRoutedEventsBatch stores the absolute receive timestamp in latency_ms;
+  // subtract publishedAt (captured right after publishInboundEventsBatch) to get
+  // the true routing latency per event.
   const latencies: number[] = [];
   for (const sessionId of sessionIds) {
     const result = routingResults.get(sessionId);
     if (result) {
-      // latency = time from batch publish to event receive
       const latency = result.latency_ms > 0
-        ? result.latency_ms
+        ? result.latency_ms - publishedAt   // absolute receive time − publish time
         : Date.now() - publishedAt;
-      latencies.push(latency);
+      latencies.push(Math.max(0, latency));
     }
   }
 

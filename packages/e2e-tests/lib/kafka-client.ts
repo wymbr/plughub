@@ -146,8 +146,137 @@ export async function waitForRoutedEvent(
   });
 }
 
+
+/**
+ * Two-phase inbound event waiter using Admin-offset snapshot to eliminate the
+ * race condition between GROUP_JOIN and the consumer's first ListOffsets call.
+ *
+ * Flow:
+ *   1. Admin fetches current end-offset of conversations.inbound (snapshot).
+ *   2. Consumer connects + subscribes (fromBeginning: false).
+ *   3. On GROUP_JOIN: explicitly seek() every assigned partition to the snapshot
+ *      offset.  Any message published AFTER the snapshot will be at an offset
+ *      >= snapshot → guaranteed to be received.
+ *   4. Resolve `ready` — caller is now safe to publish.
+ *
+ * Returns `{ ready, result }`:
+ *   - `ready`  — resolves after seek() + GROUP_JOIN (or 7 s fallback).
+ *   - `result` — resolves with the first matching event, or null on timeout.
+ */
+export function waitForInboundEvent(
+  kafka: Kafka,
+  sessionId: string,
+  timeoutMs: number = 15000,
+  contentType?: string
+): { ready: Promise<void>; result: Promise<unknown | null> } {
+  const TOPIC   = "conversations.inbound";
+  const tag     = `[inbound:${sessionId.slice(0, 8)}]`;
+  const groupId = `e2e-inbound-${randomUUID()}`;
+  const consumer = kafka.consumer({ groupId });
+  const admin    = kafka.admin();
+
+  let resolveReady!: () => void;
+  const ready = new Promise<void>((res) => { resolveReady = res; });
+
+  // Hard outer fallback — fires regardless of what happens inside the IIFE.
+  const readyTimer = setTimeout(() => {
+    console.log(`${tag} ready-fallback fired (7s)`);
+    resolveReady();
+  }, 7000);
+
+  const result = new Promise<unknown | null>((resolve) => {
+    const cleanup = () => {
+      consumer.disconnect().catch(() => undefined);
+      admin.disconnect().catch(() => undefined);
+    };
+
+    // Timeout: NOT async — resolve immediately, disconnect in background.
+    const timeout = setTimeout(() => {
+      console.log(`${tag} result-timeout (${timeoutMs}ms) — resolving null`);
+      clearTimeout(readyTimer);
+      resolveReady();
+      cleanup();
+      resolve(null);
+    }, timeoutMs);
+
+    (async () => {
+      try {
+        // Step 1: snapshot end-offsets before subscribing
+        console.log(`${tag} fetching topic offsets…`);
+        await admin.connect();
+        const topicOffsets = await admin.fetchTopicOffsets(TOPIC);
+        await admin.disconnect().catch(() => undefined);
+        console.log(`${tag} offsets: ${JSON.stringify(topicOffsets)}`);
+
+        // Step 2: connect consumer + subscribe
+        console.log(`${tag} connecting consumer…`);
+        await consumer.connect();
+        await consumer.subscribe({ topic: TOPIC, fromBeginning: false });
+        console.log(`${tag} subscribed — waiting for GROUP_JOIN`);
+
+        // Step 3: on GROUP_JOIN seek every assigned partition to snapshot offset
+        consumer.on(consumer.events.GROUP_JOIN, (event: any) => {
+          const assigned: number[] =
+            event?.payload?.memberAssignment?.[TOPIC] ??
+            topicOffsets.map((o: { partition: number }) => o.partition);
+
+          for (const partition of assigned) {
+            const info = topicOffsets.find(
+              (o: { partition: number }) => o.partition === partition
+            );
+            const offset = info?.offset ?? "0";
+            console.log(`${tag} seek partition=${partition} → offset=${offset}`);
+            consumer.seek({ topic: TOPIC, partition, offset });
+          }
+          clearTimeout(readyTimer);
+          resolveReady();
+          console.log(`${tag} ready — consumer seeked to snapshot offsets`);
+        });
+
+        consumer.run({
+          eachMessage: async ({ message }) => {
+            if (!message.value) return;
+            try {
+              const parsed = JSON.parse(message.value.toString()) as Record<string, unknown>;
+              if (parsed["session_id"] !== sessionId) return;
+              if (contentType) {
+                const content = parsed["content"] as Record<string, unknown> | undefined;
+                if (content?.["type"] !== contentType) return;
+              }
+              console.log(`${tag} event matched (type=${contentType ?? "any"}) — resolving`);
+              clearTimeout(timeout);
+              clearTimeout(readyTimer);
+              resolveReady();
+              cleanup();
+              resolve(parsed);
+            } catch { /* ignore parse errors */ }
+          },
+        }).catch((err) => {
+          console.log(`${tag} consumer.run() error: ${err}`);
+          clearTimeout(readyTimer);
+          resolveReady();
+          clearTimeout(timeout);
+          cleanup();
+          resolve(null);
+        });
+
+      } catch (err) {
+        console.log(`${tag} setup error: ${err}`);
+        clearTimeout(readyTimer);
+        resolveReady();
+        clearTimeout(timeout);
+        cleanup();
+        resolve(null);
+      }
+    })();
+  });
+
+  return { ready, result };
+}
+
 /**
  * Consumes up to `count` messages from a topic, returns them as parsed objects.
+ * Uses a fixed delay before returning (legacy).
  */
 export async function consumeEvents(
   kafka: Kafka,
@@ -193,83 +322,139 @@ export async function consumeEvents(
  * Waits for multiple routed events, one per session_id in the provided list.
  * Returns a map of session_id → routing result.
  */
-export async function waitForRoutedEventsBatch(
+type RoutedBatchResult = Map<
+  string,
+  {
+    allocated: boolean;
+    instance_id?: string;
+    pool_id?: string;
+    routing_mode?: string;
+    priority_score?: number;
+    latency_ms: number;
+    publishedAt: number;
+  }
+>;
+
+/**
+ * Two-phase batch routed-event waiter using Admin-offset snapshot (same pattern
+ * as waitForInboundEvent) to eliminate the offset-race with fromBeginning: false.
+ *
+ * Returns `{ ready, result }`:
+ *   - `ready`  — resolves after seek() + GROUP_JOIN (or 7 s fallback).
+ *   - `result` — resolves with Map<session_id → routing result> (partial on timeout).
+ *                latency_ms = absolute receive timestamp; scenario computes delta.
+ */
+export function waitForRoutedEventsBatch(
   kafka: Kafka,
   sessionIds: string[],
-  timeoutMs: number = 5000
-): Promise<
-  Map<
-    string,
-    {
-      allocated: boolean;
-      instance_id?: string;
-      pool_id?: string;
-      routing_mode?: string;
-      priority_score?: number;
-      latency_ms: number;
-      publishedAt: number;
-    }
-  >
-> {
+  timeoutMs: number = 20000
+): { ready: Promise<void>; result: Promise<RoutedBatchResult> } {
+  const TOPIC   = "conversations.routed";
+  const tag     = `[routed-batch:${sessionIds.length}]`;
   const groupId = `e2e-batch-routed-${randomUUID()}`;
   const consumer = kafka.consumer({ groupId });
-  await consumer.connect();
-  await consumer.subscribe({ topic: "conversations.routed", fromBeginning: false });
+  const admin    = kafka.admin();
 
-  const results = new Map<
-    string,
-    {
-      allocated: boolean;
-      instance_id?: string;
-      pool_id?: string;
-      routing_mode?: string;
-      priority_score?: number;
-      latency_ms: number;
-      publishedAt: number;
-    }
-  >();
+  let resolveReady!: () => void;
+  const ready = new Promise<void>((res) => { resolveReady = res; });
 
+  const readyTimer = setTimeout(() => {
+    console.log(`${tag} ready-fallback fired (7s)`);
+    resolveReady();
+  }, 7000);
+
+  const results: RoutedBatchResult = new Map();
   const sessionSet = new Set(sessionIds);
-  const publishTimes = new Map<string, number>();
-  const now = Date.now();
-  for (const id of sessionIds) publishTimes.set(id, now);
 
-  return new Promise((resolve, reject) => {
-    const timeout = setTimeout(async () => {
-      await consumer.disconnect().catch(() => undefined);
-      // Return partial results on timeout
+  const result = new Promise<RoutedBatchResult>((resolve, reject) => {
+    const cleanup = () => {
+      consumer.disconnect().catch(() => undefined);
+      admin.disconnect().catch(() => undefined);
+    };
+
+    const timeout = setTimeout(() => {
+      console.log(`${tag} result-timeout (${timeoutMs}ms) — ${results.size}/${sessionIds.length} results`);
+      clearTimeout(readyTimer);
+      resolveReady();
+      cleanup();
       resolve(results);
     }, timeoutMs);
 
-    consumer.run({
-      eachMessage: async ({ message }) => {
-        if (!message.value) return;
-        try {
-          const payload = JSON.parse(message.value.toString());
-          const sid = payload.session_id as string;
-          if (sessionSet.has(sid) && !results.has(sid)) {
-            const publishedAt = publishTimes.get(sid) ?? now;
-            const latency_ms = Date.now() - publishedAt;
-            results.set(sid, {
-              ...(payload.result ?? { allocated: false }),
-              latency_ms,
-              publishedAt,
-            });
-            if (results.size >= sessionIds.length) {
-              clearTimeout(timeout);
-              await consumer.disconnect().catch(() => undefined);
-              resolve(results);
-            }
+    (async () => {
+      try {
+        console.log(`${tag} fetching topic offsets…`);
+        await admin.connect();
+        const topicOffsets = await admin.fetchTopicOffsets(TOPIC);
+        await admin.disconnect().catch(() => undefined);
+        console.log(`${tag} offsets: ${JSON.stringify(topicOffsets)}`);
+
+        await consumer.connect();
+        await consumer.subscribe({ topic: TOPIC, fromBeginning: false });
+        console.log(`${tag} subscribed — waiting for GROUP_JOIN`);
+
+        consumer.on(consumer.events.GROUP_JOIN, (event: any) => {
+          const assigned: number[] =
+            event?.payload?.memberAssignment?.[TOPIC] ??
+            topicOffsets.map((o: { partition: number }) => o.partition);
+
+          for (const partition of assigned) {
+            const info = topicOffsets.find(
+              (o: { partition: number }) => o.partition === partition
+            );
+            const offset = info?.offset ?? "0";
+            console.log(`${tag} seek partition=${partition} → offset=${offset}`);
+            consumer.seek({ topic: TOPIC, partition, offset });
           }
-        } catch {
-          // ignore
-        }
-      },
-    }).catch((err) => {
-      clearTimeout(timeout);
-      reject(err);
-    });
+          clearTimeout(readyTimer);
+          resolveReady();
+          console.log(`${tag} ready — seeked to snapshot offsets`);
+        });
+
+        consumer.run({
+          eachMessage: async ({ message }) => {
+            if (!message.value) return;
+            try {
+              const payload = JSON.parse(message.value.toString());
+              const sid = payload.session_id as string;
+              if (sessionSet.has(sid) && !results.has(sid)) {
+                const latency_ms = Date.now();
+                results.set(sid, {
+                  ...(payload.result ?? { allocated: false }),
+                  latency_ms,
+                  publishedAt: latency_ms,
+                });
+                console.log(`${tag} routed: ${results.size}/${sessionIds.length}`);
+                if (results.size >= sessionIds.length) {
+                  clearTimeout(timeout);
+                  clearTimeout(readyTimer);
+                  resolveReady();
+                  cleanup();
+                  resolve(results);
+                }
+              }
+            } catch { /* ignore parse errors */ }
+          },
+        }).catch((err) => {
+          console.log(`${tag} consumer.run() error: ${err}`);
+          clearTimeout(readyTimer);
+          resolveReady();
+          clearTimeout(timeout);
+          cleanup();
+          reject(err);
+        });
+
+      } catch (err) {
+        console.log(`${tag} setup error: ${err}`);
+        clearTimeout(readyTimer);
+        resolveReady();
+        clearTimeout(timeout);
+        cleanup();
+        reject(err);
+      }
+    })();
   });
+
+  return { ready, result };
 }
 
 export async function disconnectAll(kafka: Kafka): Promise<void> {
