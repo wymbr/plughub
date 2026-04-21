@@ -195,7 +195,9 @@ services:
     ports:
       - "3300:3300"
     environment:
-      DATABASE_URL: postgresql://plughub:plughub@postgres:5432/plughub
+      # Use schema=registry so Prisma only manages its own tables and does not
+      # conflict with platform_config (owned by config-api in schema=public).
+      DATABASE_URL: postgresql://plughub:plughub@postgres:5432/plughub?schema=registry
       PORT: "3300"
       JWT_SECRET: demo_plughub_secret_32chars__
     depends_on:
