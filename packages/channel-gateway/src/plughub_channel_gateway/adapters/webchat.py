@@ -69,7 +69,7 @@ from ..models import (
     WsUploadRequest,
 )
 from ..session_registry import SessionRegistry
-from ..stream_subscriber import StreamSubscriber
+from ..stream_subscriber import StreamSubscriber, StreamExpiredError
 
 logger = logging.getLogger("plughub.channel-gateway.webchat")
 
@@ -283,7 +283,7 @@ class WebchatAdapter:
         auth_msg = WsAuthenticate.model_validate(data)
 
         try:
-            claims = self._decode_token(auth_msg.token)
+            claims = await self._decode_token(auth_msg.token)
         except pyjwt.ExpiredSignatureError:
             raise AuthError("token_expired", "token has expired")
         except pyjwt.InvalidTokenError as exc:
@@ -312,18 +312,61 @@ class WebchatAdapter:
             contact_id, session_id, cursor,
         )
 
-    def _decode_token(self, token: str) -> dict:
+    async def _decode_token(self, token: str) -> dict:
         """
         Decodes and validates the customer JWT.
+
+        Multi-tenant secret resolution (fase 2):
+          1. Decode without signature verification to read tenant_id from claims.
+          2. Look up per-tenant secret from Redis key
+             `{tenant_id}:config:webchat:jwt_secret` (written by config-api).
+          3. Fall back to settings.jwt_secret if no per-tenant secret is configured.
+          4. Re-decode with full HS256 verification using the resolved secret.
+
+        This allows each tenant to rotate their JWT secret independently without
+        redeploying the gateway.  Single-tenant deployments (no per-tenant Redis
+        key) continue to use settings.jwt_secret with zero config changes.
+
         Override via _token_validator constructor param (used in tests).
         """
         if self._token_validator is not None:
             return self._token_validator(token)
-        return pyjwt.decode(
-            token,
-            self._settings.jwt_secret,
-            algorithms=["HS256"],
-        )
+
+        # Step 1 — read tenant_id from unverified payload
+        try:
+            unverified = pyjwt.decode(
+                token,
+                options={"verify_signature": False},
+                algorithms=["HS256"],
+            )
+        except pyjwt.DecodeError as exc:
+            raise pyjwt.InvalidTokenError(f"malformed token: {exc}") from exc
+
+        tenant_id = str(unverified.get(_CLAIM_TENANT) or "")
+
+        # Step 2 — resolve per-tenant secret (async Redis lookup, ~0.5ms)
+        secret = await self._resolve_jwt_secret(tenant_id)
+
+        # Step 3 — full verification
+        return pyjwt.decode(token, secret, algorithms=["HS256"])
+
+    async def _resolve_jwt_secret(self, tenant_id: str) -> str:
+        """
+        Returns the JWT secret for the given tenant.
+        Checks Redis key `{tenant_id}:config:webchat:jwt_secret` first;
+        falls back to the instance-level settings.jwt_secret.
+        """
+        if not tenant_id:
+            return self._settings.jwt_secret
+        try:
+            per_tenant = await self._redis.get(
+                f"{tenant_id}:config:webchat:jwt_secret"
+            )
+            if per_tenant:
+                return per_tenant if isinstance(per_tenant, str) else per_tenant.decode()
+        except Exception:
+            pass  # Redis unavailable — fall back to instance secret
+        return self._settings.jwt_secret
 
     # ── Inbound receive loop ───────────────────────────────────────────────────
 
@@ -383,18 +426,36 @@ class WebchatAdapter:
         Subscribes to the session's canonical Redis Stream and delivers events
         to the client via WebSocket.  Cursor-based — survives reconnects without
         missing events.
+
+        StreamExpiredError: raised by StreamSubscriber when the client reconnects
+        with a cursor but the stream no longer exists (session ended, TTL expired).
+        In this case the client is notified with conn.session_ended and the loop
+        returns normally so the connection can be closed cleanly.
         """
         subscriber = StreamSubscriber(
             redis      = self._redis,
             session_id = self._session_id,
             cursor     = self._initial_cursor,
         )
-        async for msg in subscriber.messages():
+        try:
+            async for msg in subscriber.messages():
+                try:
+                    await self._ws.send_json(msg)
+                except Exception:
+                    # WebSocket closed — stop delivery
+                    return
+        except StreamExpiredError:
+            logger.info(
+                "stream expired session_id=%s cursor=%s — sending session_ended",
+                self._session_id, self._initial_cursor,
+            )
             try:
-                await self._ws.send_json(msg)
+                await self._ws.send_json({
+                    "type":   "conn.session_ended",
+                    "reason": "session_expired",
+                })
             except Exception:
-                # WebSocket closed — stop delivery
-                return
+                pass
 
     # ── Typing indicators ──────────────────────────────────────────────────────
 

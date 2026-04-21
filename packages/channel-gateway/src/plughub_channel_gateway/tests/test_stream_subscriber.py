@@ -68,12 +68,13 @@ async def collect(subscriber: StreamSubscriber, n: int) -> list[dict]:
     return results
 
 
-def make_subscriber(xread_fn, cursor: str = "0") -> StreamSubscriber:
+def make_subscriber(xread_fn, cursor: str = "0", stream_exists: bool = True) -> StreamSubscriber:
     from unittest.mock import AsyncMock
     import redis.asyncio as aioredis
 
     redis = AsyncMock(spec=aioredis.Redis)
-    redis.xread = xread_fn
+    redis.xread  = xread_fn
+    redis.exists = AsyncMock(return_value=1 if stream_exists else 0)
     return StreamSubscriber(redis=redis, session_id=SESSION_ID, cursor=cursor)
 
 
@@ -472,3 +473,95 @@ class TestResilience:
 
         # Generator exited cleanly without raising
         assert results == []
+
+
+# ── Stream expired (reconexão com TTL expirado) ───────────────────────────────
+
+class TestStreamExpired:
+    async def test_raises_stream_expired_error_when_stream_missing_on_reconnect(self):
+        """
+        Se o cliente reconecta com cursor != "0" mas o stream não existe
+        (EXISTS retorna 0), StreamExpiredError deve ser levantado antes do
+        primeiro XREAD, sinalizando que a sessão foi encerrada.
+        """
+        from plughub_channel_gateway.stream_subscriber import StreamExpiredError
+
+        s = make_subscriber(make_xread(), cursor="1234-0", stream_exists=False)
+
+        with pytest.raises(StreamExpiredError):
+            async for _ in s.messages():
+                pass  # não deve chegar aqui
+
+    async def test_cursor_zero_does_not_check_exists(self):
+        """
+        Nova conexão (cursor="0") não verifica EXISTS — o stream pode ainda
+        não ter nenhum evento.  Nenhuma exceção deve ser levantada.
+        """
+        s = make_subscriber(make_xread(), cursor="0", stream_exists=False)
+
+        # Deve iterar normalmente (sem eventos) sem levantar StreamExpiredError
+        results = []
+        task = asyncio.create_task(collect(s, 1))
+        await asyncio.sleep(0.02)   # deixa o loop rodar pelo menos um ciclo
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+        # O importante: nenhuma StreamExpiredError foi levantada
+        assert results == []
+
+    async def test_exists_called_with_correct_stream_key(self):
+        """EXISTS é chamado com a chave correta do stream."""
+        from unittest.mock import AsyncMock
+
+        s = make_subscriber(make_xread(), cursor="abc-0", stream_exists=True)
+
+        task = asyncio.create_task(collect(s, 1))
+        await asyncio.sleep(0.02)
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+        expected_key = f"session:{SESSION_ID}:stream"
+        s._redis.exists.assert_called_once_with(expected_key)
+
+    async def test_reconnect_with_valid_stream_delivers_events(self):
+        """
+        Reconnect com cursor != "0" mas stream existente deve funcionar
+        normalmente — StreamExpiredError não é levantado.
+        """
+        batch = _event(
+            "5000-0",
+            type="message", visibility="all",
+            author={"role": "primary", "participant_id": "p99"},
+            payload={"content": {"type": "text", "text": "retomada"}},
+            event_id="evt-reconnect", timestamp="2024-01-01T12:00:00Z",
+        )
+        s = make_subscriber(make_xread(batch), cursor="4999-0", stream_exists=True)
+        msgs = await collect(s, 1)
+        assert len(msgs) == 1
+        assert msgs[0]["text"] == "retomada"
+
+    async def test_redis_error_on_exists_does_not_raise(self):
+        """
+        Se EXISTS falhar (Redis indisponível), o subscriber não levanta erro —
+        presume que o stream existe e continua normalmente.
+        """
+        from unittest.mock import AsyncMock
+
+        s = make_subscriber(make_xread(), cursor="abc-0", stream_exists=True)
+        # Simula falha no EXISTS
+        s._redis.exists = AsyncMock(side_effect=ConnectionError("Redis down"))
+
+        # Deve iterar sem levantar StreamExpiredError
+        task = asyncio.create_task(collect(s, 1))
+        await asyncio.sleep(0.02)
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+        # nenhuma exceção inesperada

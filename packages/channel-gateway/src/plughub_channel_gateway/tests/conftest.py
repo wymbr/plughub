@@ -38,6 +38,7 @@ def mock_redis():
     redis.get     = AsyncMock(return_value=None)
     redis.delete  = AsyncMock(return_value=1)
     redis.publish = AsyncMock(return_value=1)
+    redis.exists  = AsyncMock(return_value=1)   # stream exists by default
     redis.aclose  = AsyncMock()
 
     # StreamSubscriber uses xread with BLOCK.  In tests we add a small sleep so

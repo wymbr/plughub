@@ -621,3 +621,246 @@ class TestClosedFromPlatform:
         ]
         event = next(e for e in events_calls if e.get("event_type") == "contact_closed")
         assert event["reason"] == "agent_done"
+
+
+# ── Stream expired reconnect ───────────────────────────────────────────────────
+
+class TestStreamExpiredReconnect:
+    """
+    When the client reconnects with a cursor but the Redis stream is gone
+    (session ended + TTL expired), the adapter must send conn.session_ended
+    and close cleanly — it must NOT hang waiting for XREAD on a missing key.
+    """
+
+    async def test_sends_conn_session_ended_when_stream_missing(
+        self, mock_producer, registry, context_reader, settings, mock_redis
+    ):
+        """
+        _stream_delivery_loop catches StreamExpiredError and sends
+        conn.session_ended to the client.
+        """
+        # Client reconnects with a cursor — stream does NOT exist
+        mock_redis.exists = AsyncMock(return_value=0)
+        # skip_auth=True so we control the exact auth message (cursor="1234-0")
+        ws = make_ws_mock(
+            [json.dumps({"type": "conn.authenticate",
+                         "token": "test_token",
+                         "cursor": "1234-0"})],
+            skip_auth=True,
+        )
+        adapter = make_adapter(ws, mock_producer, registry, context_reader, settings, mock_redis)
+        await adapter.handle()
+
+        sent = [c.args[0] for c in ws.send_json.call_args_list]
+        session_ended = next(
+            (m for m in sent if m.get("type") == "conn.session_ended"), None
+        )
+        assert session_ended is not None, "conn.session_ended not sent"
+        assert session_ended.get("reason") == "session_expired"
+
+    async def test_no_session_ended_when_cursor_is_zero(
+        self, mock_producer, registry, context_reader, settings, mock_redis
+    ):
+        """
+        New connection (cursor=None / "0") with a missing stream is fine —
+        events will arrive once the session is routed.  No session_ended sent.
+        """
+        mock_redis.exists = AsyncMock(return_value=0)
+        # No cursor = new connection
+        ws = make_ws_mock([])
+        adapter = make_adapter(ws, mock_producer, registry, context_reader, settings, mock_redis)
+        await adapter.handle()
+
+        sent = [c.args[0] for c in ws.send_json.call_args_list]
+        session_ended = next(
+            (m for m in sent if m.get("type") == "conn.session_ended"), None
+        )
+        # conn.session_ended must NOT be caused by a missing stream on new connection
+        if session_ended:
+            assert session_ended.get("reason") != "session_expired", (
+                "should not send session_expired for new connection"
+            )
+
+
+# ── Multi-tenant JWT secret ────────────────────────────────────────────────────
+
+class TestMultiTenantJwtSecret:
+    """
+    _decode_token resolves per-tenant JWT secret from Redis key
+    {tenant_id}:config:webchat:jwt_secret.  Falls back to settings.jwt_secret
+    when the key is absent.
+    """
+
+    async def test_resolves_per_tenant_secret_from_redis(
+        self, mock_producer, registry, context_reader, settings
+    ):
+        """
+        When Redis returns a per-tenant secret, PyJWT must be called with it,
+        not with settings.jwt_secret.
+        """
+        import jwt as pyjwt
+
+        per_tenant_secret = "per_tenant_secret_32chars_ok!!!!"
+        token = pyjwt.encode(
+            {"sub": CONTACT_ID, "session_id": SESSION_ID,
+             "tenant_id": TENANT_ID, "exp": 9999999999},
+            per_tenant_secret,
+            algorithm="HS256",
+        )
+
+        # Redis returns per-tenant secret for the right key
+        mock_redis = AsyncMock()
+        mock_redis.setex   = AsyncMock(return_value=True)
+        mock_redis.delete  = AsyncMock(return_value=1)
+        mock_redis.publish = AsyncMock(return_value=1)
+        mock_redis.exists  = AsyncMock(return_value=1)
+
+        async def _xread(*a, **kw):
+            await asyncio.sleep(0.005)
+            return []
+
+        mock_redis.xread = _xread
+        pubsub = AsyncMock()
+
+        async def _listen():
+            return
+            yield  # pragma: no cover
+
+        pubsub.subscribe   = AsyncMock()
+        pubsub.unsubscribe = AsyncMock()
+        pubsub.aclose      = AsyncMock()
+        pubsub.listen      = _listen
+        mock_redis.pubsub  = lambda: pubsub
+
+        async def _get(key):
+            if key == f"{TENANT_ID}:config:webchat:jwt_secret":
+                return per_tenant_secret
+            return None
+
+        mock_redis.get = _get
+
+        ws = make_ws_mock(
+            [json.dumps({"type": "conn.authenticate", "token": token})],
+            skip_auth=True,   # supply the real-token auth msg ourselves
+        )
+        # Do NOT pass _token_validator — exercise real _decode_token
+        adapter = WebchatAdapter(
+            ws               = ws,
+            pool_id          = "test_pool",
+            producer         = mock_producer,
+            registry         = registry,
+            context_reader   = context_reader,
+            settings         = settings,
+            redis            = mock_redis,
+        )
+        await adapter.handle()
+
+        sent = [c.args[0] for c in ws.send_json.call_args_list]
+        authed = next((m for m in sent if m.get("type") == "conn.authenticated"), None)
+        assert authed is not None, "conn.authenticated not sent — token validation failed"
+        assert authed["contact_id"] == CONTACT_ID
+
+    async def test_falls_back_to_instance_secret_when_redis_has_none(
+        self, mock_producer, registry, context_reader, settings
+    ):
+        """
+        When Redis has no per-tenant secret, settings.jwt_secret is used.
+        """
+        import jwt as pyjwt
+
+        token = pyjwt.encode(
+            {"sub": CONTACT_ID, "session_id": SESSION_ID,
+             "tenant_id": TENANT_ID, "exp": 9999999999},
+            settings.jwt_secret,
+            algorithm="HS256",
+        )
+
+        mock_redis = AsyncMock()
+        mock_redis.setex   = AsyncMock(return_value=True)
+        mock_redis.delete  = AsyncMock(return_value=1)
+        mock_redis.publish = AsyncMock(return_value=1)
+        mock_redis.exists  = AsyncMock(return_value=1)
+        mock_redis.get     = AsyncMock(return_value=None)   # no per-tenant secret
+
+        async def _xread(*a, **kw):
+            await asyncio.sleep(0.005)
+            return []
+
+        mock_redis.xread = _xread
+        pubsub = AsyncMock()
+
+        async def _listen():
+            return
+            yield  # pragma: no cover
+
+        pubsub.subscribe   = AsyncMock()
+        pubsub.unsubscribe = AsyncMock()
+        pubsub.aclose      = AsyncMock()
+        pubsub.listen      = _listen
+        mock_redis.pubsub  = lambda: pubsub
+
+        ws = make_ws_mock(
+            [json.dumps({"type": "conn.authenticate", "token": token})],
+            skip_auth=True,
+        )
+        adapter = WebchatAdapter(
+            ws               = ws,
+            pool_id          = "test_pool",
+            producer         = mock_producer,
+            registry         = registry,
+            context_reader   = context_reader,
+            settings         = settings,
+            redis            = mock_redis,
+        )
+        await adapter.handle()
+
+        sent = [c.args[0] for c in ws.send_json.call_args_list]
+        authed = next((m for m in sent if m.get("type") == "conn.authenticated"), None)
+        assert authed is not None, "conn.authenticated not sent — fallback to instance secret failed"
+
+    async def test_wrong_secret_raises_invalid_token(
+        self, mock_producer, registry, context_reader, settings
+    ):
+        """
+        Token signed with a different secret → conn.error (invalid_token).
+        """
+        import jwt as pyjwt
+
+        wrong_secret = "totally_wrong_secret_32chars!!!!"
+        token = pyjwt.encode(
+            {"sub": CONTACT_ID, "session_id": SESSION_ID,
+             "tenant_id": TENANT_ID, "exp": 9999999999},
+            wrong_secret,
+            algorithm="HS256",
+        )
+
+        mock_redis = AsyncMock()
+        mock_redis.get    = AsyncMock(return_value=None)   # no per-tenant secret
+        mock_redis.exists = AsyncMock(return_value=1)
+
+        ws = make_ws_mock([], skip_auth=True)
+        msgs = [json.dumps({"type": "conn.authenticate", "token": token})]
+
+        async def patched_receive():
+            if msgs:
+                return msgs.pop(0)
+            from fastapi import WebSocketDisconnect
+            raise WebSocketDisconnect(code=1000)
+
+        ws.receive_text = patched_receive
+
+        adapter = WebchatAdapter(
+            ws               = ws,
+            pool_id          = "test_pool",
+            producer         = mock_producer,
+            registry         = registry,
+            context_reader   = context_reader,
+            settings         = settings,
+            redis            = mock_redis,
+        )
+        await adapter.handle()
+
+        sent = [c.args[0] for c in ws.send_json.call_args_list]
+        error = next((m for m in sent if m.get("type") == "conn.error"), None)
+        assert error is not None, "conn.error not sent for wrong secret"
+        assert error.get("code") == "invalid_token"

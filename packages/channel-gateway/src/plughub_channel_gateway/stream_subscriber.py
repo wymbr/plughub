@@ -42,6 +42,16 @@ _AGENTS_ONLY = "agents_only"
 _XREAD_BLOCK_MS = 2000
 
 
+class StreamExpiredError(Exception):
+    """
+    Levantado quando o cliente tenta reconectar com um cursor mas o stream Redis
+    não existe mais (TTL expirou após o encerramento da sessão).
+
+    O chamador deve enviar conn.session_ended ao cliente e fechar a conexão.
+    Não é um erro de runtime — é um estado esperado para sessões encerradas.
+    """
+
+
 class StreamSubscriber:
     """
     Subscriber XREAD do stream canônico de uma sessão.
@@ -80,7 +90,25 @@ class StreamSubscriber:
         """
         AsyncIterator que produz mensagens prontas para envio via WebSocket.
         Para quando a task é cancelada (asyncio.CancelledError propagado).
+
+        Lança StreamExpiredError antes do primeiro XREAD se o cliente veio com
+        um cursor (reconexão) mas o stream não existe mais no Redis — o que indica
+        que a sessão foi encerrada e o TTL do stream expirou.  Cursor "0" (nova
+        conexão) não aciona a verificação, pois o stream pode ainda não ter eventos.
         """
+        # ── Verificação de stream expirado (somente em reconexão) ──────────────
+        if self._cursor != "0":
+            try:
+                exists = await self._redis.exists(self._stream_key)
+            except asyncio.CancelledError:
+                return
+            except Exception:
+                exists = 1  # se não der pra checar, presume que existe
+            if not exists:
+                raise StreamExpiredError(
+                    f"stream {self._stream_key} not found — session may have ended"
+                )
+
         while True:
             try:
                 entries = await self._redis.xread(

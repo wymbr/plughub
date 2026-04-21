@@ -704,8 +704,8 @@ Tests: `tests/test_usage_emitter.py` — 22 testes (todas as dimensões + error 
 
 ### Reconexão — casos pendentes (fase 2)
 
-- **Stream TTL expirado pós-session_ended**: se o Redis stream expirou (TTL do `session:{id}:stream` venceu após a sessão ser encerrada), o XREAD em stream inexistente retorna `nil` e o adapter fica aguardando eventos que nunca chegam. Solução: ao iniciar o `StreamSubscriber`, verificar se o stream existe (`XLEN`); se não existir, enviar `conn.session_ended` imediatamente e fechar a conexão.
-- **jwt_secret por tenant**: fase 1 usa segredo único por instância (`settings.jwt_secret`). Produção multi-tenant exige secret por tenant ou validação via JWKS endpoint.
+- ~~**Stream TTL expirado pós-session_ended**~~: ✅ `StreamExpiredError` levantado em `StreamSubscriber.messages()` quando cliente reconecta com cursor != "0" mas `EXISTS session:{id}:stream` retorna 0. `_stream_delivery_loop` captura e envia `{"type": "conn.session_ended", "reason": "session_expired"}`. Falha no EXISTS presume que stream existe (graceful degradation).
+- ~~**jwt_secret por tenant**~~: ✅ `_decode_token` agora async: (1) decode sem verificação para ler `tenant_id`; (2) lookup Redis `{tenant_id}:config:webchat:jwt_secret`; (3) fallback para `settings.jwt_secret`. Single-tenant sem mudança de config. Tests: `TestStreamExpiredReconnect` (2 cases) + `TestMultiTenantJwtSecret` (3 cases). Total channel-gateway: 168/168.
 
 ## Pending (next iteration)
 
