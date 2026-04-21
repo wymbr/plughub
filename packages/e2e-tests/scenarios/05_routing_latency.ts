@@ -40,6 +40,8 @@ export async function run(ctx: ScenarioContext): Promise<ScenarioResult> {
       tenantId: ctx.tenantId,
     });
     assertions.push(pass("Perf fixtures seeded (50 agent types, 5 pools)"));
+    // Allow routing engine to update its cache from registry.changed Kafka events
+    await new Promise((r) => setTimeout(r, 1500));
   } catch (err) {
     assertions.push(fail("Perf fixtures seeded", String(err)));
     return buildResult(assertions, startAt, "Seed failed: " + String(err));
@@ -90,7 +92,7 @@ export async function run(ctx: ScenarioContext): Promise<ScenarioResult> {
       sessionIds.map((sessionId, i) => ({
         session_id: sessionId,
         tenant_id: ctx.tenantId,
-        channel: "chat",
+        channel: "webchat",
         customer_id: customerId,
         intent_data: {
           confidence: 0.9,
