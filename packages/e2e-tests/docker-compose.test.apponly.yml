@@ -14,9 +14,13 @@
 name: plughub-e2e
 
 networks:
-  # Aponta para a rede já existente — não cria uma nova
+  # Aponta para a rede já existente — não cria uma nova.
+  # Docker Compose gera o nome real como "{projeto}_{rede}".
+  # Para o docker-compose.infra.yml com name:plughub-infra e rede:plughub-infra
+  # o nome real é plughub-infra_plughub-infra.
+  # Se o seu ambiente gerar um nome diferente, ajuste abaixo:
   plughub-test:
-    name: plughub-infra
+    name: plughub-infra_plughub-infra
     external: true
 
 services:
