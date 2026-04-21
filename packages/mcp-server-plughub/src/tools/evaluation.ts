@@ -355,7 +355,7 @@ function buildComparisonReport(
   const avgSimilarity = similarities.reduce((a, b) => a + b, 0) / similarities.length
 
   const divergencePoints = turns
-    .map((t, i) => ({ ...t, similarity: similarities[i] }))
+    .map((t, i) => ({ ...t, similarity: similarities[i] as number }))
     .filter(t => t.similarity < threshold)
     .map(t => ({
       turn_index:      t.turn_index,
@@ -800,12 +800,23 @@ export function registerEvaluationTools(server: McpServer, deps: EvaluationDeps)
         // ── Comparison Mode: computa ComparisonReport se turns fornecidos ──────
         let comparison: Record<string, unknown> | undefined
         if (comparison_turns && comparison_turns.length > 0) {
-          comparison = buildComparisonReport(comparison_turns, {
-            production_outcome:         session_outcome,
-            replay_outcome:             comparison_replay_outcome,
-            production_final_sentiment: production_final_sentiment,
-            replay_final_sentiment:     comparison_replay_sentiment,
+          // Normalise optional number fields: strip `undefined` so exactOptionalPropertyTypes is satisfied
+          const normalisedTurns = comparison_turns.map(t => {
+            const r: { turn_index: number; production_text: string; replay_text: string; production_latency_ms?: number; replay_latency_ms?: number } = {
+              turn_index:      t.turn_index,
+              production_text: t.production_text,
+              replay_text:     t.replay_text,
+            }
+            if (t.production_latency_ms !== undefined) r.production_latency_ms = t.production_latency_ms
+            if (t.replay_latency_ms     !== undefined) r.replay_latency_ms     = t.replay_latency_ms
+            return r
           })
+          const compOpts: { production_outcome?: string; replay_outcome?: string; production_final_sentiment?: number; replay_final_sentiment?: number } = {}
+          if (session_outcome             !== undefined) compOpts.production_outcome         = session_outcome
+          if (comparison_replay_outcome   !== undefined) compOpts.replay_outcome             = comparison_replay_outcome
+          if (production_final_sentiment  !== undefined) compOpts.production_final_sentiment = production_final_sentiment
+          if (comparison_replay_sentiment !== undefined) compOpts.replay_final_sentiment     = comparison_replay_sentiment
+          comparison = buildComparisonReport(normalisedTurns, compOpts)
         }
 
         const result: Record<string, unknown> = {

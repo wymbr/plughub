@@ -75,7 +75,7 @@ describe("assertQuota", () => {
 
     try {
       await assertQuota(redis, "t2", "sessions")
-      fail("should have thrown")
+      throw new Error("should have thrown")
     } catch (e) {
       expect(e).toBeInstanceOf(QuotaExceededError)
       const err = e as QuotaExceededError
