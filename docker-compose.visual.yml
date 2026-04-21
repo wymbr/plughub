@@ -78,7 +78,8 @@ services:
       - plughub-visual
 
   clickhouse:
-    image: clickhouse/clickhouse-server:24-alpine
+    # 23.8 LTS (non-alpine) — more stable on Windows Docker Desktop / WSL2
+    image: clickhouse/clickhouse-server:23.8
     container_name: visual-clickhouse
     ports:
       - "8123:8123"
@@ -90,18 +91,16 @@ services:
       CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: 1
     volumes:
       - clickhouse-data:/var/lib/clickhouse
-    # get_mempolicy (NUMA syscall) is blocked by Docker Desktop's default
-    # seccomp profile on Windows/WSL2. Unconfined allows it to start normally.
-    security_opt:
-      - seccomp:unconfined
-    cap_add:
-      - SYS_NICE
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
     healthcheck:
-      test: ["CMD", "wget", "--quiet", "--spider", "http://localhost:8123/ping"]
-      interval: 5s
-      timeout: 3s
+      test: ["CMD-SHELL", "curl -sf http://localhost:8123/ping || exit 1"]
+      interval: 10s
+      timeout: 5s
       retries: 15
-      start_period: 20s
+      start_period: 30s
     networks:
       - plughub-visual
 
