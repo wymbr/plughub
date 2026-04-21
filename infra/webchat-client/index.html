@@ -1,0 +1,650 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PlugHub WebChat — Test Client</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    background: #0f1117;
+    color: #e2e8f0;
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+  }
+
+  /* ── Header ── */
+  header {
+    background: #1a1d27;
+    border-bottom: 1px solid #2d3148;
+    padding: 12px 20px;
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    flex-shrink: 0;
+  }
+  header h1 { font-size: 16px; font-weight: 600; color: #818cf8; }
+  .status-dot {
+    width: 10px; height: 10px; border-radius: 50%;
+    background: #374151; transition: background 0.3s;
+    flex-shrink: 0;
+  }
+  .status-dot.connected   { background: #22c55e; }
+  .status-dot.connecting  { background: #f59e0b; animation: pulse 1s infinite; }
+  .status-dot.error       { background: #ef4444; }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
+  #status-text { font-size: 13px; color: #94a3b8; flex: 1; }
+  #session-info { font-size: 11px; color: #4b5563; }
+
+  /* ── Layout ── */
+  .main { display: flex; flex: 1; overflow: hidden; }
+
+  /* ── Sidebar (connect form) ── */
+  .sidebar {
+    width: 300px;
+    background: #13151f;
+    border-right: 1px solid #1e2235;
+    padding: 20px;
+    overflow-y: auto;
+    flex-shrink: 0;
+  }
+  .sidebar h2 { font-size: 13px; font-weight: 600; color: #6366f1; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 16px; }
+  label { display: block; font-size: 12px; color: #94a3b8; margin-bottom: 4px; margin-top: 12px; }
+  input, textarea {
+    width: 100%; background: #1a1d27; border: 1px solid #2d3148;
+    color: #e2e8f0; border-radius: 6px; padding: 8px 10px; font-size: 13px;
+    outline: none; transition: border 0.2s;
+  }
+  input:focus, textarea:focus { border-color: #6366f1; }
+  textarea { resize: vertical; min-height: 80px; font-family: monospace; font-size: 11px; }
+  button.primary {
+    width: 100%; margin-top: 16px; padding: 10px;
+    background: #4f46e5; color: white; border: none; border-radius: 6px;
+    font-size: 14px; font-weight: 500; cursor: pointer; transition: background 0.2s;
+  }
+  button.primary:hover { background: #4338ca; }
+  button.primary:disabled { background: #374151; cursor: not-allowed; }
+  button.danger {
+    width: 100%; margin-top: 8px; padding: 8px;
+    background: transparent; color: #ef4444; border: 1px solid #ef4444;
+    border-radius: 6px; font-size: 13px; cursor: pointer;
+  }
+  button.danger:hover { background: #ef444420; }
+  .divider { border: none; border-top: 1px solid #1e2235; margin: 20px 0; }
+  .info-row { display: flex; justify-content: space-between; font-size: 12px; margin-top: 8px; }
+  .info-row .key { color: #64748b; }
+  .info-row .val { color: #a5b4fc; font-family: monospace; max-width: 150px; overflow: hidden; text-overflow: ellipsis; }
+  .hint { font-size: 11px; color: #4b5563; margin-top: 6px; line-height: 1.5; }
+
+  /* ── Chat area ── */
+  .chat-area {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  #messages {
+    flex: 1;
+    overflow-y: auto;
+    padding: 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .msg {
+    max-width: 75%;
+    padding: 10px 14px;
+    border-radius: 12px;
+    font-size: 14px;
+    line-height: 1.5;
+    word-break: break-word;
+  }
+  .msg.outbound { align-self: flex-end; background: #4f46e5; color: white; border-bottom-right-radius: 4px; }
+  .msg.inbound  { align-self: flex-start; background: #1e2235; color: #e2e8f0; border-bottom-left-radius: 4px; }
+  .msg.system   { align-self: center; background: #0f1117; color: #4b5563; font-size: 12px; border: 1px solid #1e2235; border-radius: 8px; padding: 6px 12px; }
+  .msg.error-msg { align-self: center; background: #1f1215; color: #f87171; font-size: 12px; border: 1px solid #7f1d1d; border-radius: 8px; padding: 6px 12px; }
+  .msg .ts { font-size: 10px; opacity: 0.5; margin-top: 4px; }
+  .msg .sender { font-size: 11px; font-weight: 600; margin-bottom: 2px; color: #818cf8; }
+  .msg .badge {
+    display: inline-block; font-size: 10px; padding: 1px 6px; border-radius: 4px;
+    background: #1e2235; color: #64748b; margin-left: 6px; vertical-align: middle;
+  }
+
+  /* typing indicator */
+  .typing-indicator {
+    align-self: flex-start;
+    background: #1e2235;
+    border-radius: 12px;
+    padding: 10px 14px;
+    display: none;
+  }
+  .typing-indicator.visible { display: flex; gap: 4px; align-items: center; }
+  .typing-indicator span {
+    width: 6px; height: 6px; background: #64748b; border-radius: 50%;
+    animation: bounce 1.2s infinite;
+  }
+  .typing-indicator span:nth-child(2) { animation-delay: 0.2s; }
+  .typing-indicator span:nth-child(3) { animation-delay: 0.4s; }
+  @keyframes bounce { 0%,80%,100%{transform:translateY(0)} 40%{transform:translateY(-6px)} }
+
+  /* ── Input area ── */
+  .input-area {
+    background: #13151f;
+    border-top: 1px solid #1e2235;
+    padding: 12px 16px;
+    display: flex;
+    gap: 8px;
+    align-items: flex-end;
+  }
+  #msg-input {
+    flex: 1;
+    background: #1a1d27;
+    border: 1px solid #2d3148;
+    color: #e2e8f0;
+    border-radius: 10px;
+    padding: 10px 14px;
+    font-size: 14px;
+    outline: none;
+    resize: none;
+    max-height: 120px;
+    min-height: 44px;
+    line-height: 1.5;
+    transition: border 0.2s;
+  }
+  #msg-input:focus { border-color: #6366f1; }
+  .send-btn {
+    background: #4f46e5; color: white; border: none; border-radius: 10px;
+    width: 44px; height: 44px; cursor: pointer; font-size: 18px;
+    display: flex; align-items: center; justify-content: center;
+    transition: background 0.2s; flex-shrink: 0;
+  }
+  .send-btn:hover { background: #4338ca; }
+  .send-btn:disabled { background: #374151; cursor: not-allowed; }
+  .upload-btn {
+    background: #1e2235; color: #94a3b8; border: 1px solid #2d3148;
+    border-radius: 10px; width: 44px; height: 44px; cursor: pointer;
+    font-size: 18px; display: flex; align-items: center; justify-content: center;
+    transition: background 0.2s; flex-shrink: 0;
+  }
+  .upload-btn:hover { background: #2d3148; }
+  #file-input { display: none; }
+
+  /* ── Raw events log ── */
+  #log-panel {
+    height: 140px;
+    background: #0a0c13;
+    border-top: 1px solid #1e2235;
+    overflow-y: auto;
+    padding: 8px 12px;
+    font-size: 11px;
+    font-family: monospace;
+    color: #4b5563;
+    flex-shrink: 0;
+  }
+  #log-panel .log-line { padding: 1px 0; }
+  #log-panel .log-line.recv { color: #34d399; }
+  #log-panel .log-line.send { color: #60a5fa; }
+  #log-panel .log-line.err  { color: #f87171; }
+  #log-panel .log-line.info { color: #a78bfa; }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="status-dot" id="dot"></div>
+  <h1>PlugHub WebChat</h1>
+  <span id="status-text">Disconnected</span>
+  <span id="session-info"></span>
+</header>
+
+<div class="main">
+
+  <!-- Sidebar: connection form -->
+  <div class="sidebar">
+    <h2>Conexão</h2>
+
+    <label>WebSocket URL</label>
+    <input id="ws-url" type="text" value="ws://localhost:8010/webchat/v1/ws">
+
+    <label>JWT Token</label>
+    <textarea id="jwt-token" placeholder="Paste JWT here…"></textarea>
+    <p class="hint">Token HS256 com claims: sub (contact_id), session_id, tenant_id</p>
+
+    <label>Cursor de reconexão</label>
+    <input id="cursor-input" type="text" placeholder="0 (nova sessão)">
+    <p class="hint">Use o cursor retornado no conn.authenticated para retomar.</p>
+
+    <button class="primary" id="connect-btn" onclick="connect()">Conectar</button>
+    <button class="danger" id="disconnect-btn" onclick="disconnect()" style="display:none">Desconectar</button>
+
+    <hr class="divider">
+    <h2>Sessão</h2>
+    <div class="info-row"><span class="key">contact_id</span><span class="val" id="info-contact">—</span></div>
+    <div class="info-row"><span class="key">session_id</span><span class="val" id="info-session">—</span></div>
+    <div class="info-row"><span class="key">cursor</span><span class="val" id="info-cursor">—</span></div>
+    <div class="info-row"><span class="key">mensagens</span><span class="val" id="info-msgs">0</span></div>
+
+    <hr class="divider">
+    <h2>Gerar Token (demo)</h2>
+    <label>contact_id</label>
+    <input id="gen-contact" type="text" value="contact-001">
+    <label>session_id</label>
+    <input id="gen-session" type="text" value="session-001">
+    <label>tenant_id</label>
+    <input id="gen-tenant" type="text" value="tenant_demo">
+    <label>JWT Secret</label>
+    <input id="gen-secret" type="text" value="changeme_32chars_webchat_secret!">
+    <button class="primary" onclick="generateToken()">Gerar e preencher token</button>
+    <p class="hint" style="margin-top:8px">⚠️ Geração client-side só para demo. Em produção o token vem do servidor.</p>
+  </div>
+
+  <!-- Chat area -->
+  <div class="chat-area">
+    <div id="messages">
+      <div class="msg system">Bem-vindo ao cliente de teste PlugHub WebChat. Configure a conexão no painel à esquerda.</div>
+    </div>
+
+    <div class="typing-indicator" id="typing-indicator">
+      <span></span><span></span><span></span>
+    </div>
+
+    <div class="input-area">
+      <button class="upload-btn" onclick="document.getElementById('file-input').click()" title="Upload arquivo">📎</button>
+      <input type="file" id="file-input" onchange="uploadFile(this)">
+      <textarea id="msg-input" placeholder="Digite uma mensagem… (Enter = enviar, Shift+Enter = nova linha)"
+        onkeydown="handleMsgKey(event)" rows="1" disabled></textarea>
+      <button class="send-btn" onclick="sendText()" id="send-btn" disabled title="Enviar">➤</button>
+    </div>
+
+    <!-- Raw event log -->
+    <div id="log-panel"></div>
+  </div>
+
+</div>
+
+<script>
+// ── State ──────────────────────────────────────────────────────────────────
+let ws = null;
+let msgCount = 0;
+let lastCursor = '0';
+let pendingUploadRequests = {}; // requestId → { file, name, mime, size }
+
+// ── UI helpers ─────────────────────────────────────────────────────────────
+function setStatus(state, text) {
+  const dot = document.getElementById('dot');
+  dot.className = 'status-dot ' + state;
+  document.getElementById('status-text').textContent = text;
+}
+
+function log(line, cls = 'info') {
+  const p = document.getElementById('log-panel');
+  const div = document.createElement('div');
+  div.className = 'log-line ' + cls;
+  div.textContent = new Date().toISOString().substring(11, 23) + '  ' + line;
+  p.appendChild(div);
+  p.scrollTop = p.scrollHeight;
+}
+
+function addMessage(cls, html, sender = null, badge = null) {
+  const msgs = document.getElementById('messages');
+  const div = document.createElement('div');
+  div.className = 'msg ' + cls;
+  let inner = '';
+  if (sender) inner += `<div class="sender">${sender}${badge ? `<span class="badge">${badge}</span>` : ''}</div>`;
+  inner += html;
+  inner += `<div class="ts">${new Date().toLocaleTimeString()}</div>`;
+  div.innerHTML = inner;
+  msgs.appendChild(div);
+  msgs.scrollTop = msgs.scrollHeight;
+  msgCount++;
+  document.getElementById('info-msgs').textContent = msgCount;
+}
+
+function setInputEnabled(enabled) {
+  document.getElementById('msg-input').disabled = !enabled;
+  document.getElementById('send-btn').disabled = !enabled;
+}
+
+// ── JWT generation (demo only, uses SubtleCrypto) ──────────────────────────
+async function generateToken() {
+  const contact  = document.getElementById('gen-contact').value.trim();
+  const session  = document.getElementById('gen-session').value.trim();
+  const tenant   = document.getElementById('gen-tenant').value.trim();
+  const secret   = document.getElementById('gen-secret').value;
+
+  const header  = { alg: 'HS256', typ: 'JWT' };
+  const payload = { sub: contact, session_id: session, tenant_id: tenant,
+                    iat: Math.floor(Date.now()/1000), exp: Math.floor(Date.now()/1000) + 86400 };
+
+  const b64url = obj => btoa(JSON.stringify(obj)).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');
+  const sigInput = b64url(header) + '.' + b64url(payload);
+
+  const key = await crypto.subtle.importKey(
+    'raw', new TextEncoder().encode(secret),
+    { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']
+  );
+  const sig = await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(sigInput));
+  const sigB64 = btoa(String.fromCharCode(...new Uint8Array(sig))).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');
+
+  const token = sigInput + '.' + sigB64;
+  document.getElementById('jwt-token').value = token;
+  log('Token gerado para ' + contact + ' / ' + session, 'info');
+}
+
+// ── WebSocket connect ──────────────────────────────────────────────────────
+function connect() {
+  const url    = document.getElementById('ws-url').value.trim();
+  const token  = document.getElementById('jwt-token').value.trim();
+  const cursor = document.getElementById('cursor-input').value.trim() || '0';
+
+  if (!url || !token) {
+    addMessage('error-msg', 'Preencha URL e JWT Token antes de conectar.');
+    return;
+  }
+
+  setStatus('connecting', 'Conectando…');
+  document.getElementById('connect-btn').disabled = true;
+
+  ws = new WebSocket(url);
+
+  ws.onopen = () => {
+    log('WS aberto', 'info');
+    setStatus('connecting', 'Aguardando conn.hello…');
+  };
+
+  ws.onmessage = (ev) => {
+    let msg;
+    try { msg = JSON.parse(ev.data); } catch { log('msg inválida: ' + ev.data, 'err'); return; }
+
+    log('← ' + JSON.stringify(msg), 'recv');
+
+    switch (msg.type) {
+
+      case 'conn.hello':
+        // Server greeted us — now authenticate
+        const authPayload = JSON.stringify({ type: 'conn.authenticate', token, cursor });
+        ws.send(authPayload);
+        log('→ conn.authenticate (cursor=' + cursor + ')', 'send');
+        break;
+
+      case 'conn.authenticated':
+        setStatus('connected', 'Autenticado');
+        document.getElementById('disconnect-btn').style.display = 'block';
+        document.getElementById('connect-btn').style.display = 'none';
+        document.getElementById('info-contact').textContent = msg.contact_id || '—';
+        document.getElementById('info-session').textContent = msg.session_id || '—';
+        document.getElementById('info-cursor').textContent  = msg.stream_cursor || '—';
+        lastCursor = msg.stream_cursor || '0';
+        document.getElementById('cursor-input').value = lastCursor;
+        document.getElementById('session-info').textContent =
+          'session: ' + (msg.session_id || '').substring(0,12) + '…';
+        setInputEnabled(true);
+        addMessage('system', '✅ Autenticado — session_id: ' + (msg.session_id || 'n/a'));
+        break;
+
+      case 'conn.error':
+        setStatus('error', 'Erro: ' + (msg.message || msg.code));
+        addMessage('error-msg', '❌ ' + (msg.message || msg.code));
+        break;
+
+      case 'conn.pong':
+        log('← pong', 'recv');
+        break;
+
+      case 'conn.session_ended':
+        setStatus('error', 'Sessão encerrada: ' + msg.reason);
+        addMessage('system', '⛔ Sessão encerrada — reason: ' + msg.reason);
+        setInputEnabled(false);
+        break;
+
+      case 'msg.text':
+        updateCursor(msg);
+        const isOwn = msg.author && msg.author.participant_id &&
+                      msg.author.participant_id === document.getElementById('info-contact').textContent;
+        addMessage(isOwn ? 'outbound' : 'inbound',
+          escHtml(msg.content?.text || ''),
+          isOwn ? 'Você' : (msg.author?.name || msg.author?.participant_id || 'Agent'),
+          msg.visibility === 'agents_only' ? 'interno' : null);
+        break;
+
+      case 'msg.image':
+        updateCursor(msg);
+        const imgSrc = msg.content?.url || '#';
+        addMessage('inbound',
+          `<img src="${escHtml(imgSrc)}" style="max-width:200px;border-radius:6px" alt="imagem"><br>${escHtml(msg.content?.caption||'')}`,
+          msg.author?.name || 'Agent');
+        break;
+
+      case 'msg.document':
+        updateCursor(msg);
+        addMessage('inbound',
+          `📄 <a href="${escHtml(msg.content?.url||'#')}" target="_blank" style="color:#818cf8">${escHtml(msg.content?.caption||'Documento')}</a>`,
+          msg.author?.name || 'Agent');
+        break;
+
+      case 'interaction.request':
+        renderInteraction(msg);
+        break;
+
+      case 'upload.ready':
+        handleUploadReady(msg);
+        break;
+
+      case 'upload.committed':
+        handleUploadCommitted(msg);
+        break;
+
+      case 'presence.typing_start':
+        showTyping(msg.participant_id);
+        break;
+
+      case 'presence.agent_joined':
+        addMessage('system', '👤 Agente entrou — ' + (msg.participant_id||'') + ' [' + (msg.role||'') + ']');
+        break;
+
+      case 'conn.ping':
+        ws.send(JSON.stringify({ type: 'conn.pong' }));
+        break;
+
+      default:
+        addMessage('system', '📦 ' + msg.type + (msg.reason ? ': ' + msg.reason : ''));
+    }
+  };
+
+  ws.onclose = (ev) => {
+    setStatus('error', 'Desconectado (code ' + ev.code + ')');
+    log('WS fechado code=' + ev.code, 'err');
+    resetConnectionUI();
+    setInputEnabled(false);
+  };
+
+  ws.onerror = () => {
+    log('WS erro', 'err');
+    setStatus('error', 'Erro de conexão');
+  };
+}
+
+function updateCursor(msg) {
+  if (msg.event_id) {
+    lastCursor = msg.event_id;
+    document.getElementById('info-cursor').textContent = lastCursor;
+    document.getElementById('cursor-input').value = lastCursor;
+  }
+}
+
+function disconnect() {
+  if (ws) { ws.close(1000); ws = null; }
+  resetConnectionUI();
+}
+
+function resetConnectionUI() {
+  document.getElementById('connect-btn').style.display = 'block';
+  document.getElementById('connect-btn').disabled = false;
+  document.getElementById('disconnect-btn').style.display = 'none';
+  document.getElementById('session-info').textContent = '';
+  setInputEnabled(false);
+}
+
+// ── Send text ──────────────────────────────────────────────────────────────
+function sendText() {
+  const input = document.getElementById('msg-input');
+  const text = input.value.trim();
+  if (!text || !ws || ws.readyState !== WebSocket.OPEN) return;
+
+  const msgId = 'msg-' + Date.now();
+  const payload = JSON.stringify({ type: 'msg.text', id: msgId, text });
+  ws.send(payload);
+  log('→ msg.text id=' + msgId, 'send');
+
+  input.value = '';
+  input.style.height = 'auto';
+}
+
+function handleMsgKey(ev) {
+  if (ev.key === 'Enter' && !ev.shiftKey) { ev.preventDefault(); sendText(); }
+  // auto-resize
+  const ta = document.getElementById('msg-input');
+  ta.style.height = 'auto';
+  ta.style.height = Math.min(ta.scrollHeight, 120) + 'px';
+}
+
+// ── Upload ─────────────────────────────────────────────────────────────────
+function uploadFile(input) {
+  const file = input.files[0];
+  if (!file || !ws || ws.readyState !== WebSocket.OPEN) return;
+  input.value = '';
+
+  const reqId  = 'upload-' + Date.now();
+  const fileId = 'file-' + Date.now();
+
+  pendingUploadRequests[reqId] = { file, reqId, fileId };
+
+  const payload = JSON.stringify({
+    type: 'upload.request', id: reqId,
+    file_name: file.name, mime_type: file.type, size_bytes: file.size
+  });
+  ws.send(payload);
+  log('→ upload.request id=' + reqId + ' name=' + file.name, 'send');
+  addMessage('system', `📤 Iniciando upload: ${file.name} (${(file.size/1024).toFixed(1)} KB)`);
+}
+
+async function handleUploadReady(msg) {
+  const pending = pendingUploadRequests[msg.request_id];
+  if (!pending) { log('upload.ready para id desconhecido: ' + msg.request_id, 'err'); return; }
+
+  log('← upload.ready file_id=' + msg.file_id, 'recv');
+  addMessage('system', `🔗 Upload URL pronta — enviando binário…`);
+
+  try {
+    const resp = await fetch(msg.upload_url, {
+      method: 'POST', body: pending.file,
+      headers: { 'Content-Type': pending.file.type }
+    });
+    if (resp.ok) {
+      log('HTTP upload OK status=' + resp.status, 'info');
+    } else {
+      log('HTTP upload falhou status=' + resp.status, 'err');
+      addMessage('error-msg', '❌ Upload HTTP falhou: ' + resp.status);
+    }
+  } catch (e) {
+    log('HTTP upload erro: ' + e.message, 'err');
+    addMessage('error-msg', '❌ Upload erro: ' + e.message);
+  }
+
+  delete pendingUploadRequests[msg.request_id];
+}
+
+function handleUploadCommitted(msg) {
+  log('← upload.committed file_id=' + msg.file_id, 'recv');
+  addMessage('system', `✅ Arquivo salvo — enviando como mensagem…`);
+
+  // Determine message type from mime
+  const mime = msg.mime_type || '';
+  let type = 'msg.document';
+  if (mime.startsWith('image/')) type = 'msg.image';
+  if (mime.startsWith('video/')) type = 'msg.video';
+
+  const sendPayload = JSON.stringify({
+    type, id: 'msg-' + Date.now(), file_id: msg.file_id, caption: msg.url
+  });
+  ws.send(sendPayload);
+  log('→ ' + type + ' file_id=' + msg.file_id, 'send');
+}
+
+// ── Interaction (menu.submit) ──────────────────────────────────────────────
+function renderInteraction(msg) {
+  const msgs = document.getElementById('messages');
+  const div = document.createElement('div');
+  div.className = 'msg inbound';
+  div.id = 'interaction-' + msg.menu_id;
+
+  let html = `<div class="sender">Agente <span class="badge">${msg.interaction}</span></div>`;
+  html += `<div style="margin-bottom:8px">${escHtml(msg.prompt)}</div>`;
+
+  if (msg.interaction === 'button' || msg.interaction === 'list') {
+    const opts = msg.options || [];
+    opts.forEach(opt => {
+      html += `<button onclick="submitMenu('${msg.menu_id}','${msg.interaction}','${opt.id}')"
+        style="display:block;width:100%;margin:4px 0;padding:6px 10px;background:#2d3148;
+               color:#e2e8f0;border:1px solid #4b5563;border-radius:6px;cursor:pointer;text-align:left">
+        ${escHtml(opt.label)}</button>`;
+    });
+  } else if (msg.interaction === 'text') {
+    html += `<div style="display:flex;gap:6px;margin-top:8px">
+      <input type="text" id="text-reply-${msg.menu_id}" placeholder="Sua resposta…"
+        style="flex:1;padding:6px 10px;background:#1a1d27;border:1px solid #4b5563;
+               color:#e2e8f0;border-radius:6px;font-size:13px">
+      <button onclick="submitTextMenu('${msg.menu_id}')"
+        style="padding:6px 12px;background:#4f46e5;color:white;border:none;border-radius:6px;cursor:pointer">OK</button>
+    </div>`;
+  }
+
+  html += `<div class="ts">${new Date().toLocaleTimeString()}</div>`;
+  div.innerHTML = html;
+  msgs.appendChild(div);
+  msgs.scrollTop = msgs.scrollHeight;
+}
+
+function submitMenu(menuId, interaction, result) {
+  if (!ws || ws.readyState !== WebSocket.OPEN) return;
+  const payload = JSON.stringify({ type: 'menu.submit', menu_id: menuId, interaction, result });
+  ws.send(payload);
+  log('→ menu.submit menu_id=' + menuId + ' result=' + result, 'send');
+  const el = document.getElementById('interaction-' + menuId);
+  if (el) el.style.opacity = '0.5';
+}
+
+function submitTextMenu(menuId) {
+  const val = document.getElementById('text-reply-' + menuId)?.value?.trim();
+  if (val) submitMenu(menuId, 'text', val);
+}
+
+// ── Typing indicator ──────────────────────────────────────────────────────
+let typingTimer = null;
+function showTyping(participantId) {
+  const ind = document.getElementById('typing-indicator');
+  ind.className = 'typing-indicator visible';
+  if (typingTimer) clearTimeout(typingTimer);
+  typingTimer = setTimeout(() => { ind.className = 'typing-indicator'; }, 3000);
+}
+
+// ── Heartbeat ─────────────────────────────────────────────────────────────
+setInterval(() => {
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify({ type: 'conn.ping' }));
+    log('→ conn.ping', 'send');
+  }
+}, 30000);
+
+// ── Util ──────────────────────────────────────────────────────────────────
+function escHtml(s) {
+  return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+</script>
+</body>
+</html>

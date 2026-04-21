@@ -1,0 +1,460 @@
+# docker-compose.visual.yml
+# PlugHub Platform — Visual Validation Environment
+#
+# Sobe toda a stack de aplicação + ferramentas de observabilidade
+# para validação visual via browser.
+#
+# Uso:
+#   docker compose -f docker-compose.visual.yml up --build
+#
+# URLs disponíveis após o stack subir:
+#   http://localhost:5080   — Operator Console (heatmap, sessões, supervisor)
+#   http://localhost:8010   — Channel Gateway (WebSocket webchat + upload HTTP)
+#   http://localhost:9090   — WebChat Test Client (cliente HTML de teste)
+#   http://localhost:3500   — Analytics API (dashboard/reports/sessions)
+#   http://localhost:3600   — Config API (configurações por tenant)
+#   http://localhost:3300   — Agent Registry (pools, agent types, skills)
+#   http://localhost:3000   — Metabase (BI self-service)
+#   http://localhost:8080   — Kafka UI (tópicos e mensagens)
+#   http://localhost:8081   — Redis Commander (inspeção de estado)
+#
+# Variáveis de ambiente opcionais (.env.visual):
+#   ANTHROPIC_API_KEY   — necessária apenas se ai-gateway for testado com LLM real
+
+name: plughub-visual
+
+networks:
+  plughub-visual:
+    driver: bridge
+
+volumes:
+  redis-data:
+  postgres-data:
+  clickhouse-data:
+  kafka-data:
+  metabase-data:
+  metabase-plugins:
+  attachment-data:
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Infrastructure
+# ─────────────────────────────────────────────────────────────────────────────
+
+services:
+
+  redis:
+    image: redis:7-alpine
+    container_name: visual-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    command: redis-server --save "" --loglevel warning
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks:
+      - plughub-visual
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: visual-postgres
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_DB: plughub
+      POSTGRES_USER: plughub
+      POSTGRES_PASSWORD: plughub
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U plughub -d plughub"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks:
+      - plughub-visual
+
+  clickhouse:
+    image: clickhouse/clickhouse-server:24-alpine
+    container_name: visual-clickhouse
+    ports:
+      - "8123:8123"
+      - "9000:9000"
+    environment:
+      CLICKHOUSE_DB: plughub
+      CLICKHOUSE_USER: plughub
+      CLICKHOUSE_PASSWORD: plughub
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: 1
+    volumes:
+      - clickhouse-data:/var/lib/clickhouse
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--spider", "http://localhost:8123/ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks:
+      - plughub-visual
+
+  kafka:
+    image: apache/kafka:3.7.0
+    container_name: visual-kafka
+    ports:
+      - "9092:9092"
+    volumes:
+      - kafka-data:/var/lib/kafka/data
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,INTERNAL://0.0.0.0:29092,CONTROLLER://0.0.0.0:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092,INTERNAL://kafka:29092
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,INTERNAL:PLAINTEXT,CONTROLLER:PLAINTEXT
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
+      KAFKA_LOG_DIRS: /var/lib/kafka/data
+    healthcheck:
+      test: ["CMD", "/opt/kafka/bin/kafka-broker-api-versions.sh", "--bootstrap-server", "localhost:9092"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+    networks:
+      - plughub-visual
+
+  kafka-init:
+    image: apache/kafka:3.7.0
+    container_name: visual-kafka-init
+    depends_on:
+      kafka:
+        condition: service_healthy
+    networks:
+      - plughub-visual
+    entrypoint: ["/bin/bash", "-c"]
+    command:
+      - |
+        KAFKA=/opt/kafka/bin/kafka-topics.sh
+        BROKER=kafka:29092
+        TOPICS="
+          conversations.inbound
+          conversations.outbound
+          conversations.routed
+          conversations.queued
+          conversations.dequeued
+          conversations.abandoned
+          conversations.events
+          conversations.message_sent
+          conversations.session_opened
+          conversations.session_closed
+          agent.lifecycle
+          agent.done
+          agent.registry.events
+          queue.position_updated
+          rules.escalation_triggered
+          rules.notification_triggered
+          rules.session_tagged
+          gateway.heartbeat
+          mcp.audit
+          registry.changed
+          evaluation.events
+          usage.events
+          sentiment.updated
+        "
+        for topic in $$TOPICS; do
+          $$KAFKA --bootstrap-server $$BROKER --create --if-not-exists \
+            --topic $$topic --partitions 3 --replication-factor 1
+          echo "topic $$topic OK"
+        done
+        echo "All topics created."
+    restart: "no"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Application Services
+# ─────────────────────────────────────────────────────────────────────────────
+
+  agent-registry:
+    build:
+      context: .
+      dockerfile: packages/agent-registry/Dockerfile
+    container_name: visual-agent-registry
+    ports:
+      - "3300:3300"
+    environment:
+      DATABASE_URL: postgresql://plughub:plughub@postgres:5432/plughub
+      PORT: "3300"
+      JWT_SECRET: demo_plughub_secret_32chars__
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"require('http').get('http://localhost:3300/v1/health',r=>{process.exit(r.statusCode===200?0:1)}).on('error',()=>process.exit(1))\""]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 25s
+    networks:
+      - plughub-visual
+
+  channel-gateway:
+    build:
+      context: .
+      dockerfile: packages/channel-gateway/Dockerfile
+    container_name: visual-channel-gateway
+    ports:
+      - "8010:8010"
+    environment:
+      PLUGHUB_KAFKA_BROKERS:          kafka:29092
+      PLUGHUB_REDIS_URL:              redis://redis:6379
+      PLUGHUB_JWT_SECRET:             changeme_32chars_webchat_secret!
+      PLUGHUB_WS_AUTH_TIMEOUT_S:      "30"
+      PLUGHUB_STORAGE_ROOT:           /var/plughub/attachments
+      PLUGHUB_ATTACHMENT_EXPIRY_DAYS: "1"
+      PLUGHUB_DATABASE_URL:           postgresql://plughub:plughub@postgres:5432/plughub
+      PLUGHUB_WEBCHAT_SERVING_BASE_URL: http://localhost:8010/webchat/v1/attachments
+      PLUGHUB_WEBCHAT_UPLOAD_BASE_URL:  http://localhost:8010/webchat/v1/upload
+      PLUGHUB_TENANT_ID:              tenant_demo
+      PLUGHUB_KAFKA_TOPIC_INBOUND:    conversations.inbound
+      PLUGHUB_KAFKA_TOPIC_OUTBOUND:   conversations.outbound
+      PLUGHUB_KAFKA_TOPIC_EVENTS:     conversations.events
+    volumes:
+      - attachment-data:/var/plughub/attachments
+    depends_on:
+      redis:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:8010/health', timeout=3)\" 2>/dev/null && echo ok || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    networks:
+      - plughub-visual
+
+  analytics-api:
+    build:
+      context: .
+      dockerfile: packages/analytics-api/Dockerfile
+    container_name: visual-analytics-api
+    ports:
+      - "3500:3500"
+    environment:
+      PLUGHUB_KAFKA_BROKERS:      kafka:29092
+      PLUGHUB_KAFKA_GROUP_ID:     analytics-visual
+      PLUGHUB_REDIS_URL:          redis://redis:6379
+      PLUGHUB_CLICKHOUSE_HOST:    clickhouse
+      PLUGHUB_CLICKHOUSE_PORT:    "8123"
+      PLUGHUB_CLICKHOUSE_USER:    plughub
+      PLUGHUB_CLICKHOUSE_PASSWORD: plughub
+      PLUGHUB_CLICKHOUSE_DATABASE: plughub
+      PLUGHUB_ADMIN_JWT_SECRET:   demo_analytics_admin_secret
+    depends_on:
+      redis:
+        condition: service_healthy
+      clickhouse:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:3500/v1/health', timeout=3)\" 2>/dev/null && echo ok || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    networks:
+      - plughub-visual
+
+  config-api:
+    build:
+      context: .
+      dockerfile: packages/config-api/Dockerfile
+    container_name: visual-config-api
+    ports:
+      - "3600:3600"
+    environment:
+      PLUGHUB_CONFIG_DATABASE_URL: postgresql://plughub:plughub@postgres:5432/plughub
+      PLUGHUB_CONFIG_REDIS_URL:    redis://redis:6379
+      PLUGHUB_CONFIG_ADMIN_TOKEN:  demo_config_admin_token
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:3600/v1/health', timeout=3)\" 2>/dev/null && echo ok || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    networks:
+      - plughub-visual
+
+  # Config seed: populates default platform config values once
+  config-seed:
+    build:
+      context: .
+      dockerfile: packages/config-api/Dockerfile
+    container_name: visual-config-seed
+    environment:
+      PLUGHUB_CONFIG_DATABASE_URL: postgresql://plughub:plughub@postgres:5432/plughub
+      PLUGHUB_CONFIG_REDIS_URL:    redis://redis:6379
+    command: ["plughub-config-seed"]
+    depends_on:
+      config-api:
+        condition: service_healthy
+    networks:
+      - plughub-visual
+    restart: "no"
+
+  # Operator Console — React UI served by nginx
+  operator-console:
+    build:
+      context: .
+      dockerfile: packages/operator-console/Dockerfile
+    container_name: visual-operator-console
+    ports:
+      - "5080:80"
+    depends_on:
+      analytics-api:
+        condition: service_healthy
+    networks:
+      - plughub-visual
+
+  # WebChat test client — served as static HTML via nginx
+  webchat-client:
+    image: nginx:alpine
+    container_name: visual-webchat-client
+    ports:
+      - "9090:80"
+    volumes:
+      - ./infra/webchat-client:/usr/share/nginx/html:ro
+    networks:
+      - plughub-visual
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Observability & BI
+# ─────────────────────────────────────────────────────────────────────────────
+
+  # Metabase — BI self-service. http://localhost:3000
+  metabase-driver-init:
+    image: alpine/curl:latest
+    container_name: visual-metabase-driver-init
+    volumes:
+      - metabase-plugins:/plugins
+    command: >
+      sh -c "
+        if [ ! -f /plugins/clickhouse.metabase-driver.jar ]; then
+          echo 'Downloading ClickHouse Metabase driver…';
+          curl -fsSL -o /plugins/clickhouse.metabase-driver.jar
+            https://github.com/enqueue/metabase-clickhouse-driver/releases/download/1.3.2/clickhouse.metabase-driver.jar
+          && echo 'Driver downloaded.';
+        else
+          echo 'Driver already present.';
+        fi
+      "
+    restart: "no"
+
+  metabase:
+    image: metabase/metabase:v0.50.0
+    container_name: visual-metabase
+    ports:
+      - "3000:3000"
+    environment:
+      MB_PLUGINS_DIR:   /plugins
+      MB_DB_TYPE:       postgres
+      MB_DB_HOST:       postgres
+      MB_DB_PORT:       5432
+      MB_DB_DBNAME:     plughub
+      MB_DB_USER:       plughub
+      MB_DB_PASS:       plughub
+      JAVA_TIMEZONE:    America/Sao_Paulo
+      MB_SITE_LOCALE:   pt
+      MB_SEND_EMAIL_ON_FIRST_LOGIN: "false"
+      MB_ANON_TRACKING_ENABLED: "false"
+    volumes:
+      - metabase-data:/metabase-data
+      - metabase-plugins:/plugins
+    depends_on:
+      metabase-driver-init:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      clickhouse:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:3000/api/health | grep -q '\"status\":\"ok\"'"]
+      interval: 15s
+      timeout: 5s
+      retries: 20
+      start_period: 90s
+    networks:
+      - plughub-visual
+
+  metabase-setup:
+    image: python:3.11-slim
+    container_name: visual-metabase-setup
+    volumes:
+      - ./infra/metabase:/setup:ro
+    environment:
+      METABASE_URL:            http://metabase:3000
+      METABASE_ADMIN_EMAIL:    admin@plughub.local
+      METABASE_ADMIN_PASSWORD: plughub_admin_2024
+      METABASE_SITE_NAME:      "PlugHub Analytics"
+      CH_HOST:                 clickhouse
+      CH_PORT:                 "8123"
+      CH_DATABASE:             plughub
+      TENANTS:                 "tenant_demo"
+      CH_PASS_PREFIX:          "tenant_"
+    depends_on:
+      metabase:
+        condition: service_healthy
+    command: ["python", "/setup/setup.py"]
+    networks:
+      - plughub-visual
+    restart: "no"
+
+  # Kafka UI — http://localhost:8080
+  kafka-ui:
+    image: provectuslabs/kafka-ui:latest
+    container_name: visual-kafka-ui
+    ports:
+      - "8080:8080"
+    environment:
+      KAFKA_CLUSTERS_0_NAME: plughub-visual
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:29092
+    depends_on:
+      kafka:
+        condition: service_healthy
+    networks:
+      - plughub-visual
+
+  # Redis Commander — http://localhost:8081
+  redis-commander:
+    image: ghcr.io/joeferner/redis-commander:latest
+    container_name: visual-redis-commander
+    ports:
+      - "8081:8081"
+    environment:
+      REDIS_HOSTS: "local:redis:6379"
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - plughub-visual
