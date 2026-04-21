@@ -13,6 +13,7 @@ The seed script (plughub-config-seed) is run separately as a one-off job.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator
@@ -30,11 +31,33 @@ from .store  import ConfigStore
 logger = logging.getLogger("plughub.config.api")
 
 
+async def _create_pool_with_retry(dsn: str, *, min_size: int, max_size: int,
+                                   retries: int = 10, delay: float = 2.0) -> asyncpg.Pool:
+    """Create asyncpg pool with exponential-backoff retry.
+
+    pg_isready passes before PostgreSQL accepts authenticated connections,
+    so the first attempt may fail even when the Docker healthcheck is green.
+    """
+    last_exc: Exception | None = None
+    for attempt in range(1, retries + 1):
+        try:
+            return await asyncpg.create_pool(dsn, min_size=min_size, max_size=max_size)
+        except Exception as exc:
+            last_exc = exc
+            wait = delay * attempt
+            logger.warning(
+                "asyncpg pool creation failed (attempt %d/%d) — retrying in %.1fs: %s",
+                attempt, retries, wait, exc,
+            )
+            await asyncio.sleep(wait)
+    raise RuntimeError(f"Could not connect to PostgreSQL after {retries} attempts") from last_exc
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     settings = get_settings()
 
-    pool = await asyncpg.create_pool(
+    pool = await _create_pool_with_retry(
         settings.database_url,
         min_size=2,
         max_size=10,
