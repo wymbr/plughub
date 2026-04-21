@@ -13,6 +13,8 @@ volumes:
   postgres-data:
   clickhouse-data:
   kafka-data:
+  metabase-data:
+  metabase-plugins:
 
 services:
 
@@ -145,6 +147,95 @@ services:
     networks:
       - plughub-infra
     restart: unless-stopped
+
+  # ─────────────────────────────────────────────
+  # Metabase — BI e relatórios self-service
+  # Acesso: http://localhost:3000
+  # Driver ClickHouse: enqueue/metabase-clickhouse-driver v1.3.2
+  # Sandboxing: usuário CH por tenant + Row Policies (clickhouse_users.sql)
+  # Setup automático: metabase-setup (um-shot após Metabase pronto)
+  # ─────────────────────────────────────────────
+
+  # Init: baixa o driver ClickHouse antes do Metabase subir
+  metabase-driver-init:
+    image: alpine/curl:latest
+    container_name: plughub-metabase-driver-init
+    volumes:
+      - metabase-plugins:/plugins
+    command: >
+      sh -c "
+        if [ ! -f /plugins/clickhouse.metabase-driver.jar ]; then
+          echo 'Downloading ClickHouse Metabase driver…';
+          curl -fsSL -o /plugins/clickhouse.metabase-driver.jar
+            https://github.com/enqueue/metabase-clickhouse-driver/releases/download/1.3.2/clickhouse.metabase-driver.jar
+          && echo 'Driver downloaded.';
+        else
+          echo 'Driver already present.';
+        fi
+      "
+    restart: "no"
+
+  metabase:
+    image: metabase/metabase:v0.50.0
+    container_name: plughub-metabase
+    ports:
+      - "3000:3000"
+    environment:
+      MB_PLUGINS_DIR:    /plugins
+      MB_DB_TYPE:        postgres
+      MB_DB_HOST:        postgres
+      MB_DB_PORT:        5432
+      MB_DB_DBNAME:      plughub
+      MB_DB_USER:        plughub
+      MB_DB_PASS:        plughub
+      JAVA_TIMEZONE:     America/Sao_Paulo
+      MB_SITE_LOCALE:    pt
+      # Desabilita telemetria no ambiente local
+      MB_SEND_EMAIL_ON_FIRST_LOGIN: "false"
+      MB_ANON_TRACKING_ENABLED:     "false"
+    volumes:
+      - metabase-data:/metabase-data
+      - metabase-plugins:/plugins
+    depends_on:
+      metabase-driver-init:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      clickhouse:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:3000/api/health | grep -q '\"status\":\"ok\"'"]
+      interval: 15s
+      timeout:  5s
+      retries:  20
+      start_period: 90s
+    networks:
+      - plughub-infra
+    restart: unless-stopped
+
+  # One-shot: configura conexões, questions e dashboard via API Metabase
+  metabase-setup:
+    image: python:3.11-slim
+    container_name: plughub-metabase-setup
+    volumes:
+      - ./infra/metabase:/setup:ro
+    environment:
+      METABASE_URL:             http://metabase:3000
+      METABASE_ADMIN_EMAIL:     admin@plughub.local
+      METABASE_ADMIN_PASSWORD:  plughub_admin_2024
+      METABASE_SITE_NAME:       "PlugHub Analytics"
+      CH_HOST:                  clickhouse
+      CH_PORT:                  "8123"
+      CH_DATABASE:              plughub
+      TENANTS:                  "tenant_telco,tenant_bank"
+      CH_PASS_PREFIX:           "tenant_"
+    depends_on:
+      metabase:
+        condition: service_healthy
+    command: ["python", "/setup/setup.py"]
+    networks:
+      - plughub-infra
+    restart: "no"
 
   # ─────────────────────────────────────────────
   # Kafka UI — visualização de topics e mensagens
