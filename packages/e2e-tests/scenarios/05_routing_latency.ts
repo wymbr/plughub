@@ -59,6 +59,18 @@ export async function run(ctx: ScenarioContext): Promise<ScenarioResult> {
   // ── Seed 50 agent instances directly in Redis (fast path) ─────────────────
   // Bypass MCP to avoid MCP overhead in performance setup.
   try {
+    // Flush leftover queues from previous test runs — stale queued sessions
+    // consume instance capacity via periodic drain before the test's events
+    // arrive, leaving no agents available for the current run.
+    const flushPromises: Promise<unknown>[] = [];
+    for (let i = 0; i < POOLS_COUNT; i++) {
+      flushPromises.push(
+        ctx.redis.del(`${ctx.tenantId}:pool:pool_perf_${i}:queue`),
+        ctx.redis.del(`${ctx.tenantId}:pool:pool_perf_${i}:instances`)
+      );
+    }
+    await Promise.all(flushPromises);
+
     const writePromises: Promise<void>[] = [];
     for (let poolIndex = 0; poolIndex < POOLS_COUNT; poolIndex++) {
       const poolId = `pool_perf_${poolIndex}`;
