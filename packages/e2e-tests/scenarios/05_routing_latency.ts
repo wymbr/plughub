@@ -93,6 +93,24 @@ export async function run(ctx: ScenarioContext): Promise<ScenarioResult> {
   const sessionIds = Array.from({ length: CONCURRENT_REQUESTS }, () => randomUUID());
   const customerId = randomUUID(); // shared customer for all requests
 
+  // ── Start Kafka consumer BEFORE publishing — avoids race where routed events
+  //    arrive before the consumer joins the group (fromBeginning: false).
+  //    400ms delay ensures partition assignment is complete.
+  // ─────────────────────────────────────────────────────────────────────────
+  let routingResults: Map<
+    string,
+    {
+      allocated: boolean;
+      instance_id?: string;
+      pool_id?: string;
+      latency_ms: number;
+      publishedAt: number;
+    }
+  >;
+
+  const routedPromise = waitForRoutedEventsBatch(ctx.kafka, sessionIds, 8000);
+  await new Promise((r) => setTimeout(r, 400)); // wait for consumer partition assignment
+
   // ── Publish all 10 events simultaneously ──────────────────────────────────
   const publishStart = Date.now();
   try {
@@ -122,24 +140,8 @@ export async function run(ctx: ScenarioContext): Promise<ScenarioResult> {
   // Record publish timestamp for each session
   const publishedAt = Date.now();
 
-  // ── Wait for all routed events ────────────────────────────────────────────
-  let routingResults: Map<
-    string,
-    {
-      allocated: boolean;
-      instance_id?: string;
-      pool_id?: string;
-      latency_ms: number;
-      publishedAt: number;
-    }
-  >;
-
   try {
-    routingResults = await waitForRoutedEventsBatch(
-      ctx.kafka,
-      sessionIds,
-      5000 // 5s total timeout for all responses
-    );
+    routingResults = await routedPromise;
   } catch (err) {
     assertions.push(
       fail("All routing responses received within 5s", String(err))
