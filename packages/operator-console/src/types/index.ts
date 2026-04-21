@@ -103,3 +103,14 @@ export interface AppConfig {
   tenantId:   string
   apiBaseUrl: string
 }
+
+// ─── Supervisor intervention state ────────────────────────────────────────────
+
+export type SupervisorStatus = 'idle' | 'joining' | 'active' | 'leaving' | 'error'
+
+export interface SupervisorState {
+  status:        SupervisorStatus
+  participantId: string | null    // returned by POST /supervisor/join
+  joinedAt:      string | null    // ISO8601
+  error:         string | null
+}

@@ -1,17 +1,20 @@
 /**
  * SessionTranscript.tsx
- * Live read-only transcript for a single session.
+ * Live transcript for a single session with optional supervisor intervention.
  *
  * Connects to SSE GET /sessions/{id}/stream:
  *   - "history" event: all existing stream entries
  *   - "entry" event:   new entries as they arrive
  *
- * Read-only — no participant is registered; the stream is tailed via XREAD
- * on the backend, same mechanism as WebChat reconnect.
+ * Supervisor intervention (fase 3):
+ *   - "Entrar como supervisor" button in the header
+ *   - SupervisorPanel appears at the bottom when active
+ *   - Operators can send coaching (agents_only) or intervention (all) messages
+ *   - Leave cleans up Redis state via POST /supervisor/leave
  */
 import { useEffect, useRef } from 'react'
-import { useSessionStream } from '../api/hooks'
-import { scoreToColor } from '../utils/sentiment'
+import { useSessionStream, useSupervisor } from '../api/hooks'
+import { SupervisorJoinButton, SupervisorPanel } from './SupervisorPanel'
 import type { StreamEntry } from '../types'
 
 interface Props {
@@ -21,13 +24,17 @@ interface Props {
 }
 
 export function SessionTranscript({ tenantId, sessionId, onBack }: Props) {
-  const { entries, status } = useSessionStream(tenantId, sessionId)
+  const { entries, status }              = useSessionStream(tenantId, sessionId)
+  const { state: supState, join, message, leave } = useSupervisor(tenantId, sessionId)
   const bottomRef = useRef<HTMLDivElement>(null)
 
   // Auto-scroll to bottom when new entries arrive
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [entries.length])
+
+  const isSupActive  = supState.status === 'active'
+  const isSupJoining = supState.status === 'joining'
 
   return (
     <div style={styles.container}>
@@ -41,7 +48,16 @@ export function SessionTranscript({ tenantId, sessionId, onBack }: Props) {
           <code style={styles.sessionId}>{sessionId}</code>
         </span>
         <StatusDot status={status} />
-        <span style={styles.readOnly}>read-only</span>
+        {!isSupActive ? (
+          <SupervisorJoinButton
+            onJoin  ={() => join()}
+            joining ={isSupJoining}
+            error   ={supState.status === 'error' ? supState.error : null}
+          />
+        ) : (
+          <span style={styles.supervisingBadge}>👁 supervisionando</span>
+        )}
+        {!isSupActive && <span style={styles.readOnly}>read-only</span>}
       </div>
 
       {/* Stream entries */}
@@ -63,6 +79,15 @@ export function SessionTranscript({ tenantId, sessionId, onBack }: Props) {
         ))}
         <div ref={bottomRef} />
       </div>
+
+      {/* Supervisor intervention panel — visible only when active */}
+      {isSupActive && (
+        <SupervisorPanel
+          state     ={supState}
+          onMessage ={message}
+          onLeave   ={leave}
+        />
+      )}
     </div>
   )
 }
@@ -224,6 +249,12 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: 11, color: '#475569',
     border: '1px solid #334155', borderRadius: 4,
     padding: '2px 6px', marginLeft: 'auto',
+  },
+  supervisingBadge: {
+    fontSize: 12, color: '#f59e0b',
+    border: '1px solid #f59e0b44', borderRadius: 4,
+    padding: '2px 8px', marginLeft: 'auto',
+    fontWeight: 600,
   },
   stream: {
     flex: 1, overflowY: 'auto',

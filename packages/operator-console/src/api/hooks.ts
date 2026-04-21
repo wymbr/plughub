@@ -8,7 +8,7 @@
  * usePoolViews     — merges snapshots + sentiment into PoolView[]
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import type { ActiveSession, ConnectionStatus, Metrics24h, PoolSnapshot, PoolView, SentimentEntry, StreamEntry } from '../types'
+import type { ActiveSession, ConnectionStatus, Metrics24h, PoolSnapshot, PoolView, SentimentEntry, StreamEntry, SupervisorState } from '../types'
 
 const BASE = import.meta.env.VITE_API_BASE_URL ?? ''
 
@@ -233,4 +233,108 @@ export function useSessionStream(
   }, [tenantId, sessionId])
 
   return { entries, status }
+}
+
+// ─── useSupervisor ────────────────────────────────────────────────────────────
+
+/**
+ * Manages supervisor intervention lifecycle for a live session.
+ *
+ * join()    → POST /supervisor/join   → sets participantId
+ * message() → POST /supervisor/message
+ * leave()   → POST /supervisor/leave  → clears state
+ *
+ * Human operators bypass the MCP agent lifecycle entirely —
+ * the backend writes directly to the Redis session stream.
+ */
+export function useSupervisor(tenantId: string, sessionId: string | null): {
+  state:   SupervisorState
+  join:    (operatorId?: string) => Promise<void>
+  message: (text: string, visibility?: 'agents_only' | 'all') => Promise<void>
+  leave:   () => Promise<void>
+} {
+  const [state, setState] = useState<SupervisorState>({
+    status:        'idle',
+    participantId: null,
+    joinedAt:      null,
+    error:         null,
+  })
+
+  // Reset when session changes
+  useEffect(() => {
+    setState({ status: 'idle', participantId: null, joinedAt: null, error: null })
+  }, [sessionId])
+
+  const join = useCallback(async (operatorId = 'operator') => {
+    if (!sessionId || !tenantId) return
+    setState(s => ({ ...s, status: 'joining', error: null }))
+    try {
+      const res = await fetch(`${BASE}/supervisor/join`, {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ tenant_id: tenantId, session_id: sessionId, operator_id: operatorId }),
+      })
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}))
+        throw new Error((body as { detail?: string }).detail ?? `HTTP ${res.status}`)
+      }
+      const data = await res.json() as { participant_id: string; joined_at: string }
+      setState({
+        status:        'active',
+        participantId: data.participant_id,
+        joinedAt:      data.joined_at,
+        error:         null,
+      })
+    } catch (err) {
+      setState(s => ({ ...s, status: 'error', error: String(err) }))
+    }
+  }, [tenantId, sessionId])
+
+  const message = useCallback(async (text: string, visibility: 'agents_only' | 'all' = 'agents_only') => {
+    if (!sessionId || !tenantId || !state.participantId) return
+    try {
+      const res = await fetch(`${BASE}/supervisor/message`, {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({
+          tenant_id:      tenantId,
+          session_id:     sessionId,
+          participant_id: state.participantId,
+          text,
+          visibility,
+        }),
+      })
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}))
+        throw new Error((body as { detail?: string }).detail ?? `HTTP ${res.status}`)
+      }
+    } catch (err) {
+      setState(s => ({ ...s, error: String(err) }))
+    }
+  }, [tenantId, sessionId, state.participantId])
+
+  const leave = useCallback(async () => {
+    if (!sessionId || !tenantId || !state.participantId) {
+      setState({ status: 'idle', participantId: null, joinedAt: null, error: null })
+      return
+    }
+    setState(s => ({ ...s, status: 'leaving', error: null }))
+    try {
+      await fetch(`${BASE}/supervisor/leave`, {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({
+          tenant_id:      tenantId,
+          session_id:     sessionId,
+          participant_id: state.participantId,
+        }),
+      })
+    } catch {
+      // ignore — leave is best-effort
+    } finally {
+      setState({ status: 'idle', participantId: null, joinedAt: null, error: null })
+    }
+  }, [tenantId, sessionId, state.participantId])
+
+  return { state, join, message, leave }
 }
