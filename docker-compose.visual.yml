@@ -96,10 +96,10 @@ services:
         soft: 262144
         hard: 262144
     healthcheck:
-      # clickhouse-client is always available inside the image; avoids curl dependency
-      test: ["CMD-SHELL", "clickhouse-client --host=localhost --user=plughub --password=plughub --query='SELECT 1' 2>/dev/null | grep -q 1"]
+      # /ping requires no auth — returns "Ok.\n" when server is ready
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8123/ping 2>/dev/null | grep -q Ok"]
       interval: 10s
-      timeout: 10s
+      timeout: 5s
       retries: 30
       start_period: 120s
     networks:
@@ -435,8 +435,11 @@ services:
       CH_HOST:                 clickhouse
       CH_PORT:                 "8123"
       CH_DATABASE:             plughub
+      # Use the single plughub user — per-tenant CH users not created in this env
+      CH_USER:                 plughub
+      CH_PASSWORD:             plughub
       TENANTS:                 "tenant_demo"
-      CH_PASS_PREFIX:          "tenant_"
+      CH_PASS_PREFIX:          "plughub"
     depends_on:
       metabase:
         condition: service_healthy

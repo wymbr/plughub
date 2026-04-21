@@ -45,6 +45,9 @@ CH_PORT          = int(os.environ.get("CH_PORT",   "8123"))
 CH_DATABASE      = os.environ.get("CH_DATABASE",   "plughub")
 TENANTS          = [t.strip() for t in os.environ.get("TENANTS", "tenant_telco,tenant_bank").split(",") if t.strip()]
 CH_PASS_PREFIX   = os.environ.get("CH_PASS_PREFIX", "tenant_")
+# Optional override: single shared CH user (used when per-tenant users are not created)
+CH_USER_OVERRIDE     = os.environ.get("CH_USER", "")
+CH_PASSWORD_OVERRIDE = os.environ.get("CH_PASSWORD", "")
 
 
 # ─── HTTP helpers ─────────────────────────────────────────────────────────────
@@ -159,9 +162,13 @@ def create_ch_databases(token: str) -> dict[str, int]:
             print(f"  DB already exists: {conn_name} (id={existing_dbs[conn_name]})")
             continue
 
-        # Password convention: <prefix><tenant_id>_ro_2024
-        ch_user     = tenant
-        ch_password = f"{CH_PASS_PREFIX}{tenant}_ro_2024"
+        # Use override credentials if set (single shared user), else per-tenant convention
+        if CH_USER_OVERRIDE:
+            ch_user     = CH_USER_OVERRIDE
+            ch_password = CH_PASSWORD_OVERRIDE
+        else:
+            ch_user     = tenant
+            ch_password = f"{CH_PASS_PREFIX}{tenant}_ro_2024"
 
         result = post("/api/database", {
             "name":   conn_name,
