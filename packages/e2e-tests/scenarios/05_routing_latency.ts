@@ -90,14 +90,13 @@ export async function run(ctx: ScenarioContext): Promise<ScenarioResult> {
     await publishInboundEventsBatch(
       ctx.kafka,
       sessionIds.map((sessionId, i) => ({
-        session_id: sessionId,
-        tenant_id: ctx.tenantId,
-        channel: "webchat",
-        customer_id: customerId,
-        intent_data: {
-          confidence: 0.9,
-          intent: "perf_test",
-        },
+        session_id:       sessionId,
+        tenant_id:        ctx.tenantId,
+        channel:          "webchat",
+        customer_id:      customerId,
+        pool_id:          `pool_perf_${i % POOLS_COUNT}`,
+        intent:           "perf_test",
+        confidence:       0.9,
         customer_profile: { tier: "standard" },
       }))
     );

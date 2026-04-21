@@ -56,6 +56,9 @@ export async function publishInboundEvent(
 
 /**
  * Publishes multiple inbound events concurrently using a single producer.
+ * Payload matches ConversationInboundEvent (routing-engine Pydantic model):
+ *   required: session_id, tenant_id, customer_id, channel, started_at
+ *   optional: pool_id, intent, confidence, customer_profile
  */
 export async function publishInboundEventsBatch(
   kafka: Kafka,
@@ -64,20 +67,30 @@ export async function publishInboundEventsBatch(
     tenant_id: string;
     channel: string;
     customer_id: string;
-    intent_data?: { confidence: number; intent: string };
-    customer_profile?: { tier: string };
+    pool_id?: string;
+    intent?: string;
+    confidence?: number;
+    customer_profile?: Record<string, unknown>;
   }>
 ): Promise<void> {
   const producer = kafka.producer();
   await producer.connect();
+  const now = new Date().toISOString();
   try {
     await producer.send({
       topic: "conversations.inbound",
       messages: events.map((event) => ({
         key: event.session_id,
         value: JSON.stringify({
-          ...event,
-          timestamp: new Date().toISOString(),
+          session_id:       event.session_id,
+          tenant_id:        event.tenant_id,
+          customer_id:      event.customer_id,
+          channel:          event.channel,
+          started_at:       now,
+          pool_id:          event.pool_id ?? null,
+          intent:           event.intent ?? null,
+          confidence:       event.confidence ?? 0.0,
+          customer_profile: event.customer_profile ?? {},
         }),
       })),
     });
