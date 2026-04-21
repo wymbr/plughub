@@ -1,0 +1,74 @@
+# docker-compose.test.override.yml
+# Reutiliza a infra já rodando em docker-compose.infra.yml.
+#
+# Uso (na raiz do repo):
+#   docker compose \
+#     -f packages/e2e-tests/docker-compose.test.yml \
+#     -f packages/e2e-tests/docker-compose.test.override.yml \
+#     up --build -d
+#
+# Pré-requisito: criar o banco de teste (só na primeira vez):
+#   docker exec plughub-postgres psql -U plughub -c "CREATE DATABASE plughub_test;"
+
+name: plughub-e2e
+
+# ─── Rede: aponta "plughub-test" para a rede já existente ────────────────────
+networks:
+  plughub-test:
+    name: plughub-infra
+    external: true
+
+services:
+
+  # ─── Infra: desabilitar — já rodando em plughub-infra ────────────────────────
+  # profile "infra-skip" nunca é activado → serviços não sobem
+  redis:
+    profiles: ["infra-skip"]
+
+  postgres:
+    profiles: ["infra-skip"]
+
+  kafka:
+    profiles: ["infra-skip"]
+
+  kafka-init:
+    profiles: ["infra-skip"]
+
+  clickhouse:
+    profiles: ["infra-skip"]
+
+  # ─── App services: limpar depends_on de infra ────────────────────────────────
+  # A infra já está healthy; sem os containers no projeto Compose,
+  # o condition: service_healthy falharia. Mantemos só as deps entre apps.
+
+  agent-registry:
+    depends_on: {}
+
+  mcp-server-plughub:
+    depends_on:
+      agent-registry:
+        condition: service_healthy
+
+  routing-engine:
+    depends_on:
+      agent-registry:
+        condition: service_healthy
+
+  ai-gateway:
+    depends_on: {}
+
+  rules-engine:
+    depends_on: {}
+
+  channel-gateway:
+    depends_on:
+      mcp-server-plughub:
+        condition: service_healthy
+
+  analytics-api:
+    depends_on: {}
+
+  skill-flow-service:
+    depends_on:
+      mcp-server-plughub:
+        condition: service_healthy
