@@ -4,7 +4,7 @@ import TopBar from './TopBar'
 import Sidebar from './Sidebar'
 
 // Routes that need full-bleed layout (no padding, overflow-hidden)
-const FULL_BLEED_ROUTES = ['/monitor', '/agent-assist', '/config/platform']
+const FULL_BLEED_ROUTES = ['/monitor', '/agent-assist', '/config/platform', '/workflows']
 
 const Shell: React.FC = () => {
   const { pathname } = useLocation()

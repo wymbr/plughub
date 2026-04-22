@@ -7,6 +7,7 @@ import HomePage from '@/modules/home/HomePage'
 import ConfigRecursosIndex from '@/modules/config-recursos'
 import MonitorPage from '@/modules/atendimento/MonitorPage'
 import ConfigPlataformaPage from '@/modules/config-plataforma/ConfigPlataformaPage'
+import WorkflowsPage from '@/modules/workflows/WorkflowsPage'
 import PlaceholderPage from '@/modules/_placeholder/PlaceholderPage'
 
 const LoadingFallback = () => <div className="flex justify-center items-center h-screen">Loading...</div>
@@ -42,7 +43,7 @@ export const routes: RouteObject[] = [
       },
       {
         path: 'workflows',
-        element: <PlaceholderPage module="Workflows" phase="Arc 4" />
+        element: <WorkflowsPage />
       },
       {
         path: 'dashboards',
