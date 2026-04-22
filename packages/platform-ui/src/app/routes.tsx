@@ -5,6 +5,7 @@ import LoginPage from '@/auth/LoginPage'
 import { ProtectedRoute } from '@/auth/ProtectedRoute'
 import HomePage from '@/modules/home/HomePage'
 import ConfigRecursosIndex from '@/modules/config-recursos'
+import MonitorPage from '@/modules/atendimento/MonitorPage'
 import PlaceholderPage from '@/modules/_placeholder/PlaceholderPage'
 
 const LoadingFallback = () => <div className="flex justify-center items-center h-screen">Loading...</div>
@@ -32,7 +33,7 @@ export const routes: RouteObject[] = [
       },
       {
         path: 'monitor',
-        element: <PlaceholderPage module="Monitor" phase="Arc 3" />
+        element: <MonitorPage />
       },
       {
         path: 'agent-assist',

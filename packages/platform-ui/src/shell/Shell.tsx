@@ -1,19 +1,31 @@
 import React from 'react'
-import { Outlet } from 'react-router-dom'
+import { Outlet, useLocation } from 'react-router-dom'
 import TopBar from './TopBar'
 import Sidebar from './Sidebar'
 
+// Routes that need full-bleed layout (no padding, overflow-hidden)
+const FULL_BLEED_ROUTES = ['/monitor', '/agent-assist']
+
 const Shell: React.FC = () => {
+  const { pathname } = useLocation()
+  const fullBleed    = FULL_BLEED_ROUTES.some(r => pathname === r || pathname.startsWith(r + '/'))
+
   return (
     <div className="flex h-screen bg-gray-50">
       <Sidebar />
-      <div className="flex-1 flex flex-col">
+      <div className="flex-1 flex flex-col overflow-hidden">
         <TopBar />
-        <main className="flex-1 overflow-auto">
-          <div className="px-6 py-6">
+        {fullBleed ? (
+          <main className="flex-1 overflow-hidden">
             <Outlet />
-          </div>
-        </main>
+          </main>
+        ) : (
+          <main className="flex-1 overflow-auto">
+            <div className="px-6 py-6">
+              <Outlet />
+            </div>
+          </main>
+        )}
       </div>
     </div>
   )
