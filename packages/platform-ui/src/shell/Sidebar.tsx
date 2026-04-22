@@ -34,7 +34,7 @@ const Sidebar: React.FC = () => {
       label: t('nav.atendimento'),
       href: '#',
       icon: '📞',
-      roles: ['operator', 'supervisor'],
+      roles: ['operator', 'supervisor', 'admin'],
       children: [
         { label: t('nav.monitor'), href: '/monitor', icon: '📊' },
         { label: t('nav.agentAssist'), href: '/agent-assist', icon: '🤖' }

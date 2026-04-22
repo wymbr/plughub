@@ -22,7 +22,7 @@ i18n.use(initReactI18next).init({
   },
   lng: 'pt-BR',
   fallbackLng: 'pt-BR',
-  ns: ['common'],
+  ns: ['common', 'shell', 'configRecursos'],
   defaultNS: 'common',
   interpolation: {
     escapeValue: false
