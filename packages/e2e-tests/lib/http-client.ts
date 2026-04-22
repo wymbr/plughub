@@ -159,6 +159,142 @@ export class RulesEngineClient {
 // Skill Flow Service Client
 // ─────────────────────────────────────────────────────────────────────────────
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Calendar API Client (Arc 4)
+// ─────────────────────────────────────────────────────────────────────────────
+
+export class CalendarClient {
+  constructor(private readonly baseUrl: string) {}
+
+  async health(): Promise<{ status: string }> {
+    return (await get(`${this.baseUrl}/v1/health`)) as { status: string };
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Workflow API Client (Arc 4)
+// ─────────────────────────────────────────────────────────────────────────────
+
+export type WorkflowInstance = {
+  id: string;
+  status: string;
+  flow_id: string;
+  tenant_id: string;
+  resume_token?: string;
+  resume_expires_at?: string;
+  current_step?: string;
+  outcome?: string;
+  [key: string]: unknown;
+};
+
+export class WorkflowClient {
+  constructor(private readonly baseUrl: string) {}
+
+  async health(): Promise<{ status: string; postgres: string }> {
+    return (await get(`${this.baseUrl}/v1/health`)) as {
+      status: string;
+      postgres: string;
+    };
+  }
+
+  async trigger(body: {
+    tenant_id: string;
+    flow_id: string;
+    trigger_type?: string;
+    session_id?: string;
+    pool_id?: string;
+    context?: Record<string, unknown>;
+    metadata?: Record<string, unknown>;
+  }): Promise<WorkflowInstance> {
+    return (await post(`${this.baseUrl}/v1/workflow/trigger`, body)) as WorkflowInstance;
+  }
+
+  async getInstance(instanceId: string): Promise<WorkflowInstance> {
+    return (await get(
+      `${this.baseUrl}/v1/workflow/instances/${encodeURIComponent(instanceId)}`
+    )) as WorkflowInstance;
+  }
+
+  async listInstances(
+    tenantId: string,
+    params?: { status?: string; flow_id?: string; limit?: number; offset?: number }
+  ): Promise<WorkflowInstance[]> {
+    const qs = new URLSearchParams({ tenant_id: tenantId, ...params as Record<string, string> }).toString();
+    return (await get(`${this.baseUrl}/v1/workflow/instances?${qs}`)) as WorkflowInstance[];
+  }
+
+  async persistSuspend(
+    instanceId: string,
+    body: {
+      step_id: string;
+      resume_token: string;
+      reason: string;
+      timeout_hours?: number;
+      business_hours?: boolean;
+      entity_type?: string;
+      entity_id?: string;
+      pipeline_state?: Record<string, unknown>;
+      metadata?: Record<string, unknown>;
+    }
+  ): Promise<{ resume_expires_at: string; instance: WorkflowInstance }> {
+    return (await post(
+      `${this.baseUrl}/v1/workflow/instances/${encodeURIComponent(instanceId)}/persist-suspend`,
+      body
+    )) as { resume_expires_at: string; instance: WorkflowInstance };
+  }
+
+  async resume(body: {
+    token: string;
+    decision: "approved" | "rejected" | "input" | "timeout";
+    payload?: Record<string, unknown>;
+  }): Promise<{
+    instance_id: string;
+    flow_id: string;
+    decision: string;
+    wait_duration_ms: number;
+    instance: WorkflowInstance;
+  }> {
+    return (await post(`${this.baseUrl}/v1/workflow/resume`, body)) as {
+      instance_id: string;
+      flow_id: string;
+      decision: string;
+      wait_duration_ms: number;
+      instance: WorkflowInstance;
+    };
+  }
+
+  async complete(
+    instanceId: string,
+    body: { outcome: string; pipeline_state?: Record<string, unknown> }
+  ): Promise<WorkflowInstance> {
+    return (await post(
+      `${this.baseUrl}/v1/workflow/instances/${encodeURIComponent(instanceId)}/complete`,
+      body
+    )) as WorkflowInstance;
+  }
+
+  async fail(instanceId: string, error: string): Promise<WorkflowInstance> {
+    return (await post(
+      `${this.baseUrl}/v1/workflow/instances/${encodeURIComponent(instanceId)}/fail`,
+      { error }
+    )) as WorkflowInstance;
+  }
+
+  async cancel(
+    instanceId: string,
+    body?: { cancelled_by?: string; reason?: string }
+  ): Promise<WorkflowInstance> {
+    return (await post(
+      `${this.baseUrl}/v1/workflow/instances/${encodeURIComponent(instanceId)}/cancel`,
+      body ?? {}
+    )) as WorkflowInstance;
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Skill Flow Service Client
+// ─────────────────────────────────────────────────────────────────────────────
+
 export class SkillFlowClient {
   constructor(private readonly baseUrl: string) {}
 

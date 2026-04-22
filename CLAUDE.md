@@ -184,6 +184,8 @@ plughub/
     routing-engine/              ← @plughub/routing-engine — agent allocation
     rules-engine/                ← @plughub/rules-engine — monitoring and escalation
     channel-gateway/             ← @plughub/channel-gateway — channel adapters and inbound normalisation
+    calendar-api/                ← plughub-calendar-api — calendar engine + CRUD REST (Arc 4)
+    workflow-api/                ← plughub-workflow-api — workflow instance lifecycle (Arc 4)
 ```
 
 ## Stack per package
@@ -198,6 +200,8 @@ plughub/
 | agent-registry | TypeScript | Node 20+ | PostgreSQL + Prisma |
 | routing-engine | Python | Python 3.11+ | Redis + Kafka |
 | rules-engine | Python | Python 3.11+ | Redis + ClickHouse |
+| calendar-api | Python | Python 3.11+ | FastAPI + asyncpg — port 3700 |
+| workflow-api | Python | Python 3.11+ | FastAPI + asyncpg — port 3800 |
 | channel-gateway | Python | Python 3.11+ | FastAPI + aiokafka + channel adapters |
 
 ## Package dependencies
@@ -764,6 +768,98 @@ ClickHouse → Metabase (relatórios self-service)
 analytics-api REST → BI externos (PowerBI, Looker, Tableau)
 ```
 
+## Arc 4 — Workflow Automation
+
+Permite que agentes nativos sejam usados como automação de processos com etapas manuais (aprovação, input, webhook, timer), sem BPM formal.
+
+### Novos pacotes
+
+- `packages/calendar-api/` — Python FastAPI, porta 3700. Engine puro de calendário.
+- `packages/workflow-api/` — Python FastAPI, porta 3800. Ciclo de vida de WorkflowInstance.
+
+### Novos schemas em `@plughub/schemas`
+
+| Schema | Arquivo | Descrição |
+|---|---|---|
+| `SuspendStep` | `skill.ts` | Novo step type no FlowStepSchema |
+| `WorkflowInstance` | `workflow.ts` | Registro persistido em PostgreSQL |
+| `WorkflowTrigger`, `WorkflowResume` | `workflow.ts` | Requests de entrada |
+| `WorkflowEvent` | `workflow.ts` | 7 eventos Kafka (started/suspended/resumed/completed/timed_out/failed/cancelled) |
+| `HolidaySet`, `Calendar`, `CalendarAssociation` | `calendar.ts` | Hierarquia de calendários |
+| `InstallationContext`, `ResourceScope` | `platform.ts` | Contexto de instalação |
+
+### Calendar API — engine puro (no I/O)
+
+| Função | Descrição |
+|---|---|
+| `is_open(associations, holidays, at)` | Verifica se uma entidade está aberta num instante |
+| `next_open_slot(associations, holidays, after)` | Próxima janela aberta |
+| `add_business_duration(associations, holidays, from_dt, hours)` | Deadline em horas úteis |
+| `business_duration(associations, holidays, from_dt, to_dt)` | Horas úteis entre dois instantes |
+
+Resolução de prioridade: exceptions > holidays > weekly_schedule.
+Operadores: UNION (OR) + INTERSECTION (AND) por entidade.
+Tests: `test_engine.py` — 25 assertions.
+
+### Skill Flow `suspend` step
+
+```typescript
+// Flow definition
+{ type: "suspend", id: "aguardar_aprovacao",
+  reason: "approval",       // approval | input | webhook | timer
+  timeout_hours: 48,
+  business_hours: true,     // uses calendar-api for deadline
+  on_resume:  { next: "processar" },
+  on_timeout: { next: "escalar" },
+  on_reject:  { next: "notificar_rejeicao" },
+  notify: { visibility: "agents_only", text: "Token: {{resume_token}}" }
+}
+```
+
+Mecanismo de idempotência (dois estágios): sentinel `"suspending"` → `"suspended"` em pipeline_state.results. Crash entre os dois stages resulta em re-suspend seguro na retomada.
+
+`SkillFlowEngineConfig.persistSuspend` — callback opcional injetado pelo workflow-api worker. Quando ausente, deadline é wall-clock.
+`engine.run({ resumeContext: { decision, step_id, payload } })` — sinal de retomada passa direto para o suspend step.
+
+Tests: `suspend.test.ts` — 13 assertions.
+
+### Workflow API — ciclo de vida
+
+Tabela PostgreSQL `workflow.instances` (schema `workflow`).
+
+| Endpoint | Chamado por | O que faz |
+|---|---|---|
+| `POST /v1/workflow/trigger` | Sistema externo / operator | Cria WorkflowInstance, emite `workflow.started` |
+| `POST /v1/workflow/instances/{id}/persist-suspend` | Skill Flow worker (TS) | Calcula deadline (calendar-api ou wall-clock), persiste suspensão, emite `workflow.suspended` |
+| `POST /v1/workflow/resume` | Sistema externo / aprovador | Valida token, verifica expiração, registra decisão, emite `workflow.resumed` |
+| `POST /v1/workflow/instances/{id}/complete` | Skill Flow worker | Marca completed, emite `workflow.completed` |
+| `POST /v1/workflow/instances/{id}/fail` | Skill Flow worker | Marca failed, emite `workflow.failed` |
+| `POST /v1/workflow/instances/{id}/cancel` | Operator Console | Cancela active/suspended, emite `workflow.cancelled` |
+| `GET /v1/workflow/instances` | Operator Console | Lista com filtros (tenant_id, status, flow_id) |
+| `GET /v1/workflow/instances/{id}` | Operator Console | Detalhe |
+
+**Timeout scanner** — asyncio background task (intervalo configurável, padrão 60s). `UPDATE ... SET status='timed_out' WHERE status='suspended' AND resume_expires_at < now()` — atômico, sem double-processing.
+
+Tests: `test_router.py` — 27 assertions (TestTrigger, TestPersistSuspend, TestResume, TestComplete, TestFail, TestCancel, TestList, TestDetail, TestHealth, TestTimeoutScanner).
+
+### Status transitions
+
+```
+active → suspended | completed | failed | cancelled
+suspended → active (resume) | timed_out | cancelled
+timed_out / failed / completed / cancelled → terminal
+```
+
+### Kafka topic: workflow.events
+
+Publicado pelo workflow-api em todos os status transitions. Consumido pelo Skill Flow worker para disparar `engine.run()` com `resumeContext`.
+
+### Pendente neste módulo
+
+- Operator Console — painel de instâncias (Task 5)
+- E2E scenario 13 — trigger → execute → suspend → resume → complete (Task 6)
+- Skill Flow worker TypeScript — consome `workflow.events`, chama `engine.run()` com `resumeContext`
+
 ## E2E test suite — scenarios
 
 | Scenario | File | Coverage |
@@ -780,9 +876,10 @@ analytics-api REST → BI externos (PowerBI, Looker, Tableau)
 | 10 | `10_masking.ts` | message masking: MaskingConfig → tokens inline → role-based original_content (9 assertions) |
 | 11 | `11_comparison_mode.ts` | comparison mode: ReplayContext.comparison_mode → evaluation_submit com comparison_turns → ComparisonReport (12 assertions) |
 | 12 | `12_webchat_channel.ts` | webchat channel: auth handshake WS, text message → Kafka, upload flow completo (upload.request→ready→HTTP→committed→msg.image), reconnect com cursor (14 assertions) |
+| 13 | `13_workflow_automation.ts` | workflow automation Arc 4: trigger → persist-suspend → resume (approved) → complete + cancel path (13 assertions) |
 | R  | `regressions.ts` | regression suite: ZodError em session_context_get, parsing de callTool (--regression flag) |
 
-Run with: `ts-node runner.ts --conference` or `ts-node runner.ts --only 06` or `ts-node runner.ts --only 12` or `ts-node runner.ts --webchat`
+Run with: `ts-node runner.ts --conference` or `ts-node runner.ts --only 06` or `ts-node runner.ts --only 12` or `ts-node runner.ts --webchat` or `ts-node runner.ts --workflow` or `ts-node runner.ts --only 13`
 
 Scenario 06 covers two parts:
 - **Part A** — Conference happy path: primary agent busy → supervisor calls `agent_join_conference` → Redis `conference:*` keys verified → specialist `agent_done` with `conference_id` (session stays open) → primary `agent_done` closes session

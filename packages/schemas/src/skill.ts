@@ -273,6 +273,23 @@ export const FlowStepSchema = z.discriminatedUnion("type", [
   ReasonStepSchema,
   NotifyStepSchema,
   MenuStepSchema,
+  // Arc 4: workflow automation
+  z.object({
+    type:           z.literal("suspend"),
+    id:             z.string(),
+    reason:         z.enum(["approval", "input", "webhook", "timer"]),
+    timeout_hours:  z.number().positive().default(48),
+    business_hours: z.boolean().default(true),
+    calendar_id:    z.string().uuid().optional(),
+    notify:         z.object({
+      visibility: z.enum(["all", "agents_only"]).default("agents_only"),
+      text:       z.string(),
+    }).optional(),
+    on_resume:      z.object({ next: z.string() }),
+    on_timeout:     z.object({ next: z.string() }),
+    on_reject:      z.object({ next: z.string() }).optional(),
+    metadata:       z.record(z.unknown()).optional(),
+  }),
 ])
 export type FlowStep = z.infer<typeof FlowStepSchema>
 
@@ -287,6 +304,8 @@ export type InvokeStep    = z.infer<typeof InvokeStepSchema>
 export type ReasonStep    = z.infer<typeof ReasonStepSchema>
 export type NotifyStep    = z.infer<typeof NotifyStepSchema>
 export type MenuStep      = z.infer<typeof MenuStepSchema>
+// Arc 4 — suspend step (inline schema in FlowStepSchema discriminated union)
+export type SuspendStep   = Extract<FlowStep, { type: "suspend" }>
 
 /** Flow de orquestração — presente apenas quando type === "orchestrator" */
 export const SkillFlowSchema = z.object({

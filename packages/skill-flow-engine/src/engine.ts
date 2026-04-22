@@ -32,11 +32,34 @@ export interface SkillFlowEngineConfig {
     session_id:    string
     attempt:       number
   }) => Promise<unknown>
+  /**
+   * Arc 4 — Optional. Wired by workflow-api to persist WorkflowInstance to PostgreSQL
+   * and calculate the business-hours deadline for a suspend step.
+   * If absent, the suspend step falls back to wall-clock hours.
+   */
+  persistSuspend?: (params: {
+    tenant_id:     string
+    session_id:    string
+    step_id:       string
+    resume_token:  string
+    reason:        string
+    timeout_hours: number
+    business_hours: boolean
+    calendar_id?:  string
+    metadata?:     Record<string, unknown>
+  }) => Promise<{ resume_expires_at: string }>
 }
 
 export type RunResult =
   | { outcome: string; pipeline_state: PipelineState }
   | { error: "PRECONDITION_FAILED"; active_job_id: string }
+
+/** Arc 4: resume context passed from workflow-api when resuming a suspended step. */
+export interface ResumeContext {
+  decision:  "approved" | "rejected" | "input" | "timeout"
+  step_id:   string
+  payload:   Record<string, unknown>
+}
 
 // ─────────────────────────────────────────────
 // SkillFlowEngine
@@ -75,9 +98,15 @@ export class SkillFlowEngine {
      * Se omitido (retrocompatibilidade), usa "unknown".
      */
     instanceId?:    string
+    /**
+     * Arc 4 — Resume context. When set, the engine is resuming a suspended workflow.
+     * The suspend step reads this instead of suspending again.
+     */
+    resumeContext?: ResumeContext
   }): Promise<RunResult> {
     const { tenantId, sessionId, customerId, skillId, flow, sessionContext } = params
-    const instanceId = params.instanceId ?? "unknown"
+    const instanceId   = params.instanceId   ?? "unknown"
+    const resumeContext = params.resumeContext
 
     // ── Idempotência: tenta adquirir lock exclusivo ───────────────────────
     const lockAcquired = await this.stateManager.acquireLock(tenantId, sessionId, instanceId)
@@ -89,7 +118,8 @@ export class SkillFlowEngine {
     }
 
     try {
-      return await this._execute({ tenantId, sessionId, customerId, skillId, flow, sessionContext, instanceId })
+      return await this._execute({ tenantId, sessionId, customerId, skillId, flow, sessionContext, instanceId,
+        ...(resumeContext ? { resumeContext } : {}) })
     } finally {
       // Libera apenas se ainda somos o titular do lock
       await this.stateManager.releaseLock(tenantId, sessionId, instanceId)
@@ -108,8 +138,9 @@ export class SkillFlowEngine {
     flow:           SkillFlow
     sessionContext: Record<string, unknown>
     instanceId:     string
+    resumeContext?: ResumeContext
   }): Promise<RunResult> {
-    const { tenantId, sessionId, customerId, skillId, flow, sessionContext, instanceId } = params
+    const { tenantId, sessionId, customerId, skillId, flow, sessionContext, instanceId, resumeContext } = params
 
     // 1. Retomar ou iniciar pipeline
     let state = await this.stateManager.get(tenantId, sessionId)
@@ -134,7 +165,7 @@ export class SkillFlowEngine {
       }
 
       // Construir contexto de execução
-      const ctx = this._buildContext(tenantId, sessionId, customerId, sessionContext, state, stepMap, instanceId)
+      const ctx = this._buildContext(tenantId, sessionId, customerId, sessionContext, state, stepMap, instanceId, resumeContext)
 
       // Executar step
       const result = await executeStep(currentStep, ctx)
@@ -168,6 +199,13 @@ export class SkillFlowEngine {
         return { outcome: "escalated_human", pipeline_state: state }
       }
 
+      // Arc 4: fluxo suspenso aguardando sinal externo
+      if (result.next_step_id === "__suspended__") {
+        const suspendedState = { ...state, status: "suspended" as const }
+        await this.stateManager.save(tenantId, sessionId, suspendedState)
+        return { outcome: "suspended", pipeline_state: suspendedState }
+      }
+
       // Transitar para próximo step
       state = PipelineStateManager.addTransition(
         state, currentStep.id, result.next_step_id, result.transition_reason
@@ -190,6 +228,7 @@ export class SkillFlowEngine {
     state:          PipelineState,
     stepMap:        Map<string, SkillFlow["steps"][number]>,
     instanceId:     string,
+    resumeContext?: ResumeContext,
   ): StepContext {
     const self = this
 
@@ -254,6 +293,15 @@ export class SkillFlowEngine {
 
       renewLock: (ttlSeconds) =>
         self.stateManager.renewLock(tenantId, sessionId, instanceId, ttlSeconds),
+
+      // Arc 4 — wired only when caller provides persistSuspend
+      ...(self.config.persistSuspend
+        ? { persistSuspend: (params: Parameters<NonNullable<StepContext["persistSuspend"]>>[0]) =>
+              self.config.persistSuspend!({ tenant_id: tenantId, session_id: sessionId, ...params }) }
+        : {}),
+
+      // Arc 4 — resume context forwarded only when present
+      ...(resumeContext ? { resumeContext } : {}),
     }
 
     return ctx

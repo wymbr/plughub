@@ -1,0 +1,83 @@
+# docker-compose.arc4.yml
+# Arc 4 services: calendar-api (3700) + workflow-api (3800)
+#
+# Depends on docker-compose.infra.yml already running (redis, postgres, kafka).
+# Shares the same plughub-infra network so containers resolve each other by hostname.
+#
+# Usage (PowerShell from repo root):
+#   docker compose -f docker-compose.arc4.yml up --build -d
+
+services:
+
+  # ── Calendar API ─────────────────────────────────────────────────────────────
+  calendar-api:
+    build:
+      context: .
+      dockerfile: packages/calendar-api/Dockerfile
+    container_name: calendar-api
+    ports:
+      - "3700:3700"
+    environment:
+      PLUGHUB_CALENDAR_DATABASE_URL: postgresql://plughub:plughub@postgres:5432/plughub
+      PLUGHUB_CALENDAR_KAFKA_BROKERS: kafka:29092
+      PLUGHUB_CALENDAR_HOST: 0.0.0.0
+      PLUGHUB_CALENDAR_PORT: "3700"
+    networks:
+      - plughub-infra
+    depends_on:
+      - postgres-ext
+      - kafka-ext
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:3700/v1/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # ── Workflow API ──────────────────────────────────────────────────────────────
+  workflow-api:
+    build:
+      context: packages/workflow-api
+      dockerfile: Dockerfile
+    container_name: workflow-api
+    ports:
+      - "3800:3800"
+    environment:
+      PLUGHUB_WORKFLOW_DATABASE_URL: postgresql://plughub:plughub@postgres:5432/plughub
+      PLUGHUB_WORKFLOW_KAFKA_BROKERS: kafka:29092
+      PLUGHUB_WORKFLOW_KAFKA_TOPIC: workflow.events
+      PLUGHUB_WORKFLOW_CALENDAR_API_URL: http://calendar-api:3700
+      PLUGHUB_WORKFLOW_HOST: 0.0.0.0
+      PLUGHUB_WORKFLOW_PORT: "3800"
+    networks:
+      - plughub-infra
+    depends_on:
+      calendar-api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:3800/v1/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+# ── Referências externas (já criados pelo docker-compose.infra.yml) ───────────
+# Esses "services" não sobem nada — servem apenas para o depends_on funcionar.
+  postgres-ext:
+    image: alpine
+    container_name: postgres-ext-probe
+    command: ["sh", "-c", "until nc -z postgres 5432; do sleep 1; done; echo ready"]
+    networks:
+      - plughub-infra
+
+  kafka-ext:
+    image: alpine
+    container_name: kafka-ext-probe
+    command: ["sh", "-c", "until nc -z kafka 29092; do sleep 1; done; echo ready"]
+    networks:
+      - plughub-infra
+
+networks:
+  plughub-infra:
+    external: true
+    name: plughub-infra_plughub-infra   # nome gerado pelo docker-compose.infra.yml

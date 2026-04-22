@@ -200,7 +200,7 @@ export const PipelineStateSchema = z.object({
   /** Identificador do flow sendo executado */
   flow_id:         z.string(),
   current_step_id: z.string(),
-  status:          z.enum(["in_progress", "completed", "failed"]),
+  status:          z.enum(["in_progress", "completed", "failed", "suspended"]),
   started_at:      z.string().datetime(),
   updated_at:      z.string().datetime(),
 
@@ -224,7 +224,7 @@ export const PipelineStateSchema = z.object({
   transitions: z.array(z.object({
     from_step:   z.string(),
     to_step:     z.string(),
-    reason:      z.enum(["on_success", "on_failure", "condition_match", "default"]),
+    reason:      z.enum(["on_success", "on_failure", "condition_match", "default", "suspended", "resumed"]),
     timestamp:   z.string().datetime(),
   })).default([]),
 })

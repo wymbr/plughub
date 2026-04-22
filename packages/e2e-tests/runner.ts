@@ -17,6 +17,8 @@
  *   ts-node runner.ts --only 11       — run only scenario 11 (comparison mode)
  *   ts-node runner.ts --only 12       — run only scenario 12 (webchat channel)
  *   ts-node runner.ts --webchat       — run scenarios 01–04 + 12 (includes webchat)
+ *   ts-node runner.ts --workflow      — run scenarios 01–04 + 13 (workflow automation)
+ *   ts-node runner.ts --only 13       — run only scenario 13 (workflow automation)
  *
  * Environment variables (all optional — defaults work with docker-compose.test.yml):
  *   MCP_SERVER_URL            (default: http://localhost:3100)
@@ -26,6 +28,8 @@
  *   AI_GATEWAY_URL            (default: http://localhost:3200)
  *   CHANNEL_GATEWAY_WS_URL    (default: ws://localhost:8010)
  *   CHANNEL_GATEWAY_HTTP_URL  (default: http://localhost:8010)
+ *   WORKFLOW_API_URL          (default: http://localhost:3800)
+ *   CALENDAR_API_URL          (default: http://localhost:3700)
  *   REDIS_URL                 (default: redis://localhost:6379)
  *   KAFKA_BROKERS             (default: localhost:9092)
  *   TENANT_ID                 (default: tenant_e2e_test)
@@ -59,6 +63,7 @@ import { run as scenario09 } from "./scenarios/09_session_replayer";
 import { run as scenario10 } from "./scenarios/10_masking";
 import { run as scenario11 } from "./scenarios/11_comparison_mode";
 import { run as scenario12 } from "./scenarios/12_webchat_channel";
+import { run as scenario13 } from "./scenarios/13_workflow_automation";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Configuration
@@ -72,6 +77,8 @@ const config = {
   aiGatewayUrl:          process.env["AI_GATEWAY_URL"]           ?? "http://localhost:3200",
   channelGatewayWsUrl:   process.env["CHANNEL_GATEWAY_WS_URL"]   ?? "ws://localhost:8010",
   channelGatewayHttpUrl: process.env["CHANNEL_GATEWAY_HTTP_URL"] ?? "http://localhost:8010",
+  workflowApiUrl:        process.env["WORKFLOW_API_URL"]         ?? "http://localhost:3800",
+  calendarApiUrl:        process.env["CALENDAR_API_URL"]         ?? "http://localhost:3700",
   redisUrl:              process.env["REDIS_URL"]                ?? "redis://localhost:6379",
   kafkaBrokers:          (process.env["KAFKA_BROKERS"]           ?? "localhost:9092").split(","),
   tenantId:              process.env["TENANT_ID"]                ?? "tenant_e2e_test",
@@ -90,7 +97,8 @@ const onlyScenario = onlyFlag >= 0 ? args[onlyFlag + 1] : null;
 const runPerf       = args.includes("--perf")       || onlyScenario === "05";
 const runConference = args.includes("--conference") || onlyScenario === "06";
 const runWebchat    = args.includes("--webchat")    || onlyScenario === "12";
-const runDemo       = args.includes("--demo");  // runs all scenarios 01–12
+const runWorkflow   = args.includes("--workflow")   || onlyScenario === "13";
+const runDemo       = args.includes("--demo");  // runs all scenarios 01–13
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Scenario registry
@@ -135,6 +143,10 @@ if (runDemo || runWebchat || onlyScenario === "12") {
   ALL_SCENARIOS.push({ id: "12", fn: scenario12 });
 }
 
+if (runDemo || runWorkflow || onlyScenario === "13") {
+  ALL_SCENARIOS.push({ id: "13", fn: scenario13 });
+}
+
 const SCENARIOS_TO_RUN = onlyScenario
   ? ALL_SCENARIOS.filter((s) => s.id === onlyScenario)
   : ALL_SCENARIOS;
@@ -150,6 +162,8 @@ async function main(): Promise<void> {
   console.log(`  Tenant:      ${config.tenantId}`);
   console.log(`  MCP Server:  ${config.mcpServerUrl}`);
   console.log(`  Registry:    ${config.agentRegistryUrl}`);
+  console.log(`  Workflow:    ${config.workflowApiUrl}`);
+  console.log(`  Calendar:    ${config.calendarApiUrl}`);
   console.log(`  Kafka:       ${config.kafkaBrokers.join(",")}`);
   console.log(`  Redis:       ${config.redisUrl}`);
   console.log(
@@ -157,25 +171,48 @@ async function main(): Promise<void> {
   );
   console.log("─".repeat(60) + "\n");
 
-  // ── Wait for all services to be ready ─────────────────────────────────────
+  // ── Wait for services (only those needed by the selected scenarios) ─────────
   console.log("[runner] Waiting for services to be ready...");
-  await Promise.all([
+
+  const scenarioIds = new Set(SCENARIOS_TO_RUN.map((s) => s.id));
+  const needsCore     = [...scenarioIds].some((id) => !["13"].includes(id));
+  const needsWorkflow = scenarioIds.has("13") || runWorkflow;
+
+  const waits: Promise<unknown>[] = [
     waitForRedis(config.redisUrl, 30000),
     waitForKafka(config.kafkaBrokers, 30000),
-    waitForService(`${config.agentRegistryUrl}/v1/health`, "agent-registry", 30000),
-    waitForService(`${config.mcpServerUrl}/sse`, "mcp-server-plughub", 30000),
-    waitForService(`${config.skillFlowUrl}/health`, "skill-flow-service", 30000),
-    waitForService(`${config.rulesEngineUrl}/rules?tenant_id=${config.tenantId}`, "rules-engine", 30000),
-  ]);
+  ];
+
+  if (needsCore) {
+    waits.push(
+      waitForService(`${config.agentRegistryUrl}/v1/health`, "agent-registry", 30000),
+      waitForService(`${config.mcpServerUrl}/sse`, "mcp-server-plughub", 30000),
+      waitForService(`${config.skillFlowUrl}/health`, "skill-flow-service", 30000),
+      waitForService(`${config.rulesEngineUrl}/rules?tenant_id=${config.tenantId}`, "rules-engine", 30000),
+    );
+  }
+
+  if (needsWorkflow) {
+    waits.push(
+      waitForService(`${config.workflowApiUrl}/v1/health`, "workflow-api", 30000),
+      waitForService(`${config.calendarApiUrl}/v1/health`, "calendar-api", 30000),
+    );
+  }
+
+  await Promise.all(waits);
   console.log("[runner] All services ready.\n");
 
-  // ── Seed base fixtures ─────────────────────────────────────────────────────
-  console.log("[runner] Seeding base fixtures...");
-  await seedBaseFixtures({
-    agentRegistryUrl: config.agentRegistryUrl,
-    tenantId: config.tenantId,
-  });
-  console.log("[runner] Fixtures seeded.\n");
+  // ── Seed base fixtures (only when core services are available) ───────────────
+  if (needsCore) {
+    console.log("[runner] Seeding base fixtures...");
+    await seedBaseFixtures({
+      agentRegistryUrl: config.agentRegistryUrl,
+      tenantId: config.tenantId,
+    });
+    console.log("[runner] Fixtures seeded.\n");
+  } else {
+    console.log("[runner] Skipping base fixtures (no core services needed).\n");
+  }
 
   // ── Run scenarios ──────────────────────────────────────────────────────────
   const report = new ReportBuilder();
@@ -197,6 +234,8 @@ async function main(): Promise<void> {
       aiGatewayUrl:          config.aiGatewayUrl,
       channelGatewayWsUrl:   config.channelGatewayWsUrl,
       channelGatewayHttpUrl: config.channelGatewayHttpUrl,
+      workflowApiUrl:        config.workflowApiUrl,
+      calendarApiUrl:        config.calendarApiUrl,
       redis,
       kafka,
       tenantId:              config.tenantId,

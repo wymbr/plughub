@@ -20,6 +20,7 @@ import { executeInvoke }   from "./steps/invoke"
 import { executeReason }   from "./steps/reason"
 import { executeNotify }   from "./steps/notify"
 import { executeMenu }     from "./steps/menu"
+import { executeSuspend }  from "./steps/suspend"
 
 // ─────────────────────────────────────────────
 // Tipos de contexto e resultado de step
@@ -79,10 +80,40 @@ export interface StepContext {
    * Se ausente, o menu step assume que o lock não expira (safe default).
    */
   renewLock?(ttlSeconds: number): Promise<boolean>
+
+  // ── Arc 4: Workflow suspend / resume ──────────────────────────────────────
+
+  /**
+   * Persists the WorkflowInstance to PostgreSQL and calculates the deadline.
+   * Called by the suspend step. Caller (workflow-api) wires this up.
+   * If absent, the suspend step falls back to wall-clock hours.
+   */
+  persistSuspend?(params: {
+    step_id:       string
+    resume_token:  string
+    reason:        string
+    timeout_hours: number
+    business_hours: boolean
+    calendar_id?:  string
+    metadata?:     Record<string, unknown>
+  }): Promise<{ resume_expires_at: string }>
+
+  /**
+   * When set, indicates this is a resume run rather than a fresh suspend.
+   * The suspend step reads this instead of suspending again.
+   */
+  resumeContext?: {
+    decision:  "approved" | "rejected" | "input" | "timeout"
+    step_id:   string   // which suspend step is being resumed
+    payload:   Record<string, unknown>
+  }
 }
 
 export interface StepResult {
-  /** ID do próximo step. "__complete__" = pipeline encerrado. "__awaiting_escalation__" = aguardando. */
+  /**
+   * ID do próximo step.
+   * Special values: "__complete__", "__awaiting_task__", "__awaiting_escalation__", "__suspended__"
+   */
   next_step_id:      string
   /** Chave para persistir output no pipeline_state (steps que produzem resultado) */
   output_as?:        string
@@ -110,6 +141,7 @@ export async function executeStep(
     case "reason":   return executeReason(step, ctx)
     case "notify":   return executeNotify(step, ctx)
     case "menu":     return executeMenu(step, ctx)
+    case "suspend":  return executeSuspend(step, ctx)
     default:
       // TypeScript garante exhaustiveness via discriminated union
       throw new Error(`Tipo de step desconhecido: ${(step as FlowStep).type}`)
