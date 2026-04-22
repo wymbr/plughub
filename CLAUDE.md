@@ -719,7 +719,7 @@ Tests: `tests/test_usage_emitter.py` — 22 testes (todas as dimensões + error 
 
 - ~~E2E scenario 12: webchat auth flow + media upload end-to-end~~ ✅
 - ~~Usage Metering no Channel Gateway (voice_minutes, whatsapp_conversations, sms_segments)~~ ✅
-- WebChat reconexão fase 2: tratar stream TTL expirado + jwt_secret por tenant
+- ~~WebChat reconexão fase 2: tratar stream TTL expirado + jwt_secret por tenant~~ ✅
 - AttachmentStore fase 2: S3/MinIO
 - Magic bytes validation no upload (phase 2)
 - Pricing Module v1: planos, tarifas, ciclo de billing
