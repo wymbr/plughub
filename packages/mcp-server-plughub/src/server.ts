@@ -495,6 +495,17 @@ export async function startServer(config: ServerConfig): Promise<void> {
         if (err) console.error("Redis subscribe error:", err)
       })
 
+      // Deliver any pending assignment that was published while this agent was
+      // disconnected (e.g. after a server restart / browser refresh).
+      // The bridge stores `pool:pending_assignment:{poolId}` with TTL=300s when
+      // activating a human agent; it is deleted on contact_closed.
+      redis.get(`pool:pending_assignment:${poolId}`).then((pendingRaw) => {
+        if (pendingRaw && ws.readyState === WebSocket.OPEN) {
+          console.log(`[agent-ws] Delivering pending assignment to reconnecting agent pool=${poolId}`)
+          forward(`pool:events:${poolId}`, pendingRaw)
+        }
+      }).catch((err) => console.error(`[agent-ws] Error checking pending assignment pool=${poolId}:`, err))
+
       // Refresh pool instance readiness in Redis.
       // In demo/dev environments, agents connect directly (no Kafka agent_ready events),
       // so the Routing Engine never learns the agent is available via its normal lifecycle
@@ -545,12 +556,28 @@ export async function startServer(config: ServerConfig): Promise<void> {
         const msgTs   = typeof msg["timestamp"] === "string"
           ? msg["timestamp"]
           : new Date().toISOString()
+        // Read channel from session meta — must match the customer's channel
+        // so the outbound consumer delivers it (filters channel != "webchat").
+        let msgChannel = "webchat"
+        try {
+          const metaForChannel = await redis.get(`session:${activeSessionId}:meta`)
+          if (metaForChannel) {
+            const metaObj = JSON.parse(metaForChannel) as Record<string, string>
+            if (metaObj["channel"]) {
+              // Normalize legacy "chat" → "webchat": outbound_consumer filter
+              // silently drops any message where channel != "webchat".
+              const rawCh = metaObj["channel"]
+              msgChannel = rawCh === "chat" ? "webchat" : rawCh
+            }
+          }
+        } catch { /* use webchat fallback */ }
+
         await kafka.publish("conversations.outbound", {
           type:       "message.text",
           contact_id: contactId,
           session_id: activeSessionId,
           message_id: crypto.randomUUID(),
-          channel:    "chat",
+          channel:    msgChannel,
           direction:  "outbound",
           author:     { type: "agent_human", id: "human_agent" },
           content:    { type: "text", text: msgText },

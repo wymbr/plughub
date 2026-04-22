@@ -429,11 +429,26 @@ async def activate_human_agent(
         "agent_type_id": routing_result.get("agent_type_id"),
         "assigned_at":   datetime.now(timezone.utc).isoformat(),
     }
+    event_json = json.dumps(event)
     try:
-        await redis_client.publish(f"pool:events:{pool_id}", json.dumps(event))
+        await redis_client.publish(f"pool:events:{pool_id}", event_json)
         logger.info("Human agent notified: session=%s pool=%s", session_id, pool_id)
     except Exception as exc:
         logger.error("Redis publish error: session=%s — %s", session_id, exc)
+
+    # Also persist the assignment so agents that connect AFTER the pub/sub event
+    # (e.g. after a server restart) can still receive it.  TTL=300s (5 minutes).
+    # Cleared on contact_closed so agents reconnecting to a closed session don't
+    # get a stale assignment.
+    try:
+        await redis_client.setex(
+            f"pool:pending_assignment:{pool_id}",
+            300,
+            event_json,
+        )
+        logger.debug("Pending assignment stored: pool=%s session=%s", pool_id, session_id)
+    except Exception as exc:
+        logger.warning("Could not store pending assignment: pool=%s — %s", pool_id, exc)
 
 
 # ── external-mcp activation: LPUSH context_package → agent:queue ─────────────
@@ -1169,6 +1184,24 @@ async def process_contact_event(
                 # ── Restore all instances still tracked for this session ──────
                 await _restore_all_instances(redis_client, session_id)
 
+                # ── Clear pending pool assignment so reconnecting agents don't
+                #    receive a stale conversation.assigned for a closed session.
+                try:
+                    pool_id_for_cleanup = None
+                    meta_raw = await redis_client.get(f"session:{session_id}:meta")
+                    if meta_raw:
+                        pool_id_for_cleanup = json.loads(meta_raw).get("pool_id")
+                    if pool_id_for_cleanup:
+                        await redis_client.delete(f"pool:pending_assignment:{pool_id_for_cleanup}")
+                        logger.debug(
+                            "Pending assignment cleared: pool=%s session=%s",
+                            pool_id_for_cleanup, session_id,
+                        )
+                except Exception as exc:
+                    logger.warning(
+                        "Could not clear pending assignment: session=%s — %s", session_id, exc
+                    )
+
                 # ── Clean up all human-agent tracking for this session ────────
                 await redis_client.delete(f"session:{session_id}:human_agent")
                 await redis_client.delete(f"session:{session_id}:human_agents")
@@ -1309,7 +1342,15 @@ async def process_inbound(
             reply_text = content.get("text", "")
         elif msg_type == "menu_result":
             result_value = content.get("payload", {}).get("result", "")
-            reply_text = json.dumps(result_value)
+            # For button/list results (plain string) use the raw value — json.dumps
+            # would wrap it in extra quotes ("especialista" → '"especialista"'),
+            # causing the choice step's strict === comparison to always fail.
+            # For checklist (list) or form (dict) results, JSON-encode so the
+            # BLPOP consumer receives a parseable representation.
+            if isinstance(result_value, str):
+                reply_text = result_value
+            else:
+                reply_text = json.dumps(result_value)
         else:
             logger.warning(
                 "Unknown content type in inbound message: session=%s type=%s",

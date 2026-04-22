@@ -6,11 +6,10 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { WsServerEvent } from "../types";
+import { WsServerEvent, WsStatus } from "../types";
 
 const WS_BASE = import.meta.env.VITE_MCP_WS_URL ?? "/agent-ws";
-
-export type WsStatus = "connecting" | "connected" | "disconnected";
+const RECONNECT_DELAY_MS = 3_000;
 
 interface UseAgentWebSocketReturn {
   status: WsStatus;
@@ -22,13 +21,20 @@ export function useAgentWebSocket(
   sessionId: string | null,
   poolId: string | null,
 ): UseAgentWebSocketReturn {
-  const wsRef = useRef<WebSocket | null>(null);
-  const [status, setStatus] = useState<WsStatus>("disconnected");
-  const [lastEvent, setLastEvent] = useState<WsServerEvent | null>(null);
+  const wsRef        = useRef<WebSocket | null>(null);
+  const [status,     setStatus]     = useState<WsStatus>("disconnected");
+  const [lastEvent,  setLastEvent]  = useState<WsServerEvent | null>(null);
+  // reconnectCount is incremented on unexpected close to trigger a reconnect.
+  const [reconnectCount, setReconnectCount] = useState(0);
+  // intentionalClose is set to true in the cleanup function so that the
+  // onclose handler doesn't schedule another reconnect on deliberate teardown.
+  const intentionalClose = useRef(false);
 
   useEffect(() => {
     // Connect as soon as we have either a session (re-connect) or a pool (lobby mode).
     if (!sessionId && !poolId) return;
+
+    intentionalClose.current = false;
 
     // Always pass both params when available so the server subscribes to
     // both agent:events:{session_id} AND pool:events:{pool} simultaneously.
@@ -61,6 +67,14 @@ export function useAgentWebSocket(
 
     ws.onclose = () => {
       setStatus("disconnected");
+      // Auto-reconnect after RECONNECT_DELAY_MS unless the close was intentional
+      // (component unmount, session end). This keeps the subscription alive even
+      // if the mcp-server restarts mid-session.
+      if (!intentionalClose.current) {
+        setTimeout(() => {
+          setReconnectCount((n) => n + 1);
+        }, RECONNECT_DELAY_MS);
+      }
     };
 
     // Ping/pong heartbeat
@@ -71,14 +85,14 @@ export function useAgentWebSocket(
     }, 30_000);
 
     return () => {
+      intentionalClose.current = true;
       clearInterval(heartbeat);
       ws.close();
     };
-    // Only connect once: when the initial identifier (pool or session) becomes available.
-    // If the server receives conversation.assigned it dynamically adds the session
-    // subscription — no reconnect needed from the client side.
+    // Re-run when the session/pool identifier changes OR when an unexpected close
+    // triggers a reconnect (reconnectCount bump).
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sessionId ?? poolId]);
+  }, [sessionId ?? poolId, reconnectCount]);
 
   const send = useCallback(
     (text: string) => {

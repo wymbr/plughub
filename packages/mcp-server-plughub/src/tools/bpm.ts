@@ -96,6 +96,19 @@ const NotificationSendInputSchema = z.object({
   message:    z.string().min(1),
   /** Canal de entrega — "session" → webchat da sessão atual */
   channel:    z.enum(["session", "whatsapp", "sms", "email"]).default("session"),
+  /**
+   * Menu interativo (opcional) — quando presente e interaction != "text",
+   * publica menu.payload em conversations.outbound em vez de message.text.
+   * Usado pelo step menu do Skill Flow. Spec 4.7.
+   */
+  menu: z.object({
+    interaction: z.enum(["text", "button", "list", "checklist", "form"]),
+    options: z.array(z.object({
+      id:    z.string(),
+      label: z.string(),
+    })).optional(),
+    fields: z.array(z.record(z.unknown())).optional(),
+  }).optional(),
 })
 
 const ConversationEscalateInputSchema = z.object({
@@ -372,9 +385,11 @@ export function registerBpmTools(server: McpServer, deps?: BpmDeps): void {
     withGuard("notification_send", async (input: Record<string, unknown>) => {
       const parsed = NotificationSendInputSchema.parse(input)
 
-      // Look up contact_id via Redis key written by channel-gateway on connect.
-      // Key: session:{session_id}:contact_id → contact_id string
+      // Look up contact_id and channel via Redis keys written by channel-gateway on connect.
+      // Keys: session:{session_id}:contact_id → contact_id string
+      //       session:{session_id}:meta        → JSON with channel field
       let contactId = parsed.session_id  // fallback: use session_id as contact_id
+      let channel   = "webchat"          // fallback channel (outbound_consumer requires "webchat")
       if (deps?.redis) {
         try {
           const stored = await deps.redis.get(`session:${parsed.session_id}:contact_id`)
@@ -382,23 +397,58 @@ export function registerBpmTools(server: McpServer, deps?: BpmDeps): void {
         } catch {
           // ignore — use fallback
         }
+        try {
+          const meta = await deps.redis.get(`session:${parsed.session_id}:meta`)
+          if (meta) {
+            const metaObj = JSON.parse(meta) as Record<string, unknown>
+            if (typeof metaObj["channel"] === "string") {
+              // Normalize legacy "chat" → "webchat": the outbound_consumer
+              // filters channel != "webchat" and silently drops the message otherwise.
+              const rawCh = metaObj["channel"] as string
+              channel = rawCh === "chat" ? "webchat" : rawCh
+            }
+          }
+        } catch {
+          // ignore — use fallback
+        }
       }
 
-      const outbound = {
-        type:       "message.text",
-        contact_id: contactId,
-        session_id: parsed.session_id,
-        message_id: crypto.randomUUID(),
-        channel:    "chat",
-        direction:  "outbound",
-        author:     { type: "agent_ai", id: "orchestrator" },
-        content:    { type: "text", text: parsed.message },
-        text:       parsed.message,   // kept for channel-gateway backward compat
-        timestamp:  new Date().toISOString(),
-      }
+      const messageId = crypto.randomUUID()
+      const timestamp  = new Date().toISOString()
+      const hasMenu    = parsed.menu && parsed.menu.interaction !== "text"
 
       if (deps?.kafka) {
-        await deps.kafka.publish("conversations.outbound", outbound)
+        if (hasMenu) {
+          // Interactive menu step: publish menu.payload so channel-gateway
+          // renders native buttons/list instead of a plain text bubble.
+          // The outbound_consumer maps this → WsMenuRender → WebSocket.
+          await deps.kafka.publish("conversations.outbound", {
+            type:        "menu.payload",
+            contact_id:  contactId,
+            session_id:  parsed.session_id,
+            menu_id:     messageId,
+            channel,
+            interaction: parsed.menu!.interaction,
+            prompt:      parsed.message,
+            options:     parsed.menu!.options ?? [],
+            fields:      parsed.menu!.fields  ?? null,
+            timestamp,
+          })
+        } else {
+          // Plain text notification (notify step, or menu with interaction="text").
+          await deps.kafka.publish("conversations.outbound", {
+            type:       "message.text",
+            contact_id: contactId,
+            session_id: parsed.session_id,
+            message_id: messageId,
+            channel,
+            direction:  "outbound",
+            author:     { type: "agent_ai", id: "orchestrator" },
+            content:    { type: "text", text: parsed.message },
+            text:       parsed.message,   // kept for channel-gateway backward compat
+            timestamp,
+          })
+        }
       }
 
       return {
@@ -408,8 +458,8 @@ export function registerBpmTools(server: McpServer, deps?: BpmDeps): void {
             delivered:  true,
             session_id: parsed.session_id,
             contact_id: contactId,
-            message_id: outbound.message_id,
-            sent_at:    outbound.timestamp,
+            message_id: messageId,
+            sent_at:    timestamp,
           }),
         }],
       }
@@ -492,7 +542,9 @@ export function registerBpmTools(server: McpServer, deps?: BpmDeps): void {
       let contactId  = parsed.session_id
       let tenantId   = "default"
       let customerId = parsed.session_id
-      let channel    = "chat"
+      // Default to "webchat" — "chat" is not a valid ConversationInboundEvent channel
+      // and would cause the Routing Engine to silently drop the escalation event.
+      let channel    = "webchat"
 
       if (deps?.redis) {
         try {
@@ -502,7 +554,12 @@ export function registerBpmTools(server: McpServer, deps?: BpmDeps): void {
             if (parsed_meta["contact_id"])  contactId  = parsed_meta["contact_id"]
             if (parsed_meta["tenant_id"])   tenantId   = parsed_meta["tenant_id"]
             if (parsed_meta["customer_id"]) customerId = parsed_meta["customer_id"]
-            if (parsed_meta["channel"])     channel    = parsed_meta["channel"]
+            if (parsed_meta["channel"]) {
+              // Normalize legacy "chat" → "webchat" so the Routing Engine's Literal
+              // validation passes (spec channels: whatsapp, webchat, voice, email, …)
+              const rawChannel = parsed_meta["channel"]
+              channel = rawChannel === "chat" ? "webchat" : rawChannel
+            }
           }
         } catch {
           // ignore — use fallbacks
