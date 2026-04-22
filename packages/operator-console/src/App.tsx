@@ -25,11 +25,12 @@ import { HeatmapGrid } from './components/HeatmapGrid'
 import { MetricsPanel } from './components/MetricsPanel'
 import { SessionList } from './components/SessionList'
 import { SessionTranscript } from './components/SessionTranscript'
+import { WorkflowPanel } from './components/WorkflowPanel'
 
 // Default tenant from env var (override in .env.local)
 const DEFAULT_TENANT = import.meta.env.VITE_DEFAULT_TENANT ?? 'tenant_telco'
 
-type View = 'heatmap' | 'sessions' | 'transcript'
+type View = 'heatmap' | 'sessions' | 'transcript' | 'workflows'
 
 export default function App() {
   const [tenantId, setTenantId]           = useState<string>(DEFAULT_TENANT)
@@ -77,6 +78,16 @@ export default function App() {
     setView('heatmap')
   }
 
+  function goToWorkflows() {
+    setView('workflows')
+    setSelectedPool(null)
+    setSession(null)
+  }
+
+  function backToHeatmapFromWorkflows() {
+    setView('heatmap')
+  }
+
   // ── Render ────────────────────────────────────────────────────────────────
 
   return (
@@ -86,6 +97,15 @@ export default function App() {
         onTenantChange ={changeTenant}
         status         ={status}
         poolCount      ={pools.length}
+        currentView    ={view}
+        onViewChange   ={(v) => {
+          if (v === 'workflows') goToWorkflows()
+          else if (v === 'heatmap') {
+            setView('heatmap')
+            setSelectedPool(null)
+            setSession(null)
+          }
+        }}
       />
 
       <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
@@ -125,6 +145,14 @@ export default function App() {
             tenantId  ={tenantId}
             sessionId ={selectedSession}
             onBack    ={backToSessions}
+          />
+        )}
+
+        {/* ── Workflows panel ─────────────────────────────────────────────── */}
+        {view === 'workflows' && (
+          <WorkflowPanel
+            tenantId ={tenantId}
+            onBack   ={backToHeatmapFromWorkflows}
           />
         )}
 

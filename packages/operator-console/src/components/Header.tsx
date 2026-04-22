@@ -1,6 +1,6 @@
 /**
  * Header.tsx
- * Top navigation bar with connection status, tenant selector, and last-update time.
+ * Top navigation bar with connection status, tenant selector, and view navigation.
  */
 import type { ConnectionStatus } from '../types'
 
@@ -9,6 +9,8 @@ interface Props {
   onTenantChange: (id: string) => void
   status:     ConnectionStatus
   poolCount:  number
+  currentView?: 'heatmap' | 'sessions' | 'transcript' | 'workflows'
+  onViewChange?: (view: 'heatmap' | 'workflows') => void
 }
 
 const STATUS_DOT: Record<ConnectionStatus, { color: string; label: string }> = {
@@ -18,8 +20,9 @@ const STATUS_DOT: Record<ConnectionStatus, { color: string; label: string }> = {
   closed:     { color: '#475569', label: 'Closed'     },
 }
 
-export function Header({ tenantId, onTenantChange, status, poolCount }: Props) {
+export function Header({ tenantId, onTenantChange, status, poolCount, currentView, onViewChange }: Props) {
   const dot = STATUS_DOT[status]
+  const isWorkflowView = currentView === 'workflows'
 
   return (
     <header style={headerStyle}>
@@ -34,12 +37,44 @@ export function Header({ tenantId, onTenantChange, status, poolCount }: Props) {
         </div>
       </div>
 
-      {/* Center: pool count */}
-      <div style={{ fontSize: 13, color: '#64748b' }}>
-        {poolCount > 0
-          ? <><span style={{ fontWeight: 700, color: '#94a3b8' }}>{poolCount}</span> pools monitored</>
-          : 'No pools active'
-        }
+      {/* Center: navigation and pool count */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+        <button
+          onClick={() => onViewChange?.('heatmap')}
+          style={{
+            padding: '4px 12px',
+            borderRadius: 4,
+            border: isWorkflowView ? '1px solid #334155' : '1px solid #3b82f6',
+            background: isWorkflowView ? 'transparent' : '#0d47a1',
+            color: '#e2e8f0',
+            cursor: 'pointer',
+            fontSize: 12,
+            fontWeight: isWorkflowView ? 400 : 600,
+          }}
+        >
+          Heatmap
+        </button>
+        <button
+          onClick={() => onViewChange?.('workflows')}
+          style={{
+            padding: '4px 12px',
+            borderRadius: 4,
+            border: isWorkflowView ? '1px solid #7c3aed' : '1px solid #334155',
+            background: isWorkflowView ? '#4c1d95' : 'transparent',
+            color: '#e2e8f0',
+            cursor: 'pointer',
+            fontSize: 12,
+            fontWeight: isWorkflowView ? 600 : 400,
+          }}
+        >
+          Workflows
+        </button>
+        <div style={{ fontSize: 13, color: '#64748b', whiteSpace: 'nowrap' }}>
+          {!isWorkflowView && (poolCount > 0
+            ? <><span style={{ fontWeight: 700, color: '#94a3b8' }}>{poolCount}</span> pools monitored</>
+            : 'No pools active'
+          )}
+        </div>
       </div>
 
       {/* Right: tenant + status */}

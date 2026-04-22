@@ -186,6 +186,7 @@ plughub/
     channel-gateway/             ← @plughub/channel-gateway — channel adapters and inbound normalisation
     calendar-api/                ← plughub-calendar-api — calendar engine + CRUD REST (Arc 4)
     workflow-api/                ← plughub-workflow-api — workflow instance lifecycle (Arc 4)
+    skill-flow-worker/           ← skill-flow-worker — Kafka consumer, runs SkillFlow engine for workflow instances (Arc 4)
 ```
 
 ## Stack per package
@@ -202,6 +203,7 @@ plughub/
 | rules-engine | Python | Python 3.11+ | Redis + ClickHouse |
 | calendar-api | Python | Python 3.11+ | FastAPI + asyncpg — port 3700 |
 | workflow-api | Python | Python 3.11+ | FastAPI + asyncpg — port 3800 |
+| skill-flow-worker | TypeScript | Node 20+ | Kafka consumer + SkillFlowEngine bridge |
 | channel-gateway | Python | Python 3.11+ | FastAPI + aiokafka + channel adapters |
 
 ## Package dependencies
@@ -854,11 +856,17 @@ timed_out / failed / completed / cancelled → terminal
 
 Publicado pelo workflow-api em todos os status transitions. Consumido pelo Skill Flow worker para disparar `engine.run()` com `resumeContext`.
 
-### Pendente neste módulo
+### Implementado neste módulo
 
-- Operator Console — painel de instâncias (Task 5)
-- E2E scenario 13 — trigger → execute → suspend → resume → complete (Task 6)
-- Skill Flow worker TypeScript — consome `workflow.events`, chama `engine.run()` com `resumeContext`
+- `packages/skill-flow-worker/` — TypeScript worker: consome `workflow.events`, roda engine.run() com resumeContext, wired com persistSuspend callback para deadline calculation
+- Operator Console — painel de instâncias Workflow (WorkflowPanel.tsx): status filter, timeline, resume token, cancel action
+- Vite proxy configuration para `/v1/workflow` routes
+
+### Pendente (fase 2)
+
+- Skill Flow worker: mcpCall/aiGatewayCall com rotas HTTP reais (atualmente stubbed como HTTP pass-through)
+- Operator Console: integração com analytics-api para status tracking
+- E2E scenario 13 — trigger → execute → suspend → resume → complete (full end-to-end coverage)
 
 ## E2E test suite — scenarios
 

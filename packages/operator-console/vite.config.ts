@@ -11,6 +11,11 @@ export default defineConfig({
       '/reports':   { target: 'http://localhost:3500', changeOrigin: true },
       '/admin':     { target: 'http://localhost:3500', changeOrigin: true },
       '/sessions':  { target: 'http://localhost:3500', changeOrigin: true },
+      // Forward workflow API calls
+      '/v1/workflow': {
+        target: process.env.VITE_WORKFLOW_API_BASE_URL ?? 'http://localhost:3800',
+        changeOrigin: true,
+      },
     },
   },
   build: {

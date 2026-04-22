@@ -114,3 +114,30 @@ export interface SupervisorState {
   joinedAt:      string | null    // ISO8601
   error:         string | null
 }
+
+// ─── Workflow instance (from workflow-api) ────────────────────────────────────
+
+export type WorkflowStatus = 'active' | 'suspended' | 'completed' | 'failed' | 'timed_out' | 'cancelled'
+export type SuspendReason = 'approval' | 'input' | 'webhook' | 'timer'
+
+export interface WorkflowInstance {
+  id: string
+  installation_id: string
+  organization_id: string
+  tenant_id: string
+  flow_id: string
+  session_id?: string
+  pool_id?: string
+  status: WorkflowStatus
+  current_step?: string
+  pipeline_state: Record<string, unknown>
+  suspend_reason?: SuspendReason
+  resume_token?: string
+  resume_expires_at?: string
+  suspended_at?: string
+  resumed_at?: string
+  completed_at?: string
+  outcome?: string
+  created_at: string
+  metadata: Record<string, unknown>
+}
