@@ -16,8 +16,16 @@ export default defineConfig({
         target: 'http://localhost:3800',
         changeOrigin: true
       },
+      '^/v1/(calendars|holiday-sets|associations|engine)': {
+        target: 'http://localhost:3700',
+        changeOrigin: true
+      },
       '^/v1': {
         target: 'http://localhost:3300',
+        changeOrigin: true
+      },
+      '^/config': {
+        target: 'http://localhost:3600',
         changeOrigin: true
       },
       '^/dashboard': {

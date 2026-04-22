@@ -6,6 +6,7 @@ import { ProtectedRoute } from '@/auth/ProtectedRoute'
 import HomePage from '@/modules/home/HomePage'
 import ConfigRecursosIndex from '@/modules/config-recursos'
 import MonitorPage from '@/modules/atendimento/MonitorPage'
+import ConfigPlataformaPage from '@/modules/config-plataforma/ConfigPlataformaPage'
 import PlaceholderPage from '@/modules/_placeholder/PlaceholderPage'
 
 const LoadingFallback = () => <div className="flex justify-center items-center h-screen">Loading...</div>
@@ -57,7 +58,7 @@ export const routes: RouteObject[] = [
       },
       {
         path: 'config/platform',
-        element: <PlaceholderPage module="Platform Config" phase="Arc 2" />
+        element: <ConfigPlataformaPage />
       },
       {
         path: 'config/access',
