@@ -1,0 +1,35 @@
+{
+  "actions": {
+    "save": "Salvar",
+    "cancel": "Cancelar",
+    "create": "Criar",
+    "edit": "Editar",
+    "delete": "Excluir",
+    "confirm": "Confirmar",
+    "back": "Voltar",
+    "search": "Buscar",
+    "filter": "Filtrar",
+    "export": "Exportar",
+    "loading": "Carregando..."
+  },
+  "status": {
+    "active": "Ativo",
+    "inactive": "Inativo",
+    "suspended": "Suspenso",
+    "failed": "Falhou",
+    "completed": "Concluído",
+    "cancelled": "Cancelado"
+  },
+  "errors": {
+    "notFound": "Não encontrado",
+    "serverError": "Erro interno",
+    "networkError": "Erro de conexão",
+    "required": "Campo obrigatório"
+  },
+  "confirm": {
+    "deleteTitle": "Confirmar exclusão",
+    "deleteMessage": "Esta ação não pode ser desfeita. Deseja continuar?",
+    "yes": "Sim, excluir",
+    "no": "Cancelar"
+  }
+}

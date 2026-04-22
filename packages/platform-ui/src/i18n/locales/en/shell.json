@@ -1,0 +1,32 @@
+{
+  "nav": {
+    "home": "Home",
+    "atendimento": "Service",
+    "monitor": "Monitor",
+    "agentAssist": "Agent Assist",
+    "workflows": "Workflows",
+    "avaliacao": "Quality",
+    "analytics": "Analytics",
+    "dashboards": "Dashboards",
+    "relatorios": "Reports",
+    "skillFlows": "Skill Flows",
+    "configuracao": "Configuration",
+    "recursos": "Resources",
+    "plataforma": "Platform",
+    "acesso": "Access",
+    "developer": "Developer",
+    "business": "Business"
+  },
+  "topbar": {
+    "logout": "Logout",
+    "language": "Language"
+  },
+  "contextSwitcher": {
+    "installation": "Installation",
+    "tenant": "Tenant"
+  },
+  "placeholder": {
+    "title": "Module under construction",
+    "description": "This module will be available soon."
+  }
+}

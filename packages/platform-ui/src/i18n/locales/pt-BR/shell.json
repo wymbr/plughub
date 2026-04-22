@@ -1,0 +1,32 @@
+{
+  "nav": {
+    "home": "Home",
+    "atendimento": "Atendimento",
+    "monitor": "Monitor",
+    "agentAssist": "Agent Assist",
+    "workflows": "Workflows",
+    "avaliacao": "Avaliação",
+    "analytics": "Analytics",
+    "dashboards": "Dashboards",
+    "relatorios": "Relatórios",
+    "skillFlows": "Skill Flows",
+    "configuracao": "Configuração",
+    "recursos": "Recursos",
+    "plataforma": "Plataforma",
+    "acesso": "Acesso",
+    "developer": "Developer",
+    "business": "Business"
+  },
+  "topbar": {
+    "logout": "Sair",
+    "language": "Idioma"
+  },
+  "contextSwitcher": {
+    "installation": "Instalação",
+    "tenant": "Tenant"
+  },
+  "placeholder": {
+    "title": "Módulo em construção",
+    "description": "Este módulo estará disponível em breve."
+  }
+}

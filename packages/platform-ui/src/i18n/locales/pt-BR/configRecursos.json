@@ -1,0 +1,58 @@
+{
+  "title": "Configuração — Recursos",
+  "tabs": {
+    "pools": "Pools",
+    "agentTypes": "Tipos de Agente",
+    "skills": "Skills",
+    "instances": "Instâncias"
+  },
+  "pools": {
+    "title": "Pools",
+    "createPool": "Novo Pool",
+    "fields": {
+      "poolId": "ID do Pool",
+      "description": "Descrição",
+      "channelTypes": "Canais",
+      "slaTargetMs": "SLA (ms)",
+      "status": "Status"
+    },
+    "empty": "Nenhum pool cadastrado.",
+    "createFirst": "Criar primeiro pool"
+  },
+  "agentTypes": {
+    "title": "Tipos de Agente",
+    "createAgentType": "Novo Tipo de Agente",
+    "fields": {
+      "agentTypeId": "ID",
+      "framework": "Framework",
+      "executionModel": "Modelo",
+      "pools": "Pools",
+      "skills": "Skills"
+    },
+    "empty": "Nenhum tipo de agente cadastrado."
+  },
+  "skills": {
+    "title": "Skills",
+    "createSkill": "Nova Skill",
+    "fields": {
+      "skillId": "ID",
+      "name": "Nome",
+      "version": "Versão",
+      "type": "Tipo",
+      "domain": "Domínio"
+    },
+    "empty": "Nenhuma skill cadastrada."
+  },
+  "instances": {
+    "title": "Instâncias",
+    "fields": {
+      "instanceId": "ID",
+      "agentType": "Tipo",
+      "pool": "Pool",
+      "status": "Status",
+      "updatedAt": "Atualizado"
+    },
+    "empty": "Nenhuma instância registrada.",
+    "readOnly": "Somente leitura — instâncias são gerenciadas pelo SDK"
+  }
+}

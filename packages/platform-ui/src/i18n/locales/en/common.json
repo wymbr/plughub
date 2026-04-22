@@ -1,0 +1,35 @@
+{
+  "actions": {
+    "save": "Save",
+    "cancel": "Cancel",
+    "create": "Create",
+    "edit": "Edit",
+    "delete": "Delete",
+    "confirm": "Confirm",
+    "back": "Back",
+    "search": "Search",
+    "filter": "Filter",
+    "export": "Export",
+    "loading": "Loading..."
+  },
+  "status": {
+    "active": "Active",
+    "inactive": "Inactive",
+    "suspended": "Suspended",
+    "failed": "Failed",
+    "completed": "Completed",
+    "cancelled": "Cancelled"
+  },
+  "errors": {
+    "notFound": "Not found",
+    "serverError": "Internal error",
+    "networkError": "Connection error",
+    "required": "Required field"
+  },
+  "confirm": {
+    "deleteTitle": "Confirm deletion",
+    "deleteMessage": "This action cannot be undone. Do you want to continue?",
+    "yes": "Yes, delete",
+    "no": "Cancel"
+  }
+}

@@ -1,0 +1,58 @@
+{
+  "title": "Configuration — Resources",
+  "tabs": {
+    "pools": "Pools",
+    "agentTypes": "Agent Types",
+    "skills": "Skills",
+    "instances": "Instances"
+  },
+  "pools": {
+    "title": "Pools",
+    "createPool": "New Pool",
+    "fields": {
+      "poolId": "Pool ID",
+      "description": "Description",
+      "channelTypes": "Channels",
+      "slaTargetMs": "SLA (ms)",
+      "status": "Status"
+    },
+    "empty": "No pools registered.",
+    "createFirst": "Create first pool"
+  },
+  "agentTypes": {
+    "title": "Agent Types",
+    "createAgentType": "New Agent Type",
+    "fields": {
+      "agentTypeId": "ID",
+      "framework": "Framework",
+      "executionModel": "Model",
+      "pools": "Pools",
+      "skills": "Skills"
+    },
+    "empty": "No agent types registered."
+  },
+  "skills": {
+    "title": "Skills",
+    "createSkill": "New Skill",
+    "fields": {
+      "skillId": "ID",
+      "name": "Name",
+      "version": "Version",
+      "type": "Type",
+      "domain": "Domain"
+    },
+    "empty": "No skills registered."
+  },
+  "instances": {
+    "title": "Instances",
+    "fields": {
+      "instanceId": "ID",
+      "agentType": "Agent Type",
+      "pool": "Pool",
+      "status": "Status",
+      "updatedAt": "Updated"
+    },
+    "empty": "No instances registered.",
+    "readOnly": "Read-only — instances are managed by the SDK"
+  }
+}
