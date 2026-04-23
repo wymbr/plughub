@@ -58,6 +58,8 @@ import redis.asyncio as aioredis
 import yaml
 from aiokafka import AIOKafkaConsumer
 
+from .instance_bootstrap import InstanceBootstrap
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(levelname)s %(name)s — %(message)s",
@@ -75,11 +77,21 @@ AGENT_REGISTRY_URL  = os.getenv("AGENT_REGISTRY_URL",  "http://localhost:3300")
 _default_skills_dir = str(Path(__file__).parent.parent.parent.parent / "skill-flow-engine" / "skills")
 SKILLS_DIR          = os.getenv("SKILLS_DIR", _default_skills_dir)
 
-TOPIC_ROUTED  = "conversations.routed"
-TOPIC_QUEUED  = "conversations.queued"
-TOPIC_INBOUND = "conversations.inbound"
-TOPIC_EVENTS  = "conversations.events"
-GROUP_ID      = "orchestrator-bridge"
+# Comma-separated list of tenant IDs whose agent instances should be bootstrapped
+# from the Agent Registry at startup. Billing is per configured instance — the
+# Agent Registry is the source of truth, not the Redis seed.
+BOOTSTRAP_TENANT_IDS: list[str] = [
+    t.strip()
+    for t in os.getenv("BOOTSTRAP_TENANT_IDS", "tenant_demo").split(",")
+    if t.strip()
+]
+
+TOPIC_ROUTED            = "conversations.routed"
+TOPIC_QUEUED            = "conversations.queued"
+TOPIC_INBOUND           = "conversations.inbound"
+TOPIC_EVENTS            = "conversations.events"
+TOPIC_REGISTRY_CHANGED  = "registry.changed"
+GROUP_ID                = "orchestrator-bridge"
 
 
 # ── Agent type resolution ─────────────────────────────────────────────────────
@@ -1538,6 +1550,7 @@ async def run() -> None:
         TOPIC_QUEUED,
         TOPIC_INBOUND,
         TOPIC_EVENTS,
+        TOPIC_REGISTRY_CHANGED,
         bootstrap_servers=KAFKA_BROKERS,
         group_id=GROUP_ID,
         value_deserializer=lambda v: json.loads(v.decode("utf-8")),
@@ -1545,18 +1558,41 @@ async def run() -> None:
     )
     await consumer.start()
     logger.info(
-        "✅ Orchestrator Bridge started — topics: %s, %s, %s, %s",
-        TOPIC_ROUTED, TOPIC_QUEUED, TOPIC_INBOUND, TOPIC_EVENTS,
+        "✅ Orchestrator Bridge started — topics: %s, %s, %s, %s, %s",
+        TOPIC_ROUTED, TOPIC_QUEUED, TOPIC_INBOUND, TOPIC_EVENTS, TOPIC_REGISTRY_CHANGED,
     )
     logger.info("   skill-flow-service: %s", SKILL_FLOW_URL)
     logger.info("   agent-registry:     %s", AGENT_REGISTRY_URL)
     logger.info("   YAML fallback dir:  %s", SKILLS_DIR)
+    logger.info("   bootstrap tenants:  %s", BOOTSTRAP_TENANT_IDS)
+
+    # ── Instance Bootstrap ────────────────────────────────────────────────────
+    # Reads all active AgentTypes from the Agent Registry and registers each
+    # configured instance slot in Redis. This replaces the Redis seed dependency:
+    # billing is per configured instance → Agent Registry = source of truth.
+    bootstrap = InstanceBootstrap(
+        redis=redis_client,
+        registry_url=AGENT_REGISTRY_URL,
+        tenant_ids=BOOTSTRAP_TENANT_IDS,
+    )
 
     async with aiohttp.ClientSession() as http:
+        # Bootstrap instances on startup, then keep them alive via heartbeat.
+        await bootstrap.run_once(http)
+
+        # Heartbeat loop runs as a background task — renews instance TTLs every 15s
+        # and re-bootstraps if registry.changed signals a config update.
+        heartbeat_task = asyncio.create_task(bootstrap.heartbeat_loop())
+
         try:
             async for msg in consumer:
-                asyncio.create_task(_dispatch(msg.value, msg.topic, http, redis_client))
+                asyncio.create_task(_dispatch(msg.value, msg.topic, http, redis_client, bootstrap))
         finally:
+            heartbeat_task.cancel()
+            try:
+                await heartbeat_task
+            except asyncio.CancelledError:
+                pass
             await consumer.stop()
             await redis_client.aclose()
 
@@ -1566,6 +1602,7 @@ async def _dispatch(
     topic:        str,
     http:         aiohttp.ClientSession,
     redis_client: aioredis.Redis,
+    bootstrap:    InstanceBootstrap,
 ) -> None:
     try:
         if topic == TOPIC_ROUTED:
@@ -1576,6 +1613,14 @@ async def _dispatch(
             await process_inbound(payload, redis_client)
         elif topic == TOPIC_EVENTS:
             await process_contact_event(payload, redis_client)
+        elif topic == TOPIC_REGISTRY_CHANGED:
+            # Agent Registry published a config change — re-bootstrap instances
+            # on the next heartbeat tick so new/updated AgentTypes are reflected.
+            logger.info(
+                "registry.changed received: entity=%s — scheduling instance re-bootstrap",
+                payload.get("entity_type", "?"),
+            )
+            bootstrap.request_refresh()
     except Exception as exc:
         logger.error("Dispatch error topic=%s: %s", topic, exc)
 

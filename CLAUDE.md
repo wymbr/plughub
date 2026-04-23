@@ -187,6 +187,7 @@ plughub/
     calendar-api/                ← plughub-calendar-api — calendar engine + CRUD REST (Arc 4)
     workflow-api/                ← plughub-workflow-api — workflow instance lifecycle (Arc 4)
     skill-flow-worker/           ← skill-flow-worker — Kafka consumer, runs SkillFlow engine for workflow instances (Arc 4)
+    pricing-api/                 ← plughub-pricing-api — capacity-based billing, invoice calculation, reserve pool activation (Arc 2)
 ```
 
 ## Stack per package
@@ -205,6 +206,7 @@ plughub/
 | workflow-api | Python | Python 3.11+ | FastAPI + asyncpg — port 3800 |
 | skill-flow-worker | TypeScript | Node 20+ | Kafka consumer + SkillFlowEngine bridge |
 | channel-gateway | Python | Python 3.11+ | FastAPI + aiokafka + channel adapters |
+| pricing-api | Python | Python 3.11+ | FastAPI + asyncpg + openpyxl — port 3900 |
 
 ## Package dependencies
 
@@ -233,6 +235,44 @@ Never create circular dependencies. `schemas` never depends on any other package
 | **Routing Engine** | Agent allocation, queue management, scoring algorithm, close_reason detection |
 | **Rules Engine** | Post-routing event evaluation. Publishes consequences. No routing, no Redis polling. |
 | **Skill Flow Engine** | Flow interpreter. Persists pipeline_state to Redis on every step. |
+
+## Instance Bootstrap — configuration-driven agent registration
+
+Implemented in `packages/orchestrator-bridge/src/plughub_orchestrator_bridge/instance_bootstrap.py`.
+
+**Principle**: billing is per configured instance → Agent Registry is the source of truth.
+The bridge reads all active AgentTypes at startup and registers exactly the configured
+number of instances (`max_concurrent_sessions` slots per type) in Redis.
+
+### Startup flow
+
+```
+Bridge startup → InstanceBootstrap.run_once()
+  → GET /v1/agent-types  (all active types for the tenant)
+  → for each AgentType where framework != "human":
+      for n in range(max_concurrent_sessions):
+        instance_id = f"{agent_type_id}-{n+1:03d}"
+        write {tenant}:instance:{instance_id}  status=ready  TTL=35s
+        add to {tenant}:pool:{pool_id}:instances
+  → for each pool: write {tenant}:pool_config:{pool_id}  TTL=24h
+
+Heartbeat loop (every 15s) → renews TTL for ready instances
+  → if registry.changed received: re-runs full bootstrap
+```
+
+### Rules
+
+- Human agents are NOT bootstrapped — login is user-initiated via Agent Assist UI.
+- Busy/paused instances have their TTL renewed without state change.
+- Idempotent: re-running does not create duplicates.
+- Instance IDs follow the pattern `{agent_type_id}-{n+1:03d}` (e.g. `agente_demo_ia_v1-001`).
+
+### Impact on seed
+
+`infra/seed/seed.py` no longer writes Redis instance keys or pool instance sets — those
+are handled exclusively by InstanceBootstrap. The seed only:
+1. Registers pools and agent types in the Agent Registry API (PostgreSQL)
+2. Writes pool configs and the global pools set to Redis (static admin data)
 
 ## Channel vs Medium
 
@@ -273,7 +313,7 @@ TTL: same as session TTL
 [-1.0, -0.6] → "angry"
 ```
 
-## Skill Flow — nine step types
+## Skill Flow — eleven step types
 
 | Type | Does | Interacts with |
 |---|---|---|
@@ -286,6 +326,8 @@ TTL: same as session TTL
 | `reason` | Invokes AI Gateway with output_schema | AI Gateway |
 | `notify` | Sends message to customer (unidirectional) | Core → Channel Gateway |
 | `menu` | Captures customer input and suspends until reply | Core → Channel Gateway |
+| `suspend` | Suspends workflow until external signal (approval, input, webhook, timer) | workflow-api |
+| `collect` | Contacts target via channel, awaits response, suspends until replied or expired | workflow-api → Channel Gateway |
 
 ### task step modes
 
@@ -713,6 +755,133 @@ Tests: `tests/test_usage_emitter.py` — 22 testes (todas as dimensões + error 
 - ~~**Stream TTL expirado pós-session_ended**~~: ✅ `StreamExpiredError` levantado em `StreamSubscriber.messages()` quando cliente reconecta com cursor != "0" mas `EXISTS session:{id}:stream` retorna 0. `_stream_delivery_loop` captura e envia `{"type": "conn.session_ended", "reason": "session_expired"}`. Falha no EXISTS presume que stream existe (graceful degradation).
 - ~~**jwt_secret por tenant**~~: ✅ `_decode_token` agora async: (1) decode sem verificação para ler `tenant_id`; (2) lookup Redis `{tenant_id}:config:webchat:jwt_secret`; (3) fallback para `settings.jwt_secret`. Single-tenant sem mudança de config. Tests: `TestStreamExpiredReconnect` (2 cases) + `TestMultiTenantJwtSecret` (3 cases). Total channel-gateway: 168/168.
 
+## Pricing Module — capacity-based billing
+
+Implementado em `packages/pricing-api/` (Python FastAPI, porta 3900). Princípio: cobrança por capacidade configurada, não por consumo. Dados de consumo variável permanecem visíveis no painel para curadoria de qualidade, mas não entram no cálculo de faturamento.
+
+### Modelo de cobrança
+
+Dois componentes:
+
+| Componente | Descrição | Granularidade |
+|---|---|---|
+| **Base capacity** | Recursos sempre ativos (ai_agent, human_agent, whatsapp_number, etc.) | Mensal proporcional (dias úteis no ciclo) |
+| **Reserve pools** | Capacidade adicional ativada/desativada manualmente | Dia inteiro por ativação (full-day billing) |
+
+**Full-day billing para reserve pools**: se um pool é ativado em qualquer momento do dia D, o dia D inteiro é faturável. O detalhe de ativação/desativação é persistido em `pricing.reserve_activation_log` com datas de tipo `DATE` (sem horário).
+
+### PostgreSQL schema
+
+```sql
+-- Recursos configurados por instalação
+CREATE TABLE pricing.installation_resources (
+    id               UUID PRIMARY KEY,
+    tenant_id        TEXT NOT NULL,
+    installation_id  TEXT NOT NULL DEFAULT 'default',
+    resource_type    TEXT NOT NULL,  -- ai_agent | human_agent | whatsapp_number | ...
+    quantity         INT  NOT NULL,
+    pool_type        TEXT NOT NULL DEFAULT 'base',  -- base | reserve
+    reserve_pool_id  TEXT,           -- pool lógico para agrupar recursos de reserva
+    active           BOOL NOT NULL DEFAULT TRUE,
+    billing_unit     TEXT NOT NULL DEFAULT 'monthly',
+    label            TEXT NOT NULL DEFAULT '',
+    created_at       TIMESTAMPTZ DEFAULT now(),
+    updated_at       TIMESTAMPTZ DEFAULT now()
+);
+
+-- Log de ativações de reserve pools (full-day billing)
+CREATE TABLE pricing.reserve_activation_log (
+    id                 UUID PRIMARY KEY,
+    tenant_id          TEXT NOT NULL,
+    reserve_pool_id    TEXT NOT NULL,
+    activation_date    DATE NOT NULL,
+    deactivation_date  DATE,          -- NULL = ainda ativo
+    activated_by       TEXT NOT NULL DEFAULT 'operator',
+    created_at         TIMESTAMPTZ DEFAULT now(),
+    UNIQUE (tenant_id, reserve_pool_id, activation_date)
+);
+```
+
+### Preços padrão (Config API — namespace `pricing`)
+
+| Recurso | Preço mensal (BRL) |
+|---|---|
+| `ai_agent` | 120,00 |
+| `human_agent` | 50,00 |
+| `whatsapp_number` | 15,00 |
+| `voice_trunk_in` | 40,00 |
+| `voice_trunk_out` | 40,00 |
+| `email_inbox` | 25,00 |
+| `sms_number` | 10,00 |
+| `webchat_instance` | 20,00 |
+
+`reserve_markup_pct` (padrão `0.0`): surcharge percentual aplicado ao preço de reserve pools.
+`billing_cycle_day` (padrão `1`): dia do mês em que o ciclo de cobrança se inicia.
+
+### Cálculo de fatura
+
+```
+# Base items
+daily_rate  = unit_price / billing_days
+subtotal    = daily_rate × quantity × billing_days   # (sempre billing_days para base)
+
+# Reserve items
+reserve_unit = unit_price × (1 + reserve_markup_pct / 100)
+reserve_daily = reserve_unit / billing_days
+subtotal      = reserve_daily × quantity × days_active  # days_active = dias distintos do log
+```
+
+### Endpoints
+
+| Método | Rota | Descrição |
+|---|---|---|
+| `GET` | `/v1/pricing/invoice/{tenant_id}` | Fatura em JSON (ciclo atual ou explícito) |
+| `GET` | `/v1/pricing/invoice/{tenant_id}?format=xlsx` | Export XLSX com layout de fatura |
+| `GET` | `/v1/pricing/resources/{tenant_id}` | Lista recursos configurados |
+| `POST` | `/v1/pricing/resources/{tenant_id}` | Upsert recurso (admin) |
+| `DELETE` | `/v1/pricing/resources/{tenant_id}/{resource_id}` | Remove recurso (admin) |
+| `POST` | `/v1/pricing/reserve/{tenant_id}/{pool_id}/activate` | Ativa reserve pool (admin) |
+| `POST` | `/v1/pricing/reserve/{tenant_id}/{pool_id}/deactivate` | Desativa reserve pool (admin) |
+| `GET` | `/v1/pricing/reserve/{tenant_id}/activity` | Log de ativações |
+
+Auth: `X-Admin-Token` header verificado contra `Settings.admin_token` (vazio = sem auth).
+
+### Arquivos principais
+
+| Arquivo | Responsabilidade |
+|---|---|
+| `db.py` | DDL + CRUD: `list_resources`, `upsert_resource`, `delete_resource`, `set_reserve_active`, `record_activation`, `record_deactivation`, `list_activation_log`, `count_active_days` |
+| `calculator.py` | `PricingCalculator.calculate()` → `Invoice` dataclass; `invoice_to_xlsx()` openpyxl; `load_price_table()` via Config API com fallback |
+| `router.py` | FastAPI endpoints, `require_admin` dependency, `load_price_table` importado do calculator |
+| `main.py` | FastAPI app + lifecycle startup/shutdown (asyncpg pool) |
+| `config.py` | `Settings` com prefixo `PLUGHUB_PRICING_`; `config_api_url`, `admin_token`, `port` |
+| `tests/test_calculator.py` | 23 unit tests: TestUnitPrice, TestBaseCalculation, TestReserveCalculation, TestBillingCycle, TestInvoiceToDict, TestXlsxExport |
+| `tests/test_router.py` | 16 integration tests: TestHealth, TestGetInvoice (4), TestResources (5), TestReserveActivation (4), TestActivationLog (2) |
+
+Total: **39/39 testes passando**.
+
+### Operator Console — PricingPanel
+
+`packages/operator-console/src/components/PricingPanel.tsx` — dois tabs:
+
+- **Invoice tab**: tabela de base items + grupos de reserve pools com toggle Activate/Deactivate; totais por seção; GrandTotal em destaque; botão export XLSX via link direto `?format=xlsx`.
+- **Consumption tab**: dados de `GET /reports/usage` da analytics-api; agrega por dimensão com nota explícita "não incluído no faturamento — disponível para curadoria de qualidade".
+- **ResourceSidebar**: lista de recursos agrupados por pool_type + campo de admin token local.
+
+Hooks: `packages/operator-console/src/api/pricing-hooks.ts` — `useInvoice`, `useResources`, `useActivationLog`, `activateReservePool`, `deactivateReservePool`. Todos usam URL relativa (`VITE_PRICING_API_BASE_URL ?? ''`) para proxy Vite.
+
+Proxy Vite: `/v1/pricing` → `http://localhost:3900`.
+
+### Config API — namespace `pricing`
+
+Quatro chaves seedadas em `packages/config-api/src/plughub_config_api/seed.py`:
+- `pricing.currency` — `"BRL"`
+- `pricing.unit_prices` — mapa recurso→preço mensal
+- `pricing.reserve_markup_pct` — `0.0`
+- `pricing.billing_cycle_day` — `1`
+
+Editáveis por tenant via ConfigPanel do Operator Console (namespace `pricing`).
+
 ## Pending (next iteration)
 
 ### Arc 2 — fechamento
@@ -722,7 +891,7 @@ Tests: `tests/test_usage_emitter.py` — 22 testes (todas as dimensões + error 
 - ~~WebChat reconexão fase 2: tratar stream TTL expirado + jwt_secret por tenant~~ ✅
 - AttachmentStore fase 2: S3/MinIO
 - Magic bytes validation no upload (phase 2)
-- Pricing Module v1: planos, tarifas, ciclo de billing
+- ~~Pricing Module v1: planos, tarifas, ciclo de billing~~ ✅
 
 ### Arc 3 — Analytics, Dashboard Operacional e Relatórios
 
@@ -746,13 +915,13 @@ Tests: `tests/test_usage_emitter.py` — 22 testes (todas as dimensões + error 
 
 6. ~~**operator-console fase 1 — heatmap + métricas realtime**~~: ✅ heatmap de sentimento por pool (tiles coloridos por avg_score, ordered worst-first), painel lateral com métricas do pool (available/queue/SLA/distribuição) e resumo 24h; atualização via SSE ~5s. `packages/operator-console/` — React 18 + TypeScript + Vite. Hooks: `usePoolSnapshots` (SSE EventSource), `useSentimentLive` (poll 10s), `useMetrics24h` (poll 60s), `usePoolViews` (merge). Componentes: `HeatmapGrid`, `PoolTile` (cor interpolada, badge SLA breach), `MetricsPanel` (pool detail + distribution bars + 24h summary), `Header` (tenant input, status dot). Build: `tsc -b && vite build` → 157 kB JS gzip 50 kB.
 
-7. ~~**operator-console fase 2 — drill-down read-only**~~: ✅ pool → lista de sessões ativas → transcrição ao vivo. Backend: `sessions.py` em `analytics-api` — `GET /sessions/active` (ClickHouse `closed_at IS NULL` + Redis pipeline LRANGE sentiment, sorted worst-first) e `GET /sessions/{id}/stream` (SSE: evento `history` com XRANGE + eventos `entry` via XREAD bloqueante, keepalive 15s). Frontend: `useActiveSessions` (poll 10s), `useSessionStream` (EventSource SSE), `SessionList` (lista com accent colorido, badge de categoria, handle time, botão drill-in), `SessionTranscript` (auto-scroll, message bubbles diferenciados por role, system events com linha separadora, `agents_only` destacado, status dot ao vivo). `HeatmapGrid`/`PoolTile` atualizados com botão "sessions →" para drill-down. `App.tsx` refatorado para 3 níveis: heatmap → sessions → transcript. Build: 168 kB JS gzip 53 kB. Tests: `test_sessions.py` (39 assertions — TestClassify, TestSafeJson, TestParseEntry, TestFetchActiveSessions, TestOverlaySentiment, TestListActiveSessionsEndpoint). Total analytics-api: 134/134.
+7. ~~**operator-console fase 2 — drill-down read-only**~~: ✅ pool → lista de sessões ativas → transcrição ao vivo. Backend: `sessions.py` em `analytics-api` — `GET /sessions/active` (ClickHouse `closed_at IS NULL` + Redis pipeline LRANGE sentiment, sorted worst-first), `GET /sessions/{id}/stream` (SSE: evento `history` com XRANGE + eventos `entry` via XREAD bloqueante, keepalive 15s), e `GET /sessions/customer/{customer_id}` (histórico de contatos fechados por cliente, `ORDER BY opened_at DESC`, com `FINAL` para dedup ReplacingMergeTree). ClickHouse `sessions` table acrescida de coluna `customer_id Nullable(String)` + migration idempotente `ALTER TABLE ADD COLUMN IF NOT EXISTS`. Consumer/models: `parse_inbound` e `parse_conversations_event` passam `contact_id`/`customer_id` do evento Kafka. Frontend: `useActiveSessions` (poll 10s), `useSessionStream` (EventSource SSE), `SessionList`, `SessionTranscript`, `HeatmapGrid`/`PoolTile` drill-down. `App.tsx` refatorado para 3 níveis: heatmap → sessions → transcript. Build: 168 kB JS gzip 53 kB. Tests: `test_sessions.py` (54 assertions — TestClassify, TestSafeJson, TestParseEntry, TestFetchActiveSessions, TestOverlaySentiment, TestListActiveSessionsEndpoint, TestFetchCustomerHistory, TestCustomerHistoryEndpoint). Total analytics-api: 149/149.
 
 8. ~~**operator-console fase 3 — intervenção ativa**~~: ✅ Supervisores humanos entram em sessões ativas diretamente via REST (bypass do ciclo MCP agent_login). Backend: `packages/analytics-api/src/plughub_analytics_api/supervisor.py` — `POST /supervisor/join` (cria `supervisor:{session_id}:active` no Redis TTL 4h, XADD `participant_joined` agents_only), `POST /supervisor/message` (XADD `message` no formato `StreamSubscriber._map_event()`, visibility `agents_only` ou `all`), `POST /supervisor/leave` (XADD `participant_left`, DELETE Redis key, idempotente). Router wired em `main.py`. Frontend: `SupervisorPanel.tsx` (composer com visibility toggle, Enter=send, Shift+Enter=newline, Leave button), `SupervisorJoinButton` (inline no header), `useSupervisor` hook (`join/message/leave` com estado `idle|joining|active|leaving|error`), `SupervisorState` type. `SessionTranscript.tsx` atualizado: botão "Entrar como supervisor" no header → `SupervisorPanel` na base quando ativo. Build: 173 kB JS gzip 54 kB.
 
 9. ~~**Metabase setup**~~: ✅ `docker-compose.infra.yml` — serviços `metabase-driver-init` (baixa driver ClickHouse v1.3.2), `metabase` (v0.50.0, porta 3000, persiste em PostgreSQL), `metabase-setup` (one-shot via API Metabase). `infra/metabase/clickhouse_users.sql` — usuários CH read-only por tenant + Row Policies em 6 tabelas (sandboxing por `tenant_id` via conexão isolada). `infra/metabase/setup.py` — inicialização automatizada: admin account, conexões ClickHouse por tenant, 5 questions base (Sessões por Canal, Queue Events, Agent Performance, Usage Metering, Sentiment Timeline), dashboard "PlugHub Analytics" com grid de 5 cards. Acesso: http://localhost:3000 · admin@plughub.local.
 
-10. ~~**Config Management Module — separação env vars × configuração de módulo**~~: ✅ `packages/config-api/` com tabela PostgreSQL `platform_config (tenant_id, namespace, key, value JSONB, updated_at)` + API REST CRUD (`GET/PUT/DELETE /config/{namespace}/{key}`) + seed de todos os valores atuais hardcoded. Leitura com cache Redis (TTL 60s) para não adicionar latência no hot path. Fase 2: UI de visualização no operator-console.
+10. ~~**Config Management Module — separação env vars × configuração de módulo**~~: ✅ `packages/config-api/` com tabela PostgreSQL `platform_config (tenant_id, namespace, key, value JSONB, updated_at)` + API REST CRUD (`GET/PUT/DELETE /config/{namespace}/{key}`) + seed de todos os valores atuais hardcoded. Leitura com cache Redis (TTL 60s) para não adicionar latência no hot path. ~~Fase 2: UI de visualização no operator-console~~ ✅ `ConfigPanel.tsx` — sidebar de namespaces, tabela de keys com valores resolvidos, EditDrawer com JSON editor inline, scope toggle (global vs tenant), admin token local.
     - **Dois níveis**: `tenant_id = '__global__'` para defaults de plataforma; tenant real para overrides específicos. Lookup: tenant wins over global.
     - **8 namespaces seedados**: `sentiment` (thresholds, live_ttl_s), `routing` (snapshot_ttl_s, sla_default_ms, score_weights, estimated_wait_factor, congestion_sla_factor), `session` (ai_gateway_ttl_s, channel_gateway_ttl_s), `consumer` (batch_size, timeout_ms, restart_delay_s, max_restart_delay_s), `dashboard` (sse_interval_s, sse_retry_ms), `webchat` (auth_timeout_s, attachment_expiry_days, upload_limits_mb), `masking` (authorized_roles, default_retention_days, capture_input_default, capture_output_default), `quota` (max_concurrent_sessions, llm_tokens_daily, messages_daily).
     - **`ConfigStore`**: `get()` (cache hit → DB miss), `get_or_default()`, `list_namespace()` (com cache de namespace), `list_all()`, `set()` (upsert + invalidação imediata), `delete()`. Invalidação global faz SCAN para limpar variantes de tenant.
@@ -862,11 +1031,190 @@ Publicado pelo workflow-api em todos os status transitions. Consumido pelo Skill
 - Operator Console — painel de instâncias Workflow (WorkflowPanel.tsx): status filter, timeline, resume token, cancel action
 - Vite proxy configuration para `/v1/workflow` routes
 
-### Pendente (fase 2)
+### Collect Step — async multi-channel data collection
 
-- Skill Flow worker: mcpCall/aiGatewayCall com rotas HTTP reais (atualmente stubbed como HTTP pass-through)
-- Operator Console: integração com analytics-api para status tracking
-- E2E scenario 13 — trigger → execute → suspend → resume → complete (full end-to-end coverage)
+Novo step type `collect` no Skill Flow. Permite que um workflow entre em contato com um alvo (customer/agent/external) via qualquer canal, apresenta uma interação estruturada, e suspende até receber resposta ou expirar o prazo.
+
+```typescript
+// Flow definition
+{ type: "collect", id: "coletar_cpf",
+  target:        { type: "customer", id: "{{customer_id}}" },
+  channel:       "whatsapp",
+  interaction:   "form",
+  prompt:        "Por favor informe seu CPF",
+  fields:        [{ id: "cpf", label: "CPF", type: "text" }],
+  delay_hours:   0,            // envio imediato (ou scheduled_at para horário absoluto)
+  timeout_hours: 24,
+  business_hours: true,
+  campaign_id:   "camp_cobranca_jan",
+  output_as:     "cpf_response",
+  on_response:   { next: "processar_cpf" },
+  on_timeout:    { next: "escalar_sem_resposta" },
+}
+```
+
+#### Timing
+
+| Parâmetro | Descrição |
+|---|---|
+| `scheduled_at` | ISO-8601 absoluto — quando contatar o alvo |
+| `delay_hours` | Relativo: agora + N horas |
+| (nenhum) | Envio imediato |
+| `timeout_hours` | Quanto esperar pela resposta após o envio (business-hours-aware) |
+
+#### Correlação via collect_token
+
+O Skill Flow gera um UUID (`collect_token`) e o workflow-api o persiste no `collect_instances`. O channel-gateway lê o token nos metadados da sessão outbound e publica `collect.responded` ao fechar a sessão → workflow-api resume o workflow com `decision: "input"`.
+
+#### Campaign = N instâncias com mesmo campaign_id
+
+Não há entidade "campaign" separada. Um `campaign_id` é um agrupador livre em `workflow.instances` e `collect_instances`. A CampaignPanel do Operator Console agrega via `collect_events` no ClickHouse.
+
+#### Implementado
+
+- `packages/schemas/src/skill.ts` — `CollectTargetSchema`, `CollectStepSchema` (inclui scheduled_at, delay_hours, timeout_hours, business_hours, campaign_id)
+- `packages/schemas/src/workflow.ts` — `CollectStatusSchema`, `CollectRequestedSchema`, `CollectSentSchema`, `CollectRespondedSchema`, `CollectTimedOutSchema`, `CollectEventSchema`; `campaign_id` em `WorkflowInstanceSchema`
+- `packages/skill-flow-engine/src/steps/collect.ts` — executor com idempotência de dois estágios, resume path (input/timeout), wall-clock fallback
+- `packages/skill-flow-engine/src/executor.ts` — `persistCollect?` callback em `StepContext`, dispatch `case "collect"`
+- `packages/workflow-api/src/plughub_workflow_api/db.py` — tabela `workflow.collect_instances` + funções CRUD; `campaign_id` em `workflow.instances`
+- `packages/workflow-api/src/plughub_workflow_api/kafka_emitter.py` — `emit_collect_requested/sent/responded/timed_out` (topic `collect.events`)
+- `packages/workflow-api/src/plughub_workflow_api/config.py` — `collect_topic: str = "collect.events"`
+- `packages/workflow-api/src/plughub_workflow_api/router.py` — `POST /v1/workflow/instances/{id}/collect/persist`, `POST /v1/workflow/collect/respond`, `GET /v1/workflow/campaigns/{id}/collects`
+- `packages/workflow-api/src/plughub_workflow_api/timeout_job.py` — scanner de collect_instances expiradas → collect.timed_out + resume with decision=timeout
+- `packages/analytics-api/src/plughub_analytics_api/clickhouse.py` — tabelas `workflow_events` + `collect_events` (ReplacingMergeTree)
+- `packages/analytics-api/src/plughub_analytics_api/models.py` — `parse_workflow_event`, `parse_collect_event`
+- `packages/analytics-api/src/plughub_analytics_api/consumer.py` — topics `workflow.events` + `collect.events`
+- `packages/analytics-api/src/plughub_analytics_api/reports_query.py` — `query_workflows_report`, `query_campaigns_report` (com summary aggregado por campaign_id)
+- `packages/analytics-api/src/plughub_analytics_api/reports.py` — `GET /reports/workflows`, `GET /reports/campaigns`
+- `packages/operator-console/src/components/CampaignPanel.tsx` — painel de campanhas: summary cards com response rate, mini-bar de status, detail com KPIs + channel breakdown + collect event list
+- `packages/operator-console/src/api/campaign-hooks.ts` — `useCampaignData` hook (poll 30s)
+- `packages/operator-console/src/types/index.ts` — `CollectEvent`, `CampaignSummary`, `campaign_id` em `WorkflowInstance`
+- `packages/operator-console/src/components/Header.tsx` — botão "Campaigns" na nav
+- `packages/operator-console/src/App.tsx` — view `campaigns` + `CampaignPanel`
+
+#### Kafka topics
+
+| Topic | Producer | Consumer(s) |
+|---|---|---|
+| `collect.events` | workflow-api (collect endpoints + timeout scanner) | analytics-api → ClickHouse collect_events |
+
+#### Implementado (fase 2)
+
+- ~~Skill Flow worker: mcpCall/aiGatewayCall com rotas HTTP reais~~ ✅
+  - `mcpCall` → JSON-RPC `tools/call` com Authorization Bearer + MCP result unwrap
+  - `aiGatewayCall` → `POST /v1/reason` (URL corrigida de `/infer`)
+  - `persistCollect` → `POST /v1/workflow/instances/{id}/collect/persist` (novo callback)
+  - `SkillFlowEngineConfig` estendido com `persistCollect` opcional; wired no `makeContext`
+  - `WorkflowClient` + `config.ts` atualizados (`calendarApiUrl`, `mcpSessionToken`, `defaultTenantId`)
+  - `worker.ts`: `decision` aceita `"input"` para collect responses; `response_data` propagado como payload
+- ~~Operator Console — Config Management UI~~ ✅ (`packages/operator-console/src/components/ConfigPanel.tsx`)
+  - Sidebar de namespaces (8: sentiment, routing, session, consumer, dashboard, webchat, masking, quota)
+  - Tabela de keys com valor resolvido (tenant override wins over global)
+  - EditDrawer com JSON editor inline + validação + scope selector (global vs tenant)
+  - DELETE override (Reset) volta para o default global
+  - Admin token local (salvo em estado, nunca persisted) requerido para mutations
+  - `config-hooks.ts`: `useConfigAll`, `useConfigNamespace`, `putConfig`, `deleteConfig`
+  - Vite proxy: `/config` → `http://localhost:3600` (config-api)
+  - Botão "Config" (verde) adicionado na nav do Operator Console
+  - Build: 202 kB JS / 60 kB gzip
+- ~~E2E scenario 14~~ ✅ (collect step — ver tabela acima)
+
+## Agent Assist UI — `packages/agent-assist-ui/`
+
+React 18 + TypeScript + Vite. Porta de dev: 5173. Proxy: `/api` → mcp-server-plughub (3100), `/agent-ws` → WS mcp-server (3100), `/analytics` → analytics-api (3500).
+
+### Layout
+
+```
+┌─────────────────────────────────────────┐
+│  Header (agente, pool, sessão, SLA, WS) │
+├────────────────────┬────────────────────┤
+│  ChatArea (60%)    │  RightPanel (40%)  │
+├────────────────────┴────────────────────┤
+│  AgentInput + CloseModal trigger        │
+└─────────────────────────────────────────┘
+```
+
+### Fluxo de sessão
+
+1. UI abre em modo lobby (`wsSessionId=null`, conecta via `pool` no WS)
+2. `conversation.assigned` chega via `pool:events:{poolId}` → `setSessionId`, `fetchHistory`, atualiza URL
+3. Mensagens chegam por `message.text` WS events → adicionadas a `messages[]`
+4. Agente encerra → `handleClose` → POST `/api/agent_done/{sessionId}` → volta ao lobby
+5. Cliente desconecta → `session.closed` com `client_disconnect` → modal de encerramento pendente
+
+### Componentes
+
+| Componente | Responsabilidade |
+|---|---|
+| `Header` | Nome do agente, pool, session_id, status WS, SLA badge, timer de atendimento ao vivo |
+| `ChatArea` | Lista de mensagens + indicador de digitação AI + painel de sentimento ao vivo |
+| `AgentInput` | Input de texto, botão enviar, trigger do CloseModal |
+| `CloseModal` | issue_status, outcome, handoff_reason antes de chamar agent_done |
+| `RightPanel` | Tab container: Estado / Capacidades / Contexto / Histórico |
+| `ToastContainer` | Notificações temporárias e persistentes |
+
+### RightPanel — tabs
+
+| Tab | Conteúdo |
+|---|---|
+| `estado` | `EstadoTab` — sentimento (score, trend, alert), intent, SLA, flags |
+| `capacidades` | `CapacidadesTab` — suggested_agents + escalation suggestions |
+| `contexto` | `ContextoTab` — historical_insights (azul) + conversation_insights (roxo) |
+| `historico` | `HistoricoTab` — últimos 20 contatos fechados do cliente via analytics-api |
+
+### HistoricoTab — implementação
+
+- Hook `useCustomerHistory(customerId)` — fetch `GET /analytics/sessions/customer/{id}?tenant_id=VITE_TENANT_ID&limit=20`
+- Env vars: `VITE_ANALYTICS_URL` (default `/analytics`), `VITE_TENANT_ID` (default `tenant_demo`)
+- Re-busca automaticamente quando `customerId` muda
+- Cancela fetch anterior em cada re-render (cleanup via flag `cancelled`)
+- `HistoryRow` — expansível: summary (ícone de canal, badge de outcome, data, duração, close_reason) + detalhes (pool, canal, session_id)
+- Estado vazio quando `customerId === null` ("Cliente não identificado")
+- Graceful degradation: erro retorna `[]` com mensagem de erro não-bloqueante
+
+### Auto-reconexão WebSocket
+
+`useAgentWebSocket` — reconnect automático com delay de 3s em close inesperado:
+- `reconnectCount` state: incrementado por `ws.onclose` quando `!intentionalClose.current`
+- `intentionalClose` ref: setado no cleanup do useEffect (unmount ou mudança de dep)
+- Dependency array: `[sessionId ?? poolId, reconnectCount]` — reconecta ao bump de `reconnectCount`
+- Na reconexão, mcp-server entrega `pool:pending_assignment:{poolId}` (TTL 300s) para retomar sessão em andamento
+
+### Handle-time counter
+
+`Header.tsx` recebe `sessionStartedAt: Date | null` — prop passado de App.tsx quando `conversation.assigned` chega. `useEffect`/`setInterval` a cada 1s atualiza `handleMs = Date.now() - sessionStartedAt`. Formato: `M:SS` (< 1h) ou `H:MM:SS` (≥ 1h). Vira laranja após 30 minutos para alertar o agente. Resetado para `null` ao encerrar sessão em ambos os fluxos.
+
+### Renderização de mensagens `agents_only`
+
+**Backend fix** — `message_send` em `mcp-server/tools/session.ts` agora publica no canal Redis `agent:events:{session_id}` depois do XADD. Publicação ocorre para `visibility: "all"` e `"agents_only"` (não para arrays de participant_ids). O `author.type` no envelope WS é determinado consultando `{tenant_id}:agent:instance:{participant_id}` — se tiver `agent_type_id`, emite `"agent_ai"`, caso contrário `"agent_human"`. Entrega WS é best-effort (try/catch não-fatal).
+
+**Gap corrigido** — o bridge de orquestração só encaminhava `conversations.inbound` (mensagens do cliente). Com essa mudança, mensagens de agentes IA com `visibility: "all"` e notas internas com `visibility: "agents_only"` chegam ao agente humano em tempo real.
+
+**Frontend** — `ChatMessage.visibility?: string` e `WsMessageText.visibility?: string` adicionados em `types.ts`. `App.tsx` propaga `event.visibility` ao construir o `ChatMessage`. `MessageBubble.tsx` detecta `visibility === "agents_only"` e renderiza:
+- Background âmbar (`bg-amber-50`) com borda tracejada âmbar (`border-dashed border-amber-400`)
+- Badge "Interno" em âmbar antes do label do autor
+- Posicionado à esquerda (nunca à direita, independente do autor)
+
+### Menu de aprovação — renderização no chat (modo observação)
+
+`ChatMenuData` interface adicionada em `types.ts` com campos `menu_id`, `interaction`, `prompt`, `options?`, `fields?`. `ChatMessage.menuData?: ChatMenuData` adicionado — quando presente, `MessageBubble.tsx` delega para `MenuCard` em vez de renderizar um bubble normal.
+
+**`components/MenuCard.tsx`** (novo) — card read-only com badge de tipo de interação + label "IA → Cliente · observação". Renderizadores por tipo:
+
+| Tipo | Renderização |
+|---|---|
+| `text` | Prompt + indicador "Aguardando resposta em texto livre…" |
+| `button` | Chips com borda indigo arredondada, `disabled` |
+| `list` | Lista numerada com itens separados por linha, `disabled` |
+| `checklist` | Checkboxes com labels, todos `disabled` |
+| `form` | Campos `<input>` com label acima, `disabled` |
+
+**`App.tsx`** — evento `menu.render` agora popula `menuData` estruturado no lugar do texto plano com bullets. O campo `text` mantém o `prompt` como fallback para consumidores simples.
+
+**Modo substituição (futuro)** — todos os elementos interativos têm apenas `disabled`; ativar substitution mode requer remover o atributo + adicionar handler `POST /api/menu_submit/{sessionId}`.
+
+### Build: 566 kB JS / 164 kB gzip
 
 ## E2E test suite — scenarios
 
@@ -885,9 +1233,10 @@ Publicado pelo workflow-api em todos os status transitions. Consumido pelo Skill
 | 11 | `11_comparison_mode.ts` | comparison mode: ReplayContext.comparison_mode → evaluation_submit com comparison_turns → ComparisonReport (12 assertions) |
 | 12 | `12_webchat_channel.ts` | webchat channel: auth handshake WS, text message → Kafka, upload flow completo (upload.request→ready→HTTP→committed→msg.image), reconnect com cursor (14 assertions) |
 | 13 | `13_workflow_automation.ts` | workflow automation Arc 4: trigger → persist-suspend → resume (approved) → complete + cancel path (13 assertions) |
+| 14 | `14_collect_step.ts` | collect step Arc 4: trigger with campaign_id → persist-collect (token, send_at, expires_at, instance=suspended) → respond (elapsed_ms, workflow_resumed) → complete + campaign list (16 assertions) |
 | R  | `regressions.ts` | regression suite: ZodError em session_context_get, parsing de callTool (--regression flag) |
 
-Run with: `ts-node runner.ts --conference` or `ts-node runner.ts --only 06` or `ts-node runner.ts --only 12` or `ts-node runner.ts --webchat` or `ts-node runner.ts --workflow` or `ts-node runner.ts --only 13`
+Run with: `ts-node runner.ts --conference` or `ts-node runner.ts --only 06` or `ts-node runner.ts --only 12` or `ts-node runner.ts --webchat` or `ts-node runner.ts --workflow` or `ts-node runner.ts --only 13` or `ts-node runner.ts --collect` or `ts-node runner.ts --only 14`
 
 Scenario 06 covers two parts:
 - **Part A** — Conference happy path: primary agent busy → supervisor calls `agent_join_conference` → Redis `conference:*` keys verified → specialist `agent_done` with `conference_id` (session stays open) → primary `agent_done` closes session
