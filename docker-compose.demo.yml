@@ -14,10 +14,15 @@
 #   docker compose -f docker-compose.demo.yml down -v              # limpar ambiente
 #
 # Flags do runner (via E2E_EXTRA_ARGS):
-#   E2E_EXTRA_ARGS="--demo"          # todos os cenários 01–10 (padrão)
+#   E2E_EXTRA_ARGS="--demo"          # todos os cenários 01–14 (padrão)
 #   E2E_EXTRA_ARGS="--only 07"       # apenas cenário 07 (inbound full)
-#   E2E_EXTRA_ARGS="--only 08"       # apenas cenário 08 (outbound)
+#   E2E_EXTRA_ARGS="--only 12"       # apenas cenário 12 (webchat)
+#   E2E_EXTRA_ARGS="--only 13"       # apenas cenário 13 (workflow)
+#   E2E_EXTRA_ARGS="--only 14"       # apenas cenário 14 (collect step)
 #   E2E_EXTRA_ARGS="--conference"    # cenários 01–04 + 06
+#   E2E_EXTRA_ARGS="--webchat"       # cenários 01–04 + 12
+#   E2E_EXTRA_ARGS="--workflow"      # cenários 01–04 + 13 + 14
+#   E2E_EXTRA_ARGS="--collect"       # cenários 01–04 + 14
 #
 # Variáveis de ambiente requeridas (copie .env.demo.example → .env.demo):
 #   ANTHROPIC_API_KEY — necessária apenas se ai-gateway for usado em testes reais
@@ -32,6 +37,24 @@ volumes:
   kafka-data:
   postgres-data:
   redis-data:
+  clickhouse-data:
+  attachment-data:
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Agent Assist UI — testes manuais de atendimento humano
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# Sobe toda a stack de backend + Agent Assist UI, sem executar o e2e-runner:
+#   docker compose -f docker-compose.demo.yml up --build --scale e2e-runner=0
+#
+# Acesse a UI do agente em: http://localhost:5173
+#   - Parâmetros: ?pool=retencao_humano&agent=agente_retencao_humano_v1-001
+#   - Ou configure via ENV no serviço abaixo (VITE_DEFAULT_POOL / VITE_AGENT_ID)
+#
+# Observabilidade:
+#   - Kafdrop:          http://localhost:9001
+#   - Redis Commander:  http://localhost:8081
+#   - Webchat (cliente): http://localhost:8010 (canal do cliente)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Infra
@@ -135,7 +158,13 @@ services:
           gateway.heartbeat
           mcp.audit
           registry.changed
+          config.changed
           evaluation.events
+          usage.events
+          sentiment.updated
+          workflow.events
+          calendar.events
+          collect.events
         "
         for topic in $$TOPICS; do
           $$KAFKA --bootstrap-server $$BROKER --create --if-not-exists \
@@ -222,6 +251,12 @@ services:
         condition: service_completed_successfully
       agent-registry:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "pgrep -f python > /dev/null"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
     networks:
       - plughub-demo
     restart: on-failure
@@ -313,9 +348,370 @@ services:
         condition: service_healthy
       postgres:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "pgrep -f python > /dev/null"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
     networks:
       - plughub-demo
     restart: on-failure
+
+  usage-aggregator:
+    build:
+      context: packages/usage-aggregator
+      dockerfile: Dockerfile
+    environment:
+      KAFKA_BROKERS:  kafka:29092
+      KAFKA_GROUP_ID: usage-aggregator-demo
+      REDIS_URL:      redis://redis:6379
+      DATABASE_URL:   postgresql://plughub:plughub@postgres:5432/plughub_demo
+    depends_on:
+      kafka:
+        condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "pgrep -f python > /dev/null"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    networks:
+      - plughub-demo
+    restart: on-failure
+
+  clickhouse:
+    image: clickhouse/clickhouse-server:23.8
+    ports:
+      - "8123:8123"
+    environment:
+      CLICKHOUSE_DB:                       plughub_demo
+      CLICKHOUSE_USER:                     plughub
+      CLICKHOUSE_PASSWORD:                 plughub
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: 1
+    volumes:
+      - clickhouse-data:/var/lib/clickhouse
+    ulimits:
+      nofile: { soft: 262144, hard: 262144 }
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8123/ping 2>/dev/null | grep -q Ok"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 120s
+    networks:
+      - plughub-demo
+
+  analytics-api:
+    build:
+      context: .
+      dockerfile: packages/analytics-api/Dockerfile
+    ports:
+      - "3500:3500"
+    environment:
+      PLUGHUB_KAFKA_BROKERS:       kafka:29092
+      PLUGHUB_KAFKA_GROUP_ID:      analytics-demo
+      PLUGHUB_REDIS_URL:           redis://redis:6379
+      PLUGHUB_CLICKHOUSE_HOST:     clickhouse
+      PLUGHUB_CLICKHOUSE_PORT:     "8123"
+      PLUGHUB_CLICKHOUSE_USER:     plughub
+      PLUGHUB_CLICKHOUSE_PASSWORD: plughub
+      PLUGHUB_CLICKHOUSE_DATABASE: plughub_demo
+      PLUGHUB_ADMIN_JWT_SECRET:    demo_analytics_admin_secret
+    depends_on:
+      redis:
+        condition: service_healthy
+      clickhouse:
+        condition: service_started
+      kafka:
+        condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:3500/v1/health', timeout=3)\" 2>/dev/null && echo ok || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    networks:
+      - plughub-demo
+
+  config-api:
+    build:
+      context: .
+      dockerfile: packages/config-api/Dockerfile
+    ports:
+      - "3600:3600"
+    environment:
+      PLUGHUB_CONFIG_DATABASE_URL: postgresql://plughub:plughub@postgres:5432/plughub_demo
+      PLUGHUB_CONFIG_REDIS_URL:    redis://redis:6379
+      PLUGHUB_CONFIG_ADMIN_TOKEN:  demo_config_admin_token
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:3600/v1/health', timeout=3)\" 2>/dev/null && echo ok || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    restart: on-failure
+    networks:
+      - plughub-demo
+
+  config-seed:
+    build:
+      context: .
+      dockerfile: packages/config-api/Dockerfile
+    environment:
+      PLUGHUB_CONFIG_DATABASE_URL: postgresql://plughub:plughub@postgres:5432/plughub_demo
+      PLUGHUB_CONFIG_REDIS_URL:    redis://redis:6379
+    command: ["plughub-config-seed"]
+    depends_on:
+      config-api:
+        condition: service_healthy
+    networks:
+      - plughub-demo
+    restart: "no"
+
+  # Registra pools e agent types no agent-registry e escreve pool_configs no Redis.
+  # Roda uma vez na inicialização; idempotente — 409 → PUT para atualizar configuração.
+  demo-seed:
+    image: python:3.11-slim
+    volumes:
+      - ./infra/seed:/seed:ro
+    environment:
+      AGENT_REGISTRY_URL: http://agent-registry:3300
+      REDIS_URL:          redis://redis:6379
+      TENANT_ID:          tenant_demo
+    command: ["python", "/seed/seed.py"]
+    depends_on:
+      agent-registry:
+        condition: service_healthy
+      config-seed:
+        condition: service_completed_successfully
+    networks:
+      - plughub-demo
+    restart: "no"
+
+  pricing-api:
+    build:
+      context: .
+      dockerfile: packages/pricing-api/Dockerfile
+    ports:
+      - "3900:3900"
+    environment:
+      PLUGHUB_PRICING_DATABASE_URL:    postgresql://plughub:plughub@postgres:5432/plughub_demo
+      PLUGHUB_PRICING_CONFIG_API_URL:  http://config-api:3600
+      PLUGHUB_PRICING_ADMIN_TOKEN:     demo_pricing_admin_token
+    depends_on:
+      postgres:
+        condition: service_healthy
+      config-api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:3900/health', timeout=3)\" 2>/dev/null && echo ok || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    restart: on-failure
+    networks:
+      - plughub-demo
+
+  channel-gateway:
+    build:
+      context: .
+      dockerfile: packages/channel-gateway/Dockerfile
+    ports:
+      - "8010:8010"
+    environment:
+      PLUGHUB_KAFKA_BROKERS:            kafka:29092
+      PLUGHUB_REDIS_URL:                redis://redis:6379
+      PLUGHUB_JWT_SECRET:               changeme_32chars_webchat_secret!
+      PLUGHUB_WS_AUTH_TIMEOUT_S:        "30"
+      PLUGHUB_STORAGE_ROOT:             /var/plughub/attachments
+      PLUGHUB_ATTACHMENT_EXPIRY_DAYS:   "7"
+      PLUGHUB_DATABASE_URL:             postgresql://plughub:plughub@postgres:5432/plughub_demo
+      PLUGHUB_WEBCHAT_SERVING_BASE_URL: http://localhost:8010/webchat/v1/attachments
+      PLUGHUB_WEBCHAT_UPLOAD_BASE_URL:  http://localhost:8010/webchat/v1/upload
+      PLUGHUB_TENANT_ID:                tenant_demo
+      PLUGHUB_KAFKA_TOPIC_INBOUND:      conversations.inbound
+      PLUGHUB_KAFKA_TOPIC_OUTBOUND:     conversations.outbound
+      PLUGHUB_KAFKA_TOPIC_EVENTS:       conversations.events
+    volumes:
+      - attachment-data:/var/plughub/attachments
+    depends_on:
+      redis:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:8010/health', timeout=3)\" 2>/dev/null && echo ok || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    networks:
+      - plughub-demo
+
+  calendar-api:
+    build:
+      context: .
+      dockerfile: packages/calendar-api/Dockerfile
+    ports:
+      - "3700:3700"
+    environment:
+      PLUGHUB_CALENDAR_DATABASE_URL:  postgresql://plughub:plughub@postgres:5432/plughub_demo
+      PLUGHUB_CALENDAR_REDIS_URL:     redis://redis:6379
+      PLUGHUB_CALENDAR_KAFKA_BROKERS: kafka:29092
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:3700/v1/health', timeout=3)\" 2>/dev/null && echo ok || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    restart: on-failure
+    networks:
+      - plughub-demo
+
+  workflow-api:
+    build:
+      context: packages/workflow-api
+      dockerfile: Dockerfile
+    ports:
+      - "3800:3800"
+    environment:
+      PLUGHUB_WORKFLOW_DATABASE_URL:     postgresql://plughub:plughub@postgres:5432/plughub_demo
+      PLUGHUB_WORKFLOW_REDIS_URL:        redis://redis:6379
+      PLUGHUB_WORKFLOW_KAFKA_BROKERS:    kafka:29092
+      PLUGHUB_WORKFLOW_KAFKA_TOPIC:      workflow.events
+      PLUGHUB_WORKFLOW_CALENDAR_API_URL: http://calendar-api:3700
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
+      calendar-api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:3800/v1/health', timeout=3)\" 2>/dev/null && echo ok || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    restart: on-failure
+    networks:
+      - plughub-demo
+
+  skill-flow-worker:
+    build:
+      context: .
+      dockerfile: packages/skill-flow-worker/Dockerfile
+    environment:
+      KAFKA_BROKERS:    kafka:29092
+      REDIS_URL:        redis://redis:6379
+      WORKFLOW_API_URL: http://workflow-api:3800
+      MCP_SERVER_URL:   http://mcp-server-plughub:3100
+      AI_GATEWAY_URL:   http://ai-gateway:3200
+    depends_on:
+      kafka:
+        condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
+      workflow-api:
+        condition: service_healthy
+      mcp-server-plughub:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "pgrep -f node > /dev/null"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    restart: on-failure
+    networks:
+      - plughub-demo
+
+  # Orchestrator Bridge — consumes conversations.routed from Kafka and publishes
+  # conversation.assigned to Redis pub/sub pool:events:{poolId}.
+  # Required for human agents: without this service, routed contacts never appear
+  # in the Agent Assist UI.
+  orchestrator-bridge:
+    build:
+      context: .
+      dockerfile: packages/orchestrator-bridge/Dockerfile
+    volumes:
+      # Declarative registry config — RegistrySyncer reads this at startup and
+      # upserts pools + agent types into the Agent Registry automatically.
+      # No external seed script needed for a fresh environment.
+      - ./infra/registry:/registry:ro
+    environment:
+      KAFKA_BROKERS:        kafka:29092
+      REDIS_URL:            redis://redis:6379
+      SKILL_FLOW_URL:       http://skill-flow-service:3400
+      AGENT_REGISTRY_URL:   http://agent-registry:3300
+      BOOTSTRAP_TENANT_IDS: tenant_demo
+      REGISTRY_CONFIG_DIR:  /registry
+    depends_on:
+      kafka:
+        condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+      agent-registry:
+        condition: service_healthy
+      skill-flow-service:
+        condition: service_healthy
+    restart: on-failure
+    networks:
+      - plughub-demo
+
+  agent-assist-ui:
+    build:
+      context: .
+      dockerfile: packages/agent-assist-ui/Dockerfile
+    ports:
+      - "5173:5173"
+    environment:
+      # Pool e agent type padrão exibidos na UI ao abrir sem query params
+      VITE_DEFAULT_POOL:   retencao_humano
+      VITE_TENANT_ID:      tenant_demo
+    depends_on:
+      mcp-server-plughub:
+        condition: service_healthy
+      analytics-api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:5173/ > /dev/null 2>&1 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+    networks:
+      - plughub-demo
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Observability
@@ -358,26 +754,39 @@ services:
       context: .
       dockerfile: packages/e2e-tests/Dockerfile
     environment:
-      MCP_SERVER_URL:     http://mcp-server-plughub:3100
-      AGENT_REGISTRY_URL: http://agent-registry:3300
-      SKILL_FLOW_URL:     http://skill-flow-service:3400
-      RULES_ENGINE_URL:   http://rules-engine:3201
-      AI_GATEWAY_URL:     http://ai-gateway:3200
-      REDIS_URL:          redis://redis:6379
-      KAFKA_BROKERS:      kafka:29092
-      TENANT_ID:          tenant_demo
-      JWT_SECRET:         demo_plughub_secret_32chars__
-      E2E_REPORT_PATH:    /app/e2e-report.json
-      # Mude para --only 07, --only 08, --conference, etc.
-      E2E_EXTRA_ARGS:     ${E2E_EXTRA_ARGS:---demo}
+      MCP_SERVER_URL:           http://mcp-server-plughub:3100
+      AGENT_REGISTRY_URL:       http://agent-registry:3300
+      SKILL_FLOW_URL:           http://skill-flow-service:3400
+      RULES_ENGINE_URL:         http://rules-engine:3201
+      AI_GATEWAY_URL:           http://ai-gateway:3200
+      CHANNEL_GATEWAY_WS_URL:   ws://channel-gateway:8010
+      CHANNEL_GATEWAY_HTTP_URL: http://channel-gateway:8010
+      WORKFLOW_API_URL:         http://workflow-api:3800
+      CALENDAR_API_URL:         http://calendar-api:3700
+      ANALYTICS_API_URL:        http://analytics-api:3500
+      REDIS_URL:                redis://redis:6379
+      KAFKA_BROKERS:            kafka:29092
+      TENANT_ID:                tenant_demo
+      JWT_SECRET:               demo_plughub_secret_32chars__
+      E2E_REPORT_PATH:          /app/e2e-report.json
+      # Mude para --only 07, --only 08, --conference, --webchat, --workflow, --collect, etc.
+      E2E_EXTRA_ARGS:           ${E2E_EXTRA_ARGS:---demo}
     depends_on:
       mcp-server-plughub:
         condition: service_healthy
       agent-registry:
         condition: service_healthy
+      routing-engine:
+        condition: service_healthy
       skill-flow-service:
         condition: service_healthy
       rules-engine:
+        condition: service_healthy
+      channel-gateway:
+        condition: service_healthy
+      workflow-api:
+        condition: service_healthy
+      analytics-api:
         condition: service_healthy
     networks:
       - plughub-demo

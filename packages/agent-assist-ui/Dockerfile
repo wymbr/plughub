@@ -8,7 +8,7 @@ RUN npm install
 COPY packages/agent-assist-ui/ ./
 RUN npm run build
 
-# ── Runtime: nginx with WebSocket + REST proxy to mcp-server-plughub ─────────
+# ── Runtime: nginx with WebSocket + REST proxy ───────────────────────────────
 FROM nginx:alpine
 
 COPY --from=builder /app/packages/agent-assist-ui/dist /usr/share/nginx/html
@@ -36,6 +36,15 @@ RUN printf 'server {\n\
         proxy_set_header   Host $host;\n\
         proxy_buffering    off;\n\
         proxy_read_timeout 3600s;\n\
+    }\n\
+\n\
+    # Analytics API: /analytics/* → analytics-api:3500/*\n\
+    location /analytics/ {\n\
+        proxy_pass         http://analytics-api:3500/;\n\
+        proxy_http_version 1.1;\n\
+        proxy_set_header   Host $host;\n\
+        proxy_buffering    off;\n\
+        proxy_read_timeout 60s;\n\
     }\n\
 \n\
     # SPA fallback\n\
