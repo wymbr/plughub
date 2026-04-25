@@ -26,16 +26,20 @@
 
 import type { MenuStep } from "@plughub/schemas"
 import type { StepContext, StepResult } from "../executor"
+import { interpolate } from "../interpolate"
 
 export async function executeMenu(
   step: MenuStep,
   ctx:  StepContext
 ): Promise<StepResult> {
   // 1. Enviar prompt ao cliente via notification_send
+  //    Interpola {{$.pipeline_state.*}} antes de enviar — permite que o prompt
+  //    use valores calculados em steps anteriores (ex: pergunta gerada por reason).
+  const resolvedPrompt = interpolate(step.prompt, ctx)
   try {
     await ctx.mcpCall("notification_send", {
       session_id: ctx.sessionId,
-      message:    step.prompt,
+      message:    resolvedPrompt,
       channel:    "session",
       menu: step.interaction !== "text" ? {
         interaction: step.interaction,

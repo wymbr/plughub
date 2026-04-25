@@ -8,6 +8,9 @@
 
 import express, { Request, Response } from "express"
 import Redis from "ioredis"
+import * as fs   from "fs"
+import * as path from "path"
+import * as yaml from "js-yaml"
 import { Client } from "@modelcontextprotocol/sdk/client/index.js"
 import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js"
 import { SkillFlowEngine } from "@plughub/skill-flow-engine"
@@ -19,6 +22,14 @@ const PORT           = parseInt(process.env["PORT"]           ?? "3400", 10)
 const REDIS_URL      = process.env["REDIS_URL"]               ?? "redis://localhost:6379"
 const MCP_SERVER_URL = process.env["MCP_SERVER_URL"]          ?? "http://localhost:3100"
 const AI_GATEWAY_URL = process.env["AI_GATEWAY_URL"]          ?? "http://localhost:3200"
+
+// SKILLS_DIR: resolved relative to this file's location at runtime.
+// Default: packages/skill-flow-engine/skills (dev) or /app/skills (Docker).
+const _defaultSkillsDir = path.resolve(__dirname, "../../../../skill-flow-engine/skills")
+const SKILLS_DIR = process.env["SKILLS_DIR"] ?? _defaultSkillsDir
+
+// DELEGATION_JOB_TTL_S: how long the delegation Redis key lives (1h).
+const DELEGATION_JOB_TTL_S = 3600
 
 // ── Redis ─────────────────────────────────────────────────────────────────────
 
@@ -248,6 +259,192 @@ app.get("/pipeline/:tenant_id/:session_id", async (req: Request, res: Response) 
   }
 })
 
+// ── Skill YAML loader ─────────────────────────────────────────────────────────
+
+function loadSkillFlow(skillId: string): SkillFlow | null {
+  const filePath = path.join(SKILLS_DIR, `${skillId}.yaml`)
+  try {
+    const content = fs.readFileSync(filePath, "utf-8")
+    return yaml.load(content) as SkillFlow
+  } catch {
+    console.warn(`[skill-flow-service] Skill YAML not found: ${filePath}`)
+    return null
+  }
+}
+
+// ── Delegation job executor (background) ─────────────────────────────────────
+
+async function runDelegationJob(params: {
+  jobId:           string
+  tenantId:        string
+  sessionId:       string   // parent session — used for comms (notify, menu)
+  customerId:      string
+  targetSkill:     string
+  pipelineContext: Record<string, unknown>
+}): Promise<void> {
+  const { jobId, tenantId, sessionId, customerId, targetSkill, pipelineContext } = params
+  const jobKey        = `${tenantId}:delegation:${jobId}`
+  // Derive an isolated pipeline session id for the specialist so it doesn't
+  // conflict with the primary agent's execution lock on the same session_id.
+  const pipelineSessionId = `${sessionId}--assist--${jobId.slice(0, 8)}`
+
+  const updateJob = async (fields: Record<string, unknown>) => {
+    try {
+      const current = await redis.get(jobKey)
+      const existing = current ? JSON.parse(current) as Record<string, unknown> : {}
+      await redis.set(jobKey, JSON.stringify({ ...existing, ...fields }), "EX", DELEGATION_JOB_TTL_S)
+    } catch { /* non-fatal */ }
+  }
+
+  try {
+    await updateJob({ status: "running", started_at: new Date().toISOString() })
+
+    // Load skill flow
+    const flow = loadSkillFlow(targetSkill)
+    if (!flow) {
+      await updateJob({ status: "failed", error: `Skill '${targetSkill}' not found in ${SKILLS_DIR}` })
+      return
+    }
+
+    // Pre-seed the specialist's pipeline state with parent context so it can
+    // read existing contact_context (if any) without re-collecting already-known data.
+    if (Object.keys(pipelineContext).length > 0) {
+      const seedState = {
+        flow_id:         targetSkill,
+        current_step_id: flow.entry,
+        status:          "in_progress",
+        started_at:      new Date().toISOString(),
+        updated_at:      new Date().toISOString(),
+        results:         pipelineContext,
+        retry_counters:  {},
+        transitions:     [],
+      }
+      await redis.set(
+        `${tenantId}:pipeline:${pipelineSessionId}`,
+        JSON.stringify(seedState),
+        "EX",
+        86400,
+      )
+    }
+
+    // Run the skill flow engine.
+    // sessionId  = parent session — notifications and menus route to the parent channel.
+    // pipelineSessionId = derived — exclusive lock/state for the specialist.
+    const result = await engine.run({
+      tenantId,
+      sessionId,               // comms → parent channel
+      pipelineSessionId,       // state/lock → isolated
+      customerId,
+      skillId:        targetSkill,
+      flow,
+      sessionContext: {
+        tenant_id:          tenantId,
+        session_id:         sessionId,
+        pipeline_session_id: pipelineSessionId,
+        agent_type:         targetSkill,
+        delegation_mode:    "assist",
+      },
+      instanceId: `assist-${jobId.slice(0, 8)}`,
+    })
+
+    if ("error" in result) {
+      await updateJob({ status: "failed", error: result.error })
+      return
+    }
+
+    // Merge contact_context from specialist back into parent pipeline state.
+    // The parent is blocked in polling; this write is safe (no race).
+    //
+    // agente_contexto_ia_v1 stores output_as: contexto_final, so the contact_context
+    // lives at specialistResults.contexto_final.contact_context — not at the top level.
+    // Also check top-level as fallback for other specialist skills.
+    const specialistResults = result.pipeline_state.results
+    const contextoFinal = specialistResults["contexto_final"] as Record<string, unknown> | undefined
+    const contactContextValue =
+      contextoFinal?.["contact_context"] ??
+      specialistResults["contact_context"]
+
+    if (contactContextValue) {
+      const parentKey = `${tenantId}:pipeline:${sessionId}`
+      try {
+        const parentRaw = await redis.get(parentKey)
+        if (parentRaw) {
+          const parentState = JSON.parse(parentRaw) as Record<string, unknown>
+          const parentResults = (parentState["results"] as Record<string, unknown>) ?? {}
+          // Write contact_context at top level so supervisor_state can find it easily
+          parentResults["contact_context"] = contactContextValue
+          parentState["results"] = parentResults
+          parentState["updated_at"] = new Date().toISOString()
+          await redis.set(parentKey, JSON.stringify(parentState), "EX", 86400)
+          console.log(`[skill-flow-service] delegation ${jobId}: merged contact_context into parent pipeline`)
+        }
+      } catch (mergeErr) {
+        console.warn(`[skill-flow-service] delegation ${jobId}: failed to merge contact_context:`, mergeErr)
+      }
+    } else {
+      console.warn(`[skill-flow-service] delegation ${jobId}: no contact_context found in specialist results (keys: ${Object.keys(specialistResults).join(", ")})`)
+    }
+
+    await updateJob({
+      status:       "completed",
+      outcome:      result.outcome,
+      result:       specialistResults,
+      completed_at: new Date().toISOString(),
+    })
+    console.log(`[skill-flow-service] delegation ${jobId}: completed (outcome=${result.outcome})`)
+
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    console.error(`[skill-flow-service] delegation ${jobId} failed:`, message)
+    await updateJob({ status: "failed", error: message, failed_at: new Date().toISOString() })
+  }
+}
+
+// POST /delegate
+// Body: { job_id, tenant_id, session_id, customer_id, target_skill, pipeline_context? }
+// Returns immediately: { job_id, status: "accepted" }
+// Background: runs the target skill as a specialist and updates Redis job key.
+app.post("/delegate", (req: Request, res: Response) => {
+  const {
+    job_id,
+    tenant_id,
+    session_id,
+    customer_id,
+    target_skill,
+    pipeline_context,
+  } = req.body as {
+    job_id:            string
+    tenant_id:         string
+    session_id:        string
+    customer_id:       string
+    target_skill:      string
+    pipeline_context?: Record<string, unknown>
+  }
+
+  if (!job_id || !tenant_id || !session_id || !customer_id || !target_skill) {
+    res.status(400).json({
+      error: "BAD_REQUEST",
+      message: "job_id, tenant_id, session_id, customer_id, and target_skill are required",
+    })
+    return
+  }
+
+  // Respond immediately — do not await the job
+  res.json({ job_id, status: "accepted" })
+
+  // Fire background execution (non-blocking)
+  runDelegationJob({
+    jobId:           job_id,
+    tenantId:        tenant_id,
+    sessionId:       session_id,
+    customerId:      customer_id,
+    targetSkill:     target_skill,
+    pipelineContext: pipeline_context ?? {},
+  }).catch(err => {
+    console.error("[skill-flow-service] delegation background error:", err)
+  })
+})
+
 // ── Start ─────────────────────────────────────────────────────────────────────
 
 app.listen(PORT, () => {
@@ -255,4 +452,5 @@ app.listen(PORT, () => {
   console.log(`[skill-flow-service] Redis:       ${REDIS_URL}`)
   console.log(`[skill-flow-service] MCP server:  ${MCP_SERVER_URL}`)
   console.log(`[skill-flow-service] AI gateway:  ${AI_GATEWAY_URL}`)
+  console.log(`[skill-flow-service] Skills dir:  ${SKILLS_DIR}`)
 })

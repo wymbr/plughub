@@ -26,6 +26,8 @@ import { registerExternalAgentTools } from "./tools/external-agent"
 import type { ExternalAgentDeps }     from "./tools/external-agent"
 import { registerOperationalTools }  from "./tools/operational"
 import type { OperationalDeps }      from "./tools/operational"
+import { registerDelegationTools }  from "./tools/delegation"
+import type { DelegationDeps }      from "./tools/delegation"
 import { createRedisClient }       from "./infra/redis"
 import { createKafkaProducer }     from "./infra/kafka"
 import { createRegistryClient }    from "./infra/registry-client"
@@ -78,6 +80,12 @@ export function createServer(allDeps?: AllDeps): McpServer {
 
   const operationalDeps: OperationalDeps = { redis }
 
+  const delegationDeps: DelegationDeps = {
+    redis,
+    skillFlowUrl: process.env["SKILL_FLOW_URL"]   ?? "http://localhost:3400",
+    tenantId:     process.env["PLUGHUB_TENANT_ID"] ?? process.env["TENANT_ID"] ?? "tenant_demo",
+  }
+
   // Registrar todas as tools
   registerBpmTools(server, bpmDeps)
   registerRuntimeTools(server, runtimeDeps)
@@ -86,6 +94,7 @@ export function createServer(allDeps?: AllDeps): McpServer {
   registerEvaluationTools(server, evalDeps)
   registerExternalAgentTools(server, externalAgentDeps)
   registerOperationalTools(server, operationalDeps)
+  registerDelegationTools(server, delegationDeps)
 
   return server
 }
@@ -429,6 +438,11 @@ export async function startServer(config: ServerConfig): Promise<void> {
     registerEvaluationTools(mcpServer, sharedEvalDeps)
     registerExternalAgentTools(mcpServer, sharedExternalAgentDeps)
     registerOperationalTools(mcpServer, { redis })
+    registerDelegationTools(mcpServer, {
+      redis,
+      skillFlowUrl: process.env["SKILL_FLOW_URL"]    ?? "http://localhost:3400",
+      tenantId:     process.env["PLUGHUB_TENANT_ID"]  ?? process.env["TENANT_ID"] ?? "tenant_demo",
+    })
 
     transports.set(transport.sessionId, transport)
 
@@ -486,13 +500,81 @@ export async function startServer(config: ServerConfig): Promise<void> {
         else if (delta < -0.1) trend = "declining"
       }
 
+      // Read tenant_id and historical context from session meta
+      let tenantId   = ""
+      let ctxInsights: unknown[] = []
+      try {
+        const metaRaw = await redis.get(`session:${sessionId}:meta`)
+        if (metaRaw) {
+          const meta = JSON.parse(metaRaw) as Record<string, string>
+          tenantId = meta["tenant_id"] ?? ""
+        }
+      } catch { /* non-fatal */ }
+
+      if (tenantId) {
+        try {
+          const ctxRaw = await redis.get(`${tenantId}:session:${sessionId}:context`)
+          if (ctxRaw) {
+            const ctx = JSON.parse(ctxRaw) as Record<string, unknown>
+            ctxInsights = (ctx["historical_insights"] as unknown[]) ?? []
+          }
+        } catch { /* non-fatal */ }
+      }
+
+      // Read contact_context from pipeline_state (written by agente_contexto_ia_v1)
+      // Path: results.acumular_contexto.contexto_final.contact_context
+      let contactContext: Record<string, unknown> | null = null
+      if (tenantId) {
+        try {
+          const pipelineRaw = await redis.get(`${tenantId}:pipeline:${sessionId}`)
+          if (pipelineRaw) {
+            const pipeline = JSON.parse(pipelineRaw) as Record<string, unknown>
+            const results  = pipeline["results"] as Record<string, unknown> | undefined
+            if (results) {
+              // 1. Top-level contact_context (direct merge)
+              if (results["contact_context"] && typeof results["contact_context"] === "object") {
+                contactContext = results["contact_context"] as Record<string, unknown>
+              } else {
+                // 2. results.acumular_contexto.contexto_final.contact_context
+                const acumularCtx = results["acumular_contexto"] as Record<string, unknown> | undefined
+                const contextoFinalNested = acumularCtx?.["contexto_final"] as Record<string, unknown> | undefined
+                if (contextoFinalNested?.["contact_context"] && typeof contextoFinalNested["contact_context"] === "object") {
+                  contactContext = contextoFinalNested["contact_context"] as Record<string, unknown>
+                } else {
+                  // 3. Deep search: two levels into all result values
+                  outerLoop:
+                  for (const val of Object.values(results)) {
+                    if (val && typeof val === "object") {
+                      const nested = val as Record<string, unknown>
+                      if (nested["contact_context"] && typeof nested["contact_context"] === "object") {
+                        contactContext = nested["contact_context"] as Record<string, unknown>
+                        break
+                      }
+                      for (const innerVal of Object.values(nested)) {
+                        if (innerVal && typeof innerVal === "object") {
+                          const inner = innerVal as Record<string, unknown>
+                          if (inner["contact_context"] && typeof inner["contact_context"] === "object") {
+                            contactContext = inner["contact_context"] as Record<string, unknown>
+                            break outerLoop
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        } catch { /* non-fatal */ }
+      }
+
       res.json({
         session_id:   sessionId,
         turn_count:   turns.length,
         is_stale:     false,
         sentiment: {
           current:    currentSentiment,
-          trajectory: trajectory.slice(0, -1), // exclude the current partial from trajectory display
+          trajectory: trajectory.slice(0, -1),
           trend,
           alert:      currentSentiment < -0.5,
         },
@@ -509,8 +591,10 @@ export async function startServer(config: ServerConfig): Promise<void> {
           breach_imminent: false,
         },
         customer_context: {
-          historical_insights:   [],
-          conversation_insights: [],
+          historical_insights:   ctxInsights,
+          conversation_insights: turns
+            .flatMap((t: Record<string, unknown>) => (t["insights"] as unknown[]) ?? []),
+          contact_context: contactContext,
         },
       })
     } catch {
@@ -812,7 +896,28 @@ export async function startServer(config: ServerConfig): Promise<void> {
     ws.on("message", async (raw: Buffer) => {
       try {
         const msg = JSON.parse(raw.toString()) as Record<string, unknown>
-        if (msg["type"] !== "message.text") return  // ignore pong, etc.
+        // Pong from the Agent Assist UI heartbeat loop (every 15s) — translate to
+        // agent_heartbeat so the routing engine renews the instance TTL (30s).
+        // Without this, the instance expires and the agent becomes invisible to routing.
+        if (msg["type"] === "pong" && poolId) {
+          const tenantId   = process.env["PLUGHUB_TENANT_ID"] ?? "tenant_demo"
+          const instanceId = `human-${poolId}`
+          kafka.publish("agent.lifecycle", {
+            event:                   "agent_heartbeat",
+            tenant_id:               tenantId,
+            instance_id:             instanceId,
+            agent_type_id:           `human_agent_${poolId}`,
+            status:                  "ready",
+            execution_model:         "stateful",
+            current_sessions:        subscribedSessions.size,
+            pools:                   [poolId],
+            max_concurrent_sessions: 10,
+            timestamp:               new Date().toISOString(),
+          }).catch(() => {/* non-fatal */})
+          return
+        }
+
+        if (msg["type"] !== "message.text") return  // ignore other unknown types
 
         // session_id is required in every outbound message.
         const targetSessionId = typeof msg["session_id"] === "string" ? msg["session_id"] : ""
@@ -917,11 +1022,13 @@ export async function startServer(config: ServerConfig): Promise<void> {
       console.log(`   Transporte: SSE`)
       console.log(`   Endpoint:   http://${config.host}:${config.port}/sse`)
       console.log(`   Agent WS:   ws://${config.host}:${config.port}/agent/ws`)
-      console.log(`   Tools BPM:        conversation_start, conversation_status, conversation_end, rule_dry_run, notification_send, conversation_escalate`)
+      console.log(`   Tools BPM:          conversation_start, conversation_status, conversation_end, rule_dry_run, notification_send, conversation_escalate`)
       console.log(`   Tools Runtime:       agent_login, agent_ready, agent_busy, agent_done, agent_pause, agent_logout, insight_register`)
       console.log(`   Tools Supervisor:    supervisor_state, supervisor_capabilities, agent_join_conference`)
       console.log(`   Tools Evaluation:    transcript_get, evaluation_context_resolve, evaluation_publish`)
       console.log(`   Tools ExternalAgent: invoke, wait_for_assignment, send_message, wait_for_message`)
+      console.log(`   Tools Delegation:    agent_delegate, agent_delegate_status`)
+      console.log(`   SKILL_FLOW_URL:      ${process.env["SKILL_FLOW_URL"] ?? "http://localhost:3400 (padrão — configure SKILL_FLOW_URL para Docker)"}`)
       resolve()
     })
   })

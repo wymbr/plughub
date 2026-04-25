@@ -236,43 +236,200 @@ Never create circular dependencies. `schemas` never depends on any other package
 | **Rules Engine** | Post-routing event evaluation. Publishes consequences. No routing, no Redis polling. |
 | **Skill Flow Engine** | Flow interpreter. Persists pipeline_state to Redis on every step. |
 
-## Instance Bootstrap — configuration-driven agent registration
+## Instance Bootstrap — reconciliation-driven agent instance management
 
 Implemented in `packages/orchestrator-bridge/src/plughub_orchestrator_bridge/instance_bootstrap.py`.
 
-**Principle**: billing is per configured instance → Agent Registry is the source of truth.
-The bridge reads all active AgentTypes at startup and registers exactly the configured
-number of instances (`max_concurrent_sessions` slots per type) in Redis.
+**Principle**: Agent Registry is the single source of truth. The Bootstrap operates as a
+**reconciliation controller** (Kubernetes-style): it compares *desired state* (Registry)
+with *actual state* (Redis) and applies only the minimum diff to converge them.
+No restart needed for any configuration change — the controller self-heals.
 
-### Startup flow
+### Reconciliation algorithm
 
 ```
-Bridge startup → InstanceBootstrap.run_once()
-  → GET /v1/agent-types  (all active types for the tenant)
-  → for each AgentType where framework != "human":
-      for n in range(max_concurrent_sessions):
-        instance_id = f"{agent_type_id}-{n+1:03d}"
-        write {tenant}:instance:{instance_id}  status=ready  TTL=35s
-        add to {tenant}:pool:{pool_id}:instances
-  → for each pool: write {tenant}:pool_config:{pool_id}  TTL=24h
+reconcile(tenant_id):
+  # Section A — Agent instances
+  agent_types    = GET /v1/agent-types
+  registry_pools = GET /v1/pools          ← single call, all pools
+  desired        = build_desired_state(agent_types, registry_pools)
+  actual         = scan {tenant}:instance:* from Redis
 
-Heartbeat loop (every 15s) → renews TTL for ready instances
-  → if registry.changed received: re-runs full bootstrap
+  diff:
+    to_create  → write instance key + SADD pool SET
+    to_delete  → status=ready: DELETE + SREM  |  status=busy: mark draining=True
+    to_update  → status=ready: update payload  |  status=busy: mark pending_update=True
+    to_renew   → EXPIRE only (payload identical, TTL refresh)
+
+  sync pool:*:instances SETs
+
+  # Section B — Pools
+  for each pool in registry_pools:
+    if pool_config key missing or content diverged → SET pool_config:{pool_id}
+    else → EXPIRE only (renew TTL)
+
+  for each pool_config:* key in Redis NOT in registry_pools:
+    DELETE pool_config:{pool_id}
+    if pool:{pool_id}:instances SET is empty → DELETE it too
+
+  sync {tenant}:pools global SET (+adds, -removes)
 ```
+
+### Trigger points
+
+| Trigger | Action |
+|---|---|
+| Bridge startup | `reconcile()` — full diff + apply; logs ReconciliationReport |
+| Heartbeat every 15s | `_heartbeat_tick()` — TTL renewal + drain/pending_update processing |
+| Every 5 min (periodic) | `reconcile()` — auto-healing of any drift |
+| `registry.changed` (Kafka) | `reconcile()` — immediate after signal |
+| `config.changed` namespace=`quota` (Kafka) | `reconcile()` — quota limits changed, may affect instance count |
+
+### Dry-run (audit without applying)
+
+```python
+report = await bootstrap.dry_run("tenant_demo")
+print(report.summary())
+# tenant=tenant_demo created=2 deleted=1 drained=0 updated=1 renewed=7 unchanged=0 errors=0 (45ms)
+```
+
+### ReconciliationReport fields
+
+Instances: `created`, `deleted`, `drained`, `updated`, `renewed`, `unchanged`
+
+Pools: `pools_written` (created or updated), `pools_removed` (deleted from Redis), `pools_set_sync` (IDs added/removed from `{tenant}:pools` SET)
+
+Common: `errors`, `duration_ms`, `dry_run`
 
 ### Rules
 
-- Human agents are NOT bootstrapped — login is user-initiated via Agent Assist UI.
-- Busy/paused instances have their TTL renewed without state change.
-- Idempotent: re-running does not create duplicates.
-- Instance IDs follow the pattern `{agent_type_id}-{n+1:03d}` (e.g. `agente_demo_ia_v1-001`).
+- Human agents are NOT managed — login is user-initiated via Agent Assist UI.
+- Busy/paused instances are never hard-deleted; they receive `draining=True` or `pending_update=True` and are processed by the heartbeat after the session ends.
+- Idempotent: reconciling N times produces the same result as reconciling once.
+- Instance IDs: `{agent_type_id}-{n+1:03d}` (e.g. `agente_demo_ia_v1-001`).
+- `channel_types` on instances = union of `channel_types` from all associated pools.
+
+### RegistrySyncer — YAML as single source of truth for PostgreSQL
+
+Implemented in `packages/orchestrator-bridge/src/plughub_orchestrator_bridge/registry_syncer.py`.
+Runs BEFORE InstanceBootstrap at bridge startup. Reads `infra/registry/*.yaml` and:
+
+1. **Upserts** pools and agent_types via Agent Registry REST API (POST → 201 created, 409 → PATCH)
+2. **Prunes** stale agent_types not declared in YAML (`REGISTRY_SYNC_PRUNE=true`, default)
+   - Lists all agent_types via `GET /v1/agent-types` and DELETEs any not present in the YAML
+   - DELETE publishes `registry.changed` to Kafka → InstanceBootstrap cleans up Redis automatically
+   - Set `REGISTRY_SYNC_PRUNE=false` to disable (multi-tenant environments with external agent registrations)
+
+A fresh environment is fully self-configuring from YAML alone. Stale entries from old seeds or manual API calls are removed automatically on every startup — making DROP TABLE unnecessary.
 
 ### Impact on seed
 
-`infra/seed/seed.py` no longer writes Redis instance keys or pool instance sets — those
-are handled exclusively by InstanceBootstrap. The seed only:
-1. Registers pools and agent types in the Agent Registry API (PostgreSQL)
-2. Writes pool configs and the global pools set to Redis (static admin data)
+`infra/seed/seed.py` no longer writes Redis instance keys, pool instance sets, pool_config
+keys, or the `{tenant}:pools` SET — all of those are handled exclusively by InstanceBootstrap.
+The seed only registers pools and agent types in the Agent Registry API (PostgreSQL).
+
+## Context-Aware Progressive Resolution
+
+Padrão para coleta e acumulação inteligente de dados do cliente ao longo da sessão.
+Evita re-coletar dados já presentes com confiança suficiente.
+
+### ContactContext (`@plughub/schemas/contact-context.ts`)
+
+Schema em `packages/schemas/src/contact-context.ts`. Armazenado em `pipeline_state.contact_context`.
+
+Cada campo é um `ContactContextField`:
+```typescript
+{ value: string, confidence: number, source: ContactContextSource, resolved_at?: string }
+```
+
+**Fontes (ContactContextSource):**
+| Source | Descrição |
+|---|---|
+| `pipeline_state` | Herdado de agente anterior na mesma sessão |
+| `insight_historico` | Memória de longo prazo (contatos anteriores) |
+| `insight_conversa` | Gerado na sessão atual por outro step |
+| `mcp_call` | Consultado via MCP tool (CRM, billing, etc.) |
+| `customer_input` | Fornecido diretamente pelo cliente nesta sessão |
+| `ai_inferred` | Inferido pelo AI Gateway a partir da conversa |
+
+**Modelo de confiança:**
+| Range | Significado |
+|---|---|
+| 0.9–1.0 | Confirmado explicitamente — usar sem confirmação |
+| 0.7–0.9 | Inferido com alta certeza — usar sem confirmação |
+| 0.4–0.7 | Incerto — confirmar se `force_confirmation = true` |
+| 0.0–0.4 | Desconhecido — coletar novamente |
+
+**Campos:**
+`customer_id`, `cpf`, `account_id`, `nome`, `telefone`, `email`, `motivo_contato`,
+`intencao_primaria`, `sentimento_atual`, `resumo_conversa`, `resolucoes_tentadas[]`,
+`dados_crm` (raw MCP payload), `campos_ausentes[]`, `campos_incertos[]`, `completeness_score`
+
+### agente_contexto_ia_v1
+
+Pool: `contexto_ia` (role: specialist — sem tráfego direto de clientes).
+Skill: `packages/skill-flow-engine/skills/agente_contexto_ia_v1.yaml`.
+
+**Invocação:** via `task` step com `mode: assist` + `execution_mode: sync` em qualquer agente especialista.
+
+**Fluxo interno:**
+```
+avaliar_contexto (reason) → verifica pipeline_state atual, detecta gaps, define strategy
+  strategy=completo      → montar_contexto (sem coletar nada)
+  strategy=buscar_crm    → buscar_crm (invoke: mcp-server-crm customer_get) → avaliar_apos_crm
+  strategy=coletar       → gerar_pergunta (reason: pergunta consolidada) → coletar_cliente (menu)
+                           → extrair_campos (reason: extrai campos estruturados) → montar_contexto
+  strategy=confirmar     → confirmar_incertos (reason: mensagem de confirmação) → aguardar_confirmacao
+                           → processar_confirmacao → montar_contexto
+montar_contexto (reason) → consolida todas as fontes, calcula completeness_score
+finalizar (complete)     → contact_context disponível em pipeline_state
+```
+
+**Garantias:**
+- Nunca pergunta ao cliente o que já está com `confidence ≥ 0.8`
+- Gera uma única pergunta consolidada (não formulário campo por campo)
+- Busca CRM automaticamente antes de perguntar ao cliente
+- Nunca bloqueia o fluxo — `on_failure` sempre avança (`finalizar_parcial`)
+
+### Propagação entre agentes
+
+O `contact_context` é propagado via `pipeline_state` em toda a cadeia:
+```
+agente_sac_ia_v1
+  → acumular_contexto (task assist: agente_contexto_ia_v1)
+  → analisar (reason: usa contact_context para personalizar resposta)
+  → escalar (context: pipeline_state) → agente_retencao_humano_v1
+      → painel direito do Agent Assist UI exibe contact_context
+      → co-pilot (Fase 2) usa contact_context para sugestões mais precisas
+```
+
+### Adicionando context-awareness a um novo agente especialista
+
+```yaml
+# Após a saudação, antes de qualquer step que dependa de dados do cliente:
+- id: acumular_contexto
+  type: task
+  target:
+    skill_id: agente_contexto_ia_v1
+  mode: assist
+  execution_mode: sync
+  on_success: proximo_step
+  on_failure: proximo_step   # nunca bloquear
+```
+
+### Fase 2 — Co-pilot (próxima iteração)
+
+Durante sessão do agente humano, AI Gateway analisa cada mensagem do cliente em background
+usando `contact_context` e popula a aba "Capacidades" do Agent Assist UI com:
+- Sugestão de resposta personalizada
+- Flags de risco (sentimento, intenção detectada)
+- Ações recomendadas com base no `motivo_contato`
+
+### Fase 3 — Step `resolve` nativo (futuro)
+
+Novo step type no `skill-flow-engine` que encapsula a lógica do `agente_contexto_ia_v1`
+de forma declarativa, permitindo que qualquer agente defina seus pré-requisitos de contexto
+inline no YAML sem depender de um agente externo.
 
 ## Channel vs Medium
 
@@ -381,7 +538,8 @@ adapter. Skill Flow always receives a single normalised `interaction_result`.
 | `rules.escalation_triggered` | Rules Engine | Routing Engine |
 | `rules.notification_triggered` | Rules Engine | Core |
 | `rules.session_tagged` | Rules Engine | Agent Registry |
-| `registry.changed` | Agent Registry | Routing Engine, Core |
+| `registry.changed` | Agent Registry | Routing Engine, Core, orchestrator-bridge |
+| `config.changed` | Config API | orchestrator-bridge, routing-engine |
 | `gateway.heartbeat` | Channel Gateway | Routing Engine |
 | `agent.done` | Routing Engine | Rules Engine, Analytics |
 | `queue.position_updated` | Routing Engine | Channel Gateway, Analytics |
@@ -925,6 +1083,12 @@ Editáveis por tenant via ConfigPanel do Operator Console (namespace `pricing`).
     - **Dois níveis**: `tenant_id = '__global__'` para defaults de plataforma; tenant real para overrides específicos. Lookup: tenant wins over global.
     - **8 namespaces seedados**: `sentiment` (thresholds, live_ttl_s), `routing` (snapshot_ttl_s, sla_default_ms, score_weights, estimated_wait_factor, congestion_sla_factor), `session` (ai_gateway_ttl_s, channel_gateway_ttl_s), `consumer` (batch_size, timeout_ms, restart_delay_s, max_restart_delay_s), `dashboard` (sse_interval_s, sse_retry_ms), `webchat` (auth_timeout_s, attachment_expiry_days, upload_limits_mb), `masking` (authorized_roles, default_retention_days, capture_input_default, capture_output_default), `quota` (max_concurrent_sessions, llm_tokens_daily, messages_daily).
     - **`ConfigStore`**: `get()` (cache hit → DB miss), `get_or_default()`, `list_namespace()` (com cache de namespace), `list_all()`, `set()` (upsert + invalidação imediata), `delete()`. Invalidação global faz SCAN para limpar variantes de tenant.
+    - **`config.changed` (Kafka)**: Config API publica no tópico `config.changed` após cada PUT/DELETE bem-sucedido. Payload: `{event, tenant_id, namespace, key, operation, updated_at}`. Consumidores roteiam por namespace:
+      | Namespace | Consumidor | Reação |
+      |---|---|---|
+      | `quota` | orchestrator-bridge | `bootstrap.request_refresh()` — reconcilia instâncias |
+      | `routing` | routing-engine (futuro) | invalida cache local de SLA/scoring |
+      | `masking`, `session`, `webchat`, `sentiment`, `consumer`, `dashboard` | (cache Redis 60s) | sem ação imediata; propagação natural via TTL |
     - Tests: `test_store.py` (27 assertions — TestConfigCache, TestConfigStoreGet, TestConfigStoreSet, TestConfigStoreDelete, TestConfigStoreList, TestSeedData).
 
 **Arquitetura de dados:**
@@ -1234,9 +1398,11 @@ React 18 + TypeScript + Vite. Porta de dev: 5173. Proxy: `/api` → mcp-server-p
 | 12 | `12_webchat_channel.ts` | webchat channel: auth handshake WS, text message → Kafka, upload flow completo (upload.request→ready→HTTP→committed→msg.image), reconnect com cursor (14 assertions) |
 | 13 | `13_workflow_automation.ts` | workflow automation Arc 4: trigger → persist-suspend → resume (approved) → complete + cancel path (13 assertions) |
 | 14 | `14_collect_step.ts` | collect step Arc 4: trigger with campaign_id → persist-collect (token, send_at, expires_at, instance=suspended) → respond (elapsed_ms, workflow_resumed) → complete + campaign list (16 assertions) |
+| 15 | `15_instance_bootstrap.ts` | instance bootstrap: Agent Registry → Redis instance keys (status=ready, TTL>0, source=bootstrap, channel_types), pool SET completeness, pool_config cache (--bootstrap flag) |
+| 16 | `16_live_reconciliation.ts` | live reconciliation: POST new AgentType to Registry → await registry.changed → verify new instances appear in Redis ≤30 s, status=ready, source=bootstrap, TTL>0, pool SET updated (--reconcile flag) |
 | R  | `regressions.ts` | regression suite: ZodError em session_context_get, parsing de callTool (--regression flag) |
 
-Run with: `ts-node runner.ts --conference` or `ts-node runner.ts --only 06` or `ts-node runner.ts --only 12` or `ts-node runner.ts --webchat` or `ts-node runner.ts --workflow` or `ts-node runner.ts --only 13` or `ts-node runner.ts --collect` or `ts-node runner.ts --only 14`
+Run with: `ts-node runner.ts --conference` or `ts-node runner.ts --only 06` or `ts-node runner.ts --only 12` or `ts-node runner.ts --webchat` or `ts-node runner.ts --workflow` or `ts-node runner.ts --only 13` or `ts-node runner.ts --collect` or `ts-node runner.ts --only 14` or `ts-node runner.ts --bootstrap` or `ts-node runner.ts --only 15` or `ts-node runner.ts --reconcile` or `ts-node runner.ts --only 16`
 
 Scenario 06 covers two parts:
 - **Part A** — Conference happy path: primary agent busy → supervisor calls `agent_join_conference` → Redis `conference:*` keys verified → specialist `agent_done` with `conference_id` (session stays open) → primary `agent_done` closes session

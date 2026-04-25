@@ -37,18 +37,34 @@ export async function executeTask(
       ? String(JSONPath({ path: step.target.skill_id, json: evalContext as object, wrap: false }) ?? step.target.skill_id)
       : step.target.skill_id
 
-    const delegateResult = await ctx.mcpCall("agent_delegate", {
-      session_id:    ctx.sessionId,
-      target_skill:  skillId,
-      payload: {
-        customer_id:      ctx.customerId,
-        pipeline_step:    step.id,
-        pipeline_context: ctx.state.results,
-      },
-      delegation_mode: "silent",
-    }) as { job_id: string; status: string }
+    let delegateResult: { job_id: string; status: string }
+    try {
+      delegateResult = await ctx.mcpCall("agent_delegate", {
+        session_id:    ctx.sessionId,
+        target_skill:  skillId,
+        payload: {
+          customer_id:      ctx.customerId,
+          pipeline_step:    step.id,
+          pipeline_context: ctx.state.results,
+        },
+        delegation_mode: "silent",
+      }) as { job_id: string; status: string }
+    } catch (err) {
+      // Tool not registered or MCP error — fail gracefully instead of crashing engine
+      console.error(
+        `[task] agent_delegate failed for step "${step.id}" (skill=${skillId}):`,
+        err instanceof Error ? err.message : String(err)
+      )
+      return {
+        next_step_id:      step.on_failure,
+        output_as:         step.id,
+        output_value:      { error: "agent_delegate_error", detail: err instanceof Error ? err.message : String(err) },
+        transition_reason: "on_failure",
+      }
+    }
 
     jobId = delegateResult.job_id
+    console.log(`[task] delegation started: step="${step.id}" job_id=${jobId} skill=${skillId}`)
 
     // Persistir job_id ANTES do polling — garante retomada sem re-delegação
     await ctx.setJobId(step.id, jobId)
@@ -72,27 +88,46 @@ async function executeTaskSync(
   ctx:   StepContext,
   jobId: string,
 ): Promise<StepResult> {
+  console.log(`[task] polling sync: step="${step.id}" job_id=${jobId} max_attempts=${POLL_MAX_ATTEMPTS}`)
+
   for (let attempt = 0; attempt < POLL_MAX_ATTEMPTS; attempt++) {
     await sleep(POLL_INTERVAL_MS)
 
-    const pollResult = await ctx.mcpCall("agent_delegate_status", {
-      job_id:     jobId,
-      session_id: ctx.sessionId,
-    }) as { status: string; outcome?: string; result?: unknown }
+    let pollResult: { status: string; outcome?: string; result?: unknown }
+    try {
+      pollResult = await ctx.mcpCall("agent_delegate_status", {
+        job_id:     jobId,
+        session_id: ctx.sessionId,
+      }) as { status: string; outcome?: string; result?: unknown }
+    } catch (err) {
+      console.error(
+        `[task] agent_delegate_status error attempt=${attempt + 1} job_id=${jobId}:`,
+        err instanceof Error ? err.message : String(err)
+      )
+      // On transient poll error, continue (don't abort entire delegation)
+      continue
+    }
+
+    if (attempt === 0 || attempt % 5 === 0 || pollResult.status !== "queued") {
+      console.log(`[task] poll attempt=${attempt + 1}/${POLL_MAX_ATTEMPTS} job_id=${jobId} status=${pollResult.status}`)
+    }
 
     if (pollResult.status === "completed") {
       await ctx.clearJobId(step.id)
+      console.log(`[task] delegation completed: step="${step.id}" job_id=${jobId} outcome=${pollResult.outcome}`)
       return makeCompletedResult(step, pollResult)
     }
 
     if (pollResult.status === "failed") {
       await ctx.clearJobId(step.id)
+      console.error(`[task] delegation failed: step="${step.id}" job_id=${jobId}`)
       return makeFailedResult(step, jobId)
     }
     // status === "queued" | "running" → continuar polling
   }
 
   // Timeout de polling — tratar como falha (job_id permanece para debug)
+  console.error(`[task] delegation poll timeout after ${POLL_MAX_ATTEMPTS} attempts: step="${step.id}" job_id=${jobId}`)
   return {
     next_step_id:      step.on_failure,
     output_as:         step.id,

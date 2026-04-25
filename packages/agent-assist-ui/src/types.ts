@@ -127,9 +127,31 @@ export interface InsightItem {
   turn?: number;
 }
 
+// ── Contact Context (enriched by agente_contexto_ia_v1 before escalation) ────
+
+export interface ContactContextField {
+  value: string;
+  confidence: number;
+  source: string;
+}
+
+export interface ContactContextData {
+  nome?:               ContactContextField;
+  cpf?:                ContactContextField;
+  account_id?:         ContactContextField;
+  telefone?:           ContactContextField;
+  email?:              ContactContextField;
+  motivo_contato?:     ContactContextField;
+  intencao_primaria?:  ContactContextField;
+  sentimento_atual?:   ContactContextField;
+  resumo_conversa?:    ContactContextField;
+  completeness_score?: number;
+}
+
 export interface CustomerContext {
   historical_insights: InsightItem[];
   conversation_insights: InsightItem[];
+  contact_context?: ContactContextData;
 }
 
 export interface SupervisorState {

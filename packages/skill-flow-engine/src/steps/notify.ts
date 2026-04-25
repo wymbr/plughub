@@ -18,9 +18,7 @@
 
 import type { NotifyStep } from "@plughub/schemas"
 import type { StepContext, StepResult } from "../executor"
-
-/** Regex para interpolação dinâmica: {{$.pipeline_state.campo}} */
-const INTERPOLATION_REGEX = /\{\{([\$\.][^}]+)\}\}/g
+import { interpolate } from "../interpolate"
 
 export async function executeNotify(
   step: NotifyStep,
@@ -36,7 +34,7 @@ export async function executeNotify(
     }
   }
 
-  const message = interpolateMessage(step.message, ctx)
+  const message = interpolate(step.message, ctx)
 
   // ── Fase 1: gravar sentinel "dispatched" antes de enviar ─────────────────
   ctx.state = {
@@ -72,18 +70,3 @@ export async function executeNotify(
   }
 }
 
-/**
- * Interpola referências dinâmicas na mensagem.
- * {{$.pipeline_state.protocolo}} → valor do pipeline_state
- */
-function interpolateMessage(template: string, ctx: StepContext): string {
-  return template.replace(INTERPOLATION_REGEX, (_, path: string) => {
-    const parts = path.replace(/^\$\./, "").split(".")
-    let current: unknown = { pipeline_state: ctx.state.results, session: ctx.sessionContext }
-    for (const part of parts) {
-      if (current == null || typeof current !== "object") return ""
-      current = (current as Record<string, unknown>)[part]
-    }
-    return current != null ? String(current) : ""
-  })
-}

@@ -107,14 +107,21 @@ export class SkillFlowEngine {
    * Retomada após falha:
    *   Se pipeline_state existe com status "in_progress", retoma do
    *   current_step_id — nunca reinicia do entry.
+   *
+   * pipelineSessionId (opcional — assist mode):
+   *   Quando um agente especialista é invocado via task step (mode: assist),
+   *   ele usa o session_id do pai para comunicações (notify/menu vão ao canal
+   *   correto) mas um pipeline state isolado para evitar conflito de lock com
+   *   o agente primário que está em polling.
+   *   Se omitido, pipeline state e comms usam o mesmo session_id.
    */
   async run(params: {
-    tenantId:       string
-    sessionId:      string
-    customerId:     string
-    skillId:        string
-    flow:           SkillFlow
-    sessionContext: Record<string, unknown>
+    tenantId:          string
+    sessionId:         string
+    customerId:        string
+    skillId:           string
+    flow:              SkillFlow
+    sessionContext:    Record<string, unknown>
     /**
      * Identificador da instância do Routing Engine alocada para esta execução.
      * Armazenado no execution lock para que:
@@ -122,7 +129,13 @@ export class SkillFlowEngine {
      *   2. O lock só seja liberado/renovado pela instância que o adquiriu.
      * Se omitido (retrocompatibilidade), usa "unknown".
      */
-    instanceId?:    string
+    instanceId?:       string
+    /**
+     * Override para o pipeline state key — usado no modo assist para que o
+     * especialista use o session_id do pai para comms mas tenha pipeline
+     * state isolado. Padrão: igual a sessionId.
+     */
+    pipelineSessionId?: string
     /**
      * Arc 4 — Resume context. When set, the engine is resuming a suspended workflow.
      * The suspend step reads this instead of suspending again.
@@ -130,24 +143,27 @@ export class SkillFlowEngine {
     resumeContext?: ResumeContext
   }): Promise<RunResult> {
     const { tenantId, sessionId, customerId, skillId, flow, sessionContext } = params
-    const instanceId   = params.instanceId   ?? "unknown"
-    const resumeContext = params.resumeContext
+    const instanceId        = params.instanceId        ?? "unknown"
+    const pipelineSessionId = params.pipelineSessionId ?? sessionId
+    const resumeContext     = params.resumeContext
 
     // ── Idempotência: tenta adquirir lock exclusivo ───────────────────────
-    const lockAcquired = await this.stateManager.acquireLock(tenantId, sessionId, instanceId)
+    const lockAcquired = await this.stateManager.acquireLock(tenantId, pipelineSessionId, instanceId)
     if (!lockAcquired) {
       // Outra instância está executando — reportar o job ativo
-      const activeState = await this.stateManager.get(tenantId, sessionId)
+      const activeState = await this.stateManager.get(tenantId, pipelineSessionId)
       const activeJobId = this._findActiveJobId(activeState)
       return { error: "PRECONDITION_FAILED", active_job_id: activeJobId ?? "unknown" }
     }
 
     try {
-      return await this._execute({ tenantId, sessionId, customerId, skillId, flow, sessionContext, instanceId,
-        ...(resumeContext ? { resumeContext } : {}) })
+      return await this._execute({
+        tenantId, sessionId, pipelineSessionId, customerId, skillId, flow, sessionContext, instanceId,
+        ...(resumeContext ? { resumeContext } : {}),
+      })
     } finally {
       // Libera apenas se ainda somos o titular do lock
-      await this.stateManager.releaseLock(tenantId, sessionId, instanceId)
+      await this.stateManager.releaseLock(tenantId, pipelineSessionId, instanceId)
     }
   }
 
@@ -156,26 +172,27 @@ export class SkillFlowEngine {
   // ─────────────────────────────────────────────
 
   private async _execute(params: {
-    tenantId:       string
-    sessionId:      string
-    customerId:     string
-    skillId:        string
-    flow:           SkillFlow
-    sessionContext: Record<string, unknown>
-    instanceId:     string
-    resumeContext?: ResumeContext
+    tenantId:          string
+    sessionId:         string
+    pipelineSessionId: string
+    customerId:        string
+    skillId:           string
+    flow:              SkillFlow
+    sessionContext:    Record<string, unknown>
+    instanceId:        string
+    resumeContext?:    ResumeContext
   }): Promise<RunResult> {
-    const { tenantId, sessionId, customerId, skillId, flow, sessionContext, instanceId, resumeContext } = params
+    const { tenantId, sessionId, pipelineSessionId, customerId, skillId, flow, sessionContext, instanceId, resumeContext } = params
 
-    // 1. Retomar ou iniciar pipeline
-    let state = await this.stateManager.get(tenantId, sessionId)
+    // 1. Retomar ou iniciar pipeline (usa pipelineSessionId para state isolation)
+    let state = await this.stateManager.get(tenantId, pipelineSessionId)
 
     if (state?.status === "in_progress") {
       // Retomada após falha do orquestrador — continua do current_step_id
     } else {
       // Novo pipeline — inicia do entry
       state = PipelineStateManager.create(skillId, flow.entry)
-      await this.stateManager.save(tenantId, sessionId, state)
+      await this.stateManager.save(tenantId, pipelineSessionId, state)
     }
 
     // Construir mapa de steps para lookup O(1)
@@ -185,12 +202,16 @@ export class SkillFlowEngine {
     while (true) {
       const currentStep = stepMap.get(state.current_step_id)
       if (!currentStep) {
-        await this.stateManager.fail(tenantId, sessionId, state)
+        await this.stateManager.fail(tenantId, pipelineSessionId, state)
         throw new Error(`Step não encontrado: ${state.current_step_id}`)
       }
 
       // Construir contexto de execução
-      const ctx = this._buildContext(tenantId, sessionId, customerId, sessionContext, state, stepMap, instanceId, resumeContext)
+      // sessionId → usado para comms (notify, menu, MCP calls)
+      // pipelineSessionId → usado para state/lock
+      const ctx = this._buildContext(
+        tenantId, sessionId, pipelineSessionId, customerId, sessionContext, state, stepMap, instanceId, resumeContext
+      )
 
       // Executar step
       const result = await executeStep(currentStep, ctx)
@@ -208,14 +229,14 @@ export class SkillFlowEngine {
           state, currentStep.id, "__complete__", result.transition_reason
         )
         const completedState = { ...state, status: "completed" as const }
-        await this.stateManager.complete(tenantId, sessionId, state)
+        await this.stateManager.complete(tenantId, pipelineSessionId, state)
         return { outcome: result.outcome ?? "resolved", pipeline_state: completedState }
       }
 
       // Aguardando task assíncrona (execution_mode: async)
       if (result.next_step_id === "__awaiting_task__") {
         const awaitingState = { ...state, status: "completed" as const }
-        await this.stateManager.complete(tenantId, sessionId, state)
+        await this.stateManager.complete(tenantId, pipelineSessionId, state)
         return { outcome: "awaiting_task", pipeline_state: awaitingState }
       }
 
@@ -224,14 +245,14 @@ export class SkillFlowEngine {
       // iniciem um novo pipeline em vez de retomar do step escalar.
       if (result.next_step_id === "__awaiting_escalation__") {
         const escalatedState = { ...state, status: "completed" as const }
-        await this.stateManager.complete(tenantId, sessionId, state)
+        await this.stateManager.complete(tenantId, pipelineSessionId, state)
         return { outcome: "escalated_human", pipeline_state: escalatedState }
       }
 
       // Arc 4: fluxo suspenso aguardando sinal externo
       if (result.next_step_id === "__suspended__") {
         const suspendedState = { ...state, status: "suspended" as const }
-        await this.stateManager.save(tenantId, sessionId, suspendedState)
+        await this.stateManager.save(tenantId, pipelineSessionId, suspendedState)
         return { outcome: "suspended", pipeline_state: suspendedState }
       }
 
@@ -241,7 +262,7 @@ export class SkillFlowEngine {
       )
 
       // Persistir ANTES de executar o próximo step (garante retomada correta)
-      await this.stateManager.save(tenantId, sessionId, state)
+      await this.stateManager.save(tenantId, pipelineSessionId, state)
     }
   }
 
@@ -250,20 +271,21 @@ export class SkillFlowEngine {
   // ─────────────────────────────────────────────
 
   private _buildContext(
-    tenantId:       string,
-    sessionId:      string,
-    customerId:     string,
-    sessionContext: Record<string, unknown>,
-    state:          PipelineState,
-    stepMap:        Map<string, SkillFlow["steps"][number]>,
-    instanceId:     string,
-    resumeContext?: ResumeContext,
+    tenantId:          string,
+    sessionId:         string,
+    pipelineSessionId: string,
+    customerId:        string,
+    sessionContext:    Record<string, unknown>,
+    state:             PipelineState,
+    stepMap:           Map<string, SkillFlow["steps"][number]>,
+    instanceId:        string,
+    resumeContext?:    ResumeContext,
   ): StepContext {
     const self = this
 
     const ctx: StepContext = {
       tenantId,
-      sessionId,
+      sessionId,         // used by notify/menu/MCP calls — always the comms session
       customerId,
       sessionContext,
       state,
@@ -277,7 +299,8 @@ export class SkillFlowEngine {
 
       saveState: async (s) => {
         ctx.state = s
-        await self.stateManager.save(tenantId, sessionId, s)
+        // state persisted under pipelineSessionId (may differ from sessionId in assist mode)
+        await self.stateManager.save(tenantId, pipelineSessionId, s)
       },
 
       retryStep: async (stepId) => {
@@ -311,17 +334,18 @@ export class SkillFlowEngine {
         } satisfies StepResult
       },
 
+      // Job ID operations use pipelineSessionId for isolation in assist mode
       getJobId: (stepId) =>
-        self.stateManager.getJobId(tenantId, sessionId, stepId),
+        self.stateManager.getJobId(tenantId, pipelineSessionId, stepId),
 
       setJobId: (stepId, jobId) =>
-        self.stateManager.setJobId(tenantId, sessionId, stepId, jobId),
+        self.stateManager.setJobId(tenantId, pipelineSessionId, stepId, jobId),
 
       clearJobId: (stepId) =>
-        self.stateManager.clearJobId(tenantId, sessionId, stepId),
+        self.stateManager.clearJobId(tenantId, pipelineSessionId, stepId),
 
       renewLock: (ttlSeconds) =>
-        self.stateManager.renewLock(tenantId, sessionId, instanceId, ttlSeconds),
+        self.stateManager.renewLock(tenantId, pipelineSessionId, instanceId, ttlSeconds),
 
       // Arc 4 — wired only when caller provides persistSuspend
       ...(self.config.persistSuspend

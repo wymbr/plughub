@@ -454,3 +454,22 @@ export type {
   TenantTier,
   TenantConfig,
 } from "./agent-registry"
+
+// ── ContactContext — context-aware progressive resolution ────────────────────
+export {
+  ContactContextSourceSchema,
+  ContactContextFieldSchema,
+  ContactContextCrmDataSchema,
+  ContactContextSchema,
+  ContextRequirementSchema,
+  ContextResolutionRequestSchema,
+} from "./contact-context"
+
+export type {
+  ContactContextSource,
+  ContactContextField,
+  ContactContextCrmData,
+  ContactContext,
+  ContextRequirement,
+  ContextResolutionRequest,
+} from "./contact-context"

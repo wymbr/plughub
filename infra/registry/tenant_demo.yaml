@@ -1,0 +1,158 @@
+# infra/registry/tenant_demo.yaml
+#
+# Declaração completa do ambiente demo para o tenant_demo.
+# Lido pelo RegistrySyncer no startup do orchestrator-bridge.
+#
+# Regras:
+#   - pools são imutáveis após criação (estruturais — 409 é ignorado silenciosamente)
+#   - agent_types são upsert (POST → 409 → PATCH para corrigir pools/permissões)
+#   - Esta é a única fonte de verdade de configuração — não edite direto no banco
+#
+# Alterações aqui são aplicadas automaticamente no próximo restart do
+# orchestrator-bridge, sem precisar de seed manual.
+
+tenant_id: tenant_demo
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Pools
+# ─────────────────────────────────────────────────────────────────────────────
+
+pools:
+
+  - pool_id: demo_ia
+    description: "Pool IA — entry point do fluxo IVR com botões (agente_demo_ia_v1)"
+    channel_types: [webchat, whatsapp]
+    sla_target_ms: 480000
+
+  - pool_id: sac_ia
+    description: "Pool IA — atendimento SAC via LLM (Claude)"
+    channel_types: [webchat, whatsapp]
+    sla_target_ms: 480000
+
+  - pool_id: fila_humano
+    description: "Pool intermediário — fila para agente humano"
+    channel_types: [webchat, whatsapp]
+    sla_target_ms: 300000
+
+  - pool_id: retencao_humano
+    description: "Pool de agentes humanos — retenção e suporte especializado"
+    channel_types: [webchat, whatsapp]
+    sla_target_ms: 300000
+
+  - pool_id: avaliacao_ia
+    # IMPORTANTE: este pool NÃO deve estar na cadeia de roteamento ao vivo.
+    # Apenas agentes de avaliação pós-sessão devem ser registrados aqui.
+    description: "Pool exclusivo para avaliação pós-sessão — sem tráfego ao vivo"
+    channel_types: [webchat, whatsapp]
+    sla_target_ms: 600000
+
+  - pool_id: contexto_ia
+    # IMPORTANTE: pool de agentes especialistas em acumulação de contexto.
+    # Invocados via task step (mode: assist) — sem tráfego direto de clientes.
+    # Qualquer agente especialista pode invocar este pool para enriquecer
+    # o contact_context antes de iniciar seu atendimento.
+    description: "Pool de agentes especialistas em context-aware progressive resolution"
+    channel_types: [webchat, whatsapp]
+    sla_target_ms: 30000
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Agent Types
+# ─────────────────────────────────────────────────────────────────────────────
+
+agent_types:
+
+  # IVR de entrada — botões, sem LLM
+  - agent_type_id: agente_demo_ia_v1
+    framework: plughub-native
+    execution_model: stateless
+    role: executor
+    max_concurrent_sessions: 10
+    pools: [demo_ia]
+    skills: []
+    permissions:
+      - mcp-server-plughub:agent_heartbeat
+      - mcp-server-plughub:notification_send
+      - mcp-server-plughub:conversation_escalate
+      - mcp-server-plughub:interaction_request
+    capabilities:
+      channels: webchat,whatsapp
+
+  # SAC via LLM (Claude)
+  - agent_type_id: agente_sac_ia_v1
+    framework: plughub-native
+    execution_model: stateless
+    role: executor
+    max_concurrent_sessions: 10
+    pools: [sac_ia]
+    skills: []
+    permissions:
+      - mcp-server-plughub:agent_heartbeat
+      - mcp-server-plughub:notification_send
+      - mcp-server-plughub:conversation_escalate
+      - mcp-server-plughub:interaction_request
+    capabilities:
+      channels: webchat,whatsapp
+      llm: "true"
+
+  # Agente de fila — mantém o cliente esperando e escala para humano
+  - agent_type_id: agente_fila_v1
+    framework: plughub-native
+    execution_model: stateless
+    role: executor
+    max_concurrent_sessions: 50
+    pools: [fila_humano]
+    skills: []
+    permissions:
+      - mcp-server-plughub:agent_heartbeat
+      - mcp-server-plughub:notification_send
+      - mcp-server-plughub:conversation_escalate
+    capabilities:
+      channels: webchat,whatsapp
+
+  # Agente humano de retenção — gerenciado pelo Agent Assist UI
+  - agent_type_id: agente_retencao_humano_v1
+    framework: human
+    execution_model: stateful
+    role: executor
+    max_concurrent_sessions: 3
+    pools: [retencao_humano]
+    skills: []
+    permissions: []
+    capabilities:
+      channels: webchat,whatsapp
+
+  # Agente de contexto — context-aware progressive resolution
+  # Invocado via task step (mode: assist) por agentes que precisam de contexto enriquecido.
+  # Nunca recebe tráfego direto — role: executor (specialist não é enum válido no Agent Registry).
+  - agent_type_id: agente_contexto_ia_v1
+    framework: plughub-native
+    execution_model: stateless
+    role: executor
+    max_concurrent_sessions: 20
+    pools: [contexto_ia]
+    skills: []
+    permissions:
+      - mcp-server-plughub:agent_heartbeat
+      - mcp-server-plughub:notification_send
+      - mcp-server-plughub:interaction_request
+      - mcp-server-crm:customer_get
+    capabilities:
+      channels: webchat,whatsapp
+      llm: "true"
+      context_resolution: "true"
+
+  # Agente de avaliação pós-sessão — NÃO deve estar em pool de roteamento ao vivo.
+  # Recebe tráfego apenas via evaluation.requested (Session Replayer), nunca via
+  # conversations.routed. Pool: avaliacao_ia (isolado).
+  - agent_type_id: agente_avaliacao_v1
+    framework: plughub-native
+    execution_model: stateless
+    role: evaluator
+    max_concurrent_sessions: 20
+    pools: [avaliacao_ia]
+    skills: []
+    permissions:
+      - mcp-server-plughub:evaluation_context_get
+      - mcp-server-plughub:evaluation_submit
+    capabilities:
+      evaluation: "true"

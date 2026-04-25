@@ -1,0 +1,411 @@
+# agente_contexto_ia_v1.yaml
+# Agente de Acumulação de Contexto — Context-Aware Progressive Resolution
+#
+# Pool: contexto_ia (role: specialist — sem tráfego direto de clientes)
+# Invocado via: task step (mode: assist) por qualquer agente especialista
+#
+# Responsabilidade:
+#   Construir e enriquecer progressivamente o contact_context do cliente.
+#   Evita re-coletar dados já presentes com confiança suficiente.
+#   Consulta MCP (CRM) para dados que podem ser buscados automaticamente.
+#   Gera uma única pergunta consolidada para o cliente cobrir múltiplos gaps.
+#
+# Fluxo:
+#   1. avaliar_contexto       — reason: analisa pipeline_state atual, detecta
+#                               campos presentes/ausentes/incertos, decide strategy
+#   2. verificar_strategy     — choice: "completo" | "buscar_crm" | "coletar" | "confirmar"
+#   3. buscar_crm             — invoke: mcp-server-crm → customer_get (se customer_id disponível)
+#   4. gerar_pergunta         — reason: constrói pergunta natural consolidando todos os gaps
+#   5. coletar_cliente        — menu: coleta resposta livre do cliente
+#   6. extrair_campos         — reason: extrai campos estruturados da resposta livre
+#   7. confirmar_incertos     — reason: decide se campos incertos precisam confirmação explícita
+#                               + menu: pergunta de confirmação (opcional, só se necessário)
+#   8. montar_contexto        — reason: consolida tudo em ContactContext com scores de confiança
+#   9. finalizar              — complete: contexto enriquecido disponível em pipeline_state
+#
+# Output em pipeline_state.contact_context (ContactContext schema):
+#   { customer_id, cpf, account_id, nome, motivo_contato, intencao_primaria,
+#     sentimento_atual, resumo_conversa, resolucoes_tentadas, dados_crm,
+#     campos_ausentes, completeness_score, campos_incertos, updated_at }
+#
+# Threshold de confiança:
+#   ≥ 0.8 → aceito sem confirmação
+#   0.4–0.8 → confirmado se force_confirmation = true no campo
+#   < 0.4 → sempre coletado novamente
+#
+# Timeout por inatividade: 3 minutos (timeout_s: 180)
+
+entry: avaliar_contexto
+
+steps:
+
+  # ── Etapa 1: avaliar o contexto atual ────────────────────────────────────────
+  # Lê pipeline_state completo e determina o que já sabemos, o que falta,
+  # e qual a melhor estratégia para completar o contexto sem interromper
+  # o cliente desnecessariamente.
+  - id: avaliar_contexto
+    type: reason
+    prompt_id: contexto_avaliacao_v1
+    input:
+      instrucoes: |
+        Você é um agente especialista em coleta e validação de dados de clientes
+        para uma empresa de telecomunicações.
+
+        Analise o contexto atual disponível no pipeline_state e determine:
+
+        1. Quais campos já estão presentes com confiança suficiente (≥ 0.8):
+           - customer_id, cpf, account_id, nome, telefone, email
+           - motivo_contato, intencao_primaria, sentimento_atual
+           - resumo_conversa
+
+        2. Quais campos estão ausentes ou com confiança insuficiente (< 0.7)
+
+        3. IMPORTANTE — mine o historico_conversa e ultima_mensagem: se o cliente
+           já mencionou CPF, nome, conta ou qualquer dado identificador em qualquer
+           mensagem anterior da conversa, trate esse dado como presente com
+           confiança adequada ao quão claramente foi declarado (explícito=1.0,
+           informal=0.8, implícito=0.6). Não marque como ausente dados que já
+           aparecem no histórico.
+
+        4. Se customer_id ou cpf estão disponíveis (mesmo com baixa confiança),
+           podemos buscar dados no CRM sem perguntar ao cliente
+
+        5. Estratégia recomendada:
+           - "completo": todos os campos relevantes já presentes com confiança ≥ 0.8
+           - "buscar_crm": customer_id/cpf disponível → buscar dados CRM primeiro
+           - "coletar": campos ausentes que o cliente precisa fornecer
+           - "confirmar": campos presentes mas com confiança < 0.7
+
+        Seja conservador: prefira "buscar_crm" antes de "coletar" sempre que possível.
+        Não solicite ao cliente dados que já estão com confiança ≥ 0.8.
+
+        Contexto atual disponível:
+      pipeline_state_atual: "$.pipeline_state"
+      contact_context_existente: "$.pipeline_state.contact_context"
+      historico_conversa: "$.pipeline_state.analise.historico_mensagens"
+      ultima_mensagem: "$.pipeline_state.ultima_mensagem"
+    output_schema:
+      campos_presentes:
+        type: array
+        items:
+          type: string
+      campos_ausentes:
+        type: array
+        items:
+          type: string
+      campos_incertos:
+        type: array
+        items:
+          type: string
+      customer_id_disponivel:
+        type: boolean
+      strategy:
+        type: string
+        enum:
+          - completo
+          - buscar_crm
+          - coletar
+          - confirmar
+      justificativa:
+        type: string
+    output_as: avaliacao
+    on_success: verificar_strategy
+    on_failure: finalizar_parcial
+
+  # ── Etapa 2: branch por estratégia ───────────────────────────────────────────
+  - id: verificar_strategy
+    type: choice
+    conditions:
+      - field: "$.pipeline_state.avaliacao.strategy"
+        operator: eq
+        value: "completo"
+        next: montar_contexto
+      - field: "$.pipeline_state.avaliacao.strategy"
+        operator: eq
+        value: "buscar_crm"
+        next: buscar_crm
+      - field: "$.pipeline_state.avaliacao.strategy"
+        operator: eq
+        value: "confirmar"
+        next: confirmar_incertos
+    default: gerar_pergunta
+
+  # ── Etapa 3: buscar dados no CRM ─────────────────────────────────────────────
+  # Só executado quando customer_id ou cpf estão disponíveis.
+  # Busca automaticamente sem interromper o cliente.
+  - id: buscar_crm
+    type: invoke
+    mcp_server: mcp-server-crm
+    tool: customer_get
+    input:
+      customer_id: "$.pipeline_state.contact_context.customer_id.value"
+    output_as: dados_crm_raw
+    on_success: avaliar_apos_crm
+    on_failure: gerar_pergunta   # CRM indisponível → coletar do cliente
+
+  # ── Etapa 3b: re-avaliar após CRM ────────────────────────────────────────────
+  # Após buscar dados do CRM, verifica se ainda há gaps que precisam do cliente
+  - id: avaliar_apos_crm
+    type: reason
+    prompt_id: contexto_pos_crm_v1
+    input:
+      instrucoes: |
+        Os dados do CRM foram obtidos com sucesso. Analise os dados retornados
+        e determine se ainda há campos relevantes ausentes que precisam ser
+        coletados do cliente.
+
+        Campos que o CRM normalmente preenche: customer_id, nome, cpf, account_id,
+        telefone, email, e dados de conta (plano atual, status, etc.).
+
+        Se todos os campos relevantes estão cobertos pelos dados do CRM,
+        retorne needs_collection: false.
+        Caso contrário, liste os campos ainda ausentes.
+      dados_crm: "$.pipeline_state.dados_crm_raw"
+      campos_ausentes_originais: "$.pipeline_state.avaliacao.campos_ausentes"
+    output_schema:
+      needs_collection:
+        type: boolean
+      campos_ainda_ausentes:
+        type: array
+        items:
+          type: string
+    output_as: avaliacao_pos_crm
+    on_success: verificar_necessidade_coleta
+    on_failure: montar_contexto
+
+  - id: verificar_necessidade_coleta
+    type: choice
+    conditions:
+      - field: "$.pipeline_state.avaliacao_pos_crm.needs_collection"
+        operator: eq
+        value: false
+        next: montar_contexto
+    default: gerar_pergunta
+
+  # ── Etapa 4: gerar pergunta consolidada ──────────────────────────────────────
+  # Em vez de perguntar campo por campo, gera uma única pergunta natural
+  # que cobre todos os gaps de uma vez.
+  - id: gerar_pergunta
+    type: reason
+    prompt_id: contexto_gerar_pergunta_v1
+    input:
+      instrucoes: |
+        Gere uma única pergunta natural e cordial em português que colete
+        todos os dados ausentes de uma só vez.
+
+        Princípios:
+        - ANTES de gerar a pergunta, verifique o historico_conversa: se o cliente
+          já mencionou CPF, nome ou qualquer outro dado relevante em mensagens
+          anteriores, NÃO peça de novo — extraia diretamente do histórico.
+        - Nunca liste os campos como um formulário ("informe seu CPF, depois sua conta...")
+        - Integre os dados em uma frase conversacional natural
+        - Máximo 2 informações por pergunta para não sobrecarregar o cliente
+        - Se precisar de mais de 2 informações, priorize as mais importantes
+          (identificação > motivo > detalhes)
+        - Tom empático e profissional
+
+        Exemplos bons:
+          "Para agilizar seu atendimento, pode me confirmar seu CPF e número de conta?"
+          "Qual é o seu CPF para que eu possa verificar sua conta?"
+          "Pode me dizer o que está acontecendo com seu serviço?"
+
+        Exemplos ruins:
+          "Por favor, informe: 1) CPF 2) Conta 3) Motivo do contato"
+          "Qual seu CPF? E sua conta? E o motivo?"
+      campos_ausentes: "$.pipeline_state.avaliacao.campos_ausentes"
+      historico_conversa: "$.pipeline_state.analise.historico_mensagens"
+      ultima_mensagem: "$.pipeline_state.ultima_mensagem"
+    output_schema:
+      pergunta:
+        type: string
+    output_as: pergunta_gerada
+    on_success: coletar_cliente
+    on_failure: coletar_cliente_fallback
+
+  # ── Etapa 5a: coleta com pergunta gerada por IA ───────────────────────────────
+  - id: coletar_cliente
+    type: menu
+    prompt: "{{$.pipeline_state.pergunta_gerada.pergunta}}"
+    interaction: text
+    output_as: resposta_cliente
+    timeout_s: 180
+    on_success: extrair_campos
+    on_failure: finalizar_parcial
+    on_timeout: finalizar_parcial
+    on_disconnect: finalizar_parcial
+
+  # ── Etapa 5b: fallback com pergunta padrão ────────────────────────────────────
+  - id: coletar_cliente_fallback
+    type: menu
+    prompt: "Para melhor atendê-lo, pode me informar seu CPF e descrever o que precisa?"
+    interaction: text
+    output_as: resposta_cliente
+    timeout_s: 180
+    on_success: extrair_campos
+    on_failure: finalizar_parcial
+    on_timeout: finalizar_parcial
+    on_disconnect: finalizar_parcial
+
+  # ── Etapa 6: extrair campos estruturados da resposta livre ────────────────────
+  # O cliente respondeu em linguagem natural → extrai campos com scores de confiança
+  - id: extrair_campos
+    type: reason
+    prompt_id: contexto_extracao_v1
+    input:
+      instrucoes: |
+        O cliente respondeu à pergunta de coleta de dados. Extraia todos os campos
+        identificáveis da resposta e atribua scores de confiança.
+
+        Scores de confiança:
+        - 1.0: dado explicitamente declarado de forma clara e não ambígua
+               Ex: "meu CPF é 123.456.789-00" → cpf: { value: "12345678900", confidence: 1.0 }
+        - 0.8: dado claramente mencionado mas com formatação informal
+               Ex: "é o 12345678900" → cpf: { value: "12345678900", confidence: 0.8 }
+        - 0.6: dado inferido com boa certeza a partir do contexto
+               Ex: "preciso cancelar meu plano" → motivo_contato: { value: "cancelamento_plano", confidence: 0.7 }
+        - 0.4: dado mencionado mas ambíguo
+        - 0.2: dado apenas implícito
+
+        Para motivo_contato, use valores canônicos quando possível:
+          cancelamento_plano | falha_servico | duvida_fatura | mudanca_plano |
+          suporte_tecnico | reclamacao | informacao_geral
+
+        Para intencao_primaria, seja mais específico que motivo_contato:
+          Ex: motivo=cancelamento_plano, intencao=solicitar_portabilidade
+
+        Retorne apenas campos que conseguiu extrair com confiança ≥ 0.4.
+        Para source, use sempre "customer_input".
+      resposta_cliente: "$.pipeline_state.resposta_cliente"
+      campos_buscados: "$.pipeline_state.avaliacao.campos_ausentes"
+    output_schema:
+      campos_extraidos:
+        type: object
+        description: "Mapa de campo → { value, confidence, source }"
+      campos_nao_encontrados:
+        type: array
+        items:
+          type: string
+    output_as: extracao
+    on_success: montar_contexto
+    on_failure: montar_contexto
+
+  # ── Etapa 7: confirmar campos incertos ───────────────────────────────────────
+  # Só executado quando strategy = "confirmar" (campos presentes mas com baixa confiança)
+  - id: confirmar_incertos
+    type: reason
+    prompt_id: contexto_confirmacao_v1
+    input:
+      instrucoes: |
+        Há dados disponíveis sobre o cliente mas com nível de confiança insuficiente.
+        Gere uma mensagem de confirmação natural que valide esses dados sem parecer
+        um formulário burocrático.
+
+        Tom: confirme como quem já sabe e só quer ter certeza.
+        Exemplo bom: "Só para confirmar, você é o João da Silva, titular da conta 12345, correto?"
+        Exemplo ruim: "Por favor confirme: 1) Nome 2) Conta 3) CPF"
+
+        Se houver mais de 3 campos para confirmar, foque nos mais críticos
+        (customer_id/cpf > account_id > nome).
+      campos_incertos: "$.pipeline_state.avaliacao.campos_incertos"
+      contact_context_atual: "$.pipeline_state.contact_context"
+    output_schema:
+      mensagem_confirmacao:
+        type: string
+      campos_para_confirmar:
+        type: array
+        items:
+          type: string
+    output_as: confirmacao_gerada
+    on_success: aguardar_confirmacao
+    on_failure: montar_contexto
+
+  - id: aguardar_confirmacao
+    type: menu
+    prompt: "{{$.pipeline_state.confirmacao_gerada.mensagem_confirmacao}}"
+    interaction: text
+    output_as: resposta_confirmacao
+    timeout_s: 120
+    on_success: processar_confirmacao
+    on_failure: montar_contexto
+    on_timeout: montar_contexto
+
+  - id: processar_confirmacao
+    type: reason
+    prompt_id: contexto_processar_confirmacao_v1
+    input:
+      instrucoes: |
+        O cliente respondeu à confirmação de dados. Interprete a resposta e:
+        - Se confirmou: atualize a confiança dos campos confirmados para 1.0
+        - Se corrigiu algum dado: use o dado corrigido com confiança 1.0
+        - Se negou: marque o campo como ausente para nova coleta
+        Retorne o estado atualizado dos campos.
+      resposta: "$.pipeline_state.resposta_confirmacao"
+      campos_confirmados: "$.pipeline_state.confirmacao_gerada.campos_para_confirmar"
+      contact_context_atual: "$.pipeline_state.contact_context"
+    output_schema:
+      campos_atualizados:
+        type: object
+        description: "Mapa de campo → { value, confidence, source }"
+    output_as: confirmacao_processada
+    on_success: montar_contexto
+    on_failure: montar_contexto
+
+  # ── Etapa 8: montar ContactContext consolidado ────────────────────────────────
+  # Consolida todas as fontes: context original + CRM + coleta + extração + confirmação
+  - id: montar_contexto
+    type: reason
+    prompt_id: contexto_montagem_v1
+    input:
+      instrucoes: |
+        Monte o ContactContext consolidado combinando todas as fontes disponíveis.
+
+        Prioridade de fontes (maior confiança wins):
+        1. customer_input (confiança declarada na extração)
+        2. mcp_call / dados CRM (confiança 0.95 — fonte autoritativa)
+        3. pipeline_state (confiança herdada do passo anterior)
+        4. ai_inferred (confiança ≤ 0.7)
+
+        Para cada campo, escolha o valor com maior confiança entre as fontes.
+        Se houver conflito entre customer_input e CRM, prefira customer_input
+        (cliente sempre tem razão sobre seus próprios dados declarados).
+
+        Calcule completeness_score como:
+          (campos_presentes_com_confiança_≥0.8) / (total_campos_relevantes)
+          Campos relevantes para este fluxo: customer_id, cpf, account_id,
+          nome, motivo_contato, intencao_primaria, sentimento_atual
+
+        Liste campos_ausentes: campos relevantes com confiança < 0.4 ou ausentes.
+        Liste campos_incertos: campos presentes com 0.4 ≤ confiança < 0.7.
+      contact_context_original: "$.pipeline_state.contact_context"
+      dados_crm: "$.pipeline_state.dados_crm_raw"
+      campos_extraidos: "$.pipeline_state.extracao.campos_extraidos"
+      campos_confirmados: "$.pipeline_state.confirmacao_processada.campos_atualizados"
+      avaliacao_original: "$.pipeline_state.avaliacao"
+    output_schema:
+      contact_context:
+        type: object
+        description: "ContactContext completo com todos os campos e scores"
+      completeness_score:
+        type: number
+      campos_ausentes:
+        type: array
+        items:
+          type: string
+      campos_incertos:
+        type: array
+        items:
+          type: string
+    output_as: contexto_final
+    on_success: finalizar
+    on_failure: finalizar_parcial
+
+  # ── Etapa 9: finalizar com contexto enriquecido ───────────────────────────────
+  - id: finalizar
+    type: complete
+    outcome: resolved
+
+  # ── Fallback: finalizar com o que foi coletado até aqui ───────────────────────
+  # Nunca bloqueia o fluxo principal — retorna o contexto parcial disponível
+  - id: finalizar_parcial
+    type: complete
+    outcome: resolved

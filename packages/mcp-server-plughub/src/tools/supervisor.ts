@@ -124,6 +124,66 @@ export function registerSupervisorTools(server: McpServer, deps: SupervisorDeps)
         } catch { /* non-fatal */ }
       }
 
+      // 6b. Read contact_context from pipeline_state (written by agente_contexto_ia_v1)
+      //     Key: {tenant_id}:pipeline:{session_id} → { results: { contexto_final: { contact_context: {...} } } }
+      let contactContext: Record<string, unknown> | null = null
+      if (tenantId) {
+        try {
+          const pipelineRaw = await redis.get(`${tenantId}:pipeline:${parsed.session_id}`)
+          if (pipelineRaw) {
+            const pipeline = JSON.parse(pipelineRaw) as Record<string, unknown>
+            const results  = pipeline["results"] as Record<string, unknown> | undefined
+            if (results) {
+              // 1. Top-level merge (written by runDelegationJob before task.ts overwrites)
+              if (results["contact_context"] && typeof results["contact_context"] === "object") {
+                contactContext = results["contact_context"] as Record<string, unknown>
+
+              // 2. task step stores full specialist results as results.acumular_contexto
+              //    → results.acumular_contexto.contexto_final.contact_context
+              } else {
+                const acumularCtx = results["acumular_contexto"] as Record<string, unknown> | undefined
+                const contextoFinalNested = acumularCtx?.["contexto_final"] as Record<string, unknown> | undefined
+                if (contextoFinalNested?.["contact_context"] && typeof contextoFinalNested["contact_context"] === "object") {
+                  contactContext = contextoFinalNested["contact_context"] as Record<string, unknown>
+
+                // 3. Direct contexto_final at results root (edge case)
+                } else {
+                  const contextoFinal = results["contexto_final"] as Record<string, unknown> | undefined
+                  if (contextoFinal?.["contact_context"] && typeof contextoFinal["contact_context"] === "object") {
+                    contactContext = contextoFinal["contact_context"] as Record<string, unknown>
+
+                  // 4. Generic deep search: check every top-level result value for contact_context
+                  //    Covers specialist skills that use a different output_as name
+                  } else {
+                    for (const val of Object.values(results)) {
+                      if (val && typeof val === "object") {
+                        const nested = val as Record<string, unknown>
+                        // One level deep
+                        if (nested["contact_context"] && typeof nested["contact_context"] === "object") {
+                          contactContext = nested["contact_context"] as Record<string, unknown>
+                          break
+                        }
+                        // Two levels deep (e.g. results.acumular_contexto.contexto_final.contact_context)
+                        for (const innerVal of Object.values(nested)) {
+                          if (innerVal && typeof innerVal === "object") {
+                            const inner = innerVal as Record<string, unknown>
+                            if (inner["contact_context"] && typeof inner["contact_context"] === "object") {
+                              contactContext = inner["contact_context"] as Record<string, unknown>
+                              break
+                            }
+                          }
+                        }
+                        if (contactContext) break
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        } catch { /* non-fatal */ }
+      }
+
       // 7. SLA calculation
       const elapsedMs      = Date.now() - startedAt
       const urgency        = Math.min(elapsedMs / slaTargetMs, 1)
@@ -159,6 +219,7 @@ export function registerSupervisorTools(server: McpServer, deps: SupervisorDeps)
               historical_insights:   ctxInsights,
               conversation_insights: turns
                 .flatMap((t) => (t["insights"] as unknown[]) ?? []),
+              contact_context: contactContext,
             },
           }),
         }],
