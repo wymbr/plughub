@@ -21,9 +21,20 @@
 #   - WhatsApp: renderiza botões nativos
 #   - Outros canais: fallback textual com numeração automática (channel-gateway)
 
-entry: menu_principal
+entry: saudacao
 
 steps:
+
+  # ── Etapa 0: saudação inicial ─────────────────────────────────────────────
+  # Enviada como msg.text antes do menu de botões — confirma para o cliente
+  # que o agente está ativo e garante que pelo menos uma mensagem chegue ao
+  # WebSocket antes da interação do menu (útil para diagnóstico).
+  - id: saudacao
+    type: notify
+    message: "Olá! Bem-vindo ao atendimento PlugHub Demo."
+    channel: session
+    on_success: menu_principal
+    on_failure: menu_principal
 
   # ── Etapa 1: menu principal ───────────────────────────────────────────────
   # Apresenta 3 opções ao cliente via botões.

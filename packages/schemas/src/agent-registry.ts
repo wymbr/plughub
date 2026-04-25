@@ -141,6 +141,7 @@ export type AgentFramework = z.infer<typeof AgentFrameworkSchema>
 export const AgentRoleSchema = z.enum([
   "executor",       // resolve diretamente — padrão
   "orchestrator",   // coordena outros via skill flow
+  "evaluator",      // avalia qualidade pós-sessão (nunca recebe tráfego ao vivo)
 ])
 export type AgentRole = z.infer<typeof AgentRoleSchema>
 
