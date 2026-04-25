@@ -35,9 +35,11 @@ from .reports_query import (
     _clamp_page_size,
     _to_csv,
     query_agents_report,
+    query_campaigns_report,
     query_quality_report,
     query_sessions_report,
     query_usage_report,
+    query_workflows_report,
 )
 
 logger = logging.getLogger("plughub.analytics.reports")
@@ -214,3 +216,91 @@ async def report_usage(
         page_size = ps,
     )
     return _respond(data, format, f"usage_{_today_label()}.csv")
+
+
+# ─── GET /reports/workflows ───────────────────────────────────────────────────
+
+@router.get("/workflows")
+async def report_workflows(
+    request:     Request,
+    tenant_id:   str           = Query(...,    description="Tenant identifier"),
+    from_dt:     Optional[str] = Query(None,   description="ISO8601 start (default: 7d ago)"),
+    to_dt:       Optional[str] = Query(None,   description="ISO8601 end (default: now)"),
+    flow_id:     Optional[str] = Query(None,   description="Filter by flow_id"),
+    status:      Optional[str] = Query(None,   description="Filter by workflow status"),
+    campaign_id: Optional[str] = Query(None,   description="Filter by campaign_id"),
+    page:        int           = Query(1,       ge=1),
+    page_size:   int           = Query(100,     ge=1),
+    format:      str           = Query("json",  pattern="^(json|csv)$"),
+) -> Response:
+    """
+    Workflow lifecycle event list.
+
+    status filter: active | suspended | completed | failed | timed_out | cancelled
+
+    Columns: event_id, tenant_id, instance_id, flow_id, campaign_id,
+             event_type, status, current_step, suspend_reason, decision,
+             outcome, duration_ms, wait_duration_ms, error, timestamp
+    """
+    ps = _clamp_page_size(page_size, format == "csv")
+    data = await query_workflows_report(
+        client    = request.app.state.store._client,
+        database  = request.app.state.store._database,
+        tenant_id = tenant_id,
+        from_dt   = from_dt,
+        to_dt     = to_dt,
+        flow_id     = flow_id,
+        status      = status,
+        campaign_id = campaign_id,
+        page      = page,
+        page_size = ps,
+    )
+    return _respond(data, format, f"workflows_{_today_label()}.csv")
+
+
+# ─── GET /reports/campaigns ───────────────────────────────────────────────────
+
+@router.get("/campaigns")
+async def report_campaigns(
+    request:     Request,
+    tenant_id:   str           = Query(...,    description="Tenant identifier"),
+    from_dt:     Optional[str] = Query(None,   description="ISO8601 start (default: 7d ago)"),
+    to_dt:       Optional[str] = Query(None,   description="ISO8601 end (default: now)"),
+    campaign_id: Optional[str] = Query(None,   description="Filter by campaign_id"),
+    channel:     Optional[str] = Query(None,   description="Filter by channel"),
+    status:      Optional[str] = Query(None,   description="Filter by collect status"),
+    page:        int           = Query(1,       ge=1),
+    page_size:   int           = Query(100,     ge=1),
+    format:      str           = Query("json",  pattern="^(json|csv)$"),
+) -> Response:
+    """
+    Campaign collect event list + per-campaign aggregate summary.
+
+    status filter: requested | sent | responded | timed_out
+
+    Response includes:
+      data    — individual collect_event rows
+      summary — per-campaign aggregate (total, responded, timed_out, response_rate_pct, avg_elapsed_ms)
+      meta    — page / total / date range
+
+    Columns: collect_token, tenant_id, instance_id, flow_id, campaign_id,
+             step_id, target_type, channel, interaction, status,
+             send_at, responded_at, elapsed_ms, timestamp
+    """
+    ps = _clamp_page_size(page_size, format == "csv")
+    data = await query_campaigns_report(
+        client    = request.app.state.store._client,
+        database  = request.app.state.store._database,
+        tenant_id = tenant_id,
+        from_dt   = from_dt,
+        to_dt     = to_dt,
+        campaign_id = campaign_id,
+        channel     = channel,
+        status      = status,
+        page      = page,
+        page_size = ps,
+    )
+    # For CSV export, flatten summary into data
+    if format == "csv":
+        return _respond({"data": data.get("data", [])}, format, f"campaigns_{_today_label()}.csv")
+    return _respond(data, format, f"campaigns_{_today_label()}.csv")

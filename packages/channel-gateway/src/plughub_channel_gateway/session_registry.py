@@ -70,6 +70,7 @@ class SessionRegistry:
         if ws is not None:
             try:
                 await ws.send_json(payload)
+                logger.info("delivered locally to contact_id=%s", contact_id)
                 return True
             except Exception as exc:
                 logger.warning("Failed to send to contact_id=%s: %s", contact_id, exc)
@@ -77,6 +78,12 @@ class SessionRegistry:
                 return False
 
         # Cross-instance: publish to Redis channel
+        # Log which contact_ids ARE registered so mismatches are visible.
+        registered = list(self._connections.keys())
+        logger.warning(
+            "contact_id=%s not found locally (registered: %s) — falling to pub/sub",
+            contact_id, registered,
+        )
         await self._redis.publish(
             f"chat:deliver:{contact_id}",
             json.dumps(payload),
@@ -158,9 +165,9 @@ class SessionRegistry:
             if message["type"] != "pmessage":
                 continue
             try:
-                # channel = b"chat:deliver:{contact_id}"
-                channel: bytes = message["channel"]
-                contact_id = channel.decode().removeprefix("chat:deliver:")
+                # channel = "chat:deliver:{contact_id}" (str because decode_responses=True)
+                channel: str = message["channel"]
+                contact_id = channel.removeprefix("chat:deliver:")
                 payload = json.loads(message["data"])
                 ws = self._connections.get(contact_id)
                 if ws:

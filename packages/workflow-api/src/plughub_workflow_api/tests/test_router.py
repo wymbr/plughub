@@ -219,6 +219,72 @@ class TestPersistSuspend:
         )
         assert resp.status_code == 200
 
+    def test_duplicate_resume_token_is_idempotent(self, client):
+        """
+        B2-01: If persist-suspend is called twice with the same resume_token
+        (engine crashed between persistSuspend and saving expiresKey), the second
+        call must succeed and return the ORIGINAL resume_expires_at — not a new one.
+        """
+        original_expires = datetime.now(timezone.utc) + timedelta(hours=48)
+
+        # First call: instance is active → transitions to suspended
+        active_row = fake_row({"status": "active"})
+        # Second call (retry): instance is already suspended with same token
+        # db_suspend_instance UPDATE preserves resume_expires_at via CASE expression
+        already_suspended_row = fake_row({
+            "status":            "suspended",
+            "resume_token":      RESUME_TOKEN,
+            "suspend_reason":    "approval",
+            "resume_expires_at": original_expires,
+            "suspended_at":      datetime.now(timezone.utc) - timedelta(seconds=5),
+        })
+
+        suspended_row = fake_row({
+            "status":            "suspended",
+            "resume_token":      RESUME_TOKEN,
+            "suspend_reason":    "approval",
+            "resume_expires_at": original_expires,
+            "suspended_at":      datetime.now(timezone.utc),
+        })
+
+        app.state.pool = MagicMock()
+        # Each persist-suspend call: fetchrow×2 (db_get_instance + db_suspend_instance)
+        # Request 1: active → suspended
+        # Request 2 (retry): already suspended → preserved
+        app.state.pool.fetchrow = AsyncMock(side_effect=[
+            active_row,            # request 1: db_get_instance
+            suspended_row,         # request 1: db_suspend_instance
+            already_suspended_row, # request 2 (retry): db_get_instance
+            already_suspended_row, # request 2 (retry): db_suspend_instance (preserves expires)
+        ])
+        app.state.pool.fetchval = AsyncMock(return_value=1)
+
+        payload = {
+            "step_id":        "aguardar_aprovacao",
+            "resume_token":   RESUME_TOKEN,
+            "reason":         "approval",
+            "timeout_hours":  48,
+            "business_hours": True,
+        }
+
+        with patch(
+            "plughub_workflow_api.router.calculate_deadline",
+            new=AsyncMock(return_value=original_expires)
+        ):
+            resp1 = client.post(
+                f"/v1/workflow/instances/{INSTANCE_ID}/persist-suspend",
+                json=payload,
+            )
+            resp2 = client.post(
+                f"/v1/workflow/instances/{INSTANCE_ID}/persist-suspend",
+                json=payload,
+            )
+
+        assert resp1.status_code == 200
+        assert resp2.status_code == 200
+        # Both responses must carry the same resume_expires_at
+        assert resp1.json()["resume_expires_at"] == resp2.json()["resume_expires_at"]
+
 
 # ─────────────────────────────────────────────
 # TestResume

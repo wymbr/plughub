@@ -15,6 +15,7 @@ Namespaces:
   webchat        — Channel Gateway webchat adapter
   masking        — Message masking access policies
   quota          — Default quota limits
+  pricing        — Unit prices per resource type, currency, reserve markup
 
 Run:
   PLUGHUB_CONFIG_DATABASE_URL=... PLUGHUB_CONFIG_REDIS_URL=... python -m plughub_config_api.seed
@@ -235,6 +236,48 @@ _SEED: list[tuple[str, str, object, str]] = [
         "quota", "messages_daily",
         500_000,
         "Default daily message quota (visibility=all messages) per tenant."
+    ),
+
+    # ── pricing ───────────────────────────────────────────────────────────────
+    # Source: packages/pricing-api — unit prices per resource type.
+    # All values in the platform's base currency (see pricing.currency).
+    # reserve_markup_pct: additional surcharge applied to reserve pool capacity.
+    # Editable per tenant to support custom commercial agreements.
+    (
+        "pricing", "currency",
+        "BRL",
+        "ISO 4217 currency code used in all invoice calculations. "
+        "Change to 'USD' or 'EUR' for international deployments."
+    ),
+    (
+        "pricing", "unit_prices",
+        {
+            "ai_agent":          120.00,
+            "human_agent":        50.00,
+            "whatsapp_number":    15.00,
+            "voice_trunk_in":     40.00,
+            "voice_trunk_out":    40.00,
+            "email_inbox":        25.00,
+            "sms_number":         10.00,
+            "webchat_instance":   20.00,
+        },
+        "Monthly unit price per resource type (base capacity). "
+        "Keys match resource_type values in pricing.installation_resources. "
+        "Reserve pools use the same unit prices, scaled by reserve_markup_pct."
+    ),
+    (
+        "pricing", "reserve_markup_pct",
+        0.0,
+        "Percentage surcharge applied on top of base unit prices for reserve pool "
+        "capacity. 0.0 = same price as base. 10.0 = 10% more expensive than base. "
+        "Allows operators to price reserve capacity at a premium."
+    ),
+    (
+        "pricing", "billing_cycle_day",
+        1,
+        "Day of month when the billing cycle resets (1 = first of month). "
+        "Used by the invoice calculator to determine cycle_start when not "
+        "explicitly provided."
     ),
 ]
 

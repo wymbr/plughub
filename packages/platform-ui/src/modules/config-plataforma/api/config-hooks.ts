@@ -8,6 +8,16 @@
  */
 import { useCallback, useEffect, useState } from 'react'
 
+/** Safely parse a Response as JSON, surfacing clear errors when the backend
+ *  is unavailable (proxy returns HTML) rather than crashing with SyntaxError. */
+async function safeJson<T>(res: Response): Promise<T> {
+  const ct = res.headers.get('content-type') ?? ''
+  if (!ct.includes('application/json') && !ct.includes('text/json')) {
+    throw new Error(`API indisponível (HTTP ${res.status})`)
+  }
+  return res.json() as Promise<T>
+}
+
 export interface ConfigEntry {
   key:         string
   value:       unknown
@@ -39,7 +49,7 @@ export function useAllConfig(tenantId: string): {
     setLoading(true)
     setError(null)
     fetch(`/config?tenant_id=${encodeURIComponent(tenantId)}`)
-      .then(r => r.ok ? r.json() : r.json().then(b => Promise.reject(b?.detail ?? `HTTP ${r.status}`)))
+      .then(r => safeJson<AllConfig>(r).then(j => r.ok ? j : Promise.reject((j as {detail?: string}).detail ?? `HTTP ${r.status}`)))
       .then(j => { setData(j); setLoading(false) })
       .catch(e => { setError(String(e)); setLoading(false) })
   }, [tenantId, tick])
@@ -67,7 +77,8 @@ export function useNamespace(tenantId: string, ns: string): {
     setLoading(true)
     setError(null)
     fetch(`/config/${ns}?tenant_id=${encodeURIComponent(tenantId)}`)
-      .then(r => r.ok ? r.json() : r.json().then(b => Promise.reject(b?.detail ?? `HTTP ${r.status}`)))
+      .then(r => safeJson<{entries?: Record<string,unknown>; detail?: string}>(r)
+        .then(j => r.ok ? j : Promise.reject(j.detail ?? `HTTP ${r.status}`)))
       .then(j => { setEntries(j.entries ?? {}); setLoading(false) })
       .catch(e => { setError(String(e)); setLoading(false) })
   }, [tenantId, ns, tick])
@@ -93,7 +104,7 @@ export async function putConfig(
     body: JSON.stringify({ value, tenant_id: tenantId || null }),
   })
   if (!res.ok) {
-    const body = await res.json().catch(() => ({}))
+    const body = await safeJson<{ detail?: string }>(res).catch(() => ({}))
     throw new Error((body as { detail?: string }).detail ?? `HTTP ${res.status}`)
   }
 }
@@ -113,7 +124,7 @@ export async function deleteConfig(
     headers: adminToken ? { 'X-Admin-Token': adminToken } : {},
   })
   if (!res.ok) {
-    const body = await res.json().catch(() => ({}))
+    const body = await safeJson<{ detail?: string }>(res).catch(() => ({}))
     throw new Error((body as { detail?: string }).detail ?? `HTTP ${res.status}`)
   }
 }

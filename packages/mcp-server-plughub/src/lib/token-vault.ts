@@ -108,7 +108,17 @@ export class TokenVault {
    * — nunca exposto diretamente ao agente.
    */
   async resolve(tenantId: string, tokenId: string): Promise<string | null> {
+    const start = Date.now()
     const raw = await this.deps.redis.get(`${tenantId}:token:${tokenId}`)
+
+    // Constant-time response: always wait at least RESOLVE_MIN_MS
+    // to prevent timing-based enumeration of valid token IDs.
+    const RESOLVE_MIN_MS = 5
+    const elapsed = Date.now() - start
+    if (elapsed < RESOLVE_MIN_MS) {
+      await new Promise<void>(r => setTimeout(r, RESOLVE_MIN_MS - elapsed))
+    }
+
     if (!raw) return null
     try {
       const entry = JSON.parse(raw) as TokenEntry

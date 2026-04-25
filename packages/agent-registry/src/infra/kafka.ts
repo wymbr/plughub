@@ -47,6 +47,41 @@ export async function publishRegistryEvent(event: unknown): Promise<void> {
   }
 }
 
+/**
+ * Publica um evento no tópico `registry.changed`.
+ * Consumido pelo orchestrator-bridge para disparar reconciliação imediata.
+ * Deve ser chamado após qualquer mutação de AgentType ou Pool que afete
+ * o estado desejado de instâncias no Redis.
+ * Falhas são capturadas e logadas — nunca propagadas ao chamador.
+ */
+export async function publishRegistryChanged(
+  tenantId:   string,
+  entityType: string,
+  entityId:   string,
+  operation:  "created" | "updated" | "deleted",
+): Promise<void> {
+  try {
+    const producer = await getProducer()
+    await producer.send({
+      topic:    "registry.changed",
+      messages: [{
+        key:   tenantId,
+        value: JSON.stringify({
+          event_type:  "registry.changed",
+          entity_type: entityType,
+          entity_id:   entityId,
+          operation,
+          tenant_id:   tenantId,
+          timestamp:   new Date().toISOString(),
+          source:      "agent-registry",
+        }),
+      }],
+    })
+  } catch (err) {
+    console.error("[agent-registry] registry.changed publish failed:", err instanceof Error ? err.message : err)
+  }
+}
+
 export async function disconnectKafka(): Promise<void> {
   if (_producer) {
     try { await _producer.disconnect() } catch { /* ignore */ }

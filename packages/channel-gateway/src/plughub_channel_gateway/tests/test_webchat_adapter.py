@@ -864,3 +864,49 @@ class TestMultiTenantJwtSecret:
         error = next((m for m in sent if m.get("type") == "conn.error"), None)
         assert error is not None, "conn.error not sent for wrong secret"
         assert error.get("code") == "invalid_token"
+
+    async def test_rejects_alg_none_token(
+        self, mock_producer, registry, context_reader, settings
+    ):
+        """Token with alg:none must be rejected even with valid payload (B1-02)."""
+        import jwt as pyjwt
+
+        # Craft token with alg:none — PyJWT encodes but signs empty
+        payload = {
+            "sub": CONTACT_ID,
+            "session_id": SESSION_ID,
+            "tenant_id": TENANT_ID,
+            "exp": 9999999999,
+        }
+        none_token = pyjwt.encode(payload, "", algorithm="none")
+
+        mock_redis = AsyncMock()
+        mock_redis.get    = AsyncMock(return_value=None)
+        mock_redis.exists = AsyncMock(return_value=1)
+
+        ws = make_ws_mock([], skip_auth=True)
+        msgs = [json.dumps({"type": "conn.authenticate", "token": none_token})]
+
+        async def patched_receive():
+            if msgs:
+                return msgs.pop(0)
+            from fastapi import WebSocketDisconnect
+            raise WebSocketDisconnect(code=1000)
+
+        ws.receive_text = patched_receive
+
+        adapter = WebchatAdapter(
+            ws               = ws,
+            pool_id          = "test_pool",
+            producer         = mock_producer,
+            registry         = registry,
+            context_reader   = context_reader,
+            settings         = settings,
+            redis            = mock_redis,
+        )
+        await adapter.handle()
+
+        sent = [c.args[0] for c in ws.send_json.call_args_list]
+        error = next((m for m in sent if m.get("type") == "conn.error"), None)
+        assert error is not None, "conn.error not sent for alg:none token"
+        assert error.get("code") == "invalid_token"

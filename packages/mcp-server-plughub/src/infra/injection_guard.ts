@@ -115,6 +115,18 @@ export const INJECTION_PATTERNS: InjectionPattern[] = [
     severity:    "high",
     description: "DAN (Do Anything Now) jailbreak pattern",
   },
+  {
+    id:          "l33t_override",
+    regex:       /ign[o0]r[e3]|d[i1]sr[e3]g[a4]rd|f[o0]rg[e3]t\s+(pr[e3]v|[a4]ll|[e3]v[e3]ry)/i,
+    severity:    "high",
+    description: "L33tspeak variants of common override/forget patterns",
+  },
+  {
+    id:          "unicode_homoglyph_hint",
+    regex:       /[Ѐ-ӿͰ-Ͽ].*(?:instruct|prompt|system|ignore|forget)/i,
+    severity:    "medium",
+    description: "Cyrillic or Greek characters mixed with injection keywords (post-NFKC these collapse, belt-and-suspenders)",
+  },
 ]
 
 // ─────────────────────────────────────────────
@@ -190,7 +202,7 @@ export function assertNoInjection(toolName: string, input: unknown): void {
  */
 function stringify(value: unknown, depth = 0): string {
   if (depth > 8) return ""  // guard against deeply nested malicious payloads
-  if (typeof value === "string")  return value
+  if (typeof value === "string")  return value.normalize("NFKC")
   if (typeof value === "number" || typeof value === "boolean") return String(value)
   if (Array.isArray(value)) {
     return value.map(v => stringify(v, depth + 1)).join(" ")

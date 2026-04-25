@@ -8,10 +8,16 @@ Routes:
       Queries ClickHouse for sessions opened in the last 24h with closed_at IS NULL,
       then overlays latest sentiment score from Redis.
 
+  GET /sessions/customer/{customer_id}?tenant_id=xxx&limit=N
+      Contact history for a customer (closed sessions, most recent first).
+      Returns session_id, channel, pool_id, opened_at, closed_at, duration_ms,
+      outcome, close_reason for each past contact.
+
   GET /sessions/{session_id}/stream?tenant_id=xxx
       SSE stream of the Redis session stream (session:{id}:stream).
       First event type "history" delivers all existing entries.
       Subsequent events type "entry" deliver new entries as they arrive.
+      Sends ':keepalive' comment every 15s to prevent proxy timeouts.
       Read-only — no participant is registered in the session.
 """
 from __future__ import annotations
@@ -149,6 +155,102 @@ def _classify(score: float) -> str:
     if score >= -0.3: return "neutral"
     if score >= -0.6: return "frustrated"
     return "angry"
+
+
+# ─── GET /sessions/customer/{customer_id} ────────────────────────────────────
+
+_DEFAULT_HISTORY_LIMIT = 20
+_MAX_HISTORY_LIMIT     = 100
+
+
+@router.get("/customer/{customer_id}")
+async def customer_history(
+    customer_id: str,
+    request:     Request,
+    tenant_id:   str = Query(..., description="Tenant identifier"),
+    limit:       int = Query(_DEFAULT_HISTORY_LIMIT, ge=1, le=_MAX_HISTORY_LIMIT),
+) -> JSONResponse:
+    """
+    Contact history for a customer — last N closed sessions, most recent first.
+
+    Each entry includes:
+      session_id, channel, pool_id, opened_at, closed_at,
+      duration_ms, outcome, close_reason
+    """
+    store = request.app.state.store
+    try:
+        rows = await asyncio.to_thread(
+            _fetch_customer_history,
+            store._client, store._database, tenant_id, customer_id, limit,
+        )
+        return JSONResponse(content=rows)
+    except Exception as exc:
+        logger.warning(
+            "customer_history failed tenant=%s customer=%s: %s",
+            tenant_id, customer_id, exc,
+        )
+        return JSONResponse(content=[], status_code=200)
+
+
+def _fetch_customer_history(
+    client: Any, db: str, tenant_id: str, customer_id: str, limit: int,
+) -> list[dict]:
+    """
+    Queries ClickHouse for closed sessions belonging to the given customer,
+    ordered by opened_at DESC.  Uses FINAL to force ReplacingMergeTree dedup
+    so we don't return stale open-row duplicates that haven't merged yet.
+    """
+    result = client.query(f"""
+        SELECT
+            session_id,
+            channel,
+            pool_id,
+            opened_at,
+            closed_at,
+            handle_time_ms,
+            outcome,
+            close_reason
+        FROM {db}.sessions FINAL
+        WHERE tenant_id   = {{tenant_id:String}}
+          AND customer_id = {{customer_id:String}}
+          AND closed_at IS NOT NULL
+        ORDER BY opened_at DESC
+        LIMIT {limit}
+    """, parameters={"tenant_id": tenant_id, "customer_id": customer_id})
+
+    rows = []
+    for r in result.result_rows:
+        session_id, channel, pool_id, opened_at, closed_at, handle_time_ms, outcome, close_reason = r
+
+        def _dt(val: Any) -> str | None:
+            if val is None:
+                return None
+            return val.isoformat() if isinstance(val, datetime) else str(val)
+
+        # Derive duration from handle_time_ms when available, fall back to timestamps.
+        if handle_time_ms is not None:
+            duration_ms: int | None = int(handle_time_ms)
+        elif opened_at and closed_at:
+            try:
+                o = opened_at if isinstance(opened_at, datetime) else datetime.fromisoformat(str(opened_at))
+                c = closed_at if isinstance(closed_at, datetime) else datetime.fromisoformat(str(closed_at))
+                duration_ms = int((c - o).total_seconds() * 1000)
+            except Exception:
+                duration_ms = None
+        else:
+            duration_ms = None
+
+        rows.append({
+            "session_id":   session_id,
+            "channel":      channel,
+            "pool_id":      pool_id,
+            "opened_at":    _dt(opened_at),
+            "closed_at":    _dt(closed_at),
+            "duration_ms":  duration_ms,
+            "outcome":      outcome,
+            "close_reason": close_reason,
+        })
+    return rows
 
 
 # ─── GET /sessions/{session_id}/stream ───────────────────────────────────────

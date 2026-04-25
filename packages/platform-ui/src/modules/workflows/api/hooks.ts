@@ -4,6 +4,14 @@
  */
 import { useCallback, useEffect, useState } from 'react'
 
+async function safeJson<T>(res: Response): Promise<T> {
+  const ct = res.headers.get('content-type') ?? ''
+  if (!ct.includes('application/json') && !ct.includes('text/json')) {
+    throw new Error(`API indisponível (HTTP ${res.status})`)
+  }
+  return res.json() as Promise<T>
+}
+
 export type WorkflowStatus = 'active' | 'suspended' | 'completed' | 'failed' | 'timed_out' | 'cancelled'
 export type SuspendReason  = 'approval' | 'input' | 'webhook' | 'timer'
 
@@ -47,7 +55,7 @@ export function useWorkflowInstances(
       if (status) params.set('status', status)
       const res = await fetch(`/v1/workflow/instances?${params.toString()}`)
       if (res.ok) {
-        const data = await res.json() as { instances?: WorkflowInstance[] }
+        const data = await safeJson<{ instances?: WorkflowInstance[] }>(res)
         setInstances(data.instances ?? [])
       }
     } catch { /* stale ok */ }
@@ -77,7 +85,7 @@ export function useWorkflowInstance(
     setLoading(true)
     try {
       const res = await fetch(`/v1/workflow/instances/${encodeURIComponent(instanceId)}`)
-      if (res.ok) setInstance(await res.json() as WorkflowInstance)
+      if (res.ok) setInstance(await safeJson<WorkflowInstance>(res))
     } catch { /* stale ok */ }
     finally { setLoading(false) }
   }, [instanceId])
@@ -109,10 +117,10 @@ export async function triggerWorkflow(payload: {
     body:    JSON.stringify(payload),
   })
   if (!res.ok) {
-    const body = await res.json().catch(() => ({}))
+    const body = await safeJson<{ detail?: string }>(res).catch(() => ({}))
     throw new Error((body as { detail?: string }).detail ?? `HTTP ${res.status}`)
   }
-  return res.json()
+  return safeJson(res)
 }
 
 // ─── cancelWorkflow ───────────────────────────────────────────────────────────

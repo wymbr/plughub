@@ -197,8 +197,15 @@ class Decider:
             best_instance = instances[0]  # already filtered by availability
             scored_pools.append((score, pool, best_instance))
 
-        # Sort by descending score (inf comes first)
-        scored_pools.sort(key=lambda x: x[0] if x[0] != float("inf") else 1e18, reverse=True)
+        # Sort by: 1) descending score, 2) ascending queue_length (tie-breaker),
+        # 3) pool_id (deterministic last resort when queue_length is also equal).
+        scored_pools.sort(
+            key=lambda x: (
+                -(x[0] if x[0] != float("inf") else 1e18),  # descending score
+                getattr(x[1], "queue_length", 0),            # ascending queue_length
+                x[1].pool_id,                                 # deterministic last resort
+            )
+        )
 
         # ── 6. Primary agent and fallback ────────────────────────────────────
         first_score, first_pool, first_instance = scored_pools[0]

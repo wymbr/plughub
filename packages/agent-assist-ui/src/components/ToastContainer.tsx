@@ -35,6 +35,7 @@ export const ToastContainer: React.FC<ToastContainerProps> = ({
           <span className="flex-1 leading-snug">{toast.message}</span>
           <button
             onClick={() => onDismiss(toast.id)}
+            tabIndex={-1}
             className="opacity-70 hover:opacity-100 text-lg leading-none"
           >
             ×

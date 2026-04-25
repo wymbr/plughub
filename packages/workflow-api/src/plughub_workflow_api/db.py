@@ -37,6 +37,7 @@ CREATE TABLE IF NOT EXISTS workflow.instances (
     flow_id           TEXT        NOT NULL,
     session_id        TEXT,
     pool_id           TEXT,
+    campaign_id       TEXT,
     status            TEXT        NOT NULL DEFAULT 'active'
                                   CHECK (status IN ('active','suspended','completed','failed','timed_out','cancelled')),
     current_step      TEXT,
@@ -52,8 +53,9 @@ CREATE TABLE IF NOT EXISTS workflow.instances (
     metadata          JSONB       NOT NULL DEFAULT '{}'
 );
 
--- Idempotent migration: add outcome column if it was created before this change
+-- Idempotent migrations
 ALTER TABLE workflow.instances ADD COLUMN IF NOT EXISTS outcome TEXT;
+ALTER TABLE workflow.instances ADD COLUMN IF NOT EXISTS campaign_id TEXT;
 
 CREATE INDEX IF NOT EXISTS idx_wf_tenant_status
     ON workflow.instances (tenant_id, status);
@@ -69,6 +71,52 @@ CREATE INDEX IF NOT EXISTS idx_wf_expires
 CREATE INDEX IF NOT EXISTS idx_wf_session
     ON workflow.instances (tenant_id, session_id)
     WHERE session_id IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS idx_wf_campaign
+    ON workflow.instances (tenant_id, campaign_id)
+    WHERE campaign_id IS NOT NULL;
+
+-- ── collect_instances ─────────────────────────────────────────────────────────
+-- One row per collect step execution. Tracks the full lifecycle of an outbound
+-- data-collection request: requested → sent → responded | timed_out.
+
+CREATE TABLE IF NOT EXISTS workflow.collect_instances (
+    collect_token   TEXT        PRIMARY KEY,
+    instance_id     UUID        NOT NULL REFERENCES workflow.instances(id),
+    tenant_id       TEXT        NOT NULL,
+    flow_id         TEXT        NOT NULL,
+    campaign_id     TEXT,
+    step_id         TEXT        NOT NULL,
+    target_type     TEXT        NOT NULL,
+    target_id       TEXT        NOT NULL,
+    channel         TEXT        NOT NULL,
+    interaction     TEXT        NOT NULL,
+    prompt          TEXT        NOT NULL,
+    options_json    JSONB       NOT NULL DEFAULT '[]',
+    fields_json     JSONB       NOT NULL DEFAULT '[]',
+    status          TEXT        NOT NULL DEFAULT 'requested'
+                                CHECK (status IN ('requested','sent','responded','timed_out')),
+    send_at         TIMESTAMPTZ NOT NULL,
+    expires_at      TIMESTAMPTZ NOT NULL,
+    responded_at    TIMESTAMPTZ,
+    response_data   JSONB       NOT NULL DEFAULT '{}',
+    elapsed_ms      BIGINT,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_ci_instance
+    ON workflow.collect_instances (instance_id);
+
+CREATE INDEX IF NOT EXISTS idx_ci_tenant_status
+    ON workflow.collect_instances (tenant_id, status);
+
+CREATE INDEX IF NOT EXISTS idx_ci_campaign
+    ON workflow.collect_instances (tenant_id, campaign_id)
+    WHERE campaign_id IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS idx_ci_expires
+    ON workflow.collect_instances (expires_at)
+    WHERE status IN ('requested', 'sent');
 """
 
 
@@ -89,6 +137,7 @@ def _row_to_instance(row: asyncpg.Record) -> dict[str, Any]:
         "flow_id":           row["flow_id"],
         "session_id":        row["session_id"],
         "pool_id":           row["pool_id"],
+        "campaign_id":       row["campaign_id"],
         "status":            row["status"],
         "current_step":      row["current_step"],
         "pipeline_state":    json.loads(row["pipeline_state"]),
@@ -101,6 +150,31 @@ def _row_to_instance(row: asyncpg.Record) -> dict[str, Any]:
         "outcome":           row["outcome"],
         "created_at":        row["created_at"].isoformat(),
         "metadata":          json.loads(row["metadata"]),
+    }
+
+
+def _row_to_collect(row: asyncpg.Record) -> dict[str, Any]:
+    return {
+        "collect_token": row["collect_token"],
+        "instance_id":   str(row["instance_id"]),
+        "tenant_id":     row["tenant_id"],
+        "flow_id":       row["flow_id"],
+        "campaign_id":   row["campaign_id"],
+        "step_id":       row["step_id"],
+        "target_type":   row["target_type"],
+        "target_id":     row["target_id"],
+        "channel":       row["channel"],
+        "interaction":   row["interaction"],
+        "prompt":        row["prompt"],
+        "options":       json.loads(row["options_json"]),
+        "fields":        json.loads(row["fields_json"]),
+        "status":        row["status"],
+        "send_at":       row["send_at"].isoformat(),
+        "expires_at":    row["expires_at"].isoformat(),
+        "responded_at":  row["responded_at"].isoformat() if row["responded_at"] else None,
+        "response_data": json.loads(row["response_data"]),
+        "elapsed_ms":    row["elapsed_ms"],
+        "created_at":    row["created_at"].isoformat(),
     }
 
 
@@ -181,7 +255,10 @@ async def db_suspend_instance(
 ) -> dict | None:
     """
     Transition instance active → suspended.
-    Idempotent: if already suspended with the same token, returns the existing row.
+    Idempotent on resume_token: if the engine crashes between calling persistSuspend
+    and saving expiresKey to pipeline_state, the retry will call this function again
+    with the same resume_token. In that case we preserve the original resume_expires_at
+    and suspended_at so the deadline does not drift forward on each retry.
     """
     # asyncpg requires a datetime object — parse ISO string
     expires_dt = datetime.fromisoformat(resume_expires_at)
@@ -195,8 +272,14 @@ async def db_suspend_instance(
             current_step      = $2,
             resume_token      = $3,
             suspend_reason    = $4,
-            resume_expires_at = $5,
-            suspended_at      = now(),
+            -- Preserve existing deadline on retry (same token = same suspend attempt).
+            -- On first call resume_token IS NULL so ELSE branch sets the new deadline.
+            resume_expires_at = CASE
+                WHEN resume_token = $3 THEN resume_expires_at
+                ELSE $5
+            END,
+            -- Do not overwrite the original suspended_at on retry
+            suspended_at      = COALESCE(suspended_at, now()),
             pipeline_state    = $6::jsonb
         WHERE id = $1
           AND status IN ('active', 'suspended')
@@ -306,3 +389,156 @@ async def db_timeout_expired_instances(
         """
     )
     return [_row_to_instance(r) for r in rows]
+
+
+# ── Collect instance CRUD ──────────────────────────────────────────────────────
+
+async def db_create_collect(
+    pool:          asyncpg.Pool,
+    collect_token: str,
+    instance_id:   str,
+    tenant_id:     str,
+    flow_id:       str,
+    campaign_id:   str | None,
+    step_id:       str,
+    target_type:   str,
+    target_id:     str,
+    channel:       str,
+    interaction:   str,
+    prompt:        str,
+    options:       list,
+    fields:        list,
+    send_at:       datetime,
+    expires_at:    datetime,
+) -> dict:
+    """Create a collect_instance with status='requested'."""
+    row = await pool.fetchrow(
+        """
+        INSERT INTO workflow.collect_instances
+            (collect_token, instance_id, tenant_id, flow_id, campaign_id,
+             step_id, target_type, target_id, channel, interaction, prompt,
+             options_json, fields_json, send_at, expires_at)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12::jsonb,$13::jsonb,$14,$15)
+        ON CONFLICT (collect_token) DO NOTHING
+        RETURNING *
+        """,
+        collect_token, UUID(instance_id), tenant_id, flow_id, campaign_id,
+        step_id, target_type, target_id, channel, interaction, prompt,
+        json.dumps(options), json.dumps(fields), send_at, expires_at,
+    )
+    if row is None:
+        # Idempotent — already exists; fetch and return
+        row = await pool.fetchrow(
+            "SELECT * FROM workflow.collect_instances WHERE collect_token = $1",
+            collect_token,
+        )
+    return _row_to_collect(row)  # type: ignore[arg-type]
+
+
+async def db_get_collect_by_token(
+    pool:          asyncpg.Pool,
+    collect_token: str,
+) -> dict | None:
+    row = await pool.fetchrow(
+        "SELECT * FROM workflow.collect_instances WHERE collect_token = $1",
+        collect_token,
+    )
+    return _row_to_collect(row) if row else None
+
+
+async def db_list_pending_sends(pool: asyncpg.Pool) -> list[dict]:
+    """
+    Returns collect_instances that are past their send_at and still 'requested'.
+    Used by the scheduler to trigger outbound contact.
+    """
+    rows = await pool.fetch(
+        """
+        SELECT * FROM workflow.collect_instances
+        WHERE status = 'requested'
+          AND send_at <= now()
+        ORDER BY send_at
+        LIMIT 500
+        """
+    )
+    return [_row_to_collect(r) for r in rows]
+
+
+async def db_mark_collect_sent(
+    pool:          asyncpg.Pool,
+    collect_token: str,
+) -> dict | None:
+    """Transition collect_instance requested → sent."""
+    row = await pool.fetchrow(
+        """
+        UPDATE workflow.collect_instances
+        SET status = 'sent'
+        WHERE collect_token = $1
+          AND status = 'requested'
+        RETURNING *
+        """,
+        collect_token,
+    )
+    return _row_to_collect(row) if row else None
+
+
+async def db_complete_collect(
+    pool:          asyncpg.Pool,
+    collect_token: str,
+    response_data: dict,
+) -> dict | None:
+    """
+    Transition collect_instance (requested|sent) → responded.
+    Sets responded_at, response_data, and elapsed_ms.
+    """
+    row = await pool.fetchrow(
+        """
+        UPDATE workflow.collect_instances
+        SET status        = 'responded',
+            responded_at  = now(),
+            response_data = $2::jsonb,
+            elapsed_ms    = EXTRACT(EPOCH FROM (now() - created_at))::BIGINT * 1000
+        WHERE collect_token = $1
+          AND status IN ('requested', 'sent')
+        RETURNING *
+        """,
+        collect_token, json.dumps(response_data),
+    )
+    return _row_to_collect(row) if row else None
+
+
+async def db_timeout_expired_collects(pool: asyncpg.Pool) -> list[dict]:
+    """
+    Atomically marks collect_instances as timed_out whose expires_at has passed.
+    Returns the affected rows so the caller can publish collect.timed_out events
+    and trigger on_timeout resume for the parent workflow instances.
+    """
+    rows = await pool.fetch(
+        """
+        UPDATE workflow.collect_instances
+        SET status = 'timed_out'
+        WHERE status IN ('requested', 'sent')
+          AND expires_at < now()
+        RETURNING *
+        """
+    )
+    return [_row_to_collect(r) for r in rows]
+
+
+async def db_list_collects_by_campaign(
+    pool:        asyncpg.Pool,
+    tenant_id:   str,
+    campaign_id: str,
+    limit:       int = 200,
+    offset:      int = 0,
+) -> list[dict]:
+    rows = await pool.fetch(
+        """
+        SELECT * FROM workflow.collect_instances
+        WHERE tenant_id   = $1
+          AND campaign_id = $2
+        ORDER BY created_at DESC
+        LIMIT $3 OFFSET $4
+        """,
+        tenant_id, campaign_id, limit, offset,
+    )
+    return [_row_to_collect(r) for r in rows]

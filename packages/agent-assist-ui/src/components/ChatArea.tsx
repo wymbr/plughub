@@ -22,6 +22,8 @@ interface ChatAreaProps {
   aiTyping: boolean;
   /** Live AI analysis data — shown as a compact strip above the messages */
   liveState?: LiveState | null;
+  /** True when the customer has disconnected — shows a disconnection banner */
+  sessionClosed?: boolean;
 }
 
 const TREND_ICON: Record<string, string> = {
@@ -52,7 +54,7 @@ function sentimentLabel(score: number): string {
   return "Muito negativo";
 }
 
-export const ChatArea: React.FC<ChatAreaProps> = ({ messages, aiTyping, liveState }) => {
+export const ChatArea: React.FC<ChatAreaProps> = ({ messages, aiTyping, liveState, sessionClosed }) => {
   const bottomRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
@@ -67,6 +69,16 @@ export const ChatArea: React.FC<ChatAreaProps> = ({ messages, aiTyping, liveStat
 
   return (
     <div className="flex-1 flex flex-col overflow-hidden">
+      {/* ── Disconnection banner ── */}
+      {sessionClosed && (
+        <div className="flex items-center gap-2 px-3 py-2 bg-amber-50 border-b border-amber-200 flex-shrink-0">
+          <span className="text-amber-600 text-sm">⚠️</span>
+          <span className="text-amber-800 text-xs font-medium">
+            Cliente desconectou — preencha o encerramento para liberar o contato.
+          </span>
+        </div>
+      )}
+
       {/* ── Live sentiment strip ── */}
       {hasLiveData && (
         <div

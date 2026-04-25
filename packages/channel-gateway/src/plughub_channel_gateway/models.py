@@ -146,7 +146,8 @@ class WsConnectionAccepted(BaseModel):
 
 
 class WsMessageOutbound(BaseModel):
-    type:       Literal["message.text"] = "message.text"
+    # type "msg.text" — matches webchat client case 'msg.text'
+    type:       Literal["msg.text"] = "msg.text"
     message_id: str
     author:     dict[str, Any]
     text:       str
@@ -154,7 +155,8 @@ class WsMessageOutbound(BaseModel):
 
 
 class WsMenuRender(BaseModel):
-    type:        Literal["menu.render"] = "menu.render"
+    # type "interaction.request" — matches webchat client case 'interaction.request'
+    type:        Literal["interaction.request"] = "interaction.request"
     menu_id:     str
     interaction: Literal["text", "button", "list", "checklist", "form"]
     prompt:      str
@@ -168,7 +170,8 @@ class WsAgentTyping(BaseModel):
 
 
 class WsSessionClosed(BaseModel):
-    type:   Literal["session.closed"] = "session.closed"
+    # type "conn.session_ended" — matches webchat client case 'conn.session_ended'
+    type:   Literal["conn.session_ended"] = "conn.session_ended"
     reason: str
 
 

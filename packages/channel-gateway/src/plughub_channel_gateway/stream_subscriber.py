@@ -97,14 +97,21 @@ class StreamSubscriber:
         conexão) não aciona a verificação, pois o stream pode ainda não ter eventos.
         """
         # ── Verificação de stream expirado (somente em reconexão) ──────────────
+        # Usa XRANGE em vez de EXISTS para eliminar a janela de race entre a
+        # sondagem e o primeiro XREAD.  XRANGE retorna lista vazia quando a chave
+        # não existe — comportamento idêntico a uma chave existente sem entradas
+        # antigas, mas não aciona StreamExpiredError pois cursor="0" já cobre esse
+        # caso.  Cursor != "0" + lista vazia → stream expirou.
         if self._cursor != "0":
             try:
-                exists = await self._redis.exists(self._stream_key)
+                probe = await self._redis.xrange(self._stream_key, "-", "+", count=1)
             except asyncio.CancelledError:
                 return
+            except StreamExpiredError:
+                raise
             except Exception:
-                exists = 1  # se não der pra checar, presume que existe
-            if not exists:
+                probe = [1]  # se não der pra checar, presume que existe
+            if not probe:
                 raise StreamExpiredError(
                     f"stream {self._stream_key} not found — session may have ended"
                 )
@@ -207,8 +214,9 @@ class StreamSubscriber:
         base = {
             "message_id": decoded.get("event_id", ""),
             "author": {
-                "role":         author.get("role", "primary") if isinstance(author, dict) else "primary",
+                "role":          author.get("role", "primary") if isinstance(author, dict) else "primary",
                 "participant_id": author.get("participant_id", "") if isinstance(author, dict) else "",
+                "instance_id":   author.get("instance_id", "") if isinstance(author, dict) else "",
             },
             "timestamp": decoded.get("timestamp", ""),
         }
@@ -273,6 +281,7 @@ class StreamSubscriber:
         return {
             "type":           "presence.agent_joined",
             "participant_id": author.get("participant_id", ""),
+            "instance_id":    author.get("instance_id", ""),
             "role":           role,
         }
 
@@ -287,6 +296,7 @@ class StreamSubscriber:
         return {
             "type":           "presence.agent_left",
             "participant_id": author.get("participant_id", ""),
+            "instance_id":    author.get("instance_id", ""),
             "role":           role,
         }
 

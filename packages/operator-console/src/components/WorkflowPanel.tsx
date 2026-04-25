@@ -38,7 +38,7 @@ export function WorkflowPanel({ tenantId, onBack }: Props) {
   const { instances, loading: listLoading } = useWorkflowInstances(tenantId, statusFilter)
   const { instance: selectedInstance } = useWorkflowInstance(selectedInstanceId)
 
-  const sorted = instances.sort(
+  const sorted = [...instances].sort(
     (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime(),
   )
 

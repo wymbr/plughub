@@ -22,7 +22,7 @@ from .consumer import run_consumer
 
 KAFKA_BROKERS = os.getenv("KAFKA_BROKERS", "kafka:9092")
 REDIS_URL     = os.getenv("REDIS_URL",     "redis://redis:6379")
-DATABASE_URL  = os.getenv("DATABASE_URL",  "postgresql://plughub:plughub@postgres:5432/plughub_demo")
+DATABASE_URL  = os.getenv("DATABASE_URL",  "postgresql://plughub:plughub@postgres:5432/plughub")
 
 
 def main() -> None:

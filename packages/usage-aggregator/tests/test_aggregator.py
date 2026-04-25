@@ -4,7 +4,8 @@ Unit tests para UsageAggregator e funções auxiliares.
 
 Usa mocks para Redis e PostgreSQL — testa a lógica de agregação sem infra externa.
 Cobre:
-  - INCRBY correto no Redis
+  - INCRBY correto no Redis (via MULTI/EXEC)
+  - pipeline(transaction=True) é chamado (garantia de atomicidade)
   - Idempotência via event_id (ON CONFLICT DO NOTHING simulado)
   - Truncagem de timestamp para hora
   - Graceful degradation em falha de Redis
@@ -37,15 +38,24 @@ def make_event(**kwargs) -> UsageEvent:
     return UsageEvent(**defaults)
 
 
-def make_redis_mock() -> MagicMock:
+def make_redis_mock():
+    """
+    Returns (mock_redis, mock_pipe).
+    The pipeline is wired as an async context manager so that
+    `async with redis.pipeline(transaction=True) as pipe:` works in tests.
+    pipeline(transaction=True) is asserted in dedicated tests.
+    """
     mock = MagicMock()
     pipe = AsyncMock()
-    pipe.incrbyfloat = MagicMock(return_value=pipe)
-    pipe.expire      = MagicMock(return_value=pipe)
-    pipe.set         = MagicMock(return_value=pipe)
+    pipe.incrbyfloat = AsyncMock(return_value=pipe)
+    pipe.expire      = AsyncMock(return_value=pipe)
+    pipe.set         = AsyncMock(return_value=pipe)
     pipe.execute     = AsyncMock(return_value=[1.0, True, True])
+    # async context manager support: async with redis.pipeline(transaction=True) as pipe:
+    pipe.__aenter__  = AsyncMock(return_value=pipe)
+    pipe.__aexit__   = AsyncMock(return_value=None)
     mock.pipeline    = MagicMock(return_value=pipe)
-    return mock
+    return mock, pipe
 
 
 def make_pg_mock() -> MagicMock:
@@ -64,21 +74,32 @@ def make_pg_mock() -> MagicMock:
 @pytest.mark.asyncio
 async def test_redis_incrby_called_with_correct_key_and_quantity():
     """INCRBY deve usar a chave correta e a quantidade do evento."""
-    redis_mock      = make_redis_mock()
+    redis_mock, pipe = make_redis_mock()
     pg_pool, pg_conn = make_pg_mock()
     agg = UsageAggregator(redis_client=redis_mock, pg_pool=pg_pool)
 
     event = make_event(tenant_id="t1", dimension="sessions", quantity=1.0)
     await agg.process(event)
 
-    pipe = redis_mock.pipeline.return_value
     pipe.incrbyfloat.assert_called_once_with("t1:usage:current:sessions", 1.0)
+
+
+@pytest.mark.asyncio
+async def test_redis_pipeline_called_with_transaction_true():
+    """pipeline() deve ser chamado com transaction=True para garantir atomicidade (MULTI/EXEC)."""
+    redis_mock, _ = make_redis_mock()
+    pg_pool, _    = make_pg_mock()
+    agg = UsageAggregator(redis_client=redis_mock, pg_pool=pg_pool)
+
+    await agg.process(make_event())
+
+    redis_mock.pipeline.assert_called_once_with(transaction=True)
 
 
 @pytest.mark.asyncio
 async def test_redis_incrby_uses_token_quantity_for_llm():
     """Tokens LLM com quantidade > 1 devem usar o valor correto."""
-    redis_mock       = make_redis_mock()
+    redis_mock, pipe = make_redis_mock()
     pg_pool, pg_conn = make_pg_mock()
     agg = UsageAggregator(redis_client=redis_mock, pg_pool=pg_pool)
 
@@ -90,7 +111,6 @@ async def test_redis_incrby_uses_token_quantity_for_llm():
     )
     await agg.process(event)
 
-    pipe = redis_mock.pipeline.return_value
     pipe.incrbyfloat.assert_called_once_with(
         "tenant-abc:usage:current:llm_tokens_input", 1240.0
     )
@@ -99,7 +119,7 @@ async def test_redis_incrby_uses_token_quantity_for_llm():
 @pytest.mark.asyncio
 async def test_postgres_insert_called_with_event_fields():
     """Deve inserir evento bruto com todos os campos."""
-    redis_mock       = make_redis_mock()
+    redis_mock, _    = make_redis_mock()
     pg_pool, pg_conn = make_pg_mock()
     agg = UsageAggregator(redis_client=redis_mock, pg_pool=pg_pool)
 
@@ -115,7 +135,7 @@ async def test_postgres_insert_called_with_event_fields():
 @pytest.mark.asyncio
 async def test_postgres_upsert_usage_hourly():
     """Deve fazer upsert em usage_hourly com a quantidade correta."""
-    redis_mock       = make_redis_mock()
+    redis_mock, _    = make_redis_mock()
     pg_pool, pg_conn = make_pg_mock()
     agg = UsageAggregator(redis_client=redis_mock, pg_pool=pg_pool)
 
@@ -135,11 +155,13 @@ async def test_postgres_upsert_usage_hourly():
 async def test_redis_failure_does_not_raise():
     """Falha no Redis não deve propagar exceção."""
     redis_mock = MagicMock()
-    pipe = MagicMock()
-    pipe.incrbyfloat = MagicMock(return_value=pipe)
-    pipe.expire      = MagicMock(return_value=pipe)
-    pipe.set         = MagicMock(return_value=pipe)
+    pipe = AsyncMock()
+    pipe.incrbyfloat = AsyncMock(return_value=pipe)
+    pipe.expire      = AsyncMock(return_value=pipe)
+    pipe.set         = AsyncMock(return_value=pipe)
     pipe.execute     = AsyncMock(side_effect=ConnectionError("redis down"))
+    pipe.__aenter__  = AsyncMock(return_value=pipe)
+    pipe.__aexit__   = AsyncMock(return_value=None)
     redis_mock.pipeline = MagicMock(return_value=pipe)
 
     pg_pool, pg_conn = make_pg_mock()
@@ -152,7 +174,7 @@ async def test_redis_failure_does_not_raise():
 @pytest.mark.asyncio
 async def test_postgres_failure_does_not_raise():
     """Falha no PostgreSQL não deve propagar exceção."""
-    redis_mock       = make_redis_mock()
+    redis_mock, _    = make_redis_mock()
     pg_pool, pg_conn = make_pg_mock()
     pg_conn.execute  = AsyncMock(side_effect=Exception("pg down"))
     agg = UsageAggregator(redis_client=redis_mock, pg_pool=pg_pool)
@@ -188,7 +210,7 @@ async def test_duplicate_event_id_is_silently_ignored():
     """
     import asyncpg
 
-    redis_mock       = make_redis_mock()
+    redis_mock, _    = make_redis_mock()
     pg_pool, pg_conn = make_pg_mock()
     pg_conn.execute  = AsyncMock(
         side_effect=asyncpg.UniqueViolationError("duplicate key")

@@ -17,7 +17,9 @@ interface WorkflowEvent {
   instance_id: string
   flow_id: string
   current_step?: string
-  decision?: 'approved' | 'rejected' | 'timeout'
+  decision?: 'approved' | 'rejected' | 'input' | 'timeout'
+  /** For collect.responded resumes — the response data from the target */
+  response_data?: Record<string, unknown>
   [key: string]: unknown
 }
 
@@ -113,12 +115,15 @@ export class SkillFlowWorker {
           break
 
         case 'workflow.resumed': {
-          const decision = event.decision as 'approved' | 'rejected' | 'timeout' | undefined
+          const decision = (event.decision ?? 'approved') as
+            'approved' | 'rejected' | 'input' | 'timeout'
           const currentStep = instance.current_step ?? ''
           const resumeContext = {
-            decision: decision ?? 'approved',
-            step_id: currentStep,
-            payload: {},
+            decision,
+            step_id:  currentStep,
+            // For collect responses, forward the response_data as payload so
+            // the collect step can write it to pipeline_state[output_as].
+            payload:  event.response_data ?? {},
           }
           await this.engineRunner.runInstance(instance, resumeContext)
           break
@@ -128,8 +133,8 @@ export class SkillFlowWorker {
           const currentStep = instance.current_step ?? ''
           const resumeContext = {
             decision: 'timeout' as const,
-            step_id: currentStep,
-            payload: {},
+            step_id:  currentStep,
+            payload:  {},
           }
           await this.engineRunner.runInstance(instance, resumeContext)
           break

@@ -6,6 +6,14 @@
  */
 import { useCallback, useEffect, useState } from 'react'
 
+async function safeJson<T>(res: Response): Promise<T> {
+  const ct = res.headers.get('content-type') ?? ''
+  if (!ct.includes('application/json') && !ct.includes('text/json')) {
+    throw new Error(`API indisponível (HTTP ${res.status})`)
+  }
+  return res.json() as Promise<T>
+}
+
 export interface HolidaySet {
   id:              string
   organization_id: string
@@ -76,7 +84,7 @@ export function useHolidaySets(orgId: string, tenantId: string): {
     const params = new URLSearchParams({ organization_id: orgId })
     if (tenantId) params.set('tenant_id', tenantId)
     fetch(`/v1/holiday-sets?${params.toString()}`)
-      .then(r => r.ok ? r.json() : Promise.reject(`HTTP ${r.status}`))
+      .then(r => safeJson<HolidaySet[]>(r).then(j => r.ok ? j : Promise.reject(`HTTP ${r.status}`)))
       .then(j => { setSets(j); setLoading(false) })
       .catch(e => { setError(String(e)); setLoading(false) })
   }, [orgId, tenantId, tick])
@@ -97,7 +105,7 @@ export async function createHolidaySet(data: {
     body: JSON.stringify({ scope: 'tenant', ...data }),
   })
   if (!res.ok) throw new Error(`HTTP ${res.status}`)
-  return res.json()
+  return safeJson(res)
 }
 
 export async function updateHolidaySet(id: string, patch: Partial<HolidaySet>): Promise<HolidaySet> {
@@ -106,7 +114,7 @@ export async function updateHolidaySet(id: string, patch: Partial<HolidaySet>): 
     body: JSON.stringify(patch),
   })
   if (!res.ok) throw new Error(`HTTP ${res.status}`)
-  return res.json()
+  return safeJson(res)
 }
 
 export async function deleteHolidaySet(id: string): Promise<void> {
@@ -136,7 +144,7 @@ export function useCalendars(orgId: string, tenantId: string): {
     const params = new URLSearchParams({ organization_id: orgId })
     if (tenantId) params.set('tenant_id', tenantId)
     fetch(`/v1/calendars?${params.toString()}`)
-      .then(r => r.ok ? r.json() : Promise.reject(`HTTP ${r.status}`))
+      .then(r => safeJson<CalendarRecord[]>(r).then(j => r.ok ? j : Promise.reject(`HTTP ${r.status}`)))
       .then(j => { setCalendars(j); setLoading(false) })
       .catch(e => { setError(String(e)); setLoading(false) })
   }, [orgId, tenantId, tick])
@@ -158,7 +166,7 @@ export async function createCalendar(data: {
     body: JSON.stringify({ scope: 'tenant', exceptions: [], ...data }),
   })
   if (!res.ok) throw new Error(`HTTP ${res.status}`)
-  return res.json()
+  return safeJson(res)
 }
 
 export async function updateCalendar(id: string, patch: Partial<CalendarRecord>): Promise<CalendarRecord> {
@@ -167,7 +175,7 @@ export async function updateCalendar(id: string, patch: Partial<CalendarRecord>)
     body: JSON.stringify(patch),
   })
   if (!res.ok) throw new Error(`HTTP ${res.status}`)
-  return res.json()
+  return safeJson(res)
 }
 
 export async function deleteCalendar(id: string): Promise<void> {

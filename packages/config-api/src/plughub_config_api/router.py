@@ -146,14 +146,23 @@ async def put_config(
     Upsert a config value.
     body.tenant_id = null  → sets global platform default.
     body.tenant_id = "xyz" → sets tenant-specific override.
+    Publishes config.changed to Kafka after a successful write (fire-and-forget).
     """
-    store = request.app.state.store
+    store   = request.app.state.store
+    emitter = request.app.state.emitter
     await store.set(
         tenant_id   = body.tenant_id,
         namespace   = namespace,
         key         = key,
         value       = body.value,
         description = body.description,
+    )
+    # Fire-and-forget — never let Kafka failure affect the HTTP response
+    await emitter.emit_config_changed(
+        tenant_id = body.tenant_id,
+        namespace = namespace,
+        key       = key,
+        operation = "set",
     )
     effective_tenant = body.tenant_id or "__global__"
     return JSONResponse(
@@ -185,6 +194,7 @@ async def delete_config(
     - Deleting the global entry leaves all tenants without a fallback (returns null).
     """
     store   = request.app.state.store
+    emitter = request.app.state.emitter
     deleted = await store.delete(tenant_id, namespace, key)
     if not deleted:
         raise HTTPException(
@@ -192,6 +202,12 @@ async def delete_config(
             detail=f"Config entry {namespace}.{key} not found "
                    f"(tenant={tenant_id or '__global__'})",
         )
+    await emitter.emit_config_changed(
+        tenant_id = tenant_id,
+        namespace = namespace,
+        key       = key,
+        operation = "delete",
+    )
     return JSONResponse(content={"ok": True, "deleted": True})
 
 

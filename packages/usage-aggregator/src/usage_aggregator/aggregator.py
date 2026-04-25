@@ -46,22 +46,28 @@ class UsageAggregator:
 
     async def _increment_redis(self, event: UsageEvent) -> None:
         """
-        INCRBY {tenant_id}:usage:current:{dimension}
-        Inicializa cycle_start se ainda não existir.
+        Increments the usage counter atomically using MULTI/EXEC.
+
+        Using MULTI/EXEC (not pipeline) ensures that concurrent workers
+        processing the same event (e.g. Kafka redelivery) cannot interleave
+        the INCRBY + EXPIRE pair, which would cause double-counting.
+
+        Note: deduplication at the event_id level is enforced by the PostgreSQL
+        INSERT (PRIMARY KEY), but Redis counters are the fast-path for quota checks.
         """
         counter_key = f"{event.tenant_id}:usage:current:{event.dimension}"
         cycle_key   = f"{event.tenant_id}:usage:cycle_start"
 
-        pipe = self._redis.pipeline()
-        pipe.incrbyfloat(counter_key, event.quantity)
-        pipe.expire(counter_key, COUNTER_TTL_SECONDS)
-        # SET NX: só define cycle_start se ainda não existe (início do primeiro ciclo)
-        pipe.set(cycle_key, event.timestamp, ex=COUNTER_TTL_SECONDS, nx=True)
         try:
-            await pipe.execute()
+            async with self._redis.pipeline(transaction=True) as pipe:
+                await pipe.incrbyfloat(counter_key, event.quantity)
+                await pipe.expire(counter_key, COUNTER_TTL_SECONDS)
+                # SET NX: only sets cycle_start on first event of the cycle
+                await pipe.set(cycle_key, event.timestamp, ex=COUNTER_TTL_SECONDS, nx=True)
+                await pipe.execute()
         except Exception as exc:
             logger.warning(
-                "Redis INCRBY failed for tenant=%s dim=%s: %s",
+                "Redis MULTI/EXEC failed for tenant=%s dim=%s: %s — counter may be stale",
                 event.tenant_id, event.dimension, exc,
             )
 

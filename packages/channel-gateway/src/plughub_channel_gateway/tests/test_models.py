@@ -91,7 +91,7 @@ class TestServerMessages:
             text="Posso te ajudar?",
             timestamp="2024-01-01T10:00:00Z",
         )
-        assert msg.type == "message.text"
+        assert msg.type == "msg.text"
         d = msg.model_dump()
         assert d["author"]["type"] == "agent_ai"
 
@@ -102,7 +102,7 @@ class TestServerMessages:
             prompt="Escolha uma opção:",
             options=[{"id": "opt_1", "label": "Sim"}, {"id": "opt_2", "label": "Não"}],
         )
-        assert msg.type == "menu.render"
+        assert msg.type == "interaction.request"
         assert len(msg.options) == 2
 
     def test_ws_menu_render_no_options(self):
@@ -120,7 +120,7 @@ class TestServerMessages:
 
     def test_ws_session_closed(self):
         msg = WsSessionClosed(reason="agent_done")
-        assert msg.type == "session.closed"
+        assert msg.type == "conn.session_ended"
         assert msg.reason == "agent_done"
 
 

@@ -9,7 +9,7 @@
  *   ts-node runner.ts --only 05       — run only scenario 05 (performance)
  *   ts-node runner.ts --conference    — run scenarios 01–04 + 06 (conference + reconnect)
  *   ts-node runner.ts --only 06       — run only scenario 06 (conference + reconnect)
- *   ts-node runner.ts --demo          — run all scenarios 01–12 (full demo suite)
+ *   ts-node runner.ts --demo          — run all scenarios 01–16 (full demo suite)
  *   ts-node runner.ts --only 07       — run only scenario 07 (full inbound flow)
  *   ts-node runner.ts --only 08       — run only scenario 08 (outbound flow)
  *   ts-node runner.ts --only 09       — run only scenario 09 (session replayer)
@@ -17,8 +17,14 @@
  *   ts-node runner.ts --only 11       — run only scenario 11 (comparison mode)
  *   ts-node runner.ts --only 12       — run only scenario 12 (webchat channel)
  *   ts-node runner.ts --webchat       — run scenarios 01–04 + 12 (includes webchat)
- *   ts-node runner.ts --workflow      — run scenarios 01–04 + 13 (workflow automation)
+ *   ts-node runner.ts --workflow      — run scenarios 01–04 + 13 + 14 (workflow + collect)
  *   ts-node runner.ts --only 13       — run only scenario 13 (workflow automation)
+ *   ts-node runner.ts --collect       — run scenarios 01–04 + 14 (collect step)
+ *   ts-node runner.ts --only 14       — run only scenario 14 (collect step)
+ *   ts-node runner.ts --bootstrap     — run scenario 15 (instance bootstrap)
+ *   ts-node runner.ts --only 15       — run only scenario 15 (instance bootstrap)
+ *   ts-node runner.ts --reconcile     — run scenarios 01–04 + 15 + 16 (bootstrap + live reconcile)
+ *   ts-node runner.ts --only 16       — run only scenario 16 (live reconciliation)
  *
  * Environment variables (all optional — defaults work with docker-compose.test.yml):
  *   MCP_SERVER_URL            (default: http://localhost:3100)
@@ -30,6 +36,9 @@
  *   CHANNEL_GATEWAY_HTTP_URL  (default: http://localhost:8010)
  *   WORKFLOW_API_URL          (default: http://localhost:3800)
  *   CALENDAR_API_URL          (default: http://localhost:3700)
+ *   ANALYTICS_API_URL         (default: http://localhost:3500)
+ *   CONFIG_API_URL            (default: http://localhost:3600)
+ *   CONFIG_API_ADMIN_TOKEN    (default: test_e2e_admin_token)
  *   REDIS_URL                 (default: redis://localhost:6379)
  *   KAFKA_BROKERS             (default: localhost:9092)
  *   TENANT_ID                 (default: tenant_e2e_test)
@@ -45,6 +54,7 @@ import {
   waitForService,
   waitForRedis,
   waitForKafka,
+  waitForBootstrap,
 } from "./lib/wait-for";
 import { ReportBuilder } from "./lib/report";
 import { seedBaseFixtures } from "./fixtures/seed";
@@ -64,6 +74,9 @@ import { run as scenario10 } from "./scenarios/10_masking";
 import { run as scenario11 } from "./scenarios/11_comparison_mode";
 import { run as scenario12 } from "./scenarios/12_webchat_channel";
 import { run as scenario13 } from "./scenarios/13_workflow_automation";
+import { run as scenario14 } from "./scenarios/14_collect_step";
+import { run as scenario15 } from "./scenarios/15_instance_bootstrap";
+import { run as scenario16 } from "./scenarios/16_live_reconciliation";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Configuration
@@ -79,11 +92,14 @@ const config = {
   channelGatewayHttpUrl: process.env["CHANNEL_GATEWAY_HTTP_URL"] ?? "http://localhost:8010",
   workflowApiUrl:        process.env["WORKFLOW_API_URL"]         ?? "http://localhost:3800",
   calendarApiUrl:        process.env["CALENDAR_API_URL"]         ?? "http://localhost:3700",
+  analyticsApiUrl:       process.env["ANALYTICS_API_URL"]        ?? "http://localhost:3500",
+  configApiUrl:          process.env["CONFIG_API_URL"]           ?? "http://localhost:3600",
   redisUrl:              process.env["REDIS_URL"]                ?? "redis://localhost:6379",
   kafkaBrokers:          (process.env["KAFKA_BROKERS"]           ?? "localhost:9092").split(","),
   tenantId:              process.env["TENANT_ID"]                ?? "tenant_e2e_test",
   jwtSecret:             process.env["JWT_SECRET"]               ?? "test_e2e_secret_32chars",
   webchatJwtSecret:      process.env["WEBCHAT_JWT_SECRET"]       ?? "test_e2e_webchat_secret_32chars",
+  configApiAdminToken:   process.env["CONFIG_API_ADMIN_TOKEN"]   ?? "test_e2e_admin_token",
   reportPath:            process.env["E2E_REPORT_PATH"]          ?? join(__dirname, "e2e-report.json"),
 };
 
@@ -98,7 +114,10 @@ const runPerf       = args.includes("--perf")       || onlyScenario === "05";
 const runConference = args.includes("--conference") || onlyScenario === "06";
 const runWebchat    = args.includes("--webchat")    || onlyScenario === "12";
 const runWorkflow   = args.includes("--workflow")   || onlyScenario === "13";
-const runDemo       = args.includes("--demo");  // runs all scenarios 01–13
+const runCollect    = args.includes("--collect")    || onlyScenario === "14";
+const runBootstrap  = args.includes("--bootstrap")  || onlyScenario === "15";
+const runReconcile  = args.includes("--reconcile") || onlyScenario === "16";
+const runDemo       = args.includes("--demo");  // runs all scenarios 01–16
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Scenario registry
@@ -147,6 +166,18 @@ if (runDemo || runWorkflow || onlyScenario === "13") {
   ALL_SCENARIOS.push({ id: "13", fn: scenario13 });
 }
 
+if (runDemo || runWorkflow || runCollect || onlyScenario === "14") {
+  ALL_SCENARIOS.push({ id: "14", fn: scenario14 });
+}
+
+if (runDemo || runBootstrap || onlyScenario === "15") {
+  ALL_SCENARIOS.push({ id: "15", fn: scenario15 });
+}
+
+if (runDemo || runReconcile || onlyScenario === "16") {
+  ALL_SCENARIOS.push({ id: "16", fn: scenario16 });
+}
+
 const SCENARIOS_TO_RUN = onlyScenario
   ? ALL_SCENARIOS.filter((s) => s.id === onlyScenario)
   : ALL_SCENARIOS;
@@ -164,6 +195,7 @@ async function main(): Promise<void> {
   console.log(`  Registry:    ${config.agentRegistryUrl}`);
   console.log(`  Workflow:    ${config.workflowApiUrl}`);
   console.log(`  Calendar:    ${config.calendarApiUrl}`);
+  console.log(`  Analytics:   ${config.analyticsApiUrl}`);
   console.log(`  Kafka:       ${config.kafkaBrokers.join(",")}`);
   console.log(`  Redis:       ${config.redisUrl}`);
   console.log(
@@ -175,18 +207,32 @@ async function main(): Promise<void> {
   console.log("[runner] Waiting for services to be ready...");
 
   const scenarioIds = new Set(SCENARIOS_TO_RUN.map((s) => s.id));
-  const needsCore     = [...scenarioIds].some((id) => !["13"].includes(id));
-  const needsWorkflow = scenarioIds.has("13") || runWorkflow;
+  const needsCore      = [...scenarioIds].some((id) => !["13", "14", "15", "16"].includes(id));
+  const needsRegistry  = scenarioIds.has("15") || scenarioIds.has("16") || needsCore;
+  const needsBootstrap = scenarioIds.has("15") || scenarioIds.has("16");
+  const needsConfigApi = scenarioIds.has("16");
+  const needsWorkflow  = scenarioIds.has("13") || scenarioIds.has("14") || runWorkflow || runCollect;
 
   const waits: Promise<unknown>[] = [
     waitForRedis(config.redisUrl, 30000),
     waitForKafka(config.kafkaBrokers, 30000),
   ];
 
-  if (needsCore) {
+  if (needsRegistry) {
     waits.push(
       waitForService(`${config.agentRegistryUrl}/v1/health`, "agent-registry", 30000),
-      waitForService(`${config.mcpServerUrl}/sse`, "mcp-server-plughub", 30000),
+    );
+  }
+
+  if (needsConfigApi) {
+    waits.push(
+      waitForService(`${config.configApiUrl}/v1/health`, "config-api", 30000),
+    );
+  }
+
+  if (needsCore) {
+    waits.push(
+      waitForService(`${config.mcpServerUrl}/health`, "mcp-server-plughub", 30000),
       waitForService(`${config.skillFlowUrl}/health`, "skill-flow-service", 30000),
       waitForService(`${config.rulesEngineUrl}/rules?tenant_id=${config.tenantId}`, "rules-engine", 30000),
     );
@@ -202,8 +248,17 @@ async function main(): Promise<void> {
   await Promise.all(waits);
   console.log("[runner] All services ready.\n");
 
-  // ── Seed base fixtures (only when core services are available) ───────────────
-  if (needsCore) {
+  // ── Wait for bootstrap readiness (scenarios 15 and 16) ──────────────────────
+  // The orchestrator-bridge has no HTTP health endpoint — it signals readiness
+  // by writing {tenant}:bootstrap:ready to Redis after its first reconciliation.
+  if (needsBootstrap) {
+    console.log("[runner] Waiting for orchestrator-bridge initial reconciliation...");
+    await waitForBootstrap(config.redisUrl, config.tenantId, 60000);
+    console.log("[runner] Bootstrap ready.\n");
+  }
+
+  // ── Seed base fixtures (only when registry is available) ────────────────────
+  if (needsRegistry) {
     console.log("[runner] Seeding base fixtures...");
     await seedBaseFixtures({
       agentRegistryUrl: config.agentRegistryUrl,
@@ -211,7 +266,7 @@ async function main(): Promise<void> {
     });
     console.log("[runner] Fixtures seeded.\n");
   } else {
-    console.log("[runner] Skipping base fixtures (no core services needed).\n");
+    console.log("[runner] Skipping base fixtures (no registry-dependent scenarios).\n");
   }
 
   // ── Run scenarios ──────────────────────────────────────────────────────────
@@ -236,6 +291,9 @@ async function main(): Promise<void> {
       channelGatewayHttpUrl: config.channelGatewayHttpUrl,
       workflowApiUrl:        config.workflowApiUrl,
       calendarApiUrl:        config.calendarApiUrl,
+      analyticsApiUrl:       config.analyticsApiUrl,
+      configApiUrl:          config.configApiUrl,
+      configApiAdminToken:   config.configApiAdminToken,
       redis,
       kafka,
       tenantId:              config.tenantId,

@@ -5,7 +5,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import type { WorkflowInstance } from '../types'
 
-const WORKFLOW_API_BASE = import.meta.env.VITE_WORKFLOW_API_BASE_URL ?? 'http://localhost:3800'
+const WORKFLOW_API_BASE = import.meta.env.VITE_WORKFLOW_API_BASE_URL ?? ''
 
 export function useWorkflowInstances(
   tenantId: string,

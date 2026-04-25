@@ -343,6 +343,20 @@ export function registerRuntimeTools(server: McpServer, deps: RuntimeDeps): void
           timestamp:        new Date().toISOString(),
         })
 
+        // Notifica o cliente que o agente entrou na conversa (visibility: all)
+        try {
+          await (redis as any).xadd(
+            `session:${session_id}:stream`,
+            "*",
+            "event_id",   crypto.randomUUID(),
+            "type",       "participant_joined",
+            "timestamp",  new Date().toISOString(),
+            "author",     JSON.stringify({ participant_id, instance_id, role: "primary" }),
+            "visibility", JSON.stringify("all"),
+            "payload",    JSON.stringify({ participant_id, instance_id }),
+          )
+        } catch { /* stream não disponível — non-fatal */ }
+
         // Metering: emite sessions na primeira vez que esta sessão é servida.
         // Lê o canal da sessão do Redis; fallback "webchat" se meta não disponível.
         let sessionChannel = "webchat"
@@ -417,6 +431,20 @@ export function registerRuntimeTools(server: McpServer, deps: RuntimeDeps): void
         } else if (currentSessions === 0 && instanceState !== "paused") {
           await redis.hset(instanceKey, "state", "ready")
         }
+
+        // Notifica o cliente que o agente saiu da conversa (visibility: all)
+        try {
+          await (redis as any).xadd(
+            `session:${session_id}:stream`,
+            "*",
+            "event_id",   crypto.randomUUID(),
+            "type",       "participant_left",
+            "timestamp",  new Date().toISOString(),
+            "author",     JSON.stringify({ participant_id, instance_id, role: "primary" }),
+            "visibility", JSON.stringify("all"),
+            "payload",    JSON.stringify({ participant_id, instance_id, reason: outcome }),
+          )
+        } catch { /* stream não disponível — non-fatal */ }
 
         // Publica em agent.done (Kafka) — consumido por Rules Engine e Analytics
         await kafka.publish("agent.done", {

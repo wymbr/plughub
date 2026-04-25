@@ -331,7 +331,7 @@ export function registerSessionTools(server: McpServer, deps: SessionDeps): void
         const { session_token, session_id, participant_id, content, visibility } =
           MessageSendInputSchema.parse(input)
 
-        const { tenant_id } = verifySessionToken(session_token)
+        const { tenant_id, instance_id: senderInstanceId } = verifySessionToken(session_token)
 
         // Lê papel do participante no Redis para montar o author
         let role = "primary"
@@ -342,6 +342,13 @@ export function registerSessionTools(server: McpServer, deps: SessionDeps): void
           )
           if (instRaw) role = instRaw
         } catch { /* usa 'primary' como fallback */ }
+
+        // Resolve instance_id via mapeamento participant_id → instance_id (fallback: token)
+        let resolvedInstanceId = senderInstanceId ?? ""
+        try {
+          const mapped = await redis.get(`${tenant_id}:participant:${participant_id}:instance`)
+          if (mapped) resolvedInstanceId = mapped
+        } catch { /* usa fallback do token */ }
 
         const event_id   = crypto.randomUUID()
         const timestamp  = new Date().toISOString()
@@ -394,6 +401,7 @@ export function registerSessionTools(server: McpServer, deps: SessionDeps): void
           timestamp,
           author: {
             participant_id,
+            instance_id: resolvedInstanceId,
             role,
           },
           visibility,
@@ -441,6 +449,50 @@ export function registerSessionTools(server: McpServer, deps: SessionDeps): void
           visibility: Array.isArray(visibility) ? visibility : visibility,
           timestamp,
         })
+
+        // ── Publicar no canal WebSocket do agente humano ───────────────────
+        // O bridge de orquestração só encaminha mensagens do cliente
+        // (conversations.inbound) ao canal agent:events:{session_id}.
+        // Mensagens de agentes IA (visibility:"all") e notas internas
+        // (visibility:"agents_only") precisam ser entregues aqui diretamente.
+        // Não publicamos para visibility do tipo array — são direcionadas a
+        // participantes específicos que já possuem canais dedicados.
+        if (visibility === "all" || visibility === "agents_only") {
+          try {
+            // Determina author.type para o envelope WS.
+            // Agentes IA registram agent_type_id na hash de instância.
+            let wsAuthorType = "agent_human"
+            if (role === "customer") {
+              wsAuthorType = "customer"
+            } else {
+              try {
+                const aiTypeId = await redis.hget(
+                  `${tenant_id}:agent:instance:${participant_id}`,
+                  "agent_type_id"
+                )
+                if (aiTypeId) wsAuthorType = "agent_ai"
+              } catch { /* fallback para agent_human */ }
+            }
+
+            const wsEvent = {
+              type:       "message.text",
+              message_id,
+              author: {
+                type: wsAuthorType,
+                id:   participant_id,
+              },
+              text:       typeof finalContent === "string"
+                            ? finalContent
+                            : JSON.stringify(finalContent),
+              timestamp,
+              visibility: visibility as string,
+            }
+            await redis.publish(
+              `agent:events:${session_id}`,
+              JSON.stringify(wsEvent)
+            )
+          } catch { /* entrega WS é best-effort — não-fatal */ }
+        }
 
         // Metering: emite messages para mensagens visíveis ao cliente (visibility: "all").
         // Lê o canal da sessão para enriquecer o metadata; fallback "webchat".
@@ -556,7 +608,7 @@ export function registerSessionTools(server: McpServer, deps: SessionDeps): void
         const event_id  = crypto.randomUUID()
         const timestamp = new Date().toISOString()
 
-        // Escreve evento de saída do agente atual no stream
+        // Escreve evento de saída do agente atual no stream (visibility: all — cliente precisa saber)
         try {
           await (redis as any).xadd(
             `session:${session_id}:stream`,
@@ -565,7 +617,7 @@ export function registerSessionTools(server: McpServer, deps: SessionDeps): void
             "type",       "participant_left",
             "timestamp",  timestamp,
             "author",     JSON.stringify({ participant_id, role: "primary" }),
-            "visibility", JSON.stringify("agents_only"),
+            "visibility", JSON.stringify("all"),
             "payload",    JSON.stringify({
               participant_id,
               reason: handoff_reason,

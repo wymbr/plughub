@@ -37,6 +37,23 @@ export interface PersistSuspendParams {
   metadata?: Record<string, unknown>
 }
 
+export interface PersistCollectParams {
+  step_id:        string
+  collect_token:  string
+  target:         { type: string; id: string }
+  channel:        string
+  interaction:    string
+  prompt:         string
+  options?:       Array<{ id: string; label: string }>
+  fields?:        Array<{ id: string; label: string; type: string }>
+  scheduled_at?:  string
+  delay_hours?:   number
+  timeout_hours:  number
+  business_hours: boolean
+  calendar_id?:   string
+  campaign_id?:   string
+}
+
 export class WorkflowClient {
   private baseUrl: string
 
@@ -84,8 +101,26 @@ export class WorkflowClient {
       body: JSON.stringify(params),
     })
     if (!res.ok) {
-      throw new Error(`Failed to persist suspend for instance ${instanceId}: HTTP ${res.status}`)
+      const text = await res.text()
+      throw new Error(`Failed to persist suspend for instance ${instanceId}: HTTP ${res.status} — ${text}`)
     }
     return (await res.json()) as { resume_expires_at: string }
+  }
+
+  async persistCollect(
+    instanceId: string,
+    params: PersistCollectParams,
+  ): Promise<{ send_at: string; expires_at: string }> {
+    const res = await fetch(`${this.baseUrl}/v1/workflow/instances/${encodeURIComponent(instanceId)}/collect/persist`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(params),
+    })
+    if (!res.ok) {
+      const text = await res.text()
+      throw new Error(`Failed to persist collect for instance ${instanceId}: HTTP ${res.status} — ${text}`)
+    }
+    const body = (await res.json()) as { send_at: string; expires_at: string }
+    return { send_at: body.send_at, expires_at: body.expires_at }
   }
 }

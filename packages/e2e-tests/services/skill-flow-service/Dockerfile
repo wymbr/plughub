@@ -41,6 +41,9 @@ RUN npm install && NODE_OPTIONS="--max-old-space-size=4096" npm run build
 # ── Runtime stage ─────────────────────────────────────────────────────────────
 FROM node:20-slim AS runtime
 
+# wget: required by Docker healthcheck (node:20-slim ships without it)
+RUN apt-get update && apt-get install -y wget && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /app
 
 COPY --from=builder /app/packages/schemas ./packages/schemas

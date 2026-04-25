@@ -23,6 +23,12 @@ export interface ScenarioContext {
   workflowApiUrl: string;
   /** Calendar API base URL (Arc 4 — e.g. http://localhost:3700) */
   calendarApiUrl: string;
+  /** Analytics API base URL (Arc 3 — e.g. http://localhost:3500) */
+  analyticsApiUrl: string;
+  /** Config API base URL (e.g. http://localhost:3600) */
+  configApiUrl: string;
+  /** Admin token for Config API mutations (header X-Admin-Token) */
+  configApiAdminToken: string;
   redis: Redis;
   kafka: Kafka;
   tenantId: string;

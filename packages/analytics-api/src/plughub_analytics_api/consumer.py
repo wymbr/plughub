@@ -15,6 +15,8 @@ Topics → tables mapping:
   usage.events               → usage_events
   sentiment.updated          → sentiment_events
   queue.position_updated     → queue_events
+  workflow.events            → workflow_events
+  collect.events             → collect_events
 
 Batch strategy:
   Uses consumer.getmany(batch_size, timeout_ms) — processes one partition batch
@@ -41,6 +43,8 @@ from .models import (
     parse_usage_event,
     parse_sentiment_event,
     parse_queue_position,
+    parse_workflow_event,
+    parse_collect_event,
 )
 
 logger = logging.getLogger("plughub.analytics.consumer")
@@ -54,6 +58,8 @@ _TOPICS = [
     "usage.events",
     "sentiment.updated",
     "queue.position_updated",
+    "workflow.events",
+    "collect.events",
 ]
 
 # Maps topic → parser function
@@ -66,6 +72,8 @@ _PARSERS = {
     "usage.events":             parse_usage_event,
     "sentiment.updated":        parse_sentiment_event,
     "queue.position_updated":   parse_queue_position,
+    "workflow.events":          parse_workflow_event,
+    "collect.events":           parse_collect_event,
 }
 
 
@@ -175,6 +183,10 @@ async def _write_row(
             await store.insert_usage_event(row)
         elif table == "sentiment_events":
             await store.insert_sentiment_event(row)
+        elif table == "workflow_events":
+            await store.insert_workflow_event(row)
+        elif table == "collect_events":
+            await store.insert_collect_event(row)
         else:
             logger.warning("Unknown table=%s from topic=%s offset=%s", table, topic, offset)
     except Exception as exc:

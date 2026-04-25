@@ -9,8 +9,8 @@ interface Props {
   onTenantChange: (id: string) => void
   status:     ConnectionStatus
   poolCount:  number
-  currentView?: 'heatmap' | 'sessions' | 'transcript' | 'workflows'
-  onViewChange?: (view: 'heatmap' | 'workflows') => void
+  currentView?: 'heatmap' | 'sessions' | 'transcript' | 'workflows' | 'campaigns' | 'config' | 'pricing'
+  onViewChange?: (view: 'heatmap' | 'workflows' | 'campaigns' | 'config' | 'pricing') => void
 }
 
 const STATUS_DOT: Record<ConnectionStatus, { color: string; label: string }> = {
@@ -22,7 +22,35 @@ const STATUS_DOT: Record<ConnectionStatus, { color: string; label: string }> = {
 
 export function Header({ tenantId, onTenantChange, status, poolCount, currentView, onViewChange }: Props) {
   const dot = STATUS_DOT[status]
-  const isWorkflowView = currentView === 'workflows'
+  const isWorkflowView  = currentView === 'workflows'
+  const isCampaignView  = currentView === 'campaigns'
+  const isConfigView    = currentView === 'config'
+  const isPricingView   = currentView === 'pricing'
+  const isHeatmapActive = !isWorkflowView && !isCampaignView && !isConfigView && !isPricingView
+
+  const navBtn = (
+    view: 'heatmap' | 'workflows' | 'campaigns' | 'config' | 'pricing',
+    label: string,
+    active: boolean,
+    activeColor: string,
+    activeBg: string,
+  ) => (
+    <button
+      onClick={() => onViewChange?.(view)}
+      style={{
+        padding: '4px 12px',
+        borderRadius: 4,
+        border: active ? `1px solid ${activeColor}` : '1px solid #334155',
+        background: active ? activeBg : 'transparent',
+        color: '#e2e8f0',
+        cursor: 'pointer',
+        fontSize: 12,
+        fontWeight: active ? 600 : 400,
+      }}
+    >
+      {label}
+    </button>
+  )
 
   return (
     <header style={headerStyle}>
@@ -39,38 +67,13 @@ export function Header({ tenantId, onTenantChange, status, poolCount, currentVie
 
       {/* Center: navigation and pool count */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
-        <button
-          onClick={() => onViewChange?.('heatmap')}
-          style={{
-            padding: '4px 12px',
-            borderRadius: 4,
-            border: isWorkflowView ? '1px solid #334155' : '1px solid #3b82f6',
-            background: isWorkflowView ? 'transparent' : '#0d47a1',
-            color: '#e2e8f0',
-            cursor: 'pointer',
-            fontSize: 12,
-            fontWeight: isWorkflowView ? 400 : 600,
-          }}
-        >
-          Heatmap
-        </button>
-        <button
-          onClick={() => onViewChange?.('workflows')}
-          style={{
-            padding: '4px 12px',
-            borderRadius: 4,
-            border: isWorkflowView ? '1px solid #7c3aed' : '1px solid #334155',
-            background: isWorkflowView ? '#4c1d95' : 'transparent',
-            color: '#e2e8f0',
-            cursor: 'pointer',
-            fontSize: 12,
-            fontWeight: isWorkflowView ? 600 : 400,
-          }}
-        >
-          Workflows
-        </button>
+        {navBtn('heatmap',   'Heatmap',   isHeatmapActive, '#3b82f6', '#0d47a1')}
+        {navBtn('workflows', 'Workflows', isWorkflowView,  '#7c3aed', '#4c1d95')}
+        {navBtn('campaigns', 'Campaigns', isCampaignView,  '#0891b2', '#164e63')}
+        {navBtn('config',    'Config',    isConfigView,    '#84cc16', '#1a2e05')}
+        {navBtn('pricing',   'Pricing',   isPricingView,   '#f59e0b', '#451a03')}
         <div style={{ fontSize: 13, color: '#64748b', whiteSpace: 'nowrap' }}>
-          {!isWorkflowView && (poolCount > 0
+          {isHeatmapActive && (poolCount > 0
             ? <><span style={{ fontWeight: 700, color: '#94a3b8' }}>{poolCount}</span> pools monitored</>
             : 'No pools active'
           )}

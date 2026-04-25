@@ -41,6 +41,7 @@ CREATE TABLE IF NOT EXISTS {db}.sessions
     tenant_id      String,
     channel        String,
     pool_id        String,
+    customer_id    Nullable(String),
     opened_at      DateTime64(3, 'UTC'),
     closed_at      Nullable(DateTime64(3, 'UTC')),
     close_reason   Nullable(String),
@@ -53,6 +54,13 @@ ENGINE = ReplacingMergeTree(closed_at)
 PARTITION BY toYYYYMM(date)
 ORDER BY (tenant_id, session_id)
 """
+
+# Forward-compatible migration for tables that already exist without customer_id.
+# ClickHouse ADD COLUMN IF NOT EXISTS is idempotent.
+_DDL_SESSIONS_MIGRATE = (
+    "ALTER TABLE {db}.sessions ADD COLUMN IF NOT EXISTS"
+    " customer_id Nullable(String) DEFAULT NULL"
+)
 
 _DDL_QUEUE_EVENTS = """
 CREATE TABLE IF NOT EXISTS {db}.queue_events
@@ -147,6 +155,55 @@ PARTITION BY toYYYYMM(date)
 ORDER BY (tenant_id, session_id, timestamp)
 """
 
+_DDL_WORKFLOW_EVENTS = """
+CREATE TABLE IF NOT EXISTS {db}.workflow_events
+(
+    event_id        String,
+    tenant_id       String,
+    instance_id     String,
+    flow_id         String,
+    campaign_id     Nullable(String),
+    event_type      String,
+    status          Nullable(String),
+    current_step    Nullable(String),
+    suspend_reason  Nullable(String),
+    decision        Nullable(String),
+    outcome         Nullable(String),
+    duration_ms     Nullable(Int64),
+    wait_duration_ms Nullable(Int64),
+    error           Nullable(String),
+    timestamp       DateTime64(3, 'UTC'),
+    date            Date
+)
+ENGINE = ReplacingMergeTree()
+PARTITION BY toYYYYMM(date)
+ORDER BY (tenant_id, instance_id, timestamp)
+"""
+
+_DDL_COLLECT_EVENTS = """
+CREATE TABLE IF NOT EXISTS {db}.collect_events
+(
+    collect_token  String,
+    tenant_id      String,
+    instance_id    String,
+    flow_id        String,
+    campaign_id    Nullable(String),
+    step_id        String,
+    target_type    String,
+    channel        String,
+    interaction    String,
+    status         String,
+    send_at        Nullable(DateTime64(3, 'UTC')),
+    responded_at   Nullable(DateTime64(3, 'UTC')),
+    elapsed_ms     Nullable(Int64),
+    timestamp      DateTime64(3, 'UTC'),
+    date           Date
+)
+ENGINE = ReplacingMergeTree(status)
+PARTITION BY toYYYYMM(date)
+ORDER BY (tenant_id, collect_token)
+"""
+
 _ALL_DDL = [
     _DDL_DATABASE,
     _DDL_SESSIONS,
@@ -155,6 +212,13 @@ _ALL_DDL = [
     _DDL_MESSAGES,
     _DDL_USAGE_EVENTS,
     _DDL_SENTIMENT_EVENTS,
+    _DDL_WORKFLOW_EVENTS,
+    _DDL_COLLECT_EVENTS,
+]
+
+# Migrations applied after CREATE IF NOT EXISTS (idempotent ALTER TABLE statements).
+_MIGRATIONS = [
+    _DDL_SESSIONS_MIGRATE,
 ]
 
 
@@ -187,6 +251,12 @@ class AnalyticsStore:
         for ddl in _ALL_DDL:
             stmt = ddl.format(db=self._database)
             self._client.command(stmt)
+        # Forward-compatible migrations (idempotent ALTER TABLE statements).
+        for ddl in _MIGRATIONS:
+            try:
+                self._client.command(ddl.format(db=self._database))
+            except Exception as exc:
+                logger.warning("Migration skipped (already applied?): %s — %s", ddl[:60], exc)
         logger.info("ClickHouse schema ensured (database=%s)", self._database)
 
     async def ensure_schema_async(self) -> None:
@@ -206,7 +276,7 @@ class AnalyticsStore:
     # sessions
 
     _SESSION_COLS = [
-        "session_id", "tenant_id", "channel", "pool_id",
+        "session_id", "tenant_id", "channel", "pool_id", "customer_id",
         "opened_at", "closed_at", "close_reason", "outcome",
         "wait_time_ms", "handle_time_ms", "date",
     ]
@@ -278,6 +348,32 @@ class AnalyticsStore:
             self._insert, "sentiment_events", [_sentiment_row(row)], self._SENTIMENT_COLS
         )
 
+    # workflow_events
+
+    _WORKFLOW_EVENT_COLS = [
+        "event_id", "tenant_id", "instance_id", "flow_id", "campaign_id",
+        "event_type", "status", "current_step", "suspend_reason", "decision",
+        "outcome", "duration_ms", "wait_duration_ms", "error", "timestamp", "date",
+    ]
+
+    async def insert_workflow_event(self, row: dict) -> None:
+        await asyncio.to_thread(
+            self._insert, "workflow_events", [_workflow_event_row(row)], self._WORKFLOW_EVENT_COLS
+        )
+
+    # collect_events
+
+    _COLLECT_EVENT_COLS = [
+        "collect_token", "tenant_id", "instance_id", "flow_id", "campaign_id",
+        "step_id", "target_type", "channel", "interaction", "status",
+        "send_at", "responded_at", "elapsed_ms", "timestamp", "date",
+    ]
+
+    async def insert_collect_event(self, row: dict) -> None:
+        await asyncio.to_thread(
+            self._insert, "collect_events", [_collect_event_row(row)], self._COLLECT_EVENT_COLS
+        )
+
 
 # ─── Row builders ─────────────────────────────────────────────────────────────
 
@@ -305,6 +401,7 @@ def _session_row(d: dict) -> list:
         d.get("tenant_id", ""),
         d.get("channel", ""),
         d.get("pool_id", "") or "",
+        d.get("customer_id") or d.get("contact_id") or None,
         _parse_dt(d.get("opened_at") or d.get("started_at") or d.get("timestamp")) or datetime.utcnow(),
         _parse_dt(d.get("closed_at") or d.get("ended_at")),
         d.get("close_reason"),
@@ -388,6 +485,49 @@ def _sentiment_row(d: dict) -> list:
         d.get("pool_id", "") or "",
         float(d.get("score", 0.0)),
         d.get("category", "neutral"),
+        _parse_dt(ts) or datetime.utcnow(),
+        _today_utc(ts),
+    ]
+
+
+def _workflow_event_row(d: dict) -> list:
+    ts = d.get("timestamp")
+    return [
+        d.get("event_id", ""),
+        d.get("tenant_id", ""),
+        d.get("instance_id", ""),
+        d.get("flow_id", ""),
+        d.get("campaign_id"),
+        d.get("event_type", ""),
+        d.get("status"),
+        d.get("current_step"),
+        d.get("suspend_reason"),
+        d.get("decision"),
+        d.get("outcome"),
+        d.get("duration_ms"),
+        d.get("wait_duration_ms"),
+        d.get("error"),
+        _parse_dt(ts) or datetime.utcnow(),
+        _today_utc(ts),
+    ]
+
+
+def _collect_event_row(d: dict) -> list:
+    ts = d.get("timestamp")
+    return [
+        d.get("collect_token", ""),
+        d.get("tenant_id", ""),
+        d.get("instance_id", ""),
+        d.get("flow_id", ""),
+        d.get("campaign_id"),
+        d.get("step_id", ""),
+        d.get("target_type", ""),
+        d.get("channel", ""),
+        d.get("interaction", ""),
+        d.get("status", ""),
+        _parse_dt(d.get("send_at")),
+        _parse_dt(d.get("responded_at")),
+        d.get("elapsed_ms"),
         _parse_dt(ts) or datetime.utcnow(),
         _today_utc(ts),
     ]

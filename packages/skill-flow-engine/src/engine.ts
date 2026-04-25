@@ -48,6 +48,31 @@ export interface SkillFlowEngineConfig {
     calendar_id?:  string
     metadata?:     Record<string, unknown>
   }) => Promise<{ resume_expires_at: string }>
+
+  /**
+   * Arc 4 — Optional. Wired by the Skill Flow worker to persist a collect_instance
+   * in PostgreSQL, calculate send_at/expires_at via calendar-api, and publish
+   * collect.requested to Kafka.
+   * If absent, the collect step falls back to wall-clock times.
+   */
+  persistCollect?: (params: {
+    tenant_id:      string
+    session_id:     string
+    step_id:        string
+    collect_token:  string
+    target:         { type: string; id: string }
+    channel:        string
+    interaction:    string
+    prompt:         string
+    options?:       Array<{ id: string; label: string }>
+    fields?:        Array<{ id: string; label: string; type: string }>
+    scheduled_at?:  string
+    delay_hours?:   number
+    timeout_hours:  number
+    business_hours: boolean
+    calendar_id?:   string
+    campaign_id?:   string
+  }) => Promise<{ send_at: string; expires_at: string }>
 }
 
 export type RunResult =
@@ -189,14 +214,18 @@ export class SkillFlowEngine {
 
       // Aguardando task assíncrona (execution_mode: async)
       if (result.next_step_id === "__awaiting_task__") {
-        await this.stateManager.save(tenantId, sessionId, state)
-        return { outcome: "awaiting_task", pipeline_state: state }
+        const awaitingState = { ...state, status: "completed" as const }
+        await this.stateManager.complete(tenantId, sessionId, state)
+        return { outcome: "awaiting_task", pipeline_state: awaitingState }
       }
 
-      // Aguardando escalação para pool humano
+      // Aguardando escalação para pool humano.
+      // Marcamos como "completed" para que novas conexões do mesmo session_id
+      // iniciem um novo pipeline em vez de retomar do step escalar.
       if (result.next_step_id === "__awaiting_escalation__") {
-        await this.stateManager.save(tenantId, sessionId, state)
-        return { outcome: "escalated_human", pipeline_state: state }
+        const escalatedState = { ...state, status: "completed" as const }
+        await this.stateManager.complete(tenantId, sessionId, state)
+        return { outcome: "escalated_human", pipeline_state: escalatedState }
       }
 
       // Arc 4: fluxo suspenso aguardando sinal externo
@@ -298,6 +327,12 @@ export class SkillFlowEngine {
       ...(self.config.persistSuspend
         ? { persistSuspend: (params: Parameters<NonNullable<StepContext["persistSuspend"]>>[0]) =>
               self.config.persistSuspend!({ tenant_id: tenantId, session_id: sessionId, ...params }) }
+        : {}),
+
+      // Arc 4 — wired only when caller provides persistCollect
+      ...(self.config.persistCollect
+        ? { persistCollect: (params: Parameters<NonNullable<StepContext["persistCollect"]>>[0]) =>
+              self.config.persistCollect!({ tenant_id: tenantId, session_id: sessionId, ...params }) }
         : {}),
 
       // Arc 4 — resume context forwarded only when present

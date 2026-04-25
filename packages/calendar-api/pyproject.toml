@@ -1,0 +1,36 @@
+[project]
+name            = "plughub-calendar-api"
+version         = "1.0.0"
+description     = "PlugHub Platform — Calendar & Scheduling API"
+requires-python = ">=3.10"
+dependencies    = [
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.32.0",
+    "asyncpg>=0.29.0",
+    "redis[hiredis]>=5.2.0",
+    "pydantic>=2.9.0",
+    "pydantic-settings>=2.6.0",
+    "python-dateutil>=2.9.0",
+    "pytz>=2024.1",
+    "aiokafka>=0.11.0",
+]
+
+[project.scripts]
+plughub-calendar-api = "plughub_calendar_api.main:run"
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.24.0",
+]
+
+[build-system]
+requires      = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths    = ["src/plughub_calendar_api/tests"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/plughub_calendar_api"]

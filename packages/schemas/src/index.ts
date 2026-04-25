@@ -247,6 +247,8 @@ export {
   ReasonStepSchema,
   NotifyStepSchema,
   MenuStepSchema,
+  CollectTargetSchema,
+  CollectStepSchema,
   FlowStepSchema,
   SkillFlowSchema,
   SkillSchema,
@@ -273,6 +275,8 @@ export type {
   ReasonStep,
   NotifyStep,
   MenuStep,
+  CollectTarget,
+  CollectStep,
 } from "./skill"
 
 // ── Usage Metering ───────────────────────────
@@ -309,6 +313,111 @@ export type {
   QuotaLimit,
   UsageCycleReset,
 } from "./usage"
+
+// ── Platform / Installation context ─────────
+export {
+  InstallationContextSchema,
+  ResourceScopeSchema,
+  PlatformConfigSchema,
+} from "./platform"
+
+export type {
+  InstallationContext,
+  ResourceScope,
+  PlatformConfig,
+} from "./platform"
+
+// ── Calendar ─────────────────────────────────
+export {
+  DayOfWeekSchema,
+  TimeSlotSchema,
+  DayScheduleSchema,
+  HolidaySchema,
+  HolidaySetSchema,
+  CalendarExceptionSchema,
+  CalendarSchema,
+  CalendarOperatorSchema,
+  CalendarEntityTypeSchema,
+  CalendarAssociationSchema,
+  CalendarQuerySchema,
+  IsOpenResultSchema,
+  BusinessDurationResultSchema,
+  CalendarWindowOpenedSchema,
+  CalendarWindowClosedSchema,
+  CalendarEventSchema,
+} from "./calendar"
+
+export type {
+  DayOfWeek,
+  TimeSlot,
+  DaySchedule,
+  Holiday,
+  HolidaySet,
+  CalendarException,
+  Calendar,
+  CalendarOperator,
+  CalendarEntityType,
+  CalendarAssociation,
+  CalendarQuery,
+  IsOpenResult,
+  BusinessDurationResult,
+  CalendarWindowOpened,
+  CalendarWindowClosed,
+  CalendarEvent,
+} from "./calendar"
+
+// ── Workflow ──────────────────────────────────
+export {
+  SuspendReasonSchema,
+  SuspendNotifySchema,
+  SuspendStepSchema,
+  WorkflowStatusSchema,
+  WorkflowInstanceSchema,
+  WorkflowTriggerTypeSchema,
+  WorkflowTriggerSchema,
+  WorkflowDecisionSchema,
+  WorkflowResumeSchema,
+  WorkflowStartedSchema,
+  WorkflowSuspendedSchema,
+  WorkflowResumedSchema,
+  WorkflowCompletedSchema,
+  WorkflowTimedOutSchema,
+  WorkflowFailedSchema,
+  WorkflowCancelledSchema,
+  WorkflowEventSchema,
+  CollectStatusSchema,
+  CollectRequestedSchema,
+  CollectSentSchema,
+  CollectRespondedSchema,
+  CollectTimedOutSchema,
+  CollectEventSchema,
+} from "./workflow"
+
+export type {
+  SuspendReason,
+  SuspendNotify,
+  SuspendStep,
+  WorkflowStatus,
+  WorkflowInstance,
+  WorkflowTriggerType,
+  WorkflowTrigger,
+  WorkflowDecision,
+  WorkflowResume,
+  WorkflowStarted,
+  WorkflowSuspended,
+  WorkflowResumed,
+  WorkflowCompleted,
+  WorkflowTimedOut,
+  WorkflowFailed,
+  WorkflowCancelled,
+  WorkflowEvent,
+  CollectStatus,
+  CollectRequested,
+  CollectSent,
+  CollectResponded,
+  CollectTimedOut,
+  CollectEvent,
+} from "./workflow"
 
 // ── Agent Registry ───────────────────────────
 export {

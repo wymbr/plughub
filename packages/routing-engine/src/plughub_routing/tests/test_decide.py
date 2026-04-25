@@ -561,3 +561,125 @@ class TestSaturation:
         )
         assert result.saturated is True
         assert result.saturation_action == "email_confirmation"
+
+
+# ─────────────────────────────────────────────
+# Tie-breaking tests (B3-01) — spec CLAUDE.md
+# ─────────────────────────────────────────────
+
+class TestTieBreaking:
+    """
+    Equal-score pools must be broken by ascending queue_length,
+    then by pool_id for deterministic last-resort ordering.
+    Spec CLAUDE.md: "Tie-breaking — equal-score pools are broken by shortest queue length"
+    """
+
+    @pytest.mark.asyncio
+    async def test_tie_breaking_by_queue_length(self):
+        """Equal-score pools: the pool with the shorter queue wins."""
+        pool_a = _pool("pool_a", queue_length=5)
+        pool_b = _pool("pool_b", queue_length=2)
+
+        inst_reg = AsyncMock(spec=InstanceRegistry)
+        pool_reg = AsyncMock(spec=PoolRegistry)
+
+        pool_reg.get_candidate_pools.return_value = [pool_a, pool_b]
+
+        async def get_ready(tenant_id, pool_id):
+            return {
+                "pool_a": [_instance("inst_a", pool_id="pool_a")],
+                "pool_b": [_instance("inst_b", pool_id="pool_b")],
+            }.get(pool_id, [])
+
+        inst_reg.get_ready_instances.side_effect = get_ready
+        # Oldest queue wait = None → sla_urgency = 0 for all pools → same score
+        inst_reg.get_oldest_queue_wait_ms.return_value = None
+        inst_reg.get_session_affinity.return_value = None
+        inst_reg.mark_busy.return_value = None
+
+        with patch("plughub_routing.decide.compute_priority_score", return_value=0.5):
+            decider = Decider(inst_reg, pool_reg)
+            result = await decider.decide(
+                conversation_id="c1", tenant_id="tenant_test",
+                intent="cancelamento", confidence=0.90, channel="webchat",
+                customer_profile=_profile(),
+            )
+
+        assert result.primary is not None
+        assert result.primary.pool_id == "pool_b", (
+            "pool_b has queue_length=2 < pool_a's 5 — pool_b must win the tie"
+        )
+
+    @pytest.mark.asyncio
+    async def test_tie_breaking_equal_queue_falls_back_to_pool_id(self):
+        """When queue_length is also equal, the lexicographically first pool_id wins."""
+        pool_a = _pool("pool_alpha", queue_length=3)
+        pool_z = _pool("pool_zeta",  queue_length=3)
+
+        inst_reg = AsyncMock(spec=InstanceRegistry)
+        pool_reg = AsyncMock(spec=PoolRegistry)
+        pool_reg.get_candidate_pools.return_value = [pool_z, pool_a]  # z listed first
+
+        async def get_ready(tenant_id, pool_id):
+            return {
+                "pool_alpha": [_instance("inst_alpha", pool_id="pool_alpha")],
+                "pool_zeta":  [_instance("inst_zeta",  pool_id="pool_zeta")],
+            }.get(pool_id, [])
+
+        inst_reg.get_ready_instances.side_effect = get_ready
+        inst_reg.get_oldest_queue_wait_ms.return_value = None
+        inst_reg.get_session_affinity.return_value = None
+        inst_reg.mark_busy.return_value = None
+
+        with patch("plughub_routing.decide.compute_priority_score", return_value=0.5):
+            decider = Decider(inst_reg, pool_reg)
+            result = await decider.decide(
+                conversation_id="c1", tenant_id="tenant_test",
+                intent="cancelamento", confidence=0.90, channel="webchat",
+                customer_profile=_profile(),
+            )
+
+        assert result.primary is not None
+        assert result.primary.pool_id == "pool_alpha", (
+            "pool_alpha < pool_zeta lexicographically — pool_alpha must win"
+        )
+
+    @pytest.mark.asyncio
+    async def test_tie_breaking_is_deterministic(self):
+        """Same input must always produce the same routing decision (100 runs)."""
+        pools = [
+            _pool(f"pool_{chr(ord('e') - i)}", queue_length=3)
+            for i in range(5)
+        ]
+        instances_by_pool = {
+            p.pool_id: [_instance(f"inst_{p.pool_id}", pool_id=p.pool_id)]
+            for p in pools
+        }
+
+        inst_reg = AsyncMock(spec=InstanceRegistry)
+        pool_reg = AsyncMock(spec=PoolRegistry)
+        pool_reg.get_candidate_pools.return_value = pools
+
+        async def get_ready(tenant_id, pool_id):
+            return instances_by_pool.get(pool_id, [])
+
+        inst_reg.get_ready_instances.side_effect = get_ready
+        inst_reg.get_oldest_queue_wait_ms.return_value = None
+        inst_reg.get_session_affinity.return_value = None
+        inst_reg.mark_busy.return_value = None
+
+        results: set[str] = set()
+        with patch("plughub_routing.decide.compute_priority_score", return_value=0.5):
+            decider = Decider(inst_reg, pool_reg)
+            for _ in range(20):
+                result = await decider.decide(
+                    conversation_id="c1", tenant_id="tenant_test",
+                    intent="cancelamento", confidence=0.90, channel="webchat",
+                    customer_profile=_profile(),
+                )
+                assert result.primary is not None
+                results.add(result.primary.pool_id)
+
+        assert len(results) == 1, (
+            f"Expected deterministic pool selection but got: {results}"
+        )

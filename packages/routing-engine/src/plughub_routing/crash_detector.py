@@ -137,15 +137,24 @@ class CrashDetector:
         recovered: list[str] = []
         skipped_locked: list[str] = []
         for conversation_id in meta.active_conversations:
-            lock_key = f"{tenant_id}:pipeline:{conversation_id}:running"
-            engine_lock_exists = await self._redis.exists(lock_key)
-            if engine_lock_exists:
-                # Native AI agent still executing — not a real crash for this conversation
+            lock_key     = f"{tenant_id}:pipeline:{conversation_id}:running"
+            activity_key = f"{tenant_id}:session:{conversation_id}:active_instance:{instance_id}"
+
+            engine_lock_exists    = await self._redis.exists(lock_key)
+            session_active_exists = await self._redis.exists(activity_key)
+
+            if engine_lock_exists or session_active_exists:
+                # Agent still active (executing skill flow or waiting for menu reply).
+                # The instance heartbeat may have expired but the agent is alive:
+                #   engine_lock_exists  — Skill Flow engine is executing a step
+                #   session_active_exists — agent is blocked in BLPOP (menu/collect wait)
                 skipped_locked.append(conversation_id)
                 logger.info(
-                    "Crash recovery: skipping conversation with active engine lock "
-                    "tenant=%s instance=%s conversation=%s",
+                    "Crash recovery: skipping active session "
+                    "tenant=%s instance=%s conversation=%s "
+                    "lock=%s activity_flag=%s",
                     tenant_id, instance_id, conversation_id,
+                    bool(engine_lock_exists), bool(session_active_exists),
                 )
                 continue
             await self._requeue_conversation(

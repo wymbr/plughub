@@ -91,7 +91,36 @@ export async function executeMenu(
     }
   }
 
-  // 4. Aguardar resposta do cliente ou sinal de desconexão — o que chegar primeiro.
+  // 4. Sinalizar atividade para o CrashDetector (B2-03).
+  //    O heartbeat TTL do agente (30s) pode expirar durante o BLPOP (até 300s).
+  //    O activity flag diz ao CrashDetector que o agente está vivo e bloqueado,
+  //    evitando que a conversa seja re-enfileirada como se fosse um crash real.
+  //    Key: {tenantId}:session:{sessionId}:active_instance:{instanceId}
+  //    Renovado a cada 15s para cobrir BLPOPs longos.
+  const ACTIVITY_TTL_S = 30
+  let activityKey: string | null = null
+  let activityRenewTimer: ReturnType<typeof setInterval> | null = null
+
+  if (ctx.instanceId) {
+    activityKey = `${ctx.tenantId}:session:${ctx.sessionId}:active_instance:${ctx.instanceId}`
+    try {
+      await ctx.redis.set(activityKey, "1", "EX", ACTIVITY_TTL_S)
+    } catch {
+      // Non-fatal — CrashDetector may see a false positive but single-agent flow is unaffected
+      activityKey = null
+    }
+    if (activityKey) {
+      activityRenewTimer = setInterval(async () => {
+        try {
+          await ctx.redis.expire(activityKey!, ACTIVITY_TTL_S)
+        } catch {
+          // Non-fatal
+        }
+      }, 15_000)
+    }
+  }
+
+  // 5. Aguardar resposta do cliente ou sinal de desconexão — o que chegar primeiro.
   //    BLPOP monitora dois keys simultaneamente:
   //      menu:result:{sessionId}    — bridge faz LPUSH quando cliente envia mensagem
   //      session:closed:{sessionId} — bridge faz LPUSH quando contact_closed chega
@@ -137,6 +166,17 @@ export async function executeMenu(
       await ctx.redis.del(waitingKey)
     } catch {
       // Non-fatal
+    }
+    // Limpar activity flag e timer de renovação (B2-03)
+    if (activityRenewTimer !== null) {
+      clearInterval(activityRenewTimer)
+    }
+    if (activityKey) {
+      try {
+        await ctx.redis.del(activityKey)
+      } catch {
+        // Non-fatal
+      }
     }
   }
 }

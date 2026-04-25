@@ -26,11 +26,14 @@ import { MetricsPanel } from './components/MetricsPanel'
 import { SessionList } from './components/SessionList'
 import { SessionTranscript } from './components/SessionTranscript'
 import { WorkflowPanel } from './components/WorkflowPanel'
+import { CampaignPanel } from './components/CampaignPanel'
+import { ConfigPanel } from './components/ConfigPanel'
+import { PricingPanel } from './components/PricingPanel'
 
 // Default tenant from env var (override in .env.local)
 const DEFAULT_TENANT = import.meta.env.VITE_DEFAULT_TENANT ?? 'tenant_telco'
 
-type View = 'heatmap' | 'sessions' | 'transcript' | 'workflows'
+type View = 'heatmap' | 'sessions' | 'transcript' | 'workflows' | 'campaigns' | 'config' | 'pricing'
 
 export default function App() {
   const [tenantId, setTenantId]           = useState<string>(DEFAULT_TENANT)
@@ -84,6 +87,24 @@ export default function App() {
     setSession(null)
   }
 
+  function goToCampaigns() {
+    setView('campaigns')
+    setSelectedPool(null)
+    setSession(null)
+  }
+
+  function goToConfig() {
+    setView('config')
+    setSelectedPool(null)
+    setSession(null)
+  }
+
+  function goToPricing() {
+    setView('pricing')
+    setSelectedPool(null)
+    setSession(null)
+  }
+
   function backToHeatmapFromWorkflows() {
     setView('heatmap')
   }
@@ -100,6 +121,9 @@ export default function App() {
         currentView    ={view}
         onViewChange   ={(v) => {
           if (v === 'workflows') goToWorkflows()
+          else if (v === 'campaigns') goToCampaigns()
+          else if (v === 'config') goToConfig()
+          else if (v === 'pricing') goToPricing()
           else if (v === 'heatmap') {
             setView('heatmap')
             setSelectedPool(null)
@@ -153,6 +177,30 @@ export default function App() {
           <WorkflowPanel
             tenantId ={tenantId}
             onBack   ={backToHeatmapFromWorkflows}
+          />
+        )}
+
+        {/* ── Campaigns panel ─────────────────────────────────────────────── */}
+        {view === 'campaigns' && (
+          <CampaignPanel
+            tenantId ={tenantId}
+            onBack   ={() => setView('heatmap')}
+          />
+        )}
+
+        {/* ── Config panel ─────────────────────────────────────────────────── */}
+        {view === 'config' && (
+          <ConfigPanel
+            tenantId ={tenantId}
+            onBack   ={() => setView('heatmap')}
+          />
+        )}
+
+        {/* ── Pricing panel ────────────────────────────────────────────────── */}
+        {view === 'pricing' && (
+          <PricingPanel
+            tenantId ={tenantId}
+            onBack   ={() => setView('heatmap')}
           />
         )}
 

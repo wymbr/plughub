@@ -68,7 +68,7 @@ _HEARTBEAT_INTERVAL_S  = 15
 # Intervalo da reconciliação completa periódica (auto-healing de drift)
 _RECONCILE_INTERVAL_S  = 300   # 5 min
 # TTL dos pool_config no Redis
-_POOL_CONFIG_TTL_S     = 86400  # 24h
+_POOL_CONFIG_TTL_S     = 3600   # 1h — sufficient for crash recovery, fast enough for cleanup
 
 
 # ─── ReconciliationReport ─────────────────────────────────────────────────────
@@ -520,9 +520,41 @@ class InstanceBootstrap:
     async def _write_instance(
         self, tenant_id: str, instance_id: str, payload: dict
     ) -> None:
-        """Escreve instância no Redis + SADD nos pool SETs correspondentes."""
+        """
+        Escreve instância no Redis + SADD nos pool SETs correspondentes.
+
+        Safety guard: never overwrite a busy or paused instance with status=ready.
+        After a crash, the reconciliation loop may re-classify the instance as
+        to_create (desired but absent from its in-memory snapshot) and call
+        _write_instance with status=ready — even though the Redis key still exists
+        and the instance is handling an active session. The guard detects this and
+        applies pending_update instead, preserving the live session.
+        """
+        instance_key = f"{tenant_id}:instance:{instance_id}"
+
+        # Guard: if the existing Redis key shows a live session, don't overwrite it.
+        existing_raw = await self._redis.get(instance_key)
+        if existing_raw:
+            try:
+                existing = json.loads(existing_raw)
+                if existing.get("status") in ("busy", "paused"):
+                    logger.warning(
+                        "Bootstrap: instance %s is %s — marking pending_update "
+                        "instead of overwrite to preserve live session",
+                        instance_id, existing["status"],
+                    )
+                    patch = {**existing, "pending_update": True}
+                    await self._redis.set(
+                        instance_key,
+                        json.dumps(patch),
+                        ex=_INSTANCE_TTL_S,
+                    )
+                    return
+            except (json.JSONDecodeError, KeyError):
+                pass  # Corrupt state — safe to overwrite
+
         await self._redis.set(
-            f"{tenant_id}:instance:{instance_id}",
+            instance_key,
             json.dumps(payload),
             ex=_INSTANCE_TTL_S,
         )
@@ -899,9 +931,15 @@ def _pool_config_diverged(existing: dict, desired: dict) -> bool:
       scoring_weights, routing_mode, active, skills
     """
     MANAGED = {
-        "pool_id", "name", "channel_types", "sla_target_ms",
-        "max_queue_size", "scoring_weights", "routing_mode",
-        "active", "skills",
+        # Core identity and routing hard-filters
+        "pool_id", "name", "channel_types", "active",
+        # Queue and SLA parameters
+        "sla_target_ms", "max_queue_size",
+        # Scoring parameters (impact decide.py / scorer.py)
+        "scoring_weights", "routing_mode", "routing_expression",
+        "competency_weights", "aging_factor", "breach_factor",
+        # Skills and cross-site routing
+        "skills", "remote_sites",
     }
     for key in MANAGED:
         if existing.get(key) != desired.get(key):

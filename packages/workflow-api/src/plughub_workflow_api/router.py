@@ -35,17 +35,23 @@ from pydantic import BaseModel, Field
 from .calendar_client import calculate_deadline
 from .db import (
     db_cancel_instance,
+    db_complete_collect,
     db_complete_instance,
+    db_create_collect,
     db_create_instance,
     db_fail_instance,
+    db_get_collect_by_token,
     db_get_instance,
     db_get_instance_by_token,
+    db_list_collects_by_campaign,
     db_list_instances,
     db_resume_instance,
     db_suspend_instance,
 )
 from .kafka_emitter import (
     emit_cancelled,
+    emit_collect_requested,
+    emit_collect_responded,
     emit_completed,
     emit_failed,
     emit_resumed,
@@ -439,3 +445,249 @@ async def cancel_instance(
     )
 
     return updated
+
+
+# ── Collect: Persist ──────────────────────────────────────────────────────────
+
+class CollectPersistRequest(BaseModel):
+    """
+    Called by the Skill Flow engine (TypeScript worker) when it executes a
+    collect step.  The workflow-api calculates send_at and expires_at using
+    the calendar-api (or wall-clock fallback) and creates the collect_instance.
+    """
+    step_id:        str
+    collect_token:  str
+    target:         dict                  # { type, id }
+    channel:        str
+    interaction:    str
+    prompt:         str
+    options:        list = Field(default_factory=list)
+    fields:         list = Field(default_factory=list)
+    scheduled_at:   str | None = None     # ISO-8601 absolute send time
+    delay_hours:    float | None = None   # relative send time from now
+    timeout_hours:  float = 48.0
+    business_hours: bool  = True
+    entity_type:    str   = "workflow"
+    entity_id:      str | None = None     # for calendar association lookup
+    calendar_id:    str | None = None     # reserved for direct calendar override
+    campaign_id:    str | None = None
+
+
+@router.post("/v1/workflow/instances/{instance_id}/collect/persist", status_code=201)
+async def persist_collect(
+    instance_id: str,
+    body:        CollectPersistRequest,
+    request:     Request,
+    pool=Depends(_pool),
+) -> dict[str, Any]:
+    """
+    Called by the TypeScript Skill Flow engine when it hits a collect step.
+
+    1. Determines send_at from scheduled_at / delay_hours / now
+    2. Calculates expires_at = send_at + timeout_hours (business-hours-aware)
+    3. Persists collect_instance with status='requested'
+    4. Publishes collect.requested to Kafka (channel-gateway picks this up
+       at send_at to initiate outbound contact)
+
+    Returns { send_at, expires_at } so the engine can store them in pipeline_state.
+    """
+    instance = await db_get_instance(pool, instance_id)
+    if not instance:
+        raise HTTPException(404, "workflow instance not found")
+
+    settings = _settings(request)
+    producer = _producer(request)
+    now_utc   = datetime.now(timezone.utc)
+
+    # ── Determine send_at ─────────────────────────────────────────────────────
+    if body.scheduled_at:
+        send_dt = datetime.fromisoformat(body.scheduled_at)
+        if send_dt.tzinfo is None:
+            send_dt = send_dt.replace(tzinfo=timezone.utc)
+    elif body.delay_hours is not None:
+        from datetime import timedelta
+        send_dt = now_utc + timedelta(hours=body.delay_hours)
+    else:
+        send_dt = now_utc
+
+    # ── Calculate expires_at (business-hours-aware) ───────────────────────────
+    if body.business_hours and body.entity_id:
+        expires_dt = await calculate_deadline(
+            calendar_api_url=settings.calendar_api_url,
+            tenant_id=instance["tenant_id"],
+            entity_type=body.entity_type,
+            entity_id=body.entity_id,
+            from_dt=send_dt,
+            hours=body.timeout_hours,
+        )
+    else:
+        from datetime import timedelta
+        expires_dt = send_dt + timedelta(hours=body.timeout_hours)
+
+    send_at    = send_dt.isoformat()
+    expires_at = expires_dt.isoformat()
+
+    # ── Persist collect_instance ──────────────────────────────────────────────
+    collect = await db_create_collect(
+        pool,
+        collect_token=body.collect_token,
+        instance_id=instance_id,
+        tenant_id=instance["tenant_id"],
+        flow_id=instance["flow_id"],
+        campaign_id=body.campaign_id or instance.get("campaign_id"),
+        step_id=body.step_id,
+        target_type=body.target.get("type", "customer"),
+        target_id=body.target.get("id", ""),
+        channel=body.channel,
+        interaction=body.interaction,
+        prompt=body.prompt,
+        options=body.options,
+        fields=body.fields,
+        send_at=send_dt,
+        expires_at=expires_dt,
+    )
+
+    # ── Publish collect.requested ─────────────────────────────────────────────
+    await emit_collect_requested(
+        producer, settings.collect_topic,
+        tenant_id=instance["tenant_id"],
+        instance_id=instance_id,
+        flow_id=instance["flow_id"],
+        campaign_id=collect.get("campaign_id"),
+        step_id=body.step_id,
+        collect_token=body.collect_token,
+        target_type=body.target.get("type", "customer"),
+        target_id=body.target.get("id", ""),
+        channel=body.channel,
+        interaction=body.interaction,
+        prompt=body.prompt,
+        options=body.options,
+        fields=body.fields,
+        send_at=send_at,
+        expires_at=expires_at,
+    )
+
+    return {"send_at": send_at, "expires_at": expires_at, "collect": collect}
+
+
+# ── Collect: Respond ──────────────────────────────────────────────────────────
+
+class CollectRespondRequest(BaseModel):
+    """
+    Called by the channel-gateway (or any external actor) when the target
+    responds to a collect request.  The collect_token is the correlation key.
+    """
+    collect_token: str
+    response_data: dict  = Field(default_factory=dict)
+    channel:       str   = ""
+    session_id:    str | None = None
+
+
+@router.post("/v1/workflow/collect/respond", status_code=200)
+async def respond_collect(
+    body:    CollectRespondRequest,
+    request: Request,
+    pool=Depends(_pool),
+) -> dict[str, Any]:
+    """
+    Receives a collect response from the channel-gateway.
+
+    1. Looks up the collect_instance by collect_token
+    2. Transitions it to responded
+    3. Resumes the parent WorkflowInstance by delegating to resume_workflow logic
+    4. Publishes collect.responded to Kafka
+
+    The Skill Flow worker receives workflow.resumed and calls engine.run()
+    with resumeContext = { decision: "input", step_id, payload: response_data }.
+    """
+    collect = await db_get_collect_by_token(pool, body.collect_token)
+    if not collect:
+        raise HTTPException(404, "collect_token not found")
+    if collect["status"] not in ("requested", "sent"):
+        raise HTTPException(
+            409,
+            f"Collect is not awaiting response (status: '{collect['status']}')"
+        )
+
+    settings = _settings(request)
+    producer = _producer(request)
+
+    # Complete the collect_instance
+    updated_collect = await db_complete_collect(
+        pool, body.collect_token, body.response_data
+    )
+    if not updated_collect:
+        raise HTTPException(409, "Collect completion failed — concurrent update")
+
+    elapsed_ms = updated_collect.get("elapsed_ms") or 0
+
+    # Resume the parent workflow instance
+    instance = await db_get_instance(pool, collect["instance_id"])
+    if not instance:
+        logger.error(
+            "collect.respond: parent instance %s not found for token %s",
+            collect["instance_id"], body.collect_token,
+        )
+        raise HTTPException(404, "parent workflow instance not found")
+
+    # Only resume if still suspended (idempotency)
+    if instance["status"] == "suspended":
+        wait_ms = 0
+        if instance.get("suspended_at"):
+            suspended_dt = datetime.fromisoformat(instance["suspended_at"])
+            if suspended_dt.tzinfo is None:
+                suspended_dt = suspended_dt.replace(tzinfo=timezone.utc)
+            wait_ms = int((datetime.now(timezone.utc) - suspended_dt).total_seconds() * 1000)
+
+        updated_instance = await db_resume_instance(
+            pool,
+            instance_id=instance["id"],
+            pipeline_state=instance["pipeline_state"],
+        )
+
+        await emit_resumed(
+            producer, settings.kafka_topic,
+            tenant_id=instance["tenant_id"],
+            instance_id=instance["id"],
+            flow_id=instance["flow_id"],
+            decision="input",
+            resumed_from=instance.get("current_step") or "unknown",
+            next_step="__pending_engine__",
+            wait_duration_ms=wait_ms,
+        )
+    else:
+        updated_instance = instance
+
+    # Publish collect.responded
+    await emit_collect_responded(
+        producer, settings.collect_topic,
+        tenant_id=instance["tenant_id"],
+        instance_id=instance["id"],
+        collect_token=body.collect_token,
+        channel=body.channel or collect["channel"],
+        response_data=body.response_data,
+        elapsed_ms=elapsed_ms,
+    )
+
+    return {
+        "collect_token": body.collect_token,
+        "elapsed_ms":    elapsed_ms,
+        "collect":       updated_collect,
+        "instance":      updated_instance,
+    }
+
+
+# ── Campaign query ─────────────────────────────────────────────────────────────
+
+@router.get("/v1/workflow/campaigns/{campaign_id}/collects")
+async def list_campaign_collects(
+    campaign_id: str,
+    tenant_id:   str,
+    limit:       int = 200,
+    offset:      int = 0,
+    pool=Depends(_pool),
+) -> list[dict]:
+    """List all collect_instances for a campaign (for CampaignPanel)."""
+    if limit > 1000:
+        limit = 1000
+    return await db_list_collects_by_campaign(pool, tenant_id, campaign_id, limit, offset)

@@ -1,3 +1,7 @@
+// ── Connection status ─────────────────────────────────────────────────────────
+
+export type WsStatus = "connecting" | "connected" | "disconnected";
+
 // ── Chat messages ─────────────────────────────────────────────────────────────
 
 export type AuthorType = "customer" | "agent_human" | "agent_ai" | "system";
@@ -7,6 +11,10 @@ export interface ChatMessage {
   author: AuthorType;
   text: string;
   timestamp: string;
+  /** "all" = normal message; "agents_only" = internal note invisible to customer */
+  visibility?: "all" | "agents_only" | string;
+  /** Present for menu.render events — triggers rich MenuCard rendering */
+  menuData?: ChatMenuData;
 }
 
 // ── WebSocket envelope types (from channel-gateway / mcp-server) ──────────────
@@ -23,6 +31,7 @@ export interface WsMessageText {
   author: { type: AuthorType; id?: string; display_name?: string };
   text: string;
   timestamp: string;
+  visibility?: string;
 }
 
 export interface WsMenuRender {
@@ -32,6 +41,31 @@ export interface WsMenuRender {
   prompt: string;
   options?: Array<{ id: string; label: string }>;
   fields?: Array<{ id: string; label: string; type: string }>;
+}
+
+// ── Menu card data (attached to ChatMessage for rich rendering) ───────────────
+
+export interface MenuOption {
+  id:    string;
+  label: string;
+}
+
+export interface MenuField {
+  id:    string;
+  label: string;
+  type:  string;
+}
+
+/**
+ * Structured representation of a menu.render event embedded in a ChatMessage.
+ * Observation mode only — no submission capability yet (future: substitution mode).
+ */
+export interface ChatMenuData {
+  menu_id:     string;
+  interaction: "text" | "button" | "list" | "checklist" | "form";
+  prompt:      string;
+  options?:    MenuOption[];
+  fields?:     MenuField[];
 }
 
 export interface WsAgentTyping {
@@ -61,6 +95,7 @@ export type WsServerEvent =
   | WsAgentTyping
   | WsSessionClosed
   | WsConversationAssigned
+  | { type: "supervisor_state.updated" }
   | { type: "ping" };
 
 // ── supervisor_state response ─────────────────────────────────────────────────
@@ -133,9 +168,33 @@ export interface SupervisorCapabilities {
   escalations: EscalationSuggestion[];
 }
 
+// ── Multi-contact session state ───────────────────────────────────────────────
+
+/**
+ * State for a single active contact session.
+ * The App manages a Map<sessionId, ContactSession>.
+ * The concept of "selected" contact lives only in App — not in the server.
+ */
+export interface ContactSession {
+  sessionId:        string;
+  contactId:        string | null;
+  /** Display name resolved from contact metadata, or null if not yet known. */
+  customerName:     string | null;
+  channel:          string;           // "webchat" | "whatsapp" | "voice" | …
+  messages:         ChatMessage[];
+  supervisorState:  SupervisorState | null;
+  capabilities:     SupervisorCapabilities | null;
+  sessionStartedAt: Date;
+  /** Count of messages received while this contact is not the selected one. */
+  unreadCount:      number;
+  /** true after session.closed arrives — contact is visually locked until agent submits outcome */
+  sessionClosed:    boolean;
+  pendingCloseModal: boolean;
+}
+
 // ── App state ─────────────────────────────────────────────────────────────────
 
-export type ActiveTab = "estado" | "capacidades" | "contexto";
+export type ActiveTab = "estado" | "capacidades" | "contexto" | "historico";
 
 export interface AppState {
   sessionId: string | null;
@@ -158,6 +217,19 @@ export interface Toast {
   message: string;
   type: "info" | "warning" | "error";
   persistent: boolean;
+}
+
+// ── Customer contact history ──────────────────────────────────────────────────
+
+export interface ContactHistoryEntry {
+  session_id:   string;
+  channel:      string;
+  pool_id:      string;
+  opened_at:    string | null;
+  closed_at:    string | null;
+  duration_ms:  number | null;
+  outcome:      string | null;
+  close_reason: string | null;
 }
 
 // ── Close modal ───────────────────────────────────────────────────────────────

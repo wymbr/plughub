@@ -74,7 +74,9 @@ def make_subscriber(xread_fn, cursor: str = "0", stream_exists: bool = True) -> 
 
     redis = AsyncMock(spec=aioredis.Redis)
     redis.xread  = xread_fn
-    redis.exists = AsyncMock(return_value=1 if stream_exists else 0)
+    # XRANGE returns a non-empty list when the stream exists, empty list when it doesn't.
+    # count=1 probe used in messages() to detect expired streams atomically.
+    redis.xrange = AsyncMock(return_value=[("fake-entry",)] if stream_exists else [])
     return StreamSubscriber(redis=redis, session_id=SESSION_ID, cursor=cursor)
 
 
@@ -511,10 +513,8 @@ class TestStreamExpired:
         # O importante: nenhuma StreamExpiredError foi levantada
         assert results == []
 
-    async def test_exists_called_with_correct_stream_key(self):
-        """EXISTS é chamado com a chave correta do stream."""
-        from unittest.mock import AsyncMock
-
+    async def test_xrange_called_with_correct_stream_key(self):
+        """XRANGE probe é chamado com a chave correta do stream."""
         s = make_subscriber(make_xread(), cursor="abc-0", stream_exists=True)
 
         task = asyncio.create_task(collect(s, 1))
@@ -526,7 +526,7 @@ class TestStreamExpired:
             pass
 
         expected_key = f"session:{SESSION_ID}:stream"
-        s._redis.exists.assert_called_once_with(expected_key)
+        s._redis.xrange.assert_called_once_with(expected_key, "-", "+", count=1)
 
     async def test_reconnect_with_valid_stream_delivers_events(self):
         """
@@ -545,16 +545,16 @@ class TestStreamExpired:
         assert len(msgs) == 1
         assert msgs[0]["text"] == "retomada"
 
-    async def test_redis_error_on_exists_does_not_raise(self):
+    async def test_redis_error_on_xrange_does_not_raise(self):
         """
-        Se EXISTS falhar (Redis indisponível), o subscriber não levanta erro —
+        Se XRANGE falhar (Redis indisponível), o subscriber não levanta erro —
         presume que o stream existe e continua normalmente.
         """
         from unittest.mock import AsyncMock
 
         s = make_subscriber(make_xread(), cursor="abc-0", stream_exists=True)
-        # Simula falha no EXISTS
-        s._redis.exists = AsyncMock(side_effect=ConnectionError("Redis down"))
+        # Simula falha no XRANGE probe
+        s._redis.xrange = AsyncMock(side_effect=ConnectionError("Redis down"))
 
         # Deve iterar sem levantar StreamExpiredError
         task = asyncio.create_task(collect(s, 1))

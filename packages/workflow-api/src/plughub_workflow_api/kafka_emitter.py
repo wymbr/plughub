@@ -1,11 +1,12 @@
 """
 kafka_emitter.py
-Publishes workflow.* events to Kafka (topic: workflow.events).
+Publishes workflow.* events to Kafka (topic: workflow.events)
+and collect.* events (topic: collect.events).
 
 All functions are fire-and-forget — a Kafka failure never blocks
 the HTTP response. Errors are logged at WARNING level.
 
-Events emitted:
+workflow.events:
   workflow.started    — instance created, execution began
   workflow.suspended  — flow hit a suspend step
   workflow.resumed    — external signal received, flow continuing
@@ -13,6 +14,12 @@ Events emitted:
   workflow.timed_out  — suspend deadline expired, on_timeout path triggered
   workflow.failed     — unrecoverable error
   workflow.cancelled  — operator cancelled the instance
+
+collect.events:
+  collect.requested   — collect_instance created, waiting for send_at
+  collect.sent        — outbound contact initiated via channel-gateway
+  collect.responded   — target replied, workflow resumed
+  collect.timed_out   — no response before expires_at, on_timeout triggered
 """
 from __future__ import annotations
 
@@ -197,4 +204,114 @@ async def emit_cancelled(
         "flow_id":      flow_id,
         "cancelled_by": cancelled_by,
         "reason":       reason,
+    })
+
+
+# ── Collect events (topic: collect.events) ────────────────────────────────────
+
+async def emit_collect_requested(
+    producer:      Any | None,
+    topic:         str,
+    tenant_id:     str,
+    instance_id:   str,
+    flow_id:       str,
+    campaign_id:   str | None,
+    step_id:       str,
+    collect_token: str,
+    target_type:   str,
+    target_id:     str,
+    channel:       str,
+    interaction:   str,
+    prompt:        str,
+    options:       list,
+    fields:        list,
+    send_at:       str,
+    expires_at:    str,
+) -> None:
+    event: dict = {
+        "event_type":    "collect.requested",
+        "timestamp":     _now(),
+        "tenant_id":     tenant_id,
+        "instance_id":   instance_id,
+        "flow_id":       flow_id,
+        "step_id":       step_id,
+        "collect_token": collect_token,
+        "target_type":   target_type,
+        "target_id":     target_id,
+        "channel":       channel,
+        "interaction":   interaction,
+        "prompt":        prompt,
+        "send_at":       send_at,
+        "expires_at":    expires_at,
+    }
+    if campaign_id:
+        event["campaign_id"] = campaign_id
+    if options:
+        event["options"] = options
+    if fields:
+        event["fields"] = fields
+    await _emit(producer, topic, event)
+
+
+async def emit_collect_sent(
+    producer:      Any | None,
+    topic:         str,
+    tenant_id:     str,
+    instance_id:   str,
+    collect_token: str,
+    channel:       str,
+    session_id:    str | None = None,
+) -> None:
+    event: dict = {
+        "event_type":    "collect.sent",
+        "timestamp":     _now(),
+        "tenant_id":     tenant_id,
+        "instance_id":   instance_id,
+        "collect_token": collect_token,
+        "channel":       channel,
+    }
+    if session_id:
+        event["session_id"] = session_id
+    await _emit(producer, topic, event)
+
+
+async def emit_collect_responded(
+    producer:      Any | None,
+    topic:         str,
+    tenant_id:     str,
+    instance_id:   str,
+    collect_token: str,
+    channel:       str,
+    response_data: dict,
+    elapsed_ms:    int,
+) -> None:
+    await _emit(producer, topic, {
+        "event_type":    "collect.responded",
+        "timestamp":     _now(),
+        "tenant_id":     tenant_id,
+        "instance_id":   instance_id,
+        "collect_token": collect_token,
+        "channel":       channel,
+        "response_data": response_data,
+        "elapsed_ms":    elapsed_ms,
+    })
+
+
+async def emit_collect_timed_out(
+    producer:      Any | None,
+    topic:         str,
+    tenant_id:     str,
+    instance_id:   str,
+    collect_token: str,
+    channel:       str,
+    elapsed_ms:    int,
+) -> None:
+    await _emit(producer, topic, {
+        "event_type":    "collect.timed_out",
+        "timestamp":     _now(),
+        "tenant_id":     tenant_id,
+        "instance_id":   instance_id,
+        "collect_token": collect_token,
+        "channel":       channel,
+        "elapsed_ms":    elapsed_ms,
     })

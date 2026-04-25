@@ -118,6 +118,54 @@ export async function waitForKafka(
   );
 }
 
+/**
+ * Polls the Redis key `{tenantId}:bootstrap:ready` every 2 seconds until it
+ * exists (meaning orchestrator-bridge completed at least one full reconciliation)
+ * or until the timeout elapses.
+ *
+ * The key is written by main.py immediately after the first bootstrap.reconcile()
+ * call and renewed every 15 s by the heartbeat, so any value means the bridge is
+ * healthy and Redis instance/pool-config state is consistent with the Registry.
+ */
+export async function waitForBootstrap(
+  redisUrl: string,
+  tenantId: string,
+  timeoutMs: number = 60000
+): Promise<void> {
+  const key = `${tenantId}:bootstrap:ready`;
+  const deadline = Date.now() + timeoutMs;
+
+  const redis = new Redis(redisUrl, {
+    lazyConnect: true,
+    enableReadyCheck: false,
+    maxRetriesPerRequest: 0,
+    retryStrategy: () => null,
+  });
+
+  try {
+    await redis.connect();
+
+    while (Date.now() < deadline) {
+      const val = await redis.exists(key);
+      if (val === 1) {
+        console.log(`[wait-for] Bootstrap ready for tenant=${tenantId} (${key})`);
+        return;
+      }
+      await sleep(2000);
+    }
+
+    throw new Error(
+      `[wait-for] Timeout waiting for bootstrap readiness (${key}) after ${timeoutMs}ms`
+    );
+  } finally {
+    try {
+      redis.disconnect();
+    } catch {
+      // ignore
+    }
+  }
+}
+
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }

@@ -53,7 +53,7 @@ skillsRouter.post("/", async (req: Request, res: Response, next: NextFunction) =
         evaluation:       body.evaluation   ?? Prisma.DbNull,
         knowledge_domains: body.knowledge_domains ?? [],
         compatibility:    body.compatibility ?? Prisma.DbNull,
-        flow:             body.flow          ?? Prisma.DbNull,
+        flow:             body.flow != null ? (body.flow as unknown as Prisma.InputJsonValue) : Prisma.DbNull,
         created_by:       createdBy,
       },
     })
@@ -130,7 +130,7 @@ skillsRouter.put("/:skill_id", async (req: Request, res: Response, next: NextFun
         evaluation:       body.evaluation   ?? Prisma.DbNull,
         knowledge_domains: body.knowledge_domains ?? [],
         compatibility:    body.compatibility ?? Prisma.DbNull,
-        flow:             body.flow          ?? Prisma.DbNull,
+        flow:             body.flow != null ? (body.flow as unknown as Prisma.InputJsonValue) : Prisma.DbNull,
         status:           "active",
       },
       create: {
@@ -146,7 +146,7 @@ skillsRouter.put("/:skill_id", async (req: Request, res: Response, next: NextFun
         evaluation:       body.evaluation   ?? Prisma.DbNull,
         knowledge_domains: body.knowledge_domains ?? [],
         compatibility:    body.compatibility ?? Prisma.DbNull,
-        flow:             body.flow          ?? Prisma.DbNull,
+        flow:             body.flow != null ? (body.flow as unknown as Prisma.InputJsonValue) : Prisma.DbNull,
         created_by:       _getUserId(req),
       },
     })

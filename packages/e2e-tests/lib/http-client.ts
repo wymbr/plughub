@@ -102,6 +102,26 @@ export class RegistryClient {
   async listPools(): Promise<unknown> {
     return get(`${this.baseUrl}/v1/pools`, this.headers());
   }
+
+  async listAgentTypes(): Promise<{ agent_types: AgentTypeRecord[]; total: number }> {
+    return get(`${this.baseUrl}/v1/agent-types`, this.headers()) as Promise<{
+      agent_types: AgentTypeRecord[];
+      total: number;
+    }>;
+  }
+
+  async getAgentType(agentTypeId: string): Promise<AgentTypeRecord> {
+    return get(`${this.baseUrl}/v1/agent-types/${agentTypeId}`, this.headers()) as Promise<AgentTypeRecord>;
+  }
+}
+
+export interface AgentTypeRecord {
+  agent_type_id:           string;
+  framework:               string;
+  execution_model:         string;
+  max_concurrent_sessions: number;
+  pools:                   Array<{ pool_id: string } | string>;
+  [key: string]: unknown;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -288,6 +308,77 @@ export class WorkflowClient {
       `${this.baseUrl}/v1/workflow/instances/${encodeURIComponent(instanceId)}/cancel`,
       body ?? {}
     )) as WorkflowInstance;
+  }
+
+  // ── Collect step methods ───────────────────────────────────────────────────
+
+  async persistCollect(
+    instanceId: string,
+    body: {
+      step_id:        string;
+      collect_token:  string;
+      target:         { type: string; id: string };
+      channel:        string;
+      interaction:    string;
+      prompt:         string;
+      options?:       unknown[];
+      fields?:        unknown[];
+      scheduled_at?:  string;
+      delay_hours?:   number;
+      timeout_hours?: number;
+      business_hours?: boolean;
+      campaign_id?:   string;
+    }
+  ): Promise<{
+    collect_token:  string;
+    send_at:        string;
+    expires_at:     string;
+    status:         string;
+    instance:       WorkflowInstance;
+  }> {
+    return (await post(
+      `${this.baseUrl}/v1/workflow/instances/${encodeURIComponent(instanceId)}/collect/persist`,
+      body
+    )) as {
+      collect_token: string;
+      send_at: string;
+      expires_at: string;
+      status: string;
+      instance: WorkflowInstance;
+    };
+  }
+
+  async collectRespond(body: {
+    collect_token: string;
+    response_data: Record<string, unknown>;
+    channel?:      string;
+    session_id?:   string;
+  }): Promise<{
+    collect_token:   string;
+    status:          string;
+    elapsed_ms:      number;
+    instance_id:     string;
+    workflow_resumed: boolean;
+  }> {
+    return (await post(
+      `${this.baseUrl}/v1/workflow/collect/respond`,
+      body
+    )) as {
+      collect_token:    string;
+      status:           string;
+      elapsed_ms:       number;
+      instance_id:      string;
+      workflow_resumed: boolean;
+    };
+  }
+
+  async listCampaignCollects(
+    campaignId: string,
+    tenantId: string
+  ): Promise<unknown[]> {
+    return (await get(
+      `${this.baseUrl}/v1/workflow/campaigns/${encodeURIComponent(campaignId)}/collects?tenant_id=${encodeURIComponent(tenantId)}`
+    )) as unknown[];
   }
 }
 

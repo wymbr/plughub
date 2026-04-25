@@ -262,6 +262,85 @@ export const MenuStepSchema = z.object({
   on_disconnect: z.string().optional(),
 })
 
+// ── CollectStep — async multi-channel data collection (Arc 4 extension) ──────
+
+/**
+ * Target for a collect step — who to contact.
+ */
+export const CollectTargetSchema = z.object({
+  /** "customer" = known customer in CRM, "agent" = internal agent, "external" = ad-hoc contact */
+  type: z.enum(["customer", "agent", "external"]),
+  /** customer_id / agent_id / phone or email for external */
+  id:   z.string().min(1),
+})
+export type CollectTarget = z.infer<typeof CollectTargetSchema>
+
+/**
+ * CollectStep — contacts a target via any channel, presents an interaction
+ * (prompt + optional options/fields), and suspends the workflow until the
+ * target responds or the timeout expires.
+ *
+ * Timing:
+ *   scheduled_at  — absolute ISO-8601 datetime to initiate contact
+ *   delay_hours   — relative offset from now() (optional; ignored if scheduled_at set)
+ *   If neither is set, contact is initiated immediately.
+ *
+ * Response deadline:
+ *   timeout_hours + business_hours — uses calendar-api when business_hours=true
+ *   Deadline is calculated from the actual send time, not the workflow trigger time.
+ *
+ * Campaign grouping:
+ *   campaign_id — optional tag that groups N workflow instances into one campaign.
+ *   Used by analytics for aggregate campaign reporting.
+ */
+export const CollectStepSchema = z.object({
+  id:   z.string(),
+  type: z.literal("collect"),
+
+  // ── Who to contact ──
+  target:  CollectTargetSchema,
+
+  // ── How to contact ──
+  channel: z.enum(["whatsapp", "sms", "email", "voice", "webchat"]),
+
+  // ── What to collect ──
+  interaction: z.enum(["text", "button", "form"]).default("text"),
+  prompt:      z.string().min(1),
+  options:     z.array(z.object({
+    id:    z.string(),
+    label: z.string(),
+  })).optional(),
+  fields: z.array(z.object({
+    id:       z.string(),
+    label:    z.string(),
+    type:     z.string(),
+    required: z.boolean().default(false),
+  })).optional(),
+
+  // ── When to initiate contact ──
+  /** Absolute ISO-8601 send time. Takes precedence over delay_hours. */
+  scheduled_at:  z.string().datetime().optional(),
+  /** Hours from now() — used when scheduled_at is absent */
+  delay_hours:   z.number().nonnegative().optional(),
+
+  // ── How long to wait for a response (after contact is made) ──
+  timeout_hours:  z.number().positive().default(48),
+  business_hours: z.boolean().default(true),
+  calendar_id:    z.string().uuid().optional(),
+
+  // ── Campaign grouping (optional) ──
+  campaign_id:    z.string().optional(),
+
+  // ── Output ──
+  /** Key under which the response is stored in pipeline_state.results */
+  output_as: z.string(),
+
+  // ── Transitions ──
+  on_response: z.object({ next: z.string() }),
+  on_timeout:  z.object({ next: z.string() }),
+})
+export type CollectStep = z.infer<typeof CollectStepSchema>
+
 /** Step discriminado por type */
 export const FlowStepSchema = z.discriminatedUnion("type", [
   TaskStepSchema,
@@ -273,6 +352,7 @@ export const FlowStepSchema = z.discriminatedUnion("type", [
   ReasonStepSchema,
   NotifyStepSchema,
   MenuStepSchema,
+  CollectStepSchema,
   // Arc 4: workflow automation
   z.object({
     type:           z.literal("suspend"),
@@ -306,6 +386,8 @@ export type NotifyStep    = z.infer<typeof NotifyStepSchema>
 export type MenuStep      = z.infer<typeof MenuStepSchema>
 // Arc 4 — suspend step (inline schema in FlowStepSchema discriminated union)
 export type SuspendStep   = Extract<FlowStep, { type: "suspend" }>
+// Arc 4 extension — collect step
+// CollectStep type already exported above
 
 /** Flow de orquestração — presente apenas quando type === "orchestrator" */
 export const SkillFlowSchema = z.object({

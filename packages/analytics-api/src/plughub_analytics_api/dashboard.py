@@ -22,8 +22,8 @@ Routes:
       Query param: tenant_id (required)
       Returns: list of {pool_id, avg_score, count, distribution, updated_at}.
 
-All endpoints require `tenant_id` query param.
-No auth in Phase 1 — caller must supply tenant_id.
+All endpoints require a valid Bearer JWT (same RBAC as /admin/*).
+Operators are restricted to their own tenant_id; admins may query any tenant.
 """
 from __future__ import annotations
 
@@ -32,9 +32,10 @@ import json
 import logging
 import time
 
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.responses import JSONResponse, StreamingResponse
 
+from .auth import Principal, require_principal
 from .query import get_metrics_24h, get_pool_snapshots, get_sentiment_live
 
 logger = logging.getLogger("plughub.analytics.dashboard")
@@ -51,6 +52,7 @@ _SSE_RETRY_MS   = 3000
 async def dashboard_operational(
     request:   Request,
     tenant_id: str = Query(..., description="Tenant identifier"),
+    principal: Principal = Depends(require_principal),
 ) -> StreamingResponse:
     """
     Server-Sent Events stream of live pool operational snapshots.
@@ -62,6 +64,12 @@ async def dashboard_operational(
     The stream pushes every 5s or when the client disconnects.
     Snapshots older than 120s are naturally absent (Redis TTL).
     """
+    effective = principal.effective_tenant(tenant_id)
+    if effective != tenant_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access denied for requested tenant",
+        )
     redis = request.app.state.redis
 
     async def event_generator():
@@ -100,6 +108,7 @@ async def dashboard_operational(
 async def dashboard_metrics(
     request:   Request,
     tenant_id: str = Query(..., description="Tenant identifier"),
+    principal: Principal = Depends(require_principal),
 ) -> JSONResponse:
     """
     Aggregated metrics for the last 24 hours (ClickHouse).
@@ -128,6 +137,12 @@ async def dashboard_metrics(
       }
     }
     """
+    effective = principal.effective_tenant(tenant_id)
+    if effective != tenant_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access denied for requested tenant",
+        )
     store = request.app.state.store
     data  = await get_metrics_24h(
         client   = store._client,
@@ -144,6 +159,7 @@ async def dashboard_metrics(
 async def dashboard_sentiment(
     request:   Request,
     tenant_id: str = Query(..., description="Tenant identifier"),
+    principal: Principal = Depends(require_principal),
 ) -> JSONResponse:
     """
     Current per-pool sentiment aggregate (Redis, TTL 300s).
@@ -165,6 +181,12 @@ async def dashboard_sentiment(
     ]
     Returns empty list when no live data is available.
     """
+    effective = principal.effective_tenant(tenant_id)
+    if effective != tenant_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access denied for requested tenant",
+        )
     redis = request.app.state.redis
     data  = await get_sentiment_live(redis, tenant_id)
     return JSONResponse(content=data)

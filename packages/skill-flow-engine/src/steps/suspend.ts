@@ -138,6 +138,10 @@ export async function executeSuspend(
       ...(step.calendar_id  ? { calendar_id: step.calendar_id }  : {}),
       ...(step.metadata     ? { metadata:    step.metadata }     : {}),
     }
+    // NOTE: persistSuspend MUST be idempotent on resume_token — if this process
+    // crashes before expiresKey is saved, the next retry will call persistSuspend
+    // again with the same resumeToken. The workflow-api must handle this via
+    // UPSERT (INSERT ... ON CONFLICT (resume_token) DO NOTHING RETURNING *).
     const result = await ctx.persistSuspend(persistParams)
     resumeExpiresAt = result.resume_expires_at
   } else {

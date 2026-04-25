@@ -347,7 +347,18 @@ class WebchatAdapter:
         # Step 2 — resolve per-tenant secret (async Redis lookup, ~0.5ms)
         secret = await self._resolve_jwt_secret(tenant_id)
 
-        # Step 3 — full verification
+        # Step 3 — validate algorithm header explicitly before full verification
+        try:
+            header = pyjwt.get_unverified_header(token)
+        except pyjwt.DecodeError as exc:
+            raise pyjwt.InvalidTokenError(f"cannot read token header: {exc}") from exc
+
+        if header.get("alg") != "HS256":
+            raise pyjwt.InvalidTokenError(
+                f"unsupported algorithm: {header.get('alg')!r} — only HS256 is accepted"
+            )
+
+        # Step 4 — full verification
         return pyjwt.decode(token, secret, algorithms=["HS256"])
 
     async def _resolve_jwt_secret(self, tenant_id: str) -> str:

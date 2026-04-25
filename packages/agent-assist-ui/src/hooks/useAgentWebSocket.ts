@@ -1,8 +1,15 @@
 /**
  * useAgentWebSocket
  * Manages the WebSocket connection to the mcp-server-plughub agent channel.
- * Provides inbound message stream and an outbound send function.
- * Spec: agent-assist-piloto.md — Conexão e polling / WebSocket section
+ *
+ * Multi-contact design:
+ *   - One persistent WebSocket connection per agent session (not per contact).
+ *   - The connection is stable: it does NOT reconnect when contacts are assigned
+ *     or closed. The server subscribes/unsubscribes Redis channels dynamically.
+ *   - `send(text, sessionId)` requires the caller to specify which session to
+ *     target — the server uses this to route the message to the right contact.
+ *   - All incoming events carry `session_id` so the App can demultiplex them
+ *     to the correct ContactSession in the Map.
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -12,43 +19,49 @@ const WS_BASE = import.meta.env.VITE_MCP_WS_URL ?? "/agent-ws";
 const RECONNECT_DELAY_MS = 3_000;
 
 interface UseAgentWebSocketReturn {
-  status: WsStatus;
-  send: (text: string) => void;
+  status:    WsStatus;
+  /** Send a text message to a specific session. sessionId is mandatory. */
+  send:      (text: string, sessionId: string) => void;
   lastEvent: WsServerEvent | null;
 }
 
 export function useAgentWebSocket(
-  sessionId: string | null,
   poolId: string | null,
 ): UseAgentWebSocketReturn {
   const wsRef        = useRef<WebSocket | null>(null);
   const [status,     setStatus]     = useState<WsStatus>("disconnected");
   const [lastEvent,  setLastEvent]  = useState<WsServerEvent | null>(null);
-  // reconnectCount is incremented on unexpected close to trigger a reconnect.
+  // reconnectCount is bumped on unexpected close to trigger a reconnect.
   const [reconnectCount, setReconnectCount] = useState(0);
-  // intentionalClose is set to true in the cleanup function so that the
-  // onclose handler doesn't schedule another reconnect on deliberate teardown.
-  const intentionalClose = useRef(false);
+  // intentionalClose is set to true in the cleanup so onclose doesn't
+  // schedule a spurious reconnect on deliberate teardown (unmount).
+  const intentionalClose   = useRef(false);
+  // Debounce timer for the "disconnected" visual state — brief reconnects
+  // (e.g. Vite proxy resets < 2 s) should not flicker the header.
+  const disconnectTimer    = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
-    // Connect as soon as we have either a session (re-connect) or a pool (lobby mode).
-    if (!sessionId && !poolId) return;
+    if (!poolId) return;
 
     intentionalClose.current = false;
 
-    // Always pass both params when available so the server subscribes to
-    // both agent:events:{session_id} AND pool:events:{pool} simultaneously.
-    // This ensures a new conversation.assigned is received even when the agent
-    // reconnects with a stale session_id in the URL after a browser refresh.
+    // Connect with pool only — the server subscribes to session channels
+    // dynamically as conversation.assigned events arrive. We never pass
+    // session_id here because the connection outlives any single session.
     const params = new URLSearchParams();
-    if (sessionId) params.set("session_id", sessionId);
-    if (poolId)    params.set("pool", poolId);
+    params.set("pool", poolId);
     const url = `${WS_BASE}?${params.toString()}`;
     const ws = new WebSocket(url);
     wsRef.current = ws;
-    setStatus("connecting");
+    // Show "connecting" immediately only if we weren't already connected
+    // (avoids flicker when a quick reconnect happens in < 2 s).
+    setStatus(prev => prev === "connected" ? "connected" : "connecting");
 
     ws.onopen = () => {
+      if (disconnectTimer.current) {
+        clearTimeout(disconnectTimer.current);
+        disconnectTimer.current = null;
+      }
       setStatus("connected");
     };
 
@@ -62,22 +75,25 @@ export function useAgentWebSocket(
     };
 
     ws.onerror = () => {
-      setStatus("disconnected");
+      // Don't immediately set disconnected — let onclose handle it with debounce
     };
 
     ws.onclose = () => {
-      setStatus("disconnected");
-      // Auto-reconnect after RECONNECT_DELAY_MS unless the close was intentional
-      // (component unmount, session end). This keeps the subscription alive even
-      // if the mcp-server restarts mid-session.
       if (!intentionalClose.current) {
+        // Debounce the "disconnected" status: only show it if the reconnect
+        // takes longer than 2 s. Quick proxy resets stay invisible.
+        disconnectTimer.current = setTimeout(() => {
+          setStatus("disconnected");
+        }, 2_000);
         setTimeout(() => {
           setReconnectCount((n) => n + 1);
         }, RECONNECT_DELAY_MS);
+      } else {
+        setStatus("disconnected");
       }
     };
 
-    // Ping/pong heartbeat
+    // Ping/pong heartbeat — keeps the connection alive through proxies.
     const heartbeat = setInterval(() => {
       if (ws.readyState === WebSocket.OPEN) {
         ws.send(JSON.stringify({ type: "pong" }));
@@ -87,22 +103,28 @@ export function useAgentWebSocket(
     return () => {
       intentionalClose.current = true;
       clearInterval(heartbeat);
+      if (disconnectTimer.current) {
+        clearTimeout(disconnectTimer.current);
+        disconnectTimer.current = null;
+      }
       ws.close();
     };
-    // Re-run when the session/pool identifier changes OR when an unexpected close
-    // triggers a reconnect (reconnectCount bump).
+    // Reconnect only when poolId changes (rare) or after an unexpected drop.
+    // Assigning/closing contacts does NOT trigger a reconnect.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sessionId ?? poolId, reconnectCount]);
+  }, [poolId, reconnectCount]);
 
   const send = useCallback(
-    (text: string) => {
+    (text: string, sessionId: string) => {
       const ws = wsRef.current;
       if (!ws || ws.readyState !== WebSocket.OPEN) return;
+      if (!sessionId) return;  // refuse to send without a target session
       ws.send(
         JSON.stringify({
-          type: "message.text",
+          type:       "message.text",
+          session_id: sessionId,
           text,
-          timestamp: new Date().toISOString(),
+          timestamp:  new Date().toISOString(),
         })
       );
     },

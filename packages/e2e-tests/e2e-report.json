@@ -1,69 +1,197 @@
 {
   "passed": true,
-  "total": 1,
-  "passed_count": 1,
+  "total": 4,
+  "passed_count": 4,
   "failed_count": 0,
   "scenarios": [
     {
-      "scenario_id": "13",
-      "name": "Workflow Automation — trigger → suspend → resume → complete",
+      "scenario_id": "01",
+      "name": "Happy Path Completo",
       "passed": true,
       "assertions": [
         {
-          "name": "A: workflow-api health → ok (postgres ok)",
+          "name": "agent_login returns valid session_token",
+          "passed": true,
+          "details": {
+            "instance_id": "e2e-instance-80ad9d3d-fbfb-4f33-8d61-158e4bd2e300"
+          }
+        },
+        {
+          "name": "agent_ready returns status:ready",
+          "passed": true,
+          "details": {
+            "status": "ready"
+          }
+        },
+        {
+          "name": "Redis agent state = ready after agent_ready",
+          "passed": true,
+          "details": {
+            "state": "ready"
+          }
+        },
+        {
+          "name": "Pool retencao_humano contains instance after agent_ready",
           "passed": true
         },
         {
-          "name": "A: calendar-api health → ok",
+          "name": "agent_busy returns status:busy",
+          "passed": true,
+          "details": {
+            "current_sessions": 1
+          }
+        },
+        {
+          "name": "Redis agent state = busy after agent_busy",
           "passed": true
         },
         {
-          "name": "B: trigger → instance_id returned",
+          "name": "skill-flow executes 2-step flow",
+          "passed": true,
+          "details": {
+            "outcome": "resolved"
+          }
+        },
+        {
+          "name": "pipeline_state in Redis = completed after flow",
           "passed": true
         },
         {
-          "name": "B: trigger → status=active",
+          "name": "agent_done accepted without error (acknowledged:true)",
           "passed": true
         },
         {
-          "name": "C: persist-suspend → status=suspended",
+          "name": "issue_status non-empty in agent_done payload",
           "passed": true
         },
         {
-          "name": "C: persist-suspend → resume_token present",
-          "passed": true
-        },
-        {
-          "name": "C: persist-suspend → resume_expires_at calculated",
-          "passed": true
-        },
-        {
-          "name": "D: resume → instance_id matches",
-          "passed": true
-        },
-        {
-          "name": "D: resume → status=active (engine can continue)",
-          "passed": true
-        },
-        {
-          "name": "E: complete → status=completed",
-          "passed": true
-        },
-        {
-          "name": "E: complete → outcome=approved persisted (GET verified)",
-          "passed": true
-        },
-        {
-          "name": "F: cancel path — trigger + persist-suspend ok",
-          "passed": true
-        },
-        {
-          "name": "F: cancel → status=cancelled (terminal)",
+          "name": "Redis agent state = ready after agent_done",
           "passed": true
         }
       ],
-      "duration_ms": 79
+      "duration_ms": 76
+    },
+    {
+      "scenario_id": "02",
+      "name": "Escalação com Handoff",
+      "passed": true,
+      "assertions": [
+        {
+          "name": "agent_done WITHOUT handoff_reason is rejected (isError:true)",
+          "passed": true
+        },
+        {
+          "name": "rejection error message references handoff_reason",
+          "passed": true,
+          "details": {
+            "error": "handoff_reason: handoff_reason é obrigatório quando outcome !== 'resolved'"
+          }
+        },
+        {
+          "name": "agent_done WITH handoff_reason is accepted (acknowledged:true)",
+          "passed": true
+        }
+      ],
+      "duration_ms": 38
+    },
+    {
+      "scenario_id": "03",
+      "name": "Retomada Após Falha de Processo",
+      "passed": true,
+      "assertions": [
+        {
+          "name": "Redis pipeline_state.current_step_id = step3 after injection",
+          "passed": true
+        },
+        {
+          "name": "skill-flow-service healthy after restart",
+          "passed": true
+        },
+        {
+          "name": "skill-flow resumes execution after restart",
+          "passed": true,
+          "details": {
+            "outcome": "resolved"
+          }
+        },
+        {
+          "name": "step1 NOT re-executed after resume (transition not duplicated)",
+          "passed": true
+        },
+        {
+          "name": "step2 NOT re-executed after resume (transition not duplicated)",
+          "passed": true
+        },
+        {
+          "name": "pipeline_state advances past step3 after resume",
+          "passed": true,
+          "details": {
+            "current_step_id": "__complete__",
+            "status": "completed"
+          }
+        },
+        {
+          "name": "Total transition count = 4 (2 injected + 2 new)",
+          "passed": true,
+          "details": {
+            "count": 4
+          }
+        }
+      ],
+      "duration_ms": 8271
+    },
+    {
+      "scenario_id": "04",
+      "name": "Motor de Regras — Escalação Intra-Turno",
+      "passed": true,
+      "assertions": [
+        {
+          "name": "Rule created successfully",
+          "passed": true,
+          "details": {
+            "rule_id": "rule_e2e_sentiment_77df3abc",
+            "status": "draft"
+          }
+        },
+        {
+          "name": "Rule transitioned to active (or shadow) status",
+          "passed": true,
+          "details": {
+            "status": "active"
+          }
+        },
+        {
+          "name": "Agent session still busy before escalation evaluation",
+          "passed": true
+        },
+        {
+          "name": "Rules Engine detects escalation condition (should_escalate:true)",
+          "passed": true,
+          "details": {
+            "rule_id": "rule_e2e_sentiment_77df3abc",
+            "pool_target": "retencao_humano"
+          },
+          "latency_ms": 4
+        },
+        {
+          "name": "Escalation target pool = retencao_humano",
+          "passed": true,
+          "details": {
+            "pool_target": "retencao_humano"
+          }
+        },
+        {
+          "name": "Rules Engine evaluation within 500ms",
+          "passed": true,
+          "latency_ms": 4
+        },
+        {
+          "name": "Agent session still active (busy) after escalation detected — issue_status not yet sent",
+          "passed": true
+        }
+      ],
+      "duration_ms": 64
     }
   ],
-  "generated_at": "2026-04-22T12:51:17.497Z"
+  "generated_at": "2026-04-24T14:21:25.992Z"
 }

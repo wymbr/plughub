@@ -70,7 +70,7 @@ class TestMessageTextDispatch:
         registry.send.assert_called_once()
         contact_id, ws_payload = registry.send.call_args.args
         assert contact_id == "c1"
-        assert ws_payload["type"] == "message.text"
+        assert ws_payload["type"] == "msg.text"
         assert ws_payload["text"] == "Posso ajudar com sua solicitação."
         assert ws_payload["message_id"] == "msg-001"
 
@@ -103,7 +103,7 @@ class TestMenuPayloadDispatch:
 
         registry.send.assert_called_once()
         _, ws_payload = registry.send.call_args.args
-        assert ws_payload["type"] == "menu.render"
+        assert ws_payload["type"] == "interaction.request"
         assert ws_payload["menu_id"] == "menu-001"
         assert ws_payload["interaction"] == "button"
         assert len(ws_payload["options"]) == 2
@@ -121,7 +121,7 @@ class TestMenuPayloadDispatch:
         await consumer._dispatch(payload)
 
         _, ws_payload = registry.send.call_args.args
-        assert ws_payload["type"] == "menu.render"
+        assert ws_payload["type"] == "interaction.request"
         assert ws_payload["interaction"] == "form"
         assert ws_payload["fields"][0]["id"] == "name"
 
@@ -177,7 +177,7 @@ class TestSessionClosedDispatch:
 
         registry.send.assert_called_once()
         _, ws_payload = registry.send.call_args.args
-        assert ws_payload["type"] == "session.closed"
+        assert ws_payload["type"] == "conn.session_ended"
         assert ws_payload["reason"] == "agent_done"
 
     async def test_session_closed_default_reason(self, consumer, registry):

@@ -23,10 +23,11 @@ import redis.asyncio as aioredis
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 
-from .cache  import ConfigCache
-from .config import get_settings
-from .router import router as config_router
-from .store  import ConfigStore
+from .cache          import ConfigCache
+from .config         import get_settings
+from .kafka_emitter  import ConfigKafkaEmitter
+from .router         import router as config_router
+from .store          import ConfigStore
 
 logger = logging.getLogger("plughub.config.api")
 
@@ -69,20 +70,25 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         decode_responses=True,
     )
 
-    cache = ConfigCache(redis, ttl=settings.cache_ttl_s)
-    store = ConfigStore(pool, cache)
+    cache   = ConfigCache(redis, ttl=settings.cache_ttl_s)
+    store   = ConfigStore(pool, cache)
+    emitter = ConfigKafkaEmitter(settings.kafka_brokers_list)
 
     try:
         await store.setup()
     except Exception as exc:
         logger.warning("Schema setup failed — will retry on first request: %s", exc)
 
-    app.state.store = store
-    app.state.pool  = pool
-    app.state.redis = redis
+    await emitter.start()
+
+    app.state.store   = store
+    app.state.pool    = pool
+    app.state.redis   = redis
+    app.state.emitter = emitter
 
     yield
 
+    await emitter.stop()
     await pool.close()
     await redis.aclose()
 

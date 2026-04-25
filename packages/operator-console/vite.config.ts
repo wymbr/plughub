@@ -16,6 +16,21 @@ export default defineConfig({
         target: process.env.VITE_WORKFLOW_API_BASE_URL ?? 'http://localhost:3800',
         changeOrigin: true,
       },
+      // Forward config API calls
+      '/config': {
+        target: process.env.VITE_CONFIG_API_BASE_URL ?? 'http://localhost:3600',
+        changeOrigin: true,
+      },
+      // Forward supervisor intervention calls
+      '/supervisor': {
+        target: process.env.VITE_ANALYTICS_BASE_URL ?? 'http://localhost:3500',
+        changeOrigin: true,
+      },
+      // Forward pricing API calls
+      '/v1/pricing': {
+        target: process.env.VITE_PRICING_API_BASE_URL ?? 'http://localhost:3900',
+        changeOrigin: true,
+      },
     },
   },
   build: {

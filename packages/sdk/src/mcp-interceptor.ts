@@ -337,6 +337,15 @@ export class McpInterceptor {
       audit_context:       params.opts.audit_context,
       source:              "in_process",
     }
-    this.writer.write(record)
+    try {
+      this.writer.write(record)
+    } catch (err) {
+      // Audit write failure — fallback to stderr for LGPD traceability
+      // Do NOT suppress: this record must be recoverable from logs.
+      console.error(
+        "[McpInterceptor] AUDIT_WRITE_FAILED",
+        JSON.stringify({ ...record, _kafka_error: String(err) })
+      )
+    }
   }
 }

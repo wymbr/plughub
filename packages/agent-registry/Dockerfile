@@ -26,7 +26,9 @@ RUN npm install && NODE_OPTIONS="--max-old-space-size=4096" npm run build && npx
 # ── Runtime stage ─────────────────────────────────────────────────────────────
 FROM node:20-slim AS runtime
 
-RUN apt-get update && apt-get install -y openssl && rm -rf /var/lib/apt/lists/*
+# openssl: required by Prisma client
+# wget: required by Docker healthcheck (node:20-slim ships without it)
+RUN apt-get update && apt-get install -y openssl wget && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
@@ -37,4 +39,4 @@ WORKDIR /app/packages/agent-registry
 
 EXPOSE 3300
 
-CMD ["sh", "-c", "npx prisma db push --skip-generate && node dist/index.js"]
+CMD ["sh", "-c", "npx prisma db push --skip-generate --accept-data-loss && node dist/index.js"]

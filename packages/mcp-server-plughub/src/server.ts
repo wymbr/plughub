@@ -207,6 +207,184 @@ async function refreshPoolInstances(
   }
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// registerHumanAgent — create/refresh instance in Redis + notify routing engine
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// Called when a human agent connects to the Agent Assist UI WebSocket.
+// Creates a stable instance_id for this pool (one per pool, not per browser tab)
+// so the routing engine always has a consistent handle.
+//
+// Step 1 — Redis: upsert the instance directly so it is immediately visible to
+//   the routing engine's Redis reads, even before Kafka is processed.
+// Step 2 — Kafka `agent.lifecycle` / event=agent_ready: the routing engine's
+//   LifecycleEventHandler.handle() picks this up and calls _drain_queue_for_agent,
+//   which re-publishes any already-queued contacts back to conversations.inbound.
+//
+async function registerHumanAgent(
+  poolId: string,
+  redis:  import("ioredis").default,
+  kafka:  { publish: (topic: string, payload: Record<string, unknown>) => Promise<void> },
+): Promise<void> {
+  const tenantId        = process.env["PLUGHUB_TENANT_ID"] ?? "tenant_demo"
+  const registryUrl     = process.env["AGENT_REGISTRY_URL"] ?? "http://localhost:3300"
+  const instanceId      = `human-${poolId}`   // stable per pool
+  const now             = new Date().toISOString()
+
+  // ── Step 0: ensure pool exists in Agent Registry (PostgreSQL) ──────────────
+  //
+  // The InstanceBootstrap reconciler (orchestrator-bridge) deletes any Redis
+  // pool_config keys that are NOT present in the Agent Registry.  If the pool
+  // was only written via seed-demo.ps1 (direct Redis write), the bootstrap will
+  // silently wipe it on startup and every 5 minutes.
+  //
+  // Solution: POST the pool to the Agent Registry so it persists in PostgreSQL.
+  // The Agent Registry publishes pool.registered → agent.registry.events →
+  // routing-engine's RegistryEventHandler writes pool_config to Redis
+  // immediately (no need to wait for the bootstrap cycle).
+  // A 409 response means the pool already exists — that is fine.
+  try {
+    const poolPayload = {
+      pool_id:       poolId,
+      description:   `Human agent pool — ${poolId} (auto-registered on agent login)`,
+      channel_types: ["webchat", "whatsapp"],
+      sla_target_ms: 300_000,   // 5 minutes
+    }
+    const resp = await fetch(`${registryUrl}/v1/pools`, {
+      method:  "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-tenant-id":  tenantId,
+      },
+      body: JSON.stringify(poolPayload),
+    })
+    if (resp.ok) {
+      console.log(`[agent-ws] Pool registered in Agent Registry: pool=${poolId}`)
+    } else if (resp.status === 409) {
+      console.log(`[agent-ws] Pool already exists in Agent Registry: pool=${poolId}`)
+    } else {
+      console.warn(`[agent-ws] Pool registration returned HTTP ${resp.status}: pool=${poolId}`)
+    }
+  } catch (err) {
+    // Non-fatal: if the Agent Registry is unreachable, fall through.
+    // We still write to Redis directly below as a best-effort fallback.
+    console.warn(`[agent-ws] Pool registration request failed (non-fatal): pool=${poolId}`, err)
+  }
+
+  const instance = {
+    instance_id:      instanceId,
+    agent_type_id:    `human_agent_${poolId}`,
+    tenant_id:        tenantId,
+    pool_id:          poolId,
+    pools:            [poolId],
+    execution_model:  "stateful",
+    max_concurrent:   10,
+    current_sessions: 0,
+    status:           "ready",
+    registered_at:    now,
+    source:           "human_login",
+  }
+
+  // ── Step 1: write directly to Redis (immediate availability for routing reads)
+  //
+  // Even if the Agent Registry call succeeded, the routing engine's Kafka
+  // consumer may not have processed pool.registered yet.  Writing the instance
+  // and pool config directly to Redis ensures zero delay before the next
+  // routing decision.
+  await redis.set(`${tenantId}:instance:${instanceId}`, JSON.stringify(instance))
+  await redis.sadd(`${tenantId}:pool:${poolId}:instances`, instanceId)
+  await redis.sadd(`${tenantId}:pool_roster:${poolId}`, instanceId)
+
+  // Ensure pool_config is present — needed by routing engine for channel
+  // filtering and SLA scoring.  The RegistryEventHandler will overwrite this
+  // when it processes pool.registered from Kafka, but that may take a few ms.
+  const poolConfigKey = `${tenantId}:pool_config:${poolId}`
+  const existingConfig = await redis.get(poolConfigKey)
+  if (!existingConfig) {
+    const poolConfig = {
+      pool_id:       poolId,
+      tenant_id:     tenantId,
+      channel_types: ["webchat", "whatsapp"],
+      sla_target_ms: 300_000,
+      routing_expression: {
+        weight_sla: 0.4, weight_wait: 0.2, weight_tier: 0.2,
+        weight_churn: 0.1, weight_business: 0.1,
+      },
+      competency_weights: {},
+      aging_factor:  0.4,
+      breach_factor: 0.8,
+      remote_sites:  [],
+      is_human_pool: true,
+    }
+    await redis.set(poolConfigKey, JSON.stringify(poolConfig), "EX", 86_400)
+    await redis.sadd(`${tenantId}:pools`, poolId)
+    console.log(`[agent-ws] Pool config written to Redis (fallback): pool=${poolId}`)
+  }
+
+  // ── Step 2: publish agent_ready to agent.lifecycle ─────────────────────────
+  //
+  // The routing engine's LifecycleEventHandler calls _drain_queue_for_agent,
+  // which re-publishes any already-queued contacts back to conversations.inbound.
+  //
+  // execution_model MUST be "stateful" here — the routing engine's kafka_listener
+  // defaults missing execution_model to "stateless", which causes set_instance to
+  // overwrite the Redis key with execution_model="stateless".  The orchestrator-
+  // bridge reads execution_model from Redis to detect human agents (fallback 2
+  // path); if it reads "stateless", it skips activate_human_agent entirely and
+  // the contact is never passed to the Agent Assist UI.
+  await kafka.publish("agent.lifecycle", {
+    event:                    "agent_ready",
+    tenant_id:                tenantId,
+    instance_id:              instanceId,
+    agent_type_id:            `human_agent_${poolId}`,
+    status:                   "ready",
+    execution_model:          "stateful",   // required: prevents stateless default in routing engine
+    current_sessions:         0,
+    pools:                    [poolId],
+    max_concurrent_sessions:  10,
+    timestamp:                now,
+  })
+
+  console.log(`[agent-ws] Human agent registered: instance=${instanceId} pool=${poolId}`)
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// unregisterHumanAgent — mark instance as logged_out when agent disconnects
+// ─────────────────────────────────────────────────────────────────────────────
+async function unregisterHumanAgent(
+  poolId: string,
+  redis:  import("ioredis").default,
+  kafka:  { publish: (topic: string, payload: Record<string, unknown>) => Promise<void> },
+): Promise<void> {
+  const tenantId   = process.env["PLUGHUB_TENANT_ID"] ?? "tenant_demo"
+  const instanceId = `human-${poolId}`
+  const now        = new Date().toISOString()
+
+  // Update status in Redis immediately
+  try {
+    const raw = await redis.get(`${tenantId}:instance:${instanceId}`)
+    if (raw) {
+      const inst = JSON.parse(raw) as Record<string, unknown>
+      inst["status"] = "logged_out"
+      await redis.set(`${tenantId}:instance:${instanceId}`, JSON.stringify(inst))
+    }
+    await redis.srem(`${tenantId}:pool:${poolId}:instances`, instanceId)
+  } catch { /* non-fatal */ }
+
+  // Notify routing engine
+  await kafka.publish("agent.lifecycle", {
+    event:        "agent_logout",
+    tenant_id:    tenantId,
+    instance_id:  instanceId,
+    agent_type_id:`human_agent_${poolId}`,
+    status:       "logout",
+    pools:        [poolId],
+    timestamp:    now,
+  })
+
+  console.log(`[agent-ws] Human agent unregistered: instance=${instanceId} pool=${poolId}`)
+}
+
 export async function startServer(config: ServerConfig): Promise<void> {
   const app = express()
   app.use(express.json())
@@ -438,6 +616,19 @@ export async function startServer(config: ServerConfig): Promise<void> {
   // The UI connects via Vite proxy /agent-ws → ws://localhost:3100/agent/ws
   const wss = new WebSocketServer({ noServer: true })
 
+  // Grace-period timers for human agent unregister.
+  // React 18 StrictMode causes a rapid unmount/remount cycle in development:
+  //   WS open → WS close → WS open (all within ~100ms)
+  // Without a grace period, the first close triggers unregisterHumanAgent which:
+  //   a) sets status=logged_out (removing from routing)
+  //   b) publishes agent_logout to Kafka
+  //   c) drains the queue — the re-queued contact is then lost when register #2
+  //      publishes agent_ready a second time, but the queue is already empty.
+  // Fix: delay the unregister by UNREGISTER_GRACE_MS. If the same pool reconnects
+  // within that window, cancel the pending unregister.
+  const UNREGISTER_GRACE_MS = 2_500
+  const pendingUnregister = new Map<string, ReturnType<typeof setTimeout>>()
+
   httpServer.on("upgrade", (request, socket, head) => {
     const url = new URL(request.url ?? "", `http://${request.headers.host}`)
     if (url.pathname === "/agent/ws") {
@@ -450,39 +641,115 @@ export async function startServer(config: ServerConfig): Promise<void> {
   })
 
   wss.on("connection", (ws: WebSocket, request: http.IncomingMessage) => {
-    const url       = new URL(request.url ?? "", `http://${request.headers.host}`)
-    const poolId    = url.searchParams.get("pool") ?? ""
-    // activeSessionId starts from the URL param; updated when conversation.assigned arrives.
-    // Using let so the message handler always sees the current session_id even in lobby mode.
-    let   activeSessionId = url.searchParams.get("session_id") ?? ""
+    const url    = new URL(request.url ?? "", `http://${request.headers.host}`)
+    const poolId = url.searchParams.get("pool") ?? ""
+
+    // All sessions currently subscribed on this WebSocket connection.
+    // There is intentionally NO concept of "active session" here — every assigned
+    // session is equally active from the server's perspective. The UI decides which
+    // contact to display; the server just forwards events and routes outbound messages
+    // to the session_id the client specifies in each message.text payload.
+    const subscribedSessions = new Set<string>()
+
+    // Seed from URL param — agent reconnecting with a known session (e.g. browser refresh).
+    const initialSessionId = url.searchParams.get("session_id") ?? ""
+
+    // instance_id for this agent connection — resolved when conversation.assigned arrives
+    let agentInstanceId = ""
+    let agentTenantId   = ""
 
     // Send connection.accepted immediately
-    ws.send(JSON.stringify({ type: "connection.accepted", session_id: activeSessionId, pool_id: poolId }))
+    ws.send(JSON.stringify({ type: "connection.accepted", session_id: initialSessionId, pool_id: poolId }))
 
     const subscriber = redis.duplicate()
+
+    // Participant role for this connection — resolved when conversation.assigned arrives.
+    // "primary" for the first agent on a session; "specialist" if the session already
+    // had a human agent when this connection was assigned (session_invite / assist mode).
+    let agentRole = "primary"
+
+    // Helper: write participant_joined / participant_left to the session stream
+    const writeParticipantEvent = async (type: "participant_joined" | "participant_left", sessionId: string) => {
+      if (!sessionId) return
+      try {
+        await (redis as any).xadd(
+          `session:${sessionId}:stream`,
+          "*",
+          "event_id",   crypto.randomUUID(),
+          "type",       type,
+          "timestamp",  new Date().toISOString(),
+          "author",     JSON.stringify({ participant_id: agentInstanceId || poolId, instance_id: agentInstanceId || poolId, role: agentRole }),
+          "visibility", JSON.stringify("all"),
+          "payload",    JSON.stringify({ participant_id: agentInstanceId || poolId, instance_id: agentInstanceId || poolId }),
+        )
+      } catch { /* stream not available — non-fatal */ }
+    }
 
     const forward = (_channel: string, message: string) => {
       if (ws.readyState !== WebSocket.OPEN) return
       ws.send(message)
 
-      // When conversation.assigned arrives via the pool channel,
-      // track the new session_id so the message handler can use it,
-      // and also subscribe to the session-specific channel so subsequent
-      // customer messages (published to agent:events:{session_id}) reach this socket.
       try {
         const event = JSON.parse(message) as Record<string, unknown>
+
+        // ── conversation.assigned ──────────────────────────────────────────────
+        // A new contact has been routed to this agent. Add the session to the
+        // subscribed set and subscribe to its Redis channel. Never remove previous
+        // sessions — all assigned sessions remain subscribed simultaneously.
         if (event["type"] === "conversation.assigned" && typeof event["session_id"] === "string") {
-          activeSessionId = event["session_id"]
-          subscriber.subscribe(`agent:events:${event["session_id"]}`, (err) => {
-            if (err) console.error("Redis session subscribe error:", err)
+          console.log(`[agent-ws] Forwarding conversation.assigned: session=${event["session_id"]} pool=${event["pool_id"]} instance=${event["instance_id"]}`)
+          const newSessionId = event["session_id"]
+          const isNew = !subscribedSessions.has(newSessionId)
+
+          subscribedSessions.add(newSessionId)
+
+          // Capture agent identity from the first assignment event that carries it.
+          if (!agentInstanceId) {
+            if (typeof event["instance_id"] === "string" && event["instance_id"]) {
+              agentInstanceId = event["instance_id"]
+            } else if (typeof event["participant_id"] === "string" && event["participant_id"]) {
+              agentInstanceId = event["participant_id"]
+            }
+          }
+          if (!agentTenantId && typeof event["tenant_id"] === "string") {
+            agentTenantId = event["tenant_id"]
+          }
+
+          // Subscribe to session-specific channel so subsequent messages reach this socket.
+          if (isNew) {
+            subscriber.subscribe(`agent:events:${newSessionId}`, (err) => {
+              if (err) console.error("Redis session subscribe error:", err)
+            })
+
+            // Write participant_joined. Detect specialist role: if the session already
+            // has other human agents (session_invite / assist mode), this is specialist.
+            redis.scard(`session:${newSessionId}:human_agents`).then((existingCount) => {
+              agentRole = (existingCount !== null && existingCount > 1) ? "specialist" : "primary"
+              writeParticipantEvent("participant_joined", newSessionId).catch(() => {})
+            }).catch(() => {
+              writeParticipantEvent("participant_joined", newSessionId).catch(() => {})
+            })
+          }
+        }
+
+        // ── session.closed ────────────────────────────────────────────────────
+        // Session ended (customer hangup, timeout, agent_done, etc.).
+        // Remove from the subscribed set and unsubscribe from the Redis channel.
+        // The UI will handle the visual state transition on its own.
+        if (event["type"] === "session.closed" && typeof event["session_id"] === "string") {
+          const closedId = event["session_id"]
+          subscribedSessions.delete(closedId)
+          subscriber.unsubscribe(`agent:events:${closedId}`, (err) => {
+            if (err) console.error("Redis session unsubscribe error:", err)
           })
         }
-      } catch { /* ignore */ }
+      } catch { /* ignore parse errors */ }
     }
 
-    if (activeSessionId) {
-      // Direct session connection — agent already knows their session (e.g. re-connect).
-      subscriber.subscribe(`agent:events:${activeSessionId}`, (err) => {
+    if (initialSessionId) {
+      // Direct session connection — agent reconnecting with a known session (e.g. browser refresh).
+      subscribedSessions.add(initialSessionId)
+      subscriber.subscribe(`agent:events:${initialSessionId}`, (err) => {
         if (err) console.error("Redis subscribe error:", err)
       })
     }
@@ -506,40 +773,62 @@ export async function startServer(config: ServerConfig): Promise<void> {
         }
       }).catch((err) => console.error(`[agent-ws] Error checking pending assignment pool=${poolId}:`, err))
 
-      // Refresh pool instance readiness in Redis.
-      // In demo/dev environments, agents connect directly (no Kafka agent_ready events),
-      // so the Routing Engine never learns the agent is available via its normal lifecycle
-      // path.  When Carlos (re)connects here, we reset all instances that belong to this
-      // pool back to ready=0-sessions so the Routing Engine can allocate waiting contacts.
-      // This is a no-op in production where lifecycle events keep state accurate.
-      refreshPoolInstances(poolId, redis).catch((err) =>
-        console.error(`refreshPoolInstances pool=${poolId}:`, err)
+      // ── Human agent login — register instance + notify routing engine ───────
+      //
+      // When a human agent opens the Agent Assist UI we:
+      //   1. Create (or refresh) their instance in Redis so the Routing Engine
+      //      can allocate contacts to them — no seed script required.
+      //   2. Publish `agent_ready` to the `agent.lifecycle` Kafka topic so the
+      //      Routing Engine's LifecycleEventHandler runs _drain_queue_for_agent,
+      //      which re-routes any contacts already waiting in this pool.
+      //
+      // This is the correct production behaviour: the act of opening the Agent
+      // Assist UI is sufficient to become available for routing.
+      //
+      // Cancel any pending unregister for this pool — StrictMode in React 18
+      // causes a rapid close→open cycle. Without this, the close fires
+      // unregisterHumanAgent which drains the queue before the second open can
+      // receive the contact.
+      const existingUnregTimer = pendingUnregister.get(poolId)
+      if (existingUnregTimer !== undefined) {
+        clearTimeout(existingUnregTimer)
+        pendingUnregister.delete(poolId)
+        console.log(`[agent-ws] Cancelled pending unregister (StrictMode reconnect) pool=${poolId}`)
+      }
+      registerHumanAgent(poolId, redis, kafka).catch((err) =>
+        console.error(`[agent-ws] registerHumanAgent pool=${poolId}:`, err)
       )
     }
 
-    subscriber.on("message", forward)
+    subscriber.on("message", (channel: string, message: string) => {
+      console.log(`[agent-ws] pub/sub received channel=${channel} type=${(() => { try { return JSON.parse(message).type } catch { return "?" } })()}`)
+      forward(channel, message)
+    })
 
     // ── Inbound messages FROM the human agent → conversations.outbound ───────
-    // The agent UI sends { type: "message.text", text, timestamp } over this socket.
-    // We look up the contact_id from Redis (written by channel-gateway on connect),
-    // then publish to conversations.outbound so the channel-gateway delivers the reply
-    // to the customer's WebSocket.
+    // The agent UI sends { type: "message.text", session_id, text, timestamp }.
+    // session_id is mandatory — the UI always knows which contact the agent is
+    // replying to (selectedSessionId). Without it we cannot route to the right session.
     ws.on("message", async (raw: Buffer) => {
       try {
         const msg = JSON.parse(raw.toString()) as Record<string, unknown>
-        if (msg["type"] !== "message.text") return   // ignore pong, etc.
-        if (!activeSessionId) return                  // lobby mode, no session yet
+        if (msg["type"] !== "message.text") return  // ignore pong, etc.
+
+        // session_id is required in every outbound message.
+        const targetSessionId = typeof msg["session_id"] === "string" ? msg["session_id"] : ""
+        if (!targetSessionId) return  // drop messages with no target session
+
+        // Verify the target session is actually subscribed on this connection —
+        // prevents rogue clients from injecting messages into arbitrary sessions.
+        if (!subscribedSessions.has(targetSessionId)) return
 
         // Look up contact_id and channel from session metadata.
         // Try two sources in order:
         //   1. session:{session_id}:meta (written by channel-gateway on connect)
         //   2. session:{session_id}:contact_id (dedicated key, also by channel-gateway)
-        // Only fall back to activeSessionId (session_id) if both are absent —
-        // that fallback is wrong because channel-gateway registers WebSockets under
-        // contact_id, not session_id, and registry.send(session_id) would find nothing.
         let contactId: string | null = null
         try {
-          const metaRaw = await redis.get(`session:${activeSessionId}:meta`)
+          const metaRaw = await redis.get(`session:${targetSessionId}:meta`)
           if (metaRaw) {
             const meta = JSON.parse(metaRaw) as Record<string, string>
             if (meta["contact_id"]) contactId = meta["contact_id"]
@@ -547,25 +836,24 @@ export async function startServer(config: ServerConfig): Promise<void> {
         } catch { /* try next source */ }
         if (!contactId) {
           try {
-            contactId = await redis.get(`session:${activeSessionId}:contact_id`)
+            contactId = await redis.get(`session:${targetSessionId}:contact_id`)
           } catch { /* use final fallback */ }
         }
-        if (!contactId) contactId = activeSessionId  // last-resort fallback
+        if (!contactId) contactId = targetSessionId  // last-resort fallback
 
         const msgText = typeof msg["text"] === "string" ? msg["text"] : ""
         const msgTs   = typeof msg["timestamp"] === "string"
           ? msg["timestamp"]
           : new Date().toISOString()
+
         // Read channel from session meta — must match the customer's channel
-        // so the outbound consumer delivers it (filters channel != "webchat").
+        // so the outbound consumer delivers it correctly.
         let msgChannel = "webchat"
         try {
-          const metaForChannel = await redis.get(`session:${activeSessionId}:meta`)
+          const metaForChannel = await redis.get(`session:${targetSessionId}:meta`)
           if (metaForChannel) {
             const metaObj = JSON.parse(metaForChannel) as Record<string, string>
             if (metaObj["channel"]) {
-              // Normalize legacy "chat" → "webchat": outbound_consumer filter
-              // silently drops any message where channel != "webchat".
               const rawCh = metaObj["channel"]
               msgChannel = rawCh === "chat" ? "webchat" : rawCh
             }
@@ -575,17 +863,17 @@ export async function startServer(config: ServerConfig): Promise<void> {
         await kafka.publish("conversations.outbound", {
           type:       "message.text",
           contact_id: contactId,
-          session_id: activeSessionId,
+          session_id: targetSessionId,
           message_id: crypto.randomUUID(),
           channel:    msgChannel,
           direction:  "outbound",
-          author:     { type: "agent_human", id: "human_agent" },
+          author:     { type: "agent_human", id: agentInstanceId || poolId || "human_agent", instance_id: agentInstanceId || poolId },
           content:    { type: "text", text: msgText },
           text:       msgText,   // kept for channel-gateway backward compat
           timestamp:  msgTs,
         })
       } catch (err) {
-        console.error(`Agent WS message error session=${activeSessionId}:`, err)
+        console.error(`Agent WS message error:`, err)
       }
     })
 
@@ -598,12 +886,28 @@ export async function startServer(config: ServerConfig): Promise<void> {
 
     ws.on("close", () => {
       clearInterval(pingInterval)
+      // Write participant_left for every session still open on this connection.
+      for (const sid of subscribedSessions) {
+        writeParticipantEvent("participant_left", sid).catch(() => {})
+      }
       subscriber.unsubscribe()
       subscriber.quit()
+      // Notify routing engine that this human agent is no longer available.
+      // Use a grace period so that React 18 StrictMode's rapid close→open cycle
+      // does NOT unregister the agent — the new connection will cancel this timer.
+      if (poolId) {
+        const timer = setTimeout(() => {
+          pendingUnregister.delete(poolId)
+          unregisterHumanAgent(poolId, redis, kafka).catch((err) =>
+            console.error(`[agent-ws] unregisterHumanAgent pool=${poolId}:`, err)
+          )
+        }, UNREGISTER_GRACE_MS)
+        pendingUnregister.set(poolId, timer)
+      }
     })
 
     ws.on("error", (err) => {
-      console.error(`Agent WS error session=${activeSessionId} pool=${poolId}:`, err)
+      console.error(`Agent WS error pool=${poolId}:`, err)
     })
   })
 

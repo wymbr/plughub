@@ -21,6 +21,7 @@ import { executeReason }   from "./steps/reason"
 import { executeNotify }   from "./steps/notify"
 import { executeMenu }     from "./steps/menu"
 import { executeSuspend }  from "./steps/suspend"
+import { executeCollect }  from "./steps/collect"
 
 // ─────────────────────────────────────────────
 // Tipos de contexto e resultado de step
@@ -29,6 +30,8 @@ import { executeSuspend }  from "./steps/suspend"
 export interface StepContext {
   tenantId:       string
   sessionId:      string
+  /** Agent instance_id — used by menu step to set the active_instance flag for CrashDetector. Optional for backward compat. */
+  instanceId?:    string
   customerId:     string
   sessionContext: Record<string, unknown>
   state:          PipelineState
@@ -99,6 +102,29 @@ export interface StepContext {
   }): Promise<{ resume_expires_at: string }>
 
   /**
+   * Creates a collect_instance in PostgreSQL, calculates send_at and expires_at
+   * using the calendar-api, and publishes collect.requested to Kafka.
+   * Called by the collect step. Caller (workflow-api worker) wires this up.
+   * If absent, the collect step falls back to wall-clock times.
+   */
+  persistCollect?(params: {
+    step_id:        string
+    collect_token:  string
+    target:         { type: string; id: string }
+    channel:        string
+    interaction:    string
+    prompt:         string
+    options?:       Array<{ id: string; label: string }>
+    fields?:        Array<{ id: string; label: string; type: string }>
+    scheduled_at?:  string
+    delay_hours?:   number
+    timeout_hours:  number
+    business_hours: boolean
+    calendar_id?:   string
+    campaign_id?:   string
+  }): Promise<{ send_at: string; expires_at: string }>
+
+  /**
    * When set, indicates this is a resume run rather than a fresh suspend.
    * The suspend step reads this instead of suspending again.
    */
@@ -142,6 +168,7 @@ export async function executeStep(
     case "notify":   return executeNotify(step, ctx)
     case "menu":     return executeMenu(step, ctx)
     case "suspend":  return executeSuspend(step, ctx)
+    case "collect":  return executeCollect(step, ctx)
     default:
       // TypeScript garante exhaustiveness via discriminated union
       throw new Error(`Tipo de step desconhecido: ${(step as FlowStep).type}`)

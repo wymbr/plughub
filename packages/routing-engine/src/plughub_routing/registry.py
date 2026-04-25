@@ -134,18 +134,55 @@ class InstanceRegistry:
         self, instance: AgentInstance
     ) -> None:
         """
-        Persists instance state in Redis with TTL of 30s.
-        Spec: "TTL renewed on each agent_ready or agent_busy".
+        Persists instance state in Redis.
+
+        - AI agents: TTL = instance_ttl_seconds (30s), renewed on each heartbeat.
+        - Human agents (source = "human_login" in the existing Redis key): TTL is
+          preserved with KEEPTTL.  The mcp-server writes the key with no TTL
+          (permanent) and owns the lifetime; overwriting with 30s would expire the
+          key and make the orchestrator-bridge unable to read execution_model when
+          it processes conversations.routed.
+          KEEPTTL on a key with no TTL keeps it permanent.
+          KEEPTTL on a missing key creates a key with no TTL — also correct.
+
+        The AgentInstance model does not carry the source field, so we read the
+        existing Redis key to detect human agents before overwriting it.
         """
         key  = _instance_key(instance.tenant_id, instance.instance_id)
         data = instance.model_dump()
         # Alias 'state' → 'status' for mcp-server compatibility
         data["status"] = data.pop("state")
-        await self._redis.set(
-            key,
-            json.dumps(data),
-            ex=self._settings.instance_ttl_seconds,
-        )
+
+        # Detect human agents: check existing key for source="human_login".
+        is_human = False
+        try:
+            existing_raw = await self._redis.get(key)
+            if existing_raw:
+                existing = json.loads(existing_raw)
+                if existing.get("source") == "human_login":
+                    is_human = True
+                    # Re-inject source so bridge can still detect it after update.
+                    data["source"] = "human_login"
+                    # Also preserve execution_model from the original key.
+                    # The agent_ready Kafka event may carry execution_model="stateless"
+                    # (the kafka_listener default) even for human agents.  If we let
+                    # the AgentInstance value overwrite the key, the bridge's fallback-2
+                    # check (execution_model == "stateful") will fail and the contact
+                    # will never be delivered to the Agent Assist UI.
+                    if existing.get("execution_model"):
+                        data["execution_model"] = existing["execution_model"]
+        except Exception:
+            pass
+
+        if is_human:
+            # Preserve whatever TTL the mcp-server set (typically none = permanent).
+            await self._redis.set(key, json.dumps(data), keepttl=True)
+        else:
+            await self._redis.set(
+                key,
+                json.dumps(data),
+                ex=self._settings.instance_ttl_seconds,
+            )
         # Update the pool instance set if the instance is ready
         for pool_id in instance.pools:
             pool_key = _pool_instances_key(instance.tenant_id, pool_id)
@@ -471,11 +508,22 @@ class PoolRegistry:
             return None
         try:
             data = json.loads(raw)
-            # Ensure routing_expression is properly instantiated
-            if "routing_expression" in data and isinstance(data["routing_expression"], dict):
-                data["routing_expression"] = RoutingExpression(**data["routing_expression"])
+            # Coerce routing_expression from the Redis payload:
+            #   dict  → RoutingExpression instance (normal case after first reconcile)
+            #   None  → delete key so Pydantic uses default_factory=RoutingExpression
+            #           (Agent Registry returns null when pool was registered without it)
+            if "routing_expression" in data:
+                if isinstance(data["routing_expression"], dict):
+                    data["routing_expression"] = RoutingExpression(**data["routing_expression"])
+                elif data["routing_expression"] is None:
+                    del data["routing_expression"]
             return PoolConfig.model_validate(data)
-        except Exception:
+        except Exception as exc:
+            import logging as _log
+            _log.getLogger("plughub.routing.registry").warning(
+                "pool_config validation failed pool=%s tenant=%s exc=%s",
+                pool_id, tenant_id, str(exc).replace("\n", " | "),
+            )
             return None
 
     async def save_pool_config(self, config: PoolConfig) -> None:

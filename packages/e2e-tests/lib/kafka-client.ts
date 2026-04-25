@@ -462,3 +462,38 @@ export async function disconnectAll(kafka: Kafka): Promise<void> {
   // the Kafka object itself has no persistent connections to close.
   // This is a no-op placeholder for cleanup symmetry.
 }
+
+/**
+ * Publishes a registry.changed event to Kafka.
+ *
+ * The orchestrator-bridge consumes this topic and calls bootstrap.request_refresh(),
+ * which schedules a full reconcile() on the next heartbeat tick (≤15 s).
+ * Use this after flushTestData() to ensure the bridge re-creates instance keys
+ * without waiting for the periodic 5-minute reconcile cycle.
+ */
+export async function triggerRegistryChanged(
+  kafka:    Kafka,
+  tenantId: string
+): Promise<void> {
+  const producer = kafka.producer();
+  await producer.connect();
+  try {
+    await producer.send({
+      topic: "registry.changed",
+      messages: [
+        {
+          key:   tenantId,
+          value: JSON.stringify({
+            event_type:  "registry.changed",
+            entity_type: "agent_type",
+            tenant_id:   tenantId,
+            timestamp:   new Date().toISOString(),
+            source:      "e2e-test-runner",
+          }),
+        },
+      ],
+    });
+  } finally {
+    await producer.disconnect();
+  }
+}

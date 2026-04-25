@@ -566,6 +566,26 @@ export function registerBpmTools(server: McpServer, deps?: BpmDeps): void {
         }
       }
 
+      // Write participant_left to the session stream so the webchat client sees the
+      // AI agent leaving before the human agent joins.
+      // participant_id is not available in this context (no session JWT) — use "ai-agent"
+      // as a stable label. role "ai" lets the webchat render a transfer notification
+      // instead of a generic leave message.
+      if (deps?.redis) {
+        try {
+          await (deps.redis as any).xadd(
+            `session:${parsed.session_id}:stream`,
+            "*",
+            "event_id",   crypto.randomUUID(),
+            "type",       "participant_left",
+            "timestamp",  new Date().toISOString(),
+            "author",     JSON.stringify({ participant_id: "ai-agent", instance_id: "ai-agent", role: "ai" }),
+            "visibility", JSON.stringify("all"),
+            "payload",    JSON.stringify({ participant_id: "ai-agent", reason: "escalated" }),
+          )
+        } catch { /* non-fatal */ }
+      }
+
       // Publish ConversationInboundEvent to conversations.inbound so the Routing Engine
       // re-routes the session to the target_pool (human pool).
       // pool_id is set directly — the Routing Engine restricts its search to that pool only,

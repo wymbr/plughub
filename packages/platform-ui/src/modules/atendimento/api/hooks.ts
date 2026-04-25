@@ -3,6 +3,14 @@
  * Real-time data hooks wrapping analytics-api and supervisor API.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+
+async function safeJson<T>(res: Response): Promise<T> {
+  const ct = res.headers.get('content-type') ?? ''
+  if (!ct.includes('application/json') && !ct.includes('text/json')) {
+    throw new Error(`API indisponível (HTTP ${res.status})`)
+  }
+  return res.json() as Promise<T>
+}
 import type {
   ActiveSession, ConnectionStatus, Metrics24h,
   PoolSnapshot, PoolView, SentimentEntry, StreamEntry, SupervisorState
@@ -45,7 +53,7 @@ export function useSentimentLive(tenantId: string, intervalMs = 10_000): Sentime
     if (!tenantId) return
     try {
       const res = await fetch(`${BASE}/dashboard/sentiment?tenant_id=${encodeURIComponent(tenantId)}`)
-      if (res.ok) setEntries(await res.json())
+      if (res.ok) setEntries(await safeJson(res))
     } catch { /* stale data acceptable */ }
   }, [tenantId])
   useEffect(() => { fetch_(); const id = setInterval(fetch_, intervalMs); return () => clearInterval(id) }, [fetch_, intervalMs])
@@ -60,7 +68,7 @@ export function useMetrics24h(tenantId: string, intervalMs = 60_000): Metrics24h
     if (!tenantId) return
     try {
       const res = await fetch(`${BASE}/dashboard/metrics?tenant_id=${encodeURIComponent(tenantId)}`)
-      if (res.ok) setMetrics(await res.json())
+      if (res.ok) setMetrics(await safeJson(res))
     } catch { /* ignore */ }
   }, [tenantId])
   useEffect(() => { fetch_(); const id = setInterval(fetch_, intervalMs); return () => clearInterval(id) }, [fetch_, intervalMs])
@@ -120,7 +128,7 @@ export function useActiveSessions(
       const res = await fetch(
         `${BASE}/sessions/active?tenant_id=${encodeURIComponent(tenantId)}&pool_id=${encodeURIComponent(poolId)}&limit=100`,
       )
-      if (res.ok) setSessions(await res.json())
+      if (res.ok) setSessions(await safeJson(res))
     } catch { /* stale data acceptable */ }
     finally { setLoading(false) }
   }, [tenantId, poolId])
@@ -191,8 +199,8 @@ export function useSupervisor(tenantId: string, sessionId: string | null): {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ tenant_id: tenantId, session_id: sessionId, operator_id: operatorId }),
       })
-      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail ?? `HTTP ${res.status}`)
-      const data = await res.json() as { participant_id: string; joined_at: string }
+      if (!res.ok) { const e = await safeJson<{detail?:string}>(res).catch(() => ({})); throw new Error((e as {detail?:string}).detail ?? `HTTP ${res.status}`) }
+      const data = await safeJson<{ participant_id: string; joined_at: string }>(res)
       setState({ status: 'active', participantId: data.participant_id, joinedAt: data.joined_at, error: null })
     } catch (err) {
       setState(s => ({ ...s, status: 'error', error: String(err) }))
@@ -206,7 +214,7 @@ export function useSupervisor(tenantId: string, sessionId: string | null): {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ tenant_id: tenantId, session_id: sessionId, participant_id: state.participantId, text, visibility }),
       })
-      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail ?? `HTTP ${res.status}`)
+      if (!res.ok) { const e = await safeJson<{detail?:string}>(res).catch(() => ({})); throw new Error((e as {detail?:string}).detail ?? `HTTP ${res.status}`) }
     } catch (err) {
       setState(s => ({ ...s, error: String(err) }))
     }

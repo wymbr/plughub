@@ -14,6 +14,8 @@ Topics consumed:
   usage.events               → usage_events (passthrough)
   sentiment.updated          → sentiment_events (passthrough)
   queue.position_updated     → queue_events (position update)
+  workflow.events            → workflow_events (lifecycle)
+  collect.events             → collect_events (lifecycle)
 """
 from __future__ import annotations
 
@@ -43,18 +45,19 @@ def parse_inbound(payload: dict[str, Any]) -> dict | None:
         return None
 
     return {
-        "table":      "sessions",
-        "session_id": session_id,
-        "tenant_id":  tenant_id,
-        "channel":    payload.get("channel", ""),
-        "pool_id":    payload.get("pool_id") or "",
-        "opened_at":  payload.get("started_at") or _now(),
-        "closed_at":  None,
+        "table":        "sessions",
+        "session_id":   session_id,
+        "tenant_id":    tenant_id,
+        "channel":      payload.get("channel", ""),
+        "pool_id":      payload.get("pool_id") or "",
+        "customer_id":  payload.get("customer_id") or payload.get("contact_id"),
+        "opened_at":    payload.get("started_at") or _now(),
+        "closed_at":    None,
         "close_reason": None,
-        "outcome":    None,
+        "outcome":      None,
         "wait_time_ms":   None,
         "handle_time_ms": None,
-        "timestamp":  payload.get("started_at") or _now(),
+        "timestamp":    payload.get("started_at") or _now(),
     }
 
 
@@ -171,13 +174,14 @@ def parse_conversations_event(payload: dict[str, Any]) -> list[dict] | None:
     if event_type == "contact_open":
         return [
             {
-                "table":      "sessions",
-                "session_id": session_id,
-                "tenant_id":  tenant_id,
-                "channel":    payload.get("channel", ""),
-                "pool_id":    "",
-                "opened_at":  payload.get("started_at") or payload.get("timestamp") or _now(),
-                "timestamp":  payload.get("started_at") or payload.get("timestamp") or _now(),
+                "table":       "sessions",
+                "session_id":  session_id,
+                "tenant_id":   tenant_id,
+                "channel":     payload.get("channel", ""),
+                "pool_id":     "",
+                "customer_id": payload.get("customer_id") or payload.get("contact_id"),
+                "opened_at":   payload.get("started_at") or payload.get("timestamp") or _now(),
+                "timestamp":   payload.get("started_at") or payload.get("timestamp") or _now(),
             }
         ]
 
@@ -191,6 +195,7 @@ def parse_conversations_event(payload: dict[str, Any]) -> list[dict] | None:
                 "tenant_id":    tenant_id,
                 "channel":      payload.get("channel", ""),
                 "pool_id":      "",
+                "customer_id":  payload.get("customer_id") or payload.get("contact_id"),
                 "opened_at":    started_at or ended_at,
                 "closed_at":    ended_at,
                 "close_reason": payload.get("reason") or payload.get("close_reason"),
@@ -315,4 +320,86 @@ def parse_queue_position(payload: dict[str, Any]) -> dict | None:
         "estimated_wait_ms": payload.get("estimated_wait_ms"),
         "available_agents":  payload.get("available_agents"),
         "timestamp":         payload.get("published_at") or _now(),
+    }
+
+
+# ─── workflow.events ──────────────────────────────────────────────────────────
+
+# Maps workflow event_type → status label stored in workflow_events.status
+_WORKFLOW_STATUS_MAP = {
+    "workflow.started":   "active",
+    "workflow.suspended": "suspended",
+    "workflow.resumed":   "active",
+    "workflow.completed": "completed",
+    "workflow.timed_out": "timed_out",
+    "workflow.failed":    "failed",
+    "workflow.cancelled": "cancelled",
+}
+
+
+def parse_workflow_event(payload: dict[str, Any]) -> dict | None:
+    """Maps workflow.* events → workflow_events table."""
+    event_type  = payload.get("event_type")
+    tenant_id   = payload.get("tenant_id")
+    instance_id = payload.get("instance_id")
+    flow_id     = payload.get("flow_id", "")
+    if not event_type or not tenant_id or not instance_id:
+        return None
+
+    return {
+        "table":            "workflow_events",
+        "event_id":         _gen_id(),
+        "tenant_id":        tenant_id,
+        "instance_id":      instance_id,
+        "flow_id":          flow_id,
+        "campaign_id":      payload.get("campaign_id"),
+        "event_type":       event_type,
+        "status":           _WORKFLOW_STATUS_MAP.get(event_type),
+        "current_step":     payload.get("current_step"),
+        "suspend_reason":   payload.get("suspend_reason"),
+        "decision":         payload.get("decision"),
+        "outcome":          payload.get("outcome"),
+        "duration_ms":      payload.get("duration_ms"),
+        "wait_duration_ms": payload.get("wait_duration_ms"),
+        "error":            payload.get("error"),
+        "timestamp":        payload.get("timestamp") or _now(),
+    }
+
+
+# ─── collect.events ───────────────────────────────────────────────────────────
+
+# Maps collect event_type → status
+_COLLECT_STATUS_MAP = {
+    "collect.requested": "requested",
+    "collect.sent":      "sent",
+    "collect.responded": "responded",
+    "collect.timed_out": "timed_out",
+}
+
+
+def parse_collect_event(payload: dict[str, Any]) -> dict | None:
+    """Maps collect.* events → collect_events table."""
+    event_type    = payload.get("event_type")
+    tenant_id     = payload.get("tenant_id")
+    instance_id   = payload.get("instance_id")
+    collect_token = payload.get("collect_token")
+    if not event_type or not tenant_id or not instance_id or not collect_token:
+        return None
+
+    return {
+        "table":         "collect_events",
+        "collect_token": collect_token,
+        "tenant_id":     tenant_id,
+        "instance_id":   instance_id,
+        "flow_id":       payload.get("flow_id", ""),
+        "campaign_id":   payload.get("campaign_id"),
+        "step_id":       payload.get("step_id", ""),
+        "target_type":   payload.get("target_type", ""),
+        "channel":       payload.get("channel", ""),
+        "interaction":   payload.get("interaction", ""),
+        "status":        _COLLECT_STATUS_MAP.get(event_type, event_type),
+        "send_at":       payload.get("send_at"),
+        "responded_at":  payload.get("timestamp") if event_type == "collect.responded" else None,
+        "elapsed_ms":    payload.get("elapsed_ms"),
+        "timestamp":     payload.get("timestamp") or _now(),
     }

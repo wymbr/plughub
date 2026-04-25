@@ -1,10 +1,15 @@
 /**
  * MessageBubble
  * Renders a single chat message with author-specific styling.
+ *
+ * Special cases:
+ *   visibility="agents_only" — amber dashed border + "Interno" badge
+ *   message.menuData present — delegates to MenuCard (rich interaction preview)
  */
 
 import React from "react";
 import { AuthorType, ChatMessage } from "../types";
+import { MenuCard } from "./MenuCard";
 
 interface MessageBubbleProps {
   message: ChatMessage;
@@ -24,12 +29,18 @@ const BUBBLE_STYLES: Record<AuthorType, string> = {
   system: "bg-amber-50 text-amber-800 self-center text-xs italic border border-amber-200",
 };
 
+// agents_only overrides: amber tinted background + dashed border, positioned left
+const INTERNAL_BUBBLE =
+  "bg-amber-50 text-amber-900 self-start rounded-tl-none border border-dashed border-amber-400";
+
 const LABEL_STYLES: Record<AuthorType, string> = {
   customer: "text-left text-gray-500",
   agent_human: "text-right text-indigo-400",
   agent_ai: "text-left text-violet-500",
   system: "text-center text-amber-600",
 };
+
+const INTERNAL_LABEL = "text-left text-amber-600";
 
 function formatTime(iso: string): string {
   try {
@@ -43,7 +54,21 @@ function formatTime(iso: string): string {
 }
 
 export const MessageBubble: React.FC<MessageBubbleProps> = ({ message }) => {
-  const isRight = message.author === "agent_human";
+  // Menu cards are rendered as a standalone rich component, not a chat bubble.
+  if (message.menuData) {
+    return <MenuCard data={message.menuData} />;
+  }
+
+  const isInternal = message.visibility === "agents_only";
+  const isRight = !isInternal && message.author === "agent_human";
+
+  const labelStyle = isInternal
+    ? INTERNAL_LABEL
+    : LABEL_STYLES[message.author] ?? "text-left text-gray-500";
+
+  const bubbleStyle = isInternal
+    ? INTERNAL_BUBBLE
+    : BUBBLE_STYLES[message.author] ?? "bg-gray-100 text-gray-800 self-start";
 
   return (
     <div
@@ -51,12 +76,15 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message }) => {
         isRight ? "self-end items-end" : "self-start items-start"
       }`}
     >
-      <span className={`text-[10px] px-1 ${LABEL_STYLES[message.author]}`}>
-        {AUTHOR_LABELS[message.author]} · {formatTime(message.timestamp)}
+      <span className={`text-[10px] px-1 ${labelStyle}`}>
+        {isInternal && (
+          <span className="inline-flex items-center bg-amber-200 text-amber-800 rounded px-1 py-0 text-[9px] font-semibold mr-1 leading-tight">
+            Interno
+          </span>
+        )}
+        {AUTHOR_LABELS[message.author] ?? message.author} · {formatTime(message.timestamp)}
       </span>
-      <div
-        className={`px-3 py-2 rounded-2xl text-sm leading-relaxed ${BUBBLE_STYLES[message.author]}`}
-      >
+      <div className={`px-3 py-2 rounded-2xl text-sm leading-relaxed ${bubbleStyle}`}>
         {message.text}
       </div>
     </div>

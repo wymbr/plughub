@@ -1,20 +1,27 @@
 """
 test_dashboard.py
-Unit tests for the Analytics API dashboard query helpers (query.py).
+Unit tests for the Analytics API dashboard query helpers (query.py)
+and dashboard endpoint RBAC (dashboard.py).
 
 Strategy:
   - get_metrics_24h: mocks the ClickHouse client; verifies aggregation logic.
   - get_pool_snapshots: mocks Redis scan + mget; verifies snapshot parsing.
   - get_sentiment_live: mocks Redis scan + hgetall; verifies structure.
   - Error paths: client raises → function returns empty/zero result.
+  - TestDashboardRBAC: verifies that /dashboard/* endpoints enforce auth.
 """
 from __future__ import annotations
 
 import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import jwt
 import pytest
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
 
+from ..auth import Principal
+from ..dashboard import router as dashboard_router
 from ..query import (
     get_metrics_24h,
     get_pool_snapshots,
@@ -278,3 +285,122 @@ class TestGetSentimentLive:
         assert len(result) == 2
         pool_ids = {r["pool_id"] for r in result}
         assert pool_ids == {"pool_a", "pool_b"}
+
+
+# ── TestDashboardRBAC ─────────────────────────────────────────────────────────
+
+SECRET = "test_secret"
+
+
+def _make_token(payload: dict, secret: str = SECRET) -> str:
+    return jwt.encode(payload, secret, algorithm="HS256")
+
+
+def _make_app() -> tuple[FastAPI, MagicMock, MagicMock]:
+    """Returns (app, redis_mock, store_mock) with dashboard router mounted."""
+    app = FastAPI()
+    app.include_router(dashboard_router)
+
+    redis_mock = AsyncMock()
+    redis_mock.scan = AsyncMock(return_value=(0, []))
+
+    store_mock = MagicMock()
+    store_mock._client   = MagicMock()
+    store_mock._database = "plughub"
+
+    app.state.redis = redis_mock
+    app.state.store = store_mock
+    return app, redis_mock, store_mock
+
+
+def _auth_headers(token: str) -> dict:
+    return {"Authorization": f"Bearer {token}"}
+
+
+ENDPOINTS = [
+    "/dashboard/operational",
+    "/dashboard/metrics",
+    "/dashboard/sentiment",
+]
+
+
+class TestDashboardRBAC:
+    @pytest.fixture(autouse=True)
+    def _patch_settings(self, monkeypatch):
+        settings = MagicMock()
+        settings.admin_jwt_secret = SECRET
+        monkeypatch.setattr(
+            "plughub_analytics_api.auth.get_settings",
+            lambda: settings,
+        )
+
+    @pytest.mark.parametrize("endpoint", ENDPOINTS)
+    def test_missing_token_returns_401(self, endpoint):
+        app, _, _ = _make_app()
+        client = TestClient(app, raise_server_exceptions=False)
+        resp = client.get(endpoint, params={"tenant_id": TENANT})
+        assert resp.status_code == 401, f"{endpoint} should require auth"
+
+    @pytest.mark.parametrize("endpoint", ENDPOINTS)
+    def test_operator_cross_tenant_returns_403(self, endpoint):
+        """An operator token for TENANT must not access 'other_tenant'."""
+        token = _make_token({"sub": "op@co", "role": "operator", "tenant_id": TENANT})
+        app, _, _ = _make_app()
+        client = TestClient(app, raise_server_exceptions=False)
+        resp = client.get(
+            endpoint,
+            params={"tenant_id": "other_tenant"},
+            headers=_auth_headers(token),
+        )
+        assert resp.status_code == 403, f"{endpoint} must block cross-tenant operator"
+
+    @pytest.mark.parametrize("endpoint", ["/dashboard/metrics", "/dashboard/sentiment"])
+    def test_operator_own_tenant_allowed(self, endpoint):
+        """Operator accessing their own tenant should pass the RBAC gate."""
+        token = _make_token({"sub": "op@co", "role": "operator", "tenant_id": TENANT})
+        app, redis_mock, store_mock = _make_app()
+
+        # Stub out ClickHouse for /metrics
+        store_mock._client.query = MagicMock(
+            side_effect=[
+                _ch_result(["total", "avg_handle_ms", "channel", "outcome", "close_reason"], []),
+                _ch_result(["event_type", "outcome", "cnt"], []),
+                _ch_result(["dimension", "total_qty"], []),
+                _ch_result(["category", "cnt", "avg_sc"], []),
+            ]
+        )
+
+        client = TestClient(app, raise_server_exceptions=False)
+        resp = client.get(
+            endpoint,
+            params={"tenant_id": TENANT},
+            headers=_auth_headers(token),
+        )
+        assert resp.status_code in (200, 503), (
+            f"{endpoint} operator own-tenant must not be blocked by RBAC"
+        )
+
+    @pytest.mark.parametrize("endpoint", ["/dashboard/metrics", "/dashboard/sentiment"])
+    def test_admin_can_access_any_tenant(self, endpoint):
+        """Admin token is not restricted by tenant_id."""
+        token = _make_token({"sub": "admin@co", "role": "admin"})
+        app, redis_mock, store_mock = _make_app()
+
+        store_mock._client.query = MagicMock(
+            side_effect=[
+                _ch_result(["total", "avg_handle_ms", "channel", "outcome", "close_reason"], []),
+                _ch_result(["event_type", "outcome", "cnt"], []),
+                _ch_result(["dimension", "total_qty"], []),
+                _ch_result(["category", "cnt", "avg_sc"], []),
+            ]
+        )
+
+        client = TestClient(app, raise_server_exceptions=False)
+        resp = client.get(
+            endpoint,
+            params={"tenant_id": "any_other_tenant"},
+            headers=_auth_headers(token),
+        )
+        assert resp.status_code in (200, 503), (
+            f"{endpoint} admin must not be blocked by tenant isolation"
+        )

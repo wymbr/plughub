@@ -1,319 +1,438 @@
 /**
- * App
- * Root component for the Agent Assist UI.
- * Manages all state, drives WebSocket + supervisor polling, and
- * wires up the Header / ChatArea / AgentInput / RightPanel.
+ * App — Multi-contact Agent Assist UI
  *
- * Layout: full-height flex column
- *   ┌─────────────────────────────────────────┐
- *   │  Header                                 │
- *   ├────────────────────┬────────────────────┤
- *   │  ChatArea (60%)    │  RightPanel (40%)  │
- *   ├────────────────────┴────────────────────┤
- *   │  AgentInput                             │
- *   └─────────────────────────────────────────┘
+ * Layout:
+ *   ┌──────────┬───────────────────────┬──────────────────┐
+ *   │ Header (full width, top)                            │
+ *   ├──────────┬───────────────────────┬──────────────────┤
+ *   │ Contact  │  Chat Area            │  Right Panel     │
+ *   │ List     │  (selected contact)   │  (context)       │
+ *   │  (20%)   │       (50%)           │       (30%)      │
+ *   ├──────────┴───────────────────────┴──────────────────┤
+ *   │  AgentInput  (tied to selected contact)             │
+ *   └─────────────────────────────────────────────────────┘
+ *
+ * State model:
+ *   - contacts: Map<sessionId, ContactSession> — all active contacts
+ *   - selectedSessionId: string | null — which contact the agent is viewing
+ *   - One WebSocket connection for all contacts (useAgentWebSocket)
+ *   - Events are routed to the correct ContactSession by session_id in the payload
  */
 
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
   ActiveTab,
-  AppState,
   ChatMessage,
   ClosePayload,
+  ContactSession,
   Toast,
   WsServerEvent,
 } from "./types";
-import { useAgentWebSocket } from "./hooks/useAgentWebSocket";
-import { useSupervisorState } from "./hooks/useSupervisorState";
+import { useAgentWebSocket }     from "./hooks/useAgentWebSocket";
+import { useSupervisorState }    from "./hooks/useSupervisorState";
 import { useSupervisorCapabilities } from "./hooks/useSupervisorCapabilities";
-import { Header } from "./components/Header";
-import { ChatArea } from "./components/ChatArea";
-import { AgentInput } from "./components/AgentInput";
-import { CloseModal } from "./components/CloseModal";
-import { RightPanel } from "./components/RightPanel";
-import { ToastContainer } from "./components/ToastContainer";
+import { Header }          from "./components/Header";
+import { ChatArea }        from "./components/ChatArea";
+import { AgentInput }      from "./components/AgentInput";
+import { CloseModal }      from "./components/CloseModal";
+import { RightPanel }      from "./components/RightPanel";
+import { ContactList }     from "./components/ContactList";
+import { ToastContainer }  from "./components/ToastContainer";
 
 interface AppProps {
-  initialSessionId: string;
-  initialContactId: string;
   agentName: string;
-  poolId: string;
+  poolId:    string;
 }
 
 let toastSeq = 0;
-function makeToastId(): string {
-  return `toast-${++toastSeq}`;
+function makeToastId(): string { return `toast-${++toastSeq}`; }
+
+function makeContact(sessionId: string, channel = "webchat"): ContactSession {
+  return {
+    sessionId,
+    contactId:        null,
+    customerName:     null,
+    channel,
+    messages:         [],
+    supervisorState:  null,
+    capabilities:     null,
+    sessionStartedAt: new Date(),
+    unreadCount:      0,
+    sessionClosed:    false,
+    pendingCloseModal: false,
+  };
 }
 
-const App: React.FC<AppProps> = ({
-  initialSessionId,
-  initialContactId,
-  agentName,
-  poolId,
-}) => {
-  // sessionId starts from URL param; updated when conversation.assigned arrives.
-  const [sessionId, setSessionId] = useState<string | null>(initialSessionId || null);
-  const [contactId, setContactId] = useState<string>(initialContactId);
+const App: React.FC<AppProps> = ({ agentName, poolId }) => {
+  // ── Multi-contact state ───────────────────────────────────────────────────
+  const [contacts, setContacts] = useState<Map<string, ContactSession>>(new Map());
+  const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
 
-  // wsSessionId controls the WebSocket connection. It is intentionally NOT updated
-  // when conversation.assigned arrives — the server dynamically subscribes the existing
-  // WS connection to the new session's channel, so no client reconnect is needed.
-  // It is only set to null when the session ends (to return to lobby/pool mode).
-  const [wsSessionId, setWsSessionId] = useState<string | null>(initialSessionId || null);
+  // Refs that always hold the latest value — used inside WS event handler
+  // to avoid stale closure bugs (the handler's dep array omits these on purpose
+  // so it doesn't re-create on every contact / selection change).
+  const contactsRef         = useRef<Map<string, ContactSession>>(new Map());
+  const selectedSessionRef  = useRef<string | null>(null);
+  useEffect(() => { contactsRef.current        = contacts;        }, [contacts]);
+  useEffect(() => { selectedSessionRef.current = selectedSessionId; }, [selectedSessionId]);
 
-  // ── WebSocket ────────────────────────────────────────────────────────────
-  // Connects via poolId (lobby mode) when wsSessionId is not yet known,
-  // or directly via wsSessionId on re-connect after a page refresh with session_id in URL.
-  const { status: wsStatus, send, lastEvent } = useAgentWebSocket(
-    wsSessionId,
-    poolId || null,
-  );
+  // ── Shared UI state ───────────────────────────────────────────────────────
+  const [activeTab, setActiveTab] = useState<ActiveTab>("estado");
+  const [toasts, setToasts]       = useState<Toast[]>([]);
 
-  // ── Supervisor polling ────────────────────────────────────────────────────
-  const supervisorState = useSupervisorState(sessionId, lastEvent);
-  const capabilities = useSupervisorCapabilities(sessionId, supervisorState);
+  // ── WebSocket — one connection for all contacts ───────────────────────────
+  const { status: wsStatus, send, lastEvent } = useAgentWebSocket(poolId || null);
 
-  // ── Local UI state ────────────────────────────────────────────────────────
-  const [messages,          setMessages]          = useState<ChatMessage[]>([]);
-  const [activeTab,         setActiveTab]         = useState<ActiveTab>("estado");
-  const [aiTyping,          setAiTyping]          = useState(false);
-  const [sessionClosed,     setSessionClosed]     = useState(false);
-  // pendingCloseModal: true when the customer disconnected and the agent still
-  // needs to register issue_status / outcome before returning to lobby.
-  const [pendingCloseModal, setPendingCloseModal] = useState(false);
-  const [toasts,            setToasts]            = useState<Toast[]>([]);
-  const aiTypingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Track sessions for which we've already shown "Novo contato atribuído" so
+  // repeated conversation.assigned events (routing drain) don't spam toasts.
+  const notifiedAssignments = useRef<Set<string>>(new Set());
+
+  // Pending closed sessions: session.closed may arrive before conversation.assigned
+  // (routing drain re-emits assigned after the close event). We hold the close
+  // reason here and apply it when the contact is eventually added to the Map.
+  const pendingClosedSessions = useRef<Map<string, string>>(new Map());
+
+  // Sessions that the agent has already handled (agent_done submitted).
+  // Any conversation.assigned arriving after handleClose must be silently ignored
+  // — the routing engine's periodic drain re-emits routed events for dead sessions
+  // and would otherwise resurrect the contact in the sidebar.
+  const handledSessions = useRef<Set<string>>(new Set());
+
+  // ── Supervisor hooks — scoped to selected contact ─────────────────────────
+  const supervisorState = useSupervisorState(selectedSessionId, lastEvent);
+  const capabilities    = useSupervisorCapabilities(selectedSessionId, supervisorState);
+
+  // Sync supervisor data back into the selected contact's state.
+  // Also extracts customerName from issue_status context when first available —
+  // real name resolution would come from CRM (future); for now we keep null
+  // and let ContactList fall back to the session ID short form.
+  useEffect(() => {
+    if (!selectedSessionId) return;
+    setContacts(prev => {
+      const c = prev.get(selectedSessionId);
+      if (!c) return prev;
+      const next = new Map(prev);
+      next.set(selectedSessionId, {
+        ...c,
+        supervisorState: supervisorState ?? c.supervisorState,
+        capabilities:    capabilities    ?? c.capabilities,
+        // Preserve any name already resolved; null stays null until CRM integration
+        customerName:    c.customerName,
+      });
+      return next;
+    });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [supervisorState, capabilities]);
+
+  // AI typing timer per session
+  const aiTypingTimers = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
+  const [aiTypingSessions, setAiTypingSessions] = useState<Set<string>>(new Set());
 
   // ── Toast helpers ─────────────────────────────────────────────────────────
   const addToast = useCallback(
     (message: string, type: Toast["type"] = "info", persistent = false) => {
       const id = makeToastId();
-      setToasts((prev) => [...prev, { id, message, type, persistent }]);
+      setToasts(prev => [...prev, { id, message, type, persistent }]);
       if (!persistent) {
-        setTimeout(() => {
-          setToasts((prev) => prev.filter((t) => t.id !== id));
-        }, 5000);
+        setTimeout(() => setToasts(prev => prev.filter(t => t.id !== id)), 5000);
       }
     },
     []
   );
 
   const dismissToast = useCallback((id: string) => {
-    setToasts((prev) => prev.filter((t) => t.id !== id));
+    setToasts(prev => prev.filter(t => t.id !== id));
   }, []);
 
-  // ── Conversation history loader ───────────────────────────────────────────
-  // Fetches the full message list from the REST endpoint and seeds the local
-  // messages state. Called on first mount (reconnect with session_id in URL)
-  // and whenever a new conversation.assigned arrives.
-  const fetchHistory = useCallback(async (sid: string) => {
+  // ── History loader ────────────────────────────────────────────────────────
+  const fetchHistory = useCallback(async (sessionId: string) => {
     try {
-      const res = await fetch(`/api/conversation_history/${sid}`)
-      if (res.ok) {
-        const data = await res.json() as { messages: ChatMessage[] }
-        setMessages(data.messages ?? [])
-      } else {
-        setMessages([])
-      }
+      const res  = await fetch(`/api/conversation_history/${sessionId}`);
+      const data = res.ok
+        ? (await res.json() as { messages: ChatMessage[] })
+        : { messages: [] };
+      setContacts(prev => {
+        const c = prev.get(sessionId);
+        if (!c) return prev;
+        const next = new Map(prev);
+        next.set(sessionId, { ...c, messages: data.messages ?? [] });
+        return next;
+      });
     } catch {
-      // Non-fatal — agent can still work, just starts with no visible history.
-      setMessages([])
+      // non-fatal — agent starts with no visible history
     }
-  }, [])
-
-  // Seed history once on mount when the page is loaded with a session_id already
-  // in the URL (e.g. browser refresh while serving a session).
-  useEffect(() => {
-    if (initialSessionId) {
-      fetchHistory(initialSessionId)
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []) // intentionally fires only on mount — initialSessionId is a stable prop
+  }, []);
 
   // ── WS event handler ──────────────────────────────────────────────────────
   useEffect(() => {
     if (!lastEvent) return;
-
     const event: WsServerEvent = lastEvent;
 
     if (event.type === "connection.accepted") {
-      addToast("Conexão estabelecida", "info");
+      // Status já visível no header (● Connected) — sem toast para não roubar foco
       return;
     }
 
-    // conversation.assigned — arrives via pool:events:{poolId} when the Routing Engine
-    // allocates a customer session to this agent's pool. Updates sessionId / contactId
-    // so the header and supervisor polling reflect the live session.
-    // The WebSocket server already subscribed to agent:events:{session_id} dynamically,
-    // so no reconnect is needed here.
+    // ── New contact assigned ──────────────────────────────────────────────
     if (event.type === "conversation.assigned") {
-      setSessionId(event.session_id);
-      if (event.contact_id) setContactId(event.contact_id);
-      setSessionClosed(false);
-      // Fetch conversation history for this session so the agent sees messages
-      // that arrived before they connected (AI turns, prior customer messages).
-      // fetchHistory calls setMessages internally, replacing any previous session data.
-      fetchHistory(event.session_id);
-      // Update URL so browser refresh reconnects directly to this session
-      const assignedUrl = new URL(window.location.href);
-      assignedUrl.searchParams.set("session_id", event.session_id);
-      window.history.replaceState({}, "", assignedUrl.toString());
-      addToast("Conversa atribuída", "info");
+      const { session_id, contact_id } = event;
+
+      // Reject sessions already handled by the agent — routing drain re-emits
+      // conversation.assigned for dead sessions long after agent_done.
+      if (handledSessions.current.has(session_id)) return;
+
+      // Only process if truly new — dedup against both Map state (via ref) and
+      // our own notification set (handles repeated routing drain events).
+      const isNew = !contactsRef.current.has(session_id) &&
+                    !notifiedAssignments.current.has(session_id);
+      notifiedAssignments.current.add(session_id);
+
+      setContacts(prev => {
+        if (prev.has(session_id)) return prev;  // already tracked (reconnect)
+        const next = new Map(prev);
+        // Check if a session.closed already arrived before this assigned event
+        const alreadyClosed = pendingClosedSessions.current.has(session_id);
+        pendingClosedSessions.current.delete(session_id);
+        next.set(session_id, {
+          ...makeContact(session_id),
+          contactId:        contact_id ?? null,
+          sessionClosed:    alreadyClosed,
+          pendingCloseModal: alreadyClosed,
+        });
+        return next;
+      });
+      if (!isNew) return;  // duplicate event — skip side-effects
+      // Auto-select if no contact is currently selected (first contact)
+      setSelectedSessionId(prev => prev ?? session_id);
+      fetchHistory(session_id);
+      // Update URL with the first session only (for single-tab browser refresh compat)
+      const u = new URL(window.location.href);
+      if (!u.searchParams.get("session_id")) {
+        u.searchParams.set("session_id", session_id);
+        window.history.replaceState({}, "", u.toString());
+      }
+      addToast("Novo contato atribuído", "info");
       return;
     }
 
+    // ── Incoming message ──────────────────────────────────────────────────
     if (event.type === "message.text") {
+      const sid = (event as unknown as Record<string, unknown>)["session_id"] as string | undefined;
+      if (!sid) return;
+
       const msg: ChatMessage = {
-        id: event.message_id,
-        author: event.author.type,
-        text: event.text,
-        timestamp: event.timestamp,
+        id:         event.message_id,
+        author:     event.author.type,
+        text:       event.text,
+        timestamp:  event.timestamp,
+        visibility: event.visibility,
       };
-      setMessages((prev) => {
-        // Deduplicate by id
-        if (prev.some((m) => m.id === msg.id)) return prev;
-        return [...prev, msg];
+
+      setContacts(prev => {
+        const c = prev.get(sid);
+        if (!c) return prev;
+        if (c.messages.some(m => m.id === msg.id)) return prev;  // deduplicate
+        // Use ref — selectedSessionId in the closure may be stale
+        const isSelected = sid === selectedSessionRef.current;
+        const next = new Map(prev);
+        next.set(sid, {
+          ...c,
+          messages:    [...c.messages, msg],
+          unreadCount: isSelected ? 0 : c.unreadCount + 1,
+        });
+        return next;
       });
-      // Clear ai typing indicator when ai message arrives
+
+      // Clear AI typing indicator for this session
       if (event.author.type === "agent_ai") {
-        setAiTyping(false);
-        if (aiTypingTimerRef.current) {
-          clearTimeout(aiTypingTimerRef.current);
-          aiTypingTimerRef.current = null;
-        }
+        const timer = aiTypingTimers.current.get(sid);
+        if (timer) { clearTimeout(timer); aiTypingTimers.current.delete(sid); }
+        setAiTypingSessions(prev => { const s = new Set(prev); s.delete(sid); return s; });
       }
       return;
     }
 
-    if (event.type === "agent.typing") {
-      if (event.author_type === "agent_ai") {
-        setAiTyping(true);
-        // Auto-clear after 10s if no message arrives
-        if (aiTypingTimerRef.current) clearTimeout(aiTypingTimerRef.current);
-        aiTypingTimerRef.current = setTimeout(() => {
-          setAiTyping(false);
-        }, 10_000);
-      }
+    // ── AI typing indicator ───────────────────────────────────────────────
+    if (event.type === "agent.typing" && event.author_type === "agent_ai") {
+      const sid = (event as unknown as Record<string, unknown>)["session_id"] as string | undefined;
+      if (!sid) return;
+      setAiTypingSessions(prev => new Set(prev).add(sid));
+      const existing = aiTypingTimers.current.get(sid);
+      if (existing) clearTimeout(existing);
+      aiTypingTimers.current.set(
+        sid,
+        setTimeout(() => {
+          setAiTypingSessions(prev => { const s = new Set(prev); s.delete(sid); return s; });
+          aiTypingTimers.current.delete(sid);
+        }, 10_000)
+      );
       return;
     }
 
+    // ── Session closed ────────────────────────────────────────────────────
     if (event.type === "session.closed") {
+      const sid = (event as unknown as Record<string, unknown>)["session_id"] as string | undefined;
+      if (!sid) return;
+
       if (event.reason === "client_disconnect") {
-        // Customer hung up — keep sessionId so handleClose can still call
-        // agent_done. Block input and show the modal so the agent registers the outcome.
-        setSessionClosed(true);
-        setPendingCloseModal(true);
-        addToast("Cliente desconectou. Preencha o encerramento.", "warning", true);
-      } else if (sessionId !== null) {
-        // Server-initiated close (e.g. timeout) while we still have an active session.
-        // If sessionId is already null, handleClose already cleaned up — skip the echo
-        // to avoid duplicate toasts and redundant state transitions.
-        setSessionClosed(false);   // return to lobby-ready state
-        setSessionId(null);
-        setWsSessionId(null);
-        setPendingCloseModal(false);
-        const closedUrl = new URL(window.location.href);
-        closedUrl.searchParams.delete("session_id");
-        window.history.replaceState({}, "", closedUrl.toString());
-        addToast(`Sessão encerrada pelo servidor: ${event.reason}`, "warning", true);
+        // Save in pending map in case conversation.assigned hasn't arrived yet.
+        pendingClosedSessions.current.set(sid, event.reason);
+
+        setContacts(prev => {
+          const c = prev.get(sid);
+          if (!c) return prev;  // contact not yet in map — will be applied on assigned
+          const next = new Map(prev);
+          next.set(sid, { ...c, sessionClosed: true, pendingCloseModal: true });
+          return next;
+        });
+        // Only show toast once per session
+        if (!notifiedAssignments.current.has(`closed:${sid}`)) {
+          notifiedAssignments.current.add(`closed:${sid}`);
+          addToast("Cliente desconectou. Preencha o encerramento.", "warning", true);
+        }
+      } else {
+        // Server-initiated close — remove contact from map
+        pendingClosedSessions.current.delete(sid);
+        setContacts(prev => {
+          const next = new Map(prev);
+          next.delete(sid);
+          return next;
+        });
+        // If this was selected, pick another or go to lobby.
+        // Use contactsRef — contacts in the closure may be stale.
+        setSelectedSessionId(prev => {
+          if (prev !== sid) return prev;
+          const remaining = [...contactsRef.current.keys()].filter(k => k !== sid);
+          return remaining[0] ?? null;
+        });
+        const u = new URL(window.location.href);
+        u.searchParams.delete("session_id");
+        window.history.replaceState({}, "", u.toString());
       }
       return;
     }
 
+    // ── Menu render ───────────────────────────────────────────────────────
     if (event.type === "menu.render") {
-      // Menu renders from the AI agent arrive over WS — show as system message.
-      // For button/list/checklist interactions, list the options below the prompt
-      // so the human agent can see what was offered to the customer.
-      let menuText = event.prompt
-      if (event.options && event.options.length > 0) {
-        const optLines = event.options.map((o) => `  • ${o.label}`).join("\n")
-        menuText = `${event.prompt}\n${optLines}`
-      } else if (event.fields && event.fields.length > 0) {
-        const fieldLines = event.fields.map((f) => `  • ${f.label}`).join("\n")
-        menuText = `${event.prompt} [form]\n${fieldLines}`
-      }
+      const sid = (event as unknown as Record<string, unknown>)["session_id"] as string | undefined;
+      if (!sid) return;
       const menuMsg: ChatMessage = {
-        id: `menu-${event.menu_id}`,
-        author: "system",
-        text: menuText,
+        id:        `menu-${event.menu_id}`,
+        author:    "system",
+        text:      event.prompt,
         timestamp: new Date().toISOString(),
+        menuData: {
+          menu_id:     event.menu_id,
+          interaction: event.interaction,
+          prompt:      event.prompt,
+          options:     event.options,
+          fields:      event.fields,
+        },
       };
-      setMessages((prev) => {
-        if (prev.some((m) => m.id === menuMsg.id)) return prev;
-        return [...prev, menuMsg];
+      setContacts(prev => {
+        const c = prev.get(sid);
+        if (!c) return prev;
+        if (c.messages.some(m => m.id === menuMsg.id)) return prev;
+        const next = new Map(prev);
+        next.set(sid, { ...c, messages: [...c.messages, menuMsg] });
+        return next;
       });
       return;
     }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [lastEvent, addToast, fetchHistory]);
 
-  // Cleanup typing timer on unmount
+  // Clear typing timers on unmount
   useEffect(() => {
     return () => {
-      if (aiTypingTimerRef.current) clearTimeout(aiTypingTimerRef.current);
+      for (const t of aiTypingTimers.current.values()) clearTimeout(t);
     };
+  }, []);
+
+  // Mark messages as read and reset tab when switching to a contact
+  const handleSelectContact = useCallback((sessionId: string) => {
+    setSelectedSessionId(sessionId);
+    setActiveTab("estado");   // always land on Estado tab for fresh context
+    setContacts(prev => {
+      const c = prev.get(sessionId);
+      if (!c || c.unreadCount === 0) return prev;
+      const next = new Map(prev);
+      next.set(sessionId, { ...c, unreadCount: 0 });
+      return next;
+    });
   }, []);
 
   // ── Send handler ──────────────────────────────────────────────────────────
   const handleSend = useCallback(
     (text: string) => {
-      send(text);
-      // Optimistically add the agent's own message to the chat
+      if (!selectedSessionId) return;
+      send(text, selectedSessionId);
+      // Optimistic local message
       const msg: ChatMessage = {
-        id: `local-${Date.now()}`,
-        author: "agent_human",
+        id:        `local-${Date.now()}`,
+        author:    "agent_human",
         text,
         timestamp: new Date().toISOString(),
       };
-      setMessages((prev) => [...prev, msg]);
+      setContacts(prev => {
+        const c = prev.get(selectedSessionId);
+        if (!c) return prev;
+        const next = new Map(prev);
+        next.set(selectedSessionId, { ...c, messages: [...c.messages, msg] });
+        return next;
+      });
     },
-    [send]
+    [send, selectedSessionId]
   );
 
   // ── Close session handler ─────────────────────────────────────────────────
-  // Called from:
-  //   (a) AgentInput's CloseModal — agent-initiated close
-  //   (b) pendingCloseModal — agent registers outcome after customer disconnect
   const handleClose = useCallback(
-    async (payload: ClosePayload) => {
+    async (sessionId: string, payload: ClosePayload) => {
+      // Mark immediately — prevents routing drain from re-adding this session
+      // even if the API call below is slow or fails.
+      handledSessions.current.add(sessionId);
       try {
         await fetch(`/api/agent_done/${sessionId}`, {
-          method: "POST",
+          method:  "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(payload),
+          body:    JSON.stringify(payload),
         });
-        // Return to lobby immediately — don't wait for the session.closed WS echo.
-        // The echo will arrive but sessionId will already be null, so the handler
-        // skips it (sessionId !== null guard). Using false here so the UI returns
-        // to "waiting for assignment" state instead of remaining visually locked.
-        setSessionClosed(false);
-        setPendingCloseModal(false);
-        setSessionId(null);
-        setWsSessionId(null);
-        const doneUrl = new URL(window.location.href);
-        doneUrl.searchParams.delete("session_id");
-        window.history.replaceState({}, "", doneUrl.toString());
-        addToast("Atendimento encerrado com sucesso.", "info");
+        // Remove contact from map and switch selection
+        setContacts(prev => {
+          const next = new Map(prev);
+          next.delete(sessionId);
+          return next;
+        });
+        setSelectedSessionId(prev => {
+          if (prev !== sessionId) return prev;
+          const remaining = [...contactsRef.current.keys()].filter(k => k !== sessionId);
+          return remaining[0] ?? null;
+        });
+        const u = new URL(window.location.href);
+        if (u.searchParams.get("session_id") === sessionId) {
+          u.searchParams.delete("session_id");
+          window.history.replaceState({}, "", u.toString());
+        }
+        addToast("Atendimento encerrado.", "info");
       } catch {
-        addToast("Erro ao encerrar atendimento. Tente novamente.", "error");
+        addToast("Erro ao encerrar atendimento.", "error");
       }
     },
-    [sessionId, addToast]
+    [addToast]
   );
 
-  // ── Escalate / invite agent stubs ─────────────────────────────────────────
+  // ── Escalate / invite stubs ───────────────────────────────────────────────
   const handleInviteAgent = useCallback(
-    (agentTypeId: string) => {
-      addToast(`Convite enviado para: ${agentTypeId}`, "info");
-    },
+    (agentTypeId: string) => addToast(`Convite enviado: ${agentTypeId}`, "info"),
+    [addToast]
+  );
+  const handleEscalate = useCallback(
+    (targetPoolId: string) => addToast(`Escalando para: ${targetPoolId}`, "warning"),
     [addToast]
   );
 
-  const handleEscalate = useCallback(
-    (targetPoolId: string) => {
-      addToast(`Escalando para pool: ${targetPoolId}`, "warning");
-    },
-    [addToast]
-  );
+  // ── Selected contact snapshot ─────────────────────────────────────────────
+  const selected = selectedSessionId ? contacts.get(selectedSessionId) ?? null : null;
 
   // ── Render ────────────────────────────────────────────────────────────────
   return (
@@ -321,63 +440,76 @@ const App: React.FC<AppProps> = ({
       <Header
         agentName={agentName}
         poolId={poolId}
-        sessionId={sessionId}
+        sessionId={selectedSessionId}
         wsStatus={wsStatus}
-        sla={supervisorState?.sla ?? null}
+        sla={selected?.supervisorState?.sla ?? null}
+        sessionStartedAt={selected?.sessionStartedAt ?? null}
       />
 
       <div className="flex flex-1 overflow-hidden">
-        {/* Chat — 60% */}
-        <div className="flex flex-col w-[60%] overflow-hidden">
-          {/* Lobby overlay — shown when no session is active */}
-          {!sessionId && !pendingCloseModal && (
+        {/* Contact list — 20% */}
+        <div className="w-[20%] border-r border-gray-200 overflow-y-auto">
+          <ContactList
+            contacts={[...contacts.values()]}
+            selectedSessionId={selectedSessionId}
+            aiTypingSessions={aiTypingSessions}
+            onSelect={handleSelectContact}
+          />
+        </div>
+
+        {/* Chat — 50% */}
+        <div className="flex flex-col w-[50%] overflow-hidden">
+          {!selected ? (
             <div className="flex-1 flex items-center justify-center text-gray-400 text-sm select-none">
               <span className="animate-pulse">⏳ Aguardando próximo atendimento…</span>
             </div>
-          )}
-          {(sessionId || pendingCloseModal) && (
+          ) : (
             <ChatArea
-              messages={messages}
-              aiTyping={aiTyping}
-              liveState={supervisorState ? {
-                sentimentScore: supervisorState.sentiment.current,
-                sentimentAlert: supervisorState.sentiment.alert,
-                sentimentTrend: supervisorState.sentiment.trend,
-                intent:         supervisorState.intent.current,
-                flags:          supervisorState.flags,
+              messages={selected.messages}
+              aiTyping={aiTypingSessions.has(selected.sessionId)}
+              sessionClosed={selected.sessionClosed}
+              liveState={selected.supervisorState ? {
+                sentimentScore: selected.supervisorState.sentiment.current,
+                sentimentAlert: selected.supervisorState.sentiment.alert,
+                sentimentTrend: selected.supervisorState.sentiment.trend,
+                intent:         selected.supervisorState.intent.current,
+                flags:          selected.supervisorState.flags,
               } : null}
             />
           )}
           <AgentInput
             onSend={handleSend}
-            onClose={handleClose}
-            disabled={!sessionId || sessionClosed || wsStatus === "disconnected"}
+            onClose={(payload) => selected && handleClose(selected.sessionId, payload)}
+            disabled={!selected}
+            sessionClosed={selected?.sessionClosed ?? false}
           />
         </div>
 
-        {/* Right panel — 40% */}
-        <div className="w-[40%] overflow-hidden">
+        {/* Right panel — 30% */}
+        <div className="w-[30%] overflow-hidden">
           <RightPanel
             activeTab={activeTab}
             onTabChange={setActiveTab}
-            supervisorState={supervisorState}
-            capabilities={capabilities}
+            supervisorState={selected?.supervisorState ?? null}
+            capabilities={selected?.capabilities ?? null}
+            customerId={selected?.contactId ?? null}
             onInviteAgent={handleInviteAgent}
             onEscalate={handleEscalate}
           />
         </div>
       </div>
 
-      {/* Modal de encerramento quando o cliente desconecta primeiro.
-          O agente deve preencher issue_status / outcome antes de voltar ao lobby. */}
-      {pendingCloseModal && (
+      {/* Close modal — shown for selected contact when customer disconnected */}
+      {selected?.pendingCloseModal && (
         <CloseModal
           defaultIssueStatus="Cliente desconectou"
           defaultOutcome="abandoned"
-          onConfirm={(payload) => handleClose(payload)}
+          onConfirm={(payload) => handleClose(selected.sessionId, payload)}
           onCancel={() =>
-            // Cancel auto-submits with defaults so agent_done is always called
-            handleClose({ issue_status: "Cliente desconectou", outcome: "abandoned" })
+            handleClose(selected.sessionId, {
+              issue_status: "Cliente desconectou",
+              outcome: "abandoned",
+            })
           }
         />
       )}

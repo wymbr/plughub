@@ -27,8 +27,29 @@ RUN printf 'server {\n\
         proxy_set_header   Upgrade $http_upgrade;\n\
         proxy_set_header   Connection "";\n\
         proxy_set_header   Host $host;\n\
-        proxy_buffering    off;   # needed for SSE\n\
+        proxy_buffering    off;\n\
         proxy_read_timeout 300s;\n\
+    }\n\
+\n\
+    # Proxy workflow-api routes\n\
+    location /v1/workflow {\n\
+        proxy_pass         http://workflow-api:3800;\n\
+        proxy_http_version 1.1;\n\
+        proxy_set_header   Host $host;\n\
+    }\n\
+\n\
+    # Proxy pricing-api routes\n\
+    location /v1/pricing {\n\
+        proxy_pass         http://pricing-api:3900;\n\
+        proxy_http_version 1.1;\n\
+        proxy_set_header   Host $host;\n\
+    }\n\
+\n\
+    # Proxy config-api routes\n\
+    location /config {\n\
+        proxy_pass         http://config-api:3600;\n\
+        proxy_http_version 1.1;\n\
+        proxy_set_header   Host $host;\n\
     }\n\
 \n\
     # SPA fallback\n\

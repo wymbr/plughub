@@ -128,6 +128,7 @@ export interface WorkflowInstance {
   flow_id: string
   session_id?: string
   pool_id?: string
+  campaign_id?: string
   status: WorkflowStatus
   current_step?: string
   pipeline_state: Record<string, unknown>
@@ -140,4 +141,36 @@ export interface WorkflowInstance {
   outcome?: string
   created_at: string
   metadata: Record<string, unknown>
+}
+
+// ─── Campaign / Collect (from analytics-api) ─────────────────────────────────
+
+export type CollectStatus = 'requested' | 'sent' | 'responded' | 'timed_out'
+
+export interface CollectEvent {
+  collect_token: string
+  tenant_id:     string
+  instance_id:   string
+  flow_id:       string
+  campaign_id:   string | null
+  step_id:       string
+  target_type:   string
+  channel:       string
+  interaction:   string
+  status:        CollectStatus
+  send_at:       string | null
+  responded_at:  string | null
+  elapsed_ms:    number | null
+  timestamp:     string
+}
+
+export interface CampaignSummary {
+  campaign_id:       string
+  total:             number
+  responded:         number
+  timed_out:         number
+  sent:              number
+  requested:         number
+  response_rate_pct: number
+  avg_elapsed_ms:    number | null
 }

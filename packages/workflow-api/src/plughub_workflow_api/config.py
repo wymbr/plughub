@@ -26,6 +26,7 @@ class Settings(BaseSettings):
     # Kafka
     kafka_brokers:   str  = "localhost:9092"    # comma-separated
     kafka_topic:     str  = "workflow.events"
+    collect_topic:   str  = "collect.events"
     kafka_enabled:   bool = True
 
     # Calendar API (for business-hours deadline calculation)

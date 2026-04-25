@@ -1,6 +1,6 @@
 """
 test_sessions.py
-Unit tests for sessions.py — active session listing and SSE stream.
+Unit tests for sessions.py — active session listing, SSE stream, and customer history.
 
 Tests cover:
   - _classify: score → sentiment category
@@ -10,6 +10,8 @@ Tests cover:
   - _overlay_sentiment: Redis pipeline results overlaid onto sessions
   - list_active_sessions endpoint (mocked store + redis)
   - session_stream SSE endpoint (mocked redis)
+  - _fetch_customer_history: ClickHouse query result → list of dicts
+  - customer_history endpoint (mocked store)
 """
 from __future__ import annotations
 
@@ -25,6 +27,7 @@ from fastapi.testclient import TestClient
 from plughub_analytics_api.sessions import (
     _classify,
     _fetch_active_sessions,
+    _fetch_customer_history,
     _overlay_sentiment,
     _parse_entry,
     _safe_json,
@@ -367,3 +370,180 @@ class TestListActiveSessionsEndpoint:
         assert resp.status_code == 200
         # Verify query was called (limit was forwarded)
         app.state.store._client.query.assert_called_once()
+
+
+# ─── TestFetchCustomerHistory ─────────────────────────────────────────────────
+
+class TestFetchCustomerHistory:
+    def _make_client(self, rows):
+        result = MagicMock()
+        result.result_rows = rows
+        client = MagicMock()
+        client.query.return_value = result
+        return client
+
+    def _row(self, session_id="sess_001", channel="webchat", pool_id="pool_a",
+             opened_at=None, closed_at=None, handle_time_ms=120_000,
+             outcome="resolved", close_reason="flow_complete"):
+        if opened_at is None:
+            opened_at = datetime(2024, 3, 10, 9, 0, 0, tzinfo=timezone.utc)
+        if closed_at is None:
+            closed_at = datetime(2024, 3, 10, 9, 2, 0, tzinfo=timezone.utc)
+        return (session_id, channel, pool_id, opened_at, closed_at,
+                handle_time_ms, outcome, close_reason)
+
+    def test_returns_list_of_dicts(self):
+        client = self._make_client([self._row()])
+        result = _fetch_customer_history(client, "analytics", "tenant_test", "cust_001", 10)
+        assert len(result) == 1
+        row = result[0]
+        assert row["session_id"] == "sess_001"
+        assert row["channel"] == "webchat"
+        assert row["pool_id"] == "pool_a"
+        assert row["outcome"] == "resolved"
+        assert row["close_reason"] == "flow_complete"
+
+    def test_duration_from_handle_time_ms(self):
+        client = self._make_client([self._row(handle_time_ms=90_000)])
+        result = _fetch_customer_history(client, "analytics", "tenant_test", "cust_001", 10)
+        assert result[0]["duration_ms"] == 90_000
+
+    def test_duration_derived_from_timestamps_when_handle_time_ms_none(self):
+        opened_at = datetime(2024, 3, 10, 9, 0, 0, tzinfo=timezone.utc)
+        closed_at = datetime(2024, 3, 10, 9, 3, 0, tzinfo=timezone.utc)
+        client = self._make_client([self._row(
+            opened_at=opened_at, closed_at=closed_at, handle_time_ms=None,
+        )])
+        result = _fetch_customer_history(client, "analytics", "tenant_test", "cust_001", 10)
+        assert result[0]["duration_ms"] == 180_000  # 3 minutes
+
+    def test_duration_none_when_no_timestamps(self):
+        client = self._make_client([self._row(
+            opened_at=None, closed_at=None, handle_time_ms=None,
+        )])
+        # opened_at defaults to datetime in _row, override properly
+        result_mock = MagicMock()
+        result_mock.result_rows = [
+            ("sess_001", "webchat", "pool_a", None, None, None, "resolved", "flow_complete")
+        ]
+        client = MagicMock()
+        client.query.return_value = result_mock
+        result = _fetch_customer_history(client, "analytics", "tenant_test", "cust_001", 10)
+        assert result[0]["duration_ms"] is None
+
+    def test_opened_at_and_closed_at_iso(self):
+        opened_at = datetime(2024, 6, 1, 8, 0, 0, tzinfo=timezone.utc)
+        closed_at = datetime(2024, 6, 1, 8, 5, 0, tzinfo=timezone.utc)
+        client = self._make_client([self._row(opened_at=opened_at, closed_at=closed_at)])
+        result = _fetch_customer_history(client, "analytics", "tenant_test", "cust_001", 10)
+        assert "2024-06-01" in result[0]["opened_at"]
+        assert "2024-06-01" in result[0]["closed_at"]
+
+    def test_multiple_sessions_order_preserved(self):
+        row1 = self._row(session_id="sess_A", outcome="resolved")
+        row2 = self._row(session_id="sess_B", outcome="escalated")
+        client = self._make_client([row1, row2])
+        result = _fetch_customer_history(client, "analytics", "tenant_test", "cust_001", 10)
+        assert len(result) == 2
+        assert result[0]["session_id"] == "sess_A"
+        assert result[1]["session_id"] == "sess_B"
+
+    def test_empty_result(self):
+        client = self._make_client([])
+        result = _fetch_customer_history(client, "analytics", "tenant_test", "cust_001", 20)
+        assert result == []
+
+    def test_nullable_outcome_and_close_reason(self):
+        client = self._make_client([self._row(outcome=None, close_reason=None)])
+        result = _fetch_customer_history(client, "analytics", "tenant_test", "cust_001", 10)
+        assert result[0]["outcome"] is None
+        assert result[0]["close_reason"] is None
+
+
+# ─── TestCustomerHistoryEndpoint ──────────────────────────────────────────────
+
+class TestCustomerHistoryEndpoint:
+    def _make_app(self, ch_rows=None, raise_exc=None):
+        app = FastAPI()
+        app.include_router(router)
+
+        store = MagicMock()
+        store._client   = MagicMock()
+        store._database = "analytics"
+        if raise_exc:
+            store._client.query.side_effect = raise_exc
+        elif ch_rows is not None:
+            result = MagicMock()
+            result.result_rows = ch_rows
+            store._client.query.return_value = result
+
+        redis = MagicMock()
+        redis.pipeline = MagicMock(return_value=MagicMock())
+
+        app.state.store = store
+        app.state.redis = redis
+        return app
+
+    def _ch_row(self, session_id="sess_001"):
+        return (
+            session_id, "webchat", "pool_a",
+            datetime(2024, 3, 10, 9, 0, 0, tzinfo=timezone.utc),
+            datetime(2024, 3, 10, 9, 2, 0, tzinfo=timezone.utc),
+            120_000, "resolved", "flow_complete",
+        )
+
+    def test_returns_200_with_history(self):
+        app = self._make_app(ch_rows=[self._ch_row()])
+        with TestClient(app) as client:
+            resp = client.get("/sessions/customer/cust_001?tenant_id=tenant_test")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert isinstance(data, list)
+        assert len(data) == 1
+        assert data[0]["session_id"] == "sess_001"
+        assert data[0]["channel"] == "webchat"
+        assert data[0]["outcome"] == "resolved"
+        assert data[0]["duration_ms"] == 120_000
+
+    def test_returns_200_empty_when_no_history(self):
+        app = self._make_app(ch_rows=[])
+        with TestClient(app) as client:
+            resp = client.get("/sessions/customer/cust_new?tenant_id=tenant_test")
+        assert resp.status_code == 200
+        assert resp.json() == []
+
+    def test_returns_200_on_ch_failure_graceful(self):
+        app = self._make_app(raise_exc=RuntimeError("ClickHouse unavailable"))
+        with TestClient(app) as client:
+            resp = client.get("/sessions/customer/cust_001?tenant_id=tenant_test")
+        assert resp.status_code == 200
+        assert resp.json() == []
+
+    def test_missing_tenant_id_returns_422(self):
+        app = self._make_app(ch_rows=[])
+        with TestClient(app) as client:
+            resp = client.get("/sessions/customer/cust_001")
+        assert resp.status_code == 422
+
+    def test_limit_param_forwarded(self):
+        app = self._make_app(ch_rows=[])
+        with TestClient(app) as client:
+            resp = client.get("/sessions/customer/cust_001?tenant_id=t&limit=5")
+        assert resp.status_code == 200
+        app.state.store._client.query.assert_called_once()
+
+    def test_limit_too_high_returns_422(self):
+        app = self._make_app(ch_rows=[])
+        with TestClient(app) as client:
+            resp = client.get("/sessions/customer/cust_001?tenant_id=t&limit=999")
+        assert resp.status_code == 422
+
+    def test_multiple_sessions_returned(self):
+        rows = [self._ch_row("sess_A"), self._ch_row("sess_B"), self._ch_row("sess_C")]
+        app = self._make_app(ch_rows=rows)
+        with TestClient(app) as client:
+            resp = client.get("/sessions/customer/cust_001?tenant_id=tenant_test")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert len(data) == 3
+        assert {r["session_id"] for r in data} == {"sess_A", "sess_B", "sess_C"}

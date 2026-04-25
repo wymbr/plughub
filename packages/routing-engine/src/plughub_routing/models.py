@@ -86,16 +86,22 @@ class AgentInstance(BaseModel):
     instance_id:      str
     agent_type_id:    str
     tenant_id:        str
-    pool_id:          str
+    # pool_id is written by mcp-server (human agents) but omitted by the
+    # orchestrator-bridge bootstrap (which uses pools: list[str] instead).
+    # Optional to allow both sources to validate without errors.
+    pool_id:          str = ""
     pools:            list[str] = Field(default_factory=list)  # all pools this instance belongs to
-    execution_model:  Literal["stateless", "stateful"]
+    # execution_model defaults to "stateless" so bootstrap instances (which do
+    # not include this field explicitly) validate cleanly.
+    execution_model:  Literal["stateless", "stateful"] = "stateless"
     max_concurrent:   int = 1
     current_sessions: int = Field(default=0, ge=0)
     # 'state' kept for compatibility with internal scorer/router;
     # Redis uses 'status' (login|ready|busy|paused|logout|draining)
     state:            str = "ready"
     last_seen:        str | None = None
-    registered_at:    str
+    # registered_at is written by mcp-server but omitted by bootstrap instances.
+    registered_at:    str = ""
     # Competency profile declared in agent_login
     profile:          dict[str, int] = Field(default_factory=dict)
 
@@ -124,6 +130,11 @@ class PoolConfig(BaseModel):
 
     # Indicates whether the pool is a human-agent pool (determines saturation by channel)
     is_human_pool:  bool = False
+
+    # Runtime queue depth — populated from the pool snapshot at routing time.
+    # Defaults to 0 (not available) when not yet written by the router.
+    # Used exclusively as a tie-breaker in decide() when two pools have equal score.
+    queue_length:   int  = 0
 
 
 # ─────────────────────────────────────────────

@@ -152,14 +152,14 @@ def _fetch_sessions(
     where = " AND ".join(conditions)
     offset = (page - 1) * page_size
 
-    total = _count(client, f"SELECT count() FROM {db}.sessions WHERE {where}", params)
+    total = _count(client, f"SELECT count() FROM {db}.sessions FINAL WHERE {where}", params)
 
     result = client.query(f"""
         SELECT
             session_id, tenant_id, channel, pool_id,
             opened_at, closed_at, close_reason, outcome,
             wait_time_ms, handle_time_ms
-        FROM {db}.sessions
+        FROM {db}.sessions FINAL
         WHERE {where}
         ORDER BY opened_at DESC
         LIMIT {page_size} OFFSET {offset}
@@ -226,14 +226,14 @@ def _fetch_agents(
     where = " AND ".join(conditions)
     offset = (page - 1) * page_size
 
-    total = _count(client, f"SELECT count() FROM {db}.agent_events WHERE {where}", params)
+    total = _count(client, f"SELECT count() FROM {db}.agent_events FINAL WHERE {where}", params)
 
     result = client.query(f"""
         SELECT
             event_id, tenant_id, session_id, agent_type_id, pool_id,
             instance_id, event_type, outcome, handoff_reason,
             handle_time_ms, routing_mode, timestamp
-        FROM {db}.agent_events
+        FROM {db}.agent_events FINAL
         WHERE {where}
         ORDER BY timestamp DESC
         LIMIT {page_size} OFFSET {offset}
@@ -291,13 +291,13 @@ def _fetch_quality(
     where = " AND ".join(conditions)
     offset = (page - 1) * page_size
 
-    total = _count(client, f"SELECT count() FROM {db}.sentiment_events WHERE {where}", params)
+    total = _count(client, f"SELECT count() FROM {db}.sentiment_events FINAL WHERE {where}", params)
 
     result = client.query(f"""
         SELECT
             event_id, tenant_id, session_id, pool_id,
             score, category, timestamp
-        FROM {db}.sentiment_events
+        FROM {db}.sentiment_events FINAL
         WHERE {where}
         ORDER BY timestamp DESC
         LIMIT {page_size} OFFSET {offset}
@@ -355,16 +355,176 @@ def _fetch_usage(
     where = " AND ".join(conditions)
     offset = (page - 1) * page_size
 
-    total = _count(client, f"SELECT count() FROM {db}.usage_events WHERE {where}", params)
+    total = _count(client, f"SELECT count() FROM {db}.usage_events FINAL WHERE {where}", params)
 
     result = client.query(f"""
         SELECT
             event_id, tenant_id, session_id,
             dimension, quantity, source_component, timestamp
-        FROM {db}.usage_events
+        FROM {db}.usage_events FINAL
         WHERE {where}
         ORDER BY timestamp DESC
         LIMIT {page_size} OFFSET {offset}
     """, parameters=params)
 
     return {"data": _rows_to_dicts(result), "meta": _meta(page, page_size, total, since, until)}
+
+
+# ─── /reports/workflows ──────────────────────────────────────────────────────
+
+async def query_workflows_report(
+    client:    Any,
+    database:  str,
+    tenant_id: str,
+    from_dt:   str | None = None,
+    to_dt:     str | None = None,
+    *,
+    flow_id:     str | None = None,
+    status:      str | None = None,
+    campaign_id: str | None = None,
+    page:      int = 1,
+    page_size: int = 100,
+) -> dict:
+    since = _ch_fmt(from_dt) if from_dt else _default_from()
+    until = _ch_fmt(to_dt)   if to_dt   else _default_to()
+    try:
+        return await asyncio.to_thread(
+            _fetch_workflows, client, database, tenant_id, since, until,
+            flow_id, status, campaign_id, page, page_size,
+        )
+    except Exception as exc:
+        logger.warning("query_workflows_report failed tenant=%s: %s", tenant_id, exc)
+        return {"data": [], "meta": _meta(page, page_size, 0, since, until), "error": "data_unavailable"}
+
+
+def _fetch_workflows(
+    client: Any, db: str, tenant_id: str,
+    since: str, until: str,
+    flow_id: str | None, status: str | None, campaign_id: str | None,
+    page: int, page_size: int,
+) -> dict:
+    conditions = [
+        "tenant_id = {tenant_id:String}",
+        f"timestamp >= '{since}'",
+        f"timestamp < '{until}'",
+    ]
+    params: dict = {"tenant_id": tenant_id}
+
+    if flow_id:
+        conditions.append("flow_id = {flow_id:String}")
+        params["flow_id"] = flow_id
+    if status:
+        conditions.append("status = {status:String}")
+        params["status"] = status
+    if campaign_id:
+        conditions.append("campaign_id = {campaign_id:String}")
+        params["campaign_id"] = campaign_id
+
+    where = " AND ".join(conditions)
+    offset = (page - 1) * page_size
+
+    total = _count(client, f"SELECT count() FROM {db}.workflow_events FINAL WHERE {where}", params)
+
+    result = client.query(f"""
+        SELECT
+            event_id, tenant_id, instance_id, flow_id, campaign_id,
+            event_type, status, current_step, suspend_reason, decision,
+            outcome, duration_ms, wait_duration_ms, error, timestamp
+        FROM {db}.workflow_events FINAL
+        WHERE {where}
+        ORDER BY timestamp DESC
+        LIMIT {page_size} OFFSET {offset}
+    """, parameters=params)
+
+    return {"data": _rows_to_dicts(result), "meta": _meta(page, page_size, total, since, until)}
+
+
+# ─── /reports/campaigns ──────────────────────────────────────────────────────
+
+async def query_campaigns_report(
+    client:    Any,
+    database:  str,
+    tenant_id: str,
+    from_dt:   str | None = None,
+    to_dt:     str | None = None,
+    *,
+    campaign_id: str | None = None,
+    channel:     str | None = None,
+    status:      str | None = None,
+    page:      int = 1,
+    page_size: int = 100,
+) -> dict:
+    since = _ch_fmt(from_dt) if from_dt else _default_from()
+    until = _ch_fmt(to_dt)   if to_dt   else _default_to()
+    try:
+        return await asyncio.to_thread(
+            _fetch_campaigns, client, database, tenant_id, since, until,
+            campaign_id, channel, status, page, page_size,
+        )
+    except Exception as exc:
+        logger.warning("query_campaigns_report failed tenant=%s: %s", tenant_id, exc)
+        return {"data": [], "summary": [], "meta": _meta(page, page_size, 0, since, until), "error": "data_unavailable"}
+
+
+def _fetch_campaigns(
+    client: Any, db: str, tenant_id: str,
+    since: str, until: str,
+    campaign_id: str | None, channel: str | None, status: str | None,
+    page: int, page_size: int,
+) -> dict:
+    conditions = [
+        "tenant_id = {tenant_id:String}",
+        f"timestamp >= '{since}'",
+        f"timestamp < '{until}'",
+    ]
+    params: dict = {"tenant_id": tenant_id}
+
+    if campaign_id:
+        conditions.append("campaign_id = {campaign_id:String}")
+        params["campaign_id"] = campaign_id
+    if channel:
+        conditions.append("channel = {channel:String}")
+        params["channel"] = channel
+    if status:
+        conditions.append("status = {status:String}")
+        params["status"] = status
+
+    where = " AND ".join(conditions)
+    offset = (page - 1) * page_size
+
+    total = _count(client, f"SELECT count() FROM {db}.collect_events FINAL WHERE {where}", params)
+
+    result = client.query(f"""
+        SELECT
+            collect_token, tenant_id, instance_id, flow_id, campaign_id,
+            step_id, target_type, channel, interaction, status,
+            send_at, responded_at, elapsed_ms, timestamp
+        FROM {db}.collect_events FINAL
+        WHERE {where}
+        ORDER BY timestamp DESC
+        LIMIT {page_size} OFFSET {offset}
+    """, parameters=params)
+
+    # Aggregate summary: one row per campaign_id
+    agg_result = client.query(f"""
+        SELECT
+            campaign_id,
+            count()                                                    AS total,
+            countIf(status = 'responded')                              AS responded,
+            countIf(status = 'timed_out')                              AS timed_out,
+            countIf(status = 'sent')                                   AS sent,
+            countIf(status = 'requested')                              AS requested,
+            round(countIf(status = 'responded') * 100.0 / count(), 1) AS response_rate_pct,
+            avg(if(status = 'responded', elapsed_ms, NULL))            AS avg_elapsed_ms
+        FROM {db}.collect_events FINAL
+        WHERE {where} AND campaign_id IS NOT NULL
+        GROUP BY campaign_id
+        ORDER BY total DESC
+        LIMIT 100
+    """, parameters=params)
+
+    return {
+        "data":    _rows_to_dicts(result),
+        "summary": _rows_to_dicts(agg_result),
+        "meta":    _meta(page, page_size, total, since, until),
+    }

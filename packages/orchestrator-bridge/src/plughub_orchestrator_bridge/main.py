@@ -59,6 +59,7 @@ import yaml
 from aiokafka import AIOKafkaConsumer
 
 from .instance_bootstrap import InstanceBootstrap
+from .registry_syncer import RegistrySyncer
 
 logging.basicConfig(
     level=logging.INFO,
@@ -77,6 +78,13 @@ AGENT_REGISTRY_URL  = os.getenv("AGENT_REGISTRY_URL",  "http://localhost:3300")
 _default_skills_dir = str(Path(__file__).parent.parent.parent.parent / "skill-flow-engine" / "skills")
 SKILLS_DIR          = os.getenv("SKILLS_DIR", _default_skills_dir)
 
+# Path to the directory (or single YAML file) containing declarative pool and
+# agent-type definitions. When set, the RegistrySyncer upserts all entities into
+# the Agent Registry at startup, making external seed scripts unnecessary.
+# Leave unset (or empty) to skip registry sync (e.g. in integration tests that
+# pre-seed the DB via their own mechanism).
+REGISTRY_CONFIG_DIR = os.getenv("REGISTRY_CONFIG_DIR", "")
+
 # Comma-separated list of tenant IDs whose agent instances should be bootstrapped
 # from the Agent Registry at startup. Billing is per configured instance — the
 # Agent Registry is the source of truth, not the Redis seed.
@@ -91,7 +99,19 @@ TOPIC_QUEUED            = "conversations.queued"
 TOPIC_INBOUND           = "conversations.inbound"
 TOPIC_EVENTS            = "conversations.events"
 TOPIC_REGISTRY_CHANGED  = "registry.changed"
+TOPIC_CONFIG_CHANGED    = "config.changed"
 GROUP_ID                = "orchestrator-bridge"
+
+# Namespaces whose changes directly affect how many agent instances should exist.
+# Any change to these namespaces triggers a full reconciliation.
+_BOOTSTRAP_NAMESPACES: frozenset[str] = frozenset({"quota"})
+
+# Namespaces that are read at runtime via ConfigStore cache — no bootstrap action
+# needed; the cache TTL (60s) handles propagation naturally. Listed here only for
+# documentation purposes.
+_RUNTIME_NAMESPACES: frozenset[str] = frozenset({
+    "routing", "session", "masking", "webchat", "sentiment", "consumer", "dashboard",
+})
 
 
 # ── Agent type resolution ─────────────────────────────────────────────────────
@@ -624,6 +644,33 @@ async def process_routed(
     if not result.get("allocated"):
         logger.debug("Routing queued (not allocated): session=%s", session_id)
         return
+
+    # ── Dedup guard ───────────────────────────────────────────────────────────
+    # The routing engine's periodic drain re-emits conversations.routed for
+    # sessions that are already being served (skill flow still running, or human
+    # agent active). Without this guard every drain tick generates a new
+    # participant_joined event in the session stream → "Agente entrou no
+    # atendimento" spam in the webchat client.
+    #
+    # We check two independent locks:
+    #   {tenant_id}:pipeline:{session_id}:running  — set by skill-flow-service
+    #                                                 while a flow is executing
+    #   session:{session_id}:human_agent           — set by activate_human_agent
+    try:
+        existing_lock  = await redis_client.get(f"{tenant_id}:pipeline:{session_id}:running")
+        existing_human = await redis_client.get(f"session:{session_id}:human_agent")
+        if existing_lock or existing_human:
+            logger.info(
+                "Skipping duplicate routing for already-served session: "
+                "session=%s skill_running=%s human_active=%s",
+                session_id, bool(existing_lock), bool(existing_human),
+            )
+            return
+    except Exception as exc:
+        logger.warning(
+            "Could not check session state for dedup: session=%s — %s", session_id, exc
+        )
+    # ─────────────────────────────────────────────────────────────────────────
 
     agent_type_id = result.get("agent_type_id", "")
     pool_id       = result.get("pool_id", "")
@@ -1551,6 +1598,7 @@ async def run() -> None:
         TOPIC_INBOUND,
         TOPIC_EVENTS,
         TOPIC_REGISTRY_CHANGED,
+        TOPIC_CONFIG_CHANGED,
         bootstrap_servers=KAFKA_BROKERS,
         group_id=GROUP_ID,
         value_deserializer=lambda v: json.loads(v.decode("utf-8")),
@@ -1558,30 +1606,65 @@ async def run() -> None:
     )
     await consumer.start()
     logger.info(
-        "✅ Orchestrator Bridge started — topics: %s, %s, %s, %s, %s",
-        TOPIC_ROUTED, TOPIC_QUEUED, TOPIC_INBOUND, TOPIC_EVENTS, TOPIC_REGISTRY_CHANGED,
+        "✅ Orchestrator Bridge started — topics: %s, %s, %s, %s, %s, %s",
+        TOPIC_ROUTED, TOPIC_QUEUED, TOPIC_INBOUND, TOPIC_EVENTS,
+        TOPIC_REGISTRY_CHANGED, TOPIC_CONFIG_CHANGED,
     )
     logger.info("   skill-flow-service: %s", SKILL_FLOW_URL)
     logger.info("   agent-registry:     %s", AGENT_REGISTRY_URL)
     logger.info("   YAML fallback dir:  %s", SKILLS_DIR)
     logger.info("   bootstrap tenants:  %s", BOOTSTRAP_TENANT_IDS)
 
-    # ── Instance Bootstrap ────────────────────────────────────────────────────
-    # Reads all active AgentTypes from the Agent Registry and registers each
-    # configured instance slot in Redis. This replaces the Redis seed dependency:
-    # billing is per configured instance → Agent Registry = source of truth.
+    # ── Instance Bootstrap (created before the http session, used inside it) ──
     bootstrap = InstanceBootstrap(
         redis=redis_client,
         registry_url=AGENT_REGISTRY_URL,
         tenant_ids=BOOTSTRAP_TENANT_IDS,
     )
 
-    async with aiohttp.ClientSession() as http:
-        # Bootstrap instances on startup, then keep them alive via heartbeat.
-        await bootstrap.run_once(http)
+    # ── Registry Sync ─────────────────────────────────────────────────────────
+    # Reads declarative YAML config and upserts pools + agent types into the
+    # Agent Registry (PostgreSQL). Runs before InstanceBootstrap so that the
+    # registry is always consistent with the declared configuration, even on a
+    # completely fresh environment. Idempotent — safe to run on every startup.
+    syncer = RegistrySyncer(
+        registry_url=AGENT_REGISTRY_URL,
+        config_path=REGISTRY_CONFIG_DIR or None,
+    )
 
-        # Heartbeat loop runs as a background task — renews instance TTLs every 15s
-        # and re-bootstraps if registry.changed signals a config update.
+    async with aiohttp.ClientSession() as http:
+        # 1. Sync registry first (upsert pools + agent types from YAML)
+        sync_reports = await syncer.sync(http)
+        if sync_reports:
+            logger.info("Registry sync complete (%d tenant(s))", len(sync_reports))
+        elif REGISTRY_CONFIG_DIR:
+            logger.warning(
+                "Registry sync: REGISTRY_CONFIG_DIR=%r but no configs loaded — "
+                "check path and YAML format", REGISTRY_CONFIG_DIR
+            )
+
+        # 2. Reconcile Redis instances from the (now up-to-date) registry.
+        # Initial reconciliation — compares Registry vs Redis and applies the diff.
+        # Idempotent: safe to re-run; only applies what has actually changed.
+        reports = await bootstrap.reconcile(http)
+        for r in reports:
+            level = logging.WARNING if r.errors else logging.INFO
+            logger.log(level, "Startup reconciliation: %s", r.summary())
+
+        # Write readiness signal to Redis so E2E tests and health probes can
+        # detect that the initial reconciliation completed without polling logs.
+        # Key: {tenant}:bootstrap:ready  TTL: 60s (renewed by heartbeat)
+        for tenant_id in BOOTSTRAP_TENANT_IDS:
+            await redis_client.set(
+                f"{tenant_id}:bootstrap:ready",
+                "1",
+                ex=60,
+            )
+        logger.info("Bootstrap readiness signal written for tenants: %s", BOOTSTRAP_TENANT_IDS)
+
+        # Heartbeat loop runs as a background task — renews instance TTLs every 15s,
+        # applies pending updates, and runs a full reconciliation every 5 min or
+        # immediately when registry.changed signals a config update.
         heartbeat_task = asyncio.create_task(bootstrap.heartbeat_loop())
 
         try:
@@ -1614,15 +1697,62 @@ async def _dispatch(
         elif topic == TOPIC_EVENTS:
             await process_contact_event(payload, redis_client)
         elif topic == TOPIC_REGISTRY_CHANGED:
-            # Agent Registry published a config change — re-bootstrap instances
-            # on the next heartbeat tick so new/updated AgentTypes are reflected.
+            # Agent Registry published a structural change (AgentType/Pool CRUD).
+            # Re-bootstrap on the next heartbeat tick so new/updated instances
+            # and pool configs are reflected immediately.
             logger.info(
                 "registry.changed received: entity=%s — scheduling instance re-bootstrap",
                 payload.get("entity_type", "?"),
             )
             bootstrap.request_refresh()
+        elif topic == TOPIC_CONFIG_CHANGED:
+            await _handle_config_changed(payload, bootstrap)
     except Exception as exc:
         logger.error("Dispatch error topic=%s: %s", topic, exc)
+
+
+async def _handle_config_changed(
+    payload:   dict,
+    bootstrap: InstanceBootstrap,
+) -> None:
+    """
+    Reacts to a config.changed event published by the Config API.
+
+    Routing:
+      namespace=quota      → bootstrap.request_refresh()
+                             (max_concurrent_sessions or quota limits changed;
+                              reconciliation may need to create or remove instances)
+
+      namespace=routing /
+               session /
+               masking /
+               webchat /
+               sentiment /
+               consumer /
+               dashboard   → no bootstrap action needed.
+                             These values are read at runtime via ConfigStore
+                             (60s cache); the cache will naturally pick up the
+                             new values on next access.
+
+    If a future namespace requires a bootstrap trigger, add it to
+    _BOOTSTRAP_NAMESPACES in the constants section.
+    """
+    namespace  = payload.get("namespace", "")
+    key        = payload.get("key", "")
+    tenant_id  = payload.get("tenant_id", "__global__")
+    operation  = payload.get("operation", "set")
+
+    if namespace in _BOOTSTRAP_NAMESPACES:
+        logger.info(
+            "config.changed [%s] tenant=%s %s.%s — scheduling instance re-bootstrap",
+            operation, tenant_id, namespace, key,
+        )
+        bootstrap.request_refresh()
+    else:
+        logger.info(
+            "config.changed [%s] tenant=%s %s.%s — runtime config, no bootstrap needed",
+            operation, tenant_id, namespace, key,
+        )
 
 
 def main() -> None:

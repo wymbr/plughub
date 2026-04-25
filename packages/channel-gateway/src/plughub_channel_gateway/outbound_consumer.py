@@ -52,7 +52,17 @@ class OutboundConsumer:
 
         # Only process chat messages
         if channel != "webchat" or not contact_id:
+            if channel or msg_type:
+                logger.debug(
+                    "outbound skipped type=%s channel=%s contact_id=%s",
+                    msg_type, channel, contact_id,
+                )
             return
+
+        logger.info(
+            "outbound dispatch type=%s contact_id=%s session_id=%s",
+            msg_type, contact_id, payload.get("session_id"),
+        )
 
         try:
             if msg_type == "message.text":

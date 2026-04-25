@@ -1,6 +1,6 @@
 /**
  * RightPanel
- * Tab container for Estado / Capacidades / Contexto.
+ * Tab container for Estado / Capacidades / Contexto / Histórico.
  */
 
 import React from "react";
@@ -13,20 +13,23 @@ import {
 import { EstadoTab } from "./tabs/EstadoTab";
 import { CapacidadesTab } from "./tabs/CapacidadesTab";
 import { ContextoTab } from "./tabs/ContextoTab";
+import { HistoricoTab } from "./tabs/HistoricoTab";
 
 interface RightPanelProps {
   activeTab: ActiveTab;
   onTabChange: (tab: ActiveTab) => void;
   supervisorState: SupervisorState | null;
   capabilities: SupervisorCapabilities | null;
+  customerId: string | null;
   onInviteAgent?: (agentTypeId: string) => void;
   onEscalate?: (poolId: string) => void;
 }
 
 const TABS: Array<{ id: ActiveTab; label: string }> = [
-  { id: "estado", label: "Estado" },
-  { id: "capacidades", label: "Capacidades" },
-  { id: "contexto", label: "Contexto" },
+  { id: "estado",       label: "Estado"      },
+  { id: "capacidades",  label: "Capacidades" },
+  { id: "contexto",     label: "Contexto"    },
+  { id: "historico",    label: "Histórico"   },
 ];
 
 export const RightPanel: React.FC<RightPanelProps> = ({
@@ -34,6 +37,7 @@ export const RightPanel: React.FC<RightPanelProps> = ({
   onTabChange,
   supervisorState,
   capabilities,
+  customerId,
   onInviteAgent,
   onEscalate,
 }) => {
@@ -73,6 +77,9 @@ export const RightPanel: React.FC<RightPanelProps> = ({
         )}
         {activeTab === "contexto" && (
           <ContextoTab context={context} />
+        )}
+        {activeTab === "historico" && (
+          <HistoricoTab customerId={customerId} />
         )}
       </div>
     </div>
