@@ -13,6 +13,10 @@ FROM nginx:alpine
 
 COPY --from=builder /app/packages/agent-assist-ui/dist /usr/share/nginx/html
 
+# Serve the standalone webchat test page alongside the React app
+# Accessible at: http://localhost:5173/webchat-test.html
+COPY packages/agent-assist-ui/webchat-test.html /usr/share/nginx/html/webchat-test.html
+
 RUN printf 'server {\n\
     listen 5173;\n\
     root /usr/share/nginx/html;\n\

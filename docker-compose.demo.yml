@@ -41,20 +41,35 @@ volumes:
   attachment-data:
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Agent Assist UI — testes manuais de atendimento humano
+# Testes manuais — Agent Assist + Operator Console
 # ─────────────────────────────────────────────────────────────────────────────
 #
-# Sobe toda a stack de backend + Agent Assist UI, sem executar o e2e-runner:
+# Sobe toda a stack sem o runner de testes:
 #   docker compose -f docker-compose.demo.yml up --build --scale e2e-runner=0
 #
-# Acesse a UI do agente em: http://localhost:5173
-#   - Parâmetros: ?pool=retencao_humano&agent=agente_retencao_humano_v1-001
-#   - Ou configure via ENV no serviço abaixo (VITE_DEFAULT_POOL / VITE_AGENT_ID)
+# ┌─ URLs de acesso ─────────────────────────────────────────────────────────┐
+# │  Agent Assist UI (agente humano)                                         │
+# │    http://localhost:5173?pool=retencao_humano&agent=agente_humano_v1-001 │
+# │    http://localhost:5173?pool=demo_ia&agent=agente_humano_v1-001         │
+# │    http://localhost:5173?pool=sac_ia&agent=agente_humano_v1-001          │
+# │                                                                           │
+# │  WebChat cliente (página de teste do consumidor final)                   │
+# │    http://localhost:5173/webchat-test.html                               │
+# │                                                                           │
+# │  Operator Console (supervisão / analytics / config)                      │
+# │    http://localhost:4000                                                  │
+# │                                                                           │
+# │  Observabilidade                                                          │
+# │    Kafdrop (Kafka UI):         http://localhost:9001                     │
+# │    Redis Commander (Redis UI): http://localhost:8081                     │
+# └───────────────────────────────────────────────────────────────────────────┘
 #
-# Observabilidade:
-#   - Kafdrop:          http://localhost:9001
-#   - Redis Commander:  http://localhost:8081
-#   - Webchat (cliente): http://localhost:8010 (canal do cliente)
+# Fluxo de teste end-to-end manual:
+#   1. Abra o Agent Assist UI com o pool desejado no parâmetro ?pool=
+#   2. Abra webchat-test.html, selecione o mesmo pool e clique Conectar
+#   3. Envie mensagens do cliente — o agente recebe em tempo real
+#   4. Para pools de IA (sac_ia, demo_ia): o agente IA responde automaticamente
+#   5. Para retencao_humano: o agente humano visualiza e pode responder
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Infra
@@ -706,6 +721,30 @@ services:
         condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "kill -0 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+    networks:
+      - plughub-demo
+
+  operator-console:
+    build:
+      context: .
+      dockerfile: packages/operator-console/Dockerfile
+    ports:
+      - "4000:80"
+    depends_on:
+      analytics-api:
+        condition: service_healthy
+      workflow-api:
+        condition: service_healthy
+      pricing-api:
+        condition: service_healthy
+      config-api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost/health 2>/dev/null || kill -0 1"]
       interval: 10s
       timeout: 5s
       retries: 10
