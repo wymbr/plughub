@@ -451,7 +451,13 @@ export function registerBpmTools(server: McpServer, deps?: BpmDeps): void {
 
       const messageId = crypto.randomUUID()
       const timestamp  = new Date().toISOString()
-      const hasMenu    = parsed.menu && parsed.menu.interaction !== "text"
+      // Cria interaction.request para todas as interações não-text.
+      // Para text: cria interaction.request apenas quando há masked_fields (ex: PIN input)
+      // para que o webchat renderize <input type="password"> em vez de campo normal.
+      // Text sem masked_fields continua como message.text (preserva compatibilidade).
+      const hasMaskedText = parsed.menu?.interaction === "text" &&
+                            (parsed.menu?.masked_fields?.length ?? 0) > 0
+      const hasMenu    = parsed.menu && (parsed.menu.interaction !== "text" || hasMaskedText)
       const agentsOnly = parsed.visibility === "agents_only"
 
       if (agentsOnly) {

@@ -27,6 +27,8 @@
 import type { MenuStep } from "@plughub/schemas"
 import type { StepContext, StepResult } from "../executor"
 import { interpolate } from "../interpolate"
+import { computeMaskedFieldIds, isFieldMasked } from "../masking-policy"
+import { redisKeys } from "../redis-keys"
 
 export async function executeMenu(
   step: MenuStep,
@@ -37,31 +39,28 @@ export async function executeMenu(
   //    use valores calculados em steps anteriores (ex: pergunta gerada por reason).
   const resolvedPrompt = await interpolate(step.prompt, ctx, ctx.contextStore)
   try {
-    // Build the list of masked field IDs to send to the Channel Gateway.
-    // A field is considered masked when:
-    //   - field.masked is explicitly true, OR
-    //   - field.masked is undefined and step.masked is true
-    // This mirrors the routing logic applied after the BLPOP response.
-    const maskedFieldIds: string[] = []
-    if (step.fields && (step.masked || step.fields.some(f => f.masked === true))) {
-      for (const field of step.fields) {
-        const fieldMasked = field.masked
-        const isMasked    = fieldMasked === true || (fieldMasked === undefined && step.masked === true)
-        if (isMasked) maskedFieldIds.push(field.id)
-      }
-    }
+    // Computa a lista de IDs mascarados usando a política centralizada.
+    // Para interações sem fields[] (text, button, list), usa o output_as/step.id como
+    // campo implícito — permite que o webchat renderize <input type="password"> quando masked=true.
+    const implicitFieldId = step.output_as ?? step.id
+    const maskedFieldIds  = computeMaskedFieldIds(step.masked, step.fields, implicitFieldId)
 
+    // Sempre inclui o objeto menu para todas as interações.
+    // bpm.ts (mcp-server-plughub) decide o tipo de evento Kafka:
+    //   - interaction !== "text" → sempre menu.payload → interaction.request no webchat
+    //   - interaction === "text" com masked_fields → menu.payload → interaction.request mascarado
+    //   - interaction === "text" sem masked_fields → message.text → bubble normal (compatibilidade)
     await ctx.mcpCall("notification_send", {
       session_id: ctx.sessionId,
       message:    resolvedPrompt,
       channel:    "session",
       visibility: step.visibility ?? "all",
-      menu: step.interaction !== "text" ? {
+      menu: {
         interaction:   step.interaction,
         options:       step.options ?? [],
         fields:        step.fields  ?? [],
         masked_fields: maskedFieldIds.length > 0 ? maskedFieldIds : undefined,
-      } : undefined,
+      },
     })
   } catch {
     return {
@@ -80,10 +79,10 @@ export async function executeMenu(
   // timeout_s === 0 or -1 both mean "block indefinitely" (spec §4.7: -1 = block indefinitely)
   const isInfinite  = step.timeout_s === 0 || step.timeout_s === -1
   const timeoutSec  = isInfinite ? 14400 : (step.timeout_s ?? 300)
-  const resultKey   = `menu:result:${ctx.sessionId}`
-  const closedKey   = `session:closed:${ctx.sessionId}`
-  const waitingKey  = `menu:waiting:${ctx.sessionId}`
-  const maskedKey   = `menu:masked:${ctx.sessionId}`
+  const resultKey   = redisKeys.menuResult(ctx.sessionId)
+  const closedKey   = redisKeys.sessionClosed(ctx.sessionId)
+  const waitingKey  = redisKeys.menuWaiting(ctx.sessionId)
+  const maskedKey   = redisKeys.menuMasked(ctx.sessionId)
 
   try {
     // TTL ligeiramente maior que o timeout para cobrir latências de rede.
@@ -132,7 +131,7 @@ export async function executeMenu(
   let activityRenewTimer: ReturnType<typeof setInterval> | null = null
 
   if (ctx.instanceId) {
-    activityKey = `${ctx.tenantId}:session:${ctx.sessionId}:active_instance:${ctx.instanceId}`
+    activityKey = redisKeys.activeInstance(ctx.tenantId, ctx.sessionId, ctx.instanceId)
     try {
       await ctx.redis.set(activityKey, "1", "EX", ACTIVITY_TTL_S)
     } catch {
@@ -251,17 +250,17 @@ export async function executeMenu(
       responseMap = { [key]: value }
     }
 
-    // Classificar cada campo em mascarado vs. não-mascarado
+    // Classificar cada campo em mascarado vs. não-mascarado usando a política centralizada.
+    // Garante que a mesma regra de precedência usada no envio (computeMaskedFieldIds)
+    // também se aplica ao routing da resposta — os dois lados são sempre consistentes.
     const nonMaskedOutput: Record<string, string> = {}
 
     for (const [fieldId, fieldValue] of Object.entries(responseMap)) {
-      const fieldDef    = step.fields?.find(f => f.id === fieldId)
-      const fieldMasked = fieldDef?.masked  // undefined | true | false
+      const fieldDef = step.fields?.find(f => f.id === fieldId)
+      // Campos não declarados em step.fields herdam step.masked (tratados como undefined)
+      const syntheticField = fieldDef ?? { id: fieldId }
 
-      // field.masked explícito tem precedência sobre step.masked
-      const isMasked = fieldMasked === true || (fieldMasked === undefined && stepMasked)
-
-      if (isMasked) {
+      if (isFieldMasked(syntheticField, stepMasked)) {
         ctx.maskedScope[fieldId] = fieldValue  // vai para escopo em memória
       } else {
         nonMaskedOutput[fieldId] = fieldValue  // vai para pipeline_state
