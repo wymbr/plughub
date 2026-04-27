@@ -18,7 +18,7 @@
 
 export type MaskedFieldDef = {
   id:      string
-  masked?: boolean
+  masked?: boolean | undefined   // undefined permitido para compatibilidade com exactOptionalPropertyTypes
 }
 
 /**
