@@ -83,11 +83,19 @@ export async function executeMenu(
   const resultKey   = `menu:result:${ctx.sessionId}`
   const closedKey   = `session:closed:${ctx.sessionId}`
   const waitingKey  = `menu:waiting:${ctx.sessionId}`
+  const maskedKey   = `menu:masked:${ctx.sessionId}`
 
   try {
     // TTL ligeiramente maior que o timeout para cobrir latências de rede.
     // Para espera infinita: 14400s garante que a flag sobreviva a sessão inteira.
     await ctx.redis.set(waitingKey, "1", "EX", timeoutSec + 10)
+
+    // Sinaliza ao orchestrator-bridge que este menu é mascarado — o bridge
+    // deve suprimir o valor enviado pelo cliente ao encaminhar para o agente
+    // humano, garantindo que o PIN/senha nunca apareça na UI do agente.
+    if (step.masked) {
+      await ctx.redis.set(maskedKey, "1", "EX", timeoutSec + 10)
+    }
   } catch {
     // Non-fatal — degradation: conference scenario may not route correctly,
     // but single-agent flow still works
@@ -282,11 +290,20 @@ export async function executeMenu(
     return successResult
 
   } finally {
-    // Remover flag de espera independente do resultado
+    // Remover flags de espera independente do resultado
     try {
       await ctx.redis.del(waitingKey)
     } catch {
       // Non-fatal
+    }
+    // Remover flag de menu mascarado — o bridge usa essa flag para suprimir
+    // o encaminhamento do valor ao agente humano; pode ser apagada agora.
+    if (step.masked) {
+      try {
+        await ctx.redis.del(maskedKey)
+      } catch {
+        // Non-fatal
+      }
     }
     // Limpar activity flag e timer de renovação (B2-03)
     if (activityRenewTimer !== null) {

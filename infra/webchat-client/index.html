@@ -209,7 +209,7 @@
     <h2>Conexão</h2>
 
     <label>WebSocket URL</label>
-    <input id="ws-url" type="text" value="ws://localhost:8010/webchat/v1/ws">
+    <input id="ws-url" type="text" value="ws://localhost:8010/ws/chat/demo_ia">
 
     <label>JWT Token</label>
     <textarea id="jwt-token" placeholder="Paste JWT here…"></textarea>
@@ -273,6 +273,7 @@ let ws = null;
 let msgCount = 0;
 let lastCursor = '0';
 let pendingUploadRequests = {}; // requestId → { file, name, mime, size }
+let sentMsgIds = new Set();     // IDs de mensagens enviadas — evita duplicata quando o eco chega
 
 // ── UI helpers ─────────────────────────────────────────────────────────────
 function setStatus(state, text) {
@@ -402,30 +403,50 @@ function connect() {
         setInputEnabled(false);
         break;
 
-      case 'msg.text':
+      case 'msg.text': {
         updateCursor(msg);
-        const isOwn = msg.author && msg.author.participant_id &&
-                      msg.author.participant_id === document.getElementById('info-contact').textContent;
+        // Ignora eco de mensagens já renderizadas otimisticamente
+        if (msg.id && sentMsgIds.has(msg.id)) { sentMsgIds.delete(msg.id); break; }
+        const myContactId = document.getElementById('info-contact').textContent;
+        const authorId    = msg.author?.instance_id || msg.author?.participant_id || '';
+        const authorRole  = msg.author?.role || '';
+        const isOwn = authorRole === 'customer' || (msg.author?.participant_id && msg.author.participant_id === myContactId);
+        let senderLabel, badgeLabel;
+        if (isOwn) {
+          senderLabel = myContactId || 'Você';
+          badgeLabel  = null;
+        } else {
+          senderLabel = authorId || 'agente';
+          const roleMap = { primary: 'atendente', specialist: 'especialista', supervisor: 'supervisor', evaluator: 'avaliador' };
+          badgeLabel = roleMap[authorRole] || authorRole || null;
+        }
         addMessage(isOwn ? 'outbound' : 'inbound',
-          escHtml(msg.content?.text || ''),
-          isOwn ? 'Você' : (msg.author?.name || msg.author?.participant_id || 'Agent'),
-          msg.visibility === 'agents_only' ? 'interno' : null);
+          escHtml(msg.text || msg.content?.text || ''),
+          senderLabel,
+          msg.visibility === 'agents_only' ? 'interno' : badgeLabel);
         break;
+      }
 
-      case 'msg.image':
+      case 'msg.image': {
         updateCursor(msg);
-        const imgSrc = msg.content?.url || '#';
+        const imgSrc = msg.url || msg.content?.url || '#';
+        const imgAuthor = msg.author?.participant_id || 'agente';
         addMessage('inbound',
-          `<img src="${escHtml(imgSrc)}" style="max-width:200px;border-radius:6px" alt="imagem"><br>${escHtml(msg.content?.caption||'')}`,
-          msg.author?.name || 'Agent');
+          `<img src="${escHtml(imgSrc)}" style="max-width:200px;border-radius:6px" alt="imagem"><br>${escHtml(msg.caption || msg.content?.caption || '')}`,
+          imgAuthor);
         break;
+      }
 
-      case 'msg.document':
+      case 'msg.document': {
         updateCursor(msg);
+        const docUrl    = msg.url || msg.content?.url || '#';
+        const docCaption = msg.caption || msg.content?.caption || 'Documento';
+        const docAuthor = msg.author?.participant_id || 'agente';
         addMessage('inbound',
-          `📄 <a href="${escHtml(msg.content?.url||'#')}" target="_blank" style="color:#818cf8">${escHtml(msg.content?.caption||'Documento')}</a>`,
-          msg.author?.name || 'Agent');
+          `📄 <a href="${escHtml(docUrl)}" target="_blank" style="color:#818cf8">${escHtml(docCaption)}</a>`,
+          docAuthor);
         break;
+      }
 
       case 'interaction.request':
         renderInteraction(msg);
@@ -443,9 +464,26 @@ function connect() {
         showTyping(msg.participant_id);
         break;
 
-      case 'presence.agent_joined':
-        addMessage('system', '👤 Agente entrou — ' + (msg.participant_id||'') + ' [' + (msg.role||'') + ']');
+      case 'presence.agent_joined': {
+        const rjoin = { primary: 'atendente', specialist: 'especialista', supervisor: 'supervisor', evaluator: 'avaliador' };
+        const roleJoin  = rjoin[msg.role] || msg.role || 'agente';
+        const agentJoin = msg.instance_id || msg.participant_id || 'agente';
+        addMessage('system', `👤 <strong>${agentJoin}</strong> entrou na conversa como <em>${roleJoin}</em>`);
         break;
+      }
+
+      case 'presence.agent_left': {
+        if (msg.role === 'ai') {
+          // IA saindo = transferência para humano — mensagem de transição
+          addMessage('system', '🔄 Transferindo para atendente humano, aguarde…');
+        } else {
+          const rleft = { primary: 'atendente', specialist: 'especialista', supervisor: 'supervisor', evaluator: 'avaliador' };
+          const roleLeft  = rleft[msg.role] || msg.role || 'agente';
+          const agentLeft = msg.instance_id || msg.participant_id || 'agente';
+          addMessage('system', `🚪 <strong>${agentLeft}</strong> saiu da conversa (${roleLeft})`);
+        }
+        break;
+      }
 
       case 'conn.ping':
         ws.send(JSON.stringify({ type: 'conn.pong' }));
@@ -500,6 +538,11 @@ function sendText() {
   const payload = JSON.stringify({ type: 'msg.text', id: msgId, text });
   ws.send(payload);
   log('→ msg.text id=' + msgId, 'send');
+
+  // Renderização otimista: mostra a mensagem imediatamente sem esperar eco do servidor
+  sentMsgIds.add(msgId);
+  const myId = document.getElementById('info-contact').textContent || 'Você';
+  addMessage('outbound', escHtml(text), myId, null);
 
   input.value = '';
   input.style.height = 'auto';
@@ -589,19 +632,29 @@ function renderInteraction(msg) {
   if (msg.interaction === 'button' || msg.interaction === 'list') {
     const opts = msg.options || [];
     opts.forEach(opt => {
-      html += `<button onclick="submitMenu('${msg.menu_id}','${msg.interaction}','${opt.id}')"
+      html += `<button onclick="submitMenu('${msg.menu_id}','${msg.interaction}','${opt.id}','${escHtml(opt.label)}')"
         style="display:block;width:100%;margin:4px 0;padding:6px 10px;background:#2d3148;
                color:#e2e8f0;border:1px solid #4b5563;border-radius:6px;cursor:pointer;text-align:left">
         ${escHtml(opt.label)}</button>`;
     });
   } else if (msg.interaction === 'text') {
+    // Se masked_fields contiver o field_id do step (ou se masked_fields for
+    // não-vazio num step scalar), renderizar como campo de senha.
+    const isMasked = Array.isArray(msg.masked_fields) && msg.masked_fields.length > 0;
+    const inputType = isMasked ? 'password' : 'text';
+    const placeholder = isMasked ? '••••••  (entrada segura)' : 'Sua resposta…';
+    const borderColor = isMasked ? '#f59e0b' : '#4b5563';  // âmbar quando mascarado
     html += `<div style="display:flex;gap:6px;margin-top:8px">
-      <input type="text" id="text-reply-${msg.menu_id}" placeholder="Sua resposta…"
-        style="flex:1;padding:6px 10px;background:#1a1d27;border:1px solid #4b5563;
+      <input type="${inputType}" id="text-reply-${msg.menu_id}" placeholder="${placeholder}"
+        autocomplete="off" autocorrect="off" spellcheck="false"
+        style="flex:1;padding:6px 10px;background:#1a1d27;border:1px solid ${borderColor};
                color:#e2e8f0;border-radius:6px;font-size:13px">
       <button onclick="submitTextMenu('${msg.menu_id}')"
         style="padding:6px 12px;background:#4f46e5;color:white;border:none;border-radius:6px;cursor:pointer">OK</button>
     </div>`;
+    if (isMasked) {
+      html += `<div style="font-size:11px;color:#f59e0b;margin-top:4px">🔒 Campo seguro — conteúdo não é visível ao agente</div>`;
+    }
   }
 
   html += `<div class="ts">${new Date().toLocaleTimeString()}</div>`;
@@ -610,18 +663,24 @@ function renderInteraction(msg) {
   msgs.scrollTop = msgs.scrollHeight;
 }
 
-function submitMenu(menuId, interaction, result) {
+function submitMenu(menuId, interaction, result, label) {
   if (!ws || ws.readyState !== WebSocket.OPEN) return;
   const payload = JSON.stringify({ type: 'menu.submit', menu_id: menuId, interaction, result });
   ws.send(payload);
   log('→ menu.submit menu_id=' + menuId + ' result=' + result, 'send');
+
+  // Mostra a opção selecionada como mensagem do usuário
+  const myIdMenu = document.getElementById('info-contact').textContent || 'Você';
+  addMessage('outbound', escHtml(label || result), myIdMenu, null);
+
+  // Cinza o card do menu para indicar que já foi respondido
   const el = document.getElementById('interaction-' + menuId);
   if (el) el.style.opacity = '0.5';
 }
 
 function submitTextMenu(menuId) {
   const val = document.getElementById('text-reply-' + menuId)?.value?.trim();
-  if (val) submitMenu(menuId, 'text', val);
+  if (val) submitMenu(menuId, 'text', val, val);
 }
 
 // ── Typing indicator ──────────────────────────────────────────────────────

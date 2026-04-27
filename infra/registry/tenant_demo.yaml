@@ -42,6 +42,7 @@ pools:
     # "@copilot" → convida/envia comando ao co-pilot SAC do pool copilot_sac
     mentionable_pools:
       copilot: copilot_sac
+      auth:    auth_ia     # @auth → convida agente_auth_ia_v1 para verificação de identidade
 
   - pool_id: avaliacao_ia
     # IMPORTANTE: este pool NÃO deve estar na cadeia de roteamento ao vivo.

@@ -1801,17 +1801,33 @@ async def process_inbound(
 
         if is_human:
             # ── Human agent: forward to Agent Assist UI via Redis pub/sub ────
+            # Check if the active menu step is masked — if so, suppress the raw
+            # value and show a placeholder instead. This prevents PIN / passwords
+            # from ever reaching the agent's chat UI, which is the invariant
+            # stated in docs/guias/masked-input.md (maskedScope is memory-only).
+            menu_masked = await redis_client.get(f"menu:masked:{session_id}")
+            if menu_masked:
+                display_text = "[entrada mascarada — conteúdo não disponível]"
+                visibility   = "agents_only"
+                logger.info(
+                    "Masked menu reply suppressed for human agent: session=%s", session_id,
+                )
+            else:
+                display_text = reply_text if msg_type == "text" else f"[Seleção: {reply_text}]"
+                visibility   = "all"
             event = {
                 "type":       "message.text",
                 "message_id": msg.get("message_id", str(uuid.uuid4())),
                 "author":     author,
-                "text":       reply_text if msg_type == "text" else f"[Seleção: {reply_text}]",
+                "text":       display_text,
                 "timestamp":  msg.get("timestamp", datetime.now(timezone.utc).isoformat()),
                 "session_id": session_id,
                 "contact_id": contact_id,
+                "visibility": visibility,
             }
             await redis_client.publish(f"agent:events:{session_id}", json.dumps(event))
-            logger.info("Forwarded %s to human agent: session=%s", msg_type, session_id)
+            logger.info("Forwarded %s to human agent: session=%s masked=%s",
+                        msg_type, session_id, bool(menu_masked))
             delivered = True
 
         if menu_waiting:

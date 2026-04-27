@@ -26,8 +26,18 @@ classification:
   type: orchestrator
   domain: security
 
-entry: solicitar_inicio
+entry: aviso_inicio_agente
 steps:
+
+    # ── Aviso interno ao agente humano (agents_only) ───────────────────────────
+    # Aparece na UI do agente antes de qualquer mensagem ao cliente.
+    # O cliente NÃO vê esta mensagem.
+    - id: aviso_inicio_agente
+      type: notify
+      message: "🔐 Verificação de identidade iniciada. O PIN do cliente NÃO aparecerá neste chat — somente o resultado."
+      visibility: agents_only
+      on_success: solicitar_inicio
+      on_failure: solicitar_inicio
 
     # ── Aviso inicial ao cliente ───────────────────────────────────────────────
     - id: solicitar_inicio
@@ -100,7 +110,15 @@ steps:
     - id: tx_fim
       type: end_transaction
       result_as: auth_status
+      on_success: aviso_sucesso_agente
+
+    # ── Aviso interno de sucesso ao agente humano (agents_only) ───────────────
+    - id: aviso_sucesso_agente
+      type: notify
+      message: "✅ PIN validado — cliente autenticado. Encerrando verificação e retornando sessão."
+      visibility: agents_only
       on_success: confirmacao
+      on_failure: confirmacao
 
     # ── Confirmação ao cliente ─────────────────────────────────────────────────
     - id: confirmacao
@@ -121,6 +139,14 @@ steps:
       message: >
         Não foi possível verificar sua identidade no momento.
         Um de nossos especialistas irá atendê-lo em seguida.
+      on_success: aviso_falha_agente
+      on_failure: aviso_falha_agente
+
+    # ── Aviso interno de falha ao agente humano (agents_only) ─────────────────
+    - id: aviso_falha_agente
+      type: notify
+      message: "⚠️ Autenticação falhou após esgotamento de tentativas. Encerrando verificação — assuma o atendimento."
+      visibility: agents_only
       on_success: encerrar_escalado
       on_failure: encerrar_escalado
 
