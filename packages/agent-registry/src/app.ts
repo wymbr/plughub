@@ -10,6 +10,7 @@ import { agentTypesRouter }   from "./routes/agent-types"
 import { skillsRouter }       from "./routes/skills"
 import { importRouter }       from "./routes/import"
 import { instancesRouter }    from "./routes/instances"
+import { channelsRouter }     from "./routes/channels"
 
 export const app = express()
 
@@ -21,6 +22,7 @@ app.use("/v1/agent-types/import", importRouter)   // antes de /v1/agent-types pa
 app.use("/v1/agent-types",        agentTypesRouter)
 app.use("/v1/skills",             skillsRouter)
 app.use("/v1/instances",          instancesRouter)
+app.use("/v1/channels",           channelsRouter)
 
 // ── Healthcheck ────────────────────────────
 app.get("/v1/health", (_req: Request, res: Response) => {

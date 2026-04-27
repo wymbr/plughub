@@ -9,8 +9,8 @@ interface Props {
   onTenantChange: (id: string) => void
   status:     ConnectionStatus
   poolCount:  number
-  currentView?: 'heatmap' | 'sessions' | 'transcript' | 'workflows' | 'campaigns' | 'config' | 'pricing'
-  onViewChange?: (view: 'heatmap' | 'workflows' | 'campaigns' | 'config' | 'pricing') => void
+  currentView?: 'heatmap' | 'sessions' | 'transcript' | 'workflows' | 'campaigns' | 'config' | 'pricing' | 'webhooks' | 'registry' | 'skills' | 'channels' | 'agents'
+  onViewChange?: (view: 'heatmap' | 'workflows' | 'campaigns' | 'config' | 'pricing' | 'webhooks' | 'registry' | 'skills' | 'channels' | 'agents') => void
 }
 
 const STATUS_DOT: Record<ConnectionStatus, { color: string; label: string }> = {
@@ -26,10 +26,15 @@ export function Header({ tenantId, onTenantChange, status, poolCount, currentVie
   const isCampaignView  = currentView === 'campaigns'
   const isConfigView    = currentView === 'config'
   const isPricingView   = currentView === 'pricing'
-  const isHeatmapActive = !isWorkflowView && !isCampaignView && !isConfigView && !isPricingView
+  const isWebhooksView  = currentView === 'webhooks'
+  const isRegistryView  = currentView === 'registry'
+  const isSkillsView    = currentView === 'skills'
+  const isChannelsView  = currentView === 'channels'
+  const isAgentsView    = currentView === 'agents'
+  const isHeatmapActive = !isWorkflowView && !isCampaignView && !isConfigView && !isPricingView && !isWebhooksView && !isRegistryView && !isSkillsView && !isChannelsView && !isAgentsView
 
   const navBtn = (
-    view: 'heatmap' | 'workflows' | 'campaigns' | 'config' | 'pricing',
+    view: 'heatmap' | 'workflows' | 'campaigns' | 'config' | 'pricing' | 'webhooks' | 'registry' | 'skills' | 'channels' | 'agents',
     label: string,
     active: boolean,
     activeColor: string,
@@ -70,6 +75,11 @@ export function Header({ tenantId, onTenantChange, status, poolCount, currentVie
         {navBtn('heatmap',   'Heatmap',   isHeatmapActive, '#3b82f6', '#0d47a1')}
         {navBtn('workflows', 'Workflows', isWorkflowView,  '#7c3aed', '#4c1d95')}
         {navBtn('campaigns', 'Campaigns', isCampaignView,  '#0891b2', '#164e63')}
+        {navBtn('webhooks',  'Webhooks',  isWebhooksView,  '#6366f1', '#1e1b4b')}
+        {navBtn('registry',  'Registry',  isRegistryView,  '#f97316', '#431407')}
+        {navBtn('skills',    'Skills',    isSkillsView,    '#a78bfa', '#2e1065')}
+        {navBtn('channels',  'Channels',  isChannelsView,  '#14b8a6', '#042f2e')}
+        {navBtn('agents',    'Agents',    isAgentsView,    '#10b981', '#022c22')}
         {navBtn('config',    'Config',    isConfigView,    '#84cc16', '#1a2e05')}
         {navBtn('pricing',   'Pricing',   isPricingView,   '#f59e0b', '#451a03')}
         <div style={{ fontSize: 13, color: '#64748b', whiteSpace: 'nowrap' }}>

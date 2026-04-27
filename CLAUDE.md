@@ -779,6 +779,7 @@ adapter. Skill Flow always receives a single normalised `interaction_result`.
 | `conversations.session_opened` | Core | Analytics, LGPD |
 | `conversations.session_closed` | Core | Analytics, LGPD |
 | `conversations.message_sent` | Core | Analytics |
+| `conversations.participants` | orchestrator-bridge | analytics-api → ClickHouse participation_intervals |
 | `rules.escalation_triggered` | Rules Engine | Routing Engine |
 | `rules.notification_triggered` | Rules Engine | Core |
 | `rules.session_tagged` | Rules Engine | Agent Registry |
@@ -1417,6 +1418,180 @@ Quatro chaves seedadas em `packages/config-api/src/plughub_config_api/seed.py`:
 
 Editáveis por tenant via ConfigPanel do Operator Console (namespace `pricing`).
 
+## Pool Lifecycle Hooks
+
+Permite que pools humanos declarem agentes especialistas que são ativados automaticamente
+em pontos específicos do ciclo de atendimento, substituindo lógica hardcoded no Agent Assist UI.
+
+### Schema — `@plughub/schemas/agent-registry.ts`
+
+```typescript
+PoolHookEntry { pool: string }   // pool_id do especialista a recrutar
+
+PoolHooks {
+  on_human_start: PoolHookEntry[]   // agente humano entra na sessão
+  on_human_end:   PoolHookEntry[]   // agente humano chama agent_done (Fase B)
+  post_human:     PoolHookEntry[]   // após on_human_end concluir (Fase B)
+}
+```
+
+Declarado em `PoolRegistrationSchema.hooks?: PoolHooksSchema`.
+O campo `copilot_skill_id` é `@deprecated` — substituído por `hooks.on_human_start`.
+
+### Mecanismo de dispatch
+
+O orchestrator-bridge despacha hooks publicando um `ConversationInboundEvent` sintético
+no tópico `conversations.inbound` com `conference_id` preenchido:
+
+```
+hooks.on_human_start: [{pool: copilot_sac}]
+  → bridge publica conversations.inbound { pool_id: "copilot_sac", conference_id: uuid }
+  → routing engine aloca instância do pool copilot_sac
+  → routing engine publica conversations.routed com conference_id
+  → bridge recebe routed → process_routed → activate_native_agent (conference path)
+```
+
+Reutiliza 100% da infra de conferência/@mention — sem nova lógica de roteamento.
+
+### Kafka producer no bridge
+
+`_kafka_producer: AIOKafkaProducer` — variável de módulo inicializada em `run()`.
+Usada por `fire_pool_hooks()` e `_trigger_contact_close()`.
+
+### Trigger points implementados
+
+| Hook | Status | Trigger |
+|---|---|---|
+| `on_human_start` | ✅ Fase A | Após `activate_human_agent()` em `process_routed()` |
+| `on_human_end` | ✅ Fase B | `process_contact_event` agent_closed, last human drops → `fire_pool_hooks("on_human_end")` |
+| `post_human` | ✅ Fase C | `on_human_end` pending reaches 0 → `fire_pool_hooks("post_human")` → pending reaches 0 → `_trigger_contact_close()` |
+
+### Configuração (tenant_demo.yaml)
+
+```yaml
+pools:
+  - pool_id: retencao_humano
+    hooks:
+      on_human_start: []          # vazio: copilot ativado via @mention
+      on_human_end:
+        - pool: finalizacao_ia    # agente NPS + encerramento (Fase B)
+      post_human: []
+
+  - pool_id: finalizacao_ia
+    description: "NPS + encerramento após agente humano"
+    channel_types: [webchat, whatsapp]
+    sla_target_ms: 120000
+```
+
+### Agente de finalização (`agente_finalizacao_v1`)
+
+Skill: `packages/skill-flow-engine/skills/agente_finalizacao_v1.yaml`
+
+Fluxo:
+```
+agradecimento (notify) → solicitar_nps (menu button, timeout 60s)
+  → registrar_nps (notify + context_tag session.nps_score_raw)
+  → encerrar (complete resolved)
+  [timeout/failure] → encerrar (complete resolved)
+```
+
+Ativação: via `on_human_end` hook em `retencao_humano` — ✅ wired (Fase B completa).
+
+### Fase B — separação agent_done / contact_close (✅ implementado)
+
+O human `agent_done` (REST `/agent_done`) NÃO mais fecha o WebSocket do cliente.
+O bridge assume a propriedade do close e o atrasa até os hook agents concluírem.
+
+**Fluxo completo:**
+```
+Humano clica "Encerrar"
+  → mcp-server POST /agent_done (publica contact_closed reason="agent_closed")
+  → process_contact_event(agent_closed): último humano → clear human_agent flags
+      → get_pool_config → on_human_end hooks?
+          Sim → fire_pool_hooks("on_human_end")
+                  → publica conversations.inbound com conference_id por hook
+                  → seta session:{id}:hook_pending:on_human_end = N
+                  → seta session:{id}:hook_conf:{conf_id} por hook
+          Não → asyncio.create_task(_trigger_contact_close())
+  → process_routed recebe o hook agent ativado
+      → activate_native_agent (agente_finalizacao_v1 executa: NPS + encerramento)
+      → ao retornar: getdel hook_conf → decr hook_pending
+          → pending == 0 → asyncio.create_task(_trigger_contact_close())
+  → _trigger_contact_close():
+      → publica conversations.outbound session.closed → channel-gateway fecha WS do cliente
+      → publica conversations.events contact_closed reason="agent_done" → limpeza completa
+```
+
+**Redis keys de controle:**
+| Key | TTL | Descrição |
+|---|---|---|
+| `session:{id}:hook_pending:on_human_end` | 4h | Counter de hooks pendentes |
+| `session:{id}:hook_conf:{conference_id}` | 4h | Marca hook-spawned agents |
+
+**Mudança em mcp-server `/agent_done`:** removida a publicação de `conversations.outbound session.closed`. O bridge passou a ser o único dono do close do WebSocket do cliente após o `on_human_end`.
+
+### Fase C — participation analytics + post_human hook dispatch (✅ implementado)
+
+**Kafka topic:** `conversations.participants` — publicado pelo orchestrator-bridge.
+
+**Producer (orchestrator-bridge/main.py):**
+- `_publish_participant_event()` — fire-and-forget helper, publica em `TOPIC_PARTICIPANTS`
+- `activate_human_agent()` → publica `participant_joined`, armazena `participant_joined_at:{instance_id}` (Redis, TTL 4h)
+- `activate_native_agent()` → publica `participant_joined` (antes) + `participant_left` com duration_ms (após)
+- `process_contact_event(agent_closed)` → lê `participant_joined_at:{instance_id}` via GETDEL, calcula `duration_ms`, publica `participant_left`
+
+**Payload de evento:**
+```json
+{
+  "type":           "participant_joined" | "participant_left",
+  "event_id":       "uuid",
+  "session_id":     "sess_...",
+  "tenant_id":      "tenant_demo",
+  "participant_id": "agente_retencao_v1-001",
+  "pool_id":        "retencao_humano",
+  "agent_type_id":  "agente_retencao_v1",
+  "role":           "primary" | "specialist",
+  "agent_type":     "ai" | "human",
+  "conference_id":  "conf_..." | null,
+  "joined_at":      "ISO8601",
+  "duration_ms":    180000 | null,
+  "timestamp":      "ISO8601"
+}
+```
+
+**Consumer (analytics-api):**
+- `parse_participant_event()` em `models.py` — mapeia `participant_joined`/`participant_left` → `participation_intervals`
+- `"conversations.participants"` em `_TOPICS` e `_PARSERS`
+- `_write_row()` despacha `participation_intervals` → `store.upsert_participation_interval()`
+
+**ClickHouse — participation_intervals:**
+```sql
+ENGINE = ReplacingMergeTree(left_at)
+ORDER BY (tenant_id, session_id, participant_id)
+```
+`participant_joined` escreve com `left_at=NULL`; `participant_left` escreve com `left_at` preenchido.
+Background merge seleciona a versão com maior `left_at` (non-NULL wins).
+
+**API:** `GET /reports/participation` — filtros: `session_id`, `pool_id`, `agent_type_id`, `role`. Suporta `format=csv`.
+
+**Kafka topics adicionados ao docker-compose:** `conversations.participants` em `docker-compose.test.yml`, `docker-compose.full.yml`, `docker-compose.demo.yml`.
+
+**post_human dispatch:** quando `on_human_end` pending chega a 0, o bridge verifica `post_human` hooks no `pool_config`:
+- Se existirem → `fire_pool_hooks("post_human")` — mesmo mecanismo de `on_human_end`
+- Quando `post_human` pending chega a 0 → `_trigger_contact_close()`
+- Se não existirem → `_trigger_contact_close()` diretamente
+
+**Redis keys adicionais:**
+| Key | TTL | Descrição |
+|---|---|---|
+| `session:{id}:hook_pending:post_human` | 4h | Counter de post_human hooks |
+| `participant_joined_at:{instance_id}` | 4h | Timestamp ISO8601 de entrada do participante |
+
+**Tests:**
+- `test_consumer.py`: `TestParseParticipantEvent` (8 assertions), `TestWriteRowDispatch::test_participation_intervals_dispatched`
+- `test_reports.py`: `TestQueryParticipationReport` (4 assertions)
+- Total analytics-api: **172/172**
+
 ## Pending (next iteration)
 
 ### Arc 2 — fechamento
@@ -1594,15 +1769,223 @@ Tabela PostgreSQL `workflow.instances` (schema `workflow`).
 
 **Timeout scanner** — asyncio background task (intervalo configurável, padrão 60s). `UPDATE ... SET status='timed_out' WHERE status='suspended' AND resume_expires_at < now()` — atômico, sem double-processing.
 
-Tests: `test_router.py` — 27 assertions (TestTrigger, TestPersistSuspend, TestResume, TestComplete, TestFail, TestCancel, TestList, TestDetail, TestHealth, TestTimeoutScanner).
+Tests: `test_router.py` — 48 assertions (TestTrigger, TestPersistSuspend, TestResume, TestComplete, TestFail, TestCancel, TestList, TestDetail, TestHealth, TestTimeoutScanner, TestWebhookCRUD, TestWebhookTrigger, TestWebhookDeliveries).
+
+### Webhook Trigger — authenticated public endpoints
+
+Permite que sistemas externos (Salesforce, ERP, etc.) disparem workflows via URL pública autenticada por token, substituindo o trigger manual do operador.
+
+#### Token format
+
+```
+plughub_wh_<url-safe-43-chars>    (~258 bits de entropia)
+```
+
+Armazenamento: **SHA-256 hex digest** em `workflow.webhooks.token_hash` — plain token nunca é persistido.
+`token_prefix` (16 primeiros chars) é armazenado para exibição no admin UI.
+Comparação: `hmac.compare_digest` para proteção contra timing attacks.
+
+#### PostgreSQL schema
+
+```sql
+-- Webhooks registrados (um por flow/tenant)
+CREATE TABLE workflow.webhooks (
+    id                UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id         TEXT        NOT NULL,
+    flow_id           TEXT        NOT NULL,
+    description       TEXT        NOT NULL DEFAULT '',
+    token_hash        TEXT        NOT NULL UNIQUE,
+    token_prefix      TEXT        NOT NULL,
+    active            BOOL        NOT NULL DEFAULT TRUE,
+    trigger_count     BIGINT      NOT NULL DEFAULT 0,
+    last_triggered_at TIMESTAMPTZ,
+    context_override  JSONB       NOT NULL DEFAULT '{}',
+    created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at        TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- Log append-only de disparos (auditoria)
+CREATE TABLE workflow.webhook_deliveries (
+    id           UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    webhook_id   UUID        NOT NULL REFERENCES workflow.webhooks(id) ON DELETE CASCADE,
+    tenant_id    TEXT        NOT NULL,
+    triggered_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    status_code  INT         NOT NULL,
+    payload_hash TEXT        NOT NULL,
+    instance_id  UUID,
+    error        TEXT,
+    latency_ms   INT
+);
+```
+
+#### Endpoints
+
+| Método | Rota | Auth | Descrição |
+|--------|------|------|-----------|
+| `POST`   | `/v1/workflow/webhooks`                         | `X-Admin-Token` | Cria webhook; retorna plain token (exibido uma vez) |
+| `GET`    | `/v1/workflow/webhooks`                         | `X-Admin-Token` | Lista webhooks do tenant (filtros: `active`, `limit`, `offset`) |
+| `GET`    | `/v1/workflow/webhooks/{id}`                    | `X-Admin-Token` | Detalhe do webhook |
+| `PATCH`  | `/v1/workflow/webhooks/{id}`                    | `X-Admin-Token` | Atualiza `description`, `active`, `context_override` |
+| `POST`   | `/v1/workflow/webhooks/{id}/rotate`             | `X-Admin-Token` | Rotaciona token (invalida o anterior; retorna novo plain token) |
+| `DELETE` | `/v1/workflow/webhooks/{id}`                    | `X-Admin-Token` | Remove webhook e cascade-deletes deliveries |
+| `GET`    | `/v1/workflow/webhooks/{id}/deliveries`         | `X-Admin-Token` | Últimos N registros de entrega (padrão 50, máx 200) |
+| `POST`   | `/v1/workflow/webhook/{id}`                     | `X-Webhook-Token` (plain) | **Público** — dispara workflow |
+
+#### Trigger flow (POST /v1/workflow/webhook/{id})
+
+```
+1. Lê raw body → SHA-256 payload_hash
+2. Autentica: SHA-256(X-Webhook-Token) → lookup DB por token_hash
+3. verify_token(plain, stored_hash) — constant-time guard extra
+4. Verifica active; se inativo → db_record_delivery(403) + 403
+5. Merge: context = {**webhook.context_override, **body_json}
+6. db_create_instance + emit_started (mesmo que trigger manual)
+7. db_record_delivery(202, instance_id, latency_ms)
+8. trigger_count++, last_triggered_at = now() (atômico, 2xx only)
+9. Retorna 202 { instance_id, flow_id, webhook_id, status: "accepted" }
+```
+
+#### Arquivos
+
+| Arquivo | Responsabilidade |
+|---------|-----------------|
+| `webhooks.py` | `generate_token()`, `_hash_token()`, `verify_token()` — utilitários de token |
+| `db.py` | DDL + CRUD: `db_create_webhook`, `db_get_webhook`, `db_get_webhook_by_token_hash`, `db_list_webhooks`, `db_update_webhook`, `db_rotate_webhook_token`, `db_delete_webhook`, `db_record_delivery`, `db_list_deliveries` |
+| `router.py` | 7 endpoints admin + 1 endpoint público; `_require_admin` Dependency |
+| `tests/test_router.py` | `TestWebhookCRUD` (11), `TestWebhookTrigger` (5), `TestWebhookDeliveries` (4) |
+
+### Operator Console — WebhookPanel
+
+`packages/operator-console/src/components/WebhookPanel.tsx` — gestão completa de webhook triggers:
+
+- **Sidebar esquerda**: lista de webhooks com nome, flow_id, status ativo/inativo e contagem de triggers; campo de admin token local; botão "New Webhook" abre formulário de criação.
+- **Formulário de criação**: flow_id, description, context_override (JSON textarea com validação inline) — chama `POST /v1/workflow/webhooks`, exibe plain token UMA vez via `CopyBox` com dismiss obrigatório.
+- **Detalhe de webhook**: grid de metadados (flow_id, description, token_prefix, trigger_count, last_triggered_at); URL pública copiável; ações — ativar/desativar, rotate token (exige confirmação), delete (exige confirmação).
+- **Delivery log**: tabela das últimas 20 entregas com timestamp, status HTTP (colorido por faixa), latency_ms, instance_id e error message.
+- **CopyBox**: componente de exibição one-time do plain token com botão copy-to-clipboard e botão "I've saved it" para dismiss — implementa o requisito de segurança de exibição única.
+
+Hooks: `packages/operator-console/src/api/webhook-hooks.ts` — `useWebhooks` (poll 15s), `useWebhookDeliveries` (poll on mount), `createWebhook`, `patchWebhook`, `rotateWebhookToken`, `deleteWebhook`. Todos usam `VITE_WORKFLOW_API_BASE_URL ?? ''` — proxied pelo Vite via `/v1/workflow` → `http://localhost:3800`.
+
+Nav: botão "Webhooks" (indigo — `#6366f1`/`#1e1b4b`) adicionado ao `Header.tsx`.
+
+Build: 234 kB JS / 67 kB gzip.
+
+### Operator Console — RegistryPanel
+
+`packages/operator-console/src/components/RegistryPanel.tsx` — gestão de recursos do Agent Registry com quatro tabs:
+
+- **Pools**: lista de pools com status, channels e SLA; formulário de criação (pool_id, channel_types, sla_target_ms, description); edição inline de SLA, channels e descrição.
+- **Agent Types**: lista com framework, role e pools vinculados; formulário de criação (agent_type_id, framework, execution_model, role, max_concurrent_sessions, pools, skills, prompt_id); soft-delete (→ deprecated).
+- **Skills**: lista read-mostly com tipo de classificação e versão; detail view com tools, domains, description; delete com confirmação. Skills são gerenciadas por YAML — o painel exibe o estado atual do banco.
+- **Running**: lista read-only de instâncias ativas filtráveis por pool_id; atualização automática a cada 15s.
+
+Hooks: `packages/operator-console/src/api/registry-hooks.ts` — `usePools`, `createPool`, `updatePool`, `useAgentTypes`, `createAgentType`, `deleteAgentType`, `useSkills`, `deleteSkill`, `useInstances`. Todos usam `x-tenant-id` + `x-user-id: operator` headers.
+
+Proxy Vite: `/v1/pools`, `/v1/agent-types`, `/v1/skills`, `/v1/instances` → `http://localhost:3300`.
+
+Nav: botão "Registry" (orange — `#f97316`/`#431407`) adicionado ao `Header.tsx`.
+
+Build: 260 kB JS / 72 kB gzip.
+
+### Operator Console — SkillFlowEditor
+
+`packages/operator-console/src/components/SkillFlowEditor.tsx` — Monaco-based YAML editor para skills:
+
+- **Left sidebar**: lista de skills com busca por skill_id/name; tipo de classificação e versão; botão "+ New Skill" abre prompt de criação com ID.
+- **Editor principal**: Monaco com `defaultLanguage="yaml"`, `theme="vs-dark"`, `wordWrap`, `bracketPairColorization`. Validação YAML live em tempo real (parse errors mostrados na status bar).
+- **Conversão JSON↔YAML**: skills são armazenadas como JSON na API e exibidas como YAML para legibilidade. `js-yaml.dump()` ao carregar; `js-yaml.load()` ao salvar.
+- **Status bar**: mostra estado (`loading`, `saving`, `saved`, `error`, `parse_error`) com cor por estado.
+- **Ações**: ⌘S / botão Save (`PUT /v1/skills/:id`), Discard (reverte ao estado salvo), Delete (com confirmação), modificado indicado por `●` no header.
+- **Blank template**: novo skill inicia com YAML de exemplo completo (skill_id, name, version, description, classification, comentários para flow).
+
+Hooks adicionados a `registry-hooks.ts`: `fetchSkill(tenantId, skillId)` (GET), `upsertSkill(tenantId, skillId, body)` (PUT).
+
+Nav: botão "Skills" (violet — `#a78bfa`/`#2e1065`) adicionado ao `Header.tsx`.
+
+Deps adicionadas ao `package.json`: `@monaco-editor/react@^4.7.0`, `js-yaml@^4.1.1`, `@types/js-yaml@^4.0.9`.
+
+Build: 325 kB JS / 94 kB gzip.
+
+### Operator Console — ChannelPanel
+
+`packages/operator-console/src/components/ChannelPanel.tsx` — channel credential management for all supported channel types:
+
+- **Left sidebar**: grouped by channel type (WhatsApp, Webchat, Voice, Email, SMS, Instagram, Telegram, WebRTC) with emoji icon, config count badge, and per-channel "+ Add" button.
+- **CreateForm**: channel-aware form with per-channel `fields` (sensitive credentials rendered as `<input type="password">`) and `settingFields` (non-sensitive settings in 2-column grid). Toggle for active status.
+- **ConfigDetail**: shows current masked values (`••••••`) for each credential field alongside new-value inputs; only fields with non-empty new values are included in PUT payload. Settings are editable in-place. `●` indicator for unsaved changes. Three-stage delete: Delete → Confirm → execute.
+- **Accent**: teal (`#14b8a6` / `#042f2e`).
+- **ToggleSwitch**: inline active/inactive toggle used in both create and detail forms.
+
+Channel-specific credential templates:
+
+| Channel | Credential fields | Setting fields |
+|---------|-------------------|----------------|
+| WhatsApp | access_token, phone_number_id, waba_id, webhook_verify_token | api_version, webhook_path |
+| Webchat | jwt_secret | ws_auth_timeout_s, attachment_expiry_days, serving_base_url, cors_origins |
+| Voice | api_key, api_secret, account_sid | inbound_number, provider, region |
+| Email | smtp_password, api_key | smtp_host, smtp_port, from_address, from_name, provider |
+| SMS | api_key, api_secret | sender_id, provider |
+| Instagram | access_token, app_secret, webhook_verify_token | page_id, api_version |
+| Telegram | bot_token | webhook_path, bot_username |
+| WebRTC | turn_secret | stun_url, turn_url, turn_username |
+
+Backend: `packages/agent-registry/src/routes/channels.ts` — CRUD for `gateway_configs` table. `_maskCredentials()` replaces all credential values with `••••••` before returning. Triggers `registry.changed` on create/update/delete.
+
+**Backend model:**
+```prisma
+model GatewayConfig {
+  id           String   @id @default(uuid())
+  tenant_id    String
+  channel      String   // whatsapp | webchat | voice | email | sms | instagram | telegram | webrtc
+  display_name String
+  active       Boolean  @default(true)
+  credentials  Json     @default("{}")   // masked on API read
+  settings     Json     @default("{}")
+  created_at   DateTime @default(now())
+  updated_at   DateTime @updatedAt
+  created_by   String   @default("operator")
+  @@index([tenant_id])
+  @@index([tenant_id, channel])
+  @@map("gateway_configs")
+}
+```
+
+Migration: `packages/agent-registry/prisma/migrations/20260427000000_add_gateway_configs/migration.sql`
+
+Type shim: `packages/agent-registry/src/types/gateway-config.ts` — `GatewayConfigDelegate` interface used until `prisma generate` can run in a network-connected environment.
+
+Hooks: `packages/operator-console/src/api/channel-hooks.ts` — `useChannels`, `createChannel`, `updateChannel`, `deleteChannel`. Proxied via Vite `/v1/channels` → `http://localhost:3300`.
+
+Nav: botão "Channels" (teal — `#14b8a6`/`#042f2e`) adicionado ao `Header.tsx`.
+
+Build: 345 kB JS / 97 kB gzip (estimated).
+
+### Operator Console — HumanAgentPanel
+
+`packages/operator-console/src/components/HumanAgentPanel.tsx` — human agent lifecycle management with two tabs:
+
+- **Live Status tab** (`LiveTab`): table of all running human agent instances (`framework=human`), polling every 10 s. Status filter bar (All / Ready / Busy / Paused). `StatusBadge` renders colored pill per status. `ActionButtons` shows contextual actions:
+  - Ready → Pause
+  - Busy → Pause, Force Logout
+  - Paused → Resume, Force Logout
+  - PATCH `/v1/instances/:id` with `{ action: pause | resume | force_logout }`.
+- **Profiles tab** (`ProfilesTab`): sidebar (280 px) listing active and deprecated `AgentType` records filtered client-side for `framework === 'human'`. Selecting a profile opens `ProfileDetail`; "+ New Profile" opens `CreateProfileForm`.
+  - `CreateProfileForm`: `agent_type_id`, `role` select (primary/specialist/supervisor), `max_concurrent_sessions`, pool chip multi-select via comma-delimited input, permissions textarea. POSTs to `/v1/agent-types` with `framework: 'human'`, `execution_model: 'stateful'`.
+  - `ProfileDetail`: read-only pool chips, editable `max_concurrent_sessions` and `permissions`. PUT via `/v1/agent-types/:id`. Three-stage Deprecate flow (Deprecate → Confirm → DELETE).
+- **Accent**: emerald (`#10b981` / `#022c22`).
+
+Backend changes (instances.ts):
+- Added optional `framework` query param to `GET /v1/instances` — filters via nested `agent_type: { framework }` Prisma relation.
+- Added `GET /v1/instances/:instance_id` detail endpoint (full `agent_type` join including pools).
+- Added `PATCH /v1/instances/:instance_id` endpoint for operator actions; maps `pause → paused`, `resume → ready`, `force_logout → logout`; publishes `registry.changed`.
+
+Hooks: `packages/operator-console/src/api/human-agent-hooks.ts` — `useHumanInstances` (poll 10 s), `instanceAction`, `useHumanAgentTypes`, `createHumanAgent`, `updateHumanAgent`, `deprecateHumanAgent`. Reuses existing Vite proxies `/v1/instances` and `/v1/agent-types` → `http://localhost:3300`.
+
+Nav: botão "Agents" (emerald — `#10b981`/`#022c22`) adicionado ao `Header.tsx`.
+
+Build: 360 kB JS / 101 kB gzip (estimated).
 
 ### Status transitions
-
-```
-active → suspended | completed | failed | cancelled
-suspended → active (resume) | timed_out | cancelled
-timed_out / failed / completed / cancelled → terminal
-```
 
 ### Kafka topic: workflow.events
 
@@ -1612,6 +1995,13 @@ Publicado pelo workflow-api em todos os status transitions. Consumido pelo Skill
 
 - `packages/skill-flow-worker/` — TypeScript worker: consome `workflow.events`, roda engine.run() com resumeContext, wired com persistSuspend callback para deadline calculation
 - Operator Console — painel de instâncias Workflow (WorkflowPanel.tsx): status filter, timeline, resume token, cancel action
+- Operator Console — WebhookPanel (WebhookPanel.tsx): CRUD de webhooks, delivery log, one-time token display, activate/deactivate/rotate/delete
+- Operator Console — RegistryPanel (RegistryPanel.tsx): Pools / Agent Types / Skills / Running instances CRUD via agent-registry REST
+- Operator Console — SkillFlowEditor (SkillFlowEditor.tsx): Monaco YAML editor for SkillFlow definitions, live validation, JSON↔YAML conversion
+- Operator Console — ChannelPanel (ChannelPanel.tsx): channel credential management for WhatsApp, Webchat, Voice, Email, SMS, Instagram, Telegram, WebRTC; credentials masked on read
+- Operator Console — HumanAgentPanel (HumanAgentPanel.tsx): Live Status tab (human instances, operator actions) + Profiles tab (AgentType CRUD for human framework)
+- agent-registry — GatewayConfig model + migration + `routes/channels.ts` CRUD (`GET/POST /v1/channels`, `GET/PUT/DELETE /v1/channels/:id`)
+- agent-registry — `GET /v1/instances?framework=human`, `GET /v1/instances/:id` detail, `PATCH /v1/instances/:id` operator actions (pause/resume/force_logout)
 - Vite proxy configuration para `/v1/workflow` routes
 
 ### Collect Step — async multi-channel data collection
@@ -1870,9 +2260,12 @@ React 18 + TypeScript + Vite. Porta de dev: 5173. Proxy: `/api` → mcp-server-p
 | 17 | `17_context_store.ts` | ContextStore: key format, caller/session namespace writes, sentiment rounding, TTL, supervisor_state context_snapshot (18 assertions) (--ctx flag) |
 | 18 | `18_workflow_worker_chain.ts` | Kafka→worker→engine chain: trigger → workflow.started → skill-flow-worker consumes → engine suspend step → workflow.suspended Kafka → resume REST → workflow.resumed → engine complete step → workflow.completed Kafka (16 assertions) (--worker flag, 120s timeout) |
 | 19 | `19_mention_copilot_auth.ts` | @mention co-pilot + masked PIN auth: Part A — agente_auth_ia_v1 happy path (valid PIN → resolved, PIN absent from pipeline_state); Part B — failure path (PIN 999999 → escalated_human, no leak); Part C — agente_copilot_v1 @mention trigger → LLM reason → analise.sugestao populated → terminate → resolved (14 assertions) (--mention flag, 90s timeout, requires demo stack + ANTHROPIC_API_KEY) |
+| 20 | `20_masked_form.ts` | Masked Form field-level masking policy: Part A — interaction:form, 3 fields (email plain, senha masked, codigo_2fa masked) → email survives pipeline_state, masked values absent, @masked.senha forwarded to invoke (6 assertions); Part B — step.masked=true with field.masked=false override: cpf survives (override wins), pin absent (inherits step.masked) (5 assertions) (--masked flag) |
+| 21 | `21_masked_retry.ts` | Masked Retry begin_transaction rollback cycle: inject invalid PIN "000000" → validate_pin fails → rewind to tx_inicio (maskedScope cleared) → inject valid PIN "123456" → success; asserts both PINs absent from pipeline_state (5 assertions) (--masked flag) |
+| 22 | `22_pool_hooks_fase_b.ts` | Pool Lifecycle Hooks Fase B + C: Part A — no-hooks pool → agent_done → conversations.outbound session.closed immediate, hook_pending absent (3 assertions); Part B — hooks pool → agent_done → hook_pending=1, conversations.inbound hook event with conference_id + hook_type=on_human_end + target pool, conversations.outbound NOT published within 2s (9 assertions); Part C — simulate hook completion via GETDEL+DECR → publish contact_closed → conversations.outbound session.closed arrives, human tracking keys cleaned (4 assertions); Part D — pool with on_human_end+post_human hooks → simulate on_human_end completion → bridge fires post_human → conversations.inbound hook_type=post_human + hook_pending:post_human=1 (5 assertions); Part E — publish participant_joined+left to conversations.participants → analytics-api consumer → ClickHouse participation_intervals → GET /reports/participation row with duration_ms (4 assertions) (--hooks flag, 60s timeout) |
 | R  | `regressions.ts` | regression suite: ZodError em session_context_get, parsing de callTool (--regression flag) |
 
-Run with: `ts-node runner.ts --conference` or `ts-node runner.ts --only 06` or `ts-node runner.ts --only 12` or `ts-node runner.ts --webchat` or `ts-node runner.ts --workflow` or `ts-node runner.ts --only 13` or `ts-node runner.ts --collect` or `ts-node runner.ts --only 14` or `ts-node runner.ts --bootstrap` or `ts-node runner.ts --only 15` or `ts-node runner.ts --reconcile` or `ts-node runner.ts --only 16` or `ts-node runner.ts --ctx` or `ts-node runner.ts --only 17` or `ts-node runner.ts --worker` or `ts-node runner.ts --only 18` or `ts-node runner.ts --mention` or `ts-node runner.ts --only 19`
+Run with: `ts-node runner.ts --conference` or `ts-node runner.ts --only 06` or `ts-node runner.ts --only 12` or `ts-node runner.ts --webchat` or `ts-node runner.ts --workflow` or `ts-node runner.ts --only 13` or `ts-node runner.ts --collect` or `ts-node runner.ts --only 14` or `ts-node runner.ts --bootstrap` or `ts-node runner.ts --only 15` or `ts-node runner.ts --reconcile` or `ts-node runner.ts --only 16` or `ts-node runner.ts --ctx` or `ts-node runner.ts --only 17` or `ts-node runner.ts --worker` or `ts-node runner.ts --only 18` or `ts-node runner.ts --mention` or `ts-node runner.ts --only 19` or `ts-node runner.ts --masked` or `ts-node runner.ts --only 20` or `ts-node runner.ts --only 21` or `ts-node runner.ts --hooks` or `ts-node runner.ts --only 22`
 
 Scenario 06 covers two parts:
 - **Part A** — Conference happy path: primary agent busy → supervisor calls `agent_join_conference` → Redis `conference:*` keys verified → specialist `agent_done` with `conference_id` (session stays open) → primary `agent_done` closes session

@@ -31,6 +31,27 @@ export default defineConfig({
         target: process.env.VITE_PRICING_API_BASE_URL ?? 'http://localhost:3900',
         changeOrigin: true,
       },
+      // Forward agent-registry API calls (pools, agent-types, skills, instances)
+      '/v1/pools': {
+        target: process.env.VITE_REGISTRY_API_BASE_URL ?? 'http://localhost:3300',
+        changeOrigin: true,
+      },
+      '/v1/agent-types': {
+        target: process.env.VITE_REGISTRY_API_BASE_URL ?? 'http://localhost:3300',
+        changeOrigin: true,
+      },
+      '/v1/skills': {
+        target: process.env.VITE_REGISTRY_API_BASE_URL ?? 'http://localhost:3300',
+        changeOrigin: true,
+      },
+      '/v1/instances': {
+        target: process.env.VITE_REGISTRY_API_BASE_URL ?? 'http://localhost:3300',
+        changeOrigin: true,
+      },
+      '/v1/channels': {
+        target: process.env.VITE_REGISTRY_API_BASE_URL ?? 'http://localhost:3300',
+        changeOrigin: true,
+      },
     },
   },
   build: {

@@ -174,3 +174,117 @@ export interface CampaignSummary {
   response_rate_pct: number
   avg_elapsed_ms:    number | null
 }
+
+// ─── Webhook (from GET /v1/workflow/webhooks) ─────────────────────────────────
+
+export interface Webhook {
+  id:                string
+  tenant_id:         string
+  flow_id:           string
+  description:       string
+  token_prefix:      string       // first 16 chars of plain token, for display only
+  active:            boolean
+  trigger_count:     number
+  last_triggered_at: string | null
+  context_override:  Record<string, unknown>
+  created_at:        string
+  updated_at:        string
+}
+
+export interface WebhookDelivery {
+  id:           string
+  webhook_id:   string
+  tenant_id:    string
+  triggered_at: string
+  status_code:  number
+  payload_hash: string
+  instance_id:  string | null
+  error:        string | null
+  latency_ms:   number | null
+}
+
+// ─── Registry (from GET /v1/pools, /v1/agent-types, /v1/skills) ──────────────
+
+export interface RegistryPool {
+  pool_id:         string
+  tenant_id:       string
+  description:     string | null
+  channel_types:   string[]
+  sla_target_ms:   number
+  status:          'active' | 'inactive'
+  created_at:      string
+  updated_at:      string
+  mentionable_pools?: Record<string, string>
+  hooks?: {
+    on_human_start?: Array<{ pool: string }>
+    on_human_end?:   Array<{ pool: string }>
+    post_human?:     Array<{ pool: string }>
+  }
+}
+
+export interface RegistryAgentType {
+  agent_type_id:           string
+  tenant_id:               string
+  framework:               string
+  execution_model:         'stateless' | 'stateful'
+  role:                    'executor' | 'orchestrator' | 'evaluator'
+  max_concurrent_sessions: number
+  pools:                   Array<{ pool_id: string }>
+  skills:                  Array<{ skill_id: string; version_policy: string }>
+  permissions:             string[]
+  capabilities:            Record<string, string>
+  prompt_id:               string | null
+  traffic_weight:          number
+  status:                  'active' | 'deprecated'
+  created_at:              string
+  updated_at:              string
+}
+
+export interface RegistrySkill {
+  skill_id:    string
+  tenant_id:   string
+  name:        string
+  version:     string
+  description: string
+  classification: {
+    type:      'vertical' | 'horizontal' | 'orchestrator'
+    vertical?: string
+    domain?:   string
+  }
+  tools:       Array<{ name: string; server: string }>
+  knowledge_domains: string[]
+  status:      'active' | 'inactive'
+  created_at:  string
+  updated_at:  string
+}
+
+export interface RegistryInstance {
+  instance_id:    string
+  tenant_id:      string
+  agent_type_id:  string
+  pool_id:        string
+  status:         string
+  channel_types:  string[]
+  created_at:     string
+  updated_at:     string
+}
+
+// ─── Channel Gateway Config (from GET /v1/channels) ──────────────────────────
+
+export type ChannelType =
+  | 'whatsapp' | 'webchat' | 'voice' | 'email'
+  | 'sms' | 'instagram' | 'telegram' | 'webrtc'
+
+export interface GatewayConfig {
+  id:           string
+  tenant_id:    string
+  channel:      ChannelType
+  display_name: string
+  active:       boolean
+  credentials:  Record<string, string>   // values are masked on read (••••••)
+  settings:     Record<string, unknown>
+  created_at:   string
+  updated_at:   string
+  created_by:   string
+}
+

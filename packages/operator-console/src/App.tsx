@@ -29,11 +29,16 @@ import { WorkflowPanel } from './components/WorkflowPanel'
 import { CampaignPanel } from './components/CampaignPanel'
 import { ConfigPanel } from './components/ConfigPanel'
 import { PricingPanel } from './components/PricingPanel'
+import { WebhookPanel } from './components/WebhookPanel'
+import { RegistryPanel } from './components/RegistryPanel'
+import { SkillFlowEditor } from './components/SkillFlowEditor'
+import { ChannelPanel }     from './components/ChannelPanel'
+import { HumanAgentPanel } from './components/HumanAgentPanel'
 
 // Default tenant from env var (override in .env.local)
 const DEFAULT_TENANT = import.meta.env.VITE_DEFAULT_TENANT ?? 'tenant_telco'
 
-type View = 'heatmap' | 'sessions' | 'transcript' | 'workflows' | 'campaigns' | 'config' | 'pricing'
+type View = 'heatmap' | 'sessions' | 'transcript' | 'workflows' | 'campaigns' | 'config' | 'pricing' | 'webhooks' | 'registry' | 'skills' | 'channels' | 'agents'
 
 export default function App() {
   const [tenantId, setTenantId]           = useState<string>(DEFAULT_TENANT)
@@ -105,6 +110,36 @@ export default function App() {
     setSession(null)
   }
 
+  function goToWebhooks() {
+    setView('webhooks')
+    setSelectedPool(null)
+    setSession(null)
+  }
+
+  function goToRegistry() {
+    setView('registry')
+    setSelectedPool(null)
+    setSession(null)
+  }
+
+  function goToSkills() {
+    setView('skills')
+    setSelectedPool(null)
+    setSession(null)
+  }
+
+  function goToChannels() {
+    setView('channels')
+    setSelectedPool(null)
+    setSession(null)
+  }
+
+  function goToAgents() {
+    setView('agents')
+    setSelectedPool(null)
+    setSession(null)
+  }
+
   function backToHeatmapFromWorkflows() {
     setView('heatmap')
   }
@@ -124,6 +159,11 @@ export default function App() {
           else if (v === 'campaigns') goToCampaigns()
           else if (v === 'config') goToConfig()
           else if (v === 'pricing') goToPricing()
+          else if (v === 'webhooks') goToWebhooks()
+          else if (v === 'registry') goToRegistry()
+          else if (v === 'skills')    goToSkills()
+          else if (v === 'channels')  goToChannels()
+          else if (v === 'agents')    goToAgents()
           else if (v === 'heatmap') {
             setView('heatmap')
             setSelectedPool(null)
@@ -199,6 +239,46 @@ export default function App() {
         {/* ── Pricing panel ────────────────────────────────────────────────── */}
         {view === 'pricing' && (
           <PricingPanel
+            tenantId ={tenantId}
+            onBack   ={() => setView('heatmap')}
+          />
+        )}
+
+        {/* ── Webhooks panel ───────────────────────────────────────────────── */}
+        {view === 'webhooks' && (
+          <WebhookPanel
+            tenantId ={tenantId}
+            onBack   ={() => setView('heatmap')}
+          />
+        )}
+
+        {/* ── Registry Management panel ────────────────────────────────────── */}
+        {view === 'registry' && (
+          <RegistryPanel
+            tenantId ={tenantId}
+            onBack   ={() => setView('heatmap')}
+          />
+        )}
+
+        {/* ── Skill Flow Editor ────────────────────────────────────────────── */}
+        {view === 'skills' && (
+          <SkillFlowEditor
+            tenantId ={tenantId}
+            onBack   ={() => setView('heatmap')}
+          />
+        )}
+
+        {/* ── Channel Configuration panel ──────────────────────────────────── */}
+        {view === 'channels' && (
+          <ChannelPanel
+            tenantId ={tenantId}
+            onBack   ={() => setView('heatmap')}
+          />
+        )}
+
+        {/* ── Human Agent Management panel ─────────────────────────────────── */}
+        {view === 'agents' && (
+          <HumanAgentPanel
             tenantId ={tenantId}
             onBack   ={() => setView('heatmap')}
           />

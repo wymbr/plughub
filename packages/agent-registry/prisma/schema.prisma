@@ -182,3 +182,26 @@ enum SkillStatus {
   inactive
   deprecated
 }
+
+// ─────────────────────────────────────────────
+// GatewayConfig — configuração de canal por tenant
+// Credenciais de integração: WhatsApp, Webchat, Voice, Email, SMS, etc.
+// ─────────────────────────────────────────────
+
+model GatewayConfig {
+  id           String   @id @default(uuid())
+  tenant_id    String
+  channel      String   // whatsapp | webchat | voice | email | sms | instagram | telegram | webrtc
+  display_name String
+  active       Boolean  @default(true)
+  credentials  Json     @default("{}")   // masked on API read
+  settings     Json     @default("{}")   // non-sensitive settings
+
+  created_at  DateTime @default(now())
+  updated_at  DateTime @updatedAt
+  created_by  String   @default("operator")
+
+  @@index([tenant_id])
+  @@index([tenant_id, channel])
+  @@map("gateway_configs")
+}
