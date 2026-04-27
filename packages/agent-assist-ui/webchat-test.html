@@ -50,6 +50,38 @@
   .config-row button { padding: 6px 14px; font-size: 12px; background: #0ea5e9; flex-shrink: 0; }
   .config-row button:hover { background: #0284c7; }
   .err-detail { font-size: 10px; color: #ef4444; padding: 2px 12px 4px; display: none; }
+  /* ── Interaction cards ── */
+  .ia-card { background: #f1f5f9; border-radius: 12px; padding: 10px 12px;
+             align-self: flex-start; max-width: 85%; border-bottom-left-radius: 4px;
+             font-size: 13px; line-height: 1.5; }
+  .ia-card.done { opacity: .5; pointer-events: none; }
+  .ia-sender { font-size: 11px; font-weight: 600; color: #4f46e5; margin-bottom: 4px; }
+  .ia-badge { font-size: 10px; background: #e0e7ff; color: #4338ca;
+              border-radius: 4px; padding: 1px 5px; margin-left: 5px; vertical-align: middle; }
+  .ia-prompt { margin-bottom: 8px; color: #1e293b; }
+  .ia-opt-btn { display: block; width: 100%; margin: 3px 0; padding: 6px 10px;
+                background: white; color: #1e293b; border: 1px solid #cbd5e1;
+                border-radius: 6px; cursor: pointer; text-align: left; font-size: 13px; }
+  .ia-opt-btn:hover { background: #e0e7ff; border-color: #4f46e5; }
+  .ia-row { display: flex; gap: 6px; margin-top: 4px; }
+  .ia-row input { flex: 1; padding: 6px 10px; border-radius: 6px; font-size: 13px;
+                  border: 1px solid #cbd5e1; outline: none; }
+  .ia-row input:focus { border-color: #4f46e5; }
+  .ia-row input.masked { border-color: #f59e0b; }
+  .ia-row .ok-btn { padding: 6px 12px; font-size: 13px; border-radius: 6px; flex-shrink: 0; }
+  .ia-field { margin-bottom: 8px; }
+  .ia-field label { display: block; font-size: 11px; color: #64748b; margin-bottom: 3px; }
+  .ia-field input { width: 100%; padding: 6px 10px; border-radius: 6px; font-size: 13px;
+                    border: 1px solid #cbd5e1; outline: none; box-sizing: border-box; }
+  .ia-field input:focus { border-color: #4f46e5; }
+  .ia-field input.masked { border-color: #f59e0b; }
+  .ia-submit { width: 100%; margin-top: 4px; padding: 6px 12px; font-size: 13px;
+               border-radius: 6px; background: #4f46e5; color: white; border: none; cursor: pointer; }
+  .ia-submit:hover { background: #4338ca; }
+  .ia-hint { font-size: 11px; color: #b45309; margin-top: 4px; }
+  .ia-check { display: flex; align-items: center; gap: 8px; margin-bottom: 5px;
+              cursor: pointer; font-size: 13px; color: #1e293b; }
+  .ia-check input[type=checkbox] { width: 14px; height: 14px; accent-color: #4f46e5; cursor: pointer; }
 </style>
 </head>
 <body>
@@ -69,6 +101,8 @@
       <option value="demo_ia">demo_ia</option>
       <option value="fila_humano">fila_humano</option>
       <option value="retencao_humano">retencao_humano</option>
+      <option value="auth_ia">auth_ia (PIN mascarado)</option>
+      <option value="copilot_sac">copilot_sac (@mention co-pilot)</option>
     </select>
     <input id="token-input" placeholder="JWT (auto-gerado se vazio)" />
     <button id="connect-btn" onclick="connect().catch(onConnectErr)">Conectar</button>
@@ -236,7 +270,7 @@
         return;
       }
       if (msg.type === 'interaction.request') {
-        addMsg('[Menu] ' + msg.prompt, 'in', 'Sistema');
+        renderInteraction(msg);
         return;
       }
     };
@@ -263,6 +297,139 @@
     addMsg(text, 'out', 'Você');
     input.value = '';
     input.focus();
+  }
+
+  // ── Interaction rendering ────────────────────────────────────────────────────
+  function renderInteraction(msg) {
+    const msgs = document.getElementById('messages');
+
+    const card = document.createElement('div');
+    card.className = 'ia-card';
+    card.id = 'ia-' + msg.menu_id;
+
+    let html = `<div class="ia-sender">Agente <span class="ia-badge">${escHtml(msg.interaction)}</span></div>`;
+    html += `<div class="ia-prompt">${escHtml(msg.prompt)}</div>`;
+
+    if (msg.interaction === 'button' || msg.interaction === 'list') {
+      const opts = msg.options || [];
+      opts.forEach(opt => {
+        html += `<button class="ia-opt-btn"
+          onclick="submitMenu('${msg.menu_id}','${msg.interaction}','${escHtml(opt.id)}','${escHtml(opt.label)}')"
+          >${escHtml(opt.label)}</button>`;
+      });
+
+    } else if (msg.interaction === 'text') {
+      // Mascarado quando masked_fields contém qualquer campo (step scalar usa output_as/id como campo implícito)
+      const isMasked = Array.isArray(msg.masked_fields) && msg.masked_fields.length > 0;
+      const inputType   = isMasked ? 'password' : 'text';
+      const placeholder = isMasked ? '••••••  (entrada segura)' : 'Sua resposta…';
+      html += `<div class="ia-row">
+        <input type="${inputType}" id="ia-text-${msg.menu_id}" placeholder="${placeholder}"
+          class="${isMasked ? 'masked' : ''}"
+          autocomplete="off" autocorrect="off" spellcheck="false"
+          onkeydown="if(event.key==='Enter'){submitTextMenu('${msg.menu_id}');}">
+        <button class="ok-btn" onclick="submitTextMenu('${msg.menu_id}')">OK</button>
+      </div>`;
+      if (isMasked) {
+        html += `<div class="ia-hint">🔒 Campo seguro — conteúdo não é visível ao agente</div>`;
+      }
+
+    } else if (msg.interaction === 'form') {
+      const maskedSet = new Set(msg.masked_fields || []);
+      const fields    = msg.fields || [];
+      html += `<div id="ia-form-${msg.menu_id}">`;
+      fields.forEach(field => {
+        const fid      = field.id || field.label;
+        const isMasked = maskedSet.has(fid);
+        const lock     = isMasked ? '🔒 ' : '';
+        html += `<div class="ia-field">
+          <label>${lock}${escHtml(field.label || fid)}${field.required ? ' *' : ''}</label>
+          <input type="${isMasked ? 'password' : 'text'}" class="${isMasked ? 'masked' : ''}"
+            id="ia-ff-${msg.menu_id}-${escHtml(fid)}" data-fid="${escHtml(fid)}"
+            autocomplete="off" autocorrect="off" spellcheck="false"
+            placeholder="${isMasked ? '••••••' : ''}">
+        </div>`;
+      });
+      const fieldIds = JSON.stringify(fields.map(f => f.id || f.label));
+      html += `<button class="ia-submit" onclick="submitFormMenu('${msg.menu_id}',${fieldIds})">Enviar</button>`;
+      if (maskedSet.size > 0) {
+        html += `<div class="ia-hint">🔒 Campos seguros — conteúdo não é visível ao agente</div>`;
+      }
+      html += `</div>`;
+
+    } else if (msg.interaction === 'checklist') {
+      const opts = msg.options || [];
+      html += `<div id="ia-cl-${msg.menu_id}">`;
+      opts.forEach(opt => {
+        html += `<label class="ia-check">
+          <input type="checkbox" id="ia-ck-${msg.menu_id}-${escHtml(opt.id)}" value="${escHtml(opt.id)}">
+          ${escHtml(opt.label)}
+        </label>`;
+      });
+      const optIds = JSON.stringify(opts.map(o => o.id));
+      html += `<button class="ia-submit" onclick="submitChecklistMenu('${msg.menu_id}',${optIds})">Confirmar</button>`;
+      html += `</div>`;
+    }
+
+    card.innerHTML = html;
+    msgs.appendChild(card);
+    msgs.scrollTop = msgs.scrollHeight;
+
+    // Focar automaticamente no input de texto para melhor UX
+    if (msg.interaction === 'text') {
+      setTimeout(() => document.getElementById('ia-text-' + msg.menu_id)?.focus(), 50);
+    }
+  }
+
+  // ── Menu submit helpers ──────────────────────────────────────────────────────
+  function submitMenu(menuId, interaction, result, label) {
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    ws.send(JSON.stringify({ type: 'menu.submit', menu_id: menuId, interaction, result }));
+    console.log('[webchat] → menu.submit', menuId, result);
+    // Mostra confirmação como mensagem do usuário
+    addMsg(label || result, 'out', 'Você');
+    // Desabilita card para evitar dupla resposta
+    const card = document.getElementById('ia-' + menuId);
+    if (card) card.className = 'ia-card done';
+  }
+
+  function submitTextMenu(menuId) {
+    const el  = document.getElementById('ia-text-' + menuId);
+    const val = el ? el.value.trim() : '';
+    if (!val) return;
+    submitMenu(menuId, 'text', val, '••••••');   // nunca mostra o valor em claro no histórico
+  }
+
+  function submitFormMenu(menuId, fieldIds) {
+    const result = {};
+    fieldIds.forEach(fid => {
+      const el = document.getElementById('ia-ff-' + menuId + '-' + fid);
+      result[fid] = el ? el.value : '';
+    });
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    ws.send(JSON.stringify({ type: 'menu.submit', menu_id: menuId, interaction: 'form', result: JSON.stringify(result) }));
+    console.log('[webchat] → menu.submit (form)', menuId, Object.keys(result));
+    addMsg('[formulário enviado]', 'out', 'Você');
+    const card = document.getElementById('ia-' + menuId);
+    if (card) card.className = 'ia-card done';
+  }
+
+  function submitChecklistMenu(menuId, allOptionIds) {
+    const selected = allOptionIds.filter(id => {
+      const cb = document.getElementById('ia-ck-' + menuId + '-' + id);
+      return cb && cb.checked;
+    });
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    ws.send(JSON.stringify({ type: 'menu.submit', menu_id: menuId, interaction: 'checklist', result: JSON.stringify(selected) }));
+    console.log('[webchat] → menu.submit (checklist)', menuId, selected);
+    addMsg('[seleção: ' + selected.join(', ') + ']', 'out', 'Você');
+    const card = document.getElementById('ia-' + menuId);
+    if (card) card.className = 'ia-card done';
+  }
+
+  // ── Util ────────────────────────────────────────────────────────────────────
+  function escHtml(s) {
+    return String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
   }
 </script>
 </body>
