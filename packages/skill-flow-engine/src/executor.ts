@@ -10,18 +10,21 @@ import type {
   PipelineState,
   CatchStrategy,
 } from "@plughub/schemas"
+import type { IContextStore } from "./context-types"
 
-import { executeTask }     from "./steps/task"
-import { executeChoice }   from "./steps/choice"
-import { executeCatch }    from "./steps/catch"
-import { executeEscalate } from "./steps/escalate"
-import { executeComplete } from "./steps/complete"
-import { executeInvoke }   from "./steps/invoke"
-import { executeReason }   from "./steps/reason"
-import { executeNotify }   from "./steps/notify"
-import { executeMenu }     from "./steps/menu"
-import { executeSuspend }  from "./steps/suspend"
-import { executeCollect }  from "./steps/collect"
+import { executeTask }             from "./steps/task"
+import { executeChoice }           from "./steps/choice"
+import { executeCatch }            from "./steps/catch"
+import { executeEscalate }         from "./steps/escalate"
+import { executeComplete }         from "./steps/complete"
+import { executeInvoke }           from "./steps/invoke"
+import { executeReason }           from "./steps/reason"
+import { executeNotify }           from "./steps/notify"
+import { executeMenu }             from "./steps/menu"
+import { executeSuspend }          from "./steps/suspend"
+import { executeCollect }          from "./steps/collect"
+import { executeBeginTransaction } from "./steps/begin-transaction"
+import { executeEndTransaction }   from "./steps/end-transaction"
 
 // ─────────────────────────────────────────────
 // Tipos de contexto e resultado de step
@@ -38,6 +41,12 @@ export interface StepContext {
 
   /** Redis client — used by menu step for BLPOP (awaiting customer reply) */
   redis:          Redis
+
+  /**
+   * ContextStore unificado — acesso a @ctx.namespace.campo.
+   * Opcional para retrocompatibilidade; steps que usam @ctx.* requerem este campo.
+   */
+  contextStore?:  IContextStore
 
   /** Chama uma tool no mcp-server-plughub */
   mcpCall(tool: string, input: unknown, mcpServer?: string): Promise<unknown>
@@ -133,6 +142,26 @@ export interface StepContext {
     step_id:   string   // which suspend step is being resumed
     payload:   Record<string, unknown>
   }
+
+  // ── Masked input — transação atômica ──────────────────────────────────────
+
+  /**
+   * Escopo em memória para valores sensíveis capturados em steps masked.
+   * Nunca escrito em Redis, pipeline_state ou stream.
+   * Limpo pelo end_transaction (sucesso) ou pelo engine (falha → rewind).
+   * Chave = field_id do FormField; valor = dado sensível em texto claro.
+   * Sempre presente (objeto vazio quando fora de transação).
+   */
+  maskedScope: Record<string, string>
+
+  /**
+   * Step de rewind declarado no begin_transaction.on_failure.
+   * Presente enquanto estamos dentro de um bloco begin/end_transaction.
+   * Usado pelo engine para detectar falha dentro de transação e fazer rewind.
+   * Limpo pelo end_transaction (sucesso) ou pelo engine (rewind executado).
+   * null quando fora de bloco de transação.
+   */
+  transactionOnFailure: string | null
 }
 
 export interface StepResult {
@@ -167,8 +196,10 @@ export async function executeStep(
     case "reason":   return executeReason(step, ctx)
     case "notify":   return executeNotify(step, ctx)
     case "menu":     return executeMenu(step, ctx)
-    case "suspend":  return executeSuspend(step, ctx)
-    case "collect":  return executeCollect(step, ctx)
+    case "suspend":           return executeSuspend(step, ctx)
+    case "collect":           return executeCollect(step, ctx)
+    case "begin_transaction": return executeBeginTransaction(step, ctx)
+    case "end_transaction":   return executeEndTransaction(step, ctx)
     default:
       // TypeScript garante exhaustiveness via discriminated union
       throw new Error(`Tipo de step desconhecido: ${(step as FlowStep).type}`)

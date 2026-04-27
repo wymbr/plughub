@@ -652,24 +652,32 @@ async def process_routed(
     # participant_joined event in the session stream → "Agente entrou no
     # atendimento" spam in the webchat client.
     #
+    # IMPORTANT: conference invites (conference_id present) are EXEMPT from this
+    # guard. A conference invite is by definition sent to a session where a human
+    # agent is already active — blocking it would mean the specialist can never join.
+    # The conference-specific dedup (session:{id}:conference:specialist:{pool_id})
+    # lower in this function prevents double-activation of the same specialist.
+    #
     # We check two independent locks:
     #   {tenant_id}:pipeline:{session_id}:running  — set by skill-flow-service
     #                                                 while a flow is executing
     #   session:{session_id}:human_agent           — set by activate_human_agent
-    try:
-        existing_lock  = await redis_client.get(f"{tenant_id}:pipeline:{session_id}:running")
-        existing_human = await redis_client.get(f"session:{session_id}:human_agent")
-        if existing_lock or existing_human:
-            logger.info(
-                "Skipping duplicate routing for already-served session: "
-                "session=%s skill_running=%s human_active=%s",
-                session_id, bool(existing_lock), bool(existing_human),
+    conference_id = result.get("conference_id") or ""
+    if not conference_id:
+        try:
+            existing_lock  = await redis_client.get(f"{tenant_id}:pipeline:{session_id}:running")
+            existing_human = await redis_client.get(f"session:{session_id}:human_agent")
+            if existing_lock or existing_human:
+                logger.info(
+                    "Skipping duplicate routing for already-served session: "
+                    "session=%s skill_running=%s human_active=%s",
+                    session_id, bool(existing_lock), bool(existing_human),
+                )
+                return
+        except Exception as exc:
+            logger.warning(
+                "Could not check session state for dedup: session=%s — %s", session_id, exc
             )
-            return
-    except Exception as exc:
-        logger.warning(
-            "Could not check session state for dedup: session=%s — %s", session_id, exc
-        )
     # ─────────────────────────────────────────────────────────────────────────
 
     agent_type_id = result.get("agent_type_id", "")
@@ -826,6 +834,28 @@ async def process_routed(
             except Exception:
                 pass
 
+        # ── Conference dedup: skip if specialist from this pool already active ─
+        # A repeat @mention while the specialist is already running would cause the
+        # routing engine to generate another conversations.routed for the same pool.
+        # Guard against that here so we don't double-activate the specialist.
+        if conference_id and pool_id:
+            try:
+                existing_spec = await redis_client.get(
+                    f"session:{session_id}:conference:specialist:{pool_id}"
+                )
+                if existing_spec:
+                    logger.info(
+                        "Skipping duplicate conference invite: specialist pool=%s already active "
+                        "in session=%s — mention command dispatch will handle the command",
+                        pool_id, session_id,
+                    )
+                    return
+            except Exception as exc:
+                logger.warning(
+                    "Could not check existing specialist: session=%s pool=%s — %s",
+                    session_id, pool_id, exc,
+                )
+
         # ── Persist snapshot to Redis before blocking call ────────────────────
         # activate_native_agent blocks for the entire session duration (up to hours
         # for menus with timeout_s=0). If the bridge process is killed mid-session,
@@ -858,6 +888,37 @@ async def process_routed(
                 logger.warning(
                     "Could not persist AI instance snapshot: session=%s — %s",
                     session_id, exc,
+                )
+
+        # ── Store specialist info for @mention command dispatch ──────────────
+        # When conference_id is present, this agent is a conference specialist
+        # (e.g. agente_copilot_v1 in pool copilot_sac). The mention command dispatch
+        # in process_mention_routing uses this key to find the active specialist's
+        # skill_id so it can look up mention_commands from the YAML and push the
+        # appropriate signal to menu:result:{session_id}.
+        if conference_id and pool_id:
+            # Resolve skill_id early (same logic used inside activate_native_agent)
+            resolved_for_mention = await resolve_flow_for_agent(http, tenant_id, agent_type_id, skills)
+            mention_skill_id = resolved_for_mention[0] if resolved_for_mention else agent_type_id
+            try:
+                await redis_client.setex(
+                    f"session:{session_id}:conference:specialist:{pool_id}",
+                    14400,
+                    json.dumps({
+                        "skill_id":      mention_skill_id,
+                        "instance_id":   native_instance_id,
+                        "agent_type_id": agent_type_id,
+                    }),
+                )
+                logger.info(
+                    "Specialist info stored for @mention dispatch: "
+                    "session=%s pool=%s skill=%s instance=%s",
+                    session_id, pool_id, mention_skill_id, native_instance_id,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "Could not store specialist info: session=%s pool=%s — %s",
+                    session_id, pool_id, exc,
                 )
 
         agent_result = await activate_native_agent(
@@ -1148,6 +1209,27 @@ async def process_contact_event(
                         "Could not clean up specialist instance: session=%s instance=%s — %s",
                         session_id, instance_id, exc,
                     )
+            # Remove specialist conference key so a new @mention creates a fresh invite
+            try:
+                spec_keys = await redis_client.keys(
+                    f"session:{session_id}:conference:specialist:*"
+                )
+                for k in spec_keys:
+                    spec_raw = await redis_client.get(k)
+                    if spec_raw:
+                        spec = json.loads(spec_raw)
+                        if spec.get("instance_id") == instance_id:
+                            await redis_client.delete(k)
+                            logger.info(
+                                "Specialist conference key removed: session=%s key=%s",
+                                session_id, k,
+                            )
+                            break
+            except Exception as exc:
+                logger.warning(
+                    "Could not clean up specialist conference key: session=%s — %s",
+                    session_id, exc,
+                )
         return
 
     if event_type != "contact_closed":
@@ -1179,7 +1261,7 @@ async def process_contact_event(
     #                         (channel-gateway, triggered by conversations.outbound)
     #   "agent_closed"      — a human agent called REST /agent_done (mcp-server)
 
-    customer_side = reason in ("client_disconnect", "timeout", "agent_done")
+    customer_side = reason in ("client_disconnect", "timeout", "session_timeout", "agent_done")
 
     try:
         if customer_side:
@@ -1365,6 +1447,249 @@ async def process_contact_event(
         logger.error("Error processing contact_closed: session=%s — %s", session_id, exc)
 
 
+# ── @mention command dispatch ─────────────────────────────────────────────────
+
+def _load_mention_commands(skill_id: str) -> dict | None:
+    """
+    Load mention_commands from a skill YAML (SKILLS_DIR/{skill_id}.yaml).
+    Returns the dict or None if not found / not declared.
+    """
+    flow = _load_yaml_fallback(skill_id)
+    if flow is None:
+        return None
+    mention_commands = flow.get("mention_commands")
+    if not isinstance(mention_commands, dict):
+        return None
+    return mention_commands
+
+
+async def dispatch_mention_command(
+    redis_client:  aioredis.Redis,
+    session_id:    str,
+    tenant_id:     str,
+    command_name:  str,
+    command_def:   dict,
+) -> None:
+    """
+    Execute a mention_command action for an already-active specialist.
+
+    Actions (exactly one per command, Zod union):
+      trigger_step: <step_id>    → LPUSH { _mention_trigger_step: step_id }
+                                    to menu:result:{session_id} so the specialist's
+                                    blocked menu BLPOP wakes up and jumps to step_id.
+      terminate_self: true       → LPUSH { _mention_terminate: true } so the
+                                    specialist's menu step returns on_failure.
+      set_context: { key: val }  → HSET {tenant}:ctx:{session_id} with ContextEntry
+                                    (source="mention_command", confidence=1.0).
+
+    If acknowledge: true, also publishes mention_command.ack to agent:events:{session_id}
+    so the Agent Assist UI can display a confirmation badge.
+    """
+    action   = command_def.get("action", {})
+    ack      = command_def.get("acknowledge", False)
+
+    trigger_step = action.get("trigger_step")
+    terminate    = action.get("terminate_self", False)
+    set_ctx      = action.get("set_context", {})
+
+    if trigger_step:
+        payload = json.dumps({"_mention_trigger_step": trigger_step})
+        try:
+            await redis_client.lpush(f"menu:result:{session_id}", payload)
+            logger.info(
+                "mention_command dispatch: trigger_step=%s session=%s",
+                trigger_step, session_id,
+            )
+        except Exception as exc:
+            logger.error(
+                "mention_command: failed to push trigger_step=%s session=%s — %s",
+                trigger_step, session_id, exc,
+            )
+
+    elif terminate:
+        payload = json.dumps({"_mention_terminate": True})
+        try:
+            await redis_client.lpush(f"menu:result:{session_id}", payload)
+            logger.info(
+                "mention_command dispatch: terminate session=%s", session_id,
+            )
+        except Exception as exc:
+            logger.error(
+                "mention_command: failed to push terminate session=%s — %s", session_id, exc,
+            )
+
+    elif set_ctx:
+        ctx_key = f"{tenant_id}:ctx:{session_id}"
+        now_iso = datetime.now(timezone.utc).isoformat()
+        try:
+            for field, value in set_ctx.items():
+                entry = json.dumps({
+                    "value":      value,
+                    "confidence": 1.0,
+                    "source":     "mention_command",
+                    "visibility": "agents_only",
+                    "updated_at": now_iso,
+                })
+                await redis_client.hset(ctx_key, field, entry)
+            await redis_client.expire(ctx_key, 14400)
+            logger.info(
+                "mention_command dispatch: set_context fields=%s session=%s",
+                list(set_ctx.keys()), session_id,
+            )
+        except Exception as exc:
+            logger.error(
+                "mention_command: failed to set_context session=%s — %s", session_id, exc,
+            )
+    else:
+        logger.warning(
+            "mention_command: unknown action keys=%s session=%s — ignoring",
+            list(action.keys()), session_id,
+        )
+
+    if ack:
+        try:
+            await redis_client.publish(
+                f"agent:events:{session_id}",
+                json.dumps({
+                    "type":            "mention_command.ack",
+                    "session_id":      session_id,
+                    "command":         command_name,
+                    "acknowledged_at": datetime.now(timezone.utc).isoformat(),
+                }),
+            )
+            logger.info(
+                "mention_command ack published: session=%s command=%s", session_id, command_name,
+            )
+        except Exception as exc:
+            logger.warning(
+                "mention_command: failed to publish ack session=%s — %s", session_id, exc,
+            )
+
+
+async def process_mention_routing(
+    msg:          dict,
+    redis_client: aioredis.Redis,
+) -> None:
+    """
+    Handle a mention_routing event from conversations.inbound.
+
+    These events are published by routeMentions() in mcp-server-plughub/session.ts
+    when a human agent sends a @alias command. They carry:
+      mention_routing: true
+      session_id, tenant_id, pool_id (target pool), mention_text, from_pool_id
+
+    If the target specialist is already active in conference, dispatch the command
+    to their running skill flow via menu:result interrupt.
+
+    If the specialist is NOT yet active, do nothing — the Routing Engine will route
+    the event as a new conference invite (conversations.inbound → conversations.routed
+    → process_routed → activate_native_agent with conference_id).
+
+    Specialist presence is tracked by process_routed at:
+      session:{session_id}:conference:specialist:{pool_id}
+        → { skill_id, instance_id, agent_type_id }  (TTL 4h)
+    """
+    session_id   = msg.get("session_id", "")
+    pool_id      = msg.get("pool_id", "")
+    mention_text = msg.get("mention_text", "")
+    tenant_id    = msg.get("tenant_id", "")
+
+    if not session_id or not pool_id:
+        logger.warning("mention_routing: missing session_id or pool_id: %s", msg)
+        return
+
+    # Resolve tenant_id from session meta if absent from event
+    if not tenant_id:
+        try:
+            raw = await redis_client.get(f"session:{session_id}:meta")
+            if raw:
+                tenant_id = json.loads(raw).get("tenant_id", "") or json.loads(raw).get("tenant", "")
+        except Exception:
+            pass
+
+    # Check if the specialist is already active in this session
+    specialist_key = f"session:{session_id}:conference:specialist:{pool_id}"
+    try:
+        raw_specialist = await redis_client.get(specialist_key)
+    except Exception as exc:
+        logger.warning(
+            "mention_routing: could not read specialist key session=%s pool=%s — %s",
+            session_id, pool_id, exc,
+        )
+        return
+
+    if not raw_specialist:
+        # Not active yet — routing engine will handle this as a new conference invite
+        logger.info(
+            "mention_routing: specialist pool=%s not active in session=%s — "
+            "routing engine handles as new invite",
+            pool_id, session_id,
+        )
+        return
+
+    try:
+        specialist = json.loads(raw_specialist)
+    except Exception:
+        logger.warning(
+            "mention_routing: corrupt specialist info session=%s pool=%s", session_id, pool_id,
+        )
+        return
+
+    skill_id      = specialist.get("skill_id", "")
+    agent_type_id = specialist.get("agent_type_id", "")
+
+    # Parse command name: first token of mention_text (e.g. "ativa", "pausa cliente=123")
+    command_name = mention_text.strip().split()[0] if mention_text.strip() else ""
+    if not command_name:
+        logger.info(
+            "mention_routing: bare mention (no command) session=%s pool=%s — ignoring",
+            session_id, pool_id,
+        )
+        return
+
+    # Load mention_commands from skill YAML.
+    # Resolution order:
+    #   1. skill_id   → SKILLS_DIR/skill_copilot_sac_v1.yaml  (populated if file was named after skill_id)
+    #   2. agent_type_id → SKILLS_DIR/agente_copilot_v1.yaml  (the actual filename convention)
+    # YAML files are named after agent_type_id (e.g. agente_copilot_v1.yaml), not skill_id
+    # (skill_copilot_sac_v1), so the agent_type_id fallback is usually the one that resolves.
+    mention_commands: dict | None = None
+    lookup_id = ""
+    for candidate in filter(None, [skill_id, agent_type_id]):
+        mention_commands = _load_mention_commands(candidate)
+        if mention_commands is not None:
+            lookup_id = candidate
+            break
+
+    if mention_commands is None:
+        logger.warning(
+            "mention_routing: no mention_commands found for skill=%r agent_type=%r session=%s — ignoring",
+            skill_id, agent_type_id, session_id,
+        )
+        return
+
+    command_def = mention_commands.get(command_name)
+    if command_def is None:
+        logger.warning(
+            "mention_routing: unknown command=%r skill=%s session=%s — ignoring",
+            command_name, lookup_id, session_id,
+        )
+        return
+
+    logger.info(
+        "mention_routing: dispatching command=%r to specialist skill=%s session=%s",
+        command_name, lookup_id, session_id,
+    )
+
+    await dispatch_mention_command(
+        redis_client=redis_client,
+        session_id=session_id,
+        tenant_id=tenant_id,
+        command_name=command_name,
+        command_def=command_def,
+    )
+
+
 # ── Process conversations.inbound — forward customer messages to human agent ──
 
 async def process_inbound(
@@ -1372,11 +1697,17 @@ async def process_inbound(
     redis_client: aioredis.Redis,
 ) -> None:
     """
-    Two event types share conversations.inbound:
+    Three event types share conversations.inbound:
       1. NormalizedInboundEvent (from channel-gateway) — has "author" field
       2. ConversationInboundEvent (from conversation_escalate) — no "author" field,
          consumed by the Routing Engine; nothing to do here.
+      3. mention_routing event (from routeMentions in mcp-server-plughub) — has
+         mention_routing=True and no "author" field; dispatched to active specialists.
     """
+    if msg.get("mention_routing"):
+        await process_mention_routing(msg, redis_client)
+        return
+
     if "author" not in msg:
         return
 
@@ -1630,6 +1961,7 @@ async def run() -> None:
     syncer = RegistrySyncer(
         registry_url=AGENT_REGISTRY_URL,
         config_path=REGISTRY_CONFIG_DIR or None,
+        skills_dir=SKILLS_DIR or None,
     )
 
     async with aiohttp.ClientSession() as http:
@@ -1697,13 +2029,25 @@ async def _dispatch(
         elif topic == TOPIC_EVENTS:
             await process_contact_event(payload, redis_client)
         elif topic == TOPIC_REGISTRY_CHANGED:
-            # Agent Registry published a structural change (AgentType/Pool CRUD).
-            # Re-bootstrap on the next heartbeat tick so new/updated instances
-            # and pool configs are reflected immediately.
+            # Agent Registry published a structural change (AgentType/Pool/Skill CRUD).
+            entity_type = payload.get("entity_type", "?")
+            entity_id   = payload.get("entity_id",   "?")
             logger.info(
-                "registry.changed received: entity=%s — scheduling instance re-bootstrap",
-                payload.get("entity_type", "?"),
+                "registry.changed received: entity=%s id=%s — scheduling instance re-bootstrap",
+                entity_type, entity_id,
             )
+            # Skill update: invalidate the in-memory flow cache so the next agent
+            # activation fetches the updated flow from the Agent Registry.
+            # Using entity_id directly covers both:
+            #   - Registry path: skill_id == entity_id (e.g. "skill_copilot_sac_v1")
+            # Skills loaded via YAML fallback are never cached, so they reload
+            # from disk on every activation — no cache entry to invalidate.
+            if entity_type == "skill":
+                if entity_id in _skill_flow_cache:
+                    del _skill_flow_cache[entity_id]
+                    logger.info("Skill flow cache invalidated: skill_id=%s", entity_id)
+                else:
+                    logger.debug("Skill flow cache miss on invalidation (not cached): %s", entity_id)
             bootstrap.request_refresh()
         elif topic == TOPIC_CONFIG_CHANGED:
             await _handle_config_changed(payload, bootstrap)

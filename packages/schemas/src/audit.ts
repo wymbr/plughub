@@ -180,5 +180,12 @@ export const AuditRecordSchema = z.object({
   audit_context:       AuditContextSchema.optional(),
   /** Origem do registro: interceptor em-processo ou proxy sidecar */
   source:              z.enum(["in_process", "proxy_sidecar"]),
+  /**
+   * Campos cujos valores foram omitidos por serem mascarados (originados do masked_scope).
+   * Registra QUAIS campos foram enviados, mas nunca seus valores.
+   * Presente quando a tool recebe inputs via namespace @masked.*.
+   * Quando todos os inputs são mascarados, input_snapshot = null.
+   */
+  masked_input_fields: z.array(z.string()).optional(),
 })
 export type AuditRecord = z.infer<typeof AuditRecordSchema>

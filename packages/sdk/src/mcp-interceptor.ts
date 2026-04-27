@@ -29,8 +29,10 @@
  * Agentes nativos DEVEM usar McpInterceptor em vez de chamar MCP servers diretamente.
  */
 
-import type { AuditRecord, AuditPolicy, AuditContext } from "@plughub/schemas"
+import type { AuditRecord, AuditPolicy, AuditContext, ToolContextTags } from "@plughub/schemas"
 import { AuditKafkaWriter, type AuditKafkaConfig }     from "./infra/audit-kafka"
+import { ContextAccumulator } from "./context-accumulator"
+import type { ContextStore }  from "./context-store"
 
 // ─────────────────────────────────────────────
 // Injection guard (inline — sync with mcp-server-plughub/src/infra/injection_guard.ts)
@@ -160,6 +162,37 @@ export interface McpInterceptorConfig {
 
   /** Intervalo de flush dos audit records (ms, default: 500) */
   audit_flush_interval_ms?: number
+
+  // ── ContextStore wiring (opcional) ────────────────────────────────────────
+
+  /**
+   * ContextStore para acumulação de contexto como side-effect de tool calls.
+   * Quando configurado, o interceptor lê as anotações `context_tags` de cada tool
+   * e persiste automaticamente os valores de entrada/saída no ContextStore.
+   * Requer também `contextToolRegistry` para lookup das anotações.
+   */
+  contextStore?: ContextStore
+
+  /**
+   * Registro de anotações context_tags por servidor e tool name.
+   * Formato: { "mcp-server-crm": { "customer_get": { inputs: {...}, outputs: {...} } } }
+   *
+   * Populado pelo agente na inicialização ao registrar suas tool definitions.
+   * O interceptor usa este registry para extrair contexto de cada chamada.
+   */
+  contextToolRegistry?: Record<string, Record<string, ToolContextTags>>
+
+  /**
+   * Session ID atual — necessário para escrita no ContextStore.
+   * Usar getSessionId() dinâmico para suportar multi-sessão.
+   */
+  getSessionId?: () => string
+
+  /**
+   * Customer ID atual — necessário para tags de longa duração (pricing, insight.historico).
+   * Opcional — se ausente, tags de longa duração usam apenas sessionId.
+   */
+  getCustomerId?: () => string | undefined
 }
 
 export interface CallOptions {
@@ -180,18 +213,46 @@ export interface McpInterceptorError extends Error {
 // ─────────────────────────────────────────────
 
 export class McpInterceptor {
-  private readonly getSessionToken: () => string
-  private readonly delegate:        McpDelegate
-  private readonly writer:          AuditKafkaWriter
+  private readonly getSessionToken:   () => string
+  private readonly delegate:          McpDelegate
+  private readonly writer:            AuditKafkaWriter
+  private readonly contextStore?:     ContextStore
+  private readonly contextRegistry?:  Record<string, Record<string, ToolContextTags>>
+  private readonly getSessionId?:     () => string
+  private readonly getCustomerId?:    () => string | undefined
 
   constructor(cfg: McpInterceptorConfig) {
-    this.getSessionToken = cfg.getSessionToken
-    this.delegate        = cfg.delegate
-    this.writer          = new AuditKafkaWriter({
+    this.getSessionToken  = cfg.getSessionToken
+    this.delegate         = cfg.delegate
+    this.writer           = new AuditKafkaWriter({
       brokers:            cfg.kafka_brokers,
       topic:              cfg.audit_topic ?? "mcp.audit",
       flush_interval_ms:  cfg.audit_flush_interval_ms,
     })
+    this.contextStore     = cfg.contextStore
+    this.contextRegistry  = cfg.contextToolRegistry
+    this.getSessionId     = cfg.getSessionId
+    this.getCustomerId    = cfg.getCustomerId
+  }
+
+  /**
+   * Registra as anotações context_tags de um tool em runtime.
+   * Chamado pelo agente ao inicializar suas tool definitions.
+   *
+   * @param serverName  ex: "mcp-server-crm"
+   * @param toolName    ex: "customer_get"
+   * @param contextTags Anotação da tool definition
+   */
+  registerContextTags(
+    serverName:   string,
+    toolName:     string,
+    contextTags:  ToolContextTags,
+  ): void {
+    if (!this.contextRegistry) return
+    if (!this.contextRegistry[serverName]) {
+      this.contextRegistry[serverName] = {}
+    }
+    this.contextRegistry[serverName]![toolName] = contextTags
   }
 
   /**
@@ -280,10 +341,49 @@ export class McpInterceptor {
     let result: unknown
     let callError: unknown
 
+    // ── 3a. Context extraction — inputs (fire-and-forget) ──────────────────
+    const contextTags = this.contextRegistry?.[serverName]?.[toolName]
+    if (contextTags?.inputs && this.contextStore && this.getSessionId) {
+      const sessionId  = this.getSessionId()
+      const customerId = this.getCustomerId?.()
+      const accumulator = new ContextAccumulator({
+        store:      this.contextStore,
+        sessionId,
+        customerId,
+      })
+      // Non-blocking — input extraction is best-effort
+      accumulator.extractFromInputs(
+        contextTags.inputs,
+        args as Record<string, unknown>,
+        `mcp_call:${serverName}:${toolName}`,
+      ).catch(err => {
+        console.error("[McpInterceptor] CTX_INPUT_EXTRACTION_FAILED", String(err))
+      })
+    }
+
     try {
       result = await this.delegate(serverName, toolName, args)
     } catch (e) {
       callError = e
+    }
+
+    // ── 3b. Context extraction — outputs (fire-and-forget) ─────────────────
+    if (callError === undefined && contextTags?.outputs && this.contextStore && this.getSessionId) {
+      const sessionId  = this.getSessionId()
+      const customerId = this.getCustomerId?.()
+      const accumulator = new ContextAccumulator({
+        store:      this.contextStore,
+        sessionId,
+        customerId,
+      })
+      // Non-blocking — output extraction is best-effort
+      accumulator.extractFromOutputs(
+        contextTags.outputs,
+        result as Record<string, unknown>,
+        `mcp_call:${serverName}:${toolName}`,
+      ).catch(err => {
+        console.error("[McpInterceptor] CTX_OUTPUT_EXTRACTION_FAILED", String(err))
+      })
     }
 
     const duration = Date.now() - startedAt

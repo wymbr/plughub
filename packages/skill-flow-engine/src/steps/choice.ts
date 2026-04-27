@@ -3,27 +3,48 @@
  * Executor do step type: choice
  * Spec: PlugHub v24.0 seção 4.7
  *
- * Avalia condições JSONPath sobre o pipeline_state.
+ * Avalia condições sobre pipeline_state ($.) ou ContextStore (@ctx.*).
  * Retorna o next do primeiro match, ou default se nenhuma satisfeita.
+ *
+ * Operadores suportados:
+ *   eq, neq, gt, gte, lt, lte, contains  — comparação de valor
+ *   exists                                — tag @ctx presente com qualquer valor
+ *   confidence_gte                        — confiança da entry @ctx ≥ value
  */
 
-import { JSONPath } from "jsonpath-plus"
-import type { ChoiceStep } from "@plughub/schemas"
+import { JSONPath }          from "jsonpath-plus"
+import type { ChoiceStep, ContextEntry } from "@plughub/schemas"
 import type { StepContext, StepResult } from "../executor"
 
-export function executeChoice(
+export async function executeChoice(
   step: ChoiceStep,
   ctx:  StepContext
-): StepResult {
-  // Contexto de avaliação — pipeline_state + session
+): Promise<StepResult> {
+  // Contexto de avaliação para referências $.
   const evalContext = {
     pipeline_state: ctx.state.results,
     session:        ctx.sessionContext,
   }
 
   for (const condition of step.conditions) {
-    const fieldValue = resolveJsonPath(condition.field, evalContext)
-    if (evaluateCondition(fieldValue, condition.operator, condition.value)) {
+    const isCtxRef = condition.field.startsWith("@ctx.")
+
+    let matched: boolean
+
+    if (isCtxRef) {
+      // Lê a ContextEntry completa para poder avaliar exists e confidence_gte
+      const tag = condition.field.replace(/^@ctx\./, "")
+      const entry = ctx.contextStore
+        ? await ctx.contextStore.get(ctx.sessionId, tag, ctx.customerId)
+        : null
+
+      matched = evaluateCtxCondition(entry, condition.operator, condition.value)
+    } else {
+      const fieldValue = resolveJsonPath(condition.field, evalContext)
+      matched = evaluateCondition(fieldValue, condition.operator, condition.value)
+    }
+
+    if (matched) {
       return {
         next_step_id:      condition.next,
         transition_reason: "condition_match",
@@ -37,9 +58,10 @@ export function executeChoice(
   }
 }
 
+// ── Resolvers ─────────────────────────────────────────────────────────────────
+
 function resolveJsonPath(path: string, context: unknown): unknown {
   try {
-    // Remove o prefixo "$." e avalia sobre o contexto
     const results = JSONPath({ path, json: context as object, wrap: false })
     return results
   } catch {
@@ -47,6 +69,40 @@ function resolveJsonPath(path: string, context: unknown): unknown {
   }
 }
 
+// ── Evaluators ────────────────────────────────────────────────────────────────
+
+/**
+ * Avalia condições sobre uma ContextEntry do ContextStore.
+ * Suporta os operadores novos (exists, confidence_gte) além dos padrão.
+ */
+function evaluateCtxCondition(
+  entry:    ContextEntry | null,
+  operator: string,
+  expected: unknown,
+): boolean {
+  switch (operator) {
+    case "exists":
+      // Tag presente com qualquer valor (incluindo null/false/0)
+      return entry !== null
+
+    case "confidence_gte": {
+      // Confiança da entry >= value numérico
+      if (!entry) return false
+      const threshold = typeof expected === "number" ? expected : parseFloat(String(expected))
+      return !isNaN(threshold) && entry.confidence >= threshold
+    }
+
+    default:
+      // Para os demais operadores, avalia sobre o value da entry
+      return entry !== null
+        ? evaluateCondition(entry.value, operator, expected)
+        : false
+  }
+}
+
+/**
+ * Avalia condições de comparação de valor (operadores padrão).
+ */
 function evaluateCondition(
   fieldValue: unknown,
   operator:   string,

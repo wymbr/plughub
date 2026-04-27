@@ -12,6 +12,7 @@
 
 import type { Redis }          from "ioredis"
 import type { SkillFlow, PipelineState, CatchStrategy } from "@plughub/schemas"
+import type { IContextStore } from "./context-types"
 import { PipelineStateManager } from "./state"
 import { executeStep }          from "./executor"
 import type { StepContext, StepResult } from "./executor"
@@ -32,6 +33,13 @@ export interface SkillFlowEngineConfig {
     session_id:    string
     attempt:       number
   }) => Promise<unknown>
+  /**
+   * ContextStore unificado — acesso a @ctx.namespace.campo para steps que
+   * referenciam contexto via @ctx.*.
+   * Opcional — quando ausente, @ctx.* retorna undefined (não quebra o fluxo).
+   */
+  contextStore?: IContextStore
+
   /**
    * Arc 4 — Optional. Wired by workflow-api to persist WorkflowInstance to PostgreSQL
    * and calculate the business-hours deadline for a suspend step.
@@ -192,11 +200,32 @@ export class SkillFlowEngine {
     } else {
       // Novo pipeline — inicia do entry
       state = PipelineStateManager.create(skillId, flow.entry)
+
+      // ── required_context: computar @ctx.__gaps__ antes do primeiro step ──
+      // Se o skill declara required_context e há um ContextStore disponível,
+      // computa o GapsReport e armazena em pipeline_state.results["@ctx.__gaps__"].
+      // Steps de choice e reason podem referenciar esse valor para decidir se
+      // devem coletar informações faltantes antes de prosseguir.
+      if (flow.required_context?.length && this.config.contextStore) {
+        const gapsReport = await this.config.contextStore.getMissing(
+          sessionId,
+          flow.required_context,
+          customerId,
+        )
+        state = PipelineStateManager.setResult(state, "@ctx.__gaps__", gapsReport)
+      }
+
       await this.stateManager.save(tenantId, pipelineSessionId, state)
     }
 
     // Construir mapa de steps para lookup O(1)
-    const stepMap = new Map(flow.steps.map(s => [s.id, s]))
+    const stepMap     = new Map(flow.steps.map(s => [s.id, s]))
+    const stepsArray  = flow.steps
+
+    // ── Masked input — estado in-memory da transação ───────────────────────
+    // Estes valores existem apenas em memória e nunca são persistidos.
+    let maskedScope:          Record<string, string> = {}
+    let transactionOnFailure: string | null          = null
 
     // 2. Loop de execução
     while (true) {
@@ -210,20 +239,83 @@ export class SkillFlowEngine {
       // sessionId → usado para comms (notify, menu, MCP calls)
       // pipelineSessionId → usado para state/lock
       const ctx = this._buildContext(
-        tenantId, sessionId, pipelineSessionId, customerId, sessionContext, state, stepMap, instanceId, resumeContext
+        tenantId, sessionId, pipelineSessionId, customerId, sessionContext, state, stepMap, instanceId,
+        maskedScope, transactionOnFailure ?? null, resumeContext,
       )
 
       // Executar step
       const result = await executeStep(currentStep, ctx)
+
       // Sincronizar state — o step executor pode ter chamado ctx.saveState
       state = ctx.state
+
+      // Sincronizar estado in-memory da transação (mutados pelos executores)
+      maskedScope          = ctx.maskedScope
+      transactionOnFailure = ctx.transactionOnFailure
 
       // Persistir output do step no pipeline_state
       if (result.output_as && result.output_value !== undefined) {
         state = PipelineStateManager.setResult(state, result.output_as, result.output_value)
       }
 
-      // Verificar encerramento
+      // ── Marcadores internos de transação ────────────────────────────────
+
+      // begin_transaction: avança para o step seguinte na ordem do array
+      if (result.next_step_id === "__transaction_begin__") {
+        const currentIdx  = stepsArray.findIndex(s => s.id === currentStep.id)
+        const nextStep    = stepsArray[currentIdx + 1]
+        if (!nextStep) {
+          await this.stateManager.fail(tenantId, pipelineSessionId, state)
+          throw new Error(`begin_transaction sem step seguinte: ${currentStep.id}`)
+        }
+        state = PipelineStateManager.addTransition(
+          state, currentStep.id, nextStep.id, "on_success"
+        )
+        await this.stateManager.save(tenantId, pipelineSessionId, state)
+        continue
+      }
+
+      // end_transaction: limpa transactionOnFailure (já feito no executor);
+      // se on_success não foi declarado, avança para o step seguinte
+      if (result.next_step_id === "__transaction_end__") {
+        transactionOnFailure = null
+        const currentIdx  = stepsArray.findIndex(s => s.id === currentStep.id)
+        const nextStep    = stepsArray[currentIdx + 1]
+        if (nextStep) {
+          state = PipelineStateManager.addTransition(
+            state, currentStep.id, nextStep.id, "on_success"
+          )
+          await this.stateManager.save(tenantId, pipelineSessionId, state)
+          continue
+        }
+        // sem step seguinte → encerrar (equivale a complete)
+        await this.stateManager.complete(tenantId, pipelineSessionId, state)
+        return { outcome: "resolved", pipeline_state: { ...state, status: "completed" as const } }
+      }
+
+      // ── Detectar falha dentro de bloco de transação ──────────────────────
+      // Se estamos dentro de um begin_transaction (transactionOnFailure definido)
+      // e o step retornou on_failure, fazemos rewind para on_failure da transação.
+      if (
+        transactionOnFailure !== null &&
+        result.transition_reason === "on_failure"
+      ) {
+        const rewindTarget = transactionOnFailure
+        // Descartar masked_scope — nunca reutilizar valores sensíveis
+        maskedScope          = {}
+        transactionOnFailure = null
+        ctx.maskedScope          = {}
+        ctx.transactionOnFailure = null
+
+        state = PipelineStateManager.addTransition(
+          state, currentStep.id, rewindTarget, "on_failure"
+        )
+        await this.stateManager.save(tenantId, pipelineSessionId, state)
+        continue
+      }
+
+      // ── Verificar encerramento ───────────────────────────────────────────
+
       if (result.next_step_id === "__complete__") {
         state = PipelineStateManager.addTransition(
           state, currentStep.id, "__complete__", result.transition_reason
@@ -271,15 +363,17 @@ export class SkillFlowEngine {
   // ─────────────────────────────────────────────
 
   private _buildContext(
-    tenantId:          string,
-    sessionId:         string,
-    pipelineSessionId: string,
-    customerId:        string,
-    sessionContext:    Record<string, unknown>,
-    state:             PipelineState,
-    stepMap:           Map<string, SkillFlow["steps"][number]>,
-    instanceId:        string,
-    resumeContext?:    ResumeContext,
+    tenantId:             string,
+    sessionId:            string,
+    pipelineSessionId:    string,
+    customerId:           string,
+    sessionContext:       Record<string, unknown>,
+    state:                PipelineState,
+    stepMap:              Map<string, SkillFlow["steps"][number]>,
+    instanceId:           string,
+    maskedScope:          Record<string, string>,
+    transactionOnFailure: string | null,
+    resumeContext?:       ResumeContext,
   ): StepContext {
     const self = this
 
@@ -290,6 +384,13 @@ export class SkillFlowEngine {
       sessionContext,
       state,
       redis: self.config.redis,
+      // Masked input — in-memory transaction scope (mutable, never persisted)
+      maskedScope:          maskedScope,
+      transactionOnFailure: transactionOnFailure,
+
+      ...(self.config.contextStore
+        ? { contextStore: self.config.contextStore }
+        : {}),
 
       mcpCall: (tool, input, mcpServer) =>
         self.config.mcpCall(tool, input, mcpServer),

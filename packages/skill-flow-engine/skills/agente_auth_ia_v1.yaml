@@ -1,0 +1,132 @@
+# agente_auth_ia_v1.yaml
+#
+# Agente de autenticação segura via masked input.
+#
+# Fluxo atômico de captura de PIN:
+#   begin_transaction → coletar_pin (masked) → validar_pin (invoke)
+#   → verificar_resultado_pin (choice) → end_transaction → confirmação → resolved
+#
+# Falha de PIN (invalid): choice → pin_invalido (notify) → coletar_pin novamente
+#
+# Falha de MCP ou timeout: transaction rewind → falha_autenticacao → escalate
+#
+# Invariantes (spec: docs/guias/masked-input.md):
+#   - PIN nunca entra em pipeline_state, Redis, stream ou logs
+#   - @masked.pin_input só existe em memória durante o bloco
+#   - end_transaction persiste apenas { status:"ok", fields_collected:["pin_input"] }
+#   - Retry de PIN exige nova entrada do cliente (valor mascarado não é reutilizado)
+
+id: skill_auth_ia_v1
+name: "Auth IA v1 — verificação de identidade com PIN"
+version: "1.0"
+description: |
+  Fluxo de autenticação segura: solicita PIN ao cliente via interface mascarada,
+  valida via mcp-server-auth e registra resultado em pipeline_state (sem valores).
+classification:
+  type: orchestrator
+  domain: security
+
+entry: solicitar_inicio
+steps:
+
+    # ── Aviso inicial ao cliente ───────────────────────────────────────────────
+    - id: solicitar_inicio
+      type: notify
+      message: >
+        Para prosseguir, precisamos verificar sua identidade.
+        Você receberá uma solicitação para informar seu PIN de segurança.
+      on_success: tx_inicio
+      on_failure: falha_autenticacao
+
+    # ── Início da transação segura ─────────────────────────────────────────────
+    # on_failure: qualquer falha DENTRO do bloco (MCP throw, menu timeout, etc.)
+    # faz rewind aqui → falha_autenticacao
+    - id: tx_inicio
+      type: begin_transaction
+      on_failure: falha_autenticacao
+
+    # ── Coleta mascarada do PIN ────────────────────────────────────────────────
+    # masked: true → valor vai para ctx.maskedScope, NUNCA para pipeline_state
+    # @masked.pin_input referenciado pelo step validar_pin
+    - id: coletar_pin
+      type: menu
+      interaction: text
+      prompt: "Informe seu PIN de segurança (6 dígitos):"
+      timeout_s: 120
+      masked: true
+      output_as: pin_input
+      on_success: validar_pin
+      on_failure: falha_autenticacao
+      on_timeout: falha_autenticacao
+
+    # ── Validação do PIN via MCP ───────────────────────────────────────────────
+    # @masked.pin_input lê do maskedScope em memória — nunca de pipeline_state
+    # on_success → verificar_resultado_pin (choice verifica valid:true/false)
+    # on_failure (MCP throw) → engine rewind para falha_autenticacao (via transactionOnFailure)
+    - id: validar_pin
+      type: invoke
+      target:
+        mcp_server: mcp-server-auth
+        tool: validate_pin
+      input:
+        customer_id: "@ctx.caller.customer_id"
+        pin: "@masked.pin_input"
+      output_as: validacao_pin
+      on_success: verificar_resultado_pin
+      on_failure: falha_autenticacao
+
+    # ── Verificação do resultado: valid true → tx_fim | valid false → repetir ─
+    # O invoke step só checa se o MCP threw; esta choice verifica o conteúdo.
+    - id: verificar_resultado_pin
+      type: choice
+      conditions:
+        - field: "$.pipeline_state.validacao_pin.valid"
+          operator: eq
+          value: true
+          next: tx_fim
+      default: pin_invalido
+
+    # ── Notificação de PIN inválido — re-solicita entrada ─────────────────────
+    # Retorna a tx_inicio para: (1) limpar maskedScope, (2) limpar sentinelas
+    # de invocação (ex: validar_pin:__invoked__) para que validar_pin
+    # seja re-executado com o novo PIN — não retorne o resultado cacheado.
+    - id: pin_invalido
+      type: notify
+      message: "PIN inválido. Verifique e tente novamente (6 dígitos, começando com 1 para o demo)."
+      on_success: tx_inicio
+      on_failure: falha_autenticacao
+
+    # ── Fim da transação — persiste apenas metadados, descarta PIN da memória ──
+    - id: tx_fim
+      type: end_transaction
+      result_as: auth_status
+      on_success: confirmacao
+
+    # ── Confirmação ao cliente ─────────────────────────────────────────────────
+    - id: confirmacao
+      type: notify
+      message: "Identidade verificada com sucesso. ✅ Podemos prosseguir."
+      on_success: concluir
+      on_failure: concluir
+
+    - id: concluir
+      type: complete
+      outcome: resolved
+
+    # ── Caminho de falha — fora do bloco masked ───────────────────────────────
+    # on_failure do begin_transaction aponta aqui.
+    # Todos os valores mascarados já foram descartados pelo rewind.
+    - id: falha_autenticacao
+      type: notify
+      message: >
+        Não foi possível verificar sua identidade no momento.
+        Um de nossos especialistas irá atendê-lo em seguida.
+      on_success: encerrar_escalado
+      on_failure: encerrar_escalado
+
+    - id: encerrar_escalado
+      type: escalate
+      target:
+        pool: retencao_humano
+      context: pipeline_state
+      handoff_reason: "Falha na autenticação — requer atendimento humano"

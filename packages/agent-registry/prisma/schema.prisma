@@ -29,6 +29,7 @@ model Pool {
   evaluation_template_id String?
   supervisor_config      Json?
   queue_config           Json?
+  mentionable_pools      Json?   // Record<alias, pool_id> — @mention routing config
 
   created_at  DateTime @default(now())
   updated_at  DateTime @updatedAt
@@ -158,7 +159,7 @@ model Skill {
   description String
 
   classification     Json
-  instruction        Json
+  instruction        Json?   // null for orchestrator skills whose behaviour is defined by flow
   tools              Json    @default("[]")
   interface_schema   Json?
   evaluation         Json?

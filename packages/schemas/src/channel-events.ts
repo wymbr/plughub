@@ -92,6 +92,16 @@ export const OutboundEventSchema = z.object({
 
   /** Segundos até o timeout de coleta do cliente (0 = imediato, -1 = indefinido) */
   timeout_s: z.number().int().min(-1).optional(),
+  /**
+   * IDs dos campos que devem ser capturados com input mascarado.
+   * Presente quando o step menu tem masked: true (step-level) ou campos
+   * individuais com masked: true (field-level).
+   * O Channel Gateway usa esta lista para:
+   *   - Renderizar o formulário em overlay seguro (webchat)
+   *   - Usar <input type="password"> para esses campos
+   *   - Executar masked_fallback se o canal não suportar masked input
+   */
+  masked_fields: z.array(z.string()).optional(),
 })
 export type OutboundEvent = z.infer<typeof OutboundEventSchema>
 
@@ -115,6 +125,34 @@ export const ChannelCapabilitiesSchema = z.object({
   supports_rich_media: z.boolean().default(false),  // image, video, audio
   supports_location:   z.boolean().default(false),
   supports_template:   z.boolean().default(false),
+  /**
+   * Quando true, o canal suporta captura mascarada de dados sensíveis.
+   * O Channel Gateway renderiza o formulário em overlay seguro e nunca
+   * expõe valores mascarados no DOM / histórico de mensagens.
+   *
+   * Canal          supports_masked_input
+   * webchat        true  — overlay/modal + <input type="password">
+   * voice          true  — DTMF nativo (mascarado por natureza)
+   * whatsapp       false — executa masked_fallback
+   * sms            false — executa masked_fallback
+   * email          false — executa masked_fallback
+   *
+   * Default: false (seguro por omissão)
+   */
+  supports_masked_input: z.boolean().default(false),
+  /**
+   * Comportamento quando supports_masked_input = false e um step masked chega.
+   *   "message"  — envia mensagem configurável ao cliente (padrão MVP)
+   *   "link"     — gera URL one-time para webchat seguro (Horizonte 2)
+   *   "decline"  — recusa a operação com mensagem de erro
+   * Default: "message"
+   */
+  masked_fallback:        z.enum(["message", "link", "decline"]).default("message"),
+  /**
+   * Mensagem enviada ao cliente quando masked_fallback = "message".
+   * Suporta interpolação simples com {{canal}} etc.
+   */
+  masked_fallback_message: z.string().optional(),
 })
 export type ChannelCapabilities = z.infer<typeof ChannelCapabilitiesSchema>
 

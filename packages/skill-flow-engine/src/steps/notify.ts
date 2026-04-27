@@ -34,7 +34,7 @@ export async function executeNotify(
     }
   }
 
-  const message = interpolate(step.message, ctx)
+  const message = await interpolate(step.message, ctx, ctx.contextStore)
 
   // ── Fase 1: gravar sentinel "dispatched" antes de enviar ─────────────────
   ctx.state = {
@@ -48,6 +48,7 @@ export async function executeNotify(
       session_id: ctx.sessionId,
       message,
       channel:    step.channel ?? "session",
+      visibility: step.visibility ?? "all",
     })
 
     // ── Fase 2: gravar sentinel "completed" após envio ───────────────────

@@ -1,14 +1,21 @@
 /**
  * ContextoTab
  * Shows:
- *   1. Contact Context card — structured fields enriched by agente_contexto_ia_v1
- *      before human handoff (nome, CPF, motivo_contato, etc.)
- *   2. Historical insights — long-term memory from previous contacts
- *   3. Conversation insights — session-scoped insights
+ *   1. ContextSnapshotCard — flat ContextStore snapshot keyed by tag name
+ *      (new format: context_snapshot present → preferred)
+ *   2. ContactContextCard  — legacy structured fields (contact_context fallback)
+ *   3. Historical insights — long-term memory from previous contacts
+ *   4. Conversation insights — session-scoped insights
  */
 
 import React from "react";
-import { ContactContextData, ContactContextField, CustomerContext, InsightItem } from "../../types";
+import {
+  ContactContextData,
+  ContactContextField,
+  ContextEntry,
+  CustomerContext,
+  InsightItem,
+} from "../../types";
 
 interface ContextoTabProps {
   context: CustomerContext | null;
@@ -48,7 +55,65 @@ function sourceLabel(source: string): string {
     insight_conversa: "conversa",
     pipeline_state:   "sessão",
   };
-  return labels[source] ?? source;
+  // Handle prefixed sources like "mcp_call:mcp-server-crm:customer_get"
+  // or "ai_inferred:sentiment_emitter"
+  const prefix = source.split(":")[0];
+  return labels[source] ?? labels[prefix] ?? source;
+}
+
+/** Human-readable label for a ContextStore tag name. */
+function tagLabel(tag: string): string {
+  const wellKnown: Record<string, string> = {
+    "caller.nome":               "Nome",
+    "caller.cpf":                "CPF",
+    "caller.account_id":         "Conta",
+    "caller.telefone":           "Telefone",
+    "caller.email":              "E-mail",
+    "caller.motivo_contato":     "Motivo",
+    "caller.intencao_primaria":  "Intenção",
+    "caller.sentimento_atual":   "Sentimento",
+    "caller.customer_id":        "Customer ID",
+    "session.escalar_solicitado": "Escalar?",
+    "session.ultima_resposta":   "Última resposta IA",
+    "session.historico_mensagens": "Histórico",
+    "session.pergunta_coleta":   "Pergunta coleta",
+    "session.sentimento.current":   "Score sentimento",
+    "session.sentimento.categoria": "Categoria sentimento",
+    "account.plano_atual":       "Plano",
+    "account.status_conta":      "Status conta",
+  };
+  if (wellKnown[tag]) return wellKnown[tag];
+  // Strip namespace prefix for display: "caller.nome" → "nome"
+  const parts = tag.split(".");
+  return parts[parts.length - 1].replace(/_/g, " ");
+}
+
+/** Group ContextStore tags by namespace (first segment before the dot). */
+function groupByNamespace(
+  snapshot: Record<string, ContextEntry>
+): Array<{ ns: string; label: string; entries: Array<{ tag: string; entry: ContextEntry }> }> {
+  const nsLabels: Record<string, string> = {
+    caller:  "Caller",
+    session: "Sessão",
+    account: "Conta",
+  };
+  const groups: Record<string, Array<{ tag: string; entry: ContextEntry }>> = {};
+  for (const [tag, entry] of Object.entries(snapshot)) {
+    const ns = tag.includes(".") ? tag.split(".")[0] : "outros";
+    if (!groups[ns]) groups[ns] = [];
+    groups[ns].push({ tag, entry });
+  }
+  // Canonical order: caller, session, account, then alphabetically
+  const orderedNs = ["caller", "session", "account", ...Object.keys(groups).filter(
+    (ns) => !["caller", "session", "account"].includes(ns)
+  ).sort()];
+  return orderedNs
+    .filter((ns) => groups[ns]?.length)
+    .map((ns) => ({
+      ns,
+      label: nsLabels[ns] ?? ns.charAt(0).toUpperCase() + ns.slice(1),
+      entries: groups[ns],
+    }));
 }
 
 // ── ContactContextCard ────────────────────────────────────────────────────────
@@ -125,6 +190,79 @@ const ContactContextCard: React.FC<{ cc: ContactContextData }> = ({ cc }) => {
   );
 };
 
+// ── ContextSnapshotCard (new ContextStore format) ────────────────────────────
+
+interface CtxFieldRowProps {
+  tag:   string;
+  entry: ContextEntry;
+}
+
+const CtxFieldRow: React.FC<CtxFieldRowProps> = ({ tag, entry }) => {
+  const displayValue =
+    entry.value === null || entry.value === undefined
+      ? "—"
+      : typeof entry.value === "object"
+      ? JSON.stringify(entry.value)
+      : String(entry.value);
+
+  return (
+    <div className="flex items-start gap-2 py-1.5 border-b border-gray-100 last:border-0">
+      <span className="text-xs text-gray-500 w-32 shrink-0 pt-0.5 capitalize">
+        {tagLabel(tag)}
+      </span>
+      <div className="flex-1 min-w-0">
+        <span className="text-sm font-medium text-gray-900 break-all">{displayValue}</span>
+        <div className="flex gap-1.5 mt-0.5 flex-wrap">
+          <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium ${confidenceColor(entry.confidence)}`}>
+            {confidenceLabel(entry.confidence)}
+          </span>
+          <span className="text-[10px] text-gray-400 py-0.5">
+            via {sourceLabel(entry.source)}
+          </span>
+          {entry.visibility === "agents_only" && (
+            <span className="text-[10px] text-amber-600 py-0.5">🔒 agentes</span>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+};
+
+const ContextSnapshotCard: React.FC<{ snapshot: Record<string, ContextEntry> }> = ({ snapshot }) => {
+  const groups = groupByNamespace(snapshot);
+  if (groups.length === 0) return null;
+
+  return (
+    <section className="bg-teal-50 border border-teal-200 rounded-lg overflow-hidden">
+      {/* Header */}
+      <div className="flex items-center justify-between px-3 py-2 bg-teal-100 border-b border-teal-200">
+        <span className="text-xs font-semibold text-teal-800 uppercase tracking-wide">
+          Context Store
+        </span>
+        <span className="text-[10px] text-teal-600 font-medium">
+          {Object.keys(snapshot).length} campos
+        </span>
+      </div>
+
+      {/* Groups */}
+      {groups.map(({ ns, label, entries }) => (
+        <div key={ns}>
+          <div className="px-3 pt-2 pb-0.5">
+            <span className="text-[10px] font-semibold text-teal-700 uppercase tracking-wider">
+              {label}
+            </span>
+          </div>
+          <div className="px-3 pb-1">
+            {entries.map(({ tag, entry }) => (
+              <CtxFieldRow key={tag} tag={tag} entry={entry} />
+            ))}
+          </div>
+        </div>
+      ))}
+    </section>
+  );
+};
+
 // ── InsightCard ───────────────────────────────────────────────────────────────
 
 const InsightCard: React.FC<{ item: InsightItem; historical: boolean }> = ({
@@ -166,13 +304,25 @@ export const ContextoTab: React.FC<ContextoTabProps> = ({ context }) => {
     );
   }
 
-  const { historical_insights, conversation_insights, contact_context } = context;
+  const {
+    historical_insights,
+    conversation_insights,
+    contact_context,
+    context_snapshot,
+  } = context;
 
   return (
     <div className="flex flex-col gap-4 p-3 overflow-y-auto h-full">
 
-      {/* ── Contact Context (from agente_contexto_ia_v1) ── */}
-      {contact_context && <ContactContextCard cc={contact_context} />}
+      {/* ── ContextStore snapshot (new, preferred) ── */}
+      {context_snapshot && Object.keys(context_snapshot).length > 0 && (
+        <ContextSnapshotCard snapshot={context_snapshot} />
+      )}
+
+      {/* ── Legacy Contact Context (fallback when no context_snapshot) ── */}
+      {!context_snapshot && contact_context && (
+        <ContactContextCard cc={contact_context} />
+      )}
 
       {/* ── Historical Insights ── */}
       <section>

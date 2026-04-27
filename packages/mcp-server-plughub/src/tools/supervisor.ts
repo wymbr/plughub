@@ -124,56 +124,58 @@ export function registerSupervisorTools(server: McpServer, deps: SupervisorDeps)
         } catch { /* non-fatal */ }
       }
 
-      // 6b. Read contact_context from pipeline_state (written by agente_contexto_ia_v1)
-      //     Key: {tenant_id}:pipeline:{session_id} → { results: { contexto_final: { contact_context: {...} } } }
-      let contactContext: Record<string, unknown> | null = null
+      // 6b. Read context snapshot from ContextStore (written by agents via ContextAccumulator)
+      //     Primary source (v2): {tenant_id}:ctx:{session_id} — Redis hash
+      //     Fields: "caller.nome", "caller.cpf", "account.plano_atual", etc.
+      //     Values: JSON-serialized ContextEntry { value, confidence, source, visibility, updated_at }
+      //
+      //     Fallback (v1, legacy): pipeline_state contact_context search.
+      //     Can be removed once all agents are migrated to ContextStore.
+      let contextSnapshot: Record<string, unknown> | null = null
+
       if (tenantId) {
+        try {
+          const hash = await redis.hgetall(`${tenantId}:ctx:${parsed.session_id}`)
+          if (hash && Object.keys(hash).length > 0) {
+            // Parse each field as ContextEntry, expose as flat tag→entry map
+            // Grouped by namespace (caller.*, account.*, session.*) for easy UI consumption
+            const parsed_entries: Record<string, unknown> = {}
+            for (const [tag, raw] of Object.entries(hash)) {
+              try {
+                parsed_entries[tag] = JSON.parse(raw) as unknown
+              } catch {
+                parsed_entries[tag] = raw
+              }
+            }
+            contextSnapshot = parsed_entries
+          }
+        } catch { /* non-fatal — ContextStore not yet populated for this session */ }
+      }
+
+      // Legacy fallback: read contact_context from pipeline_state
+      // Used when agente_contexto_ia_v1 v1 (pre-ContextStore) ran in this session.
+      let contactContext: Record<string, unknown> | null = null
+      if (!contextSnapshot && tenantId) {
         try {
           const pipelineRaw = await redis.get(`${tenantId}:pipeline:${parsed.session_id}`)
           if (pipelineRaw) {
             const pipeline = JSON.parse(pipelineRaw) as Record<string, unknown>
             const results  = pipeline["results"] as Record<string, unknown> | undefined
             if (results) {
-              // 1. Top-level merge (written by runDelegationJob before task.ts overwrites)
-              if (results["contact_context"] && typeof results["contact_context"] === "object") {
-                contactContext = results["contact_context"] as Record<string, unknown>
-
-              // 2. task step stores full specialist results as results.acumular_contexto
-              //    → results.acumular_contexto.contexto_final.contact_context
-              } else {
-                const acumularCtx = results["acumular_contexto"] as Record<string, unknown> | undefined
-                const contextoFinalNested = acumularCtx?.["contexto_final"] as Record<string, unknown> | undefined
-                if (contextoFinalNested?.["contact_context"] && typeof contextoFinalNested["contact_context"] === "object") {
-                  contactContext = contextoFinalNested["contact_context"] as Record<string, unknown>
-
-                // 3. Direct contexto_final at results root (edge case)
-                } else {
-                  const contextoFinal = results["contexto_final"] as Record<string, unknown> | undefined
-                  if (contextoFinal?.["contact_context"] && typeof contextoFinal["contact_context"] === "object") {
-                    contactContext = contextoFinal["contact_context"] as Record<string, unknown>
-
-                  // 4. Generic deep search: check every top-level result value for contact_context
-                  //    Covers specialist skills that use a different output_as name
-                  } else {
-                    for (const val of Object.values(results)) {
-                      if (val && typeof val === "object") {
-                        const nested = val as Record<string, unknown>
-                        // One level deep
-                        if (nested["contact_context"] && typeof nested["contact_context"] === "object") {
-                          contactContext = nested["contact_context"] as Record<string, unknown>
-                          break
-                        }
-                        // Two levels deep (e.g. results.acumular_contexto.contexto_final.contact_context)
-                        for (const innerVal of Object.values(nested)) {
-                          if (innerVal && typeof innerVal === "object") {
-                            const inner = innerVal as Record<string, unknown>
-                            if (inner["contact_context"] && typeof inner["contact_context"] === "object") {
-                              contactContext = inner["contact_context"] as Record<string, unknown>
-                              break
-                            }
-                          }
-                        }
-                        if (contactContext) break
+              // Search for contact_context up to two levels deep
+              outer: for (const val of Object.values(results)) {
+                if (val && typeof val === "object") {
+                  const nested = val as Record<string, unknown>
+                  if (nested["contact_context"] && typeof nested["contact_context"] === "object") {
+                    contactContext = nested["contact_context"] as Record<string, unknown>
+                    break outer
+                  }
+                  for (const inner of Object.values(nested)) {
+                    if (inner && typeof inner === "object") {
+                      const d = inner as Record<string, unknown>
+                      if (d["contact_context"] && typeof d["contact_context"] === "object") {
+                        contactContext = d["contact_context"] as Record<string, unknown>
+                        break outer
                       }
                     }
                   }
@@ -219,7 +221,13 @@ export function registerSupervisorTools(server: McpServer, deps: SupervisorDeps)
               historical_insights:   ctxInsights,
               conversation_insights: turns
                 .flatMap((t) => (t["insights"] as unknown[]) ?? []),
-              contact_context: contactContext,
+              // context_snapshot: unified ContextStore snapshot (v2)
+              // Keys: "caller.nome", "caller.cpf", "account.plano_atual", etc.
+              // Values: ContextEntry { value, confidence, source, updated_at }
+              context_snapshot: contextSnapshot,
+              // contact_context: legacy field from pipeline_state (v1 — backward compat)
+              // Present only when ContextStore snapshot is absent.
+              contact_context: contextSnapshot ? null : contactContext,
             },
           }),
         }],

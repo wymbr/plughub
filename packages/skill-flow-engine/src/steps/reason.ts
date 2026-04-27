@@ -6,18 +6,28 @@
  * Invoca o AI Gateway com prompt declarado e output_schema.
  * O AI Gateway valida o retorno contra o schema antes de retornar.
  * max_format_retries: número de tentativas de correção de formato (default: 1).
+ *
+ * context_tags (Opção A — declaração explícita):
+ *   Após execução bem-sucedida do LLM, os campos mapeados em
+ *   step.context_tags.outputs são escritos no ContextStore automaticamente.
+ *   O engine passa ctx.contextStore para o step; se ausente, o step ignora silenciosamente.
  */
 
-import { JSONPath } from "jsonpath-plus"
-import { z }        from "zod"
-import type { ReasonStep } from "@plughub/schemas"
+import { JSONPath }              from "jsonpath-plus"
+import type { ReasonStep }       from "@plughub/schemas"
 import type { StepContext, StepResult } from "../executor"
+import { resolveInputMap }       from "../interpolate"
+import { extractOutputsToCtx }   from "../context-accumulator-util"
 
 export async function executeReason(
   step: ReasonStep,
   ctx:  StepContext
 ): Promise<StepResult> {
-  const resolvedInput = resolveInput(step.input ?? {}, ctx)
+  const resolvedInput = await resolveInputMap(
+    step.input ?? {} as Record<string, unknown>,
+    ctx,
+    ctx.contextStore,
+  )
   const maxRetries    = step.max_format_retries ?? 1
 
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
@@ -33,6 +43,18 @@ export async function executeReason(
       // Validar retorno contra output_schema
       const validated = validateAgainstSchema(result, step.output_schema)
       if (validated.success) {
+        // ── context_tags (Opção A): escrever outputs no ContextStore ─────────
+        if (step.context_tags?.outputs && ctx.contextStore) {
+          await extractOutputsToCtx(
+            ctx.contextStore,
+            ctx.sessionId,
+            ctx.customerId,
+            step.context_tags.outputs,
+            validated.data,
+            `ai_inferred:${step.id}`,
+          )
+        }
+
         return {
           next_step_id:      step.on_success,
           output_as:         step.output_as,
@@ -123,7 +145,9 @@ function validateAgainstSchema(
   return { success: true, data }
 }
 
-function resolveInput(
+// Keep JSONPath for backward compat — resolveInputMap handles both $. and @ctx.
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+function _resolveInputLegacy(
   input:   Record<string, string | number | boolean>,
   ctx:     StepContext
 ): Record<string, unknown> {

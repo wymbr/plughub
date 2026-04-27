@@ -70,3 +70,11 @@ export type {
   CallOptions,
   McpInterceptorError,
 }                                      from "./mcp-interceptor"
+
+// ── ContextStore ─────────────────────────────
+export { ContextStore }                from "./context-store"
+export type { ContextStoreConfig }     from "./context-store"
+
+// ── ContextAccumulator ───────────────────────
+export { ContextAccumulator }          from "./context-accumulator"
+export type { ContextAccumulatorConfig } from "./context-accumulator"

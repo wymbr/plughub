@@ -118,6 +118,25 @@ export const PoolRegistrationSchema = z.object({
   evaluation_template_id: z.string().optional(),
   supervisor_config:      SupervisorConfigSchema.optional(),
   queue_config:           QueueConfigSchema.optional(),
+  /**
+   * Mapa alias → pool_id dos agentes que podem ser endereçados via @mention
+   * por participantes desta fila (role: primary ou human).
+   *
+   * Domínio fechado — apenas aliases declarados aqui têm efeito de roteamento.
+   * Aliases não declarados são texto inerte (entregues normalmente sem roteamento).
+   *
+   * Exemplo:
+   *   mentionable_pools:
+   *     copilot:  copilot_retencao     # @copilot → pool copilot_retencao
+   *     billing:  billing_especialista # @billing → pool billing_especialista
+   */
+  mentionable_pools:      z.record(z.string()).optional(),
+  /**
+   * skill_id do Co-pilot associado a esta fila.
+   * Quando presente, o orchestrator-bridge auto-lança uma instância do Co-pilot
+   * assim que um agente humano entra na sessão.
+   */
+  copilot_skill_id:       z.string().optional(),
 })
 export type PoolRegistration = z.infer<typeof PoolRegistrationSchema>
 

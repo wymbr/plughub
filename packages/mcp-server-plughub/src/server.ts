@@ -32,6 +32,7 @@ import { createRedisClient }       from "./infra/redis"
 import { createKafkaProducer }     from "./infra/kafka"
 import { createRegistryClient }    from "./infra/registry-client"
 import { createPostgresClient }    from "./infra/postgres"
+import { parseMentions }           from "./lib/mention-parser"
 
 // ─────────────────────────────────────────────
 // Configuração do servidor
@@ -715,11 +716,14 @@ export async function startServer(config: ServerConfig): Promise<void> {
 
   httpServer.on("upgrade", (request, socket, head) => {
     const url = new URL(request.url ?? "", `http://${request.headers.host}`)
+    console.log(`[upgrade] method=${request.method} pathname=${url.pathname} host=${request.headers.host} upgrade=${request.headers.upgrade}`)
     if (url.pathname === "/agent/ws") {
+      console.log(`[upgrade] Handling WebSocket upgrade for pool=${url.searchParams.get("pool")}`)
       wss.handleUpgrade(request, socket, head, (ws) => {
         wss.emit("connection", ws, request)
       })
     } else {
+      console.log(`[upgrade] Unknown path ${url.pathname} — destroying socket`)
       socket.destroy()
     }
   })
@@ -727,6 +731,7 @@ export async function startServer(config: ServerConfig): Promise<void> {
   wss.on("connection", (ws: WebSocket, request: http.IncomingMessage) => {
     const url    = new URL(request.url ?? "", `http://${request.headers.host}`)
     const poolId = url.searchParams.get("pool") ?? ""
+    console.log(`[agent-ws] New WebSocket connection: pool=${poolId} from=${request.socket.remoteAddress}`)
 
     // All sessions currently subscribed on this WebSocket connection.
     // There is intentionally NO concept of "active session" here — every assigned
@@ -965,6 +970,134 @@ export async function startServer(config: ServerConfig): Promise<void> {
           }
         } catch { /* use webchat fallback */ }
 
+        // ── @mention detection ─────────────────────────────────────────────────
+        // If the human agent's message contains @aliases (e.g. "@copilot ativa"),
+        // the message must NOT be delivered to the customer. Instead:
+        //   1. Write to session stream as agents_only (visible to all agents)
+        //   2. Echo to all agents via Redis pub/sub so their UIs update
+        //   3. Route each @alias → conversations.inbound with mode: "assist" so
+        //      the Routing Engine invites the matching specialist pool
+        // This matches the PlugHub spec: "routing is additive, not substitutive".
+        const tenantIdForMentions = agentTenantId || (process.env["PLUGHUB_TENANT_ID"] ?? "tenant_demo")
+        const mentionParsed = parseMentions(msgText)
+
+        if (mentionParsed.has_mentions) {
+          const messageId = crypto.randomUUID()
+
+          // 1. Write to session stream as agents_only
+          try {
+            await (redis as any).xadd(
+              `session:${targetSessionId}:stream`,
+              "*",
+              "event_id",   messageId,
+              "type",       "message",
+              "timestamp",  msgTs,
+              "author",     JSON.stringify({
+                participant_id: agentInstanceId || poolId,
+                instance_id:    agentInstanceId || poolId,
+                type:           "agent_human",
+              }),
+              "visibility", JSON.stringify("agents_only"),
+              "payload",    JSON.stringify({ message_id: messageId, text: msgText }),
+            )
+          } catch { /* non-fatal — stream may not exist yet */ }
+
+          // 2. Echo to all agents via Redis pub/sub (the Agent Assist UI listens here)
+          try {
+            await redis.publish(`agent:events:${targetSessionId}`, JSON.stringify({
+              type:       "message.text",
+              message_id: messageId,
+              author:     {
+                type: "agent_human",
+                id:   agentInstanceId || poolId,
+              },
+              text:       msgText,
+              timestamp:  msgTs,
+              visibility: "agents_only",
+            }))
+          } catch { /* non-fatal */ }
+
+          // 3. Route each @alias to the corresponding specialist pool.
+          //    Two events per alias:
+          //      a) mention_routing:true — for command dispatch to an ALREADY-ACTIVE specialist
+          //         (handled by orchestrator-bridge process_mention_routing)
+          //      b) Full ConversationInboundEvent with conference_id — for the Routing Engine to
+          //         ALLOCATE the specialist when it is not yet running in this session
+          //         (routing engine validates required fields; conference_id signals conference mode)
+          try {
+            // Read session metadata once to get customer_id and channel for the routing event
+            let customerIdForInbound = ""
+            let channelForInbound    = "webchat"
+            try {
+              const metaRaw = await redis.get(`session:${targetSessionId}:meta`)
+              if (metaRaw) {
+                const meta = JSON.parse(metaRaw) as Record<string, string>
+                if (meta["customer_id"]) customerIdForInbound = meta["customer_id"]
+                if (meta["channel"])     channelForInbound    = meta["channel"]
+              }
+              if (!customerIdForInbound) {
+                const cidRaw = await redis.get(`session:${targetSessionId}:contact_id`)
+                if (cidRaw) customerIdForInbound = cidRaw
+              }
+            } catch { /* use defaults */ }
+
+            const poolConfigRaw = await redis.get(`${tenantIdForMentions}:pool_config:${poolId}`)
+            if (poolConfigRaw) {
+              const poolConfig = JSON.parse(poolConfigRaw) as Record<string, unknown>
+              const mentionablePools =
+                poolConfig["mentionable_pools"] &&
+                typeof poolConfig["mentionable_pools"] === "object"
+                  ? (poolConfig["mentionable_pools"] as Record<string, string>)
+                  : {}
+
+              for (const mention of mentionParsed.mentions) {
+                const targetPoolId = mentionablePools[mention.alias]
+                if (!targetPoolId) {
+                  console.log(`[agent-ws] @mention alias "${mention.alias}" not in mentionable_pools of pool "${poolId}" — skipping`)
+                  continue
+                }
+                console.log(`[agent-ws] @mention routing: alias="${mention.alias}" → pool="${targetPoolId}" session="${targetSessionId}"`)
+
+                // (a) mention_routing event — dispatches commands to an already-active specialist
+                await kafka.publish("conversations.inbound", {
+                  mention_routing:     true,
+                  session_id:          targetSessionId,
+                  tenant_id:           tenantIdForMentions,
+                  pool_id:             targetPoolId,
+                  alias:               mention.alias,
+                  mention_text:        mention.args_raw || "",
+                  from_participant_id: agentInstanceId || poolId,
+                  from_pool_id:        poolId,
+                  timestamp:           msgTs,
+                })
+
+                // (b) Full ConversationInboundEvent — allocates the specialist via Routing Engine
+                //     when not yet active. conference_id = session_id signals conference/assist mode.
+                //     The orchestrator-bridge process_routed dedup guard prevents double-activation
+                //     when the specialist is already running.
+                await kafka.publish("conversations.inbound", {
+                  session_id:   targetSessionId,
+                  tenant_id:    tenantIdForMentions,
+                  customer_id:  customerIdForInbound || targetSessionId,
+                  channel:      channelForInbound,
+                  pool_id:      targetPoolId,
+                  conference_id: targetSessionId,  // signals conference/assist mode to routing engine
+                  started_at:   new Date().toISOString(),
+                  elapsed_ms:   0,
+                })
+              }
+            } else {
+              console.log(`[agent-ws] No pool_config found for pool "${poolId}" in tenant "${tenantIdForMentions}" — @mention routing skipped`)
+            }
+          } catch (err) {
+            console.error("[agent-ws] @mention routing error (non-fatal):", err)
+          }
+
+          // Skip conversations.outbound — @mention messages are agents_only
+          return
+        }
+
+        // Normal (non-@mention) message: deliver to customer via outbound consumer
         await kafka.publish("conversations.outbound", {
           type:       "message.text",
           contact_id: contactId,

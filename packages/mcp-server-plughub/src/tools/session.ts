@@ -35,7 +35,8 @@ import {
 } from "../infra/jwt"
 import { MaskingService }  from "../lib/masking"
 import { TokenVault }      from "../lib/token-vault"
-import { emitMessageSent } from "../lib/usage-emitter"
+import { emitMessageSent }  from "../lib/usage-emitter"
+import { parseMentions }    from "../lib/mention-parser"
 
 // ─── Dependências injetadas ───────────────────────────────────────────────────
 
@@ -139,6 +140,105 @@ const SessionChannelChangeInputSchema = z.object({
   to_channel:     ChannelSchema,
   reason:         z.string().optional(),
 })
+
+// ─── @mention routing ────────────────────────────────────────────────────────
+
+interface RouteMentionsParams {
+  text:          string
+  tenantId:      string
+  sessionId:     string
+  participantId: string
+  instanceId:    string
+  redis:         RedisClient
+  kafka:         KafkaProducer
+  timestamp:     string
+}
+
+/**
+ * routeMentions — resolves @alias tokens in a human agent's message and
+ * auto-invites the corresponding pool for each valid mention.
+ *
+ * Fire-and-forget: all errors are swallowed — mention failures never
+ * block message delivery.
+ *
+ * Algorithm:
+ *   1. Parse @alias tokens from text (skip if none)
+ *   2. Look up sender's pool via instance hash
+ *   3. Load pool_config to get mentionable_pools
+ *   4. For each mention, resolve alias → pool_id
+ *   5. Resolve @ctx.* args from ContextStore
+ *   6. Publish conversations.inbound with mode: "assist" for each resolved pool
+ */
+async function routeMentions(p: RouteMentionsParams): Promise<void> {
+  const { text, tenantId, sessionId, participantId, instanceId, redis, kafka, timestamp } = p
+
+  try {
+    const parsed = parseMentions(text)
+    if (!parsed.has_mentions) return
+
+    // ── 1. Get sender's pool_id from instance hash ────────────────────────
+    let senderPoolId: string | null = null
+    try {
+      senderPoolId = await redis.hget(`${tenantId}:instance:${instanceId}`, "pool_id")
+    } catch { /* non-fatal */ }
+
+    if (!senderPoolId) return  // cannot determine domain — skip routing
+
+    // ── 2. Load mentionable_pools from pool config ────────────────────────
+    let mentionablePools: Record<string, string> = {}
+    try {
+      const poolConfigRaw = await redis.get(`${tenantId}:pool_config:${senderPoolId}`)
+      if (poolConfigRaw) {
+        const poolConfig = JSON.parse(poolConfigRaw) as Record<string, unknown>
+        if (poolConfig["mentionable_pools"] && typeof poolConfig["mentionable_pools"] === "object") {
+          mentionablePools = poolConfig["mentionable_pools"] as Record<string, string>
+        }
+      }
+    } catch { /* non-fatal — no mentionable pools configured */ }
+
+    // ── 3. Route each mention ─────────────────────────────────────────────
+    for (const mention of parsed.mentions) {
+      const targetPoolId = mentionablePools[mention.alias]
+      if (!targetPoolId) continue  // unknown alias — silently skip
+
+      // ── 4. Resolve @ctx.* args from ContextStore ──────────────────────
+      const resolvedArgs: Record<string, string> = {}
+      for (const ref of mention.ctx_refs) {
+        try {
+          const entryRaw = await (redis as any).hget(
+            `${tenantId}:ctx:${sessionId}`,
+            ref.field
+          )
+          if (entryRaw) {
+            const entry = JSON.parse(entryRaw) as { value?: unknown }
+            resolvedArgs[ref.field] = String(entry.value ?? ref.fallback)
+          } else {
+            resolvedArgs[ref.field] = ref.fallback
+          }
+        } catch {
+          resolvedArgs[ref.field] = ref.fallback
+        }
+      }
+
+      // ── 5. Auto-invite target pool ────────────────────────────────────
+      try {
+        await kafka.publish("conversations.inbound", {
+          session_id:           sessionId,
+          tenant_id:            tenantId,
+          mode:                 "assist",        // parallel, not transfer
+          mention_routing:      true,            // distinguishes from regular task-step invites
+          from_participant_id:  participantId,
+          from_pool_id:         senderPoolId,
+          alias:                mention.alias,
+          pool_id:              targetPoolId,
+          mention_args:         resolvedArgs,
+          mention_text:         mention.args_raw,
+          timestamp,
+        })
+      } catch { /* non-fatal */ }
+    }
+  } catch { /* swallow all errors — mention routing is best-effort */ }
+}
 
 // ─── Registro das tools ───────────────────────────────────────────────────────
 
@@ -354,6 +454,20 @@ export function registerSessionTools(server: McpServer, deps: SessionDeps): void
         const timestamp  = new Date().toISOString()
         const message_id = crypto.randomUUID()
 
+        // ── @mention visibility override ─────────────────────────────────────
+        // Se a mensagem contém @alias tokens e o remetente é um agente humano
+        // (role primary ou human), a mensagem é forçada para agents_only.
+        // Spec: "a mensagem é sempre entregue agents_only — o roteamento é adicional".
+        let effectiveVisibility = visibility
+        if (
+          (role === "primary" || role === "human") &&
+          content.type === "text" &&
+          content.text &&
+          parseMentions(content.text).has_mentions
+        ) {
+          effectiveVisibility = "agents_only"
+        }
+
         // ── Mascaramento LGPD com tokenização ────────────────────────────────
         // Aplica MaskingService ao conteúdo antes de gravar no stream.
         // Mensagens de agentes (role !== "customer") não são mascaradas —
@@ -404,7 +518,7 @@ export function registerSessionTools(server: McpServer, deps: SessionDeps): void
             instance_id: resolvedInstanceId,
             role,
           },
-          visibility,
+          visibility: effectiveVisibility,
           payload,
         }
 
@@ -418,7 +532,7 @@ export function registerSessionTools(server: McpServer, deps: SessionDeps): void
             "type",       "message",
             "timestamp",  timestamp,
             "author",     JSON.stringify(event.author),
-            "visibility", JSON.stringify(visibility),
+            "visibility", JSON.stringify(effectiveVisibility),
             "payload",    JSON.stringify(payload),
           )
         } catch {
@@ -431,7 +545,7 @@ export function registerSessionTools(server: McpServer, deps: SessionDeps): void
               timestamp,
               author: event.author,
               content,
-              visibility,
+              visibility: effectiveVisibility,
               masked:            false,
               masked_categories: [],
             })
@@ -446,7 +560,7 @@ export function registerSessionTools(server: McpServer, deps: SessionDeps): void
           message_id,
           participant_id,
           content,
-          visibility: Array.isArray(visibility) ? visibility : visibility,
+          visibility: effectiveVisibility,
           timestamp,
         })
 
@@ -457,11 +571,12 @@ export function registerSessionTools(server: McpServer, deps: SessionDeps): void
         // (visibility:"agents_only") precisam ser entregues aqui diretamente.
         // Não publicamos para visibility do tipo array — são direcionadas a
         // participantes específicos que já possuem canais dedicados.
-        if (visibility === "all" || visibility === "agents_only") {
+        if (effectiveVisibility === "all" || effectiveVisibility === "agents_only") {
           try {
             // Determina author.type para o envelope WS.
             // Agentes IA registram agent_type_id na hash de instância.
             let wsAuthorType = "agent_human"
+            let wsAgentTypeId: string | undefined
             if (role === "customer") {
               wsAuthorType = "customer"
             } else {
@@ -470,28 +585,50 @@ export function registerSessionTools(server: McpServer, deps: SessionDeps): void
                   `${tenant_id}:agent:instance:${participant_id}`,
                   "agent_type_id"
                 )
-                if (aiTypeId) wsAuthorType = "agent_ai"
+                if (aiTypeId) {
+                  wsAuthorType  = "agent_ai"
+                  wsAgentTypeId = aiTypeId
+                }
               } catch { /* fallback para agent_human */ }
             }
 
             const wsEvent = {
               type:       "message.text",
+              session_id,
               message_id,
               author: {
-                type: wsAuthorType,
-                id:   participant_id,
+                type:          wsAuthorType,
+                id:            participant_id,
+                ...(wsAgentTypeId ? { agent_type_id: wsAgentTypeId } : {}),
               },
               text:       typeof finalContent === "string"
                             ? finalContent
                             : JSON.stringify(finalContent),
               timestamp,
-              visibility: visibility as string,
+              visibility: effectiveVisibility as string,
             }
             await redis.publish(
               `agent:events:${session_id}`,
               JSON.stringify(wsEvent)
             )
           } catch { /* entrega WS é best-effort — não-fatal */ }
+        }
+
+        // ── @mention routing ──────────────────────────────────────────────
+        // Apenas agentes humanos com role "primary" podem emitir @mentions com
+        // efeito de roteamento. AI agents usam o task step para coordenação.
+        // O roteamento é adicional — a mensagem já foi entregue acima.
+        if ((role === "primary" || role === "human") && content.type === "text" && content.text) {
+          void routeMentions({
+            text:              content.text,
+            tenantId:          tenant_id,
+            sessionId:         session_id,
+            participantId:     participant_id,
+            instanceId:        resolvedInstanceId,
+            redis,
+            kafka,
+            timestamp,
+          })
         }
 
         // Metering: emite messages para mensagens visíveis ao cliente (visibility: "all").

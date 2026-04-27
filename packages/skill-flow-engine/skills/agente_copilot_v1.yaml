@@ -1,0 +1,106 @@
+# agente_copilot_v1.yaml
+#
+# Co-pilot especialista que assiste o agente humano de retenção em conferência.
+# Ativado via @mention: @copilot ativa | pausa | para
+#
+# Ciclo de vida:
+#   1. Agente humano digita "@copilot" → routing engine convida do pool copilot_sac
+#   2. Co-pilot anuncia presença (agents_only) e entra em standby (menu bloqueante)
+#   3. "@copilot ativa" → trigger_step: analisar_sessao → LLM gera sugestão
+#   4. "@copilot pausa" → set_context session.copilot.mode=passive (mantém em standby)
+#   5. "@copilot para"  → terminate_self → encerrar
+#
+# Spec: docs/guias/mention-protocol.md
+
+id: skill_copilot_sac_v1
+name: "Co-pilot SAC v1"
+version: "1.0"
+description: |
+  Especialista co-pilot que assiste o agente humano de retenção SAC.
+  Fornece sugestões contextuais baseadas no ContextStore da sessão.
+  Controlado por comandos @mention: ativa, pausa, para.
+classification:
+  type: orchestrator
+  domain: customer_service
+
+mention_commands:
+  ativa:
+    description: "Ativa o co-pilot — dispara análise do contexto e envia sugestão"
+    action:
+      trigger_step: analisar_sessao
+    acknowledge: true
+
+  pausa:
+    description: "Pausa o co-pilot — permanece conectado mas sem análise ativa"
+    action:
+      set_context:
+        session.copilot.mode: "passive"
+    acknowledge: true
+
+  para:
+    description: "Desconecta o co-pilot da conferência"
+    action:
+      terminate_self: true
+    acknowledge: false
+
+entry: apresentar
+steps:
+
+    # ── Anúncio de presença ────────────────────────────────────────────────────
+    - id: apresentar
+      type: notify
+      visibility: agents_only
+      message: >
+        🤖 Co-pilot SAC conectado. Comandos disponíveis:
+        @copilot ativa (analisa contexto), @copilot pausa, @copilot para.
+      on_success: aguardar
+      on_failure: encerrar
+
+    # ── Standby — aguarda trigger via @mention command ─────────────────────────
+    # timeout_s: -1 = bloqueante indefinidamente.
+    # visibility: agents_only — o prompt interno de standby não chega ao cliente.
+    # A mention_command_dispatch LPUSH no menu:result interrompe o BLPOP:
+    #   { "_mention_trigger_step": "analisar_sessao" }  → on_success
+    #   { "_mention_terminate": true }                  → on_failure (→ encerrar)
+    - id: aguardar
+      type: menu
+      visibility: agents_only
+      interaction: text
+      prompt: "(co-pilot em standby — aguardando @copilot ativa)"
+      timeout_s: -1
+      on_success: analisar_sessao
+      on_failure: encerrar
+      on_timeout: encerrar
+
+    # ── Análise LLM do contexto atual ─────────────────────────────────────────
+    - id: analisar_sessao
+      type: reason
+      prompt_id: copilot_sac_analysis_v1
+      input:
+        instrucoes: |
+          Você é um co-pilot de atendimento SAC. Analise o contexto abaixo e gere
+          UMA sugestão prática e concisa (máximo 2 frases) para o agente humano.
+          Seja direto e útil — sem perguntas, apenas a sugestão.
+        nome_cliente: "@ctx.caller.nome"
+        motivo_contato: "@ctx.caller.motivo_contato"
+        sentimento: "@ctx.session.sentimento.categoria"
+        historico: "@ctx.session.historico_resumo"
+      output_as: analise
+      output_schema:
+        sugestao:
+          type: string
+      on_success: enviar_sugestao
+      on_failure: aguardar
+
+    # ── Envio da sugestão ao agente humano (agents_only) ──────────────────────
+    - id: enviar_sugestao
+      type: notify
+      visibility: agents_only
+      message: "💡 Co-pilot: {{$.pipeline_state.analise.sugestao}}"
+      on_success: aguardar
+      on_failure: aguardar
+
+    # ── Encerramento ───────────────────────────────────────────────────────────
+    - id: encerrar
+      type: complete
+      outcome: resolved

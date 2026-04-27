@@ -38,6 +38,10 @@ pools:
     description: "Pool de agentes humanos — retenção e suporte especializado"
     channel_types: [webchat, whatsapp]
     sla_target_ms: 300000
+    # @mention routing: aliases disponíveis para agentes humanos desta fila
+    # "@copilot" → convida/envia comando ao co-pilot SAC do pool copilot_sac
+    mentionable_pools:
+      copilot: copilot_sac
 
   - pool_id: avaliacao_ia
     # IMPORTANTE: este pool NÃO deve estar na cadeia de roteamento ao vivo.
@@ -55,6 +59,22 @@ pools:
     channel_types: [webchat, whatsapp]
     sla_target_ms: 30000
 
+  - pool_id: copilot_sac
+    # Pool do co-pilot especialista SAC.
+    # Ativado via @mention pelo agente humano de retenção (@copilot).
+    # Nunca recebe tráfego direto de clientes — apenas convites via conferência.
+    description: "Pool do co-pilot SAC — especialista @mention com sugestões contextuais"
+    channel_types: [webchat, whatsapp]
+    sla_target_ms: 15000
+
+  - pool_id: auth_ia
+    # Pool do agente de autenticação segura.
+    # Executa o fluxo masked begin_transaction → coletar_pin → validar_pin → end_transaction.
+    # Pode ser ativado diretamente ou via task step de outro agente.
+    description: "Pool do agente de autenticação — fluxo masked com PIN seguro"
+    channel_types: [webchat, whatsapp]
+    sla_target_ms: 60000
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Agent Types
 # ─────────────────────────────────────────────────────────────────────────────
@@ -68,7 +88,7 @@ agent_types:
     role: executor
     max_concurrent_sessions: 10
     pools: [demo_ia]
-    skills: []
+    skills: [{skill_id: skill_demo_ia_v1}]
     permissions:
       - mcp-server-plughub:agent_heartbeat
       - mcp-server-plughub:notification_send
@@ -84,7 +104,7 @@ agent_types:
     role: executor
     max_concurrent_sessions: 10
     pools: [sac_ia]
-    skills: []
+    skills: [{skill_id: skill_sac_ia_v1}]
     permissions:
       - mcp-server-plughub:agent_heartbeat
       - mcp-server-plughub:notification_send
@@ -101,7 +121,7 @@ agent_types:
     role: executor
     max_concurrent_sessions: 50
     pools: [fila_humano]
-    skills: []
+    skills: [{skill_id: skill_fila_v1}]
     permissions:
       - mcp-server-plughub:agent_heartbeat
       - mcp-server-plughub:notification_send
@@ -130,7 +150,7 @@ agent_types:
     role: executor
     max_concurrent_sessions: 20
     pools: [contexto_ia]
-    skills: []
+    skills: [{skill_id: skill_contexto_ia_v1}]
     permissions:
       - mcp-server-plughub:agent_heartbeat
       - mcp-server-plughub:notification_send
@@ -141,6 +161,43 @@ agent_types:
       llm: "true"
       context_resolution: "true"
 
+  # Co-pilot especialista SAC — ativado via @mention pelo agente humano de retenção
+  # Possui mention_commands: ativa, pausa, para
+  - agent_type_id: agente_copilot_v1
+    framework: plughub-native
+    execution_model: stateless
+    role: executor
+    max_concurrent_sessions: 10
+    pools: [copilot_sac]
+    skills: [{skill_id: skill_copilot_sac_v1}]
+    permissions:
+      - mcp-server-plughub:agent_heartbeat
+      - mcp-server-plughub:notification_send
+      - mcp-server-plughub:interaction_request
+    capabilities:
+      channels: webchat,whatsapp
+      llm: "true"
+      copilot: "true"
+
+  # Agente de autenticação — fluxo masked com begin/end_transaction
+  # Verifica PIN do cliente via mcp-server-auth de forma segura (sem expor PIN)
+  - agent_type_id: agente_auth_ia_v1
+    framework: plughub-native
+    execution_model: stateless
+    role: executor
+    max_concurrent_sessions: 20
+    pools: [auth_ia]
+    skills: [{skill_id: skill_auth_ia_v1}]
+    permissions:
+      - mcp-server-plughub:agent_heartbeat
+      - mcp-server-plughub:notification_send
+      - mcp-server-plughub:interaction_request
+      - mcp-server-auth:validate_pin
+      - mcp-server-auth:change_pin
+    capabilities:
+      channels: webchat,whatsapp
+      masked_input: "true"
+
   # Agente de avaliação pós-sessão — NÃO deve estar em pool de roteamento ao vivo.
   # Recebe tráfego apenas via evaluation.requested (Session Replayer), nunca via
   # conversations.routed. Pool: avaliacao_ia (isolado).
@@ -150,7 +207,7 @@ agent_types:
     role: evaluator
     max_concurrent_sessions: 20
     pools: [avaliacao_ia]
-    skills: []
+    skills: [{skill_id: skill_avaliacao_v1}]
     permissions:
       - mcp-server-plughub:evaluation_context_get
       - mcp-server-plughub:evaluation_submit

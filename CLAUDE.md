@@ -322,6 +322,69 @@ Runs BEFORE InstanceBootstrap at bridge startup. Reads `infra/registry/*.yaml` a
 
 A fresh environment is fully self-configuring from YAML alone. Stale entries from old seeds or manual API calls are removed automatically on every startup — making DROP TABLE unnecessary.
 
+### Skill sync — YAML → Agent Registry (PostgreSQL)
+
+In addition to pools and agent_types, RegistrySyncer also syncs **skill definitions** from
+`packages/skill-flow-engine/skills/` to the Agent Registry at bridge startup.
+
+**`skills_dir` parameter** — path to the skills directory passed to RegistrySyncer:
+```python
+syncer = RegistrySyncer(
+    registry_url=AGENT_REGISTRY_URL,
+    config_path=REGISTRY_CONFIG_DIR or None,
+    skills_dir=SKILLS_DIR or None,        # e.g. /app/skills
+)
+```
+
+**Requirements for a YAML to be synced:**
+- Must have `id:` field matching regex `^skill_[a-z0-9_]+_v\d+$` (e.g. `skill_sac_ia_v1`)
+- Must have `entry:` and `steps:` fields (minimal valid SkillFlow)
+- `name:`, `version:`, `description:`, `classification:` are optional (sensible defaults applied)
+- `mention_commands:` at the top-level YAML is included in the payload if present
+
+Skills are PUT (upserted) before pools and agent_types to ensure agent_types can reference them.
+Skill IDs that don't match the regex (e.g. missing `id:` field) are silently skipped.
+
+**`SyncReport`** extended fields: `skills_upserted`, `skills_skipped`, `skills_errors`.
+
+### Skill hot-reload — three-elo architecture
+
+The skill hot-reload pipeline ensures that updating a YAML file propagates to running agents
+without manual cache clearing. Three components work together:
+
+```
+Elo 1 — RegistrySyncer (startup sync)
+  bridge restart → reads *.yaml from SKILLS_DIR
+  → PUT /v1/skills/{skill_id} → PostgreSQL is source of truth
+
+Elo 2 — registry.changed event (agent-registry/routes/skills.ts)
+  PUT /v1/skills/{id} → publishRegistryChanged(entity_type="skill", entity_id=skill_id)
+  DELETE /v1/skills/{id} → publishRegistryChanged(entity_type="skill", entity_id=skill_id)
+  → Kafka topic: registry.changed
+
+Elo 3 — cache invalidation (orchestrator-bridge/main.py)
+  registry.changed received → entity_type == "skill"
+  → del _skill_flow_cache[skill_id]
+  → next agent activation fetches updated flow from Agent Registry
+```
+
+**Live production update (no restart required):**
+```
+PUT /v1/skills/skill_copilot_sac_v1  →  registry.changed  →  cache invalidated  →  immediate effect
+```
+
+**`_skill_flow_cache`** — in-memory dict in orchestrator-bridge `main.py` mapping
+`skill_id → flow dict`. Populated on first agent activation (GET /v1/skills/{id}).
+Invalidated individually per skill_id on `registry.changed` events.
+
+**Note:** POST (create) on `/v1/skills` does NOT publish `registry.changed` — it is only
+used by RegistrySyncer at startup, where a cache miss on first activation is acceptable.
+
+**Known issue:** `agente_avaliacao_v1.yaml` has no `complete` or `escalate` step, which
+causes Agent Registry to return HTTP 422. RegistrySyncer logs a warning and increments
+`skills_errors` but does not block startup. The evaluator agent falls back to reading the
+YAML file directly via `_load_yaml_fallback()`.
+
 ### Impact on seed
 
 `infra/seed/seed.py` no longer writes Redis instance keys, pool instance sets, pool_config
@@ -372,20 +435,23 @@ Skill: `packages/skill-flow-engine/skills/agente_contexto_ia_v1.yaml`.
 
 **Invocação:** via `task` step com `mode: assist` + `execution_mode: sync` em qualquer agente especialista.
 
-**Fluxo interno:**
+**Fluxo interno (v2 — usa ContextStore + @ctx.*):**
 ```
-avaliar_contexto (reason) → verifica pipeline_state atual, detecta gaps, define strategy
-  strategy=completo      → montar_contexto (sem coletar nada)
-  strategy=buscar_crm    → buscar_crm (invoke: mcp-server-crm customer_get) → avaliar_apos_crm
-  strategy=coletar       → gerar_pergunta (reason: pergunta consolidada) → coletar_cliente (menu)
-                           → extrair_campos (reason: extrai campos estruturados) → montar_contexto
-  strategy=confirmar     → confirmar_incertos (reason: mensagem de confirmação) → aguardar_confirmacao
-                           → processar_confirmacao → montar_contexto
-montar_contexto (reason) → consolida todas as fontes, calcula completeness_score
-finalizar (complete)     → contact_context disponível em pipeline_state
+verificar_gaps (choice):  @ctx.caller.customer_id exists → buscar_crm
+                          @ctx.caller.cpf exists         → buscar_crm
+                          default                        → verificar_completude
+verificar_completude (choice): @ctx.caller.motivo_contato confidence_gte 0.7 → finalizar
+                               default → gerar_pergunta
+buscar_crm (invoke: mcp-server-crm/customer_get)
+  → context_tags.outputs: nome/cpf/account_id/… → caller.* (confidence=0.95, fire-and-forget)
+gerar_pergunta (reason LLM #1): pergunta consolidada → session.pergunta_coleta
+coletar_cliente (menu): prompt = {{@ctx.session.pergunta_coleta}}
+extrair_campos (reason LLM #2): campos extraídos → caller.* via context_tags
+finalizar (complete)
 ```
 
 **Garantias:**
+- 0 chamadas LLM quando CRM resolve o contexto; no máximo 2 quando necessário coletar
 - Nunca pergunta ao cliente o que já está com `confidence ≥ 0.8`
 - Gera uma única pergunta consolidada (não formulário campo por campo)
 - Busca CRM automaticamente antes de perguntar ao cliente
@@ -393,14 +459,19 @@ finalizar (complete)     → contact_context disponível em pipeline_state
 
 ### Propagação entre agentes
 
-O `contact_context` é propagado via `pipeline_state` em toda a cadeia:
+O ContextStore (`{tenantId}:ctx:{sessionId}`) persiste durante toda a sessão.
+Todos os agentes da cadeia lêem e escrevem no mesmo hash Redis — sem cópia entre agentes:
+
 ```
 agente_sac_ia_v1
+  → analisar (reason): lê @ctx.caller.nome/@ctx.session.historico_mensagens
+                        escreve session.ultima_resposta, session.escalar_solicitado via context_tags
+  → verificar_escalada (choice): @ctx.session.escalar_solicitado eq true → acumular_contexto
   → acumular_contexto (task assist: agente_contexto_ia_v1)
-  → analisar (reason: usa contact_context para personalizar resposta)
-  → escalar (context: pipeline_state) → agente_retencao_humano_v1
-      → painel direito do Agent Assist UI exibe contact_context
-      → co-pilot (Fase 2) usa contact_context para sugestões mais precisas
+       agente_contexto_ia_v1 enriquece caller.* no ContextStore
+  → escalar → agente_retencao_humano_v1
+       supervisor_state devolve context_snapshot ao Agent Assist UI
+       ContextoTab (aba Contexto) exibe campos agrupados por namespace
 ```
 
 ### Adicionando context-awareness a um novo agente especialista
@@ -430,6 +501,179 @@ usando `contact_context` e popula a aba "Capacidades" do Agent Assist UI com:
 Novo step type no `skill-flow-engine` que encapsula a lógica do `agente_contexto_ia_v1`
 de forma declarativa, permitindo que qualquer agente defina seus pré-requisitos de contexto
 inline no YAML sem depender de um agente externo.
+
+## ContextStore — unified session state
+
+O ContextStore substitui `pipeline_state.contact_context` como repositório de estado de sessão.
+É um Redis hash por sessão no qual qualquer componente pode ler e escrever campos tipados.
+
+### Redis key format
+
+```
+{tenantId}:ctx:{sessionId}   (hash Redis)
+  field = tag name (e.g. "caller.nome", "session.sentimento.current")
+  value = JSON-encoded ContextEntry
+```
+
+### ContextEntry schema (`@plughub/schemas/context-store.ts`)
+
+```typescript
+ContextEntry {
+  value:      unknown           // string | number | boolean | object
+  confidence: number            // 0.0–1.0
+  source:     string            // "mcp_call:mcp-server-crm:customer_get" | "ai_inferred:sentiment_emitter" | …
+  visibility: "agents_only" | "all"
+  updated_at: string            // ISO-8601
+}
+```
+
+### Tag namespaces
+
+| Namespace | Escopo | Escrito por |
+|---|---|---|
+| `caller.*` | Dados do cliente (nome, cpf, conta, motivo) | ContextAccumulator via MCP tools; reason step context_tags |
+| `session.*` | Estado da sessão atual | reason/invoke steps via context_tags; sentiment_emitter (session.sentimento.*) |
+| `account.*` | Dados de conta (plano, status) | invoke step com buscar_crm via context_tags |
+
+### context_tags on reason / invoke steps
+
+Qualquer step `reason` ou `invoke` pode declarar mapeamentos de entrada/saída:
+
+```yaml
+context_tags:
+  inputs:
+    nome_cliente:
+      tag: caller.nome
+      required: false       # campo opcional
+  outputs:
+    resposta:
+      tag: session.ultima_resposta
+      confidence: 1.0
+      merge: overwrite      # overwrite | append
+    sentimento:
+      tag: caller.sentimento_atual
+      confidence: 0.80
+      merge: overwrite
+```
+
+- **inputs**: antes de chamar o LLM / MCP tool, lê `@ctx.<namespace>.<field>` e popula os inputs do step
+- **outputs**: após resposta bem-sucedida, extrai campos do output e grava no ContextStore (fire-and-forget)
+- **confidence**: confiança default do entry; pode ser sobrescrita por campo
+
+### @ctx.* references in step inputs
+
+Qualquer campo de `input:` ou `message:` pode usar `@ctx.<namespace>.<field>`:
+
+```yaml
+input:
+  nome_cliente:  "@ctx.caller.nome"       # resolve ContextEntry.value
+  historico:     "@ctx.session.historico_mensagens"
+message: "{{@ctx.session.ultima_resposta}}"
+```
+
+Resolução: lê o hash Redis, parseia o ContextEntry, retorna `entry.value`. Retorna `""` se ausente.
+
+### @ctx.* in choice step conditions
+
+```yaml
+conditions:
+  - field:     "@ctx.caller.customer_id"
+    operator:  exists                # field present with any value
+    next:      buscar_crm
+  - field:     "@ctx.caller.motivo_contato"
+    operator:  confidence_gte        # confidence >= value
+    value:     0.7
+    next:      finalizar
+```
+
+Operadores suportados: `eq`, `ne`, `gt`, `gte`, `lt`, `lte`, `exists`, `not_exists`, `confidence_gte`.
+
+### required_context (YAML header)
+
+```yaml
+required_context:
+  caller.nome:
+    min_confidence: 0.8
+  caller.motivo_contato:
+    min_confidence: 0.7
+    optional: true
+```
+
+O engine pré-computa um `GapsReport` antes do primeiro step e escreve `@ctx.__gaps__` no ContextStore.
+O step inicial pode inspecionar os gaps para decidir se precisa coletar dados.
+
+### McpInterceptor auto-accumulation
+
+O `McpInterceptor` (em `@plughub/sdk`) detecta `contextRegistry[serverName][toolName]` e extrai
+inputs/outputs automaticamente, antes e depois de cada `callTool()` bem-sucedido.
+Os agentes nativos que usam o SDK recebem acumulação de contexto sem código adicional.
+
+### AI Gateway — sentiment_emitter writes
+
+`write_context_store_sentiment(redis, tenant_id, session_id, score)` é chamado dentro de
+`SessionManager.update_partial_params` após cada turno LLM.
+Escreve dois campos:
+
+| Tag | Valor | Confidence | Source |
+|---|---|---|---|
+| `session.sentimento.current` | score arredondado (4 decimais) | 0.80 | `ai_inferred:sentiment_emitter` |
+| `session.sentimento.categoria` | "satisfied" / "neutral" / "frustrated" / "angry" | 0.80 | `ai_inferred:sentiment_emitter` |
+
+TTL: 14 400 s (4 horas). Fire-and-forget: nunca levanta exceção.
+
+### supervisor_state — context_snapshot
+
+O MCP tool `supervisor_state` lê o ContextStore diretamente do Redis em vez de buscar
+em `pipeline_state.contact_context`. Retorna:
+
+```json
+"customer_context": {
+  "context_snapshot": {
+    "caller.nome":                { "value": "João", "confidence": 0.95, "source": "mcp_call:...", ... },
+    "session.sentimento.current": { "value": -0.41, "confidence": 0.80, "source": "ai_inferred:...", ... }
+  },
+  "contact_context": null   // null quando context_snapshot presente; legacy fallback
+}
+```
+
+### Agent Assist UI — ContextoTab
+
+A aba "Contexto" detecta automaticamente qual formato usar:
+- **`context_snapshot` presente** → renderiza `ContextSnapshotCard` (teal) com campos agrupados por namespace
+- **Apenas `contact_context` presente** → renderiza `ContactContextCard` (emerald) — fallback legado
+
+Fontes como `mcp_call:mcp-server-crm:customer_get` são exibidas como "CRM".
+Entradas com `visibility: "agents_only"` exibem um badge âmbar 🔒.
+
+### agente_contexto_ia_v1 — versão 2 (simplificada)
+
+A versão 2 do skill usa `choice` com `@ctx.*` em vez de múltiplas chamadas LLM:
+
+```
+verificar_gaps (choice):
+  @ctx.caller.customer_id exists  → buscar_crm
+  @ctx.caller.cpf exists          → buscar_crm
+  default                         → verificar_completude
+
+verificar_completude (choice):
+  @ctx.caller.motivo_contato confidence_gte 0.7  → finalizar
+  default                                         → gerar_pergunta
+
+buscar_crm (invoke: mcp-server-crm/customer_get):
+  context_tags.outputs: nome/cpf/account_id/telefone/email/plano_atual/status_conta
+  → confidence 0.95, source mcp_call
+
+gerar_pergunta (reason LLM #1):
+  context_tags.outputs: pergunta → session.pergunta_coleta
+
+coletar_cliente (menu):
+  prompt: "{{@ctx.session.pergunta_coleta}}"
+
+extrair_campos (reason LLM #2):
+  context_tags.outputs: todos os campos extraídos → caller.*
+```
+
+0 chamadas LLM quando CRM resolve o contexto; no máximo 2 quando é necessário coletar do cliente.
 
 ## Channel vs Medium
 
@@ -575,6 +819,9 @@ outbound:       outbound.*             →  pending deliveries for Notification 
 - Never expose `original_content` of masked messages to agents — only to authorised roles via audit trail
 - Never forward tool calls containing injection patterns — `injection_guard.ts` must be applied before any free-text field reaches a domain MCP server
 - Never send tool list to LLM without applying `permissions[]` filter from the JWT — tools not in `permissions` are invisible to the agent
+- Never write masked input values to `pipeline_state`, Redis, stream, or logs — `masked_scope` is in-memory only, cleared at `end_transaction`
+- Never allow AI agents to emit `@mention` commands — only `role: primary` or `role: human` participants may issue mentions; AI agents use `task` step for coordination
+- Never route a `@mention` to a pool not listed in `mentionable_pools` of the origin pool — domain is always closed by pool configuration
 
 ## SDK CLI
 
@@ -661,6 +908,121 @@ Implementado em `mcp-server-plughub`. ADR completo: `docs/adr/adr-message-maskin
 - Token resolution em MCP Tools de domínio (`mcp-server-crm`, etc.)
 - Channel Gateway: exibir só `display_partial` (sem wrapper `[...]`) para o cliente
 - Masking config UI no Agent Registry
+
+## @mention — protocolo de endereçamento de participantes
+
+Permite que agentes humanos enviem comandos a qualquer agente especialista em conferência usando sintaxe `@alias`. Spec completa: `docs/guias/mention-protocol.md`.
+
+### Regras fundamentais
+
+- Apenas `role: primary` ou `role: human` podem emitir mentions com efeito de roteamento
+- O domínio de aliases possíveis é fechado pela configuração `mentionable_pools` do pool de origem
+- A mensagem é sempre entregue a todos os participantes `agents_only` — o roteamento é adicional, não substitutivo
+- A confirmação de convite é o evento `participant_joined` (já existente) — sem ack separado
+
+### Pool configuration
+
+```yaml
+pools:
+  - id: retencao_humano
+    mentionable_pools:
+      copilot:  copilot_retencao     # @copilot → recruta do pool copilot_retencao
+      billing:  billing_especialista # @billing → recruta do pool billing_especialista
+```
+
+### Sintaxe com interpolação de contexto
+
+```
+@billing conta=@ctx.caller.account_id motivo=@ctx.caller.motivo_contato
+@copilot cliente tem plano @ctx.caller.plano_atual|"não identificado"
+@billing @suporte analise o contexto    ← múltiplos destinatários
+```
+
+Referências `@ctx.*` são resolvidas pelo mcp-server-plughub antes do roteamento. Fallback inline: `@ctx.campo|"default"`.
+
+### `mention_commands` no skill YAML
+
+```yaml
+mention_commands:
+  ativa:
+    action:
+      set_context: { session.copilot.mode: "active" }
+    acknowledge: true
+  pausa:
+    action:
+      set_context: { session.copilot.mode: "passive" }
+    acknowledge: true
+  para:
+    action:
+      terminate_self: true
+```
+
+Ações disponíveis: `set_context` (escreve no ContextStore), `trigger_step` (salta para step do flow), `terminate_self` (agente sai da conferência).
+
+---
+
+## Masked Input — captura segura de dados sensíveis
+
+Garante que dados altamente sensíveis (senhas, PINs, OTPs) nunca entrem no stream, `pipeline_state`, Redis ou logs. Spec completa: `docs/guias/masked-input.md`.
+
+### Atributo `masked` no menu step
+
+```yaml
+- id: coletar_senha
+  type: menu
+  interaction: form
+  masked: true                    # step-level: todos os campos
+  fields:
+    - id: senha
+      masked: true                # ou field-level individual
+```
+
+### `begin_transaction` / `end_transaction`
+
+Toda captura sensível → validação → ação é uma unidade atômica. Falha em qualquer step dentro do bloco descarta o `masked_scope` e executa `on_failure`.
+
+```yaml
+- id: tx_inicio
+  type: begin_transaction
+  on_failure: coletar_senha       # rewind explícito — nunca inferido
+
+- id: coletar_senha
+  type: menu
+  masked: true
+  ...
+
+- id: validar
+  type: invoke
+  input:
+    senha: "@masked.senha"        # namespace @masked.* — lê do scope em memória
+
+- id: tx_fim
+  type: end_transaction           # caminho feliz — rollback é sempre implícito
+  result_as: operacao_status
+```
+
+### Invariantes
+
+- `masked_scope` existe apenas em memória — nunca escrito em Redis, `pipeline_state` ou stream
+- `end_transaction` é exclusivamente o caminho de sucesso; rollback é automático e implícito
+- `reason` step dentro de bloco masked é erro de design, rejeitado pelo agent-registry
+- Retry nunca re-usa valor mascarado — recoleta sempre exige nova entrada do usuário
+- Audit record inclui `masked_input_fields: string[]` registrando quais campos foram omitidos
+- Channels sem `supports_masked_input` executam `masked_fallback` — nunca tentam renderizar o formulário
+
+### ChannelCapabilities
+
+```typescript
+supports_masked_input?: boolean   // default: false
+masked_fallback?: "message" | "link" | "decline"
+```
+
+| Canal | Suporte | Comportamento |
+|---|---|---|
+| `webchat` | `true` | Overlay fora do chat; `<input type="password">`; placeholder no replay |
+| `whatsapp` | `false` | `masked_fallback` configurado |
+| `voice` | `true` | DTMF nativo — semântico |
+| `sms`, `email` | `false` | `masked_fallback` configurado |
 
 ## Session Replayer — avaliação de qualidade pós-sessão
 
@@ -874,6 +1236,21 @@ Cron de expurgo dois estágios: Estágio 1 (horário) soft-delete; Estágio 2 (d
 - `tests/test_stream_subscriber.py` — 25 testes pytest (cursor tracking, filtro de visibilidade, mapeamento de todos os tipos de evento, resiliência a erros e cancelamento)
 - `tests/test_attachment_store.py` — 30 testes pytest (validate_mime, reserve, commit, resolve, soft_expire, stream_bytes — asyncpg mockado, filesystem real via tmp_path)
 - `tests/test_models.py` — 136 testes totais no pacote channel-gateway
+
+### Masked fields delivery chain
+
+`masked_fields` propagates from the Skill Flow Engine through the full delivery stack:
+
+| Layer | File | Change |
+|---|---|---|
+| Skill Flow Engine | `skill-flow-engine/src/steps/menu.ts` | Computes `maskedFieldIds[]` from `step.masked` + field-level `field.masked`, passes to `notification_send` |
+| BPM tool | `mcp-server-plughub/src/tools/bpm.ts` | Reads `masked_fields` from `notification_send` args, includes in `conversations.outbound` Kafka payload |
+| Channel Gateway models | `channel-gateway/models.py` | `WsMenuRender.masked_fields: list[str] \| None` |
+| Outbound consumer | `channel-gateway/outbound_consumer.py` | Extracts `masked_fields`, logs warning for non-webchat channels, passes to `WsMenuRender` |
+| Stream subscriber | `channel-gateway/stream_subscriber.py` | Conditionally adds `masked_fields` to `interaction.request` WS event |
+
+WebChat renders masked fields as `<input type="password">` overlay (outside chat transcript).
+Non-webchat channels use `masked_fallback` (configured per channel).
 
 ### Usage Metering — Channel Gateway
 
@@ -1158,6 +1535,48 @@ Mecanismo de idempotência (dois estágios): sentinel `"suspending"` → `"suspe
 
 Tests: `suspend.test.ts` — 13 assertions.
 
+### @mention — mention_commands handler (skill-flow-engine)
+
+`packages/skill-flow-engine/src/mention-commands.ts` — pure async handler for specialist agent @mention commands.
+
+| Export | Description |
+|---|---|
+| `parseCommandName(args_raw)` | Extracts first whitespace-delimited token from args_raw; `null` for bare mention |
+| `handleMentionCommand(skill, commandName, ctx)` | Dispatches command: `set_context` → ContextStore write (fire-and-forget, non-fatal), `trigger_step` → returns `trigger_step` field for caller, `terminate_self` → returns flag for caller |
+
+`MentionCommandResult`: `{ handled, acknowledge, trigger_step?, terminate_self }` — caller is responsible for Redis LPUSH and agent_done; this function does no I/O besides ContextStore writes.
+
+Unknown commands return `{ handled: false }` — silently ignored per spec.
+
+Tests: `mention-commands.test.ts` — 15 assertions (parseCommandName ×5, handleMentionCommand ×10: unknown, set_context ack/no-ack, multiple fields, no contextStore, ContextStore throws, trigger_step, terminate_self, empty mention_commands).
+
+### Masked Input — begin_transaction / end_transaction step tests
+
+`packages/skill-flow-engine/src/__tests__/steps/transaction.test.ts` — 9 unit tests for `executeBeginTransaction` and `executeEndTransaction`:
+- `begin_transaction` clears maskedScope, sets `transactionOnFailure`, returns `__transaction_begin__`
+- `end_transaction` clears maskedScope + transactionOnFailure, uses `__transaction_end__` or explicit `on_success`
+- `result_as` persists `{ status: "ok", fields_collected: [...] }` — field names only, never values
+
+`packages/skill-flow-engine/src/__tests__/engine-transaction.test.ts` — 5 engine integration tests:
+- Happy path: `begin_transaction` → `menu(masked)` → `invoke(@masked.*)` → `end_transaction(result_as)` → `complete`; masked value passed to invoke, `tx_result` persisted without sensitive content
+- Failure: invoke fails inside block → engine rewinds to `begin_transaction.on_failure`, maskedScope cleared
+- Menu timeout inside block → rewind to `on_failure`
+
+Total skill-flow-engine: **86/86 tests** (10 test files).
+
+### agent-registry — masked block validation
+
+`packages/agent-registry/src/validators/skill.ts` — `validateMaskedBlock(flow: SkillFlow): string[]`
+
+Position-based BFS: for each `begin_transaction` at array position N, seeds BFS from `steps[N+1]` (matching engine's positional advance via `__transaction_begin__`). Visits success edges only (`on_success`, `choice.conditions[].next`, `choice.default`, `suspend.on_resume.next`, `collect.on_response.next`). Stops at `end_transaction`. Reports error for any `reason` step found inside the block.
+
+HTTP 422 returned by both POST and PUT `/v1/skills` routes:
+```json
+{ "error": "invalid_masked_block", "details": ["Step \"bad_reason\" (reason) is inside masked transaction block..."] }
+```
+
+Tests: `packages/agent-registry/src/__tests__/skill-validator.test.ts` — 14 unit tests covering: no begin_transaction, empty steps, clean block, reason before/after block, reason directly inside, reason via on_success chain, reason via choice branch/default, on_failure exit (not visited), multiple blocks, last-step begin_transaction (no crash), end_transaction stops propagation.
+
 ### Workflow API — ciclo de vida
 
 Tabela PostgreSQL `workflow.instances` (schema `workflow`).
@@ -1283,6 +1702,54 @@ Não há entidade "campaign" separada. Um `campaign_id` é um agrupador livre em
   - Build: 202 kB JS / 60 kB gzip
 - ~~E2E scenario 14~~ ✅ (collect step — ver tabela acima)
 
+### ContextStore integration — origin_session_id
+
+Workflows lançados a partir de uma sessão ativa de cliente (via `task` step `mode: transfer`,
+escalação, ou coleta outbound) devem ler e escrever no ContextStore da sessão originadora —
+não no hash do workflow UUID.
+
+**Regra:** `{tenant}:ctx:{origin_session_id}` é o ContextStore key correto para @ctx.* em workflows.
+
+**Campo `origin_session_id`** adicionado a:
+- `WorkflowInstanceSchema` (`@plughub/schemas/workflow.ts`) — campo nullable, documenta a sessão originadora
+- `workflow.instances` (PostgreSQL) — coluna `origin_session_id TEXT` com migration idempotente
+- `TriggerRequest` (workflow-api `router.py`) — campo opcional no body do trigger
+- `WorkflowInstance` interface (`skill-flow-worker/workflow-client.ts`) — campo opcional
+
+**Resolução no EngineRunner** (`skill-flow-worker/engine-runner.ts`):
+```typescript
+// origin_session_id presente → usa ContextStore da sessão real do cliente
+// origin_session_id ausente  → usa instance.id (headless/standalone workflow)
+const contextSessionId = instance.origin_session_id ?? instance.id
+
+await engine.run({
+  tenantId:  instance.tenant_id,
+  sessionId: contextSessionId,   // ← chave do ContextStore ({tenant}:ctx:{contextSessionId})
+  instanceId: instance.id,       // ← UUID do workflow para pipeline_state e lifecycle
+  ...
+})
+```
+
+**Como usar no trigger:**
+```json
+POST /v1/workflow/trigger
+{
+  "tenant_id":         "tenant_demo",
+  "flow_id":           "fluxo_cobranca_v1",
+  "trigger_type":      "event",
+  "session_id":        "sess_abc123",
+  "origin_session_id": "sess_abc123",
+  "context": { "invoice_id": "INV-001", "amount": 15000 }
+}
+```
+
+Quando o workflow executa steps `reason` com `context_tags.inputs`, os campos
+`@ctx.caller.nome`, `@ctx.caller.cpf` etc. são lidos do ContextStore da sessão `sess_abc123` —
+onde foram acumulados pelo `agente_contexto_ia_v1` durante o atendimento.
+
+**Workflows standalone** (sem sessão originadora — triggers de schedule, webhook externo):
+`origin_session_id = null` → engine usa `{tenant}:ctx:{instance.id}` — hash isolado por workflow.
+
 ## Agent Assist UI — `packages/agent-assist-ui/`
 
 React 18 + TypeScript + Vite. Porta de dev: 5173. Proxy: `/api` → mcp-server-plughub (3100), `/agent-ws` → WS mcp-server (3100), `/analytics` → analytics-api (3500).
@@ -1400,9 +1867,12 @@ React 18 + TypeScript + Vite. Porta de dev: 5173. Proxy: `/api` → mcp-server-p
 | 14 | `14_collect_step.ts` | collect step Arc 4: trigger with campaign_id → persist-collect (token, send_at, expires_at, instance=suspended) → respond (elapsed_ms, workflow_resumed) → complete + campaign list (16 assertions) |
 | 15 | `15_instance_bootstrap.ts` | instance bootstrap: Agent Registry → Redis instance keys (status=ready, TTL>0, source=bootstrap, channel_types), pool SET completeness, pool_config cache (--bootstrap flag) |
 | 16 | `16_live_reconciliation.ts` | live reconciliation: POST new AgentType to Registry → await registry.changed → verify new instances appear in Redis ≤30 s, status=ready, source=bootstrap, TTL>0, pool SET updated (--reconcile flag) |
+| 17 | `17_context_store.ts` | ContextStore: key format, caller/session namespace writes, sentiment rounding, TTL, supervisor_state context_snapshot (18 assertions) (--ctx flag) |
+| 18 | `18_workflow_worker_chain.ts` | Kafka→worker→engine chain: trigger → workflow.started → skill-flow-worker consumes → engine suspend step → workflow.suspended Kafka → resume REST → workflow.resumed → engine complete step → workflow.completed Kafka (16 assertions) (--worker flag, 120s timeout) |
+| 19 | `19_mention_copilot_auth.ts` | @mention co-pilot + masked PIN auth: Part A — agente_auth_ia_v1 happy path (valid PIN → resolved, PIN absent from pipeline_state); Part B — failure path (PIN 999999 → escalated_human, no leak); Part C — agente_copilot_v1 @mention trigger → LLM reason → analise.sugestao populated → terminate → resolved (14 assertions) (--mention flag, 90s timeout, requires demo stack + ANTHROPIC_API_KEY) |
 | R  | `regressions.ts` | regression suite: ZodError em session_context_get, parsing de callTool (--regression flag) |
 
-Run with: `ts-node runner.ts --conference` or `ts-node runner.ts --only 06` or `ts-node runner.ts --only 12` or `ts-node runner.ts --webchat` or `ts-node runner.ts --workflow` or `ts-node runner.ts --only 13` or `ts-node runner.ts --collect` or `ts-node runner.ts --only 14` or `ts-node runner.ts --bootstrap` or `ts-node runner.ts --only 15` or `ts-node runner.ts --reconcile` or `ts-node runner.ts --only 16`
+Run with: `ts-node runner.ts --conference` or `ts-node runner.ts --only 06` or `ts-node runner.ts --only 12` or `ts-node runner.ts --webchat` or `ts-node runner.ts --workflow` or `ts-node runner.ts --only 13` or `ts-node runner.ts --collect` or `ts-node runner.ts --only 14` or `ts-node runner.ts --bootstrap` or `ts-node runner.ts --only 15` or `ts-node runner.ts --reconcile` or `ts-node runner.ts --only 16` or `ts-node runner.ts --ctx` or `ts-node runner.ts --only 17` or `ts-node runner.ts --worker` or `ts-node runner.ts --only 18` or `ts-node runner.ts --mention` or `ts-node runner.ts --only 19`
 
 Scenario 06 covers two parts:
 - **Part A** — Conference happy path: primary agent busy → supervisor calls `agent_join_conference` → Redis `conference:*` keys verified → specialist `agent_done` with `conference_id` (session stays open) → primary `agent_done` closes session

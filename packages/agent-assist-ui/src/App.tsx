@@ -221,11 +221,12 @@ const App: React.FC<AppProps> = ({ agentName, poolId }) => {
       if (!sid) return;
 
       const msg: ChatMessage = {
-        id:         event.message_id,
-        author:     event.author.type,
-        text:       event.text,
-        timestamp:  event.timestamp,
-        visibility: event.visibility,
+        id:          event.message_id,
+        author:      event.author.type,
+        agentTypeId: event.author.agent_type_id,
+        text:        event.text,
+        timestamp:   event.timestamp,
+        visibility:  event.visibility,
       };
 
       setContacts(prev => {
@@ -339,6 +340,27 @@ const App: React.FC<AppProps> = ({ agentName, poolId }) => {
       });
       return;
     }
+
+    // ── @mention command acknowledgement ──────────────────────────────────
+    if (event.type === "mention_command.ack") {
+      const { session_id: sid, command } = event;
+      if (!sid || !command) return;
+      const ackMsg: ChatMessage = {
+        id:         `ack-${command}-${Date.now()}`,
+        author:     "system",
+        text:       `✓ @copilot reconheceu o comando "${command}"`,
+        timestamp:  new Date().toISOString(),
+        visibility: "agents_only",
+      };
+      setContacts(prev => {
+        const c = prev.get(sid);
+        if (!c) return prev;
+        const next = new Map(prev);
+        next.set(sid, { ...c, messages: [...c.messages, ackMsg] });
+        return next;
+      });
+      return;
+    }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [lastEvent, addToast, fetchHistory]);
 
@@ -367,12 +389,18 @@ const App: React.FC<AppProps> = ({ agentName, poolId }) => {
     (text: string) => {
       if (!selectedSessionId) return;
       send(text, selectedSessionId);
+      // @mention messages are agents_only — mark them amber so they stand out
+      // from regular customer-visible messages. The server echoes them back via
+      // agent:events but without session_id (so the echo is dropped by the
+      // message.text handler). The optimistic bubble is the authoritative copy.
+      const isMention = text.trimStart().startsWith("@");
       // Optimistic local message
       const msg: ChatMessage = {
-        id:        `local-${Date.now()}`,
-        author:    "agent_human",
+        id:         `local-${Date.now()}`,
+        author:     "agent_human",
         text,
-        timestamp: new Date().toISOString(),
+        timestamp:  new Date().toISOString(),
+        visibility: isMention ? "agents_only" : undefined,
       };
       setContacts(prev => {
         const c = prev.get(selectedSessionId);

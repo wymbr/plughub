@@ -7,12 +7,13 @@
  * Nunca implementam lógica de negócio — roteiam para os componentes internos.
  */
 
-import { z }       from "zod"
-import * as crypto  from "crypto"
+import { z }        from "zod"
+import * as crypto   from "crypto"
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 import type { KafkaProducer } from "../infra/kafka"
 import type { RedisClient }   from "../infra/redis"
 import { withGuard }          from "../infra/tool-guard"
+import type { Skill }         from "@plughub/schemas"
 
 /**
  * Generates a session ID that satisfies SessionIdSchema:
@@ -97,6 +98,14 @@ const NotificationSendInputSchema = z.object({
   /** Canal de entrega — "session" → webchat da sessão atual */
   channel:    z.enum(["session", "whatsapp", "sms", "email"]).default("session"),
   /**
+   * Visibilidade da mensagem.
+   *   "all"         → entregue ao cliente via conversations.outbound (padrão)
+   *   "agents_only" → escrita no stream da sessão e publicada em agent:events:*
+   *                   para entrega em tempo real ao Agent Assist UI.
+   *                   O cliente NÃO recebe. Usado por co-pilots e especialistas.
+   */
+  visibility: z.enum(["all", "agents_only"]).default("all"),
+  /**
    * Menu interativo (opcional) — quando presente e interaction != "text",
    * publica menu.payload em conversations.outbound em vez de message.text.
    * Usado pelo step menu do Skill Flow. Spec 4.7.
@@ -108,6 +117,13 @@ const NotificationSendInputSchema = z.object({
       label: z.string(),
     })).optional(),
     fields: z.array(z.record(z.unknown())).optional(),
+    /**
+     * IDs dos campos mascarados neste step (subset de fields[].id).
+     * O Channel Gateway usa essa lista para:
+     *   - webchat: renderizar os campos como <input type="password">
+     *   - outros canais: aplicar masked_fallback (link ou texto de instrução)
+     */
+    masked_fields: z.array(z.string()).optional(),
   }).optional(),
 })
 
@@ -120,6 +136,26 @@ const ConversationEscalateInputSchema = z.object({
   pipeline_state: z.record(z.unknown()).optional(),
   /** Razão da escalada (para auditoria) */
   error_reason:   z.string().optional(),
+})
+
+const MentionCommandDispatchInputSchema = z.object({
+  /** ID do tenant */
+  tenant_id:    z.string(),
+  /** ID da sessão onde o comando foi enviado */
+  session_id:   z.string(),
+  /**
+   * ID da instância do agente especialista alvo.
+   * Necessário para terminate_self (identifica a sessão do agente).
+   * Opcional para set_context e trigger_step.
+   */
+  instance_id:  z.string().optional(),
+  /**
+   * Skill ID do agente especialista — usado para carregar o mapa mention_commands
+   * do Redis (key: {tenant_id}:skill:{skill_id}).
+   */
+  skill_id:     z.string(),
+  /** Nome do comando extraído de args_raw (ex: "ativa", "para") */
+  command_name: z.string(),
 })
 
 // ─────────────────────────────────────────────
@@ -416,8 +452,41 @@ export function registerBpmTools(server: McpServer, deps?: BpmDeps): void {
       const messageId = crypto.randomUUID()
       const timestamp  = new Date().toISOString()
       const hasMenu    = parsed.menu && parsed.menu.interaction !== "text"
+      const agentsOnly = parsed.visibility === "agents_only"
 
-      if (deps?.kafka) {
+      if (agentsOnly) {
+        // agents_only: write to session stream + publish to agent:events Redis channel.
+        // The customer webchat (channel-gateway stream subscriber) filters out agents_only
+        // entries. The Agent Assist UI receives the event via agent:events pub/sub.
+        // conversations.outbound is NOT used — customer never sees this message.
+        if (deps?.redis) {
+          try {
+            await deps.redis.xadd(
+              `session:${parsed.session_id}:stream`,
+              "*",
+              "type",       "message",
+              "timestamp",  timestamp,
+              "author",     JSON.stringify({ type: "agent_ai", id: "orchestrator" }),
+              "visibility", JSON.stringify("agents_only"),
+              "payload",    JSON.stringify({
+                message_id: messageId,
+                content:    { type: "text", text: parsed.message },
+              }),
+            )
+          } catch { /* non-fatal — stream may not exist yet */ }
+          try {
+            await deps.redis.publish(`agent:events:${parsed.session_id}`, JSON.stringify({
+              type:       "message.text",
+              session_id: parsed.session_id,
+              message_id: messageId,
+              author:     { type: "agent_ai", id: "orchestrator" },
+              text:       parsed.message,
+              timestamp,
+              visibility: "agents_only",
+            }))
+          } catch { /* non-fatal */ }
+        }
+      } else if (deps?.kafka) {
         if (hasMenu) {
           // Interactive menu step: publish menu.payload so channel-gateway
           // renders native buttons/list instead of a plain text bubble.
@@ -428,10 +497,11 @@ export function registerBpmTools(server: McpServer, deps?: BpmDeps): void {
             session_id:  parsed.session_id,
             menu_id:     messageId,
             channel,
-            interaction: parsed.menu!.interaction,
-            prompt:      parsed.message,
-            options:     parsed.menu!.options ?? [],
-            fields:      parsed.menu!.fields  ?? null,
+            interaction:   parsed.menu!.interaction,
+            prompt:        parsed.message,
+            options:       parsed.menu!.options        ?? [],
+            fields:        parsed.menu!.fields         ?? null,
+            masked_fields: parsed.menu!.masked_fields  ?? null,
             timestamp,
           })
         } else {
@@ -619,6 +689,117 @@ export function registerBpmTools(server: McpServer, deps?: BpmDeps): void {
             target_pool: parsed.target_pool,
             tenant_id:   tenantId,
             escalated_at: new Date().toISOString(),
+          }),
+        }],
+      }
+    }),
+  )
+
+  // ── mention_command_dispatch ─────────────────
+  server.tool(
+    "mention_command_dispatch",
+    "Processa um @mention command endereçado a um agente especialista. " +
+    "Chamado pelo orchestrator bridge quando detecta mention_routing:true em NormalizedInboundEvent. " +
+    "Carrega mention_commands do skill do agente, executa a ação declarada (set_context, " +
+    "trigger_step ou terminate_self) e opcionalmente envia acknowledgment agents_only. " +
+    "Comandos desconhecidos são ignorados silenciosamente. Spec: docs/guias/mention-protocol.md.",
+    MentionCommandDispatchInputSchema.shape as any,
+    withGuard("mention_command_dispatch", async (input: Record<string, unknown>) => {
+      const parsed    = MentionCommandDispatchInputSchema.parse(input)
+      const redis     = deps?.redis
+      const now       = new Date().toISOString()
+      const resultKey = `menu:result:${parsed.session_id}`
+
+      // ── 1. Load skill definition from Redis ──────────────────────────────
+      let mentionCommands: NonNullable<Skill["mention_commands"]> = {}
+
+      if (redis) {
+        try {
+          const raw = await redis.get(`${parsed.tenant_id}:skill:${parsed.skill_id}`)
+          if (raw) {
+            const skill = JSON.parse(raw) as Skill
+            mentionCommands = skill.mention_commands ?? {}
+          }
+        } catch {
+          // Non-fatal — if skill can't be loaded, command is unrecognised (handled below)
+        }
+      }
+
+      // ── 2. Look up command ────────────────────────────────────────────────
+      const cmd = mentionCommands[parsed.command_name]
+      if (!cmd) {
+        return {
+          content: [{
+            type: "text" as const,
+            text: JSON.stringify({ handled: false, reason: "unknown_command" }),
+          }],
+        }
+      }
+
+      const action = cmd.action
+
+      // ── 3. Execute action ─────────────────────────────────────────────────
+
+      if ("set_context" in action && redis) {
+        const ctxKey = `${parsed.tenant_id}:ctx:${parsed.session_id}`
+        for (const [tag, value] of Object.entries(action.set_context)) {
+          try {
+            const entry = JSON.stringify({
+              value,
+              confidence: 1.0,
+              source:     `mention_command:${parsed.command_name}`,
+              visibility: "agents_only",
+              updated_at: now,
+            })
+            await redis.hset(ctxKey, tag, entry)
+          } catch { /* non-fatal */ }
+        }
+      }
+
+      if ("trigger_step" in action && redis) {
+        // Interrupt any blocked menu:result BLPOP — the menu step detects this special payload
+        // and jumps to the specified step instead of returning a normal on_success result.
+        try {
+          await redis.lpush(resultKey, JSON.stringify({
+            _mention_trigger_step: action.trigger_step,
+          }))
+        } catch { /* non-fatal */ }
+      }
+
+      if ("terminate_self" in action && action.terminate_self && redis) {
+        // Wake up any blocked menu BLPOP with a terminate signal.
+        // The menu step (or the engine's completion logic) handles agent_done.
+        try {
+          await redis.lpush(resultKey, JSON.stringify({ _mention_terminate: true }))
+        } catch { /* non-fatal */ }
+      }
+
+      // ── 4. Acknowledgment — agents_only message ───────────────────────────
+      if (cmd.acknowledge && redis) {
+        try {
+          await (redis as any).xadd(
+            `session:${parsed.session_id}:stream`,
+            "*",
+            "event_id",   crypto.randomUUID(),
+            "type",       "message",
+            "timestamp",  now,
+            "author",     JSON.stringify({ type: "agent_ai", id: parsed.instance_id ?? "mention_dispatcher" }),
+            "visibility", JSON.stringify("agents_only"),
+            "payload",    JSON.stringify({
+              content: { type: "text", text: `[mention_command] /${parsed.command_name} acknowledged` },
+            }),
+          )
+        } catch { /* non-fatal */ }
+      }
+
+      return {
+        content: [{
+          type: "text" as const,
+          text: JSON.stringify({
+            handled:        true,
+            command_name:   parsed.command_name,
+            action_type:    Object.keys(action)[0] ?? "unknown",
+            acknowledged:   cmd.acknowledge,
           }),
         }],
       }

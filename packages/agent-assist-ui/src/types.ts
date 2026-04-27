@@ -9,6 +9,8 @@ export type AuthorType = "customer" | "agent_human" | "agent_ai" | "system";
 export interface ChatMessage {
   id: string;
   author: AuthorType;
+  /** agent_type_id for AI agents (e.g. "agente_copilot_v1") — used for labeling and coloring */
+  agentTypeId?: string;
   text: string;
   timestamp: string;
   /** "all" = normal message; "agents_only" = internal note invisible to customer */
@@ -28,7 +30,7 @@ export interface WsConnectionAccepted {
 export interface WsMessageText {
   type: "message.text";
   message_id: string;
-  author: { type: AuthorType; id?: string; display_name?: string };
+  author: { type: AuthorType; id?: string; display_name?: string; agent_type_id?: string };
   text: string;
   timestamp: string;
   visibility?: string;
@@ -88,6 +90,13 @@ export interface WsConversationAssigned {
   assigned_at: string;
 }
 
+export interface WsMentionCommandAck {
+  type:            "mention_command.ack";
+  session_id:      string;
+  command:         string;
+  acknowledged_at: string;
+}
+
 export type WsServerEvent =
   | WsConnectionAccepted
   | WsMessageText
@@ -95,6 +104,7 @@ export type WsServerEvent =
   | WsAgentTyping
   | WsSessionClosed
   | WsConversationAssigned
+  | WsMentionCommandAck
   | { type: "supervisor_state.updated" }
   | { type: "ping" };
 
@@ -148,10 +158,33 @@ export interface ContactContextData {
   completeness_score?: number;
 }
 
+// ── ContextStore entry — new unified format (Arc ContextStore) ─────────────
+
+/**
+ * A single ContextStore entry as returned by supervisor_state.customer_context.context_snapshot.
+ * The flat map is keyed by tag name (e.g. "caller.nome", "session.sentimento.current").
+ */
+export interface ContextEntry {
+  /** The stored value — string, number, boolean or structured object. */
+  value:      unknown;
+  confidence: number;
+  /** Source component (e.g. "mcp_call:mcp-server-crm:customer_get", "ai_inferred:sentiment_emitter"). */
+  source:     string;
+  /** "agents_only" | "all" */
+  visibility: string;
+  updated_at: string;
+}
+
 export interface CustomerContext {
-  historical_insights: InsightItem[];
+  historical_insights:  InsightItem[];
   conversation_insights: InsightItem[];
-  contact_context?: ContactContextData;
+  /** Legacy structured contact context (pre-ContextStore). Present when context_snapshot absent. */
+  contact_context?:     ContactContextData;
+  /**
+   * New flat ContextStore snapshot keyed by tag name (e.g. "caller.nome", "session.sentimento.current").
+   * Supersedes contact_context when present.
+   */
+  context_snapshot?:    Record<string, ContextEntry>;
 }
 
 export interface SupervisorState {

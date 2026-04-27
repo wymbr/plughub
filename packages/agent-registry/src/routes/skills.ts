@@ -9,7 +9,8 @@
 
 import { Router, Request, Response, NextFunction } from "express"
 import { prisma, Prisma }      from "../db"
-import { CreateSkillSchema, UpdateSkillSchema } from "../validators/skill"
+import { CreateSkillSchema, UpdateSkillSchema, validateMaskedBlock } from "../validators/skill"
+import { publishRegistryChanged } from "../infra/kafka"
 
 export const skillsRouter = Router()
 
@@ -27,6 +28,18 @@ skillsRouter.post("/", async (req: Request, res: Response, next: NextFunction) =
       const mcpServers = [...new Set(body.tools.map(t => t.mcp_server))]
       // TODO: consultar tabela mcp_servers do tenant
       // Por ora, aceita qualquer mcp_server — implementar quando mcp_servers table existir
+      void mcpServers
+    }
+
+    // ── Validação de bloco masked: reason step proibido dentro de begin/end_transaction ──
+    if (body.flow) {
+      const maskedErrors = validateMaskedBlock(body.flow)
+      if (maskedErrors.length > 0) {
+        return res.status(422).json({
+          error:   "invalid_masked_block",
+          details: maskedErrors,
+        })
+      }
     }
 
     // ── Verificar duplicata ──
@@ -47,7 +60,7 @@ skillsRouter.post("/", async (req: Request, res: Response, next: NextFunction) =
         version:          body.version,
         description:      body.description,
         classification:   body.classification,
-        instruction:      body.instruction,
+        instruction:      (body.instruction ?? null) as unknown as Prisma.InputJsonValue,
         tools:            body.tools ?? [],
         interface_schema: body.interface    ?? Prisma.DbNull,
         evaluation:       body.evaluation   ?? Prisma.DbNull,
@@ -117,6 +130,17 @@ skillsRouter.put("/:skill_id", async (req: Request, res: Response, next: NextFun
     const skillId   = req.params["skill_id"]!
     const body      = CreateSkillSchema.parse({ ...req.body, skill_id: skillId })
 
+    // ── Validação de bloco masked ──
+    if (body.flow) {
+      const maskedErrors = validateMaskedBlock(body.flow)
+      if (maskedErrors.length > 0) {
+        return res.status(422).json({
+          error:   "invalid_masked_block",
+          details: maskedErrors,
+        })
+      }
+    }
+
     const skill = await prisma.skill.upsert({
       where:  { skill_id_tenant_id: { skill_id: skillId, tenant_id: tenantId } },
       update: {
@@ -124,7 +148,7 @@ skillsRouter.put("/:skill_id", async (req: Request, res: Response, next: NextFun
         version:          body.version,
         description:      body.description,
         classification:   body.classification,
-        instruction:      body.instruction,
+        instruction:      (body.instruction ?? null) as unknown as Prisma.InputJsonValue,
         tools:            body.tools ?? [],
         interface_schema: body.interface    ?? Prisma.DbNull,
         evaluation:       body.evaluation   ?? Prisma.DbNull,
@@ -140,7 +164,7 @@ skillsRouter.put("/:skill_id", async (req: Request, res: Response, next: NextFun
         version:          body.version,
         description:      body.description,
         classification:   body.classification,
-        instruction:      body.instruction,
+        instruction:      (body.instruction ?? null) as unknown as Prisma.InputJsonValue,
         tools:            body.tools ?? [],
         interface_schema: body.interface    ?? Prisma.DbNull,
         evaluation:       body.evaluation   ?? Prisma.DbNull,
@@ -150,6 +174,9 @@ skillsRouter.put("/:skill_id", async (req: Request, res: Response, next: NextFun
         created_by:       _getUserId(req),
       },
     })
+
+    // Notify orchestrator-bridge to invalidate its skill cache for this skill_id
+    await publishRegistryChanged(tenantId, "skill", skillId, "updated")
 
     return res.json(_formatSkill(skill))
   } catch (err) {
@@ -173,6 +200,9 @@ skillsRouter.delete("/:skill_id", async (req: Request, res: Response, next: Next
     await prisma.skill.delete({
       where: { skill_id_tenant_id: { skill_id: skillId, tenant_id: tenantId } },
     })
+
+    // Notify orchestrator-bridge to invalidate its skill cache for this skill_id
+    await publishRegistryChanged(tenantId, "skill", skillId, "deleted")
 
     return res.status(204).send()
   } catch (err) {

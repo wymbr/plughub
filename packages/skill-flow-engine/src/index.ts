@@ -10,3 +10,6 @@ export { PipelineStateManager }        from "./state"
 
 export { executeStep }                 from "./executor"
 export type { StepContext, StepResult } from "./executor"
+
+export { handleMentionCommand, parseCommandName } from "./mention-commands"
+export type { MentionCommandContext, MentionCommandResult } from "./mention-commands"

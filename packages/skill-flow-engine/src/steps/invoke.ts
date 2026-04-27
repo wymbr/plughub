@@ -23,9 +23,10 @@
  *   - sem sentinel → primeira execução normal.
  */
 
-import { JSONPath } from "jsonpath-plus"
 import type { InvokeStep } from "@plughub/schemas"
 import type { StepContext, StepResult } from "../executor"
+import { resolveInputMap }       from "../interpolate"
+import { extractOutputsToCtx }   from "../context-accumulator-util"
 
 export async function executeInvoke(
   step: InvokeStep,
@@ -46,8 +47,12 @@ export async function executeInvoke(
     }
   }
 
-  // Resolver inputs — valores literais ou referências JSONPath
-  const resolvedInput = resolveInput(step.input ?? {}, ctx)
+  // Resolver inputs — literais, referências $.* (JSONPath) ou @ctx.* (ContextStore)
+  const resolvedInput = await resolveInputMap(
+    step.input ?? {} as Record<string, unknown>,
+    ctx,
+    ctx.contextStore,
+  )
 
   // step.target (external MCP) and step.tool (native plughub) are both optional;
   // at least one must be present — validated at runtime per spec 4.7.
@@ -79,6 +84,22 @@ export async function executeInvoke(
     }
     await ctx.saveState(ctx.state)
 
+    // ── context_tags.outputs: escrever campos do resultado no ContextStore ──
+    // Complementa McpInterceptor: aplica quando o interceptor não tem a anotação.
+    // Fire-and-forget — não bloqueia a transição do step.
+    if (step.context_tags?.outputs && ctx.contextStore) {
+      extractOutputsToCtx(
+        ctx.contextStore,
+        ctx.sessionId,
+        ctx.customerId,
+        step.context_tags.outputs,
+        result as Record<string, unknown>,
+        `mcp_call:${mcpServer}:${toolName}`,
+      ).catch(err => {
+        console.error("[invoke] CTX_OUTPUT_EXTRACTION_FAILED", String(err))
+      })
+    }
+
     return {
       next_step_id:      step.on_success,
       ...(outputKey !== undefined && { output_as: outputKey }),
@@ -101,27 +122,5 @@ export async function executeInvoke(
   }
 }
 
-/**
- * Resolve referências JSONPath nos valores de input.
- * Valores que começam com "$." são tratados como JSONPath.
- * Valores literais são passados diretamente.
- */
-function resolveInput(
-  input:   Record<string, string | number | boolean>,
-  ctx:     StepContext
-): Record<string, unknown> {
-  const evalContext = {
-    pipeline_state: ctx.state.results,
-    session:        ctx.sessionContext,
-  }
-
-  const resolved: Record<string, unknown> = {}
-  for (const [key, value] of Object.entries(input)) {
-    if (typeof value === "string" && value.startsWith("$.")) {
-      resolved[key] = JSONPath({ path: value, json: evalContext as object, wrap: false })
-    } else {
-      resolved[key] = value
-    }
-  }
-  return resolved
-}
+// resolveInput removed — replaced by resolveInputMap from ../interpolate
+// (supports both $.* JSONPath and @ctx.* ContextStore references)

@@ -249,6 +249,9 @@ export {
   MenuStepSchema,
   CollectTargetSchema,
   CollectStepSchema,
+  BeginTransactionStepSchema,
+  EndTransactionStepSchema,
+  MentionCommandSchema,
   FlowStepSchema,
   SkillFlowSchema,
   SkillSchema,
@@ -277,6 +280,9 @@ export type {
   MenuStep,
   CollectTarget,
   CollectStep,
+  BeginTransactionStep,
+  EndTransactionStep,
+  MentionCommand,
 } from "./skill"
 
 // ── Usage Metering ───────────────────────────
@@ -473,3 +479,28 @@ export type {
   ContextRequirement,
   ContextResolutionRequest,
 } from "./contact-context"
+
+// ── ContextStore — unified contact context store ──────────────────────────────
+export {
+  ContextVisibilitySchema,
+  ContextMergeStrategySchema,
+  ContextEntrySchema,
+  ContextSnapshotSchema,
+  ContextTagEntrySchema,
+  ToolContextTagsSchema,
+  SkillRequiredContextSchema,
+  ReasonStepContextTagsSchema,
+  ContextGapsReportSchema,
+} from "./context-store"
+
+export type {
+  ContextVisibility,
+  ContextMergeStrategy,
+  ContextEntry,
+  ContextSnapshot,
+  ContextTagEntry,
+  ToolContextTags,
+  SkillRequiredContext,
+  ReasonStepContextTags,
+  ContextGapsReport,
+} from "./context-store"

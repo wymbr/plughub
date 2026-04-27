@@ -9,6 +9,7 @@
  */
 
 import { z } from "zod"
+import { ToolContextTagsSchema, ReasonStepContextTagsSchema, SkillRequiredContextSchema } from "./context-store"
 
 // ─────────────────────────────────────────────
 // Classificação da skill
@@ -67,8 +68,16 @@ export const SkillEvaluationSchema = z.object({
 // Spec 4.7: oito tipos de step
 // ─────────────────────────────────────────────
 
-/** Referência JSONPath a valor no pipeline_state ou session */
-const JsonPathSchema = z.string().regex(/^\$\./, "Deve ser JSONPath iniciando com $.")
+/**
+ * Referência a valor no pipeline_state (JSONPath) ou ContextStore (@ctx).
+ * JSONPath: $.pipeline_state.results.analise.sentimento
+ * ContextStore: @ctx.session.sentimento.current
+ * ContextStore special: @ctx.__gaps__, @ctx.__pending_question__
+ */
+const JsonPathSchema = z.string().regex(
+  /^(\$\.|@ctx\.)/,
+  "Deve ser JSONPath ($.) ou referência ao ContextStore (@ctx.)"
+)
 
 /** Target de um step task ou invoke */
 const TaskTargetSchema  = z.object({ skill_id: z.string() })
@@ -78,16 +87,31 @@ const InvokeTargetSchema = z.object({
 })
 const EscalateTargetSchema = z.object({ pool: z.string() })
 
-/** Input de steps invoke e reason — literais ou JSONPath */
-const StepInputSchema = z.record(
-  z.union([z.string(), z.number(), z.boolean(), JsonPathSchema])
-)
+/**
+ * Input de steps invoke e reason — literais, JSONPath ou objetos aninhados.
+ * Objetos aninhados são necessários para campos como template_vars que agrupam
+ * múltiplos parâmetros relacionados em um único input de MCP tool.
+ */
+type StepInputValue = string | number | boolean | Record<string, string | number | boolean>
+const StepInputValueSchema: z.ZodType<StepInputValue> = z.union([
+  z.string(),
+  z.number(),
+  z.boolean(),
+  z.record(z.union([z.string(), z.number(), z.boolean()])),
+])
+const StepInputSchema = z.record(StepInputValueSchema)
 
 /** Condição para step choice */
 const ConditionSchema = z.object({
   field:    JsonPathSchema,
-  operator: z.enum(["eq", "neq", "gt", "gte", "lt", "lte", "contains"]),
-  value:    z.union([z.string(), z.number(), z.boolean()]),
+  /**
+   * Operadores disponíveis:
+   *   eq, neq, gt, gte, lt, lte, contains — comparação de valor
+   *   exists          — tag presente no ContextStore com qualquer valor
+   *   confidence_gte  — confidence da ContextEntry ≥ value (apenas @ctx.*)
+   */
+  operator: z.enum(["eq", "neq", "gt", "gte", "lt", "lte", "contains", "exists", "confidence_gte"]),
+  value:    z.union([z.string(), z.number(), z.boolean()]).optional(),  // opcional para "exists"
   next:     z.string(),
 })
 
@@ -159,7 +183,7 @@ export const EscalateStepSchema = z.object({
 export const CompleteStepSchema = z.object({
   id:      z.string(),
   type:    z.literal("complete"),
-  outcome: z.enum(["resolved", "escalated_human", "transferred_agent", "callback"]),
+  outcome: z.enum(["resolved", "escalated_human", "transferred_agent", "callback", "failed"]),
 })
 
 export const InvokeStepSchema = z.object({
@@ -175,6 +199,12 @@ export const InvokeStepSchema = z.object({
   input:      StepInputSchema.optional(),
   /** Output binding key — optional for fire-and-forget invocations */
   output_as:  z.string().optional(),
+  /**
+   * context_tags — mapeamento declarativo de inputs/outputs para o ContextStore.
+   * Complementa o McpInterceptor: se o interceptor não tiver a anotação registrada,
+   * o engine a aplica diretamente ao processar o invoke step.
+   */
+  context_tags: ToolContextTagsSchema.optional(),
   on_success: z.string(),
   on_failure: z.string(),
 })
@@ -196,6 +226,17 @@ export const ReasonStepSchema = z.object({
   output_schema:      z.record(ReasonOutputFieldSchema),
   output_as:          z.string(),
   max_format_retries: z.number().int().min(0).max(3).default(1),
+  /**
+   * Mapeamento declarativo de campos do output para o ContextStore (Opção A).
+   * O engine chama ContextAccumulator.extractFromOutputs() após execução do LLM.
+   *
+   * Exemplo:
+   *   context_tags:
+   *     outputs:
+   *       sentimento: { tag: "session.sentimento.current", confidence: 0.8, merge: "overwrite" }
+   *       escalar:    { tag: "session.escalar_solicitado",  confidence: 1.0, merge: "overwrite" }
+   */
+  context_tags:       ReasonStepContextTagsSchema.optional(),
   on_success:         z.string(),
   on_failure:         z.string(),
 })
@@ -206,6 +247,13 @@ export const NotifyStepSchema = z.object({
   /** Suporta {{$.pipeline_state.*}} para personalização dinâmica */
   message:    z.string().min(1),
   channel:    z.enum(["session", "whatsapp", "sms", "email"]).default("session"),
+  /**
+   * Visibilidade da mensagem.
+   *   "all"         → entregue ao cliente e a todos os agentes (padrão quando ausente)
+   *   "agents_only" → entregue somente aos agentes; o cliente não vê a mensagem.
+   *                   Usado por especialistas em conferência (ex: co-pilot SAC).
+   */
+  visibility: z.enum(["all", "agents_only"]).optional(),
   on_success: z.string(),
   on_failure: z.string(),
 })
@@ -237,15 +285,35 @@ export const MenuStepSchema = z.object({
     id:    z.string(),
     label: z.string(),
   })).optional(),
+  /**
+   * Quando true, todos os campos deste step são mascarados.
+   * Pode ser sobrescrito por campo individual (field-level tem precedência).
+   * Valores mascarados nunca entram no stream, pipeline_state ou logs.
+   */
+  masked: z.boolean().optional(),
   /** Campos de formulário (form) */
   fields: z.array(z.object({
     id:       z.string(),
     label:    z.string(),
     type:     z.string(),
     required: z.boolean().default(false),
+    /**
+     * Quando true, este campo específico é mascarado — mesmo que masked=false no step.
+     * Quando false, este campo NÃO é mascarado — mesmo que masked=true no step.
+     * (field-level tem precedência sobre step-level)
+     */
+    masked:   z.boolean().optional(),
   })).optional(),
   /** Chave para armazenar a resposta do cliente em pipeline_state.results */
   output_as: z.string().optional(),
+  /**
+   * Visibilidade do prompt enviado antes de aguardar a resposta.
+   *   "all"         → prompt entregue ao cliente e a todos os agentes (padrão quando ausente)
+   *   "agents_only" → prompt entregue somente aos agentes; o cliente não vê o prompt.
+   *                   Útil para menus internos de co-pilot ou aprovação entre agentes.
+   *                   O resultado/resposta ao menu segue regras normais de roteamento.
+   */
+  visibility: z.enum(["all", "agents_only"]).optional(),
   /**
    * Tempo limite para aguardar a resposta (segundos).
    *   0  → retorno imediato (sem espera)
@@ -341,6 +409,85 @@ export const CollectStepSchema = z.object({
 })
 export type CollectStep = z.infer<typeof CollectStepSchema>
 
+// ── BeginTransactionStep / EndTransactionStep — unidade atômica para dados mascarados ──
+
+/**
+ * BeginTransactionStep — abre um bloco atômico de captura sensível.
+ *
+ * Todos os steps até o EndTransactionStep correspondente são tratados como
+ * uma unidade. Se qualquer step dentro do bloco falhar, o masked_scope é
+ * descartado e o engine executa o step declarado em on_failure (rewind explícito).
+ *
+ * Regras:
+ *   - on_failure aponta para o step de recoleta (dentro ou fora do bloco)
+ *   - reason steps dentro do bloco que recebam @masked.* são inválidos
+ *   - retry nunca reutiliza valores mascarados — sempre recoleta do usuário
+ */
+export const BeginTransactionStepSchema = z.object({
+  id:         z.string(),
+  type:       z.literal("begin_transaction"),
+  /**
+   * Step para rewind em caso de falha em qualquer step dentro do bloco.
+   * Declarado explicitamente pelo autor — o engine nunca infere.
+   * Pode apontar para dentro ou fora do bloco.
+   */
+  on_failure: z.string(),
+})
+export type BeginTransactionStep = z.infer<typeof BeginTransactionStepSchema>
+
+/**
+ * EndTransactionStep — fecha o bloco atômico no caminho de sucesso.
+ *
+ * Escreve o status da operação em pipeline_state.results[result_as].
+ * Limpa o masked_scope da memória (valores sensíveis são descartados).
+ *
+ * Nota: rollback é sempre implícito e automático (via on_failure do begin_transaction).
+ * Nunca existe rollback explícito no YAML.
+ */
+export const EndTransactionStepSchema = z.object({
+  id:         z.string(),
+  type:       z.literal("end_transaction"),
+  /**
+   * Chave em pipeline_state.results onde o status da operação será gravado.
+   * Formato: { status: "ok", fields_collected: string[], completed_at: string }
+   */
+  result_as:  z.string().optional(),
+  on_success: z.string().optional(),
+})
+export type EndTransactionStep = z.infer<typeof EndTransactionStepSchema>
+
+// ── MentionCommand — comandos que um agente especialista reconhece via @mention ──
+
+/**
+ * Ação executada quando o agente recebe um mention_command.
+ */
+const MentionCommandActionSchema = z.union([
+  /** Escreve campos no ContextStore (fire-and-forget) */
+  z.object({ set_context:    z.record(z.string()) }),
+  /** Salta para o step declarado no skill flow */
+  z.object({ trigger_step:  z.string() }),
+  /** Agente sai da conferência via agent_done */
+  z.object({ terminate_self: z.literal(true) }),
+])
+
+/**
+ * MentionCommand — declara um comando que este agente reconhece quando
+ * endereçado via @alias pelo agente humano.
+ *
+ * Comandos não reconhecidos são ignorados silenciosamente.
+ * Texto livre (sem comando estruturado) pode alimentar um reason step.
+ */
+export const MentionCommandSchema = z.object({
+  description: z.string().optional(),
+  action:      MentionCommandActionSchema,
+  /**
+   * Quando true, o agente responde com uma mensagem agents_only confirmando
+   * o recebimento do comando. Quando false, o step/ação responde por conta própria.
+   */
+  acknowledge: z.boolean().default(false),
+})
+export type MentionCommand = z.infer<typeof MentionCommandSchema>
+
 /** Step discriminado por type */
 export const FlowStepSchema = z.discriminatedUnion("type", [
   TaskStepSchema,
@@ -353,6 +500,9 @@ export const FlowStepSchema = z.discriminatedUnion("type", [
   NotifyStepSchema,
   MenuStepSchema,
   CollectStepSchema,
+  // Masked input: transação atômica
+  BeginTransactionStepSchema,
+  EndTransactionStepSchema,
   // Arc 4: workflow automation
   z.object({
     type:           z.literal("suspend"),
@@ -385,14 +535,30 @@ export type ReasonStep    = z.infer<typeof ReasonStepSchema>
 export type NotifyStep    = z.infer<typeof NotifyStepSchema>
 export type MenuStep      = z.infer<typeof MenuStepSchema>
 // Arc 4 — suspend step (inline schema in FlowStepSchema discriminated union)
-export type SuspendStep   = Extract<FlowStep, { type: "suspend" }>
+export type SuspendStep          = Extract<FlowStep, { type: "suspend" }>
 // Arc 4 extension — collect step
 // CollectStep type already exported above
+// Masked input — transaction steps already exported above (BeginTransactionStep, EndTransactionStep)
 
 /** Flow de orquestração — presente apenas quando type === "orchestrator" */
 export const SkillFlowSchema = z.object({
   entry: z.string(),
   steps: z.array(FlowStepSchema).min(1),
+
+  /**
+   * Campos do ContextStore que este fluxo precisa para executar corretamente.
+   * O engine computa @ctx.__gaps__ comparando esta lista com o ContextStore atual
+   * antes de entrar no fluxo. Tags ausentes ou com confiança abaixo do threshold
+   * aparecem em @ctx.__gaps__.missing e @ctx.__gaps__.low_confidence.
+   *
+   * Exemplo em agente_contexto_ia_v1.yaml:
+   *   required_context:
+   *     - tag: "caller.cpf"
+   *       confidence_min: 0.8
+   *     - tag: "session.motivo_contato"
+   *       confidence_min: 0.6
+   */
+  required_context: z.array(SkillRequiredContextSchema).optional(),
 }).refine(
   (flow: { entry: string; steps: Array<{ id: string }> }) => flow.steps.some((s) => s.id === flow.entry),
   { message: "entry deve referenciar um step existente", path: ["entry"] }
@@ -416,10 +582,15 @@ export const SkillSchema = z.object({
 
   classification: SkillClassificationSchema,
 
+  /**
+   * System prompt instruction — obrigatório para skills verticais/horizontais (LLM-driven).
+   * Opcional para skills de orquestração (classification.type === "orchestrator")
+   * que definem comportamento exclusivamente via campo flow.
+   */
   instruction: z.object({
     prompt_id: z.string(),
     language:  z.string().default("pt-BR"),
-  }),
+  }).optional(),
 
   tools:      z.array(SkillToolSchema).default([]),
   interface:  SkillInterfaceSchema.optional(),
@@ -434,6 +605,23 @@ export const SkillSchema = z.object({
 
   /** Presente apenas quando classification.type === "orchestrator" */
   flow: SkillFlowSchema.optional(),
+
+  /**
+   * mention_commands — comandos que este agente especialista reconhece quando
+   * endereçado via @alias pelo agente humano (protocolo @mention).
+   *
+   * Mapa: nome_do_comando → definição da ação.
+   * Comandos não reconhecidos são ignorados silenciosamente.
+   *
+   * Exemplo:
+   *   mention_commands:
+   *     ativa:
+   *       action: { set_context: { "session.copilot.mode": "active" } }
+   *       acknowledge: true
+   *     para:
+   *       action: { terminate_self: true }
+   */
+  mention_commands: z.record(MentionCommandSchema).optional(),
 }).refine(
   (skill: { classification: { type: string }; flow?: unknown }) => {
     if (skill.classification.type === "orchestrator") {
