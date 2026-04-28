@@ -58,10 +58,15 @@ class Replayer:
 
     async def prepare(
         self,
-        event:          SessionClosedEvent,
-        speed_factor:   float | None = None,
-        comparison_mode: bool        = False,
-        dimensions:     list[str]    | None = None,
+        event:            SessionClosedEvent,
+        speed_factor:     float | None = None,
+        comparison_mode:  bool         = False,
+        dimensions:       list[str]    | None = None,
+        # ── Arc 6 — campaign context (optional) ──────────────────────────────
+        form_id:          str | None            = None,
+        campaign_id:      str | None            = None,
+        instance_id:      str | None            = None,
+        evaluation_form:  dict[str, Any] | None = None,
     ) -> EvaluationRequest:
         """
         Ponto de entrada principal.
@@ -71,6 +76,12 @@ class Replayer:
         3. Lê metadados complementares (sentimento, participantes, session meta)
         4. Escreve ReplayContext no Redis
         5. Retorna EvaluationRequest para publicação no Kafka
+
+        Arc 6 parameters (all optional, backward-compatible):
+          form_id, campaign_id, instance_id  — campaign tracking identifiers
+          evaluation_form                     — pre-fetched EvaluationForm dict; when
+                                                provided, written into ReplayContext so
+                                                the evaluator agent has the form inline.
 
         Raises StreamNotAvailableError se o stream não existe em nenhuma fonte.
         """
@@ -104,6 +115,10 @@ class Replayer:
             speed_factor    = sf,
             source          = source,
             comparison_mode = comparison_mode,
+            # Arc 6 fields
+            evaluation_form = evaluation_form,
+            campaign_id     = campaign_id,
+            instance_id     = instance_id,
         )
 
         # ── 5. Persiste ReplayContext no Redis ────────────────────────────────
@@ -114,8 +129,9 @@ class Replayer:
             ex=REPLAY_CONTEXT_TTL,
         )
         logger.info(
-            "Replayer: ReplayContext written for session %s (source=%s, events=%d, speed=%.1fx)",
-            session_id, source, len(raw_events), sf,
+            "Replayer: ReplayContext written for session %s "
+            "(source=%s, events=%d, speed=%.1fx, campaign=%s)",
+            session_id, source, len(raw_events), sf, campaign_id or "none",
         )
 
         # ── 6. Monta EvaluationRequest ────────────────────────────────────────
@@ -127,6 +143,10 @@ class Replayer:
             speed_factor    = sf,
             comparison_mode = comparison_mode,
             dimensions      = dimensions or [],
+            # Arc 6 fields
+            form_id         = form_id,
+            campaign_id     = campaign_id,
+            instance_id     = instance_id,
         )
 
     # ─────────────────────────────────────────

@@ -1,6 +1,8 @@
 """
 models.py
 Pydantic models espelhando os schemas TypeScript de @plughub/schemas/evaluation.ts
+
+Inclui modelos Arc 3 (Session Replayer) e Arc 6 (Evaluation Platform).
 """
 
 from __future__ import annotations
@@ -69,6 +71,19 @@ class ReplayContext(BaseModel):
     #: para que o Comparator produza um ComparisonReport junto ao EvaluationResult.
     comparison_mode: bool                     = False
 
+    # ── Arc 6 — form-aware evaluation context (optional, backward-compatible) ──
+
+    #: EvaluationForm populated by evaluation-api when a campaign triggers this replay.
+    #: When present, the evaluator agent uses this form as the evaluation template.
+    #: Stored as a plain dict to avoid a circular dependency on evaluation-api models.
+    evaluation_form: Optional[dict[str, Any]] = None
+
+    #: EvaluationCampaign that triggered this evaluation (Arc 6).
+    campaign_id:     Optional[str]            = None
+
+    #: EvaluationInstance tracking record ID (Arc 6).
+    instance_id:     Optional[str]            = None
+
 
 # ─────────────────────────────────────────────
 # EvaluationRequest
@@ -86,6 +101,11 @@ class EvaluationRequest(BaseModel):
     dimensions:      list[str]     = Field(default_factory=list)
     requested_at:    datetime      = Field(default_factory=datetime.utcnow)
 
+    # ── Arc 6 — campaign context (optional, backward-compatible) ──
+    form_id:     Optional[str] = None
+    campaign_id: Optional[str] = None
+    instance_id: Optional[str] = None
+
 
 # ─────────────────────────────────────────────
 # SessionClosedEvent (Kafka payload)
@@ -97,3 +117,37 @@ class SessionClosedEvent(BaseModel):
     outcome:      Optional[str] = None
     close_reason: Optional[str] = None
     closed_at:    Optional[str] = None
+
+
+# ─────────────────────────────────────────────
+# Arc 6 — Evaluation Platform models
+# (mirror of @plughub/schemas/evaluation.ts Arc 6 section)
+# ─────────────────────────────────────────────
+
+class KnowledgeSnippet(BaseModel):
+    """RAG result from mcp-server-knowledge, attached to an EvaluationResult."""
+    snippet_id:   str
+    content:      str
+    score:        float     # cosine similarity 0–1
+    source_ref:   Optional[str]     = None
+    retrieved_at: datetime          = Field(default_factory=datetime.utcnow)
+
+
+class EvidenceRef(BaseModel):
+    """Pointer to a specific event in the replay transcript supporting a score."""
+    event_id:   str
+    turn_index: int
+    quote:      Optional[str] = None   # ≤500 chars
+    category:   Literal["positive", "negative", "neutral"] = "neutral"
+
+
+class EvaluationCriterionResponse(BaseModel):
+    """Evaluator's structured answer to one criterion in the form."""
+    criterion_id:  str
+    na:            bool           = False
+    score:         Optional[float]  = None   # type "score"
+    boolean_value: Optional[bool]   = None   # type "boolean"
+    choice_value:  Optional[str]    = None   # type "choice"
+    text_value:    Optional[str]    = None   # type "text"
+    notes:         Optional[str]    = None
+    evidence:      list[EvidenceRef] = Field(default_factory=list)
