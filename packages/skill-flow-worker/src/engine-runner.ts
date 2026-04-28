@@ -64,9 +64,15 @@ export class EngineRunner {
     }
 
     try {
+      // Use origin_session_id as the ContextStore key when available so that
+      // @ctx.* reads/writes target the originating customer session's hash
+      // ({tenant}:ctx:{origin_session_id}) rather than the workflow UUID.
+      // Falls back to instance.id for headless workflows with no session origin.
+      const contextSessionId = instance.origin_session_id ?? instance.id
+
       const result = await this.engine.run({
         tenantId:    instance.tenant_id,
-        sessionId:   instance.id,
+        sessionId:   contextSessionId,
         customerId:  'workflow',
         skillId:     instance.flow_id,
         flow:        flowDefinition as never,

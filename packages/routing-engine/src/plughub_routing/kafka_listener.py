@@ -212,6 +212,28 @@ class LifecycleEventHandler:
             if not contact:
                 continue
 
+            # Check if the session was already closed while waiting in queue.
+            # The orchestrator-bridge sets session:{id}:closed (TTL 7d) for every
+            # close reason so we can skip re-routing stale sessions and avoid
+            # delivering "ghost contacts" to reconnecting human agents.
+            try:
+                closed_marker = await self._instances._redis.get(
+                    f"session:{contact.session_id}:closed"
+                )
+            except Exception:
+                closed_marker = None
+
+            if closed_marker:
+                logger.info(
+                    "Queue drain: session=%s closed (reason=%s) — removing from queue",
+                    contact.session_id,
+                    closed_marker.decode() if isinstance(closed_marker, bytes) else closed_marker,
+                )
+                await self._instances.remove_queued_contact(
+                    tenant_id, pool_id, contact.session_id
+                )
+                continue
+
             # Retrieve the full event dict that was stored when the contact was queued
             full_data = await self._instances.get_full_queued_contact(
                 tenant_id, contact.session_id

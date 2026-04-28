@@ -3,14 +3,24 @@ router.py
 FastAPI routes for the Workflow API.
 
 Endpoints:
-  POST /v1/workflow/trigger                     — create + start a WorkflowInstance
+  POST /v1/workflow/trigger                       — create + start a WorkflowInstance
   POST /v1/workflow/instances/{id}/persist-suspend — called by Skill Flow engine on suspend
-  POST /v1/workflow/resume                      — resume a suspended instance (token-based)
-  POST /v1/workflow/instances/{id}/complete     — mark an instance completed (called by engine)
-  POST /v1/workflow/instances/{id}/fail         — mark an instance failed (called by engine)
-  GET  /v1/workflow/instances                   — list instances
-  GET  /v1/workflow/instances/{id}              — get instance detail
-  POST /v1/workflow/instances/{id}/cancel       — cancel active/suspended instance
+  POST /v1/workflow/resume                        — resume a suspended instance (token-based)
+  POST /v1/workflow/instances/{id}/complete       — mark an instance completed (called by engine)
+  POST /v1/workflow/instances/{id}/fail           — mark an instance failed (called by engine)
+  GET  /v1/workflow/instances                     — list instances
+  GET  /v1/workflow/instances/{id}                — get instance detail
+  POST /v1/workflow/instances/{id}/cancel         — cancel active/suspended instance
+
+  ── Webhook Trigger ───────────────────────────────────────────────────────────
+  POST /v1/workflow/webhooks                      — register a webhook (admin)
+  GET  /v1/workflow/webhooks                      — list webhooks for tenant (admin)
+  GET  /v1/workflow/webhooks/{webhook_id}         — get webhook detail (admin)
+  PATCH /v1/workflow/webhooks/{webhook_id}        — update active/description/context (admin)
+  POST /v1/workflow/webhooks/{webhook_id}/rotate  — rotate token (admin)
+  DELETE /v1/workflow/webhooks/{webhook_id}       — delete webhook (admin)
+  GET  /v1/workflow/webhooks/{webhook_id}/deliveries — delivery log (admin)
+  POST /v1/workflow/webhook/{webhook_id}          — PUBLIC trigger endpoint (X-Webhook-Token)
 
 Architecture note:
   The Skill Flow engine runs in a TypeScript worker process. When it hits a
@@ -22,14 +32,20 @@ Architecture note:
   they call POST /resume with the resume_token. The workflow-api records the
   decision and emits workflow.resumed to Kafka. A Kafka consumer (or the worker
   itself) picks up the event and calls engine.run() with resumeContext set.
+
+  Webhook tokens are stored as SHA-256 hashes — plain tokens are shown once at
+  creation and never stored. Authentication uses X-Webhook-Token header with
+  constant-time hash comparison.
 """
 from __future__ import annotations
 
+import hashlib
 import logging
+import time
 from datetime import datetime, timezone
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from .calendar_client import calculate_deadline
@@ -39,14 +55,23 @@ from .db import (
     db_complete_instance,
     db_create_collect,
     db_create_instance,
+    db_create_webhook,
+    db_delete_webhook,
     db_fail_instance,
     db_get_collect_by_token,
     db_get_instance,
     db_get_instance_by_token,
+    db_get_webhook,
+    db_get_webhook_by_token_hash,
     db_list_collects_by_campaign,
+    db_list_deliveries,
     db_list_instances,
+    db_list_webhooks,
+    db_record_delivery,
     db_resume_instance,
+    db_rotate_webhook_token,
     db_suspend_instance,
+    db_update_webhook,
 )
 from .kafka_emitter import (
     emit_cancelled,
@@ -58,6 +83,7 @@ from .kafka_emitter import (
     emit_started,
     emit_suspended,
 )
+from .webhooks import generate_token, verify_token
 
 logger = logging.getLogger("plughub.workflow.router")
 router = APIRouter()
@@ -78,13 +104,17 @@ def _settings(request: Request):
 # ── Trigger ───────────────────────────────────────────────────────────────────
 
 class TriggerRequest(BaseModel):
-    tenant_id:    str
-    flow_id:      str
-    trigger_type: str = "manual"
-    session_id:   str | None = None
-    pool_id:      str | None = None
-    context:      dict = Field(default_factory=dict)
-    metadata:     dict = Field(default_factory=dict)
+    tenant_id:         str
+    flow_id:           str
+    trigger_type:      str = "manual"
+    session_id:        str | None = None
+    # When triggered from an active customer session, pass the session_id here.
+    # The worker will use this as the ContextStore key so @ctx.* reads/writes
+    # target {tenant}:ctx:{origin_session_id} rather than the workflow UUID.
+    origin_session_id: str | None = None
+    pool_id:           str | None = None
+    context:           dict = Field(default_factory=dict)
+    metadata:          dict = Field(default_factory=dict)
 
 
 @router.post("/v1/workflow/trigger", status_code=201)
@@ -102,14 +132,15 @@ async def trigger_workflow(
     producer = _producer(request)
 
     instance = await db_create_instance(pool, {
-        "installation_id": settings.installation_id,
-        "organization_id": settings.organization_id,
-        "tenant_id":       body.tenant_id,
-        "flow_id":         body.flow_id,
-        "session_id":      body.session_id,
-        "pool_id":         body.pool_id,
-        "metadata":        body.metadata,
-        "pipeline_state":  {"contact_context": body.context},
+        "installation_id":   settings.installation_id,
+        "organization_id":   settings.organization_id,
+        "tenant_id":         body.tenant_id,
+        "flow_id":           body.flow_id,
+        "session_id":        body.session_id,
+        "origin_session_id": body.origin_session_id,
+        "pool_id":           body.pool_id,
+        "metadata":          body.metadata,
+        "pipeline_state":    {"contact_context": body.context},
     })
 
     await emit_started(
@@ -691,3 +722,271 @@ async def list_campaign_collects(
     if limit > 1000:
         limit = 1000
     return await db_list_collects_by_campaign(pool, tenant_id, campaign_id, limit, offset)
+
+
+# ── Webhook helpers ────────────────────────────────────────────────────────────
+
+def _require_admin(request: Request, x_admin_token: str = Header(default="")):
+    """Dependency that validates the admin token for webhook management endpoints."""
+    settings = _settings(request)
+    if settings.admin_token and x_admin_token != settings.admin_token:
+        raise HTTPException(401, "invalid or missing X-Admin-Token")
+
+
+def _hash_payload(body: bytes) -> str:
+    return hashlib.sha256(body).hexdigest()
+
+
+# ── Webhook CRUD (admin-protected) ────────────────────────────────────────────
+
+class WebhookCreateRequest(BaseModel):
+    tenant_id:        str
+    flow_id:          str
+    description:      str                      = ""
+    context_override: dict                     = Field(default_factory=dict)
+
+
+@router.post("/v1/workflow/webhooks", status_code=201)
+async def create_webhook(
+    body:    WebhookCreateRequest,
+    request: Request,
+    pool=Depends(_pool),
+    _admin=Depends(_require_admin),
+) -> dict[str, Any]:
+    """
+    Register a new webhook endpoint that triggers the given flow_id.
+    Returns the webhook record including the plain token (shown once — never stored).
+    """
+    plain_token, token_hash, token_prefix = generate_token()
+
+    webhook = await db_create_webhook(
+        pool,
+        tenant_id=body.tenant_id,
+        flow_id=body.flow_id,
+        description=body.description,
+        token_hash=token_hash,
+        token_prefix=token_prefix,
+        context_override=body.context_override,
+    )
+
+    # Embed the plain token in the response (only opportunity to show it)
+    return {**webhook, "token": plain_token}
+
+
+@router.get("/v1/workflow/webhooks")
+async def list_webhooks(
+    tenant_id: str,
+    active:    bool | None = None,
+    limit:     int = 50,
+    offset:    int = 0,
+    pool=Depends(_pool),
+    _admin=Depends(_require_admin),
+) -> list[dict]:
+    if limit > 200:
+        limit = 200
+    return await db_list_webhooks(pool, tenant_id, active, limit, offset)
+
+
+@router.get("/v1/workflow/webhooks/{webhook_id}")
+async def get_webhook(
+    webhook_id: str,
+    pool=Depends(_pool),
+    _admin=Depends(_require_admin),
+) -> dict[str, Any]:
+    webhook = await db_get_webhook(pool, webhook_id)
+    if not webhook:
+        raise HTTPException(404, "webhook not found")
+    return webhook
+
+
+class WebhookPatchRequest(BaseModel):
+    description:      str  | None = None
+    active:           bool | None = None
+    context_override: dict | None = None
+
+
+@router.patch("/v1/workflow/webhooks/{webhook_id}", status_code=200)
+async def patch_webhook(
+    webhook_id: str,
+    body:       WebhookPatchRequest,
+    pool=Depends(_pool),
+    _admin=Depends(_require_admin),
+) -> dict[str, Any]:
+    """Update description, active status, or context_override."""
+    webhook = await db_get_webhook(pool, webhook_id)
+    if not webhook:
+        raise HTTPException(404, "webhook not found")
+
+    updated = await db_update_webhook(
+        pool, webhook_id,
+        description=body.description,
+        active=body.active,
+        context_override=body.context_override,
+    )
+    return updated  # type: ignore[return-value]
+
+
+@router.post("/v1/workflow/webhooks/{webhook_id}/rotate", status_code=200)
+async def rotate_webhook_token(
+    webhook_id: str,
+    pool=Depends(_pool),
+    _admin=Depends(_require_admin),
+) -> dict[str, Any]:
+    """
+    Rotate the webhook secret.  Returns the new plain token (shown once).
+    The old token is immediately invalidated.
+    """
+    webhook = await db_get_webhook(pool, webhook_id)
+    if not webhook:
+        raise HTTPException(404, "webhook not found")
+
+    plain_token, token_hash, token_prefix = generate_token()
+    updated = await db_rotate_webhook_token(pool, webhook_id, token_hash, token_prefix)
+    return {**updated, "token": plain_token}  # type: ignore[operator]
+
+
+@router.delete("/v1/workflow/webhooks/{webhook_id}", status_code=204)
+async def delete_webhook(
+    webhook_id: str,
+    pool=Depends(_pool),
+    _admin=Depends(_require_admin),
+) -> None:
+    deleted = await db_delete_webhook(pool, webhook_id)
+    if not deleted:
+        raise HTTPException(404, "webhook not found")
+
+
+@router.get("/v1/workflow/webhooks/{webhook_id}/deliveries")
+async def list_webhook_deliveries(
+    webhook_id: str,
+    limit:      int = 50,
+    pool=Depends(_pool),
+    _admin=Depends(_require_admin),
+) -> list[dict]:
+    """Last N delivery records for a webhook (most recent first)."""
+    webhook = await db_get_webhook(pool, webhook_id)
+    if not webhook:
+        raise HTTPException(404, "webhook not found")
+    if limit > 200:
+        limit = 200
+    return await db_list_deliveries(pool, webhook_id, limit)
+
+
+# ── Webhook public trigger ─────────────────────────────────────────────────────
+
+@router.post("/v1/workflow/webhook/{webhook_id}", status_code=202)
+async def trigger_via_webhook(
+    webhook_id:      str,
+    request:         Request,
+    pool=Depends(_pool),
+    x_webhook_token: str = Header(default=""),
+) -> dict[str, Any]:
+    """
+    Public trigger endpoint called by external systems (Salesforce, ERP, etc.).
+
+    Authentication:
+      Header X-Webhook-Token: <plain_token>
+
+    The request body (any JSON) is merged with context_override and passed as
+    pipeline_state.contact_context to the new WorkflowInstance.
+
+    Returns 202 Accepted with { instance_id, flow_id, webhook_id }.
+    Logs a delivery record regardless of outcome.
+    """
+    settings  = _settings(request)
+    producer  = _producer(request)
+    t0        = time.monotonic()
+
+    # Read raw body once (for payload hash)
+    raw_body  = await request.body()
+    payload_hash = _hash_payload(raw_body)
+
+    # ── Authenticate ──────────────────────────────────────────────────────────
+    if not x_webhook_token:
+        raise HTTPException(401, "X-Webhook-Token header is required")
+
+    token_hash = hashlib.sha256(x_webhook_token.encode()).hexdigest()
+    webhook    = await db_get_webhook_by_token_hash(pool, token_hash)
+
+    if not webhook:
+        # Log failed delivery (no webhook_id or tenant_id available — use placeholder)
+        # We can't call db_record_delivery because we don't have a valid webhook_id UUID.
+        # Just raise immediately.
+        raise HTTPException(401, "invalid webhook token")
+
+    if not verify_token(x_webhook_token, token_hash):
+        # Extra constant-time guard (token_hash lookup already confirmed match,
+        # but belt-and-suspenders against hash-lookup collisions).
+        raise HTTPException(401, "invalid webhook token")
+
+    if not webhook["active"]:
+        latency = int((time.monotonic() - t0) * 1000)
+        await db_record_delivery(
+            pool,
+            webhook_id=webhook["id"],
+            tenant_id=webhook["tenant_id"],
+            status_code=403,
+            payload_hash=payload_hash,
+            error="webhook is inactive",
+            latency_ms=latency,
+        )
+        raise HTTPException(403, "webhook is inactive")
+
+    # ── Parse body as JSON context (best-effort — empty dict on failure) ──────
+    import json as _json
+    try:
+        body_json: dict = _json.loads(raw_body) if raw_body else {}
+        if not isinstance(body_json, dict):
+            body_json = {"payload": body_json}
+    except Exception:
+        body_json = {}
+
+    # Merge context_override (webhook-level defaults) with inbound payload
+    context = {**webhook["context_override"], **body_json}
+
+    # ── Create workflow instance ──────────────────────────────────────────────
+    instance = await db_create_instance(pool, {
+        "installation_id":   settings.installation_id,
+        "organization_id":   settings.organization_id,
+        "tenant_id":         webhook["tenant_id"],
+        "flow_id":           webhook["flow_id"],
+        "session_id":        None,
+        "origin_session_id": None,
+        "pool_id":           None,
+        "metadata":          {"webhook_id": webhook["id"], "webhook_trigger": True},
+        "pipeline_state":    {"contact_context": context},
+    })
+
+    await emit_started(
+        producer, settings.kafka_topic,
+        installation_id=settings.installation_id,
+        organization_id=settings.organization_id,
+        tenant_id=webhook["tenant_id"],
+        instance_id=instance["id"],
+        flow_id=webhook["flow_id"],
+        session_id=None,
+        trigger_type="webhook",
+    )
+
+    latency = int((time.monotonic() - t0) * 1000)
+    await db_record_delivery(
+        pool,
+        webhook_id=webhook["id"],
+        tenant_id=webhook["tenant_id"],
+        status_code=202,
+        payload_hash=payload_hash,
+        instance_id=instance["id"],
+        latency_ms=latency,
+    )
+
+    logger.info(
+        "webhook trigger: webhook_id=%s flow_id=%s instance_id=%s latency_ms=%d",
+        webhook["id"], webhook["flow_id"], instance["id"], latency,
+    )
+
+    return {
+        "instance_id": instance["id"],
+        "flow_id":     webhook["flow_id"],
+        "webhook_id":  webhook["id"],
+        "status":      "accepted",
+    }

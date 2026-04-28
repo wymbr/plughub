@@ -940,6 +940,8 @@ def _pool_config_diverged(existing: dict, desired: dict) -> bool:
         "competency_weights", "aging_factor", "breach_factor",
         # Skills and cross-site routing
         "skills", "remote_sites",
+        # @mention routing — alias → pool_id map for human agent @mention commands
+        "mentionable_pools",
     }
     for key in MANAGED:
         if existing.get(key) != desired.get(key):

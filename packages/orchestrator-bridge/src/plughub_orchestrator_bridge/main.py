@@ -56,7 +56,7 @@ from pathlib import Path
 import aiohttp
 import redis.asyncio as aioredis
 import yaml
-from aiokafka import AIOKafkaConsumer
+from aiokafka import AIOKafkaConsumer, AIOKafkaProducer
 
 from .instance_bootstrap import InstanceBootstrap
 from .registry_syncer import RegistrySyncer
@@ -100,6 +100,7 @@ TOPIC_INBOUND           = "conversations.inbound"
 TOPIC_EVENTS            = "conversations.events"
 TOPIC_REGISTRY_CHANGED  = "registry.changed"
 TOPIC_CONFIG_CHANGED    = "config.changed"
+TOPIC_PARTICIPANTS      = "conversations.participants"
 GROUP_ID                = "orchestrator-bridge"
 
 # Namespaces whose changes directly affect how many agent instances should exist.
@@ -121,6 +122,10 @@ _RUNTIME_NAMESPACES: frozenset[str] = frozenset({
 
 _agent_type_cache: dict[str, dict] = {}   # agent_type_id → agent type response body
 _skill_flow_cache: dict[str, dict] = {}   # skill_id → flow dict
+
+# Kafka producer — initialised in run(), used by fire_pool_hooks().
+# None until run() starts; hooks silently skip if producer not ready.
+_kafka_producer: AIOKafkaProducer | None = None
 
 
 async def get_agent_type(
@@ -482,6 +487,363 @@ async def activate_human_agent(
     except Exception as exc:
         logger.warning("Could not store pending assignment: pool=%s — %s", pool_id, exc)
 
+    # ── Fase C: record join time + publish participant_joined to Kafka ─────────────
+    # joined_at is stored in Redis so process_contact_event can compute duration.
+    _joined_iso = datetime.now(timezone.utc).isoformat()
+    # ── Arc 5: generate segment_id for this participation window ─────────────────
+    _seg_id = str(uuid.uuid4())
+    _seq_idx = 0
+    if instance_id:
+        try:
+            await redis_client.setex(
+                f"session:{session_id}:participant_joined_at:{instance_id}",
+                14400,
+                _joined_iso,
+            )
+        except Exception:
+            pass
+        try:
+            # Increment sequence counter (primary segments only; 0-indexed)
+            _seq_raw = await redis_client.incr(f"session:{session_id}:segment_seq")
+            _seq_idx = int(_seq_raw) - 1
+            await redis_client.expire(f"session:{session_id}:segment_seq", 14400)
+            # Store segment_id keyed by instance_id for retrieval on participant_left
+            await redis_client.setex(
+                f"session:{session_id}:segment:{instance_id}",
+                14400,
+                _seg_id,
+            )
+            # Store as current primary segment for conference specialists
+            await redis_client.setex(
+                f"session:{session_id}:primary_segment",
+                14400,
+                _seg_id,
+            )
+        except Exception:
+            pass
+    asyncio.create_task(_publish_participant_event(
+        session_id=session_id,
+        tenant_id=tenant_id,
+        participant_id=instance_id,
+        pool_id=pool_id,
+        agent_type_id=routing_result.get("agent_type_id") or "",
+        event_type="participant_joined",
+        agent_type="human",
+        role="primary",
+        segment_id=_seg_id,
+        sequence_index=_seq_idx,
+        joined_at=_joined_iso,
+    ))
+
+
+# ── Pool lifecycle hooks ──────────────────────────────────────────────────────
+
+async def fire_pool_hooks(
+    http:         aiohttp.ClientSession,
+    redis_client: aioredis.Redis,
+    session_id:   str,
+    pool_id:      str,
+    tenant_id:    str,
+    customer_id:  str,
+    hook_type:    str,
+) -> None:
+    """
+    Dispatch pool lifecycle hooks defined in pool.hooks[hook_type].
+
+    For each entry { pool } in the hook list, publishes a synthetic
+    ConversationInboundEvent to conversations.inbound with conference_id set.
+    The routing engine treats this as a conference specialist invitation:
+      → allocates an instance from the target pool
+      → publishes conversations.routed with conference_id
+      → bridge activates the specialist as a conference participant
+
+    This reuses 100% of the existing @mention / conference routing path —
+    no new routing logic is needed.
+
+    Supported hook_type values:
+      on_human_start  — wired (Fase A): fires after activate_human_agent()
+      on_human_end    — ✅ Fase B: fires when last human calls agent_done
+      post_human      — ✅ Fase C: fires after all on_human_end agents complete
+
+    Errors are logged but never raised — hook failure never blocks the session.
+    """
+    global _kafka_producer
+    if _kafka_producer is None:
+        logger.warning(
+            "fire_pool_hooks: Kafka producer not ready — skipping %s hooks for pool=%s session=%s",
+            hook_type, pool_id, session_id,
+        )
+        return
+
+    pool_config = await get_pool_config(http, tenant_id, pool_id)
+    if not pool_config:
+        return
+
+    hooks      = pool_config.get("hooks") or {}
+    hook_list  = hooks.get(hook_type, [])
+
+    if not hook_list:
+        logger.debug(
+            "fire_pool_hooks: no %s hooks configured for pool=%s", hook_type, pool_id,
+        )
+        return
+
+    # Resolve channel from session meta so the specialist matches the contact's channel.
+    channel = "webchat"
+    try:
+        raw_meta = await redis_client.get(f"session:{session_id}:meta")
+        if raw_meta:
+            channel = json.loads(raw_meta).get("channel", "webchat") or "webchat"
+    except Exception:
+        pass
+
+    # For on_human_end and post_human hooks: track completion so the bridge knows when ALL hook
+    # agents have finished and can then trigger the full contact close.
+    # Counter key: session:{id}:hook_pending:{hook_type}   (TTL 4h)
+    # Per-conference key: session:{id}:hook_conf:{conference_id}  (TTL 4h)
+    # When process_routed detects a conference agent completing that has a hook_conf
+    # key, it decrements the counter. When it hits 0 → _trigger_contact_close() (for post_human)
+    # or checks for post_human hooks (for on_human_end).
+    if hook_type in ("on_human_end", "post_human") and hook_list:
+        try:
+            await redis_client.setex(
+                f"session:{session_id}:hook_pending:{hook_type}",
+                14400,
+                str(len(hook_list)),
+            )
+        except Exception as exc:
+            logger.warning(
+                "fire_pool_hooks: could not set pending counter: session=%s — %s",
+                session_id, exc,
+            )
+
+    for entry in hook_list:
+        target_pool = entry.get("pool") if isinstance(entry, dict) else None
+        if not target_pool:
+            logger.warning(
+                "fire_pool_hooks: hook entry missing 'pool' field — skipping: %s", entry,
+            )
+            continue
+
+        conference_id = str(uuid.uuid4())
+
+        # ConversationInboundEvent — routing engine picks up on pool_id + conference_id.
+        # pool_id routes to the specialist pool; conference_id marks it as a specialist
+        # invite so process_routed skips the dedup guard and activates as conference.
+        event = {
+            "event":         "conversations.inbound",
+            "type":          "conversations.inbound",
+            "session_id":    session_id,
+            "contact_id":    customer_id,
+            "customer_id":   customer_id,
+            "tenant_id":     tenant_id,
+            "channel":       channel,
+            "pool_id":       target_pool,
+            "conference_id": conference_id,
+            # Metadata for observability — not processed by routing engine.
+            "hook_type":     hook_type,
+            "origin_pool":   pool_id,
+            "timestamp":     datetime.now(timezone.utc).isoformat(),
+        }
+
+        try:
+            await _kafka_producer.send_and_wait(
+                TOPIC_INBOUND,
+                json.dumps(event).encode("utf-8"),
+            )
+            logger.info(
+                "Pool hook fired: hook=%s origin_pool=%s → target_pool=%s "
+                "session=%s conference=%s",
+                hook_type, pool_id, target_pool, session_id, conference_id,
+            )
+        except Exception as exc:
+            logger.error(
+                "Failed to fire pool hook: hook=%s target_pool=%s session=%s — %s",
+                hook_type, target_pool, session_id, exc,
+            )
+            continue
+
+        # Mark this conference_id as hook-spawned so process_routed can detect
+        # when the hook agent completes and decrement the pending counter.
+        if hook_type in ("on_human_end", "post_human"):
+            try:
+                await redis_client.setex(
+                    f"session:{session_id}:hook_conf:{conference_id}",
+                    14400,
+                    f"{hook_type}:{target_pool}",
+                )
+            except Exception as exc:
+                logger.warning(
+                    "fire_pool_hooks: could not mark hook conference: session=%s conf=%s — %s",
+                    session_id, conference_id, exc,
+                )
+
+
+# ── Contact close trigger — used by hook completion and no-hook fallback ─────
+
+async def _trigger_contact_close(
+    redis_client: aioredis.Redis,
+    session_id:   str,
+) -> None:
+    """
+    Publish the two events that close a contact from the bridge side:
+
+    1. conversations.outbound  session.closed  → channel-gateway closes customer WS
+    2. conversations.events    contact_closed  → process_contact_event does full cleanup
+
+    reason "agent_done" → customer_side=True in process_contact_event, which:
+      - signals BLPOP / XADD session:closed
+      - notifies any remaining human agents
+      - restores all AI instances
+
+    Called when either:
+    - The last on_human_end hook agent completes (counter → 0)
+    - A pool has no on_human_end hooks (immediate close)
+    """
+    global _kafka_producer
+    if _kafka_producer is None:
+        logger.warning(
+            "_trigger_contact_close: Kafka producer not ready — session=%s", session_id,
+        )
+        return
+
+    # Resolve contact_id, channel, and tenant_id from session meta.
+    contact_id = session_id
+    channel    = "webchat"
+    tenant_id  = ""
+    try:
+        raw_meta = await redis_client.get(f"session:{session_id}:meta")
+        if raw_meta:
+            meta       = json.loads(raw_meta)
+            contact_id = meta.get("contact_id", session_id) or session_id
+            channel    = meta.get("channel", "webchat") or "webchat"
+            tenant_id  = meta.get("tenant_id", "") or meta.get("tenant", "")
+    except Exception as exc:
+        logger.warning(
+            "_trigger_contact_close: could not read session meta: session=%s — %s",
+            session_id, exc,
+        )
+
+    try:
+        # 1. Close the customer WebSocket.
+        await _kafka_producer.send_and_wait(
+            "conversations.outbound",
+            json.dumps({
+                "type":       "session.closed",
+                "contact_id": contact_id,
+                "session_id": session_id,
+                "channel":    channel,
+                "reason":     "flow_complete",
+            }).encode("utf-8"),
+        )
+        logger.info(
+            "_trigger_contact_close: published conversations.outbound session.closed: "
+            "session=%s contact_id=%s channel=%s",
+            session_id, contact_id, channel,
+        )
+    except Exception as exc:
+        logger.error(
+            "_trigger_contact_close: failed to publish outbound close: session=%s — %s",
+            session_id, exc,
+        )
+
+    try:
+        # 2. Trigger full bridge cleanup via existing process_contact_event path.
+        # reason "agent_done" → customer_side=True → LPUSH/XADD + instance restore.
+        await _kafka_producer.send_and_wait(
+            TOPIC_EVENTS,
+            json.dumps({
+                "event_type": "contact_closed",
+                "session_id": session_id,
+                "tenant_id":  tenant_id,
+                "reason":     "agent_done",
+            }).encode("utf-8"),
+        )
+        logger.info(
+            "_trigger_contact_close: published conversations.events contact_closed: session=%s",
+            session_id,
+        )
+    except Exception as exc:
+        logger.error(
+            "_trigger_contact_close: failed to publish contact_closed: session=%s — %s",
+            session_id, exc,
+        )
+
+
+# ── Participant event publishing — Fase C (analytics) ─────────────────────────
+
+async def _publish_participant_event(
+    session_id:     str,
+    tenant_id:      str,
+    participant_id: str,
+    pool_id:        str,
+    agent_type_id:  str,
+    event_type:     str,        # "participant_joined" | "participant_left"
+    agent_type:     str,        # "human" | "native" | "external"
+    role:           str,        # "primary" | "specialist"
+    segment_id:     str = "",   # Arc 5: ContactSegment UUID
+    conference_id:  str = "",
+    joined_at:      str = "",
+    duration_ms:    int | None = None,
+    sequence_index: int = 0,
+    parent_segment_id: str = "",
+    outcome:        str | None = None,
+    close_reason:   str | None = None,
+    handoff_reason: str | None = None,
+    issue_status:   str | None = None,
+) -> None:
+    """
+    Fire-and-forget publish to conversations.participants Kafka topic.
+    Consumed by analytics-api → participation_intervals + segments ClickHouse tables.
+    Never raises — failures are logged at DEBUG level only.
+
+    Arc 5: segment_id, sequence_index, parent_segment_id added for ContactSegment model.
+    """
+    global _kafka_producer
+    if _kafka_producer is None:
+        return
+    event: dict = {
+        "event_id":       str(uuid.uuid4()),
+        "type":           event_type,
+        "session_id":     session_id,
+        "tenant_id":      tenant_id,
+        "segment_id":     segment_id or str(uuid.uuid4()),  # fallback if not provided
+        "participant_id": participant_id,
+        "pool_id":        pool_id,
+        "agent_type_id":  agent_type_id,
+        "role":           role,
+        "agent_type":     agent_type,
+        "sequence_index": sequence_index,
+        "timestamp":      datetime.now(timezone.utc).isoformat(),
+    }
+    if conference_id:
+        event["conference_id"] = conference_id
+    if parent_segment_id:
+        event["parent_segment_id"] = parent_segment_id
+    if joined_at:
+        event["joined_at"] = joined_at
+    if duration_ms is not None:
+        event["duration_ms"] = duration_ms
+    if outcome is not None:
+        event["outcome"] = outcome
+    if close_reason is not None:
+        event["close_reason"] = close_reason
+    if handoff_reason is not None:
+        event["handoff_reason"] = handoff_reason
+    if issue_status is not None:
+        event["issue_status"] = issue_status
+    try:
+        await _kafka_producer.send_and_wait(
+            TOPIC_PARTICIPANTS,
+            json.dumps(event).encode("utf-8"),
+        )
+        logger.debug(
+            "Participant event: %s session=%s participant=%s segment=%s",
+            event_type, session_id, participant_id, event["segment_id"],
+        )
+    except Exception as exc:
+        logger.debug("Could not publish participant event: %s — %s", event_type, exc)
+
 
 # ── external-mcp activation: LPUSH context_package → agent:queue ─────────────
 
@@ -803,6 +1165,12 @@ async def process_routed(
                 tenant_id=tenant_id,
                 routing_result=result,
             )
+            asyncio.create_task(fire_pool_hooks(
+                http=http, redis_client=redis_client,
+                session_id=session_id, pool_id=pool_id,
+                tenant_id=tenant_id, customer_id=customer_id,
+                hook_type="on_human_start",
+            ))
         else:
             logger.error(
                 "Agent type %s not found in Agent Registry and no YAML fallback in %s — "
@@ -921,6 +1289,60 @@ async def process_routed(
                     session_id, pool_id, exc,
                 )
 
+        # ── Fase C: participant_joined ─────────────────────────────────────────
+        _part_joined_at  = datetime.now(timezone.utc)
+        _part_joined_iso = _part_joined_at.isoformat()
+        _part_role = "specialist" if conference_id else "primary"
+        # ── Arc 5: generate segment_id + derive topology fields ───────────────
+        _part_seg_id = str(uuid.uuid4())
+        _part_seq_idx = 0
+        _part_parent_seg = ""
+        try:
+            if conference_id:
+                # Specialist in a conference: parent = current primary segment
+                _raw_primary = await redis_client.get(
+                    f"session:{session_id}:primary_segment"
+                )
+                if _raw_primary:
+                    _part_parent_seg = (
+                        _raw_primary if isinstance(_raw_primary, str)
+                        else _raw_primary.decode()
+                    )
+            else:
+                # Primary sequential agent: increment sequence counter
+                _seq_raw = await redis_client.incr(f"session:{session_id}:segment_seq")
+                _part_seq_idx = int(_seq_raw) - 1
+                await redis_client.expire(f"session:{session_id}:segment_seq", 14400)
+                # Publish as current primary segment for upcoming specialists
+                await redis_client.setex(
+                    f"session:{session_id}:primary_segment",
+                    14400,
+                    _part_seg_id,
+                )
+            # Store segment_id for retrieval on participant_left
+            await redis_client.setex(
+                f"session:{session_id}:segment:{native_instance_id}",
+                14400,
+                _part_seg_id,
+            )
+        except Exception:
+            pass
+        asyncio.create_task(_publish_participant_event(
+            session_id=session_id,
+            tenant_id=tenant_id,
+            participant_id=native_instance_id,
+            pool_id=pool_id,
+            agent_type_id=agent_type_id,
+            event_type="participant_joined",
+            agent_type="native",
+            role=_part_role,
+            segment_id=_part_seg_id,
+            sequence_index=_part_seq_idx,
+            parent_segment_id=_part_parent_seg,
+            conference_id=conference_id,
+            joined_at=_part_joined_iso,
+        ))
+
         agent_result = await activate_native_agent(
             http=http, redis_client=redis_client,
             session_id=session_id, customer_id=customer_id,
@@ -985,6 +1407,132 @@ async def process_routed(
                     tenant_id, native_instance_id, exc,
                 )
 
+        # ── Fase C: participant_left ───────────────────────────────────────────
+        _part_duration_ms = int(
+            (datetime.now(timezone.utc) - _part_joined_at).total_seconds() * 1000
+        )
+        # ── Arc 5: retrieve segment_id stored at participant_joined ───────────
+        _left_seg_id = _part_seg_id   # already in scope; GETDEL for cleanup
+        try:
+            _raw_seg = await redis_client.getdel(
+                f"session:{session_id}:segment:{native_instance_id}"
+            )
+            if _raw_seg:
+                _left_seg_id = (
+                    _raw_seg if isinstance(_raw_seg, str) else _raw_seg.decode()
+                )
+        except Exception:
+            pass
+        # Outcome from agent_result (populated by activate_native_agent)
+        _part_outcome = agent_result.get("outcome") if agent_result else None
+        asyncio.create_task(_publish_participant_event(
+            session_id=session_id,
+            tenant_id=tenant_id,
+            participant_id=native_instance_id,
+            pool_id=pool_id,
+            agent_type_id=agent_type_id,
+            event_type="participant_left",
+            agent_type="native",
+            role=_part_role,
+            segment_id=_left_seg_id,
+            sequence_index=_part_seq_idx,
+            parent_segment_id=_part_parent_seg,
+            conference_id=conference_id,
+            joined_at=_part_joined_iso,
+            duration_ms=_part_duration_ms,
+            outcome=_part_outcome,
+        ))
+
+        # ── Fase B/C: hook completion detection ───────────────────────────────
+        # hook_conf key stores "{hook_type}:{target_pool}" (e.g. "on_human_end:finalizacao_ia").
+        # Parse hook_type to determine which counter to decrement and what to do next:
+        #   on_human_end → when counter hits 0: check post_human hooks (Fase C) or close
+        #   post_human   → when counter hits 0: always trigger contact close
+        if conference_id:
+            try:
+                hook_label = await redis_client.getdel(
+                    f"session:{session_id}:hook_conf:{conference_id}"
+                )
+                if hook_label:
+                    _hl = hook_label if isinstance(hook_label, str) else hook_label.decode()
+                    completed_hook_type = _hl.split(":")[0]   # "on_human_end" or "post_human"
+
+                    remaining_hooks = await redis_client.decr(
+                        f"session:{session_id}:hook_pending:{completed_hook_type}"
+                    )
+                    logger.info(
+                        "Hook agent completed: session=%s conference=%s hook=%s remaining=%d",
+                        session_id, conference_id, completed_hook_type, remaining_hooks,
+                    )
+
+                    if remaining_hooks <= 0:
+                        if completed_hook_type == "on_human_end":
+                            # ── Fase C: check for post_human hooks ────────────
+                            # If post_human hooks are declared, dispatch them now.
+                            # Otherwise go straight to contact close.
+                            _ph_pool = _ph_tenant = _ph_customer = ""
+                            try:
+                                _ph_raw = await redis_client.get(f"session:{session_id}:meta")
+                                if _ph_raw:
+                                    _ph_meta    = json.loads(_ph_raw)
+                                    _ph_pool    = _ph_meta.get("pool_id", "")
+                                    _ph_tenant  = (
+                                        _ph_meta.get("tenant_id", "")
+                                        or _ph_meta.get("tenant", "")
+                                    )
+                                    _ph_customer = (
+                                        _ph_meta.get("customer_id", session_id) or session_id
+                                    )
+                            except Exception as _ph_exc:
+                                logger.debug(
+                                    "Could not read meta for post_human check: "
+                                    "session=%s — %s", session_id, _ph_exc,
+                                )
+                            _dispatched_post = False
+                            if http and _ph_pool and _ph_tenant:
+                                try:
+                                    _ph_config = await get_pool_config(
+                                        http, _ph_tenant, _ph_pool
+                                    )
+                                    _post_human_list = (
+                                        ((_ph_config or {}).get("hooks") or {})
+                                        .get("post_human", [])
+                                    )
+                                    if _post_human_list:
+                                        asyncio.create_task(fire_pool_hooks(
+                                            http=http,
+                                            redis_client=redis_client,
+                                            session_id=session_id,
+                                            pool_id=_ph_pool,
+                                            tenant_id=_ph_tenant,
+                                            customer_id=_ph_customer,
+                                            hook_type="post_human",
+                                        ))
+                                        logger.info(
+                                            "post_human hooks dispatched: session=%s pool=%s count=%d",
+                                            session_id, _ph_pool, len(_post_human_list),
+                                        )
+                                        _dispatched_post = True
+                                except Exception as _ph_exc2:
+                                    logger.warning(
+                                        "Could not check post_human hooks: session=%s — %s",
+                                        session_id, _ph_exc2,
+                                    )
+                            if not _dispatched_post:
+                                asyncio.create_task(
+                                    _trigger_contact_close(redis_client, session_id)
+                                )
+                        else:
+                            # post_human complete → trigger contact close
+                            asyncio.create_task(
+                                _trigger_contact_close(redis_client, session_id)
+                            )
+            except Exception as exc:
+                logger.warning(
+                    "Hook completion detection error: session=%s conference=%s — %s",
+                    session_id, conference_id, exc,
+                )
+
     elif framework == "human":
         await activate_human_agent(
             redis_client=redis_client,
@@ -992,6 +1540,15 @@ async def process_routed(
             tenant_id=tenant_id,
             routing_result=result,
         )
+        # Fire on_human_start hooks non-blocking.
+        # Each hook entry routes a specialist as conference participant via
+        # conversations.inbound → routing engine → process_routed (conference path).
+        asyncio.create_task(fire_pool_hooks(
+            http=http, redis_client=redis_client,
+            session_id=session_id, pool_id=pool_id,
+            tenant_id=tenant_id, customer_id=customer_id,
+            hook_type="on_human_start",
+        ))
 
     elif framework == "external-mcp":
         # Agentes externos integrados via MCP (spec 4.6k).
@@ -1152,6 +1709,7 @@ async def process_queued(
 async def process_contact_event(
     msg: dict,
     redis_client: aioredis.Redis,
+    http: aiohttp.ClientSession | None = None,
 ) -> None:
     """
     Handle lifecycle events from conversations.events.
@@ -1264,17 +1822,18 @@ async def process_contact_event(
     customer_side = reason in ("client_disconnect", "timeout", "session_timeout", "agent_done")
 
     try:
+        # ── Marcar sessão como encerrada ──────────────────────────────────────
+        # Escrita para TODOS os motivos de encerramento (não só customer_side).
+        # O Routing Engine lê este marcador em _drain_queue_for_agent para
+        # descartar sessões que ainda estão na fila mas já foram encerradas,
+        # evitando o "ghost contact" no Agent Assist ao reconectar.
+        # TTL 7 dias: cobre sessões que ficam na fila por muito tempo.
+        try:
+            await redis_client.setex(f"session:{session_id}:closed", 604800, reason)
+        except Exception as exc:
+            logger.warning("Could not set session:closed marker: session=%s — %s", session_id, exc)
+
         if customer_side:
-            # ── Marcar sessão como encerrada (para rejeitar context_packages obsoletos) ─
-            # wait_for_assignment verifica a AUSÊNCIA desta chave antes de retornar
-            # um context_package ao agente externo. Usando marcador de fechamento
-            # (em vez de checar presença de session:meta, que tem TTL de 4h) porque
-            # meta persiste muito tempo após o encerramento e causaria falso-positivo.
-            # TTL 4h: cobre a janela onde itens obsoletos podem estar na fila.
-            try:
-                await redis_client.setex(f"session:{session_id}:closed", 14400, reason)
-            except Exception as exc:
-                logger.warning("Could not set session:closed marker: session=%s — %s", session_id, exc)
 
             # ── Signal session closed — dois mecanismos em paralelo ───────────
             #
@@ -1311,6 +1870,26 @@ async def process_contact_event(
                     "Could not XADD session_closed to stream: session=%s — %s", session_id, exc
                 )
 
+            # ── Clear pending pool assignment unconditionally ─────────────────
+            # Must run regardless of whether a human agent was ever assigned.
+            # A force-close before human assignment leaves pool:pending_assignment
+            # in Redis, causing "ghost contact" on agent Ctrl+Shift+R reconnect.
+            try:
+                pool_id_for_cleanup = None
+                meta_raw = await redis_client.get(f"session:{session_id}:meta")
+                if meta_raw:
+                    pool_id_for_cleanup = json.loads(meta_raw).get("pool_id")
+                if pool_id_for_cleanup:
+                    await redis_client.delete(f"pool:pending_assignment:{pool_id_for_cleanup}")
+                    logger.debug(
+                        "Pending assignment cleared: pool=%s session=%s",
+                        pool_id_for_cleanup, session_id,
+                    )
+            except Exception as exc:
+                logger.warning(
+                    "Could not clear pending assignment: session=%s — %s", session_id, exc
+                )
+
             # ── Notify all active human agents that the session ended ─────────
             is_human = await redis_client.get(f"session:{session_id}:human_agent")
             if is_human:
@@ -1324,24 +1903,6 @@ async def process_contact_event(
 
                 # ── Restore all instances still tracked for this session ──────
                 await _restore_all_instances(redis_client, session_id)
-
-                # ── Clear pending pool assignment so reconnecting agents don't
-                #    receive a stale conversation.assigned for a closed session.
-                try:
-                    pool_id_for_cleanup = None
-                    meta_raw = await redis_client.get(f"session:{session_id}:meta")
-                    if meta_raw:
-                        pool_id_for_cleanup = json.loads(meta_raw).get("pool_id")
-                    if pool_id_for_cleanup:
-                        await redis_client.delete(f"pool:pending_assignment:{pool_id_for_cleanup}")
-                        logger.debug(
-                            "Pending assignment cleared: pool=%s session=%s",
-                            pool_id_for_cleanup, session_id,
-                        )
-                except Exception as exc:
-                    logger.warning(
-                        "Could not clear pending assignment: session=%s — %s", session_id, exc
-                    )
 
                 # ── Clean up all human-agent tracking for this session ────────
                 await redis_client.delete(f"session:{session_id}:human_agent")
@@ -1421,6 +1982,68 @@ async def process_contact_event(
 
             # ── Remove this agent from the active-agents SET ─────────────────
             if instance_id:
+                # ── Fase C: participant_left for human agent ────────────────
+                _ha_joined_iso = ""
+                try:
+                    _raw_jat = await redis_client.getdel(
+                        f"session:{session_id}:participant_joined_at:{instance_id}"
+                    )
+                    _ha_joined_iso = (
+                        _raw_jat if isinstance(_raw_jat, str)
+                        else (_raw_jat.decode() if _raw_jat else "")
+                    )
+                except Exception:
+                    pass
+                _ha_duration_ms: int | None = None
+                if _ha_joined_iso:
+                    try:
+                        _ha_jdt = datetime.fromisoformat(_ha_joined_iso)
+                        _ha_duration_ms = int(
+                            (datetime.now(timezone.utc) - _ha_jdt).total_seconds() * 1000
+                        )
+                    except Exception:
+                        pass
+                _ha_pool = _ha_agent_type_id = _ha_tenant = ""
+                try:
+                    _ha_raw_meta = await redis_client.get(f"session:{session_id}:meta")
+                    if _ha_raw_meta:
+                        _ha_m = json.loads(_ha_raw_meta)
+                        _ha_pool          = _ha_m.get("pool_id", "")
+                        _ha_agent_type_id = _ha_m.get("agent_type_id", "")
+                        _ha_tenant        = (
+                            _ha_m.get("tenant_id", "") or _ha_m.get("tenant", "")
+                        )
+                except Exception:
+                    pass
+                # ── Arc 5: retrieve segment_id stored at activate_human_agent ────
+                _ha_seg_id = ""
+                _ha_seq_idx = 0
+                try:
+                    _raw_ha_seg = await redis_client.getdel(
+                        f"session:{session_id}:segment:{instance_id}"
+                    )
+                    if _raw_ha_seg:
+                        _ha_seg_id = (
+                            _raw_ha_seg if isinstance(_raw_ha_seg, str)
+                            else _raw_ha_seg.decode()
+                        )
+                except Exception:
+                    pass
+                asyncio.create_task(_publish_participant_event(
+                    session_id=session_id,
+                    tenant_id=_ha_tenant,
+                    participant_id=instance_id,
+                    pool_id=_ha_pool,
+                    agent_type_id=_ha_agent_type_id,
+                    event_type="participant_left",
+                    agent_type="human",
+                    role="primary",
+                    segment_id=_ha_seg_id,
+                    sequence_index=_ha_seq_idx,
+                    joined_at=_ha_joined_iso,
+                    duration_ms=_ha_duration_ms,
+                ))
+
                 await redis_client.srem(f"session:{session_id}:human_agents", instance_id)
                 remaining = await redis_client.scard(f"session:{session_id}:human_agents")
                 if remaining <= 0:
@@ -1428,6 +2051,67 @@ async def process_contact_event(
                     await redis_client.delete(f"session:{session_id}:human_agent")
                     await redis_client.delete(f"session:{session_id}:human_agents")
                     logger.info("Last human agent dropped: session=%s", session_id)
+
+                    # ── Fase B: fire on_human_end hooks or trigger contact close ─
+                    # Read pool_id, tenant_id, customer_id from session meta.
+                    # If the pool declares on_human_end hooks, dispatch them now and
+                    # let hook completion tracking call _trigger_contact_close.
+                    # If not (or if meta is missing), close the contact immediately.
+                    _pool_id_hooks    = ""
+                    _tenant_id_hooks  = ""
+                    _customer_id_hooks = ""
+                    try:
+                        _raw_meta_hooks = await redis_client.get(f"session:{session_id}:meta")
+                        if _raw_meta_hooks:
+                            _meta_hooks        = json.loads(_raw_meta_hooks)
+                            _pool_id_hooks     = _meta_hooks.get("pool_id", "")
+                            _tenant_id_hooks   = (
+                                _meta_hooks.get("tenant_id", "")
+                                or _meta_hooks.get("tenant", "")
+                            )
+                            _customer_id_hooks = (
+                                _meta_hooks.get("customer_id", session_id) or session_id
+                            )
+                    except Exception as _exc:
+                        logger.warning(
+                            "agent_closed: could not read session meta for hooks: "
+                            "session=%s — %s", session_id, _exc,
+                        )
+
+                    if http and _pool_id_hooks and _tenant_id_hooks:
+                        _pool_cfg_hooks = await get_pool_config(
+                            http, _tenant_id_hooks, _pool_id_hooks
+                        )
+                        _on_human_end = (
+                            ((_pool_cfg_hooks or {}).get("hooks") or {})
+                            .get("on_human_end", [])
+                        )
+                        if _on_human_end:
+                            # Pool has on_human_end hooks — dispatch them.
+                            # _trigger_contact_close fires when all agents complete
+                            # (hook_pending counter reaches 0 in process_routed).
+                            asyncio.create_task(fire_pool_hooks(
+                                http=http, redis_client=redis_client,
+                                session_id=session_id,
+                                pool_id=_pool_id_hooks,
+                                tenant_id=_tenant_id_hooks,
+                                customer_id=_customer_id_hooks,
+                                hook_type="on_human_end",
+                            ))
+                            logger.info(
+                                "on_human_end hooks dispatched: session=%s pool=%s count=%d",
+                                session_id, _pool_id_hooks, len(_on_human_end),
+                            )
+                        else:
+                            # No hooks — close the contact immediately
+                            asyncio.create_task(
+                                _trigger_contact_close(redis_client, session_id)
+                            )
+                    else:
+                        # Meta not available — fall back to immediate close
+                        asyncio.create_task(
+                            _trigger_contact_close(redis_client, session_id)
+                        )
                 else:
                     logger.info(
                         "Agent dropped, %d agent(s) still active: session=%s instance=%s",
@@ -1442,6 +2126,9 @@ async def process_contact_event(
                 await _restore_all_instances(redis_client, session_id)
                 await redis_client.delete(f"session:{session_id}:human_agent")
                 await redis_client.delete(f"session:{session_id}:human_agents")
+                # Trigger contact close (no instance_id means we can't check hooks;
+                # fall back to immediate close so the customer WS is never left open).
+                asyncio.create_task(_trigger_contact_close(redis_client, session_id))
 
     except Exception as exc:
         logger.error("Error processing contact_closed: session=%s — %s", session_id, exc)
@@ -1938,6 +2625,7 @@ async def _restore_all_instances(
 # ── Main loop ─────────────────────────────────────────────────────────────────
 
 async def run() -> None:
+    global _kafka_producer
     redis_client = aioredis.from_url(REDIS_URL, decode_responses=True)
     consumer = AIOKafkaConsumer(
         TOPIC_ROUTED,
@@ -1952,6 +2640,12 @@ async def run() -> None:
         auto_offset_reset="latest",
     )
     await consumer.start()
+
+    producer = AIOKafkaProducer(bootstrap_servers=KAFKA_BROKERS)
+    await producer.start()
+    _kafka_producer = producer
+    logger.info("Kafka producer started (pool hooks)")
+
     logger.info(
         "✅ Orchestrator Bridge started — topics: %s, %s, %s, %s, %s, %s",
         TOPIC_ROUTED, TOPIC_QUEUED, TOPIC_INBOUND, TOPIC_EVENTS,
@@ -2025,6 +2719,8 @@ async def run() -> None:
             except asyncio.CancelledError:
                 pass
             await consumer.stop()
+            await producer.stop()
+            _kafka_producer = None
             await redis_client.aclose()
 
 
@@ -2043,7 +2739,7 @@ async def _dispatch(
         elif topic == TOPIC_INBOUND:
             await process_inbound(payload, redis_client)
         elif topic == TOPIC_EVENTS:
-            await process_contact_event(payload, redis_client)
+            await process_contact_event(payload, redis_client, http)
         elif topic == TOPIC_REGISTRY_CHANGED:
             # Agent Registry published a structural change (AgentType/Pool/Skill CRUD).
             entity_type = payload.get("entity_type", "?")

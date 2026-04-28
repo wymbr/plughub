@@ -4,7 +4,9 @@
     "pools": "Pools",
     "agentTypes": "Tipos de Agente",
     "skills": "Skills",
-    "instances": "Instâncias"
+    "instances": "Instâncias",
+    "channels": "Canais",
+    "humanAgents": "Agentes Humanos"
   },
   "pools": {
     "title": "Pools",
@@ -25,21 +27,24 @@
     "fields": {
       "agentTypeId": "ID",
       "framework": "Framework",
-      "executionModel": "Modelo",
+      "executionModel": "Modelo de Execução",
+      "role": "Role",
+      "maxConcurrent": "Máx. Simultâneos",
       "pools": "Pools",
-      "skills": "Skills"
+      "skills": "Skills",
+      "status": "Status"
     },
     "empty": "Nenhum tipo de agente cadastrado."
   },
   "skills": {
     "title": "Skills",
-    "createSkill": "Nova Skill",
     "fields": {
       "skillId": "ID",
       "name": "Nome",
       "version": "Versão",
       "type": "Tipo",
-      "domain": "Domínio"
+      "domain": "Domínio",
+      "status": "Status"
     },
     "empty": "Nenhuma skill cadastrada."
   },
@@ -49,10 +54,11 @@
       "instanceId": "ID",
       "agentType": "Tipo",
       "pool": "Pool",
+      "channels": "Canais",
       "status": "Status",
       "updatedAt": "Atualizado"
     },
     "empty": "Nenhuma instância registrada.",
-    "readOnly": "Somente leitura — instâncias são gerenciadas pelo SDK"
+    "readOnly": "Somente leitura — instâncias são gerenciadas pelo orchestrator-bridge"
   }
 }

@@ -30,6 +30,7 @@ model Pool {
   supervisor_config      Json?
   queue_config           Json?
   mentionable_pools      Json?   // Record<alias, pool_id> — @mention routing config
+  hooks                  Json?   // PoolHooks — on_human_start, on_human_end, post_human
 
   created_at  DateTime @default(now())
   updated_at  DateTime @updatedAt

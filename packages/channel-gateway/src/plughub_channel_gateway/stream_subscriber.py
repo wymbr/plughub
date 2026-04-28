@@ -28,6 +28,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 from typing import AsyncIterator
 
 import redis.asyncio as aioredis
@@ -36,6 +37,16 @@ logger = logging.getLogger("plughub.channel-gateway.stream")
 
 # Tipos de visibilidade que bloqueiam entrega ao cliente
 _AGENTS_ONLY = "agents_only"
+
+# Regex para tokens de mascaramento inline: [category:tk_xxx:display_partial]
+# Substitui pelo display_partial antes de entregar ao cliente via WebSocket.
+# Ex: "CPF: [cpf:tk_b7d2:***-00]" → "CPF: ***-00"
+_TOKEN_RE = re.compile(r'\[[\w_]+:tk_[a-f0-9]+:([^\]]+)\]')
+
+
+def _strip_tokens(text: str) -> str:
+    """Replace masking tokens with their display_partial for customer delivery."""
+    return _TOKEN_RE.sub(r'\1', text)
 
 # Timeout do XREAD bloqueante (ms) — evita bloqueio infinito, permite checagem
 # de cancelamento da task
@@ -184,7 +195,7 @@ class StreamSubscriber:
 
         if event_type == "interaction_request":
             payload = decoded.get("payload", {})
-            return {
+            mapped: dict = {
                 "type":        "interaction.request",
                 "menu_id":     payload.get("menu_id", ""),
                 "interaction": payload.get("interaction", "text"),
@@ -192,6 +203,10 @@ class StreamSubscriber:
                 "options":     payload.get("options"),
                 "fields":      payload.get("fields"),
             }
+            masked_fields = payload.get("masked_fields")
+            if masked_fields:
+                mapped["masked_fields"] = masked_fields
+            return mapped
 
         # flow_step_completed, customer_identified, medium_transitioned
         # não são entregues ao cliente na fase 1
@@ -222,7 +237,7 @@ class StreamSubscriber:
         }
 
         if content_type == "text":
-            return {**base, "type": "msg.text", "text": content.get("text", "")}
+            return {**base, "type": "msg.text", "text": _strip_tokens(content.get("text", ""))}
 
         if content_type == "image":
             return {

@@ -20,6 +20,7 @@ from ..sentiment_emitter import (
     _classify,
     emit_sentiment_updated,
     update_sentiment_live,
+    write_context_store_sentiment,
 )
 
 TENANT  = "tenant_telco"
@@ -301,3 +302,102 @@ class TestSessionManagerSentimentIntegration:
             # pool_id falls back to "unknown"
             call_kwargs = mock_emit.call_args.kwargs
             assert call_kwargs["pool_id"] == "unknown"
+
+
+# ── write_context_store_sentiment ─────────────────────────────────────────────
+
+class TestWriteContextStoreSentiment:
+    async def test_writes_to_correct_key(self):
+        r = make_redis()
+        await write_context_store_sentiment(r, TENANT, SESSION, 0.5)
+        key_arg = r.hset.call_args.args[0]
+        assert key_arg == f"{TENANT}:ctx:{SESSION}"
+
+    async def test_writes_two_fields(self):
+        r = make_redis()
+        await write_context_store_sentiment(r, TENANT, SESSION, 0.5)
+        mapping = r.hset.call_args.kwargs["mapping"]
+        assert "session.sentimento.current"   in mapping
+        assert "session.sentimento.categoria" in mapping
+
+    async def test_current_entry_value_matches_score(self):
+        r = make_redis()
+        await write_context_store_sentiment(r, TENANT, SESSION, -0.4)
+        mapping = r.hset.call_args.kwargs["mapping"]
+        entry = json.loads(mapping["session.sentimento.current"])
+        assert entry["value"]      == -0.4
+        assert entry["confidence"] == 0.80
+        assert entry["source"]     == "ai_inferred:sentiment_emitter"
+        assert entry["visibility"] == "agents_only"
+        assert "updated_at" in entry
+
+    async def test_categoria_entry_maps_to_label(self):
+        r = make_redis()
+        await write_context_store_sentiment(r, TENANT, SESSION, -0.7)  # angry
+        mapping = r.hset.call_args.kwargs["mapping"]
+        entry = json.loads(mapping["session.sentimento.categoria"])
+        assert entry["value"] == "angry"
+        assert entry["confidence"] == 0.80
+        assert entry["visibility"] == "agents_only"
+
+    async def test_satisfied_score(self):
+        r = make_redis()
+        await write_context_store_sentiment(r, TENANT, SESSION, 0.8)
+        mapping = r.hset.call_args.kwargs["mapping"]
+        cat_entry = json.loads(mapping["session.sentimento.categoria"])
+        assert cat_entry["value"] == "satisfied"
+
+    async def test_expire_called_with_session_ttl(self):
+        r = make_redis()
+        await write_context_store_sentiment(r, TENANT, SESSION, 0.0)
+        r.expire.assert_called_once()
+        key, ttl = r.expire.call_args.args
+        assert key == f"{TENANT}:ctx:{SESSION}"
+        assert ttl == 14_400  # _CTX_SESSION_TTL
+
+    async def test_score_rounded_to_4_decimals(self):
+        r = make_redis()
+        await write_context_store_sentiment(r, TENANT, SESSION, 0.123456789)
+        mapping = r.hset.call_args.kwargs["mapping"]
+        entry = json.loads(mapping["session.sentimento.current"])
+        assert entry["value"] == 0.1235  # round to 4
+
+    async def test_none_redis_is_noop(self):
+        await write_context_store_sentiment(None, TENANT, SESSION, 0.5)
+
+    async def test_silently_ignores_redis_error(self):
+        r = make_redis()
+        r.hset = AsyncMock(side_effect=Exception("redis error"))
+        # Must not raise
+        await write_context_store_sentiment(r, TENANT, SESSION, 0.5)
+
+    async def test_integration_wired_in_session_manager(self):
+        """Verifies write_context_store_sentiment is called by update_partial_params."""
+        from unittest.mock import patch, AsyncMock as AM
+        from ..session import SessionManager
+
+        redis = make_redis()
+        redis.get     = AM(return_value=None)
+        redis.set     = AM()
+        redis.publish = AM()
+        redis.hget    = AM(return_value="retencao_humano")
+
+        mgr = SessionManager(redis, kafka_producer=make_producer())
+
+        with patch("plughub_ai_gateway.session.emit_sentiment_updated",       new_callable=AM), \
+             patch("plughub_ai_gateway.session.update_sentiment_live",         new_callable=AM), \
+             patch("plughub_ai_gateway.session.write_context_store_sentiment", new_callable=AM) as mock_ctx:
+            await mgr.update_partial_params(
+                session_id      = SESSION,
+                tenant_id       = TENANT,
+                elapsed_ms      = 80,
+                intent          = "cancelamento",
+                confidence      = 0.9,
+                sentiment_score = -0.55,
+                flags           = [],
+            )
+            mock_ctx.assert_called_once()
+            ctx_kwargs = mock_ctx.call_args.kwargs
+            assert ctx_kwargs["tenant_id"]  == TENANT
+            assert ctx_kwargs["session_id"] == SESSION
+            assert ctx_kwargs["score"]      == -0.55

@@ -1,0 +1,95 @@
+# agente_finalizacao_v1.yaml
+#
+# Agente de finalização de contato — acionado via pool hook on_human_end.
+#
+# Responsabilidades:
+#   - Agradecer ao cliente pelo contato
+#   - Aplicar pesquisa NPS (escala 0–10 via botões)
+#   - Registrar resposta no ContextStore (session.nps_score)
+#   - Encerrar o contato
+#
+# Ativação (Fase B):
+#   pool retencao_humano hooks.on_human_end: [{pool: finalizacao_ia}]
+#   Disparado quando o agente humano chama agent_done e o contato
+#   ainda não foi encerrado — o agente de finalização completa o ciclo.
+#
+# Invariantes:
+#   - Nunca bloqueia: on_failure sempre avança
+#   - Resposta NPS é opcional (timeout_s: 60 → pula para encerrar)
+#   - NPS score persiste em session.nps_score no ContextStore
+
+id: skill_finalizacao_v1
+name: "Finalização v1 — agradecimento + NPS + encerramento"
+version: "1.0"
+description: |
+  Fluxo de finalização de contato: agradece ao cliente, coleta NPS
+  e encerra a sessão. Acionado via pool hook on_human_end.
+classification:
+  type: orchestrator
+  domain: quality
+
+entry: agradecimento
+
+steps:
+
+  # ── Mensagem de agradecimento ao cliente ──────────────────────────────────
+  - id: agradecimento
+    type: notify
+    message: >
+      Obrigado por entrar em contato conosco! 🙏
+      Foi um prazer te atender.
+    on_success: solicitar_nps
+    on_failure: encerrar
+
+  # ── Pesquisa NPS (0–10) via botões agrupados ──────────────────────────────
+  # Dois grupos: notas 0–6 (detratores) e 7–10 (neutros/promotores).
+  # Timeout de 60 s — se o cliente não responder, encerra sem nota.
+  - id: solicitar_nps
+    type: menu
+    interaction: button
+    prompt: "Em uma escala de 0 a 10, qual a probabilidade de você recomendar nosso atendimento para um amigo ou familiar?"
+    timeout_s: 60
+    options:
+      - id: "0"
+        label: "0"
+      - id: "1"
+        label: "1"
+      - id: "2"
+        label: "2"
+      - id: "3"
+        label: "3"
+      - id: "4"
+        label: "4"
+      - id: "5"
+        label: "5"
+      - id: "6"
+        label: "6"
+      - id: "7"
+        label: "7"
+      - id: "8"
+        label: "8"
+      - id: "9"
+        label: "9"
+      - id: "10"
+        label: "10"
+    output_as: nps_resposta
+    on_success: registrar_nps
+    on_failure: encerrar
+    on_timeout: encerrar
+
+  # ── Notificação de agradecimento pela nota ────────────────────────────────
+  - id: registrar_nps
+    type: notify
+    message: "Agradecemos sua avaliação! ✅"
+    context_tags:
+      inputs:
+        nota:
+          tag: session.nps_score_raw
+          required: false
+    on_success: encerrar
+    on_failure: encerrar
+
+  # ── Encerramento ──────────────────────────────────────────────────────────
+  - id: encerrar
+    type: complete
+    outcome: resolved

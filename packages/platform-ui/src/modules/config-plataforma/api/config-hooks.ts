@@ -22,11 +22,14 @@ export interface ConfigEntry {
   key:         string
   value:       unknown
   description: string
+  tenant_id:   string | null   // null or "__global__" = platform default; real tenantId = override
+  namespace?:  string
+  updated_at?: string
 }
 
 export interface AllConfig {
   tenant_id: string
-  config:    Record<string, Record<string, unknown>>
+  config:    Record<string, Record<string, ConfigEntry>>
 }
 
 // ─── useAllConfig ─────────────────────────────────────────────────────────────
@@ -60,12 +63,12 @@ export function useAllConfig(tenantId: string): {
 // ─── useNamespace ─────────────────────────────────────────────────────────────
 
 export function useNamespace(tenantId: string, ns: string): {
-  entries: Record<string, unknown>
+  entries: Record<string, ConfigEntry>
   loading: boolean
   error:   string | null
   reload:  () => void
 } {
-  const [entries, setEntries] = useState<Record<string, unknown>>({})
+  const [entries, setEntries] = useState<Record<string, ConfigEntry>>({})
   const [loading, setLoading] = useState(false)
   const [error,   setError]   = useState<string | null>(null)
   const [tick,    setTick]    = useState(0)
@@ -77,9 +80,23 @@ export function useNamespace(tenantId: string, ns: string): {
     setLoading(true)
     setError(null)
     fetch(`/config/${ns}?tenant_id=${encodeURIComponent(tenantId)}`)
-      .then(r => safeJson<{entries?: Record<string,unknown>; detail?: string}>(r)
+      .then(r => safeJson<{entries?: Record<string, ConfigEntry>; detail?: string}>(r)
         .then(j => r.ok ? j : Promise.reject(j.detail ?? `HTTP ${r.status}`)))
-      .then(j => { setEntries(j.entries ?? {}); setLoading(false) })
+      .then(j => {
+        // Normalise: if the API returned plain values instead of ConfigEntry objects,
+        // wrap them so downstream code can safely access .value, .tenant_id, .description.
+        const raw = j.entries ?? {}
+        const normalised: Record<string, ConfigEntry> = {}
+        for (const [k, v] of Object.entries(raw)) {
+          if (v !== null && typeof v === 'object' && 'value' in (v as object)) {
+            normalised[k] = v as ConfigEntry
+          } else {
+            normalised[k] = { key: k, value: v, description: '', tenant_id: '__global__' }
+          }
+        }
+        setEntries(normalised)
+        setLoading(false)
+      })
       .catch(e => { setError(String(e)); setLoading(false) })
   }, [tenantId, ns, tick])
 

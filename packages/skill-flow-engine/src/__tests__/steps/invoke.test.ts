@@ -51,7 +51,9 @@ function makeCtx(overrides: Partial<StepContext> = {}): StepContext {
     getJobId:       vi.fn().mockResolvedValue(null),
     setJobId:       vi.fn().mockResolvedValue(undefined),
     clearJobId:     vi.fn().mockResolvedValue(undefined),
-    renewLock:      vi.fn().mockResolvedValue(true),
+    renewLock:            vi.fn().mockResolvedValue(true),
+    maskedScope:          {},
+    transactionOnFailure: null,
     ...overrides,
   }
 }

@@ -54,10 +54,22 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         password = settings.clickhouse_password,
         database = settings.clickhouse_database,
     )
-    try:
-        await store.ensure_schema_async()
-    except Exception as exc:
-        logger.warning("ClickHouse schema setup failed — will retry on first insert: %s", exc)
+    # Retry until ClickHouse is ready — it may still be initialising when we start.
+    # Uses exponential backoff capped at 30 s; gives up after 10 minutes total.
+    _ch_delay = 2.0
+    _ch_deadline = asyncio.get_event_loop().time() + 600
+    while True:
+        try:
+            await store.ensure_schema_async()
+            logger.info("ClickHouse schema ready")
+            break
+        except Exception as exc:
+            if asyncio.get_event_loop().time() >= _ch_deadline:
+                logger.error("ClickHouse schema setup failed after 10 min — giving up: %s", exc)
+                break
+            logger.warning("ClickHouse not ready yet (%s) — retrying in %.0fs", exc, _ch_delay)
+            await asyncio.sleep(_ch_delay)
+            _ch_delay = min(_ch_delay * 1.5, 30.0)
 
     app.state.store = store
 

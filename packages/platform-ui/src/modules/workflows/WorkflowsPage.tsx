@@ -1,11 +1,7 @@
 /**
  * WorkflowsPage — /workflows
  *
- * Layout:
- *   Left column: status filter + instance list (polling 10s)
- *   Right panel:
- *     - When instance selected: detail (timeline, token, cancel)
- *     - Button to open Trigger modal
+ * Two tabs: Instâncias (workflow lifecycle) and Webhooks (trigger management)
  */
 import React, { useState } from 'react'
 import { useAuth } from '@/auth/useAuth'
@@ -14,6 +10,9 @@ import {
   cancelWorkflow, triggerWorkflow,
 } from './api/hooks'
 import type { WorkflowInstance, WorkflowStatus } from './api/hooks'
+import WebhooksTab from './WebhooksTab'
+
+type Tab = 'instances' | 'webhooks'
 
 // ─── Status config ────────────────────────────────────────────────────────────
 
@@ -43,12 +42,20 @@ const SUSPEND_LABELS: Record<string, string> = {
   timer:    '⏰ Aguardando Timer',
 }
 
+// ─── Tab bar ──────────────────────────────────────────────────────────────────
+
+const TABS: { key: Tab; label: string }[] = [
+  { key: 'instances', label: '⚡ Instâncias' },
+  { key: 'webhooks',  label: '🔗 Webhooks'  },
+]
+
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
 export default function WorkflowsPage() {
   const { session } = useAuth()
   const tenantId    = session?.tenantId ?? ''
 
+  const [activeTab,    setActiveTab]    = useState<Tab>('instances')
   const [filterStatus, setFilterStatus] = useState<WorkflowStatus | 'all'>('all')
   const [selectedId,   setSelectedId]   = useState<string | null>(null)
   const [showTrigger,  setShowTrigger]  = useState(false)
@@ -73,10 +80,38 @@ export default function WorkflowsPage() {
 
   return (
     <div style={page}>
+      {/* Tab bar */}
+      <div style={{ display: 'flex', alignItems: 'center', borderBottom: '1px solid #1e293b', flexShrink: 0, paddingLeft: 20, paddingRight: 20 }}>
+        {TABS.map(t => (
+          <button
+            key={t.key}
+            onClick={() => setActiveTab(t.key)}
+            style={{
+              padding: '10px 16px', fontSize: 13, fontWeight: activeTab === t.key ? 700 : 400,
+              color: activeTab === t.key ? '#93c5fd' : '#64748b',
+              background: 'none', border: 'none', cursor: 'pointer',
+              borderBottom: activeTab === t.key ? '2px solid #93c5fd' : '2px solid transparent',
+              marginBottom: -1,
+            }}
+          >
+            {t.label}
+          </button>
+        ))}
+      </div>
+
+      {/* Webhooks tab */}
+      {activeTab === 'webhooks' && (
+        <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
+          <WebhooksTab />
+        </div>
+      )}
+
+      {/* Instances tab */}
+      {activeTab === 'instances' && (<>
       {/* Top bar */}
       <div style={topBar}>
         <div>
-          <span style={{ fontWeight: 700, fontSize: 17, color: '#e2e8f0' }}>⚡ Workflows</span>
+          <span style={{ fontWeight: 700, fontSize: 17, color: '#e2e8f0' }}>⚡ Instâncias</span>
           <span style={{ marginLeft: 10, fontSize: 12, color: '#64748b' }}>
             {loading ? '⟳' : `${sorted.length} instância(s)`}
           </span>
@@ -148,6 +183,7 @@ export default function WorkflowsPage() {
           onTriggered={() => { setShowTrigger(false); refresh() }}
         />
       )}
+      </>)}
     </div>
   )
 }

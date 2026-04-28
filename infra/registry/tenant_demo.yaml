@@ -41,8 +41,17 @@ pools:
     # @mention routing: aliases disponíveis para agentes humanos desta fila
     # "@copilot" → convida/envia comando ao co-pilot SAC do pool copilot_sac
     mentionable_pools:
-      copilot: copilot_sac
-      auth:    auth_ia     # @auth → convida agente_auth_ia_v1 para verificação de identidade
+      copilot:    copilot_sac
+      auth:       auth_ia       # @auth      → convida agente_auth_ia_v1 (PIN texto)
+      auth_form:  auth_form_ia  # @auth_form → convida agente_auth_form_v1 (formulário)
+    # Pool lifecycle hooks — acionam especialistas em pontos do ciclo de atendimento.
+    # on_human_start: dispara quando o agente humano entra na sessão (Fase A — wired).
+    # on_human_end:   dispara quando o agente humano chama agent_done (Fase B — stub).
+    hooks:
+      on_human_start: []  # vazio: copilot ainda é ativado manualmente via @mention
+      on_human_end:
+        - pool: finalizacao_ia  # Fase B: agente de finalização (NPS + encerramento)
+      post_human: []
 
   - pool_id: avaliacao_ia
     # IMPORTANTE: este pool NÃO deve estar na cadeia de roteamento ao vivo.
@@ -75,6 +84,23 @@ pools:
     description: "Pool do agente de autenticação — fluxo masked com PIN seguro"
     channel_types: [webchat, whatsapp]
     sla_target_ms: 60000
+
+  - pool_id: auth_form_ia
+    # Pool do agente de autenticação via formulário.
+    # Demonstra field-level masking: email (plain) + senha + codigo_2fa (masked).
+    # Ideal para testar a renderização do formulário mascarado no webchat.
+    description: "Pool do agente de autenticação via formulário seguro — campos mistos"
+    channel_types: [webchat, whatsapp]
+    sla_target_ms: 60000
+
+  - pool_id: finalizacao_ia
+    # Pool do agente de finalização de contato.
+    # Acionado via pool hook on_human_end no pool retencao_humano (Fase B).
+    # Responsabilidades: agradecimento, pesquisa NPS, encerramento da sessão.
+    # Fase A: pool declarado e agent_type registrado — hook será wired na Fase B.
+    description: "Pool do agente de finalização — agradecimento + NPS + encerramento"
+    channel_types: [webchat, whatsapp]
+    sla_target_ms: 120000
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Agent Types
@@ -198,6 +224,41 @@ agent_types:
     capabilities:
       channels: webchat,whatsapp
       masked_input: "true"
+
+  # Agente de autenticação via formulário — campos mistos (email plain, senha+2fa masked)
+  # Conecte o webchat ao pool auth_form_ia para testar a renderização do formulário seguro.
+  - agent_type_id: agente_auth_form_v1
+    framework: plughub-native
+    execution_model: stateless
+    role: executor
+    max_concurrent_sessions: 20
+    pools: [auth_form_ia]
+    skills: [{skill_id: skill_auth_form_v1}]
+    permissions:
+      - mcp-server-plughub:agent_heartbeat
+      - mcp-server-plughub:notification_send
+      - mcp-server-plughub:interaction_request
+      - mcp-server-auth:validate_pin
+    capabilities:
+      channels: webchat,whatsapp
+      masked_input: "true"
+
+  # Agente de finalização de contato — acionado via on_human_end hook (Fase B)
+  # Envia agradecimento, coleta NPS e encerra o contato após o agente humano sair.
+  - agent_type_id: agente_finalizacao_v1
+    framework: plughub-native
+    execution_model: stateless
+    role: executor
+    max_concurrent_sessions: 20
+    pools: [finalizacao_ia]
+    skills: [{skill_id: skill_finalizacao_v1}]
+    permissions:
+      - mcp-server-plughub:agent_heartbeat
+      - mcp-server-plughub:notification_send
+      - mcp-server-plughub:interaction_request
+    capabilities:
+      channels: webchat,whatsapp
+      finalization: "true"
 
   # Agente de avaliação pós-sessão — NÃO deve estar em pool de roteamento ao vivo.
   # Recebe tráfego apenas via evaluation.requested (Session Replayer), nunca via

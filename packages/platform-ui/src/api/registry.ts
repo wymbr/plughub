@@ -1,4 +1,9 @@
-import { Pool, AgentType, Skill, Instance, CreatePoolInput, UpdatePoolInput, CreateAgentTypeInput, CreateSkillInput } from '@/types'
+import {
+  Pool, AgentType, Skill, Instance,
+  CreatePoolInput, UpdatePoolInput, CreateAgentTypeInput, CreateSkillInput,
+  GatewayConfig, CreateGatewayConfigInput, UpdateGatewayConfigInput,
+  AgentInstance, CreateHumanAgentInput, UpdateHumanAgentInput,
+} from '@/types'
 
 const getBaseUrl = () => {
   return import.meta.env.VITE_REGISTRY_URL || 'http://localhost:3300'
@@ -12,6 +17,13 @@ interface ListResponse<T> {
 const headers = (tenantId: string) => ({
   'Content-Type': 'application/json',
   'x-tenant-id': tenantId
+})
+
+// Headers for routes that also require a user identity (e.g. channels, human-agent actions)
+const operatorHeaders = (tenantId: string) => ({
+  'Content-Type': 'application/json',
+  'x-tenant-id': tenantId,
+  'x-user-id': 'operator',
 })
 
 // Pools
@@ -70,10 +82,15 @@ export const getAgentType = async (agentTypeId: string, tenantId: string): Promi
 }
 
 export const createAgentType = async (data: CreateAgentTypeInput, tenantId: string): Promise<AgentType> => {
+  const payload = {
+    ...data,
+    pools:  data.pools.map(id => ({ pool_id: id })),
+    skills: data.skills ?? [],
+  }
   const response = await fetch(`${getBaseUrl()}/v1/agent-types`, {
     method: 'POST',
-    headers: headers(tenantId),
-    body: JSON.stringify(data)
+    headers: operatorHeaders(tenantId),
+    body: JSON.stringify(payload)
   })
   if (!response.ok) throw new Error('Failed to create agent type')
   return response.json()
@@ -135,4 +152,102 @@ export const listInstances = async (tenantId: string, poolId?: string, status?: 
   })
   if (!response.ok) throw new Error('Failed to fetch instances')
   return response.json()
+}
+
+// Human Agent Instances (framework=human)
+export const listHumanInstances = async (tenantId: string, status?: string): Promise<ListResponse<AgentInstance>> => {
+  const params = new URLSearchParams({ framework: 'human' })
+  if (status) params.append('status', status)
+  const response = await fetch(`${getBaseUrl()}/v1/instances?${params}`, {
+    headers: operatorHeaders(tenantId)
+  })
+  if (!response.ok) throw new Error('Failed to fetch human instances')
+  return response.json()
+}
+
+export const instanceAction = async (
+  instanceId: string,
+  action: 'pause' | 'resume' | 'force_logout',
+  tenantId: string,
+): Promise<void> => {
+  const response = await fetch(`${getBaseUrl()}/v1/instances/${instanceId}`, {
+    method: 'PATCH',
+    headers: operatorHeaders(tenantId),
+    body: JSON.stringify({ action }),
+  })
+  if (!response.ok) throw new Error('Failed to perform instance action')
+}
+
+// Human Agent Types (framework=human)
+export const listHumanAgentTypes = async (tenantId: string): Promise<ListResponse<AgentType>> => {
+  const response = await fetch(`${getBaseUrl()}/v1/agent-types?framework=human`, {
+    headers: operatorHeaders(tenantId)
+  })
+  if (!response.ok) throw new Error('Failed to fetch human agent types')
+  return response.json()
+}
+
+export const createHumanAgentType = async (data: CreateHumanAgentInput, tenantId: string): Promise<AgentType> => {
+  const response = await fetch(`${getBaseUrl()}/v1/agent-types`, {
+    method: 'POST',
+    headers: operatorHeaders(tenantId),
+    body: JSON.stringify({ ...data, framework: 'human', execution_model: 'stateful' }),
+  })
+  if (!response.ok) throw new Error('Failed to create human agent type')
+  return response.json()
+}
+
+export const updateHumanAgentType = async (agentTypeId: string, data: UpdateHumanAgentInput, tenantId: string): Promise<AgentType> => {
+  const response = await fetch(`${getBaseUrl()}/v1/agent-types/${agentTypeId}`, {
+    method: 'PUT',
+    headers: operatorHeaders(tenantId),
+    body: JSON.stringify(data),
+  })
+  if (!response.ok) throw new Error('Failed to update human agent type')
+  return response.json()
+}
+
+export const deleteAgentType = async (agentTypeId: string, tenantId: string): Promise<void> => {
+  const response = await fetch(`${getBaseUrl()}/v1/agent-types/${agentTypeId}`, {
+    method: 'DELETE',
+    headers: operatorHeaders(tenantId),
+  })
+  if (!response.ok) throw new Error('Failed to delete agent type')
+}
+
+// Channels (GatewayConfig)
+export const listChannels = async (tenantId: string): Promise<ListResponse<GatewayConfig>> => {
+  const response = await fetch(`${getBaseUrl()}/v1/channels`, {
+    headers: operatorHeaders(tenantId)
+  })
+  if (!response.ok) throw new Error('Failed to fetch channels')
+  return response.json()
+}
+
+export const createChannel = async (data: CreateGatewayConfigInput, tenantId: string): Promise<GatewayConfig> => {
+  const response = await fetch(`${getBaseUrl()}/v1/channels`, {
+    method: 'POST',
+    headers: operatorHeaders(tenantId),
+    body: JSON.stringify(data)
+  })
+  if (!response.ok) throw new Error('Failed to create channel config')
+  return response.json()
+}
+
+export const updateChannel = async (id: string, data: UpdateGatewayConfigInput, tenantId: string): Promise<GatewayConfig> => {
+  const response = await fetch(`${getBaseUrl()}/v1/channels/${id}`, {
+    method: 'PUT',
+    headers: operatorHeaders(tenantId),
+    body: JSON.stringify(data)
+  })
+  if (!response.ok) throw new Error('Failed to update channel config')
+  return response.json()
+}
+
+export const deleteChannel = async (id: string, tenantId: string): Promise<void> => {
+  const response = await fetch(`${getBaseUrl()}/v1/channels/${id}`, {
+    method: 'DELETE',
+    headers: operatorHeaders(tenantId)
+  })
+  if (!response.ok) throw new Error('Failed to delete channel config')
 }

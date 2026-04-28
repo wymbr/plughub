@@ -1,5 +1,13 @@
 # agente_avaliacao_v1.yaml
 # Skill Flow do Agente de Avaliação Genérico — PlugHub v24.0 seção 10.2
+
+id: skill_avaliacao_v1
+name: "Avaliação v1 — Agente de Qualidade Genérico"
+version: "1.0"
+description: "Agente de avaliação pós-sessão: coleta transcript, executa agentes especialistas de contexto e avalia com LLM."
+classification:
+  type: orchestrator
+  domain: quality
 #
 # Este flow é o agente nativo que substitui o serviço Python evaluation-agent.
 # É genérico: nenhum detalhe do formulário de avaliação está aqui.

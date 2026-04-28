@@ -528,3 +528,280 @@ def _fetch_campaigns(
         "summary": _rows_to_dicts(agg_result),
         "meta":    _meta(page, page_size, total, since, until),
     }
+
+
+# ─── /reports/participation ───────────────────────────────────────────────────
+
+async def query_participation_report(
+    client:    Any,
+    database:  str,
+    tenant_id: str,
+    from_dt:   str | None = None,
+    to_dt:     str | None = None,
+    *,
+    session_id:    str | None = None,
+    pool_id:       str | None = None,
+    agent_type_id: str | None = None,
+    role:          str | None = None,
+    page:      int = 1,
+    page_size: int = 100,
+) -> dict:
+    since = _ch_fmt(from_dt) if from_dt else _default_from()
+    until = _ch_fmt(to_dt)   if to_dt   else _default_to()
+    try:
+        return await asyncio.to_thread(
+            _fetch_participation, client, database, tenant_id, since, until,
+            session_id, pool_id, agent_type_id, role, page, page_size,
+        )
+    except Exception as exc:
+        logger.warning("query_participation_report failed tenant=%s: %s", tenant_id, exc)
+        return {"data": [], "meta": _meta(page, page_size, 0, since, until), "error": "data_unavailable"}
+
+
+def _fetch_participation(
+    client: Any, db: str, tenant_id: str,
+    since: str, until: str,
+    session_id: str | None, pool_id: str | None,
+    agent_type_id: str | None, role: str | None,
+    page: int, page_size: int,
+) -> dict:
+    conditions = [
+        "tenant_id = {tenant_id:String}",
+        f"timestamp >= '{since}'",
+        f"timestamp < '{until}'",
+    ]
+    params: dict = {"tenant_id": tenant_id}
+
+    if session_id:
+        conditions.append("session_id = {session_id:String}")
+        params["session_id"] = session_id
+    if pool_id:
+        conditions.append("pool_id = {pool_id:String}")
+        params["pool_id"] = pool_id
+    if agent_type_id:
+        conditions.append("agent_type_id = {agent_type_id:String}")
+        params["agent_type_id"] = agent_type_id
+    if role:
+        conditions.append("role = {role:String}")
+        params["role"] = role
+
+    where = " AND ".join(conditions)
+    offset = (page - 1) * page_size
+
+    # Use FINAL so ReplacingMergeTree deduplication is applied at query time
+    total = _count(
+        client,
+        f"SELECT count() FROM {db}.participation_intervals FINAL WHERE {where}",
+        params,
+    )
+
+    result = client.query(f"""
+        SELECT
+            event_id, session_id, tenant_id,
+            participant_id, pool_id, agent_type_id,
+            role, agent_type, conference_id,
+            joined_at, left_at, duration_ms,
+            timestamp
+        FROM {db}.participation_intervals FINAL
+        WHERE {where}
+        ORDER BY timestamp DESC
+        LIMIT {page_size} OFFSET {offset}
+    """, parameters=params)
+
+    return {"data": _rows_to_dicts(result), "meta": _meta(page, page_size, total, since, until)}
+
+
+# ─── /reports/segments (Arc 5 — ContactSegment) ──────────────────────────────
+
+async def query_segments_report(
+    client:    Any,
+    database:  str,
+    tenant_id: str,
+    from_dt:   str | None = None,
+    to_dt:     str | None = None,
+    *,
+    session_id:    str | None = None,
+    pool_id:       str | None = None,
+    agent_type_id: str | None = None,
+    role:          str | None = None,
+    outcome:       str | None = None,
+    page:      int = 1,
+    page_size: int = 100,
+) -> dict:
+    since = _ch_fmt(from_dt) if from_dt else _default_from()
+    until = _ch_fmt(to_dt)   if to_dt   else _default_to()
+    try:
+        return await asyncio.to_thread(
+            _fetch_segments, client, database, tenant_id, since, until,
+            session_id, pool_id, agent_type_id, role, outcome, page, page_size,
+        )
+    except Exception as exc:
+        logger.warning("query_segments_report failed tenant=%s: %s", tenant_id, exc)
+        return {"data": [], "meta": _meta(page, page_size, 0, since, until), "error": "data_unavailable"}
+
+
+def _fetch_segments(
+    client: Any, db: str, tenant_id: str,
+    since: str, until: str,
+    session_id: str | None, pool_id: str | None,
+    agent_type_id: str | None, role: str | None,
+    outcome: str | None,
+    page: int, page_size: int,
+) -> dict:
+    conditions = [
+        "tenant_id = {tenant_id:String}",
+        f"started_at >= '{since}'",
+        f"started_at < '{until}'",
+    ]
+    params: dict = {"tenant_id": tenant_id}
+
+    if session_id:
+        conditions.append("session_id = {session_id:String}")
+        params["session_id"] = session_id
+    if pool_id:
+        conditions.append("pool_id = {pool_id:String}")
+        params["pool_id"] = pool_id
+    if agent_type_id:
+        conditions.append("agent_type_id = {agent_type_id:String}")
+        params["agent_type_id"] = agent_type_id
+    if role:
+        conditions.append("role = {role:String}")
+        params["role"] = role
+    if outcome:
+        conditions.append("outcome = {outcome:String}")
+        params["outcome"] = outcome
+
+    where  = " AND ".join(conditions)
+    offset = (page - 1) * page_size
+
+    # FINAL applies ReplacingMergeTree dedup so ended rows shadow joined rows
+    total = _count(
+        client,
+        f"SELECT count() FROM {db}.segments FINAL WHERE {where}",
+        params,
+    )
+
+    result = client.query(f"""
+        SELECT
+            segment_id, session_id, tenant_id,
+            participant_id, pool_id, agent_type_id,
+            instance_id, role, agent_type,
+            parent_segment_id, sequence_index,
+            started_at, ended_at, duration_ms,
+            outcome, close_reason, handoff_reason, issue_status,
+            conference_id
+        FROM {db}.segments FINAL
+        WHERE {where}
+        ORDER BY started_at DESC
+        LIMIT {page_size} OFFSET {offset}
+    """, parameters=params)
+
+    return {"data": _rows_to_dicts(result), "meta": _meta(page, page_size, total, since, until)}
+
+
+# ─── /reports/agents/performance (Arc 5 — aggregate per agent) ───────────────
+
+async def query_agent_performance_report(
+    client:    Any,
+    database:  str,
+    tenant_id: str,
+    from_dt:   str | None = None,
+    to_dt:     str | None = None,
+    *,
+    pool_id:       str | None = None,
+    agent_type_id: str | None = None,
+    role:          str | None = None,
+) -> dict:
+    """
+    Aggregate performance metrics per (agent_type_id, pool_id, role).
+
+    Reads from analytics.segments FINAL (Arc 5 ReplacingMergeTree).
+    Returns one row per distinct combination — no pagination needed since
+    the cardinality is bounded by the number of registered agent types × pools.
+
+    Metrics:
+      total_sessions     — count of participation windows
+      avg_duration_ms    — mean handle time (null when all duration_ms are null)
+      escalation_rate    — fraction with outcome = 'escalated'
+      handoff_rate       — fraction with a non-empty handoff_reason
+      resolved_count / escalated_count / transferred_count /
+        abandoned_count / timeout_count / handoff_count — raw breakdowns
+    """
+    since = _ch_fmt(from_dt) if from_dt else _default_from()
+    until = _ch_fmt(to_dt)   if to_dt   else _default_to()
+    try:
+        return await asyncio.to_thread(
+            _fetch_agent_performance,
+            client, database, tenant_id, since, until,
+            pool_id, agent_type_id, role,
+        )
+    except Exception as exc:
+        logger.warning(
+            "query_agent_performance_report failed tenant=%s: %s", tenant_id, exc
+        )
+        return {"data": [], "error": "data_unavailable"}
+
+
+def _fetch_agent_performance(
+    client:        Any,
+    db:            str,
+    tenant_id:     str,
+    since:         str,
+    until:         str,
+    pool_id:       str | None,
+    agent_type_id: str | None,
+    role:          str | None,
+) -> dict:
+    conditions = [
+        "tenant_id = {tenant_id:String}",
+        f"started_at >= '{since}'",
+        f"started_at < '{until}'",
+    ]
+    params: dict = {"tenant_id": tenant_id}
+
+    if pool_id:
+        conditions.append("pool_id = {pool_id:String}")
+        params["pool_id"] = pool_id
+    if agent_type_id:
+        conditions.append("agent_type_id = {agent_type_id:String}")
+        params["agent_type_id"] = agent_type_id
+    if role:
+        conditions.append("role = {role:String}")
+        params["role"] = role
+
+    where = " AND ".join(conditions)
+
+    result = client.query(f"""
+        SELECT
+            agent_type_id,
+            pool_id,
+            role,
+            count()                                                       AS total_sessions,
+            avgOrNull(duration_ms)                                        AS avg_duration_ms,
+            countIf(outcome = 'resolved')                                 AS resolved_count,
+            countIf(outcome = 'escalated')                                AS escalated_count,
+            countIf(outcome = 'transferred')                              AS transferred_count,
+            countIf(outcome = 'abandoned')                                AS abandoned_count,
+            countIf(outcome = 'timeout')                                  AS timeout_count,
+            countIf(handoff_reason IS NOT NULL AND handoff_reason != '')  AS handoff_count,
+            if(count() > 0,
+               countIf(outcome = 'escalated') / count(),
+               0.0)                                                       AS escalation_rate,
+            if(count() > 0,
+               countIf(handoff_reason IS NOT NULL AND handoff_reason != '') / count(),
+               0.0)                                                       AS handoff_rate
+        FROM {db}.segments FINAL
+        WHERE {where}
+        GROUP BY agent_type_id, pool_id, role
+        ORDER BY agent_type_id, pool_id, role
+    """, parameters=params)
+
+    rows = _rows_to_dicts(result)
+    return {
+        "data": rows,
+        "meta": {
+            "total":   len(rows),
+            "from_dt": since,
+            "to_dt":   until,
+        },
+    }

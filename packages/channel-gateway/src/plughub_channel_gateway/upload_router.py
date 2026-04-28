@@ -69,6 +69,9 @@ async def upload_file(file_id: str, request: Request) -> Response:
         )
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        # magic bytes mismatch — declared MIME does not match actual content
+        raise HTTPException(status_code=415, detail=str(exc)) from exc
     except Exception as exc:
         logger.error("commit failed file_id=%s: %s", file_id, exc)
         raise HTTPException(status_code=500, detail="upload commit failed") from exc

@@ -232,6 +232,62 @@ PARTITION BY toYYYYMM(date)
 ORDER BY (tenant_id, session_id, participant_id)
 """
 
+# ── Arc 5: segments — one row per ContactSegment (joined+left merged via ReplacingMergeTree)
+# ORDER BY (tenant_id, session_id, segment_id) — segment_id is the primary key.
+# participant_joined writes with ended_at=NULL; participant_left rewrites with ended_at set.
+# ReplacingMergeTree(ingested_at) ensures the latest write wins on background merge.
+_DDL_SEGMENTS = """
+CREATE TABLE IF NOT EXISTS {db}.segments
+(
+    segment_id         String,
+    session_id         String,
+    tenant_id          String,
+    participant_id     String,
+    pool_id            String,
+    agent_type_id      String,
+    instance_id        String,
+    role               String,
+    agent_type         String,
+    parent_segment_id  Nullable(String),
+    sequence_index     Int32,
+    started_at         DateTime64(3, 'UTC'),
+    ended_at           Nullable(DateTime64(3, 'UTC')),
+    duration_ms        Nullable(Int64),
+    outcome            Nullable(String),
+    close_reason       Nullable(String),
+    handoff_reason     Nullable(String),
+    issue_status       Nullable(String),
+    conference_id      Nullable(String),
+    ingested_at        DateTime DEFAULT now(),
+    date               Date
+)
+ENGINE = ReplacingMergeTree(ingested_at)
+PARTITION BY toYYYYMM(date)
+ORDER BY (tenant_id, session_id, segment_id)
+"""
+
+# ── Arc 5: session_timeline — time-series events tied to segments.
+# Populated by multiple Kafka topics; segment_id enriched post-hoc via timestamp overlap.
+# ReplacingMergeTree(ingested_at) for idempotent re-processing.
+_DDL_SESSION_TIMELINE = """
+CREATE TABLE IF NOT EXISTS {db}.session_timeline
+(
+    event_id    String,
+    tenant_id   String,
+    session_id  String,
+    segment_id  String,
+    event_type  String,
+    actor_id    String,
+    actor_role  String,
+    payload     String,
+    timestamp   DateTime64(3, 'UTC'),
+    ingested_at DateTime DEFAULT now()
+)
+ENGINE = ReplacingMergeTree(ingested_at)
+PARTITION BY toYYYYMM(timestamp)
+ORDER BY (tenant_id, session_id, timestamp, event_id)
+"""
+
 _ALL_DDL = [
     _DDL_DATABASE,
     _DDL_SESSIONS,
@@ -243,6 +299,8 @@ _ALL_DDL = [
     _DDL_WORKFLOW_EVENTS,
     _DDL_COLLECT_EVENTS,
     _DDL_PARTICIPATION_INTERVALS,
+    _DDL_SEGMENTS,
+    _DDL_SESSION_TIMELINE,
 ]
 
 # Migrations applied after CREATE IF NOT EXISTS (idempotent ALTER TABLE statements).
@@ -417,6 +475,43 @@ class AnalyticsStore:
             "participation_intervals",
             [_participation_row(row)],
             self._PARTICIPATION_COLS,
+        )
+
+    # segments (Arc 5)
+
+    _SEGMENT_COLS = [
+        "segment_id", "session_id", "tenant_id", "participant_id",
+        "pool_id", "agent_type_id", "instance_id", "role", "agent_type",
+        "parent_segment_id", "sequence_index",
+        "started_at", "ended_at", "duration_ms",
+        "outcome", "close_reason", "handoff_reason", "issue_status",
+        "conference_id", "date",
+    ]
+
+    async def upsert_segment(self, row: dict) -> None:
+        """Insert/update a ContactSegment row.  Called on both participant_joined and
+        participant_left — the second write (with ended_at) wins via ReplacingMergeTree."""
+        await asyncio.to_thread(
+            self._insert,
+            "segments",
+            [_segment_row(row)],
+            self._SEGMENT_COLS,
+        )
+
+    # session_timeline (Arc 5)
+
+    _TIMELINE_COLS = [
+        "event_id", "tenant_id", "session_id", "segment_id",
+        "event_type", "actor_id", "actor_role", "payload", "timestamp",
+    ]
+
+    async def insert_timeline_event(self, row: dict) -> None:
+        """Insert a generic time-series event into session_timeline."""
+        await asyncio.to_thread(
+            self._insert,
+            "session_timeline",
+            [_timeline_row(row)],
+            self._TIMELINE_COLS,
         )
 
 
@@ -597,4 +692,60 @@ def _participation_row(d: dict) -> list:
         left_at,
         d.get("duration_ms"),
         _today_utc(ts),
+    ]
+
+
+def _segment_row(d: dict) -> list:
+    """Row builder for the segments table (Arc 5 — ContactSegment)."""
+    ts         = d.get("timestamp") or d.get("joined_at")
+    event_type = d.get("type", d.get("event_type", ""))
+    started_at = _parse_dt(d.get("joined_at") or d.get("started_at") or d.get("timestamp"))
+    ended_at   = (
+        _parse_dt(d.get("timestamp"))
+        if event_type in ("participant_left", "participant.left")
+        else None
+    )
+    return [
+        d.get("segment_id", "") or "",
+        d.get("session_id", ""),
+        d.get("tenant_id", ""),
+        d.get("participant_id", ""),
+        d.get("pool_id", "") or "",
+        d.get("agent_type_id", "") or "",
+        d.get("instance_id", d.get("participant_id", "")) or "",
+        d.get("role", ""),
+        d.get("agent_type", ""),
+        d.get("parent_segment_id") or None,
+        int(d.get("sequence_index", 0)),
+        started_at or datetime.utcnow(),
+        ended_at,
+        d.get("duration_ms"),
+        d.get("outcome") or None,
+        d.get("close_reason") or None,
+        d.get("handoff_reason") or None,
+        d.get("issue_status") or None,
+        d.get("conference_id") or None,
+        _today_utc(ts),
+    ]
+
+
+def _timeline_row(d: dict) -> list:
+    """Row builder for the session_timeline table (Arc 5)."""
+    ts = d.get("timestamp")
+    import json as _json
+    payload_raw = d.get("payload", {})
+    payload_str = (
+        payload_raw if isinstance(payload_raw, str)
+        else _json.dumps(payload_raw)
+    )
+    return [
+        d.get("event_id", "") or "",
+        d.get("tenant_id", ""),
+        d.get("session_id", ""),
+        d.get("segment_id", "") or "",
+        d.get("event_type", ""),
+        d.get("actor_id", "") or "",
+        d.get("actor_role", "") or "",
+        payload_str,
+        _parse_dt(ts) or datetime.utcnow(),
     ]

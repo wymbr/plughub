@@ -49,6 +49,11 @@ class Settings(BaseSettings):
     # How long the server waits for conn.authenticate after conn.hello.
     ws_auth_timeout_s:          int = 30
 
+    # Attachment storage backend selector
+    # "filesystem" (default, phase 1) — local disk + PostgreSQL metadata
+    # "s3"         (phase 2)          — S3-compatible object storage + PostgreSQL metadata
+    attachment_store_type:      str = "filesystem"
+
     # Attachment storage (filesystem phase 1)
     # Root directory for uploaded attachments.  Override via PLUGHUB_STORAGE_ROOT.
     storage_root:               str = "/var/plughub/attachments"
@@ -56,6 +61,14 @@ class Settings(BaseSettings):
     attachment_expiry_days:     int = 30
     # PostgreSQL DSN for attachment metadata (session_attachments table).
     database_url:               str = "postgresql://plughub:plughub@localhost:5432/plughub"
+
+    # Attachment storage (S3/MinIO phase 2)
+    # endpoint_url: empty = AWS S3; set to http://minio:9000 for MinIO.
+    s3_endpoint_url:            str = ""
+    s3_bucket:                  str = "plughub-attachments"
+    s3_access_key:              str = ""
+    s3_secret_key:              str = ""
+    s3_region:                  str = "us-east-1"
 
     # Public-facing URLs for attachment serving and upload endpoints.
     # Override to match the actual host/TLS termination layer.

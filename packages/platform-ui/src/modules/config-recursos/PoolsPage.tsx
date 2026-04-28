@@ -30,11 +30,14 @@ const PoolsPage: React.FC = () => {
   })
 
   const channelOptions = [
-    { value: 'webchat', label: 'WebChat' },
-    { value: 'whatsapp', label: 'WhatsApp' },
-    { value: 'voice', label: 'Voice' },
-    { value: 'email', label: 'Email' },
-    { value: 'sms', label: 'SMS' }
+    { value: 'webchat',   label: 'WebChat'   },
+    { value: 'whatsapp',  label: 'WhatsApp'  },
+    { value: 'voice',     label: 'Voice'     },
+    { value: 'email',     label: 'Email'     },
+    { value: 'sms',       label: 'SMS'       },
+    { value: 'instagram', label: 'Instagram' },
+    { value: 'telegram',  label: 'Telegram'  },
+    { value: 'webrtc',    label: 'WebRTC'    },
   ]
 
   useEffect(() => {

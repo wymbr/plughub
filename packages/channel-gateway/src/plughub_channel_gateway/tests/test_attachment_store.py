@@ -29,6 +29,7 @@ from plughub_channel_gateway.attachment_store import (
     FilesystemAttachmentStore,
     MIME_LIMITS,
     MIME_TO_CONTENT_TYPE,
+    validate_magic_bytes,
 )
 
 
@@ -118,6 +119,91 @@ class TestValidateMime:
         assert FilesystemAttachmentStore.validate_mime("application/pdf", limit + 1) is not None
 
 
+# ── validate_magic_bytes ──────────────────────────────────────────────────────
+
+# Minimal valid headers for each supported MIME type
+_JPEG_HDR  = b"\xff\xd8\xff" + b"\x00" * 16
+_PNG_HDR   = b"\x89PNG\r\n\x1a\n" + b"\x00" * 16
+_WEBP_HDR  = b"RIFF\x00\x00\x00\x00WEBP" + b"\x00" * 16
+_GIF87_HDR = b"GIF87a" + b"\x00" * 16
+_GIF89_HDR = b"GIF89a" + b"\x00" * 16
+_PDF_HDR   = b"%PDF-1.4\n" + b"\x00" * 16
+_MP4_HDR   = b"\x00\x00\x00\x20ftypisom" + b"\x00" * 16
+_WEBM_HDR  = b"\x1a\x45\xdf\xa3" + b"\x00" * 16
+
+
+class TestValidateMagicBytes:
+    def test_valid_jpeg(self):
+        assert validate_magic_bytes(_JPEG_HDR, "image/jpeg") is None
+
+    def test_valid_png(self):
+        assert validate_magic_bytes(_PNG_HDR, "image/png") is None
+
+    def test_valid_webp(self):
+        assert validate_magic_bytes(_WEBP_HDR, "image/webp") is None
+
+    def test_valid_gif87(self):
+        assert validate_magic_bytes(_GIF87_HDR, "image/gif") is None
+
+    def test_valid_gif89(self):
+        assert validate_magic_bytes(_GIF89_HDR, "image/gif") is None
+
+    def test_valid_pdf(self):
+        assert validate_magic_bytes(_PDF_HDR, "application/pdf") is None
+
+    def test_valid_mp4(self):
+        assert validate_magic_bytes(_MP4_HDR, "video/mp4") is None
+
+    def test_valid_webm(self):
+        assert validate_magic_bytes(_WEBM_HDR, "video/webm") is None
+
+    def test_jpeg_content_declared_as_png_returns_error(self):
+        err = validate_magic_bytes(_JPEG_HDR, "image/png")
+        assert err is not None
+        assert "image/png" in err
+
+    def test_png_content_declared_as_jpeg_returns_error(self):
+        err = validate_magic_bytes(_PNG_HDR, "image/jpeg")
+        assert err is not None
+
+    def test_webp_missing_webp_marker_returns_error(self):
+        # Has RIFF but not WEBP at offset 8
+        bad = b"RIFF\x00\x00\x00\x00XXXX"
+        err = validate_magic_bytes(bad, "image/webp")
+        assert err is not None
+
+    def test_mp4_without_ftyp_at_offset4_returns_error(self):
+        err = validate_magic_bytes(b"\x00\x00\x00\x00XXXX" + b"\x00" * 16, "video/mp4")
+        assert err is not None
+
+    def test_unknown_mime_is_accepted_fail_open(self):
+        # Types not in _MAGIC_SIGS should pass without validation
+        assert validate_magic_bytes(b"anything", "application/octet-stream") is None
+
+    def test_too_short_data_returns_error(self):
+        # Only 2 bytes — can't match any signature
+        err = validate_magic_bytes(b"\xff\xd8", "image/jpeg")
+        assert err is not None
+
+    def test_empty_data_returns_error(self):
+        err = validate_magic_bytes(b"", "image/jpeg")
+        assert err is not None
+
+    async def test_commit_rejects_mime_mismatch(self, tmp_path):
+        """commit() should raise ValueError when magic bytes do not match declared MIME."""
+        file_id = str(uuid.uuid4())
+        # DB says image/jpeg but data is PNG bytes
+        row = {
+            "session_id":    SESSION,
+            "original_name": "fake.jpg",
+            "mime_type":     "image/jpeg",
+            "expires_at":    EXPIRES,
+        }
+        store, _ = make_store(tmp_path, fetchrow=row)
+        with pytest.raises(ValueError, match="image/jpeg"):
+            await store.commit(file_id=file_id, tenant_id=TENANT, data=_PNG_HDR)
+
+
 # ── reserve ───────────────────────────────────────────────────────────────────
 
 class TestReserve:
@@ -189,7 +275,7 @@ class TestCommit:
         file_id = str(uuid.uuid4())
         store, conn = make_store(tmp_path, fetchrow=self._pending_row(file_id))
 
-        data = b"fake image content"
+        data = _JPEG_HDR + b"\x00" * 100  # valid JPEG magic + padding
         meta = await store.commit(file_id=file_id, tenant_id=TENANT, data=data)
 
         abs_path = tmp_path / meta.file_path
@@ -200,12 +286,13 @@ class TestCommit:
         file_id = str(uuid.uuid4())
         store, conn = make_store(tmp_path, fetchrow=self._pending_row(file_id))
 
-        meta = await store.commit(file_id=file_id, tenant_id=TENANT, data=b"x" * 100)
+        data = _JPEG_HDR + b"\x00" * (100 - len(_JPEG_HDR))
+        meta = await store.commit(file_id=file_id, tenant_id=TENANT, data=data)
 
         assert meta.file_id    == file_id
         assert meta.tenant_id  == TENANT
         assert meta.session_id == SESSION
-        assert meta.size_bytes == 100
+        assert meta.size_bytes == len(data)
         assert meta.mime_type  == "image/jpeg"
         assert meta.serving_url == f"http://host/webchat/v1/attachments/{file_id}"
         assert meta.deleted_at is None
@@ -213,7 +300,7 @@ class TestCommit:
     async def test_commit_updates_status_to_committed(self, tmp_path):
         file_id = str(uuid.uuid4())
         store, conn = make_store(tmp_path, fetchrow=self._pending_row(file_id))
-        await store.commit(file_id=file_id, tenant_id=TENANT, data=b"data")
+        await store.commit(file_id=file_id, tenant_id=TENANT, data=_JPEG_HDR)
 
         conn.execute.assert_called_once()
         sql = conn.execute.call_args.args[0]
@@ -223,7 +310,7 @@ class TestCommit:
     async def test_commit_path_is_date_sharded(self, tmp_path):
         file_id = str(uuid.uuid4())
         store, conn = make_store(tmp_path, fetchrow=self._pending_row(file_id))
-        meta = await store.commit(file_id=file_id, tenant_id=TENANT, data=b"img")
+        meta = await store.commit(file_id=file_id, tenant_id=TENANT, data=_JPEG_HDR)
 
         now = datetime.now(timezone.utc)
         # Path contains tenant_id / YYYY / MM / DD
@@ -235,7 +322,7 @@ class TestCommit:
         store, _ = make_store(tmp_path, fetchrow=None)  # fetchrow returns None
 
         with pytest.raises(FileNotFoundError):
-            await store.commit(file_id=file_id, tenant_id=TENANT, data=b"data")
+            await store.commit(file_id=file_id, tenant_id=TENANT, data=_JPEG_HDR)
 
     async def test_commit_file_extension_matches_mime(self, tmp_path):
         """PDF file gets .pdf extension; JPEG gets .jpg etc."""
@@ -245,7 +332,7 @@ class TestCommit:
         }
         file_id = str(uuid.uuid4())
         store, _ = make_store(tmp_path, fetchrow=pdf_row)
-        meta = await store.commit(file_id=file_id, tenant_id=TENANT, data=b"PDF")
+        meta = await store.commit(file_id=file_id, tenant_id=TENANT, data=_PDF_HDR)
         assert meta.file_path.endswith(".pdf")
 
 
@@ -375,3 +462,208 @@ class TestStreamBytes:
 
         assert len(chunks) > 1
         assert b"".join(chunks) == content
+
+
+# ── S3AttachmentStore ─────────────────────────────────────────────────────────
+
+from plughub_channel_gateway.attachment_store import S3AttachmentStore  # noqa: E402
+
+
+def _make_s3_client_mock(content: bytes = b"") -> tuple[MagicMock, MagicMock]:
+    """
+    Returns (client_mock, client_cm_mock) where client_cm_mock is the async
+    context manager returned by session.client("s3", ...).
+    """
+    client = AsyncMock()
+
+    # put_object mock
+    client.put_object = AsyncMock(return_value={"ResponseMetadata": {"HTTPStatusCode": 200}})
+
+    # head_bucket mock (used in ensure_schema)
+    client.head_bucket = AsyncMock(return_value={})
+
+    # get_object mock — body yields content then b""
+    body = AsyncMock()
+    body.read = AsyncMock(side_effect=[content, b""])
+    client.get_object = AsyncMock(return_value={"Body": body})
+
+    client_cm = MagicMock()
+    client_cm.__aenter__ = AsyncMock(return_value=client)
+    client_cm.__aexit__  = AsyncMock(return_value=False)
+
+    return client, client_cm
+
+
+def make_s3_store(
+    fetchrow=None,
+    execute=None,
+    s3_content: bytes = b"",
+) -> tuple[S3AttachmentStore, MagicMock, MagicMock]:
+    """Returns (store, db_conn, s3_client)."""
+    pool, conn = make_pool(fetchrow_return=fetchrow, execute_return=execute)
+    s3_client, s3_client_cm = _make_s3_client_mock(content=s3_content)
+
+    store = S3AttachmentStore(
+        bucket                = "test-bucket",
+        db_pool               = pool,
+        serving_base_url      = "http://host/webchat/v1/attachments",
+        upload_base_url       = "http://host/webchat/v1/upload",
+        endpoint_url          = "http://minio:9000",
+        aws_access_key_id     = "test",
+        aws_secret_access_key = "testpass",
+    )
+
+    # Patch the aioboto3 session.client call
+    session_mock = MagicMock()
+    session_mock.client = MagicMock(return_value=s3_client_cm)
+    store._session = session_mock
+
+    return store, conn, s3_client
+
+
+class TestS3AttachmentStore:
+    def _pending_row(self) -> dict:
+        return {
+            "session_id":    SESSION,
+            "original_name": "photo.jpg",
+            "mime_type":     "image/jpeg",
+            "expires_at":    EXPIRES,
+        }
+
+    # ── reserve ───────────────────────────────────────────────────────────────
+
+    async def test_reserve_returns_file_id_and_upload_url(self):
+        store, conn, _ = make_s3_store()
+        file_id, upload_url = await store.reserve(
+            tenant_id  = TENANT,
+            session_id = SESSION,
+            file_name  = "photo.jpg",
+            mime_type  = "image/jpeg",
+            size_bytes = 1024,
+            expires_at = EXPIRES,
+        )
+        assert file_id
+        assert upload_url == f"http://host/webchat/v1/upload/{file_id}"
+
+    async def test_reserve_inserts_pending_row(self):
+        store, conn, _ = make_s3_store()
+        await store.reserve(
+            tenant_id  = TENANT,
+            session_id = SESSION,
+            file_name  = "photo.jpg",
+            mime_type  = "image/jpeg",
+            size_bytes = 1024,
+            expires_at = EXPIRES,
+        )
+        sql = conn.execute.call_args.args[0]
+        assert "INSERT INTO session_attachments" in sql
+
+    # ── commit ────────────────────────────────────────────────────────────────
+
+    async def test_commit_calls_put_object(self):
+        file_id = str(uuid.uuid4())
+        store, _, s3_client = make_s3_store(fetchrow=self._pending_row())
+        await store.commit(file_id=file_id, tenant_id=TENANT, data=_JPEG_HDR)
+        s3_client.put_object.assert_called_once()
+        call_kwargs = s3_client.put_object.call_args.kwargs
+        assert call_kwargs["Bucket"] == "test-bucket"
+        assert call_kwargs["Body"] == _JPEG_HDR
+        assert call_kwargs["ContentType"] == "image/jpeg"
+
+    async def test_commit_object_key_is_date_sharded(self):
+        file_id = str(uuid.uuid4())
+        store, _, s3_client = make_s3_store(fetchrow=self._pending_row())
+        meta = await store.commit(file_id=file_id, tenant_id=TENANT, data=_JPEG_HDR)
+        now = datetime.now(timezone.utc)
+        assert TENANT in meta.file_path
+        assert str(now.year) in meta.file_path
+        assert meta.file_path.endswith(".jpg")
+
+    async def test_commit_returns_correct_meta(self):
+        file_id = str(uuid.uuid4())
+        store, _, _ = make_s3_store(fetchrow=self._pending_row())
+        meta = await store.commit(file_id=file_id, tenant_id=TENANT, data=_JPEG_HDR)
+        assert meta.file_id    == file_id
+        assert meta.tenant_id  == TENANT
+        assert meta.session_id == SESSION
+        assert meta.size_bytes == len(_JPEG_HDR)
+        assert meta.serving_url == f"http://host/webchat/v1/attachments/{file_id}"
+        assert meta.deleted_at is None
+
+    async def test_commit_raises_if_no_pending_slot(self):
+        file_id = str(uuid.uuid4())
+        store, _, _ = make_s3_store(fetchrow=None)
+        with pytest.raises(FileNotFoundError):
+            await store.commit(file_id=file_id, tenant_id=TENANT, data=_JPEG_HDR)
+
+    async def test_commit_rejects_magic_mismatch(self):
+        file_id = str(uuid.uuid4())
+        store, _, _ = make_s3_store(fetchrow=self._pending_row())
+        with pytest.raises(ValueError, match="image/jpeg"):
+            await store.commit(file_id=file_id, tenant_id=TENANT, data=_PNG_HDR)
+
+    # ── resolve ───────────────────────────────────────────────────────────────
+
+    async def test_resolve_returns_meta(self):
+        file_id = str(uuid.uuid4())
+        db_row = {
+            "session_id": SESSION, "original_name": "p.jpg",
+            "mime_type": "image/jpeg", "size_bytes": 512,
+            "file_path": f"{TENANT}/2026/04/15/{SESSION}/{file_id}.jpg",
+            "expires_at": EXPIRES, "deleted_at": None,
+        }
+        store, _, _ = make_s3_store(fetchrow=db_row)
+        meta = await store.resolve(file_id=file_id, tenant_id=TENANT)
+        assert meta is not None
+        assert meta.file_id == file_id
+        assert meta.size_bytes == 512
+
+    async def test_resolve_returns_none_for_unknown(self):
+        store, _, _ = make_s3_store(fetchrow=None)
+        assert await store.resolve(file_id=str(uuid.uuid4()), tenant_id=TENANT) is None
+
+    # ── stream_bytes ──────────────────────────────────────────────────────────
+
+    async def test_stream_bytes_calls_get_object(self):
+        file_id = str(uuid.uuid4())
+        content = _JPEG_HDR + b"\x00" * 100
+        db_row = {
+            "session_id": SESSION, "original_name": "p.jpg",
+            "mime_type": "image/jpeg", "size_bytes": len(content),
+            "file_path": f"key/{file_id}.jpg",
+            "expires_at": EXPIRES, "deleted_at": None,
+        }
+        store, _, s3_client = make_s3_store(fetchrow=db_row, s3_content=content)
+        stream = await store.stream_bytes(file_id=file_id, tenant_id=TENANT)
+        chunks = []
+        async for chunk in stream:
+            chunks.append(chunk)
+        assert b"".join(chunks) == content
+        s3_client.get_object.assert_called_once_with(Bucket="test-bucket", Key=f"key/{file_id}.jpg")
+
+    async def test_stream_bytes_raises_if_not_found(self):
+        store, _, _ = make_s3_store(fetchrow=None)
+        with pytest.raises(FileNotFoundError):
+            await store.stream_bytes(file_id=str(uuid.uuid4()), tenant_id=TENANT)
+
+    async def test_stream_bytes_raises_if_deleted(self):
+        file_id = str(uuid.uuid4())
+        db_row = {
+            "session_id": SESSION, "original_name": "p.jpg",
+            "mime_type": "image/jpeg", "size_bytes": 10,
+            "file_path": "k.jpg", "expires_at": EXPIRES,
+            "deleted_at": datetime.now(timezone.utc),
+        }
+        store, _, _ = make_s3_store(fetchrow=db_row)
+        with pytest.raises(FileNotFoundError, match="expirado"):
+            await store.stream_bytes(file_id=file_id, tenant_id=TENANT)
+
+    # ── soft_expire ───────────────────────────────────────────────────────────
+
+    async def test_soft_expire_updates_db(self):
+        file_id = str(uuid.uuid4())
+        store, conn, _ = make_s3_store()
+        await store.soft_expire(file_id=file_id)
+        sql = conn.execute.call_args.args[0]
+        assert "deleted_at" in sql
+        assert "UPDATE session_attachments" in sql

@@ -1,5 +1,13 @@
 # agente_sac_ia_v1.yaml
 # SAC IA — Agente LLM de Atendimento ao Cliente
+
+id: skill_sac_ia_v1
+name: "SAC IA v1 — Atendimento LLM"
+version: "1.0"
+description: "Agente LLM de atendimento SAC com escalada para retenção humano."
+classification:
+  type: orchestrator
+  domain: customer_service
 #
 # Pool: sac_ia
 # Escalada para: retencao_humano
@@ -60,9 +68,13 @@ steps:
     on_disconnect: finalizar
 
   # ── Etapa 3: analisar mensagem com IA ────────────────────────────────────
-  # Decide se responde ou escala. Também mantém um historico_mensagens acumulado
-  # com todas as mensagens do cliente nesta sessão — usado pelo agente de contexto
-  # caso a conversa precise ser escalada (para extrair CPF, nome, etc. já mencionados).
+  # Decide se responde ou escala. Escreve os outputs diretamente no ContextStore:
+  #   @ctx.session.ultima_resposta     — resposta para o cliente (interpolada em responder)
+  #   @ctx.session.escalar_solicitado  — flag de escalada (avaliada em verificar_escalada)
+  #   @ctx.session.sentimento_atual    — sentimento detectado (lido pelo Agent Assist UI)
+  #   @ctx.session.historico_mensagens — histórico acumulado de turnos (persistido entre loops)
+  # @ctx.caller.* são lidos do ContextStore para personalizar a resposta sem
+  # depender de pipeline_state (disponíveis via insight ou acumulação prévia).
   - id: analisar
     type: reason
     prompt_id: sac_ia_turn_analysis_v1
@@ -78,7 +90,7 @@ steps:
            será usado pelo agente de contexto se a conversa for escalada.
 
         Contexto disponível sobre o cliente (use para personalizar a resposta):
-        - Se o nome do cliente está disponível com confiança ≥ 0.8, use-o na resposta
+        - Se o nome do cliente está disponível, use-o na resposta
         - Se o motivo_contato já foi identificado, não peça novamente
         - Se há histórico de tentativas de resolução, leve em conta ao formular a resposta
 
@@ -95,9 +107,28 @@ steps:
         - O cliente só quer confirmar informações
 
         Responda de forma breve e direta (2 a 4 frases).
-      mensagem_cliente: "$.pipeline_state.ultima_mensagem"
-      historico_anterior: "$.pipeline_state.analise.historico_mensagens"
-      contact_context: "$.pipeline_state.contact_context"
+      mensagem_cliente:   "$.pipeline_state.ultima_mensagem"
+      historico_anterior: "@ctx.session.historico_mensagens"
+      nome_cliente:       "@ctx.caller.nome"
+      motivo_contato:     "@ctx.caller.motivo_contato"
+    context_tags:
+      outputs:
+        resposta:
+          tag: session.ultima_resposta
+          confidence: 1.0
+          merge: overwrite
+        escalar:
+          tag: session.escalar_solicitado
+          confidence: 1.0
+          merge: overwrite
+        sentimento:
+          tag: caller.sentimento_atual
+          confidence: 0.80
+          merge: overwrite
+        historico_mensagens:
+          tag: session.historico_mensagens
+          confidence: 1.0
+          merge: overwrite
     output_schema:
       resposta:
         type: string
@@ -117,19 +148,22 @@ steps:
     on_failure: aguardar_mensagem
 
   # ── Etapa 4: verificar se deve escalar ───────────────────────────────────
+  # Lê @ctx.session.escalar_solicitado — escrito no step analisar via context_tags.
+  # true → coletar contexto completo antes de transferir para humano.
   - id: verificar_escalada
     type: choice
     conditions:
-      - field: "$.pipeline_state.analise.escalar"
+      - field: "@ctx.session.escalar_solicitado"
         operator: eq
         value: true
         next: acumular_contexto
     default: responder
 
   # ── Etapa 5: responder ao cliente e voltar ao loop ────────────────────────
+  # @ctx.session.ultima_resposta foi escrito pelo step analisar via context_tags.
   - id: responder
     type: notify
-    message: "{{$.pipeline_state.analise.resposta}}"
+    message: "{{@ctx.session.ultima_resposta}}"
     channel: session
     on_success: aguardar_mensagem
     on_failure: aguardar_mensagem

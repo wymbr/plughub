@@ -34,9 +34,12 @@ from fastapi.responses import JSONResponse, Response
 from .reports_query import (
     _clamp_page_size,
     _to_csv,
+    query_agent_performance_report,
     query_agents_report,
     query_campaigns_report,
+    query_participation_report,
     query_quality_report,
+    query_segments_report,
     query_sessions_report,
     query_usage_report,
     query_workflows_report,
@@ -304,3 +307,147 @@ async def report_campaigns(
     if format == "csv":
         return _respond({"data": data.get("data", [])}, format, f"campaigns_{_today_label()}.csv")
     return _respond(data, format, f"campaigns_{_today_label()}.csv")
+
+
+# ─── GET /reports/participation ───────────────────────────────────────────────
+
+@router.get("/participation")
+async def report_participation(
+    request:       Request,
+    tenant_id:     str           = Query(...,    description="Tenant identifier"),
+    from_dt:       Optional[str] = Query(None,   description="ISO8601 start (default: 7d ago)"),
+    to_dt:         Optional[str] = Query(None,   description="ISO8601 end (default: now)"),
+    session_id:    Optional[str] = Query(None,   description="Filter by session_id"),
+    pool_id:       Optional[str] = Query(None,   description="Filter by pool_id"),
+    agent_type_id: Optional[str] = Query(None,   description="Filter by agent_type_id"),
+    role:          Optional[str] = Query(None,   description="Filter by participant role (primary|specialist|supervisor)"),
+    page:          int           = Query(1,       ge=1),
+    page_size:     int           = Query(100,     ge=1),
+    format:        str           = Query("json",  pattern="^(json|csv)$"),
+) -> Response:
+    """
+    Participant interval list — who joined which session, when, and for how long.
+
+    Uses participation_intervals (ReplacingMergeTree) — deduplicated via FINAL at query time.
+    A row without left_at means the participant is still active (or the left event
+    hasn't been processed yet).
+
+    role filter: primary | specialist | supervisor | evaluator | reviewer
+
+    Columns: event_id, session_id, tenant_id, participant_id, pool_id,
+             agent_type_id, role, agent_type, conference_id,
+             joined_at, left_at, duration_ms, timestamp
+    """
+    ps = _clamp_page_size(page_size, format == "csv")
+    data = await query_participation_report(
+        client    = request.app.state.store._client,
+        database  = request.app.state.store._database,
+        tenant_id = tenant_id,
+        from_dt   = from_dt,
+        to_dt     = to_dt,
+        session_id    = session_id,
+        pool_id       = pool_id,
+        agent_type_id = agent_type_id,
+        role          = role,
+        page      = page,
+        page_size = ps,
+    )
+    return _respond(data, format, f"participation_{_today_label()}.csv")
+
+
+# ─── /reports/segments (Arc 5 — ContactSegment) ─────────────────────────────
+
+@router.get("/segments")
+async def get_segments_report(
+    request:       Request,
+    tenant_id:     str,
+    from_dt:       str | None = None,
+    to_dt:         str | None = None,
+    session_id:    str | None = None,
+    pool_id:       str | None = None,
+    agent_type_id: str | None = None,
+    role:          str | None = None,
+    outcome:       str | None = None,
+    page:          int = 1,
+    page_size:     int = 100,
+    format:        str | None = None,
+) -> Response:
+    """
+    Returns ContactSegment rows — one per agent participation window in a session.
+
+    Each row represents a single agent's contiguous presence in a session:
+    - sequence_index  : order among primary (sequential) segments (0, 1, 2…)
+    - parent_segment_id: non-null for conference/parallel specialist segments
+    - ended_at        : null if the participant is still active
+    - duration_ms     : populated on participant_left event
+
+    Filters: session_id, pool_id, agent_type_id, role, outcome
+    role:    primary | specialist | supervisor | evaluator | reviewer
+    outcome: resolved | escalated | transferred | abandoned | timeout
+
+    Columns: segment_id, session_id, tenant_id, participant_id, pool_id,
+             agent_type_id, instance_id, role, agent_type,
+             parent_segment_id, sequence_index,
+             started_at, ended_at, duration_ms,
+             outcome, close_reason, handoff_reason, issue_status, conference_id
+    """
+    ps = _clamp_page_size(page_size, format == "csv")
+    data = await query_segments_report(
+        client    = request.app.state.store._client,
+        database  = request.app.state.store._database,
+        tenant_id = tenant_id,
+        from_dt   = from_dt,
+        to_dt     = to_dt,
+        session_id    = session_id,
+        pool_id       = pool_id,
+        agent_type_id = agent_type_id,
+        role          = role,
+        outcome       = outcome,
+        page      = page,
+        page_size = ps,
+    )
+    return _respond(data, format, f"segments_{_today_label()}.csv")
+
+
+# ─── /reports/agents/performance (Arc 5 — aggregate per agent) ──────────────
+
+@router.get("/agents/performance")
+async def get_agent_performance_report(
+    request:       Request,
+    tenant_id:     str,
+    from_dt:       str | None = None,
+    to_dt:         str | None = None,
+    pool_id:       str | None = None,
+    agent_type_id: str | None = None,
+    role:          str | None = None,
+    format:        str | None = None,
+) -> Response:
+    """
+    Returns aggregate performance metrics per (agent_type_id, pool_id, role).
+
+    One row per distinct agent × pool × role combination observed in the
+    segments table (Arc 5 ContactSegment). No pagination — the cardinality
+    is bounded by the number of registered agent types × pools.
+
+    Metrics per group:
+      - total_sessions     : number of participation windows
+      - avg_duration_ms    : mean handle time (null if no completed segments)
+      - escalation_rate    : fraction of sessions with outcome='escalated'
+      - handoff_rate       : fraction of sessions with a non-null handoff_reason
+      - resolved_count / escalated_count / transferred_count /
+        abandoned_count / timeout_count / handoff_count : raw breakdowns
+
+    Filters: pool_id, agent_type_id, role, from_dt, to_dt
+    role:    primary | specialist | supervisor | evaluator | reviewer
+    """
+    data = await query_agent_performance_report(
+        client        = request.app.state.store._client,
+        database      = request.app.state.store._database,
+        tenant_id     = tenant_id,
+        from_dt       = from_dt,
+        to_dt         = to_dt,
+        pool_id       = pool_id,
+        agent_type_id = agent_type_id,
+        role          = role,
+    )
+    return _respond(data, format, f"agent_performance_{_today_label()}.csv")

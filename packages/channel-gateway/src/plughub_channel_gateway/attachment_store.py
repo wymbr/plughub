@@ -38,8 +38,7 @@ import asyncpg
 
 logger = logging.getLogger("plughub.channel-gateway.attachment")
 
-# ─── Allowlist de MIME types aceitos (fase 1) ────────────────────────────────
-# TODO: fase 2 — validar também por magic bytes (python-filemagic ou filetype)
+# ─── Allowlist de MIME types aceitos ─────────────────────────────────────────
 
 MIME_LIMITS: dict[str, int] = {
     "image/jpeg":       16 * 1024 * 1024,   # 16 MB
@@ -70,6 +69,50 @@ MIME_TO_CONTENT_TYPE: dict[str, str] = {
     "video/mp4":        "video",
     "video/webm":       "video",
 }
+
+# ─── Magic bytes (fase 2) ─────────────────────────────────────────────────────
+#
+# Cada entrada é uma lista de "candidatos". Um arquivo é aceito se QUALQUER
+# candidato bater. Cada candidato é uma lista de (offset, bytes_esperados) que
+# TODOS precisam bater (lógica AND dentro do candidato, OR entre candidatos).
+#
+# Exemplos:
+#   image/webp  →  RIFF em 0  AND  WEBP em 8  (um único candidato com 2 checks)
+#   image/gif   →  GIF87a em 0  OR  GIF89a em 0  (dois candidatos)
+
+_MAGIC_SIGS: dict[str, list[list[tuple[int, bytes]]]] = {
+    "image/jpeg":      [[(0, b"\xff\xd8\xff")]],
+    "image/png":       [[(0, b"\x89PNG\r\n\x1a\n")]],
+    "image/webp":      [[(0, b"RIFF"), (8, b"WEBP")]],
+    "image/gif":       [[(0, b"GIF87a")], [(0, b"GIF89a")]],
+    "application/pdf": [[(0, b"%PDF")]],
+    "video/mp4":       [[(4, b"ftyp")]],
+    "video/webm":      [[(0, b"\x1a\x45\xdf\xa3")]],
+}
+
+
+def validate_magic_bytes(data: bytes, declared_mime: str) -> str | None:
+    """
+    Valida os magic bytes do conteúdo binário contra o MIME type declarado.
+
+    Retorna None se o conteúdo bater com o tipo declarado, ou uma mensagem
+    de erro legível se houver divergência.
+
+    Tipos sem assinatura cadastrada são aceitos sem validação (fail-open).
+    """
+    candidates = _MAGIC_SIGS.get(declared_mime)
+    if candidates is None:
+        return None  # tipo sem assinatura cadastrada — aceita
+
+    for candidate in candidates:
+        if all(
+            len(data) >= offset + len(expected)
+            and data[offset : offset + len(expected)] == expected
+            for offset, expected in candidate
+        ):
+            return None  # pelo menos um candidato bateu
+
+    return f"conteúdo não corresponde ao tipo declarado: {declared_mime}"
 
 
 # ─── Modelos de dados ─────────────────────────────────────────────────────────
@@ -271,6 +314,11 @@ class FilesystemAttachmentStore:
         mime_type     = row["mime_type"]
         expires_at    = row["expires_at"]
 
+        # Valida magic bytes (fase 2)
+        magic_error = validate_magic_bytes(data, mime_type)
+        if magic_error:
+            raise ValueError(magic_error)
+
         # Calcula path date-sharded
         now       = datetime.now(timezone.utc)
         ext       = MIME_TO_EXT.get(mime_type, "bin")
@@ -406,3 +454,282 @@ class FilesystemAttachmentStore:
         if size_bytes <= 0:
             return "tamanho inválido"
         return None
+
+
+# ─── Implementação: S3 / MinIO ────────────────────────────────────────────────
+
+class S3AttachmentStore:
+    """
+    AttachmentStore fase 2: objetos no S3 (ou MinIO), metadados no PostgreSQL.
+
+    Mesma interface de FilesystemAttachmentStore — Channel Gateway não sabe a
+    diferença. A troca é feita via PLUGHUB_ATTACHMENT_STORE_TYPE=s3.
+
+    Para MinIO (demo/test), passe endpoint_url="http://minio:9000".
+    Para AWS S3, deixe endpoint_url=None e configure as credenciais normalmente.
+
+    O file_path no PostgreSQL armazena a object key S3 (mesmo formato date-sharded
+    de FilesystemAttachmentStore, mas como key de objeto em vez de path no disco).
+    """
+
+    def __init__(
+        self,
+        *,
+        bucket:               str,
+        db_pool:              asyncpg.Pool,
+        serving_base_url:     str,
+        upload_base_url:      str,
+        endpoint_url:         str | None = None,
+        aws_access_key_id:    str | None = None,
+        aws_secret_access_key: str | None = None,
+        region_name:          str = "us-east-1",
+    ) -> None:
+        try:
+            import aioboto3  # type: ignore[import]
+        except ImportError as exc:
+            raise RuntimeError(
+                "aioboto3 é necessário para S3AttachmentStore: "
+                "pip install aioboto3"
+            ) from exc
+
+        self._bucket       = bucket
+        self._db           = db_pool
+        self._serving_url  = serving_base_url.rstrip("/")
+        self._upload_url   = upload_base_url.rstrip("/")
+        self._endpoint_url = endpoint_url or None
+        self._session      = aioboto3.Session(
+            aws_access_key_id     = aws_access_key_id or None,
+            aws_secret_access_key = aws_secret_access_key or None,
+            region_name           = region_name,
+        )
+
+    def _object_key(
+        self,
+        tenant_id:  str,
+        session_id: str,
+        file_id:    str,
+        mime_type:  str,
+    ) -> str:
+        now = datetime.now(timezone.utc)
+        ext = MIME_TO_EXT.get(mime_type, "bin")
+        return (
+            f"{tenant_id}/{now.year}/{now.month:02d}/{now.day:02d}"
+            f"/{session_id}/{file_id}.{ext}"
+        )
+
+    async def ensure_schema(self) -> None:
+        """Cria tabela de metadados no PostgreSQL e verifica acesso ao bucket."""
+        async with self._db.acquire() as conn:
+            await conn.execute(FilesystemAttachmentStore.DDL)
+
+        async with self._session.client(
+            "s3", endpoint_url=self._endpoint_url
+        ) as s3:
+            try:
+                await s3.head_bucket(Bucket=self._bucket)
+                logger.info(
+                    "S3AttachmentStore: schema ensured (bucket=%s endpoint=%s)",
+                    self._bucket, self._endpoint_url or "AWS",
+                )
+            except Exception as exc:
+                logger.warning(
+                    "S3AttachmentStore: bucket '%s' inacessível: %s "
+                    "(verifique credenciais e se o bucket existe)",
+                    self._bucket, exc,
+                )
+
+    # ── reserve ───────────────────────────────────────────────────────────────
+    # Apenas cria o registro no PostgreSQL; o object key é calculado no commit.
+
+    async def reserve(
+        self,
+        *,
+        tenant_id:   str,
+        session_id:  str,
+        file_name:   str,
+        mime_type:   str,
+        size_bytes:  int,
+        expires_at:  datetime,
+    ) -> tuple[str, str]:
+        file_id = str(uuid.uuid4())
+
+        async with self._db.acquire() as conn:
+            await conn.execute(
+                """
+                INSERT INTO session_attachments
+                    (file_id, tenant_id, session_id, original_name,
+                     mime_type, size_bytes, status, expires_at)
+                VALUES ($1, $2, $3, $4, $5, $6, 'pending', $7)
+                """,
+                uuid.UUID(file_id),
+                tenant_id,
+                session_id,
+                file_name,
+                mime_type,
+                size_bytes,
+                expires_at,
+            )
+
+        upload_url = f"{self._upload_url}/{file_id}"
+        logger.debug("S3AttachmentStore.reserve: file_id=%s session=%s", file_id, session_id)
+        return file_id, upload_url
+
+    # ── commit ────────────────────────────────────────────────────────────────
+
+    async def commit(
+        self,
+        *,
+        file_id:   str,
+        tenant_id: str,
+        data:      bytes,
+    ) -> AttachmentMeta:
+        async with self._db.acquire() as conn:
+            row = await conn.fetchrow(
+                """
+                SELECT session_id, original_name, mime_type, expires_at
+                FROM   session_attachments
+                WHERE  file_id = $1 AND tenant_id = $2 AND status = 'pending'
+                """,
+                uuid.UUID(file_id), tenant_id,
+            )
+
+        if row is None:
+            raise FileNotFoundError(f"slot não encontrado ou já committed: {file_id}")
+
+        session_id    = row["session_id"]
+        original_name = row["original_name"]
+        mime_type     = row["mime_type"]
+        expires_at    = row["expires_at"]
+
+        # Valida magic bytes
+        magic_error = validate_magic_bytes(data, mime_type)
+        if magic_error:
+            raise ValueError(magic_error)
+
+        # Envia para o S3
+        key = self._object_key(tenant_id, session_id, file_id, mime_type)
+        async with self._session.client(
+            "s3", endpoint_url=self._endpoint_url
+        ) as s3:
+            await s3.put_object(
+                Bucket      = self._bucket,
+                Key         = key,
+                Body        = data,
+                ContentType = mime_type,
+            )
+
+        actual_size = len(data)
+
+        # Atualiza registro → committed
+        async with self._db.acquire() as conn:
+            await conn.execute(
+                """
+                UPDATE session_attachments
+                SET    file_path  = $1,
+                       size_bytes = $2,
+                       status     = 'committed'
+                WHERE  file_id = $3
+                """,
+                key,
+                actual_size,
+                uuid.UUID(file_id),
+            )
+
+        serving_url = f"{self._serving_url}/{file_id}"
+        logger.info(
+            "S3AttachmentStore.commit: file_id=%s size=%d key=%s",
+            file_id, actual_size, key,
+        )
+
+        return AttachmentMeta(
+            file_id       = file_id,
+            tenant_id     = tenant_id,
+            session_id    = session_id,
+            original_name = original_name,
+            mime_type     = mime_type,
+            size_bytes    = actual_size,
+            file_path     = key,
+            serving_url   = serving_url,
+            expires_at    = expires_at,
+            deleted_at    = None,
+        )
+
+    # ── resolve ───────────────────────────────────────────────────────────────
+
+    async def resolve(
+        self,
+        *,
+        file_id:   str,
+        tenant_id: str,
+    ) -> AttachmentMeta | None:
+        async with self._db.acquire() as conn:
+            row = await conn.fetchrow(
+                """
+                SELECT session_id, original_name, mime_type, size_bytes,
+                       file_path, expires_at, deleted_at
+                FROM   session_attachments
+                WHERE  file_id = $1 AND tenant_id = $2
+                """,
+                uuid.UUID(file_id), tenant_id,
+            )
+
+        if row is None:
+            return None
+
+        return AttachmentMeta(
+            file_id       = file_id,
+            tenant_id     = tenant_id,
+            session_id    = row["session_id"],
+            original_name = row["original_name"],
+            mime_type     = row["mime_type"],
+            size_bytes    = row["size_bytes"],
+            file_path     = row["file_path"],
+            serving_url   = f"{self._serving_url}/{file_id}",
+            expires_at    = row["expires_at"],
+            deleted_at    = row["deleted_at"],
+        )
+
+    # ── stream_bytes ──────────────────────────────────────────────────────────
+
+    async def stream_bytes(
+        self,
+        *,
+        file_id:   str,
+        tenant_id: str,
+    ) -> AsyncIterator[bytes]:
+        meta = await self.resolve(file_id=file_id, tenant_id=tenant_id)
+        if meta is None or meta.file_path is None:
+            raise FileNotFoundError(file_id)
+        if meta.deleted_at is not None:
+            raise FileNotFoundError(f"arquivo expirado: {file_id}")
+
+        bucket       = self._bucket
+        key          = meta.file_path
+        session      = self._session
+        endpoint_url = self._endpoint_url
+
+        async def _gen():
+            async with session.client("s3", endpoint_url=endpoint_url) as s3:
+                response = await s3.get_object(Bucket=bucket, Key=key)
+                body = response["Body"]
+                while True:
+                    chunk = await body.read(64 * 1024)
+                    if not chunk:
+                        break
+                    yield chunk
+
+        return _gen()
+
+    # ── soft_expire ───────────────────────────────────────────────────────────
+
+    async def soft_expire(self, *, file_id: str) -> None:
+        async with self._db.acquire() as conn:
+            await conn.execute(
+                """
+                UPDATE session_attachments
+                SET    deleted_at = NOW()
+                WHERE  file_id = $1 AND deleted_at IS NULL
+                """,
+                uuid.UUID(file_id),
+            )
+        logger.debug("S3AttachmentStore.soft_expire: file_id=%s", file_id)

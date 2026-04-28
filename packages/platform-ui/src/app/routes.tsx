@@ -7,7 +7,12 @@ import HomePage from '@/modules/home/HomePage'
 import ConfigRecursosIndex from '@/modules/config-recursos'
 import MonitorPage from '@/modules/atendimento/MonitorPage'
 import ConfigPlataformaPage from '@/modules/config-plataforma/ConfigPlataformaPage'
+import MaskingPage from '@/modules/masking/MaskingPage'
 import WorkflowsPage from '@/modules/workflows/WorkflowsPage'
+import CampaignsPage from '@/modules/campaigns/CampaignsPage'
+import BillingPage from '@/modules/billing/BillingPage'
+import SkillFlowsPage from '@/modules/skill-flows/SkillFlowsPage'
+import { AgentAssistPage } from '@/modules/agent-assist/AgentAssistPage'
 import PlaceholderPage from '@/modules/_placeholder/PlaceholderPage'
 
 const LoadingFallback = () => <div className="flex justify-center items-center h-screen">Loading...</div>
@@ -39,11 +44,15 @@ export const routes: RouteObject[] = [
       },
       {
         path: 'agent-assist',
-        element: <PlaceholderPage module="Agent Assist" phase="Arc 2" />
+        element: <AgentAssistPage />
       },
       {
         path: 'workflows',
         element: <WorkflowsPage />
+      },
+      {
+        path: 'campaigns',
+        element: <CampaignsPage />
       },
       {
         path: 'dashboards',
@@ -55,11 +64,19 @@ export const routes: RouteObject[] = [
       },
       {
         path: 'skill-flows',
-        element: <PlaceholderPage module="Skill Flows" phase="Arc 2" />
+        element: <SkillFlowsPage />
       },
       {
         path: 'config/platform',
         element: <ConfigPlataformaPage />
+      },
+      {
+        path: 'config/masking',
+        element: <MaskingPage />
+      },
+      {
+        path: 'config/billing',
+        element: <BillingPage />
       },
       {
         path: 'config/access',

@@ -1,5 +1,13 @@
 # agente_demo_ia_v1.yaml
 # Demo IA — Agente IVR com fluxo fixo (menu de botões)
+
+id: skill_demo_ia_v1
+name: "Demo IA v1 — IVR com menu de botões"
+version: "1.0"
+description: "Agente IVR de demonstração com menu de botões e escalada para retenção humano."
+classification:
+  type: orchestrator
+  domain: customer_service
 #
 # Pool: demo_ia
 # Escalada para: retencao_humano

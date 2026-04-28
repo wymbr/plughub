@@ -9,10 +9,13 @@
     "analytics": "Analytics",
     "dashboards": "Dashboards",
     "relatorios": "Relatórios",
+    "campanhas": "Campanhas",
     "skillFlows": "Skill Flows",
     "configuracao": "Configuração",
     "recursos": "Recursos",
     "plataforma": "Plataforma",
+    "mascaramento": "Mascaramento",
+    "faturamento": "Faturamento",
     "acesso": "Acesso",
     "developer": "Developer",
     "business": "Business"

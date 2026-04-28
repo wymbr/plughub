@@ -480,6 +480,79 @@ export type {
   ContextResolutionRequest,
 } from "./contact-context"
 
+// ── ContactSegment — Arc 5 segment-level analytics ──────────────────────────
+export {
+  SegmentOutcomeSchema,
+  ContactSegmentSchema,
+  ConversationParticipantEventSchema,
+} from "./contact-segment"
+
+export type {
+  SegmentOutcome,
+  ContactSegment,
+  ConversationParticipantEvent,
+} from "./contact-segment"
+
+// ── Rules Engine events ───────────────────────────────────────────────────────
+export {
+  RulesEvaluationContextSchema,
+  RulesEscalationEventSchema,
+  RulesActiveEventSchema,
+  RulesShadowEventSchema,
+  RulesEventSchema,
+} from "./rules-events"
+
+export type {
+  RulesEvaluationContext,
+  RulesEscalationEvent,
+  RulesActiveEvent,
+  RulesShadowEvent,
+  RulesEvent,
+} from "./rules-events"
+
+// ── Platform / cross-cutting Kafka events ────────────────────────────────────
+export {
+  RegistryChangedEventSchema,
+  ConfigChangedEventSchema,
+  SentimentUpdatedEventSchema,
+  QueuePositionUpdatedEventSchema,
+  RoutingResultEventSchema,
+  ConversationRoutedEventSchema,
+  AgentLoginEventSchema,
+  AgentReadyEventSchema,
+  AgentBusyEventSchema,
+  AgentDoneEventSchema,
+  AgentPauseEventSchema,
+  AgentLogoutEventSchema,
+  AgentHeartbeatEventSchema,
+  AgentLifecycleEventSchema,
+  ConversationContactOpenSchema,
+  ConversationContactClosedSchema,
+  ConversationMessageSentSchema,
+  ConversationsEventSchema,
+} from "./platform-events"
+
+export type {
+  RegistryChangedEvent,
+  ConfigChangedEvent,
+  SentimentUpdatedEvent,
+  QueuePositionUpdatedEvent,
+  RoutingResultEvent,
+  ConversationRoutedEvent,
+  AgentLoginEvent,
+  AgentReadyEvent,
+  AgentBusyEvent,
+  AgentDoneEvent,
+  AgentPauseEvent,
+  AgentLogoutEvent,
+  AgentHeartbeatEvent,
+  AgentLifecycleEvent,
+  ConversationContactOpen,
+  ConversationContactClosed,
+  ConversationMessageSent,
+  ConversationsEvent,
+} from "./platform-events"
+
 // ── ContextStore — unified contact context store ──────────────────────────────
 export {
   ContextVisibilitySchema,

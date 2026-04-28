@@ -19,8 +19,12 @@ from aiokafka import AIOKafkaProducer
 from fastapi import FastAPI, WebSocket
 
 from .adapters.webchat import WebchatAdapter
-from .attachment_store import FilesystemAttachmentStore
-from .config import get_settings
+from .attachment_store import (
+    AttachmentStore,
+    FilesystemAttachmentStore,
+    S3AttachmentStore,
+)
+from .config import get_settings, Settings
 from .context_reader import ContextReader
 from .outbound_consumer import OutboundConsumer
 from .session_registry import SessionRegistry
@@ -29,11 +33,47 @@ logger = logging.getLogger("plughub.channel-gateway")
 
 # ── Application state (shared across requests) ────────────────────────────────
 
-_producer:         AIOKafkaProducer        | None = None
-_registry:         SessionRegistry         | None = None
-_context:          ContextReader            | None = None
-_redis:            aioredis.Redis           | None = None
-_attachment_store: FilesystemAttachmentStore | None = None
+_producer:         AIOKafkaProducer                      | None = None
+_registry:         SessionRegistry                       | None = None
+_context:          ContextReader                         | None = None
+_redis:            aioredis.Redis                        | None = None
+_attachment_store: FilesystemAttachmentStore | S3AttachmentStore | None = None
+
+
+def _create_attachment_store(
+    settings: Settings,
+    db_pool:  asyncpg.Pool,
+) -> FilesystemAttachmentStore | S3AttachmentStore:
+    """
+    Factory que instancia o backend de storage correto conforme
+    PLUGHUB_ATTACHMENT_STORE_TYPE.
+      - "filesystem" (padrão) → FilesystemAttachmentStore (disco local)
+      - "s3"                  → S3AttachmentStore (S3 / MinIO)
+    """
+    if settings.attachment_store_type == "s3":
+        logger.info(
+            "AttachmentStore: usando S3 backend (endpoint=%s bucket=%s)",
+            settings.s3_endpoint_url or "AWS",
+            settings.s3_bucket,
+        )
+        return S3AttachmentStore(
+            bucket                = settings.s3_bucket,
+            db_pool               = db_pool,
+            serving_base_url      = settings.webchat_serving_base_url,
+            upload_base_url       = settings.webchat_upload_base_url,
+            endpoint_url          = settings.s3_endpoint_url or None,
+            aws_access_key_id     = settings.s3_access_key or None,
+            aws_secret_access_key = settings.s3_secret_key or None,
+            region_name           = settings.s3_region,
+        )
+
+    logger.info("AttachmentStore: usando filesystem backend (root=%s)", settings.storage_root)
+    return FilesystemAttachmentStore(
+        storage_root     = settings.storage_root,
+        db_pool          = db_pool,
+        serving_base_url = settings.webchat_serving_base_url,
+        upload_base_url  = settings.webchat_upload_base_url,
+    )
 
 
 @asynccontextmanager
@@ -58,12 +98,7 @@ async def lifespan(app: FastAPI):
     # PostgreSQL pool for attachment metadata
     db_pool = await asyncpg.create_pool(settings.database_url, min_size=1, max_size=10)
 
-    _attachment_store = FilesystemAttachmentStore(
-        storage_root     = settings.storage_root,
-        db_pool          = db_pool,
-        serving_base_url = settings.webchat_serving_base_url,
-        upload_base_url  = settings.webchat_upload_base_url,
-    )
+    _attachment_store = _create_attachment_store(settings, db_pool)
     await _attachment_store.ensure_schema()
 
     outbound = OutboundConsumer(registry=_registry, settings=settings)

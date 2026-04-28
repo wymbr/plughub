@@ -193,6 +193,19 @@ export interface McpInterceptorConfig {
    * Opcional — se ausente, tags de longa duração usam apenas sessionId.
    */
   getCustomerId?: () => string | undefined
+
+  /**
+   * Callback opcional para resolução de tokens de mascaramento em argumentos de tool calls.
+   * Quando configurado, qualquer string `[category:tk_xxx:display]` nos args é substituída
+   * pelo valor original antes de encaminhar ao domain MCP Server.
+   *
+   * Tipicamente implementado lendo o Redis:
+   *   resolveToken: (tenantId, tokenId) => redis.get(`${tenantId}:token:${tokenId}`)
+   *     .then(v => v ? JSON.parse(v).original_value : null)
+   *
+   * Se retornar null, o token permanece como está (fail-open — nunca bloqueia o fluxo).
+   */
+  resolveToken?: (tenantId: string, tokenId: string) => Promise<string | null>
 }
 
 export interface CallOptions {
@@ -220,6 +233,7 @@ export class McpInterceptor {
   private readonly contextRegistry?:  Record<string, Record<string, ToolContextTags>>
   private readonly getSessionId?:     () => string
   private readonly getCustomerId?:    () => string | undefined
+  private readonly resolveToken?:     (tenantId: string, tokenId: string) => Promise<string | null>
 
   constructor(cfg: McpInterceptorConfig) {
     this.getSessionToken  = cfg.getSessionToken
@@ -233,6 +247,7 @@ export class McpInterceptor {
     this.contextRegistry  = cfg.contextToolRegistry
     this.getSessionId     = cfg.getSessionId
     this.getCustomerId    = cfg.getCustomerId
+    this.resolveToken     = cfg.resolveToken
   }
 
   /**
@@ -341,6 +356,24 @@ export class McpInterceptor {
     let result: unknown
     let callError: unknown
 
+    // ── 3-pre. Token resolution (masking) ──────────────────────────────────
+    // If resolveToken is configured, replace any [category:tk_xxx:display] tokens
+    // in the args with their original values before forwarding to the domain server.
+    // This allows agents to pass masked values from the stream to MCP tools transparently.
+    let resolvedArgs = args
+    if (this.resolveToken) {
+      try {
+        resolvedArgs = await this._resolveArgsTokens(
+          args,
+          claims.tenant_id,
+          this.resolveToken,
+        )
+      } catch (err) {
+        // Fail-open: log but continue with original args — never block agent flow
+        console.error("[McpInterceptor] TOKEN_RESOLUTION_FAILED", String(err))
+      }
+    }
+
     // ── 3a. Context extraction — inputs (fire-and-forget) ──────────────────
     const contextTags = this.contextRegistry?.[serverName]?.[toolName]
     if (contextTags?.inputs && this.contextStore && this.getSessionId) {
@@ -354,7 +387,7 @@ export class McpInterceptor {
       // Non-blocking — input extraction is best-effort
       accumulator.extractFromInputs(
         contextTags.inputs,
-        args as Record<string, unknown>,
+        resolvedArgs as Record<string, unknown>,
         `mcp_call:${serverName}:${toolName}`,
       ).catch(err => {
         console.error("[McpInterceptor] CTX_INPUT_EXTRACTION_FAILED", String(err))
@@ -362,7 +395,7 @@ export class McpInterceptor {
     }
 
     try {
-      result = await this.delegate(serverName, toolName, args)
+      result = await this.delegate(serverName, toolName, resolvedArgs)
     } catch (e) {
       callError = e
     }
@@ -395,7 +428,7 @@ export class McpInterceptor {
       injection_detected: false,
       duration_ms:        duration,
       opts,
-      input_snapshot:     opts.audit_policy?.capture_input  ? args   : undefined,
+      input_snapshot:     opts.audit_policy?.capture_input  ? resolvedArgs : undefined,
       output_snapshot:    opts.audit_policy?.capture_output ? result : undefined,
     })
 
@@ -447,5 +480,58 @@ export class McpInterceptor {
         JSON.stringify({ ...record, _kafka_error: String(err) })
       )
     }
+  }
+
+  /**
+   * Recursively walks `args` and resolves any masking token strings.
+   * Token format: [category:tk_xxx:display_partial]
+   * Resolution: calls resolveToken(tenantId, tokenId) → original_value.
+   * If the full string IS the token, replaces with the raw value.
+   * If the token appears inline in a longer string, replaces the token substring.
+   * Fails-open: if resolveToken returns null, the token is left as-is.
+   */
+  private async _resolveArgsTokens(
+    value:        unknown,
+    tenantId:     string,
+    resolveToken: (tenantId: string, tokenId: string) => Promise<string | null>,
+  ): Promise<unknown> {
+    if (typeof value === "string") {
+      return this._resolveTokensInString(value, tenantId, resolveToken)
+    }
+    if (Array.isArray(value)) {
+      return Promise.all(
+        value.map(item => this._resolveArgsTokens(item, tenantId, resolveToken))
+      )
+    }
+    if (value !== null && typeof value === "object") {
+      const out: Record<string, unknown> = {}
+      for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+        out[k] = await this._resolveArgsTokens(v, tenantId, resolveToken)
+      }
+      return out
+    }
+    return value
+  }
+
+  private async _resolveTokensInString(
+    text:         string,
+    tenantId:     string,
+    resolveToken: (tenantId: string, tokenId: string) => Promise<string | null>,
+  ): Promise<string> {
+    // Regex: [category:tk_hexid:display_partial]
+    const TOKEN_RE = /\[[\w_]+:(tk_[a-f0-9]+):[^\]]+\]/g
+    const matches = [...text.matchAll(TOKEN_RE)]
+    if (matches.length === 0) return text
+
+    let result = text
+    for (const match of matches) {
+      const [fullToken, tokenId] = match
+      if (!tokenId) continue
+      const resolved = await resolveToken(tenantId, tokenId)
+      if (resolved !== null) {
+        result = result.replace(fullToken, resolved)
+      }
+    }
+    return result
   }
 }

@@ -16,6 +16,7 @@ Topics consumed:
   queue.position_updated     → queue_events (position update)
   workflow.events            → workflow_events (lifecycle)
   collect.events             → collect_events (lifecycle)
+  conversations.participants → participation_intervals (participant joined / left)
 """
 from __future__ import annotations
 
@@ -403,3 +404,75 @@ def parse_collect_event(payload: dict[str, Any]) -> dict | None:
         "elapsed_ms":    payload.get("elapsed_ms"),
         "timestamp":     payload.get("timestamp") or _now(),
     }
+
+
+# ─── conversations.participants ───────────────────────────────────────────────
+
+def parse_participant_event(payload: dict[str, Any]) -> list[dict] | None:
+    """
+    Maps participant_joined / participant_left events → two tables:
+      - participation_intervals  (legacy, ORDER BY tenant_id+session_id+participant_id)
+      - segments                 (Arc 5 ContactSegment, ORDER BY tenant_id+session_id+segment_id)
+
+    Both event types upsert the same row in each table. ReplacingMergeTree ensures
+    the later "left" write (with ended_at / left_at set) wins on background merge.
+    """
+    event_type     = payload.get("type")
+    session_id     = payload.get("session_id")
+    tenant_id      = payload.get("tenant_id")
+    participant_id = payload.get("participant_id")
+
+    if event_type not in ("participant_joined", "participant_left"):
+        return None
+    if not session_id or not tenant_id or not participant_id:
+        return None
+
+    _event_id = payload.get("event_id") or _gen_id()
+    _segment_id = payload.get("segment_id") or _gen_id()
+
+    participation_row = {
+        "table":          "participation_intervals",
+        "event_id":       _event_id,
+        "session_id":     session_id,
+        "tenant_id":      tenant_id,
+        "participant_id": participant_id,
+        "pool_id":        payload.get("pool_id") or "",
+        "agent_type_id":  payload.get("agent_type_id") or "",
+        "role":           payload.get("role") or "",
+        "agent_type":     payload.get("agent_type") or "",
+        "conference_id":  payload.get("conference_id") or None,
+        "joined_at":      payload.get("joined_at"),
+        "type":           event_type,
+        "duration_ms":    payload.get("duration_ms"),
+        "timestamp":      payload.get("timestamp") or _now(),
+    }
+
+    # Arc 5: segment row — written on both joined and left;
+    # the "left" write populates ended_at and outcome fields.
+    segment_row = {
+        "table":             "segments",
+        "event_id":          _event_id,
+        "segment_id":        _segment_id,
+        "session_id":        session_id,
+        "tenant_id":         tenant_id,
+        "participant_id":    participant_id,
+        "pool_id":           payload.get("pool_id") or "",
+        "agent_type_id":     payload.get("agent_type_id") or "",
+        "instance_id":       payload.get("participant_id") or "",
+        "role":              payload.get("role") or "",
+        "agent_type":        payload.get("agent_type") or "",
+        "parent_segment_id": payload.get("parent_segment_id") or None,
+        "sequence_index":    int(payload.get("sequence_index", 0)),
+        "conference_id":     payload.get("conference_id") or None,
+        "joined_at":         payload.get("joined_at"),
+        "started_at":        payload.get("joined_at") or payload.get("timestamp") or _now(),
+        "type":              event_type,
+        "duration_ms":       payload.get("duration_ms"),
+        "outcome":           payload.get("outcome") or None,
+        "close_reason":      payload.get("close_reason") or None,
+        "handoff_reason":    payload.get("handoff_reason") or None,
+        "issue_status":      payload.get("issue_status") or None,
+        "timestamp":         payload.get("timestamp") or _now(),
+    }
+
+    return [participation_row, segment_row]

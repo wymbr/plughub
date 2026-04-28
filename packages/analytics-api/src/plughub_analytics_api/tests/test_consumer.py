@@ -22,6 +22,7 @@ from ..models import (
     parse_usage_event,
     parse_sentiment_event,
     parse_queue_position,
+    parse_participant_event,
 )
 from ..consumer import _write_row
 
@@ -30,12 +31,15 @@ from ..consumer import _write_row
 
 def make_store() -> MagicMock:
     s = MagicMock()
-    s.upsert_session     = AsyncMock()
-    s.insert_queue_event = AsyncMock()
-    s.insert_agent_event = AsyncMock()
-    s.insert_message     = AsyncMock()
-    s.insert_usage_event = AsyncMock()
-    s.insert_sentiment_event = AsyncMock()
+    s.upsert_session               = AsyncMock()
+    s.insert_queue_event           = AsyncMock()
+    s.insert_agent_event           = AsyncMock()
+    s.insert_message               = AsyncMock()
+    s.insert_usage_event           = AsyncMock()
+    s.insert_sentiment_event       = AsyncMock()
+    s.upsert_participation_interval = AsyncMock()
+    s.upsert_segment               = AsyncMock()
+    s.insert_timeline_event        = AsyncMock()
     return s
 
 
@@ -323,9 +327,160 @@ class TestWriteRowDispatch:
         await _write_row(store, {"table": "sentiment_events"}, "topic", 0)
         store.insert_sentiment_event.assert_called_once()
 
+    async def test_participation_intervals_dispatched(self):
+        store = make_store()
+        await _write_row(store, {"table": "participation_intervals"}, "conversations.participants", 0)
+        store.upsert_participation_interval.assert_called_once()
+
+    async def test_segments_dispatched(self):
+        store = make_store()
+        await _write_row(store, {"table": "segments"}, "conversations.participants", 0)
+        store.upsert_segment.assert_called_once()
+
+    async def test_session_timeline_dispatched(self):
+        store = make_store()
+        await _write_row(store, {"table": "session_timeline"}, "conversations.participants", 0)
+        store.insert_timeline_event.assert_called_once()
+
     async def test_unknown_table_does_not_call_any_method(self):
         store = make_store()
         await _write_row(store, {"table": "unknown_table"}, "topic", 0)
         store.upsert_session.assert_not_called()
         store.insert_queue_event.assert_not_called()
         store.insert_agent_event.assert_not_called()
+
+
+# ── parse_participant_event ───────────────────────────────────────────────────
+
+PARTICIPANT = "part-agent-001"
+INSTANCE    = "agente_retencao_v1-001"
+
+
+class TestParseParticipantEvent:
+    def _joined_payload(self, conference_id: str | None = None) -> dict:
+        p = {
+            "type":           "participant_joined",
+            "session_id":     SESSION,
+            "tenant_id":      TENANT,
+            "participant_id": PARTICIPANT,
+            "pool_id":        POOL,
+            "agent_type_id":  "agente_retencao_v1",
+            "role":           "primary",
+            "agent_type":     "ai",
+            "joined_at":      "2026-01-01T10:00:00+00:00",
+            "timestamp":      "2026-01-01T10:00:00+00:00",
+        }
+        if conference_id:
+            p["conference_id"] = conference_id
+        return p
+
+    def _left_payload(self) -> dict:
+        return {
+            "type":           "participant_left",
+            "session_id":     SESSION,
+            "tenant_id":      TENANT,
+            "participant_id": PARTICIPANT,
+            "pool_id":        POOL,
+            "agent_type_id":  "agente_retencao_v1",
+            "role":           "primary",
+            "agent_type":     "ai",
+            "joined_at":      "2026-01-01T10:00:00+00:00",
+            "duration_ms":    180000,
+            "timestamp":      "2026-01-01T10:03:00+00:00",
+        }
+
+    # Arc 5: parse_participant_event now returns a list of 2 rows:
+    #   [0] participation_intervals row  (legacy)
+    #   [1] segments row                 (Arc 5 ContactSegment)
+
+    def test_participant_joined_returns_two_rows(self):
+        rows = parse_participant_event(self._joined_payload())
+        assert rows is not None
+        assert isinstance(rows, list)
+        assert len(rows) == 2
+
+    def test_participation_row_correct(self):
+        rows = parse_participant_event(self._joined_payload())
+        row = rows[0]
+        assert row["table"] == "participation_intervals"
+        assert row["session_id"] == SESSION
+        assert row["tenant_id"] == TENANT
+        assert row["participant_id"] == PARTICIPANT
+        assert row["pool_id"] == POOL
+        assert row["role"] == "primary"
+        assert row["type"] == "participant_joined"
+        assert row["duration_ms"] is None
+
+    def test_segment_row_correct(self):
+        rows = parse_participant_event(self._joined_payload())
+        seg = rows[1]
+        assert seg["table"] == "segments"
+        assert seg["session_id"] == SESSION
+        assert seg["tenant_id"] == TENANT
+        assert seg["participant_id"] == PARTICIPANT
+        assert seg["pool_id"] == POOL
+        assert seg["role"] == "primary"
+        assert isinstance(seg["segment_id"], str) and len(seg["segment_id"]) > 0
+        assert seg["sequence_index"] == 0
+
+    def test_segment_id_passed_through(self):
+        payload = self._joined_payload()
+        payload["segment_id"] = "fixed-seg-uuid"
+        rows = parse_participant_event(payload)
+        seg = rows[1]
+        assert seg["segment_id"] == "fixed-seg-uuid"
+
+    def test_sequence_index_passed_through(self):
+        payload = self._joined_payload()
+        payload["segment_id"] = "seg-1"
+        payload["sequence_index"] = 2
+        rows = parse_participant_event(payload)
+        assert rows[1]["sequence_index"] == 2
+
+    def test_parent_segment_id_passed_through(self):
+        payload = self._joined_payload()
+        payload["parent_segment_id"] = "parent-seg-uuid"
+        rows = parse_participant_event(payload)
+        assert rows[1]["parent_segment_id"] == "parent-seg-uuid"
+
+    def test_participant_left_has_duration(self):
+        rows = parse_participant_event(self._left_payload())
+        assert rows is not None
+        assert rows[0]["table"] == "participation_intervals"
+        assert rows[0]["type"] == "participant_left"
+        assert rows[0]["duration_ms"] == 180000
+
+    def test_conference_id_propagated(self):
+        rows = parse_participant_event(self._joined_payload(conference_id="conf-abc"))
+        assert rows is not None
+        assert rows[0]["conference_id"] == "conf-abc"
+        assert rows[1]["conference_id"] == "conf-abc"
+
+    def test_conference_id_absent_is_none(self):
+        rows = parse_participant_event(self._joined_payload())
+        assert rows is not None
+        assert rows[0].get("conference_id") is None
+
+    def test_unknown_type_returns_none(self):
+        payload = self._joined_payload()
+        payload["type"] = "participant_muted"
+        assert parse_participant_event(payload) is None
+
+    def test_missing_session_id_returns_none(self):
+        payload = self._joined_payload()
+        del payload["session_id"]
+        assert parse_participant_event(payload) is None
+
+    def test_missing_participant_id_returns_none(self):
+        payload = self._joined_payload()
+        del payload["participant_id"]
+        assert parse_participant_event(payload) is None
+
+    def test_event_id_generated_when_absent(self):
+        payload = self._joined_payload()
+        rows = parse_participant_event(payload)
+        assert rows is not None
+        # Both rows share the same event_id
+        assert isinstance(rows[0]["event_id"], str)
+        assert len(rows[0]["event_id"]) > 0
+        assert rows[0]["event_id"] == rows[1]["event_id"]

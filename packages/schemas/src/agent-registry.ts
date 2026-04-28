@@ -107,6 +107,27 @@ export const PoolEvaluationConfigSchema = z.object({
 })
 export type PoolEvaluationConfig = z.infer<typeof PoolEvaluationConfigSchema>
 
+// ── Pool Lifecycle Hooks — spec Pool Hooks v1 ─────────────────────────────────
+
+const PoolHookEntrySchema = z.object({
+  /**
+   * pool_id do pool de onde o especialista será recrutado.
+   * O routing engine aloca uma instância disponível deste pool como
+   * participante de conferência na sessão existente.
+   */
+  pool: z.string().regex(/^[a-z0-9_]+$/),
+})
+export type PoolHookEntry = z.infer<typeof PoolHookEntrySchema>
+
+export const PoolHooksSchema = z.object({
+  on_human_start: z.array(PoolHookEntrySchema).default([]),
+  on_human_end:   z.array(PoolHookEntrySchema).default([]),
+  post_human:     z.array(PoolHookEntrySchema).default([]),
+})
+export type PoolHooks = z.infer<typeof PoolHooksSchema>
+
+// ──────────────────────────────────────────────────────────────────────────────
+
 export const PoolRegistrationSchema = z.object({
   pool_id:                z.string().regex(/^[a-z0-9_]+$/),
   description:            z.string().optional(),
@@ -132,11 +153,30 @@ export const PoolRegistrationSchema = z.object({
    */
   mentionable_pools:      z.record(z.string()).optional(),
   /**
+   * @deprecated Usar `hooks.on_human_start` com pool explícito.
    * skill_id do Co-pilot associado a esta fila.
-   * Quando presente, o orchestrator-bridge auto-lança uma instância do Co-pilot
-   * assim que um agente humano entra na sessão.
    */
   copilot_skill_id:       z.string().optional(),
+  /**
+   * Lifecycle hooks — acionam especialistas em pontos específicos do atendimento humano.
+   *
+   * on_human_start  — disparado quando um agente humano entra na sessão
+   *                   (após conversation.assigned ser publicado).
+   *                   Uso típico: auto-activar co-pilot ou assistente de contexto.
+   *
+   * on_human_end    — disparado quando o agente humano chama agent_done
+   *                   mas ANTES do contato ser encerrado (requer Fase B).
+   *                   Uso típico: pesquisa NPS, atualização de CRM, encerramento guiado.
+   *
+   * post_human      — disparado após todos os hooks on_human_end concluírem,
+   *                   imediatamente antes do contact_close (requer Fase B).
+   *                   Uso típico: agente de qualidade, resumo automático.
+   *
+   * Cada entrada { pool } define o pool de onde o especialista será recrutado.
+   * O routing engine seleciona a instância disponível do pool alvo e a ativa
+   * como participante de conferência na sessão existente.
+   */
+  hooks:                  PoolHooksSchema.optional(),
 })
 export type PoolRegistration = z.infer<typeof PoolRegistrationSchema>
 

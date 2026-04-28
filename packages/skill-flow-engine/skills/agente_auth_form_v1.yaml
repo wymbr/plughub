@@ -1,0 +1,234 @@
+# agente_auth_form_v1.yaml
+#
+# Agente de autenticação via formulário com campos mistos.
+#
+# Demonstra field-level masking em interaction: form:
+#   email      → sem masked flag → sobrevive para pipeline_state (visível no Agent Assist)
+#   senha      → masked: true   → vai para maskedScope, usado em @masked.senha na validação
+#   codigo_2fa → masked: true   → vai para maskedScope (não usado após coleta)
+#
+# Webchat renderiza:
+#   - email      → <input type="text">    no overlay fora do chat
+#   - senha      → <input type="password"> no overlay fora do chat
+#   - codigo_2fa → <input type="password"> no overlay fora do chat
+#
+# Agent Assist vê em dados_coletados: apenas { email }
+# Senha e codigo_2fa NUNCA aparecem no stream, pipeline_state ou logs.
+#
+# Invariantes (spec: docs/guias/masked-input.md):
+#   - Campos masked nunca entram em pipeline_state, Redis, stream ou logs
+#   - @masked.senha só existe em memória durante o bloco transacional
+#   - end_transaction persiste apenas { status:"ok", fields_collected:["senha","codigo_2fa"] }
+#   - Retry exige novo preenchimento do formulário inteiro (2 tentativas no total)
+#   - Sucesso escala para retencao_humano (option B)
+#   - Falha após 2 tentativas escala para retencao_humano com handoff_reason de falha
+#
+# Validação (demo — mcp-server-auth):
+#   - senha válida: 6 dígitos começando com "1" (ex: 123456)
+#   - senha inválida: qualquer outro valor (ex: 000000, 999999)
+
+id: skill_auth_form_v1
+name: "Auth Form v1 — formulário seguro com campos mistos"
+version: "1.0"
+description: |
+  Formulário de autenticação com campos mistos: email (visível) + senha e código 2FA (mascarados).
+  Field-level masking: email sobrevive para pipeline_state; senha e codigo_2fa ficam em maskedScope.
+classification:
+  type: orchestrator
+  domain: security
+
+entry: aviso_inicio_agente
+
+steps:
+
+    # ── Aviso interno ao agente humano (agents_only) ───────────────────────────
+    - id: aviso_inicio_agente
+      type: notify
+      message: "🔐 Formulário de autenticação iniciado. Senha e código 2FA NÃO aparecerão neste chat — apenas o e-mail do cliente será visível após o preenchimento."
+      visibility: agents_only
+      on_success: solicitar_inicio
+      on_failure: solicitar_inicio
+
+    # ── Aviso inicial ao cliente ───────────────────────────────────────────────
+    - id: solicitar_inicio
+      type: notify
+      message: "Para prosseguir, precisamos verificar sua identidade. Preencha o formulário a seguir."
+      on_success: tx_inicio
+      on_failure: falha_autenticacao
+
+    # ── Início da transação segura ─────────────────────────────────────────────
+    - id: tx_inicio
+      type: begin_transaction
+      on_failure: falha_autenticacao
+
+    # ── Coleta via formulário com campos mistos ────────────────────────────────
+    # email:      sem masked → vai para pipeline_state.dados_coletados.email
+    #             também escrito em caller.email via context_tags (aparece na aba Contexto)
+    # senha:      masked:true → maskedScope[@masked.senha], ausente de pipeline_state
+    # codigo_2fa: masked:true → maskedScope[@masked.codigo_2fa], ausente de pipeline_state
+    - id: coletar_dados
+      type: menu
+      interaction: form
+      prompt: "Preencha seus dados de acesso:"
+      timeout_s: 120
+      output_as: dados_coletados
+      fields:
+        - id: email
+          label: "E-mail"
+          type: "text"
+        - id: senha
+          label: "Senha"
+          type: "text"
+          masked: true
+        - id: codigo_2fa
+          label: "Código 2FA"
+          type: "text"
+          masked: true
+      context_tags:
+        outputs:
+          email:
+            tag: caller.email
+            confidence: 1.0
+            merge: overwrite
+      on_success: validar_senha
+      on_failure: falha_autenticacao
+      on_timeout: falha_autenticacao
+
+    # ── Validação da senha via MCP ─────────────────────────────────────────────
+    # @masked.senha lê do maskedScope em memória — nunca de pipeline_state
+    # on_success → verificar_resultado (choice verifica valid:true/false)
+    # on_failure (MCP throw) → engine rewind para tx_inicio.on_failure = falha_autenticacao
+    - id: validar_senha
+      type: invoke
+      target:
+        mcp_server: mcp-server-auth
+        tool: validate_pin
+      input:
+        customer_id: "@ctx.caller.customer_id"
+        pin: "@masked.senha"
+      output_as: validacao_senha
+      on_success: verificar_resultado
+      on_failure: falha_autenticacao
+
+    # ── Verificação do resultado: valid true → tx_fim | valid false → retry ────
+    - id: verificar_resultado
+      type: choice
+      conditions:
+        - field: "$.pipeline_state.validacao_senha.valid"
+          operator: eq
+          value: true
+          next: tx_fim
+      default: senha_invalida
+
+    # ── Senha inválida — uma nova tentativa, depois escala ────────────────────
+    # Reabre o formulário UMA vez; na segunda falha vai direto para falha_autenticacao.
+    # (on_success aponta para tx_inicio_retry — bloco separado com on_failure final)
+    - id: senha_invalida
+      type: notify
+      message: "Credenciais inválidas. Tente novamente — senha deve ter 6 dígitos começando com 1 (ex: 123456)."
+      on_success: tx_inicio_retry
+      on_failure: falha_autenticacao
+
+    # ── Segunda tentativa: bloco com on_failure terminal (sem loop) ───────────
+    - id: tx_inicio_retry
+      type: begin_transaction
+      on_failure: falha_autenticacao
+
+    - id: coletar_dados_retry
+      type: menu
+      interaction: form
+      prompt: "Preencha novamente seus dados de acesso:"
+      timeout_s: 120
+      output_as: dados_coletados
+      fields:
+        - id: email
+          label: "E-mail"
+          type: "text"
+        - id: senha
+          label: "Senha"
+          type: "text"
+          masked: true
+        - id: codigo_2fa
+          label: "Código 2FA"
+          type: "text"
+          masked: true
+      context_tags:
+        outputs:
+          email:
+            tag: caller.email
+            confidence: 1.0
+            merge: overwrite
+      on_success: validar_senha_retry
+      on_failure: falha_autenticacao
+      on_timeout: falha_autenticacao
+
+    - id: validar_senha_retry
+      type: invoke
+      target:
+        mcp_server: mcp-server-auth
+        tool: validate_pin
+      input:
+        customer_id: "@ctx.caller.customer_id"
+        pin: "@masked.senha"
+      output_as: validacao_senha
+      on_success: verificar_resultado_retry
+      on_failure: falha_autenticacao
+
+    - id: verificar_resultado_retry
+      type: choice
+      conditions:
+        - field: "$.pipeline_state.validacao_senha.valid"
+          operator: eq
+          value: true
+          next: tx_fim
+      default: falha_autenticacao
+
+    # ── Fim da transação — persiste metadados, descarta campos mascarados ──────
+    - id: tx_fim
+      type: end_transaction
+      result_as: auth_status
+      on_success: aviso_sucesso_agente
+
+    # ── Aviso interno de sucesso ao agente (agents_only) ──────────────────────
+    # O e-mail está em pipeline_state.dados_coletados.email — senha e codigo_2fa ausentes.
+    - id: aviso_sucesso_agente
+      type: notify
+      message: "✅ Autenticação concluída. Transferindo para você. Verifique dados_coletados.email no painel — senha e codigo_2fa não aparecem (mascarados)."
+      visibility: agents_only
+      on_success: confirmacao
+      on_failure: confirmacao
+
+    # ── Confirmação ao cliente e escalada para agente humano ──────────────────
+    - id: confirmacao
+      type: notify
+      message: "Identidade verificada com sucesso. ✅ Transferindo para um especialista — aguarde um momento."
+      on_success: escalar_sucesso
+      on_failure: escalar_sucesso
+
+    - id: escalar_sucesso
+      type: escalate
+      target:
+        pool: retencao_humano
+      context: pipeline_state
+      handoff_reason: "Autenticação via formulário concluída com sucesso"
+
+    # ── Caminho de falha — fora do bloco masked ───────────────────────────────
+    - id: falha_autenticacao
+      type: notify
+      message: "Não foi possível verificar sua identidade no momento. Um especialista irá atendê-lo em seguida."
+      on_success: aviso_falha_agente
+      on_failure: aviso_falha_agente
+
+    - id: aviso_falha_agente
+      type: notify
+      message: "⚠️ Autenticação via formulário falhou. Assuma o atendimento."
+      visibility: agents_only
+      on_success: encerrar_escalado
+      on_failure: encerrar_escalado
+
+    - id: encerrar_escalado
+      type: escalate
+      target:
+        pool: retencao_humano
+      context: pipeline_state
+      handoff_reason: "Falha na autenticação via formulário seguro"

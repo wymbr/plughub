@@ -215,21 +215,66 @@ export class MaskingService {
 
   /**
    * Carrega MaskingAccessPolicy do Redis para o tenant.
-   * Key: {tenantId}:masking:access_policy
-   * Retorna policy default se não configurada: apenas evaluator e reviewer.
+   *
+   * Lookup chain (first found wins):
+   *   1. {tenantId}:masking:access_policy — legacy key, explicit override
+   *   2. plughub:cfg:{tenantId}:masking:authorized_roles — Config API tenant-level cache
+   *   3. plughub:cfg:__global__:masking:authorized_roles — Config API global default
+   *   4. Hardcoded default: ["evaluator", "reviewer"]
+   *
+   * This means masking access policy is editable via ConfigPanel (Config API UI)
+   * without requiring a separate admin endpoint.
    */
   static async loadAccessPolicy(
     redis:    { get(key: string): Promise<string | null> },
     tenantId: string
   ): Promise<MaskingAccessPolicy> {
+    // 1. Legacy key (explicit override — highest priority)
     try {
       const raw = await redis.get(`${tenantId}:masking:access_policy`)
       if (raw) return JSON.parse(raw) as MaskingAccessPolicy
-    } catch { /* usa default */ }
+    } catch { /* continue */ }
 
+    // 2. Config API tenant-level cache (managed via ConfigPanel)
+    try {
+      const raw = await redis.get(`plughub:cfg:${tenantId}:masking:authorized_roles`)
+      if (raw) {
+        const roles = JSON.parse(raw) as string[]
+        if (Array.isArray(roles) && roles.length > 0) {
+          return { tenant_id: tenantId, authorized_roles: roles }
+        }
+      }
+    } catch { /* continue */ }
+
+    // 3. Config API global default cache
+    try {
+      const raw = await redis.get(`plughub:cfg:__global__:masking:authorized_roles`)
+      if (raw) {
+        const roles = JSON.parse(raw) as string[]
+        if (Array.isArray(roles) && roles.length > 0) {
+          return { tenant_id: tenantId, authorized_roles: roles }
+        }
+      }
+    } catch { /* continue */ }
+
+    // 4. Hardcoded default
     return {
       tenant_id:        tenantId,
       authorized_roles: ["evaluator", "reviewer"],
     }
+  }
+
+  /**
+   * Persiste MaskingAccessPolicy no Redis (legacy key).
+   * Chamado por admin endpoints que escrevem diretamente a policy.
+   * Nota: editar via Config API (namespace masking, key authorized_roles) é a
+   * forma preferida — use loadAccessPolicy para leitura, que já faz fallback.
+   */
+  static async saveAccessPolicy(
+    redis:    { set(key: string, value: string): Promise<unknown> },
+    tenantId: string,
+    policy:   MaskingAccessPolicy
+  ): Promise<void> {
+    await redis.set(`${tenantId}:masking:access_policy`, JSON.stringify(policy))
   }
 }

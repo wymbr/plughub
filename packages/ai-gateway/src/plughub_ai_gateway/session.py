@@ -19,7 +19,7 @@ import redis.asyncio as aioredis
 logger = logging.getLogger("plughub.ai_gateway.session")
 
 from .config import get_settings
-from .sentiment_emitter import emit_sentiment_updated, update_sentiment_live
+from .sentiment_emitter import emit_sentiment_updated, update_sentiment_live, write_context_store_sentiment
 
 
 async def get_redis() -> aioredis.Redis:
@@ -152,6 +152,12 @@ class SessionManager:
                 pool_id    = pool_id,
                 score      = sentiment_score,
                 session_id = session_id,
+            )
+            await write_context_store_sentiment(
+                redis      = self._redis,
+                tenant_id  = tenant_id,
+                session_id = session_id,
+                score      = sentiment_score,
             )
         except Exception as exc:
             logger.warning("Sentiment pipeline failed for %s: %s", session_id, exc)

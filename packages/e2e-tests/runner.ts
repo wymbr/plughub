@@ -25,6 +25,19 @@
  *   ts-node runner.ts --only 15       — run only scenario 15 (instance bootstrap)
  *   ts-node runner.ts --reconcile     — run scenarios 01–04 + 15 + 16 (bootstrap + live reconcile)
  *   ts-node runner.ts --only 16       — run only scenario 16 (live reconciliation)
+ *   ts-node runner.ts --ctx           — run scenario 17 (ContextStore accumulation + supervisor_state)
+ *   ts-node runner.ts --only 17       — run only scenario 17 (ContextStore)
+ *   ts-node runner.ts --worker        — run scenario 18 (Kafka→worker→engine chain)
+ *   ts-node runner.ts --only 18       — run only scenario 18 (workflow worker chain)
+ *   ts-node runner.ts --mention       — run scenario 19 (@mention co-pilot + masked PIN auth)
+ *   ts-node runner.ts --only 19       — run only scenario 19 (@mention + masked PIN)
+ *   ts-node runner.ts --masked        — run scenarios 20 + 21 (masked form + retry cycle)
+ *   ts-node runner.ts --only 20       — run only scenario 20 (masked form field-level policy)
+ *   ts-node runner.ts --only 21       — run only scenario 21 (masked retry / rollback cycle)
+ *   ts-node runner.ts --hooks         — run scenario 22 (pool lifecycle hooks Fase B + C)
+ *   ts-node runner.ts --only 22       — run only scenario 22 (on_human_end + post_human + participation)
+ *   ts-node runner.ts --segments      — run scenario 23 (Arc 5 ContactSegment analytics pipeline)
+ *   ts-node runner.ts --only 23       — run only scenario 23 (ContactSegment lifecycle + topology)
  *
  * Environment variables (all optional — defaults work with docker-compose.test.yml):
  *   MCP_SERVER_URL            (default: http://localhost:3100)
@@ -77,6 +90,13 @@ import { run as scenario13 } from "./scenarios/13_workflow_automation";
 import { run as scenario14 } from "./scenarios/14_collect_step";
 import { run as scenario15 } from "./scenarios/15_instance_bootstrap";
 import { run as scenario16 } from "./scenarios/16_live_reconciliation";
+import { run as scenario17 } from "./scenarios/17_context_store";
+import { run as scenario18 } from "./scenarios/18_workflow_worker_chain";
+import { run as scenario19 } from "./scenarios/19_mention_copilot_auth";
+import { run as scenario20 } from "./scenarios/20_masked_form";
+import { run as scenario21 } from "./scenarios/21_masked_retry";
+import { run as scenario22 } from "./scenarios/22_pool_hooks_fase_b";
+import { run as scenario23 } from "./scenarios/23_contact_segments";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Configuration
@@ -117,7 +137,13 @@ const runWorkflow   = args.includes("--workflow")   || onlyScenario === "13";
 const runCollect    = args.includes("--collect")    || onlyScenario === "14";
 const runBootstrap  = args.includes("--bootstrap")  || onlyScenario === "15";
 const runReconcile  = args.includes("--reconcile") || onlyScenario === "16";
-const runDemo       = args.includes("--demo");  // runs all scenarios 01–16
+const runCtx        = args.includes("--ctx")        || onlyScenario === "17";
+const runWorker     = args.includes("--worker")     || onlyScenario === "18";
+const runMention    = args.includes("--mention")    || onlyScenario === "19";
+const runMasked     = args.includes("--masked")     || onlyScenario === "20" || onlyScenario === "21";
+const runHooks      = args.includes("--hooks")      || onlyScenario === "22";
+const runSegments   = args.includes("--segments")   || onlyScenario === "23";
+const runDemo       = args.includes("--demo");  // runs all scenarios 01–18
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Scenario registry
@@ -178,6 +204,34 @@ if (runDemo || runReconcile || onlyScenario === "16") {
   ALL_SCENARIOS.push({ id: "16", fn: scenario16 });
 }
 
+if (runDemo || runCtx || onlyScenario === "17") {
+  ALL_SCENARIOS.push({ id: "17", fn: scenario17 });
+}
+
+if (runDemo || runWorker || onlyScenario === "18") {
+  ALL_SCENARIOS.push({ id: "18", fn: scenario18 });
+}
+
+if (runMention || onlyScenario === "19") {
+  ALL_SCENARIOS.push({ id: "19", fn: scenario19 });
+}
+
+if (runMasked || onlyScenario === "20") {
+  ALL_SCENARIOS.push({ id: "20", fn: scenario20 });
+}
+
+if (runMasked || onlyScenario === "21") {
+  ALL_SCENARIOS.push({ id: "21", fn: scenario21 });
+}
+
+if (runHooks || onlyScenario === "22") {
+  ALL_SCENARIOS.push({ id: "22", fn: scenario22 });
+}
+
+if (runSegments || onlyScenario === "23") {
+  ALL_SCENARIOS.push({ id: "23", fn: scenario23 });
+}
+
 const SCENARIOS_TO_RUN = onlyScenario
   ? ALL_SCENARIOS.filter((s) => s.id === onlyScenario)
   : ALL_SCENARIOS;
@@ -211,7 +265,7 @@ async function main(): Promise<void> {
   const needsRegistry  = scenarioIds.has("15") || scenarioIds.has("16") || needsCore;
   const needsBootstrap = scenarioIds.has("15") || scenarioIds.has("16");
   const needsConfigApi = scenarioIds.has("16");
-  const needsWorkflow  = scenarioIds.has("13") || scenarioIds.has("14") || runWorkflow || runCollect;
+  const needsWorkflow  = scenarioIds.has("13") || scenarioIds.has("14") || scenarioIds.has("18") || runWorkflow || runCollect || runWorker;
 
   const waits: Promise<unknown>[] = [
     waitForRedis(config.redisUrl, 30000),
@@ -301,10 +355,19 @@ async function main(): Promise<void> {
       webchatJwtSecret:      config.webchatJwtSecret,
     };
 
-    // Run with 60s timeout
+    // Scenario 18 involves two Kafka consumer setups + two worker processing cycles.
+    // The worker needs to consume workflow.started, run engine (suspend), call
+    // persist-suspend, then consume workflow.resumed and run engine again (complete).
+    // Each Kafka consumer setup adds ~1-2s, and the worker may take a few seconds
+    // to process each event.  120s provides a comfortable window.
+    // Scenario 18: two Kafka round-trips + two worker engine runs → 120s
+    // Scenario 19: LLM reason step (real API) + BLPOP cycles → 90s
+    // Scenarios 20 + 21: BLPOP cycles, two form/text menu interactions → 60s
+    const timeoutMs = id === "18" ? 120_000 : id === "19" ? 90_000 : 60_000;
+
     let result: ScenarioResult;
     try {
-      result = await runWithTimeout(fn(ctx), 60_000, id);
+      result = await runWithTimeout(fn(ctx), timeoutMs, id);
     } catch (err) {
       result = {
         scenario_id: id,

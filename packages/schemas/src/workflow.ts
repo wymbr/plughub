@@ -78,6 +78,15 @@ export const WorkflowInstanceSchema = z.object({
   tenant_id:         z.string(),
   flow_id:           z.string(),
   session_id:        z.string(),
+  /**
+   * The real customer session that originated this workflow.
+   * When present, the Skill Flow worker uses this as the ContextStore key
+   * ({tenant}:ctx:{origin_session_id}) so that @ctx.* reads/writes target
+   * the originating session — not the workflow instance UUID.
+   * Populated from the trigger request's session_id when the workflow is
+   * launched directly from a session (e.g. on escalation or collect step).
+   */
+  origin_session_id: z.string().nullable().default(null),
   pool_id:           z.string().nullable().default(null),
   /** Groups N instances triggered from the same campaign. */
   campaign_id:       z.string().nullable().default(null),
@@ -109,13 +118,16 @@ export const WorkflowTriggerTypeSchema = z.enum([
 export type WorkflowTriggerType = z.infer<typeof WorkflowTriggerTypeSchema>
 
 export const WorkflowTriggerSchema = z.object({
-  tenant_id:    z.string(),
-  flow_id:      z.string(),
-  pool_id:      z.string().optional(),  // pool to route the session to
-  trigger_type: WorkflowTriggerTypeSchema,
+  tenant_id:         z.string(),
+  flow_id:           z.string(),
+  pool_id:           z.string().optional(),   // pool to route the session to
+  trigger_type:      WorkflowTriggerTypeSchema,
+  // When triggered from an active session, pass the session_id here so
+  // the worker can read @ctx.* from the originating session's ContextStore.
+  session_id:        z.string().optional(),
   // Business context passed as contact_context to the Skill Flow
-  context:      z.record(z.unknown()).default({}),
-  metadata:     z.record(z.unknown()).default({}),
+  context:           z.record(z.unknown()).default({}),
+  metadata:          z.record(z.unknown()).default({}),
 })
 export type WorkflowTrigger = z.infer<typeof WorkflowTriggerSchema>
 

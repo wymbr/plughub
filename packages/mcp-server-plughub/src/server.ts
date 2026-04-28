@@ -647,6 +647,18 @@ export async function startServer(config: ServerConfig): Promise<void> {
         }
       } catch { /* use fallback */ }
 
+      // 0. Set session:closed marker synchronously in Redis BEFORE any async
+      //    Kafka events. This allows the pending_assignment delivery path
+      //    (ws reconnect) to detect the race condition immediately — even if
+      //    the orchestrator-bridge hasn't yet processed the Kafka contact_closed.
+      //    TTL 7 days — same as orchestrator-bridge sets it.
+      try {
+        await redis.setex(`session:${sessionId}:closed`, 604800, "agent_closed")
+      } catch (err) {
+        console.error(`[agent_done] Could not set session:closed marker session=${sessionId}:`, err)
+        // Non-fatal — continue with teardown
+      }
+
       // 1. Notify the agent WebSocket so the UI transitions to closed state.
       await redis.publish(`agent:events:${sessionId}`, JSON.stringify({
         type:   "session.closed",
@@ -654,9 +666,15 @@ export async function startServer(config: ServerConfig): Promise<void> {
       }))
 
       // 2. Publish contact_closed to Kafka conversations.events so the orchestrator
-      //    bridge restores the agent instance to ready state in the routing engine.
+      //    bridge restores the agent instance to ready state in the routing engine,
+      //    fires on_human_end hooks (if any), and handles customer WS close.
       //    NOTE: must be Kafka (not Redis pub/sub) — the bridge is a Kafka consumer.
       //    instance_id is stored in session meta by the bridge on human agent activation.
+      //
+      //    Fase B: the bridge now owns the customer WebSocket close (conversations.outbound).
+      //    If pool.hooks.on_human_end is non-empty, the bridge fires specialist agents
+      //    (e.g. agente_finalizacao_v1) before closing the customer connection.
+      //    If on_human_end is empty, the bridge closes immediately — same UX as before.
       let instanceId = ""
       try {
         const metaRaw2 = await redis.get(`session:${sessionId}:meta`)
@@ -672,16 +690,10 @@ export async function startServer(config: ServerConfig): Promise<void> {
         reason:      "agent_closed",
       })
 
-      // 3. Publish session.closed to Kafka conversations.outbound so the
-      //    channel-gateway OutboundConsumer notifies the customer WebSocket
-      //    and closes the connection immediately.
-      await kafka.publish("conversations.outbound", {
-        type:       "session.closed",
-        contact_id: contactId,
-        session_id: sessionId,
-        channel,
-        reason:     outcome,
-      })
+      // NOTE: conversations.outbound (session.closed → customer WS close) is now
+      // published by the orchestrator-bridge in process_contact_event, after all
+      // on_human_end hooks have completed.  Removing it here prevents the race
+      // where the customer WebSocket was closed before the finalisation agent ran.
 
       res.json({ ok: true })
     } catch {
@@ -855,8 +867,35 @@ export async function startServer(config: ServerConfig): Promise<void> {
       // disconnected (e.g. after a server restart / browser refresh).
       // The bridge stores `pool:pending_assignment:{poolId}` with TTL=300s when
       // activating a human agent; it is deleted on contact_closed.
-      redis.get(`pool:pending_assignment:${poolId}`).then((pendingRaw) => {
+      //
+      // Race-condition guard: the agent may reconnect (Ctrl+Shift+R) immediately
+      // after clicking "Encerrar". At that instant, the orchestrator-bridge may
+      // not yet have processed the Kafka contact_closed event that deletes the
+      // pool:pending_assignment key. We therefore validate the session:closed
+      // marker (set synchronously by the /agent_done REST handler) before
+      // re-delivering the assignment, and delete the stale key if found.
+      redis.get(`pool:pending_assignment:${poolId}`).then(async (pendingRaw) => {
         if (pendingRaw && ws.readyState === WebSocket.OPEN) {
+          try {
+            const assignment = JSON.parse(pendingRaw)
+            const assignedSessionId: string | undefined = assignment.session_id
+            if (assignedSessionId) {
+              const closedMarker = await redis.get(`session:${assignedSessionId}:closed`)
+              if (closedMarker) {
+                // Session was already closed — remove stale key and skip delivery
+                await redis.del(`pool:pending_assignment:${poolId}`)
+                console.log(
+                  `[agent-ws] Skipped stale pending assignment (session closed): ` +
+                  `pool=${poolId} session=${assignedSessionId} reason=${closedMarker}`
+                )
+                return
+              }
+            }
+          } catch (err) {
+            console.error(`[agent-ws] Error validating pending assignment session:`, err)
+            // On error, fall through and deliver — better to deliver a possibly stale
+            // assignment than to silently drop a live one.
+          }
           console.log(`[agent-ws] Delivering pending assignment to reconnecting agent pool=${poolId}`)
           forward(`pool:events:${poolId}`, pendingRaw)
         }

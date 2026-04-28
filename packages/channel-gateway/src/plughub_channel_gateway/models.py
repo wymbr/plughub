@@ -156,12 +156,19 @@ class WsMessageOutbound(BaseModel):
 
 class WsMenuRender(BaseModel):
     # type "interaction.request" — matches webchat client case 'interaction.request'
-    type:        Literal["interaction.request"] = "interaction.request"
-    menu_id:     str
-    interaction: Literal["text", "button", "list", "checklist", "form"]
-    prompt:      str
-    options:     list[dict[str, str]] | None = None
-    fields:      list[dict[str, Any]] | None = None
+    type:          Literal["interaction.request"] = "interaction.request"
+    menu_id:       str
+    interaction:   Literal["text", "button", "list", "checklist", "form"]
+    prompt:        str
+    options:       list[dict[str, str]] | None = None
+    fields:        list[dict[str, Any]] | None = None
+    # IDs of fields that must be rendered as masked inputs (e.g. <input type="password">).
+    # Populated by the Skill Flow engine when step.masked=true or field.masked=true.
+    # Channel-specific behaviour:
+    #   webchat  — field rendered as <input type="password">, response sent over dedicated
+    #              masked overlay (outside chat transcript)
+    #   others   — outbound_consumer applies masked_fallback strategy (link / text instruction)
+    masked_fields: list[str] | None = None
 
 
 class WsAgentTyping(BaseModel):

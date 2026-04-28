@@ -1,23 +1,26 @@
 import React, { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import PageHeader from '@/components/ui/PageHeader'
-import Button from '@/components/ui/Button'
 import PoolsPage from './PoolsPage'
 import AgentTypesPage from './AgentTypesPage'
 import SkillsPage from './SkillsPage'
 import InstancesPage from './InstancesPage'
+import ChannelsPage from './ChannelsPage'
+import HumanAgentsPage from './HumanAgentsPage'
 
-type Tab = 'pools' | 'agentTypes' | 'skills' | 'instances'
+type Tab = 'pools' | 'agentTypes' | 'skills' | 'instances' | 'channels' | 'humanAgents'
 
 const ConfigRecursosIndex: React.FC = () => {
   const { t } = useTranslation('configRecursos')
   const [activeTab, setActiveTab] = useState<Tab>('pools')
 
   const tabs: { id: Tab; label: string }[] = [
-    { id: 'pools', label: t('tabs.pools') },
-    { id: 'agentTypes', label: t('tabs.agentTypes') },
-    { id: 'skills', label: t('tabs.skills') },
-    { id: 'instances', label: t('tabs.instances') }
+    { id: 'pools',       label: t('tabs.pools') },
+    { id: 'agentTypes',  label: t('tabs.agentTypes') },
+    { id: 'skills',      label: t('tabs.skills') },
+    { id: 'instances',   label: t('tabs.instances') },
+    { id: 'channels',    label: t('tabs.channels') },
+    { id: 'humanAgents', label: t('tabs.humanAgents') },
   ]
 
   return (
@@ -41,10 +44,12 @@ const ConfigRecursosIndex: React.FC = () => {
       </div>
 
       <div className="mt-6">
-        {activeTab === 'pools' && <PoolsPage />}
-        {activeTab === 'agentTypes' && <AgentTypesPage />}
-        {activeTab === 'skills' && <SkillsPage />}
-        {activeTab === 'instances' && <InstancesPage />}
+        {activeTab === 'pools'       && <PoolsPage />}
+        {activeTab === 'agentTypes'  && <AgentTypesPage />}
+        {activeTab === 'skills'      && <SkillsPage />}
+        {activeTab === 'instances'   && <InstancesPage />}
+        {activeTab === 'channels'    && <ChannelsPage />}
+        {activeTab === 'humanAgents' && <HumanAgentsPage />}
       </div>
     </div>
   )

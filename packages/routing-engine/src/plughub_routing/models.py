@@ -6,7 +6,7 @@ Spec: PlugHub v24.0 sections 3.3, 3.3a, 4.6
 
 from __future__ import annotations
 from typing import Literal, Any
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 # ─────────────────────────────────────────────
@@ -112,6 +112,10 @@ class AgentInstance(BaseModel):
 # ─────────────────────────────────────────────
 
 class PoolConfig(BaseModel):
+    # Ignore unknown fields so the routing engine stays forward-compatible when
+    # new fields are added to pool_config (e.g. mentionable_pools, supervisor_config).
+    model_config = ConfigDict(extra="ignore")
+
     pool_id:        str
     tenant_id:      str
     channel_types:  list[str]

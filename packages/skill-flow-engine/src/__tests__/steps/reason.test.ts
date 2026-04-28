@@ -26,8 +26,10 @@ function makeCtx(aiResult: unknown): StepContext {
     executeFallback: async () => ({ next_step_id: "", transition_reason: "on_success" as const }),
     getJobId:        async () => null,
     setJobId:        async () => {},
-    redis:           {} as any,
-    clearJobId:      async () => {},
+    redis:                {} as any,
+    clearJobId:           async () => {},
+    maskedScope:          {},
+    transactionOnFailure: null,
   }
 }
 

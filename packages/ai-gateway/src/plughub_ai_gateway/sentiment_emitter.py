@@ -1,6 +1,7 @@
 """
 sentiment_emitter.py
-AI Gateway — sentiment.updated Kafka event + sentiment_live Redis aggregate.
+AI Gateway — sentiment.updated Kafka event + sentiment_live Redis aggregate
+             + ContextStore write (session.sentimento.*).
 
 Princípio: fire-and-forget em todos os paths. Erros de infraestrutura nunca
 bloqueiam o retorno do AI Gateway ao agente chamador.
@@ -137,4 +138,66 @@ async def update_sentiment_live(
     except Exception as exc:
         logger.warning(
             "Failed to update sentiment_live key=%s: %s", key, exc,
+        )
+
+
+# ── ContextStore write ────────────────────────────────────────────────────────
+
+_CTX_SESSION_TTL = 14_400  # 4 hours — matches ContextStore default session TTL
+
+
+async def write_context_store_sentiment(
+    redis:      Any,
+    tenant_id:  str,
+    session_id: str,
+    score:      float,
+) -> None:
+    """
+    Escreve o sentimento atual no ContextStore da sessão.
+    Chave: {tenant_id}:ctx:{session_id}  (hash Redis)
+    Tags:
+      session.sentimento.current   → score numérico (-1.0 a 1.0)
+      session.sentimento.categoria → categoria textual (satisfied/neutral/frustrated/angry)
+
+    Convenções de ContextEntry:
+      confidence: 0.80 — inferência do AI Gateway (não é dado declarado pelo cliente)
+      source:     "ai_inferred:sentiment_emitter"
+      visibility: "agents_only" — não é exposto ao cliente
+
+    Fire-and-forget: nunca levanta exceção.
+    """
+    if redis is None:
+        return
+    key      = f"{tenant_id}:ctx:{session_id}"
+    category = _classify(score)
+    now      = datetime.now(timezone.utc).isoformat()
+
+    entry_current = json.dumps({
+        "value":      round(score, 4),
+        "confidence": 0.80,
+        "source":     "ai_inferred:sentiment_emitter",
+        "visibility": "agents_only",
+        "updated_at": now,
+    })
+    entry_category = json.dumps({
+        "value":      category,
+        "confidence": 0.80,
+        "source":     "ai_inferred:sentiment_emitter",
+        "visibility": "agents_only",
+        "updated_at": now,
+    })
+
+    try:
+        await redis.hset(
+            key,
+            mapping={
+                "session.sentimento.current":   entry_current,
+                "session.sentimento.categoria": entry_category,
+            },
+        )
+        # Renew TTL on the session context hash
+        await redis.expire(key, _CTX_SESSION_TTL)
+    except Exception as exc:
+        logger.warning(
+            "Failed to write context_store sentiment key=%s: %s", key, exc,
         )

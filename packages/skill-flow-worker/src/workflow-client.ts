@@ -12,6 +12,12 @@ export interface WorkflowInstance {
   tenant_id: string
   flow_id: string
   session_id?: string
+  /**
+   * The real customer session that originated this workflow.
+   * When present, the engine uses this as the ContextStore sessionId
+   * so that @ctx.* reads/writes target {tenant}:ctx:{origin_session_id}.
+   */
+  origin_session_id?: string
   pool_id?: string
   status: 'active' | 'suspended' | 'completed' | 'failed' | 'timed_out' | 'cancelled'
   current_step?: string

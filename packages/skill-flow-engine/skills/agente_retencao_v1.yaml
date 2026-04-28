@@ -2,6 +2,14 @@
 # Skill Flow de demonstração — Agente de Retenção
 # Fluxo: captura intenção do cliente → saudação → escalada para pool humano retencao_humano
 
+id: skill_retencao_v1
+name: "Retenção v1"
+version: "1.0"
+description: "Agente de retenção: captura intenção e escala para pool humano retencao_humano."
+classification:
+  type: orchestrator
+  domain: customer_service
+
 entry: captura_intencao
 
 steps:

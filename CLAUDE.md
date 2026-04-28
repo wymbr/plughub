@@ -780,8 +780,8 @@ adapter. Skill Flow always receives a single normalised `interaction_result`.
 | `conversations.session_closed` | Core | Analytics, LGPD |
 | `conversations.message_sent` | Core | Analytics |
 | `conversations.participants` | orchestrator-bridge | analytics-api → ClickHouse participation_intervals |
-| `rules.escalation_triggered` | Rules Engine | Routing Engine |
-| `rules.notification_triggered` | Rules Engine | Core |
+| `rules.escalation.events` | Rules Engine | Routing Engine |
+| `rules.shadow.events` | Rules Engine | Analytics (shadow/monitoring mode only — no routing side-effect) |
 | `rules.session_tagged` | Rules Engine | Agent Registry |
 | `registry.changed` | Agent Registry | Routing Engine, Core, orchestrator-bridge |
 | `config.changed` | Config API | orchestrator-bridge, routing-engine |
@@ -790,6 +790,57 @@ adapter. Skill Flow always receives a single normalised `interaction_result`.
 | `queue.position_updated` | Routing Engine | Channel Gateway, Analytics |
 | `mcp.audit` | McpInterceptor / proxy sidecar | Analytics, LGPD |
 | `sentiment.updated` | AI Gateway (`sentiment_emitter.py`) | analytics-api (Arc 3) |
+
+## Kafka event schemas — Zod coverage
+
+All Kafka events that cross package boundaries now have Zod schemas in `@plughub/schemas`.
+This enables compile-time validation and IDE autocomplete for producers and consumers.
+
+### New files (added in Zod schema cleanup — ~day 0.5)
+
+| File | Schemas defined |
+|---|---|
+| `packages/schemas/src/rules-events.ts` | `RulesEvaluationContextSchema`, `RulesEscalationEventSchema`, `RulesActiveEventSchema`, `RulesShadowEventSchema`, `RulesEventSchema` |
+| `packages/schemas/src/platform-events.ts` | `RegistryChangedEventSchema`, `ConfigChangedEventSchema`, `SentimentUpdatedEventSchema`, `QueuePositionUpdatedEventSchema`, `RoutingResultEventSchema`, `ConversationRoutedEventSchema`, `AgentLifecycleEventSchema` (discriminated union of 7 variants), `ConversationsEventSchema` (discriminated union of 3 variants) |
+
+### Topic → schema mapping
+
+| Topic | Schema | File |
+|---|---|---|
+| `rules.escalation.events` | `RulesEscalationEventSchema` (`shadow_mode: false`) | `rules-events.ts` |
+| `rules.shadow.events` | `RulesEscalationEventSchema` (`shadow_mode: true`) | `rules-events.ts` |
+| `registry.changed` | `RegistryChangedEventSchema` | `platform-events.ts` |
+| `config.changed` | `ConfigChangedEventSchema` | `platform-events.ts` |
+| `sentiment.updated` | `SentimentUpdatedEventSchema` | `platform-events.ts` |
+| `queue.position_updated` | `QueuePositionUpdatedEventSchema` | `platform-events.ts` |
+| `conversations.routed` | `ConversationRoutedEventSchema` (`result.allocated: true`) | `platform-events.ts` |
+| `conversations.queued` | `ConversationRoutedEventSchema` (`result.allocated: false`) | `platform-events.ts` |
+| `agent.lifecycle` | `AgentLifecycleEventSchema` (discriminated by `event` field) | `platform-events.ts` |
+| `conversations.events` | `ConversationsEventSchema` (discriminated by `event_type`) | `platform-events.ts` |
+| `workflow.events` | `WorkflowEventSchema` | `workflow.ts` (existing) |
+| `collect.events` | `CollectEventSchema` | `workflow.ts` (existing) |
+| `usage.events` | `UsageEventSchema` | `usage.ts` (existing) |
+| `conversations.participants` | `ConversationParticipantEventSchema` | `contact-segment.ts` (existing) |
+| `mcp.audit` | `AuditRecordSchema` | `audit.ts` (existing) |
+
+### Topic name discrepancy note
+
+CLAUDE.md previously documented two Rules Engine topics with incorrect names:
+- ❌ `rules.escalation_triggered` → ✅ `rules.escalation.events`
+- ❌ `rules.notification_triggered` → ✅ `rules.shadow.events` (with `shadow_mode: true`)
+
+These corrections have been applied to the Kafka topics table above. The actual topic strings are
+defined in `packages/rules-engine/src/plughub_rules/kafka_publisher.py`.
+
+### Topics without Zod schemas (not yet wired in production)
+
+These topics appear in the architecture documentation but are not published in the current codebase:
+
+| Topic | Status |
+|---|---|
+| `conversations.abandoned` | Documented but not published by routing-engine code |
+| `conversations.dequeued` | Documented but not published |
+| `rules.session_tagged` | Documented but not published |
 
 ## Naming conventions
 
@@ -904,11 +955,19 @@ Implementado em `mcp-server-plughub`. ADR completo: `docs/adr/adr-message-maskin
 - `primary` e `specialist` recebem token com partial display — operam via MCP Tools
 - MCP Tools de domínio resolvem `token_id` → valor via `TokenVault.resolve()`
 
-### Pendente neste módulo
+### Pendentes resolvidos (implementados em task #165)
 
-- Token resolution em MCP Tools de domínio (`mcp-server-crm`, etc.)
-- Channel Gateway: exibir só `display_partial` (sem wrapper `[...]`) para o cliente
-- Masking config UI no Agent Registry
+- ~~Token resolution em MCP Tools de domínio~~: ✅ `McpInterceptorConfig.resolveToken?` — callback opcional que resolve `[category:tk_xxx:display]` nos args antes de encaminhar ao domain server. Fail-open. Wired pelos agentes nativos ao instanciar o interceptor.
+- ~~Channel Gateway: exibir só `display_partial` (sem wrapper `[...]`) para o cliente~~: ✅ `_TOKEN_RE` regex + `_strip_tokens()` em `stream_subscriber.py` — aplicado ao texto antes da entrega WebSocket.
+- ~~Masking config UI~~: ✅ `packages/platform-ui/src/modules/masking/MaskingPage.tsx` — rota `/config/masking`; 4 seções: controle de acesso (authorized_roles), audit capture (capture_input/output_default), retenção (default_retention_days), visão das categorias. `MaskingService.loadAccessPolicy()` atualizado com fallback chain: legacy key → Config API tenant cache → Config API global cache → hardcoded default.
+
+### Arquitetura do modelo de mascaramento
+
+O stream canônico (`session:{id}:stream`) armazena dois campos por mensagem:
+- `content` — versão mascarada entregue ao agente (tokens inline `[cpf:tk_xxx:***-00]`)
+- `original_content` — versão original acessível apenas por `authorized_roles` via `session_context_get`
+
+O mascaramento é aplicado na **escrita** (`message_send`) e o controle de acesso ao valor original é feito na **leitura** por role. Para entrega ao cliente via WebSocket, `_strip_tokens()` extrai apenas o `display_partial` dos tokens — o cliente nunca vê o wrapper `[...]`.
 
 ## @mention — protocolo de endereçamento de participantes
 
@@ -1235,7 +1294,7 @@ Cron de expurgo dois estágios: Estágio 1 (horário) soft-delete; Estágio 2 (d
 
 - `tests/test_webchat_adapter.py` — 28 testes pytest (auth handshake, lifecycle, text/media/upload/menu, heartbeat, close_from_platform)
 - `tests/test_stream_subscriber.py` — 25 testes pytest (cursor tracking, filtro de visibilidade, mapeamento de todos os tipos de evento, resiliência a erros e cancelamento)
-- `tests/test_attachment_store.py` — 30 testes pytest (validate_mime, reserve, commit, resolve, soft_expire, stream_bytes — asyncpg mockado, filesystem real via tmp_path)
+- `tests/test_attachment_store.py` — 59 testes pytest (validate_mime, magic_bytes, reserve, commit, resolve, soft_expire, stream_bytes — FilesystemAttachmentStore + S3AttachmentStore; asyncpg mockado, filesystem real via tmp_path)
 - `tests/test_models.py` — 136 testes totais no pacote channel-gateway
 
 ### Masked fields delivery chain
@@ -1289,7 +1348,7 @@ Tests: `tests/test_usage_emitter.py` — 22 testes (todas as dimensões + error 
 ### Reconexão — casos pendentes (fase 2)
 
 - ~~**Stream TTL expirado pós-session_ended**~~: ✅ `StreamExpiredError` levantado em `StreamSubscriber.messages()` quando cliente reconecta com cursor != "0" mas `EXISTS session:{id}:stream` retorna 0. `_stream_delivery_loop` captura e envia `{"type": "conn.session_ended", "reason": "session_expired"}`. Falha no EXISTS presume que stream existe (graceful degradation).
-- ~~**jwt_secret por tenant**~~: ✅ `_decode_token` agora async: (1) decode sem verificação para ler `tenant_id`; (2) lookup Redis `{tenant_id}:config:webchat:jwt_secret`; (3) fallback para `settings.jwt_secret`. Single-tenant sem mudança de config. Tests: `TestStreamExpiredReconnect` (2 cases) + `TestMultiTenantJwtSecret` (3 cases). Total channel-gateway: 168/168.
+- ~~**jwt_secret por tenant**~~: ✅ `_decode_token` agora async: (1) decode sem verificação para ler `tenant_id`; (2) lookup Redis `{tenant_id}:config:webchat:jwt_secret`; (3) fallback para `settings.jwt_secret`. Single-tenant sem mudança de config. Tests: `TestStreamExpiredReconnect` (2 cases) + `TestMultiTenantJwtSecret` (3 cases). Total channel-gateway: 198/198 (incl. magic bytes + S3 tests).
 
 ## Pricing Module — capacity-based billing
 
@@ -1590,7 +1649,210 @@ Background merge seleciona a versão com maior `left_at` (non-NULL wins).
 **Tests:**
 - `test_consumer.py`: `TestParseParticipantEvent` (8 assertions), `TestWriteRowDispatch::test_participation_intervals_dispatched`
 - `test_reports.py`: `TestQueryParticipationReport` (4 assertions)
-- Total analytics-api: **172/172**
+- Total analytics-api (Arc 3 Fase C): **172/172**
+
+**Arc 5 tests (appended):**
+- `test_consumer.py`: `TestParseParticipantEvent` reescrito — `test_participant_joined_returns_two_rows`, `test_participation_row_correct`, `test_segment_row_correct`, `test_segment_id_passed_through`, `test_sequence_index_passed_through`, `test_parent_segment_id_passed_through`, `test_event_id_generated_when_absent`; `TestWriteRowDispatch::test_segments_dispatched`, `test_session_timeline_dispatched`
+- `test_reports.py`: `TestQuerySegmentsReport` (3 assertions — `test_returns_segment_rows`, `test_filters_do_not_crash`, `test_error_returns_empty_with_error_key`)
+- Total analytics-api: **176/176**
+
+## Frontend Architecture — platform-ui as standard shell
+
+All operator-facing UI lives in `packages/platform-ui/`. Never create standalone frontend packages.
+
+### Shell structure
+
+```
+packages/platform-ui/
+  src/
+    app/          ← App.tsx, routes.tsx (React Router v6)
+    auth/         ← AuthContext, useAuth, ProtectedRoute, LoginPage
+    components/ui/ ← Button, Card, Table, Badge, Modal, Input, Select, Spinner, PageHeader, EmptyState
+    modules/      ← one subfolder per route module
+    shell/        ← Shell.tsx (layout), Sidebar.tsx, TopBar.tsx
+    i18n/         ← pt-BR (default), en locale files
+```
+
+### Design tokens (Tailwind)
+
+| Token | Hex | Uso |
+|---|---|---|
+| `primary` | `#1B4F8A` | Sidebar, botões principais, links primários |
+| `secondary` | `#2D9CDB` | Ações secundárias, badges informativos |
+| `accent` | `#00B4D8` | Destaques, hover states |
+| `green` | `#059669` | Sucesso, status ativo |
+| `warning` | `#D97706` | Alertas, estados de atenção |
+| `red` | `#DC2626` | Erros, estados críticos |
+
+Font: Inter (via Google Fonts). Never write hex colors inline — always use Tailwind tokens.
+
+### Adding a new module
+
+1. Create `src/modules/{name}/{ModulePage}.tsx` — use only components from `@/components/ui/`
+2. Register route in `src/app/routes.tsx` as a child of the Shell route
+3. Add `NavItem` to `navItems[]` in `src/shell/Sidebar.tsx` with `roles` filter
+
+```typescript
+// routes.tsx — add to children array
+{ path: 'config/billing', element: <BillingPage /> }
+
+// Sidebar.tsx — add to navItems array
+{ label: t('nav.billing'), href: '/config/billing', icon: '💳', roles: ['admin'] }
+```
+
+### Auth pattern
+
+```typescript
+import { useAuth } from '@/auth/useAuth'
+const { session } = useAuth()  // session.role: 'operator' | 'supervisor' | 'admin' | 'developer' | 'business'
+```
+
+### Roles
+
+| Role | Acesso |
+|---|---|
+| `operator` | Monitor, Agent Assist, Analytics |
+| `supervisor` | operator + Avaliação, Relatórios |
+| `admin` | supervisor + Configuração, Skill Flows |
+| `developer` | admin + Developer Tools |
+| `business` | Home, Analytics, Business |
+
+### Migrated panels — config-recursos tabs
+
+The `packages/platform-ui/src/modules/config-recursos/` tab container holds 6 tabs:
+
+| Tab | File | Description |
+|---|---|---|
+| Pools | `PoolsPage.tsx` | Pool CRUD |
+| Agent Types | `AgentTypesPage.tsx` | AgentType CRUD |
+| Skills | `SkillsPage.tsx` | Skill list + detail |
+| Instances | `InstancesPage.tsx` | Running instances (read-only) |
+| Canais | `ChannelsPage.tsx` | GatewayConfig CRUD (8 channel types), migrated from operator-console ChannelPanel |
+| Agentes Humanos | `HumanAgentsPage.tsx` | Human instance live status + agent type CRUD, migrated from operator-console HumanAgentPanel |
+
+**New API functions in `src/api/registry.ts`:**
+- `listChannels`, `createChannel`, `updateChannel`, `deleteChannel` → `/v1/channels`
+- `listHumanInstances`, `instanceAction` → `/v1/instances?framework=human` / `PATCH /v1/instances/:id`
+- `listHumanAgentTypes`, `createHumanAgentType`, `updateHumanAgentType`, `deleteAgentType` → `/v1/agent-types`
+- `operatorHeaders()` — variant of `headers()` that includes `x-user-id: operator`
+
+**Task #168 improvements (RegistryPanel migration):**
+- `AgentTypesPage.tsx` — full rewrite: correct frameworks (plughub-native, human, external-mcp, langgraph, crewai, anthropic_sdk, azure_ai, google_vertex, generic_mcp), role select, max_concurrent_sessions, pool checkboxes, skills checkboxes, Deprecate→Confirm flow; pools rendered as chips in table
+- `SkillsPage.tsx` — full rewrite: removed create form (skills are YAML-managed), info banner pointing to skill-flow-engine/skills/, detail modal shows tools/knowledge_domains chips
+- `InstancesPage.tsx` — full rewrite: correct status filters (ready/busy/paused/draining), dynamic pool filter from API, channel_types column, 15s auto-refresh
+- `PoolsPage.tsx` — added instagram/telegram/webrtc channel options
+- Both i18n JSON files updated with new keys for executionModel, role, maxConcurrent, channels
+- `types/index.ts` — fixed `AgentType.pools: Array<{pool_id: string}>`, `skills: Array<{skill_id; version_policy?}>`, added `updated_at?`
+- `api/registry.ts` — `createAgentType` now maps `pools: string[]` → `{pool_id}[]` before POST
+
+**New types in `src/types/index.ts`:**
+`ChannelType`, `GatewayConfig`, `CreateGatewayConfigInput`, `UpdateGatewayConfigInput`,
+`HumanAgentType`, `CreateHumanAgentInput`, `UpdateHumanAgentInput`, `AgentInstance`
+
+Build: **486 kB JS / 143 kB gzip** (0 TypeScript errors).
+
+### Migrated panels — billing module
+
+`packages/platform-ui/src/modules/billing/BillingPage.tsx` — migrated from `packages/operator-console/src/components/PricingPanel.tsx`.
+
+Route: `/config/billing` (role: `admin`). Nav entry: 💳 Faturamento under Configuração group.
+
+**Components:**
+- `ResourceSidebar` (220px left panel) — base + reserve resource list grouped by pool; admin token input
+- `InvoiceTab` — base items table + reserve group blocks with activate/deactivate toggle; grand total; XLSX export link
+- `ConsumptionTab` — usage dimensions from analytics-api with info banner (not included in billing)
+
+**Inline hooks** (no separate hooks file needed):
+- `useInvoice(tenantId)` → `GET /v1/pricing/invoice/{tenantId}`
+- `useResources(tenantId)` → `GET /v1/pricing/resources/{tenantId}`
+- `useUsage(tenantId)` → `GET /reports/usage?tenant_id={tenantId}`
+
+**Vite proxy added** to `vite.config.ts`:
+- `'^/v1/pricing'` → `http://localhost:3900` (before the generic `'^/v1'` → port 3300 entry)
+
+**New types in `src/types/index.ts`:**
+`InvoiceLineItem`, `ReserveGroup`, `Invoice`, `InstallationResource`
+
+Build: **404 kB JS / 117 kB gzip** (0 TypeScript errors).
+
+### Migrated panels — skill-flows module
+
+`packages/platform-ui/src/modules/skill-flows/SkillFlowsPage.tsx` — migrated from `packages/operator-console/src/components/SkillFlowEditor.tsx`.
+
+Route: `/skill-flows` (roles: `admin`, `developer`). Replaces the former `PlaceholderPage`.
+
+**Features (fully ported):**
+- Monaco YAML editor (`vs-dark` theme, `@monaco-editor/react`) with live YAML validation
+- Left sidebar: skill list with search, type color-coding (orchestrator=violet, vertical=cyan, horizontal=yellow), modification indicator `●`
+- New skill flow: prompts for skill_id, injects blank template with the entered id
+- Save: YAML→JSON parse → `PUT /v1/skills/:id` — 422 validation errors shown in status bar
+- Delete: three-stage confirmation (Delete → Confirmar → execute)
+- Discard: reverts to last saved state
+- ⌘S keyboard shortcut
+- Auto-refresh skill list every 30s
+
+**New dependencies added to `package.json`:** `@monaco-editor/react@^4.7.0`, `js-yaml@^4.1.1`, `@types/js-yaml@^4.0.9`
+
+Build: **469 kB JS / 139 kB gzip** (0 TypeScript errors — Monaco adds ~65 kB gzipped).
+
+### Migrated panels — campaigns module
+
+`packages/platform-ui/src/modules/campaigns/CampaignsPage.tsx` — migrated from `packages/operator-console/src/components/CampaignPanel.tsx`.
+
+Route: `/campaigns` (roles: `operator`, `supervisor`, `admin`, `business`). Accessible via Analytics → Campanhas nav entry.
+
+**Features (fully ported):**
+- Left 320px sidebar: global KPI bar (Campanhas / Total / Taxa), channel + status filter dropdowns, campaign card list with `MiniBar` (4-color status bar) and `RateBadge` (green/yellow/red)
+- Right detail panel: campaign header with rate badge, 4-up KPI grid (Total / Respondidos / Expirados / Tempo médio), status distribution bar with legend, channel breakdown with progress bars, recent collect events table (token · canal · status · enviado · tempo)
+- `useCampaignData` inline hook — polls `GET /reports/campaigns` every 30s, supports channel/status filters
+- New types added to `src/types/index.ts`: `CampaignSummary`, `CollectEvent`
+- i18n: `nav.campanhas` added to pt-BR and en locales
+
+Build: **510 kB JS / 149 kB gzip** (0 TypeScript errors — Monaco included in bundle).
+
+### Migrated panels — config-plataforma module (task #171)
+
+`packages/platform-ui/src/modules/config-plataforma/components/NamespaceEditor.tsx` — upgraded to match full `ConfigPanel` feature set from operator-console.
+
+Route: `/config/platform` (role: `admin`), tab ⚙️ Configuração. No new route needed — the ConfigPlataformaPage already existed.
+
+**New features added to NamespaceEditor:**
+- **Scope selector** in edit mode: 🌐 Global default vs 🏢 Tenant override — `putConfig(ns, key, value, null | tenantId, adminToken)`
+- **"tenant override" badge** on entries where `entry.tenant_id ≠ '__global__'`
+- **Reset button** (delete override) — restores global default; only shown when `adminToken` is set
+- **Description display** per key (from `ConfigEntry.description`)
+- **Tailwind redesign** — replaces inline CSS with design system tokens (`text-primary`, `bg-gray-50`, etc.)
+
+**`config-hooks.ts` updated:**
+- `ConfigEntry` extended with `tenant_id: string | null`, `namespace?: string`, `updated_at?: string`
+- `useNamespace` return type changed from `Record<string, unknown>` → `Record<string, ConfigEntry>`
+- Normalisation shim handles APIs that return plain values instead of `ConfigEntry` objects
+- `AllConfig.config` type updated to `Record<string, Record<string, ConfigEntry>>`
+
+**`MaskingPage.tsx` updated:** adapted to use `entries[key]?.value` instead of direct entry (due to type change).
+
+Build: **513 kB JS / 150 kB gzip** (0 TypeScript errors).
+
+### Legacy standalone apps (frozen — migration planned)
+
+- `packages/operator-console/` (port 5173) — 12 panels, no design system → migrating to platform-ui
+  - ✅ ChannelPanel → `config-recursos/ChannelsPage.tsx`
+  - ✅ HumanAgentPanel → `config-recursos/HumanAgentsPage.tsx`
+  - ✅ PricingPanel → `modules/billing/BillingPage.tsx`
+  - ✅ SkillFlowEditor → `modules/skill-flows/SkillFlowsPage.tsx`
+  - ✅ RegistryPanel (Pools/AgentTypes/Skills/Instances) → `config-recursos/` tabs (task #168)
+  - ✅ WorkflowPanel + WebhookPanel → `modules/workflows/WorkflowsPage.tsx` with tabs ⚡ Instâncias | 🔗 Webhooks (task #169)
+  - ✅ CampaignPanel → `modules/campaigns/CampaignsPage.tsx` (task #170)
+  - ✅ ConfigPanel → `modules/config-plataforma/components/NamespaceEditor.tsx` (task #171 — merged into existing ConfigPlataformaPage at `/config/platform`)
+- `packages/agent-assist-ui/` (port 5175) — chat + right panel → ✅ migrated to `modules/agent-assist/AgentAssistPage.tsx` (task #172)
+- Migration plan: `docs/standards/operator-console-migration.md`
+
+### What never to do
+
+- Never create a new `packages/my-ui/` standalone app — add a module to platform-ui
+- Never use inline hex colors — use Tailwind tokens (`text-primary`, `bg-secondary`)
+- Never write custom CSS when a Tailwind class exists
+- Never create a NavItem without `roles` filter
 
 ## Pending (next iteration)
 
@@ -1599,8 +1861,8 @@ Background merge seleciona a versão com maior `left_at` (non-NULL wins).
 - ~~E2E scenario 12: webchat auth flow + media upload end-to-end~~ ✅
 - ~~Usage Metering no Channel Gateway (voice_minutes, whatsapp_conversations, sms_segments)~~ ✅
 - ~~WebChat reconexão fase 2: tratar stream TTL expirado + jwt_secret por tenant~~ ✅
-- AttachmentStore fase 2: S3/MinIO
-- Magic bytes validation no upload (phase 2)
+- ~~AttachmentStore fase 2: S3/MinIO~~ ✅
+- ~~Magic bytes validation no upload (phase 2)~~ ✅
 - ~~Pricing Module v1: planos, tarifas, ciclo de billing~~ ✅
 
 ### Arc 3 — Analytics, Dashboard Operacional e Relatórios
@@ -1654,6 +1916,104 @@ PostgreSQL (evaluation, sentiment_timeline) → analytics-api (queries pontuais)
 ClickHouse → Metabase (relatórios self-service)
 analytics-api REST → BI externos (PowerBI, Looker, Tableau)
 ```
+
+### Arc 5 — ContactSegment (✅ implementado — v1)
+
+Base analítica para SLA por agente, avaliação granular e relatórios de participação com duração real.
+ADR: `docs/adr/adr-contact-segments.md`.
+
+**ContactSegment** é a entidade que representa uma janela de participação contígua de um agente numa sessão.
+Cada segmento tem `segment_id` próprio, `sequence_index` para handoffs sequenciais, e `parent_segment_id`
+para a topologia de conferência (specialist aponta para o primary segment).
+
+#### Schemas — `@plughub/schemas/src/contact-segment.ts`
+
+```typescript
+ContactSegmentSchema {
+  segment_id:        UUID
+  session_id, tenant_id, participant_id, pool_id, agent_type_id, instance_id
+  role:              "primary" | "specialist" | "supervisor" | "evaluator" | "reviewer"
+  agent_type:        "ai" | "human"
+  parent_segment_id: UUID | null      // null para primary; specialist aponta para primary
+  sequence_index:    number           // 0 para primeiro primary; 1+ para handoffs sequenciais
+  started_at, ended_at, duration_ms
+  outcome:           "resolved" | "escalated" | "transferred" | "abandoned" | "timeout" | null
+  close_reason, handoff_reason, issue_status
+}
+
+ConversationParticipantEventSchema {
+  event_type:        "participant.joined" | "participant.left"
+  segment_id:        UUID    // obrigatório — gerado no orchestrator-bridge
+  sequence_index, parent_segment_id
+  ...demais campos existentes...
+}
+```
+
+#### orchestrator-bridge — geração de segment_id
+
+`_publish_participant_event` estendida com os parâmetros: `segment_id`, `sequence_index`, `parent_segment_id`, `outcome`, `close_reason`, `handoff_reason`, `issue_status`.
+
+| Evento | Redis key | Lógica |
+|--------|-----------|--------|
+| `activate_human_agent` | `session:{id}:segment:{instance_id}` (TTL 4h) + `session:{id}:primary_segment` + INCR `session:{id}:segment_seq` | Gera `_seg_id`, armazena, publica `participant_joined` com `sequence_index` |
+| `process_routed` (native joined) | `session:{id}:segment:{native_instance_id}` (TTL 4h) | Lê `primary_segment` para conferência (→ `parent_segment_id`), armazena novo `_part_seg_id` |
+| `process_routed` (native left) | GETDEL `session:{id}:segment:{instance_id}` | Recupera o mesmo UUID usado no joined; passa `outcome` do `agent_result` |
+| `process_contact_event` (human left) | GETDEL `session:{id}:segment:{instance_id}` | Mesmo padrão |
+
+#### analytics-api — tabelas ClickHouse
+
+| Tabela | Engine | Descrição |
+|--------|--------|-----------|
+| `analytics.segments` | `ReplacingMergeTree(ingested_at)` ORDER BY `(tenant_id, session_id, segment_id)` | Uma linha por participação; `participant_left` win sobre `participant_joined` no merge |
+| `analytics.session_timeline` | `ReplacingMergeTree(ingested_at)` ORDER BY `(tenant_id, session_id, timestamp, event_id)` | Série temporal de eventos enriquecidos com `segment_id` |
+
+#### analytics-api — `models.py`
+
+`parse_participant_event` retorna `list[dict]` em vez de `dict` — dois rows por evento:
+- `participation_row` → tabela `participation_intervals` (legado, compatibilidade Arc 3 Fase C)
+- `segment_row` → tabela `segments` (Arc 5); inclui `segment_id`, `parent_segment_id`, `sequence_index`, `outcome`, `close_reason`, `handoff_reason`, `issue_status`
+
+#### analytics-api — endpoints
+
+| Endpoint | Filtros | Descrição |
+|----------|---------|-----------|
+| `GET /reports/segments` | `session_id`, `pool_id`, `agent_type_id`, `role`, `outcome`, `from_dt`, `to_dt`, `page`, `page_size`, `format` | Linhas de `segments FINAL` (ReplacingMergeTree dedup); `format=csv` disponível |
+| `GET /reports/agents/performance` | `pool_id`, `agent_type_id`, `role`, `from_dt`, `to_dt`, `format` | Métricas agregadas por `(agent_type_id, pool_id, role)`: `total_sessions`, `avg_duration_ms`, `escalation_rate`, `handoff_rate`, breakdowns por outcome; sem paginação |
+
+#### Arquivos modificados / criados
+
+| Arquivo | Alteração |
+|---------|-----------|
+| `packages/schemas/src/contact-segment.ts` | CRIADO — `SegmentOutcomeSchema`, `ContactSegmentSchema`, `ConversationParticipantEventSchema` |
+| `packages/schemas/src/index.ts` | Exporta os novos schemas de contact-segment |
+| `packages/orchestrator-bridge/src/plughub_orchestrator_bridge/main.py` | `_publish_participant_event` + Redis keys de segment tracking em `activate_human_agent`, `process_routed`, `process_contact_event` |
+| `packages/analytics-api/src/plughub_analytics_api/clickhouse.py` | `_DDL_SEGMENTS`, `_DDL_SESSION_TIMELINE`, `upsert_segment()`, `insert_timeline_event()` |
+| `packages/analytics-api/src/plughub_analytics_api/models.py` | `parse_participant_event` → `list[dict]`; segment_row completo |
+| `packages/analytics-api/src/plughub_analytics_api/consumer.py` | Dispatch `segments` → `upsert_segment`; `session_timeline` → `insert_timeline_event` |
+| `packages/analytics-api/src/plughub_analytics_api/reports_query.py` | `query_segments_report` + `_fetch_segments`; `query_agent_performance_report` + `_fetch_agent_performance` |
+| `packages/analytics-api/src/plughub_analytics_api/reports.py` | `GET /reports/segments` endpoint; `GET /reports/agents/performance` endpoint |
+| `packages/analytics-api/.../tests/test_consumer.py` | `TestParseParticipantEvent` (8 assertions); `test_segments_dispatched`, `test_session_timeline_dispatched` |
+| `packages/analytics-api/.../tests/test_reports.py` | `TestQuerySegmentsReport` (3 assertions); `TestQueryAgentPerformanceReport` (5 assertions) |
+| `packages/e2e-tests/scenarios/23_contact_segments.ts` | CRIADO — Parts A/B/C (11 assertions) |
+| `packages/e2e-tests/runner.ts` | `--segments` flag + import `scenario23` |
+
+**Pendente (v2):**
+- Enrichment post-hoc de `segment_id` em eventos sem o campo (sentimento, mcp.audit)
+- Materialized views `segment_summary` e `agent_performance`
+
+### Arc 6 — Plataforma de Avaliação de Qualidade (deferido)
+
+Expansão completa do módulo de avaliação com editor de formulários, relatórios granulares e revisão humana.
+
+- **EvaluationTemplate** — model Prisma + API CRUD; associação de template por pool (substitui `skill_id_template` hardcoded)
+- **Editor de formulários** — UI no platform-ui para criar/editar evaluation skills sem editar YAML
+- **Dashboard de qualidade por pool** — relatórios por agente/segmento/critério; drill-down item → transcript
+- **Agente Reviewer** (IA) — revisa avaliações do `agente_avaliacao_v1`, classifica para aprovação automática ou revisão humana
+- **Agente Revision** (IA) — segundo parecer independente quando Reviewer sinaliza divergência
+- **Tela do revisor humano** — workflow de contestação/aprovação: fila para supervisor com transcrição + avaliação + justificativa + histórico do agente; ações: aprovar, ajustar notas, rejeitar
+- **Feedback loop** — aprovações/ajustes humanos retroalimentam calibração do Reviewer Agent
+- **CustomerFeedback API** — endpoint para receber NPS/CSAT/CES de canais externos; vinculação a segmentos
+- **Comparação IA vs humano** — relatório de qualidade comparativa por critério de avaliação
 
 ## Arc 4 — Workflow Automation
 
@@ -2140,9 +2500,44 @@ onde foram acumulados pelo `agente_contexto_ia_v1` durante o atendimento.
 **Workflows standalone** (sem sessão originadora — triggers de schedule, webhook externo):
 `origin_session_id = null` → engine usa `{tenant}:ctx:{instance.id}` — hash isolado por workflow.
 
-## Agent Assist UI — `packages/agent-assist-ui/`
+## Agent Assist UI — `packages/platform-ui/src/modules/agent-assist/` (task #172)
 
-React 18 + TypeScript + Vite. Porta de dev: 5173. Proxy: `/api` → mcp-server-plughub (3100), `/agent-ws` → WS mcp-server (3100), `/analytics` → analytics-api (3500).
+**Migrated from `packages/agent-assist-ui/` to platform-ui shell.** Route: `/agent-assist` (roles: operator, supervisor, admin). agentName from `useAuth()` session.name; poolId from `?pool=` URL param with inline picker when absent. Uses `h-full` instead of `h-screen` (Shell provides the outer container).
+
+Vite proxies added: `'^/api'` → `http://localhost:3100`, `'^/agent-ws'` → `ws://localhost:3100` (ws: true).
+
+New dependency: `recharts@^2.x` (used by EstadoTab sentiment line chart).
+
+**Module structure:**
+```
+modules/agent-assist/
+  AgentAssistPage.tsx          ← main page (adapts App.tsx)
+  types.ts                     ← all type definitions
+  hooks/
+    useAgentWebSocket.ts       ← persistent WS, reconnect, heartbeat
+    useSupervisorState.ts      ← polls /api/supervisor_state/{sessionId}
+    useSupervisorCapabilities.ts
+    useCustomerHistory.ts      ← GET /analytics/sessions/customer/{id}
+  components/
+    Header.tsx                 ← handle-time, SLA bar, WS dot
+    ChatArea.tsx               ← messages + live sentiment strip
+    AgentInput.tsx             ← textarea + Encerrar button
+    CloseModal.tsx             ← issue_status + outcome + handoff_reason
+    MessageBubble.tsx          ← per-author styles + MenuCard delegation
+    MenuCard.tsx               ← read-only menu interaction preview
+    ContactList.tsx            ← per-contact cards with sentiment/SLA/timer
+    RightPanel.tsx             ← 4-tab container
+    ToastContainer.tsx         ← fixed bottom-right notifications
+    tabs/
+      EstadoTab.tsx            ← sentiment chart (recharts), intent, flags, SLA
+      CapacidadesTab.tsx       ← suggested agents + escalation options
+      ContextoTab.tsx          ← ContextSnapshotCard (teal) + ContactContextCard (emerald)
+      HistoricoTab.tsx         ← customer session history
+```
+
+**Legacy app** (`packages/agent-assist-ui/`, port 5175) — frozen, kept as reference.
+
+React 18 + TypeScript + Vite. **Original** porta de dev: 5175. Proxy: `/api` → mcp-server-plughub (3100), `/agent-ws` → WS mcp-server (3100), `/analytics` → analytics-api (3500).
 
 ### Layout
 
@@ -2263,9 +2658,10 @@ React 18 + TypeScript + Vite. Porta de dev: 5173. Proxy: `/api` → mcp-server-p
 | 20 | `20_masked_form.ts` | Masked Form field-level masking policy: Part A — interaction:form, 3 fields (email plain, senha masked, codigo_2fa masked) → email survives pipeline_state, masked values absent, @masked.senha forwarded to invoke (6 assertions); Part B — step.masked=true with field.masked=false override: cpf survives (override wins), pin absent (inherits step.masked) (5 assertions) (--masked flag) |
 | 21 | `21_masked_retry.ts` | Masked Retry begin_transaction rollback cycle: inject invalid PIN "000000" → validate_pin fails → rewind to tx_inicio (maskedScope cleared) → inject valid PIN "123456" → success; asserts both PINs absent from pipeline_state (5 assertions) (--masked flag) |
 | 22 | `22_pool_hooks_fase_b.ts` | Pool Lifecycle Hooks Fase B + C: Part A — no-hooks pool → agent_done → conversations.outbound session.closed immediate, hook_pending absent (3 assertions); Part B — hooks pool → agent_done → hook_pending=1, conversations.inbound hook event with conference_id + hook_type=on_human_end + target pool, conversations.outbound NOT published within 2s (9 assertions); Part C — simulate hook completion via GETDEL+DECR → publish contact_closed → conversations.outbound session.closed arrives, human tracking keys cleaned (4 assertions); Part D — pool with on_human_end+post_human hooks → simulate on_human_end completion → bridge fires post_human → conversations.inbound hook_type=post_human + hook_pending:post_human=1 (5 assertions); Part E — publish participant_joined+left to conversations.participants → analytics-api consumer → ClickHouse participation_intervals → GET /reports/participation row with duration_ms (4 assertions) (--hooks flag, 60s timeout) |
+| 23 | `23_contact_segments.ts` | Arc 5 ContactSegment analytics pipeline: Part A — publish participant_joined+left with segment_id (sequence_index=0, outcome=resolved) → analytics-api consumer → ClickHouse segments FINAL → GET /reports/segments row with correct segment_id, sequence_index=0, duration_ms, outcome (4 assertions); Part B — conference specialist topology: primary (segment_id=A, parent=null) + specialist (segment_id=B, parent=A) published → GET /reports/segments returns both rows, specialist has parent_segment_id=A, primary has sequence_index=0 (4 assertions); Part C — sequential handoff: two primary segments sequence_index=0 and sequence_index=1 → both rows distinguishable by sequence_index (3 assertions) (--segments flag, 60s timeout) |
 | R  | `regressions.ts` | regression suite: ZodError em session_context_get, parsing de callTool (--regression flag) |
 
-Run with: `ts-node runner.ts --conference` or `ts-node runner.ts --only 06` or `ts-node runner.ts --only 12` or `ts-node runner.ts --webchat` or `ts-node runner.ts --workflow` or `ts-node runner.ts --only 13` or `ts-node runner.ts --collect` or `ts-node runner.ts --only 14` or `ts-node runner.ts --bootstrap` or `ts-node runner.ts --only 15` or `ts-node runner.ts --reconcile` or `ts-node runner.ts --only 16` or `ts-node runner.ts --ctx` or `ts-node runner.ts --only 17` or `ts-node runner.ts --worker` or `ts-node runner.ts --only 18` or `ts-node runner.ts --mention` or `ts-node runner.ts --only 19` or `ts-node runner.ts --masked` or `ts-node runner.ts --only 20` or `ts-node runner.ts --only 21` or `ts-node runner.ts --hooks` or `ts-node runner.ts --only 22`
+Run with: `ts-node runner.ts --conference` or `ts-node runner.ts --only 06` or `ts-node runner.ts --only 12` or `ts-node runner.ts --webchat` or `ts-node runner.ts --workflow` or `ts-node runner.ts --only 13` or `ts-node runner.ts --collect` or `ts-node runner.ts --only 14` or `ts-node runner.ts --bootstrap` or `ts-node runner.ts --only 15` or `ts-node runner.ts --reconcile` or `ts-node runner.ts --only 16` or `ts-node runner.ts --ctx` or `ts-node runner.ts --only 17` or `ts-node runner.ts --worker` or `ts-node runner.ts --only 18` or `ts-node runner.ts --mention` or `ts-node runner.ts --only 19` or `ts-node runner.ts --masked` or `ts-node runner.ts --only 20` or `ts-node runner.ts --only 21` or `ts-node runner.ts --hooks` or `ts-node runner.ts --only 22` or `ts-node runner.ts --segments` or `ts-node runner.ts --only 23`
 
 Scenario 06 covers two parts:
 - **Part A** — Conference happy path: primary agent busy → supervisor calls `agent_join_conference` → Redis `conference:*` keys verified → specialist `agent_done` with `conference_id` (session stays open) → primary `agent_done` closes session

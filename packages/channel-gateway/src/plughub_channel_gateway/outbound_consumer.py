@@ -90,13 +90,40 @@ class OutboundConsumer:
                     )
 
             elif msg_type == "menu.payload":
+                masked_fields: list[str] | None = payload.get("masked_fields") or None
+                channel: str = payload.get("channel", "webchat")
+
+                # Non-webchat channels do not natively support masked overlays.
+                # Log a warning so operators can configure masked_fallback for those channels.
+                if masked_fields and channel != "webchat":
+                    logger.warning(
+                        "menu.payload has masked_fields=%s for channel=%s "
+                        "(masked_fallback not yet implemented — fields will be sent unmasked)",
+                        masked_fields,
+                        channel,
+                    )
+
                 ws_msg = WsMenuRender(
                     menu_id=payload["menu_id"],
                     interaction=payload["interaction"],
                     prompt=payload["prompt"],
                     options=payload.get("options"),
                     fields=payload.get("fields"),
+                    masked_fields=masked_fields,
                 )
+
+                # Register masked_fields in SessionRegistry BEFORE sending the menu
+                # to the client. WebchatAdapter._handle_menu_submit will read and clear
+                # this entry to redact sensitive values from the agent-visible history.
+                if masked_fields:
+                    self._registry.store_menu_masked_fields(
+                        contact_id, payload["menu_id"], masked_fields
+                    )
+                    logger.debug(
+                        "stored masked_fields for contact_id=%s menu_id=%s fields=%s",
+                        contact_id, payload["menu_id"], masked_fields,
+                    )
+
                 await self._registry.send(contact_id, ws_msg.model_dump())
 
             elif msg_type == "agent.typing":

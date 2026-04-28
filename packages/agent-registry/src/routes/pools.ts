@@ -43,6 +43,8 @@ poolsRouter.post("/", async (req: Request, res: Response, next: NextFunction) =>
         evaluation_template_id: body.evaluation_template_id ?? null,
         supervisor_config:     body.supervisor_config ?? Prisma.DbNull,
         queue_config:          body.queue_config ?? Prisma.DbNull,
+        mentionable_pools:     body.mentionable_pools ?? Prisma.DbNull,
+        hooks:                 body.hooks ?? Prisma.DbNull,
         created_by:            createdBy,
       } as any,
     })
@@ -123,6 +125,8 @@ poolsRouter.put("/:pool_id", async (req: Request, res: Response, next: NextFunct
         ...(body.evaluation_template_id !== undefined && { evaluation_template_id: body.evaluation_template_id }),
         ...(body.supervisor_config     !== undefined && { supervisor_config:     body.supervisor_config }),
         ...(body.queue_config          !== undefined && { queue_config:          body.queue_config }),
+        ...(body.mentionable_pools     !== undefined && { mentionable_pools:     body.mentionable_pools }),
+        ...(body.hooks                 !== undefined && { hooks:                 body.hooks }),
       } as any,
     })
 

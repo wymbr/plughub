@@ -58,9 +58,11 @@ function makeCtx(overrides: Partial<StepContext> = {}): StepContext {
     setJobId:         vi.fn().mockResolvedValue(undefined),
     clearJobId:       vi.fn().mockResolvedValue(undefined),
     renewLock:        vi.fn().mockResolvedValue(true),
-    persistSuspend:   vi.fn().mockResolvedValue({
+    persistSuspend:       vi.fn().mockResolvedValue({
       resume_expires_at: "2026-04-29T08:00:00.000Z",
     }),
+    maskedScope:          {},
+    transactionOnFailure: null,
     ...overrides,
   }
   return ctx

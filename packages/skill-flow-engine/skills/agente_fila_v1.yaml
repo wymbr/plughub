@@ -1,5 +1,13 @@
 # agente_fila_v1.yaml
 # Queue Agent — Queue Agent Pattern (spec: Queue Agent)
+
+id: skill_fila_v1
+name: "Fila v1 — Queue Agent"
+version: "1.0"
+description: "Agente de fila: notifica cliente, aguarda disponibilidade e transfere para agente humano."
+classification:
+  type: orchestrator
+  domain: customer_service
 #
 # Ativado pelo Orchestrator Bridge quando um contato entra em fila e o pool
 # está configurado com queue_config.agent_type_id.

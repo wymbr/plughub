@@ -135,6 +135,10 @@ class WebchatAdapter:
         self._initial_cursor: str = "0"
         self._started_at:     str = ""
 
+        # Cache masked_fields per menu_id so _handle_menu_submit can redact values.
+        # Populated when interaction.request with masked_fields is delivered to the client.
+        self._pending_masked_fields: dict[str, list[str]] = {}
+
     # ── Lifecycle ──────────────────────────────────────────────────────────────
 
     async def handle(self) -> None:
@@ -450,6 +454,15 @@ class WebchatAdapter:
         )
         try:
             async for msg in subscriber.messages():
+                # Cache masked_fields so _handle_menu_submit can redact sensitive values
+                # before they are stored in the conversation history visible to agents.
+                if (
+                    msg.get("type") == "interaction.request"
+                    and msg.get("masked_fields")
+                    and msg.get("menu_id")
+                ):
+                    self._pending_masked_fields[msg["menu_id"]] = list(msg["masked_fields"])
+
                 try:
                     await self._ws.send_json(msg)
                 except Exception:
@@ -676,21 +689,71 @@ class WebchatAdapter:
             ),
             context_snapshot = snapshot,
         )
-        result_str = (
-            msg.result
-            if isinstance(msg.result, str)
-            else json.dumps(msg.result, ensure_ascii=False)
+
+        # Build the agent-visible summary of the form submission.
+        # Masked fields (senha, PIN, OTP, etc.) must NEVER appear in the session stream
+        # or conversation history visible to agents — replace with "••••••".
+        #
+        # Primary source: SessionRegistry._menu_masked_fields, populated by
+        # OutboundConsumer when the menu.payload arrived from Kafka (correct path).
+        # Fallback: self._pending_masked_fields, populated by _stream_delivery_loop
+        # (legacy / edge-case path for menus that reach clients via stream).
+        masked_fields = (
+            self._registry.pop_menu_masked_fields(self._contact_id, msg.menu_id)
+            or self._pending_masked_fields.get(msg.menu_id, [])
         )
+        masked_set    = set(masked_fields)
+
+        if msg.interaction == "form" and masked_set:
+            # Form interaction: redact individual masked fields, keep the rest visible.
+            try:
+                result_dict: dict = (
+                    json.loads(msg.result)
+                    if isinstance(msg.result, str)
+                    else dict(msg.result) if isinstance(msg.result, dict) else {}
+                )
+            except (json.JSONDecodeError, TypeError):
+                result_dict = {}
+
+            redacted = {
+                k: ("••••••" if k in masked_set else v)
+                for k, v in result_dict.items()
+            }
+            agent_label   = "Formulário"
+            agent_summary = json.dumps(redacted, ensure_ascii=False)
+
+        elif masked_set:
+            # Non-form masked interaction (text, button, list with masked:true).
+            # The entire result is sensitive — replace with placeholder.
+            # Uses the implicit field id (output_as or step.id) as label hint.
+            field_hint    = next(iter(masked_set), "entrada")
+            agent_label   = f"Entrada mascarada ({field_hint})"
+            agent_summary = "••••••"
+
+        else:
+            agent_label   = "Resposta"
+            agent_summary = (
+                msg.result
+                if isinstance(msg.result, str)
+                else json.dumps(msg.result, ensure_ascii=False)
+            )
+
         await self._registry.append_message(
             session_id = self._session_id,
             message_id = event.message_id,
             author     = "customer",
-            text       = f"[Seleção: {result_str}]",
+            text       = f"[{agent_label}: {agent_summary}]",
             timestamp  = event.timestamp,
         )
         await self._publish_inbound(event.model_dump())
+
+        # Evict fallback cache entry (if any) — pop_menu_masked_fields already
+        # cleared the primary SessionRegistry entry above.
+        self._pending_masked_fields.pop(msg.menu_id, None)
+
         logger.debug(
-            "menu_submit interaction=%s contact_id=%s", msg.interaction, self._contact_id
+            "menu_submit interaction=%s masked=%s contact_id=%s",
+            msg.interaction, list(masked_set), self._contact_id,
         )
 
     # ── Close ──────────────────────────────────────────────────────────────────
