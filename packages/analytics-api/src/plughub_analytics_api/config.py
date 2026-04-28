@@ -38,6 +38,13 @@ class Settings(BaseSettings):
     # In production, replace with a strong random secret.
     admin_jwt_secret: str = "changeme_analytics_admin_secret"
 
+    # ── Auth-API JWT secret (Arc 7c — pool-scoped visibility) ─────────────────
+    # Must match PLUGHUB_AUTH_JWT_SECRET used by auth-api.
+    # When set, Bearer tokens from auth-api are verified and accessible_pools[]
+    # is extracted to restrict report queries to the caller's allowed pools.
+    # When empty, pool scoping is disabled (all pools visible — dev / open-access).
+    auth_jwt_secret: str = ""
+
     # ── Open access (demo / dev) ──────────────────────────────────────────
     # When True, all protected endpoints return an admin principal without
     # requiring a Bearer token. NEVER enable in production.

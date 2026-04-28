@@ -28,15 +28,18 @@ from __future__ import annotations
 import logging
 from typing import Optional
 
-from fastapi import APIRouter, Query, Request
+from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import JSONResponse, Response
 
+from .pool_auth import PoolPrincipal, optional_pool_principal
 from .reports_query import (
     _clamp_page_size,
     _to_csv,
     query_agent_performance_report,
     query_agents_report,
     query_campaigns_report,
+    query_evaluations_report,
+    query_evaluations_summary,
     query_participation_report,
     query_quality_report,
     query_segments_report,
@@ -74,17 +77,18 @@ def _respond(data: dict, fmt: str, filename: str) -> Response:
 
 @router.get("/sessions")
 async def report_sessions(
-    request:      Request,
-    tenant_id:    str           = Query(...,    description="Tenant identifier"),
-    from_dt:      Optional[str] = Query(None,   description="ISO8601 start (default: 7d ago)"),
-    to_dt:        Optional[str] = Query(None,   description="ISO8601 end (default: now)"),
-    channel:      Optional[str] = Query(None,   description="Filter by channel"),
-    outcome:      Optional[str] = Query(None,   description="Filter by session outcome"),
-    close_reason: Optional[str] = Query(None,   description="Filter by close_reason"),
-    pool_id:      Optional[str] = Query(None,   description="Filter by pool_id"),
-    page:         int           = Query(1,       ge=1),
-    page_size:    int           = Query(100,     ge=1),
-    format:       str           = Query("json",  pattern="^(json|csv)$"),
+    request:        Request,
+    tenant_id:      str           = Query(...,    description="Tenant identifier"),
+    from_dt:        Optional[str] = Query(None,   description="ISO8601 start (default: 7d ago)"),
+    to_dt:          Optional[str] = Query(None,   description="ISO8601 end (default: now)"),
+    channel:        Optional[str] = Query(None,   description="Filter by channel"),
+    outcome:        Optional[str] = Query(None,   description="Filter by session outcome"),
+    close_reason:   Optional[str] = Query(None,   description="Filter by close_reason"),
+    pool_id:        Optional[str] = Query(None,   description="Filter by pool_id"),
+    page:           int           = Query(1,       ge=1),
+    page_size:      int           = Query(100,     ge=1),
+    format:         str           = Query("json",  pattern="^(json|csv)$"),
+    pool_principal: PoolPrincipal = Depends(optional_pool_principal),
 ) -> Response:
     """
     Session list for the given tenant and time window.
@@ -99,10 +103,11 @@ async def report_sessions(
         tenant_id = tenant_id,
         from_dt   = from_dt,
         to_dt     = to_dt,
-        channel      = channel,
-        outcome      = outcome,
-        close_reason = close_reason,
-        pool_id      = pool_id,
+        channel          = channel,
+        outcome          = outcome,
+        close_reason     = close_reason,
+        pool_id          = pool_id,
+        accessible_pools = pool_principal.accessible_pools,
         page      = page,
         page_size = ps,
     )
@@ -113,17 +118,18 @@ async def report_sessions(
 
 @router.get("/agents")
 async def report_agents(
-    request:       Request,
-    tenant_id:     str           = Query(...,   description="Tenant identifier"),
-    from_dt:       Optional[str] = Query(None,  description="ISO8601 start (default: 7d ago)"),
-    to_dt:         Optional[str] = Query(None,  description="ISO8601 end (default: now)"),
-    agent_type_id: Optional[str] = Query(None,  description="Filter by agent_type_id"),
-    pool_id:       Optional[str] = Query(None,  description="Filter by pool_id"),
-    event_type:    Optional[str] = Query(None,  description="Filter by event_type (routed|agent_done)"),
-    outcome:       Optional[str] = Query(None,  description="Filter by outcome"),
-    page:          int           = Query(1,      ge=1),
-    page_size:     int           = Query(100,    ge=1),
-    format:        str           = Query("json", pattern="^(json|csv)$"),
+    request:        Request,
+    tenant_id:      str           = Query(...,   description="Tenant identifier"),
+    from_dt:        Optional[str] = Query(None,  description="ISO8601 start (default: 7d ago)"),
+    to_dt:          Optional[str] = Query(None,  description="ISO8601 end (default: now)"),
+    agent_type_id:  Optional[str] = Query(None,  description="Filter by agent_type_id"),
+    pool_id:        Optional[str] = Query(None,  description="Filter by pool_id"),
+    event_type:     Optional[str] = Query(None,  description="Filter by event_type (routed|agent_done)"),
+    outcome:        Optional[str] = Query(None,  description="Filter by outcome"),
+    page:           int           = Query(1,      ge=1),
+    page_size:      int           = Query(100,    ge=1),
+    format:         str           = Query("json", pattern="^(json|csv)$"),
+    pool_principal: PoolPrincipal = Depends(optional_pool_principal),
 ) -> Response:
     """
     Agent event list. Useful for per-agent performance analysis.
@@ -138,10 +144,11 @@ async def report_agents(
         tenant_id = tenant_id,
         from_dt   = from_dt,
         to_dt     = to_dt,
-        agent_type_id = agent_type_id,
-        pool_id       = pool_id,
-        event_type    = event_type,
-        outcome       = outcome,
+        agent_type_id    = agent_type_id,
+        pool_id          = pool_id,
+        event_type       = event_type,
+        outcome          = outcome,
+        accessible_pools = pool_principal.accessible_pools,
         page      = page,
         page_size = ps,
     )
@@ -152,15 +159,16 @@ async def report_agents(
 
 @router.get("/quality")
 async def report_quality(
-    request:   Request,
-    tenant_id: str           = Query(...,   description="Tenant identifier"),
-    from_dt:   Optional[str] = Query(None,  description="ISO8601 start (default: 7d ago)"),
-    to_dt:     Optional[str] = Query(None,  description="ISO8601 end (default: now)"),
-    pool_id:   Optional[str] = Query(None,  description="Filter by pool_id"),
-    category:  Optional[str] = Query(None,  description="Filter by sentiment category"),
-    page:      int           = Query(1,      ge=1),
-    page_size: int           = Query(100,    ge=1),
-    format:    str           = Query("json", pattern="^(json|csv)$"),
+    request:        Request,
+    tenant_id:      str           = Query(...,   description="Tenant identifier"),
+    from_dt:        Optional[str] = Query(None,  description="ISO8601 start (default: 7d ago)"),
+    to_dt:          Optional[str] = Query(None,  description="ISO8601 end (default: now)"),
+    pool_id:        Optional[str] = Query(None,  description="Filter by pool_id"),
+    category:       Optional[str] = Query(None,  description="Filter by sentiment category"),
+    page:           int           = Query(1,      ge=1),
+    page_size:      int           = Query(100,    ge=1),
+    format:         str           = Query("json", pattern="^(json|csv)$"),
+    pool_principal: PoolPrincipal = Depends(optional_pool_principal),
 ) -> Response:
     """
     Per-turn sentiment event list. Useful for CSAT quality analysis.
@@ -176,8 +184,9 @@ async def report_quality(
         tenant_id = tenant_id,
         from_dt   = from_dt,
         to_dt     = to_dt,
-        pool_id   = pool_id,
-        category  = category,
+        pool_id          = pool_id,
+        category         = category,
+        accessible_pools = pool_principal.accessible_pools,
         page      = page,
         page_size = ps,
     )
@@ -313,17 +322,18 @@ async def report_campaigns(
 
 @router.get("/participation")
 async def report_participation(
-    request:       Request,
-    tenant_id:     str           = Query(...,    description="Tenant identifier"),
-    from_dt:       Optional[str] = Query(None,   description="ISO8601 start (default: 7d ago)"),
-    to_dt:         Optional[str] = Query(None,   description="ISO8601 end (default: now)"),
-    session_id:    Optional[str] = Query(None,   description="Filter by session_id"),
-    pool_id:       Optional[str] = Query(None,   description="Filter by pool_id"),
-    agent_type_id: Optional[str] = Query(None,   description="Filter by agent_type_id"),
-    role:          Optional[str] = Query(None,   description="Filter by participant role (primary|specialist|supervisor)"),
-    page:          int           = Query(1,       ge=1),
-    page_size:     int           = Query(100,     ge=1),
-    format:        str           = Query("json",  pattern="^(json|csv)$"),
+    request:        Request,
+    tenant_id:      str           = Query(...,    description="Tenant identifier"),
+    from_dt:        Optional[str] = Query(None,   description="ISO8601 start (default: 7d ago)"),
+    to_dt:          Optional[str] = Query(None,   description="ISO8601 end (default: now)"),
+    session_id:     Optional[str] = Query(None,   description="Filter by session_id"),
+    pool_id:        Optional[str] = Query(None,   description="Filter by pool_id"),
+    agent_type_id:  Optional[str] = Query(None,   description="Filter by agent_type_id"),
+    role:           Optional[str] = Query(None,   description="Filter by participant role (primary|specialist|supervisor)"),
+    page:           int           = Query(1,       ge=1),
+    page_size:      int           = Query(100,     ge=1),
+    format:         str           = Query("json",  pattern="^(json|csv)$"),
+    pool_principal: PoolPrincipal = Depends(optional_pool_principal),
 ) -> Response:
     """
     Participant interval list — who joined which session, when, and for how long.
@@ -345,10 +355,11 @@ async def report_participation(
         tenant_id = tenant_id,
         from_dt   = from_dt,
         to_dt     = to_dt,
-        session_id    = session_id,
-        pool_id       = pool_id,
-        agent_type_id = agent_type_id,
-        role          = role,
+        session_id       = session_id,
+        pool_id          = pool_id,
+        agent_type_id    = agent_type_id,
+        role             = role,
+        accessible_pools = pool_principal.accessible_pools,
         page      = page,
         page_size = ps,
     )
@@ -359,18 +370,19 @@ async def report_participation(
 
 @router.get("/segments")
 async def get_segments_report(
-    request:       Request,
-    tenant_id:     str,
-    from_dt:       str | None = None,
-    to_dt:         str | None = None,
-    session_id:    str | None = None,
-    pool_id:       str | None = None,
-    agent_type_id: str | None = None,
-    role:          str | None = None,
-    outcome:       str | None = None,
-    page:          int = 1,
-    page_size:     int = 100,
-    format:        str | None = None,
+    request:        Request,
+    tenant_id:      str,
+    from_dt:        str | None    = None,
+    to_dt:          str | None    = None,
+    session_id:     str | None    = None,
+    pool_id:        str | None    = None,
+    agent_type_id:  str | None    = None,
+    role:           str | None    = None,
+    outcome:        str | None    = None,
+    page:           int           = 1,
+    page_size:      int           = 100,
+    format:         str | None    = None,
+    pool_principal: PoolPrincipal = Depends(optional_pool_principal),
 ) -> Response:
     """
     Returns ContactSegment rows — one per agent participation window in a session.
@@ -398,11 +410,12 @@ async def get_segments_report(
         tenant_id = tenant_id,
         from_dt   = from_dt,
         to_dt     = to_dt,
-        session_id    = session_id,
-        pool_id       = pool_id,
-        agent_type_id = agent_type_id,
-        role          = role,
-        outcome       = outcome,
+        session_id       = session_id,
+        pool_id          = pool_id,
+        agent_type_id    = agent_type_id,
+        role             = role,
+        outcome          = outcome,
+        accessible_pools = pool_principal.accessible_pools,
         page      = page,
         page_size = ps,
     )
@@ -413,14 +426,15 @@ async def get_segments_report(
 
 @router.get("/agents/performance")
 async def get_agent_performance_report(
-    request:       Request,
-    tenant_id:     str,
-    from_dt:       str | None = None,
-    to_dt:         str | None = None,
-    pool_id:       str | None = None,
-    agent_type_id: str | None = None,
-    role:          str | None = None,
-    format:        str | None = None,
+    request:        Request,
+    tenant_id:      str,
+    from_dt:        str | None    = None,
+    to_dt:          str | None    = None,
+    pool_id:        str | None    = None,
+    agent_type_id:  str | None    = None,
+    role:           str | None    = None,
+    format:         str | None    = None,
+    pool_principal: PoolPrincipal = Depends(optional_pool_principal),
 ) -> Response:
     """
     Returns aggregate performance metrics per (agent_type_id, pool_id, role).
@@ -441,13 +455,86 @@ async def get_agent_performance_report(
     role:    primary | specialist | supervisor | evaluator | reviewer
     """
     data = await query_agent_performance_report(
-        client        = request.app.state.store._client,
-        database      = request.app.state.store._database,
-        tenant_id     = tenant_id,
-        from_dt       = from_dt,
-        to_dt         = to_dt,
-        pool_id       = pool_id,
-        agent_type_id = agent_type_id,
-        role          = role,
+        client           = request.app.state.store._client,
+        database         = request.app.state.store._database,
+        tenant_id        = tenant_id,
+        from_dt          = from_dt,
+        to_dt            = to_dt,
+        pool_id          = pool_id,
+        agent_type_id    = agent_type_id,
+        role             = role,
+        accessible_pools = pool_principal.accessible_pools,
     )
     return _respond(data, format, f"agent_performance_{_today_label()}.csv")
+
+
+# ─── /reports/evaluations ─────────────────────────────────────────────────────
+
+@router.get("/evaluations")
+async def get_evaluations_report(
+    request:      Request,
+    tenant_id:    str            = Query(...),
+    from_dt:      Optional[str]  = Query(None),
+    to_dt:        Optional[str]  = Query(None),
+    campaign_id:  Optional[str]  = Query(None),
+    form_id:      Optional[str]  = Query(None),
+    evaluator_id: Optional[str]  = Query(None),
+    eval_status:  Optional[str]  = Query(None),
+    page:         int            = Query(1, ge=1),
+    page_size:    int            = Query(100, ge=1),
+    format:       str            = Query("json"),
+) -> Response:
+    """
+    Individual evaluation results per session.
+
+    Filters: campaign_id, form_id, evaluator_id, eval_status
+    eval_status: submitted | approved | rejected | contested | locked
+    format: json | csv
+    """
+    page_size = _clamp_page_size(page_size, format == "csv")
+    data = await query_evaluations_report(
+        client       = request.app.state.store._client,
+        database     = request.app.state.store._database,
+        tenant_id    = tenant_id,
+        from_dt      = from_dt,
+        to_dt        = to_dt,
+        campaign_id  = campaign_id,
+        form_id      = form_id,
+        evaluator_id = evaluator_id,
+        eval_status  = eval_status,
+        page         = page,
+        page_size    = page_size,
+    )
+    return _respond(data, format, f"evaluations_{_today_label()}.csv")
+
+
+@router.get("/evaluations/summary")
+async def get_evaluations_summary(
+    request:     Request,
+    tenant_id:   str            = Query(...),
+    from_dt:     Optional[str]  = Query(None),
+    to_dt:       Optional[str]  = Query(None),
+    campaign_id: Optional[str]  = Query(None),
+    form_id:     Optional[str]  = Query(None),
+    group_by:    str            = Query("campaign_id"),
+    format:      str            = Query("json"),
+) -> Response:
+    """
+    Aggregated evaluation summary: avg score, score distribution, status counts.
+
+    group_by: campaign_id | evaluator_id | form_id | date
+    Includes per-group breakdowns: score_excellent (≥0.9), score_good (0.7-0.9),
+    score_fair (0.5-0.7), score_poor (<0.5), with_compliance_flags count.
+    format: json | csv
+    """
+    data = await query_evaluations_summary(
+        client     = request.app.state.store._client,
+        database   = request.app.state.store._database,
+        tenant_id  = tenant_id,
+        from_dt    = from_dt,
+        to_dt      = to_dt,
+        campaign_id = campaign_id,
+        form_id    = form_id,
+        group_by   = group_by,
+    )
+    return _respond(data, format, f"evaluations_summary_{_today_label()}.csv")

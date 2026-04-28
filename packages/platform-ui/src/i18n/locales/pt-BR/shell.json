@@ -12,7 +12,8 @@
       "knowledge": "Base de Conhecimento",
       "review": "Fila de Revisão",
       "myEvaluations": "Minhas Avaliações",
-      "reports": "Relatórios"
+      "reports": "Relatórios",
+      "permissions": "Permissões"
     },
     "analytics": "Analytics",
     "dashboards": "Dashboards",

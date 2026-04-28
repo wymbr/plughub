@@ -17,6 +17,7 @@ import KnowledgePage from '@/modules/evaluation/KnowledgePage'
 import ReviewPage from '@/modules/evaluation/ReviewPage'
 import MyEvaluationsPage from '@/modules/evaluation/MyEvaluationsPage'
 import EvalReportsPage from '@/modules/evaluation/ReportsPage'
+import EvaluationPermissionsPage from '@/modules/evaluation/EvaluationPermissionsPage'
 import SkillFlowsPage from '@/modules/skill-flows/SkillFlowsPage'
 import { AgentAssistPage } from '@/modules/agent-assist/AgentAssistPage'
 import PlaceholderPage from '@/modules/_placeholder/PlaceholderPage'
@@ -111,6 +112,10 @@ export const routes: RouteObject[] = [
       {
         path: 'evaluation/reports',
         element: <EvalReportsPage />
+      },
+      {
+        path: 'evaluation/permissions',
+        element: <EvaluationPermissionsPage />
       },
       {
         path: 'developer',

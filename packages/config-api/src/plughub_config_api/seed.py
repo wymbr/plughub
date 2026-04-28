@@ -101,6 +101,15 @@ _SEED: list[tuple[str, str, object, str]] = [
         "When queue wait exceeds sla × factor, the pool is considered congested. "
         "Source: routing-engine/saturated.py"
     ),
+    (
+        "routing", "performance_score_weight",
+        0.0,
+        "Arc 7d — Weight (0.0–1.0) given to historical agent performance when scoring "
+        "instances. 0.0 = pure competency match (default — backward-compatible, no Redis "
+        "reads). 0.3 = 70% competency + 30% historical performance (recommended in "
+        "production). Read from env PLUGHUB_PERFORMANCE_SCORE_WEIGHT or this Config API "
+        "key. Source: routing-engine/config.py, routing-engine/scorer.py"
+    ),
 
     # ── session ───────────────────────────────────────────────────────────────
     # Source: ai-gateway/config.py, channel-gateway/config.py
@@ -324,6 +333,46 @@ _SEED: list[tuple[str, str, object, str]] = [
         "Whether OpenAI is used as a fallback provider when all Anthropic accounts "
         "are throttled. Requires PLUGHUB_OPENAI_API_KEY(S) to be set. "
         "Source: ai-gateway/main.py"
+    ),
+
+    # ── evaluation ────────────────────────────────────────────────────────────────
+    (
+        "evaluation", "workflow_context_ttl_s",
+        604800,
+        "TTL in seconds for ContextStore entries written by the evaluation workflow motor. "
+        "Default 7 days (604800s) — longer than the standard session TTL (4h) to support "
+        "multi-day review/contestation cycles. Configurable per tenant for compliance. "
+        "Source: evaluation-api/config.py"
+    ),
+    (
+        "evaluation", "default_review_skill_id",
+        "skill_revisao_simples_v1",
+        "Default review workflow skill used when a campaign does not specify "
+        "review_workflow_skill_id. Options: skill_revisao_simples_v1 (1 round), "
+        "skill_revisao_treplica_v1 (up to 3 rounds). "
+        "Source: evaluation-api/router.py"
+    ),
+    (
+        "evaluation", "review_deadline_hours",
+        48,
+        "Default SLA in business hours for each review round. "
+        "Maps to timeout_hours in the suspend step of the review workflow skill. "
+        "Source: evaluation-api/config.py, skill_revisao_*.yaml"
+    ),
+    (
+        "evaluation", "contestation_deadline_hours",
+        72,
+        "Default SLA in business hours for each contestation window. "
+        "Maps to timeout_hours in the aguardar_contestacao step of the treplica workflow. "
+        "Source: skill_revisao_treplica_v1.yaml"
+    ),
+    (
+        "evaluation", "auto_lock_on_workflow_complete",
+        True,
+        "When True, a workflow.completed event triggers automatic locking of the "
+        "evaluation result (lock_reason=completed). Set to False to require explicit "
+        "POST /v1/evaluation/results/{id}/lock by an operator. "
+        "Source: evaluation-api/main.py"
     ),
 ]
 

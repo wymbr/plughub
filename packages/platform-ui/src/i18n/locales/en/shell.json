@@ -12,7 +12,8 @@
       "knowledge": "Knowledge Base",
       "review": "Review Queue",
       "myEvaluations": "My Evaluations",
-      "reports": "Reports"
+      "reports": "Reports",
+      "permissions": "Permissions"
     },
     "analytics": "Analytics",
     "dashboards": "Dashboards",

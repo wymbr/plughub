@@ -375,3 +375,100 @@ class TestPriorityScore:
         assert s_high > s_low
         assert s_high == pytest.approx(0.9)
         assert s_low  == pytest.approx(0.1)
+
+
+# ── Arc 7d — Performance Blending ─────────────────────────────────────────────
+
+class TestResourceScorerPerformanceBlending:
+    """
+    Arc 7d: score_resource() with performance_score + performance_score_weight.
+
+    Formula: final = (1 - w) × competency_score + w × performance_score
+    Hard filter (-1.0) must be preserved regardless of performance_score.
+    """
+
+    def test_zero_weight_ignores_performance(self):
+        """weight=0.0 → pure competency (backward-compatible default)."""
+        pool = make_pool(competency_weights={"ingles": 1.0})
+        inst = make_instance({"ingles": 1})
+        event = make_event({"ingles": 1})
+
+        score_no_perf = score_resource(event, inst, pool)
+        score_w_perf  = score_resource(
+            event, inst, pool,
+            performance_score=0.9,
+            performance_score_weight=0.0,
+        )
+        assert score_no_perf == score_w_perf
+
+    def test_high_performance_boosts_score(self):
+        """High perf score with weight=0.3 raises final above competency alone."""
+        pool  = make_pool(competency_weights={"ingles": 1.0})
+        inst  = make_instance({"ingles": 1})
+        event = make_event({"ingles": 2})  # partial match → competency=0.5
+
+        base_score = score_resource(event, inst, pool)
+        # 0.5 competency, weight=0, no blending → 0.5
+        assert base_score == pytest.approx(0.5, abs=1e-4)
+
+        blended = score_resource(
+            event, inst, pool,
+            performance_score=1.0,       # perfect history
+            performance_score_weight=0.3,
+        )
+        # final = 0.7 × 0.5 + 0.3 × 1.0 = 0.35 + 0.30 = 0.65
+        assert blended == pytest.approx(0.65, abs=1e-4)
+
+    def test_low_performance_lowers_score(self):
+        """Low perf score with weight=0.3 lowers final below competency alone."""
+        pool  = make_pool(competency_weights={"ingles": 1.0})
+        inst  = make_instance({"ingles": 2})
+        event = make_event({"ingles": 1})  # full match → competency=1.0
+
+        blended = score_resource(
+            event, inst, pool,
+            performance_score=0.0,       # worst history
+            performance_score_weight=0.3,
+        )
+        # final = 0.7 × 1.0 + 0.3 × 0.0 = 0.70
+        assert blended == pytest.approx(0.70, abs=1e-4)
+
+    def test_hard_filter_preserved_with_high_performance(self):
+        """Hard filter (-1.0) is never overridden by a high performance_score."""
+        pool  = make_pool(competency_weights={"ingles": 2.0})
+        inst  = make_instance({"ingles": 0})  # lacks required skill
+        event = make_event({"ingles": 1})
+
+        result = score_resource(
+            event, inst, pool,
+            performance_score=1.0,
+            performance_score_weight=1.0,
+        )
+        assert result == -1.0
+
+    def test_neutral_default_performance_no_bias(self):
+        """performance_score=0.5 (neutral) produces same ordering as no blending."""
+        pool   = make_pool(competency_weights={"ingles": 1.0})
+        inst_a = make_instance({"ingles": 2})   # better match → competency 1.0
+        inst_b = make_instance({"ingles": 1})   # weaker match → competency 0.5
+        event  = make_event({"ingles": 2})
+
+        w = 0.3
+        # With neutral 0.5 for both, relative ordering should still hold
+        score_a = score_resource(event, inst_a, pool, performance_score=0.5, performance_score_weight=w)
+        score_b = score_resource(event, inst_b, pool, performance_score=0.5, performance_score_weight=w)
+        assert score_a > score_b
+
+    def test_no_requirements_pool_blends_correctly(self):
+        """Pool with no competency_weights (competency=1.0) still blends."""
+        pool  = make_pool(competency_weights={})
+        inst  = make_instance({})
+        event = make_event({})
+
+        blended = score_resource(
+            event, inst, pool,
+            performance_score=0.4,
+            performance_score_weight=0.5,
+        )
+        # final = 0.5 × 1.0 + 0.5 × 0.4 = 0.5 + 0.2 = 0.7
+        assert blended == pytest.approx(0.70, abs=1e-4)

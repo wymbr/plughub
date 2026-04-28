@@ -3,10 +3,17 @@ export type UserRole = 'operator' | 'supervisor' | 'admin' | 'developer' | 'busi
 export interface Session {
   userId: string
   name: string
+  email: string
   role: UserRole
+  roles: string[]                  // all roles from JWT (user may have multiple)
   tenantId: string
+  accessiblePools: string[]        // [] = all pools (admin); non-empty = restricted
   installationId: string
   locale: 'pt-BR' | 'en'
+  // JWT tokens — stored in memory; refresh_token persisted in localStorage
+  accessToken: string
+  refreshToken: string
+  expiresAt: number                // epoch ms — when the access token expires
 }
 
 export interface Pool {
@@ -370,6 +377,36 @@ export interface EvaluationContestation {
   adjudication_note:string | null
   created_at:       string
   updated_at:       string
+}
+
+// Arc 6 v2 — 2D Permission Model
+export interface EvaluationPermission {
+  id:          string
+  tenant_id:   string
+  user_id:     string
+  scope_type:  'pool' | 'campaign' | 'global'
+  scope_id:    string | null
+  can_contest: boolean
+  can_review:  boolean
+  granted_by:  string
+  created_at:  string
+  updated_at:  string
+}
+
+// Arc 6 v2 — Result with computed available_actions
+export interface EvaluationResultWithActions extends EvaluationResult {
+  workflow_instance_id?: string | null
+  resume_token?:         string | null
+  action_required?:      'review' | 'contestation' | null
+  current_round:         number
+  deadline_at?:          string | null
+  lock_reason?:          string | null
+  available_actions:     ('review' | 'contest')[]
+  action_context?: {
+    deadline_at:     string
+    round:           number
+    authority_level: string
+  } | null
 }
 
 export interface KnowledgeSnippet {

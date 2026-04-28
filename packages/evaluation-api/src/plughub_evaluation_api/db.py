@@ -231,6 +231,55 @@ CREATE INDEX IF NOT EXISTS idx_evcontest_result
 
 CREATE INDEX IF NOT EXISTS idx_evcontest_tenant_status
     ON evaluation.contestations (tenant_id, status, contested_at DESC);
+
+-- ── Arc 6 v2 migrations (idempotent ALTER TABLE) ──────────────────────────────
+
+-- evaluation.campaigns: workflow skill reference + contestation policy
+ALTER TABLE evaluation.campaigns
+    ADD COLUMN IF NOT EXISTS review_workflow_skill_id TEXT,
+    ADD COLUMN IF NOT EXISTS contestation_policy JSONB NOT NULL DEFAULT '{}';
+
+-- evaluation.results: workflow motor state tracking
+ALTER TABLE evaluation.results
+    ADD COLUMN IF NOT EXISTS workflow_instance_id TEXT,
+    ADD COLUMN IF NOT EXISTS resume_token TEXT,
+    ADD COLUMN IF NOT EXISTS action_required TEXT
+        CHECK (action_required IN ('review', 'contestation')),
+    ADD COLUMN IF NOT EXISTS current_round INT NOT NULL DEFAULT 0,
+    ADD COLUMN IF NOT EXISTS deadline_at TIMESTAMPTZ,
+    ADD COLUMN IF NOT EXISTS lock_reason TEXT;
+
+-- evaluation.contestations: round + authority tracking
+ALTER TABLE evaluation.contestations
+    ADD COLUMN IF NOT EXISTS round_number INT NOT NULL DEFAULT 1,
+    ADD COLUMN IF NOT EXISTS authority_level TEXT;
+
+-- ── EvaluationPermission ──────────────────────────────────────────────────────
+-- 2D permission matrix: user × (pool | campaign | global) scope.
+-- scope_id is NULL for global scope; COALESCE index handles uniqueness.
+CREATE TABLE IF NOT EXISTS evaluation.permissions (
+    id          TEXT        PRIMARY KEY,                 -- "evperm_{uuid}"
+    tenant_id   TEXT        NOT NULL,
+    user_id     TEXT        NOT NULL,
+    scope_type  TEXT        NOT NULL
+                CHECK (scope_type IN ('pool', 'campaign', 'global')),
+    scope_id    TEXT,                                    -- pool_id | campaign_id | NULL (global)
+    can_contest BOOLEAN     NOT NULL DEFAULT FALSE,
+    can_review  BOOLEAN     NOT NULL DEFAULT FALSE,
+    granted_by  TEXT        NOT NULL DEFAULT 'operator',
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- Expression index so NULL scope_id rows are uniquely constrained per scope_type
+CREATE UNIQUE INDEX IF NOT EXISTS uq_eval_permission
+    ON evaluation.permissions (tenant_id, user_id, scope_type, COALESCE(scope_id, ''));
+
+CREATE INDEX IF NOT EXISTS idx_evperms_tenant_user
+    ON evaluation.permissions (tenant_id, user_id);
+
+CREATE INDEX IF NOT EXISTS idx_evperms_scope
+    ON evaluation.permissions (tenant_id, scope_type, scope_id);
 """
 
 
@@ -438,7 +487,8 @@ async def update_campaign(
     **fields: Any,
 ) -> dict[str, Any] | None:
     allowed = {"name", "description", "status", "sampling_rules", "reviewer_rules", "schedule",
-               "total_instances", "completed_instances", "avg_score"}
+               "total_instances", "completed_instances", "avg_score",
+               "review_workflow_skill_id", "contestation_policy"}
     updates = {k: v for k, v in fields.items() if k in allowed}
     if not updates:
         return await get_campaign(pool, campaign_id, tenant_id)
@@ -446,7 +496,7 @@ async def update_campaign(
     set_parts = []
     args: list[Any] = []
     idx = 1
-    jsonb_fields = {"sampling_rules", "reviewer_rules", "schedule"}
+    jsonb_fields = {"sampling_rules", "reviewer_rules", "schedule", "contestation_policy"}
     for k, v in updates.items():
         if k in jsonb_fields:
             set_parts.append(f"{k}=${idx}::jsonb")
@@ -661,6 +711,13 @@ async def get_result(pool: asyncpg.Pool, result_id: str, tenant_id: str) -> dict
     return _row(row)
 
 
+async def get_result_by_id(pool: asyncpg.Pool, result_id: str) -> dict[str, Any] | None:
+    """Look up a result by ID only — used when tenant_id is not available (e.g. lock endpoint)."""
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow("SELECT * FROM evaluation.results WHERE id=$1", result_id)
+    return _row(row)
+
+
 async def get_result_by_instance(pool: asyncpg.Pool, instance_id: str, tenant_id: str) -> dict[str, Any] | None:
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
@@ -851,6 +908,243 @@ async def list_contestations(
             *args, limit, offset,
         )
     return _rows(rows)
+
+
+# ─── Permissions CRUD ─────────────────────────────────────────────────────────
+
+async def create_permission(
+    pool: asyncpg.Pool,
+    *,
+    tenant_id: str,
+    user_id: str,
+    scope_type: str,          # "pool" | "campaign" | "global"
+    scope_id: str | None = None,
+    can_contest: bool = False,
+    can_review: bool = False,
+    granted_by: str = "operator",
+) -> dict[str, Any]:
+    perm_id = _new_id("evperm_")
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            """
+            INSERT INTO evaluation.permissions
+                (id, tenant_id, user_id, scope_type, scope_id, can_contest, can_review, granted_by)
+            VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+            ON CONFLICT (tenant_id, user_id, scope_type, COALESCE(scope_id, ''))
+            DO UPDATE SET
+                can_contest = EXCLUDED.can_contest,
+                can_review  = EXCLUDED.can_review,
+                granted_by  = EXCLUDED.granted_by,
+                updated_at  = now()
+            RETURNING *
+            """,
+            perm_id, tenant_id, user_id, scope_type, scope_id,
+            can_contest, can_review, granted_by,
+        )
+    return _row(row)  # type: ignore[return-value]
+
+
+async def list_permissions(
+    pool: asyncpg.Pool,
+    tenant_id: str,
+    user_id: str | None = None,
+    scope_type: str | None = None,
+    scope_id: str | None = None,
+) -> list[dict[str, Any]]:
+    cond = "WHERE tenant_id=$1"
+    args: list[Any] = [tenant_id]
+    for col, val in [("user_id", user_id), ("scope_type", scope_type)]:
+        if val is not None:
+            args.append(val)
+            cond += f" AND {col}=${len(args)}"
+    if scope_id is not None:
+        args.append(scope_id)
+        cond += f" AND scope_id=${len(args)}"
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            f"SELECT * FROM evaluation.permissions {cond} ORDER BY created_at DESC",
+            *args,
+        )
+    return _rows(rows)
+
+
+async def get_permission(pool: asyncpg.Pool, perm_id: str, tenant_id: str) -> dict[str, Any] | None:
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT * FROM evaluation.permissions WHERE id=$1 AND tenant_id=$2",
+            perm_id, tenant_id,
+        )
+    return _row(row)
+
+
+async def update_permission(
+    pool: asyncpg.Pool,
+    perm_id: str,
+    tenant_id: str,
+    *,
+    can_contest: bool | None = None,
+    can_review: bool | None = None,
+) -> dict[str, Any] | None:
+    set_parts = ["updated_at=now()"]
+    args: list[Any] = []
+    idx = 1
+    if can_contest is not None:
+        set_parts.append(f"can_contest=${idx}")
+        args.append(can_contest)
+        idx += 1
+    if can_review is not None:
+        set_parts.append(f"can_review=${idx}")
+        args.append(can_review)
+        idx += 1
+    args.extend([perm_id, tenant_id])
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            f"UPDATE evaluation.permissions SET {', '.join(set_parts)} "
+            f"WHERE id=${idx} AND tenant_id=${idx+1} RETURNING *",
+            *args,
+        )
+    return _row(row)
+
+
+async def delete_permission(pool: asyncpg.Pool, perm_id: str, tenant_id: str) -> bool:
+    async with pool.acquire() as conn:
+        result = await conn.execute(
+            "DELETE FROM evaluation.permissions WHERE id=$1 AND tenant_id=$2",
+            perm_id, tenant_id,
+        )
+    return result.split()[-1] != "0"
+
+
+async def resolve_permissions(
+    pool: asyncpg.Pool,
+    tenant_id: str,
+    user_id: str,
+    campaign_id: str | None = None,
+    pool_id: str | None = None,
+) -> set[str]:
+    """
+    Resolve effective permissions for a user via union of all matching scopes.
+    All matching scopes contribute (union, not override). Resolution order:
+        campaign-level  >  pool-level  >  global  (all additive via OR)
+    Returns a set of strings from {"review", "contest"}.
+    """
+    scope_conditions = ["scope_type='global'"]
+    args: list[Any] = [tenant_id, user_id]
+    if campaign_id:
+        args.append(campaign_id)
+        scope_conditions.append(f"(scope_type='campaign' AND scope_id=${len(args)})")
+    if pool_id:
+        args.append(pool_id)
+        scope_conditions.append(f"(scope_type='pool' AND scope_id=${len(args)})")
+
+    where_scopes = " OR ".join(scope_conditions)
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            f"""
+            SELECT can_contest, can_review FROM evaluation.permissions
+            WHERE tenant_id=$1 AND user_id=$2
+              AND ({where_scopes})
+            """,
+            *args,
+        )
+    perms: set[str] = set()
+    for row in rows:
+        if row["can_contest"]:
+            perms.add("contest")
+        if row["can_review"]:
+            perms.add("review")
+    return perms
+
+
+# ─── Workflow state helpers ────────────────────────────────────────────────────
+
+async def update_result_workflow_state(
+    pool: asyncpg.Pool,
+    result_id: str,
+    *,
+    action_required: str | None,
+    current_round: int | None = None,
+    deadline_at: datetime | None = None,
+    resume_token: str | None = None,
+    workflow_instance_id: str | None = None,
+    locked: bool = False,
+    lock_reason: str | None = None,
+) -> dict[str, Any] | None:
+    """
+    Called by the workflow.events Kafka consumer to sync result workflow state.
+    - workflow.suspended → action_required set, current_round/deadline_at/resume_token updated
+    - workflow.completed → locked=True, action_required=None, resume_token=None
+    """
+    set_parts = ["action_required=$1", "updated_at=now()"]
+    args: list[Any] = [action_required]
+    idx = 2
+
+    if current_round is not None:
+        set_parts.append(f"current_round=${idx}")
+        args.append(current_round)
+        idx += 1
+    if deadline_at is not None:
+        set_parts.append(f"deadline_at=${idx}")
+        args.append(deadline_at)
+        idx += 1
+    if resume_token is not None:
+        set_parts.append(f"resume_token=${idx}")
+        args.append(resume_token)
+        idx += 1
+    if workflow_instance_id is not None:
+        set_parts.append(f"workflow_instance_id=${idx}")
+        args.append(workflow_instance_id)
+        idx += 1
+    if locked:
+        set_parts.append("eval_status='locked'")
+        set_parts.append("locked_at=now()")
+        set_parts.append("resume_token=NULL")
+        if lock_reason:
+            set_parts.append(f"lock_reason=${idx}")
+            args.append(lock_reason)
+            idx += 1
+
+    args.append(result_id)
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            f"UPDATE evaluation.results SET {', '.join(set_parts)} "
+            f"WHERE id=${idx} RETURNING *",
+            *args,
+        )
+    return _row(row)
+
+
+async def lock_result(
+    pool: asyncpg.Pool,
+    result_id: str,
+    *,
+    lock_reason: str = "manual",
+    locked_by: str = "system",
+) -> dict[str, Any] | None:
+    """
+    Permanently lock a result. Called by:
+    - evaluation_lock MCP tool (from congelar_resultado workflow step)
+    - workflow.events consumer on workflow.completed with lock_reason
+    Once locked, eval_status='locked' is irreversible — any further write returns None.
+    """
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            """
+            UPDATE evaluation.results
+               SET eval_status    = 'locked',
+                   locked_at      = now(),
+                   locked_by      = $1,
+                   lock_reason    = $2,
+                   action_required = NULL,
+                   resume_token   = NULL,
+                   updated_at     = now()
+             WHERE id = $3
+               AND eval_status != 'locked'
+            RETURNING *
+            """,
+            locked_by, lock_reason, result_id,
+        )
+    return _row(row)
 
 
 # ─── Pool factory ─────────────────────────────────────────────────────────────

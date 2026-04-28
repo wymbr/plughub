@@ -64,6 +64,14 @@ class Settings(BaseSettings):
     # skill_id used for the generic evaluation SkillFlow agent
     evaluation_skill_id:     str = "agente_avaliacao_v1"
 
+    # Arc 7d — performance-based routing
+    # Weight (0.0–1.0) given to historical agent performance in score_resource().
+    # 0.0 = pure competency match (default — backward-compatible, no Redis reads).
+    # 0.3 = 70% competency + 30% historical performance (recommended in production).
+    # Sourced from PLUGHUB_PERFORMANCE_SCORE_WEIGHT; align with Config API
+    # namespace "routing" key "performance_score_weight".
+    performance_score_weight: float = 0.0
+
 
 @lru_cache
 def get_settings() -> Settings:

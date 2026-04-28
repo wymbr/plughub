@@ -72,6 +72,15 @@ def _pool_snapshot_key(tenant_id: str, pool_id: str) -> str:
     """Operational snapshot — written by router after each routing event. TTL 120s."""
     return f"{tenant_id}:pool:{pool_id}:snapshot"
 
+def _agent_perf_key(tenant_id: str, agent_type_id: str) -> str:
+    """
+    Arc 7d: historical performance score for an agent type.
+    Written by analytics-api performance_job every 5 minutes.
+    Value: str(float) in [0.0, 1.0].
+    TTL: 6 hours (refreshed by performance_job before expiry).
+    """
+    return f"{tenant_id}:agent_perf:{agent_type_id}"
+
 
 # ─────────────────────────────────────────────
 # InstanceRegistry
@@ -454,6 +463,37 @@ class InstanceRegistry:
             return json.loads(raw)
         except Exception:
             return None
+
+    async def get_agent_performance_score(
+        self,
+        tenant_id:    str,
+        agent_type_id: str,
+        default:      float = 0.5,
+    ) -> float:
+        """
+        Arc 7d — Historical performance score for an agent type.
+
+        Written by analytics-api performance_job every 5 minutes.
+        Key:   {tenant_id}:agent_perf:{agent_type_id}
+        Value: str(float) in [0.0, 1.0], TTL 6 h.
+
+        Returns `default` (0.5 = neutral) when:
+          - No data yet (new agent type, first 7 days of operation)
+          - Redis read fails (transient error)
+          - Score cannot be parsed
+
+        Default of 0.5 is intentionally neutral — does not favour or penalise
+        agents without sufficient data.
+        """
+        try:
+            raw = await self._redis.get(_agent_perf_key(tenant_id, agent_type_id))
+            if raw is not None:
+                score = float(raw)
+                # Clamp in case Redis was written by a different version
+                return max(0.0, min(1.0, score))
+        except Exception:
+            pass
+        return default
 
 
 # ─────────────────────────────────────────────

@@ -208,6 +208,8 @@ class Router:
         best_pool:     PoolConfig   | None = None
         best_score:    float               = -1.0
 
+        perf_weight = self._settings.performance_score_weight
+
         for pool in pools:
             instances = await self._instances.get_ready_instances(
                 event.tenant_id, pool.pool_id
@@ -220,7 +222,21 @@ class Router:
                 # explicitly invited a specific AI agent type.
                 if event.agent_type_id and inst.agent_type_id != event.agent_type_id:
                     continue
-                rscore = score_resource(event, inst, pool)
+
+                # Arc 7d — fetch historical performance score when weight > 0.
+                # Falls back to 0.5 (neutral) when no data is available.
+                if perf_weight > 0.0:
+                    perf_score = await self._instances.get_agent_performance_score(
+                        event.tenant_id, inst.agent_type_id
+                    )
+                else:
+                    perf_score = 0.5  # unused — weight is 0.0
+
+                rscore = score_resource(
+                    event, inst, pool,
+                    performance_score=perf_score,
+                    performance_score_weight=perf_weight,
+                )
                 if rscore < 0:
                     continue  # hard filter
                 if rscore > best_score:

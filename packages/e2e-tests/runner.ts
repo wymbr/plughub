@@ -38,6 +38,16 @@
  *   ts-node runner.ts --only 22       — run only scenario 22 (on_human_end + post_human + participation)
  *   ts-node runner.ts --segments      — run scenario 23 (Arc 5 ContactSegment analytics pipeline)
  *   ts-node runner.ts --only 23       — run only scenario 23 (ContactSegment lifecycle + topology)
+ *   ts-node runner.ts --evaluation    — run scenario 24 (Arc 6 Evaluation Campaign pipeline)
+ *   ts-node runner.ts --only 24       — run only scenario 24 (Form+Campaign CRUD, Kafka→analytics)
+ *   ts-node runner.ts --contestation  — run scenario 25 (Arc 6 Contestation + locked result)
+ *   ts-node runner.ts --only 25       — run only scenario 25 (contestation + adjudication + locked)
+ *   ts-node runner.ts --fallback         — run scenario 26 (AI Gateway 429 fallback + account rotation)
+ *   ts-node runner.ts --only 26          — run only scenario 26 (AI Gateway provider fallback chain)
+ *   ts-node runner.ts --permissions      — run scenario 27 (Arc 6 v2 — 2D permission model)
+ *   ts-node runner.ts --only 27          — run only scenario 27 (grant/list/update/resolve/revoke perms)
+ *   ts-node runner.ts --workflow-review  — run scenario 28 (Arc 6 v2 — workflow review/contestation cycle)
+ *   ts-node runner.ts --only 28          — run only scenario 28 (workflow motor, anti-replay, ContextStore lock)
  *
  * Environment variables (all optional — defaults work with docker-compose.test.yml):
  *   MCP_SERVER_URL            (default: http://localhost:3100)
@@ -50,6 +60,7 @@
  *   WORKFLOW_API_URL          (default: http://localhost:3800)
  *   CALENDAR_API_URL          (default: http://localhost:3700)
  *   ANALYTICS_API_URL         (default: http://localhost:3500)
+ *   EVALUATION_API_URL        (default: http://localhost:3400)
  *   CONFIG_API_URL            (default: http://localhost:3600)
  *   CONFIG_API_ADMIN_TOKEN    (default: test_e2e_admin_token)
  *   REDIS_URL                 (default: redis://localhost:6379)
@@ -97,6 +108,11 @@ import { run as scenario20 } from "./scenarios/20_masked_form";
 import { run as scenario21 } from "./scenarios/21_masked_retry";
 import { run as scenario22 } from "./scenarios/22_pool_hooks_fase_b";
 import { run as scenario23 } from "./scenarios/23_contact_segments";
+import { run as scenario24 } from "./scenarios/24_evaluation_campaign";
+import { run as scenario25 } from "./scenarios/25_evaluation_contestation";
+import { run as scenario26 } from "./scenarios/26_ai_gateway_fallback";
+import { run as scenario27 } from "./scenarios/27_evaluation_permissions";
+import { run as scenario28 } from "./scenarios/28_evaluation_workflow_cycle";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Configuration
@@ -113,6 +129,7 @@ const config = {
   workflowApiUrl:        process.env["WORKFLOW_API_URL"]         ?? "http://localhost:3800",
   calendarApiUrl:        process.env["CALENDAR_API_URL"]         ?? "http://localhost:3700",
   analyticsApiUrl:       process.env["ANALYTICS_API_URL"]        ?? "http://localhost:3500",
+  evaluationApiUrl:      process.env["EVALUATION_API_URL"]       ?? "http://localhost:3400",
   configApiUrl:          process.env["CONFIG_API_URL"]           ?? "http://localhost:3600",
   redisUrl:              process.env["REDIS_URL"]                ?? "redis://localhost:6379",
   kafkaBrokers:          (process.env["KAFKA_BROKERS"]           ?? "localhost:9092").split(","),
@@ -143,7 +160,12 @@ const runMention    = args.includes("--mention")    || onlyScenario === "19";
 const runMasked     = args.includes("--masked")     || onlyScenario === "20" || onlyScenario === "21";
 const runHooks      = args.includes("--hooks")      || onlyScenario === "22";
 const runSegments   = args.includes("--segments")   || onlyScenario === "23";
-const runDemo       = args.includes("--demo");  // runs all scenarios 01–18
+const runEvaluation = args.includes("--evaluation") || onlyScenario === "24";
+const runContestation = args.includes("--contestation") || onlyScenario === "25";
+const runFallback         = args.includes("--fallback")         || onlyScenario === "26";
+const runPermissions      = args.includes("--permissions")      || onlyScenario === "27";
+const runWorkflowReview   = args.includes("--workflow-review")  || onlyScenario === "28";
+const runDemo             = args.includes("--demo");  // runs all scenarios 01–18
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Scenario registry
@@ -230,6 +252,26 @@ if (runHooks || onlyScenario === "22") {
 
 if (runSegments || onlyScenario === "23") {
   ALL_SCENARIOS.push({ id: "23", fn: scenario23 });
+}
+
+if (runEvaluation || onlyScenario === "24") {
+  ALL_SCENARIOS.push({ id: "24", fn: scenario24 });
+}
+
+if (runContestation || onlyScenario === "25") {
+  ALL_SCENARIOS.push({ id: "25", fn: scenario25 });
+}
+
+if (runFallback || onlyScenario === "26") {
+  ALL_SCENARIOS.push({ id: "26", fn: scenario26 });
+}
+
+if (runPermissions || onlyScenario === "27") {
+  ALL_SCENARIOS.push({ id: "27", fn: scenario27 });
+}
+
+if (runWorkflowReview || onlyScenario === "28") {
+  ALL_SCENARIOS.push({ id: "28", fn: scenario28 });
 }
 
 const SCENARIOS_TO_RUN = onlyScenario
@@ -346,6 +388,7 @@ async function main(): Promise<void> {
       workflowApiUrl:        config.workflowApiUrl,
       calendarApiUrl:        config.calendarApiUrl,
       analyticsApiUrl:       config.analyticsApiUrl,
+      evaluationApiUrl:      config.evaluationApiUrl,
       configApiUrl:          config.configApiUrl,
       configApiAdminToken:   config.configApiAdminToken,
       redis,

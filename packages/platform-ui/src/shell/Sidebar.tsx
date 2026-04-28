@@ -58,6 +58,7 @@ const Sidebar: React.FC = () => {
         { label: t('nav.eval.review'),         href: '/evaluation/review',         icon: '🔍', roles: ['supervisor', 'admin'] },
         { label: t('nav.eval.myEvaluations'),  href: '/evaluation/my-evaluations', icon: '👤', roles: ['operator', 'supervisor', 'admin'] },
         { label: t('nav.eval.reports'),        href: '/evaluation/reports',        icon: '📊', roles: ['supervisor', 'admin', 'business'] },
+        { label: t('nav.eval.permissions'),    href: '/evaluation/permissions',    icon: '🔐', roles: ['admin'] },
       ]
     },
     {

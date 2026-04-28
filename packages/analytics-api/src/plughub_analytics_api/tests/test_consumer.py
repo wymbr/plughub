@@ -23,6 +23,7 @@ from ..models import (
     parse_sentiment_event,
     parse_queue_position,
     parse_participant_event,
+    parse_evaluation_event,
 )
 from ..consumer import _write_row
 
@@ -40,6 +41,8 @@ def make_store() -> MagicMock:
     s.upsert_participation_interval = AsyncMock()
     s.upsert_segment               = AsyncMock()
     s.insert_timeline_event        = AsyncMock()
+    s.upsert_evaluation_result     = AsyncMock()
+    s.insert_evaluation_event      = AsyncMock()
     return s
 
 
@@ -484,3 +487,148 @@ class TestParseParticipantEvent:
         assert isinstance(rows[0]["event_id"], str)
         assert len(rows[0]["event_id"]) > 0
         assert rows[0]["event_id"] == rows[1]["event_id"]
+
+
+# ── parse_evaluation_event ───────────────────────────────────────────────────
+
+class TestParseEvaluationEvent:
+    """Arc 6 — parse_evaluation_event returns [result_row, event_row]."""
+
+    RESULT_ID  = "res-eval-001"
+    INSTANCE_ID = "inst-eval-001"
+    SESSION_ID  = "sess-eval-001"
+    CAMPAIGN_ID = "camp-q1-2026"
+    EVALUATOR   = "agente_avaliacao_v1-001"
+
+    def _submitted_payload(self) -> dict:
+        return {
+            "event_type":   "evaluation.submitted",
+            "tenant_id":    TENANT,
+            "result_id":    self.RESULT_ID,
+            "instance_id":  self.INSTANCE_ID,
+            "session_id":   self.SESSION_ID,
+            "campaign_id":  self.CAMPAIGN_ID,
+            "evaluator_id": self.EVALUATOR,
+            "form_id":      "form-sac-v1",
+            "overall_score": 0.85,
+            "compliance_flags": [],
+            "timestamp":    "2026-04-01T10:00:00+00:00",
+        }
+
+    def test_returns_two_rows(self):
+        rows = parse_evaluation_event(self._submitted_payload())
+        assert rows is not None
+        assert isinstance(rows, list)
+        assert len(rows) == 2
+
+    def test_result_row_table(self):
+        rows = parse_evaluation_event(self._submitted_payload())
+        assert rows[0]["table"] == "evaluation_results"
+
+    def test_event_row_table(self):
+        rows = parse_evaluation_event(self._submitted_payload())
+        assert rows[1]["table"] == "evaluation_events"
+
+    def test_result_row_fields(self):
+        rows = parse_evaluation_event(self._submitted_payload())
+        row = rows[0]
+        assert row["result_id"]    == self.RESULT_ID
+        assert row["tenant_id"]    == TENANT
+        assert row["session_id"]   == self.SESSION_ID
+        assert row["campaign_id"]  == self.CAMPAIGN_ID
+        assert row["evaluator_id"] == self.EVALUATOR
+        assert row["overall_score"] == pytest.approx(0.85)
+        assert row["eval_status"]  == "submitted"
+        assert row["locked"]       == 0
+
+    def test_event_row_fields(self):
+        rows = parse_evaluation_event(self._submitted_payload())
+        row = rows[1]
+        assert row["result_id"]   == self.RESULT_ID
+        assert row["tenant_id"]   == TENANT
+        assert row["event_type"]  == "evaluation.submitted"
+        assert row["eval_status"] == "submitted"
+        assert row["overall_score"] == pytest.approx(0.85)
+        assert isinstance(row["event_id"], str) and len(row["event_id"]) > 0
+
+    def test_event_row_actor_id_from_evaluator(self):
+        rows = parse_evaluation_event(self._submitted_payload())
+        assert rows[1]["actor_id"] == self.EVALUATOR
+
+    def test_reviewed_event_actor_from_reviewed_by(self):
+        payload = self._submitted_payload()
+        payload["event_type"] = "evaluation.reviewed"
+        payload["eval_status"] = "approved"
+        payload["reviewed_by"] = "supervisor-001"
+        rows = parse_evaluation_event(payload)
+        assert rows is not None
+        assert rows[1]["actor_id"] == "supervisor-001"
+        assert rows[0]["eval_status"] == "approved"
+
+    def test_contested_event_actor_from_contested_by(self):
+        payload = self._submitted_payload()
+        payload["event_type"] = "evaluation.contested"
+        payload["contested_by"] = "operator-007"
+        rows = parse_evaluation_event(payload)
+        assert rows is not None
+        assert rows[1]["actor_id"] == "operator-007"
+        assert rows[0]["eval_status"] == "contested"
+
+    def test_locked_event_sets_locked_flag(self):
+        payload = self._submitted_payload()
+        payload["event_type"] = "evaluation.locked"
+        rows = parse_evaluation_event(payload)
+        assert rows is not None
+        assert rows[0]["locked"] == 1
+        assert rows[0]["eval_status"] == "locked"
+
+    def test_compliance_flags_propagated(self):
+        payload = self._submitted_payload()
+        payload["compliance_flags"] = ["gdpr_breach", "tone_violation"]
+        rows = parse_evaluation_event(payload)
+        assert rows is not None
+        assert rows[0]["compliance_flags"] == ["gdpr_breach", "tone_violation"]
+
+    def test_missing_result_id_returns_none(self):
+        payload = self._submitted_payload()
+        del payload["result_id"]
+        assert parse_evaluation_event(payload) is None
+
+    def test_missing_tenant_id_returns_none(self):
+        payload = self._submitted_payload()
+        del payload["tenant_id"]
+        assert parse_evaluation_event(payload) is None
+
+    def test_missing_event_type_returns_none(self):
+        payload = self._submitted_payload()
+        del payload["event_type"]
+        assert parse_evaluation_event(payload) is None
+
+    def test_none_overall_score_in_event_row(self):
+        payload = self._submitted_payload()
+        del payload["overall_score"]
+        rows = parse_evaluation_event(payload)
+        assert rows is not None
+        # result_row defaults to 0.0; event_row stays None
+        assert rows[0]["overall_score"] == pytest.approx(0.0)
+        assert rows[1]["overall_score"] is None
+
+
+# ── _write_row dispatch — evaluation tables ───────────────────────────────────
+
+class TestWriteRowDispatchEvaluation:
+    @pytest.mark.asyncio
+    async def test_evaluation_results_dispatched(self):
+        store = make_store()
+        row = {"table": "evaluation_results", "result_id": "r1", "tenant_id": TENANT}
+        await _write_row(store, row, "evaluation.events", 0)
+        store.upsert_evaluation_result.assert_awaited_once_with(row)
+        store.insert_evaluation_event.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_evaluation_events_dispatched(self):
+        store = make_store()
+        row = {"table": "evaluation_events", "event_id": "e1", "tenant_id": TENANT}
+        await _write_row(store, row, "evaluation.events", 1)
+        store.insert_evaluation_event.assert_awaited_once_with(row)
+        store.upsert_evaluation_result.assert_not_awaited()

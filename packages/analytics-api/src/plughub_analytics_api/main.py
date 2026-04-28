@@ -32,14 +32,15 @@ logger = logging.getLogger("plughub.analytics.api")
 
 import redis.asyncio as aioredis
 
-from .clickhouse import AnalyticsStore
-from .config     import get_settings
-from .consumer   import run_consumer
-from .dashboard  import router as dashboard_router
-from .reports    import router as reports_router
-from .admin      import router as admin_router
-from .sessions   import router as sessions_router
-from .supervisor import router as supervisor_router
+from .clickhouse      import AnalyticsStore
+from .config          import get_settings
+from .consumer        import run_consumer
+from .dashboard       import router as dashboard_router
+from .performance_job import run_performance_job_loop
+from .reports         import router as reports_router
+from .admin           import router as admin_router
+from .sessions        import router as sessions_router
+from .supervisor      import router as supervisor_router
 
 
 @asynccontextmanager
@@ -87,11 +88,24 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         name="analytics-consumer",
     )
 
+    # ── Performance sync (Arc 7d) ─────────────────────────────────────────────
+    # Reads v_agent_performance from ClickHouse every 5 min and writes
+    # performance scores to Redis for consumption by the routing-engine.
+    perf_task = asyncio.create_task(
+        run_performance_job_loop(store, redis),
+        name="performance-sync",
+    )
+
     yield
 
     consumer_task.cancel()
+    perf_task.cancel()
     try:
         await consumer_task
+    except asyncio.CancelledError:
+        pass
+    try:
+        await perf_task
     except asyncio.CancelledError:
         pass
 
@@ -153,6 +167,20 @@ async def health() -> JSONResponse:
         status_code=code,
         content={"status": status, "clickhouse": ch_status},
     )
+
+
+@app.post("/admin/performance-sync")
+async def trigger_performance_sync() -> JSONResponse:
+    """
+    Arc 7d — Manual trigger for the performance score sync.
+    Runs immediately (blocking the request) and returns the sync result.
+    Useful for testing or forcing a refresh after data backfill.
+    """
+    from .performance_job import run_performance_sync
+    store: AnalyticsStore = app.state.store
+    redis = app.state.redis
+    result = await run_performance_sync(store, redis)
+    return JSONResponse(status_code=200, content=result)
 
 
 def run() -> None:

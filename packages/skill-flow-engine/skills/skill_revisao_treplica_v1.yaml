@@ -1,0 +1,107 @@
+id: skill_revisao_treplica_v1
+name: Revisão com Tréplica (até 3 rounds)
+version: "1"
+description: |
+  Motor de estado para ciclo de revisão de avaliação com até 3 rounds (tréplica).
+  Fluxo: avaliação → revisão → contestação → revisão → contestação → revisão → congelamento.
+  O contador de rounds é controlado pelo workflow; a UI ecoa o valor recebido no submit (anti-replay).
+  Timeout em qualquer round: resultado é congelado no estado atual sem escalação.
+  Para ciclo com réplica (2 rounds), use skill_revisao_replica_v1 ou ajuste value: 2 no verificar_limite.
+classification: vertical
+
+entry: init_round
+
+steps:
+  # Inicializa o round counter no ContextStore
+  - id: init_round
+    type: invoke
+    tool: context_write
+    input:
+      tag: session.current_round
+      value: 1
+    on_success: aguardar_revisao
+    on_failure: encerrar
+
+  # Suspende aguardando decisão de revisão humana (aprovação ou contestação)
+  - id: aguardar_revisao
+    type: suspend
+    reason: input
+    timeout_hours: 48
+    business_hours: true
+    on_resume:
+      next: verificar_decisao_revisao
+    on_timeout:
+      next: congelar_resultado
+
+  # Lê a decisão gravada pelo evaluation-api no ContextStore antes do resume
+  - id: verificar_decisao_revisao
+    type: choice
+    conditions:
+      - field: "@ctx.session.review_decision"
+        operator: eq
+        value: "approved"
+        next: encerrar_aprovado
+      - field: "@ctx.session.review_decision"
+        operator: eq
+        value: "contested"
+        next: incrementar_round
+    default: congelar_resultado
+
+  # Incrementa o round e verifica se o limite de tréplica foi atingido
+  - id: incrementar_round
+    type: invoke
+    tool: context_write
+    input:
+      tag: session.current_round
+      value: "{{add(@ctx.session.current_round, 1)}}"
+    on_success: verificar_limite
+    on_failure: congelar_resultado
+
+  # Limite de tréplica = 3 rounds. Para réplica, mudar value para 2.
+  - id: verificar_limite
+    type: choice
+    conditions:
+      - field: "@ctx.session.current_round"
+        operator: gt
+        value: 3
+        next: congelar_resultado
+    default: aguardar_contestacao
+
+  # Suspende aguardando a contestação do avaliado (quem recebeu a avaliação)
+  - id: aguardar_contestacao
+    type: suspend
+    reason: input
+    timeout_hours: 72
+    business_hours: true
+    on_resume:
+      next: verificar_decisao_contestacao
+    on_timeout:
+      next: congelar_resultado
+
+  # Após contestação, volta para aguardar nova revisão com alçada superior
+  - id: verificar_decisao_contestacao
+    type: choice
+    conditions:
+      - field: "@ctx.session.review_decision"
+        operator: eq
+        value: "contested"
+        next: aguardar_revisao
+    default: encerrar_aprovado
+
+  # Congela o resultado no estado atual (timeout ou limite de rounds atingido)
+  - id: congelar_resultado
+    type: invoke
+    tool: evaluation_lock
+    input:
+      result_id: "@ctx.session.result_id"
+      lock_reason: "review_timeout"
+    on_success: encerrar
+    on_failure: encerrar
+
+  - id: encerrar_aprovado
+    type: complete
+    outcome: resolved
+
+  - id: encerrar
+    type: complete
+    outcome: resolved

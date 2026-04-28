@@ -12,6 +12,10 @@ export default defineConfig({
   server: {
     port: 5174,
     proxy: {
+      '^/auth': {
+        target: 'http://localhost:3200',
+        changeOrigin: true
+      },
       '^/api': {
         target: 'http://localhost:3100',
         changeOrigin: true

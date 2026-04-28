@@ -95,6 +95,31 @@ def _meta(page: int, page_size: int, total: int, from_dt: str, to_dt: str) -> di
     }
 
 
+def _apply_pool_scope(
+    conditions: list[str],
+    accessible_pools: "list[str] | None",
+) -> bool:
+    """
+    Mutates *conditions* in-place to add a pool_id IN (...) filter when needed.
+
+    Returns False if the caller has NO access to any pool (empty whitelist),
+    which means the caller should short-circuit and return an empty result
+    without hitting ClickHouse.
+
+    accessible_pools=None  → no-op (all pools visible, typical for open-access)
+    accessible_pools=[…]   → append AND pool_id IN ('a','b',…)
+    accessible_pools=[]    → caller has no pool access → caller must return empty
+    """
+    if accessible_pools is None:
+        return True   # unrestricted
+    if not accessible_pools:
+        return False  # no pools allowed
+    # pool_ids come from a verified JWT — safe to inline as string literals
+    pool_list = ", ".join(f"'{p}'" for p in accessible_pools)
+    conditions.append(f"pool_id IN ({pool_list})")
+    return True
+
+
 # ─── /reports/sessions ────────────────────────────────────────────────────────
 
 async def query_sessions_report(
@@ -104,19 +129,22 @@ async def query_sessions_report(
     from_dt:   str | None = None,
     to_dt:     str | None = None,
     *,
-    channel:      str | None = None,
-    outcome:      str | None = None,
-    close_reason: str | None = None,
-    pool_id:      str | None = None,
+    channel:          str | None       = None,
+    outcome:          str | None       = None,
+    close_reason:     str | None       = None,
+    pool_id:          str | None       = None,
+    accessible_pools: list[str] | None = None,
     page:      int = 1,
     page_size: int = 100,
 ) -> dict:
     since = _ch_fmt(from_dt) if from_dt else _default_from()
     until = _ch_fmt(to_dt)   if to_dt   else _default_to()
+    if accessible_pools is not None and not accessible_pools:
+        return {"data": [], "meta": _meta(page, page_size, 0, since, until)}
     try:
         return await asyncio.to_thread(
             _fetch_sessions, client, database, tenant_id, since, until,
-            channel, outcome, close_reason, pool_id, page, page_size,
+            channel, outcome, close_reason, pool_id, accessible_pools, page, page_size,
         )
     except Exception as exc:
         logger.warning("query_sessions_report failed tenant=%s: %s", tenant_id, exc)
@@ -127,6 +155,7 @@ def _fetch_sessions(
     client: Any, db: str, tenant_id: str,
     since: str, until: str,
     channel: str | None, outcome: str | None, close_reason: str | None, pool_id: str | None,
+    accessible_pools: list[str] | None,
     page: int, page_size: int,
 ) -> dict:
     conditions = [
@@ -148,6 +177,7 @@ def _fetch_sessions(
     if pool_id:
         conditions.append("pool_id = {pool_id:String}")
         params["pool_id"] = pool_id
+    _apply_pool_scope(conditions, accessible_pools)
 
     where = " AND ".join(conditions)
     offset = (page - 1) * page_size
@@ -177,19 +207,22 @@ async def query_agents_report(
     from_dt:   str | None = None,
     to_dt:     str | None = None,
     *,
-    agent_type_id: str | None = None,
-    pool_id:       str | None = None,
-    event_type:    str | None = None,
-    outcome:       str | None = None,
+    agent_type_id:    str | None       = None,
+    pool_id:          str | None       = None,
+    event_type:       str | None       = None,
+    outcome:          str | None       = None,
+    accessible_pools: list[str] | None = None,
     page:      int = 1,
     page_size: int = 100,
 ) -> dict:
     since = _ch_fmt(from_dt) if from_dt else _default_from()
     until = _ch_fmt(to_dt)   if to_dt   else _default_to()
+    if accessible_pools is not None and not accessible_pools:
+        return {"data": [], "meta": _meta(page, page_size, 0, since, until)}
     try:
         return await asyncio.to_thread(
             _fetch_agents, client, database, tenant_id, since, until,
-            agent_type_id, pool_id, event_type, outcome, page, page_size,
+            agent_type_id, pool_id, event_type, outcome, accessible_pools, page, page_size,
         )
     except Exception as exc:
         logger.warning("query_agents_report failed tenant=%s: %s", tenant_id, exc)
@@ -201,6 +234,7 @@ def _fetch_agents(
     since: str, until: str,
     agent_type_id: str | None, pool_id: str | None,
     event_type: str | None, outcome: str | None,
+    accessible_pools: list[str] | None,
     page: int, page_size: int,
 ) -> dict:
     conditions = [
@@ -222,6 +256,7 @@ def _fetch_agents(
     if outcome:
         conditions.append("outcome = {outcome:String}")
         params["outcome"] = outcome
+    _apply_pool_scope(conditions, accessible_pools)
 
     where = " AND ".join(conditions)
     offset = (page - 1) * page_size
@@ -251,17 +286,20 @@ async def query_quality_report(
     from_dt:   str | None = None,
     to_dt:     str | None = None,
     *,
-    pool_id:  str | None = None,
-    category: str | None = None,
+    pool_id:          str | None       = None,
+    category:         str | None       = None,
+    accessible_pools: list[str] | None = None,
     page:      int = 1,
     page_size: int = 100,
 ) -> dict:
     since = _ch_fmt(from_dt) if from_dt else _default_from()
     until = _ch_fmt(to_dt)   if to_dt   else _default_to()
+    if accessible_pools is not None and not accessible_pools:
+        return {"data": [], "meta": _meta(page, page_size, 0, since, until)}
     try:
         return await asyncio.to_thread(
             _fetch_quality, client, database, tenant_id, since, until,
-            pool_id, category, page, page_size,
+            pool_id, category, accessible_pools, page, page_size,
         )
     except Exception as exc:
         logger.warning("query_quality_report failed tenant=%s: %s", tenant_id, exc)
@@ -272,6 +310,7 @@ def _fetch_quality(
     client: Any, db: str, tenant_id: str,
     since: str, until: str,
     pool_id: str | None, category: str | None,
+    accessible_pools: list[str] | None,
     page: int, page_size: int,
 ) -> dict:
     conditions = [
@@ -287,6 +326,7 @@ def _fetch_quality(
     if category:
         conditions.append("category = {category:String}")
         params["category"] = category
+    _apply_pool_scope(conditions, accessible_pools)
 
     where = " AND ".join(conditions)
     offset = (page - 1) * page_size
@@ -539,19 +579,22 @@ async def query_participation_report(
     from_dt:   str | None = None,
     to_dt:     str | None = None,
     *,
-    session_id:    str | None = None,
-    pool_id:       str | None = None,
-    agent_type_id: str | None = None,
-    role:          str | None = None,
+    session_id:       str | None       = None,
+    pool_id:          str | None       = None,
+    agent_type_id:    str | None       = None,
+    role:             str | None       = None,
+    accessible_pools: list[str] | None = None,
     page:      int = 1,
     page_size: int = 100,
 ) -> dict:
     since = _ch_fmt(from_dt) if from_dt else _default_from()
     until = _ch_fmt(to_dt)   if to_dt   else _default_to()
+    if accessible_pools is not None and not accessible_pools:
+        return {"data": [], "meta": _meta(page, page_size, 0, since, until)}
     try:
         return await asyncio.to_thread(
             _fetch_participation, client, database, tenant_id, since, until,
-            session_id, pool_id, agent_type_id, role, page, page_size,
+            session_id, pool_id, agent_type_id, role, accessible_pools, page, page_size,
         )
     except Exception as exc:
         logger.warning("query_participation_report failed tenant=%s: %s", tenant_id, exc)
@@ -563,6 +606,7 @@ def _fetch_participation(
     since: str, until: str,
     session_id: str | None, pool_id: str | None,
     agent_type_id: str | None, role: str | None,
+    accessible_pools: list[str] | None,
     page: int, page_size: int,
 ) -> dict:
     conditions = [
@@ -584,6 +628,7 @@ def _fetch_participation(
     if role:
         conditions.append("role = {role:String}")
         params["role"] = role
+    _apply_pool_scope(conditions, accessible_pools)
 
     where = " AND ".join(conditions)
     offset = (page - 1) * page_size
@@ -620,20 +665,23 @@ async def query_segments_report(
     from_dt:   str | None = None,
     to_dt:     str | None = None,
     *,
-    session_id:    str | None = None,
-    pool_id:       str | None = None,
-    agent_type_id: str | None = None,
-    role:          str | None = None,
-    outcome:       str | None = None,
+    session_id:       str | None       = None,
+    pool_id:          str | None       = None,
+    agent_type_id:    str | None       = None,
+    role:             str | None       = None,
+    outcome:          str | None       = None,
+    accessible_pools: list[str] | None = None,
     page:      int = 1,
     page_size: int = 100,
 ) -> dict:
     since = _ch_fmt(from_dt) if from_dt else _default_from()
     until = _ch_fmt(to_dt)   if to_dt   else _default_to()
+    if accessible_pools is not None and not accessible_pools:
+        return {"data": [], "meta": _meta(page, page_size, 0, since, until)}
     try:
         return await asyncio.to_thread(
             _fetch_segments, client, database, tenant_id, since, until,
-            session_id, pool_id, agent_type_id, role, outcome, page, page_size,
+            session_id, pool_id, agent_type_id, role, outcome, accessible_pools, page, page_size,
         )
     except Exception as exc:
         logger.warning("query_segments_report failed tenant=%s: %s", tenant_id, exc)
@@ -646,6 +694,7 @@ def _fetch_segments(
     session_id: str | None, pool_id: str | None,
     agent_type_id: str | None, role: str | None,
     outcome: str | None,
+    accessible_pools: list[str] | None,
     page: int, page_size: int,
 ) -> dict:
     conditions = [
@@ -670,6 +719,7 @@ def _fetch_segments(
     if outcome:
         conditions.append("outcome = {outcome:String}")
         params["outcome"] = outcome
+    _apply_pool_scope(conditions, accessible_pools)
 
     where  = " AND ".join(conditions)
     offset = (page - 1) * page_size
@@ -708,9 +758,10 @@ async def query_agent_performance_report(
     from_dt:   str | None = None,
     to_dt:     str | None = None,
     *,
-    pool_id:       str | None = None,
-    agent_type_id: str | None = None,
-    role:          str | None = None,
+    pool_id:          str | None       = None,
+    agent_type_id:    str | None       = None,
+    role:             str | None       = None,
+    accessible_pools: list[str] | None = None,
 ) -> dict:
     """
     Aggregate performance metrics per (agent_type_id, pool_id, role).
@@ -729,11 +780,13 @@ async def query_agent_performance_report(
     """
     since = _ch_fmt(from_dt) if from_dt else _default_from()
     until = _ch_fmt(to_dt)   if to_dt   else _default_to()
+    if accessible_pools is not None and not accessible_pools:
+        return {"data": [], "meta": {"total": 0, "from_dt": since, "to_dt": until}}
     try:
         return await asyncio.to_thread(
             _fetch_agent_performance,
             client, database, tenant_id, since, until,
-            pool_id, agent_type_id, role,
+            pool_id, agent_type_id, role, accessible_pools,
         )
     except Exception as exc:
         logger.warning(
@@ -743,14 +796,15 @@ async def query_agent_performance_report(
 
 
 def _fetch_agent_performance(
-    client:        Any,
-    db:            str,
-    tenant_id:     str,
-    since:         str,
-    until:         str,
-    pool_id:       str | None,
-    agent_type_id: str | None,
-    role:          str | None,
+    client:          Any,
+    db:              str,
+    tenant_id:       str,
+    since:           str,
+    until:           str,
+    pool_id:         str | None,
+    agent_type_id:   str | None,
+    role:            str | None,
+    accessible_pools: list[str] | None = None,
 ) -> dict:
     conditions = [
         "tenant_id = {tenant_id:String}",
@@ -768,6 +822,7 @@ def _fetch_agent_performance(
     if role:
         conditions.append("role = {role:String}")
         params["role"] = role
+    _apply_pool_scope(conditions, accessible_pools)
 
     where = " AND ".join(conditions)
 
@@ -804,4 +859,177 @@ def _fetch_agent_performance(
             "from_dt": since,
             "to_dt":   until,
         },
+    }
+
+
+# ─── /reports/evaluations ────────────────────────────────────────────────────
+
+async def query_evaluations_report(
+    client:    Any,
+    database:  str,
+    tenant_id: str,
+    from_dt:   str | None = None,
+    to_dt:     str | None = None,
+    *,
+    campaign_id:  str | None = None,
+    form_id:      str | None = None,
+    evaluator_id: str | None = None,
+    eval_status:  str | None = None,
+    page:      int = 1,
+    page_size: int = 100,
+) -> dict:
+    """
+    Returns individual evaluation results (one row per evaluated session).
+    Filters: campaign_id, form_id, evaluator_id, eval_status.
+    """
+    since = _ch_fmt(from_dt) if from_dt else _default_from()
+    until = _ch_fmt(to_dt)   if to_dt   else _default_to()
+    try:
+        return await asyncio.to_thread(
+            _fetch_evaluations, client, database, tenant_id, since, until,
+            campaign_id, form_id, evaluator_id, eval_status, page, page_size,
+        )
+    except Exception as exc:
+        logger.warning("query_evaluations_report failed tenant=%s: %s", tenant_id, exc)
+        return {"data": [], "meta": _meta(page, page_size, 0, since, until), "error": "data_unavailable"}
+
+
+def _fetch_evaluations(
+    client: Any, db: str, tenant_id: str,
+    since: str, until: str,
+    campaign_id: str | None, form_id: str | None,
+    evaluator_id: str | None, eval_status: str | None,
+    page: int, page_size: int,
+) -> dict:
+    conditions = [
+        "tenant_id = {tenant_id:String}",
+        f"timestamp >= '{since}'",
+        f"timestamp < '{until}'",
+    ]
+    params: dict = {"tenant_id": tenant_id}
+
+    if campaign_id:
+        conditions.append("campaign_id = {campaign_id:String}")
+        params["campaign_id"] = campaign_id
+    if form_id:
+        conditions.append("form_id = {form_id:String}")
+        params["form_id"] = form_id
+    if evaluator_id:
+        conditions.append("evaluator_id = {evaluator_id:String}")
+        params["evaluator_id"] = evaluator_id
+    if eval_status:
+        conditions.append("eval_status = {eval_status:String}")
+        params["eval_status"] = eval_status
+
+    where = " AND ".join(conditions)
+    offset = (page - 1) * page_size
+
+    total = _count(
+        client,
+        f"SELECT count() FROM {db}.evaluation_results FINAL WHERE {where}",
+        params,
+    )
+
+    result = client.query(f"""
+        SELECT
+            result_id, instance_id, session_id, tenant_id,
+            evaluator_id, form_id, campaign_id,
+            overall_score, eval_status, locked,
+            compliance_flags, timestamp
+        FROM {db}.evaluation_results FINAL
+        WHERE {where}
+        ORDER BY timestamp DESC
+        LIMIT {page_size} OFFSET {offset}
+    """, parameters=params)
+
+    return {"data": _rows_to_dicts(result), "meta": _meta(page, page_size, total, since, until)}
+
+
+# ─── /reports/evaluations/summary ─────────────────────────────────────────────
+
+async def query_evaluations_summary(
+    client:    Any,
+    database:  str,
+    tenant_id: str,
+    from_dt:   str | None = None,
+    to_dt:     str | None = None,
+    *,
+    campaign_id: str | None = None,
+    form_id:     str | None = None,
+    group_by:    str = "campaign_id",   # campaign_id | evaluator_id | form_id | date
+) -> dict:
+    """
+    Aggregated evaluation summary: avg score, score distribution, count by status.
+    group_by controls the breakdown dimension.
+    """
+    since = _ch_fmt(from_dt) if from_dt else _default_from()
+    until = _ch_fmt(to_dt)   if to_dt   else _default_to()
+    # Whitelist grouping dimensions
+    allowed_groups = {"campaign_id", "evaluator_id", "form_id", "date"}
+    if group_by not in allowed_groups:
+        group_by = "campaign_id"
+    try:
+        return await asyncio.to_thread(
+            _fetch_evaluations_summary, client, database, tenant_id, since, until,
+            campaign_id, form_id, group_by,
+        )
+    except Exception as exc:
+        logger.warning("query_evaluations_summary failed tenant=%s: %s", tenant_id, exc)
+        return {"data": [], "meta": {"from_dt": since, "to_dt": until}, "error": "data_unavailable"}
+
+
+def _fetch_evaluations_summary(
+    client: Any, db: str, tenant_id: str,
+    since: str, until: str,
+    campaign_id: str | None, form_id: str | None,
+    group_by: str,
+) -> dict:
+    conditions = [
+        "tenant_id = {tenant_id:String}",
+        f"timestamp >= '{since}'",
+        f"timestamp < '{until}'",
+    ]
+    params: dict = {"tenant_id": tenant_id}
+
+    if campaign_id:
+        conditions.append("campaign_id = {campaign_id:String}")
+        params["campaign_id"] = campaign_id
+    if form_id:
+        conditions.append("form_id = {form_id:String}")
+        params["form_id"] = form_id
+
+    where = " AND ".join(conditions)
+
+    # Resolve the GROUP BY expression
+    group_col = "toDate(timestamp)" if group_by == "date" else group_by
+
+    result = client.query(f"""
+        SELECT
+            {group_col}                                  AS group_key,
+            count()                                      AS total_evaluated,
+            countIf(eval_status = 'submitted')           AS count_submitted,
+            countIf(eval_status = 'approved')            AS count_approved,
+            countIf(eval_status = 'rejected')            AS count_rejected,
+            countIf(eval_status = 'contested')           AS count_contested,
+            countIf(eval_status = 'locked')              AS count_locked,
+            countIf(locked = 1)                          AS count_locked_flag,
+            round(avg(overall_score), 4)                 AS avg_score,
+            round(min(overall_score), 4)                 AS min_score,
+            round(max(overall_score), 4)                 AS max_score,
+            countIf(overall_score >= 0.9)                AS score_excellent,
+            countIf(overall_score >= 0.7 AND overall_score < 0.9) AS score_good,
+            countIf(overall_score >= 0.5 AND overall_score < 0.7) AS score_fair,
+            countIf(overall_score < 0.5)                 AS score_poor,
+            countIf(length(compliance_flags) > 0)        AS with_compliance_flags
+        FROM {db}.evaluation_results FINAL
+        WHERE {where}
+        GROUP BY {group_col}
+        ORDER BY {group_col} ASC
+    """, parameters=params)
+
+    rows = _rows_to_dicts(result)
+    return {
+        "data":     rows,
+        "group_by": group_by,
+        "meta":     {"total": len(rows), "from_dt": since, "to_dt": until},
     }

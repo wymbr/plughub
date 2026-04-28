@@ -17,10 +17,13 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from ..reports_query import (
+    _apply_pool_scope,
     _clamp_page_size,
     _to_csv,
     query_agent_performance_report,
     query_agents_report,
+    query_evaluations_report,
+    query_evaluations_summary,
     query_participation_report,
     query_quality_report,
     query_segments_report,
@@ -541,3 +544,325 @@ class TestQueryAgentPerformanceReport:
         result = await query_agent_performance_report(client, DB, TENANT)
         assert result["data"] == []
         assert result.get("error") == "data_unavailable"
+
+
+# ─── query_evaluations_report ────────────────────────────────────────────────
+
+@pytest.mark.asyncio
+class TestQueryEvaluationsReport:
+    _COLS = [
+        "result_id", "instance_id", "session_id", "tenant_id",
+        "evaluator_id", "form_id", "campaign_id",
+        "overall_score", "eval_status", "locked",
+        "compliance_flags", "timestamp",
+    ]
+
+    def _count_result(self, n: int) -> MagicMock:
+        return _ch_result(["count()"], [[n]])
+
+    async def test_returns_data_and_meta(self):
+        client = _make_client(
+            self._count_result(0),
+            _ch_result(self._COLS, []),
+        )
+        result = await query_evaluations_report(client, DB, TENANT)
+        assert "data" in result
+        assert "meta" in result
+        assert result["meta"]["total"] == 0
+
+    async def test_data_row_mapped_correctly(self):
+        client = _make_client(
+            self._count_result(1),
+            _ch_result(self._COLS, [[
+                "res-001", "inst-001", "sess-001", TENANT,
+                "agente_avaliacao_v1-001", "form-sac-v1", "camp-q1-2026",
+                0.87, "approved", 0,
+                [], "2026-04-01T10:00:00",
+            ]]),
+        )
+        result = await query_evaluations_report(client, DB, TENANT)
+        assert result["meta"]["total"] == 1
+        row = result["data"][0]
+        assert row["result_id"]     == "res-001"
+        assert row["tenant_id"]     == TENANT
+        assert row["campaign_id"]   == "camp-q1-2026"
+        assert row["eval_status"]   == "approved"
+        assert row["overall_score"] == pytest.approx(0.87)
+        assert row["locked"]        == 0
+
+    async def test_filters_do_not_crash(self):
+        client = _make_client(
+            self._count_result(0),
+            _ch_result(self._COLS, []),
+        )
+        result = await query_evaluations_report(
+            client, DB, TENANT,
+            campaign_id  = "camp-q1-2026",
+            form_id      = "form-sac-v1",
+            evaluator_id = "agente_avaliacao_v1-001",
+            eval_status  = "approved",
+        )
+        assert result["data"] == []
+        assert result["meta"]["total"] == 0
+
+    async def test_error_returns_empty_with_error_key(self):
+        client = MagicMock()
+        client.query = MagicMock(side_effect=Exception("ch timeout"))
+        result = await query_evaluations_report(client, DB, TENANT)
+        assert result["data"] == []
+        assert result.get("error") == "data_unavailable"
+
+
+# ─── query_evaluations_summary ───────────────────────────────────────────────
+
+@pytest.mark.asyncio
+class TestQueryEvaluationsSummary:
+    _COLS = [
+        "group_key",
+        "total_evaluated",
+        "count_submitted", "count_approved", "count_rejected",
+        "count_contested", "count_locked", "count_locked_flag",
+        "avg_score", "min_score", "max_score",
+        "score_excellent", "score_good", "score_fair", "score_poor",
+        "with_compliance_flags",
+    ]
+
+    async def test_returns_data_and_meta(self):
+        client = _make_client(_ch_result(self._COLS, []))
+        result = await query_evaluations_summary(client, DB, TENANT)
+        assert "data" in result
+        assert "meta" in result
+        assert "group_by" in result
+        assert result["group_by"] == "campaign_id"  # default
+
+    async def test_summary_row_mapped_correctly(self):
+        client = _make_client(_ch_result(self._COLS, [[
+            "camp-q1-2026",
+            20,      # total_evaluated
+            5,       # count_submitted
+            12,      # count_approved
+            2,       # count_rejected
+            1,       # count_contested
+            0,       # count_locked
+            0,       # count_locked_flag
+            0.82,    # avg_score
+            0.55,    # min_score
+            0.98,    # max_score
+            8,       # score_excellent
+            6,       # score_good
+            4,       # score_fair
+            2,       # score_poor
+            3,       # with_compliance_flags
+        ]]))
+        result = await query_evaluations_summary(client, DB, TENANT)
+        assert result["meta"]["total"] == 1
+        row = result["data"][0]
+        assert row["group_key"]             == "camp-q1-2026"
+        assert row["total_evaluated"]       == 20
+        assert row["count_approved"]        == 12
+        assert row["avg_score"]             == pytest.approx(0.82)
+        assert row["score_excellent"]       == 8
+        assert row["with_compliance_flags"] == 3
+
+    async def test_invalid_group_by_defaults_to_campaign_id(self):
+        client = _make_client(_ch_result(self._COLS, []))
+        result = await query_evaluations_summary(client, DB, TENANT, group_by="injection; DROP")
+        assert result["group_by"] == "campaign_id"
+
+    async def test_error_returns_empty_with_error_key(self):
+        client = MagicMock()
+        client.query = MagicMock(side_effect=Exception("ch timeout"))
+        result = await query_evaluations_summary(client, DB, TENANT)
+        assert result["data"] == []
+        assert result.get("error") == "data_unavailable"
+
+
+# ── Arc 7c — pool-scoped visibility ───────────────────────────────────────────
+
+class TestApplyPoolScope:
+    """Unit tests for the _apply_pool_scope helper (pure, no async)."""
+
+    def test_none_pools_noop_returns_true(self):
+        conditions: list = ["tenant_id = 'x'"]
+        result = _apply_pool_scope(conditions, None)
+        assert result is True
+        assert len(conditions) == 1   # no extra condition added
+
+    def test_empty_list_returns_false(self):
+        conditions: list = ["tenant_id = 'x'"]
+        result = _apply_pool_scope(conditions, [])
+        assert result is False
+        assert len(conditions) == 1   # no condition added (caller short-circuits)
+
+    def test_single_pool_appends_in_clause(self):
+        conditions: list = []
+        _apply_pool_scope(conditions, ["pool_sac"])
+        assert len(conditions) == 1
+        assert "pool_id IN ('pool_sac')" in conditions[0]
+
+    def test_multiple_pools_joined_correctly(self):
+        conditions: list = []
+        _apply_pool_scope(conditions, ["sac", "retencao", "billing"])
+        clause = conditions[0]
+        assert "pool_id IN" in clause
+        assert "'sac'" in clause
+        assert "'retencao'" in clause
+        assert "'billing'" in clause
+
+
+class TestPoolScopedSessionsReport:
+    """Arc 7c — accessible_pools filtering in query_sessions_report."""
+
+    _COLS = ["session_id", "tenant_id", "channel", "pool_id",
+             "opened_at", "closed_at", "close_reason", "outcome",
+             "wait_time_ms", "handle_time_ms"]
+
+    def _count_result(self, n: int) -> MagicMock:
+        return _ch_result(["count()"], [[n]])
+
+    async def test_none_accessible_pools_passes_through(self):
+        """accessible_pools=None (unrestricted) — ClickHouse is still called."""
+        client = _make_client(
+            self._count_result(5),
+            _ch_result(self._COLS, []),
+        )
+        result = await query_sessions_report(
+            client, DB, TENANT, accessible_pools=None
+        )
+        assert result["meta"]["total"] == 5
+        assert client.query.call_count == 2   # count + data
+
+    async def test_empty_accessible_pools_short_circuits(self):
+        """accessible_pools=[] (no access) — ClickHouse never called."""
+        client = MagicMock()
+        result = await query_sessions_report(
+            client, DB, TENANT, accessible_pools=[]
+        )
+        assert result["data"] == []
+        assert result["meta"]["total"] == 0
+        client.query.assert_not_called()
+
+    async def test_pool_list_injects_in_clause(self):
+        """accessible_pools=['sac'] — WHERE clause contains pool_id IN (...)."""
+        client = _make_client(
+            self._count_result(2),
+            _ch_result(self._COLS, []),
+        )
+        await query_sessions_report(
+            client, DB, TENANT, accessible_pools=["sac"]
+        )
+        # Both calls (count + data) should contain the IN clause
+        for call in client.query.call_args_list:
+            sql = call[0][0]
+            assert "pool_id IN ('sac')" in sql
+
+
+class TestPoolScopedAgentsReport:
+    """Arc 7c — accessible_pools short-circuit in query_agents_report."""
+
+    async def test_empty_pools_returns_empty_without_ch_call(self):
+        client = MagicMock()
+        result = await query_agents_report(client, DB, TENANT, accessible_pools=[])
+        assert result["data"] == []
+        client.query.assert_not_called()
+
+    async def test_pools_list_filters_agent_events(self):
+        cols = ["event_id", "tenant_id", "session_id", "agent_type_id", "pool_id",
+                "instance_id", "event_type", "outcome", "handoff_reason",
+                "handle_time_ms", "routing_mode", "timestamp"]
+        client = _make_client(
+            _ch_result(["count()"], [[0]]),
+            _ch_result(cols, []),
+        )
+        await query_agents_report(client, DB, TENANT, accessible_pools=["retencao"])
+        for call in client.query.call_args_list:
+            assert "pool_id IN ('retencao')" in call[0][0]
+
+
+class TestPoolPrincipalAuth:
+    """Unit tests for pool_auth.PoolPrincipal and optional_pool_principal."""
+
+    def test_is_unrestricted_when_none(self):
+        from ..pool_auth import PoolPrincipal
+        p = PoolPrincipal(accessible_pools=None, tenant_id="t", sub="u")
+        assert p.is_unrestricted is True
+
+    def test_is_not_unrestricted_when_list(self):
+        from ..pool_auth import PoolPrincipal
+        p = PoolPrincipal(accessible_pools=["pool_a"], tenant_id="t", sub="u")
+        assert p.is_unrestricted is False
+
+    async def test_open_access_returns_unrestricted(self):
+        from unittest.mock import patch
+        from ..pool_auth import optional_pool_principal
+        with patch("plughub_analytics_api.pool_auth.get_settings") as m:
+            m.return_value.analytics_open_access = True
+            m.return_value.auth_jwt_secret = "secret"
+            principal = await optional_pool_principal(credentials=None)
+        assert principal.accessible_pools is None
+
+    async def test_no_secret_returns_unrestricted(self):
+        from unittest.mock import patch
+        from ..pool_auth import optional_pool_principal
+        with patch("plughub_analytics_api.pool_auth.get_settings") as m:
+            m.return_value.analytics_open_access = False
+            m.return_value.auth_jwt_secret = ""
+            principal = await optional_pool_principal(credentials=None)
+        assert principal.accessible_pools is None
+
+    async def test_no_token_returns_unrestricted(self):
+        from unittest.mock import patch
+        from ..pool_auth import optional_pool_principal
+        with patch("plughub_analytics_api.pool_auth.get_settings") as m:
+            m.return_value.analytics_open_access = False
+            m.return_value.auth_jwt_secret = "mysecret"
+            principal = await optional_pool_principal(credentials=None)
+        assert principal.accessible_pools is None
+
+    async def test_valid_jwt_empty_pools_returns_unrestricted(self):
+        """JWT with accessible_pools=[] means all pools (admin convention)."""
+        import jwt as pyjwt
+        from unittest.mock import MagicMock, patch
+        from ..pool_auth import optional_pool_principal
+        secret = "testsecret"
+        token = pyjwt.encode(
+            {"sub": "u1", "tenant_id": "t1", "accessible_pools": []},
+            secret, algorithm="HS256",
+        )
+        creds = MagicMock()
+        creds.credentials = token
+        with patch("plughub_analytics_api.pool_auth.get_settings") as m:
+            m.return_value.analytics_open_access = False
+            m.return_value.auth_jwt_secret = secret
+            principal = await optional_pool_principal(credentials=creds)
+        assert principal.accessible_pools is None   # [] → all pools
+
+    async def test_valid_jwt_with_pools_restricts(self):
+        import jwt as pyjwt
+        from unittest.mock import MagicMock, patch
+        from ..pool_auth import optional_pool_principal
+        secret = "testsecret"
+        token = pyjwt.encode(
+            {"sub": "u2", "tenant_id": "t1", "accessible_pools": ["sac", "retencao"]},
+            secret, algorithm="HS256",
+        )
+        creds = MagicMock()
+        creds.credentials = token
+        with patch("plughub_analytics_api.pool_auth.get_settings") as m:
+            m.return_value.analytics_open_access = False
+            m.return_value.auth_jwt_secret = secret
+            principal = await optional_pool_principal(credentials=creds)
+        assert principal.accessible_pools == ["sac", "retencao"]
+
+    async def test_invalid_jwt_raises_401(self):
+        from unittest.mock import MagicMock, patch
+        from fastapi import HTTPException
+        from ..pool_auth import optional_pool_principal
+        creds = MagicMock()
+        creds.credentials = "not.a.valid.jwt"
+        with patch("plughub_analytics_api.pool_auth.get_settings") as m:
+            m.return_value.analytics_open_access = False
+            m.return_value.auth_jwt_secret = "secret"
+            with pytest.raises(HTTPException) as exc_info:
+                await optional_pool_principal(credentials=creds)
+        assert exc_info.value.status_code == 401

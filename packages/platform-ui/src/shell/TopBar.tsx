@@ -10,8 +10,8 @@ const TopBar: React.FC = () => {
   const { session, logout } = useAuth()
   const { t, i18n } = useTranslation('shell')
 
-  const handleLogout = () => {
-    logout()
+  const handleLogout = async () => {
+    await logout()
     navigate('/login')
   }
 
@@ -40,7 +40,7 @@ const TopBar: React.FC = () => {
             <div className="flex items-center gap-2">
               <div className="text-right">
                 <p className="text-sm font-semibold text-dark">{session.name}</p>
-                <p className="text-xs text-gray">{session.userId}</p>
+                <p className="text-xs text-gray">{session.email}</p>
               </div>
               <Badge variant="default">{session.role}</Badge>
             </div>

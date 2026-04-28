@@ -12,12 +12,22 @@ class Settings(BaseSettings):
 
     # Kafka topics
     evaluation_topic: str = "evaluation.events"
+    workflow_events_topic: str = "workflow.events"
 
     # Calendar API (for business-hours deadline calculation)
     calendar_api_url: str = "http://localhost:3700"
 
     # Session Replayer (to fetch ReplayContext)
     session_replayer_url: str = "http://localhost:3300"  # mcp-server-plughub
+
+    # Workflow API (Arc 4 — review/contestation state machine)
+    workflow_api_url: str = "http://localhost:3800"
+
+    # JWT secret for reviewer/contestation identity (HS256)
+    jwt_secret: str = "changeme_evaluation_jwt_secret"
+
+    # ContextStore TTL for evaluation workflow fields (7 days — longer than session TTL)
+    workflow_context_ttl_s: int = 604800
 
     # Sampling defaults
     default_sample_rate: float = 0.1   # 10% of sessions

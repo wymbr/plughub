@@ -33,6 +33,8 @@ export interface EvaluationDeps {
   proxyUrl:    string
   /** URL do Skill Registry para carregar evaluation skills */
   skillRegistryUrl: string
+  /** URL da evaluation-api para evaluation_lock (Arc 6 v2) */
+  evaluationApiUrl?: string
 }
 
 // ─── Schemas de input ─────────────────────────────────────────────────────────
@@ -519,8 +521,17 @@ const EvaluationSubmitInputSchema = z.object({
 
 // ─── Registro das tools ───────────────────────────────────────────────────────
 
+// ─── Schemas — evaluation_lock ────────────────────────────────────────────────
+
+const EvaluationLockInputSchema = z.object({
+  result_id:   z.string().min(1).describe("ID of the EvaluationResult to lock"),
+  lock_reason: z.enum(["review_timeout", "max_rounds_reached", "manual"])
+                .default("review_timeout")
+                .describe("Reason the result is being locked permanently"),
+})
+
 export function registerEvaluationTools(server: McpServer, deps: EvaluationDeps): void {
-  const { kafka, postgres, redis, proxyUrl, skillRegistryUrl } = deps
+  const { kafka, postgres, redis, proxyUrl, skillRegistryUrl, evaluationApiUrl } = deps
 
   // ── transcript_get ────────────────────────────────────────────────────────
   server.tool(
@@ -1027,6 +1038,46 @@ export function registerEvaluationTools(server: McpServer, deps: EvaluationDeps)
           knowledge_snippets_included:  (knowledge_snippets?.length ?? 0) > 0,
           instance_lifecycle_published: resolved_instance_id !== undefined,
         })
+      } catch (e) {
+        return handleCaughtError(e)
+      }
+    }
+  )
+
+  // ── evaluation_lock (Arc 6 v2) ────────────────────────────────────────────
+  // Called by the `congelar_resultado` step in review workflow YAMLs.
+  // Permanently locks an EvaluationResult — no further review or contestation actions possible.
+  server.tool(
+    "evaluation_lock",
+    "Congela permanentemente um EvaluationResult. " +
+    "Chamado pelo step congelar_resultado nos workflows de revisão (skill_revisao_*.yaml). " +
+    "Após lock, eval_status='locked' é irreversível — ações de revisão ou contestação retornam 409. " +
+    "Arc 6 v2.",
+    EvaluationLockInputSchema.shape as any,
+    async (input: Record<string, unknown>) => {
+      try {
+        const { result_id, lock_reason } = EvaluationLockInputSchema.parse(input)
+
+        const apiBase = evaluationApiUrl ?? "http://localhost:3400"
+
+        const resp = await fetch(`${apiBase}/v1/evaluation/results/${result_id}/lock`, {
+          method:  "POST",
+          headers: { "content-type": "application/json" },
+          body:    JSON.stringify({ locked_by: "workflow", lock_reason }),
+        })
+
+        if (resp.status === 409) {
+          // Already locked — idempotent, treat as success
+          return ok({ result_id, locked: true, already_locked: true, lock_reason })
+        }
+
+        if (!resp.ok) {
+          const text = await resp.text().catch(() => "")
+          return mcpError("lock_failed", `evaluation-api returned ${resp.status}: ${text}`)
+        }
+
+        const data = await resp.json() as Record<string, unknown>
+        return ok({ result_id, locked: true, lock_reason, eval_status: data["eval_status"] })
       } catch (e) {
         return handleCaughtError(e)
       }

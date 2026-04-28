@@ -57,9 +57,11 @@ TIER_SCORE = TIER_BASE_PRIORITY
 # ─────────────────────────────────────────────
 
 def score_resource(
-    contact:   ConversationInboundEvent,
-    resource:  AgentInstance,
-    pool:      PoolConfig,
+    contact:                 ConversationInboundEvent,
+    resource:                AgentInstance,
+    pool:                    PoolConfig,
+    performance_score:       float = 0.5,
+    performance_score_weight: float = 0.0,
 ) -> float:
     """
     Calculates contact × resource compatibility.
@@ -70,30 +72,57 @@ def score_resource(
 
     Returns -1.0 if resource is incompatible (hard filter).
     Returns float [0.0, 1.0] if compatible.
+
+    Arc 7d — performance blending (optional):
+      When performance_score_weight > 0.0, the final score blends historical
+      agent performance with the competency score:
+
+        final = (1 - w) × competency_score + w × performance_score
+
+      w = performance_score_weight (0.0–1.0)
+        0.0 = pure competency (default — backward-compatible, no Redis reads)
+        0.3 = 70% competency + 30% historical performance (recommended in prod)
+
+      performance_score: float [0.0, 1.0] — fetched from Redis by the caller.
+        0.5 = neutral default (no data yet → no bias).
+
+      Hard filter (-1.0) is preserved regardless of performance_score.
     """
     weights = pool.competency_weights
     if not weights:
-        return 1.0  # pool with no requirements → any resource qualifies
+        # Pool with no requirements → any resource qualifies.
+        # Still apply performance blending if requested.
+        competency_score = 1.0
+    else:
+        total_weight     = sum(weights.values())
+        competency_score = 0.0
 
-    total_weight     = sum(weights.values())
-    competency_score = 0.0
+        for key, weight in weights.items():
+            resource_level  = resource.profile.get(key, 0)
+            required_level  = contact.requirements.get(key, 0)
 
-    for key, weight in weights.items():
-        resource_level  = resource.profile.get(key, 0)
-        required_level  = contact.requirements.get(key, 0)
+            if required_level == 0:
+                # Contact does not require this competency → maximum score
+                competency_score += weight * 1.0
+            elif resource_level == 0:
+                # Resource lacks required competency → hard filter
+                return -1.0
+            else:
+                # Proportional score — resource with level ≥ required scores 1.0
+                match = min(resource_level / max(required_level, 1), 1.0)
+                competency_score += weight * match
 
-        if required_level == 0:
-            # Contact does not require this competency → maximum score
-            competency_score += weight * 1.0
-        elif resource_level == 0:
-            # Resource lacks required competency → eliminate
-            return -1.0
-        else:
-            # Proportional score — resource with level ≥ required scores 1.0
-            match = min(resource_level / max(required_level, 1), 1.0)
-            competency_score += weight * match
+        competency_score = competency_score / max(total_weight, 1)
 
-    return round(competency_score / max(total_weight, 1), 4)
+    # Arc 7d — blend in historical performance when weight > 0
+    if performance_score_weight > 0.0:
+        w = min(max(performance_score_weight, 0.0), 1.0)
+        p = min(max(performance_score, 0.0), 1.0)
+        final = (1.0 - w) * competency_score + w * p
+    else:
+        final = competency_score
+
+    return round(final, 4)
 
 
 def instance_has_capacity(instance: AgentInstance) -> bool:

@@ -207,6 +207,7 @@ plughub/
 | skill-flow-worker | TypeScript | Node 20+ | Kafka consumer + SkillFlowEngine bridge |
 | channel-gateway | Python | Python 3.11+ | FastAPI + aiokafka + channel adapters |
 | pricing-api | Python | Python 3.11+ | FastAPI + asyncpg + openpyxl — port 3900 |
+| auth-api | Python | Python 3.11+ | FastAPI + asyncpg + bcrypt + python-jose — port 3200 |
 
 ## Package dependencies
 
@@ -220,6 +221,7 @@ agent-registry  ← depends on: schemas
 routing-engine  ← depends on: schemas, agent-registry
 rules-engine    ← depends on: schemas, routing-engine
 channel-gateway ← depends on: schemas   (no dependency on skill-flow or ai-gateway)
+auth-api        ← no internal dependencies (standalone user store)
 ```
 
 Never create circular dependencies. `schemas` never depends on any other package.
@@ -790,6 +792,7 @@ adapter. Skill Flow always receives a single normalised `interaction_result`.
 | `queue.position_updated` | Routing Engine | Channel Gateway, Analytics |
 | `mcp.audit` | McpInterceptor / proxy sidecar | Analytics, LGPD |
 | `sentiment.updated` | AI Gateway (`sentiment_emitter.py`) | analytics-api (Arc 3) |
+| `evaluation.events` | evaluation-api | analytics-api → ClickHouse `evaluation_results` + `evaluation_events` (Arc 6) |
 
 ## Kafka event schemas — Zod coverage
 
@@ -822,6 +825,7 @@ This enables compile-time validation and IDE autocomplete for producers and cons
 | `usage.events` | `UsageEventSchema` | `usage.ts` (existing) |
 | `conversations.participants` | `ConversationParticipantEventSchema` | `contact-segment.ts` (existing) |
 | `mcp.audit` | `AuditRecordSchema` | `audit.ts` (existing) |
+| `evaluation.events` | `EvaluationEventSchema` | `evaluation.ts` (Arc 6) |
 
 ### Topic name discrepancy note
 
@@ -1208,7 +1212,7 @@ Sem `unit_price_cents` ou `plan_id` — esses campos pertencem ao módulo de pri
 
 - Publicação de `usage.events` no Channel Gateway (voice, WhatsApp, SMS)
 - Módulo de pricing: lê contadores + aplica planos + escreve `{t}:quota:limit:*`
-- `usage.cycle_reset` — reset mensal de contadores
+- ~~`usage.cycle_reset` — reset mensal de contadores~~ ✅ `cycle_reset.py` + consumer `usage.cycle_reset` topic + `POST /admin/cycle-reset` (HTTP admin FastAPI — porta 3950)
 
 ## WebChat Channel — hybrid stream model
 
@@ -1833,9 +1837,9 @@ Route: `/config/platform` (role: `admin`), tab ⚙️ Configuração. No new rou
 
 Build: **513 kB JS / 150 kB gzip** (0 TypeScript errors).
 
-### Legacy standalone apps (frozen — migration planned)
+### Legacy standalone apps — ✅ migração completa, pacotes removidos
 
-- `packages/operator-console/` (port 5173) — 12 panels, no design system → migrating to platform-ui
+- `packages/operator-console/` — ✅ **Removido** (diretório deletado; docker-compose atualizado). Todos os 12 painéis migrados para `platform-ui`:
   - ✅ ChannelPanel → `config-recursos/ChannelsPage.tsx`
   - ✅ HumanAgentPanel → `config-recursos/HumanAgentsPage.tsx`
   - ✅ PricingPanel → `modules/billing/BillingPage.tsx`
@@ -1845,7 +1849,6 @@ Build: **513 kB JS / 150 kB gzip** (0 TypeScript errors).
   - ✅ CampaignPanel → `modules/campaigns/CampaignsPage.tsx` (task #170)
   - ✅ ConfigPanel → `modules/config-plataforma/components/NamespaceEditor.tsx` (task #171 — merged into existing ConfigPlataformaPage at `/config/platform`)
 - `packages/agent-assist-ui/` (port 5175) — chat + right panel → ✅ migrated to `modules/agent-assist/AgentAssistPage.tsx` (task #172)
-- Migration plan: `docs/standards/operator-console-migration.md`
 
 ### What never to do
 
@@ -1853,6 +1856,388 @@ Build: **513 kB JS / 150 kB gzip** (0 TypeScript errors).
 - Never use inline hex colors — use Tailwind tokens (`text-primary`, `bg-secondary`)
 - Never write custom CSS when a Tailwind class exists
 - Never create a NavItem without `roles` filter
+
+## Arc 7 — Autenticação Real, Permissões e Roteamento por Performance
+
+### Arc 7a — auth-api (✅ implementado)
+
+Usuários reais, JWT HS256, session lifecycle com refresh token rotation.
+Substitui o modelo de `x-tenant-id`/`x-user-id` como headers livres.
+
+**Pacote:** `packages/auth-api/` — Python FastAPI, porta 3200.
+
+#### PostgreSQL schema (schema `auth`)
+
+```sql
+CREATE TABLE auth.users (
+    id               UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id        TEXT NOT NULL,
+    email            TEXT NOT NULL,
+    name             TEXT NOT NULL DEFAULT '',
+    password_hash    TEXT NOT NULL,   -- bcrypt rounds=12
+    roles            TEXT[] NOT NULL DEFAULT '{}',
+    accessible_pools TEXT[] NOT NULL DEFAULT '{}',  -- [] = todos os pools
+    active           BOOL NOT NULL DEFAULT TRUE,
+    created_at, updated_at TIMESTAMPTZ,
+    UNIQUE (tenant_id, email)
+);
+
+CREATE TABLE auth.sessions (
+    id                 UUID PRIMARY KEY,
+    user_id            UUID REFERENCES auth.users(id) ON DELETE CASCADE,
+    tenant_id          TEXT NOT NULL,
+    refresh_token_hash TEXT NOT NULL UNIQUE,  -- SHA-256(plain_token)
+    expires_at         TIMESTAMPTZ NOT NULL,
+    last_used_at       TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+```
+
+#### JWT claims (access token — HS256, TTL 1h)
+
+```json
+{
+  "sub":              "user-uuid",
+  "tenant_id":        "tenant_demo",
+  "email":            "user@example.com",
+  "name":             "User Name",
+  "roles":            ["operator", "supervisor"],
+  "accessible_pools": ["retencao_humano", "sac"],
+  "exp": ..., "iat": ...
+}
+```
+
+`accessible_pools: []` significa acesso a todos os pools (usuário admin/developer).
+
+#### Refresh token
+
+Token opaco de 43 chars URL-safe (~258 bits de entropia). Armazenado como SHA-256 em `auth.sessions` — plain token nunca persisted. Rotation automática em cada `POST /auth/refresh` (novo par emitido, hash antigo substituído atomicamente).
+
+#### Endpoints
+
+| Método | Rota | Auth | Descrição |
+|---|---|---|---|
+| `POST` | `/auth/login` | — | Login email+senha → access_token + refresh_token |
+| `POST` | `/auth/refresh` | body refresh_token | Rotation → novo par |
+| `POST` | `/auth/logout` | body refresh_token | Invalida refresh_token (idempotente) |
+| `GET` | `/auth/me` | Bearer | Claims do access token |
+| `GET` | `/auth/users` | X-Admin-Token | Lista usuários do tenant |
+| `POST` | `/auth/users` | X-Admin-Token | Cria usuário |
+| `GET` | `/auth/users/{id}` | X-Admin-Token | Detalhe do usuário |
+| `PATCH` | `/auth/users/{id}` | X-Admin-Token | Atualiza usuário (name, password, roles, accessible_pools, active) |
+| `DELETE` | `/auth/users/{id}` | X-Admin-Token | Remove usuário |
+| `GET` | `/health` | — | Healthcheck |
+
+#### Seed automático
+
+Ao iniciar, `seed_admin_if_absent()` cria o usuário admin configurado via env vars se não existir. Idempotente — sem erro em re-inicializações.
+
+#### Variáveis de ambiente (prefixo `PLUGHUB_AUTH_`)
+
+| Var | Default | Descrição |
+|---|---|---|
+| `DATABASE_URL` | `postgresql://plughub:plughub@postgres:5432/plughub` | DSN PostgreSQL |
+| `JWT_SECRET` | `changeme_auth_jwt_secret_at_least_32_chars` | Segredo HS256 |
+| `JWT_ALGORITHM` | `HS256` | Algoritmo JWT |
+| `ACCESS_TOKEN_EXPIRE_MINUTES` | `60` | TTL do access token |
+| `REFRESH_TOKEN_EXPIRE_DAYS` | `7` | TTL do refresh token |
+| `ADMIN_TOKEN` | `""` | Token admin (vazio = sem auth em dev) |
+| `SEED_ADMIN_EMAIL` | `admin@plughub.local` | Email do admin seed |
+| `SEED_ADMIN_PASSWORD` | `changeme_admin` | Senha do admin seed |
+| `SEED_TENANT_ID` | `tenant_demo` | Tenant do admin seed |
+
+#### Arquivos
+
+| Arquivo | Responsabilidade |
+|---|---|
+| `config.py` | Settings com prefixo `PLUGHUB_AUTH_` |
+| `password.py` | `hash_password()`, `verify_password()` — bcrypt rounds=12 |
+| `jwt_utils.py` | `create_access_token()`, `decode_access_token()`, `generate_refresh_token()`, `hash_refresh_token()` |
+| `models.py` | Pydantic: LoginRequest, RefreshRequest, LogoutRequest, CreateUserRequest, UpdateUserRequest, TokenResponse, UserResponse, MeResponse |
+| `db.py` | DDL + CRUD asyncpg: `ensure_schema`, `create_user`, `get_user_by_email`, `get_user_by_id`, `list_users`, `update_user`, `delete_user`, `create_session`, `get_session_by_token_hash`, `rotate_session`, `delete_session`, `seed_admin_if_absent` |
+| `router.py` | FastAPI routes — login/refresh/logout/me + CRUD admin |
+| `main.py` | FastAPI app + lifespan asyncpg pool + seed |
+| `tests/test_router.py` | **58/58 testes** — TestHealth, TestLogin (4), TestRefresh (3), TestLogout (2), TestMe (3), TestCreateUser (3), TestListUsers (1), TestGetUser (2), TestUpdateUser (2), TestDeleteUser (2), TestSeedAdmin (2), TestPasswordUtils (3), TestJwtUtils (3), TestHashRefreshToken (3), TestGrantPermission (3), TestListPermissions (2), TestRevokePermission (2), TestResolvePermission (3), TestTemplates (6), TestApplyTemplate (2), TestResolvePermissionsLogic (6) |
+
+### Arc 7b — platform_permissions (✅ implementado)
+
+Generaliza `evaluation_permissions` para todo o sistema. Implementado em `packages/auth-api/`.
+
+#### PostgreSQL schema (schema `auth`)
+
+```sql
+-- Permissão explícita: uma linha por (user_id, module, action, scope_type, scope_id)
+CREATE TABLE auth.platform_permissions (
+    id          UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id   TEXT        NOT NULL,
+    user_id     TEXT        NOT NULL,
+    module      TEXT        NOT NULL,   -- analytics | evaluation | billing | config | registry | skill_flows | campaigns | workflows | *
+    action      TEXT        NOT NULL,   -- view | edit | admin | *
+    scope_type  TEXT        NOT NULL CHECK (scope_type IN ('pool', 'global')),
+    scope_id    TEXT,                   -- pool_id for scope_type='pool'; NULL for global
+    granted_by  TEXT        NOT NULL DEFAULT 'system',
+    template_id UUID,                   -- FK para permission_templates (auditoria)
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (tenant_id, user_id, module, action, scope_type, COALESCE(scope_id, ''))
+);
+
+-- Template nomeado de permissões (conjunto reutilizável)
+CREATE TABLE auth.permission_templates (
+    id          UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id   TEXT        NOT NULL,
+    name        TEXT        NOT NULL,
+    description TEXT        NOT NULL DEFAULT '',
+    permissions JSONB       NOT NULL DEFAULT '[]',   -- list[{module, action, scope_type, scope_id}]
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (tenant_id, name)
+);
+```
+
+#### Domínios válidos
+
+| Campo | Valores |
+|---|---|
+| `module` | `analytics`, `evaluation`, `billing`, `config`, `registry`, `skill_flows`, `campaigns`, `workflows`, `*` |
+| `action` | `view`, `edit`, `admin`, `*` |
+| `scope_type` | `pool` (scope_id = pool_id), `global` (scope_id = NULL) |
+
+Curingas: `module='*'` ou `action='*'` batem em qualquer valor pedido.
+
+#### Endpoints (X-Admin-Token)
+
+| Método | Rota | Descrição |
+|---|---|---|
+| `POST` | `/auth/permissions` | Concede permissão (upsert idempotente) |
+| `GET` | `/auth/permissions?tenant_id=&user_id=&module=` | Lista permissões com filtros |
+| `DELETE` | `/auth/permissions/{id}` | Revoga permissão |
+| `GET` | `/auth/permissions/resolve?tenant_id=&user_id=&module=&action=&pool_id=` | Resolve se usuário tem permissão (sem admin token) |
+| `POST` | `/auth/templates` | Cria template |
+| `GET` | `/auth/templates?tenant_id=` | Lista templates |
+| `GET` | `/auth/templates/{id}` | Detalhe do template |
+| `PATCH` | `/auth/templates/{id}` | Atualiza template |
+| `DELETE` | `/auth/templates/{id}` | Remove template |
+| `POST` | `/auth/templates/{id}/apply` | Materializa permissões do template para um usuário |
+
+#### Funções principais (`permissions.py`)
+
+```python
+grant_permission(...)       → dict   # ON CONFLICT DO UPDATE (idempotente)
+revoke_permission(...)      → bool
+list_permissions(...)       → list[dict]   # filtros: tenant_id, user_id, module
+resolve_permissions(...)    → bool   # global scope primeiro, depois pool scope
+get_accessible_pools_for_module(...)  → list[str] | None
+# None = acesso global (todos os pools); [] = sem acesso; [...] = pools específicos
+
+apply_template(pool, template_id, tenant_id, user_id, granted_by, scope_override=None)
+# Materializa template → platform_permissions (sem lookup em cadeia no runtime)
+# scope_override: {"scope_type": "pool", "scope_id": "pool_sac"} para restringir ao bind
+```
+
+#### Resolução de permissão
+
+```
+resolve_permissions(tenant_id, user_id, module, action, pool_id=None):
+  1. Busca linhas WHERE (module=$m OR module='*') AND (action=$a OR action='*')
+  2. scope_type='global'                     → True
+  3. scope_type='pool' AND scope_id=$pool_id → True (se pool_id fornecido)
+  4. Nenhuma match                           → False
+```
+
+#### Arquivos
+
+| Arquivo | Responsabilidade |
+|---|---|
+| `permissions.py` | DDL + CRUD: `ensure_permissions_schema`, grant/revoke/list/resolve, templates CRUD + apply |
+| `router.py` | Endpoints de permissão e template adicionados ao router existente |
+| `models.py` | `GrantPermissionRequest`, `PermissionResponse`, `PermissionEntry`, `CreateTemplateRequest`, `UpdateTemplateRequest`, `TemplateResponse`, `ApplyTemplateRequest`, `ResolvePermissionResponse` |
+
+### Arc 7c — visibilidade por pool em analytics (✅ implementado)
+
+JWT carrega `accessible_pools[]`. analytics-api injeta `WHERE pool_id IN (...)` nas queries ClickHouse. Row-level security sem subselects — whitelist de pool_ids vem diretamente do JWT.
+
+#### Arquivos novos / modificados
+
+| Arquivo | Alteração |
+|---|---|
+| `analytics-api/config.py` | Campo `auth_jwt_secret: str = ""` — segredo HS256 do auth-api (deve coincidir com `PLUGHUB_AUTH_JWT_SECRET`) |
+| `analytics-api/pool_auth.py` | **NOVO** — `PoolPrincipal` + `optional_pool_principal` FastAPI dependency |
+| `analytics-api/reports_query.py` | `_apply_pool_scope()` helper; parâmetro `accessible_pools: list[str] | None` em 6 funções: sessions, agents, quality, participation, segments, agent_performance |
+| `analytics-api/reports.py` | `Depends(optional_pool_principal)` em 6 endpoints; `accessible_pools` propagado para query helpers |
+
+#### PoolPrincipal — semântica de acessível
+
+```python
+accessible_pools = None    # acesso irrestrito — todos os pools
+accessible_pools = [...]   # restrito a esses pool_ids (JWT com lista de pools)
+```
+
+#### optional_pool_principal — comportamento por cenário
+
+| Cenário | Resultado |
+|---|---|
+| `analytics_open_access=True` OU `auth_jwt_secret=""` | `accessible_pools=None` (sem restrição) |
+| Sem header Authorization | `accessible_pools=None` (backward-compatible) |
+| JWT válido, `accessible_pools=[]` | `accessible_pools=None` (convenção auth-api: `[]` = todos os pools) |
+| JWT válido, `accessible_pools=["sac","retencao"]` | `accessible_pools=["sac","retencao"]` |
+| JWT inválido/expirado | HTTP 401 |
+
+#### `_apply_pool_scope` — aplicado nas queries
+
+Quando `accessible_pools` é uma lista não-vazia, injeta:
+```sql
+AND pool_id IN ('pool_sac', 'pool_retencao')
+```
+Quando `accessible_pools=[]` (lista vazia), o caller retorna `{"data": [], "meta": {total: 0}}` sem chamar o ClickHouse (short-circuit).
+
+#### Env var
+
+```
+PLUGHUB_ANALYTICS_AUTH_JWT_SECRET=<mesmo valor que PLUGHUB_AUTH_JWT_SECRET>
+```
+
+Quando vazia (default), pool scoping é desabilitado (todos os pools visíveis).
+
+#### Endpoints com pool scoping
+
+`GET /reports/sessions`, `/reports/agents`, `/reports/quality`, `/reports/participation`, `/reports/segments`, `/reports/agents/performance`
+
+Os endpoints que não têm dimensão `pool_id` (`/reports/usage`, `/reports/workflows`, `/reports/campaigns`, `/reports/evaluations`) não foram modificados.
+
+#### Testes
+
+`analytics-api/tests/test_reports.py` — 63/63 passando. Classes novas Arc 7c:
+- `TestApplyPoolScope` (4) — helper puro: None noop, lista vazia retorna False, IN clause gerado corretamente
+- `TestPoolScopedSessionsReport` (3) — None passa, vazia short-circuits, lista injeta IN clause no SQL
+- `TestPoolScopedAgentsReport` (2) — idem para agent_events
+- `TestPoolPrincipalAuth` (9) — open_access, sem secret, sem token, JWT []→None, JWT lista→restrito, JWT inválido→401
+
+### Arc 7d — roteamento por performance (✅ implementado)
+
+Batch job lê `mv_agent_performance_daily` (ClickHouse) e escreve scores normalizados em Redis.
+`score_resource()` no routing-engine blenda competência com performance histórica com peso configurável.
+
+#### Score formula
+
+```
+performance_score = resolution_rate × (1 − min(escalation_rate, 1.0))
+```
+
+Resultado em [0.0, 1.0]. Recompensa alta taxa de resolução, penaliza escalação.
+
+#### Blending no score_resource()
+
+```
+final = (1 − w) × competency_score + w × performance_score
+
+w = performance_score_weight (0.0–1.0)
+  0.0 = puro competency (padrão — backward-compatible, sem Redis reads)
+  0.3 = 70% competência + 30% performance histórica (recomendado em produção)
+```
+
+Hard filter (-1.0) é preservado independente do performance_score.
+Quando sem dados (novo agent, primeiros 7 dias), `performance_score = 0.5` (neutro — sem viés).
+
+#### Redis key pattern
+
+```
+{tenant_id}:agent_perf:{agent_type_id}
+  Value: str(float) in [0.0, 1.0]
+  TTL:   21600s (6h) — renovado a cada sync (5 min)
+```
+
+#### Configuração
+
+```
+PLUGHUB_PERFORMANCE_SCORE_WEIGHT=0.3    # env var no routing-engine
+```
+
+Ou via Config API namespace `routing` key `performance_score_weight` (editável por tenant no Operator Console).
+
+#### Componentes implementados
+
+| Arquivo | Responsabilidade |
+|---|---|
+| `analytics-api/performance_job.py` | `compute_performance_score()`, `run_performance_sync()`, `run_performance_job_loop()` — batch job query + Redis write |
+| `analytics-api/main.py` | Inicializa `perf_task` background em lifespan; `POST /admin/performance-sync` para trigger manual |
+| `routing-engine/registry.py` | `_agent_perf_key()` helper; `InstanceRegistry.get_agent_performance_score()` — lê Redis com fallback 0.5 |
+| `routing-engine/scorer.py` | `score_resource()` estendida com `performance_score` + `performance_score_weight` params |
+| `routing-engine/router.py` | `_allocate()` lê `perf_weight` de settings; busca score via `get_agent_performance_score()` quando weight > 0 |
+| `routing-engine/config.py` | `performance_score_weight: float = 0.0` (env `PLUGHUB_PERFORMANCE_SCORE_WEIGHT`) |
+| `config-api/seed.py` | Seed entry `routing.performance_score_weight = 0.0` com descrição |
+
+#### Parâmetros do batch job
+
+| Constante | Valor | Descrição |
+|---|---|---|
+| `PERF_KEY_TTL` | 21600s (6h) | TTL das chaves Redis de performance |
+| `LOOKBACK_DAYS` | 7 | Janela de lookback no ClickHouse |
+| `MIN_SESSIONS` | 5 | Mínimo de sessões para significância estatística |
+| Intervalo do loop | 300s (5 min) | Frequência de sync performance → Redis |
+
+#### Tests
+
+- `analytics-api/tests/test_performance_job.py` — 12 assertions: `TestComputePerformanceScore` (6 — fórmula, edge cases), `TestRunPerformanceSync` (6 — Redis write, key format, TTL, CH error, Redis error)
+- `routing-engine/tests/test_scorer.py`: `TestResourceScorerPerformanceBlending` (6 assertions — zero weight backward-compat, high perf boost, low perf penalty, hard filter preserved, neutral default no-bias, no-requirements pool blending)
+
+### Platform-UI — integração real com auth-api (✅ implementado)
+
+A platform-ui foi integrada ao auth-api real (porta 3200), substituindo o formulário mock por autenticação JWT completa.
+
+#### Token storage strategy
+
+| Token | Localização | Motivo |
+|---|---|---|
+| `access_token` | Memória (React state) | Não persiste entre reloads — re-obtido via refresh silencioso |
+| `refresh_token` | `localStorage('plughub_refresh_token')` | Sobrevive reload — base para silent re-auth |
+| Metadados (name, role, tenant) | `localStorage('plughub_session_meta')` | Persiste sem expor token |
+
+#### Arquivos modificados/criados
+
+| Arquivo | Descrição |
+|---|---|
+| `src/api/auth.ts` (NOVO) | `apiLogin`, `apiRefresh`, `apiLogout` — client HTTP para auth-api; `AuthApiError` com status HTTP |
+| `src/auth/AuthContext.tsx` | Reescrito: JWT flow real, auto-refresh (60s antes da expiração), silent re-auth no mount |
+| `src/auth/LoginPage.tsx` | Reescrito: email + password reais, tratamento de erros por status HTTP (401/403/5xx) |
+| `src/auth/ProtectedRoute.tsx` | Atualizado: spinner durante `isInitializing`; preserva URL de destino em `location.state` |
+| `src/auth/useAuth.ts` | Inalterado (expõe novo `isInitializing` e `getAccessToken` via context) |
+| `src/types/index.ts` | `Session` extendido com `email`, `roles[]`, `accessiblePools[]`, `accessToken`, `refreshToken`, `expiresAt` |
+| `src/shell/TopBar.tsx` | `handleLogout` tornou-se async; exibe `session.email` em vez de `session.userId` |
+| `vite.config.ts` | Proxy `'^/auth'` → `http://localhost:3200` adicionado |
+
+#### Fluxo de autenticação
+
+```
+Login:
+  LoginPage → apiLogin(email, password) → TokenResponse
+  → buildSession() → setState + localStorage + scheduleRefresh()
+
+Auto-refresh:
+  setTimeout (60s antes de expiresAt) → apiRefresh(refreshToken)
+  → novo TokenResponse → re-agendamento
+
+Silent re-auth no mount:
+  localStorage tem refresh_token → apiRefresh()
+    → sucesso: session restaurada, isInitializing=false
+    → falha: clearStorage(), isInitializing=false (→ login page)
+
+Logout:
+  clearTimeout, setSession(null), clearStorage()
+  → apiLogout(refreshToken, accessToken) — best-effort
+```
+
+#### `getAccessToken()` — para API clients
+
+Método disponível em `useAuth()`:
+```typescript
+const token = await getAccessToken()   // null se não autenticado
+// Verifica expiração, faz refresh se necessário, deduplica chamadas concorrentes
+```
+
+#### `isInitializing` — evita flash do login
+
+`ProtectedRoute` mostra spinner enquanto `isInitializing=true`, evitando que usuários com refresh_token válido vejam o formulário de login por 100–500ms antes do redirect.
+
+---
 
 ## Pending (next iteration)
 
@@ -2127,19 +2512,842 @@ O profile `evaluation` garante que workloads de avaliação não compitam com ag
 `packages/ai-gateway/src/plughub_ai_gateway/tests/test_account_selector.py` — 29 assertions:
 `TestLLMAccount` (5), `TestAccountSelectorPick` (8), `TestMarkThrottled` (2), `TestRecordUsage` (3), `TestHealthSummary` (3), `TestProvidersFor` (2), `TestSettingsKeyParsing` (6).
 
-### Arc 6 — Plataforma de Avaliação de Qualidade (deferido)
+## Arc 6 — Plataforma de Avaliação de Qualidade
 
-Expansão completa do módulo de avaliação com editor de formulários, relatórios granulares e revisão humana.
+Plataforma completa de avaliação de qualidade de interações: formulários configuráveis, campanhas de amostragem, agentes avaliadores com RAG, revisão humana, contestação e relatórios analíticos.
 
-- **EvaluationTemplate** — model Prisma + API CRUD; associação de template por pool (substitui `skill_id_template` hardcoded)
-- **Editor de formulários** — UI no platform-ui para criar/editar evaluation skills sem editar YAML
-- **Dashboard de qualidade por pool** — relatórios por agente/segmento/critério; drill-down item → transcript
-- **Agente Reviewer** (IA) — revisa avaliações do `agente_avaliacao_v1`, classifica para aprovação automática ou revisão humana
-- **Agente Revision** (IA) — segundo parecer independente quando Reviewer sinaliza divergência
-- **Tela do revisor humano** — workflow de contestação/aprovação: fila para supervisor com transcrição + avaliação + justificativa + histórico do agente; ações: aprovar, ajustar notas, rejeitar
-- **Feedback loop** — aprovações/ajustes humanos retroalimentam calibração do Reviewer Agent
-- **CustomerFeedback API** — endpoint para receber NPS/CSAT/CES de canais externos; vinculação a segmentos
-- **Comparação IA vs humano** — relatório de qualidade comparativa por critério de avaliação
+### Novos pacotes
+
+- `packages/evaluation-api/` — Python FastAPI, porta 3400. Ciclo de vida completo de formulários, campanhas, instâncias, resultados e contestações.
+- `packages/mcp-server-knowledge/` — TypeScript MCP Server. Base de conhecimento vetorial (pgvector) para RAG nos agentes avaliadores.
+
+### Novos schemas em `@plughub/schemas`
+
+| Schema | Arquivo | Descrição |
+|---|---|---|
+| `EvaluationForm`, `EvaluationCriterion` | `evaluation.ts` | Formulário com critérios configuráveis |
+| `EvaluationCampaign`, `SamplingRules`, `ReviewerRules` | `evaluation.ts` | Campanha de amostragem com regras |
+| `ContestationPolicy`, `ContestationRound` | `evaluation.ts` | Política de contestação configurável por campanha (Arc 6 v2) |
+| `EvaluationPermission` | `evaluation.ts` | Permissão 2D usuário × (pool \| campanha) (Arc 6 v2) |
+| `EvaluationInstance` | `evaluation.ts` | Instância de avaliação de uma sessão |
+| `EvaluationResult`, `EvaluationCriterionResponse` | `evaluation.ts` | Resultado com respostas por critério |
+| `EvaluationResultWithActions` | `evaluation.ts` | Resultado + `available_actions` computado server-side (Arc 6 v2) |
+| `EvaluationContestation` | `evaluation.ts` | Contestação de resultado |
+| `EvaluationEvent` | `evaluation.ts` | Evento Kafka `evaluation.events` |
+| `KnowledgeSnippet` | `evaluation.ts` | Snippet da base de conhecimento |
+
+#### EvaluationForm / EvaluationCriterion
+
+```typescript
+EvaluationCriterion {
+  id: string                  // criterion_id único no formulário
+  label: string               // "Seguiu protocolo de saudação"
+  description: string         // instrução para o avaliador
+  weight: number              // 0.0–1.0, sum of all criteria = 1.0
+  type: "score" | "pass_fail" | "text" | "na_allowed"
+  options?: { value: number; label: string }[]   // para score com escala customizada
+}
+
+EvaluationForm {
+  form_id: string
+  tenant_id: string
+  name: string
+  description?: string
+  criteria: EvaluationCriterion[]
+  knowledge_namespace?: string    // namespace RAG para snippets relevantes
+  active: boolean
+  created_at, updated_at: string
+}
+```
+
+#### EvaluationCampaign / SamplingRules / ReviewerRules
+
+```typescript
+SamplingRules {
+  mode: "all" | "random" | "pool_filter" | "segment_filter"
+  sample_rate?: number          // 0.0–1.0 (modo random)
+  pool_ids?: string[]           // filtro por pool
+  outcome_filter?: string[]     // filtro por outcome (resolved/escalated/…)
+  min_duration_ms?: number      // ignora sessões muito curtas
+}
+
+ReviewerRules {
+  auto_approve_above: number    // score ≥ threshold → approved sem revisão humana
+  auto_reject_below: number     // score < threshold → rejected sem revisão humana
+  require_human_review: boolean // força revisão humana independente do score
+}
+
+// Política de contestação configurável por campanha
+ContestationRound {
+  round_number:     number        // 1-based
+  contestation_roles: string[]   // roles que podem contestar neste round
+  review_roles:     string[]      // roles que podem revisar neste round
+  authority_level:  string        // "supervisor" | "manager" | "director"
+  review_deadline_hours: number   // SLA do round (business_hours: true implícito)
+}
+
+ContestationPolicy {
+  contestation_roles: string[]           // roles globais que podem contestar
+  review_roles_by_round: Record<number, string[]>  // role por round (herda contestation_roles como fallback)
+  authority_by_round: Record<number, string>       // authority_level por round
+  review_deadline_hours: number          // SLA padrão de revisão
+}
+
+EvaluationCampaign {
+  campaign_id: string
+  tenant_id: string
+  name: string
+  form_id: string
+  pool_id?: string
+  sampling: SamplingRules
+  reviewer_rules: ReviewerRules
+  contestation_policy: ContestationPolicy   // configura ciclos de revisão/contestação
+  review_workflow_skill_id: string          // skill YAML que roda como motor de estado (ex: "skill_revisao_treplica_v1")
+  status: "active" | "paused" | "completed"
+  evaluator_pool_id: string     // pool do agente_avaliacao_v1
+  created_at, updated_at: string
+}
+```
+
+#### EvaluationInstance / EvaluationResult / EvaluationCriterionResponse
+
+```typescript
+EvaluationCriterionResponse {
+  criterion_id: string
+  score?: number        // valor numérico (para type=score)
+  passed?: boolean      // (para type=pass_fail)
+  na: boolean           // critério marcado como N/A
+  evidence?: string     // trecho da transcrição usado como evidência
+  note?: string         // observação do avaliador
+}
+
+EvaluationResult {
+  result_id: string
+  instance_id: string
+  session_id: string
+  tenant_id: string
+  evaluator_id: string              // instance_id do agente avaliador
+  form_id: string
+  campaign_id?: string
+  criterion_responses: EvaluationCriterionResponse[]
+  overall_score: number             // ponderado pelos weights dos critérios
+  eval_status: "submitted" | "under_review" | "reviewed" | "contested" | "locked"
+  locked: boolean                   // resultado finalizado, imutável
+  lock_reason?: string              // "review_timeout" | "max_rounds_reached" | "manual"
+  compliance_flags: string[]        // ["sla_breached", "escalation_required"]
+  review_note?: string              // nota do revisor humano
+  reviewed_by?: string
+  reviewed_at?: string
+  timestamp: string                 // ISO-8601 de submissão
+  // Campos do motor de workflow (Arc 6 v2)
+  workflow_instance_id?: string     // UUID da instância workflow-api associada
+  resume_token?: string             // token atual para retomar o workflow (TTL = deadline do suspend)
+  action_required?: string          // "review" | "contestation" | null (persisted from workflow.events consumer)
+  current_round: number             // round atual do ciclo (0 = pré-revisão)
+  deadline_at?: string              // ISO-8601 do prazo do round atual
+}
+
+// Retornado pelo endpoint GET /v1/evaluation/results/{id}?caller_user_id=
+// Campo adicional computado server-side — nunca persisted no banco
+EvaluationResultWithActions extends EvaluationResult {
+  available_actions: ("review" | "contest")[]   // [] quando locked ou sem permissão
+  action_context?: {
+    deadline_at: string
+    round: number
+    authority_level: string
+  }
+}
+```
+
+### evaluation-api (porta 3400)
+
+#### Forms CRUD
+
+| Método | Rota | Descrição |
+|---|---|---|
+| `GET` | `/v1/evaluation/forms?tenant_id=` | Lista formulários ativos |
+| `POST` | `/v1/evaluation/forms` | Cria formulário |
+| `PATCH` | `/v1/evaluation/forms/{form_id}` | Atualiza formulário |
+| `DELETE` | `/v1/evaluation/forms/{form_id}` | Remove formulário |
+
+#### Campaigns CRUD + controle
+
+| Método | Rota | Descrição |
+|---|---|---|
+| `GET` | `/v1/evaluation/campaigns?tenant_id=` | Lista campanhas |
+| `POST` | `/v1/evaluation/campaigns` | Cria campanha |
+| `POST` | `/v1/evaluation/campaigns/{id}/pause` | Pausa campanha |
+| `POST` | `/v1/evaluation/campaigns/{id}/resume` | Retoma campanha |
+
+#### Instances lifecycle
+
+| Método | Rota | Descrição |
+|---|---|---|
+| `GET` | `/v1/evaluation/instances?campaign_id=&status=` | Lista instâncias por campanha |
+
+Instâncias são criadas automaticamente pelo **sampling engine** ao consumir eventos `conversations.session_closed`. O engine avalia `SamplingRules` e cria a instância se a sessão for selecionada.
+
+#### Results
+
+| Método | Rota | Descrição |
+|---|---|---|
+| `GET` | `/v1/evaluation/results?tenant_id=&campaign_id=&evaluator_id=` | Lista resultados |
+| `GET` | `/v1/evaluation/results/{id}?caller_user_id=` | Detalhe com `available_actions` computado server-side |
+| `POST` | `/v1/evaluation/results/{result_id}/review` | Revisor humano age (requer JWT + permissão de review no pool/campanha) |
+
+Body de review: `{ decision: "approved" | "rejected", round: number, review_note? }`. O campo `round` é anti-replay — deve ser igual a `result.current_round` ou o servidor retorna `409`.
+
+#### Contestations
+
+| Método | Rota | Descrição |
+|---|---|---|
+| `GET` | `/v1/evaluation/contestations?tenant_id=&result_id=` | Lista contestações |
+| `POST` | `/v1/evaluation/contestations` | Cria contestação (requer JWT + permissão de contest no pool/campanha) |
+| `POST` | `/v1/evaluation/contestations/{id}/adjudicate` | Adjudica contestação — mantido para compatibilidade (fluxo legado sem workflow) |
+
+Body de contestation: `{ result_id, reason, round: number }`. O campo `round` é anti-replay — deve ser igual a `result.current_round`.
+
+#### Reports
+
+| Método | Rota | Descrição |
+|---|---|---|
+| `GET` | `/v1/evaluation/reports/campaigns/{id}` | Relatório por campanha |
+| `GET` | `/v1/evaluation/reports/agents?tenant_id=&pool_id=` | Relatório por agente |
+
+#### Auth
+
+- **Operações admin** (CRUD de formulários, campanhas, permissões): `X-Admin-Token` header
+- **Operações de revisão e contestação**: `Authorization: Bearer <jwt>` com claims `sub` (user_id) e `roles[]`
+  - O evaluation-api extrai `caller.user_id` do `sub` do JWT para registrar `reviewed_by` / `contested_by`
+  - Permissões são verificadas contra `evaluation_permissions` (tabela PostgreSQL) antes de executar a ação
+
+#### Permissions CRUD
+
+| Método | Rota | Descrição |
+|---|---|---|
+| `GET` | `/v1/evaluation/permissions?tenant_id=&user_id=` | Lista permissões do usuário |
+| `POST` | `/v1/evaluation/permissions` | Concede permissão (admin) |
+| `PATCH` | `/v1/evaluation/permissions/{id}` | Atualiza permissão (admin) |
+| `DELETE` | `/v1/evaluation/permissions/{id}` | Revoga permissão (admin) |
+
+### mcp-server-knowledge
+
+MCP Server separado para a base de conhecimento vetorial dos agentes avaliadores.
+
+**PostgreSQL schema (pgvector):**
+```sql
+CREATE TABLE knowledge_snippets (
+    snippet_id   UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id    TEXT NOT NULL,
+    namespace    TEXT NOT NULL,           -- ex: "politicas_sac", "sla_contrato"
+    content      TEXT NOT NULL,
+    embedding    vector(1536),            -- OpenAI text-embedding-3-small
+    source_ref   TEXT,                   -- documento de origem
+    metadata     JSONB DEFAULT '{}',
+    created_at   TIMESTAMPTZ DEFAULT now()
+);
+CREATE INDEX ON knowledge_snippets USING ivfflat (embedding vector_cosine_ops);
+CREATE INDEX ON knowledge_snippets (tenant_id, namespace);
+```
+
+**Tools expostos:**
+| Tool | Descrição |
+|---|---|
+| `knowledge_search` | Busca semântica top-K no namespace, retorna `KnowledgeSnippet[]` |
+| `knowledge_upsert` | Insere/atualiza snippet com embedding automático |
+| `knowledge_delete` | Remove snippet por snippet_id |
+
+**API REST (proxied via Vite `/v1/knowledge`):**
+| Método | Rota | Descrição |
+|---|---|---|
+| `GET` | `/v1/knowledge/search?tenant_id=&query=&namespace=&top_k=` | Busca semântica |
+| `POST` | `/v1/knowledge/snippets` | Upsert snippet |
+| `DELETE` | `/v1/knowledge/snippets/{id}` | Remove snippet |
+
+### Agents
+
+#### agente_avaliacao_v1 — form-aware + RAG + evidência
+
+`packages/skill-flow-engine/skills/agente_avaliacao_v1.yaml`
+
+Fluxo:
+```
+carregar_contexto (invoke: evaluation_context_get)
+  → ReplayContext: stream events, form definition, campaign_context, knowledge_snippets (top-5)
+
+avaliar_criterios (reason LLM):
+  - Para cada critério do formulário:
+    - Analisa transcrição → score / pass_fail / N/A
+    - Extrai evidence (trecho textual)
+    - Computa overall_score ponderado
+  - Incorpora knowledge_snippets como contexto normativo
+  - Detecta compliance_flags (sla_breached, escalation_required, protocol_violation)
+
+submeter_resultado (invoke: evaluation_submit):
+  - criterion_responses[] com evidence por critério
+  - overall_score, compliance_flags
+  - eval_status: "submitted"
+```
+
+**Fallback:** se agent-registry retorna HTTP 422 (YAML sem `complete`/`escalate`), `_load_yaml_fallback()` no orchestrator-bridge lê o arquivo YAML diretamente.
+
+#### agente_reviewer_ia_v1 — auto-aprovação/rejeição
+
+`packages/skill-flow-engine/skills/agente_reviewer_ia_v1.yaml`
+
+Fluxo:
+```
+carregar_resultado (invoke: evaluation_context_get)
+  → EvaluationResult + critérios + threshold rules
+
+decisao_automatica (choice):
+  overall_score >= reviewer_rules.auto_approve_above → aprovar
+  overall_score <  reviewer_rules.auto_reject_below  → rejeitar
+  reviewer_rules.require_human_review eq true        → fila_humana
+  default                                            → fila_humana
+
+aprovar (invoke: evaluation_submit):
+  eval_status: "approved", review_note: "Auto-aprovado por score ≥ threshold"
+
+rejeitar (invoke: evaluation_submit):
+  eval_status: "rejected", review_note: "Auto-rejeitado por score < threshold"
+
+fila_humana (notify agents_only):
+  Sinaliza ao supervisor para revisão manual
+```
+
+### Modelo de Permissão 2D — usuário × (pool | campanha)
+
+Eixo de permissão independente do papel do usuário no sistema: um mesmo usuário pode ter permissão de contestar num pool e de revisar em outro, e ter ambas em uma campanha específica.
+
+#### PostgreSQL schema
+
+```sql
+CREATE TABLE evaluation_permissions (
+    id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id   TEXT NOT NULL,
+    user_id     TEXT NOT NULL,
+    scope_type  TEXT NOT NULL CHECK (scope_type IN ('pool', 'campaign', 'global')),
+    scope_id    TEXT,           -- pool_id ou campaign_id; NULL para global
+    can_contest BOOL NOT NULL DEFAULT FALSE,
+    can_review  BOOL NOT NULL DEFAULT FALSE,
+    granted_by  TEXT NOT NULL,
+    created_at  TIMESTAMPTZ DEFAULT now(),
+    UNIQUE (tenant_id, user_id, scope_type, scope_id)
+);
+```
+
+#### Resolução de permissão (herança de escopo)
+
+Resolução do mais específico para o mais geral. Permissões são acumulativas (union), não se excluem:
+
+```
+campaign-level  >  pool-level  >  global
+```
+
+Exemplo: usuário X com `can_review=true` no pool A e `can_contest=true` na campanha C (que usa o pool A) → X pode revisar via herança do pool, e contestar via herança da campanha. Ambas as permissões são válidas.
+
+```python
+async def resolve_permissions(tenant_id, user_id, campaign_id, pool_id) -> set[str]:
+    rows = await db.fetch("""
+        SELECT can_contest, can_review FROM evaluation_permissions
+        WHERE tenant_id = $1 AND user_id = $2
+          AND (
+            (scope_type = 'campaign' AND scope_id = $3)
+            OR (scope_type = 'pool'     AND scope_id = $4)
+            OR (scope_type = 'global')
+          )
+    """, tenant_id, user_id, campaign_id, pool_id)
+
+    permissions = set()
+    for row in rows:
+        if row["can_contest"]: permissions.add("contest")
+        if row["can_review"]:  permissions.add("review")
+    return permissions
+```
+
+#### `available_actions` — campo computado server-side
+
+O endpoint `GET /v1/evaluation/results/{id}?caller_user_id=` devolve `available_actions` já calculado, combinando o estado do workflow (`action_required` + `locked`) com as permissões do usuário. A UI nunca computa permissão localmente — apenas lê o campo:
+
+```
+available_actions = []
+if not locked and action_required == "review"       and "review"  in perms → ["review"]
+if not locked and action_required == "contestation" and "contest" in perms → ["contest"]
+```
+
+| `action_required` | Permissão do caller | `available_actions` | Botões na UI |
+|---|---|---|---|
+| `"review"` | `can_review=true` | `["review"]` | Revisar ✓ / Contestar ✗ |
+| `"review"` | `can_contest=true` | `[]` | Revisar ✗ / Contestar ✗ |
+| `"contestation"` | `can_contest=true` | `["contest"]` | Revisar ✗ / Contestar ✓ |
+| `null` (outra parte age) | qualquer | `[]` | Ambos desabilitados + mensagem "Aguardando {authority}" |
+| `null` + `locked=true` | qualquer | `[]` | Badge "Encerrado" |
+
+**Defesa em profundidade**: a UI desabilita botões com base em `available_actions`, mas o endpoint de submit repete a verificação de permissão no servidor. O servidor nunca confia no estado calculado pelo cliente.
+
+---
+
+### Workflow como Motor de Contestação/Revisão
+
+O ciclo de revisão/contestação é executado pelo Workflow API (Arc 4) como motor de estado. O YAML da skill define quantos rounds existem, timeouts e alçadas — sem lógica hardcoded no evaluation-api. Mudar o ciclo de um cliente = atualizar um YAML via `PUT /v1/skills/{id}`.
+
+#### Ligação campanha → workflow skill
+
+```
+EvaluationCampaign.review_workflow_skill_id = "skill_revisao_simples_v1"
+                                             | "skill_revisao_treplica_v1"
+                                             | qualquer skill configurada pelo cliente
+```
+
+#### Ciclo de vida completo
+
+```
+1. EvaluationResult submetido
+   → evaluation-api: POST /v1/workflow/trigger
+     { flow_id: campaign.review_workflow_skill_id,
+       origin_session_id: result.session_id,
+       context: { result_id, campaign_id, tenant_id } }
+   → workflow entra no primeiro suspend (aguardar_revisao)
+   → workflow.events consumer atualiza o result:
+       action_required = "review", current_round = 1, deadline_at, resume_token
+
+2. Usuário age na UI — endpoint ecoa o round recebido (anti-replay)
+   POST /v1/evaluation/results/{id}/review   { decision, round: 1 }
+   POST /v1/evaluation/contestations         { result_id, round: 1, reason }
+   → evaluation-api verifica permissão (resolve_permissions)
+   → verifica anti-replay: round_body == result.current_round ou rejeita 409
+   → grava no banco (audit trail)
+   → escreve no ContextStore:
+       session.review_decision  = "approved" | "contested"
+       session.reviewer_id      = caller.user_id
+       session.round_echoed     = 1
+   → POST /v1/workflow/resume { token: result.resume_token, decision: "input" }
+
+3. Workflow lê @ctx.session.review_decision no choice step → transita
+   → próximo suspend: escreve current_round incrementado no ContextStore
+   → workflow.events consumer atualiza action_required, current_round, deadline_at, resume_token
+
+4. Timeout: suspend expira sem retomada
+   → workflow entra em on_timeout → congelar_resultado step
+   → evaluation-api consumer: locked=true, lock_reason="review_timeout", action_required=null
+   → qualquer chamada subsequente sobre o result_id retorna 409 Conflict — result locked
+```
+
+#### Padrão do round counter — controlado pelo workflow, ecoado pela UI
+
+O workflow escreve `@ctx.session.current_round` ao entrar em cada suspend. A UI lê o valor recebido no result e o devolve no submit. O evaluation-api usa esse valor para o anti-replay check. O YAML é o único lugar com lógica de quantas voltas existem.
+
+```yaml
+# Fragmento — o workflow incrementa o próprio contador
+- id: incrementar_round
+  type: invoke
+  tool: context_write
+  input:
+    tag: session.current_round
+    value: "{{add(@ctx.session.current_round, 1)}}"
+  on_success: verificar_limite
+
+- id: verificar_limite
+  type: choice
+  conditions:
+    - field: "@ctx.session.review_decision"
+      operator: eq
+      value: "approved"
+      next: encerrar_aprovado
+    - field: "@ctx.session.current_round"
+      operator: gt
+      value: 3              # tréplica: único lugar onde o limite existe
+      next: congelar_resultado
+    - field: "@ctx.session.review_decision"
+      operator: eq
+      value: "contested"
+      next: aguardar_contestacao
+```
+
+Clientes com réplica configuram `value: 2`; tréplica, `value: 3` — sem nenhuma alteração de código.
+
+#### ContextStore keys usadas pelo motor de avaliação
+
+| Tag | Valor | Escrito por |
+|---|---|---|
+| `session.current_round` | `number` | Workflow (ao entrar no suspend) |
+| `session.action_required` | `"review" \| "contestation"` | Workflow (ao entrar no suspend) |
+| `session.review_decision` | `"approved" \| "contested"` | evaluation-api (antes do resume) |
+| `session.reviewer_id` | `user_id` | evaluation-api (antes do resume) |
+| `session.round_echoed` | `number` | evaluation-api (confirmação do anti-replay) |
+
+TTL: os campos de workflow de avaliação usam TTL de 7 dias (`604800s`) — diferente do TTL padrão de 4h do ContextStore — para suportar ciclos de revisão longos. Configurável via Config API namespace `evaluation` key `workflow_context_ttl_s`.
+
+#### consumer `workflow.events` no evaluation-api
+
+```python
+async def on_workflow_event(event):
+    result_id = event.get("context", {}).get("result_id")
+    if not result_id:
+        return
+
+    if event["event_type"] == "workflow.suspended":
+        step = event.get("suspended_at_step", "")
+        action = "review" if "revisao" in step else "contestation" if "contestacao" in step else None
+        await db.update_result_workflow_state(result_id,
+            action_required  = action,
+            current_round    = event["context"].get("current_round", 1),
+            deadline_at      = event.get("resume_expires_at"),
+            resume_token     = event.get("resume_token"),
+        )
+
+    elif event["event_type"] == "workflow.completed":
+        lock_reason = event.get("context", {}).get("lock_reason", "completed")
+        await db.update_result_workflow_state(result_id,
+            action_required = None,
+            resume_token    = None,
+            locked          = True,
+            lock_reason     = lock_reason,
+        )
+```
+
+#### Exemplo de YAML para ciclo com tréplica
+
+`packages/skill-flow-engine/skills/skill_revisao_treplica_v1.yaml`
+
+```yaml
+id: skill_revisao_treplica_v1
+entry: init_round
+steps:
+  - id: init_round
+    type: invoke
+    tool: context_write
+    input: { tag: session.current_round, value: 1 }
+    on_success: aguardar_revisao
+
+  - id: aguardar_revisao
+    type: suspend
+    reason: input
+    timeout_hours: 48
+    business_hours: true
+    on_resume:  { next: verificar_decisao }
+    on_timeout: { next: congelar_resultado }
+
+  - id: verificar_decisao
+    type: choice
+    conditions:
+      - field: "@ctx.session.review_decision"
+        operator: eq
+        value: "approved"
+        next: encerrar_aprovado
+      - field: "@ctx.session.review_decision"
+        operator: eq
+        value: "contested"
+        next: incrementar_round
+
+  - id: incrementar_round
+    type: invoke
+    tool: context_write
+    input:
+      tag: session.current_round
+      value: "{{add(@ctx.session.current_round, 1)}}"
+    on_success: verificar_limite
+
+  - id: verificar_limite
+    type: choice
+    conditions:
+      - field: "@ctx.session.current_round"
+        operator: gt
+        value: 3
+        next: congelar_resultado
+    default: aguardar_contestacao
+
+  - id: aguardar_contestacao
+    type: suspend
+    reason: input
+    timeout_hours: 72
+    business_hours: true
+    on_resume:  { next: aguardar_revisao }
+    on_timeout: { next: congelar_resultado }
+
+  - id: congelar_resultado
+    type: invoke
+    tool: evaluation_lock
+    input:
+      result_id:   "@ctx.session.result_id"
+      lock_reason: "review_timeout"
+    on_success: encerrar
+    on_failure: encerrar
+
+  - id: encerrar_aprovado
+    type: complete
+    outcome: resolved
+
+  - id: encerrar
+    type: complete
+    outcome: resolved
+```
+
+#### Novos campos PostgreSQL em `evaluation_results`
+
+```sql
+ALTER TABLE evaluation_results
+  ADD COLUMN workflow_instance_id UUID,
+  ADD COLUMN resume_token         TEXT,
+  ADD COLUMN action_required      TEXT CHECK (action_required IN ('review', 'contestation')),
+  ADD COLUMN current_round        INT  NOT NULL DEFAULT 0,
+  ADD COLUMN deadline_at          TIMESTAMPTZ,
+  ADD COLUMN lock_reason          TEXT;
+
+ALTER TABLE evaluation_contestations
+  ADD COLUMN round_number     INT  NOT NULL DEFAULT 1,
+  ADD COLUMN authority_level  TEXT;
+```
+
+#### Novos campos Kafka `evaluation.events`
+
+```json
+{
+  "event_type": "submitted | reviewed | contested | locked",
+  "round_number": 1,
+  "authority_level": "supervisor",
+  "lock_reason": "review_timeout | max_rounds_reached | manual",
+  ...
+}
+```
+
+---
+
+### session-replayer — extensões Arc 6
+
+O `ReplayContext` foi estendido com campos de avaliação:
+
+```python
+@dataclass
+class ReplayContext:
+    # ... campos existentes ...
+    evaluation_form:     dict | None     # formulário associado pela campanha
+    campaign_context:    dict | None     # metadados da campanha (sampling, reviewer_rules)
+    knowledge_snippets:  list[dict]      # top-K snippets do namespace do formulário
+```
+
+O Replayer busca `evaluation_form` e `campaign_context` via evaluation-api ao construir o `ReplayContext` quando `evaluation_instance_id` está presente no evento `evaluation.requested`.
+
+### MCP tools — extensões Arc 6
+
+#### evaluation_context_get (estendido)
+
+Retorna `ReplayContext` enriquecido com `evaluation_form`, `campaign_context` e `knowledge_snippets`. O agente avaliador vê os critérios do formulário e os snippets de conhecimento relevantes num único call.
+
+#### evaluation_submit (estendido)
+
+```typescript
+// Input Arc 6 (estendido)
+{
+  result_id?:           string      // novo resultado ou update de rascunho
+  instance_id:          string
+  session_id:           string
+  form_id:              string
+  campaign_id?:         string
+  criterion_responses:  EvaluationCriterionResponse[]
+  overall_score:        number
+  eval_status:          string
+  compliance_flags?:    string[]
+  review_note?:         string
+  reviewed_by?:         string
+  // Comparison Mode (Arc 3 — mantido)
+  comparison_turns?:    ComparisonTurn[]
+  comparison_replay_outcome?:   string
+  comparison_replay_sentiment?: number
+}
+```
+
+### platform-ui — módulo de avaliação
+
+6 páginas sob `/evaluation`:
+
+| Rota | Arquivo | Roles | Descrição |
+|---|---|---|---|
+| `/evaluation/forms` | `FormsPage.tsx` | admin | CRUD de formulários com critérios |
+| `/evaluation/campaigns` | `CampaignsPage.tsx` | supervisor, admin | Campanhas + KPIs em tempo real |
+| `/evaluation/knowledge` | `KnowledgePage.tsx` | admin | Base de conhecimento vetorial |
+| `/evaluation/review` | `ReviewPage.tsx` | supervisor, admin | Fila de revisão humana |
+| `/evaluation/mine` | `MyEvaluationsPage.tsx` | operator+ | Avaliações recebidas pelo agente logado |
+| `/evaluation/reports` | `ReportsPage.tsx` | supervisor+ | Dashboard analítico (analytics-api) |
+
+Nav group "Avaliação" adicionado ao `Sidebar.tsx`.
+
+**`src/api/evaluation-hooks.ts`** — hooks de API completos:
+
+| Hook / Função | Endpoint | Descrição |
+|---|---|---|
+| `useForms(tenantId)` | `GET /v1/evaluation/forms` | Lista formulários |
+| `createForm`, `updateForm`, `deleteForm` | POST/PATCH/DELETE | CRUD |
+| `useCampaigns(tenantId, pollMs)` | `GET /v1/evaluation/campaigns` | Lista campanhas (polling) |
+| `createCampaign`, `pauseCampaign`, `resumeCampaign` | POST | Ações de campanha |
+| `useInstances(campaignId, status, pollMs)` | `GET /v1/evaluation/instances` | Instâncias por campanha |
+| `useResults(tenantId, campaignId, evaluatorId, pollMs)` | `GET /v1/evaluation/results` | Resultados |
+| `reviewResult(resultId, body)` | `POST /v1/evaluation/results/{id}/review` | Revisão humana |
+| `useContestations(tenantId, resultId)` | `GET /v1/evaluation/contestations` | Contestações |
+| `createContestation`, `adjudicateContestation` | POST | Ações de contestação |
+| `useCampaignReport(campaignId)` | `GET /v1/evaluation/reports/campaigns/{id}` | Relatório por campanha |
+| `useAgentReport(tenantId, poolId)` | `GET /v1/evaluation/reports/agents` | Relatório por agente |
+| `searchKnowledge(tenantId, query, namespace, topK)` | `GET /v1/knowledge/search` | Busca RAG |
+| `upsertSnippet`, `deleteSnippet` | POST/DELETE | CRUD de snippets |
+| `useEvaluationsAnalytics(tenantId, params, pollMs)` | `GET /reports/evaluations` | analytics-api ClickHouse |
+| `useEvaluationsSummary(tenantId, params, pollMs)` | `GET /reports/evaluations/summary` | Sumário agregado |
+
+Endpoints `/v1/evaluation` e `/v1/knowledge` proxied pelo Vite para porta 3400; `/reports` proxied para porta 3500 (analytics-api).
+
+### analytics-api — ClickHouse Arc 6
+
+#### Tabelas
+
+```sql
+-- Estado atual de cada resultado (ReplacingMergeTree — latest eval_status wins)
+CREATE TABLE analytics.evaluation_results (
+    result_id        String,
+    instance_id      String,
+    session_id       String,
+    tenant_id        String,
+    evaluator_id     String,
+    form_id          String,
+    campaign_id      Nullable(String),
+    overall_score    Float64,
+    eval_status      String,
+    locked           UInt8,
+    compliance_flags Array(String),
+    timestamp        DateTime,
+    ingested_at      DateTime DEFAULT now()
+) ENGINE = ReplacingMergeTree(ingested_at)
+  ORDER BY (tenant_id, result_id);
+
+-- Log append-only de eventos (submitted/reviewed/contested/locked)
+CREATE TABLE analytics.evaluation_events (
+    event_id      String,
+    result_id     String,
+    session_id    String,
+    tenant_id     String,
+    event_type    String,    -- "submitted" | "reviewed" | "contested" | "locked"
+    actor_id      String,    -- evaluator_id / reviewed_by / contested_by
+    eval_status   String,
+    overall_score Nullable(Float64),
+    timestamp     DateTime,
+    ingested_at   DateTime DEFAULT now()
+) ENGINE = MergeTree()
+  ORDER BY (tenant_id, result_id, timestamp);
+```
+
+#### Kafka consumer
+
+Tópico `evaluation.events` adicionado a `_TOPICS` e `_PARSERS` em `consumer.py`.
+
+`parse_evaluation_event(msg)` retorna dois rows por evento:
+- `{"table": "evaluation_results", ...}` — estado atual do resultado (upsert)
+- `{"table": "evaluation_events", ...}` — entrada do log de auditoria
+
+`_write_row` despacha via `store.upsert_evaluation_result()` e `store.insert_evaluation_event()`.
+
+#### Endpoints analytics
+
+| Endpoint | Filtros | Descrição |
+|---|---|---|
+| `GET /reports/evaluations` | `tenant_id`, `from_dt`, `to_dt`, `campaign_id`, `form_id`, `evaluator_id`, `eval_status`, `page`, `page_size`, `format` | Linhas individuais de `evaluation_results FINAL` |
+| `GET /reports/evaluations/summary` | `tenant_id`, `from_dt`, `to_dt`, `campaign_id`, `form_id`, `group_by` | Agregação por `campaign_id` / `evaluator_id` / `form_id` / `date` |
+
+**Campos do sumário:** `total_evaluated`, `count_submitted`, `count_approved`, `count_rejected`, `count_contested`, `count_locked`, `count_locked_flag`, `avg_score`, `min_score`, `max_score`, `score_excellent (≥0.9)`, `score_good (0.7–0.9)`, `score_fair (0.5–0.7)`, `score_poor (<0.5)`, `with_compliance_flags`.
+
+**Proteção SQL injection:** `group_by` validado contra whitelist `{"campaign_id", "evaluator_id", "form_id", "date"}` antes de injetar na cláusula GROUP BY. Valores inválidos retornam ao default `campaign_id`.
+
+### Kafka topics
+
+| Topic | Producer | Consumer(s) |
+|---|---|---|
+| `evaluation.events` | evaluation-api (result submit + review + contestation + lock) | analytics-api → ClickHouse `evaluation_results` + `evaluation_events` |
+
+**Payload `evaluation.events`:**
+```json
+{
+  "event_type":        "submitted" | "reviewed" | "contested" | "locked",
+  "result_id":         "uuid",
+  "instance_id":       "uuid",
+  "session_id":        "sess_...",
+  "tenant_id":         "tenant_demo",
+  "evaluator_id":      "agente_avaliacao_v1-001",
+  "form_id":           "form_sac_padrao",
+  "campaign_id":       "camp_...",
+  "overall_score":     0.87,
+  "eval_status":       "approved",
+  "locked":            false,
+  "compliance_flags":  [],
+  "reviewed_by":       null,
+  "contested_by":      null,
+  "timestamp":         "ISO8601"
+}
+```
+
+### Vite proxies adicionados (platform-ui)
+
+| Prefixo | Target | Porta |
+|---|---|---|
+| `^/v1/evaluation` | evaluation-api | 3400 |
+| `^/v1/knowledge` | mcp-server-knowledge | 3401 |
+
+### Repository additions
+
+```
+plughub/
+  packages/
+    evaluation-api/               ← plughub-evaluation-api (Python FastAPI — porta 3400)
+    mcp-server-knowledge/         ← mcp-server-knowledge (TypeScript MCP Server)
+  packages/platform-ui/src/
+    modules/evaluation/           ← 6 páginas: FormsPage, CampaignsPage, KnowledgePage,
+    │                                          ReviewPage, MyEvaluationsPage, ReportsPage
+    api/evaluation-hooks.ts       ← hooks completos (evaluation-api + analytics-api)
+```
+
+### Tests
+
+- `analytics-api/tests/test_consumer.py`: `TestParseEvaluationEvent` (14 assertions), `TestWriteRowDispatchEvaluation` (2 assertions)
+- `analytics-api/tests/test_reports.py`: `TestQueryEvaluationsReport` (4 assertions), `TestQueryEvaluationsSummary` (4 assertions)
+- Total analytics-api: **108/108**
+
+### Arc 6 — Tests
+
+- `e2e-tests/scenarios/24_evaluation_campaign.ts` — 14 assertions (--evaluation flag)
+- `e2e-tests/scenarios/25_evaluation_contestation.ts` — 10 assertions (--contestation flag)
+- `e2e-tests/scenarios/26_ai_gateway_fallback.ts` — 10 assertions (--fallback flag; inference parts require ANTHROPIC_API_KEY)
+
+### Arc 6 v2 — ✅ Implementado (Permissões 2D + Workflow Motor)
+
+Todos os componentes abaixo foram implementados:
+
+- ✅ `evaluation_permissions` table + migration + endpoints `GET/POST/PATCH/DELETE /v1/evaluation/permissions`
+  - `evaluation-api/db.py`: `create_permission`, `list_permissions`, `get_permission`, `update_permission`, `delete_permission`, `resolve_permissions`
+  - UNIQUE index: `COALESCE(scope_id, '')` para suportar NULL em scope global sem violar constraint
+- ✅ `EvaluationCampaign`: campos `review_workflow_skill_id` + `contestation_policy` (DDL + schema update em `db.py`)
+- ✅ `EvaluationResult`: campos `workflow_instance_id`, `resume_token`, `action_required`, `current_round`, `deadline_at`, `lock_reason` (DDL em `db.py`)
+- ✅ `EvaluationContestation`: campos `round_number`, `authority_level` (DDL em `db.py`)
+- ✅ `GET /v1/evaluation/results/{id}?caller_user_id=` — `available_actions` computado server-side via `_compute_available_actions`
+- ✅ `POST /v1/evaluation/results/{id}/review` — JWT decode (`_decode_jwt`), `resolve_permissions()`, anti-replay de `round`, ContextStore write, workflow resume
+- ✅ `POST /v1/evaluation/contestations` — JWT decode, `resolve_permissions()`, anti-replay de `round`, ContextStore write (`session.review_decision = "contested"`), workflow resume
+- ✅ Consumer `workflow.events` no `evaluation-api/main.py` — `_on_workflow_event()`: atualiza `action_required`, `current_round`, `deadline_at`, `resume_token`, `locked`, `lock_reason` via `update_result_workflow_state()` e `lock_result()`
+- ✅ Trigger de workflow ao submeter resultado: `POST /v1/workflow/trigger` com `flow_id = campaign.review_workflow_skill_id`
+- ✅ `packages/skill-flow-engine/skills/skill_revisao_simples_v1.yaml` — ciclo simples (1 round, 6 steps)
+- ✅ `packages/skill-flow-engine/skills/skill_revisao_treplica_v1.yaml` — tréplica (até 3 rounds, 10 steps); alterar `value: 3` para `value: 2` para réplica
+- ✅ MCP tool `evaluation_lock` em `mcp-server-plughub/src/tools/evaluation.ts` — idempotente: 409 = já locked (tratado como sucesso)
+- ✅ ContextStore TTL 7 dias: Config API namespace `evaluation` key `workflow_context_ttl_s = 604800` + 4 keys adicionais (`default_review_skill_id`, `review_deadline_hours`, `contestation_deadline_hours`, `auto_lock_on_workflow_complete`)
+- ✅ platform-ui: `EvaluationPermissionsPage.tsx` — gestão de permissões 2D por usuário/pool/campanha; rota `/evaluation/permissions` (role: admin); nav item 🔐 Permissões
+- ✅ E2E scenarios 27/28: `27_evaluation_permissions.ts` (11 assertions, `--permissions`) + `28_evaluation_workflow_cycle.ts` (11 assertions, `--workflow-review`)
+
+### Arc 6 v2 — Tests
+
+- `e2e-tests/scenarios/27_evaluation_permissions.ts` — 11 assertions (--permissions flag): grant campaign/pool/global, list, update, resolve via available_actions, UNIQUE idempotency, revoke
+- `e2e-tests/scenarios/28_evaluation_workflow_cycle.ts` — 11 assertions (--workflow-review flag; requires JWT_SECRET + workflow-api): submit → trigger → suspended → anti-replay 409 → review → ContextStore → workflow.completed → locked
+
+**Invariantes desta arquitetura (nunca violar):**
+- Nunca computar `available_actions` no cliente — sempre vem do servidor
+- Nunca pular a verificação de `round` no submit — `round_body != result.current_round` → 409
+- Nunca escrever `resume_token` em logs — é um segredo de retomada do workflow
+- Nunca modificar resultado com `locked=true` — qualquer tentativa retorna 409
+- Nunca fazer `workflow/resume` sem antes gravar `session.review_decision` no ContextStore — o choice step do workflow depende desse valor
+- O YAML da skill é o único lugar com lógica de quantos rounds existem — nunca hardcodar `max_rounds` no evaluation-api
 
 ## Arc 4 — Workflow Automation
 
@@ -2785,9 +3993,14 @@ React 18 + TypeScript + Vite. **Original** porta de dev: 5175. Proxy: `/api` →
 | 21 | `21_masked_retry.ts` | Masked Retry begin_transaction rollback cycle: inject invalid PIN "000000" → validate_pin fails → rewind to tx_inicio (maskedScope cleared) → inject valid PIN "123456" → success; asserts both PINs absent from pipeline_state (5 assertions) (--masked flag) |
 | 22 | `22_pool_hooks_fase_b.ts` | Pool Lifecycle Hooks Fase B + C: Part A — no-hooks pool → agent_done → conversations.outbound session.closed immediate, hook_pending absent (3 assertions); Part B — hooks pool → agent_done → hook_pending=1, conversations.inbound hook event with conference_id + hook_type=on_human_end + target pool, conversations.outbound NOT published within 2s (9 assertions); Part C — simulate hook completion via GETDEL+DECR → publish contact_closed → conversations.outbound session.closed arrives, human tracking keys cleaned (4 assertions); Part D — pool with on_human_end+post_human hooks → simulate on_human_end completion → bridge fires post_human → conversations.inbound hook_type=post_human + hook_pending:post_human=1 (5 assertions); Part E — publish participant_joined+left to conversations.participants → analytics-api consumer → ClickHouse participation_intervals → GET /reports/participation row with duration_ms (4 assertions) (--hooks flag, 60s timeout) |
 | 23 | `23_contact_segments.ts` | Arc 5 ContactSegment analytics pipeline: Part A — publish participant_joined+left with segment_id (sequence_index=0, outcome=resolved) → analytics-api consumer → ClickHouse segments FINAL → GET /reports/segments row with correct segment_id, sequence_index=0, duration_ms, outcome (4 assertions); Part B — conference specialist topology: primary (segment_id=A, parent=null) + specialist (segment_id=B, parent=A) published → GET /reports/segments returns both rows, specialist has parent_segment_id=A, primary has sequence_index=0 (4 assertions); Part C — sequential handoff: two primary segments sequence_index=0 and sequence_index=1 → both rows distinguishable by sequence_index (3 assertions) (--segments flag, 60s timeout) |
+| 24 | `24_evaluation_campaign.ts` | Arc 6 Evaluation Campaign pipeline: Part A — Form CRUD (POST/GET/PATCH /v1/evaluation/forms, 3 assertions); Part B — Campaign CRUD + pause/resume (4 assertions); Part C — Kafka evaluation.events (submitted) → analytics-api ClickHouse → GET /reports/evaluations row with result_id, overall_score=0.85, eval_status=submitted (4 assertions); Part D — approved event via Kafka → ReplacingMergeTree FINAL → eval_status=approved; GET /reports/evaluations/summary count_approved≥1 (3 assertions) (--evaluation flag, 60s timeout) |
+| 25 | `25_evaluation_contestation.ts` | Arc 6 Contestation + human review: Part A — POST /v1/evaluation/results → submitted; reviewer approves (3 assertions); Part B — agent creates contestation, contestation appears in list, supervisor adjudicates upheld, result status consistent (4 assertions); Part C — final review with review_note, reviewed_by populated, analytics shows approved (3 assertions) (--contestation flag, 60s timeout) |
+| 26 | `26_ai_gateway_fallback.ts` | AI Gateway multi-account fallback: Part A — Config API ai_gateway namespace accessible, analytics dashboard healthy, AI Gateway /health (3 assertions); Part B — throttle marker written to Redis for account_0, POST /v1/reason routes around throttled account, response arrives despite throttle, throttle key present (4 assertions); Part C — throttle cleared, key absent after clear, AI Gateway responds after recovery (3 assertions) (--fallback flag, requires ANTHROPIC_API_KEY for inference assertions, others gracefully skip) |
+| 27 | `27_evaluation_permissions.ts` | Arc 6 v2 — 2D Permission Model: Part A — grant campaign/pool/global perms → list all three (4 assertions); Part B — PATCH flip can_review, GET reflects update (2 assertions); Part C — GET result with caller_user_id → available_actions, no-perm user gets [], UNIQUE constraint idempotency (3 assertions); Part D — DELETE campaign perm → only pool+global remain (2 assertions) (--permissions flag) |
+| 28 | `28_evaluation_workflow_cycle.ts` | Arc 6 v2 — Workflow Review/Contestation Cycle: Part A — submit result + trigger skill_revisao_simples_v1 workflow (3 assertions); Part B — poll workflow.suspended → action_required=review, available_actions=["review"], deadline_at set (3 assertions); Part C — wrong round → 409 anti-replay, correct round + JWT → 200 (2 assertions); Part D — ContextStore review_decision=approved, workflow.completed, result locked=true (3 assertions) (--workflow-review flag, 90s timeout, requires JWT_SECRET + workflow-api) |
 | R  | `regressions.ts` | regression suite: ZodError em session_context_get, parsing de callTool (--regression flag) |
 
-Run with: `ts-node runner.ts --conference` or `ts-node runner.ts --only 06` or `ts-node runner.ts --only 12` or `ts-node runner.ts --webchat` or `ts-node runner.ts --workflow` or `ts-node runner.ts --only 13` or `ts-node runner.ts --collect` or `ts-node runner.ts --only 14` or `ts-node runner.ts --bootstrap` or `ts-node runner.ts --only 15` or `ts-node runner.ts --reconcile` or `ts-node runner.ts --only 16` or `ts-node runner.ts --ctx` or `ts-node runner.ts --only 17` or `ts-node runner.ts --worker` or `ts-node runner.ts --only 18` or `ts-node runner.ts --mention` or `ts-node runner.ts --only 19` or `ts-node runner.ts --masked` or `ts-node runner.ts --only 20` or `ts-node runner.ts --only 21` or `ts-node runner.ts --hooks` or `ts-node runner.ts --only 22` or `ts-node runner.ts --segments` or `ts-node runner.ts --only 23`
+Run with: `ts-node runner.ts --conference` or `ts-node runner.ts --only 06` or `ts-node runner.ts --only 12` or `ts-node runner.ts --webchat` or `ts-node runner.ts --workflow` or `ts-node runner.ts --only 13` or `ts-node runner.ts --collect` or `ts-node runner.ts --only 14` or `ts-node runner.ts --bootstrap` or `ts-node runner.ts --only 15` or `ts-node runner.ts --reconcile` or `ts-node runner.ts --only 16` or `ts-node runner.ts --ctx` or `ts-node runner.ts --only 17` or `ts-node runner.ts --worker` or `ts-node runner.ts --only 18` or `ts-node runner.ts --mention` or `ts-node runner.ts --only 19` or `ts-node runner.ts --masked` or `ts-node runner.ts --only 20` or `ts-node runner.ts --only 21` or `ts-node runner.ts --hooks` or `ts-node runner.ts --only 22` or `ts-node runner.ts --segments` or `ts-node runner.ts --only 23` or `ts-node runner.ts --evaluation` or `ts-node runner.ts --only 24` or `ts-node runner.ts --contestation` or `ts-node runner.ts --only 25` or `ts-node runner.ts --fallback` or `ts-node runner.ts --only 26` or `ts-node runner.ts --permissions` or `ts-node runner.ts --only 27` or `ts-node runner.ts --workflow-review` or `ts-node runner.ts --only 28`
 
 Scenario 06 covers two parts:
 - **Part A** — Conference happy path: primary agent busy → supervisor calls `agent_join_conference` → Redis `conference:*` keys verified → specialist `agent_done` with `conference_id` (session stays open) → primary `agent_done` closes session

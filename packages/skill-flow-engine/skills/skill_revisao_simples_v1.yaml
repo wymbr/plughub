@@ -1,0 +1,60 @@
+id: skill_revisao_simples_v1
+name: Revisão Simples (1 round)
+version: "1"
+description: |
+  Motor de estado para ciclo de revisão de avaliação com 1 round.
+  Após submissão da avaliação, aguarda uma decisão de revisão (aprovação ou contestação).
+  Timeout: o resultado é congelado no estado atual — sem escalação.
+classification: vertical
+
+entry: init_round
+
+steps:
+  - id: init_round
+    type: invoke
+    tool: context_write
+    input:
+      tag: session.current_round
+      value: 1
+    on_success: aguardar_revisao
+    on_failure: encerrar
+
+  - id: aguardar_revisao
+    type: suspend
+    reason: input
+    timeout_hours: 48
+    business_hours: true
+    on_resume:
+      next: verificar_decisao
+    on_timeout:
+      next: congelar_resultado
+
+  - id: verificar_decisao
+    type: choice
+    conditions:
+      - field: "@ctx.session.review_decision"
+        operator: eq
+        value: "approved"
+        next: encerrar_aprovado
+      - field: "@ctx.session.review_decision"
+        operator: eq
+        value: "contested"
+        next: congelar_resultado
+    default: congelar_resultado
+
+  - id: congelar_resultado
+    type: invoke
+    tool: evaluation_lock
+    input:
+      result_id: "@ctx.session.result_id"
+      lock_reason: "review_timeout"
+    on_success: encerrar
+    on_failure: encerrar
+
+  - id: encerrar_aprovado
+    type: complete
+    outcome: resolved
+
+  - id: encerrar
+    type: complete
+    outcome: resolved
