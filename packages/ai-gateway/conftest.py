@@ -15,7 +15,7 @@ import sys
 import types
 from pathlib import Path
 
-_SRC_DIR  = Path(__file__).parent / "src" / "plughub-ai-gateway"
+_SRC_DIR  = Path(__file__).parent / "src" / "plughub_ai_gateway"
 _PKG_NAME = "plughub_ai_gateway"
 
 # ── 1. Patch pytest's resolve_package_path to handle hyphenated directories ──

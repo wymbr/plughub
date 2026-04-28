@@ -37,3 +37,13 @@ def _ensure_registered(name: str, directory: Path) -> None:
 _ensure_registered(_PKG_NAME,                       _PKG_DIR)
 _ensure_registered(f"{_PKG_NAME}.tests",            _PKG_DIR / "tests")
 _ensure_registered(f"{_PKG_NAME}.providers",        _PKG_DIR / "providers")
+
+# Pre-register this conftest module so pytest's importer doesn't try to
+# import it a second time as "plughub_ai_gateway.tests.conftest" and fail.
+import types as _types
+_conftest_name = f"{_PKG_NAME}.tests.conftest"
+if _conftest_name not in sys.modules:
+    _self_mod = _types.ModuleType(_conftest_name)
+    _self_mod.__file__    = __file__
+    _self_mod.__package__ = f"{_PKG_NAME}.tests"
+    sys.modules[_conftest_name] = _self_mod

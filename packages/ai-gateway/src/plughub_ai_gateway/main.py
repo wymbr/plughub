@@ -23,6 +23,7 @@ from fastapi.responses import JSONResponse
 
 logger = logging.getLogger(__name__)
 
+from .account_selector import AccountSelector, LLMAccount
 from .cache      import SemanticCache
 from .config     import get_settings
 from .inference  import InferenceEngine
@@ -68,26 +69,53 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             logger.warning("Kafka producer unavailable — metering disabled: %s", exc)
             kafka_producer = None
 
-    # Provider registry — one provider per vendor
-    anthropic_provider = AnthropicProvider(api_key=settings.anthropic_api_key)
-    providers = {"anthropic": anthropic_provider}
+    # Provider registry — one provider instance per API key.
+    # Keys registered as "anthropic:{key_id}" for AccountSelector, plus
+    # "anthropic" alias pointing to the first key (backward compat for /v1/turn).
+    providers: dict = {}
+    accounts:  list[LLMAccount] = []
+
+    anthropic_keys = settings.get_anthropic_keys()
+    if not anthropic_keys:
+        logger.warning("No Anthropic API keys configured (PLUGHUB_ANTHROPIC_API_KEY[S])")
+    for api_key in anthropic_keys:
+        acc = LLMAccount(
+            provider="anthropic",
+            api_key=api_key,
+            rpm_limit=settings.anthropic_rpm_limit,
+            tpm_limit=settings.anthropic_tpm_limit,
+        )
+        provider_instance = AnthropicProvider(api_key=api_key)
+        providers[acc.provider_key] = provider_instance   # "anthropic:{key_id}"
+        accounts.append(acc)
+
+    # "anthropic" → first key  (used by /v1/turn + /v1/reason legacy paths)
+    if anthropic_keys:
+        first_key = accounts[0]
+        providers["anthropic"] = providers[first_key.provider_key]
+
+    # AccountSelector — load balances across all registered keys.
+    # None when no accounts are configured (unit test / local dev without keys).
+    account_selector = AccountSelector(redis, accounts) if accounts else None
 
     # Shared session manager — used by both /inference and /v1/turn
     session_mgr = SessionManager(redis, kafka_producer=kafka_producer)
 
     # InferenceEngine — orchestrates /inference
     app.state.inference_engine = InferenceEngine(
-        providers=       providers,
-        model_profiles=  settings.model_profiles,
-        rate_limiter=    RateLimiter(redis, limit_per_minute=settings.rate_limit_rpm),
-        cache=           SemanticCache(redis, ttl_seconds=settings.cache_ttl_seconds),
-        redis=           redis,
-        session_ttl=     settings.session_ttl_seconds,
-        max_tokens=      settings.inference_max_tokens,
-        session_manager= session_mgr,
-        kafka_producer=  kafka_producer,
-        gateway_id=      getattr(settings, "gateway_id", "ai-gateway"),
+        providers=         providers,
+        model_profiles=    settings.model_profiles,
+        rate_limiter=      RateLimiter(redis, limit_per_minute=settings.rate_limit_rpm),
+        cache=             SemanticCache(redis, ttl_seconds=settings.cache_ttl_seconds),
+        redis=             redis,
+        session_ttl=       settings.session_ttl_seconds,
+        max_tokens=        settings.inference_max_tokens,
+        session_manager=   session_mgr,
+        kafka_producer=    kafka_producer,
+        gateway_id=        getattr(settings, "gateway_id", "ai-gateway"),
+        account_selector=  account_selector,
     )
+    app.state.account_selector = account_selector
 
     # Legacy components (/v1/turn, /v1/reason) — share the same provider
     app.state.redis          = redis
@@ -259,7 +287,18 @@ async def health(request: Request) -> HealthResponse:
     except Exception:
         redis_status = "error"
 
-    anthropic_status = "ok" if settings.anthropic_api_key else "error"
+    # Anthropic: ok if at least one key configured and not all accounts throttled
+    anthropic_keys = settings.get_anthropic_keys()
+    if not anthropic_keys:
+        anthropic_status = "error"
+    else:
+        selector: AccountSelector | None = getattr(request.app.state, "account_selector", None)
+        if selector is not None:
+            best = await selector.pick("anthropic")
+            anthropic_status = "ok" if best is not None else "degraded"
+        else:
+            anthropic_status = "ok"
+
     overall = "ok" if redis_status == "ok" and anthropic_status == "ok" else "degraded"
 
     return HealthResponse(

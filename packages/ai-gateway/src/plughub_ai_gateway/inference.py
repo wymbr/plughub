@@ -20,6 +20,7 @@ import logging
 import time
 from typing import Any
 
+from .account_selector import AccountSelector
 from .cache          import SemanticCache
 from .context        import extract_context_from_response
 from .models         import InferenceRequest, InferenceResponse
@@ -52,6 +53,7 @@ class InferenceEngine:
         session_manager:  SessionManager | None = None,
         kafka_producer:   Any | None = None,   # aiokafka.AIOKafkaProducer ou duck-type
         gateway_id:       str = "ai-gateway",
+        account_selector: AccountSelector | None = None,
     ) -> None:
         self._providers        = providers
         self._model_profiles   = model_profiles
@@ -63,6 +65,7 @@ class InferenceEngine:
         self._session_manager  = session_manager
         self._kafka_producer   = kafka_producer
         self._gateway_id       = gateway_id
+        self._account_selector = account_selector
 
     async def infer(self, req: InferenceRequest) -> InferenceResponse:
         """
@@ -195,31 +198,119 @@ class InferenceEngine:
         tools:    list[dict] | None,
     ) -> tuple[LLMResponse, str]:
         """
-        Tries primary provider; triggers fallback if ProviderError is retryable.
+        Tries primary provider with AccountSelector-based account rotation;
+        triggers fallback if ProviderError is retryable.
         Returns (LLMResponse, effective_provider_name).
-        """
-        provider = self._providers.get(profile.provider)
-        if provider is None:
-            raise ValueError(f"provider not registered: {profile.provider}")
 
+        Account selection flow:
+          1. If AccountSelector is configured, pick the least-loaded account
+             for profile.provider → use that specific provider instance.
+          2. On 429/529 (rate-limit): mark the picked account as throttled,
+             then re-pick a different account (same provider) and retry once.
+          3. If still failing (retryable): fall through to profile.fallback.
+          4. Record RPM+TPM usage on every successful call.
+        """
+        primary_provider_name = profile.provider
+
+        # ── Step 1: pick specific account via AccountSelector ──────────────
+        provider_key: str | None = None
+        if self._account_selector is not None:
+            provider_key = await self._account_selector.pick(primary_provider_name)
+            if provider_key is None:
+                logger.warning(
+                    "_call_with_fallback: all accounts throttled for provider=%s — jumping to fallback",
+                    primary_provider_name,
+                )
+            else:
+                provider = self._providers.get(provider_key)
+                if provider is None:
+                    logger.error(
+                        "_call_with_fallback: AccountSelector picked %s but no matching provider instance",
+                        provider_key,
+                    )
+                    provider_key = None  # fall through to generic lookup
+
+        if provider_key is None:
+            # No selector, or selector returned None — use generic provider alias
+            provider = self._providers.get(primary_provider_name)
+            if provider is None:
+                raise ValueError(f"provider not registered: {primary_provider_name}")
+            provider_key = primary_provider_name
+
+        # ── Step 2: call primary account ───────────────────────────────────
         try:
-            response = await provider.call(
+            response = await provider.call(  # type: ignore[union-attr]
                 messages=messages,
                 tools=tools,
                 model_id=profile.model_id,
                 max_tokens=self._max_tokens,
             )
-            return response, profile.provider
+            # Record usage for rate-limit tracking
+            if self._account_selector is not None and provider_key != primary_provider_name:
+                await self._account_selector.record_usage(
+                    provider_key,
+                    tokens=response.input_tokens + response.output_tokens,
+                )
+            return response, primary_provider_name
+
         except ProviderError as e:
-            if not e.retryable or profile.fallback is None:
+            if not e.retryable:
                 raise
 
-            # Trigger fallback
-            fallback_provider = self._providers.get(profile.fallback.provider)
-            if fallback_provider is None:
-                raise ValueError(
-                    f"fallback provider not registered: {profile.fallback.provider}"
-                ) from e
+            # Mark this account throttled so AccountSelector avoids it
+            if (
+                self._account_selector is not None
+                and provider_key != primary_provider_name
+                and e.error_code in ("rate_limit", "status_429", "status_529")
+            ):
+                await self._account_selector.mark_throttled(provider_key, retry_after_seconds=60)
+                logger.warning(
+                    "_call_with_fallback: account %s throttled — retrying with another account",
+                    provider_key,
+                )
+                # Retry once with the next available account
+                retry_key = await self._account_selector.pick(primary_provider_name)
+                if retry_key is not None and retry_key != provider_key:
+                    retry_provider = self._providers.get(retry_key)
+                    if retry_provider is not None:
+                        try:
+                            response = await retry_provider.call(
+                                messages=messages,
+                                tools=tools,
+                                model_id=profile.model_id,
+                                max_tokens=self._max_tokens,
+                            )
+                            await self._account_selector.record_usage(
+                                retry_key,
+                                tokens=response.input_tokens + response.output_tokens,
+                            )
+                            return response, primary_provider_name
+                        except ProviderError:
+                            pass  # fall through to model-level fallback
+
+            if profile.fallback is None:
+                raise
+
+            # ── Step 3: model-level fallback ───────────────────────────────
+            fallback_provider_name = profile.fallback.provider
+            fallback_key: str | None = None
+
+            if self._account_selector is not None:
+                fallback_key = await self._account_selector.pick(fallback_provider_name)
+
+            if fallback_key is None:
+                fallback_provider = self._providers.get(fallback_provider_name)
+                if fallback_provider is None:
+                    raise ValueError(
+                        f"fallback provider not registered: {fallback_provider_name}"
+                    ) from e
+                fallback_key = fallback_provider_name
+            else:
+                fallback_provider = self._providers.get(fallback_key)
+                if fallback_provider is None:
+                    raise ValueError(
+                        f"fallback provider_key {fallback_key} not in providers dict"
+                    ) from e
 
             response = await fallback_provider.call(
                 messages=messages,
@@ -227,7 +318,12 @@ class InferenceEngine:
                 model_id=profile.fallback.model_id,
                 max_tokens=self._max_tokens,
             )
-            return response, profile.fallback.provider
+            if self._account_selector is not None and fallback_key != fallback_provider_name:
+                await self._account_selector.record_usage(
+                    fallback_key,
+                    tokens=response.input_tokens + response.output_tokens,
+                )
+            return response, fallback_provider_name
 
     async def _write_session_params(
         self,
