@@ -33,6 +33,14 @@ export default defineConfig({
         target: 'http://localhost:3900',
         changeOrigin: true
       },
+      '^/v1/evaluation': {
+        target: 'http://localhost:3400',
+        changeOrigin: true
+      },
+      '^/v1/knowledge': {
+        target: 'http://localhost:3400',
+        changeOrigin: true
+      },
       '^/v1': {
         target: 'http://localhost:3300',
         changeOrigin: true

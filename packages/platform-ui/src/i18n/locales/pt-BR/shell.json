@@ -6,6 +6,14 @@
     "agentAssist": "Agent Assist",
     "workflows": "Workflows",
     "avaliacao": "Avaliação",
+    "eval": {
+      "forms": "Formulários",
+      "campaigns": "Campanhas",
+      "knowledge": "Base de Conhecimento",
+      "review": "Fila de Revisão",
+      "myEvaluations": "Minhas Avaliações",
+      "reports": "Relatórios"
+    },
     "analytics": "Analytics",
     "dashboards": "Dashboards",
     "relatorios": "Relatórios",

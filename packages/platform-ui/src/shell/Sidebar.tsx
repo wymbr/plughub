@@ -50,8 +50,15 @@ const Sidebar: React.FC = () => {
       label: t('nav.avaliacao'),
       href: '#',
       icon: '✓',
-      roles: ['supervisor', 'admin'],
-      children: []
+      roles: ['operator', 'supervisor', 'admin'],
+      children: [
+        { label: t('nav.eval.forms'),         href: '/evaluation/forms',          icon: '📝', roles: ['admin'] },
+        { label: t('nav.eval.campaigns'),      href: '/evaluation/campaigns',      icon: '📋', roles: ['supervisor', 'admin'] },
+        { label: t('nav.eval.knowledge'),      href: '/evaluation/knowledge',      icon: '📚', roles: ['admin'] },
+        { label: t('nav.eval.review'),         href: '/evaluation/review',         icon: '🔍', roles: ['supervisor', 'admin'] },
+        { label: t('nav.eval.myEvaluations'),  href: '/evaluation/my-evaluations', icon: '👤', roles: ['operator', 'supervisor', 'admin'] },
+        { label: t('nav.eval.reports'),        href: '/evaluation/reports',        icon: '📊', roles: ['supervisor', 'admin', 'business'] },
+      ]
     },
     {
       label: t('nav.analytics'),
@@ -127,7 +134,9 @@ const Sidebar: React.FC = () => {
 
           {isExpanded && (
             <div className="border-t border-white/10 mt-1 pt-1">
-              {item.children?.map(child => renderNavItem(child, depth + 1))}
+              {item.children
+                ?.filter(child => !child.roles || child.roles.includes(session?.role || ''))
+                .map(child => renderNavItem(child, depth + 1))}
             </div>
           )}
         </div>

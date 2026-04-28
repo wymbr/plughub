@@ -11,6 +11,12 @@ import MaskingPage from '@/modules/masking/MaskingPage'
 import WorkflowsPage from '@/modules/workflows/WorkflowsPage'
 import CampaignsPage from '@/modules/campaigns/CampaignsPage'
 import BillingPage from '@/modules/billing/BillingPage'
+import FormsPage from '@/modules/evaluation/FormsPage'
+import EvalCampaignsPage from '@/modules/evaluation/CampaignsPage'
+import KnowledgePage from '@/modules/evaluation/KnowledgePage'
+import ReviewPage from '@/modules/evaluation/ReviewPage'
+import MyEvaluationsPage from '@/modules/evaluation/MyEvaluationsPage'
+import EvalReportsPage from '@/modules/evaluation/ReportsPage'
 import SkillFlowsPage from '@/modules/skill-flows/SkillFlowsPage'
 import { AgentAssistPage } from '@/modules/agent-assist/AgentAssistPage'
 import PlaceholderPage from '@/modules/_placeholder/PlaceholderPage'
@@ -81,6 +87,30 @@ export const routes: RouteObject[] = [
       {
         path: 'config/access',
         element: <PlaceholderPage module="Access Control" phase="Arc 2" />
+      },
+      {
+        path: 'evaluation/forms',
+        element: <FormsPage />
+      },
+      {
+        path: 'evaluation/campaigns',
+        element: <EvalCampaignsPage />
+      },
+      {
+        path: 'evaluation/knowledge',
+        element: <KnowledgePage />
+      },
+      {
+        path: 'evaluation/review',
+        element: <ReviewPage />
+      },
+      {
+        path: 'evaluation/my-evaluations',
+        element: <MyEvaluationsPage />
+      },
+      {
+        path: 'evaluation/reports',
+        element: <EvalReportsPage />
       },
       {
         path: 'developer',

@@ -247,3 +247,167 @@ export interface CollectEvent {
   elapsed_ms:    number | null
   timestamp:     string
 }
+
+// ── Evaluation (Arc 6) ─────────────────────────────────────────────────────────
+
+export interface EvaluationCriterion {
+  criterion_id:  string
+  label:         string
+  description:   string
+  weight:        number
+  allows_na:     boolean
+  applies_when?: string | null
+  max_score:     number
+  instructions?: string | null
+}
+
+export interface EvaluationDimension {
+  dimension_id: string
+  label:        string
+  weight:       number
+  criteria:     EvaluationCriterion[]
+}
+
+export interface EvaluationForm {
+  form_id:         string
+  tenant_id:       string
+  name:            string
+  description:     string
+  status:          'active' | 'archived'
+  dimensions:      EvaluationDimension[]
+  knowledge_namespace?: string | null
+  created_at:      string
+  updated_at:      string
+}
+
+export interface SamplingRules {
+  mode?:           'all' | 'percentage' | 'fixed'
+  rate?:           number
+  every_n?:        number
+  min_duration_s?: number
+  agent_type_ids?: string[]
+  pool_ids?:       string[]
+  channels?:       string[]
+  outcome_filter?: string[]
+}
+
+export interface ReviewerRules {
+  auto_review?:      boolean
+  score_threshold?:  number
+  random_rate?:      number
+  human_review?:     boolean
+}
+
+export interface EvaluationCampaign {
+  campaign_id:      string
+  tenant_id:        string
+  form_id:          string
+  name:             string
+  description:      string
+  status:           'draft' | 'active' | 'paused' | 'closed'
+  sampling_rules:   SamplingRules
+  reviewer_rules:   ReviewerRules
+  total_instances:  number
+  completed:        number
+  pending:          number
+  in_review:        number
+  avg_score:        number | null
+  created_at:       string
+  updated_at:       string
+}
+
+export interface EvaluationInstance {
+  instance_id:   string
+  campaign_id:   string
+  session_id:    string
+  tenant_id:     string
+  status:        'pending' | 'in_progress' | 'completed' | 'expired' | 'error'
+  priority:      number
+  session_meta:  Record<string, unknown>
+  expires_at:    string | null
+  claimed_by:    string | null
+  created_at:    string
+  updated_at:    string
+}
+
+export interface EvaluationCriterionResponse {
+  criterion_id:   string
+  value:          number | null
+  na:             boolean
+  na_reason:      string | null
+  justification:  string
+  evidence_refs?: number[]
+}
+
+export interface EvaluationResult {
+  result_id:          string
+  instance_id:        string
+  session_id:         string
+  tenant_id:          string
+  evaluator_id:       string
+  form_id:            string | null
+  campaign_id:        string | null
+  overall_score:      number
+  overall_observation:string
+  highlights:         string[]
+  improvement_points: string[]
+  compliance_flags:   string[]
+  criterion_responses:EvaluationCriterionResponse[]
+  eval_status:        'submitted' | 'approved' | 'adjusted_approved' | 'rejected' | 'contested'
+  locked:             boolean
+  created_at:         string
+  updated_at:         string
+}
+
+export interface EvaluationContestation {
+  contestation_id:  string
+  result_id:        string
+  tenant_id:        string
+  contested_by:     string
+  reason:           string
+  status:           'open' | 'upheld' | 'dismissed'
+  adjudicator:      string | null
+  adjudication_note:string | null
+  created_at:       string
+  updated_at:       string
+}
+
+export interface KnowledgeSnippet {
+  snippet_id:  string
+  tenant_id:   string
+  namespace:   string
+  content:     string
+  source_ref?: string | null
+  metadata?:   Record<string, unknown>
+  score?:      number
+  created_at:  string
+  updated_at:  string
+}
+
+export interface CampaignReport {
+  campaign_id:     string
+  name:            string
+  form_id:         string
+  total:           number
+  completed:       number
+  pending:         number
+  in_review:       number
+  expired:         number
+  completion_pct:  number
+  avg_score:       number | null
+  score_p25:       number | null
+  score_p75:       number | null
+  top_flags:       string[]
+  generated_at:    string
+}
+
+export interface AgentEvaluationReport {
+  agent_type_id:      string
+  pool_id:            string
+  total_sessions:     number
+  evaluated:          number
+  avg_score:          number | null
+  score_trend:        { date: string; avg_score: number }[]
+  top_improvement:    string[]
+  compliance_flags:   string[]
+}
