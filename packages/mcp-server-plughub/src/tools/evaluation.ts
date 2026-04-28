@@ -410,6 +410,36 @@ const EvaluationContextGetInputSchema = z.object({
   participant_id: z.string().uuid(),
 })
 
+// ── Arc 6 — EvaluationCriterionResponse input schema ─────────────────────────
+
+const EvidenceRefInputSchema = z.object({
+  /** event_id from the replay transcript */
+  event_id:   z.string().min(1),
+  turn_index: z.number().int().nonnegative(),
+  quote:      z.string().max(500).optional(),
+  category:   z.enum(["positive", "negative", "neutral"]).default("neutral"),
+})
+
+const EvaluationCriterionResponseInputSchema = z.object({
+  criterion_id:  z.string().min(1),
+  /** true when criterion is not applicable to this session */
+  na:            z.boolean().default(false),
+  score:         z.number().min(0).optional(),     // for type "score"
+  boolean_value: z.boolean().optional(),           // for type "boolean"
+  choice_value:  z.string().optional(),            // for type "choice"
+  text_value:    z.string().optional(),            // for type "text"
+  notes:         z.string().optional(),
+  evidence:      z.array(EvidenceRefInputSchema).default([]),
+})
+
+const KnowledgeSnippetInputSchema = z.object({
+  snippet_id:   z.string().min(1),
+  content:      z.string().min(1),
+  score:        z.number().min(0).max(1),
+  source_ref:   z.string().optional(),
+  retrieved_at: z.string().optional(),
+})
+
 const EvaluationDimensionInputSchema = z.object({
   dimension_id: z.string().min(1),
   name:         z.string().min(1),
@@ -451,6 +481,40 @@ const EvaluationSubmitInputSchema = z.object({
   comparison_replay_outcome:  z.string().optional(),
   /** Sentimento final estimado para o replay (−1 a 1) */
   comparison_replay_sentiment: z.number().min(-1).max(1).optional(),
+
+  // ── Arc 6 — form-aware evaluation fields (optional, backward-compatible) ────
+
+  /**
+   * Structured responses to each criterion in the EvaluationForm.
+   * Provided when the evaluator used an EvaluationForm (campaign-triggered evaluation).
+   * Each entry maps one criterion_id to its scored response + evidence.
+   */
+  criterion_responses: z.array(EvaluationCriterionResponseInputSchema).optional(),
+
+  /**
+   * EvaluationForm ID that was used for this evaluation.
+   * Taken from ReplayContext.evaluation_form.form_id when present.
+   */
+  form_id:     z.string().optional(),
+
+  /**
+   * EvaluationCampaign that triggered this evaluation (Arc 6).
+   * Taken from ReplayContext.campaign_id when present.
+   */
+  campaign_id: z.string().optional(),
+
+  /**
+   * EvaluationInstance tracking record ID (Arc 6).
+   * When present, evaluation_submit also publishes eval.instance.submitted
+   * to evaluation.events so the evaluation-api can advance the instance lifecycle.
+   */
+  instance_id: z.string().optional(),
+
+  /**
+   * RAG snippets from mcp-server-knowledge used during evaluation.
+   * Attached to the EvaluationResult for audit and feedback loop.
+   */
+  knowledge_snippets: z.array(KnowledgeSnippetInputSchema).optional(),
 })
 
 // ─── Registro das tools ───────────────────────────────────────────────────────
@@ -685,6 +749,8 @@ export function registerEvaluationTools(server: McpServer, deps: EvaluationDeps)
     "Retorna o ReplayContext completo para avaliação de qualidade pós-sessão. " +
     "Inclui todos os eventos do stream com original_content desmascarado, " +
     "sentimento, participantes e metadados da sessão original. " +
+    "Arc 6: quando o ReplayContext contém evaluation_form, campaign_id ou instance_id, " +
+    "esses campos são também surfaced como top-level convenience fields na resposta. " +
     "Disponível apenas para agentes com role evaluator ou reviewer. " +
     "Requer que o Session Replayer tenha processado a sessão previamente. " +
     "Spec: Session Replayer.",
@@ -725,18 +791,57 @@ export function registerEvaluationTools(server: McpServer, deps: EvaluationDeps)
           )
         }
 
-        let context: unknown
+        let context: Record<string, unknown>
         try {
-          context = JSON.parse(raw)
+          context = JSON.parse(raw) as Record<string, unknown>
         } catch {
           return mcpError("parse_error", "ReplayContext inválido no Redis")
+        }
+
+        // ── Arc 6: surface form + campaign metadata as top-level fields ───────
+        // The evaluator agent can read these directly rather than digging into context.
+        // All fields are optional — Arc 3 contexts will simply not have them.
+        const arc6Meta: Record<string, unknown> = {}
+
+        if (context["evaluation_form"] !== undefined && context["evaluation_form"] !== null) {
+          arc6Meta["evaluation_form"] = context["evaluation_form"]
+        }
+        if (typeof context["campaign_id"] === "string") {
+          arc6Meta["campaign_id"] = context["campaign_id"]
+        }
+        if (typeof context["instance_id"] === "string") {
+          arc6Meta["instance_id"] = context["instance_id"]
+        }
+        if (typeof context["comparison_mode"] === "boolean") {
+          arc6Meta["comparison_mode"] = context["comparison_mode"]
+        }
+
+        // Surface participant role/type summary for the evaluator — extracted from
+        // context.participants so the agent doesn't need to iterate events.
+        const participantSummary: Array<Record<string, unknown>> = []
+        const participants = context["participants"]
+        if (Array.isArray(participants)) {
+          for (const p of participants) {
+            if (p && typeof p === "object") {
+              const pt = p as Record<string, unknown>
+              participantSummary.push({
+                participant_id: pt["participant_id"],
+                role:           pt["role"],
+                agent_type_id:  pt["agent_type_id"] ?? null,
+              })
+            }
+          }
         }
 
         return ok({
           session_id,
           participant_id,
           context,
-          retrieved_at: new Date().toISOString(),
+          retrieved_at:         new Date().toISOString(),
+          // Arc 6 convenience fields — undefined keys are omitted by JSON.stringify
+          ...(Object.keys(arc6Meta).length > 0 ? arc6Meta : {}),
+          // Participant summary (always present for transparency)
+          participant_summary: participantSummary,
         })
       } catch (e) {
         return handleCaughtError(e)
@@ -749,6 +854,9 @@ export function registerEvaluationTools(server: McpServer, deps: EvaluationDeps)
     "evaluation_submit",
     "Submete o resultado de avaliação de qualidade pós-sessão. " +
     "Publica EvaluationResult em evaluation.events (Kafka). " +
+    "Arc 6: aceita criterion_responses[], form_id, campaign_id, instance_id e knowledge_snippets. " +
+    "Quando instance_id presente, também publica eval.instance.submitted para o ciclo de vida " +
+    "da EvaluationInstance na evaluation-api. " +
     "A persistência no PostgreSQL é responsabilidade de um consumer dedicado — " +
     "esta tool nunca escreve diretamente no banco. " +
     "Reduz o TTL do ReplayContext no Redis após submissão. " +
@@ -762,6 +870,8 @@ export function registerEvaluationTools(server: McpServer, deps: EvaluationDeps)
           composite_score, dimensions, summary, highlights,
           improvement_points, compliance_flags, is_benchmark,
           comparison_turns, comparison_replay_outcome, comparison_replay_sentiment,
+          // Arc 6
+          criterion_responses, form_id, campaign_id, instance_id, knowledge_snippets,
         } = parsed
 
         const { tenant_id } = verifySessionToken(session_token)
@@ -779,6 +889,10 @@ export function registerEvaluationTools(server: McpServer, deps: EvaluationDeps)
         // Lê ReplayContext para enriquecer o resultado
         let session_outcome: string   | undefined
         let production_final_sentiment: number | undefined
+        // Arc 6: fallback — read campaign context from ReplayContext if not supplied by caller
+        let resolved_form_id     = form_id
+        let resolved_campaign_id = campaign_id
+        let resolved_instance_id = instance_id
 
         try {
           const ctxRaw = await redis.get(`${tenant_id}:replay:${session_id}:context`)
@@ -791,6 +905,18 @@ export function registerEvaluationTools(server: McpServer, deps: EvaluationDeps)
             const sentiment = ctx["sentiment"] as Array<{ score: number }> | undefined
             if (Array.isArray(sentiment) && sentiment.length > 0) {
               production_final_sentiment = sentiment[sentiment.length - 1]?.score
+            }
+
+            // Arc 6: use ReplayContext values as fallback when caller didn't supply them
+            if (!resolved_form_id && typeof ctx["evaluation_form"] === "object" && ctx["evaluation_form"] !== null) {
+              const form = ctx["evaluation_form"] as Record<string, unknown>
+              if (typeof form["form_id"] === "string") resolved_form_id = form["form_id"]
+            }
+            if (!resolved_campaign_id && typeof ctx["campaign_id"] === "string") {
+              resolved_campaign_id = ctx["campaign_id"]
+            }
+            if (!resolved_instance_id && typeof ctx["instance_id"] === "string") {
+              resolved_instance_id = ctx["instance_id"]
             }
           }
         } catch { /* non-fatal */ }
@@ -835,6 +961,8 @@ export function registerEvaluationTools(server: McpServer, deps: EvaluationDeps)
           session_outcome,
           is_benchmark,
           evaluated_at,
+          // eval_status is always "submitted" on first publish — reviewer may change it later
+          eval_status:        "submitted",
         }
 
         // Inclui comparison apenas quando presente (comparison_mode: true)
@@ -842,8 +970,45 @@ export function registerEvaluationTools(server: McpServer, deps: EvaluationDeps)
           result["comparison"] = comparison
         }
 
-        // Publica em evaluation.events — consumer persiste no PostgreSQL
+        // ── Arc 6: include form-aware fields when present ─────────────────────
+        if (resolved_form_id     !== undefined) result["form_id"]     = resolved_form_id
+        if (resolved_campaign_id !== undefined) result["campaign_id"] = resolved_campaign_id
+        if (resolved_instance_id !== undefined) result["instance_id"] = resolved_instance_id
+
+        if (criterion_responses && criterion_responses.length > 0) {
+          result["criterion_responses"] = criterion_responses
+        }
+        if (knowledge_snippets && knowledge_snippets.length > 0) {
+          result["knowledge_snippets"] = knowledge_snippets
+        }
+
+        // Publica evaluation.completed em evaluation.events — consumer persiste no PostgreSQL
         await kafka.publish("evaluation.events", result)
+
+        // ── Arc 6: publish lifecycle event when instance_id is present ────────
+        // This allows the evaluation-api to advance the EvaluationInstance from
+        // "in_progress" → "submitted" without polling.
+        if (resolved_instance_id) {
+          try {
+            const instanceEvent: Record<string, unknown> = {
+              event_type:    "eval.instance.submitted",
+              instance_id:   resolved_instance_id,
+              evaluation_id,
+              session_id,
+              tenant_id,
+              evaluator_id:  participant_id,
+              agent_type_id,
+              composite_score,
+              evaluated_at,
+            }
+            if (resolved_form_id)     instanceEvent["form_id"]     = resolved_form_id
+            if (resolved_campaign_id) instanceEvent["campaign_id"] = resolved_campaign_id
+            await kafka.publish("evaluation.events", instanceEvent)
+          } catch (e) {
+            // Non-fatal — the main result was already published
+            console.warn("evaluation_submit: failed to publish eval.instance.submitted", e)
+          }
+        }
 
         // Reduz TTL do ReplayContext — já foi consumido
         try {
@@ -857,6 +1022,10 @@ export function registerEvaluationTools(server: McpServer, deps: EvaluationDeps)
           composite_score,
           evaluated_at,
           comparison_included:  comparison !== undefined,
+          // Arc 6 — indicates which optional fields were included
+          criterion_responses_included: (criterion_responses?.length ?? 0) > 0,
+          knowledge_snippets_included:  (knowledge_snippets?.length ?? 0) > 0,
+          instance_lifecycle_published: resolved_instance_id !== undefined,
         })
       } catch (e) {
         return handleCaughtError(e)
