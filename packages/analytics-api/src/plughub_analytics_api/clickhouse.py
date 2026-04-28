@@ -13,8 +13,10 @@ Six tables, all in database `plughub`:
 
 Design decisions:
   - ReplacingMergeTree on every table for idempotent re-inserts (Kafka at-least-once).
-  - sessions uses version=closed_at: a second insert with closed_at set replaces the
-    initial row that had closed_at = NULL.
+  - No explicit version column (ClickHouse rejects Nullable and String as version).
+    Deduplication keeps the LAST inserted row per ORDER BY key. Kafka ordering
+    guarantees that close/leave events arrive after open/join events, so last-write-wins
+    is correct for sessions, participation_intervals, and collect_events.
   - All DateTime columns store UTC (ClickHouse DateTime64 with timezone 'UTC').
   - date column (Date) is the partition key for efficient time-range pruning.
   - ORDER BY always starts with (tenant_id, ...) so tenant-scoped queries are fast.
@@ -50,7 +52,7 @@ CREATE TABLE IF NOT EXISTS {db}.sessions
     handle_time_ms Nullable(Int64),
     date           Date
 )
-ENGINE = ReplacingMergeTree(closed_at)
+ENGINE = ReplacingMergeTree()
 PARTITION BY toYYYYMM(date)
 ORDER BY (tenant_id, session_id)
 """
@@ -199,9 +201,35 @@ CREATE TABLE IF NOT EXISTS {db}.collect_events
     timestamp      DateTime64(3, 'UTC'),
     date           Date
 )
-ENGINE = ReplacingMergeTree(status)
+ENGINE = ReplacingMergeTree()
 PARTITION BY toYYYYMM(date)
 ORDER BY (tenant_id, collect_token)
+"""
+
+# participation_intervals: one row per participant per session interval.
+# ReplacingMergeTree() — no version column (Nullable(DateTime64) is not valid as version).
+# The "left" event is always inserted after "joined" (Kafka ordering), so last-write-wins
+# keeps the row with left_at set. ORDER BY (tenant_id, session_id, participant_id).
+_DDL_PARTICIPATION_INTERVALS = """
+CREATE TABLE IF NOT EXISTS {db}.participation_intervals
+(
+    event_id       String,
+    session_id     String,
+    tenant_id      String,
+    participant_id String,
+    pool_id        String,
+    agent_type_id  String,
+    role           String,
+    agent_type     String,
+    conference_id  Nullable(String),
+    joined_at      Nullable(DateTime64(3, 'UTC')),
+    left_at        Nullable(DateTime64(3, 'UTC')),
+    duration_ms    Nullable(Int64),
+    date           Date
+)
+ENGINE = ReplacingMergeTree()
+PARTITION BY toYYYYMM(date)
+ORDER BY (tenant_id, session_id, participant_id)
 """
 
 _ALL_DDL = [
@@ -214,6 +242,7 @@ _ALL_DDL = [
     _DDL_SENTIMENT_EVENTS,
     _DDL_WORKFLOW_EVENTS,
     _DDL_COLLECT_EVENTS,
+    _DDL_PARTICIPATION_INTERVALS,
 ]
 
 # Migrations applied after CREATE IF NOT EXISTS (idempotent ALTER TABLE statements).
@@ -374,6 +403,22 @@ class AnalyticsStore:
             self._insert, "collect_events", [_collect_event_row(row)], self._COLLECT_EVENT_COLS
         )
 
+    # participation_intervals
+
+    _PARTICIPATION_COLS = [
+        "event_id", "session_id", "tenant_id", "participant_id",
+        "pool_id", "agent_type_id", "role", "agent_type",
+        "conference_id", "joined_at", "left_at", "duration_ms", "date",
+    ]
+
+    async def upsert_participation_interval(self, row: dict) -> None:
+        await asyncio.to_thread(
+            self._insert,
+            "participation_intervals",
+            [_participation_row(row)],
+            self._PARTICIPATION_COLS,
+        )
+
 
 # ─── Row builders ─────────────────────────────────────────────────────────────
 
@@ -529,5 +574,27 @@ def _collect_event_row(d: dict) -> list:
         _parse_dt(d.get("responded_at")),
         d.get("elapsed_ms"),
         _parse_dt(ts) or datetime.utcnow(),
+        _today_utc(ts),
+    ]
+
+
+def _participation_row(d: dict) -> list:
+    ts = d.get("timestamp") or d.get("joined_at")
+    event_type = d.get("type", "")
+    joined_at  = _parse_dt(d.get("joined_at"))
+    left_at    = _parse_dt(d.get("timestamp")) if event_type == "participant_left" else None
+    return [
+        d.get("event_id", ""),
+        d.get("session_id", ""),
+        d.get("tenant_id", ""),
+        d.get("participant_id", ""),
+        d.get("pool_id", "") or "",
+        d.get("agent_type_id", "") or "",
+        d.get("role", ""),
+        d.get("agent_type", ""),
+        d.get("conference_id") or None,
+        joined_at,
+        left_at,
+        d.get("duration_ms"),
         _today_utc(ts),
     ]
