@@ -219,9 +219,10 @@ services:
     ports:
       - "3300:3300"
     environment:
-      DATABASE_URL: postgresql://plughub:plughub@postgres:5432/plughub_demo
-      PORT: "3300"
-      JWT_SECRET: demo_plughub_secret_32chars__
+      DATABASE_URL:   postgresql://plughub:plughub@postgres:5432/plughub_demo
+      PORT:           "3300"
+      JWT_SECRET:     demo_plughub_secret_32chars__
+      KAFKA_BROKERS:  kafka:29092
     depends_on:
       postgres:
         condition: service_healthy
@@ -500,6 +501,55 @@ services:
     networks:
       - plughub-demo
 
+  # One-shot init container: creates platform_config table before config-api starts.
+  # Runs asyncpg directly — bypasses the retry-in-lifespan timing issues entirely.
+  config-db-init:
+    build:
+      context: .
+      dockerfile: packages/config-api/Dockerfile
+    environment:
+      PLUGHUB_CONFIG_DATABASE_URL: postgresql://plughub:plughub@postgres:5432/plughub_demo
+    command:
+      - python3
+      - -c
+      - |
+        import asyncio, asyncpg, os, sys, time
+        DSN = os.environ["PLUGHUB_CONFIG_DATABASE_URL"]
+        DDL = """
+        CREATE TABLE IF NOT EXISTS platform_config (
+            id          SERIAL PRIMARY KEY,
+            tenant_id   TEXT        NOT NULL DEFAULT '__global__',
+            namespace   TEXT        NOT NULL,
+            key         TEXT        NOT NULL,
+            value       JSONB       NOT NULL,
+            description TEXT        NOT NULL DEFAULT '',
+            updated_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+            CONSTRAINT uq_platform_config UNIQUE (tenant_id, namespace, key)
+        );
+        CREATE INDEX IF NOT EXISTS idx_platform_config_lookup
+            ON platform_config (tenant_id, namespace, key);
+        """
+        async def main():
+            for attempt in range(1, 11):
+                try:
+                    conn = await asyncpg.connect(DSN, timeout=5)
+                    await conn.execute(DDL)
+                    await conn.close()
+                    print("platform_config schema ready", flush=True)
+                    return
+                except Exception as exc:
+                    print(f"Attempt {attempt}/10 failed: {exc}", flush=True)
+                    if attempt < 10:
+                        await asyncio.sleep(3)
+            sys.exit(1)
+        asyncio.run(main())
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: on-failure
+    networks:
+      - plughub-demo
+
   config-api:
     build:
       context: .
@@ -511,6 +561,8 @@ services:
       PLUGHUB_CONFIG_REDIS_URL:    redis://redis:6379
       PLUGHUB_CONFIG_ADMIN_TOKEN:  demo_config_admin_token
     depends_on:
+      config-db-init:
+        condition: service_completed_successfully
       postgres:
         condition: service_healthy
       redis:
