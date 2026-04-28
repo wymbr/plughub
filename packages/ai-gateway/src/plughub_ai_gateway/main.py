@@ -34,7 +34,7 @@ from .models     import (
     InferenceRequest, InferenceResponse,
 )
 from .gateway    import AIGateway
-from .providers  import AnthropicProvider, ProviderError
+from .providers  import AnthropicProvider, OpenAIProvider, ProviderError
 from .rate_limit import RateLimiter, RateLimitExceeded
 from .reason     import ReasonEngine
 from .session    import SessionManager, get_redis
@@ -93,6 +93,24 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     if anthropic_keys:
         first_key = accounts[0]
         providers["anthropic"] = providers[first_key.provider_key]
+
+    # OpenAI — optional fallback provider (multi-key support)
+    openai_keys = settings.get_openai_keys()
+    for api_key in openai_keys:
+        acc = LLMAccount(
+            provider="openai",
+            api_key=api_key,
+            rpm_limit=settings.openai_rpm_limit,
+            tpm_limit=settings.openai_tpm_limit,
+        )
+        provider_instance = OpenAIProvider(api_key=api_key)
+        providers[acc.provider_key] = provider_instance   # "openai:{key_id}"
+        accounts.append(acc)
+
+    if openai_keys:
+        providers["openai"] = providers[
+            LLMAccount(provider="openai", api_key=openai_keys[0]).provider_key
+        ]
 
     # AccountSelector — load balances across all registered keys.
     # None when no accounts are configured (unit test / local dev without keys).

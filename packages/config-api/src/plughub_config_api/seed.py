@@ -16,6 +16,7 @@ Namespaces:
   masking        — Message masking access policies
   quota          — Default quota limits
   pricing        — Unit prices per resource type, currency, reserve markup
+  ai_gateway     — Multi-account rotation, workload isolation, evaluation model
 
 Run:
   PLUGHUB_CONFIG_DATABASE_URL=... PLUGHUB_CONFIG_REDIS_URL=... python -m plughub_config_api.seed
@@ -278,6 +279,51 @@ _SEED: list[tuple[str, str, object, str]] = [
         "Day of month when the billing cycle resets (1 = first of month). "
         "Used by the invoice calculator to determine cycle_start when not "
         "explicitly provided."
+    ),
+
+    # ── ai_gateway ────────────────────────────────────────────────────────────
+    # Source: packages/ai-gateway — multi-account + workload isolation config.
+    (
+        "ai_gateway", "account_rotation_enabled",
+        True,
+        "Whether the AccountSelector is used for load balancing across multiple "
+        "API keys. When false, the first key is always used. "
+        "Source: ai-gateway/account_selector.py"
+    ),
+    (
+        "ai_gateway", "throttle_retry_after_s",
+        60,
+        "How long (seconds) an account is excluded from selection after receiving "
+        "a 429 or 529 response. Source: ai-gateway/account_selector.py"
+    ),
+    (
+        "ai_gateway", "utilization_rpm_weight",
+        0.7,
+        "Weight of RPM utilization in the AccountSelector scoring function. "
+        "TPM weight = 1 - rpm_weight. Higher values prefer accounts with lower "
+        "request rate. Source: ai-gateway/account_selector.py"
+    ),
+    (
+        "ai_gateway", "evaluation_model",
+        "claude-haiku-4-5-20251001",
+        "Model ID used for the 'evaluation' model profile — batch evaluation "
+        "workload. Isolated from realtime agents to avoid contention. "
+        "Override with 'claude-sonnet-4-6' for higher-quality evaluations. "
+        "Source: ai-gateway/config.py"
+    ),
+    (
+        "ai_gateway", "evaluation_max_tokens",
+        2048,
+        "Max tokens for evaluation inference calls. Higher than default (1024) "
+        "because evaluation responses include per-criterion justification. "
+        "Source: ai-gateway/config.py"
+    ),
+    (
+        "ai_gateway", "openai_fallback_enabled",
+        False,
+        "Whether OpenAI is used as a fallback provider when all Anthropic accounts "
+        "are throttled. Requires PLUGHUB_OPENAI_API_KEY(S) to be set. "
+        "Source: ai-gateway/main.py"
     ),
 ]
 
