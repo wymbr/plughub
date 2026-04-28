@@ -180,6 +180,32 @@ export {
   ReplayContextSchema,
   EvaluationRequestSchema,
   ComparisonReportSchema,
+  // Arc 6 — EvaluationForm + Criterion
+  EvaluationCriterionTypeSchema,
+  EvaluationDimensionDefSchema,
+  EvaluationCriterionSchema,
+  EvaluationFormSchema,
+  EvidenceRefSchema,
+  EvaluationCriterionResponseSchema,
+  // Arc 6 — Campaign + Instance
+  SamplingRulesSchema,
+  ReviewerRulesSchema,
+  CampaignScheduleSchema,
+  EvaluationCampaignStatusSchema,
+  EvaluationCampaignSchema,
+  EvaluationInstanceStatusSchema,
+  ReviewResultSchema,
+  EvaluationInstanceSchema,
+  // Arc 6 — Kafka events
+  KnowledgeSnippetSchema,
+  EvalInstanceCreatedSchema,
+  EvalSubmittedSchema,
+  EvalReviewRequestedSchema,
+  EvalReviewCompletedSchema,
+  EvalContestedSchema,
+  EvalLockedSchema,
+  EvalCampaignStatusChangedSchema,
+  EvaluationLifecycleEventSchema,
 } from "./evaluation"
 
 export type {
@@ -189,6 +215,32 @@ export type {
   ReplayContext,
   EvaluationRequest,
   ComparisonReport,
+  // Arc 6 — EvaluationForm + Criterion
+  EvaluationCriterionType,
+  EvaluationDimensionDef,
+  EvaluationCriterion,
+  EvaluationForm,
+  EvidenceRef,
+  EvaluationCriterionResponse,
+  // Arc 6 — Campaign + Instance
+  SamplingRules,
+  ReviewerRules,
+  CampaignSchedule,
+  EvaluationCampaignStatus,
+  EvaluationCampaign,
+  EvaluationInstanceStatus,
+  ReviewResult,
+  EvaluationInstance,
+  // Arc 6 — Kafka events
+  KnowledgeSnippet,
+  EvalInstanceCreated,
+  EvalSubmitted,
+  EvalReviewRequested,
+  EvalReviewCompleted,
+  EvalContested,
+  EvalLocked,
+  EvalCampaignStatusChanged,
+  EvaluationLifecycleEvent,
 } from "./evaluation"
 
 // ── Legado v1 (mantido para compatibilidade) ─
