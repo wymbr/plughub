@@ -7,6 +7,11 @@ WORKDIR /app/packages/operator-console
 COPY packages/operator-console/package*.json ./
 RUN npm install
 COPY packages/operator-console/ ./
+
+# Build-time env vars (Vite bakes these into the JS bundle)
+ARG VITE_DEFAULT_TENANT=tenant_demo
+ENV VITE_DEFAULT_TENANT=${VITE_DEFAULT_TENANT}
+
 RUN npm run build
 
 # Stage 2: serve with nginx + API proxy

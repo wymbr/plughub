@@ -86,8 +86,10 @@ export function useConfigAll(tenantId: string): {
     setLoading(true)
     setError(null)
     try {
-      const data = await cfetch(`/config?tenant_id=${encodeURIComponent(tenantId)}`)
-      setConfig(data as ConfigAllResponse)
+      const raw  = await cfetch(`/config?tenant_id=${encodeURIComponent(tenantId)}`)
+      // API returns { tenant_id, config: { namespace: { key: ConfigEntry } } }
+      const data = (raw as { config?: ConfigAllResponse }).config ?? (raw as ConfigAllResponse)
+      setConfig(data)
     } catch (err) {
       setError(String(err))
     } finally {
@@ -120,10 +122,13 @@ export function useConfigNamespace(tenantId: string, namespace: string): {
     setLoading(true)
     setError(null)
     try {
-      const data = await cfetch(
+      const raw  = await cfetch(
         `/config/${encodeURIComponent(namespace)}?tenant_id=${encodeURIComponent(tenantId)}`
       )
-      setEntries(data as Record<string, ConfigEntry>)
+      // API returns { tenant_id, namespace, entries: { key: ConfigEntry } }
+      const data = (raw as { entries?: Record<string, ConfigEntry> }).entries
+             ?? (raw as Record<string, ConfigEntry>)
+      setEntries(data)
     } catch (err) {
       setError(String(err))
     } finally {

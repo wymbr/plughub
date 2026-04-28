@@ -481,6 +481,7 @@ services:
       PLUGHUB_CLICKHOUSE_PASSWORD: plughub
       PLUGHUB_CLICKHOUSE_DATABASE: plughub_demo
       PLUGHUB_ADMIN_JWT_SECRET:    demo_analytics_admin_secret
+      PLUGHUB_ANALYTICS_OPEN_ACCESS: "true"   # bypass JWT auth in demo — dashboard accessible without token
     depends_on:
       redis:
         condition: service_healthy

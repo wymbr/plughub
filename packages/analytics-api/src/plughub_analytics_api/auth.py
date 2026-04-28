@@ -63,7 +63,15 @@ class Principal:
 async def require_principal(
     credentials: HTTPAuthorizationCredentials | None = Depends(_bearer),
 ) -> Principal:
-    """FastAPI dependency — decodes and validates the Bearer JWT."""
+    """FastAPI dependency — decodes and validates the Bearer JWT.
+
+    When PLUGHUB_ANALYTICS_OPEN_ACCESS=true (demo / dev), returns an admin
+    principal without requiring a token.  Never enable in production.
+    """
+    settings = get_settings()
+    if settings.analytics_open_access:
+        return Principal(role="admin", tenant_id=None, sub="open_access")
+
     if not credentials:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,

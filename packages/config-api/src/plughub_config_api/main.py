@@ -74,10 +74,22 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     store   = ConfigStore(pool, cache)
     emitter = ConfigKafkaEmitter(settings.kafka_brokers_list)
 
-    try:
-        await store.setup()
-    except Exception as exc:
-        logger.warning("Schema setup failed — will retry on first request: %s", exc)
+    # Ensure DB schema with retry — asyncpg pool creation succeeds before
+    # PostgreSQL fully accepts DDL, so one immediate failure is expected.
+    for _attempt in range(1, 11):
+        try:
+            await store.setup()
+            break
+        except Exception as exc:
+            if _attempt == 10:
+                logger.error("Schema setup failed after 10 attempts — aborting: %s", exc)
+                raise
+            _wait = 2.0 * _attempt
+            logger.warning(
+                "Schema setup failed (attempt %d/10) — retrying in %.1fs: %s",
+                _attempt, _wait, exc,
+            )
+            await asyncio.sleep(_wait)
 
     await emitter.start()
 
@@ -110,7 +122,10 @@ async def health() -> JSONResponse:
     redis_status = "ok"
 
     try:
-        await app.state.pool.fetchval("SELECT 1")
+        # Verify both connectivity AND that the schema is ready
+        await app.state.pool.fetchval(
+            "SELECT COUNT(*) FROM platform_config LIMIT 0"
+        )
     except Exception as exc:
         logger.warning("PG health check failed: %s", exc)
         pg_status = "error"

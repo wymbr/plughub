@@ -38,6 +38,11 @@ class Settings(BaseSettings):
     # In production, replace with a strong random secret.
     admin_jwt_secret: str = "changeme_analytics_admin_secret"
 
+    # ── Open access (demo / dev) ──────────────────────────────────────────
+    # When True, all protected endpoints return an admin principal without
+    # requiring a Bearer token. NEVER enable in production.
+    analytics_open_access: bool = False
+
 
 @lru_cache
 def get_settings() -> Settings:
