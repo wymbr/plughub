@@ -5,6 +5,215 @@ Run the steps below **in order**: infrastructure first, then backend services, t
 
 ---
 
+## Demo Stack — ambiente completo para testes manuais
+
+Um único comando sobe toda a plataforma (infra + aplicação + observabilidade):
+
+```bash
+# Na raiz do repositório:
+docker compose -f docker-compose.demo.yml up --build --scale e2e-runner=0
+```
+
+`--scale e2e-runner=0` sobe a stack sem o runner de testes automáticos — ideal para uso interativo.
+
+Aguarde todos os containers ficarem `healthy` (~3–5 min na primeira vez).
+
+### URLs de acesso
+
+| URL | O que é |
+|---|---|
+| **http://localhost:5173** | **Agent Assist UI** — interface do agente humano |
+| **http://localhost:5173/webchat-test.html** | **WebChat cliente** — interface do consumidor final |
+| **http://localhost:4000** | **Operator Console** — supervisão, analytics e configuração |
+| http://localhost:9001 | Kafdrop — UI do Kafka |
+| http://localhost:8081 | Redis Commander — UI do Redis |
+
+### Fluxo de teste manual
+
+**Atendimento básico (pool de IA):**
+1. Abra o WebChat em `http://localhost:5173/webchat-test.html`
+2. Selecione pool `sac_ia` e clique **Conectar**
+3. Envie uma mensagem — o agente IA responde automaticamente
+4. Acompanhe o heatmap em `http://localhost:4000` (painel Heatmap)
+
+**Atendimento com agente humano:**
+1. Abra o Agent Assist UI: `http://localhost:5173?pool=retencao_humano&agent=agente_humano_v1-001`
+2. Abra o WebChat: `http://localhost:5173/webchat-test.html` → pool `retencao_humano`
+3. Envie mensagens do cliente — o agente humano recebe em tempo real
+4. Supervisor pode entrar pelo Operator Console → Heatmap → drill-down na sessão → **Entrar como supervisor**
+
+**Co-pilot @mention:**
+1. Abra o Agent Assist UI no pool `retencao_humano`
+2. O agente humano digita `@copilot ativa` → co-pilot analisa e envia sugestão (`agents_only`)
+3. `@copilot para` → co-pilot encerra
+
+**Fluxo masked PIN (auth_ia):**
+1. WebChat → pool `auth_ia`
+2. O agente solicita PIN via campo mascarado (overlay no webchat)
+3. PIN válido: 6 dígitos começando com "1" (ex: `123456`)
+
+### Operator Console — painéis disponíveis
+
+| Painel | Acesso | Admin token |
+|---|---|---|
+| Heatmap | automático | — |
+| Workflows | botão nav | — |
+| Campaigns | botão nav | — |
+| Webhooks | botão nav | `demo_pricing_admin_token` |
+| Registry | botão nav | — |
+| Skills | botão nav | — |
+| Channels | botão nav | — |
+| Agents | botão nav | — |
+| Config | botão nav | `demo_config_admin_token` |
+| Pricing | botão nav | `demo_pricing_admin_token` |
+
+### Tenant padrão
+
+Todos os serviços usam `tenant_demo`. O campo TENANT no canto superior direito do Operator Console pode ser alterado para apontar para outro tenant (se cadastrado).
+
+### Encerrar a stack
+
+```bash
+# Preserva volumes (dados)
+docker compose -f docker-compose.demo.yml down
+
+# Reset completo (apaga todos os dados)
+docker compose -f docker-compose.demo.yml down -v
+```
+
+### Rodar os testes e2e automáticos
+
+```bash
+# Todos os cenários 01–14 (padrão --demo)
+docker compose -f docker-compose.demo.yml up --build
+
+# Cenário específico
+E2E_EXTRA_ARGS="--only 07" docker compose -f docker-compose.demo.yml up --build
+
+# Apenas webchat
+E2E_EXTRA_ARGS="--webchat" docker compose -f docker-compose.demo.yml up --build
+```
+
+---
+
+## Full Integration Stack — WebChat + Agentes + Supervisão
+
+Stack completa para validar o fluxo end-to-end: cliente → canal → roteamento → agente IA → escalação → agente humano → supervisão.
+
+```powershell
+# Na raiz do repositório:
+docker compose -f docker-compose.full.yml up --build
+```
+
+Aguarde todos os containers ficarem `healthy` (pode levar 3–5 min na primeira vez — o `data-seed` espera o registry estar saudável antes de criar os pools e instâncias).
+
+### URLs do Full Stack
+
+| URL | Serviço |
+|---|---|
+| **http://localhost:9090** | **WebChat Test Client** — inicie contatos aqui |
+| **http://localhost:5173** | **Agent Assist UI** — interface do agente humano |
+| http://localhost:5174 | Platform UI — Config, Monitor, Workflows |
+| http://localhost:5080 | Operator Console — heatmap + supervisão |
+| http://localhost:8010 | Channel Gateway (WebSocket) |
+| http://localhost:3300 | Agent Registry |
+| http://localhost:3100 | MCP Server (Agent Runtime) |
+| http://localhost:3500 | Analytics API |
+| http://localhost:3600 | Config API |
+| http://localhost:3700 | Calendar API |
+| http://localhost:3800 | Workflow API |
+| http://localhost:3000 | Metabase (BI) |
+| http://localhost:8080 | Kafka UI |
+| http://localhost:8081 | Redis Commander |
+
+### Fluxo básico de validação
+
+1. **Abra o WebChat** em `http://localhost:9090`
+2. Clique em **Gerar e preencher token** (gera JWT com tenant_demo)
+3. Ajuste a URL para `ws://localhost:8010/ws/chat/demo_ia` (IVR com botões) ou `sac_ia` (LLM)
+4. Clique **Conectar** — você verá o menu do agente IA
+5. Para escalar para humano, escolha a opção de especialista
+6. **Abra o Agent Assist UI** em `http://localhost:5173?agent=Carlos&pool=retencao_humano`
+   - O agente humano verá a sessão escalada e pode assumir o atendimento
+7. **Abra o Operator Console** em `http://localhost:5080`
+   - Heatmap de sentimento + drill-down de sessões + botão Entrar como Supervisor
+
+### Agent Assist UI — parâmetros URL
+
+```
+http://localhost:5173?agent=Carlos&pool=retencao_humano
+http://localhost:5173?agent=Ana&pool=retencao_humano
+```
+
+### Encerrar a stack
+
+```powershell
+# Preserva volumes
+docker compose -f docker-compose.full.yml down
+
+# Apaga tudo incluindo volumes (reset completo)
+docker compose -f docker-compose.full.yml down -v
+```
+
+---
+
+## Visual Stack — Inicialização Rápida (Docker Compose)
+
+A forma mais rápida de subir toda a plataforma para validação visual. Um único comando sobe todos os serviços.
+
+```powershell
+# Na raiz do repositório:
+docker compose -f docker-compose.visual.yml up --build
+```
+
+Aguarde todos os containers ficarem `healthy` (pode levar 2–3 min na primeira vez).
+
+### URLs disponíveis
+
+| URL | Serviço |
+|---|---|
+| http://localhost:5174 | **Platform UI** — Monitor, Config Plataforma, Workflows |
+| http://localhost:5080 | Operator Console — heatmap, sessões ao vivo, supervisor |
+| http://localhost:8010 | Channel Gateway — WebSocket webchat + upload |
+| http://localhost:9090 | WebChat Test Client |
+| http://localhost:3500 | Analytics API |
+| http://localhost:3600 | Config API |
+| http://localhost:3700 | Calendar API |
+| http://localhost:3800 | Workflow API |
+| http://localhost:3300 | Agent Registry |
+| http://localhost:3000 | Metabase (BI self-service) |
+| http://localhost:8080 | Kafka UI |
+| http://localhost:8081 | Redis Commander |
+
+### Login na Platform UI
+
+Acesse `http://localhost:5174`. Use qualquer credencial aceita pelo Agent Registry (veja seed abaixo).
+O `tenantId` usado nos módulos é lido automaticamente da sessão JWT.
+
+### Config Plataforma — token de admin
+
+Em `/config/platform`, insira `demo_config_admin_token` no campo "Admin Token" para habilitar edição de namespaces.
+
+### Verificar saúde dos containers
+
+```powershell
+docker compose -f docker-compose.visual.yml ps
+```
+
+Todos os serviços de aplicação devem aparecer como `healthy`.
+
+### Encerrar a stack
+
+```powershell
+# Preserva volumes (dados)
+docker compose -f docker-compose.visual.yml down
+
+# Apaga tudo incluindo volumes
+docker compose -f docker-compose.visual.yml down -v
+```
+
+---
+
 ## Prerequisites
 
 | Tool | Minimum version |

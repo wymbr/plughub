@@ -47,22 +47,26 @@ volumes:
 # Sobe toda a stack sem o runner de testes:
 #   docker compose -f docker-compose.demo.yml up --build --scale e2e-runner=0
 #
-# ┌─ URLs de acesso ─────────────────────────────────────────────────────────┐
-# │  Agent Assist UI (agente humano)                                         │
-# │    http://localhost:5173?pool=retencao_humano&agent=agente_humano_v1-001 │
-# │    http://localhost:5173?pool=demo_ia&agent=agente_humano_v1-001         │
-# │    http://localhost:5173?pool=sac_ia&agent=agente_humano_v1-001          │
-# │                                                                           │
-# │  WebChat cliente (página de teste do consumidor final)                   │
-# │    http://localhost:5173/webchat-test.html                               │
-# │                                                                           │
-# │  Operator Console (supervisão / analytics / config)                      │
-# │    http://localhost:4000                                                  │
-# │                                                                           │
-# │  Observabilidade                                                          │
-# │    Kafdrop (Kafka UI):         http://localhost:9001                     │
-# │    Redis Commander (Redis UI): http://localhost:8081                     │
-# └───────────────────────────────────────────────────────────────────────────┘
+# ┌─ URLs de acesso ──────────────────────────────────────────────────────────┐
+# │                                                                            │
+# │  ① Agent Assist UI  (interface do agente humano)                          │
+# │    http://localhost:5173?pool=retencao_humano&agent=agente_humano_v1-001  │
+# │    http://localhost:5173?pool=sac_ia&agent=agente_humano_v1-001           │
+# │    http://localhost:5173?pool=auth_ia&agent=agente_humano_v1-001          │
+# │                                                                            │
+# │  ② WebChat cliente  (página do consumidor final)                          │
+# │    http://localhost:5173/webchat-test.html                                │
+# │    → selecione o pool desejado e clique "Conectar"                        │
+# │                                                                            │
+# │  ③ Operator Console  (supervisão / analytics / config / registry)         │
+# │    http://localhost:4000                                                   │
+# │    Painéis: Heatmap · Workflows · Campaigns · Webhooks · Registry         │
+# │             Skills · Channels · Agents · Config · Pricing                  │
+# │                                                                            │
+# │  Observabilidade                                                           │
+# │    Kafdrop (Kafka UI):         http://localhost:9001                      │
+# │    Redis Commander (Redis UI): http://localhost:8081                      │
+# └────────────────────────────────────────────────────────────────────────────┘
 #
 # Fluxo de teste end-to-end manual:
 #   1. Abra o Agent Assist UI com o pool desejado no parâmetro ?pool=
@@ -70,6 +74,20 @@ volumes:
 #   3. Envie mensagens do cliente — o agente recebe em tempo real
 #   4. Para pools de IA (sac_ia, demo_ia): o agente IA responde automaticamente
 #   5. Para retencao_humano: o agente humano visualiza e pode responder
+#
+# Cenários novos — @mention e masked PIN:
+#   @copilot (agente_copilot_v1 / pool copilot_sac):
+#     - Abra Agent Assist UI no pool retencao_humano
+#     - Abra webchat-test.html e conecte ao pool retencao_humano
+#     - O agente humano digita "@copilot" → co-pilot entra em standby (agents_only)
+#     - "@copilot ativa" → co-pilot analisa contexto e envia sugestão (agents_only)
+#     - "@copilot para"  → co-pilot encerra
+#
+#   agente_auth_ia_v1 (pool auth_ia — fluxo masked PIN):
+#     - Abra webchat-test.html e conecte ao pool auth_ia
+#     - O agente solicita PIN via campo mascarado (overlay no webchat)
+#     - PIN válido: 6 dígitos começando com "1" (ex: 123456)
+#     - PIN de teste de falha: 999999
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Infra
@@ -120,7 +138,7 @@ services:
       KAFKA_NODE_ID: 1
       KAFKA_PROCESS_ROLES: broker,controller
       KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,INTERNAL://0.0.0.0:29092,CONTROLLER://0.0.0.0:9093
-      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092,INTERNAL://kafka:29092
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9093,INTERNAL://kafka:29092
       KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
       KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
       KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,INTERNAL:PLAINTEXT,CONTROLLER:PLAINTEXT
@@ -163,6 +181,7 @@ services:
           conversations.message_sent
           conversations.session_opened
           conversations.session_closed
+          conversations.participants
           agent.lifecycle
           agent.done
           agent.registry.events
@@ -231,6 +250,8 @@ services:
       JWT_SECRET: demo_plughub_secret_32chars__
       KAFKA_BROKERS: kafka:29092
       AGENT_REGISTRY_URL: http://agent-registry:3300
+      SKILL_FLOW_URL: http://skill-flow-service:3400
+      PLUGHUB_TENANT_ID: tenant_demo
     depends_on:
       redis:
         condition: service_healthy
@@ -285,8 +306,8 @@ services:
     environment:
       PLUGHUB_REDIS_URL: redis://redis:6379
       PLUGHUB_PORT: "3200"
-      PLUGHUB_ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       PLUGHUB_WORKERS: "1"
+      PLUGHUB_ANTHROPIC_API_KEY: ${PLUGHUB_ANTHROPIC_API_KEY:-${ANTHROPIC_API_KEY:-}}
     depends_on:
       redis:
         condition: service_healthy
@@ -321,6 +342,23 @@ services:
     networks:
       - plughub-demo
 
+  mcp-server-auth:
+    build:
+      context: packages/mcp-server-auth
+      dockerfile: Dockerfile
+    ports:
+      - "3150:3150"
+    environment:
+      PORT: "3150"
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"require('http').get('http://localhost:3150/health',r=>{process.exit(r.statusCode===200?0:1)}).on('error',()=>process.exit(1))\""]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+    networks:
+      - plughub-demo
+
   skill-flow-service:
     build:
       context: .
@@ -330,12 +368,16 @@ services:
     environment:
       REDIS_URL: redis://redis:6379
       MCP_SERVER_URL: http://mcp-server-plughub:3100
+      MCP_AUTH_URL:   http://mcp-server-auth:3150
       AI_GATEWAY_URL: http://ai-gateway:3200
       PORT: "3400"
+      SKILLS_DIR: /app/skills
     depends_on:
       redis:
         condition: service_healthy
       mcp-server-plughub:
+        condition: service_healthy
+      mcp-server-auth:
         condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "node -e \"require('http').get('http://localhost:3400/health',r=>{process.exit(r.statusCode===200?0:1)}).on('error',()=>process.exit(1))\""]
@@ -743,8 +785,10 @@ services:
         condition: service_healthy
       config-api:
         condition: service_healthy
+      agent-registry:
+        condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost/health 2>/dev/null || kill -0 1"]
+      test: ["CMD-SHELL", "wget -qO- http://localhost/ >/dev/null 2>&1"]
       interval: 10s
       timeout: 5s
       retries: 10
