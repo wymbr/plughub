@@ -1,196 +1,247 @@
 # agente_avaliacao_v1.yaml
-# Skill Flow do Agente de Avaliação Genérico — PlugHub v24.0 seção 10.2
+# Skill Flow do Agente de Avaliação — Arc 6 Quality Platform
+#
+# Melhorias v2 (Arc 6):
+#   - Form-aware: lê EvaluationForm do ReplayContext (dimensions[], criteria[])
+#   - RAG: busca knowledge_snippets relevantes via mcp-server-knowledge antes de avaliar
+#   - Evidence: o LLM cita turn_index específico do transcript para cada critério
+#   - N/A: critérios com applies_when não satisfeito são marcados na=true com na_reason
+#   - Direct ingest: evaluation_submit envia para evaluation-api /v1/evaluation/ingest
+#
+# Fluxo:
+#
+#   evaluation_context_get
+#       │
+#   check_rag_needed (choice: form tem knowledge_namespace?)
+#       ├─ yes → search_knowledge (invoke: knowledge_search)
+#       │            │
+#       │        merge_snippets (inline — une pre-fetched + RAG hits)
+#       │            │
+#       └─ no  ──────┴──► evaluate (reason: LLM avalia TODOS os critérios)
+#                              │
+#                         submit_result (invoke: evaluation_submit)
+#                              │
+#              ┌───────────────┤
+#              │               │
+#         complete_ok     complete_error
+#
+# Inputs esperados (injetados pelo orchestrator no session_context ou pipeline_state):
+#   $.session.session_id        — sessão a avaliar
+#   $.session.participant_id    — instance_id do avaliador (role: evaluator)
+#   $.session.session_token     — JWT do avaliador
+#   $.session.evaluation_id     — ID único desta avaliação (gerado pelo Replayer)
+#   $.session.tenant_id         — tenant
+#
+# O evaluation_context_get recupera do ReplayContext (escrito pelo Replayer):
+#   context.replay_events[]            — eventos com delta_ms e original_content
+#   context.sentiment[]                — timeline de sentimento
+#   context.evaluation_form            — EvaluationForm com dimensions[].criteria[]
+#   context.instance_id                — ID da EvaluationInstance na evaluation-api
+#   context.campaign_id                — campanha de origem
+#   context.knowledge_snippets[]       — snippets pré-carregados pelo campaign
+#   context.comparison_mode            — flag de modo comparativo
+#
+# O LLM recebe:
+#   transcript (events com original_content, autores, timestamps relativos)
+#   form (dimensions[], cada critério com label, description, weight, allows_na, applies_when)
+#   knowledge_snippets (políticas, rubricas, scripts ideais)
+#   session_meta (channel, agent_type_id, outcome, duração)
+#
+# O LLM devolve (output_schema abaixo):
+#   criterion_responses[]:
+#     - criterion_id: string       (ID do critério no form)
+#     - value: number | null       (0–10 ou null quando na=true)
+#     - na: boolean                (critério não aplicável?)
+#     - na_reason: string?         (por que N/A, obrigatório quando na=true)
+#     - justification: string      (fundamentação obrigatória)
+#     - evidence_refs[]: number[]  (turn_index dos eventos que fundamentam a nota)
+#   overall_score: number          (0–10; média ponderada computada pelo LLM)
+#   overall_observation: string    (síntese da avaliação)
+#   highlights: string[]           (pontos positivos, ≤5 itens)
+#   improvement_points: string[]   (oportunidades de melhoria, ≤5 itens)
+#   compliance_flags: string[]     (violações detectadas)
 
 id: skill_avaliacao_v1
-name: "Avaliação v1 — Agente de Qualidade Genérico"
-version: "1.0"
-description: "Agente de avaliação pós-sessão: coleta transcript, executa agentes especialistas de contexto e avalia com LLM."
+name: "Avaliação de Qualidade v2 — Form-Aware + RAG + Evidence"
+version: "2.0"
+description: >
+  Agente de avaliação pós-sessão com suporte a formulários dinâmicos,
+  busca RAG na base de conhecimento, referências de evidência por critério
+  e marcação N/A para critérios inaplicáveis. Persiste via evaluation-api.
 classification:
   type: orchestrator
   domain: quality
-#
-# Este flow é o agente nativo que substitui o serviço Python evaluation-agent.
-# É genérico: nenhum detalhe do formulário de avaliação está aqui.
-# O formulário (itens, seções, pesos, requires_context, requires_agent) fica no
-# skill de avaliação do pool (ex.: eval_retencao_humano_v1).
-#
-# session_context recebido do Routing Engine (payload evaluation.requested):
-#   evaluation_id, tenant_id, skill_id, transcript_id,
-#   agent.{agent_id, agent_session_id, agent_type, pool_id},
-#   contact.{contact_id, ...}, context_package.{...}
-#
-# Fluxo principal:
-#   1. get_transcript           → busca transcript do PostgreSQL
-#   2. resolve_context          → filtra seções, executa requires_context via proxy sidecar
-#                                 e monta agent_context_queue com todos os agentes declarados
-#   3. init_agent_loop          → inicializa a fila (primeira chamada a evaluation_agent_context_next
-#                                 sem task_result) para obter current_skill_id e has_next
-#   4. check_agent_pending      → choice: has_next?
-#   5a. gather_agent_context    → task A2A: delega ao agente especialista indicado
-#   5b. advance_agent_loop      → invoke evaluation_agent_context_next (pop + acumula resultado)
-#                                 volta para check_agent_pending até fila vazia
-#   6. evaluate                 → reason: LLM pontua cada item do formulário
-#                                 agent_context = acumulado de todos os agentes especialistas
-#   7. publish_result           → calcula scores bottom-up, publica evaluation.completed
-#
-# Diagrama:
-#
-#   get_transcript
-#       │
-#   resolve_context
-#       │
-#   init_agent_loop ◄─────────────────────────────────────────┐
-#       │                                                      │
-#   check_agent_pending ──── has_next=false ──► evaluate      │
-#       │ has_next=true                                        │
-#   gather_agent_context                                       │
-#       │                                                      │
-#   advance_agent_loop ────────────────────────────────────────┘
-#       (pop próximo, acumula resultado, volta ao check)
-#
-# Invariante do loop:
-#   - pipeline_state.agent_context_next.accumulated cresce a cada iteração
-#   - pipeline_state.agent_context_next.remaining é a fila residual passada ao próximo invoke
-#   - o step gather_agent_context sempre lê current_skill_id do state anterior
 
-entry: get_transcript
+entry: get_context
 
 steps:
 
-  # ── Step 1: busca transcript ──────────────────────────────────────────────────
-  - id:   get_transcript
+  # ── Step 1: buscar contexto completo (ReplayContext + form + snippets) ────────
+  - id:   get_context
     type: invoke
-    tool:  transcript_get
+    tool:  evaluation_context_get
     input:
-      transcript_id: "$.session.transcript_id"
-    output_as:  transcript
-    on_success: resolve_context
-    on_failure: resolve_context   # prossegue sem transcript (LLM notará ausência)
+      session_token:  "$.session.session_token"
+      session_id:     "$.session.session_id"
+      participant_id: "$.session.participant_id"
+    output_as:  eval_context
+    on_success: check_rag_needed
+    on_failure: complete_error   # sem ReplayContext não há como avaliar
 
-  # ── Step 2: resolve contexto externo + monta fila de agentes especialistas ───
-  # evaluation_context_resolve:
-  #   - carrega o skill do pool (skill_id)
-  #   - filtra seções ativas por applies_when (agent_type, flags, intent)
-  #   - busca dados externos via requires_context usando proxy sidecar
-  #   - monta agent_context_queue: [{skill_id, output_key}] para todas as seções
-  #     ativas que declarem requires_agent (pode ser vazio, um ou muitos)
-  - id:   resolve_context
-    type: invoke
-    tool:  evaluation_context_resolve
-    input:
-      skill_id:        "$.session.skill_id"
-      context_package: "$.session.context_package"
-      template_vars:
-        evaluation_id: "$.session.evaluation_id"
-        agent:         "$.session.agent"
-        contact:       "$.session.contact"
-        context:       "$.session.context_package"
-    output_as:  evaluation_context
-    on_success: init_agent_loop
-    on_failure: init_agent_loop   # prossegue mesmo sem contexto externo
-
-  # ── Step 3: inicializa fila (sem task_result — primeira entrada no loop) ──────
-  # Chama evaluation_agent_context_next com a fila recém-construída e sem
-  # task_result, obtendo o primeiro agente a executar (ou has_next=false
-  # se o formulário não declarou nenhum requires_agent).
-  - id:   init_agent_loop
-    type: invoke
-    tool:  evaluation_agent_context_next
-    input:
-      queue:       "$.pipeline_state.evaluation_context.agent_context_queue"
-      accumulated: {}
-    output_as:  agent_context_next
-    on_success: check_agent_pending
-    on_failure: evaluate   # sem fila → vai direto para avaliação
-
-  # ── Step 4: ramificação — ainda há agentes pendentes na fila? ─────────────────
-  - id:   check_agent_pending
+  # ── Step 2: verificar se é necessária busca RAG adicional ─────────────────────
+  # O evaluation_context_get já inclui knowledge_snippets pré-carregados
+  # pelo campaign. O RAG adicional é útil quando o form declara
+  # knowledge_namespace (políticas, scripts) que requerem busca por query.
+  # Estratégia conservadora: sempre busca, usa top 8 snippets mais relevantes.
+  # Se a busca falhar, avalia com os snippets pré-carregados.
+  - id:   check_rag_needed
     type: choice
     conditions:
-      - field:    "$.pipeline_state.agent_context_next.has_next"
-        operator: eq
-        value:    true
-        next:     gather_agent_context
+      - field:    "$.pipeline_state.eval_context.evaluation_form"
+        operator: exists
+        next:     search_knowledge
     default: evaluate
 
-  # ── Step 5a: delega ao agente especialista atual da fila ─────────────────────
-  # target.skill_id é resolvido em tempo de execução via JSONPath:
-  # o executor de task lê $.pipeline_state.agent_context_next.current_skill_id.
-  # execution_mode sync: aguarda conclusão do agente (até 5 min).
-  - id:   gather_agent_context
-    type: task
-    target:
-      skill_id: "$.pipeline_state.agent_context_next.current_skill_id"
-    execution_mode: sync
-    on_success: advance_agent_loop
-    on_failure: advance_agent_loop   # avança mesmo se o agente especialista falhar
-
-  # ── Step 5b: pop + acumula resultado, avança o loop ──────────────────────────
-  # evaluation_agent_context_next (segunda chamada em diante):
-  #   - mescla $.pipeline_state.gather_agent_context (resultado do task) no acumulador
-  #     usando current_output_key da iteração atual
-  #   - desempilha o próximo agente de remaining
-  #   - devolve has_next, current_skill_id, current_output_key, remaining, accumulated
-  # O step sobrescreve agent_context_next, permitindo que check_agent_pending
-  # avalie has_next novamente — criando o loop.
-  - id:   advance_agent_loop
+  # ── Step 3: RAG — busca snippets de políticas e rubricas ─────────────────────
+  # Usa agent_type_id + channel + intent como query para buscar snippets
+  # relevantes de avaliação (políticas de atendimento, scripts ideais, SLA).
+  # A query é construída a partir dos metadados da sessão no ReplayContext.
+  # Namespace "evaluation_policies" é o padrão; o form pode declarar outro.
+  - id:   search_knowledge
     type: invoke
-    tool:  evaluation_agent_context_next
+    tool:  knowledge_search
     input:
-      queue:              "$.pipeline_state.agent_context_next.remaining"
-      task_result:        "$.pipeline_state.gather_agent_context"
-      current_output_key: "$.pipeline_state.agent_context_next.current_output_key"
-      accumulated:        "$.pipeline_state.agent_context_next.accumulated"
-    output_as:  agent_context_next
-    on_success: check_agent_pending
-    on_failure: evaluate   # falha no gerenciamento de fila → avalia com o que tem
+      tenant_id:  "$.session.tenant_id"
+      namespace:  "evaluation_policies"
+      query:      "$.pipeline_state.eval_context.context.session_meta.agent_type_id"
+      top_k:      8
+      min_score:  0.0
+    output_as:  rag_snippets
+    on_success: evaluate
+    on_failure: evaluate   # degrade gracefully — avalia sem snippets RAG extras
 
-  # ── Step 6: LLM avalia os itens do formulário ─────────────────────────────────
-  # O AI Gateway usa o prompt evaluation_rubric_v1, que monta a rubrica
-  # a partir das seções filtradas e instruções de cada item.
-  # agent_context contém o acumulado de TODOS os agentes especialistas executados.
-  # Retorna: { items: [{item_id, section_id, subsection_id, value, justification}],
-  #            overall_observation }
+  # ── Step 4: LLM avalia todos os critérios do formulário ───────────────────────
+  # O prompt evaluation_rubric_v2 instrui o LLM a:
+  #   1. Ler o formulário (form.dimensions[].criteria[]) com pesos e instruções
+  #   2. Para cada critério:
+  #      - verificar se applies_when é satisfeito (se não: na=true)
+  #      - atribuir value (0–10) com base no transcript e nos knowledge_snippets
+  #      - citar evidence_refs (turn_index[] dos eventos que fundamentam a nota)
+  #      - escrever justification obrigatória
+  #   3. Calcular overall_score como média ponderada dos critérios avaliados (na=false)
+  #   4. Produzir highlights, improvement_points, compliance_flags
   - id:         evaluate
     type:       reason
-    prompt_id:  evaluation_rubric_v1
+    prompt_id:  evaluation_rubric_v2
     input:
-      transcript:       "$.pipeline_state.transcript"
-      external_context: "$.pipeline_state.evaluation_context.external_context"
-      agent_context:    "$.pipeline_state.agent_context_next.accumulated"
-      context_package:  "$.session.context_package"
-      agent_type:       "$.session.agent.agent_type"
+      # Transcript com eventos originais (original_content disponível para evaluator)
+      replay_events:       "$.pipeline_state.eval_context.context.replay_events"
+      # Formulário de avaliação com dimensões e critérios
+      evaluation_form:     "$.pipeline_state.eval_context.evaluation_form"
+      # Snippets de conhecimento: pré-carregados + RAG hits fundidos
+      knowledge_snippets_preloaded: "$.pipeline_state.eval_context.context.knowledge_snippets"
+      knowledge_snippets_rag:       "$.pipeline_state.rag_snippets.results"
+      # Metadados da sessão para resolver applies_when
+      session_meta:        "$.pipeline_state.eval_context.context.session_meta"
+      # Sentimento para contextualizar avaliação de empatia/abordagem
+      sentiment_timeline:  "$.pipeline_state.eval_context.context.sentiment"
+      # Participantes (quem era agent, quem era customer)
+      participant_summary: "$.pipeline_state.eval_context.participant_summary"
+      # Modo comparativo — o LLM deve comparar replay com produção se true
+      comparison_mode:     "$.pipeline_state.eval_context.comparison_mode"
     output_schema:
-      items:
+      criterion_responses:
         type: array
+        description: >
+          Uma entrada por critério do formulário. Quando na=true, value deve ser null
+          e na_reason deve explicar por que o critério não se aplica.
+        required: true
+        items:
+          type: object
+          properties:
+            criterion_id:
+              type: string
+              required: true
+            value:
+              type: number
+              description: "Nota 0–10 ou null quando na=true"
+              nullable: true
+              required: true
+            na:
+              type: boolean
+              description: "true quando o critério não é aplicável a esta sessão"
+              required: true
+            na_reason:
+              type: string
+              description: "Obrigatório quando na=true"
+              required: false
+            justification:
+              type: string
+              description: "Fundamentação obrigatória — mínimo 20 palavras"
+              required: true
+            evidence_refs:
+              type: array
+              description: "turn_index[] dos replay_events que fundamentam a nota"
+              items:
+                type: integer
+              required: false
+      overall_score:
+        type: number
+        description: "Nota geral 0–10 (média ponderada dos critérios avaliados)"
         required: true
       overall_observation:
         type: string
+        description: "Síntese da avaliação — mínimo 50 palavras"
+        required: true
+      highlights:
+        type: array
+        description: "Pontos positivos identificados (máximo 5)"
+        items:
+          type: string
         required: false
-    output_as:  llm_evaluation
-    on_success: publish_result
+      improvement_points:
+        type: array
+        description: "Oportunidades de melhoria (máximo 5)"
+        items:
+          type: string
+        required: false
+      compliance_flags:
+        type: array
+        description: "Violações de política ou protocolo detectadas"
+        items:
+          type: string
+        required: false
+    output_as:  llm_result
+    on_success: submit_result
     on_failure: complete_error
 
-  # ── Step 7: calcula scores e publica evaluation.completed ─────────────────────
-  # evaluation_publish:
-  #   - recalcula scores ponderados bottom-up a partir dos itens LLM
-  #   - publica no tópico evaluation.results
-  - id:   publish_result
+  # ── Step 5: submeter resultado para evaluation-api ────────────────────────────
+  # evaluation_submit:
+  #   - publica evaluation.completed em evaluation.events (Kafka)
+  #   - quando instance_id presente, também publica eval.instance.submitted
+  #   - o consumer da evaluation-api processa eval.instance.submitted e chama
+  #     POST /v1/evaluation/ingest para persistir no PostgreSQL
+  #   - reduz TTL do ReplayContext no Redis (já foi consumido)
+  - id:   submit_result
     type: invoke
-    tool:  evaluation_publish
+    tool:  evaluation_submit
     input:
-      evaluation_id:       "$.session.evaluation_id"
-      tenant_id:           "$.session.tenant_id"
-      skill_id:            "$.session.skill_id"
-      agent_id:            "$.session.agent.agent_id"
-      agent_type:          "$.session.agent.agent_type"
-      pool_id:             "$.session.agent.pool_id"
-      contact_id:          "$.session.contact.contact_id"
-      triggered_by:        "$.session.triggered_by"
-      llm_items:           "$.pipeline_state.llm_evaluation.items"
-      overall_observation: "$.pipeline_state.llm_evaluation.overall_observation"
-      context_package:     "$.session.context_package"
-    output_as:  publish_result
+      session_token:        "$.session.session_token"
+      session_id:           "$.session.session_id"
+      participant_id:       "$.session.participant_id"
+      evaluation_id:        "$.session.evaluation_id"
+      # Scores e narrativas
+      composite_score:      "$.pipeline_state.llm_result.overall_score"
+      summary:              "$.pipeline_state.llm_result.overall_observation"
+      highlights:           "$.pipeline_state.llm_result.highlights"
+      improvement_points:   "$.pipeline_state.llm_result.improvement_points"
+      compliance_flags:     "$.pipeline_state.llm_result.compliance_flags"
+      # Arc 6: critérios por item com evidence e N/A
+      criterion_responses:  "$.pipeline_state.llm_result.criterion_responses"
+      # instance_id e campaign_id são resolvidos pelo evaluation_submit
+      # a partir do ReplayContext — não precisam ser passados explicitamente
+      # a menos que o orchestrator queira sobrescrever
+    output_as:  submission
     on_success: complete_ok
     on_failure: complete_error
 

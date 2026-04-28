@@ -1,0 +1,248 @@
+# agente_reviewer_ia_v1.yaml
+# Agente Reviewer IA — Arc 6 Quality Platform
+#
+# Responsabilidade: revisar automaticamente avaliações submetidas pelo agente avaliador,
+# classificando-as para aprovação automática ou encaminhamento à revisão humana.
+#
+# Papéis:
+#   - agente_avaliacao_v1 (role: evaluator) → submete EvaluationResult
+#   - agente_reviewer_ia_v1 (role: evaluator) → revisa o resultado e decide
+#   - Revisor humano (role: reviewer) → revisão final quando IA sinaliza divergência
+#
+# Quando é ativado:
+#   O evaluation-api aciona o reviewer via campaign.reviewer_rules:
+#     - reviewer_rules.auto_review: true  → reviewer IA sempre executa
+#     - reviewer_rules.score_threshold: X → executa quando composite_score < X
+#     - reviewer_rules.random_rate: 0.1   → executa em 10% das avaliações aleatoriamente
+#   O Routing Engine cria uma sessão para o agente_reviewer_ia_v1
+#   injetando evaluation_result_id no session_context.
+#
+# Fluxo:
+#
+#   get_result (invoke: evaluation_result_get)
+#       │
+#   get_original_context (invoke: evaluation_context_get)
+#       │
+#   review (reason: review_rubric_v1)  ← LLM lê resultado + transcript + form
+#       │
+#   decide (choice: review_outcome)
+#       ├─ approve → approve_result (invoke: evaluation_review_approve)
+#       │                │
+#       │           complete_ok
+#       │
+#       ├─ adjust  → adjust_result (invoke: evaluation_review_adjust)
+#       │                │
+#       │           complete_ok
+#       │
+#       └─ escalate → escalate_to_human (invoke: evaluation_review_escalate)
+#                          │
+#                     complete_ok (humano assumirá a partir da fila de revisão)
+#
+# Decisões do LLM (review_outcome):
+#   "approve"  — avaliação está correta, aprovar sem alterações
+#   "adjust"   — avaliação tem pequenas imprecisões, ajustar notas/justificativas
+#   "escalate" — avaliação tem divergência significativa, enviar para revisor humano
+#
+# Quando review_outcome = "adjust":
+#   O LLM fornece adjustments[]:
+#     [{criterion_id, adjusted_value, adjustment_reason}]
+#   A evaluation-api aplica os ajustes e recalcula composite_score.
+#
+# Quando review_outcome = "escalate":
+#   O agente gera escalation_reason detalhado.
+#   A evaluation-api cria uma EvaluationContestation automática (origem: ai_reviewer)
+#   e a EvaluationInstance entra na fila do revisor humano.
+
+id: skill_reviewer_ia_v1
+name: "Reviewer IA de Avaliação — Arc 6"
+version: "1.0"
+description: >
+  Revisa automaticamente avaliações de qualidade submetidas pelo agente avaliador.
+  Aprova, ajusta notas ou escala para revisão humana com base na coerência entre
+  transcript, formulário e critérios avaliados. Reduz carga do revisor humano
+  concentrando encaminhamentos em divergências relevantes.
+classification:
+  type: vertical
+  domain: quality
+
+entry: get_result
+
+steps:
+
+  # ── Step 1: recuperar o EvaluationResult a revisar ────────────────────────────
+  # O instance_id é injetado pelo orchestrator no session_context.
+  # evaluation_result_get lê da evaluation-api (GET /v1/evaluation/results/by_instance/:id)
+  - id:   get_result
+    type: invoke
+    tool:  evaluation_result_get
+    input:
+      session_token:  "$.session.session_token"
+      instance_id:    "$.session.evaluation_instance_id"
+    output_as:  eval_result
+    on_success: get_original_context
+    on_failure: complete_error
+
+  # ── Step 2: recuperar contexto original (transcript + form) ──────────────────
+  # O ReplayContext ainda está disponível no Redis por 1h após submissão.
+  # Se já expirou, avalia com os dados disponíveis no eval_result.
+  - id:   get_original_context
+    type: invoke
+    tool:  evaluation_context_get
+    input:
+      session_token:  "$.session.session_token"
+      session_id:     "$.pipeline_state.eval_result.session_id"
+      participant_id: "$.session.participant_id"
+    output_as:  original_context
+    on_success: review
+    on_failure: review   # degrade gracefully — revisa com o que tem no result
+
+  # ── Step 3: LLM revisa a avaliação ───────────────────────────────────────────
+  # O prompt review_rubric_v1 instrui o LLM a:
+  #   1. Ler cada criterion_response do EvaluationResult
+  #   2. Comparar com o transcript e o formulário
+  #   3. Verificar coerência: a nota é compatível com a justificativa e evidências?
+  #   4. Identificar critérios com notas suspeitas (muito alta para transcript ruim,
+  #      muito baixa sem evidência clara, justificativa genérica)
+  #   5. Decidir: approve / adjust / escalate
+  #   6. Para "adjust": fornecer adjustments[] com notas corrigidas
+  #   7. Para "escalate": fornecer escalation_reason detalhado (≥50 palavras)
+  - id:         review
+    type:       reason
+    prompt_id:  review_rubric_v1
+    input:
+      # Resultado original a revisar
+      criterion_responses:   "$.pipeline_state.eval_result.criterion_responses"
+      overall_score:         "$.pipeline_state.eval_result.overall_score"
+      overall_observation:   "$.pipeline_state.eval_result.overall_observation"
+      evaluator_id:          "$.pipeline_state.eval_result.evaluator_id"
+      # Contexto original para validação
+      replay_events:         "$.pipeline_state.original_context.context.replay_events"
+      evaluation_form:       "$.pipeline_state.original_context.evaluation_form"
+      knowledge_snippets:    "$.pipeline_state.original_context.context.knowledge_snippets"
+      session_meta:          "$.pipeline_state.original_context.context.session_meta"
+    output_schema:
+      review_outcome:
+        type: string
+        description: "approve | adjust | escalate"
+        required: true
+      review_summary:
+        type: string
+        description: "Síntese da revisão — obrigatória independente do outcome"
+        required: true
+      adjustments:
+        type: array
+        description: "Obrigatório quando review_outcome=adjust"
+        required: false
+        items:
+          type: object
+          properties:
+            criterion_id:
+              type: string
+              required: true
+            adjusted_value:
+              type: number
+              required: true
+            adjustment_reason:
+              type: string
+              required: true
+      adjusted_overall_score:
+        type: number
+        description: "Nova nota geral quando review_outcome=adjust"
+        required: false
+      escalation_reason:
+        type: string
+        description: "Obrigatório quando review_outcome=escalate — mínimo 50 palavras"
+        required: false
+      confidence:
+        type: number
+        description: "Confiança do reviewer IA na decisão (0–1)"
+        required: false
+    output_as:  review_decision
+    on_success: decide
+    on_failure: complete_error
+
+  # ── Step 4: ramificação por review_outcome ────────────────────────────────────
+  - id:   decide
+    type: choice
+    conditions:
+      - field:    "$.pipeline_state.review_decision.review_outcome"
+        operator: eq
+        value:    approve
+        next:     approve_result
+      - field:    "$.pipeline_state.review_decision.review_outcome"
+        operator: eq
+        value:    adjust
+        next:     adjust_result
+      - field:    "$.pipeline_state.review_decision.review_outcome"
+        operator: eq
+        value:    escalate
+        next:     escalate_to_human
+    default: approve_result   # fallback seguro em caso de resposta inesperada
+
+  # ── Step 5a: aprovar resultado ────────────────────────────────────────────────
+  # evaluation_review_approve:
+  #   - avança EvaluationInstance para status "reviewed"
+  #   - define eval_status="approved" no EvaluationResult
+  #   - publica evaluation.instance.reviewed no Kafka
+  - id:   approve_result
+    type: invoke
+    tool:  evaluation_review_approve
+    input:
+      session_token:  "$.session.session_token"
+      instance_id:    "$.session.evaluation_instance_id"
+      review_summary: "$.pipeline_state.review_decision.review_summary"
+      confidence:     "$.pipeline_state.review_decision.confidence"
+      reviewer_type:  "ai"
+    output_as:  approve_response
+    on_success: complete_ok
+    on_failure: complete_error
+
+  # ── Step 5b: ajustar resultado ────────────────────────────────────────────────
+  # evaluation_review_adjust:
+  #   - aplica adjustments[] no EvaluationResult
+  #   - recalcula composite_score com os novos valores
+  #   - avança EvaluationInstance para "reviewed"
+  #   - eval_status="adjusted_approved"
+  - id:   adjust_result
+    type: invoke
+    tool:  evaluation_review_adjust
+    input:
+      session_token:          "$.session.session_token"
+      instance_id:            "$.session.evaluation_instance_id"
+      adjustments:            "$.pipeline_state.review_decision.adjustments"
+      adjusted_overall_score: "$.pipeline_state.review_decision.adjusted_overall_score"
+      review_summary:         "$.pipeline_state.review_decision.review_summary"
+      confidence:             "$.pipeline_state.review_decision.confidence"
+      reviewer_type:          "ai"
+    output_as:  adjust_response
+    on_success: complete_ok
+    on_failure: complete_error
+
+  # ── Step 5c: escalar para revisor humano ──────────────────────────────────────
+  # evaluation_review_escalate:
+  #   - mantém EvaluationInstance em "in_review" (aguardando humano)
+  #   - cria EvaluationContestation automática (origin: ai_reviewer)
+  #   - publica evaluation.instance.escalated_to_human no Kafka
+  #   - a UI de revisão humana exibe o item na fila com escalation_reason
+  - id:   escalate_to_human
+    type: invoke
+    tool:  evaluation_review_escalate
+    input:
+      session_token:     "$.session.session_token"
+      instance_id:       "$.session.evaluation_instance_id"
+      escalation_reason: "$.pipeline_state.review_decision.escalation_reason"
+      review_summary:    "$.pipeline_state.review_decision.review_summary"
+      confidence:        "$.pipeline_state.review_decision.confidence"
+      reviewer_type:     "ai"
+    output_as:  escalate_response
+    on_success: complete_ok
+    on_failure: complete_error
+
+  # ── Terminadores ──────────────────────────────────────────────────────────────
+  - id:      complete_ok
+    type:    complete
+    outcome: resolved
+
+  - id:      complete_error
+    type:    complete
+    outcome: failed

@@ -1,0 +1,229 @@
+# skill_avaliacao_padrao_v1.yaml
+# Workflow padrão de avaliação de qualidade — Arc 6
+#
+# Este skill define o FLUXO de trabalho da avaliação, não os critérios.
+# Os critérios de avaliação ficam em EvaluationForm (gerenciado pela evaluation-api).
+# Este skill é reutilizável por qualquer pool que queira avaliação pós-sessão.
+#
+# Uso em agent_type:
+#   skill_ids:
+#     - skill_avaliacao_padrao_v1
+#
+# Uso em campaign:
+#   flow_id: skill_avaliacao_padrao_v1
+#   form_id: evform_retencao_humano_v1   ← form específico do pool
+#
+# Fases do workflow:
+#
+#   Fase 1 — Sampling (automático, sem LLM):
+#     O evaluation-api verifica sampling_rules da campaign.
+#     Se a sessão não deve ser amostrada, encerra sem criar instância.
+#
+#   Fase 2 — Avaliação (agente_avaliacao_v1):
+#     O evaluator agent recebe o ReplayContext + form + RAG.
+#     Avalia todos os critérios e submete via evaluation_submit.
+#
+#   Fase 3 — Revisão IA (agente_reviewer_ia_v1) — opcional:
+#     Se campaign.reviewer_rules.auto_review = true (ou score < threshold),
+#     o reviewer IA revisa a avaliação e decide: approve / adjust / escalate.
+#
+#   Fase 4 — Revisão Humana — opcional (apenas quando escalated):
+#     O supervisor acessa a fila de revisão na platform-ui e adjudica.
+#     Resultado: approved / adjusted / rejected.
+#
+#   Fase 5 — Feedback Loop (futuro):
+#     Aprovações e ajustes humanos alimentam dataset de calibração do reviewer IA.
+#
+# Integração com Routing Engine:
+#   O orchestrator cria um pool "avaliacao_ia" com este skill.
+#   Ao receber evaluation.requested (Kafka), roteia para o pool avaliacao_ia.
+#   O agente executa agente_avaliacao_v1.yaml (este skill invoca como subtask).
+#
+# Diagrama de sequência:
+#
+#   evaluation.requested (Kafka)
+#       │
+#   Routing Engine → pool avaliacao_ia
+#       │
+#   agente_avaliacao_v1 (evaluator)
+#       │ evaluation.completed (Kafka)
+#       │
+#   evaluation-api consumer
+#       │ persiste EvaluationResult
+#       │
+#   check_reviewer_rules:
+#       ├─ auto_review=true ──► agente_reviewer_ia_v1 (reviewer)
+#       │                           │
+#       │       ┌───────────────────┤
+#       │       ▼                   ▼
+#       │   approved/adjusted   escalated_to_human
+#       │                           │
+#       │                   Fila de revisão humana (platform-ui)
+#       │
+#       └─ auto_review=false ──► done (EvaluationInstance status=reviewed_auto)
+
+id: skill_avaliacao_padrao_v1
+name: "Workflow Padrão de Avaliação de Qualidade"
+version: "1.0"
+description: >
+  Orquestrador do ciclo completo de avaliação de qualidade pós-sessão.
+  Recebe evaluation.requested, executa o agente avaliador, e opcionalmente
+  o reviewer IA. Configura sampling, formulários e regras de revisão
+  via EvaluationCampaign na evaluation-api — sem hardcode neste YAML.
+classification:
+  type: orchestrator
+  domain: quality
+
+entry: prepare_evaluation
+
+steps:
+
+  # ── Step 1: verificar se a sessão deve ser amostrada ─────────────────────────
+  # evaluation_should_sample:
+  #   - chama evaluation-api GET /v1/evaluation/campaigns/:id/should_sample
+  #   - retorna should_sample: bool e priority: int
+  #   - se should_sample=false, encerra imediatamente (sessão não entra na campanha)
+  - id:   prepare_evaluation
+    type: invoke
+    tool:  evaluation_should_sample
+    input:
+      session_token:  "$.session.session_token"
+      campaign_id:    "$.session.campaign_id"
+      session_id:     "$.session.session_id"
+      session_meta:
+        duration_s:     "$.session.duration_s"
+        agent_type_id:  "$.session.agent.agent_type_id"
+        pool_id:        "$.session.agent.pool_id"
+        channel:        "$.session.channel"
+        outcome:        "$.session.outcome"
+    output_as:  sampling_result
+    on_success: check_sampling
+    on_failure: evaluate_anyway   # se a verificação falhar, avalia de qualquer forma
+
+  # ── Step 2: decisão de sampling ───────────────────────────────────────────────
+  - id:   check_sampling
+    type: choice
+    conditions:
+      - field:    "$.pipeline_state.sampling_result.should_sample"
+        operator: eq
+        value:    false
+        next:     skip_evaluation
+    default: create_instance
+
+  # ── Step 3: criar instância de avaliação na evaluation-api ──────────────────
+  # evaluation_instance_create:
+  #   - cria EvaluationInstance (status: pending)
+  #   - associa com campaign + form
+  #   - registra priority e scheduled_for
+  #   - retorna instance_id para injetar no ReplayContext
+  - id:   create_instance
+    type: invoke
+    tool:  evaluation_instance_create
+    input:
+      session_token:  "$.session.session_token"
+      campaign_id:    "$.session.campaign_id"
+      session_id:     "$.session.session_id"
+      tenant_id:      "$.session.tenant_id"
+      priority:       "$.pipeline_state.sampling_result.priority"
+      session_meta:
+        duration_s:     "$.session.duration_s"
+        agent_type_id:  "$.session.agent.agent_type_id"
+        pool_id:        "$.session.agent.pool_id"
+        channel:        "$.session.channel"
+        outcome:        "$.session.outcome"
+        close_reason:   "$.session.close_reason"
+        segment_id:     "$.session.segment_id"
+    output_as:  instance
+    on_success: enrich_replay_context
+    on_failure: evaluate_anyway   # cria instância mas avalia de qualquer forma
+
+  # ── Step 4: injetar instance_id no ReplayContext ──────────────────────────────
+  # O agente avaliador lê instance_id do ReplayContext via evaluation_context_get.
+  # evaluation_replay_context_patch atualiza o hash Redis do ReplayContext.
+  - id:   enrich_replay_context
+    type: invoke
+    tool:  evaluation_replay_context_patch
+    input:
+      session_token:  "$.session.session_token"
+      session_id:     "$.session.session_id"
+      patch:
+        instance_id:  "$.pipeline_state.instance.instance_id"
+        campaign_id:  "$.session.campaign_id"
+    output_as:  patch_result
+    on_success: run_evaluator
+    on_failure: run_evaluator   # falha no patch não bloqueia avaliação
+
+  # ── Step 5: delegar ao agente avaliador ──────────────────────────────────────
+  # agente_avaliacao_v1 executa o loop completo:
+  #   evaluation_context_get → search_knowledge → evaluate → evaluation_submit
+  # mode: transfer → o agente avaliador assume a sessão como primary
+  - id:   run_evaluator
+    type: task
+    target:
+      skill_id: skill_avaliacao_v1
+    mode: transfer
+    execution_mode: sync
+    on_success: check_reviewer_needed
+    on_failure: complete_error   # falha na avaliação — instância fica como "error"
+
+  # ── Step 5 (alternativo): avaliação sem criação de instância ─────────────────
+  # Usado quando sampling check falhou mas queremos avaliar de qualquer forma.
+  - id:   evaluate_anyway
+    type: task
+    target:
+      skill_id: skill_avaliacao_v1
+    mode: transfer
+    execution_mode: sync
+    on_success: complete_ok
+    on_failure: complete_error
+
+  # ── Step 6: verificar se reviewer IA deve executar ───────────────────────────
+  # evaluation_reviewer_needed:
+  #   - chama evaluation-api GET /v1/evaluation/instances/:id/reviewer_needed
+  #   - aplica reviewer_rules: auto_review, score_threshold, random_rate
+  #   - retorna reviewer_needed: bool
+  - id:   check_reviewer_needed
+    type: invoke
+    tool:  evaluation_reviewer_needed
+    input:
+      session_token:  "$.session.session_token"
+      instance_id:    "$.pipeline_state.instance.instance_id"
+    output_as:  reviewer_check
+    on_success: decide_reviewer
+    on_failure: complete_ok   # se verificação falhar, considera done sem revisão
+
+  # ── Step 7: decisão — executar reviewer IA? ──────────────────────────────────
+  - id:   decide_reviewer
+    type: choice
+    conditions:
+      - field:    "$.pipeline_state.reviewer_check.reviewer_needed"
+        operator: eq
+        value:    true
+        next:     run_reviewer
+    default: complete_ok
+
+  # ── Step 8: delegar ao agente reviewer IA ────────────────────────────────────
+  # agente_reviewer_ia_v1 lê o resultado, compara com transcript e decide.
+  # O orchestrator injeta evaluation_instance_id no session_context do reviewer.
+  - id:   run_reviewer
+    type: task
+    target:
+      skill_id: skill_reviewer_ia_v1
+    mode: transfer
+    execution_mode: sync
+    on_success: complete_ok
+    on_failure: complete_ok   # falha no reviewer não invalida a avaliação primária
+
+  # ── Step X: skip — sessão fora do sampling ────────────────────────────────────
+  - id:      skip_evaluation
+    type:    complete
+    outcome: resolved   # resolved sem avaliação — esperado pelo sistema
+
+  # ── Terminadores ──────────────────────────────────────────────────────────────
+  - id:      complete_ok
+    type:    complete
+    outcome: resolved
+
+  - id:      complete_error
+    type:    complete
+    outcome: failed
