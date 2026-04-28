@@ -36,7 +36,7 @@ import { ChannelPanel }     from './components/ChannelPanel'
 import { HumanAgentPanel } from './components/HumanAgentPanel'
 
 // Default tenant from env var (override in .env.local)
-const DEFAULT_TENANT = import.meta.env.VITE_DEFAULT_TENANT ?? 'tenant_telco'
+const DEFAULT_TENANT = import.meta.env.VITE_DEFAULT_TENANT ?? 'tenant_demo'
 
 type View = 'heatmap' | 'sessions' | 'transcript' | 'workflows' | 'campaigns' | 'config' | 'pricing' | 'webhooks' | 'registry' | 'skills' | 'channels' | 'agents'
 

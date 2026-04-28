@@ -28,7 +28,7 @@ logger = logging.getLogger("plughub.config.db")
 
 GLOBAL = "__global__"
 
-_DDL = """
+_DDL_TABLE = """
 CREATE TABLE IF NOT EXISTS platform_config (
     id          SERIAL PRIMARY KEY,
     tenant_id   TEXT        NOT NULL DEFAULT '__global__',
@@ -38,16 +38,24 @@ CREATE TABLE IF NOT EXISTS platform_config (
     description TEXT        NOT NULL DEFAULT '',
     updated_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
     CONSTRAINT uq_platform_config UNIQUE (tenant_id, namespace, key)
-);
+)
+"""
 
+_DDL_INDEX = """
 CREATE INDEX IF NOT EXISTS idx_platform_config_lookup
-    ON platform_config (tenant_id, namespace, key);
+    ON platform_config (tenant_id, namespace, key)
 """
 
 
 async def ensure_schema(pool: asyncpg.Pool) -> None:
+    """Create the platform_config table and index if they do not exist.
+
+    Runs each DDL statement individually so asyncpg never batches them
+    in a single pipeline that might silently skip the second statement.
+    """
     async with pool.acquire() as conn:
-        await conn.execute(_DDL)
+        await conn.execute(_DDL_TABLE)
+        await conn.execute(_DDL_INDEX)
     logger.info("platform_config schema ensured")
 
 
