@@ -2001,6 +2001,132 @@ ConversationParticipantEventSchema {
 - Enrichment post-hoc de `segment_id` em eventos sem o campo (sentimento, mcp.audit)
 - Materialized views `segment_summary` e `agent_performance`
 
+### AI Gateway — Multi-account rotation, workload isolation, fallback chain (✅ implementado)
+
+Suporte a múltiplas chaves de API Anthropic + OpenAI como fallback, com isolamento de workloads por `model_profile` e rotação automática sob throttling.
+
+#### AccountSelector — Redis-backed load balancing
+
+Implementado em `packages/ai-gateway/src/plughub_ai_gateway/account_selector.py`.
+
+**Princípio:** stateless a cada chamada. Nenhum estado em memória — todas as decisões baseadas em Redis.
+
+```
+AccountSelector.pick(provider):
+  1. Para cada conta registrada do provider:
+     a. Verifica throttle key (MGET ai_gw:{provider}:{key_id}:throttled) — exclui se presente
+     b. Calcula score: (rpm_used/rpm_limit × rpm_weight) + (tpm_used/tpm_limit × tpm_weight)
+  2. Retorna provider_key da conta com menor score
+  3. None → sem contas disponíveis → fallback cross-provider
+```
+
+**Redis keys:**
+
+| Key | TTL | Conteúdo |
+|---|---|---|
+| `ai_gw:{provider}:{key_id}:throttled` | `throttle_retry_after_s` (Config API) | `"1"` — conta excluída da rotação |
+| `ai_gw:{provider}:{key_id}:rpm` | 60 s (rolling) | Contador de requests no minuto atual |
+| `ai_gw:{provider}:{key_id}:tpm` | 60 s (rolling) | Contador de tokens no minuto atual |
+
+**`key_id`** = SHA-256(api_key)[:16] — nunca persiste o valor bruto da chave.
+
+**Scoring:** `score = (rpm_used/rpm_limit × 0.7) + (tpm_used/tpm_limit × 0.3)`. Pesos configuráveis via Config API namespace `ai_gateway` (`utilization_rpm_weight`).
+
+#### Configuração multi-chave
+
+```bash
+# Uma chave (backward compatible)
+PLUGHUB_ANTHROPIC_API_KEY=sk-ant-...
+
+# Múltiplas chaves (vírgula separado — AccountSelector ativado)
+PLUGHUB_ANTHROPIC_API_KEYS=sk-ant-...,sk-ant-...,sk-ant-...
+
+# OpenAI como fallback (opcional — requer pacote openai>=1.0.0)
+PLUGHUB_OPENAI_API_KEYS=sk-...
+```
+
+`Settings.get_anthropic_keys()` / `get_openai_keys()` normalizam ambos os formatos.
+
+#### Registro de providers em main.py
+
+```python
+# Anthropic: um provider por chave + alias "anthropic" → primeira chave (backward compat /v1/turn, /v1/reason)
+for api_key in anthropic_keys:
+    acc = LLMAccount(provider="anthropic", api_key=api_key, rpm_limit=..., tpm_limit=...)
+    providers[acc.provider_key] = AnthropicProvider(api_key=api_key)   # "anthropic:{key_id}"
+    accounts.append(acc)
+providers["anthropic"] = providers[accounts[0].provider_key]            # alias primeira chave
+
+# OpenAI: idem, opcional
+for api_key in openai_keys:
+    acc = LLMAccount(provider="openai", api_key=api_key, ...)
+    providers[acc.provider_key] = OpenAIProvider(api_key=api_key)       # "openai:{key_id}"
+    accounts.append(acc)
+```
+
+`AccountSelector(redis, accounts)` criado se `accounts` não-vazio; `None` em dev sem chaves.
+
+#### _call_with_fallback — cadeia completa
+
+```
+InferenceEngine._call_with_fallback(profile, messages, tools):
+
+  1. AccountSelector.pick(profile.provider)
+       → provider_key (e.g. "anthropic:abc123")
+       → None → vai direto ao fallback cross-provider
+
+  2. provider.call(messages, tools, model_id, max_tokens)
+       ✓ success → record_usage(provider_key, tokens) → return
+       ✗ retryable (rate_limit / status_429 / status_529):
+           → mark_throttled(provider_key, ttl=throttle_retry_after_s)
+           → AccountSelector.pick(provider) novamente (próxima conta)
+               → retry → sucesso ou exaustão
+       ✗ não-retryable → raise ProviderError
+
+  3. Sem contas disponíveis (todas throttled) OU sem AccountSelector:
+       profile.fallback presente?
+           Sim → FallbackConfig(provider, model_id)
+                 → providers[fallback.provider].call(model_id=fallback.model_id, ...)
+                 → return (provider_used=fallback.provider)
+           Não → raise ProviderError(retryable=False)
+```
+
+#### Isolamento de workloads por model_profile
+
+| Profile | Model | Fallback | Uso |
+|---|---|---|---|
+| `realtime` | `claude-sonnet-4-6` | `gpt-4o` (se OpenAI configurado) | Agentes em atendimento ao vivo |
+| `balanced` | `claude-haiku-4-5-20251001` | `gpt-4o-mini` | Fluxos de baixa latência |
+| `evaluation` | `claude-haiku-4-5-20251001` | `model_balanced` | Avaliação batch — isolado de tráfego realtime |
+
+O profile `evaluation` garante que workloads de avaliação não compitam com agentes em sessão.
+`evaluation_model` e `evaluation_max_tokens` são configuráveis via Config API namespace `ai_gateway`.
+
+#### OpenAIProvider
+
+`packages/ai-gateway/src/plughub_ai_gateway/providers/openai_provider.py`
+
+- Degrada graciosamente se pacote `openai` ausente (levanta `ProviderError(error_code="sdk_not_installed")`)
+- Converte formato de tools Anthropic (`input_schema`) para OpenAI (`function.parameters`)
+- Role mapping: `customer→user`, `agent→assistant`, `system→system` (system vai como `role: system`, diferente do Anthropic que usa campo `system=`)
+- Stop reason: `tool_calls→tool_use`, `length→max_tokens`, else `end_turn`
+
+#### Config API — namespace ai_gateway
+
+| Key | Default | Descrição |
+|---|---|---|
+| `account_rotation_enabled` | `true` | Habilita AccountSelector; `false` = sempre usa primeira chave |
+| `throttle_retry_after_s` | `60` | TTL de exclusão após 429/529 |
+| `utilization_rpm_weight` | `0.7` | Peso RPM no score (TPM = 1 - rpm_weight) |
+| `evaluation_model` | `claude-haiku-4-5-20251001` | Modelo do profile `evaluation` |
+| `evaluation_max_tokens` | `2048` | Max tokens para inferência de avaliação |
+| `openai_fallback_enabled` | `false` | Documenta se fallback OpenAI está ativo (operacional) |
+
+#### Tests
+
+`packages/ai-gateway/src/plughub_ai_gateway/tests/test_account_selector.py` — 29 assertions:
+`TestLLMAccount` (5), `TestAccountSelectorPick` (8), `TestMarkThrottled` (2), `TestRecordUsage` (3), `TestHealthSummary` (3), `TestProvidersFor` (2), `TestSettingsKeyParsing` (6).
+
 ### Arc 6 — Plataforma de Avaliação de Qualidade (deferido)
 
 Expansão completa do módulo de avaliação com editor de formulários, relatórios granulares e revisão humana.
