@@ -174,9 +174,9 @@ export async function run(ctx: ScenarioContext): Promise<ScenarioResult> {
     })
     const d = await r.json() as Record<string, unknown>
     formId = String(d["form_id"] ?? "")
-    assertions.push(pass("A-1: form created", `form_id=${formId}`, formId.length > 0
-      ? undefined
-      : `expected non-empty form_id, got status ${r.status}`))
+    assertions.push(formId.length > 0
+      ? pass("A-1: form created", `form_id=${formId}`)
+      : fail("A-1: form created", `expected non-empty form_id, got status ${r.status}`))
   } catch (e) {
     assertions.push(fail("A-1: form created", String(e)))
     formId = `form_e2e_${randomUUID().slice(0, 8)}`  // continue with fallback
@@ -187,7 +187,9 @@ export async function run(ctx: ScenarioContext): Promise<ScenarioResult> {
     const r = await fetch(`${evalApiUrl}/v1/evaluation/forms?tenant_id=${tenantId}`)
     const d = await r.json() as Array<Record<string, unknown>>
     const found = Array.isArray(d) && d.some(f => f["form_id"] === formId)
-    assertions.push(pass("A-2: form in list", `found=${found}`, found ? undefined : "form not found in list"))
+    assertions.push(found
+      ? pass("A-2: form in list", `found=${found}`)
+      : fail("A-2: form in list", "form not found in list"))
   } catch (e) {
     assertions.push(fail("A-2: form in list", String(e)))
   }
@@ -201,7 +203,9 @@ export async function run(ctx: ScenarioContext): Promise<ScenarioResult> {
     })
     const d = await r.json() as Record<string, unknown>
     const nameOk = (d["name"] as string | undefined)?.includes("Atualizado") ?? false
-    assertions.push(pass("A-3: form name updated", `name=${d["name"]}`, nameOk ? undefined : "name not updated"))
+    assertions.push(nameOk
+      ? pass("A-3: form name updated", `name=${d["name"]}`)
+      : fail("A-3: form name updated", "name not updated"))
   } catch (e) {
     assertions.push(fail("A-3: form name updated", String(e)))
   }
@@ -235,9 +239,9 @@ export async function run(ctx: ScenarioContext): Promise<ScenarioResult> {
     const d = await r.json() as Record<string, unknown>
     campaignId = String(d["campaign_id"] ?? "")
     const statusOk = d["status"] === "active"
-    assertions.push(pass("B-1: campaign created active",
-      `campaign_id=${campaignId} status=${d["status"]}`,
-      campaignId.length > 0 && statusOk ? undefined : `status=${d["status"]} http=${r.status}`))
+    assertions.push(campaignId.length > 0 && statusOk
+      ? pass("B-1: campaign created active", `campaign_id=${campaignId} status=${d["status"]}`)
+      : fail("B-1: campaign created active", `status=${d["status"]} http=${r.status}`))
   } catch (e) {
     assertions.push(fail("B-1: campaign created active", String(e)))
     campaignId = `camp_e2e_${randomUUID().slice(0, 8)}`
@@ -248,7 +252,9 @@ export async function run(ctx: ScenarioContext): Promise<ScenarioResult> {
     const r = await fetch(`${evalApiUrl}/v1/evaluation/campaigns?tenant_id=${tenantId}`)
     const d = await r.json() as Array<Record<string, unknown>>
     const found = Array.isArray(d) && d.some(c => c["campaign_id"] === campaignId)
-    assertions.push(pass("B-2: campaign in list", `found=${found}`, found ? undefined : "campaign not found in list"))
+    assertions.push(found
+      ? pass("B-2: campaign in list", `found=${found}`)
+      : fail("B-2: campaign in list", "campaign not found in list"))
   } catch (e) {
     assertions.push(fail("B-2: campaign in list", String(e)))
   }
@@ -261,7 +267,9 @@ export async function run(ctx: ScenarioContext): Promise<ScenarioResult> {
     })
     const d = await r.json() as Record<string, unknown>
     const paused = d["status"] === "paused"
-    assertions.push(pass("B-3: campaign paused", `status=${d["status"]}`, paused ? undefined : `expected paused got ${d["status"]}`))
+    assertions.push(paused
+      ? pass("B-3: campaign paused", `status=${d["status"]}`)
+      : fail("B-3: campaign paused", `expected paused got ${d["status"]}`))
   } catch (e) {
     assertions.push(fail("B-3: campaign paused", String(e)))
   }
@@ -274,7 +282,9 @@ export async function run(ctx: ScenarioContext): Promise<ScenarioResult> {
     })
     const d = await r.json() as Record<string, unknown>
     const active = d["status"] === "active"
-    assertions.push(pass("B-4: campaign resumed active", `status=${d["status"]}`, active ? undefined : `expected active got ${d["status"]}`))
+    assertions.push(active
+      ? pass("B-4: campaign resumed active", `status=${d["status"]}`)
+      : fail("B-4: campaign resumed active", `expected active got ${d["status"]}`))
   } catch (e) {
     assertions.push(fail("B-4: campaign resumed active", String(e)))
   }
@@ -301,21 +311,22 @@ export async function run(ctx: ScenarioContext): Promise<ScenarioResult> {
     ctx.kafka, analyticsUrl, tenantId, resultId, [submittedEvent]
   )
 
-  assertions.push(pass("C-1: evaluation event published to Kafka", `publishOk=${publishC}`,
-    publishC ? undefined : "failed to publish to evaluation.events"))
+  assertions.push(publishC
+    ? pass("C-1: evaluation event published to Kafka", `publishOk=${publishC}`)
+    : fail("C-1: evaluation event published to Kafka", "failed to publish to evaluation.events"))
 
   // C-2: Row found in analytics
   const foundRow = rowsC.find(r => r["result_id"] === resultId) ?? null
-  assertions.push(pass("C-2: result row appears in analytics",
-    `result_id=${foundRow?.["result_id"]} status=${statusC}`,
-    foundRow ? undefined : `row not found after polling (status=${statusC})`))
+  assertions.push(foundRow
+    ? pass("C-2: result row appears in analytics", `result_id=${foundRow["result_id"]} status=${statusC}`)
+    : fail("C-2: result row appears in analytics", `row not found after polling (status=${statusC})`))
 
   // C-3: overall_score correct
   if (foundRow) {
     const scoreOk = Math.abs(Number(foundRow["overall_score"]) - 0.85) < 0.01
-    assertions.push(pass("C-3: overall_score=0.85 in analytics row",
-      `overall_score=${foundRow["overall_score"]}`,
-      scoreOk ? undefined : `expected 0.85 got ${foundRow["overall_score"]}`))
+    assertions.push(scoreOk
+      ? pass("C-3: overall_score=0.85 in analytics row", `overall_score=${foundRow["overall_score"]}`)
+      : fail("C-3: overall_score=0.85 in analytics row", `expected 0.85 got ${foundRow["overall_score"]}`))
   } else {
     assertions.push(fail("C-3: overall_score=0.85 in analytics row", "row not found"))
   }
@@ -323,9 +334,9 @@ export async function run(ctx: ScenarioContext): Promise<ScenarioResult> {
   // C-4: eval_status=submitted in analytics row
   if (foundRow) {
     const statusEq = foundRow["eval_status"] === "submitted"
-    assertions.push(pass("C-4: eval_status=submitted in analytics row",
-      `eval_status=${foundRow["eval_status"]}`,
-      statusEq ? undefined : `expected submitted got ${foundRow["eval_status"]}`))
+    assertions.push(statusEq
+      ? pass("C-4: eval_status=submitted in analytics row", `eval_status=${foundRow["eval_status"]}`)
+      : fail("C-4: eval_status=submitted in analytics row", `expected submitted got ${foundRow["eval_status"]}`))
   } else {
     assertions.push(fail("C-4: eval_status=submitted in analytics row", "row not found"))
   }
@@ -346,7 +357,7 @@ export async function run(ctx: ScenarioContext): Promise<ScenarioResult> {
   })
 
   // Publish approved update — same result_id, ReplacingMergeTree should pick latest
-  const { publishOk: publishD, rows: rowsD } = await publishAndPollEvaluations(
+  const { publishOk: publishD } = await publishAndPollEvaluations(
     ctx.kafka, analyticsUrl, tenantId, resultId, [approvedEvent]
   )
 
@@ -367,14 +378,15 @@ export async function run(ctx: ScenarioContext): Promise<ScenarioResult> {
   } catch { /* ignore */ }
 
   // D-1: approved event published
-  assertions.push(pass("D-1: approved event published to Kafka", `publishOk=${publishD}`,
-    publishD ? undefined : "failed to publish approved event"))
+  assertions.push(publishD
+    ? pass("D-1: approved event published to Kafka", `publishOk=${publishD}`)
+    : fail("D-1: approved event published to Kafka", "failed to publish approved event"))
 
   // D-2: eval_status now approved (ReplacingMergeTree FINAL)
   const approvedRow = updatedRows.find(r => r["eval_status"] === "approved") ?? null
-  assertions.push(pass("D-2: eval_status=approved after review (ReplacingMergeTree FINAL)",
-    `status=${approvedRow?.["eval_status"]}`,
-    approvedRow ? undefined : "approved row not found — FINAL merge may not have run yet"))
+  assertions.push(approvedRow
+    ? pass("D-2: eval_status=approved after review (ReplacingMergeTree FINAL)", `status=${approvedRow["eval_status"]}`)
+    : fail("D-2: eval_status=approved after review (ReplacingMergeTree FINAL)", "approved row not found — FINAL merge may not have run yet"))
 
   // D-3: Summary endpoint returns count_approved ≥ 1
   let summaryOk = false
@@ -388,9 +400,9 @@ export async function run(ctx: ScenarioContext): Promise<ScenarioResult> {
     }
   } catch { /* ignore */ }
 
-  assertions.push(pass("D-3: summary endpoint returns total_evaluated ≥ 1",
-    `summaryOk=${summaryOk}`,
-    summaryOk ? undefined : "summary row not found or total_evaluated=0"))
+  assertions.push(summaryOk
+    ? pass("D-3: summary endpoint returns total_evaluated ≥ 1", `summaryOk=${summaryOk}`)
+    : fail("D-3: summary endpoint returns total_evaluated ≥ 1", "summary row not found or total_evaluated=0"))
 
   // ── Cleanup ─────────────────────────────────────────────────────────────────
 
@@ -402,13 +414,11 @@ export async function run(ctx: ScenarioContext): Promise<ScenarioResult> {
     })
   } catch { /* ignore */ }
 
-  const passed = assertions.filter(a => a.ok).length
-  const total  = assertions.length
   return {
-    scenario:   "24_evaluation_campaign",
-    passed,
-    failed:     total - passed,
+    scenario_id: "24",
+    name:        "Arc 6 — Evaluation Campaign pipeline",
+    passed:      assertions.every((a) => a.passed),
     assertions,
+    duration_ms: 0,  // filled in by runner
   }
 }
-

@@ -163,6 +163,7 @@ services:
           conversations.message_sent
           conversations.session_opened
           conversations.session_closed
+          conversations.participants
           agent.lifecycle
           agent.done
           agent.registry.events
@@ -428,6 +429,33 @@ services:
         condition: service_healthy
       postgres:
         condition: service_healthy
+    restart: on-failure
+    networks:
+      - plughub-full
+
+  auth-api:
+    build:
+      context: packages/auth-api
+      dockerfile: Dockerfile
+    container_name: full-auth-api
+    ports:
+      - "3200:3200"
+    environment:
+      PLUGHUB_AUTH_DATABASE_URL:        postgresql://plughub:plughub@postgres:5432/plughub
+      PLUGHUB_AUTH_JWT_SECRET:          changeme_auth_jwt_secret_full_32chars
+      PLUGHUB_AUTH_ADMIN_TOKEN:         changeme_auth_admin_token_full
+      PLUGHUB_AUTH_SEED_ADMIN_EMAIL:    admin@plughub.local
+      PLUGHUB_AUTH_SEED_ADMIN_PASSWORD: changeme_admin
+      PLUGHUB_AUTH_SEED_TENANT_ID:      tenant_demo
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:3200/health 2>/dev/null | grep -q ok"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
     restart: on-failure
     networks:
       - plughub-full
@@ -729,22 +757,7 @@ services:
     networks:
       - plughub-full
 
-  operator-console:
-    build:
-      context: .
-      dockerfile: packages/operator-console/Dockerfile
-    container_name: full-operator-console
-    ports:
-      - "5080:80"
-    depends_on:
-      analytics-api:
-        condition: service_healthy
-      pricing-api:
-        condition: service_healthy
-      config-api:
-        condition: service_healthy
-    networks:
-      - plughub-full
+  # operator-console legado removido — use platform-ui na porta 5173
 
   webchat-client:
     image: nginx:alpine

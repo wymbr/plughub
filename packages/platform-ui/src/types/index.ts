@@ -1,5 +1,24 @@
 export type UserRole = 'operator' | 'supervisor' | 'admin' | 'developer' | 'business'
 
+// ── ABAC module-config types ──────────────────────────────────────────────────
+
+/** Valores possíveis de acesso por campo de permissão. */
+export type PermissionAccess = 'none' | 'read_only' | 'write_only' | 'read_write'
+
+/** Configuração de um campo de permissão de um módulo. */
+export interface ModuleFieldConfig {
+  access: PermissionAccess
+  /** Pool IDs ou Campaign IDs com escopo restrito. [] = acesso global. */
+  scope: string[]
+}
+
+/**
+ * module_config completo do usuário.
+ * Chave externa = module_id (ex: "evaluation").
+ * Chave interna = campo de permissão (ex: "contestar", "revisar").
+ */
+export type ModuleConfig = Record<string, Record<string, ModuleFieldConfig>>
+
 export interface Session {
   userId: string
   name: string
@@ -10,6 +29,8 @@ export interface Session {
   accessiblePools: string[]        // [] = all pools (admin); non-empty = restricted
   installationId: string
   locale: 'pt-BR' | 'en'
+  /** ABAC config por módulo, carregada do JWT. */
+  moduleConfig: ModuleConfig
   // JWT tokens — stored in memory; refresh_token persisted in localStorage
   accessToken: string
   refreshToken: string
@@ -305,22 +326,40 @@ export interface ReviewerRules {
   human_review?:     boolean
 }
 
+export interface ContestationRound {
+  round_number:          number
+  contestation_roles:    string[]
+  review_roles:          string[]
+  authority_level:       'supervisor' | 'manager' | 'director'
+  review_deadline_hours: number
+}
+
+export interface ContestationPolicy {
+  contestation_roles:    string[]
+  max_rounds:            number
+  review_deadline_hours: number
+  auto_lock_on_timeout:  boolean
+  rounds?:               ContestationRound[]
+}
+
 export interface EvaluationCampaign {
-  campaign_id:      string
-  tenant_id:        string
-  form_id:          string
-  name:             string
-  description:      string
-  status:           'draft' | 'active' | 'paused' | 'closed'
-  sampling_rules:   SamplingRules
-  reviewer_rules:   ReviewerRules
-  total_instances:  number
-  completed:        number
-  pending:          number
-  in_review:        number
-  avg_score:        number | null
-  created_at:       string
-  updated_at:       string
+  campaign_id:              string
+  tenant_id:                string
+  form_id:                  string
+  name:                     string
+  description:              string
+  status:                   'draft' | 'active' | 'paused' | 'closed'
+  sampling_rules:           SamplingRules
+  reviewer_rules:           ReviewerRules
+  contestation_policy?:     ContestationPolicy
+  review_workflow_skill_id?: string
+  total_instances:          number
+  completed:                number
+  pending:                  number
+  in_review:                number
+  avg_score:                number | null
+  created_at:               string
+  updated_at:               string
 }
 
 export interface EvaluationInstance {
@@ -379,20 +418,6 @@ export interface EvaluationContestation {
   updated_at:       string
 }
 
-// Arc 6 v2 — 2D Permission Model
-export interface EvaluationPermission {
-  id:          string
-  tenant_id:   string
-  user_id:     string
-  scope_type:  'pool' | 'campaign' | 'global'
-  scope_id:    string | null
-  can_contest: boolean
-  can_review:  boolean
-  granted_by:  string
-  created_at:  string
-  updated_at:  string
-}
-
 // Arc 6 v2 — Result with computed available_actions
 export interface EvaluationResultWithActions extends EvaluationResult {
   workflow_instance_id?: string | null
@@ -407,6 +432,38 @@ export interface EvaluationResultWithActions extends EvaluationResult {
     round:           number
     authority_level: string
   } | null
+}
+
+// ── Access Control / Users (Arc 7) ────────────────────────────────────────────
+
+export interface PlatformUser {
+  id:               string
+  tenant_id:        string
+  email:            string
+  name:             string
+  roles:            string[]
+  accessible_pools: string[]   // [] = all pools
+  module_config?:   ModuleConfig
+  active:           boolean
+  created_at:       string
+  updated_at:       string
+}
+
+export interface CreateUserInput {
+  tenant_id:        string
+  email:            string
+  name:             string
+  password:         string
+  roles:            string[]
+  accessible_pools?: string[]
+}
+
+export interface UpdateUserInput {
+  name?:             string
+  password?:         string
+  roles?:            string[]
+  accessible_pools?: string[]
+  active?:           boolean
 }
 
 export interface KnowledgeSnippet {
@@ -447,4 +504,87 @@ export interface AgentEvaluationReport {
   score_trend:        { date: string; avg_score: number }[]
   top_improvement:    string[]
   compliance_flags:   string[]
+}
+
+// ─── Timeseries ───────────────────────────────────────────────────────────────
+
+export interface TimeseriesBreakdown {
+  label: string
+  value: number
+}
+
+export interface TimeseriesBucket {
+  bucket:    string   // ISO8601
+  value:     number
+  breakdown: TimeseriesBreakdown[]
+}
+
+export interface TimeseriesMeta {
+  interval_minutes: number
+  from_dt:          string
+  to_dt:            string
+  total:            number
+}
+
+export interface TimeseriesResponse {
+  buckets: TimeseriesBucket[]
+  meta:    TimeseriesMeta
+  error?:  string
+}
+
+// ─── Dashboard templates ───────────────────────────────────────────────────────
+
+export type DashboardCardType =
+  | 'timeseries_volume'
+  | 'timeseries_handle_time'
+  | 'timeseries_score'
+  | 'kpi_sessions'
+  | 'kpi_score'
+  | 'pool_status'
+
+export interface TimeseriesCardConfig {
+  url:          string    // analytics-api path, e.g. "/reports/timeseries/volume"
+  title:        string
+  valueLabel:   string
+  /** How to visualise the data. Stored per-card in the dashboard template. */
+  displayType:  'bar' | 'line' | 'area' | 'pie' | 'table' | 'tile'
+  interval?:    number
+  breakdownBy?: string
+  poolId?:      string
+}
+
+export interface KpiCardConfig {
+  title:     string
+  metricKey: string    // key from /dashboard/metrics response
+  format:    'number' | 'duration_ms' | 'score'
+  icon?:     string
+}
+
+export interface PoolStatusCardConfig {
+  title:   string
+  poolId?: string    // undefined = all pools summary
+}
+
+export type DashboardCardConfig = TimeseriesCardConfig | KpiCardConfig | PoolStatusCardConfig
+
+export interface DashboardCard {
+  id:     string
+  // react-grid-layout position + size (grid units)
+  x:      number
+  y:      number
+  w:      number
+  h:      number
+  type:   DashboardCardType
+  config: DashboardCardConfig
+}
+
+export interface DashboardTemplate {
+  template_id:  string
+  tenant_id:    string
+  name:         string
+  description?: string
+  cards:        DashboardCard[]
+  created_by:   string
+  created_at:   string
+  updated_at?:  string
 }

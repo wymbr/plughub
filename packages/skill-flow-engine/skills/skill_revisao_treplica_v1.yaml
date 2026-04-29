@@ -1,13 +1,14 @@
 id: skill_revisao_treplica_v1
 name: Revisão com Tréplica (até 3 rounds)
-version: "1"
+version: "1.0"
 description: |
   Motor de estado para ciclo de revisão de avaliação com até 3 rounds (tréplica).
   Fluxo: avaliação → revisão → contestação → revisão → contestação → revisão → congelamento.
   O contador de rounds é controlado pelo workflow; a UI ecoa o valor recebido no submit (anti-replay).
   Timeout em qualquer round: resultado é congelado no estado atual sem escalação.
   Para ciclo com réplica (2 rounds), use skill_revisao_replica_v1 ou ajuste value: 2 no verificar_limite.
-classification: vertical
+classification:
+  type: vertical
 
 entry: init_round
 

@@ -77,6 +77,21 @@ CREATE TABLE IF NOT EXISTS knowledge.snippets (
 );
 `
 
+/** Fallback table DDL without vector column — used when pgvector is unavailable. */
+export const DDL_SNIPPETS_NO_VECTOR = `
+CREATE TABLE IF NOT EXISTS knowledge.snippets (
+  snippet_id   UUID        NOT NULL DEFAULT gen_random_uuid(),
+  tenant_id    TEXT        NOT NULL,
+  namespace    TEXT        NOT NULL DEFAULT 'default',
+  content      TEXT        NOT NULL,
+  source_ref   TEXT,
+  metadata     JSONB       NOT NULL DEFAULT '{}',
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT snippets_pkey PRIMARY KEY (snippet_id)
+);
+`
+
 export const DDL_INDEXES = `
 CREATE INDEX IF NOT EXISTS idx_snippets_tenant_ns
   ON knowledge.snippets (tenant_id, namespace);
@@ -129,15 +144,27 @@ export interface DbClient {
  */
 export async function ensureSchema(client: DbClient): Promise<void> {
   await client.query(DDL_SCHEMA)
-  await client.query(DDL_SNIPPETS)
-  await client.query(DDL_INDEXES)
 
-  // pgvector extension + vector index — optional, non-fatal
+  // pgvector extension must be created BEFORE the table that uses vector(1536).
+  // If the extension is unavailable, fall back to a table without the embedding column.
+  let vectorAvailable = false
   try {
     await client.query(DDL_EXTENSION)
-    await client.query(DDL_VECTOR_INDEX)
+    vectorAvailable = true
   } catch (err) {
-    console.warn("[mcp-server-knowledge] pgvector not available — vector search disabled:", err)
+    console.warn("[mcp-server-knowledge] pgvector extension not available — falling back to text-only mode:", err)
+  }
+
+  await client.query(vectorAvailable ? DDL_SNIPPETS : DDL_SNIPPETS_NO_VECTOR)
+  await client.query(DDL_INDEXES)
+
+  // vector index — optional, only when pgvector is present
+  if (vectorAvailable) {
+    try {
+      await client.query(DDL_VECTOR_INDEX)
+    } catch (err) {
+      console.warn("[mcp-server-knowledge] vector index creation skipped:", err)
+    }
   }
 }
 

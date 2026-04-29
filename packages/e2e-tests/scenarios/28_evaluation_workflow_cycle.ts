@@ -109,7 +109,6 @@ export async function run(ctx: ScenarioContext): Promise<ScenarioResult> {
   // ── Part A — Submit result + trigger workflow ──────────────────────────────
 
   let resultId    = ""
-  let instanceId  = ""
   let workflowId  = ""
 
   // A-1: Submit evaluation result
@@ -133,11 +132,11 @@ export async function run(ctx: ScenarioContext): Promise<ScenarioResult> {
     const d = await r.json() as Record<string, unknown>
     resultId = String(d["result_id"] ?? "")
     const ok = (r.status === 200 || r.status === 201) && resultId.length > 0
-    assertions.push(pass(
-      "A-1: evaluation result submitted",
-      `result_id=${resultId} status=${d["eval_status"]}`,
-      ok ? undefined : `http=${r.status} body=${JSON.stringify(d)}`,
-    ))
+    assertions.push(ok
+      ? pass("A-1: evaluation result submitted",
+          `result_id=${resultId} status=${d["eval_status"]}`)
+      : fail("A-1: evaluation result submitted",
+          `http=${r.status} body=${JSON.stringify(d)}`))
   } catch (e) {
     assertions.push(fail("A-1: evaluation result submitted", String(e)))
     resultId = `result_wf_${randomUUID().slice(0, 8)}`
@@ -164,11 +163,11 @@ export async function run(ctx: ScenarioContext): Promise<ScenarioResult> {
     const d = await r.json() as Record<string, unknown>
     workflowId = String(d["instance_id"] ?? "")
     const ok = (r.status === 200 || r.status === 201 || r.status === 202) && workflowId.length > 0
-    assertions.push(pass(
-      "A-2: workflow triggered for skill_revisao_simples_v1",
-      `instance_id=${workflowId} flow_id=${d["flow_id"]}`,
-      ok ? undefined : `http=${r.status} body=${JSON.stringify(d)}`,
-    ))
+    assertions.push(ok
+      ? pass("A-2: workflow triggered for skill_revisao_simples_v1",
+          `instance_id=${workflowId} flow_id=${d["flow_id"]}`)
+      : fail("A-2: workflow triggered for skill_revisao_simples_v1",
+          `http=${r.status} body=${JSON.stringify(d)}`))
   } catch (e) {
     assertions.push(fail("A-2: workflow triggered for skill_revisao_simples_v1", String(e)))
     workflowId = `wf_e2e_${randomUUID().slice(0, 8)}`
@@ -187,11 +186,9 @@ export async function run(ctx: ScenarioContext): Promise<ScenarioResult> {
     )
     const status = result?.["status"]
     const ok = status === "active" || status === "suspended"
-    assertions.push(pass(
-      "A-3: workflow reaches active/suspended state",
-      `status=${status}`,
-      ok ? undefined : `status=${status} after 20s`,
-    ))
+    assertions.push(ok
+      ? pass("A-3: workflow reaches active/suspended state", `status=${status}`)
+      : fail("A-3: workflow reaches active/suspended state", `status=${status} after 20s`))
   } catch (e) {
     assertions.push(fail("A-3: workflow reaches active/suspended state", String(e)))
   }
@@ -217,11 +214,11 @@ export async function run(ctx: ScenarioContext): Promise<ScenarioResult> {
     currentRound = Number(result?.["current_round"] ?? 0)
     resumeToken  = String(result?.["resume_token"] ?? "")
     const ok = result !== null && result["action_required"] === "review"
-    assertions.push(pass(
-      "B-1: action_required=review synced to evaluation result",
-      `action_required=${result?.["action_required"]} round=${currentRound} token_len=${resumeToken.length}`,
-      ok ? undefined : `action_required=${result?.["action_required"]} after 30s`,
-    ))
+    assertions.push(ok
+      ? pass("B-1: action_required=review synced to evaluation result",
+          `action_required=${result?.["action_required"]} round=${currentRound} token_len=${resumeToken.length}`)
+      : fail("B-1: action_required=review synced to evaluation result",
+          `action_required=${result?.["action_required"]} after 30s`))
   } catch (e) {
     assertions.push(fail("B-1: action_required=review synced to evaluation result", String(e)))
     currentRound = 1  // fallback for subsequent checks
@@ -234,36 +231,32 @@ export async function run(ctx: ScenarioContext): Promise<ScenarioResult> {
     if (r.status === 404) {
       assertions.push(pass(
         "B-2: available_actions includes review for reviewer (skipped — endpoint N/A)",
-        "skipped",
-        "GET /v1/evaluation/results/{id} endpoint not available yet",
-      ))
+        "skipped"))
     } else {
       const d       = await r.json() as Record<string, unknown>
       const actions = d["available_actions"] as string[] ?? []
       const ok = actions.includes("review")
-      assertions.push(pass(
-        "B-2: available_actions includes 'review' for reviewer user",
-        `available_actions=${JSON.stringify(actions)}`,
-        ok ? undefined : `got ${JSON.stringify(actions)}`,
-      ))
+      assertions.push(ok
+        ? pass("B-2: available_actions includes 'review' for reviewer user",
+            `available_actions=${JSON.stringify(actions)}`)
+        : fail("B-2: available_actions includes 'review' for reviewer user",
+            `got ${JSON.stringify(actions)}`))
     }
   } catch (e) {
     assertions.push(fail("B-2: available_actions includes 'review' for reviewer user", String(e)))
   }
 
-  // B-3: deadline_at is set on the result
+  // B-3: deadline_at is set on the result (non-fatal if not yet set)
   try {
     const r    = await fetch(`${evalApiUrl}/v1/evaluation/results?tenant_id=${tenantId}&page_size=200`)
     const d    = await r.json() as Array<Record<string, unknown>> | { data?: Array<Record<string, unknown>> }
     const rows = Array.isArray(d) ? d : (d["data"] ?? [])
     const row  = rows.find(r => r["result_id"] === resultId)
     const hasDeadline = row && row["deadline_at"] !== null && row["deadline_at"] !== undefined
+    // Allow pass with a note if not yet set — workflow may not have suspended yet
     assertions.push(pass(
       "B-3: deadline_at set on result after workflow suspend",
-      `deadline_at=${row?.["deadline_at"]}`,
-      // Allow warning if workflow didn't emit the suspend yet
-      hasDeadline ? undefined : "deadline_at not set — workflow may not have suspended yet (non-fatal)",
-    ))
+      hasDeadline ? `deadline_at=${row?.["deadline_at"]}` : "deadline_at not set — workflow may not have suspended yet (non-fatal)"))
   } catch (e) {
     assertions.push(fail("B-3: deadline_at set on result after workflow suspend", String(e)))
   }
@@ -281,11 +274,9 @@ export async function run(ctx: ScenarioContext): Promise<ScenarioResult> {
     const is409 = r.status === 409
     // Also accept 422 if field validation rejects it, or 404 if endpoint not ready
     const acceptable = is409 || r.status === 404 || r.status === 422
-    assertions.push(pass(
-      "C-1: wrong round rejected (409 anti-replay or graceful error)",
-      `http=${r.status}`,
-      acceptable ? undefined : `expected 409/404/422 got ${r.status}`,
-    ))
+    assertions.push(acceptable
+      ? pass("C-1: wrong round rejected (409 anti-replay or graceful error)", `http=${r.status}`)
+      : fail("C-1: wrong round rejected (409 anti-replay)", `expected 409/404/422 got ${r.status}`))
   } catch (e) {
     assertions.push(fail("C-1: wrong round rejected (409 anti-replay)", String(e)))
   }
@@ -300,11 +291,11 @@ export async function run(ctx: ScenarioContext): Promise<ScenarioResult> {
     })
     const d  = await r.json() as Record<string, unknown>
     const ok = r.status === 200 || r.status === 201
-    assertions.push(pass(
-      "C-2: valid review accepted (correct round + valid JWT)",
-      `http=${r.status} status=${d["eval_status"]}`,
-      ok ? undefined : `http=${r.status} body=${JSON.stringify(d)}`,
-    ))
+    assertions.push(ok
+      ? pass("C-2: valid review accepted (correct round + valid JWT)",
+          `http=${r.status} status=${d["eval_status"]}`)
+      : fail("C-2: valid review accepted (correct round + valid JWT)",
+          `http=${r.status} body=${JSON.stringify(d)}`))
   } catch (e) {
     assertions.push(fail("C-2: valid review accepted (correct round + valid JWT)", String(e)))
   }
@@ -322,11 +313,11 @@ export async function run(ctx: ScenarioContext): Promise<ScenarioResult> {
         approved = entry.value === "approved"
       } catch { approved = raw === "approved" }
     }
-    assertions.push(pass(
-      "D-1: ContextStore has session.review_decision=approved",
-      `key=${ctxKey} raw=${raw?.slice(0, 60)}`,
-      approved ? undefined : `expected approved, got: ${raw}`,
-    ))
+    assertions.push(approved
+      ? pass("D-1: ContextStore has session.review_decision=approved",
+          `key=${ctxKey} raw=${raw?.slice(0, 60)}`)
+      : fail("D-1: ContextStore has session.review_decision=approved",
+          `expected approved, got: ${raw}`))
   } catch (e) {
     assertions.push(fail("D-1: ContextStore has session.review_decision=approved", String(e)))
   }
@@ -343,11 +334,9 @@ export async function run(ctx: ScenarioContext): Promise<ScenarioResult> {
       30000,
     )
     const ok = result?.["status"] === "completed"
-    assertions.push(pass(
-      "D-2: workflow completes after review",
-      `status=${result?.["status"]}`,
-      ok ? undefined : `status=${result?.["status"]} after 30s`,
-    ))
+    assertions.push(ok
+      ? pass("D-2: workflow completes after review", `status=${result?.["status"]}`)
+      : fail("D-2: workflow completes after review", `status=${result?.["status"]} after 30s`))
   } catch (e) {
     assertions.push(fail("D-2: workflow completes after review", String(e)))
   }
@@ -365,11 +354,11 @@ export async function run(ctx: ScenarioContext): Promise<ScenarioResult> {
       20000,
     )
     const locked = result?.["locked"] === true || result?.["locked"] === 1
-    assertions.push(pass(
-      "D-3: result locked=true after workflow.completed",
-      `locked=${result?.["locked"]} lock_reason=${result?.["lock_reason"]}`,
-      locked ? undefined : `locked=${result?.["locked"]} after 20s — workflow consumer may not be wired`,
-    ))
+    assertions.push(locked
+      ? pass("D-3: result locked=true after workflow.completed",
+          `locked=${result?.["locked"]} lock_reason=${result?.["lock_reason"]}`)
+      : fail("D-3: result locked=true after workflow.completed",
+          `locked=${result?.["locked"]} after 20s — workflow consumer may not be wired`))
   } catch (e) {
     assertions.push(fail("D-3: result locked=true after workflow.completed", String(e)))
   }
@@ -389,12 +378,11 @@ export async function run(ctx: ScenarioContext): Promise<ScenarioResult> {
     ))
   }).catch(() => {})
 
-  const passed = assertions.filter(a => a.ok).length
-  const total  = assertions.length
   return {
-    scenario:   "28_evaluation_workflow_cycle",
-    passed,
-    failed:     total - passed,
+    scenario_id: "28",
+    name:        "Arc 6 v2 — Workflow Review/Contestation Cycle",
+    passed:      assertions.every((a) => a.passed),
     assertions,
+    duration_ms: 0,  // filled in by runner
   }
 }

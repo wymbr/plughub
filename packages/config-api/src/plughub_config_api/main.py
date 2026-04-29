@@ -15,19 +15,27 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator
 
 import asyncpg
 import redis.asyncio as aioredis
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from .cache          import ConfigCache
 from .config         import get_settings
+from .db             import ensure_schema
 from .kafka_emitter  import ConfigKafkaEmitter
 from .router         import router as config_router
 from .store          import ConfigStore
+
+
+def _mask_dsn(dsn: str) -> str:
+    """Replace password in DSN with *** for safe logging."""
+    return re.sub(r"://([^:]+):[^@]+@", r"://\1:***@", dsn)
 
 logger = logging.getLogger("plughub.config.api")
 
@@ -57,6 +65,8 @@ async def _create_pool_with_retry(dsn: str, *, min_size: int, max_size: int,
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     settings = get_settings()
+
+    logger.info("Config API starting — database: %s", _mask_dsn(settings.database_url))
 
     pool = await _create_pool_with_retry(
         settings.database_url,
@@ -112,6 +122,13 @@ app = FastAPI(
     lifespan    = lifespan,
 )
 
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 app.include_router(config_router)
 
 
@@ -122,10 +139,32 @@ async def health() -> JSONResponse:
     redis_status = "ok"
 
     try:
-        # Verify both connectivity AND that the schema is ready
-        await app.state.pool.fetchval(
-            "SELECT COUNT(*) FROM platform_config LIMIT 0"
+        pool = app.state.pool
+        # Log which database we're actually connected to (diagnostics).
+        db_name = await pool.fetchval("SELECT current_database()")
+        logger.debug("Health check: connected to database '%s'", db_name)
+        # Verify both connectivity AND that the schema is ready.
+        await pool.fetchval(
+            "SELECT COUNT(*) FROM public.platform_config LIMIT 0"
         )
+    except asyncpg.exceptions.UndefinedTableError:
+        # Table missing — attempt self-healing before declaring unhealthy.
+        logger.warning(
+            "platform_config table missing in health check — attempting to recreate"
+        )
+        try:
+            await ensure_schema(app.state.pool)
+            logger.info("platform_config table recreated successfully in health check")
+            # Verify once more after recreation.
+            await app.state.pool.fetchval(
+                "SELECT COUNT(*) FROM public.platform_config LIMIT 0"
+            )
+        except Exception as recreate_exc:
+            logger.error(
+                "Self-healing failed: could not recreate platform_config: %s",
+                recreate_exc,
+            )
+            pg_status = "error"
     except Exception as exc:
         logger.warning("PG health check failed: %s", exc)
         pg_status = "error"

@@ -25,7 +25,7 @@ import React, {
   useRef,
   ReactNode,
 } from 'react'
-import { Session, UserRole } from '@/types'
+import { ModuleConfig, Session, UserRole } from '@/types'
 import { apiLogin, apiRefresh, apiLogout, AuthApiError } from '@/api/auth'
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -33,9 +33,13 @@ import { apiLogin, apiRefresh, apiLogout, AuthApiError } from '@/api/auth'
 const REFRESH_TOKEN_KEY = 'plughub_refresh_token'
 const SESSION_META_KEY  = 'plughub_session_meta'
 
-/** Map a roles[] array to the highest-privilege single UserRole for the UI. */
+/** Map a roles[] array to the highest-privilege single UserRole for the UI.
+ *  Priority: admin > developer > supervisor > operator > business
+ *  Admin is placed first so admin+developer users unlock all admin nav items.
+ *  Developer-only users still see Skill Flows and Developer Tools.
+ */
 function primaryRole(roles: string[]): UserRole {
-  const priority: UserRole[] = ['developer', 'admin', 'supervisor', 'operator', 'business']
+  const priority: UserRole[] = ['admin', 'developer', 'supervisor', 'operator', 'business']
   for (const r of priority) {
     if (roles.includes(r)) return r
   }
@@ -82,6 +86,8 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     user: {
       id: string; email: string; name: string
       roles: string[]; tenant_id: string; accessible_pools: string[]
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      module_config?: Record<string, any>
     },
   ): Session => {
     return {
@@ -92,6 +98,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       roles:           user.roles,
       tenantId:        user.tenant_id,
       accessiblePools: user.accessible_pools,
+      moduleConfig:    (user.module_config ?? {}) as ModuleConfig,
       installationId:  'default',
       locale:          'pt-BR',
       accessToken,

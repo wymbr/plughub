@@ -18,14 +18,14 @@ import asyncpg
 
 logger = logging.getLogger("plughub.calendar.db")
 
-_DDL = """
-CREATE SCHEMA IF NOT EXISTS calendar;
+_DDL_SCHEMA = "CREATE SCHEMA IF NOT EXISTS calendar"
 
+_DDL_HOLIDAY_SETS = """
 CREATE TABLE IF NOT EXISTS calendar.holiday_sets (
     id               UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
     installation_id  TEXT        NOT NULL,
     organization_id  TEXT        NOT NULL,
-    tenant_id        TEXT,                           -- NULL = org-level
+    tenant_id        TEXT,
     scope            TEXT        NOT NULL DEFAULT 'tenant'
                                  CHECK (scope IN ('installation','organization','tenant')),
     name             TEXT        NOT NULL,
@@ -33,15 +33,22 @@ CREATE TABLE IF NOT EXISTS calendar.holiday_sets (
     year             INTEGER,
     holidays         JSONB       NOT NULL DEFAULT '[]',
     created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
-    updated_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
-    CONSTRAINT uq_holiday_set UNIQUE (organization_id, COALESCE(tenant_id,''), name)
-);
+    updated_at       TIMESTAMPTZ NOT NULL DEFAULT now()
+)
+"""
 
+# COALESCE in UNIQUE constraints is not supported inline — must use expression index
+_DDL_HOLIDAY_SETS_UNIQ = (
+    "CREATE UNIQUE INDEX IF NOT EXISTS uq_holiday_set "
+    "ON calendar.holiday_sets (organization_id, COALESCE(tenant_id,''), name)"
+)
+
+_DDL_CALENDARS = """
 CREATE TABLE IF NOT EXISTS calendar.calendars (
     id               UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
     installation_id  TEXT        NOT NULL,
     organization_id  TEXT        NOT NULL,
-    tenant_id        TEXT,                           -- NULL = org-level
+    tenant_id        TEXT,
     scope            TEXT        NOT NULL DEFAULT 'tenant'
                                  CHECK (scope IN ('installation','organization','tenant')),
     name             TEXT        NOT NULL,
@@ -51,13 +58,21 @@ CREATE TABLE IF NOT EXISTS calendar.calendars (
     holiday_set_ids  JSONB       NOT NULL DEFAULT '[]',
     exceptions       JSONB       NOT NULL DEFAULT '[]',
     created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
-    updated_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
-    CONSTRAINT uq_calendar UNIQUE (organization_id, COALESCE(tenant_id,''), name)
-);
+    updated_at       TIMESTAMPTZ NOT NULL DEFAULT now()
+)
+"""
 
-CREATE INDEX IF NOT EXISTS idx_calendars_org_tenant
-    ON calendar.calendars (organization_id, tenant_id);
+_DDL_CALENDARS_UNIQ = (
+    "CREATE UNIQUE INDEX IF NOT EXISTS uq_calendar "
+    "ON calendar.calendars (organization_id, COALESCE(tenant_id,''), name)"
+)
 
+_DDL_CALENDARS_IDX = (
+    "CREATE INDEX IF NOT EXISTS idx_calendars_org_tenant "
+    "ON calendar.calendars (organization_id, tenant_id)"
+)
+
+_DDL_ASSOCIATIONS = """
 CREATE TABLE IF NOT EXISTS calendar.calendar_associations (
     id           UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
     tenant_id    TEXT        NOT NULL,
@@ -70,16 +85,28 @@ CREATE TABLE IF NOT EXISTS calendar.calendar_associations (
     priority     INTEGER     NOT NULL DEFAULT 1,
     created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
     CONSTRAINT uq_calendar_assoc UNIQUE (tenant_id, entity_type, entity_id, calendar_id)
-);
-
-CREATE INDEX IF NOT EXISTS idx_assoc_entity
-    ON calendar.calendar_associations (tenant_id, entity_type, entity_id, priority);
+)
 """
+
+_DDL_ASSOCIATIONS_IDX = (
+    "CREATE INDEX IF NOT EXISTS idx_assoc_entity "
+    "ON calendar.calendar_associations (tenant_id, entity_type, entity_id, priority)"
+)
 
 
 async def ensure_schema(pool: asyncpg.Pool) -> None:
     async with pool.acquire() as conn:
-        await conn.execute(_DDL)
+        # Explicit transaction guarantees commit before the connection is
+        # released back to the pool (avoids silent asyncpg rollback on release).
+        async with conn.transaction():
+            await conn.execute(_DDL_SCHEMA)
+            await conn.execute(_DDL_HOLIDAY_SETS)
+            await conn.execute(_DDL_HOLIDAY_SETS_UNIQ)
+            await conn.execute(_DDL_CALENDARS)
+            await conn.execute(_DDL_CALENDARS_UNIQ)
+            await conn.execute(_DDL_CALENDARS_IDX)
+            await conn.execute(_DDL_ASSOCIATIONS)
+            await conn.execute(_DDL_ASSOCIATIONS_IDX)
     logger.info("calendar schema ensured")
 
 

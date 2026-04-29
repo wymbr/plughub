@@ -11,9 +11,11 @@ dependencies    = [
     "redis[hiredis]>=5.2.0",
     "pydantic>=2.9.0",
     "pydantic-settings>=2.6.0",
-    # Attachment storage
+    # Attachment storage — fase 1 (filesystem)
     "asyncpg>=0.29.0",
     "aiofiles>=23.2.1",
+    # Attachment storage — fase 2 (S3/MinIO), importado condicionalmente
+    "aioboto3>=13.0.0",
     # JWT customer token validation
     "PyJWT>=2.8.0",
 ]

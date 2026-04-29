@@ -4,7 +4,7 @@ Pydantic schemas de entrada/saída da auth-api.
 """
 from __future__ import annotations
 
-from typing import Literal
+from typing import Any, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, EmailStr, Field
@@ -50,11 +50,22 @@ class UpdateUserRequest(BaseModel):
 
 # ─── Responses ────────────────────────────────────────────────────────────────
 
+class TokenUserInfo(BaseModel):
+    id: str
+    email: str
+    name: str
+    roles: list[str]
+    tenant_id: str
+    accessible_pools: list[str]
+    module_config: dict[str, Any] = {}   # ABAC config por módulo (carregado do JWT)
+
+
 class TokenResponse(BaseModel):
     access_token: str
     refresh_token: str
     token_type: str = "bearer"
     expires_in: int          # seconds
+    user: TokenUserInfo
 
 
 class UserResponse(BaseModel):
@@ -76,6 +87,7 @@ class MeResponse(BaseModel):
     name: str
     roles: list[str]
     accessible_pools: list[str]
+    module_config: dict[str, Any] = {}   # ABAC config por módulo
 
 
 # ─── Permissions & Templates ───────────────────────────────────────────────────

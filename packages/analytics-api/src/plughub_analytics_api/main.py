@@ -26,6 +26,7 @@ from contextlib import asynccontextmanager
 from typing import AsyncGenerator
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 logger = logging.getLogger("plughub.analytics.api")
@@ -135,6 +136,13 @@ app = FastAPI(
     version="1.0.0",
     description="Kafka→ClickHouse consumer + REST analytics for PlugHub Platform",
     lifespan=lifespan,
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 app.include_router(dashboard_router)

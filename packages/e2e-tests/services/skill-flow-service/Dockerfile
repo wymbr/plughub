@@ -5,7 +5,7 @@ WORKDIR /app
 # Copy schemas package
 COPY packages/schemas ./packages/schemas
 
-# Copy skill-flow-engine package (note: intentional typo in folder name)
+# Copy skill-flow-engine package (includes skills/*.yaml)
 COPY packages/skill-flow-engine ./packages/skill-flow-engine
 
 # Copy the skill-flow-service
@@ -49,6 +49,9 @@ WORKDIR /app
 COPY --from=builder /app/packages/schemas ./packages/schemas
 COPY --from=builder /app/packages/skill-flow-engine ./packages/skill-flow-engine
 COPY --from=builder /app/packages/e2e-tests/services/skill-flow-service ./packages/e2e-tests/services/skill-flow-service
+
+# Make skill YAMLs available at /app/skills (SKILLS_DIR in docker-compose)
+COPY --from=builder /app/packages/skill-flow-engine/skills /app/skills
 
 WORKDIR /app/packages/e2e-tests/services/skill-flow-service
 

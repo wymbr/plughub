@@ -82,11 +82,10 @@ export async function run(ctx: ScenarioContext): Promise<ScenarioResult> {
     })
     const d = await r.json() as Record<string, unknown>
     resultId = String(d["result_id"] ?? "")
-    const submitted = d["eval_status"] === "submitted"
-    assertions.push(pass("A-1: result submitted via evaluation-api",
-      `result_id=${resultId} status=${d["eval_status"]}`,
-      resultId.length > 0 && submitted ? undefined
-        : `result_id=${resultId} status=${d["eval_status"]} http=${r.status}`))
+    const submitted = d["eval_status"] === "submitted" && resultId.length > 0
+    assertions.push(submitted
+      ? pass("A-1: result submitted via evaluation-api", `result_id=${resultId} status=${d["eval_status"]}`)
+      : fail("A-1: result submitted via evaluation-api", `result_id=${resultId} status=${d["eval_status"]} http=${r.status}`))
   } catch (e) {
     assertions.push(fail("A-1: result submitted via evaluation-api", String(e)))
     // Continue with a synthetic result_id for remaining assertions
@@ -99,8 +98,9 @@ export async function run(ctx: ScenarioContext): Promise<ScenarioResult> {
     const d = await r.json() as Array<Record<string, unknown>> | { data?: Array<Record<string, unknown>> }
     const rows = Array.isArray(d) ? d : (d["data"] ?? [])
     const found = rows.some(row => row["result_id"] === resultId)
-    assertions.push(pass("A-2: result appears in results list",
-      `found=${found}`, found ? undefined : `result_id=${resultId} not found in list`))
+    assertions.push(found
+      ? pass("A-2: result appears in results list", `found=${found}`)
+      : fail("A-2: result appears in results list", `result_id=${resultId} not found in list`))
   } catch (e) {
     assertions.push(fail("A-2: result appears in results list", String(e)))
   }
@@ -114,9 +114,9 @@ export async function run(ctx: ScenarioContext): Promise<ScenarioResult> {
     })
     const d = await r.json() as Record<string, unknown>
     const approved = d["eval_status"] === "approved"
-    assertions.push(pass("A-3: result approved by human reviewer",
-      `eval_status=${d["eval_status"]}`,
-      approved ? undefined : `expected approved got ${d["eval_status"]} http=${r.status}`))
+    assertions.push(approved
+      ? pass("A-3: result approved by human reviewer", `eval_status=${d["eval_status"]}`)
+      : fail("A-3: result approved by human reviewer", `expected approved got ${d["eval_status"]} http=${r.status}`))
   } catch (e) {
     assertions.push(fail("A-3: result approved by human reviewer", String(e)))
   }
@@ -140,11 +140,10 @@ export async function run(ctx: ScenarioContext): Promise<ScenarioResult> {
     })
     const d = await r.json() as Record<string, unknown>
     contestationId = String(d["contestation_id"] ?? "")
-    const pending = d["status"] === "pending"
-    assertions.push(pass("B-1: contestation created with status=pending",
-      `contestation_id=${contestationId} status=${d["status"]}`,
-      contestationId.length > 0 && pending ? undefined
-        : `status=${d["status"]} http=${r.status}`))
+    const pending = d["status"] === "pending" && contestationId.length > 0
+    assertions.push(pending
+      ? pass("B-1: contestation created with status=pending", `contestation_id=${contestationId} status=${d["status"]}`)
+      : fail("B-1: contestation created with status=pending", `status=${d["status"]} http=${r.status}`))
   } catch (e) {
     assertions.push(fail("B-1: contestation created with status=pending", String(e)))
     contestationId = `cont_e2e_${randomUUID().slice(0, 8)}`
@@ -157,8 +156,9 @@ export async function run(ctx: ScenarioContext): Promise<ScenarioResult> {
     const d = await r.json() as Array<Record<string, unknown>> | { data?: Array<Record<string, unknown>> }
     const rows = Array.isArray(d) ? d : (d["data"] ?? [])
     const found = rows.some(row => row["contestation_id"] === contestationId)
-    assertions.push(pass("B-2: contestation appears in list",
-      `found=${found}`, found ? undefined : "contestation not found in list"))
+    assertions.push(found
+      ? pass("B-2: contestation appears in list", `found=${found}`)
+      : fail("B-2: contestation appears in list", "contestation not found in list"))
   } catch (e) {
     assertions.push(fail("B-2: contestation appears in list", String(e)))
   }
@@ -177,8 +177,9 @@ export async function run(ctx: ScenarioContext): Promise<ScenarioResult> {
     })
     const d = await r.json() as Record<string, unknown>
     const upheld = d["status"] === "upheld"
-    assertions.push(pass("B-3: contestation adjudicated as upheld",
-      `status=${d["status"]}`, upheld ? undefined : `expected upheld got ${d["status"]} http=${r.status}`))
+    assertions.push(upheld
+      ? pass("B-3: contestation adjudicated as upheld", `status=${d["status"]}`)
+      : fail("B-3: contestation adjudicated as upheld", `expected upheld got ${d["status"]} http=${r.status}`))
   } catch (e) {
     assertions.push(fail("B-3: contestation adjudicated as upheld", String(e)))
   }
@@ -193,9 +194,9 @@ export async function run(ctx: ScenarioContext): Promise<ScenarioResult> {
     const row  = rows.find(row => row["result_id"] === resultId)
     // Upheld contestation should flip result to contested or keep approved — either is valid
     const statusOk = row && ["contested", "approved"].includes(String(row["eval_status"]))
-    assertions.push(pass("B-4: result status consistent after upheld contestation",
-      `eval_status=${row?.["eval_status"]}`,
-      statusOk ? undefined : `unexpected status ${row?.["eval_status"]}`))
+    assertions.push(statusOk
+      ? pass("B-4: result status consistent after upheld contestation", `eval_status=${row?.["eval_status"]}`)
+      : fail("B-4: result status consistent after upheld contestation", `unexpected status ${row?.["eval_status"]}`))
   } catch (e) {
     assertions.push(fail("B-4: result status consistent after upheld contestation", String(e)))
   }
@@ -214,10 +215,12 @@ export async function run(ctx: ScenarioContext): Promise<ScenarioResult> {
     })
     const d = await r.json() as Record<string, unknown>
     const approvedAgain = d["eval_status"] === "approved"
-    const hasNote = (d["review_note"] as string | undefined)?.length ?? 0 > 0
-    assertions.push(pass("C-1: final review issued with review_note",
-      `eval_status=${d["eval_status"]} note_len=${(d["review_note"] as string | undefined)?.length}`,
-      approvedAgain && hasNote ? undefined : `status=${d["eval_status"]} note=${d["review_note"]}`))
+    const hasNote = ((d["review_note"] as string | undefined)?.length ?? 0) > 0
+    assertions.push(approvedAgain && hasNote
+      ? pass("C-1: final review issued with review_note",
+          `eval_status=${d["eval_status"]} note_len=${(d["review_note"] as string | undefined)?.length}`)
+      : fail("C-1: final review issued with review_note",
+          `status=${d["eval_status"]} note=${d["review_note"]}`))
   } catch (e) {
     assertions.push(fail("C-1: final review issued with review_note", String(e)))
   }
@@ -229,9 +232,10 @@ export async function run(ctx: ScenarioContext): Promise<ScenarioResult> {
     const rows = Array.isArray(d) ? d : (d["data"] ?? [])
     const row  = rows.find(row => row["result_id"] === resultId)
     const hasReviewedBy = row && row["reviewed_by"] !== null && row["reviewed_by"] !== undefined
-    assertions.push(pass("C-2: reviewed_by populated after review",
-      `reviewed_by=${row?.["reviewed_by"]}`,
-      hasReviewedBy ? undefined : `reviewed_by=${row?.["reviewed_by"]} — may not be stored on list endpoint`))
+    assertions.push(hasReviewedBy
+      ? pass("C-2: reviewed_by populated after review", `reviewed_by=${row?.["reviewed_by"]}`)
+      : fail("C-2: reviewed_by populated after review",
+          `reviewed_by=${row?.["reviewed_by"]} — may not be stored on list endpoint`))
   } catch (e) {
     assertions.push(fail("C-2: reviewed_by populated after review", String(e)))
   }
@@ -251,16 +255,16 @@ export async function run(ctx: ScenarioContext): Promise<ScenarioResult> {
     }
   } catch { /* ignore */ }
 
-  assertions.push(pass("C-3: analytics-api shows approved eval_status for result",
-    `analyticsApproved=${analyticsApproved}`,
-    analyticsApproved ? undefined : "approved row not found in analytics (ClickHouse FINAL may be delayed)"))
+  assertions.push(analyticsApproved
+    ? pass("C-3: analytics-api shows approved eval_status for result", `analyticsApproved=${analyticsApproved}`)
+    : fail("C-3: analytics-api shows approved eval_status for result",
+        "approved row not found in analytics (ClickHouse FINAL may be delayed)"))
 
-  const passed = assertions.filter(a => a.ok).length
-  const total  = assertions.length
   return {
-    scenario:   "25_evaluation_contestation",
-    passed,
-    failed:     total - passed,
+    scenario_id: "25",
+    name:        "Arc 6 — Evaluation Contestation + human review",
+    passed:      assertions.every((a) => a.passed),
     assertions,
+    duration_ms: 0,  // filled in by runner
   }
 }

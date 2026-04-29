@@ -2,14 +2,29 @@
 clickhouse.py
 ClickHouse client wrapper + DDL for the Analytics API.
 
-Six tables, all in database `plughub`:
+Tables, all in database `plughub`:
 
-  sessions        — session lifecycle (opened, closed, channel, pool, durations)
-  queue_events    — contact queued / dequeued / abandoned / position_updated
-  agent_events    — contact routed + agent_done (outcome, handle time)
-  messages        — messages published to the canonical stream
-  usage_events    — metering events (passthrough from usage.events Kafka topic)
-  sentiment_events— per-turn sentiment scores from AI Gateway
+  sessions               — session lifecycle (opened, closed, channel, pool, durations)
+  queue_events           — contact queued / dequeued / abandoned / position_updated
+  agent_events           — contact routed + agent_done (outcome, handle time)
+  messages               — messages published to the canonical stream
+  usage_events           — metering events (passthrough from usage.events Kafka topic)
+  sentiment_events       — per-turn sentiment scores from AI Gateway
+  segments               — Arc 5: ContactSegment per participant participation window
+  session_timeline       — Arc 5: time-series events enriched with segment_id
+  evaluation_results     — Arc 6: EvaluationResult state (ReplacingMergeTree)
+  evaluation_events      — Arc 6: lifecycle audit log (submitted/reviewed/contested/locked)
+  contact_insights       — business events from agent flows (insight_register MCP tool)
+
+Materialized views (AggregatingMergeTree — incremental, POPULATE on creation):
+
+  mv_agent_performance_daily — pre-aggregated daily stats per (agent_type_id, pool_id)
+  mv_segment_summary         — pre-aggregated participation stats per session_id
+
+Readable views (regular SQL views over the MVs — always up-to-date):
+
+  v_agent_performance — resolution_rate, escalation_rate, avg_duration_ms per agent_type/pool/day
+  v_segment_summary   — segment_count, handoff_count, escalations per session
 
 Design decisions:
   - ReplacingMergeTree on every table for idempotent re-inserts (Kafka at-least-once).
@@ -62,6 +77,14 @@ ORDER BY (tenant_id, session_id)
 _DDL_SESSIONS_MIGRATE = (
     "ALTER TABLE {db}.sessions ADD COLUMN IF NOT EXISTS"
     " customer_id Nullable(String) DEFAULT NULL"
+)
+
+# ANI = caller/source identifier (phone number, email address, etc.)
+# DNIS = dialed/destination identifier — applies to voice, WhatsApp, email, etc.
+_DDL_SESSIONS_MIGRATE_ANI_DNIS = (
+    "ALTER TABLE {db}.sessions"
+    " ADD COLUMN IF NOT EXISTS ani  Nullable(String) DEFAULT NULL,"
+    " ADD COLUMN IF NOT EXISTS dnis Nullable(String) DEFAULT NULL"
 )
 
 _DDL_QUEUE_EVENTS = """
@@ -288,6 +311,173 @@ PARTITION BY toYYYYMM(timestamp)
 ORDER BY (tenant_id, session_id, timestamp, event_id)
 """
 
+# ── Arc 6: evaluation_results — one row per EvaluationResult (submitted + review updates).
+# ReplacingMergeTree(ingested_at) ensures the latest review decision wins.
+# ORDER BY (tenant_id, result_id) — primary key for point lookups.
+_DDL_EVALUATION_RESULTS = """
+CREATE TABLE IF NOT EXISTS {db}.evaluation_results
+(
+    result_id          String,
+    instance_id        String,
+    session_id         String,
+    tenant_id          String,
+    evaluator_id       String,
+    form_id            String,
+    campaign_id        Nullable(String),
+    overall_score      Float32,
+    eval_status        String,
+    locked             UInt8,
+    compliance_flags   Array(String),
+    ingested_at        DateTime DEFAULT now(),
+    timestamp          DateTime64(3, 'UTC'),
+    date               Date
+)
+ENGINE = ReplacingMergeTree(ingested_at)
+PARTITION BY toYYYYMM(date)
+ORDER BY (tenant_id, result_id)
+"""
+
+# ── Arc 6: evaluation_events — general evaluation lifecycle events from evaluation.events Kafka topic.
+# Covers: evaluation.submitted, evaluation.reviewed, evaluation.contested, evaluation.locked.
+# ReplacingMergeTree() for idempotency (event_id is unique per event type).
+_DDL_EVALUATION_EVENTS = """
+CREATE TABLE IF NOT EXISTS {db}.evaluation_events
+(
+    event_id      String,
+    tenant_id     String,
+    result_id     String,
+    instance_id   String,
+    session_id    String,
+    campaign_id   Nullable(String),
+    event_type    String,
+    eval_status   Nullable(String),
+    overall_score Nullable(Float32),
+    actor_id      Nullable(String),
+    ingested_at   DateTime DEFAULT now(),
+    timestamp     DateTime64(3, 'UTC'),
+    date          Date
+)
+ENGINE = ReplacingMergeTree()
+PARTITION BY toYYYYMM(date)
+ORDER BY (tenant_id, event_id)
+"""
+
+# ── contact_insights — business events published via insight_register MCP tool.
+# Each row represents a domain event emitted by an agent flow (e.g. "cancelamento",
+# "erro_consulta_saldo"). Consumed from conversations.events Kafka topic where
+# event_type starts with "insight.".
+# ReplacingMergeTree for at-least-once idempotency.
+_DDL_CONTACT_INSIGHTS = """
+CREATE TABLE IF NOT EXISTS {db}.contact_insights
+(
+    insight_id    String,
+    tenant_id     String,
+    session_id    String,
+    insight_type  String,
+    category      String,
+    value         String,
+    tags          Array(String),
+    agent_id      Nullable(String),
+    timestamp     DateTime64(3, 'UTC'),
+    date          Date
+)
+ENGINE = ReplacingMergeTree()
+PARTITION BY toYYYYMM(date)
+ORDER BY (tenant_id, insight_id)
+"""
+
+# ── Arc 5: mv_agent_performance_daily — AggregatingMergeTree MV over segments.
+# Captures a row per (tenant_id, agent_type_id, pool_id, period_date) on every INSERT.
+# Uses State/Merge aggregating functions so partial results compose correctly.
+# POPULATE backfills existing segments rows on first creation.
+_DDL_MV_AGENT_PERFORMANCE = """
+CREATE MATERIALIZED VIEW IF NOT EXISTS {db}.mv_agent_performance_daily
+ENGINE = AggregatingMergeTree()
+PARTITION BY toYYYYMM(period_date)
+ORDER BY (tenant_id, agent_type_id, pool_id, period_date)
+POPULATE
+AS SELECT
+    tenant_id,
+    agent_type_id,
+    pool_id,
+    toDate(started_at)                                    AS period_date,
+    countState()                                          AS total_sessions_state,
+    avgState(assumeNotNull(duration_ms))                  AS avg_duration_ms_state,
+    countIfState(outcome = 'resolved')                    AS resolved_count_state,
+    countIfState(outcome = 'escalated')                   AS escalated_count_state,
+    countIfState(outcome = 'transferred')                 AS transferred_count_state,
+    countIfState(agent_type = 'human')                    AS human_sessions_state
+FROM {db}.segments
+WHERE ended_at IS NOT NULL
+GROUP BY tenant_id, agent_type_id, pool_id, toDate(started_at)
+"""
+
+# Readable SQL view over mv_agent_performance_daily.
+# resolution_rate and escalation_rate are ratios computed with Merge aggregators.
+# Use greatest(..., 1) to avoid division by zero on empty buckets.
+_DDL_V_AGENT_PERFORMANCE = """
+CREATE VIEW IF NOT EXISTS {db}.v_agent_performance AS
+SELECT
+    tenant_id,
+    agent_type_id,
+    pool_id,
+    period_date,
+    countMerge(total_sessions_state)                                              AS total_sessions,
+    round(avgMerge(avg_duration_ms_state), 0)                                     AS avg_duration_ms,
+    countIfMerge(resolved_count_state)
+        / greatest(countMerge(total_sessions_state), 1)                           AS resolution_rate,
+    countIfMerge(escalated_count_state)
+        / greatest(countMerge(total_sessions_state), 1)                           AS escalation_rate,
+    countIfMerge(transferred_count_state)
+        / greatest(countMerge(total_sessions_state), 1)                           AS transfer_rate,
+    countIfMerge(human_sessions_state)
+        / greatest(countMerge(total_sessions_state), 1)                           AS human_rate
+FROM {db}.mv_agent_performance_daily
+GROUP BY tenant_id, agent_type_id, pool_id, period_date
+"""
+
+# ── Arc 5: mv_segment_summary — AggregatingMergeTree MV over segments per session.
+# Captures a row per (tenant_id, session_id) on every INSERT into segments.
+# handoff_count = max(sequence_index) = number of primary-agent hand-offs in the session.
+_DDL_MV_SEGMENT_SUMMARY = """
+CREATE MATERIALIZED VIEW IF NOT EXISTS {db}.mv_segment_summary
+ENGINE = AggregatingMergeTree()
+ORDER BY (tenant_id, session_id)
+POPULATE
+AS SELECT
+    tenant_id,
+    session_id,
+    countState()                                    AS segment_count_state,
+    countIfState(role = 'primary')                  AS primary_count_state,
+    countIfState(role = 'specialist')               AS specialist_count_state,
+    countIfState(agent_type = 'human')              AS human_count_state,
+    sumState(assumeNotNull(duration_ms))            AS total_duration_ms_state,
+    maxState(toInt64(sequence_index))               AS max_sequence_state,
+    countIfState(outcome = 'escalated')             AS escalation_count_state,
+    countIfState(outcome = 'resolved')              AS resolved_count_state
+FROM {db}.segments
+GROUP BY tenant_id, session_id
+"""
+
+# Readable SQL view over mv_segment_summary.
+# handoff_count = max sequence_index observed (0 = single agent, 1 = one hand-off, etc.).
+_DDL_V_SEGMENT_SUMMARY = """
+CREATE VIEW IF NOT EXISTS {db}.v_segment_summary AS
+SELECT
+    tenant_id,
+    session_id,
+    countMerge(segment_count_state)       AS segment_count,
+    countMerge(primary_count_state)       AS primary_segments,
+    countMerge(specialist_count_state)    AS specialist_segments,
+    countMerge(human_count_state)         AS human_segments,
+    sumMerge(total_duration_ms_state)     AS total_duration_ms,
+    maxMerge(max_sequence_state)          AS handoff_count,
+    countMerge(escalation_count_state)    AS escalation_count,
+    countMerge(resolved_count_state)      AS resolved_count
+FROM {db}.mv_segment_summary
+GROUP BY tenant_id, session_id
+"""
+
 _ALL_DDL = [
     _DDL_DATABASE,
     _DDL_SESSIONS,
@@ -301,11 +491,21 @@ _ALL_DDL = [
     _DDL_PARTICIPATION_INTERVALS,
     _DDL_SEGMENTS,
     _DDL_SESSION_TIMELINE,
+    _DDL_EVALUATION_RESULTS,
+    _DDL_EVALUATION_EVENTS,
+    _DDL_CONTACT_INSIGHTS,
+    # Materialized views — must come AFTER the source tables they reference.
+    # AggregatingMergeTree with POPULATE backfills existing data on first creation.
+    _DDL_MV_AGENT_PERFORMANCE,
+    _DDL_V_AGENT_PERFORMANCE,
+    _DDL_MV_SEGMENT_SUMMARY,
+    _DDL_V_SEGMENT_SUMMARY,
 ]
 
 # Migrations applied after CREATE IF NOT EXISTS (idempotent ALTER TABLE statements).
 _MIGRATIONS = [
     _DDL_SESSIONS_MIGRATE,
+    _DDL_SESSIONS_MIGRATE_ANI_DNIS,
 ]
 
 
@@ -334,10 +534,21 @@ class AnalyticsStore:
     # ── Schema ────────────────────────────────────────────────────────────────
 
     def ensure_schema(self) -> None:
-        """Creates the database and all tables if they don't exist. Idempotent."""
-        for ddl in _ALL_DDL:
+        """Creates the database, all tables, and materialized views if they don't exist. Idempotent."""
+        # Base tables: execute strictly — errors are real problems.
+        base_ddl = [d for d in _ALL_DDL if "MATERIALIZED VIEW" not in d and "CREATE VIEW" not in d]
+        for ddl in base_ddl:
             stmt = ddl.format(db=self._database)
             self._client.command(stmt)
+        # Materialized views and readable views: wrap in try/except because POPULATE
+        # can raise on ClickHouse versions that don't support IF NOT EXISTS + POPULATE
+        # atomically. On re-runs the view already exists and the error is harmless.
+        view_ddl = [d for d in _ALL_DDL if "MATERIALIZED VIEW" in d or "CREATE VIEW" in d]
+        for ddl in view_ddl:
+            try:
+                self._client.command(ddl.format(db=self._database))
+            except Exception as exc:
+                logger.warning("View DDL skipped (already exists?): %s — %s", ddl[:80], exc)
         # Forward-compatible migrations (idempotent ALTER TABLE statements).
         for ddl in _MIGRATIONS:
             try:
@@ -366,6 +577,7 @@ class AnalyticsStore:
         "session_id", "tenant_id", "channel", "pool_id", "customer_id",
         "opened_at", "closed_at", "close_reason", "outcome",
         "wait_time_ms", "handle_time_ms", "date",
+        "ani", "dnis",
     ]
 
     async def upsert_session(self, row: dict) -> None:
@@ -514,6 +726,58 @@ class AnalyticsStore:
             self._TIMELINE_COLS,
         )
 
+    # evaluation_results (Arc 6)
+
+    _EVAL_RESULT_COLS = [
+        "result_id", "instance_id", "session_id", "tenant_id",
+        "evaluator_id", "form_id", "campaign_id",
+        "overall_score", "eval_status", "locked",
+        "compliance_flags", "timestamp", "date",
+    ]
+
+    async def upsert_evaluation_result(self, row: dict) -> None:
+        """Insert or update an EvaluationResult row (review decisions overwrite prior status)."""
+        await asyncio.to_thread(
+            self._insert,
+            "evaluation_results",
+            [_eval_result_row(row)],
+            self._EVAL_RESULT_COLS,
+        )
+
+    # evaluation_events (Arc 6)
+
+    _EVAL_EVENT_COLS = [
+        "event_id", "tenant_id", "result_id", "instance_id", "session_id",
+        "campaign_id", "event_type", "eval_status", "overall_score",
+        "actor_id", "timestamp", "date",
+    ]
+
+    async def insert_evaluation_event(self, row: dict) -> None:
+        """Insert a lifecycle event from the evaluation.events Kafka topic."""
+        await asyncio.to_thread(
+            self._insert,
+            "evaluation_events",
+            [_eval_event_row(row)],
+            self._EVAL_EVENT_COLS,
+        )
+
+    # contact_insights
+
+    _CONTACT_INSIGHT_COLS = [
+        "insight_id", "tenant_id", "session_id",
+        "insight_type", "category", "value", "tags",
+        "agent_id", "timestamp", "date",
+    ]
+
+    async def insert_contact_insight(self, row: dict) -> None:
+        """Insert a business insight event from insight_register MCP tool."""
+        await asyncio.to_thread(
+            self._insert,
+            "contact_insights",
+            [_contact_insight_row(row)],
+            self._CONTACT_INSIGHT_COLS,
+        )
+
 
 # ─── Row builders ─────────────────────────────────────────────────────────────
 
@@ -549,6 +813,9 @@ def _session_row(d: dict) -> list:
         d.get("wait_time_ms"),
         d.get("handle_time_ms"),
         _today_utc(ts),
+        # ANI/DNIS — caller/source and dialed/destination identifiers (any channel)
+        d.get("ani") or d.get("caller_id") or d.get("from") or None,
+        d.get("dnis") or d.get("dialed_number") or d.get("to") or None,
     ]
 
 
@@ -748,4 +1015,76 @@ def _timeline_row(d: dict) -> list:
         d.get("actor_role", "") or "",
         payload_str,
         _parse_dt(ts) or datetime.utcnow(),
+    ]
+
+
+def _eval_result_row(d: dict) -> list:
+    """Row builder for evaluation_results table (Arc 6)."""
+    ts = d.get("timestamp") or d.get("created_at")
+    flags = d.get("compliance_flags") or []
+    if isinstance(flags, str):
+        import json as _json
+        try:
+            flags = _json.loads(flags)
+        except Exception:
+            flags = []
+    return [
+        d.get("result_id", ""),
+        d.get("instance_id", "") or "",
+        d.get("session_id", "") or "",
+        d.get("tenant_id", ""),
+        d.get("evaluator_id", "") or "",
+        d.get("form_id", "") or "",
+        d.get("campaign_id") or None,
+        float(d.get("overall_score", 0.0)),
+        d.get("eval_status", "submitted"),
+        1 if d.get("locked") else 0,
+        list(flags),
+        _parse_dt(ts) or datetime.utcnow(),
+        _today_utc(ts),
+    ]
+
+
+def _eval_event_row(d: dict) -> list:
+    """Row builder for evaluation_events table (Arc 6)."""
+    ts = d.get("timestamp")
+    score = d.get("overall_score")
+    return [
+        d.get("event_id", "") or "",
+        d.get("tenant_id", ""),
+        d.get("result_id", "") or "",
+        d.get("instance_id", "") or "",
+        d.get("session_id", "") or "",
+        d.get("campaign_id") or None,
+        d.get("event_type", ""),
+        d.get("eval_status") or None,
+        float(score) if score is not None else None,
+        d.get("actor_id") or None,
+        _parse_dt(ts) or datetime.utcnow(),
+        _today_utc(ts),
+    ]
+
+
+def _contact_insight_row(d: dict) -> list:
+    """Row builder for contact_insights table."""
+    import uuid as _uuid
+    ts = d.get("timestamp")
+    tags = d.get("tags") or []
+    if isinstance(tags, str):
+        import json as _json
+        try:
+            tags = _json.loads(tags)
+        except Exception:
+            tags = [tags] if tags else []
+    return [
+        d.get("insight_id", "") or str(_uuid.uuid4()),
+        d.get("tenant_id", ""),
+        d.get("session_id", ""),
+        d.get("insight_type", ""),
+        d.get("category", ""),
+        str(d.get("value", "")) if d.get("value") is not None else "",
+        list(tags),
+        d.get("agent_id") or None,
+        _parse_dt(ts) or datetime.utcnow(),
+        _today_utc(ts),
     ]

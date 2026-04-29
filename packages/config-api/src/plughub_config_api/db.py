@@ -28,8 +28,10 @@ logger = logging.getLogger("plughub.config.db")
 
 GLOBAL = "__global__"
 
+_DDL_GRANT = "GRANT CREATE, USAGE ON SCHEMA public TO CURRENT_USER"
+
 _DDL_TABLE = """
-CREATE TABLE IF NOT EXISTS platform_config (
+CREATE TABLE IF NOT EXISTS public.platform_config (
     id          SERIAL PRIMARY KEY,
     tenant_id   TEXT        NOT NULL DEFAULT '__global__',
     namespace   TEXT        NOT NULL,
@@ -43,20 +45,64 @@ CREATE TABLE IF NOT EXISTS platform_config (
 
 _DDL_INDEX = """
 CREATE INDEX IF NOT EXISTS idx_platform_config_lookup
-    ON platform_config (tenant_id, namespace, key)
+    ON public.platform_config (tenant_id, namespace, key)
 """
 
 
 async def ensure_schema(pool: asyncpg.Pool) -> None:
     """Create the platform_config table and index if they do not exist.
 
-    Runs each DDL statement individually so asyncpg never batches them
-    in a single pipeline that might silently skip the second statement.
+    Uses an explicit transaction so asyncpg commits the DDL before releasing
+    the connection back to the pool.  Without conn.transaction(), asyncpg may
+    leave a server-side implicit transaction open; releasing the connection
+    then triggers a silent rollback.
+
+    Explicitly qualifies the table with the 'public' schema to avoid any
+    search_path ambiguity — the default '$user' schema for user 'plughub'
+    could shadow 'public' if a schema named 'plughub' exists.
+
+    Verification uses a *fresh* pool connection acquired after the DDL
+    connection is released, confirming the committed state is globally visible.
     """
     async with pool.acquire() as conn:
-        await conn.execute(_DDL_TABLE)
-        await conn.execute(_DDL_INDEX)
-    logger.info("platform_config schema ensured")
+        db_name = await conn.fetchval("SELECT current_database()")
+        logger.info("ensure_schema: running on database '%s'", db_name)
+
+        # Attempt to ensure the current user has schema privileges.
+        # IMPORTANT: This runs in auto-commit mode (outside the DDL transaction)
+        # so that a GRANT failure does NOT poison the subsequent transaction.
+        # This is a no-op for superusers (plughub is a superuser in the Docker
+        # image) and ensures compatibility with PostgreSQL 15+ where CREATE on
+        # 'public' is not granted to PUBLIC by default.
+        try:
+            await conn.execute(_DDL_GRANT)
+            logger.info("ensure_schema: schema GRANT applied")
+        except Exception as grant_exc:
+            # Superusers bypass grant checks — a failure here is non-fatal.
+            logger.warning("GRANT on public schema skipped (user is superuser or already privileged): %s", grant_exc)
+
+        # Explicit transaction — guaranteed commit before conn is released.
+        async with conn.transaction():
+            # Pin search_path inside the transaction to eliminate any ambiguity
+            # (SET LOCAL is transaction-scoped in PostgreSQL).
+            await conn.execute("SET LOCAL search_path TO public")
+            await conn.execute(_DDL_TABLE)
+            await conn.execute(_DDL_INDEX)
+        # Transaction committed; conn is still valid but no longer in a tx.
+        logger.info("ensure_schema: DDL committed in database '%s'", db_name)
+
+    # Re-acquire a fresh connection to verify the DDL is globally visible.
+    exists = await pool.fetchval(
+        "SELECT EXISTS (SELECT 1 FROM pg_tables"
+        " WHERE schemaname = 'public' AND tablename = 'platform_config')"
+    )
+    if not exists:
+        raise RuntimeError(
+            "public.platform_config not found after CREATE TABLE IF NOT EXISTS — "
+            "DDL did not commit. Check that user has CREATE ON SCHEMA public."
+        )
+
+    logger.info("platform_config schema ensured (public.platform_config)")
 
 
 # ─── raw DB operations ────────────────────────────────────────────────────────
@@ -70,7 +116,7 @@ async def db_get(
     """Two-level lookup: tenant-specific wins over global. Returns parsed value or None."""
     row = await pool.fetchrow(
         """
-        SELECT value FROM platform_config
+        SELECT value FROM public.platform_config
         WHERE tenant_id IN ($1, $2)
           AND namespace = $3
           AND key       = $4
@@ -90,7 +136,7 @@ async def db_get_raw(
 ) -> Any | None:
     """Single-row lookup — exact (tenant_id, namespace, key), no fallback."""
     row = await pool.fetchrow(
-        "SELECT value, description, updated_at FROM platform_config "
+        "SELECT value, description, updated_at FROM public.platform_config "
         "WHERE tenant_id = $1 AND namespace = $2 AND key = $3",
         tenant_id, namespace, key,
     )
@@ -117,7 +163,7 @@ async def db_set(
     """Upsert a config entry. tenant_id='__global__' sets the platform default."""
     await pool.execute(
         """
-        INSERT INTO platform_config (tenant_id, namespace, key, value, description, updated_at)
+        INSERT INTO public.platform_config (tenant_id, namespace, key, value, description, updated_at)
         VALUES ($1, $2, $3, $4::jsonb, $5, now())
         ON CONFLICT (tenant_id, namespace, key) DO UPDATE
             SET value       = EXCLUDED.value,
@@ -136,7 +182,7 @@ async def db_delete(
 ) -> bool:
     """Returns True if a row was deleted."""
     result = await pool.execute(
-        "DELETE FROM platform_config WHERE tenant_id = $1 AND namespace = $2 AND key = $3",
+        "DELETE FROM public.platform_config WHERE tenant_id = $1 AND namespace = $2 AND key = $3",
         tenant_id, namespace, key,
     )
     return result.endswith("1")
@@ -155,7 +201,7 @@ async def db_list_namespace(
     rows = await pool.fetch(
         """
         SELECT DISTINCT ON (key) key, value
-        FROM platform_config
+        FROM public.platform_config
         WHERE tenant_id IN ($1, $2)
           AND namespace = $3
         ORDER BY key, CASE WHEN tenant_id = $1 THEN 0 ELSE 1 END
@@ -176,7 +222,7 @@ async def db_list_all(
     rows = await pool.fetch(
         """
         SELECT DISTINCT ON (namespace, key) namespace, key, value
-        FROM platform_config
+        FROM public.platform_config
         WHERE tenant_id IN ($1, $2)
         ORDER BY namespace, key, CASE WHEN tenant_id = $1 THEN 0 ELSE 1 END
         """,
@@ -201,7 +247,7 @@ async def db_list_namespace_entries(
     Used by the admin list endpoint to show what is explicitly set.
     """
     rows = await pool.fetch(
-        "SELECT key, value, description, updated_at FROM platform_config "
+        "SELECT key, value, description, updated_at FROM public.platform_config "
         "WHERE tenant_id = $1 AND namespace = $2 ORDER BY key",
         tenant_id, namespace,
     )

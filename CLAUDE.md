@@ -2239,6 +2239,308 @@ const token = await getAccessToken()   // null se não autenticado
 
 ---
 
+## Sistema ABAC — Permissões Declarativas por Módulo
+
+O sistema ABAC (Attribute-Based Access Control) complementa o RBAC existente (roles: operator/supervisor/admin/developer/business) com permissões granulares declaradas por módulo. Cada módulo registra seus próprios campos de permissão em `infra/modules.yaml`. As permissões são armazenadas em `auth.users.module_config` (JSONB), carregadas no JWT e avaliadas localmente no frontend — sem round-trip ao servidor.
+
+### auth-api — extensões
+
+#### Nova tabela: `auth.module_registry`
+
+```sql
+CREATE TABLE auth.module_registry (
+    module_id          TEXT PRIMARY KEY,
+    label              TEXT NOT NULL,
+    icon               TEXT NOT NULL DEFAULT '',
+    nav_path           TEXT NOT NULL DEFAULT '',
+    active             BOOL NOT NULL DEFAULT TRUE,
+    permission_schema  JSONB NOT NULL DEFAULT '{}',
+    created_at         TIMESTAMPTZ DEFAULT now(),
+    updated_at         TIMESTAMPTZ DEFAULT now()
+);
+```
+
+#### Nova coluna em `auth.users`
+
+```sql
+ALTER TABLE auth.users
+  ADD COLUMN IF NOT EXISTS module_config JSONB NOT NULL DEFAULT '{}';
+```
+
+#### Novos endpoints
+
+| Método | Rota | Auth | Descrição |
+|---|---|---|---|
+| `GET` | `/auth/modules?active_only=true` | — | Lista módulos com permission_schema |
+| `PUT` | `/auth/users/{id}/module-config` | X-Admin-Token | Salva module_config do usuário |
+
+#### Seed automático
+
+Função `seed_modules_from_yaml()` lê `infra/modules.yaml` e faz upsert em `auth.module_registry` ao iniciar o auth-api. Idempotente — sem erro em re-inicializações.
+
+### `infra/modules.yaml` — registro central de módulos
+
+Arquivo YAML com 8 módulos registrados. Cada módulo define:
+- `module_id`, `label`, `icon`, `nav_path`, `active`
+- `permission_schema`: mapa de campos, onde cada campo tem `label`, `domain` (lista de `PermissionAccess` permitidos), `scopable` (bool), `scope_type` (pool|campaign|global), `default`
+
+**Módulos registrados:**
+
+| Módulo | Campos de permissão | Descrição |
+|---|---|---|
+| `evaluation` | `contestar`, `revisar`, `relatorio`, `formularios`, `permissoes` | Avaliação de qualidade |
+| `analytics` | `view`, `export`, `segment_drilldown` | Relatórios operacionais |
+| `billing` | `view`, `manage_resources`, `manage_pricing` | Faturamento e preços |
+| `config` | `view`, `edit`, `admin` | Configuração de plataforma |
+| `registry` | `view`, `manage_pools`, `manage_agents`, `manage_skills` | Registro de agentes |
+| `skill_flows` | `view`, `edit`, `publish` | Editor de fluxos |
+| `campaigns` | `view`, `manage`, `analytics` | Campanhas de coleta |
+| `workflows` | `view`, `manage`, `debug` | Automação de processos |
+
+### JWT — `module_config` incluído
+
+O access token agora inclui o campo `module_config` extraído de `auth.users`:
+
+```json
+{
+  "sub": "user-uuid",
+  "tenant_id": "tenant_demo",
+  "email": "user@example.com",
+  "roles": ["supervisor"],
+  "accessible_pools": [],
+  "module_config": {
+    "evaluation": {
+      "contestar": { "access": "none", "scope": [] },
+      "revisar":   { "access": "read_write", "scope": ["pool:retencao_humano"] }
+    },
+    "analytics": {
+      "view": { "access": "read_only", "scope": [] }
+    }
+  }
+}
+```
+
+### platform-ui — tipos e helper
+
+#### Tipos em `src/types/index.ts`
+
+```typescript
+export type PermissionAccess = 'none' | 'read_only' | 'write_only' | 'read_write'
+
+export interface ModuleFieldConfig {
+  access: PermissionAccess
+  scope: string[]           // [] = acesso global; ['pool:sac', 'pool:retencao'] = restrito
+}
+
+export type ModuleConfig = Record<string, Record<string, ModuleFieldConfig>>
+
+// Integrado em Session
+export interface Session {
+  // ...campos existentes...
+  moduleConfig: ModuleConfig
+}
+```
+
+#### Helper puro: `src/lib/permissions.ts`
+
+```typescript
+export class PermissionChecker {
+  constructor(private moduleConfig: ModuleConfig | undefined) {}
+
+  // Verifica se usuário tem acesso a um campo (qualquer nível acima de 'none')
+  can(module: string, field: string): boolean
+  can(module: string, field: string, minAccess: PermissionAccess): boolean
+  can(module: string, field: string, minAccess: PermissionAccess, scopeId: string): boolean
+
+  // Retorna o nível de acesso (sem verificar scope)
+  access(module: string, field: string): PermissionAccess
+
+  // Retorna a lista de escopos para um campo
+  scopeOf(module: string, field: string): string[]
+}
+
+export function makePermissions(moduleConfig: ModuleConfig | undefined): PermissionChecker
+```
+
+**Exemplos de uso:**
+
+```typescript
+const perms = makePermissions(session?.moduleConfig)
+
+perms.can('evaluation', 'revisar')                               // tem qualquer acesso?
+perms.can('evaluation', 'revisar', 'read_write')                 // tem read_write?
+perms.can('evaluation', 'revisar', 'read_write', 'pool:sac')     // tem acesso ao pool sac?
+perms.access('evaluation', 'contestar')                          // 'none'|'read_only'|'write_only'|'read_write'
+perms.scopeOf('evaluation', 'revisar')                           // [] = global; ['pool:x', 'pool:y']
+```
+
+**Hierarquia de acesso:** `none < read_only < write_only < read_write`. Quando `scope: []`, acesso é global (qualquer pool/campaign passa na validação de escopo).
+
+#### Componente: `src/components/ModulePermissionForm.tsx`
+
+Formulário dinâmico de permissões ABAC para uso na gestão de usuários:
+
+```typescript
+<ModulePermissionForm
+  modules={modules}              // retorno de GET /auth/modules?active_only=true
+  value={userModuleConfig}       // estado atual
+  onChange={(newConfig) => {...}}
+  readOnly={false}
+  adminToken={adminToken}
+/>
+```
+
+**Comportamento:**
+- Renderiza acordeões colapsáveis por módulo
+- Cada campo do `permission_schema` vira um `<select>` com opções: None, Read Only, Write Only, Read Write
+- Quando `access != none` e `scopable: true`, renderiza input de escopo com chips remoníveis (pool_id ou campaign_id)
+- Suporta modo `readOnly` (desabilita inputs, buttons)
+- Validação inline: rejeita duplicatas de escopo, detecta escopos inválidos
+
+### Integração no gerenciamento de usuários
+
+#### `src/modules/access/AccessPage.tsx` — CRUD de usuários com ABAC
+
+O modal de criação/edição de usuário agora inclui `ModulePermissionForm`:
+
+- Hook `useModules(adminToken)` → `GET /auth/modules?active_only=true`
+- Ao criar usuário: `POST /auth/users` → depois `PUT /auth/users/{id}/module-config` com config
+- Ao editar: `PATCH /auth/users/{id}` + `PUT /auth/users/{id}/module-config` (ambos simultâneos via Promise.all)
+- Modal ampliado de `max-w-lg` para `max-w-2xl` para acomodar formulário de permissões
+- Estados de salvamento e erro propagados para `ModulePermissionForm`
+
+### Sidebar — filtragem ABAC de itens de nav
+
+#### `src/shell/Sidebar.tsx` — gates ABAC opcionais em `NavItem`
+
+```typescript
+export interface NavItem {
+  label: string
+  href: string
+  icon: string
+  roles?: string[]              // filtro RBAC
+  abac?: {                       // novo — filtro ABAC
+    module: string
+    field: string
+  }
+}
+```
+
+#### Função `passesAbac(item, moduleConfig)`
+
+- Sem campo `abac` → sempre visível
+- Sem `moduleConfig` no session (conta legacy) → graceful degradation, mostra o item (backward-compatible)
+- Com `moduleConfig` → avalia `perms.can(item.abac.module, item.abac.field)` → visível se true
+
+**Items de avaliação com gates ABAC definidos:**
+
+```typescript
+// Em navItems array
+{
+  label: t('nav.evaluation.forms'),
+  href: '/evaluation/forms',
+  icon: '📋',
+  roles: ['admin'],
+  abac: { module: 'evaluation', field: 'formularios' }
+},
+{
+  label: t('nav.evaluation.campaigns'),
+  href: '/evaluation/campaigns',
+  icon: '📢',
+  roles: ['supervisor', 'admin'],
+  abac: { module: 'evaluation', field: 'formularios' }
+},
+{
+  label: t('nav.eval.avaliacoes'),
+  href: '/evaluation/avaliacoes',
+  icon: '🗂️',
+  roles: ['operator', 'supervisor', 'admin'],
+  // No ABAC gate — page is visible to all; available_actions are computed server-side per row
+},
+{
+  label: t('nav.evaluation.reports'),
+  href: '/evaluation/reports',
+  icon: '📊',
+  roles: ['supervisor', 'admin'],
+  abac: { module: 'evaluation', field: 'relatorio' }
+}
+```
+
+### Integração no módulo de avaliação
+
+#### `AvaliacoesPage.tsx` — tabela unificada (substitui ReviewPage + MyEvaluationsPage)
+
+Visão única de todas as avaliações com filtros completos e drill-down lateral.
+`available_actions` é computado server-side com Bearer JWT — nunca localmente:
+
+```
+GET /v1/evaluation/results?tenant_id=...&action_required=any     → Aguardando minha ação
+GET /v1/evaluation/results?tenant_id=...&eval_status=submitted   → filtro por status
+GET /v1/evaluation/results?tenant_id=...&campaign_id=...         → filtro por campanha
+```
+
+Por row, o servidor retorna `available_actions: ["review" | "contest"]` baseado no ABAC do JWT do caller.
+A UI desabilita/oculta botões com base nesse campo — nunca computa permissão localmente.
+
+#### Contestação por critério — `ContestPanel`
+
+Operadores contestam avaliações critério a critério em vez de escrever uma razão genérica.
+
+**Componentes:**
+- `CriterionContestRow` — exibe `criterion_id`, score atribuído e justificativa do avaliador IA como contexto; checkbox para selecionar o critério para contestação; textarea de discordância (≥ 30 chars) com contador de caracteres e borda verde/vermelha
+- `ContestPanel` — lista todos os critérios não-NA via `CriterionContestRow`; estado `crState: Record<criterion_id, { checked, justification }>`; botão de envio desabilitado até que ao menos um critério esteja selecionado e todas as justificativas tenham ≥ 30 chars
+
+**Formato estruturado do campo `reason`** (compilado por `buildReason()`, armazenado no backend como string):
+```
+[criterion_id] Nota atribuída: 7.0/10
+Avaliação do sistema: O agente seguiu o protocolo...
+Discordância: Na verdade o agente não...
+
+---
+
+[criterion_id2] Nota atribuída: 4.0/10
+Avaliação do sistema: ...
+Discordância: ...
+```
+
+Blocos separados por `\n\n---\n\n`. Backward-compatible — contestações legadas (texto livre) são tratadas como fallback.
+
+**`parseContestationReason(reason: string): ParsedCriterionContestation[]`** — helper puro que faz split em `\n\n---\n\n` e extrai `criterion_id`, `score_label`, `system_evaluation`, `disagreement` por bloco. Fallback gracioso para texto não estruturado.
+
+#### Revisão por critério — `ReviewPanel`
+
+Revisores (IA e humanos) respondem por critério, no mesmo formato estruturado.
+
+- Contestações abertas renderizadas via `parseContestationReason()` — cada critério contestado em card próprio mostrando score original, avaliação do sistema e discordância do contestante
+- Textareas de nota por critério abaixo de cada card (opcional por linha)
+- Nota geral (obrigatória apenas para `adjusted_approved` ou `rejected`)
+- `buildReviewNote()` compila `[criterion_id] nota\n\n---\n\n[geral] nota` no mesmo formato estruturado
+- Estado `crNotes: Record<criterion_id, string>` + `generalNote: string`
+
+**Invariante:** o mesmo parser `parseContestationReason` é usado tanto para exibir a contestação ao revisor quanto para exibir a resposta do revisor ao contestante — formato é simétrico.
+
+#### `CampaignsPage.tsx` — campos Arc 6 v2 no CreateModal e painel de detalhe
+
+**CreateModal** (expandido para 620 px, layout 2 colunas):
+- Dropdown "Skill de revisão" → `review_workflow_skill_id` (opções: `skill_revisao_simples_v1`, `skill_revisao_treplica_v1`)
+- Seção "Política de contestação" opt-in via checkbox:
+  - Máximo de rounds, prazo de revisão (horas), alçada (`supervisor` / `manager` / `director`), auto-lock por timeout
+  - Informação contextual: "sem política = contestação desabilitada"
+
+**Painel de detalhe** — 4 cards: Sampling, Reviewer IA, Skill de revisão (id monoespaçado + descrição), Política de contestação (max rounds / prazo / auto-lock / breakdown por round)
+
+### Invariantes (nunca violar)
+
+- **`module_config` é avaliado localmente no frontend** — nunca fazer round-trip ao servidor para verificar permissão ABAC em roteamento de UI
+- **Graceful degradation:** usuários sem `moduleConfig` recebem acesso baseado apenas em `role` (backward-compatible com contas legacy)
+- **O `module_registry` é seed automático** ao iniciar auth-api — nunca inserir manualmente via SQL
+- **`makePermissions` é puro** (sem efeitos colaterais) — seguro chamar em render sem memoização
+- **Permissão ABAC é um filtro adicional** ao filtro de roles — roles continuam sendo a primeira barreira. Ambos devem passar (`AND` lógico)
+- **Nunca persistir `PermissionAccess` como strings hardcoded** — sempre usar tipos TypeScript para evitar typos
+- **Escopo sempre em formato `{type}:{id}`** — ex: `pool:retencao_humano`, `campaign:camp_abc123`, nunca valores soltos
+
+---
+
 ## Pending (next iteration)
 
 ### Arc 2 — fechamento
@@ -2280,7 +2582,7 @@ const token = await getAccessToken()   // null se não autenticado
 
 10. ~~**Config Management Module — separação env vars × configuração de módulo**~~: ✅ `packages/config-api/` com tabela PostgreSQL `platform_config (tenant_id, namespace, key, value JSONB, updated_at)` + API REST CRUD (`GET/PUT/DELETE /config/{namespace}/{key}`) + seed de todos os valores atuais hardcoded. Leitura com cache Redis (TTL 60s) para não adicionar latência no hot path. ~~Fase 2: UI de visualização no operator-console~~ ✅ `ConfigPanel.tsx` — sidebar de namespaces, tabela de keys com valores resolvidos, EditDrawer com JSON editor inline, scope toggle (global vs tenant), admin token local.
     - **Dois níveis**: `tenant_id = '__global__'` para defaults de plataforma; tenant real para overrides específicos. Lookup: tenant wins over global.
-    - **8 namespaces seedados**: `sentiment` (thresholds, live_ttl_s), `routing` (snapshot_ttl_s, sla_default_ms, score_weights, estimated_wait_factor, congestion_sla_factor), `session` (ai_gateway_ttl_s, channel_gateway_ttl_s), `consumer` (batch_size, timeout_ms, restart_delay_s, max_restart_delay_s), `dashboard` (sse_interval_s, sse_retry_ms), `webchat` (auth_timeout_s, attachment_expiry_days, upload_limits_mb), `masking` (authorized_roles, default_retention_days, capture_input_default, capture_output_default), `quota` (max_concurrent_sessions, llm_tokens_daily, messages_daily).
+    - **9 namespaces seedados**: `sentiment` (thresholds, live_ttl_s), `routing` (snapshot_ttl_s, sla_default_ms, score_weights, estimated_wait_factor, congestion_sla_factor), `session` (ai_gateway_ttl_s, channel_gateway_ttl_s), `consumer` (batch_size, timeout_ms, restart_delay_s, max_restart_delay_s), `dashboard` (sse_interval_s, sse_retry_ms), `webchat` (auth_timeout_s, attachment_expiry_days, upload_limits_mb), `masking` (authorized_roles, default_retention_days, capture_input_default, capture_output_default), `quota` (max_concurrent_sessions, llm_tokens_daily, messages_daily), `dashboards` (default_template_id, allow_user_customization, max_cards_per_dashboard — templates armazenados como `template:{uuid}`, layouts pessoais como `layout:{tenant}:{user}`).
     - **`ConfigStore`**: `get()` (cache hit → DB miss), `get_or_default()`, `list_namespace()` (com cache de namespace), `list_all()`, `set()` (upsert + invalidação imediata), `delete()`. Invalidação global faz SCAN para limpar variantes de tenant.
     - **`config.changed` (Kafka)**: Config API publica no tópico `config.changed` após cada PUT/DELETE bem-sucedido. Payload: `{event, tenant_id, namespace, key, operation, updated_at}`. Consumidores roteiam por namespace:
       | Namespace | Consumidor | Reação |
@@ -2290,6 +2592,34 @@ const token = await getAccessToken()   // null se não autenticado
       | `masking`, `session`, `webchat`, `sentiment`, `consumer`, `dashboard` | (cache Redis 60s) | sem ação imediata; propagação natural via TTL |
     - Tests: `test_store.py` (27 assertions — TestConfigCache, TestConfigStoreGet, TestConfigStoreSet, TestConfigStoreDelete, TestConfigStoreList, TestSeedData).
 
+11. ~~**Timeseries endpoints (analytics-api)**~~: ✅ `GET /reports/timeseries/volume`, `/reports/timeseries/handle_time`, `/reports/timeseries/score`. Parâmetros: `tenant_id`, `interval` (minutos, 1–1440, default 60), `from_dt`, `to_dt`, `breakdown_by` (pool_id|channel para volume/handle_time; campaign_id|form_id para score), `pool_id`, `format` (json|csv). Usa `toStartOfInterval(timestamp, toIntervalMinute($interval))` para bucketing dinâmico. Arquivo `packages/analytics-api/src/plughub_analytics_api/timeseries_query.py`. Pool scoping via `optional_pool_principal` (Arc 7c). Resposta: `{ buckets: [{bucket, value, breakdown}], meta: {interval_minutes, from_dt, to_dt, total} }`.
+
+12. ~~**Dashboard com drag-and-drop e templates (platform-ui)**~~: ✅ `packages/platform-ui/src/modules/dashboards/DashboardsPage.tsx` — substitui `PlaceholderPage` em `/dashboards`. Componentes principais: `TimeseriesChart` genérico (`src/components/TimeseriesChart/`), `DashboardsPage` com react-grid-layout, sistema de templates via Config API namespace `dashboards`.
+
+    **TimeseriesChart** (`src/components/TimeseriesChart/`):
+    - `TimeseriesChart.tsx` — componente Recharts; `compact=true` = sparkline + KPI para cards; `compact=false` = modo completo com interval picker, date range, exportação CSV (nível 1) e raw (nível 2)
+    - `useTimeseriesData.ts` — hook de fetch + polling; suporta `accessToken` para Bearer
+    - `formatters.ts` — `formatCount`, `formatDurationMs`, `formatScore`, `formatBucketLabel`
+    - `chartType: bar | line | area`; paleta de 8 cores para breakdown series
+
+    **DashboardsPage**:
+    - Sidebar (admin only): lista de templates + botão "Novo template"; nome + descrição salvos no Config API como `dashboards.template:{uuid}`
+    - Grid: react-grid-layout 12 colunas, cards draggable/resizable em modo edição
+    - Card types: `timeseries_volume`, `timeseries_handle_time`, `timeseries_score`, `pool_status`
+    - Modo admin: criar/remover templates, adicionar/remover cards, salvar layout no template compartilhado
+    - Modo usuário: drag/resize persiste como layout pessoal (`dashboards.layout:{tenant}:{user}`) sem alterar o template compartilhado
+    - Template padrão lido de `module_config.dashboard.default_template_id` do JWT (ABAC)
+    - Fallback: layouts pessoais armazenados em localStorage quando admin token ausente
+
+    **Config API — namespace `dashboards`** (3 novas chaves seedadas):
+    - `default_template_id` → null
+    - `allow_user_customization` → true
+    - `max_cards_per_dashboard` → 20
+
+    **Tipos em `src/types/index.ts`:** `TimeseriesBreakdown`, `TimeseriesBucket`, `TimeseriesMeta`, `TimeseriesResponse`, `DashboardCardType`, `TimeseriesCardConfig`, `KpiCardConfig`, `PoolStatusCardConfig`, `DashboardCardConfig`, `DashboardCard`, `DashboardTemplate`
+
+    **Deps adicionadas ao `package.json`:** `react-grid-layout@^1.4.4`, `@types/react-grid-layout@^1.3.5`
+
 **Arquitetura de dados:**
 ```
 Kafka topics → analytics-api consumer → ClickHouse
@@ -2298,6 +2628,7 @@ Kafka topics → analytics-api consumer → ClickHouse
 Redis snapshots + sentiment_live → analytics-api → SSE → operator-console
 PostgreSQL (evaluation, sentiment_timeline) → analytics-api (queries pontuais)
 
+ClickHouse → /reports/timeseries/* → TimeseriesChart (platform-ui) → DashboardsPage cards
 ClickHouse → Metabase (relatórios self-service)
 analytics-api REST → BI externos (PowerBI, Looker, Tableau)
 ```
@@ -2716,19 +3047,14 @@ Body de contestation: `{ result_id, reason, round: number }`. O campo `round` é
 
 #### Auth
 
-- **Operações admin** (CRUD de formulários, campanhas, permissões): `X-Admin-Token` header
-- **Operações de revisão e contestação**: `Authorization: Bearer <jwt>` com claims `sub` (user_id) e `roles[]`
+- **Operações admin** (CRUD de formulários e campanhas): `X-Admin-Token` header
+- **Operações de revisão e contestação**: `Authorization: Bearer <jwt>` com claims `sub` (user_id), `roles[]` e `module_config`
   - O evaluation-api extrai `caller.user_id` do `sub` do JWT para registrar `reviewed_by` / `contested_by`
-  - Permissões são verificadas contra `evaluation_permissions` (tabela PostgreSQL) antes de executar a ação
+  - Permissões verificadas via ABAC `module_config.evaluation.revisar` / `module_config.evaluation.contestar` (sem DB lookup)
+  - `_check_abac_permission(jwt_payload, field, pool_id)` — graceful degradation: sem module_config → permite (conta legacy)
+  - Escopo: scope list vazio → acesso global; não-vazio → `pool:{pool_id}` deve estar na lista
 
-#### Permissions CRUD
-
-| Método | Rota | Descrição |
-|---|---|---|
-| `GET` | `/v1/evaluation/permissions?tenant_id=&user_id=` | Lista permissões do usuário |
-| `POST` | `/v1/evaluation/permissions` | Concede permissão (admin) |
-| `PATCH` | `/v1/evaluation/permissions/{id}` | Atualiza permissão (admin) |
-| `DELETE` | `/v1/evaluation/permissions/{id}` | Revoga permissão (admin) |
+**Nota:** a tabela `evaluation.permissions` e os endpoints `GET/POST/PATCH/DELETE /v1/evaluation/permissions` foram removidos. Permissões de avaliação são configuradas exclusivamente via ABAC no auth-api (`PUT /auth/users/{id}/module-config`), eliminando o risco de inconsistência entre os dois sistemas.
 
 ### mcp-server-knowledge
 
@@ -3167,8 +3493,7 @@ Retorna `ReplayContext` enriquecido com `evaluation_form`, `campaign_context` e 
 | `/evaluation/forms` | `FormsPage.tsx` | admin | CRUD de formulários com critérios |
 | `/evaluation/campaigns` | `CampaignsPage.tsx` | supervisor, admin | Campanhas + KPIs em tempo real |
 | `/evaluation/knowledge` | `KnowledgePage.tsx` | admin | Base de conhecimento vetorial |
-| `/evaluation/review` | `ReviewPage.tsx` | supervisor, admin | Fila de revisão humana |
-| `/evaluation/mine` | `MyEvaluationsPage.tsx` | operator+ | Avaliações recebidas pelo agente logado |
+| `/evaluation/avaliacoes` | `AvaliacoesPage.tsx` | operator, supervisor, admin | Tabela unificada: todas as avaliações, filtros completos, drill-down, ações disponíveis via ABAC |
 | `/evaluation/reports` | `ReportsPage.tsx` | supervisor+ | Dashboard analítico (analytics-api) |
 
 Nav group "Avaliação" adicionado ao `Sidebar.tsx`.
@@ -3297,8 +3622,8 @@ plughub/
     evaluation-api/               ← plughub-evaluation-api (Python FastAPI — porta 3400)
     mcp-server-knowledge/         ← mcp-server-knowledge (TypeScript MCP Server)
   packages/platform-ui/src/
-    modules/evaluation/           ← 6 páginas: FormsPage, CampaignsPage, KnowledgePage,
-    │                                          ReviewPage, MyEvaluationsPage, ReportsPage
+    modules/evaluation/           ← 5 páginas: FormsPage, CampaignsPage, KnowledgePage,
+    │                                          AvaliacoesPage (tabela unificada), ReportsPage
     api/evaluation-hooks.ts       ← hooks completos (evaluation-api + analytics-api)
 ```
 
@@ -3318,22 +3643,22 @@ plughub/
 
 Todos os componentes abaixo foram implementados:
 
-- ✅ `evaluation_permissions` table + migration + endpoints `GET/POST/PATCH/DELETE /v1/evaluation/permissions`
-  - `evaluation-api/db.py`: `create_permission`, `list_permissions`, `get_permission`, `update_permission`, `delete_permission`, `resolve_permissions`
-  - UNIQUE index: `COALESCE(scope_id, '')` para suportar NULL em scope global sem violar constraint
+- ~~`evaluation_permissions` table + endpoints~~ → **removido**: permissões unificadas no ABAC (`module_config.evaluation.revisar` / `module_config.evaluation.contestar`); tabela dropada no DDL startup
+- ✅ `_check_abac_permission(jwt_payload, field, pool_id)` em `router.py` — substitui `resolve_permissions()`; graceful degradation para tokens legacy sem `module_config`
 - ✅ `EvaluationCampaign`: campos `review_workflow_skill_id` + `contestation_policy` (DDL + schema update em `db.py`)
 - ✅ `EvaluationResult`: campos `workflow_instance_id`, `resume_token`, `action_required`, `current_round`, `deadline_at`, `lock_reason` (DDL em `db.py`)
 - ✅ `EvaluationContestation`: campos `round_number`, `authority_level` (DDL em `db.py`)
-- ✅ `GET /v1/evaluation/results/{id}?caller_user_id=` — `available_actions` computado server-side via `_compute_available_actions`
-- ✅ `POST /v1/evaluation/results/{id}/review` — JWT decode (`_decode_jwt`), `resolve_permissions()`, anti-replay de `round`, ContextStore write, workflow resume
-- ✅ `POST /v1/evaluation/contestations` — JWT decode, `resolve_permissions()`, anti-replay de `round`, ContextStore write (`session.review_decision = "contested"`), workflow resume
+- ✅ `GET /v1/evaluation/results/{id}` — `available_actions` computado server-side via `_compute_available_actions(result, jwt_payload, pool_id)` (ABAC; Bearer opcional)
+- ✅ `POST /v1/evaluation/results/{id}/review` — JWT decode, `_check_abac_permission(…, "revisar", pool_id)`, anti-replay de `round`, ContextStore write, workflow resume
+- ✅ `POST /v1/evaluation/contestations` — JWT decode, `_check_abac_permission(…, "contestar", pool_id)`, anti-replay de `round`, ContextStore write (`session.review_decision = "contested"`), workflow resume
 - ✅ Consumer `workflow.events` no `evaluation-api/main.py` — `_on_workflow_event()`: atualiza `action_required`, `current_round`, `deadline_at`, `resume_token`, `locked`, `lock_reason` via `update_result_workflow_state()` e `lock_result()`
 - ✅ Trigger de workflow ao submeter resultado: `POST /v1/workflow/trigger` com `flow_id = campaign.review_workflow_skill_id`
 - ✅ `packages/skill-flow-engine/skills/skill_revisao_simples_v1.yaml` — ciclo simples (1 round, 6 steps)
 - ✅ `packages/skill-flow-engine/skills/skill_revisao_treplica_v1.yaml` — tréplica (até 3 rounds, 10 steps); alterar `value: 3` para `value: 2` para réplica
 - ✅ MCP tool `evaluation_lock` em `mcp-server-plughub/src/tools/evaluation.ts` — idempotente: 409 = já locked (tratado como sucesso)
 - ✅ ContextStore TTL 7 dias: Config API namespace `evaluation` key `workflow_context_ttl_s = 604800` + 4 keys adicionais (`default_review_skill_id`, `review_deadline_hours`, `contestation_deadline_hours`, `auto_lock_on_workflow_complete`)
-- ✅ platform-ui: `EvaluationPermissionsPage.tsx` — gestão de permissões 2D por usuário/pool/campanha; rota `/evaluation/permissions` (role: admin); nav item 🔐 Permissões
+- ~~platform-ui: `EvaluationPermissionsPage.tsx`~~ → **removido**: permissões de avaliação configuradas na tela de usuários (AccessPage) via `ModulePermissionForm`
+- ~~platform-ui: `ReviewPage.tsx` + `MyEvaluationsPage.tsx`~~ → **unificados** em `AvaliacoesPage.tsx` (`/evaluation/avaliacoes`): tabela com filtros completos (status, campanha, "Aguardando minha ação"), drill-down lateral, `available_actions` server-side via Bearer JWT + ABAC
 - ✅ E2E scenarios 27/28: `27_evaluation_permissions.ts` (11 assertions, `--permissions`) + `28_evaluation_workflow_cycle.ts` (11 assertions, `--workflow-review`)
 
 ### Arc 6 v2 — Tests

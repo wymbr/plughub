@@ -2,6 +2,7 @@
   "nav": {
     "home": "Home",
     "atendimento": "Service",
+    "contatos": "Contacts",
     "monitor": "Monitor",
     "agentAssist": "Agent Assist",
     "workflows": "Workflows",
@@ -10,10 +11,8 @@
       "forms": "Forms",
       "campaigns": "Campaigns",
       "knowledge": "Knowledge Base",
-      "review": "Review Queue",
-      "myEvaluations": "My Evaluations",
-      "reports": "Reports",
-      "permissions": "Permissions"
+      "avaliacoes": "Evaluations",
+      "reports": "Reports"
     },
     "analytics": "Analytics",
     "dashboards": "Dashboards",

@@ -135,15 +135,17 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     )
     app.state.account_selector = account_selector
 
-    # Legacy components (/v1/turn, /v1/reason) — share the same provider
+    # Legacy components (/v1/turn, /v1/reason) — use the "anthropic" alias provider.
+    # Falls back to None when no Anthropic API key is configured (dev / test mode).
+    _legacy_provider = providers.get("anthropic")
     app.state.redis          = redis
     app.state.kafka_producer = kafka_producer
     app.state.gateway        = AIGateway(
-        provider=anthropic_provider,
+        provider=_legacy_provider,
         model_profiles=settings.model_profiles,
     )
     app.state.reason_eng  = ReasonEngine(
-        provider=anthropic_provider,
+        provider=_legacy_provider,
         model_profiles=settings.model_profiles,
     )
     app.state.session_mgr = session_mgr

@@ -293,20 +293,20 @@ function FormDetail({ form, adminToken, onSaved, onNew }: FormDetailProps) {
             </button>
           </div>
 
-          {editing.dimensions.map((d, i) => (
+          {(editing.dimensions ?? []).map((d, i) => (
             <DimensionEditor
               key={d.dimension_id}
               dim={d}
               onChange={updated => {
-                const dims = [...editing.dimensions]
+                const dims = [...(editing.dimensions ?? [])]
                 dims[i] = updated
                 setEditing({ ...editing, dimensions: dims })
               }}
-              onDelete={() => setEditing({ ...editing, dimensions: editing.dimensions.filter((_, j) => j !== i) })}
+              onDelete={() => setEditing({ ...editing, dimensions: (editing.dimensions ?? []).filter((_, j) => j !== i) })}
             />
           ))}
 
-          {editing.dimensions.length === 0 && (
+          {(editing.dimensions ?? []).length === 0 && (
             <p className="text-sm text-gray-400 text-center py-4">
               Clique em "+ Dimensão" para adicionar dimensões ao formulário
             </p>
@@ -349,7 +349,7 @@ export default function FormsPage() {
               }`}
             >
               <div className="font-medium truncate">{f.name}</div>
-              <div className="text-xs opacity-70">{f.dimensions.length} dimensões · {f.status}</div>
+              <div className="text-xs opacity-70">{(f.dimensions ?? []).length} dimensões · {f.status}</div>
             </button>
           ))}
           {!loading && forms.length === 0 && (

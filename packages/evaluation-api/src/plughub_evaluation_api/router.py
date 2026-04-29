@@ -100,6 +100,50 @@ def _decode_jwt(request: Request) -> dict[str, Any]:
     return payload
 
 
+def _decode_jwt_optional(request: Request) -> dict[str, Any] | None:
+    """Decode Bearer JWT if present; return None if absent (no error)."""
+    auth = request.headers.get("authorization", "")
+    if not auth.startswith("Bearer "):
+        return None
+    token = auth[7:]
+    try:
+        payload = pyjwt.decode(token, settings.jwt_secret, algorithms=["HS256"])
+        return payload
+    except pyjwt.PyJWTError:
+        return None
+
+
+def _check_abac_permission(jwt_payload: dict[str, Any], field: str, pool_id: str | None = None) -> bool:
+    """
+    Check ABAC permission from module_config JWT claim.
+
+    field:   'revisar'   → can the caller perform human review?
+             'contestar' → can the caller file a contestation?
+    pool_id: if the campaign is scoped to a pool, pass it to enforce scope.
+
+    Graceful degradation: if module_config is absent (legacy token) → allow.
+    Scope: if scope list is empty → global access → allow.
+            if scope list is non-empty → pool_id must be in the list.
+    """
+    module_config = jwt_payload.get("module_config", {})
+    if not module_config:
+        # Legacy token with no module_config → no ABAC restriction
+        return True
+    field_config = module_config.get("evaluation", {}).get(field, {})
+    access = field_config.get("access", "none")
+    if access == "none":
+        return False
+    scope: list[str] = field_config.get("scope", [])
+    if not scope:
+        # Empty scope = global access
+        return True
+    if pool_id:
+        # Scope list contains entries like "pool:retencao_humano"
+        return f"pool:{pool_id}" in scope or pool_id in scope
+    # No pool_id to check against → accept if any scope is present
+    return True
+
+
 # ─── DB / infra accessors ─────────────────────────────────────────────────────
 
 def _pool(request: Request) -> asyncpg.Pool:
@@ -151,30 +195,21 @@ async def _resume_workflow(resume_token: str, tenant_id: str) -> None:
         logger.warning("workflow resume HTTP call failed (non-fatal): %s", exc)
 
 
-async def _compute_available_actions(
-    pool: asyncpg.Pool,
+def _compute_available_actions(
     result: dict[str, Any],
-    caller_user_id: str | None,
+    jwt_payload: dict[str, Any] | None,
     pool_id: str | None,
 ) -> list[str]:
-    """Compute available_actions server-side — never trust the client."""
+    """Compute available_actions server-side using ABAC — never trust the client."""
     if result.get("eval_status") == "locked":
         return []
     action_required = result.get("action_required")
-    if not action_required or not caller_user_id:
+    if not action_required or not jwt_payload:
         return []
 
-    perms = await _db.resolve_permissions(
-        pool,
-        result["tenant_id"],
-        caller_user_id,
-        campaign_id=result.get("campaign_id"),
-        pool_id=pool_id,
-    )
-
-    if action_required == "review" and "review" in perms:
+    if action_required == "review" and _check_abac_permission(jwt_payload, "revisar", pool_id):
         return ["review"]
-    if action_required == "contestation" and "contest" in perms:
+    if action_required == "contestation" and _check_abac_permission(jwt_payload, "contestar", pool_id):
         return ["contest"]
     return []
 
@@ -589,13 +624,47 @@ async def list_results(
     campaign_id: str | None = None,
     session_id: str | None = None,
     eval_status: str | None = None,
+    action_required: str | None = None,   # "review" | "contestation" | "any"
+    pool_id: str | None = None,
+    evaluator_id: str | None = None,
+    locked: bool | None = None,
     limit: int = 50,
     offset: int = 0,
 ) -> dict:
-    pool = _pool(request)
-    rows = await _db.list_results(pool, tenant_id, campaign_id=campaign_id,
-                                   session_id=session_id, eval_status=eval_status,
-                                   limit=limit, offset=offset)
+    """
+    List evaluation results with optional filters.
+    Pass Authorization: Bearer <jwt> to get personalized `available_actions` per row.
+    """
+    db_pool = _pool(request)
+    jwt_payload = _decode_jwt_optional(request)
+
+    rows = await _db.list_results(
+        db_pool, tenant_id,
+        campaign_id=campaign_id,
+        session_id=session_id,
+        eval_status=eval_status,
+        action_required=action_required,
+        pool_id=pool_id,
+        evaluator_id=evaluator_id,
+        locked=locked,
+        limit=limit,
+        offset=offset,
+    )
+
+    # Compute available_actions for each row (O(1) — pure ABAC, no DB round-trip)
+    # We need the campaign's pool_id for scope enforcement; cache per campaign_id
+    campaign_pool_cache: dict[str, str | None] = {}
+    for row in rows:
+        c_id = row.get("campaign_id")
+        if c_id not in campaign_pool_cache:
+            if c_id:
+                campaign = await _db.get_campaign(db_pool, c_id, tenant_id)
+                campaign_pool_cache[c_id] = campaign.get("pool_id") if campaign else None
+            else:
+                campaign_pool_cache[c_id] = None
+        row_pool_id = campaign_pool_cache.get(c_id)
+        row["available_actions"] = _compute_available_actions(row, jwt_payload, row_pool_id)
+
     return {"tenant_id": tenant_id, "results": rows, "count": len(rows)}
 
 
@@ -604,11 +673,10 @@ async def get_result(
     result_id: str,
     tenant_id: str,
     request: Request,
-    caller_user_id: str | None = None,
 ) -> dict:
     """
     Returns the result with server-computed `available_actions`.
-    Pass ?caller_user_id=<user_id> to get personalized button state.
+    Pass Authorization: Bearer <jwt> to get personalized button state.
     The UI should never compute permissions locally — use this field only.
     """
     pool = _pool(request)
@@ -616,13 +684,15 @@ async def get_result(
     if not row:
         raise HTTPException(404, detail="result not found")
 
-    # Compute available_actions server-side
+    # Resolve pool_id from campaign for scope checks
     pool_id: str | None = None
     if row.get("campaign_id"):
         campaign = await _db.get_campaign(pool, row["campaign_id"], tenant_id)
         pool_id = campaign.get("pool_id") if campaign else None
 
-    available_actions = await _compute_available_actions(pool, row, caller_user_id, pool_id)
+    # ABAC permission check from JWT (optional — anonymous callers see empty actions)
+    jwt_payload = _decode_jwt_optional(request)
+    available_actions = _compute_available_actions(row, jwt_payload, pool_id)
 
     result_with_actions = dict(row)
     result_with_actions["available_actions"] = available_actions
@@ -673,13 +743,11 @@ async def review_result(result_id: str, tenant_id: str, body: ReviewBody, reques
             detail=f"round mismatch: expected {result.get('current_round', 0)}, got {body.round}",
         )
 
-    # Verify permission
+    # Verify ABAC permission (revisar field in module_config.evaluation)
     campaign = await _db.get_campaign(pool, result["campaign_id"], tenant_id) if result.get("campaign_id") else None
     pool_id = campaign.get("pool_id") if campaign else None
-    perms = await _db.resolve_permissions(pool, tenant_id, caller_user_id,
-                                          campaign_id=result.get("campaign_id"), pool_id=pool_id)
-    if "review" not in perms:
-        raise HTTPException(403, detail="caller lacks 'review' permission for this campaign/pool")
+    if not _check_abac_permission(jwt_payload, "revisar", pool_id):
+        raise HTTPException(403, detail="caller lacks 'revisar' permission for this campaign/pool")
 
     # Persist decision
     row = await _db.update_result(
@@ -794,13 +862,11 @@ async def create_contestation(body: ContestationCreate, request: Request) -> dic
             detail=f"round mismatch: expected {result.get('current_round', 0)}, got {body.round}",
         )
 
-    # Permission check
+    # Verify ABAC permission (contestar field in module_config.evaluation)
     campaign = await _db.get_campaign(pool, result["campaign_id"], body.tenant_id) if result.get("campaign_id") else None
     pool_id = campaign.get("pool_id") if campaign else None
-    perms = await _db.resolve_permissions(pool, body.tenant_id, caller_user_id,
-                                          campaign_id=result.get("campaign_id"), pool_id=pool_id)
-    if "contest" not in perms:
-        raise HTTPException(403, detail="caller lacks 'contest' permission for this campaign/pool")
+    if not _check_abac_permission(jwt_payload, "contestar", pool_id):
+        raise HTTPException(403, detail="caller lacks 'contestar' permission for this campaign/pool")
 
     row = await _db.create_contestation(
         pool,
@@ -874,73 +940,6 @@ async def adjudicate(contestation_id: str, tenant_id: str, body: AdjudicateBody,
         adjudicated_by=body.adjudicated_by,
     )
     return row
-
-
-# ─── Permissions (2D: user × pool|campaign|global) ────────────────────────────
-
-class PermissionCreate(BaseModel):
-    tenant_id:    str
-    user_id:      str
-    scope_type:   str       # "pool" | "campaign" | "global"
-    scope_id:     str | None = None
-    can_contest:  bool = False
-    can_review:   bool = False
-    granted_by:   str = "operator"
-
-
-class PermissionUpdate(BaseModel):
-    can_contest:  bool | None = None
-    can_review:   bool | None = None
-
-
-@router.get("/v1/evaluation/permissions")
-async def list_permissions(
-    request: Request,
-    tenant_id: str,
-    user_id: str | None = None,
-    scope_type: str | None = None,
-    scope_id: str | None = None,
-) -> dict:
-    _require_admin(request)
-    pool = _pool(request)
-    rows = await _db.list_permissions(pool, tenant_id, user_id=user_id,
-                                      scope_type=scope_type, scope_id=scope_id)
-    return {"tenant_id": tenant_id, "permissions": rows, "count": len(rows)}
-
-
-@router.post("/v1/evaluation/permissions", status_code=201)
-async def create_permission(body: PermissionCreate, request: Request) -> dict:
-    _require_admin(request)
-    allowed_scope_types = {"pool", "campaign", "global"}
-    if body.scope_type not in allowed_scope_types:
-        raise HTTPException(400, detail=f"scope_type must be one of {allowed_scope_types}")
-    if body.scope_type == "global" and body.scope_id:
-        raise HTTPException(400, detail="scope_id must be null for global scope")
-    if body.scope_type in {"pool", "campaign"} and not body.scope_id:
-        raise HTTPException(400, detail=f"scope_id is required for scope_type={body.scope_type}")
-    pool = _pool(request)
-    row = await _db.create_permission(pool, **body.model_dump())
-    return row
-
-
-@router.patch("/v1/evaluation/permissions/{perm_id}")
-async def update_permission(perm_id: str, tenant_id: str, body: PermissionUpdate, request: Request) -> dict:
-    _require_admin(request)
-    pool = _pool(request)
-    updates = {k: v for k, v in body.model_dump().items() if v is not None}
-    row = await _db.update_permission(pool, perm_id, tenant_id, **updates)
-    if not row:
-        raise HTTPException(404, detail="permission not found")
-    return row
-
-
-@router.delete("/v1/evaluation/permissions/{perm_id}", status_code=204)
-async def delete_permission(perm_id: str, tenant_id: str, request: Request) -> None:
-    _require_admin(request)
-    pool = _pool(request)
-    deleted = await _db.delete_permission(pool, perm_id, tenant_id)
-    if not deleted:
-        raise HTTPException(404, detail="permission not found")
 
 
 # ─── Sampling check ───────────────────────────────────────────────────────────

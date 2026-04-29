@@ -36,10 +36,11 @@ RUN printf 'server {\n\
         proxy_pass         http://mcp-server-plughub:3100/agent/ws;\n\
         proxy_http_version 1.1;\n\
         proxy_set_header   Upgrade $http_upgrade;\n\
-        proxy_set_header   Connection "upgrade";\n\
+        proxy_set_header   Connection "Upgrade";\n\
         proxy_set_header   Host $host;\n\
-        proxy_buffering    off;\n\
         proxy_read_timeout 3600s;\n\
+        proxy_send_timeout 3600s;\n\
+        proxy_buffering    off;\n\
     }\n\
 \n\
     # Analytics API: /analytics/* → analytics-api:3500/*\n\

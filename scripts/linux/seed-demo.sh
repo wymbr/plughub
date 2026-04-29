@@ -36,7 +36,7 @@ warn()    { printf "${YELLOW}[warn]${RESET}  %s\n" "$*"; }
 die()     { printf "${RED}[error]${RESET} %s\n" "$*" >&2; exit 1; }
 
 REGISTRY_URL="${AGENT_REGISTRY_URL:-http://localhost:3300}"
-TENANT_ID="${TENANT_ID:-default}"
+TENANT_ID="${TENANT_ID:-tenant_demo}"
 
 echo ""
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
@@ -97,13 +97,13 @@ if [ -n "$REDIS_CLI_CMD" ]; then
   # ── Pool configs (TTL 24h) ────────────────────────────────────────────────
   for pool_id in demo_ia sac_ia fila_humano; do
     $REDIS_CLI_CMD SET "${TENANT_ID}:pool_config:${pool_id}" \
-      "{\"pool_id\":\"${pool_id}\",\"tenant_id\":\"${TENANT_ID}\",\"channel_types\":[\"chat\",\"whatsapp\"],\"sla_target_ms\":300000,\"routing_expression\":${ROUTING_EXPR},\"competency_weights\":{},\"aging_factor\":0.4,\"breach_factor\":0.8,\"remote_sites\":[],\"is_human_pool\":false}" \
+      "{\"pool_id\":\"${pool_id}\",\"tenant_id\":\"${TENANT_ID}\",\"channel_types\":[\"webchat\",\"whatsapp\"],\"sla_target_ms\":300000,\"routing_expression\":${ROUTING_EXPR},\"competency_weights\":{},\"aging_factor\":0.4,\"breach_factor\":0.8,\"remote_sites\":[],\"is_human_pool\":false}" \
       EX 86400 >/dev/null \
       && success "Pool config ${pool_id} registrado"
   done
 
   $REDIS_CLI_CMD SET "${TENANT_ID}:pool_config:retencao_humano" \
-    "{\"pool_id\":\"retencao_humano\",\"tenant_id\":\"${TENANT_ID}\",\"channel_types\":[\"chat\",\"whatsapp\"],\"sla_target_ms\":300000,\"routing_expression\":${ROUTING_EXPR},\"competency_weights\":{},\"aging_factor\":0.4,\"breach_factor\":0.8,\"remote_sites\":[],\"is_human_pool\":true}" \
+    "{\"pool_id\":\"retencao_humano\",\"tenant_id\":\"${TENANT_ID}\",\"channel_types\":[\"webchat\",\"whatsapp\"],\"sla_target_ms\":300000,\"routing_expression\":${ROUTING_EXPR},\"competency_weights\":{},\"aging_factor\":0.4,\"breach_factor\":0.8,\"remote_sites\":[],\"is_human_pool\":true}" \
     EX 86400 >/dev/null \
     && success "Pool config retencao_humano registrado"
 

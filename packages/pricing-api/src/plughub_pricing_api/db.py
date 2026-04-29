@@ -69,7 +69,8 @@ CREATE INDEX IF NOT EXISTS idx_reserve_log_pool
 
 async def ensure_schema(pool: asyncpg.Pool) -> None:
     async with pool.acquire() as conn:
-        await conn.execute(_DDL)
+        async with conn.transaction():
+            await conn.execute(_DDL)
     logger.info("pricing schema ensured")
 
 

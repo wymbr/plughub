@@ -106,6 +106,17 @@ interface CreateModalProps {
   adminToken: string
 }
 
+const WORKFLOW_SKILL_OPTIONS = [
+  { value: 'skill_revisao_simples_v1',   label: 'Revisão simples (1 round, 48h)' },
+  { value: 'skill_revisao_treplica_v1',  label: 'Tréplica (até 3 rounds, 48h/72h)' },
+]
+
+const AUTHORITY_OPTIONS = [
+  { value: 'supervisor', label: 'Supervisor' },
+  { value: 'manager',    label: 'Gerente' },
+  { value: 'director',   label: 'Diretor' },
+]
+
 function CreateModal({ onClose, onCreated, adminToken }: CreateModalProps) {
   const { forms } = useForms(TENANT)
   const [name, setName] = useState('')
@@ -115,6 +126,15 @@ function CreateModal({ onClose, onCreated, adminToken }: CreateModalProps) {
   const [samplingRate, setSamplingRate] = useState('0.1')
   const [autoReview, setAutoReview] = useState(true)
   const [scoreThreshold, setScoreThreshold] = useState('7')
+
+  // Contestation / workflow fields
+  const [workflowSkillId, setWorkflowSkillId] = useState('skill_revisao_simples_v1')
+  const [enableContestation, setEnableContestation] = useState(false)
+  const [maxRounds, setMaxRounds] = useState('1')
+  const [reviewDeadlineHours, setReviewDeadlineHours] = useState('48')
+  const [authorityLevel, setAuthorityLevel] = useState<'supervisor' | 'manager' | 'director'>('supervisor')
+  const [autoLockOnTimeout, setAutoLockOnTimeout] = useState(true)
+
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -129,6 +149,7 @@ function CreateModal({ onClose, onCreated, adminToken }: CreateModalProps) {
         name,
         description,
         status: 'draft',
+        review_workflow_skill_id: workflowSkillId || undefined,
         sampling_rules: {
           mode: samplingMode,
           rate: samplingMode === 'percentage' ? parseFloat(samplingRate) : undefined,
@@ -138,6 +159,12 @@ function CreateModal({ onClose, onCreated, adminToken }: CreateModalProps) {
           auto_review: autoReview,
           score_threshold: autoReview ? parseFloat(scoreThreshold) : undefined,
         },
+        contestation_policy: enableContestation ? {
+          contestation_roles:    ['supervisor', 'admin'],
+          max_rounds:            parseInt(maxRounds),
+          review_deadline_hours: parseInt(reviewDeadlineHours),
+          auto_lock_on_timeout:  autoLockOnTimeout,
+        } : undefined,
       }, adminToken)
       onCreated()
     } catch (e) {
@@ -149,47 +176,65 @@ function CreateModal({ onClose, onCreated, adminToken }: CreateModalProps) {
 
   return (
     <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
-      <div className="bg-white rounded-lg shadow-xl w-[500px] max-h-[80vh] overflow-y-auto">
+      <div className="bg-white rounded-lg shadow-xl w-[620px] max-h-[90vh] overflow-y-auto">
         <div className="flex items-center justify-between p-4 border-b">
           <h2 className="font-semibold text-gray-800">Nova Campanha de Avaliação</h2>
           <button onClick={onClose} className="text-gray-400 hover:text-gray-600">✕</button>
         </div>
 
         <div className="p-4 space-y-4">
-          <div>
-            <label className="block text-xs font-medium text-gray-600 mb-1">Nome *</label>
-            <input
-              className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm"
-              value={name}
-              onChange={e => setName(e.target.value)}
-              placeholder="Ex: Avaliação SAC — Abril 2026"
-            />
+          {/* Basic info */}
+          <div className="grid grid-cols-2 gap-3">
+            <div className="col-span-2">
+              <label className="block text-xs font-medium text-gray-600 mb-1">Nome *</label>
+              <input
+                className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm"
+                value={name}
+                onChange={e => setName(e.target.value)}
+                placeholder="Ex: Avaliação SAC — Abril 2026"
+              />
+            </div>
+
+            <div>
+              <label className="block text-xs font-medium text-gray-600 mb-1">Formulário *</label>
+              <select
+                className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm"
+                value={formId}
+                onChange={e => setFormId(e.target.value)}
+              >
+                <option value="">Selecione um formulário</option>
+                {forms.filter(f => f.status === 'active').map(f => (
+                  <option key={f.form_id} value={f.form_id}>{f.name}</option>
+                ))}
+              </select>
+            </div>
+
+            <div>
+              <label className="block text-xs font-medium text-gray-600 mb-1">Skill de revisão</label>
+              <select
+                className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm"
+                value={workflowSkillId}
+                onChange={e => setWorkflowSkillId(e.target.value)}
+              >
+                <option value="">Nenhuma (sem workflow)</option>
+                {WORKFLOW_SKILL_OPTIONS.map(o => (
+                  <option key={o.value} value={o.value}>{o.label}</option>
+                ))}
+              </select>
+            </div>
+
+            <div className="col-span-2">
+              <label className="block text-xs font-medium text-gray-600 mb-1">Descrição</label>
+              <textarea
+                className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm resize-none"
+                rows={2}
+                value={description}
+                onChange={e => setDescription(e.target.value)}
+              />
+            </div>
           </div>
 
-          <div>
-            <label className="block text-xs font-medium text-gray-600 mb-1">Formulário *</label>
-            <select
-              className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm"
-              value={formId}
-              onChange={e => setFormId(e.target.value)}
-            >
-              <option value="">Selecione um formulário</option>
-              {forms.filter(f => f.status === 'active').map(f => (
-                <option key={f.form_id} value={f.form_id}>{f.name}</option>
-              ))}
-            </select>
-          </div>
-
-          <div>
-            <label className="block text-xs font-medium text-gray-600 mb-1">Descrição</label>
-            <textarea
-              className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm resize-none"
-              rows={2}
-              value={description}
-              onChange={e => setDescription(e.target.value)}
-            />
-          </div>
-
+          {/* Sampling */}
           <div className="border-t pt-3">
             <div className="text-xs font-semibold text-gray-600 mb-2">Regras de Sampling</div>
             <div className="flex gap-3 items-center">
@@ -217,6 +262,7 @@ function CreateModal({ onClose, onCreated, adminToken }: CreateModalProps) {
             </div>
           </div>
 
+          {/* Reviewer IA */}
           <div className="border-t pt-3">
             <div className="text-xs font-semibold text-gray-600 mb-2">Reviewer IA</div>
             <label className="flex items-center gap-2 text-sm">
@@ -239,6 +285,74 @@ function CreateModal({ onClose, onCreated, adminToken }: CreateModalProps) {
                   value={scoreThreshold}
                   onChange={e => setScoreThreshold(e.target.value)}
                 />
+              </div>
+            )}
+          </div>
+
+          {/* Contestation policy */}
+          <div className="border-t pt-3">
+            <label className="flex items-center gap-2 text-sm font-semibold text-gray-600 mb-2">
+              <input
+                type="checkbox"
+                checked={enableContestation}
+                onChange={e => setEnableContestation(e.target.checked)}
+              />
+              Habilitar política de contestação
+            </label>
+
+            {enableContestation && (
+              <div className="bg-blue-50 border border-blue-100 rounded p-3 space-y-3 mt-2">
+                <div className="grid grid-cols-3 gap-3">
+                  <div>
+                    <label className="block text-xs text-gray-600 mb-1">Máx. rounds</label>
+                    <input
+                      type="number"
+                      min={1}
+                      max={5}
+                      className="w-full border border-gray-300 rounded px-2 py-1 text-sm text-center"
+                      value={maxRounds}
+                      onChange={e => setMaxRounds(e.target.value)}
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs text-gray-600 mb-1">Prazo por round (h)</label>
+                    <input
+                      type="number"
+                      min={1}
+                      max={720}
+                      step={1}
+                      className="w-full border border-gray-300 rounded px-2 py-1 text-sm text-center"
+                      value={reviewDeadlineHours}
+                      onChange={e => setReviewDeadlineHours(e.target.value)}
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs text-gray-600 mb-1">Alçada</label>
+                    <select
+                      className="w-full border border-gray-300 rounded px-2 py-1 text-sm"
+                      value={authorityLevel}
+                      onChange={e => setAuthorityLevel(e.target.value as any)}
+                    >
+                      {AUTHORITY_OPTIONS.map(o => (
+                        <option key={o.value} value={o.value}>{o.label}</option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+
+                <label className="flex items-center gap-2 text-sm text-gray-700">
+                  <input
+                    type="checkbox"
+                    checked={autoLockOnTimeout}
+                    onChange={e => setAutoLockOnTimeout(e.target.checked)}
+                  />
+                  Bloquear resultado automaticamente ao expirar prazo
+                </label>
+
+                <p className="text-xs text-blue-700">
+                  Skill: <strong>{workflowSkillId || '(nenhuma selecionada)'}</strong> — define o número real de rounds e timeouts.
+                  Os valores acima são usados como fallback e exibição na UI.
+                </p>
               </div>
             )}
           </div>
@@ -367,11 +481,11 @@ export default function CampaignsPage() {
               <div className="bg-white border rounded p-3">
                 <div className="text-xs font-semibold text-gray-500 mb-2">Sampling</div>
                 <div className="text-gray-700 space-y-1">
-                  <div>Modo: <strong>{selected.sampling_rules.mode ?? 'percentage'}</strong></div>
-                  {selected.sampling_rules.rate !== undefined && (
+                  <div>Modo: <strong>{selected.sampling_rules?.mode ?? 'percentage'}</strong></div>
+                  {selected.sampling_rules?.rate !== undefined && (
                     <div>Taxa: <strong>{(selected.sampling_rules.rate * 100).toFixed(0)}%</strong></div>
                   )}
-                  {selected.sampling_rules.every_n !== undefined && (
+                  {selected.sampling_rules?.every_n !== undefined && (
                     <div>A cada: <strong>{selected.sampling_rules.every_n} sessões</strong></div>
                   )}
                 </div>
@@ -380,11 +494,57 @@ export default function CampaignsPage() {
               <div className="bg-white border rounded p-3">
                 <div className="text-xs font-semibold text-gray-500 mb-2">Reviewer IA</div>
                 <div className="text-gray-700 space-y-1">
-                  <div>Auto-review: <strong>{selected.reviewer_rules.auto_review ? 'Sim' : 'Não'}</strong></div>
-                  {selected.reviewer_rules.score_threshold !== undefined && (
+                  <div>Auto-review: <strong>{selected.reviewer_rules?.auto_review ? 'Sim' : 'Não'}</strong></div>
+                  {selected.reviewer_rules?.score_threshold !== undefined && (
                     <div>Threshold: <strong>{selected.reviewer_rules.score_threshold}</strong></div>
                   )}
                 </div>
+              </div>
+
+              {/* Workflow skill */}
+              <div className="bg-white border rounded p-3">
+                <div className="text-xs font-semibold text-gray-500 mb-2">Skill de revisão</div>
+                {selected.review_workflow_skill_id ? (
+                  <div className="text-gray-700 space-y-1">
+                    <div className="font-mono text-xs bg-gray-50 border rounded px-2 py-1 break-all">
+                      {selected.review_workflow_skill_id}
+                    </div>
+                    {selected.review_workflow_skill_id === 'skill_revisao_simples_v1' && (
+                      <div className="text-xs text-gray-500">Revisão simples — 1 round, 48h</div>
+                    )}
+                    {selected.review_workflow_skill_id === 'skill_revisao_treplica_v1' && (
+                      <div className="text-xs text-gray-500">Tréplica — até 3 rounds</div>
+                    )}
+                  </div>
+                ) : (
+                  <div className="text-xs text-gray-400 italic">Sem workflow configurado</div>
+                )}
+              </div>
+
+              {/* Contestation policy */}
+              <div className="bg-white border rounded p-3">
+                <div className="text-xs font-semibold text-gray-500 mb-2">Política de contestação</div>
+                {selected.contestation_policy ? (
+                  <div className="text-gray-700 space-y-1">
+                    <div>Máx. rounds: <strong>{selected.contestation_policy.max_rounds}</strong></div>
+                    <div>Prazo por round: <strong>{selected.contestation_policy.review_deadline_hours}h</strong></div>
+                    <div>
+                      Bloquear no timeout:{' '}
+                      <strong>{selected.contestation_policy.auto_lock_on_timeout ? 'Sim' : 'Não'}</strong>
+                    </div>
+                    {selected.contestation_policy.rounds && selected.contestation_policy.rounds.length > 0 && (
+                      <div className="mt-2 space-y-1">
+                        {selected.contestation_policy.rounds.map(r => (
+                          <div key={r.round_number} className="text-xs bg-gray-50 rounded px-2 py-1">
+                            Round {r.round_number}: alçada <strong>{r.authority_level}</strong>, {r.review_deadline_hours}h
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  <div className="text-xs text-gray-400 italic">Sem política de contestação</div>
+                )}
               </div>
             </div>
           </div>

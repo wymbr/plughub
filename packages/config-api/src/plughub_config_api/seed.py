@@ -374,6 +374,32 @@ _SEED: list[tuple[str, str, object, str]] = [
         "POST /v1/evaluation/results/{id}/lock by an operator. "
         "Source: evaluation-api/main.py"
     ),
+
+    # ── dashboards ────────────────────────────────────────────────────────────
+    # Source: platform-ui DashboardsPage — dashboard template management.
+    # Templates are stored as JSON values with key pattern template:{uuid}.
+    # default_template_id: which template is loaded when no user override exists.
+    # allow_user_customization: users may drag/resize cards and save a personal layout.
+    # max_cards_per_dashboard: guard against runaway dashboard configs.
+    (
+        "dashboards", "default_template_id",
+        None,
+        "UUID of the default dashboard template loaded for users without a personal "
+        "override. null = show an empty grid with an 'Add card' prompt. "
+        "Set this to a template UUID after creating your first template."
+    ),
+    (
+        "dashboards", "allow_user_customization",
+        True,
+        "When True, users can drag, resize, and save a personal layout override "
+        "on top of their assigned template. Admins always retain full edit access."
+    ),
+    (
+        "dashboards", "max_cards_per_dashboard",
+        20,
+        "Maximum number of cards allowed per dashboard template. "
+        "Prevents performance issues from overly large dashboards."
+    ),
 ]
 
 

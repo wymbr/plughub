@@ -21,7 +21,15 @@ import type { SkillFlow } from "@plughub/schemas"
 const PORT           = parseInt(process.env["PORT"]           ?? "3400", 10)
 const REDIS_URL      = process.env["REDIS_URL"]               ?? "redis://localhost:6379"
 const MCP_SERVER_URL = process.env["MCP_SERVER_URL"]          ?? "http://localhost:3100"
+const MCP_AUTH_URL   = process.env["MCP_AUTH_URL"]            ?? "http://localhost:3150"
 const AI_GATEWAY_URL = process.env["AI_GATEWAY_URL"]          ?? "http://localhost:3200"
+
+// Map of named MCP server → base URL.
+// Add entries here when new domain MCP servers are introduced.
+const MCP_SERVER_URLS: Record<string, string> = {
+  "mcp-server-plughub": MCP_SERVER_URL,
+  "mcp-server-auth":    MCP_AUTH_URL,
+}
 
 // SKILLS_DIR: resolved relative to this file's location at runtime.
 // Default: packages/skill-flow-engine/skills (dev) or /app/skills (Docker).
@@ -42,34 +50,92 @@ redis.on("error", (err) => {
   console.error("[skill-flow-service] Redis error:", err)
 })
 
-// ── MCP client (SSE transport — persistent connection) ────────────────────────
+// ── MCP client pool (one persistent SSE connection per server URL) ────────────
 
-let mcpClient: Client | null = null
-let mcpConnecting: Promise<void> | null = null
+interface McpClientEntry {
+  client:     Client | null
+  connecting: Promise<void> | null
+}
 
-async function getMcpClient(): Promise<Client> {
-  if (mcpClient !== null) return mcpClient
+const mcpClientPool = new Map<string, McpClientEntry>()
 
-  if (mcpConnecting !== null) {
-    await mcpConnecting
-    return mcpClient!
+function getPoolEntry(serverUrl: string): McpClientEntry {
+  let entry = mcpClientPool.get(serverUrl)
+  if (!entry) {
+    entry = { client: null, connecting: null }
+    mcpClientPool.set(serverUrl, entry)
+  }
+  return entry
+}
+
+async function getMcpClientForUrl(serverUrl: string): Promise<Client> {
+  const entry = getPoolEntry(serverUrl)
+
+  if (entry.client !== null) return entry.client
+
+  if (entry.connecting !== null) {
+    await entry.connecting
+    return entry.client!
   }
 
-  mcpConnecting = (async () => {
-    const client = new Client(
-      { name: "skill-flow-service", version: "1.0.0" },
-      { capabilities: {} }
-    )
-    const sseUrl = new URL(`${MCP_SERVER_URL}/sse`)
-    const transport = new SSEClientTransport(sseUrl)
-    await client.connect(transport)
-    mcpClient = client
-    console.log(`[skill-flow-service] MCP client connected to ${MCP_SERVER_URL}/sse`)
+  // Attempt connection with up to 3 retries and 500ms backoff.
+  // Protects against a race where the health check passed but the /sse
+  // endpoint is not yet accepting connections (startup jitter).
+  const MAX_CONNECT_ATTEMPTS = 3
+  let lastErr: unknown
+
+  entry.connecting = (async () => {
+    for (let attempt = 1; attempt <= MAX_CONNECT_ATTEMPTS; attempt++) {
+      try {
+        const client = new Client(
+          { name: "skill-flow-service", version: "1.0.0" },
+          { capabilities: {} }
+        )
+        const sseUrl = new URL(`${serverUrl}/sse`)
+        const transport = new SSEClientTransport(sseUrl)
+        await client.connect(transport)
+        entry.client = client
+        console.log(`[skill-flow-service] MCP client connected to ${serverUrl}/sse (attempt ${attempt})`)
+        return
+      } catch (err) {
+        lastErr = err
+        const msg = err instanceof Error ? err.message : String(err)
+        console.warn(`[skill-flow-service] MCP connect attempt ${attempt}/${MAX_CONNECT_ATTEMPTS} failed for ${serverUrl}: ${msg}`)
+        if (attempt < MAX_CONNECT_ATTEMPTS) {
+          await new Promise(r => setTimeout(r, 500 * attempt))
+        }
+      }
+    }
+    throw lastErr
   })()
 
-  await mcpConnecting
-  mcpConnecting = null
-  return mcpClient!
+  try {
+    await entry.connecting
+  } catch (err) {
+    entry.client      = null
+    entry.connecting  = null
+    throw err
+  }
+  entry.connecting = null
+  return entry.client!
+}
+
+/** Pre-warm all known MCP connections at startup (non-blocking — logs errors but does not fail). */
+async function prewarmMcpConnections(): Promise<void> {
+  for (const [name, url] of Object.entries(MCP_SERVER_URLS)) {
+    try {
+      await getMcpClientForUrl(url)
+      console.log(`[skill-flow-service] Pre-warmed MCP connection: ${name} → ${url}`)
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      console.warn(`[skill-flow-service] Pre-warm failed for ${name} (${url}): ${msg}`)
+    }
+  }
+}
+
+function resolveMcpServerUrl(mcpServer?: string): string {
+  if (!mcpServer) return MCP_SERVER_URL
+  return MCP_SERVER_URLS[mcpServer] ?? MCP_SERVER_URL
 }
 
 // ── MCP call adapter ──────────────────────────────────────────────────────────
@@ -77,23 +143,47 @@ async function getMcpClient(): Promise<Client> {
 async function mcpCall(
   tool: string,
   input: unknown,
-  _mcpServer?: string,
+  mcpServer?: string,
 ): Promise<unknown> {
+  const serverUrl = resolveMcpServerUrl(mcpServer)
+  const entry = getPoolEntry(serverUrl)
+
   let client: Client
   try {
-    client = await getMcpClient()
+    client = await getMcpClientForUrl(serverUrl)
   } catch (err) {
     // Reset so next call retries
-    mcpClient = null
-    mcpConnecting = null
+    entry.client = null
+    entry.connecting = null
     const message = err instanceof Error ? err.message : String(err)
-    throw new Error(`[skill-flow-service] MCP connect failed: ${message}`)
+    throw new Error(`[skill-flow-service] MCP connect failed (${serverUrl}): ${message}`)
   }
 
-  const result = await client.callTool({
-    name:      tool,
-    arguments: input as Record<string, unknown>,
-  })
+  let result: Awaited<ReturnType<typeof client.callTool>>
+  try {
+    result = await client.callTool({
+      name:      tool,
+      arguments: input as Record<string, unknown>,
+    })
+  } catch (callErr) {
+    // The SSE connection may have died (e.g. container rebuild).
+    // Reset the pool entry and reconnect once before giving up.
+    entry.client     = null
+    entry.connecting = null
+    console.warn(`[skill-flow-service] callTool failed for ${tool}@${serverUrl}, resetting pool and retrying once`)
+    try {
+      client = await getMcpClientForUrl(serverUrl)
+      result = await client.callTool({
+        name:      tool,
+        arguments: input as Record<string, unknown>,
+      })
+    } catch (retryErr) {
+      entry.client     = null
+      entry.connecting = null
+      const message = retryErr instanceof Error ? retryErr.message : String(retryErr)
+      throw new Error(`[skill-flow-service] MCP callTool retry failed (${tool}@${serverUrl}): ${message}`)
+    }
+  }
 
   if (result.isError === true) {
     // Extract the error message from MCP text content
@@ -140,6 +230,9 @@ async function aiGatewayCall(payload: {
   attempt:       number
 }): Promise<unknown> {
   const url = `${AI_GATEWAY_URL}/v1/reason`
+  console.log(
+    `[skill-flow-service] aiGatewayCall → POST ${url} session=${payload.session_id} prompt_id=${payload.prompt_id} attempt=${payload.attempt}`,
+  )
   let res: globalThis.Response
   try {
     res = await fetch(url, {
@@ -149,11 +242,15 @@ async function aiGatewayCall(payload: {
     })
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
+    console.error(`[skill-flow-service] aiGatewayCall network error: ${message}`)
     throw new Error(`[skill-flow-service] aiGatewayCall network error: ${message}`)
   }
 
   if (!res.ok) {
     const body = await res.text().catch(() => "(unreadable body)")
+    console.error(
+      `[skill-flow-service] aiGatewayCall HTTP ${res.status} from AI Gateway: ${body}`,
+    )
     throw new Error(
       `[skill-flow-service] aiGatewayCall HTTP ${res.status} from AI Gateway: ${body}`,
     )
@@ -162,6 +259,9 @@ async function aiGatewayCall(payload: {
   // The AI gateway returns a ReasonResponse wrapper: { session_id, result, model_used, ... }
   // executeReason validates against the *inner* result, so unwrap it here.
   const data = await res.json() as { result?: unknown }
+  console.log(
+    `[skill-flow-service] aiGatewayCall ← 200 OK session=${payload.session_id} result_keys=${Object.keys(data.result as object ?? {}).join(",")}`,
+  )
   return data.result !== undefined ? data.result : data
 }
 
@@ -209,6 +309,10 @@ app.post("/execute", async (req: Request, res: Response) => {
     })
     return
   }
+
+  console.log(
+    `[skill-flow-service] /execute received: session=${session_id} skill=${skill_id} entry=${(flow as { entry?: string }).entry ?? "?"}`,
+  )
 
   try {
     const result = await engine.run({
@@ -449,8 +553,17 @@ app.post("/delegate", (req: Request, res: Response) => {
 
 app.listen(PORT, () => {
   console.log(`[skill-flow-service] Listening on port ${PORT}`)
-  console.log(`[skill-flow-service] Redis:       ${REDIS_URL}`)
-  console.log(`[skill-flow-service] MCP server:  ${MCP_SERVER_URL}`)
-  console.log(`[skill-flow-service] AI gateway:  ${AI_GATEWAY_URL}`)
-  console.log(`[skill-flow-service] Skills dir:  ${SKILLS_DIR}`)
+  console.log(`[skill-flow-service] Redis:            ${REDIS_URL}`)
+  console.log(`[skill-flow-service] MCP plughub:      ${MCP_SERVER_URL}`)
+  console.log(`[skill-flow-service] MCP auth:         ${MCP_AUTH_URL}`)
+  console.log(`[skill-flow-service] AI gateway:       ${AI_GATEWAY_URL}`)
+  console.log(`[skill-flow-service] Skills dir:       ${SKILLS_DIR}`)
+
+  // Pre-warm all MCP SSE connections in the background.
+  // docker-compose healthchecks ensure the servers are up, but the SSE
+  // handshake is separate from the /health probe — do it eagerly to avoid
+  // the first real skill invocation paying the connection penalty.
+  prewarmMcpConnections().catch(err => {
+    console.warn("[skill-flow-service] Pre-warm completed with errors:", err)
+  })
 })

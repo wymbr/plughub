@@ -14,13 +14,14 @@ import BillingPage from '@/modules/billing/BillingPage'
 import FormsPage from '@/modules/evaluation/FormsPage'
 import EvalCampaignsPage from '@/modules/evaluation/CampaignsPage'
 import KnowledgePage from '@/modules/evaluation/KnowledgePage'
-import ReviewPage from '@/modules/evaluation/ReviewPage'
-import MyEvaluationsPage from '@/modules/evaluation/MyEvaluationsPage'
+import AvaliacoesPage from '@/modules/evaluation/AvaliacoesPage'
 import EvalReportsPage from '@/modules/evaluation/ReportsPage'
-import EvaluationPermissionsPage from '@/modules/evaluation/EvaluationPermissionsPage'
 import SkillFlowsPage from '@/modules/skill-flows/SkillFlowsPage'
 import { AgentAssistPage } from '@/modules/agent-assist/AgentAssistPage'
 import PlaceholderPage from '@/modules/_placeholder/PlaceholderPage'
+import AccessPage from '@/modules/access/AccessPage'
+import ContactsPage from '@/modules/contacts/ContactsPage'
+import DashboardsPage from '@/modules/dashboards/DashboardsPage'
 
 const LoadingFallback = () => <div className="flex justify-center items-center h-screen">Loading...</div>
 
@@ -46,6 +47,10 @@ export const routes: RouteObject[] = [
         element: <ConfigRecursosIndex />
       },
       {
+        path: 'contacts',
+        element: <ContactsPage />
+      },
+      {
         path: 'monitor',
         element: <MonitorPage />
       },
@@ -63,7 +68,7 @@ export const routes: RouteObject[] = [
       },
       {
         path: 'dashboards',
-        element: <PlaceholderPage module="Dashboards" phase="Arc 3" />
+        element: <DashboardsPage />
       },
       {
         path: 'reports',
@@ -87,7 +92,7 @@ export const routes: RouteObject[] = [
       },
       {
         path: 'config/access',
-        element: <PlaceholderPage module="Access Control" phase="Arc 2" />
+        element: <AccessPage />
       },
       {
         path: 'evaluation/forms',
@@ -102,20 +107,12 @@ export const routes: RouteObject[] = [
         element: <KnowledgePage />
       },
       {
-        path: 'evaluation/review',
-        element: <ReviewPage />
-      },
-      {
-        path: 'evaluation/my-evaluations',
-        element: <MyEvaluationsPage />
+        path: 'evaluation/avaliacoes',
+        element: <AvaliacoesPage />
       },
       {
         path: 'evaluation/reports',
         element: <EvalReportsPage />
-      },
-      {
-        path: 'evaluation/permissions',
-        element: <EvaluationPermissionsPage />
       },
       {
         path: 'developer',

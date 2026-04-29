@@ -97,6 +97,7 @@ services:
           conversations.inbound conversations.routed conversations.queued conversations.events \
           conversations.outbound conversations.message_sent conversations.channel_change \
           conversations.session_opened conversations.session_closed conversations.dequeued conversations.abandoned \
+          conversations.participants \
           agent.lifecycle agent.done agent.registry.events \
           registry.changed config.changed \
           usage.events sentiment.updated \
@@ -242,6 +243,44 @@ services:
       - plughub-test
 
   # ─────────────────────────────────────────────
+  # MinIO — S3-compatible object storage
+  # Required for channel-gateway S3 backend.
+  # ─────────────────────────────────────────────
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    ports:
+      - "9000:9000"
+    environment:
+      MINIO_ROOT_USER:     plughub
+      MINIO_ROOT_PASSWORD: plughub123
+    tmpfs:
+      - /data   # in-memory for tests — fast, no persistent volume needed
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+    networks:
+      - plughub-test
+
+  minio-init:
+    image: minio/mc:latest
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+        mc alias set local http://minio:9000 plughub plughub123 &&
+        mc mb --ignore-existing local/plughub-attachments &&
+        echo 'MinIO bucket criado.' &&
+        exit 0
+      "
+    networks:
+      - plughub-test
+
+  # ─────────────────────────────────────────────
   # Channel Gateway (Python/FastAPI + WebSocket)
   # Required for scenario 12 (webchat channel).
   # ─────────────────────────────────────────────
@@ -257,10 +296,16 @@ services:
       PLUGHUB_JWT_SECRET: test_e2e_webchat_secret_32chars
       PLUGHUB_WS_AUTH_TIMEOUT_S: "10"
       PLUGHUB_DATABASE_URL: postgresql://plughub:plughub@postgres:5432/plughub_test
-      PLUGHUB_STORAGE_ROOT: /tmp/plughub-attachments
       PLUGHUB_WEBCHAT_SERVING_BASE_URL: http://localhost:8010/webchat/v1/attachments
       PLUGHUB_WEBCHAT_UPLOAD_BASE_URL: http://localhost:8010/webchat/v1/upload
       PLUGHUB_ENTRY_POINT_POOL_ID: retencao_humano
+      # S3/MinIO storage backend
+      PLUGHUB_ATTACHMENT_STORE_TYPE: s3
+      PLUGHUB_S3_ENDPOINT_URL: http://minio:9000
+      PLUGHUB_S3_BUCKET: plughub-attachments
+      PLUGHUB_S3_ACCESS_KEY: plughub
+      PLUGHUB_S3_SECRET_KEY: plughub123
+      PLUGHUB_S3_REGION: us-east-1
     depends_on:
       redis:
         condition: service_healthy
@@ -270,6 +315,8 @@ services:
         condition: service_completed_successfully
       postgres:
         condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
     healthcheck:
       test: ["CMD-SHELL", "wget --quiet --spider http://localhost:8010/health || exit 1"]
       interval: 10s

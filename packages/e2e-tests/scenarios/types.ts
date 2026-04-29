@@ -29,6 +29,8 @@ export interface ScenarioContext {
   configApiUrl: string;
   /** Admin token for Config API mutations (header X-Admin-Token) */
   configApiAdminToken: string;
+  /** Evaluation API base URL (Arc 6 — e.g. http://localhost:3400) */
+  evaluationApiUrl: string;
   redis: Redis;
   kafka: Kafka;
   tenantId: string;

@@ -16,8 +16,11 @@ import { HeatmapGrid }      from './components/HeatmapGrid'
 import { MetricsPanel }     from './components/MetricsPanel'
 import { SessionList }      from './components/SessionList'
 import { SessionTranscript } from './components/SessionTranscript'
+import HumanAgentsPage from '@/modules/config-recursos/HumanAgentsPage'
+import InstancesPage   from '@/modules/config-recursos/InstancesPage'
 import type { PoolView } from './types'
 
+type MonitorTab = 'heatmap' | 'agentes' | 'instancias'
 type Level = 'pools' | 'sessions' | 'transcript'
 
 export default function MonitorPage() {
@@ -26,6 +29,7 @@ export default function MonitorPage() {
 
   const { pools, status, metrics } = usePoolViews(tenantId)
 
+  const [monitorTab,     setMonitorTab]     = useState<MonitorTab>('heatmap')
   const [level,          setLevel]          = useState<Level>('pools')
   const [selectedPool,   setSelectedPool]   = useState<PoolView | null>(null)
   const [selectedPoolId, setSelectedPoolId] = useState<string | null>(null)
@@ -71,63 +75,123 @@ export default function MonitorPage() {
     )
   }
 
+  const monitorTabs: { id: MonitorTab; label: string; icon: string }[] = [
+    { id: 'heatmap',    label: 'Heatmap',   icon: '🔥' },
+    { id: 'agentes',    label: 'Agentes',   icon: '👥' },
+    { id: 'instancias', label: 'Instâncias', icon: '⚡' },
+  ]
+
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden', backgroundColor: '#0f172a' }}>
-      {/* Top status bar */}
-      <div style={topBarStyle}>
-        <Breadcrumb level={level} poolId={selectedPoolId} sessionId={sessionId} onPools={handleBackToPools} onSessions={handleBackToSessions} />
-        <ConnectionPill status={status} />
-        <span style={{ marginLeft: 'auto', fontSize: 11, color: '#475569' }}>
-          tenant: <code style={{ color: '#94a3b8' }}>{tenantId}</code>
-        </span>
-        {level === 'pools' && (
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden', backgroundColor: monitorTab === 'heatmap' ? '#0f172a' : '#f8fafc' }}>
+
+      {/* Monitor tab bar */}
+      <div style={{
+        display: 'flex', alignItems: 'center', gap: 0,
+        borderBottom: monitorTab === 'heatmap' ? '1px solid #1e293b' : '1px solid #e2e8f0',
+        backgroundColor: monitorTab === 'heatmap' ? '#0a1628' : '#ffffff',
+        flexShrink: 0,
+        paddingLeft: 8,
+      }}>
+        {monitorTabs.map(tab => (
           <button
-            style={{ fontSize: 12, background: showMetrics ? '#1e40af' : 'none', border: '1px solid #334155', color: showMetrics ? '#93c5fd' : '#64748b', borderRadius: 6, padding: '3px 10px', cursor: 'pointer' }}
-            onClick={() => setShowMetrics(v => !v)}
-            title="Mostrar painel de métricas"
+            key={tab.id}
+            onClick={() => setMonitorTab(tab.id)}
+            style={{
+              fontSize: 13,
+              fontWeight: monitorTab === tab.id ? 600 : 400,
+              padding: '10px 18px',
+              cursor: 'pointer',
+              border: 'none',
+              borderBottom: monitorTab === tab.id
+                ? (tab.id === 'heatmap' ? '2px solid #60a5fa' : '2px solid #1B4F8A')
+                : '2px solid transparent',
+              background: 'transparent',
+              color: monitorTab === tab.id
+                ? (tab.id === 'heatmap' ? '#93c5fd' : '#1B4F8A')
+                : (tab.id === 'heatmap' ? '#64748b' : '#6b7280'),
+              transition: 'all 0.15s',
+              display: 'flex', alignItems: 'center', gap: 6,
+            }}
           >
-            📊 Métricas
+            <span>{tab.icon}</span>
+            <span>{tab.label}</span>
           </button>
-        )}
+        ))}
       </div>
 
-      {/* Content */}
-      <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
-        <div style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
-          {level === 'pools' && (
-            <HeatmapGrid
-              pools={pools}
-              selectedPoolId={selectedPoolId}
-              onSelect={handlePoolSelect}
-              onDrillDown={handleDrillDown}
-            />
-          )}
-          {level === 'sessions' && selectedPoolId && (
-            <SessionList
-              tenantId={tenantId}
-              poolId={selectedPoolId}
-              onSelect={handleSessionSelect}
-              onBack={handleBackToPools}
-            />
-          )}
-          {level === 'transcript' && sessionId && (
-            <SessionTranscript
-              tenantId={tenantId}
-              sessionId={sessionId}
-              onBack={handleBackToSessions}
-            />
-          )}
+      {/* Heatmap tab */}
+      {monitorTab === 'heatmap' && (
+        <>
+          {/* Top status bar */}
+          <div style={topBarStyle}>
+            <Breadcrumb level={level} poolId={selectedPoolId} sessionId={sessionId} onPools={handleBackToPools} onSessions={handleBackToSessions} />
+            <ConnectionPill status={status} />
+            <span style={{ marginLeft: 'auto', fontSize: 11, color: '#475569' }}>
+              tenant: <code style={{ color: '#94a3b8' }}>{tenantId}</code>
+            </span>
+            {level === 'pools' && (
+              <button
+                style={{ fontSize: 12, background: showMetrics ? '#1e40af' : 'none', border: '1px solid #334155', color: showMetrics ? '#93c5fd' : '#64748b', borderRadius: 6, padding: '3px 10px', cursor: 'pointer' }}
+                onClick={() => setShowMetrics(v => !v)}
+                title="Mostrar painel de métricas"
+              >
+                📊 Métricas
+              </button>
+            )}
+          </div>
+
+          {/* Heatmap content */}
+          <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
+            <div style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
+              {level === 'pools' && (
+                <HeatmapGrid
+                  pools={pools}
+                  selectedPoolId={selectedPoolId}
+                  onSelect={handlePoolSelect}
+                  onDrillDown={handleDrillDown}
+                />
+              )}
+              {level === 'sessions' && selectedPoolId && (
+                <SessionList
+                  tenantId={tenantId}
+                  poolId={selectedPoolId}
+                  onSelect={handleSessionSelect}
+                  onBack={handleBackToPools}
+                />
+              )}
+              {level === 'transcript' && sessionId && (
+                <SessionTranscript
+                  tenantId={tenantId}
+                  sessionId={sessionId}
+                  onBack={handleBackToSessions}
+                />
+              )}
+            </div>
+
+            {level === 'pools' && showMetrics && (
+              <MetricsPanel
+                pool={selectedPool}
+                metrics={metrics}
+                onClose={() => { setShowMetrics(false); setSelectedPoolId(null); setSelectedPool(null) }}
+              />
+            )}
+          </div>
+        </>
+      )}
+
+      {/* Agentes tab */}
+      {monitorTab === 'agentes' && (
+        <div style={{ flex: 1, overflow: 'auto', padding: '24px' }}>
+          <HumanAgentsPage />
         </div>
+      )}
 
-        {/* Metrics panel — shown on pool level when a pool is selected or metrics button is pressed */}
-        {level === 'pools' && showMetrics && (
-          <MetricsPanel
-            pool={selectedPool}
-            metrics={metrics}
-            onClose={() => { setShowMetrics(false); setSelectedPoolId(null); setSelectedPool(null) }}
-          />
-        )}
-      </div>
+      {/* Instâncias tab */}
+      {monitorTab === 'instancias' && (
+        <div style={{ flex: 1, overflow: 'auto', padding: '24px' }}>
+          <InstancesPage />
+        </div>
+      )}
     </div>
   )
 }

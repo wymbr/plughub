@@ -38,6 +38,7 @@ from .reports_query import (
     query_agent_performance_report,
     query_agents_report,
     query_campaigns_report,
+    query_contact_insights_report,
     query_evaluations_report,
     query_evaluations_summary,
     query_participation_report,
@@ -46,6 +47,12 @@ from .reports_query import (
     query_sessions_report,
     query_usage_report,
     query_workflows_report,
+)
+from .timeseries_query import (
+    query_handle_time_timeseries,
+    query_score_timeseries,
+    query_volume_timeseries,
+    timeseries_to_csv,
 )
 
 logger = logging.getLogger("plughub.analytics.reports")
@@ -77,26 +84,34 @@ def _respond(data: dict, fmt: str, filename: str) -> Response:
 
 @router.get("/sessions")
 async def report_sessions(
-    request:        Request,
-    tenant_id:      str           = Query(...,    description="Tenant identifier"),
-    from_dt:        Optional[str] = Query(None,   description="ISO8601 start (default: 7d ago)"),
-    to_dt:          Optional[str] = Query(None,   description="ISO8601 end (default: now)"),
-    channel:        Optional[str] = Query(None,   description="Filter by channel"),
-    outcome:        Optional[str] = Query(None,   description="Filter by session outcome"),
-    close_reason:   Optional[str] = Query(None,   description="Filter by close_reason"),
-    pool_id:        Optional[str] = Query(None,   description="Filter by pool_id"),
-    page:           int           = Query(1,       ge=1),
-    page_size:      int           = Query(100,     ge=1),
-    format:         str           = Query("json",  pattern="^(json|csv)$"),
-    pool_principal: PoolPrincipal = Depends(optional_pool_principal),
+    request:          Request,
+    tenant_id:        str           = Query(...,    description="Tenant identifier"),
+    from_dt:          Optional[str] = Query(None,   description="ISO8601 start (default: 7d ago)"),
+    to_dt:            Optional[str] = Query(None,   description="ISO8601 end (default: now)"),
+    channel:          Optional[str] = Query(None,   description="Filter by channel"),
+    outcome:          Optional[str] = Query(None,   description="Filter by session outcome"),
+    close_reason:     Optional[str] = Query(None,   description="Filter by close_reason"),
+    pool_id:          Optional[str] = Query(None,   description="Filter by pool_id"),
+    session_id:       Optional[str] = Query(None,   description="Filter by exact session_id"),
+    agent_id:         Optional[str] = Query(None,   description="Filter by agent participant_id (any segment)"),
+    insight_category: Optional[str] = Query(None,   description="Filter: sessions with this insight category"),
+    insight_tags:     Optional[str] = Query(None,   description="Comma-separated insight tags (AND logic)"),
+    ani:              Optional[str] = Query(None,   description="Filter by ANI/source identifier (partial match)"),
+    dnis:             Optional[str] = Query(None,   description="Filter by DNIS/destination identifier (partial match)"),
+    page:             int           = Query(1,       ge=1),
+    page_size:        int           = Query(100,     ge=1),
+    format:           str           = Query("json",  pattern="^(json|csv)$"),
+    pool_principal:   PoolPrincipal = Depends(optional_pool_principal),
 ) -> Response:
     """
     Session list for the given tenant and time window.
 
-    Columns: session_id, tenant_id, channel, pool_id, opened_at, closed_at,
-             close_reason, outcome, wait_time_ms, handle_time_ms
+    Columns: session_id, tenant_id, channel, pool_id, customer_id,
+             opened_at, closed_at, close_reason, outcome,
+             wait_time_ms, handle_time_ms, ani, dnis, segment_count
     """
     ps = _clamp_page_size(page_size, format == "csv")
+    tags_list = [t.strip() for t in insight_tags.split(",") if t.strip()] if insight_tags else None
     data = await query_sessions_report(
         client    = request.app.state.store._client,
         database  = request.app.state.store._database,
@@ -107,7 +122,13 @@ async def report_sessions(
         outcome          = outcome,
         close_reason     = close_reason,
         pool_id          = pool_id,
+        session_id       = session_id,
+        agent_id         = agent_id,
+        insight_category = insight_category,
+        insight_tags     = tags_list,
         accessible_pools = pool_principal.accessible_pools,
+        ani              = ani,
+        dnis             = dnis,
         page      = page,
         page_size = ps,
     )
@@ -153,6 +174,49 @@ async def report_agents(
         page_size = ps,
     )
     return _respond(data, format, f"agents_{_today_label()}.csv")
+
+
+# ─── GET /reports/contact-insights ───────────────────────────────────────────
+
+@router.get("/contact-insights")
+async def report_contact_insights(
+    request:      Request,
+    tenant_id:    str           = Query(...,    description="Tenant identifier"),
+    from_dt:      Optional[str] = Query(None,   description="ISO8601 start (default: 7d ago)"),
+    to_dt:        Optional[str] = Query(None,   description="ISO8601 end (default: now)"),
+    session_id:   Optional[str] = Query(None,   description="Filter by session_id"),
+    category:     Optional[str] = Query(None,   description="Filter by insight category"),
+    tags:         Optional[str] = Query(None,   description="Comma-separated tags (AND logic)"),
+    insight_type: Optional[str] = Query(None,   description="Filter by full insight_type (e.g. insight.registered)"),
+    page:         int           = Query(1,       ge=1),
+    page_size:    int           = Query(100,     ge=1),
+    format:       str           = Query("json",  pattern="^(json|csv)$"),
+) -> Response:
+    """
+    Business events registered via insight_register MCP tool during agent flows.
+
+    Examples: service executed (cancelamento, portabilidade), errors (erro_consulta_saldo).
+
+    Filter by category + tags to find all contacts where a given business event occurred.
+
+    Columns: insight_id, tenant_id, session_id, insight_type, category, value, tags, agent_id, timestamp
+    """
+    ps = _clamp_page_size(page_size, format == "csv")
+    tags_list = [t.strip() for t in tags.split(",") if t.strip()] if tags else None
+    data = await query_contact_insights_report(
+        client    = request.app.state.store._client,
+        database  = request.app.state.store._database,
+        tenant_id = tenant_id,
+        from_dt   = from_dt,
+        to_dt     = to_dt,
+        session_id   = session_id,
+        category     = category,
+        tags         = tags_list,
+        insight_type = insight_type,
+        page      = page,
+        page_size = ps,
+    )
+    return _respond(data, format, f"contact_insights_{_today_label()}.csv")
 
 
 # ─── GET /reports/quality ─────────────────────────────────────────────────────
@@ -538,3 +602,126 @@ async def get_evaluations_summary(
         group_by   = group_by,
     )
     return _respond(data, format, f"evaluations_summary_{_today_label()}.csv")
+
+
+# ─── GET /reports/timeseries/volume ──────────────────────────────────────────
+
+@router.get("/timeseries/volume")
+async def report_timeseries_volume(
+    request:       Request,
+    tenant_id:     str           = Query(...,   description="Tenant identifier"),
+    from_dt:       Optional[str] = Query(None,  description="ISO8601 start (default: 7d ago)"),
+    to_dt:         Optional[str] = Query(None,  description="ISO8601 end (default: now)"),
+    interval:      int           = Query(60,    ge=1, le=1440, description="Bucket size in minutes"),
+    breakdown_by:  Optional[str] = Query(None,  description="pool_id | channel"),
+    pool_id:       Optional[str] = Query(None,  description="Filter by pool_id"),
+    format:        str           = Query("json", pattern="^(json|csv)$"),
+    pool_principal: PoolPrincipal = Depends(optional_pool_principal),
+) -> Response:
+    """
+    Session volume (count) bucketed by time interval.
+
+    buckets[].value = number of sessions opened in the bucket window.
+    breakdown_by=pool_id|channel splits each bucket by that dimension.
+    meta.total = total sessions across all buckets.
+    """
+    data = await query_volume_timeseries(
+        client     = request.app.state.store._client,
+        database   = request.app.state.store._database,
+        tenant_id  = tenant_id,
+        from_dt    = from_dt,
+        to_dt      = to_dt,
+        interval   = interval,
+        breakdown_by = breakdown_by,
+        pool_id    = pool_id,
+        accessible_pools = pool_principal.accessible_pools,
+    )
+    if format == "csv":
+        return Response(
+            content=timeseries_to_csv(data.get("buckets", [])),
+            media_type="text/csv",
+            headers={"Content-Disposition": f'attachment; filename="volume_timeseries_{_today_label()}.csv"'},
+        )
+    return JSONResponse(content=data, status_code=503 if data.get("error") else 200)
+
+
+# ─── GET /reports/timeseries/handle_time ─────────────────────────────────────
+
+@router.get("/timeseries/handle_time")
+async def report_timeseries_handle_time(
+    request:       Request,
+    tenant_id:     str           = Query(...,   description="Tenant identifier"),
+    from_dt:       Optional[str] = Query(None,  description="ISO8601 start (default: 7d ago)"),
+    to_dt:         Optional[str] = Query(None,  description="ISO8601 end (default: now)"),
+    interval:      int           = Query(60,    ge=1, le=1440, description="Bucket size in minutes"),
+    breakdown_by:  Optional[str] = Query(None,  description="pool_id | channel"),
+    pool_id:       Optional[str] = Query(None,  description="Filter by pool_id"),
+    format:        str           = Query("json", pattern="^(json|csv)$"),
+    pool_principal: PoolPrincipal = Depends(optional_pool_principal),
+) -> Response:
+    """
+    Average handle time (ms) bucketed by time interval.
+
+    buckets[].value = avg duration_ms of sessions opened in the bucket window.
+    meta.total = overall avg across all buckets.
+    Tip: divide by 60000 in the UI to display minutes.
+    """
+    data = await query_handle_time_timeseries(
+        client     = request.app.state.store._client,
+        database   = request.app.state.store._database,
+        tenant_id  = tenant_id,
+        from_dt    = from_dt,
+        to_dt      = to_dt,
+        interval   = interval,
+        breakdown_by = breakdown_by,
+        pool_id    = pool_id,
+        accessible_pools = pool_principal.accessible_pools,
+    )
+    if format == "csv":
+        return Response(
+            content=timeseries_to_csv(data.get("buckets", [])),
+            media_type="text/csv",
+            headers={"Content-Disposition": f'attachment; filename="handle_time_timeseries_{_today_label()}.csv"'},
+        )
+    return JSONResponse(content=data, status_code=503 if data.get("error") else 200)
+
+
+# ─── GET /reports/timeseries/score ───────────────────────────────────────────
+
+@router.get("/timeseries/score")
+async def report_timeseries_score(
+    request:      Request,
+    tenant_id:    str           = Query(...,   description="Tenant identifier"),
+    from_dt:      Optional[str] = Query(None,  description="ISO8601 start (default: 7d ago)"),
+    to_dt:        Optional[str] = Query(None,  description="ISO8601 end (default: now)"),
+    interval:     int           = Query(60,    ge=1, le=1440, description="Bucket size in minutes"),
+    breakdown_by: Optional[str] = Query(None,  description="campaign_id | form_id"),
+    campaign_id:  Optional[str] = Query(None,  description="Filter by campaign_id"),
+    format:       str           = Query("json", pattern="^(json|csv)$"),
+    pool_principal: PoolPrincipal = Depends(optional_pool_principal),
+) -> Response:
+    """
+    Average evaluation score (0–1) bucketed by time interval.
+
+    buckets[].value = avg overall_score of evaluations submitted in the bucket.
+    breakdown_by=campaign_id|form_id splits each bucket by that dimension.
+    meta.total = overall avg across all buckets.
+    """
+    data = await query_score_timeseries(
+        client     = request.app.state.store._client,
+        database   = request.app.state.store._database,
+        tenant_id  = tenant_id,
+        from_dt    = from_dt,
+        to_dt      = to_dt,
+        interval   = interval,
+        breakdown_by = breakdown_by,
+        campaign_id  = campaign_id,
+        accessible_pools = pool_principal.accessible_pools,
+    )
+    if format == "csv":
+        return Response(
+            content=timeseries_to_csv(data.get("buckets", [])),
+            media_type="text/csv",
+            headers={"Content-Disposition": f'attachment; filename="score_timeseries_{_today_label()}.csv"'},
+        )
+    return JSONResponse(content=data, status_code=503 if data.get("error") else 200)

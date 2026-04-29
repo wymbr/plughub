@@ -86,9 +86,10 @@ export async function run(ctx: ScenarioContext): Promise<ScenarioResult> {
       accountsConfig = await r.json()
     }
     // Config may return 404 if key not set — that's also informative
-    assertions.push(pass("A-1: ai_gateway/accounts config key accessible",
-      `status=${r.status}`,
-      [200, 404].includes(r.status) ? undefined : `unexpected status ${r.status}`))
+    const statusOk = [200, 404].includes(r.status)
+    assertions.push(statusOk
+      ? pass("A-1: ai_gateway/accounts config key accessible", `status=${r.status}`)
+      : fail("A-1: ai_gateway/accounts config key accessible", `unexpected status ${r.status}`))
   } catch (e) {
     assertions.push(fail("A-1: ai_gateway/accounts config key accessible", String(e)))
   }
@@ -97,8 +98,9 @@ export async function run(ctx: ScenarioContext): Promise<ScenarioResult> {
   try {
     const r = await fetch(`${ctx.analyticsApiUrl}/dashboard/metrics?tenant_id=${tenantId}`)
     const ok = r.status === 200 || r.status === 503  // 503 if ClickHouse unreachable is acceptable
-    assertions.push(pass("A-2: analytics dashboard/metrics returns without crash",
-      `status=${r.status}`, ok ? undefined : `unexpected status ${r.status}`))
+    assertions.push(ok
+      ? pass("A-2: analytics dashboard/metrics returns without crash", `status=${r.status}`)
+      : fail("A-2: analytics dashboard/metrics returns without crash", `unexpected status ${r.status}`))
   } catch (e) {
     assertions.push(fail("A-2: analytics dashboard/metrics returns without crash", String(e)))
   }
@@ -106,8 +108,9 @@ export async function run(ctx: ScenarioContext): Promise<ScenarioResult> {
   // A-3: AI Gateway health endpoint exists
   try {
     const r = await fetch(`${aiUrl}/health`)
-    assertions.push(pass("A-3: AI Gateway /health responds",
-      `status=${r.status}`, r.ok ? undefined : `status ${r.status}`))
+    assertions.push(r.ok
+      ? pass("A-3: AI Gateway /health responds", `status=${r.status}`)
+      : fail("A-3: AI Gateway /health responds", `status ${r.status}`))
   } catch (e) {
     assertions.push(fail("A-3: AI Gateway /health responds", String(e)))
   }
@@ -123,7 +126,7 @@ export async function run(ctx: ScenarioContext): Promise<ScenarioResult> {
     await redis.set(throttleKey(tenantId, accountId0), throttleUntil, "EX", 30)
     throttleWritten = true
     assertions.push(pass("B-1: throttle marker written to Redis for account_0",
-      `throttleUntil=${throttleUntil}`, undefined))
+      `throttleUntil=${throttleUntil}`))
   } catch (e) {
     assertions.push(fail("B-1: throttle marker written to Redis for account_0", String(e)))
   }
@@ -131,9 +134,9 @@ export async function run(ctx: ScenarioContext): Promise<ScenarioResult> {
   // B-2: POST /v1/reason with minimal prompt — Gateway should route around throttled account_0
   if (!hasApiKey) {
     assertions.push(pass("B-2: AI Gateway routes around throttled account (SKIPPED — no ANTHROPIC_API_KEY)",
-      "skipped", undefined))
+      "skipped"))
     assertions.push(pass("B-3: Response arrives despite account_0 throttled (SKIPPED — no ANTHROPIC_API_KEY)",
-      "skipped", undefined))
+      "skipped"))
   } else {
     let inferenceOk = false
     let inferenceStatus = 0
@@ -158,26 +161,30 @@ export async function run(ctx: ScenarioContext): Promise<ScenarioResult> {
       }
     } catch { /* inference failed */ }
 
-    assertions.push(pass("B-2: POST /v1/reason dispatched with account_0 throttled",
-      `status=${inferenceStatus}`,
-      inferenceStatus > 0 ? undefined : "request did not reach AI Gateway"))
+    assertions.push(inferenceStatus > 0
+      ? pass("B-2: POST /v1/reason dispatched with account_0 throttled", `status=${inferenceStatus}`)
+      : fail("B-2: POST /v1/reason dispatched with account_0 throttled", "request did not reach AI Gateway"))
 
-    assertions.push(pass("B-3: response received despite account_0 throttled",
-      `ok=${inferenceOk} status=${inferenceStatus}`,
-      inferenceOk ? undefined
-        : inferenceStatus === 429 ? "Gateway returned 429 — no backup account available (expected in single-account env)"
-        : `unexpected status ${inferenceStatus}`))
+    const b3detail = `ok=${inferenceOk} status=${inferenceStatus}`
+    const b3errMsg = inferenceStatus === 429
+      ? "Gateway returned 429 — no backup account available (expected in single-account env)"
+      : `unexpected status ${inferenceStatus}`
+    assertions.push(inferenceOk
+      ? pass("B-3: response received despite account_0 throttled", b3detail)
+      : fail("B-3: response received despite account_0 throttled", b3errMsg))
   }
 
   // B-4: Account health in Redis reflects throttled state
   try {
     const val = await redis.get(throttleKey(tenantId, accountId0))
     const stillThrottled = val !== null
-    assertions.push(pass("B-4: account_0 throttle key present in Redis",
-      `throttled_until=${val}`,
-      throttleWritten && stillThrottled ? undefined
-        : throttleWritten ? "key expired or was cleared unexpectedly"
-        : "B-1 did not write key, so B-4 is irrelevant"))
+    const b4detail = `throttled_until=${val}`
+    const b4errMsg = throttleWritten && !stillThrottled
+      ? "key expired or was cleared unexpectedly"
+      : "B-1 did not write key, so B-4 is irrelevant"
+    assertions.push(throttleWritten && stillThrottled
+      ? pass("B-4: account_0 throttle key present in Redis", b4detail)
+      : fail("B-4: account_0 throttle key present in Redis", b4errMsg))
   } catch (e) {
     assertions.push(fail("B-4: account_0 throttle key present in Redis", String(e)))
   }
@@ -190,7 +197,7 @@ export async function run(ctx: ScenarioContext): Promise<ScenarioResult> {
     await redis.del(throttleKey(tenantId, accountId0))
     await redis.del(rpmKey(tenantId, accountId0))
     cleared = true
-    assertions.push(pass("C-1: throttle key cleared from Redis (simulate TTL expiry)", "cleared", undefined))
+    assertions.push(pass("C-1: throttle key cleared from Redis (simulate TTL expiry)", "cleared"))
   } catch (e) {
     assertions.push(fail("C-1: throttle key cleared from Redis", String(e)))
   }
@@ -199,8 +206,9 @@ export async function run(ctx: ScenarioContext): Promise<ScenarioResult> {
   try {
     const val = await redis.get(throttleKey(tenantId, accountId0))
     const gone = val === null
-    assertions.push(pass("C-2: throttle key absent after clear",
-      `val=${val}`, gone ? undefined : `key still present: ${val}`))
+    assertions.push(gone
+      ? pass("C-2: throttle key absent after clear", `val=${val}`)
+      : fail("C-2: throttle key absent after clear", `key still present: ${val}`))
   } catch (e) {
     assertions.push(fail("C-2: throttle key absent after clear", String(e)))
   }
@@ -208,7 +216,7 @@ export async function run(ctx: ScenarioContext): Promise<ScenarioResult> {
   // C-3: POST /v1/reason succeeds again (account_0 restored)
   if (!hasApiKey) {
     assertions.push(pass("C-3: AI Gateway uses restored account_0 (SKIPPED — no ANTHROPIC_API_KEY)",
-      "skipped", undefined))
+      "skipped"))
   } else {
     let recoveryOk = false
     let recoveryStatus = 0
@@ -231,9 +239,9 @@ export async function run(ctx: ScenarioContext): Promise<ScenarioResult> {
       recoveryOk = r.ok
     } catch { /* ignore */ }
 
-    assertions.push(pass("C-3: AI Gateway responds after account recovery",
-      `ok=${recoveryOk} status=${recoveryStatus}`,
-      recoveryOk ? undefined : `status=${recoveryStatus}`))
+    assertions.push(recoveryOk
+      ? pass("C-3: AI Gateway responds after account recovery", `ok=${recoveryOk} status=${recoveryStatus}`)
+      : fail("C-3: AI Gateway responds after account recovery", `status=${recoveryStatus}`))
   }
 
   // ── Cleanup ──────────────────────────────────────────────────────────────
@@ -243,12 +251,11 @@ export async function run(ctx: ScenarioContext): Promise<ScenarioResult> {
     await redis.del(rpmKey(tenantId, accountId0))
   } catch { /* ignore */ }
 
-  const passed = assertions.filter(a => a.ok).length
-  const total  = assertions.length
   return {
-    scenario:   "26_ai_gateway_fallback",
-    passed,
-    failed:     total - passed,
+    scenario_id: "26",
+    name:        "Arc 6 — AI Gateway multi-account fallback",
+    passed:      assertions.every((a) => a.passed),
     assertions,
+    duration_ms: 0,  // filled in by runner
   }
 }

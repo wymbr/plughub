@@ -1,197 +1,37 @@
 {
   "passed": true,
-  "total": 4,
-  "passed_count": 4,
+  "total": 1,
+  "passed_count": 1,
   "failed_count": 0,
   "scenarios": [
     {
-      "scenario_id": "01",
-      "name": "Happy Path Completo",
+      "scenario_id": "21",
+      "name": "Masked Retry — begin_transaction rollback cycle",
       "passed": true,
       "assertions": [
         {
-          "name": "agent_login returns valid session_token",
-          "passed": true,
-          "details": {
-            "instance_id": "e2e-instance-80ad9d3d-fbfb-4f33-8d61-158e4bd2e300"
-          }
-        },
-        {
-          "name": "agent_ready returns status:ready",
-          "passed": true,
-          "details": {
-            "status": "ready"
-          }
-        },
-        {
-          "name": "Redis agent state = ready after agent_ready",
-          "passed": true,
-          "details": {
-            "state": "ready"
-          }
-        },
-        {
-          "name": "Pool retencao_humano contains instance after agent_ready",
+          "name": "C: retry cycle — outcome=resolved (2nd attempt with valid PIN)",
           "passed": true
         },
         {
-          "name": "agent_busy returns status:busy",
-          "passed": true,
-          "details": {
-            "current_sessions": 1
-          }
-        },
-        {
-          "name": "Redis agent state = busy after agent_busy",
+          "name": "C: failed attempt PIN '000000' absent from pipeline_state (maskedScope cleared on rewind)",
           "passed": true
         },
         {
-          "name": "skill-flow executes 2-step flow",
-          "passed": true,
-          "details": {
-            "outcome": "resolved"
-          }
-        },
-        {
-          "name": "pipeline_state in Redis = completed after flow",
+          "name": "C: successful attempt PIN '123456' absent from pipeline_state (masked, not written to output)",
           "passed": true
         },
         {
-          "name": "agent_done accepted without error (acknowledged:true)",
+          "name": "C: validacao_pin.valid=true — 2nd attempt PIN correctly forwarded to invoke",
           "passed": true
         },
         {
-          "name": "issue_status non-empty in agent_done payload",
-          "passed": true
-        },
-        {
-          "name": "Redis agent state = ready after agent_done",
+          "name": "C: auth_status.status=ok — end_transaction completed after retry",
           "passed": true
         }
       ],
-      "duration_ms": 76
-    },
-    {
-      "scenario_id": "02",
-      "name": "Escalação com Handoff",
-      "passed": true,
-      "assertions": [
-        {
-          "name": "agent_done WITHOUT handoff_reason is rejected (isError:true)",
-          "passed": true
-        },
-        {
-          "name": "rejection error message references handoff_reason",
-          "passed": true,
-          "details": {
-            "error": "handoff_reason: handoff_reason é obrigatório quando outcome !== 'resolved'"
-          }
-        },
-        {
-          "name": "agent_done WITH handoff_reason is accepted (acknowledged:true)",
-          "passed": true
-        }
-      ],
-      "duration_ms": 38
-    },
-    {
-      "scenario_id": "03",
-      "name": "Retomada Após Falha de Processo",
-      "passed": true,
-      "assertions": [
-        {
-          "name": "Redis pipeline_state.current_step_id = step3 after injection",
-          "passed": true
-        },
-        {
-          "name": "skill-flow-service healthy after restart",
-          "passed": true
-        },
-        {
-          "name": "skill-flow resumes execution after restart",
-          "passed": true,
-          "details": {
-            "outcome": "resolved"
-          }
-        },
-        {
-          "name": "step1 NOT re-executed after resume (transition not duplicated)",
-          "passed": true
-        },
-        {
-          "name": "step2 NOT re-executed after resume (transition not duplicated)",
-          "passed": true
-        },
-        {
-          "name": "pipeline_state advances past step3 after resume",
-          "passed": true,
-          "details": {
-            "current_step_id": "__complete__",
-            "status": "completed"
-          }
-        },
-        {
-          "name": "Total transition count = 4 (2 injected + 2 new)",
-          "passed": true,
-          "details": {
-            "count": 4
-          }
-        }
-      ],
-      "duration_ms": 8271
-    },
-    {
-      "scenario_id": "04",
-      "name": "Motor de Regras — Escalação Intra-Turno",
-      "passed": true,
-      "assertions": [
-        {
-          "name": "Rule created successfully",
-          "passed": true,
-          "details": {
-            "rule_id": "rule_e2e_sentiment_77df3abc",
-            "status": "draft"
-          }
-        },
-        {
-          "name": "Rule transitioned to active (or shadow) status",
-          "passed": true,
-          "details": {
-            "status": "active"
-          }
-        },
-        {
-          "name": "Agent session still busy before escalation evaluation",
-          "passed": true
-        },
-        {
-          "name": "Rules Engine detects escalation condition (should_escalate:true)",
-          "passed": true,
-          "details": {
-            "rule_id": "rule_e2e_sentiment_77df3abc",
-            "pool_target": "retencao_humano"
-          },
-          "latency_ms": 4
-        },
-        {
-          "name": "Escalation target pool = retencao_humano",
-          "passed": true,
-          "details": {
-            "pool_target": "retencao_humano"
-          }
-        },
-        {
-          "name": "Rules Engine evaluation within 500ms",
-          "passed": true,
-          "latency_ms": 4
-        },
-        {
-          "name": "Agent session still active (busy) after escalation detected — issue_status not yet sent",
-          "passed": true
-        }
-      ],
-      "duration_ms": 64
+      "duration_ms": 4016
     }
   ],
-  "generated_at": "2026-04-24T14:21:25.992Z"
+  "generated_at": "2026-04-27T12:13:28.718Z"
 }

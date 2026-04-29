@@ -167,7 +167,8 @@ CREATE INDEX IF NOT EXISTS idx_wd_webhook_ts
 
 async def ensure_schema(pool: asyncpg.Pool) -> None:
     async with pool.acquire() as conn:
-        await conn.execute(_DDL)
+        async with conn.transaction():
+            await conn.execute(_DDL)
     logger.info("workflow schema ensured")
 
 

@@ -12,7 +12,6 @@ import type {
   EvaluationResult,
   EvaluationResultWithActions,
   EvaluationContestation,
-  EvaluationPermission,
   KnowledgeSnippet,
   CampaignReport,
   AgentEvaluationReport,
@@ -39,7 +38,8 @@ export function useForms(tenantId: string) {
     try {
       const r = await fetch(`${BASE}/forms?tenant_id=${tenantId}`)
       if (!r.ok) throw new Error(`HTTP ${r.status}`)
-      setForms(await r.json())
+      const d = await r.json()
+      setForms(Array.isArray(d) ? d : (d?.forms ?? d?.data ?? d?.items ?? []))
       setError(null)
     } catch (e) {
       setError(String(e))
@@ -92,7 +92,8 @@ export function useCampaigns(tenantId: string, pollMs = 0) {
     try {
       const r = await fetch(`${BASE}/campaigns?tenant_id=${tenantId}`)
       if (!r.ok) throw new Error(`HTTP ${r.status}`)
-      setCampaigns(await r.json())
+      const d = await r.json()
+      setCampaigns(Array.isArray(d) ? d : (d?.campaigns ?? d?.data ?? d?.items ?? []))
       setError(null)
     } catch (e) {
       setError(String(e))
@@ -152,7 +153,8 @@ export function useInstances(campaignId: string, status?: string, pollMs = 0) {
       const qs = [`campaign_id=${campaignId}`, status ? `status=${status}` : ''].filter(Boolean).join('&')
       const r = await fetch(`${BASE}/instances?${qs}`)
       if (!r.ok) throw new Error(`HTTP ${r.status}`)
-      setInstances(await r.json())
+      const d = await r.json()
+      setInstances(Array.isArray(d) ? d : (d?.instances ?? d?.data ?? d?.items ?? []))
       setError(null)
     } catch (e) {
       setError(String(e))
@@ -174,26 +176,58 @@ export function useInstances(campaignId: string, status?: string, pollMs = 0) {
 
 // ── Results ───────────────────────────────────────────────────────────────────
 
-export function useResults(tenantId: string, campaignId?: string, evaluatorId?: string, pollMs = 0) {
-  const [results, setResults] = useState<EvaluationResult[]>([])
+export interface ResultFilters {
+  campaignId?: string
+  sessionId?: string
+  evalStatus?: string
+  actionRequired?: 'review' | 'contestation' | 'any'
+  poolId?: string
+  evaluatorId?: string
+  locked?: boolean
+  limit?: number
+  offset?: number
+}
+
+export function useResults(
+  tenantId: string,
+  filters: ResultFilters = {},
+  pollMs = 0,
+  accessToken?: string,
+) {
+  const [results, setResults] = useState<EvaluationResultWithActions[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+
+  const filtersKey = JSON.stringify(filters)
 
   const load = useCallback(async () => {
     try {
       const params = new URLSearchParams({ tenant_id: tenantId })
-      if (campaignId) params.set('campaign_id', campaignId)
-      if (evaluatorId) params.set('evaluator_id', evaluatorId)
-      const r = await fetch(`${BASE}/results?${params}`)
+      if (filters.campaignId)    params.set('campaign_id', filters.campaignId)
+      if (filters.sessionId)     params.set('session_id', filters.sessionId)
+      if (filters.evalStatus)    params.set('eval_status', filters.evalStatus)
+      if (filters.actionRequired) params.set('action_required', filters.actionRequired)
+      if (filters.poolId)        params.set('pool_id', filters.poolId)
+      if (filters.evaluatorId)   params.set('evaluator_id', filters.evaluatorId)
+      if (filters.locked != null) params.set('locked', String(filters.locked))
+      if (filters.limit)         params.set('limit', String(filters.limit))
+      if (filters.offset)        params.set('offset', String(filters.offset))
+
+      const headers: Record<string, string> = {}
+      if (accessToken) headers['Authorization'] = `Bearer ${accessToken}`
+
+      const r = await fetch(`${BASE}/results?${params}`, { headers })
       if (!r.ok) throw new Error(`HTTP ${r.status}`)
-      setResults(await r.json())
+      const d = await r.json()
+      setResults(Array.isArray(d) ? d : (d?.results ?? d?.data ?? d?.items ?? []))
       setError(null)
     } catch (e) {
       setError(String(e))
     } finally {
       setLoading(false)
     }
-  }, [tenantId, campaignId, evaluatorId])
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tenantId, filtersKey, accessToken])
 
   useEffect(() => {
     load()
@@ -221,12 +255,15 @@ export async function reviewResult(
   return r.json() as Promise<EvaluationResult>
 }
 
-/** Arc 6 v2 — Fetch result detail with server-side available_actions. */
+/** Arc 6 v2 — Fetch result detail with server-side available_actions.
+ *  Pass accessToken (Bearer JWT) to get personalised button state via ABAC. */
 export async function fetchResultWithActions(
   resultId: string,
-  callerUserId: string,
+  accessToken?: string,
 ): Promise<EvaluationResultWithActions> {
-  const r = await fetch(`${BASE}/results/${resultId}?caller_user_id=${encodeURIComponent(callerUserId)}`)
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+  if (accessToken) headers['Authorization'] = `Bearer ${accessToken}`
+  const r = await fetch(`${BASE}/results/${resultId}`, { headers })
   if (!r.ok) throw new Error(`HTTP ${r.status}: ${await r.text()}`)
   return r.json()
 }
@@ -243,7 +280,8 @@ export function useContestations(tenantId: string, resultId?: string) {
       if (resultId) params.set('result_id', resultId)
       const r = await fetch(`${BASE}/contestations?${params}`)
       if (!r.ok) throw new Error(`HTTP ${r.status}`)
-      setContestations(await r.json())
+      const d = await r.json()
+      setContestations(Array.isArray(d) ? d : (d?.contestations ?? d?.data ?? d?.items ?? []))
     } catch { /* silent */ } finally {
       setLoading(false)
     }
@@ -254,12 +292,22 @@ export function useContestations(tenantId: string, resultId?: string) {
 }
 
 export async function createContestation(
-  body: { result_id: string; tenant_id: string; contested_by: string; reason: string },
-  token?: string,
+  body: {
+    result_id:    string
+    instance_id:  string
+    session_id:   string
+    tenant_id:    string
+    contested_by: string
+    reason:       string
+    round:        number   // anti-replay: must match result.current_round
+  },
+  jwtToken?: string,
 ) {
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+  if (jwtToken) headers['Authorization'] = `Bearer ${jwtToken}`
   const r = await fetch(`${BASE}/contestations`, {
     method: 'POST',
-    headers: adminHeaders(token),
+    headers,
     body: JSON.stringify(body),
   })
   if (!r.ok) throw new Error(`HTTP ${r.status}: ${await r.text()}`)
@@ -268,7 +316,7 @@ export async function createContestation(
 
 export async function adjudicateContestation(
   contestationId: string,
-  body: { status: 'upheld' | 'dismissed'; adjudicator: string; note?: string },
+  body: { decision: 'accepted' | 'rejected'; adjudicator: string; adjudication_notes?: string },
   token?: string,
 ) {
   const r = await fetch(`${BASE}/contestations/${contestationId}/adjudicate`, {
@@ -307,8 +355,9 @@ export function useAgentReport(tenantId: string, poolId?: string) {
     const params = new URLSearchParams({ tenant_id: tenantId })
     if (poolId) params.set('pool_id', poolId)
     fetch(`${BASE}/reports/agents?${params}`)
-      .then(r => r.ok ? r.json() : [])
-      .then(d => setRows(Array.isArray(d) ? d : []))
+      .then(r => r.ok ? r.json() : {})
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      .then((d: any) => setRows(Array.isArray(d) ? d : (d?.agents ?? d?.data ?? d?.items ?? [])))
       .catch(() => {})
       .finally(() => setLoading(false))
   }, [tenantId, poolId])
@@ -353,76 +402,6 @@ export async function deleteSnippet(snippetId: string, token?: string): Promise<
   if (!r.ok) throw new Error(`HTTP ${r.status}`)
 }
 
-
-// ── Permissions (Arc 6 v2 — 2D permission model) ──────────────────────────────
-
-export function usePermissions(tenantId: string, userId?: string) {
-  const [permissions, setPermissions] = useState<EvaluationPermission[]>([])
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
-
-  const load = useCallback(async () => {
-    setLoading(true)
-    try {
-      const params = new URLSearchParams({ tenant_id: tenantId })
-      if (userId) params.set('user_id', userId)
-      const r = await fetch(`${BASE}/permissions?${params}`)
-      if (!r.ok) throw new Error(`HTTP ${r.status}`)
-      setPermissions(await r.json())
-      setError(null)
-    } catch (e) {
-      setError(String(e))
-    } finally {
-      setLoading(false)
-    }
-  }, [tenantId, userId])
-
-  useEffect(() => { load() }, [load])
-  return { permissions, loading, error, reload: load }
-}
-
-export async function createPermission(
-  body: {
-    tenant_id:   string
-    user_id:     string
-    scope_type:  'pool' | 'campaign' | 'global'
-    scope_id?:   string | null
-    can_contest: boolean
-    can_review:  boolean
-    granted_by?: string
-  },
-  token?: string,
-): Promise<EvaluationPermission> {
-  const r = await fetch(`${BASE}/permissions`, {
-    method:  'POST',
-    headers: adminHeaders(token),
-    body:    JSON.stringify(body),
-  })
-  if (!r.ok) throw new Error(`HTTP ${r.status}: ${await r.text()}`)
-  return r.json()
-}
-
-export async function updatePermission(
-  permId: string,
-  body: { can_contest?: boolean; can_review?: boolean },
-  token?: string,
-): Promise<EvaluationPermission> {
-  const r = await fetch(`${BASE}/permissions/${permId}`, {
-    method:  'PATCH',
-    headers: adminHeaders(token),
-    body:    JSON.stringify(body),
-  })
-  if (!r.ok) throw new Error(`HTTP ${r.status}: ${await r.text()}`)
-  return r.json()
-}
-
-export async function deletePermission(permId: string, token?: string): Promise<void> {
-  const r = await fetch(`${BASE}/permissions/${permId}`, {
-    method:  'DELETE',
-    headers: adminHeaders(token),
-  })
-  if (!r.ok) throw new Error(`HTTP ${r.status}`)
-}
 
 // ── Analytics-API backed hooks (Arc 6 — /reports/evaluations*) ─────────────
 

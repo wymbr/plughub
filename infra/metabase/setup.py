@@ -115,25 +115,33 @@ def initial_setup() -> str:
         return session["id"]
 
     print("Running initial Metabase setup…")
-    result = post("/api/setup", {
-        "token": setup_token,
-        "prefs": {
-            "site_name":    SITE_NAME,
-            "site_locale":  "pt",
-            "allow_tracking": False,
-        },
-        "user": {
-            "email":      ADMIN_EMAIL,
-            "password":   ADMIN_PASSWORD,
-            "first_name": "PlugHub",
-            "last_name":  "Admin",
-            "site_name":  SITE_NAME,
-        },
-        "database": None,
-    })
-    token = result.get("id")
+    try:
+        result = post("/api/setup", {
+            "token": setup_token,
+            "prefs": {
+                "site_name":    SITE_NAME,
+                "site_locale":  "pt",
+                "allow_tracking": False,
+            },
+            "user": {
+                "email":      ADMIN_EMAIL,
+                "password":   ADMIN_PASSWORD,
+                "first_name": "PlugHub",
+                "last_name":  "Admin",
+                "site_name":  SITE_NAME,
+            },
+            "database": None,
+        })
+        token = result.get("id")
+    except RuntimeError as exc:
+        if "403" in str(exc):
+            # User already exists (e.g. volume persisted from previous run) — just log in
+            print("  Setup already completed (403), falling back to login…")
+            token = None
+        else:
+            raise
+
     if not token:
-        # Sometimes setup returns session differently
         session = post("/api/session", {
             "username": ADMIN_EMAIL,
             "password": ADMIN_PASSWORD,
@@ -328,34 +336,68 @@ def create_dashboard(token: str, card_ids: list[int], collection_id: int | None)
 
     dash_name = "PlugHub Analytics"
     if dash_name in existing:
-        print(f"  Dashboard already exists: {dash_name!r}")
-        return existing[dash_name]
+        dash_id = existing[dash_name]
+        print(f"  Dashboard already exists: {dash_name!r} (id={dash_id}) — checking cards…")
+    else:
+        payload: dict[str, Any] = {
+            "name":        dash_name,
+            "description": "Visão operacional e de qualidade da plataforma PlugHub",
+        }
+        if collection_id:
+            payload["collection_id"] = collection_id
 
-    payload: dict[str, Any] = {
-        "name":        dash_name,
-        "description": "Visão operacional e de qualidade da plataforma PlugHub",
-    }
-    if collection_id:
-        payload["collection_id"] = collection_id
+        dash = post("/api/dashboard", payload, token=token)
+        dash_id = dash["id"]
+        print(f"  Created dashboard: {dash_name!r} (id={dash_id})")
 
-    dash = post("/api/dashboard", payload, token=token)
-    dash_id = dash["id"]
-    print(f"  Created dashboard: {dash_name!r} (id={dash_id})")
+    # Check existing dashcards to avoid duplicates
+    try:
+        dash_detail = get(f"/api/dashboard/{dash_id}", token=token)
+        existing_card_ids = {dc["card_id"] for dc in dash_detail.get("dashcards", [])}
+    except Exception:
+        existing_card_ids = set()
 
-    # Add all cards
+    # Build list of cards to add (skip already present)
+    cards_to_add = []
     for idx, card_id in enumerate(card_ids):
+        if card_id in existing_card_ids:
+            print(f"  Card {card_id} already on dashboard — skipping")
+            continue
         col, row, sx, sy = _GRID_LAYOUT[idx] if idx < len(_GRID_LAYOUT) else (0, idx * 6, 12, 5)
-        post(f"/api/dashboard/{dash_id}/cards", {
-            "cardId":  card_id,
+        cards_to_add.append({
+            "id":      -(len(cards_to_add) + 1),   # negative id = new card
+            "card_id": card_id,
             "col":     col,
             "row":     row,
             "size_x":  sx,
             "size_y":  sy,
-            "parameter_mappings":  [],
+            "parameter_mappings":   [],
             "visualization_settings": {},
-        }, token=token)
+            "series": [],
+        })
 
-    print(f"  Dashboard populated with {len(card_ids)} cards.")
+    if cards_to_add:
+        # Metabase v0.47+ accepts all cards in a single PUT /api/dashboard/{id}/cards
+        # with body {"cards": [...]}. Falls back to individual POST /dashcards on error.
+        try:
+            put(f"/api/dashboard/{dash_id}/cards", {"cards": cards_to_add}, token=token)
+            print(f"  {len(cards_to_add)} cards added via PUT /cards.")
+        except RuntimeError as exc:
+            print(f"  PUT /cards failed ({exc}) — trying individual POST /dashcards…")
+            for c in cards_to_add:
+                post(f"/api/dashboard/{dash_id}/dashcards", {
+                    "cardId":  c["card_id"],
+                    "col":     c["col"],
+                    "row":     c["row"],
+                    "size_x":  c["size_x"],
+                    "size_y":  c["size_y"],
+                    "parameter_mappings":   [],
+                    "visualization_settings": {},
+                }, token=token)
+            print(f"  {len(cards_to_add)} cards added via POST /dashcards.")
+    else:
+        print("  All cards already present on dashboard.")
+
     return dash_id
 
 

@@ -75,12 +75,12 @@ export async function run(ctx: ScenarioContext): Promise<ScenarioResult> {
     })
     const d = await r.json() as Record<string, unknown>
     campaignPermId = String(d["id"] ?? "")
-    const ok = r.status === 200 || r.status === 201
-    assertions.push(pass(
-      "A-1: campaign-scope contestation permission granted",
-      `id=${campaignPermId} can_contest=${d["can_contest"]} can_review=${d["can_review"]}`,
-      ok && campaignPermId.length > 0 ? undefined : `http=${r.status} body=${JSON.stringify(d)}`,
-    ))
+    const ok = (r.status === 200 || r.status === 201) && campaignPermId.length > 0
+    assertions.push(ok
+      ? pass("A-1: campaign-scope contestation permission granted",
+          `id=${campaignPermId} can_contest=${d["can_contest"]} can_review=${d["can_review"]}`)
+      : fail("A-1: campaign-scope contestation permission granted",
+          `http=${r.status} body=${JSON.stringify(d)}`))
   } catch (e) {
     assertions.push(fail("A-1: campaign-scope contestation permission granted", String(e)))
     campaignPermId = `perm_${randomUUID().slice(0, 8)}`
@@ -103,12 +103,11 @@ export async function run(ctx: ScenarioContext): Promise<ScenarioResult> {
     })
     const d = await r.json() as Record<string, unknown>
     poolPermId = String(d["id"] ?? "")
-    const ok = r.status === 200 || r.status === 201
-    assertions.push(pass(
-      "A-2: pool-scope review permission granted",
-      `id=${poolPermId} can_contest=${d["can_contest"]} can_review=${d["can_review"]}`,
-      ok && poolPermId.length > 0 ? undefined : `http=${r.status}`,
-    ))
+    const ok = (r.status === 200 || r.status === 201) && poolPermId.length > 0
+    assertions.push(ok
+      ? pass("A-2: pool-scope review permission granted",
+          `id=${poolPermId} can_contest=${d["can_contest"]} can_review=${d["can_review"]}`)
+      : fail("A-2: pool-scope review permission granted", `http=${r.status}`))
   } catch (e) {
     assertions.push(fail("A-2: pool-scope review permission granted", String(e)))
     poolPermId = `perm_${randomUUID().slice(0, 8)}`
@@ -132,11 +131,11 @@ export async function run(ctx: ScenarioContext): Promise<ScenarioResult> {
     const d = await r.json() as Record<string, unknown>
     globalPermId = String(d["id"] ?? "")
     const ok = (r.status === 200 || r.status === 201) && d["scope_type"] === "global"
-    assertions.push(pass(
-      "A-3: global permission granted (can_review+can_contest)",
-      `id=${globalPermId} scope_type=${d["scope_type"]}`,
-      ok ? undefined : `http=${r.status} scope=${d["scope_type"]}`,
-    ))
+    assertions.push(ok
+      ? pass("A-3: global permission granted (can_review+can_contest)",
+          `id=${globalPermId} scope_type=${d["scope_type"]}`)
+      : fail("A-3: global permission granted (can_review+can_contest)",
+          `http=${r.status} scope=${d["scope_type"]}`))
   } catch (e) {
     assertions.push(fail("A-3: global permission granted (can_review+can_contest)", String(e)))
     globalPermId = `perm_${randomUUID().slice(0, 8)}`
@@ -149,11 +148,9 @@ export async function run(ctx: ScenarioContext): Promise<ScenarioResult> {
     const rows = Array.isArray(d) ? d : (d["data"] ?? [])
     const ids  = rows.map(row => row["id"])
     const allPresent = [campaignPermId, poolPermId, globalPermId].every(id => ids.includes(id))
-    assertions.push(pass(
-      "A-4: all three permissions appear in list for user",
-      `count=${rows.length} allPresent=${allPresent}`,
-      allPresent ? undefined : `missing IDs. found=${ids.join(",")}`,
-    ))
+    assertions.push(allPresent
+      ? pass("A-4: all three permissions appear in list for user", `count=${rows.length} allPresent=${allPresent}`)
+      : fail("A-4: all three permissions appear in list for user", `missing IDs. found=${ids.join(",")}`))
   } catch (e) {
     assertions.push(fail("A-4: all three permissions appear in list for user", String(e)))
   }
@@ -169,11 +166,11 @@ export async function run(ctx: ScenarioContext): Promise<ScenarioResult> {
     })
     const d = await r.json() as Record<string, unknown>
     const ok = r.ok && d["can_review"] === true && d["can_contest"] === true
-    assertions.push(pass(
-      "B-1: campaign perm updated — can_review flipped to true",
-      `can_review=${d["can_review"]} can_contest=${d["can_contest"]}`,
-      ok ? undefined : `http=${r.status} can_review=${d["can_review"]}`,
-    ))
+    assertions.push(ok
+      ? pass("B-1: campaign perm updated — can_review flipped to true",
+          `can_review=${d["can_review"]} can_contest=${d["can_contest"]}`)
+      : fail("B-1: campaign perm updated — can_review flipped to true",
+          `http=${r.status} can_review=${d["can_review"]}`))
   } catch (e) {
     assertions.push(fail("B-1: campaign perm updated — can_review flipped to true", String(e)))
   }
@@ -185,11 +182,11 @@ export async function run(ctx: ScenarioContext): Promise<ScenarioResult> {
     const rows = Array.isArray(d) ? d : (d["data"] ?? [])
     const row  = rows.find(p => p["id"] === campaignPermId)
     const ok   = row && row["can_review"] === true && row["can_contest"] === true
-    assertions.push(pass(
-      "B-2: GET reflects updated can_review=true on campaign perm",
-      `can_review=${row?.["can_review"]} can_contest=${row?.["can_contest"]}`,
-      ok ? undefined : `row=${JSON.stringify(row)}`,
-    ))
+    assertions.push(ok
+      ? pass("B-2: GET reflects updated can_review=true on campaign perm",
+          `can_review=${row?.["can_review"]} can_contest=${row?.["can_contest"]}`)
+      : fail("B-2: GET reflects updated can_review=true on campaign perm",
+          `row=${JSON.stringify(row)}`))
   } catch (e) {
     assertions.push(fail("B-2: GET reflects updated can_review=true on campaign perm", String(e)))
   }
@@ -197,7 +194,6 @@ export async function run(ctx: ScenarioContext): Promise<ScenarioResult> {
   // ── Part C — available_actions (server-side resolution) ───────────────────
 
   // Create a synthetic result to test available_actions resolution.
-  // We need: result with action_required="review" so user with can_review gets ["review"].
   let resultId = ""
   try {
     const r = await fetch(`${evalApiUrl}/v1/evaluation/results`, {
@@ -227,17 +223,15 @@ export async function run(ctx: ScenarioContext): Promise<ScenarioResult> {
     if (r.status === 404 || resultId.length === 0) {
       assertions.push(pass(
         "C-1: available_actions returned for result detail (skipped — no result)",
-        "skipped",
-        "evaluation-api result endpoint not yet available or result creation failed",
-      ))
+        "skipped"))
     } else {
       const d = await r.json() as Record<string, unknown>
       const hasField = "available_actions" in d
-      assertions.push(pass(
-        "C-1: available_actions field present in result detail",
-        `available_actions=${JSON.stringify(d["available_actions"])}`,
-        hasField ? undefined : `field missing. keys=${Object.keys(d).join(",")}`,
-      ))
+      assertions.push(hasField
+        ? pass("C-1: available_actions field present in result detail",
+            `available_actions=${JSON.stringify(d["available_actions"])}`)
+        : fail("C-1: available_actions field present in result detail",
+            `field missing. keys=${Object.keys(d).join(",")}`))
     }
   } catch (e) {
     assertions.push(fail("C-1: available_actions field present in result detail", String(e)))
@@ -249,20 +243,18 @@ export async function run(ctx: ScenarioContext): Promise<ScenarioResult> {
     if (resultId.length === 0) {
       assertions.push(pass(
         "C-2: no-perm user gets empty available_actions (skipped)",
-        "skipped",
-        "result creation failed; cannot test permission resolution",
-      ))
+        "skipped"))
     } else {
       const url = `${evalApiUrl}/v1/evaluation/results/${resultId}?caller_user_id=${noPermUser}`
       const r   = await fetch(url)
       const d   = await r.json() as Record<string, unknown>
       const actions = d["available_actions"] as unknown[]
       const empty = Array.isArray(actions) && actions.length === 0
-      assertions.push(pass(
-        "C-2: no-perm user receives empty available_actions",
-        `available_actions=${JSON.stringify(actions)}`,
-        empty ? undefined : `expected [] got ${JSON.stringify(actions)}`,
-      ))
+      assertions.push(empty
+        ? pass("C-2: no-perm user receives empty available_actions",
+            `available_actions=${JSON.stringify(actions)}`)
+        : fail("C-2: no-perm user receives empty available_actions",
+            `expected [] got ${JSON.stringify(actions)}`))
     }
   } catch (e) {
     assertions.push(fail("C-2: no-perm user receives empty available_actions", String(e)))
@@ -285,11 +277,9 @@ export async function run(ctx: ScenarioContext): Promise<ScenarioResult> {
     })
     // Expect either 200/201 (upsert) or 409 (conflict) — both are valid
     const acceptable = r.status === 200 || r.status === 201 || r.status === 409
-    assertions.push(pass(
-      "C-3: duplicate global scope returns 409 or idempotent 2xx",
-      `http=${r.status}`,
-      acceptable ? undefined : `unexpected status ${r.status}`,
-    ))
+    assertions.push(acceptable
+      ? pass("C-3: duplicate global scope returns 409 or idempotent 2xx", `http=${r.status}`)
+      : fail("C-3: duplicate global scope returns 409 or idempotent 2xx", `unexpected status ${r.status}`))
   } catch (e) {
     assertions.push(fail("C-3: duplicate global scope returns 409 or idempotent 2xx", String(e)))
   }
@@ -303,11 +293,9 @@ export async function run(ctx: ScenarioContext): Promise<ScenarioResult> {
       headers,
     })
     const ok = r.status === 204 || r.status === 200
-    assertions.push(pass(
-      "D-1: campaign perm deleted",
-      `http=${r.status}`,
-      ok ? undefined : `expected 204 got ${r.status}`,
-    ))
+    assertions.push(ok
+      ? pass("D-1: campaign perm deleted", `http=${r.status}`)
+      : fail("D-1: campaign perm deleted", `expected 204 got ${r.status}`))
   } catch (e) {
     assertions.push(fail("D-1: campaign perm deleted", String(e)))
   }
@@ -322,11 +310,11 @@ export async function run(ctx: ScenarioContext): Promise<ScenarioResult> {
     const poolStill    = ids.includes(poolPermId)
     const globalStill  = ids.includes(globalPermId)
     const ok = campaignGone && poolStill && globalStill
-    assertions.push(pass(
-      "D-2: only pool + global remain after campaign perm deleted",
-      `count=${rows.length} campaignGone=${campaignGone} pool=${poolStill} global=${globalStill}`,
-      ok ? undefined : `campaignGone=${campaignGone} pool=${poolStill} global=${globalStill}`,
-    ))
+    assertions.push(ok
+      ? pass("D-2: only pool + global remain after campaign perm deleted",
+          `count=${rows.length} campaignGone=${campaignGone} pool=${poolStill} global=${globalStill}`)
+      : fail("D-2: only pool + global remain after campaign perm deleted",
+          `campaignGone=${campaignGone} pool=${poolStill} global=${globalStill}`))
   } catch (e) {
     assertions.push(fail("D-2: only pool + global remain after campaign perm deleted", String(e)))
   }
@@ -337,12 +325,11 @@ export async function run(ctx: ScenarioContext): Promise<ScenarioResult> {
     fetch(`${evalApiUrl}/v1/evaluation/permissions/${globalPermId}`, { method: "DELETE", headers }),
   ])
 
-  const passed = assertions.filter(a => a.ok).length
-  const total  = assertions.length
   return {
-    scenario:   "27_evaluation_permissions",
-    passed,
-    failed:     total - passed,
+    scenario_id: "27",
+    name:        "Arc 6 v2 — 2D Permission Model",
+    passed:      assertions.every((a) => a.passed),
     assertions,
+    duration_ms: 0,  // filled in by runner
   }
 }

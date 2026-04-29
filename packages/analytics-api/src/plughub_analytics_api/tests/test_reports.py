@@ -22,6 +22,7 @@ from ..reports_query import (
     _to_csv,
     query_agent_performance_report,
     query_agents_report,
+    query_contact_insights_report,
     query_evaluations_report,
     query_evaluations_summary,
     query_participation_report,
@@ -866,3 +867,59 @@ class TestPoolPrincipalAuth:
             with pytest.raises(HTTPException) as exc_info:
                 await optional_pool_principal(credentials=creds)
         assert exc_info.value.status_code == 401
+
+
+# ── query_contact_insights_report ─────────────────────────────────────────────
+
+class TestQueryContactInsightsReport:
+    """Tests for the _fetch_contact_insights path via query_contact_insights_report."""
+
+    COLS = ["insight_id", "tenant_id", "session_id",
+            "insight_type", "category", "value", "tags", "agent_id", "timestamp"]
+
+    def _insight_row(self, **overrides):
+        base = [
+            "ins-001", TENANT, "sess-001",
+            "insight.registered", "cancelamento", "produto_x",
+            ["churn", "vip"], "agente_sac_v1-001", "2026-01-15T12:00:00",
+        ]
+        return base
+
+    @pytest.mark.asyncio
+    async def test_returns_data_rows(self):
+        count_r = _ch_result(["count()"], [[3]])
+        data_r  = _ch_result(self.COLS, [self._insight_row()])
+        client  = _make_client(count_r, data_r)
+        result  = await query_contact_insights_report(client, DB, TENANT)
+        assert result["meta"]["total"] == 3
+        assert len(result["data"]) == 1
+        assert result["data"][0]["insight_id"] == "ins-001"
+
+    @pytest.mark.asyncio
+    async def test_category_filter_appends_condition(self):
+        count_r = _ch_result(["count()"], [[1]])
+        data_r  = _ch_result(self.COLS, [self._insight_row()])
+        client  = _make_client(count_r, data_r)
+        await query_contact_insights_report(client, DB, TENANT, category="cancelamento")
+        # Verify both queries (count + data) were called
+        assert client.query.call_count == 2
+        # The count query SQL should contain the category parameter
+        count_sql = client.query.call_args_list[0][0][0]
+        assert "category" in count_sql
+
+    @pytest.mark.asyncio
+    async def test_tags_filter_appends_has_condition(self):
+        count_r = _ch_result(["count()"], [[0]])
+        data_r  = _ch_result(self.COLS, [])
+        client  = _make_client(count_r, data_r)
+        await query_contact_insights_report(client, DB, TENANT, tags=["churn", "vip"])
+        count_sql = client.query.call_args_list[0][0][0]
+        assert "has" in count_sql
+
+    @pytest.mark.asyncio
+    async def test_error_returns_empty_with_error_key(self):
+        client = MagicMock()
+        client.query = MagicMock(side_effect=RuntimeError("CH timeout"))
+        result = await query_contact_insights_report(client, DB, TENANT)
+        assert result["data"] == []
+        assert "error" in result

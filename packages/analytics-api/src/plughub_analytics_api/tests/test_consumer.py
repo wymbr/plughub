@@ -43,6 +43,7 @@ def make_store() -> MagicMock:
     s.insert_timeline_event        = AsyncMock()
     s.upsert_evaluation_result     = AsyncMock()
     s.insert_evaluation_event      = AsyncMock()
+    s.insert_contact_insight       = AsyncMock()
     return s
 
 
@@ -632,3 +633,122 @@ class TestWriteRowDispatchEvaluation:
         await _write_row(store, row, "evaluation.events", 1)
         store.insert_evaluation_event.assert_awaited_once_with(row)
         store.upsert_evaluation_result.assert_not_awaited()
+
+
+# ── parse_conversations_event — insight.* events ──────────────────────────────
+
+class TestParseConversationsEventInsight:
+    """parse_conversations_event dispatches insight.* event_types to contact_insights table."""
+
+    def _payload(self, event_type="insight.registered", **extra):
+        base = {
+            "event_type": event_type,
+            "session_id": SESSION,
+            "tenant_id":  TENANT,
+            "insight_id": "ins-001",
+            "timestamp":  "2026-01-15T12:00:00+00:00",
+            "category":   "cancelamento",
+            "value":      "produto_x",
+            "tags":       ["churn", "vip"],
+            "agent_id":   "agente_sac_v1-001",
+        }
+        base.update(extra)
+        return base
+
+    def test_returns_contact_insights_row(self):
+        rows = parse_conversations_event(self._payload())
+        assert rows is not None and len(rows) == 1
+        assert rows[0]["table"] == "contact_insights"
+
+    def test_insight_id_preserved(self):
+        rows = parse_conversations_event(self._payload())
+        assert rows[0]["insight_id"] == "ins-001"
+
+    def test_insight_type_equals_event_type(self):
+        rows = parse_conversations_event(self._payload("insight.historico.cancelamento"))
+        assert rows[0]["insight_type"] == "insight.historico.cancelamento"
+
+    def test_category_and_value_mapped(self):
+        rows = parse_conversations_event(self._payload())
+        assert rows[0]["category"] == "cancelamento"
+        assert rows[0]["value"] == "produto_x"
+
+    def test_tags_propagated(self):
+        rows = parse_conversations_event(self._payload())
+        assert rows[0]["tags"] == ["churn", "vip"]
+
+    def test_agent_id_from_agent_id_field(self):
+        rows = parse_conversations_event(self._payload(agent_id="agente_sac_v1-001"))
+        assert rows[0]["agent_id"] == "agente_sac_v1-001"
+
+    def test_agent_id_from_instance_id_fallback(self):
+        payload = self._payload()
+        del payload["agent_id"]
+        payload["instance_id"] = "agente_sac_v1-002"
+        rows = parse_conversations_event(payload)
+        assert rows[0]["agent_id"] == "agente_sac_v1-002"
+
+    def test_category_from_nested_data(self):
+        payload = {
+            "event_type": "insight.registered",
+            "session_id": SESSION,
+            "tenant_id":  TENANT,
+            "data": {"category": "retencao", "value": "oferta_aceita", "tags": ["retencao"]},
+        }
+        rows = parse_conversations_event(payload)
+        assert rows[0]["category"] == "retencao"
+        assert rows[0]["value"] == "oferta_aceita"
+
+    def test_insight_id_generated_when_absent(self):
+        payload = self._payload()
+        del payload["insight_id"]
+        rows = parse_conversations_event(payload)
+        assert rows[0]["insight_id"]  # auto-generated UUID
+
+    def test_unknown_event_type_returns_none(self):
+        # Non-insight event types that aren't known are skipped
+        rows = parse_conversations_event(self._payload("unknown.event.type"))
+        assert rows is None
+
+    def test_missing_session_id_returns_none(self):
+        payload = self._payload()
+        del payload["session_id"]
+        assert parse_conversations_event(payload) is None
+
+    def test_missing_tenant_id_returns_none(self):
+        payload = self._payload()
+        del payload["tenant_id"]
+        assert parse_conversations_event(payload) is None
+
+
+# ── _write_row dispatch — contact_insights ────────────────────────────────────
+
+class TestWriteRowDispatchContactInsight:
+    @pytest.mark.asyncio
+    async def test_contact_insight_dispatched(self):
+        store = make_store()
+        store.insert_contact_insight = AsyncMock()
+        row = {
+            "table":        "contact_insights",
+            "insight_id":   "ins-001",
+            "tenant_id":    TENANT,
+            "session_id":   SESSION,
+            "insight_type": "insight.registered",
+            "category":     "cancelamento",
+            "value":        "produto_x",
+            "tags":         ["churn"],
+            "agent_id":     None,
+            "timestamp":    "2026-01-15T12:00:00+00:00",
+        }
+        await _write_row(store, row, "conversations.events", 0)
+        store.insert_contact_insight.assert_awaited_once_with(row)
+
+    @pytest.mark.asyncio
+    async def test_contact_insight_does_not_touch_other_stores(self):
+        store = make_store()
+        store.insert_contact_insight = AsyncMock()
+        row = {"table": "contact_insights", "insight_id": "ins-002", "tenant_id": TENANT}
+        await _write_row(store, row, "conversations.events", 0)
+        store.upsert_session.assert_not_awaited()
+        store.insert_agent_event.assert_not_awaited()
+        store.insert_evaluation_event.assert_not_awaited()

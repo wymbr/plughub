@@ -32,7 +32,9 @@ export const listPools = async (tenantId: string): Promise<ListResponse<Pool>> =
     headers: headers(tenantId)
   })
   if (!response.ok) throw new Error('Failed to fetch pools')
-  return response.json()
+  const data = await response.json()
+  // API returns { pools: [...], total: n }
+  return { items: data.pools ?? data.items ?? [], total: data.total ?? 0 }
 }
 
 export const getPool = async (poolId: string, tenantId: string): Promise<Pool> => {
@@ -70,7 +72,9 @@ export const listAgentTypes = async (tenantId: string, poolId?: string): Promise
     headers: headers(tenantId)
   })
   if (!response.ok) throw new Error('Failed to fetch agent types')
-  return response.json()
+  const data = await response.json()
+  // API returns { agent_types: [...], total: n }
+  return { items: data.agent_types ?? data.items ?? [], total: data.total ?? 0 }
 }
 
 export const getAgentType = async (agentTypeId: string, tenantId: string): Promise<AgentType> => {
@@ -102,7 +106,9 @@ export const listSkills = async (tenantId: string): Promise<ListResponse<Skill>>
     headers: headers(tenantId)
   })
   if (!response.ok) throw new Error('Failed to fetch skills')
-  return response.json()
+  const data = await response.json()
+  // API returns { skills: [...], total: n }
+  return { items: data.skills ?? data.items ?? [], total: data.total ?? 0 }
 }
 
 export const getSkill = async (skillId: string, tenantId: string): Promise<Skill> => {
@@ -151,7 +157,9 @@ export const listInstances = async (tenantId: string, poolId?: string, status?: 
     headers: headers(tenantId)
   })
   if (!response.ok) throw new Error('Failed to fetch instances')
-  return response.json()
+  const data = await response.json()
+  // API returns { instances: [...], total: n }
+  return { items: data.instances ?? data.items ?? [], total: data.total ?? 0 }
 }
 
 // Human Agent Instances (framework=human)
@@ -162,7 +170,8 @@ export const listHumanInstances = async (tenantId: string, status?: string): Pro
     headers: operatorHeaders(tenantId)
   })
   if (!response.ok) throw new Error('Failed to fetch human instances')
-  return response.json()
+  const data = await response.json()
+  return { items: data.instances ?? data.items ?? [], total: data.total ?? 0 }
 }
 
 export const instanceAction = async (
@@ -184,7 +193,8 @@ export const listHumanAgentTypes = async (tenantId: string): Promise<ListRespons
     headers: operatorHeaders(tenantId)
   })
   if (!response.ok) throw new Error('Failed to fetch human agent types')
-  return response.json()
+  const data = await response.json()
+  return { items: data.agent_types ?? data.items ?? [], total: data.total ?? 0 }
 }
 
 export const createHumanAgentType = async (data: CreateHumanAgentInput, tenantId: string): Promise<AgentType> => {

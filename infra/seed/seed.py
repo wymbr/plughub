@@ -52,6 +52,16 @@ def die(msg: str) -> None:
     sys.exit(1)
 
 
+def _parse_body(raw: bytes) -> dict:
+    """Parse response body as JSON; return {} on empty or non-JSON body."""
+    if not raw:
+        return {}
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        return {"_raw": raw.decode(errors="replace")}
+
+
 def http_post(path: str, payload: dict) -> tuple[int, dict]:
     url  = f"{REGISTRY_URL}{path}"
     body = json.dumps(payload).encode()
@@ -67,9 +77,29 @@ def http_post(path: str, payload: dict) -> tuple[int, dict]:
     )
     try:
         with urllib.request.urlopen(req, timeout=30) as resp:
-            return resp.status, json.loads(resp.read())
+            return resp.status, _parse_body(resp.read())
     except urllib.error.HTTPError as e:
-        return e.code, json.loads(e.read() or b"{}")
+        return e.code, _parse_body(e.read())
+
+
+def http_patch(path: str, payload: dict) -> tuple[int, dict]:
+    url  = f"{REGISTRY_URL}{path}"
+    body = json.dumps(payload).encode()
+    req  = urllib.request.Request(
+        url,
+        data=body,
+        method="PATCH",
+        headers={
+            "Content-Type":  "application/json",
+            "x-tenant-id":   TENANT_ID,
+            "x-user-id":     "seed",
+        },
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            return resp.status, _parse_body(resp.read())
+    except urllib.error.HTTPError as e:
+        return e.code, _parse_body(e.read())
 
 
 def wait_for_registry() -> None:
@@ -190,6 +220,14 @@ POOLS = [
         "routing_expression": ROUTING_EXPR,
         "is_human_pool": True,
     },
+    {
+        "pool_id":       "avaliacao_ia",
+        "description":   "Pool exclusivo para agentes de avaliação pós-sessão — NÃO recebe tráfego ao vivo",
+        "channel_types": ["webchat", "whatsapp"],
+        "sla_target_ms": 600_000,
+        "routing_expression": ROUTING_EXPR,
+        "is_human_pool": False,
+    },
 ]
 
 # Pools that will be sent to the registry API (routing_expression + is_human_pool
@@ -259,9 +297,13 @@ AGENT_TYPES = [
         "agent_type_id":           "agente_avaliacao_v1",
         "framework":               "plughub-native",
         "execution_model":         "stateless",
-        "role":                    "executor",
+        "role":                    "evaluator",
         "max_concurrent_sessions": 20,
-        "pools":                   ["demo_ia"],
+        # IMPORTANT: must be in its own pool — NOT in demo_ia or any live-routing pool.
+        # The evaluator only handles post-session quality assessment (evaluation_context_get
+        # + evaluation_submit). Routing a live conversation to it causes an immediate
+        # skill-flow failure because no live-conversation tools are available.
+        "pools":                   ["avaliacao_ia"],
         "skills":                  [],
         "permissions": [
             "mcp-server-plughub:evaluation_context_get",
@@ -287,7 +329,7 @@ def seed_pools() -> None:
         if status == 201:
             ok(f"Pool {pool['pool_id']} criado")
         elif status == 409:
-            warn(f"Pool {pool['pool_id']} já existia — ignorado")
+            warn(f"Pool {pool['pool_id']} já existia — ignorado (pools são imutáveis via seed)")
         else:
             die(f"Erro ao criar pool {pool['pool_id']}: HTTP {status} — {resp}")
 
@@ -304,7 +346,20 @@ def seed_agent_types() -> None:
         if status == 201:
             ok(f"AgentType {at['agent_type_id']} criado")
         elif status == 409:
-            warn(f"AgentType {at['agent_type_id']} já existia — ignorado")
+            # Already exists — PATCH to apply any config changes (e.g. pool reassignment).
+            # The PATCH endpoint replaces pool associations and updates mutable fields.
+            # This ensures existing environments converge to the current seed definition.
+            patch_body   = {k: v for k, v in at.items() if k != "agent_type_id"}
+            patch_status, patch_resp = http_patch(
+                f"/v1/agent-types/{at['agent_type_id']}", patch_body
+            )
+            if patch_status in (200, 204):
+                ok(f"AgentType {at['agent_type_id']} atualizado (PATCH {patch_status})")
+            else:
+                warn(
+                    f"AgentType {at['agent_type_id']} já existia; PATCH retornou {patch_status} "
+                    f"— {patch_resp}. Configuração pode estar desatualizada."
+                )
         else:
             die(f"Erro ao criar agent type {at['agent_type_id']}: HTTP {status} — {resp}")
 
@@ -389,10 +444,10 @@ def main() -> None:
     print("━" * 57)
     print("  Seed concluído com sucesso!")
     print()
-    print("  Pools:        demo_ia · sac_ia · fila_humano · retencao_humano")
+    print("  Pools:        demo_ia · sac_ia · fila_humano · retencao_humano · avaliacao_ia")
     print("  Agent types:  agente_demo_ia_v1 · agente_sac_ia_v1")
     print("                agente_fila_v1 · agente_retencao_humano_v1")
-    print("                agente_avaliacao_v1")
+    print("                agente_avaliacao_v1  (pool: avaliacao_ia — pós-sessão apenas)")
     print()
     print("  Redis instances: registradas pelo orchestrator-bridge InstanceBootstrap")
     print("  (billing por instância configurada → Agent Registry = source of truth)")

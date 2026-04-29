@@ -18,6 +18,7 @@ from typing import AsyncGenerator
 
 import asyncpg
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from .config import get_settings
@@ -114,6 +115,13 @@ app = FastAPI(
         "complete, fail, cancel — and publishes workflow.* events to Kafka."
     ),
     lifespan = lifespan,
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 app.include_router(workflow_router)

@@ -1,0 +1,210 @@
+# infra/modules.yaml
+# Declaração de todos os módulos da plataforma PlugHub.
+# Carregado pelo auth-api no startup e registrado em auth.module_registry.
+#
+# Estrutura de permission_schema:
+#   <key>:
+#     label:      string — rótulo exibido na UI de usuários
+#     domain:     list   — valores válidos para 'access'
+#     scopable:   bool   — se true, permite escopo por pool/campanha
+#     scope_type: string — "pool" | "campaign" (apenas quando scopable: true)
+#     default:    string — valor padrão para novos usuários
+#
+# Domínio de 'access': [none, read_only, write_only, read_write]
+
+modules:
+
+  # ── Avaliação de Qualidade ────────────────────────────────────────────────────
+  - module_id: evaluation
+    label: Avaliação de Qualidade
+    icon: "⭐"
+    nav_path: /evaluation
+    permission_schema:
+      contestar:
+        label: Contestar avaliações recebidas
+        domain: [none, read_write]
+        scopable: true
+        scope_type: pool
+        default: none
+      revisar:
+        label: Revisar e decidir sobre avaliações
+        domain: [none, read_only, read_write]
+        scopable: true
+        scope_type: pool
+        default: none
+      relatorio:
+        label: Visualizar relatórios de qualidade
+        domain: [none, read_only]
+        scopable: false
+        default: none
+      formularios:
+        label: Gerenciar formulários e campanhas
+        domain: [none, read_write]
+        scopable: false
+        default: none
+
+  # ── Contatos ──────────────────────────────────────────────────────────────────
+  - module_id: contacts
+    label: Contatos
+    icon: "📞"
+    nav_path: /contacts
+    permission_schema:
+      visualizar:
+        label: Visualizar contatos e transcrições
+        domain: [none, read_only]
+        scopable: true
+        scope_type: pool
+        default: none
+      exportar:
+        label: Exportar dados de contatos
+        domain: [none, read_write]
+        scopable: false
+        default: none
+
+  # ── Analytics e Dashboard ─────────────────────────────────────────────────────
+  - module_id: analytics
+    label: Analytics e Dashboard
+    icon: "📊"
+    nav_path: /analytics
+    permission_schema:
+      dashboard:
+        label: Dashboard operacional em tempo real
+        domain: [none, read_only]
+        scopable: true
+        scope_type: pool
+        default: none
+      relatorios:
+        label: Relatórios e exportações
+        domain: [none, read_only]
+        scopable: true
+        scope_type: pool
+        default: none
+      consolidado:
+        label: Visão consolidada (admin — cross-tenant)
+        domain: [none, read_only]
+        scopable: false
+        default: none
+
+  # ── Automação de Fluxos ───────────────────────────────────────────────────────
+  - module_id: workflows
+    label: Automação de Fluxos
+    icon: "⚡"
+    nav_path: /workflows
+    permission_schema:
+      visualizar:
+        label: Visualizar instâncias de workflow
+        domain: [none, read_only]
+        scopable: false
+        default: none
+      cancelar:
+        label: Cancelar instâncias de workflow
+        domain: [none, read_write]
+        scopable: false
+        default: none
+      webhooks:
+        label: Gerenciar webhooks de disparo
+        domain: [none, read_write]
+        scopable: false
+        default: none
+
+  # ── Campanhas ─────────────────────────────────────────────────────────────────
+  - module_id: campaigns
+    label: Campanhas de Coleta
+    icon: "📣"
+    nav_path: /campaigns
+    permission_schema:
+      visualizar:
+        label: Visualizar campanhas e resultados
+        domain: [none, read_only]
+        scopable: false
+        default: none
+      gerenciar:
+        label: Criar e gerenciar campanhas
+        domain: [none, read_write]
+        scopable: false
+        default: none
+
+  # ── Atendimento (Agent Assist) ────────────────────────────────────────────────
+  - module_id: agent_assist
+    label: Atendimento
+    icon: "🎧"
+    nav_path: /agent-assist
+    permission_schema:
+      atender:
+        label: Receber e atender contatos
+        domain: [none, read_write]
+        scopable: true
+        scope_type: pool
+        default: none
+      supervisionar:
+        label: Monitorar e intervir em sessões ativas
+        domain: [none, read_only, read_write]
+        scopable: true
+        scope_type: pool
+        default: none
+
+  # ── Faturamento ───────────────────────────────────────────────────────────────
+  - module_id: billing
+    label: Faturamento
+    icon: "💳"
+    nav_path: /config/billing
+    permission_schema:
+      visualizar:
+        label: Visualizar fatura e recursos
+        domain: [none, read_only]
+        scopable: false
+        default: none
+      gerenciar:
+        label: Gerenciar recursos e ativar reservas
+        domain: [none, read_write]
+        scopable: false
+        default: none
+
+  # ── Configuração da Plataforma ────────────────────────────────────────────────
+  - module_id: config
+    label: Configuração da Plataforma
+    icon: "⚙️"
+    nav_path: /config
+    permission_schema:
+      plataforma:
+        label: Configurações gerais (namespaces, valores)
+        domain: [none, read_only, read_write]
+        scopable: false
+        default: none
+      recursos:
+        label: Pools, Agent Types, Skills, Instâncias
+        domain: [none, read_only, read_write]
+        scopable: false
+        default: none
+      canais:
+        label: Configuração de canais e credenciais
+        domain: [none, read_only, read_write]
+        scopable: false
+        default: none
+      usuarios:
+        label: Gestão de usuários e permissões
+        domain: [none, read_only, read_write]
+        scopable: false
+        default: none
+      mascaramento:
+        label: Configuração de mascaramento de dados
+        domain: [none, read_only, read_write]
+        scopable: false
+        default: none
+
+  # ── Skill Flows ───────────────────────────────────────────────────────────────
+  - module_id: skill_flows
+    label: Skill Flows
+    icon: "🔧"
+    nav_path: /skill-flows
+    permission_schema:
+      visualizar:
+        label: Visualizar skill flows
+        domain: [none, read_only]
+        scopable: false
+        default: none
+      editar:
+        label: Criar e editar skill flows
+        domain: [none, read_write]
+        scopable: false
+        default: none

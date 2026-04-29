@@ -14,6 +14,20 @@ import { channelsRouter }     from "./routes/channels"
 
 export const app = express()
 
+// ── CORS — allow browser requests from platform-ui ──
+app.use((req: Request, res: Response, next: NextFunction) => {
+  const origin = req.headers.origin
+  // Allow any localhost origin (dev + demo) and any configured CORS_ORIGIN
+  const allowed = process.env["CORS_ORIGIN"] || "http://localhost:5174"
+  if (origin && (origin === allowed || origin.startsWith("http://localhost"))) {
+    res.setHeader("Access-Control-Allow-Origin", origin)
+  }
+  res.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type, x-tenant-id, x-user-id, Authorization")
+  if (req.method === "OPTIONS") return res.sendStatus(204)
+  next()
+})
+
 app.use(express.json())
 
 // ── Rotas ──────────────────────────────────

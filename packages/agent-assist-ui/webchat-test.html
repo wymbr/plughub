@@ -70,15 +70,27 @@
   .ia-row input.masked { border-color: #f59e0b; }
   .ia-row .ok-btn { padding: 6px 12px; font-size: 13px; border-radius: 6px; flex-shrink: 0; }
   .ia-field { margin-bottom: 8px; }
-  .ia-field label { display: block; font-size: 11px; color: #64748b; margin-bottom: 3px; }
+  .ia-field label { display: flex; align-items: center; gap: 4px;
+                    font-size: 11px; color: #64748b; margin-bottom: 3px; }
   .ia-field input { width: 100%; padding: 6px 10px; border-radius: 6px; font-size: 13px;
                     border: 1px solid #cbd5e1; outline: none; box-sizing: border-box; }
   .ia-field input:focus { border-color: #4f46e5; }
-  .ia-field input.masked { border-color: #f59e0b; }
-  .ia-submit { width: 100%; margin-top: 4px; padding: 6px 12px; font-size: 13px;
-               border-radius: 6px; background: #4f46e5; color: white; border: none; cursor: pointer; }
+  .ia-field input.masked { border-color: #f59e0b; background: #fffbeb; }
+  .ia-field-tooltip { font-size: 10px; color: #94a3b8; cursor: help; }
+  .ia-submit { width: 100%; margin-top: 8px; padding: 8px 12px; font-size: 13px;
+               border-radius: 6px; background: #4f46e5; color: white; border: none;
+               cursor: pointer; font-weight: 500; }
   .ia-submit:hover { background: #4338ca; }
   .ia-hint { font-size: 11px; color: #b45309; margin-top: 4px; }
+  /* ── Submitted form state ── */
+  .ia-submitted-banner { font-size: 11px; color: #16a34a; font-weight: 600;
+                         margin-bottom: 8px; display: flex; align-items: center; gap: 4px; }
+  .ia-field-done { display: flex; justify-content: space-between; align-items: center;
+                   padding: 4px 0; border-bottom: 1px solid #e2e8f0; font-size: 12px; }
+  .ia-field-done:last-child { border-bottom: none; }
+  .ia-field-done-label { color: #64748b; }
+  .ia-field-done-value { color: #1e293b; font-weight: 500; }
+  .ia-field-done-value.masked-done { color: #b45309; letter-spacing: 1px; }
   .ia-check { display: flex; align-items: center; gap: 8px; margin-bottom: 5px;
               cursor: pointer; font-size: 13px; color: #1e293b; }
   .ia-check input[type=checkbox] { width: 14px; height: 14px; accent-color: #4f46e5; cursor: pointer; }
@@ -102,6 +114,7 @@
       <option value="fila_humano">fila_humano</option>
       <option value="retencao_humano">retencao_humano</option>
       <option value="auth_ia">auth_ia (PIN mascarado)</option>
+      <option value="auth_form_ia">auth_form_ia (formulário masked)</option>
       <option value="copilot_sac">copilot_sac (@mention co-pilot)</option>
     </select>
     <input id="token-input" placeholder="JWT (auto-gerado se vazio)" />
@@ -282,7 +295,12 @@
     };
     ws.onclose = (e) => {
       console.log('[webchat] WS closed', e.code, e.reason);
-      if (connected) { setStatus('Desconectado', 'err'); connected = false; }
+      if (connected) {
+        setStatus('Sessão encerrada', 'err');
+        connected = false;
+        addMsg('Atendimento encerrado.', 'sys');
+        document.getElementById('send-btn').disabled = true;
+      }
     };
   }
 
@@ -337,21 +355,32 @@
     } else if (msg.interaction === 'form') {
       const maskedSet = new Set(msg.masked_fields || []);
       const fields    = msg.fields || [];
-      html += `<div id="ia-form-${msg.menu_id}">`;
+      // Store field metadata in a JS-safe way using a global map keyed by menu_id
+      window._formMeta = window._formMeta || {};
+      window._formMeta[msg.menu_id] = fields.map(f => ({
+        id:       f.id || f.label,
+        label:    f.label || f.id,
+        isMasked: maskedSet.has(f.id || f.label),
+      }));
+      html += `<div id="ia-form-${escHtml(msg.menu_id)}">`;
       fields.forEach(field => {
         const fid      = field.id || field.label;
         const isMasked = maskedSet.has(fid);
-        const lock     = isMasked ? '🔒 ' : '';
+        const tooltip  = isMasked
+          ? 'Conteúdo seguro — não ficará visível ao agente'
+          : '';
         html += `<div class="ia-field">
-          <label>${lock}${escHtml(field.label || fid)}${field.required ? ' *' : ''}</label>
+          <label>
+            ${isMasked ? '🔒 ' : ''}${escHtml(field.label || fid)}${field.required ? ' *' : ''}
+            ${tooltip ? `<span class="ia-field-tooltip" title="${tooltip}">ⓘ</span>` : ''}
+          </label>
           <input type="${isMasked ? 'password' : 'text'}" class="${isMasked ? 'masked' : ''}"
-            id="ia-ff-${msg.menu_id}-${escHtml(fid)}" data-fid="${escHtml(fid)}"
+            id="ia-ff-${escHtml(msg.menu_id)}-${escHtml(fid)}"
             autocomplete="off" autocorrect="off" spellcheck="false"
-            placeholder="${isMasked ? '••••••' : ''}">
+            placeholder="${isMasked ? 'Conteúdo seguro' : ''}">
         </div>`;
       });
-      const fieldIds = JSON.stringify(fields.map(f => f.id || f.label));
-      html += `<button class="ia-submit" onclick="submitFormMenu('${msg.menu_id}',${fieldIds})">Enviar</button>`;
+      html += `<button class="ia-submit" id="ia-btn-${escHtml(msg.menu_id)}">Enviar</button>`;
       if (maskedSet.size > 0) {
         html += `<div class="ia-hint">🔒 Campos seguros — conteúdo não é visível ao agente</div>`;
       }
@@ -366,14 +395,26 @@
           ${escHtml(opt.label)}
         </label>`;
       });
-      const optIds = JSON.stringify(opts.map(o => o.id));
-      html += `<button class="ia-submit" onclick="submitChecklistMenu('${msg.menu_id}',${optIds})">Confirmar</button>`;
+      html += `<button class="ia-submit" id="ia-clbtn-${escHtml(msg.menu_id)}">Confirmar</button>`;
       html += `</div>`;
     }
 
     card.innerHTML = html;
     msgs.appendChild(card);
     msgs.scrollTop = msgs.scrollHeight;
+
+    // Attach event listeners AFTER innerHTML is set (avoids onclick attribute parsing issues)
+    if (msg.interaction === 'form') {
+      const menuId = msg.menu_id;
+      const btn = document.getElementById('ia-btn-' + menuId);
+      if (btn) btn.addEventListener('click', function() { submitFormMenu(menuId); });
+    }
+    if (msg.interaction === 'checklist') {
+      const menuId = msg.menu_id;
+      const opts   = msg.options || [];
+      const btn    = document.getElementById('ia-clbtn-' + menuId);
+      if (btn) btn.addEventListener('click', function() { submitChecklistMenu(menuId, opts.map(o => o.id)); });
+    }
 
     // Focar automaticamente no input de texto para melhor UX
     if (msg.interaction === 'text') {
@@ -400,18 +441,47 @@
     submitMenu(menuId, 'text', val, '••••••');   // nunca mostra o valor em claro no histórico
   }
 
-  function submitFormMenu(menuId, fieldIds) {
+  function submitFormMenu(menuId) {
+    const meta = (window._formMeta || {})[menuId];
+    if (!meta) { console.warn('[webchat] submitFormMenu: no meta for', menuId); return; }
+
+    // Collect values from inputs
     const result = {};
-    fieldIds.forEach(fid => {
+    meta.forEach(({ id: fid }) => {
       const el = document.getElementById('ia-ff-' + menuId + '-' + fid);
       result[fid] = el ? el.value : '';
     });
-    if (!ws || ws.readyState !== WebSocket.OPEN) return;
-    ws.send(JSON.stringify({ type: 'menu.submit', menu_id: menuId, interaction: 'form', result: JSON.stringify(result) }));
+
+    if (!ws || ws.readyState !== WebSocket.OPEN) {
+      console.warn('[webchat] submitFormMenu: WS not open');
+      return;
+    }
+
+    ws.send(JSON.stringify({
+      type:        'menu.submit',
+      menu_id:     menuId,
+      interaction: 'form',
+      result:      JSON.stringify(result),
+    }));
     console.log('[webchat] → menu.submit (form)', menuId, Object.keys(result));
-    addMsg('[formulário enviado]', 'out', 'Você');
+
+    // Replace form with submitted state showing values / •••••• for masked fields
+    const formDiv = document.getElementById('ia-form-' + menuId);
+    if (formDiv) {
+      let html = `<div class="ia-submitted-banner">✓ Formulário enviado</div>`;
+      meta.forEach(({ id: fid, label, isMasked }) => {
+        const displayVal = isMasked ? '••••••' : escHtml(result[fid] || '—');
+        html += `<div class="ia-field-done">
+          <span class="ia-field-done-label">${isMasked ? '🔒 ' : ''}${escHtml(label)}</span>
+          <span class="ia-field-done-value ${isMasked ? 'masked-done' : ''}">${displayVal}</span>
+        </div>`;
+      });
+      formDiv.innerHTML = html;
+    }
+
+    // Mark card as done (no further interaction)
     const card = document.getElementById('ia-' + menuId);
-    if (card) card.className = 'ia-card done';
+    if (card) card.classList.add('done');
   }
 
   function submitChecklistMenu(menuId, allOptionIds) {

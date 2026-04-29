@@ -402,11 +402,11 @@ const AgentTypesPage: React.FC = () => {
                 ))}
               </div>
             </div>
-            {selected.skills.length > 0 && (
+            {(selected.skills ?? []).length > 0 && (
               <div>
                 <div className="text-xs font-semibold text-gray uppercase mb-2">Skills</div>
                 <div className="flex gap-1 flex-wrap">
-                  {selected.skills.map(s => (
+                  {(selected.skills ?? []).map(s => (
                     <span key={s.skill_id} className="text-xs px-1.5 py-0.5 rounded bg-green/10 text-green border border-green/20">
                       {s.skill_id}
                     </span>
@@ -414,13 +414,13 @@ const AgentTypesPage: React.FC = () => {
                 </div>
               </div>
             )}
-            {selected.permissions.length > 0 && (
+            {(selected.permissions ?? []).length > 0 && (
               <div>
                 <div className="text-xs font-semibold text-gray uppercase mb-2">Permissions</div>
                 <div className="flex gap-1 flex-wrap">
-                  {selected.permissions.map((p, i) => (
+                  {(selected.permissions ?? []).map((p, i) => (
                     <span key={i} className="text-xs px-1.5 py-0.5 rounded bg-gray/10 text-gray border border-gray/20 font-mono">
-                      {p}
+                      {typeof p === 'string' ? p : JSON.stringify(p)}
                     </span>
                   ))}
                 </div>

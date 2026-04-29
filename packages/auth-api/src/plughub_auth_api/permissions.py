@@ -46,10 +46,15 @@ CREATE TABLE IF NOT EXISTS auth.platform_permissions (
     scope_id    TEXT,
     granted_by  TEXT        NOT NULL DEFAULT 'system',
     template_id UUID,
-    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
-    UNIQUE (tenant_id, user_id, module, action, scope_type, COALESCE(scope_id, ''))
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 )
 """
+
+# COALESCE in UNIQUE constraints requires a separate expression index — not supported inline.
+DDL_PERMISSIONS_UNIQ = (
+    "CREATE UNIQUE INDEX IF NOT EXISTS uq_platform_perms "
+    "ON auth.platform_permissions (tenant_id, user_id, module, action, scope_type, COALESCE(scope_id, ''))"
+)
 
 DDL_PERMISSIONS_IDX = (
     "CREATE INDEX IF NOT EXISTS idx_platform_perms_user "
@@ -72,9 +77,11 @@ CREATE TABLE IF NOT EXISTS auth.permission_templates (
 
 async def ensure_permissions_schema(pool: asyncpg.Pool) -> None:
     async with pool.acquire() as conn:
-        await conn.execute(DDL_PERMISSIONS)
-        await conn.execute(DDL_PERMISSIONS_IDX)
-        await conn.execute(DDL_TEMPLATES)
+        async with conn.transaction():
+            await conn.execute(DDL_PERMISSIONS)
+            await conn.execute(DDL_PERMISSIONS_UNIQ)
+            await conn.execute(DDL_PERMISSIONS_IDX)
+            await conn.execute(DDL_TEMPLATES)
     logger.info("platform_permissions schema ensured")
 
 

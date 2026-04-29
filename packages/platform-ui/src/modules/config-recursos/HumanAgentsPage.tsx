@@ -353,7 +353,10 @@ function ProfileRow({ at, selected, onSelect }: {
         {at.agent_type_id}
       </div>
       <div className="text-xs text-gray mt-0.5">
-        {Array.isArray(at.pools) ? (at.pools as unknown as string[]).join(', ') || 'sem pools' : 'sem pools'}
+        {Array.isArray(at.pools) && at.pools.length > 0
+          // pools are full Pool objects from the API — extract pool_id
+          ? at.pools.map((p: any) => p.pool_id ?? String(p)).join(', ')
+          : 'sem pools'}
       </div>
     </button>
   )
@@ -508,8 +511,9 @@ function ProfileDetail({ tenantId, agentType, onSaved, onDeprecated, onError }: 
     }
   }
 
-  const poolList = Array.isArray(agentType.pools)
-    ? (agentType.pools as unknown as string[])
+  // pools from the API are full Pool objects — extract pool_id strings
+  const poolList: string[] = Array.isArray(agentType.pools)
+    ? agentType.pools.map((p: any) => p.pool_id ?? String(p))
     : []
 
   return (

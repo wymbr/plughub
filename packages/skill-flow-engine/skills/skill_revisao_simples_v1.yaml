@@ -1,11 +1,12 @@
 id: skill_revisao_simples_v1
 name: Revisão Simples (1 round)
-version: "1"
+version: "1.0"
 description: |
   Motor de estado para ciclo de revisão de avaliação com 1 round.
   Após submissão da avaliação, aguarda uma decisão de revisão (aprovação ou contestação).
   Timeout: o resultado é congelado no estado atual — sem escalação.
-classification: vertical
+classification:
+  type: vertical
 
 entry: init_round
 

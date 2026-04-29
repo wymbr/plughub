@@ -254,32 +254,10 @@ ALTER TABLE evaluation.contestations
     ADD COLUMN IF NOT EXISTS round_number INT NOT NULL DEFAULT 1,
     ADD COLUMN IF NOT EXISTS authority_level TEXT;
 
--- ── EvaluationPermission ──────────────────────────────────────────────────────
--- 2D permission matrix: user × (pool | campaign | global) scope.
--- scope_id is NULL for global scope; COALESCE index handles uniqueness.
-CREATE TABLE IF NOT EXISTS evaluation.permissions (
-    id          TEXT        PRIMARY KEY,                 -- "evperm_{uuid}"
-    tenant_id   TEXT        NOT NULL,
-    user_id     TEXT        NOT NULL,
-    scope_type  TEXT        NOT NULL
-                CHECK (scope_type IN ('pool', 'campaign', 'global')),
-    scope_id    TEXT,                                    -- pool_id | campaign_id | NULL (global)
-    can_contest BOOLEAN     NOT NULL DEFAULT FALSE,
-    can_review  BOOLEAN     NOT NULL DEFAULT FALSE,
-    granted_by  TEXT        NOT NULL DEFAULT 'operator',
-    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
-    updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-
--- Expression index so NULL scope_id rows are uniquely constrained per scope_type
-CREATE UNIQUE INDEX IF NOT EXISTS uq_eval_permission
-    ON evaluation.permissions (tenant_id, user_id, scope_type, COALESCE(scope_id, ''));
-
-CREATE INDEX IF NOT EXISTS idx_evperms_tenant_user
-    ON evaluation.permissions (tenant_id, user_id);
-
-CREATE INDEX IF NOT EXISTS idx_evperms_scope
-    ON evaluation.permissions (tenant_id, scope_type, scope_id);
+-- evaluation.permissions table removed: permissions are now handled via
+-- ABAC module_config in the auth-api JWT (module_config.evaluation.revisar /
+-- module_config.evaluation.contestar). Drop the legacy table if it exists.
+DROP TABLE IF EXISTS evaluation.permissions;
 """
 
 
@@ -733,18 +711,58 @@ async def list_results(
     campaign_id: str | None = None,
     session_id: str | None = None,
     eval_status: str | None = None,
+    action_required: str | None = None,   # "review" | "contestation" | "any" (non-null)
+    pool_id: str | None = None,            # filter via campaign → pool
+    evaluator_id: str | None = None,
+    locked: bool | None = None,
     limit: int = 50,
     offset: int = 0,
 ) -> list[dict[str, Any]]:
-    cond = "WHERE tenant_id=$1"
+    if pool_id:
+        # Join through campaigns to filter by pool_id
+        base = """
+            SELECT r.*
+            FROM evaluation.results r
+            LEFT JOIN evaluation.campaigns c ON c.id = r.campaign_id
+            WHERE r.tenant_id=$1
+        """
+        cond_prefix = "AND"
+    else:
+        base = "SELECT * FROM evaluation.results WHERE tenant_id=$1"
+        cond_prefix = "AND"
+
+    cond = ""
     args: list[Any] = [tenant_id]
-    for col, val in [("campaign_id", campaign_id), ("session_id", session_id), ("eval_status", eval_status)]:
+
+    for col, val in [
+        ("r.campaign_id" if pool_id else "campaign_id", campaign_id),
+        ("r.session_id"  if pool_id else "session_id",  session_id),
+        ("r.eval_status" if pool_id else "eval_status",  eval_status),
+        ("r.evaluator_id" if pool_id else "evaluator_id", evaluator_id),
+    ]:
         if val is not None:
             args.append(val)
-            cond += f" AND {col}=${len(args)}"
+            cond += f" {cond_prefix} {col}=${len(args)}"
+
+    if pool_id:
+        args.append(pool_id)
+        cond += f" {cond_prefix} c.pool_id=${len(args)}"
+
+    if action_required == "any":
+        cond += f" {cond_prefix} {'r.' if pool_id else ''}action_required IS NOT NULL"
+    elif action_required is not None:
+        args.append(action_required)
+        cond += f" {cond_prefix} {'r.' if pool_id else ''}action_required=${len(args)}"
+
+    if locked is not None:
+        args.append(locked)
+        cond += f" {cond_prefix} {'r.' if pool_id else ''}locked=${len(args)}"
+
+    order_col = "r.submitted_at" if pool_id else "submitted_at"
     async with pool.acquire() as conn:
         rows = await conn.fetch(
-            f"SELECT * FROM evaluation.results {cond} ORDER BY submitted_at DESC LIMIT ${len(args)+1} OFFSET ${len(args)+2}",
+            f"{base}{cond} ORDER BY {order_col} DESC NULLS LAST"
+            f" LIMIT ${len(args)+1} OFFSET ${len(args)+2}",
             *args, limit, offset,
         )
     return _rows(rows)
@@ -908,152 +926,6 @@ async def list_contestations(
             *args, limit, offset,
         )
     return _rows(rows)
-
-
-# ─── Permissions CRUD ─────────────────────────────────────────────────────────
-
-async def create_permission(
-    pool: asyncpg.Pool,
-    *,
-    tenant_id: str,
-    user_id: str,
-    scope_type: str,          # "pool" | "campaign" | "global"
-    scope_id: str | None = None,
-    can_contest: bool = False,
-    can_review: bool = False,
-    granted_by: str = "operator",
-) -> dict[str, Any]:
-    perm_id = _new_id("evperm_")
-    async with pool.acquire() as conn:
-        row = await conn.fetchrow(
-            """
-            INSERT INTO evaluation.permissions
-                (id, tenant_id, user_id, scope_type, scope_id, can_contest, can_review, granted_by)
-            VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
-            ON CONFLICT (tenant_id, user_id, scope_type, COALESCE(scope_id, ''))
-            DO UPDATE SET
-                can_contest = EXCLUDED.can_contest,
-                can_review  = EXCLUDED.can_review,
-                granted_by  = EXCLUDED.granted_by,
-                updated_at  = now()
-            RETURNING *
-            """,
-            perm_id, tenant_id, user_id, scope_type, scope_id,
-            can_contest, can_review, granted_by,
-        )
-    return _row(row)  # type: ignore[return-value]
-
-
-async def list_permissions(
-    pool: asyncpg.Pool,
-    tenant_id: str,
-    user_id: str | None = None,
-    scope_type: str | None = None,
-    scope_id: str | None = None,
-) -> list[dict[str, Any]]:
-    cond = "WHERE tenant_id=$1"
-    args: list[Any] = [tenant_id]
-    for col, val in [("user_id", user_id), ("scope_type", scope_type)]:
-        if val is not None:
-            args.append(val)
-            cond += f" AND {col}=${len(args)}"
-    if scope_id is not None:
-        args.append(scope_id)
-        cond += f" AND scope_id=${len(args)}"
-    async with pool.acquire() as conn:
-        rows = await conn.fetch(
-            f"SELECT * FROM evaluation.permissions {cond} ORDER BY created_at DESC",
-            *args,
-        )
-    return _rows(rows)
-
-
-async def get_permission(pool: asyncpg.Pool, perm_id: str, tenant_id: str) -> dict[str, Any] | None:
-    async with pool.acquire() as conn:
-        row = await conn.fetchrow(
-            "SELECT * FROM evaluation.permissions WHERE id=$1 AND tenant_id=$2",
-            perm_id, tenant_id,
-        )
-    return _row(row)
-
-
-async def update_permission(
-    pool: asyncpg.Pool,
-    perm_id: str,
-    tenant_id: str,
-    *,
-    can_contest: bool | None = None,
-    can_review: bool | None = None,
-) -> dict[str, Any] | None:
-    set_parts = ["updated_at=now()"]
-    args: list[Any] = []
-    idx = 1
-    if can_contest is not None:
-        set_parts.append(f"can_contest=${idx}")
-        args.append(can_contest)
-        idx += 1
-    if can_review is not None:
-        set_parts.append(f"can_review=${idx}")
-        args.append(can_review)
-        idx += 1
-    args.extend([perm_id, tenant_id])
-    async with pool.acquire() as conn:
-        row = await conn.fetchrow(
-            f"UPDATE evaluation.permissions SET {', '.join(set_parts)} "
-            f"WHERE id=${idx} AND tenant_id=${idx+1} RETURNING *",
-            *args,
-        )
-    return _row(row)
-
-
-async def delete_permission(pool: asyncpg.Pool, perm_id: str, tenant_id: str) -> bool:
-    async with pool.acquire() as conn:
-        result = await conn.execute(
-            "DELETE FROM evaluation.permissions WHERE id=$1 AND tenant_id=$2",
-            perm_id, tenant_id,
-        )
-    return result.split()[-1] != "0"
-
-
-async def resolve_permissions(
-    pool: asyncpg.Pool,
-    tenant_id: str,
-    user_id: str,
-    campaign_id: str | None = None,
-    pool_id: str | None = None,
-) -> set[str]:
-    """
-    Resolve effective permissions for a user via union of all matching scopes.
-    All matching scopes contribute (union, not override). Resolution order:
-        campaign-level  >  pool-level  >  global  (all additive via OR)
-    Returns a set of strings from {"review", "contest"}.
-    """
-    scope_conditions = ["scope_type='global'"]
-    args: list[Any] = [tenant_id, user_id]
-    if campaign_id:
-        args.append(campaign_id)
-        scope_conditions.append(f"(scope_type='campaign' AND scope_id=${len(args)})")
-    if pool_id:
-        args.append(pool_id)
-        scope_conditions.append(f"(scope_type='pool' AND scope_id=${len(args)})")
-
-    where_scopes = " OR ".join(scope_conditions)
-    async with pool.acquire() as conn:
-        rows = await conn.fetch(
-            f"""
-            SELECT can_contest, can_review FROM evaluation.permissions
-            WHERE tenant_id=$1 AND user_id=$2
-              AND ({where_scopes})
-            """,
-            *args,
-        )
-    perms: set[str] = set()
-    for row in rows:
-        if row["can_contest"]:
-            perms.add("contest")
-        if row["can_review"]:
-            perms.add("review")
-    return perms
 
 
 # ─── Workflow state helpers ────────────────────────────────────────────────────

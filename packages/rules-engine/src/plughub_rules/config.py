@@ -25,7 +25,7 @@ class Settings(BaseSettings):
     audit_log_table:        str = "escalation_audit"
 
     # Kafka
-    kafka_broker:            str = "localhost:9092"
+    kafka_broker:            str = "kafka:29092"
     kafka_topic_conversations: str = "conversations.events"
     kafka_topic_lifecycle:   str = "agent.lifecycle"
     kafka_topic_evaluation:  str = "evaluation.events"

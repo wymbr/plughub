@@ -16,6 +16,7 @@ import redis.asyncio as aioredis
 import uvicorn
 from aiokafka import AIOKafkaConsumer, AIOKafkaProducer
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
 from .config import settings
 from . import db as _db
@@ -125,6 +126,13 @@ def create_app() -> FastAPI:
         title="PlugHub Evaluation API",
         version="1.0.0",
         description="Arc 6 quality evaluation platform",
+    )
+
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],
+        allow_methods=["*"],
+        allow_headers=["*"],
     )
 
     @app.on_event("startup")

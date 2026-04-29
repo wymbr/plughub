@@ -573,8 +573,8 @@ export async function run(ctx: ScenarioContext): Promise<ScenarioResult> {
   }
 
   return {
-    scenario:     "23",
-    description:  "Arc 5 — ContactSegment analytics pipeline",
+    scenario_id:  "23",
+    name:         "Arc 5 — ContactSegment analytics pipeline",
     passed:       assertions.every((a) => a.passed),
     assertions,
     duration_ms:  0,  // filled in by runner

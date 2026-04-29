@@ -41,9 +41,9 @@ SELECT
     tenant_id,
     agent_type_id,
     countMerge(total_sessions_state)                                              AS total_sessions,
-    countMerge(resolved_count_state)
+    countIfMerge(resolved_count_state)
         / greatest(countMerge(total_sessions_state), 1)                           AS resolution_rate,
-    countMerge(escalated_count_state)
+    countIfMerge(escalated_count_state)
         / greatest(countMerge(total_sessions_state), 1)                           AS escalation_rate
 FROM {db}.mv_agent_performance_daily
 WHERE period_date >= today() - {lookback}

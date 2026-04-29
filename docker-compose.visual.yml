@@ -8,11 +8,14 @@
 #   docker compose -f docker-compose.visual.yml up --build
 #
 # URLs disponíveis após o stack subir:
+#   http://localhost:5174   — Platform UI (módulos Monitor, Config, Workflows)
 #   http://localhost:5080   — Operator Console (heatmap, sessões, supervisor)
 #   http://localhost:8010   — Channel Gateway (WebSocket webchat + upload HTTP)
 #   http://localhost:9090   — WebChat Test Client (cliente HTML de teste)
 #   http://localhost:3500   — Analytics API (dashboard/reports/sessions)
 #   http://localhost:3600   — Config API (configurações por tenant)
+#   http://localhost:3700   — Calendar API (calendários e feriados)
+#   http://localhost:3800   — Workflow API (instâncias de workflow)
 #   http://localhost:3300   — Agent Registry (pools, agent types, skills)
 #   http://localhost:3000   — Metabase (BI self-service)
 #   http://localhost:8080   — Kafka UI (tópicos e mensagens)
@@ -175,6 +178,8 @@ services:
           evaluation.events
           usage.events
           sentiment.updated
+          workflow.events
+          calendar.events
         "
         for topic in $$TOPICS; do
           $$KAFKA --bootstrap-server $$BROKER --create --if-not-exists \
@@ -336,19 +341,87 @@ services:
       - plughub-visual
     restart: "no"
 
-  # Operator Console — React UI served by nginx
-  operator-console:
+  calendar-api:
     build:
       context: .
-      dockerfile: packages/operator-console/Dockerfile
-    container_name: visual-operator-console
+      dockerfile: packages/calendar-api/Dockerfile
+    container_name: visual-calendar-api
     ports:
-      - "5080:80"
+      - "3700:3700"
+    environment:
+      PLUGHUB_CALENDAR_DATABASE_URL: postgresql://plughub:plughub@postgres:5432/plughub
+      PLUGHUB_CALENDAR_REDIS_URL:    redis://redis:6379
     depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:3700/v1/health', timeout=3)\" 2>/dev/null && echo ok || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    restart: on-failure
+    networks:
+      - plughub-visual
+
+  workflow-api:
+    build:
+      context: packages/workflow-api
+      dockerfile: Dockerfile
+    container_name: visual-workflow-api
+    ports:
+      - "3800:3800"
+    environment:
+      PLUGHUB_WORKFLOW_DATABASE_URL: postgresql://plughub:plughub@postgres:5432/plughub
+      PLUGHUB_WORKFLOW_REDIS_URL:    redis://redis:6379
+      PLUGHUB_KAFKA_BROKERS:         kafka:29092
+      PLUGHUB_CALENDAR_API_URL:      http://calendar-api:3700
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
+      calendar-api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:3800/v1/health', timeout=3)\" 2>/dev/null && echo ok || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    restart: on-failure
+    networks:
+      - plughub-visual
+
+  # Platform UI — React app served by nginx on port 5174
+  platform-ui:
+    build:
+      context: .
+      dockerfile: packages/platform-ui/Dockerfile
+    container_name: visual-platform-ui
+    ports:
+      - "5174:5174"
+    depends_on:
+      agent-registry:
+        condition: service_healthy
       analytics-api:
+        condition: service_healthy
+      config-api:
+        condition: service_healthy
+      calendar-api:
+        condition: service_healthy
+      workflow-api:
         condition: service_healthy
     networks:
       - plughub-visual
+
+  # operator-console legado removido — use platform-ui na porta 5173
 
   # WebChat test client — served as static HTML via nginx
   webchat-client:

@@ -51,23 +51,40 @@ export default defineConfig({
       },
       '^/config': {
         target: 'http://localhost:3600',
-        changeOrigin: true
+        changeOrigin: true,
+        bypass(req) {
+          // SPA routes under /config must be served by React Router, not the config-api.
+          // Browser navigation sends Accept: text/html; API fetch calls do not.
+          if (req.headers.accept?.includes('text/html')) return '/index.html'
+        }
       },
       '^/dashboard': {
         target: 'http://localhost:3500',
-        changeOrigin: true
+        changeOrigin: true,
+        bypass(req) {
+          if (req.headers.accept?.includes('text/html')) return '/index.html'
+        }
       },
       '^/sessions': {
         target: 'http://localhost:3500',
-        changeOrigin: true
+        changeOrigin: true,
+        bypass(req) {
+          if (req.headers.accept?.includes('text/html')) return '/index.html'
+        }
       },
       '^/supervisor': {
         target: 'http://localhost:3500',
-        changeOrigin: true
+        changeOrigin: true,
+        bypass(req) {
+          if (req.headers.accept?.includes('text/html')) return '/index.html'
+        }
       },
       '^/reports': {
         target: 'http://localhost:3500',
-        changeOrigin: true
+        changeOrigin: true,
+        bypass(req) {
+          if (req.headers.accept?.includes('text/html')) return '/index.html'
+        }
       },
       '^/webchat': {
         target: 'http://localhost:8010',

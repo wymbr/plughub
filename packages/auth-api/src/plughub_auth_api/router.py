@@ -37,6 +37,7 @@ from .models import (
     ResolvePermissionResponse,
     TemplateResponse,
     TokenResponse,
+    TokenUserInfo,
     UpdateTemplateRequest,
     UpdateUserRequest,
     UserResponse,
@@ -86,6 +87,7 @@ def _make_token_response(
 ) -> tuple[TokenResponse, str]:
     """Gera access_token + refresh_token. Retorna (TokenResponse, plain_refresh_token)."""
     plain_refresh = generate_refresh_token()
+    module_config: dict[str, Any] = user.get("module_config") or {}
     access = create_access_token(
         user_id=str(user["id"]),
         tenant_id=user["tenant_id"],
@@ -94,6 +96,7 @@ def _make_token_response(
         roles=list(user["roles"]),
         accessible_pools=list(user["accessible_pools"]),
         settings=settings,
+        module_config=module_config,
     )
     expires_in = settings.access_token_expire_minutes * 60
     return (
@@ -101,6 +104,15 @@ def _make_token_response(
             access_token=access,
             refresh_token=plain_refresh,
             expires_in=expires_in,
+            user=TokenUserInfo(
+                id=str(user["id"]),
+                email=user["email"],
+                name=user["name"],
+                roles=list(user["roles"]),
+                tenant_id=user["tenant_id"],
+                accessible_pools=list(user["accessible_pools"]),
+                module_config=module_config,
+            ),
         ),
         plain_refresh,
     )
@@ -198,6 +210,7 @@ async def me(request: Request) -> MeResponse:
         name=claims["name"],
         roles=claims["roles"],
         accessible_pools=claims["accessible_pools"],
+        module_config=claims.get("module_config", {}),
     )
 
 
@@ -468,3 +481,219 @@ async def apply_template(
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     return [_perm_to_response(r) for r in rows]
+
+
+# ─── Module registry ──────────────────────────────────────────────────────────
+#
+# GET  /auth/modules                — lista módulos ativos (público, usado pela UI)
+# GET  /auth/modules/{module_id}    — detalhe do módulo
+# POST /auth/modules                — registra/atualiza módulo (admin — para plugins)
+# PATCH /auth/modules/{module_id}/active — ativa/desativa módulo (admin)
+
+def _module_to_dict(row: dict[str, Any]) -> dict[str, Any]:
+    import json as _json
+    schema = row.get("schema") or row.get("permission_schema") or {}
+    if isinstance(schema, str):
+        schema = _json.loads(schema)
+    return {
+        "module_id": row["module_id"],
+        "tenant_id": row.get("tenant_id"),
+        "label": row["label"],
+        "icon": row["icon"],
+        "nav_path": row["nav_path"],
+        "permission_schema": schema,
+        "active": row["active"],
+        "registered_at": (
+            row["registered_at"].isoformat()
+            if hasattr(row.get("registered_at"), "isoformat")
+            else str(row.get("registered_at", ""))
+        ),
+        "updated_at": (
+            row["updated_at"].isoformat()
+            if hasattr(row.get("updated_at"), "isoformat")
+            else str(row.get("updated_at", ""))
+        ),
+    }
+
+
+@router.get("/modules", response_model=list[dict])
+async def list_modules(
+    request: Request,
+    tenant_id: str | None = None,
+    active_only: bool = True,
+) -> list[dict]:
+    """
+    Lista módulos disponíveis.
+    tenant_id=None → apenas módulos de plataforma (built-in).
+    tenant_id=X    → módulos de plataforma + módulos específicos do tenant X.
+    Público — não requer admin token (a UI precisa para renderizar formulários de permissão).
+    """
+    pool = _get_pool(request)
+    rows = await db_mod.list_modules(pool, tenant_id=tenant_id, active_only=active_only)
+    return [_module_to_dict(r) for r in rows]
+
+
+@router.get("/modules/{module_id}", response_model=dict)
+async def get_module(module_id: str, request: Request) -> dict:
+    pool = _get_pool(request)
+    row = await db_mod.get_module(pool, module_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="Module not found")
+    return _module_to_dict(row)
+
+
+@router.post("/modules", response_model=dict, status_code=201,
+             dependencies=[Depends(_require_admin)])
+async def register_module(body: dict, request: Request) -> dict:
+    """
+    Registra ou atualiza um módulo (upsert por module_id).
+    Usado por plugins para declarar seus módulos e permission_schemas.
+    Módulos de plataforma são registrados automaticamente no startup via modules.yaml.
+    """
+    pool = _get_pool(request)
+    module_id: str = body.get("module_id", "")
+    if not module_id:
+        raise HTTPException(status_code=422, detail="module_id is required")
+    row = await db_mod.upsert_module(
+        pool,
+        module_id=module_id,
+        label=body.get("label", module_id),
+        icon=body.get("icon", "📦"),
+        nav_path=body.get("nav_path", ""),
+        schema=body.get("permission_schema", {}),
+        tenant_id=body.get("tenant_id"),  # None = platform-wide
+        active=body.get("active", True),
+    )
+    return _module_to_dict(row)
+
+
+@router.patch("/modules/{module_id}/active", response_model=dict,
+              dependencies=[Depends(_require_admin)])
+async def set_module_active(module_id: str, request: Request, active: bool = True) -> dict:
+    pool = _get_pool(request)
+    ok = await db_mod.set_module_active(pool, module_id, active)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Module not found")
+    row = await db_mod.get_module(pool, module_id)
+    return _module_to_dict(row)  # type: ignore[arg-type]
+
+
+# ─── User module-config (permissões ABAC) ─────────────────────────────────────
+#
+# GET   /auth/users/{id}/module-config                 — config completa (admin)
+# PUT   /auth/users/{id}/module-config                 — substitui config completa (admin)
+# PATCH /auth/users/{id}/module-config/{module_id}     — atualiza config de um módulo (admin)
+#
+# Formato de module_config armazenado em auth.users:
+#   {
+#     "evaluation": {
+#       "contestar": { "access": "read_write", "scope": ["pool:retencao_humano"] },
+#       "revisar":   { "access": "read_only",  "scope": [] }
+#     },
+#     "contacts": {
+#       "visualizar": { "access": "read_only", "scope": [] }
+#     }
+#   }
+
+
+@router.get("/users/{user_id}/module-config", response_model=dict,
+            dependencies=[Depends(_require_admin)])
+async def get_user_module_config(user_id: str, request: Request) -> dict:
+    """Retorna o module_config completo do usuário."""
+    pool = _get_pool(request)
+    # Verifica existência
+    existing = await db_mod.get_user_by_id(pool, user_id)
+    if not existing:
+        raise HTTPException(status_code=404, detail="User not found")
+    cfg = await db_mod.get_user_module_config(pool, user_id)
+    return cfg
+
+
+@router.put("/users/{user_id}/module-config", response_model=dict,
+            dependencies=[Depends(_require_admin)])
+async def set_user_module_config(user_id: str, body: dict, request: Request) -> dict:
+    """
+    Substitui todo o module_config do usuário.
+    Valida cada módulo presente contra o schema registrado em auth.module_registry.
+    Retorna 422 se houver violações de schema.
+    """
+    pool = _get_pool(request)
+    existing = await db_mod.get_user_by_id(pool, user_id)
+    if not existing:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    # Valida cada módulo contra o schema registrado
+    all_errors: list[str] = []
+    for module_id, module_data in body.items():
+        mod_row = await db_mod.get_module(pool, module_id)
+        if not mod_row:
+            all_errors.append(f"Módulo '{module_id}' não encontrado no registro")
+            continue
+        import json as _json
+        schema = mod_row.get("schema") or {}
+        if isinstance(schema, str):
+            schema = _json.loads(schema)
+        errs = db_mod.validate_module_config(
+            {"permission_schema": schema},
+            module_data if isinstance(module_data, dict) else {},
+        )
+        all_errors.extend([f"[{module_id}] {e}" for e in errs])
+
+    if all_errors:
+        raise HTTPException(
+            status_code=422,
+            detail={"errors": all_errors},
+        )
+
+    ok = await db_mod.set_user_module_config(pool, user_id, body)
+    if not ok:
+        raise HTTPException(status_code=404, detail="User not found")
+    return await db_mod.get_user_module_config(pool, user_id)
+
+
+@router.patch("/users/{user_id}/module-config/{module_id}", response_model=dict,
+              dependencies=[Depends(_require_admin)])
+async def patch_user_module_config(
+    user_id: str,
+    module_id: str,
+    body: dict,
+    request: Request,
+) -> dict:
+    """
+    Atualiza a config de um módulo específico do usuário sem sobrescrever os outros módulos.
+    Valida contra o schema do módulo antes de persistir.
+    """
+    pool = _get_pool(request)
+
+    # Verifica existência do usuário
+    existing = await db_mod.get_user_by_id(pool, user_id)
+    if not existing:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    # Verifica existência do módulo e valida
+    mod_row = await db_mod.get_module(pool, module_id)
+    if not mod_row:
+        raise HTTPException(status_code=404, detail=f"Module '{module_id}' not found")
+
+    import json as _json
+    schema = mod_row.get("schema") or {}
+    if isinstance(schema, str):
+        schema = _json.loads(schema)
+
+    errors = db_mod.validate_module_config(
+        {"permission_schema": schema},
+        body if isinstance(body, dict) else {},
+    )
+    if errors:
+        raise HTTPException(status_code=422, detail={"errors": errors})
+
+    row = await db_mod.patch_user_module_config(pool, user_id, module_id, body)
+    if not row:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    # Retorna apenas a config do módulo atualizado
+    import json as _json2  # noqa: F811
+    cfg = row.get("module_config") or {}
+    if isinstance(cfg, str):
+        cfg = _json2.loads(cfg)
+    return cfg.get(module_id, {})

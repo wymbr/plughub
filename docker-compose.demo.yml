@@ -24,11 +24,11 @@
 # │    http://localhost:5173/webchat-test.html                                │
 # │                                                                             │
 # │  Observabilidade                                                            │
-# │    Kafdrop  (Kafka UI):         http://localhost:9001                     │
+# │    Kafdrop  (Kafka UI):         http://localhost:9002                     │
 # │    Redis Commander (Redis UI):  http://localhost:8081                     │
 # │                                                                             │
 # │  APIs diretas (para debug)                                                 │
-# │    auth-api:        http://localhost:3200/health                          │
+# │    auth-api:        http://localhost:3202/health                          │
 # │    evaluation-api:  http://localhost:3400/health                          │
 # │    knowledge-api:   http://localhost:3401/health                          │
 # │    pricing-api:     http://localhost:3900/health                          │
@@ -98,7 +98,7 @@ volumes:
 # │    http://localhost:5174/skill-flows      ← Editor Monaco de skills      │
 # │                                                                            │
 # │  Observabilidade                                                           │
-# │    Kafdrop (Kafka UI):         http://localhost:9001                      │
+# │    Kafdrop  (Kafka UI):         http://localhost:9002                      │
 # │    Redis Commander (Redis UI): http://localhost:8081                      │
 # └────────────────────────────────────────────────────────────────────────────┘
 #
@@ -145,7 +145,7 @@ services:
       - plughub-demo
 
   postgres:
-    image: postgres:16-alpine
+    image: pgvector/pgvector:pg16
     ports:
       - "5433:5432"   # 5432 pode estar em uso pela infra existente
     environment:
@@ -154,6 +154,9 @@ services:
       POSTGRES_PASSWORD: plughub
     volumes:
       - postgres-data:/var/lib/postgresql/data
+      # Init scripts run automatically on first start (empty data volume).
+      # 01_platform_config.sql creates the platform_config table that config-api needs.
+      - ./infra/demo/initdb:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U plughub -d plughub_demo"]
       interval: 5s
@@ -229,6 +232,7 @@ services:
           config.changed
           evaluation.events
           usage.events
+          usage.cycle_reset
           sentiment.updated
           workflow.events
           calendar.events
@@ -368,6 +372,10 @@ services:
     depends_on:
       redis:
         condition: service_healthy
+      kafka:
+        condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
     healthcheck:
       test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:3201/rules?tenant_id=health_probe', timeout=3)\" 2>/dev/null && echo ok || exit 1"]
       interval: 10s
@@ -436,6 +444,8 @@ services:
     depends_on:
       kafka:
         condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
       redis:
         condition: service_healthy
       postgres:
@@ -483,7 +493,7 @@ services:
       context: packages/auth-api
       dockerfile: Dockerfile
     ports:
-      - "3200:3200"
+      - "3202:3200"
     environment:
       PLUGHUB_AUTH_DATABASE_URL:        postgresql://plughub:plughub@postgres:5432/plughub_demo
       PLUGHUB_AUTH_JWT_SECRET:          changeme_auth_jwt_secret_demo_32c
@@ -495,7 +505,7 @@ services:
       postgres:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost:3200/health 2>/dev/null | grep -q ok"]
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request; r=urllib.request.urlopen('http://localhost:3200/health', timeout=3); assert b'ok' in r.read()\""]
       interval: 10s
       timeout: 5s
       retries: 10
@@ -561,37 +571,6 @@ services:
     networks:
       - plughub-demo
 
-  # One-shot init container: creates platform_config table before config-api starts.
-  # Uses the postgres:16-alpine image (psql already available — no Python/asyncpg needed).
-  config-db-init:
-    image: postgres:16-alpine
-    environment:
-      PGPASSWORD: plughub
-    command:
-      - sh
-      - -c
-      - |
-        echo "Creating platform_config schema..."
-        psql -h postgres -U plughub -d plughub_demo -v ON_ERROR_STOP=1 -c "
-          CREATE TABLE IF NOT EXISTS platform_config (
-            id          SERIAL PRIMARY KEY,
-            tenant_id   TEXT        NOT NULL DEFAULT '__global__',
-            namespace   TEXT        NOT NULL,
-            key         TEXT        NOT NULL,
-            value       JSONB       NOT NULL,
-            description TEXT        NOT NULL DEFAULT '',
-            updated_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
-            CONSTRAINT uq_platform_config UNIQUE (tenant_id, namespace, key)
-          );
-          CREATE INDEX IF NOT EXISTS idx_platform_config_lookup
-            ON platform_config (tenant_id, namespace, key);
-        " && echo "platform_config schema ready."
-    depends_on:
-      postgres:
-        condition: service_healthy
-    restart: on-failure
-    networks:
-      - plughub-demo
 
   config-api:
     build:
@@ -605,8 +584,6 @@ services:
       PLUGHUB_CONFIG_ADMIN_TOKEN:   demo_config_admin_token
       PLUGHUB_CONFIG_KAFKA_BROKERS: kafka:29092
     depends_on:
-      config-db-init:
-        condition: service_completed_successfully
       kafka:
         condition: service_healthy
       kafka-init:
@@ -616,11 +593,11 @@ services:
       redis:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:3600/v1/health', timeout=3)\" 2>/dev/null && echo ok || exit 1"]
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:3600/v1/health', timeout=5)\" 2>/dev/null && echo ok || exit 1"]
       interval: 10s
-      timeout: 5s
-      retries: 10
-      start_period: 30s
+      timeout: 8s
+      retries: 15
+      start_period: 60s
     restart: on-failure
     networks:
       - plughub-demo
@@ -974,7 +951,7 @@ services:
       config-api:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost:5174/ > /dev/null 2>&1"]
+      test: ["CMD-SHELL", "kill -0 1"]
       interval: 15s
       timeout: 5s
       retries: 10
@@ -1011,11 +988,11 @@ services:
 # Observability
 # ─────────────────────────────────────────────────────────────────────────────
 
-  # Kafdrop — Kafka UI. Acesse: http://localhost:9001
+  # Kafdrop  (Kafka UI):         http://localhost:9002
   kafdrop:
     image: obsidiandynamics/kafdrop:4.0.2
     ports:
-      - "9001:9000"   # 9000 pode estar em uso pela infra existente
+      - "9002:9000"   # 9000/9001 podem estar em uso pela infra existente
     environment:
       KAFKA_BROKERCONNECT: kafka:29092
       JVM_OPTS: "-Xms32M -Xmx64M"
@@ -1023,6 +1000,7 @@ services:
     depends_on:
       kafka:
         condition: service_healthy
+    restart: on-failure
     networks:
       - plughub-demo
 

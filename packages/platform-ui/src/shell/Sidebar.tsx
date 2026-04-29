@@ -2,12 +2,17 @@ import React, { useState } from 'react'
 import { Link, useLocation } from 'react-router-dom'
 import { useAuth } from '@/auth/useAuth'
 import { useTranslation } from 'react-i18next'
+import { makePermissions } from '@/lib/permissions'
 
 interface NavItem {
   label: string
   href: string
   icon: string
   roles?: string[]
+  /** ABAC gate: show this item only when can(module, field) is true.
+   *  Evaluated after roles. If omitted, no ABAC check is applied.
+   *  Items without any moduleConfig default to showing (graceful degradation). */
+  abac?: { module: string; field: string }
   children?: NavItem[]
 }
 
@@ -36,7 +41,8 @@ const Sidebar: React.FC = () => {
       icon: '📞',
       roles: ['operator', 'supervisor', 'admin'],
       children: [
-        { label: t('nav.monitor'), href: '/monitor', icon: '📊' },
+        { label: t('nav.contatos'),    href: '/contacts',     icon: '📋' },
+        { label: t('nav.monitor'),     href: '/monitor',      icon: '📊' },
         { label: t('nav.agentAssist'), href: '/agent-assist', icon: '🤖' }
       ]
     },
@@ -52,13 +58,11 @@ const Sidebar: React.FC = () => {
       icon: '✓',
       roles: ['operator', 'supervisor', 'admin'],
       children: [
-        { label: t('nav.eval.forms'),         href: '/evaluation/forms',          icon: '📝', roles: ['admin'] },
-        { label: t('nav.eval.campaigns'),      href: '/evaluation/campaigns',      icon: '📋', roles: ['supervisor', 'admin'] },
+        { label: t('nav.eval.forms'),         href: '/evaluation/forms',          icon: '📝', roles: ['admin'],                              abac: { module: 'evaluation', field: 'formularios' } },
+        { label: t('nav.eval.campaigns'),      href: '/evaluation/campaigns',      icon: '📋', roles: ['supervisor', 'admin'],                abac: { module: 'evaluation', field: 'formularios' } },
         { label: t('nav.eval.knowledge'),      href: '/evaluation/knowledge',      icon: '📚', roles: ['admin'] },
-        { label: t('nav.eval.review'),         href: '/evaluation/review',         icon: '🔍', roles: ['supervisor', 'admin'] },
-        { label: t('nav.eval.myEvaluations'),  href: '/evaluation/my-evaluations', icon: '👤', roles: ['operator', 'supervisor', 'admin'] },
-        { label: t('nav.eval.reports'),        href: '/evaluation/reports',        icon: '📊', roles: ['supervisor', 'admin', 'business'] },
-        { label: t('nav.eval.permissions'),    href: '/evaluation/permissions',    icon: '🔐', roles: ['admin'] },
+        { label: t('nav.eval.avaliacoes'),      href: '/evaluation/avaliacoes',     icon: '🗂️', roles: ['operator', 'supervisor', 'admin'] },
+        { label: t('nav.eval.reports'),        href: '/evaluation/reports',        icon: '📊', roles: ['supervisor', 'admin', 'business'],    abac: { module: 'evaluation', field: 'relatorio' } },
       ]
     },
     {
@@ -107,7 +111,20 @@ const Sidebar: React.FC = () => {
 
   const isActive = (href: string) => location.pathname === href || location.pathname.startsWith(href + '/')
 
-  const filteredItems = navItems.filter(item => !item.roles || item.roles.includes(session?.role || ''))
+  const perms = makePermissions(session?.moduleConfig)
+
+  /** Returns true if the item passes its ABAC gate (or has no gate). */
+  function passesAbac(item: NavItem): boolean {
+    if (!item.abac) return true
+    // Graceful degradation: if the user has no moduleConfig at all, fall back
+    // to role-based filtering only (backward-compatible with legacy accounts).
+    if (!session?.moduleConfig || Object.keys(session.moduleConfig).length === 0) return true
+    return perms.can(item.abac.module, item.abac.field)
+  }
+
+  const filteredItems = navItems.filter(item =>
+    (!item.roles || item.roles.includes(session?.role || '')) && passesAbac(item)
+  )
 
   const renderNavItem = (item: NavItem, depth: number = 0) => {
     const hasChildren = item.children && item.children.length > 0
@@ -136,7 +153,9 @@ const Sidebar: React.FC = () => {
           {isExpanded && (
             <div className="border-t border-white/10 mt-1 pt-1">
               {item.children
-                ?.filter(child => !child.roles || child.roles.includes(session?.role || ''))
+                ?.filter(child =>
+                  (!child.roles || child.roles.includes(session?.role || '')) && passesAbac(child)
+                )
                 .map(child => renderNavItem(child, depth + 1))}
             </div>
           )}

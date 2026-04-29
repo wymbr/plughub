@@ -133,7 +133,13 @@ async def query_sessions_report(
     outcome:          str | None       = None,
     close_reason:     str | None       = None,
     pool_id:          str | None       = None,
+    session_id:       str | None       = None,
+    agent_id:         str | None       = None,
+    insight_category: str | None       = None,
+    insight_tags:     list[str] | None = None,
     accessible_pools: list[str] | None = None,
+    ani:              str | None       = None,
+    dnis:             str | None       = None,
     page:      int = 1,
     page_size: int = 100,
 ) -> dict:
@@ -144,7 +150,9 @@ async def query_sessions_report(
     try:
         return await asyncio.to_thread(
             _fetch_sessions, client, database, tenant_id, since, until,
-            channel, outcome, close_reason, pool_id, accessible_pools, page, page_size,
+            channel, outcome, close_reason, pool_id, session_id,
+            agent_id, insight_category, insight_tags, accessible_pools, page, page_size,
+            ani, dnis,
         )
     except Exception as exc:
         logger.warning("query_sessions_report failed tenant=%s: %s", tenant_id, exc)
@@ -155,43 +163,196 @@ def _fetch_sessions(
     client: Any, db: str, tenant_id: str,
     since: str, until: str,
     channel: str | None, outcome: str | None, close_reason: str | None, pool_id: str | None,
+    session_id: str | None, agent_id: str | None,
+    insight_category: str | None, insight_tags: list[str] | None,
     accessible_pools: list[str] | None,
     page: int, page_size: int,
+    ani: str | None = None, dnis: str | None = None,
 ) -> dict:
     conditions = [
-        "tenant_id = {tenant_id:String}",
-        f"opened_at >= '{since}'",
-        f"opened_at < '{until}'",
+        "s.tenant_id = {tenant_id:String}",
+        f"s.opened_at >= '{since}'",
+        f"s.opened_at < '{until}'",
     ]
     params: dict = {"tenant_id": tenant_id}
 
+    if session_id:
+        conditions.append("s.session_id = {session_id:String}")
+        params["session_id"] = session_id
     if channel:
-        conditions.append("channel = {channel:String}")
+        conditions.append("s.channel = {channel:String}")
         params["channel"] = channel
     if outcome:
-        conditions.append("outcome = {outcome:String}")
+        conditions.append("s.outcome = {outcome:String}")
         params["outcome"] = outcome
     if close_reason:
-        conditions.append("close_reason = {close_reason:String}")
+        conditions.append("s.close_reason = {close_reason:String}")
         params["close_reason"] = close_reason
     if pool_id:
-        conditions.append("pool_id = {pool_id:String}")
+        # pool_id changes per segment (routing + specialists + conference).
+        # Query via segments to find any session where ANY segment belonged to this pool.
+        conditions.append(
+            f"s.session_id IN (SELECT session_id FROM {db}.segments FINAL"
+            " WHERE tenant_id = {tenant_id:String} AND pool_id = {pool_id:String})"
+        )
         params["pool_id"] = pool_id
-    _apply_pool_scope(conditions, accessible_pools)
+
+    # Pool-scope access filter (Arc 7c) — inline pool_id list (safe, values from JWT)
+    if accessible_pools:
+        pool_list = ", ".join(f"'{p}'" for p in accessible_pools)
+        conditions.append(f"s.pool_id IN ({pool_list})")
+    # accessible_pools=None → no restriction; accessible_pools=[] → short-circuit in async wrapper
+
+    # agent_id filter — requires subquery against segments table
+    if agent_id:
+        conditions.append(
+            f"s.session_id IN (SELECT session_id FROM {db}.segments FINAL"
+            " WHERE tenant_id = {{tenant_id:String}} AND participant_id = {{agent_id:String}})"
+        )
+        params["agent_id"] = agent_id
+
+    # insight_category filter — requires subquery against contact_insights table
+    if insight_category:
+        conditions.append(
+            f"s.session_id IN (SELECT session_id FROM {db}.contact_insights FINAL"
+            " WHERE tenant_id = {{tenant_id:String}} AND category = {{insight_category:String}})"
+        )
+        params["insight_category"] = insight_category
+
+    # insight_tags filter — each tag must be present (AND semantics)
+    if insight_tags:
+        for i, tag in enumerate(insight_tags):
+            tag_key = f"insight_tag_{i}"
+            conditions.append(
+                f"s.session_id IN (SELECT session_id FROM {db}.contact_insights FINAL"
+                f" WHERE tenant_id = {{tenant_id:String}} AND has(tags, {{{tag_key}:String}}))"
+            )
+            params[tag_key] = tag
+
+    # ANI/DNIS filters — partial match (LIKE) for usability
+    if ani:
+        conditions.append("s.ani LIKE {ani_like:String}")
+        params["ani_like"] = f"%{ani}%"
+    if dnis:
+        conditions.append("s.dnis LIKE {dnis_like:String}")
+        params["dnis_like"] = f"%{dnis}%"
 
     where = " AND ".join(conditions)
     offset = (page - 1) * page_size
 
-    total = _count(client, f"SELECT count() FROM {db}.sessions FINAL WHERE {where}", params)
+    total = _count(
+        client,
+        f"SELECT count() FROM {db}.sessions AS s FINAL WHERE {where}",
+        params,
+    )
+
+    # Use correlated subquery for segment_count — avoids dependency on v_segment_summary MV
+    # Falls back to 0 when segments table doesn't exist yet (try/except handled in caller).
+    try:
+        result = client.query(f"""
+            SELECT
+                s.session_id, s.tenant_id, s.channel, s.pool_id, s.customer_id,
+                s.opened_at, s.closed_at, s.close_reason, s.outcome,
+                s.wait_time_ms, s.handle_time_ms,
+                s.ani, s.dnis,
+                (
+                    SELECT count()
+                    FROM {db}.segments FINAL
+                    WHERE tenant_id = s.tenant_id AND session_id = s.session_id
+                ) AS segment_count
+            FROM {db}.sessions AS s FINAL
+            WHERE {where}
+            ORDER BY s.opened_at DESC
+            LIMIT {page_size} OFFSET {offset}
+        """, parameters=params)
+    except Exception:
+        # Fallback: segments table or ANI/DNIS columns may not exist yet
+        result = client.query(f"""
+            SELECT
+                s.session_id, s.tenant_id, s.channel, s.pool_id, s.customer_id,
+                s.opened_at, s.closed_at, s.close_reason, s.outcome,
+                s.wait_time_ms, s.handle_time_ms,
+                NULL AS ani, NULL AS dnis,
+                0 AS segment_count
+            FROM {db}.sessions AS s FINAL
+            WHERE {where}
+            ORDER BY s.opened_at DESC
+            LIMIT {page_size} OFFSET {offset}
+        """, parameters=params)
+
+    return {"data": _rows_to_dicts(result), "meta": _meta(page, page_size, total, since, until)}
+
+
+# ─── /reports/contact-insights ────────────────────────────────────────────────
+
+async def query_contact_insights_report(
+    client:    Any,
+    database:  str,
+    tenant_id: str,
+    from_dt:   str | None = None,
+    to_dt:     str | None = None,
+    *,
+    session_id:  str | None       = None,
+    category:    str | None       = None,
+    tags:        list[str] | None = None,
+    insight_type: str | None      = None,
+    page:      int = 1,
+    page_size: int = 100,
+) -> dict:
+    since = _ch_fmt(from_dt) if from_dt else _default_from()
+    until = _ch_fmt(to_dt)   if to_dt   else _default_to()
+    try:
+        return await asyncio.to_thread(
+            _fetch_contact_insights, client, database, tenant_id, since, until,
+            session_id, category, tags, insight_type, page, page_size,
+        )
+    except Exception as exc:
+        logger.warning("query_contact_insights_report failed tenant=%s: %s", tenant_id, exc)
+        return {"data": [], "meta": _meta(page, page_size, 0, since, until), "error": "data_unavailable"}
+
+
+def _fetch_contact_insights(
+    client: Any, db: str, tenant_id: str,
+    since: str, until: str,
+    session_id: str | None, category: str | None,
+    tags: list[str] | None, insight_type: str | None,
+    page: int, page_size: int,
+) -> dict:
+    conditions = [
+        "tenant_id = {tenant_id:String}",
+        f"timestamp >= '{since}'",
+        f"timestamp < '{until}'",
+    ]
+    params: dict = {"tenant_id": tenant_id}
+
+    if session_id:
+        conditions.append("session_id = {session_id:String}")
+        params["session_id"] = session_id
+    if category:
+        conditions.append("category = {category:String}")
+        params["category"] = category
+    if insight_type:
+        conditions.append("insight_type = {insight_type:String}")
+        params["insight_type"] = insight_type
+    if tags:
+        for i, tag in enumerate(tags):
+            tag_key = f"tag_{i}"
+            conditions.append(f"has(tags, {{{tag_key}:String}})")
+            params[tag_key] = tag
+
+    where = " AND ".join(conditions)
+    offset = (page - 1) * page_size
+
+    total = _count(client, f"SELECT count() FROM {db}.contact_insights FINAL WHERE {where}", params)
 
     result = client.query(f"""
         SELECT
-            session_id, tenant_id, channel, pool_id,
-            opened_at, closed_at, close_reason, outcome,
-            wait_time_ms, handle_time_ms
-        FROM {db}.sessions FINAL
+            insight_id, tenant_id, session_id,
+            insight_type, category, value, tags,
+            agent_id, timestamp
+        FROM {db}.contact_insights FINAL
         WHERE {where}
-        ORDER BY opened_at DESC
+        ORDER BY timestamp DESC
         LIMIT {page_size} OFFSET {offset}
     """, parameters=params)
 

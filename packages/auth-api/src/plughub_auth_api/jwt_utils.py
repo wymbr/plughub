@@ -9,6 +9,8 @@ Claims do access token:
   name             — nome de exibição
   roles            — lista de roles (operator | supervisor | admin | developer | business)
   accessible_pools — lista de pool_ids; [] = acesso a todos os pools
+  module_config    — config ABAC por módulo (ver infra/modules.yaml)
+                     ex: { "evaluation": { "contestar": { "access": "read_write", "scope": [] } } }
   exp / iat        — padrão JWT
 """
 from __future__ import annotations
@@ -35,6 +37,7 @@ def create_access_token(
     roles: list[str],
     accessible_pools: list[str],
     settings: Settings,
+    module_config: dict[str, Any] | None = None,
 ) -> str:
     expire = _now() + timedelta(minutes=settings.access_token_expire_minutes)
     payload: dict[str, Any] = {
@@ -44,6 +47,7 @@ def create_access_token(
         "name":             name,
         "roles":            roles,
         "accessible_pools": accessible_pools,
+        "module_config":    module_config or {},
         "iat":              _now(),
         "exp":              expire,
     }

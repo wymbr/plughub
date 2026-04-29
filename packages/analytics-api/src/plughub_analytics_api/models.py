@@ -17,6 +17,7 @@ Topics consumed:
   workflow.events            → workflow_events (lifecycle)
   collect.events             → collect_events (lifecycle)
   conversations.participants → participation_intervals (participant joined / left)
+  evaluation.events          → evaluation_results + evaluation_events (Arc 6)
 """
 from __future__ import annotations
 
@@ -45,6 +46,16 @@ def parse_inbound(payload: dict[str, Any]) -> dict | None:
     if not session_id or not tenant_id:
         return None
 
+    # ANI/DNIS — source/destination identifiers, channel-agnostic:
+    #   voice:     ANI = caller number, DNIS = dialed number
+    #   whatsapp:  ANI = sender number, DNIS = business number
+    #   email:     ANI = from address, DNIS = to address
+    meta = payload.get("metadata") or payload.get("channel_metadata") or {}
+    ani  = (payload.get("ani") or payload.get("caller_id") or payload.get("from")
+            or meta.get("ani") or meta.get("caller_id") or meta.get("from") or None)
+    dnis = (payload.get("dnis") or payload.get("dialed_number") or payload.get("to")
+            or meta.get("dnis") or meta.get("dialed_number") or meta.get("to") or None)
+
     return {
         "table":        "sessions",
         "session_id":   session_id,
@@ -59,6 +70,8 @@ def parse_inbound(payload: dict[str, Any]) -> dict | None:
         "wait_time_ms":   None,
         "handle_time_ms": None,
         "timestamp":    payload.get("started_at") or _now(),
+        "ani":          ani,
+        "dnis":         dnis,
     }
 
 
@@ -216,6 +229,26 @@ def parse_conversations_event(payload: dict[str, Any]) -> list[dict] | None:
                 "channel":      payload.get("channel", ""),
                 "content_type": payload.get("content_type") or "",
                 "visibility":   payload.get("visibility") or "all",
+                "timestamp":    payload.get("timestamp") or _now(),
+            }
+        ]
+
+    # Business events from insight_register MCP tool (insight.registered, insight.historico.*, etc.)
+    if event_type and event_type.startswith("insight."):
+        import uuid as _uuid
+        insight_type = event_type  # e.g. "insight.registered" or "insight.historico.cancelamento"
+        data = payload.get("data") or payload.get("insight") or payload
+        return [
+            {
+                "table":        "contact_insights",
+                "insight_id":   payload.get("insight_id") or str(_uuid.uuid4()),
+                "tenant_id":    tenant_id,
+                "session_id":   session_id,
+                "insight_type": insight_type,
+                "category":     data.get("category") or payload.get("category") or "",
+                "value":        str(data.get("value") or payload.get("value") or ""),
+                "tags":         data.get("tags") or payload.get("tags") or [],
+                "agent_id":     payload.get("agent_id") or payload.get("instance_id") or None,
                 "timestamp":    payload.get("timestamp") or _now(),
             }
         ]
@@ -476,3 +509,82 @@ def parse_participant_event(payload: dict[str, Any]) -> list[dict] | None:
     }
 
     return [participation_row, segment_row]
+
+
+# ─── evaluation.events (Arc 6) ────────────────────────────────────────────────
+
+# Maps evaluation event_type → status stored in evaluation_events.eval_status
+_EVAL_EVENT_STATUS_MAP = {
+    "evaluation.submitted":  "submitted",
+    "evaluation.reviewed":   None,          # actual status in payload (approved/rejected/etc.)
+    "evaluation.contested":  "contested",
+    "evaluation.locked":     "locked",
+}
+
+
+def parse_evaluation_event(payload: dict[str, Any]) -> list[dict] | None:
+    """
+    Maps evaluation.* events to two tables:
+      - evaluation_results  — upserts the latest status of the result
+      - evaluation_events   — append-only lifecycle event log
+
+    Recognised event_type values:
+      evaluation.submitted  → new EvaluationResult written by agente_avaliacao_v1
+      evaluation.reviewed   → supervisor approved/adjusted/rejected
+      evaluation.contested  → agent submitted contestation
+      evaluation.locked     → result permanently locked
+    """
+    event_type = payload.get("event_type")
+    tenant_id  = payload.get("tenant_id")
+    result_id  = payload.get("result_id")
+
+    if not event_type or not tenant_id or not result_id:
+        return None
+
+    ts         = payload.get("timestamp") or _now()
+    session_id = payload.get("session_id") or ""
+    instance_id = payload.get("instance_id") or ""
+    campaign_id = payload.get("campaign_id") or None
+    overall_score = payload.get("overall_score")
+    eval_status = payload.get("eval_status") or _EVAL_EVENT_STATUS_MAP.get(event_type, event_type)
+    locked = 1 if payload.get("locked") or event_type == "evaluation.locked" else 0
+    compliance_flags = payload.get("compliance_flags") or []
+    actor_id = (
+        payload.get("reviewed_by")
+        or payload.get("contested_by")
+        or payload.get("evaluator_id")
+        or None
+    )
+
+    result_row = {
+        "table":           "evaluation_results",
+        "result_id":       result_id,
+        "instance_id":     instance_id,
+        "session_id":      session_id,
+        "tenant_id":       tenant_id,
+        "evaluator_id":    payload.get("evaluator_id") or "",
+        "form_id":         payload.get("form_id") or "",
+        "campaign_id":     campaign_id,
+        "overall_score":   float(overall_score) if overall_score is not None else 0.0,
+        "eval_status":     eval_status or "submitted",
+        "locked":          locked,
+        "compliance_flags": list(compliance_flags),
+        "timestamp":       ts,
+    }
+
+    event_row = {
+        "table":         "evaluation_events",
+        "event_id":      _gen_id(),
+        "tenant_id":     tenant_id,
+        "result_id":     result_id,
+        "instance_id":   instance_id,
+        "session_id":    session_id,
+        "campaign_id":   campaign_id,
+        "event_type":    event_type,
+        "eval_status":   eval_status,
+        "overall_score": float(overall_score) if overall_score is not None else None,
+        "actor_id":      actor_id,
+        "timestamp":     ts,
+    }
+
+    return [result_row, event_row]
