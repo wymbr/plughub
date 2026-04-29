@@ -20,6 +20,35 @@ RUN printf 'server {\n\
     root /usr/share/nginx/html;\n\
     index index.html;\n\
 \n\
+    # auth-api (Arc 7a)\n\
+    location ~ ^/auth(/|$) {\n\
+        proxy_pass         http://auth-api:3200;\n\
+        proxy_http_version 1.1;\n\
+        proxy_set_header   Host $host;\n\
+        proxy_buffering    off;\n\
+        proxy_read_timeout 30s;\n\
+    }\n\
+\n\
+    # mcp-server-plughub (agent WebSocket)\n\
+    location ~ ^/agent-ws(/|$) {\n\
+        proxy_pass         http://mcp-server-plughub:3100;\n\
+        proxy_http_version 1.1;\n\
+        proxy_set_header   Upgrade $http_upgrade;\n\
+        proxy_set_header   Connection "upgrade";\n\
+        proxy_set_header   Host $host;\n\
+        proxy_buffering    off;\n\
+        proxy_read_timeout 3600s;\n\
+    }\n\
+\n\
+    # mcp-server-plughub (REST /api)\n\
+    location ~ ^/api(/|$) {\n\
+        proxy_pass         http://mcp-server-plughub:3100;\n\
+        proxy_http_version 1.1;\n\
+        proxy_set_header   Host $host;\n\
+        proxy_buffering    off;\n\
+        proxy_read_timeout 60s;\n\
+    }\n\
+\n\
     # workflow-api — must come before generic /v1 rule\n\
     location ~ ^/v1/workflow(/|$) {\n\
         proxy_pass         http://workflow-api:3800;\n\
@@ -27,6 +56,33 @@ RUN printf 'server {\n\
         proxy_set_header   Host $host;\n\
         proxy_buffering    off;\n\
         proxy_read_timeout 300s;\n\
+    }\n\
+\n\
+    # evaluation-api (Arc 6) — before generic /v1\n\
+    location ~ ^/v1/evaluation(/|$) {\n\
+        proxy_pass         http://evaluation-api:3400;\n\
+        proxy_http_version 1.1;\n\
+        proxy_set_header   Host $host;\n\
+        proxy_buffering    off;\n\
+        proxy_read_timeout 60s;\n\
+    }\n\
+\n\
+    # mcp-server-knowledge (Arc 6 RAG) — before generic /v1\n\
+    location ~ ^/v1/knowledge(/|$) {\n\
+        proxy_pass         http://mcp-server-knowledge:3401;\n\
+        proxy_http_version 1.1;\n\
+        proxy_set_header   Host $host;\n\
+        proxy_buffering    off;\n\
+        proxy_read_timeout 60s;\n\
+    }\n\
+\n\
+    # pricing-api (Arc 2) — before generic /v1\n\
+    location ~ ^/v1/pricing(/|$) {\n\
+        proxy_pass         http://pricing-api:3900;\n\
+        proxy_http_version 1.1;\n\
+        proxy_set_header   Host $host;\n\
+        proxy_buffering    off;\n\
+        proxy_read_timeout 60s;\n\
     }\n\
 \n\
     # calendar-api routes\n\
@@ -56,7 +112,7 @@ RUN printf 'server {\n\
         proxy_read_timeout 60s;\n\
     }\n\
 \n\
-    # analytics-api routes\n\
+    # analytics-api (dashboard SSE + reports)\n\
     location ~ ^/(dashboard|sessions|supervisor|reports)(/|$) {\n\
         proxy_pass         http://analytics-api:3500;\n\
         proxy_http_version 1.1;\n\

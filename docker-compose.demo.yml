@@ -1,31 +1,56 @@
 # docker-compose.demo.yml
-# PlugHub Platform — Demo Environment
+# PlugHub Platform — Demo Environment (Arc 2 → Arc 7 completo)
 #
-# Inclui toda a stack de infra e aplicação + ferramentas de observabilidade:
-#   - Kafdrop  → UI do Kafka     http://localhost:9000
-#   - Redis Commander → UI do Redis  http://localhost:8081
-#
-# O runner de testes (e2e-runner) executa automaticamente após todos os serviços
-# estarem prontos e encerra ao finalizar. Sua saída é o relatório da demo.
+# Stack completa: infra + todos os módulos de aplicação + observabilidade
 #
 # Uso:
 #   docker compose -f docker-compose.demo.yml up --build
-#   docker compose -f docker-compose.demo.yml logs -f e2e-runner   # acompanhar saída
-#   docker compose -f docker-compose.demo.yml down -v              # limpar ambiente
+#   docker compose -f docker-compose.demo.yml up --build --scale e2e-runner=0  # sem runner
+#   docker compose -f docker-compose.demo.yml logs -f e2e-runner               # acompanhar testes
+#   docker compose -f docker-compose.demo.yml down -v                          # limpar ambiente
+#
+# ┌─ URLs de acesso ───────────────────────────────────────────────────────────┐
+# │                                                                             │
+# │  ★ Platform UI  (shell unificado — login real via auth-api)                │
+# │    http://localhost:5174/login                                             │
+# │    Login: admin@plughub.local / changeme_admin                            │
+# │    Módulos: Monitor · Agent Assist · Avaliação · Faturamento ·            │
+# │             Config · Skill Flows · Campanhas · Workflows                   │
+# │                                                                             │
+# │  ① Agent Assist UI  (legacy — agente humano direto)                        │
+# │    http://localhost:5173?pool=retencao_humano&agent=agente_humano_v1-001  │
+# │                                                                             │
+# │  ② WebChat cliente  (consumidor final)                                     │
+# │    http://localhost:5173/webchat-test.html                                │
+# │                                                                             │
+# │  Observabilidade                                                            │
+# │    Kafdrop  (Kafka UI):         http://localhost:9001                     │
+# │    Redis Commander (Redis UI):  http://localhost:8081                     │
+# │                                                                             │
+# │  APIs diretas (para debug)                                                 │
+# │    auth-api:        http://localhost:3200/health                          │
+# │    evaluation-api:  http://localhost:3400/health                          │
+# │    knowledge-api:   http://localhost:3401/health                          │
+# │    pricing-api:     http://localhost:3900/health                          │
+# └─────────────────────────────────────────────────────────────────────────────┘
 #
 # Flags do runner (via E2E_EXTRA_ARGS):
-#   E2E_EXTRA_ARGS="--demo"          # todos os cenários 01–14 (padrão)
-#   E2E_EXTRA_ARGS="--only 07"       # apenas cenário 07 (inbound full)
-#   E2E_EXTRA_ARGS="--only 12"       # apenas cenário 12 (webchat)
-#   E2E_EXTRA_ARGS="--only 13"       # apenas cenário 13 (workflow)
-#   E2E_EXTRA_ARGS="--only 14"       # apenas cenário 14 (collect step)
-#   E2E_EXTRA_ARGS="--conference"    # cenários 01–04 + 06
-#   E2E_EXTRA_ARGS="--webchat"       # cenários 01–04 + 12
-#   E2E_EXTRA_ARGS="--workflow"      # cenários 01–04 + 13 + 14
-#   E2E_EXTRA_ARGS="--collect"       # cenários 01–04 + 14
+#   E2E_EXTRA_ARGS="--demo"           # cenários 01–14 (padrão)
+#   E2E_EXTRA_ARGS="--only 07"        # apenas cenário 07 (inbound full)
+#   E2E_EXTRA_ARGS="--only 12"        # apenas cenário 12 (webchat)
+#   E2E_EXTRA_ARGS="--only 13"        # apenas cenário 13 (workflow)
+#   E2E_EXTRA_ARGS="--only 14"        # apenas cenário 14 (collect step)
+#   E2E_EXTRA_ARGS="--conference"     # cenários 01–04 + 06
+#   E2E_EXTRA_ARGS="--webchat"        # cenários 01–04 + 12
+#   E2E_EXTRA_ARGS="--workflow"       # cenários 01–04 + 13 + 14
+#   E2E_EXTRA_ARGS="--evaluation"     # cenários 01–04 + 24 + 25 (Arc 6)
+#   E2E_EXTRA_ARGS="--hooks"          # cenário 22 (pool lifecycle hooks)
+#   E2E_EXTRA_ARGS="--segments"       # cenário 23 (Arc 5 contact segments)
+#   E2E_EXTRA_ARGS="--permissions"    # cenário 27 (Arc 6 v2 permissions)
 #
-# Variáveis de ambiente requeridas (copie .env.demo.example → .env.demo):
-#   ANTHROPIC_API_KEY — necessária apenas se ai-gateway for usado em testes reais
+# Variáveis de ambiente opcionais:
+#   ANTHROPIC_API_KEY — para testes com inferência LLM real (cenários 19, 26)
+#   OPENAI_API_KEY    — para embeddings reais no mcp-server-knowledge
 
 name: plughub-demo
 
@@ -39,29 +64,38 @@ volumes:
   redis-data:
   clickhouse-data:
   attachment-data:
+  minio-data:
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Testes manuais — Agent Assist + Operator Console
+# Testes manuais — roteiro de validação
 # ─────────────────────────────────────────────────────────────────────────────
 #
 # Sobe toda a stack sem o runner de testes:
 #   docker compose -f docker-compose.demo.yml up --build --scale e2e-runner=0
 #
-# ┌─ URLs de acesso ──────────────────────────────────────────────────────────┐
+# ┌─ Roteiro de validação ────────────────────────────────────────────────────┐
 # │                                                                            │
-# │  ① Agent Assist UI  (interface do agente humano)                          │
-# │    http://localhost:5173?pool=retencao_humano&agent=agente_humano_v1-001  │
-# │    http://localhost:5173?pool=sac_ia&agent=agente_humano_v1-001           │
-# │    http://localhost:5173?pool=auth_ia&agent=agente_humano_v1-001          │
+# │  PASSO 1 — Login no Platform UI (shell unificado)                        │
+# │    http://localhost:5174/login                                            │
+# │    Email: admin@plughub.local  Senha: changeme_admin                     │
 # │                                                                            │
-# │  ② WebChat cliente  (página do consumidor final)                          │
-# │    http://localhost:5173/webchat-test.html                                │
-# │    → selecione o pool desejado e clique "Conectar"                        │
+# │  PASSO 2 — Monitor operacional                                            │
+# │    http://localhost:5174/monitor                                          │
+# │    Heatmap de sentimento por pool · métricas 24h · drill-down de sessão  │
 # │                                                                            │
-# │  ③ Operator Console  (supervisão / analytics / config / registry)         │
-# │    http://localhost:4000                                                   │
-# │    Painéis: Heatmap · Workflows · Campaigns · Webhooks · Registry         │
-# │             Skills · Channels · Agents · Config · Pricing                  │
+# │  PASSO 3 — Agent Assist (atendimento humano)                             │
+# │    http://localhost:5173?pool=retencao_humano&agent=agente_humano_v1-001 │
+# │    Webchat do cliente: http://localhost:5173/webchat-test.html            │
+# │                                                                            │
+# │  PASSO 4 — Avaliação de Qualidade (Arc 6)                                │
+# │    http://localhost:5174/evaluation/forms      ← criar formulário        │
+# │    http://localhost:5174/evaluation/campaigns  ← criar campanha          │
+# │    http://localhost:5174/evaluation/review     ← revisar avaliações      │
+# │                                                                            │
+# │  PASSO 5 — Configuração e Billing                                        │
+# │    http://localhost:5174/config/platform  ← Config API por namespace     │
+# │    http://localhost:5174/config/billing   ← Faturamento por capacidade   │
+# │    http://localhost:5174/skill-flows      ← Editor Monaco de skills      │
 # │                                                                            │
 # │  Observabilidade                                                           │
 # │    Kafdrop (Kafka UI):         http://localhost:9001                      │
@@ -251,7 +285,7 @@ services:
       JWT_SECRET: demo_plughub_secret_32chars__
       KAFKA_BROKERS: kafka:29092
       AGENT_REGISTRY_URL: http://agent-registry:3300
-      SKILL_FLOW_URL: http://skill-flow-service:3400
+      SKILL_FLOW_URL: http://skill-flow-service:3460
       PLUGHUB_TENANT_ID: tenant_demo
     depends_on:
       redis:
@@ -364,14 +398,14 @@ services:
     build:
       context: .
       dockerfile: packages/e2e-tests/services/skill-flow-service/Dockerfile
-    ports:
-      - "3400:3400"
+    # Porta interna 3460 — evaluation-api ocupa 3400 externamente
+    # Sem mapeamento externo: somente acessível via rede interna plughub-demo
     environment:
       REDIS_URL: redis://redis:6379
       MCP_SERVER_URL: http://mcp-server-plughub:3100
       MCP_AUTH_URL:   http://mcp-server-auth:3150
       AI_GATEWAY_URL: http://ai-gateway:3200
-      PORT: "3400"
+      PORT: "3460"
       SKILLS_DIR: /app/skills
     depends_on:
       redis:
@@ -381,7 +415,7 @@ services:
       mcp-server-auth:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "node -e \"require('http').get('http://localhost:3400/health',r=>{process.exit(r.statusCode===200?0:1)}).on('error',()=>process.exit(1))\""]
+      test: ["CMD-SHELL", "node -e \"require('http').get('http://localhost:3460/health',r=>{process.exit(r.statusCode===200?0:1)}).on('error',()=>process.exit(1))\""]
       interval: 10s
       timeout: 5s
       retries: 10
@@ -439,6 +473,32 @@ services:
       interval: 15s
       timeout: 5s
       retries: 5
+      start_period: 20s
+    networks:
+      - plughub-demo
+    restart: on-failure
+
+  auth-api:
+    build:
+      context: packages/auth-api
+      dockerfile: Dockerfile
+    ports:
+      - "3200:3200"
+    environment:
+      PLUGHUB_AUTH_DATABASE_URL:        postgresql://plughub:plughub@postgres:5432/plughub_demo
+      PLUGHUB_AUTH_JWT_SECRET:          changeme_auth_jwt_secret_demo_32c
+      PLUGHUB_AUTH_ADMIN_TOKEN:         changeme_auth_admin_token_demo
+      PLUGHUB_AUTH_SEED_ADMIN_EMAIL:    admin@plughub.local
+      PLUGHUB_AUTH_SEED_ADMIN_PASSWORD: changeme_admin
+      PLUGHUB_AUTH_SEED_TENANT_ID:      tenant_demo
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:3200/health 2>/dev/null | grep -q ok"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
       start_period: 20s
     networks:
       - plughub-demo
@@ -625,6 +685,42 @@ services:
     networks:
       - plughub-demo
 
+  # ─── MinIO — S3-compatible object storage (sem custo, roda localmente) ────────
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    ports:
+      - "9000:9000"   # S3 API
+      - "9001:9001"   # Console web → http://localhost:9001 (plughub / plughub123)
+    environment:
+      MINIO_ROOT_USER:     plughub
+      MINIO_ROOT_PASSWORD: plughub123
+    volumes:
+      - minio-data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - plughub-demo
+
+  minio-init:
+    image: minio/mc:latest
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+        mc alias set local http://minio:9000 plughub plughub123 &&
+        mc mb --ignore-existing local/plughub-attachments &&
+        echo 'MinIO bucket plughub-attachments criado.' &&
+        exit 0
+      "
+    networks:
+      - plughub-demo
+
   channel-gateway:
     build:
       context: .
@@ -632,21 +728,25 @@ services:
     ports:
       - "8010:8010"
     environment:
-      PLUGHUB_KAFKA_BROKERS:            kafka:29092
-      PLUGHUB_REDIS_URL:                redis://redis:6379
-      PLUGHUB_JWT_SECRET:               changeme_32chars_webchat_secret!
-      PLUGHUB_WS_AUTH_TIMEOUT_S:        "30"
-      PLUGHUB_STORAGE_ROOT:             /var/plughub/attachments
-      PLUGHUB_ATTACHMENT_EXPIRY_DAYS:   "7"
-      PLUGHUB_DATABASE_URL:             postgresql://plughub:plughub@postgres:5432/plughub_demo
-      PLUGHUB_WEBCHAT_SERVING_BASE_URL: http://localhost:8010/webchat/v1/attachments
-      PLUGHUB_WEBCHAT_UPLOAD_BASE_URL:  http://localhost:8010/webchat/v1/upload
-      PLUGHUB_TENANT_ID:                tenant_demo
-      PLUGHUB_KAFKA_TOPIC_INBOUND:      conversations.inbound
-      PLUGHUB_KAFKA_TOPIC_OUTBOUND:     conversations.outbound
-      PLUGHUB_KAFKA_TOPIC_EVENTS:       conversations.events
-    volumes:
-      - attachment-data:/var/plughub/attachments
+      PLUGHUB_KAFKA_BROKERS:              kafka:29092
+      PLUGHUB_REDIS_URL:                  redis://redis:6379
+      PLUGHUB_JWT_SECRET:                 changeme_32chars_webchat_secret!
+      PLUGHUB_WS_AUTH_TIMEOUT_S:          "30"
+      PLUGHUB_ATTACHMENT_EXPIRY_DAYS:     "7"
+      PLUGHUB_DATABASE_URL:               postgresql://plughub:plughub@postgres:5432/plughub_demo
+      PLUGHUB_WEBCHAT_SERVING_BASE_URL:   http://localhost:8010/webchat/v1/attachments
+      PLUGHUB_WEBCHAT_UPLOAD_BASE_URL:    http://localhost:8010/webchat/v1/upload
+      PLUGHUB_TENANT_ID:                  tenant_demo
+      PLUGHUB_KAFKA_TOPIC_INBOUND:        conversations.inbound
+      PLUGHUB_KAFKA_TOPIC_OUTBOUND:       conversations.outbound
+      PLUGHUB_KAFKA_TOPIC_EVENTS:         conversations.events
+      # S3/MinIO storage backend (fase 2)
+      PLUGHUB_ATTACHMENT_STORE_TYPE:      s3
+      PLUGHUB_S3_ENDPOINT_URL:            http://minio:9000
+      PLUGHUB_S3_BUCKET:                  plughub-attachments
+      PLUGHUB_S3_ACCESS_KEY:              plughub
+      PLUGHUB_S3_SECRET_KEY:              plughub123
+      PLUGHUB_S3_REGION:                  us-east-1
     depends_on:
       redis:
         condition: service_healthy
@@ -656,6 +756,8 @@ services:
         condition: service_completed_successfully
       postgres:
         condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
     healthcheck:
       test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:8010/health', timeout=3)\" 2>/dev/null && echo ok || exit 1"]
       interval: 10s
@@ -768,7 +870,7 @@ services:
     environment:
       KAFKA_BROKERS:        kafka:29092
       REDIS_URL:            redis://redis:6379
-      SKILL_FLOW_URL:       http://skill-flow-service:3400
+      SKILL_FLOW_URL:       http://skill-flow-service:3460
       AGENT_REGISTRY_URL:   http://agent-registry:3300
       BOOTSTRAP_TENANT_IDS: tenant_demo
       REGISTRY_CONFIG_DIR:  /registry
@@ -783,6 +885,100 @@ services:
         condition: service_healthy
       skill-flow-service:
         condition: service_healthy
+    restart: on-failure
+    networks:
+      - plughub-demo
+
+  # ─── evaluation-api (Arc 6 — quality evaluation platform) ──────────────────
+  evaluation-api:
+    build:
+      context: .
+      dockerfile: packages/evaluation-api/Dockerfile
+    ports:
+      - "3400:3400"
+    environment:
+      PLUGHUB_EVALUATION_DATABASE_URL:        postgresql://plughub:plughub@postgres:5432/plughub_demo
+      PLUGHUB_EVALUATION_REDIS_URL:           redis://redis:6379
+      PLUGHUB_EVALUATION_KAFKA_BROKERS:       kafka:29092
+      PLUGHUB_EVALUATION_ADMIN_TOKEN:         changeme_eval_admin_token_demo
+      PLUGHUB_EVALUATION_JWT_SECRET:          changeme_auth_jwt_secret_demo_32c
+      PLUGHUB_EVALUATION_CALENDAR_API_URL:    http://calendar-api:3700
+      PLUGHUB_EVALUATION_WORKFLOW_API_URL:    http://workflow-api:3800
+      PLUGHUB_EVALUATION_SESSION_REPLAYER_URL: http://mcp-server-plughub:3100
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:3400/health')\""]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    restart: on-failure
+    networks:
+      - plughub-demo
+
+  # ─── mcp-server-knowledge (Arc 6 — RAG knowledge base) ──────────────────
+  mcp-server-knowledge:
+    build:
+      context: .
+      dockerfile: packages/mcp-server-knowledge/Dockerfile
+    ports:
+      - "3401:3401"
+    environment:
+      PORT:             "3401"
+      DATABASE_URL:     postgresql://plughub:plughub@postgres:5432/plughub_demo
+      ADMIN_TOKEN:      changeme_knowledge_admin_token_demo
+      # EMBEDDING_PROVIDER: openai       # descomente para habilitar embeddings reais
+      # OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"require('http').get('http://localhost:3401/health',r=>{process.exit(r.statusCode===200?0:1)}).on('error',()=>process.exit(1))\""]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    restart: on-failure
+    networks:
+      - plughub-demo
+
+  # ─── platform-ui (shell unificado — porta 5174) ──────────────────────────
+  #   http://localhost:5174/login          ← login com credenciais reais (auth-api)
+  #   http://localhost:5174/monitor        ← monitor operacional
+  #   http://localhost:5174/agent-assist   ← agent assist integrado
+  #   http://localhost:5174/evaluation     ← plataforma de avaliação Arc 6
+  #   http://localhost:5174/config/billing ← faturamento Arc 2
+  platform-ui:
+    build:
+      context: .
+      dockerfile: packages/platform-ui/Dockerfile
+    ports:
+      - "5174:5174"
+    depends_on:
+      auth-api:
+        condition: service_healthy
+      mcp-server-plughub:
+        condition: service_healthy
+      agent-registry:
+        condition: service_healthy
+      analytics-api:
+        condition: service_healthy
+      config-api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:5174/ > /dev/null 2>&1"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
     restart: on-failure
     networks:
       - plughub-demo
@@ -804,32 +1000,6 @@ services:
         condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "kill -0 1"]
-      interval: 10s
-      timeout: 5s
-      retries: 10
-      start_period: 15s
-    networks:
-      - plughub-demo
-
-  operator-console:
-    build:
-      context: .
-      dockerfile: packages/operator-console/Dockerfile
-    ports:
-      - "4000:80"
-    depends_on:
-      analytics-api:
-        condition: service_healthy
-      workflow-api:
-        condition: service_healthy
-      pricing-api:
-        condition: service_healthy
-      config-api:
-        condition: service_healthy
-      agent-registry:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost/ >/dev/null 2>&1"]
       interval: 10s
       timeout: 5s
       retries: 10
@@ -880,9 +1050,11 @@ services:
     environment:
       MCP_SERVER_URL:           http://mcp-server-plughub:3100
       AGENT_REGISTRY_URL:       http://agent-registry:3300
-      SKILL_FLOW_URL:           http://skill-flow-service:3400
+      SKILL_FLOW_URL:           http://skill-flow-service:3460
       RULES_ENGINE_URL:         http://rules-engine:3201
       AI_GATEWAY_URL:           http://ai-gateway:3200
+      AUTH_API_URL:             http://auth-api:3200
+      EVALUATION_API_URL:       http://evaluation-api:3400
       CHANNEL_GATEWAY_WS_URL:   ws://channel-gateway:8010
       CHANNEL_GATEWAY_HTTP_URL: http://channel-gateway:8010
       WORKFLOW_API_URL:         http://workflow-api:3800
@@ -892,8 +1064,17 @@ services:
       KAFKA_BROKERS:            kafka:29092
       TENANT_ID:                tenant_demo
       JWT_SECRET:               demo_plughub_secret_32chars__
+      AUTH_JWT_SECRET:          changeme_auth_jwt_secret_demo_32c
+      AUTH_ADMIN_TOKEN:         changeme_auth_admin_token_demo
+      EVAL_ADMIN_TOKEN:         changeme_eval_admin_token_demo
       E2E_REPORT_PATH:          /app/e2e-report.json
-      # Mude para --only 07, --only 08, --conference, --webchat, --workflow, --collect, etc.
+      # E2E_EXTRA_ARGS exemplos:
+      #   --demo           cenários 01–14 (padrão)
+      #   --evaluation     Arc 6: cenários 01–04 + 24 + 25
+      #   --permissions    Arc 6 v2: cenário 27
+      #   --hooks          Arc 5 hooks: cenário 22
+      #   --segments       Arc 5 segments: cenário 23
+      #   --conference, --webchat, --workflow, --collect, --ctx
       E2E_EXTRA_ARGS:           ${E2E_EXTRA_ARGS:---demo}
     depends_on:
       mcp-server-plughub:
@@ -911,6 +1092,10 @@ services:
       workflow-api:
         condition: service_healthy
       analytics-api:
+        condition: service_healthy
+      evaluation-api:
+        condition: service_healthy
+      auth-api:
         condition: service_healthy
     networks:
       - plughub-demo
