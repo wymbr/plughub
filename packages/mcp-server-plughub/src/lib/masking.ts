@@ -239,7 +239,7 @@ export class MaskingService {
     try {
       const raw = await redis.get(`plughub:cfg:${tenantId}:masking:authorized_roles`)
       if (raw) {
-        const roles = JSON.parse(raw) as string[]
+        const roles = JSON.parse(raw) as MaskingAccessPolicy['authorized_roles']
         if (Array.isArray(roles) && roles.length > 0) {
           return { tenant_id: tenantId, authorized_roles: roles }
         }
@@ -250,7 +250,7 @@ export class MaskingService {
     try {
       const raw = await redis.get(`plughub:cfg:__global__:masking:authorized_roles`)
       if (raw) {
-        const roles = JSON.parse(raw) as string[]
+        const roles = JSON.parse(raw) as MaskingAccessPolicy['authorized_roles']
         if (Array.isArray(roles) && roles.length > 0) {
           return { tenant_id: tenantId, authorized_roles: roles }
         }

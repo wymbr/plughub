@@ -158,7 +158,7 @@ describe("evaluation_context_get", () => {
     })
 
     expect(raw.isError).toBe(true)
-    const text = JSON.parse(raw.content[0].text)
+    const text = JSON.parse(raw.content[0]!.text)
     expect(text.error).toBe("replay_not_ready")
   })
 
@@ -174,7 +174,7 @@ describe("evaluation_context_get", () => {
     })
 
     expect(raw.isError).toBe(true)
-    const text = JSON.parse(raw.content[0].text)
+    const text = JSON.parse(raw.content[0]!.text)
     expect(text.error).toBe("unauthorized")
   })
 

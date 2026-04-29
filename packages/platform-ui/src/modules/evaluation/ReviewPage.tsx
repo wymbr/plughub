@@ -80,7 +80,7 @@ function ReviewModal({ result, adminToken, onClose, onReviewed }: ReviewModalPro
     setSaving(true)
     setError(null)
     try {
-      await reviewResult(result.result_id, { eval_status: decision, review_note: note }, adminToken)
+      await reviewResult(result.result_id, { decision, round: result.current_round ?? 1, review_note: note }, adminToken)
       onReviewed()
     } catch (e) {
       setError(String(e))
