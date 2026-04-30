@@ -269,14 +269,25 @@ async def ensure_schema(pool: asyncpg.Pool) -> None:
 
 # ─── Helper ───────────────────────────────────────────────────────────────────
 
+def _parse_jsonb(val: Any) -> Any:
+    """asyncpg returns JSONB columns as raw strings — parse them back to Python objects."""
+    if isinstance(val, str) and val and val[0] in ('{', '['):
+        try:
+            import json as _json
+            return _json.loads(val)
+        except Exception:
+            pass
+    return val
+
+
 def _row(record: asyncpg.Record | None) -> dict[str, Any] | None:
     if record is None:
         return None
-    return dict(record)
+    return {k: _parse_jsonb(v) for k, v in dict(record).items()}
 
 
 def _rows(records: list[asyncpg.Record]) -> list[dict[str, Any]]:
-    return [dict(r) for r in records]
+    return [_row(r) for r in records]  # type: ignore[misc]
 
 
 def _new_id(prefix: str) -> str:
