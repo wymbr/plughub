@@ -27,7 +27,6 @@ import { AgentAssistPage } from '@/modules/agent-assist/AgentAssistPage'
 import PlaceholderPage from '@/modules/_placeholder/PlaceholderPage'
 import AccessPage from '@/modules/access/AccessPage'
 import ContactsPage from '@/modules/contacts/ContactsPage'
-import DashboardsPage from '@/modules/dashboards/DashboardsPage'
 
 export const routes: RouteObject[] = [
   {
@@ -68,9 +67,9 @@ export const routes: RouteObject[] = [
       // Legacy redirect
       { path: 'skill-flows',        element: <Navigate to="/agent-flow/editor" replace /> },
 
-      // ── Analytics ─────────────────────────────────────────────
-      { path: 'dashboards', element: <DashboardsPage /> },
-      { path: 'reports',    element: <PlaceholderPage module="Reports" phase="Arc 3" /> },
+      // ── Analytics (legacy redirects — grupo removido do nav) ──
+      { path: 'dashboards', element: <Navigate to="/contacts?tab=analise" replace /> },
+      { path: 'reports',    element: <Navigate to="/contacts?tab=analise" replace /> },
 
       // ── Evaluation ────────────────────────────────────────────
       { path: 'evaluation/forms',      element: <FormsPage /> },
@@ -86,9 +85,10 @@ export const routes: RouteObject[] = [
       { path: 'config/billing',   element: <BillingPage /> },
       { path: 'config/access',    element: <AccessPage /> },
 
-      // ── Developer / Business ───────────────────────────────────
-      { path: 'developer', element: <PlaceholderPage module="Developer Tools"    phase="Arc 4" /> },
-      { path: 'business',  element: <PlaceholderPage module="Business Analytics" phase="Arc 3" /> },
+      // ── Developer ─────────────────────────────────────────────
+      { path: 'developer', element: <PlaceholderPage module="Developer Tools" phase="Arc 4" /> },
+      // Legacy: /business → home (role business acessa módulos via ABAC)
+      { path: 'business',  element: <Navigate to="/" replace /> },
     ]
   }
 ]

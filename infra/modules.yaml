@@ -49,6 +49,12 @@ modules:
     icon: "📞"
     nav_path: /contacts
     permission_schema:
+      operacao:
+        label: Acesso operacional (Monitor em tempo real, Agent Assist)
+        domain: [none, read_only, read_write]
+        scopable: true
+        scope_type: pool
+        default: none
       visualizar:
         label: Visualizar contatos e transcrições
         domain: [none, read_only]
@@ -61,38 +67,19 @@ modules:
         scopable: false
         default: none
 
-  # ── Analytics e Dashboard ─────────────────────────────────────────────────────
-  - module_id: analytics
-    label: Analytics e Dashboard
-    icon: "📊"
-    nav_path: /analytics
-    permission_schema:
-      dashboard:
-        label: Dashboard operacional em tempo real
-        domain: [none, read_only]
-        scopable: true
-        scope_type: pool
-        default: none
-      relatorios:
-        label: Relatórios e exportações
-        domain: [none, read_only]
-        scopable: true
-        scope_type: pool
-        default: none
-      consolidado:
-        label: Visão consolidada (admin — cross-tenant)
-        domain: [none, read_only]
-        scopable: false
-        default: none
-
   # ── Automação de Fluxos ───────────────────────────────────────────────────────
   - module_id: workflows
     label: Automação de Fluxos
     icon: "⚡"
     nav_path: /workflows
     permission_schema:
+      operacao:
+        label: Acesso operacional (Editor, Monitor, Calendário)
+        domain: [none, read_only, read_write]
+        scopable: false
+        default: none
       visualizar:
-        label: Visualizar instâncias de workflow
+        label: Visualizar instâncias e relatórios de workflow
         domain: [none, read_only]
         scopable: false
         default: none
@@ -192,14 +179,19 @@ modules:
         scopable: false
         default: none
 
-  # ── Skill Flows ───────────────────────────────────────────────────────────────
+  # ── Skill Flows / AgentFlow ───────────────────────────────────────────────────
   - module_id: skill_flows
     label: Skill Flows
     icon: "🔧"
-    nav_path: /skill-flows
+    nav_path: /agent-flow
     permission_schema:
+      operacao:
+        label: Acesso operacional (Editor, Monitor, Deploy)
+        domain: [none, read_only, read_write]
+        scopable: false
+        default: none
       visualizar:
-        label: Visualizar skill flows
+        label: Visualizar relatórios de agent flow
         domain: [none, read_only]
         scopable: false
         default: none

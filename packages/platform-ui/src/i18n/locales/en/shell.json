@@ -23,17 +23,13 @@
       "avaliacoes": "Evaluations",
       "reports": "Reports"
     },
-    "analytics": "Analytics",
-    "dashboards": "Dashboards",
-    "relatorios": "Reports",
     "configuracao": "Configuration",
     "recursos": "Resources",
     "plataforma": "Platform",
     "mascaramento": "Masking",
     "faturamento": "Billing",
     "acesso": "Access",
-    "developer": "Developer",
-    "business": "Business"
+    "developer": "Developer"
   },
   "topbar": {
     "logout": "Logout",

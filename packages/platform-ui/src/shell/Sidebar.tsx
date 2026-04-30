@@ -42,11 +42,11 @@ const Sidebar: React.FC = () => {
       label: t('nav.atendimento'),
       href: '#',
       icon: '📞',
-      roles: ['operator', 'supervisor', 'admin'],
+      roles: ['operator', 'supervisor', 'admin', 'business'],
       children: [
         { label: t('nav.contatos'),    href: '/contacts',             icon: '📋' },
-        { label: t('nav.monitor'),     href: '/contacts?tab=monitor', icon: '📡' },
-        { label: t('nav.agentAssist'), href: '/agent-assist',         icon: '🤖' }
+        { label: t('nav.monitor'),     href: '/contacts?tab=monitor', icon: '📡', abac: { module: 'contacts',    field: 'operacao' } },
+        { label: t('nav.agentAssist'), href: '/agent-assist',         icon: '🤖', abac: { module: 'contacts',    field: 'operacao' } }
       ]
     },
     {
@@ -54,12 +54,12 @@ const Sidebar: React.FC = () => {
       label: t('nav.workflow'),
       href: '#',
       icon: '⚙️',
-      roles: ['operator', 'supervisor', 'admin'],
+      roles: ['operator', 'supervisor', 'admin', 'business'],
       children: [
-        { label: t('nav.workflow.editor'),   href: '/workflow/editor',   icon: '▶️' },
-        { label: t('nav.workflow.monitor'),  href: '/workflow/monitor',  icon: '📡' },
+        { label: t('nav.workflow.editor'),   href: '/workflow/editor',   icon: '▶️', abac: { module: 'workflows', field: 'operacao' } },
+        { label: t('nav.workflow.monitor'),  href: '/workflow/monitor',  icon: '📡', abac: { module: 'workflows', field: 'operacao' } },
         { label: t('nav.workflow.report'),   href: '/workflow/report',   icon: '📊' },
-        { label: t('nav.workflow.calendar'), href: '/workflow/calendar', icon: '📅' },
+        { label: t('nav.workflow.calendar'), href: '/workflow/calendar', icon: '📅', abac: { module: 'workflows', field: 'operacao' } },
       ]
     },
     {
@@ -67,12 +67,12 @@ const Sidebar: React.FC = () => {
       label: t('nav.agentFlow'),
       href: '#',
       icon: '🔄',
-      roles: ['admin', 'developer'],
+      roles: ['admin', 'developer', 'business'],
       children: [
-        { label: t('nav.agentFlow.editor'),  href: '/agent-flow/editor',  icon: '✏️' },
-        { label: t('nav.agentFlow.monitor'), href: '/agent-flow/monitor', icon: '📡' },
+        { label: t('nav.agentFlow.editor'),  href: '/agent-flow/editor',  icon: '✏️', abac: { module: 'skill_flows', field: 'operacao' } },
+        { label: t('nav.agentFlow.monitor'), href: '/agent-flow/monitor', icon: '📡', abac: { module: 'skill_flows', field: 'operacao' } },
         { label: t('nav.agentFlow.report'),  href: '/agent-flow/report',  icon: '📊' },
-        { label: t('nav.agentFlow.deploy'),  href: '/agent-flow/deploy',  icon: '🚀' },
+        { label: t('nav.agentFlow.deploy'),  href: '/agent-flow/deploy',  icon: '🚀', abac: { module: 'skill_flows', field: 'operacao' } },
       ]
     },
     {
@@ -80,24 +80,13 @@ const Sidebar: React.FC = () => {
       label: t('nav.avaliacao'),
       href: '#',
       icon: '✓',
-      roles: ['operator', 'supervisor', 'admin'],
-      children: [
-        { label: t('nav.eval.forms'),         href: '/evaluation/forms',          icon: '📝', roles: ['admin'],                              abac: { module: 'evaluation', field: 'formularios' } },
-        { label: t('nav.eval.campaigns'),      href: '/evaluation/campaigns',      icon: '📋', roles: ['supervisor', 'admin'],                abac: { module: 'evaluation', field: 'formularios' } },
-        { label: t('nav.eval.knowledge'),      href: '/evaluation/knowledge',      icon: '📚', roles: ['admin'] },
-        { label: t('nav.eval.avaliacoes'),      href: '/evaluation/avaliacoes',     icon: '🗂️', roles: ['operator', 'supervisor', 'admin'] },
-        { label: t('nav.eval.reports'),        href: '/evaluation/reports',        icon: '📊', roles: ['supervisor', 'admin', 'business'],    abac: { module: 'evaluation', field: 'relatorio' } },
-      ]
-    },
-    {
-      navKey: 'analytics',
-      label: t('nav.analytics'),
-      href: '#',
-      icon: '📈',
       roles: ['operator', 'supervisor', 'admin', 'business'],
       children: [
-        { label: t('nav.dashboards'),  href: '/dashboards', icon: '📊' },
-        { label: t('nav.relatorios'),  href: '/reports',    icon: '📄' },
+        { label: t('nav.eval.forms'),      href: '/evaluation/forms',      icon: '📝', roles: ['admin'],                           abac: { module: 'evaluation', field: 'formularios' } },
+        { label: t('nav.eval.campaigns'),  href: '/evaluation/campaigns',  icon: '📋', roles: ['supervisor', 'admin'],             abac: { module: 'evaluation', field: 'formularios' } },
+        { label: t('nav.eval.knowledge'),  href: '/evaluation/knowledge',  icon: '📚', roles: ['admin'] },
+        { label: t('nav.eval.avaliacoes'), href: '/evaluation/avaliacoes', icon: '🗂️', roles: ['operator', 'supervisor', 'admin'] },
+        { label: t('nav.eval.reports'),    href: '/evaluation/reports',    icon: '📊', roles: ['supervisor', 'admin', 'business'], abac: { module: 'evaluation', field: 'relatorio' } },
       ]
     },
     {
@@ -105,13 +94,13 @@ const Sidebar: React.FC = () => {
       label: t('nav.configuracao'),
       href: '#',
       icon: '⚙️',
-      roles: ['admin'],
+      roles: ['admin', 'business'],
       children: [
-        { label: t('nav.recursos'), href: '/config/recursos', icon: '📦' },
-        { label: t('nav.plataforma'), href: '/config/platform', icon: '🖥️' },
-        { label: t('nav.mascaramento'), href: '/config/masking', icon: '🔒' },
-        { label: t('nav.faturamento'), href: '/config/billing', icon: '💳' },
-        { label: t('nav.acesso'), href: '/config/access', icon: '🔐' },
+        { label: t('nav.recursos'),     href: '/config/recursos',  icon: '📦', abac: { module: 'config', field: 'recursos' } },
+        { label: t('nav.plataforma'),   href: '/config/platform',  icon: '🖥️', abac: { module: 'config', field: 'plataforma' } },
+        { label: t('nav.mascaramento'), href: '/config/masking',   icon: '🔒', abac: { module: 'config', field: 'mascaramento' } },
+        { label: t('nav.faturamento'),  href: '/config/billing',   icon: '💳', roles: ['admin', 'business'] },
+        { label: t('nav.acesso'),       href: '/config/access',    icon: '🔐', abac: { module: 'config', field: 'usuarios' } },
       ]
     },
     {
@@ -120,12 +109,6 @@ const Sidebar: React.FC = () => {
       icon: '👨‍💻',
       roles: ['developer', 'admin']
     },
-    {
-      label: t('nav.business'),
-      href: '/business',
-      icon: '💼',
-      roles: ['business']
-    }
   ]
 
   const isActive = (href: string) => {
