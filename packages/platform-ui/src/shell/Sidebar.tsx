@@ -47,10 +47,28 @@ const Sidebar: React.FC = () => {
       ]
     },
     {
-      label: t('nav.workflows'),
-      href: '/workflows',
+      label: t('nav.workflow'),
+      href: '#',
       icon: '⚙️',
-      roles: ['operator', 'supervisor', 'admin']
+      roles: ['operator', 'supervisor', 'admin'],
+      children: [
+        { label: t('nav.workflow.editor'),   href: '/workflow/editor',   icon: '▶️' },
+        { label: t('nav.workflow.monitor'),  href: '/workflow/monitor',  icon: '📡' },
+        { label: t('nav.workflow.report'),   href: '/workflow/report',   icon: '📊' },
+        { label: t('nav.workflow.calendar'), href: '/workflow/calendar', icon: '📅' },
+      ]
+    },
+    {
+      label: t('nav.agentFlow'),
+      href: '#',
+      icon: '🔄',
+      roles: ['admin', 'developer'],
+      children: [
+        { label: t('nav.agentFlow.editor'),  href: '/agent-flow/editor',  icon: '✏️' },
+        { label: t('nav.agentFlow.monitor'), href: '/agent-flow/monitor', icon: '📡' },
+        { label: t('nav.agentFlow.report'),  href: '/agent-flow/report',  icon: '📊' },
+        { label: t('nav.agentFlow.deploy'),  href: '/agent-flow/deploy',  icon: '🚀' },
+      ]
     },
     {
       label: t('nav.avaliacao'),
@@ -73,14 +91,7 @@ const Sidebar: React.FC = () => {
       children: [
         { label: t('nav.dashboards'),  href: '/dashboards', icon: '📊' },
         { label: t('nav.relatorios'),  href: '/reports',    icon: '📄' },
-        { label: t('nav.campanhas'),   href: '/campaigns',  icon: '📣' }
       ]
-    },
-    {
-      label: t('nav.skillFlows'),
-      href: '/skill-flows',
-      icon: '🔄',
-      roles: ['admin', 'developer']
     },
     {
       label: t('nav.configuracao'),
@@ -93,7 +104,6 @@ const Sidebar: React.FC = () => {
         { label: t('nav.mascaramento'), href: '/config/masking', icon: '🔒' },
         { label: t('nav.faturamento'), href: '/config/billing', icon: '💳' },
         { label: t('nav.acesso'), href: '/config/access', icon: '🔐' },
-        { label: t('nav.calendarios'), href: '/config/calendars', icon: '📅' }
       ]
     },
     {
