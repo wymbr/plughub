@@ -1850,20 +1850,31 @@ Build: **513 kB JS / 150 kB gzip** (0 TypeScript errors).
   - ✅ ConfigPanel → `modules/config-plataforma/components/NamespaceEditor.tsx` (task #171 — merged into existing ConfigPlataformaPage at `/config/platform`)
 - `packages/agent-assist-ui/` (port 5175) — chat + right panel → ✅ migrated to `modules/agent-assist/AgentAssistPage.tsx` (task #172)
 
-### Nav structure — Workflow and AgentFlow groups
+### Nav structure — groups, roles and ABAC gates
 
-The Sidebar groups are now expandable collapsible sections (children[]):
+The Sidebar has expandable collapsible groups (children[]). The `business` role is **cross-cutting**: it is included in every group's `roles[]` but operational items are hidden via ABAC `operacao` field (business users have `operacao: none`).
 
-| Group | Roles | Routes |
-|-------|-------|--------|
-| **Workflow** (⚙️) | operator, supervisor, admin | `/workflow/editor`, `/workflow/monitor`, `/workflow/report`, `/workflow/calendar` |
-| **AgentFlow** (🔄) | admin, developer | `/agent-flow/editor`, `/agent-flow/monitor`, `/agent-flow/report`, `/agent-flow/deploy` |
+| Group | Roles | Children / ABAC gate |
+|-------|-------|----------------------|
+| **Atendimento** (📞) | operator, supervisor, admin, **business** | Contatos (no gate); Monitor 📡, AgentAssist 🤖 → `contacts.operacao` |
+| **Workflow** (⚙️) | operator, supervisor, admin, **business** | Editor ▶️, Monitor 📡, Calendar 📅 → `workflows.operacao`; Report 📊 (no gate) |
+| **AgentFlow** (🔄) | admin, developer, **business** | Editor ✏️, Monitor 📡, Deploy 🚀 → `skill_flows.operacao`; Report 📊 (no gate) |
+| **Avaliação** (✓) | operator, supervisor, admin, **business** | Forms, Campaigns → `evaluation.formularios`; Reports → `evaluation.relatorio`; others role-gated |
+| **Configuração** (⚙️) | admin, **business** | Recursos/Plataforma/Mascaramento/Acesso → ABAC config fields; Faturamento (no ABAC gate — always visible to admin + business) |
+| **Developer** (👨‍💻) | developer, admin | (no children) |
+
+**Analytics group was dissolved** — its content lives in: Contacts (MonitorTab + AnaliseTab), workflow/report, agent-flow/report, evaluation/reports. No separate Analytics nav group exists.
+
+**`operacao` ABAC pattern** — applied to contacts, workflows, skill_flows modules. Operational items (Monitor, Editor, Calendar, Deploy, AgentAssist) carry `abac: { module: '...', field: 'operacao' }`. Users with `operacao: none` (including `business`) don't see these items. Report children have no ABAC gate — visible to all roles that access the group.
 
 Legacy redirects in `routes.tsx`:
 - `/workflows` → `/workflow/monitor`
 - `/campaigns` → `/workflow/report`
 - `/config/calendars` → `/workflow/calendar`
 - `/skill-flows` → `/agent-flow/editor`
+- `/dashboards` → `/contacts?tab=analise`
+- `/reports` → `/contacts?tab=analise`
+- `/business` → `/` (business accesses modules via ABAC)
 
 ### Skill Deploy Lifecycle (Phase 1) — ✅ implemented
 
@@ -2329,14 +2340,16 @@ Arquivo YAML com 8 módulos registrados. Cada módulo define:
 
 | Módulo | Campos de permissão | Descrição |
 |---|---|---|
-| `evaluation` | `contestar`, `revisar`, `relatorio`, `formularios`, `permissoes` | Avaliação de qualidade |
-| `analytics` | `view`, `export`, `segment_drilldown` | Relatórios operacionais |
-| `billing` | `view`, `manage_resources`, `manage_pricing` | Faturamento e preços |
-| `config` | `view`, `edit`, `admin` | Configuração de plataforma |
-| `registry` | `view`, `manage_pools`, `manage_agents`, `manage_skills` | Registro de agentes |
-| `skill_flows` | `view`, `edit`, `publish` | Editor de fluxos |
-| `campaigns` | `view`, `manage`, `analytics` | Campanhas de coleta |
-| `workflows` | `view`, `manage`, `debug` | Automação de processos |
+| `evaluation` | `contestar`, `revisar`, `relatorio`, `formularios` | Avaliação de qualidade |
+| `contacts` | **`operacao`**, `visualizar`, `exportar` | Contatos — `operacao` gatea Monitor + AgentAssist |
+| `billing` | `visualizar`, `gerenciar` | Faturamento e preços |
+| `config` | `plataforma`, `recursos`, `canais`, `usuarios`, `mascaramento` | Configuração de plataforma |
+| `skill_flows` | **`operacao`**, `visualizar`, `editar` | AgentFlow — `operacao` gatea Editor, Monitor, Deploy |
+| `workflows` | **`operacao`**, `visualizar`, `cancelar`, `webhooks` | Automação — `operacao` gatea Editor, Monitor, Calendar |
+| `agent_assist` | `atender`, `supervisionar` | Atendimento humano |
+| `campaigns` | `visualizar`, `gerenciar` | Campanhas de coleta |
+
+**Nota:** o módulo `analytics` foi removido do `infra/modules.yaml`. Seus dados estão disponíveis nas abas MonitorTab e AnaliseTab do ContactsPage, não como módulo ABAC separado.
 
 ### JWT — `module_config` incluído
 
@@ -2472,6 +2485,21 @@ export interface NavItem {
 - Sem campo `abac` → sempre visível
 - Sem `moduleConfig` no session (conta legacy) → graceful degradation, mostra o item (backward-compatible)
 - Com `moduleConfig` → avalia `perms.can(item.abac.module, item.abac.field)` → visível se true
+
+**`operacao` gates — contacts, workflows, skill_flows (added in sidebar refactor):**
+
+```typescript
+// Operational items hidden for users with operacao: none (e.g. business role)
+{ href: '/contacts?tab=monitor', abac: { module: 'contacts',    field: 'operacao' } },
+{ href: '/agent-assist',         abac: { module: 'contacts',    field: 'operacao' } },
+{ href: '/workflow/editor',      abac: { module: 'workflows',   field: 'operacao' } },
+{ href: '/workflow/monitor',     abac: { module: 'workflows',   field: 'operacao' } },
+{ href: '/workflow/calendar',    abac: { module: 'workflows',   field: 'operacao' } },
+{ href: '/agent-flow/editor',    abac: { module: 'skill_flows', field: 'operacao' } },
+{ href: '/agent-flow/monitor',   abac: { module: 'skill_flows', field: 'operacao' } },
+{ href: '/agent-flow/deploy',    abac: { module: 'skill_flows', field: 'operacao' } },
+// Report pages have NO gate — visible to all roles that reach the group
+```
 
 **Items de avaliação com gates ABAC definidos:**
 
