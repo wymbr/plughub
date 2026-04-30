@@ -1,19 +1,25 @@
 /**
  * Header
- * Shows agent name, pool, session ID, WS connection status, SLA progress bar,
- * and a live handle-time counter (elapsed since conversation.assigned).
+ * Row 1: agent name / session info / handle-time / SLA / WS status
+ * Row 2 (presence bar): pool pills + "Entrar em todos" — replaces PresenceSidebar column
  */
 
 import React, { useEffect, useState } from "react";
-import { SlaState, WsStatus } from "../types";
+import { PoolInfo, PoolConnectionStatus, SlaState, WsStatus } from "../types";
 
 interface HeaderProps {
-  agentName: string;
-  poolId: string;
-  sessionId: string | null;
-  wsStatus: WsStatus;
-  sla: SlaState | null;
+  agentName:        string;
+  poolId:           string;       // pool of selected contact (for session subtitle)
+  sessionId:        string | null;
+  wsStatus:         WsStatus;
+  sla:              SlaState | null;
   sessionStartedAt: Date | null;
+  // Presence (pool pills)
+  pools:            PoolInfo[];
+  activePools:      string[];
+  poolStatuses:     Map<string, PoolConnectionStatus>;
+  onTogglePool:     (poolId: string) => void;
+  onJoinAll:        () => void;
 }
 
 function formatElapsed(ms: number): string {
@@ -21,9 +27,7 @@ function formatElapsed(ms: number): string {
   const h   = Math.floor(totalSec / 3600);
   const m   = Math.floor((totalSec % 3600) / 60);
   const s   = totalSec % 60;
-  if (h > 0) {
-    return `${h}:${m.toString().padStart(2, "0")}:${s.toString().padStart(2, "0")}`;
-  }
+  if (h > 0) return `${h}:${m.toString().padStart(2, "0")}:${s.toString().padStart(2, "0")}`;
   return `${m}:${s.toString().padStart(2, "0")}`;
 }
 
@@ -33,6 +37,53 @@ const STATUS_COLORS: Record<WsStatus, string> = {
   disconnected: "bg-red-500",
 };
 
+// ── Pool pill ─────────────────────────────────────────────────────────────────
+const CHANNEL_ICON: Record<string, string> = {
+  webchat: "💬", whatsapp: "📱", voice: "📞", email: "✉️",
+  sms: "📩", telegram: "✈️", instagram: "📷", webrtc: "🎙️",
+};
+
+function primaryChannelIcon(channelTypes: string[]): string {
+  const first = channelTypes[0];
+  return first ? (CHANNEL_ICON[first] ?? "💬") : "💬";
+}
+
+interface PoolPillProps {
+  pool:    PoolInfo;
+  active:  boolean;
+  status:  PoolConnectionStatus | undefined;
+  onToggle: () => void;
+}
+
+const PoolPill: React.FC<PoolPillProps> = ({ pool, active, status, onToggle }) => {
+  const label = pool.display_name ?? pool.pool_id;
+  const shortLabel = label.replace(/_/g, " ").replace(/\s*(humano|ia|v\d+)$/i, "").trim() || label;
+
+  const dotColor =
+    !active           ? "bg-gray-300" :
+    status === "connected"  ? "bg-green-400" :
+    status === "connecting" ? "bg-yellow-400 animate-pulse" :
+                              "bg-gray-400";
+
+  return (
+    <button
+      onClick={onToggle}
+      title={`${label} — ${active ? "Ready (clique para Offline)" : "Offline (clique para Ready)"}`}
+      className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full border text-xs font-medium
+        transition-colors whitespace-nowrap flex-shrink-0
+        ${active
+          ? "bg-indigo-50 border-indigo-300 text-indigo-700 hover:bg-indigo-100"
+          : "bg-white border-gray-200 text-gray-400 hover:border-gray-300 hover:text-gray-600"
+        }`}
+    >
+      <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${dotColor}`} />
+      <span className="text-[10px]">{primaryChannelIcon(pool.channel_types)}</span>
+      <span>{shortLabel}</span>
+    </button>
+  );
+};
+
+// ── Main component ─────────────────────────────────────────────────────────────
 export const Header: React.FC<HeaderProps> = ({
   agentName,
   poolId,
@@ -40,18 +91,18 @@ export const Header: React.FC<HeaderProps> = ({
   wsStatus,
   sla,
   sessionStartedAt,
+  pools,
+  activePools,
+  poolStatuses,
+  onTogglePool,
+  onJoinAll,
 }) => {
   const [handleMs, setHandleMs] = useState<number>(0);
 
   useEffect(() => {
-    if (!sessionStartedAt) {
-      setHandleMs(0);
-      return;
-    }
+    if (!sessionStartedAt) { setHandleMs(0); return; }
     setHandleMs(Date.now() - sessionStartedAt.getTime());
-    const id = setInterval(() => {
-      setHandleMs(Date.now() - sessionStartedAt.getTime());
-    }, 1_000);
+    const id = setInterval(() => setHandleMs(Date.now() - sessionStartedAt.getTime()), 1_000);
     return () => clearInterval(id);
   }, [sessionStartedAt]);
 
@@ -62,22 +113,29 @@ export const Header: React.FC<HeaderProps> = ({
     : slaPercent > 70 ? "bg-yellow-400"
     : "bg-green-500";
 
+  const allActive   = pools.length > 0 && pools.every(p => activePools.includes(p.pool_id));
+  const activeCount = activePools.length;
+
   return (
-    <header className="bg-white border-b border-gray-200 px-4 py-2 flex-shrink-0">
-      <div className="flex items-center justify-between">
+    <header className="bg-white border-b border-gray-200 flex-shrink-0">
+      {/* ── Row 1: identity / session / status ── */}
+      <div className="px-4 py-2 flex items-center justify-between">
         <div className="flex items-center gap-3">
-          <div className="w-8 h-8 rounded-full bg-indigo-600 flex items-center justify-center text-white text-sm font-semibold">
+          <div className="w-8 h-8 rounded-full bg-indigo-600 flex items-center justify-center
+            text-white text-sm font-semibold flex-shrink-0">
             {agentName.charAt(0).toUpperCase()}
           </div>
-          <div>
-            <p className="text-sm font-semibold text-gray-800 leading-tight">{agentName}</p>
-            <p className="text-xs text-gray-500 leading-tight">
-              {poolId}
-              {sessionId && (
-                <span className="ml-2 font-mono text-gray-400">
-                  {sessionId.slice(0, 8)}…
-                </span>
-              )}
+          <div className="min-w-0">
+            <p className="text-sm font-semibold text-gray-800 leading-tight truncate">
+              {agentName}
+            </p>
+            <p className="text-xs text-gray-500 leading-tight truncate">
+              {sessionId
+                ? <>{poolId}<span className="ml-2 font-mono text-gray-400">{sessionId.slice(0, 8)}…</span></>
+                : activeCount === 0
+                  ? <span className="text-gray-400 italic">Offline — selecione um pool</span>
+                  : <span className="text-green-600 font-medium">Ready em {activeCount} pool{activeCount > 1 ? "s" : ""}</span>
+              }
             </p>
           </div>
         </div>
@@ -86,11 +144,9 @@ export const Header: React.FC<HeaderProps> = ({
           {sessionStartedAt && sessionId && (
             <div className="flex items-center gap-1.5" title="Tempo de atendimento">
               <span className="text-xs text-gray-400">⏱</span>
-              <span
-                className={`text-sm font-mono font-semibold tabular-nums ${
-                  handleMs >= 30 * 60 * 1000 ? "text-orange-600" : "text-indigo-700"
-                }`}
-              >
+              <span className={`text-sm font-mono font-semibold tabular-nums ${
+                handleMs >= 30 * 60 * 1000 ? "text-orange-600" : "text-indigo-700"
+              }`}>
                 {formatElapsed(handleMs)}
               </span>
             </div>
@@ -120,6 +176,34 @@ export const Header: React.FC<HeaderProps> = ({
           </div>
         </div>
       </div>
+
+      {/* ── Row 2: pool presence pills ── */}
+      {pools.length > 0 && (
+        <div className="px-4 pb-2 flex items-center gap-2 overflow-x-auto scrollbar-none">
+          {/* "Entrar em todos" — only shown when not all pools are active */}
+          {!allActive && (
+            <button
+              onClick={onJoinAll}
+              className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full border
+                bg-indigo-600 border-indigo-600 text-white text-xs font-semibold
+                hover:bg-indigo-700 transition-colors whitespace-nowrap flex-shrink-0"
+            >
+              <span>⚡</span>
+              Entrar em todos
+            </button>
+          )}
+
+          {pools.map(pool => (
+            <PoolPill
+              key={pool.pool_id}
+              pool={pool}
+              active={activePools.includes(pool.pool_id)}
+              status={poolStatuses.get(pool.pool_id)}
+              onToggle={() => onTogglePool(pool.pool_id)}
+            />
+          ))}
+        </div>
+      )}
     </header>
   );
 };

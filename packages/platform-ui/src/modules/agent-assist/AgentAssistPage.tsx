@@ -4,19 +4,20 @@
  * Architecture (multi-pool):
  *   - Agent can be "Ready" in multiple pools simultaneously.
  *   - One WebSocket per active pool (useMultiPoolWebSocket).
- *   - Contacts from all pools appear in a single prioritised ContactList.
- *   - PresenceSidebar (left, collapsible) shows pool login/logout toggles.
+ *   - Contacts from all pools appear in a single ContactList (FIFO order).
+ *   - Pool presence controls live in the Header (second row of pills).
  *
  * Layout:
- *   ┌──────────────────────────────────────────────────────────┐
- *   │  Header (agente, pool do contato selecionado, SLA, WS)   │
- *   ├───────┬──────────┬──────────────────────┬───────────────┤
- *   │Presence│ Contact │  Chat Area            │  Right Panel  │
- *   │Sidebar │  List   │  (selected contact)   │  (context)    │
- *   │(~160px)│ (~200px)│     (flex-1)          │   (~280px)    │
- *   ├───────┴──────────┴──────────────────────┴───────────────┤
- *   │  AgentInput  (tied to selected contact)                  │
- *   └──────────────────────────────────────────────────────────┘
+ *   ┌────────────────────────────────────────────────────────────┐
+ *   │  Header row 1: agente, pool, sessão, SLA, WS status        │
+ *   │  Header row 2: pool pills (Ready/Offline toggles)          │
+ *   ├──────────┬──────────────────────────┬─────────────────────┤
+ *   │  Contact │  Chat Area               │  Right Panel        │
+ *   │  List    │  (selected contact)      │  (context)          │
+ *   │ (~200px) │     (flex-1)             │   (~280px)          │
+ *   ├──────────┴──────────────────────────┴─────────────────────┤
+ *   │  AgentInput  (tied to selected contact)                    │
+ *   └────────────────────────────────────────────────────────────┘
  */
 
 import React, { useCallback, useEffect, useRef, useState } from "react";
@@ -41,7 +42,6 @@ import { AgentInput }       from "./components/AgentInput";
 import { CloseModal }       from "./components/CloseModal";
 import { RightPanel }       from "./components/RightPanel";
 import { ContactList }      from "./components/ContactList";
-import { PresenceSidebar }  from "./components/PresenceSidebar";
 import { ToastContainer }   from "./components/ToastContainer";
 
 const API_BASE = import.meta.env.VITE_REGISTRY_URL ?? "/v1";
@@ -123,13 +123,16 @@ export const AgentAssistPage: React.FC = () => {
 
   // ── Presence: set of pool_ids the agent is "Ready" in ──────────────────
   const [activePools, setActivePools] = useState<string[]>([]);
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
 
   const handleTogglePool = useCallback((poolId: string) => {
     setActivePools(prev =>
       prev.includes(poolId) ? prev.filter(p => p !== poolId) : [...prev, poolId]
     );
   }, []);
+
+  const handleJoinAll = useCallback(() => {
+    setActivePools(availablePools.map(p => p.pool_id));
+  }, [availablePools]);
 
   // ── Multi-pool WebSocket ────────────────────────────────────────────────
   const { statuses, lastEvent, send } = useMultiPoolWebSocket(activePools);
@@ -500,19 +503,14 @@ export const AgentAssistPage: React.FC = () => {
         wsStatus={wsStatus}
         sla={selected?.supervisorState?.sla ?? null}
         sessionStartedAt={selected?.sessionStartedAt ?? null}
+        pools={availablePools}
+        activePools={activePools}
+        poolStatuses={statuses}
+        onTogglePool={handleTogglePool}
+        onJoinAll={handleJoinAll}
       />
 
       <div className="flex flex-1 overflow-hidden">
-
-        {/* Presence sidebar */}
-        <PresenceSidebar
-          pools={availablePools}
-          activePools={activePools}
-          statuses={statuses}
-          onToggle={handleTogglePool}
-          collapsed={sidebarCollapsed}
-          onCollapse={() => setSidebarCollapsed(c => !c)}
-        />
 
         {/* Contact list — fixed 200px */}
         <div className="w-[200px] border-r border-gray-200 overflow-hidden flex flex-col flex-shrink-0">
@@ -532,7 +530,7 @@ export const AgentAssistPage: React.FC = () => {
                 <>
                   <span className="text-3xl">🟢</span>
                   <p className="text-center leading-snug max-w-xs">
-                    Selecione um pool na barra lateral para ficar disponível.
+                    Ative um pool no cabeçalho para ficar disponível.
                   </p>
                 </>
               ) : (
