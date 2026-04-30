@@ -13,9 +13,16 @@
 # │                                                                             │
 # │  ★ Platform UI  (shell unificado — login real via auth-api)                │
 # │    http://localhost:5174/login                                             │
-# │    Login: admin@plughub.local / changeme_admin                            │
-# │    Módulos: Monitor · Agent Assist · Avaliação · Faturamento ·            │
-# │             Config · Skill Flows · Campanhas · Workflows                   │
+# │                                                                             │
+# │    Usuários demo:                                                           │
+# │      admin@plughub.local      / changeme_admin      (roles: admin)         │
+# │      supervisor@plughub.local / changeme_supervisor (roles: supervisor)    │
+# │      operator@plughub.local   / changeme_operator   (roles: operator)      │
+# │                                                                             │
+# │    Módulos:                                                                 │
+# │      Monitor · Agent Assist · Contatos · Avaliação · Dashboards ·         │
+# │      Faturamento · Config · Skill Flows · Campanhas · Workflows ·          │
+# │      Usuários (Access)                                                      │
 # │                                                                             │
 # │  ① Agent Assist UI  (legacy — agente humano direto)                        │
 # │    http://localhost:5173?pool=retencao_humano&agent=agente_humano_v1-001  │
@@ -35,18 +42,19 @@
 # └─────────────────────────────────────────────────────────────────────────────┘
 #
 # Flags do runner (via E2E_EXTRA_ARGS):
-#   E2E_EXTRA_ARGS="--demo"           # cenários 01–14 (padrão)
-#   E2E_EXTRA_ARGS="--only 07"        # apenas cenário 07 (inbound full)
-#   E2E_EXTRA_ARGS="--only 12"        # apenas cenário 12 (webchat)
-#   E2E_EXTRA_ARGS="--only 13"        # apenas cenário 13 (workflow)
-#   E2E_EXTRA_ARGS="--only 14"        # apenas cenário 14 (collect step)
-#   E2E_EXTRA_ARGS="--conference"     # cenários 01–04 + 06
-#   E2E_EXTRA_ARGS="--webchat"        # cenários 01–04 + 12
-#   E2E_EXTRA_ARGS="--workflow"       # cenários 01–04 + 13 + 14
-#   E2E_EXTRA_ARGS="--evaluation"     # cenários 01–04 + 24 + 25 (Arc 6)
-#   E2E_EXTRA_ARGS="--hooks"          # cenário 22 (pool lifecycle hooks)
-#   E2E_EXTRA_ARGS="--segments"       # cenário 23 (Arc 5 contact segments)
-#   E2E_EXTRA_ARGS="--permissions"    # cenário 27 (Arc 6 v2 permissions)
+#   E2E_EXTRA_ARGS="--demo"             # cenários 01–14 (padrão)
+#   E2E_EXTRA_ARGS="--only 07"          # apenas cenário 07 (inbound full)
+#   E2E_EXTRA_ARGS="--only 12"          # apenas cenário 12 (webchat)
+#   E2E_EXTRA_ARGS="--only 13"          # apenas cenário 13 (workflow)
+#   E2E_EXTRA_ARGS="--only 14"          # apenas cenário 14 (collect step)
+#   E2E_EXTRA_ARGS="--conference"       # cenários 01–04 + 06
+#   E2E_EXTRA_ARGS="--webchat"          # cenários 01–04 + 12
+#   E2E_EXTRA_ARGS="--workflow"         # cenários 01–04 + 13 + 14
+#   E2E_EXTRA_ARGS="--evaluation"       # cenários 01–04 + 24 + 25 (Arc 6)
+#   E2E_EXTRA_ARGS="--hooks"            # cenário 22 (pool lifecycle hooks)
+#   E2E_EXTRA_ARGS="--segments"         # cenário 23 (Arc 5 contact segments)
+#   E2E_EXTRA_ARGS="--permissions"      # cenário 27 (Arc 6 v2 ABAC permissions)
+#   E2E_EXTRA_ARGS="--workflow-review"  # cenário 28 (Arc 6 v2 review/contestation cycle)
 #
 # Variáveis de ambiente opcionais:
 #   ANTHROPIC_API_KEY — para testes com inferência LLM real (cenários 19, 26)
@@ -87,15 +95,22 @@ volumes:
 # │    http://localhost:5173?pool=retencao_humano&agent=agente_humano_v1-001 │
 # │    Webchat do cliente: http://localhost:5173/webchat-test.html            │
 # │                                                                            │
-# │  PASSO 4 — Avaliação de Qualidade (Arc 6)                                │
-# │    http://localhost:5174/evaluation/forms      ← criar formulário        │
-# │    http://localhost:5174/evaluation/campaigns  ← criar campanha          │
-# │    http://localhost:5174/evaluation/review     ← revisar avaliações      │
+# │  PASSO 4 — Avaliação de Qualidade (Arc 6 + ABAC)                        │
+# │    http://localhost:5174/evaluation/forms      ← formulários (admin)     │
+# │    http://localhost:5174/evaluation/campaigns  ← campanhas (admin)       │
+# │    http://localhost:5174/evaluation/avaliacoes ← tabela unificada        │
+# │      Login como supervisor → pode revisar    (revisar = read_write)      │
+# │      Login como operator   → pode contestar  (contestar = read_write)    │
 # │                                                                            │
-# │  PASSO 5 — Configuração e Billing                                        │
+# │  PASSO 5 — Gestão de Usuários e Permissões ABAC                         │
+# │    http://localhost:5174/access               ← CRUD + ModulePermissionForm│
+# │    Editar supervisor/operator → aba Permissões → ajustar module_config   │
+# │                                                                            │
+# │  PASSO 6 — Configuração e Billing                                        │
 # │    http://localhost:5174/config/platform  ← Config API por namespace     │
 # │    http://localhost:5174/config/billing   ← Faturamento por capacidade   │
 # │    http://localhost:5174/skill-flows      ← Editor Monaco de skills      │
+# │    http://localhost:5174/dashboards       ← Dashboards drag-and-drop     │
 # │                                                                            │
 # │  Observabilidade                                                           │
 # │    Kafdrop  (Kafka UI):         http://localhost:9002                      │
@@ -494,6 +509,11 @@ services:
       dockerfile: Dockerfile
     ports:
       - "3202:3200"
+    volumes:
+      # modules.yaml não está no contexto de build (packages/auth-api/).
+      # O volume mount torna o arquivo acessível em /infra/modules.yaml dentro
+      # do container, que é o path que main.py resolve via seed_modules_from_yaml().
+      - ./infra/modules.yaml:/infra/modules.yaml:ro
     environment:
       PLUGHUB_AUTH_DATABASE_URL:        postgresql://plughub:plughub@postgres:5432/plughub_demo
       PLUGHUB_AUTH_JWT_SECRET:          changeme_auth_jwt_secret_demo_32c
@@ -633,6 +653,48 @@ services:
         condition: service_healthy
       config-seed:
         condition: service_completed_successfully
+      auth-seed:
+        condition: service_completed_successfully
+    networks:
+      - plughub-demo
+    restart: "no"
+
+  # Cria usuários demo no auth-api com module_config (ABAC).
+  # supervisor@plughub.local — pode revisar avaliações + ver analytics
+  # operator@plughub.local   — pode contestar avaliações + ver analytics
+  auth-seed:
+    image: python:3.11-slim
+    volumes:
+      - ./infra/seed:/seed:ro
+    environment:
+      AUTH_API_URL:       http://auth-api:3200
+      AUTH_ADMIN_TOKEN:   changeme_auth_admin_token_demo
+      TENANT_ID:          tenant_demo
+      SEED_MAX_WAIT:      "120"
+    command: ["python", "/seed/seed_auth.py"]
+    depends_on:
+      auth-api:
+        condition: service_healthy
+    networks:
+      - plughub-demo
+    restart: "no"
+
+  # Cria formulário e campanha de avaliação demo.
+  # Formulário "SAC Padrão" com 4 critérios.
+  # Campanha "Demo SAC — Avaliação Contínua" com skill_revisao_simples_v1.
+  eval-seed:
+    image: python:3.11-slim
+    volumes:
+      - ./infra/seed:/seed:ro
+    environment:
+      EVALUATION_API_URL: http://evaluation-api:3400
+      AUTH_ADMIN_TOKEN:   changeme_eval_admin_token_demo
+      TENANT_ID:          tenant_demo
+      SEED_MAX_WAIT:      "120"
+    command: ["python", "/seed/seed_evaluation.py"]
+    depends_on:
+      evaluation-api:
+        condition: service_healthy
     networks:
       - plughub-demo
     restart: "no"
@@ -1047,11 +1109,12 @@ services:
       EVAL_ADMIN_TOKEN:         changeme_eval_admin_token_demo
       E2E_REPORT_PATH:          /app/e2e-report.json
       # E2E_EXTRA_ARGS exemplos:
-      #   --demo           cenários 01–14 (padrão)
-      #   --evaluation     Arc 6: cenários 01–04 + 24 + 25
-      #   --permissions    Arc 6 v2: cenário 27
-      #   --hooks          Arc 5 hooks: cenário 22
-      #   --segments       Arc 5 segments: cenário 23
+      #   --demo              cenários 01–14 (padrão)
+      #   --evaluation        Arc 6: cenários 01–04 + 24 + 25
+      #   --permissions       Arc 6 v2: cenário 27 (ABAC permissions)
+      #   --workflow-review   Arc 6 v2: cenário 28 (review/contestation workflow cycle)
+      #   --hooks             Arc 5 hooks: cenário 22
+      #   --segments          Arc 5 segments: cenário 23
       #   --conference, --webchat, --workflow, --collect, --ctx
       E2E_EXTRA_ARGS:           ${E2E_EXTRA_ARGS:---demo}
     depends_on:
