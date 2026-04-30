@@ -1051,8 +1051,10 @@ services:
 # ─────────────────────────────────────────────────────────────────────────────
 
   # Kafdrop  (Kafka UI):         http://localhost:9002
+  # NOTA: kafdrop 4.x tem incompatibilidade com Kafka 3.7 KRaft (kafkaHighLevelConsumer
+  # falha no init). Usamos 3.31.0 que funciona corretamente com Kafka 3.x.
   kafdrop:
-    image: obsidiandynamics/kafdrop:4.0.2
+    image: obsidiandynamics/kafdrop:3.31.0
     ports:
       - "9002:9000"   # 9000/9001 podem estar em uso pela infra existente
     environment:

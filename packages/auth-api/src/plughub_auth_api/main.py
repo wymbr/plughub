@@ -31,15 +31,22 @@ logging.basicConfig(
 logger = logging.getLogger("plughub.auth_api")
 
 # ─── Caminho canônico de infra/modules.yaml ───────────────────────────────────
-# A auth-api fica em packages/auth-api/src/plughub_auth_api/ — precisamos
-# subir 5 níveis para chegar à raiz do monorepo onde fica infra/modules.yaml.
+# Em desenvolvimento: packages/auth-api/src/plughub_auth_api/main.py
+#   → parents[4] = raiz do monorepo → infra/modules.yaml
+# Em container (WORKDIR /app): /app/src/plughub_auth_api/main.py
+#   → apenas parents[0..3] disponíveis → IndexError sem a guarda abaixo.
+# Env var PLUGHUB_AUTH_MODULES_YAML tem prioridade (montado via volume no compose).
 _THIS_FILE = pathlib.Path(__file__).resolve()
-_REPO_ROOT = _THIS_FILE.parents[4]        # plughub/
-_MODULES_YAML = _REPO_ROOT / "infra" / "modules.yaml"
-# Permite override via env var (útil em containers)
 _MODULES_YAML_OVERRIDE = os.environ.get("PLUGHUB_AUTH_MODULES_YAML", "")
 if _MODULES_YAML_OVERRIDE:
     _MODULES_YAML = pathlib.Path(_MODULES_YAML_OVERRIDE)
+else:
+    try:
+        _REPO_ROOT = _THIS_FILE.parents[4]   # dev: plughub/
+        _MODULES_YAML = _REPO_ROOT / "infra" / "modules.yaml"
+    except IndexError:
+        # Fallback para containers onde o WORKDIR é /app (profundidade menor)
+        _MODULES_YAML = pathlib.Path("/infra/modules.yaml")
 
 
 async def _register_platform_modules(pool: asyncpg.Pool) -> None:
