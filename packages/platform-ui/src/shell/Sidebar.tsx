@@ -5,6 +5,8 @@ import { useTranslation } from 'react-i18next'
 import { makePermissions } from '@/lib/permissions'
 
 interface NavItem {
+  /** Stable identifier used for expand/collapse state; defaults to href when omitted. */
+  navKey?: string
   label: string
   href: string
   icon: string
@@ -20,7 +22,7 @@ const Sidebar: React.FC = () => {
   const { session } = useAuth()
   const { t } = useTranslation('shell')
   const location = useLocation()
-  const [expandedGroups, setExpandedGroups] = useState<string[]>(['home'])
+  const [expandedGroups, setExpandedGroups] = useState<string[]>([])
 
   const toggleGroup = (key: string) => {
     setExpandedGroups(prev =>
@@ -36,6 +38,7 @@ const Sidebar: React.FC = () => {
       roles: ['operator', 'supervisor', 'admin', 'developer', 'business']
     },
     {
+      navKey: 'atendimento',
       label: t('nav.atendimento'),
       href: '#',
       icon: '📞',
@@ -47,6 +50,7 @@ const Sidebar: React.FC = () => {
       ]
     },
     {
+      navKey: 'workflow',
       label: t('nav.workflow'),
       href: '#',
       icon: '⚙️',
@@ -59,6 +63,7 @@ const Sidebar: React.FC = () => {
       ]
     },
     {
+      navKey: 'agentFlow',
       label: t('nav.agentFlow'),
       href: '#',
       icon: '🔄',
@@ -71,6 +76,7 @@ const Sidebar: React.FC = () => {
       ]
     },
     {
+      navKey: 'avaliacao',
       label: t('nav.avaliacao'),
       href: '#',
       icon: '✓',
@@ -84,6 +90,7 @@ const Sidebar: React.FC = () => {
       ]
     },
     {
+      navKey: 'analytics',
       label: t('nav.analytics'),
       href: '#',
       icon: '📈',
@@ -94,6 +101,7 @@ const Sidebar: React.FC = () => {
       ]
     },
     {
+      navKey: 'configuracao',
       label: t('nav.configuracao'),
       href: '#',
       icon: '⚙️',
@@ -150,12 +158,13 @@ const Sidebar: React.FC = () => {
     const hasChildren = item.children && item.children.length > 0
 
     if (hasChildren) {
-      const isExpanded = expandedGroups.includes(item.label)
+      const groupKey = item.navKey ?? item.href
+      const isExpanded = expandedGroups.includes(groupKey)
 
       return (
-        <div key={item.label}>
+        <div key={groupKey}>
           <button
-            onClick={() => toggleGroup(item.label)}
+            onClick={() => toggleGroup(groupKey)}
             className="w-full flex items-center gap-2 px-4 py-2 text-white/70 hover:text-white transition-colors text-sm group"
           >
             <span className="text-lg">{item.icon}</span>

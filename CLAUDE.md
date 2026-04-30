@@ -1843,12 +1843,52 @@ Build: **513 kB JS / 150 kB gzip** (0 TypeScript errors).
   - ✅ ChannelPanel → `config-recursos/ChannelsPage.tsx`
   - ✅ HumanAgentPanel → `config-recursos/HumanAgentsPage.tsx`
   - ✅ PricingPanel → `modules/billing/BillingPage.tsx`
-  - ✅ SkillFlowEditor → `modules/skill-flows/SkillFlowsPage.tsx`
+  - ✅ SkillFlowEditor → `modules/agent-flow/AgentFlowEditorPage.tsx` (YAML editor, now under `/agent-flow/editor`)
   - ✅ RegistryPanel (Pools/AgentTypes/Skills/Instances) → `config-recursos/` tabs (task #168)
-  - ✅ WorkflowPanel + WebhookPanel → `modules/workflows/WorkflowsPage.tsx` with tabs ⚡ Instâncias | 🔗 Webhooks (task #169)
+  - ✅ WorkflowPanel + WebhookPanel → `modules/workflows/WorkflowEditorPage.tsx` + `WorkflowMonitorPage.tsx` + `WorkflowReportPage.tsx` + `WorkflowCalendarPage.tsx` under `/workflow/*`
   - ✅ CampaignPanel → `modules/campaigns/CampaignsPage.tsx` (task #170)
   - ✅ ConfigPanel → `modules/config-plataforma/components/NamespaceEditor.tsx` (task #171 — merged into existing ConfigPlataformaPage at `/config/platform`)
 - `packages/agent-assist-ui/` (port 5175) — chat + right panel → ✅ migrated to `modules/agent-assist/AgentAssistPage.tsx` (task #172)
+
+### Nav structure — Workflow and AgentFlow groups
+
+The Sidebar groups are now expandable collapsible sections (children[]):
+
+| Group | Roles | Routes |
+|-------|-------|--------|
+| **Workflow** (⚙️) | operator, supervisor, admin | `/workflow/editor`, `/workflow/monitor`, `/workflow/report`, `/workflow/calendar` |
+| **AgentFlow** (🔄) | admin, developer | `/agent-flow/editor`, `/agent-flow/monitor`, `/agent-flow/report`, `/agent-flow/deploy` |
+
+Legacy redirects in `routes.tsx`:
+- `/workflows` → `/workflow/monitor`
+- `/campaigns` → `/workflow/report`
+- `/config/calendars` → `/workflow/calendar`
+- `/skill-flows` → `/agent-flow/editor`
+
+### Skill Deploy Lifecycle (Phase 1) — ✅ implemented
+
+Skills follow a two-stage lifecycle: **draft** (saved YAML not yet in production) → **published** (deployed to pools).
+
+**PostgreSQL additions** (migration `20260430000000_add_skill_deployments`):
+- `skills.deploy_status: TEXT DEFAULT 'draft'` — `"draft"` or `"published"`
+- `skills.published_at: TIMESTAMPTZ?` — timestamp of first/last deploy
+- `skill_deployments` table — deployment history with `pool_ids[]`, `yaml_snapshot`, `deployed_by`, `deployed_at`, `notes`
+
+**New agent-registry endpoints:**
+
+| Method | Route | Description |
+|--------|-------|-------------|
+| `POST` | `/v1/skills/:skill_id/deploy` | Deploys skill to `pool_ids[]`; sets `deploy_status=published`, records `SkillDeployment`, triggers `publishRegistryChanged` |
+| `GET` | `/v1/skills/:skill_id/deployments` | Returns deployment history (newest first, `limit` param, max 200) |
+
+**Invariants:**
+- `PUT /v1/skills/:id` (save) always sets `deploy_status = "draft"` on new skills; NEVER modifies `deploy_status` on updates — only the deploy action changes it
+- Every deploy snapshot the `flow` JSON at deploy time into `yaml_snapshot` for rollback reference
+- Deploy calls `publishRegistryChanged(tenantId, "skill", skillId, "updated")` to trigger hot-reload in orchestrator-bridge
+
+**Rollback** = trigger a new deploy pointing to the previous `yaml_snapshot` version (Phase 2: automated rollback button in Deploy UI).
+
+**Phase 2 (deferred):** calendar-scheduled deploys, graceful handoff monitor, automated rollback button.
 
 ### What never to do
 
@@ -1856,6 +1896,7 @@ Build: **513 kB JS / 150 kB gzip** (0 TypeScript errors).
 - Never use inline hex colors — use Tailwind tokens (`text-primary`, `bg-secondary`)
 - Never write custom CSS when a Tailwind class exists
 - Never create a NavItem without `roles` filter
+- Never modify `deploy_status` in PUT /v1/skills — only the deploy action owns that field
 
 ## Arc 7 — Autenticação Real, Permissões e Roteamento por Performance
 

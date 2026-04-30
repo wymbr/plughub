@@ -168,13 +168,20 @@ model Skill {
   compatibility      Json?
   flow               Json?   // presente apenas para type: orchestrator
 
+  /// Deploy lifecycle: "draft" (saved but not in production) | "published" (deployed to at least one pool)
+  deploy_status String   @default("draft")
+  published_at  DateTime?
+
   created_at  DateTime @default(now())
   updated_at  DateTime @updatedAt
   created_by  String
 
+  deployments SkillDeployment[]
+
   @@unique([skill_id, tenant_id])
   @@index([tenant_id])
   @@index([tenant_id, status])
+  @@index([tenant_id, deploy_status])
   @@map("skills")
 }
 
@@ -182,6 +189,30 @@ enum SkillStatus {
   active
   inactive
   deprecated
+}
+
+// ─────────────────────────────────────────────
+// SkillDeployment — histórico de deploys por skill
+// Cada deploy registra a snapshot do flow, pools alvo e quem executou
+// ─────────────────────────────────────────────
+
+model SkillDeployment {
+  id        String   @id @default(uuid())
+  skill_id  String
+  tenant_id String
+  version   String
+
+  pool_ids      String[]         // pools para os quais o deploy foi direcionado
+  yaml_snapshot Json?            // snapshot do flow no momento do deploy
+  deployed_by   String
+  deployed_at   DateTime @default(now())
+  notes         String?          // notas opcionais do operador
+
+  skill Skill @relation(fields: [skill_id, tenant_id], references: [skill_id, tenant_id], onDelete: Cascade)
+
+  @@index([skill_id, tenant_id])
+  @@index([tenant_id])
+  @@map("skill_deployments")
 }
 
 // ─────────────────────────────────────────────
