@@ -1857,22 +1857,31 @@ The Sidebar has expandable collapsible groups (children[]). The `business` role 
 | Group | Roles | Children / ABAC gate |
 |-------|-------|----------------------|
 | **Atendimento** (📞) | operator, supervisor, admin, **business** | Contatos (no gate); Monitor 📡, AgentAssist 🤖 → `contacts.operacao` |
-| **Workflow** (⚙️) | operator, supervisor, admin, **business** | Editor ▶️, Monitor 📡, Calendar 📅 → `workflows.operacao`; Report 📊 (no gate) |
-| **AgentFlow** (🔄) | admin, developer, **business** | Editor ✏️, Monitor 📡, Deploy 🚀 → `skill_flows.operacao`; Report 📊 (no gate) |
+| **Workflow** (⚙️) | operator, supervisor, admin, **business** | Editor ▶️, Monitor 📡, Calendar 📅 → `workflows.operacao`; Report 📊 → `workflows.visualizar` |
+| **AgentFlow** (🔄) | admin, developer, **business** | Editor ✏️, Monitor 📡, Deploy 🚀 → `skill_flows.operacao`; Report 📊 → `skill_flows.visualizar` |
 | **Avaliação** (✓) | operator, supervisor, admin, **business** | Forms, Campaigns → `evaluation.formularios`; Reports → `evaluation.relatorio`; others role-gated |
-| **Configuração** (⚙️) | admin, **business** | Recursos/Plataforma/Mascaramento/Acesso → ABAC config fields; Faturamento (no ABAC gate — always visible to admin + business) |
+| **Configuração** (⚙️) | admin, **business** | Templates de Dashboard 📊 → `config.plataforma`; Recursos/Plataforma/Mascaramento/Acesso → ABAC config fields; Faturamento (no ABAC gate — always visible to admin + business) |
 | **Developer** (👨‍💻) | developer, admin | (no children) |
 
 **Analytics group was dissolved** — its content lives in: Contacts (MonitorTab + AnaliseTab), workflow/report, agent-flow/report, evaluation/reports. No separate Analytics nav group exists.
 
-**`operacao` ABAC pattern** — applied to contacts, workflows, skill_flows modules. Operational items (Monitor, Editor, Calendar, Deploy, AgentAssist) carry `abac: { module: '...', field: 'operacao' }`. Users with `operacao: none` (including `business`) don't see these items. Report children have no ABAC gate — visible to all roles that access the group.
+**Two-tier ABAC pattern for analytics access:**
+- `operacao` gates **active operational items** (Monitor, Editor, Calendar, Deploy, AgentAssist) — users with `operacao: none` (including `business`) don't see these items
+- `visualizar` gates **read-only analytical items** (Report, Análise tab) — allows business/analyst roles to access dashboards and reports without operational access
+
+**Contacts tab-level ABAC** — `ContactsPage` filters its own tabs at render time:
+- `Lista` tab — always visible (role-gated at group level)
+- `Monitor` tab — requires `contacts.operacao`
+- `Análise` tab — requires `contacts.visualizar`
+Active tab falls back to first visible tab if the URL-requested tab is not accessible.
+
+**Templates de Dashboard** — the DashboardsPage (`/dashboards`) is for template management only (admin). It moved from a top-level nav item to inside Configuração, gated by `config.plataforma`. Dashboard content (analytics cards) is embedded inside each module's respective page and is accessed through the module's own `visualizar` permission, not a separate dashboard route.
 
 Legacy redirects in `routes.tsx`:
 - `/workflows` → `/workflow/monitor`
 - `/campaigns` → `/workflow/report`
 - `/config/calendars` → `/workflow/calendar`
 - `/skill-flows` → `/agent-flow/editor`
-- `/dashboards` → `/contacts?tab=analise`
 - `/reports` → `/contacts?tab=analise`
 - `/business` → `/` (business accesses modules via ABAC)
 
@@ -2671,7 +2680,7 @@ Revisores (IA e humanos) respondem por critério, no mesmo formato estruturado.
     - `formatters.ts` — `formatCount`, `formatDurationMs`, `formatScore`, `formatBucketLabel`
     - `chartType: bar | line | area`; paleta de 8 cores para breakdown series
 
-    **DashboardsPage**:
+    **DashboardsPage** — rota `/dashboards`, acessível via Configuração → Templates de Dashboard (gate: `config.plataforma`):
     - Sidebar (admin only): lista de templates + botão "Novo template"; nome + descrição salvos no Config API como `dashboards.template:{uuid}`
     - Grid: react-grid-layout 12 colunas, cards draggable/resizable em modo edição
     - Card types: `timeseries_volume`, `timeseries_handle_time`, `timeseries_score`, `pool_status`
@@ -2679,11 +2688,18 @@ Revisores (IA e humanos) respondem por critério, no mesmo formato estruturado.
     - Modo usuário: drag/resize persiste como layout pessoal (`dashboards.layout:{tenant}:{user}`) sem alterar o template compartilhado
     - Template padrão lido de `module_config.dashboard.default_template_id` do JWT (ABAC)
     - Fallback: layouts pessoais armazenados em localStorage quando admin token ausente
+    - Botão "Editar" desabilitado quando nenhum template está selecionado (previne erros de operação)
+    - Grid e editMode resetam automaticamente quando template é deletado (useEffect null-template cleanup)
 
     **Config API — namespace `dashboards`** (3 novas chaves seedadas):
     - `default_template_id` → null
     - `allow_user_customization` → true
     - `max_cards_per_dashboard` → 20
+
+    **Config API — fix: admin token via query param fallback** (`router.py`):
+    - `_require_admin` aceita o token tanto via `X-Admin-Token` header quanto via `?admin_token=` query param
+    - O fallback por query param garante que DELETE requests funcionem mesmo quando reverse proxies (nginx) removem headers customizados
+    - `dashboard-hooks.ts`: `configDelete` envia o token em ambos (header + query param); todas as funções propagam `tenant_id` como query param; `configListNamespace` faz unwrap correto do envelope `{ entries: {...} }` da Config API
 
     **Tipos em `src/types/index.ts`:** `TimeseriesBreakdown`, `TimeseriesBucket`, `TimeseriesMeta`, `TimeseriesResponse`, `DashboardCardType`, `TimeseriesCardConfig`, `KpiCardConfig`, `PoolStatusCardConfig`, `DashboardCardConfig`, `DashboardCard`, `DashboardTemplate`
 

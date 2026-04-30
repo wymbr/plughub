@@ -12,6 +12,7 @@ import WorkflowEditorPage   from '@/modules/workflows/WorkflowEditorPage'
 import WorkflowMonitorPage  from '@/modules/workflows/WorkflowMonitorPage'
 import WorkflowReportPage   from '@/modules/workflows/WorkflowReportPage'
 import WorkflowCalendarPage from '@/modules/workflows/WorkflowCalendarPage'
+import CalendarsPage from '@/modules/calendars/CalendarsPage'
 // AgentFlow group
 import AgentFlowEditorPage  from '@/modules/agent-flow/AgentFlowEditorPage'
 import AgentFlowMonitorPage from '@/modules/agent-flow/AgentFlowMonitorPage'
@@ -56,9 +57,8 @@ export const routes: RouteObject[] = [
       { path: 'workflow/report',   element: <WorkflowReportPage /> },
       { path: 'workflow/calendar', element: <WorkflowCalendarPage /> },
       // Legacy redirects
-      { path: 'workflows',         element: <Navigate to="/workflow/monitor" replace /> },
-      { path: 'campaigns',         element: <Navigate to="/workflow/report"  replace /> },
-      { path: 'config/calendars',  element: <Navigate to="/workflow/calendar" replace /> },
+      { path: 'workflows',         element: <Navigate to="/workflow/monitor"   replace /> },
+      { path: 'campaigns',         element: <Navigate to="/workflow/report"    replace /> },
 
       // ── AgentFlow group ────────────────────────────────────────
       { path: 'agent-flow/editor',  element: <AgentFlowEditorPage /> },
@@ -81,11 +81,14 @@ export const routes: RouteObject[] = [
       { path: 'evaluation/reports',    element: <EvalReportsPage /> },
 
       // ── Configuration ─────────────────────────────────────────
-      { path: 'config/recursos',  element: <ConfigRecursosIndex /> },
-      { path: 'config/platform',  element: <ConfigPlataformaPage /> },
-      { path: 'config/masking',   element: <MaskingPage /> },
-      { path: 'config/billing',   element: <BillingPage /> },
-      { path: 'config/access',    element: <AccessPage /> },
+      { path: 'config/recursos',   element: <ConfigRecursosIndex /> },
+      { path: 'config/platform',   element: <ConfigPlataformaPage /> },
+      { path: 'config/masking',    element: <MaskingPage /> },
+      { path: 'config/billing',    element: <BillingPage /> },
+      { path: 'config/access',     element: <AccessPage /> },
+      { path: 'config/calendars',  element: <CalendarsPage /> },
+      // Legacy redirect: old workflow/calendar (webhooks only now)
+      { path: 'workflow/triggers', element: <WorkflowCalendarPage /> },
 
       // ── Developer ─────────────────────────────────────────────
       { path: 'developer', element: <PlaceholderPage module="Developer Tools" phase="Arc 4" /> },
