@@ -1,16 +1,20 @@
 /**
  * ContactList
- * Left-column sidebar listing all active contacts assigned to this agent.
+ * Left-column sidebar listing all active contacts assigned to this agent,
+ * sorted by urgency (highest priority first).
+ *
+ * Priority score = waitMs / slaTargetMs  (higher = more urgent).
+ * When slaTargetMs is unknown, closed contacts always sort last.
  *
  * Each row shows:
- *   - Channel icon (webchat / whatsapp / voice / email / sms)
+ *   - "Próximo sugerido" badge on the top-priority open contact
+ *   - Urgency color bar on the left edge (green / yellow / orange / red)
+ *   - Channel icon + pool badge
  *   - Customer name (or session ID fallback)
  *   - Unread message badge
  *   - Sentiment colour indicator (if supervisorState is available)
  *   - SLA progress mini-bar
- *   - Live handle-time counter
- *
- * A "lobby" row is shown at the top when there are no contacts.
+ *   - Live wait-time counter (from sessionStartedAt)
  */
 
 import React, { useEffect, useState } from "react";
@@ -60,25 +64,69 @@ function formatElapsed(ms: number): string {
   return `${m}:${s.toString().padStart(2, "0")}`;
 }
 
-// ── Single contact row ─────────────────────────────────────────────────────
-interface RowProps {
-  contact:   ContactSession;
-  selected:  boolean;
-  aiTyping:  boolean;
-  onSelect:  () => void;
+// ── Priority / urgency ────────────────────────────────────────────────────
+/**
+ * Returns a score in [0, ∞).
+ * score = waitMs / slaTargetMs  → 1.0 means SLA is exactly at deadline.
+ * Closed contacts get Infinity so they always sort to the bottom.
+ */
+function urgencyScore(contact: ContactSession, nowMs: number): number {
+  if (contact.sessionClosed) return Infinity;
+  const waitMs = nowMs - contact.sessionStartedAt.getTime();
+  const sla = contact.supervisorState?.sla?.target_ms ?? contact.slaTargetMs;
+  if (!sla) return waitMs / 1;          // sort by raw wait when no SLA
+  return waitMs / sla;
 }
 
-const ContactRow: React.FC<RowProps> = ({ contact, selected, aiTyping, onSelect }) => {
-  const [handleMs, setHandleMs] = useState<number>(
-    Date.now() - contact.sessionStartedAt.getTime()
-  );
+type UrgencyLevel = "low" | "medium" | "high" | "critical";
+
+function urgencyLevel(score: number): UrgencyLevel {
+  if (score >= 1.0) return "critical";
+  if (score >= 0.7) return "high";
+  if (score >= 0.4) return "medium";
+  return "low";
+}
+
+const URGENCY_BORDER: Record<UrgencyLevel, string> = {
+  low:      "border-l-green-400",
+  medium:   "border-l-yellow-400",
+  high:     "border-l-orange-400",
+  critical: "border-l-red-500",
+};
+
+const URGENCY_TIMER: Record<UrgencyLevel, string> = {
+  low:      "text-gray-400",
+  medium:   "text-yellow-600",
+  high:     "text-orange-500 font-semibold",
+  critical: "text-red-500 font-bold",
+};
+
+// ── Pool badge ─────────────────────────────────────────────────────────────
+function poolLabel(poolId: string): string {
+  // Show last segment for readability: "retencao_humano" → "retencao"
+  return poolId.split("_").slice(0, -1).join("_") || poolId;
+}
+
+// ── Single contact row ─────────────────────────────────────────────────────
+interface RowProps {
+  contact:    ContactSession;
+  selected:   boolean;
+  aiTyping:   boolean;
+  suggested:  boolean;
+  onSelect:   () => void;
+}
+
+const ContactRow: React.FC<RowProps> = ({ contact, selected, aiTyping, suggested, onSelect }) => {
+  const [nowMs, setNowMs] = useState<number>(Date.now());
 
   useEffect(() => {
-    const id = setInterval(() => {
-      setHandleMs(Date.now() - contact.sessionStartedAt.getTime());
-    }, 1_000);
+    const id = setInterval(() => setNowMs(Date.now()), 1_000);
     return () => clearInterval(id);
-  }, [contact.sessionStartedAt]);
+  }, []);
+
+  const handleMs   = nowMs - contact.sessionStartedAt.getTime();
+  const score      = urgencyScore(contact, nowMs);
+  const level      = contact.sessionClosed ? "low" : urgencyLevel(score);
 
   const sentimentScore = contact.supervisorState?.sentiment.current ?? null;
   const sla            = contact.supervisorState?.sla ?? null;
@@ -93,22 +141,50 @@ const ContactRow: React.FC<RowProps> = ({ contact, selected, aiTyping, onSelect 
     contact.customerName
     ?? `#${contact.sessionId.slice(0, 8)}`;
 
+  const borderClass = contact.sessionClosed
+    ? "border-l-red-300"
+    : URGENCY_BORDER[level];
+
   return (
     <button
       onClick={onSelect}
-      className={`w-full text-left px-3 py-2.5 border-b transition-colors
+      className={`w-full text-left px-3 py-2 border-b transition-colors
         focus:outline-none focus:ring-inset focus:ring-1 focus:ring-indigo-300
+        border-l-[3px] ${borderClass}
         ${contact.sessionClosed
-          ? `bg-red-50 border-red-100 hover:bg-red-100
-             ${selected ? "border-l-[3px] border-l-red-500" : "border-l-[3px] border-l-red-300"}`
-          : `border-gray-100 hover:bg-indigo-50
-             ${selected ? "bg-indigo-50 border-l-[3px] border-l-indigo-500" : "border-l-[3px] border-l-transparent"}`
+          ? `bg-red-50 border-b-red-100 hover:bg-red-100
+             ${selected ? "border-l-red-500" : ""}`
+          : `border-b-gray-100 hover:bg-indigo-50
+             ${selected ? "bg-indigo-50" : ""}`
         }
       `}
     >
+      {/* Badge row: "Próximo sugerido" + pool */}
+      {(suggested || contact.poolId) && (
+        <div className="flex items-center gap-1 mb-1">
+          {suggested && !contact.sessionClosed && (
+            <span className="text-[9px] font-bold uppercase tracking-wide
+              bg-indigo-500 text-white px-1.5 py-0.5 rounded-full leading-none">
+              Próximo ↑
+            </span>
+          )}
+          {contact.poolId && (
+            <span className="text-[9px] font-medium text-gray-400 bg-gray-100
+              px-1 py-0.5 rounded truncate max-w-[80px]"
+              title={contact.poolId}
+            >
+              {poolLabel(contact.poolId)}
+            </span>
+          )}
+        </div>
+      )}
+
       {/* Row 1: channel icon + name + unread badge */}
       <div className="flex items-center gap-1.5 min-w-0">
-        <span className="text-base leading-none flex-shrink-0" title={contact.sessionClosed ? "Sessão encerrada" : contact.channel}>
+        <span
+          className="text-base leading-none flex-shrink-0"
+          title={contact.sessionClosed ? "Sessão encerrada" : contact.channel}
+        >
           {contact.sessionClosed ? "🔴" : channelIcon(contact.channel)}
         </span>
         <span
@@ -125,7 +201,7 @@ const ContactRow: React.FC<RowProps> = ({ contact, selected, aiTyping, onSelect 
         )}
       </div>
 
-      {/* Row 2: sentiment dot + handle time + SLA bar */}
+      {/* Row 2: sentiment dot + wait time + SLA bar */}
       <div className="flex items-center gap-1.5 mt-1">
         {/* Sentiment dot */}
         <span
@@ -133,18 +209,21 @@ const ContactRow: React.FC<RowProps> = ({ contact, selected, aiTyping, onSelect 
           title={`Sentimento: ${sentimentScore?.toFixed(2) ?? "n/a"}`}
         />
 
-        {/* Handle time */}
+        {/* Wait time */}
         <span
           className={`text-[11px] font-mono tabular-nums flex-shrink-0
-            ${handleMs >= 30 * 60 * 1000 ? "text-orange-500 font-semibold" : "text-gray-400"}`}
-          title="Tempo de atendimento"
+            ${contact.sessionClosed ? "text-gray-400" : URGENCY_TIMER[level]}`}
+          title="Tempo de espera / atendimento"
         >
           {formatElapsed(handleMs)}
         </span>
 
         {/* SLA mini-bar */}
         {sla && (
-          <div className="flex-1 h-1 bg-gray-200 rounded-full overflow-hidden ml-1" title={`SLA ${slaPercent.toFixed(0)}%`}>
+          <div
+            className="flex-1 h-1 bg-gray-200 rounded-full overflow-hidden ml-1"
+            title={`SLA ${slaPercent.toFixed(0)}%`}
+          >
             <div
               className={`h-full rounded-full transition-all duration-500 ${slaColor}`}
               style={{ width: `${slaPercent}%` }}
@@ -164,7 +243,8 @@ const ContactRow: React.FC<RowProps> = ({ contact, selected, aiTyping, onSelect 
 
         {/* Closed badge */}
         {contact.sessionClosed && (
-          <span className="flex-shrink-0 text-[10px] bg-red-100 text-red-600 font-semibold px-1.5 py-0.5 rounded border border-red-200">
+          <span className="flex-shrink-0 text-[10px] bg-red-100 text-red-600 font-semibold
+            px-1.5 py-0.5 rounded border border-red-200">
             encerrado
           </span>
         )}
@@ -173,13 +253,25 @@ const ContactRow: React.FC<RowProps> = ({ contact, selected, aiTyping, onSelect 
   );
 };
 
-// ── Main component ─────────────────────────────────────────────────────────
+// ── Main component ─────────────────────────────────────────────────────────────
 export const ContactList: React.FC<ContactListProps> = ({
   contacts,
   selectedSessionId,
   aiTypingSessions,
   onSelect,
 }) => {
+  const now = Date.now();
+
+  // Sort: open contacts by urgency score desc, closed always last
+  const sorted = [...contacts].sort((a, b) => {
+    const sa = urgencyScore(a, now);
+    const sb = urgencyScore(b, now);
+    return sb - sa;
+  });
+
+  // The top open contact gets the "Próximo sugerido" badge
+  const suggestedId = sorted.find(c => !c.sessionClosed)?.sessionId ?? null;
+
   return (
     <div className="flex flex-col h-full">
       {/* Header */}
@@ -194,7 +286,6 @@ export const ContactList: React.FC<ContactListProps> = ({
 
       {/* Contact rows */}
       {contacts.length === 0 ? (
-        // Lobby state
         <div className="flex-1 flex flex-col items-center justify-center gap-2 text-gray-400 p-4">
           <span className="text-2xl">⏳</span>
           <p className="text-xs text-center leading-snug">
@@ -203,12 +294,13 @@ export const ContactList: React.FC<ContactListProps> = ({
         </div>
       ) : (
         <div className="flex-1 overflow-y-auto">
-          {contacts.map((contact) => (
+          {sorted.map((contact) => (
             <ContactRow
               key={contact.sessionId}
               contact={contact}
               selected={contact.sessionId === selectedSessionId}
               aiTyping={aiTypingSessions.has(contact.sessionId)}
+              suggested={contact.sessionId === suggestedId}
               onSelect={() => onSelect(contact.sessionId)}
             />
           ))}

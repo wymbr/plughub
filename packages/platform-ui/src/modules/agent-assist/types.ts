@@ -223,6 +223,22 @@ export interface SupervisorCapabilities {
   escalations: EscalationSuggestion[];
 }
 
+// ── Pool presence ─────────────────────────────────────────────────────────────
+
+/** Status of a single pool WebSocket connection. */
+export type PoolConnectionStatus = "connecting" | "connected" | "disconnected";
+
+/** Agent's presence state in a pool. */
+export type PoolPresenceStatus = "ready" | "offline";
+
+/** A pool available for the agent to join. */
+export interface PoolInfo {
+  pool_id:       string;
+  display_name?: string;
+  channel_types: string[];
+  sla_target_ms: number | null;
+}
+
 // ── Multi-contact session state ───────────────────────────────────────────────
 
 /**
@@ -236,6 +252,10 @@ export interface ContactSession {
   /** Display name resolved from contact metadata, or null if not yet known. */
   customerName:     string | null;
   channel:          string;           // "webchat" | "whatsapp" | "voice" | …
+  /** Pool this contact was assigned through — from conversation.assigned.pool_id */
+  poolId:           string;
+  /** SLA target in ms for this contact — from pool config or supervisorState */
+  slaTargetMs:      number | null;
   messages:         ChatMessage[];
   supervisorState:  SupervisorState | null;
   capabilities:     SupervisorCapabilities | null;

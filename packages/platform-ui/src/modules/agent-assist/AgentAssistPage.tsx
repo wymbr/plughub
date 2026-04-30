@@ -1,26 +1,25 @@
 /**
- * AgentAssistPage — Multi-contact Agent Assist UI (platform-ui module)
+ * AgentAssistPage — Multi-contact, Multi-pool Agent Assist UI
  *
- * Adapted from packages/agent-assist-ui/src/App.tsx for the platform-ui shell.
- * Key differences from the standalone app:
- *   - Uses `h-full` (not h-screen) — Shell provides the outer container
- *   - agentName sourced from useAuth() session.name
- *   - poolId read from ?pool= URL param (useSearchParams); shows picker if absent
+ * Architecture (multi-pool):
+ *   - Agent can be "Ready" in multiple pools simultaneously.
+ *   - One WebSocket per active pool (useMultiPoolWebSocket).
+ *   - Contacts from all pools appear in a single prioritised ContactList.
+ *   - PresenceSidebar (left, collapsible) shows pool login/logout toggles.
  *
  * Layout:
- *   ┌──────────────────────────────────────────────────────┐
- *   │  Header (agente, pool, sessão, SLA, WS)              │
- *   ├──────────┬───────────────────────┬───────────────────┤
- *   │ Contact  │  Chat Area            │  Right Panel      │
- *   │ List     │  (selected contact)   │  (context)        │
- *   │  (20%)   │       (50%)           │       (30%)       │
- *   ├──────────┴───────────────────────┴───────────────────┤
- *   │  AgentInput  (tied to selected contact)              │
- *   └──────────────────────────────────────────────────────┘
+ *   ┌──────────────────────────────────────────────────────────┐
+ *   │  Header (agente, pool do contato selecionado, SLA, WS)   │
+ *   ├───────┬──────────┬──────────────────────┬───────────────┤
+ *   │Presence│ Contact │  Chat Area            │  Right Panel  │
+ *   │Sidebar │  List   │  (selected contact)   │  (context)    │
+ *   │(~160px)│ (~200px)│     (flex-1)          │   (~280px)    │
+ *   ├───────┴──────────┴──────────────────────┴───────────────┤
+ *   │  AgentInput  (tied to selected contact)                  │
+ *   └──────────────────────────────────────────────────────────┘
  */
 
 import React, { useCallback, useEffect, useRef, useState } from "react";
-import { useSearchParams } from "react-router-dom";
 import { useAuth } from "@/auth/useAuth";
 
 import {
@@ -28,31 +27,38 @@ import {
   ChatMessage,
   ClosePayload,
   ContactSession,
+  PoolConnectionStatus,
+  PoolInfo,
   Toast,
-  WsServerEvent,
+  WsStatus,
 } from "./types";
-import { useAgentWebSocket }         from "./hooks/useAgentWebSocket";
+import { useMultiPoolWebSocket } from "./hooks/useMultiPoolWebSocket";
 import { useSupervisorState }        from "./hooks/useSupervisorState";
 import { useSupervisorCapabilities } from "./hooks/useSupervisorCapabilities";
-import { Header }         from "./components/Header";
-import { ChatArea }       from "./components/ChatArea";
-import { AgentInput }     from "./components/AgentInput";
-import { CloseModal }     from "./components/CloseModal";
-import { RightPanel }     from "./components/RightPanel";
-import { ContactList }    from "./components/ContactList";
-import { ToastContainer } from "./components/ToastContainer";
+import { Header }           from "./components/Header";
+import { ChatArea }         from "./components/ChatArea";
+import { AgentInput }       from "./components/AgentInput";
+import { CloseModal }       from "./components/CloseModal";
+import { RightPanel }       from "./components/RightPanel";
+import { ContactList }      from "./components/ContactList";
+import { PresenceSidebar }  from "./components/PresenceSidebar";
+import { ToastContainer }   from "./components/ToastContainer";
+
+const API_BASE = import.meta.env.VITE_REGISTRY_URL ?? "/v1";
 
 // ── Toast id generator ─────────────────────────────────────────────────────
 let toastSeq = 0;
 function makeToastId(): string { return `toast-${++toastSeq}`; }
 
 // ── ContactSession factory ─────────────────────────────────────────────────
-function makeContact(sessionId: string, channel = "webchat"): ContactSession {
+function makeContact(sessionId: string, poolId: string, channel = "webchat"): ContactSession {
   return {
     sessionId,
     contactId:         null,
     customerName:      null,
     channel,
+    poolId,
+    slaTargetMs:       null,
     messages:          [],
     supervisorState:   null,
     capabilities:      null,
@@ -63,54 +69,75 @@ function makeContact(sessionId: string, channel = "webchat"): ContactSession {
   };
 }
 
-// ── Pool picker (shown when ?pool= is not set) ─────────────────────────────
-const PoolPicker: React.FC<{ onPick: (pool: string) => void }> = ({ onPick }) => {
-  const [value, setValue] = useState("");
-  return (
-    <div className="flex flex-col items-center justify-center h-full gap-4 text-gray-500">
-      <span className="text-4xl">🤖</span>
-      <p className="text-sm">Informe o pool para iniciar o atendimento</p>
-      <div className="flex gap-2">
-        <input
-          type="text"
-          className="border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
-          placeholder="Ex: retencao_humano"
-          value={value}
-          onChange={(e) => setValue(e.target.value)}
-          onKeyDown={(e) => e.key === "Enter" && value.trim() && onPick(value.trim())}
-        />
-        <button
-          disabled={!value.trim()}
-          onClick={() => onPick(value.trim())}
-          className="px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-medium disabled:opacity-40"
-        >
-          Entrar
-        </button>
-      </div>
-    </div>
-  );
-};
+// ── Aggregate WS status helper ─────────────────────────────────────────────
+function aggregateStatus(
+  statuses: Map<string, PoolConnectionStatus>,
+  activePools: string[],
+): WsStatus {
+  if (activePools.length === 0) return "disconnected";
+  const vals = activePools.map(p => statuses.get(p) ?? "disconnected");
+  if (vals.some(v => v === "connected"))    return "connected";
+  if (vals.some(v => v === "connecting"))   return "connecting";
+  return "disconnected";
+}
+
+// ── Fetch pools from agent-registry ───────────────────────────────────────
+async function fetchPools(accessiblePools: string[]): Promise<PoolInfo[]> {
+  try {
+    const res  = await fetch(`${API_BASE}/pools`, {
+      headers: { "x-tenant-id": "tenant_demo", "x-user-id": "operator" },
+    });
+    if (!res.ok) return [];
+    const data = await res.json() as Array<{
+      pool_id: string;
+      display_name?: string;
+      channel_types?: string[];
+      sla_target_ms?: number | null;
+    }>;
+    const list: PoolInfo[] = data.map(p => ({
+      pool_id:       p.pool_id,
+      display_name:  p.display_name,
+      channel_types: p.channel_types ?? [],
+      sla_target_ms: p.sla_target_ms ?? null,
+    }));
+    // Filter to only pools the agent is authorised for
+    if (accessiblePools.length === 0) return list;
+    return list.filter(p => accessiblePools.includes(p.pool_id));
+  } catch {
+    return [];
+  }
+}
 
 // ── AgentAssistPage ────────────────────────────────────────────────────────
 export const AgentAssistPage: React.FC = () => {
   const { session } = useAuth();
   const agentName   = session?.name ?? "Agente";
+  const accessiblePools: string[] = session?.accessiblePools ?? [];
 
-  const [searchParams, setSearchParams] = useSearchParams();
-  const [poolId, setPoolId] = useState<string>(searchParams.get("pool") ?? "");
+  // ── Available pools (from registry) ────────────────────────────────────
+  const [availablePools, setAvailablePools] = useState<PoolInfo[]>([]);
+  useEffect(() => {
+    fetchPools(accessiblePools).then(setAvailablePools);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
-  // Commit pool selection to URL
-  const handlePickPool = useCallback((pool: string) => {
-    setPoolId(pool);
-    setSearchParams((p) => { p.set("pool", pool); return p; }, { replace: true });
-  }, [setSearchParams]);
+  // ── Presence: set of pool_ids the agent is "Ready" in ──────────────────
+  const [activePools, setActivePools] = useState<string[]>([]);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+
+  const handleTogglePool = useCallback((poolId: string) => {
+    setActivePools(prev =>
+      prev.includes(poolId) ? prev.filter(p => p !== poolId) : [...prev, poolId]
+    );
+  }, []);
+
+  // ── Multi-pool WebSocket ────────────────────────────────────────────────
+  const { statuses, lastEvent, send } = useMultiPoolWebSocket(activePools);
 
   // ── Multi-contact state ─────────────────────────────────────────────────
   const [contacts, setContacts] = useState<Map<string, ContactSession>>(new Map());
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
 
-  // Refs always hold latest value — used inside WS event handler to avoid
-  // stale closure bugs (the handler's dep array omits these on purpose).
   const contactsRef        = useRef<Map<string, ContactSession>>(new Map());
   const selectedSessionRef = useRef<string | null>(null);
   useEffect(() => { contactsRef.current        = contacts;          }, [contacts]);
@@ -120,18 +147,15 @@ export const AgentAssistPage: React.FC = () => {
   const [activeTab, setActiveTab] = useState<ActiveTab>("estado");
   const [toasts, setToasts]       = useState<Toast[]>([]);
 
-  // ── WebSocket — one connection for all contacts ─────────────────────────
-  const { status: wsStatus, send, lastEvent } = useAgentWebSocket(poolId || null);
-
-  // Track assignments to suppress routing-drain duplicates
-  const notifiedAssignments = useRef<Set<string>>(new Set());
-  // Pending closed sessions: session.closed may arrive before conversation.assigned
+  // Dedup guards
+  const notifiedAssignments   = useRef<Set<string>>(new Set());
   const pendingClosedSessions = useRef<Map<string, string>>(new Map());
-  // Sessions already handled — suppress routing drain re-emissions
-  const handledSessions = useRef<Set<string>>(new Set());
+  const handledSessions       = useRef<Set<string>>(new Set());
 
   // ── Supervisor hooks — scoped to selected contact ───────────────────────
-  const supervisorState = useSupervisorState(selectedSessionId, lastEvent);
+  // Cast away the _pool_id tag for hooks that expect WsServerEvent | null
+  const lastWsEvent = lastEvent as import("./types").WsServerEvent | null;
+  const supervisorState = useSupervisorState(selectedSessionId, lastWsEvent);
   const capabilities    = useSupervisorCapabilities(selectedSessionId, supervisorState);
 
   // Sync supervisor data back into the selected contact's state
@@ -145,7 +169,9 @@ export const AgentAssistPage: React.FC = () => {
         ...c,
         supervisorState: supervisorState ?? c.supervisorState,
         capabilities:    capabilities    ?? c.capabilities,
-        customerName:    c.customerName,
+        // Update slaTargetMs from supervisorState when available
+        slaTargetMs:
+          supervisorState?.sla?.target_ms ?? c.slaTargetMs,
       });
       return next;
     });
@@ -187,20 +213,23 @@ export const AgentAssistPage: React.FC = () => {
         return next;
       });
     } catch {
-      // non-fatal — agent starts with no visible history
+      // non-fatal
     }
   }, []);
 
   // ── WS event handler ────────────────────────────────────────────────────
   useEffect(() => {
     if (!lastEvent) return;
-    const event: WsServerEvent = lastEvent;
+    const sourcePoolId = lastEvent._pool_id;
+    // Re-typed as WsServerEvent for discriminated union narrowing
+    const event = lastEvent as import("./types").WsServerEvent;
 
     if (event.type === "connection.accepted") return;
 
     // ── New contact assigned ────────────────────────────────────────────
     if (event.type === "conversation.assigned") {
-      const { session_id, contact_id } = event;
+      const { session_id, contact_id, pool_id } = event;
+      const resolvedPool = pool_id ?? sourcePoolId;
 
       if (handledSessions.current.has(session_id)) return;
 
@@ -208,19 +237,25 @@ export const AgentAssistPage: React.FC = () => {
                     !notifiedAssignments.current.has(session_id);
       notifiedAssignments.current.add(session_id);
 
+      // Lookup slaTargetMs from available pools
+      const poolInfo = availablePools.find(p => p.pool_id === resolvedPool);
+      const slaTargetMs = poolInfo?.sla_target_ms ?? null;
+
       setContacts(prev => {
         if (prev.has(session_id)) return prev;
         const next = new Map(prev);
         const alreadyClosed = pendingClosedSessions.current.has(session_id);
         pendingClosedSessions.current.delete(session_id);
         next.set(session_id, {
-          ...makeContact(session_id),
+          ...makeContact(session_id, resolvedPool),
           contactId:         contact_id ?? null,
+          slaTargetMs,
           sessionClosed:     alreadyClosed,
           pendingCloseModal: alreadyClosed,
         });
         return next;
       });
+
       if (!isNew) return;
       setSelectedSessionId(prev => prev ?? session_id);
       fetchHistory(session_id);
@@ -256,7 +291,6 @@ export const AgentAssistPage: React.FC = () => {
         return next;
       });
 
-      // Clear AI typing indicator for this session
       if (event.author.type === "agent_ai") {
         const timer = aiTypingTimers.current.get(sid);
         if (timer) { clearTimeout(timer); aiTypingTimers.current.delete(sid); }
@@ -449,24 +483,19 @@ export const AgentAssistPage: React.FC = () => {
     [addToast]
   );
 
-  // ── Selected contact snapshot ───────────────────────────────────────────
-  const selected = selectedSessionId ? contacts.get(selectedSessionId) ?? null : null;
+  // ── Derived state ───────────────────────────────────────────────────────
+  const selected   = selectedSessionId ? contacts.get(selectedSessionId) ?? null : null;
+  const wsStatus   = aggregateStatus(statuses, activePools);
 
-  // ── Pool not set — show picker ──────────────────────────────────────────
-  if (!poolId) {
-    return (
-      <div className="h-full overflow-hidden bg-gray-50">
-        <PoolPicker onPick={handlePickPool} />
-      </div>
-    );
-  }
+  // Show the selected contact's pool in the header, or the first active pool
+  const headerPoolId = selected?.poolId ?? activePools[0] ?? "";
 
   // ── Main render ─────────────────────────────────────────────────────────
   return (
     <div className="flex flex-col h-full overflow-hidden bg-gray-50">
       <Header
         agentName={agentName}
-        poolId={poolId}
+        poolId={headerPoolId}
         sessionId={selectedSessionId}
         wsStatus={wsStatus}
         sla={selected?.supervisorState?.sla ?? null}
@@ -474,8 +503,19 @@ export const AgentAssistPage: React.FC = () => {
       />
 
       <div className="flex flex-1 overflow-hidden">
-        {/* Contact list — 20% */}
-        <div className="w-[20%] border-r border-gray-200 overflow-hidden flex flex-col">
+
+        {/* Presence sidebar */}
+        <PresenceSidebar
+          pools={availablePools}
+          activePools={activePools}
+          statuses={statuses}
+          onToggle={handleTogglePool}
+          collapsed={sidebarCollapsed}
+          onCollapse={() => setSidebarCollapsed(c => !c)}
+        />
+
+        {/* Contact list — fixed 200px */}
+        <div className="w-[200px] border-r border-gray-200 overflow-hidden flex flex-col flex-shrink-0">
           <ContactList
             contacts={[...contacts.values()]}
             selectedSessionId={selectedSessionId}
@@ -484,11 +524,23 @@ export const AgentAssistPage: React.FC = () => {
           />
         </div>
 
-        {/* Chat — 50% */}
-        <div className="flex flex-col w-[50%] overflow-hidden">
+        {/* Chat — flex-1 */}
+        <div className="flex flex-col flex-1 overflow-hidden">
           {!selected ? (
-            <div className="flex-1 flex items-center justify-center text-gray-400 text-sm select-none">
-              <span className="animate-pulse">⏳ Aguardando próximo atendimento…</span>
+            <div className="flex-1 flex flex-col items-center justify-center text-gray-400 text-sm select-none gap-3">
+              {activePools.length === 0 ? (
+                <>
+                  <span className="text-3xl">🟢</span>
+                  <p className="text-center leading-snug max-w-xs">
+                    Selecione um pool na barra lateral para ficar disponível.
+                  </p>
+                </>
+              ) : (
+                <>
+                  <span className="text-3xl animate-pulse">⏳</span>
+                  <p>Aguardando próximo atendimento…</p>
+                </>
+              )}
             </div>
           ) : (
             <ChatArea
@@ -512,8 +564,8 @@ export const AgentAssistPage: React.FC = () => {
           />
         </div>
 
-        {/* Right panel — 30% */}
-        <div className="w-[30%] overflow-hidden flex flex-col">
+        {/* Right panel — fixed 280px */}
+        <div className="w-[280px] overflow-hidden flex flex-col flex-shrink-0 border-l border-gray-200">
           <RightPanel
             activeTab={activeTab}
             onTabChange={setActiveTab}
@@ -526,7 +578,7 @@ export const AgentAssistPage: React.FC = () => {
         </div>
       </div>
 
-      {/* Close modal — shown when customer disconnected on selected contact */}
+      {/* Close modal */}
       {selected?.pendingCloseModal && (
         <CloseModal
           defaultIssueStatus="Cliente desconectou"
