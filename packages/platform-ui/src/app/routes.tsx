@@ -24,6 +24,7 @@ import SkillFlowsPage from '@/modules/skill-flows/SkillFlowsPage'
 import { AgentAssistPage } from '@/modules/agent-assist/AgentAssistPage'
 import PlaceholderPage from '@/modules/_placeholder/PlaceholderPage'
 import AccessPage from '@/modules/access/AccessPage'
+import CalendarsPage from '@/modules/calendars/CalendarsPage'
 import ContactsPage from '@/modules/contacts/ContactsPage'
 import DashboardsPage from '@/modules/dashboards/DashboardsPage'
 
@@ -98,6 +99,10 @@ export const routes: RouteObject[] = [
       {
         path: 'config/access',
         element: <AccessPage />
+      },
+      {
+        path: 'config/calendars',
+        element: <CalendarsPage />
       },
       {
         path: 'evaluation/forms',

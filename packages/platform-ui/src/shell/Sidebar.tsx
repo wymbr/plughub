@@ -92,7 +92,8 @@ const Sidebar: React.FC = () => {
         { label: t('nav.plataforma'), href: '/config/platform', icon: '🖥️' },
         { label: t('nav.mascaramento'), href: '/config/masking', icon: '🔒' },
         { label: t('nav.faturamento'), href: '/config/billing', icon: '💳' },
-        { label: t('nav.acesso'), href: '/config/access', icon: '🔐' }
+        { label: t('nav.acesso'), href: '/config/access', icon: '🔐' },
+        { label: t('nav.calendarios'), href: '/config/calendars', icon: '📅' }
       ]
     },
     {
