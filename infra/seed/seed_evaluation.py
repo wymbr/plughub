@@ -137,15 +137,15 @@ def upsert_form() -> str | None:
                 form_id = f.get("id") or f.get("form_id", "")
                 existing_dims = f.get("dimensions") or []
                 if not existing_dims:
-                    # Dimensions vazias (seed anterior usou 'criteria') — corrigir via PATCH
-                    log(f"Formulário '{FORM_NAME}' existe ({form_id}) mas sem dimensões — corrigindo via PATCH…")
-                    p_status, p_body = _req("PATCH", f"/v1/evaluation/forms/{form_id}", {
+                    # Dimensions vazias — corrigir via PUT (o router não expõe PATCH)
+                    log(f"Formulário '{FORM_NAME}' existe ({form_id}) mas sem dimensões — corrigindo via PUT…")
+                    p_status, p_body = _req("PUT", f"/v1/evaluation/forms/{form_id}?tenant_id={TENANT_ID}", {
                         "dimensions": DIMENSIONS,
                     })
                     if p_status in (200, 204):
                         ok(f"Formulário '{FORM_NAME}' corrigido: {form_id}")
                     else:
-                        warn(f"Falha no PATCH do formulário {form_id}: {p_status} {p_body}")
+                        warn(f"Falha no PUT do formulário {form_id}: {p_status} {p_body}")
                 else:
                     warn(f"Formulário '{FORM_NAME}' já existe e tem dimensões: {form_id}")
                 return form_id
