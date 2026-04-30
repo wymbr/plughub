@@ -1,11 +1,15 @@
 import React, { lazy, Suspense } from 'react'
-import { RouteObject } from 'react-router-dom'
+import { RouteObject, Navigate } from 'react-router-dom'
+
+/** Redirect legacy /monitor → /contacts?tab=monitor */
+function MonitorRedirect() {
+  return <Navigate to="/contacts?tab=monitor" replace />
+}
 import Shell from '@/shell/Shell'
 import LoginPage from '@/auth/LoginPage'
 import { ProtectedRoute } from '@/auth/ProtectedRoute'
 import HomePage from '@/modules/home/HomePage'
 import ConfigRecursosIndex from '@/modules/config-recursos'
-import MonitorPage from '@/modules/atendimento/MonitorPage'
 import ConfigPlataformaPage from '@/modules/config-plataforma/ConfigPlataformaPage'
 import MaskingPage from '@/modules/masking/MaskingPage'
 import WorkflowsPage from '@/modules/workflows/WorkflowsPage'
@@ -52,7 +56,8 @@ export const routes: RouteObject[] = [
       },
       {
         path: 'monitor',
-        element: <MonitorPage />
+        // Redirect legacy /monitor to /contacts?tab=monitor
+        element: <MonitorRedirect />
       },
       {
         path: 'agent-assist',

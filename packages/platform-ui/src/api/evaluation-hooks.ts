@@ -39,7 +39,15 @@ export function useForms(tenantId: string) {
       const r = await fetch(`${BASE}/forms?tenant_id=${tenantId}`)
       if (!r.ok) throw new Error(`HTTP ${r.status}`)
       const d = await r.json()
-      setForms(Array.isArray(d) ? d : (d?.forms ?? d?.data ?? d?.items ?? []))
+      const raw: EvaluationForm[] = Array.isArray(d) ? d : (d?.forms ?? d?.data ?? d?.items ?? [])
+      // Defensive: asyncpg may return JSONB columns as strings — parse them
+      const normalized = raw.map(f => ({
+        ...f,
+        dimensions: typeof f.dimensions === 'string'
+          ? (() => { try { return JSON.parse(f.dimensions as unknown as string) } catch { return [] } })()
+          : (f.dimensions ?? []),
+      }))
+      setForms(normalized)
       setError(null)
     } catch (e) {
       setError(String(e))

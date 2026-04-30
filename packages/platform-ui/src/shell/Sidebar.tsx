@@ -41,9 +41,9 @@ const Sidebar: React.FC = () => {
       icon: '📞',
       roles: ['operator', 'supervisor', 'admin'],
       children: [
-        { label: t('nav.contatos'),    href: '/contacts',     icon: '📋' },
-        { label: t('nav.monitor'),     href: '/monitor',      icon: '📊' },
-        { label: t('nav.agentAssist'), href: '/agent-assist', icon: '🤖' }
+        { label: t('nav.contatos'),    href: '/contacts',             icon: '📋' },
+        { label: t('nav.monitor'),     href: '/contacts?tab=monitor', icon: '📡' },
+        { label: t('nav.agentAssist'), href: '/agent-assist',         icon: '🤖' }
       ]
     },
     {
@@ -109,7 +109,16 @@ const Sidebar: React.FC = () => {
     }
   ]
 
-  const isActive = (href: string) => location.pathname === href || location.pathname.startsWith(href + '/')
+  const isActive = (href: string) => {
+    // Handle hrefs with query params (e.g. /contacts?tab=monitor)
+    const qIdx = href.indexOf('?')
+    if (qIdx >= 0) {
+      const hrefPath   = href.slice(0, qIdx)
+      const hrefSearch = href.slice(qIdx + 1)
+      return location.pathname === hrefPath && location.search.includes(hrefSearch)
+    }
+    return location.pathname === href || location.pathname.startsWith(href + '/')
+  }
 
   const perms = makePermissions(session?.moduleConfig)
 
