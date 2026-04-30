@@ -10,6 +10,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { useAuth }          from '@/auth/useAuth'
+import { makePermissions }  from '@/lib/permissions'
 import { SessionTranscript } from '@/modules/atendimento/components/SessionTranscript'
 import type { ContactFilters } from './types'
 import { DEFAULT_FILTERS, iso7dAgo, isoToday } from './types'
@@ -162,10 +163,10 @@ function ContactDetail({ tenantId, sessionId, onBack }: {
 
 type ContactTab = 'lista' | 'monitor' | 'analise'
 
-const TABS: { id: ContactTab; label: string; icon: string }[] = [
+const ALL_TABS: { id: ContactTab; label: string; icon: string; abac?: { module: string; field: string } }[] = [
   { id: 'lista',   label: 'Lista',    icon: '📋' },
-  { id: 'monitor', label: 'Monitor',  icon: '📡' },
-  { id: 'analise', label: 'Análise',  icon: '📊' },
+  { id: 'monitor', label: 'Monitor',  icon: '📡', abac: { module: 'contacts', field: 'operacao'   } },
+  { id: 'analise', label: 'Análise',  icon: '📊', abac: { module: 'contacts', field: 'visualizar' } },
 ]
 
 // ─── Filter bar component ─────────────────────────────────────────────────────
@@ -286,11 +287,19 @@ function FilterBar({ filters, setFilters, loading, totalLabel }: FilterBarProps)
 export default function ContactsPage() {
   const { session }   = useAuth()
   const tenantId      = session?.tenantId ?? ''
+  const perms         = makePermissions(session?.moduleConfig)
+
+  // Filter tabs by ABAC — Lista is always visible; Monitor needs operacao; Análise needs visualizar
+  const TABS = ALL_TABS.filter(tab =>
+    !tab.abac || perms.can(tab.abac.module, tab.abac.field)
+  )
+  const validTabIds = TABS.map(t => t.id)
 
   const [searchParams, setSearchParams] = useSearchParams()
   const rawTab = searchParams.get('tab') as ContactTab | null
-  const activeTab: ContactTab = rawTab && ['lista','monitor','analise'].includes(rawTab)
-    ? rawTab : 'lista'
+  // If requested tab is not accessible, fall back to first visible tab
+  const activeTab: ContactTab = rawTab && validTabIds.includes(rawTab)
+    ? rawTab : (validTabIds[0] ?? 'lista')
 
   function setTab(t: ContactTab) {
     setSearchParams(p => { p.set('tab', t); return p }, { replace: true })
@@ -347,10 +356,8 @@ export default function ContactsPage() {
         </div>
       </div>
 
-      {/* ── Shared filter bar (hidden for Monitor — has its own toolbar) ── */}
-      {activeTab !== 'monitor' && (
-        <FilterBar filters={filters} setFilters={setFilters} />
-      )}
+      {/* ── Shared filter bar ── */}
+      <FilterBar filters={filters} setFilters={setFilters} />
 
       {/* ── Tab content ─────────────────────────────────────────────────── */}
       <div className="flex-1 overflow-hidden">

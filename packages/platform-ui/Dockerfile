@@ -30,7 +30,9 @@ RUN printf 'server {\n\
     }\n\
 \n\
     # mcp-server-plughub (agent WebSocket)\n\
-    location ~ ^/agent-ws(/|$) {\n\
+    # /agent-ws → /agent/ws on the backend (path rewrite required)\n\
+    location ~ ^/agent-ws {\n\
+        rewrite ^/agent-ws(.*) /agent/ws$1 break;\n\
         proxy_pass         http://mcp-server-plughub:3100;\n\
         proxy_http_version 1.1;\n\
         proxy_set_header   Upgrade $http_upgrade;\n\
@@ -103,17 +105,25 @@ RUN printf 'server {\n\
         proxy_read_timeout 60s;\n\
     }\n\
 \n\
-    # config-api\n\
-    location ~ ^/config(/|$) {\n\
+    # SPA routes under /config — must come BEFORE config-api proxy\n\
+    # These are React Router routes; hard refresh must serve index.html, not config-api\n\
+    location ~ ^/config/(access|billing|platform|masking|recursos)(/|$) {\n\
+        try_files $uri $uri/ /index.html;\n\
+    }\n\
+\n\
+    # config-api (namespace/key CRUD — all other /config/* routes)\n\
+    location ~ ^/config/ {\n\
         proxy_pass         http://config-api:3600;\n\
         proxy_http_version 1.1;\n\
         proxy_set_header   Host $host;\n\
+        proxy_set_header   X-Admin-Token $http_x_admin_token;\n\
         proxy_buffering    off;\n\
         proxy_read_timeout 60s;\n\
     }\n\
 \n\
     # analytics-api (dashboard SSE + reports)\n\
-    location ~ ^/(dashboard|sessions|supervisor|reports)(/|$) {\n\
+    # NOTE: using / (not (/|$)) so bare paths like /reports fall through to SPA fallback\n\
+    location ~ ^/(dashboard|sessions|supervisor|reports)/ {\n\
         proxy_pass         http://analytics-api:3500;\n\
         proxy_http_version 1.1;\n\
         proxy_set_header   Upgrade $http_upgrade;\n\

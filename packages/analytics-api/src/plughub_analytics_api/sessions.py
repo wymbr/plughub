@@ -67,7 +67,7 @@ async def list_active_sessions(
     try:
         sessions = await asyncio.to_thread(
             _fetch_active_sessions,
-            store._client, store._database, tenant_id, pool_id, limit,
+            store.new_client(), store._database, tenant_id, pool_id, limit,
         )
         # Overlay sentiment scores from Redis (pipeline for efficiency)
         if sessions:
@@ -181,7 +181,7 @@ async def customer_history(
     try:
         rows = await asyncio.to_thread(
             _fetch_customer_history,
-            store._client, store._database, tenant_id, customer_id, limit,
+            store.new_client(), store._database, tenant_id, customer_id, limit,
         )
         return JSONResponse(content=rows)
     except Exception as exc:

@@ -113,7 +113,7 @@ async def report_sessions(
     ps = _clamp_page_size(page_size, format == "csv")
     tags_list = [t.strip() for t in insight_tags.split(",") if t.strip()] if insight_tags else None
     data = await query_sessions_report(
-        client    = request.app.state.store._client,
+        client    = request.app.state.store.new_client(),
         database  = request.app.state.store._database,
         tenant_id = tenant_id,
         from_dt   = from_dt,
@@ -160,7 +160,7 @@ async def report_agents(
     """
     ps = _clamp_page_size(page_size, format == "csv")
     data = await query_agents_report(
-        client    = request.app.state.store._client,
+        client    = request.app.state.store.new_client(),
         database  = request.app.state.store._database,
         tenant_id = tenant_id,
         from_dt   = from_dt,
@@ -204,7 +204,7 @@ async def report_contact_insights(
     ps = _clamp_page_size(page_size, format == "csv")
     tags_list = [t.strip() for t in tags.split(",") if t.strip()] if tags else None
     data = await query_contact_insights_report(
-        client    = request.app.state.store._client,
+        client    = request.app.state.store.new_client(),
         database  = request.app.state.store._database,
         tenant_id = tenant_id,
         from_dt   = from_dt,
@@ -243,7 +243,7 @@ async def report_quality(
     """
     ps = _clamp_page_size(page_size, format == "csv")
     data = await query_quality_report(
-        client    = request.app.state.store._client,
+        client    = request.app.state.store.new_client(),
         database  = request.app.state.store._database,
         tenant_id = tenant_id,
         from_dt   = from_dt,
@@ -281,7 +281,7 @@ async def report_usage(
     """
     ps = _clamp_page_size(page_size, format == "csv")
     data = await query_usage_report(
-        client    = request.app.state.store._client,
+        client    = request.app.state.store.new_client(),
         database  = request.app.state.store._database,
         tenant_id = tenant_id,
         from_dt   = from_dt,
@@ -320,7 +320,7 @@ async def report_workflows(
     """
     ps = _clamp_page_size(page_size, format == "csv")
     data = await query_workflows_report(
-        client    = request.app.state.store._client,
+        client    = request.app.state.store.new_client(),
         database  = request.app.state.store._database,
         tenant_id = tenant_id,
         from_dt   = from_dt,
@@ -365,7 +365,7 @@ async def report_campaigns(
     """
     ps = _clamp_page_size(page_size, format == "csv")
     data = await query_campaigns_report(
-        client    = request.app.state.store._client,
+        client    = request.app.state.store.new_client(),
         database  = request.app.state.store._database,
         tenant_id = tenant_id,
         from_dt   = from_dt,
@@ -414,7 +414,7 @@ async def report_participation(
     """
     ps = _clamp_page_size(page_size, format == "csv")
     data = await query_participation_report(
-        client    = request.app.state.store._client,
+        client    = request.app.state.store.new_client(),
         database  = request.app.state.store._database,
         tenant_id = tenant_id,
         from_dt   = from_dt,
@@ -469,7 +469,7 @@ async def get_segments_report(
     """
     ps = _clamp_page_size(page_size, format == "csv")
     data = await query_segments_report(
-        client    = request.app.state.store._client,
+        client    = request.app.state.store.new_client(),
         database  = request.app.state.store._database,
         tenant_id = tenant_id,
         from_dt   = from_dt,
@@ -519,7 +519,7 @@ async def get_agent_performance_report(
     role:    primary | specialist | supervisor | evaluator | reviewer
     """
     data = await query_agent_performance_report(
-        client           = request.app.state.store._client,
+        client           = request.app.state.store.new_client(),
         database         = request.app.state.store._database,
         tenant_id        = tenant_id,
         from_dt          = from_dt,
@@ -557,7 +557,7 @@ async def get_evaluations_report(
     """
     page_size = _clamp_page_size(page_size, format == "csv")
     data = await query_evaluations_report(
-        client       = request.app.state.store._client,
+        client       = request.app.state.store.new_client(),
         database     = request.app.state.store._database,
         tenant_id    = tenant_id,
         from_dt      = from_dt,
@@ -592,7 +592,7 @@ async def get_evaluations_summary(
     format: json | csv
     """
     data = await query_evaluations_summary(
-        client     = request.app.state.store._client,
+        client     = request.app.state.store.new_client(),
         database   = request.app.state.store._database,
         tenant_id  = tenant_id,
         from_dt    = from_dt,
@@ -626,7 +626,7 @@ async def report_timeseries_volume(
     meta.total = total sessions across all buckets.
     """
     data = await query_volume_timeseries(
-        client     = request.app.state.store._client,
+        client     = request.app.state.store.new_client(),
         database   = request.app.state.store._database,
         tenant_id  = tenant_id,
         from_dt    = from_dt,
@@ -667,7 +667,7 @@ async def report_timeseries_handle_time(
     Tip: divide by 60000 in the UI to display minutes.
     """
     data = await query_handle_time_timeseries(
-        client     = request.app.state.store._client,
+        client     = request.app.state.store.new_client(),
         database   = request.app.state.store._database,
         tenant_id  = tenant_id,
         from_dt    = from_dt,
@@ -708,7 +708,7 @@ async def report_timeseries_score(
     meta.total = overall avg across all buckets.
     """
     data = await query_score_timeseries(
-        client     = request.app.state.store._client,
+        client     = request.app.state.store.new_client(),
         database   = request.app.state.store._database,
         tenant_id  = tenant_id,
         from_dt    = from_dt,

@@ -16,10 +16,11 @@ import type { DashboardCard, DashboardTemplate } from '@/types'
 
 const CONFIG_BASE = '/config'    // proxied to config-api (port 3600)
 
-async function configGet(namespace: string, key: string, adminToken?: string): Promise<unknown> {
+async function configGet(namespace: string, key: string, adminToken?: string, tenantId?: string): Promise<unknown> {
   const headers: Record<string, string> = {}
   if (adminToken) headers['X-Admin-Token'] = adminToken
-  const res = await fetch(`${CONFIG_BASE}/${namespace}/${key}`, { headers })
+  const params = tenantId ? `?tenant_id=${encodeURIComponent(tenantId)}` : ''
+  const res = await fetch(`${CONFIG_BASE}/${namespace}/${key}${params}`, { headers })
   if (res.status === 404) return null
   if (!res.ok) throw new Error(`Config GET ${namespace}/${key}: HTTP ${res.status}`)
   const json = await res.json()
@@ -48,27 +49,40 @@ async function configPut(
   if (!res.ok) throw new Error(`Config PUT ${namespace}/${key}: HTTP ${res.status}`)
 }
 
-async function configDelete(namespace: string, key: string, adminToken: string): Promise<void> {
-  const res = await fetch(`${CONFIG_BASE}/${namespace}/${key}`, {
+async function configDelete(namespace: string, key: string, adminToken: string, tenantId?: string): Promise<void> {
+  // Build query params — include admin_token as fallback in case the reverse proxy
+  // strips custom request headers for DELETE requests
+  const qp = new URLSearchParams()
+  if (tenantId) qp.set('tenant_id', tenantId)
+  if (adminToken) qp.set('admin_token', adminToken)
+  const params = qp.toString() ? `?${qp.toString()}` : ''
+  const res = await fetch(`${CONFIG_BASE}/${namespace}/${key}${params}`, {
     method: 'DELETE',
     headers: { 'X-Admin-Token': adminToken },
   })
   if (!res.ok && res.status !== 404) throw new Error(`Config DELETE: HTTP ${res.status}`)
 }
 
-async function configListNamespace(namespace: string, adminToken?: string): Promise<Record<string, unknown>> {
+async function configListNamespace(namespace: string, adminToken?: string, tenantId?: string): Promise<Record<string, unknown>> {
   const headers: Record<string, string> = {}
   if (adminToken) headers['X-Admin-Token'] = adminToken
-  const res = await fetch(`${CONFIG_BASE}/${namespace}`, { headers })
+  const params = tenantId ? `?tenant_id=${encodeURIComponent(tenantId)}` : ''
+  const res = await fetch(`${CONFIG_BASE}/${namespace}${params}`, { headers })
   if (!res.ok) throw new Error(`Config list ${namespace}: HTTP ${res.status}`)
-  return res.json()
+  const json = await res.json()
+  // Config API returns { tenant_id, namespace, entries: {...} } — unwrap entries
+  if (json && typeof json === 'object' && 'entries' in json && typeof json.entries === 'object') {
+    return json.entries as Record<string, unknown>
+  }
+  // Fallback: response is already a flat key→value map (older config-api versions)
+  return json
 }
 
 // ─── Template CRUD ────────────────────────────────────────────────────────────
 
 /** Fetch all templates for the tenant */
 export async function listTemplates(tenantId: string, adminToken: string): Promise<DashboardTemplate[]> {
-  const all = await configListNamespace('dashboards', adminToken)
+  const all = await configListNamespace('dashboards', adminToken, tenantId)
   const templates: DashboardTemplate[] = []
   for (const [key, raw] of Object.entries(all)) {
     if (!key.startsWith('template:')) continue
@@ -84,8 +98,8 @@ export async function listTemplates(tenantId: string, adminToken: string): Promi
 }
 
 /** Fetch a single template by ID */
-export async function getTemplate(templateId: string, adminToken?: string): Promise<DashboardTemplate | null> {
-  const raw = await configGet('dashboards', `template:${templateId}`, adminToken)
+export async function getTemplate(templateId: string, adminToken?: string, tenantId?: string): Promise<DashboardTemplate | null> {
+  const raw = await configGet('dashboards', `template:${templateId}`, adminToken, tenantId)
   if (!raw) return null
   return raw as DashboardTemplate
 }
@@ -100,8 +114,8 @@ export async function saveTemplate(
 }
 
 /** Delete a template */
-export async function deleteTemplate(templateId: string, adminToken: string): Promise<void> {
-  await configDelete('dashboards', `template:${templateId}`, adminToken)
+export async function deleteTemplate(templateId: string, adminToken: string, tenantId?: string): Promise<void> {
+  await configDelete('dashboards', `template:${templateId}`, adminToken, tenantId)
 }
 
 // ─── Personal layout override ─────────────────────────────────────────────────
@@ -134,7 +148,7 @@ export async function loadPersonalLayout(
 ): Promise<DashboardCard[] | null> {
   try {
     if (adminToken) {
-      const raw = await configGet('dashboards', layoutKey(tenantId, userId), adminToken)
+      const raw = await configGet('dashboards', layoutKey(tenantId, userId), adminToken, tenantId)
       if (Array.isArray(raw)) return raw as DashboardCard[]
     }
     // Fallback to localStorage
@@ -184,7 +198,7 @@ interface TemplateState {
 }
 
 /** Hook: load a single template by ID */
-export function useTemplate(templateId: string | null, adminToken?: string): TemplateState {
+export function useTemplate(templateId: string | null, adminToken?: string, tenantId?: string): TemplateState {
   const [template, setTemplate] = useState<DashboardTemplate | null>(null)
   const [loading, setLoading]   = useState(!!templateId)
   const [error, setError]       = useState<string | null>(null)
@@ -193,11 +207,11 @@ export function useTemplate(templateId: string | null, adminToken?: string): Tem
     if (!templateId) { setTemplate(null); setLoading(false); return }
     let cancelled = false
     setLoading(true)
-    getTemplate(templateId, adminToken)
+    getTemplate(templateId, adminToken, tenantId)
       .then(t => { if (!cancelled) { setTemplate(t); setLoading(false) } })
       .catch(e => { if (!cancelled) { setError(String(e)); setLoading(false) } })
     return () => { cancelled = true }
-  }, [templateId, adminToken])
+  }, [templateId, adminToken, tenantId])
 
   return { template, loading, error }
 }

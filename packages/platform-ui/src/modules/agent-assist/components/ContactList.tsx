@@ -234,17 +234,7 @@ export const ContactList: React.FC<ContactListProps> = ({
 
   return (
     <div className="flex flex-col h-full bg-gray-100">
-      {/* Header */}
-      <div className="px-3 py-2 border-b border-gray-200 bg-gray-100 flex-shrink-0 flex items-center gap-1.5">
-        <span className="text-xs font-semibold text-gray-500 uppercase tracking-wide">
-          Contatos
-        </span>
-        {contacts.length > 0 && (
-          <span className="text-xs text-gray-400">({contacts.length})</span>
-        )}
-      </div>
-
-      {/* Rows */}
+      {/* Rows — header is rendered in the shared sub-header row of AgentAssistPage */}
       {contacts.length === 0 ? (
         <div className="flex-1 flex flex-col items-center justify-center gap-2 text-gray-400 p-4">
           <span className="text-2xl">⏳</span>

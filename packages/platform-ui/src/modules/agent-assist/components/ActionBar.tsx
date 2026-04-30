@@ -108,8 +108,9 @@ export const ActionBar: React.FC<ActionBarProps> = ({
 }) => {
   if (!contact) {
     return (
-      <div className="h-12 border-b border-gray-100 bg-white flex-shrink-0 flex items-center px-4">
-        <span className="text-xs text-gray-400 italic">Nenhum contato selecionado</span>
+      <div className="flex-1 bg-white flex items-center px-4 gap-2">
+        <span className="text-sm text-gray-300 select-none">—</span>
+        <span className="text-xs text-gray-400">Selecione um contato para iniciar o atendimento</span>
       </div>
     );
   }
@@ -117,10 +118,10 @@ export const ActionBar: React.FC<ActionBarProps> = ({
   const sla = contact.supervisorState?.sla ?? null;
 
   return (
-    <div className={`border-b flex-shrink-0 flex items-center gap-2 px-3 py-1.5 min-h-[48px]
+    <div className={`flex-1 flex items-center gap-2 px-3
       ${contact.sessionClosed
-        ? "bg-amber-50 border-amber-200"
-        : "bg-white border-gray-100"
+        ? "bg-amber-50"
+        : "bg-white"
       }`}
     >
       {/* ── Left: contact identity ── */}

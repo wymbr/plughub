@@ -145,7 +145,7 @@ async def dashboard_metrics(
         )
     store = request.app.state.store
     data  = await get_metrics_24h(
-        client   = store._client,
+        client   = store.new_client(),
         database = store._database,
         tenant_id = tenant_id,
     )

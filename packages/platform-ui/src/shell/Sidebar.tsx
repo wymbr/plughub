@@ -55,7 +55,7 @@ const Sidebar: React.FC = () => {
       children: [
         { label: t('nav.workflow.editor'),   href: '/workflow/editor',   icon: '▶️', abac: { module: 'workflows', field: 'operacao' } },
         { label: t('nav.workflow.monitor'),  href: '/workflow/monitor',  icon: '📡', abac: { module: 'workflows', field: 'operacao' } },
-        { label: t('nav.workflow.report'),   href: '/workflow/report',   icon: '📊' },
+        { label: t('nav.workflow.report'),   href: '/workflow/report',   icon: '📊', abac: { module: 'workflows',   field: 'visualizar' } },
         { label: t('nav.workflow.calendar'), href: '/workflow/calendar', icon: '📅', abac: { module: 'workflows', field: 'operacao' } },
       ]
     },
@@ -68,7 +68,7 @@ const Sidebar: React.FC = () => {
       children: [
         { label: t('nav.agentFlow.editor'),  href: '/agent-flow/editor',  icon: '✏️', abac: { module: 'skill_flows', field: 'operacao' } },
         { label: t('nav.agentFlow.monitor'), href: '/agent-flow/monitor', icon: '📡', abac: { module: 'skill_flows', field: 'operacao' } },
-        { label: t('nav.agentFlow.report'),  href: '/agent-flow/report',  icon: '📊' },
+        { label: t('nav.agentFlow.report'),  href: '/agent-flow/report',  icon: '📊', abac: { module: 'skill_flows', field: 'visualizar' } },
         { label: t('nav.agentFlow.deploy'),  href: '/agent-flow/deploy',  icon: '🚀', abac: { module: 'skill_flows', field: 'operacao' } },
       ]
     },
@@ -93,6 +93,7 @@ const Sidebar: React.FC = () => {
       icon: '⚙️',
       roles: ['admin', 'business'],
       children: [
+        { label: t('nav.dashboards'),    href: '/dashboards',       icon: '📊', abac: { module: 'config', field: 'plataforma' } },
         { label: t('nav.recursos'),     href: '/config/recursos',  icon: '📦', abac: { module: 'config', field: 'recursos' } },
         { label: t('nav.plataforma'),   href: '/config/platform',  icon: '🖥️', abac: { module: 'config', field: 'plataforma' } },
         { label: t('nav.mascaramento'), href: '/config/masking',   icon: '🔒', abac: { module: 'config', field: 'mascaramento' } },

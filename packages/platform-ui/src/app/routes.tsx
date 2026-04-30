@@ -27,6 +27,7 @@ import { AgentAssistPage } from '@/modules/agent-assist/AgentAssistPage'
 import PlaceholderPage from '@/modules/_placeholder/PlaceholderPage'
 import AccessPage from '@/modules/access/AccessPage'
 import ContactsPage from '@/modules/contacts/ContactsPage'
+import DashboardsPage from '@/modules/dashboards/DashboardsPage'
 
 export const routes: RouteObject[] = [
   {
@@ -67,8 +68,9 @@ export const routes: RouteObject[] = [
       // Legacy redirect
       { path: 'skill-flows',        element: <Navigate to="/agent-flow/editor" replace /> },
 
-      // ── Analytics (legacy redirects — grupo removido do nav) ──
-      { path: 'dashboards', element: <Navigate to="/contacts?tab=analise" replace /> },
+      // ── Dashboards ────────────────────────────────────────────
+      { path: 'dashboards', element: <DashboardsPage /> },
+      // Legacy redirect
       { path: 'reports',    element: <Navigate to="/contacts?tab=analise" replace /> },
 
       // ── Evaluation ────────────────────────────────────────────

@@ -83,25 +83,26 @@ function aggregateStatus(
 }
 
 // ── Fetch pools from agent-registry ───────────────────────────────────────
-async function fetchPools(accessiblePools: string[]): Promise<PoolInfo[]> {
+async function fetchPools(accessiblePools: string[], accessToken?: string): Promise<PoolInfo[]> {
   try {
-    const res  = await fetch(`${API_BASE}/pools`, {
-      headers: { "x-tenant-id": "tenant_demo", "x-user-id": "operator" },
-    });
+    const headers: Record<string, string> = {
+      "x-tenant-id": "tenant_demo",
+      "x-user-id": "operator",
+    };
+    if (accessToken) headers["Authorization"] = `Bearer ${accessToken}`;
+    const res  = await fetch(`${API_BASE}/pools`, { headers });
     if (!res.ok) return [];
-    const data = await res.json() as Array<{
-      pool_id: string;
-      display_name?: string;
-      channel_types?: string[];
-      sla_target_ms?: number | null;
-    }>;
+    const json = await res.json() as
+      | { pools: Array<{ pool_id: string; display_name?: string; channel_types?: string[]; sla_target_ms?: number | null }> }
+      | Array<{ pool_id: string; display_name?: string; channel_types?: string[]; sla_target_ms?: number | null }>;
+    const data = Array.isArray(json) ? json : (json.pools ?? []);
     const list: PoolInfo[] = data.map(p => ({
       pool_id:       p.pool_id,
       display_name:  p.display_name,
       channel_types: p.channel_types ?? [],
       sla_target_ms: p.sla_target_ms ?? null,
     }));
-    // Filter to only pools the agent is authorised for
+    // [] = acesso global (mostra todos os pools); lista preenchida = filtra
     if (accessiblePools.length === 0) return list;
     return list.filter(p => accessiblePools.includes(p.pool_id));
   } catch {
@@ -118,7 +119,7 @@ export const AgentAssistPage: React.FC = () => {
   // ── Available pools (from registry) ────────────────────────────────────
   const [availablePools, setAvailablePools] = useState<PoolInfo[]>([]);
   useEffect(() => {
-    fetchPools(accessiblePools).then(setAvailablePools);
+    fetchPools(accessiblePools, session?.accessToken).then(setAvailablePools);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -515,32 +516,70 @@ export const AgentAssistPage: React.FC = () => {
         onJoinAll={handleJoinAll}
       />
 
-      <div className="flex flex-1 overflow-hidden">
+      {/* ── Unified 3-column layout ───────────────────────────────────────── */}
+      <div className="flex flex-col flex-1 overflow-hidden">
 
-        {/* Contact list — gray column, no explicit right border (tab bleed handles separator) */}
-        <div className="w-[200px] bg-gray-100 overflow-hidden flex flex-col flex-shrink-0">
-          <ContactList
-            contacts={[...contacts.values()]}
-            selectedSessionId={selectedSessionId}
-            aiTypingSessions={aiTypingSessions}
-            onSelect={handleSelectContact}
+        {/* ── Shared sub-header row (h-12) — all three column headers are siblings
+               so they share the exact same top/bottom Y coordinates               */}
+        <div className="flex h-12 flex-shrink-0 border-b border-gray-200">
+
+          {/* Contact list header */}
+          <div className="w-[200px] flex-shrink-0 bg-gray-100 border-r border-gray-200
+                          flex items-center px-3 gap-1.5">
+            <span className="text-xs font-semibold text-gray-500 uppercase tracking-wide">
+              Contatos
+            </span>
+            {contacts.size > 0 && (
+              <span className="text-xs text-gray-400">({contacts.size})</span>
+            )}
+          </div>
+
+          {/* ActionBar (center column) */}
+          <ActionBar
+            contact={selected}
+            onEncerrar={() => setShowCloseModal(true)}
+            onPausar={() => addToast("Pausar: em breve", "info")}
+            onTransferir={() => addToast("Transferir: em breve", "info")}
+            onDesligar={() => addToast("Desligar: em breve", "info")}
           />
+
+          {/* Right-panel tab bar */}
+          <div className="w-[280px] flex-shrink-0 border-l border-gray-200 flex bg-white">
+            {(["estado", "capacidades", "contexto", "historico"] as ActiveTab[]).map((id) => {
+              const label = { estado: "Estado", capacidades: "Capacidades", contexto: "Contexto", historico: "Histórico" }[id];
+              return (
+                <button
+                  key={id}
+                  onClick={() => setActiveTab(id)}
+                  className={`flex-1 h-full flex items-end justify-center pb-2.5 text-xs font-medium transition-colors ${
+                    activeTab === id
+                      ? "border-b-2 border-indigo-600 text-indigo-600"
+                      : "text-gray-500 hover:text-gray-700"
+                  }`}
+                >
+                  {label}
+                </button>
+              );
+            })}
+          </div>
+
         </div>
 
-        {/* White surface: chat + right panel share a unified white background */}
-        <div className="flex flex-1 overflow-hidden bg-white">
+        {/* ── Content row below the shared header ───────────────────────────── */}
+        <div className="flex flex-1 overflow-hidden">
+
+          {/* Contact rows (no internal header — it's in the shared row above) */}
+          <div className="w-[200px] flex-shrink-0 bg-gray-100 border-r border-gray-200 overflow-hidden">
+            <ContactList
+              contacts={[...contacts.values()]}
+              selectedSessionId={selectedSessionId}
+              aiTypingSessions={aiTypingSessions}
+              onSelect={handleSelectContact}
+            />
+          </div>
 
           {/* Chat column */}
-          <div className="flex flex-col flex-1 overflow-hidden">
-
-            {/* Action bar — contact identity lives ONLY here */}
-            <ActionBar
-              contact={selected}
-              onEncerrar={() => setShowCloseModal(true)}
-              onPausar={() => addToast("Pausar: em breve", "info")}
-              onTransferir={() => addToast("Transferir: em breve", "info")}
-              onDesligar={() => addToast("Desligar: em breve", "info")}
-            />
+          <div className="flex flex-col flex-1 overflow-hidden bg-white">
 
             {/* Chat area or idle placeholder */}
             {!selected ? (
@@ -582,11 +621,10 @@ export const AgentAssistPage: React.FC = () => {
             />
           </div>
 
-          {/* Right panel — fixed 280px, shares white bg with chat */}
-          <div className="w-[280px] overflow-hidden flex flex-col flex-shrink-0 border-l border-gray-200">
+          {/* Right panel content (no internal tab bar — it's in the shared row above) */}
+          <div className="w-[280px] flex-shrink-0 border-l border-gray-200 overflow-hidden bg-white">
             <RightPanel
               activeTab={activeTab}
-              onTabChange={setActiveTab}
               supervisorState={selected?.supervisorState ?? null}
               capabilities={selected?.capabilities ?? null}
               customerId={selected?.contactId ?? null}

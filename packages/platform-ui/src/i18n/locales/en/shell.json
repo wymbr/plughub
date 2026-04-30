@@ -1,9 +1,9 @@
 {
   "nav": {
     "home": "Home",
+    "dashboards": "Dashboards",
     "atendimento": "Service",
     "contatos": "Contacts",
-    "monitor": "Monitor",
     "agentAssist": "Agent Assist",
     "workflow": "Workflow",
     "workflow.editor": "Editor",

@@ -515,6 +515,12 @@ class AnalyticsStore:
     """
     Wraps a synchronous clickhouse_connect client.
     All insert methods run via asyncio.to_thread() to avoid blocking the event loop.
+
+    Thread-safety note: clickhouse_connect clients must not be shared across concurrent
+    threads (raises "Attempt to execute concurrent queries within the same session").
+    Use ``new_client()`` whenever you need a client inside asyncio.to_thread() — it
+    creates a fresh, independent connection each time.  ``self._client`` is kept only
+    for DDL (ensure_schema) and insert operations which are naturally serialised.
     """
 
     def __init__(
@@ -525,11 +531,17 @@ class AnalyticsStore:
         password: str,
         database: str,
     ) -> None:
-        self._client   = clickhouse_connect.get_client(
-            host=host, port=port,
-            username=user, password=password,
-        )
+        self._conn_params = dict(host=host, port=port, username=user, password=password)
+        self._client   = clickhouse_connect.get_client(**self._conn_params)
         self._database = database
+
+    def new_client(self) -> Any:
+        """Return a fresh ClickHouse client.
+
+        Call this inside every asyncio.to_thread() invocation so that concurrent
+        requests never share the same underlying session.
+        """
+        return clickhouse_connect.get_client(**self._conn_params)
 
     # ── Schema ────────────────────────────────────────────────────────────────
 

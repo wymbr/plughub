@@ -23,7 +23,8 @@ export default defineConfig({
       '^/agent-ws': {
         target: 'ws://localhost:3100',
         changeOrigin: true,
-        ws: true
+        ws: true,
+        rewrite: (path: string) => path.replace(/^\/agent-ws/, '/agent/ws'),
       },
       '^/v1/workflow': {
         target: 'http://localhost:3800',

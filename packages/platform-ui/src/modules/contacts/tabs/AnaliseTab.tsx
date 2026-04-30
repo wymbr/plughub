@@ -124,9 +124,10 @@ export function AnaliseTab({ tenantId, filters }: Props) {
   const [rows,    setRows]    = useState<ContactRow[]>([])
   const [loading, setLoading] = useState(false)
   const [error,   setError]   = useState('')
+  const [degraded, setDegraded] = useState(false)
 
   const fetchRows = useCallback(async () => {
-    setLoading(true); setError('')
+    setLoading(true); setError(''); setDegraded(false)
     try {
       const params = new URLSearchParams({
         tenant_id: tenantId,
@@ -148,11 +149,19 @@ export function AnaliseTab({ tenantId, filters }: Props) {
       if (insightTags)     params.set('insight_tags',     insightTags)
 
       const res = await fetch(`/reports/sessions?${params}`)
-      if (!res.ok) { setError(`Erro HTTP ${res.status}`); return }
-      const data: ContactsApiResponse = await res.json()
+      // Try to parse body even on error — analytics-api always returns JSON
+      const data: ContactsApiResponse = await res.json().catch(() => ({ data: [] }))
+      if (!res.ok || (data as any).error) {
+        setDegraded(true)
+        setError(`HTTP ${res.status}`)
+        // Keep existing rows if we had data before; otherwise use empty
+        setRows(prev => prev.length > 0 ? prev : [])
+        return
+      }
       const items = Array.isArray(data) ? (data as unknown as ContactRow[]) : (data.data ?? [])
       setRows(items)
     } catch (e) {
+      setDegraded(true)
       setError(String(e))
     } finally {
       setLoading(false)
@@ -160,14 +169,6 @@ export function AnaliseTab({ tenantId, filters }: Props) {
   }, [tenantId, filters])
 
   useEffect(() => { fetchRows() }, [fetchRows])
-
-  if (error) {
-    return (
-      <div className="flex items-center justify-center h-full text-red-500 text-sm p-8">
-        {error}
-      </div>
-    )
-  }
 
   const metrics = aggregate(rows)
   const resRate = metrics.total > 0 ? Math.round((metrics.resolved / metrics.total) * 100) : 0
@@ -198,6 +199,23 @@ export function AnaliseTab({ tenantId, filters }: Props) {
             </>
         }
       </div>
+
+      {/* Degraded banner — shown when sessions query fails but tab still renders */}
+      {degraded && !loading && (
+        <div className="flex items-center gap-3 px-4 py-2 bg-amber-50 border-b border-amber-200 flex-shrink-0 text-xs text-amber-800">
+          <span>⚠️</span>
+          <span>
+            Dados de contatos temporariamente indisponíveis ({error}).
+            Os gráficos de série histórica ainda são exibidos.
+          </span>
+          <button
+            onClick={fetchRows}
+            className="ml-auto px-2 py-1 rounded border border-amber-400 hover:bg-amber-100 transition-colors font-medium"
+          >
+            ⟳ Tentar novamente
+          </button>
+        </div>
+      )}
 
       <div className="flex-1 overflow-auto p-5 space-y-6">
 

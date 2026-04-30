@@ -76,7 +76,7 @@ async def admin_consolidated(
     effective_tenant = principal.effective_tenant(None)
 
     data = await query_consolidated(
-        client    = store._client,
+        client    = store.new_client(),
         database  = store._database,
         tenant_id = effective_tenant,
         from_dt   = from_dt,

@@ -65,7 +65,10 @@ class TestRunPerformanceSync:
         store._database = "analytics"
         result = MagicMock()
         result.result_rows = rows
-        store._client.query = MagicMock(return_value=result)
+        # performance_job calls store.new_client().query — wire the mock accordingly
+        store.new_client.return_value.query = MagicMock(return_value=result)
+        # keep _client wired for backward compat in other tests that reference it
+        store._client.query = store.new_client.return_value.query
         return store
 
     def _make_redis(self) -> AsyncMock:
@@ -134,7 +137,7 @@ class TestRunPerformanceSync:
         """When ClickHouse raises, returns updated=0, errors=1."""
         store = MagicMock()
         store._database = "analytics"
-        store._client.query = MagicMock(side_effect=RuntimeError("CH down"))
+        store.new_client.return_value.query = MagicMock(side_effect=RuntimeError("CH down"))
         redis = self._make_redis()
 
         result = await run_performance_sync(store, redis)

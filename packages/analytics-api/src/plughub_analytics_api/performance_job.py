@@ -94,7 +94,7 @@ async def run_performance_sync(store, redis) -> dict:
     )
 
     try:
-        result = await asyncio.to_thread(store._client.query, query)
+        result = await asyncio.to_thread(store.new_client().query, query)
     except Exception as exc:
         logger.error("Performance sync query failed: %s", exc)
         return {"updated": 0, "errors": 1}

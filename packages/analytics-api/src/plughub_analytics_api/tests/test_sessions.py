@@ -306,6 +306,8 @@ class TestListActiveSessionsEndpoint:
         store   = MagicMock()
         store._client   = MagicMock()
         store._database = "analytics"
+        # new_client() must return the same mock so existing assertions still work
+        store.new_client.return_value = store._client
         if ch_rows is not None:
             result = MagicMock()
             result.result_rows = ch_rows
@@ -470,6 +472,8 @@ class TestCustomerHistoryEndpoint:
         store = MagicMock()
         store._client   = MagicMock()
         store._database = "analytics"
+        # new_client() must return the same mock so existing assertions still work
+        store.new_client.return_value = store._client
         if raise_exc:
             store._client.query.side_effect = raise_exc
         elif ch_rows is not None:

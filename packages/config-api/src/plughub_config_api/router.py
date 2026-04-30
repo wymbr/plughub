@@ -46,12 +46,19 @@ router = APIRouter(prefix="/config")
 async def _require_admin(
     request: Request,
     x_admin_token: Optional[str] = Header(default=None),
+    admin_token: Optional[str] = Query(default=None, alias="admin_token"),
 ) -> None:
-    """Simple static token guard for write operations."""
+    """Simple static token guard for write operations.
+
+    Accepts the admin token via X-Admin-Token header OR ?admin_token=... query param.
+    The query-param fallback ensures DELETE requests work even when reverse proxies
+    drop custom request headers.
+    """
     from .config import get_settings
     settings = get_settings()
     expected = getattr(settings, "admin_token", None)
-    if expected and x_admin_token != expected:
+    token = x_admin_token or admin_token
+    if expected and token != expected:
         raise HTTPException(status_code=401, detail="Invalid X-Admin-Token")
 
 

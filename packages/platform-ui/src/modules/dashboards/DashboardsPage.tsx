@@ -295,10 +295,13 @@ function NewTemplateModal({
   const [name, setName]         = useState('')
   const [description, setDesc]  = useState('')
   const [saving, setSaving]     = useState(false)
+  const [error, setError]       = useState<string | null>(null)
 
   async function handleCreate() {
     if (!name.trim()) return
+    if (!adminToken) { setError('Admin token obrigatório. Preencha o campo no topo da página.'); return }
     setSaving(true)
+    setError(null)
     const template: DashboardTemplate = {
       template_id:  uuid(),
       tenant_id:    tenantId,
@@ -308,9 +311,13 @@ function NewTemplateModal({
       created_by:   'admin',
       created_at:   new Date().toISOString(),
     }
-    await saveTemplate(template, adminToken)
-    onCreated(template)
-    setSaving(false)
+    try {
+      await saveTemplate(template, adminToken)
+      onCreated(template)
+    } catch (e) {
+      setError(String(e))
+      setSaving(false)
+    }
   }
 
   return (
@@ -339,6 +346,9 @@ function NewTemplateModal({
               placeholder="Opcional"
             />
           </div>
+          {error && (
+            <p className="text-xs text-red-600 bg-red-50 border border-red-200 rounded px-2 py-1">{error}</p>
+          )}
           <div className="flex gap-2 pt-1">
             <button
               onClick={handleCreate}
@@ -390,7 +400,7 @@ export default function DashboardsPage() {
     else if (!activeTemplateId && templates.length > 0) setActiveTemplateId(templates[0].template_id)
   }, [defaultTemplateId, templates, activeTemplateId])
 
-  const { template } = useTemplate(activeTemplateId, adminToken)
+  const { template } = useTemplate(activeTemplateId, adminToken, tenantId)
 
   // Cards state (current working copy)
   const [cards, setCards] = useState<DashboardCard[]>([])
@@ -399,7 +409,13 @@ export default function DashboardsPage() {
 
   // Load personal layout override (or template cards on first load)
   useEffect(() => {
-    if (!template) return
+    if (!template) {
+      // Template was deleted or deselected — clear the grid
+      setCards([])
+      setDirty(false)
+      setEditMode(false)
+      return
+    }
     loadPersonalLayout(tenantId, userId).then(personal => {
       // Only apply personal layout if it matches the same set of card IDs
       if (personal && personal.length === template.cards.length) {
@@ -486,7 +502,7 @@ export default function DashboardsPage() {
 
   async function handleDeleteTemplate(id: string) {
     if (!window.confirm('Remover este template permanentemente?')) return
-    await deleteTemplate(id, adminToken)
+    await deleteTemplate(id, adminToken, tenantId)
     reloadTemplates()
     if (activeTemplateId === id) setActiveTemplateId(null)
   }
@@ -520,7 +536,9 @@ export default function DashboardsPage() {
           {isAdmin && (
             <button
               onClick={() => setEditMode(e => !e)}
-              className={`text-xs px-3 py-1.5 rounded border transition-colors ${
+              disabled={!activeTemplateId}
+              title={!activeTemplateId ? 'Selecione um template primeiro' : ''}
+              className={`text-xs px-3 py-1.5 rounded border transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${
                 editMode
                   ? 'bg-primary text-white border-primary'
                   : 'border-gray-200 text-gray-600 hover:bg-gray-50'
