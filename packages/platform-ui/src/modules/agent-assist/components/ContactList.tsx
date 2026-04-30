@@ -120,19 +120,38 @@ const ContactRow: React.FC<RowProps> = ({ contact, selected, aiTyping, onSelect 
     : slaPercent > 70 ? "bg-yellow-400"
     : "bg-green-400";
 
-  const borderClass = contact.sessionClosed ? "border-l-red-300" : URGENCY_BORDER[level];
+  // Tab visual: selected row bleeds right (box-shadow covers the container's right border)
+  // creating the illusion of a browser tab extending into the white central surface.
+  const borderAccent = contact.sessionClosed
+    ? (selected ? "#ef4444" : "#fca5a5")
+    : (selected ? "#4f46e5" : URGENCY_BORDER[level].replace("border-l-", ""));
+
+  const selectedStyle: React.CSSProperties = selected
+    ? {
+        backgroundColor: "#ffffff",
+        // 2px white shadow to the right covers the container border at this row's height
+        boxShadow: "2px 0 0 0 #ffffff",
+        position:  "relative",
+        zIndex:    1,
+      }
+    : {};
 
   return (
     <button
       onClick={onSelect}
+      style={selectedStyle}
       className={`w-full text-left px-3 py-2.5 border-b transition-colors
         focus:outline-none focus:ring-inset focus:ring-1 focus:ring-indigo-300
-        border-l-[3px] ${borderClass}
+        border-l-[3px]
         ${contact.sessionClosed
-          ? `bg-red-50 border-b-red-100 hover:bg-red-100${selected ? " border-l-red-500" : ""}`
-          : `border-b-gray-100 hover:bg-indigo-50${selected ? " bg-indigo-50" : ""}`
+          ? `${selected ? "bg-white" : "bg-red-50 hover:bg-red-100"} border-b-red-100`
+          : `${selected ? "bg-white" : "bg-transparent hover:bg-white/60"} border-b-gray-100`
         }
       `}
+      // Inline left-border colour (urgency or selection)
+      ref={el => {
+        if (el) el.style.borderLeftColor = borderAccent;
+      }}
     >
       {/* Row 1: channel icon + identity + unread badge */}
       <div className="flex items-center gap-1.5 min-w-0">
@@ -214,9 +233,9 @@ export const ContactList: React.FC<ContactListProps> = ({
   });
 
   return (
-    <div className="flex flex-col h-full">
+    <div className="flex flex-col h-full bg-gray-100">
       {/* Header */}
-      <div className="px-3 py-2 border-b border-gray-200 bg-gray-50 flex-shrink-0 flex items-center gap-1.5">
+      <div className="px-3 py-2 border-b border-gray-200 bg-gray-100 flex-shrink-0 flex items-center gap-1.5">
         <span className="text-xs font-semibold text-gray-500 uppercase tracking-wide">
           Contatos
         </span>

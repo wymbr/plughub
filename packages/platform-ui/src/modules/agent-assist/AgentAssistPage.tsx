@@ -37,6 +37,7 @@ import { useMultiPoolWebSocket } from "./hooks/useMultiPoolWebSocket";
 import { useSupervisorState }        from "./hooks/useSupervisorState";
 import { useSupervisorCapabilities } from "./hooks/useSupervisorCapabilities";
 import { Header }           from "./components/Header";
+import { ActionBar }        from "./components/ActionBar";
 import { ChatArea }         from "./components/ChatArea";
 import { AgentInput }       from "./components/AgentInput";
 import { CloseModal }       from "./components/CloseModal";
@@ -149,6 +150,9 @@ export const AgentAssistPage: React.FC = () => {
   // ── Shared UI state ─────────────────────────────────────────────────────
   const [activeTab, setActiveTab] = useState<ActiveTab>("estado");
   const [toasts, setToasts]       = useState<Toast[]>([]);
+
+  // ── Modal state (Encerrar triggered from ActionBar) ────────────────────────
+  const [showCloseModal, setShowCloseModal] = useState(false);
 
   // Dedup guards
   const notifiedAssignments   = useRef<Set<string>>(new Set());
@@ -503,6 +507,7 @@ export const AgentAssistPage: React.FC = () => {
         wsStatus={wsStatus}
         sla={selected?.supervisorState?.sla ?? null}
         sessionStartedAt={selected?.sessionStartedAt ?? null}
+        contactCount={contacts.size}
         pools={availablePools}
         activePools={activePools}
         poolStatuses={statuses}
@@ -512,8 +517,8 @@ export const AgentAssistPage: React.FC = () => {
 
       <div className="flex flex-1 overflow-hidden">
 
-        {/* Contact list — fixed 200px */}
-        <div className="w-[200px] border-r border-gray-200 overflow-hidden flex flex-col flex-shrink-0">
+        {/* Contact list — gray column, no explicit right border (tab bleed handles separator) */}
+        <div className="w-[200px] bg-gray-100 overflow-hidden flex flex-col flex-shrink-0">
           <ContactList
             contacts={[...contacts.values()]}
             selectedSessionId={selectedSessionId}
@@ -522,72 +527,95 @@ export const AgentAssistPage: React.FC = () => {
           />
         </div>
 
-        {/* Chat — flex-1 */}
-        <div className="flex flex-col flex-1 overflow-hidden">
-          {!selected ? (
-            <div className="flex-1 flex flex-col items-center justify-center text-gray-400 text-sm select-none gap-3">
-              {activePools.length === 0 ? (
-                <>
-                  <span className="text-3xl">🟢</span>
-                  <p className="text-center leading-snug max-w-xs">
-                    Ative um pool no cabeçalho para ficar disponível.
-                  </p>
-                </>
-              ) : (
-                <>
-                  <span className="text-3xl animate-pulse">⏳</span>
-                  <p>Aguardando próximo atendimento…</p>
-                </>
-              )}
-            </div>
-          ) : (
-            <ChatArea
-              messages={selected.messages}
-              aiTyping={aiTypingSessions.has(selected.sessionId)}
-              sessionClosed={selected.sessionClosed}
-              liveState={selected.supervisorState ? {
-                sentimentScore: selected.supervisorState.sentiment.current,
-                sentimentAlert: selected.supervisorState.sentiment.alert,
-                sentimentTrend: selected.supervisorState.sentiment.trend,
-                intent:         selected.supervisorState.intent.current,
-                flags:          selected.supervisorState.flags,
-              } : null}
-            />
-          )}
-          <AgentInput
-            onSend={handleSend}
-            onClose={(payload) => selected && handleClose(selected.sessionId, payload)}
-            disabled={!selected}
-            sessionClosed={selected?.sessionClosed ?? false}
-          />
-        </div>
+        {/* White surface: chat + right panel share a unified white background */}
+        <div className="flex flex-1 overflow-hidden bg-white">
 
-        {/* Right panel — fixed 280px */}
-        <div className="w-[280px] overflow-hidden flex flex-col flex-shrink-0 border-l border-gray-200">
-          <RightPanel
-            activeTab={activeTab}
-            onTabChange={setActiveTab}
-            supervisorState={selected?.supervisorState ?? null}
-            capabilities={selected?.capabilities ?? null}
-            customerId={selected?.contactId ?? null}
-            onInviteAgent={handleInviteAgent}
-            onEscalate={handleEscalate}
-          />
+          {/* Chat column */}
+          <div className="flex flex-col flex-1 overflow-hidden">
+
+            {/* Action bar — contact identity lives ONLY here */}
+            <ActionBar
+              contact={selected}
+              onEncerrar={() => setShowCloseModal(true)}
+              onPausar={() => addToast("Pausar: em breve", "info")}
+              onTransferir={() => addToast("Transferir: em breve", "info")}
+              onDesligar={() => addToast("Desligar: em breve", "info")}
+            />
+
+            {/* Chat area or idle placeholder */}
+            {!selected ? (
+              <div className="flex-1 flex flex-col items-center justify-center text-gray-400 text-sm select-none gap-3">
+                {activePools.length === 0 ? (
+                  <>
+                    <span className="text-3xl">🟢</span>
+                    <p className="text-center leading-snug max-w-xs">
+                      Ative um pool no cabeçalho para ficar disponível.
+                    </p>
+                  </>
+                ) : (
+                  <>
+                    <span className="text-3xl animate-pulse">⏳</span>
+                    <p>Aguardando próximo atendimento…</p>
+                  </>
+                )}
+              </div>
+            ) : (
+              <ChatArea
+                messages={selected.messages}
+                aiTyping={aiTypingSessions.has(selected.sessionId)}
+                sessionClosed={selected.sessionClosed}
+                liveState={selected.supervisorState ? {
+                  sentimentScore: selected.supervisorState.sentiment.current,
+                  sentimentAlert: selected.supervisorState.sentiment.alert,
+                  sentimentTrend: selected.supervisorState.sentiment.trend,
+                  intent:         selected.supervisorState.intent.current,
+                  flags:          selected.supervisorState.flags,
+                } : null}
+              />
+            )}
+
+            <AgentInput
+              onSend={handleSend}
+              disabled={!selected}
+              sessionClosed={selected?.sessionClosed ?? false}
+              capabilities={selected?.capabilities ?? null}
+            />
+          </div>
+
+          {/* Right panel — fixed 280px, shares white bg with chat */}
+          <div className="w-[280px] overflow-hidden flex flex-col flex-shrink-0 border-l border-gray-200">
+            <RightPanel
+              activeTab={activeTab}
+              onTabChange={setActiveTab}
+              supervisorState={selected?.supervisorState ?? null}
+              capabilities={selected?.capabilities ?? null}
+              customerId={selected?.contactId ?? null}
+              onInviteAgent={handleInviteAgent}
+              onEscalate={handleEscalate}
+            />
+          </div>
+
         </div>
       </div>
 
-      {/* Close modal */}
-      {selected?.pendingCloseModal && (
+      {/* Close modal — triggered by ActionBar's Encerrar or auto-shown on client_disconnect */}
+      {(showCloseModal || selected?.pendingCloseModal) && selected && (
         <CloseModal
-          defaultIssueStatus="Cliente desconectou"
-          defaultOutcome="abandoned"
-          onConfirm={(payload) => handleClose(selected.sessionId, payload)}
-          onCancel={() =>
-            handleClose(selected.sessionId, {
-              issue_status: "Cliente desconectou",
-              outcome: "abandoned",
-            })
-          }
+          defaultIssueStatus={selected.sessionClosed ? "Cliente desconectou" : ""}
+          defaultOutcome={selected.sessionClosed ? "abandoned" : "resolved"}
+          onConfirm={(payload) => {
+            setShowCloseModal(false);
+            handleClose(selected.sessionId, payload);
+          }}
+          onCancel={() => {
+            setShowCloseModal(false);
+            if (selected.sessionClosed) {
+              handleClose(selected.sessionId, {
+                issue_status: "Cliente desconectou",
+                outcome: "abandoned",
+              });
+            }
+          }}
         />
       )}
 

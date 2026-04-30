@@ -45,7 +45,7 @@ export const RightPanel: React.FC<RightPanelProps> = ({
     supervisorState?.customer_context ?? null;
 
   return (
-    <div className="flex flex-col h-full bg-white border-l border-gray-200">
+    <div className="flex flex-col h-full bg-white">
       {/* Tab bar */}
       <div className="flex border-b border-gray-200 flex-shrink-0">
         {TABS.map((tab) => (

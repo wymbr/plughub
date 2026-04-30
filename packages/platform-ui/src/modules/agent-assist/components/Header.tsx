@@ -14,6 +14,7 @@ interface HeaderProps {
   wsStatus:         WsStatus;
   sla:              SlaState | null;
   sessionStartedAt: Date | null;
+  contactCount?:    number;       // total contacts currently handled (capacity indicator)
   // Presence (pool pills)
   pools:            PoolInfo[];
   activePools:      string[];
@@ -91,6 +92,7 @@ export const Header: React.FC<HeaderProps> = ({
   wsStatus,
   sla,
   sessionStartedAt,
+  contactCount = 0,
   pools,
   activePools,
   poolStatuses,
@@ -167,6 +169,18 @@ export const Header: React.FC<HeaderProps> = ({
               {sla.breach_imminent && (
                 <span className="text-xs font-semibold text-red-600 animate-pulse">BREACH</span>
               )}
+            </div>
+          )}
+
+          {/* Capacity indicator */}
+          {contactCount > 0 && (
+            <div
+              className="flex items-center gap-1 px-2 py-0.5 rounded-full bg-indigo-50
+                border border-indigo-200 text-indigo-700 text-xs font-medium"
+              title="Contatos em atendimento"
+            >
+              <span>🎧</span>
+              <span>Atendendo {contactCount}</span>
             </div>
           )}
 

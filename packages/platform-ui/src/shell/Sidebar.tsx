@@ -5,15 +5,11 @@ import { useTranslation } from 'react-i18next'
 import { makePermissions } from '@/lib/permissions'
 
 interface NavItem {
-  /** Stable identifier used for expand/collapse state; defaults to href when omitted. */
   navKey?: string
   label: string
   href: string
   icon: string
   roles?: string[]
-  /** ABAC gate: show this item only when can(module, field) is true.
-   *  Evaluated after roles. If omitted, no ABAC check is applied.
-   *  Items without any moduleConfig default to showing (graceful degradation). */
   abac?: { module: string; field: string }
   children?: NavItem[]
 }
@@ -23,8 +19,10 @@ const Sidebar: React.FC = () => {
   const { t } = useTranslation('shell')
   const location = useLocation()
   const [expandedGroups, setExpandedGroups] = useState<string[]>([])
+  const [collapsed, setCollapsed]           = useState(false)
 
   const toggleGroup = (key: string) => {
+    if (collapsed) { setCollapsed(false); return }
     setExpandedGroups(prev =>
       prev.includes(key) ? prev.filter(g => g !== key) : [...prev, key]
     )
@@ -44,9 +42,8 @@ const Sidebar: React.FC = () => {
       icon: '📞',
       roles: ['operator', 'supervisor', 'admin', 'business'],
       children: [
-        { label: t('nav.contatos'),    href: '/contacts',             icon: '📋' },
-        { label: t('nav.monitor'),     href: '/contacts?tab=monitor', icon: '📡', abac: { module: 'contacts',    field: 'operacao' } },
-        { label: t('nav.agentAssist'), href: '/agent-assist',         icon: '🤖', abac: { module: 'contacts',    field: 'operacao' } }
+        { label: t('nav.contatos'),    href: '/contacts',     icon: '📋' },
+        { label: t('nav.agentAssist'), href: '/agent-assist', icon: '🤖', abac: { module: 'contacts', field: 'operacao' } }
       ]
     },
     {
@@ -112,7 +109,6 @@ const Sidebar: React.FC = () => {
   ]
 
   const isActive = (href: string) => {
-    // Handle hrefs with query params (e.g. /contacts?tab=monitor)
     const qIdx = href.indexOf('?')
     if (qIdx >= 0) {
       const hrefPath   = href.slice(0, qIdx)
@@ -124,11 +120,8 @@ const Sidebar: React.FC = () => {
 
   const perms = makePermissions(session?.moduleConfig)
 
-  /** Returns true if the item passes its ABAC gate (or has no gate). */
   function passesAbac(item: NavItem): boolean {
     if (!item.abac) return true
-    // Graceful degradation: if the user has no moduleConfig at all, fall back
-    // to role-based filtering only (backward-compatible with legacy accounts).
     if (!session?.moduleConfig || Object.keys(session.moduleConfig).length === 0) return true
     return perms.can(item.abac.module, item.abac.field)
   }
@@ -137,11 +130,57 @@ const Sidebar: React.FC = () => {
     (!item.roles || item.roles.includes(session?.role || '')) && passesAbac(item)
   )
 
+  // ── Collapsed: icon-only strip ─────────────────────────────────────────────
+  if (collapsed) {
+    return (
+      <aside className="w-11 bg-primary flex flex-col overflow-hidden flex-shrink-0 transition-all duration-200">
+        <nav className="flex-1 py-3 flex flex-col items-center gap-1">
+          {filteredItems.map(item => {
+            const key = item.navKey ?? item.href
+            const href = item.href === '#'
+              ? (item.children?.[0]?.href ?? '#')
+              : item.href
+            const active = item.href === '#'
+              ? item.children?.some(c => isActive(c.href))
+              : isActive(item.href)
+
+            return (
+              <Link
+                key={key}
+                to={href}
+                title={item.label}
+                className={`w-9 h-9 flex items-center justify-center rounded-lg text-lg
+                  transition-colors
+                  ${active
+                    ? 'bg-white/15 text-white'
+                    : 'text-white/60 hover:text-white hover:bg-white/10'
+                  }`}
+              >
+                {item.icon}
+              </Link>
+            )
+          })}
+        </nav>
+
+        {/* Expand toggle */}
+        <button
+          onClick={() => setCollapsed(false)}
+          title="Expandir menu"
+          className="w-full py-3 flex items-center justify-center text-white/50 hover:text-white
+            transition-colors border-t border-white/10 text-sm"
+        >
+          ›
+        </button>
+      </aside>
+    )
+  }
+
+  // ── Expanded: full sidebar ─────────────────────────────────────────────────
   const renderNavItem = (item: NavItem, depth: number = 0) => {
     const hasChildren = item.children && item.children.length > 0
 
     if (hasChildren) {
-      const groupKey = item.navKey ?? item.href
+      const groupKey  = item.navKey ?? item.href
       const isExpanded = expandedGroups.includes(groupKey)
 
       return (
@@ -154,11 +193,10 @@ const Sidebar: React.FC = () => {
             <span className="flex-1 text-left">{item.label}</span>
             <svg
               className={`w-4 h-4 transition-transform ${isExpanded ? 'rotate-180' : ''}`}
-              fill="none"
-              stroke="currentColor"
-              viewBox="0 0 24 24"
+              fill="none" stroke="currentColor" viewBox="0 0 24 24"
             >
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 14l-7-7m0 0L5 14m7-7v12" />
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                d="M19 14l-7-7m0 0L5 14m7-7v12" />
             </svg>
           </button>
 
@@ -166,7 +204,8 @@ const Sidebar: React.FC = () => {
             <div className="border-t border-white/10 mt-1 pt-1">
               {item.children
                 ?.filter(child =>
-                  (!child.roles || child.roles.includes(session?.role || '')) && passesAbac(child)
+                  (!child.roles || child.roles.includes(session?.role || '')) &&
+                  passesAbac(child)
                 )
                 .map(child => renderNavItem(child, depth + 1))}
             </div>
@@ -192,14 +231,23 @@ const Sidebar: React.FC = () => {
   }
 
   return (
-    <aside className="w-56 bg-primary flex flex-col overflow-y-auto">
+    <aside className="w-56 bg-primary flex flex-col overflow-y-auto flex-shrink-0 transition-all duration-200">
       <nav className="flex-1 py-4 space-y-1">
         {filteredItems.map(item => renderNavItem(item))}
       </nav>
 
-      <div className="border-t border-white/10 p-4 text-xs text-white/60">
-        <p>v1.0.0</p>
-        <p>© 2026 PlugHub</p>
+      {/* Collapse + version footer */}
+      <div className="border-t border-white/10 p-3 flex items-center gap-2">
+        <div className="flex-1 text-xs text-white/40">
+          <p>v1.0.0</p>
+        </div>
+        <button
+          onClick={() => setCollapsed(true)}
+          title="Recolher menu"
+          className="text-white/40 hover:text-white/80 transition-colors text-xs px-1"
+        >
+          ‹
+        </button>
       </div>
     </aside>
   )
