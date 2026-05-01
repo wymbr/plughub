@@ -12,7 +12,7 @@ async function safeJson<T>(res: Response): Promise<T> {
   return res.json() as Promise<T>
 }
 import type {
-  ActiveSession, ConnectionStatus, Metrics24h,
+  ActiveSession, ConnectionStatus, ContactSegment, Metrics24h,
   PoolSnapshot, PoolView, SentimentEntry, StreamEntry, SupervisorState
 } from '../types'
 
@@ -173,6 +173,58 @@ export function useSessionStream(
   }, [tenantId, sessionId])
 
   return { entries, status }
+}
+
+// ─── useSessionSegments ──────────────────────────────────────────────────────
+
+export function useSessionSegments(
+  tenantId:   string,
+  sessionId:  string | null,
+  intervalMs = 5_000,
+): { segments: ContactSegment[]; loading: boolean; error: string | null } {
+  const [segments, setSegments] = useState<ContactSegment[]>([])
+  const [loading,  setLoading]  = useState(false)
+  const [error,    setError]    = useState<string | null>(null)
+
+  const fetch_ = useCallback(async () => {
+    if (!tenantId || !sessionId) return
+    setLoading(true)
+    try {
+      const url = `${BASE}/reports/segments?tenant_id=${encodeURIComponent(tenantId)}&session_id=${encodeURIComponent(sessionId)}&page_size=50`
+      const res = await fetch(url)
+      if (!res.ok) {
+        setError(`API indisponível (HTTP ${res.status})`)
+        return
+      }
+      const data = await safeJson<{ data: ContactSegment[]; error?: string }>(res)
+      if (data.error) {
+        setError('Erro ao carregar segmentos — verifique se o analytics-api está online')
+        return
+      }
+      // Sort: primary before specialist, then by started_at ascending
+      const sorted = (data.data ?? []).slice().sort((a, b) => {
+        if (a.started_at < b.started_at) return -1
+        if (a.started_at > b.started_at) return 1
+        return 0
+      })
+      setSegments(sorted)
+      setError(null)
+    } catch (err) {
+      setError(`Erro de rede: ${String(err)}`)
+    }
+    finally { setLoading(false) }
+  }, [tenantId, sessionId])
+
+  useEffect(() => {
+    setSegments([])
+    setError(null)
+    if (!sessionId) return
+    fetch_()
+    const id = setInterval(fetch_, intervalMs)
+    return () => clearInterval(id)
+  }, [fetch_, sessionId, intervalMs])
+
+  return { segments, loading, error }
 }
 
 // ─── useSupervisor ────────────────────────────────────────────────────────────
