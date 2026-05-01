@@ -37,12 +37,52 @@ import redis.asyncio as aioredis
 from .models import AgentInstance, PoolConfig, RoutingExpression
 from .registry import InstanceRegistry, PoolRegistry
 from .config import get_settings
+from .routing_config import routing_config
 
 if TYPE_CHECKING:
+    import httpx
     from aiokafka import AIOKafkaProducer
     from .router import Router
 
 logger = logging.getLogger("plughub.routing.kafka_listener")
+
+
+class ConfigChangedHandler:
+    """
+    Processes config.changed Kafka events for the routing namespace.
+
+    When the Config API publishes a change to namespace "routing", this handler
+    marks the local RoutingConfigCache as stale and schedules a background
+    reload so fresh values are picked up without a routing-engine restart.
+
+    Events from other namespaces are silently ignored — each component is
+    responsible for the namespaces it cares about.
+    """
+
+    def __init__(self, config_api_url: str, http_client: "httpx.AsyncClient") -> None:
+        import httpx as _httpx  # local import to keep top-level imports clean
+        self._config_api_url = config_api_url
+        self._http_client    = http_client
+
+    async def handle(self, event: dict) -> None:
+        namespace = event.get("namespace", "")
+        if namespace != "routing":
+            logger.debug("config.changed ignored: namespace=%s", namespace)
+            return
+
+        key       = event.get("key", "<unknown>")
+        tenant_id = event.get("tenant_id", "<unknown>")
+        operation = event.get("operation", "<unknown>")
+
+        logger.info(
+            "config.changed received: namespace=routing key=%s tenant=%s op=%s — invalidating cache",
+            key, tenant_id, operation,
+        )
+        routing_config.invalidate()
+        # Reload in background so we don't block the consumer loop.
+        asyncio.create_task(
+            routing_config.reload(self._config_api_url, self._http_client)
+        )
 
 
 class RegistryEventHandler:
@@ -319,25 +359,35 @@ def _map_status_to_state(status: str) -> str:
 
 
 async def run_listeners(
-    redis_client:          aioredis.Redis,
-    instance_registry:     InstanceRegistry,
-    pool_registry:         PoolRegistry,
-    kafka_topic_lifecycle: str,
-    kafka_topic_registry:  str,
-    kafka_brokers:         str,
-    kafka_group_id:        str,
+    redis_client:              aioredis.Redis,
+    instance_registry:         InstanceRegistry,
+    pool_registry:             PoolRegistry,
+    kafka_topic_lifecycle:     str,
+    kafka_topic_registry:      str,
+    kafka_brokers:             str,
+    kafka_group_id:            str,
     # Optional: when provided, enables queue-drain on agent_ready (Scenario 2)
-    router:                "Router | None"          = None,
-    kafka_producer:        "AIOKafkaProducer | None" = None,
-    kafka_topic_inbound:   str                      = "conversations.inbound",
+    router:                    "Router | None"          = None,
+    kafka_producer:            "AIOKafkaProducer | None" = None,
+    kafka_topic_inbound:       str                      = "conversations.inbound",
+    # Optional: when provided, subscribes to config.changed and refreshes routing cache
+    kafka_topic_config_changed: str | None              = None,
+    config_api_url:            str                      = "http://localhost:3600",
+    http_client:               "httpx.AsyncClient | None" = None,
 ) -> None:
     """
-    Starts Kafka consumers for agent.lifecycle and agent.registry.events.
+    Starts Kafka consumers for agent.lifecycle, agent.registry.events,
+    and optionally config.changed.
     Called by main.py during Routing Engine startup.
 
     When router + kafka_producer are supplied, agent_ready events trigger an
     automatic queue drain (Scenario 2 — spec 3.3b).
+
+    When kafka_topic_config_changed + http_client are supplied, config.changed
+    events for the "routing" namespace invalidate and reload the local
+    RoutingConfigCache (spec: config.changed → routing-engine cache refresh).
     """
+    import httpx as _httpx
     from aiokafka import AIOKafkaConsumer
 
     registry_handler  = RegistryEventHandler(pool_registry)
@@ -349,9 +399,18 @@ async def run_listeners(
         kafka_topic_inbound = kafka_topic_inbound,
     )
 
+    _http_client = http_client or _httpx.AsyncClient()
+    config_handler = ConfigChangedHandler(
+        config_api_url = config_api_url,
+        http_client    = _http_client,
+    )
+
+    topics = [kafka_topic_lifecycle, kafka_topic_registry]
+    if kafka_topic_config_changed:
+        topics.append(kafka_topic_config_changed)
+
     consumer = AIOKafkaConsumer(
-        kafka_topic_lifecycle,
-        kafka_topic_registry,
+        *topics,
         bootstrap_servers = kafka_brokers,
         group_id          = kafka_group_id + "-listener",
         value_deserializer= lambda v: json.loads(v.decode("utf-8")),
@@ -359,24 +418,29 @@ async def run_listeners(
     )
     await consumer.start()
     logger.info(
-        "Kafka listeners started: topics=%s, %s",
-        kafka_topic_lifecycle, kafka_topic_registry,
+        "Kafka listeners started: topics=%s",
+        ", ".join(topics),
     )
 
     try:
         async for msg in consumer:
             payload = msg.value
             topic   = msg.topic
-            asyncio.create_task(_dispatch(payload, topic, registry_handler, lifecycle_handler))
+            asyncio.create_task(
+                _dispatch(payload, topic, registry_handler, lifecycle_handler,
+                          config_handler, kafka_topic_config_changed)
+            )
     finally:
         await consumer.stop()
 
 
 async def _dispatch(
-    payload:           dict,
-    topic:             str,
-    registry_handler:  RegistryEventHandler,
-    lifecycle_handler: LifecycleEventHandler,
+    payload:                    dict,
+    topic:                      str,
+    registry_handler:           RegistryEventHandler,
+    lifecycle_handler:          LifecycleEventHandler,
+    config_handler:             ConfigChangedHandler,
+    kafka_topic_config_changed: str | None,
 ) -> None:
     try:
         settings = get_settings()
@@ -384,5 +448,7 @@ async def _dispatch(
             await registry_handler.handle(payload)
         elif topic == settings.kafka_topic_lifecycle:
             await lifecycle_handler.handle(payload)
+        elif kafka_topic_config_changed and topic == kafka_topic_config_changed:
+            await config_handler.handle(payload)
     except Exception as exc:
         logger.error("Error in Kafka dispatch: topic=%s — %s", topic, exc)

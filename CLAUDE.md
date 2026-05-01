@@ -2223,8 +2223,10 @@ Ou via Config API namespace `routing` key `performance_score_weight` (editável 
 | `analytics-api/main.py` | Inicializa `perf_task` background em lifespan; `POST /admin/performance-sync` para trigger manual |
 | `routing-engine/registry.py` | `_agent_perf_key()` helper; `InstanceRegistry.get_agent_performance_score()` — lê Redis com fallback 0.5 |
 | `routing-engine/scorer.py` | `score_resource()` estendida com `performance_score` + `performance_score_weight` params |
-| `routing-engine/router.py` | `_allocate()` lê `perf_weight` de settings; busca score via `get_agent_performance_score()` quando weight > 0 |
-| `routing-engine/config.py` | `performance_score_weight: float = 0.0` (env `PLUGHUB_PERFORMANCE_SCORE_WEIGHT`) |
+| `routing-engine/router.py` | `_allocate()` lê `perf_weight` de `routing_config.get()` com fallback para env var |
+| `routing-engine/config.py` | `performance_score_weight: float = 0.0` (env `PLUGHUB_PERFORMANCE_SCORE_WEIGHT` — fallback quando Config API indisponível) |
+| `routing-engine/routing_config.py` | **NOVO** — `RoutingConfigCache`: busca namespace `routing` do Config API no startup; invalidado por `ConfigChangedHandler` via `config.changed` Kafka; defaults built-in garantem operação offline |
+| `routing-engine/kafka_listener.py` | `ConfigChangedHandler` — invalida e recarrega `RoutingConfigCache` em background quando `namespace=routing` |
 | `config-api/seed.py` | Seed entry `routing.performance_score_weight = 0.0` com descrição |
 
 #### Parâmetros do batch job
@@ -2650,7 +2652,7 @@ Revisores (IA e humanos) respondem por critério, no mesmo formato estruturado.
 
 ### Config API / Routing Engine
 
-- **Consumo de `config.changed` namespace `routing`** *(deferred)*: routing-engine deve escutar o tópico `config.changed` e invalidar cache local de SLA/scoring quando namespace = `routing`. Atualmente apenas o orchestrator-bridge reage a `config.changed` (namespace `quota`).
+~~**Consumo de `config.changed` namespace `routing`**~~ ✅ Implementado. `RoutingConfigCache` em `routing_config.py` faz fetch do Config API no startup e é invalidado/recarregado via `ConfigChangedHandler` ao receber `config.changed` com `namespace=routing`. `performance_score_weight` lido dinamicamente do cache com fallback para env var. 15/15 testes em `test_routing_config.py`.
 
 ### Agent Assist UI — MenuCard substitution mode (Phase 2)
 

@@ -27,6 +27,7 @@ from .scorer import (
 )
 from .registry import InstanceRegistry, PoolRegistry
 from .config import get_settings
+from .routing_config import routing_config
 
 if TYPE_CHECKING:
     from aiokafka import AIOKafkaProducer
@@ -208,7 +209,13 @@ class Router:
         best_pool:     PoolConfig   | None = None
         best_score:    float               = -1.0
 
-        perf_weight = self._settings.performance_score_weight
+        # Arc 7d — performance_score_weight is dynamically overridable via
+        # Config API namespace "routing" key "performance_score_weight".
+        # Falls back to env-var setting when Config API is unavailable.
+        perf_weight = routing_config.get(
+            "performance_score_weight",
+            self._settings.performance_score_weight,
+        )
 
         for pool in pools:
             instances = await self._instances.get_ready_instances(

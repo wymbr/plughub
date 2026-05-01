@@ -22,6 +22,7 @@ from .models import ConversationInboundEvent, ConversationRoutedEvent
 from .registry import InstanceRegistry, PoolRegistry
 from .router import Router
 from .kafka_listener import run_listeners
+from .routing_config import routing_config
 
 logger = logging.getLogger("plughub.routing")
 
@@ -36,6 +37,12 @@ async def run() -> None:
     instance_registry = InstanceRegistry(redis_client)
     pool_registry     = PoolRegistry(redis_client)
     router            = Router(instance_registry, pool_registry)
+
+    # Pre-load routing namespace from Config API so first routing call already
+    # has up-to-date SLA/scoring values (performance_score_weight, etc.).
+    # Failure is non-fatal — RoutingConfigCache falls back to built-in defaults.
+    await routing_config.reload(settings.config_api_url, http_client)
+    logger.info("Routing config cache pre-loaded from %s", settings.config_api_url)
 
     consumer = AIOKafkaConsumer(
         settings.kafka_topic_inbound,
@@ -56,17 +63,21 @@ async def run() -> None:
     # Start kafka_listener in background (populates Redis cache of pools and instances)
     listener_task = asyncio.create_task(
         run_listeners(
-            redis_client          = redis_client,
-            instance_registry     = instance_registry,
-            pool_registry         = pool_registry,
-            kafka_topic_lifecycle = settings.kafka_topic_lifecycle,
-            kafka_topic_registry  = settings.kafka_topic_registry,
-            kafka_brokers         = settings.kafka_brokers,
-            kafka_group_id        = settings.kafka_group_id,
+            redis_client               = redis_client,
+            instance_registry          = instance_registry,
+            pool_registry              = pool_registry,
+            kafka_topic_lifecycle      = settings.kafka_topic_lifecycle,
+            kafka_topic_registry       = settings.kafka_topic_registry,
+            kafka_brokers              = settings.kafka_brokers,
+            kafka_group_id             = settings.kafka_group_id,
             # Queue drain — on agent_ready, pull waiting contacts from queue
-            router                = router,
-            kafka_producer        = producer,
-            kafka_topic_inbound   = settings.kafka_topic_inbound,
+            router                     = router,
+            kafka_producer             = producer,
+            kafka_topic_inbound        = settings.kafka_topic_inbound,
+            # Config cache refresh — on config.changed namespace=routing, reload cache
+            kafka_topic_config_changed = settings.kafka_topic_config_changed,
+            config_api_url             = settings.config_api_url,
+            http_client                = http_client,
         )
     )
 

@@ -57,6 +57,10 @@ class Settings(BaseSettings):
     # Set to 0 to disable. Default: 15s.
     queue_drain_interval_s: int = 15
 
+    # Config API — used to fetch routing namespace settings on startup and reload
+    config_api_url:               str = "http://localhost:3600"
+    kafka_topic_config_changed:   str = "config.changed"
+
     # Evaluation consumer — evaluation.requested → SkillFlowEngine
     kafka_topic_evaluation:  str = "evaluation.events"
     # HTTP endpoint of the skill-flow-service (TypeScript wrapper around SkillFlowEngine)
