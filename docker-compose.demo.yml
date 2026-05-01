@@ -1,7 +1,12 @@
 # docker-compose.demo.yml
-# PlugHub Platform — Demo Environment (Arc 2 → Arc 7 completo)
+# PlugHub Platform — Demo Environment (Arc 2 → Arc 7 completo + Arc 5 Fase 3)
 #
 # Stack completa: infra + todos os módulos de aplicação + observabilidade
+#
+# Novidades neste build:
+#   • resolve step (Arc 5 Fase 3) — coleta de contexto inline e declarativa
+#     Pipeline: gap check → CRM lookup → LLM question → BLPOP → LLM extract
+#     Declarado diretamente no YAML do skill, sem depender de agente externo.
 #
 # Uso:
 #   docker compose -f docker-compose.demo.yml up --build
@@ -53,6 +58,7 @@
 #   E2E_EXTRA_ARGS="--evaluation"       # cenários 01–04 + 24 + 25 (Arc 6)
 #   E2E_EXTRA_ARGS="--hooks"            # cenário 22 (pool lifecycle hooks)
 #   E2E_EXTRA_ARGS="--segments"         # cenário 23 (Arc 5 contact segments)
+#   E2E_EXTRA_ARGS="--ctx"              # cenário 17 (ContextStore + resolve step)
 #   E2E_EXTRA_ARGS="--permissions"      # cenário 27 (Arc 6 v2 ABAC permissions)
 #   E2E_EXTRA_ARGS="--workflow-review"  # cenário 28 (Arc 6 v2 review/contestation cycle)
 #
@@ -111,6 +117,17 @@ volumes:
 # │    http://localhost:5174/config/billing   ← Faturamento por capacidade   │
 # │    http://localhost:5174/skill-flows      ← Editor Monaco de skills      │
 # │    http://localhost:5174/dashboards       ← Dashboards drag-and-drop     │
+# │                                                                            │
+# │  PASSO 7 — Validar resolve step (Arc 5 Fase 3)                          │
+# │    O resolve step é declarado no YAML de qualquer skill com:              │
+# │      type: resolve                                                        │
+# │      required_fields:                                                     │
+# │        - tag: caller.nome                                                 │
+# │          confidence_min: 0.8                                              │
+# │          required: true                                                   │
+# │    Para validar inline: abrir Skill Flows → inspecionar o YAML           │
+# │    de agente_sac_ia_v1 e verificar se resolve step aparece.              │
+# │    E2E: docker compose run e2e-runner ts-node runner.ts --ctx             │
 # │                                                                            │
 # │  Observabilidade                                                           │
 # │    Kafdrop  (Kafka UI):         http://localhost:9002                      │
