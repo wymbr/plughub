@@ -58,7 +58,7 @@ export function registerDeployTools(server: McpServer, deps: DeployDeps): void {
     "Deploy a skill to one or more pools via agent-registry. " +
     "Called by the skill_scheduled_deploy_v1 workflow after its timer fires.",
     SkillDeployInputSchema.shape as any,   // cast required — ZodOptional not assignable to ZodRawShapeCompat in this SDK version
-    async (rawInput) => {
+    async (rawInput: Record<string, unknown>) => {
       let input: z.infer<typeof SkillDeployInputSchema>
       try {
         input = SkillDeployInputSchema.parse(rawInput)
