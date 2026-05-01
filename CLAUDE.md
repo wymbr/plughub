@@ -878,6 +878,7 @@ outbound:       outbound.*             →  pending deliveries for Notification 
 - Never write masked input values to `pipeline_state`, Redis, stream, or logs — `masked_scope` is in-memory only, cleared at `end_transaction`
 - Never allow AI agents to emit `@mention` commands — only `role: primary` or `role: human` participants may issue mentions; AI agents use `task` step for coordination
 - Never route a `@mention` to a pool not listed in `mentionable_pools` of the origin pool — domain is always closed by pool configuration
+- **Never leave deferred phases undocumented** — whenever a scope is split into phases and only some are implemented, every unimplemented phase MUST be registered immediately in the `## Pending (next iteration)` section with its name, parent feature, and a brief description of what remains. Marking something as "futuro", "deferred", or "Phase N (deferred)" in inline comments is NOT sufficient; the item must also appear in the centralised Pending list. This prevents work from being lost between sessions.
 
 ## SDK CLI
 
@@ -2620,6 +2621,40 @@ Revisores (IA e humanos) respondem por critério, no mesmo formato estruturado.
 ---
 
 ## Pending (next iteration)
+
+> **Regra de registro:** toda vez que um escopo é dividido em fases e apenas algumas são implementadas, as fases restantes são obrigatoriamente listadas aqui antes de encerrar a sessão de trabalho. Marcar como "futuro" ou "deferred" em comentários inline não é suficiente.
+
+### Context-Aware / ContextStore
+
+- **Fase 2 — Co-pilot** *(deferred)*: AI Gateway analisa cada mensagem do cliente em background durante a sessão de um agente humano e popula a aba "Capacidades" do Agent Assist com sugestões de resposta personalizada, flags de risco (sentimento, intenção detectada) e ações recomendadas baseadas em `motivo_contato`. Depende de `session.sentimento.*` e `caller.*` já populados no ContextStore.
+- **Fase 3 — Step `resolve` nativo** *(deferred)*: novo step type no skill-flow-engine que encapsula a lógica do `agente_contexto_ia_v1` de forma declarativa inline no YAML (sem depender de agente externo via `task` step). Permite que qualquer agente defina pré-requisitos de contexto inline.
+
+### Arc 5 — ContactSegment (v2)
+
+- **Enrichment post-hoc de `segment_id`** *(deferred)*: eventos sem `segment_id` emitidos por componentes externos (ex: `sentiment_events`, `mcp.audit`) precisam ser enriquecidos retroativamente com o `segment_id` correto a partir de lookup no Redis/ClickHouse pelo `session_id` + `participant_id`.
+- **Materialized views ClickHouse** *(deferred)*: criar `mv_segment_summary` (métricas por segmento: avg_duration_ms, resolution_rate, escalation_rate) e `mv_agent_performance` (métricas por agent_type_id + pool_id, base para Arc 7d performance routing).
+
+### Skill Deploy Lifecycle (Phase 2)
+
+- **Deploy agendado via Workflow engine** *(deferred)*: integrar com workflow-api para criar uma instância `suspend → deploy no horário configurado`. UI: seletor de data/hora no DeployPage + listagem de deploys agendados pendentes.
+- **Graceful handoff monitor** *(deferred)*: painel no DeployPage mostrando progresso por pool — quantas sessões ainda usam a versão anterior vs nova, com indicador visual de convergência.
+- **Automated rollback button** *(deferred)*: botão na UI de Deploy que dispara um novo deploy apontando para o `yaml_snapshot` de uma versão anterior listada no histórico.
+
+### Usage Metering — Channel Gateway adapters
+
+- **whatsapp_conversations, voice_minutes, sms_segments, email_messages** *(deferred)*: as funções em `usage_emitter.py` estão implementadas e documentadas, mas os adapters de canal ainda não as chamam. Será wired quando cada adapter for criado (WhatsApp, WebRTC/Voice, SMS, Email).
+
+### Pricing Module
+
+- **Integração metering × pricing** *(deferred)*: módulo que lê os contadores de `usage.events` no Redis/ClickHouse, aplica planos configurados no Config API e escreve `{tenant}:quota:limit:*` no Redis. Atualmente separação está incompleta — metering registra mas pricing não consome.
+
+### Config API / Routing Engine
+
+- **Consumo de `config.changed` namespace `routing`** *(deferred)*: routing-engine deve escutar o tópico `config.changed` e invalidar cache local de SLA/scoring quando namespace = `routing`. Atualmente apenas o orchestrator-bridge reage a `config.changed` (namespace `quota`).
+
+### Agent Assist UI — MenuCard substitution mode (Phase 2)
+
+- **Modo substituição nos MenuCards** *(deferred)*: os MenuCards renderizados no chat do agente humano são read-only (todos os inputs têm `disabled`). Para ativar o modo substituição: (1) remover `disabled` dos elementos interativos em `MenuCard.tsx`; (2) adicionar handler `POST /api/menu_submit/{sessionId}` com payload `{ menu_id, interaction, result }`; (3) flag `substitutionMode: boolean` prop no componente para alternar entre os dois modos sem duplicar código.
 
 ### Arc 2 — fechamento
 
