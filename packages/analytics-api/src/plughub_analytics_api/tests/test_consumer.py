@@ -752,3 +752,174 @@ class TestWriteRowDispatchContactInsight:
         store.upsert_session.assert_not_awaited()
         store.insert_agent_event.assert_not_awaited()
         store.insert_evaluation_event.assert_not_awaited()
+
+
+# ── parse_agent_lifecycle — Arc 8 pause/resume ────────────────────────────────
+
+class TestParseAgentLifecyclePause:
+    """Arc 8 — agent_pause and agent_ready events map to agent_pause_intervals."""
+
+    INSTANCE = "agente_retencao_v1-001"
+    TS       = "2026-05-01T09:00:00+00:00"
+
+    def _pause_payload(self, **extra):
+        base = {
+            "event":         "agent_pause",
+            "tenant_id":     TENANT,
+            "instance_id":   self.INSTANCE,
+            "agent_type_id": "agente_retencao_v1",
+            "pool_id":       POOL,
+            "reason_id":     "intervalo",
+            "reason_label":  "Intervalo",
+            "timestamp":     self.TS,
+        }
+        base.update(extra)
+        return base
+
+    def _ready_payload(self, **extra):
+        base = {
+            "event":         "agent_ready",
+            "tenant_id":     TENANT,
+            "instance_id":   self.INSTANCE,
+            "agent_type_id": "agente_retencao_v1",
+            "pools":         [POOL],
+            "status":        "ready",
+            "execution_model": "stateless",
+            "max_concurrent_sessions": 5,
+            "current_sessions": 0,
+            "timestamp":     self.TS,
+        }
+        base.update(extra)
+        return base
+
+    # ── agent_pause ──────────────────────────────────────────────────────────
+
+    def test_agent_pause_returns_open_row(self):
+        row = parse_agent_lifecycle(self._pause_payload())
+        assert row is not None
+        assert row["table"] == "agent_pause_intervals"
+        assert row["action"] == "open"
+
+    def test_agent_pause_fields_propagated(self):
+        row = parse_agent_lifecycle(self._pause_payload(note="Pausa para café"))
+        assert row["tenant_id"]    == TENANT
+        assert row["instance_id"]  == self.INSTANCE
+        assert row["agent_type_id"] == "agente_retencao_v1"
+        assert row["pool_id"]      == POOL
+        assert row["reason_id"]    == "intervalo"
+        assert row["reason_label"] == "Intervalo"
+        assert row["note"]         == "Pausa para café"
+        assert row["paused_at"]    == self.TS
+
+    def test_agent_pause_generates_interval_id(self):
+        row = parse_agent_lifecycle(self._pause_payload())
+        assert row is not None
+        assert "interval_id" in row
+        assert len(row["interval_id"]) == 36  # UUID format
+
+    def test_agent_pause_note_none_when_absent(self):
+        row = parse_agent_lifecycle(self._pause_payload())
+        assert row["note"] is None
+
+    def test_agent_pause_missing_tenant_returns_none(self):
+        payload = self._pause_payload()
+        del payload["tenant_id"]
+        assert parse_agent_lifecycle(payload) is None
+
+    def test_agent_pause_missing_instance_returns_none(self):
+        payload = self._pause_payload()
+        del payload["instance_id"]
+        assert parse_agent_lifecycle(payload) is None
+
+    # ── agent_ready (close_check) ────────────────────────────────────────────
+
+    def test_agent_ready_returns_close_check(self):
+        row = parse_agent_lifecycle(self._ready_payload())
+        assert row is not None
+        assert row["table"]  == "agent_pause_intervals"
+        assert row["action"] == "close_check"
+
+    def test_agent_ready_carries_tenant_instance_resumed_at(self):
+        row = parse_agent_lifecycle(self._ready_payload())
+        assert row["tenant_id"]   == TENANT
+        assert row["instance_id"] == self.INSTANCE
+        assert row["resumed_at"]  == self.TS
+
+    def test_agent_ready_missing_tenant_returns_none(self):
+        payload = self._ready_payload()
+        del payload["tenant_id"]
+        assert parse_agent_lifecycle(payload) is None
+
+    def test_agent_ready_missing_instance_returns_none(self):
+        payload = self._ready_payload()
+        del payload["instance_id"]
+        assert parse_agent_lifecycle(payload) is None
+
+    # ── agent_done unaffected ────────────────────────────────────────────────
+
+    def test_agent_done_still_returns_agent_events_row(self):
+        row = parse_agent_lifecycle({
+            "event":      "agent_done",
+            "tenant_id":  TENANT,
+            "instance_id": self.INSTANCE,
+            "session_id": SESSION,
+            "timestamp":  self.TS,
+        })
+        assert row is not None
+        assert row["table"] == "agent_events"
+        assert row["event_type"] == "agent_done"
+
+    # ── untracked events ─────────────────────────────────────────────────────
+
+    def test_agent_login_returns_none(self):
+        assert parse_agent_lifecycle({
+            "event": "agent_login", "tenant_id": TENANT, "instance_id": self.INSTANCE,
+        }) is None
+
+    def test_agent_heartbeat_returns_none(self):
+        assert parse_agent_lifecycle({
+            "event": "agent_heartbeat", "tenant_id": TENANT, "instance_id": self.INSTANCE,
+            "status": "ready",
+        }) is None
+
+    def test_agent_busy_returns_none(self):
+        assert parse_agent_lifecycle({
+            "event": "agent_busy", "tenant_id": TENANT, "instance_id": self.INSTANCE,
+            "session_id": SESSION,
+        }) is None
+
+
+# ── _write_row dispatch — agent_pause_intervals ───────────────────────────────
+
+class TestWriteRowDispatchPauseIntervals:
+    @pytest.mark.asyncio
+    async def test_agent_pause_intervals_dispatched(self):
+        store = make_store()
+        store.upsert_agent_pause_interval = AsyncMock()
+        row = {
+            "table":        "agent_pause_intervals",
+            "action":       "close",
+            "interval_id":  "00000000-0000-0000-0000-000000000001",
+            "tenant_id":    TENANT,
+            "instance_id":  "agente_retencao_v1-001",
+            "agent_type_id": "agente_retencao_v1",
+            "pool_id":      POOL,
+            "reason_id":    "intervalo",
+            "reason_label": "Intervalo",
+            "note":         None,
+            "paused_at":    "2026-05-01T09:00:00+00:00",
+            "resumed_at":   "2026-05-01T09:30:00+00:00",
+            "duration_ms":  1800000,
+        }
+        await _write_row(store, row, "agent.lifecycle", 0)
+        store.upsert_agent_pause_interval.assert_awaited_once_with(row)
+
+    @pytest.mark.asyncio
+    async def test_agent_pause_intervals_does_not_touch_other_stores(self):
+        store = make_store()
+        store.upsert_agent_pause_interval = AsyncMock()
+        row = {"table": "agent_pause_intervals", "interval_id": "x", "tenant_id": TENANT}
+        await _write_row(store, row, "agent.lifecycle", 0)
+        store.upsert_session.assert_not_awaited()
+        store.insert_agent_event.assert_not_awaited()
+        store.insert_evaluation_event.assert_not_awaited()

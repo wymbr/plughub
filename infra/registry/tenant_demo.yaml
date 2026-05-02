@@ -50,7 +50,8 @@ pools:
     hooks:
       on_human_start: []  # vazio: copilot ainda é ativado manualmente via @mention
       on_human_end:
-        - pool: finalizacao_ia  # Fase B: agente de finalização (NPS + encerramento)
+        - pool: wrapup_ia  # Wrap-up obrigatório com agente humano (agents_only)
+        - pool: nps_ia     # NPS isolado com cliente (visibility array)
       post_human: []
 
   - pool_id: avaliacao_ia
@@ -94,11 +95,27 @@ pools:
     sla_target_ms: 60000
 
   - pool_id: finalizacao_ia
-    # Pool do agente de finalização de contato.
-    # Acionado via pool hook on_human_end no pool retencao_humano (Fase B).
-    # Responsabilidades: agradecimento, pesquisa NPS, encerramento da sessão.
-    # Fase A: pool declarado e agent_type registrado — hook será wired na Fase B.
-    description: "Pool do agente de finalização — agradecimento + NPS + encerramento"
+    # DEPRECATED — substituído por wrapup_ia + nps_ia (dois agentes paralelos).
+    # Mantido para retrocompatibilidade com deploys que ainda referenciam este pool.
+    description: "[DEPRECATED] Pool do agente de finalização — usar wrapup_ia + nps_ia"
+    channel_types: [webchat, whatsapp]
+    sla_target_ms: 120000
+
+  - pool_id: wrapup_ia
+    # Pool do agente de wrap-up pós-atendimento.
+    # Acionado via pool hook on_human_end — obrigatório quando configurado.
+    # Coleta notas internas do agente humano (resumo, classificação, próximos passos).
+    # Usa visibility agents_only — cliente não vê o wrap-up.
+    description: "Pool do agente de wrap-up — notas internas pós-atendimento (agents_only)"
+    channel_types: [webchat, whatsapp]
+    sla_target_ms: 180000
+
+  - pool_id: nps_ia
+    # Pool do agente NPS pós-atendimento.
+    # Acionado via pool hook on_human_end, em paralelo com wrapup_ia.
+    # Conversa exclusivamente com o cliente via visibility array.
+    # O agente humano NÃO vê as mensagens de NPS.
+    description: "Pool do agente NPS — pesquisa isolada com o cliente (visibility array)"
     channel_types: [webchat, whatsapp]
     sla_target_ms: 120000
 
@@ -243,8 +260,7 @@ agent_types:
       channels: webchat,whatsapp
       masked_input: "true"
 
-  # Agente de finalização de contato — acionado via on_human_end hook (Fase B)
-  # Envia agradecimento, coleta NPS e encerra o contato após o agente humano sair.
+  # [DEPRECATED] Agente de finalização de contato — substituído por nps_v1 + wrapup_v1
   - agent_type_id: agente_finalizacao_v1
     framework: plughub-native
     execution_model: stateless
@@ -252,6 +268,39 @@ agent_types:
     max_concurrent_sessions: 20
     pools: [finalizacao_ia]
     skills: [{skill_id: skill_finalizacao_v1}]
+    permissions:
+      - mcp-server-plughub:agent_heartbeat
+      - mcp-server-plughub:notification_send
+      - mcp-server-plughub:interaction_request
+    capabilities:
+      channels: webchat,whatsapp
+
+  # Agente NPS — pesquisa de satisfação isolada com o cliente.
+  # Usa visibility array (customer_participant_id) para que o agente humano
+  # NÃO veja as mensagens de avaliação. Evita animosidade.
+  - agent_type_id: agente_nps_v1
+    framework: plughub-native
+    execution_model: stateless
+    role: executor
+    max_concurrent_sessions: 20
+    pools: [nps_ia]
+    skills: [{skill_id: skill_nps_v1}]
+    permissions:
+      - mcp-server-plughub:agent_heartbeat
+      - mcp-server-plughub:notification_send
+      - mcp-server-plughub:interaction_request
+    capabilities:
+      channels: webchat,whatsapp
+
+  # Agente de wrap-up — notas internas pós-atendimento.
+  # Obrigatório quando configurado. Usa visibility agents_only.
+  - agent_type_id: agente_wrapup_v1
+    framework: plughub-native
+    execution_model: stateless
+    role: executor
+    max_concurrent_sessions: 20
+    pools: [wrapup_ia]
+    skills: [{skill_id: skill_wrapup_v1}]
     permissions:
       - mcp-server-plughub:agent_heartbeat
       - mcp-server-plughub:notification_send

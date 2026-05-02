@@ -217,8 +217,7 @@ function NewSkillPrompt({
 // ── SkillFlowsPage ────────────────────────────────────────────────────────────
 
 const SkillFlowsPage: React.FC = () => {
-  const { session } = useAuth()
-  const tenantId = session?.tenantId ?? ''
+  const { tenantId } = useAuth()
 
   // ── Skill list state ───────────────────────────────────────────────────────
   const [skills,      setSkills]      = useState<Skill[]>([])

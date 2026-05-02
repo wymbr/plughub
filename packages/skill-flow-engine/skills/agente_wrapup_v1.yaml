@@ -1,0 +1,140 @@
+# agente_wrapup_v1.yaml
+#
+# Agente de wrap-up pós-atendimento — acionado via pool hook on_human_end.
+# Executa em conferência como specialist, em paralelo com agente_nps_v1.
+#
+# Responsabilidades:
+#   - Coletar notas internas do agente humano (resumo, classificação, próximos passos)
+#   - Registrar dados de wrap-up no ContextStore (session.wrapup.*)
+#   - Obrigatório quando configurado — contato não fecha antes do wrap-up
+#
+# Isolamento de visibilidade:
+#   Todas as mensagens usam visibility: ["@ctx.session.human_agent_participant_id"].
+#   O cliente NÃO vê o wrap-up — é uma conversa exclusiva com o agente humano
+#   que encerrou. Supervisores e outros participantes da conferência também
+#   NÃO veem — evita poluir sessões com múltiplos agentes.
+#
+# Invariantes:
+#   - Wrap-up é obrigatório — o contato não fecha até este agente completar
+#   - on_failure avança (nunca bloqueia indefinidamente)
+#   - Timeout de 120s para cada interação — se o agente não responder, pula
+#   - Todos os dados ficam em session.wrapup.* no ContextStore
+
+id: skill_wrapup_v1
+name: "Wrap-up v1 — notas internas pós-atendimento"
+version: "1.0"
+description: |
+  Coleta notas internas do agente humano após o atendimento.
+  Usa visibility array com participant_id do agente humano — apenas
+  ele vê. Obrigatório quando configurado no pool hook on_human_end.
+classification:
+  type: orchestrator
+  domain: quality
+
+entry: solicitar_resumo
+
+steps:
+
+  # ── Solicitar resumo do atendimento ao agente humano ──────────────────────
+  - id: solicitar_resumo
+    type: menu
+    interaction: text
+    prompt: "📝 Wrap-up — por favor, descreva brevemente o que foi tratado neste atendimento:"
+    visibility:
+      - "@ctx.session.human_agent_participant_id"
+    timeout_s: 120
+    output_as: wrapup_resumo
+    on_success: registrar_resumo
+    on_failure: solicitar_classificacao
+    on_timeout: solicitar_classificacao
+
+  # ── Registrar resumo no ContextStore ──────────────────────────────────────
+  # dotPath key (wrapup_resumo) deve coincidir com output_as do menu anterior.
+  - id: registrar_resumo
+    type: notify
+    message: "✅ Resumo registrado."
+    visibility:
+      - "@ctx.session.human_agent_participant_id"
+    context_tags:
+      outputs:
+        wrapup_resumo:
+          tag: session.wrapup.resumo
+          confidence: 1.0
+          merge: overwrite
+          scope: segment
+    on_success: solicitar_classificacao
+    on_failure: solicitar_classificacao
+
+  # ── Classificação do atendimento ──────────────────────────────────────────
+  - id: solicitar_classificacao
+    type: menu
+    interaction: button
+    prompt: "Como você classifica este atendimento?"
+    visibility:
+      - "@ctx.session.human_agent_participant_id"
+    timeout_s: 120
+    options:
+      - id: resolvido
+        label: "✅ Resolvido"
+      - id: pendente
+        label: "⏳ Pendente"
+      - id: escalado
+        label: "⬆️ Escalado"
+      - id: cancelado
+        label: "❌ Cancelado pelo cliente"
+    output_as: wrapup_classificacao
+    on_success: registrar_classificacao
+    on_failure: solicitar_proximos_passos
+    on_timeout: solicitar_proximos_passos
+
+  # ── Registrar classificação ───────────────────────────────────────────────
+  # dotPath key (wrapup_classificacao) deve coincidir com output_as do menu anterior.
+  - id: registrar_classificacao
+    type: notify
+    message: "✅ Classificação registrada."
+    visibility:
+      - "@ctx.session.human_agent_participant_id"
+    context_tags:
+      outputs:
+        wrapup_classificacao:
+          tag: session.wrapup.classificacao
+          confidence: 1.0
+          merge: overwrite
+          scope: segment
+    on_success: solicitar_proximos_passos
+    on_failure: solicitar_proximos_passos
+
+  # ── Próximos passos (opcional) ────────────────────────────────────────────
+  - id: solicitar_proximos_passos
+    type: menu
+    interaction: text
+    prompt: "Há próximos passos necessários? (digite 'não' para pular)"
+    visibility:
+      - "@ctx.session.human_agent_participant_id"
+    timeout_s: 120
+    output_as: wrapup_proximos_passos
+    on_success: registrar_proximos_passos
+    on_failure: encerrar
+    on_timeout: encerrar
+
+  # ── Registrar próximos passos ─────────────────────────────────────────────
+  # dotPath key (wrapup_proximos_passos) deve coincidir com output_as do menu anterior.
+  - id: registrar_proximos_passos
+    type: notify
+    message: "✅ Wrap-up completo. Obrigado!"
+    visibility:
+      - "@ctx.session.human_agent_participant_id"
+    context_tags:
+      outputs:
+        wrapup_proximos_passos:
+          tag: session.wrapup.proximos_passos
+          confidence: 1.0
+          merge: overwrite
+          scope: segment
+    on_success: encerrar
+    on_failure: encerrar
+
+  # ── Encerramento ──────────────────────────────────────────────────────────
+  - id: encerrar
+    type: complete
+    outcome: resolved

@@ -17,6 +17,7 @@ Namespaces:
   quota          — Default quota limits
   pricing        — Unit prices per resource type, currency, reserve markup
   ai_gateway     — Multi-account rotation, workload isolation, evaluation model
+  agent_activity — Agent pause/resume reasons (Arc 8)
 
 Run:
   PLUGHUB_CONFIG_DATABASE_URL=... PLUGHUB_CONFIG_REDIS_URL=... python -m plughub_config_api.seed
@@ -373,6 +374,27 @@ _SEED: list[tuple[str, str, object, str]] = [
         "evaluation result (lock_reason=completed). Set to False to require explicit "
         "POST /v1/evaluation/results/{id}/lock by an operator. "
         "Source: evaluation-api/main.py"
+    ),
+
+    # ── agent_activity ────────────────────────────────────────────────────────
+    # Source: orchestrator-bridge (agent_pause events), Agent Assist UI (PauseReasonModal)
+    # pause_reasons: list of { id, label, requires_note } used in the PauseReasonModal.
+    # Agents must select a reason before pausing; if requires_note=true, a textarea is shown.
+    # Tenant-specific overrides can add/replace entries via Config API.
+    (
+        "agent_activity", "pause_reasons",
+        [
+            {"id": "intervalo",    "label": "Intervalo",        "requires_note": False},
+            {"id": "almoco",       "label": "Almoço",           "requires_note": False},
+            {"id": "treinamento",  "label": "Treinamento",      "requires_note": False},
+            {"id": "reuniao",      "label": "Reunião",          "requires_note": True},
+            {"id": "outro",        "label": "Outro",            "requires_note": True},
+        ],
+        "List of pause reason objects { id, label, requires_note } shown in the "
+        "PauseReasonModal in Agent Assist UI. When requires_note=true, the agent must "
+        "enter a free-text note before confirming. Pool-level overrides can be configured "
+        "via key pause_reasons:{pool_id}. Source: platform-ui PauseReasonModal, "
+        "orchestrator-bridge agent_pause Kafka event."
     ),
 
     # ── dashboards ────────────────────────────────────────────────────────────

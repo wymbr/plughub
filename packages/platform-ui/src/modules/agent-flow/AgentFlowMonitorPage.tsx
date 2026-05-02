@@ -58,8 +58,7 @@ const STATUS_LABEL: Record<string, string> = {
 // ── Main page ──────────────────────────────────────────────────────────────────
 
 export default function AgentFlowMonitorPage() {
-  const { session, getAccessToken } = useAuth()
-  const tenantId = session?.tenantId ?? ''
+  const { session, getAccessToken, tenantId } = useAuth()
 
   const [instances,  setInstances]  = useState<AgentInstance[]>([])
   const [loading,    setLoading]    = useState(false)

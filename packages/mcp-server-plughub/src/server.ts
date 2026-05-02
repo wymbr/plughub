@@ -28,6 +28,8 @@ import { registerOperationalTools }  from "./tools/operational"
 import type { OperationalDeps }      from "./tools/operational"
 import { registerDelegationTools }  from "./tools/delegation"
 import type { DelegationDeps }      from "./tools/delegation"
+import { registerDeployTools }      from "./tools/deploy"
+import type { DeployDeps }          from "./tools/deploy"
 import { createRedisClient }       from "./infra/redis"
 import { createKafkaProducer }     from "./infra/kafka"
 import { createRegistryClient }    from "./infra/registry-client"
@@ -87,6 +89,11 @@ export function createServer(allDeps?: AllDeps): McpServer {
     tenantId:     process.env["PLUGHUB_TENANT_ID"] ?? process.env["TENANT_ID"] ?? "tenant_demo",
   }
 
+  const deployDeps: DeployDeps = {
+    agentRegistryUrl: process.env["AGENT_REGISTRY_URL"] ?? "http://localhost:3300",
+    tenantId:         process.env["PLUGHUB_TENANT_ID"]  ?? process.env["TENANT_ID"] ?? "tenant_demo",
+  }
+
   // Registrar todas as tools
   registerBpmTools(server, bpmDeps)
   registerRuntimeTools(server, runtimeDeps)
@@ -96,6 +103,7 @@ export function createServer(allDeps?: AllDeps): McpServer {
   registerExternalAgentTools(server, externalAgentDeps)
   registerOperationalTools(server, operationalDeps)
   registerDelegationTools(server, delegationDeps)
+  registerDeployTools(server, deployDeps)
 
   return server
 }
@@ -473,7 +481,7 @@ export async function startServer(config: ServerConfig): Promise<void> {
   // These endpoints are consumed by agent-assist-ui via Vite proxy /api → :3100
 
   // GET /supervisor_state/:sessionId
-  app.get("/supervisor_state/:sessionId", async (req: Request, res: Response) => {
+  app.get("/api/supervisor_state/:sessionId", async (req: Request, res: Response) => {
     const { sessionId } = req.params
     try {
       // Read live session AI state from Redis if available
@@ -608,7 +616,7 @@ export async function startServer(config: ServerConfig): Promise<void> {
   // Written by channel-gateway (inbound via WebchatAdapter, outbound via OutboundConsumer).
   // Key: session:{sessionId}:messages — Redis List (RPUSH, LRANGE).
   // Each entry is a JSON-serialised ChatMessage { id, author, text, timestamp }.
-  app.get("/conversation_history/:sessionId", async (req: Request, res: Response) => {
+  app.get("/api/conversation_history/:sessionId", async (req: Request, res: Response) => {
     const { sessionId } = req.params
     try {
       const raw      = await redis.lrange(`session:${sessionId}:messages`, 0, -1)
@@ -620,15 +628,69 @@ export async function startServer(config: ServerConfig): Promise<void> {
   })
 
   // GET /supervisor_capabilities/:sessionId
-  app.get("/supervisor_capabilities/:sessionId", async (_req: Request, res: Response) => {
+  app.get("/api/supervisor_capabilities/:sessionId", async (_req: Request, res: Response) => {
     res.json({
       suggested_agents: [],
       escalations:      [],
     })
   })
 
-  // POST /agent_done/:sessionId — light signal for UI teardown (actual done via MCP tool)
-  app.post("/agent_done/:sessionId", async (req: Request, res: Response) => {
+  // GET /copilot_state/:sessionId
+  // Returns the latest co-pilot suggestions written by AI Gateway (copilot_emitter.py).
+  // Reads {tenantId}:ctx:{sessionId} hash fields prefixed with "session.copilot.*".
+  // Called by the Agent Assist UI (useCopilotState hook) after receiving copilot.updated.
+  app.get("/api/copilot_state/:sessionId", async (req: Request, res: Response) => {
+    const { sessionId } = req.params
+
+    // Resolve tenant from session meta (same pattern as supervisor_state)
+    let tenantId = process.env["PLUGHUB_TENANT_ID"] ?? "tenant_demo"
+    try {
+      const metaRaw = await redis.get(`session:${sessionId}:meta`)
+      if (metaRaw) {
+        const meta = JSON.parse(metaRaw) as Record<string, string>
+        if (meta["tenant_id"]) tenantId = meta["tenant_id"]
+      }
+    } catch { /* use env fallback */ }
+
+    try {
+      const ctxKey = `${tenantId}:ctx:${sessionId}`
+      const fields = [
+        "session.copilot.sugestao_resposta",
+        "session.copilot.flags_risco",
+        "session.copilot.acoes_recomendadas",
+        "session.copilot.ultima_analise",
+      ]
+      const raw = await (redis as any).hmget(ctxKey, ...fields)
+
+      const readEntry = (v: string | null): unknown => {
+        if (!v) return null
+        try { return JSON.parse(v) } catch { return null }
+      }
+
+      const entryValue = (v: string | null): unknown => {
+        const entry = readEntry(v) as Record<string, unknown> | null
+        return entry?.value ?? null
+      }
+
+      const sugestaoRaw  = entryValue(raw?.[0])
+      const flagsRaw     = entryValue(raw?.[1])
+      const acoesRaw     = entryValue(raw?.[2])
+      const ultimaRaw    = entryValue(raw?.[3])
+
+      res.json({
+        session_id:         sessionId,
+        sugestao_resposta:  typeof sugestaoRaw === "string" ? sugestaoRaw : null,
+        flags_risco:        Array.isArray(flagsRaw)  ? flagsRaw  : [],
+        acoes_recomendadas: Array.isArray(acoesRaw)  ? acoesRaw  : [],
+        ultima_analise:     typeof ultimaRaw  === "string" ? ultimaRaw  : null,
+      })
+    } catch {
+      res.status(500).json({ error: "copilot_state_unavailable" })
+    }
+  })
+
+  // POST /api/agent_done/:sessionId — light signal for UI teardown (actual done via MCP tool)
+  app.post("/api/agent_done/:sessionId", async (req: Request, res: Response) => {
     const { sessionId } = req.params
     try {
       const body    = req.body as Record<string, unknown>
@@ -659,9 +721,13 @@ export async function startServer(config: ServerConfig): Promise<void> {
         // Non-fatal — continue with teardown
       }
 
-      // 1. Notify the agent WebSocket so the UI transitions to closed state.
+      // 1. Notify the agent WebSocket that the human part is done.
+      //    We publish "session.agent_done" instead of "session.closed" so the
+      //    Agent Assist UI stays in the session during on_human_end hooks
+      //    (wrapup, NPS, etc.).  The orchestrator-bridge publishes the actual
+      //    "session.closed" event after all hooks complete via _trigger_contact_close.
       await redis.publish(`agent:events:${sessionId}`, JSON.stringify({
-        type:   "session.closed",
+        type:   "session.agent_done",
         reason: outcome,
       }))
 
@@ -697,6 +763,51 @@ export async function startServer(config: ServerConfig): Promise<void> {
 
       res.json({ ok: true })
     } catch {
+      res.status(500).json({ error: "publish_failed" })
+    }
+  })
+
+  // Menu substitution — supervisor answers a pending menu step on behalf of the customer.
+  // XADD interaction_result to the session stream so the Skill Flow engine can resume
+  // the suspended menu step.  Also pub/sub notifies agents watching the stream.
+  app.post("/api/menu_submit/:sessionId", async (req: Request, res: Response) => {
+    const { sessionId } = req.params
+    const { menu_id, interaction, result } = req.body as Record<string, unknown>
+
+    if (!menu_id || !interaction) {
+      res.status(400).json({ error: "menu_id and interaction are required" })
+      return
+    }
+
+    try {
+      const eventId = crypto.randomUUID()
+      const now     = new Date().toISOString()
+
+      await (redis as any).xadd(
+        `session:${sessionId}:stream`, "*",
+        "event_id",  eventId,
+        "type",      "interaction_result",
+        "timestamp", now,
+        "author",    JSON.stringify({ type: "system", id: "supervisor" }),
+        "visibility", JSON.stringify("all"),
+        "payload",   JSON.stringify({ menu_id, interaction, result }),
+      )
+
+      // Notify agents watching this session via pub/sub
+      await redis.publish(
+        `agent:events:${sessionId}`,
+        JSON.stringify({
+          type:       "interaction_result",
+          session_id: sessionId,
+          menu_id,
+          interaction,
+          result,
+          timestamp:  now,
+        }),
+      )
+
+      res.json({ ok: true, event_id: eventId })
+    } catch (err) {
       res.status(500).json({ error: "publish_failed" })
     }
   })
@@ -931,6 +1042,37 @@ export async function startServer(config: ServerConfig): Promise<void> {
     subscriber.on("message", (channel: string, message: string) => {
       console.log(`[agent-ws] pub/sub received channel=${channel} type=${(() => { try { return JSON.parse(message).type } catch { return "?" } })()}`)
       forward(channel, message)
+
+      // ── Co-pilot Phase 2 — fire-and-forget background analysis ────────────
+      // When a customer message arrives in a session where a human agent is
+      // present, trigger AI Gateway to analyze and write co-pilot suggestions.
+      // The AI Gateway responds 202 immediately; analysis is async on its side.
+      try {
+        const event = JSON.parse(message) as Record<string, unknown>
+        const author = event["author"] as Record<string, unknown> | undefined
+        if (
+          event["type"] === "message.text" &&
+          author?.["type"] === "customer" &&
+          typeof event["session_id"] === "string" &&
+          typeof event["text"] === "string" &&
+          agentTenantId
+        ) {
+          const aiGatewayUrl = process.env["PLUGHUB_AI_GATEWAY_URL"] ?? "http://ai-gateway:3200"
+          const copilotPayload = JSON.stringify({
+            session_id:       event["session_id"],
+            tenant_id:        agentTenantId,
+            customer_message: (event["text"] as string).slice(0, 1000),
+          })
+          // Fire-and-forget — never awaited, errors suppressed
+          fetch(`${aiGatewayUrl}/v1/copilot/analyze`, {
+            method:  "POST",
+            headers: { "Content-Type": "application/json" },
+            body:    copilotPayload,
+          }).catch((err: unknown) => {
+            console.warn(`[agent-ws] copilot analyze fire failed session=${event["session_id"]}:`, err)
+          })
+        }
+      } catch { /* never block the forward path */ }
     })
 
     // ── Inbound messages FROM the human agent → conversations.outbound ───────
@@ -1136,20 +1278,190 @@ export async function startServer(config: ServerConfig): Promise<void> {
           return
         }
 
-        // Normal (non-@mention) message: deliver to customer via outbound consumer
-        await kafka.publish("conversations.outbound", {
-          type:       "message.text",
-          contact_id: contactId,
-          session_id: targetSessionId,
-          message_id: crypto.randomUUID(),
-          channel:    msgChannel,
-          direction:  "outbound",
-          author:     { type: "agent_human", id: agentInstanceId || poolId || "human_agent", instance_id: agentInstanceId || poolId },
-          content:    { type: "text", text: msgText },
-          text:       msgText,   // kept for channel-gateway backward compat
-          timestamp:  msgTs,
-        })
+        // ── Check if a hook agent is waiting for this agent's input ──────────
+        // menu:waiting:{sessionId} is now a HASH with one field per waiting agent:
+        //   field = instanceId, value = JSON({ visibility, masked })
+        //
+        // Agent messages are routed to agents whose visibility is:
+        //   - "agents_only" → always receives agent messages
+        //   - array containing this agent's participant_id → targeted visibility
+        //
+        // The matched visibility is used for the stream entry, ensuring the
+        // message is only visible to the intended participants.
+        let targetAgentKey:  string | null = null
+        let targetVisibility: unknown = null
+        try {
+          const waitingHash = await redis.hgetall(`menu:waiting:${targetSessionId}`)
+          if (waitingHash && Object.keys(waitingHash).length > 0) {
+            const agentPid = agentInstanceId || poolId || "human_agent"
+            for (const [aKey, metaJson] of Object.entries(waitingHash)) {
+              try {
+                const meta = JSON.parse(metaJson as string)
+                const vis = meta.visibility
+                if (vis === "agents_only") {
+                  targetAgentKey   = aKey
+                  targetVisibility = vis
+                  break
+                }
+                if (Array.isArray(vis) && vis.includes(agentPid)) {
+                  targetAgentKey   = aKey
+                  targetVisibility = vis
+                  break
+                }
+              } catch { /* skip malformed entry */ }
+            }
+          }
+        } catch { /* assume normal message on error */ }
+
+        const outMsgId = crypto.randomUUID()
+        const outAuthor = { type: "agent_human", id: agentInstanceId || poolId || "human_agent", instance_id: agentInstanceId || poolId }
+
+        if (targetAgentKey) {
+          // ── Hook agent response path ──────────────────────────────────────
+          // The agent's message is a response to a hook agent (wrap-up, NPS, etc.).
+          // Write to stream with the SAME visibility the hook agent used in its
+          // question — ensures the response is only visible to the intended audience.
+          const streamVis = targetVisibility ?? "agents_only"
+
+          // 1. Write to stream with matched visibility
+          try {
+            await (redis as any).xadd(
+              `session:${targetSessionId}:stream`,
+              "*",
+              "event_id",   outMsgId,
+              "type",       "message",
+              "timestamp",  msgTs,
+              "author",     JSON.stringify({
+                participant_id: agentInstanceId || poolId || "human_agent",
+                instance_id:    agentInstanceId || poolId || "human_agent",
+                type:           "agent_human",
+                role:           agentRole,
+              }),
+              "visibility", JSON.stringify(streamVis),
+              "payload",    JSON.stringify({
+                message_id: outMsgId,
+                content:    { type: "text", text: msgText },
+                text:       msgText,
+              }),
+            )
+            await redis.expire(`session:${targetSessionId}:stream`, 14400)
+          } catch { /* non-fatal */ }
+
+          // 2. Echo to agents via pub/sub so the Agent Assist UI shows it
+          try {
+            await redis.publish(`agent:events:${targetSessionId}`, JSON.stringify({
+              type:       "message.text",
+              message_id: outMsgId,
+              author:     { type: "agent_human", id: agentInstanceId || poolId },
+              text:       msgText,
+              timestamp:  msgTs,
+              visibility: streamVis,
+            }))
+          } catch { /* non-fatal */ }
+
+          // 3. Feed the hook agent's isolated BLPOP key
+          try {
+            const resultKey = targetAgentKey !== "_default_"
+              ? `menu:result:${targetSessionId}:${targetAgentKey}`
+              : `menu:result:${targetSessionId}`
+            await redis.lpush(resultKey, msgText)
+          } catch { /* non-fatal — hook agent will timeout instead */ }
+        } else {
+          // ── Normal message path — deliver to customer ─────────────────────
+          await kafka.publish("conversations.outbound", {
+            type:       "message.text",
+            contact_id: contactId,
+            session_id: targetSessionId,
+            message_id: outMsgId,
+            channel:    msgChannel,
+            direction:  "outbound",
+            author:     outAuthor,
+            content:    { type: "text", text: msgText },
+            text:       msgText,   // kept for channel-gateway backward compat
+            timestamp:  msgTs,
+          })
+
+          // Write to canonical stream so supervision SSE and analytics can see the message.
+          try {
+            await (redis as any).xadd(
+              `session:${targetSessionId}:stream`,
+              "*",
+              "event_id",   outMsgId,
+              "type",       "message",
+              "timestamp",  msgTs,
+              "author",     JSON.stringify({
+                participant_id: agentInstanceId || poolId || "human_agent",
+                instance_id:    agentInstanceId || poolId || "human_agent",
+                type:           "agent_human",
+                role:           agentRole,
+              }),
+              "visibility", JSON.stringify("all"),
+              "payload",    JSON.stringify({
+                message_id: outMsgId,
+                content:    { type: "text", text: msgText },
+                text:       msgText,
+              }),
+            )
+            await redis.expire(`session:${targetSessionId}:stream`, 14400)
+          } catch { /* non-fatal */ }
+        }
       } catch (err) {
+        console.error(`Agent WS message error:`, err)
+      }
+    })
+
+    // Ping every 30s to keep connection alive
+    const pingInterval = setInterval(() => {
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: "ping" }))
+      }
+    }, 30_000)
+
+    ws.on("close", () => {
+      clearInterval(pingInterval)
+      // Write participant_left for every session still open on this connection.
+      for (const sid of subscribedSessions) {
+        writeParticipantEvent("participant_left", sid).catch(() => {})
+      }
+      subscriber.unsubscribe()
+      subscriber.quit()
+      // Notify routing engine that this human agent is no longer available.
+      // Use a grace period so that React 18 StrictMode's rapid close→open cycle
+      // does NOT unregister the agent — the new connection will cancel this timer.
+      if (poolId) {
+        const timer = setTimeout(() => {
+          pendingUnregister.delete(poolId)
+          unregisterHumanAgent(poolId, redis, kafka).catch((err) =>
+            console.error(`[agent-ws] unregisterHumanAgent pool=${poolId}:`, err)
+          )
+        }, UNREGISTER_GRACE_MS)
+        pendingUnregister.set(poolId, timer)
+      }
+    })
+
+    ws.on("error", (err) => {
+      console.error(`Agent WS error pool=${poolId}:`, err)
+    })
+  })
+
+  await new Promise<void>((resolve) => {
+    httpServer.listen(config.port, config.host, () => {
+      console.log(`✅ mcp-server-plughub iniciado`)
+      console.log(`   Transporte: SSE`)
+      console.log(`   Endpoint:   http://${config.host}:${config.port}/sse`)
+      console.log(`   Agent WS:   ws://${config.host}:${config.port}/agent/ws`)
+      console.log(`   Tools BPM:          conversation_start, conversation_status, conversation_end, rule_dry_run, notification_send, conversation_escalate`)
+      console.log(`   Tools Runtime:       agent_login, agent_ready, agent_busy, agent_done, agent_pause, agent_logout, insight_register`)
+      console.log(`   Tools Supervisor:    supervisor_state, supervisor_capabilities, agent_join_conference`)
+      console.log(`   Tools Evaluation:    transcript_get, evaluation_context_resolve, evaluation_publish`)
+      console.log(`   Tools ExternalAgent: invoke, wait_for_assignment, send_message, wait_for_message`)
+      console.log(`   Tools Delegation:    agent_delegate, agent_delegate_status`)
+      console.log(`   SKILL_FLOW_URL:      ${process.env["SKILL_FLOW_URL"] ?? "http://localhost:3400 (padrão — configure SKILL_FLOW_URL para Docker)"}`)
+      resolve()
+    })
+  })
+}
+) {
         console.error(`Agent WS message error:`, err)
       }
     })

@@ -1,170 +1,102 @@
 /**
  * AgentAssistPage — Multi-contact, Multi-pool Agent Assist UI
  *
- * Architecture (multi-pool):
- *   - Agent can be "Ready" in multiple pools simultaneously.
- *   - One WebSocket per active pool (useMultiPoolWebSocket).
- *   - Contacts from all pools appear in a single ContactList (FIFO order).
- *   - Pool presence controls live in the Header (second row of pills).
+ * All persistent state (WS connections, contact map, pool presence, toasts)
+ * lives in AgentAssistContext (provided at Shell level) so it survives
+ * navigation. This component only holds UI-local state that is fine to reset:
+ *   activeTab, centerTab, showCloseModal, substitutionMode, lastCopilotEvent.
  *
  * Layout:
  *   ┌────────────────────────────────────────────────────────────┐
  *   │  Header row 1: agente, pool, sessão, SLA, WS status        │
- *   │  Header row 2: pool pills (Ready/Offline toggles)          │
+ *   │  Header row 2: pool combo dropdown                         │
  *   ├──────────┬──────────────────────────┬─────────────────────┤
- *   │  Contact │  Chat Area               │  Right Panel        │
- *   │  List    │  (selected contact)      │  (context)          │
+ *   │  Contact │  [Atual | Histórico] tab │  Right Panel        │
+ *   │  List    │  (selected contact)      │  [Estado|Cap|Ctx]   │
  *   │ (~200px) │     (flex-1)             │   (~280px)          │
  *   ├──────────┴──────────────────────────┴─────────────────────┤
- *   │  AgentInput  (tied to selected contact)                    │
+ *   │  AgentInput  (shown only in "Atual" tab)                   │
  *   └────────────────────────────────────────────────────────────┘
  */
 
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useState } from "react";
 import { useAuth } from "@/auth/useAuth";
 
-import {
-  ActiveTab,
-  ChatMessage,
-  ClosePayload,
-  ContactSession,
-  PoolConnectionStatus,
-  PoolInfo,
-  Toast,
-  WsStatus,
-} from "./types";
-import { useMultiPoolWebSocket } from "./hooks/useMultiPoolWebSocket";
-import { useSupervisorState }        from "./hooks/useSupervisorState";
-import { useSupervisorCapabilities } from "./hooks/useSupervisorCapabilities";
+import { ActiveTab, ClosePayload }         from "./types";
+import { useAgentAssist, aggregateStatus } from "./AgentAssistContext";
+import { useSupervisorState }              from "./hooks/useSupervisorState";
+import { useSupervisorCapabilities }       from "./hooks/useSupervisorCapabilities";
+import { useCopilotState }                 from "./hooks/useCopilotState";
 import { Header }           from "./components/Header";
 import { ActionBar }        from "./components/ActionBar";
 import { ChatArea }         from "./components/ChatArea";
 import { AgentInput }       from "./components/AgentInput";
-import { CloseModal }       from "./components/CloseModal";
-import { RightPanel }       from "./components/RightPanel";
-import { ContactList }      from "./components/ContactList";
-import { ToastContainer }   from "./components/ToastContainer";
+import { CloseModal }        from "./components/CloseModal";
+import { PauseReasonModal }  from "./components/PauseReasonModal";
+import { RightPanel }        from "./components/RightPanel";
+import { ContactList }       from "./components/ContactList";
+import { ToastContainer }    from "./components/ToastContainer";
+import { HistoricoTab }      from "./components/tabs/HistoricoTab";
 
-const API_BASE = import.meta.env.VITE_REGISTRY_URL ?? "/v1";
-
-// ── Toast id generator ─────────────────────────────────────────────────────
-let toastSeq = 0;
-function makeToastId(): string { return `toast-${++toastSeq}`; }
-
-// ── ContactSession factory ─────────────────────────────────────────────────
-function makeContact(sessionId: string, poolId: string, channel = "webchat"): ContactSession {
-  return {
-    sessionId,
-    contactId:         null,
-    customerName:      null,
-    channel,
-    poolId,
-    slaTargetMs:       null,
-    messages:          [],
-    supervisorState:   null,
-    capabilities:      null,
-    sessionStartedAt:  new Date(),
-    unreadCount:       0,
-    sessionClosed:     false,
-    pendingCloseModal: false,
-  };
-}
-
-// ── Aggregate WS status helper ─────────────────────────────────────────────
-function aggregateStatus(
-  statuses: Map<string, PoolConnectionStatus>,
-  activePools: string[],
-): WsStatus {
-  if (activePools.length === 0) return "disconnected";
-  const vals = activePools.map(p => statuses.get(p) ?? "disconnected");
-  if (vals.some(v => v === "connected"))    return "connected";
-  if (vals.some(v => v === "connecting"))   return "connecting";
-  return "disconnected";
-}
-
-// ── Fetch pools from agent-registry ───────────────────────────────────────
-async function fetchPools(accessiblePools: string[], accessToken?: string): Promise<PoolInfo[]> {
-  try {
-    const headers: Record<string, string> = {
-      "x-tenant-id": "tenant_demo",
-      "x-user-id": "operator",
-    };
-    if (accessToken) headers["Authorization"] = `Bearer ${accessToken}`;
-    const res  = await fetch(`${API_BASE}/pools`, { headers });
-    if (!res.ok) return [];
-    const json = await res.json() as
-      | { pools: Array<{ pool_id: string; display_name?: string; channel_types?: string[]; sla_target_ms?: number | null }> }
-      | Array<{ pool_id: string; display_name?: string; channel_types?: string[]; sla_target_ms?: number | null }>;
-    const data = Array.isArray(json) ? json : (json.pools ?? []);
-    const list: PoolInfo[] = data.map(p => ({
-      pool_id:       p.pool_id,
-      display_name:  p.display_name,
-      channel_types: p.channel_types ?? [],
-      sla_target_ms: p.sla_target_ms ?? null,
-    }));
-    // [] = acesso global (mostra todos os pools); lista preenchida = filtra
-    if (accessiblePools.length === 0) return list;
-    return list.filter(p => accessiblePools.includes(p.pool_id));
-  } catch {
-    return [];
-  }
-}
+type CenterTab = "atual" | "historico";
 
 // ── AgentAssistPage ────────────────────────────────────────────────────────
 export const AgentAssistPage: React.FC = () => {
   const { session } = useAuth();
   const agentName   = session?.name ?? "Agente";
-  const accessiblePools: string[] = session?.accessiblePools ?? [];
 
-  // ── Available pools (from registry) ────────────────────────────────────
-  const [availablePools, setAvailablePools] = useState<PoolInfo[]>([]);
+  // ── All persistent state from context ──────────────────────────────────
+  const {
+    availablePools,
+    activePools,
+    handleTogglePool,
+    handleJoinAll,
+    handleLeaveAll,
+    statuses,
+    lastEvent,
+    send,
+    contacts,
+    setContacts,
+    selectedSessionId,
+    setSelectedSessionId,
+    aiTypingSessions,
+    toasts,
+    addToast,
+    dismissToast,
+    fetchHistory,
+    handledSessions,
+  } = useAgentAssist();
+
+  // ── UI-local state (resets on navigation — acceptable) ─────────────────
+  const [activeTab,       setActiveTab]       = useState<ActiveTab>("estado");
+  const [centerTab,       setCenterTab]       = useState<CenterTab>("atual");
+  const [showCloseModal,  setShowCloseModal]  = useState(false);
+  const [substitutionMode, setSubstitutionMode] = useState(false);
+  const [lastCopilotEvent, setLastCopilotEvent] = useState(0);
+  const [isPaused,         setIsPaused]         = useState(false);
+  const [showPauseModal,   setShowPauseModal]   = useState(false);
+
+  // Reset substitution mode when selected contact changes
   useEffect(() => {
-    fetchPools(accessiblePools, session?.accessToken).then(setAvailablePools);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+    setSubstitutionMode(false);
+  }, [selectedSessionId]);
 
-  // ── Presence: set of pool_ids the agent is "Ready" in ──────────────────
-  const [activePools, setActivePools] = useState<string[]>([]);
-
-  const handleTogglePool = useCallback((poolId: string) => {
-    setActivePools(prev =>
-      prev.includes(poolId) ? prev.filter(p => p !== poolId) : [...prev, poolId]
-    );
-  }, []);
-
-  const handleJoinAll = useCallback(() => {
-    setActivePools(availablePools.map(p => p.pool_id));
-  }, [availablePools]);
-
-  // ── Multi-pool WebSocket ────────────────────────────────────────────────
-  const { statuses, lastEvent, send } = useMultiPoolWebSocket(activePools);
-
-  // ── Multi-contact state ─────────────────────────────────────────────────
-  const [contacts, setContacts] = useState<Map<string, ContactSession>>(new Map());
-  const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
-
-  const contactsRef        = useRef<Map<string, ContactSession>>(new Map());
-  const selectedSessionRef = useRef<string | null>(null);
-  useEffect(() => { contactsRef.current        = contacts;          }, [contacts]);
-  useEffect(() => { selectedSessionRef.current = selectedSessionId; }, [selectedSessionId]);
-
-  // ── Shared UI state ─────────────────────────────────────────────────────
-  const [activeTab, setActiveTab] = useState<ActiveTab>("estado");
-  const [toasts, setToasts]       = useState<Toast[]>([]);
-
-  // ── Modal state (Encerrar triggered from ActionBar) ────────────────────────
-  const [showCloseModal, setShowCloseModal] = useState(false);
-
-  // Dedup guards
-  const notifiedAssignments   = useRef<Set<string>>(new Set());
-  const pendingClosedSessions = useRef<Map<string, string>>(new Map());
-  const handledSessions       = useRef<Set<string>>(new Set());
-
-  // ── Supervisor hooks — scoped to selected contact ───────────────────────
-  // Cast away the _pool_id tag for hooks that expect WsServerEvent | null
-  const lastWsEvent = lastEvent as import("./types").WsServerEvent | null;
+  // ── Supervisor/copilot hooks — scoped to selected contact ───────────────
+  const lastWsEvent     = lastEvent as import("./types").WsServerEvent | null;
   const supervisorState = useSupervisorState(selectedSessionId, lastWsEvent);
   const capabilities    = useSupervisorCapabilities(selectedSessionId, supervisorState);
+  const copilotSuggestions = useCopilotState(selectedSessionId, lastCopilotEvent);
+
+  // Listen for copilot.updated on selected session
+  useEffect(() => {
+    if (!lastEvent) return;
+    const event = lastEvent as import("./types").WsServerEvent;
+    if (event.type === "copilot.updated" &&
+        event.session_id &&
+        event.session_id === selectedSessionId) {
+      setLastCopilotEvent(Date.now());
+    }
+  }, [lastEvent, selectedSessionId]);
 
   // Sync supervisor data back into the selected contact's state
   useEffect(() => {
@@ -177,249 +109,18 @@ export const AgentAssistPage: React.FC = () => {
         ...c,
         supervisorState: supervisorState ?? c.supervisorState,
         capabilities:    capabilities    ?? c.capabilities,
-        // Update slaTargetMs from supervisorState when available
-        slaTargetMs:
-          supervisorState?.sla?.target_ms ?? c.slaTargetMs,
+        slaTargetMs:     supervisorState?.sla?.target_ms ?? c.slaTargetMs,
       });
       return next;
     });
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [supervisorState, capabilities]);
 
-  // AI typing timer per session
-  const aiTypingTimers = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
-  const [aiTypingSessions, setAiTypingSessions] = useState<Set<string>>(new Set());
-
-  // ── Toast helpers ───────────────────────────────────────────────────────
-  const addToast = useCallback(
-    (message: string, type: Toast["type"] = "info", persistent = false) => {
-      const id = makeToastId();
-      setToasts(prev => [...prev, { id, message, type, persistent }]);
-      if (!persistent) {
-        setTimeout(() => setToasts(prev => prev.filter(t => t.id !== id)), 5000);
-      }
-    },
-    []
-  );
-
-  const dismissToast = useCallback((id: string) => {
-    setToasts(prev => prev.filter(t => t.id !== id));
-  }, []);
-
-  // ── History loader ──────────────────────────────────────────────────────
-  const fetchHistory = useCallback(async (sessionId: string) => {
-    try {
-      const res  = await fetch(`/api/conversation_history/${sessionId}`);
-      const data = res.ok
-        ? (await res.json() as { messages: ChatMessage[] })
-        : { messages: [] };
-      setContacts(prev => {
-        const c = prev.get(sessionId);
-        if (!c) return prev;
-        const next = new Map(prev);
-        next.set(sessionId, { ...c, messages: data.messages ?? [] });
-        return next;
-      });
-    } catch {
-      // non-fatal
-    }
-  }, []);
-
-  // ── WS event handler ────────────────────────────────────────────────────
-  useEffect(() => {
-    if (!lastEvent) return;
-    const sourcePoolId = lastEvent._pool_id;
-    // Re-typed as WsServerEvent for discriminated union narrowing
-    const event = lastEvent as import("./types").WsServerEvent;
-
-    if (event.type === "connection.accepted") return;
-
-    // ── New contact assigned ────────────────────────────────────────────
-    if (event.type === "conversation.assigned") {
-      const { session_id, contact_id, pool_id } = event;
-      const resolvedPool = pool_id ?? sourcePoolId;
-
-      if (handledSessions.current.has(session_id)) return;
-
-      const isNew = !contactsRef.current.has(session_id) &&
-                    !notifiedAssignments.current.has(session_id);
-      notifiedAssignments.current.add(session_id);
-
-      // Lookup slaTargetMs from available pools
-      const poolInfo = availablePools.find(p => p.pool_id === resolvedPool);
-      const slaTargetMs = poolInfo?.sla_target_ms ?? null;
-
-      setContacts(prev => {
-        if (prev.has(session_id)) return prev;
-        const next = new Map(prev);
-        const alreadyClosed = pendingClosedSessions.current.has(session_id);
-        pendingClosedSessions.current.delete(session_id);
-        next.set(session_id, {
-          ...makeContact(session_id, resolvedPool),
-          contactId:         contact_id ?? null,
-          slaTargetMs,
-          sessionClosed:     alreadyClosed,
-          pendingCloseModal: alreadyClosed,
-        });
-        return next;
-      });
-
-      if (!isNew) return;
-      setSelectedSessionId(prev => prev ?? session_id);
-      fetchHistory(session_id);
-      addToast("Novo contato atribuído", "info");
-      return;
-    }
-
-    // ── Incoming message ────────────────────────────────────────────────
-    if (event.type === "message.text") {
-      const sid = (event as unknown as Record<string, unknown>)["session_id"] as string | undefined;
-      if (!sid) return;
-
-      const msg: ChatMessage = {
-        id:          event.message_id,
-        author:      event.author.type,
-        agentTypeId: event.author.agent_type_id,
-        text:        event.text,
-        timestamp:   event.timestamp,
-        visibility:  event.visibility,
-      };
-
-      setContacts(prev => {
-        const c = prev.get(sid);
-        if (!c) return prev;
-        if (c.messages.some(m => m.id === msg.id)) return prev;
-        const isSelected = sid === selectedSessionRef.current;
-        const next = new Map(prev);
-        next.set(sid, {
-          ...c,
-          messages:    [...c.messages, msg],
-          unreadCount: isSelected ? 0 : c.unreadCount + 1,
-        });
-        return next;
-      });
-
-      if (event.author.type === "agent_ai") {
-        const timer = aiTypingTimers.current.get(sid);
-        if (timer) { clearTimeout(timer); aiTypingTimers.current.delete(sid); }
-        setAiTypingSessions(prev => { const s = new Set(prev); s.delete(sid); return s; });
-      }
-      return;
-    }
-
-    // ── AI typing indicator ─────────────────────────────────────────────
-    if (event.type === "agent.typing" && event.author_type === "agent_ai") {
-      const sid = (event as unknown as Record<string, unknown>)["session_id"] as string | undefined;
-      if (!sid) return;
-      setAiTypingSessions(prev => new Set(prev).add(sid));
-      const existing = aiTypingTimers.current.get(sid);
-      if (existing) clearTimeout(existing);
-      aiTypingTimers.current.set(
-        sid,
-        setTimeout(() => {
-          setAiTypingSessions(prev => { const s = new Set(prev); s.delete(sid); return s; });
-          aiTypingTimers.current.delete(sid);
-        }, 10_000)
-      );
-      return;
-    }
-
-    // ── Session closed ──────────────────────────────────────────────────
-    if (event.type === "session.closed") {
-      const sid = (event as unknown as Record<string, unknown>)["session_id"] as string | undefined;
-      if (!sid) return;
-
-      if (event.reason === "client_disconnect") {
-        pendingClosedSessions.current.set(sid, event.reason);
-        setContacts(prev => {
-          const c = prev.get(sid);
-          if (!c) return prev;
-          const next = new Map(prev);
-          next.set(sid, { ...c, sessionClosed: true, pendingCloseModal: true });
-          return next;
-        });
-        if (!notifiedAssignments.current.has(`closed:${sid}`)) {
-          notifiedAssignments.current.add(`closed:${sid}`);
-          addToast("Cliente desconectou. Preencha o encerramento.", "warning", true);
-        }
-      } else {
-        pendingClosedSessions.current.delete(sid);
-        setContacts(prev => {
-          const next = new Map(prev);
-          next.delete(sid);
-          return next;
-        });
-        setSelectedSessionId(prev => {
-          if (prev !== sid) return prev;
-          const remaining = [...contactsRef.current.keys()].filter(k => k !== sid);
-          return remaining[0] ?? null;
-        });
-      }
-      return;
-    }
-
-    // ── Menu render ─────────────────────────────────────────────────────
-    if (event.type === "menu.render") {
-      const sid = (event as unknown as Record<string, unknown>)["session_id"] as string | undefined;
-      if (!sid) return;
-      const menuMsg: ChatMessage = {
-        id:        `menu-${event.menu_id}`,
-        author:    "system",
-        text:      event.prompt,
-        timestamp: new Date().toISOString(),
-        menuData: {
-          menu_id:     event.menu_id,
-          interaction: event.interaction,
-          prompt:      event.prompt,
-          options:     event.options,
-          fields:      event.fields,
-        },
-      };
-      setContacts(prev => {
-        const c = prev.get(sid);
-        if (!c) return prev;
-        if (c.messages.some(m => m.id === menuMsg.id)) return prev;
-        const next = new Map(prev);
-        next.set(sid, { ...c, messages: [...c.messages, menuMsg] });
-        return next;
-      });
-      return;
-    }
-
-    // ── @mention command acknowledgement ─────────────────────────────────
-    if (event.type === "mention_command.ack") {
-      const { session_id: sid, command } = event;
-      if (!sid || !command) return;
-      const ackMsg: ChatMessage = {
-        id:         `ack-${command}-${Date.now()}`,
-        author:     "system",
-        text:       `✓ @copilot reconheceu o comando "${command}"`,
-        timestamp:  new Date().toISOString(),
-        visibility: "agents_only",
-      };
-      setContacts(prev => {
-        const c = prev.get(sid);
-        if (!c) return prev;
-        const next = new Map(prev);
-        next.set(sid, { ...c, messages: [...c.messages, ackMsg] });
-        return next;
-      });
-      return;
-    }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [lastEvent, addToast, fetchHistory]);
-
-  // Clear typing timers on unmount
-  useEffect(() => {
-    return () => {
-      for (const t of aiTypingTimers.current.values()) clearTimeout(t);
-    };
-  }, []);
-
-  // Mark messages as read when switching contact
+  // ── Handlers ────────────────────────────────────────────────────────────
   const handleSelectContact = useCallback((sessionId: string) => {
     setSelectedSessionId(sessionId);
     setActiveTab("estado");
+    setCenterTab("atual");
     setContacts(prev => {
       const c = prev.get(sessionId);
       if (!c || c.unreadCount === 0) return prev;
@@ -427,33 +128,33 @@ export const AgentAssistPage: React.FC = () => {
       next.set(sessionId, { ...c, unreadCount: 0 });
       return next;
     });
-  }, []);
+  }, [setSelectedSessionId, setContacts]);
 
-  // ── Send handler ────────────────────────────────────────────────────────
   const handleSend = useCallback(
     (text: string) => {
       if (!selectedSessionId) return;
       send(text, selectedSessionId);
       const isMention = text.trimStart().startsWith("@");
-      const msg: ChatMessage = {
-        id:         `local-${Date.now()}`,
-        author:     "agent_human",
-        text,
-        timestamp:  new Date().toISOString(),
-        visibility: isMention ? "agents_only" : undefined,
-      };
       setContacts(prev => {
         const c = prev.get(selectedSessionId);
         if (!c) return prev;
         const next = new Map(prev);
-        next.set(selectedSessionId, { ...c, messages: [...c.messages, msg] });
+        next.set(selectedSessionId, {
+          ...c,
+          messages: [...c.messages, {
+            id:         `local-${Date.now()}`,
+            author:     "agent_human",
+            text,
+            timestamp:  new Date().toISOString(),
+            visibility: isMention ? "agents_only" : undefined,
+          }],
+        });
         return next;
       });
     },
-    [send, selectedSessionId]
+    [send, selectedSessionId, setContacts]
   );
 
-  // ── Close session handler ───────────────────────────────────────────────
   const handleClose = useCallback(
     async (sessionId: string, payload: ClosePayload) => {
       handledSessions.current.add(sessionId);
@@ -463,25 +164,83 @@ export const AgentAssistPage: React.FC = () => {
           headers: { "Content-Type": "application/json" },
           body:    JSON.stringify(payload),
         });
+        // Don't remove the contact yet — the bridge may fire on_human_end hooks
+        // (wrapup, NPS) that still need the agent to interact.  Mark the contact
+        // as wrapping-up so the UI can show a visual indicator.  The actual
+        // removal happens when session.closed arrives via WebSocket (published
+        // by the bridge after all hooks complete).
         setContacts(prev => {
+          const c = prev.get(sessionId);
+          if (!c) return prev;
           const next = new Map(prev);
-          next.delete(sessionId);
+          next.set(sessionId, { ...c, sessionClosed: true });
           return next;
         });
-        setSelectedSessionId(prev => {
-          if (prev !== sessionId) return prev;
-          const remaining = [...contactsRef.current.keys()].filter(k => k !== sessionId);
-          return remaining[0] ?? null;
-        });
-        addToast("Atendimento encerrado.", "info");
+        addToast("Aguardando finalização (wrap-up/NPS)…", "info");
       } catch {
         addToast("Erro ao encerrar atendimento.", "error");
       }
     },
+    [addToast, setContacts, handledSessions]
+  );
+
+  const handleMenuSubmit = useCallback(
+    async (menuId: string, result: import("./components/MenuCard").SubmitResult) => {
+      if (!selectedSessionId) return;
+      try {
+        const resp = await fetch(`/api/menu_submit/${selectedSessionId}`, {
+          method:  "POST",
+          headers: { "Content-Type": "application/json" },
+          body:    JSON.stringify({ menu_id: menuId, interaction: "button", result }),
+        });
+        if (resp.ok) {
+          addToast("Resposta enviada ao Skill Flow.", "info");
+          setSubstitutionMode(false);
+        } else {
+          addToast("Falha ao enviar resposta.", "error");
+        }
+      } catch {
+        addToast("Erro de rede ao enviar resposta.", "error");
+      }
+    },
+    [selectedSessionId, addToast]
+  );
+
+  const handleDesligar = useCallback(() => {
+    if (!selectedSessionId) return;
+    handleClose(selectedSessionId, {
+      issue_status: "Desligado pelo agente",
+      outcome: "abandoned",
+    });
+  }, [selectedSessionId, handleClose]);
+
+  // Resume: direct (no modal)
+  const handleResume = useCallback(() => {
+    setIsPaused(false);
+    addToast("Agente retomado — disponível para novos contatos.", "info");
+  }, [addToast]);
+
+  // Pause: intercepted by PauseReasonModal
+  const handlePauseRequest = useCallback(() => {
+    setShowPauseModal(true);
+  }, []);
+
+  const handlePauseConfirm = useCallback(
+    (reasonId: string, reasonLabel: string, note?: string) => {
+      setShowPauseModal(false);
+      setIsPaused(true);
+      const detail = note ? ` — ${note}` : "";
+      addToast(`Agente pausado (${reasonLabel}${detail}). Novos contatos não serão recebidos.`, "info");
+      // Best-effort API call — endpoint is deferred; graceful degradation on failure
+      fetch(`/api/agent-pause`, {
+        method:  "PUT",
+        headers: { "Content-Type": "application/json" },
+        body:    JSON.stringify({ reason_id: reasonId, reason_label: reasonLabel, note }),
+      }).catch(() => { /* endpoint not yet in orchestrator-bridge — ignore */ });
+    },
     [addToast]
   );
 
-  // ── Escalate / invite stubs ─────────────────────────────────────────────
   const handleInviteAgent = useCallback(
     (agentTypeId: string) => addToast(`Convite enviado: ${agentTypeId}`, "info"),
     [addToast]
@@ -491,14 +250,12 @@ export const AgentAssistPage: React.FC = () => {
     [addToast]
   );
 
-  // ── Derived state ───────────────────────────────────────────────────────
-  const selected   = selectedSessionId ? contacts.get(selectedSessionId) ?? null : null;
-  const wsStatus   = aggregateStatus(statuses, activePools);
-
-  // Show the selected contact's pool in the header, or the first active pool
+  // ── Derived state ────────────────────────────────────────────────────────
+  const selected     = selectedSessionId ? contacts.get(selectedSessionId) ?? null : null;
+  const wsStatus     = aggregateStatus(statuses, activePools);
   const headerPoolId = selected?.poolId ?? activePools[0] ?? "";
 
-  // ── Main render ─────────────────────────────────────────────────────────
+  // ── Render ────────────────────────────────────────────────────────────────
   return (
     <div className="flex flex-col h-full overflow-hidden bg-gray-50">
       <Header
@@ -514,13 +271,16 @@ export const AgentAssistPage: React.FC = () => {
         poolStatuses={statuses}
         onTogglePool={handleTogglePool}
         onJoinAll={handleJoinAll}
+        onLeaveAll={handleLeaveAll}
+        isPaused={isPaused}
+        onTogglePause={handleResume}
+        onPauseRequest={handlePauseRequest}
       />
 
-      {/* ── Unified 3-column layout ───────────────────────────────────────── */}
+      {/* ── Unified 3-column layout ────────────────────────────────────────── */}
       <div className="flex flex-col flex-1 overflow-hidden">
 
-        {/* ── Shared sub-header row (h-12) — all three column headers are siblings
-               so they share the exact same top/bottom Y coordinates               */}
+        {/* ── Shared sub-header row (h-12) ────────────────────────────────── */}
         <div className="flex h-12 flex-shrink-0 border-b border-gray-200">
 
           {/* Contact list header */}
@@ -534,19 +294,40 @@ export const AgentAssistPage: React.FC = () => {
             )}
           </div>
 
-          {/* ActionBar (center column) */}
-          <ActionBar
-            contact={selected}
-            onEncerrar={() => setShowCloseModal(true)}
-            onPausar={() => addToast("Pausar: em breve", "info")}
-            onTransferir={() => addToast("Transferir: em breve", "info")}
-            onDesligar={() => addToast("Desligar: em breve", "info")}
-          />
+          {/* Center column header: Atual / Histórico tabs + ActionBar */}
+          <div className="flex flex-1 overflow-hidden">
+            {/* Center tab pills */}
+            <div className="flex border-r border-gray-100">
+              {(["atual", "historico"] as CenterTab[]).map(tab => (
+                <button
+                  key={tab}
+                  onClick={() => setCenterTab(tab)}
+                  className={`px-4 h-full flex items-end justify-center pb-2.5 text-xs font-medium transition-colors ${
+                    centerTab === tab
+                      ? "border-b-2 border-indigo-600 text-indigo-600"
+                      : "text-gray-500 hover:text-gray-700"
+                  }`}
+                >
+                  {tab === "atual" ? "Atual" : "Histórico"}
+                </button>
+              ))}
+            </div>
+
+            {/* ActionBar — only relevant in Atual tab */}
+            <ActionBar
+              contact={selected}
+              onEncerrar={() => setShowCloseModal(true)}
+              onTransferir={() => addToast("Transferir: em breve", "info")}
+              onDesligar={handleDesligar}
+              substitutionMode={substitutionMode}
+              onToggleSubstitutionMode={() => setSubstitutionMode(prev => !prev)}
+            />
+          </div>
 
           {/* Right-panel tab bar */}
           <div className="w-[280px] flex-shrink-0 border-l border-gray-200 flex bg-white">
-            {(["estado", "capacidades", "contexto", "historico"] as ActiveTab[]).map((id) => {
-              const label = { estado: "Estado", capacidades: "Capacidades", contexto: "Contexto", historico: "Histórico" }[id];
+            {(["estado", "capacidades", "contexto"] as ActiveTab[]).map((id) => {
+              const label = { estado: "Estado", capacidades: "Capacidades", contexto: "Contexto" }[id];
               return (
                 <button
                   key={id}
@@ -565,10 +346,10 @@ export const AgentAssistPage: React.FC = () => {
 
         </div>
 
-        {/* ── Content row below the shared header ───────────────────────────── */}
+        {/* ── Content row ────────────────────────────────────────────────── */}
         <div className="flex flex-1 overflow-hidden">
 
-          {/* Contact rows (no internal header — it's in the shared row above) */}
+          {/* Contact list */}
           <div className="w-[200px] flex-shrink-0 bg-gray-100 border-r border-gray-200 overflow-hidden">
             <ContactList
               contacts={[...contacts.values()]}
@@ -578,55 +359,67 @@ export const AgentAssistPage: React.FC = () => {
             />
           </div>
 
-          {/* Chat column */}
+          {/* Center column */}
           <div className="flex flex-col flex-1 overflow-hidden bg-white">
 
-            {/* Chat area or idle placeholder */}
-            {!selected ? (
-              <div className="flex-1 flex flex-col items-center justify-center text-gray-400 text-sm select-none gap-3">
-                {activePools.length === 0 ? (
-                  <>
-                    <span className="text-3xl">🟢</span>
-                    <p className="text-center leading-snug max-w-xs">
-                      Ative um pool no cabeçalho para ficar disponível.
-                    </p>
-                  </>
-                ) : (
-                  <>
-                    <span className="text-3xl animate-pulse">⏳</span>
-                    <p>Aguardando próximo atendimento…</p>
-                  </>
-                )}
+            {centerTab === "historico" ? (
+              /* ── Histórico tab ── */
+              <div className="flex-1 overflow-hidden">
+                <HistoricoTab customerId={selected?.contactId ?? null} />
               </div>
             ) : (
-              <ChatArea
-                messages={selected.messages}
-                aiTyping={aiTypingSessions.has(selected.sessionId)}
-                sessionClosed={selected.sessionClosed}
-                liveState={selected.supervisorState ? {
-                  sentimentScore: selected.supervisorState.sentiment.current,
-                  sentimentAlert: selected.supervisorState.sentiment.alert,
-                  sentimentTrend: selected.supervisorState.sentiment.trend,
-                  intent:         selected.supervisorState.intent.current,
-                  flags:          selected.supervisorState.flags,
-                } : null}
-              />
-            )}
+              /* ── Atual tab ── */
+              <>
+                {!selected ? (
+                  <div className="flex-1 flex flex-col items-center justify-center text-gray-400 text-sm select-none gap-3">
+                    {activePools.length === 0 ? (
+                      <>
+                        <span className="text-3xl">🟢</span>
+                        <p className="text-center leading-snug max-w-xs">
+                          Ative um pool no cabeçalho para ficar disponível.
+                        </p>
+                      </>
+                    ) : (
+                      <>
+                        <span className="text-3xl animate-pulse">⏳</span>
+                        <p>Aguardando próximo atendimento…</p>
+                      </>
+                    )}
+                  </div>
+                ) : (
+                  <ChatArea
+                    messages={selected.messages}
+                    aiTyping={aiTypingSessions.has(selected.sessionId)}
+                    sessionClosed={selected.sessionClosed}
+                    liveState={selected.supervisorState ? {
+                      sentimentScore: selected.supervisorState.sentiment.current,
+                      sentimentAlert: selected.supervisorState.sentiment.alert,
+                      sentimentTrend: selected.supervisorState.sentiment.trend,
+                      intent:         selected.supervisorState.intent.current,
+                      flags:          selected.supervisorState.flags,
+                    } : null}
+                    substitutionMode={substitutionMode}
+                    onMenuSubmit={handleMenuSubmit}
+                  />
+                )}
 
-            <AgentInput
-              onSend={handleSend}
-              disabled={!selected}
-              sessionClosed={selected?.sessionClosed ?? false}
-              capabilities={selected?.capabilities ?? null}
-            />
+                <AgentInput
+                  onSend={handleSend}
+                  disabled={!selected}
+                  sessionClosed={selected?.sessionClosed ?? false}
+                  capabilities={selected?.capabilities ?? null}
+                />
+              </>
+            )}
           </div>
 
-          {/* Right panel content (no internal tab bar — it's in the shared row above) */}
+          {/* Right panel */}
           <div className="w-[280px] flex-shrink-0 border-l border-gray-200 overflow-hidden bg-white">
             <RightPanel
               activeTab={activeTab}
               supervisorState={selected?.supervisorState ?? null}
               capabilities={selected?.capabilities ?? null}
+              copilotSuggestions={copilotSuggestions}
               customerId={selected?.contactId ?? null}
               onInviteAgent={handleInviteAgent}
               onEscalate={handleEscalate}
@@ -636,7 +429,7 @@ export const AgentAssistPage: React.FC = () => {
         </div>
       </div>
 
-      {/* Close modal — triggered by ActionBar's Encerrar or auto-shown on client_disconnect */}
+      {/* Close modal */}
       {(showCloseModal || selected?.pendingCloseModal) && selected && (
         <CloseModal
           defaultIssueStatus={selected.sessionClosed ? "Cliente desconectou" : ""}
@@ -654,6 +447,13 @@ export const AgentAssistPage: React.FC = () => {
               });
             }
           }}
+        />
+      )}
+
+      {showPauseModal && (
+        <PauseReasonModal
+          onConfirm={handlePauseConfirm}
+          onCancel={() => setShowPauseModal(false)}
         />
       )}
 

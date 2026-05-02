@@ -134,10 +134,12 @@ CREATE TABLE IF NOT EXISTS {db}.messages
     message_id   String,
     tenant_id    String,
     session_id   String,
+    author_id    Nullable(String),
     author_role  String,
     channel      String,
     content_type String,
     visibility   String,
+    content      Nullable(String),
     timestamp    DateTime64(3, 'UTC'),
     date         Date
 )
@@ -145,6 +147,13 @@ ENGINE = ReplacingMergeTree()
 PARTITION BY toYYYYMM(date)
 ORDER BY (tenant_id, message_id)
 """
+
+# Forward-compatible migrations for messages table (idempotent)
+_DDL_MESSAGES_MIGRATE_CONTENT = (
+    "ALTER TABLE {db}.messages"
+    " ADD COLUMN IF NOT EXISTS author_id Nullable(String) DEFAULT NULL,"
+    " ADD COLUMN IF NOT EXISTS content   Nullable(String) DEFAULT NULL"
+)
 
 _DDL_USAGE_EVENTS = """
 CREATE TABLE IF NOT EXISTS {db}.usage_events
@@ -172,6 +181,7 @@ CREATE TABLE IF NOT EXISTS {db}.sentiment_events
     pool_id    String,
     score      Float32,
     category   String,
+    segment_id Nullable(String),
     timestamp  DateTime64(3, 'UTC'),
     date       Date
 )
@@ -179,6 +189,12 @@ ENGINE = ReplacingMergeTree()
 PARTITION BY toYYYYMM(date)
 ORDER BY (tenant_id, session_id, timestamp)
 """
+
+# Forward-compatible migration: add segment_id to pre-existing sentiment_events tables.
+_DDL_SENTIMENT_EVENTS_MIGRATE_SEGMENT = (
+    "ALTER TABLE {db}.sentiment_events"
+    " ADD COLUMN IF NOT EXISTS segment_id Nullable(String) DEFAULT NULL"
+)
 
 _DDL_WORKFLOW_EVENTS = """
 CREATE TABLE IF NOT EXISTS {db}.workflow_events
@@ -386,6 +402,32 @@ PARTITION BY toYYYYMM(date)
 ORDER BY (tenant_id, insight_id)
 """
 
+# ── Arc 8: agent_pause_intervals — one row per pause interval per human agent.
+# ReplacingMergeTree on (tenant_id, instance_id, paused_at): the close row
+# (with resumed_at + duration_ms) wins over the open row on background merge
+# because ingested_at is later.
+_DDL_AGENT_PAUSE_INTERVALS = """
+CREATE TABLE IF NOT EXISTS {db}.agent_pause_intervals
+(
+    interval_id    String,
+    tenant_id      String,
+    instance_id    String,
+    agent_type_id  String,
+    pool_id        String,
+    reason_id      String,
+    reason_label   String,
+    note           Nullable(String),
+    paused_at      DateTime64(3, 'UTC'),
+    resumed_at     Nullable(DateTime64(3, 'UTC')),
+    duration_ms    Nullable(Int64),
+    ingested_at    DateTime DEFAULT now(),
+    date           Date
+)
+ENGINE = ReplacingMergeTree(ingested_at)
+PARTITION BY toYYYYMM(date)
+ORDER BY (tenant_id, instance_id, paused_at)
+"""
+
 # ── Arc 5: mv_agent_performance_daily — AggregatingMergeTree MV over segments.
 # Captures a row per (tenant_id, agent_type_id, pool_id, period_date) on every INSERT.
 # Uses State/Merge aggregating functions so partial results compose correctly.
@@ -494,6 +536,7 @@ _ALL_DDL = [
     _DDL_EVALUATION_RESULTS,
     _DDL_EVALUATION_EVENTS,
     _DDL_CONTACT_INSIGHTS,
+    _DDL_AGENT_PAUSE_INTERVALS,
     # Materialized views — must come AFTER the source tables they reference.
     # AggregatingMergeTree with POPULATE backfills existing data on first creation.
     _DDL_MV_AGENT_PERFORMANCE,
@@ -506,6 +549,8 @@ _ALL_DDL = [
 _MIGRATIONS = [
     _DDL_SESSIONS_MIGRATE,
     _DDL_SESSIONS_MIGRATE_ANI_DNIS,
+    _DDL_SENTIMENT_EVENTS_MIGRATE_SEGMENT,
+    _DDL_MESSAGES_MIGRATE_CONTENT,
 ]
 
 
@@ -626,14 +671,72 @@ class AnalyticsStore:
     # messages
 
     _MESSAGE_COLS = [
-        "message_id", "tenant_id", "session_id", "author_role",
-        "channel", "content_type", "visibility", "timestamp", "date",
+        "message_id", "tenant_id", "session_id", "author_id", "author_role",
+        "channel", "content_type", "visibility", "content", "timestamp", "date",
     ]
 
     async def insert_message(self, row: dict) -> None:
         await asyncio.to_thread(
             self._insert, "messages", [_message_row(row)], self._MESSAGE_COLS
         )
+
+    def query_session_messages(
+        self, client: Any, tenant_id: str, session_id: str
+    ) -> list[dict]:
+        """
+        Fallback: returns all messages for a closed session ordered by timestamp.
+        Used by the SSE endpoint when the Redis stream key has expired.
+
+        Returns dicts compatible with _parse_entry() output:
+          entry_id, type, timestamp, author_id, author_role, visibility, content, payload
+        """
+        import json as _json
+
+        result = client.query(f"""
+            SELECT
+                message_id,
+                author_id,
+                author_role,
+                visibility,
+                content_type,
+                content,
+                timestamp
+            FROM {self._database}.messages FINAL
+            WHERE tenant_id  = {{tenant_id:String}}
+              AND session_id = {{session_id:String}}
+            ORDER BY timestamp ASC
+        """, parameters={"tenant_id": tenant_id, "session_id": session_id})
+
+        rows = []
+        for r in result.result_rows:
+            msg_id, author_id, author_role, visibility, content_type, content_raw, ts = r
+            # Parse content if it's a JSON string
+            content_parsed = None
+            if content_raw:
+                try:
+                    content_parsed = _json.loads(content_raw)
+                except Exception:
+                    content_parsed = content_raw
+
+            ts_str: str | None = None
+            if ts is not None:
+                from datetime import datetime as _dt, timezone as _tz
+                if isinstance(ts, _dt):
+                    ts_str = ts.replace(tzinfo=_tz.utc).isoformat()
+                else:
+                    ts_str = str(ts)
+
+            rows.append({
+                "entry_id":    msg_id,
+                "type":        "message",
+                "timestamp":   ts_str,
+                "author_id":   author_id,
+                "author_role": author_role or "",
+                "visibility":  visibility or "all",
+                "content":     content_parsed,
+                "payload":     None,
+            })
+        return rows
 
     # usage_events
 
@@ -651,7 +754,7 @@ class AnalyticsStore:
 
     _SENTIMENT_COLS = [
         "event_id", "tenant_id", "session_id", "pool_id",
-        "score", "category", "timestamp", "date",
+        "score", "category", "segment_id", "timestamp", "date",
     ]
 
     async def insert_sentiment_event(self, row: dict) -> None:
@@ -790,6 +893,105 @@ class AnalyticsStore:
             self._CONTACT_INSIGHT_COLS,
         )
 
+    # agent_pause_intervals (Arc 8)
+
+    _AGENT_PAUSE_INTERVAL_COLS = [
+        "interval_id", "tenant_id", "instance_id", "agent_type_id", "pool_id",
+        "reason_id", "reason_label", "note",
+        "paused_at", "resumed_at", "duration_ms",
+        # ingested_at omitted — DEFAULT now()
+        "date",
+    ]
+
+    async def upsert_agent_pause_interval(self, row: dict) -> None:
+        """Insert (open) or update (close) a pause interval row.
+
+        Open row:  resumed_at=None, duration_ms=None  — written on agent_pause event.
+        Close row: resumed_at+duration_ms filled       — written on agent_ready after pause.
+        ReplacingMergeTree(ingested_at) ensures the close row wins on merge.
+        """
+        await asyncio.to_thread(
+            self._insert,
+            "agent_pause_intervals",
+            [_agent_pause_interval_row(row)],
+            self._AGENT_PAUSE_INTERVAL_COLS,
+        )
+
+    # ── Arc 5: segment_id lookups (for post-hoc enrichment) ───────────────────
+
+    async def lookup_segment_id(
+        self,
+        tenant_id:    str,
+        session_id:   str,
+        participant_id: str,
+    ) -> str | None:
+        """
+        Return the most recent segment_id for a (session, participant) pair.
+        Used as ClickHouse fallback when Redis key has expired (TTL 4 h).
+        Runs in a thread-pool executor to avoid blocking the event loop.
+        """
+        def _query() -> str | None:
+            client = self.new_client()
+            try:
+                result = client.query(
+                    f"""
+                    SELECT segment_id
+                    FROM {self._database}.segments FINAL
+                    WHERE tenant_id     = %(tenant_id)s
+                      AND session_id   = %(session_id)s
+                      AND participant_id = %(participant_id)s
+                    ORDER BY started_at DESC
+                    LIMIT 1
+                    """,
+                    parameters={
+                        "tenant_id":     tenant_id,
+                        "session_id":    session_id,
+                        "participant_id": participant_id,
+                    },
+                )
+                rows = result.result_rows
+                return rows[0][0] if rows else None
+            finally:
+                client.close()
+
+        return await asyncio.to_thread(_query)
+
+    async def lookup_primary_segment_id(
+        self,
+        tenant_id:  str,
+        session_id: str,
+    ) -> str | None:
+        """
+        Return the most recent primary-role segment_id for a session.
+        Used when no instance_id is available (e.g. sentiment.updated events).
+        Prefers open segments (ended_at IS NULL); falls back to most recently
+        started segment with role='primary'.
+        """
+        def _query() -> str | None:
+            client = self.new_client()
+            try:
+                result = client.query(
+                    f"""
+                    SELECT segment_id
+                    FROM {self._database}.segments FINAL
+                    WHERE tenant_id  = %(tenant_id)s
+                      AND session_id = %(session_id)s
+                      AND role       = 'primary'
+                    ORDER BY (ended_at IS NULL) DESC, started_at DESC
+                    LIMIT 1
+                    """,
+                    parameters={
+                        "tenant_id":  tenant_id,
+                        "session_id": session_id,
+                    },
+                )
+                rows = result.result_rows
+                return rows[0][0] if rows else None
+            finally:
+                client.close()
+
+        return await asyncio.to_thread(_query)
+
 
 # ─── Row builders ─────────────────────────────────────────────────────────────
 
@@ -868,14 +1070,21 @@ def _agent_row(d: dict) -> list:
 
 def _message_row(d: dict) -> list:
     ts = d.get("timestamp")
+    content = d.get("content")
+    # Normalise content to a JSON string if it's a dict/list
+    if content is not None and not isinstance(content, str):
+        import json as _json
+        content = _json.dumps(content, ensure_ascii=False)
     return [
         d.get("message_id", ""),
         d.get("tenant_id", ""),
         d.get("session_id", ""),
+        d.get("author_id") or None,
         d.get("author_role", ""),
         d.get("channel", "") or "",
         d.get("content_type", "") or "",
         d.get("visibility", "all"),
+        content,
         _parse_dt(ts) or datetime.utcnow(),
         _today_utc(ts),
     ]
@@ -904,6 +1113,7 @@ def _sentiment_row(d: dict) -> list:
         d.get("pool_id", "") or "",
         float(d.get("score", 0.0)),
         d.get("category", "neutral"),
+        d.get("segment_id") or None,   # Nullable — None when enrichment failed
         _parse_dt(ts) or datetime.utcnow(),
         _today_utc(ts),
     ]
@@ -1099,4 +1309,33 @@ def _contact_insight_row(d: dict) -> list:
         d.get("agent_id") or None,
         _parse_dt(ts) or datetime.utcnow(),
         _today_utc(ts),
+    ]
+
+
+def _agent_pause_interval_row(d: dict) -> list:
+    """Row builder for agent_pause_intervals table (Arc 8).
+
+    An "open" row has resumed_at=None and duration_ms=None.
+    A "close" row (written when agent_ready follows agent_pause) has
+    resumed_at and duration_ms filled in.  ReplacingMergeTree(ingested_at)
+    ensures the close row wins on background merge.
+    """
+    paused_ts   = d.get("paused_at")
+    resumed_ts  = d.get("resumed_at")
+    paused_dt   = _parse_dt(paused_ts) if paused_ts else datetime.utcnow()
+    resumed_dt  = _parse_dt(resumed_ts) if resumed_ts else None
+    return [
+        d.get("interval_id", ""),
+        d.get("tenant_id", ""),
+        d.get("instance_id", ""),
+        d.get("agent_type_id", ""),
+        d.get("pool_id", ""),
+        d.get("reason_id", ""),
+        d.get("reason_label", ""),
+        d.get("note") or None,
+        paused_dt,
+        resumed_dt,
+        d.get("duration_ms") or None,
+        # ingested_at — DEFAULT now(), omitted so ClickHouse fills it
+        _today_utc(paused_ts),
     ]

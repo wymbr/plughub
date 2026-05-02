@@ -13,8 +13,7 @@ import {
   useCampaignReport,
 } from '@/api/evaluation-hooks'
 import type { EvaluationCampaign, CampaignReport } from '@/types'
-
-const TENANT = import.meta.env.VITE_TENANT_ID ?? 'tenant_demo'
+import { useAuth } from '@/auth/useAuth'
 
 function StatusBadge({ status }: { status: string }) {
   const styles: Record<string, string> = {
@@ -118,6 +117,7 @@ const AUTHORITY_OPTIONS = [
 ]
 
 function CreateModal({ onClose, onCreated, adminToken }: CreateModalProps) {
+  const { tenantId: TENANT } = useAuth()
   const { forms } = useForms(TENANT)
   const [name, setName] = useState('')
   const [description, setDescription] = useState('')
@@ -378,6 +378,7 @@ function CreateModal({ onClose, onCreated, adminToken }: CreateModalProps) {
 // ── CampaignsPage ─────────────────────────────────────────────────────────────
 
 export default function CampaignsPage() {
+  const { tenantId: TENANT } = useAuth()
   const [adminToken, setAdminToken] = useState('')
   const { campaigns, loading, reload } = useCampaigns(TENANT, 30_000)
   const [selected, setSelected] = useState<EvaluationCampaign | null>(null)

@@ -35,6 +35,7 @@ from .pool_auth import PoolPrincipal, optional_pool_principal
 from .reports_query import (
     _clamp_page_size,
     _to_csv,
+    query_agent_performance_daily,
     query_agent_performance_report,
     query_agents_report,
     query_campaigns_report,
@@ -44,6 +45,8 @@ from .reports_query import (
     query_participation_report,
     query_quality_report,
     query_segments_report,
+    query_agent_availability,
+    query_session_complexity,
     query_sessions_report,
     query_usage_report,
     query_workflows_report,
@@ -725,3 +728,142 @@ async def report_timeseries_score(
             headers={"Content-Disposition": f'attachment; filename="score_timeseries_{_today_label()}.csv"'},
         )
     return JSONResponse(content=data, status_code=503 if data.get("error") else 200)
+
+
+# ─── /reports/agent-performance/daily (Arc 5 MV — v_agent_performance) ──────
+
+@router.get("/agent-performance/daily")
+async def get_agent_performance_daily(
+    request:        Request,
+    tenant_id:      str           = Query(...,    description="Tenant identifier"),
+    from_dt:        Optional[str] = Query(None,   description="Start date (YYYY-MM-DD or ISO8601); default: 7d ago"),
+    to_dt:          Optional[str] = Query(None,   description="End date (YYYY-MM-DD or ISO8601); default: today"),
+    pool_id:        Optional[str] = Query(None,   description="Filter by pool_id"),
+    agent_type_id:  Optional[str] = Query(None,   description="Filter by agent_type_id"),
+    format:         str           = Query("json",  pattern="^(json|csv)$"),
+    pool_principal: PoolPrincipal = Depends(optional_pool_principal),
+) -> Response:
+    """
+    Daily pre-aggregated performance metrics from the mv_agent_performance_daily
+    materialized view (AggregatingMergeTree), read via the v_agent_performance
+    readable SQL view.
+
+    One row per (agent_type_id, pool_id, period_date). Suitable for trend charts
+    and time-series dashboards — much faster than querying segments FINAL.
+
+    Columns:
+      agent_type_id, pool_id, period_date,
+      total_sessions, avg_duration_ms,
+      resolution_rate, escalation_rate, transfer_rate, human_rate
+
+    Rates are in [0.0, 1.0]. total_sessions reflects sessions handled in that day
+    for the given agent × pool combination (MIN_SESSIONS threshold NOT applied here —
+    use the routing-engine's performance_job for throttle-safe scores).
+    """
+    data = await query_agent_performance_daily(
+        client    = request.app.state.store.new_client(),
+        database  = request.app.state.store._database,
+        tenant_id = tenant_id,
+        from_dt   = from_dt,
+        to_dt     = to_dt,
+        pool_id          = pool_id,
+        agent_type_id    = agent_type_id,
+        accessible_pools = pool_principal.accessible_pools,
+    )
+    return _respond(data, format, f"agent_performance_daily_{_today_label()}.csv")
+
+
+# ─── /reports/sessions/complexity (Arc 5 MV — v_segment_summary) ─────────────
+
+@router.get("/sessions/complexity")
+async def get_session_complexity(
+    request:        Request,
+    tenant_id:      str           = Query(...,    description="Tenant identifier"),
+    from_dt:        Optional[str] = Query(None,   description="ISO8601 start (default: 7d ago)"),
+    to_dt:          Optional[str] = Query(None,   description="ISO8601 end (default: now)"),
+    pool_id:        Optional[str] = Query(None,   description="Filter sessions by originating pool_id"),
+    min_handoffs:   int           = Query(0,       ge=0, description="Minimum handoff_count to include"),
+    page:           int           = Query(1,       ge=1),
+    page_size:      int           = Query(100,     ge=1),
+    format:         str           = Query("json",  pattern="^(json|csv)$"),
+    pool_principal: PoolPrincipal = Depends(optional_pool_principal),
+) -> Response:
+    """
+    Session complexity metrics from the mv_segment_summary materialized view
+    (AggregatingMergeTree), read via the v_segment_summary readable SQL view.
+    Joined with the sessions table for date-range and pool_id filtering.
+
+    One row per session. Suitable for identifying complex interactions (high
+    handoffs, multi-agent conferences) and escalation pattern analysis.
+
+    Columns:
+      session_id, pool_id,
+      segment_count, primary_segments, specialist_segments, human_segments,
+      total_duration_ms,
+      handoff_count, escalation_count, resolved_count
+
+    Use min_handoffs=1 to find sessions that were transferred at least once.
+    Use min_handoffs=2 to find sessions with multiple escalation steps.
+    """
+    ps = _clamp_page_size(page_size, format == "csv")
+    data = await query_session_complexity(
+        client    = request.app.state.store.new_client(),
+        database  = request.app.state.store._database,
+        tenant_id = tenant_id,
+        from_dt   = from_dt,
+        to_dt     = to_dt,
+        pool_id          = pool_id,
+        min_handoffs     = min_handoffs,
+        accessible_pools = pool_principal.accessible_pools,
+        page      = page,
+        page_size = ps,
+    )
+    return _respond(data, format, f"session_complexity_{_today_label()}.csv")
+
+
+# ─── /reports/agent-availability (Arc 8 — pause intervals) ───────────────────
+
+@router.get("/agent-availability")
+async def get_agent_availability(
+    request:        Request,
+    tenant_id:      str           = Query(...,   description="Tenant identifier"),
+    from_dt:        Optional[str] = Query(None,  description="ISO8601 start (default: 7d ago)"),
+    to_dt:          Optional[str] = Query(None,  description="ISO8601 end (default: now)"),
+    pool_id:        Optional[str] = Query(None,  description="Filter by pool_id"),
+    agent_type_id:  Optional[str] = Query(None,  description="Filter by agent_type_id"),
+    page:           int           = Query(1,      ge=1),
+    page_size:      int           = Query(100,    ge=1),
+    format:         str           = Query("json", pattern="^(json|csv)$"),
+    pool_principal: PoolPrincipal = Depends(optional_pool_principal),
+) -> Response:
+    """
+    Agent pause/availability report from the agent_pause_intervals table (Arc 8).
+
+    Aggregates completed pause intervals (duration_ms IS NOT NULL) per
+    (agent_type_id, pool_id, period_date).
+
+    Each row includes:
+      agent_type_id, pool_id, period_date,
+      total_pauses      — number of completed pause intervals,
+      total_pause_ms    — sum of all durations in milliseconds,
+      reason_breakdown  — list of {reason_id, reason_label, count, total_ms}
+
+    Pool scoping (Arc 7c): if the caller JWT carries accessible_pools the
+    result is restricted to those pool_ids automatically.
+
+    Use format=csv for bulk exports (flattens reason_breakdown as JSON string).
+    """
+    ps = _clamp_page_size(page_size, format == "csv")
+    data = await query_agent_availability(
+        store             = request.app.state.store,
+        tenant_id         = tenant_id,
+        from_dt           = from_dt,
+        to_dt             = to_dt,
+        pool_id           = pool_id,
+        agent_type_id     = agent_type_id,
+        accessible_pools  = pool_principal.accessible_pools,
+        page              = page,
+        page_size         = ps,
+    )
+    return _respond(data, format, f"agent_availability_{_today_label()}.csv")
+

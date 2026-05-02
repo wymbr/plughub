@@ -3,7 +3,7 @@
  * Executor do step type: choice
  * Spec: PlugHub v24.0 seção 4.7
  *
- * Avalia condições sobre pipeline_state ($.) ou ContextStore (@ctx.*).
+ * Avalia condições sobre pipeline_state ($.) ou ContextStore (@ctx.*, @segment.*).
  * Retorna o next do primeiro match, ou default se nenhuma satisfeita.
  *
  * Operadores suportados:
@@ -27,13 +27,22 @@ export async function executeChoice(
   }
 
   for (const condition of step.conditions) {
-    const isCtxRef = condition.field.startsWith("@ctx.")
+    const isCtxRef     = condition.field.startsWith("@ctx.")
+    const isSegmentRef = condition.field.startsWith("@segment.")
 
     let matched: boolean
 
-    if (isCtxRef) {
+    if (isCtxRef || isSegmentRef) {
+      // Resolve the tag — segment refs get prefixed with segment.{segmentId}.
+      let tag: string
+      if (isSegmentRef) {
+        const localTag = condition.field.replace(/^@segment\./, "")
+        tag = ctx.segmentId ? `segment.${ctx.segmentId}.${localTag}` : localTag
+      } else {
+        tag = condition.field.replace(/^@ctx\./, "")
+      }
+
       // Lê a ContextEntry completa para poder avaliar exists e confidence_gte
-      const tag = condition.field.replace(/^@ctx\./, "")
       const entry = ctx.contextStore
         ? await ctx.contextStore.get(ctx.sessionId, tag, ctx.customerId)
         : null

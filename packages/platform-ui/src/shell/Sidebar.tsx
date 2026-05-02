@@ -2,7 +2,6 @@ import React, { useState } from 'react'
 import { Link, useLocation } from 'react-router-dom'
 import { useAuth } from '@/auth/useAuth'
 import { useTranslation } from 'react-i18next'
-import { makePermissions } from '@/lib/permissions'
 
 interface NavItem {
   navKey?: string
@@ -15,7 +14,7 @@ interface NavItem {
 }
 
 const Sidebar: React.FC = () => {
-  const { session } = useAuth()
+  const { session, perms } = useAuth()
   const { t } = useTranslation('shell')
   const location = useLocation()
   const [expandedGroups, setExpandedGroups] = useState<string[]>([])
@@ -98,8 +97,9 @@ const Sidebar: React.FC = () => {
         { label: t('nav.plataforma'),   href: '/config/platform',    icon: '🖥️', abac: { module: 'config', field: 'plataforma'   } },
         { label: t('nav.calendarios'),  href: '/config/calendars',   icon: '📅', abac: { module: 'config', field: 'plataforma'   } },
         { label: t('nav.mascaramento'), href: '/config/masking',     icon: '🔒', abac: { module: 'config', field: 'mascaramento' } },
-        { label: t('nav.faturamento'),  href: '/config/billing',     icon: '💳', roles: ['admin', 'business'] },
-        { label: t('nav.acesso'),       href: '/config/access',      icon: '🔐', abac: { module: 'config', field: 'usuarios'     } },
+        { label: t('nav.faturamento'),       href: '/config/billing',       icon: '💳', roles: ['admin', 'business'] },
+        { label: t('nav.relatorios_agentes'), href: '/config/agent-reports', icon: '📈', roles: ['supervisor', 'admin'] },
+        { label: t('nav.acesso'),            href: '/config/access',        icon: '🔐', abac: { module: 'config', field: 'usuarios' } },
       ]
     },
     {
@@ -119,8 +119,6 @@ const Sidebar: React.FC = () => {
     }
     return location.pathname === href || location.pathname.startsWith(href + '/')
   }
-
-  const perms = makePermissions(session?.moduleConfig)
 
   function passesAbac(item: NavItem): boolean {
     if (!item.abac) return true

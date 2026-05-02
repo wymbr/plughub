@@ -1,0 +1,129 @@
+# agente_nps_v1.yaml
+#
+# Agente de pesquisa NPS — acionado via pool hook on_human_end.
+# Executa em conferência como specialist, em paralelo com agente_wrapup_v1.
+#
+# Responsabilidades:
+#   - Verificar se o cliente ainda está conectado (@ctx.session.close_origin)
+#   - Se desconectado → encerra imediatamente sem pesquisa
+#   - Se conectado → agradecer, aplicar pesquisa NPS (0–10 via botões)
+#   - Registrar resposta no ContextStore (session.nps_score)
+#
+# Isolamento de visibilidade:
+#   Todas as mensagens deste agente usam visibility com array contendo
+#   o customer_participant_id. O agente humano NÃO vê o NPS — evita
+#   animosidade caso o cliente dê nota baixa enquanto o agente ainda
+#   está na conferência (fazendo wrap-up).
+#
+# Invariantes:
+#   - Nunca bloqueia: on_failure sempre avança para encerrar
+#   - NPS é opcional (timeout_s: 30 → encerra silenciosamente)
+#   - Se cliente desconectou → complete imediato sem interação
+
+id: skill_nps_v1
+name: "NPS v1 — pesquisa de satisfação pós-atendimento"
+version: "1.0"
+description: |
+  Pesquisa NPS isolada do agente humano. Conversa exclusivamente com
+  o cliente via visibility array (customer_participant_id). O agente
+  humano não vê as mensagens de avaliação.
+classification:
+  type: orchestrator
+  domain: quality
+
+entry: verificar_origem
+
+steps:
+
+  # ── Verificar se o cliente está conectado ─────────────────────────────────
+  # Se close_origin é "client_disconnect", o cliente já saiu — NPS não faz
+  # sentido. Encerra sem interação.
+  - id: verificar_origem
+    type: choice
+    conditions:
+      - field: "@ctx.session.close_origin"
+        operator: eq
+        value: "client_disconnect"
+        next: encerrar_sem_pesquisa
+    default: agradecimento
+
+  # ── Agradecimento ao cliente ──────────────────────────────────────────────
+  # visibility: array com o customer_participant_id da sessão.
+  # O @ctx.session.customer_participant_id é escrito pelo bridge antes de
+  # disparar os hooks.
+  - id: agradecimento
+    type: notify
+    message: >
+      Obrigado por entrar em contato conosco! 🙏
+      Foi um prazer te atender.
+    visibility:
+      - "@ctx.session.customer_participant_id"
+    on_success: solicitar_nps
+    on_failure: encerrar
+
+  # ── Pesquisa NPS (0–10) via botões ────────────────────────────────────────
+  # visibility array garante que apenas o cliente veja a pergunta.
+  # Timeout de 30s — sem resposta, encerra sem nota.
+  - id: solicitar_nps
+    type: menu
+    interaction: button
+    prompt: "Em uma escala de 0 a 10, qual a probabilidade de você recomendar nosso atendimento para um amigo ou familiar?"
+    visibility:
+      - "@ctx.session.customer_participant_id"
+    timeout_s: 30
+    options:
+      - id: "0"
+        label: "0"
+      - id: "1"
+        label: "1"
+      - id: "2"
+        label: "2"
+      - id: "3"
+        label: "3"
+      - id: "4"
+        label: "4"
+      - id: "5"
+        label: "5"
+      - id: "6"
+        label: "6"
+      - id: "7"
+        label: "7"
+      - id: "8"
+        label: "8"
+      - id: "9"
+        label: "9"
+      - id: "10"
+        label: "10"
+    output_as: nps_resposta
+    on_success: registrar_nps
+    on_failure: encerrar
+    on_timeout: encerrar
+    on_disconnect: encerrar
+
+  # ── Registrar NPS no ContextStore + agradecer ─────────────────────────────
+  # context_tags.outputs usa pipeline_state.results como fonte.
+  # O dotPath key (nps_resposta) deve coincidir com o output_as do menu anterior.
+  - id: registrar_nps
+    type: notify
+    message: "Agradecemos sua avaliação! ✅"
+    visibility:
+      - "@ctx.session.customer_participant_id"
+    context_tags:
+      outputs:
+        nps_resposta:
+          tag: session.nps_score
+          confidence: 1.0
+          merge: overwrite
+          scope: segment
+    on_success: encerrar
+    on_failure: encerrar
+
+  # ── Encerramento normal ───────────────────────────────────────────────────
+  - id: encerrar
+    type: complete
+    outcome: resolved
+
+  # ── Encerramento sem pesquisa (cliente desconectado) ──────────────────────
+  - id: encerrar_sem_pesquisa
+    type: complete
+    outcome: resolved

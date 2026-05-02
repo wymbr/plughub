@@ -22,8 +22,6 @@ import { TimeseriesChart, type DisplayType } from '@/components/TimeseriesChart'
 import { useAuth } from '@/auth/useAuth'
 import type { AgentEvaluationReport } from '@/types'
 
-const TENANT = import.meta.env.VITE_TENANT_ID ?? 'tenant_demo'
-
 function ScorePill({ score }: { score: number | null }) {
   if (score === null) return <span className="text-gray-400 text-xs">—</span>
   const bg = score >= 8 ? 'bg-green-100 text-green-800' : score >= 6 ? 'bg-yellow-100 text-yellow-800' : 'bg-red-100 text-red-800'
@@ -42,6 +40,7 @@ function ProgressBar({ pct }: { pct: number }) {
 // ── CampaignTab ────────────────────────────────────────────────────────────────
 
 function CampaignTab() {
+  const { tenantId: TENANT } = useAuth()
   const { campaigns } = useCampaigns(TENANT)
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const { report, loading } = useCampaignReport(selectedId)
@@ -131,6 +130,7 @@ function CampaignTab() {
 // ── AgentTab ──────────────────────────────────────────────────────────────────
 
 function AgentTab() {
+  const { tenantId: TENANT } = useAuth()
   const [poolFilter, setPoolFilter] = useState('')
   const { rows, loading } = useAgentReport(TENANT, poolFilter || undefined)
 
@@ -221,6 +221,7 @@ function RateBadge({ numerator, denominator, warnBelow }: { numerator: number; d
 }
 
 function AnalyticsTab() {
+  const { tenantId: TENANT } = useAuth()
   const [groupBy, setGroupBy] = useState<string>('campaign_id')
   const [campaignFilter, setCampaignFilter] = useState('')
 
@@ -478,7 +479,7 @@ const DISPLAY_OPTIONS: { value: DisplayType; label: string; icon: string }[] = [
 ]
 
 function TrendTab() {
-  const { session, getAccessToken } = useAuth()
+  const { session, getAccessToken, tenantId: TENANT } = useAuth()
   const [accessToken, setAccessToken] = useState<string | undefined>(undefined)
   const [breakdownBy, setBreakdownBy] = useState('')
   const [displayType, setDisplayType] = useState<DisplayType>('line')

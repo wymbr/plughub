@@ -42,8 +42,7 @@ const SUSPEND_LABELS: Record<string, string> = {
 // ── Page ───────────────────────────────────────────────────────────────────────
 
 export default function WorkflowMonitorPage() {
-  const { session } = useAuth()
-  const tenantId    = session?.tenantId ?? ''
+  const { tenantId } = useAuth()
 
   const [filterStatus, setFilterStatus] = useState<WorkflowStatus | 'all'>('all')
   const [selectedId,   setSelectedId]   = useState<string | null>(null)

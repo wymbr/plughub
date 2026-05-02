@@ -10,10 +10,12 @@
 
 import React from "react";
 import { AuthorType, ChatMessage } from "../types";
-import { MenuCard } from "./MenuCard";
+import { MenuCard, SubmitResult } from "./MenuCard";
 
 interface MessageBubbleProps {
-  message: ChatMessage;
+  message:           ChatMessage;
+  substitutionMode?: boolean;
+  onMenuSubmit?:     (menuId: string, result: SubmitResult) => void;
 }
 
 function agentLabel(agentTypeId: string | undefined): string {
@@ -82,9 +84,21 @@ function formatTime(iso: string): string {
   }
 }
 
-export const MessageBubble: React.FC<MessageBubbleProps> = ({ message }) => {
+export const MessageBubble: React.FC<MessageBubbleProps> = ({
+  message,
+  substitutionMode = false,
+  onMenuSubmit,
+}) => {
   if (message.menuData) {
-    return <MenuCard data={message.menuData} />;
+    return (
+      <MenuCard
+        data={message.menuData}
+        substitutionMode={substitutionMode}
+        onSubmit={onMenuSubmit
+          ? (result) => onMenuSubmit(message.menuData!.menu_id, result)
+          : undefined}
+      />
+    );
   }
 
   const isInternal   = message.visibility === "agents_only";

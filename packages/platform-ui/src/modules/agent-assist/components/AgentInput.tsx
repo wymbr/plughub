@@ -24,7 +24,9 @@ export const AgentInput: React.FC<AgentInputProps> = ({
   sessionClosed = false,
   capabilities,
 }) => {
-  const inputDisabled = disabled || sessionClosed;
+  // During wrap-up (sessionClosed=true) the input stays active so the agent
+  // can respond to hook agent prompts (wrap-up notes, classification, etc.).
+  const inputDisabled = disabled;
   const [text,         setText]         = useState("");
   const [showPalette,  setShowPalette]  = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -79,19 +81,18 @@ export const AgentInput: React.FC<AgentInputProps> = ({
     }
   };
 
-  // Closed-session banner (Encerrar button is in ActionBar)
-  if (sessionClosed) {
-    return (
-      <div className="border-t border-amber-200 bg-amber-50 px-4 py-3 flex-shrink-0">
-        <p className="text-xs text-amber-700 text-center leading-snug">
-          ⚠️ Cliente desconectou — clique em <strong>Encerrar</strong> para registrar o desfecho.
-        </p>
-      </div>
-    );
-  }
-
   return (
-    <div className="border-t border-gray-200 bg-white px-3 py-2 flex-shrink-0 relative">
+    <div className={`border-t px-3 py-2 flex-shrink-0 relative ${
+      sessionClosed
+        ? "border-amber-200 bg-amber-50"
+        : "border-gray-200 bg-white"
+    }`}>
+      {/* Wrap-up banner — input remains active so the agent can respond to hook agents */}
+      {sessionClosed && (
+        <p className="text-xs text-amber-700 text-center leading-snug mb-2">
+          ⏳ Wrap-up em andamento — responda às perguntas dos agentes de finalização abaixo.
+        </p>
+      )}
       {/* Canned phrases palette — floats above the input */}
       {showPalette && (
         <CannedPhrasesPalette

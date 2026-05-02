@@ -8,6 +8,7 @@
 import React, { useEffect, useRef } from "react";
 import { ChatMessage } from "../types";
 import { MessageBubble } from "./MessageBubble";
+import { SubmitResult } from "./MenuCard";
 
 interface LiveState {
   sentimentScore: number;
@@ -18,10 +19,12 @@ interface LiveState {
 }
 
 interface ChatAreaProps {
-  messages: ChatMessage[];
-  aiTyping: boolean;
-  liveState?: LiveState | null;
-  sessionClosed?: boolean;
+  messages:          ChatMessage[];
+  aiTyping:          boolean;
+  liveState?:        LiveState | null;
+  sessionClosed?:    boolean;
+  substitutionMode?: boolean;
+  onMenuSubmit?:     (menuId: string, result: SubmitResult) => void;
 }
 
 const TREND_ICON: Record<string, string> = {
@@ -52,7 +55,14 @@ function sentimentLabel(score: number): string {
   return "Muito negativo";
 }
 
-export const ChatArea: React.FC<ChatAreaProps> = ({ messages, aiTyping, liveState, sessionClosed }) => {
+export const ChatArea: React.FC<ChatAreaProps> = ({
+  messages,
+  aiTyping,
+  liveState,
+  sessionClosed,
+  substitutionMode = false,
+  onMenuSubmit,
+}) => {
   const bottomRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
@@ -129,7 +139,12 @@ export const ChatArea: React.FC<ChatAreaProps> = ({ messages, aiTyping, liveStat
         )}
 
         {messages.map((msg) => (
-          <MessageBubble key={msg.id} message={msg} />
+          <MessageBubble
+            key={msg.id}
+            message={msg}
+            substitutionMode={substitutionMode}
+            onMenuSubmit={onMenuSubmit}
+          />
         ))}
 
         {aiTyping && (

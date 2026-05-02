@@ -23,10 +23,12 @@ import React, {
   useEffect,
   useCallback,
   useRef,
+  useMemo,
   ReactNode,
 } from 'react'
 import { ModuleConfig, Session, UserRole } from '@/types'
 import { apiLogin, apiRefresh, apiLogout, AuthApiError } from '@/api/auth'
+import { makePermissions, Permissions } from '@/lib/permissions'
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -55,6 +57,21 @@ interface SessionMeta {
   accessiblePools: string[]
 }
 
+// ── Stable current-user object ────────────────────────────────────────────────
+
+/** Flat projection of the logged-in user — the same data as `session` but
+ *  as a plain, stable object (no token fields). Safe to pass as props or
+ *  spread across modules without re-rendering on token refresh. */
+export interface CurrentUser {
+  userId:          string
+  name:            string
+  email:           string
+  tenantId:        string
+  role:            UserRole        // highest-privilege role
+  roles:           string[]
+  accessiblePools: string[]       // [] = all pools
+}
+
 // ── Context types ─────────────────────────────────────────────────────────────
 
 interface AuthContextType {
@@ -65,6 +82,14 @@ interface AuthContextType {
   logout:          () => Promise<void>
   /** Returns a valid access token, refreshing if needed. Used by API clients. */
   getAccessToken:  () => Promise<string | null>
+
+  // ── Convenience derivations — stable across token refreshes ──────────────
+  /** Tenant ID from JWT. Falls back to VITE_TENANT_ID env var when not authenticated. */
+  tenantId:        string
+  /** ABAC permission checker built from the JWT module_config. Never null — graceful for unauthenticated state. */
+  perms:           Permissions
+  /** Flat current-user object without token fields. Null when not authenticated. */
+  currentUser:     CurrentUser | null
 }
 
 export const AuthContext = createContext<AuthContextType | undefined>(undefined)
@@ -242,6 +267,35 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     return renewed?.accessToken ?? null
   }, [session, buildSession, persistSession, scheduleRefresh, clearStorage])
 
+  // ── Derived stable values — recomputed only when session identity changes ───
+
+  /** tenantId from JWT; falls back to env var so non-authenticated code still works */
+  const tenantId = session?.tenantId ?? (import.meta.env.VITE_TENANT_ID as string | undefined) ?? ''
+
+  /** ABAC permission checker — recomputed only when moduleConfig object changes */
+  const perms = useMemo(
+    () => makePermissions(session?.moduleConfig),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [session?.moduleConfig]
+  )
+
+  /** Flat current-user object — stable across token refreshes because it omits token fields */
+  const currentUser = useMemo<CurrentUser | null>(() => {
+    if (!session) return null
+    return {
+      userId:          session.userId,
+      name:            session.name,
+      email:           session.email,
+      tenantId:        session.tenantId,
+      role:            session.role,
+      roles:           session.roles,
+      accessiblePools: session.accessiblePools,
+    }
+  }, [
+    session?.userId, session?.name, session?.email, session?.tenantId,
+    session?.role, session?.roles, session?.accessiblePools,
+  ])
+
   // ── Context value ────────────────────────────────────────────────────────────
 
   return (
@@ -252,6 +306,9 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       login,
       logout,
       getAccessToken,
+      tenantId,
+      perms,
+      currentUser,
     }}>
       {children}
     </AuthContext.Provider>

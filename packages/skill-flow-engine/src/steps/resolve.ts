@@ -115,6 +115,7 @@ export async function executeResolve(
           step.crm_lookup.context_tags.outputs,
           rawResult as Record<string, unknown>,
           `mcp_call:${step.crm_lookup.mcp_server}:${step.crm_lookup.tool}`,
+          ctx.segmentId,
         )
       }
 

@@ -18,7 +18,6 @@ import EmptyState from '@/components/ui/EmptyState'
 // ── Constants ──────────────────────────────────────────────────────────────────
 
 const ORG_ID  = import.meta.env.VITE_CALENDAR_ORG_ID ?? 'org-default'
-const TENANT  = import.meta.env.VITE_TENANT_ID       ?? 'tenant_demo'
 
 const DAY_LABELS: Record<string, string> = {
   monday:    'Seg',
@@ -117,34 +116,36 @@ async function apiFetch(path: string, opts?: RequestInit) {
   return res.json()
 }
 
-const calApi = {
-  // Holiday sets
-  listHolidaySets: () =>
-    apiFetch(`/v1/holiday-sets?organization_id=${ORG_ID}&tenant_id=${TENANT}`),
-  createHolidaySet: (body: object) =>
-    apiFetch('/v1/holiday-sets', { method: 'POST', body: JSON.stringify(body) }),
-  updateHolidaySet: (id: string, body: object) =>
-    apiFetch(`/v1/holiday-sets/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
-  deleteHolidaySet: (id: string) =>
-    apiFetch(`/v1/holiday-sets/${id}`, { method: 'DELETE' }),
+function makeCalApi(tenantId: string) {
+  return {
+    // Holiday sets
+    listHolidaySets: () =>
+      apiFetch(`/v1/holiday-sets?organization_id=${ORG_ID}&tenant_id=${tenantId}`),
+    createHolidaySet: (body: object) =>
+      apiFetch('/v1/holiday-sets', { method: 'POST', body: JSON.stringify(body) }),
+    updateHolidaySet: (id: string, body: object) =>
+      apiFetch(`/v1/holiday-sets/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
+    deleteHolidaySet: (id: string) =>
+      apiFetch(`/v1/holiday-sets/${id}`, { method: 'DELETE' }),
 
-  // Calendars
-  listCalendars: () =>
-    apiFetch(`/v1/calendars?organization_id=${ORG_ID}&tenant_id=${TENANT}`),
-  createCalendar: (body: object) =>
-    apiFetch('/v1/calendars', { method: 'POST', body: JSON.stringify(body) }),
-  updateCalendar: (id: string, body: object) =>
-    apiFetch(`/v1/calendars/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
-  deleteCalendar: (id: string) =>
-    apiFetch(`/v1/calendars/${id}`, { method: 'DELETE' }),
+    // Calendars
+    listCalendars: () =>
+      apiFetch(`/v1/calendars?organization_id=${ORG_ID}&tenant_id=${tenantId}`),
+    createCalendar: (body: object) =>
+      apiFetch('/v1/calendars', { method: 'POST', body: JSON.stringify(body) }),
+    updateCalendar: (id: string, body: object) =>
+      apiFetch(`/v1/calendars/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
+    deleteCalendar: (id: string) =>
+      apiFetch(`/v1/calendars/${id}`, { method: 'DELETE' }),
 
-  // Associations
-  listAssociations: (entityType: string, entityId: string) =>
-    apiFetch(`/v1/associations?tenant_id=${TENANT}&entity_type=${entityType}&entity_id=${entityId}`),
-  createAssociation: (body: object) =>
-    apiFetch('/v1/associations', { method: 'POST', body: JSON.stringify(body) }),
-  deleteAssociation: (id: string) =>
-    apiFetch(`/v1/associations/${id}`, { method: 'DELETE' }),
+    // Associations
+    listAssociations: (entityType: string, entityId: string) =>
+      apiFetch(`/v1/associations?tenant_id=${tenantId}&entity_type=${entityType}&entity_id=${entityId}`),
+    createAssociation: (body: object) =>
+      apiFetch('/v1/associations', { method: 'POST', body: JSON.stringify(body) }),
+    deleteAssociation: (id: string) =>
+      apiFetch(`/v1/associations/${id}`, { method: 'DELETE' }),
+  }
 }
 
 // ── Shared components ─────────────────────────────────────────────────────────
@@ -339,6 +340,8 @@ function HolidaysEditor({ holidays, onChange }: HolidaysEditorProps) {
 interface CalendarsTabProps { holidaySets: HolidaySet[] }
 
 function CalendarsTab({ holidaySets }: CalendarsTabProps) {
+  const { tenantId } = useAuth()
+  const calApi = makeCalApi(tenantId)
   const [calendars, setCalendars] = useState<CalendarObj[]>([])
   const [loading,   setLoading]   = useState(true)
   const [error,     setError]     = useState('')
@@ -388,7 +391,7 @@ function CalendarsTab({ holidaySets }: CalendarsTabProps) {
     try {
       const body = {
         organization_id: ORG_ID,
-        tenant_id:       TENANT,
+        tenant_id:       tenantId,
         name:            fName,
         description:     fDesc,
         timezone:        fTz,
@@ -582,6 +585,8 @@ function CalendarsTab({ holidaySets }: CalendarsTabProps) {
 interface HolidaysTabProps { onSetsChange: (sets: HolidaySet[]) => void }
 
 function HolidaysTab({ onSetsChange }: HolidaysTabProps) {
+  const { tenantId } = useAuth()
+  const calApi = makeCalApi(tenantId)
   const [sets,      setSets]      = useState<HolidaySet[]>([])
   const [loading,   setLoading]   = useState(true)
   const [error,     setError]     = useState('')
@@ -633,7 +638,7 @@ function HolidaysTab({ onSetsChange }: HolidaysTabProps) {
     try {
       const body = {
         organization_id: ORG_ID,
-        tenant_id:       TENANT,
+        tenant_id:       tenantId,
         name:            fName,
         description:     fDesc,
         year:            fYear ? parseInt(fYear, 10) : null,
@@ -820,6 +825,8 @@ function HolidaysTab({ onSetsChange }: HolidaysTabProps) {
 interface AssociationsTabProps { calendars: CalendarObj[] }
 
 function AssociationsTab({ calendars }: AssociationsTabProps) {
+  const { tenantId } = useAuth()
+  const calApi = makeCalApi(tenantId)
   const [entityType, setEntityType] = useState<EntityType>('pool')
   const [entityId,   setEntityId]   = useState('')
   const [assocs,     setAssocs]     = useState<Association[]>([])
@@ -853,7 +860,7 @@ function AssociationsTab({ calendars }: AssociationsTabProps) {
     setSaving(true)
     try {
       await calApi.createAssociation({
-        tenant_id:   TENANT,
+        tenant_id:   tenantId,
         entity_type: entityType,
         entity_id:   entityId.trim(),
         calendar_id: fCalId,
@@ -1029,7 +1036,8 @@ function AssociationsTab({ calendars }: AssociationsTabProps) {
 const TABS = ['Calendários', 'Feriados', 'Associações']
 
 export default function CalendarsPage() {
-  const { session } = useAuth()
+  const { session, tenantId } = useAuth()
+  const calApi = makeCalApi(tenantId)
   const [tab, setTab]             = useState('Calendários')
   const [calendars, setCalendars] = useState<CalendarObj[]>([])
   const [holidaySets, setHolidaySets] = useState<HolidaySet[]>([])
@@ -1041,11 +1049,13 @@ export default function CalendarsPage() {
       const data = await calApi.listCalendars()
       setCalendars(data ?? [])
     } catch { /* ignore */ }
-  }, [])
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tenantId])
 
   useEffect(() => {
     handleCalendarsLoad()
     calApi.listHolidaySets().then(d => setHolidaySets(d ?? [])).catch(() => {})
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [handleCalendarsLoad])
 
   if (!session || session.role === 'business') {

@@ -10,8 +10,9 @@ import React, { useState, useMemo } from 'react'
 import type { ContactFilters, VizFormat } from '../types'
 import { usePoolViews } from '@/modules/atendimento/api/hooks'
 import { SessionList }      from '@/modules/atendimento/components/SessionList'
+import { SegmentList }      from '@/modules/atendimento/components/SegmentList'
 import { SessionTranscript } from '@/modules/atendimento/components/SessionTranscript'
-import type { PoolView } from '@/modules/atendimento/types'
+import type { PoolView, ContactSegment } from '@/modules/atendimento/types'
 import { scoreToColor, scoreToAccent, formatMs } from '@/modules/atendimento/utils/sentiment'
 
 interface Props {
@@ -29,7 +30,7 @@ const VIZ_OPTIONS: { id: VizFormat; label: string; icon: string }[] = [
   { id: 'table',   label: 'Tabela',   icon: '📋' },
 ]
 
-type DrillLevel = 'pools' | 'sessions' | 'transcript'
+type DrillLevel = 'pools' | 'sessions' | 'segments' | 'transcript'
 
 // ── Connection pill ────────────────────────────────────────────────────────
 
@@ -257,6 +258,7 @@ export function MonitorTab({ tenantId, filters }: Props) {
   const [drillLevel, setDrillLevel] = useState<DrillLevel>('pools')
   const [selectedPool, setSelectedPool] = useState<string | null>(null)
   const [selectedSession, setSelectedSession] = useState<string | null>(null)
+  const [selectedSegment, setSelectedSegment] = useState<ContactSegment | null>(null)
 
   // Sort: highlighted first, then by pool_id alphabetically
   const sortedPools = useMemo(() => {
@@ -274,11 +276,20 @@ export function MonitorTab({ tenantId, filters }: Props) {
   function handlePoolClick(poolId: string) {
     setSelectedPool(poolId)
     setSelectedSession(null)
+    setSelectedSegment(null)
     setDrillLevel('sessions')
   }
 
+  // Session selected → go to segment list (contacts don't have direct conversations)
   function handleSessionSelect(sid: string) {
     setSelectedSession(sid)
+    setSelectedSegment(null)
+    setDrillLevel('segments')
+  }
+
+  // Segment selected → show transcript for that segment
+  function handleSegmentSelect(segment: ContactSegment) {
+    setSelectedSegment(segment)
     setDrillLevel('transcript')
   }
 
@@ -286,11 +297,18 @@ export function MonitorTab({ tenantId, filters }: Props) {
     setDrillLevel('pools')
     setSelectedPool(null)
     setSelectedSession(null)
+    setSelectedSegment(null)
   }
 
   function goBackToSessions() {
     setDrillLevel('sessions')
     setSelectedSession(null)
+    setSelectedSegment(null)
+  }
+
+  function goBackToSegments() {
+    setDrillLevel('segments')
+    setSelectedSegment(null)
   }
 
   const isDark = vizFormat === 'heatmap'
@@ -332,21 +350,39 @@ export function MonitorTab({ tenantId, filters }: Props) {
 
           {/* Breadcrumb for drill-down */}
           {drillLevel !== 'pools' && (
-            <div className="flex items-center gap-1 text-xs ml-auto" style={{ color: isDark ? '#94a3b8' : '#6b7280' }}>
+            <div className="flex items-center gap-1 text-xs ml-auto flex-wrap" style={{ color: isDark ? '#94a3b8' : '#6b7280' }}>
               <button onClick={goBackToPools} className="hover:underline">Pools</button>
-              <><span className="mx-1">/</span>
-                  {drillLevel === 'sessions'
-                    ? <span className="font-semibold" style={{ color: isDark ? '#e2e8f0' : '#111827' }}>
-                        {selectedPool?.replace(/_/g, ' ')}
+              <span className="mx-0.5">/</span>
+              {drillLevel === 'sessions'
+                ? <span className="font-semibold" style={{ color: isDark ? '#e2e8f0' : '#111827' }}>
+                    {selectedPool?.replace(/_/g, ' ')}
+                  </span>
+                : <button onClick={goBackToSessions} className="hover:underline">
+                    {selectedPool?.replace(/_/g, ' ')}
+                  </button>
+              }
+              {(drillLevel === 'segments' || drillLevel === 'transcript') && selectedSession && (
+                <>
+                  <span className="mx-0.5">/</span>
+                  {drillLevel === 'segments'
+                    ? <span className="font-semibold font-mono text-[11px]" style={{ color: isDark ? '#e2e8f0' : '#111827' }}>
+                        …{selectedSession.slice(-10)}
                       </span>
-                    : <button onClick={goBackToSessions} className="hover:underline">
-                        {selectedPool?.replace(/_/g, ' ')}
+                    : <button onClick={goBackToSegments} className="hover:underline font-mono text-[11px]">
+                        …{selectedSession.slice(-10)}
                       </button>
                   }
                 </>
-              {drillLevel === 'transcript' && selectedSession && (
-                <><span className="mx-1">/</span>
-                  <code className="font-mono text-[11px]">…{selectedSession.slice(-10)}</code>
+              )}
+              {drillLevel === 'transcript' && selectedSegment && (
+                <>
+                  <span className="mx-0.5">/</span>
+                  <span className="font-semibold" style={{ color: isDark ? '#e2e8f0' : '#111827' }}>
+                    {selectedSegment.role}
+                    {selectedSegment.ended_at === null && (
+                      <span className="ml-1 text-green-600">●</span>
+                    )}
+                  </span>
                 </>
               )}
             </div>
@@ -418,12 +454,25 @@ export function MonitorTab({ tenantId, filters }: Props) {
             </div>
           )}
 
+          {drillLevel === 'segments' && selectedSession && (
+            <div style={{ height: '100%' }}>
+              <SegmentList
+                tenantId={tenantId}
+                sessionId={selectedSession}
+                onSelect={handleSegmentSelect}
+                onBack={goBackToSessions}
+              />
+            </div>
+          )}
+
           {drillLevel === 'transcript' && selectedSession && (
             <div style={{ height: '100%', backgroundColor: '#0f172a', borderRadius: 12, overflow: 'hidden' }}>
               <SessionTranscript
                 tenantId={tenantId}
                 sessionId={selectedSession}
-                onBack={goBackToSessions}
+                onBack={goBackToSegments}
+                canJoin={selectedSegment?.ended_at === null}
+                segment={selectedSegment ?? undefined}
               />
             </div>
           )}

@@ -287,6 +287,7 @@ async def activate_native_agent(
     instance_id: str = "",
     conference_id: str = "",
     extra_context: dict | None = None,
+    segment_id: str = "",
 ) -> dict:
     """
     Activate a plughub-native orchestrator agent by calling skill-flow-service.
@@ -337,7 +338,7 @@ async def activate_native_agent(
     if extra_context:
         session_context.update(extra_context)
 
-    payload = {
+    payload: dict = {
         "tenant_id":       tenant_id,
         "session_id":      session_id,
         "customer_id":     customer_id,
@@ -346,6 +347,19 @@ async def activate_native_agent(
         "instance_id":     instance_id,   # stored in execution lock by the engine
         "session_context": session_context,
     }
+    # segment_id for segment-scoped ContextStore writes (scope: segment in YAML).
+    # Allows parallel agents (NPS + wrap-up) to isolate their data per participation.
+    if segment_id:
+        payload["segment_id"] = segment_id
+    # Conference specialists (hook agents) share the same session_id for
+    # message delivery, but each needs its own pipeline_state and execution
+    # lock.  Use the agent's unique segment_id — each participant in the
+    # session has a distinct segment, so two hook agents running in parallel
+    # on the same session never collide.
+    if segment_id:
+        payload["pipeline_session_id"] = f"{session_id}--seg--{segment_id[:8]}"
+    elif conference_id:
+        payload["pipeline_session_id"] = f"{session_id}--conf--{conference_id[:8]}"
 
     url = f"{SKILL_FLOW_URL}/execute"
     try:
@@ -536,6 +550,82 @@ async def activate_human_agent(
     ))
 
 
+# ── Pre-hook ContextStore writes ──────────────────────────────────────────────
+
+async def _write_pre_hook_context(
+    redis_client: aioredis.Redis,
+    tenant_id:    str,
+    session_id:   str,
+    close_origin: str,
+    human_instance_id: str | None = None,
+) -> None:
+    """
+    Escreve campos no ContextStore que os hook agents precisam ANTES de
+    executar.  Chamado imediatamente antes de fire_pool_hooks("on_human_end").
+
+    Campos escritos:
+      session.close_origin              — "agent_closed" ou "client_disconnect"
+      session.customer_participant_id   — lido de session:{id}:customer_participant_id
+                                          (gerado pelo channel-gateway no handshake)
+      session.human_agent_participant_id — instance_id do agente humano que saiu;
+                                           usado pelo wrap-up para visibility array
+    """
+    ctx_key = f"{tenant_id}:ctx:{session_id}"
+    now_iso = datetime.now(timezone.utc).isoformat()
+    try:
+        # 1. close_origin — permite que o agente NPS saiba se o cliente está ativo
+        entry_origin = json.dumps({
+            "value":      close_origin,
+            "confidence": 1.0,
+            "source":     "bridge:pre_hook",
+            "visibility": "agents_only",
+            "updated_at": now_iso,
+        })
+        await redis_client.hset(ctx_key, "session.close_origin", entry_origin)
+
+        # 2. customer_participant_id — o agente NPS usa para montar o array de
+        #    visibility [customer_participant_id] das suas mensagens.
+        cust_pid = await redis_client.get(
+            f"session:{session_id}:customer_participant_id"
+        )
+        if cust_pid:
+            pid_str = cust_pid if isinstance(cust_pid, str) else cust_pid.decode()
+            entry_pid = json.dumps({
+                "value":      pid_str,
+                "confidence": 1.0,
+                "source":     "bridge:pre_hook",
+                "visibility": "agents_only",
+                "updated_at": now_iso,
+            })
+            await redis_client.hset(ctx_key, "session.customer_participant_id", entry_pid)
+
+        # 3. human_agent_participant_id — o agente de wrap-up usa para montar o
+        #    array de visibility [human_instance_id] das suas mensagens, garantindo
+        #    que apenas o agente humano que encerrou veja o wrap-up (e não
+        #    supervisores ou outros participantes da conferência).
+        if human_instance_id:
+            entry_human = json.dumps({
+                "value":      human_instance_id,
+                "confidence": 1.0,
+                "source":     "bridge:pre_hook",
+                "visibility": "agents_only",
+                "updated_at": now_iso,
+            })
+            await redis_client.hset(
+                ctx_key, "session.human_agent_participant_id", entry_human,
+            )
+
+        await redis_client.expire(ctx_key, 14400)
+        logger.info(
+            "pre_hook context written: session=%s close_origin=%s cust_pid=%s human_pid=%s",
+            session_id, close_origin, bool(cust_pid), human_instance_id or "none",
+        )
+    except Exception as exc:
+        logger.warning(
+            "pre_hook context write failed: session=%s — %s (non-fatal)", session_id, exc,
+        )
+
+
 # ── Pool lifecycle hooks ──────────────────────────────────────────────────────
 
 async def fire_pool_hooks(
@@ -630,6 +720,7 @@ async def fire_pool_hooks(
         # ConversationInboundEvent — routing engine picks up on pool_id + conference_id.
         # pool_id routes to the specialist pool; conference_id marks it as a specialist
         # invite so process_routed skips the dedup guard and activates as conference.
+        _now_iso = datetime.now(timezone.utc).isoformat()
         event = {
             "event":         "conversations.inbound",
             "type":          "conversations.inbound",
@@ -640,10 +731,13 @@ async def fire_pool_hooks(
             "channel":       channel,
             "pool_id":       target_pool,
             "conference_id": conference_id,
+            # Required by ConversationInboundEvent (Pydantic model in routing-engine).
+            # Without this field, the routing engine rejects the event as "unrecognised".
+            "started_at":    _now_iso,
             # Metadata for observability — not processed by routing engine.
             "hook_type":     hook_type,
             "origin_pool":   pool_id,
-            "timestamp":     datetime.now(timezone.utc).isoformat(),
+            "timestamp":     _now_iso,
         }
 
         try:
@@ -681,7 +775,7 @@ async def fire_pool_hooks(
 
 # ── Hook timeout guard — safety net when hook agents never start/complete ────
 
-_HOOK_TIMEOUT_S = 90  # seconds to wait before forcing contact close
+_HOOK_TIMEOUT_S = 180  # seconds to wait before forcing contact close
 
 async def _hook_timeout_guard(
     redis_client: aioredis.Redis,
@@ -790,6 +884,28 @@ async def _trigger_contact_close(
     except Exception as exc:
         logger.warning(
             "_trigger_contact_close: could not read session meta: session=%s — %s",
+            session_id, exc,
+        )
+
+    # 0. Notify the agent WebSocket that the session is now truly closed.
+    #    This is deferred from agent_done (which publishes "session.agent_done")
+    #    so hook agents (wrapup, NPS) can interact with the human agent first.
+    try:
+        await redis_client.publish(
+            f"agent:events:{session_id}",
+            json.dumps({
+                "type":       "session.closed",
+                "session_id": session_id,
+                "reason":     "agent_done",
+            }),
+        )
+        logger.info(
+            "_trigger_contact_close: published session.closed to agent:events: session=%s",
+            session_id,
+        )
+    except Exception as exc:
+        logger.warning(
+            "_trigger_contact_close: could not publish agent session.closed: session=%s — %s",
             session_id, exc,
         )
 
@@ -1419,6 +1535,7 @@ async def process_routed(
             skills=skills,
             instance_id=native_instance_id,
             conference_id=conference_id,
+            segment_id=_part_seg_id,
         )
 
         # ── Conference: notify the human agent that the AI has completed ──────
@@ -1511,6 +1628,23 @@ async def process_routed(
             duration_ms=_part_duration_ms,
             outcome=_part_outcome,
         ))
+
+        # ── Primary AI agent complete: trigger contact close ──────────────────
+        # Conference / hook agents are handled by the Fase B/C block below
+        # (counter tracked via hook_conf keys).  Primary (non-conference) AI
+        # agents own the session lifecycle directly, so we must trigger the
+        # close here.  The idempotency guard (close_fired NX key) inside
+        # _trigger_contact_close prevents double-close when the channel-gateway
+        # already fired a close due to customer disconnect or session timeout.
+        #
+        # EXCEÇÃO: outcomes de escalação/transferência indicam que a sessão
+        # continua com outro agente — NÃO fechar o WebSocket do cliente.
+        # O conversation_escalate (BPM tool) já publicou conversations.inbound
+        # para alocar o próximo agente; fechar aqui causaria race condition.
+        _escalation_outcomes = ("escalated_human", "escalated_ai", "transferred")
+        _ai_outcome = (agent_result or {}).get("outcome", "")
+        if not conference_id and _ai_outcome not in _escalation_outcomes:
+            asyncio.create_task(_trigger_contact_close(redis_client, session_id))
 
         # ── Fase B/C: hook completion detection ───────────────────────────────
         # hook_conf key stores "{hook_type}:{target_pool}" (e.g. "on_human_end:finalizacao_ia").
@@ -1914,7 +2048,11 @@ async def process_contact_event(
             #
             # 1. LPUSH session:closed:{session_id}   — desbloqueia BLPOP legado
             #    (Skill Flow menu step, wait_for_message de versões anteriores).
-            #    TTL 10s — consumo imediato esperado.
+            #    TTL 300s — must survive long enough for hook-triggered flows
+            #    (e.g. on_human_end finalizacao) whose menu steps only start
+            #    5-15s later after Kafka routing.  BLPOP consumes the value
+            #    immediately, so the list becomes empty; the TTL is just a
+            #    guard against orphaned keys.
             #
             # 2. XADD session:{session_id}:stream  — desbloqueia XREADGROUP de
             #    agentes external-mcp usando wait_for_message com Streams.
@@ -1923,8 +2061,20 @@ async def process_contact_event(
             #    mensagens do cliente já enfileiradas.
             #    NOTA: usa :stream (não :messages) — :messages é uma List do canal-gateway.
             try:
-                await redis_client.lpush(f"session:closed:{session_id}", reason)
-                await redis_client.expire(f"session:closed:{session_id}", 10)
+                # Quando múltiplos agentes estão bloqueados em menu steps simultâneos
+                # (ex: NPS + wrap-up), cada BLPOP consome UMA entrada do list.
+                # LPUSH N cópias do sinal para garantir que todos os BLPOPs desbloqueiem.
+                n_waiting = 1
+                try:
+                    _wh = await redis_client.hgetall(f"menu:waiting:{session_id}")
+                    if _wh and len(_wh) > 1:
+                        n_waiting = len(_wh)
+                except Exception:
+                    pass
+                closed_key = f"session:closed:{session_id}"
+                for _ in range(n_waiting):
+                    await redis_client.lpush(closed_key, reason)
+                await redis_client.expire(closed_key, 300)
             except Exception as exc:
                 logger.warning("Could not push session:closed: session=%s — %s", session_id, exc)
 
@@ -1966,6 +2116,7 @@ async def process_contact_event(
                 )
 
             # ── Notify all active human agents that the session ended ─────────
+            _hooks_pending = False  # set True when on_human_end hooks are dispatched
             is_human = await redis_client.get(f"session:{session_id}:human_agent")
             if is_human:
                 closed_event = {
@@ -1979,23 +2130,172 @@ async def process_contact_event(
                 # ── Restore all instances still tracked for this session ──────
                 await _restore_all_instances(redis_client, session_id)
 
+                # ── Publish participant_left for all tracked human agents ─────
+                _human_members = await redis_client.smembers(
+                    f"session:{session_id}:human_agents"
+                )
+                _last_human_instance_id: str | None = None
+                for _hm_inst in (_human_members or []):
+                    _hm_inst_str = (
+                        _hm_inst if isinstance(_hm_inst, str) else _hm_inst.decode()
+                    )
+                    _last_human_instance_id = _hm_inst_str
+                    _hm_joined_iso = ""
+                    try:
+                        _raw_hm_jat = await redis_client.getdel(
+                            f"session:{session_id}:participant_joined_at:{_hm_inst_str}"
+                        )
+                        _hm_joined_iso = (
+                            _raw_hm_jat if isinstance(_raw_hm_jat, str)
+                            else (_raw_hm_jat.decode() if _raw_hm_jat else "")
+                        )
+                    except Exception:
+                        pass
+                    _hm_dur: int | None = None
+                    if _hm_joined_iso:
+                        try:
+                            _hm_jdt = datetime.fromisoformat(_hm_joined_iso)
+                            _hm_dur = int(
+                                (datetime.now(timezone.utc) - _hm_jdt).total_seconds() * 1000
+                            )
+                        except Exception:
+                            pass
+                    _hm_seg_id = ""
+                    try:
+                        _raw_hm_seg = await redis_client.getdel(
+                            f"session:{session_id}:segment:{_hm_inst_str}"
+                        )
+                        if _raw_hm_seg:
+                            _hm_seg_id = (
+                                _raw_hm_seg if isinstance(_raw_hm_seg, str)
+                                else _raw_hm_seg.decode()
+                            )
+                    except Exception:
+                        pass
+                    _hm_pool = _hm_at = _hm_ten = ""
+                    try:
+                        _hm_raw_meta = await redis_client.get(f"session:{session_id}:meta")
+                        if _hm_raw_meta:
+                            _hm_m = json.loads(_hm_raw_meta)
+                            _hm_pool = _hm_m.get("pool_id", "")
+                            _hm_at   = _hm_m.get("agent_type_id", "")
+                            _hm_ten  = _hm_m.get("tenant_id", "") or _hm_m.get("tenant", "")
+                    except Exception:
+                        pass
+                    asyncio.create_task(_publish_participant_event(
+                        session_id=session_id,
+                        tenant_id=_hm_ten,
+                        participant_id=_hm_inst_str,
+                        pool_id=_hm_pool,
+                        agent_type_id=_hm_at,
+                        event_type="participant_left",
+                        agent_type="human",
+                        role="primary",
+                        segment_id=_hm_seg_id,
+                        joined_at=_hm_joined_iso,
+                        duration_ms=_hm_dur,
+                    ))
+
                 # ── Clean up all human-agent tracking for this session ────────
                 await redis_client.delete(f"session:{session_id}:human_agent")
                 await redis_client.delete(f"session:{session_id}:human_agents")
 
-            # ── Clear conversation data so next agent doesn't see stale data ───
-            # session:{id}:messages — List (channel-gateway conversation history)
-            # session:{id}:stream   — Redis Stream (external-mcp wait_for_message)
-            try:
-                await redis_client.delete(
-                    f"session:{session_id}:messages",
-                    f"session:{session_id}:stream",
+                # ── Check for on_human_end hooks (wrap-up agent) ─────────────
+                # Even when the *client* disconnected, we still fire on_human_end
+                # hooks so that wrap-up agents (NPS, encerramento) can execute.
+                # The customer WS is already closed, so the wrap-up agent operates
+                # in "post-session" mode — its messages go to the stream but the
+                # client won't see them.  The hooks guarantee that the session is
+                # properly closed on the platform side.
+                _cs_pool_id    = ""
+                _cs_tenant_id  = ""
+                _cs_customer_id = ""
+                try:
+                    _cs_raw_meta = await redis_client.get(f"session:{session_id}:meta")
+                    if _cs_raw_meta:
+                        _cs_meta        = json.loads(_cs_raw_meta)
+                        _cs_pool_id     = _cs_meta.get("pool_id", "")
+                        _cs_tenant_id   = (
+                            _cs_meta.get("tenant_id", "")
+                            or _cs_meta.get("tenant", "")
+                        )
+                        _cs_customer_id = (
+                            _cs_meta.get("customer_id", session_id) or session_id
+                        )
+                except Exception as _exc:
+                    logger.warning(
+                        "customer_disconnect: could not read session meta for hooks: "
+                        "session=%s — %s", session_id, _exc,
+                    )
+
+                _cs_hooks_fired = False
+                if http and _cs_pool_id and _cs_tenant_id:
+                    _cs_pool_cfg = await get_pool_config(
+                        http, _cs_tenant_id, _cs_pool_id
+                    )
+                    _cs_on_human_end = (
+                        ((_cs_pool_cfg or {}).get("hooks") or {})
+                        .get("on_human_end", [])
+                    )
+                    if _cs_on_human_end:
+                        _cs_hooks_fired = True
+                        _hooks_pending = True
+                        # Escreve close_origin + customer/human participant_id no
+                        # ContextStore ANTES de disparar os hooks.
+                        await _write_pre_hook_context(
+                            redis_client, _cs_tenant_id, session_id,
+                            close_origin="client_disconnect",
+                            human_instance_id=_last_human_instance_id,
+                        )
+                        asyncio.create_task(fire_pool_hooks(
+                            http=http, redis_client=redis_client,
+                            session_id=session_id,
+                            pool_id=_cs_pool_id,
+                            tenant_id=_cs_tenant_id,
+                            customer_id=_cs_customer_id,
+                            hook_type="on_human_end",
+                        ))
+                        asyncio.create_task(_hook_timeout_guard(
+                            redis_client, session_id, "on_human_end",
+                        ))
+                        logger.info(
+                            "on_human_end hooks dispatched (client disconnect): "
+                            "session=%s pool=%s count=%d (timeout guard: %ds)",
+                            session_id, _cs_pool_id, len(_cs_on_human_end),
+                            _HOOK_TIMEOUT_S,
+                        )
+
+                if not _cs_hooks_fired:
+                    # No hooks or meta unavailable — close the contact immediately
+                    asyncio.create_task(
+                        _trigger_contact_close(redis_client, session_id)
+                    )
+                    logger.info(
+                        "No on_human_end hooks — closing contact immediately: session=%s",
+                        session_id,
+                    )
+
+            else:
+                # No human agent was active — close the contact immediately
+                asyncio.create_task(
+                    _trigger_contact_close(redis_client, session_id)
                 )
-                logger.debug("Message data cleared: session=%s", session_id)
-            except Exception as exc:
-                logger.warning(
-                    "Could not delete message data: session=%s — %s", session_id, exc
-                )
+
+            # ── Clear conversation data (only when no hooks are pending) ──────
+            # When on_human_end hooks were dispatched, the stream must survive
+            # until the wrap-up agent completes.  Stream/messages are cleaned
+            # naturally by TTL (4h) or by the re-entry after hooks complete.
+            if not _hooks_pending:
+                try:
+                    await redis_client.delete(
+                        f"session:{session_id}:messages",
+                        f"session:{session_id}:stream",
+                    )
+                    logger.debug("Message data cleared: session=%s", session_id)
+                except Exception as exc:
+                    logger.warning(
+                        "Could not delete message data: session=%s — %s", session_id, exc
+                    )
 
             # ── Restore all AI agent instances for this session ───────────────
             # AI agents are tracked in session:{session_id}:ai_agents SET,
@@ -2162,30 +2462,18 @@ async def process_contact_event(
                             .get("on_human_end", [])
                         )
                         if _on_human_end:
-                            # Notify the client immediately that the human agent has ended.
-                            # This runs BEFORE on_human_end hooks (e.g. agente_finalizacao_v1)
-                            # so the customer sees the message without waiting for wrap-up.
-                            try:
-                                _encerrado_stream = f"session:{session_id}:stream"
-                                await redis_client.xadd(
-                                    _encerrado_stream,
-                                    {
-                                        "type":        "message",
-                                        "author_role": "system",
-                                        "visibility":  "all",
-                                        "content":     "O atendimento humano foi encerrado.",
-                                    },
-                                )
-                                logger.info(
-                                    "XADD 'atendimento encerrado' to stream: session=%s",
-                                    session_id,
-                                )
-                            except Exception as _xadd_exc:
-                                logger.warning(
-                                    "Could not XADD encerrado message: session=%s — %s",
-                                    session_id, _xadd_exc,
-                                )
+                            # NÃO envia "atendimento encerrado" ao cliente aqui —
+                            # os hook agents (NPS, wrap-up) ainda vão interagir.
+                            # A mensagem de encerramento é enviada somente quando
+                            # _trigger_contact_close() executa (após todos os hooks).
 
+                            # Escreve close_origin + customer/human participant_id no
+                            # ContextStore ANTES de disparar os hooks.
+                            await _write_pre_hook_context(
+                                redis_client, _tenant_id_hooks, session_id,
+                                close_origin="agent_closed",
+                                human_instance_id=instance_id,
+                            )
                             # Pool has on_human_end hooks — dispatch them.
                             # _trigger_contact_close fires when all agents complete
                             # (hook_pending counter reaches 0 in process_routed).
@@ -2553,7 +2841,23 @@ async def process_inbound(
         #   3. External-MCP  → Redis Streams  session:{session_id}:stream   (XADD, fan-out)
 
         is_human     = await redis_client.get(f"session:{session_id}:human_agent")
-        menu_waiting = await redis_client.get(f"menu:waiting:{session_id}")
+
+        # ── menu:waiting é agora um HASH com metadados por agente ────────────
+        # Cada campo é um instanceId, valor é JSON({visibility, masked}).
+        # Permite roteamento preciso: customer → agente com visibility que
+        # inclui o customer; agent → agente com visibility agents_only.
+        waiting_hash: dict[str, str] = {}
+        try:
+            raw_hash = await redis_client.hgetall(f"menu:waiting:{session_id}")
+            if raw_hash:
+                # redis-py pode retornar bytes ou str dependendo de decode_responses
+                waiting_hash = {
+                    (k.decode() if isinstance(k, bytes) else k): (v.decode() if isinstance(v, bytes) else v)
+                    for k, v in raw_hash.items()
+                }
+        except Exception:
+            pass  # treat as no waiting agents
+        menu_waiting = bool(waiting_hash)
 
         # Detect external-mcp agents: stream exists and has at least one consumer group.
         # XINFO GROUPS returns [] when the stream doesn't exist or has no groups.
@@ -2573,7 +2877,16 @@ async def process_inbound(
         if not menu_waiting and not is_human and not has_stream_consumers:
             for _ in range(15):   # 15 × 200ms = 3s window
                 await asyncio.sleep(0.2)
-                menu_waiting         = await redis_client.get(f"menu:waiting:{session_id}")
+                try:
+                    raw_hash = await redis_client.hgetall(f"menu:waiting:{session_id}")
+                    if raw_hash:
+                        waiting_hash = {
+                            (k.decode() if isinstance(k, bytes) else k): (v.decode() if isinstance(v, bytes) else v)
+                            for k, v in raw_hash.items()
+                        }
+                        menu_waiting = True
+                except Exception:
+                    pass
                 is_human             = await redis_client.get(f"session:{session_id}:human_agent")
                 try:
                     groups               = await redis_client.xinfo_groups(stream_key)
@@ -2588,11 +2901,31 @@ async def process_inbound(
                     break
 
         logger.info(
-            "Inbound routing: session=%s menu_waiting=%s is_human=%s stream_consumers=%s",
-            session_id, bool(menu_waiting), bool(is_human), has_stream_consumers,
+            "Inbound routing: session=%s menu_waiting=%s(%d) is_human=%s stream_consumers=%s",
+            session_id, bool(menu_waiting), len(waiting_hash), bool(is_human), has_stream_consumers,
         )
 
         delivered = False
+
+        # ── Determinar mascaramento a partir do hash (com fallback legado) ──
+        any_masked = False
+        if waiting_hash:
+            for _meta_json in waiting_hash.values():
+                try:
+                    _meta = json.loads(_meta_json)
+                    if _meta.get("masked"):
+                        any_masked = True
+                        break
+                except Exception:
+                    pass
+        if not any_masked:
+            # Fallback legado: key separada menu:masked:{session_id}
+            try:
+                legacy_masked = await redis_client.get(f"menu:masked:{session_id}")
+                if legacy_masked:
+                    any_masked = True
+            except Exception:
+                pass
 
         if is_human:
             # ── Human agent: forward to Agent Assist UI via Redis pub/sub ────
@@ -2600,8 +2933,7 @@ async def process_inbound(
             # value and show a placeholder instead. This prevents PIN / passwords
             # from ever reaching the agent's chat UI, which is the invariant
             # stated in docs/guias/masked-input.md (maskedScope is memory-only).
-            menu_masked = await redis_client.get(f"menu:masked:{session_id}")
-            if menu_masked:
+            if any_masked:
                 display_text = "[entrada mascarada — conteúdo não disponível]"
                 visibility   = "agents_only"
                 logger.info(
@@ -2622,16 +2954,68 @@ async def process_inbound(
             }
             await redis_client.publish(f"agent:events:{session_id}", json.dumps(event))
             logger.info("Forwarded %s to human agent: session=%s masked=%s",
-                        msg_type, session_id, bool(menu_masked))
+                        msg_type, session_id, bool(any_masked))
+
+            # Write to canonical stream so supervision SSE and analytics can see the message
+            try:
+                stream_key_human = f"session:{session_id}:stream"
+                await redis_client.xadd(
+                    stream_key_human,
+                    {
+                        "event_id":    event.get("message_id", str(uuid.uuid4())),
+                        "type":        "message",
+                        "timestamp":   event.get("timestamp", datetime.now(timezone.utc).isoformat()),
+                        "author_id":   author.get("id") or contact_id or "customer",
+                        "author_role": "customer",
+                        "visibility":  visibility,
+                        "content":     json.dumps({"text": display_text}),
+                    },
+                )
+                await redis_client.expire(stream_key_human, 14400)  # 4h TTL
+            except Exception as _xadd_exc:
+                logger.warning(
+                    "Could not XADD customer message to stream: session=%s — %s",
+                    session_id, _xadd_exc,
+                )
+
             delivered = True
 
-        if menu_waiting:
-            # ── Native AI agent in Skill Flow menu step: unblock BLPOP ───────
-            await redis_client.lpush(f"menu:result:{session_id}", reply_text)
-            logger.info(
-                "Pushed menu reply to native AI session: session=%s text=%r",
-                session_id, reply_text[:80],
-            )
+        if waiting_hash:
+            # ── Native AI agents in Skill Flow menu step: route by visibility ──
+            # Customer messages go to agents whose visibility includes the customer
+            # (visibility "all" or array containing customer's participant_id).
+            # Each agent has its own isolated BLPOP key: menu:result:{session_id}:{instanceId}
+            customer_pid = contact_id or "customer"
+            for agent_key, meta_json in waiting_hash.items():
+                try:
+                    meta = json.loads(meta_json)
+                except Exception:
+                    meta = {"visibility": "all"}
+                vis = meta.get("visibility", "all")
+
+                # Determine if this agent is waiting for customer input:
+                # - "all": always receives customer messages
+                # - array: receives if customer_pid is in the array
+                # - "agents_only": does NOT receive customer messages
+                is_customer_facing = False
+                if vis == "all":
+                    is_customer_facing = True
+                elif isinstance(vis, list):
+                    # Array of participant IDs — customer is in the audience
+                    is_customer_facing = True  # customer sent a message, and they can see it
+                # "agents_only" → skip — customer messages are not for this agent
+
+                if is_customer_facing:
+                    result_key = (
+                        f"menu:result:{session_id}:{agent_key}"
+                        if agent_key != "_default_"
+                        else f"menu:result:{session_id}"
+                    )
+                    await redis_client.lpush(result_key, reply_text)
+                    logger.info(
+                        "Pushed menu reply to AI agent: session=%s agent=%s key=%s text=%r",
+                        session_id, agent_key, result_key, reply_text[:80],
+                    )
             delivered = True
 
         if has_stream_consumers:

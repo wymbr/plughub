@@ -52,6 +52,7 @@ export async function executeReason(
             step.context_tags.outputs,
             validated.data,
             `ai_inferred:${step.id}`,
+            ctx.segmentId,
           )
         }
 

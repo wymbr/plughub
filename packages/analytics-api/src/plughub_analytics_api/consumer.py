@@ -11,19 +11,29 @@ Topics → tables mapping:
   conversations.routed       → sessions (pool update) + agent_events (routing)
   conversations.queued       → sessions (pool update) + queue_events
   conversations.events       → sessions + messages (contact_open/closed/message_sent)
-  agent.lifecycle            → agent_events (agent_done only)
+  agent.lifecycle            → agent_events (agent_done)
+                             + agent_pause_intervals (agent_pause → open; agent_ready → close)
   usage.events               → usage_events
-  sentiment.updated          → sentiment_events
+  sentiment.updated          → sentiment_events  (segment_id enriched via SegmentEnricher)
   queue.position_updated     → queue_events
   workflow.events            → workflow_events
   collect.events             → collect_events
   conversations.participants → participation_intervals (participant_joined / left)
   evaluation.events          → evaluation_results + evaluation_events (Arc 6)
+  mcp.audit                  → session_timeline   (segment_id enriched via SegmentEnricher)
 
 Batch strategy:
   Uses consumer.getmany(batch_size, timeout_ms) — processes one partition batch
   at a time, commits after each batch succeeds.  Malformed messages are logged
   and skipped (do NOT hold back the consumer group).
+
+Segment enrichment (Arc 5 post-hoc):
+  For topics that lack segment_id (sentiment.updated, mcp.audit) the consumer
+  resolves segment_id before calling the parser using SegmentEnricher:
+    • sentiment.updated → lookup_primary(session_id)     (primary agent in session)
+    • mcp.audit        → lookup_by_instance(instance_id) (specific MCP caller)
+  The lookup chain is: in-memory cache → Redis → ClickHouse FINAL query.
+  If all three fail segment_id is written as None / "" — no event is dropped.
 """
 from __future__ import annotations
 
@@ -49,7 +59,9 @@ from .models import (
     parse_collect_event,
     parse_participant_event,
     parse_evaluation_event,
+    parse_mcp_audit_event,
 )
+from .segment_enricher import SegmentEnricher
 
 logger = logging.getLogger("plughub.analytics.consumer")
 
@@ -66,9 +78,12 @@ _TOPICS = [
     "collect.events",
     "conversations.participants",
     "evaluation.events",
+    "mcp.audit",
 ]
 
-# Maps topic → parser function
+# Maps topic → parser function.
+# For topics that need segment enrichment the consumer handles this before
+# calling the parser; the dict stays plain-parser references.
 _PARSERS = {
     "conversations.inbound":    parse_inbound,
     "conversations.routed":     parse_routed,
@@ -82,15 +97,30 @@ _PARSERS = {
     "collect.events":           parse_collect_event,
     "conversations.participants": parse_participant_event,
     "evaluation.events":          parse_evaluation_event,
+    "mcp.audit":                  parse_mcp_audit_event,
 }
 
+# Topics that require segment_id enrichment before being passed to the parser.
+_ENRICHED_TOPICS = frozenset({"sentiment.updated", "mcp.audit"})
 
-async def run_consumer(store: AnalyticsStore) -> None:
+# Redis key TTL for open pause intervals (24 h — covers overnight shifts)
+_PAUSE_KEY_TTL = 86_400
+
+
+async def run_consumer(store: AnalyticsStore, redis: object | None = None) -> None:
     """
     Starts the Kafka consumer and loops until SIGTERM/SIGINT.
     Called from main.py lifespan background task.
+
+    Args:
+        store: AnalyticsStore wrapping the ClickHouse connection.
+        redis: Optional aioredis client.  When provided, SegmentEnricher uses
+               it for fast Redis lookups before falling back to ClickHouse.
+               When None, enrichment falls back to ClickHouse only.
     """
     settings = get_settings()
+
+    enricher = SegmentEnricher(redis, store) if redis is not None else None
 
     consumer = AIOKafkaConsumer(
         *_TOPICS,
@@ -129,7 +159,7 @@ async def run_consumer(store: AnalyticsStore) -> None:
             for tp, messages in batch.items():
                 topic = tp.topic
                 for msg in messages:
-                    await _process_message(store, topic, msg)
+                    await _process_message(store, topic, msg, enricher, redis)
 
             # Commit after every batch succeeds
             await consumer.commit()
@@ -139,11 +169,13 @@ async def run_consumer(store: AnalyticsStore) -> None:
 
 
 async def _process_message(
-    store: AnalyticsStore,
-    topic: str,
-    msg:   object,
+    store:    AnalyticsStore,
+    topic:    str,
+    msg:      object,
+    enricher: SegmentEnricher | None = None,
+    redis:    object | None = None,
 ) -> None:
-    """Deserialises one Kafka message, parses it, and writes to ClickHouse."""
+    """Deserialises one Kafka message, enriches if needed, parses, and writes to ClickHouse."""
     offset = getattr(msg, "offset", "?")
     try:
         raw     = json.loads(msg.value.decode("utf-8"))  # type: ignore[union-attr]
@@ -152,12 +184,37 @@ async def _process_message(
             logger.debug("No parser for topic=%s offset=%s — skipped", topic, offset)
             return
 
-        result = parser(raw)
+        # ── Arc 5: post-hoc segment_id enrichment ────────────────────────────
+        if topic in _ENRICHED_TOPICS and enricher is not None:
+            result = await _parse_with_enrichment(raw, topic, parser, enricher)
+        else:
+            result = parser(raw)
+
         if result is None:
             return  # skipped by parser (unknown event_type or missing fields)
 
         # Normalise to a list so routed/queued can return multiple rows
         rows = result if isinstance(result, list) else [result]
+
+        # ── Arc 8: pause interval Redis state machine ─────────────────────────
+        # agent.lifecycle may return action=open (store in Redis) or
+        # action=close_check (look up Redis, compute duration, emit close row).
+        if topic == "agent.lifecycle" and redis is not None:
+            resolved: list[dict] = []
+            for row in rows:
+                action = row.get("action")
+                if action == "open":
+                    row = await _handle_pause_open(row, redis)
+                    resolved.append(row)
+                elif action == "close_check":
+                    close_row = await _handle_pause_close(row, redis)
+                    if close_row is not None:
+                        resolved.append(close_row)
+                    # None means no open pause → normal agent_ready, skip
+                else:
+                    resolved.append(row)
+            rows = resolved
+
         for row in rows:
             await _write_row(store, row, topic, offset)
 
@@ -168,6 +225,144 @@ async def _process_message(
             "Unexpected error processing topic=%s offset=%s: %s",
             topic, offset, exc, exc_info=True,
         )
+
+
+def _pause_redis_key(tenant_id: str, instance_id: str) -> str:
+    """Redis key that stores open pause state for a human agent instance."""
+    return f"{tenant_id}:pause:{instance_id}"
+
+
+async def _handle_pause_close(
+    row:   dict,
+    redis: object,
+) -> dict | None:
+    """
+    Resolve a 'close_check' agent_pause_intervals row.
+
+    Reads the open pause state from Redis.  If found, returns a close row
+    (same interval_id, resumed_at + duration_ms filled).  If not found (no
+    open pause) the row is dropped — this is a normal login/ready transition,
+    not a resume-from-pause.
+
+    Redis key format:
+      {tenant_id}:pause:{instance_id}
+    Value (JSON): { "interval_id": "...", "paused_at": "ISO8601", "reason_id": "...",
+                   "reason_label": "...", "agent_type_id": "...", "pool_id": "...", "note": ... }
+    """
+    import json as _json
+    from datetime import datetime as _dt
+
+    tenant_id   = row.get("tenant_id", "")
+    instance_id = row.get("instance_id", "")
+    resumed_at  = row.get("resumed_at", "")
+
+    key = _pause_redis_key(tenant_id, instance_id)
+    try:
+        raw = await redis.get(key)  # type: ignore[union-attr]
+        if not raw:
+            return None  # no open pause — normal agent_ready, skip
+        state = _json.loads(raw)
+        await redis.delete(key)  # type: ignore[union-attr]
+    except Exception as exc:
+        logger.debug("Pause Redis lookup failed instance=%s: %s", instance_id, exc)
+        return None
+
+    paused_at_str = state.get("paused_at", "")
+    # Compute duration_ms between paused_at and resumed_at
+    duration_ms: int | None = None
+    try:
+        paused_dt  = _dt.fromisoformat(paused_at_str.replace("Z", "+00:00"))
+        resumed_dt = _dt.fromisoformat(resumed_at.replace("Z", "+00:00"))
+        duration_ms = int((resumed_dt - paused_dt).total_seconds() * 1000)
+    except Exception:
+        pass
+
+    return {
+        "table":          "agent_pause_intervals",
+        "action":         "close",
+        "interval_id":    state.get("interval_id", ""),
+        "tenant_id":      tenant_id,
+        "instance_id":    instance_id,
+        "agent_type_id":  state.get("agent_type_id", ""),
+        "pool_id":        state.get("pool_id", ""),
+        "reason_id":      state.get("reason_id", ""),
+        "reason_label":   state.get("reason_label", ""),
+        "note":           state.get("note") or None,
+        "paused_at":      paused_at_str,
+        "resumed_at":     resumed_at,
+        "duration_ms":    duration_ms,
+    }
+
+
+async def _handle_pause_open(
+    row:   dict,
+    redis: object,
+) -> dict:
+    """
+    Store open pause state in Redis and return the row unchanged.
+
+    The row already contains all fields needed to write to agent_pause_intervals.
+    We additionally persist the state in Redis so that the matching agent_ready
+    can close the interval and compute duration_ms.
+    """
+    import json as _json
+
+    tenant_id   = row.get("tenant_id", "")
+    instance_id = row.get("instance_id", "")
+    key = _pause_redis_key(tenant_id, instance_id)
+    state = {
+        "interval_id":  row.get("interval_id", ""),
+        "paused_at":    row.get("paused_at", ""),
+        "reason_id":    row.get("reason_id", ""),
+        "reason_label": row.get("reason_label", ""),
+        "agent_type_id": row.get("agent_type_id", ""),
+        "pool_id":       row.get("pool_id", ""),
+        "note":          row.get("note") or None,
+    }
+    try:
+        await redis.set(key, _json.dumps(state), ex=_PAUSE_KEY_TTL)  # type: ignore[union-attr]
+    except Exception as exc:
+        logger.debug("Pause Redis store failed instance=%s: %s", instance_id, exc)
+    return row
+
+
+async def _parse_with_enrichment(
+    raw:      dict,
+    topic:    str,
+    parser:   object,
+    enricher: SegmentEnricher,
+) -> dict | list | None:
+    """
+    Resolve segment_id via SegmentEnricher, then call the parser with it.
+
+    Enrichment strategy per topic:
+      sentiment.updated → lookup_primary(session_id)
+          The AI Gateway does not carry instance_id in the payload; we find
+          the current primary participant of the session.
+      mcp.audit         → lookup_by_instance(session_id, instance_id)
+          The AuditRecord always carries instance_id (the agent invoking the tool).
+    """
+    session_id = raw.get("session_id") or ""
+    tenant_id  = raw.get("tenant_id") or ""
+    segment_id: str | None = None
+
+    try:
+        if topic == "sentiment.updated":
+            segment_id = await enricher.lookup_primary(session_id, tenant_id)
+        elif topic == "mcp.audit":
+            instance_id = raw.get("instance_id") or ""
+            segment_id = await enricher.lookup_by_instance(
+                session_id, instance_id, tenant_id
+            )
+    except Exception as exc:
+        logger.debug(
+            "Segment enrichment failed topic=%s session=%s: %s",
+            topic, session_id, exc,
+        )
+
+    # Call the parser with the (possibly None) segment_id keyword argument.
+    # Both parse_sentiment_event and parse_mcp_audit_event accept segment_id.
+    return parser(raw, segment_id=segment_id)  # type: ignore[call-arg]
 
 
 async def _write_row(
@@ -207,6 +402,8 @@ async def _write_row(
             await store.insert_evaluation_event(row)
         elif table == "contact_insights":
             await store.insert_contact_insight(row)
+        elif table == "agent_pause_intervals":
+            await store.upsert_agent_pause_interval(row)
         else:
             logger.warning("Unknown table=%s from topic=%s offset=%s", table, topic, offset)
     except Exception as exc:

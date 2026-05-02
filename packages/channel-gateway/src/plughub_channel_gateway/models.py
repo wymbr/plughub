@@ -89,6 +89,10 @@ class WsAuthenticated(BaseModel):
     session_id: str
     # Cursor atual do stream — cliente usa para reconnect
     stream_cursor: str = "0"
+    # Participant ID do cliente — usado para visibility baseada em array.
+    # Permite que agentes enviem mensagens visíveis apenas ao cliente via
+    # visibility: ["<participant_id>"]
+    participant_id: str = ""
 
 
 class WsAuthError(BaseModel):
@@ -220,6 +224,7 @@ class ContactOpenEvent(BaseModel):
     event_type: Literal["contact_open"] = "contact_open"
     contact_id: str
     session_id: str
+    tenant_id: str
     channel: Literal["webchat"] = "webchat"
     started_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
@@ -228,6 +233,7 @@ class ContactClosedEvent(BaseModel):
     event_type: Literal["contact_closed"] = "contact_closed"
     contact_id: str
     session_id: str
+    tenant_id: str
     channel: Literal["webchat"] = "webchat"
     reason: Literal["agent_done", "client_disconnect", "timeout"]
     started_at: str

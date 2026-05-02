@@ -355,8 +355,7 @@ function MetaField({ label, value, mono = false, copyable = false }: {
 // ─── WebhooksTab (main) ───────────────────────────────────────────────────────
 
 export default function WebhooksTab() {
-  const { session }   = useAuth()
-  const tenantId      = session?.tenantId ?? ''
+  const { tenantId }  = useAuth()
 
   const [adminToken,   setAdminToken]   = useState('')
   const [creating,     setCreating]     = useState(false)

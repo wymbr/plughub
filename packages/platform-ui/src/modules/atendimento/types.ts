@@ -94,6 +94,32 @@ export interface StreamEntry {
   payload:     unknown
 }
 
+// ─── Contact segment (per-agent participation window within a session) ────────
+
+export type SegmentRole    = "primary" | "specialist" | "supervisor" | "evaluator" | "reviewer"
+export type SegmentOutcome = "resolved" | "escalated" | "transferred" | "abandoned" | "timeout"
+
+export interface ContactSegment {
+  segment_id:        string
+  session_id:        string
+  tenant_id:         string
+  participant_id:    string
+  pool_id:           string
+  agent_type_id:     string
+  instance_id:       string | null
+  role:              SegmentRole
+  agent_type:        "ai" | "human"
+  parent_segment_id: string | null   // null for primary; specialist points to primary segment
+  sequence_index:    number          // 0 = first primary; increments on handoffs
+  started_at:        string          // ISO-8601
+  ended_at:          string | null   // null = segment still active
+  duration_ms:       number | null
+  outcome:           SegmentOutcome | null
+  close_reason:      string | null
+  handoff_reason:    string | null
+  issue_status:      string | null
+}
+
 // ─── Connection status ────────────────────────────────────────────────────────
 
 export type ConnectionStatus = 'connecting' | 'connected' | 'error' | 'closed'

@@ -20,6 +20,8 @@ from ..reports_query import (
     _apply_pool_scope,
     _clamp_page_size,
     _to_csv,
+    query_agent_availability,
+    query_agent_performance_daily,
     query_agent_performance_report,
     query_agents_report,
     query_contact_insights_report,
@@ -28,6 +30,7 @@ from ..reports_query import (
     query_participation_report,
     query_quality_report,
     query_segments_report,
+    query_session_complexity,
     query_sessions_report,
     query_usage_report,
 )
@@ -923,3 +926,267 @@ class TestQueryContactInsightsReport:
         result = await query_contact_insights_report(client, DB, TENANT)
         assert result["data"] == []
         assert "error" in result
+
+
+# ─── query_agent_performance_daily (Arc 5 MV — v_agent_performance) ──────────
+
+@pytest.mark.asyncio
+class TestQueryAgentPerformanceDaily:
+    """Tests for the daily MV-backed performance endpoint (v_agent_performance view)."""
+
+    _COLS = [
+        "agent_type_id", "pool_id", "period_date",
+        "total_sessions", "avg_duration_ms",
+        "resolution_rate", "escalation_rate", "transfer_rate", "human_rate",
+    ]
+
+    async def test_returns_data_and_meta(self):
+        """Empty result set still returns data + meta with date keys."""
+        client = _make_client(_ch_result(self._COLS, []))
+        result = await query_agent_performance_daily(client, DB, TENANT)
+        assert "data" in result
+        assert "meta" in result
+        assert "from_date" in result["meta"]
+        assert "to_date" in result["meta"]
+        assert result["meta"]["total"] == 0
+
+    async def test_data_row_mapped_correctly(self):
+        """Each row contains all expected columns with correct values."""
+        from datetime import date
+        client = _make_client(_ch_result(self._COLS, [[
+            "agente_sac_v1", "sac_ia", date(2026, 4, 28),
+            42,         # total_sessions
+            28500.0,    # avg_duration_ms
+            0.857143,   # resolution_rate
+            0.095238,   # escalation_rate
+            0.047619,   # transfer_rate
+            0.0,        # human_rate
+        ]]))
+        result = await query_agent_performance_daily(client, DB, TENANT)
+        assert result["meta"]["total"] == 1
+        row = result["data"][0]
+        assert row["agent_type_id"]   == "agente_sac_v1"
+        assert row["pool_id"]         == "sac_ia"
+        assert row["total_sessions"]  == 42
+        assert row["avg_duration_ms"] == pytest.approx(28500.0)
+        assert row["resolution_rate"] == pytest.approx(0.857143)
+        assert row["escalation_rate"] == pytest.approx(0.095238)
+
+    async def test_filters_do_not_crash(self):
+        """Passing pool_id and agent_type_id filters runs without error."""
+        client = _make_client(_ch_result(self._COLS, []))
+        result = await query_agent_performance_daily(
+            client, DB, TENANT,
+            pool_id       = "sac_ia",
+            agent_type_id = "agente_sac_v1",
+        )
+        assert result["data"] == []
+        assert result["meta"]["total"] == 0
+
+    async def test_empty_accessible_pools_short_circuits(self):
+        """accessible_pools=[] returns empty immediately without hitting ClickHouse."""
+        client = MagicMock()
+        result = await query_agent_performance_daily(
+            client, DB, TENANT, accessible_pools=[]
+        )
+        assert result["data"] == []
+        assert result["meta"]["total"] == 0
+        client.query.assert_not_called()
+
+    async def test_error_returns_empty_with_error_key(self):
+        """ClickHouse error returns graceful fallback with error key."""
+        client = MagicMock()
+        client.query = MagicMock(side_effect=Exception("CH timeout"))
+        result = await query_agent_performance_daily(client, DB, TENANT)
+        assert result["data"] == []
+        assert result.get("error") == "data_unavailable"
+
+
+# ─── query_session_complexity (Arc 5 MV — v_segment_summary) ─────────────────
+
+@pytest.mark.asyncio
+class TestQuerySessionComplexity:
+    """Tests for the session-complexity MV-backed endpoint (v_segment_summary view)."""
+
+    _COLS = [
+        "session_id", "pool_id",
+        "segment_count", "primary_segments", "specialist_segments", "human_segments",
+        "total_duration_ms", "handoff_count", "escalation_count", "resolved_count",
+    ]
+
+    def _count_result(self, n: int) -> MagicMock:
+        r = MagicMock()
+        r.result_rows = [[n]]
+        return r
+
+    async def test_returns_data_and_meta(self):
+        """Empty result set still returns data + meta."""
+        client = _make_client(
+            self._count_result(0),
+            _ch_result(self._COLS, []),
+        )
+        result = await query_session_complexity(client, DB, TENANT)
+        assert "data" in result
+        assert "meta" in result
+        assert result["meta"]["total"] == 0
+
+    async def test_data_row_mapped_correctly(self):
+        """Each row maps all expected columns correctly."""
+        client = _make_client(
+            self._count_result(1),
+            _ch_result(self._COLS, [[
+                "sess-complex-001", "retencao_humano",
+                3,       # segment_count
+                2,       # primary_segments
+                1,       # specialist_segments
+                1,       # human_segments
+                125000,  # total_duration_ms
+                2,       # handoff_count
+                1,       # escalation_count
+                0,       # resolved_count
+            ]]),
+        )
+        result = await query_session_complexity(client, DB, TENANT)
+        assert result["meta"]["total"] == 1
+        row = result["data"][0]
+        assert row["session_id"]         == "sess-complex-001"
+        assert row["pool_id"]            == "retencao_humano"
+        assert row["segment_count"]      == 3
+        assert row["handoff_count"]      == 2
+        assert row["escalation_count"]   == 1
+        assert row["total_duration_ms"]  == 125000
+
+    async def test_min_handoffs_filter(self):
+        """min_handoffs parameter is accepted without crashing."""
+        client = _make_client(
+            self._count_result(0),
+            _ch_result(self._COLS, []),
+        )
+        result = await query_session_complexity(
+            client, DB, TENANT, min_handoffs=2
+        )
+        assert result["data"] == []
+        # SQL sent to ClickHouse should reference min_handoffs
+        for call in client.query.call_args_list:
+            sql = call[0][0]
+            assert "handoff_count" in sql
+
+    async def test_empty_accessible_pools_short_circuits(self):
+        """accessible_pools=[] returns empty immediately without hitting ClickHouse."""
+        client = MagicMock()
+        result = await query_session_complexity(
+            client, DB, TENANT, accessible_pools=[]
+        )
+        assert result["data"] == []
+        assert result["meta"]["total"] == 0
+        client.query.assert_not_called()
+
+    async def test_error_returns_empty_with_error_key(self):
+        """ClickHouse error returns graceful fallback with error key."""
+        client = MagicMock()
+        client.query = MagicMock(side_effect=Exception("CH timeout"))
+        result = await query_session_complexity(client, DB, TENANT)
+        assert result["data"] == []
+        assert result.get("error") == "data_unavailable"
+
+
+# ── query_agent_availability (Arc 8) ─────────────────────────────────────────
+
+@pytest.mark.asyncio
+class TestQueryAgentAvailabilityReport:
+    """Unit tests for Arc 8 agent availability / pause interval report."""
+
+    # Column names returned by the aggregate query
+    _AGG_COLS    = ["agent_type_id", "pool_id", "period_date", "total_pauses", "total_pause_ms"]
+    _REASON_COLS = ["agent_type_id", "pool_id", "period_date", "reason_id", "reason_label", "cnt", "total_ms"]
+
+    def _make_client_availability(self, agg_rows=None, reason_rows=None, total=0):
+        """
+        _fetch_agent_availability makes 3 ClickHouse queries:
+          1. countDistinct  → total
+          2. aggregate      → agg_rows
+          3. reason breakdown → reason_rows
+
+        query_agent_availability receives a *store* object (store.client + store.database),
+        not a raw client — so we wrap the prepared client in a MagicMock store.
+        """
+        count_result  = _ch_result(["countDistinct((agent_type_id, pool_id, toDate(paused_at)))"], [[total]])
+        agg_result    = _ch_result(self._AGG_COLS,    agg_rows    or [])
+        reason_result = _ch_result(self._REASON_COLS, reason_rows or [])
+        client = _make_client(count_result, agg_result, reason_result)
+        store = MagicMock()
+        store.client   = client
+        store.database = DB
+        return store
+
+    async def test_returns_data_and_meta(self):
+        """Successful call returns data list and meta dict."""
+        store  = self._make_client_availability()
+        result = await query_agent_availability(store, TENANT)
+        assert "data" in result
+        assert "meta" in result
+        assert result["data"] == []
+        assert result["meta"]["total"] == 0
+
+    async def test_agg_row_mapped_with_reason_breakdown(self):
+        """An aggregated row is returned with reason_breakdown attached."""
+        from datetime import date
+        period = date(2026, 5, 1)
+        store  = self._make_client_availability(
+            agg_rows=[["agente_retencao_v1", "retencao_humano", period, 3, 5400000]],
+            reason_rows=[
+                ["agente_retencao_v1", "retencao_humano", period, "intervalo", "Intervalo", 2, 3600000],
+                ["agente_retencao_v1", "retencao_humano", period, "almoco",    "Almoço",    1, 1800000],
+            ],
+            total=1,
+        )
+        result = await query_agent_availability(store, TENANT)
+        assert result["meta"]["total"] == 1
+        row = result["data"][0]
+        assert row["agent_type_id"]  == "agente_retencao_v1"
+        assert row["pool_id"]        == "retencao_humano"
+        assert row["total_pauses"]   == 3
+        assert row["total_pause_ms"] == 5400000
+        breakdown = row["reason_breakdown"]
+        assert len(breakdown) == 2
+        reasons = {r["reason_id"] for r in breakdown}
+        assert "intervalo" in reasons
+        assert "almoco"    in reasons
+
+    async def test_empty_accessible_pools_short_circuits(self):
+        """accessible_pools=[] returns empty immediately without hitting ClickHouse."""
+        store = MagicMock()
+        result = await query_agent_availability(
+            store, TENANT, accessible_pools=[]
+        )
+        assert result["data"] == []
+        assert result["meta"]["total"] == 0
+        # short-circuit: store.client.query must never be called
+        store.client.query.assert_not_called()
+
+    async def test_none_accessible_pools_calls_ch(self):
+        """accessible_pools=None (unrestricted) — ClickHouse is queried normally."""
+        store  = self._make_client_availability(total=0)
+        result = await query_agent_availability(
+            store, TENANT, accessible_pools=None
+        )
+        assert store.client.query.call_count == 3  # count + agg + reason breakdown
+        assert result["data"] == []
+
+    async def test_pool_filter_injects_in_clause(self):
+        """accessible_pools=['retencao_humano'] → IN clause in all queries."""
+        store = self._make_client_availability(total=0)
+        await query_agent_availability(
+            store, TENANT, accessible_pools=["retencao_humano"]
+        )
+        for call in store.client.query.call_args_list:
+            sql = call[0][0]
+            assert "pool_id IN ('retencao_humano')" in sql
+
+    async def test_error_returns_empty_with_error_key(self):
+        """ClickHouse error returns graceful fallback with error key."""
+        store = MagicMock()
+        store.client.query = MagicMock(side_effect=Exception("CH timeout"))
+        result = await query_agent_availability(store, TENANT)
+        assert result["data"] == []
+        assert result.get("error") == "data_unavailable"

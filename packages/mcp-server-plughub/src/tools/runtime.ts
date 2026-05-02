@@ -460,10 +460,18 @@ export function registerRuntimeTools(server: McpServer, deps: RuntimeDeps): void
           timestamp:      new Date().toISOString(),
         })
 
-        // Notifica o cliente via conversations.outbound — envia session.closed
-        // EXCEÇÃO (modo conferência): quando conference_id está presente, encerra
-        // apenas a participação do especialista — NÃO a sessão do cliente.
-        if (!conference_id) {
+        // Publica contact_closed em conversations.events para que o orchestrator-
+        // bridge processe a saída do agente humano.  O bridge é o ÚNICO dono do
+        // close do WebSocket do cliente — ele verifica se o pool tem on_human_end
+        // hooks (NPS, wrap-up) e só fecha o WebSocket após todos os hooks
+        // completarem (via _trigger_contact_close).
+        //
+        // EXCEÇÃO 1 (modo conferência): conference_agent_completed é publicado
+        // separadamente abaixo — não gera contact_closed.
+        // EXCEÇÃO 2 (escalação/transferência): outcomes que indicam continuidade
+        // não geram contact_closed — o bridge cuida após o próximo agente.
+        const isEscalation = ["escalated_human", "escalated_ai", "transferred"].includes(payload.outcome)
+        if (!conference_id && !isEscalation) {
           try {
             let contactId = session_id   // fallback
             let channel   = "webchat"
@@ -473,14 +481,18 @@ export function registerRuntimeTools(server: McpServer, deps: RuntimeDeps): void
               if (meta["contact_id"]) contactId = meta["contact_id"]
               if (meta["channel"])    channel   = meta["channel"]
             }
-            await kafka.publish("conversations.outbound", {
-              type:       "session.closed",
-              contact_id: contactId,
+            await kafka.publish("conversations.events", {
+              event_type:  "contact_closed",
               session_id,
+              tenant_id,
+              instance_id,
+              contact_id:  contactId,
               channel,
-              reason:     payload.outcome,
+              reason:      "agent_closed",
+              outcome:     payload.outcome,
+              timestamp:   new Date().toISOString(),
             })
-          } catch { /* Non-fatal — WebSocket do cliente expira pelo TTL da sessão */ }
+          } catch { /* Non-fatal — timeout guard no bridge fecha após 180s */ }
         }
 
         // Modo conferência: sinaliza conclusão do especialista sem encerrar a sessão

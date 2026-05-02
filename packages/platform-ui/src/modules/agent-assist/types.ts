@@ -105,7 +105,9 @@ export type WsServerEvent =
   | WsSessionClosed
   | WsConversationAssigned
   | WsMentionCommandAck
+  | { type: "session.agent_done"; reason?: string }
   | { type: "supervisor_state.updated" }
+  | { type: "copilot.updated"; session_id: string }
   | { type: "ping" };
 
 // ── supervisor_state response ─────────────────────────────────────────────────
@@ -269,7 +271,7 @@ export interface ContactSession {
 
 // ── App state ─────────────────────────────────────────────────────────────────
 
-export type ActiveTab = "estado" | "capacidades" | "contexto" | "historico";
+export type ActiveTab = "estado" | "capacidades" | "contexto";
 
 export interface Toast {
   id: string;
@@ -297,4 +299,22 @@ export interface ClosePayload {
   issue_status: string;
   outcome: "resolved" | "escalated" | "abandoned";
   handoff_reason?: string;
+}
+
+// ── Co-pilot Phase 2 ─────────────────────────────────────────────────────────
+
+/**
+ * Co-pilot suggestions written by AI Gateway (copilot_emitter.py)
+ * and read from ContextStore (session.copilot.*) via GET /copilot_state/:sessionId.
+ * Refreshed after each customer message; displayed in the Capacidades tab.
+ */
+export interface CopilotSuggestions {
+  /** Concise suggested response the agent can adapt */
+  sugestao_resposta: string | null;
+  /** Risk flags detected from the customer message (e.g. "intencao_cancelamento") */
+  flags_risco: string[];
+  /** Recommended actions for the agent (e.g. "consultar_historico_crm") */
+  acoes_recomendadas: string[];
+  /** ISO-8601 timestamp of the last analysis */
+  ultima_analise: string | null;
 }

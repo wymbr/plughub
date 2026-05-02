@@ -6,8 +6,7 @@
 import React, { useState } from 'react'
 import { searchKnowledge, upsertSnippet, deleteSnippet } from '@/api/evaluation-hooks'
 import type { KnowledgeSnippet } from '@/types'
-
-const TENANT = import.meta.env.VITE_TENANT_ID ?? 'tenant_demo'
+import { useAuth } from '@/auth/useAuth'
 
 const NAMESPACES = [
   'evaluation_policies',
@@ -86,6 +85,7 @@ function SnippetCard({
 }
 
 export default function KnowledgePage() {
+  const { tenantId: TENANT } = useAuth()
   const [adminToken, setAdminToken] = useState('')
   const [namespace, setNamespace] = useState(NAMESPACES[0])
   const [customNs, setCustomNs] = useState('')

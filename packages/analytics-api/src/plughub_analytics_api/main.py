@@ -85,7 +85,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     # ── Kafka consumer ────────────────────────────────────────────────────────
     consumer_task = asyncio.create_task(
-        _run_consumer_safe(store),
+        _run_consumer_safe(store, redis),
         name="analytics-consumer",
     )
 
@@ -113,13 +113,13 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     await redis.aclose()
 
 
-async def _run_consumer_safe(store: AnalyticsStore) -> None:
+async def _run_consumer_safe(store: AnalyticsStore, redis: object | None = None) -> None:
     """Wraps run_consumer with restart-on-failure (except on explicit shutdown)."""
     settings = get_settings()
     delay    = 5
     while True:
         try:
-            await run_consumer(store)
+            await run_consumer(store, redis)
             break  # clean exit (shutdown signal)
         except asyncio.CancelledError:
             break

@@ -134,6 +134,10 @@ class WebchatAdapter:
         self._session_id:     str = ""
         self._initial_cursor: str = "0"
         self._started_at:     str = ""
+        self._tenant_id:      str = ""
+        # Participant ID do cliente — gerado no handshake, usado para visibility
+        # baseada em array (ex: NPS visível apenas ao cliente, não ao agente humano)
+        self._customer_participant_id: str = ""
 
         # Cache masked_fields per menu_id so _handle_menu_submit can redact values.
         # Populated when interaction.request with masked_fields is delivered to the client.
@@ -171,6 +175,7 @@ class WebchatAdapter:
 
         # ── Session setup ──────────────────────────────────────────────────────
         tenant_id    = self._settings.tenant_id
+        self._tenant_id = tenant_id
         ttl          = self._settings.session_ttl_seconds
         self._started_at = datetime.now(timezone.utc).isoformat()
 
@@ -185,20 +190,30 @@ class WebchatAdapter:
             f"session:{self._session_id}:meta",
             ttl,
             json.dumps({
-                "contact_id":  self._contact_id,
-                "session_id":  self._session_id,
-                "tenant_id":   tenant_id,
-                "customer_id": self._contact_id,
-                "channel":     "webchat",
-                "pool_id":     self._pool_id,
-                "started_at":  self._started_at,
+                "contact_id":              self._contact_id,
+                "session_id":              self._session_id,
+                "tenant_id":               tenant_id,
+                "customer_id":             self._contact_id,
+                "channel":                 "webchat",
+                "pool_id":                 self._pool_id,
+                "started_at":              self._started_at,
+                "customer_participant_id":  self._customer_participant_id,
             }),
+        )
+        # Chave dedicada para lookup rápido pelo stream_subscriber e outros
+        # componentes que precisam saber o participant_id do cliente sem
+        # parsear o JSON completo do meta.
+        await self._redis.setex(
+            f"session:{self._session_id}:customer_participant_id",
+            ttl,
+            self._customer_participant_id,
         )
 
         await self._publish_event(
             ContactOpenEvent(
                 contact_id=self._contact_id,
                 session_id=self._session_id,
+                tenant_id=tenant_id,
                 started_at=self._started_at,
             ).model_dump()
         )
@@ -209,13 +224,14 @@ class WebchatAdapter:
 
         if self._pool_id:
             await self._publish_inbound({
-                "session_id":  self._session_id,
-                "tenant_id":   tenant_id,
-                "customer_id": self._contact_id,
-                "channel":     "webchat",
-                "pool_id":     self._pool_id,
-                "started_at":  self._started_at,
-                "elapsed_ms":  0,
+                "session_id":              self._session_id,
+                "tenant_id":               tenant_id,
+                "customer_id":             self._contact_id,
+                "channel":                 "webchat",
+                "pool_id":                 self._pool_id,
+                "started_at":              self._started_at,
+                "elapsed_ms":              0,
+                "customer_participant_id":  self._customer_participant_id,
             })
 
         # ── Concurrent tasks ───────────────────────────────────────────────────
@@ -300,15 +316,19 @@ class WebchatAdapter:
         session_id = str(claims.get(_CLAIM_SESSION) or "") or str(uuid.uuid4())
         cursor     = auth_msg.cursor or "0"
 
-        self._contact_id     = contact_id
-        self._session_id     = session_id
-        self._initial_cursor = cursor
+        customer_participant_id = f"cust_{uuid.uuid4().hex[:12]}"
+
+        self._contact_id               = contact_id
+        self._session_id               = session_id
+        self._initial_cursor           = cursor
+        self._customer_participant_id  = customer_participant_id
 
         await self._ws.send_json(
             WsAuthenticated(
-                contact_id    = contact_id,
-                session_id    = session_id,
-                stream_cursor = cursor,
+                contact_id     = contact_id,
+                session_id     = session_id,
+                stream_cursor  = cursor,
+                participant_id = customer_participant_id,
             ).model_dump()
         )
         logger.debug(
@@ -448,9 +468,10 @@ class WebchatAdapter:
         returns normally so the connection can be closed cleanly.
         """
         subscriber = StreamSubscriber(
-            redis      = self._redis,
-            session_id = self._session_id,
-            cursor     = self._initial_cursor,
+            redis                    = self._redis,
+            session_id               = self._session_id,
+            cursor                   = self._initial_cursor,
+            customer_participant_id   = self._customer_participant_id,
         )
         try:
             async for msg in subscriber.messages():
@@ -764,6 +785,7 @@ class WebchatAdapter:
             ContactClosedEvent(
                 contact_id = self._contact_id,
                 session_id = self._session_id,
+                tenant_id  = self._tenant_id,
                 reason     = reason,  # type: ignore[arg-type]
                 started_at = started_at or self._started_at,
             ).model_dump()

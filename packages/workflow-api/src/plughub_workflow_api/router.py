@@ -169,6 +169,9 @@ class PersistSuspendRequest(BaseModel):
     entity_type:    str   = "workflow"
     entity_id:      str | None = None
     calendar_id:    str | None = None      # reserved — future direct-calendar override
+    # Optional: absolute ISO-8601 datetime for timer-based suspends (scheduled deploys, etc.)
+    # When provided, used directly as resume_expires_at (overrides timeout_hours + business_hours)
+    scheduled_at:   str | None = None
     pipeline_state: dict  = Field(default_factory=dict)
     metadata:       dict  = Field(default_factory=dict)
 
@@ -202,7 +205,15 @@ async def persist_suspend(
     # Calculate deadline
     now_utc = datetime.now(timezone.utc)
 
-    if body.business_hours and body.entity_id:
+    if body.scheduled_at:
+        # Timer-based suspend: use provided absolute datetime directly
+        try:
+            deadline = datetime.fromisoformat(body.scheduled_at)
+            if deadline.tzinfo is None:
+                deadline = deadline.replace(tzinfo=timezone.utc)
+        except ValueError as exc:
+            raise HTTPException(400, f"Invalid scheduled_at: {exc}") from exc
+    elif body.business_hours and body.entity_id:
         deadline = await calculate_deadline(
             calendar_api_url=settings.calendar_api_url,
             tenant_id=instance["tenant_id"],

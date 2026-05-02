@@ -152,3 +152,13 @@ class InferenceResponse(BaseModel):
     risk_flag:       bool
     model_used:      str   # e.g. "anthropic/claude-sonnet-4-6"
     cached:          bool
+
+
+# ─────────────────────────────────────────────
+# POST /v1/copilot/analyze
+# ─────────────────────────────────────────────
+
+class CopilotAnalyzeRequest(BaseModel):
+    session_id:       str = Field(..., description="Active session UUID")
+    tenant_id:        str = Field(..., description="Tenant ID")
+    customer_message: str = Field(..., description="Latest customer message text")

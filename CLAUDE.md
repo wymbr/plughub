@@ -490,7 +490,7 @@ agente_sac_ia_v1
   on_failure: proximo_step   # nunca bloquear
 ```
 
-### Fase 2 — Co-pilot (próxima iteração)
+### Fase 2 — Co-pilot (✅ implementado)
 
 Durante sessão do agente humano, AI Gateway analisa cada mensagem do cliente em background
 usando `contact_context` e popula a aba "Capacidades" do Agent Assist UI com:
@@ -498,11 +498,82 @@ usando `contact_context` e popula a aba "Capacidades" do Agent Assist UI com:
 - Flags de risco (sentimento, intenção detectada)
 - Ações recomendadas com base no `motivo_contato`
 
-### Fase 3 — Step `resolve` nativo (futuro)
+**Componentes implementados:**
+- `copilot_emitter.py` (AI Gateway) — `analyze_for_copilot()` fire-and-forget: lê ContextStore (`caller.nome`, `caller.motivo_contato`, `session.sentimento.categoria`), chama Haiku (`claude-haiku-4-5-20251001`, isolado de tráfego realtime), escreve 4 tags (`session.copilot.sugestao_resposta`, `session.copilot.flags_risco`, `session.copilot.acoes_recomendadas`, `session.copilot.ultima_analise`) no ContextStore, publica `copilot.updated` via Redis pub/sub `agent:events:{session_id}`
+- `POST /v1/copilot/analyze` (AI Gateway) — endpoint 202 Accepted que dispara `analyze_for_copilot` como asyncio task
+- `GET /copilot_state/:sessionId` (mcp-server-plughub) — lê ContextStore e retorna `{ sugestao_resposta, flags_risco, acoes_recomendadas, ultima_analise }`
+- `server.ts` — dispara análise fire-and-forget em cada evento `message.text` do cliente
+- `useCopilotState` hook — busca `/api/copilot_state/:sessionId`, re-busca ao receber `copilot.updated`
+- `CapacidadesTab.tsx` — `CopilotSection` com teal styling (risk flags badges, suggested response blockquote, recommended actions list), renderizada ANTES dos agentes sugeridos
+- `AgentAssistPage.tsx` — `lastCopilotEvent` state + handler `copilot.updated` usando `selectedSessionRef.current` + `useCopilotState` + repasse de prop
+- `test_copilot_emitter.py` — 28/28 testes passando
+
+### Fase 3 — Step `resolve` nativo (✅ implementado)
 
 Novo step type no `skill-flow-engine` que encapsula a lógica do `agente_contexto_ia_v1`
 de forma declarativa, permitindo que qualquer agente defina seus pré-requisitos de contexto
 inline no YAML sem depender de um agente externo.
+
+**Pipeline de 5 fases:**
+
+| Fase | O que faz | Chamadas LLM |
+|---|---|---|
+| 1 — Gap check | Consulta ContextStore; se tudo resolvido → `on_success` imediato com `method=cache` | 0 |
+| 2 — CRM lookup | (opcional) Chama MCP tool configurado, propaga outputs via `context_tags`; não-fatal | 0 |
+| 3 — LLM question | Gera pergunta consolidada cobrindo todos os gaps; falha → `method=skipped` (não bloqueia) | 1 |
+| 4 — Input BLPOP | Envia pergunta via `notification_send`; aguarda resposta (mesmo padrão do `menu` step) | 0 |
+| 5 — LLM extract | Extrai campos estruturados da resposta; escreve no ContextStore com `confidence=0.7`; não-fatal | 1 |
+
+**Garantias de não-bloqueio:**
+- Erros nas fases 2, 3, 5 → avança para `on_success` (nunca descarta)
+- Timeout/disconnect na fase 4 → `on_success` com `method=timeout` / `method=disconnected`
+- `on_failure`: apenas para `notification_send` falhar ou lock roubado
+- Sem `ctx.contextStore` → `on_success` imediato com `method=no_contextstore`
+
+**Schema (declaração no YAML):**
+```yaml
+- id: coletar_contexto
+  type: resolve
+  required_fields:
+    - tag: caller.nome
+      confidence_min: 0.8
+      required: true
+    - tag: caller.motivo_contato
+      confidence_min: 0.7
+      required: false
+  crm_lookup:                           # opcional
+    mcp_server: mcp-server-crm
+    tool: customer_get
+    input:
+      customer_id: "@ctx.caller.customer_id"
+    context_tags:
+      outputs:
+        nome:      { tag: caller.nome,     confidence: 0.95, merge: overwrite }
+        cpf:       { tag: caller.cpf,      confidence: 0.95, merge: overwrite }
+        account_id: { tag: caller.account_id, confidence: 0.95, merge: overwrite }
+  question_prompt_id: resolve_generate_question_v1
+  extract_prompt_id:  resolve_extract_fields_v1
+  timeout_s: 300
+  output_as: contexto_resolucao         # opcional — persiste ResolveOutput no pipeline_state
+  on_success: proximo_step
+  on_failure: escalar
+```
+
+**`ResolveOutput` (persistido via `output_as`):**
+```typescript
+ResolveOutput {
+  resolved:       boolean
+  method:         "cache" | "crm" | "customer_input" | "timeout" | "disconnected" | "skipped" | "no_contextstore"
+  remaining_gaps: string[]   // campos ainda ausentes após o resolve (quando !resolved)
+}
+```
+
+**Arquivos implementados:**
+- `packages/schemas/src/skill.ts` — `ResolveRequiredFieldSchema`, `ResolveCrmLookupSchema`, `ResolveStepSchema` (adicionados ao `FlowStepSchema`)
+- `packages/schemas/src/index.ts` — exports dos novos schemas e tipos
+- `packages/skill-flow-engine/src/steps/resolve.ts` — executor completo (5 fases)
+- `packages/skill-flow-engine/src/executor.ts` — import + `case "resolve"` no dispatch
+- `packages/skill-flow-engine/src/__tests__/steps/resolve.test.ts` — 15 unit tests
 
 ## ContextStore — unified session state
 
@@ -536,10 +607,78 @@ ContextEntry {
 | `caller.*` | Dados do cliente (nome, cpf, conta, motivo) | ContextAccumulator via MCP tools; reason step context_tags |
 | `session.*` | Estado da sessão atual | reason/invoke steps via context_tags; sentiment_emitter (session.sentimento.*) |
 | `account.*` | Dados de conta (plano, status) | invoke step com buscar_crm via context_tags |
+| `segment.{segmentId}.*` | Dados isolados por participação de agente | context_tags com `scope: segment` |
 
-### context_tags on reason / invoke steps
+### Segment-scoped storage
 
-Qualquer step `reason` ou `invoke` pode declarar mapeamentos de entrada/saída:
+Quando agentes paralelos (NPS + wrap-up) executam na mesma sessão, seus dados podem
+colidir no namespace `session.*`. O scope `segment` resolve isso prefixando a tag com
+`segment.{segmentId}.` — cada agente escreve no seu próprio espaço.
+
+**Escrita (scope: segment em context_tags):**
+```yaml
+context_tags:
+  outputs:
+    wrapup_resumo:
+      tag: session.wrapup.resumo
+      confidence: 1.0
+      merge: overwrite
+      scope: segment    # ← grava como segment.{segmentId}.session.wrapup.resumo
+```
+
+Quando `scope: segment` e o engine tem `segmentId` disponível, a tag é automaticamente
+prefixada por `resolveTagWithScope()`. Se `segmentId` for ausente, cai para a tag original
+(graceful degradation — backward compatible).
+
+**Leitura (@segment.* em interpolação, inputs e choice):**
+```yaml
+# Em inputs de step
+input:
+  resumo: "@segment.wrapup.resumo"    # → segment.{segmentId}.wrapup.resumo
+
+# Em choice conditions
+conditions:
+  - field: "@segment.nps_score"
+    operator: exists
+    next: processar_nps
+
+# Em templates de mensagem
+message: "Resumo: {{@segment.wrapup.resumo}}"
+```
+
+**Propagação do segmentId:**
+- O orchestrator-bridge gera `_part_seg_id = uuid4()` ao ativar cada agente nativo
+- Armazenado em Redis: `session:{id}:segment:{instance_id}` (TTL 14400s)
+- Passado via HTTP payload `segment_id` ao skill-flow-service
+- Engine propaga: `run(segmentId)` → `_execute()` → `_buildContext()` → `ctx.segmentId`
+- Cada step usa `ctx.segmentId` em `extractOutputsToCtx()` e leituras `@segment.*`
+
+**Implementação (arquivos modificados):**
+
+| Arquivo | Alteração |
+|---------|-----------|
+| `packages/schemas/src/context-store.ts` | `ContextTagScopeSchema` (`"session" \| "segment"`), campo `scope` em `ContextTagEntrySchema` com default `"session"` |
+| `packages/schemas/src/index.ts` | Exporta `ContextTagScopeSchema` e `ContextTagScope` |
+| `packages/skill-flow-engine/src/context-accumulator-util.ts` | `resolveTagWithScope(tag, scope, segmentId)` — prefixador; `extractOutputsToCtx` recebe `segmentId?` como 7o parâmetro |
+| `packages/skill-flow-engine/src/executor.ts` | `segmentId?: string` em `StepContext`; `case "resolve"` no dispatch |
+| `packages/skill-flow-engine/src/engine.ts` | `segmentId` propagado em `run()` → `_execute()` → `_buildContext()` → `ctx` |
+| `packages/skill-flow-engine/src/interpolate.ts` | `@segment.*` nos regexes `INTERPOLATION_REGEX` e `SINGLE_REF_REGEX`; `resolveSegmentRef()`; `resolveVisibility()` export |
+| `packages/skill-flow-engine/src/steps/choice.ts` | `isSegmentRef` check — `@segment.*` resolvido com prefixo `segment.{segmentId}.` |
+| `packages/skill-flow-engine/src/steps/invoke.ts` | `ctx.segmentId` passado a `extractOutputsToCtx()` |
+| `packages/skill-flow-engine/src/steps/reason.ts` | `ctx.segmentId` passado a `extractOutputsToCtx()` |
+| `packages/skill-flow-engine/src/steps/resolve.ts` | `ctx.segmentId` passado a `extractOutputsToCtx()` no CRM lookup |
+| `packages/e2e-tests/services/skill-flow-service/src/index.ts` | `segment_id` lido do payload HTTP e passado a `engine.run()` |
+| `packages/orchestrator-bridge/.../main.py` | `segment_id` incluído no payload HTTP para `activate_native_agent()` |
+
+**Invariantes:**
+- `@segment.*` retorna `undefined` quando `segmentId` não está disponível (workflows headless)
+- `scope: segment` sem `segmentId` → tag inalterada (sem prefixo)
+- `@ctx.*` e `@segment.*` coexistem — `@ctx.` lê tags session-scoped; `@segment.` lê segment-scoped
+- Agentes sem segment (queue agents, workflows) nunca escrevem segment-scoped — o campo é `undefined`
+
+### context_tags on reason / invoke / notify steps
+
+Qualquer step `reason`, `invoke` ou `notify` pode declarar mapeamentos de entrada/saída:
 
 ```yaml
 context_tags:
@@ -562,9 +701,28 @@ context_tags:
 - **outputs**: após resposta bem-sucedida, extrai campos do output e grava no ContextStore (fire-and-forget)
 - **confidence**: confiança default do entry; pode ser sobrescrita por campo
 
-### @ctx.* references in step inputs
+**Diferença por tipo de step:**
+- `reason` / `invoke`: o objeto-fonte para `outputs` é o resultado do LLM ou MCP tool
+- `notify`: o objeto-fonte é `pipeline_state.results` — permite "registrar" valores coletados em steps anteriores (ex: menu `output_as: nps_resposta` → notify `context_tags.outputs.nps_resposta` → ContextStore `session.nps_score`)
 
-Qualquer campo de `input:` ou `message:` pode usar `@ctx.<namespace>.<field>`:
+### @ctx.* and @segment.* in visibility arrays
+
+Steps `notify` e `menu` aceitam visibility como array de participant_ids com referências `@ctx.*` e `@segment.*`:
+
+```yaml
+visibility:
+  - "@ctx.session.customer_participant_id"
+  - "@segment.assigned_agent_id"
+```
+
+O engine resolve cada referência via `resolveVisibility()` (`interpolate.ts`) antes de chamar
+`notification_send`. Referências `@ctx.*` lêem o ContextStore da sessão; `@segment.*` lêem
+tags com prefixo `segment.{segmentId}.`. Elementos que resolvem para `undefined/null/""` são
+removidos silenciosamente. Array vazio após resolução → fallback para `"all"` (segurança).
+
+### @ctx.* and @segment.* references in step inputs
+
+Qualquer campo de `input:` ou `message:` pode usar `@ctx.<namespace>.<field>` ou `@segment.<field>`:
 
 ```yaml
 input:
@@ -574,8 +732,9 @@ message: "{{@ctx.session.ultima_resposta}}"
 ```
 
 Resolução: lê o hash Redis, parseia o ContextEntry, retorna `entry.value`. Retorna `""` se ausente.
+Para `@segment.*`, o campo é prefixado com `segment.{segmentId}.` antes da leitura.
 
-### @ctx.* in choice step conditions
+### @ctx.* and @segment.* in choice step conditions
 
 ```yaml
 conditions:
@@ -588,7 +747,8 @@ conditions:
     next:      finalizar
 ```
 
-Operadores suportados: `eq`, `ne`, `gt`, `gte`, `lt`, `lte`, `exists`, `not_exists`, `confidence_gte`.
+Operadores suportados: `eq`, `neq`, `gt`, `gte`, `lt`, `lte`, `contains`, `exists`, `confidence_gte`.
+Referências `@segment.*` são resolvidas com prefixo `segment.{segmentId}.` antes da leitura do ContextStore.
 
 ### required_context (YAML header)
 
@@ -716,7 +876,7 @@ TTL: same as session TTL
 [-1.0, -0.6] → "angry"
 ```
 
-## Skill Flow — eleven step types
+## Skill Flow — thirteen step types
 
 | Type | Does | Interacts with |
 |---|---|---|
@@ -731,6 +891,7 @@ TTL: same as session TTL
 | `menu` | Captures customer input and suspends until reply | Core → Channel Gateway |
 | `suspend` | Suspends workflow until external signal (approval, input, webhook, timer) | workflow-api |
 | `collect` | Contacts target via channel, awaits response, suspends until replied or expired | workflow-api → Channel Gateway |
+| `resolve` | Inline context accumulation (gap check → CRM → LLM question → BLPOP → LLM extract) | ContextStore + AI Gateway |
 
 ### task step modes
 
@@ -1354,6 +1515,7 @@ Tests: `tests/test_usage_emitter.py` — 22 testes (todas as dimensões + error 
 
 - ~~**Stream TTL expirado pós-session_ended**~~: ✅ `StreamExpiredError` levantado em `StreamSubscriber.messages()` quando cliente reconecta com cursor != "0" mas `EXISTS session:{id}:stream` retorna 0. `_stream_delivery_loop` captura e envia `{"type": "conn.session_ended", "reason": "session_expired"}`. Falha no EXISTS presume que stream existe (graceful degradation).
 - ~~**jwt_secret por tenant**~~: ✅ `_decode_token` agora async: (1) decode sem verificação para ler `tenant_id`; (2) lookup Redis `{tenant_id}:config:webchat:jwt_secret`; (3) fallback para `settings.jwt_secret`. Single-tenant sem mudança de config. Tests: `TestStreamExpiredReconnect` (2 cases) + `TestMultiTenantJwtSecret` (3 cases). Total channel-gateway: 198/198 (incl. magic bytes + S3 tests).
+- ~~**`tenant_id` ausente em `ContactOpenEvent`/`ContactClosedEvent`**~~: ✅ Ambos os modelos em `models.py` receberam campo `tenant_id: str`. O `WebchatAdapter` armazena `self._tenant_id = settings.tenant_id` em `__init__` e propaga para as instâncias dos eventos. Sem `tenant_id`, o `analytics-api` silenciosamente descartava os eventos (`if not session_id or not tenant_id: return None`), fazendo com que sessões jamais recebessem `closed_at` no ClickHouse e permanecessem "ativas" para sempre.
 
 ## Pricing Module — capacity-based billing
 
@@ -1547,19 +1709,76 @@ pools:
     sla_target_ms: 120000
 ```
 
-### Agente de finalização (`agente_finalizacao_v1`)
+### Agente de finalização (`agente_finalizacao_v1`) — DEPRECATED
 
 Skill: `packages/skill-flow-engine/skills/agente_finalizacao_v1.yaml`
 
-Fluxo:
-```
-agradecimento (notify) → solicitar_nps (menu button, timeout 60s)
-  → registrar_nps (notify + context_tag session.nps_score_raw)
-  → encerrar (complete resolved)
-  [timeout/failure] → encerrar (complete resolved)
-```
+**Substituído por dois agentes paralelos** (`agente_nps_v1` + `agente_wrapup_v1`) que
+executam como conference specialists na mesma sessão, cada um com isolamento de
+visibilidade diferente.
 
-Ativação: via `on_human_end` hook em `retencao_humano` — ✅ wired (Fase B completa).
+### Agentes pós-atendimento — NPS + Wrap-up (✅ implementado)
+
+Dois agentes paralelos acionados via `on_human_end` hook em `retencao_humano`:
+
+| Agente | Pool | Skill | Visibility | Propósito |
+|---|---|---|---|---|
+| `agente_nps_v1` | `nps_ia` | `skill_nps_v1` | `["@ctx.session.customer_participant_id"]` | Pesquisa NPS exclusiva com o cliente |
+| `agente_wrapup_v1` | `wrapup_ia` | `skill_wrapup_v1` | `["@ctx.session.human_agent_participant_id"]` | Notas internas obrigatórias com o agente humano |
+
+**Isolamento de visibilidade:**
+- O **agente NPS** conversa exclusivamente com o cliente via array visibility contendo
+  `customer_participant_id`. O agente humano NÃO vê as mensagens de avaliação — evita
+  animosidade caso o cliente dê nota baixa.
+- O **agente de wrap-up** usa array visibility com `human_agent_participant_id` — apenas o agente humano que encerrou vê as notas internas. Supervisores e outros participantes da conferência NÃO veem.
+- Ambos coexistem na mesma sessão (conferência) sem interferência mútua.
+
+**Customer `participant_id`:**
+O channel-gateway gera um `participant_id` no formato `cust_{hex12}` durante o auth
+handshake WebSocket. Armazenado em:
+- `session:{id}:meta` (campo `customer_participant_id`)
+- `session:{id}:customer_participant_id` (chave dedicada para lookup rápido)
+- `conn.authenticated` WebSocket response (campo `participant_id`)
+
+O bridge escreve `@ctx.session.customer_participant_id` no ContextStore **antes** de
+disparar os hooks, permitindo que o YAML do NPS resolva `@ctx.session.customer_participant_id`
+no array de visibility.
+
+**Pre-hook ContextStore writes** (`_write_pre_hook_context`):
+- `session.close_origin` — `"agent_closed"` ou `"client_disconnect"`
+- `session.customer_participant_id` — lido de `session:{id}:customer_participant_id`
+- `session.human_agent_participant_id` — `instance_id` do agente humano que saiu; usado pelo wrap-up para montar visibility array exclusiva
+
+O agente NPS verifica `@ctx.session.close_origin` no primeiro step (`choice`): se
+`client_disconnect`, encerra imediatamente sem pesquisa.
+
+**`notification_send` — visibility array:**
+O schema de `notification_send` em `bpm.ts` aceita `z.union([z.enum(["all","agents_only"]), z.array(z.string())])`.
+Array visibility escreve no stream com `visibility: ["part_id1", ...]` — o `StreamSubscriber`
+entrega ao webchat client somente se `customer_participant_id` estiver na lista. `agent:events`
+NÃO é notificado (agente humano não vê).
+
+**`NotifyStepSchema` / `MenuStepSchema` — visibility array + context_tags:**
+Ambos os schemas em `@plughub/schemas/skill.ts` aceitam `visibility` como:
+- `"all"` — entregue ao cliente e todos os agentes (padrão)
+- `"agents_only"` — somente agentes (cliente não vê)
+- `string[]` — lista de `participant_id`s; suporta referências `@ctx.*` e `@segment.*`
+  que são resolvidas via `resolveVisibility()` antes do envio
+
+`NotifyStepSchema` também suporta `context_tags.outputs` (inline schema com `tag`, `confidence`,
+`merge`) para gravar dados no ContextStore após entrega (ex: NPS score).
+
+**Nota:** o `context_tags.outputs` do `NotifyStepSchema` usa um schema inline sem o campo `scope`
+(diferente do `ContextTagEntrySchema` completo usado por `reason`/`invoke`). Portanto, notify steps
+não suportam `scope: segment` — segmentos devem usar `reason`/`invoke` para escrita segment-scoped.
+
+Ativação: via `on_human_end` hooks em `retencao_humano`:
+```yaml
+hooks:
+  on_human_end:
+    - pool: wrapup_ia   # obrigatório
+    - pool: nps_ia       # pesquisa isolada
+```
 
 ### Fase B — separação agent_done / contact_close (✅ implementado)
 
@@ -1572,14 +1791,15 @@ Humano clica "Encerrar"
   → mcp-server POST /agent_done (publica contact_closed reason="agent_closed")
   → process_contact_event(agent_closed): último humano → clear human_agent flags
       → get_pool_config → on_human_end hooks?
-          Sim → fire_pool_hooks("on_human_end")
+          Sim → _write_pre_hook_context(close_origin, customer_participant_id)
+                → fire_pool_hooks("on_human_end")
                   → publica conversations.inbound com conference_id por hook
-                  → seta session:{id}:hook_pending:on_human_end = N
+                  → seta session:{id}:hook_pending:on_human_end = N (= 2: wrapup + nps)
                   → seta session:{id}:hook_conf:{conf_id} por hook
           Não → asyncio.create_task(_trigger_contact_close())
-  → process_routed recebe o hook agent ativado
-      → activate_native_agent (agente_finalizacao_v1 executa: NPS + encerramento)
-      → ao retornar: getdel hook_conf → decr hook_pending
+  → process_routed recebe cada hook agent ativado (paralelo)
+      → activate_native_agent (agente_wrapup_v1 visibility array [human_pid] + agente_nps_v1 visibility array [customer_pid])
+      → ao retornar cada um: getdel hook_conf → decr hook_pending
           → pending == 0 → asyncio.create_task(_trigger_contact_close())
   → _trigger_contact_close():
       → publica conversations.outbound session.closed → channel-gateway fecha WS do cliente
@@ -1654,12 +1874,12 @@ Background merge seleciona a versão com maior `left_at` (non-NULL wins).
 **Tests:**
 - `test_consumer.py`: `TestParseParticipantEvent` (8 assertions), `TestWriteRowDispatch::test_participation_intervals_dispatched`
 - `test_reports.py`: `TestQueryParticipationReport` (4 assertions)
-- Total analytics-api (Arc 3 Fase C): **172/172**
+- Total analytics-api (Arc 3 Fase C): **179/179**
 
 **Arc 5 tests (appended):**
 - `test_consumer.py`: `TestParseParticipantEvent` reescrito — `test_participant_joined_returns_two_rows`, `test_participation_row_correct`, `test_segment_row_correct`, `test_segment_id_passed_through`, `test_sequence_index_passed_through`, `test_parent_segment_id_passed_through`, `test_event_id_generated_when_absent`; `TestWriteRowDispatch::test_segments_dispatched`, `test_session_timeline_dispatched`
 - `test_reports.py`: `TestQuerySegmentsReport` (3 assertions — `test_returns_segment_rows`, `test_filters_do_not_crash`, `test_error_returns_empty_with_error_key`)
-- Total analytics-api: **176/176**
+- Total analytics-api: **183/183**
 
 ## Frontend Architecture — platform-ui as standard shell
 
@@ -1907,9 +2127,21 @@ Skills follow a two-stage lifecycle: **draft** (saved YAML not yet in production
 - Every deploy snapshot the `flow` JSON at deploy time into `yaml_snapshot` for rollback reference
 - Deploy calls `publishRegistryChanged(tenantId, "skill", skillId, "updated")` to trigger hot-reload in orchestrator-bridge
 
-**Rollback** = trigger a new deploy pointing to the previous `yaml_snapshot` version (Phase 2: automated rollback button in Deploy UI).
+**Rollback** = trigger a new deploy pointing to the previous `yaml_snapshot` version — ✅ implemented (rollback button in Deploy UI history).
 
-**Phase 2 (deferred):** calendar-scheduled deploys, graceful handoff monitor, automated rollback button.
+**Phase 2 — new agent-registry endpoints (added in Phase 2):**
+
+| Method | Route | Description |
+|--------|-------|-------------|
+| `GET` | `/v1/skills/:skill_id/deployments/scheduled` | Lists pending scheduled deploys (proxies to workflow-api, filters by `skill_scheduled_deploy_v1` + skill_id in context) |
+| `GET` | `/v1/skills/:skill_id/handoff-status` | Returns `{ deployed, active_sessions, pool_ids, deployed_at, deployed_by, deployment_id }` — queries analytics-api for sessions started before `deployed_at` in affected pools |
+
+**Phase 2 — new packages:**
+- `packages/skill-flow-engine/skills/skill_scheduled_deploy_v1.yaml` — timer-based workflow; `on_timeout` IS the deploy trigger
+- `packages/mcp-server-plughub/src/tools/deploy.ts` — `skill_deploy` MCP tool (calls agent-registry POST /v1/skills/:id/deploy)
+- `workflow-api/router.py` — `PersistSuspendRequest.scheduled_at` (ISO-8601) overrides `timeout_hours` calculation
+
+**Phase 2 — complete.** See "Skill Deploy Lifecycle (Phase 2)" in the Pending section for full implementation details.
 
 ### What never to do
 
@@ -2628,19 +2860,21 @@ Revisores (IA e humanos) respondem por critério, no mesmo formato estruturado.
 
 ### Context-Aware / ContextStore
 
-- **Fase 2 — Co-pilot** *(deferred)*: AI Gateway analisa cada mensagem do cliente em background durante a sessão de um agente humano e popula a aba "Capacidades" do Agent Assist com sugestões de resposta personalizada, flags de risco (sentimento, intenção detectada) e ações recomendadas baseadas em `motivo_contato`. Depende de `session.sentimento.*` e `caller.*` já populados no ContextStore.
-- **Fase 3 — Step `resolve` nativo** *(deferred)*: novo step type no skill-flow-engine que encapsula a lógica do `agente_contexto_ia_v1` de forma declarativa inline no YAML (sem depender de agente externo via `task` step). Permite que qualquer agente defina pré-requisitos de contexto inline.
+- ~~**Fase 2 — Co-pilot**~~ ✅ Implementado — ver seção "Fase 2 — Co-pilot (✅ implementado)" acima.
+- ~~**Fase 3 — Step `resolve` nativo**~~ ✅ Implementado — ver seção "Fase 3 — Step `resolve` nativo (✅ implementado)" acima.
 
 ### Arc 5 — ContactSegment (v2)
 
-- **Enrichment post-hoc de `segment_id`** *(deferred)*: eventos sem `segment_id` emitidos por componentes externos (ex: `sentiment_events`, `mcp.audit`) precisam ser enriquecidos retroativamente com o `segment_id` correto a partir de lookup no Redis/ClickHouse pelo `session_id` + `participant_id`.
-- **Materialized views ClickHouse** *(deferred)*: criar `mv_segment_summary` (métricas por segmento: avg_duration_ms, resolution_rate, escalation_rate) e `mv_agent_performance` (métricas por agent_type_id + pool_id, base para Arc 7d performance routing).
+- ~~**Enrichment post-hoc de `segment_id`**~~ ✅: `SegmentEnricher` em `analytics-api/segment_enricher.py` — lookup chain cache LRU → Redis → ClickHouse FINAL; `sentiment.updated` → `lookup_primary(session_id)` (chave Redis `session:{id}:primary_segment`); `mcp.audit` → `lookup_by_instance(session_id, instance_id)` (chave `session:{id}:segment:{instance_id}`). Consumer enriquece antes de parsear via `_ENRICHED_TOPICS = frozenset({"sentiment.updated", "mcp.audit"})`. `sentiment_events` recebe coluna `segment_id Nullable(String)` via migration idempotente. `mcp.audit` roteia para `session_timeline`. Se enriquecimento falhar, `segment_id=None/""` — nenhum evento descartado. `main.py` passa `redis` para `_run_consumer_safe` → `run_consumer`. 27/27 testes em `test_segment_enricher.py`. Total analytics-api: **226/226**.
+- ~~**Materialized views ClickHouse**~~ ✅: `mv_agent_performance_daily` (AggregatingMergeTree, POPULATE) + readable view `v_agent_performance` — expostos via `GET /reports/agent-performance/daily`; `mv_segment_summary` (AggregatingMergeTree, POPULATE) + readable view `v_segment_summary` — expostos via `GET /reports/sessions/complexity`. Ambos na DDL de `clickhouse.py` e aplicados via `ensure_schema()`. Pool scoping (`accessible_pools`) aplicado em ambos os endpoints. Tests: `TestQueryAgentPerformanceDaily` (5) + `TestQuerySessionComplexity` (5) em `test_reports.py`.
 
-### Skill Deploy Lifecycle (Phase 2)
+### Skill Deploy Lifecycle (Phase 2) — ✅ Implementado completo
 
-- **Deploy agendado via Workflow engine** *(deferred)*: integrar com workflow-api para criar uma instância `suspend → deploy no horário configurado`. UI: seletor de data/hora no DeployPage + listagem de deploys agendados pendentes.
-- **Graceful handoff monitor** *(deferred)*: painel no DeployPage mostrando progresso por pool — quantas sessões ainda usam a versão anterior vs nova, com indicador visual de convergência.
-- **Automated rollback button** *(deferred)*: botão na UI de Deploy que dispara um novo deploy apontando para o `yaml_snapshot` de uma versão anterior listada no histórico.
+Todos os três itens foram implementados:
+
+- ~~**Deploy agendado via Workflow engine**~~ ✅: `skill_scheduled_deploy_v1.yaml` — workflow com `reason: timer` suspend; `on_timeout` dispara o deploy. `PersistSuspendRequest.scheduled_at` (ISO-8601 absoluto) em `workflow-api/router.py` sobrepõe o cálculo de `timeout_hours`. MCP tool `skill_deploy` em `mcp-server-plughub/src/tools/deploy.ts` chama `POST /v1/skills/:id/deploy`. `GET /v1/skills/:id/deployments/scheduled` na agent-registry filtra instâncias do workflow `skill_scheduled_deploy_v1` para a skill. UI: `AgentFlowDeployPage.tsx` — seção "Agendar deploy" com seletor `datetime-local`, botão "⏰ Agendar" (viola), listagem de deploys pendentes com botão "✕ Cancelar" que chama `DELETE /v1/workflow/instances/:id/cancel`.
+- ~~**Graceful handoff monitor**~~ ✅: `GET /v1/skills/:id/handoff-status` na agent-registry — detecta o deploy mais recente, consulta analytics-api por sessões ativas iniciadas antes de `deployed_at` nos pools afetados, retorna `{ deployed, active_sessions, pool_ids, deployed_at, deployed_by, deployment_id }`. UI: `AgentFlowDeployPage.tsx` — seção "Monitor de handoff" com KPI card de sessões na versão anterior (verde quando 0, âmbar quando > 0), barra de convergência animada, e polling automático a cada 10 s via `setInterval` em `useEffect`.
+- ~~**Automated rollback button**~~ ✅: botão "↩ Rollback" (âmbar) no histórico do DeployPage; dois estágios — PUT para restaurar `flow` do `yaml_snapshot` + POST para re-deploy nos mesmos `pool_ids` com nota de rollback. Guard: oculto no item mais recente ("atual"); desabilitado se `yaml_snapshot` ausente. `RollbackConfirmModal` inline com info do deploy original (data, pools, deployment_id). Badge "rollback" em laranja em entradas originadas por rollback. `rollbackSkill()` two-step em `AgentFlowDeployPage.tsx`.
 
 ### Usage Metering — Channel Gateway adapters
 
@@ -2654,9 +2888,48 @@ Revisores (IA e humanos) respondem por critério, no mesmo formato estruturado.
 
 ~~**Consumo de `config.changed` namespace `routing`**~~ ✅ Implementado. `RoutingConfigCache` em `routing_config.py` faz fetch do Config API no startup e é invalidado/recarregado via `ConfigChangedHandler` ao receber `config.changed` com `namespace=routing`. `performance_score_weight` lido dinamicamente do cache com fallback para env var. 15/15 testes em `test_routing_config.py`.
 
-### Agent Assist UI — MenuCard substitution mode (Phase 2)
+### Arc 8 — Relatório de Disponibilidade e Pausas de Agentes
 
-- **Modo substituição nos MenuCards** *(deferred)*: os MenuCards renderizados no chat do agente humano são read-only (todos os inputs têm `disabled`). Para ativar o modo substituição: (1) remover `disabled` dos elementos interativos em `MenuCard.tsx`; (2) adicionar handler `POST /api/menu_submit/{sessionId}` com payload `{ menu_id, interaction, result }`; (3) flag `substitutionMode: boolean` prop no componente para alternar entre os dois modos sem duplicar código.
+A maior parte dos dados para volumetria e tempo de atendimento já existe em `participation_intervals` e `segments`. O único gap real é o ciclo de pausa: o `AgentLifecycleEventSchema` já define `agent_pause`, mas o evento não carrega motivo e o consumer da analytics-api o descarta.
+
+**O que precisa ser feito:**
+
+- **`agent_pause` schema** *(deferred)*: adicionar campos `reason_id: string` e `reason_label: string` ao `AgentPauseEventSchema` em `packages/schemas/src/platform-events.ts`. O `agent_ready` já existe e serve como sinal de retomada de pausa.
+
+- **Config API — motivos de pausa** *(deferred)*: seed de namespace `agent_activity` com chave `pause_reasons` — lista de `{ id, label, requires_note: bool }`. Suporte a override por pool via chave `pause_reasons:{pool_id}`. Seed com motivos padrão: `{ id: "intervalo", label: "Intervalo", requires_note: false }`, `{ id: "almoco", label: "Almoço", requires_note: false }`, `{ id: "treinamento", label: "Treinamento", requires_note: false }`, `{ id: "reuniao", label: "Reunião", requires_note: true }`, `{ id: "outro", label: "Outro", requires_note: true }`.
+
+- **orchestrator-bridge — publicar `agent_pause`/`agent_ready` com motivo** *(deferred)*: quando o agente pausa via `PUT /api/agent-pause/:instanceId { reason_id, reason_label, note? }`, o bridge publica `agent_pause` no tópico `agent.lifecycle` com os campos de motivo. Quando retoma (`PUT /api/agent-resume/:instanceId`), publica `agent_ready`.
+
+- **analytics-api — consumir `agent_pause` e `agent_ready`** *(deferred)*: o `parse_agent_lifecycle` hoje retorna `None` para qualquer evento que não seja `agent_done`. Estender para processar `agent_pause` → registra `paused_at` em nova tabela `agent_pause_intervals`; `agent_ready` (quando há uma pausa aberta) → fecha o intervalo com `resumed_at` e calcula `duration_ms`. Schema da tabela:
+  ```sql
+  CREATE TABLE analytics.agent_pause_intervals (
+      interval_id   String,
+      tenant_id     String,
+      instance_id   String,
+      agent_type_id String,
+      pool_id       String,
+      reason_id     String,
+      reason_label  String,
+      note          Nullable(String),
+      paused_at     DateTime,
+      resumed_at    Nullable(DateTime),
+      duration_ms   Nullable(Int64),
+      ingested_at   DateTime DEFAULT now()
+  ) ENGINE = ReplacingMergeTree(ingested_at)
+    ORDER BY (tenant_id, instance_id, paused_at);
+  ```
+
+- **analytics-api — `GET /reports/agent-availability`** *(deferred)*: endpoint que agrega `agent_pause_intervals FINAL` por `(agent_type_id, pool_id, period_date)`. Retorna: `total_pause_duration_ms`, `pause_count`, breakdown por `reason_id` com duração acumulada, disponível com `format=csv`. Pool scoping via `optional_pool_principal` (Arc 7c).
+
+- ~~**platform-ui — AgentReportsPage**~~ ✅: nova página `/config/agent-reports` (roles: supervisor, admin) com duas sub-abas: "Disponibilidade" (pivot agent × data, colunas de datas, células âmbar com intensidade = ms/4h) e "Pausas" (tabela flat de reason_breakdown com paginação e exportação CSV). `useAvailability` hook faz `GET /reports/agent-availability` com filtros de data, pool_id, agent_type_id. Nav entry 📈 "Relatórios de Agentes" adicionada ao grupo Configuração (roles: supervisor, admin). Rotas em `routes.tsx` e i18n em `pt-BR/en/shell.json` atualizadas.
+
+- ~~**platform-ui — PauseReasonModal**~~ ✅: modal intercepta o botão "Pausar" no `AgentAssistPage`. Busca motivos do Config API (`GET /config/agent_activity/pause_reasons`) com fallback para DEFAULT_REASONS (intervalo, almoço, treinamento, reunião, outro). `onPauseRequest` (modal) separado de `onTogglePause` (resume direto). `requires_note: true` exibe textarea obrigatória (≥ 3 chars). Confirma → `setIsPaused(true)` + chama best-effort `PUT /api/agent-pause` (endpoint deferred no orchestrator-bridge — graceful degradation). Fecha no Escape e backdrop click.
+
+**O que NÃO precisa ser adicionado** (já existe):
+- Volumetria de atendimento → `GET /reports/participation` (total_sessions, duration_ms por agente/pool)
+- Tempo médio de atendimento → `GET /reports/agents/performance` (avg_duration_ms, total_sessions)
+- Escalonamentos e transferências → `GET /reports/agents/performance` (escalation_rate, handoff_rate)
+
 
 ### Arc 2 — fechamento
 
@@ -2689,7 +2962,7 @@ Revisores (IA e humanos) respondem por critério, no mesmo formato estruturado.
 
 6. ~~**operator-console fase 1 — heatmap + métricas realtime**~~: ✅ heatmap de sentimento por pool (tiles coloridos por avg_score, ordered worst-first), painel lateral com métricas do pool (available/queue/SLA/distribuição) e resumo 24h; atualização via SSE ~5s. `packages/operator-console/` — React 18 + TypeScript + Vite. Hooks: `usePoolSnapshots` (SSE EventSource), `useSentimentLive` (poll 10s), `useMetrics24h` (poll 60s), `usePoolViews` (merge). Componentes: `HeatmapGrid`, `PoolTile` (cor interpolada, badge SLA breach), `MetricsPanel` (pool detail + distribution bars + 24h summary), `Header` (tenant input, status dot). Build: `tsc -b && vite build` → 157 kB JS gzip 50 kB.
 
-7. ~~**operator-console fase 2 — drill-down read-only**~~: ✅ pool → lista de sessões ativas → transcrição ao vivo. Backend: `sessions.py` em `analytics-api` — `GET /sessions/active` (ClickHouse `closed_at IS NULL` + Redis pipeline LRANGE sentiment, sorted worst-first), `GET /sessions/{id}/stream` (SSE: evento `history` com XRANGE + eventos `entry` via XREAD bloqueante, keepalive 15s), e `GET /sessions/customer/{customer_id}` (histórico de contatos fechados por cliente, `ORDER BY opened_at DESC`, com `FINAL` para dedup ReplacingMergeTree). ClickHouse `sessions` table acrescida de coluna `customer_id Nullable(String)` + migration idempotente `ALTER TABLE ADD COLUMN IF NOT EXISTS`. Consumer/models: `parse_inbound` e `parse_conversations_event` passam `contact_id`/`customer_id` do evento Kafka. Frontend: `useActiveSessions` (poll 10s), `useSessionStream` (EventSource SSE), `SessionList`, `SessionTranscript`, `HeatmapGrid`/`PoolTile` drill-down. `App.tsx` refatorado para 3 níveis: heatmap → sessions → transcript. Build: 168 kB JS gzip 53 kB. Tests: `test_sessions.py` (54 assertions — TestClassify, TestSafeJson, TestParseEntry, TestFetchActiveSessions, TestOverlaySentiment, TestListActiveSessionsEndpoint, TestFetchCustomerHistory, TestCustomerHistoryEndpoint). Total analytics-api: 149/149.
+7. ~~**operator-console fase 2 — drill-down read-only**~~: ✅ pool → lista de sessões ativas → transcrição ao vivo. Backend: `sessions.py` em `analytics-api` — `GET /sessions/active` (ClickHouse `closed_at IS NULL` + Redis pipeline LRANGE sentiment, sorted worst-first), `GET /sessions/{id}/stream` (SSE: evento `history` com XRANGE + eventos `entry` via XREAD bloqueante, keepalive 15s; **ClickHouse fallback**: quando `xrange` retorna vazio — stream expirado em sessões fechadas — chama `store.query_session_messages()` via `asyncio.to_thread` antes de emitir o evento `history`; se ClickHouse também falhar, emite history vazia sem bloquear), e `GET /sessions/customer/{customer_id}` (histórico de contatos fechados por cliente, `ORDER BY opened_at DESC`, com `FINAL` para dedup ReplacingMergeTree). ClickHouse `sessions` table acrescida de coluna `customer_id Nullable(String)` + migration idempotente `ALTER TABLE ADD COLUMN IF NOT EXISTS`. Consumer/models: `parse_inbound` e `parse_conversations_event` passam `contact_id`/`customer_id` do evento Kafka. Frontend: `useActiveSessions` (poll 10s), `useSessionStream` (EventSource SSE), `SessionList`, `SessionTranscript`, `HeatmapGrid`/`PoolTile` drill-down. `App.tsx` refatorado para 3 níveis: heatmap → sessions → transcript. Build: 168 kB JS gzip 53 kB. Tests: `test_sessions.py` (61 assertions — TestClassify, TestSafeJson, TestParseEntry, TestFetchActiveSessions, TestOverlaySentiment, TestListActiveSessionsEndpoint, TestFetchCustomerHistory, TestCustomerHistoryEndpoint, TestStreamClickHouseFallback). Total analytics-api: 156/156.
 
 8. ~~**operator-console fase 3 — intervenção ativa**~~: ✅ Supervisores humanos entram em sessões ativas diretamente via REST (bypass do ciclo MCP agent_login). Backend: `packages/analytics-api/src/plughub_analytics_api/supervisor.py` — `POST /supervisor/join` (cria `supervisor:{session_id}:active` no Redis TTL 4h, XADD `participant_joined` agents_only), `POST /supervisor/message` (XADD `message` no formato `StreamSubscriber._map_event()`, visibility `agents_only` ou `all`), `POST /supervisor/leave` (XADD `participant_left`, DELETE Redis key, idempotente). Router wired em `main.py`. Frontend: `SupervisorPanel.tsx` (composer com visibility toggle, Enter=send, Shift+Enter=newline, Leave button), `SupervisorJoinButton` (inline no header), `useSupervisor` hook (`join/message/leave` com estado `idle|joining|active|leaving|error`), `SupervisorState` type. `SessionTranscript.tsx` atualizado: botão "Entrar como supervisor" no header → `SupervisorPanel` na base quando ativo. Build: 173 kB JS gzip 54 kB.
 
@@ -2817,6 +3090,8 @@ ConversationParticipantEventSchema {
 |----------|---------|-----------|
 | `GET /reports/segments` | `session_id`, `pool_id`, `agent_type_id`, `role`, `outcome`, `from_dt`, `to_dt`, `page`, `page_size`, `format` | Linhas de `segments FINAL` (ReplacingMergeTree dedup); `format=csv` disponível |
 | `GET /reports/agents/performance` | `pool_id`, `agent_type_id`, `role`, `from_dt`, `to_dt`, `format` | Métricas agregadas por `(agent_type_id, pool_id, role)`: `total_sessions`, `avg_duration_ms`, `escalation_rate`, `handoff_rate`, breakdowns por outcome; sem paginação |
+| `GET /reports/agent-performance/daily` | `pool_id`, `agent_type_id`, `from_dt` (date), `to_dt` (date), `format` | **MV-backed** — lê `v_agent_performance` (sobre `mv_agent_performance_daily`); uma linha por `(agent_type_id, pool_id, period_date)`; colunas: `resolution_rate`, `escalation_rate`, `transfer_rate`, `human_rate`, `avg_duration_ms`; pool scoping suportado |
+| `GET /reports/sessions/complexity` | `pool_id`, `min_handoffs`, `from_dt`, `to_dt`, `page`, `page_size`, `format` | **MV-backed** — lê `v_segment_summary` (sobre `mv_segment_summary`) JOIN `sessions FINAL` para filtro de data/pool; uma linha por sessão: `segment_count`, `handoff_count`, `escalation_count`, `total_duration_ms` |
 
 #### Arquivos modificados / criados
 
@@ -2828,16 +3103,16 @@ ConversationParticipantEventSchema {
 | `packages/analytics-api/src/plughub_analytics_api/clickhouse.py` | `_DDL_SEGMENTS`, `_DDL_SESSION_TIMELINE`, `upsert_segment()`, `insert_timeline_event()` |
 | `packages/analytics-api/src/plughub_analytics_api/models.py` | `parse_participant_event` → `list[dict]`; segment_row completo |
 | `packages/analytics-api/src/plughub_analytics_api/consumer.py` | Dispatch `segments` → `upsert_segment`; `session_timeline` → `insert_timeline_event` |
-| `packages/analytics-api/src/plughub_analytics_api/reports_query.py` | `query_segments_report` + `_fetch_segments`; `query_agent_performance_report` + `_fetch_agent_performance` |
-| `packages/analytics-api/src/plughub_analytics_api/reports.py` | `GET /reports/segments` endpoint; `GET /reports/agents/performance` endpoint |
+| `packages/analytics-api/src/plughub_analytics_api/reports_query.py` | `query_segments_report` + `_fetch_segments`; `query_agent_performance_report` + `_fetch_agent_performance`; `query_agent_performance_daily` + `_fetch_agent_performance_daily`; `query_session_complexity` + `_fetch_session_complexity` |
+| `packages/analytics-api/src/plughub_analytics_api/reports.py` | `GET /reports/segments`; `GET /reports/agents/performance`; `GET /reports/agent-performance/daily`; `GET /reports/sessions/complexity` |
 | `packages/analytics-api/.../tests/test_consumer.py` | `TestParseParticipantEvent` (8 assertions); `test_segments_dispatched`, `test_session_timeline_dispatched` |
-| `packages/analytics-api/.../tests/test_reports.py` | `TestQuerySegmentsReport` (3 assertions); `TestQueryAgentPerformanceReport` (5 assertions) |
+| `packages/analytics-api/.../tests/test_reports.py` | `TestQuerySegmentsReport` (3); `TestQueryAgentPerformanceReport` (5); `TestQueryAgentPerformanceDaily` (5); `TestQuerySessionComplexity` (5) |
 | `packages/e2e-tests/scenarios/23_contact_segments.ts` | CRIADO — Parts A/B/C (11 assertions) |
 | `packages/e2e-tests/runner.ts` | `--segments` flag + import `scenario23` |
 
-**Pendente (v2):**
-- Enrichment post-hoc de `segment_id` em eventos sem o campo (sentimento, mcp.audit)
-- Materialized views `segment_summary` e `agent_performance`
+**Pendente (v2):** todos os itens implementados ✅
+- ~~Enrichment post-hoc de `segment_id` em eventos sem o campo (sentimento, mcp.audit)~~ ✅ `SegmentEnricher` — ver Pending section removida acima
+- ~~Materialized views `segment_summary` e `agent_performance`~~ ✅ (`mv_agent_performance_daily` + `mv_segment_summary` + readable views + dois novos endpoints REST)
 
 ### AI Gateway — Multi-account rotation, workload isolation, fallback chain (✅ implementado)
 
@@ -3878,7 +4153,7 @@ Tests: `mention-commands.test.ts` — 15 assertions (parseCommandName ×5, handl
 - Failure: invoke fails inside block → engine rewinds to `begin_transaction.on_failure`, maskedScope cleared
 - Menu timeout inside block → rewind to `on_failure`
 
-Total skill-flow-engine: **86/86 tests** (10 test files).
+Total skill-flow-engine: **101/101 tests** (11 test files).
 
 ### agent-registry — masked block validation
 
@@ -4338,7 +4613,8 @@ React 18 + TypeScript + Vite. **Original** porta de dev: 5175. Proxy: `/api` →
 2. `conversation.assigned` chega via `pool:events:{poolId}` → `setSessionId`, `fetchHistory`, atualiza URL
 3. Mensagens chegam por `message.text` WS events → adicionadas a `messages[]`
 4. Agente encerra → `handleClose` → POST `/api/agent_done/{sessionId}` → volta ao lobby
-5. Cliente desconecta → `session.closed` com `client_disconnect` → modal de encerramento pendente
+5. Cliente desconecta → `session.closed` com `client_disconnect` → contato removido automaticamente (sem CloseModal — wrap-up é server-side via `agente_finalizacao_v1`)
+6. Agente clica "Desligar" → `handleDesligar` → `handleClose(sessionId, { issue_status: "Desligado pelo agente", outcome: "abandoned" })` → `agent_done` imediato sem modal
 
 ### Componentes
 
@@ -4347,7 +4623,7 @@ React 18 + TypeScript + Vite. **Original** porta de dev: 5175. Proxy: `/api` →
 | `Header` | Nome do agente, pool, session_id, status WS, SLA badge, timer de atendimento ao vivo |
 | `ChatArea` | Lista de mensagens + indicador de digitação AI + painel de sentimento ao vivo |
 | `AgentInput` | Input de texto, botão enviar, trigger do CloseModal |
-| `CloseModal` | issue_status, outcome, handoff_reason antes de chamar agent_done |
+| `CloseModal` | issue_status, outcome, handoff_reason — usado apenas para encerramento manual explícito; **não** aparece em `session.closed` (wrap-up server-side via `agente_finalizacao_v1`) |
 | `RightPanel` | Tab container: Estado / Capacidades / Contexto / Histórico |
 | `ToastContainer` | Notificações temporárias e persistentes |
 
@@ -4409,7 +4685,7 @@ React 18 + TypeScript + Vite. **Original** porta de dev: 5175. Proxy: `/api` →
 
 **`App.tsx`** — evento `menu.render` agora popula `menuData` estruturado no lugar do texto plano com bullets. O campo `text` mantém o `prompt` como fallback para consumidores simples.
 
-**Modo substituição (futuro)** — todos os elementos interativos têm apenas `disabled`; ativar substitution mode requer remover o atributo + adicionar handler `POST /api/menu_submit/{sessionId}`.
+**Modo substituição (Phase 2 — ✅ implementado)** — `substitutionMode: boolean` prop em `MenuCard.tsx` alterna entre observação (disabled) e substituição (interativo). Quando ativo: borda âmbar, badge "substituição", todos os 5 tipos de interação (button/list/checklist/form/text) tornam-se funcionais. `SubmitResult = string | string[] | Record<string, string>`. `onSubmit` propaga por `ChatArea → MessageBubble → MenuCard`. Botão "🔄 Substituir/Substituindo" na `ActionBar` liga/desliga o modo; reset automático ao trocar de contato. Backend: `POST /api/menu_submit/:sessionId` no mcp-server-plughub faz XADD `interaction_result` no stream Redis e pub/sub `agent:events:{sessionId}` — o Skill Flow Engine retoma o suspend step. Auto-disable após submit bem-sucedido.
 
 ### Build: 566 kB JS / 164 kB gzip
 

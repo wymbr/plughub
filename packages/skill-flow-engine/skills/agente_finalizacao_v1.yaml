@@ -15,7 +15,7 @@
 #
 # Invariantes:
 #   - Nunca bloqueia: on_failure sempre avança
-#   - Resposta NPS é opcional (timeout_s: 60 → pula para encerrar)
+#   - Resposta NPS é opcional (timeout_s: 30 → pula para encerrar)
 #   - NPS score persiste em session.nps_score no ContextStore
 
 id: skill_finalizacao_v1
@@ -48,7 +48,7 @@ steps:
     type: menu
     interaction: button
     prompt: "Em uma escala de 0 a 10, qual a probabilidade de você recomendar nosso atendimento para um amigo ou familiar?"
-    timeout_s: 60
+    timeout_s: 30
     options:
       - id: "0"
         label: "0"

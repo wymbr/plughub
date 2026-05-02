@@ -244,16 +244,36 @@ export const ReasonStepSchema = z.object({
 export const NotifyStepSchema = z.object({
   id:         z.string(),
   type:       z.literal("notify"),
-  /** Suporta {{$.pipeline_state.*}} para personalização dinâmica */
+  /** Suporta {{$.pipeline_state.*}} e {{@ctx.*}} para personalização dinâmica */
   message:    z.string().min(1),
   channel:    z.enum(["session", "whatsapp", "sms", "email"]).default("session"),
   /**
    * Visibilidade da mensagem.
-   *   "all"         → entregue ao cliente e a todos os agentes (padrão quando ausente)
-   *   "agents_only" → entregue somente aos agentes; o cliente não vê a mensagem.
-   *                   Usado por especialistas em conferência (ex: co-pilot SAC).
+   *   "all"             → entregue ao cliente e a todos os agentes (padrão quando ausente)
+   *   "agents_only"     → entregue somente aos agentes; o cliente não vê a mensagem.
+   *                       Usado por especialistas em conferência (ex: co-pilot, wrap-up).
+   *   ["participant_id"] → entregue APENAS aos participant_ids listados.
+   *                       Permite que um agente converse exclusivamente com o cliente
+   *                       (via customer_participant_id) sem que o agente humano veja.
+   *                       Usado pelo agente NPS para isolar avaliação do agente.
+   *                       Suporta @ctx.* para resolução dinâmica do participant_id.
    */
-  visibility: z.enum(["all", "agents_only"]).optional(),
+  visibility: z.union([
+    z.enum(["all", "agents_only"]),
+    z.array(z.string().min(1)).min(1),
+  ]).optional(),
+  /**
+   * Mapeamento de saída para o ContextStore.
+   * Permite que o notify step registre dados no ContextStore após entrega.
+   * Ex: registrar que o NPS foi enviado, ou gravar timestamp de notificação.
+   */
+  context_tags: z.object({
+    outputs: z.record(z.object({
+      tag:        z.string(),
+      confidence: z.number().min(0).max(1).default(1.0),
+      merge:      z.enum(["overwrite", "append"]).default("overwrite"),
+    })),
+  }).optional(),
   on_success: z.string(),
   on_failure: z.string(),
 })
@@ -308,12 +328,16 @@ export const MenuStepSchema = z.object({
   output_as: z.string().optional(),
   /**
    * Visibilidade do prompt enviado antes de aguardar a resposta.
-   *   "all"         → prompt entregue ao cliente e a todos os agentes (padrão quando ausente)
-   *   "agents_only" → prompt entregue somente aos agentes; o cliente não vê o prompt.
-   *                   Útil para menus internos de co-pilot ou aprovação entre agentes.
-   *                   O resultado/resposta ao menu segue regras normais de roteamento.
+   *   "all"             → prompt entregue ao cliente e a todos os agentes (padrão quando ausente)
+   *   "agents_only"     → prompt entregue somente aos agentes; o cliente não vê o prompt.
+   *                       Útil para menus internos de co-pilot ou aprovação entre agentes.
+   *   ["participant_id"] → prompt entregue APENAS aos participant_ids listados.
+   *                       Usado para interações exclusivas com o cliente (ex: NPS).
    */
-  visibility: z.enum(["all", "agents_only"]).optional(),
+  visibility: z.union([
+    z.enum(["all", "agents_only"]),
+    z.array(z.string().min(1)).min(1),
+  ]).optional(),
   /**
    * Tempo limite para aguardar a resposta (segundos).
    *   0  → retorno imediato (sem espera)
@@ -456,6 +480,100 @@ export const EndTransactionStepSchema = z.object({
 })
 export type EndTransactionStep = z.infer<typeof EndTransactionStepSchema>
 
+// ── ResolveStep — coleta de contexto declarativa inline (Fase 3 — Arc 5 / Context-Aware) ──
+
+/**
+ * Campo do ContextStore que o resolve step deve garantir.
+ * Análogo ao SkillRequiredContextSchema mas com semântica de coleta ativa.
+ */
+export const ResolveRequiredFieldSchema = z.object({
+  /** Tag do ContextStore no formato namespace.campo (ex: "caller.cpf") */
+  tag:            z.string().min(1),
+  /** Confiança mínima aceitável — entradas abaixo disso disparam coleta */
+  confidence_min: z.number().min(0).max(1).default(0.7),
+  /** Se true, o step gera uma pergunta para este campo quando ausente ou incerto */
+  required:       z.boolean().default(true),
+})
+export type ResolveRequiredField = z.infer<typeof ResolveRequiredFieldSchema>
+
+/**
+ * Lookup CRM opcional executado antes de perguntar ao cliente.
+ * Evita coletar dados que já estão disponíveis no CRM.
+ * Erros no lookup são não-fatais — o step avança para coleta manual.
+ */
+export const ResolveCrmLookupSchema = z.object({
+  /** mcp-server alvo (ex: "mcp-server-crm") */
+  mcp_server:   z.string().min(1),
+  /** Tool do mcp-server (ex: "customer_get") */
+  tool:         z.string().min(1),
+  /** Inputs do tool — suporta literais, $.jsonpath e @ctx.namespace.campo */
+  input:        StepInputSchema.optional(),
+  /** Mapeamento de campos do resultado para o ContextStore */
+  context_tags: ToolContextTagsSchema.optional(),
+})
+export type ResolveCrmLookup = z.infer<typeof ResolveCrmLookupSchema>
+
+/**
+ * ResolveStep — coleta de contexto declarativa inline no YAML.
+ *
+ * Substitui a necessidade de chamar agente_contexto_ia_v1 via task step.
+ * Executa um pipeline de 5 fases sem criar uma sessão de agente extra:
+ *
+ *   Fase 1 — Gap check:    Verifica ContextStore. Se completo → on_success imediato.
+ *   Fase 2 — CRM lookup:   Chama MCP tool para preencher gaps. Erros são não-fatais.
+ *   Fase 3 — LLM question: Gera pergunta consolidada via AI Gateway.
+ *   Fase 4 — Input:        Envia pergunta e aguarda resposta do cliente (BLPOP).
+ *   Fase 5 — LLM extract:  Extrai campos da resposta e grava no ContextStore.
+ *
+ * Garantias:
+ *   - Nunca bloqueia o fluxo: timeout/disconnect/erros de LLM → on_success com method=skipped
+ *   - on_failure apenas para falhas catastróficas (notification_send, lock roubado)
+ *   - 0 chamadas LLM quando CRM resolve o contexto
+ *   - Máximo 2 chamadas LLM quando é necessário perguntar ao cliente
+ */
+export const ResolveStepSchema = z.object({
+  id:   z.string(),
+  type: z.literal("resolve"),
+
+  /** Campos que o step deve garantir no ContextStore antes de avançar */
+  required_fields: z.array(ResolveRequiredFieldSchema).min(1),
+
+  /**
+   * Lookup CRM executado na Fase 2 quando há gaps após a Fase 1.
+   * Ausente → pula direto para geração de pergunta (Fase 3).
+   */
+  crm_lookup: ResolveCrmLookupSchema.optional(),
+
+  /**
+   * Prompt ID para geração da pergunta consolidada (Fase 3).
+   * O AI Gateway recebe: { gaps: string[], context: Record<string, unknown> }
+   * e deve retornar: { pergunta: string }
+   */
+  question_prompt_id: z.string().default("resolve_generate_question_v1"),
+
+  /**
+   * Prompt ID para extração de campos da resposta do cliente (Fase 5).
+   * O AI Gateway recebe: { response: string, required_fields: string[], context: Record<string, unknown> }
+   * e deve retornar: { fields: Record<string, string | null> }
+   */
+  extract_prompt_id: z.string().default("resolve_extract_fields_v1"),
+
+  /**
+   * Tempo limite (segundos) para aguardar resposta do cliente na Fase 4.
+   *  -1 ou 0 → bloqueia indefinidamente (on_success com method=timeout nunca ocorre)
+   *  >0      → avança para on_success com method=timeout ao expirar
+   * Default: 300 (5 minutos)
+   */
+  timeout_s: z.number().int().min(-1).default(300),
+
+  /** Chave em pipeline_state.results para o relatório de saída do resolve */
+  output_as: z.string().optional(),
+
+  on_success: z.string(),
+  on_failure: z.string(),
+})
+export type ResolveStep = z.infer<typeof ResolveStepSchema>
+
 // ── MentionCommand — comandos que um agente especialista reconhece via @mention ──
 
 /**
@@ -503,6 +621,8 @@ export const FlowStepSchema = z.discriminatedUnion("type", [
   // Masked input: transação atômica
   BeginTransactionStepSchema,
   EndTransactionStepSchema,
+  // Arc 5 / Context-Aware Fase 3: coleta de contexto inline
+  ResolveStepSchema,
   // Arc 4: workflow automation
   z.object({
     type:           z.literal("suspend"),

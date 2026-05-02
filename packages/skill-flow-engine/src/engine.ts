@@ -149,11 +149,14 @@ export class SkillFlowEngine {
      * The suspend step reads this instead of suspending again.
      */
     resumeContext?: ResumeContext
+    /** Segment UUID for segment-scoped ContextStore writes. */
+    segmentId?:        string
   }): Promise<RunResult> {
     const { tenantId, sessionId, customerId, skillId, flow, sessionContext } = params
     const instanceId        = params.instanceId        ?? "unknown"
     const pipelineSessionId = params.pipelineSessionId ?? sessionId
     const resumeContext     = params.resumeContext
+    const segmentId         = params.segmentId
 
     // ── Idempotência: tenta adquirir lock exclusivo ───────────────────────
     const lockAcquired = await this.stateManager.acquireLock(tenantId, pipelineSessionId, instanceId)
@@ -168,6 +171,7 @@ export class SkillFlowEngine {
       return await this._execute({
         tenantId, sessionId, pipelineSessionId, customerId, skillId, flow, sessionContext, instanceId,
         ...(resumeContext ? { resumeContext } : {}),
+        ...(segmentId ? { segmentId } : {}),
       })
     } finally {
       // Libera apenas se ainda somos o titular do lock
@@ -189,8 +193,9 @@ export class SkillFlowEngine {
     sessionContext:    Record<string, unknown>
     instanceId:        string
     resumeContext?:    ResumeContext
+    segmentId?:        string
   }): Promise<RunResult> {
-    const { tenantId, sessionId, pipelineSessionId, customerId, skillId, flow, sessionContext, instanceId, resumeContext } = params
+    const { tenantId, sessionId, pipelineSessionId, customerId, skillId, flow, sessionContext, instanceId, resumeContext, segmentId } = params
 
     // 1. Retomar ou iniciar pipeline (usa pipelineSessionId para state isolation)
     let state = await this.stateManager.get(tenantId, pipelineSessionId)
@@ -240,7 +245,7 @@ export class SkillFlowEngine {
       // pipelineSessionId → usado para state/lock
       const ctx = this._buildContext(
         tenantId, sessionId, pipelineSessionId, customerId, sessionContext, state, stepMap, instanceId,
-        maskedScope, transactionOnFailure ?? null, resumeContext,
+        maskedScope, transactionOnFailure ?? null, resumeContext, segmentId,
       )
 
       // Executar step
@@ -374,6 +379,7 @@ export class SkillFlowEngine {
     maskedScope:          Record<string, string>,
     transactionOnFailure: string | null,
     resumeContext?:       ResumeContext,
+    segmentId?:           string,
   ): StepContext {
     const self = this
 
@@ -384,6 +390,8 @@ export class SkillFlowEngine {
       sessionContext,
       state,
       redis: self.config.redis,
+      instanceId,
+      ...(segmentId ? { segmentId } : {}),
       // Masked input — in-memory transaction scope (mutable, never persisted)
       maskedScope:          maskedScope,
       transactionOnFailure: transactionOnFailure,

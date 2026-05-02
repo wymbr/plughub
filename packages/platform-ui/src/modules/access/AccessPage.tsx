@@ -1076,9 +1076,8 @@ function TemplatesPane({ tenantId, adminToken, availablePools, users, grantedBy 
 type PageTab = 'users' | 'templates'
 
 export default function AccessPage() {
-  const { session } = useAuth()
-  const tenantId  = session?.tenantId ?? ''
-  const grantedBy = session?.email ?? session?.userId ?? 'admin'
+  const { session, tenantId, currentUser } = useAuth()
+  const grantedBy = currentUser?.email ?? currentUser?.userId ?? 'admin'
 
   const [activeTab,   setActiveTab]   = useState<PageTab>('users')
   const [adminToken,  setAdminToken]  = useState('')

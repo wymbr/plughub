@@ -216,12 +216,34 @@ export const AgentDoneEventSchema = z.object({
 export type AgentDoneEvent = z.infer<typeof AgentDoneEventSchema>
 
 export const AgentPauseEventSchema = z.object({
-  event:       z.literal("agent_pause"),
-  tenant_id:   z.string(),
-  instance_id: z.string(),
-  timestamp:   z.string().datetime(),
+  event:         z.literal("agent_pause"),
+  tenant_id:     z.string(),
+  instance_id:   z.string(),
+  agent_type_id: z.string().optional(),
+  pool_id:       z.string().optional(),
+  /** Pause reason code from agent_activity.pause_reasons Config API namespace */
+  reason_id:     z.string(),
+  /** Human-readable label for the reason, e.g. "Intervalo" */
+  reason_label:  z.string(),
+  /** Optional free-text note — required when reason.requires_note = true */
+  note:          z.string().optional(),
+  timestamp:     z.string().datetime(),
 })
 export type AgentPauseEvent = z.infer<typeof AgentPauseEventSchema>
+
+/** agent_ready is also used to signal return from pause (when preceded by agent_pause) */
+export const AgentResumeEventSchema = z.object({
+  event:         z.literal("agent_ready"),
+  tenant_id:     z.string(),
+  instance_id:   z.string(),
+  agent_type_id: z.string(),
+  pools:                   z.array(z.string()),
+  status:                  z.literal("ready"),
+  execution_model:         z.string(),
+  max_concurrent_sessions: z.number().int().positive(),
+  current_sessions:        z.number().int().nonnegative(),
+  timestamp:               z.string().datetime(),
+})
 
 export const AgentLogoutEventSchema = z.object({
   event:           z.literal("agent_logout"),

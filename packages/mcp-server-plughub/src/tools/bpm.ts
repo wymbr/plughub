@@ -103,8 +103,17 @@ const NotificationSendInputSchema = z.object({
    *   "agents_only" → escrita no stream da sessão e publicada em agent:events:*
    *                   para entrega em tempo real ao Agent Assist UI.
    *                   O cliente NÃO recebe. Usado por co-pilots e especialistas.
+   *   ["part_id1"]  → escrita no stream da sessão com visibility array.
+   *                   Entregue APENAS aos participant_ids listados.
+   *                   O stream_subscriber do webchat entrega ao cliente se o
+   *                   customer_participant_id estiver na lista. O agent:events
+   *                   NÃO é notificado (agentes não veem). Usado pelo agente NPS
+   *                   para conversar exclusivamente com o cliente.
    */
-  visibility: z.enum(["all", "agents_only"]).default("all"),
+  visibility: z.union([
+    z.enum(["all", "agents_only"]),
+    z.array(z.string().min(1)).min(1),
+  ]).default("all"),
   /**
    * Menu interativo (opcional) — quando presente e interaction != "text",
    * publica menu.payload em conversations.outbound em vez de message.text.
@@ -458,7 +467,8 @@ export function registerBpmTools(server: McpServer, deps?: BpmDeps): void {
       const hasMaskedText = parsed.menu?.interaction === "text" &&
                             (parsed.menu?.masked_fields?.length ?? 0) > 0
       const hasMenu    = parsed.menu && (parsed.menu.interaction !== "text" || hasMaskedText)
-      const agentsOnly = parsed.visibility === "agents_only"
+      const agentsOnly    = parsed.visibility === "agents_only"
+      const isArrayVis    = Array.isArray(parsed.visibility)
 
       if (agentsOnly) {
         // agents_only: write to session stream + publish to agent:events Redis channel.
@@ -491,6 +501,55 @@ export function registerBpmTools(server: McpServer, deps?: BpmDeps): void {
               visibility: "agents_only",
             }))
           } catch { /* non-fatal */ }
+        }
+      } else if (isArrayVis) {
+        // Array visibility: write to session stream with the participant_id list.
+        // The stream_subscriber delivers to the webchat client ONLY if
+        // customer_participant_id is in the list.
+        // agent:events is NOT notified — agents listed in the array receive
+        // the message via their own stream subscription (session_context_get).
+        // conversations.outbound is NOT used.
+        // Primary use case: NPS agent talks exclusively to the customer without
+        // the human agent seeing the messages.
+        if (deps?.redis) {
+          try {
+            await deps.redis.xadd(
+              `session:${parsed.session_id}:stream`,
+              "*",
+              "type",       "message",
+              "timestamp",  timestamp,
+              "author",     JSON.stringify({ type: "agent_ai", id: "orchestrator" }),
+              "visibility", JSON.stringify(parsed.visibility),
+              "payload",    JSON.stringify({
+                message_id: messageId,
+                content:    { type: "text", text: parsed.message },
+              }),
+            )
+          } catch { /* non-fatal — stream may not exist yet */ }
+          // NÃO publicamos em agent:events — visibilidade restrita impede que
+          // o Agent Assist UI do agente humano veja estas mensagens.
+          // Os participantes listados no array já lêem o stream diretamente
+          // (customer via StreamSubscriber, agentes via session_context_get).
+        }
+
+        // Para interações de menu com array visibility (ex: NPS button),
+        // publicamos em conversations.outbound para que o channel-gateway
+        // entregue a interação ao cliente via o adapter webchat.
+        if (hasMenu && deps?.kafka) {
+          await deps.kafka.publish("conversations.outbound", {
+            type:          "menu.payload",
+            contact_id:    contactId,
+            session_id:    parsed.session_id,
+            menu_id:       messageId,
+            channel,
+            interaction:   parsed.menu!.interaction,
+            prompt:        parsed.message,
+            options:       parsed.menu!.options        ?? [],
+            fields:        parsed.menu!.fields         ?? null,
+            masked_fields: parsed.menu!.masked_fields  ?? null,
+            visibility:    parsed.visibility,
+            timestamp,
+          })
         }
       } else if (deps?.kafka) {
         if (hasMenu) {

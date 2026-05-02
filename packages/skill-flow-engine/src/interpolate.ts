@@ -19,11 +19,11 @@ import type { StepContext }   from "./executor"
 
 // ── Regex ─────────────────────────────────────────────────────────────────────
 
-/** Interpola {{$.path}}, {{@ctx.path}} ou {{@masked.field}} numa string template */
-const INTERPOLATION_REGEX = /\{\{((?:\$\.|@ctx\.|@masked\.)[^}]+)\}\}/g
+/** Interpola {{$.path}}, {{@ctx.path}}, {{@segment.path}} ou {{@masked.field}} numa string template */
+const INTERPOLATION_REGEX = /\{\{((?:\$\.|@ctx\.|@segment\.|@masked\.)[^}]+)\}\}/g
 
 /** Detecta se uma string inteira é uma referência única (sem texto ao redor) */
-const SINGLE_REF_REGEX = /^(?:\$\.|@ctx\.|@masked\.)/
+const SINGLE_REF_REGEX = /^(?:\$\.|@ctx\.|@segment\.|@masked\.)/
 
 // ── resolveRef — resolve uma única referência ────────────────────────────────
 
@@ -42,6 +42,9 @@ export async function resolveRef(
 ): Promise<unknown> {
   if (ref.startsWith("@masked.")) {
     return resolveMaskedRef(ref, ctx)
+  }
+  if (ref.startsWith("@segment.")) {
+    return resolveSegmentRef(ref, ctx, contextStore)
   }
   if (ref.startsWith("@ctx.")) {
     return resolveCtxRef(ref, ctx, contextStore)
@@ -145,7 +148,48 @@ export async function resolveInputMap(
   return resolved
 }
 
+// ── resolveVisibility — resolve visibility arrays with @ctx.* / @segment.* ──
+
+/**
+ * Resolve visibility arrays that may contain @ctx.* or @segment.* references.
+ * String values ("all", "agents_only") pass through unchanged.
+ * Array values have each element resolved; empty result falls back to "all".
+ */
+export async function resolveVisibility(
+  visibility: string | string[],
+  ctx:        StepContext,
+  contextStore?: IContextStore,
+): Promise<string | string[]> {
+  if (typeof visibility === "string") return visibility
+  if (!Array.isArray(visibility)) return visibility
+  const resolved: string[] = []
+  for (const item of visibility) {
+    if (item.startsWith("@ctx.") || item.startsWith("@segment.")) {
+      const val = await resolveRef(item, ctx, contextStore)
+      if (val != null && val !== "") resolved.push(String(val))
+    } else {
+      resolved.push(item)
+    }
+  }
+  return resolved.length > 0 ? resolved : "all"
+}
+
 // ── Implementações internas ──────────────────────────────────────────────────
+
+/** Resolve um @segment.local_tag → value do ContextStore com segment prefix */
+async function resolveSegmentRef(
+  ref:          string,
+  ctx:          StepContext,
+  contextStore:  IContextStore | undefined,
+): Promise<unknown> {
+  if (!contextStore) return undefined
+  if (!ctx.segmentId) return undefined
+
+  // "@segment.nps_score" → "segment.{segmentId}.nps_score"
+  const localTag = ref.replace(/^@segment\./, "")
+  const fullTag  = `segment.${ctx.segmentId}.${localTag}`
+  return contextStore.getValue(ctx.sessionId, fullTag, ctx.customerId)
+}
 
 /** Resolve um @ctx.namespace.campo → value do  IContextStore */
 async function resolveCtxRef(

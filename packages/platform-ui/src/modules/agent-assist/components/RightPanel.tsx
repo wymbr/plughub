@@ -1,12 +1,13 @@
 /**
  * RightPanel
- * Tab content for Estado / Capacidades / Contexto / Histórico.
+ * Tab content for Estado / Capacidades / Contexto.
  * The tab bar is rendered in the shared sub-header row of AgentAssistPage.
  */
 
 import React from "react";
 import {
   ActiveTab,
+  CopilotSuggestions,
   CustomerContext,
   SupervisorCapabilities,
   SupervisorState,
@@ -14,12 +15,12 @@ import {
 import { EstadoTab }     from "./tabs/EstadoTab";
 import { CapacidadesTab } from "./tabs/CapacidadesTab";
 import { ContextoTab }   from "./tabs/ContextoTab";
-import { HistoricoTab }  from "./tabs/HistoricoTab";
 
 interface RightPanelProps {
   activeTab: ActiveTab;
   supervisorState: SupervisorState | null;
   capabilities: SupervisorCapabilities | null;
+  copilotSuggestions?: CopilotSuggestions | null;
   customerId: string | null;
   onInviteAgent?: (agentTypeId: string) => void;
   onEscalate?: (poolId: string) => void;
@@ -29,6 +30,7 @@ export const RightPanel: React.FC<RightPanelProps> = ({
   activeTab,
   supervisorState,
   capabilities,
+  copilotSuggestions,
   customerId,
   onInviteAgent,
   onEscalate,
@@ -46,15 +48,13 @@ export const RightPanel: React.FC<RightPanelProps> = ({
         {activeTab === "capacidades" && (
           <CapacidadesTab
             capabilities={capabilities}
+            copilotSuggestions={copilotSuggestions}
             onInviteAgent={onInviteAgent}
             onEscalate={onEscalate}
           />
         )}
         {activeTab === "contexto" && (
           <ContextoTab context={context} />
-        )}
-        {activeTab === "historico" && (
-          <HistoricoTab customerId={customerId} />
         )}
       </div>
     </div>

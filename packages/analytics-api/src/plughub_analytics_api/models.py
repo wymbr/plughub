@@ -12,12 +12,13 @@ Topics consumed:
   conversations.events       → sessions (contact_open / contact_closed) + messages
   agent.lifecycle            → agent_events (agent_done)
   usage.events               → usage_events (passthrough)
-  sentiment.updated          → sentiment_events (passthrough)
+  sentiment.updated          → sentiment_events (+ segment_id enrichment via SegmentEnricher)
   queue.position_updated     → queue_events (position update)
   workflow.events            → workflow_events (lifecycle)
   collect.events             → collect_events (lifecycle)
   conversations.participants → participation_intervals (participant joined / left)
   evaluation.events          → evaluation_results + evaluation_events (Arc 6)
+  mcp.audit                  → session_timeline (+ segment_id enrichment via SegmentEnricher)
 """
 from __future__ import annotations
 
@@ -225,10 +226,12 @@ def parse_conversations_event(payload: dict[str, Any]) -> list[dict] | None:
                 "message_id":   payload.get("message_id") or _gen_id(),
                 "tenant_id":    tenant_id,
                 "session_id":   session_id,
+                "author_id":    payload.get("author_id") or payload.get("participant_id"),
                 "author_role":  payload.get("author_role") or payload.get("role", ""),
                 "channel":      payload.get("channel", ""),
                 "content_type": payload.get("content_type") or "",
                 "visibility":   payload.get("visibility") or "all",
+                "content":      payload.get("content"),
                 "timestamp":    payload.get("timestamp") or _now(),
             }
         ]
@@ -262,32 +265,76 @@ def parse_conversations_event(payload: dict[str, Any]) -> list[dict] | None:
 def parse_agent_lifecycle(payload: dict[str, Any]) -> dict | None:
     """
     Handles agent.lifecycle events.
-    Only agent_done is relevant for analytics — other events are skipped.
+
+    agent_done  → agent_events table (as before).
+    agent_pause → agent_pause_intervals table (open interval; action="open").
+    agent_ready → may close an open pause interval (action="close").
+                  The consumer is responsible for Redis state tracking and
+                  will only write a close row when a matching open interval
+                  is found in Redis.
+
+    For agent_pause and agent_ready the dict carries an "action" key
+    ("open" / "close_check") so the consumer can dispatch them correctly.
+    Other event types are skipped (return None).
     """
-    event = payload.get("event", "")
-    if event != "agent_done":
-        return None
+    event     = payload.get("event", "")
+    tenant_id = payload.get("tenant_id", "")
+    instance_id = payload.get("instance_id", "")
 
-    session_id = payload.get("session_id")
-    tenant_id  = payload.get("tenant_id")
-    if not session_id or not tenant_id:
-        return None
+    if event == "agent_done":
+        session_id = payload.get("session_id")
+        if not session_id or not tenant_id:
+            return None
+        return {
+            "table":          "agent_events",
+            "event_id":       _gen_id(),
+            "tenant_id":      tenant_id,
+            "session_id":     session_id,
+            "agent_type_id":  payload.get("agent_type_id") or "",
+            "pool_id":        payload.get("pool_id") or "",
+            "instance_id":    instance_id,
+            "event_type":     "agent_done",
+            "outcome":        payload.get("outcome"),
+            "handoff_reason": payload.get("handoff_reason"),
+            "handle_time_ms": payload.get("handle_time_ms"),
+            "routing_mode":   None,
+            "timestamp":      payload.get("timestamp") or _now(),
+        }
 
-    return {
-        "table":         "agent_events",
-        "event_id":      _gen_id(),
-        "tenant_id":     tenant_id,
-        "session_id":    session_id,
-        "agent_type_id": payload.get("agent_type_id") or "",
-        "pool_id":       payload.get("pool_id") or "",
-        "instance_id":   payload.get("instance_id") or "",
-        "event_type":    "agent_done",
-        "outcome":       payload.get("outcome"),
-        "handoff_reason": payload.get("handoff_reason"),
-        "handle_time_ms": payload.get("handle_time_ms"),
-        "routing_mode":  None,
-        "timestamp":     payload.get("timestamp") or _now(),
-    }
+    if event == "agent_pause":
+        if not tenant_id or not instance_id:
+            return None
+        import uuid as _uuid
+        return {
+            "table":        "agent_pause_intervals",
+            "action":       "open",
+            "interval_id":  str(_uuid.uuid4()),
+            "tenant_id":    tenant_id,
+            "instance_id":  instance_id,
+            "agent_type_id": payload.get("agent_type_id") or "",
+            "pool_id":       payload.get("pool_id") or "",
+            "reason_id":    payload.get("reason_id", ""),
+            "reason_label": payload.get("reason_label", ""),
+            "note":         payload.get("note") or None,
+            "paused_at":    payload.get("timestamp") or _now(),
+        }
+
+    if event == "agent_ready":
+        if not tenant_id or not instance_id:
+            return None
+        # Return a sentinel that tells the consumer to check Redis for an
+        # open pause interval.  The consumer will enrich this into a full
+        # close row or drop it if no open interval exists.
+        return {
+            "table":        "agent_pause_intervals",
+            "action":       "close_check",
+            "tenant_id":    tenant_id,
+            "instance_id":  instance_id,
+            "resumed_at":   payload.get("timestamp") or _now(),
+        }
+
+    # Untracked event (agent_login, agent_busy, agent_heartbeat, agent_logout) — skip.
+    return None
 
 
 # ─── usage.events ─────────────────────────────────────────────────────────────
@@ -314,8 +361,17 @@ def parse_usage_event(payload: dict[str, Any]) -> dict | None:
 
 # ─── sentiment.updated ────────────────────────────────────────────────────────
 
-def parse_sentiment_event(payload: dict[str, Any]) -> dict | None:
-    """Passthrough from sentiment.updated → sentiment_events table."""
+def parse_sentiment_event(
+    payload:    dict[str, Any],
+    segment_id: str | None = None,
+) -> dict | None:
+    """
+    Maps sentiment.updated → sentiment_events table.
+
+    The optional ``segment_id`` parameter is injected by the consumer after
+    post-hoc enrichment via SegmentEnricher.lookup_primary().  When enrichment
+    fails (Redis and ClickHouse both miss) the field is stored as None.
+    """
     event_id  = payload.get("event_id")
     tenant_id = payload.get("tenant_id")
     session_id = payload.get("session_id")
@@ -330,6 +386,67 @@ def parse_sentiment_event(payload: dict[str, Any]) -> dict | None:
         "pool_id":    payload.get("pool_id") or "",
         "score":      float(payload.get("score", 0.0)),
         "category":   payload.get("category") or "neutral",
+        "segment_id": segment_id or None,
+        "timestamp":  payload.get("timestamp") or _now(),
+    }
+
+
+# ─── mcp.audit ────────────────────────────────────────────────────────────────
+
+def parse_mcp_audit_event(
+    payload:    dict[str, Any],
+    segment_id: str | None = None,
+) -> dict | None:
+    """
+    Maps mcp.audit → session_timeline table.
+
+    AuditRecord fields used:
+      tenant_id, session_id, instance_id, server_name, tool_name,
+      allowed, injection_detected, duration_ms, timestamp.
+
+    The optional ``segment_id`` is injected by the consumer after post-hoc
+    enrichment via SegmentEnricher.lookup_by_instance(instance_id).
+    When no segment can be resolved the row is still written with
+    segment_id = "" (session_timeline.segment_id is non-Nullable String).
+    """
+    import json as _json
+
+    tenant_id  = payload.get("tenant_id")
+    session_id = payload.get("session_id")
+    if not tenant_id or not session_id:
+        # mcp.audit events without a session_id are system-level calls
+        # (e.g. from the orchestrator-bridge startup); not attributable to a
+        # session so we skip them here.
+        return None
+
+    instance_id = payload.get("instance_id") or ""
+    server_name = payload.get("server_name") or ""
+    tool_name   = payload.get("tool_name") or ""
+    allowed     = bool(payload.get("allowed", True))
+    injection   = bool(payload.get("injection_detected", False))
+    duration_ms = payload.get("duration_ms")
+
+    # Pack relevant audit fields into the generic payload JSON
+    audit_payload = {
+        "server_name":         server_name,
+        "tool_name":           tool_name,
+        "allowed":             allowed,
+        "injection_detected":  injection,
+        "duration_ms":         duration_ms,
+        "source":              payload.get("source") or "",
+        "data_categories":     payload.get("data_categories") or [],
+    }
+
+    return {
+        "table":      "session_timeline",
+        "event_id":   payload.get("event_id") or _gen_id(),
+        "tenant_id":  tenant_id,
+        "session_id": session_id,
+        "segment_id": segment_id or "",
+        "event_type": "mcp.tool_call",
+        "actor_id":   instance_id,
+        "actor_role": "agent",
+        "payload":    _json.dumps(audit_payload),
         "timestamp":  payload.get("timestamp") or _now(),
     }
 

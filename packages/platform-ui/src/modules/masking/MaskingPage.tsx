@@ -42,8 +42,7 @@ function badge(text: string, color: string) {
 // ── Main component ────────────────────────────────────────────────────────────
 
 export default function MaskingPage() {
-  const { session }    = useAuth()
-  const tenantId       = session?.tenantId ?? ''
+  const { tenantId }   = useAuth()
   const [adminToken,   setAdminToken]   = useState('')
   const [showToken,    setShowToken]    = useState(false)
   const [saving,       setSaving]       = useState<string | null>(null)

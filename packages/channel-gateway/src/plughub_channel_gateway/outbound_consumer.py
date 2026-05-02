@@ -66,27 +66,36 @@ class OutboundConsumer:
 
         try:
             if msg_type == "message.text":
-                ws_msg = WsMessageOutbound(
-                    message_id=payload.get("message_id", ""),
-                    author=payload.get("author", {}),
-                    text=payload.get("text", ""),
-                    timestamp=payload.get("timestamp", ""),
-                )
-                await self._registry.send(contact_id, ws_msg.model_dump())
+                # NOTE: In the hybrid stream model, webchat clients receive
+                # messages via the stream_subscriber (XREAD on session stream),
+                # NOT from the outbound consumer.  Both AI and human agents now
+                # XADD their messages to the canonical stream.  Delivering here
+                # as well would cause duplicate bubbles in the webchat UI.
+                #
+                # registry.send() is therefore SKIPPED for message.text.
+                # Non-webchat channels (WhatsApp, SMS, etc.) will use their own
+                # adapter delivery path — not registry.send().
+                #
+                # Conversation history persistence is kept below so that the
+                # session:{id}:messages List (used for context in AI agents)
+                # remains populated.
 
                 # Persist to conversation history.
                 # Both AI (notification_send tool) and human (mcp-server WS handler)
                 # outbound messages arrive here with the same envelope format, so this
                 # single point captures all outbound regardless of agent type.
                 session_id  = payload.get("session_id", "")
+                text        = payload.get("text", "")
+                message_id  = payload.get("message_id", "")
                 author_type = payload.get("author", {}).get("type", "agent_ai")
-                if session_id and ws_msg.text:
+                timestamp   = payload.get("timestamp", "")
+                if session_id and text:
                     await self._registry.append_message(
                         session_id=session_id,
-                        message_id=ws_msg.message_id,
+                        message_id=message_id,
                         author=author_type,
-                        text=ws_msg.text,
-                        timestamp=ws_msg.timestamp,
+                        text=text,
+                        timestamp=timestamp,
                     )
 
             elif msg_type == "menu.payload":

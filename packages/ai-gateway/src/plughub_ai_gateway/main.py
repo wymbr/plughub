@@ -32,7 +32,9 @@ from .models     import (
     ReasonRequest, ReasonResponse,
     HealthResponse,
     InferenceRequest, InferenceResponse,
+    CopilotAnalyzeRequest,
 )
+from .copilot_emitter import analyze_for_copilot
 from .gateway    import AIGateway
 from .providers  import AnthropicProvider, OpenAIProvider, ProviderError
 from .rate_limit import RateLimiter, RateLimitExceeded
@@ -294,6 +296,49 @@ async def reason(req: ReasonRequest, request: Request) -> ReasonResponse:
         )
 
     return response
+
+
+@app.post("/v1/copilot/analyze", status_code=202)
+async def copilot_analyze(req: CopilotAnalyzeRequest, request: Request) -> dict:
+    """
+    Co-pilot Phase 2 — background analysis of a customer message.
+
+    Accepts the request immediately (202 Accepted) and schedules fire-and-forget
+    analysis via asyncio.create_task. The LLM call is isolated to the "fast"
+    model profile (haiku) to avoid competing with realtime agent workloads.
+
+    On completion, writes session.copilot.* to ContextStore and publishes
+    copilot.updated to agent:events:{session_id} so the Agent Assist UI
+    refreshes its Capacidades tab via WebSocket.
+    """
+    import asyncio
+
+    redis    = request.app.state.redis
+    settings = get_settings()
+
+    # Pick provider — use "anthropic" alias (first key, backward-compat with fire-and-forget use)
+    # Falls back to None when no Anthropic key is configured (dev / test mode).
+    provider = getattr(request.app.state, "gateway", None)
+    if provider is not None:
+        provider = getattr(provider, "_provider", None) or getattr(provider, "provider", None)
+    # Simpler: use the providers dict stored on the inference engine
+    engine: InferenceEngine = request.app.state.inference_engine
+    provider = getattr(engine, "providers", {}).get("anthropic")
+
+    model_id = settings.model_fast  # haiku — isolated from realtime agents
+
+    asyncio.create_task(
+        analyze_for_copilot(
+            redis            = redis,
+            provider         = provider,
+            session_id       = req.session_id,
+            tenant_id        = req.tenant_id,
+            customer_message = req.customer_message,
+            model_id         = model_id,
+        )
+    )
+
+    return {"status": "accepted", "session_id": req.session_id}
 
 
 @app.get("/v1/health", response_model=HealthResponse)

@@ -347,8 +347,7 @@ const STATUS_OPTIONS  = ['', 'responded', 'timed_out', 'sent', 'requested']
 // ── Main page ──────────────────────────────────────────────────────────────────
 
 export default function CampaignsPage() {
-  const { session } = useAuth()
-  const tenantId = session?.tenantId ?? ''
+  const { tenantId } = useAuth()
 
   const [selectedCampaignId, setSelectedCampaignId] = useState<string | null>(null)
   const [filterChannel,      setFilterChannel]       = useState('')

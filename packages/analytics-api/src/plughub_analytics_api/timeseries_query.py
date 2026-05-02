@@ -77,6 +77,8 @@ def _rows_to_buckets(
         for row in rows:
             bucket_val = row.get("bucket")
             if isinstance(bucket_val, datetime):
+                if bucket_val.tzinfo is None:
+                    bucket_val = bucket_val.replace(tzinfo=timezone.utc)
                 bucket_val = bucket_val.isoformat()
             result.append({
                 "bucket": bucket_val,
@@ -91,6 +93,8 @@ def _rows_to_buckets(
     for row in rows:
         bucket_val = row.get("bucket")
         if isinstance(bucket_val, datetime):
+            if bucket_val.tzinfo is None:
+                bucket_val = bucket_val.replace(tzinfo=timezone.utc)
             bucket_val = bucket_val.isoformat()
         label = str(row.get("breakdown_label") or "unknown")
         value = round(float(row.get(value_col, 0) or 0), 4)

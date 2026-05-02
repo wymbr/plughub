@@ -291,6 +291,8 @@ app.post("/execute", async (req: Request, res: Response) => {
     flow,
     session_context,
     instance_id,
+    pipeline_session_id,
+    segment_id,
   } = req.body as {
     tenant_id:       string
     session_id:      string
@@ -300,6 +302,11 @@ app.post("/execute", async (req: Request, res: Response) => {
     session_context: Record<string, unknown>
     /** Routing Engine instance_id — stored in execution lock for crash detection. */
     instance_id?:    string
+    /** When set, used for pipeline_state key and execution lock instead of session_id.
+     *  Allows conference specialists (hook agents) to run in parallel on the same session. */
+    pipeline_session_id?: string
+    /** Segment UUID for segment-scoped ContextStore writes (scope: segment in YAML). */
+    segment_id?:     string
   }
 
   if (!tenant_id || !session_id || !customer_id || !skill_id || !flow) {
@@ -311,7 +318,8 @@ app.post("/execute", async (req: Request, res: Response) => {
   }
 
   console.log(
-    `[skill-flow-service] /execute received: session=${session_id} skill=${skill_id} entry=${(flow as { entry?: string }).entry ?? "?"}`,
+    `[skill-flow-service] /execute received: session=${session_id} skill=${skill_id} entry=${(flow as { entry?: string }).entry ?? "?"}` +
+    (pipeline_session_id ? ` pipeline=${pipeline_session_id}` : ""),
   )
 
   try {
@@ -323,6 +331,10 @@ app.post("/execute", async (req: Request, res: Response) => {
       flow,
       sessionContext: session_context ?? {},
       instanceId:     instance_id,
+      segmentId:      segment_id,
+      // Use pipeline_session_id for lock/state isolation when provided
+      // (conference specialists). sessionId is still used for message delivery.
+      pipelineSessionId: pipeline_session_id,
     })
 
     if ("error" in result && result.error === "PRECONDITION_FAILED") {

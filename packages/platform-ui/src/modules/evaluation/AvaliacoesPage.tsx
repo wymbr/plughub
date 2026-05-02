@@ -27,7 +27,6 @@ import type {
   EvaluationCampaign,
 } from '@/types'
 
-const TENANT = import.meta.env.VITE_TENANT_ID ?? 'tenant_demo'
 
 // ── Shared helpers ─────────────────────────────────────────────────────────────
 
@@ -151,6 +150,7 @@ function ReviewPanel({
   adminToken: string
   onDone:     () => void
 }) {
+  const { tenantId: TENANT } = useAuth()
   const [decision, setDecision] = useState<'approved' | 'adjusted_approved' | 'rejected'>('approved')
   const [saving,   setSaving]   = useState(false)
   const [error,    setError]    = useState<string | null>(null)
@@ -443,6 +443,7 @@ function ContestPanel({
   onDone:   () => void
   onCancel: () => void
 }) {
+  const { tenantId: TENANT } = useAuth()
   const criteria = result.criterion_responses ?? []
 
   // Per-criterion state: criterion_id → { checked, justification }
@@ -727,7 +728,7 @@ const STATUS_OPTIONS = [
 ]
 
 export default function AvaliacoesPage() {
-  const { session, getAccessToken } = useAuth()
+  const { session, getAccessToken, tenantId: TENANT, currentUser } = useAuth()
   const [jwtToken, setJwtToken]       = useState('')
   const [adminToken, setAdminToken]   = useState('')
   const [selected, setSelected]       = useState<EvaluationResultWithActions | null>(null)
@@ -771,7 +772,7 @@ export default function AvaliacoesPage() {
 
   useEffect(() => { syncSelected() }, [results]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  const userId = session?.userId ?? ''
+  const userId = currentUser?.userId ?? ''
 
   return (
     <div className="flex flex-col h-full">

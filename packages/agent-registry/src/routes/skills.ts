@@ -11,6 +11,7 @@ import { Router, Request, Response, NextFunction } from "express"
 import { prisma, Prisma }      from "../db"
 import { CreateSkillSchema, UpdateSkillSchema, validateMaskedBlock } from "../validators/skill"
 import { publishRegistryChanged } from "../infra/kafka"
+import { config } from "../config"
 
 export const skillsRouter = Router()
 
@@ -311,3 +312,138 @@ function _formatDeployment(d: Record<string, unknown>): Record<string, unknown> 
   const { id: _id, ...rest } = d
   return { id: _id, ...rest }
 }
+
+// ─────────────────────────────────────────────
+// GET /v1/skills/:skill_id/deployments/scheduled
+// Returns pending scheduled workflow deploy instances for a skill.
+// Proxies to workflow-api GET /v1/workflow/instances?flow_id=skill_scheduled_deploy_v1&status=suspended
+// filtered to instances whose context.skill_id matches.
+// ─────────────────────────────────────────────
+skillsRouter.get("/:skill_id/deployments/scheduled", async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const tenantId = _getTenantId(req)
+    const skillId  = req.params["skill_id"]!
+
+    // Verify skill exists
+    const skill = await prisma.skill.findUnique({
+      where: { skill_id_tenant_id: { skill_id: skillId, tenant_id: tenantId } },
+    })
+    if (!skill) return res.status(404).json({ error: "Skill não encontrada" })
+
+    // Proxy to workflow-api
+    const workflowUrl = `${config.workflow_api_url}/v1/workflow/instances?flow_id=skill_scheduled_deploy_v1&status=suspended&tenant_id=${encodeURIComponent(tenantId)}&limit=50`
+    let workflowInstances: Record<string, unknown>[] = []
+    try {
+      const wfRes = await fetch(workflowUrl, {
+        headers: { "x-tenant-id": tenantId },
+      })
+      if (wfRes.ok) {
+        const body = await wfRes.json() as { instances?: Record<string, unknown>[] }
+        workflowInstances = body.instances ?? []
+      }
+    } catch {
+      // Workflow-api unavailable — return empty list gracefully
+    }
+
+    // Filter to instances whose pipeline_state.contact_context.skill_id matches
+    const relevant = workflowInstances.filter((inst) => {
+      try {
+        const ctx = (inst["pipeline_state"] as Record<string, unknown>)?.["contact_context"] as Record<string, unknown> | undefined
+        return ctx?.["skill_id"] === skillId
+      } catch {
+        return false
+      }
+    })
+
+    return res.json({
+      skill_id: skillId,
+      scheduled_deploys: relevant.map((inst) => {
+        const ctx = ((inst["pipeline_state"] as Record<string, unknown>)?.["contact_context"] ?? {}) as Record<string, unknown>
+        return {
+          workflow_instance_id: inst["id"],
+          skill_id:    ctx["skill_id"],
+          pool_ids:    ctx["pool_ids"],
+          scheduled_at: inst["resume_expires_at"],
+          deployed_by:  ctx["deployed_by"],
+          notes:        ctx["deploy_notes"],
+          status:       inst["status"],
+          created_at:   inst["created_at"],
+        }
+      }),
+      total: relevant.length,
+    })
+  } catch (err) {
+    return next(err)
+  }
+})
+
+// ─────────────────────────────────────────────
+// GET /v1/skills/:skill_id/handoff-status
+// Returns the count of sessions still active on the previous skill version.
+// Used by the Graceful Handoff Monitor UI to show deploy convergence progress.
+// ─────────────────────────────────────────────
+skillsRouter.get("/:skill_id/handoff-status", async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const tenantId = _getTenantId(req)
+    const skillId  = req.params["skill_id"]!
+
+    // Verify skill exists and get deploy info
+    const skill = await prisma.skill.findUnique({
+      where: { skill_id_tenant_id: { skill_id: skillId, tenant_id: tenantId } },
+    })
+    if (!skill) return res.status(404).json({ error: "Skill não encontrada" })
+
+    // Get the most recent published deployment
+    const latestDeploy = await (prisma as any).skillDeployment.findFirst({
+      where:   { skill_id: skillId, tenant_id: tenantId },
+      orderBy: { deployed_at: "desc" },
+    }) as Record<string, unknown> | null
+
+    if (!latestDeploy) {
+      return res.json({
+        skill_id:       skillId,
+        deployed:       false,
+        active_sessions: 0,
+        pool_ids:       [],
+        deployed_at:    null,
+      })
+    }
+
+    const deployedAt = latestDeploy["deployed_at"] as string
+    const poolIds    = (latestDeploy["pool_ids"] as string[]) ?? []
+
+    // Query analytics-api for sessions still active in affected pools started before deploy
+    let activeSessionCount = 0
+    if (poolIds.length > 0) {
+      try {
+        const params = new URLSearchParams({
+          tenant_id: tenantId,
+          to_dt:     deployedAt,          // sessions started before deploy
+          page_size: "1",                 // we only need the total count
+        })
+        for (const pid of poolIds) params.append("pool_id", pid)
+
+        const analyticsUrl = `${config.analytics_api_url}/reports/sessions?${params.toString()}`
+        const aRes = await fetch(analyticsUrl)
+        if (aRes.ok) {
+          const aBody = await aRes.json() as { meta?: { total?: number }; total?: number }
+          activeSessionCount = aBody.meta?.total ?? aBody.total ?? 0
+        }
+      } catch {
+        // analytics-api unavailable — return 0 gracefully
+      }
+    }
+
+    return res.json({
+      skill_id:         skillId,
+      deployed:         true,
+      active_sessions:  activeSessionCount,
+      pool_ids:         poolIds,
+      deployed_at:      deployedAt,
+      deployment_id:    latestDeploy["id"],
+      deployed_by:      latestDeploy["deployed_by"],
+    })
+  } catch (err) {
+    return next(err)
+  }
+})

@@ -85,10 +85,12 @@ class StreamSubscriber:
         redis:      aioredis.Redis,
         session_id: str,
         cursor:     str = "0",
+        customer_participant_id: str = "",
     ) -> None:
         self._redis      = redis
         self._stream_key = f"session:{session_id}:stream"
         self._cursor     = cursor
+        self._customer_participant_id = customer_participant_id
 
     @property
     def cursor(self) -> str:
@@ -169,13 +171,21 @@ class StreamSubscriber:
 
         # ── Filtro de visibilidade ──────────────────────────────────────────
         # agents_only nunca chega ao cliente browser.
-        # Lista de participant_ids: o cliente não tem participant_id no modelo
-        # híbrido — só recebe "all".
         if visibility == _AGENTS_ONLY:
             return None
         if isinstance(visibility, list):
-            # Mensagem privada entre agentes — cliente não recebe
-            return None
+            # Lista de participant_ids — entrega ao cliente somente se o seu
+            # participant_id estiver na lista.  Permite que agentes (ex: NPS)
+            # enviem mensagens visíveis apenas ao cliente, sem que o agente
+            # humano as veja (o agente humano recebe via agent:events somente
+            # se estiver na lista, ou não recebe de forma alguma).
+            if (
+                self._customer_participant_id
+                and self._customer_participant_id in visibility
+            ):
+                pass  # entrega ao cliente
+            else:
+                return None
 
         # ── Mapeamento por tipo ────────────────────────────────────────────
         if event_type == "message":
@@ -213,10 +223,53 @@ class StreamSubscriber:
         return None
 
     def _map_message(self, decoded: dict) -> dict | None:
-        """Mapeia evento 'message' para o tipo WebSocket correto."""
+        """Mapeia evento 'message' para o tipo WebSocket correto.
+
+        Suporta dois formatos de XADD:
+          - Legacy: author (JSON obj), payload.content, visibility (JSON)
+          - New:    author_id, author_role, content (top-level), visibility (plain str)
+        """
         payload  = decoded.get("payload", {})
         content  = payload.get("content", {})
         author   = decoded.get("author", {})
+
+        # ── Fallback para formato "new" (bridge customer inbound XADD) ────
+        # Quando payload está vazio mas content existe no nível raiz, usa o
+        # formato novo.  Isso acontece quando o orchestrator-bridge faz XADD
+        # com campos author_id/author_role/content ao nível raiz.
+        if not content and "content" in decoded:
+            raw_content = decoded["content"]
+            if isinstance(raw_content, str):
+                try:
+                    content = json.loads(raw_content)
+                except Exception:
+                    content = {"type": "text", "text": raw_content}
+            elif isinstance(raw_content, dict):
+                content = raw_content
+            else:
+                content = {"type": "text", "text": str(raw_content)}
+
+        # ── Fallback de author para formato "new" ────────────────────────
+        # No formato novo, author_role e author_id são campos separados.
+        author_role = None
+        if isinstance(author, dict) and author:
+            author_role = author.get("role", "primary")
+        elif "author_role" in decoded:
+            author_role = decoded.get("author_role", "primary")
+            # Reconstrói author dict a partir dos campos avulsos
+            author = {
+                "role":           author_role,
+                "participant_id": decoded.get("author_id", ""),
+                "instance_id":    decoded.get("author_id", ""),
+            }
+        else:
+            author_role = "primary"
+
+        # ── Filtro: mensagens do customer não são ecoadas de volta ────────
+        # O webchat client já exibe a própria mensagem localmente — entregar
+        # via stream causaria um balão duplicado (vazio ou não).
+        if author_role == "customer":
+            return None
 
         if isinstance(content, str):
             try:

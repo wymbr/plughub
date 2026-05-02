@@ -102,6 +102,26 @@ def http_patch(path: str, payload: dict) -> tuple[int, dict]:
         return e.code, _parse_body(e.read())
 
 
+def http_put(path: str, payload: dict) -> tuple[int, dict]:
+    url  = f"{REGISTRY_URL}{path}"
+    body = json.dumps(payload).encode()
+    req  = urllib.request.Request(
+        url,
+        data=body,
+        method="PUT",
+        headers={
+            "Content-Type":  "application/json",
+            "x-tenant-id":   TENANT_ID,
+            "x-user-id":     "seed",
+        },
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            return resp.status, _parse_body(resp.read())
+    except urllib.error.HTTPError as e:
+        return e.code, _parse_body(e.read())
+
+
 def wait_for_registry() -> None:
     log(f"Aguardando agent-registry em {REGISTRY_URL}/v1/health …")
     deadline = time.time() + MAX_WAIT_S
@@ -219,6 +239,30 @@ POOLS = [
         "sla_target_ms": 300_000,
         "routing_expression": ROUTING_EXPR,
         "is_human_pool": True,
+        "hooks": {
+            "on_human_start": [],
+            "on_human_end": [
+                {"pool": "wrapup_ia"},
+                {"pool": "nps_ia"},
+            ],
+            "post_human": [],
+        },
+    },
+    {
+        "pool_id":       "wrapup_ia",
+        "description":   "Pool do agente de wrap-up — notas internas pós-atendimento (agents_only)",
+        "channel_types": ["webchat", "whatsapp"],
+        "sla_target_ms": 180_000,
+        "routing_expression": ROUTING_EXPR,
+        "is_human_pool": False,
+    },
+    {
+        "pool_id":       "nps_ia",
+        "description":   "Pool do agente NPS — pesquisa isolada com o cliente (visibility array)",
+        "channel_types": ["webchat", "whatsapp"],
+        "sla_target_ms": 120_000,
+        "routing_expression": ROUTING_EXPR,
+        "is_human_pool": False,
     },
     {
         "pool_id":       "avaliacao_ia",
@@ -232,7 +276,7 @@ POOLS = [
 
 # Pools that will be sent to the registry API (routing_expression + is_human_pool
 # are Routing Engine Redis fields, not registry fields — strip them for the POST body).
-REGISTRY_POOL_FIELDS = {"pool_id", "description", "channel_types", "sla_target_ms"}
+REGISTRY_POOL_FIELDS = {"pool_id", "description", "channel_types", "sla_target_ms", "hooks"}
 
 AGENT_TYPES = [
     {
@@ -294,6 +338,36 @@ AGENT_TYPES = [
         "capabilities": {"channels": "webchat,whatsapp"},
     },
     {
+        "agent_type_id":           "agente_nps_v1",
+        "framework":               "plughub-native",
+        "execution_model":         "stateless",
+        "role":                    "executor",
+        "max_concurrent_sessions": 20,
+        "pools":                   ["nps_ia"],
+        "skills":                  [{"skill_id": "skill_nps_v1"}],
+        "permissions": [
+            "mcp-server-plughub:agent_heartbeat",
+            "mcp-server-plughub:notification_send",
+            "mcp-server-plughub:interaction_request",
+        ],
+        "capabilities": {"channels": "webchat,whatsapp"},
+    },
+    {
+        "agent_type_id":           "agente_wrapup_v1",
+        "framework":               "plughub-native",
+        "execution_model":         "stateless",
+        "role":                    "executor",
+        "max_concurrent_sessions": 20,
+        "pools":                   ["wrapup_ia"],
+        "skills":                  [{"skill_id": "skill_wrapup_v1"}],
+        "permissions": [
+            "mcp-server-plughub:agent_heartbeat",
+            "mcp-server-plughub:notification_send",
+            "mcp-server-plughub:interaction_request",
+        ],
+        "capabilities": {"channels": "webchat,whatsapp", "finalization": "true"},
+    },
+    {
         "agent_type_id":           "agente_avaliacao_v1",
         "framework":               "plughub-native",
         "execution_model":         "stateless",
@@ -329,7 +403,18 @@ def seed_pools() -> None:
         if status == 201:
             ok(f"Pool {pool['pool_id']} criado")
         elif status == 409:
-            warn(f"Pool {pool['pool_id']} já existia — ignorado (pools são imutáveis via seed)")
+            # Already exists — PUT to apply config changes (e.g. hooks added).
+            put_body = {k: v for k, v in body.items() if k != "pool_id"}
+            put_status, put_resp = http_put(
+                f"/v1/pools/{pool['pool_id']}", put_body
+            )
+            if put_status in (200, 204):
+                ok(f"Pool {pool['pool_id']} atualizado (PUT {put_status})")
+            else:
+                warn(
+                    f"Pool {pool['pool_id']} já existia; PUT retornou {put_status} "
+                    f"— {put_resp}. Configuração pode estar desatualizada."
+                )
         else:
             die(f"Erro ao criar pool {pool['pool_id']}: HTTP {status} — {resp}")
 
@@ -391,7 +476,7 @@ def seed_redis() -> None:
     log("Gravando pool configs no Redis …")
     for pool in POOLS:
         key   = f"{TENANT_ID}:pool_config:{pool['pool_id']}"
-        value = json.dumps({
+        pool_config_data = {
             "pool_id":             pool["pool_id"],
             "tenant_id":           TENANT_ID,
             "channel_types":       pool["channel_types"],
@@ -402,7 +487,10 @@ def seed_redis() -> None:
             "breach_factor":       0.8,
             "remote_sites":        [],
             "is_human_pool":       pool.get("is_human_pool", False),
-        })
+        }
+        if pool.get("hooks"):
+            pool_config_data["hooks"] = pool["hooks"]
+        value = json.dumps(pool_config_data)
         r.set(key, value)
         ok(f"pool_config:{pool['pool_id']}")
 

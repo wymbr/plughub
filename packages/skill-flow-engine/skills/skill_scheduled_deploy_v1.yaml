@@ -1,0 +1,54 @@
+id: skill_scheduled_deploy_v1
+name: Deploy Agendado de Skill
+version: "1.0"
+description: |
+  Motor de estado para deploy agendado de skill.
+  Suspende até o horário configurado em session.deploy_at (ISO-8601),
+  executa o deploy via MCP tool skill_deploy, notifica e encerra.
+  Timeout: deploy é executado normalmente (on_timeout = caminho de execução).
+classification:
+  type: vertical
+
+entry: aguardar_horario
+
+steps:
+  - id: aguardar_horario
+    type: suspend
+    reason: timer
+    timeout_hours: 8760
+    business_hours: false
+    on_resume:
+      next: executar_deploy
+    on_timeout:
+      next: executar_deploy
+
+  - id: executar_deploy
+    type: invoke
+    tool: skill_deploy
+    input:
+      skill_id: "@ctx.session.skill_id"
+      pool_ids: "@ctx.session.pool_ids"
+      deployed_by: "@ctx.session.deployed_by"
+      notes: "@ctx.session.deploy_notes"
+    on_success: notificar_sucesso
+    on_failure: notificar_falha
+
+  - id: notificar_sucesso
+    type: notify
+    visibility: agents_only
+    message: "✅ Deploy agendado concluído: skill {{@ctx.session.skill_id}} publicado nos pools {{@ctx.session.pool_ids}}."
+    on_success: encerrar
+
+  - id: notificar_falha
+    type: notify
+    visibility: agents_only
+    message: "❌ Deploy agendado falhou: skill {{@ctx.session.skill_id}}. Verifique os logs e tente novamente."
+    on_success: encerrar_falha
+
+  - id: encerrar
+    type: complete
+    outcome: resolved
+
+  - id: encerrar_falha
+    type: complete
+    outcome: escalated

@@ -52,8 +52,7 @@ const TABS: { key: Tab; label: string }[] = [
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
 export default function WorkflowsPage() {
-  const { session } = useAuth()
-  const tenantId    = session?.tenantId ?? ''
+  const { session, tenantId } = useAuth()
 
   const [activeTab,    setActiveTab]    = useState<Tab>('instances')
   const [filterStatus, setFilterStatus] = useState<WorkflowStatus | 'all'>('all')

@@ -15,8 +15,7 @@ import { CalendarManager }  from './components/CalendarManager'
 type Tab = 'config' | 'calendar'
 
 export default function ConfigPlataformaPage() {
-  const { session } = useAuth()
-  const tenantId    = session?.tenantId ?? ''
+  const { tenantId } = useAuth()
   const orgId       = tenantId   // use tenantId as organization_id in single-tenant setup
 
   const [tab,        setTab]        = useState<Tab>('config')

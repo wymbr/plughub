@@ -10,8 +10,9 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { useAuth }          from '@/auth/useAuth'
-import { makePermissions }  from '@/lib/permissions'
 import { SessionTranscript } from '@/modules/atendimento/components/SessionTranscript'
+import { SegmentList }       from '@/modules/atendimento/components/SegmentList'
+import type { ContactSegment } from '@/modules/atendimento/types'
 import type { ContactFilters } from './types'
 import { DEFAULT_FILTERS, iso7dAgo, isoToday } from './types'
 import { ListaTab }   from './tabs/ListaTab'
@@ -128,7 +129,23 @@ type DetailTab = 'transcript' | 'insights'
 function ContactDetail({ tenantId, sessionId, onBack }: {
   tenantId: string; sessionId: string; onBack: () => void
 }) {
-  const [tab, setTab] = useState<DetailTab>('transcript')
+  const [tab, setTab]               = useState<DetailTab>('transcript')
+  const [detailSegment, setDetailSegment] = useState<ContactSegment | null>(null)
+
+  // When in transcript tab and a segment is selected, show the transcript
+  // narrowed to that segment. Back from transcript → segment list.
+  if (tab === 'transcript' && detailSegment) {
+    return (
+      <div style={{ height: '100%', backgroundColor: '#0f172a' }}>
+        <SessionTranscript
+          tenantId={tenantId}
+          sessionId={sessionId}
+          segment={detailSegment}
+          onBack={() => setDetailSegment(null)}
+        />
+      </div>
+    )
+  }
 
   return (
     <div className="flex flex-col h-full bg-gray-50">
@@ -137,20 +154,24 @@ function ContactDetail({ tenantId, sessionId, onBack }: {
           ← Contatos
         </button>
         {(['transcript', 'insights'] as DetailTab[]).map(t => (
-          <button key={t} onClick={() => setTab(t)}
+          <button key={t} onClick={() => { setTab(t); setDetailSegment(null) }}
             className={`px-4 py-3 text-sm font-medium border-b-2 transition-colors ${
               tab === t ? 'border-primary text-primary' : 'border-transparent text-gray-500 hover:text-gray-700'
             }`}>
-            {t === 'transcript' ? '💬 Transcrição' : '📌 Eventos de Negócio'}
+            {t === 'transcript' ? '💬 Segmentos' : '📌 Eventos de Negócio'}
           </button>
         ))}
         <span className="ml-auto text-xs text-gray-400 font-mono py-3 truncate max-w-xs">{sessionId}</span>
       </div>
       <div className="flex-1 overflow-hidden">
         {tab === 'transcript' ? (
-          <div style={{ height: '100%', backgroundColor: '#0f172a' }}>
-            <SessionTranscript tenantId={tenantId} sessionId={sessionId} onBack={onBack} />
-          </div>
+          /* Segment list — selecting a segment drills into the transcript */
+          <SegmentList
+            tenantId={tenantId}
+            sessionId={sessionId}
+            onSelect={seg => setDetailSegment(seg)}
+            onBack={onBack}
+          />
         ) : (
           <ContactInsightsPanel tenantId={tenantId} sessionId={sessionId} />
         )}
@@ -285,9 +306,7 @@ function FilterBar({ filters, setFilters, loading, totalLabel }: FilterBarProps)
 // ─── ContactsPage ─────────────────────────────────────────────────────────────
 
 export default function ContactsPage() {
-  const { session }   = useAuth()
-  const tenantId      = session?.tenantId ?? ''
-  const perms         = makePermissions(session?.moduleConfig)
+  const { session, tenantId, perms } = useAuth()
 
   // Filter tabs by ABAC — Lista is always visible; Monitor needs operacao; Análise needs visualizar
   const TABS = ALL_TABS.filter(tab =>

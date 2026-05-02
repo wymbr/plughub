@@ -475,8 +475,7 @@ function ConsumptionTab({ tenantId }: { tenantId: string }) {
 type BillingTab = 'invoice' | 'consumption'
 
 const BillingPage: React.FC = () => {
-  const { session } = useAuth()
-  const tenantId = session?.tenantId ?? ''
+  const { tenantId } = useAuth()
 
   const [activeTab,  setActiveTab]  = useState<BillingTab>('invoice')
   const [adminToken, setAdminToken] = useState('')

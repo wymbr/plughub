@@ -7,8 +7,7 @@
 import React, { useState } from 'react'
 import { useForms, createForm, updateForm, deleteForm } from '@/api/evaluation-hooks'
 import type { EvaluationForm, EvaluationDimension, EvaluationCriterion } from '@/types'
-
-const TENANT = import.meta.env.VITE_TENANT_ID ?? 'tenant_demo'
+import { useAuth } from '@/auth/useAuth'
 
 function ScoreBadge({ score }: { score: number }) {
   const color = score >= 8 ? 'bg-green-100 text-green-800' : score >= 6 ? 'bg-yellow-100 text-yellow-800' : 'bg-red-100 text-red-800'
@@ -168,6 +167,7 @@ interface FormDetailProps {
 }
 
 function FormDetail({ form, adminToken, onSaved, onNew }: FormDetailProps) {
+  const { tenantId: TENANT } = useAuth()
   const [editing, setEditing] = useState<EvaluationForm | null>(null)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -320,6 +320,7 @@ function FormDetail({ form, adminToken, onSaved, onNew }: FormDetailProps) {
 // ── FormsPage ─────────────────────────────────────────────────────────────────
 
 export default function FormsPage() {
+  const { tenantId: TENANT } = useAuth()
   const [adminToken, setAdminToken] = useState('')
   const { forms, loading, reload } = useForms(TENANT)
   const [selected, setSelected] = useState<EvaluationForm | null>(null)

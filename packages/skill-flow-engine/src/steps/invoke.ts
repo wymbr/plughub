@@ -95,6 +95,7 @@ export async function executeInvoke(
         step.context_tags.outputs,
         result as Record<string, unknown>,
         `mcp_call:${mcpServer}:${toolName}`,
+        ctx.segmentId,
       ).catch(err => {
         console.error("[invoke] CTX_OUTPUT_EXTRACTION_FAILED", String(err))
       })

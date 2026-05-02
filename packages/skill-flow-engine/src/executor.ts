@@ -25,6 +25,7 @@ import { executeSuspend }          from "./steps/suspend"
 import { executeCollect }          from "./steps/collect"
 import { executeBeginTransaction } from "./steps/begin-transaction"
 import { executeEndTransaction }   from "./steps/end-transaction"
+import { executeResolve }          from "./steps/resolve"
 
 // ─────────────────────────────────────────────
 // Tipos de contexto e resultado de step
@@ -35,6 +36,8 @@ export interface StepContext {
   sessionId:      string
   /** Agent instance_id — used by menu step to set the active_instance flag for CrashDetector. Optional for backward compat. */
   instanceId?:    string
+  /** Segment UUID for segment-scoped ContextStore writes (scope: segment in YAML). Optional. */
+  segmentId?:     string
   customerId:     string
   sessionContext: Record<string, unknown>
   state:          PipelineState
@@ -200,6 +203,7 @@ export async function executeStep(
     case "collect":           return executeCollect(step, ctx)
     case "begin_transaction": return executeBeginTransaction(step, ctx)
     case "end_transaction":   return executeEndTransaction(step, ctx)
+    case "resolve":           return executeResolve(step, ctx)
     default:
       // TypeScript garante exhaustiveness via discriminated union
       throw new Error(`Tipo de step desconhecido: ${(step as FlowStep).type}`)

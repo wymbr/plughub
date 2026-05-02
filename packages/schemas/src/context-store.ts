@@ -102,6 +102,14 @@ export type ContextSnapshot = z.infer<typeof ContextSnapshotSchema>
 
 // ── context_tags: anotação declarativa em tool definitions ───────────────────
 
+// ── Scope de armazenamento ──────────────────────────────────────────────────────
+
+export const ContextTagScopeSchema = z.enum([
+  "session",   // tag gravada no escopo da sessão (default — backward compatible)
+  "segment",   // tag prefixada com segment.{segmentId}.* — isolada por participação
+])
+export type ContextTagScope = z.infer<typeof ContextTagScopeSchema>
+
 export const ContextTagEntrySchema = z.object({
   /** Caminho no ContextStore: "caller.cpf", "account.nome", "session.motivo_contato" */
   tag: z.string().regex(
@@ -126,6 +134,18 @@ export const ContextTagEntrySchema = z.object({
 
   /** TTL override para esta tag específica (segundos) */
   ttl_override_s: z.number().int().positive().optional(),
+
+  /**
+   * Escopo de armazenamento da tag.
+   *
+   * - "session" (default): tag gravada diretamente no ContextStore da sessão.
+   * - "segment": tag prefixada com segment.{segmentId}. — isolada por participação
+   *   do agente. Requer que o StepContext tenha segmentId definido.
+   *   Ex: tag "wrapup.resumo" com scope "segment" → "segment.{seg_id}.wrapup.resumo"
+   *
+   * Ideal para agentes paralelos (NPS, wrap-up) que não devem compartilhar dados.
+   */
+  scope: ContextTagScopeSchema.default("session"),
 })
 export type ContextTagEntry = z.infer<typeof ContextTagEntrySchema>
 

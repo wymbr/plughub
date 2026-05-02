@@ -111,7 +111,7 @@ def _fetch_active_sessions(
         rows.append({
             "session_id":    session_id,
             "channel":       channel,
-            "opened_at":     opened_at.isoformat() if isinstance(opened_at, datetime) else str(opened_at),
+            "opened_at":     opened_at.replace(tzinfo=timezone.utc).isoformat() if isinstance(opened_at, datetime) and opened_at.tzinfo is None else (opened_at.isoformat() if isinstance(opened_at, datetime) else str(opened_at)),
             "handle_time_ms": handle_time_ms,
             "wait_time_ms":  wait_time_ms,
             "latest_score":  None,   # filled by _overlay_sentiment
@@ -225,7 +225,11 @@ def _fetch_customer_history(
         def _dt(val: Any) -> str | None:
             if val is None:
                 return None
-            return val.isoformat() if isinstance(val, datetime) else str(val)
+            if isinstance(val, datetime):
+                if val.tzinfo is None:
+                    val = val.replace(tzinfo=timezone.utc)
+                return val.isoformat()
+            return str(val)
 
         # Derive duration from handle_time_ms when available, fall back to timestamps.
         if handle_time_ms is not None:
@@ -269,6 +273,7 @@ async def session_stream(
     Sends ':keepalive' comment every 15s to prevent proxy timeouts.
     """
     redis      = request.app.state.redis
+    store      = request.app.state.store
     stream_key = f"session:{session_id}:stream"
 
     async def event_generator():
@@ -278,6 +283,26 @@ async def session_stream(
         try:
             raw_entries = await redis.xrange(stream_key, "-", "+")
             history     = [_parse_entry(e_id, e_data) for e_id, e_data in raw_entries]
+
+            # Fallback: when Redis stream has expired (closed sessions), query ClickHouse.
+            if not history:
+                try:
+                    ch_history = await asyncio.to_thread(
+                        store.query_session_messages,
+                        store.new_client(), tenant_id, session_id,
+                    )
+                    if ch_history:
+                        history = ch_history
+                        logger.debug(
+                            "session_stream: Redis empty, loaded %d msgs from ClickHouse id=%s",
+                            len(history), session_id,
+                        )
+                except Exception as ch_exc:
+                    logger.debug(
+                        "session_stream: ClickHouse fallback failed id=%s: %s",
+                        session_id, ch_exc,
+                    )
+
             yield f"event: history\ndata: {json.dumps(history)}\nid: 0\n\n"
             cursor = raw_entries[-1][0] if raw_entries else "0"
         except Exception as exc:
@@ -331,7 +356,12 @@ async def session_stream(
 
 
 def _parse_entry(entry_id: str | bytes, data: dict) -> dict:
-    """Converts a raw Redis stream entry to a clean dict for the frontend."""
+    """Converts a raw Redis stream entry to a clean dict for the frontend.
+
+    Handles two XADD field conventions:
+      1. message_send (session.ts): uses ``author`` (JSON object) and ``payload``
+      2. Human agent bridge / new code: uses ``author_id``, ``author_role``, ``content``
+    """
     if isinstance(entry_id, bytes):
         entry_id = entry_id.decode()
 
@@ -342,15 +372,41 @@ def _parse_entry(entry_id: str | bytes, data: dict) -> dict:
         if isinstance(v, bytes): v = v.decode()
         clean[k] = v
 
+    # ── Resolve author_id / author_role ─────────────────────────────────────
+    author_id   = clean.get("author_id")
+    author_role = clean.get("author_role")
+
+    # Fallback: parse the ``author`` JSON field written by message_send
+    if not author_id and clean.get("author"):
+        author_obj = _safe_json(clean["author"])
+        if isinstance(author_obj, dict):
+            author_id   = author_obj.get("participant_id") or author_obj.get("instance_id")
+            author_role = author_obj.get("role") or author_obj.get("type")
+
+    # ── Resolve content ─────────────────────────────────────────────────────
+    content = _safe_json(clean.get("content"))
+
+    # Fallback: extract text from ``payload`` when content is absent
+    if content is None and clean.get("payload"):
+        payload_obj = _safe_json(clean["payload"])
+        if isinstance(payload_obj, dict) and "text" in payload_obj:
+            content = {"text": payload_obj["text"]}
+        elif payload_obj is not None:
+            content = payload_obj
+
+    # ── Resolve visibility ──────────────────────────────────────────────────
+    vis_raw = clean.get("visibility", "all")
+    visibility = _safe_json(vis_raw) if vis_raw else "all"
+
     return {
-        "entry_id":   entry_id,
-        "type":       clean.get("type", "unknown"),
-        "timestamp":  clean.get("timestamp"),
-        "author_id":  clean.get("author_id"),
-        "author_role": clean.get("author_role"),
-        "visibility": clean.get("visibility", "all"),
-        "content":    _safe_json(clean.get("content")),
-        "payload":    _safe_json(clean.get("payload")),
+        "entry_id":    entry_id,
+        "type":        clean.get("type", "unknown"),
+        "timestamp":   clean.get("timestamp"),
+        "author_id":   author_id,
+        "author_role": author_role,
+        "visibility":  visibility,
+        "content":     content,
+        "payload":     _safe_json(clean.get("payload")),
     }
 
 

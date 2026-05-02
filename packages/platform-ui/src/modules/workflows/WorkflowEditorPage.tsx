@@ -49,8 +49,7 @@ const STATUS_LABELS: Record<string, string> = {
 // ── Main page ──────────────────────────────────────────────────────────────────
 
 export default function WorkflowEditorPage() {
-  const { session, getAccessToken } = useAuth()
-  const tenantId    = session?.tenantId ?? ''
+  const { session, getAccessToken, tenantId } = useAuth()
   const installId   = session?.installationId ?? ''
 
   const [skills,       setSkills]       = useState<Skill[]>([])

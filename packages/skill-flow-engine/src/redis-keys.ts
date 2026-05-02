@@ -12,31 +12,56 @@
 
 export const redisKeys = {
   /**
-   * BLPOP key: menu step aguarda resposta do cliente aqui.
-   * Bridge faz LPUSH quando o cliente envia uma mensagem durante uma sessão IA.
+   * BLPOP key: menu step aguarda resposta aqui.
+   *
+   * Quando instanceId é fornecido, cada agente recebe sua própria fila isolada:
+   *   menu:result:{sessionId}:{instanceId}
+   * Isso evita race conditions em cenários de conferência com múltiplos agentes
+   * bloqueados simultaneamente (ex: NPS + wrap-up em paralelo).
+   *
+   * Bridge/mcp-server consultam o hash menu:waiting:{sessionId} para descobrir
+   * qual fila usar ao rotear uma mensagem.
+   *
+   * Fallback sem instanceId: menu:result:{sessionId} (comportamento legado).
    */
-  menuResult: (sessionId: string) => `menu:result:${sessionId}`,
+  menuResult: (sessionId: string, instanceId?: string) =>
+    instanceId
+      ? `menu:result:${sessionId}:${instanceId}`
+      : `menu:result:${sessionId}`,
 
   /**
-   * Flag de presença: definida com TTL antes do BLPOP, removida logo após.
-   * Bridge consulta para decidir se deve fazer LPUSH em cenário de conferência
-   * (múltiplos agentes no mesmo contact — garante que a resposta do cliente
-   * chegue ao AI agent bloqueado no BLPOP).
+   * HASH de presença: armazena metadados de cada agente bloqueado em menu step.
+   *
+   * Key:   menu:waiting:{sessionId}
+   * Field: instanceId (ou "_default_" como fallback)
+   * Value: JSON({ visibility, masked })
+   *
+   *   visibility — a mesma declarada no notification_send do menu step:
+   *     "all" | "agents_only" | ["participant_id_1", ...]
+   *   masked — true se o step captura dados sensíveis (PIN, senha)
+   *
+   * Bridge e mcp-server fazem HGETALL e roteiam a mensagem para o agente
+   * cuja visibility corresponde ao remetente:
+   *   - Customer envia → agente com visibility "all" ou array incluindo customer
+   *   - Agent humano envia → agente com visibility "agents_only" ou array incluindo o agent
+   *
+   * Definida com TTL antes do BLPOP, campo removido via HDEL após resposta.
    */
   menuWaiting: (sessionId: string) => `menu:waiting:${sessionId}`,
 
   /**
-   * Flag de mascaramento: definida quando step.masked=true.
-   * Bridge lê antes de encaminhar a resposta ao agente humano:
-   *   - flag ausente → encaminha normalmente
-   *   - flag presente → substitui valor por "[entrada mascarada]" (visibility: agents_only)
-   * Garante que PINs/senhas nunca apareçam na UI do agente humano.
+   * @deprecated Substituído pelo campo "masked" dentro do hash menu:waiting.
+   * Mantido apenas para backward compat com bridges que ainda não foram atualizados.
    */
   menuMasked: (sessionId: string) => `menu:masked:${sessionId}`,
 
   /**
    * Sinal de desconexão: bridge faz LPUSH aqui quando contact_closed chega.
    * Desbloqueia o BLPOP imediatamente, retornando on_disconnect no menu step.
+   *
+   * Quando múltiplos agentes estão bloqueados simultaneamente, o bridge faz
+   * LPUSH N vezes (N = número de entradas no hash menu:waiting) para garantir
+   * que todos os BLPOPs sejam desbloqueados.
    */
   sessionClosed: (sessionId: string) => `session:closed:${sessionId}`,
 

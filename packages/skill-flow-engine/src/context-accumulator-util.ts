@@ -10,6 +10,23 @@ import type { ContextTagEntry, ContextMergeStrategy } from "@plughub/schemas"
 import type { IContextStore } from "./context-types"
 
 /**
+ * Resolves a tag name applying segment scope when configured.
+ * When scope === "segment" and a segmentId is available, prefixes the tag
+ * with `segment.{segmentId}.` so parallel agents in the same session write
+ * to isolated namespaces.
+ */
+export function resolveTagWithScope(
+  tag:       string,
+  scope:     string | undefined,
+  segmentId: string | undefined,
+): string {
+  if (scope === "segment" && segmentId) {
+    return `segment.${segmentId}.${tag}`
+  }
+  return tag
+}
+
+/**
  * Extrai campos de um objeto de saída e os escreve no ContextStore.
  *
  * @param store        ContextStore onde escrever
@@ -18,6 +35,7 @@ import type { IContextStore } from "./context-types"
  * @param outputTags   Mapeamento dotPath → ContextTagEntry da anotação context_tags.outputs
  * @param outputObj    Objeto de saída do LLM (ou outro step)
  * @param source       Origem da escrita (ex: "ai_inferred:step_id")
+ * @param segmentId    Segment UUID for segment-scoped writes (optional)
  */
 export async function extractOutputsToCtx(
   store:      IContextStore,
@@ -26,6 +44,7 @@ export async function extractOutputsToCtx(
   outputTags: Record<string, ContextTagEntry>,
   outputObj:  unknown,
   source:     string,
+  segmentId?: string,
 ): Promise<void> {
   if (!outputObj || typeof outputObj !== "object") return
 
@@ -34,9 +53,10 @@ export async function extractOutputsToCtx(
     if (value === undefined || value === null) continue
 
     const merge = (tagEntry.merge ?? "highest_confidence") as ContextMergeStrategy
+    const resolvedTag = resolveTagWithScope(tagEntry.tag, (tagEntry as Record<string, unknown>).scope as string | undefined, segmentId)
     await store.set(
       sessionId,
-      tagEntry.tag,
+      resolvedTag,
       {
         value,
         confidence:     tagEntry.confidence,

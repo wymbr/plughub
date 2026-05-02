@@ -45,8 +45,7 @@ function fmtPct(v: number): string {
 // ── Main page ──────────────────────────────────────────────────────────────────
 
 export default function AgentFlowReportPage() {
-  const { session, getAccessToken } = useAuth()
-  const tenantId = session?.tenantId ?? ''
+  const { tenantId, getAccessToken } = useAuth()
 
   const [rows,    setRows]    = useState<AgentPerf[]>([])
   const [loading, setLoading] = useState(false)

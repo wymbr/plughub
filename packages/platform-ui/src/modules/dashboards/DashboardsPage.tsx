@@ -373,10 +373,9 @@ function NewTemplateModal({
 // ─── Main page ────────────────────────────────────────────────────────────────
 
 export default function DashboardsPage() {
-  const { session } = useAuth()
+  const { session, tenantId, currentUser } = useAuth()
   const isAdmin  = session?.role === 'admin' || session?.role === 'developer'
-  const tenantId = session?.tenantId ?? TENANT_ID
-  const userId   = session?.userId   ?? 'anonymous'
+  const userId   = currentUser?.userId ?? 'anonymous'
 
   // Admin token — stored locally (never in JWT)
   const [adminToken, setAdminToken] = useState(() =>

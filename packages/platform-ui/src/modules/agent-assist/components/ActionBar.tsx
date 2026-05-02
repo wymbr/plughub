@@ -2,9 +2,11 @@
  * ActionBar
  * Top bar of the chat column, showing:
  *   • Contact identity (channel icon + display id + pool badge + channel badge)
- *   • Action buttons: Pausar / Transferir / Desligar  (left group)
+ *   • Action buttons: Transferir / Desligar  (left group)
  *   • SLA mini-bar (centre-right)
  *   • Encerrar button (rightmost)
+ *
+ * Note: Pausar is a global agent-level toggle; it lives in the Header, not here.
  *
  * Replaces the contact identity that was in the old ChatArea header and consolidates
  * the "Encerrar" button that was previously in AgentInput.
@@ -91,20 +93,22 @@ const HandleTimer: React.FC<{ startedAt: Date }> = ({ startedAt }) => {
 
 // ── Props ─────────────────────────────────────────────────────────────────────
 export interface ActionBarProps {
-  contact:      ContactSession | null;
-  onEncerrar:   () => void;
-  onPausar?:    () => void;
-  onTransferir?: () => void;
-  onDesligar?:  () => void;
+  contact:                  ContactSession | null;
+  onEncerrar:               () => void;
+  onTransferir?:            () => void;
+  onDesligar?:              () => void;
+  substitutionMode?:        boolean;
+  onToggleSubstitutionMode?: () => void;
 }
 
 // ── Main component ─────────────────────────────────────────────────────────────
 export const ActionBar: React.FC<ActionBarProps> = ({
   contact,
   onEncerrar,
-  onPausar,
   onTransferir,
   onDesligar,
+  substitutionMode = false,
+  onToggleSubstitutionMode,
 }) => {
   if (!contact) {
     return (
@@ -152,16 +156,6 @@ export const ActionBar: React.FC<ActionBarProps> = ({
       {/* ── Action buttons ── */}
       <div className="flex items-center gap-1.5 flex-shrink-0">
         <button
-          onClick={onPausar}
-          disabled={contact.sessionClosed}
-          title="Pausar atendimento"
-          className="px-2.5 py-1 rounded text-xs font-medium border transition-colors
-            text-gray-600 bg-white border-gray-200 hover:bg-gray-50 hover:border-gray-300
-            disabled:opacity-40 disabled:cursor-not-allowed"
-        >
-          ⏸ Pausar
-        </button>
-        <button
           onClick={onTransferir}
           disabled={contact.sessionClosed}
           title="Transferir para outro agente ou pool"
@@ -181,6 +175,25 @@ export const ActionBar: React.FC<ActionBarProps> = ({
         >
           📵 Desligar
         </button>
+        {/* ── Menu substitution mode toggle ── */}
+        {onToggleSubstitutionMode && (
+          <button
+            onClick={onToggleSubstitutionMode}
+            disabled={contact.sessionClosed}
+            title={substitutionMode
+              ? "Desativar modo substituição (voltar para observação)"
+              : "Ativar modo substituição — supervisor responde menus em nome do cliente"}
+            className={[
+              "px-2.5 py-1 rounded text-xs font-medium border transition-colors",
+              substitutionMode
+                ? "text-amber-800 bg-amber-200 border-amber-400 hover:bg-amber-300"
+                : "text-amber-700 bg-white border-amber-300 hover:bg-amber-50",
+              "disabled:opacity-40 disabled:cursor-not-allowed",
+            ].join(" ")}
+          >
+            {substitutionMode ? "🔄 Substituindo" : "🔄 Substituir"}
+          </button>
+        )}
       </div>
 
       {/* ── Spacer ── */}

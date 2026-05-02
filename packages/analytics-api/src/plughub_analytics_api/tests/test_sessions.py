@@ -15,6 +15,7 @@ Tests cover:
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import time
 from datetime import datetime, timezone
@@ -551,3 +552,170 @@ class TestCustomerHistoryEndpoint:
         data = resp.json()
         assert len(data) == 3
         assert {r["session_id"] for r in data} == {"sess_A", "sess_B", "sess_C"}
+
+
+# ─── TestStreamClickHouseFallback ────────────────────────────────────────────
+
+class TestStreamClickHouseFallback:
+    """
+    Verifies that GET /sessions/{session_id}/stream falls back to
+    store.query_session_messages() (ClickHouse) when the Redis stream key
+    has expired (xrange returns an empty list).
+
+    The live-tail loop is terminated cleanly by making redis.xread raise
+    asyncio.CancelledError, which is caught by the outer
+    'except asyncio.CancelledError: pass' block in event_generator().
+    """
+
+    def _make_app(
+        self,
+        xrange_entries: list | None = None,
+        ch_messages: list | None = None,
+        ch_raise: Exception | None = None,
+    ):
+        """
+        Build a minimal FastAPI app with mocked Redis and store.
+
+        xrange_entries: list of (entry_id, data_dict) tuples returned by
+                        redis.xrange — defaults to [] (stream expired).
+        ch_messages:    list of dicts returned by store.query_session_messages.
+        ch_raise:       if set, query_session_messages raises this exception.
+        """
+        app = FastAPI()
+        app.include_router(router)
+
+        # Redis mock: xrange for history, xread raises CancelledError to end loop
+        redis = AsyncMock()
+        redis.xrange = AsyncMock(return_value=xrange_entries if xrange_entries is not None else [])
+        redis.xread  = AsyncMock(side_effect=asyncio.CancelledError())
+
+        # Store mock: ClickHouse fallback
+        store = MagicMock()
+        store._database = "analytics"
+        store.new_client = MagicMock(return_value=MagicMock())
+        if ch_raise is not None:
+            store.query_session_messages = MagicMock(side_effect=ch_raise)
+        else:
+            store.query_session_messages = MagicMock(
+                return_value=ch_messages if ch_messages is not None else []
+            )
+
+        app.state.redis = redis
+        app.state.store = store
+        return app
+
+    @staticmethod
+    def _ch_message(
+        entry_id: str = "msg-ch-1",
+        author_role: str = "primary",
+        content_text: str = "Hello from CH",
+    ) -> dict:
+        """Minimal message dict matching query_session_messages() output format."""
+        return {
+            "entry_id":    entry_id,
+            "type":        "message",
+            "timestamp":   "2024-01-01T12:00:00+00:00",
+            "author_id":   "part_001",
+            "author_role": author_role,
+            "visibility":  "all",
+            "content":     {"text": content_text},
+            "payload":     None,
+        }
+
+    @staticmethod
+    def _parse_sse_history(text: str) -> list | None:
+        """
+        Extract and decode the 'history' SSE event data from raw SSE text.
+        Returns the decoded JSON list, or None if no 'history' event found.
+        """
+        in_history = False
+        for line in text.splitlines():
+            if line == "event: history":
+                in_history = True
+            elif in_history and line.startswith("data: "):
+                return json.loads(line[6:])
+        return None
+
+    def test_redis_empty_calls_clickhouse_fallback(self):
+        """When Redis xrange returns empty, store.query_session_messages is called."""
+        app = self._make_app(xrange_entries=[], ch_messages=[self._ch_message()])
+
+        with TestClient(app, raise_server_exceptions=False) as client:
+            client.get("/sessions/sess_001/stream?tenant_id=tenant_test")
+
+        app.state.store.query_session_messages.assert_called_once()
+
+    def test_clickhouse_messages_appear_in_history_event(self):
+        """History SSE event contains ClickHouse messages when Redis stream is empty."""
+        msgs = [self._ch_message(entry_id="msg-ch-99", content_text="Fallback msg")]
+        app = self._make_app(xrange_entries=[], ch_messages=msgs)
+
+        with TestClient(app, raise_server_exceptions=False) as client:
+            resp = client.get("/sessions/sess_001/stream?tenant_id=tenant_test")
+
+        history = self._parse_sse_history(resp.text)
+        assert history is not None
+        assert len(history) == 1
+        assert history[0]["entry_id"] == "msg-ch-99"
+        assert history[0]["content"]["text"] == "Fallback msg"
+
+    def test_redis_entries_skip_clickhouse(self):
+        """When Redis xrange returns entries, ClickHouse fallback must NOT be called."""
+        xrange_entries = [
+            ("1-0", {"type": "message", "content": '{"text":"from Redis"}', "visibility": "all"})
+        ]
+        app = self._make_app(xrange_entries=xrange_entries)
+
+        with TestClient(app, raise_server_exceptions=False) as client:
+            client.get("/sessions/sess_001/stream?tenant_id=tenant_test")
+
+        app.state.store.query_session_messages.assert_not_called()
+
+    def test_both_empty_yields_empty_history(self):
+        """When Redis and ClickHouse both return empty, history event is []."""
+        app = self._make_app(xrange_entries=[], ch_messages=[])
+
+        with TestClient(app, raise_server_exceptions=False) as client:
+            resp = client.get("/sessions/sess_001/stream?tenant_id=tenant_test")
+
+        history = self._parse_sse_history(resp.text)
+        assert history == []
+
+    def test_clickhouse_failure_yields_empty_history(self):
+        """When ClickHouse fallback raises, endpoint degrades to empty history."""
+        app = self._make_app(
+            xrange_entries=[], ch_raise=RuntimeError("ClickHouse unavailable")
+        )
+
+        with TestClient(app, raise_server_exceptions=False) as client:
+            resp = client.get("/sessions/sess_001/stream?tenant_id=tenant_test")
+
+        history = self._parse_sse_history(resp.text)
+        assert history == []
+
+    def test_history_event_present_before_live_tail(self):
+        """The 'history' event always appears in the response (even for empty stream)."""
+        app = self._make_app()
+
+        with TestClient(app, raise_server_exceptions=False) as client:
+            resp = client.get("/sessions/sess_001/stream?tenant_id=tenant_test")
+
+        assert "event: history" in resp.text
+
+    def test_multiple_ch_messages_all_in_history(self):
+        """All messages returned by ClickHouse fallback appear in history."""
+        msgs = [
+            self._ch_message("msg-1", "primary",  "First"),
+            self._ch_message("msg-2", "customer",  "Second"),
+            self._ch_message("msg-3", "specialist", "Third"),
+        ]
+        app = self._make_app(xrange_entries=[], ch_messages=msgs)
+
+        with TestClient(app, raise_server_exceptions=False) as client:
+            resp = client.get("/sessions/sess_001/stream?tenant_id=tenant_test")
+
+        history = self._parse_sse_history(resp.text)
+        assert history is not None
+        assert len(history) == 3
+        entry_ids = [h["entry_id"] for h in history]
+        assert entry_ids == ["msg-1", "msg-2", "msg-3"]

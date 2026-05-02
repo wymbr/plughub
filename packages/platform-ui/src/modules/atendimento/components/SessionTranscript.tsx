@@ -1,45 +1,102 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type React from 'react'
 import { useSessionStream, useSupervisor } from '../api/hooks'
 import { SupervisorJoinButton, SupervisorPanel } from './SupervisorPanel'
-import type { StreamEntry } from '../types'
+import type { ContactSegment, StreamEntry } from '../types'
 
 interface Props {
   tenantId:  string
   sessionId: string
   onBack:    () => void
+  /** When false (ended segment), supervisor join is hidden — only read-only view available. Default: true */
+  canJoin?:  boolean
+  /**
+   * When present, entries are split into three accordion buckets:
+   *   - before segment.started_at  → collapsed by default
+   *   - during [started_at, ended_at] → expanded
+   *   - after segment.ended_at       → collapsed by default
+   */
+  segment?:  ContactSegment
 }
 
-export function SessionTranscript({ tenantId, sessionId, onBack }: Props) {
+export function SessionTranscript({ tenantId, sessionId, onBack, canJoin = true, segment }: Props) {
   const { entries, status }                        = useSessionStream(tenantId, sessionId)
   const { state: supState, join, message, leave }  = useSupervisor(tenantId, sessionId)
-  const bottomRef = useRef<HTMLDivElement>(null)
+  const bottomRef   = useRef<HTMLDivElement>(null)
+  const duringRef   = useRef<HTMLDivElement>(null)
 
-  useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }) }, [entries.length])
+  // Accordion state for before/after buckets
+  const [showBefore, setShowBefore] = useState(false)
+  const [showAfter,  setShowAfter]  = useState(false)
+
+  // Auto-scroll: when no segment, scroll to bottom; when segment, scroll to "during" block
+  useEffect(() => {
+    if (segment) {
+      duringRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    } else {
+      bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [entries.length])
 
   const isSupActive  = supState.status === 'active'
   const isSupJoining = supState.status === 'joining'
+
+  // ── Segment filtering ───────────────────────────────────────────────────────
+  let before: StreamEntry[] = []
+  let during: StreamEntry[] = []
+  let after:  StreamEntry[] = []
+
+  if (segment) {
+    const startMs = new Date(segment.started_at).getTime()
+    const endMs   = segment.ended_at ? new Date(segment.ended_at).getTime() : Infinity
+
+    for (const e of entries) {
+      if (!e.timestamp) { during.push(e); continue }
+      const ts = new Date(e.timestamp).getTime()
+      if (ts < startMs) before.push(e)
+      else if (ts <= endMs) during.push(e)
+      else after.push(e)
+    }
+  } else {
+    during = entries
+  }
+
+  // ── Header label ────────────────────────────────────────────────────────────
+  const segmentLabel = segment
+    ? `${segment.role} · ${segment.agent_type === 'human' ? '👤' : '🤖'} ${segment.participant_id}`
+    : null
 
   return (
     <div style={s.container}>
       {/* Header */}
       <div style={s.header}>
-        <button style={s.backBtn} onClick={onBack}>← Sessões</button>
+        <button style={s.backBtn} onClick={onBack}>← Segmentos</button>
         <span style={{ fontSize: 14, color: '#94a3b8' }}>
           Sessão{' '}
           <code style={{ fontSize: 12, color: '#e2e8f0', backgroundColor: '#1e293b', borderRadius: 4, padding: '1px 6px' }}>
             {sessionId}
           </code>
         </span>
+        {segmentLabel && (
+          <span style={{ fontSize: 11, color: '#818cf8', border: '1px solid #818cf844', borderRadius: 4, padding: '2px 8px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: 260 }}>
+            🔍 {segmentLabel}
+          </span>
+        )}
         <StatusDot status={status} />
-        {!isSupActive ? (
+        {canJoin && !isSupActive && (
           <SupervisorJoinButton onJoin={() => join()} joining={isSupJoining} error={supState.status === 'error' ? supState.error : null} />
-        ) : (
+        )}
+        {canJoin && isSupActive && (
           <span style={{ fontSize: 12, color: '#f59e0b', border: '1px solid #f59e0b44', borderRadius: 4, padding: '2px 8px', marginLeft: 'auto', fontWeight: 600 }}>
             👁 supervisionando
           </span>
         )}
-        {!isSupActive && <span style={{ fontSize: 11, color: '#475569', border: '1px solid #334155', borderRadius: 4, padding: '2px 6px', marginLeft: 'auto' }}>leitura</span>}
+        {!isSupActive && (
+          <span style={{ fontSize: 11, color: canJoin ? '#475569' : '#374151', border: `1px solid ${canJoin ? '#334155' : '#1f2937'}`, borderRadius: 4, padding: '2px 6px', marginLeft: 'auto' }}>
+            {canJoin ? 'leitura' : 'encerrado · somente leitura'}
+          </span>
+        )}
       </div>
 
       {/* Stream */}
@@ -47,12 +104,99 @@ export function SessionTranscript({ tenantId, sessionId, onBack }: Props) {
         {entries.length === 0 && status === 'connecting' && <div style={s.placeholder}>Conectando ao stream…</div>}
         {entries.length === 0 && status === 'connected'  && <div style={s.placeholder}>Nenhum evento nesta sessão.</div>}
         {entries.length === 0 && status === 'error'      && <div style={{ ...s.placeholder, color: '#ef4444' }}>Falha ao conectar ao stream.</div>}
-        {entries.map(e => <EntryRow key={e.entry_id} entry={e} />)}
-        <div ref={bottomRef} />
+
+        {segment ? (
+          /* ── Segment accordion view ── */
+          <>
+            {/* Before bucket */}
+            {before.length > 0 && (
+              <AccordionBucket
+                label={`Antes do segmento · ${before.length} evento${before.length !== 1 ? 's' : ''}`}
+                open={showBefore}
+                onToggle={() => setShowBefore(v => !v)}
+                accent="#475569"
+              >
+                {before.map(e => <EntryRow key={e.entry_id} entry={e} />)}
+              </AccordionBucket>
+            )}
+
+            {/* During bucket — always expanded, scrolled into view */}
+            <div ref={duringRef}>
+              <SegmentDivider label="▶ Início do segmento" color="#818cf8" ts={segment.started_at} />
+              {during.length === 0 ? (
+                <div style={{ ...s.placeholder, padding: 20 }}>Nenhum evento durante este segmento.</div>
+              ) : (
+                during.map(e => <EntryRow key={e.entry_id} entry={e} />)
+              )}
+              {segment.ended_at && <SegmentDivider label="■ Fim do segmento" color="#818cf8" ts={segment.ended_at} />}
+            </div>
+
+            {/* After bucket */}
+            {after.length > 0 && (
+              <AccordionBucket
+                label={`Depois do segmento · ${after.length} evento${after.length !== 1 ? 's' : ''}`}
+                open={showAfter}
+                onToggle={() => setShowAfter(v => !v)}
+                accent="#475569"
+              >
+                {after.map(e => <EntryRow key={e.entry_id} entry={e} />)}
+              </AccordionBucket>
+            )}
+          </>
+        ) : (
+          /* ── Full stream view ── */
+          <>
+            {during.map(e => <EntryRow key={e.entry_id} entry={e} />)}
+            <div ref={bottomRef} />
+          </>
+        )}
       </div>
 
       {/* Supervisor panel */}
       {isSupActive && <SupervisorPanel state={supState} onMessage={message} onLeave={leave} />}
+    </div>
+  )
+}
+
+// ─── Accordion bucket ─────────────────────────────────────────────────────────
+
+function AccordionBucket({ label, open, onToggle, accent, children }: {
+  label: string; open: boolean; onToggle: () => void; accent: string; children: React.ReactNode
+}) {
+  return (
+    <div style={{ marginBottom: 4 }}>
+      <button
+        onClick={onToggle}
+        style={{
+          width: '100%', display: 'flex', alignItems: 'center', gap: 8,
+          background: 'none', border: `1px solid ${accent}44`, borderRadius: 6,
+          color: accent, fontSize: 11, padding: '5px 10px', cursor: 'pointer',
+          textAlign: 'left', letterSpacing: '0.04em',
+        }}
+      >
+        <span style={{ flexShrink: 0 }}>{open ? '▾' : '▸'}</span>
+        <span style={{ flex: 1 }}>{label}</span>
+      </button>
+      {open && (
+        <div style={{ paddingLeft: 8, marginTop: 4, borderLeft: `2px solid ${accent}44` }}>
+          {children}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ─── Segment divider ─────────────────────────────────────────────────────────
+
+function SegmentDivider({ label, color, ts }: { label: string; color: string; ts: string }) {
+  const time = ts ? fmtTs(ts) : ''
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 10, margin: '10px 0 6px', color }}>
+      <span style={{ flex: 1, height: 1, backgroundColor: color + '44', display: 'block' }} />
+      <span style={{ fontSize: 11, whiteSpace: 'nowrap', fontWeight: 600, letterSpacing: '0.05em' }}>
+        {label}{time ? ` · ${time}` : ''}
+      </span>
+      <span style={{ flex: 1, height: 1, backgroundColor: color + '44', display: 'block' }} />
     </div>
   )
 }

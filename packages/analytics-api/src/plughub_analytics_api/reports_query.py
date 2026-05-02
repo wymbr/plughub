@@ -52,9 +52,14 @@ def _rows_to_dicts(result: Any) -> list[dict]:
     rows = []
     for row in result.result_rows:
         d = dict(zip(cols, row))
-        # Convert datetime objects to ISO strings for JSON serialisability
+        # Convert datetime objects to ISO strings for JSON serialisability.
+        # ClickHouse returns naive datetimes (no tzinfo) but stores them as UTC.
+        # We must append timezone info so JavaScript interprets them correctly
+        # (without it, JS treats "2026-05-02T11:48:45" as local time, not UTC).
         for k, v in d.items():
             if isinstance(v, datetime):
+                if v.tzinfo is None:
+                    v = v.replace(tzinfo=timezone.utc)
                 d[k] = v.isoformat()
         rows.append(d)
     return rows
@@ -1194,3 +1199,354 @@ def _fetch_evaluations_summary(
         "group_by": group_by,
         "meta":     {"total": len(rows), "from_dt": since, "to_dt": until},
     }
+
+
+# ─── /reports/agent-performance/daily (Arc 5 MV — v_agent_performance) ──────
+
+async def query_agent_performance_daily(
+    client:    Any,
+    database:  str,
+    tenant_id: str,
+    from_dt:   str | None = None,
+    to_dt:     str | None = None,
+    *,
+    pool_id:          str | None       = None,
+    agent_type_id:    str | None       = None,
+    accessible_pools: list[str] | None = None,
+) -> dict:
+    """
+    Returns daily pre-aggregated performance metrics from the mv_agent_performance_daily
+    AggregatingMergeTree, exposed via the v_agent_performance readable view.
+
+    One row per (agent_type_id, pool_id, period_date) — no pagination needed since
+    the cardinality is bounded by (agent_types × pools × days).
+
+    Metrics per row:
+      total_sessions     — total participation windows in that day
+      avg_duration_ms    — mean handle time
+      resolution_rate    — fraction with outcome = 'resolved'
+      escalation_rate    — fraction with outcome = 'escalated'
+      transfer_rate      — fraction with outcome = 'transferred'
+      human_rate         — fraction of human-agent sessions
+
+    More efficient than querying segments FINAL because the MV is pre-aggregated
+    incrementally; ideal for dashboard trend charts and the Arc 7d performance job.
+    """
+    since_date = _ch_fmt(from_dt)[:10] if from_dt else _default_from()[:10]
+    until_date = _ch_fmt(to_dt)[:10]   if to_dt   else _default_to()[:10]
+
+    if accessible_pools is not None and not accessible_pools:
+        return {"data": [], "meta": {"total": 0, "from_date": since_date, "to_date": until_date}}
+    try:
+        return await asyncio.to_thread(
+            _fetch_agent_performance_daily,
+            client, database, tenant_id, since_date, until_date,
+            pool_id, agent_type_id, accessible_pools,
+        )
+    except Exception as exc:
+        logger.warning("query_agent_performance_daily failed tenant=%s: %s", tenant_id, exc)
+        return {"data": [], "error": "data_unavailable"}
+
+
+def _fetch_agent_performance_daily(
+    client:          Any,
+    db:              str,
+    tenant_id:       str,
+    since_date:      str,
+    until_date:      str,
+    pool_id:         str | None,
+    agent_type_id:   str | None,
+    accessible_pools: list[str] | None,
+) -> dict:
+    conditions = [
+        "tenant_id = {tenant_id:String}",
+        f"period_date >= toDate('{since_date}')",
+        f"period_date <= toDate('{until_date}')",
+    ]
+    params: dict = {"tenant_id": tenant_id}
+
+    if pool_id:
+        conditions.append("pool_id = {pool_id:String}")
+        params["pool_id"] = pool_id
+    if agent_type_id:
+        conditions.append("agent_type_id = {agent_type_id:String}")
+        params["agent_type_id"] = agent_type_id
+    _apply_pool_scope(conditions, accessible_pools)
+
+    where = " AND ".join(conditions)
+
+    result = client.query(f"""
+        SELECT
+            agent_type_id,
+            pool_id,
+            period_date,
+            total_sessions,
+            avg_duration_ms,
+            round(resolution_rate, 4) AS resolution_rate,
+            round(escalation_rate, 4) AS escalation_rate,
+            round(transfer_rate,   4) AS transfer_rate,
+            round(human_rate,      4) AS human_rate
+        FROM {db}.v_agent_performance
+        WHERE {where}
+        ORDER BY period_date DESC, agent_type_id, pool_id
+    """, parameters=params)
+
+    rows = _rows_to_dicts(result)
+    return {
+        "data": rows,
+        "meta": {"total": len(rows), "from_date": since_date, "to_date": until_date},
+    }
+
+
+# ─── /reports/sessions/complexity (Arc 5 MV — v_segment_summary) ─────────────
+
+async def query_session_complexity(
+    client:    Any,
+    database:  str,
+    tenant_id: str,
+    from_dt:   str | None = None,
+    to_dt:     str | None = None,
+    *,
+    pool_id:          str | None       = None,
+    min_handoffs:     int              = 0,
+    accessible_pools: list[str] | None = None,
+    page:      int = 1,
+    page_size: int = 100,
+) -> dict:
+    """
+    Returns session complexity metrics from the mv_segment_summary AggregatingMergeTree,
+    exposed via the v_segment_summary readable view joined with the sessions table
+    for date-range and pool filtering.
+
+    Ordered by handoff_count DESC so the most complex sessions surface first.
+
+    Metrics per session:
+      segment_count      — total participation windows (primary + specialist + supervisor)
+      primary_segments   — primary-agent segments
+      specialist_segments— specialist segments (conferences)
+      human_segments     — human-agent segments
+      total_duration_ms  — sum of all segment durations
+      handoff_count      — max sequence_index (0 = no handoffs, 1 = one handoff, …)
+      escalation_count   — segments with outcome = 'escalated'
+      resolved_count     — segments with outcome = 'resolved'
+
+    Use min_handoffs=1 to filter only sessions that had at least one agent transfer.
+    """
+    since = _ch_fmt(from_dt) if from_dt else _default_from()
+    until = _ch_fmt(to_dt)   if to_dt   else _default_to()
+
+    if accessible_pools is not None and not accessible_pools:
+        return {"data": [], "meta": _meta(page, page_size, 0, since, until)}
+    try:
+        return await asyncio.to_thread(
+            _fetch_session_complexity,
+            client, database, tenant_id, since, until,
+            pool_id, min_handoffs, accessible_pools, page, page_size,
+        )
+    except Exception as exc:
+        logger.warning("query_session_complexity failed tenant=%s: %s", tenant_id, exc)
+        return {"data": [], "error": "data_unavailable"}
+
+
+def _fetch_session_complexity(
+    client:          Any,
+    db:              str,
+    tenant_id:       str,
+    since:           str,
+    until:           str,
+    pool_id:         str | None,
+    min_handoffs:    int,
+    accessible_pools: list[str] | None,
+    page:            int,
+    page_size:       int,
+) -> dict:
+    offset = (page - 1) * page_size
+
+    # Conditions on the sessions table (for date and pool filtering)
+    sess_conditions = [
+        "s.tenant_id = {tenant_id:String}",
+        f"s.opened_at >= '{since}'",
+        f"s.opened_at < '{until}'",
+    ]
+    params: dict = {"tenant_id": tenant_id}
+
+    if pool_id:
+        sess_conditions.append("s.pool_id = {pool_id:String}")
+        params["pool_id"] = pool_id
+    if accessible_pools:
+        pool_list = ", ".join(f"'{p}'" for p in accessible_pools)
+        sess_conditions.append(f"s.pool_id IN ({pool_list})")
+
+    sess_where = " AND ".join(sess_conditions)
+
+    # Count query
+    count_result = client.query(f"""
+        SELECT count()
+        FROM {db}.v_segment_summary vs
+        INNER JOIN (
+            SELECT DISTINCT session_id, pool_id
+            FROM {db}.sessions FINAL
+            WHERE {sess_where}
+        ) s ON vs.session_id = s.session_id AND vs.tenant_id = {'{tenant_id:String}'}
+        WHERE vs.handoff_count >= {min_handoffs}
+    """, parameters=params)
+    total = count_result.result_rows[0][0] if count_result.result_rows else 0
+
+    # Data query
+    result = client.query(f"""
+        SELECT
+            vs.session_id,
+            s.pool_id,
+            vs.segment_count,
+            vs.primary_segments,
+            vs.specialist_segments,
+            vs.human_segments,
+            vs.total_duration_ms,
+            vs.handoff_count,
+            vs.escalation_count,
+            vs.resolved_count
+        FROM {db}.v_segment_summary vs
+        INNER JOIN (
+            SELECT DISTINCT session_id, pool_id
+            FROM {db}.sessions FINAL
+            WHERE {sess_where}
+        ) s ON vs.session_id = s.session_id AND vs.tenant_id = {'{tenant_id:String}'}
+        WHERE vs.handoff_count >= {min_handoffs}
+        ORDER BY vs.handoff_count DESC, vs.session_id
+        LIMIT {page_size}
+        OFFSET {offset}
+    """, parameters=params)
+
+    rows = _rows_to_dicts(result)
+    return {"data": rows, "meta": _meta(page, page_size, total, since, until)}
+
+
+# ─── Arc 8: agent pause availability ──────────────────────────────────────────
+
+async def query_agent_availability(
+    store:            Any,
+    tenant_id:        str,
+    from_dt:          str | None = None,
+    to_dt:            str | None = None,
+    pool_id:          str | None = None,
+    agent_type_id:    str | None = None,
+    accessible_pools: list[str] | None = None,
+    page:             int = 1,
+    page_size:        int = 100,
+) -> dict:
+    """
+    Aggregate pause intervals per (agent_type_id, pool_id, date).
+
+    Returns:
+      data: [{agent_type_id, pool_id, period_date, total_pauses,
+              total_pause_ms, reason_breakdown: [{reason_id, reason_label,
+              count, total_ms}]}]
+      meta: pagination info
+    """
+    page_size = min(page_size, _MAX_PAGE_SIZE_JSON)
+    since = from_dt or _default_from()
+    until = to_dt   or _default_to()
+    try:
+        if accessible_pools is not None and len(accessible_pools) == 0:
+            return {"data": [], "meta": _meta(page, page_size, 0, since, until)}
+        return await asyncio.to_thread(
+            _fetch_agent_availability,
+            store.client, store.database, tenant_id,
+            since, until, pool_id, agent_type_id, accessible_pools,
+            page, page_size,
+        )
+    except Exception as exc:
+        logger.warning("query_agent_availability failed tenant=%s: %s", tenant_id, exc)
+        return {"data": [], "error": "data_unavailable"}
+
+
+def _fetch_agent_availability(
+    client:           Any,
+    db:               str,
+    tenant_id:        str,
+    since:            str,
+    until:            str,
+    pool_id:          str | None,
+    agent_type_id:    str | None,
+    accessible_pools: list[str] | None,
+    page:             int,
+    page_size:        int,
+) -> dict:
+    offset = (page - 1) * page_size
+    conditions = [
+        "tenant_id = {tenant_id:String}",
+        f"paused_at >= '{since}'",
+        f"paused_at <  '{until}'",
+    ]
+    params: dict = {"tenant_id": tenant_id}
+
+    if pool_id:
+        conditions.append("pool_id = {pool_id:String}")
+        params["pool_id"] = pool_id
+    if agent_type_id:
+        conditions.append("agent_type_id = {agent_type_id:String}")
+        params["agent_type_id"] = agent_type_id
+    _apply_pool_scope(conditions, accessible_pools)
+
+    where = " AND ".join(conditions)
+
+    # distinct (agent_type_id, pool_id, date) combos — for count query
+    count_result = client.query(f"""
+        SELECT countDistinct((agent_type_id, pool_id, toDate(paused_at)))
+        FROM {db}.agent_pause_intervals FINAL
+        WHERE {where}
+    """, parameters=params)
+    total = count_result.result_rows[0][0] if count_result.result_rows else 0
+
+    # Aggregate per (agent_type_id, pool_id, date)
+    agg_result = client.query(f"""
+        SELECT
+            agent_type_id,
+            pool_id,
+            toDate(paused_at)                   AS period_date,
+            count()                              AS total_pauses,
+            sum(duration_ms)                     AS total_pause_ms
+        FROM {db}.agent_pause_intervals FINAL
+        WHERE {where} AND duration_ms IS NOT NULL
+        GROUP BY agent_type_id, pool_id, period_date
+        ORDER BY period_date DESC, agent_type_id, pool_id
+        LIMIT {page_size}
+        OFFSET {offset}
+    """, parameters=params)
+
+    agg_rows = _rows_to_dicts(agg_result)
+
+    # Fetch reason breakdown for the same filters
+    reason_result = client.query(f"""
+        SELECT
+            agent_type_id,
+            pool_id,
+            toDate(paused_at)   AS period_date,
+            reason_id,
+            reason_label,
+            count()              AS cnt,
+            sum(duration_ms)     AS total_ms
+        FROM {db}.agent_pause_intervals FINAL
+        WHERE {where} AND duration_ms IS NOT NULL
+        GROUP BY agent_type_id, pool_id, period_date, reason_id, reason_label
+    """, parameters=params)
+
+    # Index reason breakdown by (agent_type_id, pool_id, period_date)
+    breakdown: dict = {}
+    for r in _rows_to_dicts(reason_result):
+        key = (r["agent_type_id"], r["pool_id"], r["period_date"])
+        breakdown.setdefault(key, []).append({
+            "reason_id":    r["reason_id"],
+            "reason_label": r["reason_label"],
+            "count":        r["cnt"],
+            "total_ms":     r["total_ms"],
+        })
+
+    for row in agg_rows:
+        key = (row["agent_type_id"], row["pool_id"], row["period_date"])
+        row["reason_breakdown"] = breakdown.get(key, [])
+        # convert date to string if needed
+        if hasattr(row.get("period_date"), "isoformat"):
+            row["period_date"] = row["period_date"].isoformat()
+
+    return {"data": agg_rows, "meta": _meta(page, page_size, total, since, until)}
