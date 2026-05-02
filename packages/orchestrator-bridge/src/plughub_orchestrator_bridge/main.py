@@ -679,6 +679,50 @@ async def fire_pool_hooks(
                 )
 
 
+# ── Hook timeout guard — safety net when hook agents never start/complete ────
+
+_HOOK_TIMEOUT_S = 90  # seconds to wait before forcing contact close
+
+async def _hook_timeout_guard(
+    redis_client: aioredis.Redis,
+    session_id:   str,
+    hook_type:    str,
+) -> None:
+    """
+    Safety net for on_human_end / post_human hook completion tracking.
+
+    If the hook agents don't complete within _HOOK_TIMEOUT_S seconds (e.g. because
+    the target pool has no running instances and the routing engine queues the request
+    indefinitely), this guard force-closes the contact so the customer WebSocket is
+    never left open permanently.
+
+    Called via asyncio.create_task() immediately after fire_pool_hooks().
+    """
+    await asyncio.sleep(_HOOK_TIMEOUT_S)
+    pending_key = f"session:{session_id}:hook_pending:{hook_type}"
+    try:
+        still_pending = await redis_client.exists(pending_key)
+        if still_pending:
+            logger.warning(
+                "_hook_timeout_guard: %s hooks did not complete within %ds — "
+                "force-closing contact: session=%s",
+                hook_type, _HOOK_TIMEOUT_S, session_id,
+            )
+            # Delete the pending key to prevent double-close if a late hook completes.
+            await redis_client.delete(pending_key)
+            await _trigger_contact_close(redis_client, session_id)
+        else:
+            logger.debug(
+                "_hook_timeout_guard: %s hooks completed normally before timeout: session=%s",
+                hook_type, session_id,
+            )
+    except Exception as exc:
+        logger.warning(
+            "_hook_timeout_guard: error checking pending key: session=%s — %s",
+            session_id, exc,
+        )
+
+
 # ── Contact close trigger — used by hook completion and no-hook fallback ─────
 
 async def _trigger_contact_close(
@@ -706,6 +750,31 @@ async def _trigger_contact_close(
             "_trigger_contact_close: Kafka producer not ready — session=%s", session_id,
         )
         return
+
+    # Idempotency guard: only the first caller wins.  SET NX with TTL 7d.
+    # This prevents double-close when both a hook completion and the timeout guard
+    # race to call _trigger_contact_close for the same session.
+    try:
+        acquired = await redis_client.set(
+            f"session:{session_id}:close_fired",
+            "1",
+            nx=True,
+            ex=604800,
+        )
+        if not acquired:
+            logger.debug(
+                "_trigger_contact_close: close already fired for session=%s — skipping",
+                session_id,
+            )
+            return
+    except Exception as exc:
+        logger.warning(
+            "_trigger_contact_close: could not acquire close_fired guard: session=%s — %s "
+            "(proceeding anyway)",
+            session_id, exc,
+        )
+        # Non-fatal — proceed even if Redis SET failed; double-close is benign
+        # (channel-gateway handles duplicate session.closed gracefully).
 
     # Resolve contact_id, channel, and tenant_id from session meta.
     contact_id = session_id
@@ -1508,9 +1577,15 @@ async def process_routed(
                                             customer_id=_ph_customer,
                                             hook_type="post_human",
                                         ))
+                                        # Safety net for post_human hooks too
+                                        asyncio.create_task(_hook_timeout_guard(
+                                            redis_client, session_id, "post_human",
+                                        ))
                                         logger.info(
-                                            "post_human hooks dispatched: session=%s pool=%s count=%d",
+                                            "post_human hooks dispatched: session=%s pool=%s count=%d "
+                                            "(timeout guard scheduled: %ds)",
                                             session_id, _ph_pool, len(_post_human_list),
+                                            _HOOK_TIMEOUT_S,
                                         )
                                         _dispatched_post = True
                                 except Exception as _ph_exc2:
@@ -2087,6 +2162,30 @@ async def process_contact_event(
                             .get("on_human_end", [])
                         )
                         if _on_human_end:
+                            # Notify the client immediately that the human agent has ended.
+                            # This runs BEFORE on_human_end hooks (e.g. agente_finalizacao_v1)
+                            # so the customer sees the message without waiting for wrap-up.
+                            try:
+                                _encerrado_stream = f"session:{session_id}:stream"
+                                await redis_client.xadd(
+                                    _encerrado_stream,
+                                    {
+                                        "type":        "message",
+                                        "author_role": "system",
+                                        "visibility":  "all",
+                                        "content":     "O atendimento humano foi encerrado.",
+                                    },
+                                )
+                                logger.info(
+                                    "XADD 'atendimento encerrado' to stream: session=%s",
+                                    session_id,
+                                )
+                            except Exception as _xadd_exc:
+                                logger.warning(
+                                    "Could not XADD encerrado message: session=%s — %s",
+                                    session_id, _xadd_exc,
+                                )
+
                             # Pool has on_human_end hooks — dispatch them.
                             # _trigger_contact_close fires when all agents complete
                             # (hook_pending counter reaches 0 in process_routed).
@@ -2098,9 +2197,18 @@ async def process_contact_event(
                                 customer_id=_customer_id_hooks,
                                 hook_type="on_human_end",
                             ))
+                            # Safety net: if hook agents never start or complete
+                            # (e.g. pool has no running instances), force-close
+                            # the contact after _HOOK_TIMEOUT_S seconds so the
+                            # customer WebSocket is never left open indefinitely.
+                            asyncio.create_task(_hook_timeout_guard(
+                                redis_client, session_id, "on_human_end",
+                            ))
                             logger.info(
-                                "on_human_end hooks dispatched: session=%s pool=%s count=%d",
+                                "on_human_end hooks dispatched: session=%s pool=%s count=%d "
+                                "(timeout guard scheduled: %ds)",
                                 session_id, _pool_id_hooks, len(_on_human_end),
+                                _HOOK_TIMEOUT_S,
                             )
                         else:
                             # No hooks — close the contact immediately
