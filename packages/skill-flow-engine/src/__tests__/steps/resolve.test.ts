@@ -178,8 +178,8 @@ describe("executeResolve", () => {
         input:        { customer_id: "$.sessionContext.customer_id" },
         context_tags: {
           outputs: {
-            nome:   { tag: "caller.nome",           confidence: 0.95, merge: "overwrite" },
-            motivo: { tag: "caller.motivo_contato",  confidence: 0.95, merge: "overwrite" },
+            nome:   { tag: "caller.nome",           confidence: 0.95, merge: "overwrite" as const, scope: "session" as const },
+            motivo: { tag: "caller.motivo_contato",  confidence: 0.95, merge: "overwrite" as const, scope: "session" as const },
           },
         },
       },

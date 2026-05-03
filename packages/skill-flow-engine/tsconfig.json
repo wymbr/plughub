@@ -11,9 +11,10 @@
     "declaration":                true,
     "declarationMap":             true,
     "sourceMap":                  true,
+    "moduleResolution":           "node",
     "esModuleInterop":            true,
     "skipLibCheck":               true,
-    "incremental": true
+    "incremental":                true
   },
   "include":  ["src/**/*"],
   "exclude":  ["node_modules", "dist"]
