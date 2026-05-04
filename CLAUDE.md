@@ -4687,6 +4687,10 @@ React 18 + TypeScript + Vite. **Original** porta de dev: 5175. Proxy: `/api` →
 
 **Modo substituição (Phase 2 — ✅ implementado)** — `substitutionMode: boolean` prop em `MenuCard.tsx` alterna entre observação (disabled) e substituição (interativo). Quando ativo: borda âmbar, badge "substituição", todos os 5 tipos de interação (button/list/checklist/form/text) tornam-se funcionais. `SubmitResult = string | string[] | Record<string, string>`. `onSubmit` propaga por `ChatArea → MessageBubble → MenuCard`. Botão "🔄 Substituir/Substituindo" na `ActionBar` liga/desliga o modo; reset automático ao trocar de contato. Backend: `POST /api/menu_submit/:sessionId` no mcp-server-plughub faz XADD `interaction_result` no stream Redis e pub/sub `agent:events:{sessionId}` — o Skill Flow Engine retoma o suspend step. Auto-disable após submit bem-sucedido.
 
+**Roteamento por participant_id (✅ implementado)** — quando múltiplos agentes (NPS + wrap-up) estão bloqueados em `menu:waiting:{sessionId}` com visibility arrays distintas, o `menu_submit` endpoint resolve o `participant_id` do agente humano via ContextStore (`session.human_agent_participant_id`) e faz `vis.includes(agentPid)` — mesmo padrão do WS text handler (linha 1383 de `server.ts`). Garante que o click de botão do wrap-up seja roteado para o agente correto e não para o NPS.
+
+**Echo otimista de menu buttons (✅ implementado)** — `handleMenuSubmit` em `AgentAssistPage.tsx` adiciona a mensagem selecionada ao estado local React (id: `local-menu-{timestamp}`, author: `agent_human`, visibility: `agents_only`) antes do fetch para `/api/menu_submit`. Labels de opções são resolvidos via `menuData.options` (ex: id `resolvido` → label `✅ Resolvido`). Mesmo padrão do `handleSend` para texto digitado.
+
 ### Build: 566 kB JS / 164 kB gzip
 
 ## E2E test suite — scenarios

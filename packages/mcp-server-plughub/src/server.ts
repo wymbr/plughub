@@ -772,7 +772,7 @@ export async function startServer(config: ServerConfig): Promise<void> {
   // the suspended menu step.  Also pub/sub notifies agents watching the stream.
   app.post("/api/menu_submit/:sessionId", async (req: Request, res: Response) => {
     const { sessionId } = req.params
-    const { menu_id, interaction, result } = req.body as Record<string, unknown>
+    const { menu_id, interaction, result, displayText: rawDisplayText } = req.body as Record<string, unknown>
 
     if (!menu_id || !interaction) {
       res.status(400).json({ error: "menu_id and interaction are required" })
@@ -783,31 +783,124 @@ export async function startServer(config: ServerConfig): Promise<void> {
       const eventId = crypto.randomUUID()
       const now     = new Date().toISOString()
 
-      await (redis as any).xadd(
-        `session:${sessionId}:stream`, "*",
-        "event_id",  eventId,
-        "type",      "interaction_result",
-        "timestamp", now,
-        "author",    JSON.stringify({ type: "system", id: "supervisor" }),
-        "visibility", JSON.stringify("all"),
-        "payload",   JSON.stringify({ menu_id, interaction, result }),
-      )
+      // Normalise result to string for LPUSH — same logic as bridge process_inbound:
+      // plain string for button/list; JSON for checklist (array) or form (object).
+      const resultText = typeof result === "string"
+        ? result
+        : JSON.stringify(result)
 
-      // Notify agents watching this session via pub/sub
-      await redis.publish(
-        `agent:events:${sessionId}`,
-        JSON.stringify({
-          type:       "interaction_result",
-          session_id: sessionId,
-          menu_id,
-          interaction,
-          result,
-          timestamp:  now,
-        }),
-      )
+      // Display text for echo in chat — prefer the label sent by the frontend,
+      // fall back to the raw result value.
+      const displayText = typeof rawDisplayText === "string" && rawDisplayText
+        ? rawDisplayText
+        : resultText
 
-      res.json({ ok: true, event_id: eventId })
+      // 1. Resolve the human agent's participant_id so we can match against
+      //    the visibility arrays in menu:waiting — same logic as the WS text
+      //    handler (line 1383): vis.includes(agentPid).
+      //    The bridge writes session.human_agent_participant_id to the
+      //    ContextStore ({tenantId}:ctx:{sessionId}) before firing hooks.
+      const menuTenantId = process.env["PLUGHUB_TENANT_ID"] ?? "tenant_demo"
+      let agentPid = "human_agent"
+      try {
+        const ctxKey = `${menuTenantId}:ctx:${sessionId}`
+        const raw = await redis.hget(ctxKey, "session.human_agent_participant_id")
+        if (raw) {
+          const entry = JSON.parse(raw)
+          if (typeof entry.value === "string" && entry.value) {
+            agentPid = entry.value
+          }
+        }
+      } catch { /* fallback to "human_agent" */ }
+      console.log(`[menu_submit] session=${sessionId} agentPid=${agentPid}`)
+
+      // 2. Check menu:waiting hash — route to the correct agent's BLPOP key.
+      //    Mirrors the WS text handler: agents_only matches any agent message;
+      //    array visibility only matches if it includes this agent's participant_id.
+      let pushed = false
+      let targetVisibility: unknown = "agents_only"
+      try {
+        const waitingHash = await redis.hgetall(`menu:waiting:${sessionId}`)
+        console.log(`[menu_submit] session=${sessionId} menu:waiting =`, JSON.stringify(waitingHash))
+        if (waitingHash && Object.keys(waitingHash).length > 0) {
+          for (const [agentKey, metaJson] of Object.entries(waitingHash)) {
+            try {
+              const meta = JSON.parse(metaJson as string)
+              const vis = meta.visibility
+              if (vis === "agents_only") {
+                targetVisibility = vis
+                const resultKey = agentKey !== "_default_"
+                  ? `menu:result:${sessionId}:${agentKey}`
+                  : `menu:result:${sessionId}`
+                console.log(`[menu_submit] LPUSH ${resultKey} = "${resultText}" (agents_only match)`)
+                await redis.lpush(resultKey, resultText)
+                pushed = true
+                break
+              }
+              if (Array.isArray(vis) && vis.includes(agentPid)) {
+                targetVisibility = vis
+                const resultKey = agentKey !== "_default_"
+                  ? `menu:result:${sessionId}:${agentKey}`
+                  : `menu:result:${sessionId}`
+                console.log(`[menu_submit] LPUSH ${resultKey} = "${resultText}" (visibility includes ${agentPid})`)
+                await redis.lpush(resultKey, resultText)
+                pushed = true
+                break
+              }
+            } catch { /* skip malformed entry */ }
+          }
+        }
+      } catch (err) {
+        console.error("[menu_submit] Error checking menu:waiting:", err)
+      }
+
+      // 2. Write echo message to canonical stream as type "message" (NOT interaction_result).
+      //    This mirrors the WS text handler so the message appears in transcripts and
+      //    supervisor SSE streams.  Using type "message" ensures the Agent Assist UI
+      //    renders it as a normal chat bubble.
+      try {
+        await (redis as any).xadd(
+          `session:${sessionId}:stream`, "*",
+          "event_id",   eventId,
+          "type",       "message",
+          "timestamp",  now,
+          "author",     JSON.stringify({
+            participant_id: "human_agent",
+            instance_id:    "human_agent",
+            type:           "agent_human",
+            role:           "primary",
+          }),
+          "visibility", JSON.stringify(targetVisibility),
+          "payload",    JSON.stringify({
+            message_id: eventId,
+            content:    { type: "text", text: displayText },
+            text:       displayText,
+          }),
+        )
+        await redis.expire(`session:${sessionId}:stream`, 14400)
+      } catch { /* non-fatal */ }
+
+      // 3. Publish message.text to pub/sub — the Agent Assist UI listens for this
+      //    event type to show real-time chat bubbles.  This matches the WS text
+      //    handler pattern (line 1397).
+      try {
+        await redis.publish(
+          `agent:events:${sessionId}`,
+          JSON.stringify({
+            type:       "message.text",
+            message_id: eventId,
+            author:     { type: "agent_human", id: "human_agent" },
+            text:       displayText,
+            timestamp:  now,
+            visibility: targetVisibility,
+          }),
+        )
+      } catch { /* non-fatal */ }
+
+      console.log(`[menu_submit] Done. pushed=${pushed} menu_id=${menu_id} result="${resultText}"`)
+      res.json({ ok: true, event_id: eventId, pushed })
     } catch (err) {
+      console.error("[menu_submit] Fatal error:", err)
       res.status(500).json({ error: "publish_failed" })
     }
   })
@@ -914,6 +1007,10 @@ export async function startServer(config: ServerConfig): Promise<void> {
           const isNew = !subscribedSessions.has(newSessionId)
 
           subscribedSessions.add(newSessionId)
+          console.log(
+            `[agent-ws] subscribedSessions updated: pool=${poolId} ` +
+            `sessions=[${[...subscribedSessions].join(",")}]`
+          )
 
           // Capture agent identity from the first assignment event that carries it.
           if (!agentInstanceId) {
@@ -1107,11 +1204,20 @@ export async function startServer(config: ServerConfig): Promise<void> {
 
         // session_id is required in every outbound message.
         const targetSessionId = typeof msg["session_id"] === "string" ? msg["session_id"] : ""
-        if (!targetSessionId) return  // drop messages with no target session
+        if (!targetSessionId) {
+          console.warn(`[human-msg] dropped: no session_id in message from pool=${poolId}`)
+          return
+        }
 
         // Verify the target session is actually subscribed on this connection —
         // prevents rogue clients from injecting messages into arbitrary sessions.
-        if (!subscribedSessions.has(targetSessionId)) return
+        if (!subscribedSessions.has(targetSessionId)) {
+          console.warn(
+            `[human-msg] dropped: session=${targetSessionId} not in subscribedSessions ` +
+            `(pool=${poolId}, subscribed=[${[...subscribedSessions].join(",")}])`
+          )
+          return
+        }
 
         // Look up contact_id and channel from session metadata.
         // Try two sources in order:
@@ -1403,7 +1509,13 @@ export async function startServer(config: ServerConfig): Promise<void> {
               }),
             )
             await redis.expire(`session:${targetSessionId}:stream`, 14400)
-          } catch { /* non-fatal */ }
+            console.log(
+              `[human-msg] XADD ok session=${targetSessionId} msg=${outMsgId} ` +
+              `pool=${poolId} instance=${agentInstanceId || "none"}`
+            )
+          } catch (xaddErr) {
+            console.error(`[human-msg] XADD failed session=${targetSessionId}:`, xaddErr)
+          }
         }
       } catch (err) {
         console.error(`Agent WS message error:`, err)

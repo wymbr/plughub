@@ -187,14 +187,47 @@ export const AgentAssistPage: React.FC = () => {
   const handleMenuSubmit = useCallback(
     async (menuId: string, result: import("./components/MenuCard").SubmitResult) => {
       if (!selectedSessionId) return;
+      // Look up the actual interaction type and option label from the menu message
+      const contact = contacts.get(selectedSessionId);
+      const menuMsg = contact?.messages.find(m => m.menuData?.menu_id === menuId);
+      const interaction = menuMsg?.menuData?.interaction ?? "button";
+
+      // Resolve display text: use option label for button/list, stringify for others
+      let displayText = typeof result === "string" ? result : JSON.stringify(result);
+      if (typeof result === "string" && menuMsg?.menuData?.options) {
+        const opt = menuMsg.menuData.options.find(o => o.id === result);
+        if (opt) displayText = opt.label;
+      }
+
+      // Optimistic local echo — same pattern as handleSend (line 138).
+      // The pub/sub message from menu_submit doesn't carry session_id, so the
+      // WS handler in AgentAssistContext would discard it.  Adding the message
+      // locally ensures the agent sees their selection immediately.
+      const echoSessionId = selectedSessionId;
+      setContacts(prev => {
+        const c = prev.get(echoSessionId);
+        if (!c) return prev;
+        const next = new Map(prev);
+        next.set(echoSessionId, {
+          ...c,
+          messages: [...c.messages, {
+            id:         `local-menu-${Date.now()}`,
+            author:     "agent_human",
+            text:       displayText,
+            timestamp:  new Date().toISOString(),
+            visibility: "agents_only",
+          }],
+        });
+        return next;
+      });
+
       try {
         const resp = await fetch(`/api/menu_submit/${selectedSessionId}`, {
           method:  "POST",
           headers: { "Content-Type": "application/json" },
-          body:    JSON.stringify({ menu_id: menuId, interaction: "button", result }),
+          body:    JSON.stringify({ menu_id: menuId, interaction, result, displayText }),
         });
         if (resp.ok) {
-          addToast("Resposta enviada ao Skill Flow.", "info");
           setSubstitutionMode(false);
         } else {
           addToast("Falha ao enviar resposta.", "error");
@@ -203,7 +236,7 @@ export const AgentAssistPage: React.FC = () => {
         addToast("Erro de rede ao enviar resposta.", "error");
       }
     },
-    [selectedSessionId, addToast]
+    [selectedSessionId, contacts, addToast, setContacts]
   );
 
   const handleDesligar = useCallback(() => {
