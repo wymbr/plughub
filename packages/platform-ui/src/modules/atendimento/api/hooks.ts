@@ -152,24 +152,66 @@ export function useSessionStream(
 ): { entries: StreamEntry[]; status: ConnectionStatus } {
   const [entries, setEntries] = useState<StreamEntry[]>([])
   const [status,  setStatus]  = useState<ConnectionStatus>('connecting')
-  const esRef = useRef<EventSource | null>(null)
+  const esRef       = useRef<EventSource | null>(null)
+  const gotHistory  = useRef(false)
 
   useEffect(() => {
     setEntries([])
+    gotHistory.current = false
     if (!sessionId || !tenantId) return
-    const url = `${BASE}/sessions/${encodeURIComponent(sessionId)}/stream?tenant_id=${encodeURIComponent(tenantId)}`
-    const es  = new EventSource(url)
-    esRef.current = es
-    setStatus('connecting')
-    es.addEventListener('history', (e: MessageEvent) => {
-      try { setEntries(JSON.parse(e.data) as StreamEntry[]); setStatus('connected') } catch { /* ignore */ }
-    })
-    es.addEventListener('entry', (e: MessageEvent) => {
-      try { setEntries(prev => [...prev, JSON.parse(e.data) as StreamEntry]) } catch { /* ignore */ }
-    })
-    es.addEventListener('error', () => setStatus('error'))
-    es.onopen = () => setStatus('connected')
-    return () => { es.close(); esRef.current = null; setStatus('closed') }
+
+    let retryCount = 0
+    const maxRetries = 3
+    let closed = false
+
+    function connect() {
+      if (closed) return
+      const url = `${BASE}/sessions/${encodeURIComponent(sessionId!)}/stream?tenant_id=${encodeURIComponent(tenantId)}`
+      const es  = new EventSource(url)
+      esRef.current = es
+      setStatus('connecting')
+
+      es.addEventListener('history', (e: MessageEvent) => {
+        try {
+          const parsed = JSON.parse(e.data) as StreamEntry[]
+          gotHistory.current = true
+          retryCount = 0
+          setEntries(parsed)
+          setStatus('connected')
+        } catch (err) {
+          console.warn('[useSessionStream] Failed to parse history:', err)
+          setStatus('error')
+        }
+      })
+      es.addEventListener('entry', (e: MessageEvent) => {
+        try { setEntries(prev => [...prev, JSON.parse(e.data) as StreamEntry]) } catch { /* ignore */ }
+      })
+      es.addEventListener('error', () => {
+        // EventSource fires error on connection loss. If we never got history,
+        // try reconnecting a few times before giving up.
+        if (!gotHistory.current && retryCount < maxRetries) {
+          retryCount++
+          es.close()
+          esRef.current = null
+          setTimeout(connect, 1000 * retryCount)
+        } else {
+          setStatus('error')
+        }
+      })
+      es.onopen = () => {
+        if (gotHistory.current) setStatus('connected')
+        // Don't set to 'connected' until we actually get the history event
+      }
+    }
+
+    connect()
+
+    return () => {
+      closed = true
+      esRef.current?.close()
+      esRef.current = null
+      setStatus('closed')
+    }
   }, [tenantId, sessionId])
 
   return { entries, status }
@@ -185,9 +227,13 @@ export function useSessionSegments(
   const [segments, setSegments] = useState<ContactSegment[]>([])
   const [loading,  setLoading]  = useState(false)
   const [error,    setError]    = useState<string | null>(null)
+  // Track whether all segments are finalized (no active ones) — stop polling when true
+  const allFinalized = useRef(false)
 
   const fetch_ = useCallback(async () => {
     if (!tenantId || !sessionId) return
+    // Skip polling if all segments already ended — no new data expected
+    if (allFinalized.current) return
     setLoading(true)
     try {
       const url = `${BASE}/reports/segments?tenant_id=${encodeURIComponent(tenantId)}&session_id=${encodeURIComponent(sessionId)}&page_size=50`
@@ -209,6 +255,10 @@ export function useSessionSegments(
       })
       setSegments(sorted)
       setError(null)
+      // If we got segments and none are active, mark as finalized to stop polling
+      if (sorted.length > 0 && sorted.every(s => s.ended_at !== null)) {
+        allFinalized.current = true
+      }
     } catch (err) {
       setError(`Erro de rede: ${String(err)}`)
     }
@@ -218,6 +268,7 @@ export function useSessionSegments(
   useEffect(() => {
     setSegments([])
     setError(null)
+    allFinalized.current = false
     if (!sessionId) return
     fetch_()
     const id = setInterval(fetch_, intervalMs)

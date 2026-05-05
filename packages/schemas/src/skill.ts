@@ -178,6 +178,8 @@ export const EscalateStepSchema = z.object({
   target:       EscalateTargetSchema,
   context:      z.literal("pipeline_state"),
   error_reason: z.string().optional(),
+  on_failure:   z.string().optional(),
+  handoff_reason: z.string().optional(),
 })
 
 export const CompleteStepSchema = z.object({

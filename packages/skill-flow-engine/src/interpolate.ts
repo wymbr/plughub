@@ -171,7 +171,14 @@ export async function resolveVisibility(
       resolved.push(item)
     }
   }
-  return resolved.length > 0 ? resolved : "all"
+  if (resolved.length > 0) return resolved
+  // Original array had items but all resolved to empty/null — the intent was to
+  // restrict visibility to specific participants. Falling back to "all" would
+  // broadcast to everyone (including the customer), which is the opposite of the
+  // YAML author's intention.  Fall back to "agents_only" as a safe default.
+  // This prevents NPS messages from leaking to the Agent Assist UI when
+  // @ctx.session.customer_participant_id is not yet in the ContextStore.
+  return visibility.length > 0 ? "agents_only" : "all"
 }
 
 // ── Implementações internas ──────────────────────────────────────────────────

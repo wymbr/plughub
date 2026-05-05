@@ -14,6 +14,7 @@ import * as yaml from "js-yaml"
 import { Client } from "@modelcontextprotocol/sdk/client/index.js"
 import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js"
 import { SkillFlowEngine } from "@plughub/skill-flow-engine"
+import { ContextStore } from "./context-store"
 import type { SkillFlow } from "@plughub/schemas"
 
 // ── Config ────────────────────────────────────────────────────────────────────
@@ -265,9 +266,25 @@ async function aiGatewayCall(payload: {
   return data.result !== undefined ? data.result : data
 }
 
-// ── Engine ────────────────────────────────────────────────────────────────────
+// ── Engine factory ────────────────────────────────────────────────────────────
+// ContextStore requires tenantId at construction, and tenantId varies per
+// request.  Creating the engine per-request is cheap (constructor only builds
+// a PipelineStateManager that holds a Redis reference), so we do that instead
+// of keeping a global singleton without contextStore.
+//
+// IMPORTANT: Each engine gets a **dedicated** Redis connection via .duplicate().
+// The menu step uses BLPOP (blocking command), and Redis only processes one
+// blocking command per connection at a time.  If two agents (e.g. NPS + wrap-up)
+// share the same connection, the second BLPOP is queued locally by ioredis until
+// the first completes — causing serialization instead of parallelism.
+// The caller MUST disconnect the dedicated connection after engine.run() completes.
 
-const engine = new SkillFlowEngine({ redis, mcpCall, aiGatewayCall })
+function createEngine(tenantId: string, _sessionId: string): { engine: SkillFlowEngine; dedicatedRedis: Redis } {
+  const dedicatedRedis = redis.duplicate()
+  const contextStore = new ContextStore({ redis: dedicatedRedis, tenantId })
+  const engine = new SkillFlowEngine({ redis: dedicatedRedis, mcpCall, aiGatewayCall, contextStore })
+  return { engine, dedicatedRedis }
+}
 
 // ── Express app ───────────────────────────────────────────────────────────────
 
@@ -322,6 +339,7 @@ app.post("/execute", async (req: Request, res: Response) => {
     (pipeline_session_id ? ` pipeline=${pipeline_session_id}` : ""),
   )
 
+  const { engine, dedicatedRedis } = createEngine(tenant_id, session_id)
   try {
     const result = await engine.run({
       tenantId:       tenant_id,
@@ -338,15 +356,24 @@ app.post("/execute", async (req: Request, res: Response) => {
     })
 
     if ("error" in result && result.error === "PRECONDITION_FAILED") {
+      console.warn(`[skill-flow-service] /execute PRECONDITION_FAILED: session=${session_id} active_job=${result.active_job_id}`)
       res.status(412).json(result)
       return
     }
 
+    const outcome = "outcome" in result ? result.outcome : "unknown"
+    console.log(`[skill-flow-service] /execute completed: session=${session_id} skill=${skill_id} outcome=${outcome}`)
     res.json(result)
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
-    console.error("[skill-flow-service] /execute error:", message)
+    const stack   = err instanceof Error ? err.stack : undefined
+    console.error(`[skill-flow-service] /execute ERROR: session=${session_id} skill=${skill_id}: ${message}`)
+    if (stack) console.error(stack)
     res.status(500).json({ error: "INTERNAL_ERROR", message })
+  } finally {
+    // Disconnect the dedicated Redis connection to avoid connection leaks.
+    // disconnect() is graceful — it waits for pending commands to finish.
+    dedicatedRedis.disconnect()
   }
 })
 
@@ -446,7 +473,9 @@ async function runDelegationJob(params: {
     // Run the skill flow engine.
     // sessionId  = parent session — notifications and menus route to the parent channel.
     // pipelineSessionId = derived — exclusive lock/state for the specialist.
-    const result = await engine.run({
+    const { engine: delegationEngine, dedicatedRedis: delegationRedis } = createEngine(tenantId, sessionId)
+    try {
+    const result = await delegationEngine.run({
       tenantId,
       sessionId,               // comms → parent channel
       pipelineSessionId,       // state/lock → isolated
@@ -508,6 +537,10 @@ async function runDelegationJob(params: {
       completed_at: new Date().toISOString(),
     })
     console.log(`[skill-flow-service] delegation ${jobId}: completed (outcome=${result.outcome})`)
+
+    } finally {
+      delegationRedis.disconnect()
+    }
 
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)

@@ -38,12 +38,14 @@ steps:
     visibility: agents_only
     message: "✅ Deploy agendado concluído: skill {{@ctx.session.skill_id}} publicado nos pools {{@ctx.session.pool_ids}}."
     on_success: encerrar
+    on_failure: encerrar
 
   - id: notificar_falha
     type: notify
     visibility: agents_only
     message: "❌ Deploy agendado falhou: skill {{@ctx.session.skill_id}}. Verifique os logs e tente novamente."
     on_success: encerrar_falha
+    on_failure: encerrar_falha
 
   - id: encerrar
     type: complete
@@ -51,4 +53,4 @@ steps:
 
   - id: encerrar_falha
     type: complete
-    outcome: escalated
+    outcome: failed

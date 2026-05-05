@@ -18,7 +18,7 @@
 
 import type { NotifyStep } from "@plughub/schemas"
 import type { StepContext, StepResult } from "../executor"
-import { interpolate } from "../interpolate"
+import { interpolate, resolveVisibility } from "../interpolate"
 
 export async function executeNotify(
   step: NotifyStep,
@@ -35,6 +35,7 @@ export async function executeNotify(
   }
 
   const message = await interpolate(step.message, ctx, ctx.contextStore)
+  const resolvedVisibility = await resolveVisibility(step.visibility ?? "all", ctx, ctx.contextStore)
 
   // ── Fase 1: gravar sentinel "dispatched" antes de enviar ─────────────────
   ctx.state = {
@@ -48,7 +49,9 @@ export async function executeNotify(
       session_id: ctx.sessionId,
       message,
       channel:    step.channel ?? "session",
-      visibility: step.visibility ?? "all",
+      visibility: resolvedVisibility,
+      ...(ctx.segmentId ? { segment_id: ctx.segmentId } : {}),
+      ...(ctx.instanceId ? { instance_id: ctx.instanceId } : {}),
     })
 
     // ── Fase 2: gravar sentinel "completed" após envio ───────────────────
@@ -70,4 +73,3 @@ export async function executeNotify(
     }
   }
 }
-

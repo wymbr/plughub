@@ -50,7 +50,7 @@ def _strip_tokens(text: str) -> str:
 
 # Timeout do XREAD bloqueante (ms) — evita bloqueio infinito, permite checagem
 # de cancelamento da task
-_XREAD_BLOCK_MS = 2000
+_XREAD_BLOCK_MS = 500
 
 
 class StreamExpiredError(Exception):

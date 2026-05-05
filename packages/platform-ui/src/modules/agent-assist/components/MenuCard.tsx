@@ -277,28 +277,36 @@ export const MenuCard: React.FC<MenuCardProps> = ({
     onSubmit: handleSubmit,
   };
 
+  const isAgentTarget = data.targetsSelf ?? false;
+
   return (
     <div
       className={[
         "rounded-xl px-3 pt-2.5 pb-3 max-w-[90%] self-start shadow-sm border transition-colors",
-        substitutionMode
-          ? "border-amber-300 bg-amber-50/70"
-          : "border-indigo-200 bg-indigo-50/60",
+        isAgentTarget
+          ? "border-emerald-300 bg-emerald-50/70"
+          : substitutionMode
+            ? "border-amber-300 bg-amber-50/70"
+            : "border-indigo-200 bg-indigo-50/60",
       ].join(" ")}
     >
       <div className="flex items-center gap-1.5 mb-1.5">
         <span
           className={[
             "text-[10px] rounded-full px-2 py-0.5 font-medium flex items-center gap-1 border",
-            substitutionMode
-              ? "bg-amber-100 text-amber-800 border-amber-300"
-              : "bg-indigo-100 text-indigo-700 border-indigo-200",
+            isAgentTarget
+              ? "bg-emerald-100 text-emerald-800 border-emerald-300"
+              : substitutionMode
+                ? "bg-amber-100 text-amber-800 border-amber-300"
+                : "bg-indigo-100 text-indigo-700 border-indigo-200",
           ].join(" ")}
         >
           {icon} {label}
         </span>
         <span className="text-[9px] text-gray-400 ml-auto">
-          {substitutionMode ? "IA → Cliente · substituição" : "IA → Cliente · observação"}
+          {data.targetsSelf
+            ? "IA → Agente · responda abaixo"
+            : substitutionMode ? "IA → Cliente · substituição" : "IA → Cliente · observação"}
         </span>
       </div>
 

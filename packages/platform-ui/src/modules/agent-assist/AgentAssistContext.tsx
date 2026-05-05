@@ -178,7 +178,7 @@ export const AgentAssistProvider: React.FC<{ children: React.ReactNode }> = ({ c
   }, []);
 
   // ── Multi-pool WebSocket ──────────────────────────────────────────────────
-  const { statuses, lastEvent, send } = useMultiPoolWebSocket(activePools);
+  const { statuses, lastEvent, send, registerSession, unregisterSession } = useMultiPoolWebSocket(activePools);
 
   // ── Multi-contact state ───────────────────────────────────────────────────
   const [contacts, setContacts]           = useState<Map<string, ContactSession>>(new Map());
@@ -247,6 +247,9 @@ export const AgentAssistProvider: React.FC<{ children: React.ReactNode }> = ({ c
     if (event.type === "conversation.assigned") {
       const { session_id, contact_id, pool_id } = event;
       const resolvedPool = pool_id ?? sourcePoolId;
+
+      // Register session→pool mapping so send() targets the correct WS connection
+      registerSession(session_id, resolvedPool);
 
       if (handledSessions.current.has(session_id)) return;
 
@@ -345,6 +348,9 @@ export const AgentAssistProvider: React.FC<{ children: React.ReactNode }> = ({ c
       const sid = (event as unknown as Record<string, unknown>)["session_id"] as string | undefined;
       if (!sid) return;
 
+      // Clean up session→pool mapping
+      unregisterSession(sid);
+
       // Remove the contact — all hooks have completed.
       pendingClosedSessions.current.delete(sid);
       setContacts(prev => {
@@ -367,6 +373,11 @@ export const AgentAssistProvider: React.FC<{ children: React.ReactNode }> = ({ c
     if (event.type === "menu.render") {
       const sid = (event as unknown as Record<string, unknown>)["session_id"] as string | undefined;
       if (!sid) return;
+      // Detect if the menu targets the current agent (not the customer).
+      // Array visibility or "agents_only" means the agent IS the respondent —
+      // MenuCard should be interactive without needing the global substitution toggle.
+      const vis = (event as unknown as Record<string, unknown>)["visibility"];
+      const targetsSelf = Array.isArray(vis) || vis === "agents_only";
       const menuMsg: ChatMessage = {
         id:        `menu-${event.menu_id}`,
         author:    "system",
@@ -378,6 +389,7 @@ export const AgentAssistProvider: React.FC<{ children: React.ReactNode }> = ({ c
           prompt:      event.prompt,
           options:     event.options,
           fields:      event.fields,
+          targetsSelf,
         },
       };
       setContacts(prev => {
@@ -412,7 +424,7 @@ export const AgentAssistProvider: React.FC<{ children: React.ReactNode }> = ({ c
       return;
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [lastEvent, addToast, fetchHistory]);
+  }, [lastEvent, addToast, fetchHistory, registerSession, unregisterSession]);
 
   // Clear typing timers on unmount (full app unmount, not navigation)
   useEffect(() => {
@@ -441,6 +453,7 @@ export const AgentAssistProvider: React.FC<{ children: React.ReactNode }> = ({ c
     fetchHistory,
     handledSessions,
   };
+
 
   return (
     <AgentAssistContext.Provider value={value}>

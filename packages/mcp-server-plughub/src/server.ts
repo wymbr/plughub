@@ -865,8 +865,8 @@ export async function startServer(config: ServerConfig): Promise<void> {
           "type",       "message",
           "timestamp",  now,
           "author",     JSON.stringify({
-            participant_id: "human_agent",
-            instance_id:    "human_agent",
+            participant_id: agentPid,
+            instance_id:    agentPid,
             type:           "agent_human",
             role:           "primary",
           }),
@@ -889,7 +889,7 @@ export async function startServer(config: ServerConfig): Promise<void> {
           JSON.stringify({
             type:       "message.text",
             message_id: eventId,
-            author:     { type: "agent_human", id: "human_agent" },
+            author:     { type: "agent_human", id: agentPid },
             text:       displayText,
             timestamp:  now,
             visibility: targetVisibility,
@@ -1472,6 +1472,22 @@ export async function startServer(config: ServerConfig): Promise<void> {
               : `menu:result:${targetSessionId}`
             await redis.lpush(resultKey, msgText)
           } catch { /* non-fatal — hook agent will timeout instead */ }
+
+          // 4. Publish to analytics (ClickHouse persistence) for hook agent responses too
+          try {
+            await kafka.publish("conversations.events", {
+              event_type:   "message_sent",
+              message_id:   outMsgId,
+              session_id:   targetSessionId,
+              tenant_id:    agentTenantId || process.env["PLUGHUB_TENANT_ID"] || "tenant_demo",
+              author_id:    agentInstanceId || poolId || "human_agent",
+              author_role:  "agent",
+              content_type: "text",
+              content:      msgText,
+              visibility:   typeof streamVis === "string" ? streamVis : JSON.stringify(streamVis),
+              timestamp:    msgTs,
+            })
+          } catch { /* non-fatal — analytics persistence is best-effort */ }
         } else {
           // ── Normal message path — deliver to customer ─────────────────────
           await kafka.publish("conversations.outbound", {
@@ -1516,6 +1532,22 @@ export async function startServer(config: ServerConfig): Promise<void> {
           } catch (xaddErr) {
             console.error(`[human-msg] XADD failed session=${targetSessionId}:`, xaddErr)
           }
+
+          // Publish to analytics (ClickHouse persistence) so messages survive Redis stream TTL
+          try {
+            await kafka.publish("conversations.events", {
+              event_type:   "message_sent",
+              message_id:   outMsgId,
+              session_id:   targetSessionId,
+              tenant_id:    agentTenantId || process.env["PLUGHUB_TENANT_ID"] || "tenant_demo",
+              author_id:    agentInstanceId || poolId || "human_agent",
+              author_role:  "agent",
+              content_type: "text",
+              content:      msgText,
+              visibility:   "all",
+              timestamp:    msgTs,
+            })
+          } catch { /* non-fatal — analytics persistence is best-effort */ }
         }
       } catch (err) {
         console.error(`Agent WS message error:`, err)

@@ -98,20 +98,6 @@ const NotificationSendInputSchema = z.object({
   /** Canal de entrega — "session" → webchat da sessão atual */
   channel:    z.enum(["session", "whatsapp", "sms", "email"]).default("session"),
   /**
-   * segment_id do agente que emite a mensagem (opcional).
-   * Quando presente, é escrito no stream canônico junto com a mensagem,
-   * permitindo filtragem determinística por segmento no frontend (Contatos).
-   * Propagado automaticamente pelo Skill Flow Engine via ctx.segmentId.
-   */
-  segment_id: z.string().optional(),
-  /**
-   * instance_id do agente que emite a mensagem (opcional).
-   * Ex: "agente_nps_v1-001", "agente_wrapup_v1-001".
-   * Usado como author.id no stream para que o frontend possa atribuir
-   * cada mensagem ao agente correto por participant_id.
-   */
-  instance_id: z.string().optional(),
-  /**
    * Visibilidade da mensagem.
    *   "all"         → entregue ao cliente via conversations.outbound (padrão)
    *   "agents_only" → escrita no stream da sessão e publicada em agent:events:*
@@ -449,8 +435,6 @@ export function registerBpmTools(server: McpServer, deps?: BpmDeps): void {
       //       session:{session_id}:meta        → JSON with channel field
       let contactId = parsed.session_id  // fallback: use session_id as contact_id
       let channel   = "webchat"          // fallback channel (outbound_consumer requires "webchat")
-      let metaTenantId: string | null = null      // tenant_id from session meta (for analytics)
-      let metaCustomerPid: string | null = null  // customer_participant_id from session meta (fallback)
       if (deps?.redis) {
         try {
           const stored = await deps.redis.get(`session:${parsed.session_id}:contact_id`)
@@ -467,15 +451,6 @@ export function registerBpmTools(server: McpServer, deps?: BpmDeps): void {
               // filters channel != "webchat" and silently drops the message otherwise.
               const rawCh = metaObj["channel"] as string
               channel = rawCh === "chat" ? "webchat" : rawCh
-            }
-            // Extract customer_participant_id from meta as fallback for the
-            // dedicated Redis key (which may have expired by the time post-session
-            // hook agents like NPS run).
-            if (typeof metaObj["tenant_id"] === "string") {
-              metaTenantId = metaObj["tenant_id"] as string
-            }
-            if (typeof metaObj["customer_participant_id"] === "string") {
-              metaCustomerPid = metaObj["customer_participant_id"] as string
             }
           }
         } catch {
@@ -495,20 +470,6 @@ export function registerBpmTools(server: McpServer, deps?: BpmDeps): void {
       const agentsOnly    = parsed.visibility === "agents_only"
       const isArrayVis    = Array.isArray(parsed.visibility)
 
-      // Build optional segment_id args for XADD (empty array when absent)
-      const segArgs: string[] = parsed.segment_id
-        ? ["segment_id", parsed.segment_id]
-        : []
-
-      // Use instance_id as the author identifier when available.
-      // instance_id is the agent's name (e.g. "agente_nps_v1-001"),
-      // propagated by the Skill Flow Engine via ctx.instanceId.
-      // This replaces the hardcoded "orchestrator" so the frontend can
-      // distinguish which agent sent which message by matching participant_id.
-      // Falls back to segment_id (UUID) then "orchestrator" for backward compat.
-      const authorId = parsed.instance_id ?? parsed.segment_id ?? "orchestrator"
-      const authorJson = JSON.stringify({ type: "agent_ai", id: authorId })
-
       if (agentsOnly) {
         // agents_only: write to session stream + publish to agent:events Redis channel.
         // The customer webchat (channel-gateway stream subscriber) filters out agents_only
@@ -521,9 +482,8 @@ export function registerBpmTools(server: McpServer, deps?: BpmDeps): void {
               "*",
               "type",       "message",
               "timestamp",  timestamp,
-              "author",     authorJson,
+              "author",     JSON.stringify({ type: "agent_ai", id: "orchestrator" }),
               "visibility", JSON.stringify("agents_only"),
-              ...segArgs,
               "payload",    JSON.stringify({
                 message_id: messageId,
                 content:    { type: "text", text: parsed.message },
@@ -535,7 +495,7 @@ export function registerBpmTools(server: McpServer, deps?: BpmDeps): void {
               type:       "message.text",
               session_id: parsed.session_id,
               message_id: messageId,
-              author:     { type: "agent_ai", id: authorId },
+              author:     { type: "agent_ai", id: "orchestrator" },
               text:       parsed.message,
               timestamp,
               visibility: "agents_only",
@@ -558,53 +518,18 @@ export function registerBpmTools(server: McpServer, deps?: BpmDeps): void {
               "*",
               "type",       "message",
               "timestamp",  timestamp,
-              "author",     authorJson,
+              "author",     JSON.stringify({ type: "agent_ai", id: "orchestrator" }),
               "visibility", JSON.stringify(parsed.visibility),
-              ...segArgs,
               "payload",    JSON.stringify({
                 message_id: messageId,
                 content:    { type: "text", text: parsed.message },
               }),
             )
           } catch { /* non-fatal — stream may not exist yet */ }
-
-          // Determine if the visibility array targets the human agent.
-          // If it only targets the customer (not any agent), skip agent:events
-          // so NPS messages don't leak to Agent Assist UI.
-          let targetsAgent = true
-          try {
-            let custPid = await deps.redis.get(
-              `session:${parsed.session_id}:customer_participant_id`
-            )
-            // Fallback: dedicated key may have expired; use value from session meta
-            if (!custPid && metaCustomerPid) custPid = metaCustomerPid
-            if (custPid && Array.isArray(parsed.visibility)) {
-              const custStr = typeof custPid === "string" ? custPid : String(custPid)
-              // If every element in the visibility array is the customer_participant_id,
-              // then this message is customer-only — skip agent:events.
-              targetsAgent = parsed.visibility.some((v: string) => v !== custStr)
-            }
-          } catch { /* non-fatal — default to publishing */ }
-
-          if (targetsAgent && !hasMenu) {
-            // Publish to agent:events so Agent Assist UI receives the message.
-            // This is critical for post-agent_done wrap-up messages that target
-            // the human agent's participant_id.
-            // When hasMenu is true, we skip this — the menu.render event below
-            // will deliver the message to Agent Assist UI instead, avoiding
-            // duplicate display (text bubble + menu card for the same message).
-            try {
-              await deps.redis.publish(`agent:events:${parsed.session_id}`, JSON.stringify({
-                type:       "message.text",
-                session_id: parsed.session_id,
-                message_id: messageId,
-                author:     { type: "agent_ai", id: authorId },
-                text:       parsed.message,
-                timestamp,
-                visibility: parsed.visibility,
-              }))
-            } catch { /* non-fatal */ }
-          }
+          // NÃO publicamos em agent:events — visibilidade restrita impede que
+          // o Agent Assist UI do agente humano veja estas mensagens.
+          // Os participantes listados no array já lêem o stream diretamente
+          // (customer via StreamSubscriber, agentes via session_context_get).
         }
 
         // Para interações de menu com array visibility (ex: NPS button),
@@ -626,40 +551,6 @@ export function registerBpmTools(server: McpServer, deps?: BpmDeps): void {
             timestamp,
           })
         }
-
-        // Also publish menu to agent:events for Agent Assist UI (wrap-up menus),
-        // but only if the visibility targets the human agent (not customer-only).
-        if (hasMenu && deps?.redis) {
-          // Reuse the targetsAgent check from above (same visibility array)
-          let menuTargetsAgent = true
-          try {
-            let custPid2 = await deps.redis.get(
-              `session:${parsed.session_id}:customer_participant_id`
-            )
-            // Fallback: dedicated key may have expired; use value from session meta
-            if (!custPid2 && metaCustomerPid) custPid2 = metaCustomerPid
-            if (custPid2 && Array.isArray(parsed.visibility)) {
-              const custStr2 = typeof custPid2 === "string" ? custPid2 : String(custPid2)
-              menuTargetsAgent = parsed.visibility.some((v: string) => v !== custStr2)
-            }
-          } catch { /* non-fatal */ }
-
-          if (menuTargetsAgent) {
-            try {
-              await deps.redis.publish(`agent:events:${parsed.session_id}`, JSON.stringify({
-                type:       "menu.render",
-                session_id: parsed.session_id,
-                menu_id:    messageId,
-                interaction: parsed.menu!.interaction,
-                prompt:     parsed.message,
-                options:    parsed.menu!.options  ?? [],
-                fields:     parsed.menu!.fields   ?? [],
-                timestamp,
-                visibility: parsed.visibility,
-              }))
-            } catch { /* non-fatal */ }
-          }
-        }
       } else {
         // Default visibility ("all"): write to Redis stream so webchat clients
         // receive the message via StreamSubscriber (XREAD), AND publish to Kafka
@@ -674,9 +565,8 @@ export function registerBpmTools(server: McpServer, deps?: BpmDeps): void {
                 "*",
                 "type",       "interaction_request",
                 "timestamp",  timestamp,
-                "author",     authorJson,
+                "author",     JSON.stringify({ type: "agent_ai", id: "orchestrator" }),
                 "visibility", JSON.stringify("all"),
-                ...segArgs,
                 "payload",    JSON.stringify({
                   menu_id:       messageId,
                   interaction:   parsed.menu!.interaction,
@@ -693,9 +583,8 @@ export function registerBpmTools(server: McpServer, deps?: BpmDeps): void {
                 "*",
                 "type",       "message",
                 "timestamp",  timestamp,
-                "author",     authorJson,
+                "author",     JSON.stringify({ type: "agent_ai", id: "orchestrator" }),
                 "visibility", JSON.stringify("all"),
-                ...segArgs,
                 "payload",    JSON.stringify({
                   message_id: messageId,
                   content:    { type: "text", text: parsed.message },
@@ -710,7 +599,7 @@ export function registerBpmTools(server: McpServer, deps?: BpmDeps): void {
               type:       hasMenu ? "menu.render" : "message.text",
               session_id: parsed.session_id,
               message_id: messageId,
-              author:     { type: "agent_ai", id: authorId },
+              author:     { type: "agent_ai", id: "orchestrator" },
               text:       parsed.message,
               timestamp,
               visibility: "all",
@@ -750,33 +639,13 @@ export function registerBpmTools(server: McpServer, deps?: BpmDeps): void {
               message_id: messageId,
               channel,
               direction:  "outbound",
-              author:     { type: "agent_ai", id: authorId },
+              author:     { type: "agent_ai", id: "orchestrator" },
               content:    { type: "text", text: parsed.message },
               text:       parsed.message,   // kept for channel-gateway backward compat
               timestamp,
             })
           }
         }
-      }
-
-      // ── Publish to conversations.events for ClickHouse analytics persistence ──
-      // This ensures messages from notification_send (AI agent outbound) are
-      // queryable in the analytics-api SessionTranscript ClickHouse fallback.
-      if (deps?.kafka && metaTenantId) {
-        try {
-          await deps.kafka.publish("conversations.events", {
-            event_type:   "message_sent",
-            session_id:   parsed.session_id,
-            tenant_id:    metaTenantId,
-            message_id:   messageId,
-            author_id:    authorId,
-            author_role:  "primary",
-            content:      parsed.message,
-            content_type: "text",
-            visibility:   typeof parsed.visibility === "string" ? parsed.visibility : JSON.stringify(parsed.visibility),
-            timestamp,
-          })
-        } catch { /* non-fatal — analytics persistence is best-effort */ }
       }
 
       return {
@@ -989,79 +858,4 @@ export function registerBpmTools(server: McpServer, deps?: BpmDeps): void {
         return {
           content: [{
             type: "text" as const,
-            text: JSON.stringify({ handled: false, reason: "unknown_command" }),
-          }],
-        }
-      }
-
-      const action = cmd.action
-
-      // ── 3. Execute action ─────────────────────────────────────────────────
-
-      if ("set_context" in action && redis) {
-        const ctxKey = `${parsed.tenant_id}:ctx:${parsed.session_id}`
-        for (const [tag, value] of Object.entries(action.set_context)) {
-          try {
-            const entry = JSON.stringify({
-              value,
-              confidence: 1.0,
-              source:     `mention_command:${parsed.command_name}`,
-              visibility: "agents_only",
-              updated_at: now,
-            })
-            await redis.hset(ctxKey, tag, entry)
-          } catch { /* non-fatal */ }
-        }
-      }
-
-      if ("trigger_step" in action && redis) {
-        // Interrupt any blocked menu:result BLPOP — the menu step detects this special payload
-        // and jumps to the specified step instead of returning a normal on_success result.
-        try {
-          await redis.lpush(resultKey, JSON.stringify({
-            _mention_trigger_step: (action as { trigger_step: string }).trigger_step,
-          }))
-        } catch { /* non-fatal */ }
-      }
-
-      if ("terminate_self" in action && (action as { terminate_self: boolean }).terminate_self && redis) {
-        // Wake up any blocked menu BLPOP with a terminate signal.
-        // Wake up any blocked menu BLPOP with a terminate signal.
-        // The menu step (or the engine's completion logic) handles agent_done.
-        try {
-          await redis.lpush(resultKey, JSON.stringify({ _mention_terminate: true }))
-        } catch { /* non-fatal */ }
-      }
-
-      // ── 4. Acknowledgment — agents_only message ───────────────────────────
-      if (cmd.acknowledge && redis) {
-        try {
-          await (redis as any).xadd(
-            `session:${parsed.session_id}:stream`,
-            "*",
-            "event_id",   crypto.randomUUID(),
-            "type",       "message",
-            "timestamp",  now,
-            "author",     JSON.stringify({ type: "agent_ai", id: parsed.instance_id ?? "mention_dispatcher" }),
-            "visibility", JSON.stringify("agents_only"),
-            "payload",    JSON.stringify({
-              content: { type: "text", text: `[mention_command] /${parsed.command_name} acknowledged` },
-            }),
-          )
-        } catch { /* non-fatal */ }
-      }
-
-      return {
-        content: [{
-          type: "text" as const,
-          text: JSON.stringify({
-            handled:        true,
-            command_name:   parsed.command_name,
-            action_type:    Object.keys(action)[0] ?? "unknown",
-            acknowledged:   cmd.acknowledge,
-          }),
-        }],
-      }
-    }),
-  )
-}
+            text: JSON.stringify({ 

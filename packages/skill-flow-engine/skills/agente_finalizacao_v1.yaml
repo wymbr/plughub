@@ -82,10 +82,11 @@ steps:
     type: notify
     message: "Agradecemos sua avaliação! ✅"
     context_tags:
-      inputs:
-        nota:
-          tag: session.nps_score_raw
-          required: false
+      outputs:
+        nps_score:
+          tag: session.nps_score
+          confidence: 1.0
+          merge: overwrite
     on_success: encerrar
     on_failure: encerrar
 

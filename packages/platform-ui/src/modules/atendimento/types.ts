@@ -89,9 +89,11 @@ export interface StreamEntry {
   timestamp:   string | null
   author_id:   string | null
   author_role: string | null
-  visibility:  string
+  visibility:  string | string[]
   content:     unknown
   payload:     unknown
+  /** segment_id of the agent that emitted this entry (present since Arc 5) */
+  segment_id?: string
 }
 
 // ─── Contact segment (per-agent participation window within a session) ────────
@@ -127,6 +129,7 @@ export type ConnectionStatus = 'connecting' | 'connected' | 'error' | 'closed'
 // ─── Supervisor ───────────────────────────────────────────────────────────────
 
 export type SupervisorStatus = 'idle' | 'joining' | 'active' | 'leaving' | 'error'
+
 
 export interface SupervisorState {
   status:        SupervisorStatus

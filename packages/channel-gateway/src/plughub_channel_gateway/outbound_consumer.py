@@ -35,6 +35,9 @@ class OutboundConsumer:
             bootstrap_servers=self._settings.kafka_brokers,
             group_id=self._settings.kafka_group_id,
             auto_offset_reset="latest",
+            # Low-latency tuning: reduce broker wait time before returning data.
+            fetch_max_wait_ms=100,
+            fetch_min_bytes=1,
         )
         await consumer.start()
         logger.info("outbound consumer started — topic=%s", self._settings.kafka_topic_outbound)
@@ -68,8 +71,9 @@ class OutboundConsumer:
             if msg_type == "message.text":
                 # NOTE: In the hybrid stream model, webchat clients receive
                 # messages via the stream_subscriber (XREAD on session stream),
-                # NOT from the outbound consumer.  Both AI and human agents now
-                # XADD their messages to the canonical stream.  Delivering here
+                # NOT from the outbound consumer.  The notification_send tool
+                # XADDs messages to the canonical session stream for ALL
+                # visibility modes (all, agents_only, array).  Delivering here
                 # as well would cause duplicate bubbles in the webchat UI.
                 #
                 # registry.send() is therefore SKIPPED for message.text.
@@ -112,15 +116,6 @@ class OutboundConsumer:
                         channel,
                     )
 
-                ws_msg = WsMenuRender(
-                    menu_id=payload["menu_id"],
-                    interaction=payload["interaction"],
-                    prompt=payload["prompt"],
-                    options=payload.get("options"),
-                    fields=payload.get("fields"),
-                    masked_fields=masked_fields,
-                )
-
                 # Register masked_fields in SessionRegistry BEFORE sending the menu
                 # to the client. WebchatAdapter._handle_menu_submit will read and clear
                 # this entry to redact sensitive values from the agent-visible history.
@@ -133,7 +128,23 @@ class OutboundConsumer:
                         contact_id, payload["menu_id"], masked_fields,
                     )
 
-                await self._registry.send(contact_id, ws_msg.model_dump())
+                # NOTE: In the hybrid stream model, webchat clients receive
+                # interaction_request events via the stream_subscriber (XREAD on
+                # session stream), NOT from the outbound consumer.  The
+                # notification_send tool XADDs interaction_request to the stream
+                # for ALL visibility modes (all, agents_only, array).  Delivering
+                # via registry.send() as well would cause duplicate forms in the
+                # webchat UI.
+                #
+                # We still process masked_fields above so that the
+                # WebchatAdapter._handle_menu_submit can redact sensitive values.
+                #
+                # Non-webchat channels will use their own adapter delivery path.
+                logger.debug(
+                    "menu.payload skipped registry.send for webchat (hybrid stream model) "
+                    "contact_id=%s menu_id=%s",
+                    contact_id, payload.get("menu_id"),
+                )
 
             elif msg_type == "agent.typing":
                 ws_msg = WsAgentTyping(author_type=payload.get("author_type", "agent_ai"))

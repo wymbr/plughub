@@ -553,13 +553,19 @@ export function registerSessionTools(server: McpServer, deps: SessionDeps): void
         }
 
         // ── Publicar no Kafka ─────────────────────────────────────────────
-        await kafka.publish("conversations.message_sent", {
+        // Publish to conversations.events (same topic as contact_open/contact_closed)
+        // so the analytics-api consumer can populate the ClickHouse messages table.
+        await kafka.publish("conversations.events", {
+          event_type: "message_sent",
           event_id,
           session_id,
           tenant_id,
           message_id,
+          author_id:   participant_id,
+          author_role:  event.author?.role ?? "",
           participant_id,
-          content,
+          content:      typeof content === "string" ? content : JSON.stringify(content),
+          content_type: typeof content === "object" ? "json" : "text",
           visibility: effectiveVisibility,
           timestamp,
         })

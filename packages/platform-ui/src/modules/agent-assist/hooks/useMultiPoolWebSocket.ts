@@ -7,8 +7,10 @@
  *     Adding a pool_id opens a new WS; removing one closes it.
  *   - Each connection sends the same typed envelope as useAgentWebSocket.
  *   - `lastEvent` is the most recent event from ANY pool, tagged with `_pool_id`.
- *   - `send(text, sessionId)` broadcasts to all connections (mcp-server routes
- *     by session_id on the server side, so any connection will do).
+ *   - `send(text, sessionId)` targets the correct connection via session→pool
+ *     mapping (registered on conversation.assigned). Falls back to broadcast
+ *     if the mapping is missing. Each server-side connection validates
+ *     subscribedSessions independently.
  *   - `statuses` is a Map<poolId, PoolConnectionStatus> for the sidebar dots.
  */
 
@@ -33,6 +35,13 @@ interface PoolState {
   intentionalClose: boolean;
 }
 
+/**
+ * Maps sessionId → poolId so send() can target the correct WebSocket
+ * connection. Populated externally via registerSession() when
+ * conversation.assigned arrives.
+ */
+type SessionPoolMap = Map<string, string>;
+
 interface UseMultiPoolWebSocketReturn {
   /** Current connection status per pool. */
   statuses:  Map<string, PoolConnectionStatus>;
@@ -40,6 +49,13 @@ interface UseMultiPoolWebSocketReturn {
   lastEvent: TaggedWsEvent | null;
   /** Send a text message targeting a specific session. */
   send:      (text: string, sessionId: string) => void;
+  /**
+   * Register which pool owns a session. Call when conversation.assigned
+   * arrives so send() can target the correct WebSocket connection.
+   */
+  registerSession: (sessionId: string, poolId: string) => void;
+  /** Unregister a session (e.g. on session.closed). */
+  unregisterSession: (sessionId: string) => void;
 }
 
 function openConnection(
@@ -136,7 +152,8 @@ function closeConnection(poolId: string, poolStateRef: React.MutableRefObject<Ma
 }
 
 export function useMultiPoolWebSocket(activePools: string[]): UseMultiPoolWebSocketReturn {
-  const poolStateRef = useRef<Map<string, PoolState>>(new Map());
+  const poolStateRef    = useRef<Map<string, PoolState>>(new Map());
+  const sessionPoolRef  = useRef<SessionPoolMap>(new Map());
   const [statuses,  setStatuses]  = useState<Map<string, PoolConnectionStatus>>(new Map());
   const [lastEvent, setLastEvent] = useState<TaggedWsEvent | null>(null);
 
@@ -184,14 +201,38 @@ export function useMultiPoolWebSocket(activePools: string[]): UseMultiPoolWebSoc
       timestamp:  new Date().toISOString(),
     });
 
-    // Send on any open connection — mcp-server routes by session_id
+    // Each server-side WS connection has its own subscribedSessions set.
+    // Only the connection that received conversation.assigned for this
+    // sessionId will process the message; others silently drop it.
+    //
+    // Strategy: try the known pool first (if registered), then broadcast
+    // to ALL open connections as fallback. The server-side validation
+    // ensures only the correct connection processes it.
+    const knownPool = sessionPoolRef.current.get(sessionId);
+    if (knownPool) {
+      const state = poolStateRef.current.get(knownPool);
+      if (state && state.ws.readyState === WebSocket.OPEN) {
+        state.ws.send(envelope);
+        return;
+      }
+    }
+
+    // Fallback: broadcast to all open connections
     for (const { ws } of poolStateRef.current.values()) {
       if (ws.readyState === WebSocket.OPEN) {
         ws.send(envelope);
-        return;
+        // Don't return — send to ALL connections so the right one picks it up
       }
     }
   }, []);
 
-  return { statuses, lastEvent, send };
+  const registerSession = useCallback((sessionId: string, poolId: string) => {
+    sessionPoolRef.current.set(sessionId, poolId);
+  }, []);
+
+  const unregisterSession = useCallback((sessionId: string) => {
+    sessionPoolRef.current.delete(sessionId);
+  }, []);
+
+  return { statuses, lastEvent, send, registerSession, unregisterSession };
 }

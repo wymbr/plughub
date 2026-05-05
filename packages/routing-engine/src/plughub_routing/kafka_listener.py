@@ -415,6 +415,10 @@ async def run_listeners(
         group_id          = kafka_group_id + "-listener",
         value_deserializer= lambda v: json.loads(v.decode("utf-8")),
         auto_offset_reset = "latest",
+        # Low-latency tuning: agent_ready events trigger queue drain —
+        # reducing fetch_max_wait_ms ensures fast pickup of ready agents.
+        fetch_max_wait_ms = 100,
+        fetch_min_bytes   = 1,
     )
     await consumer.start()
     logger.info(

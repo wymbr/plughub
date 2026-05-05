@@ -50,6 +50,11 @@ async def run() -> None:
         group_id=settings.kafka_group_id,
         value_deserializer=lambda v: json.loads(v.decode("utf-8")),
         auto_offset_reset="earliest",
+        # Low-latency tuning: reduce broker wait time before returning data.
+        # Default fetch_max_wait_ms=500 adds up to 500ms per poll cycle.
+        # With fetch_min_bytes=1, the broker returns as soon as any data arrives.
+        fetch_max_wait_ms=100,
+        fetch_min_bytes=1,
     )
     producer = AIOKafkaProducer(
         bootstrap_servers=settings.kafka_brokers,

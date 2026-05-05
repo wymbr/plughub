@@ -183,13 +183,16 @@ export async function executeResolve(
 
   const isInfinite  = step.timeout_s === 0 || step.timeout_s === -1
   const timeoutSec  = isInfinite ? 14400 : (step.timeout_s ?? 300)
-  const resultKey   = redisKeys.menuResult(ctx.sessionId)
+  const resultKey   = redisKeys.menuResult(ctx.sessionId, ctx.instanceId)
   const closedKey   = redisKeys.sessionClosed(ctx.sessionId)
   const waitingKey  = redisKeys.menuWaiting(ctx.sessionId)
 
-  // Flag de espera (mesma que o menu step — bridge já sabe lidar com ela)
+  // Flag de espera — HASH com metadados por agente (mesma lógica do menu step)
+  const waitingField = ctx.instanceId ?? "_default_"
+  const waitingMeta  = JSON.stringify({ visibility: "all", masked: false })
   try {
-    await ctx.redis.set(waitingKey, "1", "EX", timeoutSec + 10)
+    await ctx.redis.hset(waitingKey, waitingField, waitingMeta)
+    await ctx.redis.expire(waitingKey, timeoutSec + 10)
   } catch {
     // Non-fatal
   }
@@ -270,7 +273,7 @@ export async function executeResolve(
 
   } finally {
     // Limpeza de flags (sempre executada)
-    try { await ctx.redis.del(waitingKey) } catch { /* non-fatal */ }
+    try { await ctx.redis.hdel(waitingKey, waitingField) } catch { /* non-fatal */ }
     if (activityRenewTimer !== null) {
       clearInterval(activityRenewTimer)
     }

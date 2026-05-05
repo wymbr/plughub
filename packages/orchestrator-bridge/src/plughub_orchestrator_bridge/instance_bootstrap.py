@@ -610,6 +610,12 @@ class InstanceBootstrap:
         """
         Garante que cada pool:*:instances SET contém exatamente as instâncias
         desejadas — remove entradas obsoletas, adiciona as que faltam.
+
+        Human-login instances (source="human_login") are never removed: they are
+        managed by the mcp-server registerHumanAgent lifecycle, not by bootstrap.
+        Removing them causes a race condition where the human agent becomes
+        invisible to routing until the next heartbeat re-adds it to the SET,
+        causing delays of up to ~60s on contact allocation.
         """
         # Mapa pool_id → instâncias desejadas nesse pool
         desired_by_pool: dict[str, set[str]] = {}
@@ -629,9 +635,19 @@ class InstanceBootstrap:
                 for iid in want_set - have_set:
                     await self._redis.sadd(set_key, iid)
                 for iid in have_set - want_set:
-                    # Remove unconditionally: membership is per-pool.
-                    # An instance moved to a different pool is still in `desired`
-                    # (for its new pool), but must be removed from this pool's SET.
+                    # Before removing, check if this is a human-login instance.
+                    # Human agents are registered directly by mcp-server (not by
+                    # bootstrap) so they are never in `desired` — but removing
+                    # them would break routing until the next heartbeat re-adds.
+                    inst_key = f"{tenant_id}:instance:{iid}"
+                    try:
+                        raw = await self._redis.get(inst_key)
+                        if raw:
+                            inst_data = json.loads(raw)
+                            if inst_data.get("source") == "human_login":
+                                continue  # skip — managed by mcp-server lifecycle
+                    except Exception:
+                        pass  # key read failed — safe to remove stale SET member
                     await self._redis.srem(set_key, iid)
 
     async def _reconcile_pool_configs(

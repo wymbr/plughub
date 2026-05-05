@@ -25,6 +25,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re as _re
 import time
 from datetime import datetime, timezone
 from typing import Any
@@ -380,7 +381,7 @@ def _parse_entry(entry_id: str | bytes, data: dict) -> dict:
     if not author_id and clean.get("author"):
         author_obj = _safe_json(clean["author"])
         if isinstance(author_obj, dict):
-            author_id   = author_obj.get("participant_id") or author_obj.get("instance_id")
+            author_id   = author_obj.get("participant_id") or author_obj.get("instance_id") or author_obj.get("id")
             author_role = author_obj.get("role") or author_obj.get("type")
 
     # ── Resolve content ─────────────────────────────────────────────────────
@@ -398,16 +399,59 @@ def _parse_entry(entry_id: str | bytes, data: dict) -> dict:
     vis_raw = clean.get("visibility", "all")
     visibility = _safe_json(vis_raw) if vis_raw else "all"
 
-    return {
+    entry_type = clean.get("type", "unknown")
+    payload_parsed = _safe_json(clean.get("payload"))
+
+
+    # ── Mask sensitive data in any entry ─────────────────────────────────────
+    # Customer form submissions may arrive as type "message" (not just
+    # "interaction_result") because notification_send and menu_submit both
+    # write type: "message" to the stream.  Check ALL entries for sensitive
+    # field patterns (passwords, PINs, 2FA codes, etc.).
+    content, payload_parsed = _mask_interaction_result(content, payload_parsed)
+
+    result: dict[str, Any] = {
         "entry_id":    entry_id,
-        "type":        clean.get("type", "unknown"),
+        "type":        entry_type,
         "timestamp":   clean.get("timestamp"),
         "author_id":   author_id,
         "author_role": author_role,
         "visibility":  visibility,
         "content":     content,
-        "payload":     _safe_json(clean.get("payload")),
+        "payload":     payload_parsed,
     }
+    # Include segment_id when present (written by notification_send)
+    seg_id = clean.get("segment_id")
+    if seg_id:
+        result["segment_id"] = seg_id
+    return result
+
+
+_SENSITIVE_FIELD_RE = _re.compile(
+    r"\b(senha|password|pin|codigo_2fa|otp|token|secret|cvv|cvc)\b",
+    _re.IGNORECASE,
+)
+
+
+def _mask_interaction_result(
+    content: Any, payload: Any
+) -> tuple[Any, Any]:
+    """Replace sensitive form data in interaction_result entries with a placeholder."""
+    text_parts: list[str] = []
+    for obj in (content, payload):
+        if isinstance(obj, str):
+            text_parts.append(obj)
+        elif isinstance(obj, dict):
+            text_parts.append(json.dumps(obj))
+
+    combined = " ".join(text_parts)
+    if _SENSITIVE_FIELD_RE.search(combined):
+        return (
+            {"text": "[Dados sensíveis omitidos]"},
+            None,
+        )
+    return content, payload
+
 
 
 def _safe_json(raw: str | None) -> Any:

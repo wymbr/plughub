@@ -458,16 +458,23 @@ async def activate_human_agent(
         except Exception as exc:
             logger.warning("Could not save instance snapshot: session=%s — %s", session_id, exc)
 
-    # ── Store instance_id in session meta so REST /agent_done can include it ──
+    # ── Store instance_id and pool_id in session meta ─────────────────────────
     # The Agent Assist UI does not pass instance_id in the agent_done request,
     # so the mcp-server reads it from here. In true conference the last-writer
     # wins — acceptable since the REST endpoint is only used by human agents.
+    #
+    # pool_id is critical for hook dispatch: when the human agent calls
+    # agent_done, process_contact_event reads pool_id from meta to find the
+    # pool_config and its on_human_end hooks. Without pool_id, no hooks fire
+    # and the session closes immediately without NPS/wrap-up.
     if instance_id:
         try:
             raw_meta = await redis_client.get(f"session:{session_id}:meta")
             if raw_meta:
                 meta = json.loads(raw_meta)
-                meta["instance_id"] = instance_id
+                meta["instance_id"]   = instance_id
+                meta["pool_id"]       = pool_id
+                meta["agent_type_id"] = routing_result.get("agent_type_id", "")
                 await redis_client.setex(f"session:{session_id}:meta", 14400, json.dumps(meta))
         except Exception as exc:
             logger.warning("Could not update session meta with instance_id: session=%s — %s", session_id, exc)
@@ -558,6 +565,7 @@ async def _write_pre_hook_context(
     session_id:   str,
     close_origin: str,
     human_instance_id: str | None = None,
+    customer_participant_id: str | None = None,
 ) -> None:
     """
     Escreve campos no ContextStore que os hook agents precisam ANTES de
@@ -588,6 +596,9 @@ async def _write_pre_hook_context(
         cust_pid = await redis_client.get(
             f"session:{session_id}:customer_participant_id"
         )
+        # Fallback: if dedicated key expired/missing, use value from session meta
+        if not cust_pid and customer_participant_id:
+            cust_pid = customer_participant_id
         if cust_pid:
             pid_str = cust_pid if isinstance(cust_pid, str) else cust_pid.decode()
             entry_pid = json.dumps({
@@ -795,20 +806,30 @@ async def _hook_timeout_guard(
     await asyncio.sleep(_HOOK_TIMEOUT_S)
     pending_key = f"session:{session_id}:hook_pending:{hook_type}"
     try:
-        still_pending = await redis_client.exists(pending_key)
-        if still_pending:
+        # Check the counter VALUE, not just key existence.
+        # After all hooks complete, decr leaves the key with value 0 (key still exists).
+        # We only force-close if the value is > 0 (hooks genuinely didn't finish).
+        raw_val = await redis_client.get(pending_key)
+        remaining = 0
+        if raw_val is not None:
+            try:
+                remaining = int(raw_val if isinstance(raw_val, str) else raw_val.decode())
+            except (ValueError, AttributeError):
+                remaining = 0
+        if remaining > 0:
             logger.warning(
                 "_hook_timeout_guard: %s hooks did not complete within %ds — "
-                "force-closing contact: session=%s",
-                hook_type, _HOOK_TIMEOUT_S, session_id,
+                "remaining=%d, force-closing contact: session=%s",
+                hook_type, _HOOK_TIMEOUT_S, remaining, session_id,
             )
             # Delete the pending key to prevent double-close if a late hook completes.
             await redis_client.delete(pending_key)
             await _trigger_contact_close(redis_client, session_id)
         else:
             logger.debug(
-                "_hook_timeout_guard: %s hooks completed normally before timeout: session=%s",
-                hook_type, session_id,
+                "_hook_timeout_guard: %s hooks completed normally before timeout "
+                "(remaining=%d): session=%s",
+                hook_type, remaining, session_id,
             )
     except Exception as exc:
         logger.warning(
@@ -2210,6 +2231,7 @@ async def process_contact_event(
                 _cs_pool_id    = ""
                 _cs_tenant_id  = ""
                 _cs_customer_id = ""
+                _cs_meta: dict = {}
                 try:
                     _cs_raw_meta = await redis_client.get(f"session:{session_id}:meta")
                     if _cs_raw_meta:
@@ -2246,6 +2268,7 @@ async def process_contact_event(
                             redis_client, _cs_tenant_id, session_id,
                             close_origin="client_disconnect",
                             human_instance_id=_last_human_instance_id,
+                            customer_participant_id=_cs_meta.get("customer_participant_id") if _cs_meta else None,
                         )
                         asyncio.create_task(fire_pool_hooks(
                             http=http, redis_client=redis_client,
@@ -2435,6 +2458,7 @@ async def process_contact_event(
                     _pool_id_hooks    = ""
                     _tenant_id_hooks  = ""
                     _customer_id_hooks = ""
+                    _meta_hooks: dict = {}
                     try:
                         _raw_meta_hooks = await redis_client.get(f"session:{session_id}:meta")
                         if _raw_meta_hooks:
@@ -2473,6 +2497,7 @@ async def process_contact_event(
                                 redis_client, _tenant_id_hooks, session_id,
                                 close_origin="agent_closed",
                                 human_instance_id=instance_id,
+                                customer_participant_id=_meta_hooks.get("customer_participant_id") if _meta_hooks else None,
                             )
                             # Pool has on_human_end hooks — dispatch them.
                             # _trigger_contact_close fires when all agents complete
@@ -2980,12 +3005,57 @@ async def process_inbound(
 
             delivered = True
 
+        # ── Publish customer message to analytics (ClickHouse persistence) ──
+        # This must happen for ALL customer messages regardless of delivery target,
+        # so messages survive Redis stream TTL expiration.
+        try:
+            _tenant_for_analytics = await redis_client.get(f"session:{session_id}:tenant_id")
+            if _tenant_for_analytics and isinstance(_tenant_for_analytics, bytes):
+                _tenant_for_analytics = _tenant_for_analytics.decode()
+            _tenant_for_analytics = _tenant_for_analytics or os.environ.get("PLUGHUB_TENANT_ID", "tenant_demo")
+
+            _analytics_event = {
+                "event_type":   "message_sent",
+                "message_id":   msg.get("message_id", str(uuid.uuid4())),
+                "session_id":   session_id,
+                "tenant_id":    _tenant_for_analytics,
+                "author_id":    author.get("id") or contact_id or "customer",
+                "author_role":  "customer",
+                "content_type": "text",
+                "content":      reply_text if not any_masked else "[entrada mascarada]",
+                "visibility":   "all",
+                "timestamp":    msg.get("timestamp", datetime.now(timezone.utc).isoformat()),
+            }
+            if _kafka_producer:
+                await _kafka_producer.send_and_wait(
+                    "conversations.events",
+                    json.dumps(_analytics_event).encode("utf-8"),
+                )
+                logger.debug("Published customer message to conversations.events: session=%s", session_id)
+        except Exception as _analytics_exc:
+            logger.warning("Failed to publish customer analytics event: session=%s — %s", session_id, _analytics_exc)
+
         if waiting_hash:
             # ── Native AI agents in Skill Flow menu step: route by visibility ──
             # Customer messages go to agents whose visibility includes the customer
             # (visibility "all" or array containing customer's participant_id).
             # Each agent has its own isolated BLPOP key: menu:result:{session_id}:{instanceId}
+            #
+            # customer_participant_id (cust_{hex12}) is distinct from contact_id (JWT sub).
+            # The visibility array uses the resolved participant_id, so we must look it up.
             customer_pid = contact_id or "customer"
+            try:
+                _cust_pid_raw = await redis_client.get(
+                    f"session:{session_id}:customer_participant_id"
+                )
+                if _cust_pid_raw:
+                    customer_pid = (
+                        _cust_pid_raw if isinstance(_cust_pid_raw, str)
+                        else _cust_pid_raw.decode()
+                    )
+            except Exception:
+                pass  # fallback to contact_id — best effort
+
             for agent_key, meta_json in waiting_hash.items():
                 try:
                     meta = json.loads(meta_json)
@@ -2995,14 +3065,13 @@ async def process_inbound(
 
                 # Determine if this agent is waiting for customer input:
                 # - "all": always receives customer messages
-                # - array: receives if customer_pid is in the array
+                # - array: receives only if customer_pid is in the array
                 # - "agents_only": does NOT receive customer messages
                 is_customer_facing = False
                 if vis == "all":
                     is_customer_facing = True
                 elif isinstance(vis, list):
-                    # Array of participant IDs — customer is in the audience
-                    is_customer_facing = True  # customer sent a message, and they can see it
+                    is_customer_facing = customer_pid in vis
                 # "agents_only" → skip — customer messages are not for this agent
 
                 if is_customer_facing:
@@ -3130,6 +3199,11 @@ async def run() -> None:
         group_id=GROUP_ID,
         value_deserializer=lambda v: json.loads(v.decode("utf-8")),
         auto_offset_reset="latest",
+        # Low-latency tuning: reduce broker wait time before returning data.
+        # Default fetch_max_wait_ms=500 adds up to 500ms per poll cycle.
+        # With fetch_min_bytes=1, the broker returns as soon as any data arrives.
+        fetch_max_wait_ms=100,
+        fetch_min_bytes=1,
     )
     await consumer.start()
 

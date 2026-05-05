@@ -13,8 +13,9 @@ export interface ChatMessage {
   agentTypeId?: string;
   text: string;
   timestamp: string;
-  /** "all" = normal message; "agents_only" = internal note invisible to customer */
-  visibility?: "all" | "agents_only" | string;
+  /** "all" = normal message; "agents_only" = internal note invisible to customer;
+   *  string[] = array of participant_ids (targeted visibility — treated as internal) */
+  visibility?: "all" | "agents_only" | string | string[];
   /** Present for menu.render events — triggers rich MenuCard rendering */
   menuData?: ChatMenuData;
 }
@@ -60,14 +61,18 @@ export interface MenuField {
 
 /**
  * Structured representation of a menu.render event embedded in a ChatMessage.
- * Observation mode only — no submission capability yet (future: substitution mode).
+ *
+ * targetsSelf: true when the menu's visibility targets the current human agent
+ * (array visibility or agents_only). In this case the agent IS the respondent —
+ * MenuCard renders in interactive mode automatically, no manual toggle needed.
  */
 export interface ChatMenuData {
-  menu_id:     string;
-  interaction: "text" | "button" | "list" | "checklist" | "form";
-  prompt:      string;
-  options?:    MenuOption[];
-  fields?:     MenuField[];
+  menu_id:      string;
+  interaction:  "text" | "button" | "list" | "checklist" | "form";
+  prompt:       string;
+  options?:     MenuOption[];
+  fields?:      MenuField[];
+  targetsSelf?: boolean;
 }
 
 export interface WsAgentTyping {
@@ -313,7 +318,6 @@ export interface CopilotSuggestions {
   sugestao_resposta: string | null;
   /** Risk flags detected from the customer message (e.g. "intencao_cancelamento") */
   flags_risco: string[];
-  /** Recommended actions for the agent (e.g. "consultar_historico_crm") */
   acoes_recomendadas: string[];
   /** ISO-8601 timestamp of the last analysis */
   ultima_analise: string | null;

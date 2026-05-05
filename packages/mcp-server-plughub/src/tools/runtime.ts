@@ -731,6 +731,22 @@ export function registerRuntimeTools(server: McpServer, deps: RuntimeDeps): void
           ttlSeconds
         )
 
+        // Publish to analytics for ClickHouse persistence (contact_insights table)
+        if (kafka) {
+          try {
+            await kafka.publish("conversations.events", {
+              event_type:  "insight.registered",
+              insight_id:  item_id,
+              session_id,
+              tenant_id,
+              instance_id,
+              category,
+              data:        { category, value: content, tags: [] },
+              timestamp:   registered_at,
+            })
+          } catch { /* non-fatal — analytics persistence is best-effort */ }
+        }
+
         return ok({
           item_id,
           session_id,

@@ -156,3 +156,9 @@ steps:
         pool: retencao_humano
       context: pipeline_state
       handoff_reason: "Falha na autenticação — requer atendimento humano"
+      on_failure: encerrar_fallback
+
+    - id: encerrar_fallback
+      type: complete
+      outcome: failed
+      issue_status: "Escalação falhou — MCP indisponível"

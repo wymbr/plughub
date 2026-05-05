@@ -90,6 +90,14 @@ class CrashDetector:
             tenant_id = parts[0]
 
             for instance_id in instance_ids:
+                # Human agents are managed by the mcp-server WebSocket lifecycle
+                # (register on connect, unregister on disconnect) — not by the
+                # InstanceBootstrap reconciliation controller.  Their instance keys
+                # may not exist between sessions.  Skip them to avoid an infinite
+                # crash-detect → cleanup → re-add loop.
+                if instance_id.startswith("human-"):
+                    continue
+
                 key_exists = await self._redis.exists(
                     _instance_key(tenant_id, instance_id)
                 )

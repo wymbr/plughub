@@ -55,7 +55,7 @@ class Settings(BaseSettings):
     # Periodic queue drain — fallback for environments without agent_ready Kafka events
     # (e.g. demo/dev where Agent Assist UI connects directly to Redis pub/sub).
     # Set to 0 to disable. Default: 15s.
-    queue_drain_interval_s: int = 15
+    queue_drain_interval_s: int = 5
 
     # Config API — used to fetch routing namespace settings on startup and reload
     config_api_url:               str = "http://localhost:3600"

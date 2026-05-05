@@ -124,17 +124,13 @@ function InsightCard({ row }: { row: InsightRow }) {
 
 // ─── ContactDetail ────────────────────────────────────────────────────────────
 
-type DetailTab = 'transcript' | 'insights'
-
 function ContactDetail({ tenantId, sessionId, onBack }: {
   tenantId: string; sessionId: string; onBack: () => void
 }) {
-  const [tab, setTab]               = useState<DetailTab>('transcript')
   const [detailSegment, setDetailSegment] = useState<ContactSegment | null>(null)
 
-  // When in transcript tab and a segment is selected, show the transcript
-  // narrowed to that segment. Back from transcript → segment list.
-  if (tab === 'transcript' && detailSegment) {
+  // When a segment is selected, show the transcript narrowed to that segment.
+  if (detailSegment) {
     return (
       <div style={{ height: '100%', backgroundColor: '#0f172a' }}>
         <SessionTranscript
@@ -153,28 +149,16 @@ function ContactDetail({ tenantId, sessionId, onBack }: {
         <button onClick={onBack} className="mr-4 text-sm text-gray-500 hover:text-primary py-3 transition-colors">
           ← Contatos
         </button>
-        {(['transcript', 'insights'] as DetailTab[]).map(t => (
-          <button key={t} onClick={() => { setTab(t); setDetailSegment(null) }}
-            className={`px-4 py-3 text-sm font-medium border-b-2 transition-colors ${
-              tab === t ? 'border-primary text-primary' : 'border-transparent text-gray-500 hover:text-gray-700'
-            }`}>
-            {t === 'transcript' ? '💬 Segmentos' : '📌 Eventos de Negócio'}
-          </button>
-        ))}
+        <span className="text-sm font-medium text-gray-700 py-3">💬 Segmentos</span>
         <span className="ml-auto text-xs text-gray-400 font-mono py-3 truncate max-w-xs">{sessionId}</span>
       </div>
       <div className="flex-1 overflow-hidden">
-        {tab === 'transcript' ? (
-          /* Segment list — selecting a segment drills into the transcript */
-          <SegmentList
-            tenantId={tenantId}
-            sessionId={sessionId}
-            onSelect={seg => setDetailSegment(seg)}
-            onBack={onBack}
-          />
-        ) : (
-          <ContactInsightsPanel tenantId={tenantId} sessionId={sessionId} />
-        )}
+        <SegmentList
+          tenantId={tenantId}
+          sessionId={sessionId}
+          onSelect={seg => setDetailSegment(seg)}
+          onBack={onBack}
+        />
       </div>
     </div>
   )

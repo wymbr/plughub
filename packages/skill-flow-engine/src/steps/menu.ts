@@ -26,7 +26,7 @@
 
 import type { MenuStep } from "@plughub/schemas"
 import type { StepContext, StepResult } from "../executor"
-import { interpolate } from "../interpolate"
+import { interpolate, resolveVisibility } from "../interpolate"
 import { computeMaskedFieldIds, isFieldMasked } from "../masking-policy"
 import { redisKeys } from "../redis-keys"
 
@@ -38,6 +38,7 @@ export async function executeMenu(
   //    Interpola {{$.pipeline_state.*}} antes de enviar — permite que o prompt
   //    use valores calculados em steps anteriores (ex: pergunta gerada por reason).
   const resolvedPrompt = await interpolate(step.prompt, ctx, ctx.contextStore)
+  const resolvedVisibility = await resolveVisibility(step.visibility ?? "all", ctx, ctx.contextStore)
   try {
     // Computa a lista de IDs mascarados usando a política centralizada.
     // Para interações sem fields[] (text, button, list), usa o output_as/step.id como
@@ -54,7 +55,9 @@ export async function executeMenu(
       session_id: ctx.sessionId,
       message:    resolvedPrompt,
       channel:    "session",
-      visibility: step.visibility ?? "all",
+      visibility: resolvedVisibility,
+      ...(ctx.segmentId ? { segment_id: ctx.segmentId } : {}),
+      ...(ctx.instanceId ? { instance_id: ctx.instanceId } : {}),
       menu: {
         interaction:   step.interaction,
         options:       step.options ?? [],
@@ -79,19 +82,29 @@ export async function executeMenu(
   // timeout_s === 0 or -1 both mean "block indefinitely" (spec §4.7: -1 = block indefinitely)
   const isInfinite  = step.timeout_s === 0 || step.timeout_s === -1
   const timeoutSec  = isInfinite ? 14400 : (step.timeout_s ?? 300)
-  const resultKey   = redisKeys.menuResult(ctx.sessionId)
+  const resultKey   = redisKeys.menuResult(ctx.sessionId, ctx.instanceId)
   const closedKey   = redisKeys.sessionClosed(ctx.sessionId)
   const waitingKey  = redisKeys.menuWaiting(ctx.sessionId)
   const maskedKey   = redisKeys.menuMasked(ctx.sessionId)
 
+  // ── Field name no HASH menu:waiting ────────────────────────────────────
+  // Cada agente bloqueado usa seu instanceId como field; "_default_" para
+  // instâncias legadas sem instanceId.  O bridge faz HGETALL e roteia por
+  // visibility — customer messages vão para agentes com visibility "all"
+  // ou array incluindo o customer; agents_only vai para agentes internos.
+  const waitingField = ctx.instanceId ?? "_default_"
+  const waitingMeta  = JSON.stringify({
+    visibility: resolvedVisibility,
+    masked:     step.masked === true,
+  })
   try {
+    // HSET + EXPIRE: cada agente registra sua entrada no hash.
     // TTL ligeiramente maior que o timeout para cobrir latências de rede.
     // Para espera infinita: 14400s garante que a flag sobreviva a sessão inteira.
-    await ctx.redis.set(waitingKey, "1", "EX", timeoutSec + 10)
+    await ctx.redis.hset(waitingKey, waitingField, waitingMeta)
+    await ctx.redis.expire(waitingKey, timeoutSec + 10)
 
-    // Sinaliza ao orchestrator-bridge que este menu é mascarado — o bridge
-    // deve suprimir o valor enviado pelo cliente ao encaminhar para o agente
-    // humano, garantindo que o PIN/senha nunca apareça na UI do agente.
+    // Backward compat: manter key legada menu:masked para bridges antigos
     if (step.masked) {
       await ctx.redis.set(maskedKey, "1", "EX", timeoutSec + 10)
     }
@@ -288,10 +301,13 @@ export async function executeMenu(
     }
     return successResult
 
+
   } finally {
-    // Remover flags de espera independente do resultado
+    // Remover este agente do hash de espera — HDEL em vez de DEL para não
+    // apagar entradas de outros agentes bloqueados na mesma sessão (cenário
+    // de conferência com NPS + wrap-up paralelos).
     try {
-      await ctx.redis.del(waitingKey)
+      await ctx.redis.hdel(waitingKey, waitingField)
     } catch {
       // Non-fatal
     }

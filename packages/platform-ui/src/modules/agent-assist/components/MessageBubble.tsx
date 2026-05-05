@@ -90,10 +90,13 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({
   onMenuSubmit,
 }) => {
   if (message.menuData) {
+    // When the menu targets the agent (targetsSelf), auto-enable interactive mode
+    // so the agent can click buttons directly — no manual toggle needed.
+    const effectiveSubstitution = substitutionMode || (message.menuData.targetsSelf ?? false);
     return (
       <MenuCard
         data={message.menuData}
-        substitutionMode={substitutionMode}
+        substitutionMode={effectiveSubstitution}
         onSubmit={onMenuSubmit
           ? (result) => onMenuSubmit(message.menuData!.menu_id, result)
           : undefined}
@@ -101,7 +104,11 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({
     );
   }
 
-  const isInternal   = message.visibility === "agents_only";
+  // Treat as internal when: explicit "agents_only" OR array visibility (targeted
+  // participant list — e.g. wrap-up messages sent to ["human_instance_id"]).
+  // Array visibility means the message targets specific participants, not the customer.
+  const isInternal   = message.visibility === "agents_only"
+    || Array.isArray(message.visibility);
   const isSpecialist = !isInternal && message.author === "agent_ai" && isSpecialistAgent(message.agentTypeId);
   const isRight      = !isInternal && message.author === "agent_human";
 

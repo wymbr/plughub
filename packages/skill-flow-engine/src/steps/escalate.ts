@@ -16,12 +16,36 @@ export async function executeEscalate(
   ctx:  StepContext
 ): Promise<StepResult> {
   // Deriva para pool via conversation_escalate com pipeline_state completo
-  await ctx.mcpCall("conversation_escalate", {
-    session_id:     ctx.sessionId,
-    target_pool:    step.target.pool,
-    pipeline_state: ctx.state,
-    error_reason:   step.error_reason,
-  })
+  try {
+    await ctx.mcpCall("conversation_escalate", {
+      session_id:     ctx.sessionId,
+      target_pool:    step.target.pool,
+      pipeline_state: ctx.state,
+      error_reason:   step.error_reason,
+    })
+  } catch (err) {
+    // Graceful degradation — same pattern as notify/invoke steps.
+    // Without this, an MCP failure would propagate as an uncaught exception,
+    // crashing the engine (500) and causing the bridge to close the session.
+    const msg = err instanceof Error ? err.message : String(err)
+    console.error(
+      "[escalate] conversation_escalate failed for session=" + ctx.sessionId +
+      " target_pool=" + step.target.pool + ": " + msg,
+    )
+    // If on_failure is defined, transition there; otherwise complete with error
+    // to avoid a crash from undefined step id.
+    if (step.on_failure) {
+      return {
+        next_step_id:      step.on_failure,
+        transition_reason: "on_failure",
+      }
+    }
+    return {
+      next_step_id:      "__complete__",
+      outcome:           "error",
+      transition_reason: "on_failure",
+    }
+  }
 
   // O Rules Engine atualiza o pipeline_state quando o agente do pool
   // sinaliza agent_done. O engine detecta isso via polling do pipeline_state.

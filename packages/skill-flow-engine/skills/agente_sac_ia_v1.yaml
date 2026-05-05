@@ -201,6 +201,13 @@ steps:
       pool: retencao_humano
     context: pipeline_state
     error_reason: escalated_to_human
+    on_failure: encerrar_fallback
+
+  # ── Etapa 8b: fallback quando escalação falha ────────────────────────────
+  - id: encerrar_fallback
+    type: complete
+    outcome: failed
+    issue_status: "Escalação falhou — MCP indisponível"
 
   # ── Etapa 9: finalizar sem escalada (timeout ou resolução direta) ─────────
   - id: finalizar

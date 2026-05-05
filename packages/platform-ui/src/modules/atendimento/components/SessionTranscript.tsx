@@ -1,35 +1,253 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import type React from 'react'
 import { useSessionStream, useSupervisor } from '../api/hooks'
 import { SupervisorJoinButton, SupervisorPanel } from './SupervisorPanel'
 import type { ContactSegment, StreamEntry } from '../types'
 
+// ─── Business event types ─────────────────────────────────────────────────────
+
+interface InsightRow {
+  insight_id:   string
+  tenant_id:    string
+  session_id:   string
+  insight_type: string
+  category:     string | null
+  value:        string | null
+  tags:         string[]
+  agent_id:     string | null
+  timestamp:    string
+}
+
+// ─── useSessionInsights hook ──────────────────────────────────────────────────
+
+function useSessionInsights(tenantId: string, sessionId: string | null): {
+  insights: InsightRow[]; loading: boolean
+} {
+  const [insights, setInsights] = useState<InsightRow[]>([])
+  const [loading, setLoading]   = useState(false)
+
+  useEffect(() => {
+    if (!tenantId || !sessionId) { setInsights([]); return }
+    let cancelled = false
+    setLoading(true)
+
+    const params = new URLSearchParams({ tenant_id: tenantId, session_id: sessionId, page_size: '200' })
+    fetch(`/reports/contact-insights?${params}`)
+      .then(r => r.json())
+      .then((data: { data?: InsightRow[] } | InsightRow[]) => {
+        if (cancelled) return
+        setInsights(Array.isArray(data) ? data : (data.data ?? []))
+      })
+      .catch(() => { if (!cancelled) setInsights([]) })
+      .finally(() => { if (!cancelled) setLoading(false) })
+
+    return () => { cancelled = true }
+  }, [tenantId, sessionId])
+
+  return { insights, loading }
+}
+
+// System event types that should always pass through specialist filtering
+
+const SYSTEM_TYPES_SET = new Set([
+  'session_opened','session_closed','participant_joined','participant_left',
+  'flow_step_completed','customer_identified','medium_transitioned',
+])
+
+// ─── Specialist visibility filter ────────────────────────────────────────────
+
+/**
+ * Safely parse visibility — handles both parsed arrays and JSON-encoded strings.
+ * Redis stores visibility as JSON.stringify(array), and some code paths deliver
+ * it to the frontend still as a string like '["cust_xxx"]' instead of a real array.
+ */
+function parseVis(vis: unknown): string | string[] {
+  if (Array.isArray(vis)) return vis
+  if (typeof vis === 'string' && vis.startsWith('[')) {
+    try { return JSON.parse(vis) as string[] } catch { return vis }
+  }
+  return (vis as string) ?? 'all'
+}
+
+/**
+ * Checks whether a segment's agent sends messages that target customers.
+ * Returns true if any message from this segment uses visibility "all" or
+ * a visibility array containing a cust_* participant ID.
+ */
+function segmentTalksToCustomers(
+  segment: ContactSegment,
+  allEntries: StreamEntry[],
+): boolean {
+  for (const entry of allEntries) {
+    // Match entries FROM this segment's agent (by author_id).
+    // We cannot rely on segment_id because it is not written to the stream
+    // by all code paths (message_send omits it).
+    if (entry.author_id !== segment.participant_id) continue
+    const vis = parseVis(entry.visibility)
+    if (vis === 'all') return true
+    if (Array.isArray(vis) && vis.some(v => typeof v === 'string' && v.startsWith('cust_'))) return true
+  }
+  return false
+}
+
+/**
+ * Checks whether a segment's agent sends messages that target a specific
+ * participant (by ID). Returns true if any message from this segment uses
+ * visibility "all", "agents_only", or a visibility array containing the ID.
+ */
+function segmentTalksToParticipant(
+  segment: ContactSegment,
+  participantId: string,
+  allEntries: StreamEntry[],
+): boolean {
+  for (const entry of allEntries) {
+    if (entry.author_id !== segment.participant_id) continue
+    const vis = parseVis(entry.visibility)
+    if (vis === 'all') return true
+    if (vis === 'agents_only') return true
+    if (Array.isArray(vis) && vis.includes(participantId)) return true
+  }
+  return false
+}
+
+/**
+ * Determines if a stream entry belongs to a specialist segment.
+ *
+ * Uses the same visibility-based distribution logic as the platform:
+ *
+ *   1. **segment_id UUID match** — definitive when present on both sides.
+ *   2. **author_id match** — the entry's author IS this segment's agent → include.
+ *      A known agent that is NOT this segment's agent falls through to step 3
+ *      (it may still belong here, e.g. human agent replying to wrap-up questions).
+ *   3. **Time window gate** — entry must fall within [started_at, ended_at].
+ *   4. **Visibility routing**:
+ *        - Array of pids → include only if segment.participant_id is listed.
+ *        - "agents_only" → include in all agent segments.
+ *        - "all" / undefined → use conversation membership: include only if this
+ *          segment's agent communicates with the entry's author (checked via the
+ *          visibility values on the segment's own messages in allEntries).
+ */
+function entryBelongsToSpecialist(
+  e: StreamEntry,
+  segment: ContactSegment,
+  allEntries?: StreamEntry[],
+): boolean {
+  if (SYSTEM_TYPES_SET.has(e.type)) return true
+
+  // ── 1. segment_id UUID match (definitive) ──
+  if (e.segment_id && segment.segment_id) {
+    return e.segment_id === segment.segment_id
+  }
+
+  // ── 2. author_id (instance_id) match ──
+  const authorId = e.author_id
+  const isCustomerEntry = e.author_role === 'customer'
+    || authorId === 'customer'
+    || (typeof authorId === 'string' && authorId.startsWith('cust_'))
+
+  const isKnownAgent = !!authorId
+    && authorId !== 'orchestrator'
+    && authorId !== 'customer'
+    && !isCustomerEntry
+
+  if (isKnownAgent && segment.participant_id) {
+    if (authorId === segment.participant_id) return true
+    // Known agent but NOT this segment's agent — don't exclude yet.
+    // Fall through: the message may be directed to this segment's agent
+    // (e.g., human agent replying to wrap-up agent's questions).
+  }
+
+  // ── 3. Time window gate ──
+  if (!e.timestamp || !segment.started_at) return false
+
+  const eTime = new Date(e.timestamp).getTime()
+  const start = new Date(segment.started_at).getTime()
+  if (eTime < start) return false
+  if (segment.ended_at) {
+    const end = new Date(segment.ended_at).getTime()
+    if (eTime > end) return false
+  }
+
+  // ── 4. Visibility routing ──
+  const vis = parseVis(e.visibility)
+
+  // Array of participant_ids → include if this segment's agent is listed,
+  // OR if the message author is someone this segment's agent communicates with
+  // (e.g. human agent replying to wrap-up menu — the reply's visibility is the
+  //  same array that the wrap-up prompt used to target the human, so it doesn't
+  //  contain the wrap-up agent's ID, but it IS part of the wrap-up conversation).
+  if (Array.isArray(vis) && segment.participant_id) {
+    if (vis.includes(segment.participant_id)) return true
+    // Check: does this segment's agent talk to the entry's author?
+    if (allEntries && authorId) {
+      return segmentTalksToParticipant(segment, authorId, allEntries)
+    }
+    return false
+  }
+
+  // "agents_only" → delivered to all agents → include in every agent segment
+  if (vis === 'agents_only') return true
+
+  // "all" / undefined / null — visible to everyone.
+  // When multiple segments overlap in time, determine membership by checking
+  // whether this segment's agent communicates with the entry's author.
+  if (allEntries && allEntries.length > 0 && authorId) {
+    if (isCustomerEntry) {
+      // Customer message: include only if this segment's agent targets customers
+      return segmentTalksToCustomers(segment, allEntries)
+    }
+    if (isKnownAgent) {
+      // Non-matching agent: include only if this segment's agent targets them
+      return segmentTalksToParticipant(segment, authorId, allEntries)
+    }
+  }
+
+  // Fallback (orchestrator, unknown, no allEntries) → include
+  return true
+}
+
+// ─── Sensitive data masking ──────────────────────────────────────────────────
+
+/**
+ * Masks sensitive form data in ANY stream entry (not just interaction_result).
+ */
+function maskSensitiveContent(e: StreamEntry): StreamEntry {
+  const text = extractText(e.content)
+  const payloadText = extractText(e.payload)
+  const combined = text + ' ' + payloadText
+
+  const sensitivePatterns = /\b(senha|password|pin|codigo_2fa|otp|token|secret|cvv|cvc)\b/i
+
+  if (sensitivePatterns.test(combined)) {
+    return {
+      ...e,
+      content: { text: '[Dados sensíveis omitidos — formulário mascarado]' },
+      payload: null,
+    }
+  }
+
+  return e
+}
+
 interface Props {
   tenantId:  string
   sessionId: string
   onBack:    () => void
-  /** When false (ended segment), supervisor join is hidden — only read-only view available. Default: true */
   canJoin?:  boolean
-  /**
-   * When present, entries are split into three accordion buckets:
-   *   - before segment.started_at  → collapsed by default
-   *   - during [started_at, ended_at] → expanded
-   *   - after segment.ended_at       → collapsed by default
-   */
   segment?:  ContactSegment
 }
 
 export function SessionTranscript({ tenantId, sessionId, onBack, canJoin = true, segment }: Props) {
   const { entries, status }                        = useSessionStream(tenantId, sessionId)
   const { state: supState, join, message, leave }  = useSupervisor(tenantId, sessionId)
+  const { insights }                               = useSessionInsights(tenantId, sessionId)
   const bottomRef   = useRef<HTMLDivElement>(null)
   const duringRef   = useRef<HTMLDivElement>(null)
 
-  // Accordion state for before/after buckets
   const [showBefore, setShowBefore] = useState(false)
   const [showAfter,  setShowAfter]  = useState(false)
+  const [showEvents, setShowEvents] = useState(true)
 
-  // Auto-scroll: when no segment, scroll to bottom; when segment, scroll to "during" block
   useEffect(() => {
     if (segment) {
       duringRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
@@ -42,7 +260,11 @@ export function SessionTranscript({ tenantId, sessionId, onBack, canJoin = true,
   const isSupActive  = supState.status === 'active'
   const isSupJoining = supState.status === 'joining'
 
-  // ── Segment filtering ───────────────────────────────────────────────────────
+  const handleSend = useCallback((text: string) => {
+    if (isSupActive) message(text)
+  }, [isSupActive, message])
+
+  // ── partition entries when viewing a segment ──
   let before: StreamEntry[] = []
   let during: StreamEntry[] = []
   let after:  StreamEntry[] = []
@@ -51,36 +273,54 @@ export function SessionTranscript({ tenantId, sessionId, onBack, canJoin = true,
     const startMs = new Date(segment.started_at).getTime()
     const endMs   = segment.ended_at ? new Date(segment.ended_at).getTime() : Infinity
 
-    for (const e of entries) {
-      if (!e.timestamp) { during.push(e); continue }
-      const ts = new Date(e.timestamp).getTime()
-      if (ts < startMs) before.push(e)
-      else if (ts <= endMs) during.push(e)
-      else after.push(e)
+    const isSpecialist = segment.role === 'specialist'
+
+    for (const raw of entries) {
+      const masked = maskSensitiveContent(raw)
+      const ts = masked.timestamp ? new Date(masked.timestamp).getTime() : 0
+      if (ts < startMs) { before.push(masked); continue }
+      if (ts > endMs)   { after.push(masked); continue }
+
+      if (isSpecialist) {
+        if (entryBelongsToSpecialist(masked, segment, entries)) {
+          during.push(masked)
+        }
+      } else {
+        during.push(masked)
+      }
     }
   } else {
-    during = entries
+    // Full session view — still mask sensitive data
+    during = entries.map(maskSensitiveContent)
   }
 
-  // ── Header label ────────────────────────────────────────────────────────────
+  const segmentInsights = segment
+    ? insights.filter(i => {
+        if (!i.timestamp) return false
+        const ts    = new Date(i.timestamp).getTime()
+        const start = new Date(segment.started_at).getTime()
+        const end   = segment.ended_at ? new Date(segment.ended_at).getTime() : Infinity
+        return ts >= start && ts <= end
+      })
+    : insights
+
   const segmentLabel = segment
-    ? `${segment.role} · ${segment.agent_type === 'human' ? '👤' : '🤖'} ${segment.participant_id}`
+    ? `${segment.role} · ${segment.agent_type === 'human' ? '\u{1F464}' : '\u{1F916}'} ${segment.participant_id}`
     : null
 
   return (
     <div style={s.container}>
-      {/* Header */}
       <div style={s.header}>
-        <button style={s.backBtn} onClick={onBack}>← Segmentos</button>
+        <button style={s.backBtn} onClick={onBack}>{'←'} Segmentos</button>
         <span style={{ fontSize: 14, color: '#94a3b8' }}>
-          Sessão{' '}
+          {'Sessão '}
           <code style={{ fontSize: 12, color: '#e2e8f0', backgroundColor: '#1e293b', borderRadius: 4, padding: '1px 6px' }}>
             {sessionId}
           </code>
         </span>
         {segmentLabel && (
           <span style={{ fontSize: 11, color: '#818cf8', border: '1px solid #818cf844', borderRadius: 4, padding: '2px 8px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: 260 }}>
-            🔍 {segmentLabel}
+            {'\u{1F50D}'} {segmentLabel}
           </span>
         )}
         <StatusDot status={status} />
@@ -89,7 +329,7 @@ export function SessionTranscript({ tenantId, sessionId, onBack, canJoin = true,
         )}
         {canJoin && isSupActive && (
           <span style={{ fontSize: 12, color: '#f59e0b', border: '1px solid #f59e0b44', borderRadius: 4, padding: '2px 8px', marginLeft: 'auto', fontWeight: 600 }}>
-            👁 supervisionando
+            {'\u{1F441}'} supervisionando
           </span>
         )}
         {!isSupActive && (
@@ -99,154 +339,118 @@ export function SessionTranscript({ tenantId, sessionId, onBack, canJoin = true,
         )}
       </div>
 
-      {/* Stream */}
       <div style={s.stream}>
-        {entries.length === 0 && status === 'connecting' && <div style={s.placeholder}>Conectando ao stream…</div>}
-        {entries.length === 0 && status === 'connected'  && <div style={s.placeholder}>Nenhum evento nesta sessão.</div>}
-        {entries.length === 0 && status === 'error'      && <div style={{ ...s.placeholder, color: '#ef4444' }}>Falha ao conectar ao stream.</div>}
-
-        {segment ? (
-          /* ── Segment accordion view ── */
-          <>
-            {/* Before bucket */}
-            {before.length > 0 && (
-              <AccordionBucket
-                label={`Antes do segmento · ${before.length} evento${before.length !== 1 ? 's' : ''}`}
-                open={showBefore}
-                onToggle={() => setShowBefore(v => !v)}
-                accent="#475569"
-              >
-                {before.map(e => <EntryRow key={e.entry_id} entry={e} />)}
-              </AccordionBucket>
-            )}
-
-            {/* During bucket — always expanded, scrolled into view */}
-            <div ref={duringRef}>
-              <SegmentDivider label="▶ Início do segmento" color="#818cf8" ts={segment.started_at} />
-              {during.length === 0 ? (
-                <div style={{ ...s.placeholder, padding: 20 }}>Nenhum evento durante este segmento.</div>
-              ) : (
-                during.map(e => <EntryRow key={e.entry_id} entry={e} />)
-              )}
-              {segment.ended_at && <SegmentDivider label="■ Fim do segmento" color="#818cf8" ts={segment.ended_at} />}
-            </div>
-
-            {/* After bucket */}
-            {after.length > 0 && (
-              <AccordionBucket
-                label={`Depois do segmento · ${after.length} evento${after.length !== 1 ? 's' : ''}`}
-                open={showAfter}
-                onToggle={() => setShowAfter(v => !v)}
-                accent="#475569"
-              >
-                {after.map(e => <EntryRow key={e.entry_id} entry={e} />)}
-              </AccordionBucket>
-            )}
-          </>
-        ) : (
-          /* ── Full stream view ── */
-          <>
-            {during.map(e => <EntryRow key={e.entry_id} entry={e} />)}
-            <div ref={bottomRef} />
-          </>
+        {/* ── Before segment ── */}
+        {segment && before.length > 0 && (
+          <div style={{ marginBottom: 8 }}>
+            <button onClick={() => setShowBefore(!showBefore)} style={{ background: 'none', border: 'none', color: '#475569', cursor: 'pointer', fontSize: 12, padding: '4px 0' }}>
+              {showBefore ? '▾' : '▸'} Antes do segmento · {before.length} eventos
+            </button>
+            {showBefore && before.map(e => <EntryRow key={e.entry_id} e={e} showEvents={showEvents} />)}
+          </div>
         )}
+
+        {/* ── Segment start marker ── */}
+        {segment && (
+          <div ref={duringRef} style={{ display: 'flex', alignItems: 'center', gap: 10, margin: '8px 0' }}>
+            <span style={{ flex: 1, height: 2, background: 'linear-gradient(90deg, transparent, #22c55e)', display: 'block' }} />
+            <span style={{ fontSize: 11, color: '#22c55e', fontWeight: 600, whiteSpace: 'nowrap' }}>
+              {'▶'} Início do segmento · {segment.started_at ? fmtTs(segment.started_at) : ''}
+            </span>
+            <span style={{ flex: 1, height: 2, background: 'linear-gradient(90deg, #22c55e, transparent)', display: 'block' }} />
+          </div>
+        )}
+
+        {/* ── During segment ── */}
+        {during.length === 0 && <p style={s.placeholder}>Nenhum evento no stream ainda.</p>}
+        {during.map(e => <EntryRow key={e.entry_id} e={e} showEvents={showEvents} />)}
+
+        {/* ── Segment insights ── */}
+        {segmentInsights.length > 0 && (
+          <div style={{ marginTop: 12, display: 'flex', flexDirection: 'column', gap: 6 }}>
+            <span style={{ fontSize: 11, color: '#64748b', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+              Insights ({segmentInsights.length})
+            </span>
+            {segmentInsights.map(row => <InsightCard key={row.insight_id} row={row} />)}
+          </div>
+        )}
+
+        {/* ── Segment end marker ── */}
+        {segment && segment.ended_at && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, margin: '8px 0' }}>
+            <span style={{ flex: 1, height: 2, background: 'linear-gradient(90deg, transparent, #ef4444)', display: 'block' }} />
+            <span style={{ fontSize: 11, color: '#ef4444', fontWeight: 600, whiteSpace: 'nowrap' }}>
+              {'■'} Fim do segmento · {fmtTs(segment.ended_at)}
+            </span>
+            <span style={{ flex: 1, height: 2, background: 'linear-gradient(90deg, #ef4444, transparent)', display: 'block' }} />
+          </div>
+        )}
+
+        {/* ── After segment ── */}
+        {segment && after.length > 0 && (
+          <div style={{ marginTop: 8 }}>
+            <button onClick={() => setShowAfter(!showAfter)} style={{ background: 'none', border: 'none', color: '#475569', cursor: 'pointer', fontSize: 12, padding: '4px 0' }}>
+              {showAfter ? '▾' : '▸'} Após o segmento · {after.length} eventos
+            </button>
+            {showAfter && after.map(e => <EntryRow key={e.entry_id} e={e} showEvents={showEvents} />)}
+          </div>
+        )}
+
+        {/* ── Events toggle ── */}
+        {!segment && (
+          <div style={{ marginTop: 8, textAlign: 'center' }}>
+            <button onClick={() => setShowEvents(!showEvents)} style={{ background: 'none', border: '1px solid #334155', color: '#94a3b8', borderRadius: 6, padding: '4px 12px', cursor: 'pointer', fontSize: 12 }}>
+              {showEvents ? 'Ocultar eventos' : 'Mostrar eventos'}
+            </button>
+          </div>
+        )}
+
+        <div ref={bottomRef} />
       </div>
 
-      {/* Supervisor panel */}
-      {isSupActive && <SupervisorPanel state={supState} onMessage={message} onLeave={leave} />}
-    </div>
-  )
-}
-
-// ─── Accordion bucket ─────────────────────────────────────────────────────────
-
-function AccordionBucket({ label, open, onToggle, accent, children }: {
-  label: string; open: boolean; onToggle: () => void; accent: string; children: React.ReactNode
-}) {
-  return (
-    <div style={{ marginBottom: 4 }}>
-      <button
-        onClick={onToggle}
-        style={{
-          width: '100%', display: 'flex', alignItems: 'center', gap: 8,
-          background: 'none', border: `1px solid ${accent}44`, borderRadius: 6,
-          color: accent, fontSize: 11, padding: '5px 10px', cursor: 'pointer',
-          textAlign: 'left', letterSpacing: '0.04em',
-        }}
-      >
-        <span style={{ flexShrink: 0 }}>{open ? '▾' : '▸'}</span>
-        <span style={{ flex: 1 }}>{label}</span>
-      </button>
-      {open && (
-        <div style={{ paddingLeft: 8, marginTop: 4, borderLeft: `2px solid ${accent}44` }}>
-          {children}
-        </div>
+      {isSupActive && (
+        <SupervisorPanel state={supState} onMessage={message} onLeave={() => leave()} />
       )}
     </div>
   )
 }
 
-// ─── Segment divider ─────────────────────────────────────────────────────────
+// ─── Sub-components ────────────────────────────────────────────────────────────
 
-function SegmentDivider({ label, color, ts }: { label: string; color: string; ts: string }) {
-  const time = ts ? fmtTs(ts) : ''
-  return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 10, margin: '10px 0 6px', color }}>
-      <span style={{ flex: 1, height: 1, backgroundColor: color + '44', display: 'block' }} />
-      <span style={{ fontSize: 11, whiteSpace: 'nowrap', fontWeight: 600, letterSpacing: '0.05em' }}>
-        {label}{time ? ` · ${time}` : ''}
-      </span>
-      <span style={{ flex: 1, height: 1, backgroundColor: color + '44', display: 'block' }} />
-    </div>
-  )
-}
+function EntryRow({ e, showEvents }: { e: StreamEntry; showEvents: boolean }) {
+  const isEvent = SYSTEM_TYPES_SET.has(e.type)
+  if (isEvent) return showEvents ? <EventRow e={e} /> : null
 
-// ─── EntryRow ─────────────────────────────────────────────────────────────────
-
-const SYSTEM_TYPES = new Set(['session_opened','session_closed','participant_joined','participant_left','flow_step_completed','customer_identified','medium_transitioned'])
-
-function EntryRow({ entry: e }: { entry: StreamEntry }) {
-  if (SYSTEM_TYPES.has(e.type)) return <SystemEvent entry={e} />
-
-  const isCustomer = e.author_role === 'customer' || e.author_role === null
-  const isInternal = e.visibility === 'agents_only' || Array.isArray(e.visibility)
-  const align      = isCustomer ? 'flex-start' : 'flex-end'
+  const text = extractText(e.content)
+  const isAgent = e.author_role !== 'customer'
+  const isInternal = e.visibility === 'agents_only'
 
   return (
-    <div style={{ display: 'flex', justifyContent: align, marginBottom: 4 }}>
-      {isInternal ? (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 2, maxWidth: '72%' }}>
-          <span style={{ fontSize: 10, color: '#22c55e', letterSpacing: '0.06em', textTransform: 'uppercase', paddingLeft: 2 }}>
-            apenas agentes
-          </span>
-          <MessageBubble entry={e} internal />
+    <div style={{ display: 'flex', flexDirection: 'column', alignItems: isAgent ? 'flex-end' : 'flex-start' }}>
+      <div style={{
+        maxWidth: '75%',
+        padding: '8px 12px',
+        borderRadius: 8,
+        fontSize: 13,
+        lineHeight: 1.5,
+        ...(isInternal
+          ? { backgroundColor: '#fef3c7', border: '1px dashed #f59e0b', color: '#92400e' }
+          : isAgent
+            ? { backgroundColor: '#1e293b', color: '#e2e8f0' }
+            : { backgroundColor: '#1e3a5f', color: '#bfdbfe' })
+      }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 2 }}>
+          {isInternal && <span style={{ fontSize: 9, fontWeight: 700, color: '#d97706', textTransform: 'uppercase' }}>Interno</span>}
+          <RoleBadge role={e.author_role} />
+          <span style={{ fontSize: 10, color: '#64748b' }}>{e.timestamp ? fmtTs(e.timestamp) : ''}</span>
         </div>
-      ) : (
-        <MessageBubble entry={e} internal={false} />
-      )}
-    </div>
-  )
-}
-
-function MessageBubble({ entry: e, internal }: { entry: StreamEntry; internal: boolean }) {
-  const isAgent = ['primary','specialist','supervisor','evaluator','reviewer'].includes(e.author_role ?? '')
-  const bg      = internal ? '#1e2d1e' : isAgent ? '#1e293b' : '#0f3460'
-  const border  = internal ? '1px dashed #22c55e44' : 'none'
-  const text    = extractText(e.content)
-
-  return (
-    <div style={{ maxWidth: '72%', borderRadius: 10, padding: '8px 12px', fontSize: 13, backgroundColor: bg, border }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
-        <RoleBadge role={e.author_role} />
-        {e.timestamp && <span style={{ fontSize: 10, color: '#475569' }}>{fmtTs(e.timestamp)}</span>}
+        <div style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{text}</div>
       </div>
-      <div style={{ lineHeight: 1.5, color: '#e2e8f0', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{text}</div>
-      {e.type !== 'message' && <div style={{ fontSize: 10, color: '#475569', marginTop: 4 }}>{e.type}</div>}
     </div>
   )
 }
 
-function SystemEvent({ entry: e }: { entry: StreamEntry }) {
+function EventRow({ e }: { e: StreamEntry }) {
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 10, margin: '6px 0', color: '#475569' }}>
       <span style={{ flex: 1, height: 1, backgroundColor: '#1e293b', display: 'block' }} />
@@ -254,6 +458,42 @@ function SystemEvent({ entry: e }: { entry: StreamEntry }) {
         {e.type.replace(/_/g, ' ')}{e.timestamp ? ` · ${fmtTs(e.timestamp)}` : ''}
       </span>
       <span style={{ flex: 1, height: 1, backgroundColor: '#1e293b', display: 'block' }} />
+    </div>
+  )
+}
+
+function InsightCard({ row }: { row: InsightRow }) {
+  const isHistorico = row.insight_type?.startsWith('insight.historico')
+  const isConvo     = row.insight_type?.startsWith('insight.conversa')
+  const borderColor = isHistorico ? '#a78bfa' : isConvo ? '#2dd4bf' : '#60a5fa'
+  const badgeBg     = isHistorico ? '#a78bfa22' : isConvo ? '#2dd4bf22' : '#60a5fa22'
+  const badgeColor  = isHistorico ? '#c4b5fd' : isConvo ? '#5eead4' : '#93c5fd'
+  const dt          = row.timestamp ? fmtTs(row.timestamp) : ''
+  const hasTags     = Array.isArray(row.tags) && row.tags.length > 0
+
+  return (
+    <div style={{ borderLeft: `3px solid ${borderColor}`, borderRadius: 6, padding: '6px 10px', backgroundColor: '#111827' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', marginBottom: 3 }}>
+        <span style={{ fontSize: 10, fontWeight: 600, padding: '1px 6px', borderRadius: 10, backgroundColor: badgeBg, color: badgeColor }}>
+          {row.insight_type}
+        </span>
+        {row.category && (
+          <span style={{ fontSize: 10, padding: '1px 6px', borderRadius: 10, backgroundColor: '#1f2937', color: '#9ca3af' }}>
+            {row.category}
+          </span>
+        )}
+        {dt && <span style={{ fontSize: 10, color: '#475569', marginLeft: 'auto' }}>{dt}</span>}
+      </div>
+      {row.value && <p style={{ fontSize: 12, color: '#d1d5db', lineHeight: 1.4, margin: 0 }}>{row.value}</p>}
+      {hasTags && (
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginTop: 4 }}>
+          {row.tags.map(tag => (
+            <span key={tag} style={{ fontSize: 10, padding: '1px 5px', borderRadius: 4, border: '1px solid #374151', color: '#6b7280', backgroundColor: '#0f172a' }}>
+              #{tag}
+            </span>
+          ))}
+        </div>
+      )}
     </div>
   )
 }
@@ -285,15 +525,17 @@ function extractText(content: unknown): string {
   return String(content)
 }
 
-function fmtTs(ts: string): string {
-  try { return new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }) }
-  catch { return ts }
+function fmtTs(iso: string): string {
+  try {
+    const d = new Date(iso)
+    return d.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+  } catch { return iso }
 }
 
 const s: Record<string, React.CSSProperties> = {
-  container: { display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden', backgroundColor: '#0a1628', color: '#e2e8f0' },
-  header: { display: 'flex', alignItems: 'center', gap: 12, padding: '12px 16px', borderBottom: '1px solid #1e293b', backgroundColor: '#0f172a', flexShrink: 0 },
-  backBtn: { background: 'none', border: '1px solid #334155', color: '#94a3b8', borderRadius: 6, padding: '4px 10px', cursor: 'pointer', fontSize: 13 },
-  stream: { flex: 1, overflowY: 'auto', padding: '16px 20px', display: 'flex', flexDirection: 'column', gap: 8 },
-  placeholder: { padding: 40, textAlign: 'center', color: '#475569', fontSize: 14 },
+  container:   { display: 'flex', flexDirection: 'column', height: '100%', backgroundColor: '#0f172a', color: '#e2e8f0' },
+  header:      { display: 'flex', alignItems: 'center', gap: 10, padding: '10px 16px', borderBottom: '1px solid #1e293b', flexWrap: 'wrap' },
+  backBtn:     { background: 'none', border: '1px solid #334155', color: '#94a3b8', borderRadius: 6, padding: '4px 12px', cursor: 'pointer', fontSize: 13 },
+  stream:      { flex: 1, overflowY: 'auto', padding: '12px 16px', display: 'flex', flexDirection: 'column', gap: 8 },
+  placeholder: { color: '#475569', fontStyle: 'italic', fontSize: 13, textAlign: 'center', marginTop: 24 },
 }
