@@ -30,7 +30,7 @@ import { registerDelegationTools }  from "./tools/delegation"
 import type { DelegationDeps }      from "./tools/delegation"
 import { registerDeployTools }      from "./tools/deploy"
 import type { DeployDeps }          from "./tools/deploy"
-import { createRedisClient }       from "./infra/redis"
+import { createRedisClient, keys } from "./infra/redis"
 import { createKafkaProducer }     from "./infra/kafka"
 import { createRegistryClient }    from "./infra/registry-client"
 import { createPostgresClient }    from "./infra/postgres"
@@ -902,6 +902,122 @@ export async function startServer(config: ServerConfig): Promise<void> {
     } catch (err) {
       console.error("[menu_submit] Fatal error:", err)
       res.status(500).json({ error: "publish_failed" })
+    }
+  })
+
+  // ── Arc 8 — Human agent pause / resume REST endpoints ────────────────────
+  // Called by the Agent Assist UI when the human clicks "Pausar" (with a reason)
+  // or "Retomar". These mirror the MCP tool path (agent_pause / agent_ready in
+  // runtime.ts) but do not require a session JWT — the agent is identified by
+  // their pool_id, from which the instance_id is derived using the convention
+  // established in runtime.ts:  instanceId = "human-${poolId}"
+  // ─────────────────────────────────────────────────────────────────────────
+
+  app.put("/api/agent-pause", async (req: Request, res: Response) => {
+    try {
+      const body = req.body as Record<string, unknown>
+      const poolId     = (body["pool_id"]     as string | undefined) ?? ""
+      const reasonId   = (body["reason_id"]   as string | undefined) ?? ""
+      const reasonLabel = (body["reason_label"] as string | undefined) ?? ""
+      const note       = (body["note"]         as string | undefined) ?? ""
+
+      if (!poolId) {
+        res.status(400).json({ error: "pool_id is required" })
+        return
+      }
+
+      const tenantId   = process.env["PLUGHUB_TENANT_ID"] ?? "tenant_demo"
+      const instanceId = `human-${poolId}`
+      const instanceKey = keys.agentInstance(tenantId, instanceId)
+
+      // Verify instance exists
+      const state = await redis.hget(instanceKey, "state")
+      if (!state) {
+        res.status(404).json({ error: "instance_not_found", instance_id: instanceId })
+        return
+      }
+      if (state !== "ready" && state !== "busy") {
+        res.status(409).json({ error: "invalid_state", current_state: state })
+        return
+      }
+
+      // Mark as paused in Redis
+      await redis.hset(instanceKey, "state", "paused")
+
+      // Remove from all pool available sets — agent won't receive new contacts
+      const poolsRaw = await redis.hget(instanceKey, "pools")
+      const pools: string[] = poolsRaw ? (JSON.parse(poolsRaw) as string[]) : [poolId]
+      for (const pid of pools) {
+        await redis.srem(keys.poolAvailable(tenantId, pid), instanceId)
+      }
+
+      // Publish agent_pause to agent.lifecycle with reason fields
+      await kafka.publish("agent.lifecycle", {
+        event:        "agent_pause",
+        tenant_id:    tenantId,
+        instance_id:  instanceId,
+        pool_id:      poolId,
+        reason_id:    reasonId,
+        reason_label: reasonLabel,
+        note:         note,
+        timestamp:    new Date().toISOString(),
+      })
+
+      res.json({ ok: true, instance_id: instanceId, state: "paused", timestamp: new Date().toISOString() })
+    } catch (err) {
+      console.error("[agent-pause] Error:", err)
+      res.status(500).json({ error: "pause_failed" })
+    }
+  })
+
+  app.put("/api/agent-resume", async (req: Request, res: Response) => {
+    try {
+      const body = req.body as Record<string, unknown>
+      const poolId = (body["pool_id"] as string | undefined) ?? ""
+
+      if (!poolId) {
+        res.status(400).json({ error: "pool_id is required" })
+        return
+      }
+
+      const tenantId   = process.env["PLUGHUB_TENANT_ID"] ?? "tenant_demo"
+      const instanceId = `human-${poolId}`
+      const instanceKey = keys.agentInstance(tenantId, instanceId)
+
+      // Verify instance exists and is paused
+      const state = await redis.hget(instanceKey, "state")
+      if (!state) {
+        res.status(404).json({ error: "instance_not_found", instance_id: instanceId })
+        return
+      }
+      if (state !== "paused") {
+        res.status(409).json({ error: "invalid_state", current_state: state })
+        return
+      }
+
+      // Mark as ready in Redis
+      await redis.hset(instanceKey, "state", "ready")
+
+      // Re-add to all pool available sets — agent is available again
+      const poolsRaw = await redis.hget(instanceKey, "pools")
+      const pools: string[] = poolsRaw ? (JSON.parse(poolsRaw) as string[]) : [poolId]
+      for (const pid of pools) {
+        await redis.sadd(keys.poolAvailable(tenantId, pid), instanceId)
+      }
+
+      // Publish agent_ready to agent.lifecycle
+      await kafka.publish("agent.lifecycle", {
+        event:       "agent_ready",
+        tenant_id:   tenantId,
+        instance_id: instanceId,
+        pool_id:     poolId,
+        timestamp:   new Date().toISOString(),
+      })
+
+      res.json({ ok: true, instance_id: instanceId, state: "ready", timestamp: new Date().toISOString() })
+    } catch (err) {
+      console.error("[agent-resume] Error:", err)
+      res.status(500).json({ error: "resume_failed" })
     }
   })
 

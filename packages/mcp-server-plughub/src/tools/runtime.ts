@@ -95,6 +95,9 @@ const AgentDoneInputSchema = z.object({
 
 const AgentPauseInputSchema = z.object({
   session_token: z.string().min(1),
+  reason_id:     z.string().optional(),
+  reason_label:  z.string().optional(),
+  note:          z.string().optional(),
 })
 
 const AgentLogoutInputSchema = z.object({
@@ -538,7 +541,7 @@ export function registerRuntimeTools(server: McpServer, deps: RuntimeDeps): void
     AgentPauseInputSchema.shape as any,
     async (input: Record<string, unknown>) => {
       try {
-        const { session_token } = AgentPauseInputSchema.parse(input)
+        const { session_token, reason_id, reason_label, note } = AgentPauseInputSchema.parse(input)
         const { tenant_id, instance_id } = verifySessionToken(session_token)
 
         const instanceKey = keys.agentInstance(tenant_id, instance_id)
@@ -563,10 +566,13 @@ export function registerRuntimeTools(server: McpServer, deps: RuntimeDeps): void
         }
 
         await kafka.publish("agent.lifecycle", {
-          event:     "agent_pause",
+          event:        "agent_pause",
           tenant_id,
           instance_id,
-          timestamp: new Date().toISOString(),
+          reason_id:    reason_id    ?? "",
+          reason_label: reason_label ?? "",
+          note:         note         ?? "",
+          timestamp:    new Date().toISOString(),
         })
 
         return ok({ status: "paused", timestamp: new Date().toISOString() })

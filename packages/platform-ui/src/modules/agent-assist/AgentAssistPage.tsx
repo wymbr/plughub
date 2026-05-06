@@ -20,6 +20,7 @@
  */
 
 import React, { useCallback, useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { useAuth } from "@/auth/useAuth";
 
 import { ActiveTab, ClosePayload }         from "./types";
@@ -42,8 +43,9 @@ type CenterTab = "atual" | "historico";
 
 // ── AgentAssistPage ────────────────────────────────────────────────────────
 export const AgentAssistPage: React.FC = () => {
+  const { t } = useTranslation("agentAssist");
   const { session } = useAuth();
-  const agentName   = session?.name ?? "Agente";
+  const agentName   = session?.name ?? t("session.none");
 
   // ── All persistent state from context ──────────────────────────────────
   const {
@@ -176,9 +178,9 @@ export const AgentAssistPage: React.FC = () => {
           next.set(sessionId, { ...c, sessionClosed: true });
           return next;
         });
-        addToast("Aguardando finalização (wrap-up/NPS)…", "info");
+        addToast(t("message.closingWrapUp"), "info");
       } catch {
-        addToast("Erro ao encerrar atendimento.", "error");
+        addToast(t("message.closingError"), "error");
       }
     },
     [addToast, setContacts, handledSessions]
@@ -230,10 +232,10 @@ export const AgentAssistPage: React.FC = () => {
         if (resp.ok) {
           setSubstitutionMode(false);
         } else {
-          addToast("Falha ao enviar resposta.", "error");
+          addToast(t("message.menuSubmitFailed"), "error");
         }
       } catch {
-        addToast("Erro de rede ao enviar resposta.", "error");
+        addToast(t("message.networkError"), "error");
       }
     },
     [selectedSessionId, contacts, addToast, setContacts]
@@ -242,16 +244,25 @@ export const AgentAssistPage: React.FC = () => {
   const handleDesligar = useCallback(() => {
     if (!selectedSessionId) return;
     handleClose(selectedSessionId, {
-      issue_status: "Desligado pelo agente",
+      issue_status: t("message.hungUpByAgent"),
       outcome: "abandoned",
     });
-  }, [selectedSessionId, handleClose]);
+  }, [selectedSessionId, handleClose, t]);
 
   // Resume: direct (no modal)
   const handleResume = useCallback(() => {
     setIsPaused(false);
-    addToast("Agente retomado — disponível para novos contatos.", "info");
-  }, [addToast]);
+    addToast(t("message.agentResumed"), "info");
+    // Best-effort resume signal — mcp-server-plughub restores agent to ready state
+    const poolId = activePools[0] ?? "";
+    if (poolId) {
+      fetch(`/api/agent-resume`, {
+        method:  "PUT",
+        headers: { "Content-Type": "application/json" },
+        body:    JSON.stringify({ pool_id: poolId }),
+      }).catch(() => { /* non-fatal */ });
+    }
+  }, [activePools, addToast, t]);
 
   // Pause: intercepted by PauseReasonModal
   const handlePauseRequest = useCallback(() => {
@@ -263,24 +274,25 @@ export const AgentAssistPage: React.FC = () => {
       setShowPauseModal(false);
       setIsPaused(true);
       const detail = note ? ` — ${note}` : "";
-      addToast(`Agente pausado (${reasonLabel}${detail}). Novos contatos não serão recebidos.`, "info");
-      // Best-effort API call — endpoint is deferred; graceful degradation on failure
+      addToast(t("message.agentPaused", { reason: reasonLabel, detail }), "info");
+      // Best-effort pause signal — mcp-server-plughub marks agent paused + publishes agent.lifecycle
+      const poolId = activePools[0] ?? "";
       fetch(`/api/agent-pause`, {
         method:  "PUT",
         headers: { "Content-Type": "application/json" },
-        body:    JSON.stringify({ reason_id: reasonId, reason_label: reasonLabel, note }),
-      }).catch(() => { /* endpoint not yet in orchestrator-bridge — ignore */ });
+        body:    JSON.stringify({ pool_id: poolId, reason_id: reasonId, reason_label: reasonLabel, note }),
+      }).catch(() => { /* non-fatal */ });
     },
-    [addToast]
+    [activePools, addToast, t]
   );
 
   const handleInviteAgent = useCallback(
-    (agentTypeId: string) => addToast(`Convite enviado: ${agentTypeId}`, "info"),
-    [addToast]
+    (agentTypeId: string) => addToast(t("message.inviteSent", { agentTypeId }), "info"),
+    [addToast, t]
   );
   const handleEscalate = useCallback(
-    (targetPoolId: string) => addToast(`Escalando para: ${targetPoolId}`, "warning"),
-    [addToast]
+    (targetPoolId: string) => addToast(t("message.escalatingTo", { poolId: targetPoolId }), "warning"),
+    [addToast, t]
   );
 
   // ── Derived state ────────────────────────────────────────────────────────
@@ -320,7 +332,7 @@ export const AgentAssistPage: React.FC = () => {
           <div className="w-[200px] flex-shrink-0 bg-gray-100 border-r border-gray-200
                           flex items-center px-3 gap-1.5">
             <span className="text-xs font-semibold text-gray-500 uppercase tracking-wide">
-              Contatos
+              {t("contacts.label")}
             </span>
             {contacts.size > 0 && (
               <span className="text-xs text-gray-400">({contacts.size})</span>
@@ -341,7 +353,7 @@ export const AgentAssistPage: React.FC = () => {
                       : "text-gray-500 hover:text-gray-700"
                   }`}
                 >
-                  {tab === "atual" ? "Atual" : "Histórico"}
+                  {tab === "atual" ? t("centerTab.atual") : t("centerTab.historico")}
                 </button>
               ))}
             </div>
@@ -350,7 +362,7 @@ export const AgentAssistPage: React.FC = () => {
             <ActionBar
               contact={selected}
               onEncerrar={() => setShowCloseModal(true)}
-              onTransferir={() => addToast("Transferir: em breve", "info")}
+              onTransferir={() => addToast(t("message.transferComingSoon"), "info")}
               onDesligar={handleDesligar}
               substitutionMode={substitutionMode}
               onToggleSubstitutionMode={() => setSubstitutionMode(prev => !prev)}
@@ -360,7 +372,8 @@ export const AgentAssistPage: React.FC = () => {
           {/* Right-panel tab bar */}
           <div className="w-[280px] flex-shrink-0 border-l border-gray-200 flex bg-white">
             {(["estado", "capacidades", "contexto"] as ActiveTab[]).map((id) => {
-              const label = { estado: "Estado", capacidades: "Capacidades", contexto: "Contexto" }[id];
+              const labels = { estado: t("rightTab.estado"), capacidades: t("rightTab.capacidades"), contexto: t("rightTab.contexto") };
+              const label = labels[id];
               return (
                 <button
                   key={id}
@@ -409,13 +422,13 @@ export const AgentAssistPage: React.FC = () => {
                       <>
                         <span className="text-3xl">🟢</span>
                         <p className="text-center leading-snug max-w-xs">
-                          Ative um pool no cabeçalho para ficar disponível.
+                          {t("empty.activatePool")}
                         </p>
                       </>
                     ) : (
                       <>
                         <span className="text-3xl animate-pulse">⏳</span>
-                        <p>Aguardando próximo atendimento…</p>
+                        <p>{t("empty.waitingForContact")}</p>
                       </>
                     )}
                   </div>
@@ -465,7 +478,7 @@ export const AgentAssistPage: React.FC = () => {
       {/* Close modal */}
       {(showCloseModal || selected?.pendingCloseModal) && selected && (
         <CloseModal
-          defaultIssueStatus={selected.sessionClosed ? "Cliente desconectou" : ""}
+          defaultIssueStatus={selected.sessionClosed ? t("message.clientDisconnected") : ""}
           defaultOutcome={selected.sessionClosed ? "abandoned" : "resolved"}
           onConfirm={(payload) => {
             setShowCloseModal(false);
@@ -475,7 +488,7 @@ export const AgentAssistPage: React.FC = () => {
             setShowCloseModal(false);
             if (selected.sessionClosed) {
               handleClose(selected.sessionId, {
-                issue_status: "Cliente desconectou",
+                issue_status: t("message.clientDisconnected"),
                 outcome: "abandoned",
               });
             }

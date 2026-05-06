@@ -3043,15 +3043,17 @@ PLUGHUB_OPENAI_API_KEYS=sk-...               # OpenAI fallback (opcional; requer
 
 - **Integração metering × pricing** *(deferred)*: módulo que aplica planos do Config API e escreve `{tenant}:quota:limit:*`. Metering registra mas pricing não consome.
 
-### Arc 8 — Relatório de Disponibilidade e Pausas de Agentes
+### Arc 8 — Relatório de Disponibilidade e Pausas de Agentes (✅ implementado)
 
-Frontend implementado (`AgentReportsPage.tsx`, `PauseReasonModal.tsx`). Backend pendente:
+Pipeline completo de rastreamento de pausas de agentes humanos.
 
-- **`agent_pause` schema**: adicionar `reason_id` e `reason_label` ao `AgentPauseEventSchema` em `packages/schemas/src/platform-events.ts`.
-- **Config API — motivos de pausa**: namespace `agent_activity`, chave `pause_reasons` (lista `{ id, label, requires_note }`). Motivos padrão: intervalo, almoço, treinamento, reunião, outro. Override por pool via `pause_reasons:{pool_id}`.
-- **orchestrator-bridge**: publicar `agent_pause`/`agent_ready` com motivo via `PUT /api/agent-pause/:instanceId`.
-- **analytics-api — consumir pausas**: tabela `agent_pause_intervals` (ClickHouse, `ReplacingMergeTree`). `parse_agent_lifecycle` estendido.
-- **analytics-api — `GET /reports/agent-availability`**: agrega por `(agent_type_id, pool_id, period_date)`. Pool scoping via `optional_pool_principal`.
+**Componentes implementados:**
+- `AgentPauseEventSchema` em `@plughub/schemas/platform-events.ts` — inclui `reason_id` e `reason_label`
+- Config API namespace `agent_activity`, chave `pause_reasons` — motivos padrão seedados; `PauseReasonModal.tsx` lê via `/config/agent_activity/pause_reasons`
+- `PUT /api/agent-pause` e `PUT /api/agent-resume` em `mcp-server-plughub/src/server.ts` — deriva `instanceId = "human-${pool_id}"`, atualiza Redis (state → paused/ready, pool available SET), publica `agent_pause`/`agent_ready` em `agent.lifecycle` Kafka com `reason_id`/`reason_label`
+- `agent_pause` MCP tool em `runtime.ts` também enriquecido com `reason_id`, `reason_label`, `note` (schema + Kafka payload)
+- analytics-api: tabela `agent_pause_intervals` (ClickHouse `ReplacingMergeTree`); `parse_agent_lifecycle` consome `agent_pause`/`agent_ready`; `GET /reports/agent-availability` agrega por `(agent_type_id, pool_id, period_date)` com pool scoping
+- `AgentReportsPage.tsx` — painel de disponibilidade e histórico de pausas
 
 ### CLAUDE.md — Otimização
 
