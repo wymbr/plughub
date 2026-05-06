@@ -1,9 +1,10 @@
 {
   "title": "Contacts",
   "tabs": {
-    "list":    "List",
-    "monitor": "Monitor",
-    "analysis": "Analysis"
+    "list":      "List",
+    "relatorio": "Report",
+    "monitor":   "Monitor",
+    "analysis":  "Analysis"
   },
   "noTenant": "No tenant in session. Please log in again.",
   "detail": {

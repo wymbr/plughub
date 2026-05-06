@@ -1,10 +1,18 @@
 /**
  * MonitorTab — visão em tempo real de todos os pools.
  *
- * - SSE via usePoolViews: todos os pools sempre visíveis
- * - Pools que batem com filters.poolId ficam em destaque; demais ficam em segundo plano
- * - Seletor de formato de visualização: heatmap | bars | donut | tiles | table
- * - Clique em pool → painel lateral com sessões ativas → transcript inline
+ * Scope toggle: Sessões | Processos
+ *
+ * Sessões:
+ *   - SSE via usePoolViews: todos os pools sempre visíveis
+ *   - Pools que batem com filters.poolId ficam em destaque; demais ficam em segundo plano
+ *   - Seletor de formato de visualização: heatmap | bars | donut | tiles | table
+ *   - Clique em pool → painel lateral com sessões ativas → transcript inline
+ *
+ * Processos:
+ *   - Lista de WorkflowInstances com filtro de status
+ *   - Painel de detalhe à direita: timeline, suspend reason, resume token
+ *   - Link para sessão origem (origin_session_id) disponível no detalhe
  */
 import React, { useState, useMemo } from 'react'
 import type { ContactFilters, VizFormat } from '../types'
@@ -14,6 +22,10 @@ import { SegmentList }      from '@/modules/atendimento/components/SegmentList'
 import { SessionTranscript } from '@/modules/atendimento/components/SessionTranscript'
 import type { PoolView, ContactSegment } from '@/modules/atendimento/types'
 import { scoreToColor, scoreToAccent, formatMs } from '@/modules/atendimento/utils/sentiment'
+import {
+  useWorkflowInstances, useWorkflowInstance, cancelWorkflow,
+} from '@/modules/workflows/api/hooks'
+import type { WorkflowInstance, WorkflowStatus } from '@/modules/workflows/api/hooks'
 
 interface Props {
   tenantId: string
@@ -250,9 +262,246 @@ function PoolTableRow({ pool, highlighted, selected, onClick }: {
   )
 }
 
+// ── Processos (workflow instances) view ────────────────────────────────────
+
+type MonitorScope = 'sessions' | 'processes'
+
+const WF_STATUS_COLORS: Record<WorkflowStatus, string> = {
+  active:    '#3b82f6',
+  suspended: '#eab308',
+  completed: '#22c55e',
+  failed:    '#ef4444',
+  timed_out: '#ef4444',
+  cancelled: '#6b7280',
+}
+
+const WF_STATUS_LABELS: Record<WorkflowStatus | 'all', string> = {
+  all:       'Todos',
+  active:    'Ativo',
+  suspended: 'Suspenso',
+  completed: 'Concluído',
+  failed:    'Falhou',
+  timed_out: 'Expirado',
+  cancelled: 'Cancelado',
+}
+
+const WF_SUSPEND_LABELS: Record<string, string> = {
+  approval: '⏳ Aprovação pendente',
+  input:    '✏️ Aguardando entrada',
+  webhook:  '🔗 Aguardando webhook',
+  timer:    '⏰ Timer agendado',
+}
+
+function ProcessosView({ tenantId }: { tenantId: string }) {
+  const [filterStatus, setFilterStatus] = useState<WorkflowStatus | 'all'>('all')
+  const [selectedId,   setSelectedId]   = useState<string | null>(null)
+
+  const statusParam = filterStatus === 'all' ? undefined : filterStatus
+  const { instances, loading, refresh } = useWorkflowInstances(tenantId, statusParam, 10_000)
+  const { instance: detail }            = useWorkflowInstance(selectedId, 10_000)
+
+  const sorted = [...instances].sort(
+    (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime(),
+  )
+
+  async function handleCancel() {
+    if (!selectedId) return
+    if (!confirm('Cancelar esta instância de processo?')) return
+    try {
+      await cancelWorkflow(selectedId, tenantId)
+      setSelectedId(null)
+      refresh()
+    } catch (e) { alert(String(e)) }
+  }
+
+  return (
+    <div className="flex h-full overflow-hidden bg-[#0a1628] text-slate-200">
+      {/* Left: list */}
+      <div className="w-72 flex-shrink-0 border-r border-slate-800 flex flex-col overflow-hidden">
+        {/* Status filter */}
+        <div className="flex flex-wrap gap-1.5 px-3 py-2.5 border-b border-slate-800 flex-shrink-0">
+          {(['all', 'active', 'suspended', 'completed', 'failed'] as const).map(s => {
+            const active = filterStatus === s
+            const color  = s === 'all' ? '#3b82f6' : WF_STATUS_COLORS[s as WorkflowStatus]
+            return (
+              <button key={s} onClick={() => { setFilterStatus(s); setSelectedId(null) }}
+                className="text-xs px-2.5 py-1 rounded-md font-medium transition-all"
+                style={{
+                  border:  `1px solid ${active ? color : '#334155'}`,
+                  background: active ? color + '22' : 'transparent',
+                  color:   active ? color : '#64748b',
+                  fontWeight: active ? 600 : 400,
+                }}>
+                {WF_STATUS_LABELS[s]}
+              </button>
+            )
+          })}
+        </div>
+
+        {/* Instance list */}
+        <div className="flex-1 overflow-y-auto">
+          {sorted.length === 0 && !loading && (
+            <div className="flex flex-col items-center justify-center py-12 text-slate-500 text-sm gap-2">
+              <span className="text-2xl">📋</span>
+              <span>Nenhum processo encontrado</span>
+            </div>
+          )}
+          {sorted.map(inst => {
+            const color    = WF_STATUS_COLORS[inst.status]
+            const isSelected = inst.id === selectedId
+            return (
+              <div key={inst.id} onClick={() => setSelectedId(inst.id === selectedId ? null : inst.id)}
+                className="px-4 py-3 cursor-pointer transition-colors hover:bg-slate-800/50"
+                style={{
+                  borderBottom: '1px solid #1e293b',
+                  background:   isSelected ? '#1e293b' : 'transparent',
+                  borderLeft:   isSelected ? `3px solid ${color}` : '3px solid transparent',
+                }}>
+                <div className="flex justify-between items-start gap-2">
+                  <div className="flex-1 min-w-0">
+                    <code className="text-xs font-semibold text-blue-300">{inst.id.slice(0, 8)}…</code>
+                    <div className="text-xs text-slate-500 mt-0.5 truncate">{inst.flow_id}</div>
+                    {inst.origin_session_id && (
+                      <div className="text-xs text-slate-600 mt-0.5 truncate font-mono">
+                        sessão: …{inst.origin_session_id.slice(-10)}
+                      </div>
+                    )}
+                  </div>
+                  <span className="text-[11px] font-bold px-1.5 py-0.5 rounded flex-shrink-0"
+                    style={{ background: color + '33', color }}>
+                    {WF_STATUS_LABELS[inst.status] ?? inst.status}
+                  </span>
+                </div>
+                <div className="text-[11px] text-slate-500 mt-1.5">
+                  {new Date(inst.created_at).toLocaleString('pt-BR')}
+                </div>
+                {inst.suspend_reason && (
+                  <div className="text-[11px] text-yellow-400 mt-1">
+                    {WF_SUSPEND_LABELS[inst.suspend_reason] ?? inst.suspend_reason}
+                  </div>
+                )}
+              </div>
+            )
+          })}
+        </div>
+      </div>
+
+      {/* Right: detail or empty */}
+      {detail ? (
+        <div className="flex-1 flex flex-col overflow-hidden">
+          {/* Detail header */}
+          <div className="flex justify-between items-start px-5 py-3.5 border-b border-slate-800 flex-shrink-0">
+            <div>
+              <code className="text-xs text-blue-300">{detail.id}</code>
+              <div className="text-xs text-slate-500 mt-0.5">{detail.flow_id}</div>
+            </div>
+            <button onClick={() => setSelectedId(null)}
+              className="text-slate-500 hover:text-slate-200 text-lg leading-none">✕</button>
+          </div>
+
+          {/* Scrollable detail body */}
+          <div className="flex-1 overflow-y-auto p-5 space-y-5">
+
+            {/* Status */}
+            <div>
+              <div className="text-[11px] font-bold text-slate-500 uppercase tracking-wider mb-2">Status</div>
+              <span className="text-xs font-bold px-2.5 py-1 rounded"
+                style={{ background: WF_STATUS_COLORS[detail.status] + '33', color: WF_STATUS_COLORS[detail.status] }}>
+                {WF_STATUS_LABELS[detail.status] ?? detail.status}
+              </span>
+              {detail.current_step && (
+                <div className="mt-2 text-xs text-slate-400">
+                  Step atual: <code className="text-slate-200">{detail.current_step}</code>
+                </div>
+              )}
+              {detail.outcome && (
+                <div className="mt-1 text-xs text-slate-400">
+                  Outcome: <code className="text-slate-200">{detail.outcome}</code>
+                </div>
+              )}
+            </div>
+
+            {/* Timeline */}
+            <div>
+              <div className="text-[11px] font-bold text-slate-500 uppercase tracking-wider mb-2">Timeline</div>
+              <div className="space-y-1.5">
+                {[
+                  { dot: '#22c55e', label: 'Criado',    ts: detail.created_at },
+                  detail.suspended_at ? { dot: '#eab308', label: 'Suspenso',   ts: detail.suspended_at } : null,
+                  detail.resumed_at   ? { dot: '#3b82f6', label: 'Retomado',   ts: detail.resumed_at   } : null,
+                  detail.completed_at ? { dot: '#22c55e', label: 'Concluído',  ts: detail.completed_at } : null,
+                ].filter(Boolean).map((entry, i) => (
+                  <div key={i} className="flex items-center gap-2 text-xs">
+                    <span className="w-2 h-2 rounded-full flex-shrink-0"
+                      style={{ backgroundColor: entry!.dot }} />
+                    <span className="text-slate-400 w-20 flex-shrink-0">{entry!.label}</span>
+                    <span className="text-slate-500">{new Date(entry!.ts).toLocaleString('pt-BR')}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* Suspend reason */}
+            {detail.suspend_reason && (
+              <div>
+                <div className="text-[11px] font-bold text-slate-500 uppercase tracking-wider mb-2">Motivo da suspensão</div>
+                <span className="text-xs px-2.5 py-1 rounded border border-yellow-900/60 bg-yellow-900/20 text-yellow-300">
+                  {WF_SUSPEND_LABELS[detail.suspend_reason] ?? detail.suspend_reason}
+                </span>
+              </div>
+            )}
+
+            {/* Resume token */}
+            {detail.resume_token && (
+              <div>
+                <div className="text-[11px] font-bold text-slate-500 uppercase tracking-wider mb-2">Token de retomada</div>
+                <div
+                  className="bg-slate-900 border border-slate-700 rounded px-3 py-2 text-[11px] font-mono text-slate-400 break-all cursor-pointer hover:border-slate-500"
+                  onClick={() => void navigator.clipboard.writeText(detail.resume_token!)}
+                  title="Clique para copiar">
+                  {detail.resume_token}
+                </div>
+                {detail.resume_expires_at && (
+                  <div className="mt-1 text-[11px] text-slate-600">
+                    Expira em: {new Date(detail.resume_expires_at).toLocaleString('pt-BR')}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Origin session link */}
+            {detail.origin_session_id && (
+              <div>
+                <div className="text-[11px] font-bold text-slate-500 uppercase tracking-wider mb-2">Sessão de origem</div>
+                <code className="text-xs text-blue-400 font-mono">{detail.origin_session_id}</code>
+              </div>
+            )}
+          </div>
+
+          {/* Cancel button */}
+          {['active', 'suspended'].includes(detail.status) && (
+            <div className="px-4 py-3 border-t border-slate-800 flex-shrink-0">
+              <button onClick={handleCancel}
+                className="w-full py-2 rounded border border-red-800 bg-red-950 text-red-300 text-sm font-semibold hover:bg-red-900 transition-colors">
+                Cancelar processo
+              </button>
+            </div>
+          )}
+        </div>
+      ) : (
+        <div className="flex-1 flex flex-col items-center justify-center text-slate-500">
+          <div className="text-4xl mb-3">⚙️</div>
+          <div className="text-sm">Selecione um processo para ver detalhes</div>
+        </div>
+      )}
+    </div>
+  )
+}
+
 // ── Main MonitorTab ────────────────────────────────────────────────────────
 
 export function MonitorTab({ tenantId, filters }: Props) {
+  const [scope, setScope] = useState<MonitorScope>('sessions')
   const { pools, status } = usePoolViews(tenantId)
   const [vizFormat, setVizFormat] = useState<VizFormat>('bars')
   const [drillLevel, setDrillLevel] = useState<DrillLevel>('pools')
@@ -311,83 +560,116 @@ export function MonitorTab({ tenantId, filters }: Props) {
     setSelectedSegment(null)
   }
 
-  const isDark = vizFormat === 'heatmap'
+  const isDark = vizFormat === 'heatmap' && scope === 'sessions'
 
   return (
-    <div className="flex h-full overflow-hidden" style={{ backgroundColor: isDark ? '#0f172a' : '#f8fafc' }}>
+    <div className="flex flex-col h-full overflow-hidden" style={{ backgroundColor: isDark ? '#0f172a' : '#f8fafc' }}>
+
+      {/* ── Scope toggle + toolbar ────────────────────────────────────── */}
+      <div className="flex items-center gap-3 px-4 py-2.5 flex-shrink-0 border-b"
+        style={{ backgroundColor: isDark ? '#0a1628' : '#ffffff', borderColor: isDark ? '#1e293b' : '#e5e7eb' }}>
+
+        {/* Scope selector: Sessões | Processos */}
+        <div className="flex items-center gap-0.5 bg-gray-100 rounded-lg p-0.5 flex-shrink-0">
+          {([
+            { id: 'sessions' as MonitorScope, label: 'Sessões',  icon: '📡' },
+            { id: 'processes' as MonitorScope, label: 'Processos', icon: '⚙️' },
+          ]).map(opt => (
+            <button key={opt.id} onClick={() => setScope(opt.id)}
+              className="flex items-center gap-1 px-3 py-1 rounded-md text-xs font-medium transition-all"
+              style={{
+                backgroundColor: scope === opt.id ? '#fff' : 'transparent',
+                color:           scope === opt.id ? '#1B4F8A' : '#6b7280',
+                boxShadow:       scope === opt.id ? '0 1px 3px rgba(0,0,0,0.12)' : 'none',
+              }}>
+              <span>{opt.icon}</span>
+              <span>{opt.label}</span>
+            </button>
+          ))}
+        </div>
+
+        {scope === 'sessions' && (
+          <>
+            {/* Viz format selector */}
+            <div className="flex items-center gap-0.5 bg-gray-100 rounded-lg p-0.5">
+              {VIZ_OPTIONS.map(opt => (
+                <button key={opt.id} onClick={() => setVizFormat(opt.id)} title={opt.label}
+                  className="flex items-center gap-1 px-2.5 py-1 rounded-md text-xs font-medium transition-all"
+                  style={{
+                    backgroundColor: vizFormat === opt.id ? '#fff' : 'transparent',
+                    color:           vizFormat === opt.id ? '#1B4F8A' : '#6b7280',
+                    boxShadow:       vizFormat === opt.id ? '0 1px 3px rgba(0,0,0,0.12)' : 'none',
+                  }}>
+                  <span>{opt.icon}</span>
+                  <span className="hidden sm:inline">{opt.label}</span>
+                </button>
+              ))}
+            </div>
+
+            <ConnectionPill status={status} />
+
+            {/* Filter context label */}
+            {(filters.poolId || filters.channel) && (
+              <span className="text-xs px-2 py-0.5 rounded-full bg-primary/10 text-primary font-medium">
+                {highlightedCount} de {sortedPools.length} em destaque
+              </span>
+            )}
+
+            {/* Breadcrumb for drill-down */}
+            {drillLevel !== 'pools' && (
+              <div className="flex items-center gap-1 text-xs ml-auto flex-wrap" style={{ color: isDark ? '#94a3b8' : '#6b7280' }}>
+                <button onClick={goBackToPools} className="hover:underline">Pools</button>
+                <span className="mx-0.5">/</span>
+                {drillLevel === 'sessions'
+                  ? <span className="font-semibold" style={{ color: isDark ? '#e2e8f0' : '#111827' }}>
+                      {selectedPool?.replace(/_/g, ' ')}
+                    </span>
+                  : <button onClick={goBackToSessions} className="hover:underline">
+                      {selectedPool?.replace(/_/g, ' ')}
+                    </button>
+                }
+                {(drillLevel === 'segments' || drillLevel === 'transcript') && selectedSession && (
+                  <>
+                    <span className="mx-0.5">/</span>
+                    {drillLevel === 'segments'
+                      ? <span className="font-semibold font-mono text-[11px]" style={{ color: isDark ? '#e2e8f0' : '#111827' }}>
+                          …{selectedSession.slice(-10)}
+                        </span>
+                      : <button onClick={goBackToSegments} className="hover:underline font-mono text-[11px]">
+                          …{selectedSession.slice(-10)}
+                        </button>
+                    }
+                  </>
+                )}
+                {drillLevel === 'transcript' && selectedSegment && (
+                  <>
+                    <span className="mx-0.5">/</span>
+                    <span className="font-semibold" style={{ color: isDark ? '#e2e8f0' : '#111827' }}>
+                      {selectedSegment.role}
+                      {selectedSegment.ended_at === null && (
+                        <span className="ml-1 text-green-600">●</span>
+                      )}
+                    </span>
+                  </>
+                )}
+              </div>
+            )}
+          </>
+        )}
+      </div>
+
+      {/* ── Scope content ─────────────────────────────────────────────── */}
+      {scope === 'processes' && (
+        <div className="flex-1 overflow-hidden">
+          <ProcessosView tenantId={tenantId} />
+        </div>
+      )}
+
+      {scope === 'sessions' && (
+      <div className="flex flex-1 overflow-hidden">
 
       {/* ── Left: pool grid ─────────────────────────────────────────── */}
       <div className="flex flex-col flex-1 overflow-hidden">
-
-        {/* Toolbar */}
-        <div className="flex items-center gap-3 px-4 py-2.5 flex-shrink-0 border-b"
-          style={{ backgroundColor: isDark ? '#0a1628' : '#ffffff', borderColor: isDark ? '#1e293b' : '#e5e7eb' }}>
-
-          {/* Viz format selector */}
-          <div className="flex items-center gap-0.5 bg-gray-100 rounded-lg p-0.5">
-            {VIZ_OPTIONS.map(opt => (
-              <button key={opt.id} onClick={() => setVizFormat(opt.id)} title={opt.label}
-                className="flex items-center gap-1 px-2.5 py-1 rounded-md text-xs font-medium transition-all"
-                style={{
-                  backgroundColor: vizFormat === opt.id ? '#fff' : 'transparent',
-                  color:           vizFormat === opt.id ? '#1B4F8A' : '#6b7280',
-                  boxShadow:       vizFormat === opt.id ? '0 1px 3px rgba(0,0,0,0.12)' : 'none',
-                }}>
-                <span>{opt.icon}</span>
-                <span className="hidden sm:inline">{opt.label}</span>
-              </button>
-            ))}
-          </div>
-
-          <ConnectionPill status={status} />
-
-          {/* Filter context label */}
-          {(filters.poolId || filters.channel) && (
-            <span className="text-xs px-2 py-0.5 rounded-full bg-primary/10 text-primary font-medium">
-              {highlightedCount} de {sortedPools.length} em destaque
-            </span>
-          )}
-
-          {/* Breadcrumb for drill-down */}
-          {drillLevel !== 'pools' && (
-            <div className="flex items-center gap-1 text-xs ml-auto flex-wrap" style={{ color: isDark ? '#94a3b8' : '#6b7280' }}>
-              <button onClick={goBackToPools} className="hover:underline">Pools</button>
-              <span className="mx-0.5">/</span>
-              {drillLevel === 'sessions'
-                ? <span className="font-semibold" style={{ color: isDark ? '#e2e8f0' : '#111827' }}>
-                    {selectedPool?.replace(/_/g, ' ')}
-                  </span>
-                : <button onClick={goBackToSessions} className="hover:underline">
-                    {selectedPool?.replace(/_/g, ' ')}
-                  </button>
-              }
-              {(drillLevel === 'segments' || drillLevel === 'transcript') && selectedSession && (
-                <>
-                  <span className="mx-0.5">/</span>
-                  {drillLevel === 'segments'
-                    ? <span className="font-semibold font-mono text-[11px]" style={{ color: isDark ? '#e2e8f0' : '#111827' }}>
-                        …{selectedSession.slice(-10)}
-                      </span>
-                    : <button onClick={goBackToSegments} className="hover:underline font-mono text-[11px]">
-                        …{selectedSession.slice(-10)}
-                      </button>
-                  }
-                </>
-              )}
-              {drillLevel === 'transcript' && selectedSegment && (
-                <>
-                  <span className="mx-0.5">/</span>
-                  <span className="font-semibold" style={{ color: isDark ? '#e2e8f0' : '#111827' }}>
-                    {selectedSegment.role}
-                    {selectedSegment.ended_at === null && (
-                      <span className="ml-1 text-green-600">●</span>
-                    )}
-                  </span>
-                </>
-              )}
-            </div>
-          )}
-        </div>
 
         {/* Pool grid or drill-down */}
         <div className="flex-1 overflow-auto p-4">
@@ -478,6 +760,9 @@ export function MonitorTab({ tenantId, filters }: Props) {
           )}
         </div>
       </div>
-    </div>
+      </div>  {/* /sessions flex wrapper */}
+      )}
+
+    </div>  {/* /outer flex-col */}
   )
 }

@@ -100,7 +100,11 @@ def _resolve_date(
             return "holiday", []
         return "holiday", holiday["override_slots"]
 
-    # 3. Weekly schedule
+    # 3. always_open bypasses weekly_schedule — full 24h, holidays/exceptions still apply above
+    if cal.get("always_open"):
+        return "open", None   # None sentinel = full day (callers must handle)
+
+    # 4. Weekly schedule
     day_name = _DAY_NAMES[d.weekday()]
     for day_sched in cal.get("weekly_schedule", []):
         if day_sched.get("day") == day_name:
@@ -137,7 +141,11 @@ def _calendar_is_open(cal: dict, holidays: list[dict], at: datetime) -> bool:
     local_dt = _to_local(at, tz)
     h_index = _build_holidays_index(holidays)
     status, slots = _resolve_date(cal, h_index, local_dt.date())
-    if status == "closed" or not slots:
+    if status == "closed":
+        return False
+    if slots is None:          # always_open full day
+        return True
+    if not slots:              # holiday/closed with no override slots
         return False
     return _in_slots(local_dt.time(), slots)
 
@@ -150,6 +158,8 @@ def _calendar_status(cal: dict, holidays: list[dict], at: datetime) -> str:
     status, slots = _resolve_date(cal, h_index, local_dt.date())
     if status == "closed":
         return "closed"
+    if slots is None:          # always_open full day (exceptions/holidays already handled above)
+        return "open"
     if not slots:
         # holiday or open day with no time slots → treated as closed
         return status  # preserves "holiday" vs "closed" distinction
@@ -172,7 +182,14 @@ def _calendar_next_open(
     for day_offset in range(_MAX_LOOKAHEAD_DAYS):
         check_date = local_dt.date() + timedelta(days=day_offset)
         _status, slots = _resolve_date(cal, h_index, check_date)
-        if _status == "closed" or not slots:
+        if _status == "closed":
+            continue
+        if slots is None:
+            # always_open full day — next open moment is right now (or start of next open day)
+            candidate_time = local_dt.time() if day_offset == 0 else time(0, 0)
+            candidate = tz.localize(datetime.combine(check_date, candidate_time))
+            return candidate.astimezone(pytz.UTC).replace(tzinfo=pytz.UTC)
+        if not slots:
             continue
         for slot in slots:
             open_t  = _parse_time(slot["open"])

@@ -76,6 +76,7 @@ interface CalendarObj {
   name:            string
   description:     string
   timezone:        string
+  always_open:     boolean
   weekly_schedule: WeeklyDaySchedule[]
   holiday_set_ids: string[]
   exceptions:      unknown[]
@@ -421,11 +422,12 @@ function CalendarsTab({ holidaySets }: CalendarsTabProps) {
   const [saving,    setSaving]    = useState(false)
 
   // Form state
-  const [fName,     setFName]     = useState('')
-  const [fDesc,     setFDesc]     = useState('')
-  const [fTz,       setFTz]       = useState('America/Sao_Paulo')
-  const [fSched,    setFSched]    = useState<WeeklyDaySchedule[]>([])
-  const [fHsIds,    setFHsIds]    = useState<string[]>([])
+  const [fName,       setFName]       = useState('')
+  const [fDesc,       setFDesc]       = useState('')
+  const [fTz,         setFTz]         = useState('America/Sao_Paulo')
+  const [fAlwaysOpen, setFAlwaysOpen] = useState(false)
+  const [fSched,      setFSched]      = useState<WeeklyDaySchedule[]>([])
+  const [fHsIds,      setFHsIds]      = useState<string[]>([])
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -444,13 +446,15 @@ function CalendarsTab({ holidaySets }: CalendarsTabProps) {
 
   const openCreate = () => {
     setEditing(null)
-    setFName(''); setFDesc(''); setFTz('America/Sao_Paulo'); setFSched([]); setFHsIds([])
+    setFName(''); setFDesc(''); setFTz('America/Sao_Paulo')
+    setFAlwaysOpen(false); setFSched([]); setFHsIds([])
     setShowForm(true)
   }
 
   const openEdit = (c: CalendarObj) => {
     setEditing(c)
     setFName(c.name); setFDesc(c.description); setFTz(c.timezone)
+    setFAlwaysOpen(c.always_open ?? false)
     setFSched(c.weekly_schedule); setFHsIds(c.holiday_set_ids)
     setShowForm(true)
   }
@@ -465,7 +469,8 @@ function CalendarsTab({ holidaySets }: CalendarsTabProps) {
         name:            fName,
         description:     fDesc,
         timezone:        fTz,
-        weekly_schedule: fSched,
+        always_open:     fAlwaysOpen,
+        weekly_schedule: fAlwaysOpen ? [] : fSched,
         holiday_set_ids: fHsIds,
         exceptions:      editing?.exceptions ?? [],
       }
@@ -499,6 +504,7 @@ function CalendarsTab({ holidaySets }: CalendarsTabProps) {
   }
 
   const scheduleLabel = (c: CalendarObj) => {
+    if (c.always_open) return '24×7'
     const active = c.weekly_schedule
       .filter(s => s.open)
       .map(s => {
@@ -547,9 +553,15 @@ function CalendarsTab({ holidaySets }: CalendarsTabProps) {
                   <span className="text-[11px] bg-gray-100 text-gray-600 px-2 py-0.5 rounded-full">
                     🌍 {c.timezone}
                   </span>
-                  <span className="text-[11px] bg-indigo-50 text-indigo-700 px-2 py-0.5 rounded-full truncate max-w-xs">
-                    📅 {scheduleLabel(c)}
-                  </span>
+                  {c.always_open ? (
+                    <span className="text-[11px] bg-indigo-600 text-white px-2 py-0.5 rounded-full font-medium">
+                      ⚡ 24×7
+                    </span>
+                  ) : (
+                    <span className="text-[11px] bg-indigo-50 text-indigo-700 px-2 py-0.5 rounded-full truncate max-w-xs">
+                      📅 {scheduleLabel(c)}
+                    </span>
+                  )}
                   {c.holiday_set_ids.length > 0 && (
                     <span className="text-[11px] bg-amber-50 text-amber-700 px-2 py-0.5 rounded-full">
                       🏖️ {c.holiday_set_ids.length} conj. feriados
@@ -605,10 +617,33 @@ function CalendarsTab({ holidaySets }: CalendarsTabProps) {
               </select>
             </div>
 
-            <div>
-              <label className="block text-xs font-medium text-gray-700 mb-2">{t('calendar.schedule')}</label>
-              <WeeklyEditor schedule={fSched} onChange={setFSched} />
+            {/* 24x7 toggle */}
+            <div className="flex items-center justify-between px-3 py-2.5 bg-indigo-50 rounded-lg border border-indigo-100">
+              <div>
+                <p className="text-sm font-medium text-indigo-800">Funcionamento 24×7</p>
+                <p className="text-xs text-indigo-600 mt-0.5">
+                  Sempre aberto — feriados e exceções ainda se aplicam
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setFAlwaysOpen(v => !v)}
+                className={`relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full transition-colors duration-200 ease-in-out focus:outline-none ${
+                  fAlwaysOpen ? 'bg-indigo-600' : 'bg-gray-300'
+                }`}
+              >
+                <span className={`inline-block h-5 w-5 transform rounded-full bg-white shadow transition duration-200 ease-in-out mt-0.5 ${
+                  fAlwaysOpen ? 'translate-x-5' : 'translate-x-0.5'
+                }`} />
+              </button>
             </div>
+
+            {!fAlwaysOpen && (
+              <div>
+                <label className="block text-xs font-medium text-gray-700 mb-2">{t('calendar.schedule')}</label>
+                <WeeklyEditor schedule={fSched} onChange={setFSched} />
+              </div>
+            )}
 
             {holidaySets.length > 0 && (
               <div>

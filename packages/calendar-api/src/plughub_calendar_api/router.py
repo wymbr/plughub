@@ -165,6 +165,7 @@ class CalendarCreate(BaseModel):
     name:            str
     description:     str = ""
     timezone:        str | None = None  # None → inherit tenant default (or platform default)
+    always_open:     bool = False        # True = 24/7; holidays/exceptions still apply
     weekly_schedule: list[dict] = Field(default_factory=list)
     holiday_set_ids: list[str]  = Field(default_factory=list)
     exceptions:      list[dict] = Field(default_factory=list)
@@ -174,6 +175,7 @@ class CalendarUpdate(BaseModel):
     name:            str | None = None
     description:     str | None = None
     timezone:        str | None = None
+    always_open:     bool | None = None
     weekly_schedule: list[dict] | None = None
     holiday_set_ids: list[str]  | None = None
     exceptions:      list[dict] | None = None

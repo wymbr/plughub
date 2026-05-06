@@ -1,9 +1,10 @@
 {
   "title": "Contatos",
   "tabs": {
-    "list":    "Lista",
-    "monitor": "Monitor",
-    "analysis": "Análise"
+    "list":      "Lista",
+    "relatorio": "Relatório",
+    "monitor":   "Monitor",
+    "analysis":  "Análise"
   },
   "noTenant": "Sessão sem tenant. Faça login novamente.",
   "detail": {

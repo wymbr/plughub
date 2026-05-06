@@ -54,12 +54,19 @@ CREATE TABLE IF NOT EXISTS calendar.calendars (
     name             TEXT        NOT NULL,
     description      TEXT        NOT NULL DEFAULT '',
     timezone         TEXT        NOT NULL DEFAULT 'America/Sao_Paulo',
+    always_open      BOOLEAN     NOT NULL DEFAULT FALSE,
     weekly_schedule  JSONB       NOT NULL DEFAULT '[]',
     holiday_set_ids  JSONB       NOT NULL DEFAULT '[]',
     exceptions       JSONB       NOT NULL DEFAULT '[]',
     created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at       TIMESTAMPTZ NOT NULL DEFAULT now()
 )
+"""
+
+# Idempotent migration: add always_open to pre-existing calendars tables
+_DDL_CALENDARS_ADD_ALWAYS_OPEN = """
+ALTER TABLE calendar.calendars
+ADD COLUMN IF NOT EXISTS always_open BOOLEAN NOT NULL DEFAULT FALSE
 """
 
 _DDL_CALENDARS_UNIQ = (
@@ -76,8 +83,7 @@ _DDL_ASSOCIATIONS = """
 CREATE TABLE IF NOT EXISTS calendar.calendar_associations (
     id           UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
     tenant_id    TEXT        NOT NULL,
-    entity_type  TEXT        NOT NULL
-                             CHECK (entity_type IN ('tenant','channel','pool','workflow')),
+    entity_type  TEXT        NOT NULL,
     entity_id    TEXT        NOT NULL,
     calendar_id  UUID        NOT NULL REFERENCES calendar.calendars(id) ON DELETE CASCADE,
     operator     TEXT        NOT NULL DEFAULT 'UNION'
@@ -92,6 +98,15 @@ _DDL_ASSOCIATIONS_IDX = (
     "CREATE INDEX IF NOT EXISTS idx_assoc_entity "
     "ON calendar.calendar_associations (tenant_id, entity_type, entity_id, priority)"
 )
+
+# Idempotent migration: drop legacy CHECK constraint on entity_type (now open enum)
+_DDL_ASSOC_DROP_ENTITY_CHECK = """
+DO $$ BEGIN
+  ALTER TABLE calendar.calendar_associations
+    DROP CONSTRAINT IF EXISTS calendar_associations_entity_type_check;
+EXCEPTION WHEN undefined_table THEN NULL;
+END $$
+"""
 
 _DDL_TENANT_CONFIG = """
 CREATE TABLE IF NOT EXISTS calendar.tenant_config (
@@ -116,8 +131,12 @@ async def ensure_schema(pool: asyncpg.Pool) -> None:
             await conn.execute(_DDL_CALENDARS)
             await conn.execute(_DDL_CALENDARS_UNIQ)
             await conn.execute(_DDL_CALENDARS_IDX)
+            # Idempotent migration: add always_open to pre-existing tables
+            await conn.execute(_DDL_CALENDARS_ADD_ALWAYS_OPEN)
             await conn.execute(_DDL_ASSOCIATIONS)
             await conn.execute(_DDL_ASSOCIATIONS_IDX)
+            # Idempotent migration: remove legacy entity_type CHECK constraint
+            await conn.execute(_DDL_ASSOC_DROP_ENTITY_CHECK)
             await conn.execute(_DDL_TENANT_CONFIG)
     logger.info("calendar schema ensured")
 
@@ -217,6 +236,7 @@ def _row_to_calendar(row: asyncpg.Record) -> dict[str, Any]:
         "name":            row["name"],
         "description":     row["description"],
         "timezone":        row["timezone"],
+        "always_open":     row["always_open"],
         "weekly_schedule": json.loads(row["weekly_schedule"]),
         "holiday_set_ids": json.loads(row["holiday_set_ids"]),
         "exceptions":      json.loads(row["exceptions"]),
@@ -254,13 +274,14 @@ async def db_create_calendar(pool: asyncpg.Pool, data: dict) -> dict:
         """
         INSERT INTO calendar.calendars
             (installation_id, organization_id, tenant_id, scope, name, description,
-             timezone, weekly_schedule, holiday_set_ids, exceptions)
-        VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9::jsonb,$10::jsonb)
+             timezone, always_open, weekly_schedule, holiday_set_ids, exceptions)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10::jsonb,$11::jsonb)
         RETURNING *
         """,
         data["installation_id"], data["organization_id"], data.get("tenant_id"),
         data.get("scope", "tenant"), data["name"], data.get("description", ""),
         data.get("timezone", "America/Sao_Paulo"),
+        bool(data.get("always_open", False)),
         json.dumps(data.get("weekly_schedule", [])),
         json.dumps(data.get("holiday_set_ids", [])),
         json.dumps(data.get("exceptions", [])),
@@ -275,15 +296,17 @@ async def db_update_calendar(pool: asyncpg.Pool, id: str, data: dict) -> dict | 
         SET name            = COALESCE($2, name),
             description     = COALESCE($3, description),
             timezone        = COALESCE($4, timezone),
-            weekly_schedule = COALESCE($5::jsonb, weekly_schedule),
-            holiday_set_ids = COALESCE($6::jsonb, holiday_set_ids),
-            exceptions      = COALESCE($7::jsonb, exceptions),
+            always_open     = COALESCE($5, always_open),
+            weekly_schedule = COALESCE($6::jsonb, weekly_schedule),
+            holiday_set_ids = COALESCE($7::jsonb, holiday_set_ids),
+            exceptions      = COALESCE($8::jsonb, exceptions),
             updated_at      = now()
         WHERE id = $1
         RETURNING *
         """,
         UUID(id),
         data.get("name"), data.get("description"), data.get("timezone"),
+        bool(data["always_open"]) if "always_open" in data else None,
         json.dumps(data["weekly_schedule"]) if "weekly_schedule" in data else None,
         json.dumps(data["holiday_set_ids"]) if "holiday_set_ids" in data else None,
         json.dumps(data["exceptions"]) if "exceptions" in data else None,
@@ -362,7 +385,7 @@ async def db_get_associations_for_engine(
     rows = await pool.fetch(
         """
         SELECT a.id, a.operator, a.priority,
-               c.id AS calendar_id, c.timezone,
+               c.id AS calendar_id, c.timezone, c.always_open,
                c.weekly_schedule, c.holiday_set_ids, c.exceptions
         FROM calendar.calendar_associations a
         JOIN calendar.calendars c ON c.id = a.calendar_id
@@ -375,14 +398,15 @@ async def db_get_associations_for_engine(
     for r in rows:
         hs_ids = json.loads(r["holiday_set_ids"])
         result.append({
-            "assoc_id":       str(r["id"]),
-            "operator":       r["operator"],
-            "priority":       r["priority"],
-            "calendar_id":    str(r["calendar_id"]),
-            "timezone":       r["timezone"],
+            "assoc_id":        str(r["id"]),
+            "operator":        r["operator"],
+            "priority":        r["priority"],
+            "calendar_id":     str(r["calendar_id"]),
+            "timezone":        r["timezone"],
+            "always_open":     r["always_open"],
             "weekly_schedule": json.loads(r["weekly_schedule"]),
             "holiday_set_ids": hs_ids,
-            "exceptions":     json.loads(r["exceptions"]),
+            "exceptions":      json.loads(r["exceptions"]),
         })
     return result
 

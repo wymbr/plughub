@@ -1,7 +1,7 @@
 /**
  * ContactsPage — /contacts
  *
- * Unified tab shell: Lista | Monitor | Análise
+ * Unified tab shell: Relatório | Monitor | Análise
  *
  * - Filter bar is shared above all tabs (ContactFilters state lives here)
  * - ?tab= URL param syncs the active tab
@@ -170,13 +170,13 @@ function ContactDetail({ tenantId, sessionId, onBack }: {
 
 // ─── Tab definition ───────────────────────────────────────────────────────────
 
-type ContactTab = 'lista' | 'monitor' | 'analise'
+type ContactTab = 'relatorio' | 'monitor' | 'analise'
 
 // Note: Tab labels are i18n keys and will be resolved in the component
 const ALL_TABS: { id: ContactTab; label: string; icon: string; abac?: { module: string; field: string } }[] = [
-  { id: 'lista',   label: 'tabs.list',    icon: '📋' },
-  { id: 'monitor', label: 'tabs.monitor',  icon: '📡', abac: { module: 'contacts', field: 'operacao'   } },
-  { id: 'analise', label: 'tabs.analysis',  icon: '📊', abac: { module: 'contacts', field: 'visualizar' } },
+  { id: 'relatorio', label: 'tabs.relatorio', icon: '📋' },
+  { id: 'monitor',   label: 'tabs.monitor',   icon: '📡', abac: { module: 'contacts', field: 'operacao'   } },
+  { id: 'analise',   label: 'tabs.analysis',  icon: '📊', abac: { module: 'contacts', field: 'visualizar' } },
 ]
 
 // ─── Filter bar component ─────────────────────────────────────────────────────
@@ -299,7 +299,7 @@ export default function ContactsPage() {
   const { t } = useTranslation('contacts')
   const { session, tenantId, perms } = useAuth()
 
-  // Filter tabs by ABAC — Lista is always visible; Monitor needs operacao; Análise needs visualizar
+  // Filter tabs by ABAC — Relatório is always visible; Monitor needs operacao; Análise needs visualizar
   const TABS = ALL_TABS.filter(tab =>
     !tab.abac || perms.can(tab.abac.module, tab.abac.field)
   )
@@ -309,7 +309,7 @@ export default function ContactsPage() {
   const rawTab = searchParams.get('tab') as ContactTab | null
   // If requested tab is not accessible, fall back to first visible tab
   const activeTab: ContactTab = rawTab && validTabIds.includes(rawTab)
-    ? rawTab : (validTabIds[0] ?? 'lista')
+    ? rawTab : (validTabIds[0] ?? 'relatorio')
 
   function setTab(t: ContactTab) {
     setSearchParams(p => { p.set('tab', t); return p }, { replace: true })
@@ -371,7 +371,7 @@ export default function ContactsPage() {
 
       {/* ── Tab content ─────────────────────────────────────────────────── */}
       <div className="flex-1 overflow-hidden">
-        {activeTab === 'lista' && (
+        {activeTab === 'relatorio' && (
           <ListaTab
             tenantId={tenantId}
             filters={filters}

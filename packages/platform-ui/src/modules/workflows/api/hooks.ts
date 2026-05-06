@@ -16,14 +16,15 @@ export type WorkflowStatus = 'active' | 'suspended' | 'completed' | 'failed' | '
 export type SuspendReason  = 'approval' | 'input' | 'webhook' | 'timer'
 
 export interface WorkflowInstance {
-  id:               string
-  installation_id:  string
-  organization_id:  string
-  tenant_id:        string
-  flow_id:          string
-  session_id?:      string
-  pool_id?:         string
-  status:           WorkflowStatus
+  id:                 string
+  installation_id:    string
+  organization_id:    string
+  tenant_id:          string
+  flow_id:            string
+  session_id?:        string
+  origin_session_id?: string
+  pool_id?:           string
+  status:             WorkflowStatus
   current_step?:    string
   pipeline_state:   Record<string, unknown>
   suspend_reason?:  SuspendReason
