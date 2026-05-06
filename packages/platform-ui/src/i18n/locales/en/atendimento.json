@@ -1,0 +1,72 @@
+{
+  "title": "Operations Monitor",
+  "loading": "Loading…",
+  "error":   "Error loading data.",
+  "pools":   "Pools",
+  "noData":  "No data available.",
+  "monitor": {
+    "tenantNotConfigured": "Tenant not configured in session. Please login again.",
+    "heatmapTab": "Heatmap",
+    "agentesTab": "Agents",
+    "instanciasTab": "Instances",
+    "metrics": "Metrics",
+    "showMetrics": "Show metrics panel",
+    "pools": "Pools",
+    "status": {
+      "connecting": "Connecting",
+      "connected": "Connected",
+      "error": "SSE Error",
+      "closed": "Closed"
+    }
+  },
+  "metricsPanel": {
+    "title":          "Pool metrics",
+    "toggle":         "Show metrics panel",
+    "available":      "Available",
+    "queue":          "Queue",
+    "sla":            "SLA",
+    "avgScore":       "Avg score",
+    "sessions24h":    "Sessions (24h)",
+    "resolved":       "Resolved",
+    "avgHandle":      "Avg handle time",
+    "sentimentDist":  "Sentiment distribution",
+    "satisfied":      "Satisfied",
+    "neutral":        "Neutral",
+    "frustrated":     "Frustrated",
+    "angry":          "Angry",
+    "noSentiment":    "No sentiment data."
+  },
+  "breadcrumbs": {
+    "pools":    "Pools",
+    "sessions": "Sessions",
+    "segments": "Segments",
+    "transcript":"Transcript"
+  },
+  "sessionList": {
+    "channel":    "Channel",
+    "duration":   "Duration",
+    "score":      "Score",
+    "sentiment":  "Sentiment",
+    "noSessions": "No active sessions in this pool.",
+    "loading":    "Loading sessions…"
+  },
+  "segmentList": {
+    "participant": "Participant",
+    "role":        "Role",
+    "duration":    "Duration",
+    "noSegments":  "No segments for this session.",
+    "loading":     "Loading segments…"
+  },
+  "transcript": {
+    "joinSupervisor": "Join as supervisor",
+    "leaving":        "Leaving…",
+    "noMessages":     "No messages yet.",
+    "loading":        "Loading transcript…",
+    "send":           "Send",
+    "placeholder":    "Type a message…",
+    "visibility": {
+      "all":        "All participants",
+      "agentsOnly": "Agents only"
+    }
+  }
+}

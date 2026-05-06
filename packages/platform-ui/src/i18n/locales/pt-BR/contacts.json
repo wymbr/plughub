@@ -1,0 +1,101 @@
+{
+  "title": "Contatos",
+  "tabs": {
+    "list":    "Lista",
+    "monitor": "Monitor",
+    "analysis": "Análise"
+  },
+  "noTenant": "Sessão sem tenant. Faça login novamente.",
+  "detail": {
+    "back":     "← Contatos",
+    "segments": "💬 Segmentos"
+  },
+  "filter": {
+    "from":           "De",
+    "to":             "até",
+    "sessionId":      "Session ID…",
+    "allChannels":    "Todos os canais",
+    "allOutcomes":    "Todos os outcomes",
+    "moreFilters":    "Mais filtros",
+    "clearFilters":   "✕ Limpar",
+    "pool":           "Pool",
+    "agent":          "Agente",
+    "ani":            "Origem (ANI)",
+    "dnis":           "Destino (DNIS)",
+    "eventCategory":  "Evento",
+    "tags":           "Tags"
+  },
+  "insights": {
+    "loading":    "Carregando eventos…",
+    "loadError":  "Falha ao carregar eventos de negócio.",
+    "empty":      "Nenhum evento de negócio registrado nesta sessão.",
+    "registeredBy": "Registrado por:"
+  },
+  "lista": {
+    "loading":    "Carregando…",
+    "empty":      "Nenhum contato encontrado com os filtros aplicados.",
+    "page":       "Página {{page}} de {{total}}",
+    "prev":       "← Anterior",
+    "next":       "Próxima →",
+    "active":     "Em andamento",
+    "liveStatus": "ativo",
+    "columns": {
+      "sessionId":  "Session ID",
+      "channel":    "Canal",
+      "pool":       "Pool",
+      "origin":     "Origem",
+      "destination":"Destino",
+      "started":    "Iniciado",
+      "ended":      "Encerrado",
+      "duration":   "Duração",
+      "status":     "Status / Outcome",
+      "segments":   "Segmentos"
+    },
+    "count_one":   "{{count}} contato",
+    "count_other": "{{count}} contatos"
+  },
+  "monitor": {
+    "loading":       "Aguardando dados dos pools…",
+    "noData":        "Sem dados de pool disponíveis.",
+    "available":     "disponível",
+    "queue":         "fila",
+    "sla":           "SLA",
+    "breadcrumbs": {
+      "pools":    "Pools",
+      "sessions": "Sessões",
+      "segments": "Segmentos",
+      "transcript":"Transcrição"
+    },
+    "sessionList": {
+      "title":   "Sessões Ativas",
+      "empty":   "Nenhuma sessão ativa.",
+      "loading": "Carregando sessões…"
+    },
+    "segmentList": {
+      "title":   "Segmentos",
+      "empty":   "Nenhum segmento.",
+      "loading": "Carregando segmentos…"
+    }
+  },
+  "analysis": {
+    "loading":           "Calculando métricas…",
+    "contact_one":       "{{count}} contato analisado",
+    "contact_other":     "{{count}} contatos analisados",
+    "showingFirst":      "(mostrando primeiros {{limit}})",
+    "dataUnavailable":   "Dados de contatos temporariamente indisponíveis ({{error}}). Os gráficos de série histórica ainda são exibidos.",
+    "retry":             "⟳ Tentar novamente",
+    "noData":            "Sem dados",
+    "totalContacts":     "Total de contatos",
+    "resolutionRate":    "Taxa de resolução",
+    "resolved":          "{{count}} resolvidos",
+    "avgHandleTime":     "Tempo médio (HT)",
+    "activeChannels":    "Canais ativos",
+    "outcomeDistrib":    "Distribuição por Outcome",
+    "channelDistrib":    "Distribuição por Canal",
+    "volumeByPool":      "Volume por Pool",
+    "volumeChart":       "Volume de Contatos",
+    "contacts":          "Contatos",
+    "avgHandleChart":    "Tempo Médio de Atendimento",
+    "time":              "Tempo"
+  }
+}

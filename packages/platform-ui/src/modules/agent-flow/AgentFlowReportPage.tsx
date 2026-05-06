@@ -6,6 +6,7 @@
  * Reads from analytics-api GET /reports/agents/performance.
  */
 import React, { useCallback, useEffect, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { useAuth } from '@/auth/useAuth'
 import Spinner from '@/components/ui/Spinner'
 
@@ -45,6 +46,7 @@ function fmtPct(v: number): string {
 // ── Main page ──────────────────────────────────────────────────────────────────
 
 export default function AgentFlowReportPage() {
+  const { t } = useTranslation('agentFlow')
   const { tenantId, getAccessToken } = useAuth()
 
   const [rows,    setRows]    = useState<AgentPerf[]>([])
@@ -68,6 +70,7 @@ export default function AgentFlowReportPage() {
       setRows(data)
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
+      setRows([])
     } finally {
       setLoading(false)
     }
@@ -106,34 +109,34 @@ export default function AgentFlowReportPage() {
       {/* Top bar */}
       <div style={topBar}>
         <div>
-          <span style={{ fontWeight: 700, fontSize: 17, color: '#e2e8f0' }}>📊 Relatório de AgentFlow</span>
+          <span style={{ fontWeight: 700, fontSize: 17, color: '#e2e8f0' }}>📊 {t('report.title')}</span>
           <span style={{ marginLeft: 10, fontSize: 12, color: '#64748b' }}>
-            {loading ? '⟳' : `${rows.length} skill(s)`}
+            {loading ? '⟳' : t('report.skillsCount', { count: rows.length })}
           </span>
         </div>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
           <input
             value={filter}
             onChange={e => setFilter(e.target.value)}
-            placeholder="Filtrar por skill ou pool…"
+            placeholder={t('report.filterPlaceholder')}
             style={searchInput}
           />
-          <button style={btnSecondary} onClick={load}>↻ Atualizar</button>
+          <button style={btnSecondary} onClick={load}>↻ {t('actions.refresh')}</button>
         </div>
       </div>
 
       {error && (
         <div style={{ padding: '10px 20px', background: '#7f1d1d', color: '#fca5a5', fontSize: 12 }}>
-          Erro: {error}
+          {t('report.error')}: {error}
         </div>
       )}
 
       {/* KPI bar */}
       <div style={kpiBar}>
-        <KpiCard label="Total de sessões" value={totalSessions.toLocaleString('pt-BR')} color="#3b82f6" />
-        <KpiCard label="Duração média"    value={fmtDuration(avgDuration)}              color="#22c55e" />
-        <KpiCard label="Taxa de escalação" value={fmtPct(avgEscalation)}               color="#eab308" />
-        <KpiCard label="Skills monitorados" value={rows.length.toString()}             color="#a78bfa" />
+        <KpiCard label={t('report.totalSessions')} value={totalSessions.toLocaleString('pt-BR')} color="#3b82f6" />
+        <KpiCard label={t('report.avgDuration')}    value={fmtDuration(avgDuration)}              color="#22c55e" />
+        <KpiCard label={t('report.avgEscalation')} value={fmtPct(avgEscalation)}               color="#eab308" />
+        <KpiCard label={t('report.skillsMonitored')} value={rows.length.toString()}             color="#a78bfa" />
       </div>
 
       {/* Table */}
@@ -143,7 +146,7 @@ export default function AgentFlowReportPage() {
         )}
         {!loading && rows.length === 0 && !error && (
           <div style={{ padding: '60px 24px', textAlign: 'center', color: '#475569', fontSize: 13 }}>
-            Nenhum dado de performance disponível. Execute sessões de agentes para ver relatórios.
+            {t('report.noData')}
           </div>
         )}
         {filtered.length > 0 && (
@@ -151,12 +154,12 @@ export default function AgentFlowReportPage() {
             <thead>
               <tr>
                 {([
-                  ['agent_type_id',  'Skill / Agente',    false],
-                  ['pool_id',        'Pool',              false],
-                  ['total_sessions', 'Sessões',           true],
-                  ['avg_duration_ms','Duração média',     true],
-                  ['escalation_rate','Taxa de escalação', true],
-                  ['handoff_rate',   'Taxa de handoff',   true],
+                  ['agent_type_id',  t('report.skillName'),    false],
+                  ['pool_id',        t('report.pool'),         false],
+                  ['total_sessions', t('report.sessions'),     true],
+                  ['avg_duration_ms',t('report.avgDuration'),  true],
+                  ['escalation_rate',t('report.escalationRate'), true],
+                  ['handoff_rate',   t('report.handoffRate'),  true],
                 ] as [keyof AgentPerf, string, boolean][]).map(([key, label, sortable]) => (
                   <th
                     key={key}
@@ -167,7 +170,7 @@ export default function AgentFlowReportPage() {
                     {sortable && sortKey === key && (sortDir === 'asc' ? ' ↑' : ' ↓')}
                   </th>
                 ))}
-                <th style={thStyle}>Outcomes</th>
+                <th style={thStyle}>{t('report.outcomes')}</th>
               </tr>
             </thead>
             <tbody>

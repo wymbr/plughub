@@ -93,6 +93,17 @@ _DDL_ASSOCIATIONS_IDX = (
     "ON calendar.calendar_associations (tenant_id, entity_type, entity_id, priority)"
 )
 
+_DDL_TENANT_CONFIG = """
+CREATE TABLE IF NOT EXISTS calendar.tenant_config (
+    tenant_id         TEXT        PRIMARY KEY,
+    default_timezone  TEXT        NOT NULL DEFAULT 'America/Sao_Paulo',
+    updated_at        TIMESTAMPTZ NOT NULL DEFAULT now()
+)
+"""
+
+# Platform-level default timezone used when the tenant has no explicit config
+_PLATFORM_DEFAULT_TIMEZONE = "America/Sao_Paulo"
+
 
 async def ensure_schema(pool: asyncpg.Pool) -> None:
     async with pool.acquire() as conn:
@@ -107,6 +118,7 @@ async def ensure_schema(pool: asyncpg.Pool) -> None:
             await conn.execute(_DDL_CALENDARS_IDX)
             await conn.execute(_DDL_ASSOCIATIONS)
             await conn.execute(_DDL_ASSOCIATIONS_IDX)
+            await conn.execute(_DDL_TENANT_CONFIG)
     logger.info("calendar schema ensured")
 
 
@@ -373,6 +385,55 @@ async def db_get_associations_for_engine(
             "exceptions":     json.loads(r["exceptions"]),
         })
     return result
+
+
+# ── Tenant Config ─────────────────────────────────────────────────────────────
+
+async def db_get_tenant_config(
+    pool: asyncpg.Pool,
+    tenant_id: str,
+) -> dict[str, Any]:
+    """Return tenant config, falling back to platform defaults if not set."""
+    row = await pool.fetchrow(
+        "SELECT * FROM calendar.tenant_config WHERE tenant_id = $1",
+        tenant_id,
+    )
+    if row:
+        return {
+            "tenant_id":        row["tenant_id"],
+            "default_timezone": row["default_timezone"],
+            "updated_at":       row["updated_at"].isoformat(),
+        }
+    # No config row yet — return defaults without persisting
+    return {
+        "tenant_id":        tenant_id,
+        "default_timezone": _PLATFORM_DEFAULT_TIMEZONE,
+        "updated_at":       None,
+    }
+
+
+async def db_upsert_tenant_config(
+    pool: asyncpg.Pool,
+    tenant_id: str,
+    default_timezone: str,
+) -> dict[str, Any]:
+    """Create or update the tenant's default timezone."""
+    row = await pool.fetchrow(
+        """
+        INSERT INTO calendar.tenant_config (tenant_id, default_timezone)
+        VALUES ($1, $2)
+        ON CONFLICT (tenant_id)
+        DO UPDATE SET default_timezone = EXCLUDED.default_timezone,
+                      updated_at       = now()
+        RETURNING *
+        """,
+        tenant_id, default_timezone,
+    )
+    return {
+        "tenant_id":        row["tenant_id"],
+        "default_timezone": row["default_timezone"],
+        "updated_at":       row["updated_at"].isoformat(),
+    }
 
 
 async def db_get_holidays_for_sets(

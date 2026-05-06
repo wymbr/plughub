@@ -1,12 +1,23 @@
 # docker-compose.demo.yml
-# PlugHub Platform — Demo Environment (Arc 2 → Arc 7 completo + Arc 5 Fase 3)
+# PlugHub Platform — Demo Environment (Arc 2 → Arc 8 completo)
 #
 # Stack completa: infra + todos os módulos de aplicação + observabilidade
 #
 # Novidades neste build:
-#   • resolve step (Arc 5 Fase 3) — coleta de contexto inline e declarativa
-#     Pipeline: gap check → CRM lookup → LLM question → BLPOP → LLM extract
-#     Declarado diretamente no YAML do skill, sem depender de agente externo.
+#   • Arc 8 — Disponibilidade de Agentes: rastreamento de pausas com motivo
+#     obrigatório (PauseReasonModal), intervalo agent_pause_intervals no
+#     ClickHouse, relatório de disponibilidade por pool/período
+#     (http://localhost:5174/reports/agents)
+#
+#   • Calendar API — Fases 1–4 concluídas:
+#     Fase 1: feriados recorrentes por MM-DD (sem ano fixo)
+#     Fase 2: status 3-state open/closed/holiday
+#     Fase 3: timezone por tenant (GET/PATCH /v1/tenant-config)
+#     Fase 4: múltiplos intervalos de tempo por dia — WeeklyEditor
+#             redesenhado permite N slots (ex: pausa de almoço 12–13h)
+#
+#   • Agent Assist unificado no Platform UI (http://localhost:5174/agent-assist)
+#     Multi-pool WebSocket, Presence Sidebar, ContactList priorizada por SLA
 #
 # Uso:
 #   docker compose -f docker-compose.demo.yml up --build
@@ -29,10 +40,13 @@
 # │      Faturamento · Config · Skill Flows · Campanhas · Workflows ·          │
 # │      Usuários (Access)                                                      │
 # │                                                                             │
-# │  ① Agent Assist UI  (legacy — agente humano direto)                        │
+# │  ① Agent Assist — integrado no Platform UI (recomendado)                   │
+# │    http://localhost:5174/agent-assist?pool=retencao_humano               │
+# │                                                                             │
+# │  ② Agent Assist UI — app legado (referência)                               │
 # │    http://localhost:5173?pool=retencao_humano&agent=agente_humano_v1-001  │
 # │                                                                             │
-# │  ② WebChat cliente  (consumidor final)                                     │
+# │  ③ WebChat cliente  (consumidor final)                                     │
 # │    http://localhost:5173/webchat-test.html                                │
 # │                                                                             │
 # │  Observabilidade                                                            │
@@ -44,6 +58,8 @@
 # │    evaluation-api:  http://localhost:3400/health                          │
 # │    knowledge-api:   http://localhost:3401/health                          │
 # │    pricing-api:     http://localhost:3900/health                          │
+# │    calendar-api:    http://localhost:3700/health                          │
+# │    workflow-api:    http://localhost:3800/health                          │
 # └─────────────────────────────────────────────────────────────────────────────┘
 #
 # Flags do runner (via E2E_EXTRA_ARGS):
@@ -93,13 +109,17 @@ volumes:
 # │    http://localhost:5174/login                                            │
 # │    Email: admin@plughub.local  Senha: changeme_admin                     │
 # │                                                                            │
-# │  PASSO 2 — Monitor operacional                                            │
-# │    http://localhost:5174/monitor                                          │
-# │    Heatmap de sentimento por pool · métricas 24h · drill-down de sessão  │
+# │  PASSO 2 — Monitor operacional e Contatos                                │
+# │    http://localhost:5174/contacts?tab=monitor                            │
+# │    Lista · Monitor SSE em tempo real · Análise agregada                  │
 # │                                                                            │
-# │  PASSO 3 — Agent Assist (atendimento humano)                             │
-# │    http://localhost:5173?pool=retencao_humano&agent=agente_humano_v1-001 │
+# │  PASSO 3 — Agent Assist (atendimento humano — unificado)                 │
+# │    http://localhost:5174/agent-assist?pool=retencao_humano               │
+# │    Login como operator@plughub.local / changeme_operator                  │
 # │    Webchat do cliente: http://localhost:5173/webchat-test.html            │
+# │    • Multi-pool: sidebar com status de presença por pool                  │
+# │    • ContactList priorizada por urgência de SLA                           │
+# │    • PauseReasonModal obrigatório ao pausar (Arc 8)                      │
 # │                                                                            │
 # │  PASSO 4 — Avaliação de Qualidade (Arc 6 + ABAC)                        │
 # │    http://localhost:5174/evaluation/forms      ← formulários (admin)     │
@@ -119,15 +139,23 @@ volumes:
 # │    http://localhost:5174/dashboards       ← Dashboards drag-and-drop     │
 # │                                                                            │
 # │  PASSO 7 — Validar resolve step (Arc 5 Fase 3)                          │
-# │    O resolve step é declarado no YAML de qualquer skill com:              │
-# │      type: resolve                                                        │
-# │      required_fields:                                                     │
-# │        - tag: caller.nome                                                 │
-# │          confidence_min: 0.8                                              │
-# │          required: true                                                   │
-# │    Para validar inline: abrir Skill Flows → inspecionar o YAML           │
-# │    de agente_sac_ia_v1 e verificar se resolve step aparece.              │
+# │    Abrir Skill Flows → inspecionar YAML de agente_sac_ia_v1              │
+# │    Verificar step type: resolve com required_fields declarado             │
 # │    E2E: docker compose run e2e-runner ts-node runner.ts --ctx             │
+# │                                                                            │
+# │  PASSO 8 — Arc 8: Disponibilidade e Pausas de Agentes                   │
+# │    http://localhost:5174/reports/agents                                   │
+# │    Pausa o agente no Agent Assist → PauseReasonModal aparece              │
+# │    (selecione motivo da pausa antes de confirmar)                         │
+# │    Relatório mostra disponibilidade por pool/período e breakdown           │
+# │    de pausas por motivo                                                   │
+# │                                                                            │
+# │  PASSO 9 — Calendar API (Fases 1–4)                                      │
+# │    http://localhost:5174/workflow/calendar                                │
+# │    Criar/editar calendário → WeeklyEditor suporta múltiplos              │
+# │    intervalos por dia (botão "+ intervalo" por linha do dia)              │
+# │    Ex: Segunda 08:00–12:00 + 13:00–18:00 (pausa de almoço)               │
+# │    Namespace: tenant-config → Fuso horário padrão configurável            │
 # │                                                                            │
 # │  Observabilidade                                                           │
 # │    Kafdrop  (Kafka UI):         http://localhost:9002                      │
@@ -322,6 +350,7 @@ services:
       KAFKA_BROKERS: kafka:29092
       AGENT_REGISTRY_URL: http://agent-registry:3300
       SKILL_FLOW_URL: http://skill-flow-service:3460
+      CALENDAR_API_URL: http://calendar-api:3700
       PLUGHUB_TENANT_ID: tenant_demo
     depends_on:
       redis:

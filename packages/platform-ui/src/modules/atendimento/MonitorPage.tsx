@@ -10,6 +10,7 @@
  */
 import { useState } from 'react'
 import type React from 'react'
+import { useTranslation } from 'react-i18next'
 import { useAuth } from '@/auth/useAuth'
 import { usePoolViews } from './api/hooks'
 import { HeatmapGrid }      from './components/HeatmapGrid'
@@ -24,6 +25,7 @@ type MonitorTab = 'heatmap' | 'agentes' | 'instancias'
 type Level = 'pools' | 'sessions' | 'transcript'
 
 export default function MonitorPage() {
+  const { t } = useTranslation('atendimento')
   const { tenantId } = useAuth()
 
   const { pools, status, metrics } = usePoolViews(tenantId)
@@ -69,15 +71,15 @@ export default function MonitorPage() {
   if (!tenantId) {
     return (
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: '#64748b', fontSize: 14 }}>
-        Tenant não configurado na sessão. Faça login novamente.
+        {t('monitor.tenantNotConfigured', { defaultValue: 'Tenant not configured in session. Please login again.' })}
       </div>
     )
   }
 
   const monitorTabs: { id: MonitorTab; label: string; icon: string }[] = [
-    { id: 'heatmap',    label: 'Heatmap',   icon: '🔥' },
-    { id: 'agentes',    label: 'Agentes',   icon: '👥' },
-    { id: 'instancias', label: 'Instâncias', icon: '⚡' },
+    { id: 'heatmap',    label: t('monitor.heatmapTab', { defaultValue: 'Heatmap' }),   icon: '🔥' },
+    { id: 'agentes',    label: t('monitor.agentesTab', { defaultValue: 'Agents' }),   icon: '👥' },
+    { id: 'instancias', label: t('monitor.instanciasTab', { defaultValue: 'Instances' }), icon: '⚡' },
   ]
 
   return (
@@ -123,8 +125,8 @@ export default function MonitorPage() {
         <>
           {/* Top status bar */}
           <div style={topBarStyle}>
-            <Breadcrumb level={level} poolId={selectedPoolId} sessionId={sessionId} onPools={handleBackToPools} onSessions={handleBackToSessions} />
-            <ConnectionPill status={status} />
+            <Breadcrumb t={t} level={level} poolId={selectedPoolId} sessionId={sessionId} onPools={handleBackToPools} onSessions={handleBackToSessions} />
+            <ConnectionPill t={t} status={status} />
             <span style={{ marginLeft: 'auto', fontSize: 11, color: '#475569' }}>
               tenant: <code style={{ color: '#94a3b8' }}>{tenantId}</code>
             </span>
@@ -132,9 +134,9 @@ export default function MonitorPage() {
               <button
                 style={{ fontSize: 12, background: showMetrics ? '#1e40af' : 'none', border: '1px solid #334155', color: showMetrics ? '#93c5fd' : '#64748b', borderRadius: 6, padding: '3px 10px', cursor: 'pointer' }}
                 onClick={() => setShowMetrics(v => !v)}
-                title="Mostrar painel de métricas"
+                title={t('monitor.showMetrics', { defaultValue: 'Show metrics panel' })}
               >
-                📊 Métricas
+                📊 {t('monitor.metrics', { defaultValue: 'Metrics' })}
               </button>
             )}
           </div>
@@ -197,7 +199,8 @@ export default function MonitorPage() {
 
 // ─── Breadcrumb ───────────────────────────────────────────────────────────────
 
-function Breadcrumb({ level, poolId, sessionId, onPools, onSessions }: {
+function Breadcrumb({ t, level, poolId, sessionId, onPools, onSessions }: {
+  t:          any
   level:      string
   poolId:     string | null
   sessionId:  string | null
@@ -208,11 +211,11 @@ function Breadcrumb({ level, poolId, sessionId, onPools, onSessions }: {
   const sepStyle:   React.CSSProperties = { fontSize: 13, color: '#334155', margin: '0 4px' }
   const activeStyle: React.CSSProperties = { fontSize: 13, color: '#e2e8f0', fontWeight: 600 }
 
-  if (level === 'pools') return <span style={activeStyle}>Pools</span>
+  if (level === 'pools') return <span style={activeStyle}>{t('monitor.pools', { defaultValue: 'Pools' })}</span>
 
   if (level === 'sessions') return (
     <span style={{ display: 'flex', alignItems: 'center' }}>
-      <span style={crumbStyle} onClick={onPools}>Pools</span>
+      <span style={crumbStyle} onClick={onPools}>{t('monitor.pools', { defaultValue: 'Pools' })}</span>
       <span style={sepStyle}>/</span>
       <span style={activeStyle}>{poolId?.replace(/_/g, ' ')}</span>
     </span>
@@ -220,7 +223,7 @@ function Breadcrumb({ level, poolId, sessionId, onPools, onSessions }: {
 
   return (
     <span style={{ display: 'flex', alignItems: 'center' }}>
-      <span style={crumbStyle} onClick={onPools}>Pools</span>
+      <span style={crumbStyle} onClick={onPools}>{t('monitor.pools', { defaultValue: 'Pools' })}</span>
       <span style={sepStyle}>/</span>
       <span style={crumbStyle} onClick={onSessions}>{poolId?.replace(/_/g, ' ')}</span>
       <span style={sepStyle}>/</span>
@@ -233,17 +236,23 @@ function Breadcrumb({ level, poolId, sessionId, onPools, onSessions }: {
 
 // ─── ConnectionPill ───────────────────────────────────────────────────────────
 
-function ConnectionPill({ status }: { status: string }) {
-  const colors: Record<string, { bg: string; text: string; label: string }> = {
-    connecting: { bg: '#451a03', text: '#fbbf24', label: 'conectando' },
-    connected:  { bg: '#052e16', text: '#22c55e', label: 'conectado'  },
-    error:      { bg: '#3f0e0e', text: '#ef4444', label: 'erro SSE'   },
-    closed:     { bg: '#1e293b', text: '#64748b', label: 'fechado'    },
+function ConnectionPill({ t, status }: { t: any; status: string }) {
+  const colors: Record<string, { bg: string; text: string; labelKey: string }> = {
+    connecting: { bg: '#451a03', text: '#fbbf24', labelKey: 'connecting' },
+    connected:  { bg: '#052e16', text: '#22c55e', labelKey: 'connected'  },
+    error:      { bg: '#3f0e0e', text: '#ef4444', labelKey: 'error'     },
+    closed:     { bg: '#1e293b', text: '#64748b', labelKey: 'closed'    },
   }
   const c = colors[status] ?? colors.closed
+  const labelMap: Record<string, string> = {
+    connecting: t('monitor.status.connecting', { defaultValue: 'Connecting' }),
+    connected: t('monitor.status.connected', { defaultValue: 'Connected' }),
+    error: t('monitor.status.error', { defaultValue: 'SSE Error' }),
+    closed: t('monitor.status.closed', { defaultValue: 'Closed' }),
+  }
   return (
     <span style={{ fontSize: 11, fontWeight: 600, backgroundColor: c.bg, color: c.text, borderRadius: 4, padding: '2px 8px', letterSpacing: '0.04em' }}>
-      {c.label}
+      {labelMap[c.labelKey] || labelMap.closed}
     </span>
   )
 }

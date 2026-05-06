@@ -34,7 +34,11 @@
       "skills": "Skills",
       "status": "Status"
     },
-    "empty": "Nenhum tipo de agente cadastrado."
+    "empty": "Nenhum tipo de agente cadastrado.",
+    "deprecateConfirm": "Deprecar este tipo de agente?",
+    "deprecating": "Deprecando...",
+    "deprecate": "Deprecar",
+    "close": "Fechar"
   },
   "skills": {
     "title": "Skills",
@@ -46,7 +50,11 @@
       "domain": "Domínio",
       "status": "Status"
     },
-    "empty": "Nenhuma skill cadastrada."
+    "empty": "Nenhuma skill cadastrada.",
+    "loadFailed": "Falha ao carregar skills",
+    "deleteConfirm": "Deletar esta skill?",
+    "deleting": "Deletando...",
+    "close": "Fechar"
   },
   "instances": {
     "title": "Instâncias",
@@ -59,6 +67,136 @@
       "updatedAt": "Atualizado"
     },
     "empty": "Nenhuma instância registrada.",
-    "readOnly": "Somente leitura — instâncias são gerenciadas pelo orchestrator-bridge"
+    "readOnly": "Somente leitura — instâncias são gerenciadas pelo orchestrator-bridge",
+    "filters": {
+      "status": "Status",
+      "pool": "Pool",
+      "allStatuses": "Todos os status",
+      "allPools": "Todos os pools",
+      "ready": "Pronto",
+      "busy": "Ocupado",
+      "paused": "Pausado",
+      "draining": "Drenando"
+    },
+    "autoRefresh": "Auto-atualização a cada 15 segundos",
+    "instanceCount": "{{count}} instância",
+    "instanceCount_plural": "{{count}} instâncias"
+  },
+  "humanAgents": {
+    "title": "Agentes Humanos",
+    "liveTab": "● Status Ao Vivo",
+    "profilesTab": "⚙ Perfis",
+    "tracked": "{{count}} agente(s) humano(s) rastreado(s)",
+    "emptyLive": "Nenhum agente humano logado",
+    "emptyLiveWithStatus": "Nenhum agente com status \"{{status}}\"",
+    "emptyLiveDesc": "Agentes aparecem aqui quando se conectam via Agent Assist UI",
+    "tableHeaders": {
+      "instanceId": "ID da Instância",
+      "agentType": "Tipo de Agente",
+      "pool": "Pool",
+      "status": "Status",
+      "updated": "Atualizado",
+      "actions": "Ações"
+    },
+    "statusLabels": {
+      "all": "Todos",
+      "ready": "Pronto",
+      "busy": "Ocupado",
+      "paused": "Pausado",
+      "login": "Login",
+      "logout": "Logout"
+    },
+    "actions": {
+      "pause": "Pausar",
+      "resume": "Retomar",
+      "forceLogout": "Forçar Logout",
+      "waiting": "Aguardando…"
+    },
+    "profiles": {
+      "title": "Perfis de Agente",
+      "active": "{{count}} ativo(s)",
+      "newButton": "+ Novo",
+      "emptyProfiles": "Nenhum perfil de agente humano cadastrado",
+      "activeSection": "Ativos",
+      "deprecatedSection": "Descontinuados",
+      "selectPrompt": "Selecione um perfil ou crie um novo",
+      "selectDesc": "Cada perfil representa um agente humano que pode se conectar via Agent Assist UI",
+      "noPoolsAvailable": "Nenhum pool disponível — crie pools na aba Pools primeiro"
+    },
+    "createProfile": {
+      "title": "Novo Perfil de Agente Humano",
+      "section": {
+        "identity": "Identidade",
+        "pools": "Pools",
+        "permissions": "Permissões (opcional)"
+      },
+      "fields": {
+        "agentTypeId": "ID do Tipo de Agente",
+        "agentTypeIdHelper": "Usado como identificador de login no Agent Assist UI",
+        "agentTypeIdPlaceholder": "ex: agente_humano_retencao_v1",
+        "role": "Papel (Role)",
+        "maxConcurrent": "Max Sessões Simultâneas",
+        "permissions": "Nomes de ferramentas MCP separados por vírgula",
+        "permissionsPlaceholder": "customer_get, contract_read, …"
+      },
+      "validation": {
+        "agentTypeIdRequired": "ID do tipo de agente é obrigatório",
+        "poolsRequired": "Atribua pelo menos um pool"
+      },
+      "buttons": {
+        "create": "Criar Perfil",
+        "creating": "Criando…",
+        "cancel": "Cancelar"
+      }
+    },
+    "profileDetail": {
+      "framework": "framework: human",
+      "role": "role:",
+      "poolsAssigned": "Pools Atribuídos",
+      "noPools": "Nenhum pool atribuído",
+      "poolsNote": "Pools são definidos na criação — recrie o perfil para alterar",
+      "settings": "Configurações",
+      "metadata": {
+        "updated": "Atualizado:",
+        "created": "Criado:"
+      },
+      "buttons": {
+        "save": "Salvar Alterações",
+        "saving": "Salvando…",
+        "deprecate": "Descontinuar",
+        "deprecateConfirm": "Confirmar Descontinuação",
+        "deprecating": "Processando…",
+        "cancel": "Cancelar"
+      }
+    }
+  },
+  "channels": {
+    "title": "Canais",
+    "add": "Adicionar",
+    "configured": "configurado(s)",
+    "selectTitle": "Selecione um canal ou adicione uma configuração",
+    "emptyDesc": "Nenhum canal configurado ainda.",
+    "loadFailed": "Falha ao carregar configurações de canal",
+    "newConfig": "Nova configuração",
+    "credentialsMasked": "Credenciais são mascaradas após salvar",
+    "general": "Geral",
+    "displayName": "Display Name",
+    "active": "Ativo",
+    "inactive": "Inativo",
+    "credentials": "Credenciais",
+    "credentialsMaskedAfterSave": "valores são mascarados após salvar",
+    "settings": "Configurações",
+    "blankToKeep": "deixe em branco para manter o valor atual",
+    "newValueOptional": "Novo valor (opcional)",
+    "saveConfig": "Salvar configuração",
+    "saving": "Salvando",
+    "cancel": "Cancelar",
+    "created": "Criado",
+    "updated": "Atualizado",
+    "by": "Por",
+    "delete": "Excluir",
+    "saveChanges": "Salvar alterações",
+    "deleting": "Excluindo",
+    "confirmDelete": "Confirmar exclusão"
   }
 }

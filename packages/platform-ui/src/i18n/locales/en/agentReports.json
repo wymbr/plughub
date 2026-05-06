@@ -1,0 +1,46 @@
+{
+  "title": "Agent Reports",
+  "tabs": {
+    "availability": "Availability",
+    "pauses":       "Pauses"
+  },
+  "filters": {
+    "from":                  "From",
+    "to":                    "To",
+    "pool":                  "Pool",
+    "agentType":             "Agent Type",
+    "allPools":              "All pools",
+    "allTypes":              "All types",
+    "loading":               "Loading…",
+    "poolPlaceholder":       "e.g.: retention_human",
+    "agentTypePlaceholder":  "e.g.: agent_sac_ia_v1"
+  },
+  "availability": {
+    "title":       "Availability Heatmap",
+    "loading":     "Loading availability data…",
+    "noData":      "No availability data.",
+    "agent":       "Agent",
+    "totalPause":  "Total Pause",
+    "pauseCount":  "Pause Count"
+  },
+  "pauses": {
+    "title":     "Pause Detail",
+    "loading":   "Loading pause data…",
+    "noData":    "No pauses for the selected period.",
+    "reason":    "Reason",
+    "duration":  "Duration",
+    "count":     "Count",
+    "exportCsv": "Export CSV"
+  },
+  "breadcrumbs": {
+    "config": "Configuration"
+  },
+  "pagination": {
+    "results": "{{count}} result",
+    "prev":    "Prev",
+    "next":    "Next"
+  },
+  "error": {
+    "loading": "Error loading data"
+  }
+}

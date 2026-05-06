@@ -2,9 +2,10 @@
 engine.py
 Calendar computation engine — pure logic, no I/O.
 
-Four public functions:
-  is_open(cal, holidays, at)                 → bool
-  next_open_slot(cal, holidays, after)       → datetime | None
+Public functions:
+  get_open_status(associations, holidays_by_cal, at) → "open" | "closed" | "holiday"
+  is_open(associations, holidays_by_cal, at)         → bool  (deprecated wrapper)
+  next_open_slot(cal, holidays, after)               → datetime | None
   add_business_duration(cal, holidays, from_dt, hours) → datetime
   business_duration(cal, holidays, from_dt, to_dt)     → float (hours)
 
@@ -13,7 +14,7 @@ A "holidays" list is the merged holidays from all linked holiday_set_ids.
 
 Resolution priority (highest first):
   1. exceptions  — point-in-time overrides on the calendar
-  2. holidays    — from linked holiday_sets
+  2. holidays    — from linked holiday_sets (YYYY-MM-DD exact, then MM-DD recurring)
   3. weekly_schedule — recurring weekly rules
 
 All datetimes are handled in the calendar's timezone.
@@ -72,46 +73,56 @@ def _resolve_date(
     cal: dict[str, Any],
     holidays_by_date: dict[str, dict],
     d: date,
-) -> tuple[bool, list[dict]]:
+) -> tuple[str, list[dict]]:
     """
-    Resolve open/closed status and applicable slots for a calendar date.
-    Returns (is_open, slots).
+    Resolve status and applicable slots for a calendar date.
+    Returns (status, slots) where status is "open" | "closed" | "holiday".
 
     Priority:
-      1. Calendar exceptions
-      2. Holidays from linked sets
+      1. Calendar exceptions           → "open" or "closed" (never "holiday")
+      2. Holidays (YYYY-MM-DD exact, then MM-DD recurring)
       3. Weekly schedule
     """
     date_str = d.strftime("%Y-%m-%d")
+    mmdd_str = d.strftime("%m-%d")  # for recurring holiday lookup
 
-    # 1. Exceptions (highest priority)
+    # 1. Exceptions (highest priority — override even holidays)
     for exc in cal.get("exceptions", []):
         if exc["date"] == date_str:
             if exc["override_slots"] is None:
-                return False, []
-            return True, exc["override_slots"]
+                return "closed", []
+            return "open", exc["override_slots"]
 
-    # 2. Holidays
-    if date_str in holidays_by_date:
-        holiday = holidays_by_date[date_str]
+    # 2. Holidays — exact YYYY-MM-DD wins over recurring MM-DD
+    holiday = holidays_by_date.get(date_str) or holidays_by_date.get(mmdd_str)
+    if holiday is not None:
         if holiday.get("override_slots") is None:
-            return False, []
-        return True, holiday["override_slots"]
+            return "holiday", []
+        return "holiday", holiday["override_slots"]
 
     # 3. Weekly schedule
     day_name = _DAY_NAMES[d.weekday()]
     for day_sched in cal.get("weekly_schedule", []):
         if day_sched.get("day") == day_name:
             if not day_sched.get("open", True):
-                return False, []
-            return True, day_sched.get("slots", [{"open": "00:00", "close": "23:59"}])
+                return "closed", []
+            return "open", day_sched.get("slots", [{"open": "00:00", "close": "23:59"}])
 
     # Day not in weekly_schedule → closed
-    return False, []
+    return "closed", []
 
 
 def _build_holidays_index(holidays: list[dict]) -> dict[str, dict]:
-    """Flatten a list of holiday dicts into a date→holiday index."""
+    """
+    Flatten a list of holiday dicts into a date→holiday index.
+
+    Stores entries under their original key:
+      - YYYY-MM-DD → one-time holiday for that specific date
+      - MM-DD       → recurring holiday (matched every year by _resolve_date)
+
+    When both YYYY-MM-DD and MM-DD exist for the same month-day, the exact
+    YYYY-MM-DD entry takes precedence because _resolve_date checks it first.
+    """
     index: dict[str, dict] = {}
     for h in holidays:
         index[h["date"]] = h
@@ -121,13 +132,33 @@ def _build_holidays_index(holidays: list[dict]) -> dict[str, dict]:
 # ── Single-calendar open check ────────────────────────────────────────────────
 
 def _calendar_is_open(cal: dict, holidays: list[dict], at: datetime) -> bool:
+    """Return bool — used internally by next_open_slot and business duration helpers."""
     tz = _tz(cal["timezone"])
     local_dt = _to_local(at, tz)
     h_index = _build_holidays_index(holidays)
-    is_open, slots = _resolve_date(cal, h_index, local_dt.date())
-    if not is_open:
+    status, slots = _resolve_date(cal, h_index, local_dt.date())
+    if status == "closed" or not slots:
         return False
     return _in_slots(local_dt.time(), slots)
+
+
+def _calendar_status(cal: dict, holidays: list[dict], at: datetime) -> str:
+    """Return 'open' | 'closed' | 'holiday' for a single calendar at the given moment."""
+    tz = _tz(cal["timezone"])
+    local_dt = _to_local(at, tz)
+    h_index = _build_holidays_index(holidays)
+    status, slots = _resolve_date(cal, h_index, local_dt.date())
+    if status == "closed":
+        return "closed"
+    if not slots:
+        # holiday or open day with no time slots → treated as closed
+        return status  # preserves "holiday" vs "closed" distinction
+    if _in_slots(local_dt.time(), slots):
+        return "open"
+    # Outside the time window — preserve holiday status if applicable.
+    # A holiday with override_slots is still a holiday outside those hours;
+    # a regular working day outside its hours is simply closed.
+    return status if status == "holiday" else "closed"
 
 
 def _calendar_next_open(
@@ -140,8 +171,8 @@ def _calendar_next_open(
 
     for day_offset in range(_MAX_LOOKAHEAD_DAYS):
         check_date = local_dt.date() + timedelta(days=day_offset)
-        is_open, slots = _resolve_date(cal, h_index, check_date)
-        if not is_open or not slots:
+        _status, slots = _resolve_date(cal, h_index, check_date)
+        if _status == "closed" or not slots:
             continue
         for slot in slots:
             open_t  = _parse_time(slot["open"])
@@ -166,28 +197,74 @@ def _aggregate_is_open(
     Evaluate all calendar associations for an entity.
     UNION group → OR; then INTERSECTION items → AND.
     """
-    if not associations:
-        return False
+    status, _ = _aggregate_status(associations, holidays_by_cal, at)
+    return status == "open"
 
-    union_results = []
-    intersection_results = []
+
+def _aggregate_status(
+    associations: list[dict],
+    holidays_by_cal: dict[str, list[dict]],
+    at: datetime,
+) -> tuple[str, bool]:
+    """
+    Return (status, open_bool) for an entity considering all calendar associations.
+
+    UNION calendars are OR-ed together; INTERSECTION calendars are AND-ed over the result.
+
+    Status logic:
+      - "open"    if the entity is within a business window
+      - "holiday" if at least one calendar reports a holiday and entity is closed
+      - "closed"  otherwise
+    """
+    if not associations:
+        return "closed", False
+
+    union_statuses: list[str] = []
+    intersection_statuses: list[str] = []
 
     for assoc in associations:
         cal_id   = assoc["calendar_id"]
         holidays = holidays_by_cal.get(cal_id, [])
-        result   = _calendar_is_open(assoc, holidays, at)
+        st       = _calendar_status(assoc, holidays, at)
         if assoc["operator"] == "UNION":
-            union_results.append(result)
+            union_statuses.append(st)
         else:
-            intersection_results.append(result)
+            intersection_statuses.append(st)
 
-    # Evaluate
-    union_open = any(union_results) if union_results else True
-    intersect_open = all(intersection_results) if intersection_results else True
-    return union_open and intersect_open
+    union_open      = any(s == "open" for s in union_statuses) if union_statuses else True
+    intersect_open  = all(s == "open" for s in intersection_statuses) if intersection_statuses else True
+    final_open      = union_open and intersect_open
+
+    if final_open:
+        return "open", True
+
+    # Entity is closed — determine why
+    all_statuses = union_statuses + intersection_statuses
+    if any(s == "holiday" for s in all_statuses):
+        return "holiday", False
+
+    return "closed", False
 
 
 # ── Public API ────────────────────────────────────────────────────────────────
+
+def get_open_status(
+    associations: list[dict],
+    holidays_by_cal: dict[str, list[dict]],
+    at: datetime | None = None,
+) -> str:
+    """
+    Return the open status of an entity: "open" | "closed" | "holiday".
+
+    associations    — list of dicts from db_get_associations_for_engine
+    holidays_by_cal — {calendar_id: [holiday, ...]} from db_get_holidays_for_sets
+    at              — UTC datetime (default: now UTC)
+    """
+    if at is None:
+        at = datetime.utcnow().replace(tzinfo=pytz.UTC)
+    status, _ = _aggregate_status(associations, holidays_by_cal, at)
+    return status
+
 
 def is_open(
     associations: list[dict],
@@ -196,6 +273,9 @@ def is_open(
 ) -> bool:
     """
     Return True if the entity is open at the given moment (default: now UTC).
+
+    .. deprecated::
+       Use get_open_status() for the 3-state result ("open" | "closed" | "holiday").
 
     associations    — list of dicts from db_get_associations_for_engine
     holidays_by_cal — {calendar_id: [holiday, ...]} from db_get_holidays_for_sets
@@ -294,9 +374,9 @@ def add_business_duration(
             break
 
         local = _to_local(current, tz)
-        is_open_now, slots = _resolve_date(primary, h_index, local.date())
+        _status, slots = _resolve_date(primary, h_index, local.date())
 
-        if not is_open_now or not _in_slots(local.time(), slots):
+        if _status == "closed" or not slots or not _in_slots(local.time(), slots):
             # Not in a business window — jump to next open slot
             nxt = _calendar_next_open(primary, holidays_by_cal.get(primary["calendar_id"], []), current)
             if nxt is None:
@@ -352,8 +432,8 @@ def business_duration(
 
     while current < end:
         local = _to_local(current, tz)
-        is_open_now, slots = _resolve_date(primary, h_index, local.date())
-        if is_open_now and _in_slots(local.time(), slots):
+        _status, slots = _resolve_date(primary, h_index, local.date())
+        if _status != "closed" and slots and _in_slots(local.time(), slots):
             advance = min(step, end - current)
             total  += advance
         current += step

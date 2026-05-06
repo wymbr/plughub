@@ -1,0 +1,46 @@
+{
+  "title": "Relatórios de Agentes",
+  "tabs": {
+    "availability": "Disponibilidade",
+    "pauses":       "Pausas"
+  },
+  "filters": {
+    "from":                  "De",
+    "to":                    "Até",
+    "pool":                  "Pool",
+    "agentType":             "Tipo de Agente",
+    "allPools":              "Todos os pools",
+    "allTypes":              "Todos os tipos",
+    "loading":               "Carregando…",
+    "poolPlaceholder":       "ex: retencao_humano",
+    "agentTypePlaceholder":  "ex: agente_sac_ia_v1"
+  },
+  "availability": {
+    "title":       "Heatmap de Disponibilidade",
+    "loading":     "Carregando dados de disponibilidade…",
+    "noData":      "Sem dados de disponibilidade.",
+    "agent":       "Agente",
+    "totalPause":  "Pausa Total",
+    "pauseCount":  "Qtd. Pausas"
+  },
+  "pauses": {
+    "title":     "Detalhe de Pausas",
+    "loading":   "Carregando dados de pausas…",
+    "noData":    "Sem pausas no período selecionado.",
+    "reason":    "Motivo",
+    "duration":  "Duração",
+    "count":     "Quantidade",
+    "exportCsv": "Exportar CSV"
+  },
+  "breadcrumbs": {
+    "config": "Configuração"
+  },
+  "pagination": {
+    "results": "{{count}} resultado",
+    "prev":    "Ant",
+    "next":    "Próx"
+  },
+  "error": {
+    "loading": "Erro ao carregar dados"
+  }
+}

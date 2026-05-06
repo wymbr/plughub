@@ -9,6 +9,7 @@
  */
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
+import { useTranslation } from 'react-i18next'
 import { useAuth }          from '@/auth/useAuth'
 import { SessionTranscript } from '@/modules/atendimento/components/SessionTranscript'
 import { SegmentList }       from '@/modules/atendimento/components/SegmentList'
@@ -42,6 +43,7 @@ interface InsightsApiResponse {
 // ─── ContactInsightsPanel ─────────────────────────────────────────────────────
 
 function ContactInsightsPanel({ tenantId, sessionId }: { tenantId: string; sessionId: string }) {
+  const { t } = useTranslation('contacts')
   const [rows,    setRows]    = useState<InsightRow[]>([])
   const [loading, setLoading] = useState(true)
   const [error,   setError]   = useState('')
@@ -67,7 +69,7 @@ function ContactInsightsPanel({ tenantId, sessionId }: { tenantId: string; sessi
   if (loading) {
     return (
       <div className="flex items-center justify-center h-full text-gray-400 text-sm gap-2">
-        <span className="animate-spin text-lg">⟳</span> Carregando eventos…
+        <span className="animate-spin text-lg">⟳</span> {t('insights.loading')}
       </div>
     )
   }
@@ -77,7 +79,7 @@ function ContactInsightsPanel({ tenantId, sessionId }: { tenantId: string; sessi
       <div className="flex flex-col items-center justify-center h-full text-gray-400 gap-2 p-8">
         <span className="text-3xl">📭</span>
         <p className="text-sm text-center">
-          {error ? 'Falha ao carregar eventos de negócio.' : 'Nenhum evento de negócio registrado nesta sessão.'}
+          {error ? t('insights.loadError') : t('insights.empty')}
         </p>
         {error && <p className="text-xs text-red-400">{error}</p>}
       </div>
@@ -92,6 +94,7 @@ function ContactInsightsPanel({ tenantId, sessionId }: { tenantId: string; sessi
 }
 
 function InsightCard({ row }: { row: InsightRow }) {
+  const { t } = useTranslation('contacts')
   const isHistorico = row.insight_type?.startsWith('insight.historico')
   const isConvo     = row.insight_type?.startsWith('insight.conversa')
   const borderColor = isHistorico ? 'border-violet-400' : isConvo ? 'border-teal-400' : 'border-blue-300'
@@ -116,7 +119,7 @@ function InsightCard({ row }: { row: InsightRow }) {
         </div>
       )}
       {row.agent_id && (
-        <p className="text-xs text-gray-400">Registrado por: <code className="bg-gray-100 rounded px-1">{row.agent_id}</code></p>
+        <p className="text-xs text-gray-400">{t('insights.registeredBy')} <code className="bg-gray-100 rounded px-1">{row.agent_id}</code></p>
       )}
     </div>
   )
@@ -127,6 +130,7 @@ function InsightCard({ row }: { row: InsightRow }) {
 function ContactDetail({ tenantId, sessionId, onBack }: {
   tenantId: string; sessionId: string; onBack: () => void
 }) {
+  const { t } = useTranslation('contacts')
   const [detailSegment, setDetailSegment] = useState<ContactSegment | null>(null)
 
   // When a segment is selected, show the transcript narrowed to that segment.
@@ -147,9 +151,9 @@ function ContactDetail({ tenantId, sessionId, onBack }: {
     <div className="flex flex-col h-full bg-gray-50">
       <div className="flex items-center gap-0 border-b border-gray-200 bg-white px-4 flex-shrink-0">
         <button onClick={onBack} className="mr-4 text-sm text-gray-500 hover:text-primary py-3 transition-colors">
-          ← Contatos
+          {t('detail.back')}
         </button>
-        <span className="text-sm font-medium text-gray-700 py-3">💬 Segmentos</span>
+        <span className="text-sm font-medium text-gray-700 py-3">{t('detail.segments')}</span>
         <span className="ml-auto text-xs text-gray-400 font-mono py-3 truncate max-w-xs">{sessionId}</span>
       </div>
       <div className="flex-1 overflow-hidden">
@@ -168,10 +172,11 @@ function ContactDetail({ tenantId, sessionId, onBack }: {
 
 type ContactTab = 'lista' | 'monitor' | 'analise'
 
+// Note: Tab labels are i18n keys and will be resolved in the component
 const ALL_TABS: { id: ContactTab; label: string; icon: string; abac?: { module: string; field: string } }[] = [
-  { id: 'lista',   label: 'Lista',    icon: '📋' },
-  { id: 'monitor', label: 'Monitor',  icon: '📡', abac: { module: 'contacts', field: 'operacao'   } },
-  { id: 'analise', label: 'Análise',  icon: '📊', abac: { module: 'contacts', field: 'visualizar' } },
+  { id: 'lista',   label: 'tabs.list',    icon: '📋' },
+  { id: 'monitor', label: 'tabs.monitor',  icon: '📡', abac: { module: 'contacts', field: 'operacao'   } },
+  { id: 'analise', label: 'tabs.analysis',  icon: '📊', abac: { module: 'contacts', field: 'visualizar' } },
 ]
 
 // ─── Filter bar component ─────────────────────────────────────────────────────
@@ -186,6 +191,7 @@ interface FilterBarProps {
 }
 
 function FilterBar({ filters, setFilters, loading, totalLabel }: FilterBarProps) {
+  const { t } = useTranslation('contacts')
   const [showExtra, setShowExtra] = useState(false)
 
   function set<K extends keyof ContactFilters>(key: K, value: ContactFilters[K]) {
@@ -208,20 +214,20 @@ function FilterBar({ filters, setFilters, loading, totalLabel }: FilterBarProps)
       <div className="flex flex-wrap items-center gap-2">
 
         <div className="flex items-center gap-1.5 text-xs text-gray-500">
-          <span>De</span>
+          <span>{t('filter.from')}</span>
           <input type="date" value={filters.fromDt} onChange={e => set('fromDt', e.target.value)} className={inp} />
-          <span>até</span>
+          <span>{t('filter.to')}</span>
           <input type="date" value={filters.toDt}   onChange={e => set('toDt',   e.target.value)} className={inp} />
         </div>
 
         <input type="text" value={filters.sessionIdSearch}
           onChange={e => set('sessionIdSearch', e.target.value)}
-          placeholder="Session ID…"
+          placeholder={t('filter.sessionId')}
           className={`${inp} w-44`} />
 
         <select value={filters.channel} onChange={e => set('channel', e.target.value)}
           className={`${inp} bg-white`}>
-          <option value="">Todos os canais</option>
+          <option value="">{t('filter.allChannels')}</option>
           {['webchat','whatsapp','voice','email','sms','instagram','telegram','webrtc'].map(c => (
             <option key={c} value={c}>{c}</option>
           ))}
@@ -229,7 +235,7 @@ function FilterBar({ filters, setFilters, loading, totalLabel }: FilterBarProps)
 
         <select value={filters.outcome} onChange={e => set('outcome', e.target.value)}
           className={`${inp} bg-white`}>
-          <option value="">Todos os outcomes</option>
+          <option value="">{t('filter.allOutcomes')}</option>
           {['resolved','escalated','transferred','abandoned','timeout'].map(o => (
             <option key={o} value={o}>{o}</option>
           ))}
@@ -241,7 +247,7 @@ function FilterBar({ filters, setFilters, loading, totalLabel }: FilterBarProps)
               ? 'bg-primary/10 text-primary border-primary/30 font-semibold'
               : 'text-gray-500 border-gray-300 hover:border-primary hover:text-primary'
           }`}>
-          {showExtra ? '▲' : '▼'} Mais filtros
+          {showExtra ? '▲' : '▼'} {t('filter.moreFilters')}
           {hasExtra && (
             <span className="ml-1 inline-flex items-center justify-center w-4 h-4 rounded-full bg-primary text-white text-[10px] font-bold">
               {[filters.poolId, filters.agentId, filters.ani, filters.dnis, filters.insightCategory, filters.insightTags].filter(Boolean).length}
@@ -252,7 +258,7 @@ function FilterBar({ filters, setFilters, loading, totalLabel }: FilterBarProps)
         {hasAny && (
           <button onClick={clearAll}
             className="text-xs text-gray-400 hover:text-red-500 px-2 py-1.5 rounded-lg border border-gray-200 hover:border-red-300 transition-colors ml-auto">
-            ✕ Limpar
+            {t('filter.clearFilters')}
           </button>
         )}
 
@@ -266,12 +272,12 @@ function FilterBar({ filters, setFilters, loading, totalLabel }: FilterBarProps)
       {showExtra && (
         <div className="flex flex-wrap items-center gap-2 mt-2 pt-2 border-t border-gray-100">
           {([
-            { key: 'poolId',          label: 'Pool',          placeholder: 'ex: sac_ia',       width: 'w-36' },
-            { key: 'agentId',         label: 'Agente',        placeholder: 'participant_id…',   width: 'w-44' },
-            { key: 'ani',             label: 'Origem (ANI)',   placeholder: '+5511…',            width: 'w-36' },
-            { key: 'dnis',            label: 'Destino (DNIS)', placeholder: '+5511…',            width: 'w-36' },
-            { key: 'insightCategory', label: 'Evento',        placeholder: 'categoria…',        width: 'w-40' },
-            { key: 'insightTags',     label: 'Tags',          placeholder: 'tag1,tag2',         width: 'w-36' },
+            { key: 'poolId',          label: t('filter.pool'),          placeholder: 'ex: sac_ia',       width: 'w-36' },
+            { key: 'agentId',         label: t('filter.agent'),        placeholder: 'participant_id…',   width: 'w-44' },
+            { key: 'ani',             label: t('filter.ani'),   placeholder: '+5511…',            width: 'w-36' },
+            { key: 'dnis',            label: t('filter.dnis'), placeholder: '+5511…',            width: 'w-36' },
+            { key: 'insightCategory', label: t('filter.eventCategory'),        placeholder: 'categoria…',        width: 'w-40' },
+            { key: 'insightTags',     label: t('filter.tags'),          placeholder: 'tag1,tag2',         width: 'w-36' },
           ] as { key: keyof ContactFilters; label: string; placeholder: string; width: string }[]).map(f => (
             <div key={f.key} className="flex items-center gap-1">
               <span className="text-xs text-gray-400 whitespace-nowrap">{f.label}:</span>
@@ -290,6 +296,7 @@ function FilterBar({ filters, setFilters, loading, totalLabel }: FilterBarProps)
 // ─── ContactsPage ─────────────────────────────────────────────────────────────
 
 export default function ContactsPage() {
+  const { t } = useTranslation('contacts')
   const { session, tenantId, perms } = useAuth()
 
   // Filter tabs by ABAC — Lista is always visible; Monitor needs operacao; Análise needs visualizar
@@ -320,7 +327,7 @@ export default function ContactsPage() {
   if (!tenantId) {
     return (
       <div className="flex items-center justify-center h-full text-gray-400 text-sm">
-        Sessão sem tenant. Faça login novamente.
+        {t('noTenant')}
       </div>
     )
   }
@@ -342,7 +349,7 @@ export default function ContactsPage() {
       {/* ── Page header with tab bar ─────────────────────────────────────── */}
       <div className="bg-white border-b border-gray-200 flex-shrink-0">
         <div className="flex items-center px-4 pt-3">
-          <span className="font-bold text-gray-800 text-base mr-4">Contatos</span>
+          <span className="font-bold text-gray-800 text-base mr-4">{t('title')}</span>
           <div className="flex">
             {TABS.map(tab => (
               <button key={tab.id} onClick={() => setTab(tab.id)}
@@ -352,7 +359,7 @@ export default function ContactsPage() {
                     : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
                 }`}>
                 <span>{tab.icon}</span>
-                <span>{tab.label}</span>
+                <span>{t(tab.label)}</span>
               </button>
             ))}
           </div>

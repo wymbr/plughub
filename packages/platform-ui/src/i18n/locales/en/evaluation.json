@@ -1,0 +1,221 @@
+{
+  "title": "Evaluations",
+  "tabs": {
+    "forms":      "Forms",
+    "campaigns":  "Campaigns",
+    "knowledge":  "Knowledge Base",
+    "avaliacoes": "Evaluations",
+    "reports":    "Reports"
+  },
+  "forms": {
+    "title":       "Evaluation Forms",
+    "create":      "New Form",
+    "name":        "Name",
+    "description": "Description",
+    "criteria":    "Criteria",
+    "weight":      "Weight",
+    "type":        "Type",
+    "noForms":     "No forms found.",
+    "active":      "Active",
+    "inactive":    "Inactive",
+    "types": {
+      "score":      "Score",
+      "pass_fail":  "Pass / Fail",
+      "text":       "Text",
+      "na_allowed": "N/A Allowed"
+    }
+  },
+  "campaigns": {
+    "title":          "Campaigns",
+    "create":         "New Campaign",
+    "loading":        "Loading report…",
+    "noReport":       "No report data",
+    "total":          "Total",
+    "completed":      "Completed",
+    "pending":        "Pending",
+    "underReview":    "Under Review",
+    "conclusion":     "Conclusion",
+    "avgScore":       "Avg. score:",
+    "frequentFlags":  "Frequent flags",
+    "pause":          "Pause",
+    "resume":         "Resume",
+    "status": {
+      "active":    "Active",
+      "paused":    "Paused",
+      "completed": "Completed"
+    },
+    "sidebar": {
+      "adminTokenPlaceholder": "Admin token",
+      "newButton": "+ New",
+      "loading": "Loading…",
+      "noCampaigns": "No campaigns found"
+    },
+    "empty": {
+      "selectCampaign": "Select a campaign from the list",
+      "newCampaignButton": "+ New Campaign"
+    },
+    "modal": {
+      "title": "New Evaluation Campaign",
+      "close": "✕",
+      "basicInfo": "Basic Information",
+      "nameLabel": "Name *",
+      "nameExample": "Ex: SAC Evaluation — April 2026",
+      "formLabel": "Form *",
+      "selectForm": "Select a form",
+      "reviewSkillLabel": "Review Skill",
+      "noWorkflow": "None (no workflow)",
+      "descriptionLabel": "Description",
+      "samplingRules": "Sampling Rules",
+      "samplingMode": {
+        "all": "All",
+        "percentage": "% of sessions",
+        "fixed": "Every N sessions"
+      },
+      "samplingHint": "(0–1, e.g.: 0.1 = 10%)",
+      "reviewerIA": "Reviewer IA",
+      "enableAutoReview": "Enable automatic review by IA",
+      "escalateThreshold": "Escalate to human when score <",
+      "contestation": "Contestation Policy",
+      "enableContestation": "Enable contestation policy",
+      "maxRounds": "Max. rounds",
+      "reviewDeadline": "Review deadline (h)",
+      "authority": "Authority",
+      "autoLockTimeout": "Lock result automatically on timeout",
+      "skillInfo": "Skill: {{skill}} — defines actual number of rounds and timeouts. The values above are used as fallback and UI display.",
+      "errorRequired": "Name and form are required",
+      "errorMessage": "{{error}}",
+      "cancel": "Cancel",
+      "submit": "{{saving|Create campaign|Creating…}}"
+    },
+    "detail": {
+      "emptyTitle": "📋",
+      "sampling": "Sampling",
+      "samplingMode": "Mode: {{mode}}",
+      "samplingRate": "Rate: {{rate}}%",
+      "samplingEvery": "Every: {{count}} sessions",
+      "reviewerIA": "Reviewer IA",
+      "autoReview": "Auto-review: {{enabled|Yes|No}}",
+      "threshold": "Threshold: {{threshold}}",
+      "skillReview": "Review Skill",
+      "noWorkflow": "No workflow configured",
+      "contestationPolicy": "Contestation Policy",
+      "maxRounds": "Max. rounds: {{rounds}}",
+      "reviewDeadline": "Review deadline: {{hours}}h",
+      "autoLock": "Lock on timeout: {{enabled|Yes|No}}",
+      "noPolicy": "No contestation policy"
+    },
+    "progress": "Progress"
+  },
+  "knowledge": {
+    "title":      "Knowledge Base",
+    "search":     "Search…",
+    "namespace":  "Namespace",
+    "content":    "Content",
+    "upsert":     "Save Snippet",
+    "delete":     "Delete",
+    "noResults":  "No snippets found.",
+    "topK":       "Top K results"
+  },
+  "loading": "Loading…",
+  "error": {
+    "loading": "Error loading"
+  },
+  "empty": {
+    "noEvaluations": "No evaluations found.",
+    "noActions": "No pending actions for you at the moment"
+  },
+  "statuses": {
+    "submitted":         "Submitted",
+    "approved":          "Approved",
+    "adjusted_approved": "Approved w/ adjustment",
+    "rejected":          "Rejected",
+    "contested":         "Contested",
+    "locked":            "Locked"
+  },
+  "filters": {
+    "allStatuses": "All statuses",
+    "myActions": "Awaiting my action",
+    "allCampaigns": "All campaigns",
+    "adminTokenPlaceholder": "Admin token (adjudication)",
+    "authenticated": "Authenticated",
+    "loginRequired": "Please log in",
+    "reload": "Reload"
+  },
+  "table": {
+    "session": "Session",
+    "campaign": "Campaign",
+    "evaluator": "Evaluator",
+    "score": "Score",
+    "status": "Status",
+    "actions": "Actions",
+    "date": "Date"
+  },
+  "detail": {
+    "session": "Session",
+    "evaluator": "Evaluator",
+    "review": "Review",
+    "contest": "Contest",
+    "locked": "Locked",
+    "generalObservation": "General Observation",
+    "highlights": "Highlights",
+    "improvements": "Improvements",
+    "flags": "Flags",
+    "evaluatedCriteria": "Evaluated Criteria",
+    "campaign": "Campaign",
+    "currentRound": "Current round",
+    "lockReason": "Lock reason",
+    "createdAt": "Created at",
+    "awaiting": "Awaiting",
+    "awaitingReview": "review",
+    "awaitingContest": "contestation",
+    "deadline": "Deadline"
+  },
+  "review": {
+    "openContestations": "Open Contestations",
+    "from": "From",
+    "evaluatedAs": "Evaluated as",
+    "accepted": "Accepted",
+    "rejected": "Rejected",
+    "decision": "Decision",
+    "approve": "Approve",
+    "approveWithRemarks": "Approve with remarks",
+    "reject": "Reject",
+    "criterionNotes": "Review notes per criterion",
+    "criterionNotesHint": "optional",
+    "generalNote": "General note",
+    "noteRequired": "Add at least one review note for adjustment/rejection",
+    "noteOptional": "Optional note",
+    "saving": "Saving…",
+    "submitReview": "Submit Review"
+  },
+  "contest": {
+    "title": "Contest",
+    "minChars": "chars min",
+    "justification": "Disagreement",
+    "justificationPlaceholder": "Explain your disagreement (min 30 chars)…",
+    "charsRemaining": "{{count}} more character(s) required",
+    "selectAtLeastOne": "Select at least one criterion to contest",
+    "allJustificationsRequired": "All justifications must be at least 30 characters",
+    "noCriteria": "No criteria to contest",
+    "criteriaList": "Criteria to contest ({{count}} selected)",
+    "banner": {
+      "title": "Contest Evaluation Result",
+      "description": "Select the criteria you disagree with and provide your justification for each."
+    },
+    "cancel": "Cancel",
+    "submit": "Submit Contestation ({{count}})",
+    "submitting": "Submitting…"
+  },
+  "reports": {
+    "title":       "Evaluation Reports",
+    "byCampaign":  "By Campaign",
+    "byAgent":     "By Agent",
+    "avgScore":    "Avg. Score",
+    "total":       "Total",
+    "approved":    "Approved",
+    "rejected":    "Rejected",
+    "contested":   "Contested",
+    "locked":      "Locked",
+    "noData":      "No report data."
+  }
+}

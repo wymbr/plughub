@@ -6,6 +6,7 @@
  * Right: instances for selected skill with status, pool, channel_types.
  */
 import React, { useCallback, useEffect, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { useAuth } from '@/auth/useAuth'
 import Spinner from '@/components/ui/Spinner'
 import type { AgentInstance } from '@/types'
@@ -47,6 +48,8 @@ const STATUS_COLOR: Record<string, string> = {
   offline:  '#6b7280',
 }
 
+// Note: STATUS_LABEL values are replaced dynamically by useTranslation
+// Keys: monitor.status.ready, monitor.status.busy, monitor.status.paused, monitor.status.draining, monitor.status.offline
 const STATUS_LABEL: Record<string, string> = {
   ready:    'Pronto',
   busy:     'Em sessão',
@@ -58,6 +61,7 @@ const STATUS_LABEL: Record<string, string> = {
 // ── Main page ──────────────────────────────────────────────────────────────────
 
 export default function AgentFlowMonitorPage() {
+  const { t } = useTranslation('agentFlow')
   const { session, getAccessToken, tenantId } = useAuth()
 
   const [instances,  setInstances]  = useState<AgentInstance[]>([])
@@ -111,17 +115,17 @@ export default function AgentFlowMonitorPage() {
       {/* Top bar */}
       <div style={topBar}>
         <div>
-          <span style={{ fontWeight: 700, fontSize: 17, color: '#e2e8f0' }}>📡 Monitor de AgentFlow</span>
+          <span style={{ fontWeight: 700, fontSize: 17, color: '#e2e8f0' }}>📡 {t('monitor.title')}</span>
           <span style={{ marginLeft: 10, fontSize: 12, color: '#64748b' }}>
-            {loading ? '⟳' : `${instances.length} instância(s)`}
+            {loading ? '⟳' : t('monitor.instanceCount', { count: instances.length })}
           </span>
         </div>
-        <button style={btnSecondary} onClick={load}>↻ Atualizar</button>
+        <button style={btnSecondary} onClick={load}>{t('monitor.refresh')}</button>
       </div>
 
       {error && (
         <div style={{ padding: '10px 20px', background: '#7f1d1d', color: '#fca5a5', fontSize: 12 }}>
-          Erro: {error}
+          {t('monitor.error')}: {error}
         </div>
       )}
 
@@ -129,7 +133,7 @@ export default function AgentFlowMonitorPage() {
         {/* ─── Left: skill groups ──────────────────────────────────────── */}
         <div style={leftCol}>
           <div style={colHeader}>
-            <span style={{ fontSize: 12, fontWeight: 600, color: '#94a3b8' }}>Por skill</span>
+            <span style={{ fontSize: 12, fontWeight: 600, color: '#94a3b8' }}>{t('monitor.bySkill')}</span>
             {loading && <Spinner />}
           </div>
 
@@ -143,10 +147,10 @@ export default function AgentFlowMonitorPage() {
             onClick={() => setSelectedSkill(null)}
           >
             <div style={{ fontSize: 12, fontWeight: 600, color: !selectedSkill ? '#93c5fd' : '#e2e8f0' }}>
-              Todos os skills
+              {t('monitor.allSkills')}
             </div>
             <div style={{ fontSize: 11, color: '#64748b', marginTop: 2 }}>
-              {instances.length} instância(s)
+              {t('monitor.instanceCount', { count: instances.length })}
             </div>
           </button>
 
@@ -168,9 +172,9 @@ export default function AgentFlowMonitorPage() {
                     {g.skillId}
                   </div>
                   <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>
-                    {g.ready  > 0 && <Pill color="#22c55e" label={`${g.ready} pronto`} />}
-                    {g.busy   > 0 && <Pill color="#3b82f6" label={`${g.busy} em sessão`} />}
-                    {g.paused > 0 && <Pill color="#eab308" label={`${g.paused} pausado`} />}
+                    {g.ready  > 0 && <Pill color="#22c55e" label={`${g.ready} ${t('monitor.status.ready')}`} />}
+                    {g.busy   > 0 && <Pill color="#3b82f6" label={`${g.busy} ${t('monitor.status.busy')}`} />}
+                    {g.paused > 0 && <Pill color="#eab308" label={`${g.paused} ${t('monitor.status.paused')}`} />}
                   </div>
                 </button>
               )
@@ -182,14 +186,14 @@ export default function AgentFlowMonitorPage() {
         <div style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
           <div style={colHeader}>
             <span style={{ fontSize: 12, fontWeight: 600, color: '#94a3b8' }}>
-              {selectedSkill ? `Instâncias de ${selectedSkill}` : 'Todas as instâncias'}
+              {selectedSkill ? t('monitor.instancesOf', { skill: selectedSkill }) : t('monitor.allInstances')}
             </span>
           </div>
 
           <div style={{ flex: 1, overflowY: 'auto' }}>
             {displayInstances.length === 0 && !loading && (
               <div style={{ padding: '40px 24px', textAlign: 'center', color: '#475569', fontSize: 13 }}>
-                Nenhuma instância ativa
+                {t('monitor.noInstances')}
               </div>
             )}
             <div style={{ padding: 16, display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: 12 }}>

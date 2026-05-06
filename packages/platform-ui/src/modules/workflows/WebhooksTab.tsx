@@ -4,6 +4,7 @@
  * Uses Tailwind + platform-ui design tokens.
  */
 import React, { useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { useAuth } from '@/auth/useAuth'
 import {
   useWebhooks, useWebhookDeliveries,
@@ -17,6 +18,7 @@ import Input from '@/components/ui/Input'
 // ─── CopyBox ──────────────────────────────────────────────────────────────────
 
 function CopyBox({ value, label }: { value: string; label: string }) {
+  const { t } = useTranslation('workflows')
   const [copied, setCopied] = useState(false)
   function copy() {
     navigator.clipboard.writeText(value).then(() => {
@@ -26,7 +28,7 @@ function CopyBox({ value, label }: { value: string; label: string }) {
   return (
     <div className="border border-primary rounded-lg p-3 bg-primary/5 mt-3">
       <div className="text-xs font-bold text-primary mb-2">
-        ⚠ {label} — copie agora, não será exibido novamente
+        ⚠ {label} — {t('webhook.copyWarning')}
       </div>
       <div className="flex items-start gap-3">
         <code className="flex-1 text-xs text-secondary font-mono break-all leading-relaxed">
@@ -38,7 +40,7 @@ function CopyBox({ value, label }: { value: string; label: string }) {
             copied ? 'border-green text-green' : 'border-primary text-primary'
           } bg-transparent cursor-pointer`}
         >
-          {copied ? '✓ Copiado' : 'Copiar'}
+          {copied ? `✓ ${t('webhook.copied')}` : t('webhook.copy')}
         </button>
       </div>
     </div>
@@ -57,11 +59,12 @@ function HttpBadge({ code }: { code: number }) {
 }
 
 function ActiveBadge({ active }: { active: boolean }) {
+  const { t } = useTranslation('workflows')
   return (
     <span className={`text-xs font-bold px-2 py-0.5 rounded-full border ${
       active ? 'bg-green/10 text-green border-green/30' : 'bg-red/10 text-red border-red/30'
     }`}>
-      {active ? 'Ativo' : 'Inativo'}
+      {active ? t('webhook.active') : t('webhook.inactive')}
     </span>
   )
 }
@@ -74,6 +77,7 @@ function CreateForm({ tenantId, adminToken, onCreated, onCancel }: {
   onCreated:  (webhook: Webhook, token: string) => void
   onCancel:   () => void
 }) {
+  const { t } = useTranslation('workflows')
   const [flowId,  setFlowId]  = useState('')
   const [desc,    setDesc]    = useState('')
   const [ctxRaw,  setCtxRaw]  = useState('{}')
@@ -95,7 +99,7 @@ function CreateForm({ tenantId, adminToken, onCreated, onCancel }: {
       const { webhook, token } = await createWebhookApi(tenantId, flowId.trim(), desc.trim(), ctx, adminToken)
       onCreated(webhook, token)
     } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : 'Erro desconhecido')
+      setError(e instanceof Error ? e.message : t('webhook.unknownError'))
     } finally {
       setSaving(false)
     }
@@ -103,18 +107,18 @@ function CreateForm({ tenantId, adminToken, onCreated, onCancel }: {
 
   return (
     <div className="bg-white border border-lightGray rounded-lg p-5">
-      <h3 className="text-sm font-bold text-dark mb-4">Novo Webhook</h3>
+      <h3 className="text-sm font-bold text-dark mb-4">{t('webhook.createTitle')}</h3>
 
       <div className="space-y-3">
         <Input
-          label="Flow ID *"
+          label={`${t('webhook.flowId')} *`}
           value={flowId}
           onChange={e => setFlowId(e.target.value)}
           placeholder="wf_approval_v1"
           required
         />
         <Input
-          label="Descrição"
+          label={t('webhook.description')}
           value={desc}
           onChange={e => setDesc(e.target.value)}
           placeholder="Salesforce opportunity trigger"
@@ -122,7 +126,7 @@ function CreateForm({ tenantId, adminToken, onCreated, onCancel }: {
 
         <div>
           <label className="text-xs font-semibold text-gray uppercase tracking-wide block mb-1">
-            Context Override (JSON)
+            {t('webhook.contextOverride')}
           </label>
           <textarea
             value={ctxRaw}
@@ -132,19 +136,19 @@ function CreateForm({ tenantId, adminToken, onCreated, onCancel }: {
               ctxErr ? 'border-red' : 'border-lightGray'
             }`}
           />
-          {ctxErr && <p className="text-xs text-red mt-1">JSON inválido</p>}
+          {ctxErr && <p className="text-xs text-red mt-1">{t('webhook.invalidJson')}</p>}
         </div>
 
         {error && <p className="text-xs text-red">{error}</p>}
 
         <div className="flex justify-end gap-2 pt-1">
-          <Button variant="ghost" onClick={onCancel}>Cancelar</Button>
+          <Button variant="ghost" onClick={onCancel}>{t('trigger.cancel')}</Button>
           <Button
             variant="primary"
             onClick={submit}
             disabled={saving || !flowId.trim() || ctxErr}
           >
-            {saving ? 'Criando…' : 'Criar Webhook'}
+            {saving ? t('webhook.creating') : t('webhook.createButton')}
           </Button>
         </div>
       </div>
@@ -155,9 +159,10 @@ function CreateForm({ tenantId, adminToken, onCreated, onCancel }: {
 // ─── DeliveryLog ──────────────────────────────────────────────────────────────
 
 function DeliveryLog({ deliveries, loading }: { deliveries: WebhookDelivery[]; loading: boolean }) {
+  const { t } = useTranslation('workflows')
   if (loading) return <Spinner />
   if (deliveries.length === 0) return (
-    <p className="text-xs text-gray italic">Nenhuma entrega ainda.</p>
+    <p className="text-xs text-gray italic">{t('webhook.noDeliveries')}</p>
   )
   return (
     <div className="space-y-0">
@@ -190,6 +195,7 @@ function WebhookDetail({ webhook, adminToken, onUpdated, onDeleted, plainToken, 
   plainToken: string | null
   clearToken: () => void
 }) {
+  const { t } = useTranslation('workflows')
   const { deliveries, loading: dlLoading, refresh: refreshDl } = useWebhookDeliveries(webhook.id, adminToken)
   const [confirming, setConfirming] = useState<'delete' | 'rotate' | null>(null)
   const [working,    setWorking]    = useState(false)
@@ -203,7 +209,7 @@ function WebhookDetail({ webhook, adminToken, onUpdated, onDeleted, plainToken, 
     try {
       const updated = await patchWebhookApi(webhook.id, { active: !webhook.active }, adminToken)
       onUpdated(updated)
-    } catch (e: unknown) { setError(e instanceof Error ? e.message : 'Erro') }
+    } catch (e: unknown) { setError(e instanceof Error ? e.message : t('webhook.error')) }
     finally { setWorking(false) }
   }
 
@@ -213,7 +219,7 @@ function WebhookDetail({ webhook, adminToken, onUpdated, onDeleted, plainToken, 
       const { webhook: updated, token } = await rotateWebhookTokenApi(webhook.id, adminToken)
       setLocalToken(token)
       onUpdated(updated)
-    } catch (e: unknown) { setError(e instanceof Error ? e.message : 'Erro') }
+    } catch (e: unknown) { setError(e instanceof Error ? e.message : t('webhook.error')) }
     finally { setWorking(false) }
   }
 
@@ -222,7 +228,7 @@ function WebhookDetail({ webhook, adminToken, onUpdated, onDeleted, plainToken, 
     try {
       await deleteWebhookApi(webhook.id, adminToken)
       onDeleted()
-    } catch (e: unknown) { setError(e instanceof Error ? e.message : 'Erro') }
+    } catch (e: unknown) { setError(e instanceof Error ? e.message : t('webhook.error')) }
     finally { setWorking(false) }
   }
 
@@ -242,13 +248,13 @@ function WebhookDetail({ webhook, adminToken, onUpdated, onDeleted, plainToken, 
         </div>
         <div className="flex gap-2 flex-wrap justify-end">
           <Button variant="ghost" onClick={toggleActive} disabled={working}>
-            {webhook.active ? 'Desativar' : 'Ativar'}
+            {webhook.active ? t('webhook.deactivate') : t('webhook.activate')}
           </Button>
           <Button variant="ghost" onClick={() => setConfirming('rotate')} disabled={working}>
-            Rotacionar Token
+            {t('webhook.rotate')}
           </Button>
           <Button variant="danger" onClick={() => setConfirming('delete')} disabled={working}>
-            Excluir
+            {t('webhook.delete')}
           </Button>
         </div>
       </div>
@@ -258,10 +264,10 @@ function WebhookDetail({ webhook, adminToken, onUpdated, onDeleted, plainToken, 
       {/* Confirmação rotate */}
       {confirming === 'rotate' && (
         <div className="border border-primary rounded-lg p-4 bg-primary/5 text-sm text-dark">
-          Rotacionar o token invalida imediatamente o token atual. Continuar?
+          {t('webhook.rotateConfirm')}
           <div className="flex gap-2 mt-3">
-            <Button variant="ghost" onClick={() => setConfirming(null)}>Cancelar</Button>
-            <Button variant="primary" onClick={rotate}>Rotacionar</Button>
+            <Button variant="ghost" onClick={() => setConfirming(null)}>{t('trigger.cancel')}</Button>
+            <Button variant="primary" onClick={rotate}>{t('webhook.rotate')}</Button>
           </div>
         </div>
       )}
@@ -269,10 +275,10 @@ function WebhookDetail({ webhook, adminToken, onUpdated, onDeleted, plainToken, 
       {/* Confirmação delete */}
       {confirming === 'delete' && (
         <div className="border border-red rounded-lg p-4 bg-red/5 text-sm text-dark">
-          Excluir este webhook? Todos os registros de entrega serão removidos. Isso não pode ser desfeito.
+          {t('webhook.deleteConfirm')}
           <div className="flex gap-2 mt-3">
-            <Button variant="ghost" onClick={() => setConfirming(null)}>Cancelar</Button>
-            <Button variant="danger" onClick={doDelete}>Excluir</Button>
+            <Button variant="ghost" onClick={() => setConfirming(null)}>{t('trigger.cancel')}</Button>
+            <Button variant="danger" onClick={doDelete}>{t('webhook.delete')}</Button>
           </div>
         </div>
       )}
@@ -280,10 +286,10 @@ function WebhookDetail({ webhook, adminToken, onUpdated, onDeleted, plainToken, 
       {/* Token recém-gerado */}
       {localToken && (
         <div>
-          <CopyBox value={localToken} label="Novo Webhook Token" />
+          <CopyBox value={localToken} label={t('webhook.newTokenLabel')} />
           <div className="mt-2 flex justify-end">
             <Button variant="ghost" onClick={() => { setLocalToken(null); clearToken() }}>
-              Já salvei, fechar
+              {t('webhook.savedClose')}
             </Button>
           </div>
         </div>
@@ -291,19 +297,19 @@ function WebhookDetail({ webhook, adminToken, onUpdated, onDeleted, plainToken, 
 
       {/* Metadata */}
       <div className="border border-lightGray rounded-lg p-4 grid grid-cols-2 gap-x-6 gap-y-3">
-        <MetaField label="Webhook ID"      value={webhook.id} mono />
-        <MetaField label="Prefixo do Token" value={webhook.token_prefix} mono />
-        <MetaField label="Disparos"        value={String(webhook.trigger_count)} />
-        <MetaField label="Último disparo"  value={fmt(webhook.last_triggered_at)} />
-        <MetaField label="Criado em"       value={fmt(webhook.created_at)} />
-        <MetaField label="Atualizado em"   value={fmt(webhook.updated_at)} />
+        <MetaField label={t('webhook.webhookId')}      value={webhook.id} mono />
+        <MetaField label={t('webhook.tokenPrefix')} value={webhook.token_prefix} mono />
+        <MetaField label={t('webhook.triggers')}        value={String(webhook.trigger_count)} />
+        <MetaField label={t('webhook.lastTrigger')}  value={fmt(webhook.last_triggered_at)} />
+        <MetaField label={t('webhook.createdAt')}       value={fmt(webhook.created_at)} />
+        <MetaField label={t('webhook.updatedAt')}   value={fmt(webhook.updated_at)} />
         <div className="col-span-2">
-          <MetaField label="URL de disparo" value={triggerUrl} mono copyable />
+          <MetaField label={t('webhook.triggerUrl')} value={triggerUrl} mono copyable />
         </div>
         {Object.keys(webhook.context_override).length > 0 && (
           <div className="col-span-2">
             <MetaField
-              label="Context Override"
+              label={t('webhook.contextOverride')}
               value={JSON.stringify(webhook.context_override, null, 2)}
               mono
             />
@@ -314,8 +320,8 @@ function WebhookDetail({ webhook, adminToken, onUpdated, onDeleted, plainToken, 
       {/* Delivery log */}
       <div className="border border-lightGray rounded-lg p-4">
         <div className="flex items-center justify-between mb-3">
-          <span className="text-sm font-semibold text-dark">Log de entregas</span>
-          <Button variant="ghost" onClick={refreshDl}>Atualizar</Button>
+          <span className="text-sm font-semibold text-dark">{t('webhook.deliveryLog')}</span>
+          <Button variant="ghost" onClick={refreshDl}>{t('actions.refresh')}</Button>
         </div>
         <DeliveryLog deliveries={deliveries} loading={dlLoading} />
       </div>
@@ -326,6 +332,7 @@ function WebhookDetail({ webhook, adminToken, onUpdated, onDeleted, plainToken, 
 function MetaField({ label, value, mono = false, copyable = false }: {
   label: string; value: string; mono?: boolean; copyable?: boolean
 }) {
+  const { t } = useTranslation('workflows')
   const [copied, setCopied] = useState(false)
   function copy() {
     navigator.clipboard.writeText(value).then(() => {
@@ -344,7 +351,7 @@ function MetaField({ label, value, mono = false, copyable = false }: {
               copied ? 'border-green text-green' : 'border-gray text-gray'
             } bg-transparent`}
           >
-            {copied ? '✓' : 'Copiar'}
+            {copied ? '✓' : t('webhook.copy')}
           </button>
         )}
       </div>
@@ -355,6 +362,7 @@ function MetaField({ label, value, mono = false, copyable = false }: {
 // ─── WebhooksTab (main) ───────────────────────────────────────────────────────
 
 export default function WebhooksTab() {
+  const { t } = useTranslation('workflows')
   const { tenantId }  = useAuth()
 
   const [adminToken,   setAdminToken]   = useState('')
@@ -388,12 +396,12 @@ export default function WebhooksTab() {
       <div className="w-80 shrink-0 border-r border-lightGray flex flex-col overflow-hidden">
         {/* Toolbar */}
         <div className="flex items-center gap-3 px-4 py-3 border-b border-lightGray">
-          <span className="text-sm font-bold text-dark flex-1">Webhooks</span>
+          <span className="text-sm font-bold text-dark flex-1">{t('webhook.title')}</span>
           <Button
             variant="primary"
             onClick={() => { setCreating(true); setSelectedId(null) }}
           >
-            + Novo
+            + {t('webhook.new')}
           </Button>
         </div>
 
@@ -403,7 +411,7 @@ export default function WebhooksTab() {
             type="password"
             value={adminToken}
             onChange={e => setAdminToken(e.target.value)}
-            placeholder="Admin token (X-Admin-Token)"
+            placeholder={t('webhook.tokenPlaceholder')}
             className="w-full border border-lightGray rounded px-3 py-1.5 text-xs font-mono bg-white text-dark outline-none"
           />
         </div>
@@ -414,10 +422,10 @@ export default function WebhooksTab() {
             <div className="p-4"><Spinner /></div>
           )}
           {!loading && !webhooks.length && adminToken && (
-            <p className="p-4 text-sm text-gray italic">Nenhum webhook cadastrado.</p>
+            <p className="p-4 text-sm text-gray italic">{t('webhook.noWebhooks')}</p>
           )}
           {!adminToken && (
-            <p className="p-4 text-xs text-gray italic">Informe o admin token para gerenciar webhooks.</p>
+            <p className="p-4 text-xs text-gray italic">{t('webhook.tokenRequired')}</p>
           )}
 
           {webhooks.map(wh => (
@@ -436,7 +444,7 @@ export default function WebhooksTab() {
                 <p className="text-xs text-gray truncate mb-1">{wh.description}</p>
               )}
               <div className="flex gap-3 text-xs text-gray">
-                <span>🔗 {wh.trigger_count} disparos</span>
+                <span>🔗 {wh.trigger_count} {t('webhook.triggers')}</span>
                 <code>{wh.token_prefix}…</code>
               </div>
             </button>
@@ -471,11 +479,10 @@ export default function WebhooksTab() {
           <div className="h-full flex flex-col items-center justify-center gap-3 text-center">
             <div className="text-4xl">🔗</div>
             <p className="text-sm font-semibold text-gray">
-              Selecione um webhook ou crie um novo
+              {t('webhook.selectOrCreate')}
             </p>
             <p className="text-xs text-gray max-w-sm">
-              Webhooks permitem que sistemas externos (Salesforce, ERP, etc.)
-              disparem workflows automaticamente via URL autenticada.
+              {t('webhook.description')}
             </p>
           </div>
         )}

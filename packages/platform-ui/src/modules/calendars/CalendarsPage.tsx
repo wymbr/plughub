@@ -11,6 +11,7 @@
  */
 
 import React, { useCallback, useEffect, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { useAuth } from '@/auth/useAuth'
 import Spinner from '@/components/ui/Spinner'
 import EmptyState from '@/components/ui/EmptyState'
@@ -57,10 +58,17 @@ const TIMEZONES = [
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
-interface WeeklySlot {
-  day_of_week: string
-  start_time:  string
-  end_time:    string
+/** A single open/close interval within a day */
+interface TimeInterval {
+  open:  string   // "HH:MM"
+  close: string   // "HH:MM"
+}
+
+/** One entry in weekly_schedule — matches the engine format exactly */
+interface WeeklyDaySchedule {
+  day:   string          // "monday" | "tuesday" | …
+  open:  boolean         // false → closed all day
+  slots: TimeInterval[]  // empty if open=false; multiple = split day (e.g. lunch break)
 }
 
 interface CalendarObj {
@@ -68,7 +76,7 @@ interface CalendarObj {
   name:            string
   description:     string
   timezone:        string
-  weekly_schedule: WeeklySlot[]
+  weekly_schedule: WeeklyDaySchedule[]
   holiday_set_ids: string[]
   exceptions:      unknown[]
   created_at:      string
@@ -190,15 +198,16 @@ function Modal({
 function ConfirmDelete({
   label, onCancel, onConfirm
 }: { label: string; onCancel: () => void; onConfirm: () => void }) {
+  const { t } = useTranslation('calendars')
   return (
     <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
       <div className="bg-white rounded-xl shadow-xl p-6 w-full max-w-sm">
         <p className="text-sm text-gray-700 mb-4">
-          Excluir <strong>{label}</strong>? Esta ação não pode ser desfeita.
+          {t('messages.deleteConfirm', { label })}
         </p>
         <div className="flex gap-2 justify-end">
-          <button onClick={onCancel} className="px-4 py-2 text-sm text-gray-600 hover:text-gray-800">Cancelar</button>
-          <button onClick={onConfirm} className="px-4 py-2 text-sm bg-red-600 text-white rounded-lg hover:bg-red-700">Excluir</button>
+          <button onClick={onCancel} className="px-4 py-2 text-sm text-gray-600 hover:text-gray-800">{t('calendar.cancel')}</button>
+          <button onClick={onConfirm} className="px-4 py-2 text-sm bg-red-600 text-white rounded-lg hover:bg-red-700">{t('calendar.delete')}</button>
         </div>
       </div>
     </div>
@@ -208,63 +217,122 @@ function ConfirmDelete({
 // ── Weekly Schedule editor ────────────────────────────────────────────────────
 
 interface WeeklyEditorProps {
-  schedule: WeeklySlot[]
-  onChange: (s: WeeklySlot[]) => void
+  schedule: WeeklyDaySchedule[]
+  onChange: (s: WeeklyDaySchedule[]) => void
 }
 
 function WeeklyEditor({ schedule, onChange }: WeeklyEditorProps) {
-  const slotFor = (day: string) => schedule.find(s => s.day_of_week === day)
+  const { t } = useTranslation('calendars')
 
+  const dayEntry = (day: string): WeeklyDaySchedule | undefined =>
+    schedule.find(s => s.day === day)
+
+  /** Toggle a day on/off */
   const toggle = (day: string) => {
-    if (slotFor(day)) {
-      onChange(schedule.filter(s => s.day_of_week !== day))
+    const existing = dayEntry(day)
+    if (existing) {
+      // remove day entirely
+      onChange(schedule.filter(s => s.day !== day))
     } else {
-      onChange([...schedule, { day_of_week: day, start_time: '08:00', end_time: '18:00' }])
+      // add day with a single default slot
+      onChange([...schedule, { day, open: true, slots: [{ open: '08:00', close: '18:00' }] }])
     }
   }
 
-  const update = (day: string, field: 'start_time' | 'end_time', val: string) => {
-    onChange(schedule.map(s => s.day_of_week === day ? { ...s, [field]: val } : s))
+  /** Update a specific slot field within a day */
+  const updateSlot = (day: string, idx: number, field: 'open' | 'close', val: string) => {
+    onChange(schedule.map(s => {
+      if (s.day !== day) return s
+      const newSlots = s.slots.map((sl, i) => i === idx ? { ...sl, [field]: val } : sl)
+      return { ...s, slots: newSlots }
+    }))
+  }
+
+  /** Add a new interval to a day */
+  const addInterval = (day: string) => {
+    onChange(schedule.map(s => {
+      if (s.day !== day) return s
+      const last = s.slots[s.slots.length - 1]
+      // default: new interval starts 1h after last close
+      const newOpen  = last?.close ?? '18:00'
+      const newClose = '23:00'
+      return { ...s, slots: [...s.slots, { open: newOpen, close: newClose }] }
+    }))
+  }
+
+  /** Remove an interval from a day (keep at least 1) */
+  const removeInterval = (day: string, idx: number) => {
+    onChange(schedule.map(s => {
+      if (s.day !== day) return s
+      const newSlots = s.slots.filter((_, i) => i !== idx)
+      // if all slots removed, fall back to a single default slot rather than empty
+      return { ...s, slots: newSlots.length > 0 ? newSlots : [{ open: '08:00', close: '18:00' }] }
+    }))
   }
 
   return (
     <div className="space-y-1">
       {DAYS.map(day => {
-        const slot = slotFor(day)
-        const active = !!slot
+        const entry  = dayEntry(day)
+        const active = !!entry
         return (
-          <div key={day} className={`flex items-center gap-3 px-3 py-2 rounded-lg
-            ${active ? 'bg-indigo-50 border border-indigo-200' : 'bg-gray-50'}`}>
-            <button
-              type="button"
-              onClick={() => toggle(day)}
-              className={`w-5 h-5 rounded border-2 flex-shrink-0 flex items-center justify-center
-                ${active ? 'bg-indigo-500 border-indigo-500 text-white' : 'border-gray-300'}`}
-            >
-              {active && <span className="text-xs">✓</span>}
-            </button>
-            <span className={`w-8 text-sm font-medium ${active ? 'text-gray-800' : 'text-gray-400'}`}>
-              {DAY_LABELS[day]}
-            </span>
-            {active ? (
-              <>
+          <div key={day} className={`rounded-lg border ${active ? 'bg-indigo-50 border-indigo-200' : 'bg-gray-50 border-transparent'}`}>
+            {/* Day header row */}
+            <div className="flex items-center gap-3 px-3 py-2">
+              <button
+                type="button"
+                onClick={() => toggle(day)}
+                className={`w-5 h-5 rounded border-2 flex-shrink-0 flex items-center justify-center
+                  ${active ? 'bg-indigo-500 border-indigo-500 text-white' : 'border-gray-300'}`}
+              >
+                {active && <span className="text-xs">✓</span>}
+              </button>
+              <span className={`w-8 text-sm font-medium ${active ? 'text-gray-800' : 'text-gray-400'}`}>
+                {DAY_LABELS[day]}
+              </span>
+              {!active && (
+                <span className="text-xs text-gray-400 italic">{t('calendar.closed')}</span>
+              )}
+              {active && entry.slots.length < 4 && (
+                <button
+                  type="button"
+                  onClick={() => addInterval(day)}
+                  title="Adicionar intervalo"
+                  className="ml-auto text-xs text-indigo-500 hover:text-indigo-700 px-2 py-0.5 rounded hover:bg-indigo-100 transition-colors"
+                >
+                  + intervalo
+                </button>
+              )}
+            </div>
+
+            {/* Time intervals */}
+            {active && entry.slots.map((sl, idx) => (
+              <div key={idx} className="flex items-center gap-2 px-3 pb-2 pl-10">
                 <input
                   type="time"
-                  value={slot.start_time}
-                  onChange={e => update(day, 'start_time', e.target.value)}
-                  className="text-sm border border-gray-300 rounded px-2 py-0.5 focus:outline-none focus:ring-1 focus:ring-indigo-400"
+                  value={sl.open}
+                  onChange={e => updateSlot(day, idx, 'open', e.target.value)}
+                  className="text-sm border border-gray-300 rounded px-2 py-0.5 focus:outline-none focus:ring-1 focus:ring-indigo-400 bg-white"
                 />
-                <span className="text-xs text-gray-400">até</span>
+                <span className="text-xs text-gray-400">{t('messages.until')}</span>
                 <input
                   type="time"
-                  value={slot.end_time}
-                  onChange={e => update(day, 'end_time', e.target.value)}
-                  className="text-sm border border-gray-300 rounded px-2 py-0.5 focus:outline-none focus:ring-1 focus:ring-indigo-400"
+                  value={sl.close}
+                  onChange={e => updateSlot(day, idx, 'close', e.target.value)}
+                  className="text-sm border border-gray-300 rounded px-2 py-0.5 focus:outline-none focus:ring-1 focus:ring-indigo-400 bg-white"
                 />
-              </>
-            ) : (
-              <span className="text-xs text-gray-400 italic">Fechado</span>
-            )}
+                {entry.slots.length > 1 && (
+                  <button
+                    type="button"
+                    onClick={() => removeInterval(day, idx)}
+                    title="Remover intervalo"
+                    className="text-gray-400 hover:text-red-500 text-sm leading-none transition-colors"
+                  >
+                    ×
+                  </button>
+                )}
+              </div>
+            ))}
           </div>
         )
       })}
@@ -280,6 +348,7 @@ interface HolidaysEditorProps {
 }
 
 function HolidaysEditor({ holidays, onChange }: HolidaysEditorProps) {
+  const { t } = useTranslation('calendars')
   const [newDate, setNewDate] = useState('')
   const [newName, setNewName] = useState('')
 
@@ -296,7 +365,7 @@ function HolidaysEditor({ holidays, onChange }: HolidaysEditorProps) {
     <div className="space-y-3">
       <div className="max-h-40 overflow-y-auto space-y-1">
         {holidays.length === 0 && (
-          <p className="text-xs text-gray-400 italic">Nenhum feriado adicionado</p>
+          <p className="text-xs text-gray-400 italic">{t('messages.noHolidaysAdded')}</p>
         )}
         {holidays.map((h, i) => (
           <div key={i} className="flex items-center gap-2 px-2 py-1 bg-gray-50 rounded text-sm">
@@ -315,7 +384,7 @@ function HolidaysEditor({ holidays, onChange }: HolidaysEditorProps) {
         />
         <input
           type="text"
-          placeholder="Nome do feriado"
+          placeholder={t('holidaySet.holidayNamePlaceholder')}
           value={newName}
           onChange={e => setNewName(e.target.value)}
           onKeyDown={e => e.key === 'Enter' && add()}
@@ -340,6 +409,7 @@ function HolidaysEditor({ holidays, onChange }: HolidaysEditorProps) {
 interface CalendarsTabProps { holidaySets: HolidaySet[] }
 
 function CalendarsTab({ holidaySets }: CalendarsTabProps) {
+  const { t } = useTranslation('calendars')
   const { tenantId } = useAuth()
   const calApi = makeCalApi(tenantId)
   const [calendars, setCalendars] = useState<CalendarObj[]>([])
@@ -354,7 +424,7 @@ function CalendarsTab({ holidaySets }: CalendarsTabProps) {
   const [fName,     setFName]     = useState('')
   const [fDesc,     setFDesc]     = useState('')
   const [fTz,       setFTz]       = useState('America/Sao_Paulo')
-  const [fSched,    setFSched]    = useState<WeeklySlot[]>([])
+  const [fSched,    setFSched]    = useState<WeeklyDaySchedule[]>([])
   const [fHsIds,    setFHsIds]    = useState<string[]>([])
 
   const load = useCallback(async () => {
@@ -429,21 +499,28 @@ function CalendarsTab({ holidaySets }: CalendarsTabProps) {
   }
 
   const scheduleLabel = (c: CalendarObj) => {
-    const active = c.weekly_schedule.map(s => DAY_LABELS[s.day_of_week]).join(', ')
-    return active || 'Sem horário definido'
+    const active = c.weekly_schedule
+      .filter(s => s.open)
+      .map(s => {
+        const label = DAY_LABELS[s.day] ?? s.day
+        if (s.slots.length > 1) return `${label}(${s.slots.length})`
+        return label
+      })
+      .join(', ')
+    return active || t('calendar.noSchedule')
   }
 
   return (
     <div className="p-4 space-y-4">
       <div className="flex items-center justify-between">
         <p className="text-sm text-gray-500">
-          Defina calendários com horários semanais e feriados vinculados.
+          {t('calendar.info')}
         </p>
         <button
           onClick={openCreate}
           className="px-4 py-2 text-sm bg-primary text-white rounded-lg hover:bg-blue-800 transition-colors"
         >
-          + Novo Calendário
+          + {t('calendar.new')}
         </button>
       </div>
 
@@ -453,8 +530,8 @@ function CalendarsTab({ holidaySets }: CalendarsTabProps) {
       {!loading && calendars.length === 0 && (
         <EmptyState
           icon="📅"
-          title="Nenhum calendário"
-          description="Crie o primeiro calendário para definir horários de atendimento."
+          title={t('calendar.noItems')}
+          description={t('calendar.noItemsDesc')}
         />
       )}
 
@@ -483,11 +560,11 @@ function CalendarsTab({ holidaySets }: CalendarsTabProps) {
               <div className="flex gap-1 flex-shrink-0">
                 <button onClick={() => openEdit(c)}
                   className="px-3 py-1.5 text-xs text-indigo-600 hover:bg-indigo-50 rounded-lg transition-colors">
-                  Editar
+                  {t('calendar.edit')}
                 </button>
                 <button onClick={() => setDelTarget(c)}
                   className="px-3 py-1.5 text-xs text-red-500 hover:bg-red-50 rounded-lg transition-colors">
-                  Excluir
+                  {t('calendar.delete')}
                 </button>
               </div>
             </div>
@@ -496,29 +573,29 @@ function CalendarsTab({ holidaySets }: CalendarsTabProps) {
       )}
 
       {showForm && (
-        <Modal title={editing ? `Editar: ${editing.name}` : 'Novo Calendário'} onClose={() => setShowForm(false)}>
+        <Modal title={editing ? t('calendar.editTitle', { name: editing.name }) : t('calendar.new')} onClose={() => setShowForm(false)}>
           <form onSubmit={submit} className="space-y-4">
             <div>
-              <label className="block text-xs font-medium text-gray-700 mb-1">Nome *</label>
+              <label className="block text-xs font-medium text-gray-700 mb-1">{t('calendar.name')}</label>
               <input
                 required
                 value={fName}
                 onChange={e => setFName(e.target.value)}
-                placeholder="ex: Atendimento Comercial"
+                placeholder={t('calendar.namePlaceholder')}
                 className="w-full text-sm border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-indigo-400"
               />
             </div>
             <div>
-              <label className="block text-xs font-medium text-gray-700 mb-1">Descrição</label>
+              <label className="block text-xs font-medium text-gray-700 mb-1">{t('calendar.description')}</label>
               <input
                 value={fDesc}
                 onChange={e => setFDesc(e.target.value)}
-                placeholder="Opcional"
+                placeholder={t('calendar.descPlaceholder')}
                 className="w-full text-sm border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-indigo-400"
               />
             </div>
             <div>
-              <label className="block text-xs font-medium text-gray-700 mb-1">Fuso horário</label>
+              <label className="block text-xs font-medium text-gray-700 mb-1">{t('calendar.timezone')}</label>
               <select
                 value={fTz}
                 onChange={e => setFTz(e.target.value)}
@@ -529,13 +606,13 @@ function CalendarsTab({ holidaySets }: CalendarsTabProps) {
             </div>
 
             <div>
-              <label className="block text-xs font-medium text-gray-700 mb-2">Horários semanais</label>
+              <label className="block text-xs font-medium text-gray-700 mb-2">{t('calendar.schedule')}</label>
               <WeeklyEditor schedule={fSched} onChange={setFSched} />
             </div>
 
             {holidaySets.length > 0 && (
               <div>
-                <label className="block text-xs font-medium text-gray-700 mb-2">Conjuntos de feriados</label>
+                <label className="block text-xs font-medium text-gray-700 mb-2">{t('calendar.holidaySets')}</label>
                 <div className="space-y-1 max-h-36 overflow-y-auto">
                   {holidaySets.map(hs => (
                     <label key={hs.id} className="flex items-center gap-2 cursor-pointer px-2 py-1 rounded hover:bg-gray-50">
@@ -556,11 +633,11 @@ function CalendarsTab({ holidaySets }: CalendarsTabProps) {
             <div className="flex gap-2 justify-end pt-2 border-t border-gray-100">
               <button type="button" onClick={() => setShowForm(false)}
                 className="px-4 py-2 text-sm text-gray-600 hover:text-gray-800">
-                Cancelar
+                {t('calendar.cancel')}
               </button>
               <button type="submit" disabled={saving}
                 className="px-4 py-2 text-sm bg-primary text-white rounded-lg hover:bg-blue-800 disabled:opacity-50">
-                {saving ? 'Salvando…' : (editing ? 'Salvar' : 'Criar')}
+                {saving ? t('calendar.saving') : (editing ? t('calendar.save') : t('calendar.create'))}
               </button>
             </div>
           </form>
@@ -585,6 +662,7 @@ function CalendarsTab({ holidaySets }: CalendarsTabProps) {
 interface HolidaysTabProps { onSetsChange: (sets: HolidaySet[]) => void }
 
 function HolidaysTab({ onSetsChange }: HolidaysTabProps) {
+  const { t } = useTranslation('calendars')
   const { tenantId } = useAuth()
   const calApi = makeCalApi(tenantId)
   const [sets,      setSets]      = useState<HolidaySet[]>([])
@@ -673,13 +751,13 @@ function HolidaysTab({ onSetsChange }: HolidaysTabProps) {
     <div className="p-4 space-y-4">
       <div className="flex items-center justify-between">
         <p className="text-sm text-gray-500">
-          Conjuntos de datas de feriado vinculáveis a calendários.
+          {t('holidaySet.info')}
         </p>
         <button
           onClick={openCreate}
           className="px-4 py-2 text-sm bg-primary text-white rounded-lg hover:bg-blue-800 transition-colors"
         >
-          + Novo Conjunto
+          + {t('holidaySet.new')}
         </button>
       </div>
 
@@ -689,8 +767,8 @@ function HolidaysTab({ onSetsChange }: HolidaysTabProps) {
       {!loading && sets.length === 0 && (
         <EmptyState
           icon="🏖️"
-          title="Nenhum conjunto de feriados"
-          description="Crie um conjunto para marcar os feriados do seu calendário."
+          title={t('holidaySet.noItems')}
+          description={t('holidaySet.noItemsDesc')}
         />
       )}
 
@@ -711,7 +789,7 @@ function HolidaysTab({ onSetsChange }: HolidaysTabProps) {
                       </span>
                     )}
                     <span className="text-[11px] text-gray-400">
-                      {(hs.holidays ?? []).length} feriados
+                      {t('holidaySet.holidayCount', { count: (hs.holidays ?? []).length })}
                     </span>
                   </div>
                   {hs.description && (
@@ -721,11 +799,11 @@ function HolidaysTab({ onSetsChange }: HolidaysTabProps) {
                 <div className="flex gap-1 flex-shrink-0">
                   <button onClick={() => openEdit(hs)}
                     className="px-3 py-1.5 text-xs text-indigo-600 hover:bg-indigo-50 rounded-lg transition-colors">
-                    Editar
+                    {t('calendar.edit')}
                   </button>
                   <button onClick={() => setDelTarget(hs)}
                     className="px-3 py-1.5 text-xs text-red-500 hover:bg-red-50 rounded-lg transition-colors">
-                    Excluir
+                    {t('calendar.delete')}
                   </button>
                   <span className="text-gray-300 text-sm self-center">
                     {expanded === hs.id ? '▲' : '▼'}
@@ -736,7 +814,7 @@ function HolidaysTab({ onSetsChange }: HolidaysTabProps) {
               {expanded === hs.id && (
                 <div className="border-t border-gray-100 px-4 py-3 bg-gray-50">
                   {(hs.holidays ?? []).length === 0 ? (
-                    <p className="text-xs text-gray-400 italic">Nenhum feriado neste conjunto.</p>
+                    <p className="text-xs text-gray-400 italic">{t('holidaySet.noHolidays')}</p>
                   ) : (
                     <div className="space-y-1">
                       {(hs.holidays ?? []).map((h, i) => (
@@ -755,52 +833,52 @@ function HolidaysTab({ onSetsChange }: HolidaysTabProps) {
       )}
 
       {showForm && (
-        <Modal title={editing ? `Editar: ${editing.name}` : 'Novo Conjunto de Feriados'} onClose={() => setShowForm(false)}>
+        <Modal title={editing ? t('holidaySet.editTitle', { name: editing.name }) : t('holidaySet.new')} onClose={() => setShowForm(false)}>
           <form onSubmit={submit} className="space-y-4">
             <div className="grid grid-cols-3 gap-3">
               <div className="col-span-2">
-                <label className="block text-xs font-medium text-gray-700 mb-1">Nome *</label>
+                <label className="block text-xs font-medium text-gray-700 mb-1">{t('holidaySet.name')}</label>
                 <input
                   required
                   value={fName}
                   onChange={e => setFName(e.target.value)}
-                  placeholder="ex: Feriados Nacionais 2025"
+                  placeholder={t('holidaySet.namePlaceholder')}
                   className="w-full text-sm border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-indigo-400"
                 />
               </div>
               <div>
-                <label className="block text-xs font-medium text-gray-700 mb-1">Ano</label>
+                <label className="block text-xs font-medium text-gray-700 mb-1">{t('holidaySet.year')}</label>
                 <input
                   type="number"
                   value={fYear}
                   onChange={e => setFYear(e.target.value)}
-                  placeholder="2025"
+                  placeholder={t('holidaySet.yearPlaceholder')}
                   min="2000" max="2100"
                   className="w-full text-sm border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-indigo-400"
                 />
               </div>
             </div>
             <div>
-              <label className="block text-xs font-medium text-gray-700 mb-1">Descrição</label>
+              <label className="block text-xs font-medium text-gray-700 mb-1">{t('holidaySet.description')}</label>
               <input
                 value={fDesc}
                 onChange={e => setFDesc(e.target.value)}
-                placeholder="Opcional"
+                placeholder={t('holidaySet.descPlaceholder')}
                 className="w-full text-sm border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-indigo-400"
               />
             </div>
             <div>
-              <label className="block text-xs font-medium text-gray-700 mb-2">Feriados</label>
+              <label className="block text-xs font-medium text-gray-700 mb-2">{t('holidaySet.holidays')}</label>
               <HolidaysEditor holidays={fHols} onChange={setFHols} />
             </div>
             <div className="flex gap-2 justify-end pt-2 border-t border-gray-100">
               <button type="button" onClick={() => setShowForm(false)}
                 className="px-4 py-2 text-sm text-gray-600 hover:text-gray-800">
-                Cancelar
+                {t('calendar.cancel')}
               </button>
               <button type="submit" disabled={saving}
                 className="px-4 py-2 text-sm bg-primary text-white rounded-lg hover:bg-blue-800 disabled:opacity-50">
-                {saving ? 'Salvando…' : (editing ? 'Salvar' : 'Criar')}
+                {saving ? t('calendar.saving') : (editing ? t('calendar.save') : t('calendar.create'))}
               </button>
             </div>
           </form>
@@ -825,6 +903,7 @@ function HolidaysTab({ onSetsChange }: HolidaysTabProps) {
 interface AssociationsTabProps { calendars: CalendarObj[] }
 
 function AssociationsTab({ calendars }: AssociationsTabProps) {
+  const { t } = useTranslation('calendars')
   const { tenantId } = useAuth()
   const calApi = makeCalApi(tenantId)
   const [entityType, setEntityType] = useState<EntityType>('pool')
@@ -962,7 +1041,7 @@ function AssociationsTab({ calendars }: AssociationsTabProps) {
 
       {assocs.length === 0 && entityId && !loading && (
         <p className="text-sm text-gray-400 text-center py-4 italic">
-          Nenhuma associação encontrada para este ID.
+          {t('association.noItems')}
         </p>
       )}
 
@@ -1033,10 +1112,10 @@ function AssociationsTab({ calendars }: AssociationsTabProps) {
 // Root page
 // ═══════════════════════════════════════════════════════════════════════════════
 
-const TABS = ['Calendários', 'Feriados', 'Associações']
-
 export default function CalendarsPage() {
+  const { t } = useTranslation('calendars')
   const { session, tenantId } = useAuth()
+  const TABS = [t('tabs.calendars'), t('tabs.holidaySets'), t('tabs.associations')]
   const calApi = makeCalApi(tenantId)
   const [tab, setTab]             = useState('Calendários')
   const [calendars, setCalendars] = useState<CalendarObj[]>([])

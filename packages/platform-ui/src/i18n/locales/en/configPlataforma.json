@@ -1,0 +1,37 @@
+{
+  "title": "Platform Configuration",
+  "description": "Platform settings and calendar management",
+  "adminTokenLabel": "Admin Token:",
+  "adminTokenPlaceholder": "To enable editing",
+  "hideToken": "Hide",
+  "showToken": "Show",
+  "tokenSet": "token set",
+  "configTab": "Configuration",
+  "calendarTab": "Calendars",
+  "tabs": {
+    "config":    "Configuration",
+    "calendars": "Calendars"
+  },
+  "namespace": {
+    "title":       "Namespaces",
+    "adminToken":  "Admin token",
+    "tokenHint":   "Required to enable editing",
+    "key":         "Key",
+    "value":       "Value",
+    "scope":       "Scope",
+    "scopeGlobal": "🌐 Global default",
+    "scopeTenant": "🏢 Tenant override",
+    "tenantBadge": "tenant override",
+    "edit":        "Edit",
+    "save":        "Save",
+    "cancel":      "Cancel",
+    "reset":       "Reset to global default",
+    "description": "Description",
+    "noEntries":   "No entries in this namespace.",
+    "loading":     "Loading configuration…"
+  },
+  "calendar": {
+    "noItems":   "No calendars configured.",
+    "loading":   "Loading calendars…"
+  }
+}

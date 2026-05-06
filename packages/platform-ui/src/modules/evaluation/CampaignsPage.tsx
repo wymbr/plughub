@@ -4,6 +4,7 @@
  */
 
 import React, { useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import {
   useCampaigns,
   useForms,
@@ -16,13 +17,15 @@ import type { EvaluationCampaign, CampaignReport } from '@/types'
 import { useAuth } from '@/auth/useAuth'
 
 function StatusBadge({ status }: { status: string }) {
+  const { t } = useTranslation('evaluation')
   const styles: Record<string, string> = {
     draft:   'bg-gray-100 text-gray-600',
     active:  'bg-green-100 text-green-800',
     paused:  'bg-yellow-100 text-yellow-800',
     closed:  'bg-red-100 text-red-700',
   }
-  return <span className={`px-2 py-0.5 rounded text-xs font-medium ${styles[status] ?? 'bg-gray-100'}`}>{status}</span>
+  const statusLabel = t(`campaigns.status.${status}`, { defaultValue: status })
+  return <span className={`px-2 py-0.5 rounded text-xs font-medium ${styles[status] ?? 'bg-gray-100'}`}>{statusLabel}</span>
 }
 
 function ProgressBar({ pct }: { pct: number }) {
@@ -40,10 +43,11 @@ function ProgressBar({ pct }: { pct: number }) {
 // ── CampaignReport panel ───────────────────────────────────────────────────────
 
 function ReportPanel({ campaignId }: { campaignId: string }) {
+  const { t } = useTranslation('evaluation')
   const { report, loading } = useCampaignReport(campaignId)
 
-  if (loading) return <div className="text-xs text-gray-400 py-4 text-center">Carregando relatório…</div>
-  if (!report) return <div className="text-xs text-gray-400 py-4 text-center">Sem dados de relatório</div>
+  if (loading) return <div className="text-xs text-gray-400 py-4 text-center">{t('campaigns.loading')}</div>
+  if (!report) return <div className="text-xs text-gray-400 py-4 text-center">{t('campaigns.noReport')}</div>
 
   const pct = report.completion_pct ?? 0
 
@@ -51,10 +55,10 @@ function ReportPanel({ campaignId }: { campaignId: string }) {
     <div className="space-y-4">
       <div className="grid grid-cols-4 gap-3">
         {[
-          { label: 'Total', value: report.total, color: 'text-gray-700' },
-          { label: 'Concluídas', value: report.completed, color: 'text-green-700' },
-          { label: 'Pendentes', value: report.pending, color: 'text-yellow-700' },
-          { label: 'Em revisão', value: report.in_review, color: 'text-blue-700' },
+          { label: t('campaigns.total'), value: report.total, color: 'text-gray-700' },
+          { label: t('campaigns.completed'), value: report.completed, color: 'text-green-700' },
+          { label: t('campaigns.pending'), value: report.pending, color: 'text-yellow-700' },
+          { label: t('campaigns.underReview'), value: report.in_review, color: 'text-blue-700' },
         ].map(k => (
           <div key={k.label} className="bg-gray-50 rounded p-3 text-center">
             <div className={`text-2xl font-bold ${k.color}`}>{k.value}</div>
@@ -65,7 +69,7 @@ function ReportPanel({ campaignId }: { campaignId: string }) {
 
       <div>
         <div className="flex justify-between text-xs text-gray-600 mb-1">
-          <span>Conclusão</span>
+          <span>{t('campaigns.conclusion')}</span>
           <span>{pct.toFixed(1)}%</span>
         </div>
         <ProgressBar pct={pct} />
@@ -73,7 +77,7 @@ function ReportPanel({ campaignId }: { campaignId: string }) {
 
       {report.avg_score !== null && (
         <div className="flex items-center gap-3">
-          <span className="text-xs text-gray-500">Nota média:</span>
+          <span className="text-xs text-gray-500">{t('campaigns.avgScore')}</span>
           <span className="text-lg font-bold text-primary">{report.avg_score?.toFixed(2)}</span>
           {report.score_p25 !== null && report.score_p75 !== null && (
             <span className="text-xs text-gray-400">
@@ -85,7 +89,7 @@ function ReportPanel({ campaignId }: { campaignId: string }) {
 
       {report.top_flags && report.top_flags.length > 0 && (
         <div>
-          <div className="text-xs font-semibold text-gray-600 mb-1">Flags frequentes</div>
+          <div className="text-xs font-semibold text-gray-600 mb-1">{t('campaigns.frequentFlags')}</div>
           <div className="flex flex-wrap gap-1">
             {report.top_flags.map(f => (
               <span key={f} className="bg-red-50 text-red-700 text-xs px-2 py-0.5 rounded">{f}</span>
@@ -117,6 +121,7 @@ const AUTHORITY_OPTIONS = [
 ]
 
 function CreateModal({ onClose, onCreated, adminToken }: CreateModalProps) {
+  const { t } = useTranslation('evaluation')
   const { tenantId: TENANT } = useAuth()
   const { forms } = useForms(TENANT)
   const [name, setName] = useState('')
@@ -139,7 +144,7 @@ function CreateModal({ onClose, onCreated, adminToken }: CreateModalProps) {
   const [error, setError] = useState<string | null>(null)
 
   const submit = async () => {
-    if (!name || !formId) { setError('Nome e formulário são obrigatórios'); return }
+    if (!name || !formId) { setError(t('campaigns.modal.errorRequired')); return }
     setSaving(true)
     setError(null)
     try {
@@ -178,31 +183,31 @@ function CreateModal({ onClose, onCreated, adminToken }: CreateModalProps) {
     <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
       <div className="bg-white rounded-lg shadow-xl w-[620px] max-h-[90vh] overflow-y-auto">
         <div className="flex items-center justify-between p-4 border-b">
-          <h2 className="font-semibold text-gray-800">Nova Campanha de Avaliação</h2>
-          <button onClick={onClose} className="text-gray-400 hover:text-gray-600">✕</button>
+          <h2 className="font-semibold text-gray-800">{t('campaigns.modal.title')}</h2>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-600">{t('campaigns.modal.close')}</button>
         </div>
 
         <div className="p-4 space-y-4">
           {/* Basic info */}
           <div className="grid grid-cols-2 gap-3">
             <div className="col-span-2">
-              <label className="block text-xs font-medium text-gray-600 mb-1">Nome *</label>
+              <label className="block text-xs font-medium text-gray-600 mb-1">{t('campaigns.modal.nameLabel')}</label>
               <input
                 className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm"
                 value={name}
                 onChange={e => setName(e.target.value)}
-                placeholder="Ex: Avaliação SAC — Abril 2026"
+                placeholder={t('campaigns.modal.nameExample')}
               />
             </div>
 
             <div>
-              <label className="block text-xs font-medium text-gray-600 mb-1">Formulário *</label>
+              <label className="block text-xs font-medium text-gray-600 mb-1">{t('campaigns.modal.formLabel')}</label>
               <select
                 className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm"
                 value={formId}
                 onChange={e => setFormId(e.target.value)}
               >
-                <option value="">Selecione um formulário</option>
+                <option value="">{t('campaigns.modal.selectForm')}</option>
                 {forms.filter(f => f.status === 'active').map(f => (
                   <option key={f.form_id} value={f.form_id}>{f.name}</option>
                 ))}
@@ -210,13 +215,13 @@ function CreateModal({ onClose, onCreated, adminToken }: CreateModalProps) {
             </div>
 
             <div>
-              <label className="block text-xs font-medium text-gray-600 mb-1">Skill de revisão</label>
+              <label className="block text-xs font-medium text-gray-600 mb-1">{t('campaigns.modal.reviewSkillLabel')}</label>
               <select
                 className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm"
                 value={workflowSkillId}
                 onChange={e => setWorkflowSkillId(e.target.value)}
               >
-                <option value="">Nenhuma (sem workflow)</option>
+                <option value="">{t('campaigns.modal.noWorkflow')}</option>
                 {WORKFLOW_SKILL_OPTIONS.map(o => (
                   <option key={o.value} value={o.value}>{o.label}</option>
                 ))}
@@ -224,7 +229,7 @@ function CreateModal({ onClose, onCreated, adminToken }: CreateModalProps) {
             </div>
 
             <div className="col-span-2">
-              <label className="block text-xs font-medium text-gray-600 mb-1">Descrição</label>
+              <label className="block text-xs font-medium text-gray-600 mb-1">{t('campaigns.modal.descriptionLabel')}</label>
               <textarea
                 className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm resize-none"
                 rows={2}
@@ -236,16 +241,16 @@ function CreateModal({ onClose, onCreated, adminToken }: CreateModalProps) {
 
           {/* Sampling */}
           <div className="border-t pt-3">
-            <div className="text-xs font-semibold text-gray-600 mb-2">Regras de Sampling</div>
+            <div className="text-xs font-semibold text-gray-600 mb-2">{t('campaigns.modal.samplingRules')}</div>
             <div className="flex gap-3 items-center">
               <select
                 className="border border-gray-300 rounded px-2 py-1 text-sm"
                 value={samplingMode}
                 onChange={e => setSamplingMode(e.target.value as any)}
               >
-                <option value="all">Todos</option>
-                <option value="percentage">% das sessões</option>
-                <option value="fixed">A cada N sessões</option>
+                <option value="all">{t('campaigns.modal.samplingMode.all')}</option>
+                <option value="percentage">{t('campaigns.modal.samplingMode.percentage')}</option>
+                <option value="fixed">{t('campaigns.modal.samplingMode.fixed')}</option>
               </select>
               {samplingMode !== 'all' && (
                 <input
@@ -258,24 +263,24 @@ function CreateModal({ onClose, onCreated, adminToken }: CreateModalProps) {
                   onChange={e => setSamplingRate(e.target.value)}
                 />
               )}
-              {samplingMode === 'percentage' && <span className="text-xs text-gray-500">(0–1, ex: 0.1 = 10%)</span>}
+              {samplingMode === 'percentage' && <span className="text-xs text-gray-500">{t('campaigns.modal.samplingHint')}</span>}
             </div>
           </div>
 
           {/* Reviewer IA */}
           <div className="border-t pt-3">
-            <div className="text-xs font-semibold text-gray-600 mb-2">Reviewer IA</div>
+            <div className="text-xs font-semibold text-gray-600 mb-2">{t('campaigns.modal.reviewerIA')}</div>
             <label className="flex items-center gap-2 text-sm">
               <input
                 type="checkbox"
                 checked={autoReview}
                 onChange={e => setAutoReview(e.target.checked)}
               />
-              Ativar revisão automática por IA
+              {t('campaigns.modal.enableAutoReview')}
             </label>
             {autoReview && (
               <div className="flex items-center gap-2 mt-2 text-sm text-gray-600">
-                <span>Escalar para humano quando nota &lt;</span>
+                <span>{t('campaigns.modal.escalateThreshold')}</span>
                 <input
                   type="number"
                   min={1}
@@ -297,14 +302,14 @@ function CreateModal({ onClose, onCreated, adminToken }: CreateModalProps) {
                 checked={enableContestation}
                 onChange={e => setEnableContestation(e.target.checked)}
               />
-              Habilitar política de contestação
+              {t('campaigns.modal.enableContestation')}
             </label>
 
             {enableContestation && (
               <div className="bg-blue-50 border border-blue-100 rounded p-3 space-y-3 mt-2">
                 <div className="grid grid-cols-3 gap-3">
                   <div>
-                    <label className="block text-xs text-gray-600 mb-1">Máx. rounds</label>
+                    <label className="block text-xs text-gray-600 mb-1">{t('campaigns.modal.maxRounds')}</label>
                     <input
                       type="number"
                       min={1}
@@ -315,7 +320,7 @@ function CreateModal({ onClose, onCreated, adminToken }: CreateModalProps) {
                     />
                   </div>
                   <div>
-                    <label className="block text-xs text-gray-600 mb-1">Prazo por round (h)</label>
+                    <label className="block text-xs text-gray-600 mb-1">{t('campaigns.modal.reviewDeadline')}</label>
                     <input
                       type="number"
                       min={1}
@@ -327,7 +332,7 @@ function CreateModal({ onClose, onCreated, adminToken }: CreateModalProps) {
                     />
                   </div>
                   <div>
-                    <label className="block text-xs text-gray-600 mb-1">Alçada</label>
+                    <label className="block text-xs text-gray-600 mb-1">{t('campaigns.modal.authority')}</label>
                     <select
                       className="w-full border border-gray-300 rounded px-2 py-1 text-sm"
                       value={authorityLevel}
@@ -346,12 +351,11 @@ function CreateModal({ onClose, onCreated, adminToken }: CreateModalProps) {
                     checked={autoLockOnTimeout}
                     onChange={e => setAutoLockOnTimeout(e.target.checked)}
                   />
-                  Bloquear resultado automaticamente ao expirar prazo
+                  {t('campaigns.modal.autoLockTimeout')}
                 </label>
 
                 <p className="text-xs text-blue-700">
-                  Skill: <strong>{workflowSkillId || '(nenhuma selecionada)'}</strong> — define o número real de rounds e timeouts.
-                  Os valores acima são usados como fallback e exibição na UI.
+                  {t('campaigns.modal.skillInfo', { skill: workflowSkillId || '(nenhuma selecionada)' })}
                 </p>
               </div>
             )}
@@ -361,13 +365,13 @@ function CreateModal({ onClose, onCreated, adminToken }: CreateModalProps) {
         </div>
 
         <div className="flex justify-end gap-2 p-4 border-t">
-          <button onClick={onClose} className="px-4 py-1.5 text-sm text-gray-600 hover:text-gray-800">Cancelar</button>
+          <button onClick={onClose} className="px-4 py-1.5 text-sm text-gray-600 hover:text-gray-800">{t('campaigns.modal.cancel')}</button>
           <button
             onClick={submit}
             disabled={saving}
             className="bg-primary text-white px-4 py-1.5 text-sm rounded hover:bg-blue-800 disabled:opacity-50"
           >
-            {saving ? 'Criando…' : 'Criar campanha'}
+            {saving ? t('campaigns.modal.submit', { context: 'saving' }) : t('campaigns.modal.submit', { context: 'default' })}
           </button>
         </div>
       </div>
@@ -378,6 +382,7 @@ function CreateModal({ onClose, onCreated, adminToken }: CreateModalProps) {
 // ── CampaignsPage ─────────────────────────────────────────────────────────────
 
 export default function CampaignsPage() {
+  const { t } = useTranslation('evaluation')
   const { tenantId: TENANT } = useAuth()
   const [adminToken, setAdminToken] = useState('')
   const { campaigns, loading, reload } = useCampaigns(TENANT, 30_000)
@@ -404,7 +409,7 @@ export default function CampaignsPage() {
           <input
             className="flex-1 border border-gray-300 rounded px-2 py-1 text-xs"
             type="password"
-            placeholder="Admin token"
+            placeholder={t('campaigns.sidebar.adminTokenPlaceholder')}
             value={adminToken}
             onChange={e => setAdminToken(e.target.value)}
           />
@@ -412,12 +417,12 @@ export default function CampaignsPage() {
             onClick={() => setShowCreate(true)}
             className="bg-primary text-white text-xs px-2 py-1 rounded hover:bg-blue-800"
           >
-            + Nova
+            {t('campaigns.sidebar.newButton')}
           </button>
         </div>
 
         <div className="flex-1 overflow-y-auto p-2 space-y-1">
-          {loading && <p className="text-sm text-gray-400 p-2">Carregando…</p>}
+          {loading && <p className="text-sm text-gray-400 p-2">{t('campaigns.sidebar.loading')}</p>}
           {campaigns.map(c => {
             const pct = c.total_instances > 0 ? (c.completed / c.total_instances) * 100 : 0
             return (
@@ -436,14 +441,14 @@ export default function CampaignsPage() {
                 </div>
                 <ProgressBar pct={pct} />
                 <div className="flex justify-between text-xs text-gray-400 mt-1">
-                  <span>{c.completed}/{c.total_instances} concluídas</span>
+                  <span>{c.completed}/{c.total_instances} {t('campaigns.completed').toLowerCase()}</span>
                   <span>{pct.toFixed(0)}%</span>
                 </div>
               </button>
             )
           })}
           {!loading && campaigns.length === 0 && (
-            <p className="text-xs text-gray-400 text-center py-6">Nenhuma campanha encontrada</p>
+            <p className="text-xs text-gray-400 text-center py-6">{t('campaigns.sidebar.noCampaigns')}</p>
           )}
         </div>
       </aside>
@@ -463,7 +468,7 @@ export default function CampaignsPage() {
                     : 'border-green-300 text-green-700 hover:bg-green-50'
                 }`}
               >
-                {selected.status === 'active' ? '⏸ Pausar' : '▶ Retomar'}
+                {selected.status === 'active' ? `⏸ ${t('campaigns.pause')}` : `▶ ${t('campaigns.resume')}`}
               </button>
             </div>
 
@@ -474,64 +479,63 @@ export default function CampaignsPage() {
             )}
 
             <div className="bg-white border rounded p-4 space-y-3">
-              <h3 className="font-semibold text-gray-700">Progresso</h3>
+              <h3 className="font-semibold text-gray-700">{t('campaigns.progress')}</h3>
               <ReportPanel campaignId={selected.campaign_id} />
             </div>
 
             <div className="grid grid-cols-2 gap-4 text-sm">
               <div className="bg-white border rounded p-3">
-                <div className="text-xs font-semibold text-gray-500 mb-2">Sampling</div>
+                <div className="text-xs font-semibold text-gray-500 mb-2">{t('campaigns.detail.sampling')}</div>
                 <div className="text-gray-700 space-y-1">
-                  <div>Modo: <strong>{selected.sampling_rules?.mode ?? 'percentage'}</strong></div>
+                  <div>{t('campaigns.detail.samplingMode', { mode: selected.sampling_rules?.mode ?? 'percentage' })}</div>
                   {selected.sampling_rules?.rate !== undefined && (
-                    <div>Taxa: <strong>{(selected.sampling_rules.rate * 100).toFixed(0)}%</strong></div>
+                    <div>{t('campaigns.detail.samplingRate', { rate: (selected.sampling_rules.rate * 100).toFixed(0) })}</div>
                   )}
                   {selected.sampling_rules?.every_n !== undefined && (
-                    <div>A cada: <strong>{selected.sampling_rules.every_n} sessões</strong></div>
+                    <div>{t('campaigns.detail.samplingEvery', { count: selected.sampling_rules.every_n })}</div>
                   )}
                 </div>
               </div>
 
               <div className="bg-white border rounded p-3">
-                <div className="text-xs font-semibold text-gray-500 mb-2">Reviewer IA</div>
+                <div className="text-xs font-semibold text-gray-500 mb-2">{t('campaigns.detail.reviewerIA')}</div>
                 <div className="text-gray-700 space-y-1">
-                  <div>Auto-review: <strong>{selected.reviewer_rules?.auto_review ? 'Sim' : 'Não'}</strong></div>
+                  <div>{t('campaigns.detail.autoReview', { enabled: selected.reviewer_rules?.auto_review ? 'Yes' : 'No' })}</div>
                   {selected.reviewer_rules?.score_threshold !== undefined && (
-                    <div>Threshold: <strong>{selected.reviewer_rules.score_threshold}</strong></div>
+                    <div>{t('campaigns.detail.threshold', { threshold: selected.reviewer_rules.score_threshold })}</div>
                   )}
                 </div>
               </div>
 
               {/* Workflow skill */}
               <div className="bg-white border rounded p-3">
-                <div className="text-xs font-semibold text-gray-500 mb-2">Skill de revisão</div>
+                <div className="text-xs font-semibold text-gray-500 mb-2">{t('campaigns.detail.skillReview')}</div>
                 {selected.review_workflow_skill_id ? (
                   <div className="text-gray-700 space-y-1">
                     <div className="font-mono text-xs bg-gray-50 border rounded px-2 py-1 break-all">
                       {selected.review_workflow_skill_id}
                     </div>
                     {selected.review_workflow_skill_id === 'skill_revisao_simples_v1' && (
-                      <div className="text-xs text-gray-500">Revisão simples — 1 round, 48h</div>
+                      <div className="text-xs text-gray-500">{WORKFLOW_SKILL_OPTIONS[0].label}</div>
                     )}
                     {selected.review_workflow_skill_id === 'skill_revisao_treplica_v1' && (
-                      <div className="text-xs text-gray-500">Tréplica — até 3 rounds</div>
+                      <div className="text-xs text-gray-500">{WORKFLOW_SKILL_OPTIONS[1].label}</div>
                     )}
                   </div>
                 ) : (
-                  <div className="text-xs text-gray-400 italic">Sem workflow configurado</div>
+                  <div className="text-xs text-gray-400 italic">{t('campaigns.detail.noWorkflow')}</div>
                 )}
               </div>
 
               {/* Contestation policy */}
               <div className="bg-white border rounded p-3">
-                <div className="text-xs font-semibold text-gray-500 mb-2">Política de contestação</div>
+                <div className="text-xs font-semibold text-gray-500 mb-2">{t('campaigns.detail.contestationPolicy')}</div>
                 {selected.contestation_policy ? (
                   <div className="text-gray-700 space-y-1">
-                    <div>Máx. rounds: <strong>{selected.contestation_policy.max_rounds}</strong></div>
-                    <div>Prazo por round: <strong>{selected.contestation_policy.review_deadline_hours}h</strong></div>
+                    <div>{t('campaigns.detail.maxRounds', { rounds: selected.contestation_policy.max_rounds })}</div>
+                    <div>{t('campaigns.detail.reviewDeadline', { hours: selected.contestation_policy.review_deadline_hours })}</div>
                     <div>
-                      Bloquear no timeout:{' '}
-                      <strong>{selected.contestation_policy.auto_lock_on_timeout ? 'Sim' : 'Não'}</strong>
+                      {t('campaigns.detail.autoLock', { enabled: selected.contestation_policy.auto_lock_on_timeout ? 'Yes' : 'No' })}
                     </div>
                     {selected.contestation_policy.rounds && selected.contestation_policy.rounds.length > 0 && (
                       <div className="mt-2 space-y-1">
@@ -544,20 +548,20 @@ export default function CampaignsPage() {
                     )}
                   </div>
                 ) : (
-                  <div className="text-xs text-gray-400 italic">Sem política de contestação</div>
+                  <div className="text-xs text-gray-400 italic">{t('campaigns.detail.noPolicy')}</div>
                 )}
               </div>
             </div>
           </div>
         ) : (
           <div className="flex flex-col items-center justify-center h-full text-gray-400 gap-3">
-            <div className="text-4xl">📋</div>
-            <p>Selecione uma campanha na lista</p>
+            <div className="text-4xl">{t('campaigns.empty.emptyTitle')}</div>
+            <p>{t('campaigns.empty.selectCampaign')}</p>
             <button
               onClick={() => setShowCreate(true)}
               className="bg-primary text-white px-4 py-2 rounded text-sm hover:bg-blue-800"
             >
-              + Nova Campanha
+              {t('campaigns.empty.newCampaignButton')}
             </button>
           </div>
         )}

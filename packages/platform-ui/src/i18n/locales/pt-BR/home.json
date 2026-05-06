@@ -1,0 +1,29 @@
+{
+  "welcome":        "Bem-vindo, {{name}}",
+  "subtitle":       "Enterprise Orchestration Platform",
+  "profile": {
+    "title":        "Informações do Perfil",
+    "userId":       "ID do Usuário",
+    "role":         "Papel",
+    "tenant":       "Tenant",
+    "installation": "Instalação"
+  },
+  "quickLinks": {
+    "title":            "Links Rápidos",
+    "recursos":         "Recursos",
+    "recursosDesc":     "Gerencie pools, agentes e skills",
+    "monitor":          "Monitor",
+    "monitorDesc":      "Monitore sessões ativas",
+    "underConstruction":"Módulos em construção",
+    "comingSoon":       "Mais funcionalidades em breve"
+  },
+  "features": {
+    "title":          "Funcionalidades da Plataforma",
+    "routing":        "Routing Engine",
+    "routingDesc":    "Alocação inteligente de agentes",
+    "skills":         "Skill Flows",
+    "skillsDesc":     "Automação de processos",
+    "analytics":      "Analytics",
+    "analyticsDesc":  "Insights em tempo real"
+  }
+}

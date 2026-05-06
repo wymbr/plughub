@@ -1,0 +1,129 @@
+{
+  "editor": {
+    "title":         "Editor de Agent Flow",
+    "newSkill":      "Nova Skill",
+    "newSkillId":    "ID da Skill (ex: skill_sac_v1)",
+    "save":          "Salvar",
+    "saving":        "Salvando…",
+    "saved":         "Salvo",
+    "discard":       "Descartar",
+    "delete":        "Excluir",
+    "confirmDelete": "Confirmar exclusão",
+    "search":        "Buscar skills…",
+    "noSkills":      "Nenhuma skill encontrada.",
+    "parseError":    "Erro de parse YAML",
+    "validating":    "Validando…"
+  },
+  "monitor": {
+    "title":  "📡 Monitor de Agent Flow",
+    "skills": "Skills",
+    "noSkillSelected": "Selecione uma skill para ver as instâncias.",
+    "noInstances":     "Nenhuma instância ativa",
+    "loading":         "Carregando instâncias…",
+    "bySkill":         "Por skill",
+    "allSkills":       "Todos os skills",
+    "allInstances":    "Todas as instâncias",
+    "instancesOf":     "Instâncias de {{skill}}",
+    "instanceCount":   "{{count}} instância(s)",
+    "refresh":         "↻ Atualizar",
+    "error":           "Erro",
+    "status": {
+      "ready":    "pronto",
+      "busy":     "em sessão",
+      "paused":   "pausado",
+      "draining": "drenando",
+      "offline":  "offline"
+    },
+    "statuses": {
+      "ready":    "Pronto",
+      "busy":     "Em sessão",
+      "paused":   "Pausado",
+      "draining": "Drenando",
+      "offline":  "Offline"
+    }
+  },
+  "deploy": {
+    "title":          "Deploy de AgentFlow",
+    "selectSkill":    "Selecione uma skill para fazer o deploy.",
+    "selectPoolsForDeploy": "Selecionar pools para deploy",
+    "executeDeployTitle": "Executar deploy",
+    "selectAtLeastOnePool": "Selecione ao menos um pool para ativar o deploy.",
+    "selectedPools":  "Pools selecionados:",
+    "deploying":      "Publicando…",
+    "deployNow":      "Publicar agora",
+    "deployExplain":  "O skill será publicado nos pools selecionados. Sessões em andamento continuarão com a versão anterior até o encerramento.",
+    "errorLoading":   "Erro ao carregar",
+    "noDeployDetected": "Nenhum deploy ativo detectado para este skill.",
+    "lastDeployment": "Último deploy",
+    "affectedPools":  "Pools afetados:",
+    "status": {
+      "draft":     "Rascunho",
+      "published": "Publicado"
+    },
+    "pools":          "Pools de destino",
+    "noPools":        "Nenhum pool disponível.",
+    "notes":          "Observações (opcional)",
+    "deployBtn":      "🚀 Deploy",
+    "deploySuccess":  "Deploy realizado com sucesso.",
+    "rollback":       "Rollback",
+    "rollbackConfirm":"Isso vai restaurar o snapshot YAML anterior e refazer o deploy. Continuar?",
+    "rollbackTooltip": "Restaurar este flow e fazer novo deploy nos mesmos pools",
+    "noSnapshotTitle": "Snapshot indisponível para este deploy",
+    "rollbackExplain": "O rollback restaura o flow daquele deploy e publica nos mesmos pools. Sessões em andamento continuam na versão anterior até o encerramento.",
+    "scheduleExplain": "Agende o deploy para ser executado automaticamente em um horário futuro. Os pools selecionados na seção acima serão utilizados.",
+    "selectPoolBeforeSchedule": "Selecione ao menos um pool acima antes de agendar.",
+    "scheduling":     "Agendando…",
+    "convergenceComplete": "Completa",
+    "sessionsMigrating": "sessão(ões) migrando…",
+    "handoffExplain": "Atualizado automaticamente a cada 10 s. Sessões em andamento migram para a nova versão ao encerrar.",
+    "version":        "Versão",
+    "originalDeploy": "Deploy original",
+    "deployId":       "Deploy ID",
+    "cancel":         "Cancelar",
+    "rolling":        "Fazendo rollback…",
+    "confirmRollback": "Confirmar rollback",
+    "schedule": {
+      "title":    "Agendar Deploy",
+      "dateTime": "Data/hora do deploy",
+      "submit":   "Agendar",
+      "pending":  "Deploys agendados pendentes",
+      "cancel":   "Cancelar"
+    },
+    "history": {
+      "title":      "Histórico de Deploys",
+      "noHistory":  "Nenhum deploy realizado.",
+      "current":    "atual",
+      "by":         "por",
+      "pools":      "pools",
+      "rollbackTag":"rollback"
+    },
+    "handoff": {
+      "title":          "Monitor de Handoff",
+      "activeSessions": "sessões na versão anterior",
+      "convergence":    "Convergência",
+      "notDeployed":    "Skill ainda não publicada.",
+      "allConverged":   "Todas as sessões na versão mais recente."
+    }
+  },
+  "report": {
+    "title":   "Relatório de Agent Flow",
+    "loading": "Carregando relatório…",
+    "noData":  "Sem dados disponíveis.",
+    "skillsCount": "{{count}} skill(s)",
+    "filterPlaceholder": "Filtrar por skill ou pool…",
+    "error": "Erro",
+    "totalSessions": "Total de Sessões",
+    "avgDuration": "Duração Média",
+    "avgEscalation": "Taxa de Escalação",
+    "skillsMonitored": "Skills Monitorados",
+    "skillName": "Skill / Agente",
+    "pool": "Pool",
+    "sessions": "Sessões",
+    "escalationRate": "Taxa de Escalação",
+    "handoffRate": "Taxa de Handoff",
+    "outcomes": "Outcomes"
+  },
+  "actions": {
+    "refresh": "Atualizar"
+  }
+}

@@ -1,0 +1,49 @@
+# TODO — PlugHub Itens Pendentes
+
+> Itens genuinamente não implementados. Histórico de implementações concluídas em `CHANGELOG.md`.
+
+---
+
+## Usage Metering — Channel Gateway adapters
+
+- **whatsapp_conversations, voice_minutes, sms_segments, email_messages** *(deferred)*: funções em `usage_emitter.py` implementadas, mas os adapters de canal ainda não as chamam. Será wired quando cada adapter for criado (WhatsApp, WebRTC/Voice, SMS, Email).
+
+---
+
+## Pricing Module
+
+- **Integração metering × pricing** *(deferred)*: módulo que lê contadores de `usage.events` no Redis/ClickHouse, aplica planos configurados no Config API e escreve `{tenant}:quota:limit:*` no Redis. Metering registra mas pricing não consome.
+
+---
+
+## Arc 8 — Relatório de Disponibilidade e Pausas de Agentes
+
+**Frontend já implementado:** `AgentReportsPage.tsx` e `PauseReasonModal.tsx` ✅ — aguardando backend.
+
+**Backend pendente:**
+
+1. **`agent_pause` schema** — adicionar `reason_id: string` e `reason_label: string` ao `AgentPauseEventSchema` em `packages/schemas/src/platform-events.ts`.
+
+2. **Config API — motivos de pausa** — seed de namespace `agent_activity` com chave `pause_reasons` (lista de `{ id, label, requires_note: bool }`). Motivos padrão: intervalo, almoço, treinamento, reunião, outro. Override por pool via chave `pause_reasons:{pool_id}`.
+
+3. **orchestrator-bridge — publicar `agent_pause`/`agent_ready` com motivo** — `PUT /api/agent-pause/:instanceId { reason_id, reason_label, note? }` publica no tópico `agent.lifecycle`. `PUT /api/agent-resume/:instanceId` publica `agent_ready`.
+
+4. **analytics-api — consumir `agent_pause` e `agent_ready`** — `parse_agent_lifecycle` estendido para processar pausas → tabela `agent_pause_intervals` (ClickHouse, `ReplacingMergeTree`). Schema: `interval_id, tenant_id, instance_id, agent_type_id, pool_id, reason_id, reason_label, note, paused_at, resumed_at, duration_ms`.
+
+5. **analytics-api — `GET /reports/agent-availability`** — agrega `agent_pause_intervals FINAL` por `(agent_type_id, pool_id, period_date)`. Campos: `total_pause_duration_ms`, `pause_count`, breakdown por `reason_id`. Pool scoping via `optional_pool_principal`.
+
+---
+
+## mcp-server-plughub — writeStreamEntry centralizado (Task #173)
+
+Refatoração estrutural para eliminar os múltiplos caminhos de XADD direto no stream Redis. Hoje existem quatro pontos de escrita com convenções inconsistentes: `message_send` (session.ts), `notification_send` (bpm.ts), `agent_done` (session.ts), `mention_dispatcher` (bpm.ts). Cada um grava campos com formatos diferentes (`author` como JSON object vs. campos flat, `segment_id` ausente ou inconsistente), causando bugs de visibilidade e fallbacks no `_parse_entry` do analytics-api.
+
+**Solução**: função única `writeStreamEntry()` com validação Zod obrigatória em compile-time e runtime antes de cada XADD. Campos obrigatórios: `type`, `author_id`, `author_role`, `visibility`, `content`, `timestamp`. `segment_id` opcional mas sempre presente como campo consistente. Falha ruidosa se campo ausente — nenhum entry incompleto entra no stream.
+
+---
+
+## CLAUDE.md — Otimização (Fases 2 e 3)
+
+**Fase 2** *(blocked by Fase 1)*: Mover Arc 6, Arc 4, Arc 7, ABAC e ContextStore para arquivos em `docs/modules/`. Manter no CLAUDE.md apenas resumo de 15–20 linhas por módulo com link para o arquivo completo.
+
+**Fase 3** *(blocked by Fase 2)*: Mover seções menores (WebChat Channel, Instance Bootstrap, Pool Lifecycle Hooks, Session Replayer, Usage Metering, Pricing Module) para `docs/modules/`. Revisão final para target ≤ 800 linhas no CLAUDE.md.

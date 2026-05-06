@@ -4,6 +4,7 @@
  * Two tabs: Instâncias (workflow lifecycle) and Webhooks (trigger management)
  */
 import React, { useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { useAuth } from '@/auth/useAuth'
 import {
   useWorkflowInstances, useWorkflowInstance,
@@ -25,33 +26,10 @@ const STATUS_COLORS: Record<WorkflowStatus, string> = {
   cancelled: '#6b7280',
 }
 
-const STATUS_LABELS: Record<WorkflowStatus | 'all', string> = {
-  all:       'Todos',
-  active:    'Ativo',
-  suspended: 'Suspenso',
-  completed: 'Concluído',
-  failed:    'Falhou',
-  timed_out: 'Expirou',
-  cancelled: 'Cancelado',
-}
-
-const SUSPEND_LABELS: Record<string, string> = {
-  approval: '⏳ Aguardando Aprovação',
-  input:    '✏️ Aguardando Input',
-  webhook:  '🔗 Aguardando Webhook',
-  timer:    '⏰ Aguardando Timer',
-}
-
-// ─── Tab bar ──────────────────────────────────────────────────────────────────
-
-const TABS: { key: Tab; label: string }[] = [
-  { key: 'instances', label: '⚡ Instâncias' },
-  { key: 'webhooks',  label: '🔗 Webhooks'  },
-]
-
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
 export default function WorkflowsPage() {
+  const { t } = useTranslation('workflows')
   const { session, tenantId } = useAuth()
 
   const [activeTab,    setActiveTab]    = useState<Tab>('instances')
@@ -69,7 +47,7 @@ export default function WorkflowsPage() {
 
   async function handleCancel() {
     if (!selectedId) return
-    if (!confirm('Cancelar esta instância?')) return
+    if (!confirm(t('instance.confirmCancel'))) return
     try {
       await cancelWorkflow(selectedId, tenantId)
       setSelectedId(null)
@@ -77,23 +55,28 @@ export default function WorkflowsPage() {
     } catch (e) { alert(String(e)) }
   }
 
+  const TABS: { key: Tab; label: string }[] = [
+    { key: 'instances', label: `⚡ ${t('instance.title')}` },
+    { key: 'webhooks',  label: `🔗 ${t('webhook.title')}`  },
+  ]
+
   return (
     <div style={page}>
       {/* Tab bar */}
       <div style={{ display: 'flex', alignItems: 'center', borderBottom: '1px solid #1e293b', flexShrink: 0, paddingLeft: 20, paddingRight: 20 }}>
-        {TABS.map(t => (
+        {TABS.map(tab => (
           <button
-            key={t.key}
-            onClick={() => setActiveTab(t.key)}
+            key={tab.key}
+            onClick={() => setActiveTab(tab.key)}
             style={{
-              padding: '10px 16px', fontSize: 13, fontWeight: activeTab === t.key ? 700 : 400,
-              color: activeTab === t.key ? '#93c5fd' : '#64748b',
+              padding: '10px 16px', fontSize: 13, fontWeight: activeTab === tab.key ? 700 : 400,
+              color: activeTab === tab.key ? '#93c5fd' : '#64748b',
               background: 'none', border: 'none', cursor: 'pointer',
-              borderBottom: activeTab === t.key ? '2px solid #93c5fd' : '2px solid transparent',
+              borderBottom: activeTab === tab.key ? '2px solid #93c5fd' : '2px solid transparent',
               marginBottom: -1,
             }}
           >
-            {t.label}
+            {tab.label}
           </button>
         ))}
       </div>
@@ -110,12 +93,12 @@ export default function WorkflowsPage() {
       {/* Top bar */}
       <div style={topBar}>
         <div>
-          <span style={{ fontWeight: 700, fontSize: 17, color: '#e2e8f0' }}>⚡ Instâncias</span>
+          <span style={{ fontWeight: 700, fontSize: 17, color: '#e2e8f0' }}>⚡ {t('instance.title')}</span>
           <span style={{ marginLeft: 10, fontSize: 12, color: '#64748b' }}>
-            {loading ? '⟳' : `${sorted.length} instância(s)`}
+            {loading ? '⟳' : t('instance.count', { count: sorted.length })}
           </span>
         </div>
-        <button style={btnCreate} onClick={() => setShowTrigger(true)}>+ Disparar</button>
+        <button style={btnCreate} onClick={() => setShowTrigger(true)}>+ {t('trigger.submit')}</button>
       </div>
 
       <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
@@ -135,7 +118,7 @@ export default function WorkflowsPage() {
                   color: filterStatus === s ? (s === 'all' ? '#93c5fd' : STATUS_COLORS[s as WorkflowStatus]) : '#64748b',
                 }}
               >
-                {STATUS_LABELS[s]}
+                {s === 'all' ? t('instance.statuses.all') : t(`statuses.${s}`)}
               </button>
             ))}
           </div>
@@ -144,7 +127,7 @@ export default function WorkflowsPage() {
           <div style={{ flex: 1, overflowY: 'auto' }}>
             {sorted.length === 0 && !loading && (
               <div style={{ padding: '40px 20px', textAlign: 'center', color: '#475569', fontSize: 13 }}>
-                Nenhuma instância encontrada.
+                {t('instance.noItems')}
               </div>
             )}
             {sorted.map(inst => (
@@ -164,11 +147,12 @@ export default function WorkflowsPage() {
             instance={detail}
             onCancel={handleCancel}
             onClose={() => setSelectedId(null)}
+            t={t}
           />
         ) : (
           <div style={emptyDetail}>
             <div style={{ fontSize: 32, marginBottom: 12 }}>⚡</div>
-            <div style={{ fontSize: 14, color: '#475569' }}>Selecione uma instância para ver os detalhes</div>
+            <div style={{ fontSize: 14, color: '#475569' }}>{t('instance.selectForDetails')}</div>
           </div>
         )}
       </div>
@@ -180,6 +164,7 @@ export default function WorkflowsPage() {
           installationId={session?.installationId ?? ''}
           onClose={() => setShowTrigger(false)}
           onTriggered={() => { setShowTrigger(false); refresh() }}
+          t={t}
         />
       )}
       </>)}
@@ -190,7 +175,11 @@ export default function WorkflowsPage() {
 // ─── InstanceRow ──────────────────────────────────────────────────────────────
 
 function InstanceRow({ inst, selected, onClick }: { inst: WorkflowInstance; selected: boolean; onClick: () => void }) {
+  const { t } = useTranslation('workflows')
   const color = STATUS_COLORS[inst.status]
+  const statusLabel = inst.status === 'timed_out' ? t('statuses.timed_out').toLowerCase() : t(`statuses.${inst.status}`).toLowerCase()
+  const suspendLabel = inst.suspend_reason ? t(`suspendReasons.${inst.suspend_reason}`) ?? inst.suspend_reason : null
+
   return (
     <div
       onClick={onClick}
@@ -206,15 +195,15 @@ function InstanceRow({ inst, selected, onClick }: { inst: WorkflowInstance; sele
           <div style={{ fontSize: 12, color: '#64748b', marginTop: 2 }}>{inst.flow_id}</div>
         </div>
         <span style={{ fontSize: 11, fontWeight: 700, padding: '2px 7px', borderRadius: 4, background: color + '33', color }}>
-          {inst.status === 'timed_out' ? 'expirou' : STATUS_LABELS[inst.status].toLowerCase()}
+          {statusLabel}
         </span>
       </div>
       <div style={{ fontSize: 11, color: '#475569', marginTop: 5 }}>
         {new Date(inst.created_at).toLocaleString('pt-BR')}
       </div>
-      {inst.suspend_reason && (
+      {suspendLabel && (
         <div style={{ fontSize: 11, color: '#fbbf24', marginTop: 3 }}>
-          {SUSPEND_LABELS[inst.suspend_reason] ?? inst.suspend_reason}
+          {suspendLabel}
         </div>
       )}
     </div>
@@ -223,13 +212,15 @@ function InstanceRow({ inst, selected, onClick }: { inst: WorkflowInstance; sele
 
 // ─── InstanceDetail ───────────────────────────────────────────────────────────
 
-function InstanceDetail({ instance: inst, onCancel, onClose }: {
+function InstanceDetail({ instance: inst, onCancel, onClose, t }: {
   instance: WorkflowInstance
   onCancel: () => void
   onClose:  () => void
+  t: (key: string, options?: Record<string, unknown>) => string
 }) {
   const color    = STATUS_COLORS[inst.status]
   const canCancel = ['active', 'suspended'].includes(inst.status)
+  const suspendLabel = inst.suspend_reason ? t(`suspendReasons.${inst.suspend_reason}`) ?? inst.suspend_reason : null
 
   return (
     <div style={detailPanel}>
@@ -244,52 +235,52 @@ function InstanceDetail({ instance: inst, onCancel, onClose }: {
 
       <div style={{ flex: 1, overflowY: 'auto', padding: '16px 20px' }}>
         {/* Status */}
-        <Section label="Status">
+        <Section label={t('instance.status')}>
           <span style={{ fontSize: 12, fontWeight: 700, padding: '3px 10px', borderRadius: 4, background: color + '33', color }}>
-            {inst.status === 'timed_out' ? 'expirou' : STATUS_LABELS[inst.status]}
+            {inst.status === 'timed_out' ? t('statuses.timed_out') : t(`statuses.${inst.status}`)}
           </span>
           {inst.current_step && (
             <div style={{ marginTop: 8, fontSize: 12, color: '#94a3b8' }}>
-              Step atual: <code style={{ color: '#e2e8f0' }}>{inst.current_step}</code>
+              {t('instance.currentStep')}: <code style={{ color: '#e2e8f0' }}>{inst.current_step}</code>
             </div>
           )}
           {inst.outcome && (
             <div style={{ marginTop: 4, fontSize: 12, color: '#94a3b8' }}>
-              Outcome: <code style={{ color: '#e2e8f0' }}>{inst.outcome}</code>
+              {t('instance.outcome')}: <code style={{ color: '#e2e8f0' }}>{inst.outcome}</code>
             </div>
           )}
         </Section>
 
         {/* Timeline */}
-        <Section label="Timeline">
-          <TimelineEntry dot="#22c55e" label="Criado" ts={inst.created_at} />
-          {inst.suspended_at  && <TimelineEntry dot="#eab308" label="Suspenso"  ts={inst.suspended_at} />}
-          {inst.resumed_at    && <TimelineEntry dot="#3b82f6" label="Retomado"  ts={inst.resumed_at} />}
-          {inst.completed_at  && <TimelineEntry dot="#22c55e" label="Concluído" ts={inst.completed_at} />}
+        <Section label={t('instance.timeline')}>
+          <TimelineEntry dot="#22c55e" label={t('instance.created')} ts={inst.created_at} />
+          {inst.suspended_at  && <TimelineEntry dot="#eab308" label={t('instance.suspended')}  ts={inst.suspended_at} />}
+          {inst.resumed_at    && <TimelineEntry dot="#3b82f6" label={t('instance.resumed')}  ts={inst.resumed_at} />}
+          {inst.completed_at  && <TimelineEntry dot="#22c55e" label={t('instance.completed')} ts={inst.completed_at} />}
         </Section>
 
         {/* Suspend reason */}
-        {inst.suspend_reason && (
-          <Section label="Motivo de suspensão">
+        {suspendLabel && (
+          <Section label={t('instance.suspendReason')}>
             <span style={{ fontSize: 12, padding: '3px 10px', borderRadius: 4, background: '#451a0322', color: '#fde047', border: '1px solid #451a03' }}>
-              {SUSPEND_LABELS[inst.suspend_reason] ?? inst.suspend_reason}
+              {suspendLabel}
             </span>
           </Section>
         )}
 
         {/* Resume token */}
         {inst.resume_token && (
-          <Section label="Resume Token">
+          <Section label={t('instance.resumeToken')}>
             <div
               style={{ background: '#0f172a', border: '1px solid #334155', borderRadius: 4, padding: '8px 12px', fontSize: 11, fontFamily: 'monospace', color: '#94a3b8', wordBreak: 'break-all', cursor: 'pointer' }}
               onClick={() => { void navigator.clipboard.writeText(inst.resume_token!); }}
-              title="Clique para copiar"
+              title={t('instance.clickToCopy')}
             >
               {inst.resume_token}
             </div>
             {inst.resume_expires_at && (
               <div style={{ marginTop: 4, fontSize: 11, color: '#475569' }}>
-                Expira: {new Date(inst.resume_expires_at).toLocaleString('pt-BR')}
+                {t('instance.expiresAt')}: {new Date(inst.resume_expires_at).toLocaleString('pt-BR')}
               </div>
             )}
           </Section>
@@ -303,7 +294,7 @@ function InstanceDetail({ instance: inst, onCancel, onClose }: {
             onClick={onCancel}
             style={{ width: '100%', padding: '8px', borderRadius: 4, border: '1px solid #ef4444', background: '#7f1d1d', color: '#fca5a5', cursor: 'pointer', fontSize: 13, fontWeight: 600 }}
           >
-            Cancelar Instância
+            {t('instance.cancelInstance')}
           </button>
         </div>
       )}
@@ -332,11 +323,12 @@ function TimelineEntry({ dot, label, ts }: { dot: string; label: string; ts: str
 
 // ─── TriggerModal ─────────────────────────────────────────────────────────────
 
-function TriggerModal({ tenantId, installationId, onClose, onTriggered }: {
+function TriggerModal({ tenantId, installationId, onClose, onTriggered, t }: {
   tenantId:       string
   installationId: string
   onClose:        () => void
   onTriggered:    () => void
+  t: (key: string, options?: Record<string, unknown>) => string
 }) {
   const [flowId,   setFlowId]   = useState('')
   const [metaJson, setMetaJson] = useState('{}')
@@ -344,10 +336,10 @@ function TriggerModal({ tenantId, installationId, onClose, onTriggered }: {
   const [saving,   setSaving]   = useState(false)
 
   async function handleTrigger() {
-    if (!flowId.trim()) { setError('flow_id obrigatório'); return }
+    if (!flowId.trim()) { setError(t('trigger.flowId')); return }
     let metadata: Record<string, unknown>
     try { metadata = JSON.parse(metaJson) }
-    catch { setError('metadata deve ser JSON válido'); return }
+    catch { setError(t('trigger.context')); return }
 
     setSaving(true); setError(null)
     try {
@@ -367,12 +359,12 @@ function TriggerModal({ tenantId, installationId, onClose, onTriggered }: {
     <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100 }}>
       <div style={{ background: '#1e293b', borderRadius: 10, padding: 24, width: 480, maxWidth: '95vw', boxShadow: '0 20px 60px rgba(0,0,0,0.6)' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
-          <h3 style={{ margin: 0, fontSize: 16, fontWeight: 700, color: '#e2e8f0' }}>⚡ Disparar Workflow</h3>
+          <h3 style={{ margin: 0, fontSize: 16, fontWeight: 700, color: '#e2e8f0' }}>⚡ {t('trigger.title')}</h3>
           <button onClick={onClose} style={{ background: 'none', border: 'none', color: '#64748b', cursor: 'pointer', fontSize: 18 }}>✕</button>
         </div>
 
         <div style={{ marginBottom: 14 }}>
-          <label style={{ display: 'block', fontSize: 12, fontWeight: 600, color: '#94a3b8', marginBottom: 4 }}>Flow ID *</label>
+          <label style={{ display: 'block', fontSize: 12, fontWeight: 600, color: '#94a3b8', marginBottom: 4 }}>{t('trigger.flowId')} *</label>
           <input
             style={inputStyle}
             value={flowId}
@@ -382,7 +374,7 @@ function TriggerModal({ tenantId, installationId, onClose, onTriggered }: {
         </div>
 
         <div style={{ marginBottom: 14 }}>
-          <label style={{ display: 'block', fontSize: 12, fontWeight: 600, color: '#94a3b8', marginBottom: 4 }}>Metadata (JSON)</label>
+          <label style={{ display: 'block', fontSize: 12, fontWeight: 600, color: '#94a3b8', marginBottom: 4 }}>{t('trigger.context')}</label>
           <textarea
             style={{ ...inputStyle, height: 100, resize: 'vertical', fontFamily: 'monospace', fontSize: 12 }}
             value={metaJson}
@@ -394,9 +386,9 @@ function TriggerModal({ tenantId, installationId, onClose, onTriggered }: {
 
         <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
           <button style={btnCreate} onClick={handleTrigger} disabled={saving}>
-            {saving ? 'Disparando…' : 'Disparar'}
+            {saving ? t('trigger.submit') + '…' : t('trigger.submit')}
           </button>
-          <button style={btnSecondary} onClick={onClose}>Cancelar</button>
+          <button style={btnSecondary} onClick={onClose}>{t('trigger.cancel')}</button>
         </div>
       </div>
     </div>

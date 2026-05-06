@@ -1,0 +1,37 @@
+{
+  "title": "Configuração de Plataforma",
+  "description": "Configurações da plataforma e gestão de calendários",
+  "adminTokenLabel": "Admin Token:",
+  "adminTokenPlaceholder": "Para habilitar edição",
+  "hideToken": "Ocultar",
+  "showToken": "Mostrar",
+  "tokenSet": "token definido",
+  "configTab": "Configuração",
+  "calendarTab": "Calendários",
+  "tabs": {
+    "config":    "Configuração",
+    "calendars": "Calendários"
+  },
+  "namespace": {
+    "title":       "Namespaces",
+    "adminToken":  "Admin token",
+    "tokenHint":   "Para habilitar edição",
+    "key":         "Chave",
+    "value":       "Valor",
+    "scope":       "Escopo",
+    "scopeGlobal": "🌐 Padrão global",
+    "scopeTenant": "🏢 Override por tenant",
+    "tenantBadge": "override por tenant",
+    "edit":        "Editar",
+    "save":        "Salvar",
+    "cancel":      "Cancelar",
+    "reset":       "Restaurar padrão global",
+    "description": "Descrição",
+    "noEntries":   "Nenhuma entrada neste namespace.",
+    "loading":     "Carregando configuração…"
+  },
+  "calendar": {
+    "noItems":   "Nenhum calendário configurado.",
+    "loading":   "Carregando calendários…"
+  }
+}

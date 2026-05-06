@@ -19,6 +19,7 @@ interface SkillDetail extends Skill {
 const SkillsPage: React.FC = () => {
   const { session } = useAuth()
   const { t } = useTranslation('configRecursos')
+  const { t: tCommon } = useTranslation('common')
   const [skills, setSkills] = useState<Skill[]>([])
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState('')
@@ -36,7 +37,7 @@ const SkillsPage: React.FC = () => {
       const result = await registryApi.listSkills(session.tenantId)
       setSkills(result.items || [])
     } catch {
-      setError('Failed to load skills')
+      setError(t('skills.loadFailed'))
     } finally {
       setIsLoading(false)
     }
@@ -137,16 +138,16 @@ const SkillsPage: React.FC = () => {
           footer={
             confirmDelete ? (
               <>
-                <span className="text-sm text-red self-center">Delete this skill?</span>
-                <Button variant="ghost" onClick={() => setConfirmDelete(false)}>Cancel</Button>
+                <span className="text-sm text-red self-center">{t('skills.deleteConfirm')}</span>
+                <Button variant="ghost" onClick={() => setConfirmDelete(false)}>{tCommon('cancel')}</Button>
                 <Button variant="danger" onClick={handleDelete} disabled={isDeleting}>
-                  {isDeleting ? 'Deleting...' : 'Confirm'}
+                  {isDeleting ? t('skills.deleting') : tCommon('confirm')}
                 </Button>
               </>
             ) : (
               <>
-                <Button variant="danger" onClick={() => setConfirmDelete(true)}>Delete</Button>
-                <Button variant="ghost" onClick={() => setIsDetailOpen(false)}>Close</Button>
+                <Button variant="danger" onClick={() => setConfirmDelete(true)}>{tCommon('delete')}</Button>
+                <Button variant="ghost" onClick={() => setIsDetailOpen(false)}>{t('skills.close')}</Button>
               </>
             )
           }

@@ -7,48 +7,48 @@ import Badge from '@/components/ui/Badge'
 
 const HomePage: React.FC = () => {
   const { session } = useAuth()
-  const { t } = useTranslation('shell')
+  const { t } = useTranslation('home')
 
   return (
     <div>
       <h1 className="text-3xl font-bold text-dark mb-2">
-        {session && `Bem-vindo, ${session.name}`}
+        {session && t('welcome', { name: session.name })}
       </h1>
-      <p className="text-gray mb-8">Enterprise Orchestration Platform</p>
+      <p className="text-gray mb-8">{t('subtitle')}</p>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
-        <Card title="Profile Information">
+        <Card title={t('profile.title')}>
           <div className="space-y-3">
             <div>
-              <p className="text-xs text-gray uppercase font-semibold">User ID</p>
+              <p className="text-xs text-gray uppercase font-semibold">{t('profile.userId')}</p>
               <p className="text-sm text-dark font-semibold">{session?.userId}</p>
             </div>
             <div>
-              <p className="text-xs text-gray uppercase font-semibold">Role</p>
+              <p className="text-xs text-gray uppercase font-semibold">{t('profile.role')}</p>
               <div className="mt-1">
                 <Badge variant="default">{session?.role}</Badge>
               </div>
             </div>
             <div>
-              <p className="text-xs text-gray uppercase font-semibold">Tenant</p>
+              <p className="text-xs text-gray uppercase font-semibold">{t('profile.tenant')}</p>
               <p className="text-sm text-dark font-semibold">{session?.tenantId}</p>
             </div>
             <div>
-              <p className="text-xs text-gray uppercase font-semibold">Installation</p>
+              <p className="text-xs text-gray uppercase font-semibold">{t('profile.installation')}</p>
               <p className="text-sm text-dark font-semibold">{session?.installationId}</p>
             </div>
           </div>
         </Card>
 
-        <Card title="Quick Links">
+        <Card title={t('quickLinks.title')}>
           <div className="space-y-2">
             {session?.role === 'admin' && (
               <Link
                 to="/config/recursos"
                 className="block p-3 rounded border border-lightGray hover:bg-tableAlt transition-colors"
               >
-                <p className="font-semibold text-dark">{t('nav.recursos')}</p>
-                <p className="text-xs text-gray">Manage pools, agents, and skills</p>
+                <p className="font-semibold text-dark">{t('quickLinks.recursos')}</p>
+                <p className="text-xs text-gray">{t('quickLinks.recursosDesc')}</p>
               </Link>
             )}
 
@@ -58,36 +58,36 @@ const HomePage: React.FC = () => {
                   to="/monitor"
                   className="block p-3 rounded border border-lightGray hover:bg-tableAlt transition-colors"
                 >
-                  <p className="font-semibold text-dark">{t('nav.monitor')}</p>
-                  <p className="text-xs text-gray">Monitor active sessions</p>
+                  <p className="font-semibold text-dark">{t('quickLinks.monitor')}</p>
+                  <p className="text-xs text-gray">{t('quickLinks.monitorDesc')}</p>
                 </Link>
               </>
             )}
 
             <div className="p-3 rounded border border-lightGray bg-tableAlt">
-              <p className="font-semibold text-dark text-sm">Modules under construction</p>
-              <p className="text-xs text-gray mt-1">More features coming soon</p>
+              <p className="font-semibold text-dark text-sm">{t('quickLinks.underConstruction')}</p>
+              <p className="text-xs text-gray mt-1">{t('quickLinks.comingSoon')}</p>
             </div>
           </div>
         </Card>
       </div>
 
-      <Card title="Platform Features">
+      <Card title={t('features.title')}>
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           <div className="text-center">
             <p className="text-2xl mb-2">🎯</p>
-            <p className="font-semibold text-dark text-sm">Routing Engine</p>
-            <p className="text-xs text-gray">Smart agent allocation</p>
+            <p className="font-semibold text-dark text-sm">{t('features.routing')}</p>
+            <p className="text-xs text-gray">{t('features.routingDesc')}</p>
           </div>
           <div className="text-center">
             <p className="text-2xl mb-2">⚙️</p>
-            <p className="font-semibold text-dark text-sm">Skill Flows</p>
-            <p className="text-xs text-gray">Process automation</p>
+            <p className="font-semibold text-dark text-sm">{t('features.skills')}</p>
+            <p className="text-xs text-gray">{t('features.skillsDesc')}</p>
           </div>
           <div className="text-center">
             <p className="text-2xl mb-2">📊</p>
-            <p className="font-semibold text-dark text-sm">Analytics</p>
-            <p className="text-xs text-gray">Real-time insights</p>
+            <p className="font-semibold text-dark text-sm">{t('features.analytics')}</p>
+            <p className="text-xs text-gray">{t('features.analyticsDesc')}</p>
           </div>
         </div>
       </Card>

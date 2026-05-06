@@ -47,15 +47,15 @@ const InstancesPage: React.FC = () => {
   }, [loadInstances])
 
   const statusOptions = [
-    { value: '',         label: 'All statuses' },
-    { value: 'ready',    label: 'Ready'    },
-    { value: 'busy',     label: 'Busy'     },
-    { value: 'paused',   label: 'Paused'   },
-    { value: 'draining', label: 'Draining' },
+    { value: '',         label: t('instances.filters.allStatuses') },
+    { value: 'ready',    label: t('instances.filters.ready')       },
+    { value: 'busy',     label: t('instances.filters.busy')        },
+    { value: 'paused',   label: t('instances.filters.paused')      },
+    { value: 'draining', label: t('instances.filters.draining')    },
   ]
 
   const poolOptions = [
-    { value: '', label: 'All pools' },
+    { value: '', label: t('instances.filters.allPools') },
     ...pools.map(p => ({ value: p.pool_id, label: p.pool_id })),
   ]
 
@@ -73,7 +73,7 @@ const InstancesPage: React.FC = () => {
     { key: 'pool_id',       label: t('instances.fields.pool') },
     {
       key: 'channel_types',
-      label: 'Channels',
+      label: t('instances.fields.channels'),
       render: (channels: string[]) => (
         <div className="flex gap-1 flex-wrap">
           {(channels || []).map(ch => (
@@ -104,13 +104,13 @@ const InstancesPage: React.FC = () => {
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
         <Select
-          label="Status"
+          label={t('instances.filters.status')}
           value={statusFilter}
           onChange={e => setStatusFilter(e.target.value)}
           options={statusOptions}
         />
         <Select
-          label="Pool"
+          label={t('instances.filters.pool')}
           value={poolFilter}
           onChange={e => setPoolFilter(e.target.value)}
           options={poolOptions}
@@ -126,7 +126,7 @@ const InstancesPage: React.FC = () => {
       )}
 
       <div className="mt-4 text-xs text-gray text-center">
-        Auto-refresh every 15 seconds · {instances.length} instance{instances.length !== 1 ? 's' : ''}
+        {t('instances.autoRefresh')} · {t('instances.instanceCount', { count: instances.length })}
       </div>
     </div>
   )

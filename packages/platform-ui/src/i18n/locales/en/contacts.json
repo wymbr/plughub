@@ -1,0 +1,101 @@
+{
+  "title": "Contacts",
+  "tabs": {
+    "list":    "List",
+    "monitor": "Monitor",
+    "analysis": "Analysis"
+  },
+  "noTenant": "No tenant in session. Please log in again.",
+  "detail": {
+    "back":     "← Contacts",
+    "segments": "💬 Segments"
+  },
+  "filter": {
+    "from":           "From",
+    "to":             "to",
+    "sessionId":      "Session ID…",
+    "allChannels":    "All channels",
+    "allOutcomes":    "All outcomes",
+    "moreFilters":    "More filters",
+    "clearFilters":   "✕ Clear",
+    "pool":           "Pool",
+    "agent":          "Agent",
+    "ani":            "Origin (ANI)",
+    "dnis":           "Destination (DNIS)",
+    "eventCategory":  "Event",
+    "tags":           "Tags"
+  },
+  "insights": {
+    "loading":    "Loading events…",
+    "loadError":  "Failed to load business events.",
+    "empty":      "No business events recorded in this session.",
+    "registeredBy": "Registered by:"
+  },
+  "lista": {
+    "loading":    "Loading…",
+    "empty":      "No contacts found with the applied filters.",
+    "page":       "Page {{page}} of {{total}}",
+    "prev":       "← Previous",
+    "next":       "Next →",
+    "active":     "Active",
+    "liveStatus": "active",
+    "columns": {
+      "sessionId":  "Session ID",
+      "channel":    "Channel",
+      "pool":       "Pool",
+      "origin":     "Origin",
+      "destination":"Destination",
+      "started":    "Started",
+      "ended":      "Ended",
+      "duration":   "Duration",
+      "status":     "Status / Outcome",
+      "segments":   "Segments"
+    },
+    "count_one":   "{{count}} contact",
+    "count_other": "{{count}} contacts"
+  },
+  "monitor": {
+    "loading":       "Loading pool data…",
+    "noData":        "No pool data available.",
+    "available":     "available",
+    "queue":         "queue",
+    "sla":           "SLA",
+    "breadcrumbs": {
+      "pools":    "Pools",
+      "sessions": "Sessions",
+      "segments": "Segments",
+      "transcript":"Transcript"
+    },
+    "sessionList": {
+      "title":   "Active Sessions",
+      "empty":   "No active sessions.",
+      "loading": "Loading sessions…"
+    },
+    "segmentList": {
+      "title":   "Segments",
+      "empty":   "No segments.",
+      "loading": "Loading segments…"
+    }
+  },
+  "analysis": {
+    "loading":           "Calculating metrics…",
+    "contact_one":       "{{count}} contact analyzed",
+    "contact_other":     "{{count}} contacts analyzed",
+    "showingFirst":      "(showing first {{limit}})",
+    "dataUnavailable":   "Contact data temporarily unavailable ({{error}}). Historical charts are still displayed.",
+    "retry":             "⟳ Retry",
+    "noData":            "No data",
+    "totalContacts":     "Total Contacts",
+    "resolutionRate":    "Resolution Rate",
+    "resolved":          "{{count}} resolved",
+    "avgHandleTime":     "Avg. Handle Time (HT)",
+    "activeChannels":    "Active Channels",
+    "outcomeDistrib":    "Outcome Distribution",
+    "channelDistrib":    "Channel Distribution",
+    "volumeByPool":      "Volume by Pool",
+    "volumeChart":       "Contact Volume",
+    "contacts":          "Contacts",
+    "avgHandleChart":    "Average Handle Time",
+    "time":              "Time"
+  }
+}

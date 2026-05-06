@@ -12,17 +12,19 @@
  *   4. Rules overview — read-only list of DEFAULT_MASKING_RULES categories
  */
 import React, { useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { useAuth } from '@/auth/useAuth'
 import { useNamespace, putConfig } from '../config-plataforma/api/config-hooks'
 
 // ── Masking categories (mirrors DEFAULT_MASKING_RULES in schemas/audit.ts) ─────
+// Labels are translated inline in the component
 const DEFAULT_CATEGORIES = [
-  { id: 'credit_card',  label: 'Cartão de Crédito', example: '****1234',      icon: '💳' },
-  { id: 'cpf',          label: 'CPF',                example: '***-00',        icon: '🪪' },
-  { id: 'phone',        label: 'Telefone',           example: '(11) ****-4321', icon: '📞' },
-  { id: 'email_addr',   label: 'E-mail',             example: 'j***@emp.com',  icon: '📧' },
-  { id: 'iban',         label: 'IBAN',               example: 'BR***1234',     icon: '🏦' },
-  { id: 'passport',     label: 'Passaporte',         example: '***1234',       icon: '🛂' },
+  { id: 'credit_card',  example: '****1234',      icon: '💳' },
+  { id: 'cpf',          example: '***-00',        icon: '🪪' },
+  { id: 'phone',        example: '(11) ****-4321', icon: '📞' },
+  { id: 'email_addr',   example: 'j***@emp.com',  icon: '📧' },
+  { id: 'iban',         example: 'BR***1234',     icon: '🏦' },
+  { id: 'passport',     example: '***1234',       icon: '🛂' },
 ]
 
 const ROLES_OPTIONS = ['evaluator', 'reviewer', 'supervisor', 'admin', 'developer']
@@ -42,6 +44,7 @@ function badge(text: string, color: string) {
 // ── Main component ────────────────────────────────────────────────────────────
 
 export default function MaskingPage() {
+  const { t } = useTranslation('masking')
   const { tenantId }   = useAuth()
   const [adminToken,   setAdminToken]   = useState('')
   const [showToken,    setShowToken]    = useState(false)
@@ -69,12 +72,12 @@ export default function MaskingPage() {
   }
 
   async function saveKey(key: string, value: unknown) {
-    if (!adminToken) { showToast('Admin token obrigatório para salvar', false); return }
+    if (!adminToken) { showToast(t('toast.tokenRequired'), false); return }
     setSaving(key)
     try {
       await putConfig('masking', key, value, tenantId, adminToken)
       reload()
-      showToast(`${key} salvo`, true)
+      showToast(t('toast.keySaved', { key }), true)
     } catch (e) {
       showToast(String(e), false)
     } finally {
@@ -109,21 +112,20 @@ export default function MaskingPage() {
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 16 }}>
           <div>
             <h1 style={{ margin: 0, fontSize: 18, fontWeight: 700, color: '#e2e8f0' }}>
-              🔒 Mascaramento de Mensagens
+              🔒 {t('header.title')}
             </h1>
             <p style={{ margin: '4px 0 0', fontSize: 13, color: '#64748b' }}>
-              Tokens inline protegem dados sensíveis no stream canônico.
-              Alterações propagam em até 60 s (TTL do cache Redis da Config API).
+              {t('header.description')}
             </p>
           </div>
           {/* Admin token */}
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
-            <label style={{ fontSize: 12, color: '#64748b' }}>Admin Token:</label>
+            <label style={{ fontSize: 12, color: '#64748b' }}>{t('header.adminToken')}:</label>
             <input
               type={showToken ? 'text' : 'password'}
               value={adminToken}
               onChange={e => setAdminToken(e.target.value)}
-              placeholder="Para habilitar edição"
+              placeholder={t('header.tokenPlaceholder')}
               style={inputStyle}
             />
             <button style={iconBtn} onClick={() => setShowToken(v => !v)}>
@@ -135,7 +137,7 @@ export default function MaskingPage() {
       </div>
 
       {/* Loading / error */}
-      {loading && <div style={infoBox('#1e293b', '#94a3b8')}>Carregando configurações…</div>}
+      {loading && <div style={infoBox('#1e293b', '#94a3b8')}>{t('loading')}</div>}
       {error   && <div style={infoBox('#7f1d1d22', '#fca5a5')}>⚠ {error}</div>}
 
       <div style={{ padding: '20px 28px', display: 'flex', flexDirection: 'column', gap: 24 }}>
@@ -143,8 +145,8 @@ export default function MaskingPage() {
         {/* ── Section 1: Access Policy ─────────────────────────────────────── */}
         <Section
           icon="👥"
-          title="Controle de Acesso ao original_content"
-          desc="Define quais roles podem ver o valor original de campos mascarados (via session_context_get e evaluation_context_get). Agentes com roles fora desta lista recebem apenas o display_partial (ex: ***-00)."
+          title={t('section.access.title')}
+          desc={t('section.access.description')}
         >
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 12 }}>
             {ROLES_OPTIONS.map(role => {
@@ -168,27 +170,29 @@ export default function MaskingPage() {
             })}
           </div>
           <p style={{ margin: '10px 0 0', fontSize: 12, color: '#475569' }}>
-            Roles ativos: {authorizedRoles.length === 0 ? '(nenhum — todo conteúdo mascarado)' : authorizedRoles.join(', ')}
+            {t('section.access.activeRoles', {
+              roles: authorizedRoles.length === 0 ? t('section.access.noRoles') : authorizedRoles.join(', ')
+            })}
           </p>
         </Section>
 
         {/* ── Section 2: Audit Capture ──────────────────────────────────────── */}
         <Section
           icon="📋"
-          title="Captura de Audit Records"
-          desc="Controla se input/output das tool calls MCP são capturados nos registros de auditoria (Kafka topic mcp.audit). Atenção LGPD: capture_input pode incluir valores mascarados resolvidos."
+          title={t('section.audit.title')}
+          desc={t('section.audit.description')}
         >
           <div style={{ display: 'flex', gap: 16, marginTop: 12, flexWrap: 'wrap' }}>
             <ToggleCard
-              label="Capturar Input"
+              label={t('section.audit.captureInput')}
               sublabel="capture_input_default"
               active={captureInput}
               onToggle={() => saveKey('capture_input_default', !captureInput)}
               saving={saving === 'capture_input_default'}
-              warning="Atenção: pode capturar valores sensíveis resolvidos"
+              warning={t('section.audit.warning')}
             />
             <ToggleCard
-              label="Capturar Output"
+              label={t('section.audit.captureOutput')}
               sublabel="capture_output_default"
               active={captureOutput}
               onToggle={() => saveKey('capture_output_default', !captureOutput)}
@@ -200,8 +204,8 @@ export default function MaskingPage() {
         {/* ── Section 3: Token Retention ────────────────────────────────────── */}
         <Section
           icon="⏱"
-          title="Retenção de Tokens"
-          desc="Tempo em dias que os tokens de mascaramento são mantidos no Redis. Após expirar, o original_content não pode mais ser resolvido — use apenas em sessões encerradas ou relatórios com dados já exportados."
+          title={t('section.retention.title')}
+          desc={t('section.retention.description')}
         >
           <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginTop: 12 }}>
             <RetentionEditor
@@ -215,8 +219,8 @@ export default function MaskingPage() {
         {/* ── Section 4: Categories overview ───────────────────────────────── */}
         <Section
           icon="📋"
-          title="Categorias de Mascaramento"
-          desc="Categorias ativas por padrão (DEFAULT_MASKING_RULES em @plughub/schemas/audit.ts). Para adicionar regras customizadas ou desativar categorias, configure {tenantId}:masking:config diretamente no Redis."
+          title={t('section.categories.title')}
+          desc={t('section.categories.description')}
         >
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))', gap: 10, marginTop: 12 }}>
             {DEFAULT_CATEGORIES.map(cat => (
@@ -226,23 +230,22 @@ export default function MaskingPage() {
               }}>
                 <span style={{ fontSize: 22 }}>{cat.icon}</span>
                 <div>
-                  <div style={{ fontWeight: 600, fontSize: 13, color: '#e2e8f0' }}>{cat.label}</div>
+                  <div style={{ fontWeight: 600, fontSize: 13, color: '#e2e8f0' }}>{t(`categories.${cat.id}`)}</div>
                   <div style={{ fontSize: 11, color: '#64748b', marginTop: 2 }}>
-                    Exibe: <code style={{ color: '#94a3b8', background: '#1e293b', padding: '0 4px', borderRadius: 3 }}>{cat.example}</code>
+                    {t('section.categories.display')}: <code style={{ color: '#94a3b8', background: '#1e293b', padding: '0 4px', borderRadius: 3 }}>{cat.example}</code>
                   </div>
-                  <div style={{ marginTop: 6 }}>{badge('ativo', '#22c55e')}</div>
+                  <div style={{ marginTop: 6 }}>{badge(t('section.categories.active'), '#22c55e')}</div>
                 </div>
               </div>
             ))}
           </div>
           <div style={{ marginTop: 12, padding: '10px 14px', background: '#0f172a', borderRadius: 8, border: '1px solid #1e293b' }}>
             <p style={{ margin: 0, fontSize: 12, color: '#64748b', lineHeight: 1.6 }}>
-              <strong style={{ color: '#94a3b8' }}>Formato do token inline:</strong>{' '}
+              <strong style={{ color: '#94a3b8' }}>{t('section.categories.tokenFormat')}:</strong>{' '}
               <code style={{ color: '#7dd3fc', background: '#0c1a30', padding: '2px 6px', borderRadius: 3 }}>
                 [category:tk_a8f3:display_partial]
               </code>
-              {' '}— substituído por <em>display_partial</em> na entrega ao cliente via WebSocket.
-              Resolvido para o valor original por roles autorizados via MCP tools.
+              {' '}— {t('section.categories.tokenExplanation')}
             </p>
           </div>
         </Section>
@@ -309,6 +312,7 @@ function ToggleCard({ label, sublabel, active, onToggle, saving, warning }: {
 function RetentionEditor({ value, onSave, saving }: {
   value: number; onSave: (v: number) => void; saving: boolean
 }) {
+  const { t } = useTranslation('masking')
   const [editing, setEditing] = useState(false)
   const [draft,   setDraft]   = useState(String(value))
 
@@ -333,9 +337,9 @@ function RetentionEditor({ value, onSave, saving }: {
             autoFocus
           />
           <button onClick={commit} disabled={saving} style={saveBtnStyle}>
-            {saving ? '…' : 'Salvar'}
+            {saving ? '…' : t('retention.save')}
           </button>
-          <button onClick={() => setEditing(false)} style={cancelBtnStyle}>Cancelar</button>
+          <button onClick={() => setEditing(false)} style={cancelBtnStyle}>{t('retention.cancel')}</button>
         </>
       ) : (
         <>
@@ -345,9 +349,9 @@ function RetentionEditor({ value, onSave, saving }: {
           }}>
             {value}
           </div>
-          <div style={{ color: '#64748b', fontSize: 13 }}>dias</div>
+          <div style={{ color: '#64748b', fontSize: 13 }}>{t('retention.days')}</div>
           <button onClick={() => { setDraft(String(value)); setEditing(true) }} style={editBtnStyle}>
-            ✏️ Editar
+            ✏️ {t('retention.edit')}
           </button>
         </>
       )}

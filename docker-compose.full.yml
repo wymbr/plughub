@@ -233,6 +233,7 @@ services:
       JWT_SECRET:         demo_plughub_secret_32chars__
       KAFKA_BROKERS:      kafka:29092
       AGENT_REGISTRY_URL: http://agent-registry:3300
+      CALENDAR_API_URL:   http://calendar-api:3700
     depends_on:
       redis:
         condition: service_healthy

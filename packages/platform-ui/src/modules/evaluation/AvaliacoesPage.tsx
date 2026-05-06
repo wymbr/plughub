@@ -11,6 +11,7 @@
  * available_actions comes from the server (Bearer JWT → ABAC) — never computed locally.
  */
 import React, { useState, useEffect, useCallback } from 'react'
+import { useTranslation } from 'react-i18next'
 import { useAuth } from '@/auth/useAuth'
 import {
   useResults,
@@ -40,15 +41,7 @@ function ScorePill({ score }: { score: number }) {
   return <span className={`px-2 py-0.5 rounded text-sm font-bold ${bg}`}>{display}</span>
 }
 
-const STATUS_LABELS: Record<string, string> = {
-  submitted:        'Submetido',
-  approved:         'Aprovado',
-  adjusted_approved:'Aprovado c/ ajuste',
-  rejected:         'Rejeitado',
-  contested:        'Contestado',
-  locked:           'Bloqueado',
-}
-
+// STATUS_STYLES and status badge rendering with i18n support
 const STATUS_STYLES: Record<string, string> = {
   submitted:        'bg-blue-100 text-blue-700',
   approved:         'bg-green-100 text-green-800',
@@ -58,10 +51,11 @@ const STATUS_STYLES: Record<string, string> = {
   locked:           'bg-gray-100 text-gray-500',
 }
 
-function StatusBadge({ status }: { status: string }) {
+function StatusBadge({ status, t }: { status: string; t: (key: string) => string }) {
+  const labelKey = `statuses.${status}`
   return (
     <span className={`px-2 py-0.5 rounded text-xs font-medium ${STATUS_STYLES[status] ?? 'bg-gray-100 text-gray-500'}`}>
-      {STATUS_LABELS[status] ?? status}
+      {t(labelKey) ?? status}
     </span>
   )
 }
@@ -150,6 +144,7 @@ function ReviewPanel({
   adminToken: string
   onDone:     () => void
 }) {
+  const { t } = useTranslation('evaluation')
   const { tenantId: TENANT } = useAuth()
   const [decision, setDecision] = useState<'approved' | 'adjusted_approved' | 'rejected'>('approved')
   const [saving,   setSaving]   = useState(false)
@@ -181,7 +176,7 @@ function ReviewPanel({
   const noteOk       = !requiresNote || reviewNote.length > 0
 
   const submit = async () => {
-    if (!noteOk) { setError('Adicione ao menos uma nota de revisão para ajuste/rejeição'); return }
+    if (!noteOk) { setError(t('review.noteRequired')); return }
     setSaving(true)
     setError(null)
     try {
@@ -219,13 +214,13 @@ function ReviewPanel({
       {openContestations.length > 0 && (
         <div className="border border-orange-200 rounded bg-orange-50">
           <div className="text-xs font-semibold text-orange-700 px-3 pt-3 pb-1">
-            ⚑ Contestações abertas
+            ⚑ {t('review.openContestations')}
           </div>
           {openContestations.map(c => {
             const parsed = parseContestationReason(c.reason)
             return (
               <div key={c.contestation_id} className="px-3 pb-3 space-y-2">
-                <p className="text-xs text-gray-500">De: <strong>{c.contested_by}</strong></p>
+                <p className="text-xs text-gray-500">{t('review.from')}: <strong>{c.contested_by}</strong></p>
                 {parsed.map((p, i) => (
                   <div key={i} className={`rounded p-2 text-xs space-y-1 ${p.criterion_id ? 'bg-white border border-orange-100' : 'bg-orange-100'}`}>
                     {p.criterion_id && (
@@ -235,7 +230,7 @@ function ReviewPanel({
                       </div>
                     )}
                     {p.system_evaluation && (
-                      <p className="text-gray-500 italic">Avaliado como: {p.system_evaluation}</p>
+                      <p className="text-gray-500 italic">{t('review.evaluatedAs')}: {p.system_evaluation}</p>
                     )}
                     <p className="text-orange-800 font-medium">{p.disagreement || p.criterion_id === '' ? p.disagreement : '—'}</p>
                   </div>
@@ -244,11 +239,11 @@ function ReviewPanel({
                   <button
                     onClick={() => adjudicate(c, 'accepted')}
                     className="text-xs bg-green-100 text-green-700 px-2 py-0.5 rounded hover:bg-green-200"
-                  >✓ Procedente</button>
+                  >✓ {t('review.accepted')}</button>
                   <button
                     onClick={() => adjudicate(c, 'rejected')}
                     className="text-xs bg-gray-100 text-gray-600 px-2 py-0.5 rounded hover:bg-gray-200"
-                  >✕ Improcedente</button>
+                  >✕ {t('review.rejected')}</button>
                 </div>
               </div>
             )
@@ -258,13 +253,13 @@ function ReviewPanel({
 
       {/* Decision */}
       <div>
-        <div className="text-xs font-semibold text-gray-600 mb-2">Decisão</div>
+        <div className="text-xs font-semibold text-gray-600 mb-2">{t('review.decision')}</div>
         <div className="flex gap-4">
           {(['approved', 'adjusted_approved', 'rejected'] as const).map(d => (
             <label key={d} className="flex items-center gap-1.5 text-sm cursor-pointer">
               <input type="radio" value={d} checked={decision === d} onChange={() => setDecision(d)} />
               <span className={d === 'approved' ? 'text-green-700' : d === 'adjusted_approved' ? 'text-teal-700' : 'text-red-700'}>
-                {d === 'approved' ? '✓ Aprovar' : d === 'adjusted_approved' ? '~ Aprovar c/ ressalvas' : '✕ Rejeitar'}
+                {d === 'approved' ? '✓ ' + t('review.approve') : d === 'adjusted_approved' ? '~ ' + t('review.approveWithRemarks') : '✕ ' + t('review.reject')}
               </span>
             </label>
           ))}
@@ -275,8 +270,8 @@ function ReviewPanel({
       {criteria.length > 0 && (
         <div>
           <div className="text-xs font-semibold text-gray-600 mb-2">
-            Notas por critério
-            <span className="text-gray-400 font-normal ml-1">(opcional — preencha os que desejar comentar)</span>
+            {t('review.criterionNotes')}
+            <span className="text-gray-400 font-normal ml-1">({t('review.criterionNotesHint')})</span>
           </div>
           <div className="space-y-2">
             {criteria.map(cr => {
@@ -313,12 +308,12 @@ function ReviewPanel({
       {/* General note */}
       <div>
         <label className="text-xs font-semibold text-gray-600 mb-1 block">
-          Nota geral{requiresNote && <span className="text-red-500 ml-1">*</span>}
+          {t('review.generalNote')}{requiresNote && <span className="text-red-500 ml-1">*</span>}
         </label>
         <textarea
           className="w-full border border-gray-300 rounded px-3 py-2 text-sm resize-none"
           rows={2}
-          placeholder={requiresNote ? 'Obrigatório para ajuste ou rejeição' : 'Observação geral (opcional)'}
+          placeholder={requiresNote ? t('review.noteRequired') : t('review.noteOptional')}
           value={generalNote}
           onChange={e => setGeneralNote(e.target.value)}
         />
@@ -331,7 +326,7 @@ function ReviewPanel({
         disabled={saving || !noteOk}
         className="bg-primary text-white text-sm px-4 py-1.5 rounded hover:bg-blue-800 disabled:opacity-50 w-full"
       >
-        {saving ? 'Salvando…' : 'Confirmar revisão'}
+        {saving ? t('review.saving') : t('review.submitReview')}
       </button>
     </div>
   )
@@ -357,6 +352,7 @@ function CriterionContestRow({
   onToggle:       () => void
   onJustification:(text: string) => void
 }) {
+  const { t } = useTranslation('evaluation')
   const charCount = state.justification.trim().length
   const tooShort  = state.checked && charCount > 0 && charCount < MIN_CONTEST_CHARS
   const scoreVal  = cr.value !== null && cr.value !== undefined
@@ -395,7 +391,7 @@ function CriterionContestRow({
         </div>
         {!cr.na && (
           <span className={`text-xs shrink-0 self-center font-medium ${state.checked ? 'text-orange-600' : 'text-gray-400'}`}>
-            {state.checked ? '✓ contestar' : 'contestar'}
+            {state.checked ? '✓ ' + t('contest.title') : t('contest.title')}
           </span>
         )}
       </label>
@@ -405,10 +401,10 @@ function CriterionContestRow({
         <div className="px-3 pb-3 space-y-1">
           <div className="flex items-center justify-between">
             <label className="text-xs font-semibold text-orange-700">
-              Justificativa <span className="text-red-500">*</span>
+              {t('contest.justification')} <span className="text-red-500">*</span>
             </label>
             <span className={`text-xs ${tooShort ? 'text-red-500' : charCount >= MIN_CONTEST_CHARS ? 'text-green-600' : 'text-gray-400'}`}>
-              {charCount}/{MIN_CONTEST_CHARS} mín.
+              {charCount}/{MIN_CONTEST_CHARS} {t('contest.minChars')}
             </span>
           </div>
           <textarea
@@ -416,13 +412,13 @@ function CriterionContestRow({
               tooShort ? 'border-red-300' : charCount >= MIN_CONTEST_CHARS ? 'border-green-300' : 'border-orange-200'
             }`}
             rows={3}
-            placeholder="Por que o score deste critério está incorreto? Cite trechos da transcrição se possível."
+            placeholder={t('contest.justificationPlaceholder')}
             value={state.justification}
             onChange={e => onJustification(e.target.value)}
             autoFocus
           />
           {tooShort && (
-            <p className="text-xs text-red-500">{MIN_CONTEST_CHARS - charCount} caracteres restantes</p>
+            <p className="text-xs text-red-500">{t('contest.charsRemaining', { count: MIN_CONTEST_CHARS - charCount })}</p>
           )}
         </div>
       )}
@@ -443,6 +439,7 @@ function ContestPanel({
   onDone:   () => void
   onCancel: () => void
 }) {
+  const { t } = useTranslation('evaluation')
   const { tenantId: TENANT } = useAuth()
   const criteria = result.criterion_responses ?? []
 
@@ -481,8 +478,8 @@ function ContestPanel({
     }).join('\n\n---\n\n')
 
   const submit = async () => {
-    if (contestedEntries.length === 0) { setError('Selecione ao menos um critério para contestar'); return }
-    if (!allValid) { setError('Todas as justificativas precisam ter ao menos 30 caracteres'); return }
+    if (contestedEntries.length === 0) { setError(t('contest.selectAtLeastOne')); return }
+    if (!allValid) { setError(t('contest.allJustificationsRequired')); return }
     setSaving(true)
     setError(null)
     try {
@@ -510,19 +507,19 @@ function ContestPanel({
     <div className="space-y-3">
       {/* Banner */}
       <div className="bg-orange-50 border border-orange-200 rounded p-3">
-        <p className="text-xs font-semibold text-orange-800 mb-0.5">⚑ Contestar avaliação</p>
+        <p className="text-xs font-semibold text-orange-800 mb-0.5">⚑ {t('contest.banner.title')}</p>
         <p className="text-xs text-orange-700">
-          Selecione os critérios com score incorreto e justifique cada um. Seu supervisor receberá a contestação com o contexto completo.
+          {t('contest.banner.description')}
         </p>
       </div>
 
       {/* Criteria list */}
       {criteria.length === 0 ? (
-        <p className="text-xs text-gray-400 italic text-center py-4">Sem critérios disponíveis para contestar</p>
+        <p className="text-xs text-gray-400 italic text-center py-4">{t('contest.noCriteria')}</p>
       ) : (
         <div>
           <div className="text-xs font-semibold text-gray-600 mb-2">
-            Critérios avaliados — {contestedEntries.length} selecionado{contestedEntries.length !== 1 ? 's' : ''}
+            {t('contest.criteriaList', { count: contestedEntries.length })}
           </div>
           {criteria.map(cr => (
             <CriterionContestRow
@@ -545,14 +542,14 @@ function ContestPanel({
           onClick={onCancel}
           className="flex-1 text-sm px-4 py-1.5 rounded border border-gray-300 text-gray-600 hover:bg-gray-50"
         >
-          Cancelar
+          {t('contest.cancel')}
         </button>
         <button
           onClick={submit}
           disabled={saving || !allValid}
           className="flex-1 bg-orange-600 text-white text-sm px-4 py-1.5 rounded hover:bg-orange-700 disabled:opacity-50"
         >
-          {saving ? 'Enviando…' : `Enviar contestação${contestedEntries.length > 0 ? ` (${contestedEntries.length})` : ''}`}
+          {saving ? t('contest.submitting') : t('contest.submit', { count: contestedEntries.length })}
         </button>
       </div>
     </div>
@@ -576,6 +573,7 @@ function DetailPanel({
   onClose: () => void
   onAction: () => void
 }) {
+  const { t } = useTranslation('evaluation')
   const [mode, setMode] = useState<'view' | 'review' | 'contest'>('view')
   const canReview  = result.available_actions?.includes('review')
   const canContest = result.available_actions?.includes('contest')
@@ -585,12 +583,12 @@ function DetailPanel({
       {/* Header */}
       <div className="flex items-center gap-2 p-3 border-b bg-gray-50">
         <div className="flex-1 min-w-0">
-          <div className="font-semibold text-sm text-gray-800 truncate">Sessão: {result.session_id}</div>
-          <div className="text-xs text-gray-400 truncate">Avaliador: {result.evaluator_id}</div>
+          <div className="font-semibold text-sm text-gray-800 truncate">{t('detail.session')}: {result.session_id}</div>
+          <div className="text-xs text-gray-400 truncate">{t('detail.evaluator')}: {result.evaluator_id}</div>
         </div>
         <ScorePill score={result.overall_score} />
-        <StatusBadge status={result.eval_status} />
-        {result.locked && <span title="Bloqueado">🔒</span>}
+        <StatusBadge status={result.eval_status} t={t} />
+        {result.locked && <span title={t('detail.locked')}>🔒</span>}
         <button onClick={onClose} className="text-gray-400 hover:text-gray-600 ml-1 text-lg leading-none">✕</button>
       </div>
 
@@ -606,7 +604,7 @@ function DetailPanel({
                   : 'bg-white text-primary border-primary hover:bg-blue-50'
               }`}
             >
-              ✓ Revisar
+              ✓ {t('detail.review')}
             </button>
           )}
           {canContest && (
@@ -618,13 +616,13 @@ function DetailPanel({
                   : 'bg-white text-orange-600 border-orange-600 hover:bg-orange-50'
               }`}
             >
-              ⚑ Contestar
+              ⚑ {t('detail.contest')}
             </button>
           )}
           {result.action_required && (
             <span className="text-xs text-gray-500 self-center ml-auto">
-              Aguardando: {result.action_required === 'review' ? 'revisão' : 'contestação'}
-              {result.deadline_at && ` · prazo ${fmt(result.deadline_at)}`}
+              {t('detail.awaiting')}: {result.action_required === 'review' ? t('detail.awaitingReview') : t('detail.awaitingContest')}
+              {result.deadline_at && ` · ${t('detail.deadline')} ${fmt(result.deadline_at)}`}
             </span>
           )}
         </div>
@@ -635,7 +633,7 @@ function DetailPanel({
         {/* Overview */}
         {result.overall_observation && (
           <div className="bg-gray-50 rounded p-3">
-            <div className="text-xs font-semibold text-gray-600 mb-1">Observação geral</div>
+            <div className="text-xs font-semibold text-gray-600 mb-1">{t('detail.generalObservation')}</div>
             <p className="text-sm text-gray-700">{result.overall_observation}</p>
           </div>
         )}
@@ -644,7 +642,7 @@ function DetailPanel({
         <div className="grid grid-cols-2 gap-3">
           {(result.highlights ?? []).length > 0 && (
             <div>
-              <div className="text-xs font-semibold text-green-700 mb-1">✓ Pontos positivos</div>
+              <div className="text-xs font-semibold text-green-700 mb-1">✓ {t('detail.highlights')}</div>
               <ul className="text-xs text-gray-600 space-y-0.5">
                 {result.highlights.map((h, i) => <li key={i}>• {h}</li>)}
               </ul>
@@ -652,7 +650,7 @@ function DetailPanel({
           )}
           {(result.improvement_points ?? []).length > 0 && (
             <div>
-              <div className="text-xs font-semibold text-orange-700 mb-1">↑ Melhorias</div>
+              <div className="text-xs font-semibold text-orange-700 mb-1">↑ {t('detail.improvements')}</div>
               <ul className="text-xs text-gray-600 space-y-0.5">
                 {result.improvement_points.map((p, i) => <li key={i}>• {p}</li>)}
               </ul>
@@ -663,7 +661,7 @@ function DetailPanel({
         {/* Compliance flags */}
         {(result.compliance_flags ?? []).length > 0 && (
           <div>
-            <div className="text-xs font-semibold text-red-700 mb-1">⚠ Flags</div>
+            <div className="text-xs font-semibold text-red-700 mb-1">⚠ {t('detail.flags')}</div>
             <div className="flex flex-wrap gap-1">
               {result.compliance_flags.map(f => (
                 <span key={f} className="bg-red-50 text-red-700 text-xs px-2 py-0.5 rounded">{f}</span>
@@ -675,7 +673,7 @@ function DetailPanel({
         {/* Criteria — hidden when in contest mode (ContestPanel renders its own interactive list) */}
         {mode !== 'contest' && (result.criterion_responses ?? []).length > 0 && (
           <div>
-            <div className="text-xs font-semibold text-gray-600 mb-2">Critérios avaliados</div>
+            <div className="text-xs font-semibold text-gray-600 mb-2">{t('detail.evaluatedCriteria')}</div>
             <div className="border rounded">
               {result.criterion_responses.map(cr => (
                 <CriterionRow key={cr.criterion_id} cr={cr} />
@@ -686,10 +684,10 @@ function DetailPanel({
 
         {/* Metadata */}
         <div className="text-xs text-gray-400 space-y-0.5">
-          <div>Campanha: {result.campaign_id ?? '—'}</div>
-          <div>Round atual: {result.current_round ?? 0}</div>
-          {result.lock_reason && <div>Motivo do bloqueio: {result.lock_reason}</div>}
-          <div>Criado em: {fmt(result.created_at)}</div>
+          <div>{t('detail.campaign')}: {result.campaign_id ?? '—'}</div>
+          <div>{t('detail.currentRound')}: {result.current_round ?? 0}</div>
+          {result.lock_reason && <div>{t('detail.lockReason')}: {result.lock_reason}</div>}
+          <div>{t('detail.createdAt')}: {fmt(result.created_at)}</div>
         </div>
 
         {/* Action panels */}
@@ -717,17 +715,8 @@ function DetailPanel({
 
 // ── Main Page ──────────────────────────────────────────────────────────────────
 
-const STATUS_OPTIONS = [
-  { value: '', label: 'Todos os status' },
-  { value: 'submitted', label: 'Submetido' },
-  { value: 'approved', label: 'Aprovado' },
-  { value: 'adjusted_approved', label: 'Aprovado c/ ajuste' },
-  { value: 'rejected', label: 'Rejeitado' },
-  { value: 'contested', label: 'Contestado' },
-  { value: 'locked', label: 'Bloqueado' },
-]
-
 export default function AvaliacoesPage() {
+  const { t } = useTranslation('evaluation')
   const { session, getAccessToken, tenantId: TENANT, currentUser } = useAuth()
   const [jwtToken, setJwtToken]       = useState('')
   const [adminToken, setAdminToken]   = useState('')
@@ -774,11 +763,22 @@ export default function AvaliacoesPage() {
 
   const userId = currentUser?.userId ?? ''
 
+  // Build status options using translations
+  const STATUS_OPTIONS = [
+    { value: '', label: t('filters.allStatuses') },
+    { value: 'submitted', label: t('statuses.submitted') },
+    { value: 'approved', label: t('statuses.approved') },
+    { value: 'adjusted_approved', label: t('statuses.adjusted_approved') },
+    { value: 'rejected', label: t('statuses.rejected') },
+    { value: 'contested', label: t('statuses.contested') },
+    { value: 'locked', label: t('statuses.locked') },
+  ]
+
   return (
     <div className="flex flex-col h-full">
       {/* Filter bar */}
       <div className="border-b bg-white px-4 py-2 flex items-center gap-3 flex-wrap">
-        <span className="text-sm font-medium text-gray-700">Avaliações</span>
+        <span className="text-sm font-medium text-gray-700">{t('title')}</span>
 
         {/* Quick filter: Aguardando minha ação */}
         <button
@@ -789,7 +789,7 @@ export default function AvaliacoesPage() {
               : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'
           }`}
         >
-          ⚡ Aguardando minha ação
+          ⚡ {t('filters.myActions')}
         </button>
 
         {/* Status filter */}
@@ -809,7 +809,7 @@ export default function AvaliacoesPage() {
           onChange={e => setCampaignFilter(e.target.value)}
           className="border border-gray-300 rounded px-2 py-1 text-sm max-w-[200px]"
         >
-          <option value="">Todas as campanhas</option>
+          <option value="">{t('filters.allCampaigns')}</option>
           {(campaigns as EvaluationCampaign[]).map(c => (
             <option key={c.campaign_id} value={c.campaign_id}>{c.name}</option>
           ))}
@@ -822,17 +822,17 @@ export default function AvaliacoesPage() {
           type="password"
           value={adminToken}
           onChange={e => setAdminToken(e.target.value)}
-          placeholder="Token admin (adjudicação)"
+          placeholder={t('filters.adminTokenPlaceholder')}
           className="border border-gray-300 rounded px-2 py-1 text-xs w-44"
         />
 
         {jwtToken
-          ? <span className="text-xs text-green-600">✓ Autenticado</span>
-          : <span className="text-xs text-orange-500">⚠ Faça login</span>
+          ? <span className="text-xs text-green-600">✓ {t('filters.authenticated')}</span>
+          : <span className="text-xs text-orange-500">⚠ {t('filters.loginRequired')}</span>
         }
 
         <button onClick={reload} className="text-xs text-gray-500 hover:text-gray-700 border border-gray-200 rounded px-2 py-1">
-          ↺ Recarregar
+          ↺ {t('filters.reload')}
         </button>
       </div>
 
@@ -841,17 +841,17 @@ export default function AvaliacoesPage() {
         {/* Table */}
         <div className="flex-1 overflow-auto">
           {loading && (
-            <div className="flex items-center justify-center h-32 text-gray-400 text-sm">Carregando…</div>
+            <div className="flex items-center justify-center h-32 text-gray-400 text-sm">{t('loading')}</div>
           )}
           {!loading && error && (
-            <div className="p-4 text-red-600 text-sm">Erro ao carregar: {error}</div>
+            <div className="p-4 text-red-600 text-sm">{t('error.loading')}: {error}</div>
           )}
           {!loading && !error && displayed.length === 0 && (
             <div className="flex flex-col items-center justify-center h-48 text-gray-400">
               <span className="text-3xl mb-2">⭐</span>
-              <p className="text-sm">Nenhuma avaliação encontrada</p>
+              <p className="text-sm">{t('empty.noEvaluations')}</p>
               {myActionsOnly && (
-                <p className="text-xs mt-1">Sem ações pendentes para você no momento</p>
+                <p className="text-xs mt-1">{t('empty.noActions')}</p>
               )}
             </div>
           )}
@@ -859,13 +859,13 @@ export default function AvaliacoesPage() {
             <table className="w-full text-sm border-collapse">
               <thead>
                 <tr className="border-b bg-gray-50 text-xs text-gray-500">
-                  <th className="text-left px-4 py-2 font-medium">Sessão</th>
-                  <th className="text-left px-4 py-2 font-medium">Campanha</th>
-                  <th className="text-left px-4 py-2 font-medium">Avaliador</th>
-                  <th className="text-center px-4 py-2 font-medium">Nota</th>
-                  <th className="text-left px-4 py-2 font-medium">Status</th>
-                  <th className="text-left px-4 py-2 font-medium">Ações</th>
-                  <th className="text-left px-4 py-2 font-medium">Data</th>
+                  <th className="text-left px-4 py-2 font-medium">{t('table.session')}</th>
+                  <th className="text-left px-4 py-2 font-medium">{t('table.campaign')}</th>
+                  <th className="text-left px-4 py-2 font-medium">{t('table.evaluator')}</th>
+                  <th className="text-center px-4 py-2 font-medium">{t('table.score')}</th>
+                  <th className="text-left px-4 py-2 font-medium">{t('table.status')}</th>
+                  <th className="text-left px-4 py-2 font-medium">{t('table.actions')}</th>
+                  <th className="text-left px-4 py-2 font-medium">{t('table.date')}</th>
                 </tr>
               </thead>
               <tbody>
@@ -898,8 +898,8 @@ export default function AvaliacoesPage() {
                       </td>
                       <td className="px-4 py-2">
                         <div className="flex items-center gap-1">
-                          <StatusBadge status={r.eval_status} />
-                          {r.locked && <span className="text-xs text-gray-400" title="Bloqueado">🔒</span>}
+                          <StatusBadge status={r.eval_status} t={t} />
+                          {r.locked && <span className="text-xs text-gray-400" title={t('detail.locked')}>🔒</span>}
                         </div>
                       </td>
                       <td className="px-4 py-2">
@@ -914,7 +914,7 @@ export default function AvaliacoesPage() {
                                     : 'bg-orange-100 text-orange-700'
                                 }`}
                               >
-                                {a === 'review' ? '✓ Revisar' : '⚑ Contestar'}
+                                {a === 'review' ? '✓ ' + t('detail.review') : '⚑ ' + t('detail.contest')}
                               </span>
                             ))}
                           </div>

@@ -1,0 +1,112 @@
+{
+  "title": "Controle de Acesso",
+  "pageSubtitle": "Gerencie usuários e templates de permissão",
+  "adminTokenPlaceholder": "Admin token (opcional em dev)",
+  "adminTokenApply": "Aplicar",
+  "tabs": {
+    "users": "Usuários",
+    "templates": "Templates"
+  },
+  "users": {
+    "title": "Usuários",
+    "create": "Novo Usuário",
+    "editUser": "Editar Usuário",
+    "newUser": "Novo Usuário",
+    "name": "Nome",
+    "email": "E-mail",
+    "password": "Senha",
+    "passwordNew": "Senha (para novos usuários)",
+    "passwordOptional": "Senha (deixe em branco para manter a atual)",
+    "role": "Papéis",
+    "pools": "Pools Acessíveis",
+    "status": "Status",
+    "active": "Ativo",
+    "inactive": "Inativo",
+    "noUsers": "Nenhum usuário encontrado.",
+    "noResults": "Sem resultados para os filtros aplicados.",
+    "summary": "Resumo",
+    "total": "Total",
+    "filterAll": "Todos",
+    "allPools": "Todos",
+    "tableUser": "Usuário",
+    "tableRoles": "Perfis",
+    "tablePools": "Pools (dados)",
+    "searchPlaceholder": "Buscar por nome ou e-mail…",
+    "deactivate": "Desativar",
+    "reactivate": "Reativar",
+    "loading": "Carregando usuários…",
+    "permissions": "Permissões de Módulo"
+  },
+  "roles": {
+    "operator": "Operator",
+    "supervisor": "Supervisor",
+    "admin": "Admin",
+    "developer": "Developer",
+    "business": "Business"
+  },
+  "modules": {
+    "analytics": "Analytics",
+    "evaluation": "Avaliação",
+    "billing": "Faturamento",
+    "config": "Configuração",
+    "registry": "Recursos",
+    "skill_flows": "Skill Flows",
+    "campaigns": "Campanhas",
+    "workflows": "Workflows"
+  },
+  "actions": {
+    "view": "Visualizar",
+    "edit": "Editar",
+    "admin": "Admin"
+  },
+  "templates": {
+    "title": "Templates de Permissão",
+    "create": "Novo Template",
+    "createNew": "Novo Template",
+    "createFirst": "Criar o primeiro",
+    "noTemplates": "Nenhum template criado.",
+    "name": "Nome do Template",
+    "description": "Descrição",
+    "permissions": "Permissões",
+    "apply": "Aplicar a Usuário",
+    "selectTemplate": "Selecione um template",
+    "selectDescription": "Ou crie um novo para definir um conjunto reutilizável de permissões.",
+    "module": "Módulo",
+    "action": "Ação",
+    "addPerm": "Adicionar Permissão",
+    "selectPool": "Selecionar pool (opcional)",
+    "poolIdPlaceholder": "ID do pool (opcional)",
+    "preview": "Visualização",
+    "noPermissions": "Nenhuma permissão neste template.",
+    "permissionCount_one": "1 permissão",
+    "permissionCount": "{{count}} permissões",
+    "permissionsDescription": "Selecione as permissões a incluir neste template.",
+    "applyModal": {
+      "title": "Aplicar Template",
+      "user": "Usuário",
+      "pool": "Escopo de pool (opcional)",
+      "confirm": "Aplicar",
+      "cancel": "Cancelar"
+    },
+    "allPools": "Todos os pools"
+  },
+  "form": {
+    "save": "Salvar",
+    "cancel": "Cancelar",
+    "delete": "Excluir",
+    "confirm": "Confirmar exclusão?",
+    "edit": "Editar"
+  },
+  "errors": {
+    "selectRole": "Por favor, selecione pelo menos um papel.",
+    "selectUser": "Por favor, selecione um usuário.",
+    "selectTemplate": "Por favor, selecione um template.",
+    "poolId": "ID do pool é obrigatório.",
+    "templateName": "Nome do template é obrigatório."
+  },
+  "messages": {
+    "templateSaved": "Template salvo com sucesso.",
+    "templateCreated": "Template criado com sucesso.",
+    "templateApplied": "Template aplicado com sucesso."
+  }
+}

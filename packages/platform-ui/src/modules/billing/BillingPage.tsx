@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { useAuth } from '@/auth/useAuth'
 import Spinner from '@/components/ui/Spinner'
 import Badge from '@/components/ui/Badge'
@@ -111,6 +112,7 @@ interface SidebarProps {
 }
 
 function ResourceSidebar({ resources, loading, adminToken, onAdminToken }: SidebarProps) {
+  const { t } = useTranslation('billing')
   const base    = resources.filter(r => r.pool_type === 'base')
   const reserve = resources.filter(r => r.pool_type === 'reserve')
 
@@ -122,7 +124,7 @@ function ResourceSidebar({ resources, loading, adminToken, onAdminToken }: Sideb
   return (
     <div className="w-56 shrink-0 bg-gray-50 border-r border-lightGray flex flex-col">
       <div className="px-4 py-3 border-b border-lightGray">
-        <h3 className="text-xs font-semibold text-gray uppercase tracking-wide">Recursos</h3>
+        <h3 className="text-xs font-semibold text-gray uppercase tracking-wide">{t('resources.title')}</h3>
       </div>
 
       <div className="flex-1 overflow-y-auto px-3 py-3 space-y-4">
@@ -132,7 +134,7 @@ function ResourceSidebar({ resources, loading, adminToken, onAdminToken }: Sideb
           <>
             {/* Base resources */}
             <div>
-              <p className="text-xs font-semibold text-gray mb-2 uppercase tracking-wide">Base</p>
+              <p className="text-xs font-semibold text-gray mb-2 uppercase tracking-wide">{t('resources.base')}</p>
               <div className="space-y-0.5">
                 {base.map(r => (
                   <div key={r.id} className="flex items-center gap-2 text-xs text-dark px-2 py-1 rounded hover:bg-white">
@@ -142,7 +144,7 @@ function ResourceSidebar({ resources, loading, adminToken, onAdminToken }: Sideb
                   </div>
                 ))}
                 {base.length === 0 && (
-                  <p className="text-xs text-gray/60 px-2">Nenhum recurso base</p>
+                  <p className="text-xs text-gray/60 px-2">{t('resources.noResources')}</p>
                 )}
               </div>
             </div>
@@ -150,7 +152,7 @@ function ResourceSidebar({ resources, loading, adminToken, onAdminToken }: Sideb
             {/* Reserve groups */}
             {Object.entries(reserveGroups).length > 0 && (
               <div>
-                <p className="text-xs font-semibold text-gray mb-2 uppercase tracking-wide">Reserva</p>
+                <p className="text-xs font-semibold text-gray mb-2 uppercase tracking-wide">{t('resources.reserve')}</p>
                 <div className="space-y-2">
                   {Object.entries(reserveGroups).map(([poolId, items]) => (
                     <div key={poolId} className="rounded border border-lightGray bg-white px-2 py-1.5">
@@ -173,15 +175,15 @@ function ResourceSidebar({ resources, loading, adminToken, onAdminToken }: Sideb
 
       {/* Admin Token input */}
       <div className="border-t border-lightGray px-3 py-3 shrink-0">
-        <label className="block text-xs font-semibold text-gray mb-1">Admin Token</label>
+        <label className="block text-xs font-semibold text-gray mb-1">{t('resources.adminToken')}</label>
         <input
           type="password"
           value={adminToken}
           onChange={e => onAdminToken(e.target.value)}
-          placeholder="Token de administrador"
+          placeholder={t('resources.adminToken')}
           className="w-full px-2 py-1.5 text-xs border border-lightGray rounded focus:outline-none focus:border-secondary bg-white text-dark placeholder-gray/50"
         />
-        <p className="text-xs text-gray/60 mt-1">Necessário para ativar / desativar pools</p>
+        <p className="text-xs text-gray/60 mt-1">{t('resources.adminTokenHint')}</p>
       </div>
     </div>
   )
@@ -199,6 +201,7 @@ interface InvoiceTabProps {
 }
 
 function InvoiceTab({ invoice, loading, error, tenantId, adminToken, onRefresh }: InvoiceTabProps) {
+  const { t } = useTranslation('billing')
   const [toggling, setToggling] = useState<string | null>(null)
   const [toast,    setToast]    = useState<string | null>(null)
 
@@ -209,7 +212,7 @@ function InvoiceTab({ invoice, loading, error, tenantId, adminToken, onRefresh }
 
   const handleToggle = async (group: ReserveGroup) => {
     if (!adminToken) {
-      showToast('⚠️ Informe o Admin Token no painel lateral')
+      showToast(`⚠️ ${t('invoice.adminTokenRequired')}`)
       return
     }
     setToggling(group.pool_id)
@@ -223,7 +226,7 @@ function InvoiceTab({ invoice, loading, error, tenantId, adminToken, onRefresh }
         const body = await res.json().catch(() => ({})) as { detail?: string }
         throw new Error(body.detail ?? `HTTP ${res.status}`)
       }
-      showToast(`✅ Pool ${group.pool_id} ${group.active ? 'desativado' : 'ativado'}`)
+      showToast(`✅ ${t('invoice.toggleSuccess', { pool: group.pool_id, action: group.active ? t('invoice.deactivate') : t('invoice.activate') })}`)
       onRefresh()
     } catch (err) {
       showToast(`❌ ${String(err)}`)
@@ -233,10 +236,10 @@ function InvoiceTab({ invoice, loading, error, tenantId, adminToken, onRefresh }
   }
 
   if (loading) return <div className="flex justify-center items-center py-16"><Spinner /></div>
-  if (error)   return <p className="p-6 text-sm text-red">Erro ao carregar fatura: {error}</p>
+  if (error)   return <p className="p-6 text-sm text-red">{t('error.loadInvoice')}: {error}</p>
   if (!invoice) return (
     <div className="p-6">
-      <EmptyState title="Nenhuma fatura disponível" description="A fatura do ciclo atual não pôde ser carregada." />
+      <EmptyState title={t('invoice.empty.title')} description={t('invoice.empty.description')} />
     </div>
   )
 
@@ -254,10 +257,10 @@ function InvoiceTab({ invoice, loading, error, tenantId, adminToken, onRefresh }
       {/* Cycle header */}
       <div className="flex items-start justify-between">
         <div>
-          <h3 className="text-base font-semibold text-dark">Fatura — Ciclo Atual</h3>
+          <h3 className="text-base font-semibold text-dark">{t('invoice.title')}</h3>
           <p className="text-xs text-gray mt-0.5">
             {fmtDate(invoice.cycle_start)} – {fmtDate(invoice.cycle_end)}
-            <span className="ml-2 text-gray/60">· {invoice.billing_days} dias úteis ·</span>
+            <span className="ml-2 text-gray/60">· {t('invoice.billingDays', { days: invoice.billing_days })} ·</span>
             <span className="ml-1 text-gray/60">{invoice.installation_id}</span>
           </p>
         </div>
@@ -266,23 +269,23 @@ function InvoiceTab({ invoice, loading, error, tenantId, adminToken, onRefresh }
           download
           className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-secondary text-white rounded-md hover:opacity-90 transition-opacity shrink-0 ml-4"
         >
-          ⬇️ Exportar XLSX
+          ⬇️ {t('invoice.exportXlsx')}
         </a>
       </div>
 
       {/* Base items table */}
       {invoice.base_items.length > 0 && (
         <section>
-          <h4 className="text-sm font-semibold text-dark mb-2">Capacidade Base</h4>
+          <h4 className="text-sm font-semibold text-dark mb-2">{t('invoice.baseItems')}</h4>
           <div className="rounded-lg border border-lightGray overflow-hidden">
             <table className="w-full text-xs">
               <thead className="bg-gray-50">
                 <tr>
-                  <th className="px-4 py-2.5 text-left font-semibold text-gray">Recurso</th>
-                  <th className="px-4 py-2.5 text-right font-semibold text-gray">Qtd</th>
-                  <th className="px-4 py-2.5 text-right font-semibold text-gray">Preço unit.</th>
-                  <th className="px-4 py-2.5 text-right font-semibold text-gray">Dias</th>
-                  <th className="px-4 py-2.5 text-right font-semibold text-gray">Subtotal</th>
+                  <th className="px-4 py-2.5 text-left font-semibold text-gray">{t('invoice.columns.resource')}</th>
+                  <th className="px-4 py-2.5 text-right font-semibold text-gray">{t('invoice.columns.quantity')}</th>
+                  <th className="px-4 py-2.5 text-right font-semibold text-gray">{t('invoice.columns.unitPrice')}</th>
+                  <th className="px-4 py-2.5 text-right font-semibold text-gray">{t('invoice.columns.days')}</th>
+                  <th className="px-4 py-2.5 text-right font-semibold text-gray">{t('invoice.columns.subtotal')}</th>
                 </tr>
               </thead>
               <tbody>
@@ -306,7 +309,7 @@ function InvoiceTab({ invoice, loading, error, tenantId, adminToken, onRefresh }
               <tfoot className="border-t border-lightGray">
                 <tr className="bg-gray-50">
                   <td colSpan={4} className="px-4 py-2.5 text-right text-sm font-semibold text-dark">
-                    Total Base
+                    {t('invoice.baseItems')}
                   </td>
                   <td className="px-4 py-2.5 text-right text-sm font-semibold text-dark font-mono">
                     {fmtCurrency(invoice.base_total, currency)}
@@ -321,7 +324,7 @@ function InvoiceTab({ invoice, loading, error, tenantId, adminToken, onRefresh }
       {/* Reserve groups */}
       {invoice.reserve_groups.length > 0 && (
         <section>
-          <h4 className="text-sm font-semibold text-dark mb-3">Pools de Reserva</h4>
+          <h4 className="text-sm font-semibold text-dark mb-3">{t('invoice.reserveItems')}</h4>
           <div className="space-y-3">
             {invoice.reserve_groups.map((group: ReserveGroup) => (
               <div key={group.pool_id} className="rounded-lg border border-lightGray overflow-hidden">
@@ -341,10 +344,10 @@ function InvoiceTab({ invoice, loading, error, tenantId, adminToken, onRefresh }
                       {group.label || group.pool_id}
                     </span>
                     <Badge variant={group.active ? 'active' : 'default'}>
-                      {group.active ? 'Ativo' : 'Inativo'}
+                      {group.active ? t('invoice.statusActive') : t('invoice.statusInactive')}
                     </Badge>
                     {group.active && group.days_active > 0 && (
-                      <span className="text-xs text-gray shrink-0">{group.days_active} dias ativos</span>
+                      <span className="text-xs text-gray shrink-0">{t('invoice.daysActive', { days: group.days_active })}</span>
                     )}
                   </div>
                   <button
@@ -356,7 +359,7 @@ function InvoiceTab({ invoice, loading, error, tenantId, adminToken, onRefresh }
                         : 'bg-green/10 text-green hover:bg-green/20'
                     }`}
                   >
-                    {toggling === group.pool_id ? '…' : group.active ? 'Desativar' : 'Ativar'}
+                    {toggling === group.pool_id ? '…' : group.active ? t('invoice.deactivate') : t('invoice.activate')}
                   </button>
                 </div>
 
@@ -383,7 +386,7 @@ function InvoiceTab({ invoice, loading, error, tenantId, adminToken, onRefresh }
                     <tfoot className="border-t border-lightGray">
                       <tr className="bg-gray-50">
                         <td colSpan={3} className="px-4 py-1.5 text-right text-xs font-semibold text-dark">
-                          Subtotal
+                          {t('invoice.columns.subtotal')}
                         </td>
                         <td className="px-4 py-1.5 text-right font-mono text-xs font-semibold text-dark">
                           {fmtCurrency(group.subtotal, currency)}
@@ -398,7 +401,7 @@ function InvoiceTab({ invoice, loading, error, tenantId, adminToken, onRefresh }
 
           {/* Reserve total row */}
           <div className="mt-2 px-4 py-2 bg-gray-50 rounded-lg border border-lightGray flex justify-between items-center">
-            <span className="text-sm font-semibold text-dark">Total Reserva</span>
+            <span className="text-sm font-semibold text-dark">{t('invoice.reserveItems')}</span>
             <span className="text-sm font-semibold text-dark font-mono">
               {fmtCurrency(invoice.reserve_total, currency)}
             </span>
@@ -409,9 +412,9 @@ function InvoiceTab({ invoice, loading, error, tenantId, adminToken, onRefresh }
       {/* Grand Total */}
       <div className="rounded-xl bg-primary/5 border-2 border-primary/20 px-6 py-5 flex items-center justify-between">
         <div>
-          <p className="text-xs font-semibold text-gray uppercase tracking-wide">Total Geral</p>
+          <p className="text-xs font-semibold text-gray uppercase tracking-wide">{t('invoice.grandTotal')}</p>
           <p className="text-xs text-gray/60 mt-0.5">
-            Gerado em {fmtDate(invoice.generated_at)}
+            {t('invoice.generatedAt', { date: fmtDate(invoice.generated_at) })}
           </p>
         </div>
         <span className="text-3xl font-bold text-primary font-mono">
@@ -425,6 +428,7 @@ function InvoiceTab({ invoice, loading, error, tenantId, adminToken, onRefresh }
 // ── ConsumptionTab ──────────────────────────────────────────────────────────────
 
 function ConsumptionTab({ tenantId }: { tenantId: string }) {
+  const { t } = useTranslation('billing')
   const { rows, loading } = useUsage(tenantId)
 
   if (loading) return <div className="flex justify-center items-center py-16"><Spinner /></div>
@@ -432,21 +436,17 @@ function ConsumptionTab({ tenantId }: { tenantId: string }) {
   return (
     <div className="flex-1 overflow-y-auto p-6 space-y-5">
       <div>
-        <h3 className="text-base font-semibold text-dark">Consumo Variável</h3>
+        <h3 className="text-base font-semibold text-dark">{t('consumption.title')}</h3>
         <div className="mt-2 flex items-start gap-2 bg-blue-50 border border-blue-200 rounded-lg px-4 py-3 text-xs text-blue-700">
           <span className="text-base shrink-0">ℹ️</span>
-          <span>
-            Esses dados de consumo <strong>não são incluídos no faturamento</strong> — disponíveis
-            para curadoria de qualidade operacional. O faturamento é baseado exclusivamente em
-            capacidade configurada.
-          </span>
+          <span>{t('consumption.notice')}</span>
         </div>
       </div>
 
       {rows.length === 0 ? (
         <EmptyState
-          title="Sem dados de consumo"
-          description="Nenhum evento de uso registrado no ciclo atual."
+          title={t('consumption.noData')}
+          description={t('consumption.noDataDescription')}
         />
       ) : (
         <div className="grid grid-cols-2 gap-3">
@@ -460,7 +460,7 @@ function ConsumptionTab({ tenantId }: { tenantId: string }) {
                 <p className="text-2xl font-bold text-dark font-mono mt-1">
                   {row.total.toLocaleString('pt-BR')}
                 </p>
-                <p className="text-xs text-gray/60 mt-0.5">{meta?.unit ?? 'eventos'}</p>
+                <p className="text-xs text-gray/60 mt-0.5">{meta?.unit ?? t('consumption.defaultUnit')}</p>
               </div>
             )
           })}
@@ -475,6 +475,7 @@ function ConsumptionTab({ tenantId }: { tenantId: string }) {
 type BillingTab = 'invoice' | 'consumption'
 
 const BillingPage: React.FC = () => {
+  const { t } = useTranslation('billing')
   const { tenantId } = useAuth()
 
   const [activeTab,  setActiveTab]  = useState<BillingTab>('invoice')
@@ -488,9 +489,9 @@ const BillingPage: React.FC = () => {
     <div className="flex flex-col h-full">
       {/* Page header */}
       <div className="px-6 py-4 border-b border-lightGray bg-white shrink-0">
-        <h2 className="text-lg font-semibold text-dark">Faturamento</h2>
+        <h2 className="text-lg font-semibold text-dark">{t('title')}</h2>
         <p className="text-xs text-gray mt-0.5">
-          Capacidade configurada e consumo por ciclo de cobrança
+          {t('pageSubtitle')}
         </p>
       </div>
 
@@ -517,7 +518,7 @@ const BillingPage: React.FC = () => {
                     : 'border-transparent text-gray hover:text-dark'
                 }`}
               >
-                {tab === 'invoice' ? '🧾 Fatura' : '📊 Consumo'}
+                {tab === 'invoice' ? `🧾 ${t('tabs.invoice')}` : `📊 ${t('tabs.consumption')}`}
               </button>
             ))}
           </div>

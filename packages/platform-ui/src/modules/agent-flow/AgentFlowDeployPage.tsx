@@ -22,6 +22,7 @@
  *   POST /v1/workflow/instances/:id/cancel — cancel a scheduled deploy
  */
 import React, { useCallback, useEffect, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { useAuth } from '@/auth/useAuth'
 import Spinner from '@/components/ui/Spinner'
 
@@ -263,14 +264,15 @@ interface RollbackModalProps {
 }
 
 function RollbackConfirmModal({ dep, skillId, rolling, error, onConfirm, onCancel }: RollbackModalProps) {
+  const { t } = useTranslation('agentFlow')
   return (
     <div style={overlay}>
       <div style={modalBox}>
         <div style={{ fontSize: 18, fontWeight: 700, color: '#f8fafc', marginBottom: 4 }}>
-          ↩ Confirmar rollback
+          ↩ {t('deploy.rollback')}
         </div>
         <div style={{ fontSize: 12, color: '#64748b', marginBottom: 16 }}>
-          Esta operação sobrescreve o flow atual e faz um novo deploy.
+          {t('deploy.rollbackConfirm')}
         </div>
 
         <div style={infoRow}>
@@ -278,15 +280,15 @@ function RollbackConfirmModal({ dep, skillId, rolling, error, onConfirm, onCance
           <code style={infoVal}>{skillId}</code>
         </div>
         <div style={infoRow}>
-          <span style={infoLabel}>Versão</span>
+          <span style={infoLabel}>{t('deploy.version', { defaultValue: 'Version' })}</span>
           <span style={infoVal}>v{dep.version}</span>
         </div>
         <div style={infoRow}>
-          <span style={infoLabel}>Deploy original</span>
+          <span style={infoLabel}>{t('deploy.originalDeploy', { defaultValue: 'Original deploy' })}</span>
           <span style={infoVal}>{fmtDate(dep.deployed_at)}</span>
         </div>
         <div style={infoRow}>
-          <span style={infoLabel}>Deploy ID</span>
+          <span style={infoLabel}>{t('deploy.deployId', { defaultValue: 'Deploy ID' })}</span>
           <code style={{ ...infoVal, fontSize: 10 }}>{dep.deployment_id}</code>
         </div>
         <div style={{ ...infoRow, alignItems: 'flex-start' }}>
@@ -300,7 +302,7 @@ function RollbackConfirmModal({ dep, skillId, rolling, error, onConfirm, onCance
 
         {!dep.yaml_snapshot && (
           <div style={{ marginTop: 12, padding: '8px 12px', background: '#431407', color: '#fb923c', borderRadius: 4, fontSize: 12 }}>
-            ⚠️ Este deploy não possui snapshot do flow — não é possível fazer rollback.
+            ⚠️ {t('deploy.noSnapshot', { defaultValue: 'This deploy has no flow snapshot — rollback is not possible.' })}
           </div>
         )}
 
@@ -316,7 +318,7 @@ function RollbackConfirmModal({ dep, skillId, rolling, error, onConfirm, onCance
             disabled={rolling}
             style={{ ...btnSecondary, padding: '8px 20px' }}
           >
-            Cancelar
+            {t('deploy.cancel', { defaultValue: 'Cancel' })}
           </button>
           <button
             onClick={onConfirm}
@@ -330,7 +332,7 @@ function RollbackConfirmModal({ dep, skillId, rolling, error, onConfirm, onCance
               transition: 'all .15s',
             }}
           >
-            {rolling ? '⟳ Revertendo…' : '↩ Confirmar rollback'}
+            {rolling ? '⟳ ' + t('deploy.rolling', { defaultValue: 'Rolling back…' }) : '↩ ' + t('deploy.confirmRollback', { defaultValue: 'Confirm rollback' })}
           </button>
         </div>
       </div>
@@ -341,6 +343,7 @@ function RollbackConfirmModal({ dep, skillId, rolling, error, onConfirm, onCance
 // ── Main page ──────────────────────────────────────────────────────────────────
 
 export default function AgentFlowDeployPage() {
+  const { t } = useTranslation('agentFlow')
   const { session, getAccessToken, tenantId } = useAuth()
 
   const [skills,      setSkills]      = useState<Skill[]>([])
@@ -555,17 +558,17 @@ export default function AgentFlowDeployPage() {
       {/* Top bar */}
       <div style={topBar}>
         <div>
-          <span style={{ fontWeight: 700, fontSize: 17, color: '#e2e8f0' }}>🚀 Deploy de AgentFlow</span>
+          <span style={{ fontWeight: 700, fontSize: 17, color: '#e2e8f0' }}>🚀 {t('deploy.title')}</span>
           <span style={{ marginLeft: 10, fontSize: 12, color: '#64748b' }}>
             {loading ? '⟳' : `${skills.length} skill(s)`}
           </span>
         </div>
-        <button style={btnSecondary} onClick={load} disabled={loading}>↻ Atualizar</button>
+        <button style={btnSecondary} onClick={load} disabled={loading}>↻ {t('monitor.refresh', { defaultValue: '↻ Refresh' })}</button>
       </div>
 
       {error && (
         <div style={{ padding: '10px 20px', background: '#7f1d1d', color: '#fca5a5', fontSize: 12 }}>
-          Erro ao carregar: {error}
+          {t('deploy.errorLoading', { defaultValue: 'Error loading' })}: {error}
         </div>
       )}
 
@@ -576,7 +579,7 @@ export default function AgentFlowDeployPage() {
             <input
               value={filter}
               onChange={e => setFilter(e.target.value)}
-              placeholder="Buscar skill…"
+              placeholder={t('editor.search', { defaultValue: 'Search skills…' })}
               style={searchInput}
             />
             {loading && <Spinner />}
@@ -585,7 +588,7 @@ export default function AgentFlowDeployPage() {
           <div style={{ flex: 1, overflowY: 'auto' }}>
             {filtered.length === 0 && !loading && (
               <div style={{ padding: '40px 16px', textAlign: 'center', color: '#475569', fontSize: 13 }}>
-                Nenhum skill encontrado
+                {t('editor.noSkills', { defaultValue: 'No skills found.' })}
               </div>
             )}
             {filtered.map(skill => {
@@ -656,9 +659,9 @@ export default function AgentFlowDeployPage() {
 
             <div style={{ flex: 1, overflowY: 'auto', padding: '20px' }}>
               {/* Pool selection */}
-              <Section label="Selecionar pools para deploy">
+              <Section label={t('deploy.selectPoolsForDeploy', { defaultValue: 'Select pools for deployment' })}>
                 {pools.length === 0 && (
-                  <div style={{ fontSize: 12, color: '#475569' }}>Nenhum pool disponível</div>
+                  <div style={{ fontSize: 12, color: '#475569' }}>{t('deploy.noPools', { defaultValue: 'No pools available.' })}</div>
                 )}
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: 8, marginTop: 8 }}>
                   {pools.map(pool => {
@@ -699,15 +702,15 @@ export default function AgentFlowDeployPage() {
               </Section>
 
               {/* Deploy action */}
-              <Section label="Executar deploy">
+              <Section label={t('deploy.executeDeployTitle', { defaultValue: 'Execute deploy' })}>
                 <div style={{ marginBottom: 12 }}>
                   {selectedPools.length === 0 ? (
                     <div style={{ fontSize: 12, color: '#64748b' }}>
-                      Selecione ao menos um pool para ativar o deploy.
+                      {t('deploy.selectAtLeastOnePool', { defaultValue: 'Select at least one pool to enable deployment.' })}
                     </div>
                   ) : (
                     <div style={{ fontSize: 12, color: '#94a3b8' }}>
-                      Pools selecionados:{' '}
+                      {t('deploy.selectedPools', { defaultValue: 'Selected pools:' })}{' '}
                       {selectedPools.map(p => (
                         <span key={p} style={poolChip}>{p}</span>
                       ))}
@@ -737,16 +740,16 @@ export default function AgentFlowDeployPage() {
                     transition: 'all .15s',
                   }}
                 >
-                  {deploying ? '⟳ Publicando…' : '🚀 Publicar agora'}
+                  {deploying ? '⟳ ' + t('deploy.deploying', { defaultValue: 'Deploying…' }) : '🚀 ' + t('deploy.deployNow', { defaultValue: 'Deploy now' })}
                 </button>
 
                 <div style={{ fontSize: 11, color: '#475569', marginTop: 8 }}>
-                  O skill será publicado nos pools selecionados. Sessões em andamento continuarão com a versão anterior até o encerramento.
+                  {t('deploy.deployExplain', { defaultValue: 'The skill will be deployed to the selected pools. In-progress sessions will continue on the previous version until completion.' })}
                 </div>
               </Section>
 
               {/* Deployment history */}
-              <Section label="Histórico de deploys">
+              <Section label={t('deploy.history.title', { defaultValue: 'Deployment History' })}>
                 {loadingDetail && (
                   <div style={{ display: 'flex', justifyContent: 'center', padding: 20 }}>
                     <Spinner />
@@ -754,7 +757,7 @@ export default function AgentFlowDeployPage() {
                 )}
                 {!loadingDetail && deployments.length === 0 && (
                   <div style={{ fontSize: 12, color: '#475569' }}>
-                    Nenhum deploy registrado para este skill.
+                    {t('deploy.history.noHistory', { defaultValue: 'No deployments yet.' })}
                   </div>
                 )}
 
@@ -772,17 +775,17 @@ export default function AgentFlowDeployPage() {
                             <code style={{ fontSize: 11, color: '#93c5fd' }}>{dep.deployment_id}</code>
                             {isLatest && (
                               <span style={{ fontSize: 9, fontWeight: 700, padding: '1px 5px', borderRadius: 3, background: '#14532d', color: '#4ade80', textTransform: 'uppercase' }}>
-                                atual
+                                {t('deploy.history.current', { defaultValue: 'current' })}
                               </span>
                             )}
                             {isRollbackRow && (
                               <span style={{ fontSize: 9, fontWeight: 700, padding: '1px 5px', borderRadius: 3, background: '#451a03', color: '#fb923c', textTransform: 'uppercase' }}>
-                                rollback
+                                {t('deploy.history.rollbackTag', { defaultValue: 'rollback' })}
                               </span>
                             )}
                           </div>
                           <div style={{ fontSize: 11, color: '#64748b', marginTop: 2 }}>
-                            v{dep.version} · por {dep.deployed_by}
+                            v{dep.version} · {t('deploy.history.by', { defaultValue: 'by' })} {dep.deployed_by}
                           </div>
                           {dep.notes && (
                             <div style={{ fontSize: 10, color: '#475569', marginTop: 2, fontStyle: 'italic' }}>
@@ -802,8 +805,8 @@ export default function AgentFlowDeployPage() {
                               disabled={!canRollback}
                               title={
                                 !hasSnapshot
-                                  ? 'Snapshot indisponível para este deploy'
-                                  : 'Restaurar este flow e fazer novo deploy nos mesmos pools'
+                                  ? t('deploy.noSnapshotTitle', { defaultValue: 'Snapshot not available for this deployment' })
+                                  : t('deploy.rollbackTooltip', { defaultValue: 'Restore this flow and redeploy to the same pools' })
                               }
                               style={{
                                 fontSize: 11, fontWeight: 600, padding: '3px 10px', borderRadius: 4,
@@ -815,7 +818,7 @@ export default function AgentFlowDeployPage() {
                                 whiteSpace:  'nowrap',
                               }}
                             >
-                              ↩ Rollback
+                              ↩ {t('deploy.rollback', { defaultValue: 'Rollback' })}
                             </button>
                           )}
                         </div>
@@ -832,23 +835,21 @@ export default function AgentFlowDeployPage() {
 
                 {deployments.length > 0 && (
                   <div style={{ fontSize: 11, color: '#334155', marginTop: 8 }}>
-                    O rollback restaura o flow daquele deploy e publica nos mesmos pools.
-                    Sessões em andamento continuam na versão anterior até o encerramento.
+                    {t('deploy.rollbackExplain', { defaultValue: 'Rollback restores the flow from that deployment and publishes to the same pools. In-progress sessions will continue on the previous version until completion.' })}
                   </div>
                 )}
               </Section>
 
               {/* ── Scheduled deploy ──────────────────────────────────── */}
-              <Section label="Agendar deploy">
+              <Section label={t('deploy.schedule.title', { defaultValue: 'Schedule Deploy' })}>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
                   <div style={{ fontSize: 12, color: '#94a3b8' }}>
-                    Agende o deploy para ser executado automaticamente em um horário futuro.
-                    Os pools selecionados na seção acima serão utilizados.
+                    {t('deploy.scheduleExplain', { defaultValue: 'Schedule the deployment to run automatically at a future time. The pools selected in the section above will be used.' })}
                   </div>
 
                   {selectedPools.length === 0 && (
                     <div style={{ fontSize: 12, color: '#64748b', padding: '8px 12px', background: '#1e293b', borderRadius: 4 }}>
-                      ⚠️ Selecione ao menos um pool acima antes de agendar.
+                      ⚠️ {t('deploy.selectPoolBeforeSchedule', { defaultValue: 'Select at least one pool above before scheduling.' })}
                     </div>
                   )}
 
@@ -877,7 +878,7 @@ export default function AgentFlowDeployPage() {
                         transition: 'all .15s',
                       }}
                     >
-                      {scheduling ? '⟳ Agendando…' : '⏰ Agendar'}
+                      {scheduling ? '⟳ ' + t('deploy.scheduling', { defaultValue: 'Scheduling…' }) : '⏰ ' + t('deploy.schedule.submit', { defaultValue: 'Schedule' })}
                     </button>
                   </div>
 
@@ -896,7 +897,7 @@ export default function AgentFlowDeployPage() {
                   {scheduledDeploys.length > 0 && (
                     <div style={{ marginTop: 4 }}>
                       <div style={{ fontSize: 11, fontWeight: 600, color: '#64748b', marginBottom: 6 }}>
-                        Deploys agendados pendentes ({scheduledDeploys.filter(s => s.status === 'active' || s.status === 'suspended').length}):
+                        {t('deploy.schedule.pending', { defaultValue: 'Pending scheduled deploys' })} ({scheduledDeploys.filter(s => s.status === 'active' || s.status === 'suspended').length}):
                       </div>
                       {scheduledDeploys
                         .filter(sd => sd.status === 'active' || sd.status === 'suspended')
@@ -934,7 +935,7 @@ export default function AgentFlowDeployPage() {
                                 whiteSpace: 'nowrap', flexShrink: 0,
                               }}
                             >
-                              {cancellingId === sd.workflow_instance_id ? '⟳' : '✕ Cancelar'}
+                              {cancellingId === sd.workflow_instance_id ? '⟳' : '✕ ' + t('deploy.schedule.cancel', { defaultValue: 'Cancel' })}
                             </button>
                           </div>
                         ))}
@@ -944,15 +945,15 @@ export default function AgentFlowDeployPage() {
               </Section>
 
               {/* ── Handoff monitor ───────────────────────────────────── */}
-              <Section label={`Monitor de handoff${handoffPolling ? ' ⟳' : ''}`}>
+              <Section label={`${t('deploy.handoff.title', { defaultValue: 'Handoff Monitor' })}${handoffPolling ? ' ⟳' : ''}`}>
                 {!handoffStatus && (
                   <div style={{ fontSize: 12, color: '#475569' }}>
-                    Nenhum deploy ativo detectado para este skill.
+                    {t('deploy.noDeployDetected', { defaultValue: 'No active deployment detected for this skill.' })}
                   </div>
                 )}
                 {handoffStatus && !handoffStatus.deployed && (
                   <div style={{ fontSize: 12, color: '#64748b', padding: '10px 12px', background: '#1e293b', borderRadius: 6 }}>
-                    Este skill ainda não foi publicado em nenhum pool.
+                    {t('deploy.handoff.notDeployed', { defaultValue: 'Skill not yet deployed.' })}
                   </div>
                 )}
                 {handoffStatus && handoffStatus.deployed && (
@@ -968,14 +969,14 @@ export default function AgentFlowDeployPage() {
                           {handoffStatus.active_sessions}
                         </div>
                         <div style={{ fontSize: 11, color: '#64748b', marginTop: 4 }}>
-                          Sessões na versão anterior
+                          {t('deploy.handoff.activeSessions', { defaultValue: 'sessions on previous version' })}
                         </div>
                       </div>
                       <div style={metricCard}>
                         <div style={{ fontSize: 12, fontWeight: 600, color: '#93c5fd' }}>
                           {handoffStatus.deployed_at ? fmtDate(handoffStatus.deployed_at) : '–'}
                         </div>
-                        <div style={{ fontSize: 11, color: '#64748b', marginTop: 4 }}>Último deploy</div>
+                        <div style={{ fontSize: 11, color: '#64748b', marginTop: 4 }}>{t('deploy.lastDeployment', { defaultValue: 'Last deployment' })}</div>
                         {handoffStatus.deployed_by && (
                           <div style={{ fontSize: 10, color: '#475569', marginTop: 2 }}>
                             por {handoffStatus.deployed_by}
@@ -987,12 +988,12 @@ export default function AgentFlowDeployPage() {
                     {/* Convergence indicator */}
                     <div style={{ background: '#1e293b', borderRadius: 6, padding: '12px 14px' }}>
                       <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8 }}>
-                        <span style={{ fontSize: 12, color: '#94a3b8', fontWeight: 600 }}>Convergência</span>
+                        <span style={{ fontSize: 12, color: '#94a3b8', fontWeight: 600 }}>{t('deploy.handoff.convergence', { defaultValue: 'Convergence' })}</span>
                         {handoffStatus.active_sessions === 0 ? (
-                          <span style={{ fontSize: 12, fontWeight: 700, color: '#4ade80' }}>✓ Completa</span>
+                          <span style={{ fontSize: 12, fontWeight: 700, color: '#4ade80' }}>✓ {t('deploy.convergenceComplete', { defaultValue: 'Complete' })}</span>
                         ) : (
                           <span style={{ fontSize: 12, color: '#fbbf24' }}>
-                            {handoffStatus.active_sessions} sessão(ões) migrando…
+                            {handoffStatus.active_sessions} {t('deploy.sessionsMigrating', { defaultValue: 'session(s) migrating…' })}
                           </span>
                         )}
                       </div>
@@ -1006,14 +1007,13 @@ export default function AgentFlowDeployPage() {
                         }} />
                       </div>
                       <div style={{ fontSize: 10, color: '#475569', marginTop: 8 }}>
-                        Atualizado automaticamente a cada 10 s.
-                        Sessões em andamento migram para a nova versão ao encerrar.
+                        {t('deploy.handoffExplain', { defaultValue: 'Updated automatically every 10 seconds. In-progress sessions migrate to the new version when complete.' })}
                       </div>
                     </div>
 
                     {/* Affected pools */}
                     <div>
-                      <div style={{ fontSize: 11, color: '#64748b', marginBottom: 4 }}>Pools afetados:</div>
+                      <div style={{ fontSize: 11, color: '#64748b', marginBottom: 4 }}>{t('deploy.affectedPools', { defaultValue: 'Affected pools:' })}</div>
                       <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
                         {handoffStatus.pool_ids.map(p => (
                           <span key={p} style={poolChip}>{p}</span>
@@ -1029,7 +1029,7 @@ export default function AgentFlowDeployPage() {
           <div style={emptyDetail}>
             <div style={{ fontSize: 40, marginBottom: 12 }}>🚀</div>
             <div style={{ fontSize: 14, color: '#475569', textAlign: 'center', maxWidth: 280 }}>
-              Selecione um skill para configurar e executar o deploy nos pools desejados
+              {t('deploy.selectSkill', { defaultValue: 'Select a skill to deploy.' })}
             </div>
           </div>
         )}

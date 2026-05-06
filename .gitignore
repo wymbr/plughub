@@ -56,3 +56,6 @@ test-results/
 # ── Docker volumes (se commitados por engano) ─────────────────────────────────
 data/
 volumes/
+
+# Cowork local settings
+.claude/

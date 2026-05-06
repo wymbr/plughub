@@ -4,6 +4,7 @@
  * Migrated from operator-console/HumanAgentPanel.tsx — uses platform-ui design system.
  */
 import React, { useState, useEffect, useCallback } from 'react'
+import { useTranslation } from 'react-i18next'
 import { useAuth } from '@/auth/useAuth'
 import { AgentType, AgentInstance, Pool } from '@/types'
 import * as registryApi from '@/api/registry'
@@ -32,6 +33,7 @@ const STATUS_LABELS = ['all', 'ready', 'busy', 'paused', 'login', 'logout'] as c
 // ── Main page ─────────────────────────────────────────────────────────────────
 
 const HumanAgentsPage: React.FC = () => {
+  const { t } = useTranslation('configRecursos')
   const [innerTab, setInnerTab] = useState<'live' | 'profiles'>('live')
   const [error,    setError]    = useState('')
 
@@ -39,18 +41,18 @@ const HumanAgentsPage: React.FC = () => {
     <div className="border border-lightGray rounded-lg overflow-hidden bg-white" style={{ minHeight: 520 }}>
       {/* Inner tab bar */}
       <div className="flex items-center gap-1 px-4 py-2 border-b border-lightGray bg-gray-50">
-        <span className="text-sm font-bold text-dark mr-4">Agentes Humanos</span>
-        {(['live', 'profiles'] as const).map(t => (
+        <span className="text-sm font-bold text-dark mr-4">{t('humanAgents.title')}</span>
+        {(['live', 'profiles'] as const).map(tabId => (
           <button
-            key={t}
-            onClick={() => { setInnerTab(t); setError('') }}
+            key={tabId}
+            onClick={() => { setInnerTab(tabId); setError('') }}
             className={`text-xs px-4 py-1.5 rounded-md font-medium transition-colors border ${
-              innerTab === t
+              innerTab === tabId
                 ? 'bg-primary/10 border-primary text-primary'
                 : 'bg-white border-lightGray text-gray hover:border-secondary hover:text-secondary'
             }`}
           >
-            {t === 'live' ? '● Status Ao Vivo' : '⚙ Perfis'}
+            {tabId === 'live' ? t('humanAgents.liveTab') : t('humanAgents.profilesTab')}
           </button>
         ))}
       </div>
@@ -70,6 +72,7 @@ const HumanAgentsPage: React.FC = () => {
 // ── Live Status tab ───────────────────────────────────────────────────────────
 
 function LiveTab({ onError }: { onError: (m: string) => void }) {
+  const { t } = useTranslation('configRecursos')
   const { session } = useAuth()
   const [instances,  setInstances]  = useState<AgentInstance[]>([])
   const [loading,    setLoading]    = useState(true)
@@ -111,19 +114,19 @@ function LiveTab({ onError }: { onError: (m: string) => void }) {
     <div className="flex-1 flex flex-col overflow-hidden">
       {/* Toolbar */}
       <div className="flex items-center justify-between px-4 py-2 border-b border-lightGray">
-        <span className="text-xs text-gray">{instances.length} agente(s) humano(s) rastreado(s)</span>
+        <span className="text-xs text-gray">{t('humanAgents.tracked', { count: instances.length })}</span>
         <div className="flex gap-1">
-          {STATUS_LABELS.map(s => (
+          {STATUS_LABELS.map(statusLabel => (
             <button
-              key={s}
-              onClick={() => setFilter(s)}
+              key={statusLabel}
+              onClick={() => setFilter(statusLabel)}
               className={`text-xs px-3 py-1 rounded border transition-colors ${
-                filter === s
+                filter === statusLabel
                   ? 'bg-primary/10 border-primary text-primary font-medium'
                   : 'bg-white border-lightGray text-gray hover:border-secondary'
               }`}
             >
-              {s === 'all' ? 'Todos' : s}
+              {t(`humanAgents.statusLabels.${statusLabel}`)}
             </button>
           ))}
         </div>
@@ -133,14 +136,21 @@ function LiveTab({ onError }: { onError: (m: string) => void }) {
       <div className="flex-1 overflow-y-auto">
         {filtered.length === 0 ? (
           <EmptyState
-            title={filter === 'all' ? 'Nenhum agente humano logado' : `Nenhum agente com status "${filter}"`}
-            description="Agentes aparecem aqui quando se conectam via Agent Assist UI"
+            title={filter === 'all' ? t('humanAgents.emptyLive') : t('humanAgents.emptyLiveWithStatus', { status: filter })}
+            description={t('humanAgents.emptyLiveDesc')}
           />
         ) : (
           <table className="w-full text-xs border-collapse">
             <thead className="bg-gray-50 sticky top-0">
               <tr>
-                {['Instance ID', 'Tipo de Agente', 'Pool', 'Status', 'Atualizado', 'Ações'].map(h => (
+                {[
+                  t('humanAgents.tableHeaders.instanceId'),
+                  t('humanAgents.tableHeaders.agentType'),
+                  t('humanAgents.tableHeaders.pool'),
+                  t('humanAgents.tableHeaders.status'),
+                  t('humanAgents.tableHeaders.updated'),
+                  t('humanAgents.tableHeaders.actions'),
+                ].map(h => (
                   <th key={h} className="text-left px-3 py-2 text-gray font-semibold uppercase tracking-wide text-xs border-b border-lightGray">
                     {h}
                   </th>
@@ -168,9 +178,9 @@ function LiveTab({ onError }: { onError: (m: string) => void }) {
                   </td>
                   <td className="px-3 py-2">
                     {acting === inst.instance_id ? (
-                      <span className="text-gray text-xs">Aguardando…</span>
+                      <span className="text-gray text-xs">{t('humanAgents.actions.waiting')}</span>
                     ) : (
-                      <InstanceActions status={inst.status as InstanceStatus} onAction={a => doAction(inst, a)} />
+                      <InstanceActions status={inst.status as InstanceStatus} onAction={a => doAction(inst, a)} t={t} />
                     )}
                   </td>
                 </tr>
@@ -183,20 +193,21 @@ function LiveTab({ onError }: { onError: (m: string) => void }) {
   )
 }
 
-function InstanceActions({ status, onAction }: {
+function InstanceActions({ status, onAction, t }: {
   status:   InstanceStatus
   onAction: (a: 'pause' | 'resume' | 'force_logout') => void
+  t:        (key: string) => string
 }) {
   return (
     <div className="flex gap-1">
       {(status === 'ready' || status === 'busy') && (
-        <ActionChip label="Pausar" variant="warning" onClick={() => onAction('pause')} />
+        <ActionChip label={t('humanAgents.actions.pause')} variant="warning" onClick={() => onAction('pause')} />
       )}
       {status === 'paused' && (
-        <ActionChip label="Retomar" variant="success" onClick={() => onAction('resume')} />
+        <ActionChip label={t('humanAgents.actions.resume')} variant="success" onClick={() => onAction('resume')} />
       )}
       {status !== 'logout' && (
-        <ActionChip label="Forçar Logout" variant="danger" onClick={() => onAction('force_logout')} />
+        <ActionChip label={t('humanAgents.actions.forceLogout')} variant="danger" onClick={() => onAction('force_logout')} />
       )}
     </div>
   )
@@ -225,6 +236,7 @@ function ActionChip({ label, variant, onClick }: {
 // ── Profiles tab ──────────────────────────────────────────────────────────────
 
 function ProfilesTab({ onError }: { onError: (m: string) => void }) {
+  const { t } = useTranslation('configRecursos')
   const { session } = useAuth()
   const [agentTypes, setAgentTypes] = useState<HumanAgentTypeExt[]>([])
   const [pools,      setPools]      = useState<Pool[]>([])
@@ -262,8 +274,8 @@ function ProfilesTab({ onError }: { onError: (m: string) => void }) {
       <div className="w-72 flex-shrink-0 border-r border-lightGray flex flex-col overflow-y-auto bg-gray-50">
         <div className="px-4 py-3 border-b border-lightGray flex items-center justify-between">
           <div>
-            <div className="text-xs font-bold text-dark">Perfis de Agente</div>
-            <div className="text-xs text-gray mt-0.5">{active.length} ativo(s)</div>
+            <div className="text-xs font-bold text-dark">{t('humanAgents.profiles.title')}</div>
+            <div className="text-xs text-gray mt-0.5">{t('humanAgents.profiles.active', { count: active.length })}</div>
           </div>
           <button
             onClick={() => { setCreating(true); setSelected(null) }}
@@ -273,20 +285,20 @@ function ProfilesTab({ onError }: { onError: (m: string) => void }) {
                 : 'bg-white border-lightGray text-gray hover:border-primary hover:text-primary'
             }`}
           >
-            + Novo
+            {t('humanAgents.profiles.newButton')}
           </button>
         </div>
 
         <div className="flex-1 py-2">
           {agentTypes.length === 0 && (
             <div className="px-4 py-5 text-center text-xs text-gray">
-              Nenhum perfil de agente humano cadastrado
+              {t('humanAgents.profiles.emptyProfiles')}
             </div>
           )}
 
           {active.length > 0 && (
             <>
-              <div className="px-4 py-1 text-xs font-bold text-gray uppercase tracking-wider">Ativos</div>
+              <div className="px-4 py-1 text-xs font-bold text-gray uppercase tracking-wider">{t('humanAgents.profiles.activeSection')}</div>
               {active.map(at => (
                 <ProfileRow key={at.agent_type_id} at={at} selected={selected?.agent_type_id === at.agent_type_id}
                   onSelect={() => { setSelected(at); setCreating(false) }} />
@@ -296,7 +308,7 @@ function ProfilesTab({ onError }: { onError: (m: string) => void }) {
 
           {deprecated.length > 0 && (
             <>
-              <div className="px-4 pt-3 pb-1 text-xs font-bold text-gray uppercase tracking-wider">Descontinuados</div>
+              <div className="px-4 pt-3 pb-1 text-xs font-bold text-gray uppercase tracking-wider">{t('humanAgents.profiles.deprecatedSection')}</div>
               {deprecated.map(at => (
                 <ProfileRow key={at.agent_type_id} at={at} selected={selected?.agent_type_id === at.agent_type_id}
                   onSelect={() => { setSelected(at); setCreating(false) }} />
@@ -328,8 +340,8 @@ function ProfilesTab({ onError }: { onError: (m: string) => void }) {
         )}
         {!creating && !selected && (
           <EmptyState
-            title="Selecione um perfil ou crie um novo"
-            description="Cada perfil representa um agente humano que pode se conectar pelo Agent Assist UI"
+            title={t('humanAgents.profiles.selectPrompt')}
+            description={t('humanAgents.profiles.selectDesc')}
           />
         )}
       </div>
@@ -354,9 +366,8 @@ function ProfileRow({ at, selected, onSelect }: {
       </div>
       <div className="text-xs text-gray mt-0.5">
         {Array.isArray(at.pools) && at.pools.length > 0
-          // pools are full Pool objects from the API — extract pool_id
           ? at.pools.map((p: any) => p.pool_id ?? String(p)).join(', ')
-          : 'sem pools'}
+          : '—'}
       </div>
     </button>
   )
@@ -368,6 +379,7 @@ function CreateProfileForm({ tenantId, poolIds, onSaved, onCancel, onError }: {
   tenantId: string; poolIds: string[]
   onSaved:  () => void; onCancel: () => void; onError: (m: string) => void
 }) {
+  const { t } = useTranslation('configRecursos')
   const [agentTypeId,   setAgentTypeId]   = useState('')
   const [role,          setRole]          = useState('primary')
   const [maxConcurrent, setMaxConcurrent] = useState('5')
@@ -380,8 +392,8 @@ function CreateProfileForm({ tenantId, poolIds, onSaved, onCancel, onError }: {
   }
 
   async function handleSave() {
-    if (!agentTypeId.trim())    { onError('ID do tipo de agente é obrigatório'); return }
-    if (selectedPools.length === 0) { onError('Atribua pelo menos um pool');    return }
+    if (!agentTypeId.trim())    { onError(t('humanAgents.createProfile.validation.agentTypeIdRequired')); return }
+    if (selectedPools.length === 0) { onError(t('humanAgents.createProfile.validation.poolsRequired'));    return }
     setSaving(true)
     try {
       await registryApi.createHumanAgentType({
@@ -400,18 +412,18 @@ function CreateProfileForm({ tenantId, poolIds, onSaved, onCancel, onError }: {
 
   return (
     <div className="flex-1 overflow-y-auto p-6">
-      <div className="text-sm font-bold text-dark mb-5">Novo Perfil de Agente Humano</div>
+      <div className="text-sm font-bold text-dark mb-5">{t('humanAgents.createProfile.title')}</div>
 
-      <SectionBlock title="Identidade">
+      <SectionBlock title={t('humanAgents.createProfile.section.identity')}>
         <div className="mb-3">
-          <FieldLabel>ID do Tipo de Agente <span className="text-red">*</span></FieldLabel>
+          <FieldLabel>{t('humanAgents.createProfile.fields.agentTypeId')} <span className="text-red">*</span></FieldLabel>
           <input className={inputCls} value={agentTypeId}
-            onChange={e => setAgentTypeId(e.target.value)} placeholder="ex: agente_humano_retencao_v1" />
-          <div className="text-xs text-gray mt-1">Usado como identificador de login no Agent Assist UI</div>
+            onChange={e => setAgentTypeId(e.target.value)} placeholder={t('humanAgents.createProfile.fields.agentTypeIdPlaceholder')} />
+          <div className="text-xs text-gray mt-1">{t('humanAgents.createProfile.fields.agentTypeIdHelper')}</div>
         </div>
         <div className="grid grid-cols-2 gap-4">
           <div>
-            <FieldLabel>Papel (Role)</FieldLabel>
+            <FieldLabel>{t('humanAgents.createProfile.fields.role')}</FieldLabel>
             <select className={`${inputCls} cursor-pointer`} value={role} onChange={e => setRole(e.target.value)}>
               {['primary', 'specialist', 'supervisor', 'evaluator', 'reviewer'].map(r => (
                 <option key={r} value={r}>{r}</option>
@@ -419,16 +431,16 @@ function CreateProfileForm({ tenantId, poolIds, onSaved, onCancel, onError }: {
             </select>
           </div>
           <div>
-            <FieldLabel>Max Sessões Simultâneas</FieldLabel>
+            <FieldLabel>{t('humanAgents.createProfile.fields.maxConcurrent')}</FieldLabel>
             <input type="number" min={1} max={20} className={inputCls}
               value={maxConcurrent} onChange={e => setMaxConcurrent(e.target.value)} />
           </div>
         </div>
       </SectionBlock>
 
-      <SectionBlock title={<>Pools <span className="text-red">*</span></>}>
+      <SectionBlock title={<>{t('humanAgents.createProfile.section.pools')} <span className="text-red">*</span></>}>
         {poolIds.length === 0 ? (
-          <div className="text-xs text-gray">Nenhum pool disponível — crie pools na aba Pools primeiro</div>
+          <div className="text-xs text-gray">{t('humanAgents.profiles.noPoolsAvailable')}</div>
         ) : (
           <div className="flex flex-wrap gap-2">
             {poolIds.map(pid => (
@@ -446,17 +458,17 @@ function CreateProfileForm({ tenantId, poolIds, onSaved, onCancel, onError }: {
         )}
       </SectionBlock>
 
-      <SectionBlock title="Permissões (opcional)">
-        <FieldLabel>Nomes de ferramentas MCP separados por vírgula</FieldLabel>
+      <SectionBlock title={t('humanAgents.createProfile.section.permissions')}>
+        <FieldLabel>{t('humanAgents.createProfile.fields.permissions')}</FieldLabel>
         <input className={inputCls} value={permissions}
-          onChange={e => setPermissions(e.target.value)} placeholder="customer_get, contract_read, …" />
+          onChange={e => setPermissions(e.target.value)} placeholder={t('humanAgents.createProfile.fields.permissionsPlaceholder')} />
       </SectionBlock>
 
       <div className="flex gap-3 mt-2">
         <Button variant="primary" onClick={handleSave} disabled={saving}>
-          {saving ? 'Criando…' : 'Criar Perfil'}
+          {saving ? t('humanAgents.createProfile.buttons.creating') : t('humanAgents.createProfile.buttons.create')}
         </Button>
-        <Button variant="ghost" onClick={onCancel}>Cancelar</Button>
+        <Button variant="ghost" onClick={onCancel}>{t('humanAgents.createProfile.buttons.cancel')}</Button>
       </div>
     </div>
   )
@@ -471,6 +483,7 @@ function ProfileDetail({ tenantId, agentType, onSaved, onDeprecated, onError }: 
   onDeprecated:() => void
   onError:     (m: string) => void
 }) {
+  const { t } = useTranslation('configRecursos')
   const [maxConcurrent, setMaxConcurrent] = useState(String(agentType.max_concurrent_sessions ?? 5))
   const [permissions,   setPermissions]   = useState((agentType.permissions ?? []).join(', '))
   const [saving,        setSaving]        = useState(false)
@@ -524,35 +537,35 @@ function ProfileDetail({ tenantId, agentType, onSaved, onDeprecated, onError }: 
             {agentType.agent_type_id}
             {modified && <span className="text-secondary text-sm">●</span>}
           </div>
-          <div className="text-xs text-gray mt-0.5">framework: human · role: {agentType.role ?? '—'}</div>
+          <div className="text-xs text-gray mt-0.5">{t('humanAgents.profileDetail.framework')} · {t('humanAgents.profileDetail.role')} {agentType.role ?? '—'}</div>
         </div>
         <Badge variant={isActive ? 'active' : 'default'}>{agentType.status}</Badge>
       </div>
 
       {/* Pools (read-only) */}
-      <SectionBlock title="Pools Atribuídos">
+      <SectionBlock title={t('humanAgents.profileDetail.poolsAssigned')}>
         <div className="flex flex-wrap gap-2">
           {poolList.length === 0
-            ? <span className="text-xs text-gray">Nenhum pool atribuído</span>
+            ? <span className="text-xs text-gray">{t('humanAgents.profileDetail.noPools')}</span>
             : poolList.map(pid => (
                 <Badge key={pid} variant="default" className="text-xs">{pid}</Badge>
               ))
           }
         </div>
         <div className="text-xs text-gray mt-2">
-          Pools são definidos na criação — recrie o perfil para alterar
+          {t('humanAgents.profileDetail.poolsNote')}
         </div>
       </SectionBlock>
 
       {/* Editable */}
-      <SectionBlock title="Configurações">
+      <SectionBlock title={t('humanAgents.profileDetail.settings')}>
         <div className="grid grid-cols-2 gap-4 mb-3">
           <div>
-            <FieldLabel>Papel (Role)</FieldLabel>
+            <FieldLabel>{t('humanAgents.createProfile.fields.role')}</FieldLabel>
             <div className={`${inputCls} opacity-60 cursor-not-allowed`}>{agentType.role ?? '—'}</div>
           </div>
           <div>
-            <FieldLabel>Max Sessões Simultâneas</FieldLabel>
+            <FieldLabel>{t('humanAgents.createProfile.fields.maxConcurrent')}</FieldLabel>
             <input type="number" min={1} max={20} className={inputCls}
               value={maxConcurrent}
               onChange={e => { setMaxConcurrent(e.target.value); setModified(true) }}
@@ -561,10 +574,10 @@ function ProfileDetail({ tenantId, agentType, onSaved, onDeprecated, onError }: 
           </div>
         </div>
         <div>
-          <FieldLabel>Permissões (nomes de ferramentas MCP, separados por vírgula)</FieldLabel>
+          <FieldLabel>{t('humanAgents.createProfile.fields.permissions')}</FieldLabel>
           <input className={inputCls} value={permissions}
             onChange={e => { setPermissions(e.target.value); setModified(true) }}
-            placeholder="customer_get, contract_read, …"
+            placeholder={t('humanAgents.createProfile.fields.permissionsPlaceholder')}
             disabled={!isActive}
           />
         </div>
@@ -572,8 +585,8 @@ function ProfileDetail({ tenantId, agentType, onSaved, onDeprecated, onError }: 
 
       {/* Metadata */}
       <div className="flex gap-6 text-xs text-gray mb-5">
-        {agentType.updated_at && <span>Atualizado: {new Date(agentType.updated_at).toLocaleDateString('pt-BR')}</span>}
-        <span>Criado: {new Date(agentType.created_at).toLocaleDateString('pt-BR')}</span>
+        {agentType.updated_at && <span>{t('humanAgents.profileDetail.metadata.updated')} {new Date(agentType.updated_at).toLocaleDateString('pt-BR')}</span>}
+        <span>{t('humanAgents.profileDetail.metadata.created')} {new Date(agentType.created_at).toLocaleDateString('pt-BR')}</span>
       </div>
 
       {/* Actions */}
@@ -581,21 +594,21 @@ function ProfileDetail({ tenantId, agentType, onSaved, onDeprecated, onError }: 
         <div className="flex gap-3 items-center">
           {modified && (
             <Button variant="primary" onClick={handleSave} disabled={saving}>
-              {saving ? 'Salvando…' : 'Salvar Alterações'}
+              {saving ? t('humanAgents.profileDetail.buttons.saving') : t('humanAgents.profileDetail.buttons.save')}
             </Button>
           )}
           {!confirmDep ? (
             <Button variant="ghost" onClick={() => setConfirmDep(true)}
               className="text-warning border-warning/30 hover:bg-warning/5">
-              Descontinuar
+              {t('humanAgents.profileDetail.buttons.deprecate')}
             </Button>
           ) : (
             <>
               <Button variant="primary" onClick={handleDeprecate} disabled={deprecating}
                 className="bg-warning border-warning hover:bg-warning/90">
-                {deprecating ? 'Processando…' : 'Confirmar Descontinuação'}
+                {deprecating ? t('humanAgents.profileDetail.buttons.deprecating') : t('humanAgents.profileDetail.buttons.deprecateConfirm')}
               </Button>
-              <Button variant="ghost" onClick={() => setConfirmDep(false)}>Cancelar</Button>
+              <Button variant="ghost" onClick={() => setConfirmDep(false)}>{t('humanAgents.profileDetail.buttons.cancel')}</Button>
             </>
           )}
         </div>

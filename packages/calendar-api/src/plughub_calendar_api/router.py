@@ -29,15 +29,18 @@ from .db import (
     db_get_calendar,
     db_get_holiday_set,
     db_get_holidays_for_sets,
+    db_get_tenant_config,
     db_list_associations,
     db_list_calendars,
     db_list_holiday_sets,
     db_update_calendar,
     db_update_holiday_set,
+    db_upsert_tenant_config,
 )
 from .engine import (
     add_business_duration,
     business_duration,
+    get_open_status,
     is_open,
     next_open_slot,
 )
@@ -117,6 +120,42 @@ async def delete_holiday_set(id: str, pool=Depends(_pool)):
         raise HTTPException(404, "holiday_set not found")
 
 
+# ── Tenant Config ─────────────────────────────────────────────────────────────
+
+class TenantConfigUpdate(BaseModel):
+    tenant_id:        str
+    default_timezone: str
+
+
+@router.get("/v1/tenant-config")
+async def get_tenant_config(
+    tenant_id: str,
+    pool=Depends(_pool),
+) -> dict:
+    """
+    Return the default timezone configuration for a tenant.
+    Falls back to 'America/Sao_Paulo' if no explicit config has been set.
+    """
+    return await db_get_tenant_config(pool, tenant_id)
+
+
+@router.patch("/v1/tenant-config")
+async def update_tenant_config(
+    body: TenantConfigUpdate,
+    pool=Depends(_pool),
+) -> dict:
+    """
+    Create or update the tenant's default timezone.
+    This timezone is used as the default for new calendars created without an
+    explicit timezone field, replacing the platform-wide 'America/Sao_Paulo' default.
+    """
+    try:
+        pytz.timezone(body.default_timezone)
+    except pytz.UnknownTimeZoneError:
+        raise HTTPException(422, f"Unknown timezone: {body.default_timezone!r}")
+    return await db_upsert_tenant_config(pool, body.tenant_id, body.default_timezone)
+
+
 # ── Calendars ─────────────────────────────────────────────────────────────────
 
 class CalendarCreate(BaseModel):
@@ -125,7 +164,7 @@ class CalendarCreate(BaseModel):
     scope:           str = "tenant"
     name:            str
     description:     str = ""
-    timezone:        str = "America/Sao_Paulo"
+    timezone:        str | None = None  # None → inherit tenant default (or platform default)
     weekly_schedule: list[dict] = Field(default_factory=list)
     holiday_set_ids: list[str]  = Field(default_factory=list)
     exceptions:      list[dict] = Field(default_factory=list)
@@ -158,6 +197,15 @@ async def create_calendar(
     settings = _settings(request)
     data = body.model_dump()
     data["installation_id"] = settings.installation_id
+
+    # If the caller did not provide an explicit timezone, inherit the tenant's
+    # configured default (falls back to 'America/Sao_Paulo' if not set).
+    if data.get("timezone") is None and data.get("tenant_id"):
+        tenant_cfg = await db_get_tenant_config(pool, data["tenant_id"])
+        data["timezone"] = tenant_cfg["default_timezone"]
+    elif data.get("timezone") is None:
+        data["timezone"] = "America/Sao_Paulo"
+
     return await db_create_calendar(pool, data)
 
 
@@ -253,7 +301,15 @@ async def engine_is_open(
     at:          str | None = None,
     pool=Depends(_pool),
 ) -> dict[str, Any]:
-    """Is the entity open right now (or at a specific datetime)?"""
+    """
+    Query the open/closed/holiday status of an entity.
+
+    Returns:
+      status        — "open" | "closed" | "holiday"
+      open          — boolean (deprecated; use status)
+      evaluated_at  — ISO-8601 timestamp of evaluation
+      entity_type, entity_id, calendars_count
+    """
     at_dt: datetime | None = None
     if at:
         at_dt = datetime.fromisoformat(at)
@@ -261,11 +317,12 @@ async def engine_is_open(
             at_dt = pytz.UTC.localize(at_dt)
 
     assocs, hols = await _load_engine_data(pool, tenant_id, entity_type, entity_id)
-    open_now = is_open(assocs, hols, at_dt)
+    status = get_open_status(assocs, hols, at_dt)
     evaluated_at = (at_dt or datetime.utcnow().replace(tzinfo=pytz.UTC)).isoformat()
 
     return {
-        "open":            open_now,
+        "status":          status,
+        "open":            status == "open",  # deprecated — kept for backward compatibility
         "evaluated_at":    evaluated_at,
         "entity_type":     entity_type,
         "entity_id":       entity_id,

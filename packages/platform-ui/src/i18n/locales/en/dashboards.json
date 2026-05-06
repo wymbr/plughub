@@ -1,0 +1,48 @@
+{
+  "title":         "Dashboard Templates",
+  "noTemplate":    "No template selected.",
+  "selectTemplate":"Select a template from the sidebar to view the dashboard.",
+  "editMode":      "Edit mode",
+  "exitEdit":      "Exit edit mode",
+  "addCard":       "Add card",
+  "saveTemplate":  "Save template",
+  "saving":        "Saving…",
+  "newTemplate":   "+ New template",
+  "templateName":  "Template name",
+  "description":   "Description",
+  "create":        "Create",
+  "deleteTemplate":"Remove template",
+  "deleteCardTitle":"Remove card",
+  "templates":     "Templates",
+  "noTemplates":   "No templates created yet.",
+  "createFirst":   "Create your first template",
+  "emptyDashboard":"Empty dashboard",
+  "addCards":      "Add cards",
+  "deleteTemplateConfirm": "Remove this template permanently?",
+  "selectFirstTooltip": "Select a template first",
+  "adminTokenRequired": "Admin token required",
+  "connectSSE":    "Connect to operational SSE",
+  "card": {
+    "type":        "Card type",
+    "title":       "Title",
+    "interval":    "Interval (minutes)",
+    "breakdown":   "Breakdown by",
+    "displayType": "Display type",
+    "add":         "Add",
+    "cancel":      "Cancel"
+  },
+  "cardTypes": {
+    "timeseries_volume":      "Session volume",
+    "timeseries_handle_time": "Handle time",
+    "timeseries_score":       "Quality score",
+    "pool_status":            "Pool status"
+  },
+  "displayTypes": {
+    "line":  "Line chart",
+    "bar":   "Bar chart",
+    "area":  "Area chart",
+    "pie":   "Pie chart",
+    "table": "Table",
+    "tile":  "KPI tile"
+  }
+}

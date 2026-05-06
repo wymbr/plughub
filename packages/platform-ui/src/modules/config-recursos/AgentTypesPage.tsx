@@ -29,6 +29,7 @@ const ROLES = ['executor', 'orchestrator', 'evaluator', 'supervisor']
 const AgentTypesPage: React.FC = () => {
   const { session } = useAuth()
   const { t } = useTranslation('configRecursos')
+  const { t: tCommon } = useTranslation('common')
   const [agentTypes, setAgentTypes] = useState<AgentType[]>([])
   const [pools, setPools] = useState<Pool[]>([])
   const [skills, setSkills] = useState<Skill[]>([])
@@ -76,7 +77,7 @@ const AgentTypesPage: React.FC = () => {
       setPools(poolsResult.items || [])
       setSkills(skillsResult.items || [])
     } catch {
-      setError('Failed to load data')
+      setError(tCommon('failedToSave'))
     } finally {
       setIsLoading(false)
     }
@@ -236,9 +237,9 @@ const AgentTypesPage: React.FC = () => {
         title={t('agentTypes.createAgentType')}
         footer={
           <>
-            <Button variant="ghost" onClick={handleClose}>Cancel</Button>
+            <Button variant="ghost" onClick={handleClose}>{tCommon('cancel')}</Button>
             <Button variant="primary" onClick={handleSubmit} disabled={isSaving}>
-              {isSaving ? 'Saving...' : 'Save'}
+              {isSaving ? tCommon('saving') : tCommon('save')}
             </Button>
           </>
         }
@@ -357,16 +358,16 @@ const AgentTypesPage: React.FC = () => {
           footer={
             confirmDeprecate ? (
               <>
-                <span className="text-sm text-red self-center">Deprecate this agent type?</span>
-                <Button variant="ghost" onClick={() => setConfirmDeprecate(false)}>Cancel</Button>
+                <span className="text-sm text-red self-center">{t('agentTypes.deprecateConfirm')}</span>
+                <Button variant="ghost" onClick={() => setConfirmDeprecate(false)}>{tCommon('cancel')}</Button>
                 <Button variant="danger" onClick={handleDeprecate} disabled={isDeprecating}>
-                  {isDeprecating ? 'Deprecating...' : 'Confirm'}
+                  {isDeprecating ? t('agentTypes.deprecating') : tCommon('confirm')}
                 </Button>
               </>
             ) : (
               <>
-                <Button variant="danger" onClick={() => setConfirmDeprecate(true)}>Deprecate</Button>
-                <Button variant="ghost" onClick={() => setIsDetailOpen(false)}>Close</Button>
+                <Button variant="danger" onClick={() => setConfirmDeprecate(true)}>{t('agentTypes.deprecate')}</Button>
+                <Button variant="ghost" onClick={() => setIsDetailOpen(false)}>{t('agentTypes.close')}</Button>
               </>
             )
           }

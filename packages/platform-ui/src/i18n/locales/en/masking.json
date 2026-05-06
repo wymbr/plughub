@@ -1,0 +1,55 @@
+{
+  "title": "Masking",
+  "header": {
+    "title": "Message Masking",
+    "description": "Inline tokens protect sensitive data in the canonical stream. Changes propagate within 60s (Redis Config API cache TTL).",
+    "adminToken": "Admin Token",
+    "tokenPlaceholder": "To enable editing"
+  },
+  "section": {
+    "access": {
+      "title": "Access Control for original_content",
+      "description": "Defines which roles can view the original value of masked fields (via session_context_get and evaluation_context_get). Agents with roles outside this list receive only the display_partial (e.g., ***-00).",
+      "activeRoles": "Active roles: {{roles}}",
+      "noRoles": "(none — all content masked)"
+    },
+    "audit": {
+      "title": "Audit Capture",
+      "description": "Controls whether input/output of MCP tool calls are captured in audit records (Kafka topic mcp.audit). LGPD warning: capture_input may include resolved masked values.",
+      "captureInput": "Capture Input",
+      "captureOutput": "Capture Output",
+      "warning": "Warning: may capture resolved sensitive values"
+    },
+    "retention": {
+      "title": "Token Retention",
+      "description": "Time in days that masking tokens are kept in Redis. After expiration, original_content cannot be resolved — use only on closed sessions or exported reports."
+    },
+    "categories": {
+      "title": "Masking Categories",
+      "description": "Active categories by default (DEFAULT_MASKING_RULES in @plughub/schemas/audit.ts). To add custom rules or disable categories, configure {{tenantId}}:masking:config directly in Redis.",
+      "display": "Display",
+      "active": "active",
+      "tokenFormat": "Inline token format",
+      "tokenExplanation": "replaced by display_partial on delivery to client via WebSocket. Resolved to original value by authorized roles via MCP tools."
+    }
+  },
+  "retention": {
+    "save": "Save",
+    "cancel": "Cancel",
+    "edit": "Edit",
+    "days": "days"
+  },
+  "loading": "Loading settings…",
+  "toast": {
+    "tokenRequired": "Admin token required to save",
+    "keySaved": "{{key}} saved"
+  },
+  "categories": {
+    "credit_card": "Credit Card",
+    "cpf": "CPF",
+    "phone": "Phone",
+    "email_addr": "Email",
+    "iban": "IBAN",
+    "passport": "Passport"
+  }
+}

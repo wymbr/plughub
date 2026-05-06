@@ -1,0 +1,99 @@
+{
+  "title": "Agent Assist",
+  "pool": {
+    "select":   "Select pool",
+    "all":      "All pools",
+    "noPool":   "No pool selected"
+  },
+  "session": {
+    "none":        "No active session",
+    "loading":     "Loading session…",
+    "ended":       "Session ended",
+    "assigned":    "Session assigned"
+  },
+  "close": {
+    "title":        "Close Session",
+    "issueStatus":  "Issue Status",
+    "outcome":      "Outcome",
+    "handoff":      "Handoff Reason",
+    "confirm":      "Close Session",
+    "cancel":       "Cancel"
+  },
+  "input": {
+    "placeholder": "Type a message…",
+    "send":        "Send",
+    "close":       "Close",
+    "pause":       "Pause",
+    "resume":      "Resume",
+    "hangup":      "Hang up"
+  },
+  "tabs": {
+    "state":        "State",
+    "capabilities": "Capabilities",
+    "context":      "Context",
+    "history":      "History"
+  },
+  "state": {
+    "sentiment":   "Sentiment",
+    "intent":      "Intent",
+    "sla":         "SLA",
+    "flags":       "Flags"
+  },
+  "capabilities": {
+    "suggestedAgents": "Suggested Agents",
+    "copilot":         "AI Suggestion",
+    "riskFlags":       "Risk Flags",
+    "actions":         "Recommended Actions"
+  },
+  "context": {
+    "noContext": "No context available.",
+    "agents":    "Agents only"
+  },
+  "history": {
+    "noHistory":    "No contact history.",
+    "loading":      "Loading history…",
+    "notIdentified":"Customer not identified"
+  },
+  "pause": {
+    "title":     "Select Pause Reason",
+    "reason":    "Reason",
+    "note":      "Note (optional)",
+    "confirm":   "Confirm",
+    "cancel":    "Cancel",
+    "required":  "Note required for this reason"
+  },
+  "substitution": {
+    "toggle":     "🔄 Replace",
+    "active":     "🔄 Replacing",
+    "observation":"Observation"
+  },
+  "message": {
+    "closingWrapUp":        "Waiting for finalization (wrap-up/NPS)…",
+    "closingError":         "Error closing session.",
+    "menuSubmitFailed":     "Failed to submit response.",
+    "networkError":         "Network error sending response.",
+    "hungUpByAgent":        "Hung up by agent",
+    "agentResumed":         "Agent resumed — available for new contacts.",
+    "agentPaused":          "Agent paused ({{reason}}{{detail}}). No new contacts will be received.",
+    "inviteSent":           "Invitation sent: {{agentTypeId}}",
+    "escalatingTo":         "Escalating to: {{poolId}}",
+    "transferComingSoon":   "Transfer: coming soon",
+    "clientDisconnected":   "Client disconnected"
+  },
+  "contacts": {
+    "label": "Contacts"
+  },
+  "centerTab": {
+    "atual":     "Current",
+    "historico": "History"
+  },
+  "rightTab": {
+    "estado":      "State",
+    "capacidades": "Capabilities",
+    "contexto":    "Context"
+  },
+  "empty": {
+    "activatePool":       "Activate a pool in the header to become available.",
+    "waitingForContact":  "Waiting for next contact…"
+  }
+}

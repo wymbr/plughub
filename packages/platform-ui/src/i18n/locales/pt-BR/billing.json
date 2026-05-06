@@ -1,0 +1,77 @@
+{
+  "title": "Faturamento",
+  "pageSubtitle": "Visualize faturas e dados de consumo",
+  "tabs": {
+    "invoice":     "Fatura",
+    "consumption": "Consumo"
+  },
+  "invoice": {
+    "title":        "Fatura",
+    "period":       "Período de faturamento",
+    "billingDays":  "{{days}} dias úteis",
+    "baseItems":    "Capacidade Base",
+    "reserveItems": "Pools de Reserva",
+    "total":        "Total",
+    "grandTotal":   "Total Geral",
+    "exportXlsx":   "Exportar XLSX",
+    "noItems":      "Nenhum item nesta fatura.",
+    "activate":     "Ativar",
+    "deactivate":   "Desativar",
+    "daysActive":   "{{days}} dias ativos",
+    "statusActive": "Ativo",
+    "statusInactive": "Inativo",
+    "toggleSuccess": "{{resource}} alternado com sucesso",
+    "adminTokenRequired": "Token admin necessário para alternar pools de reserva",
+    "empty": {
+      "title": "Nenhuma fatura disponível",
+      "description": "Nenhum dado de faturamento disponível para este período"
+    },
+    "columns": {
+      "resource": "Recurso",
+      "quantity": "Quantidade",
+      "unitPrice": "Preço Unitário",
+      "subtotal": "Subtotal",
+      "daysActive": "Dias Ativos"
+    },
+    "generatedAt": "Gerado em {{date}}"
+  },
+  "consumption": {
+    "title":       "Consumo de Uso",
+    "notice":      "Dados de consumo disponíveis para curadoria de qualidade, não incluídos no faturamento.",
+    "noData":      "Sem dados de consumo disponíveis.",
+    "noDataDescription": "Nenhum dado de consumo para exibir",
+    "dimension":   "Dimensão",
+    "total":       "Total",
+    "unit":        "Unidade",
+    "defaultUnit": "unidades"
+  },
+  "resources": {
+    "title":       "Recursos",
+    "base":        "Base",
+    "reserve":     "Reserva",
+    "adminToken":  "Token admin",
+    "adminTokenHint": "Digite o token admin para gerenciar recursos",
+    "noResources": "Nenhum recurso configurado."
+  },
+  "dimensions": {
+    "sessions":            { "label": "Sessões",              "unit": "sessões"  },
+    "messages":            { "label": "Mensagens",            "unit": "msgs"     },
+    "llm_tokens_input":    { "label": "Tokens LLM (entrada)", "unit": "tokens"   },
+    "llm_tokens_output":   { "label": "Tokens LLM (saída)",   "unit": "tokens"   },
+    "webchat_attachments": { "label": "Anexos WebChat",       "unit": "arquivos" }
+  },
+  "resourceTypes": {
+    "ai_agent":         "Agente IA",
+    "human_agent":      "Agente Humano",
+    "whatsapp_number":  "Número WhatsApp",
+    "voice_trunk_in":   "Tronco de Voz Entrada",
+    "voice_trunk_out":  "Tronco de Voz Saída",
+    "email_inbox":      "Caixa de E-mail",
+    "sms_number":       "Número SMS",
+    "webchat_instance": "Instância WebChat"
+  },
+  "error": {
+    "loadInvoice":    "Falha ao carregar fatura.",
+    "loadResources":  "Falha ao carregar recursos."
+  }
+}

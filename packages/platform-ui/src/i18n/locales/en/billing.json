@@ -1,0 +1,77 @@
+{
+  "title": "Billing",
+  "pageSubtitle": "View invoices and consumption data",
+  "tabs": {
+    "invoice":     "Invoice",
+    "consumption": "Consumption"
+  },
+  "invoice": {
+    "title":        "Invoice",
+    "period":       "Billing period",
+    "billingDays":  "{{days}} billing days",
+    "baseItems":    "Base Capacity",
+    "reserveItems": "Reserve Pools",
+    "total":        "Total",
+    "grandTotal":   "Grand Total",
+    "exportXlsx":   "Export XLSX",
+    "noItems":      "No items in this invoice.",
+    "activate":     "Activate",
+    "deactivate":   "Deactivate",
+    "daysActive":   "{{days}} days active",
+    "statusActive": "Active",
+    "statusInactive": "Inactive",
+    "toggleSuccess": "{{resource}} toggled successfully",
+    "adminTokenRequired": "Admin token required to toggle reserve pools",
+    "empty": {
+      "title": "No invoice available",
+      "description": "No billing data available for this period"
+    },
+    "columns": {
+      "resource": "Resource",
+      "quantity": "Quantity",
+      "unitPrice": "Unit Price",
+      "subtotal": "Subtotal",
+      "daysActive": "Days Active"
+    },
+    "generatedAt": "Generated on {{date}}"
+  },
+  "consumption": {
+    "title":       "Usage Consumption",
+    "notice":      "Usage data is available for quality curation but is not included in billing.",
+    "noData":      "No consumption data available.",
+    "noDataDescription": "No consumption data to display",
+    "dimension":   "Dimension",
+    "total":       "Total",
+    "unit":        "Unit",
+    "defaultUnit": "units"
+  },
+  "resources": {
+    "title":       "Resources",
+    "base":        "Base",
+    "reserve":     "Reserve",
+    "adminToken":  "Admin token",
+    "adminTokenHint": "Enter admin token to manage resources",
+    "noResources": "No resources configured."
+  },
+  "dimensions": {
+    "sessions":            { "label": "Sessions",            "unit": "sessions" },
+    "messages":            { "label": "Messages",            "unit": "msgs"     },
+    "llm_tokens_input":    { "label": "LLM Tokens (input)",  "unit": "tokens"   },
+    "llm_tokens_output":   { "label": "LLM Tokens (output)", "unit": "tokens"   },
+    "webchat_attachments": { "label": "WebChat Attachments", "unit": "files"    }
+  },
+  "resourceTypes": {
+    "ai_agent":         "AI Agent",
+    "human_agent":      "Human Agent",
+    "whatsapp_number":  "WhatsApp Number",
+    "voice_trunk_in":   "Inbound Voice Trunk",
+    "voice_trunk_out":  "Outbound Voice Trunk",
+    "email_inbox":      "Email Inbox",
+    "sms_number":       "SMS Number",
+    "webchat_instance": "WebChat Instance"
+  },
+  "error": {
+    "loadInvoice":    "Failed to load invoice.",
+    "loadResources":  "Failed to load resources."
+  }
+}

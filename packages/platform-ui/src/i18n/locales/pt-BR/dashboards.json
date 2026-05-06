@@ -1,0 +1,48 @@
+{
+  "title":         "Templates de Dashboard",
+  "noTemplate":    "Nenhum template selecionado.",
+  "selectTemplate":"Selecione um template na barra lateral para visualizar o dashboard.",
+  "editMode":      "Modo de edição",
+  "exitEdit":      "Sair do modo de edição",
+  "addCard":       "Adicionar card",
+  "saveTemplate":  "Salvar template",
+  "saving":        "Salvando…",
+  "newTemplate":   "+ Novo template",
+  "templateName":  "Nome do template",
+  "description":   "Descrição",
+  "create":        "Criar",
+  "deleteTemplate":"Remover template",
+  "deleteCardTitle":"Remover card",
+  "templates":     "Templates",
+  "noTemplates":   "Nenhum template criado ainda.",
+  "createFirst":   "Criar o primeiro template",
+  "emptyDashboard":"Dashboard vazio",
+  "addCards":      "Adicionar cards",
+  "deleteTemplateConfirm": "Remover este template permanentemente?",
+  "selectFirstTooltip": "Selecione um template primeiro",
+  "adminTokenRequired": "Admin token necessário",
+  "connectSSE":    "Conectar ao SSE operacional",
+  "card": {
+    "type":        "Tipo de card",
+    "title":       "Título",
+    "interval":    "Intervalo (minutos)",
+    "breakdown":   "Breakdown por",
+    "displayType": "Tipo de exibição",
+    "add":         "Adicionar",
+    "cancel":      "Cancelar"
+  },
+  "cardTypes": {
+    "timeseries_volume":      "Volume de sessões",
+    "timeseries_handle_time": "Tempo de atendimento",
+    "timeseries_score":       "Score de qualidade",
+    "pool_status":            "Status do pool"
+  },
+  "displayTypes": {
+    "line":  "Linha",
+    "bar":   "Barras",
+    "area":  "Área",
+    "pie":   "Pizza",
+    "table": "Tabela",
+    "tile":  "KPI tile"
+  }
+}

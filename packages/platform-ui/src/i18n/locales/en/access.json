@@ -1,0 +1,112 @@
+{
+  "title": "Access Control",
+  "pageSubtitle": "Manage users and permission templates",
+  "adminTokenPlaceholder": "Admin token (optional in dev)",
+  "adminTokenApply": "Apply",
+  "tabs": {
+    "users": "Users",
+    "templates": "Templates"
+  },
+  "users": {
+    "title": "Users",
+    "create": "New User",
+    "editUser": "Edit User",
+    "newUser": "New User",
+    "name": "Name",
+    "email": "Email",
+    "password": "Password",
+    "passwordNew": "Password (for new users)",
+    "passwordOptional": "Password (leave empty to keep current)",
+    "role": "Roles",
+    "pools": "Accessible Pools",
+    "status": "Status",
+    "active": "Active",
+    "inactive": "Inactive",
+    "noUsers": "No users found.",
+    "noResults": "No results for the applied filters.",
+    "summary": "Summary",
+    "total": "Total",
+    "filterAll": "All",
+    "allPools": "All",
+    "tableUser": "User",
+    "tableRoles": "Roles",
+    "tablePools": "Pools (Data)",
+    "searchPlaceholder": "Search by name or email…",
+    "deactivate": "Deactivate",
+    "reactivate": "Reactivate",
+    "loading": "Loading users…",
+    "permissions": "Module Permissions"
+  },
+  "roles": {
+    "operator": "Operator",
+    "supervisor": "Supervisor",
+    "admin": "Admin",
+    "developer": "Developer",
+    "business": "Business"
+  },
+  "modules": {
+    "analytics": "Analytics",
+    "evaluation": "Evaluation",
+    "billing": "Billing",
+    "config": "Configuration",
+    "registry": "Resources",
+    "skill_flows": "Skill Flows",
+    "campaigns": "Campaigns",
+    "workflows": "Workflows"
+  },
+  "actions": {
+    "view": "View",
+    "edit": "Edit",
+    "admin": "Admin"
+  },
+  "templates": {
+    "title": "Permission Templates",
+    "create": "New Template",
+    "createNew": "New Template",
+    "createFirst": "Create the first one",
+    "noTemplates": "No templates created.",
+    "name": "Template Name",
+    "description": "Description",
+    "permissions": "Permissions",
+    "apply": "Apply to User",
+    "selectTemplate": "Select a template",
+    "selectDescription": "Or create a new one to define a reusable set of permissions.",
+    "module": "Module",
+    "action": "Action",
+    "addPerm": "Add Permission",
+    "selectPool": "Select pool (optional)",
+    "poolIdPlaceholder": "Pool ID (optional)",
+    "preview": "Preview",
+    "noPermissions": "No permissions in this template.",
+    "permissionCount_one": "1 permission",
+    "permissionCount": "{{count}} permissions",
+    "permissionsDescription": "Select the permissions to include in this template.",
+    "applyModal": {
+      "title": "Apply Template",
+      "user": "User",
+      "pool": "Pool scope (optional)",
+      "confirm": "Apply",
+      "cancel": "Cancel"
+    },
+    "allPools": "All pools"
+  },
+  "form": {
+    "save": "Save",
+    "cancel": "Cancel",
+    "delete": "Delete",
+    "confirm": "Confirm delete?",
+    "edit": "Edit"
+  },
+  "errors": {
+    "selectRole": "Please select at least one role.",
+    "selectUser": "Please select a user.",
+    "selectTemplate": "Please select a template.",
+    "poolId": "Pool ID is required.",
+    "templateName": "Template name is required."
+  },
+  "messages": {
+    "templateSaved": "Template saved successfully.",
+    "templateCreated": "Template created successfully.",
+    "templateApplied": "Template applied successfully."
+  }
+}

@@ -1,0 +1,55 @@
+{
+  "title": "Mascaramento",
+  "header": {
+    "title": "Mascaramento de Mensagens",
+    "description": "Tokens inline protegem dados sensíveis no stream canônico. Alterações propagam em até 60s (TTL do cache Redis da Config API).",
+    "adminToken": "Admin Token",
+    "tokenPlaceholder": "Para habilitar edição"
+  },
+  "section": {
+    "access": {
+      "title": "Controle de Acesso ao original_content",
+      "description": "Define quais roles podem ver o valor original de campos mascarados (via session_context_get e evaluation_context_get). Agentes com roles fora desta lista recebem apenas o display_partial (ex: ***-00).",
+      "activeRoles": "Roles ativos: {{roles}}",
+      "noRoles": "(nenhum — todo conteúdo mascarado)"
+    },
+    "audit": {
+      "title": "Captura de Audit Records",
+      "description": "Controla se input/output das tool calls MCP são capturados nos registros de auditoria (Kafka topic mcp.audit). Atenção LGPD: capture_input pode incluir valores mascarados resolvidos.",
+      "captureInput": "Capturar Input",
+      "captureOutput": "Capturar Output",
+      "warning": "Atenção: pode capturar valores sensíveis resolvidos"
+    },
+    "retention": {
+      "title": "Retenção de Tokens",
+      "description": "Tempo em dias que os tokens de mascaramento são mantidos no Redis. Após expirar, o original_content não pode mais ser resolvido — use apenas em sessões encerradas ou relatórios com dados já exportados."
+    },
+    "categories": {
+      "title": "Categorias de Mascaramento",
+      "description": "Categorias ativas por padrão (DEFAULT_MASKING_RULES em @plughub/schemas/audit.ts). Para adicionar regras customizadas ou desativar categorias, configure {{tenantId}}:masking:config diretamente no Redis.",
+      "display": "Exibe",
+      "active": "ativo",
+      "tokenFormat": "Formato do token inline",
+      "tokenExplanation": "substituído por display_partial na entrega ao cliente via WebSocket. Resolvido para o valor original por roles autorizados via MCP tools."
+    }
+  },
+  "retention": {
+    "save": "Salvar",
+    "cancel": "Cancelar",
+    "edit": "Editar",
+    "days": "dias"
+  },
+  "loading": "Carregando configurações…",
+  "toast": {
+    "tokenRequired": "Admin token obrigatório para salvar",
+    "keySaved": "{{key}} salvo"
+  },
+  "categories": {
+    "credit_card": "Cartão de Crédito",
+    "cpf": "CPF",
+    "phone": "Telefone",
+    "email_addr": "E-mail",
+    "iban": "IBAN",
+    "passport": "Passaporte"
+  }
+}

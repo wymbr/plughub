@@ -48,7 +48,8 @@ export type DaySchedule = z.infer<typeof DayScheduleSchema>
 // ── Holiday (single date within a HolidaySet) ────────────────────────────────
 
 export const HolidaySchema = z.object({
-  date:  z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "must be YYYY-MM-DD"),
+  // Accepts YYYY-MM-DD (one-time) or MM-DD (recurring every year)
+  date:  z.string().regex(/^(\d{4}-)?\d{2}-\d{2}$/, "must be YYYY-MM-DD or MM-DD"),
   name:  z.string(),
   // null = day is fully closed; array = override with specific slots
   override_slots: z.array(TimeSlotSchema).nullable().default(null),
@@ -144,8 +145,14 @@ export const CalendarQuerySchema = z.object({
 })
 export type CalendarQuery = z.infer<typeof CalendarQuerySchema>
 
+// Three-state status: open = within business hours, closed = outside hours, holiday = matched a holiday override
+export const IsOpenStatusSchema = z.enum(["open", "closed", "holiday"])
+export type IsOpenStatus = z.infer<typeof IsOpenStatusSchema>
+
 export const IsOpenResultSchema = z.object({
-  open:        z.boolean(),
+  status:       IsOpenStatusSchema,
+  /** @deprecated use status instead */
+  open:         z.boolean(),
   evaluated_at: z.string().datetime(),
   next_change:  z.string().datetime().nullable(),  // next open or close event
   calendars_used: z.array(z.string().uuid()),

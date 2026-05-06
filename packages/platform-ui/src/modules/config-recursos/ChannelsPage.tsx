@@ -4,6 +4,7 @@
  * Migrated from operator-console/ChannelPanel.tsx — uses platform-ui design system.
  */
 import React, { useState, useEffect, useCallback } from 'react'
+import { useTranslation } from 'react-i18next'
 import { useAuth } from '@/auth/useAuth'
 import { GatewayConfig, ChannelType } from '@/types'
 import * as registryApi from '@/api/registry'
@@ -139,6 +140,7 @@ const ALL_CHANNELS = Object.keys(CHANNEL_META) as ChannelType[]
 
 const ChannelsPage: React.FC = () => {
   const { session } = useAuth()
+  const { t } = useTranslation('configRecursos')
   const [channels,  setChannels]  = useState<GatewayConfig[]>([])
   const [loading,   setLoading]   = useState(true)
   const [selected,  setSelected]  = useState<GatewayConfig | null>(null)
@@ -152,11 +154,11 @@ const ChannelsPage: React.FC = () => {
       const result = await registryApi.listChannels(session.tenantId)
       setChannels(result.items ?? [])
     } catch {
-      setError('Falha ao carregar configurações de canal')
+      setError(t('channels.loadFailed'))
     } finally {
       setLoading(false)
     }
-  }, [session])
+  }, [session, t])
 
   useEffect(() => { loadChannels() }, [loadChannels])
 
@@ -195,8 +197,8 @@ const ChannelsPage: React.FC = () => {
       {/* ── Left sidebar ─────────────────────────────────────────────────────── */}
       <div className="w-72 flex-shrink-0 border-r border-lightGray flex flex-col bg-gray-50 overflow-y-auto">
         <div className="px-4 py-3 border-b border-lightGray">
-          <div className="text-sm font-bold text-dark">Canais</div>
-          <div className="text-xs text-gray mt-0.5">{channels.length} configurado(s)</div>
+          <div className="text-sm font-bold text-dark">{t('channels.title')}</div>
+          <div className="text-xs text-gray mt-0.5">{channels.length} {t('channels.configured')}</div>
         </div>
 
         <div className="flex-1 py-2">
@@ -226,7 +228,7 @@ const ChannelsPage: React.FC = () => {
                         : 'bg-white border-lightGray text-gray hover:border-primary hover:text-primary'
                     }`}
                   >
-                    + Add
+                    + {t('channels.add')}
                   </button>
                 </div>
 
@@ -271,6 +273,7 @@ const ChannelsPage: React.FC = () => {
             onSaved={handleSaved}
             onCancel={() => setCreating(null)}
             onError={setError}
+            t={t}
           />
         )}
 
@@ -281,13 +284,14 @@ const ChannelsPage: React.FC = () => {
             onSaved={handleSavedUpdate}
             onDeleted={handleDeleted}
             onError={setError}
+            t={t}
           />
         )}
 
         {!creating && !selected && (
           <EmptyState
-            title="Selecione um canal ou adicione uma configuração"
-            description={channels.length === 0 ? 'Nenhum canal configurado ainda.' : `${channels.length} canal(is) configurado(s)`}
+            title={t('channels.selectTitle')}
+            description={channels.length === 0 ? t('channels.emptyDesc') : `${channels.length} ${t('channels.configured')}`}
           />
         )}
       </div>
@@ -297,12 +301,13 @@ const ChannelsPage: React.FC = () => {
 
 // ── CreateForm ────────────────────────────────────────────────────────────────
 
-function CreateForm({ tenantId, channel, onSaved, onCancel, onError }: {
+function CreateForm({ tenantId, channel, onSaved, onCancel, onError, t }: {
   tenantId: string
   channel:  ChannelType
   onSaved:  () => void
   onCancel: () => void
   onError:  (msg: string) => void
+  t:        (key: string) => string
 }) {
   const meta = CHANNEL_META[channel]
   const [displayName, setDisplayName] = useState(`${meta.label} — ${new Date().getFullYear()}`)
@@ -312,7 +317,7 @@ function CreateForm({ tenantId, channel, onSaved, onCancel, onError }: {
   const [saving,      setSaving]      = useState(false)
 
   async function handleSave() {
-    if (!displayName.trim()) { onError('Display name é obrigatório'); return }
+    if (!displayName.trim()) { onError(t('channels.displayNameRequired')); return }
     setSaving(true)
     try {
       await registryApi.createChannel({
@@ -334,16 +339,16 @@ function CreateForm({ tenantId, channel, onSaved, onCancel, onError }: {
       <div className="flex items-center gap-3 mb-6">
         <span className="text-2xl">{meta.icon}</span>
         <div>
-          <div className="text-base font-bold text-dark">Nova configuração — {meta.label}</div>
-          <div className="text-xs text-gray mt-0.5">Credenciais são mascaradas após salvar</div>
+          <div className="text-base font-bold text-dark">{t('channels.newConfig')} — {meta.label}</div>
+          <div className="text-xs text-gray mt-0.5">{t('channels.credentialsMasked')}</div>
         </div>
       </div>
 
       {/* General */}
-      <Section title="Geral">
+      <Section title={t('channels.general')}>
         <div className="flex gap-4 items-end">
           <div className="flex-1">
-            <FieldLabel>Display Name</FieldLabel>
+            <FieldLabel>{t('channels.displayName')}</FieldLabel>
             <input
               className={inputCls}
               value={displayName}
@@ -352,7 +357,7 @@ function CreateForm({ tenantId, channel, onSaved, onCancel, onError }: {
             />
           </div>
           <div className="mb-0.5">
-            <FieldLabel>Ativo</FieldLabel>
+            <FieldLabel>{t('channels.active')}</FieldLabel>
             <Toggle checked={active} onChange={setActive} />
           </div>
         </div>
@@ -360,7 +365,7 @@ function CreateForm({ tenantId, channel, onSaved, onCancel, onError }: {
 
       {/* Credentials */}
       {meta.fields.length > 0 && (
-        <Section title="Credenciais" subtitle="valores são mascarados após salvar">
+        <Section title={t('channels.credentials')} subtitle={t('channels.credentialsMaskedAfterSave')}>
           {meta.fields.map(f => (
             <div key={f.key} className="mb-3">
               <FieldLabel>{f.label}</FieldLabel>
@@ -379,7 +384,7 @@ function CreateForm({ tenantId, channel, onSaved, onCancel, onError }: {
 
       {/* Settings */}
       {meta.settingFields.length > 0 && (
-        <Section title="Configurações">
+        <Section title={t('channels.settings')}>
           <div className="grid grid-cols-2 gap-x-4 gap-y-3">
             {meta.settingFields.map(f => (
               <div key={f.key}>
@@ -399,9 +404,9 @@ function CreateForm({ tenantId, channel, onSaved, onCancel, onError }: {
 
       <div className="flex gap-3 mt-2">
         <Button variant="primary" onClick={handleSave} disabled={saving}>
-          {saving ? 'Salvando…' : 'Salvar configuração'}
+          {saving ? `${t('channels.saving')}…` : t('channels.saveConfig')}
         </Button>
-        <Button variant="ghost" onClick={onCancel}>Cancelar</Button>
+        <Button variant="ghost" onClick={onCancel}>{t('channels.cancel')}</Button>
       </div>
     </div>
   )
@@ -409,12 +414,13 @@ function CreateForm({ tenantId, channel, onSaved, onCancel, onError }: {
 
 // ── ConfigDetail ──────────────────────────────────────────────────────────────
 
-function ConfigDetail({ tenantId, config, onSaved, onDeleted, onError }: {
+function ConfigDetail({ tenantId, config, onSaved, onDeleted, onError, t }: {
   tenantId:  string
   config:    GatewayConfig
   onSaved:   (updated: GatewayConfig) => void
   onDeleted: () => void
   onError:   (msg: string) => void
+  t:         (key: string) => string
 }) {
   const meta = CHANNEL_META[config.channel] ?? CHANNEL_META['webchat']
 
@@ -486,15 +492,15 @@ function ConfigDetail({ tenantId, config, onSaved, onDeleted, onError }: {
           </div>
         </div>
         <Badge variant={config.active ? 'active' : 'default'}>
-          {config.active ? 'Ativo' : 'Inativo'}
+          {config.active ? t('channels.active') : t('channels.inactive')}
         </Badge>
       </div>
 
       {/* General */}
-      <Section title="Geral">
+      <Section title={t('channels.general')}>
         <div className="flex gap-4 items-end">
           <div className="flex-1">
-            <FieldLabel>Display Name</FieldLabel>
+            <FieldLabel>{t('channels.displayName')}</FieldLabel>
             <input
               className={inputCls}
               value={displayName}
@@ -502,7 +508,7 @@ function ConfigDetail({ tenantId, config, onSaved, onDeleted, onError }: {
             />
           </div>
           <div className="mb-0.5">
-            <FieldLabel>Ativo</FieldLabel>
+            <FieldLabel>{t('channels.active')}</FieldLabel>
             <Toggle checked={active} onChange={v => { setActive(v); mark() }} />
           </div>
         </div>
@@ -510,7 +516,7 @@ function ConfigDetail({ tenantId, config, onSaved, onDeleted, onError }: {
 
       {/* Credentials */}
       {meta.fields.length > 0 && (
-        <Section title="Credenciais" subtitle="deixe em branco para manter o valor atual">
+        <Section title={t('channels.credentials')} subtitle={t('channels.blankToKeep')}>
           {meta.fields.map(f => (
             <div key={f.key} className="mb-3">
               <FieldLabel>{f.label}</FieldLabel>
@@ -524,7 +530,7 @@ function ConfigDetail({ tenantId, config, onSaved, onDeleted, onError }: {
                   className={`${inputCls} flex-1 font-mono`}
                   value={newCreds[f.key] ?? ''}
                   onChange={e => { setNewCreds(prev => ({ ...prev, [f.key]: e.target.value })); mark() }}
-                  placeholder="Novo valor (opcional)"
+                  placeholder={t('channels.newValueOptional')}
                   autoComplete="off"
                 />
               </div>
@@ -535,7 +541,7 @@ function ConfigDetail({ tenantId, config, onSaved, onDeleted, onError }: {
 
       {/* Settings */}
       {meta.settingFields.length > 0 && (
-        <Section title="Configurações">
+        <Section title={t('channels.settings')}>
           <div className="grid grid-cols-2 gap-x-4 gap-y-3">
             {meta.settingFields.map(f => (
               <div key={f.key}>
@@ -555,16 +561,16 @@ function ConfigDetail({ tenantId, config, onSaved, onDeleted, onError }: {
 
       {/* Metadata */}
       <div className="flex gap-6 text-xs text-gray mb-6">
-        <span>Criado: {new Date(config.created_at).toLocaleDateString('pt-BR')}</span>
-        <span>Atualizado: {new Date(config.updated_at).toLocaleDateString('pt-BR')}</span>
-        <span>Por: {config.created_by}</span>
+        <span>{t('channels.created')}: {new Date(config.created_at).toLocaleDateString('pt-BR')}</span>
+        <span>{t('channels.updated')}: {new Date(config.updated_at).toLocaleDateString('pt-BR')}</span>
+        <span>{t('channels.by')}: {config.created_by}</span>
       </div>
 
       {/* Actions */}
       <div className="flex gap-3 items-center">
         {modified && (
           <Button variant="primary" onClick={handleSave} disabled={saving}>
-            {saving ? 'Salvando…' : 'Salvar alterações'}
+            {saving ? `${t('channels.saving')}…` : t('channels.saveChanges')}
           </Button>
         )}
 
@@ -574,7 +580,7 @@ function ConfigDetail({ tenantId, config, onSaved, onDeleted, onError }: {
             onClick={() => setConfirmDel(true)}
             className="text-red border-red/30 hover:bg-red/5"
           >
-            Excluir
+            {t('channels.delete')}
           </Button>
         ) : (
           <>
@@ -584,9 +590,9 @@ function ConfigDetail({ tenantId, config, onSaved, onDeleted, onError }: {
               disabled={deleting}
               className="bg-red border-red hover:bg-red/90"
             >
-              {deleting ? 'Excluindo…' : 'Confirmar exclusão'}
+              {deleting ? `${t('channels.deleting')}…` : t('channels.confirmDelete')}
             </Button>
-            <Button variant="ghost" onClick={() => setConfirmDel(false)}>Cancelar</Button>
+            <Button variant="ghost" onClick={() => setConfirmDel(false)}>{t('channels.cancel')}</Button>
           </>
         )}
       </div>

@@ -6,6 +6,7 @@
  *   Templates — Permission templates: criar, editar, aplicar a usuários com escopo de pool
  */
 import React, { useCallback, useEffect, useRef, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { useAuth } from '@/auth/useAuth'
 import Spinner from '@/components/ui/Spinner'
 import type { PlatformUser, CreateUserInput, UpdateUserInput, Pool, ModuleConfig } from '@/types'
@@ -193,24 +194,26 @@ function RoleBadge({ role }: { role: string }) {
 }
 
 function StatusBadge({ active }: { active: boolean }) {
+  const { t } = useTranslation('access')
   return active
-    ? <span className="inline-block text-xs font-semibold px-2 py-0.5 rounded-full bg-green-100 text-green-700">Ativo</span>
-    : <span className="inline-block text-xs font-semibold px-2 py-0.5 rounded-full bg-red-100 text-red-600">Inativo</span>
+    ? <span className="inline-block text-xs font-semibold px-2 py-0.5 rounded-full bg-green-100 text-green-700">{t('users.active')}</span>
+    : <span className="inline-block text-xs font-semibold px-2 py-0.5 rounded-full bg-red-100 text-red-600">{t('users.inactive')}</span>
 }
 
 function DeleteButton({ onConfirm }: { onConfirm: () => void }) {
+  const { t } = useTranslation('access')
   const [stage, setStage] = useState<0 | 1 | 2>(0)
   if (stage === 0) return (
-    <button onClick={() => setStage(1)} className="text-xs text-red-500 hover:text-red-700 transition-colors">Remover</button>
+    <button onClick={() => setStage(1)} className="text-xs text-red-500 hover:text-red-700 transition-colors">{t('form.delete')}</button>
   )
   if (stage === 1) return (
     <span className="flex items-center gap-1">
-      <button onClick={() => setStage(2)} className="text-xs font-semibold text-red-600 hover:text-red-800">Confirmar</button>
+      <button onClick={() => setStage(2)} className="text-xs font-semibold text-red-600 hover:text-red-800">{t('form.confirm')}</button>
       <span className="text-gray-300">|</span>
-      <button onClick={() => setStage(0)} className="text-xs text-gray-400 hover:text-gray-600">Cancelar</button>
+      <button onClick={() => setStage(0)} className="text-xs text-gray-400 hover:text-gray-600">{t('form.cancel')}</button>
     </span>
   )
-  return <button onClick={onConfirm} className="text-xs font-bold text-red-700 animate-pulse">⚠ Apagar</button>
+  return <button onClick={onConfirm} className="text-xs font-bold text-red-700 animate-pulse">⚠ {t('form.delete')}</button>
 }
 
 // ── UserModal ─────────────────────────────────────────────────────────────────
@@ -226,6 +229,7 @@ interface UserModalProps {
 }
 
 function UserModal({ tenantId, adminToken, user, availablePools, modules, onClose, onSaved }: UserModalProps) {
+  const { t } = useTranslation('access')
   const isEdit = user !== null
   const [name,         setName]         = useState(user?.name ?? '')
   const [email,        setEmail]        = useState(user?.email ?? '')
@@ -250,7 +254,7 @@ function UserModal({ tenantId, adminToken, user, availablePools, modules, onClos
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
-    if (roles.length === 0) { setErr('Selecione ao menos um perfil.'); return }
+    if (roles.length === 0) { setErr(t('errors.selectRole')); return }
     setSaving(true); setErr(null)
     try {
       const accessiblePools = Array.from(selectedPools)
@@ -284,34 +288,34 @@ function UserModal({ tenantId, adminToken, user, availablePools, modules, onClos
       onClick={e => { if (e.target === backdropRef.current) onClose() }}>
       <div className="bg-white rounded-xl shadow-2xl w-full max-w-2xl max-h-[90vh] flex flex-col">
         <div className="flex items-center justify-between px-6 py-4 border-b border-gray-200 flex-shrink-0">
-          <h2 className="text-lg font-semibold text-gray-900">{isEdit ? 'Editar usuário' : 'Novo usuário'}</h2>
+          <h2 className="text-lg font-semibold text-gray-900">{isEdit ? t('users.editUser') : t('users.newUser')}</h2>
           <button onClick={onClose} className="text-gray-400 hover:text-gray-600 text-xl leading-none">&times;</button>
         </div>
         <form onSubmit={handleSubmit} className="px-6 py-5 space-y-4 overflow-y-auto flex-1">
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Nome</label>
+            <label className="block text-sm font-medium text-gray-700 mb-1">{t('users.name')}</label>
             <input type="text" value={name} onChange={e => setName(e.target.value)} required
-              placeholder="Nome completo"
+              placeholder={t('users.fullName')}
               className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/40" />
           </div>
           {!isEdit && (
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">E-mail</label>
+              <label className="block text-sm font-medium text-gray-700 mb-1">{t('users.email')}</label>
               <input type="email" value={email} onChange={e => setEmail(e.target.value)} required
-                placeholder="usuario@empresa.com"
+                placeholder={t('users.emailPlaceholder')}
                 className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/40" />
             </div>
           )}
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">
-              {isEdit ? 'Nova senha (opcional)' : 'Senha'}
+              {isEdit ? t('users.newPassword') : t('users.password')}
             </label>
             <input type="password" value={password} onChange={e => setPassword(e.target.value)} required={!isEdit}
-              placeholder={isEdit ? 'Deixe em branco para manter' : 'Mínimo 8 caracteres'}
+              placeholder={isEdit ? t('users.passwordBlank') : t('users.passwordMin8')}
               className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/40" />
           </div>
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Perfil de sistema</label>
+            <label className="block text-sm font-medium text-gray-700 mb-1">{t('users.role')}</label>
             <select value={roles[0] ?? 'operator'} onChange={e => setRoles([e.target.value])}
               className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/40 bg-white">
               {ALL_ROLES.map(role => (
@@ -324,21 +328,21 @@ function UserModal({ tenantId, adminToken, user, availablePools, modules, onClos
           <div>
             <div className="flex items-center justify-between mb-1.5">
               <label className="text-sm font-medium text-gray-700">
-                Pools acessíveis
+                {t('users.pools')}
                 <span className="ml-1.5 text-xs font-normal text-gray-400">
-                  {selectedPools.size === 0 ? '(nenhum selecionado = todos)' : `${selectedPools.size} selecionado${selectedPools.size !== 1 ? 's' : ''}`}
+                  {selectedPools.size === 0 ? t('users.poolsNone') : t('users.poolsSelected', { count: selectedPools.size })}
                 </span>
               </label>
               {availablePools.length > 0 && (
                 <button type="button" onClick={() => setSelectedPools(allSelected ? new Set() : new Set(availablePools.map(p => p.pool_id)))}
                   className="text-xs text-gray-400 hover:text-gray-600 transition-colors">
-                  {allSelected ? 'Desmarcar todos' : 'Selecionar todos'}
+                  {allSelected ? t('users.deselectAll') : t('users.selectAll')}
                 </button>
               )}
             </div>
             {availablePools.length === 0 ? (
               <div className="border border-gray-200 rounded-lg px-3 py-2 text-xs text-gray-400 italic bg-gray-50">
-                Nenhum pool cadastrado — o usuário terá acesso a todos.
+                {t('users.noPoolsConfigured')}
               </div>
             ) : (
               <div className="border border-gray-200 rounded-lg divide-y divide-gray-100 max-h-40 overflow-y-auto">
@@ -367,14 +371,14 @@ function UserModal({ tenantId, adminToken, user, availablePools, modules, onClos
                 })}
               </div>
             )}
-            <p className="text-xs text-gray-400 mt-1">Controla o domínio de dados visível em analytics e relatórios.</p>
+            <p className="text-xs text-gray-400 mt-1">{t('users.poolsDescription')}</p>
           </div>
 
           {/* ABAC module permissions */}
           {modules.length > 0 && (
             <div>
               <div className="flex items-center justify-between mb-2">
-                <label className="text-sm font-medium text-gray-700">Permissões por módulo</label>
+                <label className="text-sm font-medium text-gray-700">{t('users.permissions')}</label>
                 <span className="text-xs text-gray-400">ABAC</span>
               </div>
               <div className="border border-gray-200 rounded-lg overflow-hidden">
@@ -386,30 +390,30 @@ function UserModal({ tenantId, adminToken, user, availablePools, modules, onClos
                 />
               </div>
               <p className="text-xs text-gray-400 mt-1">
-                Define o nível de acesso do usuário dentro de cada módulo da plataforma.
+                {t('users.permissionsDescription')}
               </p>
             </div>
           )}
 
           {isEdit && (
             <div className="flex items-center gap-3">
-              <label className="text-sm font-medium text-gray-700">Status</label>
+              <label className="text-sm font-medium text-gray-700">{t('form.status')}</label>
               <button type="button" onClick={() => setActive(v => !v)}
                 className={`relative inline-flex h-6 w-11 rounded-full transition-colors ${active ? 'bg-green-500' : 'bg-gray-300'}`}>
                 <span className={`absolute top-0.5 left-0.5 h-5 w-5 bg-white rounded-full shadow transition-transform ${active ? 'translate-x-5' : ''}`} />
               </button>
-              <span className="text-sm text-gray-500">{active ? 'Ativo' : 'Inativo'}</span>
+              <span className="text-sm text-gray-500">{active ? t('users.active') : t('users.inactive')}</span>
             </div>
           )}
           {err && <p className="text-sm text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2">{err}</p>}
           <div className="flex justify-end gap-3 pt-2">
             <button type="button" onClick={onClose}
               className="px-4 py-2 text-sm text-gray-600 border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors">
-              Cancelar
+              {t('form.cancel')}
             </button>
             <button type="submit" disabled={saving}
               className="px-5 py-2 text-sm font-medium text-white bg-primary rounded-lg hover:bg-primary/90 disabled:opacity-50 transition-colors">
-              {saving ? 'Salvando…' : isEdit ? 'Salvar alterações' : 'Criar usuário'}
+              {saving ? t('form.saving') : isEdit ? t('users.saveChanges') : t('users.createUser')}
             </button>
           </div>
         </form>
@@ -432,6 +436,7 @@ interface ApplyModalProps {
 }
 
 function ApplyTemplateModal({ template, users, availablePools, adminToken, tenantId, grantedBy, onClose, onApplied }: ApplyModalProps) {
+  const { t } = useTranslation('access')
   const [userId,    setUserId]    = useState('')
   const [scopeType, setScopeType] = useState<'global' | 'pool'>('global')
   const [poolId,    setPoolId]    = useState('')
@@ -441,8 +446,8 @@ function ApplyTemplateModal({ template, users, availablePools, adminToken, tenan
 
   async function handleApply(e: React.FormEvent) {
     e.preventDefault()
-    if (!userId) { setErr('Selecione um usuário.'); return }
-    if (scopeType === 'pool' && !poolId.trim()) { setErr('Informe o ID do pool.'); return }
+    if (!userId) { setErr(t('errors.selectUser')); return }
+    if (scopeType === 'pool' && !poolId.trim()) { setErr(t('errors.poolId')); return }
     setApplying(true); setErr(null)
     try {
       const body: Record<string, unknown> = { tenant_id: tenantId, user_id: userId, granted_by: grantedBy }
@@ -462,7 +467,7 @@ function ApplyTemplateModal({ template, users, availablePools, adminToken, tenan
       <div className="bg-white rounded-xl shadow-2xl w-full max-w-md">
         <div className="flex items-center justify-between px-6 py-4 border-b border-gray-200">
           <div>
-            <h2 className="text-lg font-semibold text-gray-900">Aplicar template</h2>
+            <h2 className="text-lg font-semibold text-gray-900">{t('templates.applyModal.title')}</h2>
             <p className="text-sm text-gray-500 mt-0.5">{template.name}</p>
           </div>
           <button onClick={onClose} className="text-gray-400 hover:text-gray-600 text-xl leading-none">&times;</button>
@@ -471,10 +476,10 @@ function ApplyTemplateModal({ template, users, availablePools, adminToken, tenan
         <form onSubmit={handleApply} className="px-6 py-5 space-y-5">
           {/* User select */}
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Usuário</label>
+            <label className="block text-sm font-medium text-gray-700 mb-1">{t('templates.applyModal.user')}</label>
             <select value={userId} onChange={e => setUserId(e.target.value)}
               className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/40 bg-white">
-              <option value="">— Selecione —</option>
+              <option value="">— {t('templates.applyModal.selectUser')} —</option>
               {users.filter(u => u.active).map(u => (
                 <option key={u.id} value={u.id}>{u.name} ({u.email})</option>
               ))}
@@ -486,7 +491,7 @@ function ApplyTemplateModal({ template, users, availablePools, adminToken, tenan
                   ? selectedUser.accessible_pools.map(p => (
                     <span key={p} className="text-xs bg-gray-100 text-gray-600 px-1.5 py-0.5 rounded font-mono">{p}</span>
                   ))
-                  : <span className="text-xs text-gray-400 italic">Todos os pools</span>
+                  : <span className="text-xs text-gray-400 italic">{t('templates.applyModal.allPools')}</span>
                 }
               </div>
             )}
@@ -494,16 +499,16 @@ function ApplyTemplateModal({ template, users, availablePools, adminToken, tenan
 
           {/* Scope */}
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">Escopo de operação</label>
-            <p className="text-xs text-gray-400 mb-3">Define em quais pools este usuário pode executar as ações do template.</p>
+            <label className="block text-sm font-medium text-gray-700 mb-2">{t('templates.applyModal.scope')}</label>
+            <p className="text-xs text-gray-400 mb-3">{t('templates.applyModal.scopeDescription')}</p>
             <div className="space-y-2">
               <label className="flex items-start gap-3 cursor-pointer group">
                 <input type="radio" name="scope" value="global" checked={scopeType === 'global'}
                   onChange={() => setScopeType('global')}
                   className="mt-0.5 accent-primary" />
                 <div>
-                  <span className="text-sm font-medium text-gray-800">Global — todos os pools</span>
-                  <p className="text-xs text-gray-400 mt-0.5">Permissões aplicadas sem restrição de pool.</p>
+                  <span className="text-sm font-medium text-gray-800">{t('templates.applyModal.scopeGlobal')}</span>
+                  <p className="text-xs text-gray-400 mt-0.5">{t('templates.applyModal.scopeGlobalDescription')}</p>
                 </div>
               </label>
               <label className="flex items-start gap-3 cursor-pointer group">
@@ -511,13 +516,13 @@ function ApplyTemplateModal({ template, users, availablePools, adminToken, tenan
                   onChange={() => setScopeType('pool')}
                   className="mt-0.5 accent-primary" />
                 <div className="flex-1">
-                  <span className="text-sm font-medium text-gray-800">Pool específico</span>
-                  <p className="text-xs text-gray-400 mt-0.5">Permissões restritas a um pool.</p>
+                  <span className="text-sm font-medium text-gray-800">{t('templates.applyModal.scopePool')}</span>
+                  <p className="text-xs text-gray-400 mt-0.5">{t('templates.applyModal.scopePoolDescription')}</p>
                   {scopeType === 'pool' && (
                     availablePools.length > 0 ? (
                       <select value={poolId} onChange={e => setPoolId(e.target.value)}
                         className="mt-2 w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/40 bg-white font-mono">
-                        <option value="">— Selecione um pool —</option>
+                        <option value="">— {t('templates.applyModal.selectPool')} —</option>
                         {availablePools.map(p => (
                           <option key={p.pool_id} value={p.pool_id}>
                             {p.pool_id}{p.description ? ` — ${p.description}` : ''}
@@ -526,7 +531,7 @@ function ApplyTemplateModal({ template, users, availablePools, adminToken, tenan
                       </select>
                     ) : (
                       <input type="text" value={poolId} onChange={e => setPoolId(e.target.value)}
-                        placeholder="ID do pool (ex: retencao_humano)"
+                        placeholder={t('templates.applyModal.poolIdPlaceholder')}
                         className="mt-2 w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/40 font-mono" />
                     )
                   )}
@@ -537,7 +542,7 @@ function ApplyTemplateModal({ template, users, availablePools, adminToken, tenan
 
           {/* Preview */}
           <div className="bg-gray-50 rounded-lg p-3 border border-gray-200">
-            <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">Permissões que serão concedidas</p>
+            <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">{t('templates.applyModal.preview')}</p>
             <div className="flex flex-wrap gap-1">
               {template.permissions.map((p, i) => (
                 <span key={i} className="text-xs bg-white border border-gray-200 text-gray-700 px-2 py-0.5 rounded font-mono">
@@ -545,7 +550,7 @@ function ApplyTemplateModal({ template, users, availablePools, adminToken, tenan
                   {scopeType === 'pool' && poolId ? ` @${poolId}` : ' @global'}
                 </span>
               ))}
-              {template.permissions.length === 0 && <span className="text-xs text-gray-400 italic">Nenhuma permissão definida</span>}
+              {template.permissions.length === 0 && <span className="text-xs text-gray-400 italic">{t('templates.applyModal.noPermissions')}</span>}
             </div>
           </div>
 
@@ -554,11 +559,11 @@ function ApplyTemplateModal({ template, users, availablePools, adminToken, tenan
           <div className="flex justify-end gap-3 pt-1">
             <button type="button" onClick={onClose}
               className="px-4 py-2 text-sm text-gray-600 border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors">
-              Cancelar
+              {t('form.cancel')}
             </button>
             <button type="submit" disabled={applying}
               className="px-5 py-2 text-sm font-medium text-white bg-primary rounded-lg hover:bg-primary/90 disabled:opacity-50 transition-colors">
-              {applying ? 'Aplicando…' : 'Aplicar template'}
+              {applying ? t('form.applying') : t('templates.applyModal.confirm')}
             </button>
           </div>
         </form>
@@ -581,6 +586,7 @@ interface TemplateEditorProps {
 }
 
 function TemplateEditor({ tenantId, adminToken, availablePools, users, grantedBy, template, onSaved, onDeleted }: TemplateEditorProps) {
+  const { t } = useTranslation('access')
   const isEdit = template !== null
 
   // Parse initial permissions into a Set of "module:action" strings for easy toggle
@@ -631,7 +637,7 @@ function TemplateEditor({ tenantId, adminToken, availablePools, users, grantedBy
 
   async function handleSave(e: React.FormEvent) {
     e.preventDefault()
-    if (!name.trim()) { setErr('Informe um nome para o template.'); return }
+    if (!name.trim()) { setErr(t('errors.templateName')); return }
     setSaving(true); setErr(null); setSuccessMsg(null)
     try {
       const body = { tenant_id: tenantId, name: name.trim(), description: description.trim(), permissions: buildPermissions() }
@@ -640,7 +646,7 @@ function TemplateEditor({ tenantId, adminToken, availablePools, users, grantedBy
       } else {
         await apiFetch('/auth/templates', adminToken, { method: 'POST', body: JSON.stringify(body) })
       }
-      setSuccessMsg(isEdit ? 'Template salvo.' : 'Template criado.')
+      setSuccessMsg(isEdit ? t('messages.templateSaved') : t('messages.templateCreated'))
       onSaved()
     } catch (ex) { setErr(String(ex)) }
     finally { setSaving(false) }
@@ -665,36 +671,36 @@ function TemplateEditor({ tenantId, adminToken, availablePools, users, grantedBy
         <div className="px-6 py-4 border-b border-gray-200 bg-white sticky top-0 z-10 flex items-center justify-between">
           <div>
             <h2 className="text-base font-semibold text-gray-900">
-              {isEdit ? template.name : 'Novo template'}
+              {isEdit ? template.name : t('templates.newTemplate')}
             </h2>
-            <p className="text-xs text-gray-400 mt-0.5">{permCount} permissão{permCount !== 1 ? 'ões' : ''} selecionada{permCount !== 1 ? 's' : ''}</p>
+            <p className="text-xs text-gray-400 mt-0.5">{t('templates.permissionsSelected', { count: permCount })}</p>
           </div>
           <div className="flex items-center gap-2">
             {isEdit && (
               <>
                 <button type="button" onClick={() => setApplyModal(true)}
                   className="px-3 py-1.5 text-xs font-medium text-primary border border-primary rounded-lg hover:bg-primary/5 transition-colors">
-                  ↗ Aplicar a usuário
+                  ↗ {t('templates.apply')}
                 </button>
                 {delStage === 0 && (
                   <button type="button" onClick={() => setDelStage(1)}
                     className="px-3 py-1.5 text-xs text-red-500 border border-red-200 rounded-lg hover:bg-red-50 transition-colors">
-                    Excluir
+                    {t('form.delete')}
                   </button>
                 )}
                 {delStage === 1 && (
                   <span className="flex items-center gap-1">
                     <button type="button" onClick={handleDelete}
-                      className="text-xs font-semibold text-red-600 hover:text-red-800">Confirmar exclusão</button>
+                      className="text-xs font-semibold text-red-600 hover:text-red-800">{t('templates.confirmDelete')}</button>
                     <span className="text-gray-300 text-xs">|</span>
-                    <button type="button" onClick={() => setDelStage(0)} className="text-xs text-gray-400 hover:text-gray-600">Cancelar</button>
+                    <button type="button" onClick={() => setDelStage(0)} className="text-xs text-gray-400 hover:text-gray-600">{t('form.cancel')}</button>
                   </span>
                 )}
               </>
             )}
             <button type="submit" disabled={saving}
               className="px-4 py-1.5 text-xs font-medium text-white bg-primary rounded-lg hover:bg-primary/90 disabled:opacity-50 transition-colors">
-              {saving ? 'Salvando…' : isEdit ? 'Salvar' : 'Criar template'}
+              {saving ? t('form.saving') : isEdit ? t('form.save') : t('templates.createTemplate')}
             </button>
           </div>
         </div>
@@ -703,15 +709,15 @@ function TemplateEditor({ tenantId, adminToken, availablePools, users, grantedBy
           {/* Name + description */}
           <div className="grid grid-cols-2 gap-4">
             <div className="col-span-2 sm:col-span-1">
-              <label className="block text-sm font-medium text-gray-700 mb-1">Nome do template</label>
+              <label className="block text-sm font-medium text-gray-700 mb-1">{t('templates.name')}</label>
               <input type="text" value={name} onChange={e => setName(e.target.value)} required
-                placeholder="Ex: Supervisor Regional"
+                placeholder={t('templates.namePlaceholder')}
                 className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/40" />
             </div>
             <div className="col-span-2 sm:col-span-1">
-              <label className="block text-sm font-medium text-gray-700 mb-1">Descrição</label>
+              <label className="block text-sm font-medium text-gray-700 mb-1">{t('templates.description')}</label>
               <input type="text" value={description} onChange={e => setDescription(e.target.value)}
-                placeholder="Acesso de supervisão ao SAC…"
+                placeholder={t('templates.descriptionPlaceholder')}
                 className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/40" />
             </div>
           </div>
@@ -719,25 +725,25 @@ function TemplateEditor({ tenantId, adminToken, availablePools, users, grantedBy
           {/* Permission matrix */}
           <div>
             <div className="flex items-center justify-between mb-3">
-              <label className="text-sm font-medium text-gray-700">Permissões</label>
+              <label className="text-sm font-medium text-gray-700">{t('templates.permissions')}</label>
               <button type="button" onClick={() => {
                 if (perms.size > 0) setPerms(new Set())
                 else setPerms(new Set(MODULES.flatMap(m => ACTIONS.map(a => `${m.id}:${a.id}`))))
               }} className="text-xs text-gray-400 hover:text-gray-600 transition-colors">
-                {perms.size > 0 ? 'Limpar tudo' : 'Selecionar tudo'}
+                {perms.size > 0 ? t('templates.clearAll') : t('templates.selectAll')}
               </button>
             </div>
             <div className="border border-gray-200 rounded-xl overflow-hidden">
               <table className="w-full text-sm">
                 <thead className="bg-gray-50 border-b border-gray-200">
                   <tr>
-                    <th className="text-left text-xs font-semibold text-gray-500 uppercase tracking-wider px-4 py-2.5 w-44">Módulo</th>
+                    <th className="text-left text-xs font-semibold text-gray-500 uppercase tracking-wider px-4 py-2.5 w-44">{t('templates.module')}</th>
                     {ACTIONS.map(a => (
                       <th key={a.id} className="text-center text-xs font-semibold text-gray-500 uppercase tracking-wider px-3 py-2.5">
                         {a.label}
                       </th>
                     ))}
-                    <th className="text-center text-xs font-semibold text-gray-500 uppercase tracking-wider px-3 py-2.5">Todos</th>
+                    <th className="text-center text-xs font-semibold text-gray-500 uppercase tracking-wider px-3 py-2.5">{t('templates.all')}</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-100 bg-white">
@@ -773,7 +779,7 @@ function TemplateEditor({ tenantId, adminToken, availablePools, users, grantedBy
               </table>
             </div>
             <p className="text-xs text-gray-400 mt-2">
-              As permissões definem o que o usuário pode fazer. O pool de dados (domínio) é definido ao aplicar o template.
+              {t('templates.permissionsDescription')}
             </p>
           </div>
 
@@ -792,7 +798,7 @@ function TemplateEditor({ tenantId, adminToken, availablePools, users, grantedBy
           template={template} users={users} availablePools={availablePools}
           adminToken={adminToken} tenantId={tenantId} grantedBy={grantedBy}
           onClose={() => setApplyModal(false)}
-          onApplied={() => { setSuccessMsg('Template aplicado com sucesso.') }}
+          onApplied={() => { setSuccessMsg(t('messages.templateApplied')) }}
         />
       )}
     </div>
@@ -813,6 +819,7 @@ interface UsersPaneProps {
 }
 
 function UsersPane({ tenantId, adminToken, availablePools, modules, users, loading, error, reload }: UsersPaneProps) {
+  const { t } = useTranslation('access')
   const [search,       setSearch]       = useState('')
   const [roleFilter,   setRoleFilter]   = useState('all')
   const [statusFilter, setStatusFilter] = useState<'all' | 'active' | 'inactive'>('all')
@@ -854,13 +861,13 @@ function UsersPane({ tenantId, adminToken, availablePools, modules, users, loadi
       {/* Sidebar */}
       <aside className="w-52 flex-shrink-0 border-r border-gray-200 bg-gray-50 flex flex-col overflow-y-auto">
         <div className="p-4 border-b border-gray-200 space-y-1">
-          <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">Resumo</p>
-          <div className="flex justify-between text-sm"><span className="text-gray-600">Total</span><span className="font-semibold">{total}</span></div>
-          <div className="flex justify-between text-sm"><span className="text-green-600">Ativos</span><span className="font-semibold text-green-700">{active}</span></div>
-          <div className="flex justify-between text-sm"><span className="text-red-500">Inativos</span><span className="font-semibold text-red-600">{total - active}</span></div>
+          <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">{t('users.summary')}</p>
+          <div className="flex justify-between text-sm"><span className="text-gray-600">{t('users.total')}</span><span className="font-semibold">{total}</span></div>
+          <div className="flex justify-between text-sm"><span className="text-green-600">{t('users.active')}</span><span className="font-semibold text-green-700">{active}</span></div>
+          <div className="flex justify-between text-sm"><span className="text-red-500">{t('users.inactive')}</span><span className="font-semibold text-red-600">{total - active}</span></div>
         </div>
         <div className="p-4 border-b border-gray-200">
-          <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-3">Perfil de sistema</p>
+          <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-3">{t('users.role')}</p>
           <div className="space-y-1">
             {(['all', ...ALL_ROLES] as const).map(role => {
               const isAll = role === 'all'
@@ -873,7 +880,7 @@ function UsersPane({ tenantId, adminToken, availablePools, modules, users, loadi
                       ? colors ? `${colors.bg} ${colors.text} font-semibold` : 'bg-primary text-white'
                       : 'text-gray-600 hover:bg-gray-100'
                   }`}>
-                  <span>{isAll ? 'Todos' : ROLE_LABELS[role as RoleKey]}</span>
+                  <span>{isAll ? t('users.filterAll') : ROLE_LABELS[role as RoleKey]}</span>
                   {!isAll && <span className="text-xs font-mono">{byRole[role] ?? 0}</span>}
                 </button>
               )
@@ -881,12 +888,12 @@ function UsersPane({ tenantId, adminToken, availablePools, modules, users, loadi
           </div>
         </div>
         <div className="p-4">
-          <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-3">Status</p>
+          <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-3">{t('users.status')}</p>
           <div className="space-y-1">
             {(['all', 'active', 'inactive'] as const).map(s => (
               <button key={s} onClick={() => setStatusFilter(s)}
                 className={`w-full text-left text-sm px-2 py-1.5 rounded-lg transition-colors ${statusFilter === s ? 'bg-primary text-white' : 'text-gray-600 hover:bg-gray-100'}`}>
-                {s === 'all' ? 'Todos' : s === 'active' ? 'Ativos' : 'Inativos'}
+                {s === 'all' ? t('users.filterAll') : s === 'active' ? t('users.active') : t('users.inactive')}
               </button>
             ))}
           </div>
@@ -898,11 +905,11 @@ function UsersPane({ tenantId, adminToken, availablePools, modules, users, loadi
         {/* Subheader */}
         <div className="px-6 py-3 border-b border-gray-100 bg-white flex items-center gap-3 flex-shrink-0">
           <input type="search" value={search} onChange={e => setSearch(e.target.value)}
-            placeholder="Buscar por nome ou e-mail…"
+            placeholder={t('users.searchPlaceholder')}
             className="flex-1 max-w-md border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/40" />
           <button onClick={() => setModalUser(null)}
             className="ml-auto flex items-center gap-1.5 px-3 py-2 text-sm font-medium text-white bg-primary rounded-lg hover:bg-primary/90 transition-colors">
-            + Novo usuário
+            + {t('users.create')}
           </button>
         </div>
 
@@ -918,16 +925,16 @@ function UsersPane({ tenantId, adminToken, availablePools, modules, users, loadi
           <div className="flex-1 overflow-auto">
             {filtered.length === 0 ? (
               <div className="flex items-center justify-center h-40">
-                <p className="text-gray-400 text-sm">{users.length === 0 ? 'Nenhum usuário encontrado.' : 'Sem resultados para os filtros aplicados.'}</p>
+                <p className="text-gray-400 text-sm">{users.length === 0 ? t('users.noUsers') : t('users.noResults')}</p>
               </div>
             ) : (
               <table className="w-full text-sm">
                 <thead className="bg-gray-50 border-b border-gray-200 sticky top-0 z-10">
                   <tr>
-                    <th className="text-left text-xs font-semibold text-gray-500 uppercase tracking-wider px-6 py-3">Usuário</th>
-                    <th className="text-left text-xs font-semibold text-gray-500 uppercase tracking-wider px-4 py-3">Perfis</th>
-                    <th className="text-left text-xs font-semibold text-gray-500 uppercase tracking-wider px-4 py-3">Pools (dados)</th>
-                    <th className="text-left text-xs font-semibold text-gray-500 uppercase tracking-wider px-4 py-3">Status</th>
+                    <th className="text-left text-xs font-semibold text-gray-500 uppercase tracking-wider px-6 py-3">{t('users.tableUser')}</th>
+                    <th className="text-left text-xs font-semibold text-gray-500 uppercase tracking-wider px-4 py-3">{t('users.tableRoles')}</th>
+                    <th className="text-left text-xs font-semibold text-gray-500 uppercase tracking-wider px-4 py-3">{t('users.tablePools')}</th>
+                    <th className="text-left text-xs font-semibold text-gray-500 uppercase tracking-wider px-4 py-3">{t('users.status')}</th>
                     <th className="px-4 py-3" />
                   </tr>
                 </thead>
@@ -941,7 +948,7 @@ function UsersPane({ tenantId, adminToken, availablePools, modules, users, loadi
                       <td className="px-4 py-3"><div className="flex flex-wrap gap-1">{u.roles.map(r => <RoleBadge key={r} role={r} />)}</div></td>
                       <td className="px-4 py-3">
                         {u.accessible_pools.length === 0
-                          ? <span className="text-xs text-gray-400 italic">Todos</span>
+                          ? <span className="text-xs text-gray-400 italic">{t('users.allPools')}</span>
                           : <div className="flex flex-wrap gap-1">
                               {u.accessible_pools.slice(0, 3).map(p => (
                                 <span key={p} className="text-xs bg-gray-100 text-gray-600 px-1.5 py-0.5 rounded font-mono">{p}</span>
@@ -953,10 +960,10 @@ function UsersPane({ tenantId, adminToken, availablePools, modules, users, loadi
                       <td className="px-4 py-3"><StatusBadge active={u.active} /></td>
                       <td className="px-4 py-3">
                         <div className="flex items-center gap-3 justify-end whitespace-nowrap">
-                          <button onClick={() => setModalUser(u)} className="text-xs text-primary hover:text-primary/80 font-medium transition-colors">Editar</button>
+                          <button onClick={() => setModalUser(u)} className="text-xs text-primary hover:text-primary/80 font-medium transition-colors">{t('form.edit')}</button>
                           <button onClick={() => handleToggleActive(u)}
                             className={`text-xs font-medium transition-colors ${u.active ? 'text-amber-600 hover:text-amber-800' : 'text-green-600 hover:text-green-800'}`}>
-                            {u.active ? 'Desativar' : 'Reativar'}
+                            {u.active ? t('users.deactivate') : t('users.reactivate')}
                           </button>
                           <DeleteButton onConfirm={() => handleDelete(u)} />
                         </div>
@@ -990,6 +997,7 @@ interface TemplatesPaneProps {
 }
 
 function TemplatesPane({ tenantId, adminToken, availablePools, users, grantedBy }: TemplatesPaneProps) {
+  const { t } = useTranslation('access')
   const { templates, loading, error, reload } = useTemplates(tenantId, adminToken)
   const [selected, setSelected]   = useState<PermTemplate | null | undefined>(undefined)
   // undefined = nothing selected; null = create mode; PermTemplate = edit mode
@@ -1009,9 +1017,9 @@ function TemplatesPane({ tenantId, adminToken, availablePools, users, grantedBy 
       {/* Template list */}
       <aside className="w-64 flex-shrink-0 border-r border-gray-200 bg-gray-50 flex flex-col overflow-hidden">
         <div className="p-4 border-b border-gray-200 flex items-center justify-between">
-          <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Templates</p>
+          <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">{t('templates.title')}</p>
           <button onClick={() => setSelected(null)}
-            className="text-xs font-medium text-primary hover:text-primary/80 transition-colors">+ Novo</button>
+            className="text-xs font-medium text-primary hover:text-primary/80 transition-colors">+ {t('templates.create')}</button>
         </div>
 
         {error && <p className="text-xs text-red-600 px-4 py-2">{error}</p>}
@@ -1022,19 +1030,19 @@ function TemplatesPane({ tenantId, adminToken, availablePools, users, grantedBy 
           <div className="flex-1 overflow-y-auto divide-y divide-gray-100">
             {templates.length === 0 ? (
               <div className="p-4 text-center">
-                <p className="text-sm text-gray-400">Nenhum template criado.</p>
-                <button onClick={() => setSelected(null)} className="mt-2 text-xs text-primary hover:underline">Criar o primeiro</button>
+                <p className="text-sm text-gray-400">{t('templates.noTemplates')}</p>
+                <button onClick={() => setSelected(null)} className="mt-2 text-xs text-primary hover:underline">{t('templates.createFirst')}</button>
               </div>
             ) : (
-              templates.map(t => {
-                const isActive = selected !== null && selected !== undefined && selected.id === t.id
+              templates.map(template => {
+                const isActive = selected !== null && selected !== undefined && selected.id === template.id
                 return (
-                  <button key={t.id} onClick={() => setSelected(t)}
+                  <button key={template.id} onClick={() => setSelected(template)}
                     className={`w-full text-left px-4 py-3 transition-colors ${isActive ? 'bg-primary/5 border-l-2 border-primary' : 'hover:bg-gray-100 border-l-2 border-transparent'}`}>
-                    <p className={`text-sm font-medium ${isActive ? 'text-primary' : 'text-gray-800'}`}>{t.name}</p>
-                    {t.description && <p className="text-xs text-gray-400 mt-0.5 truncate">{t.description}</p>}
+                    <p className={`text-sm font-medium ${isActive ? 'text-primary' : 'text-gray-800'}`}>{template.name}</p>
+                    {template.description && <p className="text-xs text-gray-400 mt-0.5 truncate">{template.description}</p>}
                     <p className="text-xs text-gray-400 mt-1">
-                      {t.permissions.length} permissão{t.permissions.length !== 1 ? 'ões' : ''}
+                      {t('templates.permissionCount', { count: template.permissions.length })}
                     </p>
                   </button>
                 )
@@ -1049,11 +1057,11 @@ function TemplatesPane({ tenantId, adminToken, availablePools, users, grantedBy 
         <div className="flex-1 flex items-center justify-center bg-white">
           <div className="text-center text-gray-400 max-w-xs">
             <p className="text-4xl mb-3">📋</p>
-            <p className="text-base font-medium text-gray-600">Selecione um template</p>
-            <p className="text-sm mt-1">Ou crie um novo para definir um conjunto reutilizável de permissões.</p>
+            <p className="text-base font-medium text-gray-600">{t('templates.selectTemplate')}</p>
+            <p className="text-sm mt-1">{t('templates.selectDescription')}</p>
             <button onClick={() => setSelected(null)}
               className="mt-4 px-4 py-2 text-sm font-medium text-white bg-primary rounded-lg hover:bg-primary/90 transition-colors">
-              + Novo template
+              + {t('templates.createNew')}
             </button>
           </div>
         </div>
@@ -1076,6 +1084,7 @@ function TemplatesPane({ tenantId, adminToken, availablePools, users, grantedBy 
 type PageTab = 'users' | 'templates'
 
 export default function AccessPage() {
+  const { t } = useTranslation('access')
   const { session, tenantId, currentUser } = useAuth()
   const grantedBy = currentUser?.email ?? currentUser?.userId ?? 'admin'
 
@@ -1093,8 +1102,8 @@ export default function AccessPage() {
   }
 
   const tabs: { id: PageTab; label: string; icon: string }[] = [
-    { id: 'users',     label: 'Usuários',  icon: '👤' },
-    { id: 'templates', label: 'Templates', icon: '📋' },
+    { id: 'users',     label: t('tabs.users'),     icon: '👤' },
+    { id: 'templates', label: t('tabs.templates'), icon: '📋' },
   ]
 
   return (
@@ -1103,20 +1112,20 @@ export default function AccessPage() {
       {/* Page header */}
       <div className="px-6 py-4 border-b border-gray-200 bg-white flex items-center justify-between flex-shrink-0">
         <div>
-          <h1 className="text-xl font-bold text-gray-900">Controle de Acesso</h1>
-          <p className="text-sm text-gray-500 mt-0.5">Gerencie usuários e templates de permissão</p>
+          <h1 className="text-xl font-bold text-gray-900">{t('title')}</h1>
+          <p className="text-sm text-gray-500 mt-0.5">{t('pageSubtitle')}</p>
         </div>
         {/* Admin token — optional */}
         <div className="flex items-center gap-2">
           <input type="password" value={adminToken}
             onChange={e => { setAdminToken(e.target.value); setTokenSaved(false) }}
             onKeyDown={e => { if (e.key === 'Enter') saveToken() }}
-            placeholder="Admin token (opcional em dev)"
+            placeholder={t('adminTokenPlaceholder')}
             className="border border-gray-300 rounded-lg px-3 py-1.5 text-xs w-52 focus:outline-none focus:ring-2 focus:ring-primary/40" />
           {adminToken && (
             <button onClick={saveToken}
               className={`px-3 py-1.5 text-xs font-medium rounded-lg transition-colors ${tokenSaved ? 'bg-green-100 text-green-700' : 'bg-primary text-white hover:bg-primary/90'}`}>
-              {tokenSaved ? '✓' : 'Aplicar'}
+              {tokenSaved ? '✓' : t('adminTokenApply')}
             </button>
           )}
         </div>

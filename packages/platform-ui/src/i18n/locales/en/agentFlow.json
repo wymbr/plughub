@@ -1,0 +1,129 @@
+{
+  "editor": {
+    "title":         "Agent Flow Editor",
+    "newSkill":      "New Skill",
+    "newSkillId":    "Skill ID (e.g. skill_sac_v1)",
+    "save":          "Save",
+    "saving":        "Saving…",
+    "saved":         "Saved",
+    "discard":       "Discard",
+    "delete":        "Delete",
+    "confirmDelete": "Confirm delete",
+    "search":        "Search skills…",
+    "noSkills":      "No skills found.",
+    "parseError":    "YAML parse error",
+    "validating":    "Validating…"
+  },
+  "monitor": {
+    "title":  "📡 Agent Flow Monitor",
+    "skills": "Skills",
+    "noSkillSelected": "Select a skill to view its instances.",
+    "noInstances":     "No running instances",
+    "loading":         "Loading instances…",
+    "bySkill":         "By skill",
+    "allSkills":       "All skills",
+    "allInstances":    "All instances",
+    "instancesOf":     "Instances of {{skill}}",
+    "instanceCount":   "{{count}} instance(s)",
+    "refresh":         "↻ Refresh",
+    "error":           "Error",
+    "status": {
+      "ready":    "ready",
+      "busy":     "in session",
+      "paused":   "paused",
+      "draining": "draining",
+      "offline":  "offline"
+    },
+    "statuses": {
+      "ready":    "Ready",
+      "busy":     "In session",
+      "paused":   "Paused",
+      "draining": "Draining",
+      "offline":  "Offline"
+    }
+  },
+  "deploy": {
+    "title":          "Deploy AgentFlow",
+    "selectSkill":    "Select a skill to deploy.",
+    "selectPoolsForDeploy": "Select pools for deployment",
+    "executeDeployTitle": "Execute deploy",
+    "selectAtLeastOnePool": "Select at least one pool to enable deployment.",
+    "selectedPools":  "Selected pools:",
+    "deploying":      "Deploying…",
+    "deployNow":      "Deploy now",
+    "deployExplain":  "The skill will be deployed to the selected pools. In-progress sessions will continue on the previous version until completion.",
+    "errorLoading":   "Error loading",
+    "noDeployDetected": "No active deployment detected for this skill.",
+    "lastDeployment": "Last deployment",
+    "affectedPools":  "Affected pools:",
+    "status": {
+      "draft":     "Draft",
+      "published": "Published"
+    },
+    "pools":          "Target pools",
+    "noPools":        "No pools available.",
+    "notes":          "Notes (optional)",
+    "deployBtn":      "🚀 Deploy",
+    "deploySuccess":  "Deployed successfully.",
+    "rollback":       "Rollback",
+    "rollbackConfirm":"This will restore the previous YAML snapshot and redeploy. Continue?",
+    "rollbackTooltip": "Restore this flow and redeploy to the same pools",
+    "noSnapshotTitle": "Snapshot not available for this deployment",
+    "rollbackExplain": "Rollback restores the flow from that deployment and publishes to the same pools. In-progress sessions will continue on the previous version until completion.",
+    "scheduleExplain": "Schedule the deployment to run automatically at a future time. The pools selected in the section above will be used.",
+    "selectPoolBeforeSchedule": "Select at least one pool above before scheduling.",
+    "scheduling":     "Scheduling…",
+    "convergenceComplete": "Complete",
+    "sessionsMigrating": "session(s) migrating…",
+    "handoffExplain": "Updated automatically every 10 seconds. In-progress sessions migrate to the new version when complete.",
+    "version":        "Version",
+    "originalDeploy": "Original deploy",
+    "deployId":       "Deploy ID",
+    "cancel":         "Cancel",
+    "rolling":        "Rolling back…",
+    "confirmRollback": "Confirm rollback",
+    "schedule": {
+      "title":    "Schedule Deploy",
+      "dateTime": "Deploy date/time",
+      "submit":   "Schedule",
+      "pending":  "Pending scheduled deploys",
+      "cancel":   "Cancel"
+    },
+    "history": {
+      "title":      "Deployment History",
+      "noHistory":  "No deployments yet.",
+      "current":    "current",
+      "by":         "by",
+      "pools":      "pools",
+      "rollbackTag":"rollback"
+    },
+    "handoff": {
+      "title":          "Handoff Monitor",
+      "activeSessions": "sessions on previous version",
+      "convergence":    "Convergence",
+      "notDeployed":    "Skill not yet deployed.",
+      "allConverged":   "All sessions on latest version."
+    }
+  },
+  "report": {
+    "title":   "Agent Flow Report",
+    "loading": "Loading report…",
+    "noData":  "No data available.",
+    "skillsCount": "{{count}} skill(s)",
+    "filterPlaceholder": "Filter by skill or pool…",
+    "error": "Error",
+    "totalSessions": "Total Sessions",
+    "avgDuration": "Avg Duration",
+    "avgEscalation": "Escalation Rate",
+    "skillsMonitored": "Skills Monitored",
+    "skillName": "Skill / Agent",
+    "pool": "Pool",
+    "sessions": "Sessions",
+    "escalationRate": "Escalation Rate",
+    "handoffRate": "Handoff Rate",
+    "outcomes": "Outcomes"
+  },
+  "actions": {
+    "refresh": "Refresh"
+  }
+}

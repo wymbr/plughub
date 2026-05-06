@@ -6,6 +6,7 @@
  * Right panel: form + recent instances for selected flow.
  */
 import React, { useCallback, useEffect, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { useAuth } from '@/auth/useAuth'
 import Spinner from '@/components/ui/Spinner'
 import { triggerWorkflow, useWorkflowInstances } from './api/hooks'
@@ -37,18 +38,12 @@ const STATUS_COLORS: Record<string, string> = {
   cancelled: '#6b7280',
 }
 
-const STATUS_LABELS: Record<string, string> = {
-  active:    'Ativo',
-  suspended: 'Suspenso',
-  completed: 'Concluído',
-  failed:    'Falhou',
-  timed_out: 'Expirou',
-  cancelled: 'Cancelado',
-}
+// STATUS_LABELS will be generated from i18n in the component function
 
 // ── Main page ──────────────────────────────────────────────────────────────────
 
 export default function WorkflowEditorPage() {
+  const { t } = useTranslation('workflows')
   const { session, getAccessToken, tenantId } = useAuth()
   const installId   = session?.installationId ?? ''
 
@@ -60,6 +55,16 @@ export default function WorkflowEditorPage() {
   const [error,        setError]        = useState<string | null>(null)
   const [triggering,   setTriggering]   = useState(false)
   const [lastTriggered, setLastTriggered] = useState<string | null>(null)
+
+  // i18n status labels
+  const STATUS_LABELS: Record<string, string> = {
+    active:    t('statuses.active'),
+    suspended: t('statuses.suspended'),
+    completed: t('statuses.completed'),
+    failed:    t('statuses.failed'),
+    timed_out: t('statuses.timed_out'),
+    cancelled: t('statuses.cancelled'),
+  }
 
   const { instances, loading: instLoading, refresh } = useWorkflowInstances(
     tenantId,
@@ -97,10 +102,10 @@ export default function WorkflowEditorPage() {
 
   async function handleTrigger() {
     const flowId = flowInput.trim() || selectedFlow
-    if (!flowId) { setError('Selecione ou informe um flow_id'); return }
+    if (!flowId) { setError(t('editor.selectFlowId')); return }
     let context: Record<string, unknown>
     try { context = JSON.parse(contextJson) }
-    catch { setError('Context deve ser JSON válido'); return }
+    catch { setError(t('editor.invalidJson')); return }
 
     setTriggering(true); setError(null)
     try {
@@ -125,14 +130,14 @@ export default function WorkflowEditorPage() {
       {/* ── Left: skill list ─────────────────────────────────────────────── */}
       <div style={leftCol}>
         <div style={colHeader}>
-          <span style={{ fontWeight: 700, fontSize: 13, color: '#e2e8f0' }}>Flows disponíveis</span>
+          <span style={{ fontWeight: 700, fontSize: 13, color: '#e2e8f0' }}>{t('editor.availableFlows')}</span>
           {skillsLoading && <Spinner />}
         </div>
 
         <div style={{ flex: 1, overflowY: 'auto' }}>
           {skills.length === 0 && !skillsLoading && (
             <div style={{ padding: '24px 16px', textAlign: 'center', color: '#475569', fontSize: 12 }}>
-              Nenhum skill encontrado
+              {t('editor.noSkillsFound')}
             </div>
           )}
           {skills.map(sk => {
@@ -173,28 +178,28 @@ export default function WorkflowEditorPage() {
           {/* Form */}
           <div style={card}>
             <h2 style={{ margin: '0 0 18px', fontSize: 15, fontWeight: 700, color: '#e2e8f0' }}>
-              ⚡ Disparar Workflow
+              ⚡ {t('trigger.title')}
             </h2>
 
             <div style={{ marginBottom: 14 }}>
-              <label style={labelStyle}>Flow ID</label>
+              <label style={labelStyle}>{t('trigger.flowId')}</label>
               <input
                 style={inputStyle}
                 value={flowInput}
                 onChange={e => setFlowInput(e.target.value)}
-                placeholder="ex: skill_cobranca_v1 — ou selecione à esquerda"
+                placeholder={t('editor.flowIdPlaceholder')}
               />
             </div>
 
             <div style={{ marginBottom: 18 }}>
-              <label style={labelStyle}>Context (JSON)</label>
+              <label style={labelStyle}>{t('trigger.context')}</label>
               <textarea
                 style={{ ...inputStyle, height: 120, resize: 'vertical', fontFamily: 'monospace', fontSize: 12 }}
                 value={contextJson}
                 onChange={e => setContextJson(e.target.value)}
               />
               <div style={{ fontSize: 11, color: '#475569', marginTop: 4 }}>
-                Parâmetros passados para o workflow como <code>metadata</code>
+                {t('editor.contextDescription')}
               </div>
             </div>
 
@@ -203,7 +208,7 @@ export default function WorkflowEditorPage() {
             )}
             {lastTriggered && !error && (
               <div style={{ fontSize: 12, color: '#22c55e', marginBottom: 12 }}>
-                ✓ Disparado às {lastTriggered}
+                ✓ {t('editor.triggeredAt')} {lastTriggered}
               </div>
             )}
 
@@ -217,10 +222,10 @@ export default function WorkflowEditorPage() {
                 onClick={handleTrigger}
                 disabled={triggering}
               >
-                {triggering ? 'Disparando…' : '▶ Disparar agora'}
+                {triggering ? t('editor.triggering') : `▶ ${t('editor.triggerNow')}`}
               </button>
               <span style={{ fontSize: 11, color: '#475569' }}>
-                Agendamento via Calendar (Fase 2)
+                {t('editor.calendarNote')}
               </span>
             </div>
           </div>
@@ -230,14 +235,14 @@ export default function WorkflowEditorPage() {
             <div style={{ ...card, marginTop: 16 }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
                 <h3 style={{ margin: 0, fontSize: 13, fontWeight: 700, color: '#94a3b8' }}>
-                  Instâncias recentes{selectedFlow ? ` · ${selectedFlow}` : ''}
+                  {t('editor.recentInstances')}{selectedFlow ? ` · ${selectedFlow}` : ''}
                 </h3>
                 {instLoading && <Spinner />}
               </div>
 
               {flowInstances.length === 0 ? (
                 <div style={{ fontSize: 12, color: '#475569', textAlign: 'center', padding: '20px 0' }}>
-                  {selectedFlow ? 'Nenhuma instância para este flow' : 'Selecione um flow para ver instâncias'}
+                  {selectedFlow ? t('editor.noInstancesForFlow') : t('editor.selectFlowInstances')}
                 </div>
               ) : (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>

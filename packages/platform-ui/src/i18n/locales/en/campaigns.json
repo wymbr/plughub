@@ -1,0 +1,51 @@
+{
+  "title":   "Campaigns",
+  "loading": "Loading campaigns…",
+  "noData":  "No campaigns found.",
+  "refresh": "Refresh",
+  "errorLoading": "Error loading campaigns",
+  "noRecentEvents": "No events recorded yet",
+  "emptyTitle": "Select a campaign",
+  "emptyDesc": "Choose a campaign from the list to see details",
+  "responseRate": "response rate",
+  "untilResponse": "until response",
+  "filters": {
+    "channel": "Channel",
+    "status":  "Status",
+    "all":     "All"
+  },
+  "kpi": {
+    "campaigns":    "Campaigns",
+    "total":        "Total",
+    "responseRate": "Response rate"
+  },
+  "detail": {
+    "title":        "Campaign detail",
+    "total":        "Total",
+    "responded":    "Responded",
+    "expired":      "Expired",
+    "avgTime":      "Avg time",
+    "statusDist":   "Status distribution",
+    "channelBreak": "Channel breakdown",
+    "recentEvents": "Recent collect events",
+    "token":        "Token",
+    "channel":      "Channel",
+    "status":       "Status",
+    "sent":         "Sent",
+    "elapsed":      "Elapsed"
+  },
+  "statusLabels": {
+    "responded": "Responded",
+    "sent":      "Sent",
+    "timedOut":  "Expired",
+    "requested": "Pending",
+    "shots":     "shots"
+  },
+  "statuses": {
+    "pending":   "Pending",
+    "sent":      "Sent",
+    "responded": "Responded",
+    "expired":   "Expired",
+    "failed":    "Failed"
+  }
+}

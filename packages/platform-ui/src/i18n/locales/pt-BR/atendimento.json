@@ -1,0 +1,72 @@
+{
+  "title": "Monitor Operacional",
+  "loading": "Carregando…",
+  "error":   "Erro ao carregar dados.",
+  "pools":   "Pools",
+  "noData":  "Sem dados disponíveis.",
+  "monitor": {
+    "tenantNotConfigured": "Tenant não configurado na sessão. Faça login novamente.",
+    "heatmapTab": "Heatmap",
+    "agentesTab": "Agentes",
+    "instanciasTab": "Instâncias",
+    "metrics": "Métricas",
+    "showMetrics": "Mostrar painel de métricas",
+    "pools": "Pools",
+    "status": {
+      "connecting": "Conectando",
+      "connected": "Conectado",
+      "error": "Erro SSE",
+      "closed": "Fechado"
+    }
+  },
+  "metricsPanel": {
+    "title":          "Métricas do pool",
+    "toggle":         "Mostrar painel de métricas",
+    "available":      "Disponíveis",
+    "queue":          "Fila",
+    "sla":            "SLA",
+    "avgScore":       "Score médio",
+    "sessions24h":    "Sessões (24h)",
+    "resolved":       "Resolvidos",
+    "avgHandle":      "Tempo médio de atendimento",
+    "sentimentDist":  "Distribuição de sentimento",
+    "satisfied":      "Satisfeito",
+    "neutral":        "Neutro",
+    "frustrated":     "Frustrado",
+    "angry":          "Irritado",
+    "noSentiment":    "Sem dados de sentimento."
+  },
+  "breadcrumbs": {
+    "pools":    "Pools",
+    "sessions": "Sessões",
+    "segments": "Segmentos",
+    "transcript":"Transcrição"
+  },
+  "sessionList": {
+    "channel":    "Canal",
+    "duration":   "Duração",
+    "score":      "Score",
+    "sentiment":  "Sentimento",
+    "noSessions": "Sem sessões ativas neste pool.",
+    "loading":    "Carregando sessões…"
+  },
+  "segmentList": {
+    "participant": "Participante",
+    "role":        "Papel",
+    "duration":    "Duração",
+    "noSegments":  "Sem segmentos para esta sessão.",
+    "loading":     "Carregando segmentos…"
+  },
+  "transcript": {
+    "joinSupervisor": "Entrar como supervisor",
+    "leaving":        "Saindo…",
+    "noMessages":     "Sem mensagens ainda.",
+    "loading":        "Carregando transcrição…",
+    "send":           "Enviar",
+    "placeholder":    "Digite uma mensagem…",
+    "visibility": {
+      "all":        "Todos os participantes",
+      "agentsOnly": "Somente agentes"
+    }
+  }
+}

@@ -21,6 +21,7 @@ import React, { useCallback, useEffect, useState } from 'react'
 import GridLayout, { Layout } from 'react-grid-layout'
 import 'react-grid-layout/css/styles.css'
 import 'react-resizable/css/styles.css'
+import { useTranslation } from 'react-i18next'
 import { useAuth } from '@/auth/useAuth'
 import { TimeseriesChart, type DisplayType } from '@/components/TimeseriesChart'
 import {
@@ -144,7 +145,7 @@ function CardContent({ card, tenantId }: { card: DashboardCard; tenantId: string
       <div className="h-full flex flex-col">
         <p className="text-xs text-gray-500 px-1 pb-1">{cfg.title}</p>
         <div className="flex-1 flex items-center justify-center text-xs text-gray-400">
-          Conectar ao SSE operacional
+          {/* SSE operational — pending */}
         </div>
       </div>
     )
@@ -177,6 +178,7 @@ function AddCardModal({
   onAdd: (preset: CardPreset, displayType: DisplayType) => void
   onClose: () => void
 }) {
+  const { t } = useTranslation('dashboards')
   const [selectedPreset, setSelectedPreset] = useState<CardPreset | null>(null)
   const [displayType, setDisplayType]       = useState<DisplayType>('bar')
 
@@ -199,14 +201,14 @@ function AddCardModal({
     <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
       <div className="bg-white rounded-xl shadow-xl w-full max-w-lg p-6 flex flex-col gap-5">
         <div className="flex items-center justify-between">
-          <h2 className="text-base font-semibold text-gray-800">Adicionar card</h2>
+          <h2 className="text-base font-semibold text-gray-800">{t('addCard')}</h2>
           <button onClick={onClose} className="text-gray-400 hover:text-gray-600 text-xl leading-none">×</button>
         </div>
 
         {/* Step 1 — pick data source */}
         <div>
           <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">
-            1. Tipo de dado
+            {t('card.type')}
           </p>
           <div className="grid grid-cols-2 gap-2">
             {CARD_PRESETS.map(preset => (
@@ -220,7 +222,7 @@ function AddCardModal({
                 }`}
               >
                 <span className="text-xl">{preset.icon}</span>
-                <span className="text-xs font-medium leading-snug">{preset.label}</span>
+                <span className="text-xs font-medium leading-snug">{t(`cardTypes.${preset.type}`, preset.label)}</span>
               </button>
             ))}
           </div>
@@ -230,7 +232,7 @@ function AddCardModal({
         {isTimeseries && (
           <div>
             <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">
-              2. Visualização
+              {t('card.displayType')}
             </p>
             <div className="grid grid-cols-3 gap-2">
               {DISPLAY_OPTIONS.map(opt => (
@@ -246,7 +248,7 @@ function AddCardModal({
                   }`}
                 >
                   <span className="text-base font-mono">{opt.icon}</span>
-                  <span className="text-xs font-medium">{opt.label}</span>
+                  <span className="text-xs font-medium">{t(`displayTypes.${opt.value}`, opt.label)}</span>
                 </button>
               ))}
             </div>
@@ -264,14 +266,14 @@ function AddCardModal({
             className="flex-1 bg-primary text-white text-sm font-medium py-2 rounded hover:opacity-90
               disabled:opacity-40 transition-opacity"
           >
-            Adicionar
+            {t('card.add')}
           </button>
           <button
             onClick={onClose}
             className="flex-1 border border-gray-200 text-gray-600 text-sm py-2 rounded
               hover:bg-gray-50 transition-colors"
           >
-            Cancelar
+            {t('card.cancel')}
           </button>
         </div>
       </div>
@@ -292,6 +294,7 @@ function NewTemplateModal({
   onCreated:  (t: DashboardTemplate) => void
   onClose:    () => void
 }) {
+  const { t } = useTranslation('dashboards')
   const [name, setName]         = useState('')
   const [description, setDesc]  = useState('')
   const [saving, setSaving]     = useState(false)
@@ -324,12 +327,12 @@ function NewTemplateModal({
     <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
       <div className="bg-white rounded-xl shadow-xl w-full max-w-sm p-6">
         <div className="flex items-center justify-between mb-4">
-          <h2 className="text-base font-semibold text-gray-800">Novo template</h2>
+          <h2 className="text-base font-semibold text-gray-800">{t('newTemplate')}</h2>
           <button onClick={onClose} className="text-gray-400 hover:text-gray-600 text-xl leading-none">×</button>
         </div>
         <div className="flex flex-col gap-3">
           <div>
-            <label className="block text-xs font-medium text-gray-600 mb-1">Nome *</label>
+            <label className="block text-xs font-medium text-gray-600 mb-1">{t('templateName')} *</label>
             <input
               value={name}
               onChange={e => setName(e.target.value)}
@@ -338,7 +341,7 @@ function NewTemplateModal({
             />
           </div>
           <div>
-            <label className="block text-xs font-medium text-gray-600 mb-1">Descrição</label>
+            <label className="block text-xs font-medium text-gray-600 mb-1">{t('description')}</label>
             <input
               value={description}
               onChange={e => setDesc(e.target.value)}
@@ -355,13 +358,13 @@ function NewTemplateModal({
               disabled={!name.trim() || saving}
               className="flex-1 bg-primary text-white text-sm font-medium py-2 rounded hover:opacity-90 disabled:opacity-40 transition-opacity"
             >
-              {saving ? 'Salvando…' : 'Criar'}
+              {saving ? t('saving') : t('create')}
             </button>
             <button
               onClick={onClose}
               className="flex-1 border border-gray-200 text-gray-600 text-sm py-2 rounded hover:bg-gray-50 transition-colors"
             >
-              Cancelar
+              {t('card.cancel')}
             </button>
           </div>
         </div>
@@ -373,6 +376,7 @@ function NewTemplateModal({
 // ─── Main page ────────────────────────────────────────────────────────────────
 
 export default function DashboardsPage() {
+  const { t } = useTranslation('dashboards')
   const { session, tenantId, currentUser } = useAuth()
   const isAdmin  = session?.role === 'admin' || session?.role === 'developer'
   const userId   = currentUser?.userId ?? 'anonymous'
@@ -500,7 +504,7 @@ export default function DashboardsPage() {
   // ── Delete template ─────────────────────────────────────────────────────────
 
   async function handleDeleteTemplate(id: string) {
-    if (!window.confirm('Remover este template permanentemente?')) return
+    if (!window.confirm(t('deleteTemplateConfirm'))) return
     await deleteTemplate(id, adminToken, tenantId)
     reloadTemplates()
     if (activeTemplateId === id) setActiveTemplateId(null)
@@ -528,7 +532,7 @@ export default function DashboardsPage() {
           <span className="text-sm font-semibold text-gray-800">
             {template?.name ?? 'Dashboard'}
           </span>
-          {dirty && <span className="text-xs text-amber-500 font-medium">● não salvo</span>}
+          {dirty && <span className="text-xs text-amber-500 font-medium">●</span>}
         </div>
 
         <div className="flex items-center gap-2">
@@ -536,14 +540,14 @@ export default function DashboardsPage() {
             <button
               onClick={() => setEditMode(e => !e)}
               disabled={!activeTemplateId}
-              title={!activeTemplateId ? 'Selecione um template primeiro' : ''}
+              title={!activeTemplateId ? t('selectFirstTooltip') : ''}
               className={`text-xs px-3 py-1.5 rounded border transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${
                 editMode
                   ? 'bg-primary text-white border-primary'
                   : 'border-gray-200 text-gray-600 hover:bg-gray-50'
               }`}
             >
-              {editMode ? '✓ Modo edição' : '✎ Editar'}
+              {editMode ? t('exitEdit') : t('editMode')}
             </button>
           )}
           {editMode && (
@@ -551,7 +555,7 @@ export default function DashboardsPage() {
               onClick={() => setShowAddCard(true)}
               className="text-xs px-3 py-1.5 rounded border border-gray-200 text-gray-600 hover:bg-gray-50 transition-colors"
             >
-              + Card
+              {t('addCard')}
             </button>
           )}
           {dirty && (
@@ -560,7 +564,7 @@ export default function DashboardsPage() {
               disabled={saving}
               className="text-xs px-3 py-1.5 rounded bg-primary text-white hover:opacity-90 disabled:opacity-50 transition-opacity"
             >
-              {saving ? 'Salvando…' : 'Salvar'}
+              {saving ? t('saving') : t('saveTemplate')}
             </button>
           )}
           {/* Admin token input */}
@@ -582,14 +586,14 @@ export default function DashboardsPage() {
         {isAdmin && (
           <aside className="w-52 border-r border-gray-200 bg-gray-50 flex flex-col overflow-y-auto flex-shrink-0">
             <div className="px-4 py-3 border-b border-gray-200">
-              <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Templates</p>
+              <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">{t('templates')}</p>
               <button
                 onClick={() => setShowNewTemplate(true)}
                 disabled={!adminToken}
                 className="w-full text-xs py-1.5 rounded border border-dashed border-gray-300 text-gray-500 hover:border-primary hover:text-primary disabled:opacity-40 transition-colors"
-                title={!adminToken ? 'Admin token necessário' : ''}
+                title={!adminToken ? t('adminTokenRequired') : ''}
               >
-                + Novo template
+                {t('newTemplate')}
               </button>
             </div>
 
@@ -600,28 +604,28 @@ export default function DashboardsPage() {
             )}
 
             <nav className="flex-1 py-2">
-              {templates.map(t => (
+              {templates.map(tmpl => (
                 <div
-                  key={t.template_id}
+                  key={tmpl.template_id}
                   className={`group flex items-center justify-between px-4 py-2 cursor-pointer transition-colors ${
-                    activeTemplateId === t.template_id
+                    activeTemplateId === tmpl.template_id
                       ? 'bg-primary/10 text-primary font-medium'
                       : 'text-gray-700 hover:bg-gray-100'
                   }`}
-                  onClick={() => setActiveTemplateId(t.template_id)}
+                  onClick={() => setActiveTemplateId(tmpl.template_id)}
                 >
-                  <span className="text-xs truncate">{t.name}</span>
+                  <span className="text-xs truncate">{tmpl.name}</span>
                   <button
-                    onClick={e => { e.stopPropagation(); handleDeleteTemplate(t.template_id) }}
+                    onClick={e => { e.stopPropagation(); handleDeleteTemplate(tmpl.template_id) }}
                     className="opacity-0 group-hover:opacity-100 text-gray-400 hover:text-red-500 transition-all text-sm leading-none ml-1"
-                    title="Remover template"
+                    title={t('deleteTemplate')}
                   >
                     ×
                   </button>
                 </div>
               ))}
               {!tmplLoading && templates.length === 0 && (
-                <p className="text-xs text-gray-400 px-4 py-3">Nenhum template ainda</p>
+                <p className="text-xs text-gray-400 px-4 py-3">{t('noTemplates')}</p>
               )}
             </nav>
           </aside>
@@ -632,13 +636,13 @@ export default function DashboardsPage() {
           {!activeTemplateId && !tmplLoading && (
             <div className="flex flex-col items-center justify-center h-64 text-gray-400">
               <span className="text-4xl mb-3">📊</span>
-              <p className="text-sm">Nenhum template selecionado</p>
+              <p className="text-sm">{t('noTemplate')}</p>
               {isAdmin && (
                 <button
                   onClick={() => setShowNewTemplate(true)}
                   className="mt-3 text-xs text-primary underline"
                 >
-                  Criar o primeiro template
+                  {t('createFirst')}
                 </button>
               )}
             </div>
@@ -647,13 +651,13 @@ export default function DashboardsPage() {
           {activeTemplateId && cards.length === 0 && (
             <div className="flex flex-col items-center justify-center h-64 text-gray-400">
               <span className="text-4xl mb-3">🗂️</span>
-              <p className="text-sm">Dashboard vazio</p>
+              <p className="text-sm">{t('emptyDashboard')}</p>
               {isAdmin && editMode && (
                 <button
                   onClick={() => setShowAddCard(true)}
                   className="mt-3 text-xs text-primary underline"
                 >
-                  Adicionar cards
+                  {t('addCards')}
                 </button>
               )}
             </div>
@@ -685,7 +689,7 @@ export default function DashboardsPage() {
                       <button
                         onClick={() => removeCard(card.id)}
                         className="text-gray-400 hover:text-red-500 text-sm leading-none ml-2 flex-shrink-0"
-                        title="Remover card"
+                        title={t('deleteCardTitle')}
                       >
                         ×
                       </button>

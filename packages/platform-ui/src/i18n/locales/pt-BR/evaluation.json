@@ -1,0 +1,221 @@
+{
+  "title": "Avaliações",
+  "tabs": {
+    "forms":      "Formulários",
+    "campaigns":  "Campanhas",
+    "knowledge":  "Base de Conhecimento",
+    "avaliacoes": "Avaliações",
+    "reports":    "Relatórios"
+  },
+  "forms": {
+    "title":       "Formulários de Avaliação",
+    "create":      "Novo Formulário",
+    "name":        "Nome",
+    "description": "Descrição",
+    "criteria":    "Critérios",
+    "weight":      "Peso",
+    "type":        "Tipo",
+    "noForms":     "Nenhum formulário encontrado.",
+    "active":      "Ativo",
+    "inactive":    "Inativo",
+    "types": {
+      "score":      "Pontuação",
+      "pass_fail":  "Aprovado / Reprovado",
+      "text":       "Texto",
+      "na_allowed": "N/A Permitido"
+    }
+  },
+  "campaigns": {
+    "title":          "Campanhas",
+    "create":         "Nova Campanha",
+    "loading":        "Carregando relatório…",
+    "noReport":       "Sem dados de relatório",
+    "total":          "Total",
+    "completed":      "Concluídas",
+    "pending":        "Pendentes",
+    "underReview":    "Em revisão",
+    "conclusion":     "Conclusão",
+    "avgScore":       "Nota média:",
+    "frequentFlags":  "Flags frequentes",
+    "pause":          "Pausar",
+    "resume":         "Retomar",
+    "status": {
+      "active":    "Ativa",
+      "paused":    "Pausada",
+      "completed": "Concluída"
+    },
+    "sidebar": {
+      "adminTokenPlaceholder": "Token admin",
+      "newButton": "+ Nova",
+      "loading": "Carregando…",
+      "noCampaigns": "Nenhuma campanha encontrada"
+    },
+    "empty": {
+      "selectCampaign": "Selecione uma campanha na lista",
+      "newCampaignButton": "+ Nova Campanha"
+    },
+    "modal": {
+      "title": "Nova Campanha de Avaliação",
+      "close": "✕",
+      "basicInfo": "Informações Básicas",
+      "nameLabel": "Nome *",
+      "nameExample": "Ex: Avaliação SAC — Abril 2026",
+      "formLabel": "Formulário *",
+      "selectForm": "Selecione um formulário",
+      "reviewSkillLabel": "Skill de revisão",
+      "noWorkflow": "Nenhuma (sem workflow)",
+      "descriptionLabel": "Descrição",
+      "samplingRules": "Regras de Sampling",
+      "samplingMode": {
+        "all": "Todos",
+        "percentage": "% das sessões",
+        "fixed": "A cada N sessões"
+      },
+      "samplingHint": "(0–1, ex: 0.1 = 10%)",
+      "reviewerIA": "Reviewer IA",
+      "enableAutoReview": "Ativar revisão automática por IA",
+      "escalateThreshold": "Escalar para humano quando nota <",
+      "contestation": "Política de Contestação",
+      "enableContestation": "Habilitar política de contestação",
+      "maxRounds": "Máx. rounds",
+      "reviewDeadline": "Prazo por round (h)",
+      "authority": "Alçada",
+      "autoLockTimeout": "Bloquear resultado automaticamente ao expirar prazo",
+      "skillInfo": "Skill: {{skill}} — define o número real de rounds e timeouts. Os valores acima são usados como fallback e exibição na UI.",
+      "errorRequired": "Nome e formulário são obrigatórios",
+      "errorMessage": "{{error}}",
+      "cancel": "Cancelar",
+      "submit": "{{saving|Criar campanha|Criando…}}"
+    },
+    "detail": {
+      "emptyTitle": "📋",
+      "sampling": "Sampling",
+      "samplingMode": "Modo: {{mode}}",
+      "samplingRate": "Taxa: {{rate}}%",
+      "samplingEvery": "A cada: {{count}} sessões",
+      "reviewerIA": "Reviewer IA",
+      "autoReview": "Auto-revisão: {{enabled|Sim|Não}}",
+      "threshold": "Threshold: {{threshold}}",
+      "skillReview": "Skill de revisão",
+      "noWorkflow": "Sem workflow configurado",
+      "contestationPolicy": "Política de Contestação",
+      "maxRounds": "Máx. rounds: {{rounds}}",
+      "reviewDeadline": "Prazo por round: {{hours}}h",
+      "autoLock": "Bloquear no timeout: {{enabled|Sim|Não}}",
+      "noPolicy": "Sem política de contestação"
+    },
+    "progress": "Progresso"
+  },
+  "knowledge": {
+    "title":      "Base de Conhecimento",
+    "search":     "Pesquisar…",
+    "namespace":  "Namespace",
+    "content":    "Conteúdo",
+    "upsert":     "Salvar Snippet",
+    "delete":     "Excluir",
+    "noResults":  "Nenhum snippet encontrado.",
+    "topK":       "Top K resultados"
+  },
+  "loading": "Carregando…",
+  "error": {
+    "loading": "Erro ao carregar"
+  },
+  "empty": {
+    "noEvaluations": "Nenhuma avaliação encontrada",
+    "noActions": "Sem ações pendentes para você no momento"
+  },
+  "statuses": {
+    "submitted":         "Submetido",
+    "approved":          "Aprovado",
+    "adjusted_approved": "Aprovado c/ ajuste",
+    "rejected":          "Rejeitado",
+    "contested":         "Contestado",
+    "locked":            "Bloqueado"
+  },
+  "filters": {
+    "allStatuses": "Todos os status",
+    "myActions": "Aguardando minha ação",
+    "allCampaigns": "Todas as campanhas",
+    "adminTokenPlaceholder": "Token admin (adjudicação)",
+    "authenticated": "Autenticado",
+    "loginRequired": "Faça login",
+    "reload": "Recarregar"
+  },
+  "table": {
+    "session": "Sessão",
+    "campaign": "Campanha",
+    "evaluator": "Avaliador",
+    "score": "Nota",
+    "status": "Status",
+    "actions": "Ações",
+    "date": "Data"
+  },
+  "detail": {
+    "session": "Sessão",
+    "evaluator": "Avaliador",
+    "review": "Revisar",
+    "contest": "Contestar",
+    "locked": "Bloqueado",
+    "generalObservation": "Observação geral",
+    "highlights": "Pontos positivos",
+    "improvements": "Melhorias",
+    "flags": "Flags",
+    "evaluatedCriteria": "Critérios avaliados",
+    "campaign": "Campanha",
+    "currentRound": "Round atual",
+    "lockReason": "Motivo do bloqueio",
+    "createdAt": "Criado em",
+    "awaiting": "Aguardando",
+    "awaitingReview": "revisão",
+    "awaitingContest": "contestação",
+    "deadline": "Prazo"
+  },
+  "review": {
+    "openContestations": "Contestações abertas",
+    "from": "De",
+    "evaluatedAs": "Avaliado como",
+    "accepted": "Procedente",
+    "rejected": "Improcedente",
+    "decision": "Decisão",
+    "approve": "Aprovar",
+    "approveWithRemarks": "Aprovar com ajustes",
+    "reject": "Rejeitar",
+    "criterionNotes": "Notas por critério",
+    "criterionNotesHint": "opcional",
+    "generalNote": "Nota geral",
+    "noteRequired": "Adicione ao menos uma nota de revisão para ajuste/rejeição",
+    "noteOptional": "Nota opcional",
+    "saving": "Salvando…",
+    "submitReview": "Enviar Revisão"
+  },
+  "contest": {
+    "title": "Contestar",
+    "minChars": "chars mín",
+    "justification": "Discordância",
+    "justificationPlaceholder": "Explique sua discordância (mín. 30 caracteres)…",
+    "charsRemaining": "{{count}} caractere(s) restante(s)",
+    "selectAtLeastOne": "Selecione ao menos um critério para contestar",
+    "allJustificationsRequired": "Todas as justificativas devem ter pelo menos 30 caracteres",
+    "noCriteria": "Nenhum critério para contestar",
+    "criteriaList": "Critérios para contestar ({{count}} selecionados)",
+    "banner": {
+      "title": "Contestar Resultado de Avaliação",
+      "description": "Selecione os critérios com os quais você discorda e forneça sua justificativa para cada um."
+    },
+    "cancel": "Cancelar",
+    "submit": "Enviar Contestação ({{count}})",
+    "submitting": "Enviando…"
+  },
+  "reports": {
+    "title":       "Relatórios de Avaliação",
+    "byCampaign":  "Por Campanha",
+    "byAgent":     "Por Agente",
+    "avgScore":    "Nota Média",
+    "total":       "Total",
+    "approved":    "Aprovados",
+    "rejected":    "Rejeitados",
+    "contested":   "Contestados",
+    "locked":      "Bloqueados",
+    "noData":      "Sem dados de relatório."
+  }
+}

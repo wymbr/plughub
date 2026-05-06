@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { useAuth } from '@/auth/useAuth'
 import Spinner from '@/components/ui/Spinner'
 import Badge from '@/components/ui/Badge'
@@ -55,6 +56,7 @@ function useCampaignData(
   status?:     string,
   intervalMs  = 30_000,
 ) {
+  const { t } = useTranslation('campaigns')
   const [data,    setData]    = useState<CampaignApiResponse | null>(null)
   const [loading, setLoading] = useState(false)
   const [error,   setError]   = useState<string | null>(null)
@@ -71,7 +73,7 @@ function useCampaignData(
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
       setData(await res.json())
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Erro desconhecido')
+      setError(e instanceof Error ? e.message : t('unknownError', { defaultValue: 'Unknown error' }))
     } finally {
       setLoading(false)
     }
@@ -103,6 +105,7 @@ function RateBadge({ rate }: { rate: number }) {
 function MiniBar({ responded, sent, timed_out, requested }: {
   responded: number; sent: number; timed_out: number; requested: number
 }) {
+  const { t } = useTranslation('campaigns')
   const total = responded + sent + timed_out + requested
   if (total === 0) return <div className="h-2 bg-gray-100 rounded-full w-full" />
 
@@ -111,19 +114,19 @@ function MiniBar({ responded, sent, timed_out, requested }: {
   return (
     <div className="flex h-2 rounded-full overflow-hidden w-full gap-0.5">
       {responded > 0 && (
-        <div title={`Respondidos: ${responded}`}
+        <div title={`${t('statusLabels.responded')}: ${responded}`}
           className="bg-green-400 rounded-l-full" style={{ width: pct(responded) }} />
       )}
       {sent > 0 && (
-        <div title={`Enviados: ${sent}`}
+        <div title={`${t('statusLabels.sent')}: ${sent}`}
           className="bg-blue-400" style={{ width: pct(sent) }} />
       )}
       {timed_out > 0 && (
-        <div title={`Expirados: ${timed_out}`}
+        <div title={`${t('statusLabels.timedOut')}: ${timed_out}`}
           className="bg-red-400" style={{ width: pct(timed_out) }} />
       )}
       {requested > 0 && (
-        <div title={`Aguardando: ${requested}`}
+        <div title={`${t('statusLabels.requested')}: ${requested}`}
           className="bg-yellow-300 rounded-r-full" style={{ width: pct(requested) }} />
       )}
     </div>
@@ -139,6 +142,7 @@ function CampaignCard({
   selected: boolean
   onClick: () => void
 }) {
+  const { t } = useTranslation('campaigns')
   return (
     <button
       onClick={onClick}
@@ -153,9 +157,9 @@ function CampaignCard({
         <RateBadge rate={summary.response_rate_pct} />
       </div>
       <div className="flex items-center justify-between mb-2">
-        <span className="text-xs text-gray-500">{summary.total} disparos</span>
+        <span className="text-xs text-gray-500">{summary.total} {t('statusLabels.shots')}</span>
         <span className="text-xs text-gray-400">
-          {summary.responded} respondidos
+          {summary.responded} {t('statusLabels.responded')}
         </span>
       </div>
       <MiniBar
@@ -179,6 +183,7 @@ function KpiCard({ label, value, sub }: { label: string; value: string; sub?: st
 }
 
 function ChannelBreakdown({ events }: { events: CollectEvent[] }) {
+  const { t } = useTranslation('campaigns')
   const counts: Record<string, { total: number; responded: number }> = {}
   for (const e of events) {
     if (!counts[e.channel]) counts[e.channel] = { total: 0, responded: 0 }
@@ -191,7 +196,7 @@ function ChannelBreakdown({ events }: { events: CollectEvent[] }) {
 
   return (
     <div className="bg-white border border-gray-200 rounded-lg p-4">
-      <h3 className="text-sm font-semibold text-gray-700 mb-3">Por canal</h3>
+      <h3 className="text-sm font-semibold text-gray-700 mb-3">{t('detail.channelBreak')}</h3>
       <div className="space-y-2">
         {channels.map(([ch, { total, responded }]) => (
           <div key={ch} className="flex items-center gap-2">
@@ -242,6 +247,7 @@ function CampaignDetail({
   summary: CampaignSummary
   events: CollectEvent[]
 }) {
+  const { t } = useTranslation('campaigns')
   const campaignEvents = events.filter(
     e => e.campaign_id === summary.campaign_id
   )
@@ -253,7 +259,7 @@ function CampaignDetail({
         <div>
           <h2 className="text-lg font-semibold text-gray-900">{summary.campaign_id}</h2>
           <p className="text-sm text-gray-500 mt-0.5">
-            {summary.total} disparos • taxa de resposta{' '}
+            {summary.total} {t('statusLabels.shots')} • {t('responseRate')}{' '}
             <strong className="text-gray-700">{summary.response_rate_pct.toFixed(1)}%</strong>
           </p>
         </div>
@@ -262,23 +268,23 @@ function CampaignDetail({
 
       {/* KPI grid */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        <KpiCard label="Total" value={String(summary.total)} />
+        <KpiCard label={t('detail.total')} value={String(summary.total)} />
         <KpiCard
-          label="Respondidos"
+          label={t('detail.responded')}
           value={String(summary.responded)}
-          sub={`${summary.response_rate_pct.toFixed(1)}% de resposta`}
+          sub={`${summary.response_rate_pct.toFixed(1)}% ${t('responseRate')}`}
         />
-        <KpiCard label="Expirados" value={String(summary.timed_out)} />
+        <KpiCard label={t('detail.expired')} value={String(summary.timed_out)} />
         <KpiCard
-          label="Tempo médio"
+          label={t('detail.avgTime')}
           value={fmtDuration(summary.avg_elapsed_ms)}
-          sub="até resposta"
+          sub={t('untilResponse', { defaultValue: 'until response' })}
         />
       </div>
 
       {/* Status bar */}
       <div className="bg-white border border-gray-200 rounded-lg p-4">
-        <h3 className="text-sm font-semibold text-gray-700 mb-3">Distribuição de status</h3>
+        <h3 className="text-sm font-semibold text-gray-700 mb-3">{t('detail.statusDist')}</h3>
         <MiniBar
           responded={summary.responded}
           sent={summary.sent}
@@ -287,10 +293,10 @@ function CampaignDetail({
         />
         <div className="flex gap-4 mt-2">
           {[
-            { label: 'Respondidos', color: 'bg-green-400', count: summary.responded },
-            { label: 'Enviados',    color: 'bg-blue-400',  count: summary.sent },
-            { label: 'Expirados',   color: 'bg-red-400',   count: summary.timed_out },
-            { label: 'Aguardando',  color: 'bg-yellow-300', count: summary.requested },
+            { label: t('detail.responded'), color: 'bg-green-400', count: summary.responded },
+            { label: t('detail.sent'),    color: 'bg-blue-400',  count: summary.sent },
+            { label: t('detail.expired'),   color: 'bg-red-400',   count: summary.timed_out },
+            { label: t('statusLabels.requested'),  color: 'bg-yellow-300', count: summary.requested },
           ].map(({ label, color, count }) => (
             <div key={label} className="flex items-center gap-1.5 text-xs text-gray-600">
               <div className={`w-2.5 h-2.5 rounded-full ${color}`} />
@@ -307,23 +313,23 @@ function CampaignDetail({
       <div className="bg-white border border-gray-200 rounded-lg overflow-hidden">
         <div className="px-4 py-3 border-b border-gray-100">
           <h3 className="text-sm font-semibold text-gray-700">
-            Eventos recentes ({campaignEvents.length})
+            {t('detail.recentEvents')} ({campaignEvents.length})
           </h3>
         </div>
         {campaignEvents.length === 0 ? (
           <div className="px-4 py-8 text-center text-sm text-gray-500">
-            Nenhum evento registrado ainda
+            {t('noRecentEvents', { defaultValue: 'No events recorded yet' })}
           </div>
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
                 <tr className="bg-gray-50 text-xs text-gray-500 uppercase tracking-wide">
-                  <th className="px-4 py-2 text-left">Token</th>
-                  <th className="px-4 py-2 text-left">Canal</th>
-                  <th className="px-4 py-2 text-left">Status</th>
-                  <th className="px-4 py-2 text-left">Enviado em</th>
-                  <th className="px-4 py-2 text-left">Tempo</th>
+                  <th className="px-4 py-2 text-left">{t('detail.token')}</th>
+                  <th className="px-4 py-2 text-left">{t('detail.channel')}</th>
+                  <th className="px-4 py-2 text-left">{t('detail.status')}</th>
+                  <th className="px-4 py-2 text-left">{t('detail.sent')}</th>
+                  <th className="px-4 py-2 text-left">{t('detail.elapsed')}</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
@@ -347,6 +353,7 @@ const STATUS_OPTIONS  = ['', 'responded', 'timed_out', 'sent', 'requested']
 // ── Main page ──────────────────────────────────────────────────────────────────
 
 export default function CampaignsPage() {
+  const { t } = useTranslation('campaigns')
   const { tenantId } = useAuth()
 
   const [selectedCampaignId, setSelectedCampaignId] = useState<string | null>(null)
@@ -379,13 +386,13 @@ export default function CampaignsPage() {
         {/* Header */}
         <div className="px-4 py-4 border-b border-gray-100">
           <div className="flex items-center justify-between mb-3">
-            <h1 className="text-base font-semibold text-gray-900">Campanhas</h1>
+            <h1 className="text-base font-semibold text-gray-900">{t('title')}</h1>
             <button
               onClick={refresh}
               className="text-xs text-secondary hover:text-primary transition-colors"
-              title="Atualizar"
+              title={t('refresh', { defaultValue: 'Refresh' })}
             >
-              ↻ Atualizar
+              ↻ {t('refresh', { defaultValue: 'Refresh' })}
             </button>
           </div>
 
@@ -394,15 +401,15 @@ export default function CampaignsPage() {
             <div className="grid grid-cols-3 gap-2 mb-3">
               {[
                 {
-                  label: 'Campanhas',
+                  label: t('kpi.campaigns'),
                   value: String(summaries.length),
                 },
                 {
-                  label: 'Total',
+                  label: t('kpi.total'),
                   value: String(summaries.reduce((acc, s) => acc + s.total, 0)),
                 },
                 {
-                  label: 'Taxa',
+                  label: t('kpi.responseRate'),
                   value: (() => {
                     const total     = summaries.reduce((a, s) => a + s.total, 0)
                     const responded = summaries.reduce((a, s) => a + s.responded, 0)
@@ -425,7 +432,7 @@ export default function CampaignsPage() {
               onChange={e => setFilterChannel(e.target.value)}
               className="flex-1 text-xs border border-gray-200 rounded px-2 py-1.5 text-gray-700 bg-white"
             >
-              <option value="">Todos os canais</option>
+              <option value="">{t('filters.all')} {t('filters.channel')}</option>
               {CHANNEL_OPTIONS.filter(Boolean).map(ch => (
                 <option key={ch} value={ch}>{ch}</option>
               ))}
@@ -435,7 +442,7 @@ export default function CampaignsPage() {
               onChange={e => setFilterStatus(e.target.value)}
               className="flex-1 text-xs border border-gray-200 rounded px-2 py-1.5 text-gray-700 bg-white"
             >
-              <option value="">Todos os status</option>
+              <option value="">{t('filters.all')} {t('filters.status')}</option>
               {STATUS_OPTIONS.filter(Boolean).map(st => (
                 <option key={st} value={st}>{st}</option>
               ))}
@@ -451,12 +458,12 @@ export default function CampaignsPage() {
             </div>
           ) : error ? (
             <div className="px-4 py-6 text-center">
-              <p className="text-sm text-red-600 mb-2">Erro ao carregar campanhas</p>
+              <p className="text-sm text-red-600 mb-2">{t('errorLoading', { defaultValue: 'Error loading campaigns' })}</p>
               <p className="text-xs text-gray-400">{error}</p>
             </div>
           ) : summaries.length === 0 ? (
             <div className="px-4 py-8 text-center text-sm text-gray-500">
-              Nenhuma campanha encontrada
+              {t('noData')}
             </div>
           ) : (
             summaries.map(s => (
@@ -485,8 +492,8 @@ export default function CampaignsPage() {
         ) : (
           <div className="flex justify-center items-center h-full">
             <EmptyState
-              title="Selecione uma campanha"
-              description="Escolha uma campanha na lista para ver os detalhes"
+              title={t('emptyTitle', { defaultValue: 'Select a campaign' })}
+              description={t('emptyDesc', { defaultValue: 'Choose a campaign from the list to see details' })}
             />
           </div>
         )}

@@ -15,6 +15,7 @@ import Spinner from '@/components/ui/Spinner'
 const PoolsPage: React.FC = () => {
   const { session } = useAuth()
   const { t } = useTranslation('configRecursos')
+  const { t: tCommon } = useTranslation('common')
   const [pools, setPools] = useState<Pool[]>([])
   const [isLoading, setIsLoading] = useState(true)
   const [isOpen, setIsOpen] = useState(false)
@@ -88,7 +89,7 @@ const PoolsPage: React.FC = () => {
 
   const handleSubmit = async () => {
     if (!session || !formData.pool_id.trim()) {
-      setError(t('pools.fields.poolId') + ' is required')
+      setError(t('pools.fields.poolId') + ' ' + tCommon('isRequired'))
       return
     }
 
@@ -108,7 +109,7 @@ const PoolsPage: React.FC = () => {
       await loadPools()
       handleClose()
     } catch (err) {
-      setError('Failed to save pool')
+      setError(tCommon('failedToSave'))
     } finally {
       setIsSaving(false)
     }
@@ -175,14 +176,14 @@ const PoolsPage: React.FC = () => {
       <Modal
         isOpen={isOpen}
         onClose={handleClose}
-        title={editingPool ? t('pools.fields.poolId') : t('pools.createPool')}
+        title={editingPool ? t('pools.title') : t('pools.createPool')}
         footer={
           <>
             <Button variant="ghost" onClick={handleClose}>
-              Cancel
+              {tCommon('cancel')}
             </Button>
             <Button variant="primary" onClick={handleSubmit} disabled={isSaving}>
-              {isSaving ? 'Saving...' : 'Save'}
+              {isSaving ? tCommon('saving') : tCommon('save')}
             </Button>
           </>
         }
@@ -206,7 +207,7 @@ const PoolsPage: React.FC = () => {
             label={t('pools.fields.description')}
             value={formData.description}
             onChange={(e) => setFormData({ ...formData, description: e.target.value })}
-            placeholder="Optional description"
+            placeholder={tCommon('optionalDescription')}
           />
 
           <div>

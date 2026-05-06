@@ -1,0 +1,51 @@
+{
+  "title":   "Campanhas",
+  "loading": "Carregando campanhas…",
+  "noData":  "Nenhuma campanha encontrada.",
+  "refresh": "Atualizar",
+  "errorLoading": "Erro ao carregar campanhas",
+  "noRecentEvents": "Nenhum evento registrado ainda",
+  "emptyTitle": "Selecione uma campanha",
+  "emptyDesc": "Escolha uma campanha na lista para ver os detalhes",
+  "responseRate": "taxa de resposta",
+  "untilResponse": "até resposta",
+  "filters": {
+    "channel": "Canal",
+    "status":  "Status",
+    "all":     "Todos"
+  },
+  "kpi": {
+    "campaigns":    "Campanhas",
+    "total":        "Total",
+    "responseRate": "Taxa de resposta"
+  },
+  "detail": {
+    "title":        "Detalhe da campanha",
+    "total":        "Total",
+    "responded":    "Respondidos",
+    "expired":      "Expirados",
+    "avgTime":      "Tempo médio",
+    "statusDist":   "Distribuição por status",
+    "channelBreak": "Breakdown por canal",
+    "recentEvents": "Eventos de coleta recentes",
+    "token":        "Token",
+    "channel":      "Canal",
+    "status":       "Status",
+    "sent":         "Enviado",
+    "elapsed":      "Tempo"
+  },
+  "statusLabels": {
+    "responded": "Respondidos",
+    "sent":      "Enviados",
+    "timedOut":  "Expirados",
+    "requested": "Aguardando",
+    "shots":     "disparos"
+  },
+  "statuses": {
+    "pending":   "Pendente",
+    "sent":      "Enviado",
+    "responded": "Respondido",
+    "expired":   "Expirado",
+    "failed":    "Falhou"
+  }
+}

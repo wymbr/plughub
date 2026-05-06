@@ -3934,6 +3934,23 @@ Tests: `test_engine.py` — 41 assertions (25 engine + 16 novos para MM-DD holid
 
 Tests: `test_router.py` — 17 assertions (TestGetTenantConfig ×4, TestUpdateTenantConfig ×9, TestCreateCalendarTimezoneInheritance ×4). Total calendar-api: **58/58**.
 
+### Calendar MCP tools — `mcp-server-plughub`
+
+Quatro ferramentas MCP que envolvem os endpoints de engine do Calendar API, permitindo que agentes Skill Flow consultem horários de negócio via steps `invoke` sem acessar a REST API diretamente.
+
+Arquivo: `packages/mcp-server-plughub/src/tools/calendar.ts`
+Registradas em `server.ts` via `registerCalendarTools(server, calendarDeps)`.
+Env var: `CALENDAR_API_URL` (default: `http://localhost:3700`).
+
+| Ferramenta | Endpoint proxied | Descrição |
+|---|---|---|
+| `calendar_is_open` | `GET /v1/engine/is-open` | Status open/closed/holiday de uma entidade no instante `at` |
+| `calendar_next_open_slot` | `GET /v1/engine/next-open-slot` | Próxima janela aberta após `after` |
+| `calendar_add_business_duration` | `POST /v1/engine/add-business-duration` | Deadline = from_dt + N horas úteis |
+| `calendar_business_duration` | `POST /v1/engine/business-duration` | Horas úteis entre from_dt e to_dt |
+
+Todos os tools aceitam `tenant_id` opcional (fallback para o tenant do servidor) e retornam os mesmos payloads da API REST subjacente. Erros de rede ou HTTP não-2xx retornam `isError: true` com código `calendar_api_error` ou `network_error`.
+
 ### Skill Flow `suspend` step
 
 ```typescript

@@ -1,0 +1,99 @@
+{
+  "title": "Agent Assist",
+  "pool": {
+    "select":   "Selecionar pool",
+    "all":      "Todos os pools",
+    "noPool":   "Nenhum pool selecionado"
+  },
+  "session": {
+    "none":        "Sem sessão ativa",
+    "loading":     "Carregando sessão…",
+    "ended":       "Sessão encerrada",
+    "assigned":    "Sessão atribuída"
+  },
+  "close": {
+    "title":        "Encerrar Sessão",
+    "issueStatus":  "Status do Problema",
+    "outcome":      "Outcome",
+    "handoff":      "Motivo de Transferência",
+    "confirm":      "Encerrar Sessão",
+    "cancel":       "Cancelar"
+  },
+  "input": {
+    "placeholder": "Digite uma mensagem…",
+    "send":        "Enviar",
+    "close":       "Encerrar",
+    "pause":       "Pausar",
+    "resume":      "Retomar",
+    "hangup":      "Desligar"
+  },
+  "tabs": {
+    "state":        "Estado",
+    "capabilities": "Capacidades",
+    "context":      "Contexto",
+    "history":      "Histórico"
+  },
+  "state": {
+    "sentiment":   "Sentimento",
+    "intent":      "Intenção",
+    "sla":         "SLA",
+    "flags":       "Flags"
+  },
+  "capabilities": {
+    "suggestedAgents": "Agentes Sugeridos",
+    "copilot":         "Sugestão IA",
+    "riskFlags":       "Flags de Risco",
+    "actions":         "Ações Recomendadas"
+  },
+  "context": {
+    "noContext": "Nenhum contexto disponível.",
+    "agents":    "Somente agentes"
+  },
+  "history": {
+    "noHistory":    "Sem histórico de contatos.",
+    "loading":      "Carregando histórico…",
+    "notIdentified":"Cliente não identificado"
+  },
+  "pause": {
+    "title":     "Selecionar Motivo de Pausa",
+    "reason":    "Motivo",
+    "note":      "Observação (opcional)",
+    "confirm":   "Confirmar",
+    "cancel":    "Cancelar",
+    "required":  "Observação obrigatória para este motivo"
+  },
+  "substitution": {
+    "toggle":     "🔄 Substituir",
+    "active":     "🔄 Substituindo",
+    "observation":"Observação"
+  },
+  "message": {
+    "closingWrapUp":        "Aguardando finalização (wrap-up/NPS)…",
+    "closingError":         "Erro ao encerrar atendimento.",
+    "menuSubmitFailed":     "Falha ao enviar resposta.",
+    "networkError":         "Erro de rede ao enviar resposta.",
+    "hungUpByAgent":        "Desligado pelo agente",
+    "agentResumed":         "Agente retomado — disponível para novos contatos.",
+    "agentPaused":          "Agente pausado ({{reason}}{{detail}}). Novos contatos não serão recebidos.",
+    "inviteSent":           "Convite enviado: {{agentTypeId}}",
+    "escalatingTo":         "Escalando para: {{poolId}}",
+    "transferComingSoon":   "Transferir: em breve",
+    "clientDisconnected":   "Cliente desconectou"
+  },
+  "contacts": {
+    "label": "Contatos"
+  },
+  "centerTab": {
+    "atual":     "Atual",
+    "historico": "Histórico"
+  },
+  "rightTab": {
+    "estado":      "Estado",
+    "capacidades": "Capacidades",
+    "contexto":    "Contexto"
+  },
+  "empty": {
+    "activatePool":       "Ative um pool no cabeçalho para ficar disponível.",
+    "waitingForContact":  "Aguardando próximo atendimento…"
+  }
+}
