@@ -13,6 +13,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 import type { KafkaProducer } from "../infra/kafka"
 import type { RedisClient }   from "../infra/redis"
 import { withGuard }          from "../infra/tool-guard"
+import { writeStreamEntry }   from "../lib/write-stream-entry"
 import type { Skill }         from "@plughub/schemas"
 
 /**
@@ -495,11 +496,6 @@ export function registerBpmTools(server: McpServer, deps?: BpmDeps): void {
       const agentsOnly    = parsed.visibility === "agents_only"
       const isArrayVis    = Array.isArray(parsed.visibility)
 
-      // Build optional segment_id args for XADD (empty array when absent)
-      const segArgs: string[] = parsed.segment_id
-        ? ["segment_id", parsed.segment_id]
-        : []
-
       // Use instance_id as the author identifier when available.
       // instance_id is the agent's name (e.g. "agente_nps_v1-001"),
       // propagated by the Skill Flow Engine via ctx.instanceId.
@@ -516,19 +512,19 @@ export function registerBpmTools(server: McpServer, deps?: BpmDeps): void {
         // conversations.outbound is NOT used — customer never sees this message.
         if (deps?.redis) {
           try {
-            await deps.redis.xadd(
-              `session:${parsed.session_id}:stream`,
-              "*",
-              "type",       "message",
-              "timestamp",  timestamp,
-              "author",     authorJson,
-              "visibility", JSON.stringify("agents_only"),
-              ...segArgs,
-              "payload",    JSON.stringify({
+            await writeStreamEntry(deps.redis, {
+              stream_key:  `session:${parsed.session_id}:stream`,
+              type:        "message",
+              author_id:   authorId,
+              author_role: "specialist",
+              visibility:  "agents_only",
+              segment_id:  parsed.segment_id,
+              payload: {
                 message_id: messageId,
                 content:    { type: "text", text: parsed.message },
-              }),
-            )
+              },
+              timestamp,
+            })
           } catch { /* non-fatal — stream may not exist yet */ }
           try {
             await deps.redis.publish(`agent:events:${parsed.session_id}`, JSON.stringify({
@@ -553,19 +549,19 @@ export function registerBpmTools(server: McpServer, deps?: BpmDeps): void {
         // the human agent seeing the messages.
         if (deps?.redis) {
           try {
-            await deps.redis.xadd(
-              `session:${parsed.session_id}:stream`,
-              "*",
-              "type",       "message",
-              "timestamp",  timestamp,
-              "author",     authorJson,
-              "visibility", JSON.stringify(parsed.visibility),
-              ...segArgs,
-              "payload",    JSON.stringify({
+            await writeStreamEntry(deps.redis, {
+              stream_key:  `session:${parsed.session_id}:stream`,
+              type:        "message",
+              author_id:   authorId,
+              author_role: "specialist",
+              visibility:  parsed.visibility as string[],
+              segment_id:  parsed.segment_id,
+              payload: {
                 message_id: messageId,
                 content:    { type: "text", text: parsed.message },
-              }),
-            )
+              },
+              timestamp,
+            })
           } catch { /* non-fatal — stream may not exist yet */ }
 
           // Determine if the visibility array targets the human agent.
@@ -669,38 +665,38 @@ export function registerBpmTools(server: McpServer, deps?: BpmDeps): void {
             if (hasMenu) {
               // Interactive menu: write interaction_request to stream so webchat
               // StreamSubscriber delivers it as an interaction.request WS event.
-              await deps.redis.xadd(
-                `session:${parsed.session_id}:stream`,
-                "*",
-                "type",       "interaction_request",
-                "timestamp",  timestamp,
-                "author",     authorJson,
-                "visibility", JSON.stringify("all"),
-                ...segArgs,
-                "payload",    JSON.stringify({
+              await writeStreamEntry(deps.redis, {
+                stream_key:  `session:${parsed.session_id}:stream`,
+                type:        "interaction_request",
+                author_id:   authorId,
+                author_role: "specialist",
+                visibility:  "all",
+                segment_id:  parsed.segment_id,
+                payload: {
                   menu_id:       messageId,
                   interaction:   parsed.menu!.interaction,
                   prompt:        parsed.message,
                   options:       parsed.menu!.options        ?? [],
                   fields:        parsed.menu!.fields         ?? null,
                   masked_fields: parsed.menu!.masked_fields  ?? null,
-                }),
-              )
+                },
+                timestamp,
+              })
             } else {
               // Plain text notification: write message to stream.
-              await deps.redis.xadd(
-                `session:${parsed.session_id}:stream`,
-                "*",
-                "type",       "message",
-                "timestamp",  timestamp,
-                "author",     authorJson,
-                "visibility", JSON.stringify("all"),
-                ...segArgs,
-                "payload",    JSON.stringify({
+              await writeStreamEntry(deps.redis, {
+                stream_key:  `session:${parsed.session_id}:stream`,
+                type:        "message",
+                author_id:   authorId,
+                author_role: "specialist",
+                visibility:  "all",
+                segment_id:  parsed.segment_id,
+                payload: {
                   message_id: messageId,
                   content:    { type: "text", text: parsed.message },
-                }),
-              )
+                },
+                timestamp,
+              })
             }
           } catch { /* non-fatal — stream may not exist yet */ }
 
@@ -901,16 +897,14 @@ export function registerBpmTools(server: McpServer, deps?: BpmDeps): void {
       // instead of a generic leave message.
       if (deps?.redis) {
         try {
-          await (deps.redis as any).xadd(
-            `session:${parsed.session_id}:stream`,
-            "*",
-            "event_id",   crypto.randomUUID(),
-            "type",       "participant_left",
-            "timestamp",  new Date().toISOString(),
-            "author",     JSON.stringify({ participant_id: "ai-agent", instance_id: "ai-agent", role: "ai" }),
-            "visibility", JSON.stringify("all"),
-            "payload",    JSON.stringify({ participant_id: "ai-agent", reason: "escalated" }),
-          )
+          await writeStreamEntry(deps.redis, {
+            stream_key:  `session:${parsed.session_id}:stream`,
+            type:        "participant_left",
+            author_id:   "ai-agent",
+            author_role: "specialist",
+            visibility:  "all",
+            payload:     { participant_id: "ai-agent", reason: "escalated" },
+          })
         } catch { /* non-fatal */ }
       }
 
@@ -1036,18 +1030,17 @@ export function registerBpmTools(server: McpServer, deps?: BpmDeps): void {
       // ── 4. Acknowledgment — agents_only message ───────────────────────────
       if (cmd.acknowledge && redis) {
         try {
-          await (redis as any).xadd(
-            `session:${parsed.session_id}:stream`,
-            "*",
-            "event_id",   crypto.randomUUID(),
-            "type",       "message",
-            "timestamp",  now,
-            "author",     JSON.stringify({ type: "agent_ai", id: parsed.instance_id ?? "mention_dispatcher" }),
-            "visibility", JSON.stringify("agents_only"),
-            "payload",    JSON.stringify({
+          await writeStreamEntry(redis, {
+            stream_key:  `session:${parsed.session_id}:stream`,
+            type:        "message",
+            author_id:   parsed.instance_id ?? "mention_dispatcher",
+            author_role: "specialist",
+            visibility:  "agents_only",
+            payload: {
               content: { type: "text", text: `[mention_command] /${parsed.command_name} acknowledged` },
-            }),
-          )
+            },
+            timestamp: now,
+          })
         } catch { /* non-fatal */ }
       }
 

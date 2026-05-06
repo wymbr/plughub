@@ -9,6 +9,93 @@ that makes service delivery possible, not the delivery itself.
 
 Full architectural specification: `plughub_spec_v1.docx` (root of this repo).
 
+---
+
+## Saúde do CLAUDE.md — Regras de Manutenção
+
+> **Por que existe:** este arquivo é carregado integralmente a cada sessão de trabalho. Cada linha extra custa tokens e degrada o contexto disponível. As regras abaixo preservam o trabalho de otimização feito — não as ignore.
+
+### Target: ≤ 800 linhas no CLAUDE.md
+
+Quando o arquivo ultrapassar 800 linhas, aplicar as regras de extração abaixo antes de continuar.
+
+### O que FICA no CLAUDE.md
+
+| Categoria | Critério |
+|-----------|----------|
+| Invariantes e regras | "never do X", contratos de componente, limites arquiteturais |
+| Modelo de sessão e domínios | roles, status, close_reason, visibilidade de mensagens |
+| Responsabilidades dos componentes | tabela de uma linha por componente |
+| Stack por pacote | tabela compacta (linguagem, runtime, porta) |
+| Estrutura do repositório | árvore de diretórios do nível `packages/` |
+| Kafka topics | tabela de tópicos × producer × consumer |
+| Convenções de nomenclatura | padrões de ID |
+| Seções de arquitetura ativa | resumo de 15–20 linhas com link para `docs/modules/` |
+| Pending genuíno | máx 50 linhas — apenas itens não implementados |
+
+### O que NÃO pertence ao CLAUDE.md
+
+| Proibido | Vai para |
+|----------|----------|
+| Itens marcados com ✅ | `CHANGELOG.md` |
+| Histórico de implementação (task #N, testes X/Y, build N kB) | `CHANGELOG.md` |
+| Documentação completa de um Arc ou módulo (> 50 linhas) | `docs/modules/{arc}.md` |
+| Snippets de código longos (> 10 linhas) fora de invariantes | `docs/modules/{arc}.md` |
+| Listas de arquivos modificados por feature | `CHANGELOG.md` ou `docs/modules/` |
+| Detalhes de UI (props, componentes, hooks por feature) | `docs/modules/{arc}.md` |
+| "Pendente (fase 2)" que já foi implementado | Deletar |
+
+### Estrutura de arquivos de referência
+
+```
+plughub/
+  CLAUDE.md          ← arquitetura viva, regras, invariantes, resumos (≤ 800 linhas)
+  TODO.md            ← itens genuinamente não implementados
+  CHANGELOG.md       ← histórico de implementações concluídas
+  docs/
+    modules/
+      arc4-workflow.md        ← documentação completa do Arc 4
+      arc6-evaluation.md      ← documentação completa do Arc 6
+      arc7-auth.md            ← documentação completa do Arc 7
+      abac.md                 ← sistema de permissões ABAC
+      context-store.md        ← ContextStore, @ctx.*, segment-scoped
+      webchat-channel.md      ← WebChat, uploads, masked fields delivery
+      instance-bootstrap.md   ← reconciliação, RegistrySyncer, hot-reload
+      pool-lifecycle-hooks.md ← hooks on_human_start/end/post_human
+      session-replayer.md     ← replayer, comparison mode, hydrator
+      usage-metering.md       ← metering, quota, usage.events
+      pricing.md              ← capacity-based billing, reserve pools
+    adr/                      ← Architecture Decision Records existentes
+```
+
+### Como adicionar uma nova feature
+
+1. **Feature pequena** (< 20 linhas de doc): adicionar inline na seção H2 existente mais próxima.
+2. **Feature média** (20–50 linhas): criar subseção `###` dentro da seção H2 mais próxima.
+3. **Feature grande / novo Arc** (> 50 linhas): criar `docs/modules/{nome}.md` com a documentação completa; adicionar resumo de 15–20 linhas no CLAUDE.md com link para o arquivo.
+4. **Ao concluir uma fase pendente**: mover o item do `## Pending` para `CHANGELOG.md`; atualizar `TODO.md`; **nunca deixar ✅ no CLAUDE.md**.
+
+### Critério de extração imediata
+
+Se qualquer seção do CLAUDE.md tiver mais de 80 linhas e não for uma tabela de referência rápida, ela é candidata a extração para `docs/modules/`.
+
+### Regra de persistência de planejamento
+
+> **Decisões de design ou planejamento acordadas em conversa devem ser registradas imediatamente — nunca deixar só no chat.**
+
+O chat é efêmero: quando o contexto esgota, o resumo automático preserva o que foi *executado* (arquivos criados, código escrito), mas perde *discussões de planejamento* que não foram materializadas em documento. Para evitar perda de planejamento entre sessões:
+
+| Tipo de decisão | Onde registrar imediatamente |
+|---|---|
+| Nova tarefa planejada (qualquer tamanho) | Task no tracker (`TaskCreate`) |
+| Decisão técnica com contexto (> 3 linhas) | Entrada em `TODO.md` com raciocínio |
+| Invariante ou regra arquitetural | Seção neste arquivo (`CLAUDE.md`) |
+| Implementação concluída | `CHANGELOG.md` |
+
+**Regra de encerramento de sessão longa**: antes que a janela de contexto esgote, varrer o que foi decidido mas ainda não está em task ou doc e registrar. Equivalente a um `git commit` antes de fechar o editor.
+
+---
+
 ## Unified Session Model
 
 Every contact is a conference room. There is no distinction between a normal flow
@@ -850,10 +937,16 @@ extrair_campos (reason LLM #2):
 StreamEventType:
   session_opened | session_closed
   participant_joined | participant_left
-  customer_identified | medium_transitioned
+  customer_identified | medium_transitioned | channel_transitioned
   message | interaction_request | interaction_result
   flow_step_completed
 ```
+
+**All XADD calls to `session:{id}:stream` MUST go through `writeStreamEntry()`** (`mcp-server-plughub/src/lib/write-stream-entry.ts`). Never call `redis.xadd()` directly. `writeStreamEntry` guarantees:
+- `event_id` always present (auto-generated UUID if not supplied)
+- `segment_id` always present as flat field (empty string when absent)
+- `author_id` and `author_role` as flat fields for reliable analytics parsing
+- Zod validation before every write — malformed entries never enter the stream
 
 Messages in the stream carry both `content` (masked, delivered to agents) and
 `original_content` (unmasked, accessible only by authorised roles for LGPD audit).
@@ -1040,6 +1133,7 @@ outbound:       outbound.*             →  pending deliveries for Notification 
 - Never allow AI agents to emit `@mention` commands — only `role: primary` or `role: human` participants may issue mentions; AI agents use `task` step for coordination
 - Never route a `@mention` to a pool not listed in `mentionable_pools` of the origin pool — domain is always closed by pool configuration
 - **Never leave deferred phases undocumented** — whenever a scope is split into phases and only some are implemented, every unimplemented phase MUST be registered immediately in the `## Pending (next iteration)` section with its name, parent feature, and a brief description of what remains. Marking something as "futuro", "deferred", or "Phase N (deferred)" in inline comments is NOT sufficient; the item must also appear in the centralised Pending list. This prevents work from being lost between sessions.
+- **Never call `redis.xadd()` directly in mcp-server-plughub** — all stream writes go through `writeStreamEntry()` in `lib/write-stream-entry.ts`. The sole exception is `session_opened`/`session_closed` in `server.ts` (Core lifecycle events, not agent-layer events).
 
 ## SDK CLI
 
@@ -2854,391 +2948,115 @@ Revisores (IA e humanos) respondem por critério, no mesmo formato estruturado.
 
 ---
 
-## Pending (next iteration)
-
-> **Regra de registro:** toda vez que um escopo é dividido em fases e apenas algumas são implementadas, as fases restantes são obrigatoriamente listadas aqui antes de encerrar a sessão de trabalho. Marcar como "futuro" ou "deferred" em comentários inline não é suficiente.
-
-### Context-Aware / ContextStore
-
-- ~~**Fase 2 — Co-pilot**~~ ✅ Implementado — ver seção "Fase 2 — Co-pilot (✅ implementado)" acima.
-- ~~**Fase 3 — Step `resolve` nativo**~~ ✅ Implementado — ver seção "Fase 3 — Step `resolve` nativo (✅ implementado)" acima.
-
-### Arc 5 — ContactSegment (v2)
-
-- ~~**Enrichment post-hoc de `segment_id`**~~ ✅: `SegmentEnricher` em `analytics-api/segment_enricher.py` — lookup chain cache LRU → Redis → ClickHouse FINAL; `sentiment.updated` → `lookup_primary(session_id)` (chave Redis `session:{id}:primary_segment`); `mcp.audit` → `lookup_by_instance(session_id, instance_id)` (chave `session:{id}:segment:{instance_id}`). Consumer enriquece antes de parsear via `_ENRICHED_TOPICS = frozenset({"sentiment.updated", "mcp.audit"})`. `sentiment_events` recebe coluna `segment_id Nullable(String)` via migration idempotente. `mcp.audit` roteia para `session_timeline`. Se enriquecimento falhar, `segment_id=None/""` — nenhum evento descartado. `main.py` passa `redis` para `_run_consumer_safe` → `run_consumer`. 27/27 testes em `test_segment_enricher.py`. Total analytics-api: **226/226**.
-- ~~**Materialized views ClickHouse**~~ ✅: `mv_agent_performance_daily` (AggregatingMergeTree, POPULATE) + readable view `v_agent_performance` — expostos via `GET /reports/agent-performance/daily`; `mv_segment_summary` (AggregatingMergeTree, POPULATE) + readable view `v_segment_summary` — expostos via `GET /reports/sessions/complexity`. Ambos na DDL de `clickhouse.py` e aplicados via `ensure_schema()`. Pool scoping (`accessible_pools`) aplicado em ambos os endpoints. Tests: `TestQueryAgentPerformanceDaily` (5) + `TestQuerySessionComplexity` (5) em `test_reports.py`.
-
-### Skill Deploy Lifecycle (Phase 2) — ✅ Implementado completo
-
-Todos os três itens foram implementados:
-
-- ~~**Deploy agendado via Workflow engine**~~ ✅: `skill_scheduled_deploy_v1.yaml` — workflow com `reason: timer` suspend; `on_timeout` dispara o deploy. `PersistSuspendRequest.scheduled_at` (ISO-8601 absoluto) em `workflow-api/router.py` sobrepõe o cálculo de `timeout_hours`. MCP tool `skill_deploy` em `mcp-server-plughub/src/tools/deploy.ts` chama `POST /v1/skills/:id/deploy`. `GET /v1/skills/:id/deployments/scheduled` na agent-registry filtra instâncias do workflow `skill_scheduled_deploy_v1` para a skill. UI: `AgentFlowDeployPage.tsx` — seção "Agendar deploy" com seletor `datetime-local`, botão "⏰ Agendar" (viola), listagem de deploys pendentes com botão "✕ Cancelar" que chama `DELETE /v1/workflow/instances/:id/cancel`.
-- ~~**Graceful handoff monitor**~~ ✅: `GET /v1/skills/:id/handoff-status` na agent-registry — detecta o deploy mais recente, consulta analytics-api por sessões ativas iniciadas antes de `deployed_at` nos pools afetados, retorna `{ deployed, active_sessions, pool_ids, deployed_at, deployed_by, deployment_id }`. UI: `AgentFlowDeployPage.tsx` — seção "Monitor de handoff" com KPI card de sessões na versão anterior (verde quando 0, âmbar quando > 0), barra de convergência animada, e polling automático a cada 10 s via `setInterval` em `useEffect`.
-- ~~**Automated rollback button**~~ ✅: botão "↩ Rollback" (âmbar) no histórico do DeployPage; dois estágios — PUT para restaurar `flow` do `yaml_snapshot` + POST para re-deploy nos mesmos `pool_ids` com nota de rollback. Guard: oculto no item mais recente ("atual"); desabilitado se `yaml_snapshot` ausente. `RollbackConfirmModal` inline com info do deploy original (data, pools, deployment_id). Badge "rollback" em laranja em entradas originadas por rollback. `rollbackSkill()` two-step em `AgentFlowDeployPage.tsx`.
-
-### Usage Metering — Channel Gateway adapters
-
-- **whatsapp_conversations, voice_minutes, sms_segments, email_messages** *(deferred)*: as funções em `usage_emitter.py` estão implementadas e documentadas, mas os adapters de canal ainda não as chamam. Será wired quando cada adapter for criado (WhatsApp, WebRTC/Voice, SMS, Email).
-
-### Pricing Module
-
-- **Integração metering × pricing** *(deferred)*: módulo que lê os contadores de `usage.events` no Redis/ClickHouse, aplica planos configurados no Config API e escreve `{tenant}:quota:limit:*` no Redis. Atualmente separação está incompleta — metering registra mas pricing não consome.
-
-### Config API / Routing Engine
-
-~~**Consumo de `config.changed` namespace `routing`**~~ ✅ Implementado. `RoutingConfigCache` em `routing_config.py` faz fetch do Config API no startup e é invalidado/recarregado via `ConfigChangedHandler` ao receber `config.changed` com `namespace=routing`. `performance_score_weight` lido dinamicamente do cache com fallback para env var. 15/15 testes em `test_routing_config.py`.
-
-### Arc 8 — Relatório de Disponibilidade e Pausas de Agentes
-
-A maior parte dos dados para volumetria e tempo de atendimento já existe em `participation_intervals` e `segments`. O único gap real é o ciclo de pausa: o `AgentLifecycleEventSchema` já define `agent_pause`, mas o evento não carrega motivo e o consumer da analytics-api o descarta.
-
-**O que precisa ser feito:**
-
-- **`agent_pause` schema** *(deferred)*: adicionar campos `reason_id: string` e `reason_label: string` ao `AgentPauseEventSchema` em `packages/schemas/src/platform-events.ts`. O `agent_ready` já existe e serve como sinal de retomada de pausa.
-
-- **Config API — motivos de pausa** *(deferred)*: seed de namespace `agent_activity` com chave `pause_reasons` — lista de `{ id, label, requires_note: bool }`. Suporte a override por pool via chave `pause_reasons:{pool_id}`. Seed com motivos padrão: `{ id: "intervalo", label: "Intervalo", requires_note: false }`, `{ id: "almoco", label: "Almoço", requires_note: false }`, `{ id: "treinamento", label: "Treinamento", requires_note: false }`, `{ id: "reuniao", label: "Reunião", requires_note: true }`, `{ id: "outro", label: "Outro", requires_note: true }`.
-
-- **orchestrator-bridge — publicar `agent_pause`/`agent_ready` com motivo** *(deferred)*: quando o agente pausa via `PUT /api/agent-pause/:instanceId { reason_id, reason_label, note? }`, o bridge publica `agent_pause` no tópico `agent.lifecycle` com os campos de motivo. Quando retoma (`PUT /api/agent-resume/:instanceId`), publica `agent_ready`.
-
-- **analytics-api — consumir `agent_pause` e `agent_ready`** *(deferred)*: o `parse_agent_lifecycle` hoje retorna `None` para qualquer evento que não seja `agent_done`. Estender para processar `agent_pause` → registra `paused_at` em nova tabela `agent_pause_intervals`; `agent_ready` (quando há uma pausa aberta) → fecha o intervalo com `resumed_at` e calcula `duration_ms`. Schema da tabela:
-  ```sql
-  CREATE TABLE analytics.agent_pause_intervals (
-      interval_id   String,
-      tenant_id     String,
-      instance_id   String,
-      agent_type_id String,
-      pool_id       String,
-      reason_id     String,
-      reason_label  String,
-      note          Nullable(String),
-      paused_at     DateTime,
-      resumed_at    Nullable(DateTime),
-      duration_ms   Nullable(Int64),
-      ingested_at   DateTime DEFAULT now()
-  ) ENGINE = ReplacingMergeTree(ingested_at)
-    ORDER BY (tenant_id, instance_id, paused_at);
-  ```
-
-- **analytics-api — `GET /reports/agent-availability`** *(deferred)*: endpoint que agrega `agent_pause_intervals FINAL` por `(agent_type_id, pool_id, period_date)`. Retorna: `total_pause_duration_ms`, `pause_count`, breakdown por `reason_id` com duração acumulada, disponível com `format=csv`. Pool scoping via `optional_pool_principal` (Arc 7c).
-
-- ~~**platform-ui — AgentReportsPage**~~ ✅: nova página `/config/agent-reports` (roles: supervisor, admin) com duas sub-abas: "Disponibilidade" (pivot agent × data, colunas de datas, células âmbar com intensidade = ms/4h) e "Pausas" (tabela flat de reason_breakdown com paginação e exportação CSV). `useAvailability` hook faz `GET /reports/agent-availability` com filtros de data, pool_id, agent_type_id. Nav entry 📈 "Relatórios de Agentes" adicionada ao grupo Configuração (roles: supervisor, admin). Rotas em `routes.tsx` e i18n em `pt-BR/en/shell.json` atualizadas.
-
-- ~~**platform-ui — PauseReasonModal**~~ ✅: modal intercepta o botão "Pausar" no `AgentAssistPage`. Busca motivos do Config API (`GET /config/agent_activity/pause_reasons`) com fallback para DEFAULT_REASONS (intervalo, almoço, treinamento, reunião, outro). `onPauseRequest` (modal) separado de `onTogglePause` (resume direto). `requires_note: true` exibe textarea obrigatória (≥ 3 chars). Confirma → `setIsPaused(true)` + chama best-effort `PUT /api/agent-pause` (endpoint deferred no orchestrator-bridge — graceful degradation). Fecha no Escape e backdrop click.
-
-**O que NÃO precisa ser adicionado** (já existe):
-- Volumetria de atendimento → `GET /reports/participation` (total_sessions, duration_ms por agente/pool)
-- Tempo médio de atendimento → `GET /reports/agents/performance` (avg_duration_ms, total_sessions)
-- Escalonamentos e transferências → `GET /reports/agents/performance` (escalation_rate, handoff_rate)
-
-
-### Arc 2 — fechamento
-
-- ~~E2E scenario 12: webchat auth flow + media upload end-to-end~~ ✅
-- ~~Usage Metering no Channel Gateway (voice_minutes, whatsapp_conversations, sms_segments)~~ ✅
-- ~~WebChat reconexão fase 2: tratar stream TTL expirado + jwt_secret por tenant~~ ✅
-- ~~AttachmentStore fase 2: S3/MinIO~~ ✅
-- ~~Magic bytes validation no upload (phase 2)~~ ✅
-- ~~Pricing Module v1: planos, tarifas, ciclo de billing~~ ✅
-
-### Arc 3 — Analytics, Dashboard Operacional e Relatórios
-
-**Dependência prévia:** ~~AI Gateway deve publicar `sentiment.updated` no Kafka antes da analytics-api poder agregar sentimento por pool em real-time.~~ ✅ Implementado: `sentiment_emitter.py` publica `sentiment.updated` no Kafka e mantém `{tenant_id}:pool:{pool_id}:sentiment_live` no Redis após cada turno LLM.
-
-**Novos pacotes:**
-- `packages/analytics-api/` — consumer Kafka→ClickHouse, API REST, SSE
-- `packages/operator-console/` — React app: heatmap, drill-down, intervenção
-
-**Tasks:**
-
-1. ~~**AI Gateway — publicar sentiment.updated**~~: ✅ `sentiment_emitter.py` — `emit_sentiment_updated` (Kafka topic `sentiment.updated`) + `update_sentiment_live` (Redis hash `{tenant_id}:pool:{pool_id}:sentiment_live`, TTL 300s, avg_score + distribuição por categoria). Wired em `SessionManager.update_partial_params`. Tests: `test_sentiment_emitter.py` (41 assertions).
-
-2. ~~**analytics-api — consumer + ClickHouse schema**~~: ✅ `packages/analytics-api/` — 6 tabelas ClickHouse (`sessions`, `queue_events`, `agent_events`, `messages`, `usage_events`, `sentiment_events`), todas `ReplacingMergeTree` para idempotência. Consumer multi-topic (8 tópicos) com commit manual após batch. Parsers por topic (models.py). ClickHouse + analytics-api adicionados ao docker-compose.test.yml. Tests: `test_consumer.py` (30 assertions).
-
-3. ~~**analytics-api — endpoints dashboard**~~: ✅ `GET /dashboard/operational` (SSE, Redis snapshots, 5s interval, `event: pools`), `GET /dashboard/metrics` (ClickHouse últimas 24h — sessions/agent_events/usage/sentiment agregados, retorna 503 em erro), `GET /dashboard/sentiment` (Redis `sentiment_live` por pool). Query helpers em `query.py`: `get_metrics_24h` (4 queries CH, `asyncio.to_thread`), `get_pool_snapshots` (scan+mget), `get_sentiment_live` (scan+hgetall). Tests: `test_dashboard.py` (18 assertions).
-
-4. ~~**analytics-api — endpoints reports + BI export**~~: ✅ `GET /reports/sessions`, `/reports/agents`, `/reports/quality`, `/reports/usage`. Filtros opcionais por endpoint (channel, outcome, close_reason, pool_id, agent_type_id, event_type, dimension, source_component, category). Paginação (`page`, `page_size`): max 1000 JSON / 10000 CSV. `format=csv` retorna `text/csv` com `Content-Disposition: attachment`. Helpers em `reports_query.py` (`asyncio.to_thread`, count + data query, `_to_csv`). Tests: `test_reports.py` (26 assertions).
-
-5. ~~**analytics-api — camada admin consolidada**~~: ✅ `GET /admin/consolidated` com agregação cross-tenant por canal e por pool; RBAC: tenant operator vê apenas `tenant_id = X`, admin vê tudo. Auth Bearer JWT HS256 (`admin_jwt_secret`). `Principal.effective_tenant()` aplica o filtro correto por role. `admin_query.py`: 3 queries CH (`by_channel` com breakdown por outcome, `by_pool` sessions + sentinel overlay de `sentiment_events`). Tests: `test_admin.py` (21 assertions — `TestPrincipal`, `TestRequirePrincipal`, `TestQueryConsolidated`).
-
-6. ~~**operator-console fase 1 — heatmap + métricas realtime**~~: ✅ heatmap de sentimento por pool (tiles coloridos por avg_score, ordered worst-first), painel lateral com métricas do pool (available/queue/SLA/distribuição) e resumo 24h; atualização via SSE ~5s. `packages/operator-console/` — React 18 + TypeScript + Vite. Hooks: `usePoolSnapshots` (SSE EventSource), `useSentimentLive` (poll 10s), `useMetrics24h` (poll 60s), `usePoolViews` (merge). Componentes: `HeatmapGrid`, `PoolTile` (cor interpolada, badge SLA breach), `MetricsPanel` (pool detail + distribution bars + 24h summary), `Header` (tenant input, status dot). Build: `tsc -b && vite build` → 157 kB JS gzip 50 kB.
-
-7. ~~**operator-console fase 2 — drill-down read-only**~~: ✅ pool → lista de sessões ativas → transcrição ao vivo. Backend: `sessions.py` em `analytics-api` — `GET /sessions/active` (ClickHouse `closed_at IS NULL` + Redis pipeline LRANGE sentiment, sorted worst-first), `GET /sessions/{id}/stream` (SSE: evento `history` com XRANGE + eventos `entry` via XREAD bloqueante, keepalive 15s; **ClickHouse fallback**: quando `xrange` retorna vazio — stream expirado em sessões fechadas — chama `store.query_session_messages()` via `asyncio.to_thread` antes de emitir o evento `history`; se ClickHouse também falhar, emite history vazia sem bloquear), e `GET /sessions/customer/{customer_id}` (histórico de contatos fechados por cliente, `ORDER BY opened_at DESC`, com `FINAL` para dedup ReplacingMergeTree). ClickHouse `sessions` table acrescida de coluna `customer_id Nullable(String)` + migration idempotente `ALTER TABLE ADD COLUMN IF NOT EXISTS`. Consumer/models: `parse_inbound` e `parse_conversations_event` passam `contact_id`/`customer_id` do evento Kafka. Frontend: `useActiveSessions` (poll 10s), `useSessionStream` (EventSource SSE), `SessionList`, `SessionTranscript`, `HeatmapGrid`/`PoolTile` drill-down. `App.tsx` refatorado para 3 níveis: heatmap → sessions → transcript. Build: 168 kB JS gzip 53 kB. Tests: `test_sessions.py` (61 assertions — TestClassify, TestSafeJson, TestParseEntry, TestFetchActiveSessions, TestOverlaySentiment, TestListActiveSessionsEndpoint, TestFetchCustomerHistory, TestCustomerHistoryEndpoint, TestStreamClickHouseFallback). Total analytics-api: 156/156.
-
-8. ~~**operator-console fase 3 — intervenção ativa**~~: ✅ Supervisores humanos entram em sessões ativas diretamente via REST (bypass do ciclo MCP agent_login). Backend: `packages/analytics-api/src/plughub_analytics_api/supervisor.py` — `POST /supervisor/join` (cria `supervisor:{session_id}:active` no Redis TTL 4h, XADD `participant_joined` agents_only), `POST /supervisor/message` (XADD `message` no formato `StreamSubscriber._map_event()`, visibility `agents_only` ou `all`), `POST /supervisor/leave` (XADD `participant_left`, DELETE Redis key, idempotente). Router wired em `main.py`. Frontend: `SupervisorPanel.tsx` (composer com visibility toggle, Enter=send, Shift+Enter=newline, Leave button), `SupervisorJoinButton` (inline no header), `useSupervisor` hook (`join/message/leave` com estado `idle|joining|active|leaving|error`), `SupervisorState` type. `SessionTranscript.tsx` atualizado: botão "Entrar como supervisor" no header → `SupervisorPanel` na base quando ativo. Build: 173 kB JS gzip 54 kB.
-
-9. ~~**Metabase setup**~~: ✅ `docker-compose.infra.yml` — serviços `metabase-driver-init` (baixa driver ClickHouse v1.3.2), `metabase` (v0.50.0, porta 3000, persiste em PostgreSQL), `metabase-setup` (one-shot via API Metabase). `infra/metabase/clickhouse_users.sql` — usuários CH read-only por tenant + Row Policies em 6 tabelas (sandboxing por `tenant_id` via conexão isolada). `infra/metabase/setup.py` — inicialização automatizada: admin account, conexões ClickHouse por tenant, 5 questions base (Sessões por Canal, Queue Events, Agent Performance, Usage Metering, Sentiment Timeline), dashboard "PlugHub Analytics" com grid de 5 cards. Acesso: http://localhost:3000 · admin@plughub.local.
-
-10. ~~**Config Management Module — separação env vars × configuração de módulo**~~: ✅ `packages/config-api/` com tabela PostgreSQL `platform_config (tenant_id, namespace, key, value JSONB, updated_at)` + API REST CRUD (`GET/PUT/DELETE /config/{namespace}/{key}`) + seed de todos os valores atuais hardcoded. Leitura com cache Redis (TTL 60s) para não adicionar latência no hot path. ~~Fase 2: UI de visualização no operator-console~~ ✅ `ConfigPanel.tsx` — sidebar de namespaces, tabela de keys com valores resolvidos, EditDrawer com JSON editor inline, scope toggle (global vs tenant), admin token local.
-    - **Dois níveis**: `tenant_id = '__global__'` para defaults de plataforma; tenant real para overrides específicos. Lookup: tenant wins over global.
-    - **9 namespaces seedados**: `sentiment` (thresholds, live_ttl_s), `routing` (snapshot_ttl_s, sla_default_ms, score_weights, estimated_wait_factor, congestion_sla_factor), `session` (ai_gateway_ttl_s, channel_gateway_ttl_s), `consumer` (batch_size, timeout_ms, restart_delay_s, max_restart_delay_s), `dashboard` (sse_interval_s, sse_retry_ms), `webchat` (auth_timeout_s, attachment_expiry_days, upload_limits_mb), `masking` (authorized_roles, default_retention_days, capture_input_default, capture_output_default), `quota` (max_concurrent_sessions, llm_tokens_daily, messages_daily), `dashboards` (default_template_id, allow_user_customization, max_cards_per_dashboard — templates armazenados como `template:{uuid}`, layouts pessoais como `layout:{tenant}:{user}`).
-    - **`ConfigStore`**: `get()` (cache hit → DB miss), `get_or_default()`, `list_namespace()` (com cache de namespace), `list_all()`, `set()` (upsert + invalidação imediata), `delete()`. Invalidação global faz SCAN para limpar variantes de tenant.
-    - **`config.changed` (Kafka)**: Config API publica no tópico `config.changed` após cada PUT/DELETE bem-sucedido. Payload: `{event, tenant_id, namespace, key, operation, updated_at}`. Consumidores roteiam por namespace:
-      | Namespace | Consumidor | Reação |
-      |---|---|---|
-      | `quota` | orchestrator-bridge | `bootstrap.request_refresh()` — reconcilia instâncias |
-      | `routing` | routing-engine (futuro) | invalida cache local de SLA/scoring |
-      | `masking`, `session`, `webchat`, `sentiment`, `consumer`, `dashboard` | (cache Redis 60s) | sem ação imediata; propagação natural via TTL |
-    - Tests: `test_store.py` (27 assertions — TestConfigCache, TestConfigStoreGet, TestConfigStoreSet, TestConfigStoreDelete, TestConfigStoreList, TestSeedData).
-
-11. ~~**Timeseries endpoints (analytics-api)**~~: ✅ `GET /reports/timeseries/volume`, `/reports/timeseries/handle_time`, `/reports/timeseries/score`. Parâmetros: `tenant_id`, `interval` (minutos, 1–1440, default 60), `from_dt`, `to_dt`, `breakdown_by` (pool_id|channel para volume/handle_time; campaign_id|form_id para score), `pool_id`, `format` (json|csv). Usa `toStartOfInterval(timestamp, toIntervalMinute($interval))` para bucketing dinâmico. Arquivo `packages/analytics-api/src/plughub_analytics_api/timeseries_query.py`. Pool scoping via `optional_pool_principal` (Arc 7c). Resposta: `{ buckets: [{bucket, value, breakdown}], meta: {interval_minutes, from_dt, to_dt, total} }`.
-
-12. ~~**Dashboard com drag-and-drop e templates (platform-ui)**~~: ✅ `packages/platform-ui/src/modules/dashboards/DashboardsPage.tsx` — substitui `PlaceholderPage` em `/dashboards`. Componentes principais: `TimeseriesChart` genérico (`src/components/TimeseriesChart/`), `DashboardsPage` com react-grid-layout, sistema de templates via Config API namespace `dashboards`.
-
-    **TimeseriesChart** (`src/components/TimeseriesChart/`):
-    - `TimeseriesChart.tsx` — componente Recharts; `compact=true` = sparkline + KPI para cards; `compact=false` = modo completo com interval picker, date range, exportação CSV (nível 1) e raw (nível 2)
-    - `useTimeseriesData.ts` — hook de fetch + polling; suporta `accessToken` para Bearer
-    - `formatters.ts` — `formatCount`, `formatDurationMs`, `formatScore`, `formatBucketLabel`
-    - `chartType: bar | line | area`; paleta de 8 cores para breakdown series
-
-    **DashboardsPage** — rota `/dashboards`, acessível via Configuração → Templates de Dashboard (gate: `config.plataforma`):
-    - Sidebar (admin only): lista de templates + botão "Novo template"; nome + descrição salvos no Config API como `dashboards.template:{uuid}`
-    - Grid: react-grid-layout 12 colunas, cards draggable/resizable em modo edição
-    - Card types: `timeseries_volume`, `timeseries_handle_time`, `timeseries_score`, `pool_status`
-    - Modo admin: criar/remover templates, adicionar/remover cards, salvar layout no template compartilhado
-    - Modo usuário: drag/resize persiste como layout pessoal (`dashboards.layout:{tenant}:{user}`) sem alterar o template compartilhado
-    - Template padrão lido de `module_config.dashboard.default_template_id` do JWT (ABAC)
-    - Fallback: layouts pessoais armazenados em localStorage quando admin token ausente
-    - Botão "Editar" desabilitado quando nenhum template está selecionado (previne erros de operação)
-    - Grid e editMode resetam automaticamente quando template é deletado (useEffect null-template cleanup)
-
-    **Config API — namespace `dashboards`** (3 novas chaves seedadas):
-    - `default_template_id` → null
-    - `allow_user_customization` → true
-    - `max_cards_per_dashboard` → 20
-
-    **Config API — fix: admin token via query param fallback** (`router.py`):
-    - `_require_admin` aceita o token tanto via `X-Admin-Token` header quanto via `?admin_token=` query param
-    - O fallback por query param garante que DELETE requests funcionem mesmo quando reverse proxies (nginx) removem headers customizados
-    - `dashboard-hooks.ts`: `configDelete` envia o token em ambos (header + query param); todas as funções propagam `tenant_id` como query param; `configListNamespace` faz unwrap correto do envelope `{ entries: {...} }` da Config API
-
-    **Tipos em `src/types/index.ts`:** `TimeseriesBreakdown`, `TimeseriesBucket`, `TimeseriesMeta`, `TimeseriesResponse`, `DashboardCardType`, `TimeseriesCardConfig`, `KpiCardConfig`, `PoolStatusCardConfig`, `DashboardCardConfig`, `DashboardCard`, `DashboardTemplate`
-
-    **Deps adicionadas ao `package.json`:** `react-grid-layout@^1.4.4`, `@types/react-grid-layout@^1.3.5`
-
-**Arquitetura de dados:**
-```
-Kafka topics → analytics-api consumer → ClickHouse
-  (conversations.*, agent.done, usage.events, queue.position_updated, sentiment.updated)
-
-Redis snapshots + sentiment_live → analytics-api → SSE → operator-console
-PostgreSQL (evaluation, sentiment_timeline) → analytics-api (queries pontuais)
-
-ClickHouse → /reports/timeseries/* → TimeseriesChart (platform-ui) → DashboardsPage cards
-ClickHouse → Metabase (relatórios self-service)
-analytics-api REST → BI externos (PowerBI, Looker, Tableau)
-```
-
-### Arc 5 — ContactSegment (✅ implementado — v1)
+## Arc 5 — ContactSegment
 
 Base analítica para SLA por agente, avaliação granular e relatórios de participação com duração real.
 ADR: `docs/adr/adr-contact-segments.md`.
 
-**ContactSegment** é a entidade que representa uma janela de participação contígua de um agente numa sessão.
-Cada segmento tem `segment_id` próprio, `sequence_index` para handoffs sequenciais, e `parent_segment_id`
-para a topologia de conferência (specialist aponta para o primary segment).
+**ContactSegment** representa uma janela de participação contígua de um agente numa sessão.
+Cada segmento tem `segment_id` próprio, `sequence_index` para handoffs e `parent_segment_id`
+para topologia de conferência (specialist aponta para primary).
 
-#### Schemas — `@plughub/schemas/src/contact-segment.ts`
+### Schemas — `@plughub/schemas/src/contact-segment.ts`
 
-```typescript
-ContactSegmentSchema {
-  segment_id:        UUID
-  session_id, tenant_id, participant_id, pool_id, agent_type_id, instance_id
-  role:              "primary" | "specialist" | "supervisor" | "evaluator" | "reviewer"
-  agent_type:        "ai" | "human"
-  parent_segment_id: UUID | null      // null para primary; specialist aponta para primary
-  sequence_index:    number           // 0 para primeiro primary; 1+ para handoffs sequenciais
-  started_at, ended_at, duration_ms
-  outcome:           "resolved" | "escalated" | "transferred" | "abandoned" | "timeout" | null
-  close_reason, handoff_reason, issue_status
-}
+`ContactSegmentSchema`: `segment_id`, `session_id`, `tenant_id`, `participant_id`, `pool_id`, `agent_type_id`, `instance_id`, `role` (primary/specialist/supervisor/evaluator/reviewer), `agent_type` (ai/human), `parent_segment_id` (null para primary), `sequence_index` (0 para primeiro primary; 1+ para handoffs), `started_at`, `ended_at`, `duration_ms`, `outcome` (resolved/escalated/transferred/abandoned/timeout/null), `close_reason`, `handoff_reason`, `issue_status`.
 
-ConversationParticipantEventSchema {
-  event_type:        "participant.joined" | "participant.left"
-  segment_id:        UUID    // obrigatório — gerado no orchestrator-bridge
-  sequence_index, parent_segment_id
-  ...demais campos existentes...
-}
-```
+`ConversationParticipantEventSchema`: estende o evento existente com `segment_id` (UUID obrigatório), `sequence_index`, `parent_segment_id`, `outcome`, `close_reason`, `handoff_reason`, `issue_status`.
 
-#### orchestrator-bridge — geração de segment_id
-
-`_publish_participant_event` estendida com os parâmetros: `segment_id`, `sequence_index`, `parent_segment_id`, `outcome`, `close_reason`, `handoff_reason`, `issue_status`.
+### orchestrator-bridge — Redis keys de segment tracking
 
 | Evento | Redis key | Lógica |
 |--------|-----------|--------|
-| `activate_human_agent` | `session:{id}:segment:{instance_id}` (TTL 4h) + `session:{id}:primary_segment` + INCR `session:{id}:segment_seq` | Gera `_seg_id`, armazena, publica `participant_joined` com `sequence_index` |
-| `process_routed` (native joined) | `session:{id}:segment:{native_instance_id}` (TTL 4h) | Lê `primary_segment` para conferência (→ `parent_segment_id`), armazena novo `_part_seg_id` |
-| `process_routed` (native left) | GETDEL `session:{id}:segment:{instance_id}` | Recupera o mesmo UUID usado no joined; passa `outcome` do `agent_result` |
-| `process_contact_event` (human left) | GETDEL `session:{id}:segment:{instance_id}` | Mesmo padrão |
+| `activate_human_agent` | `session:{id}:segment:{instance_id}` (TTL 4h) + `session:{id}:primary_segment` + INCR `session:{id}:segment_seq` | Gera UUID, armazena, publica `participant_joined` com `sequence_index` |
+| `process_routed` joined | `session:{id}:segment:{native_instance_id}` (TTL 4h) | Lê `primary_segment` → `parent_segment_id` para conferência |
+| `process_routed` left | GETDEL `session:{id}:segment:{instance_id}` | Recupera UUID; passa `outcome` do `agent_result` |
+| `process_contact_event` human left | GETDEL `session:{id}:segment:{instance_id}` | Mesmo padrão |
 
-#### analytics-api — tabelas ClickHouse
+### analytics-api — ClickHouse
 
 | Tabela | Engine | Descrição |
 |--------|--------|-----------|
-| `analytics.segments` | `ReplacingMergeTree(ingested_at)` ORDER BY `(tenant_id, session_id, segment_id)` | Uma linha por participação; `participant_left` win sobre `participant_joined` no merge |
-| `analytics.session_timeline` | `ReplacingMergeTree(ingested_at)` ORDER BY `(tenant_id, session_id, timestamp, event_id)` | Série temporal de eventos enriquecidos com `segment_id` |
+| `analytics.segments` | `ReplacingMergeTree(ingested_at)` ORDER BY `(tenant_id, session_id, segment_id)` | Uma linha por participação; `participant_left` win no merge |
+| `analytics.session_timeline` | `ReplacingMergeTree(ingested_at)` ORDER BY `(tenant_id, session_id, timestamp, event_id)` | Série temporal enriquecida com `segment_id` |
+| `mv_agent_performance_daily` | `AggregatingMergeTree` (POPULATE) | Materializada; lida via `v_agent_performance` |
+| `mv_segment_summary` | `AggregatingMergeTree` (POPULATE) | Materializada; lida via `v_segment_summary` |
 
-#### analytics-api — `models.py`
+### Endpoints
 
-`parse_participant_event` retorna `list[dict]` em vez de `dict` — dois rows por evento:
-- `participation_row` → tabela `participation_intervals` (legado, compatibilidade Arc 3 Fase C)
-- `segment_row` → tabela `segments` (Arc 5); inclui `segment_id`, `parent_segment_id`, `sequence_index`, `outcome`, `close_reason`, `handoff_reason`, `issue_status`
+| Endpoint | Descrição |
+|----------|-----------|
+| `GET /reports/segments` | Linhas de `segments FINAL`; filtros: session_id, pool_id, agent_type_id, role, outcome, from_dt, to_dt; `format=csv` |
+| `GET /reports/agents/performance` | Métricas agregadas por (agent_type_id, pool_id, role): total_sessions, avg_duration_ms, escalation_rate, handoff_rate |
+| `GET /reports/agent-performance/daily` | MV-backed — por (agent_type_id, pool_id, period_date): resolution_rate, escalation_rate, avg_duration_ms |
+| `GET /reports/sessions/complexity` | MV-backed — por sessão: segment_count, handoff_count, escalation_count, total_duration_ms |
 
-#### analytics-api — endpoints
+E2E scenario 23 (`--segments` flag): Parts A/B/C — 11 assertions.
+SegmentEnricher para enriquecimento post-hoc: lookup chain LRU → Redis → ClickHouse; total analytics-api: 226/226 testes.
 
-| Endpoint | Filtros | Descrição |
-|----------|---------|-----------|
-| `GET /reports/segments` | `session_id`, `pool_id`, `agent_type_id`, `role`, `outcome`, `from_dt`, `to_dt`, `page`, `page_size`, `format` | Linhas de `segments FINAL` (ReplacingMergeTree dedup); `format=csv` disponível |
-| `GET /reports/agents/performance` | `pool_id`, `agent_type_id`, `role`, `from_dt`, `to_dt`, `format` | Métricas agregadas por `(agent_type_id, pool_id, role)`: `total_sessions`, `avg_duration_ms`, `escalation_rate`, `handoff_rate`, breakdowns por outcome; sem paginação |
-| `GET /reports/agent-performance/daily` | `pool_id`, `agent_type_id`, `from_dt` (date), `to_dt` (date), `format` | **MV-backed** — lê `v_agent_performance` (sobre `mv_agent_performance_daily`); uma linha por `(agent_type_id, pool_id, period_date)`; colunas: `resolution_rate`, `escalation_rate`, `transfer_rate`, `human_rate`, `avg_duration_ms`; pool scoping suportado |
-| `GET /reports/sessions/complexity` | `pool_id`, `min_handoffs`, `from_dt`, `to_dt`, `page`, `page_size`, `format` | **MV-backed** — lê `v_segment_summary` (sobre `mv_segment_summary`) JOIN `sessions FINAL` para filtro de data/pool; uma linha por sessão: `segment_count`, `handoff_count`, `escalation_count`, `total_duration_ms` |
+---
 
-#### Arquivos modificados / criados
+## AI Gateway — Multi-account Rotation
 
-| Arquivo | Alteração |
-|---------|-----------|
-| `packages/schemas/src/contact-segment.ts` | CRIADO — `SegmentOutcomeSchema`, `ContactSegmentSchema`, `ConversationParticipantEventSchema` |
-| `packages/schemas/src/index.ts` | Exporta os novos schemas de contact-segment |
-| `packages/orchestrator-bridge/src/plughub_orchestrator_bridge/main.py` | `_publish_participant_event` + Redis keys de segment tracking em `activate_human_agent`, `process_routed`, `process_contact_event` |
-| `packages/analytics-api/src/plughub_analytics_api/clickhouse.py` | `_DDL_SEGMENTS`, `_DDL_SESSION_TIMELINE`, `upsert_segment()`, `insert_timeline_event()` |
-| `packages/analytics-api/src/plughub_analytics_api/models.py` | `parse_participant_event` → `list[dict]`; segment_row completo |
-| `packages/analytics-api/src/plughub_analytics_api/consumer.py` | Dispatch `segments` → `upsert_segment`; `session_timeline` → `insert_timeline_event` |
-| `packages/analytics-api/src/plughub_analytics_api/reports_query.py` | `query_segments_report` + `_fetch_segments`; `query_agent_performance_report` + `_fetch_agent_performance`; `query_agent_performance_daily` + `_fetch_agent_performance_daily`; `query_session_complexity` + `_fetch_session_complexity` |
-| `packages/analytics-api/src/plughub_analytics_api/reports.py` | `GET /reports/segments`; `GET /reports/agents/performance`; `GET /reports/agent-performance/daily`; `GET /reports/sessions/complexity` |
-| `packages/analytics-api/.../tests/test_consumer.py` | `TestParseParticipantEvent` (8 assertions); `test_segments_dispatched`, `test_session_timeline_dispatched` |
-| `packages/analytics-api/.../tests/test_reports.py` | `TestQuerySegmentsReport` (3); `TestQueryAgentPerformanceReport` (5); `TestQueryAgentPerformanceDaily` (5); `TestQuerySessionComplexity` (5) |
-| `packages/e2e-tests/scenarios/23_contact_segments.ts` | CRIADO — Parts A/B/C (11 assertions) |
-| `packages/e2e-tests/runner.ts` | `--segments` flag + import `scenario23` |
+Suporte a múltiplas chaves de API Anthropic + OpenAI como fallback, isolamento de workloads por `model_profile` e rotação automática sob throttling. Implementado em `packages/ai-gateway/src/plughub_ai_gateway/account_selector.py`.
 
-**Pendente (v2):** todos os itens implementados ✅
-- ~~Enrichment post-hoc de `segment_id` em eventos sem o campo (sentimento, mcp.audit)~~ ✅ `SegmentEnricher` — ver Pending section removida acima
-- ~~Materialized views `segment_summary` e `agent_performance`~~ ✅ (`mv_agent_performance_daily` + `mv_segment_summary` + readable views + dois novos endpoints REST)
+### AccountSelector — Redis-backed
 
-### AI Gateway — Multi-account rotation, workload isolation, fallback chain (✅ implementado)
+Stateless por chamada. Algoritmo: para cada conta disponível do provider, verifica throttle key (`ai_gw:{provider}:{key_id}:throttled`, TTL configurável); calcula `score = (rpm_used/rpm_limit × 0.7) + (tpm_used/tpm_limit × 0.3)`; retorna conta com menor score. `key_id` = SHA-256(api_key)[:16] — chave bruta nunca persiste.
 
-Suporte a múltiplas chaves de API Anthropic + OpenAI como fallback, com isolamento de workloads por `model_profile` e rotação automática sob throttling.
-
-#### AccountSelector — Redis-backed load balancing
-
-Implementado em `packages/ai-gateway/src/plughub_ai_gateway/account_selector.py`.
-
-**Princípio:** stateless a cada chamada. Nenhum estado em memória — todas as decisões baseadas em Redis.
-
-```
-AccountSelector.pick(provider):
-  1. Para cada conta registrada do provider:
-     a. Verifica throttle key (MGET ai_gw:{provider}:{key_id}:throttled) — exclui se presente
-     b. Calcula score: (rpm_used/rpm_limit × rpm_weight) + (tpm_used/tpm_limit × tpm_weight)
-  2. Retorna provider_key da conta com menor score
-  3. None → sem contas disponíveis → fallback cross-provider
-```
-
-**Redis keys:**
-
-| Key | TTL | Conteúdo |
-|---|---|---|
-| `ai_gw:{provider}:{key_id}:throttled` | `throttle_retry_after_s` (Config API) | `"1"` — conta excluída da rotação |
-| `ai_gw:{provider}:{key_id}:rpm` | 60 s (rolling) | Contador de requests no minuto atual |
-| `ai_gw:{provider}:{key_id}:tpm` | 60 s (rolling) | Contador de tokens no minuto atual |
-
-**`key_id`** = SHA-256(api_key)[:16] — nunca persiste o valor bruto da chave.
-
-**Scoring:** `score = (rpm_used/rpm_limit × 0.7) + (tpm_used/tpm_limit × 0.3)`. Pesos configuráveis via Config API namespace `ai_gateway` (`utilization_rpm_weight`).
-
-#### Configuração multi-chave
+### Configuração
 
 ```bash
-# Uma chave (backward compatible)
-PLUGHUB_ANTHROPIC_API_KEY=sk-ant-...
-
-# Múltiplas chaves (vírgula separado — AccountSelector ativado)
-PLUGHUB_ANTHROPIC_API_KEYS=sk-ant-...,sk-ant-...,sk-ant-...
-
-# OpenAI como fallback (opcional — requer pacote openai>=1.0.0)
-PLUGHUB_OPENAI_API_KEYS=sk-...
+PLUGHUB_ANTHROPIC_API_KEY=sk-ant-...         # single key (backward compat)
+PLUGHUB_ANTHROPIC_API_KEYS=sk-1,sk-2,sk-3   # multi-key — AccountSelector ativado
+PLUGHUB_OPENAI_API_KEYS=sk-...               # OpenAI fallback (opcional; requer openai>=1.0.0)
 ```
 
-`Settings.get_anthropic_keys()` / `get_openai_keys()` normalizam ambos os formatos.
+### `_call_with_fallback`
 
-#### Registro de providers em main.py
+`AccountSelector.pick(provider)` → tenta provider key → em 429/529: `mark_throttled` → próxima conta → se todas throttled: fallback cross-provider (`FallbackConfig`) → se nenhum fallback: `ProviderError`.
 
-```python
-# Anthropic: um provider por chave + alias "anthropic" → primeira chave (backward compat /v1/turn, /v1/reason)
-for api_key in anthropic_keys:
-    acc = LLMAccount(provider="anthropic", api_key=api_key, rpm_limit=..., tpm_limit=...)
-    providers[acc.provider_key] = AnthropicProvider(api_key=api_key)   # "anthropic:{key_id}"
-    accounts.append(acc)
-providers["anthropic"] = providers[accounts[0].provider_key]            # alias primeira chave
-
-# OpenAI: idem, opcional
-for api_key in openai_keys:
-    acc = LLMAccount(provider="openai", api_key=api_key, ...)
-    providers[acc.provider_key] = OpenAIProvider(api_key=api_key)       # "openai:{key_id}"
-    accounts.append(acc)
-```
-
-`AccountSelector(redis, accounts)` criado se `accounts` não-vazio; `None` em dev sem chaves.
-
-#### _call_with_fallback — cadeia completa
-
-```
-InferenceEngine._call_with_fallback(profile, messages, tools):
-
-  1. AccountSelector.pick(profile.provider)
-       → provider_key (e.g. "anthropic:abc123")
-       → None → vai direto ao fallback cross-provider
-
-  2. provider.call(messages, tools, model_id, max_tokens)
-       ✓ success → record_usage(provider_key, tokens) → return
-       ✗ retryable (rate_limit / status_429 / status_529):
-           → mark_throttled(provider_key, ttl=throttle_retry_after_s)
-           → AccountSelector.pick(provider) novamente (próxima conta)
-               → retry → sucesso ou exaustão
-       ✗ não-retryable → raise ProviderError
-
-  3. Sem contas disponíveis (todas throttled) OU sem AccountSelector:
-       profile.fallback presente?
-           Sim → FallbackConfig(provider, model_id)
-                 → providers[fallback.provider].call(model_id=fallback.model_id, ...)
-                 → return (provider_used=fallback.provider)
-           Não → raise ProviderError(retryable=False)
-```
-
-#### Isolamento de workloads por model_profile
+### Model profiles
 
 | Profile | Model | Fallback | Uso |
 |---|---|---|---|
-| `realtime` | `claude-sonnet-4-6` | `gpt-4o` (se OpenAI configurado) | Agentes em atendimento ao vivo |
-| `balanced` | `claude-haiku-4-5-20251001` | `gpt-4o-mini` | Fluxos de baixa latência |
-| `evaluation` | `claude-haiku-4-5-20251001` | `model_balanced` | Avaliação batch — isolado de tráfego realtime |
+| `realtime` | `claude-sonnet-4-6` | `gpt-4o` | Agentes ao vivo |
+| `balanced` | `claude-haiku-4-5-20251001` | `gpt-4o-mini` | Fluxos low-latency |
+| `evaluation` | `claude-haiku-4-5-20251001` | `model_balanced` | Avaliação batch — isolado do tráfego realtime |
 
-O profile `evaluation` garante que workloads de avaliação não compitam com agentes em sessão.
-`evaluation_model` e `evaluation_max_tokens` são configuráveis via Config API namespace `ai_gateway`.
+### Config API — namespace `ai_gateway`
 
-#### OpenAIProvider
+`account_rotation_enabled` (default: true), `throttle_retry_after_s` (60), `utilization_rpm_weight` (0.7), `evaluation_model`, `evaluation_max_tokens` (2048), `openai_fallback_enabled` (false).
 
-`packages/ai-gateway/src/plughub_ai_gateway/providers/openai_provider.py`
+29 assertions em `test_account_selector.py`. E2E scenario 26 (`--fallback`): throttle → fallback → recovery.
 
-- Degrada graciosamente se pacote `openai` ausente (levanta `ProviderError(error_code="sdk_not_installed")`)
-- Converte formato de tools Anthropic (`input_schema`) para OpenAI (`function.parameters`)
-- Role mapping: `customer→user`, `agent→assistant`, `system→system` (system vai como `role: system`, diferente do Anthropic que usa campo `system=`)
-- Stop reason: `tool_calls→tool_use`, `length→max_tokens`, else `end_turn`
+---
 
-#### Config API — namespace ai_gateway
+## Pending (next iteration)
 
-| Key | Default | Descrição |
-|---|---|---|
-| `account_rotation_enabled` | `true` | Habilita AccountSelector; `false` = sempre usa primeira chave |
-| `throttle_retry_after_s` | `60` | TTL de exclusão após 429/529 |
-| `utilization_rpm_weight` | `0.7` | Peso RPM no score (TPM = 1 - rpm_weight) |
-| `evaluation_model` | `claude-haiku-4-5-20251001` | Modelo do profile `evaluation` |
-| `evaluation_max_tokens` | `2048` | Max tokens para inferência de avaliação |
-| `openai_fallback_enabled` | `false` | Documenta se fallback OpenAI está ativo (operacional) |
+> **Regra de registro:** toda vez que um escopo é dividido em fases e apenas algumas são implementadas, as fases restantes são listadas aqui **e** em `TODO.md`. Itens concluídos movidos para `CHANGELOG.md`.
 
-#### Tests
+### Usage Metering — Channel Gateway adapters
 
-`packages/ai-gateway/src/plughub_ai_gateway/tests/test_account_selector.py` — 29 assertions:
-`TestLLMAccount` (5), `TestAccountSelectorPick` (8), `TestMarkThrottled` (2), `TestRecordUsage` (3), `TestHealthSummary` (3), `TestProvidersFor` (2), `TestSettingsKeyParsing` (6).
+- **whatsapp_conversations, voice_minutes, sms_segments, email_messages** *(deferred)*: funções em `usage_emitter.py` implementadas, mas os adapters de canal ainda não as chamam. Será wired quando cada adapter for criado.
+
+### Pricing Module
+
+- **Integração metering × pricing** *(deferred)*: módulo que aplica planos do Config API e escreve `{tenant}:quota:limit:*`. Metering registra mas pricing não consome.
+
+### Arc 8 — Relatório de Disponibilidade e Pausas de Agentes
+
+Frontend implementado (`AgentReportsPage.tsx`, `PauseReasonModal.tsx`). Backend pendente:
+
+- **`agent_pause` schema**: adicionar `reason_id` e `reason_label` ao `AgentPauseEventSchema` em `packages/schemas/src/platform-events.ts`.
+- **Config API — motivos de pausa**: namespace `agent_activity`, chave `pause_reasons` (lista `{ id, label, requires_note }`). Motivos padrão: intervalo, almoço, treinamento, reunião, outro. Override por pool via `pause_reasons:{pool_id}`.
+- **orchestrator-bridge**: publicar `agent_pause`/`agent_ready` com motivo via `PUT /api/agent-pause/:instanceId`.
+- **analytics-api — consumir pausas**: tabela `agent_pause_intervals` (ClickHouse, `ReplacingMergeTree`). `parse_agent_lifecycle` estendido.
+- **analytics-api — `GET /reports/agent-availability`**: agrega por `(agent_type_id, pool_id, period_date)`. Pool scoping via `optional_pool_principal`.
+
+### CLAUDE.md — Otimização
+
+- **Fase 2** *(blocked)*: Mover Arc 6, Arc 4, Arc 7, ABAC, ContextStore para `docs/modules/`. Resumo de 15–20 linhas por módulo com link.
+- **Fase 3** *(blocked)*: Mover seções menores para `docs/modules/`. Target: ≤ 800 linhas no CLAUDE.md.
 
 ## Arc 6 — Plataforma de Avaliação de Qualidade
 
@@ -4102,7 +3920,17 @@ Permite que agentes nativos sejam usados como automação de processos com etapa
 
 Resolução de prioridade: exceptions > holidays > weekly_schedule.
 Operadores: UNION (OR) + INTERSECTION (AND) por entidade.
-Tests: `test_engine.py` — 25 assertions.
+Tests: `test_engine.py` — 41 assertions (25 engine + 16 novos para MM-DD holidays e status 3-state).
+
+**Melhorias implementadas (Tasks #162, #163, #164):**
+
+- **Feriados recorrentes MM-DD**: O campo `date` em `HolidaySchema` aceita tanto `YYYY-MM-DD` (feriado pontual) quanto `MM-DD` (recorrente todo ano). `_build_holidays_index` indexa pelo valor original; `_resolve_date` verifica `YYYY-MM-DD` primeiro e cai para `MM-DD` quando não há match exato. Engine e schemas atualizados.
+
+- **Status 3-state open/closed/holiday**: `get_open_status()` retorna `"open" | "closed" | "holiday"` em vez de booleano. `_calendar_status()` e `_aggregate_status()` propagam `"holiday"` quando uma entidade está fechada por feriado. `is_open()` mantido como wrapper booleano (`@deprecated`). Endpoint `GET /v1/engine/is-open` retorna `{ status, open (deprecated), evaluated_at, entity_type, entity_id, calendars_count }`.
+
+- **Timezone por tenant** (`GET /v1/tenant-config`, `PATCH /v1/tenant-config`): Tabela `calendar.tenant_config` com campo `default_timezone`. `CalendarCreate.timezone` é `Optional[str]` — `None` herda o default do tenant (fallback: `America/Sao_Paulo`). Validação IANA via `pytz.timezone()` no PATCH, antes de tocar o banco.
+
+Tests: `test_router.py` — 17 assertions (TestGetTenantConfig ×4, TestUpdateTenantConfig ×9, TestCreateCalendarTimezoneInheritance ×4). Total calendar-api: **58/58**.
 
 ### Skill Flow `suspend` step
 

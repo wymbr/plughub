@@ -33,10 +33,11 @@ import {
   verifySessionToken,
   InvalidTokenError,
 } from "../infra/jwt"
-import { MaskingService }  from "../lib/masking"
-import { TokenVault }      from "../lib/token-vault"
-import { emitMessageSent }  from "../lib/usage-emitter"
-import { parseMentions }    from "../lib/mention-parser"
+import { MaskingService }     from "../lib/masking"
+import { TokenVault }         from "../lib/token-vault"
+import { emitMessageSent }    from "../lib/usage-emitter"
+import { parseMentions }      from "../lib/mention-parser"
+import { writeStreamEntry }   from "../lib/write-stream-entry"
 
 // ─── Dependências injetadas ───────────────────────────────────────────────────
 
@@ -522,21 +523,24 @@ export function registerSessionTools(server: McpServer, deps: SessionDeps): void
           payload,
         }
 
-        // ── Escrita no stream canônico (Redis Streams) ────────────────────
-        // XADD session:{id}:stream * event_id <uuid> type message ...
+        // ── Escrita no stream canônico via writeStreamEntry ──────────────
+        // Usa a função centralizada que garante event_id, segment_id,
+        // author_id e author_role como campos flat — nunca xadd direto.
         try {
-          await (redis as any).xadd(
-            `session:${session_id}:stream`,
-            "*",
-            "event_id",   event_id,
-            "type",       "message",
-            "timestamp",  timestamp,
-            "author",     JSON.stringify(event.author),
-            "visibility", JSON.stringify(effectiveVisibility),
-            "payload",    JSON.stringify(payload),
-          )
-        } catch {
-          // Redis Streams não suportado no ambiente (ex: mock) — fallback para RPUSH
+          await writeStreamEntry(redis, {
+            stream_key:  `session:${session_id}:stream`,
+            type:        "message",
+            author_id:   participant_id,
+            author_role: role,
+            visibility:  effectiveVisibility,
+            payload,
+            event_id,
+            timestamp,
+          })
+        } catch (xaddErr) {
+          // ZodError → propaga (entry inválido não deve ser escrito)
+          if (xaddErr instanceof z.ZodError) throw xaddErr
+          // Redis Streams não suportado (ex: mock) — fallback para RPUSH
           await redis.rpush(
             `session:${session_id}:messages`,
             JSON.stringify({
@@ -674,23 +678,23 @@ export function registerSessionTools(server: McpServer, deps: SessionDeps): void
         const event_id   = crypto.randomUUID()
         const timestamp  = new Date().toISOString()
 
-        // Escreve evento no stream canônico
+        // Escreve evento no stream canônico via writeStreamEntry
         try {
-          await (redis as any).xadd(
-            `session:${session_id}:stream`,
-            "*",
-            "event_id",      event_id,
-            "type",          "interaction_request",
-            "timestamp",     timestamp,
-            "author",        JSON.stringify({ participant_id, role: "primary" }),
-            "visibility",    JSON.stringify("agents_only"),
-            "payload",       JSON.stringify({
+          await writeStreamEntry(redis, {
+            stream_key:  `session:${session_id}:stream`,
+            type:        "interaction_request",
+            author_id:   participant_id,
+            author_role: "primary",
+            visibility:  "agents_only",
+            payload: {
               interaction_id:   event_id,
               interaction_type: "session_invite",
               prompt:           reason ?? "session_invite",
               timeout_s:        0,
-            }),
-          )
+            },
+            event_id,
+            timestamp,
+          })
         } catch { /* stream não disponível — non-fatal */ }
 
         // Publica em conversations.inbound para o Routing Engine alocar o especialista
@@ -753,19 +757,19 @@ export function registerSessionTools(server: McpServer, deps: SessionDeps): void
 
         // Escreve evento de saída do agente atual no stream (visibility: all — cliente precisa saber)
         try {
-          await (redis as any).xadd(
-            `session:${session_id}:stream`,
-            "*",
-            "event_id",   event_id,
-            "type",       "participant_left",
-            "timestamp",  timestamp,
-            "author",     JSON.stringify({ participant_id, role: "primary" }),
-            "visibility", JSON.stringify("all"),
-            "payload",    JSON.stringify({
+          await writeStreamEntry(redis, {
+            stream_key:  `session:${session_id}:stream`,
+            type:        "participant_left",
+            author_id:   participant_id,
+            author_role: "primary",
+            visibility:  "all",
+            payload: {
               participant_id,
               reason: handoff_reason,
-            }),
-          )
+            },
+            event_id,
+            timestamp,
+          })
         } catch { /* non-fatal */ }
 
         // Publica em conversations.inbound para re-roteamento (transferência)
@@ -833,16 +837,16 @@ export function registerSessionTools(server: McpServer, deps: SessionDeps): void
 
         // Escreve evento channel_transitioned no stream canônico
         try {
-          await (redis as any).xadd(
-            `session:${session_id}:stream`,
-            "*",
-            "event_id",   event_id,
-            "type",       "channel_transitioned",
-            "timestamp",  timestamp,
-            "author",     JSON.stringify({ participant_id, role: "primary" }),
-            "visibility", JSON.stringify("all"),
-            "payload",    JSON.stringify(payload),
-          )
+          await writeStreamEntry(redis, {
+            stream_key:  `session:${session_id}:stream`,
+            type:        "channel_transitioned",
+            author_id:   participant_id,
+            author_role: "primary",
+            visibility:  "all",
+            payload,
+            event_id,
+            timestamp,
+          })
         } catch { /* non-fatal */ }
 
         // Notifica o Channel Gateway via Kafka

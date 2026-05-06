@@ -32,6 +32,7 @@ import {
   SESSION_TOKEN_TTL_S,
 } from "../infra/jwt"
 import { emitSessionOpened } from "../lib/usage-emitter"
+import { writeStreamEntry }  from "../lib/write-stream-entry"
 
 // ─── Dependências injetadas ───────────────────────────────────────────────────
 
@@ -345,16 +346,14 @@ export function registerRuntimeTools(server: McpServer, deps: RuntimeDeps): void
 
         // Notifica o cliente que o agente entrou na conversa (visibility: all)
         try {
-          await (redis as any).xadd(
-            `session:${session_id}:stream`,
-            "*",
-            "event_id",   crypto.randomUUID(),
-            "type",       "participant_joined",
-            "timestamp",  new Date().toISOString(),
-            "author",     JSON.stringify({ participant_id, instance_id, role: "primary" }),
-            "visibility", JSON.stringify("all"),
-            "payload",    JSON.stringify({ participant_id, instance_id }),
-          )
+          await writeStreamEntry(redis, {
+            stream_key:  `session:${session_id}:stream`,
+            type:        "participant_joined",
+            author_id:   participant_id,
+            author_role: "primary",
+            visibility:  "all",
+            payload:     { participant_id, instance_id },
+          })
         } catch { /* stream não disponível — non-fatal */ }
 
         // Metering: emite sessions na primeira vez que esta sessão é servida.
@@ -434,16 +433,14 @@ export function registerRuntimeTools(server: McpServer, deps: RuntimeDeps): void
 
         // Notifica o cliente que o agente saiu da conversa (visibility: all)
         try {
-          await (redis as any).xadd(
-            `session:${session_id}:stream`,
-            "*",
-            "event_id",   crypto.randomUUID(),
-            "type",       "participant_left",
-            "timestamp",  new Date().toISOString(),
-            "author",     JSON.stringify({ participant_id, instance_id, role: "primary" }),
-            "visibility", JSON.stringify("all"),
-            "payload",    JSON.stringify({ participant_id, instance_id, reason: outcome }),
-          )
+          await writeStreamEntry(redis, {
+            stream_key:  `session:${session_id}:stream`,
+            type:        "participant_left",
+            author_id:   participant_id,
+            author_role: "primary",
+            visibility:  "all",
+            payload:     { participant_id, instance_id, reason: outcome },
+          })
         } catch { /* stream não disponível — non-fatal */ }
 
         // Publica em agent.done (Kafka) — consumido por Rules Engine e Analytics
