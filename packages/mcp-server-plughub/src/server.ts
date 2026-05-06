@@ -37,6 +37,7 @@ import { createKafkaProducer }     from "./infra/kafka"
 import { createRegistryClient }    from "./infra/registry-client"
 import { createPostgresClient }    from "./infra/postgres"
 import { parseMentions }           from "./lib/mention-parser"
+import { writeStreamEntry }        from "./lib/write-stream-entry"
 
 // ─────────────────────────────────────────────
 // Configuração do servidor
@@ -862,33 +863,52 @@ export async function startServer(config: ServerConfig): Promise<void> {
         console.error("[menu_submit] Error checking menu:waiting:", err)
       }
 
-      // 2. Write echo message to canonical stream as type "message" (NOT interaction_result).
-      //    This mirrors the WS text handler so the message appears in transcripts and
-      //    supervisor SSE streams.  Using type "message" ensures the Agent Assist UI
-      //    renders it as a normal chat bubble.
+      // 2. Write echo message to canonical stream via writeStreamEntry (invariant:
+      //    never call redis.xadd() directly in mcp-server-plughub).
+      //    Using type "message" ensures the Agent Assist UI renders it as a normal
+      //    chat bubble.  The flat author_id / author_role fields are required by
+      //    _parse_entry() in analytics-api for correct transcript rendering.
       try {
-        await (redis as any).xadd(
-          `session:${sessionId}:stream`, "*",
-          "event_id",   eventId,
-          "type",       "message",
-          "timestamp",  now,
-          "author",     JSON.stringify({
-            participant_id: agentPid,
-            instance_id:    agentPid,
-            type:           "agent_human",
-            role:           "primary",
-          }),
-          "visibility", JSON.stringify(targetVisibility),
-          "payload",    JSON.stringify({
+        await writeStreamEntry(redis as any, {
+          stream_key:  `session:${sessionId}:stream`,
+          type:        "message",
+          author_id:   agentPid,
+          author_role: "primary",
+          visibility:  targetVisibility as "all" | "agents_only" | string[],
+          segment_id:  undefined,
+          payload: {
             message_id: eventId,
             content:    { type: "text", text: displayText },
             text:       displayText,
-          }),
-        )
+          },
+          timestamp:   now,
+          event_id:    eventId,
+        })
         await redis.expire(`session:${sessionId}:stream`, 14400)
       } catch { /* non-fatal */ }
 
-      // 3. Publish message.text to pub/sub — the Agent Assist UI listens for this
+      // 3. Publish to conversations.events Kafka so the echo is persisted to
+      //    ClickHouse via the analytics-api consumer.  Without this, closed-session
+      //    transcripts (Redis TTL expired → ClickHouse fallback) are missing the
+      //    human agent's button selection.
+      try {
+        await kafka.publish("conversations.events", {
+          event_type:   "message_sent",
+          session_id:   sessionId,
+          tenant_id:    menuTenantId,
+          message_id:   eventId,
+          author_id:    agentPid,
+          author_role:  "primary",
+          content:      displayText,
+          content_type: "text",
+          visibility:   typeof targetVisibility === "string"
+            ? targetVisibility
+            : JSON.stringify(targetVisibility),
+          timestamp:    now,
+        })
+      } catch { /* non-fatal — analytics persistence is best-effort */ }
+
+      // 4. Publish message.text to pub/sub — the Agent Assist UI listens for this
       //    event type to show real-time chat bubbles.  This matches the WS text
       //    handler pattern (line 1397).
       try {
