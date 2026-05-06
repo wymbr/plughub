@@ -7,16 +7,11 @@ import HomePage from '@/modules/home/HomePage'
 import ConfigRecursosIndex from '@/modules/config-recursos'
 import ConfigPlataformaPage from '@/modules/config-plataforma/ConfigPlataformaPage'
 import MaskingPage from '@/modules/masking/MaskingPage'
-// Workflow group
+// Workflow / Fluxo
 import WorkflowEditorPage   from '@/modules/workflows/WorkflowEditorPage'
-import WorkflowMonitorPage  from '@/modules/workflows/WorkflowMonitorPage'
-import WorkflowReportPage   from '@/modules/workflows/WorkflowReportPage'
 import WorkflowCalendarPage from '@/modules/workflows/WorkflowCalendarPage'
 import CalendarsPage from '@/modules/calendars/CalendarsPage'
-// AgentFlow group
 import AgentFlowEditorPage  from '@/modules/agent-flow/AgentFlowEditorPage'
-import AgentFlowMonitorPage from '@/modules/agent-flow/AgentFlowMonitorPage'
-import AgentFlowReportPage  from '@/modules/agent-flow/AgentFlowReportPage'
 import AgentFlowDeployPage  from '@/modules/agent-flow/AgentFlowDeployPage'
 import BillingPage from '@/modules/billing/BillingPage'
 import AgentReportsPage from '@/modules/agent-reports/AgentReportsPage'
@@ -30,6 +25,7 @@ import PlaceholderPage from '@/modules/_placeholder/PlaceholderPage'
 import AccessPage from '@/modules/access/AccessPage'
 import ContactsPage from '@/modules/contacts/ContactsPage'
 import DashboardsPage from '@/modules/dashboards/DashboardsPage'
+import ConfigCanaisIndex from '@/modules/config-canais'
 
 export const routes: RouteObject[] = [
   {
@@ -52,22 +48,23 @@ export const routes: RouteObject[] = [
       // Legacy redirect: /monitor → /contacts?tab=monitor
       { path: 'monitor',      element: <Navigate to="/contacts?tab=monitor" replace /> },
 
-      // ── Workflow group ─────────────────────────────────────────
-      { path: 'workflow/editor',   element: <WorkflowEditorPage /> },
-      { path: 'workflow/monitor',  element: <WorkflowMonitorPage /> },
-      { path: 'workflow/report',   element: <WorkflowReportPage /> },
-      { path: 'workflow/calendar', element: <WorkflowCalendarPage /> },
-      // Legacy redirects
-      { path: 'workflows',         element: <Navigate to="/workflow/monitor"   replace /> },
-      { path: 'campaigns',         element: <Navigate to="/workflow/report"    replace /> },
-
-      // ── AgentFlow group ────────────────────────────────────────
+      // ── Fluxo (unified editor) ─────────────────────────────────
       { path: 'agent-flow/editor',  element: <AgentFlowEditorPage /> },
-      { path: 'agent-flow/monitor', element: <AgentFlowMonitorPage /> },
-      { path: 'agent-flow/report',  element: <AgentFlowReportPage /> },
       { path: 'agent-flow/deploy',  element: <AgentFlowDeployPage /> },
-      // Legacy redirect
-      { path: 'skill-flows',        element: <Navigate to="/agent-flow/editor" replace /> },
+      // Legacy redirects: monitor/report → contacts tabs
+      { path: 'agent-flow/monitor', element: <Navigate to="/contacts?tab=monitor"   replace /> },
+      { path: 'agent-flow/report',  element: <Navigate to="/contacts?tab=relatorio" replace /> },
+      { path: 'skill-flows',        element: <Navigate to="/agent-flow/editor"       replace /> },
+
+      // ── Workflow routes (still accessible directly) ─────────────
+      { path: 'workflow/editor',   element: <WorkflowEditorPage /> },
+      { path: 'workflow/calendar', element: <WorkflowCalendarPage /> },
+      // Redirects: monitor/report → contacts tabs
+      { path: 'workflow/monitor',  element: <Navigate to="/contacts?tab=monitor"   replace /> },
+      { path: 'workflow/report',   element: <Navigate to="/contacts?tab=relatorio" replace /> },
+      // Legacy redirects
+      { path: 'workflows',         element: <Navigate to="/contacts?tab=monitor"   replace /> },
+      { path: 'campaigns',         element: <Navigate to="/contacts?tab=relatorio" replace /> },
 
       // ── Dashboards ────────────────────────────────────────────
       { path: 'dashboards', element: <DashboardsPage /> },
@@ -84,6 +81,7 @@ export const routes: RouteObject[] = [
       // ── Configuration ─────────────────────────────────────────
       { path: 'config/recursos',   element: <ConfigRecursosIndex /> },
       { path: 'config/platform',   element: <ConfigPlataformaPage /> },
+      { path: 'config/canais',     element: <ConfigCanaisIndex /> },
       { path: 'config/masking',    element: <MaskingPage /> },
       { path: 'config/billing',        element: <BillingPage /> },
       { path: 'config/agent-reports', element: <AgentReportsPage /> },

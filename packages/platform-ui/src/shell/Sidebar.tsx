@@ -46,29 +46,13 @@ const Sidebar: React.FC = () => {
       ]
     },
     {
-      navKey: 'workflow',
-      label: t('nav.workflow'),
-      href: '#',
-      icon: '⚙️',
-      roles: ['operator', 'supervisor', 'admin', 'business'],
-      children: [
-        { label: t('nav.workflow.editor'),   href: '/workflow/editor',   icon: '▶️', abac: { module: 'workflows', field: 'operacao'   } },
-        { label: t('nav.workflow.monitor'),  href: '/workflow/monitor',  icon: '📡', abac: { module: 'workflows', field: 'operacao'   } },
-        { label: t('nav.workflow.report'),   href: '/workflow/report',   icon: '📊', abac: { module: 'workflows', field: 'visualizar' } },
-        { label: t('nav.workflow.triggers'), href: '/workflow/calendar', icon: '🔗', abac: { module: 'workflows', field: 'operacao'   } },
-      ]
-    },
-    {
-      navKey: 'agentFlow',
-      label: t('nav.agentFlow'),
+      navKey: 'fluxo',
+      label: t('nav.fluxo'),
       href: '#',
       icon: '🔄',
       roles: ['admin', 'developer', 'business'],
       children: [
-        { label: t('nav.agentFlow.editor'),  href: '/agent-flow/editor',  icon: '✏️', abac: { module: 'skill_flows', field: 'operacao' } },
-        { label: t('nav.agentFlow.monitor'), href: '/agent-flow/monitor', icon: '📡', abac: { module: 'skill_flows', field: 'operacao' } },
-        { label: t('nav.agentFlow.report'),  href: '/agent-flow/report',  icon: '📊', abac: { module: 'skill_flows', field: 'visualizar' } },
-        { label: t('nav.agentFlow.deploy'),  href: '/agent-flow/deploy',  icon: '🚀', abac: { module: 'skill_flows', field: 'operacao' } },
+        { label: t('nav.fluxo.editor'), href: '/agent-flow/editor', icon: '✏️', abac: { module: 'skill_flows', field: 'operacao' } },
       ]
     },
     {
@@ -95,6 +79,7 @@ const Sidebar: React.FC = () => {
         { label: t('nav.dashboards'),    href: '/dashboards',         icon: '📊', abac: { module: 'config', field: 'plataforma'   } },
         { label: t('nav.recursos'),     href: '/config/recursos',    icon: '📦', abac: { module: 'config', field: 'recursos'     } },
         { label: t('nav.plataforma'),   href: '/config/platform',    icon: '🖥️', abac: { module: 'config', field: 'plataforma'   } },
+        { label: t('nav.canais'),       href: '/config/canais',      icon: '📡', abac: { module: 'config', field: 'plataforma'   } },
         { label: t('nav.calendarios'),  href: '/config/calendars',   icon: '📅', abac: { module: 'config', field: 'plataforma'   } },
         { label: t('nav.mascaramento'), href: '/config/masking',     icon: '🔒', abac: { module: 'config', field: 'mascaramento' } },
         { label: t('nav.faturamento'),       href: '/config/billing',       icon: '💳', roles: ['admin', 'business'] },

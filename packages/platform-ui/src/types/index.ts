@@ -37,12 +37,31 @@ export interface Session {
   expiresAt: number                // epoch ms — when the access token expires
 }
 
+export interface RoutingExpression {
+  weight_sla:      number  // default 1.0 — SLA urgency
+  weight_wait:     number  // default 0.8 — raw wait time
+  weight_tier:     number  // default 0.6 — customer tier
+  weight_churn:    number  // default 0.9 — churn risk
+  weight_business: number  // default 0.4 — business value score
+}
+
+export const ROUTING_EXPRESSION_DEFAULTS: RoutingExpression = {
+  weight_sla:      1.0,
+  weight_wait:     0.8,
+  weight_tier:     0.6,
+  weight_churn:    0.9,
+  weight_business: 0.4,
+}
+
 export interface Pool {
   pool_id: string
   tenant_id: string
   description?: string
   channel_types: string[]
   sla_target_ms: number
+  calendar_id?: string
+  routing_skills?: string[]
+  routing_expression?: RoutingExpression
   status: string
   created_at: string
   updated_at: string
@@ -53,12 +72,18 @@ export interface CreatePoolInput {
   description?: string
   channel_types: string[]
   sla_target_ms: number
+  calendar_id?: string
+  routing_skills?: string[]
+  routing_expression?: RoutingExpression
 }
 
 export interface UpdatePoolInput {
   description?: string
   channel_types?: string[]
   sla_target_ms?: number
+  calendar_id?: string
+  routing_skills?: string[]
+  routing_expression?: RoutingExpression
 }
 
 export interface AgentType {

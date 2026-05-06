@@ -4,6 +4,32 @@
 
 ---
 
+## platform-ui — Backend pendente para features de config (2026-05-06)
+
+### Sentimento — _classify() dinâmico
+
+`sentiment_emitter.py._classify()` usa if/elif hardcoded. Para que `SentimentBandsEditor` funcione em runtime, o AI Gateway precisa ler `sentiment.bands` do Config API e classificar usando as faixas configuradas. Refatoração: passar `bands: list[dict]` como parâmetro ou ler do Config API na inicialização com hot-reload via `config.changed` Kafka.
+
+### Sessão — orchestrator-bridge ler TTLs do Config API
+
+`orchestrator-bridge/main.py` tem ~20 literais `14400` hardcoded (TTL de sessão Redis). O namespace `session` no Config API (`channel_gateway_ttl_s`) existe mas não é consumido pelo bridge. Migrar para leitura dinâmica similar ao `RoutingConfigCache`. Idem para `session_replayer` (`HYDRATION_TTL_SECONDS`, `REPLAY_CONTEXT_TTL`) e `conversation-writer` (`transcript_ttl_seconds`).
+
+### Config API seed — novos namespaces/chaves
+
+- Renomear `masking` → `audit_policy` no seed (manter `masking` como alias de compatibilidade).
+- Adicionar chaves ao namespace `session`: `orchestrator_session_ttl_s` (14400), `transcript_ttl_s` (14400), `replayer_hydration_ttl_s` (3600), `replay_context_ttl_s` (3600), `pool_config_ttl_s` (3600), `sentiment_live_ttl_s` (300).
+- Adicionar `analytics_consumer` como namespace (renomear de `consumer`).
+
+### Pool Registry — routing_expression field
+
+Verificar se `agent-registry` (Prisma schema + API endpoints) aceita e persiste o campo `routing_expression` nos modelos `Pool`/`CreatePool`/`UpdatePool`. O frontend já envia o campo; o backend precisa estar preparado.
+
+### Quotas — refatoração
+
+`quota.llm_tokens_daily` e `quota.messages_daily` devem migrar para o namespace `ai_gateway` como limites por conta API (não por tenant). O namespace `quota` simplifica para apenas `max_concurrent_sessions`.
+
+---
+
 ## Usage Metering — Channel Gateway adapters
 
 - **whatsapp_conversations, voice_minutes, sms_segments, email_messages** *(deferred)*: funções em `usage_emitter.py` implementadas, mas os adapters de canal ainda não as chamam. Será wired quando cada adapter for criado (WhatsApp, WebRTC/Voice, SMS, Email).

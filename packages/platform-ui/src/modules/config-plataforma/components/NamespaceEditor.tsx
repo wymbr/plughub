@@ -2,11 +2,16 @@
  * NamespaceEditor.tsx
  * Platform config editor (config-api, port 3600).
  *
- * Left sidebar: 8 namespace buttons with colour dot.
+ * Left sidebar: namespace buttons with colour dot.
  * Right table: key / value / actions for selected namespace.
  *   - "tenant override" badge when entry.tenant_id ≠ '__global__'
  *   - Edit inline: scope selector (🌐 Global default vs 🏢 Tenant)
  *   - Reset button removes the tenant override (falls back to global default)
+ *
+ * Namespaces removed from here (have dedicated UIs):
+ *   sentiment  → SentimentBandsEditor (tab Sentimento)
+ *   dashboard  → Dashboards module (template-level config)
+ *   webchat    → Configuração/Canais/WebChat
  */
 import React, { useState, useCallback } from 'react'
 import { useNamespace, putConfig, deleteConfig, type ConfigEntry } from '../api/config-hooks'
@@ -15,14 +20,42 @@ import Spinner from '@/components/ui/Spinner'
 // ── Namespace catalogue ────────────────────────────────────────────────────────
 
 const NAMESPACES = [
-  { id: 'sentiment',  label: 'Sentimento',   icon: '💬', color: 'bg-green-400',  desc: 'Thresholds e TTL do sentimento no AI Gateway' },
-  { id: 'routing',    label: 'Roteamento',   icon: '🔀', color: 'bg-blue-400',   desc: 'SLA, snapshots e pesos do algoritmo de roteamento' },
-  { id: 'session',    label: 'Sessão',       icon: '⏱',  color: 'bg-purple-400', desc: 'TTLs de sessão por componente' },
-  { id: 'consumer',   label: 'Consumer',     icon: '📥', color: 'bg-yellow-400', desc: 'Parâmetros do Kafka consumer da analytics-api' },
-  { id: 'dashboard',  label: 'Dashboard',    icon: '📊', color: 'bg-cyan-400',   desc: 'Intervalo SSE e retry do dashboard operacional' },
-  { id: 'webchat',    label: 'WebChat',      icon: '💻', color: 'bg-pink-400',   desc: 'Auth timeout, expiração de attachments, limites de upload' },
-  { id: 'masking',    label: 'Mascaramento', icon: '🔒', color: 'bg-red-400',    desc: 'Política de acesso ao original_content e audit capture' },
-  { id: 'quota',      label: 'Quotas',       icon: '📏', color: 'bg-orange-400', desc: 'Limites operacionais de sessões, tokens e mensagens' },
+  {
+    id: 'routing',
+    label: 'Roteamento',
+    icon: '🔀', color: 'bg-blue-400',
+    desc: 'Defaults globais de roteamento: sla_default_ms, estimated_wait_factor, congestion_sla_factor, performance_score_weight, snapshot_ttl_s',
+  },
+  {
+    id: 'session',
+    label: 'Sessão',
+    icon: '⏱', color: 'bg-purple-400',
+    desc: 'TTLs de Redis por componente: ai_gateway_ttl_s, channel_gateway_ttl_s, transcript_ttl_s, replayer TTLs',
+  },
+  {
+    id: 'consumer',
+    label: 'Consumer Analytics',
+    icon: '📥', color: 'bg-yellow-400',
+    desc: 'Kafka consumer da analytics-api: batch_size, timeout_ms, restart_delay_s, max_restart_delay_s',
+  },
+  {
+    id: 'audit_policy',
+    label: 'Política de Auditoria',
+    icon: '🔒', color: 'bg-red-400',
+    desc: 'Controle de acesso a dados mascarados: authorized_roles, token_retention_days, capture_input, capture_output',
+  },
+  {
+    id: 'masking',
+    label: 'Mascaramento (legado)',
+    icon: '🔓', color: 'bg-red-200',
+    desc: '[Legado] Será migrado para audit_policy. Mantido para compatibilidade enquanto o seed é atualizado.',
+  },
+  {
+    id: 'quota',
+    label: 'Quotas',
+    icon: '📏', color: 'bg-orange-400',
+    desc: 'max_concurrent_sessions — limite operacional de sessões simultâneas por tenant',
+  },
 ]
 
 // ── Helpers ────────────────────────────────────────────────────────────────────

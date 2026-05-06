@@ -1,19 +1,23 @@
 /**
  * ConfigPlataformaPage — /config/platform
  *
- * Two tabs:
- *   Configuração  — namespace editor (config-api port 3600)
- *   Calendários   — holiday sets + calendar CRUD (calendar-api port 3700)
+ * Tabs:
+ *   config      — namespace editor (routing, session, consumer, audit_policy, quota)
+ *   sentimento  — SentimentBandsEditor (numeric bands)
+ *   calendar    — holiday sets + calendar CRUD (calendar-api port 3700)
+ *   routing     — RoutingSkillsManager (competency skills for queue ordering)
  *
  * The admin token for config mutations is entered inline and never persisted.
  */
 import React, { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useAuth } from '@/auth/useAuth'
-import { NamespaceEditor } from './components/NamespaceEditor'
-import { CalendarManager }  from './components/CalendarManager'
+import { NamespaceEditor }        from './components/NamespaceEditor'
+import { CalendarManager }         from './components/CalendarManager'
+import { RoutingSkillsManager }    from './components/RoutingSkillsManager'
+import { SentimentBandsEditor }    from './components/SentimentBandsEditor'
 
-type Tab = 'config' | 'calendar'
+type Tab = 'config' | 'sentimento' | 'calendar' | 'routing'
 
 export default function ConfigPlataformaPage() {
   const { t } = useTranslation('configPlataforma')
@@ -36,7 +40,7 @@ export default function ConfigPlataformaPage() {
         </div>
 
         {/* Admin token (for config mutations) */}
-        {tab === 'config' && (
+        {(tab === 'config' || tab === 'sentimento') && (
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
             <label style={{ fontSize: 12, color: '#64748b' }}>{t('adminTokenLabel', { defaultValue: 'Admin Token:' })}</label>
             <input
@@ -64,14 +68,18 @@ export default function ConfigPlataformaPage() {
 
       {/* Tab bar */}
       <div style={tabBarStyle}>
-        <TabBtn active={tab === 'config'}   onClick={() => setTab('config')}>⚙️ {t('configTab', { defaultValue: 'Configuration' })}</TabBtn>
-        <TabBtn active={tab === 'calendar'} onClick={() => setTab('calendar')}>📅 {t('calendarTab', { defaultValue: 'Calendars' })}</TabBtn>
+        <TabBtn active={tab === 'config'}     onClick={() => setTab('config')}>⚙️ {t('configTab', { defaultValue: 'Configuração' })}</TabBtn>
+        <TabBtn active={tab === 'sentimento'} onClick={() => setTab('sentimento')}>💬 Sentimento</TabBtn>
+        <TabBtn active={tab === 'calendar'}   onClick={() => setTab('calendar')}>📅 {t('calendarTab', { defaultValue: 'Calendários' })}</TabBtn>
+        <TabBtn active={tab === 'routing'}    onClick={() => setTab('routing')}>🎯 {t('routingTab', { defaultValue: 'Roteamento' })}</TabBtn>
       </div>
 
       {/* Content */}
-      <div style={{ flex: 1, overflow: 'hidden' }}>
-        {tab === 'config'   && <NamespaceEditor tenantId={tenantId} adminToken={adminToken} />}
-        {tab === 'calendar' && <CalendarManager orgId={orgId} tenantId={tenantId} />}
+      <div style={{ flex: 1, overflow: 'auto' }}>
+        {tab === 'config'     && <NamespaceEditor tenantId={tenantId} adminToken={adminToken} />}
+        {tab === 'sentimento' && <SentimentBandsEditor tenantId={tenantId} adminToken={adminToken} />}
+        {tab === 'calendar'   && <CalendarManager orgId={orgId} tenantId={tenantId} />}
+        {tab === 'routing'    && <RoutingSkillsManager tenantId={tenantId} adminToken={adminToken} />}
       </div>
     </div>
   )
