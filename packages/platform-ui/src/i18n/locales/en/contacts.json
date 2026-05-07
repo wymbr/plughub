@@ -4,7 +4,8 @@
     "list":      "List",
     "relatorio": "Report",
     "monitor":   "Monitor",
-    "analysis":  "Analysis"
+    "analysis":  "Analysis",
+    "agents":    "Agents"
   },
   "noTenant": "No tenant in session. Please log in again.",
   "detail": {

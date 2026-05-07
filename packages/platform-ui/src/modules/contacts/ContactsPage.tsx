@@ -19,6 +19,7 @@ import { DEFAULT_FILTERS, iso7dAgo, isoToday } from './types'
 import { ListaTab }   from './tabs/ListaTab'
 import { MonitorTab } from './tabs/MonitorTab'
 import { AnaliseTab } from './tabs/AnaliseTab'
+import { AgentsTab }  from './tabs/AgentsTab'
 
 // ─── Insight types (detail panel) ─────────────────────────────────────────────
 
@@ -170,13 +171,14 @@ function ContactDetail({ tenantId, sessionId, onBack }: {
 
 // ─── Tab definition ───────────────────────────────────────────────────────────
 
-type ContactTab = 'report' | 'monitor' | 'analysis'
+type ContactTab = 'report' | 'monitor' | 'analysis' | 'agents'
 
 // Note: Tab labels are i18n keys and will be resolved in the component
 const ALL_TABS: { id: ContactTab; label: string; icon: string; abac?: { module: string; field: string } }[] = [
   { id: 'report',   label: 'tabs.relatorio', icon: '📋' },
   { id: 'monitor',  label: 'tabs.monitor',   icon: '📡', abac: { module: 'contacts', field: 'operacao'   } },
   { id: 'analysis', label: 'tabs.analysis',  icon: '📊', abac: { module: 'contacts', field: 'visualizar' } },
+  { id: 'agents',   label: 'tabs.agents',    icon: '👤', abac: { module: 'contacts', field: 'visualizar' } },
 ]
 
 // ─── Filter bar component ─────────────────────────────────────────────────────
@@ -386,6 +388,12 @@ export default function ContactsPage() {
         )}
         {activeTab === 'analysis' && (
           <AnaliseTab
+            tenantId={tenantId}
+            filters={filters}
+          />
+        )}
+        {activeTab === 'agents' && (
+          <AgentsTab
             tenantId={tenantId}
             filters={filters}
           />

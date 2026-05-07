@@ -83,7 +83,6 @@ const Sidebar: React.FC = () => {
         { label: t('nav.calendars'),     href: '/config/calendars',     icon: '📅', abac: { module: 'config', field: 'platform'   } },
         { label: t('nav.masking'),       href: '/config/masking',       icon: '🔒', abac: { module: 'config', field: 'masking'    } },
         { label: t('nav.billing'),       href: '/config/billing',       icon: '💳', roles: ['admin', 'business'] },
-        { label: t('nav.agent_reports'), href: '/config/agent-reports', icon: '📈', roles: ['supervisor', 'admin'] },
         { label: t('nav.access'),        href: '/config/access',        icon: '🔐', abac: { module: 'config', field: 'users'      } },
       ]
     },

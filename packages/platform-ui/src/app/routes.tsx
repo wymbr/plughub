@@ -14,7 +14,6 @@ import CalendarsPage from '@/modules/calendars/CalendarsPage'
 import AgentFlowEditorPage  from '@/modules/agent-flow/AgentFlowEditorPage'
 import AgentFlowDeployPage  from '@/modules/agent-flow/AgentFlowDeployPage'
 import BillingPage from '@/modules/billing/BillingPage'
-import AgentReportsPage from '@/modules/agent-reports/AgentReportsPage'
 import FormsPage from '@/modules/evaluation/FormsPage'
 import EvalCampaignsPage from '@/modules/evaluation/CampaignsPage'
 import KnowledgePage from '@/modules/evaluation/KnowledgePage'
@@ -87,7 +86,7 @@ export const routes: RouteObject[] = [
       { path: 'config/canais',     element: <Navigate to="/config/channels" replace /> },
       { path: 'config/masking',    element: <MaskingPage /> },
       { path: 'config/billing',        element: <BillingPage /> },
-      { path: 'config/agent-reports', element: <AgentReportsPage /> },
+      { path: 'config/agent-reports', element: <Navigate to="/contacts?tab=agents" replace /> },
       { path: 'config/access',        element: <AccessPage /> },
       { path: 'config/calendars',  element: <CalendarsPage /> },
       // Legacy redirect: old workflow/calendar (webhooks only now)

@@ -4,7 +4,8 @@
     "list":      "Lista",
     "relatorio": "Relatório",
     "monitor":   "Monitor",
-    "analysis":  "Análise"
+    "analysis":  "Análise",
+    "agents":    "Agentes"
   },
   "noTenant": "Sessão sem tenant. Faça login novamente.",
   "detail": {
