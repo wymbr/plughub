@@ -3,6 +3,8 @@ import {
   CreatePoolInput, UpdatePoolInput, CreateAgentTypeInput, CreateSkillInput,
   GatewayConfig, CreateGatewayConfigInput, UpdateGatewayConfigInput,
   AgentInstance, CreateHumanAgentInput, UpdateHumanAgentInput,
+  ChannelEndpoint, CreateChannelEndpointInput, UpdateChannelEndpointInput,
+  ChannelEndpointChannel,
 } from '@/types'
 
 const getBaseUrl = () => {
@@ -260,4 +262,57 @@ export const deleteChannel = async (id: string, tenantId: string): Promise<void>
     headers: operatorHeaders(tenantId)
   })
   if (!response.ok) throw new Error('Failed to delete channel config')
+}
+
+// ── Channel Endpoints ─────────────────────────────────────────────────────────
+
+export const listChannelEndpoints = async (
+  tenantId: string,
+  channel?: ChannelEndpointChannel,
+): Promise<ChannelEndpoint[]> => {
+  const qs = channel ? `?channel=${channel}` : ''
+  const response = await fetch(`${getBaseUrl()}/v1/channel-endpoints${qs}`, {
+    headers: headers(tenantId),
+  })
+  if (!response.ok) throw new Error('Failed to fetch channel endpoints')
+  const data = await response.json() as { endpoints: ChannelEndpoint[] }
+  return data.endpoints
+}
+
+export const createChannelEndpoint = async (
+  data: CreateChannelEndpointInput,
+  tenantId: string,
+): Promise<ChannelEndpoint> => {
+  const response = await fetch(`${getBaseUrl()}/v1/channel-endpoints`, {
+    method: 'POST',
+    headers: headers(tenantId),
+    body: JSON.stringify(data),
+  })
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({})) as { error?: string }
+    throw new Error(err.error ?? 'Failed to create channel endpoint')
+  }
+  return response.json()
+}
+
+export const updateChannelEndpoint = async (
+  id: string,
+  data: UpdateChannelEndpointInput,
+  tenantId: string,
+): Promise<ChannelEndpoint> => {
+  const response = await fetch(`${getBaseUrl()}/v1/channel-endpoints/${id}`, {
+    method: 'PUT',
+    headers: headers(tenantId),
+    body: JSON.stringify(data),
+  })
+  if (!response.ok) throw new Error('Failed to update channel endpoint')
+  return response.json()
+}
+
+export const deleteChannelEndpoint = async (id: string, tenantId: string): Promise<void> => {
+  const response = await fetch(`${getBaseUrl()}/v1/channel-endpoints/${id}`, {
+    method: 'DELETE',
+    headers: headers(tenantId),
+  })
+  if (!response.ok) throw new Error('Failed to delete channel endpoint')
 }

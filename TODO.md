@@ -68,6 +68,38 @@ Refatoração estrutural para eliminar os múltiplos caminhos de XADD direto no 
 
 ---
 
+## Language Cleanup — Portuguese identifiers in code (2026-05-07)
+
+Rule added to CLAUDE.md. Fase 1 ✅ complete — see CHANGELOG 2026-05-07.
+
+**Remaining manual steps in WSL terminal:**
+- `git mv packages/platform-ui/src/modules/config-canais packages/platform-ui/src/modules/config-channels`
+- `git mv packages/platform-ui/src/modules/atendimento packages/platform-ui/src/modules/service` + update all imports
+
+### Fase 2 — ABAC field names (requires DB migration + modules.yaml update)
+
+| Current | Replace with | Files |
+|---|---|---|
+| `field: 'mascaramento'` | `field: 'masking'` | modules.yaml + all JWT validation code |
+| `field: 'relatorio'` | `field: 'report'` | modules.yaml + all JWT validation code |
+| `field: 'recursos'` | `field: 'resources'` | modules.yaml + all JWT validation code |
+
+Migration: `UPDATE auth.module_registry SET ... WHERE ...` + auth-api reseed on startup handles it if modules.yaml is the source of truth.
+
+### Not in scope (intentional)
+
+`agente_*`, `skill_*`, `pool_id` values like `retencao_humano`, `postura_atendimento` — these are business-domain entity IDs configured by the tenant; they are data, not code identifiers.
+
+---
+
+## Channel Endpoints — channel-gateway integration (pending)
+
+Layers 1 (agent-registry), 3 (platform-ui), 4 (schemas) ✅ complete — see CHANGELOG 2026-05-07.
+
+**Layer 2 — channel-gateway** *(deferred)*: Replace hardcoded pool lookup with HTTP call to agent-registry `GET /v1/channel-endpoints?channel={ch}&identifier={id}`. Cache with short TTL (~30s) to avoid hot-path latency. Also run `prisma migrate dev --name add_channel_endpoint` in agent-registry when network is available.
+
+---
+
 ## CLAUDE.md — Otimização (Fases 2 e 3)
 
 **Fase 2** *(blocked by Fase 1)*: Mover Arc 6, Arc 4, Arc 7, ABAC e ContextStore para arquivos em `docs/modules/`. Manter no CLAUDE.md apenas resumo de 15–20 linhas por módulo com link para o arquivo completo.

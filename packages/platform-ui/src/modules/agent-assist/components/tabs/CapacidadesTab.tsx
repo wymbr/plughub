@@ -78,9 +78,9 @@ const CopilotSection: React.FC<{ copilot: CopilotSuggestions }> = ({ copilot }) 
           <span className="text-sm">🤖</span>
           <span className="text-xs font-semibold text-teal-800">Co-pilot</span>
         </div>
-        {copilot.ultima_analise && (
+        {copilot.last_analysis && (
           <span className="text-[10px] text-teal-600">
-            {formatTime(copilot.ultima_analise)}
+            {formatTime(copilot.last_analysis)}
           </span>
         )}
       </div>

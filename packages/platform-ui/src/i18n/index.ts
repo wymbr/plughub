@@ -15,7 +15,7 @@ import agentReportsPtBr from './locales/pt-BR/agentReports.json'
 import workflowsPtBr from './locales/pt-BR/workflows.json'
 import agentFlowPtBr from './locales/pt-BR/agentFlow.json'
 import calendarsPtBr from './locales/pt-BR/calendars.json'
-import atendimentoPtBr from './locales/pt-BR/atendimento.json'
+import servicePtBr from './locales/pt-BR/atendimento.json'
 import campaignsPtBr from './locales/pt-BR/campaigns.json'
 import configPlataformaPtBr from './locales/pt-BR/configPlataforma.json'
 import dashboardsPtBr from './locales/pt-BR/dashboards.json'
@@ -35,7 +35,7 @@ import agentReportsEn from './locales/en/agentReports.json'
 import workflowsEn from './locales/en/workflows.json'
 import agentFlowEn from './locales/en/agentFlow.json'
 import calendarsEn from './locales/en/calendars.json'
-import atendimentoEn from './locales/en/atendimento.json'
+import serviceEn from './locales/en/atendimento.json'
 import campaignsEn from './locales/en/campaigns.json'
 import configPlataformaEn from './locales/en/configPlataforma.json'
 import dashboardsEn from './locales/en/dashboards.json'
@@ -57,7 +57,7 @@ i18n.use(initReactI18next).init({
       workflows:       workflowsPtBr,
       agentFlow:       agentFlowPtBr,
       calendars:       calendarsPtBr,
-      atendimento:     atendimentoPtBr,
+      service:         servicePtBr,
       campaigns:       campaignsPtBr,
       configPlataforma:configPlataformaPtBr,
       dashboards:      dashboardsPtBr,
@@ -77,7 +77,7 @@ i18n.use(initReactI18next).init({
       workflows:       workflowsEn,
       agentFlow:       agentFlowEn,
       calendars:       calendarsEn,
-      atendimento:     atendimentoEn,
+      service:         serviceEn,
       campaigns:       campaignsEn,
       configPlataforma:configPlataformaEn,
       dashboards:      dashboardsEn,
@@ -90,7 +90,7 @@ i18n.use(initReactI18next).init({
     'common', 'shell', 'configRecursos',
     'contacts', 'billing', 'evaluation', 'access', 'masking',
     'agentAssist', 'agentReports', 'workflows', 'agentFlow',
-    'calendars', 'atendimento', 'campaigns', 'configPlataforma',
+    'calendars', 'service', 'campaigns', 'configPlataforma',
     'dashboards', 'home',
   ],
   defaultNS: 'common',

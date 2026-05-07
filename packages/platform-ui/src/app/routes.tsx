@@ -25,7 +25,7 @@ import PlaceholderPage from '@/modules/_placeholder/PlaceholderPage'
 import AccessPage from '@/modules/access/AccessPage'
 import ContactsPage from '@/modules/contacts/ContactsPage'
 import DashboardsPage from '@/modules/dashboards/DashboardsPage'
-import ConfigCanaisIndex from '@/modules/config-canais'
+import ConfigChannelsIndex from '@/modules/config-channels'
 
 export const routes: RouteObject[] = [
   {
@@ -53,35 +53,38 @@ export const routes: RouteObject[] = [
       { path: 'agent-flow/deploy',  element: <AgentFlowDeployPage /> },
       // Legacy redirects: monitor/report → contacts tabs
       { path: 'agent-flow/monitor', element: <Navigate to="/contacts?tab=monitor"   replace /> },
-      { path: 'agent-flow/report',  element: <Navigate to="/contacts?tab=relatorio" replace /> },
-      { path: 'skill-flows',        element: <Navigate to="/agent-flow/editor"       replace /> },
+      { path: 'agent-flow/report',  element: <Navigate to="/contacts?tab=report" replace /> },
+      { path: 'skill-flows',        element: <Navigate to="/agent-flow/editor"   replace /> },
 
       // ── Workflow routes (still accessible directly) ─────────────
       { path: 'workflow/editor',   element: <WorkflowEditorPage /> },
       { path: 'workflow/calendar', element: <WorkflowCalendarPage /> },
       // Redirects: monitor/report → contacts tabs
-      { path: 'workflow/monitor',  element: <Navigate to="/contacts?tab=monitor"   replace /> },
-      { path: 'workflow/report',   element: <Navigate to="/contacts?tab=relatorio" replace /> },
+      { path: 'workflow/monitor',  element: <Navigate to="/contacts?tab=monitor" replace /> },
+      { path: 'workflow/report',   element: <Navigate to="/contacts?tab=report"  replace /> },
       // Legacy redirects
-      { path: 'workflows',         element: <Navigate to="/contacts?tab=monitor"   replace /> },
-      { path: 'campaigns',         element: <Navigate to="/contacts?tab=relatorio" replace /> },
+      { path: 'workflows',         element: <Navigate to="/contacts?tab=monitor" replace /> },
+      { path: 'campaigns',         element: <Navigate to="/contacts?tab=report"  replace /> },
 
       // ── Dashboards ────────────────────────────────────────────
       { path: 'dashboards', element: <DashboardsPage /> },
       // Legacy redirect
-      { path: 'reports',    element: <Navigate to="/contacts?tab=analise" replace /> },
+      { path: 'reports',    element: <Navigate to="/contacts?tab=analysis" replace /> },
 
       // ── Evaluation ────────────────────────────────────────────
-      { path: 'evaluation/forms',      element: <FormsPage /> },
-      { path: 'evaluation/campaigns',  element: <EvalCampaignsPage /> },
-      { path: 'evaluation/knowledge',  element: <KnowledgePage /> },
-      { path: 'evaluation/avaliacoes', element: <AvaliacoesPage /> },
-      { path: 'evaluation/reports',    element: <EvalReportsPage /> },
+      { path: 'evaluation/forms',        element: <FormsPage /> },
+      { path: 'evaluation/campaigns',    element: <EvalCampaignsPage /> },
+      { path: 'evaluation/knowledge',    element: <KnowledgePage /> },
+      { path: 'evaluation/evaluations',  element: <AvaliacoesPage /> },
+      { path: 'evaluation/avaliacoes',   element: <Navigate to="/evaluation/evaluations" replace /> },
+      { path: 'evaluation/reports',      element: <EvalReportsPage /> },
 
       // ── Configuration ─────────────────────────────────────────
-      { path: 'config/recursos',   element: <ConfigRecursosIndex /> },
+      { path: 'config/resources',  element: <ConfigRecursosIndex /> },
+      { path: 'config/recursos',   element: <Navigate to="/config/resources" replace /> },
       { path: 'config/platform',   element: <ConfigPlataformaPage /> },
-      { path: 'config/canais',     element: <ConfigCanaisIndex /> },
+      { path: 'config/channels',   element: <ConfigChannelsIndex /> },
+      { path: 'config/canais',     element: <Navigate to="/config/channels" replace /> },
       { path: 'config/masking',    element: <MaskingPage /> },
       { path: 'config/billing',        element: <BillingPage /> },
       { path: 'config/agent-reports', element: <AgentReportsPage /> },

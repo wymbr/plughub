@@ -5,12 +5,13 @@
 
 import express, { Request, Response, NextFunction } from "express"
 import { ZodError }           from "zod"
-import { poolsRouter }        from "./routes/pools"
-import { agentTypesRouter }   from "./routes/agent-types"
-import { skillsRouter }       from "./routes/skills"
-import { importRouter }       from "./routes/import"
-import { instancesRouter }    from "./routes/instances"
-import { channelsRouter }     from "./routes/channels"
+import { poolsRouter }            from "./routes/pools"
+import { agentTypesRouter }       from "./routes/agent-types"
+import { skillsRouter }           from "./routes/skills"
+import { importRouter }           from "./routes/import"
+import { instancesRouter }        from "./routes/instances"
+import { channelsRouter }         from "./routes/channels"
+import { channelEndpointsRouter } from "./routes/channel-endpoints"
 
 export const app = express()
 
@@ -37,6 +38,7 @@ app.use("/v1/agent-types",        agentTypesRouter)
 app.use("/v1/skills",             skillsRouter)
 app.use("/v1/instances",          instancesRouter)
 app.use("/v1/channels",           channelsRouter)
+app.use("/v1/channel-endpoints",  channelEndpointsRouter)
 
 // ── Healthcheck ────────────────────────────
 app.get("/v1/health", (_req: Request, res: Response) => {

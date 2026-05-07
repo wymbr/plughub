@@ -216,6 +216,37 @@ model SkillDeployment {
 }
 
 // ─────────────────────────────────────────────
+// ChannelEndpoint — maps an external entry point to a pool
+// Each WhatsApp number, webchat slug, voice DID, etc. has its own record.
+// identifier semantics:
+//   webchat  — URL slug (e.g. "support")  → {host}/webchat/support
+//   whatsapp — E.164 number (e.g. "+5511999999999")
+//   voice    — DID / E.164
+//   sms      — short code or long code
+//   email    — address (e.g. "support@company.com")
+// ─────────────────────────────────────────────
+
+model ChannelEndpoint {
+  id           String   @id @default(uuid())
+  tenant_id    String
+  channel      String   // webchat | whatsapp | voice | sms | email
+  identifier   String   // channel-specific external address
+  pool_id      String   // logical pool_id (not FK — pool lives in same service)
+  display_name String
+  settings     Json     @default("{}")   // per-instance overrides
+  active       Boolean  @default(true)
+
+  created_at  DateTime @default(now())
+  updated_at  DateTime @updatedAt
+
+  @@unique([tenant_id, channel, identifier])
+  @@index([tenant_id])
+  @@index([tenant_id, channel])
+  @@index([tenant_id, channel, active])
+  @@map("channel_endpoints")
+}
+
+// ─────────────────────────────────────────────
 // GatewayConfig — configuração de canal por tenant
 // Credenciais de integração: WhatsApp, Webchat, Voice, Email, SMS, etc.
 // ─────────────────────────────────────────────

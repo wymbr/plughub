@@ -320,5 +320,5 @@ export interface CopilotSuggestions {
   flags_risco: string[];
   acoes_recomendadas: string[];
   /** ISO-8601 timestamp of the last analysis */
-  ultima_analise: string | null;
+  last_analysis: string | null;
 }

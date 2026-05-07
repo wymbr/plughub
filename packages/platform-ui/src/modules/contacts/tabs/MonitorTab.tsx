@@ -16,12 +16,12 @@
  */
 import React, { useState, useMemo } from 'react'
 import type { ContactFilters, VizFormat } from '../types'
-import { usePoolViews } from '@/modules/atendimento/api/hooks'
-import { SessionList }      from '@/modules/atendimento/components/SessionList'
-import { SegmentList }      from '@/modules/atendimento/components/SegmentList'
-import { SessionTranscript } from '@/modules/atendimento/components/SessionTranscript'
-import type { PoolView, ContactSegment } from '@/modules/atendimento/types'
-import { scoreToColor, scoreToAccent, formatMs } from '@/modules/atendimento/utils/sentiment'
+import { usePoolViews } from '@/modules/service/api/hooks'
+import { SessionList }      from '@/modules/service/components/SessionList'
+import { SegmentList }      from '@/modules/service/components/SegmentList'
+import { SessionTranscript } from '@/modules/service/components/SessionTranscript'
+import type { PoolView, ContactSegment } from '@/modules/service/types'
+import { scoreToColor, scoreToAccent, formatMs } from '@/modules/service/utils/sentiment'
 import {
   useWorkflowInstances, useWorkflowInstance, cancelWorkflow,
 } from '@/modules/workflows/api/hooks'

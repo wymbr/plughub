@@ -25,7 +25,7 @@ type MonitorTab = 'heatmap' | 'agentes' | 'instancias'
 type Level = 'pools' | 'sessions' | 'transcript'
 
 export default function MonitorPage() {
-  const { t } = useTranslation('atendimento')
+  const { t } = useTranslation('service')
   const { tenantId } = useAuth()
 
   const { pools, status, metrics } = usePoolViews(tenantId)

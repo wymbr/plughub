@@ -35,56 +35,56 @@ const Sidebar: React.FC = () => {
       roles: ['operator', 'supervisor', 'admin', 'developer', 'business']
     },
     {
-      navKey: 'atendimento',
-      label: t('nav.atendimento'),
+      navKey: 'service',
+      label: t('nav.service'),
       href: '#',
       icon: '📞',
       roles: ['operator', 'supervisor', 'admin', 'business'],
       children: [
-        { label: t('nav.contatos'),    href: '/contacts',     icon: '📋' },
+        { label: t('nav.contacts'),    href: '/contacts',     icon: '📋' },
         { label: t('nav.agentAssist'), href: '/agent-assist', icon: '🤖', abac: { module: 'contacts', field: 'operacao' } }
       ]
     },
     {
-      navKey: 'fluxo',
-      label: t('nav.fluxo'),
+      navKey: 'flow',
+      label: t('nav.flow'),
       href: '#',
       icon: '🔄',
       roles: ['admin', 'developer', 'business'],
       children: [
-        { label: t('nav.fluxo.editor'), href: '/agent-flow/editor', icon: '✏️', abac: { module: 'skill_flows', field: 'operacao' } },
+        { label: t('nav.flow.editor'), href: '/agent-flow/editor', icon: '✏️', abac: { module: 'skill_flows', field: 'operacao' } },
       ]
     },
     {
-      navKey: 'avaliacao',
-      label: t('nav.avaliacao'),
+      navKey: 'quality',
+      label: t('nav.quality'),
       href: '#',
       icon: '✓',
       roles: ['operator', 'supervisor', 'admin', 'business'],
       children: [
-        { label: t('nav.eval.forms'),      href: '/evaluation/forms',      icon: '📝', roles: ['admin'],                           abac: { module: 'evaluation', field: 'formularios' } },
-        { label: t('nav.eval.campaigns'),  href: '/evaluation/campaigns',  icon: '📋', roles: ['supervisor', 'admin'],             abac: { module: 'evaluation', field: 'formularios' } },
-        { label: t('nav.eval.knowledge'),  href: '/evaluation/knowledge',  icon: '📚', roles: ['admin'] },
-        { label: t('nav.eval.avaliacoes'), href: '/evaluation/avaliacoes', icon: '🗂️', roles: ['operator', 'supervisor', 'admin'] },
-        { label: t('nav.eval.reports'),    href: '/evaluation/reports',    icon: '📊', roles: ['supervisor', 'admin', 'business'], abac: { module: 'evaluation', field: 'relatorio' } },
+        { label: t('nav.eval.forms'),       href: '/evaluation/forms',       icon: '📝', roles: ['admin'],                           abac: { module: 'evaluation', field: 'formularios' } },
+        { label: t('nav.eval.campaigns'),   href: '/evaluation/campaigns',   icon: '📋', roles: ['supervisor', 'admin'],             abac: { module: 'evaluation', field: 'formularios' } },
+        { label: t('nav.eval.knowledge'),   href: '/evaluation/knowledge',   icon: '📚', roles: ['admin'] },
+        { label: t('nav.eval.evaluations'), href: '/evaluation/evaluations', icon: '🗂️', roles: ['operator', 'supervisor', 'admin'] },
+        { label: t('nav.eval.reports'),     href: '/evaluation/reports',     icon: '📊', roles: ['supervisor', 'admin', 'business'], abac: { module: 'evaluation', field: 'report'   } },
       ]
     },
     {
-      navKey: 'configuracao',
-      label: t('nav.configuracao'),
+      navKey: 'config',
+      label: t('nav.config'),
       href: '#',
       icon: '⚙️',
       roles: ['admin', 'business'],
       children: [
-        { label: t('nav.dashboards'),    href: '/dashboards',         icon: '📊', abac: { module: 'config', field: 'plataforma'   } },
-        { label: t('nav.recursos'),     href: '/config/recursos',    icon: '📦', abac: { module: 'config', field: 'recursos'     } },
-        { label: t('nav.plataforma'),   href: '/config/platform',    icon: '🖥️', abac: { module: 'config', field: 'plataforma'   } },
-        { label: t('nav.canais'),       href: '/config/canais',      icon: '📡', abac: { module: 'config', field: 'plataforma'   } },
-        { label: t('nav.calendarios'),  href: '/config/calendars',   icon: '📅', abac: { module: 'config', field: 'plataforma'   } },
-        { label: t('nav.mascaramento'), href: '/config/masking',     icon: '🔒', abac: { module: 'config', field: 'mascaramento' } },
-        { label: t('nav.faturamento'),       href: '/config/billing',       icon: '💳', roles: ['admin', 'business'] },
-        { label: t('nav.relatorios_agentes'), href: '/config/agent-reports', icon: '📈', roles: ['supervisor', 'admin'] },
-        { label: t('nav.acesso'),            href: '/config/access',        icon: '🔐', abac: { module: 'config', field: 'usuarios' } },
+        { label: t('nav.dashboards'),    href: '/dashboards',           icon: '📊', abac: { module: 'config', field: 'platform'   } },
+        { label: t('nav.resources'),     href: '/config/resources',     icon: '📦', abac: { module: 'config', field: 'resources'  } },
+        { label: t('nav.platform'),      href: '/config/platform',      icon: '🖥️', abac: { module: 'config', field: 'platform'   } },
+        { label: t('nav.channels'),      href: '/config/channels',      icon: '📡', abac: { module: 'config', field: 'platform'   } },
+        { label: t('nav.calendars'),     href: '/config/calendars',     icon: '📅', abac: { module: 'config', field: 'platform'   } },
+        { label: t('nav.masking'),       href: '/config/masking',       icon: '🔒', abac: { module: 'config', field: 'masking'    } },
+        { label: t('nav.billing'),       href: '/config/billing',       icon: '💳', roles: ['admin', 'business'] },
+        { label: t('nav.agent_reports'), href: '/config/agent-reports', icon: '📈', roles: ['supervisor', 'admin'] },
+        { label: t('nav.access'),        href: '/config/access',        icon: '🔐', abac: { module: 'config', field: 'users'      } },
       ]
     },
     {

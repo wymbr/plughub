@@ -367,6 +367,21 @@ insight:        insight.historico.*    →  customer long-term memory
                 insight.conversa.*     →  generated in current session, expires on close
 ```
 
+### Language Rule — English in code, Portuguese only in display
+
+All technical identifiers MUST be in English: URL routes, TypeScript/Python variable names, function names, interface names, type union values, i18n key names, file names, folder names, navKeys, tab IDs, ABAC field names, Kafka topic names, Redis key patterns, and API endpoint paths.
+
+Portuguese is allowed ONLY in: i18n value strings (the translated text shown to the user) and in business-domain entity IDs (`agente_*`, `skill_*`, `pool_id`, `tenant_id`) that represent named instances configured by the tenant — these are data, not code.
+
+```
+✅  route: /config/channels        href: t('nav.channels')    tab: 'report'
+❌  route: /config/canais          href: t('nav.canais')       tab: 'relatorio'
+
+✅  agente_retencao_v1   (entity ID configured by tenant — data, not code)
+❌  const atendimento =  (TypeScript variable)
+❌  def mascaramento():  (Python function)
+```
+
 ## What Never To Do
 
 - Never create a component that routes conversations without going through the Routing Engine

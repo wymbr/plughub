@@ -191,6 +191,39 @@ export interface UpdateGatewayConfigInput {
   settings?: Record<string, unknown>
 }
 
+// ── ChannelEndpoint — external address → pool mapping ────────────────────────
+
+export type ChannelEndpointChannel = 'webchat' | 'whatsapp' | 'voice' | 'sms' | 'email'
+
+export interface ChannelEndpoint {
+  id:           string
+  tenant_id:    string
+  channel:      ChannelEndpointChannel
+  identifier:   string
+  pool_id:      string
+  display_name: string
+  settings:     Record<string, unknown>
+  active:       boolean
+  created_at:   string
+  updated_at:   string
+}
+
+export interface CreateChannelEndpointInput {
+  channel:      ChannelEndpointChannel
+  identifier:   string
+  pool_id:      string
+  display_name: string
+  settings?:    Record<string, unknown>
+  active?:      boolean
+}
+
+export interface UpdateChannelEndpointInput {
+  pool_id?:      string
+  display_name?: string
+  settings?:     Record<string, unknown>
+  active?:       boolean
+}
+
 // ── Human Agent (AgentType framework=human) ───────────────────────────────────
 
 // HumanAgentType — AgentType with framework=human (all base fields are already required)

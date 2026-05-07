@@ -613,6 +613,23 @@ export type {
   ConversationsEvent,
 } from "./platform-events"
 
+// ── ChannelEndpoint — external address → pool mapping ────────────────────────
+export {
+  ChannelEndpointChannelSchema,
+  ChannelEndpointSchema,
+  CreateChannelEndpointSchema,
+  UpdateChannelEndpointSchema,
+  ChannelEndpointQuerySchema,
+} from "./channel-endpoint"
+
+export type {
+  ChannelEndpointChannel,
+  ChannelEndpoint,
+  CreateChannelEndpoint,
+  UpdateChannelEndpoint,
+  ChannelEndpointQuery,
+} from "./channel-endpoint"
+
 // ── ContextStore — unified contact context store ──────────────────────────────
 export {
   ContextVisibilitySchema,

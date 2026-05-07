@@ -11,9 +11,9 @@ import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import { useAuth }          from '@/auth/useAuth'
-import { SessionTranscript } from '@/modules/atendimento/components/SessionTranscript'
-import { SegmentList }       from '@/modules/atendimento/components/SegmentList'
-import type { ContactSegment } from '@/modules/atendimento/types'
+import { SessionTranscript } from '@/modules/service/components/SessionTranscript'
+import { SegmentList }       from '@/modules/service/components/SegmentList'
+import type { ContactSegment } from '@/modules/service/types'
 import type { ContactFilters } from './types'
 import { DEFAULT_FILTERS, iso7dAgo, isoToday } from './types'
 import { ListaTab }   from './tabs/ListaTab'
@@ -170,13 +170,13 @@ function ContactDetail({ tenantId, sessionId, onBack }: {
 
 // ─── Tab definition ───────────────────────────────────────────────────────────
 
-type ContactTab = 'relatorio' | 'monitor' | 'analise'
+type ContactTab = 'report' | 'monitor' | 'analysis'
 
 // Note: Tab labels are i18n keys and will be resolved in the component
 const ALL_TABS: { id: ContactTab; label: string; icon: string; abac?: { module: string; field: string } }[] = [
-  { id: 'relatorio', label: 'tabs.relatorio', icon: '📋' },
-  { id: 'monitor',   label: 'tabs.monitor',   icon: '📡', abac: { module: 'contacts', field: 'operacao'   } },
-  { id: 'analise',   label: 'tabs.analysis',  icon: '📊', abac: { module: 'contacts', field: 'visualizar' } },
+  { id: 'report',   label: 'tabs.relatorio', icon: '📋' },
+  { id: 'monitor',  label: 'tabs.monitor',   icon: '📡', abac: { module: 'contacts', field: 'operacao'   } },
+  { id: 'analysis', label: 'tabs.analysis',  icon: '📊', abac: { module: 'contacts', field: 'visualizar' } },
 ]
 
 // ─── Filter bar component ─────────────────────────────────────────────────────
@@ -309,7 +309,7 @@ export default function ContactsPage() {
   const rawTab = searchParams.get('tab') as ContactTab | null
   // If requested tab is not accessible, fall back to first visible tab
   const activeTab: ContactTab = rawTab && validTabIds.includes(rawTab)
-    ? rawTab : (validTabIds[0] ?? 'relatorio')
+    ? rawTab : (validTabIds[0] ?? 'report')
 
   function setTab(t: ContactTab) {
     setSearchParams(p => { p.set('tab', t); return p }, { replace: true })
@@ -371,7 +371,7 @@ export default function ContactsPage() {
 
       {/* ── Tab content ─────────────────────────────────────────────────── */}
       <div className="flex-1 overflow-hidden">
-        {activeTab === 'relatorio' && (
+        {activeTab === 'report' && (
           <ListaTab
             tenantId={tenantId}
             filters={filters}
@@ -384,7 +384,7 @@ export default function ContactsPage() {
             filters={filters}
           />
         )}
-        {activeTab === 'analise' && (
+        {activeTab === 'analysis' && (
           <AnaliseTab
             tenantId={tenantId}
             filters={filters}
