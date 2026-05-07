@@ -278,6 +278,16 @@ POOLS = [
 # are Routing Engine Redis fields, not registry fields — strip them for the POST body).
 REGISTRY_POOL_FIELDS = {"pool_id", "description", "channel_types", "sla_target_ms", "hooks"}
 
+# ─── Channel Endpoints — demo entries ────────────────────────────────────────
+# Visible in Platform UI → Configuration → Channels
+CHANNEL_ENDPOINTS = [
+    # WebChat endpoints — slug-based routing
+    {"channel": "webchat", "identifier": "demo",  "pool_id": "demo_ia",          "label": "WebChat Demo IA"},
+    {"channel": "webchat", "identifier": "sac",   "pool_id": "sac_ia",           "label": "WebChat SAC IA"},
+    # Webhook endpoint — path-based: {host}/channel/webhook/crm-callback
+    {"channel": "webhook", "identifier": "crm-callback", "pool_id": "retencao_humano", "label": "CRM Callback"},
+]
+
 AGENT_TYPES = [
     {
         "agent_type_id":           "agente_demo_ia_v1",
@@ -450,7 +460,31 @@ def seed_agent_types() -> None:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Step 3: write Redis keys (pool configs, instances, rosters, pool sets)
+# Step 3: seed channel endpoints via agent-registry
+# ─────────────────────────────────────────────────────────────────────────────
+
+def seed_channel_endpoints() -> None:
+    log("Registrando channel endpoints no agent-registry …")
+    for ep in CHANNEL_ENDPOINTS:
+        body = {
+            "channel":    ep["channel"],
+            "identifier": ep["identifier"],
+            "pool_id":    ep["pool_id"],
+            "label":      ep.get("label", ep["identifier"]),
+            "active":     True,
+        }
+        status, resp = http_post("/v1/channel-endpoints", body)
+        if status == 201:
+            ok(f"ChannelEndpoint {ep['channel']}/{ep['identifier']} → {ep['pool_id']}")
+        elif status == 409:
+            # Already exists — idempotent, skip
+            ok(f"ChannelEndpoint {ep['channel']}/{ep['identifier']} já existe (skip)")
+        else:
+            warn(f"ChannelEndpoint {ep['channel']}/{ep['identifier']}: HTTP {status} — {resp}")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Step 4: write Redis keys (pool configs, instances, rosters, pool sets)
 # ─────────────────────────────────────────────────────────────────────────────
 
 def seed_redis() -> None:
@@ -524,6 +558,9 @@ def main() -> None:
     print()
 
     seed_agent_types()
+    print()
+
+    seed_channel_endpoints()
     print()
 
     seed_redis()

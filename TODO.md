@@ -72,10 +72,6 @@ Refatoração estrutural para eliminar os múltiplos caminhos de XADD direto no 
 
 Rule added to CLAUDE.md. Fase 1 ✅ complete — see CHANGELOG 2026-05-07.
 
-**Remaining manual steps in WSL terminal:**
-- `git mv packages/platform-ui/src/modules/config-canais packages/platform-ui/src/modules/config-channels`
-- `git mv packages/platform-ui/src/modules/atendimento packages/platform-ui/src/modules/service` + update all imports
-
 ### Fase 2 — ABAC field names (requires DB migration + modules.yaml update)
 
 | Current | Replace with | Files |
@@ -97,6 +93,51 @@ Migration: `UPDATE auth.module_registry SET ... WHERE ...` + auth-api reseed on 
 Layers 1 (agent-registry), 3 (platform-ui), 4 (schemas) ✅ complete — see CHANGELOG 2026-05-07.
 
 **Layer 2 — channel-gateway** *(deferred)*: Replace hardcoded pool lookup with HTTP call to agent-registry `GET /v1/channel-endpoints?channel={ch}&identifier={id}`. Cache with short TTL (~30s) to avoid hot-path latency. Also run `prisma migrate dev --name add_channel_endpoint` in agent-registry when network is available.
+
+---
+
+## Skill Flow — Deploy por Slots de Versão (anterior / corrente / próxima)
+
+O modelo atual de deploy (`skill_deployments`) é um histórico de deploys arbitrário onde o operador escolhe manualmente para qual snapshot fazer rollback. Isso exige conhecimento técnico do operador e abre espaço para erros de configuração.
+
+**Modelo desejado:** cada skill tem 3 slots nomeados pelo desenvolvedor:
+
+| Slot | Papel |
+|---|---|
+| `anterior` | Versão de fallback seguro — destino do rollback automático |
+| `corrente` | Versão atualmente em produção |
+| `próxima` | Candidata ao próximo deploy |
+
+Cada slot carrega: YAML do flow + configuração JSON específica dessa versão.
+
+**Fluxo de deploy:** promove `próxima` → `corrente`; `corrente` desloca automaticamente para `anterior`.
+**Fluxo de rollback:** promove `anterior` → `corrente`; nenhuma escolha manual pelo operador.
+
+O operador executa a intenção que o desenvolvedor pré-definiu — não toma decisão técnica sobre qual versão ou configuração usar.
+
+**Impacto no backend:** novo model `skill_version_slots` em agent-registry com campos `slot` (anterior/corrente/proxima), `skill_id`, `yaml_snapshot`, `config_json`, `pool_ids`, `set_at`, `set_by`. Endpoints `PUT /v1/skills/:id/slots/:slot` (desenvolvedor) e `POST /v1/skills/:id/promote` (trigger de deploy: próxima→corrente) e `POST /v1/skills/:id/rollback` (anterior→corrente).
+
+**Impacto no frontend:** `AgentFlowDeployPage` ganha painel de 3 colunas (anterior/corrente/próxima) onde o desenvolvedor edita cada slot. Operador vê apenas os botões "Promover" e "Rollback" com confirmação.
+
+---
+
+## Skill Flow Editor — Folder Organization (new feature)
+
+O `SkillFlowsPage` exibe lista plana. Não há pastas/grupos. Melhoria desejada: agrupamento visual por `classification.type` (orchestrator/vertical/horizontal) ou por pasta livre configurável no `skill_id` (ex: `skill_sac_*/skill_retencao_*` agrupados). Separação visual entre "skills de workflow" e "agents operacionais" simplificaria a navegação em registries com muitos skills.
+
+**Escopo sugerido:** filtro/toggle por `classification.type` na sidebar do editor (sem filesystem de pastas — apenas agrupamento visual).
+
+---
+
+## Skill Flow — Scheduled Deploy gap (2026-05-07)
+
+`scheduleSkillDeploy()` em `AgentFlowDeployPage.tsx` envia `flow_id: 'skill_scheduled_deploy_v1'` mas **não inclui `flow_definition` em `metadata`**. O worker (`engine-runner.ts`) falha com `"Missing flow_definition in metadata"`.
+
+**Solução A (recomendada):** o endpoint `POST /v1/workflow/trigger` no workflow-api busca a skill pelo `flow_id` no agent-registry e injeta `flow` (entry + steps) em `metadata.flow_definition` antes de salvar a instância. Assim o caller não precisa resolver o YAML.
+
+**Solução B:** `scheduleSkillDeploy` busca `GET /v1/skills/skill_scheduled_deploy_v1` antes de chamar trigger e inclui `metadata: { flow_definition: skill.flow }`.
+
+Solução A é preferível — elimina o acoplamento ao caller e garante que qualquer trigger (webhook, evaluation-api, etc.) funcione corretamente.
 
 ---
 

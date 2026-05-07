@@ -1,13 +1,32 @@
 # docker-compose.demo.yml
-# PlugHub Platform — Demo Environment (Arc 2 → Arc 8 completo)
+# PlugHub Platform — Demo Environment (Arc 2 → Arc 8 frontend)
 #
 # Stack completa: infra + todos os módulos de aplicação + observabilidade
 #
-# Novidades neste build:
-#   • Arc 8 — Disponibilidade de Agentes: rastreamento de pausas com motivo
-#     obrigatório (PauseReasonModal), intervalo agent_pause_intervals no
-#     ClickHouse, relatório de disponibilidade por pool/período
-#     (http://localhost:5174/reports/agents)
+# Novidades neste build (2026-05-07):
+#   • Channel Endpoints — /config/channels
+#     Entidade ChannelEndpoint mapeia endereço externo (slug, DID, número)
+#     para pool_id por canal. Suporte a: webchat, whatsapp, voice, sms,
+#     email, webhook. Webhook como canal de entrada (path-based routing
+#     {host}/channel/webhook/{slug}) separado de workflow webhooks Arc 4.
+#     WebChat config page e Webhook config page por sub-tab.
+#
+#   • Contacts — nova aba Agentes (disponibilidade + pausas)
+#     Tab "Agents" em /contacts?tab=agents: pivot table de disponibilidade
+#     por agente × dia (heatmap âmbar) + lista plana de pausas por motivo
+#     com export CSV. Gateada por ABAC contacts.visualizar.
+#     Backend Arc 8 (analytics-api /reports/agent-availability) pendente —
+#     tab exibe estado de loading até endpoint estar disponível.
+#
+#   • Language Cleanup Fase 1 — identificadores em inglês
+#     Rotas, navKeys, tab IDs, i18n keys e nomes de pasta migrados:
+#     /config/canais → /config/channels, /atendimento → /service,
+#     tab 'relatorio' → 'report', tab 'analise' → 'analysis'.
+#     Redirects de compatibilidade mantidos para todas as rotas antigas.
+#
+#   • Agent Reports movido para Contacts → Agents
+#     /config/agent-reports redireciona para /contacts?tab=agents.
+#     Item removido da sidebar de Configuração.
 #
 #   • Calendar API — Fases 1–4 concluídas:
 #     Fase 1: feriados recorrentes por MM-DD (sem ano fixo)
@@ -36,9 +55,10 @@
 # │      operator@plughub.local   / changeme_operator   (roles: operator)      │
 # │                                                                             │
 # │    Módulos:                                                                 │
-# │      Monitor · Agent Assist · Contatos · Avaliação · Dashboards ·         │
-# │      Faturamento · Config · Skill Flows · Campanhas · Workflows ·          │
-# │      Usuários (Access)                                                      │
+# │      Contatos (Lista/Relatório/Monitor/Análise/Agentes) · Agent Assist ·   │
+# │      Fluxo/Editor · Avaliação · Dashboards · Faturamento ·                 │
+# │      Config (Recursos/Plataforma/Canais/Calendários/Masking/Billing) ·     │
+# │      Workflow · Acesso (Usuários + ABAC)                                   │
 # │                                                                             │
 # │  ① Agent Assist — integrado no Platform UI (recomendado)                   │
 # │    http://localhost:5174/agent-assist?pool=retencao_humano               │
@@ -134,8 +154,10 @@ volumes:
 # │                                                                            │
 # │  PASSO 6 — Configuração e Billing                                        │
 # │    http://localhost:5174/config/platform  ← Config API por namespace     │
+# │    http://localhost:5174/config/channels  ← Channel Endpoints (novo)     │
+# │      Sub-tabs: Endpoints (CRUD por canal) + Config (WebChat / Webhook)   │
 # │    http://localhost:5174/config/billing   ← Faturamento por capacidade   │
-# │    http://localhost:5174/skill-flows      ← Editor Monaco de skills      │
+# │    http://localhost:5174/agent-flow/editor ← Editor Monaco de skills     │
 # │    http://localhost:5174/dashboards       ← Dashboards drag-and-drop     │
 # │                                                                            │
 # │  PASSO 7 — Validar resolve step (Arc 5 Fase 3)                          │
@@ -143,12 +165,13 @@ volumes:
 # │    Verificar step type: resolve com required_fields declarado             │
 # │    E2E: docker compose run e2e-runner ts-node runner.ts --ctx             │
 # │                                                                            │
-# │  PASSO 8 — Arc 8: Disponibilidade e Pausas de Agentes                   │
-# │    http://localhost:5174/reports/agents                                   │
-# │    Pausa o agente no Agent Assist → PauseReasonModal aparece              │
-# │    (selecione motivo da pausa antes de confirmar)                         │
-# │    Relatório mostra disponibilidade por pool/período e breakdown           │
-# │    de pausas por motivo                                                   │
+# │  PASSO 8 — Arc 8: Disponibilidade e Pausas de Agentes (frontend)         │
+# │    http://localhost:5174/contacts?tab=agents                              │
+# │    Pivot table agente × dia (heatmap âmbar por duração de pausas) +      │
+# │    lista plana de pausas por motivo com export CSV.                       │
+# │    NOTA: backend /reports/agent-availability pendente de implementação    │
+# │    → aba exibe skeleton/loading até endpoint disponível.                  │
+# │    PauseReasonModal: pausar agente no Agent Assist → modal com motivos.   │
 # │                                                                            │
 # │  PASSO 9 — Calendar API (Fases 1–4)                                      │
 # │    http://localhost:5174/workflow/calendar                                │
