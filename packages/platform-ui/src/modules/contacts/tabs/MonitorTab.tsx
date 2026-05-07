@@ -763,6 +763,6 @@ export function MonitorTab({ tenantId, filters }: Props) {
       </div>
       )}
 
-    </div>  {/* /outer flex-col */}
+    </div>
   )
 }
