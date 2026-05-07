@@ -280,12 +280,12 @@ const WebhookConfigPage: React.FC = () => {
         <p>
           <strong>Channel webhooks</strong> (this page) receive inbound contacts from external systems
           and route them to a pool via the routing engine. URL pattern:
-          <code className="font-mono bg-blue-100 px-1 mx-1 rounded">{'{'host{'}'}/channel/webhook/{'{'identifier{'}'}</code>
+          <code className="font-mono bg-blue-100 px-1 mx-1 rounded">{'{host}/channel/webhook/{identifier}'}</code>
         </p>
         <p>
           <strong>Workflow webhooks</strong> trigger a specific skill flow directly, bypassing routing.
           Managed in <em>Workflow → Webhooks / Triggers</em>. URL pattern:
-          <code className="font-mono bg-blue-100 px-1 mx-1 rounded">{'{'host{'}'}/v1/workflow/webhook/{'{'id{'}'}</code>
+          <code className="font-mono bg-blue-100 px-1 mx-1 rounded">{'{host}/v1/workflow/webhook/{id}'}</code>
         </p>
       </section>
     </div>

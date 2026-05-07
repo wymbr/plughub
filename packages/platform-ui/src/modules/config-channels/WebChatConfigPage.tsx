@@ -241,7 +241,7 @@ const WebChatConfigPage: React.FC = () => {
           Changes take effect on new WebSocket connections — active sessions are not affected.
         </p>
         <p>
-          The <strong>JWT secret</strong> per tenant is configured via Redis (<code className="font-mono">{'{'tenant_id{'}'}:config:webchat:jwt_secret'}</code>)
+          The <strong>JWT secret</strong> per tenant is configured via Redis (<code className="font-mono">{'{tenant_id}:config:webchat:jwt_secret'}</code>)
           and is not editable here for security reasons.
         </p>
       </section>

@@ -760,7 +760,7 @@ export function MonitorTab({ tenantId, filters }: Props) {
           )}
         </div>
       </div>
-      </div>  {/* /sessions flex wrapper */}
+      </div>
       )}
 
     </div>  {/* /outer flex-col */}
