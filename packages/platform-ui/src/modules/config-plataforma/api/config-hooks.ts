@@ -103,6 +103,60 @@ export function useNamespace(tenantId: string, ns: string): {
   return { entries, loading, error, reload }
 }
 
+// ─── useMultiNamespace ───────────────────────────────────────────────────────
+// Fetches multiple namespaces in parallel and merges them.
+// Each ConfigEntry gets entry.namespace set to its source namespace.
+
+export function useMultiNamespace(tenantId: string, namespaceIds: string[]): {
+  entriesByNs: Record<string, Record<string, ConfigEntry>>
+  loading: boolean
+  error:   string | null
+  reload:  () => void
+} {
+  const [entriesByNs, setEntriesByNs] = useState<Record<string, Record<string, ConfigEntry>>>({})
+  const [loading, setLoading] = useState(false)
+  const [error,   setError]   = useState<string | null>(null)
+  const [tick,    setTick]    = useState(0)
+
+  const reload = useCallback(() => setTick(t => t + 1), [])
+  const nsKey = namespaceIds.join(',')
+
+  useEffect(() => {
+    if (!tenantId || namespaceIds.length === 0) return
+    setLoading(true)
+    setError(null)
+
+    const fetchNs = (ns: string) =>
+      fetch(`/config/${ns}?tenant_id=${encodeURIComponent(tenantId)}`)
+        .then(r => safeJson<{entries?: Record<string, ConfigEntry>; detail?: string}>(r)
+          .then(j => r.ok ? j : Promise.reject(j.detail ?? `HTTP ${r.status}`)))
+        .then(j => {
+          const raw = j.entries ?? {}
+          const normalised: Record<string, ConfigEntry> = {}
+          for (const [k, v] of Object.entries(raw)) {
+            if (v !== null && typeof v === 'object' && 'value' in (v as object)) {
+              normalised[k] = { ...(v as ConfigEntry), namespace: ns }
+            } else {
+              normalised[k] = { key: k, value: v, description: '', tenant_id: '__global__', namespace: ns }
+            }
+          }
+          return { ns, entries: normalised }
+        })
+
+    Promise.all(namespaceIds.map(fetchNs))
+      .then(results => {
+        const merged: Record<string, Record<string, ConfigEntry>> = {}
+        for (const { ns, entries } of results) merged[ns] = entries
+        setEntriesByNs(merged)
+        setLoading(false)
+      })
+      .catch(e => { setError(String(e)); setLoading(false) })
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tenantId, nsKey, tick])
+
+  return { entriesByNs, loading, error, reload }
+}
+
 // ─── putConfig ────────────────────────────────────────────────────────────────
 
 export async function putConfig(

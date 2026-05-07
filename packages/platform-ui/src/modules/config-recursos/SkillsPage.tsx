@@ -1,225 +1,344 @@
-import React, { useState, useEffect } from 'react'
-import { useTranslation } from 'react-i18next'
+/**
+ * SkillsPage.tsx — CRUD for competency (routing) skills
+ *
+ * Stored in config-api namespace: competency_skills
+ * Each entry:
+ *   key   — skill identifier  (e.g. "ingles", "cobranca", "retencao")
+ *   value — { domain: 0-9 }  — default strength scale for routing
+ *
+ * Write operations require an admin token (same pattern as NamespaceEditor).
+ */
+import React, { useState, useCallback } from 'react'
 import { useAuth } from '@/auth/useAuth'
-import * as registryApi from '@/api/registry'
-import { Skill } from '@/types'
-import Table from '@/components/ui/Table'
-import Modal from '@/components/ui/Modal'
-import Button from '@/components/ui/Button'
-import Badge from '@/components/ui/Badge'
-import EmptyState from '@/components/ui/EmptyState'
+import {
+  useNamespace,
+  putConfig,
+  deleteConfig,
+} from '@/modules/config-plataforma/api/config-hooks'
 import Spinner from '@/components/ui/Spinner'
 
-interface SkillDetail extends Skill {
-  tools?: Array<{ server: string; name: string }>
-  knowledge_domains?: string[]
-  entry?: string
+const NS = 'competency_skills'
+
+const DOMAIN_HINTS: Record<number, string> = {
+  0: 'Não requerido',
+  1: 'Mínimo',
+  2: 'Básico',
+  3: 'Básico',
+  4: 'Intermediário',
+  5: 'Intermediário',
+  6: 'Bom',
+  7: 'Avançado',
+  8: 'Avançado',
+  9: 'Especialista',
 }
+
+// ── helpers ────────────────────────────────────────────────────────────────────
+
+function getDomain(value: unknown): number {
+  if (typeof value === 'number') return Math.min(9, Math.max(0, Math.round(value)))
+  if (typeof value === 'object' && value !== null) {
+    const d = (value as Record<string, unknown>).domain
+    return typeof d === 'number' ? Math.min(9, Math.max(0, Math.round(d))) : 5
+  }
+  return 5
+}
+
+// ── DomainBar — visual 0-9 pip bar ────────────────────────────────────────────
+
+function DomainBar({ value }: { value: number }) {
+  return (
+    <div className="flex items-center gap-1.5">
+      <div className="flex gap-0.5">
+        {Array.from({ length: 10 }, (_, i) => (
+          <div
+            key={i}
+            className={`w-2 h-4 rounded-sm transition-colors ${
+              i < value ? 'bg-primary' : 'bg-gray-200'
+            }`}
+          />
+        ))}
+      </div>
+      <span className="text-xs font-mono font-bold text-gray-700 w-5 text-right">
+        {value}
+      </span>
+      <span className="text-[10px] text-gray-400">{DOMAIN_HINTS[value]}</span>
+    </div>
+  )
+}
+
+// ── DomainSlider ──────────────────────────────────────────────────────────────
+
+function DomainSlider({
+  value,
+  onChange,
+}: {
+  value: number
+  onChange: (v: number) => void
+}) {
+  return (
+    <div className="flex items-center gap-3 flex-1">
+      <input
+        type="range"
+        min={0}
+        max={9}
+        step={1}
+        value={value}
+        onChange={e => onChange(Number(e.target.value))}
+        className="flex-1 max-w-[160px] accent-primary"
+      />
+      <span className="text-xs font-mono font-bold text-gray-700 w-5">{value}</span>
+      <span className="text-[10px] text-gray-400">{DOMAIN_HINTS[value]}</span>
+    </div>
+  )
+}
+
+// ── SkillsPage ─────────────────────────────────────────────────────────────────
 
 const SkillsPage: React.FC = () => {
   const { session } = useAuth()
-  const { t } = useTranslation('configRecursos')
-  const { t: tCommon } = useTranslation('common')
-  const [skills, setSkills] = useState<Skill[]>([])
-  const [isLoading, setIsLoading] = useState(true)
-  const [error, setError] = useState('')
-  const [selected, setSelected] = useState<SkillDetail | null>(null)
-  const [isDetailOpen, setIsDetailOpen] = useState(false)
-  const [isDeleting, setIsDeleting] = useState(false)
-  const [confirmDelete, setConfirmDelete] = useState(false)
+  const tenantId = session?.tenantId ?? ''
 
-  useEffect(() => { loadSkills() }, [])
+  const { entries, loading, error: loadError, reload } = useNamespace(tenantId, NS)
+  const sortedKeys = Object.keys(entries).sort()
 
-  const loadSkills = async () => {
-    if (!session) return
-    setIsLoading(true)
-    try {
-      const result = await registryApi.listSkills(session.tenantId)
-      setSkills(result.items || [])
-    } catch {
-      setError(t('skills.loadFailed'))
-    } finally {
-      setIsLoading(false)
+  const [adminToken, setAdminToken] = useState('')
+  const [editingKey, setEditingKey] = useState<string | null>(null)
+  const [editDomain, setEditDomain] = useState(5)
+
+  const [isAdding, setIsAdding] = useState(false)
+  const [newKey, setNewKey] = useState('')
+  const [newDomain, setNewDomain] = useState(5)
+
+  const [saving, setSaving] = useState(false)
+  const [deletingKey, setDeletingKey] = useState<string | null>(null)
+  const [opError, setOpError] = useState<string | null>(null)
+
+  // ── actions ──────────────────────────────────────────────────────────────────
+
+  const handleAddStart = () => {
+    setIsAdding(true)
+    setNewKey('')
+    setNewDomain(5)
+    setEditingKey(null)
+    setOpError(null)
+  }
+
+  const handleAddSave = useCallback(async () => {
+    const key = newKey.trim()
+    if (!key) { setOpError('Key obrigatória'); return }
+    if (!/^[a-z0-9_]+$/.test(key)) {
+      setOpError('Key: apenas letras minúsculas, dígitos e _')
+      return
     }
-  }
-
-  const handleRowClick = async (skill: Skill) => {
-    setSelected(skill as SkillDetail)
-    setConfirmDelete(false)
-    setIsDetailOpen(true)
-    // Fetch full detail
+    if (entries[key]) { setOpError(`Key "${key}" já existe`); return }
+    if (!adminToken) { setOpError('Admin token obrigatório para salvar'); return }
+    setSaving(true); setOpError(null)
     try {
-      const detail = await registryApi.getSkill(skill.skill_id, session!.tenantId)
-      setSelected(detail as SkillDetail)
-    } catch { /* keep summary */ }
-  }
-
-  const handleDelete = async () => {
-    if (!session || !selected) return
-    setIsDeleting(true)
-    try {
-      await registryApi.deleteSkill(selected.skill_id, session.tenantId)
-      await loadSkills()
-      setIsDetailOpen(false)
-      setSelected(null)
-      setConfirmDelete(false)
-    } catch {
-      setError('Failed to delete skill')
+      await putConfig(NS, key, { domain: newDomain }, null, adminToken)
+      reload()
+      setIsAdding(false)
+    } catch (e) {
+      setOpError(String(e))
     } finally {
-      setIsDeleting(false)
+      setSaving(false)
     }
+  }, [newKey, newDomain, adminToken, entries, reload])
+
+  const handleEditStart = (key: string) => {
+    setEditDomain(getDomain(entries[key]?.value))
+    setEditingKey(key)
+    setIsAdding(false)
+    setOpError(null)
   }
 
-  const typeColor = (type?: string) => {
-    if (type === 'orchestrator') return 'text-indigo-600 bg-indigo-50 border-indigo-200'
-    if (type === 'vertical')     return 'text-cyan-600 bg-cyan-50 border-cyan-200'
-    return 'text-yellow-600 bg-yellow-50 border-yellow-200'
-  }
+  const handleEditSave = useCallback(async (key: string) => {
+    if (!adminToken) { setOpError('Admin token obrigatório para salvar'); return }
+    setSaving(true); setOpError(null)
+    try {
+      await putConfig(NS, key, { domain: editDomain }, null, adminToken)
+      reload()
+      setEditingKey(null)
+    } catch (e) {
+      setOpError(String(e))
+    } finally {
+      setSaving(false)
+    }
+  }, [editDomain, adminToken, reload])
 
-  const columns = [
-    {
-      key: 'skill_id',
-      label: t('skills.fields.skillId'),
-      render: (id: string) => <code className="text-xs text-secondary">{id}</code>,
-    },
-    { key: 'name',    label: t('skills.fields.name') },
-    { key: 'version', label: t('skills.fields.version') },
-    {
-      key: 'classification',
-      label: t('skills.fields.type'),
-      render: (c?: { type?: string }) => c?.type ? (
-        <span className={`text-xs font-semibold px-2 py-0.5 rounded border ${typeColor(c.type)}`}>
-          {c.type}
-        </span>
-      ) : <span className="text-gray text-xs">—</span>,
-    },
-    {
-      key: 'status',
-      label: t('skills.fields.status'),
-      render: (s: string) => <Badge variant={s === 'active' ? 'active' : 'default'}>{s}</Badge>,
-    },
-  ]
+  const handleDelete = useCallback(async (key: string) => {
+    if (!adminToken) { setOpError('Admin token obrigatório para excluir'); return }
+    if (!window.confirm(`Remover competency skill "${key}"?`)) return
+    setDeletingKey(key); setOpError(null)
+    try {
+      await deleteConfig(NS, key, null, adminToken)
+      reload()
+    } catch (e) {
+      setOpError(String(e))
+    } finally {
+      setDeletingKey(null)
+    }
+  }, [adminToken, reload])
+
+  // ── render ────────────────────────────────────────────────────────────────────
 
   return (
-    <div>
-      <div className="mb-4 bg-secondary/5 border border-secondary/20 rounded px-4 py-2 text-sm text-dark">
-        Skills are managed via YAML files in{' '}
-        <code className="text-primary text-xs">packages/skill-flow-engine/skills/</code>{' '}
-        and synced at bridge startup. Use the{' '}
-        <strong>Skill Flows</strong> module to edit them.
+    <div className="flex flex-col gap-4">
+      {/* Info banner */}
+      <div className="bg-blue-50 border border-blue-200 rounded px-4 py-2.5 text-sm text-blue-800">
+        Competency skills são usadas no roteamento estático — agentes e pools declaram
+        um nível (0-9) por skill. Armazenadas em{' '}
+        <code className="font-mono text-xs bg-blue-100 px-1 rounded">competency_skills</code>{' '}
+        na Config API.
       </div>
 
-      {error && (
-        <div className="mb-4 bg-red/10 border border-red text-red px-3 py-2 rounded text-sm flex justify-between">
-          <span>{error}</span>
-          <button onClick={() => setError('')} className="font-bold">✕</button>
+      {/* Controls row */}
+      <div className="flex items-center gap-3 flex-wrap">
+        <label className="text-xs font-semibold text-gray-600 shrink-0">Admin Token</label>
+        <input
+          type="password"
+          value={adminToken}
+          onChange={e => setAdminToken(e.target.value)}
+          placeholder="Token para escrita"
+          className="w-52 text-xs font-mono px-2 py-1.5 border border-gray-300 rounded focus:outline-none focus:border-blue-400 bg-white"
+        />
+        {!adminToken && (
+          <span className="text-xs text-amber-600">⚠ Defina o admin token para editar</span>
+        )}
+        <button
+          onClick={handleAddStart}
+          disabled={isAdding}
+          className="ml-auto px-3 py-1.5 text-xs font-semibold bg-primary text-white rounded hover:bg-blue-800 disabled:opacity-40 transition-colors"
+        >
+          + Nova Skill
+        </button>
+      </div>
+
+      {/* Error */}
+      {(opError || loadError) && (
+        <div className="bg-red-50 border border-red-300 text-red-700 px-3 py-2 rounded text-xs flex justify-between items-center">
+          <span>{opError ?? loadError}</span>
+          <button onClick={() => setOpError(null)} className="ml-3 font-bold leading-none">✕</button>
         </div>
       )}
 
-      {isLoading ? (
-        <div className="flex justify-center py-8"><Spinner /></div>
-      ) : skills.length === 0 ? (
-        <EmptyState title={t('skills.empty')} />
-      ) : (
-        <Table
-          columns={columns}
-          data={skills}
-          keyField="skill_id"
-          onRowClick={handleRowClick}
-        />
-      )}
+      {/* Table */}
+      <div className="border border-gray-200 rounded overflow-hidden">
+        {/* Column header */}
+        <div className="flex gap-4 px-4 py-2 bg-gray-50 border-b border-gray-200 text-[10px] font-semibold text-gray-400 uppercase tracking-wide shrink-0">
+          <span className="w-44 shrink-0">Chave</span>
+          <span className="flex-1">Domínio (0-9)</span>
+          <span className="w-28 shrink-0 text-right">Ações</span>
+        </div>
 
-      {/* Detail modal */}
-      {selected && (
-        <Modal
-          isOpen={isDetailOpen}
-          onClose={() => { setIsDetailOpen(false); setConfirmDelete(false) }}
-          title={selected.skill_id}
-          footer={
-            confirmDelete ? (
-              <>
-                <span className="text-sm text-red self-center">{t('skills.deleteConfirm')}</span>
-                <Button variant="ghost" onClick={() => setConfirmDelete(false)}>{tCommon('cancel')}</Button>
-                <Button variant="danger" onClick={handleDelete} disabled={isDeleting}>
-                  {isDeleting ? t('skills.deleting') : tCommon('confirm')}
-                </Button>
-              </>
-            ) : (
-              <>
-                <Button variant="danger" onClick={() => setConfirmDelete(true)}>{tCommon('delete')}</Button>
-                <Button variant="ghost" onClick={() => setIsDetailOpen(false)}>{t('skills.close')}</Button>
-              </>
-            )
-          }
-        >
-          <div className="space-y-4 text-sm">
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <div className="text-xs font-semibold text-gray uppercase mb-1">{t('skills.fields.name')}</div>
-                <span className="text-dark">{selected.name}</span>
-              </div>
-              <div>
-                <div className="text-xs font-semibold text-gray uppercase mb-1">{t('skills.fields.version')}</div>
-                <span className="text-dark font-mono">{selected.version}</span>
-              </div>
-              {selected.classification?.type && (
-                <div>
-                  <div className="text-xs font-semibold text-gray uppercase mb-1">{t('skills.fields.type')}</div>
-                  <span className={`text-xs font-semibold px-2 py-0.5 rounded border ${typeColor(selected.classification.type)}`}>
-                    {selected.classification.type}
-                  </span>
-                </div>
-              )}
-              {selected.classification?.domain && (
-                <div>
-                  <div className="text-xs font-semibold text-gray uppercase mb-1">{t('skills.fields.domain')}</div>
-                  <span className="text-dark">{selected.classification.domain}</span>
-                </div>
-              )}
-            </div>
+        {/* Loading */}
+        {loading && (
+          <div className="flex justify-center py-8"><Spinner /></div>
+        )}
 
-            {selected.description && (
-              <div>
-                <div className="text-xs font-semibold text-gray uppercase mb-1">Description</div>
-                <p className="text-dark leading-relaxed">{selected.description}</p>
-              </div>
-            )}
-
-            {selected.tools && selected.tools.length > 0 && (
-              <div>
-                <div className="text-xs font-semibold text-gray uppercase mb-2">
-                  Tools ({selected.tools.length})
-                </div>
-                <div className="flex flex-wrap gap-1">
-                  {selected.tools.map((tool, i) => (
-                    <span key={i} className="text-xs px-1.5 py-0.5 rounded bg-gray/10 text-gray border border-gray/20 font-mono">
-                      {tool.server}/{tool.name}
-                    </span>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {selected.knowledge_domains && selected.knowledge_domains.length > 0 && (
-              <div>
-                <div className="text-xs font-semibold text-gray uppercase mb-2">Knowledge Domains</div>
-                <div className="flex flex-wrap gap-1">
-                  {selected.knowledge_domains.map((d, i) => (
-                    <span key={i} className="text-xs px-1.5 py-0.5 rounded bg-gray/10 text-gray border border-gray/20">
-                      {d}
-                    </span>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            <div>
-              <div className="text-xs font-semibold text-gray uppercase mb-1">Status</div>
-              <Badge variant={selected.status === 'active' ? 'active' : 'default'}>{selected.status}</Badge>
+        {/* Add row */}
+        {isAdding && (
+          <div className="flex items-center gap-4 px-4 py-3 border-b border-blue-100 bg-blue-50/40">
+            <input
+              value={newKey}
+              onChange={e => setNewKey(e.target.value.toLowerCase().replace(/[^a-z0-9_]/g, ''))}
+              placeholder="ex: ingles"
+              autoFocus
+              className="w-44 shrink-0 text-xs font-mono px-2 py-1.5 border border-gray-300 rounded focus:outline-none focus:border-blue-400 bg-white"
+            />
+            <DomainSlider value={newDomain} onChange={setNewDomain} />
+            <div className="flex gap-1.5 shrink-0">
+              <button
+                onClick={handleAddSave}
+                disabled={saving || !adminToken}
+                className="px-2.5 py-1 text-xs font-semibold bg-primary text-white rounded disabled:opacity-40 hover:bg-blue-800 transition-colors"
+              >
+                {saving ? '…' : 'Salvar'}
+              </button>
+              <button
+                onClick={() => { setIsAdding(false); setOpError(null) }}
+                className="px-2.5 py-1 text-xs border border-gray-300 rounded text-gray-600 hover:text-gray-900 transition-colors"
+              >
+                Cancelar
+              </button>
             </div>
           </div>
-        </Modal>
-      )}
+        )}
+
+        {/* Empty state */}
+        {!loading && sortedKeys.length === 0 && !isAdding && (
+          <div className="px-4 py-8 text-center text-sm text-gray-400">
+            Nenhuma competency skill cadastrada.{' '}
+            <button
+              onClick={handleAddStart}
+              className="text-primary hover:underline font-medium"
+            >
+              + Nova Skill
+            </button>
+          </div>
+        )}
+
+        {/* Rows */}
+        {sortedKeys.map(key => {
+          const domain = getDomain(entries[key]?.value)
+          const isEditing = editingKey === key
+          const isDeleting = deletingKey === key
+
+          return (
+            <div
+              key={key}
+              className="flex items-center gap-4 px-4 py-3 border-b border-gray-100 last:border-0"
+            >
+              <span className="w-44 shrink-0 text-xs font-mono font-semibold text-gray-700">
+                {key}
+              </span>
+
+              {isEditing ? (
+                <>
+                  <DomainSlider value={editDomain} onChange={setEditDomain} />
+                  <div className="flex gap-1.5 shrink-0">
+                    <button
+                      onClick={() => handleEditSave(key)}
+                      disabled={saving || !adminToken}
+                      className="px-2.5 py-1 text-xs font-semibold bg-primary text-white rounded disabled:opacity-40 hover:bg-blue-800 transition-colors"
+                    >
+                      {saving ? '…' : 'Salvar'}
+                    </button>
+                    <button
+                      onClick={() => { setEditingKey(null); setOpError(null) }}
+                      className="px-2.5 py-1 text-xs border border-gray-300 rounded text-gray-600 hover:text-gray-900 transition-colors"
+                    >
+                      Cancelar
+                    </button>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <div className="flex-1">
+                    <DomainBar value={domain} />
+                  </div>
+                  <div className="flex gap-1.5 shrink-0">
+                    <button
+                      onClick={() => handleEditStart(key)}
+                      className="px-2 py-1 text-xs border border-gray-300 rounded text-gray-600 hover:text-gray-900 hover:border-gray-400 transition-colors"
+                    >
+                      ✏ Editar
+                    </button>
+                    {adminToken && (
+                      <button
+                        onClick={() => handleDelete(key)}
+                        disabled={isDeleting}
+                        className="px-2 py-1 text-xs border border-red-200 rounded text-red-500 hover:bg-red-50 disabled:opacity-40 transition-colors"
+                      >
+                        {isDeleting ? '…' : '🗑'}
+                      </button>
+                    )}
+                  </div>
+                </>
+              )}
+            </div>
+          )
+        })}
+      </div>
     </div>
   )
 }

@@ -9,7 +9,7 @@
  *   ├──────────────┬───────────────────────────────────────┤
  *   │  Skill list  │  Monaco YAML editor                   │
  *   │  search      │                                       │
- *   │  + New       │  ─────────────────────────────────    │
+ *   │  search      │  ─────────────────────────────────    │
  *   │  rows…       │  Status bar                           │
  *   └──────────────┴───────────────────────────────────────┘
  *
@@ -22,23 +22,6 @@ import * as yaml from 'js-yaml'
 import { useAuth } from '@/auth/useAuth'
 import Spinner from '@/components/ui/Spinner'
 import type { Skill } from '@/types'
-
-// ── AgentType config captured at new-skill creation ─────────────────────────
-
-interface AgentTypeConfig {
-  agent_type_id:           string
-  framework:               string
-  execution_model:         'stateless' | 'stateful'
-  role:                    string
-  max_concurrent_sessions: number
-  pools:                   string[]
-}
-
-const FRAMEWORKS = [
-  'plughub-native', 'human', 'external-mcp',
-  'langgraph', 'crewai', 'anthropic_sdk', 'azure_ai', 'google_vertex', 'generic_mcp',
-]
-const ROLES = ['executor', 'orchestrator', 'evaluator', 'supervisor']
 
 // ── Blank template ──────────────────────────────────────────────────────────
 
@@ -196,175 +179,6 @@ function SkillListItem({
   )
 }
 
-// ── New Skill form (with AgentType) ──────────────────────────────────────────
-
-function NewSkillForm({
-  tenantId,
-  onConfirm,
-  onCancel,
-}: {
-  tenantId: string
-  onConfirm: (skillId: string, agentType: AgentTypeConfig) => void
-  onCancel:  () => void
-}) {
-  const [skillId,    setSkillId]    = useState('skill_novo_v1')
-  const [framework,  setFramework]  = useState('plughub-native')
-  const [execModel,  setExecModel]  = useState<'stateless' | 'stateful'>('stateless')
-  const [role,       setRole]       = useState('executor')
-  const [maxConc,    setMaxConc]    = useState(1)
-  const [pools,      setPools]      = useState<Array<{ pool_id: string }>>([])
-  const [selPools,   setSelPools]   = useState<string[]>([])
-  const [loadingPools, setLoadingPools] = useState(false)
-  const [formError,  setFormError]  = useState('')
-
-  useEffect(() => {
-    if (!tenantId) return
-    setLoadingPools(true)
-    fetch('/v1/pools', { headers: { 'Content-Type': 'application/json', 'x-tenant-id': tenantId } })
-      .then(r => r.ok ? r.json() : Promise.reject())
-      .then((data: { pools?: Array<{ pool_id: string }>; items?: Array<{ pool_id: string }> }) => {
-        setPools(data.pools ?? data.items ?? [])
-      })
-      .catch(() => { /* stale ok */ })
-      .finally(() => setLoadingPools(false))
-  }, [tenantId])
-
-  const togglePool = (id: string) => {
-    setSelPools(prev =>
-      prev.includes(id) ? prev.filter(p => p !== id) : [...prev, id]
-    )
-  }
-
-  const handleConfirm = () => {
-    if (!skillId.trim()) { setFormError('Skill ID é obrigatório'); return }
-    if (!/^skill_[a-z0-9_]+_v\d+$/.test(skillId.trim())) {
-      setFormError('Formato: skill_{nome}_v{n}  ex: skill_sac_ia_v1')
-      return
-    }
-    if (selPools.length === 0) { setFormError('Selecione ao menos um pool'); return }
-    onConfirm(skillId.trim(), {
-      agent_type_id:           skillId.trim(),
-      framework,
-      execution_model:         execModel,
-      role,
-      max_concurrent_sessions: maxConc,
-      pools:                   selPools,
-    })
-  }
-
-  const fieldCls = 'w-full px-2 py-1.5 text-xs border border-gray-700 rounded bg-gray-800 text-gray-100 font-mono focus:outline-none focus:border-violet-500 placeholder-gray-500'
-  const labelCls = 'text-xs font-semibold text-gray-400 mb-1 block'
-
-  return (
-    <div className="border-b border-gray-800 bg-violet-950/30 overflow-y-auto max-h-[70vh]">
-      {/* Skill section */}
-      <div className="px-3 pt-3 pb-2 border-b border-gray-800/60">
-        <p className="text-xs font-bold text-violet-400 mb-2">📄 Skill Flow</p>
-        <label className={labelCls}>Skill ID *</label>
-        <input
-          value={skillId}
-          onChange={e => setSkillId(e.target.value)}
-          onKeyDown={e => { if (e.key === 'Enter') handleConfirm() }}
-          placeholder="skill_nome_v1"
-          className={fieldCls}
-        />
-        <p className="text-xs text-gray-600 mt-1">Formato: skill_&#123;nome&#125;_v&#123;n&#125;</p>
-      </div>
-
-      {/* AgentType section */}
-      <div className="px-3 pt-2 pb-3">
-        <p className="text-xs font-bold text-cyan-400 mb-2 mt-1">🤖 AgentType</p>
-        <p className="text-xs text-gray-600 mb-2">
-          ID: <code className="text-violet-400">{skillId || '—'}</code>
-        </p>
-
-        <div className="space-y-2">
-          <div className="grid grid-cols-2 gap-2">
-            <div>
-              <label className={labelCls}>Framework</label>
-              <select value={framework} onChange={e => setFramework(e.target.value)} className={fieldCls}>
-                {FRAMEWORKS.map(f => <option key={f} value={f}>{f}</option>)}
-              </select>
-            </div>
-            <div>
-              <label className={labelCls}>Exec Model</label>
-              <select
-                value={execModel}
-                onChange={e => setExecModel(e.target.value as 'stateless' | 'stateful')}
-                className={fieldCls}
-              >
-                <option value="stateless">stateless</option>
-                <option value="stateful">stateful</option>
-              </select>
-            </div>
-            <div>
-              <label className={labelCls}>Role</label>
-              <select value={role} onChange={e => setRole(e.target.value)} className={fieldCls}>
-                {ROLES.map(r => <option key={r} value={r}>{r}</option>)}
-              </select>
-            </div>
-            <div>
-              <label className={labelCls}>Max Concurrent</label>
-              <input
-                type="number"
-                min={1}
-                value={maxConc}
-                onChange={e => setMaxConc(parseInt(e.target.value) || 1)}
-                className={fieldCls}
-              />
-            </div>
-          </div>
-
-          <div>
-            <label className={labelCls}>Pools *</label>
-            {loadingPools
-              ? <p className="text-xs text-gray-500">Carregando pools…</p>
-              : pools.length === 0
-              ? <p className="text-xs text-gray-500">Nenhum pool disponível</p>
-              : (
-                <div className="space-y-1 max-h-28 overflow-y-auto border border-gray-700 rounded p-1.5">
-                  {pools.map(p => (
-                    <label key={p.pool_id} className="flex items-center gap-2 cursor-pointer">
-                      <input
-                        type="checkbox"
-                        checked={selPools.includes(p.pool_id)}
-                        onChange={() => togglePool(p.pool_id)}
-                        className="w-3.5 h-3.5 rounded"
-                      />
-                      <span className="text-xs text-gray-200 font-mono">{p.pool_id}</span>
-                    </label>
-                  ))}
-                </div>
-              )
-            }
-          </div>
-        </div>
-
-        {formError && (
-          <p className="text-xs text-red-400 mt-2 bg-red-950/50 border border-red-900 rounded px-2 py-1">
-            {formError}
-          </p>
-        )}
-
-        <div className="flex gap-2 mt-3">
-          <button
-            onClick={handleConfirm}
-            className="px-3 py-1 text-xs font-bold rounded border border-violet-500 bg-violet-950 text-violet-400 hover:bg-violet-900 transition-colors"
-          >
-            Criar
-          </button>
-          <button
-            onClick={onCancel}
-            className="px-3 py-1 text-xs rounded border border-gray-700 text-gray-400 hover:bg-gray-800 transition-colors"
-          >
-            Cancelar
-          </button>
-        </div>
-      </div>
-    </div>
-  )
-}
-
 // ── SkillFlowsPage ────────────────────────────────────────────────────────────
 
 const SkillFlowsPage: React.FC = () => {
@@ -399,11 +213,8 @@ const SkillFlowsPage: React.FC = () => {
   const [savedValue,       setSavedValue]       = useState(BLANK_TEMPLATE)
   const [statusKind,       setStatusKind]       = useState<StatusKind>('idle')
   const [statusMsg,        setStatusMsg]        = useState('Selecione uma skill ou crie uma nova')
-  const [isNew,            setIsNew]            = useState(false)
-  const [newPrompt,        setNewPrompt]        = useState(false)
-  const [search,           setSearch]           = useState('')
-  const [confirmDel,       setConfirmDel]       = useState(false)
-  const [pendingAgentType, setPendingAgentType] = useState<AgentTypeConfig | null>(null)
+  const [search,    setSearch]    = useState('')
+  const [confirmDel, setConfirmDel] = useState(false)
 
   const isModified = editorValue !== savedValue
   const editorRef  = useRef<unknown>(null)
@@ -420,7 +231,6 @@ const SkillFlowsPage: React.FC = () => {
       const yamlText = skillToYaml(data)
       setEditorValue(yamlText)
       setSavedValue(yamlText)
-      setIsNew(false)
       setStatusKind('idle')
       setStatusMsg(`Carregado: ${skillId}`)
     } catch (e: unknown) {
@@ -433,20 +243,6 @@ const SkillFlowsPage: React.FC = () => {
     if (isModified && !confirm('Descartar alterações não salvas?')) return
     setSelectedId(skillId)
     void loadSkill(skillId)
-  }
-
-  // ── New skill ──────────────────────────────────────────────────────────────
-  function handleNewConfirm(skillId: string, agentType: AgentTypeConfig) {
-    if (isModified && !confirm('Descartar alterações não salvas?')) return
-    const template = BLANK_TEMPLATE.replace('skill_novo_v1', skillId)
-    setSelectedId(skillId)
-    setEditorValue(template)
-    setSavedValue('')   // force isModified = true
-    setIsNew(true)
-    setNewPrompt(false)
-    setPendingAgentType(agentType)
-    setStatusKind('idle')
-    setStatusMsg(`Nova skill: ${skillId} (não salva)`)
   }
 
   // ── Save ───────────────────────────────────────────────────────────────────
@@ -474,42 +270,10 @@ const SkillFlowsPage: React.FC = () => {
         body:    JSON.stringify(payload),
       })
 
-      // If this is a new skill, also create the associated AgentType
-      if (isNew && pendingAgentType) {
-        try {
-          await apiFetchRaw('/v1/agent-types', {
-            method:  'POST',
-            headers: operatorHeaders(tenantId),
-            body:    JSON.stringify({
-              agent_type_id:           pendingAgentType.agent_type_id,
-              framework:               pendingAgentType.framework,
-              execution_model:         pendingAgentType.execution_model,
-              role:                    pendingAgentType.role,
-              max_concurrent_sessions: pendingAgentType.max_concurrent_sessions,
-              pools:                   pendingAgentType.pools.map(id => ({ pool_id: id })),
-              skills:                  [],
-            }),
-          })
-          setPendingAgentType(null)
-        } catch (agentErr: unknown) {
-          // Skill saved but AgentType failed — warn but don't block
-          setStatusKind('saved')
-          setStatusMsg(`Skill salva. AgentType falhou: ${agentErr instanceof Error ? agentErr.message : 'erro'}`)
-          setSavedValue(editorValue)
-          setSelectedId(skillId)
-          setIsNew(false)
-          void refreshList()
-          return
-        }
-      }
-
       setSavedValue(editorValue)
       setSelectedId(skillId)
-      setIsNew(false)
       setStatusKind('saved')
-      setStatusMsg(isNew && pendingAgentType
-        ? `Salvo: ${skillId} + AgentType criado`
-        : `Salvo: ${skillId}`)
+      setStatusMsg(`Salvo: ${skillId}`)
       void refreshList()
     } catch (e: unknown) {
       setStatusKind('error')
@@ -532,7 +296,6 @@ const SkillFlowsPage: React.FC = () => {
       setSelectedId(null)
       setEditorValue(BLANK_TEMPLATE)
       setSavedValue(BLANK_TEMPLATE)
-      setIsNew(false)
       setConfirmDel(false)
       setStatusKind('idle')
       setStatusMsg('Skill removida')
@@ -546,17 +309,7 @@ const SkillFlowsPage: React.FC = () => {
   // ── Discard ────────────────────────────────────────────────────────────────
   function handleDiscard() {
     if (!confirm('Descartar todas as alterações não salvas?')) return
-    if (isNew) {
-      setSelectedId(null)
-      setEditorValue(BLANK_TEMPLATE)
-      setSavedValue(BLANK_TEMPLATE)
-      setIsNew(false)
-      setPendingAgentType(null)
-      setStatusKind('idle')
-      setStatusMsg('Nenhuma skill selecionada')
-    } else if (selectedId) {
-      void loadSkill(selectedId)
-    }
+    if (selectedId) void loadSkill(selectedId)
   }
 
   // ── Live YAML validation ───────────────────────────────────────────────────
@@ -604,13 +357,7 @@ const SkillFlowsPage: React.FC = () => {
         {selectedId && (
           <span className="text-xs text-gray-500 font-mono">
             {selectedId}
-            {isNew      && <span className="text-yellow-400 ml-1">(nova)</span>}
-            {isModified && !isNew && <span className="text-yellow-400 ml-1">●</span>}
-          </span>
-        )}
-        {isNew && pendingAgentType && (
-          <span className="text-xs text-cyan-500 bg-cyan-950/50 border border-cyan-800 px-2 py-0.5 rounded font-mono">
-            🤖 {pendingAgentType.framework} · {pendingAgentType.role} · {pendingAgentType.pools.join(', ')}
+            {isModified && <span className="text-yellow-400 ml-1">●</span>}
           </span>
         )}
 
@@ -646,7 +393,7 @@ const SkillFlowsPage: React.FC = () => {
               </button>
             </>
           ) : (
-            selectedId && !isNew && (
+            selectedId && (
               <button
                 onClick={() => setConfirmDel(true)}
                 className="px-3 py-1 text-xs font-semibold rounded border border-red-800/50 text-red-400 hover:bg-red-950 transition-colors"
@@ -658,7 +405,7 @@ const SkillFlowsPage: React.FC = () => {
 
           <button
             onClick={() => void handleSave()}
-            disabled={statusKind === 'saving' || (!isModified && !isNew)}
+            disabled={statusKind === 'saving' || !isModified}
             className="px-4 py-1 text-xs font-bold rounded border border-violet-600 bg-violet-950 text-violet-300 hover:bg-violet-900 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
           >
             {statusKind === 'saving' ? 'Salvando…' : '⌘S Salvar'}
@@ -671,7 +418,7 @@ const SkillFlowsPage: React.FC = () => {
 
         {/* ── Left sidebar: skill list ───────────────────────────────────── */}
         <div className="w-60 shrink-0 bg-gray-900 border-r border-gray-800 flex flex-col overflow-hidden">
-          {/* Search + New */}
+          {/* Search */}
           <div className="px-3 py-2.5 border-b border-gray-800 shrink-0">
             <input
               value={search}
@@ -679,22 +426,7 @@ const SkillFlowsPage: React.FC = () => {
               placeholder="Buscar skills…"
               className="w-full px-2 py-1.5 text-xs border border-gray-700 rounded bg-gray-800 text-gray-200 focus:outline-none focus:border-violet-600 placeholder-gray-500"
             />
-            <button
-              onClick={() => setNewPrompt(p => !p)}
-              className="w-full mt-2 py-1.5 text-xs font-bold rounded border border-violet-700/60 bg-violet-950 text-violet-400 hover:bg-violet-900 transition-colors"
-            >
-              + Nova Skill
-            </button>
           </div>
-
-          {/* New skill form */}
-          {newPrompt && (
-            <NewSkillForm
-              tenantId={tenantId}
-              onConfirm={handleNewConfirm}
-              onCancel={() => setNewPrompt(false)}
-            />
-          )}
 
           {/* Skill list */}
           <div className="flex-1 overflow-y-auto">

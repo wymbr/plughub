@@ -5,6 +5,50 @@
 
 ---
 
+## platform-ui — UI fixes + Skills/Pools/Config refactor (2026-05-07)
+
+### Contacts (#23)
+- ✅ Tab bar separada do título (border-b não mais aparecia sob "Contatos")
+- ✅ Normalização de URL stale (`?tab=lista` → `?tab=report` via useEffect)
+- ✅ Tab "Report" renomeada para "List" (`tabs.list`); i18n já tinha a chave
+- ✅ Admin/supervisor/developer bypassam ABAC — veem todas as abas (List · Monitor · Analysis · Agents)
+
+### Calendars (#24)
+- ✅ Botão "New" adicionado nas seções Calendar e Holiday Sets
+- ✅ Aba "Associations" removida (TabBar + AssociationsTab + código relacionado removidos)
+- ✅ Tab state tipado com union `CalTab = 'calendars' | 'holiday-sets'`
+
+### Flow/Editor (#25)
+- ✅ Botão "New" removido (skills vêm do registry YAML, não são criadas pela UI)
+- ✅ `NewSkillForm`, `AgentTypeConfig`, `FRAMEWORKS`, `ROLES`, `handleNewConfirm` removidos
+- ✅ `isNew`, `pendingAgentType` removidos do estado
+
+### Config/Platform — Masking + Namespaces (#26, #27)
+- ✅ `MaskingPage.tsx`: namespace `masking` → `audit_policy`; chaves `capture_input`, `capture_output`, `token_retention_days`
+- ✅ `NamespaceEditor`: namespaces `masking` e `audit_policy` removidos (têm UI própria)
+- ✅ Namespaces `routing` + `session` unificados em grupo "Roteamento & Timeouts" com section headers
+- ✅ Namespace `expurgo` adicionado (`voice_recording_days`, `attachment_days`)
+- ✅ `NamespacePanel` sub-componente extraído; suporte a grupos (`namespaceIds[]`)
+- ✅ `useMultiNamespace` hook adicionado em `config-hooks.ts`
+
+### Resources/Skills (#28)
+- ✅ `SkillsPage.tsx` reescrito: CRUD de competency skills no namespace `competency_skills` da Config API
+- ✅ Cada entry: `key` (snake_case) + `value.domain` (0-9)
+- ✅ Visual domain bar (10 pips) + slider inline para add/edit
+- ✅ Admin token field para operações de escrita
+
+### Resources/Pools (#29)
+- ✅ `PoolsPage.tsx` reescrito: form de Modal para Drawer (slide-in direita, Escape para fechar)
+- ✅ `routing_weights` substitui `routing_expression` na UI: Fixos (per-skill 0-9) + Dinâmicos (5 fatores 0-9)
+- ✅ Competency skills carregadas de `/config/competency_skills` para o seletor de Fixos
+- ✅ `routing_skills[]` derivado automaticamente dos Fixos com peso > 0 no save
+- ✅ `types/index.ts`: `RoutingWeights`, `RoutingWeightsDinamicos`, `ROUTING_WEIGHTS_DEFAULTS` adicionados
+
+### Bugfix
+- ✅ `SkillFlowsPage.tsx` linha 408: referência residual a `isNew` removida
+
+---
+
 ## platform-ui — Language cleanup + ChannelEndpoint (2026-05-07)
 
 ### Language rule — English identifiers in code

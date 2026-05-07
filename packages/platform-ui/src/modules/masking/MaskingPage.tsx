@@ -2,7 +2,7 @@
  * MaskingPage — /config/masking
  *
  * Dedicated UI for message masking configuration.
- * Settings are stored in Config API (namespace "masking") and read by
+ * Settings are stored in Config API (namespace "audit_policy") and read by
  * MaskingService in mcp-server-plughub via Redis cache fallback chain.
  *
  * Sections:
@@ -51,7 +51,8 @@ export default function MaskingPage() {
   const [saving,       setSaving]       = useState<string | null>(null)
   const [toast,        setToast]        = useState<{ msg: string; ok: boolean } | null>(null)
 
-  const { entries, loading, error, reload } = useNamespace(tenantId, 'masking')
+  // audit_policy namespace is the canonical source for masking/audit configuration
+  const { entries, loading, error, reload } = useNamespace(tenantId, 'audit_policy')
 
   // Resolved values with defaults — entries[key].value holds the actual config value
   const val = (key: string): unknown => entries[key]?.value ?? entries[key]
@@ -60,10 +61,10 @@ export default function MaskingPage() {
     ? (val('authorized_roles') as string[])
     : ['evaluator', 'reviewer']
 
-  const captureInput:     boolean = val('capture_input_default')  === true
-  const captureOutput:    boolean = val('capture_output_default') === true
-  const retentionDays:    number  = typeof val('default_retention_days') === 'number'
-    ? (val('default_retention_days') as number)
+  const captureInput:  boolean = val('capture_input')  === true
+  const captureOutput: boolean = val('capture_output') === true
+  const retentionDays: number  = typeof val('token_retention_days') === 'number'
+    ? (val('token_retention_days') as number)
     : 30
 
   function showToast(msg: string, ok: boolean) {
@@ -75,7 +76,7 @@ export default function MaskingPage() {
     if (!adminToken) { showToast(t('toast.tokenRequired'), false); return }
     setSaving(key)
     try {
-      await putConfig('masking', key, value, tenantId, adminToken)
+      await putConfig('audit_policy', key, value, tenantId, adminToken)
       reload()
       showToast(t('toast.keySaved', { key }), true)
     } catch (e) {
@@ -185,18 +186,18 @@ export default function MaskingPage() {
           <div style={{ display: 'flex', gap: 16, marginTop: 12, flexWrap: 'wrap' }}>
             <ToggleCard
               label={t('section.audit.captureInput')}
-              sublabel="capture_input_default"
+              sublabel="capture_input"
               active={captureInput}
-              onToggle={() => saveKey('capture_input_default', !captureInput)}
-              saving={saving === 'capture_input_default'}
+              onToggle={() => saveKey('capture_input', !captureInput)}
+              saving={saving === 'capture_input'}
               warning={t('section.audit.warning')}
             />
             <ToggleCard
               label={t('section.audit.captureOutput')}
-              sublabel="capture_output_default"
+              sublabel="capture_output"
               active={captureOutput}
-              onToggle={() => saveKey('capture_output_default', !captureOutput)}
-              saving={saving === 'capture_output_default'}
+              onToggle={() => saveKey('capture_output', !captureOutput)}
+              saving={saving === 'capture_output'}
             />
           </div>
         </Section>
@@ -210,8 +211,8 @@ export default function MaskingPage() {
           <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginTop: 12 }}>
             <RetentionEditor
               value={retentionDays}
-              onSave={v => saveKey('default_retention_days', v)}
-              saving={saving === 'default_retention_days'}
+              onSave={v => saveKey('token_retention_days', v)}
+              saving={saving === 'token_retention_days'}
             />
           </div>
         </Section>

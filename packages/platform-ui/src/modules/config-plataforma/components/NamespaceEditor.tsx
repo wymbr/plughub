@@ -9,28 +9,41 @@
  *   - Reset button removes the tenant override (falls back to global default)
  *
  * Namespaces removed from here (have dedicated UIs):
- *   sentiment  → SentimentBandsEditor (tab Sentimento)
- *   dashboard  → Dashboards module (template-level config)
- *   webchat    → Configuração/Canais/WebChat
+ *   sentiment    → SentimentBandsEditor (tab Sentimento)
+ *   dashboard    → Dashboards module (template-level config)
+ *   webchat      → Configuração/Canais/WebChat
+ *   audit_policy → Configuração/Mascaramento (MaskingPage)
+ *   masking      → removed (legacy, replaced by audit_policy)
  */
 import React, { useState, useCallback } from 'react'
-import { useNamespace, putConfig, deleteConfig, type ConfigEntry } from '../api/config-hooks'
+import { useNamespace, useMultiNamespace, putConfig, deleteConfig, type ConfigEntry } from '../api/config-hooks'
 import Spinner from '@/components/ui/Spinner'
 
 // ── Namespace catalogue ────────────────────────────────────────────────────────
+// An entry with `namespaceIds` is a "group": multiple API namespaces merged in one tab.
+// An entry with just `id` maps 1:1 to a single API namespace.
 
-const NAMESPACES = [
+interface NsEntry {
+  id:            string          // virtual ID for selection state
+  namespaceIds?: string[]        // if present: group of multiple API namespaces
+  label:         string
+  icon:          string
+  color:         string
+  desc:          string
+  sections?:     { ns: string; label: string }[]  // labels for each sub-section in a group
+}
+
+const NAMESPACES: NsEntry[] = [
   {
-    id: 'routing',
-    label: 'Roteamento',
+    id:           'routing_timeouts',
+    namespaceIds: ['routing', 'session'],
+    sections: [
+      { ns: 'routing', label: 'Roteamento (SLA & TTL)' },
+      { ns: 'session', label: 'Timeouts de Componentes' },
+    ],
+    label: 'Roteamento & Timeouts',
     icon: '🔀', color: 'bg-blue-400',
-    desc: 'Defaults globais de roteamento: sla_default_ms, estimated_wait_factor, congestion_sla_factor, performance_score_weight, snapshot_ttl_s',
-  },
-  {
-    id: 'session',
-    label: 'Sessão',
-    icon: '⏱', color: 'bg-purple-400',
-    desc: 'TTLs de Redis por componente: ai_gateway_ttl_s, channel_gateway_ttl_s, transcript_ttl_s, replayer TTLs',
+    desc: 'SLA, snapshot_ttl_s | TTLs: ai_gateway, channel_gateway, transcript, replayer. Pesos/fatores ficam nas configurações de pool.',
   },
   {
     id: 'consumer',
@@ -39,22 +52,16 @@ const NAMESPACES = [
     desc: 'Kafka consumer da analytics-api: batch_size, timeout_ms, restart_delay_s, max_restart_delay_s',
   },
   {
-    id: 'audit_policy',
-    label: 'Política de Auditoria',
-    icon: '🔒', color: 'bg-red-400',
-    desc: 'Controle de acesso a dados mascarados: authorized_roles, token_retention_days, capture_input, capture_output',
-  },
-  {
-    id: 'masking',
-    label: 'Mascaramento (legado)',
-    icon: '🔓', color: 'bg-red-200',
-    desc: '[Legado] Será migrado para audit_policy. Mantido para compatibilidade enquanto o seed é atualizado.',
-  },
-  {
     id: 'quota',
     label: 'Quotas',
     icon: '📏', color: 'bg-orange-400',
     desc: 'max_concurrent_sessions — limite operacional de sessões simultâneas por tenant',
+  },
+  {
+    id: 'expurgo',
+    label: 'Expurgo',
+    icon: '🗑️', color: 'bg-slate-400',
+    desc: 'Retenção de dados: voice_recording_days (gravações), attachment_days (anexos de mensagem) — aplica a DB e file storage',
   },
 ]
 
@@ -275,25 +282,78 @@ interface Props {
   adminToken: string
 }
 
+// ── NamespacePanel — single namespace view ─────────────────────────────────────
+
+function NamespacePanel({
+  nsId, sectionLabel, tenantId, adminToken, editingKey, setEditingKey,
+}: {
+  nsId:         string
+  sectionLabel?: string
+  tenantId:     string
+  adminToken:   string
+  editingKey:   string | null
+  setEditingKey: (k: string | null) => void
+}) {
+  const { entries, loading, error, reload } = useNamespace(tenantId, nsId)
+  const sortedKeys = Object.keys(entries).sort()
+
+  return (
+    <>
+      {sectionLabel && (
+        <div className="px-5 py-2 bg-gray-50 border-b border-gray-100 text-[10px] font-bold text-gray-500 uppercase tracking-widest">
+          {sectionLabel} <code className="normal-case font-normal text-gray-400">({nsId})</code>
+          {loading && <span className="ml-2 text-gray-400">…</span>}
+          {error   && <span className="ml-2 text-red-500">⚠ {error}</span>}
+        </div>
+      )}
+      {!sectionLabel && loading && (
+        <div className="flex justify-center py-6"><Spinner /></div>
+      )}
+      {!sectionLabel && error && (
+        <div className="px-5 py-2 text-xs text-red-600">⚠ {error}</div>
+      )}
+      {!loading && sortedKeys.length === 0 && !error && (
+        <div className="px-5 py-6 text-center text-sm text-gray-400">
+          Nenhuma configuração em <code className="font-mono">{nsId}</code>.
+        </div>
+      )}
+      {sortedKeys.map(key => (
+        <ConfigRow
+          key={`${nsId}:${key}`}
+          entryKey={key}
+          entry={entries[key]}
+          tenantId={tenantId}
+          adminToken={adminToken}
+          isEditing={editingKey === `${nsId}:${key}`}
+          onEdit={() => setEditingKey(`${nsId}:${key}`)}
+          onCancelEdit={() => setEditingKey(null)}
+          onSaved={reload}
+          onDeleted={() => { setEditingKey(null); reload() }}
+        />
+      ))}
+    </>
+  )
+}
+
+// ── NamespaceEditor ───────────────────────────────────────────────────────────
+
 export function NamespaceEditor({ tenantId, adminToken }: Props) {
-  const [selectedNs, setSelectedNs] = useState(NAMESPACES[0].id)
+  const [selectedId, setSelectedId] = useState(NAMESPACES[0].id)
   const [editingKey, setEditingKey] = useState<string | null>(null)
 
-  const { entries, loading, error, reload } = useNamespace(tenantId, selectedNs)
-
-  const ns = NAMESPACES.find(n => n.id === selectedNs)!
-  const sortedKeys = Object.keys(entries).sort()
+  const ns = NAMESPACES.find(n => n.id === selectedId)!
+  const isGroup = !!(ns.namespaceIds && ns.namespaceIds.length > 0)
 
   return (
     <div className="flex h-full overflow-hidden">
       {/* Namespace sidebar */}
-      <aside className="w-44 shrink-0 border-r border-gray-200 bg-gray-50 flex flex-col overflow-y-auto">
+      <aside className="w-48 shrink-0 border-r border-gray-200 bg-gray-50 flex flex-col overflow-y-auto">
         {NAMESPACES.map(n => {
-          const active = n.id === selectedNs
+          const active = n.id === selectedId
           return (
             <button
               key={n.id}
-              onClick={() => { setSelectedNs(n.id); setEditingKey(null) }}
+              onClick={() => { setSelectedId(n.id); setEditingKey(null) }}
               className={`flex items-center gap-2.5 px-3 py-2.5 text-left text-sm transition-colors border-l-2 ${
                 active
                   ? 'border-l-primary bg-white text-gray-900 font-semibold'
@@ -316,16 +376,6 @@ export function NamespaceEditor({ tenantId, adminToken }: Props) {
             <p className="text-sm font-semibold text-gray-900">{ns.label}</p>
             <p className="text-xs text-gray-500 truncate">{ns.desc}</p>
           </div>
-          <div className="flex items-center gap-2">
-            {loading && <Spinner />}
-            {error && <span className="text-xs text-red-600">⚠ {error}</span>}
-            <button
-              onClick={reload}
-              className="text-xs text-secondary hover:text-primary transition-colors"
-            >
-              ↻
-            </button>
-          </div>
         </div>
 
         {/* Column headers */}
@@ -335,27 +385,30 @@ export function NamespaceEditor({ tenantId, adminToken }: Props) {
           <span className="w-20 shrink-0 text-right">Ações</span>
         </div>
 
-        {/* Rows */}
+        {/* Rows — group or single */}
         <div className="flex-1 overflow-y-auto">
-          {!loading && sortedKeys.length === 0 && !error && (
-            <div className="px-5 py-10 text-center text-sm text-gray-400">
-              Nenhuma configuração encontrada para o namespace <code className="font-mono">{selectedNs}</code>.
-            </div>
-          )}
-          {sortedKeys.map(key => (
-            <ConfigRow
-              key={key}
-              entryKey={key}
-              entry={entries[key]}
-              tenantId={tenantId}
-              adminToken={adminToken}
-              isEditing={editingKey === key}
-              onEdit={() => setEditingKey(key)}
-              onCancelEdit={() => setEditingKey(null)}
-              onSaved={reload}
-              onDeleted={() => { setEditingKey(null); reload() }}
-            />
-          ))}
+          {isGroup
+            ? ns.namespaceIds!.map(nsId => (
+                <NamespacePanel
+                  key={nsId}
+                  nsId={nsId}
+                  sectionLabel={ns.sections?.find(s => s.ns === nsId)?.label ?? nsId}
+                  tenantId={tenantId}
+                  adminToken={adminToken}
+                  editingKey={editingKey}
+                  setEditingKey={setEditingKey}
+                />
+              ))
+            : (
+              <NamespacePanel
+                nsId={ns.id}
+                tenantId={tenantId}
+                adminToken={adminToken}
+                editingKey={editingKey}
+                setEditingKey={setEditingKey}
+              />
+            )
+          }
         </div>
       </div>
     </div>

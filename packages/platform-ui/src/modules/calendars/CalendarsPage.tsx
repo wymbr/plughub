@@ -10,7 +10,7 @@
  * Backend: calendar-api (port 3700) proxied via Vite under /v1/
  */
 
-import React, { useCallback, useEffect, useState } from 'react'
+import React, { useCallback, useEffect, useState } from 'react' // useCallback used inside tabs
 import { useTranslation } from 'react-i18next'
 import { useAuth } from '@/auth/useAuth'
 import Spinner from '@/components/ui/Spinner'
@@ -30,16 +30,6 @@ const DAY_LABELS: Record<string, string> = {
   sunday:    'Dom',
 }
 const DAYS = Object.keys(DAY_LABELS)
-
-const ENTITY_TYPES = ['pool', 'tenant', 'channel', 'workflow'] as const
-type EntityType = typeof ENTITY_TYPES[number]
-
-const ENTITY_LABELS: Record<EntityType, string> = {
-  pool:     'Pool',
-  tenant:   'Tenant',
-  channel:  'Canal',
-  workflow: 'Workflow',
-}
 
 const TIMEZONES = [
   'America/Sao_Paulo',
@@ -99,16 +89,6 @@ interface HolidaySet {
   updated_at:  string
 }
 
-interface Association {
-  id:          string
-  tenant_id:   string
-  entity_type: string
-  entity_id:   string
-  calendar_id: string
-  operator:    'UNION' | 'INTERSECTION'
-  priority:    number
-  created_at:  string
-}
 
 // ── Fetch helpers ──────────────────────────────────────────────────────────────
 
@@ -147,38 +127,11 @@ function makeCalApi(tenantId: string) {
     deleteCalendar: (id: string) =>
       apiFetch(`/v1/calendars/${id}`, { method: 'DELETE' }),
 
-    // Associations
-    listAssociations: (entityType: string, entityId: string) =>
-      apiFetch(`/v1/associations?tenant_id=${tenantId}&entity_type=${entityType}&entity_id=${entityId}`),
-    createAssociation: (body: object) =>
-      apiFetch('/v1/associations', { method: 'POST', body: JSON.stringify(body) }),
-    deleteAssociation: (id: string) =>
-      apiFetch(`/v1/associations/${id}`, { method: 'DELETE' }),
   }
 }
 
 // ── Shared components ─────────────────────────────────────────────────────────
 
-function TabBar({
-  tabs, active, onChange
-}: { tabs: string[]; active: string; onChange: (t: string) => void }) {
-  return (
-    <div className="flex border-b border-gray-200 bg-white px-4">
-      {tabs.map(tab => (
-        <button
-          key={tab}
-          onClick={() => onChange(tab)}
-          className={`px-4 py-3 text-sm font-medium border-b-2 -mb-px transition-colors
-            ${active === tab
-              ? 'border-primary text-primary'
-              : 'border-transparent text-gray-500 hover:text-gray-700'}`}
-        >
-          {tab}
-        </button>
-      ))}
-    </div>
-  )
-}
 
 function Modal({
   title, onClose, children
@@ -932,250 +885,32 @@ function HolidaysTab({ onSetsChange }: HolidaysTabProps) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// Tab: Associações
-// ═══════════════════════════════════════════════════════════════════════════════
-
-interface AssociationsTabProps { calendars: CalendarObj[] }
-
-function AssociationsTab({ calendars }: AssociationsTabProps) {
-  const { t } = useTranslation('calendars')
-  const { tenantId } = useAuth()
-  const calApi = makeCalApi(tenantId)
-  const [entityType, setEntityType] = useState<EntityType>('pool')
-  const [entityId,   setEntityId]   = useState('')
-  const [assocs,     setAssocs]     = useState<Association[]>([])
-  const [loading,    setLoading]    = useState(false)
-  const [error,      setError]      = useState('')
-
-  // New assoc form
-  const [fCalId,   setFCalId]   = useState('')
-  const [fOp,      setFOp]      = useState<'UNION' | 'INTERSECTION'>('UNION')
-  const [fPriority, setFPriority] = useState('1')
-  const [saving,   setSaving]   = useState(false)
-  const [delId,    setDelId]    = useState<string | null>(null)
-
-  const search = async () => {
-    if (!entityId.trim()) return
-    setLoading(true)
-    setError('')
-    try {
-      const data = await calApi.listAssociations(entityType, entityId.trim())
-      setAssocs(data ?? [])
-    } catch (e: unknown) {
-      setError(String(e))
-    } finally {
-      setLoading(false)
-    }
-  }
-
-  const addAssoc = async (e: React.FormEvent) => {
-    e.preventDefault()
-    if (!fCalId || !entityId.trim()) return
-    setSaving(true)
-    try {
-      await calApi.createAssociation({
-        tenant_id:   tenantId,
-        entity_type: entityType,
-        entity_id:   entityId.trim(),
-        calendar_id: fCalId,
-        operator:    fOp,
-        priority:    parseInt(fPriority, 10) || 1,
-      })
-      await search()
-      setFCalId(''); setFOp('UNION'); setFPriority('1')
-    } catch (e: unknown) {
-      alert(String(e))
-    } finally {
-      setSaving(false)
-    }
-  }
-
-  const removeAssoc = async (id: string) => {
-    try {
-      await calApi.deleteAssociation(id)
-      await search()
-    } catch (e: unknown) {
-      alert(String(e))
-    } finally {
-      setDelId(null)
-    }
-  }
-
-  const calName = (id: string) => calendars.find(c => c.id === id)?.name ?? id.slice(0, 8)
-
-  return (
-    <div className="p-4 space-y-4">
-      <p className="text-sm text-gray-500">
-        Associe um calendário a um pool, tenant, canal ou workflow para definir horários de operação.
-      </p>
-
-      {/* Lookup */}
-      <div className="bg-white border border-gray-200 rounded-xl p-4 space-y-3">
-        <p className="text-xs font-semibold text-gray-600 uppercase tracking-wide">Buscar associações</p>
-        <div className="flex gap-3">
-          <select
-            value={entityType}
-            onChange={e => setEntityType(e.target.value as EntityType)}
-            className="text-sm border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-indigo-400"
-          >
-            {ENTITY_TYPES.map(et => (
-              <option key={et} value={et}>{ENTITY_LABELS[et]}</option>
-            ))}
-          </select>
-          <input
-            type="text"
-            value={entityId}
-            onChange={e => setEntityId(e.target.value)}
-            onKeyDown={e => e.key === 'Enter' && search()}
-            placeholder={`ID do ${ENTITY_LABELS[entityType].toLowerCase()}…`}
-            className="flex-1 text-sm border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-indigo-400"
-          />
-          <button
-            onClick={search}
-            disabled={!entityId.trim() || loading}
-            className="px-4 py-2 text-sm bg-gray-700 text-white rounded-lg hover:bg-gray-900 disabled:opacity-50"
-          >
-            {loading ? '…' : 'Buscar'}
-          </button>
-        </div>
-        {error && <p className="text-xs text-red-600">{error}</p>}
-      </div>
-
-      {/* Results */}
-      {assocs.length > 0 && (
-        <div className="bg-white border border-gray-200 rounded-xl overflow-hidden">
-          <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide px-4 py-2 border-b border-gray-100 bg-gray-50">
-            {assocs.length} associação{assocs.length !== 1 ? 'ões' : ''} encontrada{assocs.length !== 1 ? 's' : ''}
-          </p>
-          <div className="divide-y divide-gray-100">
-            {assocs.map(a => (
-              <div key={a.id} className="flex items-center gap-3 px-4 py-3">
-                <div className="flex-1 min-w-0">
-                  <p className="text-sm font-medium text-gray-800 truncate">
-                    📅 {calName(a.calendar_id)}
-                  </p>
-                  <div className="flex gap-2 mt-0.5">
-                    <span className={`text-[11px] px-1.5 py-0.5 rounded font-medium
-                      ${a.operator === 'UNION' ? 'bg-green-50 text-green-700' : 'bg-purple-50 text-purple-700'}`}>
-                      {a.operator}
-                    </span>
-                    <span className="text-[11px] text-gray-400">prioridade {a.priority}</span>
-                  </div>
-                </div>
-                <button
-                  onClick={() => setDelId(a.id)}
-                  className="px-3 py-1.5 text-xs text-red-500 hover:bg-red-50 rounded-lg transition-colors flex-shrink-0"
-                >
-                  Remover
-                </button>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {assocs.length === 0 && entityId && !loading && (
-        <p className="text-sm text-gray-400 text-center py-4 italic">
-          {t('association.noItems')}
-        </p>
-      )}
-
-      {/* Add form */}
-      {entityId.trim() && calendars.length > 0 && (
-        <div className="bg-indigo-50 border border-indigo-200 rounded-xl p-4 space-y-3">
-          <p className="text-xs font-semibold text-indigo-700 uppercase tracking-wide">Adicionar associação</p>
-          <form onSubmit={addAssoc} className="flex gap-3 flex-wrap items-end">
-            <div className="flex-1 min-w-40">
-              <label className="block text-xs text-indigo-700 mb-1">Calendário</label>
-              <select
-                required
-                value={fCalId}
-                onChange={e => setFCalId(e.target.value)}
-                className="w-full text-sm border border-indigo-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-indigo-400 bg-white"
-              >
-                <option value="">Selecione…</option>
-                {calendars.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-              </select>
-            </div>
-            <div>
-              <label className="block text-xs text-indigo-700 mb-1">Operador</label>
-              <select
-                value={fOp}
-                onChange={e => setFOp(e.target.value as 'UNION' | 'INTERSECTION')}
-                className="text-sm border border-indigo-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-indigo-400 bg-white"
-              >
-                <option value="UNION">UNION (OR)</option>
-                <option value="INTERSECTION">INTERSECTION (AND)</option>
-              </select>
-            </div>
-            <div className="w-24">
-              <label className="block text-xs text-indigo-700 mb-1">Prioridade</label>
-              <input
-                type="number"
-                min="1" max="100"
-                value={fPriority}
-                onChange={e => setFPriority(e.target.value)}
-                className="w-full text-sm border border-indigo-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-indigo-400 bg-white"
-              />
-            </div>
-            <button
-              type="submit"
-              disabled={saving || !fCalId}
-              className="px-4 py-2 text-sm bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 disabled:opacity-50"
-            >
-              {saving ? '…' : '+ Associar'}
-            </button>
-          </form>
-          <p className="text-[11px] text-indigo-600">
-            💡 UNION: aberto se qualquer calendário estiver aberto. INTERSECTION: aberto somente se todos estiverem abertos.
-          </p>
-        </div>
-      )}
-
-      {delId && (
-        <ConfirmDelete
-          label="esta associação"
-          onCancel={() => setDelId(null)}
-          onConfirm={() => removeAssoc(delId)}
-        />
-      )}
-    </div>
-  )
-}
-
-// ═══════════════════════════════════════════════════════════════════════════════
 // Root page
 // ═══════════════════════════════════════════════════════════════════════════════
+
+type CalTab = 'calendars' | 'holiday-sets'
 
 export default function CalendarsPage() {
   const { t } = useTranslation('calendars')
   const { session, tenantId } = useAuth()
-  const TABS = [t('tabs.calendars'), t('tabs.holidaySets'), t('tabs.associations')]
   const calApi = makeCalApi(tenantId)
-  const [tab, setTab]             = useState('Calendários')
-  const [calendars, setCalendars] = useState<CalendarObj[]>([])
+  const [tab, setTab]             = useState<CalTab>('calendars')
   const [holidaySets, setHolidaySets] = useState<HolidaySet[]>([])
 
-  // Re-fetch calendars whenever the Calendários tab is active — lifted so
-  // AssociationsTab can reference the full list for the calendar name lookup.
-  const handleCalendarsLoad = useCallback(async () => {
-    try {
-      const data = await calApi.listCalendars()
-      setCalendars(data ?? [])
-    } catch { /* ignore */ }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tenantId])
+  const TABS: { id: CalTab; label: string }[] = [
+    { id: 'calendars',    label: t('tabs.calendars')   },
+    { id: 'holiday-sets', label: t('tabs.holidaySets') },
+  ]
 
   useEffect(() => {
-    handleCalendarsLoad()
     calApi.listHolidaySets().then(d => setHolidaySets(d ?? [])).catch(() => {})
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [handleCalendarsLoad])
+  }, [tenantId])
 
   if (!session || session.role === 'business') {
     return (
       <div className="flex items-center justify-center h-full">
-        <p className="text-gray-500">Acesso restrito a administradores.</p>
+        <p className="text-gray-500">{t('association.restricted')}</p>
       </div>
     )
   }
@@ -1183,24 +918,32 @@ export default function CalendarsPage() {
   return (
     <div className="flex flex-col h-full bg-gray-50">
       {/* Page header */}
-      <div className="px-6 py-4 bg-white border-b border-gray-200">
-        <h1 className="text-lg font-semibold text-gray-800">Calendários</h1>
-        <p className="text-sm text-gray-500 mt-0.5">
-          Gerencie horários de operação, feriados e associações por pool ou canal.
-        </p>
+      <div className="bg-white flex-shrink-0">
+        <div className="px-6 pt-4 pb-1">
+          <h1 className="text-lg font-semibold text-gray-800">{t('title')}</h1>
+        </div>
+        <div className="flex border-b border-gray-200 px-4">
+          {TABS.map(({ id, label }) => (
+            <button
+              key={id}
+              onClick={() => setTab(id)}
+              className={`px-4 py-2.5 text-sm font-medium border-b-2 -mb-px transition-colors
+                ${tab === id
+                  ? 'border-primary text-primary'
+                  : 'border-transparent text-gray-500 hover:text-gray-700'}`}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
       </div>
 
-      <TabBar tabs={TABS} active={tab} onChange={setTab} />
-
       <div className="flex-1 overflow-y-auto">
-        {tab === 'Calendários' && (
+        {tab === 'calendars' && (
           <CalendarsTab holidaySets={holidaySets} />
         )}
-        {tab === 'Feriados' && (
+        {tab === 'holiday-sets' && (
           <HolidaysTab onSetsChange={setHolidaySets} />
-        )}
-        {tab === 'Associações' && (
-          <AssociationsTab calendars={calendars} />
         )}
       </div>
     </div>

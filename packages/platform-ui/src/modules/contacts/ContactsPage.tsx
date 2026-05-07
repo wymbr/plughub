@@ -175,7 +175,7 @@ type ContactTab = 'report' | 'monitor' | 'analysis' | 'agents'
 
 // Note: Tab labels are i18n keys and will be resolved in the component
 const ALL_TABS: { id: ContactTab; label: string; icon: string; abac?: { module: string; field: string } }[] = [
-  { id: 'report',   label: 'tabs.relatorio', icon: '📋' },
+  { id: 'report',   label: 'tabs.list',      icon: '📋' },
   { id: 'monitor',  label: 'tabs.monitor',   icon: '📡', abac: { module: 'contacts', field: 'operacao'   } },
   { id: 'analysis', label: 'tabs.analysis',  icon: '📊', abac: { module: 'contacts', field: 'visualizar' } },
   { id: 'agents',   label: 'tabs.agents',    icon: '👤', abac: { module: 'contacts', field: 'visualizar' } },
@@ -301,9 +301,10 @@ export default function ContactsPage() {
   const { t } = useTranslation('contacts')
   const { session, tenantId, perms } = useAuth()
 
-  // Filter tabs by ABAC — Relatório is always visible; Monitor needs operacao; Análise needs visualizar
+  // admin / developer / supervisor always see all tabs; other roles are gated by ABAC
+  const isFullAccess = ['admin', 'developer', 'supervisor'].includes(session?.role ?? '')
   const TABS = ALL_TABS.filter(tab =>
-    !tab.abac || perms.can(tab.abac.module, tab.abac.field)
+    !tab.abac || isFullAccess || perms.can(tab.abac.module, tab.abac.field)
   )
   const validTabIds = TABS.map(t => t.id)
 
@@ -313,8 +314,16 @@ export default function ContactsPage() {
   const activeTab: ContactTab = rawTab && validTabIds.includes(rawTab)
     ? rawTab : (validTabIds[0] ?? 'report')
 
-  function setTab(t: ContactTab) {
-    setSearchParams(p => { p.set('tab', t); return p }, { replace: true })
+  // Normalise stale / legacy URL params (e.g. ?tab=lista from old code)
+  useEffect(() => {
+    if (!rawTab || !validTabIds.includes(rawTab)) {
+      setSearchParams(p => { p.set('tab', validTabIds[0] ?? 'report'); return p }, { replace: true })
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rawTab])
+
+  function setTab(tab: ContactTab) {
+    setSearchParams(p => { p.set('tab', tab); return p }, { replace: true })
   }
 
   // Shared filter state — lifted above all tabs
@@ -349,22 +358,22 @@ export default function ContactsPage() {
     <div className="flex flex-col h-full overflow-hidden bg-gray-50">
 
       {/* ── Page header with tab bar ─────────────────────────────────────── */}
-      <div className="bg-white border-b border-gray-200 flex-shrink-0">
-        <div className="flex items-center px-4 pt-3">
-          <span className="font-bold text-gray-800 text-base mr-4">{t('title')}</span>
-          <div className="flex">
-            {TABS.map(tab => (
-              <button key={tab.id} onClick={() => setTab(tab.id)}
-                className={`flex items-center gap-1.5 px-5 py-2.5 text-sm font-medium border-b-2 transition-colors ${
-                  activeTab === tab.id
-                    ? 'border-primary text-primary'
-                    : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
-                }`}>
-                <span>{tab.icon}</span>
-                <span>{t(tab.label)}</span>
-              </button>
-            ))}
-          </div>
+      <div className="bg-white flex-shrink-0">
+        <div className="px-4 pt-3 pb-1">
+          <span className="font-bold text-gray-800 text-base">{t('title')}</span>
+        </div>
+        <div className="flex border-b border-gray-200 px-4">
+          {TABS.map(tab => (
+            <button key={tab.id} onClick={() => setTab(tab.id)}
+              className={`flex items-center gap-1.5 px-5 py-2.5 text-sm font-medium border-b-2 -mb-px transition-colors ${
+                activeTab === tab.id
+                  ? 'border-primary text-primary'
+                  : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+              }`}>
+              <span>{tab.icon}</span>
+              <span>{t(tab.label)}</span>
+            </button>
+          ))}
         </div>
       </div>
 

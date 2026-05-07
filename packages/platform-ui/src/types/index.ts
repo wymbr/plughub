@@ -53,6 +53,29 @@ export const ROUTING_EXPRESSION_DEFAULTS: RoutingExpression = {
   weight_business: 0.4,
 }
 
+/**
+ * RoutingWeights — integer 0-9 priority weights for a pool.
+ *  fixos:     per-competency-skill weight (0 = disable, 1-9 = strength)
+ *  dinamicos: dynamic queue scoring factors (0 = ignore, 9 = max influence)
+ */
+export interface RoutingWeightsDinamicos {
+  sla:      number   // 0-9, default 9 — SLA urgency
+  wait:     number   // 0-9, default 7 — raw wait time
+  tier:     number   // 0-9, default 5 — customer tier
+  churn:    number   // 0-9, default 8 — churn risk
+  business: number   // 0-9, default 3 — business value score
+}
+
+export interface RoutingWeights {
+  fixos:     Record<string, number>    // competency skill key → 0-9
+  dinamicos: RoutingWeightsDinamicos
+}
+
+export const ROUTING_WEIGHTS_DEFAULTS: RoutingWeights = {
+  fixos: {},
+  dinamicos: { sla: 9, wait: 7, tier: 5, churn: 8, business: 3 },
+}
+
 export interface Pool {
   pool_id: string
   tenant_id: string
@@ -62,6 +85,7 @@ export interface Pool {
   calendar_id?: string
   routing_skills?: string[]
   routing_expression?: RoutingExpression
+  routing_weights?: RoutingWeights
   status: string
   created_at: string
   updated_at: string
@@ -75,6 +99,7 @@ export interface CreatePoolInput {
   calendar_id?: string
   routing_skills?: string[]
   routing_expression?: RoutingExpression
+  routing_weights?: RoutingWeights
 }
 
 export interface UpdatePoolInput {
@@ -84,6 +109,7 @@ export interface UpdatePoolInput {
   calendar_id?: string
   routing_skills?: string[]
   routing_expression?: RoutingExpression
+  routing_weights?: RoutingWeights
 }
 
 export interface AgentType {

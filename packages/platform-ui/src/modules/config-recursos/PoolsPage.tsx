@@ -1,56 +1,185 @@
+/**
+ * PoolsPage.tsx — CRUD for routing pools
+ *
+ * Form opens as a right-side Drawer (replaces Modal).
+ * routing_weights section:
+ *   Fixos     — per-competency-skill weight (0-9) loaded from /config/competency_skills
+ *   Dinâmicos — dynamic queue scoring factors (0-9 integer scale)
+ */
 import React, { useState, useEffect, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useAuth } from '@/auth/useAuth'
 import * as registryApi from '@/api/registry'
-import { Pool, RoutingExpression, ROUTING_EXPRESSION_DEFAULTS } from '@/types'
+import {
+  Pool,
+  RoutingWeights,
+  ROUTING_WEIGHTS_DEFAULTS,
+  RoutingWeightsDinamicos,
+} from '@/types'
 import Button from '@/components/ui/Button'
 import Table from '@/components/ui/Table'
-import Modal from '@/components/ui/Modal'
 import Input from '@/components/ui/Input'
 import Select from '@/components/ui/Select'
 import Badge from '@/components/ui/Badge'
 import EmptyState from '@/components/ui/EmptyState'
 import Spinner from '@/components/ui/Spinner'
 
+// ── types ──────────────────────────────────────────────────────────────────────
+
 interface CalendarOption { id: string; name: string }
-interface RoutingSkill   { key: string; domain: string }
+interface CompetencySkill { key: string; domain: number }
+
+// ── Drawer ────────────────────────────────────────────────────────────────────
+
+function Drawer({
+  isOpen,
+  onClose,
+  title,
+  children,
+  footer,
+}: {
+  isOpen:    boolean
+  onClose:   () => void
+  title:     string
+  children:  React.ReactNode
+  footer?:   React.ReactNode
+}) {
+  // close on Escape
+  useEffect(() => {
+    if (!isOpen) return
+    const handler = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
+    window.addEventListener('keydown', handler)
+    return () => window.removeEventListener('keydown', handler)
+  }, [isOpen, onClose])
+
+  return (
+    <>
+      {/* Backdrop */}
+      <div
+        className={`fixed inset-0 bg-black/30 z-40 transition-opacity duration-200 ${
+          isOpen ? 'opacity-100 pointer-events-auto' : 'opacity-0 pointer-events-none'
+        }`}
+        onClick={onClose}
+      />
+      {/* Panel */}
+      <div
+        className={`fixed inset-y-0 right-0 w-[540px] bg-white shadow-2xl z-50 flex flex-col
+          transform transition-transform duration-200 ease-in-out
+          ${isOpen ? 'translate-x-0' : 'translate-x-full'}`}
+      >
+        {/* Header */}
+        <div className="flex items-center justify-between px-5 py-4 border-b border-gray-200 shrink-0">
+          <span className="font-semibold text-gray-900 text-base">{title}</span>
+          <button
+            onClick={onClose}
+            className="text-gray-400 hover:text-gray-700 text-xl leading-none w-7 h-7 flex items-center justify-center rounded hover:bg-gray-100 transition-colors"
+            aria-label="Fechar"
+          >
+            ✕
+          </button>
+        </div>
+        {/* Scrollable body */}
+        <div className="flex-1 overflow-y-auto px-5 py-5">
+          {children}
+        </div>
+        {/* Footer */}
+        {footer && (
+          <div className="flex justify-end gap-2 px-5 py-3.5 border-t border-gray-200 shrink-0 bg-gray-50">
+            {footer}
+          </div>
+        )}
+      </div>
+    </>
+  )
+}
+
+// ── WeightSlider ──────────────────────────────────────────────────────────────
+
+function WeightSlider({
+  label,
+  hint,
+  value,
+  onChange,
+}: {
+  label:    string
+  hint:     string
+  value:    number
+  onChange: (v: number) => void
+}) {
+  const pct = Math.round((value / 9) * 100)
+  return (
+    <div className="flex items-center gap-3">
+      <div className="w-32 shrink-0">
+        <p className="text-xs font-medium text-gray-700 leading-tight">{label}</p>
+        <p className="text-[10px] text-gray-400 leading-tight">{hint}</p>
+      </div>
+      <input
+        type="range"
+        min={0}
+        max={9}
+        step={1}
+        value={value}
+        onChange={e => onChange(Number(e.target.value))}
+        className="flex-1 accent-primary"
+      />
+      <span className="w-12 text-right text-xs font-mono font-bold text-gray-700 shrink-0">
+        {value} <span className="text-gray-400 font-normal">/{pct}%</span>
+      </span>
+    </div>
+  )
+}
+
+// ── PoolsPage ─────────────────────────────────────────────────────────────────
+
+const CHANNEL_OPTIONS = [
+  { value: 'webchat',   label: 'WebChat'   },
+  { value: 'whatsapp',  label: 'WhatsApp'  },
+  { value: 'voice',     label: 'Voice'     },
+  { value: 'email',     label: 'Email'     },
+  { value: 'sms',       label: 'SMS'       },
+  { value: 'instagram', label: 'Instagram' },
+  { value: 'telegram',  label: 'Telegram'  },
+  { value: 'webrtc',    label: 'WebRTC'    },
+]
+
+const DINAMICOS_META: Array<{
+  key: keyof RoutingWeightsDinamicos
+  label: string
+  hint: string
+  default: number
+}> = [
+  { key: 'sla',      label: 'Urgência SLA',     hint: 'Tempo de espera ÷ SLA alvo',       default: 9 },
+  { key: 'wait',     label: 'Tempo de espera',  hint: 'Espera absoluta normalizada',       default: 7 },
+  { key: 'tier',     label: 'Tier do cliente',  hint: 'platinum > gold > standard',        default: 5 },
+  { key: 'churn',    label: 'Risco de churn',   hint: 'Score de churn do perfil',          default: 8 },
+  { key: 'business', label: 'Valor de negócio', hint: 'business_score do cliente',         default: 3 },
+]
 
 const PoolsPage: React.FC = () => {
   const { session } = useAuth()
   const { t } = useTranslation('configRecursos')
   const { t: tCommon } = useTranslation('common')
 
-  const [pools,      setPools]      = useState<Pool[]>([])
-  const [calendars,  setCalendars]  = useState<CalendarOption[]>([])
-  const [routingSkills, setRoutingSkills] = useState<RoutingSkill[]>([])
-  const [isLoading,  setIsLoading]  = useState(true)
-  const [isOpen,     setIsOpen]     = useState(false)
+  const [pools,     setPools]     = useState<Pool[]>([])
+  const [calendars, setCalendars] = useState<CalendarOption[]>([])
+  const [competencySkills, setCompetencySkills] = useState<CompetencySkill[]>([])
+  const [isLoading, setIsLoading] = useState(true)
+  const [isOpen,    setIsOpen]    = useState(false)
   const [editingPool, setEditingPool] = useState<Pool | null>(null)
-  const [isSaving,   setIsSaving]   = useState(false)
-  const [error,      setError]      = useState('')
+  const [isSaving, setIsSaving]   = useState(false)
+  const [error,    setError]      = useState('')
 
   const [formData, setFormData] = useState({
-    pool_id:            '',
-    description:        '',
-    channel_types:      [] as string[],
-    sla_target_ms:      30000,
-    calendar_id:        '',
-    routing_skills:     [] as string[],
-    routing_expression: { ...ROUTING_EXPRESSION_DEFAULTS } as RoutingExpression,
+    pool_id:       '',
+    description:   '',
+    channel_types: [] as string[],
+    sla_target_ms: 30000,
+    calendar_id:   '',
+    routing_weights: { ...ROUTING_WEIGHTS_DEFAULTS } as RoutingWeights,
   })
 
-  const channelOptions = [
-    { value: 'webchat',   label: 'WebChat'   },
-    { value: 'whatsapp',  label: 'WhatsApp'  },
-    { value: 'voice',     label: 'Voice'     },
-    { value: 'email',     label: 'Email'     },
-    { value: 'sms',       label: 'SMS'       },
-    { value: 'instagram', label: 'Instagram' },
-    { value: 'telegram',  label: 'Telegram'  },
-    { value: 'webrtc',    label: 'WebRTC'    },
-  ]
+  // ── data loading ─────────────────────────────────────────────────────────────
 
-  // ── Fetch calendars from calendar-api ──────────────────────────────────────
   const loadCalendars = useCallback(async () => {
     if (!session) return
     try {
@@ -63,29 +192,32 @@ const PoolsPage: React.FC = () => {
         const data = await res.json() as Array<{ id: string; name: string }>
         setCalendars((data ?? []).map(c => ({ id: c.id, name: c.name })))
       }
-    } catch { /* stale ok — calendar-api optional */ }
+    } catch { /* stale ok */ }
   }, [session])
 
-  // ── Fetch routing (competency) skills from config-api ─────────────────────
-  const loadRoutingSkills = useCallback(async () => {
+  const loadCompetencySkills = useCallback(async () => {
     if (!session) return
     try {
-      const res = await fetch(`/config/routing?tenant_id=${encodeURIComponent(session.tenantId)}`)
+      const res = await fetch(
+        `/config/competency_skills?tenant_id=${encodeURIComponent(session.tenantId)}`
+      )
       if (res.ok) {
         const data = await res.json() as { entries?: Record<string, unknown> }
-        const entries = data.entries ?? {}
-        const skills: RoutingSkill[] = Object.entries(entries).map(([k, v]) => ({
-          key: k,
-          domain: typeof v === 'object' && v !== null
-            ? ((v as Record<string, unknown>).domain as string) ?? ''
-            : String(v ?? ''),
-        }))
-        setRoutingSkills(skills)
+        const raw = data.entries ?? {}
+        const skills: CompetencySkill[] = Object.entries(raw).map(([k, v]) => {
+          let domain = 5
+          if (typeof v === 'number') domain = Math.min(9, Math.max(0, Math.round(v)))
+          else if (typeof v === 'object' && v !== null) {
+            const d = (v as Record<string, unknown>).domain
+            if (typeof d === 'number') domain = Math.min(9, Math.max(0, Math.round(d)))
+          }
+          return { key: k, domain }
+        })
+        setCompetencySkills(skills.sort((a, b) => a.key.localeCompare(b.key)))
       }
     } catch { /* stale ok */ }
   }, [session])
 
-  // ── Load pools ─────────────────────────────────────────────────────────────
   const loadPools = useCallback(async () => {
     if (!session) return
     setIsLoading(true)
@@ -102,16 +234,38 @@ const PoolsPage: React.FC = () => {
   useEffect(() => {
     void loadPools()
     void loadCalendars()
-    void loadRoutingSkills()
-  }, [loadPools, loadCalendars, loadRoutingSkills])
+    void loadCompetencySkills()
+  }, [loadPools, loadCalendars, loadCompetencySkills])
 
-  // ── Form helpers ───────────────────────────────────────────────────────────
+  // ── form helpers ──────────────────────────────────────────────────────────────
+
+  function buildDefaultWeights(pool?: Pool): RoutingWeights {
+    const base = { ...ROUTING_WEIGHTS_DEFAULTS }
+    if (!pool) return base
+    // If pool has existing routing_weights, use those
+    if (pool.routing_weights) return pool.routing_weights
+    // Otherwise migrate routing_expression (floats) to 0-9 dinamicos
+    if (pool.routing_expression) {
+      const re = pool.routing_expression
+      return {
+        fixos: base.fixos,
+        dinamicos: {
+          sla:      Math.round(re.weight_sla      * 9),
+          wait:     Math.round(re.weight_wait     * 9),
+          tier:     Math.round(re.weight_tier     * 9),
+          churn:    Math.round(re.weight_churn    * 9),
+          business: Math.round(re.weight_business * 9),
+        },
+      }
+    }
+    return base
+  }
+
   const handleOpenCreate = () => {
     setEditingPool(null)
     setFormData({
       pool_id: '', description: '', channel_types: [], sla_target_ms: 30000,
-      calendar_id: '', routing_skills: [],
-      routing_expression: { ...ROUTING_EXPRESSION_DEFAULTS },
+      calendar_id: '', routing_weights: { ...ROUTING_WEIGHTS_DEFAULTS },
     })
     setError('')
     setIsOpen(true)
@@ -120,67 +274,65 @@ const PoolsPage: React.FC = () => {
   const handleOpenEdit = (pool: Pool) => {
     setEditingPool(pool)
     setFormData({
-      pool_id:            pool.pool_id,
-      description:        pool.description || '',
-      channel_types:      pool.channel_types,
-      sla_target_ms:      pool.sla_target_ms,
-      calendar_id:        pool.calendar_id  || '',
-      routing_skills:     pool.routing_skills || [],
-      routing_expression: pool.routing_expression ?? { ...ROUTING_EXPRESSION_DEFAULTS },
+      pool_id:         pool.pool_id,
+      description:     pool.description || '',
+      channel_types:   pool.channel_types,
+      sla_target_ms:   pool.sla_target_ms,
+      calendar_id:     pool.calendar_id || '',
+      routing_weights: buildDefaultWeights(pool),
     })
     setError('')
     setIsOpen(true)
   }
 
-  const setRoutingWeight = (key: keyof RoutingExpression, val: string) => {
-    const n = parseFloat(val)
-    if (isNaN(n)) return
-    setFormData(prev => ({
-      ...prev,
-      routing_expression: { ...prev.routing_expression, [key]: Math.max(0, n) },
-    }))
-  }
-
   const handleClose = () => { setIsOpen(false); setEditingPool(null) }
 
-  const handleChannelToggle = (channel: string) => {
+  const handleChannelToggle = (ch: string) =>
     setFormData(prev => ({
       ...prev,
-      channel_types: prev.channel_types.includes(channel)
-        ? prev.channel_types.filter(c => c !== channel)
-        : [...prev.channel_types, channel],
+      channel_types: prev.channel_types.includes(ch)
+        ? prev.channel_types.filter(c => c !== ch)
+        : [...prev.channel_types, ch],
     }))
-  }
 
-  const handleRoutingSkillToggle = (key: string) => {
+  const setFixoWeight = (skillKey: string, val: number) =>
     setFormData(prev => ({
       ...prev,
-      routing_skills: prev.routing_skills.includes(key)
-        ? prev.routing_skills.filter(s => s !== key)
-        : [...prev.routing_skills, key],
+      routing_weights: {
+        ...prev.routing_weights,
+        fixos: { ...prev.routing_weights.fixos, [skillKey]: val },
+      },
     }))
-  }
+
+  const setDinamicoWeight = (key: keyof RoutingWeightsDinamicos, val: number) =>
+    setFormData(prev => ({
+      ...prev,
+      routing_weights: {
+        ...prev.routing_weights,
+        dinamicos: { ...prev.routing_weights.dinamicos, [key]: val },
+      },
+    }))
 
   const handleSubmit = async () => {
     if (!session || !formData.pool_id.trim()) {
       setError(t('pools.fields.poolId') + ' ' + tCommon('isRequired'))
       return
     }
-    setIsSaving(true)
-    setError('')
+    setIsSaving(true); setError('')
     try {
-      // Only send routing_expression if it differs from defaults
-      const re = formData.routing_expression
-      const reChanged = (Object.keys(ROUTING_EXPRESSION_DEFAULTS) as Array<keyof RoutingExpression>)
-        .some(k => re[k] !== ROUTING_EXPRESSION_DEFAULTS[k])
+      const rw = formData.routing_weights
+      // Derive routing_skills from fixos (keys with weight > 0)
+      const routing_skills = Object.entries(rw.fixos)
+        .filter(([, w]) => w > 0)
+        .map(([k]) => k)
 
       const payload = {
-        description:    formData.description,
-        channel_types:  formData.channel_types,
-        sla_target_ms:  formData.sla_target_ms,
-        ...(formData.calendar_id    ? { calendar_id:    formData.calendar_id }    : {}),
-        ...(formData.routing_skills.length ? { routing_skills: formData.routing_skills } : {}),
-        ...(reChanged ? { routing_expression: re } : {}),
+        description:   formData.description,
+        channel_types: formData.channel_types,
+        sla_target_ms: formData.sla_target_ms,
+        ...(formData.calendar_id ? { calendar_id: formData.calendar_id } : {}),
+        ...(routing_skills.length ? { routing_skills } : {}),
+        routing_weights: rw,
       }
       if (editingPool) {
         await registryApi.updatePool(editingPool.pool_id, payload, session.tenantId)
@@ -196,7 +348,8 @@ const PoolsPage: React.FC = () => {
     }
   }
 
-  // ── Table columns ──────────────────────────────────────────────────────────
+  // ── table columns ─────────────────────────────────────────────────────────────
+
   const columns = [
     { key: 'pool_id', label: t('pools.fields.poolId') },
     {
@@ -219,30 +372,33 @@ const PoolsPage: React.FC = () => {
         : <span className="text-xs text-gray">—</span>,
     },
     {
-      key: 'routing_skills',
-      label: 'Skills Roteamento',
-      render: (skills?: string[]) => skills && skills.length > 0
-        ? (
-          <div className="flex gap-1 flex-wrap">
-            {skills.map(s => (
-              <span key={s} className="text-xs px-1.5 py-0.5 rounded bg-green/10 text-green border border-green/20 font-mono">{s}</span>
-            ))}
+      key: 'routing_weights',
+      label: 'Prioridade',
+      render: (rw?: RoutingWeights, row?: Pool) => {
+        const weights = rw ?? (row ? buildDefaultWeights(row) : null)
+        if (!weights) return <span className="text-xs text-gray">padrão</span>
+        const skills = Object.entries(weights.fixos).filter(([, w]) => w > 0)
+        return (
+          <div className="flex flex-col gap-0.5">
+            <span className="text-[10px] font-mono text-gray" title={
+              `SLA:${weights.dinamicos.sla} Wait:${weights.dinamicos.wait} ` +
+              `Tier:${weights.dinamicos.tier} Churn:${weights.dinamicos.churn} ` +
+              `Biz:${weights.dinamicos.business}`
+            }>
+              SLA·{weights.dinamicos.sla} Churn·{weights.dinamicos.churn}
+            </span>
+            {skills.length > 0 && (
+              <div className="flex gap-1 flex-wrap">
+                {skills.map(([k, w]) => (
+                  <span key={k} className="text-[10px] px-1 py-0 rounded bg-green-50 text-green-700 border border-green-200 font-mono">
+                    {k}·{w}
+                  </span>
+                ))}
+              </div>
+            )}
           </div>
         )
-        : <span className="text-xs text-gray">—</span>,
-    },
-    {
-      key: 'routing_expression',
-      label: 'Prioridade',
-      render: (re?: import('@/types').RoutingExpression) => re
-        ? (
-          <span className="text-[10px] font-mono text-gray" title={
-            `SLA:${re.weight_sla} Wait:${re.weight_wait} Tier:${re.weight_tier} Churn:${re.weight_churn} Biz:${re.weight_business}`
-          }>
-            SLA·{re.weight_sla} Churn·{re.weight_churn}
-          </span>
-        )
-        : <span className="text-xs text-gray">padrão</span>,
+      },
     },
     {
       key: 'status',
@@ -255,6 +411,8 @@ const PoolsPage: React.FC = () => {
     { value: '', label: '— Nenhum —' },
     ...calendars.map(c => ({ value: c.id, label: c.name })),
   ]
+
+  // ── render ────────────────────────────────────────────────────────────────────
 
   return (
     <div>
@@ -275,10 +433,14 @@ const PoolsPage: React.FC = () => {
         <Table columns={columns} data={pools} keyField="pool_id" onRowClick={handleOpenEdit} />
       )}
 
-      <Modal
+      {/* ── Drawer form ──────────────────────────────────────────────────────── */}
+      <Drawer
         isOpen={isOpen}
         onClose={handleClose}
-        title={editingPool ? t('pools.title') : t('pools.createPool')}
+        title={editingPool
+          ? `Pool: ${editingPool.pool_id}`
+          : t('pools.createPool')
+        }
         footer={
           <>
             <Button variant="ghost" onClick={handleClose}>{tCommon('cancel')}</Button>
@@ -288,12 +450,14 @@ const PoolsPage: React.FC = () => {
           </>
         }
       >
-        <div className="space-y-4">
+        <div className="space-y-5">
           {error && (
-            <div className="bg-red/10 border border-red text-red px-3 py-2 rounded text-sm">{error}</div>
+            <div className="bg-red-50 border border-red-300 text-red-700 px-3 py-2 rounded text-sm">
+              {error}
+            </div>
           )}
 
-          {/* Pool ID */}
+          {/* ── Basic info ───────────────────────────────────────────────────── */}
           <Input
             label={t('pools.fields.poolId')}
             value={formData.pool_id}
@@ -302,7 +466,6 @@ const PoolsPage: React.FC = () => {
             required
           />
 
-          {/* Description */}
           <Input
             label={t('pools.fields.description')}
             value={formData.description}
@@ -310,19 +473,19 @@ const PoolsPage: React.FC = () => {
             placeholder={tCommon('optionalDescription')}
           />
 
-          {/* Channel types */}
+          {/* ── Channel types ─────────────────────────────────────────────────── */}
           <div>
             <label className="text-sm font-semibold text-dark mb-2 block">
               {t('pools.fields.channelTypes')}
             </label>
-            <div className="space-y-2">
-              {channelOptions.map(ch => (
+            <div className="grid grid-cols-2 gap-y-2">
+              {CHANNEL_OPTIONS.map(ch => (
                 <label key={ch.value} className="flex items-center gap-2 cursor-pointer">
                   <input
                     type="checkbox"
                     checked={formData.channel_types.includes(ch.value)}
                     onChange={() => handleChannelToggle(ch.value)}
-                    className="w-4 h-4 rounded border-lightGray text-primary"
+                    className="w-4 h-4 rounded accent-primary"
                   />
                   <span className="text-sm text-dark">{ch.label}</span>
                 </label>
@@ -330,7 +493,7 @@ const PoolsPage: React.FC = () => {
             </div>
           </div>
 
-          {/* SLA */}
+          {/* ── SLA ───────────────────────────────────────────────────────────── */}
           <Input
             label={t('pools.fields.slaTargetMs')}
             type="number"
@@ -338,93 +501,89 @@ const PoolsPage: React.FC = () => {
             onChange={e => setFormData({ ...formData, sla_target_ms: parseInt(e.target.value) })}
           />
 
-          {/* Calendar */}
-          <Select
-            label="Template de Calendário"
-            value={formData.calendar_id}
-            onChange={e => setFormData({ ...formData, calendar_id: e.target.value })}
-            options={calendarOptions}
-          />
-          {calendars.length === 0 && (
-            <p className="text-xs text-gray -mt-3">
-              Nenhum calendário disponível. Crie em Configuração → Plataforma → Calendários.
-            </p>
-          )}
-
-          {/* Routing skills */}
-          {routingSkills.length > 0 && (
-            <div>
-              <label className="text-sm font-semibold text-dark mb-1 block">
-                Skills de Roteamento
-              </label>
-              <p className="text-xs text-gray mb-2">
-                Skills de competência usados para ordenação estática da fila neste pool.
+          {/* ── Calendar ──────────────────────────────────────────────────────── */}
+          <div>
+            <Select
+              label="Template de Calendário"
+              value={formData.calendar_id}
+              onChange={e => setFormData({ ...formData, calendar_id: e.target.value })}
+              options={calendarOptions}
+            />
+            {calendars.length === 0 && (
+              <p className="text-xs text-gray mt-1">
+                Nenhum calendário disponível. Crie em Configuração → Plataforma → Calendários.
               </p>
-              <div className="space-y-1.5 max-h-40 overflow-y-auto border border-lightGray rounded p-2">
-                {routingSkills.map(skill => (
-                  <label key={skill.key} className="flex items-center gap-2 cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={formData.routing_skills.includes(skill.key)}
-                      onChange={() => handleRoutingSkillToggle(skill.key)}
-                      className="w-4 h-4 rounded border-lightGray"
-                    />
-                    <span className="text-sm font-mono text-dark">{skill.key}</span>
-                    <span className="text-xs text-gray">{skill.domain}</span>
-                  </label>
+            )}
+          </div>
+
+          {/* ── Routing weights — Fixos ───────────────────────────────────────── */}
+          <div>
+            <div className="mb-2">
+              <p className="text-sm font-semibold text-dark">Pesos de Roteamento — Fixos</p>
+              <p className="text-xs text-gray mt-0.5">
+                Importância de cada competency skill neste pool.
+                Defina 0 para ignorar a skill no roteamento.
+              </p>
+            </div>
+
+            {competencySkills.length === 0 ? (
+              <p className="text-xs text-gray italic py-2">
+                Nenhuma competency skill cadastrada.
+                Configure em Recursos → Skills.
+              </p>
+            ) : (
+              <div className="flex flex-col gap-2.5 border border-gray-200 rounded p-3 bg-gray-50">
+                {competencySkills.map(skill => (
+                  <WeightSlider
+                    key={skill.key}
+                    label={skill.key}
+                    hint={`padrão: ${skill.domain}`}
+                    value={formData.routing_weights.fixos[skill.key] ?? 0}
+                    onChange={v => setFixoWeight(skill.key, v)}
+                  />
                 ))}
               </div>
-            </div>
-          )}
-          {routingSkills.length === 0 && (
-            <p className="text-xs text-gray">
-              Nenhuma competency skill cadastrada. Configure em Plataforma → Roteamento.
-            </p>
-          )}
+            )}
+          </div>
 
-          {/* Routing expression — priority scoring weights */}
+          {/* ── Routing weights — Dinâmicos ───────────────────────────────────── */}
           <div>
-            <label className="text-sm font-semibold text-dark mb-1 block">
-              Expressão de Prioridade
-            </label>
-            <p className="text-xs text-gray mb-3">
-              Pesos aplicados ao cálculo de prioridade dinâmica quando um agente fica livre.
-              Valores maiores aumentam a influência desse critério na ordenação da fila.
-            </p>
-            <div className="grid grid-cols-2 gap-3">
-              {(
-                [
-                  { key: 'weight_sla',      label: 'Urgência SLA',        hint: 'Tempo de espera ÷ SLA alvo' },
-                  { key: 'weight_wait',     label: 'Tempo de espera',     hint: 'Espera normalizada' },
-                  { key: 'weight_tier',     label: 'Tier do cliente',     hint: 'platinum > gold > standard' },
-                  { key: 'weight_churn',    label: 'Risco de churn',      hint: 'Score de churn do cliente' },
-                  { key: 'weight_business', label: 'Valor de negócio',    hint: 'business_score do perfil' },
-                ] as { key: keyof RoutingExpression; label: string; hint: string }[]
-              ).map(({ key, label, hint }) => (
-                <div key={key}>
-                  <label className="text-xs font-medium text-dark block mb-0.5">{label}</label>
-                  <p className="text-[10px] text-gray mb-1">{hint}</p>
-                  <input
-                    type="number"
-                    min={0}
-                    step={0.1}
-                    value={formData.routing_expression[key]}
-                    onChange={e => setRoutingWeight(key, e.target.value)}
-                    className="w-full text-xs font-mono px-2 py-1.5 border border-lightGray rounded focus:outline-none focus:border-primary text-dark"
-                  />
-                </div>
+            <div className="mb-2">
+              <p className="text-sm font-semibold text-dark">Pesos de Roteamento — Dinâmicos</p>
+              <p className="text-xs text-gray mt-0.5">
+                Influência de cada fator em tempo real na ordenação da fila.
+                0 = ignorar, 9 = máxima influência.
+              </p>
+            </div>
+            <div className="flex flex-col gap-2.5 border border-gray-200 rounded p-3 bg-gray-50">
+              {DINAMICOS_META.map(({ key, label, hint }) => (
+                <WeightSlider
+                  key={key}
+                  label={label}
+                  hint={hint}
+                  value={formData.routing_weights.dinamicos[key]}
+                  onChange={v => setDinamicoWeight(key, v)}
+                />
               ))}
             </div>
             <button
               type="button"
-              onClick={() => setFormData(prev => ({ ...prev, routing_expression: { ...ROUTING_EXPRESSION_DEFAULTS } }))}
-              className="mt-2 text-xs text-secondary hover:text-primary transition-colors"
+              onClick={() =>
+                setFormData(prev => ({
+                  ...prev,
+                  routing_weights: {
+                    ...prev.routing_weights,
+                    dinamicos: { ...ROUTING_WEIGHTS_DEFAULTS.dinamicos },
+                  },
+                }))
+              }
+              className="mt-1.5 text-xs text-secondary hover:text-primary transition-colors"
             >
-              ↺ Restaurar padrões
+              ↺ Restaurar padrões dinâmicos
             </button>
           </div>
         </div>
-      </Modal>
+      </Drawer>
     </div>
   )
 }

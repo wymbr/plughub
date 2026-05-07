@@ -4,6 +4,29 @@
 
 ---
 
+## platform-ui — Próximas features planejadas
+
+### #30 — Contacts: 2 níveis de aba (Contacts / Agents) com filtros revisados
+
+Reestruturar ContactsPage em nível superior Contacts | Agents, cada um com sub-abas
+List · Monitor · Analysis e filtros independentes revisados.
+- Filtro atual de Contacts tem campos inadequados por contexto — precisa ser redefinido
+- Aba Agents: List = tabela de agentes com métricas consolidadas (TMA, volume, taxa resolução)
+  + drill-down para lista de contatos/segmentos onde o agente atuou
+- Decisões pendentes: conjunto exato de filtros por nível, URL scheme (?section=contacts&tab=list)
+- Ver Task #30 para especificação completa
+
+### #31 — Flow/Deploy: ciclo de vida de versões com agendamento e rollback
+
+Tela de deploy de skills em pools com modelo de 3 slots (anterior / corrente / próxima).
+- Cada slot: skill_id + JSON de configuração
+- Deploy: anterior←corrente←próxima, próxima←livre
+- Rollback: corrente←anterior (o que era corrente: decisão pendente)
+- Agendamento via workflow-api (skill_scheduled_deploy_v1); Calendar API para validação de horário
+- Ver Task #31 para especificação completa
+
+---
+
 ## platform-ui — Backend pendente para features de config (2026-05-06)
 
 ### Sentimento — _classify() dinâmico
