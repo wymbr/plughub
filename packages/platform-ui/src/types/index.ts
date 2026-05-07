@@ -193,7 +193,7 @@ export interface UpdateGatewayConfigInput {
 
 // ── ChannelEndpoint — external address → pool mapping ────────────────────────
 
-export type ChannelEndpointChannel = 'webchat' | 'whatsapp' | 'voice' | 'sms' | 'email'
+export type ChannelEndpointChannel = 'webchat' | 'whatsapp' | 'voice' | 'sms' | 'email' | 'webhook'
 
 export interface ChannelEndpoint {
   id:           string

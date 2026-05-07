@@ -16,11 +16,12 @@ import React, { useState } from 'react'
 import PageHeader from '@/components/ui/PageHeader'
 import { ChannelEndpointList } from './ChannelEndpointList'
 import WebChatConfigPage from './WebChatConfigPage'
+import WebhookConfigPage from './WebhookConfigPage'
 import type { ChannelEndpointChannel } from '@/types'
 
 // ── Channel tabs ───────────────────────────────────────────────────────────────
 
-type ChannelTab = ChannelEndpointChannel   // 'webchat' | 'whatsapp' | 'voice' | 'email' | 'sms'
+type ChannelTab = ChannelEndpointChannel   // 'webchat' | 'whatsapp' | 'voice' | 'email' | 'sms' | 'webhook'
 type ChannelSubTab = 'endpoints' | 'settings'
 
 const CHANNEL_TABS: { id: ChannelTab; label: string; icon: string }[] = [
@@ -29,10 +30,11 @@ const CHANNEL_TABS: { id: ChannelTab; label: string; icon: string }[] = [
   { id: 'voice',    label: 'Voice',    icon: '📞' },
   { id: 'email',    label: 'E-mail',   icon: '✉️'  },
   { id: 'sms',      label: 'SMS',      icon: '📱' },
+  { id: 'webhook',  label: 'Webhook',  icon: '🔗' },
 ]
 
 // Channels that have a real "Settings" page; others show a placeholder
-const HAS_SETTINGS = new Set<ChannelTab>(['webchat'])
+const HAS_SETTINGS = new Set<ChannelTab>(['webchat', 'webhook'])
 
 // ── Component ─────────────────────────────────────────────────────────────────
 
@@ -101,6 +103,10 @@ const ConfigChannelsIndex: React.FC = () => {
 
         {activeSubTab === 'settings' && activeChannel === 'webchat' && (
           <WebChatConfigPage />
+        )}
+
+        {activeSubTab === 'settings' && activeChannel === 'webhook' && (
+          <WebhookConfigPage />
         )}
       </div>
     </div>

@@ -373,6 +373,11 @@ export default function WebhooksTab() {
   const { webhooks, loading, refresh } = useWebhooks(tenantId, adminToken)
   const selected = webhooks.find(w => w.id === selectedId) ?? null
 
+  // ── Scope note ──────────────────────────────────────────────────────────────
+  // These are WORKFLOW webhooks — they trigger a specific skill flow (flow_id)
+  // directly, bypassing the routing engine.
+  // For inbound contacts routed to a pool, see Configuration → Channels → Webhook.
+
   function handleCreated(webhook: Webhook, token: string) {
     setCreating(false)
     setPendingToken(token)
@@ -391,7 +396,15 @@ export default function WebhooksTab() {
   }
 
   return (
-    <div className="flex flex-1 overflow-hidden">
+    <div className="flex flex-col flex-1 overflow-hidden">
+      {/* ── Scope banner ──────────────────────────────────────────────────── */}
+      <div className="mx-4 mt-3 mb-0 px-3 py-2 bg-amber-50 border border-amber-200 rounded text-xs text-amber-700 shrink-0">
+        <strong>Workflow webhooks</strong> — trigger a specific skill flow (Flow ID) directly, bypassing routing.
+        For inbound contacts routed to a pool, use{' '}
+        <strong>Configuration → Channels → Webhook</strong>.
+      </div>
+
+      <div className="flex flex-1 overflow-hidden mt-3">
       {/* ── Left sidebar ──────────────────────────────────────────────────── */}
       <div className="w-80 shrink-0 border-r border-lightGray flex flex-col overflow-hidden">
         {/* Toolbar */}
@@ -486,6 +499,7 @@ export default function WebhooksTab() {
             </p>
           </div>
         )}
+      </div>
       </div>
     </div>
   )

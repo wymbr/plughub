@@ -14,6 +14,7 @@ export const ChannelEndpointChannelSchema = z.enum([
   "voice",
   "sms",
   "email",
+  "webhook",
 ])
 export type ChannelEndpointChannel = z.infer<typeof ChannelEndpointChannelSchema>
 
@@ -26,6 +27,9 @@ export type ChannelEndpointChannel = z.infer<typeof ChannelEndpointChannelSchema
  *   voice     — DID / E.164, e.g. "+5511000000"
  *   sms       — short code or long code, e.g. "55119"
  *   email     — address, e.g. "support@company.com"
+ *   webhook   — URL slug, e.g. "salesforce", "erp" → URL: {host}/channel/webhook/{slug}
+ *               NOTE: distinct from workflow webhooks (Arc 4) which trigger skill flows directly.
+ *               Channel webhooks route inbound contacts to a pool via the routing engine.
  */
 export const ChannelEndpointSchema = z.object({
   id:           z.string().uuid(),

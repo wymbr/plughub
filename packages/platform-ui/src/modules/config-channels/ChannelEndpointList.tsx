@@ -29,6 +29,7 @@ const IDENTIFIER_HINT: Record<ChannelEndpointChannel, string> = {
   voice:    'DID / E.164, e.g. +5511000000',
   sms:      'Short code or long code, e.g. 55119',
   email:    'Address, e.g. support@company.com',
+  webhook:  'URL slug, e.g. "salesforce" → {host}/channel/webhook/salesforce',
 }
 
 const IDENTIFIER_PLACEHOLDER: Record<ChannelEndpointChannel, string> = {
@@ -37,6 +38,7 @@ const IDENTIFIER_PLACEHOLDER: Record<ChannelEndpointChannel, string> = {
   voice:    '+5511000000',
   sms:      '55119',
   email:    'support@company.com',
+  webhook:  'salesforce',
 }
 
 // ── Empty form state ───────────────────────────────────────────────────────────
