@@ -83,6 +83,8 @@ async def run() -> None:
             kafka_topic_config_changed = settings.kafka_topic_config_changed,
             config_api_url             = settings.config_api_url,
             http_client                = http_client,
+            # Session close events — remove orphan queue entries on client disconnect
+            kafka_topic_events         = settings.kafka_topic_events,
         )
     )
 
@@ -352,6 +354,19 @@ async def _periodic_queue_drain(
 
                     # Dequeue oldest contact
                     session_id = oldest[0]
+
+                    # Skip sessions already closed (client disconnected while in queue)
+                    closed_marker = await redis_client.get(f"session:{session_id}:closed")
+                    if closed_marker:
+                        await redis_client.zrem(key, session_id)
+                        await redis_client.delete(f"{tenant_id}:queue_contact:{session_id}")
+                        logger.info(
+                            "Periodic drain: skipped closed session=%s pool=%s reason=%s",
+                            session_id, pool_id,
+                            closed_marker if isinstance(closed_marker, str) else closed_marker.decode(),
+                        )
+                        continue
+
                     contact_key = f"{tenant_id}:queue_contact:{session_id}"
                     raw_contact = await redis_client.get(contact_key)
                     if not raw_contact:

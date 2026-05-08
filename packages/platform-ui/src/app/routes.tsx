@@ -22,7 +22,6 @@ import KnowledgePage from '@/modules/evaluation/KnowledgePage'
 import AvaliacoesPage from '@/modules/evaluation/AvaliacoesPage'
 import EvalReportsPage from '@/modules/evaluation/ReportsPage'
 import { AgentAssistPage } from '@/modules/agent-assist/AgentAssistPage'
-import PlaceholderPage from '@/modules/_placeholder/PlaceholderPage'
 import AccessPage from '@/modules/access/AccessPage'
 // Atendimento
 import SessionsPage from '@/modules/contacts/SessionsPage'
@@ -114,8 +113,6 @@ export const routes: RouteObject[] = [
       { path: 'config/calendars',  element: <CalendarsPage /> },
       { path: 'workflow/triggers', element: <WorkflowCalendarPage /> },
 
-      // ── Developer ─────────────────────────────────────────────────
-      { path: 'developer', element: <PlaceholderPage module="Developer Tools" phase="Arc 4" /> },
       { path: 'business',  element: <Navigate to="/" replace /> },
     ]
   }

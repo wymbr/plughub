@@ -140,12 +140,6 @@ const Sidebar: React.FC = () => {
       ]
     },
 
-    {
-      label: t('nav.developer'),
-      href: '/developer',
-      icon: '👨‍💻',
-      roles: ['developer', 'admin']
-    },
   ]
 
   const isActive = (href: string) => {
@@ -161,8 +155,8 @@ const Sidebar: React.FC = () => {
   function passesAbac(item: NavItem): boolean {
     if (!item.abac) return true
     if (!session?.moduleConfig || Object.keys(session.moduleConfig).length === 0) return true
-    // admin / supervisor / developer bypass ABAC
-    if (['admin', 'supervisor', 'developer'].includes(session?.role ?? '')) return true
+    // admin / supervisor bypass ABAC
+    if (['admin', 'supervisor'].includes(session?.role ?? '')) return true
     return perms.can(item.abac.module, item.abac.field)
   }
 

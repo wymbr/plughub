@@ -4,14 +4,6 @@
 
 ---
 
-## Bugs conhecidos
-
-### Routing Engine — fila não limpa ao desconectar cliente
-Quando o cliente fecha o WebSocket (refresh, fechar aba, queda de conexão), a sessão permanece no ZSET `{tenant}:pool:{pool_id}:queue` indefinidamente.
-Fluxo correto: Channel Gateway detecta `connection_lost` → publica para Core → Core encerra sessão com `close_reason: customer_disconnect` → Routing Engine remove entrada do ZSET.
-Impacto: fila operacional (`/contacts/pools`) exibe sessões órfãs. SLA excedido falso-positivo.
-Componentes: `channel-gateway` (WebchatAdapter — detect WS close) + `routing-engine` (consumer de `conversations.session_closed` — remover do ZSET).
-
 ---
 
 ## platform-ui — Próximas features planejadas

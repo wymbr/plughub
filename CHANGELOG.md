@@ -2,6 +2,115 @@
 
 ---
 
+## Bugfix — Routing Engine: sessões órfãs na fila ao desconectar cliente (2026-05-08)
+
+**Problema:** Quando o cliente WebSocket desconectava (refresh, fechar aba, queda de rede), a sessão permanecia no ZSET `{tenant}:pool:{pool_id}:queue` indefinidamente — exibida na tela operacional de pools como sessão ativa, gerando falso-positivo de SLA excedido.
+
+**Root cause:** O Channel Gateway já publicava `ContactClosedEvent` em `conversations.events` corretamente. O Routing Engine não consumia esse tópico e nunca gravava a chave `session:{id}:closed` no Redis — que é o marcador que o `_drain_queue_for_agent` usa para pular sessões encerradas.
+
+**Solução (apenas routing-engine):**
+
+- ✅ `config.py` — adicionado `kafka_topic_events: str = "conversations.events"`
+- ✅ `kafka_listener.py` — novo `SessionClosedEventHandler`:
+  - Recebe `event_type="contact_closed"`, grava `session:{id}:closed = reason` (TTL 7d)
+  - Lê `{tenant}:queue_contact:{session_id}` para descobrir `pool_id`, remove do ZSET e deleta o JSON
+- ✅ `kafka_listener.py` — `run_listeners()` e `_dispatch()` atualizados para aceitar e rotear `kafka_topic_events`
+- ✅ `main.py` — `run_listeners` chamado com `kafka_topic_events = settings.kafka_topic_events`
+- ✅ `main.py` — `_periodic_queue_drain` agora verifica `session:{id}:closed` antes de re-rotear (defesa em profundidade)
+
+**Componentes alterados:** `routing-engine` apenas. Channel Gateway, Core e orchestrator-bridge sem alteração.
+
+---
+
+## Task #38 — Calendar Arc: modelo dois níveis + feriados recorrentes + detecção de conflitos (2026-05-08)
+
+**Problema:** O calendário era um template compartilhado por referência, o que significava que exceções de um pool (manutenção, etc.) vazavam para outros pools que usassem o mesmo calendário. Feriados não podiam ser marcados como recorrentes anuais. Datas sobrepostas entre conjuntos de feriados eram silenciosamente resolvidas pelo último registro.
+
+**Solução:** Modelo dois níveis onde (1) o calendário define a política compartilhada e (2) a associação `pool ↔ calendário` carrega exceções específicas do pool com prioridade 1 no motor.
+
+**calendar-api — db.py:**
+- ✅ `_DDL_ASSOCIATIONS` — coluna `exceptions JSONB NOT NULL DEFAULT '[]'` na tabela `calendar_associations`
+- ✅ `_DDL_ASSOC_ADD_EXCEPTIONS` — migration idempotente `ADD COLUMN IF NOT EXISTS`
+- ✅ `ensure_schema` — executa a migration idempotente
+- ✅ `_row_to_assoc` — inclui `exceptions` no retorno
+- ✅ `db_create_association` — persiste `exceptions`
+- ✅ `db_update_association` — PATCH de `exceptions` de uma associação existente
+- ✅ `db_upsert_pool_association` — upsert `ON CONFLICT DO UPDATE SET exceptions = EXCLUDED.exceptions`
+- ✅ `db_delete_associations_for_entity` — remove todas as associações de uma entidade
+- ✅ `db_get_associations_for_engine` — merge de exceções: `assoc.exceptions` (prioridade) + `cal.exceptions` (deduplica por date)
+
+**calendar-api — router.py:**
+- ✅ `AssociationCreate` — aceita `exceptions: list[dict] = []`
+- ✅ `AssociationUpdate` — Pydantic model para PATCH
+- ✅ `AssociationUpsert` — Pydantic model para PUT /upsert
+- ✅ `PATCH /v1/associations/{id}` — atualiza exceções
+- ✅ `PUT /v1/associations/upsert` — idempotent upsert (limpa associações antigas, cria nova com exceções)
+- ✅ `DELETE /v1/associations/entity` — remove todas associações de uma entidade
+
+**agent-registry:**
+- ✅ `prisma/schema.prisma` — `calendar_id String?` no model Pool
+- ✅ `prisma/migrations/20260508220000_add_pool_calendar_id/migration.sql`
+- ✅ `src/routes/pools.ts` — persiste `calendar_id` no create + update
+- ✅ `packages/schemas/src/agent-registry.ts` — `calendar_id: z.string().uuid().optional()` em `PoolRegistrationSchema`
+
+**platform-ui — CalendarsPage.tsx:**
+- ✅ `HolidaysEditor` — checkbox "Repete todo ano": salva `MM-DD` em vez de `YYYY-MM-DD`; badge ↺ na lista de feriados recorrentes
+- ✅ `conflictDates` — `useMemo` detecta datas sobrepostas entre conjuntos selecionados
+- ✅ Warning ⚠️ inline no seletor de conjuntos quando há datas duplicadas
+
+**platform-ui — PoolsPage.tsx:**
+- ✅ `PoolExceptionsEditor` — componente inline para gerenciar exceções do pool (fecha o dia todo ou horário especial)
+- ✅ `calExceptions` state — carregado assincronamente da associação existente ao abrir o drawer
+- ✅ `loadPoolAssociation` — busca associações do pool em `GET /v1/associations`
+- ✅ `handleSubmit` — após salvar o pool no agent-registry, faz PUT `/v1/associations/upsert` (com calendar_id + exceptions) ou DELETE `/v1/associations/entity` (se sem calendário)
+- ✅ Seção "Exceções deste Pool" aparece no drawer somente quando `calendar_id` está definido
+
+**i18n:**
+- ✅ `en/calendars.json` — `holidaySet.recurringLabel`, `calendar.holidayConflict`, `calendar.holidayConflictHint`
+- ✅ `pt-BR/calendars.json` — traduções correspondentes
+
+---
+
+## Task #37 — Config/Channels: hierarquia Conta → Endpoints (2026-05-08)
+
+**Problema:** GatewayConfig (credenciais) e ChannelEndpoint (endereços → pools) eram entidades paralelas sem relação explícita, listadas em sub-tabs separadas.
+
+**Solução:** FK nullable `gateway_config_id` no ChannelEndpoint + UI hierárquica onde cada conta (GatewayConfig) é um card pai com seus endpoints filhos abaixo.
+
+**Backend — agent-registry:**
+- ✅ `prisma/schema.prisma` — `gateway_config_id String?` em ChannelEndpoint + relação bidirecional com GatewayConfig
+- ✅ `prisma/migrations/20260508200000_channel_endpoint_gateway_config_fk/migration.sql` — ADD COLUMN + índice
+- ✅ `src/types/channel-endpoint.ts` — `gateway_config_id: string | null` no type shim + `updateMany` adicionado
+- ✅ `src/routes/channel-endpoints.ts` — aceita `gateway_config_id` em POST + PUT; filtro em GET; webhook adicionado a VALID_CHANNELS
+
+**Frontend — platform-ui:**
+- ✅ `src/types/index.ts` — `gateway_config_id: string | null` em ChannelEndpoint; `gateway_config_id?` em Create/UpdateChannelEndpointInput
+- ✅ `src/api/registry.ts` — `listChannelEndpoints` aceita filtro opcional `gatewayConfigId`
+- ✅ `modules/config-channels/ChannelAccountCard.tsx` — novo componente card pai: mostra credenciais + tabela de endpoints filhos; formulários inline para criar/editar/deletar endpoints dentro do card
+- ✅ `modules/config-channels/index.tsx` — reestruturado: ChannelPanel usa ChannelAccountCard como hierarquia principal; webhook mantém ChannelEndpointList standalone; webchat mantém sub-tab "Runtime Settings"
+
+---
+
+## Task #36 — Config/Channels: consolidação GatewayConfig (2026-05-08)
+
+**Problema resolvido:** GatewayConfig (credenciais de API) estava em Resources/Channels enquanto ChannelEndpoints (roteamento) estava em Config/Channels — duas telas separadas para configurar o mesmo canal.
+
+**Solução:** Config/Channels virou o ponto único de configuração de canal. Resources ficou apenas com Pools + Skills.
+
+**Frontend — platform-ui:**
+- ✅ `modules/config-channels/channel-meta.ts` — `CHANNEL_META` extraído para arquivo compartilhado (8 canais: whatsapp, webchat, voice, email, sms, instagram, telegram, webrtc, webhook)
+- ✅ `modules/config-channels/GatewayConfigPanel.tsx` — CRUD de GatewayConfig escopado por canal; sub-tabs expandíveis inline; suporte a create/edit/delete com masking de credenciais
+- ✅ `modules/config-channels/index.tsx` — adicionada sub-tab "Credentials" para todos os canais que possuem campos de API; sub-tabs: Endpoints | Credentials | Settings (Settings apenas webchat/webhook)
+- ✅ `modules/config-recursos/index.tsx` — aba "Channels" removida; Resources agora tem apenas Pools + Skills
+- ✅ `modules/config-recursos/ChannelsPage.tsx` — marcado `@deprecated`; arquivo mantido para referência
+
+**Estrutura final de Config/Channels por canal:**
+- Endpoints: mapeamento identifier → pool (ChannelEndpointList, existente)
+- Credentials: API keys/tokens/secrets (GatewayConfigPanel, novo)
+- Settings: configuração de comportamento runtime via Config API (webchat: auth_timeout, attachments; webhook: path)
+
+---
+
 ## Task #34 — Service/Pools: monitoração operacional de pools (2026-05-08)
 
 **Backend — agent-registry:**

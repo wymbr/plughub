@@ -85,6 +85,69 @@ class ConfigChangedHandler:
         )
 
 
+class SessionClosedEventHandler:
+    """
+    Processes ContactClosedEvent messages from conversations.events.
+
+    On every session close (disconnect, timeout, agent_done) this handler:
+      1. Sets session:{session_id}:closed = reason  (TTL 7d) so that
+         _drain_queue_for_agent skips re-routing stale sessions.
+      2. If the session is still in a pool queue (i.e. the client disconnected
+         before an agent was allocated), removes it from the ZSET and deletes
+         the stored contact JSON, so orphan sessions never appear in the UI.
+
+    No-op for events other than contact_closed.
+    """
+
+    _CLOSED_TTL_S = 7 * 24 * 3600  # 7 days — same as drain_queue comment
+
+    def __init__(self, instance_registry: InstanceRegistry) -> None:
+        self._instances = instance_registry
+
+    async def handle(self, event: dict) -> None:
+        if event.get("event_type") != "contact_closed":
+            return
+
+        session_id = event.get("session_id", "")
+        tenant_id  = event.get("tenant_id", "")
+        reason     = event.get("reason", "unknown")
+
+        if not session_id or not tenant_id:
+            return
+
+        # 1. Mark session as closed — _drain_queue_for_agent checks this key
+        await self._instances._redis.set(
+            f"session:{session_id}:closed",
+            reason,
+            ex=self._CLOSED_TTL_S,
+        )
+
+        # 2. Remove from queue if still present.
+        #    The stored contact JSON ({tenant}:queue_contact:{session_id}) carries
+        #    pool_id — use it to target the correct ZSET.
+        try:
+            raw = await self._instances._redis.get(
+                f"{tenant_id}:queue_contact:{session_id}"
+            )
+            if raw:
+                import json as _json
+                contact_data = _json.loads(raw)
+                pool_id = contact_data.get("pool_id", "")
+                if pool_id:
+                    await self._instances.remove_queued_contact(
+                        tenant_id, pool_id, session_id
+                    )
+                    logger.info(
+                        "Queue cleanup: removed session=%s pool=%s reason=%s",
+                        session_id, pool_id, reason,
+                    )
+        except Exception as exc:
+            logger.warning(
+                "Queue cleanup: could not remove session=%s from queue: %s",
+                session_id, exc,
+            )
+
+
 class RegistryEventHandler:
     """
     Processes Agent Registry events and populates the Redis pool config cache.
@@ -374,10 +437,12 @@ async def run_listeners(
     kafka_topic_config_changed: str | None              = None,
     config_api_url:            str                      = "http://localhost:3600",
     http_client:               "httpx.AsyncClient | None" = None,
+    # Optional: channel gateway session close events — cleans up orphan queue entries
+    kafka_topic_events:        str | None               = None,
 ) -> None:
     """
     Starts Kafka consumers for agent.lifecycle, agent.registry.events,
-    and optionally config.changed.
+    and optionally config.changed and conversations.events.
     Called by main.py during Routing Engine startup.
 
     When router + kafka_producer are supplied, agent_ready events trigger an
@@ -386,6 +451,10 @@ async def run_listeners(
     When kafka_topic_config_changed + http_client are supplied, config.changed
     events for the "routing" namespace invalidate and reload the local
     RoutingConfigCache (spec: config.changed → routing-engine cache refresh).
+
+    When kafka_topic_events is supplied, contact_closed events from the channel
+    gateway set session:{id}:closed in Redis and remove orphan queue entries,
+    preventing ghost sessions from appearing in the operational pools UI.
     """
     import httpx as _httpx
     from aiokafka import AIOKafkaConsumer
@@ -405,9 +474,13 @@ async def run_listeners(
         http_client    = _http_client,
     )
 
+    session_closed_handler = SessionClosedEventHandler(instance_registry)
+
     topics = [kafka_topic_lifecycle, kafka_topic_registry]
     if kafka_topic_config_changed:
         topics.append(kafka_topic_config_changed)
+    if kafka_topic_events:
+        topics.append(kafka_topic_events)
 
     consumer = AIOKafkaConsumer(
         *topics,
@@ -432,7 +505,8 @@ async def run_listeners(
             topic   = msg.topic
             asyncio.create_task(
                 _dispatch(payload, topic, registry_handler, lifecycle_handler,
-                          config_handler, kafka_topic_config_changed)
+                          config_handler, session_closed_handler,
+                          kafka_topic_config_changed, kafka_topic_events)
             )
     finally:
         await consumer.stop()
@@ -444,7 +518,9 @@ async def _dispatch(
     registry_handler:           RegistryEventHandler,
     lifecycle_handler:          LifecycleEventHandler,
     config_handler:             ConfigChangedHandler,
+    session_closed_handler:     SessionClosedEventHandler,
     kafka_topic_config_changed: str | None,
+    kafka_topic_events:         str | None,
 ) -> None:
     try:
         settings = get_settings()
@@ -454,5 +530,7 @@ async def _dispatch(
             await lifecycle_handler.handle(payload)
         elif kafka_topic_config_changed and topic == kafka_topic_config_changed:
             await config_handler.handle(payload)
+        elif kafka_topic_events and topic == kafka_topic_events:
+            await session_closed_handler.handle(payload)
     except Exception as exc:
         logger.error("Error in Kafka dispatch: topic=%s — %s", topic, exc)

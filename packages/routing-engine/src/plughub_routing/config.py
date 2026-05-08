@@ -21,6 +21,8 @@ class Settings(BaseSettings):
     # Agent Registry events — populate Redis cache of pool configs and instances
     kafka_topic_lifecycle:  str = "agent.lifecycle"
     kafka_topic_registry:   str = "agent.registry.events"
+    # Channel Gateway session close events — used to remove orphan sessions from queue
+    kafka_topic_events:     str = "conversations.events"
 
     # Redis
     redis_url: str = "redis://localhost:6379"
