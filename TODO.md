@@ -17,14 +17,13 @@ Ver CHANGELOG 2026-05-08 e `docs/modules/task-30-contacts-restructure.md`.
 - `FlowMonitorPage`: select de pools hardcoded (sem opções dinâmicas) — melhorar com fetch de pools disponíveis
 - `EventsPage`: requer endpoint `GET /reports/events` no analytics-api (pode ainda não existir)
 
-### #31 — Flow/Deploy: ciclo de vida de versões com agendamento e rollback
+### #31 / #33 — ✅ Flow/Deploy: modelo pool-centric 3 slots — implementado (2026-05-08)
 
-Tela de deploy de skills em pools com modelo de 3 slots (anterior / corrente / próxima).
-- Cada slot: skill_id + JSON de configuração
-- Deploy: anterior←corrente←próxima, próxima←livre
-- Rollback: corrente←anterior (o que era corrente: decisão pendente)
-- Agendamento via workflow-api (skill_scheduled_deploy_v1); Calendar API para validação de horário
-- Ver Task #31 para especificação completa
+Ver CHANGELOG 2026-05-08 (Tasks #31 e #33).
+
+**Pendências futuras decorrentes:**
+- `AgentFlowDeployPage`: role-based access control (developer vs operator) — atualmente todos os usuários veem o botão "Editar slot"; ABAC não está aplicado ainda
+- `skill_scheduled_deploy_v1` precisa existir como skill no registry para o agendamento funcionar (legado do #31 — seção de agendamento foi removida no #33)
 
 ---
 
@@ -120,30 +119,6 @@ Layers 1 (agent-registry), 3 (platform-ui), 4 (schemas) ✅ complete — see CHA
 
 ---
 
-## Skill Flow — Deploy por Slots de Versão (anterior / corrente / próxima)
-
-O modelo atual de deploy (`skill_deployments`) é um histórico de deploys arbitrário onde o operador escolhe manualmente para qual snapshot fazer rollback. Isso exige conhecimento técnico do operador e abre espaço para erros de configuração.
-
-**Modelo desejado:** cada skill tem 3 slots nomeados pelo desenvolvedor:
-
-| Slot | Papel |
-|---|---|
-| `anterior` | Versão de fallback seguro — destino do rollback automático |
-| `corrente` | Versão atualmente em produção |
-| `próxima` | Candidata ao próximo deploy |
-
-Cada slot carrega: YAML do flow + configuração JSON específica dessa versão.
-
-**Fluxo de deploy:** promove `próxima` → `corrente`; `corrente` desloca automaticamente para `anterior`.
-**Fluxo de rollback:** promove `anterior` → `corrente`; nenhuma escolha manual pelo operador.
-
-O operador executa a intenção que o desenvolvedor pré-definiu — não toma decisão técnica sobre qual versão ou configuração usar.
-
-**Impacto no backend:** novo model `skill_version_slots` em agent-registry com campos `slot` (anterior/corrente/proxima), `skill_id`, `yaml_snapshot`, `config_json`, `pool_ids`, `set_at`, `set_by`. Endpoints `PUT /v1/skills/:id/slots/:slot` (desenvolvedor) e `POST /v1/skills/:id/promote` (trigger de deploy: próxima→corrente) e `POST /v1/skills/:id/rollback` (anterior→corrente).
-
-**Impacto no frontend:** `AgentFlowDeployPage` ganha painel de 3 colunas (anterior/corrente/próxima) onde o desenvolvedor edita cada slot. Operador vê apenas os botões "Promover" e "Rollback" com confirmação.
-
----
 
 ## Skill Flow Editor — Folder Organization (new feature)
 

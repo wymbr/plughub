@@ -2,6 +2,60 @@
 
 ---
 
+## Task #33 — Deploy Pool-Centric: redesign completo (2026-05-08)
+
+**Conceito corrigido:** deploy é uma operação de *pool*, não de skill. O usuário escolhe um pool e atribui um skill-flow a cada slot.
+
+**Backend — agent-registry:**
+- ✅ `prisma/migrations/20260508120000_add_pool_skill_slots/migration.sql` — tabela `pool_skill_slots` (pool_id + tenant_id + slot como chave; FK para pools com CASCADE; índice pool+tenant)
+- ✅ `prisma/schema.prisma` — modelo `PoolSkillSlot` + relação `skill_slots` em `Pool`
+- ✅ `src/routes/pool-slots.ts` — 4 endpoints montados em `/v1/pools/:pool_id`:
+  - `GET /slots` — retorna todos os 3 slots do pool
+  - `PUT /slots/next` — único slot editável; 403 para previous/current; auto-fetches yaml_snapshot
+  - `POST /promote` — next→current, current→previous, next cleared (transaction)
+  - `POST /rollback` — previous→current, previous cleared (transaction)
+- ✅ `src/app.ts` — `poolSlotsRouter` montado em `/v1/pools/:pool_id` com `mergeParams: true`
+
+**Frontend — platform-ui:**
+- ✅ `AgentFlowDeployPage.tsx` — reescrita pool-centric:
+  - Lista de pools no painel esquerdo com filtro
+  - 3 cards por pool: Anterior (cinza) / Corrente (verde) / Próxima (azul)
+  - Somente "Próxima" tem botão Editar; Corrente/Anterior mostram "🔒 somente leitura"
+  - `NextSlotEditor`: skill dropdown + `ConfigForm` derivado de `skill.interface_schema`
+  - "Copiar do Corrente": intersection merge — campos que existem em ambos são copiados; novos campos (só no novo schema) recebem badge "novo"; campos removidos são ignorados
+  - Rollback usa `config_json` salvo sem revalidação (operação de emergência)
+  - `ConfirmModal` para Promover e Rollback
+  - Headers `x-tenant-id` em todos os fetches
+
+---
+
+## Full-Stack — 3-Slot Deploy Lifecycle (2026-05-08)
+
+### Task #31 — Flow/Deploy: modelo de 3 slots (anterior / corrente / próxima)
+
+**Backend — agent-registry:**
+- ✅ `prisma/migrations/20260508000000_add_skill_version_slots/migration.sql` — tabela `skill_version_slots` + enum `SkillSlot` (previous/current/next)
+- ✅ `prisma/schema.prisma` — modelo `SkillVersionSlot` + enum `SkillSlot` + relação `version_slots` em `Skill`
+- ✅ `src/routes/skill-slots.ts` — 4 endpoints: `GET /slots`, `PUT /slots/:slot`, `POST /promote`, `POST /rollback`
+- ✅ `src/app.ts` — `skillSlotsRouter` montado em `/v1/skills/:skill_id` com `mergeParams: true`
+
+**Backend — workflow-api:**
+- ✅ `config.py` — adicionado `agent_registry_url` (default `http://localhost:3300`)
+- ✅ `router.py` — `_resolve_flow_definition()`: injeta `flow_definition` de agent-registry no metadata quando omitido em `POST /v1/workflow/trigger` para skill_*_v{n}
+- ✅ `docker-compose.demo.yml`, `docker-compose.full.yml`, `docker-compose.arc4.yml` — `PLUGHUB_WORKFLOW_AGENT_REGISTRY_URL` adicionado
+
+**Frontend — platform-ui:**
+- ✅ `AgentFlowDeployPage.tsx` — reescrita completa; substituiu histórico-as-rollback por modelo de slots:
+  - Painel de 3 colunas: Anterior / Corrente / Próxima
+  - Desenvolvedor: botão "Editar" por slot (yaml_snapshot + config_json + pool_ids)
+  - Operador: "Promover" (Próxima→Corrente, Corrente→Anterior) e "Rollback" (Anterior→Corrente) com confirmação
+  - Após promote/rollback: chama `POST /deploy` para registrar em `skill_deployments`
+  - Histórico de deploys colapsável
+  - Deploys agendados colapsável (agendamento via workflow-api + cancelamento)
+  - Monitor de handoff gradual colapsável (polling 15s)
+
+---
+
 ## platform-ui — Contacts & Nav Restructure (2026-05-08)
 
 ### Task #30 — Grupos Atendimento + Análise + Flow expandido

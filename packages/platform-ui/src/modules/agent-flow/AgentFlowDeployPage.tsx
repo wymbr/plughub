@@ -1,338 +1,535 @@
 /**
  * AgentFlowDeployPage — /agent-flow/deploy
  *
- * Phase 1 — Deploy management for AgentFlow skills.
- * Phase 2 — Rollback: restore a previous yaml_snapshot and redeploy to same pools.
- *           Scheduled deploy: trigger a workflow that fires at a configured time.
- *           Graceful Handoff Monitor: track sessions still on the old version.
+ * Pool-centric 3-slot deploy lifecycle.
+ * Spec: Task #31 revised
  *
- * Left panel  : skill list with draft/published status
- * Right panel : deployment detail — pools, deploy action, history, scheduled, handoff monitor
+ * Left panel  : pool list
+ * Right panel :
+ *   - 3-slot panel (Anterior / Corrente / Próxima)
+ *     • Anterior + Corrente: read-only (imutável após promoção)
+ *     • Próxima: editável — seleciona skill-flow + preenche config via interface_schema
+ *       Botão "Copiar do Corrente": pré-preenche campos coincidentes, marca novos com badge
+ *   - Promover / Rollback com confirmação
  *
- * Backend contract (agent-registry):
- *   GET  /v1/skills?tenant_id=...
- *   GET  /v1/pools?tenant_id=...
- *   PUT  /v1/skills/:id
- *   POST /v1/skills/:id/deploy
- *   GET  /v1/skills/:id/deployments?tenant_id=...
- *   GET  /v1/skills/:id/deployments/scheduled?tenant_id=...
- *   GET  /v1/skills/:id/handoff-status?tenant_id=...
- * Backend contract (workflow-api via /v1/workflow):
- *   POST /v1/workflow/trigger   — schedule a deploy via skill_scheduled_deploy_v1
- *   POST /v1/workflow/instances/:id/cancel — cancel a scheduled deploy
+ * Rules enforced in UI:
+ *   - Only "next" slot has an Edit button
+ *   - Config form is read-only for current/previous
+ *   - Copy-from-current: intersection merge, new fields highlighted, dropped fields silently ignored
+ *   - On rollback: previous slot's skill + config restored as-is (no schema revalidation)
  */
 import React, { useCallback, useEffect, useState } from 'react'
-import { useTranslation } from 'react-i18next'
 import { useAuth } from '@/auth/useAuth'
 import Spinner from '@/components/ui/Spinner'
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
-interface Skill {
-  id:              string
-  name?:           string
-  version?:        string
-  classification?: string
-  status?:         'draft' | 'published'
-  published_at?:   string
-  updated_at?:     string
-}
-
 interface Pool {
-  pool_id:       string
-  description?:  string
+  pool_id:        string
+  description?:   string
   channel_types?: string[]
+  status?:        string
 }
 
-interface Deployment {
-  deployment_id:  string
-  skill_id:       string
-  version:        string
-  pool_ids:       string[]
-  deployed_by:    string
-  deployed_at:    string
-  notes?:         string | null
-  yaml_snapshot?: unknown  // JSON object — the flow at deploy time
+interface Skill {
+  skill_id:         string
+  name?:            string
+  version?:         string
+  description?:     string
+  classification?:  Record<string, unknown>
+  interface?:       InterfaceSchema | null  // interface_schema exposed as "interface"
 }
 
-interface ScheduledDeploy {
-  workflow_instance_id: string
-  skill_id:   string
-  pool_ids:   string[]
-  scheduled_at: string   // ISO-8601 — when the deploy will fire
-  deployed_by?: string
-  notes?:       string
-  status:       string
-  created_at:   string
+interface InterfaceSchema {
+  type?:       string
+  properties?: Record<string, FieldSchema>
+  required?:   string[]
 }
 
-interface HandoffStatus {
-  skill_id:        string
-  deployed:        boolean
-  active_sessions: number
-  pool_ids:        string[]
-  deployed_at:     string | null
-  deployment_id?:  string
-  deployed_by?:    string
+interface FieldSchema {
+  type?:        string
+  description?: string
+  default?:     unknown
+  enum?:        unknown[]
+  items?:       FieldSchema
+  minimum?:     number
+  maximum?:     number
+}
+
+interface SlotData {
+  slot:          string
+  set:           boolean
+  skill_id?:     string | null
+  config_json?:  Record<string, unknown>
+  yaml_snapshot?: unknown
+  set_at?:       string
+  set_by?:       string
+}
+
+interface SlotsResponse {
+  pool_id: string
+  slots: { previous: SlotData; current: SlotData; next: SlotData }
 }
 
 // ── API ────────────────────────────────────────────────────────────────────────
 
-function authHeaders(token?: string | null): Record<string, string> {
-  const h: Record<string, string> = { 'Content-Type': 'application/json' }
+function _h(tenantId: string, token?: string | null): Record<string, string> {
+  const h: Record<string, string> = { 'Content-Type': 'application/json', 'x-tenant-id': tenantId }
   if (token) h['Authorization'] = `Bearer ${token}`
   return h
 }
 
-async function fetchSkills(tenantId: string, token?: string | null): Promise<Skill[]> {
-  const res = await fetch(`/v1/skills?tenant_id=${tenantId}`, { headers: authHeaders(token) })
+async function apiFetchPools(tenantId: string, token?: string | null): Promise<Pool[]> {
+  const res = await fetch('/v1/pools', { headers: _h(tenantId, token) })
   if (!res.ok) throw new Error(`HTTP ${res.status}`)
   const body = await res.json()
-  return Array.isArray(body) ? body : (body.data ?? body.skills ?? [])
+  return Array.isArray(body) ? body : (body.pools ?? body.data ?? [])
 }
 
-async function fetchPools(tenantId: string, token?: string | null): Promise<Pool[]> {
-  const res = await fetch(`/v1/pools?tenant_id=${tenantId}`, { headers: authHeaders(token) })
+async function apiFetchSkills(tenantId: string, token?: string | null): Promise<Skill[]> {
+  const res = await fetch('/v1/skills', { headers: _h(tenantId, token) })
   if (!res.ok) throw new Error(`HTTP ${res.status}`)
   const body = await res.json()
-  return Array.isArray(body) ? body : (body.data ?? body.pools ?? [])
+  return Array.isArray(body) ? body : (body.skills ?? body.data ?? [])
 }
 
-async function fetchDeployments(skillId: string, tenantId: string, token?: string | null): Promise<Deployment[]> {
-  const res = await fetch(`/v1/skills/${skillId}/deployments?tenant_id=${tenantId}`, {
-    headers: authHeaders(token),
-  })
-  if (!res.ok) {
-    if (res.status === 404) return []
-    throw new Error(`HTTP ${res.status}`)
-  }
-  const body = await res.json()
-  return Array.isArray(body) ? body : (body.data ?? body.deployments ?? [])
-}
-
-async function deploySkill(
-  skillId:  string,
-  poolIds:  string[],
-  tenantId: string,
-  token?:   string | null,
-  notes?:   string,
-): Promise<Deployment> {
-  const res = await fetch(`/v1/skills/${skillId}/deploy`, {
-    method:  'POST',
-    headers: authHeaders(token),
-    body:    JSON.stringify({ pool_ids: poolIds, tenant_id: tenantId, notes }),
-  })
-  if (!res.ok) {
-    const text = await res.text()
-    throw new Error(`HTTP ${res.status}: ${text}`)
-  }
-  const body = await res.json()
-  return body.deployment ?? body
-}
-
-/** Phase 2 — restore the flow from a yaml_snapshot, then redeploy to the same pools. */
-async function rollbackSkill(
-  skillId:      string,
-  dep:          Deployment,
-  tenantId:     string,
-  token?:       string | null,
-): Promise<Deployment> {
-  // Step 1 — restore the flow (PUT skill with the snapshot as the new flow)
-  const putRes = await fetch(`/v1/skills/${skillId}`, {
-    method:  'PUT',
-    headers: authHeaders(token),
-    body:    JSON.stringify({
-      skill_id:  skillId,
-      tenant_id: tenantId,
-      flow:      dep.yaml_snapshot,
-    }),
-  })
-  if (!putRes.ok) {
-    const text = await putRes.text()
-    throw new Error(`Restauração falhou HTTP ${putRes.status}: ${text}`)
-  }
-
-  // Step 2 — deploy to the same pools with a rollback note
-  return deploySkill(
-    skillId,
-    dep.pool_ids,
-    tenantId,
-    token,
-    `Rollback para deploy ${dep.deployment_id} (${new Date(dep.deployed_at).toLocaleString('pt-BR')})`,
-  )
-}
-
-async function fetchScheduledDeploys(skillId: string, tenantId: string, token?: string | null): Promise<ScheduledDeploy[]> {
-  const res = await fetch(`/v1/skills/${skillId}/deployments/scheduled?tenant_id=${tenantId}`, {
-    headers: authHeaders(token),
-  })
-  if (!res.ok) return []
-  const body = await res.json()
-  return Array.isArray(body) ? body : (body.scheduled_deploys ?? [])
-}
-
-async function fetchHandoffStatus(skillId: string, tenantId: string, token?: string | null): Promise<HandoffStatus | null> {
-  const res = await fetch(`/v1/skills/${skillId}/handoff-status?tenant_id=${tenantId}`, {
-    headers: authHeaders(token),
-  })
-  if (!res.ok) return null
+async function apiFetchSlots(poolId: string, tenantId: string, token?: string | null): Promise<SlotsResponse> {
+  const res = await fetch(`/v1/pools/${poolId}/slots`, { headers: _h(tenantId, token) })
+  if (!res.ok) throw new Error(`HTTP ${res.status}`)
   return res.json()
 }
 
-/**
- * Schedule a deploy via workflow (skill_scheduled_deploy_v1).
- * The workflow suspends until scheduledAt, then fires the skill_deploy MCP tool.
- */
-async function scheduleSkillDeploy(
-  skillId:     string,
-  poolIds:     string[],
-  tenantId:    string,
-  scheduledAt: string,     // ISO-8601
-  token?:      string | null,
-  deployedBy?: string,
-  notes?:      string,
-): Promise<{ workflow_instance_id: string }> {
-  const res = await fetch('/v1/workflow/trigger', {
-    method:  'POST',
-    headers: authHeaders(token),
-    body:    JSON.stringify({
-      tenant_id:    tenantId,
-      flow_id:      'skill_scheduled_deploy_v1',
-      trigger_type: 'scheduled',
-      context: {
-        skill_id:     skillId,
-        pool_ids:     poolIds,
-        deploy_at:    scheduledAt,
-        deployed_by:  deployedBy ?? 'platform-ui:scheduled',
-        deploy_notes: notes ?? `Scheduled deploy for ${skillId}`,
-      },
-    }),
+async function apiSetNextSlot(
+  poolId: string, tenantId: string, token: string | null | undefined,
+  payload: { skill_id: string; config_json: Record<string, unknown> },
+): Promise<SlotData> {
+  const res = await fetch(`/v1/pools/${poolId}/slots/next`, {
+    method: 'PUT', headers: _h(tenantId, token), body: JSON.stringify(payload),
   })
-  if (!res.ok) {
-    const text = await res.text()
-    throw new Error(`HTTP ${res.status}: ${text}`)
-  }
-  const body = await res.json()
-  return { workflow_instance_id: body.id ?? body.workflow_instance_id }
+  if (!res.ok) { const t = await res.text(); throw new Error(`HTTP ${res.status}: ${t}`) }
+  return res.json()
 }
 
-async function cancelScheduledDeploy(
-  workflowInstanceId: string,
-  tenantId:           string,
-  token?:             string | null,
-): Promise<void> {
-  const res = await fetch(`/v1/workflow/instances/${workflowInstanceId}/cancel`, {
-    method:  'POST',
-    headers: { ...authHeaders(token), 'x-tenant-id': tenantId },
-    body:    JSON.stringify({ reason: 'Cancelled by user via deploy UI' }),
+async function apiPromote(poolId: string, tenantId: string, token?: string | null): Promise<SlotsResponse> {
+  const res = await fetch(`/v1/pools/${poolId}/promote`, {
+    method: 'POST', headers: _h(tenantId, token),
   })
-  if (!res.ok) {
-    const text = await res.text()
-    throw new Error(`HTTP ${res.status}: ${text}`)
+  if (!res.ok) { const t = await res.text(); throw new Error(`HTTP ${res.status}: ${t}`) }
+  return res.json()
+}
+
+async function apiRollback(poolId: string, tenantId: string, token?: string | null): Promise<SlotsResponse> {
+  const res = await fetch(`/v1/pools/${poolId}/rollback`, {
+    method: 'POST', headers: _h(tenantId, token),
+  })
+  if (!res.ok) { const t = await res.text(); throw new Error(`HTTP ${res.status}: ${t}`) }
+  return res.json()
+}
+
+// ── Helpers ────────────────────────────────────────────────────────────────────
+
+function fmtDateShort(iso?: string | null) {
+  if (!iso) return '—'
+  return new Date(iso).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' })
+}
+
+const SLOT_LABEL: Record<string, string> = { previous: 'Anterior', current: 'Corrente', next: 'Próxima' }
+const SLOT_DESC:  Record<string, string> = {
+  previous: 'Alvo seguro de rollback — somente leitura',
+  current:  'Versão em produção — somente leitura',
+  next:     'Candidata preparada pelo desenvolvedor',
+}
+const SLOT_COLOR: Record<string, string> = { previous: '#94a3b8', current: '#22c55e', next: '#3b82f6' }
+const SLOT_BG:    Record<string, string> = { previous: '#1c2535', current: '#0f2818', next: '#0c1b35' }
+
+// ── Config form: render fields from interface_schema ──────────────────────────
+
+interface ConfigFormProps {
+  schema:      InterfaceSchema | null | undefined
+  values:      Record<string, unknown>
+  onChange:    (key: string, value: unknown) => void
+  readOnly:    boolean
+  newFields?:  Set<string>   // fields added in this version (highlighted)
+}
+
+function ConfigForm({ schema, values, onChange, readOnly, newFields }: ConfigFormProps) {
+  if (!schema?.properties || Object.keys(schema.properties).length === 0) {
+    return (
+      <div style={{ fontSize: 12, color: '#475569', fontStyle: 'italic', padding: '8px 0' }}>
+        Esta skill não define parâmetros de configuração (interface_schema vazio).
+      </div>
+    )
   }
-}
 
-// ── Status / class helpers ─────────────────────────────────────────────────────
+  const required = new Set(schema.required ?? [])
 
-const STATUS_COLOR: Record<string, string> = {
-  published: '#22c55e',
-  draft:     '#eab308',
-}
-const STATUS_LABEL: Record<string, string> = {
-  published: 'Publicado',
-  draft:     'Rascunho',
-}
-const CLASS_COLOR: Record<string, string> = {
-  orchestrator: '#a78bfa',
-  vertical:     '#22d3ee',
-  horizontal:   '#fbbf24',
-}
-
-function fmtDate(iso: string) {
-  return new Date(iso).toLocaleString('pt-BR')
-}
-
-// ── Rollback Confirm Modal ─────────────────────────────────────────────────────
-
-interface RollbackModalProps {
-  dep:        Deployment
-  skillId:    string
-  rolling:    boolean
-  error:      string | null
-  onConfirm:  () => void
-  onCancel:   () => void
-}
-
-function RollbackConfirmModal({ dep, skillId, rolling, error, onConfirm, onCancel }: RollbackModalProps) {
-  const { t } = useTranslation('agentFlow')
   return (
-    <div style={overlay}>
-      <div style={modalBox}>
-        <div style={{ fontSize: 18, fontWeight: 700, color: '#f8fafc', marginBottom: 4 }}>
-          ↩ {t('deploy.rollback')}
-        </div>
-        <div style={{ fontSize: 12, color: '#64748b', marginBottom: 16 }}>
-          {t('deploy.rollbackConfirm')}
-        </div>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+      {Object.entries(schema.properties).map(([key, field]) => {
+        const isNew      = newFields?.has(key)
+        const isRequired = required.has(key)
+        const value      = values[key]
 
-        <div style={infoRow}>
-          <span style={infoLabel}>Skill</span>
-          <code style={infoVal}>{skillId}</code>
-        </div>
-        <div style={infoRow}>
-          <span style={infoLabel}>{t('deploy.version', { defaultValue: 'Version' })}</span>
-          <span style={infoVal}>v{dep.version}</span>
-        </div>
-        <div style={infoRow}>
-          <span style={infoLabel}>{t('deploy.originalDeploy', { defaultValue: 'Original deploy' })}</span>
-          <span style={infoVal}>{fmtDate(dep.deployed_at)}</span>
-        </div>
-        <div style={infoRow}>
-          <span style={infoLabel}>{t('deploy.deployId', { defaultValue: 'Deploy ID' })}</span>
-          <code style={{ ...infoVal, fontSize: 10 }}>{dep.deployment_id}</code>
-        </div>
-        <div style={{ ...infoRow, alignItems: 'flex-start' }}>
-          <span style={infoLabel}>Pools</span>
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
-            {dep.pool_ids.map(p => (
-              <span key={p} style={poolChip}>{p}</span>
-            ))}
+        return (
+          <div key={key}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
+              <label style={{ fontSize: 12, color: '#94a3b8', fontWeight: 500 }}>
+                {key}
+                {isRequired && <span style={{ color: '#f87171', marginLeft: 2 }}>*</span>}
+              </label>
+              {isNew && (
+                <span style={{ fontSize: 10, padding: '1px 5px', borderRadius: 3, background: '#1d4ed822', color: '#60a5fa', border: '1px solid #1d4ed844' }}>
+                  novo
+                </span>
+              )}
+              {field.description && (
+                <span style={{ fontSize: 11, color: '#475569' }}>— {field.description}</span>
+              )}
+            </div>
+
+            {field.enum ? (
+              <select
+                value={String(value ?? '')}
+                disabled={readOnly}
+                onChange={e => onChange(key, e.target.value)}
+                style={_inputStyle(readOnly)}
+              >
+                <option value="">Selecione…</option>
+                {field.enum.map(opt => (
+                  <option key={String(opt)} value={String(opt)}>{String(opt)}</option>
+                ))}
+              </select>
+            ) : field.type === 'boolean' ? (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <input
+                  type="checkbox"
+                  checked={Boolean(value)}
+                  disabled={readOnly}
+                  onChange={e => onChange(key, e.target.checked)}
+                  style={{ accentColor: '#3b82f6', width: 14, height: 14 }}
+                />
+                <span style={{ fontSize: 12, color: readOnly ? '#475569' : '#94a3b8' }}>
+                  {Boolean(value) ? 'true' : 'false'}
+                </span>
+              </div>
+            ) : field.type === 'integer' || field.type === 'number' ? (
+              <input
+                type="number"
+                value={value != null ? String(value) : ''}
+                disabled={readOnly}
+                min={field.minimum}
+                max={field.maximum}
+                onChange={e => onChange(key, field.type === 'integer' ? parseInt(e.target.value, 10) : parseFloat(e.target.value))}
+                style={_inputStyle(readOnly)}
+              />
+            ) : field.type === 'array' || field.type === 'object' ? (
+              <textarea
+                value={value != null ? JSON.stringify(value, null, 2) : ''}
+                disabled={readOnly}
+                rows={3}
+                onChange={e => {
+                  try { onChange(key, JSON.parse(e.target.value)) } catch { onChange(key, e.target.value) }
+                }}
+                style={{ ..._inputStyle(readOnly), fontFamily: 'monospace', fontSize: 11, resize: 'vertical' }}
+              />
+            ) : (
+              <input
+                type="text"
+                value={value != null ? String(value) : ''}
+                disabled={readOnly}
+                onChange={e => onChange(key, e.target.value)}
+                style={_inputStyle(readOnly)}
+              />
+            )}
           </div>
+        )
+      })}
+    </div>
+  )
+}
+
+function _inputStyle(readOnly: boolean): React.CSSProperties {
+  return {
+    width: '100%', boxSizing: 'border-box',
+    background: readOnly ? '#0a0f1a' : '#0a1628',
+    border: `1px solid ${readOnly ? '#1e293b' : '#1e3a5f'}`,
+    borderRadius: 5, padding: '6px 10px', fontSize: 12,
+    color: readOnly ? '#475569' : '#e2e8f0',
+    outline: 'none', cursor: readOnly ? 'not-allowed' : 'text',
+  }
+}
+
+// ── Slot card ──────────────────────────────────────────────────────────────────
+
+interface SlotCardProps {
+  slotName:   string
+  data:       SlotData
+  skill?:     Skill | null
+  onEdit?:    () => void   // only for "next"
+}
+
+function SlotCard({ slotName, data, skill, onEdit }: SlotCardProps) {
+  const color = SLOT_COLOR[slotName] ?? '#94a3b8'
+  const bg    = SLOT_BG[slotName]   ?? '#1e293b'
+  const isEditable = slotName === 'next'
+
+  return (
+    <div style={{
+      background: bg, borderRadius: 8, border: `1px solid ${color}33`,
+      borderTop: `3px solid ${color}`, padding: '14px 16px',
+      display: 'flex', flexDirection: 'column', gap: 10, minHeight: 180,
+    }}>
+      <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between' }}>
+        <div>
+          <div style={{ fontSize: 13, fontWeight: 700, color }}>{SLOT_LABEL[slotName]}</div>
+          <div style={{ fontSize: 11, color: '#475569', marginTop: 2 }}>{SLOT_DESC[slotName]}</div>
         </div>
-
-        {!dep.yaml_snapshot && (
-          <div style={{ marginTop: 12, padding: '8px 12px', background: '#431407', color: '#fb923c', borderRadius: 4, fontSize: 12 }}>
-            ⚠️ {t('deploy.noSnapshot', { defaultValue: 'This deploy has no flow snapshot — rollback is not possible.' })}
-          </div>
-        )}
-
-        {error && (
-          <div style={{ marginTop: 12, padding: '8px 12px', background: '#7f1d1d', color: '#fca5a5', borderRadius: 4, fontSize: 12 }}>
-            {error}
-          </div>
-        )}
-
-        <div style={{ display: 'flex', gap: 10, marginTop: 20, justifyContent: 'flex-end' }}>
-          <button
-            onClick={onCancel}
-            disabled={rolling}
-            style={{ ...btnSecondary, padding: '8px 20px' }}
-          >
-            {t('deploy.cancel', { defaultValue: 'Cancel' })}
+        {isEditable && onEdit && (
+          <button onClick={onEdit}
+            style={{ padding: '4px 10px', borderRadius: 4, fontSize: 11, background: '#1e3a5f', color: '#93c5fd', border: '1px solid #1d4ed822', cursor: 'pointer', flexShrink: 0 }}>
+            ✏ Editar
           </button>
-          <button
-            onClick={onConfirm}
-            disabled={rolling || !dep.yaml_snapshot}
-            style={{
-              padding: '8px 20px', borderRadius: 6, fontSize: 13, fontWeight: 600,
-              background: rolling || !dep.yaml_snapshot ? '#1e293b' : '#b45309',
-              color: rolling || !dep.yaml_snapshot ? '#475569' : '#fff',
-              border: 'none',
-              cursor: rolling || !dep.yaml_snapshot ? 'not-allowed' : 'pointer',
-              transition: 'all .15s',
-            }}
+        )}
+        {!isEditable && data.set && (
+          <span style={{ fontSize: 10, color: '#334155', flexShrink: 0 }}>🔒 somente leitura</span>
+        )}
+      </div>
+
+      {!data.set ? (
+        <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#334155', fontSize: 12 }}>
+          — vazio —
+        </div>
+      ) : (
+        <div style={{ fontSize: 12, display: 'flex', flexDirection: 'column', gap: 6 }}>
+          <div>
+            <span style={{ color: '#475569' }}>Skill: </span>
+            <code style={{ color: color, fontSize: 11 }}>{data.skill_id ?? '—'}</code>
+            {skill?.name && <span style={{ color: '#475569', marginLeft: 6 }}>({skill.name})</span>}
+          </div>
+
+          {data.config_json && Object.keys(data.config_json).length > 0 && (
+            <div>
+              <div style={{ color: '#475569', fontSize: 11, marginBottom: 4 }}>Configuração:</div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+                {Object.entries(data.config_json).slice(0, 5).map(([k, v]) => (
+                  <div key={k} style={{ display: 'flex', gap: 8 }}>
+                    <span style={{ color: '#475569', minWidth: 80, fontSize: 11 }}>{k}</span>
+                    <span style={{ color: '#64748b', fontSize: 11, wordBreak: 'break-all' }}>
+                      {typeof v === 'object' ? JSON.stringify(v) : String(v ?? '—')}
+                    </span>
+                  </div>
+                ))}
+                {Object.keys(data.config_json).length > 5 && (
+                  <div style={{ color: '#334155', fontSize: 10 }}>
+                    +{Object.keys(data.config_json).length - 5} campo(s)…
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          {data.set_at && (
+            <div style={{ color: '#334155', fontSize: 10, marginTop: 4 }}>
+              Definido por <span style={{ color: '#475569' }}>{data.set_by ?? '?'}</span>{' '}
+              em {fmtDateShort(data.set_at)}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ── Next slot edit panel ───────────────────────────────────────────────────────
+
+interface NextSlotEditorProps {
+  poolId:       string
+  tenantId:     string
+  skills:       Skill[]
+  currentSlot:  SlotData
+  existingNext: SlotData
+  onSave:       (payload: { skill_id: string; config_json: Record<string, unknown> }) => Promise<void>
+  onClose:      () => void
+  saving:       boolean
+  saveError:    string | null
+}
+
+function NextSlotEditor({
+  skills, currentSlot, existingNext, onSave, onClose, saving, saveError,
+}: NextSlotEditorProps) {
+  const [selectedSkillId, setSelectedSkillId] = useState<string>(existingNext.skill_id ?? '')
+  const [configValues,    setConfigValues]    = useState<Record<string, unknown>>(existingNext.config_json ?? {})
+  const [newFields,       setNewFields]       = useState<Set<string>>(new Set())
+
+  const selectedSkill = skills.find(s => s.skill_id === selectedSkillId) ?? null
+  const schema        = selectedSkill?.interface ?? null
+
+  // When skill selection changes: reset config to defaults from schema
+  const handleSkillChange = (skillId: string) => {
+    setSelectedSkillId(skillId)
+    setNewFields(new Set())
+    const sk = skills.find(s => s.skill_id === skillId)
+    if (sk?.interface?.properties) {
+      const defaults: Record<string, unknown> = {}
+      for (const [key, field] of Object.entries(sk.interface.properties)) {
+        defaults[key] = field.default ?? (field.type === 'boolean' ? false : field.type === 'integer' || field.type === 'number' ? 0 : '')
+      }
+      setConfigValues(defaults)
+    } else {
+      setConfigValues({})
+    }
+  }
+
+  // Copy from current slot: intersection merge with new fields highlighted
+  const handleCopyFromCurrent = () => {
+    if (!currentSlot.set || !currentSlot.config_json) return
+    const schemaProps = schema?.properties ?? {}
+    const currentConfig = currentSlot.config_json
+
+    const merged: Record<string, unknown>  = { ...configValues }
+    const detected = new Set<string>()
+
+    for (const key of Object.keys(schemaProps)) {
+      if (key in currentConfig) {
+        merged[key] = currentConfig[key]        // copy matching field
+      } else {
+        detected.add(key)                        // new field — not in current
+      }
+      // fields in currentConfig but NOT in schemaProps are silently dropped
+    }
+
+    setConfigValues(merged)
+    setNewFields(detected)
+  }
+
+  const handleFieldChange = (key: string, value: unknown) => {
+    setConfigValues(prev => ({ ...prev, [key]: value }))
+  }
+
+  const handleSave = async () => {
+    if (!selectedSkillId) { alert('Selecione uma skill-flow'); return }
+    await onSave({ skill_id: selectedSkillId, config_json: configValues })
+  }
+
+  const hasCurrent = currentSlot.set && !!currentSlot.config_json
+
+  return (
+    <div style={{
+      position: 'fixed', inset: 0, background: 'rgba(0,0,0,.75)',
+      display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 999,
+    }}>
+      <div style={{
+        background: '#0f172a', border: '1px solid #1d4ed844', borderRadius: 10,
+        width: 580, maxHeight: '88vh', overflow: 'auto', padding: 28,
+        display: 'flex', flexDirection: 'column', gap: 18,
+      }}>
+        {/* Header */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <div style={{ width: 10, height: 10, borderRadius: '50%', background: '#3b82f6' }} />
+          <span style={{ fontSize: 15, fontWeight: 700, color: '#f1f5f9' }}>
+            Configurar slot Próxima
+          </span>
+        </div>
+
+        {/* Skill selector */}
+        <div>
+          <label style={{ fontSize: 11, fontWeight: 600, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.05em', display: 'block', marginBottom: 6 }}>
+            Skill-flow
+          </label>
+          <select
+            value={selectedSkillId}
+            onChange={e => handleSkillChange(e.target.value)}
+            style={{ width: '100%', background: '#1e293b', border: '1px solid #334155', borderRadius: 6, padding: '8px 10px', fontSize: 12, color: '#e2e8f0', outline: 'none', boxSizing: 'border-box' }}
           >
-            {rolling ? '⟳ ' + t('deploy.rolling', { defaultValue: 'Rolling back…' }) : '↩ ' + t('deploy.confirmRollback', { defaultValue: 'Confirm rollback' })}
+            <option value="">Selecione uma skill-flow…</option>
+            {skills.map(s => (
+              <option key={s.skill_id} value={s.skill_id}>
+                {s.skill_id}{s.name ? ` — ${s.name}` : ''}
+              </option>
+            ))}
+          </select>
+          {selectedSkill?.description && (
+            <div style={{ fontSize: 11, color: '#475569', marginTop: 4 }}>{selectedSkill.description}</div>
+          )}
+        </div>
+
+        {/* Config form */}
+        {selectedSkillId && (
+          <div>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
+              <label style={{ fontSize: 11, fontWeight: 600, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                Configuração
+              </label>
+              {hasCurrent && (
+                <button onClick={handleCopyFromCurrent}
+                  style={{ fontSize: 11, padding: '4px 10px', borderRadius: 4, background: '#1e293b', color: '#60a5fa', border: '1px solid #334155', cursor: 'pointer' }}>
+                  ⬇ Copiar do Corrente
+                </button>
+              )}
+            </div>
+
+            {newFields.size > 0 && (
+              <div style={{ marginBottom: 10, padding: '6px 10px', background: '#1d4ed811', border: '1px solid #1d4ed833', borderRadius: 4, fontSize: 11, color: '#60a5fa' }}>
+                {newFields.size} campo(s) novo(s) nesta versão — marcados com <strong>novo</strong>. Campos removidos foram descartados.
+              </div>
+            )}
+
+            <ConfigForm
+              schema={schema}
+              values={configValues}
+              onChange={handleFieldChange}
+              readOnly={false}
+              newFields={newFields}
+            />
+          </div>
+        )}
+
+        {saveError && (
+          <div style={{ padding: '8px 12px', background: '#7f1d1d', color: '#fca5a5', borderRadius: 4, fontSize: 12 }}>
+            {saveError}
+          </div>
+        )}
+
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10 }}>
+          <button onClick={onClose} disabled={saving}
+            style={{ padding: '8px 20px', borderRadius: 6, fontSize: 13, background: '#1e293b', color: '#94a3b8', border: '1px solid #334155', cursor: 'pointer' }}>
+            Cancelar
+          </button>
+          <button onClick={handleSave} disabled={saving || !selectedSkillId}
+            style={{
+              padding: '8px 22px', borderRadius: 6, fontSize: 13, fontWeight: 600, border: 'none',
+              background: saving || !selectedSkillId ? '#1e3a5f' : '#1d4ed8',
+              color:      saving || !selectedSkillId ? '#334155' : '#fff',
+              cursor:     saving || !selectedSkillId ? 'not-allowed' : 'pointer',
+            }}>
+            {saving ? '⟳ Salvando…' : 'Salvar slot Próxima'}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ── Confirm modal ──────────────────────────────────────────────────────────────
+
+function ConfirmModal({ title, message, confirmLabel, confirmColor = '#1d4ed8', onConfirm, onCancel, running, error }: {
+  title: string; message: React.ReactNode; confirmLabel: string; confirmColor?: string
+  onConfirm: () => void; onCancel: () => void; running: boolean; error: string | null
+}) {
+  return (
+    <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,.7)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 999 }}>
+      <div style={{ background: '#0f172a', border: '1px solid #334155', borderRadius: 10, width: 420, padding: 28 }}>
+        <div style={{ fontSize: 16, fontWeight: 700, color: '#f1f5f9', marginBottom: 10 }}>{title}</div>
+        <div style={{ fontSize: 13, color: '#94a3b8', marginBottom: 20 }}>{message}</div>
+        {error && <div style={{ padding: '8px 12px', background: '#7f1d1d', color: '#fca5a5', borderRadius: 4, fontSize: 12, marginBottom: 16 }}>{error}</div>}
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10 }}>
+          <button onClick={onCancel} disabled={running}
+            style={{ padding: '8px 20px', borderRadius: 6, fontSize: 13, background: '#1e293b', color: '#94a3b8', border: '1px solid #334155', cursor: 'pointer' }}>
+            Cancelar
+          </button>
+          <button onClick={onConfirm} disabled={running}
+            style={{ padding: '8px 20px', borderRadius: 6, fontSize: 13, fontWeight: 600, background: running ? '#334155' : confirmColor, color: running ? '#64748b' : '#fff', border: 'none', cursor: running ? 'not-allowed' : 'pointer' }}>
+            {running ? '⟳ Aguarde…' : confirmLabel}
           </button>
         </div>
       </div>
@@ -343,728 +540,319 @@ function RollbackConfirmModal({ dep, skillId, rolling, error, onConfirm, onCance
 // ── Main page ──────────────────────────────────────────────────────────────────
 
 export default function AgentFlowDeployPage() {
-  const { t } = useTranslation('agentFlow')
-  const { session, getAccessToken, tenantId } = useAuth()
+  const { getAccessToken, tenantId } = useAuth()
 
-  const [skills,      setSkills]      = useState<Skill[]>([])
-  const [pools,       setPools]       = useState<Pool[]>([])
-  const [selected,    setSelected]    = useState<Skill | null>(null)
-  const [deployments, setDeployments] = useState<Deployment[]>([])
-  const [selectedPools, setSelectedPools] = useState<string[]>([])
+  const [pools,        setPools]        = useState<Pool[]>([])
+  const [skills,       setSkills]       = useState<Skill[]>([])
+  const [filter,       setFilter]       = useState('')
+  const [selected,     setSelected]     = useState<Pool | null>(null)
+  const [slots,        setSlots]        = useState<SlotsResponse | null>(null)
+  const [slotsLoading, setSlotsLoading] = useState(false)
+  const [slotsError,   setSlotsError]   = useState<string | null>(null)
 
-  const [loading,       setLoading]       = useState(false)
-  const [loadingDetail, setLoadingDetail] = useState(false)
-  const [deploying,     setDeploying]     = useState(false)
-  const [error,         setError]         = useState<string | null>(null)
-  const [deployError,   setDeployError]   = useState<string | null>(null)
-  const [deploySuccess, setDeploySuccess] = useState<string | null>(null)
-  const [filter,        setFilter]        = useState('')
+  const [pageLoading, setPageLoading] = useState(true)
+  const [pageError,   setPageError]   = useState<string | null>(null)
 
-  // Rollback state
-  const [rollbackTarget, setRollbackTarget] = useState<Deployment | null>(null)
-  const [rollingBack,    setRollingBack]    = useState(false)
-  const [rollbackError,  setRollbackError]  = useState<string | null>(null)
+  // Edit next slot
+  const [editing,   setEditing]   = useState(false)
+  const [saving,    setSaving]    = useState(false)
+  const [saveError, setSaveError] = useState<string | null>(null)
 
-  // Scheduled deploy state
-  const [scheduledDeploys,   setScheduledDeploys]   = useState<ScheduledDeploy[]>([])
-  const [scheduleAt,         setScheduleAt]          = useState('')  // datetime-local value
-  const [scheduling,         setScheduling]          = useState(false)
-  const [scheduleError,      setScheduleError]       = useState<string | null>(null)
-  const [scheduleSuccess,    setScheduleSuccess]     = useState<string | null>(null)
-  const [cancellingId,       setCancellingId]        = useState<string | null>(null)
+  // Promote / rollback
+  const [confirmAction, setConfirmAction] = useState<'promote' | 'rollback' | null>(null)
+  const [actionRunning, setActionRunning] = useState(false)
+  const [actionError,   setActionError]   = useState<string | null>(null)
 
-  // Handoff monitor state
-  const [handoffStatus,    setHandoffStatus]    = useState<HandoffStatus | null>(null)
-  const [handoffPolling,   setHandoffPolling]   = useState(false)
-
-  const load = useCallback(async () => {
-    if (!tenantId) return
-    setLoading(true); setError(null)
-    try {
-      const token = await getAccessToken()
-      const [s, p] = await Promise.all([
-        fetchSkills(tenantId, token),
-        fetchPools(tenantId, token).catch(() => [] as Pool[]),
-      ])
-      setSkills(s)
-      setPools(p)
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
-    } finally {
-      setLoading(false)
-    }
-  }, [tenantId])
-
-  useEffect(() => { load() }, [load])
-
-  // Poll handoff status every 10 s when a published skill is selected
+  // Load master data
   useEffect(() => {
-    if (!selected || !handoffStatus?.deployed) return
-    setHandoffPolling(true)
-    const id = setInterval(async () => {
+    if (!tenantId) return
+    ;(async () => {
       try {
         const token = await getAccessToken()
-        const fresh = await fetchHandoffStatus(selected.id, tenantId, token)
-        setHandoffStatus(fresh)
-      } catch { /* silent — stale data is fine */ }
-    }, 10_000)
-    return () => { clearInterval(id); setHandoffPolling(false) }
-  }, [selected?.id, handoffStatus?.deployed, tenantId])
+        const [pl, sk] = await Promise.all([
+          apiFetchPools(tenantId, token),
+          apiFetchSkills(tenantId, token),
+        ])
+        setPools(pl)
+        setSkills(sk)
+      } catch (e) {
+        setPageError(e instanceof Error ? e.message : String(e))
+      } finally {
+        setPageLoading(false)
+      }
+    })()
+  }, [tenantId, getAccessToken])
 
-  const selectSkill = useCallback(async (skill: Skill) => {
-    setSelected(skill)
-    setSelectedPools([])
-    setDeployError(null)
-    setDeploySuccess(null)
-    setRollbackError(null)
-    setScheduleError(null)
-    setScheduleSuccess(null)
-    setHandoffStatus(null)
-    setHandoffPolling(false)
-    setLoadingDetail(true)
+  const loadSlots = useCallback(async (pool: Pool) => {
+    if (!tenantId) return
+    setSlotsLoading(true); setSlotsError(null)
     try {
       const token = await getAccessToken()
-      const [deps, scheduled, handoff] = await Promise.all([
-        fetchDeployments(skill.id, tenantId, token),
-        fetchScheduledDeploys(skill.id, tenantId, token).catch(() => [] as ScheduledDeploy[]),
-        fetchHandoffStatus(skill.id, tenantId, token).catch(() => null),
-      ])
-      setDeployments(deps)
-      setScheduledDeploys(scheduled)
-      setHandoffStatus(handoff)
-    } catch {
-      setDeployments([])
-    } finally {
-      setLoadingDetail(false)
-    }
-  }, [tenantId])
-
-  const handleDeploy = async () => {
-    if (!selected || selectedPools.length === 0) return
-    setDeploying(true); setDeployError(null); setDeploySuccess(null)
-    try {
-      const token = await getAccessToken()
-      const dep = await deploySkill(selected.id, selectedPools, tenantId, token)
-      setDeploySuccess(`Deploy realizado com sucesso (ID: ${dep.deployment_id})`)
-      const [updatedSkills, updatedDeps] = await Promise.all([
-        fetchSkills(tenantId, token),
-        fetchDeployments(selected.id, tenantId, token).catch(() => []),
-      ])
-      setSkills(updatedSkills)
-      setDeployments(updatedDeps)
-      const freshSkill = updatedSkills.find(s => s.id === selected.id)
-      if (freshSkill) setSelected(freshSkill)
+      const sl = await apiFetchSlots(pool.pool_id, tenantId, token)
+      setSlots(sl)
     } catch (e) {
-      setDeployError(e instanceof Error ? e.message : String(e))
+      setSlotsError(e instanceof Error ? e.message : String(e))
     } finally {
-      setDeploying(false)
+      setSlotsLoading(false)
     }
+  }, [tenantId, getAccessToken])
+
+  const handleSelectPool = (pool: Pool) => {
+    setSelected(pool); setSlots(null); setSlotsError(null); setActionError(null)
+    loadSlots(pool)
   }
 
-  const handleRollbackConfirm = async () => {
-    if (!rollbackTarget || !selected) return
-    setRollingBack(true); setRollbackError(null)
+  // Save next slot
+  const handleSaveNext = async (payload: { skill_id: string; config_json: Record<string, unknown> }) => {
+    if (!selected || !tenantId) return
+    setSaving(true); setSaveError(null)
     try {
       const token = await getAccessToken()
-      const dep = await rollbackSkill(selected.id, rollbackTarget, tenantId, token)
-      setRollbackTarget(null)
-      setDeploySuccess(`Rollback realizado com sucesso (novo deploy: ${dep.deployment_id})`)
-      const [updatedSkills, updatedDeps] = await Promise.all([
-        fetchSkills(tenantId, token),
-        fetchDeployments(selected.id, tenantId, token).catch(() => []),
-      ])
-      setSkills(updatedSkills)
-      setDeployments(updatedDeps)
-      const freshSkill = updatedSkills.find(s => s.id === selected.id)
-      if (freshSkill) setSelected(freshSkill)
+      await apiSetNextSlot(selected.pool_id, tenantId, token, payload)
+      const updated = await apiFetchSlots(selected.pool_id, tenantId, token)
+      setSlots(updated)
+      setEditing(false)
     } catch (e) {
-      setRollbackError(e instanceof Error ? e.message : String(e))
+      setSaveError(e instanceof Error ? e.message : String(e))
     } finally {
-      setRollingBack(false)
+      setSaving(false)
     }
   }
 
-  const handleScheduleDeploy = async () => {
-    if (!selected || selectedPools.length === 0 || !scheduleAt) return
-    setScheduling(true); setScheduleError(null); setScheduleSuccess(null)
+  // Promote / rollback
+  const handleConfirmAction = async () => {
+    if (!selected || !tenantId || !confirmAction) return
+    setActionRunning(true); setActionError(null)
     try {
       const token = await getAccessToken()
-      const scheduledAtIso = new Date(scheduleAt).toISOString()
-      const result = await scheduleSkillDeploy(
-        selected.id,
-        selectedPools,
-        tenantId,
-        scheduledAtIso,
-        token,
-        session?.name ?? 'platform-ui:scheduled',
-      )
-      setScheduleSuccess(`Deploy agendado com sucesso (workflow: ${result.workflow_instance_id})`)
-      setScheduleAt('')
-      const freshScheduled = await fetchScheduledDeploys(selected.id, tenantId, token).catch(
-        () => [] as ScheduledDeploy[],
-      )
-      setScheduledDeploys(freshScheduled)
+      const result = confirmAction === 'promote'
+        ? await apiPromote(selected.pool_id, tenantId, token)
+        : await apiRollback(selected.pool_id, tenantId, token)
+      setSlots(result)
+      setConfirmAction(null)
     } catch (e) {
-      setScheduleError(e instanceof Error ? e.message : String(e))
+      setActionError(e instanceof Error ? e.message : String(e))
     } finally {
-      setScheduling(false)
+      setActionRunning(false)
     }
   }
 
-  const handleCancelScheduled = async (workflowInstanceId: string) => {
-    if (!selected) return
-    setCancellingId(workflowInstanceId)
-    setScheduleError(null)
-    try {
-      const token = await getAccessToken()
-      await cancelScheduledDeploy(workflowInstanceId, tenantId, token)
-      const freshScheduled = await fetchScheduledDeploys(selected.id, tenantId, token).catch(
-        () => [] as ScheduledDeploy[],
-      )
-      setScheduledDeploys(freshScheduled)
-    } catch (e) {
-      setScheduleError(e instanceof Error ? e.message : String(e))
-    } finally {
-      setCancellingId(null)
-    }
-  }
+  const filteredPools = pools.filter(p => {
+    if (!filter.trim()) return true
+    const q = filter.toLowerCase()
+    return p.pool_id.toLowerCase().includes(q) || (p.description ?? '').toLowerCase().includes(q)
+  })
 
-  const togglePool = (poolId: string) => {
-    setSelectedPools(prev =>
-      prev.includes(poolId) ? prev.filter(p => p !== poolId) : [...prev, poolId]
-    )
-  }
+  const canPromote  = slots?.slots.next.set     === true
+  const canRollback = slots?.slots.previous.set === true
 
-  const filtered = skills.filter(s =>
-    !filter ||
-    s.id.toLowerCase().includes(filter.toLowerCase()) ||
-    (s.name ?? '').toLowerCase().includes(filter.toLowerCase())
+  // Resolve skill names for slot cards
+  const skillMap = Object.fromEntries(skills.map(s => [s.skill_id, s]))
+
+  if (!tenantId) return (
+    <div className="flex items-center justify-center h-full text-gray-400 text-sm">Nenhum tenant selecionado.</div>
+  )
+  if (pageLoading) return (
+    <div className="flex items-center justify-center h-full"><Spinner /></div>
+  )
+  if (pageError) return (
+    <div className="flex items-center justify-center h-full text-red-400 text-sm">Erro: {pageError}</div>
   )
 
   return (
-    <div style={page}>
-      {/* Rollback confirm modal */}
-      {rollbackTarget && (
-        <RollbackConfirmModal
-          dep={rollbackTarget}
-          skillId={selected?.id ?? ''}
-          rolling={rollingBack}
-          error={rollbackError}
-          onConfirm={handleRollbackConfirm}
-          onCancel={() => { setRollbackTarget(null); setRollbackError(null) }}
+    <div style={{ display: 'flex', height: '100%', overflow: 'hidden', background: '#0a1628', color: '#e2e8f0' }}>
+
+      {/* ─── Left: pool list ───────────────────────────────────────────── */}
+      <div style={{ width: 260, flexShrink: 0, borderRight: '1px solid #1e293b', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+        <div style={{ padding: '14px 16px 10px', borderBottom: '1px solid #1e293b', flexShrink: 0 }}>
+          <div style={{ fontSize: 15, fontWeight: 700, color: '#f1f5f9', marginBottom: 10 }}>Deploy de Skills</div>
+          <input
+            value={filter}
+            onChange={e => setFilter(e.target.value)}
+            placeholder="Filtrar pools…"
+            style={{ width: '100%', background: '#1e293b', border: '1px solid #334155', borderRadius: 6, padding: '6px 10px', fontSize: 12, color: '#e2e8f0', outline: 'none', boxSizing: 'border-box' }}
+          />
+        </div>
+
+        <div style={{ flex: 1, overflowY: 'auto' }}>
+          {filteredPools.length === 0 ? (
+            <div style={{ padding: 24, textAlign: 'center', color: '#334155', fontSize: 12 }}>Nenhum pool encontrado</div>
+          ) : filteredPools.map(pool => {
+            const isActive = selected?.pool_id === pool.pool_id
+            return (
+              <button key={pool.pool_id} onClick={() => handleSelectPool(pool)}
+                style={{
+                  width: '100%', textAlign: 'left', padding: '10px 16px',
+                  background: isActive ? '#1e3a5f' : 'transparent',
+                  borderLeft: `3px solid ${isActive ? '#3b82f6' : 'transparent'}`,
+                  borderBottom: '1px solid #1e293b', borderTop: 'none', borderRight: 'none',
+                  cursor: 'pointer', transition: 'background .12s',
+                }}>
+                <code style={{ fontSize: 11, color: isActive ? '#93c5fd' : '#e2e8f0', display: 'block', wordBreak: 'break-all' }}>
+                  {pool.pool_id}
+                </code>
+                {pool.description && (
+                  <div style={{ fontSize: 11, color: '#475569', marginTop: 2, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                    {pool.description}
+                  </div>
+                )}
+                {pool.channel_types && pool.channel_types.length > 0 && (
+                  <div style={{ fontSize: 10, color: '#334155', marginTop: 2 }}>
+                    {pool.channel_types.join(' · ')}
+                  </div>
+                )}
+              </button>
+            )
+          })}
+        </div>
+      </div>
+
+      {/* ─── Right: slot panel ────────────────────────────────────────── */}
+      <div style={{ flex: 1, overflow: 'auto', padding: 24, display: 'flex', flexDirection: 'column', gap: 20 }}>
+        {!selected ? (
+          <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', color: '#334155', gap: 8 }}>
+            <span style={{ fontSize: 32 }}>⚙</span>
+            <span style={{ fontSize: 14 }}>Selecione um pool para gerenciar o deploy</span>
+          </div>
+        ) : (
+          <>
+            {/* Header */}
+            <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between' }}>
+              <div>
+                <code style={{ fontSize: 16, fontWeight: 700, color: '#93c5fd' }}>{selected.pool_id}</code>
+                {selected.description && <div style={{ fontSize: 13, color: '#64748b', marginTop: 4 }}>{selected.description}</div>}
+              </div>
+              <button onClick={() => loadSlots(selected)}
+                style={{ padding: '6px 14px', borderRadius: 6, fontSize: 12, background: '#1e293b', color: '#64748b', border: '1px solid #334155', cursor: 'pointer', flexShrink: 0 }}>
+                {slotsLoading ? <Spinner /> : '↻ Atualizar'}
+              </button>
+            </div>
+
+            {slotsError && (
+              <div style={{ padding: '10px 14px', background: '#7f1d1d', color: '#fca5a5', borderRadius: 6, fontSize: 12 }}>
+                Erro: {slotsError}
+              </div>
+            )}
+
+            {/* Slots */}
+            <div>
+              <div style={{ marginBottom: 14 }}>
+                <div style={{ fontSize: 13, fontWeight: 700, color: '#f1f5f9', marginBottom: 2 }}>Slots de versão</div>
+                <div style={{ fontSize: 11, color: '#475569' }}>
+                  Próxima → Corrente → Anterior &nbsp;·&nbsp;
+                  Desenvolvedor configura Próxima; Operador promove ou reverte
+                </div>
+              </div>
+
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 14 }}>
+                {(['previous', 'current', 'next'] as const).map(sn => {
+                  const slotData  = slots?.slots[sn] ?? { slot: sn, set: false }
+                  const slotSkill = slotData.skill_id ? (skillMap[slotData.skill_id] ?? null) : null
+                  return (
+                    <SlotCard
+                      key={sn}
+                      slotName={sn}
+                      data={slotData}
+                      skill={slotSkill}
+                      onEdit={sn === 'next' ? () => { setEditing(true); setSaveError(null) } : undefined}
+                    />
+                  )
+                })}
+              </div>
+
+              {/* Action buttons */}
+              <div style={{ display: 'flex', gap: 12, marginTop: 16, alignItems: 'center' }}>
+                <button
+                  onClick={() => { setConfirmAction('promote'); setActionError(null) }}
+                  disabled={!canPromote || slotsLoading}
+                  style={{
+                    padding: '9px 22px', borderRadius: 6, fontSize: 13, fontWeight: 600, border: 'none',
+                    background: canPromote && !slotsLoading ? '#1d4ed8' : '#1e293b',
+                    color:      canPromote && !slotsLoading ? '#fff'    : '#334155',
+                    cursor:     canPromote && !slotsLoading ? 'pointer' : 'not-allowed', transition: 'all .12s',
+                  }}>
+                  ↑ Promover (Próxima → Corrente)
+                </button>
+                <button
+                  onClick={() => { setConfirmAction('rollback'); setActionError(null) }}
+                  disabled={!canRollback || slotsLoading}
+                  style={{
+                    padding: '9px 22px', borderRadius: 6, fontSize: 13, fontWeight: 600, border: 'none',
+                    background: canRollback && !slotsLoading ? '#78350f' : '#1e293b',
+                    color:      canRollback && !slotsLoading ? '#fde68a' : '#334155',
+                    cursor:     canRollback && !slotsLoading ? 'pointer' : 'not-allowed', transition: 'all .12s',
+                  }}>
+                  ↩ Rollback (Anterior → Corrente)
+                </button>
+                {!canPromote && !canRollback && slots && (
+                  <span style={{ fontSize: 12, color: '#334155' }}>
+                    {!canPromote && 'Configure o slot "Próxima" para habilitar a promoção. '}
+                    {!canRollback && 'Sem slot "Anterior" para rollback.'}
+                  </span>
+                )}
+              </div>
+            </div>
+          </>
+        )}
+      </div>
+
+      {/* ─── Modals ──────────────────────────────────────────────────── */}
+
+      {editing && selected && slots && (
+        <NextSlotEditor
+          poolId={selected.pool_id}
+          tenantId={tenantId}
+          skills={skills}
+          currentSlot={slots.slots.current}
+          existingNext={slots.slots.next}
+          onSave={handleSaveNext}
+          onClose={() => setEditing(false)}
+          saving={saving}
+          saveError={saveError}
         />
       )}
 
-      {/* Top bar */}
-      <div style={topBar}>
-        <div>
-          <span style={{ fontWeight: 700, fontSize: 17, color: '#e2e8f0' }}>🚀 {t('deploy.title')}</span>
-          <span style={{ marginLeft: 10, fontSize: 12, color: '#64748b' }}>
-            {loading ? '⟳' : `${skills.length} skill(s)`}
-          </span>
-        </div>
-        <button style={btnSecondary} onClick={load} disabled={loading}>↻ {t('monitor.refresh', { defaultValue: '↻ Refresh' })}</button>
-      </div>
-
-      {error && (
-        <div style={{ padding: '10px 20px', background: '#7f1d1d', color: '#fca5a5', fontSize: 12 }}>
-          {t('deploy.errorLoading', { defaultValue: 'Error loading' })}: {error}
-        </div>
+      {confirmAction === 'promote' && (
+        <ConfirmModal
+          title="Promover versão"
+          message={
+            <span>
+              O slot <strong style={{ color: '#3b82f6' }}>Próxima</strong> passará para{' '}
+              <strong style={{ color: '#22c55e' }}>Corrente</strong>, e o atual{' '}
+              <strong style={{ color: '#22c55e' }}>Corrente</strong> será arquivado em{' '}
+              <strong style={{ color: '#94a3b8' }}>Anterior</strong>.
+              <br /><br />
+              Corrente e Anterior se tornarão imutáveis.
+            </span>
+          }
+          confirmLabel="↑ Confirmar promoção"
+          confirmColor="#1d4ed8"
+          onConfirm={handleConfirmAction}
+          onCancel={() => setConfirmAction(null)}
+          running={actionRunning}
+          error={actionError}
+        />
       )}
 
-      <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
-        {/* ─── Left: skill list ────────────────────────────────────── */}
-        <div style={leftCol}>
-          <div style={colHeader}>
-            <input
-              value={filter}
-              onChange={e => setFilter(e.target.value)}
-              placeholder={t('editor.search', { defaultValue: 'Search skills…' })}
-              style={searchInput}
-            />
-            {loading && <Spinner />}
-          </div>
-
-          <div style={{ flex: 1, overflowY: 'auto' }}>
-            {filtered.length === 0 && !loading && (
-              <div style={{ padding: '40px 16px', textAlign: 'center', color: '#475569', fontSize: 13 }}>
-                {t('editor.noSkills', { defaultValue: 'No skills found.' })}
-              </div>
-            )}
-            {filtered.map(skill => {
-              const active      = selected?.id === skill.id
-              const status      = skill.status ?? 'draft'
-              const statusColor = STATUS_COLOR[status] ?? '#6b7280'
-              const classColor  = CLASS_COLOR[skill.classification ?? ''] ?? '#94a3b8'
-              return (
-                <button
-                  key={skill.id}
-                  onClick={() => selectSkill(skill)}
-                  style={{
-                    width: '100%', textAlign: 'left', padding: '12px 16px',
-                    borderBottom: '1px solid #1e293b', cursor: 'pointer',
-                    background:  active ? '#1e3a5f' : 'transparent',
-                    borderLeft:  active ? '3px solid #3b82f6' : '3px solid transparent',
-                  }}
-                >
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <code style={{ fontSize: 11, color: active ? '#93c5fd' : '#e2e8f0', fontWeight: 600 }}>
-                      {skill.id}
-                    </code>
-                    <span style={{ fontSize: 10, fontWeight: 700, padding: '1px 6px', borderRadius: 3, background: statusColor + '22', color: statusColor }}>
-                      {STATUS_LABEL[status] ?? status}
-                    </span>
-                  </div>
-                  <div style={{ display: 'flex', gap: 6, marginTop: 4 }}>
-                    {skill.classification && (
-                      <span style={{ fontSize: 10, padding: '1px 5px', borderRadius: 3, background: classColor + '22', color: classColor }}>
-                        {skill.classification}
-                      </span>
-                    )}
-                    {skill.version && (
-                      <span style={{ fontSize: 10, color: '#475569' }}>v{skill.version}</span>
-                    )}
-                  </div>
-                  {skill.published_at && (
-                    <div style={{ fontSize: 10, color: '#475569', marginTop: 3 }}>
-                      Publicado: {fmtDate(skill.published_at)}
-                    </div>
-                  )}
-                </button>
-              )
-            })}
-          </div>
-        </div>
-
-        {/* ─── Right: deploy panel ─────────────────────────────────── */}
-        {selected ? (
-          <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-            {/* Header */}
-            <div style={{ padding: '16px 20px', borderBottom: '1px solid #1e293b', flexShrink: 0 }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-                <div>
-                  <code style={{ fontSize: 13, color: '#93c5fd', fontWeight: 600 }}>{selected.id}</code>
-                  {selected.name && (
-                    <div style={{ fontSize: 12, color: '#64748b', marginTop: 2 }}>{selected.name}</div>
-                  )}
-                </div>
-                <span style={{ fontSize: 11, fontWeight: 700, padding: '3px 10px', borderRadius: 4,
-                  background: (STATUS_COLOR[selected.status ?? 'draft'] ?? '#6b7280') + '22',
-                  color: STATUS_COLOR[selected.status ?? 'draft'] ?? '#6b7280',
-                }}>
-                  {STATUS_LABEL[selected.status ?? 'draft'] ?? selected.status}
-                </span>
-              </div>
-            </div>
-
-            <div style={{ flex: 1, overflowY: 'auto', padding: '20px' }}>
-              {/* Pool selection */}
-              <Section label={t('deploy.selectPoolsForDeploy', { defaultValue: 'Select pools for deployment' })}>
-                {pools.length === 0 && (
-                  <div style={{ fontSize: 12, color: '#475569' }}>{t('deploy.noPools', { defaultValue: 'No pools available.' })}</div>
-                )}
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: 8, marginTop: 8 }}>
-                  {pools.map(pool => {
-                    const checked = selectedPools.includes(pool.pool_id)
-                    return (
-                      <label
-                        key={pool.pool_id}
-                        style={{
-                          display: 'flex', alignItems: 'flex-start', gap: 10, padding: '10px 12px',
-                          background: checked ? '#1e3a5f' : '#1e293b',
-                          border: `1px solid ${checked ? '#3b82f6' : '#334155'}`,
-                          borderRadius: 6, cursor: 'pointer',
-                        }}
-                      >
-                        <input
-                          type="checkbox"
-                          checked={checked}
-                          onChange={() => togglePool(pool.pool_id)}
-                          style={{ marginTop: 2, accentColor: '#3b82f6' }}
-                        />
-                        <div>
-                          <div style={{ fontSize: 12, fontWeight: 600, color: checked ? '#93c5fd' : '#e2e8f0' }}>
-                            {pool.pool_id}
-                          </div>
-                          {pool.description && (
-                            <div style={{ fontSize: 11, color: '#64748b', marginTop: 2 }}>{pool.description}</div>
-                          )}
-                          {pool.channel_types && pool.channel_types.length > 0 && (
-                            <div style={{ fontSize: 10, color: '#475569', marginTop: 3 }}>
-                              {pool.channel_types.join(' · ')}
-                            </div>
-                          )}
-                        </div>
-                      </label>
-                    )
-                  })}
-                </div>
-              </Section>
-
-              {/* Deploy action */}
-              <Section label={t('deploy.executeDeployTitle', { defaultValue: 'Execute deploy' })}>
-                <div style={{ marginBottom: 12 }}>
-                  {selectedPools.length === 0 ? (
-                    <div style={{ fontSize: 12, color: '#64748b' }}>
-                      {t('deploy.selectAtLeastOnePool', { defaultValue: 'Select at least one pool to enable deployment.' })}
-                    </div>
-                  ) : (
-                    <div style={{ fontSize: 12, color: '#94a3b8' }}>
-                      {t('deploy.selectedPools', { defaultValue: 'Selected pools:' })}{' '}
-                      {selectedPools.map(p => (
-                        <span key={p} style={poolChip}>{p}</span>
-                      ))}
-                    </div>
-                  )}
-                </div>
-
-                {deployError && (
-                  <div style={{ padding: '8px 12px', background: '#7f1d1d', color: '#fca5a5', borderRadius: 4, fontSize: 12, marginBottom: 10 }}>
-                    {deployError}
-                  </div>
-                )}
-                {deploySuccess && (
-                  <div style={{ padding: '8px 12px', background: '#052e16', color: '#4ade80', borderRadius: 4, fontSize: 12, marginBottom: 10 }}>
-                    ✓ {deploySuccess}
-                  </div>
-                )}
-
-                <button
-                  onClick={handleDeploy}
-                  disabled={deploying || selectedPools.length === 0}
-                  style={{
-                    padding: '10px 24px', borderRadius: 6, fontSize: 14, fontWeight: 600,
-                    background: selectedPools.length > 0 && !deploying ? '#2563eb' : '#1e293b',
-                    color: selectedPools.length > 0 && !deploying ? '#fff' : '#475569',
-                    border: 'none', cursor: selectedPools.length > 0 && !deploying ? 'pointer' : 'not-allowed',
-                    transition: 'all .15s',
-                  }}
-                >
-                  {deploying ? '⟳ ' + t('deploy.deploying', { defaultValue: 'Deploying…' }) : '🚀 ' + t('deploy.deployNow', { defaultValue: 'Deploy now' })}
-                </button>
-
-                <div style={{ fontSize: 11, color: '#475569', marginTop: 8 }}>
-                  {t('deploy.deployExplain', { defaultValue: 'The skill will be deployed to the selected pools. In-progress sessions will continue on the previous version until completion.' })}
-                </div>
-              </Section>
-
-              {/* Deployment history */}
-              <Section label={t('deploy.history.title', { defaultValue: 'Deployment History' })}>
-                {loadingDetail && (
-                  <div style={{ display: 'flex', justifyContent: 'center', padding: 20 }}>
-                    <Spinner />
-                  </div>
-                )}
-                {!loadingDetail && deployments.length === 0 && (
-                  <div style={{ fontSize: 12, color: '#475569' }}>
-                    {t('deploy.history.noHistory', { defaultValue: 'No deployments yet.' })}
-                  </div>
-                )}
-
-                {deployments.map((dep, idx) => {
-                  const isLatest      = idx === 0
-                  const hasSnapshot   = Boolean(dep.yaml_snapshot)
-                  const canRollback   = !isLatest && hasSnapshot
-                  const isRollbackRow = dep.notes?.startsWith('Rollback para deploy')
-
-                  return (
-                    <div key={dep.deployment_id} style={historyRow}>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8 }}>
-                        <div style={{ minWidth: 0, flex: 1 }}>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
-                            <code style={{ fontSize: 11, color: '#93c5fd' }}>{dep.deployment_id}</code>
-                            {isLatest && (
-                              <span style={{ fontSize: 9, fontWeight: 700, padding: '1px 5px', borderRadius: 3, background: '#14532d', color: '#4ade80', textTransform: 'uppercase' }}>
-                                {t('deploy.history.current', { defaultValue: 'current' })}
-                              </span>
-                            )}
-                            {isRollbackRow && (
-                              <span style={{ fontSize: 9, fontWeight: 700, padding: '1px 5px', borderRadius: 3, background: '#451a03', color: '#fb923c', textTransform: 'uppercase' }}>
-                                {t('deploy.history.rollbackTag', { defaultValue: 'rollback' })}
-                              </span>
-                            )}
-                          </div>
-                          <div style={{ fontSize: 11, color: '#64748b', marginTop: 2 }}>
-                            v{dep.version} · {t('deploy.history.by', { defaultValue: 'by' })} {dep.deployed_by}
-                          </div>
-                          {dep.notes && (
-                            <div style={{ fontSize: 10, color: '#475569', marginTop: 2, fontStyle: 'italic' }}>
-                              {dep.notes}
-                            </div>
-                          )}
-                        </div>
-
-                        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 6, flexShrink: 0 }}>
-                          <span style={{ fontSize: 11, color: '#64748b', whiteSpace: 'nowrap' }}>
-                            {fmtDate(dep.deployed_at)}
-                          </span>
-                          {/* Rollback button — only for non-latest entries with a snapshot */}
-                          {!isLatest && (
-                            <button
-                              onClick={() => { setRollbackTarget(dep); setRollbackError(null); setDeploySuccess(null) }}
-                              disabled={!canRollback}
-                              title={
-                                !hasSnapshot
-                                  ? t('deploy.noSnapshotTitle', { defaultValue: 'Snapshot not available for this deployment' })
-                                  : t('deploy.rollbackTooltip', { defaultValue: 'Restore this flow and redeploy to the same pools' })
-                              }
-                              style={{
-                                fontSize: 11, fontWeight: 600, padding: '3px 10px', borderRadius: 4,
-                                background:  canRollback ? '#431407' : '#1e293b',
-                                color:       canRollback ? '#fb923c' : '#475569',
-                                border:     `1px solid ${canRollback ? '#92400e' : '#334155'}`,
-                                cursor:      canRollback ? 'pointer' : 'not-allowed',
-                                transition:  'all .15s',
-                                whiteSpace:  'nowrap',
-                              }}
-                            >
-                              ↩ {t('deploy.rollback', { defaultValue: 'Rollback' })}
-                            </button>
-                          )}
-                        </div>
-                      </div>
-
-                      <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', marginTop: 6 }}>
-                        {dep.pool_ids.map(p => (
-                          <span key={p} style={poolChip}>{p}</span>
-                        ))}
-                      </div>
-                    </div>
-                  )
-                })}
-
-                {deployments.length > 0 && (
-                  <div style={{ fontSize: 11, color: '#334155', marginTop: 8 }}>
-                    {t('deploy.rollbackExplain', { defaultValue: 'Rollback restores the flow from that deployment and publishes to the same pools. In-progress sessions will continue on the previous version until completion.' })}
-                  </div>
-                )}
-              </Section>
-
-              {/* ── Scheduled deploy ──────────────────────────────────── */}
-              <Section label={t('deploy.schedule.title', { defaultValue: 'Schedule Deploy' })}>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-                  <div style={{ fontSize: 12, color: '#94a3b8' }}>
-                    {t('deploy.scheduleExplain', { defaultValue: 'Schedule the deployment to run automatically at a future time. The pools selected in the section above will be used.' })}
-                  </div>
-
-                  {selectedPools.length === 0 && (
-                    <div style={{ fontSize: 12, color: '#64748b', padding: '8px 12px', background: '#1e293b', borderRadius: 4 }}>
-                      ⚠️ {t('deploy.selectPoolBeforeSchedule', { defaultValue: 'Select at least one pool above before scheduling.' })}
-                    </div>
-                  )}
-
-                  <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
-                    <input
-                      type="datetime-local"
-                      value={scheduleAt}
-                      onChange={e => setScheduleAt(e.target.value)}
-                      min={new Date(Date.now() + 60_000).toISOString().slice(0, 16)}
-                      style={{
-                        flex: 1, minWidth: 180, background: '#0f1f35',
-                        border: '1px solid #334155', borderRadius: 5,
-                        padding: '7px 10px', color: '#e2e8f0', fontSize: 12,
-                      }}
-                    />
-                    <button
-                      onClick={handleScheduleDeploy}
-                      disabled={scheduling || selectedPools.length === 0 || !scheduleAt}
-                      style={{
-                        padding: '8px 18px', borderRadius: 6, fontSize: 13, fontWeight: 600,
-                        background: (!scheduling && selectedPools.length > 0 && scheduleAt) ? '#7c3aed' : '#1e293b',
-                        color:      (!scheduling && selectedPools.length > 0 && scheduleAt) ? '#fff' : '#475569',
-                        border: 'none',
-                        cursor: (!scheduling && selectedPools.length > 0 && scheduleAt) ? 'pointer' : 'not-allowed',
-                        whiteSpace: 'nowrap',
-                        transition: 'all .15s',
-                      }}
-                    >
-                      {scheduling ? '⟳ ' + t('deploy.scheduling', { defaultValue: 'Scheduling…' }) : '⏰ ' + t('deploy.schedule.submit', { defaultValue: 'Schedule' })}
-                    </button>
-                  </div>
-
-                  {scheduleError && (
-                    <div style={{ padding: '8px 12px', background: '#7f1d1d', color: '#fca5a5', borderRadius: 4, fontSize: 12 }}>
-                      {scheduleError}
-                    </div>
-                  )}
-                  {scheduleSuccess && (
-                    <div style={{ padding: '8px 12px', background: '#052e16', color: '#4ade80', borderRadius: 4, fontSize: 12 }}>
-                      ✓ {scheduleSuccess}
-                    </div>
-                  )}
-
-                  {/* Pending list */}
-                  {scheduledDeploys.length > 0 && (
-                    <div style={{ marginTop: 4 }}>
-                      <div style={{ fontSize: 11, fontWeight: 600, color: '#64748b', marginBottom: 6 }}>
-                        {t('deploy.schedule.pending', { defaultValue: 'Pending scheduled deploys' })} ({scheduledDeploys.filter(s => s.status === 'active' || s.status === 'suspended').length}):
-                      </div>
-                      {scheduledDeploys
-                        .filter(sd => sd.status === 'active' || sd.status === 'suspended')
-                        .map(sd => (
-                          <div
-                            key={sd.workflow_instance_id}
-                            style={{
-                              background: '#1e293b', border: '1px solid #334155', borderRadius: 6,
-                              padding: '10px 14px', marginBottom: 6,
-                              display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 10,
-                            }}
-                          >
-                            <div style={{ minWidth: 0, flex: 1 }}>
-                              <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', marginBottom: 4 }}>
-                                {(sd.pool_ids ?? []).map(p => (
-                                  <span key={p} style={poolChip}>{p}</span>
-                                ))}
-                              </div>
-                              <div style={{ fontSize: 11, color: '#94a3b8' }}>
-                                ⏰ {sd.scheduled_at ? fmtDate(sd.scheduled_at) : '–'}
-                              </div>
-                              {sd.deployed_by && (
-                                <div style={{ fontSize: 10, color: '#475569', marginTop: 2 }}>
-                                  por {sd.deployed_by}
-                                </div>
-                              )}
-                            </div>
-                            <button
-                              onClick={() => handleCancelScheduled(sd.workflow_instance_id)}
-                              disabled={cancellingId === sd.workflow_instance_id}
-                              style={{
-                                fontSize: 11, padding: '4px 10px', borderRadius: 4,
-                                background: '#7f1d1d', color: '#fca5a5',
-                                border: '1px solid #991b1b', cursor: 'pointer',
-                                whiteSpace: 'nowrap', flexShrink: 0,
-                              }}
-                            >
-                              {cancellingId === sd.workflow_instance_id ? '⟳' : '✕ ' + t('deploy.schedule.cancel', { defaultValue: 'Cancel' })}
-                            </button>
-                          </div>
-                        ))}
-                    </div>
-                  )}
-                </div>
-              </Section>
-
-              {/* ── Handoff monitor ───────────────────────────────────── */}
-              <Section label={`${t('deploy.handoff.title', { defaultValue: 'Handoff Monitor' })}${handoffPolling ? ' ⟳' : ''}`}>
-                {!handoffStatus && (
-                  <div style={{ fontSize: 12, color: '#475569' }}>
-                    {t('deploy.noDeployDetected', { defaultValue: 'No active deployment detected for this skill.' })}
-                  </div>
-                )}
-                {handoffStatus && !handoffStatus.deployed && (
-                  <div style={{ fontSize: 12, color: '#64748b', padding: '10px 12px', background: '#1e293b', borderRadius: 6 }}>
-                    {t('deploy.handoff.notDeployed', { defaultValue: 'Skill not yet deployed.' })}
-                  </div>
-                )}
-                {handoffStatus && handoffStatus.deployed && (
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-                    {/* KPI row */}
-                    <div style={{ display: 'flex', gap: 10 }}>
-                      <div style={metricCard}>
-                        <div style={{
-                          fontSize: 28, fontWeight: 700,
-                          color: handoffStatus.active_sessions === 0 ? '#4ade80' : '#fbbf24',
-                          lineHeight: 1,
-                        }}>
-                          {handoffStatus.active_sessions}
-                        </div>
-                        <div style={{ fontSize: 11, color: '#64748b', marginTop: 4 }}>
-                          {t('deploy.handoff.activeSessions', { defaultValue: 'sessions on previous version' })}
-                        </div>
-                      </div>
-                      <div style={metricCard}>
-                        <div style={{ fontSize: 12, fontWeight: 600, color: '#93c5fd' }}>
-                          {handoffStatus.deployed_at ? fmtDate(handoffStatus.deployed_at) : '–'}
-                        </div>
-                        <div style={{ fontSize: 11, color: '#64748b', marginTop: 4 }}>{t('deploy.lastDeployment', { defaultValue: 'Last deployment' })}</div>
-                        {handoffStatus.deployed_by && (
-                          <div style={{ fontSize: 10, color: '#475569', marginTop: 2 }}>
-                            por {handoffStatus.deployed_by}
-                          </div>
-                        )}
-                      </div>
-                    </div>
-
-                    {/* Convergence indicator */}
-                    <div style={{ background: '#1e293b', borderRadius: 6, padding: '12px 14px' }}>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8 }}>
-                        <span style={{ fontSize: 12, color: '#94a3b8', fontWeight: 600 }}>{t('deploy.handoff.convergence', { defaultValue: 'Convergence' })}</span>
-                        {handoffStatus.active_sessions === 0 ? (
-                          <span style={{ fontSize: 12, fontWeight: 700, color: '#4ade80' }}>✓ {t('deploy.convergenceComplete', { defaultValue: 'Complete' })}</span>
-                        ) : (
-                          <span style={{ fontSize: 12, color: '#fbbf24' }}>
-                            {handoffStatus.active_sessions} {t('deploy.sessionsMigrating', { defaultValue: 'session(s) migrating…' })}
-                          </span>
-                        )}
-                      </div>
-                      <div style={{ height: 8, background: '#0f172a', borderRadius: 4, overflow: 'hidden' }}>
-                        <div style={{
-                          height: '100%',
-                          width: handoffStatus.active_sessions === 0 ? '100%' : '15%',
-                          background: handoffStatus.active_sessions === 0 ? '#22c55e' : '#fbbf24',
-                          borderRadius: 4,
-                          transition: 'width 1.2s ease, background 1.2s ease',
-                        }} />
-                      </div>
-                      <div style={{ fontSize: 10, color: '#475569', marginTop: 8 }}>
-                        {t('deploy.handoffExplain', { defaultValue: 'Updated automatically every 10 seconds. In-progress sessions migrate to the new version when complete.' })}
-                      </div>
-                    </div>
-
-                    {/* Affected pools */}
-                    <div>
-                      <div style={{ fontSize: 11, color: '#64748b', marginBottom: 4 }}>{t('deploy.affectedPools', { defaultValue: 'Affected pools:' })}</div>
-                      <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
-                        {handoffStatus.pool_ids.map(p => (
-                          <span key={p} style={poolChip}>{p}</span>
-                        ))}
-                      </div>
-                    </div>
-                  </div>
-                )}
-              </Section>
-            </div>
-          </div>
-        ) : (
-          <div style={emptyDetail}>
-            <div style={{ fontSize: 40, marginBottom: 12 }}>🚀</div>
-            <div style={{ fontSize: 14, color: '#475569', textAlign: 'center', maxWidth: 280 }}>
-              {t('deploy.selectSkill', { defaultValue: 'Select a skill to deploy.' })}
-            </div>
-          </div>
-        )}
-      </div>
+      {confirmAction === 'rollback' && (
+        <ConfirmModal
+          title="Rollback de versão"
+          message={
+            <span>
+              O slot <strong style={{ color: '#94a3b8' }}>Anterior</strong> será restaurado como{' '}
+              <strong style={{ color: '#22c55e' }}>Corrente</strong>, com a skill e configuração exatas que estavam em produção anteriormente.
+              <br /><br />
+              O slot Anterior será removido após o rollback.
+            </span>
+          }
+          confirmLabel="↩ Confirmar rollback"
+          confirmColor="#78350f"
+          onConfirm={handleConfirmAction}
+          onCancel={() => setConfirmAction(null)}
+          running={actionRunning}
+          error={actionError}
+        />
+      )}
     </div>
   )
 }
-
-// ── Sub-components ─────────────────────────────────────────────────────────────
-
-function Section({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <div style={{ marginBottom: 24 }}>
-      <div style={{ fontSize: 11, fontWeight: 700, color: '#475569', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 10 }}>
-        {label}
-      </div>
-      {children}
-    </div>
-  )
-}
-
-// ── Styles ─────────────────────────────────────────────────────────────────────
-
-const page: React.CSSProperties        = { display: 'flex', flexDirection: 'column', height: '100%', backgroundColor: '#0a1628', color: '#e2e8f0', overflow: 'hidden' }
-const topBar: React.CSSProperties      = { display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 20px', borderBottom: '1px solid #1e293b', flexShrink: 0 }
-const leftCol: React.CSSProperties     = { width: 300, flexShrink: 0, borderRight: '1px solid #1e293b', display: 'flex', flexDirection: 'column', overflow: 'hidden' }
-const colHeader: React.CSSProperties   = { padding: '10px 16px', borderBottom: '1px solid #1e293b', flexShrink: 0, display: 'flex', alignItems: 'center', gap: 8 }
-const searchInput: React.CSSProperties = { flex: 1, background: '#0f1f35', border: '1px solid #334155', borderRadius: 5, padding: '5px 10px', color: '#e2e8f0', fontSize: 12 }
-const btnSecondary: React.CSSProperties = { background: 'none', border: '1px solid #334155', color: '#94a3b8', borderRadius: 6, padding: '5px 12px', cursor: 'pointer', fontSize: 12 }
-const emptyDetail: React.CSSProperties = { flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }
-const historyRow: React.CSSProperties  = { background: '#1e293b', border: '1px solid #334155', borderRadius: 6, padding: '10px 14px', marginBottom: 8 }
-const poolChip: React.CSSProperties    = { fontSize: 10, background: '#172554', color: '#93c5fd', padding: '1px 6px', borderRadius: 3 }
-const overlay: React.CSSProperties     = { position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }
-const modalBox: React.CSSProperties    = { background: '#0f172a', border: '1px solid #334155', borderRadius: 10, padding: '28px 32px', width: 480, maxWidth: '90vw' }
-const infoRow: React.CSSProperties     = { display: 'flex', alignItems: 'center', gap: 12, padding: '6px 0', borderBottom: '1px solid #1e293b' }
-const infoLabel: React.CSSProperties   = { fontSize: 11, color: '#475569', width: 110, flexShrink: 0 }
-const infoVal: React.CSSProperties     = { fontSize: 12, color: '#e2e8f0' }
-const metricCard: React.CSSProperties  = { flex: 1, background: '#1e293b', border: '1px solid #334155', borderRadius: 6, padding: '12px 14px' }

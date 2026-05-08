@@ -38,6 +38,8 @@ model Pool {
 
   // Tipos de agente registrados neste pool
   agent_types AgentTypePool[]
+  // Deploy slots: previous / current / next
+  skill_slots PoolSkillSlot[]
 
   @@unique([pool_id, tenant_id])
   @@index([tenant_id])
@@ -177,6 +179,7 @@ model Skill {
   created_by  String
 
   deployments SkillDeployment[]
+  version_slots SkillVersionSlot[]
 
   @@unique([skill_id, tenant_id])
   @@index([tenant_id])
@@ -213,6 +216,67 @@ model SkillDeployment {
   @@index([skill_id, tenant_id])
   @@index([tenant_id])
   @@map("skill_deployments")
+}
+
+// ─────────────────────────────────────────────
+// SkillVersionSlot — 3-slot deploy lifecycle model
+// Spec: Task #31 — anterior / corrente / proxima
+// The operator promotes (proxima→corrente, corrente→anterior)
+// or rolls back (anterior→corrente) with a single button click.
+// ─────────────────────────────────────────────
+
+model SkillVersionSlot {
+  id        String    @id @default(uuid())
+  skill_id  String
+  tenant_id String
+  slot      SkillSlot // previous | current | next
+
+  yaml_snapshot Json?           // flow definition at slot set time
+  config_json   Json     @default("{}")   // per-slot runtime config overrides
+  pool_ids      String[] @default([])     // target pools for this slot
+  set_at        DateTime @default(now())
+  set_by        String
+
+  skill Skill @relation(fields: [skill_id, tenant_id], references: [skill_id, tenant_id], onDelete: Cascade)
+
+  @@unique([skill_id, tenant_id, slot])
+  @@index([skill_id, tenant_id])
+  @@map("skill_version_slots")
+}
+
+enum SkillSlot {
+  previous  // anterior — safe rollback target
+  current   // corrente — live in production
+  next      // proxima  — developer-prepared candidate
+}
+
+// ─────────────────────────────────────────────
+// PoolSkillSlot — deploy state per pool (3-slot model)
+// Spec: Task #31 revised — pool-centric deploy
+// Key: pool_id + tenant_id + slot
+// Only "next" is editable; current/previous are immutable snapshots.
+// Promote: next→current, current→previous, next cleared.
+// Rollback: previous→current, previous cleared.
+// ─────────────────────────────────────────────
+
+model PoolSkillSlot {
+  id            String    @id @default(uuid())
+  pool_id       String
+  tenant_id     String
+  slot          SkillSlot
+
+  skill_id      String?             // null = slot empty
+  config_json   Json      @default("{}")   // filled from skill's interface_schema
+  yaml_snapshot Json?               // snapshot of skill flow at set time
+
+  set_at  DateTime @default(now())
+  set_by  String
+
+  pool Pool @relation(fields: [pool_id, tenant_id], references: [pool_id, tenant_id], onDelete: Cascade)
+
+  @@unique([pool_id, tenant_id, slot])
+  @@index([pool_id, tenant_id])
+  @@map("pool_skill_slots")
 }
 
 // ─────────────────────────────────────────────
