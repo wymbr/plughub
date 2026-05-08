@@ -13,6 +13,8 @@ import WorkflowCalendarPage from '@/modules/workflows/WorkflowCalendarPage'
 import CalendarsPage from '@/modules/calendars/CalendarsPage'
 import AgentFlowEditorPage  from '@/modules/agent-flow/AgentFlowEditorPage'
 import AgentFlowDeployPage  from '@/modules/agent-flow/AgentFlowDeployPage'
+import FlowMonitorPage      from '@/modules/agent-flow/FlowMonitorPage'
+import ProcessosPage        from '@/modules/agent-flow/ProcessosPage'
 import BillingPage from '@/modules/billing/BillingPage'
 import FormsPage from '@/modules/evaluation/FormsPage'
 import EvalCampaignsPage from '@/modules/evaluation/CampaignsPage'
@@ -22,7 +24,15 @@ import EvalReportsPage from '@/modules/evaluation/ReportsPage'
 import { AgentAssistPage } from '@/modules/agent-assist/AgentAssistPage'
 import PlaceholderPage from '@/modules/_placeholder/PlaceholderPage'
 import AccessPage from '@/modules/access/AccessPage'
-import ContactsPage from '@/modules/contacts/ContactsPage'
+// Atendimento
+import SessionsPage from '@/modules/contacts/SessionsPage'
+import AgentsPage   from '@/modules/contacts/AgentsPage'
+import EventsPage   from '@/modules/contacts/EventsPage'
+// Análise
+import AnaliseContatosPage  from '@/modules/analise/AnaliseContatosPage'
+import AnaliseAgentesPage   from '@/modules/analise/AnaliseAgentesPage'
+import AnaliseProcessosPage from '@/modules/analise/AnaliseProcessosPage'
+import AnaliseQualidadePage from '@/modules/analise/AnaliseQualidadePage'
 import DashboardsPage from '@/modules/dashboards/DashboardsPage'
 import ConfigChannelsIndex from '@/modules/config-channels'
 
@@ -41,36 +51,47 @@ export const routes: RouteObject[] = [
     children: [
       { index: true, element: <HomePage /> },
 
-      // ── Service ────────────────────────────────────────────────
-      { path: 'contacts',     element: <ContactsPage /> },
-      { path: 'agent-assist', element: <AgentAssistPage /> },
-      // Legacy redirect: /monitor → /contacts?tab=monitor
-      { path: 'monitor',      element: <Navigate to="/contacts?tab=monitor" replace /> },
+      // ── Atendimento ────────────────────────────────────────────────
+      { path: 'contacts/sessions', element: <SessionsPage /> },
+      { path: 'contacts/agents',   element: <AgentsPage   /> },
+      { path: 'contacts/events',   element: <EventsPage   /> },
+      { path: 'agent-assist',      element: <AgentAssistPage /> },
 
-      // ── Fluxo (unified editor) ─────────────────────────────────
-      { path: 'agent-flow/editor',  element: <AgentFlowEditorPage /> },
-      { path: 'agent-flow/deploy',  element: <AgentFlowDeployPage /> },
-      // Legacy redirects: monitor/report → contacts tabs
-      { path: 'agent-flow/monitor', element: <Navigate to="/contacts?tab=monitor"   replace /> },
-      { path: 'agent-flow/report',  element: <Navigate to="/contacts?tab=report" replace /> },
-      { path: 'skill-flows',        element: <Navigate to="/agent-flow/editor"   replace /> },
+      // Legacy redirects: /contacts → /contacts/sessions
+      { path: 'contacts',          element: <Navigate to="/contacts/sessions" replace /> },
+      { path: 'monitor',           element: <Navigate to="/flow/monitor"      replace /> },
+
+      // ── Fluxo ──────────────────────────────────────────────────────
+      { path: 'agent-flow/editor',   element: <AgentFlowEditorPage /> },
+      { path: 'agent-flow/deploy',   element: <AgentFlowDeployPage /> },
+      { path: 'flow/monitor',        element: <FlowMonitorPage     /> },
+      { path: 'flow/processos',      element: <ProcessosPage       /> },
+      // Legacy redirects
+      { path: 'agent-flow/monitor',  element: <Navigate to="/flow/monitor"   replace /> },
+      { path: 'agent-flow/report',   element: <Navigate to="/contacts/sessions" replace /> },
+      { path: 'skill-flows',         element: <Navigate to="/agent-flow/editor" replace /> },
 
       // ── Workflow routes (still accessible directly) ─────────────
       { path: 'workflow/editor',   element: <WorkflowEditorPage /> },
       { path: 'workflow/calendar', element: <WorkflowCalendarPage /> },
-      // Redirects: monitor/report → contacts tabs
-      { path: 'workflow/monitor',  element: <Navigate to="/contacts?tab=monitor" replace /> },
-      { path: 'workflow/report',   element: <Navigate to="/contacts?tab=report"  replace /> },
-      // Legacy redirects
-      { path: 'workflows',         element: <Navigate to="/contacts?tab=monitor" replace /> },
-      { path: 'campaigns',         element: <Navigate to="/contacts?tab=report"  replace /> },
+      // Redirects
+      { path: 'workflow/monitor',  element: <Navigate to="/flow/monitor"      replace /> },
+      { path: 'workflow/report',   element: <Navigate to="/contacts/sessions" replace /> },
+      { path: 'workflows',         element: <Navigate to="/flow/monitor"      replace /> },
+      { path: 'campaigns',         element: <Navigate to="/contacts/sessions" replace /> },
 
-      // ── Dashboards ────────────────────────────────────────────
+      // ── Análise ────────────────────────────────────────────────────
+      { path: 'analise/contatos',  element: <AnaliseContatosPage  /> },
+      { path: 'analise/agentes',   element: <AnaliseAgentesPage   /> },
+      { path: 'analise/processos', element: <AnaliseProcessosPage /> },
+      { path: 'analise/qualidade', element: <AnaliseQualidadePage /> },
+
+      // ── Dashboards ────────────────────────────────────────────────
       { path: 'dashboards', element: <DashboardsPage /> },
-      // Legacy redirect
-      { path: 'reports',    element: <Navigate to="/contacts?tab=analysis" replace /> },
+      // Legacy redirects
+      { path: 'reports',    element: <Navigate to="/analise/contatos" replace /> },
 
-      // ── Evaluation ────────────────────────────────────────────
+      // ── Evaluation ────────────────────────────────────────────────
       { path: 'evaluation/forms',        element: <FormsPage /> },
       { path: 'evaluation/campaigns',    element: <EvalCampaignsPage /> },
       { path: 'evaluation/knowledge',    element: <KnowledgePage /> },
@@ -78,23 +99,21 @@ export const routes: RouteObject[] = [
       { path: 'evaluation/avaliacoes',   element: <Navigate to="/evaluation/evaluations" replace /> },
       { path: 'evaluation/reports',      element: <EvalReportsPage /> },
 
-      // ── Configuration ─────────────────────────────────────────
+      // ── Configuration ─────────────────────────────────────────────
       { path: 'config/resources',  element: <ConfigRecursosIndex /> },
       { path: 'config/recursos',   element: <Navigate to="/config/resources" replace /> },
       { path: 'config/platform',   element: <ConfigPlataformaPage /> },
       { path: 'config/channels',   element: <ConfigChannelsIndex /> },
       { path: 'config/canais',     element: <Navigate to="/config/channels" replace /> },
       { path: 'config/masking',    element: <MaskingPage /> },
-      { path: 'config/billing',        element: <BillingPage /> },
-      { path: 'config/agent-reports', element: <Navigate to="/contacts?tab=agents" replace /> },
-      { path: 'config/access',        element: <AccessPage /> },
+      { path: 'config/billing',    element: <BillingPage /> },
+      { path: 'config/agent-reports', element: <Navigate to="/analise/agentes"   replace /> },
+      { path: 'config/access',     element: <AccessPage /> },
       { path: 'config/calendars',  element: <CalendarsPage /> },
-      // Legacy redirect: old workflow/calendar (webhooks only now)
       { path: 'workflow/triggers', element: <WorkflowCalendarPage /> },
 
-      // ── Developer ─────────────────────────────────────────────
+      // ── Developer ─────────────────────────────────────────────────
       { path: 'developer', element: <PlaceholderPage module="Developer Tools" phase="Arc 4" /> },
-      // Legacy: /business → home (role business acessa módulos via ABAC)
       { path: 'business',  element: <Navigate to="/" replace /> },
     ]
   }

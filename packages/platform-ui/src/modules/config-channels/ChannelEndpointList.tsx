@@ -41,9 +41,18 @@ const IDENTIFIER_PLACEHOLDER: Record<ChannelEndpointChannel, string> = {
   webhook:  'salesforce',
 }
 
+// ── Form state type ────────────────────────────────────────────────────────────
+
+interface FormState {
+  identifier:   string
+  pool_id:      string
+  display_name: string
+  active:       boolean
+}
+
 // ── Empty form state ───────────────────────────────────────────────────────────
 
-const emptyForm = (): Omit<CreateChannelEndpointInput, 'channel'> => ({
+const emptyForm = (): FormState => ({
   identifier:   '',
   pool_id:      '',
   display_name: '',
@@ -66,7 +75,7 @@ export const ChannelEndpointList: React.FC<Props> = ({ channel }) => {
 
   // Form state — null = closed, 'new' = creating, string id = editing
   const [formMode, setFormMode]   = useState<null | 'new' | string>(null)
-  const [form,     setForm]       = useState(emptyForm())
+  const [form,     setForm]       = useState<FormState>(emptyForm())
   const [saving,   setSaving]     = useState(false)
   const [formErr,  setFormErr]    = useState<string | null>(null)
 
@@ -272,13 +281,6 @@ export const ChannelEndpointList: React.FC<Props> = ({ channel }) => {
 }
 
 // ── EndpointForm ───────────────────────────────────────────────────────────────
-
-interface FormState {
-  identifier:   string
-  pool_id:      string
-  display_name: string
-  active:       boolean
-}
 
 interface FormProps {
   form:               FormState

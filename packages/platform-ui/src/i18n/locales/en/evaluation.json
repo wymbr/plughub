@@ -51,6 +51,7 @@
       "noCampaigns": "No campaigns found"
     },
     "empty": {
+      "emptyTitle": "📋",
       "selectCampaign": "Select a campaign from the list",
       "newCampaignButton": "+ New Campaign"
     },

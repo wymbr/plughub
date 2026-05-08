@@ -6,15 +6,16 @@
 
 ## platform-ui — Próximas features planejadas
 
-### #30 — Contacts: 2 níveis de aba (Contacts / Agents) com filtros revisados
+### #30 — ✅ Contacts & Nav Restructure — implementado (2026-05-08)
 
-Reestruturar ContactsPage em nível superior Contacts | Agents, cada um com sub-abas
-List · Monitor · Analysis e filtros independentes revisados.
-- Filtro atual de Contacts tem campos inadequados por contexto — precisa ser redefinido
-- Aba Agents: List = tabela de agentes com métricas consolidadas (TMA, volume, taxa resolução)
-  + drill-down para lista de contatos/segmentos onde o agente atuou
-- Decisões pendentes: conjunto exato de filtros por nível, URL scheme (?section=contacts&tab=list)
-- Ver Task #30 para especificação completa
+Ver CHANGELOG 2026-05-08 e `docs/modules/task-30-contacts-restructure.md`.
+
+**Pendências futuras decorrentes:**
+- `AgentsPage` / Lista sub-tab: requer backend Arc 8 (`GET /reports/agent-performance/daily`)
+- `AnaliseProcessosPage`: requer endpoint analytics-api para métricas de workflow
+- `AnaliseQualidadePage`: requer `GET /reports/evaluations/summary` da evaluation-api
+- `FlowMonitorPage`: select de pools hardcoded (sem opções dinâmicas) — melhorar com fetch de pools disponíveis
+- `EventsPage`: requer endpoint `GET /reports/events` no analytics-api (pode ainda não existir)
 
 ### #31 — Flow/Deploy: ciclo de vida de versões com agendamento e rollback
 

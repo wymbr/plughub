@@ -51,6 +51,7 @@
       "noCampaigns": "Nenhuma campanha encontrada"
     },
     "empty": {
+      "emptyTitle": "📋",
       "selectCampaign": "Selecione uma campanha na lista",
       "newCampaignButton": "+ Nova Campanha"
     },

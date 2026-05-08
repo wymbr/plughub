@@ -36,7 +36,7 @@ export function useCopilotState(
           sugestao_resposta:  data.sugestao_resposta  ?? null,
           flags_risco:        Array.isArray(data.flags_risco)        ? data.flags_risco        : [],
           acoes_recomendadas: Array.isArray(data.acoes_recomendadas) ? data.acoes_recomendadas : [],
-          last_analysis:      data.ultima_analise ?? null,
+          last_analysis:      data.last_analysis ?? null,
         });
       }
     } catch {

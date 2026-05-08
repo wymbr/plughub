@@ -94,7 +94,7 @@ function useUsers(tenantId: string, adminToken: string) {
   const [error,   setError]   = useState<string | null>(null)
 
   const load = useCallback(async () => {
-    if (!tenantId) return
+    if (!tenantId || !adminToken) return
     setLoading(true); setError(null)
     try {
       // auth-api returns a plain array, not {users: [...]}
@@ -120,7 +120,7 @@ function useTemplates(tenantId: string, adminToken: string) {
   const [error,     setError]     = useState<string | null>(null)
 
   const load = useCallback(async () => {
-    if (!tenantId) return
+    if (!tenantId || !adminToken) return
     setLoading(true); setError(null)
     try {
       const data = await apiFetch<{ templates: PermTemplate[] }>(
