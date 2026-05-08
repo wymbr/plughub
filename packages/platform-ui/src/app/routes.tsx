@@ -27,6 +27,7 @@ import AccessPage from '@/modules/access/AccessPage'
 // Atendimento
 import SessionsPage from '@/modules/contacts/SessionsPage'
 import AgentsPage   from '@/modules/contacts/AgentsPage'
+import PoolsPage    from '@/modules/contacts/PoolsPage'
 import EventsPage   from '@/modules/contacts/EventsPage'
 // Análise
 import AnaliseContatosPage  from '@/modules/analise/AnaliseContatosPage'
@@ -54,6 +55,7 @@ export const routes: RouteObject[] = [
       // ── Atendimento ────────────────────────────────────────────────
       { path: 'contacts/sessions', element: <SessionsPage /> },
       { path: 'contacts/agents',   element: <AgentsPage   /> },
+      { path: 'contacts/pools',    element: <PoolsPage    /> },
       { path: 'contacts/events',   element: <EventsPage   /> },
       { path: 'agent-assist',      element: <AgentAssistPage /> },
 

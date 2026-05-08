@@ -18,7 +18,7 @@ async function main() {
 
   app.listen(config.port, config.host, () => {
     console.log(`✅ agent-registry iniciado em http://${config.host}:${config.port}`)
-    console.log(`   Rotas: /v1/pools  /v1/agent-types  /v1/skills`)
+    console.log(`   Rotas: /v1/pools  /v1/agent-types  /v1/skills  /v1/instances  /v1/operational`)
   })
 }
 

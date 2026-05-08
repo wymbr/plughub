@@ -14,6 +14,7 @@ import { channelsRouter }         from "./routes/channels"
 import { channelEndpointsRouter } from "./routes/channel-endpoints"
 import { skillSlotsRouter }       from "./routes/skill-slots"
 import { poolSlotsRouter }        from "./routes/pool-slots"
+import { operationalRouter }      from "./routes/operational"
 
 export const app = express()
 
@@ -43,6 +44,7 @@ app.use("/v1/skills/:skill_id",   skillSlotsRouter)   // slots sub-routes: /slot
 app.use("/v1/instances",          instancesRouter)
 app.use("/v1/channels",           channelsRouter)
 app.use("/v1/channel-endpoints",  channelEndpointsRouter)
+app.use("/v1/operational",        operationalRouter)
 
 // ── Healthcheck ────────────────────────────
 app.get("/v1/health", (_req: Request, res: Response) => {

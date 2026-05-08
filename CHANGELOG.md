@@ -2,6 +2,33 @@
 
 ---
 
+## Task #34 — Service/Pools: monitoração operacional de pools (2026-05-08)
+
+**Backend — agent-registry:**
+- ✅ `src/infra/redis.ts` — Redis client (ioredis) com opKeys: poolSnapshot, poolQueue, poolInstances
+- ✅ `src/routes/operational.ts` — `GET /v1/operational/pools` + `GET /v1/operational/pools/:id/queue`
+  - Fallback automático: snapshot Redis (Routing Engine) → live counts (:instances SCARD + :queue ZCARD)
+  - Pool config (DB) + estado operacional (Redis) combinados por pool_id
+  - Queue drill-down: posição, session_id, aguardando, SLA excedido, espera estimada restante
+- ✅ `src/app.ts` — operationalRouter montado em `/v1/operational`
+- ✅ `package.json` — ioredis adicionado
+- ✅ `config.ts` — redis_url adicionado
+- ✅ `docker-compose.demo.yml` — REDIS_URL + depends_on redis adicionados ao agent-registry
+
+**Frontend — platform-ui:**
+- ✅ `modules/contacts/PoolsPage.tsx` — nova página `/contacts/pools`:
+  - Summary pills: agentes disponíveis, contatos em fila, pools com fila, total
+  - Tabela de pools: status, disponíveis, fila, espera est., SLA, canais, snapshot age
+  - Drill-down inline por pool: lista de sessões em fila com posição + wait + SLA excedido
+  - Auto-refresh 15s, filtros por pool (select dinâmico) e status
+  - `PoolStatusCard` exportado para reutilização em dashboard (Task #35)
+- ✅ `modules/contacts/AgentsPage.tsx` — redesign: grid de cards → tabela compacta; tab "Lista" removida
+- ✅ `shell/Sidebar.tsx` — item "Pools" adicionado em Service
+- ✅ `app/routes.tsx` — rota `/contacts/pools` adicionada
+- ✅ i18n pt-BR + en — chave `nav.service.pools` adicionada
+
+---
+
 ## Task #33 — Deploy Pool-Centric: redesign completo (2026-05-08)
 
 **Conceito corrigido:** deploy é uma operação de *pool*, não de skill. O usuário escolhe um pool e atribui um skill-flow a cada slot.

@@ -55,6 +55,12 @@ const Sidebar: React.FC = () => {
           abac:  { module: 'contacts', field: 'operacao' },
         },
         {
+          label: t('nav.service.pools'),
+          href:  '/contacts/pools',
+          icon:  '🏊',
+          abac:  { module: 'contacts', field: 'operacao' },
+        },
+        {
           label: t('nav.service.events'),
           href:  '/contacts/events',
           icon:  '📡',

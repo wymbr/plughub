@@ -5,6 +5,7 @@
     "service": "Service",
     "service.sessions": "Sessions",
     "service.agents": "Agents",
+    "service.pools": "Pools",
     "service.events": "Events",
     "contacts": "Contacts",
     "agentAssist": "Agent Assist",

@@ -344,6 +344,7 @@ services:
       PORT:           "3300"
       JWT_SECRET:     demo_plughub_secret_32chars__
       KAFKA_BROKERS:  kafka:29092
+      REDIS_URL:      redis://redis:6379
     depends_on:
       postgres:
         condition: service_healthy
@@ -351,6 +352,8 @@ services:
         condition: service_healthy
       kafka-init:
         condition: service_completed_successfully
+      redis:
+        condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "node -e \"require('http').get('http://localhost:3300/v1/health',r=>{process.exit(r.statusCode===200?0:1)}).on('error',()=>process.exit(1))\""]
       interval: 10s
@@ -911,7 +914,8 @@ services:
       PLUGHUB_WORKFLOW_REDIS_URL:        redis://redis:6379
       PLUGHUB_WORKFLOW_KAFKA_BROKERS:    kafka:29092
       PLUGHUB_WORKFLOW_KAFKA_TOPIC:      workflow.events
-      PLUGHUB_WORKFLOW_CALENDAR_API_URL: http://calendar-api:3700
+      PLUGHUB_WORKFLOW_CALENDAR_API_URL:      http://calendar-api:3700
+      PLUGHUB_WORKFLOW_AGENT_REGISTRY_URL:   http://agent-registry:3300
     depends_on:
       postgres:
         condition: service_healthy
