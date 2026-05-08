@@ -177,6 +177,12 @@ export const PoolRegistrationSchema = z.object({
    * como participante de conferência na sessão existente.
    */
   hooks:                  PoolHooksSchema.optional(),
+  /**
+   * UUID of the associated calendar in calendar-api.
+   * Stored here as a display cache — the authoritative link lives in
+   * calendar.calendar_associations. The UI keeps both in sync.
+   */
+  calendar_id:            z.string().uuid().optional(),
 })
 export type PoolRegistration = z.infer<typeof PoolRegistrationSchema>
 

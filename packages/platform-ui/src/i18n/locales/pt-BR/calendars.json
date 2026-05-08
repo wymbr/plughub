@@ -43,7 +43,9 @@
     "noSchedule":   "Sem horário definido",
     "closed":       "Fechado",
     "holidaySetsLabel": "{{count}} conj. feriados",
-    "holidaySetsLabelPlural": "{{count}} conj. feriados"
+    "holidaySetsLabelPlural": "{{count}} conj. feriados",
+    "holidayConflict": "{{count}} data(s) duplicada(s) entre os conjuntos selecionados",
+    "holidayConflictHint": "O último cadastro prevalece. Use exceções no pool para sobrescrever datas específicas."
   },
   "holidaySet": {
     "info":        "Conjuntos de datas de feriado vinculáveis a calendários.",
@@ -61,6 +63,7 @@
     "date":        "Data",
     "holidayName": "Nome do feriado",
     "holidayNamePlaceholder": "Nome do feriado",
+    "recurringLabel": "Repete todo ano",
     "noHolidays":  "Nenhum feriado neste conjunto.",
     "save":        "Salvar",
     "create":      "Criar",
@@ -85,6 +88,17 @@
     "delete":     "Excluir",
     "noItems":    "Nenhuma associação encontrada para este ID.",
     "restricted": "Acesso restrito a administradores."
+  },
+  "exceptions": {
+    "title":            "Dias de Exceção",
+    "subtitle":         "Datas únicas com regras especiais (manutenção, eventos, etc.)",
+    "noItems":          "Nenhum dia de exceção configurado",
+    "addBtn":           "Adicionar exceção",
+    "closedAllDay":     "Fechado o dia todo",
+    "customHours":      "Horário especial",
+    "labelPlaceholder": "Descrição (ex: Manutenção)",
+    "count":            "{{count}} exceção",
+    "countPlural":      "{{count}} exceções"
   },
   "messages": {
     "deleteConfirm": "Excluir {{label}}? Esta ação não pode ser desfeita.",

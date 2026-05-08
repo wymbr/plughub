@@ -267,10 +267,14 @@ export const deleteChannel = async (id: string, tenantId: string): Promise<void>
 // ── Channel Endpoints ─────────────────────────────────────────────────────────
 
 export const listChannelEndpoints = async (
-  tenantId: string,
-  channel?: ChannelEndpointChannel,
+  tenantId:         string,
+  channel?:         ChannelEndpointChannel | string,
+  gatewayConfigId?: string,
 ): Promise<ChannelEndpoint[]> => {
-  const qs = channel ? `?channel=${channel}` : ''
+  const params = new URLSearchParams()
+  if (channel)         params.set('channel',           channel)
+  if (gatewayConfigId) params.set('gateway_config_id', gatewayConfigId)
+  const qs = params.toString() ? `?${params.toString()}` : ''
   const response = await fetch(`${getBaseUrl()}/v1/channel-endpoints${qs}`, {
     headers: headers(tenantId),
   })

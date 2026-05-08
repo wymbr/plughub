@@ -502,7 +502,8 @@ services:
       PLUGHUB_WORKFLOW_DATABASE_URL:  postgresql://plughub:plughub@postgres:5432/plughub
       PLUGHUB_WORKFLOW_REDIS_URL:     redis://redis:6379
       PLUGHUB_WORKFLOW_KAFKA_BROKERS: kafka:29092
-      PLUGHUB_WORKFLOW_CALENDAR_API_URL: http://calendar-api:3700
+      PLUGHUB_WORKFLOW_CALENDAR_API_URL:    http://calendar-api:3700
+      PLUGHUB_WORKFLOW_AGENT_REGISTRY_URL: http://agent-registry:3300
     depends_on:
       postgres:
         condition: service_healthy

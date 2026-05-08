@@ -29,6 +29,117 @@ import Spinner from '@/components/ui/Spinner'
 interface CalendarOption { id: string; name: string }
 interface CompetencySkill { key: string; domain: number }
 
+interface TimeInterval { open: string; close: string }
+interface ExceptionEntry {
+  date:           string               // "YYYY-MM-DD"
+  label:          string
+  override_slots: TimeInterval[] | null // null = closed all day
+}
+
+// ── PoolExceptionsEditor ──────────────────────────────────────────────────────
+// Compact inline editor for pool-level exception overrides.
+
+function PoolExceptionsEditor({
+  exceptions, onChange,
+}: { exceptions: ExceptionEntry[]; onChange: (e: ExceptionEntry[]) => void }) {
+  const [newDate,  setNewDate]  = useState('')
+  const [newLabel, setNewLabel] = useState('')
+  const [closed,   setClosed]   = useState(true)
+  const [newSlots, setNewSlots] = useState<TimeInterval[]>([{ open: '08:00', close: '18:00' }])
+
+  const add = () => {
+    if (!newDate) return
+    onChange([...exceptions, {
+      date:           newDate,
+      label:          newLabel.trim(),
+      override_slots: closed ? null : [...newSlots],
+    }])
+    setNewDate(''); setNewLabel(''); setClosed(true)
+    setNewSlots([{ open: '08:00', close: '18:00' }])
+  }
+
+  const remove = (i: number) => onChange(exceptions.filter((_, idx) => idx !== i))
+
+  const updateSlot = (idx: number, field: 'open' | 'close', val: string) =>
+    setNewSlots(prev => prev.map((s, i) => i === idx ? { ...s, [field]: val } : s))
+
+  return (
+    <div className="space-y-2">
+      {/* Existing list */}
+      <div className="max-h-36 overflow-y-auto space-y-1">
+        {exceptions.length === 0 ? (
+          <p className="text-xs text-gray-400 italic">Nenhuma exceção configurada para este pool.</p>
+        ) : exceptions.map((exc, i) => (
+          <div key={i} className="flex items-start gap-2 px-2 py-1.5 bg-orange-50 border border-orange-100 rounded text-sm">
+            <span className="font-mono text-xs text-gray-600 w-24 flex-shrink-0 pt-0.5">{exc.date}</span>
+            <div className="flex-1 min-w-0">
+              {exc.label && <p className="text-xs text-gray-700 truncate mb-0.5">{exc.label}</p>}
+              {exc.override_slots === null ? (
+                <span className="text-xs text-red-600 font-medium">Fechado o dia todo</span>
+              ) : (
+                <span className="text-xs text-orange-700">
+                  {exc.override_slots.map(s => `${s.open}–${s.close}`).join(', ')}
+                </span>
+              )}
+            </div>
+            <button type="button" onClick={() => remove(i)}
+              className="text-red-400 hover:text-red-600 text-xs flex-shrink-0 pt-0.5">✕</button>
+          </div>
+        ))}
+      </div>
+
+      {/* Add form */}
+      <div className="border border-dashed border-orange-200 rounded-lg p-3 space-y-2 bg-orange-50/40">
+        <div className="flex gap-2">
+          <input type="date" value={newDate} onChange={e => setNewDate(e.target.value)}
+            className="text-sm border border-gray-300 rounded px-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-orange-400 bg-white" />
+          <input type="text" placeholder="Descrição (ex: Manutenção)" value={newLabel}
+            onChange={e => setNewLabel(e.target.value)} onKeyDown={e => e.key === 'Enter' && add()}
+            className="flex-1 text-sm border border-gray-300 rounded px-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-orange-400 bg-white" />
+        </div>
+        <div className="flex items-center gap-4">
+          <label className="flex items-center gap-2 cursor-pointer">
+            <input type="radio" checked={closed} onChange={() => setClosed(true)}
+              className="text-red-500 focus:ring-red-400" />
+            <span className="text-xs text-gray-700">Fechado o dia todo</span>
+          </label>
+          <label className="flex items-center gap-2 cursor-pointer">
+            <input type="radio" checked={!closed} onChange={() => setClosed(false)}
+              className="text-orange-500 focus:ring-orange-400" />
+            <span className="text-xs text-gray-700">Horário especial</span>
+          </label>
+        </div>
+        {!closed && (
+          <div className="space-y-1 pl-1">
+            {newSlots.map((sl, idx) => (
+              <div key={idx} className="flex items-center gap-2">
+                <input type="time" value={sl.open} onChange={e => updateSlot(idx, 'open', e.target.value)}
+                  className="text-sm border border-gray-300 rounded px-2 py-1 bg-white focus:outline-none focus:ring-1 focus:ring-orange-400" />
+                <span className="text-xs text-gray-400">até</span>
+                <input type="time" value={sl.close} onChange={e => updateSlot(idx, 'close', e.target.value)}
+                  className="text-sm border border-gray-300 rounded px-2 py-1 bg-white focus:outline-none focus:ring-1 focus:ring-orange-400" />
+                {newSlots.length > 1 && (
+                  <button type="button" onClick={() => setNewSlots(prev => prev.filter((_, i) => i !== idx))}
+                    className="text-gray-400 hover:text-red-500 text-sm leading-none">×</button>
+                )}
+              </div>
+            ))}
+            {newSlots.length < 4 && (
+              <button type="button"
+                onClick={() => setNewSlots(prev => [...prev, { open: prev[prev.length-1]?.close ?? '18:00', close: '23:00' }])}
+                className="text-xs text-orange-600 hover:text-orange-800 mt-0.5">+ intervalo</button>
+            )}
+          </div>
+        )}
+        <button type="button" onClick={add} disabled={!newDate}
+          className="w-full px-3 py-1.5 text-xs bg-orange-500 text-white rounded-lg hover:bg-orange-600 disabled:opacity-50 transition-colors">
+          Adicionar exceção
+        </button>
+      </div>
+    </div>
+  )
+}
+
 // ── Drawer ────────────────────────────────────────────────────────────────────
 
 function Drawer({
@@ -169,6 +280,9 @@ const PoolsPage: React.FC = () => {
   const [isSaving, setIsSaving]   = useState(false)
   const [error,    setError]      = useState('')
 
+  // Pool-level calendar exceptions (Level 2: association exceptions override calendar exceptions)
+  const [calExceptions, setCalExceptions] = useState<ExceptionEntry[]>([])
+
   const [formData, setFormData] = useState({
     pool_id:       '',
     description:   '',
@@ -193,6 +307,23 @@ const PoolsPage: React.FC = () => {
         setCalendars((data ?? []).map(c => ({ id: c.id, name: c.name })))
       }
     } catch { /* stale ok */ }
+  }, [session])
+
+  /** Fetch the calendar-api association for this pool and return its exceptions. */
+  const loadPoolAssociation = useCallback(async (poolId: string): Promise<ExceptionEntry[]> => {
+    if (!session) return []
+    try {
+      const params = new URLSearchParams({
+        tenant_id:   session.tenantId,
+        entity_type: 'pool',
+        entity_id:   poolId,
+      })
+      const res = await fetch(`/v1/associations?${params}`)
+      if (!res.ok) return []
+      const assocs = await res.json() as Array<{ exceptions?: ExceptionEntry[] }>
+      // Return exceptions from the first (primary) association
+      return assocs[0]?.exceptions ?? []
+    } catch { return [] }
   }, [session])
 
   const loadCompetencySkills = useCallback(async () => {
@@ -267,6 +398,7 @@ const PoolsPage: React.FC = () => {
       pool_id: '', description: '', channel_types: [], sla_target_ms: 30000,
       calendar_id: '', routing_weights: { ...ROUTING_WEIGHTS_DEFAULTS },
     })
+    setCalExceptions([])
     setError('')
     setIsOpen(true)
   }
@@ -281,8 +413,11 @@ const PoolsPage: React.FC = () => {
       calendar_id:     pool.calendar_id || '',
       routing_weights: buildDefaultWeights(pool),
     })
+    setCalExceptions([])  // will be loaded async below
     setError('')
     setIsOpen(true)
+    // Load pool-level exceptions from calendar-api association
+    void loadPoolAssociation(pool.pool_id).then(exc => setCalExceptions(exc))
   }
 
   const handleClose = () => { setIsOpen(false); setEditingPool(null) }
@@ -326,11 +461,13 @@ const PoolsPage: React.FC = () => {
         .filter(([, w]) => w > 0)
         .map(([k]) => k)
 
+      const poolId = editingPool ? editingPool.pool_id : formData.pool_id
+
       const payload = {
         description:   formData.description,
         channel_types: formData.channel_types,
         sla_target_ms: formData.sla_target_ms,
-        ...(formData.calendar_id ? { calendar_id: formData.calendar_id } : {}),
+        ...(formData.calendar_id ? { calendar_id: formData.calendar_id } : { calendar_id: undefined }),
         ...(routing_skills.length ? { routing_skills } : {}),
         routing_weights: rw,
       }
@@ -339,6 +476,31 @@ const PoolsPage: React.FC = () => {
       } else {
         await registryApi.createPool({ pool_id: formData.pool_id, ...payload }, session.tenantId)
       }
+
+      // ── Sync calendar association in calendar-api ─────────────────────────
+      // The actual engine uses calendar-api associations — keep them in sync.
+      if (formData.calendar_id) {
+        await fetch('/v1/associations/upsert', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            tenant_id:   session.tenantId,
+            entity_type: 'pool',
+            entity_id:   poolId,
+            calendar_id: formData.calendar_id,
+            operator:    'UNION',
+            priority:    1,
+            exceptions:  calExceptions,
+          }),
+        })
+      } else {
+        // No calendar selected — remove any existing associations for this pool
+        await fetch(
+          `/v1/associations/entity?tenant_id=${encodeURIComponent(session.tenantId)}&entity_type=pool&entity_id=${encodeURIComponent(poolId)}`,
+          { method: 'DELETE' },
+        )
+      }
+
       await loadPools()
       handleClose()
     } catch {
@@ -504,17 +666,31 @@ const PoolsPage: React.FC = () => {
           {/* ── Calendar ──────────────────────────────────────────────────────── */}
           <div>
             <Select
-              label="Template de Calendário"
+              label="Calendário"
               value={formData.calendar_id}
               onChange={e => setFormData({ ...formData, calendar_id: e.target.value })}
               options={calendarOptions}
             />
             {calendars.length === 0 && (
               <p className="text-xs text-gray mt-1">
-                Nenhum calendário disponível. Crie em Configuração → Plataforma → Calendários.
+                Nenhum calendário disponível. Crie em Configuração → Calendários.
               </p>
             )}
           </div>
+
+          {/* ── Pool-level exceptions (Level 2) ──────────────────────────────── */}
+          {formData.calendar_id && (
+            <div>
+              <div className="mb-2">
+                <p className="text-sm font-semibold text-dark">Exceções deste Pool</p>
+                <p className="text-xs text-gray mt-0.5">
+                  Datas únicas que sobrescrevem as regras do calendário somente para este pool.
+                  Prioridade 1 — acima de feriados e do horário semanal.
+                </p>
+              </div>
+              <PoolExceptionsEditor exceptions={calExceptions} onChange={setCalExceptions} />
+            </div>
+          )}
 
           {/* ── Routing weights — Fixos ───────────────────────────────────────── */}
           <div>

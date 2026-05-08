@@ -1049,6 +1049,60 @@ export async function startServer(config: ServerConfig): Promise<void> {
     }
   })
 
+  // ── GET /api/instances ────────────────────────────────────────────────────
+  // Lists all live agent instances from Redis.
+  // Redis is the source of truth for runtime instance state (orchestrator-bridge
+  // bootstrap writes here; PostgreSQL agent-registry only tracks registered types).
+  //
+  // Query params:
+  //   tenant_id? — defaults to PLUGHUB_TENANT_ID env var
+  //   pool_id?   — filter by pool
+  //   status?    — filter by status (ready|busy|paused|draining|login|logout)
+  app.get("/api/instances", async (req: Request, res: Response) => {
+    try {
+      const tenantId  = (req.query["tenant_id"] as string | undefined)
+        ?? process.env["PLUGHUB_TENANT_ID"]
+        ?? "tenant_default"
+      const filterPool   = req.query["pool_id"] as string | undefined
+      const filterStatus = req.query["status"]  as string | undefined
+
+      // Collect all instance IDs from every pool's membership set
+      const poolIds: string[] = filterPool
+        ? [filterPool]
+        : await redis.smembers(`${tenantId}:pools`)
+
+      const instanceIds = new Set<string>()
+      await Promise.all(
+        poolIds.map(async pid => {
+          const members = await redis.smembers(`${tenantId}:pool:${pid}:instances`)
+          members.forEach(id => instanceIds.add(id))
+        }),
+      )
+
+      // Read each instance JSON
+      const results: Record<string, unknown>[] = []
+      await Promise.all(
+        Array.from(instanceIds).map(async iid => {
+          const raw = await redis.get(`${tenantId}:instance:${iid}`)
+          if (!raw) return
+          try {
+            const inst = JSON.parse(raw) as Record<string, unknown>
+            if (filterStatus && inst["status"] !== filterStatus) return
+            results.push(inst)
+          } catch { /* skip malformed entry */ }
+        }),
+      )
+
+      results.sort((a, b) =>
+        String(a["instance_id"] ?? "").localeCompare(String(b["instance_id"] ?? ""))
+      )
+
+      res.json({ instances: results, total: results.length })
+    } catch (err) {
+      res.status(500).json({ error: "instances_unavailable", detail: String(err) })
+    }
+  })
+
   // Healthcheck
   app.get("/health", (_req: Request, res: Response) => {
     res.json({ status: "ok", service: "mcp-server-plughub", version: "1.0.0" })

@@ -222,32 +222,35 @@ export interface UpdateGatewayConfigInput {
 export type ChannelEndpointChannel = 'webchat' | 'whatsapp' | 'voice' | 'sms' | 'email' | 'webhook'
 
 export interface ChannelEndpoint {
-  id:           string
-  tenant_id:    string
-  channel:      ChannelEndpointChannel
-  identifier:   string
-  pool_id:      string
-  display_name: string
-  settings:     Record<string, unknown>
-  active:       boolean
-  created_at:   string
-  updated_at:   string
+  id:                string
+  tenant_id:         string
+  channel:           ChannelEndpointChannel
+  identifier:        string
+  pool_id:           string
+  display_name:      string
+  settings:          Record<string, unknown>
+  active:            boolean
+  gateway_config_id: string | null   // FK to GatewayConfig; null = standalone
+  created_at:        string
+  updated_at:        string
 }
 
 export interface CreateChannelEndpointInput {
-  channel:      ChannelEndpointChannel
-  identifier:   string
-  pool_id:      string
-  display_name: string
-  settings?:    Record<string, unknown>
-  active?:      boolean
+  channel:            ChannelEndpointChannel
+  identifier:         string
+  pool_id:            string
+  display_name:       string
+  settings?:          Record<string, unknown>
+  active?:            boolean
+  gateway_config_id?: string | null
 }
 
 export interface UpdateChannelEndpointInput {
-  pool_id?:      string
-  display_name?: string
-  settings?:     Record<string, unknown>
-  active?:       boolean
+  pool_id?:            string
+  display_name?:       string
+  settings?:           Record<string, unknown>
+  active?:             boolean
+  gateway_config_id?:  string | null
 }
 
 // ── Human Agent (AgentType framework=human) ───────────────────────────────────

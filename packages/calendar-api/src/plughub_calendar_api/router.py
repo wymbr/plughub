@@ -23,6 +23,7 @@ from .db import (
     db_create_calendar,
     db_create_holiday_set,
     db_delete_association,
+    db_delete_associations_for_entity,
     db_delete_calendar,
     db_delete_holiday_set,
     db_get_associations_for_engine,
@@ -33,8 +34,10 @@ from .db import (
     db_list_associations,
     db_list_calendars,
     db_list_holiday_sets,
+    db_update_association,
     db_update_calendar,
     db_update_holiday_set,
+    db_upsert_pool_association,
     db_upsert_tenant_config,
 )
 from .engine import (
@@ -243,6 +246,22 @@ class AssociationCreate(BaseModel):
     calendar_id: str
     operator:    str = "UNION"
     priority:    int = 1
+    exceptions:  list[dict] = Field(default_factory=list)
+
+
+class AssociationUpdate(BaseModel):
+    exceptions: list[dict] | None = None
+
+
+class AssociationUpsert(BaseModel):
+    """Idempotent upsert — replaces any existing association for this entity."""
+    tenant_id:   str
+    entity_type: str
+    entity_id:   str
+    calendar_id: str
+    operator:    str = "UNION"
+    priority:    int = 1
+    exceptions:  list[dict] = Field(default_factory=list)
 
 
 @router.get("/v1/associations")
@@ -258,6 +277,40 @@ async def list_associations(
 @router.post("/v1/associations", status_code=201)
 async def create_association(body: AssociationCreate, pool=Depends(_pool)):
     return await db_create_association(pool, body.model_dump())
+
+
+@router.patch("/v1/associations/{id}")
+async def update_association(id: str, body: AssociationUpdate, pool=Depends(_pool)):
+    row = await db_update_association(pool, id, body.model_dump(exclude_none=True))
+    if not row:
+        raise HTTPException(404, "association not found")
+    return row
+
+
+@router.put("/v1/associations/upsert")
+async def upsert_association(body: AssociationUpsert, pool=Depends(_pool)) -> dict[str, Any]:
+    """
+    Idempotent upsert: replace the association for this entity with the given calendar.
+    First removes any existing associations for (tenant_id, entity_type, entity_id),
+    then creates a fresh one with the supplied parameters and exceptions.
+
+    Use this from pool/channel/workflow editors so they don't need to track assoc IDs.
+    """
+    # Clear old associations for this entity (a pool has at most one calendar in the UI)
+    await db_delete_associations_for_entity(pool, body.tenant_id, body.entity_type, body.entity_id)
+    data = body.model_dump()
+    return await db_create_association(pool, data)
+
+
+@router.delete("/v1/associations/entity", status_code=204)
+async def delete_entity_associations(
+    tenant_id:   str,
+    entity_type: str,
+    entity_id:   str,
+    pool=Depends(_pool),
+) -> None:
+    """Remove ALL calendar associations for a given entity."""
+    await db_delete_associations_for_entity(pool, tenant_id, entity_type, entity_id)
 
 
 @router.delete("/v1/associations/{id}", status_code=204)

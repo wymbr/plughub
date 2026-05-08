@@ -32,6 +32,9 @@ class Settings(BaseSettings):
     # Calendar API (for business-hours deadline calculation)
     calendar_api_url: str = "http://localhost:3700"
 
+    # Agent Registry (for resolving flow_definition when only flow_id is provided)
+    agent_registry_url: str = "http://localhost:3300"
+
     # Timeout scanner interval in seconds
     timeout_scan_interval_s: int = 60
 

@@ -1,7 +1,8 @@
 /**
  * ChannelsPage.tsx
- * Manage GatewayConfig credentials per channel (WhatsApp, Webchat, Voice, etc.)
- * Migrated from operator-console/ChannelPanel.tsx — uses platform-ui design system.
+ * @deprecated — Replaced by config-channels/GatewayConfigPanel.tsx (Task #36).
+ * GatewayConfig management moved to Configuration → Channels → [channel] → Credentials tab.
+ * This file is kept for reference but is no longer rendered anywhere.
  */
 import React, { useState, useEffect, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'

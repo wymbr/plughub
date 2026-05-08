@@ -10,7 +10,7 @@
  * Backend: calendar-api (port 3700) proxied via Vite under /v1/
  */
 
-import React, { useCallback, useEffect, useState } from 'react' // useCallback used inside tabs
+import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useAuth } from '@/auth/useAuth'
 import Spinner from '@/components/ui/Spinner'
@@ -61,6 +61,13 @@ interface WeeklyDaySchedule {
   slots: TimeInterval[]  // empty if open=false; multiple = split day (e.g. lunch break)
 }
 
+/** One-time date override — priority 1 in the engine (above holidays and weekly_schedule) */
+interface ExceptionEntry {
+  date:           string               // "YYYY-MM-DD"
+  label:          string               // admin description shown in UI only
+  override_slots: TimeInterval[] | null // null = closed all day; [...] = custom hours
+}
+
 interface CalendarObj {
   id:              string
   name:            string
@@ -69,7 +76,7 @@ interface CalendarObj {
   always_open:     boolean
   weekly_schedule: WeeklyDaySchedule[]
   holiday_set_ids: string[]
-  exceptions:      unknown[]
+  exceptions:      ExceptionEntry[]
   created_at:      string
   updated_at:      string
 }
@@ -303,14 +310,20 @@ interface HolidaysEditorProps {
 
 function HolidaysEditor({ holidays, onChange }: HolidaysEditorProps) {
   const { t } = useTranslation('calendars')
-  const [newDate, setNewDate] = useState('')
-  const [newName, setNewName] = useState('')
+  const [newDate,      setNewDate]      = useState('')
+  const [newName,      setNewName]      = useState('')
+  const [recurring,    setRecurring]    = useState(false)
+
+  const isRecurring = (date: string) => /^\d{2}-\d{2}$/.test(date) // "MM-DD" format
 
   const add = () => {
     if (!newDate || !newName.trim()) return
-    onChange([...holidays, { date: newDate, name: newName.trim() }])
+    // If recurring: store only "MM-DD"; otherwise full "YYYY-MM-DD"
+    const dateValue = recurring ? newDate.slice(5) : newDate
+    onChange([...holidays, { date: dateValue, name: newName.trim() }])
     setNewDate('')
     setNewName('')
+    setRecurring(false)
   }
 
   const remove = (i: number) => onChange(holidays.filter((_, idx) => idx !== i))
@@ -324,32 +337,209 @@ function HolidaysEditor({ holidays, onChange }: HolidaysEditorProps) {
         {holidays.map((h, i) => (
           <div key={i} className="flex items-center gap-2 px-2 py-1 bg-gray-50 rounded text-sm">
             <span className="text-gray-500 font-mono text-xs w-20 flex-shrink-0">{h.date}</span>
+            {isRecurring(h.date) && (
+              <span className="text-[10px] bg-indigo-100 text-indigo-600 px-1.5 py-0 rounded-full flex-shrink-0">
+                ↺
+              </span>
+            )}
             <span className="flex-1 text-gray-800 truncate">{h.name}</span>
             <button onClick={() => remove(i)} className="text-red-400 hover:text-red-600 text-xs flex-shrink-0">✕</button>
           </div>
         ))}
       </div>
-      <div className="flex gap-2">
-        <input
-          type="date"
-          value={newDate}
-          onChange={e => setNewDate(e.target.value)}
-          className="text-sm border border-gray-300 rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-indigo-400"
-        />
-        <input
-          type="text"
-          placeholder={t('holidaySet.holidayNamePlaceholder')}
-          value={newName}
-          onChange={e => setNewName(e.target.value)}
-          onKeyDown={e => e.key === 'Enter' && add()}
-          className="flex-1 text-sm border border-gray-300 rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-indigo-400"
-        />
+      <div className="space-y-2">
+        <div className="flex gap-2">
+          <input
+            type="date"
+            value={newDate}
+            onChange={e => setNewDate(e.target.value)}
+            className="text-sm border border-gray-300 rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-indigo-400"
+          />
+          <input
+            type="text"
+            placeholder={t('holidaySet.holidayNamePlaceholder')}
+            value={newName}
+            onChange={e => setNewName(e.target.value)}
+            onKeyDown={e => e.key === 'Enter' && add()}
+            className="flex-1 text-sm border border-gray-300 rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-indigo-400"
+          />
+          <button
+            type="button"
+            onClick={add}
+            className="px-3 py-1 text-sm bg-indigo-500 text-white rounded hover:bg-indigo-600"
+          >
+            +
+          </button>
+        </div>
+        <label className="flex items-center gap-2 cursor-pointer select-none">
+          <input
+            type="checkbox"
+            checked={recurring}
+            onChange={e => setRecurring(e.target.checked)}
+            className="rounded border-gray-300 text-indigo-500 focus:ring-indigo-400"
+          />
+          <span className="text-xs text-gray-600">
+            {t('holidaySet.recurringLabel')} <span className="text-gray-400 font-mono">(MM-DD)</span>
+          </span>
+        </label>
+      </div>
+    </div>
+  )
+}
+
+// ── Exceptions editor ─────────────────────────────────────────────────────────
+
+interface ExceptionsEditorProps {
+  exceptions: ExceptionEntry[]
+  onChange:   (e: ExceptionEntry[]) => void
+}
+
+function ExceptionsEditor({ exceptions, onChange }: ExceptionsEditorProps) {
+  const { t } = useTranslation('calendars')
+  const [newDate,   setNewDate]   = useState('')
+  const [newLabel,  setNewLabel]  = useState('')
+  const [closed,    setClosed]    = useState(true)
+  const [newSlots,  setNewSlots]  = useState<TimeInterval[]>([{ open: '08:00', close: '18:00' }])
+
+  const add = () => {
+    if (!newDate) return
+    onChange([...exceptions, {
+      date:           newDate,
+      label:          newLabel.trim(),
+      override_slots: closed ? null : [...newSlots],
+    }])
+    setNewDate(''); setNewLabel(''); setClosed(true)
+    setNewSlots([{ open: '08:00', close: '18:00' }])
+  }
+
+  const remove = (i: number) => onChange(exceptions.filter((_, idx) => idx !== i))
+
+  const updateNewSlot = (idx: number, field: 'open' | 'close', val: string) =>
+    setNewSlots(prev => prev.map((s, i) => i === idx ? { ...s, [field]: val } : s))
+
+  const addNewSlot = () =>
+    setNewSlots(prev => [...prev, { open: prev[prev.length - 1]?.close ?? '18:00', close: '23:00' }])
+
+  const removeNewSlot = (idx: number) =>
+    setNewSlots(prev => prev.length > 1 ? prev.filter((_, i) => i !== idx) : prev)
+
+  return (
+    <div className="space-y-3">
+      {/* Existing exceptions list */}
+      <div className="max-h-48 overflow-y-auto space-y-1">
+        {exceptions.length === 0 && (
+          <p className="text-xs text-gray-400 italic">{t('exceptions.noItems')}</p>
+        )}
+        {exceptions.map((exc, i) => (
+          <div key={i} className="flex items-start gap-2 px-2 py-1.5 bg-orange-50 border border-orange-100 rounded text-sm">
+            <span className="font-mono text-xs text-gray-600 w-24 flex-shrink-0 pt-0.5">{exc.date}</span>
+            <div className="flex-1 min-w-0">
+              {exc.label && <p className="text-xs text-gray-700 truncate mb-0.5">{exc.label}</p>}
+              {exc.override_slots === null ? (
+                <span className="text-xs text-red-600 font-medium">{t('exceptions.closedAllDay')}</span>
+              ) : (
+                <span className="text-xs text-orange-700">
+                  {exc.override_slots.map(s => `${s.open}–${s.close}`).join(', ')}
+                </span>
+              )}
+            </div>
+            <button
+              type="button"
+              onClick={() => remove(i)}
+              className="text-red-400 hover:text-red-600 text-xs flex-shrink-0 pt-0.5"
+            >✕</button>
+          </div>
+        ))}
+      </div>
+
+      {/* Add new exception */}
+      <div className="border border-dashed border-orange-200 rounded-lg p-3 space-y-2 bg-orange-50/40">
+        {/* Date + label row */}
+        <div className="flex gap-2">
+          <input
+            type="date"
+            value={newDate}
+            onChange={e => setNewDate(e.target.value)}
+            className="text-sm border border-gray-300 rounded px-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-orange-400 bg-white"
+          />
+          <input
+            type="text"
+            placeholder={t('exceptions.labelPlaceholder')}
+            value={newLabel}
+            onChange={e => setNewLabel(e.target.value)}
+            onKeyDown={e => e.key === 'Enter' && add()}
+            className="flex-1 text-sm border border-gray-300 rounded px-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-orange-400 bg-white"
+          />
+        </div>
+
+        {/* Closed / custom hours toggle */}
+        <div className="flex items-center gap-4">
+          <label className="flex items-center gap-2 cursor-pointer">
+            <input
+              type="radio"
+              checked={closed}
+              onChange={() => setClosed(true)}
+              className="text-red-500 focus:ring-red-400"
+            />
+            <span className="text-xs text-gray-700">{t('exceptions.closedAllDay')}</span>
+          </label>
+          <label className="flex items-center gap-2 cursor-pointer">
+            <input
+              type="radio"
+              checked={!closed}
+              onChange={() => setClosed(false)}
+              className="text-orange-500 focus:ring-orange-400"
+            />
+            <span className="text-xs text-gray-700">{t('exceptions.customHours')}</span>
+          </label>
+        </div>
+
+        {/* Custom slots (only when not closed) */}
+        {!closed && (
+          <div className="space-y-1 pl-1">
+            {newSlots.map((sl, idx) => (
+              <div key={idx} className="flex items-center gap-2">
+                <input
+                  type="time"
+                  value={sl.open}
+                  onChange={e => updateNewSlot(idx, 'open', e.target.value)}
+                  className="text-sm border border-gray-300 rounded px-2 py-1 bg-white focus:outline-none focus:ring-1 focus:ring-orange-400"
+                />
+                <span className="text-xs text-gray-400">{t('messages.until')}</span>
+                <input
+                  type="time"
+                  value={sl.close}
+                  onChange={e => updateNewSlot(idx, 'close', e.target.value)}
+                  className="text-sm border border-gray-300 rounded px-2 py-1 bg-white focus:outline-none focus:ring-1 focus:ring-orange-400"
+                />
+                {newSlots.length > 1 && (
+                  <button
+                    type="button"
+                    onClick={() => removeNewSlot(idx)}
+                    className="text-gray-400 hover:text-red-500 text-sm leading-none"
+                  >×</button>
+                )}
+              </div>
+            ))}
+            {newSlots.length < 4 && (
+              <button
+                type="button"
+                onClick={addNewSlot}
+                className="text-xs text-orange-600 hover:text-orange-800 mt-0.5"
+              >
+                + intervalo
+              </button>
+            )}
+          </div>
+        )}
+
         <button
           type="button"
           onClick={add}
-          className="px-3 py-1 text-sm bg-indigo-500 text-white rounded hover:bg-indigo-600"
+          disabled={!newDate}
+          className="w-full px-3 py-1.5 text-xs bg-orange-500 text-white rounded-lg hover:bg-orange-600 disabled:opacity-50 transition-colors"
         >
-          +
+          {t('exceptions.addBtn')}
         </button>
       </div>
     </div>
@@ -381,6 +571,7 @@ function CalendarsTab({ holidaySets }: CalendarsTabProps) {
   const [fAlwaysOpen, setFAlwaysOpen] = useState(false)
   const [fSched,      setFSched]      = useState<WeeklyDaySchedule[]>([])
   const [fHsIds,      setFHsIds]      = useState<string[]>([])
+  const [fExceptions, setFExceptions] = useState<ExceptionEntry[]>([])
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -400,7 +591,7 @@ function CalendarsTab({ holidaySets }: CalendarsTabProps) {
   const openCreate = () => {
     setEditing(null)
     setFName(''); setFDesc(''); setFTz('America/Sao_Paulo')
-    setFAlwaysOpen(false); setFSched([]); setFHsIds([])
+    setFAlwaysOpen(false); setFSched([]); setFHsIds([]); setFExceptions([])
     setShowForm(true)
   }
 
@@ -409,6 +600,7 @@ function CalendarsTab({ holidaySets }: CalendarsTabProps) {
     setFName(c.name); setFDesc(c.description); setFTz(c.timezone)
     setFAlwaysOpen(c.always_open ?? false)
     setFSched(c.weekly_schedule); setFHsIds(c.holiday_set_ids)
+    setFExceptions(c.exceptions ?? [])
     setShowForm(true)
   }
 
@@ -425,7 +617,7 @@ function CalendarsTab({ holidaySets }: CalendarsTabProps) {
         always_open:     fAlwaysOpen,
         weekly_schedule: fAlwaysOpen ? [] : fSched,
         holiday_set_ids: fHsIds,
-        exceptions:      editing?.exceptions ?? [],
+        exceptions:      fExceptions,
       }
       if (editing) {
         await calApi.updateCalendar(editing.id, body)
@@ -455,6 +647,20 @@ function CalendarsTab({ holidaySets }: CalendarsTabProps) {
   const toggleHolidaySet = (id: string) => {
     setFHsIds(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id])
   }
+
+  /** Detect holidays with identical dates across the currently-selected holiday sets. */
+  const conflictDates = useMemo(() => {
+    const selected = holidaySets.filter(hs => fHsIds.includes(hs.id))
+    const dateCount: Record<string, number> = {}
+    for (const hs of selected) {
+      for (const h of hs.holidays ?? []) {
+        dateCount[h.date] = (dateCount[h.date] ?? 0) + 1
+      }
+    }
+    return Object.entries(dateCount)
+      .filter(([, count]) => count > 1)
+      .map(([date]) => date)
+  }, [fHsIds, holidaySets])
 
   const scheduleLabel = (c: CalendarObj) => {
     if (c.always_open) return '24×7'
@@ -518,6 +724,11 @@ function CalendarsTab({ holidaySets }: CalendarsTabProps) {
                   {c.holiday_set_ids.length > 0 && (
                     <span className="text-[11px] bg-amber-50 text-amber-700 px-2 py-0.5 rounded-full">
                       🏖️ {c.holiday_set_ids.length} conj. feriados
+                    </span>
+                  )}
+                  {(c.exceptions ?? []).length > 0 && (
+                    <span className="text-[11px] bg-orange-50 text-orange-700 px-2 py-0.5 rounded-full">
+                      ⚠️ {c.exceptions.length} {c.exceptions.length === 1 ? t('exceptions.count', { count: c.exceptions.length }) : t('exceptions.countPlural', { count: c.exceptions.length })}
                     </span>
                   )}
                 </div>
@@ -615,8 +826,28 @@ function CalendarsTab({ holidaySets }: CalendarsTabProps) {
                     </label>
                   ))}
                 </div>
+                {conflictDates.length > 0 && (
+                  <div className="mt-2 px-3 py-2 bg-amber-50 border border-amber-200 rounded-lg">
+                    <p className="text-xs font-medium text-amber-700">
+                      ⚠️ {t('calendar.holidayConflict', { count: conflictDates.length })}
+                    </p>
+                    <p className="text-[11px] text-amber-600 mt-0.5 font-mono">
+                      {conflictDates.slice(0, 5).join(', ')}{conflictDates.length > 5 ? ` +${conflictDates.length - 5}` : ''}
+                    </p>
+                    <p className="text-[11px] text-amber-500 mt-0.5">{t('calendar.holidayConflictHint')}</p>
+                  </div>
+                )}
               </div>
             )}
+
+            {/* Exception days */}
+            <div>
+              <div className="mb-2">
+                <label className="block text-xs font-medium text-gray-700">{t('exceptions.title')}</label>
+                <p className="text-[11px] text-gray-400 mt-0.5">{t('exceptions.subtitle')}</p>
+              </div>
+              <ExceptionsEditor exceptions={fExceptions} onChange={setFExceptions} />
+            </div>
 
             <div className="flex gap-2 justify-end pt-2 border-t border-gray-100">
               <button type="button" onClick={() => setShowForm(false)}

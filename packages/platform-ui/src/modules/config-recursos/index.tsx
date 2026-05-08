@@ -3,18 +3,16 @@ import { useTranslation } from 'react-i18next'
 import PageHeader from '@/components/ui/PageHeader'
 import PoolsPage from './PoolsPage'
 import SkillsPage from './SkillsPage'
-import ChannelsPage from './ChannelsPage'
 
-type Tab = 'pools' | 'skills' | 'channels'
+type Tab = 'pools' | 'skills'
 
 const ConfigRecursosIndex: React.FC = () => {
   const { t } = useTranslation('configRecursos')
   const [activeTab, setActiveTab] = useState<Tab>('pools')
 
   const tabs: { id: Tab; label: string }[] = [
-    { id: 'pools',    label: t('tabs.pools') },
-    { id: 'skills',   label: t('tabs.skills') },
-    { id: 'channels', label: t('tabs.channels') },
+    { id: 'pools',  label: t('tabs.pools')  },
+    { id: 'skills', label: t('tabs.skills') },
   ]
 
   return (
@@ -38,9 +36,8 @@ const ConfigRecursosIndex: React.FC = () => {
       </div>
 
       <div className="mt-6">
-        {activeTab === 'pools'    && <PoolsPage />}
-        {activeTab === 'skills'   && <SkillsPage />}
-        {activeTab === 'channels' && <ChannelsPage />}
+        {activeTab === 'pools'  && <PoolsPage />}
+        {activeTab === 'skills' && <SkillsPage />}
       </div>
     </div>
   )

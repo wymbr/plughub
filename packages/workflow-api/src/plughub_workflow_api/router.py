@@ -41,10 +41,12 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import re
 import time
 from datetime import datetime, timezone
 from typing import Any
 
+import httpx
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from pydantic import BaseModel, Field
 
@@ -117,6 +119,40 @@ class TriggerRequest(BaseModel):
     metadata:          dict = Field(default_factory=dict)
 
 
+_SKILL_ID_RE = re.compile(r"^skill_[a-z0-9_]+_v\d+$")
+
+
+async def _resolve_flow_definition(
+    flow_id: str,
+    tenant_id: str,
+    metadata: dict,
+    registry_url: str,
+) -> dict:
+    """
+    If metadata already contains 'flow_definition', return metadata unchanged.
+    Otherwise, for skill_* flow IDs, fetch the skill from agent-registry and inject
+    the 'flow' field as 'flow_definition' so the skill-flow-worker can execute it.
+    """
+    if "flow_definition" in metadata:
+        return metadata
+
+    if not _SKILL_ID_RE.match(flow_id):
+        return metadata  # not a skill — infrastructure flows may have definitions elsewhere
+
+    try:
+        url = f"{registry_url}/v1/skills/{flow_id}"
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            resp = await client.get(url, headers={"x-tenant-id": tenant_id})
+        if resp.status_code == 200:
+            skill = resp.json()
+            if skill.get("flow"):
+                return {**metadata, "flow_definition": skill["flow"]}
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Could not fetch flow_definition for %s from registry: %s", flow_id, exc)
+
+    return metadata
+
+
 @router.post("/v1/workflow/trigger", status_code=201)
 async def trigger_workflow(
     body:    TriggerRequest,
@@ -127,9 +163,20 @@ async def trigger_workflow(
     Create a new WorkflowInstance and signal that execution should begin.
     The actual Skill Flow execution is delegated to a TypeScript worker that
     consumes the workflow.started Kafka event.
+
+    If body.flow_id matches skill_*_v{n} and body.metadata has no flow_definition,
+    the skill's flow is automatically fetched from agent-registry and injected.
     """
     settings = _settings(request)
     producer = _producer(request)
+
+    # Resolve flow_definition when caller omits it (e.g. scheduled deploys)
+    resolved_metadata = await _resolve_flow_definition(
+        flow_id=body.flow_id,
+        tenant_id=body.tenant_id,
+        metadata=body.metadata,
+        registry_url=settings.agent_registry_url,
+    )
 
     instance = await db_create_instance(pool, {
         "installation_id":   settings.installation_id,
@@ -139,7 +186,7 @@ async def trigger_workflow(
         "session_id":        body.session_id,
         "origin_session_id": body.origin_session_id,
         "pool_id":           body.pool_id,
-        "metadata":          body.metadata,
+        "metadata":          resolved_metadata,
         "pipeline_state":    {"contact_context": body.context},
     })
 

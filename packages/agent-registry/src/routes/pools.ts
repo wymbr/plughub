@@ -45,6 +45,7 @@ poolsRouter.post("/", async (req: Request, res: Response, next: NextFunction) =>
         queue_config:          body.queue_config ?? Prisma.DbNull,
         mentionable_pools:     body.mentionable_pools ?? Prisma.DbNull,
         hooks:                 body.hooks ?? Prisma.DbNull,
+        calendar_id:           body.calendar_id ?? null,
         created_by:            createdBy,
       } as any,
     })
@@ -127,6 +128,7 @@ poolsRouter.put("/:pool_id", async (req: Request, res: Response, next: NextFunct
         ...(body.queue_config          !== undefined && { queue_config:          body.queue_config }),
         ...(body.mentionable_pools     !== undefined && { mentionable_pools:     body.mentionable_pools }),
         ...(body.hooks                 !== undefined && { hooks:                 body.hooks }),
+        ...(body.calendar_id           !== undefined && { calendar_id:           body.calendar_id }),
       } as any,
     })
 

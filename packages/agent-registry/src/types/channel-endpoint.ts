@@ -9,16 +9,17 @@
  */
 
 export interface ChannelEndpointRow {
-  id:           string
-  tenant_id:    string
-  channel:      string
-  identifier:   string
-  pool_id:      string
-  display_name: string
-  settings:     Record<string, unknown>
-  active:       boolean
-  created_at:   Date
-  updated_at:   Date
+  id:                string
+  tenant_id:         string
+  channel:           string
+  identifier:        string
+  pool_id:           string
+  display_name:      string
+  settings:          Record<string, unknown>
+  active:            boolean
+  gateway_config_id: string | null   // optional FK to GatewayConfig
+  created_at:        Date
+  updated_at:        Date
 }
 
 /** Typed accessor returned by the prisma shim */
@@ -40,6 +41,11 @@ export interface ChannelEndpointDelegate {
     where: Record<string, unknown>
     data:  Partial<Omit<ChannelEndpointRow, 'id' | 'tenant_id' | 'channel' | 'identifier' | 'created_at'>>
   }): Promise<ChannelEndpointRow>
+
+  updateMany(args: {
+    where: Record<string, unknown>
+    data:  Partial<Omit<ChannelEndpointRow, 'id' | 'created_at'>>
+  }): Promise<{ count: number }>
 
   delete(args: {
     where: Record<string, unknown>

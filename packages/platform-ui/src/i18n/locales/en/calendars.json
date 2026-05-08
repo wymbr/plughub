@@ -43,7 +43,9 @@
     "noSchedule":   "No schedule defined",
     "closed":       "Closed",
     "holidaySetsLabel": "{{count}} holiday set",
-    "holidaySetsLabelPlural": "{{count}} holiday sets"
+    "holidaySetsLabelPlural": "{{count}} holiday sets",
+    "holidayConflict": "{{count}} date(s) overlap across selected holiday sets",
+    "holidayConflictHint": "Last entry wins. Use association-level exceptions to override specific dates."
   },
   "holidaySet": {
     "info":        "Holiday date sets that can be linked to calendars.",
@@ -61,6 +63,7 @@
     "date":        "Date",
     "holidayName": "Holiday name",
     "holidayNamePlaceholder": "Holiday name",
+    "recurringLabel": "Repeat every year",
     "noHolidays":  "No holidays in this set.",
     "save":        "Save",
     "create":      "Create",
@@ -85,6 +88,17 @@
     "delete":     "Delete",
     "noItems":    "No associations found for this ID.",
     "restricted": "Restricted to administrators."
+  },
+  "exceptions": {
+    "title":            "Exception Days",
+    "subtitle":         "One-time dates with special rules (maintenance, events, etc.)",
+    "noItems":          "No exception days configured",
+    "addBtn":           "Add exception",
+    "closedAllDay":     "Closed all day",
+    "customHours":      "Custom hours",
+    "labelPlaceholder": "Description (e.g., Maintenance)",
+    "count":            "{{count}} exception",
+    "countPlural":      "{{count}} exceptions"
   },
   "messages": {
     "deleteConfirm": "Delete {{label}}? This action cannot be undone.",

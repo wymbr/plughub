@@ -31,6 +31,7 @@ model Pool {
   queue_config           Json?
   mentionable_pools      Json?   // Record<alias, pool_id> — @mention routing config
   hooks                  Json?   // PoolHooks — on_human_start, on_human_end, post_human
+  calendar_id            String? // Reference to calendar-api calendar UUID (display cache)
 
   created_at  DateTime @default(now())
   updated_at  DateTime @updatedAt
@@ -291,14 +292,18 @@ model PoolSkillSlot {
 // ─────────────────────────────────────────────
 
 model ChannelEndpoint {
-  id           String   @id @default(uuid())
-  tenant_id    String
-  channel      String   // webchat | whatsapp | voice | sms | email
-  identifier   String   // channel-specific external address
-  pool_id      String   // logical pool_id (not FK — pool lives in same service)
-  display_name String
-  settings     Json     @default("{}")   // per-instance overrides
-  active       Boolean  @default(true)
+  id                 String   @id @default(uuid())
+  tenant_id          String
+  channel            String   // webchat | whatsapp | voice | sms | email | webhook
+  identifier         String   // channel-specific external address
+  pool_id            String   // logical pool_id (not FK — pool lives in same service)
+  display_name       String
+  settings           Json     @default("{}")   // per-instance overrides
+  active             Boolean  @default(true)
+
+  // Optional parent integration — links this endpoint to its GatewayConfig account
+  gateway_config_id  String?
+  gateway_config     GatewayConfig? @relation(fields: [gateway_config_id], references: [id], onDelete: SetNull)
 
   created_at  DateTime @default(now())
   updated_at  DateTime @updatedAt
@@ -307,6 +312,7 @@ model ChannelEndpoint {
   @@index([tenant_id])
   @@index([tenant_id, channel])
   @@index([tenant_id, channel, active])
+  @@index([gateway_config_id])
   @@map("channel_endpoints")
 }
 
@@ -323,6 +329,9 @@ model GatewayConfig {
   active       Boolean  @default(true)
   credentials  Json     @default("{}")   // masked on API read
   settings     Json     @default("{}")   // non-sensitive settings
+
+  // Child endpoints that belong to this integration account
+  endpoints    ChannelEndpoint[]
 
   created_at  DateTime @default(now())
   updated_at  DateTime @updatedAt

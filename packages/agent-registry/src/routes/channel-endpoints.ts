@@ -19,7 +19,7 @@ const channelEndpoint = (prisma as unknown as { channelEndpoint: ChannelEndpoint
 
 export const channelEndpointsRouter = Router()
 
-const VALID_CHANNELS = new Set(["webchat", "whatsapp", "voice", "sms", "email"])
+const VALID_CHANNELS = new Set(["webchat", "whatsapp", "voice", "sms", "email", "webhook"])
 
 // ─────────────────────────────────────────────
 // GET /v1/channel-endpoints
@@ -27,15 +27,17 @@ const VALID_CHANNELS = new Set(["webchat", "whatsapp", "voice", "sms", "email"])
 // ─────────────────────────────────────────────
 channelEndpointsRouter.get("/", async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const tenantId = _getTenantId(req)
-    const channel  = req.query["channel"] as string | undefined
-    const poolId   = req.query["pool_id"] as string | undefined
-    const activeQ  = req.query["active"]  as string | undefined
+    const tenantId       = _getTenantId(req)
+    const channel        = req.query["channel"]          as string | undefined
+    const poolId         = req.query["pool_id"]          as string | undefined
+    const activeQ        = req.query["active"]           as string | undefined
+    const gatewayConfigId = req.query["gateway_config_id"] as string | undefined
 
     const where: Record<string, unknown> = { tenant_id: tenantId }
-    if (channel) where["channel"] = channel
-    if (poolId)  where["pool_id"] = poolId
-    if (activeQ !== undefined) where["active"] = activeQ === "true"
+    if (channel)         where["channel"]          = channel
+    if (poolId)          where["pool_id"]          = poolId
+    if (activeQ !== undefined) where["active"]     = activeQ === "true"
+    if (gatewayConfigId) where["gateway_config_id"] = gatewayConfigId
 
     const endpoints = await channelEndpoint.findMany({
       where,
@@ -72,12 +74,13 @@ channelEndpointsRouter.post("/", async (req: Request, res: Response, next: NextF
   try {
     const tenantId = _getTenantId(req)
     const body     = req.body as {
-      channel:      string
-      identifier:   string
-      pool_id:      string
-      display_name: string
-      settings?:    Record<string, unknown>
-      active?:      boolean
+      channel:            string
+      identifier:         string
+      pool_id:            string
+      display_name:       string
+      settings?:          Record<string, unknown>
+      active?:            boolean
+      gateway_config_id?: string | null
     }
 
     if (!body.channel || !VALID_CHANNELS.has(body.channel)) {
@@ -101,13 +104,14 @@ channelEndpointsRouter.post("/", async (req: Request, res: Response, next: NextF
 
     const ep = await channelEndpoint.create({
       data: {
-        tenant_id:    tenantId,
-        channel:      body.channel,
-        identifier:   body.identifier.trim(),
-        pool_id:      body.pool_id.trim(),
-        display_name: body.display_name.trim(),
-        settings:     body.settings ?? {},
-        active:       body.active ?? true,
+        tenant_id:         tenantId,
+        channel:           body.channel,
+        identifier:        body.identifier.trim(),
+        pool_id:           body.pool_id.trim(),
+        display_name:      body.display_name.trim(),
+        settings:          body.settings ?? {},
+        active:            body.active ?? true,
+        gateway_config_id: body.gateway_config_id ?? null,
       },
     })
 
@@ -128,20 +132,22 @@ channelEndpointsRouter.put("/:id", async (req: Request, res: Response, next: Nex
     const tenantId = _getTenantId(req)
     const id       = req.params["id"]!
     const body     = req.body as {
-      pool_id?:      string
-      display_name?: string
-      settings?:     Record<string, unknown>
-      active?:       boolean
+      pool_id?:            string
+      display_name?:       string
+      settings?:           Record<string, unknown>
+      active?:             boolean
+      gateway_config_id?:  string | null
     }
 
     const existing = await channelEndpoint.findFirst({ where: { id, tenant_id: tenantId } })
     if (!existing) return res.status(404).json({ error: "Channel endpoint not found" })
 
     const updates: Record<string, unknown> = {}
-    if (body.pool_id      !== undefined) updates["pool_id"]      = body.pool_id.trim()
-    if (body.display_name !== undefined) updates["display_name"] = body.display_name.trim()
-    if (body.settings     !== undefined) updates["settings"]     = body.settings
-    if (body.active       !== undefined) updates["active"]       = body.active
+    if (body.pool_id           !== undefined) updates["pool_id"]           = body.pool_id.trim()
+    if (body.display_name      !== undefined) updates["display_name"]      = body.display_name.trim()
+    if (body.settings          !== undefined) updates["settings"]          = body.settings
+    if (body.active            !== undefined) updates["active"]            = body.active
+    if (body.gateway_config_id !== undefined) updates["gateway_config_id"] = body.gateway_config_id ?? null
 
     if (Object.keys(updates).length === 0) {
       return res.status(400).json({ error: "No updatable fields provided" })

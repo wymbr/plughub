@@ -89,9 +89,16 @@ CREATE TABLE IF NOT EXISTS calendar.calendar_associations (
     operator     TEXT        NOT NULL DEFAULT 'UNION'
                              CHECK (operator IN ('UNION','INTERSECTION')),
     priority     INTEGER     NOT NULL DEFAULT 1,
+    exceptions   JSONB       NOT NULL DEFAULT '[]',
     created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
     CONSTRAINT uq_calendar_assoc UNIQUE (tenant_id, entity_type, entity_id, calendar_id)
 )
+"""
+
+# Idempotent migration: add exceptions column to pre-existing associations tables
+_DDL_ASSOC_ADD_EXCEPTIONS = """
+ALTER TABLE calendar.calendar_associations
+ADD COLUMN IF NOT EXISTS exceptions JSONB NOT NULL DEFAULT '[]'
 """
 
 _DDL_ASSOCIATIONS_IDX = (
@@ -137,6 +144,8 @@ async def ensure_schema(pool: asyncpg.Pool) -> None:
             await conn.execute(_DDL_ASSOCIATIONS_IDX)
             # Idempotent migration: remove legacy entity_type CHECK constraint
             await conn.execute(_DDL_ASSOC_DROP_ENTITY_CHECK)
+            # Idempotent migration: add exceptions column to pre-existing associations tables
+            await conn.execute(_DDL_ASSOC_ADD_EXCEPTIONS)
             await conn.execute(_DDL_TENANT_CONFIG)
     logger.info("calendar schema ensured")
 
@@ -332,6 +341,7 @@ def _row_to_assoc(row: asyncpg.Record) -> dict[str, Any]:
         "calendar_id": str(row["calendar_id"]),
         "operator":    row["operator"],
         "priority":    row["priority"],
+        "exceptions":  json.loads(row["exceptions"]),
         "created_at":  row["created_at"].isoformat(),
     }
 
@@ -357,15 +367,73 @@ async def db_create_association(pool: asyncpg.Pool, data: dict) -> dict:
     row = await pool.fetchrow(
         """
         INSERT INTO calendar.calendar_associations
-            (tenant_id, entity_type, entity_id, calendar_id, operator, priority)
-        VALUES ($1,$2,$3,$4,$5,$6)
+            (tenant_id, entity_type, entity_id, calendar_id, operator, priority, exceptions)
+        VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb)
         RETURNING *
         """,
         data["tenant_id"], data["entity_type"], data["entity_id"],
         UUID(data["calendar_id"]), data.get("operator", "UNION"),
         data.get("priority", 1),
+        json.dumps(data.get("exceptions", [])),
     )
     return _row_to_assoc(row)
+
+
+async def db_update_association(pool: asyncpg.Pool, id: str, data: dict) -> dict | None:
+    """Update mutable fields of an existing association (currently only exceptions)."""
+    row = await pool.fetchrow(
+        """
+        UPDATE calendar.calendar_associations
+        SET exceptions = COALESCE($2::jsonb, exceptions)
+        WHERE id = $1
+        RETURNING *
+        """,
+        UUID(id),
+        json.dumps(data["exceptions"]) if "exceptions" in data else None,
+    )
+    return _row_to_assoc(row) if row else None
+
+
+async def db_upsert_pool_association(pool: asyncpg.Pool, data: dict) -> dict:
+    """
+    Upsert an entity ↔ calendar association.
+    If an association already exists for (tenant_id, entity_type, entity_id, calendar_id),
+    updates its exceptions. Otherwise inserts a new row.
+    """
+    row = await pool.fetchrow(
+        """
+        INSERT INTO calendar.calendar_associations
+            (tenant_id, entity_type, entity_id, calendar_id, operator, priority, exceptions)
+        VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb)
+        ON CONFLICT ON CONSTRAINT uq_calendar_assoc
+        DO UPDATE SET exceptions = EXCLUDED.exceptions
+        RETURNING *
+        """,
+        data["tenant_id"], data["entity_type"], data["entity_id"],
+        UUID(data["calendar_id"]), data.get("operator", "UNION"),
+        data.get("priority", 1),
+        json.dumps(data.get("exceptions", [])),
+    )
+    return _row_to_assoc(row)
+
+
+async def db_delete_associations_for_entity(
+    pool: asyncpg.Pool,
+    tenant_id: str,
+    entity_type: str,
+    entity_id: str,
+) -> int:
+    """Delete all associations for an entity. Returns the number of deleted rows."""
+    result = await pool.execute(
+        """
+        DELETE FROM calendar.calendar_associations
+        WHERE tenant_id = $1 AND entity_type = $2 AND entity_id = $3
+        """,
+        tenant_id, entity_type, entity_id,
+    )
+    # asyncpg returns e.g. "DELETE 2"
+    parts = result.split()
+    return int(parts[1]) if len(parts) == 2 and parts[1].isdigit() else 0
 
 
 async def db_delete_association(pool: asyncpg.Pool, id: str) -> bool:
@@ -381,12 +449,23 @@ async def db_get_associations_for_engine(
     entity_type: str,
     entity_id: str,
 ) -> list[dict]:
-    """Returns associations joined with calendar data — used by the engine."""
+    """
+    Returns associations joined with calendar data — used by the engine.
+
+    Exceptions are merged with association-level overrides taking priority:
+      1. Association exceptions  (entity-specific, e.g. a pool maintenance day)
+      2. Calendar exceptions     (shared policy)
+    The engine's _resolve_date returns on the first match, so prepending assoc
+    exceptions ensures they override calendar-level exceptions for the same date.
+    """
     rows = await pool.fetch(
         """
         SELECT a.id, a.operator, a.priority,
-               c.id AS calendar_id, c.timezone, c.always_open,
-               c.weekly_schedule, c.holiday_set_ids, c.exceptions
+               a.exceptions                AS assoc_exceptions,
+               c.id                        AS calendar_id,
+               c.timezone, c.always_open,
+               c.weekly_schedule, c.holiday_set_ids,
+               c.exceptions                AS cal_exceptions
         FROM calendar.calendar_associations a
         JOIN calendar.calendars c ON c.id = a.calendar_id
         WHERE a.tenant_id = $1 AND a.entity_type = $2 AND a.entity_id = $3
@@ -397,6 +476,12 @@ async def db_get_associations_for_engine(
     result = []
     for r in rows:
         hs_ids = json.loads(r["holiday_set_ids"])
+        assoc_exc = json.loads(r["assoc_exceptions"])
+        cal_exc   = json.loads(r["cal_exceptions"])
+        # Assoc exceptions take priority — prepend them.
+        # Deduplicate: if assoc already covers a date, skip the calendar-level entry.
+        assoc_dates = {e["date"] for e in assoc_exc}
+        merged_exceptions = assoc_exc + [e for e in cal_exc if e["date"] not in assoc_dates]
         result.append({
             "assoc_id":        str(r["id"]),
             "operator":        r["operator"],
@@ -406,7 +491,7 @@ async def db_get_associations_for_engine(
             "always_open":     r["always_open"],
             "weekly_schedule": json.loads(r["weekly_schedule"]),
             "holiday_set_ids": hs_ids,
-            "exceptions":      json.loads(r["exceptions"]),
+            "exceptions":      merged_exceptions,
         })
     return result
 
