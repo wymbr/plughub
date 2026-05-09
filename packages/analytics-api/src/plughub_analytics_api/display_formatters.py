@@ -1,0 +1,603 @@
+"""
+display_formatters.py
+Query helpers and data-shape formatters for the /reports/display/* endpoints.
+
+Each formatter produces a dict matching the frontend DisplayTool data contracts
+defined in platform-ui/src/dashboard/tools/types.ts:
+
+  BarChartData / LineChartData (identical shape):
+    { x_labels: string[], series: [{name, data: number[], color?}], stacked?, y_label? }
+
+  DonutData:
+    { labels: string[], values: number[], total? }
+
+  TableData:
+    { columns: [{key, label, sortable?, align?}], rows: [{...}], total? }
+
+  MetricCardData:
+    { value: number, label: string, format: str, trend?: number }
+
+All formatters are async. Callers (display.py) stay thin — one formatter call per route.
+"""
+from __future__ import annotations
+
+import asyncio
+import logging
+from datetime import datetime, timedelta, timezone
+from typing import Any
+
+from .query import get_pool_snapshots
+from .reports_query import query_agent_performance_report
+from .timeseries_query import (
+    query_handle_time_timeseries,
+    query_score_timeseries,
+    query_volume_timeseries,
+)
+
+logger = logging.getLogger("plughub.analytics.display")
+
+
+# ─── datetime helpers ──────────────────────────────────────────────────────────
+
+_FMT = "%Y-%m-%d %H:%M:%S"
+
+
+def _default_from() -> str:
+    return (datetime.utcnow() - timedelta(days=7)).strftime(_FMT)
+
+
+def _default_to() -> str:
+    return datetime.utcnow().strftime(_FMT)
+
+
+def _fmt_dt(s: str | None) -> str:
+    """
+    Parses ISO8601 or date-only 'YYYY-MM-DD' to a ClickHouse UTC datetime string.
+    Falls back to now on any error.
+    """
+    if not s:
+        return _default_to()
+    try:
+        s2 = s.strip().replace("Z", "+00:00")
+        if "T" in s2 or " " in s2:
+            dt = datetime.fromisoformat(s2).astimezone(timezone.utc)
+        else:
+            # date-only "YYYY-MM-DD" (from <input type="date">)
+            parts = s2.split("+")[0].split("-")
+            dt = datetime(int(parts[0]), int(parts[1]), int(parts[2]),
+                          tzinfo=timezone.utc)
+        return dt.strftime(_FMT)
+    except Exception:
+        return _default_to()
+
+
+def _prev_period(since: str, until: str) -> tuple[str, str]:
+    """Returns the prior period of the same length immediately before `since`."""
+    try:
+        s = datetime.strptime(since, _FMT).replace(tzinfo=timezone.utc)
+        u = datetime.strptime(until, _FMT).replace(tzinfo=timezone.utc)
+        duration = u - s
+        if duration.total_seconds() <= 0:
+            duration = timedelta(days=7)
+        return (s - duration).strftime(_FMT), s.strftime(_FMT)
+    except Exception:
+        since_dt = datetime.utcnow() - timedelta(days=14)
+        until_dt = datetime.utcnow() - timedelta(days=7)
+        return since_dt.strftime(_FMT), until_dt.strftime(_FMT)
+
+
+def _pool_clause(accessible_pools: list[str] | None) -> str:
+    if accessible_pools is None:
+        return ""
+    if not accessible_pools:
+        return "AND 1=0"
+    pool_list = ", ".join(f"'{p}'" for p in accessible_pools)
+    return f"AND pool_id IN ({pool_list})"
+
+
+def _run(client: Any, sql: str, params: dict) -> list[dict]:
+    result = client.query(sql, parameters=params)
+    cols = result.column_names
+    return [dict(zip(cols, row)) for row in result.result_rows]
+
+
+# ─── shared: convert buckets → { x_labels, series } ──────────────────────────
+
+def _buckets_to_chart(
+    buckets: list[dict],
+    series_name: str,
+    y_label: str | None = None,
+) -> dict:
+    """
+    Converts timeseries buckets from query_*_timeseries into the shared
+    BarChartData / LineChartData shape:
+      { x_labels: [...], series: [{ name, data }], y_label? }
+    """
+    x_labels = [b.get("bucket", "") for b in buckets]
+    # Convert datetime objects to ISO strings if needed
+    x_strs: list[str] = []
+    for x in x_labels:
+        if isinstance(x, datetime):
+            if x.tzinfo is None:
+                x = x.replace(tzinfo=timezone.utc)
+            x_strs.append(x.isoformat())
+        else:
+            x_strs.append(str(x) if x is not None else "")
+
+    data = [round(float(b.get("value", 0) or 0), 4) for b in buckets]
+    result: dict = {
+        "x_labels": x_strs,
+        "series":   [{"name": series_name, "data": data}],
+    }
+    if y_label:
+        result["y_label"] = y_label
+    return result
+
+
+# ─── /reports/display/session-volume ─────────────────────────────────────────
+
+async def fmt_session_volume(
+    client:           Any,
+    database:         str,
+    tenant_id:        str,
+    from_dt:          str | None,
+    to_dt:            str | None,
+    pool_id:          str | None,
+    accessible_pools: list[str] | None,
+) -> dict:
+    """Returns BarChartData/LineChartData — sessions per time bucket."""
+    result = await query_volume_timeseries(
+        client           = client,
+        database         = database,
+        tenant_id        = tenant_id,
+        from_dt          = from_dt,
+        to_dt            = to_dt,
+        interval         = 60,
+        pool_id          = pool_id,
+        accessible_pools = accessible_pools,
+    )
+    return _buckets_to_chart(result.get("buckets", []), "Sessões")
+
+
+# ─── /reports/display/handle-time ─────────────────────────────────────────────
+
+async def fmt_handle_time(
+    client:           Any,
+    database:         str,
+    tenant_id:        str,
+    from_dt:          str | None,
+    to_dt:            str | None,
+    pool_id:          str | None,
+    accessible_pools: list[str] | None,
+) -> dict:
+    """Returns BarChartData/LineChartData — avg handle time (ms) per bucket."""
+    result = await query_handle_time_timeseries(
+        client           = client,
+        database         = database,
+        tenant_id        = tenant_id,
+        from_dt          = from_dt,
+        to_dt            = to_dt,
+        interval         = 60,
+        pool_id          = pool_id,
+        accessible_pools = accessible_pools,
+    )
+    return _buckets_to_chart(result.get("buckets", []), "Tempo Médio (ms)", y_label="ms")
+
+
+# ─── /reports/display/evaluation-score ───────────────────────────────────────
+
+async def fmt_evaluation_score(
+    client:           Any,
+    database:         str,
+    tenant_id:        str,
+    from_dt:          str | None,
+    to_dt:            str | None,
+    pool_id:          str | None,  # no-op for evaluation_results
+    accessible_pools: list[str] | None,
+) -> dict:
+    """Returns BarChartData/LineChartData — avg evaluation score per bucket."""
+    result = await query_score_timeseries(
+        client           = client,
+        database         = database,
+        tenant_id        = tenant_id,
+        from_dt          = from_dt,
+        to_dt            = to_dt,
+        interval         = 60,
+        accessible_pools = accessible_pools,
+    )
+    return _buckets_to_chart(result.get("buckets", []), "Nota Média", y_label="score")
+
+
+# ─── /reports/display/sessions-by-pool ───────────────────────────────────────
+
+def _fetch_sessions_by_pool(
+    client:           Any,
+    db:               str,
+    tenant_id:        str,
+    since:            str,
+    until:            str,
+    accessible_pools: list[str] | None,
+) -> list[dict]:
+    pool_clause = _pool_clause(accessible_pools)
+    sql = f"""
+        SELECT pool_id, count() AS cnt
+        FROM {db}.sessions
+        WHERE tenant_id = {{tenant_id:String}}
+          AND opened_at >= '{since}'
+          AND opened_at <  '{until}'
+          {pool_clause}
+        GROUP BY pool_id
+        ORDER BY cnt DESC
+    """
+    return _run(client, sql, {"tenant_id": tenant_id})
+
+
+async def fmt_sessions_by_pool(
+    client:           Any,
+    database:         str,
+    tenant_id:        str,
+    from_dt:          str | None,
+    to_dt:            str | None,
+    accessible_pools: list[str] | None,
+) -> dict:
+    """Returns BarChartData — session count grouped by pool_id."""
+    since = _fmt_dt(from_dt) if from_dt else _default_from()
+    until = _fmt_dt(to_dt)   if to_dt   else _default_to()
+
+    empty = {"x_labels": [], "series": [{"name": "Sessões", "data": []}]}
+    if accessible_pools is not None and not accessible_pools:
+        return empty
+
+    try:
+        rows = await asyncio.to_thread(
+            _fetch_sessions_by_pool, client, database, tenant_id, since, until, accessible_pools
+        )
+        return {
+            "x_labels": [r.get("pool_id") or "unknown" for r in rows],
+            "series":   [{"name": "Sessões", "data": [int(r["cnt"]) for r in rows]}],
+        }
+    except Exception as exc:
+        logger.warning("fmt_sessions_by_pool failed tenant=%s: %s", tenant_id, exc)
+        return empty
+
+
+# ─── /reports/display/outcome-distribution ────────────────────────────────────
+
+def _fetch_outcome_distribution(
+    client:           Any,
+    db:               str,
+    tenant_id:        str,
+    since:            str,
+    until:            str,
+    pool_id:          str | None,
+    accessible_pools: list[str] | None,
+) -> list[dict]:
+    pool_clause = _pool_clause(accessible_pools)
+    pool_filter = f"AND pool_id = '{pool_id}'" if pool_id else ""
+    sql = f"""
+        SELECT outcome, count() AS cnt
+        FROM {db}.sessions
+        WHERE tenant_id = {{tenant_id:String}}
+          AND opened_at >= '{since}'
+          AND opened_at <  '{until}'
+          {pool_clause}
+          {pool_filter}
+        GROUP BY outcome
+        ORDER BY cnt DESC
+    """
+    return _run(client, sql, {"tenant_id": tenant_id})
+
+
+async def fmt_outcome_distribution(
+    client:           Any,
+    database:         str,
+    tenant_id:        str,
+    from_dt:          str | None,
+    to_dt:            str | None,
+    pool_id:          str | None,
+    accessible_pools: list[str] | None,
+) -> dict:
+    """Returns DonutData — session counts by outcome."""
+    since = _fmt_dt(from_dt) if from_dt else _default_from()
+    until = _fmt_dt(to_dt)   if to_dt   else _default_to()
+
+    empty: dict = {"labels": [], "values": []}
+    if accessible_pools is not None and not accessible_pools:
+        return empty
+
+    try:
+        rows = await asyncio.to_thread(
+            _fetch_outcome_distribution,
+            client, database, tenant_id, since, until, pool_id, accessible_pools
+        )
+        return {
+            "labels": [r.get("outcome") or "unknown" for r in rows],
+            "values": [int(r["cnt"]) for r in rows],
+        }
+    except Exception as exc:
+        logger.warning("fmt_outcome_distribution failed tenant=%s: %s", tenant_id, exc)
+        return empty
+
+
+# ─── /reports/display/pool-status ─────────────────────────────────────────────
+
+async def fmt_pool_status(redis: Any, tenant_id: str) -> dict:
+    """Returns TableData — live pool snapshots from Redis."""
+    snapshots = await get_pool_snapshots(redis, tenant_id)
+
+    columns = [
+        {"key": "pool_id",       "label": "Pool",          "sortable": True},
+        {"key": "available",     "label": "Disponíveis",   "sortable": True, "align": "right"},
+        {"key": "queue_length",  "label": "Fila",          "sortable": True, "align": "right"},
+        {"key": "sla_target_ms", "label": "SLA (ms)",      "sortable": True, "align": "right"},
+        {"key": "channel_types", "label": "Canais"},
+        {"key": "updated_at",    "label": "Atualizado em"},
+    ]
+
+    rows = [
+        {
+            "pool_id":       s.get("pool_id", ""),
+            "available":     s.get("available", 0),
+            "queue_length":  s.get("queue_length", 0),
+            "sla_target_ms": s.get("sla_target_ms", "-"),
+            "channel_types": ", ".join(s.get("channel_types") or []),
+            "updated_at":    s.get("updated_at", ""),
+        }
+        for s in snapshots
+    ]
+
+    return {"columns": columns, "rows": rows}
+
+
+# ─── /reports/display/agent-performance ──────────────────────────────────────
+
+async def fmt_agent_performance(
+    client:           Any,
+    database:         str,
+    tenant_id:        str,
+    from_dt:          str | None,
+    to_dt:            str | None,
+    pool_id:          str | None,
+    accessible_pools: list[str] | None,
+) -> dict:
+    """Returns TableData — per-agent resolution/escalation rates."""
+    result = await query_agent_performance_report(
+        client           = client,
+        database         = database,
+        tenant_id        = tenant_id,
+        from_dt          = from_dt,
+        to_dt            = to_dt,
+        pool_id          = pool_id,
+        accessible_pools = accessible_pools,
+    )
+    raw = result.get("data", [])
+
+    columns = [
+        {"key": "agent_type_id",   "label": "Agent",        "sortable": True},
+        {"key": "pool_id",         "label": "Pool",          "sortable": True},
+        {"key": "role",            "label": "Papel"},
+        {"key": "total_sessions",  "label": "Sessões",       "sortable": True, "align": "right"},
+        {"key": "avg_duration_ms", "label": "Duração Média", "sortable": True, "align": "right"},
+        {"key": "resolution_rate", "label": "Resolução %",   "sortable": True, "align": "right"},
+        {"key": "escalation_rate", "label": "Escalação %",   "sortable": True, "align": "right"},
+    ]
+
+    rows = []
+    for r in raw:
+        avg_ms = r.get("avg_duration_ms")
+        rows.append({
+            "agent_type_id":   r.get("agent_type_id", ""),
+            "pool_id":         r.get("pool_id", "-"),
+            "role":            r.get("role", "-"),
+            "total_sessions":  int(r.get("total_sessions", 0)),
+            "avg_duration_ms": f"{int(avg_ms):,} ms" if avg_ms else "-",
+            "resolution_rate": f"{float(r.get('resolution_rate', 0)) * 100:.1f}%",
+            "escalation_rate": f"{float(r.get('escalation_rate', 0)) * 100:.1f}%",
+        })
+
+    return {"columns": columns, "rows": rows}
+
+
+# ─── KPI helpers ──────────────────────────────────────────────────────────────
+
+def _count_sessions_sync(
+    client:           Any,
+    db:               str,
+    tenant_id:        str,
+    since:            str,
+    until:            str,
+    pool_id:          str | None,
+    accessible_pools: list[str] | None,
+) -> int:
+    pool_clause = _pool_clause(accessible_pools)
+    pool_filter = f"AND pool_id = '{pool_id}'" if pool_id else ""
+    sql = f"""
+        SELECT count() AS cnt FROM {db}.sessions
+        WHERE tenant_id = {{tenant_id:String}}
+          AND opened_at >= '{since}'
+          AND opened_at <  '{until}'
+          {pool_clause}
+          {pool_filter}
+    """
+    rows = _run(client, sql, {"tenant_id": tenant_id})
+    return int(rows[0].get("cnt", 0)) if rows else 0
+
+
+def _resolution_rate_sync(
+    client:           Any,
+    db:               str,
+    tenant_id:        str,
+    since:            str,
+    until:            str,
+    pool_id:          str | None,
+    accessible_pools: list[str] | None,
+) -> float | None:
+    pool_clause = _pool_clause(accessible_pools)
+    pool_filter = f"AND pool_id = '{pool_id}'" if pool_id else ""
+    sql = f"""
+        SELECT count() AS total, countIf(outcome = 'resolved') AS resolved
+        FROM {db}.sessions
+        WHERE tenant_id = {{tenant_id:String}}
+          AND opened_at >= '{since}'
+          AND opened_at <  '{until}'
+          {pool_clause}
+          {pool_filter}
+    """
+    rows = _run(client, sql, {"tenant_id": tenant_id})
+    if not rows:
+        return None
+    total   = int(rows[0].get("total", 0))
+    resolved = int(rows[0].get("resolved", 0))
+    return resolved / total if total > 0 else None
+
+
+def _avg_score_sync(
+    client:           Any,
+    db:               str,
+    tenant_id:        str,
+    since:            str,
+    until:            str,
+) -> float | None:
+    # evaluation_results has no pool_id — scoping not applicable
+    sql = f"""
+        SELECT avgOrNull(overall_score) AS avg_score
+        FROM {db}.evaluation_results FINAL
+        WHERE tenant_id = {{tenant_id:String}}
+          AND timestamp >= '{since}'
+          AND timestamp <  '{until}'
+    """
+    rows = _run(client, sql, {"tenant_id": tenant_id})
+    if not rows or rows[0].get("avg_score") is None:
+        return None
+    return round(float(rows[0]["avg_score"]), 4)
+
+
+def _trend_pct(current: float | None, previous: float | None) -> float | None:
+    if current is None or previous is None or previous == 0:
+        return None
+    return round((current - previous) / abs(previous) * 100, 1)
+
+
+# ─── /reports/display/kpi-sessions ───────────────────────────────────────────
+
+async def fmt_kpi_sessions(
+    client:           Any,
+    database:         str,
+    tenant_id:        str,
+    from_dt:          str | None,
+    to_dt:            str | None,
+    pool_id:          str | None,
+    accessible_pools: list[str] | None,
+) -> dict:
+    """Returns MetricCardData — total sessions in period with trend."""
+    since = _fmt_dt(from_dt) if from_dt else _default_from()
+    until = _fmt_dt(to_dt)   if to_dt   else _default_to()
+    prev_since, prev_until = _prev_period(since, until)
+
+    empty: dict = {"value": 0, "label": "Sessões", "format": "number"}
+    if accessible_pools is not None and not accessible_pools:
+        return empty
+
+    try:
+        current, previous = await asyncio.gather(
+            asyncio.to_thread(
+                _count_sessions_sync, client, database, tenant_id,
+                since, until, pool_id, accessible_pools,
+            ),
+            asyncio.to_thread(
+                _count_sessions_sync, client, database, tenant_id,
+                prev_since, prev_until, pool_id, accessible_pools,
+            ),
+        )
+        result: dict = {"value": current, "label": "Sessões", "format": "number"}
+        trend = _trend_pct(float(current), float(previous))
+        if trend is not None:
+            result["trend"] = trend
+        return result
+    except Exception as exc:
+        logger.warning("fmt_kpi_sessions failed tenant=%s: %s", tenant_id, exc)
+        return empty
+
+
+# ─── /reports/display/kpi-resolution ─────────────────────────────────────────
+
+async def fmt_kpi_resolution(
+    client:           Any,
+    database:         str,
+    tenant_id:        str,
+    from_dt:          str | None,
+    to_dt:            str | None,
+    pool_id:          str | None,
+    accessible_pools: list[str] | None,
+) -> dict:
+    """Returns MetricCardData — resolution rate % with trend."""
+    since = _fmt_dt(from_dt) if from_dt else _default_from()
+    until = _fmt_dt(to_dt)   if to_dt   else _default_to()
+    prev_since, prev_until = _prev_period(since, until)
+
+    empty: dict = {"value": 0.0, "label": "Resolução", "format": "percent"}
+    if accessible_pools is not None and not accessible_pools:
+        return empty
+
+    try:
+        current_rate, prev_rate = await asyncio.gather(
+            asyncio.to_thread(
+                _resolution_rate_sync, client, database, tenant_id,
+                since, until, pool_id, accessible_pools,
+            ),
+            asyncio.to_thread(
+                _resolution_rate_sync, client, database, tenant_id,
+                prev_since, prev_until, pool_id, accessible_pools,
+            ),
+        )
+        # MetricCardTool 'percent' format multiplies by 100 — return raw ratio (0-1)
+        value      = round(current_rate or 0.0, 4)
+        prev_value = round(prev_rate    or 0.0, 4) if prev_rate is not None else None
+        result: dict = {"value": value, "label": "Resolução", "format": "percent"}
+        trend = _trend_pct(value, prev_value)
+        if trend is not None:
+            result["trend"] = trend
+        return result
+    except Exception as exc:
+        logger.warning("fmt_kpi_resolution failed tenant=%s: %s", tenant_id, exc)
+        return empty
+
+
+# ─── /reports/display/kpi-score ──────────────────────────────────────────────
+
+async def fmt_kpi_score(
+    client:           Any,
+    database:         str,
+    tenant_id:        str,
+    from_dt:          str | None,
+    to_dt:            str | None,
+    pool_id:          str | None,  # no-op — evaluation_results has no pool_id
+    accessible_pools: list[str] | None,
+) -> dict:
+    """Returns MetricCardData — avg evaluation score with trend."""
+    since = _fmt_dt(from_dt) if from_dt else _default_from()
+    until = _fmt_dt(to_dt)   if to_dt   else _default_to()
+    prev_since, prev_until = _prev_period(since, until)
+
+    empty: dict = {"value": 0.0, "label": "Nota Média", "format": "score"}
+    if accessible_pools is not None and not accessible_pools:
+        return empty
+
+    try:
+        current_score, prev_score = await asyncio.gather(
+            asyncio.to_thread(
+                _avg_score_sync, client, database, tenant_id, since, until,
+            ),
+            asyncio.to_thread(
+                _avg_score_sync, client, database, tenant_id, prev_since, prev_until,
+            ),
+        )
+        value = current_score or 0.0
+        result: dict = {"value": value, "label": "Nota Média", "format": "score"}
+        trend = _trend_pct(value, prev_score)
+        if trend is not None:
+            result["trend"] = trend
+        return result
+    except Exception as exc:
+        logger.warning("fmt_kpi_score failed tenant=%s: %s", tenant_id, exc)
+        return empty

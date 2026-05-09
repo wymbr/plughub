@@ -37,6 +37,7 @@ from .clickhouse      import AnalyticsStore
 from .config          import get_settings
 from .consumer        import run_consumer
 from .dashboard       import router as dashboard_router
+from .display         import router as display_router
 from .performance_job import run_performance_job_loop
 from .reports         import router as reports_router
 from .admin           import router as admin_router
@@ -146,6 +147,7 @@ app.add_middleware(
 )
 
 app.include_router(dashboard_router)
+app.include_router(display_router)
 app.include_router(reports_router)
 app.include_router(admin_router)
 app.include_router(sessions_router)

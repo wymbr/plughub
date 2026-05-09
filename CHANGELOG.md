@@ -2,6 +2,113 @@
 
 ---
 
+## Dashboard #35 — Part 4: Analytics-API Display Endpoints (2026-05-09)
+
+10 endpoints `GET /reports/display/*` no `analytics-api`, com formatters centralizados em `display_formatters.py`. Cada endpoint retorna o shape exato do DisplayTool correspondente — os cards new-format passam a mostrar dados reais de ClickHouse/Redis.
+
+**Arquivos criados:**
+
+| Arquivo | Descrição |
+|---|---|
+| `packages/analytics-api/src/plughub_analytics_api/display_formatters.py` | Funções de query + formatação para cada endpoint; `_fmt_dt()` aceita ISO8601 e `YYYY-MM-DD`; `_prev_period()` calcula período anterior para KPI trend; `_buckets_to_chart()` converte timeseries buckets para `BarChartData`/`LineChartData` shape |
+| `packages/analytics-api/src/plughub_analytics_api/display.py` | FastAPI router `prefix="/reports/display"` com 10 rotas; parâmetros `from`/`to` (alias para datas do FilterBar); `pool_id` opcional; auth via `optional_pool_principal` |
+
+**Arquivos modificados:**
+
+| Arquivo | Alteração |
+|---|---|
+| `packages/analytics-api/src/plughub_analytics_api/main.py` | `from .display import router as display_router` + `app.include_router(display_router)` |
+
+**Endpoints implementados:**
+
+| Endpoint | Tool compatível | Shape retornado |
+|---|---|---|
+| `GET /reports/display/session-volume` | bar_chart, line_chart | `BarChartData` (`x_labels` + `series`) |
+| `GET /reports/display/handle-time` | line_chart, bar_chart | `BarChartData` (`x_labels` + `series`) |
+| `GET /reports/display/evaluation-score` | line_chart, bar_chart | `BarChartData` (`x_labels` + `series`) |
+| `GET /reports/display/sessions-by-pool` | bar_chart | `BarChartData` (pool_id como categorias) |
+| `GET /reports/display/outcome-distribution` | donut | `DonutData` (`labels` + `values`) |
+| `GET /reports/display/pool-status` | table | `TableData` (Redis snapshots, live) |
+| `GET /reports/display/agent-performance` | table | `TableData` (ClickHouse segments) |
+| `GET /reports/display/kpi-sessions` | metric_card | `MetricCardData` com trend vs período anterior |
+| `GET /reports/display/kpi-resolution` | metric_card | `MetricCardData` (ratio 0-1, format: percent) |
+| `GET /reports/display/kpi-score` | metric_card | `MetricCardData` com trend vs período anterior |
+
+**Reutilização:** timeseries endpoints delegam para `query_volume_timeseries`, `query_handle_time_timeseries`, `query_score_timeseries` existentes; agent-performance delega para `query_agent_performance_report`; pool-status reutiliza `get_pool_snapshots` do Redis.
+
+---
+
+## Dashboard #35 — Part 3: Runtime Filters (FilterBar + GlobalFilters) (2026-05-09)
+
+Sistema de filtros globais do dashboard: admin configura quais filtros o template expõe; usuário controla valores em runtime via `FilterBar`; cada card `NewDashboardCard` lê os valores via `buildQueryUrl()` na hora do fetch.
+
+**Arquivos criados:**
+
+| Arquivo | Descrição |
+|---|---|
+| `src/dashboard/FilterBar.tsx` | `FilterBar` component: renderiza controles de `date`, `select`, `multi_select`; botão ↺ Limpar quando há filtros ativos; `FILTER_PRESETS` com Período e Pool |
+| `src/dashboard/FilterConfigPanel.tsx` | Painel admin (edit mode, sidebar): adicionar/remover presets de filtros; editor de opções para filtros select |
+
+**Arquivos modificados:**
+
+| Arquivo | Alteração |
+|---|---|
+| `src/modules/dashboards/DashboardsPage.tsx` | `globalFilters` state (carregado do template); `runtimeFilters` state (seed dos defaults); `setRuntimeFilter` / `resetRuntimeFilters`; `updateGlobalFilters` (sets dirty); `handleSave` persiste `global_filters`; `<FilterBar>` entre TopBar e grid; `<FilterConfigPanel>` no sidebar em edit mode; `runtimeFilters` passado para `<CardRenderer>` |
+
+**Fluxo completo:** admin adiciona preset "Período" em edit mode → salva template com `global_filters: [{date_from}, {date_to}]` → usuário vê FilterBar com pickers → ao alterar datas, todos os cards new-format re-buscam via `buildQueryUrl()` com os novos valores. Cards legados (TimeseriesChart) ignoram `runtimeFilters` (mantêm seus próprios controles internos).
+
+---
+
+## Dashboard #35 — Part 2: AddCardModal 3-step + NewDashboardCard (2026-05-09)
+
+Modal de criação de cards substituído por fluxo de 3 passos. Novos cards criados diretamente como `NewDashboardCard` (tool_id + query + tool_config).
+
+**Arquivos criados:**
+
+| Arquivo | Descrição |
+|---|---|
+| `src/dashboard/catalog.ts` | `ENDPOINT_CATALOG` — 10 endpoints `/reports/display/*` com `compatible_tools`, `configurable_params`, defaults de dimensão |
+| `src/dashboard/AddCardModal.tsx` | Modal 3-step: (1) escolher métrica, (2) escolher visualização, (3) configurar título + params fixos; `onAdd(NewDashboardCard)` |
+
+**Arquivos modificados:**
+
+| Arquivo | Alteração |
+|---|---|
+| `src/modules/dashboards/DashboardsPage.tsx` | `CARD_PRESETS` / `DISPLAY_OPTIONS` / antigo `AddCardModal` removidos; `addCard(card: NewDashboardCard)` direto; imports limpos |
+
+**Comportamento do modal:** `tenant_id` sempre fixo com o valor do tenant atual; `from`/`to` sempre runtime (filter_key `date_from`/`date_to`); `pool_id` fixo se preenchido pelo usuário, runtime caso contrário. Navegação Passo 1 → 2 → 3 com Voltar; indicador de progresso com dots.
+
+---
+
+## Dashboard #35 — Part 1: Display Tool Registry (2026-05-09)
+
+Implementada a infraestrutura de Display Tools no `platform-ui` (sem dependência de backend). Cards antigos continuam funcionando sem alteração.
+
+**Arquivos criados:**
+
+| Arquivo | Descrição |
+|---|---|
+| `src/dashboard/tools/types.ts` | Contratos TypeScript: `DisplayTool`, `NewDashboardCard`, `CardQuery`, `QueryParam`, `GlobalFilter`, `buildQueryUrl()` + 5 data shapes |
+| `src/dashboard/tools/MetricCardTool.tsx` | KPI com número grande, label e trend arrow (↑↓) |
+| `src/dashboard/tools/BarChartTool.tsx` | Barras verticais via recharts, stacked opcional |
+| `src/dashboard/tools/LineChartTool.tsx` | Linhas com pontos, eixo X com labels |
+| `src/dashboard/tools/DonutTool.tsx` | Donut chart com legenda lateral e tooltip de % |
+| `src/dashboard/tools/TableTool.tsx` | Tabela MxN com header fixo, scroll interno, ordenação client-side |
+| `src/dashboard/tools/registry.ts` | Mapa `toolId → DisplayTool` + `normalizeCard()` com migration map dos 6 tipos antigos |
+| `src/dashboard/CardRenderer.tsx` | Dispatcher: detecta `tool_id` (new path) vs `type` (legacy path); faz fetch + polling para new-format cards |
+
+**Arquivos modificados:**
+
+| Arquivo | Alteração |
+|---|---|
+| `src/types/index.ts` | `DashboardTemplate.cards` → `(DashboardCard | NewDashboardCard)[]`; `global_filters?`; re-exports de `NewDashboardCard`, `CardQuery`, `QueryParam`, `GlobalFilter` |
+| `src/api/dashboard-hooks.ts` | `savePersonalLayout` e `loadPersonalLayout` aceitam `AnyDashboardCard[]` |
+| `src/modules/dashboards/DashboardsPage.tsx` | `CardContent` removido; substituído por `<CardRenderer>`; `cards` state: `(DashboardCard | NewDashboardCard)[]`; card header title: suporte a ambos os formatos |
+
+**Invariants mantidos:** cards antigos continuam sendo renderizados via `LegacyCardContent` → `TimeseriesChart`. `normalizeCard()` existe mas não é chamado ainda (Part 2). Nenhum endpoint `/reports/display/*` é requerido em Part 1.
+
+---
+
 ## CLAUDE.md Otimização Fase 2 — docs/modules/ completo (2026-05-09)
 
 Criados 5 novos arquivos em `docs/modules/` para seções que não tinham referência completa fora do CLAUDE.md:
