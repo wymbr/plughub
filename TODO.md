@@ -33,6 +33,17 @@ Ver CHANGELOG 2026-05-08 (Tasks #31 e #33).
 
 ---
 
+## Dashboard #35 — Sistema de Cards Genéricos
+
+Spec completa em `docs/modules/dashboard.md`. Implementação em 4 partes sequenciais:
+
+- **Parte 1** — Display Tool Registry (platform-ui only, sem dependência de backend): `src/dashboard/tools/` com 5 tools iniciais + `normalizeCard()` adapter para backward compat
+- **Parte 2** — Novo `DashboardCard` schema (`tool_id + query + tool_config`) + `AddCardModal` 3-passos
+- **Parte 3** — Runtime Filters: `global_filters` no template + `FilterBar` component
+- **Parte 4** — Analytics-API: 10 endpoints `/reports/display/*` com formatação centralizada em `display_formatters.py`
+
+---
+
 ## Usage Metering — Channel Gateway adapters
 
 - **whatsapp_conversations, voice_minutes, sms_segments, email_messages** *(deferred)*: funções em `usage_emitter.py` implementadas, mas os adapters de canal ainda não as chamam. Será wired quando cada adapter for criado (WhatsApp, WebRTC/Voice, SMS, Email).
