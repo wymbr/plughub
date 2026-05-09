@@ -2,6 +2,18 @@
 
 ---
 
+## Pool Registry routing_expression — verificado como já implementado (2026-05-09)
+
+Code review confirmou que `routing_expression` está completamente suportado:
+- `PoolRegistrationSchema` (schemas) — campo `routing_expression: RoutingExpressionSchema.optional()`
+- Prisma schema — `routing_expression Json?`
+- `validators/pool.ts` — `CreatePoolSchema`/`UpdatePoolSchema` herdam via extend/partial
+- `routes/pools.ts` — create e update ambos persistem o campo corretamente
+
+TODO.md: seção "Pool Registry — routing_expression field" removida.
+
+---
+
 ## Task #41 — Remover category do AI Gateway + schemas (2026-05-09)
 
 O AI Gateway é producer puro de dados de sentimento — não deve classificar scores em categorias. As faixas (satisfied/neutral/frustrated/angry) são configuráveis por tenant via Config API; qualquer classificação feita com valores hardcoded seria incorreta após mudança de configuração. A responsabilidade de classificar pertence ao consumer (analytics-api), que tem acesso às faixas corretas.
