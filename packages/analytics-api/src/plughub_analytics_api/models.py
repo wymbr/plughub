@@ -95,12 +95,20 @@ def parse_routed(payload: dict[str, Any]) -> list[dict] | None:
     routed_at  = payload.get("routed_at") or _now()
 
     rows: list[dict] = [
-        # sessions — update with pool_id
+        # sessions — update with pool_id.
+        # NOTE: channel="" here because ConversationRoutedEvent (Zod schema) does not carry
+        # channel — the Routing Engine only knows pool/agent. Writing channel="" will REPLACE
+        # the parse_inbound row's channel="webchat" in ReplacingMergeTree (last-write-wins,
+        # no partial merge). The query layer in reports_query.py compensates by using a
+        # COALESCE subquery to recover the effective channel from any historical row,
+        # and by allowing closed_at IS NULL rows through the channel filter.
+        # Do NOT change channel="" to channel=payload.get("channel","") here without also
+        # updating ConversationRoutedEventSchema to carry the channel field.
         {
             "table":      "sessions",
             "session_id": session_id,
             "tenant_id":  tenant_id,
-            "channel":    "",           # already set by inbound; keep empty for merge
+            "channel":    "",
             "pool_id":    pool_id,
             "opened_at":  routed_at,
             "timestamp":  routed_at,
@@ -143,6 +151,7 @@ def parse_queued(payload: dict[str, Any]) -> list[dict] | None:
     queued_at = payload.get("routed_at") or _now()
 
     rows: list[dict] = [
+        # sessions — update with pool_id (queued). Same channel="" caveat as parse_routed.
         {
             "table":      "sessions",
             "session_id": session_id,
@@ -203,19 +212,32 @@ def parse_conversations_event(payload: dict[str, Any]) -> list[dict] | None:
     if event_type == "contact_closed":
         started_at = payload.get("started_at")
         ended_at   = payload.get("ended_at") or _now()
+        # Compute handle_time_ms from timestamps when available
+        handle_time_ms: int | None = None
+        if started_at and ended_at:
+            try:
+                from datetime import datetime as _dt, timezone as _tz
+                def _parse(s: str) -> _dt:
+                    return _dt.fromisoformat(s.replace("Z", "+00:00")).astimezone(_tz.utc)
+                handle_time_ms = int((_parse(ended_at) - _parse(started_at)).total_seconds() * 1000)
+                if handle_time_ms < 0:
+                    handle_time_ms = None
+            except Exception:
+                handle_time_ms = None
         return [
             {
-                "table":        "sessions",
-                "session_id":   session_id,
-                "tenant_id":    tenant_id,
-                "channel":      payload.get("channel", ""),
-                "pool_id":      "",
-                "customer_id":  payload.get("customer_id") or payload.get("contact_id"),
-                "opened_at":    started_at or ended_at,
-                "closed_at":    ended_at,
-                "close_reason": payload.get("reason") or payload.get("close_reason"),
-                "outcome":      payload.get("outcome"),
-                "timestamp":    ended_at,
+                "table":          "sessions",
+                "session_id":     session_id,
+                "tenant_id":      tenant_id,
+                "channel":        payload.get("channel", ""),
+                "pool_id":        payload.get("pool_id") or "",
+                "customer_id":    payload.get("customer_id") or payload.get("contact_id"),
+                "opened_at":      started_at or ended_at,
+                "closed_at":      ended_at,
+                "close_reason":   payload.get("reason") or payload.get("close_reason"),
+                "outcome":        payload.get("outcome"),
+                "handle_time_ms": handle_time_ms,
+                "timestamp":      ended_at,
             }
         ]
 

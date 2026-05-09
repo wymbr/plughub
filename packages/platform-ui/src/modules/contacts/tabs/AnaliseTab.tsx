@@ -2,11 +2,20 @@
  * AnaliseTab — métricas agregadas do conjunto filtrado de contatos.
  *
  * Seções:
- *   1. KPIs (total, taxa de resolução, tempo médio, SLA breach)
- *   2. Distribuição por outcome — barras horizontais coloridas
- *   3. Distribuição por canal — barras horizontais
+ *   1. KPIs (total de contatos, taxa de resolução, tempo médio, canais ativos)
+ *   2. Distribuição por outcome — de ATENDIMENTOS (segments), não de contatos
+ *   3. Distribuição por canal — de CONTATOS (sessions)
  *   4. Timeseries de volume — TimeseriesChart compact
  *   5. Timeseries de handle time — TimeseriesChart compact
+ *
+ * Duas chamadas paralelas:
+ *   /reports/sessions  → total de contatos, distribuição por canal, handle_time
+ *   /reports/segments  → distribuição de outcome por atendimento (outcome real)
+ *
+ * Rationale: "contato" ≠ "atendimento". O outcome pertence ao atendimento
+ * (segment), não ao contato (session). Sessions.outcome é sempre NULL porque
+ * nenhum evento escreve lá — o outcome é registrado em cada segment via
+ * participant_left.
  */
 import React, { useCallback, useEffect, useState } from 'react'
 import type { ContactFilters, ContactRow, ContactsApiResponse } from '../types'
@@ -20,41 +29,81 @@ interface Props {
   filters:  ContactFilters
 }
 
-// ── Aggregated metrics ─────────────────────────────────────────────────────
+// ── Segment row (subset of fields we need) ────────────────────────────────────
 
-interface AggMetrics {
-  total:          number
-  resolved:       number
-  avgHandleMs:    number | null
-  outcomeMap:     Record<string, number>
-  channelMap:     Record<string, number>
+interface SegRow {
+  segment_id:  string
+  session_id:  string
+  pool_id:     string
+  role:        string
+  agent_type:  string
+  outcome:     string | null
+  duration_ms: number | null
 }
 
-function aggregate(rows: ContactRow[]): AggMetrics {
-  const outcomeMap: Record<string, number> = {}
+interface SegApiResponse {
+  data: SegRow[]
+  meta?: { total?: number }
+  error?: string
+}
+
+// ── Aggregated metrics — sessions (contacts) ──────────────────────────────────
+
+interface SessionMetrics {
+  total:       number
+  avgHandleMs: number | null
+  channelMap:  Record<string, number>
+}
+
+function aggregateSessions(rows: ContactRow[]): SessionMetrics {
   const channelMap: Record<string, number> = {}
   let totalHandleMs = 0
   let handledCount  = 0
-  let resolved      = 0
+  // Exclude hook/internal sessions (wrapup, NPS, etc.) — they have channel='' or null.
+  // Hook sessions are synthetic conferences created by orchestrator-bridge; they are not
+  // real customer contacts and must not inflate the total or skew channel distribution.
+  // Active real sessions also pass through with their recovered channel (COALESCE in backend).
+  const realRows = rows.filter(r => r.channel && r.channel !== '')
 
-  for (const row of rows) {
-    const out = row.outcome ?? 'unknown'
-    outcomeMap[out] = (outcomeMap[out] ?? 0) + 1
+  for (const row of realRows) {
     channelMap[row.channel] = (channelMap[row.channel] ?? 0) + 1
     if (row.handle_time_ms) { totalHandleMs += row.handle_time_ms; handledCount++ }
-    if (row.outcome === 'resolved') resolved++
   }
 
   return {
-    total:       rows.length,
-    resolved,
+    total:       realRows.length,
     avgHandleMs: handledCount > 0 ? totalHandleMs / handledCount : null,
-    outcomeMap,
     channelMap,
   }
 }
 
-// ── Horizontal bar chart ───────────────────────────────────────────────────
+// ── Aggregated metrics — segments (attendances / atendimentos) ────────────────
+
+interface SegmentMetrics {
+  outcomeMap:        Record<string, number>
+  resolved:          number
+  totalWithOutcome:  number   // segments where outcome is known (not null/empty/active)
+}
+
+const ACTIVE_OUTCOMES = new Set(['active', ''])
+
+function aggregateSegments(segs: SegRow[]): SegmentMetrics {
+  const outcomeMap: Record<string, number> = {}
+  let resolved = 0
+  let totalWithOutcome = 0
+
+  for (const seg of segs) {
+    const out = seg.outcome
+    if (!out || ACTIVE_OUTCOMES.has(out)) continue   // skip active/empty
+    outcomeMap[out] = (outcomeMap[out] ?? 0) + 1
+    totalWithOutcome++
+    if (out === 'resolved') resolved++
+  }
+
+  return { outcomeMap, resolved, totalWithOutcome }
+}
+
+// ── Horizontal bar chart ───────────────────────────────────────────────────────
 
 function HBar({ label, value, total, color, icon }: {
   label: string; value: number; total: number; color: string; icon?: string
@@ -75,7 +124,7 @@ function HBar({ label, value, total, color, icon }: {
   )
 }
 
-// ── KPI card ───────────────────────────────────────────────────────────────
+// ── KPI card ──────────────────────────────────────────────────────────────────
 
 function KpiCard({ label, value, sub, color }: {
   label: string; value: string; sub?: string; color?: string
@@ -91,12 +140,14 @@ function KpiCard({ label, value, sub, color }: {
   )
 }
 
-// ── Outcome colors (extended for unknown/active) ───────────────────────────
+// ── Outcome colors (extended for unknown/active) ──────────────────────────────
 
 const OUTCOME_COLOR_EXT: Record<string, string> = {
   ...OUTCOME_COLORS,
-  unknown: '#9ca3af',
-  active:  '#2563eb',
+  unknown:     '#9ca3af',
+  active:      '#2563eb',
+  escalated_human: '#d97706',
+  humano:      '#1B4F8A',
 }
 
 function outcomeColor(key: string): string {
@@ -112,73 +163,120 @@ const CHANNEL_COLORS: Record<string, string> = {
   instagram: '#e1306c',
   telegram:  '#229ED9',
   webrtc:    '#475569',
+  internal:  '#9ca3af',
 }
 
 function channelColor(ch: string): string {
   return CHANNEL_COLORS[ch] ?? '#6b7280'
 }
 
-// ── AnaliseTab ─────────────────────────────────────────────────────────────
+// ── AnaliseTab ────────────────────────────────────────────────────────────────
 
 export function AnaliseTab({ tenantId, filters }: Props) {
-  const [rows,    setRows]    = useState<ContactRow[]>([])
-  const [loading, setLoading] = useState(false)
-  const [error,   setError]   = useState('')
-  const [degraded, setDegraded] = useState(false)
+  const [rows,        setRows]        = useState<ContactRow[]>([])
+  const [segRows,     setSegRows]     = useState<SegRow[]>([])
+  const [loading,     setLoading]     = useState(false)
+  const [error,       setError]       = useState('')
+  const [segError,    setSegError]    = useState('')
+  const [degraded,    setDegraded]    = useState(false)
 
-  const fetchRows = useCallback(async () => {
-    setLoading(true); setError(''); setDegraded(false)
-    try {
-      const params = new URLSearchParams({
-        tenant_id: tenantId,
-        page:      '1',
-        page_size: String(FETCH_LIMIT),
-      })
-      const { fromDt, toDt, sessionIdSearch, channel, outcome, poolId,
-              agentId, ani, dnis, insightCategory, insightTags } = filters
-      if (fromDt)          params.set('from_dt',          fromDt + 'T00:00:00')
-      if (toDt)            params.set('to_dt',            toDt   + 'T23:59:59')
-      if (sessionIdSearch) params.set('session_id',       sessionIdSearch)
-      if (channel)         params.set('channel',          channel)
-      if (outcome)         params.set('outcome',          outcome)
-      if (poolId)          params.set('pool_id',          poolId)
-      if (agentId)         params.set('agent_id',         agentId)
-      if (ani)             params.set('ani',              ani)
-      if (dnis)            params.set('dnis',             dnis)
-      if (insightCategory) params.set('insight_category', insightCategory)
-      if (insightTags)     params.set('insight_tags',     insightTags)
+  const fetchAll = useCallback(async () => {
+    setLoading(true); setError(''); setSegError(''); setDegraded(false)
 
-      const res = await fetch(`/reports/sessions?${params}`)
-      // Try to parse body even on error — analytics-api always returns JSON
-      const data: ContactsApiResponse = await res.json().catch(() => ({ data: [] }))
-      if (!res.ok || (data as any).error) {
+    // ── Build session params ─────────────────────────────────────────────────
+    const sParams = new URLSearchParams({
+      tenant_id: tenantId,
+      page:      '1',
+      page_size: String(FETCH_LIMIT),
+    })
+    const { fromDt, toDt, sessionIdSearch, channel, outcome, poolId,
+            agentId, ani, dnis, insightCategory, insightTags } = filters
+    if (fromDt)          sParams.set('from_dt',          fromDt + 'T00:00:00')
+    if (toDt)            sParams.set('to_dt',            toDt   + 'T23:59:59')
+    if (sessionIdSearch) sParams.set('session_id',       sessionIdSearch)
+    if (channel)         sParams.set('channel',          channel)
+    if (outcome)         sParams.set('outcome',          outcome)
+    if (poolId)          sParams.set('pool_id',          poolId)
+    if (agentId)         sParams.set('agent_id',         agentId)
+    if (ani)             sParams.set('ani',              ani)
+    if (dnis)            sParams.set('dnis',             dnis)
+    if (insightCategory) sParams.set('insight_category', insightCategory)
+    if (insightTags)     sParams.set('insight_tags',     insightTags)
+
+    // ── Build segment params (date + pool only — outcome is what we measure) ─
+    const gParams = new URLSearchParams({
+      tenant_id: tenantId,
+      page:      '1',
+      page_size: String(FETCH_LIMIT),
+    })
+    if (fromDt) gParams.set('from_dt', fromDt + 'T00:00:00')
+    if (toDt)   gParams.set('to_dt',   toDt   + 'T23:59:59')
+    if (poolId) gParams.set('pool_id', poolId)
+
+    // ── Parallel fetch ───────────────────────────────────────────────────────
+    const [sessRes, segRes] = await Promise.allSettled([
+      fetch(`/reports/sessions?${sParams}`),
+      fetch(`/reports/segments?${gParams}`),
+    ])
+
+    // Sessions
+    if (sessRes.status === 'fulfilled') {
+      const res = sessRes.value
+      try {
+        const data: ContactsApiResponse = await res.json()
+        if (!res.ok || (data as any).error) {
+          setDegraded(true)
+          setError(`HTTP ${res.status}`)
+          setRows(prev => prev.length > 0 ? prev : [])
+        } else {
+          const items = Array.isArray(data) ? (data as unknown as ContactRow[]) : (data.data ?? [])
+          setRows(items)
+        }
+      } catch {
         setDegraded(true)
-        setError(`HTTP ${res.status}`)
-        // Keep existing rows if we had data before; otherwise use empty
+        setError('parse error')
         setRows(prev => prev.length > 0 ? prev : [])
-        return
       }
-      const items = Array.isArray(data) ? (data as unknown as ContactRow[]) : (data.data ?? [])
-      setRows(items)
-    } catch (e) {
+    } else {
       setDegraded(true)
-      setError(String(e))
-    } finally {
-      setLoading(false)
+      setError(String(sessRes.reason))
+      setRows(prev => prev.length > 0 ? prev : [])
     }
+
+    // Segments
+    if (segRes.status === 'fulfilled') {
+      const res = segRes.value
+      try {
+        const data: SegApiResponse = await res.json()
+        if (!res.ok || data.error) {
+          setSegError(`HTTP ${res.status}`)
+          setSegRows(prev => prev.length > 0 ? prev : [])
+        } else {
+          setSegRows(Array.isArray(data) ? (data as unknown as SegRow[]) : (data.data ?? []))
+        }
+      } catch {
+        setSegError('parse error')
+        setSegRows(prev => prev.length > 0 ? prev : [])
+      }
+    } else {
+      setSegError(String(segRes.reason))
+      setSegRows(prev => prev.length > 0 ? prev : [])
+    }
+
+    setLoading(false)
   }, [tenantId, filters])
 
-  useEffect(() => { fetchRows() }, [fetchRows])
+  useEffect(() => { fetchAll() }, [fetchAll])
 
-  const metrics = aggregate(rows)
-  const resRate = metrics.total > 0 ? Math.round((metrics.resolved / metrics.total) * 100) : 0
+  const sMet = aggregateSessions(rows)
+  const gMet = aggregateSegments(segRows)
 
-  // Sort outcome entries: by count desc
-  const outcomeEntries = Object.entries(metrics.outcomeMap)
-    .sort((a, b) => b[1] - a[1])
+  const resRate = gMet.totalWithOutcome > 0
+    ? Math.round((gMet.resolved / gMet.totalWithOutcome) * 100)
+    : 0
 
-  const channelEntries = Object.entries(metrics.channelMap)
-    .sort((a, b) => b[1] - a[1])
+  const outcomeEntries = Object.entries(gMet.outcomeMap).sort((a, b) => b[1] - a[1])
+  const channelEntries = Object.entries(sMet.channelMap).sort((a, b) => b[1] - a[1])
 
   // TimeseriesChart params derived from filters
   const tsFromDt = filters.fromDt || undefined
@@ -191,10 +289,19 @@ export function AnaliseTab({ tenantId, filters }: Props) {
       <div className="flex items-center gap-2 px-4 py-2 bg-white border-b border-gray-100 flex-shrink-0 text-xs text-gray-400">
         {loading
           ? <><span className="animate-spin">⟳</span> Calculando métricas…</>
-          : <><strong className="text-gray-700">{metrics.total.toLocaleString('pt-BR')}</strong>
-              &nbsp;contato{metrics.total !== 1 ? 's' : ''} analisados
-              {metrics.total >= FETCH_LIMIT && (
+          : <><strong className="text-gray-700">{sMet.total.toLocaleString('pt-BR')}</strong>
+              &nbsp;contato{sMet.total !== 1 ? 's' : ''} analisados
+              {sMet.total >= FETCH_LIMIT && (
                 <span className="ml-1 text-amber-500">(mostrando primeiros {FETCH_LIMIT})</span>
+              )}
+              {segRows.length > 0 && (
+                <span className="ml-2 text-gray-300">·</span>
+              )}
+              {segRows.length > 0 && (
+                <span className="ml-1">
+                  <strong className="text-gray-700">{segRows.length.toLocaleString('pt-BR')}</strong>
+                  &nbsp;atendimento{segRows.length !== 1 ? 's' : ''}
+                </span>
               )}
             </>
         }
@@ -209,37 +316,48 @@ export function AnaliseTab({ tenantId, filters }: Props) {
             Os gráficos de série histórica ainda são exibidos.
           </span>
           <button
-            onClick={fetchRows}
+            onClick={fetchAll}
             className="ml-auto px-2 py-1 rounded border border-amber-400 hover:bg-amber-100 transition-colors font-medium"
           >
             ⟳ Tentar novamente
           </button>
         </div>
       )}
+      {segError && !loading && (
+        <div className="flex items-center gap-3 px-4 py-2 bg-amber-50 border-b border-amber-200 flex-shrink-0 text-xs text-amber-800">
+          <span>⚠️</span>
+          <span>Dados de atendimentos temporariamente indisponíveis ({segError}). Outcome não disponível.</span>
+        </div>
+      )}
 
       <div className="flex-1 overflow-auto p-5 space-y-6">
 
-        {/* ── KPIs ─────────────────────────────────────────────────────── */}
+        {/* ── KPIs ────────────────────────────────────────────────────────── */}
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-          <KpiCard label="Total de contatos"   value={metrics.total.toLocaleString('pt-BR')} />
+          <KpiCard label="Total de contatos"   value={sMet.total.toLocaleString('pt-BR')} />
           <KpiCard label="Taxa de resolução"
-            value={`${resRate}%`}
-            sub={`${metrics.resolved} resolvidos`}
-            color={resRate >= 70 ? '#059669' : resRate >= 40 ? '#d97706' : '#dc2626'} />
+            value={gMet.totalWithOutcome > 0 ? `${resRate}%` : '—'}
+            sub={gMet.totalWithOutcome > 0
+              ? `${gMet.resolved} de ${gMet.totalWithOutcome} atend.`
+              : segError ? 'indisponível' : 'sem atendimentos'}
+            color={gMet.totalWithOutcome > 0
+              ? (resRate >= 70 ? '#059669' : resRate >= 40 ? '#d97706' : '#dc2626')
+              : undefined} />
           <KpiCard label="Tempo médio (HT)"
-            value={formatMs(metrics.avgHandleMs)}
+            value={formatMs(sMet.avgHandleMs)}
             color="#1B4F8A" />
           <KpiCard label="Canais ativos"
             value={String(channelEntries.length)}
             sub={channelEntries.map(([ch]) => CHANNEL_ICONS[ch] ?? ch).join(' ')} />
         </div>
 
-        {/* ── Distribution row ─────────────────────────────────────────── */}
+        {/* ── Distribution row ─────────────────────────────────────────────── */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
 
-          {/* Outcome distribution */}
+          {/* Outcome distribution — from SEGMENTS (atendimentos) */}
           <div className="bg-white rounded-xl border border-gray-200 p-5">
-            <h3 className="text-sm font-semibold text-gray-700 mb-4">Distribuição por Outcome</h3>
+            <h3 className="text-sm font-semibold text-gray-700 mb-1">Distribuição por Outcome</h3>
+            <p className="text-xs text-gray-400 mb-4">por atendimento (segment)</p>
             {loading ? (
               <div className="space-y-2">
                 {[1,2,3].map(i => (
@@ -247,23 +365,26 @@ export function AnaliseTab({ tenantId, filters }: Props) {
                 ))}
               </div>
             ) : outcomeEntries.length === 0 ? (
-              <div className="text-center text-gray-400 text-sm py-6">Sem dados</div>
+              <div className="text-center text-gray-400 text-sm py-6">
+                {segError ? 'Dados indisponíveis' : 'Sem atendimentos concluídos'}
+              </div>
             ) : (
               <div className="space-y-2.5">
                 {outcomeEntries.map(([key, count]) => (
                   <HBar key={key}
                     label={key}
                     value={count}
-                    total={metrics.total}
+                    total={gMet.totalWithOutcome}
                     color={outcomeColor(key)} />
                 ))}
               </div>
             )}
           </div>
 
-          {/* Channel distribution */}
+          {/* Channel distribution — from SESSIONS (contatos) */}
           <div className="bg-white rounded-xl border border-gray-200 p-5">
-            <h3 className="text-sm font-semibold text-gray-700 mb-4">Distribuição por Canal</h3>
+            <h3 className="text-sm font-semibold text-gray-700 mb-1">Distribuição por Canal</h3>
+            <p className="text-xs text-gray-400 mb-4">por contato (session)</p>
             {loading ? (
               <div className="space-y-2">
                 {[1,2,3].map(i => (
@@ -278,7 +399,7 @@ export function AnaliseTab({ tenantId, filters }: Props) {
                   <HBar key={ch}
                     label={ch}
                     value={count}
-                    total={metrics.total}
+                    total={sMet.total}
                     color={channelColor(ch)}
                     icon={CHANNEL_ICONS[ch]} />
                 ))}
@@ -287,7 +408,7 @@ export function AnaliseTab({ tenantId, filters }: Props) {
           </div>
         </div>
 
-        {/* ── Timeseries charts ─────────────────────────────────────────── */}
+        {/* ── Timeseries charts ─────────────────────────────────────────────── */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
 
           <div className="bg-white rounded-xl border border-gray-200 p-5">
@@ -325,8 +446,8 @@ export function AnaliseTab({ tenantId, filters }: Props) {
           </div>
         </div>
 
-        {/* ── Pool breakdown table (if no pool filter) ──────────────────── */}
-        {!filters.poolId && metrics.total > 0 && (() => {
+        {/* ── Pool breakdown table (if no pool filter) ────────────────────── */}
+        {!filters.poolId && sMet.total > 0 && (() => {
           const poolMap: Record<string, number> = {}
           for (const row of rows) {
             if (row.pool_id) poolMap[row.pool_id] = (poolMap[row.pool_id] ?? 0) + 1
@@ -341,7 +462,7 @@ export function AnaliseTab({ tenantId, filters }: Props) {
                   <HBar key={pid}
                     label={pid.replace(/_/g, ' ')}
                     value={count}
-                    total={metrics.total}
+                    total={sMet.total}
                     color="#1B4F8A" />
                 ))}
               </div>

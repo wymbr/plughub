@@ -36,11 +36,19 @@ def _default_to() -> str:
 
 
 def _ch_fmt(iso: str | None) -> str:
-    """Converts an ISO8601 string to a ClickHouse-compatible datetime string (UTC, no tz)."""
+    """Converts an ISO8601 string (or relative '-Nd' offset) to ClickHouse UTC datetime."""
     if not iso:
         return _default_to()
+    stripped = iso.strip()
+    # Relative offset: -Nd (e.g. '-7d' = 7 days ago)
+    if stripped.startswith("-") and stripped.endswith("d"):
+        try:
+            days = int(stripped[1:-1])
+            return (datetime.utcnow() - timedelta(days=days)).strftime("%Y-%m-%d %H:%M:%S")
+        except ValueError:
+            return _default_from()
     try:
-        dt = datetime.fromisoformat(iso.replace("Z", "+00:00"))
+        dt = datetime.fromisoformat(stripped.replace("Z", "+00:00"))
         return dt.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
     except Exception:
         return _default_to()
@@ -178,6 +186,16 @@ def _fetch_sessions(
         "s.tenant_id = {tenant_id:String}",
         f"s.opened_at >= '{since}'",
         f"s.opened_at < '{until}'",
+        # Exclude completed hook-agent sessions (wrapup_ia, nps_ia, etc.) that have no
+        # physical channel — these are synthetic conferences created by orchestrator-bridge.
+        # We CANNOT use `s.channel != ''` alone because parse_routed writes channel=''
+        # which overwrites the parse_inbound row in ReplacingMergeTree, causing active
+        # sessions to vanish right after routing. Instead:
+        #   - Active sessions (closed_at IS NULL) are always shown — routing may have
+        #     zeroed the channel column but the session is genuinely in progress.
+        #   - Closed sessions must have channel != '' — hook sessions close with channel=''
+        #     (their synthetic inbound event carries no channel) so they are excluded here.
+        "(s.channel != '' OR s.closed_at IS NULL)",
     ]
     params: dict = {"tenant_id": tenant_id}
 
@@ -185,7 +203,16 @@ def _fetch_sessions(
         conditions.append("s.session_id = {session_id:String}")
         params["session_id"] = session_id
     if channel:
-        conditions.append("s.channel = {channel:String}")
+        # For active sessions parse_routed may have set channel='' — include them by also
+        # checking non-FINAL rows. For closed sessions s.channel is authoritative.
+        conditions.append(
+            f"(s.channel = {{channel:String}} OR"
+            f" (s.closed_at IS NULL AND EXISTS ("
+            f"  SELECT 1 FROM {db}.sessions"
+            f"  WHERE tenant_id = s.tenant_id AND session_id = s.session_id"
+            f"  AND channel = {{channel:String}}"
+            f" )))"
+        )
         params["channel"] = channel
     if outcome:
         conditions.append("s.outcome = {outcome:String}")
@@ -202,10 +229,13 @@ def _fetch_sessions(
         )
         params["pool_id"] = pool_id
 
-    # Pool-scope access filter (Arc 7c) — inline pool_id list (safe, values from JWT)
+    # Pool-scope access filter (Arc 7c) — inline pool_id list (safe, values from JWT).
+    # Active sessions that have not yet been routed carry pool_id='' (parse_inbound sets it
+    # empty; parse_routed fills it in later). We must include pool_id='' so supervisors
+    # see contacts from the moment they arrive, before routing assigns a pool.
     if accessible_pools:
         pool_list = ", ".join(f"'{p}'" for p in accessible_pools)
-        conditions.append(f"s.pool_id IN ({pool_list})")
+        conditions.append(f"(s.pool_id IN ({pool_list}) OR s.pool_id = '')")
     # accessible_pools=None → no restriction; accessible_pools=[] → short-circuit in async wrapper
 
     # agent_id filter — requires subquery against segments table
@@ -251,15 +281,85 @@ def _fetch_sessions(
         params,
     )
 
-    # Use correlated subquery for segment_count — avoids dependency on v_segment_summary MV
-    # Falls back to 0 when segments table doesn't exist yet (try/except handled in caller).
+    # Use correlated subqueries against segments table to recover pool_id, outcome,
+    # and handle_time_ms which may be missing/empty in the sessions row when the
+    # contact_closed event didn't carry them (ReplacingMergeTree last-write-wins issue).
+    # Falls back to 0/null when segments table doesn't exist yet.
     try:
         result = client.query(f"""
             SELECT
-                s.session_id, s.tenant_id, s.channel, s.pool_id, s.customer_id,
-                s.opened_at, s.closed_at, s.close_reason, s.outcome,
-                s.wait_time_ms, s.handle_time_ms,
-                s.ani, s.dnis,
+                s.session_id,
+                s.tenant_id,
+                -- channel: parse_routed writes channel='' which overwrites parse_inbound's real
+                -- channel in ReplacingMergeTree. Recover it from any non-empty historical row.
+                COALESCE(
+                    NULLIF(s.channel, ''),
+                    (
+                        SELECT channel
+                        FROM {db}.sessions
+                        WHERE tenant_id = s.tenant_id
+                          AND session_id = s.session_id
+                          AND channel != ''
+                        LIMIT 1
+                    )
+                ) AS channel,
+                -- pool_id: prefer sessions row when non-empty; else take from primary segment
+                COALESCE(
+                    NULLIF(s.pool_id, ''),
+                    (
+                        SELECT pool_id
+                        FROM {db}.segments FINAL
+                        WHERE tenant_id = s.tenant_id
+                          AND session_id = s.session_id
+                          AND (parent_segment_id IS NULL OR parent_segment_id = '')
+                          AND pool_id != ''
+                        ORDER BY started_at ASC
+                        LIMIT 1
+                    )
+                ) AS pool_id,
+                s.customer_id,
+                s.opened_at,
+                s.closed_at,
+                s.close_reason,
+                -- outcome: prefer sessions row when set;
+                -- else take from most recent primary segment (participant_left event carries it);
+                -- else fall back to agent_events (agent_done event always has it).
+                -- contact_closed events do NOT carry outcome, so sessions.outcome is always NULL
+                -- without one of these two fallbacks.
+                COALESCE(
+                    NULLIF(s.outcome, ''),
+                    (
+                        SELECT outcome
+                        FROM {db}.segments FINAL
+                        WHERE tenant_id = s.tenant_id
+                          AND session_id = s.session_id
+                          AND outcome IS NOT NULL AND outcome != ''
+                        ORDER BY ended_at DESC
+                        LIMIT 1
+                    ),
+                    (
+                        SELECT outcome
+                        FROM {db}.agent_events FINAL
+                        WHERE tenant_id = s.tenant_id
+                          AND session_id = s.session_id
+                          AND event_type = 'agent_done'
+                          AND outcome IS NOT NULL AND outcome != ''
+                        ORDER BY timestamp DESC
+                        LIMIT 1
+                    )
+                ) AS outcome,
+                s.wait_time_ms,
+                -- handle_time_ms: prefer stored value; else compute from timestamps
+                COALESCE(
+                    s.handle_time_ms,
+                    if(
+                        s.closed_at IS NOT NULL AND s.opened_at IS NOT NULL,
+                        toInt64(dateDiff('millisecond', s.opened_at, s.closed_at)),
+                        NULL
+                    )
+                ) AS handle_time_ms,
+                s.ani,
+                s.dnis,
                 (
                     SELECT count()
                     FROM {db}.segments FINAL
@@ -1526,7 +1626,8 @@ def _fetch_session_complexity(
 # ─── Arc 8: agent pause availability ──────────────────────────────────────────
 
 async def query_agent_availability(
-    store:            Any,
+    client:           Any,
+    database:         str,
     tenant_id:        str,
     from_dt:          str | None = None,
     to_dt:            str | None = None,
@@ -1553,7 +1654,7 @@ async def query_agent_availability(
             return {"data": [], "meta": _meta(page, page_size, 0, since, until)}
         return await asyncio.to_thread(
             _fetch_agent_availability,
-            store.client, store.database, tenant_id,
+            client, database, tenant_id,
             since, until, pool_id, agent_type_id, accessible_pools,
             page, page_size,
         )
