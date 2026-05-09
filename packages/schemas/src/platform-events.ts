@@ -81,8 +81,9 @@ export type ConfigChangedEvent = z.infer<typeof ConfigChangedEventSchema>
  * and to update `{tenant_id}:pool:{pool_id}:sentiment_live` Redis hash.
  *
  * `score` is rounded to 4 decimal places.
- * `category` is computed at publish time from configurable tenant ranges
- * (default: satisfied ≥ 0.3, neutral ≥ -0.3, frustrated ≥ -0.6, angry < -0.6).
+ * Category classification (satisfied/neutral/frustrated/angry) is intentionally
+ * NOT included — bands are tenant-configurable and must be applied by the
+ * consumer (analytics-api) using current thresholds from Config API.
  */
 export const SentimentUpdatedEventSchema = z.object({
   event_id:   z.string().uuid(),
@@ -90,7 +91,6 @@ export const SentimentUpdatedEventSchema = z.object({
   session_id: z.string(),
   pool_id:    z.string(),
   score:      z.number().min(-1).max(1),
-  category:   z.enum(["satisfied", "neutral", "frustrated", "angry"]),
   timestamp:  z.string().datetime(),
 })
 export type SentimentUpdatedEvent = z.infer<typeof SentimentUpdatedEventSchema>

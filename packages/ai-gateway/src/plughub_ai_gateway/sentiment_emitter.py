@@ -12,15 +12,14 @@ Tópico Kafka: sentiment.updated
   em real-time no dashboard operacional.
 
 Redis key: {tenant_id}:pool:{pool_id}:sentiment_live
-  Hash com avg_score + distribuição por categoria.
+  Hash com avg_score + score_total + count (valores numéricos puros).
   TTL: 300s (renovado a cada atualização).
   Lido por: analytics-api → GET /dashboard/sentiment.
 
-Categorias de sentimento (ranges configuráveis por tenant — padrão):
-  [ 0.3,  1.0] → satisfied
-  [-0.3,  0.3] → neutral
-  [-0.6, -0.3] → frustrated
-  [-1.0, -0.6] → angry
+Nota de arquitetura: category classification (satisfied/neutral/frustrated/angry)
+  é RESPONSABILIDADE DO CONSUMER (analytics-api), não do AI Gateway.
+  As faixas são configuráveis por tenant via Config API — o AI Gateway apenas
+  produz o score numérico bruto e não deve interpretar seu significado.
 """
 from __future__ import annotations
 
@@ -30,24 +29,10 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any
 
-from .sentiment_config import sentiment_config
-
 logger = logging.getLogger("plughub.ai_gateway.sentiment")
 
 _TOPIC = "sentiment.updated"
-_SENTIMENT_LIVE_TTL = 300  # seconds — overridden at runtime by Config API session.sentiment_live_ttl_s
-
-
-# ── Category classification ───────────────────────────────────────────────────
-
-def _classify(score: float) -> str:
-    """
-    Maps a sentiment score to the canonical category label.
-    Delegates to sentiment_config.classify() which uses dynamic thresholds
-    loaded from Config API (sentiment.thresholds). Falls back to hardcoded
-    defaults when Config API is unreachable.
-    """
-    return sentiment_config.classify(score)
+_SENTIMENT_LIVE_TTL = 300  # seconds
 
 
 # ── Kafka emission ────────────────────────────────────────────────────────────
@@ -63,8 +48,8 @@ async def emit_sentiment_updated(
     Publica sentiment.updated no Kafka.
     Fire-and-forget: nunca levanta exceção.
 
-    Payload:
-      event_id, tenant_id, session_id, pool_id, score, category, timestamp
+    Payload: event_id, tenant_id, session_id, pool_id, score, timestamp.
+    Sem category — classificação é responsabilidade do analytics-api consumer.
     """
     if producer is None:
         return
@@ -75,7 +60,6 @@ async def emit_sentiment_updated(
             "session_id": session_id,
             "pool_id":    pool_id,
             "score":      round(score, 4),
-            "category":   _classify(score),
             "timestamp":  datetime.now(timezone.utc).isoformat(),
         }
         value = json.dumps(event).encode("utf-8")
@@ -100,11 +84,12 @@ async def update_sentiment_live(
     Mantém o hash {tenant_id}:pool:{pool_id}:sentiment_live no Redis.
     Atualiza:
       - avg_score: média móvel simples (running total / count)
+      - score_total: soma acumulada dos scores
       - count: total de atualizações
-      - satisfied / neutral / frustrated / angry: contagem por categoria
       - last_session_id: última sessão que gerou atualização
       - updated_at: timestamp ISO8601
 
+    Sem contagens por categoria — classificação é responsabilidade do consumer.
     TTL renovado para 300s a cada atualização.
     Fire-and-forget: nunca levanta exceção.
     """
@@ -112,24 +97,15 @@ async def update_sentiment_live(
         return
     key = f"{tenant_id}:pool:{pool_id}:sentiment_live"
     try:
-        # Lê estado atual para calcular nova média
-        raw = await redis.hgetall(key)
-        count     = int(raw.get("count", 0))
-        total     = float(raw.get("score_total", 0.0))
-
-        count  += 1
-        total  += score
-        avg    = round(total / count, 4)
-        cat    = _classify(score)
-
-        # Incrementa categoria
-        cat_count = int(raw.get(cat, 0)) + 1
+        raw   = await redis.hgetall(key)
+        count = int(raw.get("count", 0)) + 1
+        total = round(float(raw.get("score_total", 0.0)) + score, 4)
+        avg   = round(total / count, 4)
 
         mapping = {
             "avg_score":       str(avg),
-            "score_total":     str(round(total, 4)),
+            "score_total":     str(total),
             "count":           str(count),
-            cat:               str(cat_count),
             "last_session_id": session_id,
             "updated_at":      datetime.now(timezone.utc).isoformat(),
         }

@@ -28,7 +28,6 @@ from .account_selector  import AccountSelector, LLMAccount
 from .cache             import SemanticCache
 from .config            import get_settings
 from .inference         import InferenceEngine
-from .sentiment_config  import sentiment_config
 from .models     import (
     TurnRequest, TurnResponse,
     ReasonRequest, ReasonResponse,
@@ -120,14 +119,6 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # None when no accounts are configured (unit test / local dev without keys).
     account_selector = AccountSelector(redis, accounts) if accounts else None
 
-    # Load dynamic sentiment thresholds from Config API (sentiment.thresholds).
-    # Falls back silently to hardcoded defaults if Config API is unreachable.
-    await sentiment_config.reload(settings.config_api_url)
-    # Refresh thresholds every 60s in the background — picks up SentimentBandsEditor changes.
-    _sentiment_refresh_task = asyncio.create_task(
-        sentiment_config.refresh_loop(settings.config_api_url, interval_s=60.0)
-    )
-
     # Shared session manager — used by both /inference and /v1/turn
     session_mgr = SessionManager(redis, kafka_producer=kafka_producer)
 
@@ -163,12 +154,6 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     app.state.session_mgr = session_mgr
 
     yield
-
-    _sentiment_refresh_task.cancel()
-    try:
-        await _sentiment_refresh_task
-    except asyncio.CancelledError:
-        pass
 
     if kafka_producer is not None:
         await kafka_producer.stop()

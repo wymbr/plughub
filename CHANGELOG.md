@@ -2,19 +2,22 @@
 
 ---
 
-## Task #41 — Sentiment classification dinâmica via Config API (2026-05-09)
+## Task #41 — Remover category do AI Gateway + schemas (2026-05-09)
 
-`sentiment_emitter._classify()` era hardcoded com if/elif. Agora delega para `SentimentConfig` que carrega as faixas do Config API (namespace `sentiment`, key `thresholds`) no startup e as refresca a cada 60s em background. Fallback silencioso para defaults quando Config API inacessível.
+O AI Gateway é producer puro de dados de sentimento — não deve classificar scores em categorias. As faixas (satisfied/neutral/frustrated/angry) são configuráveis por tenant via Config API; qualquer classificação feita com valores hardcoded seria incorreta após mudança de configuração. A responsabilidade de classificar pertence ao consumer (analytics-api), que tem acesso às faixas corretas.
 
-**Arquivos modificados — `packages/ai-gateway/`:**
-- `sentiment_config.py` (novo) — classe `SentimentConfig` com `classify(score)` (sync), `reload(config_api_url)` (async httpx GET `/config/sentiment`), `refresh_loop(interval_s=60)` (background asyncio task). Singleton `sentiment_config`. Defaults espelham `config-api/seed.py`.
-- `sentiment_emitter.py` — `_classify(score)` agora delega para `sentiment_config.classify(score)`.
-- `config.py` — adiciona `config_api_url: str = "http://localhost:3500"`.
-- `main.py` — lifespan: `await sentiment_config.reload(settings.config_api_url)` no startup; `asyncio.create_task(sentiment_config.refresh_loop(...))` em background; `_sentiment_refresh_task.cancel()` no teardown.
+**Alterações:**
 
-TODO.md: seção "Sentimento — _classify() dinâmico" removida.
+`packages/schemas/src/platform-events.ts`:
+- `SentimentUpdatedEventSchema` — removido campo `category`. Comentário documenta explicitamente que a classificação é responsabilidade do consumer.
 
-**Nota de arquitetura**: hot-reload via `config.changed` Kafka não implementado (AI Gateway não tem consumer Kafka). Refresh periódico de 60s cobre o caso de uso — latência máxima de 1 minuto após mudança de faixas no SentimentBandsEditor. Ver discussão em TODO se necessidade de latência menor justificar adicionar consumer.
+`packages/ai-gateway/src/plughub_ai_gateway/`:
+- `sentiment_config.py` — deletado (classificação dinâmica não pertence ao AI Gateway).
+- `sentiment_emitter.py` — removidos `_classify()`, import `sentiment_config`, campo `category` do payload Kafka, contagens por categoria (`satisfied/neutral/frustrated/angry`) do hash `sentiment_live`. Hash agora contém apenas `avg_score`, `score_total`, `count`, `last_session_id`, `updated_at`.
+- `config.py` — removido `config_api_url` (não mais necessário).
+- `main.py` — removidos import `sentiment_config`, `reload()` no startup, `refresh_loop()` background task e cancel no teardown.
+
+TODO.md: seção "Sentimento — _classify() dinâmico" já havia sido removida na sessão anterior.
 
 ---
 
