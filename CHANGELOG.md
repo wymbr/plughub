@@ -2,6 +2,20 @@
 
 ---
 
+## Quota namespace removido do Config API seed (2026-05-09)
+
+As três entradas do namespace `quota` (`max_concurrent_sessions`, `llm_tokens_daily`, `messages_daily`) foram removidas do seed.py por serem código morto:
+
+- Nenhuma é lida em runtime por nenhum componente via Config API
+- `max_concurrent_sessions`: `checkConcurrentSessions()` lê diretamente `{tenant}:quota:max_concurrent_sessions` no Redis, que é escrito pelo pricing-api (não pelo Config API)
+- `llm_tokens_daily` / `messages_daily`: conceitualmente incorretos no modelo multi-conta — limites por conta API não cabem como valor único global por tenant
+- Quando o pricing for integrado, escreverá `{tenant}:quota:*` diretamente no Redis por plano ativado
+
+Nota adicionada ao cabeçalho do seed.py documentando o fluxo correto.
+TODO.md: seção "Quotas — refatoração" removida.
+
+---
+
 ## Pool Registry routing_expression — verificado como já implementado (2026-05-09)
 
 Code review confirmou que `routing_expression` está completamente suportado:

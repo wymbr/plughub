@@ -14,12 +14,16 @@ Namespaces:
   dashboard          — Analytics API dashboard SSE
   webchat            — Channel Gateway webchat adapter
   audit_policy       — Message masking/audit access policies  (replaces: masking)
-  quota              — Default quota limits
   pricing            — Unit prices per resource type, currency, reserve markup
   ai_gateway         — Multi-account rotation, workload isolation, evaluation model
   agent_activity     — Agent pause/resume reasons (Arc 8)
   evaluation         — Evaluation platform defaults
   dashboards         — Dashboard template management
+
+Note: 'quota' namespace removed. Per-tenant limits ({tenant}:quota:*) are written
+  directly by the pricing integration when a plan is activated — not seeded here.
+  checkConcurrentSessions() and assertQuota() in mcp-server read from Redis keys
+  set by pricing-api, not from Config API.
 
 Deprecated aliases (kept for backward compatibility with existing deployments):
   masking            — alias for audit_policy (do not add new keys here)
@@ -338,27 +342,6 @@ _SEED: list[tuple[str, str, object, str]] = [
         False,
         "[DEPRECATED — use audit_policy.capture_output_default] "
         "Whether MCP tool call outputs are captured in audit records by default."
-    ),
-
-    # ── quota ─────────────────────────────────────────────────────────────────
-    # Source: mcp-server/lib/quota-check.ts
-    (
-        "quota", "max_concurrent_sessions",
-        100,
-        "Platform-wide default maximum concurrent sessions per tenant. "
-        "Enforced by assertQuota() in mcp-server before session_open. "
-        "Can be overridden per tenant. Source: mcp-server/lib/quota-check.ts"
-    ),
-    (
-        "quota", "llm_tokens_daily",
-        10_000_000,
-        "Default daily LLM token budget (input + output combined) per tenant. "
-        "Usage tracked by analytics-api consumer from usage.events topic."
-    ),
-    (
-        "quota", "messages_daily",
-        500_000,
-        "Default daily message quota (visibility=all messages) per tenant."
     ),
 
     # ── pricing ───────────────────────────────────────────────────────────────

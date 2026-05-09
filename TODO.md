@@ -31,10 +31,6 @@ Ver CHANGELOG 2026-05-08 (Tasks #31 e #33).
 
 ## platform-ui — Backend pendente para features de config (2026-05-06)
 
-### Quotas — refatoração
-
-`quota.llm_tokens_daily` e `quota.messages_daily` devem migrar para o namespace `ai_gateway` como limites por conta API (não por tenant). O namespace `quota` simplifica para apenas `max_concurrent_sessions`.
-
 ---
 
 ## Usage Metering — Channel Gateway adapters
