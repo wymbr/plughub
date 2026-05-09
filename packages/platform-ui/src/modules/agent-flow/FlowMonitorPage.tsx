@@ -6,16 +6,26 @@
  *
  * Renders MonitorTab in sessions-only scope (Processos moved to /flow/processos).
  */
-import React, { useState } from 'react'
+import React, { useEffect, useState } from 'react'
 import { useAuth } from '@/auth/useAuth'
+import { listPools } from '@/api/registry'
 import { MonitorTab } from '@/modules/contacts/tabs/MonitorTab'
 import type { ContactFilters } from '@/modules/contacts/types'
 import { DEFAULT_FILTERS } from '@/modules/contacts/types'
+import type { Pool } from '@/types'
 
 export default function FlowMonitorPage() {
   const { tenantId } = useAuth()
   // Minimal filter state — pool and channel are the only relevant filters here
   const [filters, setFilters] = useState<ContactFilters>(DEFAULT_FILTERS)
+  const [pools,   setPools]   = useState<Pool[]>([])
+
+  useEffect(() => {
+    if (!tenantId) return
+    listPools(tenantId)
+      .then(res => setPools(res.items.filter(p => p.status === 'active')))
+      .catch(() => setPools([]))
+  }, [tenantId])
 
   if (!tenantId) {
     return (
@@ -36,6 +46,9 @@ export default function FlowMonitorPage() {
             onChange={e => setFilters(f => ({ ...f, poolId: e.target.value }))}
             className="text-xs border border-gray-300 rounded-lg px-2.5 py-1.5 bg-white focus:outline-none focus:ring-2 focus:ring-primary/30">
             <option value="">Todos os pools</option>
+            {pools.map(p => (
+              <option key={p.pool_id} value={p.pool_id}>{p.pool_id}</option>
+            ))}
           </select>
           <select
             value={filters.channel}
