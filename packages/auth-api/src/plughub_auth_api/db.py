@@ -73,6 +73,43 @@ ALTER TABLE auth.users
     ADD COLUMN IF NOT EXISTS module_config JSONB NOT NULL DEFAULT '{}'
 """
 
+# ── Language Cleanup Phase 2 — rename Portuguese ABAC field keys in module_config
+# Each UPDATE is idempotent: the WHERE clause only matches rows that still carry
+# the old key name, so re-running on an already-migrated DB is a no-op.
+
+DDL_MIGRATE_ABAC_RELATORIO = """
+UPDATE auth.users
+SET module_config = jsonb_set(
+    module_config,
+    '{evaluation}',
+    ((module_config -> 'evaluation') - 'relatorio')
+      || jsonb_build_object('report', module_config -> 'evaluation' -> 'relatorio')
+)
+WHERE (module_config -> 'evaluation') ? 'relatorio'
+"""
+
+DDL_MIGRATE_ABAC_RECURSOS = """
+UPDATE auth.users
+SET module_config = jsonb_set(
+    module_config,
+    '{config}',
+    ((module_config -> 'config') - 'recursos')
+      || jsonb_build_object('resources', module_config -> 'config' -> 'recursos')
+)
+WHERE (module_config -> 'config') ? 'recursos'
+"""
+
+DDL_MIGRATE_ABAC_MASCARAMENTO = """
+UPDATE auth.users
+SET module_config = jsonb_set(
+    module_config,
+    '{config}',
+    ((module_config -> 'config') - 'mascaramento')
+      || jsonb_build_object('masking', module_config -> 'config' -> 'mascaramento')
+)
+WHERE (module_config -> 'config') ? 'mascaramento'
+"""
+
 
 async def ensure_schema(pool: asyncpg.Pool) -> None:
     async with pool.acquire() as conn:
@@ -84,6 +121,10 @@ async def ensure_schema(pool: asyncpg.Pool) -> None:
             await conn.execute(DDL_SESSIONS_IDX_EXP)
             await conn.execute(DDL_MODULE_REGISTRY)
             await conn.execute(DDL_MIGRATE_USERS_MODULE_CONFIG)
+            # Language Cleanup Phase 2 — rename Portuguese ABAC field names
+            await conn.execute(DDL_MIGRATE_ABAC_RELATORIO)
+            await conn.execute(DDL_MIGRATE_ABAC_RECURSOS)
+            await conn.execute(DDL_MIGRATE_ABAC_MASCARAMENTO)
     logger.info("auth schema ensured")
 
 

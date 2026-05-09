@@ -44,11 +44,11 @@ const HomePage: React.FC = () => {
           <div className="space-y-2">
             {session?.role === 'admin' && (
               <Link
-                to="/config/recursos"
+                to="/config/resources"
                 className="block p-3 rounded border border-lightGray hover:bg-tableAlt transition-colors"
               >
-                <p className="font-semibold text-dark">{t('quickLinks.recursos')}</p>
-                <p className="text-xs text-gray">{t('quickLinks.recursosDesc')}</p>
+                <p className="font-semibold text-dark">{t('quickLinks.resources')}</p>
+                <p className="text-xs text-gray">{t('quickLinks.resourcesDesc')}</p>
               </Link>
             )}
 

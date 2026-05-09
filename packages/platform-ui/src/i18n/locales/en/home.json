@@ -10,8 +10,8 @@
   },
   "quickLinks": {
     "title":            "Quick Links",
-    "recursos":         "Resources",
-    "recursosDesc":     "Manage pools, agents, and skills",
+    "resources":        "Resources",
+    "resourcesDesc":    "Manage pools, agents, and skills",
     "monitor":          "Monitor",
     "monitorDesc":      "Monitor active sessions",
     "underConstruction":"Modules under construction",

@@ -49,24 +49,6 @@ Ver CHANGELOG 2026-05-08 (Tasks #31 e #33).
 
 ---
 
-## Language Cleanup — Portuguese identifiers in code (2026-05-07)
-
-Rule added to CLAUDE.md. Fase 1 ✅ complete — see CHANGELOG 2026-05-07.
-
-### Fase 2 — ABAC field names (requires DB migration + modules.yaml update)
-
-| Current | Replace with | Files |
-|---|---|---|
-| `field: 'mascaramento'` | `field: 'masking'` | modules.yaml + all JWT validation code |
-| `field: 'relatorio'` | `field: 'report'` | modules.yaml + all JWT validation code |
-| `field: 'recursos'` | `field: 'resources'` | modules.yaml + all JWT validation code |
-
-Migration: `UPDATE auth.module_registry SET ... WHERE ...` + auth-api reseed on startup handles it if modules.yaml is the source of truth.
-
-### Not in scope (intentional)
-
-`agente_*`, `skill_*`, `pool_id` values like `retencao_humano`, `postura_atendimento` — these are business-domain entity IDs configured by the tenant; they are data, not code identifiers.
-
 ---
 
 ## Channel Endpoints — channel-gateway integration (pending)

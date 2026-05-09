@@ -2,7 +2,7 @@
   "title": "Contacts",
   "tabs": {
     "list":      "List",
-    "relatorio": "Report",
+    "report":    "Report",
     "monitor":   "Monitor",
     "analysis":  "Analysis",
     "agents":    "Agents"

@@ -2,6 +2,31 @@
 
 ---
 
+## Language Cleanup Phase 2 — ABAC field names (2026-05-09)
+
+Renomeados os 3 identificadores ABAC em português que violavam a Language Rule (English in code):
+
+| Antigo | Novo | Módulo |
+|---|---|---|
+| `relatorio` | `report` | `evaluation` |
+| `recursos` | `resources` | `config` |
+| `mascaramento` | `masking` | `config` |
+
+**Arquivos alterados:**
+
+- `infra/modules.yaml` — campos renomeados nas seções `evaluation` e `config`.
+- `packages/auth-api/src/plughub_auth_api/db.py` — 3 migrations idempotentes adicionadas a `ensure_schema()`: renomeiam as chaves no JSONB `auth.users.module_config` (condição `? 'old_key'` garante no-op se já migrado).
+- `packages/platform-ui/src/shell/Sidebar.tsx` — já usava nomes ingleses (`report`, `resources`, `masking`) desde a Language Cleanup Phase 1.
+- `packages/platform-ui/src/i18n/locales/en/contacts.json` e `pt-BR/contacts.json` — chave `"relatorio"` → `"report"` (chave órfã, sem usages em código).
+- `packages/platform-ui/src/i18n/locales/en/home.json` e `pt-BR/home.json` — chaves `"recursos"` → `"resources"` e `"recursosDesc"` → `"resourcesDesc"`.
+- `packages/platform-ui/src/modules/home/HomePage.tsx` — `t('quickLinks.recursos')` → `t('quickLinks.resources')`, `t('quickLinks.recursosDesc')` → `t('quickLinks.resourcesDesc')`, `to="/config/recursos"` → `to="/config/resources"`.
+
+**Comportamento no restart:** `_register_platform_modules()` já faz upsert do módulo inteiro com `ON CONFLICT DO UPDATE SET schema = EXCLUDED.schema`, então `auth.module_registry` é atualizado automaticamente. As migrations de `module_config` garantem que permissões existentes de usuários não são perdidas.
+
+TODO.md: seção "Language Cleanup — Fase 2" removida.
+
+---
+
 ## Task #173 — writeStreamEntry centralizado no mcp-server-plughub (2026-05-09)
 
 Eliminados 4 pontos de `redis.xadd()` direto em `server.ts` que usavam formatos inconsistentes (campos `author` como JSON object sem campos flat `author_id`/`author_role`, ausência de `segment_id`). Todos migrados para `writeStreamEntry()` que garante validação Zod em runtime e layout canônico no stream.
