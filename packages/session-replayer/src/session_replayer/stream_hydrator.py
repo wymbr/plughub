@@ -10,7 +10,7 @@ Padrão: ensure-before-read.
 O Replayer não sabe se os dados vieram do Redis original (hot) ou do PostgreSQL (cold).
 A diferença fica registrada apenas em ReplayContext.source para observabilidade.
 
-TTL de hydration: HYDRATION_TTL_SECONDS (default 3600 = 1h)
+TTL de hydration: configurável via parâmetro `ttl` (default 3600 = 1h, lido do Config API)
   Suficiente para cobrir a avaliação + margem. Não interfere com o TTL original
   da sessão (que pode já ter expirado).
 """
@@ -27,7 +27,7 @@ import redis.asyncio as aioredis
 
 logger = logging.getLogger(__name__)
 
-HYDRATION_TTL_SECONDS = 3600  # 1h — cobre avaliação + margem
+HYDRATION_TTL_SECONDS = 3600  # 1h — fallback when Config API is unreachable
 
 
 class StreamHydrator:
@@ -40,9 +40,11 @@ class StreamHydrator:
         self,
         redis_client: aioredis.Redis,
         pg_pool:      asyncpg.Pool,
+        ttl:          int = HYDRATION_TTL_SECONDS,
     ) -> None:
         self._redis = redis_client
         self._pg    = pg_pool
+        self._ttl   = ttl
 
     async def ensure(
         self,
@@ -82,7 +84,7 @@ class StreamHydrator:
 
         logger.info(
             "StreamHydrator: hydrated %d events for session %s (TTL=%ds)",
-            len(rows), session_id, HYDRATION_TTL_SECONDS
+            len(rows), session_id, self._ttl
         )
         return "postgres"
 
@@ -152,7 +154,7 @@ class StreamHydrator:
 
             pipe.xadd(stream_key, fields)  # type: ignore[arg-type]
 
-        pipe.expire(stream_key, HYDRATION_TTL_SECONDS)
+        pipe.expire(stream_key, self._ttl)
         await pipe.execute()
 
 

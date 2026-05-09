@@ -36,7 +36,7 @@ from .stream_hydrator import StreamHydrator, StreamNotAvailableError
 
 logger = logging.getLogger(__name__)
 
-REPLAY_CONTEXT_TTL = 3600  # 1h — suficiente para a avaliação completar
+REPLAY_CONTEXT_TTL = 3600  # 1h — fallback when Config API is unreachable
 
 
 class Replayer:
@@ -50,11 +50,13 @@ class Replayer:
         hydrator:        StreamHydrator,
         evaluator_pool:  str          = "avaliador_qualidade",
         default_speed:   float        = 10.0,
+        context_ttl:     int          = REPLAY_CONTEXT_TTL,
     ) -> None:
         self._redis          = redis_client
         self._hydrator       = hydrator
         self._evaluator_pool = evaluator_pool
         self._default_speed  = default_speed
+        self._context_ttl    = context_ttl
 
     async def prepare(
         self,
@@ -126,7 +128,7 @@ class Replayer:
         await self._redis.set(
             context_key,
             context.model_dump_json(),
-            ex=REPLAY_CONTEXT_TTL,
+            ex=self._context_ttl,
         )
         logger.info(
             "Replayer: ReplayContext written for session %s "

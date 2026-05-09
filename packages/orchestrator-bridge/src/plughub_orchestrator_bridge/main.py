@@ -60,6 +60,7 @@ from aiokafka import AIOKafkaConsumer, AIOKafkaProducer
 
 from .instance_bootstrap import InstanceBootstrap
 from .registry_syncer import RegistrySyncer
+from .session_config import session_config
 
 logging.basicConfig(
     level=logging.INFO,
@@ -74,6 +75,7 @@ KAFKA_BROKERS       = os.getenv("KAFKA_BROKERS",       "localhost:9092")
 REDIS_URL           = os.getenv("REDIS_URL",            "redis://localhost:6379")
 SKILL_FLOW_URL      = os.getenv("SKILL_FLOW_URL",       "http://localhost:3400")
 AGENT_REGISTRY_URL  = os.getenv("AGENT_REGISTRY_URL",  "http://localhost:3300")
+CONFIG_API_URL      = os.getenv("CONFIG_API_URL",       "http://localhost:3500")
 
 _default_skills_dir = str(Path(__file__).parent.parent.parent.parent / "skill-flow-engine" / "skills")
 SKILLS_DIR          = os.getenv("SKILLS_DIR", _default_skills_dir)
@@ -122,6 +124,12 @@ _RUNTIME_NAMESPACES: frozenset[str] = frozenset({
 
 _agent_type_cache: dict[str, dict] = {}   # agent_type_id → agent type response body
 _skill_flow_cache: dict[str, dict] = {}   # skill_id → flow dict
+
+
+def _stl() -> int:
+    """Returns the session Redis TTL (seconds) from Config API, with hardcoded fallback."""
+    return int(session_config.get("orchestrator_session_ttl_s", 14_400))
+
 
 # Kafka producer — initialised in run(), used by fire_pool_hooks().
 # None until run() starts; hooks silently skip if producer not ready.
@@ -420,14 +428,14 @@ async def activate_human_agent(
 
     try:
         # ── Mark session as having at least one human agent (fast-lookup flag) ──
-        await redis_client.setex(f"session:{session_id}:human_agent", 14400, "1")
+        await redis_client.setex(f"session:{session_id}:human_agent", _stl(), "1")
         # ── Track this specific instance in a SET for conference support ────────
         # Allows multiple human agents to share the same session_id.
         # process_contact_event uses SREM to remove each agent on agent_done and
         # clears the human_agent flag only when the SET becomes empty.
         if instance_id:
             await redis_client.sadd(f"session:{session_id}:human_agents", instance_id)
-            await redis_client.expire(f"session:{session_id}:human_agents", 14400)
+            await redis_client.expire(f"session:{session_id}:human_agents", _stl())
     except Exception as exc:
         logger.error(
             "Failed to set human_agent flag — bidirectional messaging will not work: "
@@ -475,7 +483,7 @@ async def activate_human_agent(
                 meta["instance_id"]   = instance_id
                 meta["pool_id"]       = pool_id
                 meta["agent_type_id"] = routing_result.get("agent_type_id", "")
-                await redis_client.setex(f"session:{session_id}:meta", 14400, json.dumps(meta))
+                await redis_client.setex(f"session:{session_id}:meta", _stl(), json.dumps(meta))
         except Exception as exc:
             logger.warning("Could not update session meta with instance_id: session=%s — %s", session_id, exc)
 
@@ -527,7 +535,7 @@ async def activate_human_agent(
             # Increment sequence counter (primary segments only; 0-indexed)
             _seq_raw = await redis_client.incr(f"session:{session_id}:segment_seq")
             _seq_idx = int(_seq_raw) - 1
-            await redis_client.expire(f"session:{session_id}:segment_seq", 14400)
+            await redis_client.expire(f"session:{session_id}:segment_seq", _stl())
             # Store segment_id keyed by instance_id for retrieval on participant_left
             await redis_client.setex(
                 f"session:{session_id}:segment:{instance_id}",
@@ -626,7 +634,7 @@ async def _write_pre_hook_context(
                 ctx_key, "session.human_agent_participant_id", entry_human,
             )
 
-        await redis_client.expire(ctx_key, 14400)
+        await redis_client.expire(ctx_key, _stl())
         logger.info(
             "pre_hook context written: session=%s close_origin=%s cust_pid=%s human_pid=%s",
             session_id, close_origin, bool(cust_pid), human_instance_id or "none",
@@ -1154,7 +1162,7 @@ async def activate_external_mcp_agent(
     if instance_id:
         try:
             await redis_client.sadd(f"session:{session_id}:ai_agents", instance_id)
-            await redis_client.expire(f"session:{session_id}:ai_agents", 14400)
+            await redis_client.expire(f"session:{session_id}:ai_agents", _stl())
 
             # Persist routing snapshot for recovery on bridge restart.
             raw_inst = await redis_client.get(f"{tenant_id}:instance:{instance_id}")
@@ -1298,7 +1306,7 @@ async def process_routed(
                         }),
                     )
                     await redis_client.sadd(f"session:{session_id}:ai_agents", yaml_instance_id)
-                    await redis_client.expire(f"session:{session_id}:ai_agents", 14400)
+                    await redis_client.expire(f"session:{session_id}:ai_agents", _stl())
                     logger.debug(
                         "YAML fallback: AI snapshot persisted: session=%s instance=%s",
                         session_id, yaml_instance_id,
@@ -1453,7 +1461,7 @@ async def process_routed(
                 await redis_client.sadd(
                     f"session:{session_id}:ai_agents", native_instance_id,
                 )
-                await redis_client.expire(f"session:{session_id}:ai_agents", 14400)
+                await redis_client.expire(f"session:{session_id}:ai_agents", _stl())
                 logger.debug(
                     "AI instance snapshot persisted: session=%s instance=%s",
                     session_id, native_instance_id,
@@ -1518,7 +1526,7 @@ async def process_routed(
                 # Primary sequential agent: increment sequence counter
                 _seq_raw = await redis_client.incr(f"session:{session_id}:segment_seq")
                 _part_seq_idx = int(_seq_raw) - 1
-                await redis_client.expire(f"session:{session_id}:segment_seq", 14400)
+                await redis_client.expire(f"session:{session_id}:segment_seq", _stl())
                 # Publish as current primary segment for upcoming specialists
                 await redis_client.setex(
                     f"session:{session_id}:primary_segment",
@@ -2639,7 +2647,7 @@ async def dispatch_mention_command(
                     "updated_at": now_iso,
                 })
                 await redis_client.hset(ctx_key, field, entry)
-            await redis_client.expire(ctx_key, 14400)
+            await redis_client.expire(ctx_key, _stl())
             logger.info(
                 "mention_command dispatch: set_context fields=%s session=%s",
                 list(set_ctx.keys()), session_id,
@@ -2996,7 +3004,7 @@ async def process_inbound(
                         "content":     json.dumps({"text": display_text}),
                     },
                 )
-                await redis_client.expire(stream_key_human, 14400)  # 4h TTL
+                await redis_client.expire(stream_key_human, _stl())  # 4h TTL
             except Exception as _xadd_exc:
                 logger.warning(
                     "Could not XADD customer message to stream: session=%s — %s",
@@ -3106,7 +3114,7 @@ async def process_inbound(
                     },
                     maxlen=500,   # descarta itens mais antigos se stream crescer demais
                 )
-                await redis_client.expire(stream_key, 14400)  # renova TTL 4h a cada mensagem
+                await redis_client.expire(stream_key, _stl())  # renova TTL 4h a cada mensagem
                 logger.info(
                     "XADD to session stream: session=%s groups=%d text=%r",
                     session_id, len(groups), reply_text[:80],
@@ -3241,6 +3249,10 @@ async def run() -> None:
     )
 
     async with aiohttp.ClientSession() as http:
+        # 0. Load session TTLs from Config API — replaces hardcoded 14400 literals.
+        #    Falls back silently to defaults (14400s) if Config API is unreachable.
+        await session_config.reload(CONFIG_API_URL, http)
+
         # 1. Sync registry first (upsert pools + agent types from YAML)
         sync_reports = await syncer.sync(http)
         if sync_reports:
@@ -3328,7 +3340,7 @@ async def _dispatch(
                     logger.debug("Skill flow cache miss on invalidation (not cached): %s", entity_id)
             bootstrap.request_refresh()
         elif topic == TOPIC_CONFIG_CHANGED:
-            await _handle_config_changed(payload, bootstrap)
+            await _handle_config_changed(payload, bootstrap, http)
     except Exception as exc:
         logger.error("Dispatch error topic=%s: %s", topic, exc)
 
@@ -3336,6 +3348,7 @@ async def _dispatch(
 async def _handle_config_changed(
     payload:   dict,
     bootstrap: InstanceBootstrap,
+    http:      aiohttp.ClientSession,
 ) -> None:
     """
     Reacts to a config.changed event published by the Config API.
@@ -3345,16 +3358,18 @@ async def _handle_config_changed(
                              (max_concurrent_sessions or quota limits changed;
                               reconciliation may need to create or remove instances)
 
+      namespace=session    → session_config.invalidate() + background reload.
+                             Applies new TTL values immediately to all subsequent
+                             Redis calls (setex/expire) in the bridge.
+
       namespace=routing /
-               session /
                masking /
                webchat /
                sentiment /
                consumer /
                dashboard   → no bootstrap action needed.
-                             These values are read at runtime via ConfigStore
-                             (60s cache); the cache will naturally pick up the
-                             new values on next access.
+                             These values are read at runtime via their own caches;
+                             the cache TTL (60s) handles propagation naturally.
 
     If a future namespace requires a bootstrap trigger, add it to
     _BOOTSTRAP_NAMESPACES in the constants section.
@@ -3370,6 +3385,13 @@ async def _handle_config_changed(
             operation, tenant_id, namespace, key,
         )
         bootstrap.request_refresh()
+    elif namespace == "session":
+        logger.info(
+            "config.changed [%s] tenant=%s %s.%s — reloading session TTL config",
+            operation, tenant_id, namespace, key,
+        )
+        session_config.invalidate()
+        asyncio.create_task(session_config.reload(CONFIG_API_URL, http))
     else:
         logger.info(
             "config.changed [%s] tenant=%s %s.%s — runtime config, no bootstrap needed",

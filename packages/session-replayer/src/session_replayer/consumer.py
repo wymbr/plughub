@@ -18,6 +18,7 @@ import asyncio
 import json
 import logging
 import os
+import urllib.request
 import uuid
 from datetime import datetime, timezone
 
@@ -26,11 +27,44 @@ import redis.asyncio as aioredis
 from aiokafka import AIOKafkaConsumer, AIOKafkaProducer
 
 from .models import EvaluationRequest, SessionClosedEvent
-from .replayer import Replayer
-from .stream_hydrator import StreamHydrator, StreamNotAvailableError
+from .replayer import Replayer, REPLAY_CONTEXT_TTL
+from .stream_hydrator import StreamHydrator, StreamNotAvailableError, HYDRATION_TTL_SECONDS
 from .stream_persister import StreamPersister
 
 logger = logging.getLogger(__name__)
+
+
+async def _fetch_config_ttl(config_api_url: str, key: str, default: int) -> int:
+    """
+    Fetches a single TTL value from the Config API session namespace at startup.
+    Uses urllib (no extra dependency) in a thread executor to stay non-blocking.
+    Falls back to `default` on any error.
+    """
+    url = f"{config_api_url.rstrip('/')}/config/session"
+    loop = asyncio.get_event_loop()
+
+    def _get() -> int | None:
+        with urllib.request.urlopen(url, timeout=5) as resp:  # noqa: S310
+            body = json.loads(resp.read())
+            entries = body.get("entries") or body
+            entry = entries.get(key)
+            if isinstance(entry, dict) and "value" in entry:
+                return int(entry["value"])
+            if isinstance(entry, (int, float)):
+                return int(entry)
+        return None
+
+    try:
+        result = await loop.run_in_executor(None, _get)
+        if result is not None:
+            logger.info("Config API session.%s=%d", key, result)
+            return result
+    except Exception as exc:
+        logger.warning(
+            "Could not fetch session.%s from Config API (%s) — using default %ds: %s",
+            key, url, default, exc,
+        )
+    return default
 
 
 class SessionReplayerConsumer:
@@ -39,20 +73,31 @@ class SessionReplayerConsumer:
     """
 
     def __init__(self) -> None:
-        self._kafka_brokers     = os.getenv("KAFKA_BROKERS", "localhost:9092")
-        self._redis_url         = os.getenv("REDIS_URL",     "redis://localhost:6379")
-        self._postgres_dsn      = os.getenv("DATABASE_URL",  "postgresql://plughub:plughub@localhost:5432/plughub")
-        self._evaluator_pool    = os.getenv("EVALUATOR_POOL", "avaliador_qualidade")
-        self._default_speed     = float(os.getenv("REPLAY_SPEED_FACTOR", "10.0"))
+        self._kafka_brokers      = os.getenv("KAFKA_BROKERS",   "localhost:9092")
+        self._redis_url          = os.getenv("REDIS_URL",        "redis://localhost:6379")
+        self._postgres_dsn       = os.getenv("DATABASE_URL",     "postgresql://plughub:plughub@localhost:5432/plughub")
+        self._config_api_url     = os.getenv("CONFIG_API_URL",   "http://localhost:3500")
+        self._evaluator_pool     = os.getenv("EVALUATOR_POOL",   "avaliador_qualidade")
+        self._default_speed      = float(os.getenv("REPLAY_SPEED_FACTOR", "10.0"))
         self._group_id_persister = "session-replayer-persister"
         self._group_id_replayer  = "session-replayer-replayer"
 
-        self._redis:     aioredis.Redis | None = None
-        self._pg_pool:   asyncpg.Pool   | None = None
-        self._producer:  AIOKafkaProducer | None = None
+        self._redis:            aioredis.Redis    | None = None
+        self._pg_pool:          asyncpg.Pool      | None = None
+        self._producer:         AIOKafkaProducer  | None = None
+        self._hydration_ttl:    int = HYDRATION_TTL_SECONDS
+        self._replay_context_ttl: int = REPLAY_CONTEXT_TTL
 
     async def start(self) -> None:
         """Inicializa infra e inicia os dois consumers em paralelo."""
+        # Load session TTLs from Config API before starting consumers.
+        self._hydration_ttl = await _fetch_config_ttl(
+            self._config_api_url, "replayer_hydration_ttl_s", HYDRATION_TTL_SECONDS
+        )
+        self._replay_context_ttl = await _fetch_config_ttl(
+            self._config_api_url, "replay_context_ttl_s", REPLAY_CONTEXT_TTL
+        )
+
         self._redis   = aioredis.from_url(self._redis_url, decode_responses=False)
         self._pg_pool = await asyncpg.create_pool(self._postgres_dsn, min_size=2, max_size=10)
         self._producer = AIOKafkaProducer(
@@ -179,12 +224,13 @@ class SessionReplayerConsumer:
             req.session_id, req.evaluation_id, req.speed_factor,
         )
 
-        hydrator = StreamHydrator(self._redis, self._pg_pool)
+        hydrator = StreamHydrator(self._redis, self._pg_pool, ttl=self._hydration_ttl)
         replayer = Replayer(
             redis_client   = self._redis,
             hydrator       = hydrator,
             evaluator_pool = req.evaluator_pool,
             default_speed  = req.speed_factor,
+            context_ttl    = self._replay_context_ttl,
         )
 
         # Reconstrói o SessionClosedEvent mínimo necessário para o Replayer

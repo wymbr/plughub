@@ -21,9 +21,12 @@ class Settings(BaseSettings):
     kafka_topic_events:      str = "conversations.events"
     kafka_topic_eval_events: str = "evaluation.events"
 
+    # Config API — used at startup to read dynamic TTLs from session namespace
+    config_api_url: str = "http://localhost:3500"
+
     # Redis
     redis_url:                  str = "redis://localhost:6379/0"
-    transcript_ttl_seconds:     int = 14_400   # 4h default
+    transcript_ttl_seconds:     int = 14_400   # 4h fallback — overridden by Config API session.transcript_ttl_s
 
     # PostgreSQL
     postgres_dsn: str = "postgresql://plughub:plughub@localhost:5432/plughub"

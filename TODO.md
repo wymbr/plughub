@@ -35,10 +35,6 @@ Ver CHANGELOG 2026-05-08 (Tasks #31 e #33).
 
 `sentiment_emitter.py._classify()` usa if/elif hardcoded. Para que `SentimentBandsEditor` funcione em runtime, o AI Gateway precisa ler `sentiment.bands` do Config API e classificar usando as faixas configuradas. Refatoração: passar `bands: list[dict]` como parâmetro ou ler do Config API na inicialização com hot-reload via `config.changed` Kafka.
 
-### Sessão — orchestrator-bridge ler TTLs do Config API
-
-`orchestrator-bridge/main.py` tem ~20 literais `14400` hardcoded (TTL de sessão Redis). O namespace `session` no Config API (`channel_gateway_ttl_s`) existe mas não é consumido pelo bridge. Migrar para leitura dinâmica similar ao `RoutingConfigCache`. Idem para `session_replayer` (`HYDRATION_TTL_SECONDS`, `REPLAY_CONTEXT_TTL`) e `conversation-writer` (`transcript_ttl_seconds`).
-
 ### Pool Registry — routing_expression field
 
 Verificar se `agent-registry` (Prisma schema + API endpoints) aceita e persiste o campo `routing_expression` nos modelos `Pool`/`CreatePool`/`UpdatePool`. O frontend já envia o campo; o backend precisa estar preparado.
