@@ -104,18 +104,6 @@ O `SkillFlowsPage` exibe lista plana. Não há pastas/grupos. Melhoria desejada:
 
 ---
 
-## Skill Flow — Scheduled Deploy gap (2026-05-07)
-
-`scheduleSkillDeploy()` em `AgentFlowDeployPage.tsx` envia `flow_id: 'skill_scheduled_deploy_v1'` mas **não inclui `flow_definition` em `metadata`**. O worker (`engine-runner.ts`) falha com `"Missing flow_definition in metadata"`.
-
-**Solução A (recomendada):** o endpoint `POST /v1/workflow/trigger` no workflow-api busca a skill pelo `flow_id` no agent-registry e injeta `flow` (entry + steps) em `metadata.flow_definition` antes de salvar a instância. Assim o caller não precisa resolver o YAML.
-
-**Solução B:** `scheduleSkillDeploy` busca `GET /v1/skills/skill_scheduled_deploy_v1` antes de chamar trigger e inclui `metadata: { flow_definition: skill.flow }`.
-
-Solução A é preferível — elimina o acoplamento ao caller e garante que qualquer trigger (webhook, evaluation-api, etc.) funcione corretamente.
-
----
-
 ## CLAUDE.md — Otimização (Fases 2 e 3)
 
 **Fase 2** *(blocked by Fase 1)*: Mover Arc 6, Arc 4, Arc 7, ABAC e ContextStore para arquivos em `docs/modules/`. Manter no CLAUDE.md apenas resumo de 15–20 linhas por módulo com link para o arquivo completo.

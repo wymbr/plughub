@@ -2,6 +2,20 @@
 
 ---
 
+## Scheduled Deploy gap — verificado como já implementado (2026-05-09)
+
+Code review revelou que o TODO "Skill Flow — Scheduled Deploy gap" já estava resolvido. Items confirmados como presentes:
+
+- `_resolve_flow_definition()` em `workflow-api/router.py` (linhas 125–153): busca o skill pelo `flow_id` no agent-registry quando `metadata` não contém `flow_definition`, e injeta automaticamente antes de salvar a instância.
+- Chamado em `trigger_workflow` via `resolved_metadata = await _resolve_flow_definition(...)`.
+- `agent_registry_url` configurado em `workflow-api/config.py`.
+- `skill_scheduled_deploy_v1.yaml` presente em `skill-flow-engine/skills/`.
+- `scheduleSkillDeploy()` removido da UI no Task #33 (seção de agendamento foi retirada do `AgentFlowDeployPage`).
+
+TODO.md: seção "Skill Flow — Scheduled Deploy gap" removida.
+
+---
+
 ## Session TTLs dinâmicos via Config API (2026-05-09)
 
 Eliminados ~25 literais `14400` hardcoded de 3 componentes. Todos os TTLs de sessão Redis agora lidos do namespace `session` do Config API no startup, com fallback silencioso aos valores default (14400s / 3600s).
