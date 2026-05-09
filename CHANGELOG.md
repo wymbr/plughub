@@ -2,6 +2,22 @@
 
 ---
 
+## Task #41 — Sentiment classification dinâmica via Config API (2026-05-09)
+
+`sentiment_emitter._classify()` era hardcoded com if/elif. Agora delega para `SentimentConfig` que carrega as faixas do Config API (namespace `sentiment`, key `thresholds`) no startup e as refresca a cada 60s em background. Fallback silencioso para defaults quando Config API inacessível.
+
+**Arquivos modificados — `packages/ai-gateway/`:**
+- `sentiment_config.py` (novo) — classe `SentimentConfig` com `classify(score)` (sync), `reload(config_api_url)` (async httpx GET `/config/sentiment`), `refresh_loop(interval_s=60)` (background asyncio task). Singleton `sentiment_config`. Defaults espelham `config-api/seed.py`.
+- `sentiment_emitter.py` — `_classify(score)` agora delega para `sentiment_config.classify(score)`.
+- `config.py` — adiciona `config_api_url: str = "http://localhost:3500"`.
+- `main.py` — lifespan: `await sentiment_config.reload(settings.config_api_url)` no startup; `asyncio.create_task(sentiment_config.refresh_loop(...))` em background; `_sentiment_refresh_task.cancel()` no teardown.
+
+TODO.md: seção "Sentimento — _classify() dinâmico" removida.
+
+**Nota de arquitetura**: hot-reload via `config.changed` Kafka não implementado (AI Gateway não tem consumer Kafka). Refresh periódico de 60s cobre o caso de uso — latência máxima de 1 minuto após mudança de faixas no SentimentBandsEditor. Ver discussão em TODO se necessidade de latência menor justificar adicionar consumer.
+
+---
+
 ## Scheduled Deploy gap — verificado como já implementado (2026-05-09)
 
 Code review revelou que o TODO "Skill Flow — Scheduled Deploy gap" já estava resolvido. Items confirmados como presentes:

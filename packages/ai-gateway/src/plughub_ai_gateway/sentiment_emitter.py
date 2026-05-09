@@ -30,24 +30,24 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any
 
+from .sentiment_config import sentiment_config
+
 logger = logging.getLogger("plughub.ai_gateway.sentiment")
 
 _TOPIC = "sentiment.updated"
-_SENTIMENT_LIVE_TTL = 300  # seconds
+_SENTIMENT_LIVE_TTL = 300  # seconds — overridden at runtime by Config API session.sentiment_live_ttl_s
 
 
 # ── Category classification ───────────────────────────────────────────────────
 
 def _classify(score: float) -> str:
-    """Maps a sentiment score to the canonical category label."""
-    if score >= 0.3:
-        return "satisfied"
-    elif score >= -0.3:
-        return "neutral"
-    elif score >= -0.6:
-        return "frustrated"
-    else:
-        return "angry"
+    """
+    Maps a sentiment score to the canonical category label.
+    Delegates to sentiment_config.classify() which uses dynamic thresholds
+    loaded from Config API (sentiment.thresholds). Falls back to hardcoded
+    defaults when Config API is unreachable.
+    """
+    return sentiment_config.classify(score)
 
 
 # ── Kafka emission ────────────────────────────────────────────────────────────

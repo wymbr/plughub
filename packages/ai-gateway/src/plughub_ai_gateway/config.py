@@ -45,6 +45,9 @@ class Settings(BaseSettings):
     # Evaluation model profile — isolated from realtime agents
     model_evaluation: str = "claude-haiku-4-5-20251001"
 
+    # Config API — used at startup to load dynamic config (sentiment thresholds, etc.)
+    config_api_url: str = "http://localhost:3500"
+
     # Redis
     redis_url: str = "redis://localhost:6379"
 

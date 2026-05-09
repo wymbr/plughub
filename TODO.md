@@ -31,10 +31,6 @@ Ver CHANGELOG 2026-05-08 (Tasks #31 e #33).
 
 ## platform-ui — Backend pendente para features de config (2026-05-06)
 
-### Sentimento — _classify() dinâmico
-
-`sentiment_emitter.py._classify()` usa if/elif hardcoded. Para que `SentimentBandsEditor` funcione em runtime, o AI Gateway precisa ler `sentiment.bands` do Config API e classificar usando as faixas configuradas. Refatoração: passar `bands: list[dict]` como parâmetro ou ler do Config API na inicialização com hot-reload via `config.changed` Kafka.
-
 ### Pool Registry — routing_expression field
 
 Verificar se `agent-registry` (Prisma schema + API endpoints) aceita e persiste o campo `routing_expression` nos modelos `Pool`/`CreatePool`/`UpdatePool`. O frontend já envia o campo; o backend precisa estar preparado.
