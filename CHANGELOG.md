@@ -2,6 +2,28 @@
 
 ---
 
+## Config API Seed — novos namespaces e chaves de sessão (2026-05-09)
+
+**Arquivo:** `packages/config-api/src/plughub_config_api/seed.py`
+
+**O que mudou:**
+
+Namespace `session` — 6 chaves TTL adicionadas para centralizar todos os TTLs de Redis em um único namespace, eliminando literais hardcoded nos componentes:
+- `orchestrator_session_ttl_s` (14400) — bridge session state
+- `transcript_ttl_s` (14400) — conversation-writer
+- `replayer_hydration_ttl_s` (3600) — Hydrator (session_replayer)
+- `replay_context_ttl_s` (3600) — ReplayContext hash
+- `pool_config_ttl_s` (3600) — PoolConfigCache no orchestrator-bridge
+- `sentiment_live_ttl_s` (300) — sentiment_live hash (duplicado de `sentiment.live_ttl_s` para o bridge ler tudo de um namespace)
+
+Namespace `audit_policy` — substitui `masking` como namespace primário para políticas de mascaramento/auditoria (LGPD). Chaves: `authorized_roles`, `default_retention_days`, `capture_input_default`, `capture_output_default`. Entradas `masking.*` mantidas como aliases deprecados com prefixo `[DEPRECATED]` na descrição.
+
+Namespace `analytics_consumer` — substitui `consumer` como namespace primário para configuração do consumidor Kafka da analytics-api. Entradas `consumer.*` mantidas como aliases deprecados.
+
+Docstring do arquivo atualizado para listar namespaces ativos vs aliases deprecados.
+
+---
+
 ## Bugfix — Routing Engine: sessões órfãs na fila ao desconectar cliente (2026-05-08)
 
 **Problema:** Quando o cliente WebSocket desconectava (refresh, fechar aba, queda de rede), a sessão permanecia no ZSET `{tenant}:pool:{pool_id}:queue` indefinidamente — exibida na tela operacional de pools como sessão ativa, gerando falso-positivo de SLA excedido.

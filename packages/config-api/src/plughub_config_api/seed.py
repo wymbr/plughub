@@ -7,17 +7,23 @@ Existing entries are NOT overwritten (ON CONFLICT DO NOTHING logic via store).
 Tenant-specific overrides are never set by the seed — only global defaults.
 
 Namespaces:
-  sentiment      — AI Gateway sentiment scoring
-  routing        — Routing Engine scheduling and SLA
-  session        — Session TTLs per component
-  consumer       — Analytics API Kafka consumer
-  dashboard      — Analytics API dashboard SSE
-  webchat        — Channel Gateway webchat adapter
-  masking        — Message masking access policies
-  quota          — Default quota limits
-  pricing        — Unit prices per resource type, currency, reserve markup
-  ai_gateway     — Multi-account rotation, workload isolation, evaluation model
-  agent_activity — Agent pause/resume reasons (Arc 8)
+  sentiment          — AI Gateway sentiment scoring
+  routing            — Routing Engine scheduling and SLA
+  session            — Session TTLs per component (all TTLs centralised here)
+  analytics_consumer — Analytics API Kafka consumer  (replaces: consumer)
+  dashboard          — Analytics API dashboard SSE
+  webchat            — Channel Gateway webchat adapter
+  audit_policy       — Message masking/audit access policies  (replaces: masking)
+  quota              — Default quota limits
+  pricing            — Unit prices per resource type, currency, reserve markup
+  ai_gateway         — Multi-account rotation, workload isolation, evaluation model
+  agent_activity     — Agent pause/resume reasons (Arc 8)
+  evaluation         — Evaluation platform defaults
+  dashboards         — Dashboard template management
+
+Deprecated aliases (kept for backward compatibility with existing deployments):
+  masking            — alias for audit_policy (do not add new keys here)
+  consumer           — alias for analytics_consumer (do not add new keys here)
 
 Run:
   PLUGHUB_CONFIG_DATABASE_URL=... PLUGHUB_CONFIG_REDIS_URL=... python -m plughub_config_api.seed
@@ -113,7 +119,9 @@ _SEED: list[tuple[str, str, object, str]] = [
     ),
 
     # ── session ───────────────────────────────────────────────────────────────
-    # Source: ai-gateway/config.py, channel-gateway/config.py
+    # Central TTL registry for all components that manage session-scoped Redis keys.
+    # Consumers: ai-gateway, channel-gateway, orchestrator-bridge, conversation-writer,
+    #            session_replayer, routing-engine (pool config cache), sentiment_emitter.
     (
         "session", "ai_gateway_ttl_s",
         86_400,
@@ -126,34 +134,107 @@ _SEED: list[tuple[str, str, object, str]] = [
         "Redis TTL (seconds) for Channel Gateway session references. "
         "4 hours. Source: channel-gateway/config.py"
     ),
-
-    # ── consumer ──────────────────────────────────────────────────────────────
-    # Source: analytics-api/config.py, consumer.py
     (
-        "consumer", "batch_size",
+        "session", "orchestrator_session_ttl_s",
+        14_400,
+        "Redis TTL (seconds) for orchestrator-bridge session state "
+        "(session:{id}:* keys managed by the bridge). 4 hours. "
+        "Currently hardcoded as 14400 in orchestrator-bridge/main.py — "
+        "migrating to dynamic read from this key."
+    ),
+    (
+        "session", "transcript_ttl_s",
+        14_400,
+        "Redis TTL (seconds) for transcript entries written by conversation-writer. "
+        "4 hours. Currently hardcoded as transcript_ttl_seconds in conversation-writer."
+    ),
+    (
+        "session", "replayer_hydration_ttl_s",
+        3_600,
+        "Redis TTL (seconds) for session data hydrated into Redis by the Hydrator "
+        "(session_replayer) before evaluation. 1 hour. "
+        "Currently hardcoded as HYDRATION_TTL_SECONDS in session_replayer."
+    ),
+    (
+        "session", "replay_context_ttl_s",
+        3_600,
+        "Redis TTL (seconds) for the ReplayContext hash "
+        "({tenant}:replay:{session_id}:context). 1 hour. "
+        "Currently hardcoded as REPLAY_CONTEXT_TTL in session_replayer."
+    ),
+    (
+        "session", "pool_config_ttl_s",
+        3_600,
+        "Redis TTL (seconds) for pool configuration snapshots cached by "
+        "orchestrator-bridge (used by PoolConfigCache). 1 hour. "
+        "Routing-engine has a separate pool_config_ttl_seconds (24h) for its own cache."
+    ),
+    (
+        "session", "sentiment_live_ttl_s",
+        300,
+        "Redis TTL (seconds) for the sentiment_live hash "
+        "({tenant}:pool:{pool}:sentiment_live) written by sentiment_emitter. "
+        "5 minutes. Kept here (session namespace) alongside sentiment.live_ttl_s "
+        "so orchestrator-bridge can read all TTLs from a single namespace."
+    ),
+
+    # ── analytics_consumer ────────────────────────────────────────────────────
+    # Source: analytics-api/config.py, consumer.py
+    # Renamed from 'consumer' → 'analytics_consumer' for clarity.
+    # Deprecated aliases kept below under 'consumer' namespace.
+    (
+        "analytics_consumer", "batch_size",
         200,
         "Maximum number of Kafka records fetched per getmany() call in the "
         "analytics-api consumer. Tune for throughput vs latency. "
         "Source: analytics-api/config.py"
     ),
     (
-        "consumer", "timeout_ms",
+        "analytics_consumer", "timeout_ms",
         500,
         "Kafka consumer poll timeout in milliseconds (getmany). "
         "Source: analytics-api/config.py"
     ),
     (
-        "consumer", "restart_delay_s",
+        "analytics_consumer", "restart_delay_s",
         5,
         "Initial delay before restarting the consumer after a crash. "
         "Doubles on each failure up to max_restart_delay_s. "
         "Source: analytics-api/main.py (_run_consumer_safe)"
     ),
     (
-        "consumer", "max_restart_delay_s",
+        "analytics_consumer", "max_restart_delay_s",
         60,
         "Maximum delay between consumer restarts. "
         "Source: analytics-api/main.py (_run_consumer_safe)"
+    ),
+
+    # ── consumer (deprecated alias for analytics_consumer) ────────────────────
+    # Kept so existing deployments that already read from 'consumer' continue to work.
+    # Do NOT add new keys here — use 'analytics_consumer' instead.
+    (
+        "consumer", "batch_size",
+        200,
+        "[DEPRECATED — use analytics_consumer.batch_size] "
+        "Maximum number of Kafka records fetched per getmany() call."
+    ),
+    (
+        "consumer", "timeout_ms",
+        500,
+        "[DEPRECATED — use analytics_consumer.timeout_ms] "
+        "Kafka consumer poll timeout in milliseconds."
+    ),
+    (
+        "consumer", "restart_delay_s",
+        5,
+        "[DEPRECATED — use analytics_consumer.restart_delay_s] "
+        "Initial delay before restarting the consumer after a crash."
+    ),
+    (
+        "consumer", "max_restart_delay_s",
+        60,
+        "[DEPRECATED — use analytics_consumer.max_restart_delay_s] "
+        "Maximum delay between consumer restarts."
     ),
 
     # ── dashboard ─────────────────────────────────────────────────────────────
@@ -200,31 +281,62 @@ _SEED: list[tuple[str, str, object, str]] = [
         "application/pdf, video/mp4, video/webm."
     ),
 
-    # ── masking ───────────────────────────────────────────────────────────────
+    # ── audit_policy ──────────────────────────────────────────────────────────
     # Source: schemas/audit.ts (DEFAULT_MASKING_RULES, MaskingAccessPolicy)
+    # Renamed from 'masking' → 'audit_policy' to reflect broader scope (LGPD audit,
+    # token masking, capture policy). Deprecated aliases kept below under 'masking'.
     (
-        "masking", "authorized_roles",
+        "audit_policy", "authorized_roles",
         ["evaluator", "reviewer"],
         "Roles that can read original_content (unmasked) in session_context_get. "
         "primary and specialist always receive masked (display_partial) content. "
         "Source: schemas/audit.ts MaskingAccessPolicy"
     ),
     (
-        "masking", "default_retention_days",
+        "audit_policy", "default_retention_days",
         90,
         "Default number of days masked tokens are retained in the audit trail. "
         "After this period, token resolution may return null."
     ),
     (
-        "masking", "capture_input_default",
+        "audit_policy", "capture_input_default",
         False,
         "Whether MCP tool call inputs are captured in audit records by default. "
-        "Can be overridden per tool via audit_policy. "
+        "Can be overridden per tool via tool-level audit_policy config. "
         "Source: schemas/audit.ts DEFAULT_MASKING_RULES"
+    ),
+    (
+        "audit_policy", "capture_output_default",
+        False,
+        "Whether MCP tool call outputs are captured in audit records by default. "
+        "Source: schemas/audit.ts DEFAULT_MASKING_RULES"
+    ),
+
+    # ── masking (deprecated alias for audit_policy) ───────────────────────────
+    # Kept so existing deployments that already read from 'masking' continue to work.
+    # Do NOT add new keys here — use 'audit_policy' instead.
+    (
+        "masking", "authorized_roles",
+        ["evaluator", "reviewer"],
+        "[DEPRECATED — use audit_policy.authorized_roles] "
+        "Roles that can read original_content (unmasked)."
+    ),
+    (
+        "masking", "default_retention_days",
+        90,
+        "[DEPRECATED — use audit_policy.default_retention_days] "
+        "Days masked tokens are retained in the audit trail."
+    ),
+    (
+        "masking", "capture_input_default",
+        False,
+        "[DEPRECATED — use audit_policy.capture_input_default] "
+        "Whether MCP tool call inputs are captured in audit records by default."
     ),
     (
         "masking", "capture_output_default",
         False,
+        "[DEPRECATED — use audit_policy.capture_output_default] "
         "Whether MCP tool call outputs are captured in audit records by default."
     ),
 

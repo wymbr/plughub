@@ -39,12 +39,6 @@ Ver CHANGELOG 2026-05-08 (Tasks #31 e #33).
 
 `orchestrator-bridge/main.py` tem ~20 literais `14400` hardcoded (TTL de sessão Redis). O namespace `session` no Config API (`channel_gateway_ttl_s`) existe mas não é consumido pelo bridge. Migrar para leitura dinâmica similar ao `RoutingConfigCache`. Idem para `session_replayer` (`HYDRATION_TTL_SECONDS`, `REPLAY_CONTEXT_TTL`) e `conversation-writer` (`transcript_ttl_seconds`).
 
-### Config API seed — novos namespaces/chaves
-
-- Renomear `masking` → `audit_policy` no seed (manter `masking` como alias de compatibilidade).
-- Adicionar chaves ao namespace `session`: `orchestrator_session_ttl_s` (14400), `transcript_ttl_s` (14400), `replayer_hydration_ttl_s` (3600), `replay_context_ttl_s` (3600), `pool_config_ttl_s` (3600), `sentiment_live_ttl_s` (300).
-- Adicionar `analytics_consumer` como namespace (renomear de `consumer`).
-
 ### Pool Registry — routing_expression field
 
 Verificar se `agent-registry` (Prisma schema + API endpoints) aceita e persiste o campo `routing_expression` nos modelos `Pool`/`CreatePool`/`UpdatePool`. O frontend já envia o campo; o backend precisa estar preparado.
