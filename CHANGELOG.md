@@ -2,6 +2,20 @@
 
 ---
 
+## Task #173 — writeStreamEntry centralizado no mcp-server-plughub (2026-05-09)
+
+Eliminados 4 pontos de `redis.xadd()` direto em `server.ts` que usavam formatos inconsistentes (campos `author` como JSON object sem campos flat `author_id`/`author_role`, ausência de `segment_id`). Todos migrados para `writeStreamEntry()` que garante validação Zod em runtime e layout canônico no stream.
+
+Pontos migrados em `server.ts`:
+- `writeParticipantEvent` — `participant_joined`/`participant_left` com `visibility: "all"`
+- Mention dispatcher — `message` com `visibility: "agents_only"`
+- Hook agent response path — `message` com `visibility: streamVis` (dinâmico)
+- Normal message path — `message` com `visibility: "all"`
+
+Resultado: `server.ts` não contém nenhum `xadd` direto. Todo entry no stream canônico passa por `writeStreamEntry()` com `author_id`/`author_role` flat fields obrigatórios — elimina fallbacks em `_parse_entry` do analytics-api.
+
+---
+
 ## Quota namespace removido do Config API seed (2026-05-09)
 
 As três entradas do namespace `quota` (`max_concurrent_sessions`, `llm_tokens_daily`, `messages_daily`) foram removidas do seed.py por serem código morto:

@@ -47,12 +47,6 @@ Ver CHANGELOG 2026-05-08 (Tasks #31 e #33).
 
 ---
 
-## mcp-server-plughub — writeStreamEntry centralizado (Task #173)
-
-Refatoração estrutural para eliminar os múltiplos caminhos de XADD direto no stream Redis. Hoje existem quatro pontos de escrita com convenções inconsistentes: `message_send` (session.ts), `notification_send` (bpm.ts), `agent_done` (session.ts), `mention_dispatcher` (bpm.ts). Cada um grava campos com formatos diferentes (`author` como JSON object vs. campos flat, `segment_id` ausente ou inconsistente), causando bugs de visibilidade e fallbacks no `_parse_entry` do analytics-api.
-
-**Solução**: função única `writeStreamEntry()` com validação Zod obrigatória em compile-time e runtime antes de cada XADD. Campos obrigatórios: `type`, `author_id`, `author_role`, `visibility`, `content`, `timestamp`. `segment_id` opcional mas sempre presente como campo consistente. Falha ruidosa se campo ausente — nenhum entry incompleto entra no stream.
-
 ---
 
 ## Language Cleanup — Portuguese identifiers in code (2026-05-07)

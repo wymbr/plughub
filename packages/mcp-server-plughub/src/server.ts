@@ -1175,16 +1175,14 @@ export async function startServer(config: ServerConfig): Promise<void> {
     const writeParticipantEvent = async (type: "participant_joined" | "participant_left", sessionId: string) => {
       if (!sessionId) return
       try {
-        await (redis as any).xadd(
-          `session:${sessionId}:stream`,
-          "*",
-          "event_id",   crypto.randomUUID(),
-          "type",       type,
-          "timestamp",  new Date().toISOString(),
-          "author",     JSON.stringify({ participant_id: agentInstanceId || poolId, instance_id: agentInstanceId || poolId, role: agentRole }),
-          "visibility", JSON.stringify("all"),
-          "payload",    JSON.stringify({ participant_id: agentInstanceId || poolId, instance_id: agentInstanceId || poolId }),
-        )
+        await writeStreamEntry(redis as any, {
+          stream_key:  `session:${sessionId}:stream`,
+          type,
+          author_id:   agentInstanceId || poolId,
+          author_role: agentRole,
+          visibility:  "all",
+          payload:     { participant_id: agentInstanceId || poolId, instance_id: agentInstanceId || poolId },
+        })
       } catch { /* stream not available — non-fatal */ }
     }
 
@@ -1471,20 +1469,16 @@ export async function startServer(config: ServerConfig): Promise<void> {
 
           // 1. Write to session stream as agents_only
           try {
-            await (redis as any).xadd(
-              `session:${targetSessionId}:stream`,
-              "*",
-              "event_id",   messageId,
-              "type",       "message",
-              "timestamp",  msgTs,
-              "author",     JSON.stringify({
-                participant_id: agentInstanceId || poolId,
-                instance_id:    agentInstanceId || poolId,
-                type:           "agent_human",
-              }),
-              "visibility", JSON.stringify("agents_only"),
-              "payload",    JSON.stringify({ message_id: messageId, text: msgText }),
-            )
+            await writeStreamEntry(redis as any, {
+              stream_key:  `session:${targetSessionId}:stream`,
+              type:        "message",
+              author_id:   agentInstanceId || poolId,
+              author_role: agentRole,
+              visibility:  "agents_only",
+              event_id:    messageId,
+              timestamp:   msgTs,
+              payload:     { message_id: messageId, text: msgText },
+            })
           } catch { /* non-fatal — stream may not exist yet */ }
 
           // 2. Echo to all agents via Redis pub/sub (the Agent Assist UI listens here)
@@ -1629,25 +1623,20 @@ export async function startServer(config: ServerConfig): Promise<void> {
 
           // 1. Write to stream with matched visibility
           try {
-            await (redis as any).xadd(
-              `session:${targetSessionId}:stream`,
-              "*",
-              "event_id",   outMsgId,
-              "type",       "message",
-              "timestamp",  msgTs,
-              "author",     JSON.stringify({
-                participant_id: agentInstanceId || poolId || "human_agent",
-                instance_id:    agentInstanceId || poolId || "human_agent",
-                type:           "agent_human",
-                role:           agentRole,
-              }),
-              "visibility", JSON.stringify(streamVis),
-              "payload",    JSON.stringify({
+            await writeStreamEntry(redis as any, {
+              stream_key:  `session:${targetSessionId}:stream`,
+              type:        "message",
+              author_id:   agentInstanceId || poolId || "human_agent",
+              author_role: agentRole,
+              visibility:  streamVis,
+              event_id:    outMsgId,
+              timestamp:   msgTs,
+              payload:     {
                 message_id: outMsgId,
                 content:    { type: "text", text: msgText },
                 text:       msgText,
-              }),
-            )
+              },
+            })
             await redis.expire(`session:${targetSessionId}:stream`, 14400)
           } catch { /* non-fatal */ }
 
@@ -1703,25 +1692,20 @@ export async function startServer(config: ServerConfig): Promise<void> {
 
           // Write to canonical stream so supervision SSE and analytics can see the message.
           try {
-            await (redis as any).xadd(
-              `session:${targetSessionId}:stream`,
-              "*",
-              "event_id",   outMsgId,
-              "type",       "message",
-              "timestamp",  msgTs,
-              "author",     JSON.stringify({
-                participant_id: agentInstanceId || poolId || "human_agent",
-                instance_id:    agentInstanceId || poolId || "human_agent",
-                type:           "agent_human",
-                role:           agentRole,
-              }),
-              "visibility", JSON.stringify("all"),
-              "payload",    JSON.stringify({
+            await writeStreamEntry(redis as any, {
+              stream_key:  `session:${targetSessionId}:stream`,
+              type:        "message",
+              author_id:   agentInstanceId || poolId || "human_agent",
+              author_role: agentRole,
+              visibility:  "all",
+              event_id:    outMsgId,
+              timestamp:   msgTs,
+              payload:     {
                 message_id: outMsgId,
                 content:    { type: "text", text: msgText },
                 text:       msgText,
-              }),
-            )
+              },
+            })
             await redis.expire(`session:${targetSessionId}:stream`, 14400)
             console.log(
               `[human-msg] XADD ok session=${targetSessionId} msg=${outMsgId} ` +
