@@ -1,14 +1,13 @@
 /**
  * AgentsPage — /contacts/agents
  *
- * Live view of agent instances grouped by agent_type.
- * Instances are read from Redis via GET /api/instances (mcp-server-plughub).
- * Redis is the source of truth for runtime state — orchestrator-bridge bootstrap
- * writes instances there; PostgreSQL agent-registry only tracks configuration.
+ * Two sub-tabs:
+ *   monitor  — live instances polled every 15 s (Redis via GET /api/instances)
+ *   report   — daily performance metrics (GET /reports/agent-performance/daily)
  *
- * Sub-tabs:
- *   monitor — live instances polled every 15s
- *   list    — aggregated agent metrics (Arc 8 backend — pending)
+ * Data sources:
+ *   Live instances : GET /api/instances          (mcp-server-plughub → Redis)
+ *   Daily perf     : GET /reports/agent-performance/daily  (analytics-api)
  */
 import React, { useCallback, useEffect, useState } from 'react'
 import { useAuth } from '@/auth/useAuth'
@@ -18,16 +17,29 @@ import type { Pool } from '@/types'
 
 // ── Runtime instance type (from Redis via mcp-server-plughub) ─────────────────
 interface RuntimeInstance {
-  instance_id:    string
-  agent_type_id:  string
-  pool_id?:       string
-  pools?:         string[]
-  status:         string
+  instance_id:       string
+  agent_type_id:     string
+  pool_id?:          string
+  pools?:            string[]
+  status:            string
   current_sessions?: number
   max_concurrent?:   number
   channel_types?:    string[]
   source?:           string
   registered_at?:    string
+}
+
+// ── Daily performance row (from analytics-api) ────────────────────────────────
+interface DailyPerfRow {
+  agent_type_id:   string
+  pool_id:         string
+  period_date:     string
+  total_sessions:  number
+  avg_duration_ms: number
+  resolution_rate: number
+  escalation_rate: number
+  transfer_rate:   number
+  human_rate:      number
 }
 
 // ── Status config ─────────────────────────────────────────────────────────────
@@ -51,12 +63,27 @@ const STATUS_LABEL: Record<string, string> = {
 
 const ALL_STATUSES = ['login', 'ready', 'busy', 'paused', 'draining', 'logout'] as const
 
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+function isoToday(): string { return new Date().toISOString().slice(0, 10) }
+function iso7DaysAgo(): string {
+  const d = new Date(); d.setDate(d.getDate() - 6)
+  return d.toISOString().slice(0, 10)
+}
+function pct(v: number): string { return `${(v * 100).toFixed(1)}%` }
+function fmtDuration(ms: number): string {
+  if (ms < 60_000) return `${Math.round(ms / 1000)}s`
+  const m = Math.floor(ms / 60_000)
+  const s = Math.round((ms % 60_000) / 1000)
+  return s > 0 ? `${m}m ${s}s` : `${m}m`
+}
+
 // ── Monitor sub-tab ───────────────────────────────────────────────────────────
 
 async function fetchRuntimeInstances(
   tenantId: string,
-  poolId?: string,
-  status?: string,
+  poolId?:  string,
+  status?:  string,
 ): Promise<RuntimeInstance[]> {
   const params = new URLSearchParams({ tenant_id: tenantId })
   if (poolId) params.append('pool_id', poolId)
@@ -68,13 +95,12 @@ async function fetchRuntimeInstances(
 }
 
 function MonitorSubTab({ tenantId }: { tenantId: string }) {
-  const [instances,      setInstances]      = useState<RuntimeInstance[]>([])
-  const [pools,          setPools]          = useState<Pool[]>([])
-  const [loading,        setLoading]        = useState(false)
-  const [error,          setError]          = useState<string | null>(null)
-  const [selectedGroup,  setSelectedGroup]  = useState<string | null>(null)
+  const [instances,     setInstances]     = useState<RuntimeInstance[]>([])
+  const [pools,         setPools]         = useState<Pool[]>([])
+  const [loading,       setLoading]       = useState(false)
+  const [error,         setError]         = useState<string | null>(null)
+  const [selectedGroup, setSelectedGroup] = useState<string | null>(null)
 
-  // Filters — persisted in localStorage so they survive navigation
   const [filterPool,   setFilterPool]   = useState<string>(
     () => localStorage.getItem('agents.filterPool')   ?? ''
   )
@@ -92,10 +118,8 @@ function MonitorSubTab({ tenantId }: { tenantId: string }) {
   }
 
   const loadPools = useCallback(async () => {
-    try {
-      const res = await listPools(tenantId)
-      setPools(res.items)
-    } catch { /* non-fatal */ }
+    try { const res = await listPools(tenantId); setPools(res.items) }
+    catch { /* non-fatal */ }
   }, [tenantId])
 
   const load = useCallback(async () => {
@@ -113,14 +137,12 @@ function MonitorSubTab({ tenantId }: { tenantId: string }) {
   }, [tenantId, filterPool, filterStatus])
 
   useEffect(() => { loadPools() }, [loadPools])
-
   useEffect(() => {
     load()
     const id = setInterval(load, 15_000)
     return () => clearInterval(id)
   }, [load])
 
-  // Group by agent_type_id
   type AgentGroup = {
     agentTypeId: string
     instances:   RuntimeInstance[]
@@ -150,44 +172,27 @@ function MonitorSubTab({ tenantId }: { tenantId: string }) {
 
       {/* Filter bar */}
       <div className="flex items-center gap-3 px-4 py-2.5 border-b border-slate-800 flex-shrink-0 flex-wrap">
-
-        {/* Pool filter */}
         <div className="flex items-center gap-1.5">
           <label className="text-xs text-slate-500 whitespace-nowrap">Pool</label>
-          <select
-            value={filterPool}
-            onChange={e => handleSetFilterPool(e.target.value)}
-            className="text-xs bg-slate-900 border border-slate-700 rounded px-2 py-1 text-slate-200 focus:outline-none focus:border-slate-500 min-w-[140px]"
-          >
+          <select value={filterPool} onChange={e => handleSetFilterPool(e.target.value)}
+            className="text-xs bg-slate-900 border border-slate-700 rounded px-2 py-1 text-slate-200 focus:outline-none focus:border-slate-500 min-w-[140px]">
             <option value="">Todos</option>
-            {pools.map(p => (
-              <option key={p.pool_id} value={p.pool_id}>{p.pool_id}</option>
-            ))}
+            {pools.map(p => <option key={p.pool_id} value={p.pool_id}>{p.pool_id}</option>)}
           </select>
         </div>
-
-        {/* Status filter */}
         <div className="flex items-center gap-1.5">
           <label className="text-xs text-slate-500 whitespace-nowrap">Status</label>
-          <select
-            value={filterStatus}
-            onChange={e => handleSetFilterStatus(e.target.value)}
-            className="text-xs bg-slate-900 border border-slate-700 rounded px-2 py-1 text-slate-200 focus:outline-none focus:border-slate-500"
-          >
+          <select value={filterStatus} onChange={e => handleSetFilterStatus(e.target.value)}
+            className="text-xs bg-slate-900 border border-slate-700 rounded px-2 py-1 text-slate-200 focus:outline-none focus:border-slate-500">
             <option value="">Todos</option>
-            {ALL_STATUSES.map(s => (
-              <option key={s} value={s}>{STATUS_LABEL[s]}</option>
-            ))}
+            {ALL_STATUSES.map(s => <option key={s} value={s}>{STATUS_LABEL[s]}</option>)}
           </select>
         </div>
-
         <div className="flex-1" />
-
         {loading
           ? <Spinner />
           : <button onClick={load} className="text-xs text-slate-500 hover:text-slate-300 transition-colors px-2 py-1">↻ Atualizar</button>
         }
-
         <span className="text-xs text-slate-600">{instances.length} instâncias</span>
       </div>
 
@@ -198,20 +203,16 @@ function MonitorSubTab({ tenantId }: { tenantId: string }) {
           <div className="px-3 py-2 border-b border-slate-800 flex-shrink-0">
             <span className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider">Por tipo de agente</span>
           </div>
-
-          {/* All */}
           <button
             className="w-full text-left px-4 py-2.5 border-b border-slate-800 transition-colors flex-shrink-0"
             style={{
-              background:  !selectedGroup ? '#1e293b' : 'transparent',
-              borderLeft:  !selectedGroup ? '3px solid #3b82f6' : '3px solid transparent',
+              background: !selectedGroup ? '#1e293b' : 'transparent',
+              borderLeft: !selectedGroup ? '3px solid #3b82f6' : '3px solid transparent',
             }}
-            onClick={() => setSelectedGroup(null)}
-          >
+            onClick={() => setSelectedGroup(null)}>
             <div className="text-xs font-semibold text-slate-200">Todos</div>
             <div className="text-xs text-slate-500 mt-0.5">{instances.length} instâncias</div>
           </button>
-
           <div className="flex-1 overflow-y-auto">
             {groups.map(g => {
               const active = g.agentTypeId === selectedGroup
@@ -219,8 +220,8 @@ function MonitorSubTab({ tenantId }: { tenantId: string }) {
                 <button key={g.agentTypeId} onClick={() => setSelectedGroup(active ? null : g.agentTypeId)}
                   className="w-full text-left px-4 py-2.5 border-b border-slate-800 transition-colors"
                   style={{
-                    background:  active ? '#1e3a5f' : 'transparent',
-                    borderLeft:  active ? '3px solid #3b82f6' : '3px solid transparent',
+                    background: active ? '#1e3a5f' : 'transparent',
+                    borderLeft: active ? '3px solid #3b82f6' : '3px solid transparent',
                   }}>
                   <div className="text-xs font-semibold truncate" style={{ color: active ? '#93c5fd' : '#e2e8f0' }}>
                     {g.agentTypeId}
@@ -246,13 +247,11 @@ function MonitorSubTab({ tenantId }: { tenantId: string }) {
               {selectedGroup ? `Instâncias — ${selectedGroup}` : 'Todas as instâncias'}
             </span>
           </div>
-
           {error && (
             <div className="mx-4 mt-3 px-3 py-2 bg-red-950 border border-red-800 rounded text-xs text-red-300">
               Erro ao carregar instâncias: {error}
             </div>
           )}
-
           <div className="flex-1 overflow-y-auto">
             {displayInstances.length === 0 && !loading && !error ? (
               <div className="flex flex-col items-center justify-center py-16 text-slate-500 gap-2">
@@ -286,9 +285,7 @@ function MonitorSubTab({ tenantId }: { tenantId: string }) {
                         <td className="px-4 py-2.5">
                           <code className="text-blue-300 font-semibold">{inst.instance_id}</code>
                         </td>
-                        <td className="px-3 py-2.5 text-slate-400 truncate max-w-[180px]">
-                          {inst.agent_type_id}
-                        </td>
+                        <td className="px-3 py-2.5 text-slate-400 truncate max-w-[180px]">{inst.agent_type_id}</td>
                         <td className="px-3 py-2.5 text-center">
                           <span className="text-[11px] font-bold px-1.5 py-0.5 rounded"
                             style={{ background: color + '22', color }}>
@@ -326,10 +323,251 @@ function MonitorSubTab({ tenantId }: { tenantId: string }) {
   )
 }
 
+// ── Report sub-tab ────────────────────────────────────────────────────────────
+
+function RateBar({ value, color }: { value: number; color: string }) {
+  return (
+    <div className="flex items-center gap-1.5">
+      <div className="w-16 h-1.5 rounded bg-gray-100 overflow-hidden">
+        <div className="h-full rounded" style={{ width: `${(value * 100).toFixed(0)}%`, background: color }} />
+      </div>
+      <span className="text-[11px] tabular-nums" style={{ color }}>{pct(value)}</span>
+    </div>
+  )
+}
+
+function ReportSubTab({ tenantId }: { tenantId: string }) {
+  const [fromDt,        setFromDt]        = useState(iso7DaysAgo)
+  const [toDt,          setToDt]          = useState(isoToday)
+  const [filterPool,    setFilterPool]    = useState('')
+  const [filterAgent,   setFilterAgent]   = useState('')
+  const [data,          setData]          = useState<DailyPerfRow[]>([])
+  const [pools,         setPools]         = useState<Pool[]>([])
+  const [loading,       setLoading]       = useState(false)
+  const [error,         setError]         = useState<string | null>(null)
+  const [sortKey,       setSortKey]       = useState<keyof DailyPerfRow>('period_date')
+  const [sortAsc,       setSortAsc]       = useState(false)
+
+  const loadPools = useCallback(async () => {
+    try { const res = await listPools(tenantId); setPools(res.items) }
+    catch { /* non-fatal */ }
+  }, [tenantId])
+
+  const load = useCallback(async () => {
+    setLoading(true); setError(null)
+    try {
+      const qs = new URLSearchParams({ tenant_id: tenantId, from_dt: fromDt, to_dt: toDt })
+      if (filterPool)  qs.append('pool_id', filterPool)
+      if (filterAgent) qs.append('agent_type_id', filterAgent)
+      const res  = await fetch(`/reports/agent-performance/daily?${qs}`)
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      const body = await res.json()
+      setData(Array.isArray(body) ? body : (body.data ?? []))
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+      setData([])
+    } finally { setLoading(false) }
+  }, [tenantId, fromDt, toDt, filterPool, filterAgent])
+
+  useEffect(() => { loadPools() }, [loadPools])
+  useEffect(() => { load() }, [load])
+
+  // ── KPIs ─────────────────────────────────────────────────────────────────────
+  const totalSessions  = data.reduce((s, r) => s + r.total_sessions, 0)
+  const wResolution    = totalSessions > 0
+    ? data.reduce((s, r) => s + r.resolution_rate * r.total_sessions, 0) / totalSessions
+    : null
+  const wEscalation    = totalSessions > 0
+    ? data.reduce((s, r) => s + r.escalation_rate * r.total_sessions, 0) / totalSessions
+    : null
+  const avgDuration    = totalSessions > 0
+    ? data.reduce((s, r) => s + r.avg_duration_ms * r.total_sessions, 0) / totalSessions
+    : null
+
+  // ── Unique agent types for filter dropdown ────────────────────────────────────
+  const agentTypes = [...new Set(data.map(r => r.agent_type_id))].sort()
+
+  // ── Sort ──────────────────────────────────────────────────────────────────────
+  function handleSort(key: keyof DailyPerfRow) {
+    if (key === sortKey) setSortAsc(a => !a)
+    else { setSortKey(key); setSortAsc(false) }
+  }
+
+  const sorted = [...data].sort((a, b) => {
+    const va = a[sortKey], vb = b[sortKey]
+    const cmp = typeof va === 'number' && typeof vb === 'number'
+      ? va - vb : String(va).localeCompare(String(vb))
+    return sortAsc ? cmp : -cmp
+  })
+
+  // ── CSV export ────────────────────────────────────────────────────────────────
+  function exportCsv() {
+    const cols: (keyof DailyPerfRow)[] = [
+      'period_date', 'agent_type_id', 'pool_id', 'total_sessions',
+      'avg_duration_ms', 'resolution_rate', 'escalation_rate', 'transfer_rate', 'human_rate',
+    ]
+    const header = cols.join(',')
+    const rows   = data.map(r => cols.map(c => r[c]).join(',')).join('\n')
+    const blob   = new Blob([header + '\n' + rows], { type: 'text/csv' })
+    const url    = URL.createObjectURL(blob)
+    const a      = document.createElement('a')
+    a.href = url; a.download = `agents_perf_${fromDt}_${toDt}.csv`; a.click()
+    URL.revokeObjectURL(url)
+  }
+
+  // ── Th helper ─────────────────────────────────────────────────────────────────
+  function Th({ label, k, align = 'left' }: { label: string; k: keyof DailyPerfRow; align?: string }) {
+    const active = sortKey === k
+    return (
+      <th onClick={() => handleSort(k)}
+        className={`px-3 py-2.5 font-medium text-${align} cursor-pointer select-none whitespace-nowrap hover:text-gray-700 transition-colors ${active ? 'text-primary' : 'text-gray-500'}`}>
+        {label}{active ? (sortAsc ? ' ↑' : ' ↓') : ''}
+      </th>
+    )
+  }
+
+  return (
+    <div className="flex flex-col h-full overflow-hidden bg-gray-50">
+
+      {/* Filter bar */}
+      <div className="bg-white border-b border-gray-200 px-5 py-2.5 flex items-center gap-3 flex-shrink-0 flex-wrap">
+        <div className="flex items-center gap-1.5">
+          <label className="text-xs text-gray-500">De</label>
+          <input type="date" value={fromDt} onChange={e => setFromDt(e.target.value)}
+            className="text-xs border border-gray-300 rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-primary/40" />
+        </div>
+        <div className="flex items-center gap-1.5">
+          <label className="text-xs text-gray-500">Até</label>
+          <input type="date" value={toDt} onChange={e => setToDt(e.target.value)}
+            className="text-xs border border-gray-300 rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-primary/40" />
+        </div>
+        <div className="flex items-center gap-1.5">
+          <label className="text-xs text-gray-500">Pool</label>
+          <select value={filterPool} onChange={e => setFilterPool(e.target.value)}
+            className="text-xs border border-gray-300 rounded px-2 py-1 bg-white focus:outline-none focus:ring-1 focus:ring-primary/40 min-w-[130px]">
+            <option value="">Todos</option>
+            {pools.map(p => <option key={p.pool_id} value={p.pool_id}>{p.pool_id}</option>)}
+          </select>
+        </div>
+        <div className="flex items-center gap-1.5">
+          <label className="text-xs text-gray-500">Agente</label>
+          <select value={filterAgent} onChange={e => setFilterAgent(e.target.value)}
+            className="text-xs border border-gray-300 rounded px-2 py-1 bg-white focus:outline-none focus:ring-1 focus:ring-primary/40 min-w-[160px]">
+            <option value="">Todos</option>
+            {agentTypes.map(a => <option key={a} value={a}>{a}</option>)}
+          </select>
+        </div>
+        <div className="flex-1" />
+        {loading
+          ? <Spinner />
+          : <button onClick={load} className="text-xs text-gray-400 hover:text-gray-600 transition-colors px-2 py-1">↻ Atualizar</button>
+        }
+        <button onClick={exportCsv} disabled={data.length === 0}
+          className="text-xs border border-gray-200 rounded px-2.5 py-1 text-gray-600 hover:bg-gray-50 disabled:opacity-40 transition-colors">
+          ↓ CSV
+        </button>
+      </div>
+
+      {/* KPI strip */}
+      <div className="flex gap-3 px-5 py-3 flex-shrink-0 flex-wrap">
+        <div className="bg-white border border-gray-200 rounded-lg px-5 py-3 flex flex-col gap-0.5 min-w-[130px]">
+          <span className="text-[11px] text-gray-400 uppercase tracking-wide">Sessões</span>
+          <span className="text-2xl font-bold text-gray-800 leading-none">{totalSessions.toLocaleString('pt-BR')}</span>
+        </div>
+        <div className="bg-white border border-gray-200 rounded-lg px-5 py-3 flex flex-col gap-0.5 min-w-[130px]">
+          <span className="text-[11px] text-gray-400 uppercase tracking-wide">Resolução média</span>
+          <span className="text-2xl font-bold leading-none" style={{ color: '#059669' }}>
+            {wResolution !== null ? pct(wResolution) : '—'}
+          </span>
+        </div>
+        <div className="bg-white border border-gray-200 rounded-lg px-5 py-3 flex flex-col gap-0.5 min-w-[130px]">
+          <span className="text-[11px] text-gray-400 uppercase tracking-wide">Escalonamento</span>
+          <span className="text-2xl font-bold leading-none" style={{ color: wEscalation !== null && wEscalation > 0.15 ? '#DC2626' : '#1B4F8A' }}>
+            {wEscalation !== null ? pct(wEscalation) : '—'}
+          </span>
+        </div>
+        <div className="bg-white border border-gray-200 rounded-lg px-5 py-3 flex flex-col gap-0.5 min-w-[130px]">
+          <span className="text-[11px] text-gray-400 uppercase tracking-wide">Tempo médio</span>
+          <span className="text-2xl font-bold text-gray-800 leading-none">
+            {avgDuration !== null ? fmtDuration(avgDuration) : '—'}
+          </span>
+        </div>
+      </div>
+
+      {/* Error */}
+      {error && (
+        <div className="mx-5 mb-2 px-3 py-2 bg-red-50 border border-red-200 rounded text-xs text-red-600 flex-shrink-0">
+          Erro ao carregar dados: {error}
+        </div>
+      )}
+
+      {/* Table */}
+      <div className="flex-1 overflow-auto px-5 pb-5">
+        {sorted.length === 0 && !loading ? (
+          <div className="flex flex-col items-center justify-center py-20 text-gray-400 gap-2">
+            <span className="text-3xl">📊</span>
+            <span className="text-sm">Nenhum dado no período</span>
+          </div>
+        ) : (
+          <table className="w-full text-xs bg-white border border-gray-200 rounded-lg overflow-hidden border-separate border-spacing-0">
+            <thead className="sticky top-0 z-10 bg-gray-50 border-b border-gray-200">
+              <tr>
+                <Th label="Data"       k="period_date" />
+                <Th label="Agente"     k="agent_type_id" />
+                <Th label="Pool"       k="pool_id" />
+                <Th label="Sessões"    k="total_sessions"  align="right" />
+                <Th label="Tempo méd." k="avg_duration_ms" align="right" />
+                <th className="px-3 py-2.5 text-left text-gray-500 font-medium whitespace-nowrap">Resolução</th>
+                <th className="px-3 py-2.5 text-left text-gray-500 font-medium whitespace-nowrap">Escalonamento</th>
+                <th className="px-3 py-2.5 text-left text-gray-500 font-medium whitespace-nowrap">Transferência</th>
+                <th className="px-3 py-2.5 text-left text-gray-500 font-medium whitespace-nowrap">Humano</th>
+              </tr>
+            </thead>
+            <tbody>
+              {sorted.map((row, i) => (
+                <tr key={i} className="border-t border-gray-100 hover:bg-gray-50 transition-colors">
+                  <td className="px-3 py-2.5 text-gray-500 font-mono whitespace-nowrap">{row.period_date}</td>
+                  <td className="px-3 py-2.5 text-gray-700 font-mono max-w-[200px] truncate" title={row.agent_type_id}>
+                    {row.agent_type_id}
+                  </td>
+                  <td className="px-3 py-2.5 text-gray-500 max-w-[140px] truncate" title={row.pool_id}>
+                    {row.pool_id || '—'}
+                  </td>
+                  <td className="px-3 py-2.5 text-right text-gray-700 font-medium">
+                    {row.total_sessions.toLocaleString('pt-BR')}
+                  </td>
+                  <td className="px-3 py-2.5 text-right text-gray-500">
+                    {fmtDuration(row.avg_duration_ms)}
+                  </td>
+                  <td className="px-3 py-2.5">
+                    <RateBar value={row.resolution_rate}  color="#059669" />
+                  </td>
+                  <td className="px-3 py-2.5">
+                    <RateBar value={row.escalation_rate}  color={row.escalation_rate > 0.15 ? '#DC2626' : '#6b7280'} />
+                  </td>
+                  <td className="px-3 py-2.5">
+                    <RateBar value={row.transfer_rate}    color="#2D9CDB" />
+                  </td>
+                  <td className="px-3 py-2.5">
+                    <RateBar value={row.human_rate}       color="#D97706" />
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+    </div>
+  )
+}
+
 // ── AgentsPage ────────────────────────────────────────────────────────────────
+
+type AgentTab = 'monitor' | 'report'
 
 export default function AgentsPage() {
   const { tenantId } = useAuth()
+  const [activeTab, setActiveTab] = useState<AgentTab>('monitor')
 
   if (!tenantId) {
     return (
@@ -339,13 +577,33 @@ export default function AgentsPage() {
     )
   }
 
+  const tabs: { id: AgentTab; label: string }[] = [
+    { id: 'monitor', label: 'Monitor' },
+    { id: 'report',  label: 'Relatório' },
+  ]
+
   return (
     <div className="flex flex-col h-full overflow-hidden bg-[#0a1628]">
-      <div className="flex-shrink-0 px-4 pt-3 pb-2 border-b border-slate-800">
+      {/* Header + tab bar */}
+      <div className="flex-shrink-0 px-4 pt-3 border-b border-slate-800">
         <span className="font-bold text-slate-100 text-base">Agentes</span>
+        <div className="flex gap-0 mt-2">
+          {tabs.map(t => (
+            <button key={t.id} onClick={() => setActiveTab(t.id)}
+              className="px-4 py-1.5 text-xs font-medium transition-colors border-b-2"
+              style={{
+                borderColor: activeTab === t.id ? '#3b82f6' : 'transparent',
+                color:       activeTab === t.id ? '#93c5fd' : '#64748b',
+              }}>
+              {t.label}
+            </button>
+          ))}
+        </div>
       </div>
+
       <div className="flex-1 overflow-hidden">
-        <MonitorSubTab tenantId={tenantId} />
+        {activeTab === 'monitor' && <MonitorSubTab tenantId={tenantId} />}
+        {activeTab === 'report'  && <ReportSubTab  tenantId={tenantId} />}
       </div>
     </div>
   )

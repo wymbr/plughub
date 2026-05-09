@@ -4,41 +4,30 @@
 
 ---
 
----
-
 ## platform-ui — Próximas features planejadas
 
 ### #30 — ✅ Contacts & Nav Restructure — implementado (2026-05-08)
+### Backend-dependent Pages — ✅ implementado (2026-05-09)
 
-Ver CHANGELOG 2026-05-08 e `docs/modules/task-30-contacts-restructure.md`.
+Ver CHANGELOG 2026-05-09.
 
-**Pendências futuras decorrentes:**
-- `AgentsPage` / Lista sub-tab: requer backend Arc 8 (`GET /reports/agent-performance/daily`)
-- `AnaliseProcessosPage`: requer endpoint analytics-api para métricas de workflow
-- `AnaliseQualidadePage`: requer `GET /reports/evaluations/summary` da evaluation-api
-- `FlowMonitorPage`: select de pools hardcoded (sem opções dinâmicas) — melhorar com fetch de pools disponíveis
-- `EventsPage`: requer endpoint `GET /reports/events` no analytics-api (pode ainda não existir)
+**Pendências futuras decorrentes do #30 — ainda abertas:**
+- `AgentFlowDeployPage`: role-based access control (developer vs operator) — ABAC não aplicado ainda
+
+---
 
 ### #31 / #33 — ✅ Flow/Deploy: modelo pool-centric 3 slots — implementado (2026-05-08)
 
 Ver CHANGELOG 2026-05-08 (Tasks #31 e #33).
 
 **Pendências futuras decorrentes:**
-- `AgentFlowDeployPage`: role-based access control (developer vs operator) — atualmente todos os usuários veem o botão "Editar slot"; ABAC não está aplicado ainda
-- `skill_scheduled_deploy_v1` precisa existir como skill no registry para o agendamento funcionar (legado do #31 — seção de agendamento foi removida no #33)
-
----
-
-## platform-ui — Backend pendente para features de config (2026-05-06)
+- `skill_scheduled_deploy_v1` precisa existir como skill no registry para o agendamento funcionar
 
 ---
 
 ## Dashboard #35 — ✅ Sistema de Cards Genéricos — implementado (2026-05-09)
 
 Ver CHANGELOG 2026-05-09 (Parts 1–4). Spec completa em `docs/modules/dashboard.md`.
-
-**Pendências futuras decorrentes:**
-- `FlowMonitorPage`: select de pools hardcoded — substituir por fetch dinâmico de `GET /v1/pools` no agent-registry
 
 ---
 
@@ -54,12 +43,6 @@ Ver CHANGELOG 2026-05-09 (Parts 1–4). Spec completa em `docs/modules/dashboard
 
 ---
 
----
-
----
-
----
-
 ## Channel Endpoints — channel-gateway integration (pending)
 
 Layers 1 (agent-registry), 3 (platform-ui), 4 (schemas) ✅ complete — see CHANGELOG 2026-05-07.
@@ -68,10 +51,9 @@ Layers 1 (agent-registry), 3 (platform-ui), 4 (schemas) ✅ complete — see CHA
 
 ---
 
-
 ## Skill Flow Editor — Folder Organization (new feature)
 
-O `SkillFlowsPage` exibe lista plana. Não há pastas/grupos. Melhoria desejada: agrupamento visual por `classification.type` (orchestrator/vertical/horizontal) ou por pasta livre configurável no `skill_id` (ex: `skill_sac_*/skill_retencao_*` agrupados). Separação visual entre "skills de workflow" e "agents operacionais" simplificaria a navegação em registries com muitos skills.
+O `SkillFlowsPage` exibe lista plana. Não há pastas/grupos. Melhoria desejada: agrupamento visual por `classification.type` (orchestrator/vertical/horizontal) ou por pasta livre configurável no `skill_id`. Separação visual entre "skills de workflow" e "agents operacionais" simplificaria a navegação em registries com muitos skills.
 
 **Escopo sugerido:** filtro/toggle por `classification.type` na sidebar do editor (sem filesystem de pastas — apenas agrupamento visual).
 

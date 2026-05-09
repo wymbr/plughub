@@ -46,9 +46,11 @@ from .reports_query import (
     query_quality_report,
     query_segments_report,
     query_agent_availability,
+    query_events,
     query_session_complexity,
     query_sessions_report,
     query_usage_report,
+    query_workflow_summary,
     query_workflows_report,
 )
 from .timeseries_query import (
@@ -866,4 +868,86 @@ async def get_agent_availability(
         page_size         = ps,
     )
     return _respond(data, format, f"agent_availability_{_today_label()}.csv")
+
+
+# ─── /reports/events — unified event stream ───────────────────────────────────
+
+@router.get("/events")
+async def get_events(
+    request:        Request,
+    tenant_id:      str           = Query(...,    description="Tenant identifier"),
+    from_dt:        Optional[str] = Query(None,   description="Start datetime (YYYY-MM-DD or ISO8601); default: 7d ago"),
+    to_dt:          Optional[str] = Query(None,   description="End datetime (YYYY-MM-DD or ISO8601); default: now"),
+    session_id:     Optional[str] = Query(None,   description="Exact session_id filter"),
+    pool_id:        Optional[str] = Query(None,   description="Pool filter"),
+    channel:        Optional[str] = Query(None,   description="Channel filter (webchat, whatsapp, voice, …)"),
+    event_type:     Optional[str] = Query(None,   description="Event type filter (session_opened, message_sent, agent_done, …)"),
+    page:           int           = Query(1,      ge=1),
+    page_size:      int           = Query(100,    ge=1, le=1000),
+    format:         str           = Query("json", pattern="^(json|csv)$"),
+    pool_principal: PoolPrincipal = Depends(optional_pool_principal),
+) -> Response:
+    """
+    Unified event stream for debugging and audit.
+
+    Sources (UNION ALL):
+      sessions            → session_opened, session_closed
+      messages            → message_sent (visibility=all only)
+      agent_events        → agent_done, routed
+      agent_pause_intervals → agent_pause, agent_ready
+      workflow_events     → workflow_{event_type}
+
+    All events share the common shape:
+      event_id, session_id, tenant_id, type, timestamp,
+      channel, pool_id, author_id, author_role, content
+    """
+    ps   = _clamp_page_size(page_size, is_csv=(format == "csv"))
+    data = await query_events(
+        client           = request.app.state.store.new_client(),
+        database         = request.app.state.store._database,
+        tenant_id        = tenant_id,
+        from_dt          = from_dt,
+        to_dt            = to_dt,
+        session_id       = session_id,
+        pool_id          = pool_id,
+        channel          = channel,
+        event_type       = event_type,
+        accessible_pools = pool_principal.accessible_pools,
+        page             = page,
+        page_size        = ps,
+    )
+    return _respond(data, format, f"events_{_today_label()}.csv")
+
+
+# ─── /reports/workflow-summary — aggregated workflow analytics ────────────────
+
+@router.get("/workflow-summary")
+async def get_workflow_summary(
+    request:        Request,
+    tenant_id:      str           = Query(...,          description="Tenant identifier"),
+    from_dt:        Optional[str] = Query(None,         description="Start date (YYYY-MM-DD or ISO8601); default: 7d ago"),
+    to_dt:          Optional[str] = Query(None,         description="End date; default: now"),
+    group_by:       str           = Query("flow_id",    pattern="^(flow_id|campaign_id)$"),
+    flow_id:        Optional[str] = Query(None,         description="Filter by specific flow_id"),
+    campaign_id:    Optional[str] = Query(None,         description="Filter by specific campaign_id"),
+    pool_principal: PoolPrincipal = Depends(optional_pool_principal),
+) -> Response:
+    """
+    Aggregated workflow metrics grouped by flow_id or campaign_id.
+
+    One row per group with: total_triggered, total_completed, total_failed,
+    total_timeout, total_cancelled, total_suspended,
+    completion_rate, failure_rate, avg_duration_ms.
+    """
+    data = await query_workflow_summary(
+        client      = request.app.state.store.new_client(),
+        database    = request.app.state.store._database,
+        tenant_id   = tenant_id,
+        from_dt     = from_dt,
+        to_dt       = to_dt,
+        group_by    = group_by,
+        flow_id     = flow_id,
+        campaign_id = campaign_id,
+    )
+    return JSONResponse(content=data)
 

@@ -2,6 +2,29 @@
 
 ---
 
+## Backend-dependent Pages — AgentsPage Relatório + EventsPage + AnaliseProcessosPage (2026-05-09)
+
+Implementação completa das últimas três páginas que dependiam de endpoints backend não existentes:
+
+**AgentsPage sub-tab Relatório** (`packages/platform-ui/src/modules/contacts/AgentsPage.tsx`)
+- Nova tab "Relatório" ao lado de "Monitor" com query a `GET /reports/agent-performance/daily` (endpoint já existia)
+- Filtros: range de data, pool (dropdown dinâmico), agente (dropdown populado pelos dados)
+- KPI strip: total sessões, resolução média ponderada, escalonamento médio ponderado, tempo médio
+- Tabela sortável com mini-bars para resolução/escalonamento/transferência/humano; export CSV
+
+**EventsPage backend** (`packages/analytics-api/`)
+- `query_events` em `reports_query.py`: UNION ALL de 7 branches (session_opened, session_closed, message_sent, agent_done/routed, agent_pause, agent_ready, workflow events) com `CAST(NULL AS Nullable(String))` para type safety no ClickHouse
+- Endpoint `GET /reports/events` com filtros: `session_id`, `pool_id`, `channel`, `event_type`; pool_scope RBAC via `accessible_pools`; paginação padrão
+- Otimização: quando `event_type` é especificado, apenas os branches relevantes são incluídos no UNION
+- Frontend `EventsPage.tsx` já existia e estava aguardando este endpoint
+
+**AnaliseProcessosPage** (full stack)
+- `query_workflow_summary` em `reports_query.py`: agrega `workflow_events` por `flow_id` ou `campaign_id` usando `countDistinctIf`; retorna `completion_rate`, `failure_rate`, `avg_duration_ms` (calculados em Python pós-query para evitar divisão por zero no SQL)
+- Endpoint `GET /reports/workflow-summary?group_by=flow_id|campaign_id`
+- `AnaliseProcessosPage.tsx`: substituído placeholder por página completa com filter bar (data + group_by), 5 KPI cards, tabela sortável com `OutcomeBar` (distribuição de outcomes) + `RateBar` (conclusão/falha), export CSV
+
+---
+
 ## Dashboard #35 — Part 4: Analytics-API Display Endpoints (2026-05-09)
 
 10 endpoints `GET /reports/display/*` no `analytics-api`, com formatters centralizados em `display_formatters.py`. Cada endpoint retorna o shape exato do DisplayTool correspondente — os cards new-format passam a mostrar dados reais de ClickHouse/Redis.

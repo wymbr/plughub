@@ -645,6 +645,108 @@ def _fetch_workflows(
     return {"data": _rows_to_dicts(result), "meta": _meta(page, page_size, total, since, until)}
 
 
+# ─── /reports/workflow-summary — aggregated workflow analytics ────────────────
+#
+# Aggregates workflow_events per flow_id or campaign_id.
+# Uses countDistinctIf to count unique instances per lifecycle stage.
+# duration_ms is only populated on completed/failed events (workflow-api sets it).
+
+async def query_workflow_summary(
+    client:    Any,
+    database:  str,
+    tenant_id: str,
+    from_dt:   str | None = None,
+    to_dt:     str | None = None,
+    *,
+    group_by:    str = "flow_id",       # "flow_id" | "campaign_id"
+    flow_id:     str | None = None,
+    campaign_id: str | None = None,
+) -> dict:
+    """
+    Summarised workflow metrics grouped by flow_id or campaign_id.
+
+    Returns one row per group with:
+      group_key, total_triggered, total_completed, total_failed,
+      total_timeout, total_cancelled, total_suspended,
+      completion_rate, failure_rate, avg_duration_ms
+    """
+    since = _ch_fmt(from_dt) if from_dt else _default_from()
+    until = _ch_fmt(to_dt)   if to_dt   else _default_to()
+    try:
+        return await asyncio.to_thread(
+            _fetch_workflow_summary, client, database, tenant_id, since, until,
+            group_by, flow_id, campaign_id,
+        )
+    except Exception as exc:
+        logger.warning("query_workflow_summary failed tenant=%s: %s", tenant_id, exc)
+        return {"data": [], "meta": {"from_dt": since, "to_dt": until}, "error": "data_unavailable"}
+
+
+def _fetch_workflow_summary(
+    client: Any, db: str, tenant_id: str,
+    since: str, until: str,
+    group_by: str, flow_id: str | None, campaign_id: str | None,
+) -> dict:
+    # Validate group_by — only allow known values
+    if group_by not in ("flow_id", "campaign_id"):
+        group_by = "flow_id"
+
+    conditions = [
+        f"tenant_id = '{tenant_id}'",
+        f"timestamp >= '{since}'",
+        f"timestamp <= '{until}'",
+    ]
+    if flow_id:
+        conditions.append(f"flow_id = '{flow_id}'")
+    if campaign_id:
+        conditions.append(f"campaign_id = '{campaign_id}'")
+
+    where = " AND ".join(conditions)
+
+    # group_key: for campaign_id, NULL/empty maps to '(sem campanha)'
+    if group_by == "campaign_id":
+        group_expr = "if(campaign_id IS NOT NULL AND campaign_id != '', campaign_id, '(sem campanha)')"
+    else:
+        group_expr = "flow_id"
+
+    result = client.query(f"""
+        SELECT
+            {group_expr}                                                        AS group_key,
+            countDistinctIf(instance_id, event_type = 'triggered')             AS total_triggered,
+            countDistinctIf(instance_id, event_type = 'completed')             AS total_completed,
+            countDistinctIf(instance_id, event_type = 'failed')                AS total_failed,
+            countDistinctIf(instance_id, event_type = 'timeout')               AS total_timeout,
+            countDistinctIf(instance_id, event_type = 'cancelled')             AS total_cancelled,
+            countDistinctIf(instance_id, event_type = 'suspended')             AS total_suspended,
+            avgIf(duration_ms, event_type IN ('completed','failed')
+                  AND duration_ms IS NOT NULL AND duration_ms > 0)             AS avg_duration_ms
+        FROM {db}.workflow_events FINAL
+        WHERE {where}
+        GROUP BY group_key
+        ORDER BY total_triggered DESC
+        LIMIT 500
+    """, parameters={})
+
+    rows = _rows_to_dicts(result)
+
+    # Compute derived rates client-side (avoid division-by-zero in SQL)
+    for row in rows:
+        triggered = row.get("total_triggered") or 0
+        completed = row.get("total_completed") or 0
+        failed    = row.get("total_failed")    or 0
+        row["completion_rate"] = round(completed / triggered, 4) if triggered else 0.0
+        row["failure_rate"]    = round(failed    / triggered, 4) if triggered else 0.0
+        # avg_duration_ms may be None if no completed/failed events in range
+        if row.get("avg_duration_ms") is None:
+            row["avg_duration_ms"] = None
+
+    return {
+        "data":     rows,
+        "group_by": group_by,
+        "meta":     {"total": len(rows), "from_dt": since, "to_dt": until},
+    }
+
+
 # ─── /reports/campaigns ──────────────────────────────────────────────────────
 
 async def query_campaigns_report(
@@ -1550,3 +1652,302 @@ def _fetch_agent_availability(
             row["period_date"] = row["period_date"].isoformat()
 
     return {"data": agg_rows, "meta": _meta(page, page_size, total, since, until)}
+
+
+# ─── /reports/events — unified event stream ───────────────────────────────────
+#
+# UNION ALL across five source tables:
+#   sessions          → session_opened / session_closed
+#   messages          → message_sent
+#   agent_events      → agent_done / routed
+#   agent_pause_intervals → agent_pause / agent_ready
+#   workflow_events   → workflow_{event_type}
+#
+# Each branch normalises to the common shape:
+#   event_id, session_id, tenant_id, type, timestamp,
+#   channel, pool_id, author_id, author_role, content
+#
+# The outer WHERE applies user-level filters (event_type, pool_id, channel,
+# session_id) so ClickHouse can prune cheaply after the UNION.
+
+_NULL = "CAST(NULL AS Nullable(String))"   # reused in every branch
+
+# Which tables serve which event types (for query pruning)
+_SESSION_TYPES  = {"session_opened", "session_closed"}
+_MESSAGE_TYPES  = {"message_sent"}
+_AGENT_TYPES    = {"agent_done", "routed"}
+_PAUSE_TYPES    = {"agent_pause"}
+_READY_TYPES    = {"agent_ready"}
+
+
+def _events_sql_branches(
+    db:               str,
+    tenant_id:        str,
+    since:            str,
+    until:            str,
+    event_type:       str | None,
+    session_id:       str | None,
+    accessible_pools: list[str] | None,
+) -> list[str]:
+    """
+    Builds the list of UNION ALL branch SQL strings.
+
+    Optimisation: when event_type is specified, only branches that can
+    produce that type are included.  When event_type is None, all branches
+    are included.
+    """
+    include_session  = (not event_type) or event_type in _SESSION_TYPES
+    include_messages = (not event_type) or event_type in _MESSAGE_TYPES
+    include_agent    = (not event_type) or event_type in _AGENT_TYPES
+    include_pause    = (not event_type) or event_type in _PAUSE_TYPES
+    include_ready    = (not event_type) or event_type in _READY_TYPES
+    include_workflow = (not event_type) or (event_type and event_type.startswith("workflow_"))
+
+    # accessible_pools filter snippet for tables that have pool_id
+    pool_scope = ""
+    if accessible_pools:
+        pool_list = ", ".join(f"'{p}'" for p in accessible_pools)
+        pool_scope = f" AND pool_id IN ({pool_list})"
+
+    # session_id filter inside subqueries
+    sid_filter_sess   = (f" AND session_id = '{session_id}'" if session_id else "")
+    sid_filter_msg    = (f" AND m.session_id = '{session_id}'" if session_id else "")
+    sid_filter_agent  = (f" AND ae.session_id = '{session_id}'" if session_id else "")
+
+    branches: list[str] = []
+
+    if include_session:
+        # session_opened
+        branches.append(f"""
+    SELECT
+        session_id                        AS event_id,
+        session_id,
+        tenant_id,
+        'session_opened'                  AS type,
+        opened_at                         AS timestamp,
+        channel,
+        pool_id,
+        {_NULL}                           AS author_id,
+        'system'                          AS author_role,
+        {_NULL}                           AS content
+    FROM {db}.sessions FINAL
+    WHERE tenant_id = '{tenant_id}'
+      AND opened_at >= '{since}' AND opened_at <= '{until}'
+      {pool_scope}{sid_filter_sess}""")
+
+        # session_closed
+        branches.append(f"""
+    SELECT
+        concat(session_id, ':closed')     AS event_id,
+        session_id,
+        tenant_id,
+        'session_closed'                  AS type,
+        closed_at                         AS timestamp,
+        channel,
+        pool_id,
+        {_NULL}                           AS author_id,
+        'system'                          AS author_role,
+        if(close_reason IS NOT NULL, close_reason, {_NULL}) AS content
+    FROM {db}.sessions FINAL
+    WHERE tenant_id = '{tenant_id}'
+      AND closed_at IS NOT NULL
+      AND closed_at >= '{since}' AND closed_at <= '{until}'
+      {pool_scope}{sid_filter_sess}""")
+
+    if include_messages:
+        pool_join_filter = ""
+        if accessible_pools:
+            pool_list = ", ".join(f"'{p}'" for p in accessible_pools)
+            pool_join_filter = f" AND s.pool_id IN ({pool_list})"
+        branches.append(f"""
+    SELECT
+        m.message_id                      AS event_id,
+        m.session_id,
+        m.tenant_id,
+        'message_sent'                    AS type,
+        m.timestamp,
+        m.channel,
+        s.pool_id,
+        if(m.author_id IS NOT NULL, m.author_id, {_NULL}) AS author_id,
+        m.author_role,
+        if(m.content IS NOT NULL, m.content, {_NULL}) AS content
+    FROM {db}.messages FINAL m
+    LEFT JOIN (
+        SELECT session_id, pool_id
+        FROM {db}.sessions FINAL
+        WHERE tenant_id = '{tenant_id}'{pool_join_filter}
+    ) s ON m.session_id = s.session_id
+    WHERE m.tenant_id = '{tenant_id}'
+      AND m.timestamp >= '{since}' AND m.timestamp <= '{until}'
+      AND m.visibility = 'all'{sid_filter_msg}""")
+
+    if include_agent:
+        branches.append(f"""
+    SELECT
+        ae.event_id,
+        ae.session_id,
+        ae.tenant_id,
+        ae.event_type                     AS type,
+        ae.timestamp,
+        s.channel,
+        ae.pool_id,
+        if(ae.instance_id != '', ae.instance_id, {_NULL}) AS author_id,
+        ae.agent_type_id                  AS author_role,
+        if(ae.outcome IS NOT NULL, ae.outcome, {_NULL}) AS content
+    FROM {db}.agent_events FINAL ae
+    LEFT JOIN (
+        SELECT session_id, channel
+        FROM {db}.sessions FINAL
+        WHERE tenant_id = '{tenant_id}'
+    ) s ON ae.session_id = s.session_id
+    WHERE ae.tenant_id = '{tenant_id}'
+      AND ae.timestamp >= '{since}' AND ae.timestamp <= '{until}'
+      {pool_scope.replace('pool_id', 'ae.pool_id')}{sid_filter_agent}""")
+
+    if include_pause:
+        branches.append(f"""
+    SELECT
+        interval_id                       AS event_id,
+        {_NULL}                           AS session_id,
+        tenant_id,
+        'agent_pause'                     AS type,
+        paused_at                         AS timestamp,
+        {_NULL}                           AS channel,
+        pool_id,
+        instance_id                       AS author_id,
+        agent_type_id                     AS author_role,
+        reason_label                      AS content
+    FROM {db}.agent_pause_intervals FINAL
+    WHERE tenant_id = '{tenant_id}'
+      AND paused_at >= '{since}' AND paused_at <= '{until}'
+      {pool_scope}""")
+
+    if include_ready:
+        branches.append(f"""
+    SELECT
+        concat(interval_id, ':r')         AS event_id,
+        {_NULL}                           AS session_id,
+        tenant_id,
+        'agent_ready'                     AS type,
+        resumed_at                        AS timestamp,
+        {_NULL}                           AS channel,
+        pool_id,
+        instance_id                       AS author_id,
+        agent_type_id                     AS author_role,
+        reason_label                      AS content
+    FROM {db}.agent_pause_intervals FINAL
+    WHERE tenant_id = '{tenant_id}'
+      AND resumed_at IS NOT NULL
+      AND resumed_at >= '{since}' AND resumed_at <= '{until}'
+      {pool_scope}""")
+
+    if include_workflow:
+        # event_type in workflow_events is e.g. 'triggered', 'completed', etc.
+        # We prefix with 'workflow_' to match front-end expectations.
+        # If a specific workflow type is requested, strip the prefix for the inner filter.
+        wf_type_filter = ""
+        if event_type and event_type.startswith("workflow_"):
+            inner_type = event_type[len("workflow_"):]
+            wf_type_filter = f" AND event_type = '{inner_type}'"
+        branches.append(f"""
+    SELECT
+        we.event_id,
+        {_NULL}                           AS session_id,
+        we.tenant_id,
+        concat('workflow_', we.event_type) AS type,
+        we.timestamp,
+        {_NULL}                           AS channel,
+        {_NULL}                           AS pool_id,
+        we.instance_id                    AS author_id,
+        'workflow'                        AS author_role,
+        if(we.status IS NOT NULL, we.status, {_NULL}) AS content
+    FROM {db}.workflow_events FINAL we
+    WHERE we.tenant_id = '{tenant_id}'
+      AND we.timestamp >= '{since}' AND we.timestamp <= '{until}'
+      {wf_type_filter}""")
+
+    return branches
+
+
+async def query_events(
+    client:    Any,
+    database:  str,
+    tenant_id: str,
+    from_dt:   str | None = None,
+    to_dt:     str | None = None,
+    *,
+    session_id:       str | None       = None,
+    pool_id:          str | None       = None,
+    channel:          str | None       = None,
+    event_type:       str | None       = None,
+    accessible_pools: list[str] | None = None,
+    page:      int = 1,
+    page_size: int = 100,
+) -> dict:
+    """
+    Unified event stream from sessions, messages, agent_events,
+    agent_pause_intervals and workflow_events.
+
+    Returns: { data: [EventRow], meta: { total, page, page_size, from_dt, to_dt } }
+    """
+    since = _ch_fmt(from_dt) if from_dt else _default_from()
+    until = _ch_fmt(to_dt)   if to_dt   else _default_to()
+    if accessible_pools is not None and not accessible_pools:
+        return {"data": [], "meta": _meta(page, page_size, 0, since, until)}
+    try:
+        return await asyncio.to_thread(
+            _fetch_events, client, database, tenant_id, since, until,
+            session_id, pool_id, channel, event_type, accessible_pools, page, page_size,
+        )
+    except Exception as exc:
+        logger.warning("query_events failed tenant=%s: %s", tenant_id, exc)
+        return {"data": [], "meta": _meta(page, page_size, 0, since, until), "error": "data_unavailable"}
+
+
+def _fetch_events(
+    client: Any, db: str, tenant_id: str,
+    since: str, until: str,
+    session_id: str | None, pool_id: str | None,
+    channel: str | None, event_type: str | None,
+    accessible_pools: list[str] | None,
+    page: int, page_size: int,
+) -> dict:
+    branches = _events_sql_branches(
+        db, tenant_id, since, until, event_type, session_id, accessible_pools,
+    )
+    if not branches:
+        return {"data": [], "meta": _meta(page, page_size, 0, since, until)}
+
+    union_sql = "\n    UNION ALL\n".join(branches)
+
+    # Outer filters applied after UNION to let ClickHouse push them down
+    outer_conditions: list[str] = []
+    if event_type:
+        outer_conditions.append(f"type = '{event_type}'")
+    if pool_id:
+        outer_conditions.append(f"pool_id = '{pool_id}'")
+    if channel:
+        outer_conditions.append(f"channel = '{channel}'")
+    if session_id:
+        outer_conditions.append(f"session_id = '{session_id}'")
+
+    outer_where = ("WHERE " + " AND ".join(outer_conditions)) if outer_conditions else ""
+    offset = (page - 1) * page_size
+
+    count_sql = f"""
+        SELECT count()
+        FROM ({union_sql}) AS events
+        {outer_where}
+    """
+    total = _count(client, count_sql, {})
+
+    data_sql = f"""
+        SELECT event_id, session_id, tenant_id, type, timestamp,
+               channel, pool_id, author_id, author_role, content
+        FROM ({union_sql}) AS events
+        {outer_where}
+        ORDER BY timestamp DESC
+        LIMIT {page_size} OFFSET {offset}
+    """
+    result = client.query(data_sql, parameters={})
+    return {"data": _rows_to_dicts(result), "meta": _meta(page, page_size, total, since, until)}
