@@ -2,6 +2,25 @@
 
 ---
 
+## CLAUDE.md Otimização Fase 2 — docs/modules/ completo (2026-05-09)
+
+Criados 5 novos arquivos em `docs/modules/` para seções que não tinham referência completa fora do CLAUDE.md:
+
+| Arquivo criado | Conteúdo |
+|---|---|
+| `docs/modules/arc5-segments.md` | ContactSegment data model, ClickHouse schema, endpoints |
+| `docs/modules/ai-gateway.md` | Multi-account rotation, AccountSelector, model profiles, sentiment emission |
+| `docs/modules/arc8-agent-availability.md` | Pause tracking, Kafka events, ClickHouse schema, analytics endpoint |
+| `docs/modules/usage-metering.md` | Dimensions, Redis counters, assertQuota pattern, cycle reset |
+| `docs/modules/pricing.md` | Billing model, reserve pools, endpoints, quota side effects |
+| `docs/modules/session-replayer.md` | Pipeline, Hydrator pattern, ReplayContext, timing replay, Comparison Mode |
+
+CLAUDE.md atualizado: `→ See [docs/modules/xxx.md]` adicionado em cada seção que agora tem um arquivo dedicado. Seção "Pending — CLAUDE.md Otimização Fase 2" atualizada para Fase 3.
+
+TODO.md: Fase 2 marcada como concluída; item Fase 3 mantido.
+
+---
+
 ## Language Cleanup Phase 2 — ABAC field names (2026-05-09)
 
 Renomeados os 3 identificadores ABAC em português que violavam a Language Rule (English in code):

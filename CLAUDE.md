@@ -445,7 +445,7 @@ Pattern: ensure-before-read with optional Hydrator. Pipeline: `session_closed` �
 
 `ReplayContext` extended for Arc 6: `evaluation_form`, `campaign_context`, `knowledge_snippets` (top-5). **Comparison Mode**: `comparison_turns` with Jaccard similarity (threshold 0.4); `buildComparisonReport()` with divergence_points. `ReplayEvent.delta_ms` preserves original intervals; `speed_factor` scales timing (default 10x batch).
 
-→ See [`docs/adr/adr-session-replayer.md`](docs/adr/adr-session-replayer.md)
+→ See [`docs/modules/session-replayer.md`](docs/modules/session-replayer.md), [`docs/adr/adr-session-replayer.md`](docs/adr/adr-session-replayer.md)
 
 ---
 
@@ -456,6 +456,8 @@ Kafka topic `usage.events` — `UsageEventSchema`: `event_id`, `tenant_id`, `ses
 Dimensions wired: `sessions` (Core, SET NX guard), `messages` (Core, visibility=all), `llm_tokens_input/output` (AI Gateway), `webchat_attachments` (Channel Gateway). Pending: `whatsapp_conversations`, `voice_minutes`, `sms_segments`, `email_messages` (functions ready, adapters not yet wired).
 
 Redis: `{t}:usage:current:{dimension}` (45d), `{t}:quota:limit:{dimension}`, `{t}:quota:concurrent_sessions`. `assertQuota` (INCRBY-check-rollback). Cycle reset: `POST /admin/cycle-reset` (port 3950).
+
+→ See [`docs/modules/usage-metering.md`](docs/modules/usage-metering.md)
 
 ---
 
@@ -475,7 +477,9 @@ Masked fields delivery chain: `step.masked` → `notification_send` args → `co
 
 `packages/pricing-api/` — Python FastAPI, port 3900. Billing by configured capacity, not consumption. Two components: **base capacity** (monthly pro-rated, billing_days) + **reserve pools** (full-day billing per activation day). `billing_cycle_day` default 1. `reserve_markup_pct` default 0%.
 
-Endpoints: `GET /v1/pricing/invoice/{tenant_id}` (JSON + `?format=xlsx`), `POST /v1/pricing/resources/{tenant_id}`, `POST /v1/pricing/reserve/{tenant_id}/{pool_id}/activate|deactivate`. Config API namespace `pricing`: `unit_prices`, `reserve_markup_pct`, `billing_cycle_day`, `currency`. Platform-UI BillingPage at `/config/billing` (role: admin).
+Endpoints: `GET /v1/pricing/invoice/{tenant_id}` (JSON + `?format=xlsx`), `POST /v1/pricing/resources/{tenant_id}`, `POST /v1/pricing/reserve/{tenant_id}/{pool_id}/activate|deactivate`. Config API namespace `pricing`: `unit_prices`, `reserve_markup_pct`, `billing_cycle_day`, `currency`. Platform-UI BillingPage at `/config/billing` (role: admin). Quota limits written to Redis on plan activation — not seeded by Config API.
+
+→ See [`docs/modules/pricing.md`](docs/modules/pricing.md)
 
 ---
 
@@ -497,7 +501,7 @@ Pre-hook ContextStore writes (before hooks fire): `session.close_origin`, `sessi
 
 ClickHouse tables: `analytics.segments` (`ReplacingMergeTree` ORDER BY `(tenant_id, session_id, segment_id)`), `analytics.session_timeline` (enriched with `segment_id`), `mv_agent_performance_daily` (AggregatingMergeTree), `mv_segment_summary`. Endpoints: `GET /reports/segments`, `GET /reports/agents/performance`, `GET /reports/agent-performance/daily`, `GET /reports/sessions/complexity`.
 
-→ See [`docs/adr/adr-contact-segments.md`](docs/adr/adr-contact-segments.md)
+→ See [`docs/modules/arc5-segments.md`](docs/modules/arc5-segments.md), [`docs/adr/adr-contact-segments.md`](docs/adr/adr-contact-segments.md)
 
 ---
 
@@ -507,11 +511,15 @@ ClickHouse tables: `analytics.segments` (`ReplacingMergeTree` ORDER BY `(tenant_
 
 Config: `PLUGHUB_ANTHROPIC_API_KEYS=sk-1,sk-2,sk-3` (multi-key activates AccountSelector). `PLUGHUB_OPENAI_API_KEYS` optional fallback. Model profiles: `realtime` (Sonnet → gpt-4o), `balanced` (Haiku → gpt-4o-mini), `evaluation` (Haiku — isolated from realtime). Config API namespace `ai_gateway`: `account_rotation_enabled`, `throttle_retry_after_s`, `evaluation_model`.
 
+→ See [`docs/modules/ai-gateway.md`](docs/modules/ai-gateway.md)
+
 ---
 
 ## Arc 8 — Agent Availability & Pause Tracking
 
 Pipeline for tracking human agent pauses. Config API namespace `agent_activity`, key `pause_reasons` (seedable pause reason list). Pause endpoints: `PUT /api/agent-pause` and `PUT /api/agent-resume` in mcp-server-plughub — updates Redis state, publishes `agent_pause`/`agent_ready` to `agent.lifecycle` Kafka with `reason_id`/`reason_label`. ClickHouse table: `agent_pause_intervals` (ReplacingMergeTree). Analytics: `GET /reports/agent-availability` with pool scoping. Platform-UI: `AgentReportsPage.tsx` at `/contacts/reports/agents`.
+
+→ See [`docs/modules/arc8-agent-availability.md`](docs/modules/arc8-agent-availability.md)
 
 ---
 
@@ -580,4 +588,4 @@ Nav groups: Atendimento (📞), Fluxo/Editor (⚙️), Avaliação (✓), Config
 - **Integração metering × pricing** *(deferred)*: módulo que aplica planos e escreve `{tenant}:quota:limit:*`.
 
 ### CLAUDE.md — Otimização
-- **Fase 2** *(in progress)*: Mover arc5-segments, session-replayer, usage-metering, pricing, AI gateway, arc8 para docs/modules/ com conteúdo completo.
+- **Fase 3** *(next)*: Revisão final para confirmar target ≤ 800 linhas; mover seções remanescentes se necessário.

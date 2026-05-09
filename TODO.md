@@ -68,8 +68,6 @@ O `SkillFlowsPage` exibe lista plana. Não há pastas/grupos. Melhoria desejada:
 
 ---
 
-## CLAUDE.md — Otimização (Fases 2 e 3)
+## CLAUDE.md — Otimização (Fase 3)
 
-**Fase 2** *(blocked by Fase 1)*: Mover Arc 6, Arc 4, Arc 7, ABAC e ContextStore para arquivos em `docs/modules/`. Manter no CLAUDE.md apenas resumo de 15–20 linhas por módulo com link para o arquivo completo.
-
-**Fase 3** *(blocked by Fase 2)*: Mover seções menores (WebChat Channel, Instance Bootstrap, Pool Lifecycle Hooks, Session Replayer, Usage Metering, Pricing Module) para `docs/modules/`. Revisão final para target ≤ 800 linhas no CLAUDE.md.
+**Fase 3**: Revisão final para confirmar CLAUDE.md ≤ 800 linhas. Mover seções remanescentes se necessário. Fase 2 concluída — ver CHANGELOG 2026-05-09.
