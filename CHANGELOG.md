@@ -2,6 +2,23 @@
 
 ---
 
+## Arc 8 — Disponibilidade e Pausas de Agentes — backend completo (verificado 2026-05-09)
+
+Verificação de code review revelou que todo o backend Arc 8 já estava implementado. TODO.md estava desatualizado. Itens confirmados como presentes:
+
+- `AgentPauseEventSchema` em `platform-events.ts` — campos `reason_id`, `reason_label`, `note` presentes.
+- Config API seed `agent_activity.pause_reasons` — já presente em `seed.py`.
+- `PUT /api/agent-pause` e `PUT /api/agent-resume` em `mcp-server-plughub/src/server.ts` (linhas 944–1050) — publicam `agent_pause`/`agent_ready` em `agent.lifecycle` com `reason_id`/`reason_label`.
+- `parse_agent_lifecycle` em `analytics-api/models.py` — processa `agent_pause` (action=open) e `agent_ready` (action=close_check).
+- Tabela `agent_pause_intervals` (ClickHouse `ReplacingMergeTree`) em `clickhouse.py`.
+- `upsert_agent_pause_interval` e Redis state machine no consumer (`consumer.py`).
+- `GET /reports/agent-availability` em `reports.py` + `query_agent_availability` em `reports_query.py`.
+- Testes unitários em `tests/test_reports.py`.
+
+TODO.md: seção Arc 8 removida (todos os itens concluídos).
+
+---
+
 ## Config API Seed — novos namespaces e chaves de sessão (2026-05-09)
 
 **Arquivo:** `packages/config-api/src/plughub_config_api/seed.py`

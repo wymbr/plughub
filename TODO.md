@@ -61,22 +61,6 @@ Verificar se `agent-registry` (Prisma schema + API endpoints) aceita e persiste 
 
 ---
 
-## Arc 8 — Relatório de Disponibilidade e Pausas de Agentes
-
-**Frontend já implementado:** `AgentReportsPage.tsx` e `PauseReasonModal.tsx` ✅ — aguardando backend.
-
-**Backend pendente:**
-
-1. **`agent_pause` schema** — adicionar `reason_id: string` e `reason_label: string` ao `AgentPauseEventSchema` em `packages/schemas/src/platform-events.ts`.
-
-2. **Config API — motivos de pausa** — seed de namespace `agent_activity` com chave `pause_reasons` (lista de `{ id, label, requires_note: bool }`). Motivos padrão: intervalo, almoço, treinamento, reunião, outro. Override por pool via chave `pause_reasons:{pool_id}`.
-
-3. **orchestrator-bridge — publicar `agent_pause`/`agent_ready` com motivo** — `PUT /api/agent-pause/:instanceId { reason_id, reason_label, note? }` publica no tópico `agent.lifecycle`. `PUT /api/agent-resume/:instanceId` publica `agent_ready`.
-
-4. **analytics-api — consumir `agent_pause` e `agent_ready`** — `parse_agent_lifecycle` estendido para processar pausas → tabela `agent_pause_intervals` (ClickHouse, `ReplacingMergeTree`). Schema: `interval_id, tenant_id, instance_id, agent_type_id, pool_id, reason_id, reason_label, note, paused_at, resumed_at, duration_ms`.
-
-5. **analytics-api — `GET /reports/agent-availability`** — agrega `agent_pause_intervals FINAL` por `(agent_type_id, pool_id, period_date)`. Campos: `total_pause_duration_ms`, `pause_count`, breakdown por `reason_id`. Pool scoping via `optional_pool_principal`.
-
 ---
 
 ## mcp-server-plughub — writeStreamEntry centralizado (Task #173)
