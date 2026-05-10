@@ -449,6 +449,14 @@ Pattern: ensure-before-read with optional Hydrator. Pipeline: `session_closed` �
 
 ---
 
+## Session & Conference Lifecycle — Three-Layer Model
+
+Three independent layers must not be collapsed: **(1) contact lifecycle** (customer perspective, statistics frozen at customer departure); **(2) agent segment lifecycle** (each participant's window, pool resource freed at `agent_done`); **(3) conference infrastructure** (the room, destroyed only when all participants leave). The current implementation conflates layers 1 and 3 — `_trigger_contact_close()` currently serves both. Known gaps: G1 (AHT inflated by wrap-up time), G2 (`remaining` ignores AI specialists), G3 (AI instance restored while still running), G4 (supervisor has no heartbeat cleanup), G5 (primary AI close expels supervisor), G6 (redundant restore on agent_done close). Fixes applied 2026-05-10: busy counter on cross-pool transfer, pool counter on queue entry, `agent_done` publish from bridge for native/YAML-fallback agents.
+
+→ See [`docs/modules/session-conference-lifecycle.md`](docs/modules/session-conference-lifecycle.md)
+
+---
+
 ## Usage Metering
 
 Kafka topic `usage.events` — `UsageEventSchema`: `event_id`, `tenant_id`, `session_id`, `dimension`, `quantity`, `source_component`, `metadata`. No pricing in usage records — metering ≠ pricing.
@@ -586,6 +594,11 @@ Nav groups: Atendimento (📞), Fluxo/Editor (⚙️), Avaliação (✓), Config
 
 ### Pricing Module
 - **Integração metering × pricing** *(deferred)*: módulo que aplica planos e escreve `{tenant}:quota:limit:*`.
+
+### Arc 9 — Agent Groups & Supervisor Scope *(não implementado)*
+- `AgentGroup` como entidade de gestão de pessoas (ortogonal a Pool). Tabelas: `agent_groups`, `agent_group_members`, `agent_group_users`, `agent_group_supervisors`, `agent_group_shifts`. JWT carrega `supervised_groups[]`, `supervised_agent_types[]`, `supervised_user_ids[]` — denormalizados no login/refresh. Shifts resolvem qual supervisor está ativo por janela horária. analytics-api filtra queries de sessões/agentes via LEFT JOIN pré-agregado quando `supervised_agent_types` não-vazio. platform-ui: nova página Config/Groups; Monitor e Console filtram transparentemente por escopo do JWT.
+
+→ See [`docs/modules/arc9-agent-groups.md`](docs/modules/arc9-agent-groups.md)
 
 ### CLAUDE.md — Otimização
 - **Fase 3** *(next)*: Revisão final para confirmar target ≤ 800 linhas; mover seções remanescentes se necessário.
