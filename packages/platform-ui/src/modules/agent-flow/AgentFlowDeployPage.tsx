@@ -37,6 +37,7 @@ interface Skill {
   version?:         string
   description?:     string
   classification?:  Record<string, unknown>
+  folder?:          string   // optional view-only grouping path, e.g. "project/sub"
   interface?:       InterfaceSchema | null  // interface_schema exposed as "interface"
 }
 
@@ -340,6 +341,45 @@ function SlotCard({ slotName, data, skill, onEdit }: SlotCardProps) {
   )
 }
 
+// ── Skill grouping for select ─────────────────────────────────────────────────
+
+interface SkillGroup {
+  label:  string    // optgroup label
+  skills: Skill[]
+}
+
+/** Groups skills into optgroup sections: root type → folder path (flat, no nesting in HTML) */
+function groupSkillsForSelect(skills: Skill[]): SkillGroup[] {
+  const agents    = skills.filter(s => (s.classification?.type as string | undefined) !== 'orchestrator')
+  const workflows = skills.filter(s => (s.classification?.type as string | undefined) === 'orchestrator')
+
+  const groups: SkillGroup[] = []
+
+  for (const [rootLabel, list] of [['Agentes', agents], ['Workflows', workflows]] as [string, Skill[]][]) {
+    if (list.length === 0) continue
+
+    // Collect skills by folder path (max 2 levels)
+    const byFolder = new Map<string, Skill[]>()  // '' = unfiled
+    for (const s of list) {
+      const raw    = s.folder?.trim().replace(/^\/+|\/+$/g, '') ?? ''
+      const folder = raw ? raw.split('/').slice(0, 2).join('/') : ''
+      if (!byFolder.has(folder)) byFolder.set(folder, [])
+      byFolder.get(folder)!.push(s)
+    }
+
+    // Emit unfiled first, then folders sorted alphabetically
+    const unfiled = byFolder.get('') ?? []
+    if (unfiled.length > 0) groups.push({ label: rootLabel, skills: unfiled })
+
+    const folders = Array.from(byFolder.keys()).filter(k => k !== '').sort()
+    for (const folder of folders) {
+      groups.push({ label: `${rootLabel} / ${folder}`, skills: byFolder.get(folder)! })
+    }
+  }
+
+  return groups
+}
+
 // ── Next slot edit panel ───────────────────────────────────────────────────────
 
 interface NextSlotEditorProps {
@@ -442,10 +482,14 @@ function NextSlotEditor({
             style={{ width: '100%', background: '#1e293b', border: '1px solid #334155', borderRadius: 6, padding: '8px 10px', fontSize: 12, color: '#e2e8f0', outline: 'none', boxSizing: 'border-box' }}
           >
             <option value="">Selecione uma skill-flow…</option>
-            {skills.map(s => (
-              <option key={s.skill_id} value={s.skill_id}>
-                {s.skill_id}{s.name ? ` — ${s.name}` : ''}
-              </option>
+            {groupSkillsForSelect(skills).map(group => (
+              <optgroup key={group.label} label={group.label}>
+                {group.skills.map(s => (
+                  <option key={s.skill_id} value={s.skill_id}>
+                    {s.skill_id}{s.name ? ` — ${s.name}` : ''}
+                  </option>
+                ))}
+              </optgroup>
             ))}
           </select>
           {selectedSkill?.description && (
