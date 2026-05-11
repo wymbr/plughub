@@ -98,9 +98,14 @@ Spec completa em [`docs/modules/arc10-journey.md`](docs/modules/arc10-journey.md
 - `mcp-server-plughub`: `tools/journey.ts` — `journey_start`, `journey_link_session`, `journey_merge`
 - `analytics-api`: `parse_journey_event()` + `_DDL_JOURNEY_EVENTS` + `insert_journey_event()` + tópico `journey.events` no consumer
 
-**Fase B — Vinculação automática via collect** *(não implementado)*
-- Channel Gateway: receber `journey_id` do `collect.events` Kafka e taguear sessão criada
-- Flag `creates_journey: true` no skill YAML + skill-flow-engine chamando `journey_start` no primeiro step
+**Fase B — Vinculação automática via collect** *(concluída 2026-05-11)*
+- `workflow-api/db.py`: migration `collect_instances.journey_id`; `_row_to_instance`/`_row_to_collect` expõem `journey_id`; `db_create_collect()` aceita `journey_id`; `db_create_journey_for_instance()` (idempotente, transacional)
+- `workflow-api/config.py`: `journey_topic` adicionado a `Settings`
+- `workflow-api/kafka_emitter.py`: `emit_collect_requested()` propaga `journey_id`
+- `workflow-api/router.py`: `persist_collect` threads `journey_id`; `respond_collect` emite `journey_session_linked` quando collect tem `journey_id` + `body.session_id`
+- `workflow-api/journey_router.py`: endpoint `POST /v1/journeys/from-instance/{instance_id}` (creates_journey:true)
+- `skill-flow-worker/workflow-client.ts`: `journey_id` em `WorkflowInstance`; `createJourneyForInstance()` method
+- `skill-flow-worker/engine-runner.ts`: verifica `creates_journey:true` antes de `engine.run()`; cria journey automaticamente (falha não-fatal)
 
 **Fase C — Monitor (ProcessosPage)** *(não implementado)*
 - Journey list + detail panel + drill-down → sessions existentes → transcript

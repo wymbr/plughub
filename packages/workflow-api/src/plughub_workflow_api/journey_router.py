@@ -8,12 +8,13 @@ call these endpoints internally, ensuring every operation is audited by
 McpInterceptor.
 
 Endpoints:
-  POST   /v1/journeys                          — create journey + trigger workflow
-  GET    /v1/journeys/{journey_id}             — get journey
-  GET    /v1/journeys                          — list journeys (tenant, status, customer_id, skill_id)
-  POST   /v1/journeys/{journey_id}/link-session — link additional session
-  POST   /v1/journeys/{journey_id}/merge       — merge secondary into primary
-  PATCH  /v1/journeys/{journey_id}/status      — update status (internal use: workflow lifecycle)
+  POST   /v1/journeys                                  — create journey + trigger workflow
+  POST   /v1/journeys/from-instance/{instance_id}      — Arc 10 Phase B: creates_journey:true auto-link
+  GET    /v1/journeys/{journey_id}                     — get journey
+  GET    /v1/journeys                                  — list journeys (tenant, status, customer_id, skill_id)
+  POST   /v1/journeys/{journey_id}/link-session        — link additional session
+  POST   /v1/journeys/{journey_id}/merge               — merge secondary into primary
+  PATCH  /v1/journeys/{journey_id}/status              — update status (internal use: workflow lifecycle)
 """
 from __future__ import annotations
 
@@ -26,6 +27,7 @@ from pydantic import BaseModel, Field
 
 from .db import (
     db_create_journey,
+    db_create_journey_for_instance,
     db_get_journey,
     db_list_journeys,
     db_merge_journeys,
@@ -175,6 +177,45 @@ async def create_journey(body: JourneyCreateRequest, request: Request) -> dict:
     )
 
     return {**journey, "workflow_instance_id": instance_id}
+
+
+@journey_router.post("/from-instance/{instance_id}", status_code=201)
+async def create_journey_for_instance(instance_id: str, request: Request) -> dict:
+    """
+    Arc 10 Phase B — creates_journey: true support.
+
+    Called by skill-flow-worker when it detects creates_journey=true on the
+    skill YAML and the running instance has no journey_id yet.
+
+    Idempotent: if the instance already has a journey_id, returns the existing
+    Journey record with HTTP 200 (not 201).
+
+    The skill-flow-worker calls this endpoint at the start of execution (before
+    engine.run()), so the journey exists before any step emits events.
+    """
+    tenant_id = _tenant(request)
+    pool      = request.app.state.pool
+    producer  = request.app.state.producer
+
+    journey = await db_create_journey_for_instance(pool, instance_id, tenant_id)
+    if not journey:
+        raise HTTPException(status_code=404, detail="WorkflowInstance not found")
+
+    # Publish journey_started only for freshly created journeys
+    # (idempotent re-call returns the same journey without re-emitting)
+    if journey.get("workflow_instance_id") == instance_id:
+        await emit_journey_started(
+            producer,
+            _JOURNEY_TOPIC,
+            journey_id           = journey["journey_id"],
+            tenant_id            = tenant_id,
+            skill_id             = journey["skill_id"],
+            origin_session_id    = journey.get("origin_session_id", ""),
+            workflow_instance_id = instance_id,
+            customer_id          = journey.get("customer_id"),
+        )
+
+    return journey
 
 
 @journey_router.get("/{journey_id}")

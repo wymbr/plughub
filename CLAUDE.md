@@ -615,7 +615,7 @@ Journey é a unidade de serviço que transcende a sessão — agrupa todos os co
 
 **Vinculação de sessões subsequentes**: sessões criadas por `collect` step recebem `journey_id` via Kafka `collect.events`. Recontatos manuais via `journey_link_session(journey_id, session_id)`. Correlação automática de recontatos espontâneos é fase posterior.
 
-**Fase A implementada**: `workflow-api` `/v1/journeys` (5 endpoints) + MCP tools `journey_start`/`journey_link_session`/`journey_merge` + `analytics-api` consumer `journey.events` → `journey_events` ClickHouse.
+**Fases A+B implementadas**: `workflow-api` `/v1/journeys` (6 endpoints, inclui `POST /from-instance/{id}`) + MCP tools `journey_start`/`journey_link_session`/`journey_merge` + `analytics-api` consumer `journey.events` → `journey_events` ClickHouse. Phase B: `creates_journey:true` no YAML + skill-flow-worker auto-cria Journey; `collect` step propaga `journey_id`; `respond_collect` emite `journey_session_linked` quando sessão filha chega.
 
 **Kafka**: `journey.events` — 8 tipos: `journey_started`, `journey_session_linked`, `journey_suspended`, `journey_resumed`, `journey_completed`, `journey_failed`, `journey_cancelled`, `journey_merged`.
 

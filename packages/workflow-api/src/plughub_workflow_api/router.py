@@ -57,6 +57,7 @@ from .db import (
     db_complete_instance,
     db_create_collect,
     db_create_instance,
+    db_create_journey_for_instance,
     db_create_webhook,
     db_delete_webhook,
     db_fail_instance,
@@ -81,6 +82,7 @@ from .kafka_emitter import (
     emit_collect_responded,
     emit_completed,
     emit_failed,
+    emit_journey_session_linked,
     emit_resumed,
     emit_started,
     emit_suspended,
@@ -616,6 +618,9 @@ async def persist_collect(
     send_at    = send_dt.isoformat()
     expires_at = expires_dt.isoformat()
 
+    # ── Propagate journey_id from instance (Arc 10 Phase B) ─────────────────
+    journey_id: str | None = instance.get("journey_id")
+
     # ── Persist collect_instance ──────────────────────────────────────────────
     collect = await db_create_collect(
         pool,
@@ -634,6 +639,7 @@ async def persist_collect(
         fields=body.fields,
         send_at=send_dt,
         expires_at=expires_dt,
+        journey_id=journey_id,
     )
 
     # ── Publish collect.requested ─────────────────────────────────────────────
@@ -654,6 +660,7 @@ async def persist_collect(
         fields=body.fields,
         send_at=send_at,
         expires_at=expires_at,
+        journey_id=journey_id,
     )
 
     return {"send_at": send_at, "expires_at": expires_at, "collect": collect}
@@ -757,6 +764,23 @@ async def respond_collect(
         response_data=body.response_data,
         elapsed_ms=elapsed_ms,
     )
+
+    # Arc 10 Phase B — link the new session to the Journey that owns the collect
+    collect_journey_id: str | None = collect.get("journey_id")
+    if collect_journey_id and body.session_id:
+        try:
+            await emit_journey_session_linked(
+                producer, settings.journey_topic,
+                journey_id=collect_journey_id,
+                tenant_id=instance["tenant_id"],
+                skill_id=instance["flow_id"],
+                session_id=body.session_id,
+            )
+        except Exception as exc:
+            logger.warning(
+                "journey_session_linked emit failed journey=%s session=%s: %s",
+                collect_journey_id, body.session_id, exc,
+            )
 
     return {
         "collect_token": body.collect_token,

@@ -308,6 +308,7 @@ async def emit_collect_requested(
     fields:        list,
     send_at:       str,
     expires_at:    str,
+    journey_id:    str | None = None,
 ) -> None:
     event: dict = {
         "event_type":    "collect.requested",
@@ -331,6 +332,8 @@ async def emit_collect_requested(
         event["options"] = options
     if fields:
         event["fields"] = fields
+    if journey_id:
+        event["journey_id"] = journey_id
     await _emit(producer, topic, event)
 
 

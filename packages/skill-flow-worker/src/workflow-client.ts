@@ -31,6 +31,8 @@ export interface WorkflowInstance {
   outcome?: string
   created_at: string
   metadata: Record<string, unknown>
+  /** Arc 10: set when this instance was initiated via creates_journey:true or journey_start MCP tool */
+  journey_id?: string
 }
 
 export interface PersistSuspendParams {
@@ -128,5 +130,34 @@ export class WorkflowClient {
     }
     const body = (await res.json()) as { send_at: string; expires_at: string }
     return { send_at: body.send_at, expires_at: body.expires_at }
+  }
+
+  /**
+   * Arc 10 Phase B — creates_journey: true support.
+   *
+   * Called by EngineRunner when the skill YAML has creates_journey:true and the
+   * running instance does not yet have a journey_id.  Idempotent on the server
+   * side — safe to call even if a race created the journey first.
+   *
+   * Returns the journey_id of the created (or existing) Journey.
+   */
+  async createJourneyForInstance(
+    instanceId: string,
+    tenantId: string,
+  ): Promise<{ journey_id: string }> {
+    const res = await fetch(`${this.baseUrl}/v1/journeys/from-instance/${encodeURIComponent(instanceId)}`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-tenant-id': tenantId,
+        'x-internal': '1',
+      },
+    })
+    if (!res.ok) {
+      const text = await res.text()
+      throw new Error(`Failed to create journey for instance ${instanceId}: HTTP ${res.status} — ${text}`)
+    }
+    const body = (await res.json()) as { journey_id: string }
+    return { journey_id: body.journey_id }
   }
 }

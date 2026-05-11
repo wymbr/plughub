@@ -2,6 +2,39 @@
 
 ---
 
+## Arc 10 Phase B — Journey Automatic Session Linking (2026-05-11)
+
+### `packages/workflow-api/src/plughub_workflow_api/db.py`
+- Migration `ALTER TABLE workflow.collect_instances ADD COLUMN IF NOT EXISTS journey_id UUID` — propaga journey_id do instance para o collect
+- `_row_to_instance()`: expõe `journey_id` no dict serializado
+- `_row_to_collect()`: expõe `journey_id` no dict serializado
+- `db_create_collect()`: aceita `journey_id: str | None = None` e persiste na tabela
+- `db_create_journey_for_instance()` (NEW): cria Journey vinculada a instance já existente; idempotente (retorna journey existente se instance já tem `journey_id`); transacional com `SELECT FOR UPDATE`; deriva `skill_id = flow_id`, back-links `instances.journey_id`
+
+### `packages/workflow-api/src/plughub_workflow_api/config.py`
+- Adicionado `journey_topic: str = "journey.events"` a `Settings`
+
+### `packages/workflow-api/src/plughub_workflow_api/kafka_emitter.py`
+- `emit_collect_requested()`: aceita `journey_id: str | None = None`; inclui no payload quando presente
+
+### `packages/workflow-api/src/plughub_workflow_api/router.py`
+- `persist_collect`: lê `journey_id` do instance e repassa para `db_create_collect()` e `emit_collect_requested()`
+- `respond_collect`: após `emit_collect_responded`, se `collect.journey_id` e `body.session_id`, emite `journey_session_linked` via `emit_journey_session_linked()` (falha não bloqueia resposta)
+- Imports: `db_create_journey_for_instance`, `emit_journey_session_linked` adicionados
+
+### `packages/workflow-api/src/plughub_workflow_api/journey_router.py`
+- Novo endpoint `POST /v1/journeys/from-instance/{instance_id}`: chamado pelo skill-flow-worker quando `creates_journey:true`; idempotente; emite `journey_started` apenas para journeys recém-criadas
+- Import `db_create_journey_for_instance` adicionado
+
+### `packages/skill-flow-worker/src/workflow-client.ts`
+- `WorkflowInstance`: campo `journey_id?: string` adicionado
+- `WorkflowClient.createJourneyForInstance(instanceId, tenantId)` (NEW): `POST /v1/journeys/from-instance/{id}` com headers `x-tenant-id` + `x-internal:1`
+
+### `packages/skill-flow-worker/src/engine-runner.ts`
+- `EngineRunner.runInstance()`: antes de `engine.run()`, verifica `flowDefinition.creates_journey === true && !instance.journey_id`; se verdadeiro, chama `workflowClient.createJourneyForInstance()`; falha é não-fatal (log + continua sem journey)
+
+---
+
 ## Arc 10 Phase A — Journey Backend Foundation (2026-05-11)
 
 ### `packages/schemas/src/journey.ts` (NEW)

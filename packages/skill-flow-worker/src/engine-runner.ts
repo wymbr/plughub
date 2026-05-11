@@ -63,6 +63,28 @@ export class EngineRunner {
       return
     }
 
+    // Arc 10 Phase B — creates_journey: true
+    // If the skill YAML declares creates_journey:true and the instance has no
+    // journey_id yet, create the Journey before running the flow so that every
+    // subsequent step (collect, notify, etc.) is already linked to a Journey.
+    if (
+      (flowDefinition as Record<string, unknown>)['creates_journey'] === true &&
+      !instance.journey_id
+    ) {
+      try {
+        const { journey_id } = await this.workflowClient.createJourneyForInstance(
+          instance.id,
+          instance.tenant_id,
+        )
+        console.log(`Instance ${instance.id}: auto-created journey ${journey_id} (creates_journey:true)`)
+        // Reflect journey_id locally so subsequent code can read it if needed
+        instance = { ...instance, journey_id }
+      } catch (err) {
+        // Non-fatal: log and continue without a journey rather than failing the whole instance
+        console.warn(`Instance ${instance.id}: creates_journey auto-link failed: ${err}`)
+      }
+    }
+
     try {
       // Use origin_session_id as the ContextStore key when available so that
       // @ctx.* reads/writes target the originating customer session's hash
