@@ -9,6 +9,7 @@ import React, { useEffect, useRef } from "react";
 import { ChatMessage } from "../types";
 import { MessageBubble } from "./MessageBubble";
 import { SubmitResult } from "./MenuCard";
+import { useMaskingDisplayRules } from "@/components/MaskedToken";
 
 interface LiveState {
   sentimentScore: number;
@@ -63,7 +64,8 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   substitutionMode = false,
   onMenuSubmit,
 }) => {
-  const bottomRef = useRef<HTMLDivElement | null>(null);
+  const bottomRef    = useRef<HTMLDivElement | null>(null);
+  const maskingRules = useMaskingDisplayRules();
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -144,6 +146,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
             message={msg}
             substitutionMode={substitutionMode}
             onMenuSubmit={onMenuSubmit}
+            maskingRules={maskingRules}
           />
         ))}
 

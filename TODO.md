@@ -75,8 +75,6 @@ Implementação completa: auth-api (tabelas + CRUD REST + shift resolution + JWT
 
 **Bloco 3 — Channel Gateway TTS** *(deferred até implementação de voz)*: quando qualquer adapter de voz/TTS for criado, deve consultar `rule.{category}.display_voice` no namespace `masking` do Config API antes de passar texto ao sintetizador. Comportamentos: `silence` (pula o valor), `beep` (tom de beep), `speak_placeholder` (fala "valor mascarado"). Aplica-se a qualquer canal que gere áudio — não só voice/webrtc. Não implementar antes de definir qual engine TTS será usada.
 
-**AgentAssistPage token rendering** *(deferred)*: chat bubbles em `/agent-assist` ainda não usam `renderWithTokens`. Natural continuação do Bloco 2.
-
 ---
 
 ## Audit Profile — LGPD Compliance Role

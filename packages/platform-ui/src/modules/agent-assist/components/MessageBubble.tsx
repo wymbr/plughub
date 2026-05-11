@@ -11,11 +11,13 @@
 import React from "react";
 import { AuthorType, ChatMessage } from "../types";
 import { MenuCard, SubmitResult } from "./MenuCard";
+import { renderWithTokens, type MaskingRulesMap } from "@/components/MaskedToken";
 
 interface MessageBubbleProps {
   message:           ChatMessage;
   substitutionMode?: boolean;
   onMenuSubmit?:     (menuId: string, result: SubmitResult) => void;
+  maskingRules?:     MaskingRulesMap;
 }
 
 function agentLabel(agentTypeId: string | undefined): string {
@@ -88,6 +90,7 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({
   message,
   substitutionMode = false,
   onMenuSubmit,
+  maskingRules,
 }) => {
   if (message.menuData) {
     // When the menu targets the agent (targetsSelf), auto-enable interactive mode
@@ -151,7 +154,7 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({
         {authorLabel} · {formatTime(message.timestamp)}
       </span>
       <div className={`px-3 py-2 rounded-2xl text-sm leading-relaxed ${bubbleStyle}`}>
-        {message.text}
+        {renderWithTokens(message.text, maskingRules)}
       </div>
     </div>
   );

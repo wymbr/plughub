@@ -27,6 +27,17 @@ Transparently restricts what a supervisor sees in the live Monitor and Console b
 
 ---
 
+## Masking Bloco 2b — AgentAssistPage Token Rendering (2026-05-11)
+
+**`packages/platform-ui/src/modules/agent-assist/components/ChatArea.tsx`**
+- `useMaskingDisplayRules()` chamado uma vez no componente; `maskingRules` passado para cada `MessageBubble`
+
+**`packages/platform-ui/src/modules/agent-assist/components/MessageBubble.tsx`**
+- Prop `maskingRules?: MaskingRulesMap` adicionada
+- `{message.text}` substituído por `{renderWithTokens(message.text, maskingRules)}` — tokens aparecem como chips no console do operador
+
+---
+
 ## Masking Bloco 2 — Channel-Aware Display Architecture (2026-05-11)
 
 **`packages/platform-ui/src/components/MaskedToken.tsx`** *(novo)*
