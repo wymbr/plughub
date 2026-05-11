@@ -537,10 +537,50 @@ function ConfirmModal({ title, message, confirmLabel, confirmColor = '#1d4ed8', 
   )
 }
 
+// ── Role helpers ───────────────────────────────────────────────────────────────
+
+/** Can prepare the "next" slot — developer + admin */
+function hasEditRole(roles: string[]): boolean {
+  return roles.some(r => r === 'developer' || r === 'admin')
+}
+
+/** Can promote / rollback — operator, supervisor + admin */
+function hasOperateRole(roles: string[]): boolean {
+  return roles.some(r => r === 'operator' || r === 'supervisor' || r === 'admin')
+}
+
+const ROLE_BANNER: Record<string, { label: string; color: string; bg: string; border: string }> = {
+  developer: {
+    label:  'Você pode configurar o slot Próxima. Apenas operadores e supervisores podem promover ou reverter.',
+    color:  '#93c5fd', bg: '#0c1b35', border: '#1d4ed844',
+  },
+  operator: {
+    label:  'Você pode promover e reverter deploys. Apenas desenvolvedores podem configurar o slot Próxima.',
+    color:  '#86efac', bg: '#0a1f10', border: '#16a34a44',
+  },
+  supervisor: {
+    label:  'Você pode promover e reverter deploys. Apenas desenvolvedores podem configurar o slot Próxima.',
+    color:  '#86efac', bg: '#0a1f10', border: '#16a34a44',
+  },
+}
+
 // ── Main page ──────────────────────────────────────────────────────────────────
 
 export default function AgentFlowDeployPage() {
-  const { getAccessToken, tenantId } = useAuth()
+  const { getAccessToken, tenantId, session } = useAuth()
+
+  // Derived role capabilities — based on all roles the user holds
+  const roles      = session?.roles ?? []
+  const canEdit    = hasEditRole(roles)
+  const canOperate = hasOperateRole(roles)
+
+  // Banner: pick the most specific role descriptor (developer > supervisor > operator)
+  const bannerRole = roles.includes('developer') ? 'developer'
+    : roles.includes('supervisor')               ? 'supervisor'
+    : roles.includes('operator')                 ? 'operator'
+    : null
+  // Admin has both capabilities — no banner needed
+  const showBanner = bannerRole !== null && !(canEdit && canOperate)
 
   const [pools,        setPools]        = useState<Pool[]>([])
   const [skills,       setSkills]       = useState<Skill[]>([])
@@ -709,6 +749,20 @@ export default function AgentFlowDeployPage() {
 
       {/* ─── Right: slot panel ────────────────────────────────────────── */}
       <div style={{ flex: 1, overflow: 'auto', padding: 24, display: 'flex', flexDirection: 'column', gap: 20 }}>
+
+        {/* Role permission banner */}
+        {showBanner && bannerRole && (
+          <div style={{
+            padding: '8px 14px', borderRadius: 6, fontSize: 12,
+            background: ROLE_BANNER[bannerRole].bg,
+            color:      ROLE_BANNER[bannerRole].color,
+            border:     `1px solid ${ROLE_BANNER[bannerRole].border}`,
+            flexShrink: 0,
+          }}>
+            🔑 {ROLE_BANNER[bannerRole].label}
+          </div>
+        )}
+
         {!selected ? (
           <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', color: '#334155', gap: 8 }}>
             <span style={{ fontSize: 32 }}>⚙</span>
@@ -754,40 +808,44 @@ export default function AgentFlowDeployPage() {
                       slotName={sn}
                       data={slotData}
                       skill={slotSkill}
-                      onEdit={sn === 'next' ? () => { setEditing(true); setSaveError(null) } : undefined}
+                      onEdit={sn === 'next' && canEdit ? () => { setEditing(true); setSaveError(null) } : undefined}
                     />
                   )
                 })}
               </div>
 
               {/* Action buttons */}
-              <div style={{ display: 'flex', gap: 12, marginTop: 16, alignItems: 'center' }}>
+              <div style={{ display: 'flex', gap: 12, marginTop: 16, alignItems: 'center', flexWrap: 'wrap' }}>
                 <button
                   onClick={() => { setConfirmAction('promote'); setActionError(null) }}
-                  disabled={!canPromote || slotsLoading}
+                  disabled={!canPromote || !canOperate || slotsLoading}
+                  title={!canOperate ? 'Apenas operadores e supervisores podem promover' : undefined}
                   style={{
                     padding: '9px 22px', borderRadius: 6, fontSize: 13, fontWeight: 600, border: 'none',
-                    background: canPromote && !slotsLoading ? '#1d4ed8' : '#1e293b',
-                    color:      canPromote && !slotsLoading ? '#fff'    : '#334155',
-                    cursor:     canPromote && !slotsLoading ? 'pointer' : 'not-allowed', transition: 'all .12s',
+                    background: canPromote && canOperate && !slotsLoading ? '#1d4ed8' : '#1e293b',
+                    color:      canPromote && canOperate && !slotsLoading ? '#fff'    : '#334155',
+                    cursor:     canPromote && canOperate && !slotsLoading ? 'pointer' : 'not-allowed', transition: 'all .12s',
                   }}>
                   ↑ Promover (Próxima → Corrente)
                 </button>
                 <button
                   onClick={() => { setConfirmAction('rollback'); setActionError(null) }}
-                  disabled={!canRollback || slotsLoading}
+                  disabled={!canRollback || !canOperate || slotsLoading}
+                  title={!canOperate ? 'Apenas operadores e supervisores podem reverter' : undefined}
                   style={{
                     padding: '9px 22px', borderRadius: 6, fontSize: 13, fontWeight: 600, border: 'none',
-                    background: canRollback && !slotsLoading ? '#78350f' : '#1e293b',
-                    color:      canRollback && !slotsLoading ? '#fde68a' : '#334155',
-                    cursor:     canRollback && !slotsLoading ? 'pointer' : 'not-allowed', transition: 'all .12s',
+                    background: canRollback && canOperate && !slotsLoading ? '#78350f' : '#1e293b',
+                    color:      canRollback && canOperate && !slotsLoading ? '#fde68a' : '#334155',
+                    cursor:     canRollback && canOperate && !slotsLoading ? 'pointer' : 'not-allowed', transition: 'all .12s',
                   }}>
                   ↩ Rollback (Anterior → Corrente)
                 </button>
-                {!canPromote && !canRollback && slots && (
+                {slots && (
                   <span style={{ fontSize: 12, color: '#334155' }}>
-                    {!canPromote && 'Configure o slot "Próxima" para habilitar a promoção. '}
-                    {!canRollback && 'Sem slot "Anterior" para rollback.'}
+                    {!canOperate
+                      ? 'Sem permissão para promover ou reverter — apenas operadores e supervisores.'
+                      : (!canPromote ? 'Configure o slot "Próxima" para habilitar a promoção. ' : '')
+                        + (!canRollback ? 'Sem slot "Anterior" para rollback.' : '')}
                   </span>
                 )}
               </div>

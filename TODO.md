@@ -11,8 +11,7 @@
 
 Ver CHANGELOG 2026-05-09.
 
-**Pendências futuras decorrentes do #30 — ainda abertas:**
-- `AgentFlowDeployPage`: role-based access control (developer vs operator) — ABAC não aplicado ainda
+**Pendências futuras decorrentes do #30 — concluídas.**
 
 ---
 

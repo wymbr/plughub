@@ -2,6 +2,18 @@
 
 ---
 
+## AgentFlowDeployPage — Role-Based Access Control (2026-05-11)
+
+**`packages/platform-ui/src/modules/agent-flow/AgentFlowDeployPage.tsx`**
+- `hasEditRole(roles)` — `developer | admin` → pode configurar slot Próxima (Edit button)
+- `hasOperateRole(roles)` — `operator | supervisor | admin` → pode promover e reverter
+- Editar slot Próxima: `onEdit` prop do `SlotCard` só passada quando `canEdit`
+- Botões Promover/Rollback: `disabled={!canOperate}` + `title` explicativo no hover
+- Banner de permissão: exibido quando o usuário tem apenas um dos dois papéis, explicando o que pode e o que não pode fazer (dev vê azul, operator/supervisor vê verde; admin não vê banner)
+- Lógica usa `session.roles[]` (array multi-role) — usuário com ambos os papéis tem acesso completo
+
+---
+
 ## Arc 9 — Monitor + Console Scope Filtering (2026-05-11)
 
 Transparently restricts what a supervisor sees in the live Monitor and Console based on JWT claims from Arc 9. Admin (empty arrays) is unrestricted.
