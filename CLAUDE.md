@@ -603,6 +603,24 @@ Nav groups (navKey): Home 🏠, Console 🖥️ (contacts.operacao), Monitor �
 
 ---
 
+## Arc 10 — Journey: Multi-Session Service Automation
+
+Journey é a unidade de serviço que transcende a sessão — agrupa todos os contatos (`session_id[]`) de um mesmo processo de atendimento. Nível acima de Session na hierarquia de observabilidade: Journey → Session → Segment (drill-down aditivo, sem quebrar modelo existente).
+
+**Entidade Journey**: `journey_id` (UUID, separado de `workflow_instance_id`), `tenant_id`, `skill_id`, `workflow_instance_id` (nullable FK), `customer_id`, `origin_session_id`, `status` (`active|suspended|completed|failed|cancelled`), `metadata`. Sessions ganham campo `journey_id` nullable — sessões standalone não mudam.
+
+**Formas de iniciar**: (1) MCP tool `journey_start(skill_id, session_id, metadata?)` — chamada por AI agent ou humano; (2) `@mention` `@journey:<skill_id>` por agente primário — pool config `mentionable_journeys`; (3) flag `creates_journey: true` na skill YAML — automático no primeiro step; (4) botão "Iniciar Processo" no ActionBar do Console (chama a mesma MCP tool). Toda criação passa pelo McpInterceptor (auditoria).
+
+**Vinculação de sessões subsequentes**: sessões criadas por `collect` step recebem `journey_id` via Kafka `collect.events`. Recontatos manuais via `journey_link_session(journey_id, session_id)`. Correlação automática de recontatos espontâneos é fase posterior.
+
+**Kafka**: `journey.events` — 7 tipos: `journey_started`, `journey_session_linked`, `journey_suspended`, `journey_resumed`, `journey_completed`, `journey_failed`, `journey_cancelled`.
+
+**Frontend**: ProcessosPage ganha Journey list + drill-down. HistoricoTab no Console mostra processos em aberto do cliente. Analytics: KPIs end-to-end por skill_id (duração mediana, taxa resolução, contatos médios, SLA compliance).
+
+→ See [`docs/modules/arc10-journey.md`](docs/modules/arc10-journey.md)
+
+---
+
 ## Pending (Next Iteration)
 
 ### Usage Metering — Channel Gateway Adapters

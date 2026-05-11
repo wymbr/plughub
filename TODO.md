@@ -96,6 +96,41 @@ Perfil dedicado ao DPO/Compliance para auditoria de dados pessoais. Decisão té
 
 ---
 
+## Arc 10 — Journey: Multi-Session Service Automation *(não implementado)*
+
+Spec completa em [`docs/modules/arc10-journey.md`](docs/modules/arc10-journey.md).
+
+**Fase A — Backend foundation** *(pré-requisito de tudo)*
+- Schema `journeys` table em `workflow-api` (ou novo `journey-api`)
+- Campo `journey_id` nullable em `sessions` (PostgreSQL + ClickHouse `session_timeline`)
+- MCP tools `journey_start` + `journey_link_session` em `mcp-server-plughub` (grupo `journey`)
+- `JourneyEventSchema` em `@plughub/schemas`
+- Kafka topic `journey.events` + consumer em analytics-api → `analytics.journeys` ClickHouse
+- `workflow-api`: aceitar `journey_id` no trigger payload; publicar eventos de ciclo de vida
+
+**Fase B — Vinculação automática via collect**
+- Channel Gateway: receber `journey_id` do `collect.events` Kafka e taguear sessão criada
+- Flag `creates_journey: true` no skill YAML + skill-flow-engine chamando `journey_start` no primeiro step
+
+**Fase C — Monitor (ProcessosPage)**
+- Journey list + detail panel + drill-down → sessions existentes → transcript
+- Journey KPIs em Analytics: duração mediana, taxa resolução, contatos médios por skill_id
+
+**Fase D — Console (AgentAssistPage)**
+- HistoricoTab: seção "Processos em aberto" para o customer_id atual
+- ActionBar: botão "Iniciar Processo" com selector (filtrado por `mentionable_journeys` do pool)
+- `@mention` protocol: extensão `@journey:<skill_id>`
+
+**Fase E — Relatórios consolidados**
+- `GET /reports/journeys` em analytics-api com filtros por skill_id, status, período
+- Dashboard cards de jornada (usando sistema de cards genéricos existente)
+
+**Decisões pendentes antes da Fase A:**
+- Journey entity em `workflow-api` ou novo `journey-api` separado?
+- `mentionable_journeys` configurado no pool YAML ou no skill YAML?
+
+---
+
 ## CLAUDE.md — Otimização (Fase 3)
 
 **Fase 3**: Revisão final para confirmar CLAUDE.md ≤ 800 linhas. Mover seções remanescentes se necessário. Fase 2 concluída — ver CHANGELOG 2026-05-09.
