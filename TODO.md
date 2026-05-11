@@ -118,8 +118,48 @@ Spec completa em [`docs/modules/arc10-journey.md`](docs/modules/arc10-journey.md
 - `@mention` protocol: extensão `@journey:<skill_id>` — sem UI especial, agentes humanos digitam no campo de texto
 - Botão "Unir jornadas" no painel de detalhes do tab Jornadas em ProcessosPage; chama `POST /v1/journeys/merge`
 
+**Fase D.5 — Refinamentos de spec** *(concluída 2026-05-11)*
+
+*Três decisões de design acordadas e implementadas em 2026-05-11:*
+
+**1. Enriquecimento do evento `journey_session_linked`**
+Campos adicionais a incluir no schema (`@plughub/schemas/src/journey.ts`) e no payload emitido em `workflow-api/kafka_emitter.py`:
+- `current_step?: string` — passo do workflow no momento do vínculo
+- `session_outcome?: string` — outcome da sessão neste contato (`resolved/escalated/abandoned/…`)
+- `session_started_at?: string` — ISO timestamp de abertura da sessão
+- `session_ended_at?: string` — ISO timestamp de encerramento
+Isso cria linha do tempo auditável da evolução do workflow através dos contatos. ClickHouse `journey_events` armazena automaticamente; `GET /reports/journeys` pode expor a progressão por `journey_id`.
+
+**2. SLA herdado do pool — sem campo novo**
+Journey não tem `sla_target_ms` próprio. A cadeia é: `journey.origin_session_id → session.pool_id → pool.sla_target_ms`. Cumprimento medido como `(last_event_at − created_at) vs sla_target_ms`. Nenhuma mudança de schema.
+
+**3. Interseção de sessões entre journeys independentes**
+Uma sessão pode ser `origin_session_id` de **múltiplas journeys independentes** — seja o primeiro contato, seja qualquer sessão no meio de uma journey em andamento. Regra de comportamento:
+- `journey_start(skill_id, session_id)` seta **apenas** `journey.origin_session_id = session_id`; nunca toca `sessions.journey_id` da sessão passada
+- `sessions.journey_id` é setado **somente** em sessões criadas por `collect` (sessões que pertencem exclusivamente a uma journey)
+- Uma sessão pode simultaneamente ter `sessions.journey_id = Journey_A` (collect) e ser `origin_session_id` de `Journey_B` (novo serviço iniciado neste contato)
+- As journeys não têm relação entre si; a interseção é capturada apenas pelo `origin_session_id` comum
+- Query "todas sessões desta journey": `sessions WHERE journey_id = ? UNION session WHERE session_id = journey.origin_session_id`
+
+Exemplo canônico:
+```
+S1 → origin de Journey A (produto X)
+S2 → collect de Journey A (journey_id=A)
+S3 → collect de Journey A (journey_id=A) + origin de Journey B (produto Y, iniciado neste contato)
+S4 → collect de Journey B (journey_id=B)
+```
+
 **Fase E — Dashboard cards de jornada** *(não implementado)*
-- Dashboard cards de jornada usando sistema de cards genéricos existente (KPIs por skill_id já disponíveis via `GET /reports/journeys`)
+
+Usar o sistema de cards genéricos existente (Dashboard #35). KPI data já disponível via `GET /reports/journeys`.
+
+Cards a registrar no display tool registry:
+- `journey_active_count` — contagem de journeys ativas (filtráveis por skill_id)
+- `journey_resolution_rate` — taxa de resolução por skill_id (gauge ou trend)
+- `journey_funnel` — distribuição por status (`active/suspended/completed/failed`) como barras
+- `journey_median_duration` — duração mediana (p50) por skill_id
+
+Cada card recebe parâmetros de filtro compatíveis com o `GlobalFilters` existente (`tenant_id`, `from_dt`, `to_dt`, `skill_id`).
 
 **Fase F — Split de jornadas** *(fase futura — decisões em aberto)*
 - MCP tool `journey_split(journey_id, session_ids[])` — extrai sessões para nova journey

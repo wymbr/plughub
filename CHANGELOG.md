@@ -2,6 +2,33 @@
 
 ---
 
+## Arc 10 Phase D.5 — Journey Spec Refinements (2026-05-11)
+
+### `packages/schemas/src/journey.ts`
+- `JourneyEventSchema`: campos opcionais `current_step`, `session_outcome`, `session_started_at`, `session_ended_at` adicionados ao tipo `journey_session_linked`
+
+### `packages/workflow-api/src/plughub_workflow_api/kafka_emitter.py`
+- `emit_journey_session_linked()`: aceita `current_step`, `session_outcome`, `session_started_at`, `session_ended_at` (todos opcionais); inclui no payload quando presentes
+
+### `packages/workflow-api/src/plughub_workflow_api/router.py`
+- `respond_collect`: passa `current_step = instance.get("current_step")` para `emit_journey_session_linked` — captura o passo do workflow no momento em que a sessão de collect é vinculada
+
+### `packages/workflow-api/src/plughub_workflow_api/journey_router.py`
+- `JourneyLinkSessionRequest`: campos opcionais `current_step`, `session_outcome`, `session_started_at`, `session_ended_at`
+- `link_session` endpoint: repassa todos os campos para `emit_journey_session_linked`
+
+### `packages/analytics-api/src/plughub_analytics_api/clickhouse.py`
+- `_DDL_JOURNEY_EVENTS`: 4 colunas novas — `current_step Nullable(String)`, `session_outcome Nullable(String)`, `session_started_at Nullable(DateTime64(3))`, `session_ended_at Nullable(DateTime64(3))`
+- `_JOURNEY_EVENT_COLS`: lista de colunas atualizada
+- `_journey_event_row()`: popula as 4 novas colunas do dict de entrada
+
+### `packages/analytics-api/src/plughub_analytics_api/models.py`
+- `parse_journey_event()`: extrai `current_step`, `session_outcome`, `session_started_at`, `session_ended_at` do payload Kafka
+
+**Regra de interseção confirmada:** `db_create_journey` e MCP `journey_start` nunca tocam `sessions.journey_id` — verificado. Sessions só recebem `journey_id` via `collect.events` processado pelo Core (collect sessions exclusivamente). Múltiplas journeys podem compartilhar o mesmo `origin_session_id` sem conflito.
+
+---
+
 ## Arc 10 Phase D — Console Journey Integration (2026-05-11)
 
 ### `packages/platform-ui/src/modules/agent-assist/types.ts`

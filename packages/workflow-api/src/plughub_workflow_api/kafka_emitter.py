@@ -236,21 +236,34 @@ async def emit_journey_started(
 
 
 async def emit_journey_session_linked(
-    producer:   Any | None,
-    topic:      str,
-    journey_id: str,
-    tenant_id:  str,
-    skill_id:   str,
-    session_id: str,
+    producer:          Any | None,
+    topic:             str,
+    journey_id:        str,
+    tenant_id:         str,
+    skill_id:          str,
+    session_id:        str,
+    current_step:      str | None = None,
+    session_outcome:   str | None = None,
+    session_started_at: str | None = None,
+    session_ended_at:  str | None = None,
 ) -> None:
-    await _emit(producer, topic, {
+    event: dict = {
         "event_type": "journey_session_linked",
         "timestamp":  _now(),
         "journey_id": journey_id,
         "tenant_id":  tenant_id,
         "skill_id":   skill_id,
         "session_id": session_id,
-    })
+    }
+    if current_step:
+        event["current_step"] = current_step
+    if session_outcome:
+        event["session_outcome"] = session_outcome
+    if session_started_at:
+        event["session_started_at"] = session_started_at
+    if session_ended_at:
+        event["session_ended_at"] = session_ended_at
+    await _emit(producer, topic, event)
 
 
 async def emit_journey_status_changed(

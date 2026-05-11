@@ -58,7 +58,13 @@ class JourneyCreateRequest(BaseModel):
 
 
 class JourneyLinkSessionRequest(BaseModel):
-    session_id: str = Field(..., description="Session to associate with the journey")
+    session_id:         str           = Field(..., description="Session to associate with the journey")
+    # D.5 enrichment — optional; populate when session has ended so the audit
+    # log captures the workflow progression across contacts.
+    current_step:       str | None    = Field(None, description="Workflow step at time of linking")
+    session_outcome:    str | None    = Field(None, description="Outcome of this session within the journey")
+    session_started_at: str | None    = Field(None, description="ISO datetime the session opened")
+    session_ended_at:   str | None    = Field(None, description="ISO datetime the session closed")
 
 
 class JourneyMergeRequest(BaseModel):
@@ -268,10 +274,14 @@ async def link_session(journey_id: str, body: JourneyLinkSessionRequest, request
     await emit_journey_session_linked(
         producer,
         _JOURNEY_TOPIC,
-        journey_id = journey_id,
-        tenant_id  = tenant_id,
-        skill_id   = journey["skill_id"],
-        session_id = body.session_id,
+        journey_id         = journey_id,
+        tenant_id          = tenant_id,
+        skill_id           = journey["skill_id"],
+        session_id         = body.session_id,
+        current_step       = body.current_step,
+        session_outcome    = body.session_outcome,
+        session_started_at = body.session_started_at,
+        session_ended_at   = body.session_ended_at,
     )
 
     return {"ok": True, "journey_id": journey_id, "session_id": body.session_id}

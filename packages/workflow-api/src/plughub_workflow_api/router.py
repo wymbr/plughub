@@ -765,16 +765,21 @@ async def respond_collect(
         elapsed_ms=elapsed_ms,
     )
 
-    # Arc 10 Phase B — link the new session to the Journey that owns the collect
+    # Arc 10 Phase B — link the new session to the Journey that owns the collect.
+    # D.5: include current_step from the workflow instance so the event log captures
+    # the workflow progression at the moment this contact was linked.
     collect_journey_id: str | None = collect.get("journey_id")
     if collect_journey_id and body.session_id:
         try:
             await emit_journey_session_linked(
                 producer, settings.journey_topic,
-                journey_id=collect_journey_id,
-                tenant_id=instance["tenant_id"],
-                skill_id=instance["flow_id"],
-                session_id=body.session_id,
+                journey_id    = collect_journey_id,
+                tenant_id     = instance["tenant_id"],
+                skill_id      = instance["flow_id"],
+                session_id    = body.session_id,
+                current_step  = instance.get("current_step") or None,
+                # session_outcome / session_started_at / session_ended_at are
+                # populated by caller when session closes (manual link-session call)
             )
         except Exception as exc:
             logger.warning(

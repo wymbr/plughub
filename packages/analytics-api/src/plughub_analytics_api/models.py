@@ -770,4 +770,9 @@ def parse_journey_event(payload: dict[str, Any]) -> dict | None:
         "session_id":             payload.get("session_id") or None,
         "workflow_instance_id":   payload.get("workflow_instance_id") or None,
         "merged_into_journey_id": payload.get("merged_into_journey_id") or None,
+        # D.5 session progression fields (journey_session_linked only)
+        "current_step":           payload.get("current_step") or None,
+        "session_outcome":        payload.get("session_outcome") or None,
+        "session_started_at":     payload.get("session_started_at") or None,
+        "session_ended_at":       payload.get("session_ended_at") or None,
     }

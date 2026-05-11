@@ -67,6 +67,20 @@ export const JourneyEventSchema = z.object({
   origin_session_id:       z.string().optional(),
   /** Populated for journey_session_linked events */
   session_id:              z.string().optional(),
+  /**
+   * Populated for journey_session_linked — workflow step at the moment of linking.
+   * Allows reconstructing the workflow progression across contacts.
+   */
+  current_step:            z.string().optional(),
+  /**
+   * Populated for journey_session_linked — outcome of this specific session
+   * within the journey (resolved / escalated / abandoned / …).
+   */
+  session_outcome:         z.string().optional(),
+  /** ISO datetime when the linked session was opened. */
+  session_started_at:      z.string().datetime().optional(),
+  /** ISO datetime when the linked session was closed. */
+  session_ended_at:        z.string().datetime().optional(),
   /** Current or new workflow_instance_id */
   workflow_instance_id:    z.string().uuid().nullable().optional(),
   /** Populated for journey_merged — the primary journey that absorbed this one */

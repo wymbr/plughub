@@ -420,6 +420,11 @@ CREATE TABLE IF NOT EXISTS {db}.journey_events
     session_id              Nullable(String),
     workflow_instance_id    Nullable(String),
     merged_into_journey_id  Nullable(String),
+    -- D.5: session progression enrichment (journey_session_linked only)
+    current_step            Nullable(String),
+    session_outcome         Nullable(String),
+    session_started_at      Nullable(DateTime64(3, 'UTC')),
+    session_ended_at        Nullable(DateTime64(3, 'UTC')),
     timestamp               DateTime64(3, 'UTC'),
     date                    Date
 )
@@ -950,6 +955,7 @@ class AnalyticsStore:
         "event_id", "event_type", "tenant_id", "journey_id", "skill_id",
         "status", "customer_id", "origin_session_id", "session_id",
         "workflow_instance_id", "merged_into_journey_id",
+        "current_step", "session_outcome", "session_started_at", "session_ended_at",
         "timestamp", "date",
     ]
 
@@ -1387,8 +1393,10 @@ def _agent_pause_interval_row(d: dict) -> list:
 
 
 def _journey_event_row(d: dict) -> list:
-    """Row builder for journey_events table (Arc 10)."""
-    ts = d.get("timestamp")
+    """Row builder for journey_events table (Arc 10 + D.5 enrichment)."""
+    ts             = d.get("timestamp")
+    started_at_str = d.get("session_started_at")
+    ended_at_str   = d.get("session_ended_at")
     return [
         d.get("event_id", ""),
         d.get("event_type", ""),
@@ -1401,6 +1409,11 @@ def _journey_event_row(d: dict) -> list:
         d.get("session_id") or None,
         d.get("workflow_instance_id") or None,
         d.get("merged_into_journey_id") or None,
+        # D.5 session progression fields
+        d.get("current_step") or None,
+        d.get("session_outcome") or None,
+        _parse_dt(started_at_str) if started_at_str else None,
+        _parse_dt(ended_at_str)   if ended_at_str   else None,
         _parse_dt(ts) or datetime.utcnow(),
         _today_utc(ts),
     ]
