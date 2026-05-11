@@ -70,6 +70,38 @@ Core implementado: auth-api (tabelas + CRUD + shift resolution + JWT claims), an
 
 ---
 
+## Masking — Channel-Aware Display Architecture
+
+**Bloco 1 (concluído 2026-05-11)**: correções de segurança — logs de `menu_submit` redactados, fallback Kafka redacta `input_snapshot`/`output_snapshot`, `masked_input_fields` populado no `AuditRecord`. Ver CHANGELOG.
+
+**Bloco 2 (concluído 2026-05-11)**: `MaskedToken` component + `renderWithTokens` + `useMaskingDisplayRules` + migração `SessionTranscript` (remove `maskSensitiveContent`) + `MaskingPage` seção 5 (display rules por categoria × canal). Ver CHANGELOG.
+
+**Bloco 3 — Channel Gateway TTS** *(deferred até implementação de voz)*: quando qualquer adapter de voz/TTS for criado, deve consultar `rule.{category}.display_voice` no namespace `masking` do Config API antes de passar texto ao sintetizador. Comportamentos: `silence` (pula o valor), `beep` (tom de beep), `speak_placeholder` (fala "valor mascarado"). Aplica-se a qualquer canal que gere áudio — não só voice/webrtc. Não implementar antes de definir qual engine TTS será usada.
+
+**AgentAssistPage token rendering** *(deferred)*: chat bubbles em `/agent-assist` ainda não usam `renderWithTokens`. Natural continuação do Bloco 2.
+
+---
+
+## Audit Profile — LGPD Compliance Role
+
+Perfil dedicado ao DPO/Compliance para auditoria de dados pessoais. Decisão técnica: implementar como módulo ABAC `audit` separado (não uma role fixa) para manter ortogonalidade com `operator`/`supervisor`/`admin`.
+
+**Escopo do módulo ABAC `audit`:**
+- `sessions` — leitura de `original_content` (dados desmascarados) via endpoint separado com log de acesso próprio
+- `mcp_calls` — leitura de `input_snapshot`/`output_snapshot` com `masked_input_fields` no `mcp.audit` ClickHouse
+- `user_access` — leitura de logs de autenticação e refresh token rotation
+- `data_requests` — CRUD de SARs (Subject Access Requests) e erasure requests
+- `config_snapshot` — leitura somente de configurações ativas (masking rules, retention policies)
+
+**Para implementar:**
+1. Adicionar `audit` ao `infra/modules.yaml` e ao `PermissionChecker`
+2. Endpoint `GET /v1/audit/sessions/{id}/original-content` (auth-api ou novo audit-api) com log de acesso obrigatório
+3. Endpoint `GET /v1/audit/mcp-calls` consumindo ClickHouse `mcp_audit` com filtro por `masked_input_fields IS NOT NULL`
+4. Pipeline SAR/erasure: pseudonimização em `sessions_stream` + anonimização em analytics ClickHouse
+5. Platform-UI: página `AuditPage` em novo grupo de nav (somente role com módulo `audit`)
+
+---
+
 ## CLAUDE.md — Otimização (Fase 3)
 
 **Fase 3**: Revisão final para confirmar CLAUDE.md ≤ 800 linhas. Mover seções remanescentes se necessário. Fase 2 concluída — ver CHANGELOG 2026-05-09.
