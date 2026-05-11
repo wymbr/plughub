@@ -2143,3 +2143,152 @@ def _fetch_events(
     """
     result = client.query(data_sql, parameters={})
     return {"data": _rows_to_dicts(result), "meta": _meta(page, page_size, total, since, until)}
+
+
+# ─── /reports/journeys (Arc 10) ───────────────────────────────────────────────
+
+async def query_journeys_report(
+    client:    Any,
+    database:  str,
+    tenant_id: str,
+    from_dt:   str | None = None,
+    to_dt:     str | None = None,
+    *,
+    skill_id:    str | None = None,
+    status:      str | None = None,
+    customer_id: str | None = None,
+    page:      int = 1,
+    page_size: int = 100,
+) -> dict:
+    """
+    Journey list and KPI summary from journey_events ClickHouse table.
+
+    Returns:
+      data: list of journey summaries (one per journey_id)
+      kpis: per-skill_id aggregations (resolution_rate, median_duration_ms, avg_session_count)
+      meta: pagination info
+    """
+    since = _ch_fmt(from_dt) if from_dt else _default_from()
+    until = _ch_fmt(to_dt)   if to_dt   else _default_to()
+    try:
+        return await asyncio.to_thread(
+            _fetch_journeys, client, database, tenant_id, since, until,
+            skill_id, status, customer_id, page, page_size,
+        )
+    except Exception as exc:
+        logger.warning("query_journeys_report failed tenant=%s: %s", tenant_id, exc)
+        return {"data": [], "kpis": [], "meta": _meta(page, page_size, 0, since, until), "error": "data_unavailable"}
+
+
+def _fetch_journeys(
+    client:      Any,
+    db:          str,
+    tenant_id:   str,
+    since:       str,
+    until:       str,
+    skill_id:    str | None,
+    status:      str | None,
+    customer_id: str | None,
+    page:        int,
+    page_size:   int,
+) -> dict:
+    """
+    Reconstructs journey state from journey_events using argMax aggregations.
+    Each event carries the current journey status — we pick the latest.
+    session_count = 1 (origin) + count(distinct linked sessions).
+    """
+    base_conditions = [
+        "tenant_id = {tenant_id:String}",
+        f"timestamp >= '{since}'",
+        f"timestamp <= '{until}'",
+    ]
+    params: dict = {"tenant_id": tenant_id}
+
+    if skill_id:
+        base_conditions.append("skill_id = {skill_id:String}")
+        params["skill_id"] = skill_id
+    if customer_id:
+        base_conditions.append("customer_id = {customer_id:String}")
+        params["customer_id"] = customer_id
+
+    base_where = " AND ".join(base_conditions)
+
+    # ── Journey summary (one row per journey_id) ──────────────────────────────
+    # We aggregate all events to reconstruct journey state.
+    # status comes from argMax on timestamp (last event wins).
+    # session_count = 1 (origin) + countDistinct of session_ids from link events.
+    summary_sql = f"""
+        SELECT
+            journey_id,
+            argMax(skill_id,           timestamp)  AS skill_id,
+            argMax(status,             timestamp)  AS status,
+            argMax(customer_id,        timestamp)  AS customer_id,
+            argMax(origin_session_id,  timestamp)  AS origin_session_id,
+            argMax(workflow_instance_id, timestamp) AS workflow_instance_id,
+            min(timestamp)                         AS created_at,
+            max(timestamp)                         AS last_event_at,
+            countDistinctIf(
+                session_id,
+                event_type = 'journey_session_linked' AND session_id IS NOT NULL
+            ) + 1                                  AS session_count
+        FROM {db}.journey_events FINAL
+        WHERE {base_where}
+        GROUP BY journey_id
+        HAVING 1=1
+    """
+
+    # Apply status filter at HAVING level (status is aggregated)
+    having_extra = ""
+    if status:
+        having_extra = f" AND argMax(status, timestamp) = '{status}'"
+
+    count_sql = f"SELECT count() FROM ({summary_sql}{having_extra}) AS j"
+    total = _count(client, count_sql, params)
+
+    offset = (page - 1) * page_size
+    result = client.query(f"""
+        SELECT *
+        FROM ({summary_sql}{having_extra}) AS j
+        ORDER BY created_at DESC
+        LIMIT {page_size} OFFSET {offset}
+    """, parameters=params)
+
+    rows = _rows_to_dicts(result)
+
+    # ── KPI summary per skill_id ──────────────────────────────────────────────
+    kpi_result = client.query(f"""
+        SELECT
+            skill_id,
+            count()                                             AS total_journeys,
+            countIf(status = 'completed')                       AS completed_count,
+            countIf(status = 'failed')                          AS failed_count,
+            countIf(status = 'active')                          AS active_count,
+            round(countIf(status = 'completed') / count(), 4)   AS resolution_rate,
+            avg(session_count)                                  AS avg_session_count,
+            median(duration_ms)                                 AS median_duration_ms
+        FROM (
+            SELECT
+                argMax(skill_id,  timestamp)                          AS skill_id,
+                argMax(status,    timestamp)                          AS status,
+                min(timestamp)                                        AS created_at,
+                max(timestamp)                                        AS last_event_at,
+                dateDiff('millisecond', min(timestamp), max(timestamp)) AS duration_ms,
+                countDistinctIf(
+                    session_id,
+                    event_type = 'journey_session_linked' AND session_id IS NOT NULL
+                ) + 1                                                 AS session_count
+            FROM {db}.journey_events FINAL
+            WHERE {base_where}
+            GROUP BY journey_id
+        ) AS j
+        GROUP BY skill_id
+        ORDER BY total_journeys DESC
+    """, parameters=params)
+
+    kpi_rows = _rows_to_dicts(kpi_result)
+
+    return {
+        "data": rows,
+        "kpis": kpi_rows,
+        "meta": _meta(page, page_size, total, since, until),
+    }

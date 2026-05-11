@@ -2,6 +2,30 @@
 
 ---
 
+## Arc 10 Phase E — Dashboard Journey Cards (2026-05-11)
+
+### `packages/analytics-api/src/plughub_analytics_api/display_formatters.py`
+- `fmt_journey_active_count()`: MetricCardData — contagem de jornadas ativas com tendência vs período anterior (query `argMax(status)` no `journey_events` FINAL)
+- `fmt_journey_resolution_rate()`: BarChartData — taxa de resolução (%) por `skill_id`; denominador = apenas jornadas terminais (`completed/failed/cancelled`)
+- `fmt_journey_funnel()`: DonutData — distribuição de jornadas por status mais recente
+- `fmt_journey_median_duration()`: BarChartData — duração mediana (p50) em minutos por `skill_id`; calcula `max(event_time) - min(event_time)` por jornada; filtra jornadas terminais
+- Todos os formatters aceitam `skill_id: str | None` como filtro opcional
+- Helpers privados `_fetch_journey_*_sync()` com queries ClickHouse `argMax` sobre `journey_events FINAL`
+
+### `packages/analytics-api/src/plughub_analytics_api/display.py`
+- 4 novos endpoints adicionados: `GET /reports/display/journey-active-count`, `journey-resolution-rate`, `journey-funnel`, `journey-median-duration`
+- Docstring do módulo atualizada (14 rotas total)
+- Import dos 4 novos formatters
+
+### `packages/platform-ui/src/dashboard/catalog.ts`
+- 4 novas entradas em `ENDPOINT_CATALOG`:
+  - `journey-active-count` → `metric_card` (3×2) — param fixo `skill_id`
+  - `journey-resolution-rate` → `bar_chart` (6×4) — param fixo `skill_id`
+  - `journey-funnel` → `donut` (4×3) — param fixo `skill_id`
+  - `journey-median-duration` → `bar_chart` (6×4) — param fixo `skill_id`
+
+---
+
 ## Arc 10 Phase D.5 — Journey Spec Refinements (2026-05-11)
 
 ### `packages/schemas/src/journey.ts`

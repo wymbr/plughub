@@ -6,17 +6,21 @@ These endpoints feed the new-format dashboard cards (Part 4 of Dashboard #35).
 Each endpoint returns a data shape compatible with one or more DisplayTools
 defined in platform-ui/src/dashboard/tools/.
 
-Routes (10 total):
-  GET /reports/display/session-volume       → LineChartData  (bar/line)
-  GET /reports/display/handle-time          → LineChartData  (line/bar)
-  GET /reports/display/evaluation-score     → LineChartData  (line/bar)
-  GET /reports/display/sessions-by-pool     → BarChartData   (bar)
-  GET /reports/display/outcome-distribution → DonutData      (donut)
-  GET /reports/display/pool-status          → TableData      (table)
-  GET /reports/display/agent-performance    → TableData      (table)
-  GET /reports/display/kpi-sessions         → MetricCardData (metric_card)
-  GET /reports/display/kpi-resolution       → MetricCardData (metric_card)
-  GET /reports/display/kpi-score            → MetricCardData (metric_card)
+Routes (14 total):
+  GET /reports/display/session-volume            → LineChartData  (bar/line)
+  GET /reports/display/handle-time               → LineChartData  (line/bar)
+  GET /reports/display/evaluation-score          → LineChartData  (line/bar)
+  GET /reports/display/sessions-by-pool          → BarChartData   (bar)
+  GET /reports/display/outcome-distribution      → DonutData      (donut)
+  GET /reports/display/pool-status               → TableData      (table)
+  GET /reports/display/agent-performance         → TableData      (table)
+  GET /reports/display/kpi-sessions              → MetricCardData (metric_card)
+  GET /reports/display/kpi-resolution            → MetricCardData (metric_card)
+  GET /reports/display/kpi-score                 → MetricCardData (metric_card)
+  GET /reports/display/journey-active-count      → MetricCardData (metric_card)
+  GET /reports/display/journey-resolution-rate   → BarChartData   (bar_chart)
+  GET /reports/display/journey-funnel            → DonutData      (donut)
+  GET /reports/display/journey-median-duration   → BarChartData   (bar_chart)
 
 Common query params:
   tenant_id   string   required
@@ -39,6 +43,10 @@ from .display_formatters import (
     fmt_agent_performance,
     fmt_evaluation_score,
     fmt_handle_time,
+    fmt_journey_active_count,
+    fmt_journey_funnel,
+    fmt_journey_median_duration,
+    fmt_journey_resolution_rate,
     fmt_kpi_resolution,
     fmt_kpi_score,
     fmt_kpi_sessions,
@@ -292,5 +300,101 @@ async def display_kpi_score(
         to_dt            = to,
         pool_id          = pool_id,
         accessible_pools = pool_principal.accessible_pools,
+    )
+    return JSONResponse(content=data)
+
+
+# ─── GET /reports/display/journey-active-count ───────────────────────────────
+
+@router.get("/journey-active-count")
+async def display_journey_active_count(
+    request:        Request,
+    tenant_id:      str           = Query(...,  description="Tenant identifier"),
+    from_:          Optional[str] = Query(None, alias="from", description="Period start"),
+    to:             Optional[str] = Query(None, description="Period end"),
+    skill_id:       Optional[str] = Query(None, description="Filter by skill_id"),
+    pool_principal: PoolPrincipal = Depends(optional_pool_principal),
+) -> JSONResponse:
+    """Count of active journeys in period with trend — compatible with metric_card."""
+    store = request.app.state.store
+    data  = await fmt_journey_active_count(
+        client    = store.new_client(),
+        database  = store._database,
+        tenant_id = tenant_id,
+        from_dt   = from_,
+        to_dt     = to,
+        skill_id  = skill_id,
+    )
+    return JSONResponse(content=data)
+
+
+# ─── GET /reports/display/journey-resolution-rate ────────────────────────────
+
+@router.get("/journey-resolution-rate")
+async def display_journey_resolution_rate(
+    request:        Request,
+    tenant_id:      str           = Query(...,  description="Tenant identifier"),
+    from_:          Optional[str] = Query(None, alias="from", description="Period start"),
+    to:             Optional[str] = Query(None, description="Period end"),
+    skill_id:       Optional[str] = Query(None, description="Filter by skill_id"),
+    pool_principal: PoolPrincipal = Depends(optional_pool_principal),
+) -> JSONResponse:
+    """Journey resolution rate % per skill_id (terminal journeys only) — compatible with bar_chart."""
+    store = request.app.state.store
+    data  = await fmt_journey_resolution_rate(
+        client    = store.new_client(),
+        database  = store._database,
+        tenant_id = tenant_id,
+        from_dt   = from_,
+        to_dt     = to,
+        skill_id  = skill_id,
+    )
+    return JSONResponse(content=data)
+
+
+# ─── GET /reports/display/journey-funnel ─────────────────────────────────────
+
+@router.get("/journey-funnel")
+async def display_journey_funnel(
+    request:        Request,
+    tenant_id:      str           = Query(...,  description="Tenant identifier"),
+    from_:          Optional[str] = Query(None, alias="from", description="Period start"),
+    to:             Optional[str] = Query(None, description="Period end"),
+    skill_id:       Optional[str] = Query(None, description="Filter by skill_id"),
+    pool_principal: PoolPrincipal = Depends(optional_pool_principal),
+) -> JSONResponse:
+    """Journey distribution by status (active/suspended/completed/failed/cancelled) — compatible with donut."""
+    store = request.app.state.store
+    data  = await fmt_journey_funnel(
+        client    = store.new_client(),
+        database  = store._database,
+        tenant_id = tenant_id,
+        from_dt   = from_,
+        to_dt     = to,
+        skill_id  = skill_id,
+    )
+    return JSONResponse(content=data)
+
+
+# ─── GET /reports/display/journey-median-duration ────────────────────────────
+
+@router.get("/journey-median-duration")
+async def display_journey_median_duration(
+    request:        Request,
+    tenant_id:      str           = Query(...,  description="Tenant identifier"),
+    from_:          Optional[str] = Query(None, alias="from", description="Period start"),
+    to:             Optional[str] = Query(None, description="Period end"),
+    skill_id:       Optional[str] = Query(None, description="Filter by skill_id"),
+    pool_principal: PoolPrincipal = Depends(optional_pool_principal),
+) -> JSONResponse:
+    """Journey p50 duration in minutes per skill_id (terminal journeys) — compatible with bar_chart."""
+    store = request.app.state.store
+    data  = await fmt_journey_median_duration(
+        client    = store.new_client(),
+        database  = store._database,
+        tenant_id = tenant_id,
+        from_dt   = from_,
+        to_dt     = to,
+        skill_id  = skill_id,
     )
     return JSONResponse(content=data)

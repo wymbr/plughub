@@ -179,6 +179,64 @@ export const ENDPOINT_CATALOG: EndpointDescriptor[] = [
       { key: 'pool_id', label: 'Pool (fixo)', placeholder: 'Ex: retencao_humano', optional: true },
     ],
   },
+
+  // ─── Journey cards (Arc 10 — Phase E) ────────────────────────────────────
+  {
+    id:               'journey-active-count',
+    endpoint:         '/reports/display/journey-active-count',
+    label:            'KPI: Jornadas Ativas',
+    icon:             '🗺️',
+    description:      'Total de jornadas com status ativo e tendência vs período anterior',
+    compatible_tools: ['metric_card'],
+    default_tool:     'metric_card',
+    defaultW:         3,
+    defaultH:         2,
+    configurable_params: [
+      { key: 'skill_id', label: 'Skill (fixo)', placeholder: 'Ex: skill_portabilidade_v1', optional: true },
+    ],
+  },
+  {
+    id:               'journey-resolution-rate',
+    endpoint:         '/reports/display/journey-resolution-rate',
+    label:            'Taxa de Resolução por Jornada',
+    icon:             '✅',
+    description:      'Percentual de jornadas concluídas por skill (apenas jornadas finalizadas)',
+    compatible_tools: ['bar_chart'],
+    default_tool:     'bar_chart',
+    defaultW:         6,
+    defaultH:         4,
+    configurable_params: [
+      { key: 'skill_id', label: 'Skill (fixo)', placeholder: 'Ex: skill_portabilidade_v1', optional: true },
+    ],
+  },
+  {
+    id:               'journey-funnel',
+    endpoint:         '/reports/display/journey-funnel',
+    label:            'Funil de Jornadas',
+    icon:             '🔽',
+    description:      'Distribuição de jornadas por status (ativa, suspensa, concluída, falha)',
+    compatible_tools: ['donut'],
+    default_tool:     'donut',
+    defaultW:         4,
+    defaultH:         3,
+    configurable_params: [
+      { key: 'skill_id', label: 'Skill (fixo)', placeholder: 'Ex: skill_portabilidade_v1', optional: true },
+    ],
+  },
+  {
+    id:               'journey-median-duration',
+    endpoint:         '/reports/display/journey-median-duration',
+    label:            'Duração Mediana de Jornadas',
+    icon:             '⏳',
+    description:      'Duração mediana (p50) em minutos por skill para jornadas finalizadas',
+    compatible_tools: ['bar_chart'],
+    default_tool:     'bar_chart',
+    defaultW:         6,
+    defaultH:         4,
+    configurable_params: [
+      { key: 'skill_id', label: 'Skill (fixo)', placeholder: 'Ex: skill_portabilidade_v1', optional: true },
+    ],
+  },
 ]
 
 /** Lookup an endpoint by ID. */

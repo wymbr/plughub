@@ -149,17 +149,9 @@ S3 → collect de Journey A (journey_id=A) + origin de Journey B (produto Y, ini
 S4 → collect de Journey B (journey_id=B)
 ```
 
-**Fase E — Dashboard cards de jornada** *(não implementado)*
+**Fase E — Dashboard cards de jornada** *(concluída 2026-05-11)*
 
-Usar o sistema de cards genéricos existente (Dashboard #35). KPI data já disponível via `GET /reports/journeys`.
-
-Cards a registrar no display tool registry:
-- `journey_active_count` — contagem de journeys ativas (filtráveis por skill_id)
-- `journey_resolution_rate` — taxa de resolução por skill_id (gauge ou trend)
-- `journey_funnel` — distribuição por status (`active/suspended/completed/failed`) como barras
-- `journey_median_duration` — duração mediana (p50) por skill_id
-
-Cada card recebe parâmetros de filtro compatíveis com o `GlobalFilters` existente (`tenant_id`, `from_dt`, `to_dt`, `skill_id`).
+Ver CHANGELOG 2026-05-11. 4 endpoints display + 4 entradas em `catalog.ts`.
 
 **Fase F — Split de jornadas** *(fase futura — decisões em aberto)*
 - MCP tool `journey_split(journey_id, session_ids[])` — extrai sessões para nova journey
