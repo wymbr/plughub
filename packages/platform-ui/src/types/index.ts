@@ -27,6 +27,8 @@ export interface Session {
   roles: string[]                  // all roles from JWT (user may have multiple)
   tenantId: string
   accessiblePools: string[]        // [] = all pools (admin); non-empty = restricted
+  /** Arc 9 — agent types this supervisor can see. [] = unrestricted (admin). */
+  supervisedAgentTypes: string[]
   installationId: string
   locale: 'pt-BR' | 'en'
   /** ABAC config por módulo, carregada do JWT. */

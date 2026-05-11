@@ -63,13 +63,14 @@ interface SessionMeta {
  *  as a plain, stable object (no token fields). Safe to pass as props or
  *  spread across modules without re-rendering on token refresh. */
 export interface CurrentUser {
-  userId:          string
-  name:            string
-  email:           string
-  tenantId:        string
-  role:            UserRole        // highest-privilege role
-  roles:           string[]
-  accessiblePools: string[]       // [] = all pools
+  userId:               string
+  name:                 string
+  email:                string
+  tenantId:             string
+  role:                 UserRole        // highest-privilege role
+  roles:                string[]
+  accessiblePools:      string[]       // [] = all pools
+  supervisedAgentTypes: string[]       // [] = unrestricted (admin); non-empty = Arc 9 scope
 }
 
 // ── Context types ─────────────────────────────────────────────────────────────
@@ -111,24 +112,26 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     user: {
       id: string; email: string; name: string
       roles: string[]; tenant_id: string; accessible_pools: string[]
+      supervised_agent_types?: string[]
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       module_config?: Record<string, any>
     },
   ): Session => {
     return {
-      userId:          user.id,
-      email:           user.email,
-      name:            user.name,
-      role:            primaryRole(user.roles),
-      roles:           user.roles,
-      tenantId:        user.tenant_id,
-      accessiblePools: user.accessible_pools,
-      moduleConfig:    (user.module_config ?? {}) as ModuleConfig,
-      installationId:  'default',
-      locale:          'pt-BR',
+      userId:               user.id,
+      email:                user.email,
+      name:                 user.name,
+      role:                 primaryRole(user.roles),
+      roles:                user.roles,
+      tenantId:             user.tenant_id,
+      accessiblePools:      user.accessible_pools,
+      supervisedAgentTypes: user.supervised_agent_types ?? [],
+      moduleConfig:         (user.module_config ?? {}) as ModuleConfig,
+      installationId:       'default',
+      locale:               'pt-BR',
       accessToken,
       refreshToken,
-      expiresAt:       Date.now() + expiresIn * 1000,
+      expiresAt:            Date.now() + expiresIn * 1000,
     }
   }, [])
 
@@ -283,17 +286,19 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   const currentUser = useMemo<CurrentUser | null>(() => {
     if (!session) return null
     return {
-      userId:          session.userId,
-      name:            session.name,
-      email:           session.email,
-      tenantId:        session.tenantId,
-      role:            session.role,
-      roles:           session.roles,
-      accessiblePools: session.accessiblePools,
+      userId:               session.userId,
+      name:                 session.name,
+      email:                session.email,
+      tenantId:             session.tenantId,
+      role:                 session.role,
+      roles:                session.roles,
+      accessiblePools:      session.accessiblePools,
+      supervisedAgentTypes: session.supervisedAgentTypes,
     }
   }, [
     session?.userId, session?.name, session?.email, session?.tenantId,
     session?.role, session?.roles, session?.accessiblePools,
+    session?.supervisedAgentTypes,
   ])
 
   // ── Context value ────────────────────────────────────────────────────────────

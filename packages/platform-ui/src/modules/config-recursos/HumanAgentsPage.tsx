@@ -79,16 +79,25 @@ function LiveTab({ onError }: { onError: (m: string) => void }) {
   const [filter,     setFilter]     = useState<string>('all')
   const [acting,     setActing]     = useState<string | null>(null)
 
+  // Arc 9 — non-empty means supervisor scope; admin keeps empty = unrestricted
+  const supervisedAgentTypes = session?.supervisedAgentTypes ?? []
+
   const load = useCallback(async () => {
     if (!session) return
     setLoading(true)
     try {
       const result = await registryApi.listHumanInstances(session.tenantId)
-      setInstances(result.items ?? [])
+      const items  = result.items ?? []
+      // Transparent scope filter: only show instances whose agent_type is supervised
+      setInstances(
+        supervisedAgentTypes.length > 0
+          ? items.filter(i => supervisedAgentTypes.includes(i.agent_type_id))
+          : items,
+      )
     } catch (e) {
       onError((e as Error).message)
     } finally { setLoading(false) }
-  }, [session, onError])
+  }, [session, supervisedAgentTypes, onError])
 
   useEffect(() => { load() }, [load])
 

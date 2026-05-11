@@ -59,12 +59,9 @@ O `SkillFlowsPage` exibe lista plana. Não há pastas/grupos. Melhoria desejada:
 
 ---
 
-## Arc 9 — Agent Groups & Supervisor Scope *(parcialmente implementado — 2026-05-11)*
+## Arc 9 — Agent Groups & Supervisor Scope *(implementado — 2026-05-11)*
 
-Core implementado: auth-api (tabelas + CRUD + shift resolution + JWT claims), analytics-api (5 report endpoints filtrados por `supervised_agent_types`), platform-ui (`Config/Groups` page).
-
-**Pendência restante:**
-- Monitor (`PoolsPage`, `AgentsPage`) e Console (`AgentAssistPage`) ainda não filtram transparentemente via `supervised_agent_types` do JWT. Backend já filtra os relatórios; a UI operacional (ao vivo) não foi ajustada.
+Implementação completa: auth-api (tabelas + CRUD REST + shift resolution + JWT claims), analytics-api (5 report endpoints filtrados), platform-ui (Config/Groups page + Monitor/Console scope filtering via `supervised_agent_types` e `accessiblePools`). Ver CHANGELOG.
 
 **Spec completa:** [`docs/modules/arc9-agent-groups.md`](docs/modules/arc9-agent-groups.md)
 

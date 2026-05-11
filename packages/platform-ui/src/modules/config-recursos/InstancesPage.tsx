@@ -18,6 +18,9 @@ const InstancesPage: React.FC = () => {
   const [statusFilter, setStatusFilter] = useState('')
   const [poolFilter, setPoolFilter] = useState('')
 
+  // Arc 9 — non-empty means supervisor scope; admin keeps empty = unrestricted
+  const supervisedAgentTypes = session?.supervisedAgentTypes ?? []
+
   const loadInstances = useCallback(async () => {
     if (!session) return
     try {
@@ -26,10 +29,16 @@ const InstancesPage: React.FC = () => {
         poolFilter || undefined,
         statusFilter || undefined,
       )
-      setInstances(result.items || [])
+      const items = result.items || []
+      // Transparent scope filter: only show AI instances the supervisor owns
+      setInstances(
+        supervisedAgentTypes.length > 0
+          ? items.filter(i => supervisedAgentTypes.includes(i.agent_type_id))
+          : items,
+      )
     } catch { /* stale ok */ }
     finally { setIsLoading(false) }
-  }, [session, poolFilter, statusFilter])
+  }, [session, supervisedAgentTypes, poolFilter, statusFilter])
 
   // Load pools once for the filter dropdown
   useEffect(() => {

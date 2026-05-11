@@ -597,9 +597,7 @@ Nav groups (navKey): Home 🏠, Console 🖥️ (contacts.operacao), Monitor �
 
 **auth-api REST** (`/v1/groups`, admin-token): full CRUD for groups + sub-resources (members, users, supervisors, shifts). `groups_router.py` registered in `main.py`.
 
-**platform-ui**: `GroupsPage` at `/config/groups` (roles: admin, ABAC `config.users`). List + side drawer with 4 tabs (Info, Members, Supervisors, Shifts). Nav entry added to Configuração group. i18n namespace `groups` (en + pt-BR).
-
-Pending: Monitor and Console transparent scope filtering from JWT `supervised_agent_types`.
+**platform-ui**: `GroupsPage` at `/config/groups` (roles: admin, ABAC `config.users`). List + side drawer with 4 tabs (Info, Members, Supervisors, Shifts). Nav entry added to Configuração group. i18n namespace `groups` (en + pt-BR). `Session.supervisedAgentTypes` + `CurrentUser.supervisedAgentTypes` added to auth layer. Monitor Heatmap filtered by `accessiblePools`; Agents/Instances tabs filtered by `supervisedAgentTypes` (client-side, transparent). Console already scoped via `accessiblePools` in `AgentAssistContext.fetchPools`.
 
 → See [`docs/modules/arc9-agent-groups.md`](docs/modules/arc9-agent-groups.md)
 

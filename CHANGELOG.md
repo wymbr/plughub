@@ -2,6 +2,31 @@
 
 ---
 
+## Arc 9 — Monitor + Console Scope Filtering (2026-05-11)
+
+Transparently restricts what a supervisor sees in the live Monitor and Console based on JWT claims from Arc 9. Admin (empty arrays) is unrestricted.
+
+**`packages/platform-ui/src/types/index.ts`**
+- `Session.supervisedAgentTypes: string[]` adicionado — `[]` = irrestrito (admin); não-vazio = escopo Arc 9
+
+**`packages/platform-ui/src/auth/AuthContext.tsx`**
+- `CurrentUser.supervisedAgentTypes: string[]` adicionado
+- `buildSession()` params: `supervised_agent_types?: string[]` opcional (backwards-compat); fallback `[]` para JWTs legados
+- `currentUser` memo inclui `supervisedAgentTypes`
+
+**`packages/platform-ui/src/modules/service/MonitorPage.tsx`**
+- Heatmap: `pools` filtrado por `session.accessiblePools` antes de passar para `HeatmapGrid` — supervisores com escopo só vêem seus pools
+
+**`packages/platform-ui/src/modules/config-recursos/HumanAgentsPage.tsx`**
+- `LiveTab`: instâncias filtradas por `session.supervisedAgentTypes` após load — supervisores vêem só agentes do seu escopo
+
+**`packages/platform-ui/src/modules/config-recursos/InstancesPage.tsx`**
+- Instâncias AI filtradas por `session.supervisedAgentTypes` após load
+
+*Console (AgentAssistPage)*: já filtrado via `accessiblePools` em `AgentAssistContext.fetchPools` — sem mudança necessária.
+
+---
+
 ## Masking Bloco 2 — Channel-Aware Display Architecture (2026-05-11)
 
 **`packages/platform-ui/src/components/MaskedToken.tsx`** *(novo)*

@@ -26,9 +26,16 @@ type Level = 'pools' | 'sessions' | 'transcript'
 
 export default function MonitorPage() {
   const { t } = useTranslation('service')
-  const { tenantId } = useAuth()
+  const { tenantId, session } = useAuth()
 
-  const { pools, status, metrics } = usePoolViews(tenantId)
+  const { pools: allPools, status, metrics } = usePoolViews(tenantId)
+
+  // Arc 9 — transparent scope: supervisors with non-empty accessiblePools see
+  // only their assigned pools in the heatmap. Admin (empty array) sees all.
+  const accessiblePools = session?.accessiblePools ?? []
+  const pools = accessiblePools.length > 0
+    ? allPools.filter(p => accessiblePools.includes(p.pool_id))
+    : allPools
 
   const [monitorTab,     setMonitorTab]     = useState<MonitorTab>('heatmap')
   const [level,          setLevel]          = useState<Level>('pools')
