@@ -29,7 +29,8 @@ Journey
   workflow_instance_id  UUID nullable FK  — instância ativa (atualizado on trigger)
   customer_id           string nullable   — identificador do cliente (caller.*)
   origin_session_id     string            — primeira sessão que iniciou a jornada
-  status                enum              — active | suspended | completed | failed | cancelled
+  status                enum              — active | suspended | completed | failed | cancelled | merged
+  merged_into_journey_id UUID nullable   — preenchido quando status = merged
   metadata              JSONB nullable    — dados passados no journey_start
   created_at            timestamptz
   updated_at            timestamptz
@@ -140,13 +141,15 @@ Quando um cliente recontatá proativamente (nova chamada, novo chat), o agente h
 ### Tipos de evento `journey.events`
 
 ```
-journey_started    — journey criada, origin_session_id definida
+journey_started         — journey criada, origin_session_id definida
 journey_session_linked  — nova sessão vinculada à journey
-journey_suspended  — workflow suspendeu (aguardando input/timer)
-journey_resumed    — workflow retomado
-journey_completed  — processo concluído com sucesso
-journey_failed     — processo falhou
-journey_cancelled  — cancelado por agente ou timeout
+journey_suspended       — workflow suspendeu (aguardando input/timer)
+journey_resumed         — workflow retomado
+journey_completed       — processo concluído com sucesso
+journey_failed          — processo falhou
+journey_cancelled       — cancelado por agente ou timeout
+journey_merged          — journey secundária absorvida por primária
+journey_split           — nova journey criada a partir de sessões extraídas
 ```
 
 ---
@@ -223,11 +226,17 @@ Botão "Iniciar Processo" (visível quando pool tem `mentionable_journeys` confi
 - HistoricoTab: seção "Processos em aberto"
 - ActionBar: botão "Iniciar Processo" + selector
 - `@mention` protocol: extensão `@journey:<skill_id>`
+- MCP tool `journey_merge(journey_id_primary, journey_id_secondary)` — UI no Monitor (botão "Unir jornadas" no detail panel); sessões do secundário reassignadas ao primário; secundário recebe `status: merged` + `merged_into_journey_id`; `workflow_instance_id` do primário continua ativo; `session_count` e `created_at` recalculados usando o mais antigo dos dois
 
 ### Fase E — Relatórios consolidados
 - `GET /reports/journeys` endpoint em analytics-api
 - KPIs end-to-end por skill_id, duração mediana, taxa resolução
 - Dashboard cards de jornada
+
+### Fase F — Split de jornadas *(fase futura)*
+- MCP tool `journey_split(journey_id, session_ids[])` — extrai sessões selecionadas para uma nova journey; journey original continua com as sessões remanescentes
+- Decisões em aberto antes de implementar: (a) o `workflow_instance_id` original permanece na journey original ou migra com as sessões extraídas? (b) a nova journey recebe um novo workflow trigger ou inicia sem workflow (`workflow_instance_id = null`)? (c) quais restrições previnem split que invalide a `origin_session_id` da journey original?
+- UI: no Monitor, painel de sessões da journey com seleção múltipla + botão "Separar em nova jornada"
 
 ---
 
@@ -238,6 +247,8 @@ Botão "Iniciar Processo" (visível quando pool tem `mentionable_journeys` confi
 - **`journey_start` é sempre chamado via MCP tool** — nunca REST direto da UI; garante auditoria pelo McpInterceptor
 - **Uma Journey ativa tem no máximo um WorkflowInstance ativo** — múltiplos instances são sequenciais (retry), nunca paralelos
 - **`origin_session_id` é imutável** após criação da Journey
+- **Journey com `status: merged` é somente leitura** — nenhuma operação (link_session, merge, split) pode ter uma journey merged como alvo primário
+- **`journey_merge` é irreversível** — não existe unmerge; use split se necessário após um merge incorreto
 
 ---
 

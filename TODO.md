@@ -120,10 +120,15 @@ Spec completa em [`docs/modules/arc10-journey.md`](docs/modules/arc10-journey.md
 - HistoricoTab: seção "Processos em aberto" para o customer_id atual
 - ActionBar: botão "Iniciar Processo" com selector (filtrado por `mentionable_journeys` do pool)
 - `@mention` protocol: extensão `@journey:<skill_id>`
+- MCP tool `journey_merge(journey_id_primary, journey_id_secondary)` + botão "Unir jornadas" no Monitor detail panel; journey secundária recebe `status: merged` + `merged_into_journey_id`
 
 **Fase E — Relatórios consolidados**
 - `GET /reports/journeys` em analytics-api com filtros por skill_id, status, período
 - Dashboard cards de jornada (usando sistema de cards genéricos existente)
+
+**Fase F — Split de jornadas** *(fase futura — decisões em aberto)*
+- MCP tool `journey_split(journey_id, session_ids[])` — extrai sessões para nova journey
+- Decisões antes de implementar: destino do `workflow_instance_id`; nova journey recebe workflow ou inicia sem; restrição sobre `origin_session_id` da journey original
 
 **Decisões pendentes antes da Fase A:**
 - Journey entity em `workflow-api` ou novo `journey-api` separado?
