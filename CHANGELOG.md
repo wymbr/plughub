@@ -2,6 +2,64 @@
 
 ---
 
+## Arc 10 Phase A — Journey Backend Foundation (2026-05-11)
+
+### `packages/schemas/src/journey.ts` (NEW)
+- `JourneyStatusSchema`, `JourneySchema` — entidade Journey com todos os campos
+- `JourneyEventTypeSchema`, `JourneyEventSchema` — 9 tipos de eventos Kafka
+- `JourneyStartInputSchema/OutputSchema`, `JourneyLinkSessionInputSchema`, `JourneyMergeInputSchema` — contratos MCP tool
+- Exportações adicionadas a `src/index.ts`
+
+### `packages/workflow-api` — Journey CRUD + Router
+- **`db.py`**: DDL `workflow.journeys` (self-referential FK `merged_into_journey_id`); migration `workflow.instances.journey_id`; `_row_to_journey()`; CRUD: `db_create_journey`, `db_get_journey`, `db_list_journeys`, `db_set_journey_workflow_instance`, `db_update_journey_status`, `db_merge_journeys` (transactional, protege contra re-merge)
+- **`kafka_emitter.py`**: `emit_journey_started`, `emit_journey_session_linked`, `emit_journey_status_changed`, `emit_journey_merged`
+- **`journey_router.py`** (NEW): `APIRouter(prefix="/v1/journeys")` — 5 endpoints: POST (create+trigger), GET /{id}, GET (list), POST /{id}/link-session, POST /{id}/merge, PATCH /{id}/status; helper `_trigger_workflow()` chama `/v1/trigger`
+- **`main.py`**: `journey_router` registrado
+
+### `packages/mcp-server-plughub/src/tools/journey.ts` (NEW)
+- `journey_start` — cria Journey + dispara workflow; retorna `journey_id` + `workflow_instance_id`
+- `journey_link_session` — vincula sessão adicional à journey
+- `journey_merge` — absorve secondary no primary (irreversível); Phase D
+- Registrado em `server.ts` com `JourneyDeps` (`WORKFLOW_API_URL`)
+
+### `packages/analytics-api` — Kafka consumer + ClickHouse
+- **`models.py`**: `parse_journey_event()` — mapeia 8 event types para `journey_events` table; status derivado de `_JOURNEY_STATUS_MAP`
+- **`clickhouse.py`**: `_DDL_JOURNEY_EVENTS` (ReplacingMergeTree ORDER BY tenant_id, event_id); `_journey_event_row()`; `AnalyticsStore.insert_journey_event()`; DDL adicionado a `_ALL_DDL`
+- **`consumer.py`**: tópico `journey.events` adicionado a `_TOPICS`, `_PARSERS`; `journey_events` adicionado a `_write_row`
+
+---
+
+## Arc 10 — Journey Merge/Split Spec (2026-05-11)
+
+**`docs/modules/arc10-journey.md`**
+- Status `merged` adicionado ao enum; campo `merged_into_journey_id` na entidade
+- Kafka event types: `journey_merged` + `journey_split` (futuro — Phase F)
+- Phase D: `journey_merge(journey_id_primary, journey_id_secondary)` — operação irreversível, secondary vira read-only
+- Phase F: `journey_split` com 3 open decisions documentadas
+- Invariantes: merged journey é read-only; merge é irreversível
+
+**`TODO.md`**: Phase D e Phase F atualizados
+
+---
+
+## Skill Flow Editor — Folder Tree Sidebar (2026-05-11)
+
+**`packages/platform-ui/src/modules/skill-flows/SkillFlowsPage.tsx`**
+- Campo `folder?: string` no YAML lido como metadado de view-only (path 2-níveis, ex: `"clientes/retencao"`)
+- `buildFolderTree(skills)` separa skills por `classification.type` em raízes Agentes/Workflows; constrói árvore de pastas
+- Sidebar expandível: raízes + pastas com `paddingLeft` por profundidade; busca colapsa para lista plana
+- Estado: `expandedRoots: Set<string>`, `expandedFolders: Set<string>` (ambos abertos por padrão)
+
+---
+
+## AgentFlowDeployPage — Skill Selector Grouping (2026-05-11)
+
+**`packages/platform-ui/src/modules/agent-flow/AgentFlowDeployPage.tsx`**
+- `groupSkillsForSelect(skills)` → `<optgroup>` HTML nativo com labels "Agentes", "Agentes / pasta", "Workflows / pasta"
+- Skills separadas por `classification.type === 'orchestrator'` antes do agrupamento por `folder`
+
+---
+
 ## AgentFlowDeployPage — Role-Based Access Control (2026-05-11)
 
 **`packages/platform-ui/src/modules/agent-flow/AgentFlowDeployPage.tsx`**

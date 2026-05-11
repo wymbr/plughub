@@ -331,6 +331,7 @@ Consumes: `conversations.routed`, `conversations.queued`, `conversations.abandon
 | `evaluation.events` | evaluation-api | analytics-api → ClickHouse |
 | `workflow.events` | workflow-api | skill-flow-worker |
 | `collect.events` | workflow-api | analytics-api |
+| `journey.events` | workflow-api | analytics-api → ClickHouse |
 | `usage.events` | Core, AI Gateway, Channel Gateway | usage-aggregator |
 
 ## Kafka Event Schemas — Zod Coverage
@@ -348,6 +349,7 @@ All cross-package Kafka events have Zod schemas in `@plughub/schemas`:
 | `agent.lifecycle` | `AgentLifecycleEventSchema` | `platform-events.ts` |
 | `workflow.events` | `WorkflowEventSchema` | `workflow.ts` |
 | `collect.events` | `CollectEventSchema` | `workflow.ts` |
+| `journey.events` | `JourneyEventSchema` | `journey.ts` |
 | `usage.events` | `UsageEventSchema` | `usage.ts` |
 | `conversations.participants` | `ConversationParticipantEventSchema` | `contact-segment.ts` |
 | `mcp.audit` | `AuditRecordSchema` | `audit.ts` |
@@ -613,7 +615,9 @@ Journey é a unidade de serviço que transcende a sessão — agrupa todos os co
 
 **Vinculação de sessões subsequentes**: sessões criadas por `collect` step recebem `journey_id` via Kafka `collect.events`. Recontatos manuais via `journey_link_session(journey_id, session_id)`. Correlação automática de recontatos espontâneos é fase posterior.
 
-**Kafka**: `journey.events` — 7 tipos: `journey_started`, `journey_session_linked`, `journey_suspended`, `journey_resumed`, `journey_completed`, `journey_failed`, `journey_cancelled`.
+**Fase A implementada**: `workflow-api` `/v1/journeys` (5 endpoints) + MCP tools `journey_start`/`journey_link_session`/`journey_merge` + `analytics-api` consumer `journey.events` → `journey_events` ClickHouse.
+
+**Kafka**: `journey.events` — 8 tipos: `journey_started`, `journey_session_linked`, `journey_suspended`, `journey_resumed`, `journey_completed`, `journey_failed`, `journey_cancelled`, `journey_merged`.
 
 **Frontend**: ProcessosPage ganha Journey list + drill-down. HistoricoTab no Console mostra processos em aberto do cliente. Analytics: KPIs end-to-end por skill_id (duração mediana, taxa resolução, contatos médios, SLA compliance).
 

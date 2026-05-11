@@ -207,6 +207,87 @@ async def emit_cancelled(
     })
 
 
+# ── Journey events (topic: journey.events) — Arc 10 ──────────────────────────
+
+async def emit_journey_started(
+    producer:             Any | None,
+    topic:                str,
+    journey_id:           str,
+    tenant_id:            str,
+    skill_id:             str,
+    origin_session_id:    str,
+    workflow_instance_id: str | None = None,
+    customer_id:          str | None = None,
+    metadata:             dict | None = None,
+) -> None:
+    event: dict = {
+        "event_type":          "journey_started",
+        "timestamp":           _now(),
+        "journey_id":          journey_id,
+        "tenant_id":           tenant_id,
+        "skill_id":            skill_id,
+        "origin_session_id":   origin_session_id,
+        "workflow_instance_id": workflow_instance_id,
+        "customer_id":         customer_id,
+    }
+    if metadata:
+        event["metadata"] = metadata
+    await _emit(producer, topic, event)
+
+
+async def emit_journey_session_linked(
+    producer:   Any | None,
+    topic:      str,
+    journey_id: str,
+    tenant_id:  str,
+    skill_id:   str,
+    session_id: str,
+) -> None:
+    await _emit(producer, topic, {
+        "event_type": "journey_session_linked",
+        "timestamp":  _now(),
+        "journey_id": journey_id,
+        "tenant_id":  tenant_id,
+        "skill_id":   skill_id,
+        "session_id": session_id,
+    })
+
+
+async def emit_journey_status_changed(
+    producer:   Any | None,
+    topic:      str,
+    event_type: str,   # journey_suspended | journey_resumed | journey_completed | journey_failed | journey_cancelled
+    journey_id: str,
+    tenant_id:  str,
+    skill_id:   str,
+) -> None:
+    await _emit(producer, topic, {
+        "event_type": event_type,
+        "timestamp":  _now(),
+        "journey_id": journey_id,
+        "tenant_id":  tenant_id,
+        "skill_id":   skill_id,
+    })
+
+
+async def emit_journey_merged(
+    producer:             Any | None,
+    topic:                str,
+    journey_id:           str,      # secondary (now merged)
+    journey_id_primary:   str,
+    tenant_id:            str,
+    skill_id:             str,
+) -> None:
+    await _emit(producer, topic, {
+        "event_type":            "journey_merged",
+        "timestamp":             _now(),
+        "journey_id":            journey_id,
+        "merged_into_journey_id": journey_id_primary,
+        "tenant_id":             tenant_id,
+        "skill_id":              skill_id,
+    })
+
+
 # ── Collect events (topic: collect.events) ────────────────────────────────────
 
 async def emit_collect_requested(

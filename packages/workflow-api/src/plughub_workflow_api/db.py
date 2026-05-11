@@ -145,6 +145,40 @@ CREATE INDEX IF NOT EXISTS idx_wh_tenant
 CREATE INDEX IF NOT EXISTS idx_wh_token_hash
     ON workflow.webhooks (token_hash);
 
+-- ── journeys ──────────────────────────────────────────────────────────────────
+-- Arc 10: Journey entity — business-level unit that transcends the session.
+-- journey_id ≠ workflow_instance_id — distinct entities with independent lifecycles.
+-- Sessions acquire journey_id via Phase B (collect step or manual link).
+
+CREATE TABLE IF NOT EXISTS workflow.journeys (
+    journey_id             UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id              TEXT        NOT NULL,
+    skill_id               TEXT        NOT NULL,
+    workflow_instance_id   UUID        REFERENCES workflow.instances(id) ON DELETE SET NULL,
+    customer_id            TEXT,
+    origin_session_id      TEXT        NOT NULL,
+    status                 TEXT        NOT NULL DEFAULT 'active'
+                                       CHECK (status IN ('active','suspended','completed','failed','cancelled','merged')),
+    merged_into_journey_id UUID        REFERENCES workflow.journeys(journey_id) ON DELETE SET NULL,
+    metadata               JSONB,
+    created_at             TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at             TIMESTAMPTZ NOT NULL DEFAULT now(),
+    completed_at           TIMESTAMPTZ
+);
+
+CREATE INDEX IF NOT EXISTS idx_jrn_tenant_status
+    ON workflow.journeys (tenant_id, status);
+CREATE INDEX IF NOT EXISTS idx_jrn_tenant_customer
+    ON workflow.journeys (tenant_id, customer_id)
+    WHERE customer_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_jrn_workflow_instance
+    ON workflow.journeys (workflow_instance_id)
+    WHERE workflow_instance_id IS NOT NULL;
+
+-- Idempotent migration: add journey_id to workflow.instances so a trigger payload
+-- can carry journey_id and the instance keeps the association.
+ALTER TABLE workflow.instances ADD COLUMN IF NOT EXISTS journey_id UUID REFERENCES workflow.journeys(journey_id) ON DELETE SET NULL;
+
 -- ── webhook_deliveries ─────────────────────────────────────────────────────────
 -- Append-only delivery log. Pruned by the caller (keep last N per webhook_id).
 
@@ -820,3 +854,174 @@ async def db_list_deliveries(
         UUID(webhook_id), limit,
     )
     return [_row_to_delivery(r) for r in rows]
+
+
+# ── Journey CRUD (Arc 10) ──────────────────────────────────────────────────────
+
+def _row_to_journey(row: asyncpg.Record) -> dict[str, Any]:
+    return {
+        "journey_id":             str(row["journey_id"]),
+        "tenant_id":              row["tenant_id"],
+        "skill_id":               row["skill_id"],
+        "workflow_instance_id":   str(row["workflow_instance_id"]) if row["workflow_instance_id"] else None,
+        "customer_id":            row["customer_id"],
+        "origin_session_id":      row["origin_session_id"],
+        "status":                 row["status"],
+        "merged_into_journey_id": str(row["merged_into_journey_id"]) if row["merged_into_journey_id"] else None,
+        "metadata":               json.loads(row["metadata"]) if row["metadata"] else None,
+        "created_at":             row["created_at"].isoformat(),
+        "updated_at":             row["updated_at"].isoformat(),
+        "completed_at":           row["completed_at"].isoformat() if row["completed_at"] else None,
+    }
+
+
+async def db_create_journey(
+    pool:              asyncpg.Pool,
+    tenant_id:         str,
+    skill_id:          str,
+    origin_session_id: str,
+    customer_id:       str | None = None,
+    metadata:          dict | None = None,
+) -> dict:
+    """Create a new Journey with status='active'."""
+    row = await pool.fetchrow(
+        """
+        INSERT INTO workflow.journeys
+            (tenant_id, skill_id, origin_session_id, customer_id, metadata)
+        VALUES ($1,$2,$3,$4,$5::jsonb)
+        RETURNING *
+        """,
+        tenant_id, skill_id, origin_session_id, customer_id,
+        json.dumps(metadata) if metadata else None,
+    )
+    return _row_to_journey(row)
+
+
+async def db_get_journey(
+    pool:       asyncpg.Pool,
+    journey_id: str,
+    tenant_id:  str,
+) -> dict | None:
+    row = await pool.fetchrow(
+        "SELECT * FROM workflow.journeys WHERE journey_id = $1 AND tenant_id = $2",
+        UUID(journey_id), tenant_id,
+    )
+    return _row_to_journey(row) if row else None
+
+
+async def db_list_journeys(
+    pool:        asyncpg.Pool,
+    tenant_id:   str,
+    status:      str | None = None,
+    customer_id: str | None = None,
+    skill_id:    str | None = None,
+    limit:       int = 50,
+    offset:      int = 0,
+) -> list[dict]:
+    filters: list[str] = ["tenant_id = $1"]
+    params:  list[Any] = [tenant_id]
+
+    if status:
+        params.append(status)
+        filters.append(f"status = ${len(params)}")
+    if customer_id:
+        params.append(customer_id)
+        filters.append(f"customer_id = ${len(params)}")
+    if skill_id:
+        params.append(skill_id)
+        filters.append(f"skill_id = ${len(params)}")
+
+    params.extend([limit, offset])
+    rows = await pool.fetch(
+        f"""
+        SELECT * FROM workflow.journeys
+        WHERE {' AND '.join(filters)}
+        ORDER BY created_at DESC
+        LIMIT ${len(params) - 1} OFFSET ${len(params)}
+        """,
+        *params,
+    )
+    return [_row_to_journey(r) for r in rows]
+
+
+async def db_set_journey_workflow_instance(
+    pool:                 asyncpg.Pool,
+    journey_id:           str,
+    workflow_instance_id: str,
+) -> dict | None:
+    """Associate (or update) the active WorkflowInstance for a Journey."""
+    row = await pool.fetchrow(
+        """
+        UPDATE workflow.journeys
+        SET workflow_instance_id = $2,
+            updated_at           = now()
+        WHERE journey_id = $1
+        RETURNING *
+        """,
+        UUID(journey_id), UUID(workflow_instance_id),
+    )
+    return _row_to_journey(row) if row else None
+
+
+async def db_update_journey_status(
+    pool:       asyncpg.Pool,
+    journey_id: str,
+    status:     str,
+) -> dict | None:
+    """Update journey status; sets completed_at for terminal states."""
+    row = await pool.fetchrow(
+        """
+        UPDATE workflow.journeys
+        SET status       = $2,
+            completed_at = CASE WHEN $2 IN ('completed','failed','cancelled','merged') THEN now() ELSE completed_at END,
+            updated_at   = now()
+        WHERE journey_id = $1
+        RETURNING *
+        """,
+        UUID(journey_id), status,
+    )
+    return _row_to_journey(row) if row else None
+
+
+async def db_merge_journeys(
+    pool:                 asyncpg.Pool,
+    journey_id_primary:   str,
+    journey_id_secondary: str,
+) -> dict | None:
+    """
+    Merge secondary journey into primary:
+      - secondary.status = 'merged', secondary.merged_into_journey_id = primary
+      - primary.updated_at refreshed
+    Returns the updated primary journey. Rejects if secondary is already merged.
+    """
+    # Guard: secondary must not already be merged and must not equal primary
+    if journey_id_primary == journey_id_secondary:
+        return None
+
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            # Mark secondary as merged
+            await conn.execute(
+                """
+                UPDATE workflow.journeys
+                SET status                 = 'merged',
+                    merged_into_journey_id = $2,
+                    completed_at           = now(),
+                    updated_at             = now()
+                WHERE journey_id = $1
+                  AND status NOT IN ('merged', 'completed', 'failed', 'cancelled')
+                """,
+                UUID(journey_id_secondary), UUID(journey_id_primary),
+            )
+            # Touch primary updated_at
+            row = await conn.fetchrow(
+                """
+                UPDATE workflow.journeys
+                SET updated_at = now()
+                WHERE journey_id = $1
+                RETURNING *
+                """,
+                UUID(journey_id_primary),
+            )
+
+    return _row_to_journey(row) if row else None

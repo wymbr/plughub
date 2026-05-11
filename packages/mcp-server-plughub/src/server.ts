@@ -32,6 +32,8 @@ import { registerDeployTools }      from "./tools/deploy"
 import type { DeployDeps }          from "./tools/deploy"
 import { registerCalendarTools }    from "./tools/calendar"
 import type { CalendarDeps }        from "./tools/calendar"
+import { registerJourneyTools }     from "./tools/journey"
+import type { JourneyDeps }         from "./tools/journey"
 import { createRedisClient, keys } from "./infra/redis"
 import { createKafkaProducer }     from "./infra/kafka"
 import { createRegistryClient }    from "./infra/registry-client"
@@ -102,6 +104,11 @@ export function createServer(allDeps?: AllDeps): McpServer {
     tenantId:       process.env["PLUGHUB_TENANT_ID"] ?? process.env["TENANT_ID"] ?? "tenant_demo",
   }
 
+  const journeyDeps: JourneyDeps = {
+    workflowApiUrl: process.env["WORKFLOW_API_URL"]  ?? "http://localhost:3800",
+    tenantId:       process.env["PLUGHUB_TENANT_ID"] ?? process.env["TENANT_ID"] ?? "tenant_demo",
+  }
+
   // Registrar todas as tools
   registerBpmTools(server, bpmDeps)
   registerRuntimeTools(server, runtimeDeps)
@@ -113,6 +120,7 @@ export function createServer(allDeps?: AllDeps): McpServer {
   registerDelegationTools(server, delegationDeps)
   registerDeployTools(server, deployDeps)
   registerCalendarTools(server, calendarDeps)
+  registerJourneyTools(server, journeyDeps)
 
   return server
 }

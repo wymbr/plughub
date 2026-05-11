@@ -485,6 +485,29 @@ export type {
   CollectEvent,
 } from "./workflow"
 
+// ── Journey (Arc 10) ─────────────────────────
+export {
+  JourneyStatusSchema,
+  JourneySchema,
+  JourneyEventTypeSchema,
+  JourneyEventSchema,
+  JourneyStartInputSchema,
+  JourneyStartOutputSchema,
+  JourneyLinkSessionInputSchema,
+  JourneyMergeInputSchema,
+} from "./journey"
+
+export type {
+  JourneyStatus,
+  Journey,
+  JourneyEventType,
+  JourneyEvent,
+  JourneyStartInput,
+  JourneyStartOutput,
+  JourneyLinkSessionInput,
+  JourneyMergeInput,
+} from "./journey"
+
 // ── Agent Registry ───────────────────────────
 export {
   RoutingExpressionSchema,

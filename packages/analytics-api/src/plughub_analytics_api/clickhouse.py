@@ -15,6 +15,7 @@ Tables, all in database `plughub`:
   evaluation_results     — Arc 6: EvaluationResult state (ReplacingMergeTree)
   evaluation_events      — Arc 6: lifecycle audit log (submitted/reviewed/contested/locked)
   contact_insights       — business events from agent flows (insight_register MCP tool)
+  journey_events         — Arc 10: Journey lifecycle events (append-only audit log)
 
 Materialized views (AggregatingMergeTree — incremental, POPULATE on creation):
 
@@ -402,6 +403,31 @@ PARTITION BY toYYYYMM(date)
 ORDER BY (tenant_id, insight_id)
 """
 
+# ── Arc 10: journey_events — append-only audit log for journey lifecycle events.
+# Each row corresponds to one event from the journey.events Kafka topic.
+# ReplacingMergeTree() on (tenant_id, event_id) for at-least-once idempotency.
+_DDL_JOURNEY_EVENTS = """
+CREATE TABLE IF NOT EXISTS {db}.journey_events
+(
+    event_id                String,
+    event_type              String,
+    tenant_id               String,
+    journey_id              String,
+    skill_id                String,
+    status                  Nullable(String),
+    customer_id             Nullable(String),
+    origin_session_id       Nullable(String),
+    session_id              Nullable(String),
+    workflow_instance_id    Nullable(String),
+    merged_into_journey_id  Nullable(String),
+    timestamp               DateTime64(3, 'UTC'),
+    date                    Date
+)
+ENGINE = ReplacingMergeTree()
+PARTITION BY toYYYYMM(date)
+ORDER BY (tenant_id, event_id)
+"""
+
 # ── Arc 8: agent_pause_intervals — one row per pause interval per human agent.
 # ReplacingMergeTree on (tenant_id, instance_id, paused_at): the close row
 # (with resumed_at + duration_ms) wins over the open row on background merge
@@ -537,6 +563,7 @@ _ALL_DDL = [
     _DDL_EVALUATION_EVENTS,
     _DDL_CONTACT_INSIGHTS,
     _DDL_AGENT_PAUSE_INTERVALS,
+    _DDL_JOURNEY_EVENTS,
     # Materialized views — must come AFTER the source tables they reference.
     # AggregatingMergeTree with POPULATE backfills existing data on first creation.
     _DDL_MV_AGENT_PERFORMANCE,
@@ -915,6 +942,24 @@ class AnalyticsStore:
             "agent_pause_intervals",
             [_agent_pause_interval_row(row)],
             self._AGENT_PAUSE_INTERVAL_COLS,
+        )
+
+    # journey_events (Arc 10)
+
+    _JOURNEY_EVENT_COLS = [
+        "event_id", "event_type", "tenant_id", "journey_id", "skill_id",
+        "status", "customer_id", "origin_session_id", "session_id",
+        "workflow_instance_id", "merged_into_journey_id",
+        "timestamp", "date",
+    ]
+
+    async def insert_journey_event(self, row: dict) -> None:
+        """Insert a lifecycle event from the journey.events Kafka topic (Arc 10)."""
+        await asyncio.to_thread(
+            self._insert,
+            "journey_events",
+            [_journey_event_row(row)],
+            self._JOURNEY_EVENT_COLS,
         )
 
     # ── Arc 5: segment_id lookups (for post-hoc enrichment) ───────────────────
@@ -1338,4 +1383,24 @@ def _agent_pause_interval_row(d: dict) -> list:
         d.get("duration_ms") or None,
         # ingested_at — DEFAULT now(), omitted so ClickHouse fills it
         _today_utc(paused_ts),
+    ]
+
+
+def _journey_event_row(d: dict) -> list:
+    """Row builder for journey_events table (Arc 10)."""
+    ts = d.get("timestamp")
+    return [
+        d.get("event_id", ""),
+        d.get("event_type", ""),
+        d.get("tenant_id", ""),
+        d.get("journey_id", ""),
+        d.get("skill_id", ""),
+        d.get("status") or None,
+        d.get("customer_id") or None,
+        d.get("origin_session_id") or None,
+        d.get("session_id") or None,
+        d.get("workflow_instance_id") or None,
+        d.get("merged_into_journey_id") or None,
+        _parse_dt(ts) or datetime.utcnow(),
+        _today_utc(ts),
     ]

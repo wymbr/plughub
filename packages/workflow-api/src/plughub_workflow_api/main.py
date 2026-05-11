@@ -23,6 +23,7 @@ from fastapi.responses import JSONResponse
 
 from .config import get_settings
 from .db import ensure_schema
+from .journey_router import journey_router
 from .router import router as workflow_router
 from .timeout_job import run_timeout_scanner
 
@@ -125,6 +126,7 @@ app.add_middleware(
 )
 
 app.include_router(workflow_router)
+app.include_router(journey_router)
 
 
 @app.get("/v1/health")

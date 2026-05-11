@@ -50,14 +50,6 @@ Layers 1 (agent-registry), 3 (platform-ui), 4 (schemas) ✅ complete — see CHA
 
 ---
 
-## Skill Flow Editor — Folder Organization (new feature)
-
-O `SkillFlowsPage` exibe lista plana. Não há pastas/grupos. Melhoria desejada: agrupamento visual por `classification.type` (orchestrator/vertical/horizontal) ou por pasta livre configurável no `skill_id`. Separação visual entre "skills de workflow" e "agents operacionais" simplificaria a navegação em registries com muitos skills.
-
-**Escopo sugerido:** filtro/toggle por `classification.type` na sidebar do editor (sem filesystem de pastas — apenas agrupamento visual).
-
----
-
 ## Arc 9 — Agent Groups & Supervisor Scope *(implementado — 2026-05-11)*
 
 Implementação completa: auth-api (tabelas + CRUD REST + shift resolution + JWT claims), analytics-api (5 report endpoints filtrados), platform-ui (Config/Groups page + Monitor/Console scope filtering via `supervised_agent_types` e `accessiblePools`). Ver CHANGELOG.
@@ -96,43 +88,37 @@ Perfil dedicado ao DPO/Compliance para auditoria de dados pessoais. Decisão té
 
 ---
 
-## Arc 10 — Journey: Multi-Session Service Automation *(não implementado)*
+## Arc 10 — Journey: Multi-Session Service Automation
 
 Spec completa em [`docs/modules/arc10-journey.md`](docs/modules/arc10-journey.md).
 
-**Fase A — Backend foundation** *(pré-requisito de tudo)*
-- Schema `journeys` table em `workflow-api` (ou novo `journey-api`)
-- Campo `journey_id` nullable em `sessions` (PostgreSQL + ClickHouse `session_timeline`)
-- MCP tools `journey_start` + `journey_link_session` em `mcp-server-plughub` (grupo `journey`)
-- `JourneyEventSchema` em `@plughub/schemas`
-- Kafka topic `journey.events` + consumer em analytics-api → `analytics.journeys` ClickHouse
-- `workflow-api`: aceitar `journey_id` no trigger payload; publicar eventos de ciclo de vida
+**Fase A — Backend foundation** *(concluída 2026-05-11)*
+- `@plughub/schemas`: `JourneyStatusSchema`, `JourneySchema`, `JourneyEventTypeSchema`, `JourneyStartInputSchema`, `JourneyMergeInputSchema` — ver CHANGELOG
+- `workflow-api`: tabela `workflow.journeys` + CRUD + `journey_router.py` (5 endpoints) + kafka emitters
+- `mcp-server-plughub`: `tools/journey.ts` — `journey_start`, `journey_link_session`, `journey_merge`
+- `analytics-api`: `parse_journey_event()` + `_DDL_JOURNEY_EVENTS` + `insert_journey_event()` + tópico `journey.events` no consumer
 
-**Fase B — Vinculação automática via collect**
+**Fase B — Vinculação automática via collect** *(não implementado)*
 - Channel Gateway: receber `journey_id` do `collect.events` Kafka e taguear sessão criada
 - Flag `creates_journey: true` no skill YAML + skill-flow-engine chamando `journey_start` no primeiro step
 
-**Fase C — Monitor (ProcessosPage)**
+**Fase C — Monitor (ProcessosPage)** *(não implementado)*
 - Journey list + detail panel + drill-down → sessions existentes → transcript
 - Journey KPIs em Analytics: duração mediana, taxa resolução, contatos médios por skill_id
 
-**Fase D — Console (AgentAssistPage)**
+**Fase D — Console (AgentAssistPage)** *(não implementado)*
 - HistoricoTab: seção "Processos em aberto" para o customer_id atual
 - ActionBar: botão "Iniciar Processo" com selector (filtrado por `mentionable_journeys` do pool)
 - `@mention` protocol: extensão `@journey:<skill_id>`
-- MCP tool `journey_merge(journey_id_primary, journey_id_secondary)` + botão "Unir jornadas" no Monitor detail panel; journey secundária recebe `status: merged` + `merged_into_journey_id`
+- Botão "Unir jornadas" no Monitor detail panel (usa MCP tool `journey_merge` já implementado)
 
-**Fase E — Relatórios consolidados**
+**Fase E — Relatórios consolidados** *(não implementado)*
 - `GET /reports/journeys` em analytics-api com filtros por skill_id, status, período
 - Dashboard cards de jornada (usando sistema de cards genéricos existente)
 
 **Fase F — Split de jornadas** *(fase futura — decisões em aberto)*
 - MCP tool `journey_split(journey_id, session_ids[])` — extrai sessões para nova journey
 - Decisões antes de implementar: destino do `workflow_instance_id`; nova journey recebe workflow ou inicia sem; restrição sobre `origin_session_id` da journey original
-
-**Decisões pendentes antes da Fase A:**
-- Journey entity em `workflow-api` ou novo `journey-api` separado?
-- `mentionable_journeys` configurado no pool YAML ou no skill YAML?
 
 ---
 

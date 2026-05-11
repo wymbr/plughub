@@ -727,3 +727,47 @@ def parse_evaluation_event(payload: dict[str, Any]) -> list[dict] | None:
     }
 
     return [result_row, event_row]
+
+
+# ─── journey.events (Arc 10) ──────────────────────────────────────────────────
+
+# Maps journey event_type → status stored in journey_events.status
+_JOURNEY_STATUS_MAP: dict[str, str | None] = {
+    "journey_started":         "active",
+    "journey_session_linked":  None,          # status unchanged, not a lifecycle transition
+    "journey_suspended":       "suspended",
+    "journey_resumed":         "active",
+    "journey_completed":       "completed",
+    "journey_failed":          "failed",
+    "journey_cancelled":       "cancelled",
+    "journey_merged":          "merged",
+}
+
+
+def parse_journey_event(payload: dict[str, Any]) -> dict | None:
+    """Maps journey.* events → journey_events table (append-only audit log)."""
+    event_type = payload.get("event_type")
+    tenant_id  = payload.get("tenant_id")
+    journey_id = payload.get("journey_id")
+
+    if not event_type or not tenant_id or not journey_id:
+        return None
+
+    if event_type not in _JOURNEY_STATUS_MAP:
+        return None  # unknown event type — skip
+
+    return {
+        "table":                  "journey_events",
+        "event_id":               _gen_id(),
+        "event_type":             event_type,
+        "timestamp":              payload.get("timestamp") or _now(),
+        "tenant_id":              tenant_id,
+        "journey_id":             journey_id,
+        "skill_id":               payload.get("skill_id") or "",
+        "status":                 _JOURNEY_STATUS_MAP[event_type],
+        "customer_id":            payload.get("customer_id") or None,
+        "origin_session_id":      payload.get("origin_session_id") or None,
+        "session_id":             payload.get("session_id") or None,
+        "workflow_instance_id":   payload.get("workflow_instance_id") or None,
+        "merged_into_journey_id": payload.get("merged_into_journey_id") or None,
+    }
