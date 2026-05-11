@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import type React from 'react'
 import { useSessionStream, useSupervisor } from '../api/hooks'
 import { SupervisorJoinButton, SupervisorPanel } from './SupervisorPanel'
+import { renderWithTokens, useMaskingDisplayRules } from '@/components/MaskedToken'
 import type { ContactSegment, StreamEntry } from '../types'
 
 // ─── Business event types ─────────────────────────────────────────────────────
@@ -206,28 +207,10 @@ function entryBelongsToSpecialist(
   return true
 }
 
-// ─── Sensitive data masking ──────────────────────────────────────────────────
-
-/**
- * Masks sensitive form data in ANY stream entry (not just interaction_result).
- */
-function maskSensitiveContent(e: StreamEntry): StreamEntry {
-  const text = extractText(e.content)
-  const payloadText = extractText(e.payload)
-  const combined = text + ' ' + payloadText
-
-  const sensitivePatterns = /\b(senha|password|pin|codigo_2fa|otp|token|secret|cvv|cvc)\b/i
-
-  if (sensitivePatterns.test(combined)) {
-    return {
-      ...e,
-      content: { text: '[Dados sensíveis omitidos — formulário mascarado]' },
-      payload: null,
-    }
-  }
-
-  return e
-}
+// ─── Sensitive data note ──────────────────────────────────────────────────────
+// Masking tokens ([category:tk_xxx:display]) are rendered by renderWithTokens()
+// in EntryRow. No crude keyword-based scrubbing — the platform uses structured
+// tokens for all sensitive data; keyword scrubbing was a temporary fallback.
 
 interface Props {
   tenantId:  string
@@ -240,6 +223,7 @@ interface Props {
 export function SessionTranscript({ tenantId, sessionId, onBack, canJoin = true, segment }: Props) {
   const { entries, status }                        = useSessionStream(tenantId, sessionId)
   const { state: supState, join, message, leave }  = useSupervisor(tenantId, sessionId)
+  const maskingRules                               = useMaskingDisplayRules()
   const { insights }                               = useSessionInsights(tenantId, sessionId)
   const bottomRef   = useRef<HTMLDivElement>(null)
   const duringRef   = useRef<HTMLDivElement>(null)
@@ -275,23 +259,21 @@ export function SessionTranscript({ tenantId, sessionId, onBack, canJoin = true,
 
     const isSpecialist = segment.role === 'specialist'
 
-    for (const raw of entries) {
-      const masked = maskSensitiveContent(raw)
-      const ts = masked.timestamp ? new Date(masked.timestamp).getTime() : 0
-      if (ts < startMs) { before.push(masked); continue }
-      if (ts > endMs)   { after.push(masked); continue }
+    for (const entry of entries) {
+      const ts = entry.timestamp ? new Date(entry.timestamp).getTime() : 0
+      if (ts < startMs) { before.push(entry); continue }
+      if (ts > endMs)   { after.push(entry); continue }
 
       if (isSpecialist) {
-        if (entryBelongsToSpecialist(masked, segment, entries)) {
-          during.push(masked)
+        if (entryBelongsToSpecialist(entry, segment, entries)) {
+          during.push(entry)
         }
       } else {
-        during.push(masked)
+        during.push(entry)
       }
     }
   } else {
-    // Full session view — still mask sensitive data
-    during = entries.map(maskSensitiveContent)
+    during = entries.slice()
   }
 
   const segmentInsights = segment
@@ -346,7 +328,7 @@ export function SessionTranscript({ tenantId, sessionId, onBack, canJoin = true,
             <button onClick={() => setShowBefore(!showBefore)} style={{ background: 'none', border: 'none', color: '#475569', cursor: 'pointer', fontSize: 12, padding: '4px 0' }}>
               {showBefore ? '▾' : '▸'} Antes do segmento · {before.length} eventos
             </button>
-            {showBefore && before.map(e => <EntryRow key={e.entry_id} e={e} showEvents={showEvents} />)}
+            {showBefore && before.map(e => <EntryRow key={e.entry_id} e={e} showEvents={showEvents} maskingRules={maskingRules} />)}
           </div>
         )}
 
@@ -363,7 +345,7 @@ export function SessionTranscript({ tenantId, sessionId, onBack, canJoin = true,
 
         {/* ── During segment ── */}
         {during.length === 0 && <p style={s.placeholder}>Nenhum evento no stream ainda.</p>}
-        {during.map(e => <EntryRow key={e.entry_id} e={e} showEvents={showEvents} />)}
+        {during.map(e => <EntryRow key={e.entry_id} e={e} showEvents={showEvents} maskingRules={maskingRules} />)}
 
         {/* ── Segment insights ── */}
         {segmentInsights.length > 0 && (
@@ -392,7 +374,7 @@ export function SessionTranscript({ tenantId, sessionId, onBack, canJoin = true,
             <button onClick={() => setShowAfter(!showAfter)} style={{ background: 'none', border: 'none', color: '#475569', cursor: 'pointer', fontSize: 12, padding: '4px 0' }}>
               {showAfter ? '▾' : '▸'} Após o segmento · {after.length} eventos
             </button>
-            {showAfter && after.map(e => <EntryRow key={e.entry_id} e={e} showEvents={showEvents} />)}
+            {showAfter && after.map(e => <EntryRow key={e.entry_id} e={e} showEvents={showEvents} maskingRules={maskingRules} />)}
           </div>
         )}
 
@@ -417,13 +399,18 @@ export function SessionTranscript({ tenantId, sessionId, onBack, canJoin = true,
 
 // ─── Sub-components ────────────────────────────────────────────────────────────
 
-function EntryRow({ e, showEvents }: { e: StreamEntry; showEvents: boolean }) {
+function EntryRow({ e, showEvents, maskingRules }: {
+  e: StreamEntry
+  showEvents: boolean
+  maskingRules?: import('@/components/MaskedToken').MaskingRulesMap
+}) {
   const isEvent = SYSTEM_TYPES_SET.has(e.type)
   if (isEvent) return showEvents ? <EventRow e={e} /> : null
 
   const text = extractText(e.content)
   const isAgent = e.author_role !== 'customer'
   const isInternal = e.visibility === 'agents_only'
+  const rendered = renderWithTokens(text, maskingRules)
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', alignItems: isAgent ? 'flex-end' : 'flex-start' }}>
@@ -444,7 +431,7 @@ function EntryRow({ e, showEvents }: { e: StreamEntry; showEvents: boolean }) {
           <RoleBadge role={e.author_role} />
           <span style={{ fontSize: 10, color: '#64748b' }}>{e.timestamp ? fmtTs(e.timestamp) : ''}</span>
         </div>
-        <div style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{text}</div>
+        <div style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{rendered}</div>
       </div>
     </div>
   )

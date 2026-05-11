@@ -15,6 +15,8 @@ import React, { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useAuth } from '@/auth/useAuth'
 import { useNamespace, putConfig } from '../config-plataforma/api/config-hooks'
+import type { DisplayScreen, DisplayVoice, MaskingDisplayRule } from '@/components/MaskedToken'
+import { DEFAULT_DISPLAY_RULE } from '@/components/MaskedToken'
 
 // ── Masking categories (mirrors DEFAULT_MASKING_RULES in schemas/audit.ts) ─────
 // Labels are translated inline in the component
@@ -54,6 +56,9 @@ export default function MaskingPage() {
   // audit_policy namespace is the canonical source for masking/audit configuration
   const { entries, loading, error, reload } = useNamespace(tenantId, 'audit_policy')
 
+  // masking namespace stores per-category display rules
+  const { entries: maskingEntries, reload: reloadMasking } = useNamespace(tenantId, 'masking')
+
   // Resolved values with defaults — entries[key].value holds the actual config value
   const val = (key: string): unknown => entries[key]?.value ?? entries[key]
 
@@ -84,6 +89,28 @@ export default function MaskingPage() {
     } finally {
       setSaving(null)
     }
+  }
+
+  async function saveMaskingRule(category: string, rule: MaskingDisplayRule) {
+    if (!adminToken) { showToast(t('toast.tokenRequired'), false); return }
+    const key = `rule.${category}`
+    setSaving(key)
+    try {
+      await putConfig('masking', key, rule, tenantId, adminToken)
+      reloadMasking()
+      showToast(t('toast.keySaved', { key }), true)
+    } catch (e) {
+      showToast(String(e), false)
+    } finally {
+      setSaving(null)
+    }
+  }
+
+  function getMaskingRule(category: string): MaskingDisplayRule {
+    const key = `rule.${category}`
+    const v = maskingEntries[key]?.value ?? maskingEntries[key]
+    if (v && typeof v === 'object') return v as MaskingDisplayRule
+    return DEFAULT_DISPLAY_RULE
   }
 
   function toggleRole(role: string) {
@@ -250,6 +277,100 @@ export default function MaskingPage() {
             </p>
           </div>
         </Section>
+
+        {/* ── Section 5: Display rules per category ────────────────────────── */}
+        <Section
+          icon="🖥️"
+          title={t('section.displayRules.title', { defaultValue: 'Display Rules by Category' })}
+          desc={t('section.displayRules.description', { defaultValue: 'Configure how masked tokens are shown per channel. Changes apply immediately to new sessions.' })}
+        >
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 12, marginTop: 12 }}>
+            {DEFAULT_CATEGORIES.map(cat => {
+              const rule = getMaskingRule(cat.id)
+              const key  = `rule.${cat.id}`
+              const isSaving = saving === key
+              function update(patch: Partial<MaskingDisplayRule>) {
+                saveMaskingRule(cat.id, { ...rule, ...patch })
+              }
+              return (
+                <div key={cat.id} style={{
+                  background: '#0f172a', border: '1px solid #1e293b', borderRadius: 8,
+                  padding: '14px 16px',
+                }}>
+                  {/* Category header */}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
+                    <span style={{ fontSize: 18 }}>{cat.icon}</span>
+                    <span style={{ fontWeight: 600, fontSize: 13, color: '#e2e8f0' }}>{t(`categories.${cat.id}`)}</span>
+                    <code style={{ fontSize: 10, color: '#475569', marginLeft: 4 }}>{cat.id}</code>
+                    {isSaving && <span style={{ fontSize: 10, color: '#3b82f6', marginLeft: 'auto' }}>saving…</span>}
+                  </div>
+
+                  {/* Controls row */}
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 16, alignItems: 'flex-start' }}>
+
+                    {/* display_screen */}
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 4, minWidth: 140 }}>
+                      <label style={{ fontSize: 10, color: '#64748b', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+                        {t('section.displayRules.screen', { defaultValue: 'Screen display' })}
+                      </label>
+                      <select
+                        value={rule.display_screen}
+                        disabled={isSaving}
+                        onChange={e => update({ display_screen: e.target.value as DisplayScreen })}
+                        style={{ ...selectStyle }}
+                      >
+                        <option value="display_partial">{t('displayScreen.partial', { defaultValue: 'Partial (***-00)' })}</option>
+                        <option value="full_mask">{t('displayScreen.full', { defaultValue: 'Full mask (•••••)' })}</option>
+                        <option value="hidden">{t('displayScreen.hidden', { defaultValue: 'Label only' })}</option>
+                      </select>
+                    </div>
+
+                    {/* display_voice */}
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 4, minWidth: 140 }}>
+                      <label style={{ fontSize: 10, color: '#64748b', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+                        {t('section.displayRules.voice', { defaultValue: 'Voice channel' })}
+                      </label>
+                      <select
+                        value={rule.display_voice}
+                        disabled={isSaving}
+                        onChange={e => update({ display_voice: e.target.value as DisplayVoice })}
+                        style={{ ...selectStyle }}
+                      >
+                        <option value="silence">{t('displayVoice.silence', { defaultValue: 'Silence' })}</option>
+                        <option value="beep">{t('displayVoice.beep', { defaultValue: 'Beep tone' })}</option>
+                        <option value="speak_placeholder">{t('displayVoice.placeholder', { defaultValue: 'Speak placeholder' })}</option>
+                      </select>
+                    </div>
+
+                    {/* echo_to_customer */}
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                      <label style={{ fontSize: 10, color: '#64748b', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+                        {t('section.displayRules.echoCustomer', { defaultValue: 'Echo to customer' })}
+                      </label>
+                      <MiniToggle
+                        active={rule.echo_to_customer}
+                        onToggle={() => update({ echo_to_customer: !rule.echo_to_customer })}
+                        disabled={isSaving}
+                      />
+                    </div>
+
+                    {/* echo_to_operator */}
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                      <label style={{ fontSize: 10, color: '#64748b', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+                        {t('section.displayRules.echoOperator', { defaultValue: 'Echo to operator' })}
+                      </label>
+                      <MiniToggle
+                        active={rule.echo_to_operator}
+                        onToggle={() => update({ echo_to_operator: !rule.echo_to_operator })}
+                        disabled={isSaving}
+                      />
+                    </div>
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        </Section>
       </div>
     </div>
   )
@@ -384,6 +505,33 @@ const cancelBtnStyle: React.CSSProperties = {
 const editBtnStyle: React.CSSProperties = {
   padding: '4px 12px', fontSize: 12, borderRadius: 6,
   background: 'none', color: '#64748b', border: '1px solid #334155', cursor: 'pointer',
+}
+
+function MiniToggle({ active, onToggle, disabled }: {
+  active: boolean; onToggle: () => void; disabled?: boolean
+}) {
+  return (
+    <button
+      onClick={onToggle}
+      disabled={disabled}
+      style={{
+        width: 40, height: 22, borderRadius: 11, border: 'none', cursor: disabled ? 'not-allowed' : 'pointer',
+        background: active ? '#3b82f6' : '#1e293b', position: 'relative', transition: 'background 0.2s',
+        opacity: disabled ? 0.6 : 1,
+      }}
+    >
+      <span style={{
+        position: 'absolute', top: 2, left: active ? 20 : 2,
+        width: 18, height: 18, borderRadius: '50%',
+        background: active ? '#fff' : '#64748b', transition: 'left 0.2s',
+      }} />
+    </button>
+  )
+}
+
+const selectStyle: React.CSSProperties = {
+  background: '#0a1628', border: '1px solid #334155', borderRadius: 6,
+  color: '#e2e8f0', fontSize: 12, padding: '5px 8px', outline: 'none', cursor: 'pointer',
 }
 
 function infoBox(bg: string, color: string): React.CSSProperties {

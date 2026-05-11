@@ -2,6 +2,27 @@
 
 ---
 
+## Masking Bloco 2 — Channel-Aware Display Architecture (2026-05-11)
+
+**`packages/platform-ui/src/components/MaskedToken.tsx`** *(novo)*
+- `TOKEN_RE`, `parseToken()` — regex e parser para formato `[category:tk_xxx:display]`
+- `MaskedToken` component — chip estilizado com ícone de categoria, label e valor parcial; suporta `display_screen: display_partial | full_mask | hidden`
+- `renderWithTokens(text, rules?)` — split de texto com substituição de tokens por `<MaskedToken>` components; retorna `React.ReactNode[]`
+- `useMaskingDisplayRules()` — hook que lê namespace `masking` do Config API e retorna `MaskingRulesMap` per-category; defaults aplicados quando ausente
+- `DEFAULT_DISPLAY_RULE` — `display_partial / silence / echo_to_customer=false / echo_to_operator=true`
+
+**`packages/platform-ui/src/modules/service/components/SessionTranscript.tsx`**
+- `EntryRow` migrado: usa `renderWithTokens(text, maskingRules)` ao invés de `extractText` raw — tokens aparecem como chips ao invés de strings brutas
+- Removida `maskSensitiveContent()` (regex keyword crude) — substituída por token-aware rendering
+- `useMaskingDisplayRules()` chamado no componente raiz; `maskingRules` passado para todos os `EntryRow`
+
+**`packages/platform-ui/src/modules/masking/MaskingPage.tsx`**
+- Section 5 "Display Rules by Category": grid de cards por categoria com 4 controles cada — `display_screen` (select), `display_voice` (select), `echo_to_customer` (toggle), `echo_to_operator` (toggle)
+- Salva em namespace `masking`, chave `rule.{category}` no Config API
+- `MiniToggle` component, `selectStyle`, `getMaskingRule()` helper, `saveMaskingRule()`
+
+---
+
 ## Masking Bloco 1 — Security Fixes (2026-05-11)
 
 Correções de segurança identificadas no mapeamento de vetores de vazamento. Nenhuma mudança de API ou schema — apenas remoção de exposição de dados sensíveis em logs.
