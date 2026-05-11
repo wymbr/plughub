@@ -112,11 +112,11 @@ Spec completa em [`docs/modules/arc10-journey.md`](docs/modules/arc10-journey.md
 - `platform-ui/hooks.ts`: `Journey`/`JourneyKpi` types + `useJourneys()` + `useJourney()`
 - `ProcessosPage.tsx`: dois tabs — **Jornadas** (KPI strip + lista + detalhe) e **Instâncias** (view existente preservada)
 
-**Fase D — Console (AgentAssistPage)** *(não implementado)*
-- HistoricoTab: seção "Processos em aberto" para o customer_id atual
-- ActionBar: botão "Iniciar Processo" com selector (filtrado por `mentionable_journeys` do pool)
-- `@mention` protocol: extensão `@journey:<skill_id>`
-- Botão "Unir jornadas" no Monitor detail panel (usa MCP tool `journey_merge` já implementado)
+**Fase D — Console (AgentAssistPage)** *(concluída 2026-05-11)*
+- HistoricoTab: seção "Processos em aberto" para o customer_id atual (apenas active/suspended)
+- ActionBar: botão "Iniciar Processo" dropdown filtrado por `pool.mentionable_journeys`; chama `POST /v1/journeys`
+- `@mention` protocol: extensão `@journey:<skill_id>` — sem UI especial, agentes humanos digitam no campo de texto
+- Botão "Unir jornadas" no painel de detalhes do tab Jornadas em ProcessosPage; chama `POST /v1/journeys/merge`
 
 **Fase E — Dashboard cards de jornada** *(não implementado)*
 - Dashboard cards de jornada usando sistema de cards genéricos existente (KPIs por skill_id já disponíveis via `GET /reports/journeys`)

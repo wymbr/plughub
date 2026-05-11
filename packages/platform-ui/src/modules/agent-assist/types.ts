@@ -240,10 +240,12 @@ export type PoolPresenceStatus = "ready" | "offline";
 
 /** A pool available for the agent to join. */
 export interface PoolInfo {
-  pool_id:       string;
-  display_name?: string;
-  channel_types: string[];
-  sla_target_ms: number | null;
+  pool_id:              string;
+  display_name?:        string;
+  channel_types:        string[];
+  sla_target_ms:        number | null;
+  /** skill_ids that can be mentioned / started via Journey in this pool */
+  mentionable_journeys?: string[];
 }
 
 // ── Multi-contact session state ───────────────────────────────────────────────

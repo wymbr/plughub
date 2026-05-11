@@ -2,6 +2,35 @@
 
 ---
 
+## Arc 10 Phase D — Console Journey Integration (2026-05-11)
+
+### `packages/platform-ui/src/modules/agent-assist/types.ts`
+- `PoolInfo`: campo `mentionable_journeys?: string[]` adicionado
+
+### `packages/platform-ui/src/modules/agent-assist/AgentAssistContext.tsx`
+- `fetchPools`: extrai `mentionable_journeys` do response da agent-registry e povoa `PoolInfo`
+
+### `packages/platform-ui/src/modules/agent-assist/components/ActionBar.tsx`
+- `IniciarProcessoButton`: dropdown de skill_ids de `mentionable_journeys` com label humanizado (remove prefixo `skill_` e sufixo `_vN`)
+- `ActionBarProps`: props `mentionableJourneys?` e `onIniciarProcesso?` adicionadas
+- Botão "🗺️ Processo ▾" renderizado na barra de ações quando `onIniciarProcesso` e `mentionableJourneys.length > 0`
+
+### `packages/platform-ui/src/modules/agent-assist/components/tabs/HistoricoTab.tsx`
+- `HistoricoTabProps`: campo `tenantId?: string | null` adicionado
+- `useCustomerJourneys(tenantId, customerId)`: hook local que consulta `GET /analytics/reports/journeys` filtrando por `customer_id`; retorna apenas jornadas `active` e `suspended`
+- `OpenJourneys`: seção "Processos em aberto" com badges coloridos por status, renderizada antes de "Contatos anteriores"
+
+### `packages/platform-ui/src/modules/agent-assist/AgentAssistPage.tsx`
+- `mentionableJourneys`: estado derivado de `availablePools` filtrado pelo `poolId` do contato selecionado
+- `handleIniciarProcesso(skillId)`: `POST /v1/journeys` com `{ tenant_id, skill_id, session_id }` + toast feedback
+- `ActionBar`: props `mentionableJourneys` e `onIniciarProcesso` conectadas
+- `HistoricoTab`: prop `tenantId` conectada
+
+### `packages/platform-ui/src/modules/agent-flow/ProcessosPage.tsx`
+- `MergeButton`: componente dropdown "⛓ Unir jornadas" adicionado ao painel de detalhes de jornadas no tab Jornadas (visível apenas para jornadas `active`/`suspended`; chama `POST /v1/journeys/merge`; remove itens sem candidatos possíveis)
+
+---
+
 ## Arc 10 Phase C — Journey Monitor (ProcessosPage) (2026-05-11)
 
 ### `packages/analytics-api/src/plughub_analytics_api/reports.py`

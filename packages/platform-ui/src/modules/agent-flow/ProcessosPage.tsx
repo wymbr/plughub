@@ -6,13 +6,13 @@
  * Tab "journeys"  — Journey list from analytics-api + detail from workflow-api
  * Tab "instances" — Workflow instance lifecycle (existing view)
  */
-import React, { useState } from 'react'
+import React, { useState, useRef, useEffect } from 'react'
 import { useAuth } from '@/auth/useAuth'
 import {
   useWorkflowInstances, useWorkflowInstance, cancelWorkflow,
   useJourneys, useJourney,
 } from '@/modules/workflows/api/hooks'
-import type { WorkflowStatus, JourneyStatus } from '@/modules/workflows/api/hooks'
+import type { WorkflowStatus, JourneyStatus, Journey } from '@/modules/workflows/api/hooks'
 import { Link } from 'react-router-dom'
 
 // ── Shared helpers ────────────────────────────────────────────────────────────
@@ -46,6 +46,78 @@ const JOURNEY_STATUS_LABELS: Record<JourneyStatus | 'all', string> = {
   completed: 'Concluído',
   failed:    'Falhou',
   cancelled: 'Cancelado',
+}
+
+// ── Journey merge helper ──────────────────────────────────────────────────────
+
+function MergeButton({ primary, candidates, tenantId, onMerged }: {
+  primary:    Journey
+  candidates: Journey[]
+  tenantId:   string
+  onMerged:   () => void
+}) {
+  const [open,    setOpen]    = useState(false)
+  const [merging, setMerging] = useState(false)
+  const ref = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (!open) return
+    function handle(e: MouseEvent) {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false)
+    }
+    document.addEventListener('mousedown', handle)
+    return () => document.removeEventListener('mousedown', handle)
+  }, [open])
+
+  const others = candidates.filter(
+    j => j.journey_id !== primary.journey_id &&
+         (j.status === 'active' || j.status === 'suspended')
+  )
+  if (others.length === 0) return null
+
+  async function merge(sourceId: string) {
+    setMerging(true)
+    setOpen(false)
+    try {
+      const res = await fetch('/v1/journeys/merge', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({
+          tenant_id:         tenantId,
+          journey_id:        primary.journey_id,
+          source_journey_id: sourceId,
+        }),
+      })
+      if (res.ok) onMerged()
+    } catch { /* non-fatal */ }
+    finally { setMerging(false) }
+  }
+
+  return (
+    <div ref={ref} className="relative">
+      <button
+        onClick={() => setOpen(o => !o)}
+        disabled={merging}
+        className="w-full py-1.5 rounded border border-violet-800 bg-violet-950/60 text-violet-300 text-xs font-medium hover:bg-violet-900/60 transition-colors disabled:opacity-40"
+      >
+        {merging ? '…' : '⛓ Unir jornadas'}
+      </button>
+      {open && (
+        <div className="absolute bottom-full left-0 right-0 mb-1 bg-slate-800 border border-slate-600 rounded-lg shadow-xl overflow-hidden z-50">
+          <div className="px-2.5 py-1.5 text-[10px] font-bold text-slate-400 uppercase tracking-wide border-b border-slate-700">
+            Mesclar nesta jornada
+          </div>
+          {others.map(j => (
+            <button key={j.journey_id} onClick={() => merge(j.journey_id)}
+              className="w-full text-left px-3 py-2 text-xs text-slate-300 hover:bg-slate-700 transition-colors border-b border-slate-700/50 last:border-0">
+              <div className="font-mono text-slate-400">{j.journey_id.slice(0, 12)}…</div>
+              <div className="text-slate-500 truncate mt-0.5">{j.skill_id}</div>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  )
 }
 
 function JourneysTab({ tenantId }: { tenantId: string }) {
@@ -251,6 +323,18 @@ function JourneysTab({ tenantId }: { tenantId: string }) {
               )}
 
             </div>
+
+            {/* Merge button — only for active/suspended journeys */}
+            {(detail.status === 'active' || detail.status === 'suspended') && (
+              <div className="px-4 py-3 border-t border-slate-800 flex-shrink-0">
+                <MergeButton
+                  primary={detail}
+                  candidates={journeys}
+                  tenantId={tenantId}
+                  onMerged={() => { setSelectedId(null); refresh() }}
+                />
+              </div>
+            )}
           </div>
         ) : (
           <div className="flex-1 flex flex-col items-center justify-center text-slate-500">

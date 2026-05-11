@@ -1,17 +1,107 @@
 /**
  * HistoricoTab
- * Shows the customer's last N closed sessions from analytics-api.
+ * Shows:
+ *  1. "Processos em aberto" — active/suspended Journeys for this customer (Arc 10 Phase D)
+ *  2. "Contatos anteriores" — the customer's last N closed sessions from analytics-api.
  *
- * Each row shows: date, channel icon, duration, outcome badge, close_reason.
+ * Each session row shows: date, channel icon, duration, outcome badge, close_reason.
  * Clicking a row expands it to show pool_id and session_id for reference.
  */
 
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { ContactHistoryEntry } from "../../types";
 import { useCustomerHistory } from "../../hooks/useCustomerHistory";
+import type { Journey, JourneyStatus } from "@/modules/workflows/api/hooks";
 
 interface HistoricoTabProps {
-  customerId: string | null;
+  customerId:  string | null;
+  tenantId?:   string | null;
+}
+
+// ── Open journeys for this customer (Arc 10 Phase D) ─────────────────────────
+
+const JOURNEY_STATUS_COLORS: Record<JourneyStatus, string> = {
+  active:    '#2563eb',
+  suspended: '#d97706',
+  completed: '#059669',
+  failed:    '#dc2626',
+  cancelled: '#6b7280',
+}
+
+const JOURNEY_STATUS_LABELS: Record<JourneyStatus, string> = {
+  active:    'Ativo',
+  suspended: 'Suspenso',
+  completed: 'Concluído',
+  failed:    'Falhou',
+  cancelled: 'Cancelado',
+}
+
+function useCustomerJourneys(tenantId: string | null | undefined, customerId: string | null) {
+  const [journeys, setJourneys] = useState<Journey[]>([])
+  const [loading,  setLoading]  = useState(false)
+
+  useEffect(() => {
+    if (!tenantId || !customerId) { setJourneys([]); return }
+    let active = true
+    setLoading(true)
+    const params = new URLSearchParams({
+      tenant_id:   tenantId,
+      customer_id: customerId,
+      page_size:   '10',
+    })
+    fetch(`/analytics/reports/journeys?${params.toString()}`)
+      .then(r => r.ok ? r.json() : { data: [] })
+      .then((d: { data?: Journey[] }) => {
+        if (active) {
+          // Show active and suspended only — completed/failed/cancelled are noise
+          setJourneys((d.data ?? []).filter(j => j.status === 'active' || j.status === 'suspended'))
+        }
+      })
+      .catch(() => { if (active) setJourneys([]) })
+      .finally(() => { if (active) setLoading(false) })
+    return () => { active = false }
+  }, [tenantId, customerId])
+
+  return { journeys, loading }
+}
+
+function OpenJourneys({ tenantId, customerId }: { tenantId: string | null | undefined; customerId: string | null }) {
+  const { journeys, loading } = useCustomerJourneys(tenantId, customerId)
+
+  if (!loading && journeys.length === 0) return null
+
+  return (
+    <div className="px-3 pt-2 pb-0 flex-shrink-0">
+      <div className="text-[10px] font-semibold text-gray-400 uppercase tracking-wide mb-1.5">
+        Processos em aberto
+      </div>
+      {loading && (
+        <div className="text-xs text-gray-400 animate-pulse py-1">Carregando…</div>
+      )}
+      {!loading && journeys.map(j => {
+        const color = JOURNEY_STATUS_COLORS[j.status]
+        return (
+          <div key={j.journey_id}
+            className="flex items-start justify-between gap-2 px-2.5 py-1.5 rounded-lg border mb-1.5"
+            style={{ borderColor: color + '40', background: color + '10' }}>
+            <div className="flex-1 min-w-0">
+              <div className="text-[11px] font-mono text-gray-600 truncate font-medium">
+                {j.skill_id.replace(/^skill_|_v\d+$/g, '').replace(/_/g, ' ')}
+              </div>
+              <div className="text-[10px] text-gray-400 mt-0.5">
+                {j.session_count} sessão{j.session_count !== 1 ? 'ões' : ''}
+              </div>
+            </div>
+            <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded flex-shrink-0"
+              style={{ background: color + '25', color }}>
+              {JOURNEY_STATUS_LABELS[j.status]}
+            </span>
+          </div>
+        )
+      })}
+      <div className="border-b border-gray-100 mt-1 mb-2" />
+    </div>
+  )
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -130,7 +220,7 @@ const HistoryRow: React.FC<{ entry: ContactHistoryEntry }> = ({ entry }) => {
 
 // ── HistoricoTab ──────────────────────────────────────────────────────────────
 
-export const HistoricoTab: React.FC<HistoricoTabProps> = ({ customerId }) => {
+export const HistoricoTab: React.FC<HistoricoTabProps> = ({ customerId, tenantId }) => {
   const { entries, loading, error, refetch } = useCustomerHistory(customerId);
 
   if (!customerId) {
@@ -144,6 +234,10 @@ export const HistoricoTab: React.FC<HistoricoTabProps> = ({ customerId }) => {
 
   return (
     <div className="flex flex-col h-full overflow-hidden">
+
+      {/* Open journeys (Arc 10) */}
+      <OpenJourneys tenantId={tenantId} customerId={customerId} />
+
       {/* Header */}
       <div className="flex items-center justify-between px-3 py-2 border-b border-gray-100 flex-shrink-0">
         <span className="text-xs font-semibold text-gray-500 uppercase tracking-wide">

@@ -93,10 +93,11 @@ async function fetchPools(accessiblePools: string[], accessToken?: string): Prom
       | Array<{ pool_id: string; display_name?: string; channel_types?: string[]; sla_target_ms?: number | null }>;
     const data = Array.isArray(json) ? json : (json.pools ?? []);
     const list: PoolInfo[] = data.map(p => ({
-      pool_id:       p.pool_id,
-      display_name:  p.display_name,
-      channel_types: p.channel_types ?? [],
-      sla_target_ms: p.sla_target_ms ?? null,
+      pool_id:               p.pool_id,
+      display_name:          p.display_name,
+      channel_types:         p.channel_types ?? [],
+      sla_target_ms:         p.sla_target_ms ?? null,
+      mentionable_journeys:  (p as Record<string, unknown>)['mentionable_journeys'] as string[] | undefined,
     }));
     if (accessiblePools.length === 0) return list;
     return list.filter(p => accessiblePools.includes(p.pool_id));

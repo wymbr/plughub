@@ -295,10 +295,37 @@ export const AgentAssistPage: React.FC = () => {
     [addToast, t]
   );
 
+  // ── Iniciar Processo (Arc 10 Phase D) ────────────────────────────────────
+  const handleIniciarProcesso = useCallback(
+    async (skillId: string) => {
+      if (!selectedSessionId) return;
+      const tenantId = session?.tenantId ?? "";
+      try {
+        const res = await fetch("/v1/journeys", {
+          method:  "POST",
+          headers: { "Content-Type": "application/json" },
+          body:    JSON.stringify({ tenant_id: tenantId, skill_id: skillId, session_id: selectedSessionId }),
+        });
+        if (res.ok) {
+          addToast(`Processo "${skillId.replace(/^skill_|_v\d+$/g, "").replace(/_/g, " ")}" iniciado`, "info");
+        } else {
+          addToast("Não foi possível iniciar o processo", "error");
+        }
+      } catch {
+        addToast("Erro ao iniciar processo", "error");
+      }
+    },
+    [selectedSessionId, session, addToast],
+  );
+
   // ── Derived state ────────────────────────────────────────────────────────
   const selected     = selectedSessionId ? contacts.get(selectedSessionId) ?? null : null;
   const wsStatus     = aggregateStatus(statuses, activePools);
   const headerPoolId = selected?.poolId ?? activePools[0] ?? "";
+  // Pool-level mentionable_journeys for the active contact's pool (Arc 10 Phase D)
+  const mentionableJourneys = (
+    availablePools.find(p => p.pool_id === selected?.poolId)?.mentionable_journeys ?? []
+  );
 
   // ── Render ────────────────────────────────────────────────────────────────
   return (
@@ -366,6 +393,8 @@ export const AgentAssistPage: React.FC = () => {
               onDesligar={handleDesligar}
               substitutionMode={substitutionMode}
               onToggleSubstitutionMode={() => setSubstitutionMode(prev => !prev)}
+              mentionableJourneys={mentionableJourneys}
+              onIniciarProcesso={handleIniciarProcesso}
             />
           </div>
 
@@ -411,7 +440,10 @@ export const AgentAssistPage: React.FC = () => {
             {centerTab === "historico" ? (
               /* ── Histórico tab ── */
               <div className="flex-1 overflow-hidden">
-                <HistoricoTab customerId={selected?.contactId ?? null} />
+                <HistoricoTab
+                  customerId={selected?.contactId ?? null}
+                  tenantId={session?.tenantId}
+                />
               </div>
             ) : (
               /* ── Atual tab ── */

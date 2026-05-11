@@ -12,7 +12,7 @@
  * the "Encerrar" button that was previously in AgentInput.
  */
 
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { ContactSession, SlaState } from "../types";
 
 const CHANNEL_ICON: Record<string, string> = {
@@ -91,6 +91,61 @@ const HandleTimer: React.FC<{ startedAt: Date }> = ({ startedAt }) => {
   );
 };
 
+// ── Iniciar Processo dropdown (Arc 10 Phase D) ────────────────────────────────
+const IniciarProcessoButton: React.FC<{
+  skills:            string[];
+  disabled?:         boolean;
+  onSelect:          (skillId: string) => void;
+}> = ({ skills, disabled, onSelect }) => {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    function handle(e: MouseEvent) {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    }
+    document.addEventListener("mousedown", handle);
+    return () => document.removeEventListener("mousedown", handle);
+  }, [open]);
+
+  if (skills.length === 0) return null;
+
+  return (
+    <div className="relative" ref={ref}>
+      <button
+        onClick={() => setOpen(o => !o)}
+        disabled={disabled}
+        title="Iniciar um processo (Journey) vinculado a esta sessão"
+        className="px-2.5 py-1 rounded text-xs font-medium border transition-colors
+          text-blue-700 bg-blue-50 border-blue-200 hover:bg-blue-100 hover:border-blue-300
+          disabled:opacity-40 disabled:cursor-not-allowed"
+      >
+        🗺️ Processo ▾
+      </button>
+      {open && (
+        <div className="absolute left-0 top-full mt-1 z-50 bg-white border border-gray-200
+          rounded-lg shadow-lg min-w-[180px] overflow-hidden">
+          <div className="px-2.5 py-1.5 text-[10px] font-bold text-gray-400 uppercase tracking-wide border-b border-gray-100">
+            Iniciar processo
+          </div>
+          {skills.map(skillId => (
+            <button
+              key={skillId}
+              onClick={() => { onSelect(skillId); setOpen(false); }}
+              className="w-full text-left px-3 py-2 text-xs text-gray-700 hover:bg-blue-50
+                hover:text-blue-700 transition-colors border-b border-gray-50 last:border-0"
+            >
+              {skillId.replace(/^skill_|_v\d+$/g, '').replace(/_/g, ' ')}
+              <div className="text-[10px] text-gray-400 font-mono mt-0.5">{skillId}</div>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+};
+
 // ── Props ─────────────────────────────────────────────────────────────────────
 export interface ActionBarProps {
   contact:                  ContactSession | null;
@@ -99,6 +154,10 @@ export interface ActionBarProps {
   onDesligar?:              () => void;
   substitutionMode?:        boolean;
   onToggleSubstitutionMode?: () => void;
+  /** skill_ids from pool.mentionable_journeys — shown in "Iniciar Processo" dropdown */
+  mentionableJourneys?:     string[];
+  /** Called when the agent picks a skill from the dropdown */
+  onIniciarProcesso?:       (skillId: string) => void;
 }
 
 // ── Main component ─────────────────────────────────────────────────────────────
@@ -109,6 +168,8 @@ export const ActionBar: React.FC<ActionBarProps> = ({
   onDesligar,
   substitutionMode = false,
   onToggleSubstitutionMode,
+  mentionableJourneys = [],
+  onIniciarProcesso,
 }) => {
   if (!contact) {
     return (
@@ -193,6 +254,14 @@ export const ActionBar: React.FC<ActionBarProps> = ({
           >
             {substitutionMode ? "🔄 Substituindo" : "🔄 Substituir"}
           </button>
+        )}
+        {/* ── Iniciar Processo (Arc 10 Phase D) ── */}
+        {onIniciarProcesso && mentionableJourneys.length > 0 && (
+          <IniciarProcessoButton
+            skills={mentionableJourneys}
+            disabled={contact.sessionClosed}
+            onSelect={onIniciarProcesso}
+          />
         )}
       </div>
 
