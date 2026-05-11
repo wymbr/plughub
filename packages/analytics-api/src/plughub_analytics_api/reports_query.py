@@ -328,6 +328,8 @@ def _fetch_sessions(
         conditions.append("s.dnis LIKE {dnis_like:String}")
         params["dnis_like"] = f"%{dnis}%"
 
+    where = " AND ".join(conditions)
+
     # Arc 9 — agent scope: sessions that had at least one segment from a supervised agent type
     _agent_join, _agent_where = _agent_scope_session_join(db, tenant_id, supervised_agent_types)
     if _agent_where:

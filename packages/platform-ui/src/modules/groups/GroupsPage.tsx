@@ -91,8 +91,10 @@ export default function GroupsPage() {
   const { t }     = useTranslation('groups')
   const { session } = useAuth()
 
-  const tenantId   = session?.tenantId  ?? 'tenant_demo'
-  const adminToken = session?.adminToken ?? ''
+  const tenantId = session?.tenantId ?? 'tenant_demo'
+
+  const [adminToken,  setAdminToken]  = useState('')
+  const [tokenSaved,  setTokenSaved]  = useState(false)
 
   const [groups,  setGroups]  = useState<Group[]>([])
   const [loading, setLoading] = useState(false)
@@ -185,15 +187,13 @@ export default function GroupsPage() {
     }
   }
 
-  // ── Render ────────────────────────────────────────────────────────────────────
-
-  if (!adminToken) {
-    return (
-      <div className="p-8 text-center text-gray-500">
-        {t('noAdminToken')}
-      </div>
-    )
+  function saveToken() {
+    setTokenSaved(true)
+    void loadGroups()
+    setTimeout(() => setTokenSaved(false), 2000)
   }
+
+  // ── Render ────────────────────────────────────────────────────────────────────
 
   return (
     <div className="h-full flex flex-col bg-gray-50">
@@ -203,12 +203,34 @@ export default function GroupsPage() {
           <h1 className="text-xl font-semibold text-gray-900">{t('title')}</h1>
           <p className="text-sm text-gray-500 mt-0.5">{t('subtitle')}</p>
         </div>
-        <button
-          onClick={() => setNewGroupOpen(true)}
-          className="px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 transition-colors"
-        >
-          + {t('newGroup')}
-        </button>
+        <div className="flex items-center gap-2">
+          <input
+            type="password"
+            value={adminToken}
+            onChange={e => { setAdminToken(e.target.value); setTokenSaved(false) }}
+            onKeyDown={e => { if (e.key === 'Enter') saveToken() }}
+            placeholder={t('adminTokenPlaceholder')}
+            className="border border-gray-300 rounded-lg px-3 py-1.5 text-xs w-48 focus:outline-none focus:ring-2 focus:ring-blue-500"
+          />
+          {adminToken && (
+            <button
+              onClick={saveToken}
+              className={`px-3 py-1.5 text-xs font-medium rounded-lg transition-colors ${
+                tokenSaved ? 'bg-green-100 text-green-700' : 'bg-blue-600 text-white hover:bg-blue-700'
+              }`}
+            >
+              {tokenSaved ? '✓' : t('adminTokenApply')}
+            </button>
+          )}
+          {adminToken && (
+            <button
+              onClick={() => setNewGroupOpen(true)}
+              className="px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 transition-colors"
+            >
+              + {t('newGroup')}
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Error banner */}

@@ -5,6 +5,8 @@
   "empty": "No groups yet. Create one to assign supervisors and members.",
   "confirmDelete": "Delete this group? This action cannot be undone.",
   "noAdminToken": "Admin token required. Please log in with an admin account.",
+  "adminTokenPlaceholder": "Admin token (to enable editing)",
+  "adminTokenApply": "Apply",
   "members": "Members",
   "supervisors": "Supervisors",
   "shifts": "Shifts",

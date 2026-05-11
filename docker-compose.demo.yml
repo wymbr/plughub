@@ -1,9 +1,19 @@
 # docker-compose.demo.yml
-# PlugHub Platform — Demo Environment (Arc 2 → Arc 8 frontend)
+# PlugHub Platform — Demo Environment (Arc 2 → Arc 9)
 #
 # Stack completa: infra + todos os módulos de aplicação + observabilidade
 #
-# Novidades neste build (2026-05-09):
+# Novidades neste build (2026-05-11):
+#
+#   • Arc 9 — Agent Groups & Supervisor Scope
+#     AgentGroup como entidade de gestão de pessoas ortogonal a Pool.
+#     auth-api: 5 novas tabelas (agent_groups + sub-recursos); CRUD REST
+#     /v1/groups/**; claims supervised_agent_types/groups/user_ids no JWT.
+#     analytics-api: 5 report endpoints filtram por supervised_agent_types.
+#     platform-ui: Config/Groups page em http://localhost:5174/config/groups
+#     (list + drawer com tabs Info / Members / Supervisors / Shifts).
+#
+# Novidades anteriores (2026-05-09):
 #
 #   • Dashboard #35 — Sistema de Cards Genéricos configuráveis por JSON
 #     Dashboards drag-and-drop com 7 tipos de display tool: metric_card,
@@ -93,7 +103,7 @@
 # │      Contatos (Lista/Relatório/Monitor/Análise/Agentes) · Agent Assist ·   │
 # │      Fluxo/Editor · Avaliação · Dashboards · Faturamento ·                 │
 # │      Config (Recursos/Plataforma/Canais/Calendários/Masking/Billing) ·     │
-# │      Workflow · Acesso (Usuários + ABAC)                                   │
+# │      Workflow · Acesso (Usuários + ABAC) · Grupos (Arc 9)                  │
 # │                                                                             │
 # │  ① Agent Assist — integrado no Platform UI (recomendado)                   │
 # │    http://localhost:5174/agent-assist?pool=retencao_humano               │
@@ -189,9 +199,12 @@ volumes:
 # │                                                                            │
 # │  PASSO 6 — Configuração e Billing                                        │
 # │    http://localhost:5174/config/platform  ← Config API por namespace     │
-# │    http://localhost:5174/config/channels  ← Channel Endpoints (novo)     │
+# │    http://localhost:5174/config/channels  ← Channel Endpoints            │
 # │      Sub-tabs: Endpoints (CRUD por canal) + Config (WebChat / Webhook)   │
 # │    http://localhost:5174/config/billing   ← Faturamento por capacidade   │
+# │    http://localhost:5174/config/groups    ← Agent Groups (Arc 9)         │
+# │      Criar grupo → adicionar members (agent_type_ids) + supervisors +    │
+# │      shifts (dias da semana + janela horária + timezone)                  │
 # │    http://localhost:5174/agent-flow/editor ← Editor Monaco de skills     │
 # │    http://localhost:5174/dashboards       ← Dashboards drag-and-drop     │
 # │                                                                            │

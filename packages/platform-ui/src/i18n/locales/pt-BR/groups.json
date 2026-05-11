@@ -5,6 +5,8 @@
   "empty": "Nenhum grupo ainda. Crie um para atribuir supervisores e membros.",
   "confirmDelete": "Excluir este grupo? Esta ação não pode ser desfeita.",
   "noAdminToken": "Token de administrador necessário. Faça login com uma conta admin.",
+  "adminTokenPlaceholder": "Admin token (para habilitar edição)",
+  "adminTokenApply": "Aplicar",
   "members": "Membros",
   "supervisors": "Supervisores",
   "shifts": "Turnos",
