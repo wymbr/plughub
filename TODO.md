@@ -107,9 +107,10 @@ Spec completa em [`docs/modules/arc10-journey.md`](docs/modules/arc10-journey.md
 - `skill-flow-worker/workflow-client.ts`: `journey_id` em `WorkflowInstance`; `createJourneyForInstance()` method
 - `skill-flow-worker/engine-runner.ts`: verifica `creates_journey:true` antes de `engine.run()`; cria journey automaticamente (falha não-fatal)
 
-**Fase C — Monitor (ProcessosPage)** *(não implementado)*
-- Journey list + detail panel + drill-down → sessions existentes → transcript
-- Journey KPIs em Analytics: duração mediana, taxa resolução, contatos médios por skill_id
+**Fase C — Monitor (ProcessosPage)** *(concluída 2026-05-11)*
+- `analytics-api/reports.py`: `GET /reports/journeys` (filtra por skill_id, status, customer_id; retorna data + kpis + meta)
+- `platform-ui/hooks.ts`: `Journey`/`JourneyKpi` types + `useJourneys()` + `useJourney()`
+- `ProcessosPage.tsx`: dois tabs — **Jornadas** (KPI strip + lista + detalhe) e **Instâncias** (view existente preservada)
 
 **Fase D — Console (AgentAssistPage)** *(não implementado)*
 - HistoricoTab: seção "Processos em aberto" para o customer_id atual
@@ -117,9 +118,8 @@ Spec completa em [`docs/modules/arc10-journey.md`](docs/modules/arc10-journey.md
 - `@mention` protocol: extensão `@journey:<skill_id>`
 - Botão "Unir jornadas" no Monitor detail panel (usa MCP tool `journey_merge` já implementado)
 
-**Fase E — Relatórios consolidados** *(não implementado)*
-- `GET /reports/journeys` em analytics-api com filtros por skill_id, status, período
-- Dashboard cards de jornada (usando sistema de cards genéricos existente)
+**Fase E — Dashboard cards de jornada** *(não implementado)*
+- Dashboard cards de jornada usando sistema de cards genéricos existente (KPIs por skill_id já disponíveis via `GET /reports/journeys`)
 
 **Fase F — Split de jornadas** *(fase futura — decisões em aberto)*
 - MCP tool `journey_split(journey_id, session_ids[])` — extrai sessões para nova journey

@@ -2,6 +2,25 @@
 
 ---
 
+## Arc 10 Phase C — Journey Monitor (ProcessosPage) (2026-05-11)
+
+### `packages/analytics-api/src/plughub_analytics_api/reports.py`
+- Import `query_journeys_report` adicionado
+- Novo endpoint `GET /reports/journeys`: filtra por `skill_id`, `status`, `customer_id`, `from_dt/to_dt`, paginação; retorna `data` (journey summaries), `kpis` (por skill_id), `meta`; status filter via HAVING sobre estado agregado
+
+### `packages/platform-ui/src/modules/workflows/api/hooks.ts`
+- Tipos `JourneyStatus`, `Journey`, `JourneyKpi` adicionados
+- `useJourneys(tenantId, skillId?, status?)`: polling 15s para `GET /analytics/reports/journeys`; retorna `{ journeys, kpis, loading, refresh }`
+- `useJourney(journeyId)`: fetch sob demanda de `GET /v1/journeys/{id}` (workflow-api)
+
+### `packages/platform-ui/src/modules/agent-flow/ProcessosPage.tsx`
+- Reestruturado com dois tabs: **Jornadas** (tab padrão) e **Instâncias**
+- `JourneysTab`: KPI strip por skill_id (total, taxa resolução, duração p50) + lista de jornadas com filtro de status + painel de detalhes (timeline, session_count, sessão de origem, workflow_instance_id, customer_id)
+- `InstancesTab`: visão existente de instâncias de workflow preservada sem alterações funcionais
+- Ambos os tabs mantêm refresh manual acessível
+
+---
+
 ## Arc 10 Phase B — Journey Automatic Session Linking (2026-05-11)
 
 ### `packages/workflow-api/src/plughub_workflow_api/db.py`

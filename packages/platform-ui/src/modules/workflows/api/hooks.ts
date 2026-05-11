@@ -135,6 +135,96 @@ export async function cancelWorkflow(instanceId: string, tenantId: string): Prom
   if (!res.ok) throw new Error(`HTTP ${res.status}`)
 }
 
+// ─── Journey types & hooks ────────────────────────────────────────────────────
+
+export type JourneyStatus = 'active' | 'suspended' | 'completed' | 'failed' | 'cancelled'
+
+export interface Journey {
+  journey_id:           string
+  tenant_id:            string
+  skill_id:             string
+  status:               JourneyStatus
+  customer_id?:         string
+  origin_session_id?:   string
+  workflow_instance_id?: string
+  created_at:           string
+  last_event_at?:       string
+  session_count:        number
+  metadata?:            Record<string, unknown>
+}
+
+export interface JourneyKpi {
+  skill_id:           string
+  total_journeys:     number
+  completed_count:    number
+  failed_count:       number
+  active_count:       number
+  resolution_rate:    number
+  avg_session_count:  number
+  median_duration_ms: number | null
+}
+
+export function useJourneys(
+  tenantId:  string,
+  skillId?:  string,
+  status?:   JourneyStatus | 'all',
+  intervalMs = 15_000,
+): { journeys: Journey[]; kpis: JourneyKpi[]; loading: boolean; refresh: () => void } {
+  const [journeys, setJourneys] = useState<Journey[]>([])
+  const [kpis,     setKpis]     = useState<JourneyKpi[]>([])
+  const [loading,  setLoading]  = useState(false)
+
+  const refresh = useCallback(async () => {
+    if (!tenantId) return
+    setLoading(true)
+    try {
+      const params = new URLSearchParams({ tenant_id: tenantId, page_size: '200' })
+      if (skillId)                        params.set('skill_id', skillId)
+      if (status && status !== 'all')     params.set('status', status)
+      const res = await fetch(`/analytics/reports/journeys?${params.toString()}`)
+      if (res.ok) {
+        const data = await safeJson<{ data?: Journey[]; kpis?: JourneyKpi[] }>(res)
+        setJourneys(data.data ?? [])
+        setKpis(data.kpis ?? [])
+      }
+    } catch { /* stale ok */ }
+    finally { setLoading(false) }
+  }, [tenantId, skillId, status])
+
+  useEffect(() => {
+    refresh()
+    const id = setInterval(refresh, intervalMs)
+    return () => clearInterval(id)
+  }, [refresh, intervalMs])
+
+  return { journeys, kpis, loading, refresh }
+}
+
+export function useJourney(
+  journeyId: string | null,
+): { journey: Journey | null; loading: boolean; refresh: () => void } {
+  const [journey, setJourney] = useState<Journey | null>(null)
+  const [loading, setLoading] = useState(false)
+
+  const refresh = useCallback(async () => {
+    if (!journeyId) return
+    setLoading(true)
+    try {
+      const res = await fetch(`/v1/journeys/${encodeURIComponent(journeyId)}`)
+      if (res.ok) setJourney(await safeJson<Journey>(res))
+    } catch { /* stale ok */ }
+    finally { setLoading(false) }
+  }, [journeyId])
+
+  useEffect(() => {
+    setJourney(null)
+    if (!journeyId) return
+    refresh()
+  }, [refresh, journeyId])
+
+  return { journey, loading, refresh }
+}
+
 // ─── Webhook types ────────────────────────────────────────────────────────────
 
 export interface Webhook {

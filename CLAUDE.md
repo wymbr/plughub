@@ -615,11 +615,11 @@ Journey é a unidade de serviço que transcende a sessão — agrupa todos os co
 
 **Vinculação de sessões subsequentes**: sessões criadas por `collect` step recebem `journey_id` via Kafka `collect.events`. Recontatos manuais via `journey_link_session(journey_id, session_id)`. Correlação automática de recontatos espontâneos é fase posterior.
 
-**Fases A+B implementadas**: `workflow-api` `/v1/journeys` (6 endpoints, inclui `POST /from-instance/{id}`) + MCP tools `journey_start`/`journey_link_session`/`journey_merge` + `analytics-api` consumer `journey.events` → `journey_events` ClickHouse. Phase B: `creates_journey:true` no YAML + skill-flow-worker auto-cria Journey; `collect` step propaga `journey_id`; `respond_collect` emite `journey_session_linked` quando sessão filha chega.
+**Fases A+B+C implementadas**: `workflow-api` `/v1/journeys` (6 endpoints, inclui `POST /from-instance/{id}`) + MCP tools `journey_start`/`journey_link_session`/`journey_merge` + `analytics-api` consumer `journey.events` → `journey_events` ClickHouse. Phase B: `creates_journey:true` no YAML + skill-flow-worker auto-cria Journey; `collect` step propaga `journey_id`; `respond_collect` emite `journey_session_linked` quando sessão filha chega. Phase C: `GET /reports/journeys` (argMax aggregation, KPI strip por skill_id) + `ProcessosPage` com tabs Jornadas/Instâncias + hooks `useJourneys`/`useJourney`.
 
 **Kafka**: `journey.events` — 8 tipos: `journey_started`, `journey_session_linked`, `journey_suspended`, `journey_resumed`, `journey_completed`, `journey_failed`, `journey_cancelled`, `journey_merged`.
 
-**Frontend**: ProcessosPage ganha Journey list + drill-down. HistoricoTab no Console mostra processos em aberto do cliente. Analytics: KPIs end-to-end por skill_id (duração mediana, taxa resolução, contatos médios, SLA compliance).
+**Frontend pendente**: HistoricoTab no Console mostra processos em aberto do cliente (Fase D). Dashboard cards de jornada (Fase E).
 
 → See [`docs/modules/arc10-journey.md`](docs/modules/arc10-journey.md)
 

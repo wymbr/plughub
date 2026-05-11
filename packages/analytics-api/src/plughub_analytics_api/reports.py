@@ -42,6 +42,7 @@ from .reports_query import (
     query_contact_insights_report,
     query_evaluations_report,
     query_evaluations_summary,
+    query_journeys_report,
     query_participation_report,
     query_quality_report,
     query_segments_report,
@@ -956,4 +957,51 @@ async def get_workflow_summary(
         campaign_id = campaign_id,
     )
     return JSONResponse(content=data)
+
+
+# ─── /reports/journeys (Arc 10) ───────────────────────────────────────────────
+
+@router.get("/journeys")
+async def get_journeys_report(
+    request:     Request,
+    tenant_id:   str           = Query(...,    description="Tenant identifier"),
+    from_dt:     Optional[str] = Query(None,   description="ISO8601 start (default: 7d ago)"),
+    to_dt:       Optional[str] = Query(None,   description="ISO8601 end (default: now)"),
+    skill_id:    Optional[str] = Query(None,   description="Filter by skill_id"),
+    status:      Optional[str] = Query(None,   description="Filter by journey status (active|suspended|completed|failed|cancelled)"),
+    customer_id: Optional[str] = Query(None,   description="Filter by customer_id"),
+    page:        int           = Query(1,       ge=1),
+    page_size:   int           = Query(100,     ge=1),
+    format:      str           = Query("json",  pattern="^(json|csv)$"),
+) -> Response:
+    """
+    Journey list and per-skill KPI summary from journey_events ClickHouse table (Arc 10).
+
+    Reconstructs journey state from events using argMax aggregations.
+
+    Response shape:
+      data: list of journey summaries — one per journey_id:
+        journey_id, skill_id, status, customer_id, origin_session_id,
+        workflow_instance_id, created_at, last_event_at, session_count
+      kpis: per-skill_id aggregations:
+        skill_id, total_journeys, completed_count, failed_count, active_count,
+        resolution_rate, avg_session_count, median_duration_ms
+      meta: pagination + time window
+
+    Filter by status applies a HAVING clause over the aggregated state.
+    """
+    ps = _clamp_page_size(page_size, format == "csv")
+    data = await query_journeys_report(
+        client      = request.app.state.store.new_client(),
+        database    = request.app.state.store._database,
+        tenant_id   = tenant_id,
+        from_dt     = from_dt,
+        to_dt       = to_dt,
+        skill_id    = skill_id,
+        status      = status,
+        customer_id = customer_id,
+        page        = page,
+        page_size   = ps,
+    )
+    return _respond(data, format, f"journeys_{_today_label()}.csv")
 
