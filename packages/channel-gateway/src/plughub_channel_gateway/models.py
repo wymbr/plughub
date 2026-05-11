@@ -238,6 +238,8 @@ class ContactClosedEvent(BaseModel):
     reason: Literal["agent_done", "client_disconnect", "timeout"]
     started_at: str
     ended_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+    pool_id: str = ""
+    customer_id: str = ""
 
 
 # ── Platform — outbound event (consumed from conversations.outbound) ────────

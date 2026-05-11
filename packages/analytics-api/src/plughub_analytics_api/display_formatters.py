@@ -52,13 +52,24 @@ def _default_to() -> str:
 
 def _fmt_dt(s: str | None) -> str:
     """
-    Parses ISO8601 or date-only 'YYYY-MM-DD' to a ClickHouse UTC datetime string.
-    Falls back to now on any error.
+    Parses:
+      - ISO8601 or 'YYYY-MM-DD'  → ClickHouse UTC datetime string
+      - Relative offsets '-Nd'   → N days ago (e.g. '-7d', '-30d')
+      - Empty / None             → now
+      - Anything else            → now (safe fallback)
     """
     if not s:
         return _default_to()
+    stripped = s.strip()
+    # Relative date: -Nd (e.g. '-7d' means 7 days ago)
+    if stripped.startswith("-") and stripped.endswith("d"):
+        try:
+            days = int(stripped[1:-1])
+            return (datetime.utcnow() - timedelta(days=days)).strftime(_FMT)
+        except ValueError:
+            return _default_from()
     try:
-        s2 = s.strip().replace("Z", "+00:00")
+        s2 = stripped.replace("Z", "+00:00")
         if "T" in s2 or " " in s2:
             dt = datetime.fromisoformat(s2).astimezone(timezone.utc)
         else:

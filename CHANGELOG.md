@@ -2,6 +2,34 @@
 
 ---
 
+## Arc 9 — Agent Groups & Supervisor Scope (2026-05-11)
+
+Implementação completa da entidade `AgentGroup` como camada de gestão de pessoas ortogonal a Pool.
+
+**auth-api** (`packages/auth-api/src/plughub_auth_api/`)
+- `db.py`: 5 novas tabelas DDL em schema `auth` (`agent_groups`, `agent_group_members`, `agent_group_users`, `agent_group_supervisors`, `agent_group_shifts`); funções CRUD completas para cada entidade; `resolve_supervisor_scope(pool, user_id, role)` — resolução de shifts com conversão de DOW (spec 0=Sun ↔ Python weekday 0=Mon via `(dow+1)%7`); sentinela `["__no_active_shift__"]` para grupos ativos sem membros configurados
+- `jwt_utils.py`: `create_access_token()` estendido com `supervised_groups`, `supervised_agent_types`, `supervised_user_ids`; todos emitidos como `[]` (não `null`) para compatibilidade JSON
+- `router.py`: `_make_token_response` convertida para `async`; chama `resolve_supervisor_scope` no login e no refresh; claims denormalizados no JWT
+- `groups_router.py` (novo): `APIRouter(prefix="/v1/groups")`; CRUD de grupos + sub-recursos `/members`, `/users`, `/supervisors`, `/shifts`; todos os endpoints autenticados por `X-Admin-Token`
+- `main.py`: `groups_router` registrado
+
+**analytics-api** (`packages/analytics-api/src/plughub_analytics_api/`)
+- `pool_auth.py`: `PoolPrincipal` estendido com `supervised_agent_types: list[str] | None`; decodificação do claim JWT no `optional_pool_principal()`
+- `reports_query.py`: `_apply_agent_scope()` para filtro direto (segments, performance, availability); `_agent_scope_session_join()` para sessões via LEFT JOIN em `segments FINAL`; os 5 pares de funções `query_*/fetch_*` atualizados com parâmetro `supervised_agent_types`
+- `reports.py`: os 5 endpoints de relatório passam `supervised_agent_types = pool_principal.supervised_agent_types`
+
+**platform-ui** (`packages/platform-ui/src/`)
+- `modules/groups/GroupsPage.tsx` (novo): lista de grupos com drawer lateral; 4 tabs — Info (edição de nome/descrição), Members (agent_type_ids + is_human), Supervisors (users), Shifts (dias da semana + janela horária + timezone + toggle ativo)
+- `i18n/locales/en/groups.json` + `pt-BR/groups.json` (novos): namespace `groups` completo
+- `i18n/locales/*/shell.json`: chave `nav.groups` adicionada
+- `i18n/index.ts`: namespace `groups` registrado
+- `shell/Sidebar.tsx`: entrada "Groups" adicionada ao grupo Configuração (ABAC `config.users`)
+- `app/routes.tsx`: rota `config/groups` mapeada para `GroupsPage`
+
+**CLAUDE.md**: seção Arc 9 adicionada; item removido do `## Pending`
+
+---
+
 ## Backend-dependent Pages — AgentsPage Relatório + EventsPage + AnaliseProcessosPage (2026-05-09)
 
 Implementação completa das últimas três páginas que dependiam de endpoints backend não existentes:

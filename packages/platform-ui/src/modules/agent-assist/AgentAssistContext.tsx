@@ -348,10 +348,31 @@ export const AgentAssistProvider: React.FC<{ children: React.ReactNode }> = ({ c
       const sid = (event as unknown as Record<string, unknown>)["session_id"] as string | undefined;
       if (!sid) return;
 
-      // Clean up session→pool mapping
-      unregisterSession(sid);
+      // "client_disconnect" means the CUSTOMER disconnected but the bridge may
+      // still fire on_human_end hooks (wrapup, NPS) for the agent.  Do NOT remove
+      // the contact yet — mark it as sessionClosed so the agent sees the correct
+      // state and can still interact with hook agents.  The actual removal happens
+      // when reason === "agent_done" (published by _trigger_contact_close after all
+      // hooks have completed).
+      if (event.reason === "client_disconnect" || event.reason === "timeout") {
+        addToast("Cliente desconectou. Aguardando encerramento...", "warning");
+        setContacts(prev => {
+          const c = prev.get(sid);
+          if (!c) return prev;
+          const next = new Map(prev);
+          // Mark as closed (disables input, shows indicator) but do NOT open the
+          // CloseModal — the bridge is running on_human_end hooks and will send
+          // session.closed reason="agent_done" when they finish, at which point
+          // the contact is removed automatically.
+          next.set(sid, { ...c, sessionClosed: true, pendingCloseModal: false });
+          return next;
+        });
+        return;
+      }
 
-      // Remove the contact — all hooks have completed.
+      // For "agent_done" (and any other reason): all hooks have completed —
+      // clean up session→pool mapping and remove the contact.
+      unregisterSession(sid);
       pendingClosedSessions.current.delete(sid);
       setContacts(prev => {
         const next = new Map(prev);
@@ -363,9 +384,6 @@ export const AgentAssistProvider: React.FC<{ children: React.ReactNode }> = ({ c
         const remaining = [...contactsRef.current.keys()].filter(k => k !== sid);
         return remaining[0] ?? null;
       });
-      if (event.reason === "client_disconnect") {
-        addToast("Cliente desconectou. Atendimento encerrado.", "warning");
-      }
       return;
     }
 

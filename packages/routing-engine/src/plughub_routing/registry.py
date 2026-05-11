@@ -41,6 +41,18 @@ def _pool_instances_key(tenant_id: str, pool_id: str) -> str:
     """Set of instance_ids present (ready) in the pool."""
     return f"{tenant_id}:pool:{pool_id}:instances"
 
+def _pool_busy_instances_key(tenant_id: str, pool_id: str) -> str:
+    """Set of instance_ids currently handling at least one session in the pool."""
+    return f"{tenant_id}:pool:{pool_id}:busy_instances"
+
+def _pool_active_count_key(tenant_id: str, pool_id: str) -> str:
+    """
+    Atomic counter of active sessions currently being served in the pool.
+    INCR'd synchronously in mark_busy (at routing time, same call chain as
+    write_pool_snapshot), DECR'd in remove_conversation (agent_done).
+    """
+    return f"{tenant_id}:pool:{pool_id}:active_count"
+
 def _pool_config_key(tenant_id: str, pool_id: str) -> str:
     """Pool configuration cache — populated by kafka_listener."""
     return f"{tenant_id}:pool_config:{pool_id}"
@@ -55,6 +67,15 @@ def _queue_key(tenant_id: str, pool_id: str) -> str:
 
 def _queue_contact_key(tenant_id: str, session_id: str) -> str:
     return f"{tenant_id}:queue_contact:{session_id}"
+
+def _session_serving_pool_key(tenant_id: str, session_id: str) -> str:
+    """
+    Stores which pool_id currently has an active_count increment for this session.
+    Written on each routing event; used to detect cross-pool transfers (escalations)
+    and decrement the origin pool's counter without relying on agent_done.
+    TTL: 24h (sessions don't last longer).
+    """
+    return f"{tenant_id}:session:pool:{session_id}"
 
 def _session_instance_key(session_id: str) -> str:
     """Session affinity for stateful agents."""
@@ -199,6 +220,12 @@ class InstanceRegistry:
                 await self._redis.sadd(pool_key, instance.instance_id)
             else:
                 await self._redis.srem(pool_key, instance.instance_id)
+            # Remove from busy set when agent is fully free (ready with no active sessions)
+            if data["status"] == "ready" and instance.current_sessions == 0:
+                await self._redis.srem(
+                    _pool_busy_instances_key(instance.tenant_id, pool_id),
+                    instance.instance_id,
+                )
 
     # ── Instance meta (no TTL) ────────────────────────────────────────────────
 
@@ -235,6 +262,31 @@ class InstanceRegistry:
         await self._redis.srem(
             _instance_conversations_key(tenant_id, instance_id), conversation_id
         )
+        # Decrement active-session counters and update snapshots in-place.
+        # We look up which pools this instance belongs to from its meta record.
+        # For the common single-pool case this is exact; for multi-pool agents
+        # we decrement all pools (floor 0) which may transiently undercount a
+        # sibling pool — acceptable given 120s snapshot TTL and self-correction
+        # on the next routing event.
+        try:
+            meta = await self.get_instance_meta(tenant_id, instance_id)
+            if meta:
+                for pool_id in meta.pools:
+                    new_val = await self._redis.decr(_pool_active_count_key(tenant_id, pool_id))
+                    if new_val < 0:
+                        await self._redis.set(_pool_active_count_key(tenant_id, pool_id), 0)
+                        new_val = 0
+                    # Patch the busy field in the existing snapshot so the SSE
+                    # dashboard reflects the change without waiting for the next
+                    # routing event to trigger write_pool_snapshot.
+                    snap_key = _pool_snapshot_key(tenant_id, pool_id)
+                    raw_snap = await self._redis.get(snap_key)
+                    if raw_snap:
+                        snap = json.loads(raw_snap)
+                        snap["busy"] = new_val
+                        await self._redis.set(snap_key, json.dumps(snap), keepttl=True)
+        except Exception:
+            pass  # counter miscount is non-critical; self-corrects on next routing
 
     async def get_instance_meta(
         self, tenant_id: str, instance_id: str
@@ -298,16 +350,22 @@ class InstanceRegistry:
         )
 
     async def mark_busy(
-        self, tenant_id: str, pool_id: str, instance_id: str
+        self,
+        tenant_id:  str,
+        pool_id:    str,
+        instance_id: str,
+        session_id: str | None = None,
     ) -> None:
         """
-        Increments current_sessions on the instance.
+        Increments current_sessions on the instance and updates pool active-count.
 
-        Uses KEEPTTL so the original TTL (e.g. 24h for demo-seeded instances or 30s
-        for live-registered agents) is preserved.  Production agents renew their TTL
-        via subsequent agent_busy/agent_heartbeat events (which call set_instance).
-        Without KEEPTTL, mark_busy would overwrite a 24h seed TTL with 30s — causing
-        the instance to vanish before the next escalation could be routed to it.
+        session_id (optional) — when provided, enables cross-pool transfer detection.
+        If the session was previously served by a different pool (escalation), that
+        pool's active-count is decremented and its snapshot is patched in-place.
+        This covers the case where agent_done fires only on full session close, not
+        on segment handoff.
+
+        Uses KEEPTTL to preserve the original instance TTL (see comment below).
         """
         key = _instance_key(tenant_id, instance_id)
         raw = await self._redis.get(key)
@@ -321,7 +379,9 @@ class InstanceRegistry:
         if inst.current_sessions >= inst.max_concurrent:
             inst.state = "busy"
 
-        # Serialize and update in Redis — preserve the existing TTL
+        # Serialize and update in Redis — preserve the existing TTL.
+        # KEEPTTL: production agents renew TTL via agent_busy/heartbeat; seeded
+        # instances have 24h TTL that must not be overwritten with the default 30s.
         out = inst.model_dump()
         out["status"] = out.pop("state")   # alias for mcp-server compat
         await self._redis.set(key, json.dumps(out), keepttl=True)
@@ -331,6 +391,76 @@ class InstanceRegistry:
         if inst.state != "ready" or inst.current_sessions >= inst.max_concurrent:
             await self._redis.srem(pool_key, instance_id)
         # (no sadd needed — the instance was already in the set before mark_busy)
+
+        # Track busy instances (for membership visibility)
+        await self._redis.sadd(_pool_busy_instances_key(tenant_id, pool_id), instance_id)
+
+        # Increment atomic active-session counter for the new pool.
+        await self._redis.incr(_pool_active_count_key(tenant_id, pool_id))
+
+        # Cross-pool transfer handling (escalation / agent_transfer).
+        # agent_done only fires when the full SESSION closes, not when a segment
+        # ends on escalation. So we detect transfers here: if this session was
+        # previously served by a different pool, decrement that pool's counter now.
+        if session_id:
+            serving_key = _session_serving_pool_key(tenant_id, session_id)
+            prev_pool   = await self._redis.getset(serving_key, pool_id)
+            await self._redis.expire(serving_key, 86_400)   # 24h TTL
+            if prev_pool and prev_pool != pool_id:
+                new_val = await self._redis.decr(_pool_active_count_key(tenant_id, prev_pool))
+                if new_val < 0:
+                    await self._redis.set(_pool_active_count_key(tenant_id, prev_pool), 0)
+                    new_val = 0
+                # Patch previous pool snapshot so SSE reflects the change immediately
+                snap_key = _pool_snapshot_key(tenant_id, prev_pool)
+                raw_snap = await self._redis.get(snap_key)
+                if raw_snap:
+                    snap = json.loads(raw_snap)
+                    snap["busy"] = new_val
+                    await self._redis.set(snap_key, json.dumps(snap), keepttl=True)
+
+    async def release_session_from_pool(
+        self,
+        tenant_id:   str,
+        session_id:  str,
+        new_pool_id: str | None = None,
+    ) -> None:
+        """
+        Releases the active-count claim from the session's current pool when the
+        session moves to a queue without an agent allocation (escalation to queue).
+
+        Called by router.route() when a contact cannot be immediately allocated and
+        is placed in a pool's queue.  Detects whether the session was previously
+        served by a different pool (via _session_serving_pool_key) and decrements
+        that pool's active counter.
+
+        Setting new_pool_id claims the session for the destination pool's queue so
+        that a subsequent mark_busy (when the contact is dequeued and allocated)
+        sees the session already at pool_id and does not double-decrement.
+
+        If the session was never served (first contact, no previous pool), this is
+        a safe no-op: GETSET returns None and no counter is touched.
+        """
+        serving_key = _session_serving_pool_key(tenant_id, session_id)
+        if new_pool_id:
+            prev_pool = await self._redis.getset(serving_key, new_pool_id)
+            await self._redis.expire(serving_key, 86_400)   # 24h TTL
+        else:
+            prev_pool = await self._redis.get(serving_key)
+
+        if prev_pool and prev_pool != new_pool_id:
+            new_val = await self._redis.decr(_pool_active_count_key(tenant_id, prev_pool))
+            if new_val < 0:
+                await self._redis.set(_pool_active_count_key(tenant_id, prev_pool), 0)
+                new_val = 0
+            # Patch the previous pool's snapshot in-place so SSE clients see the
+            # update without waiting for the next routing event.
+            snap_key = _pool_snapshot_key(tenant_id, prev_pool)
+            raw_snap = await self._redis.get(snap_key)
+            if raw_snap:
+                snap = json.loads(raw_snap)
+                snap["busy"] = new_val
+                await self._redis.set(snap_key, json.dumps(snap), keepttl=True)
 
     async def add_queued_contact(
         self,
@@ -418,6 +548,21 @@ class InstanceRegistry:
         """Returns count of ready instances in the pool."""
         return await self._redis.scard(_pool_instances_key(tenant_id, pool_id))
 
+    async def get_busy_count(self, tenant_id: str, pool_id: str) -> int:
+        """
+        Returns the count of ACTIVE SESSIONS currently being served in the pool.
+
+        Uses an atomic INCR/DECR counter keyed at _pool_active_count_key.
+        The counter is incremented synchronously in mark_busy (at routing time,
+        in the same call chain as write_pool_snapshot) and decremented in
+        remove_conversation (called on agent_done Kafka event).
+
+        This correctly handles agents with max_concurrent > 1: every routed
+        session increments the counter, so N sessions on one instance → N.
+        """
+        raw = await self._redis.get(_pool_active_count_key(tenant_id, pool_id))
+        return max(0, int(raw)) if raw else 0
+
     async def get_queue_length(self, tenant_id: str, pool_id: str) -> int:
         """Returns the number of contacts waiting in the pool queue."""
         return await self._redis.zcard(_queue_key(tenant_id, pool_id))
@@ -436,11 +581,13 @@ class InstanceRegistry:
         Key: {tenant_id}:pool:{pool_id}:snapshot
         """
         available    = await self.get_available_count(tenant_id, pool_id)
+        busy         = await self.get_busy_count(tenant_id, pool_id)
         queue_length = await self.get_queue_length(tenant_id, pool_id)
         snapshot = {
             "pool_id":       pool_id,
             "tenant_id":     tenant_id,
             "available":     available,
+            "busy":          busy,
             "queue_length":  queue_length,
             "sla_target_ms": sla_target_ms,
             "channel_types": channel_types,

@@ -20,6 +20,7 @@ import campaignsPtBr from './locales/pt-BR/campaigns.json'
 import configPlataformaPtBr from './locales/pt-BR/configPlataforma.json'
 import dashboardsPtBr from './locales/pt-BR/dashboards.json'
 import homePtBr from './locales/pt-BR/home.json'
+import groupsPtBr from './locales/pt-BR/groups.json'
 
 // en
 import commonEn from './locales/en/common.json'
@@ -40,6 +41,7 @@ import campaignsEn from './locales/en/campaigns.json'
 import configPlataformaEn from './locales/en/configPlataforma.json'
 import dashboardsEn from './locales/en/dashboards.json'
 import homeEn from './locales/en/home.json'
+import groupsEn from './locales/en/groups.json'
 
 i18n.use(initReactI18next).init({
   resources: {
@@ -62,6 +64,7 @@ i18n.use(initReactI18next).init({
       configPlataforma:configPlataformaPtBr,
       dashboards:      dashboardsPtBr,
       home:            homePtBr,
+      groups:          groupsPtBr,
     },
     en: {
       common:          commonEn,
@@ -82,6 +85,7 @@ i18n.use(initReactI18next).init({
       configPlataforma:configPlataformaEn,
       dashboards:      dashboardsEn,
       home:            homeEn,
+      groups:          groupsEn,
     }
   },
   lng: 'en',
@@ -91,7 +95,7 @@ i18n.use(initReactI18next).init({
     'contacts', 'billing', 'evaluation', 'access', 'masking',
     'agentAssist', 'agentReports', 'workflows', 'agentFlow',
     'calendars', 'service', 'campaigns', 'configPlataforma',
-    'dashboards', 'home',
+    'dashboards', 'home', 'groups',
   ],
   defaultNS: 'common',
   interpolation: {

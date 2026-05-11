@@ -1619,7 +1619,7 @@ export async function startServer(config: ServerConfig): Promise<void> {
           // The agent's message is a response to a hook agent (wrap-up, NPS, etc.).
           // Write to stream with the SAME visibility the hook agent used in its
           // question — ensures the response is only visible to the intended audience.
-          const streamVis = targetVisibility ?? "agents_only"
+          const streamVis = (targetVisibility ?? "agents_only") as string[] | "all" | "agents_only"
 
           // 1. Write to stream with matched visibility
           try {

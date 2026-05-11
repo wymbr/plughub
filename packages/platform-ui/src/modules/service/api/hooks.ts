@@ -98,6 +98,7 @@ export function usePoolViews(tenantId: string): {
       pool_id:         s.pool_id,
       tenant_id:       s.tenant_id,
       available:       s.available,
+      busy:            s.busy ?? 0,    // backward-compat: older snapshots won't have the field
       queue_length:    s.queue_length,
       sla_target_ms:   s.sla_target_ms,
       channel_types:   s.channel_types,

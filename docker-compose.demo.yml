@@ -3,7 +3,42 @@
 #
 # Stack completa: infra + todos os módulos de aplicação + observabilidade
 #
-# Novidades neste build (2026-05-07):
+# Novidades neste build (2026-05-09):
+#
+#   • Dashboard #35 — Sistema de Cards Genéricos configuráveis por JSON
+#     Dashboards drag-and-drop com 7 tipos de display tool: metric_card,
+#     bar_chart, line_chart, donut, table, agent_status, pool_status.
+#     AddCardModal 3 etapas (escolher ferramenta → configurar → salvar).
+#     FilterBar global por tenant/período/pool aplicado a todos os cards.
+#     10 endpoints GET /reports/display/* no analytics-api com dados reais.
+#     http://localhost:5174/dashboards
+#
+#   • Análise de Qualidade — página funcional
+#     GET /reports/evaluations/summary com group_by (campanha/form/avaliador/data).
+#     KPIs: total avaliações, nota média ponderada, % contestações.
+#     Tabela sortável com ScoreBar mini-distribuição por quartil.
+#     http://localhost:5174/analise/qualidade
+#
+#   • Análise de Processos — página funcional
+#     GET /reports/workflow-summary com group_by (flow_id/campaign_id).
+#     OutcomeBar proporcional + RateBar conclusão/falha. CSV export.
+#     http://localhost:5174/analise/processos
+#
+#   • Agentes — sub-tab Relatório funcional
+#     GET /reports/agent-performance/daily (Arc 5 MV).
+#     Filtros data + pool + agente; KPIs ponderados; mini-bars por taxa.
+#     http://localhost:5174/contacts/agents
+#
+#   • Eventos — stream unificado de auditoria
+#     GET /reports/events: UNION ALL de sessions/messages/agent_events/
+#     agent_pause_intervals/workflow_events. Filtros session_id, pool_id,
+#     channel, event_type com branch pruning por event_type.
+#     http://localhost:5174/contacts/events
+#
+#   • FlowMonitorPage — pools dinâmicos
+#     Select de pool agora carrega GET /v1/pools do agent-registry (era hardcoded).
+#
+# Novidades anteriores (2026-05-07):
 #   • Channel Endpoints — /config/channels
 #     Entidade ChannelEndpoint mapeia endereço externo (slug, DID, número)
 #     para pool_id por canal. Suporte a: webchat, whatsapp, voice, sms,
@@ -165,13 +200,18 @@ volumes:
 # │    Verificar step type: resolve com required_fields declarado             │
 # │    E2E: docker compose run e2e-runner ts-node runner.ts --ctx             │
 # │                                                                            │
-# │  PASSO 8 — Arc 8: Disponibilidade e Pausas de Agentes (frontend)         │
-# │    http://localhost:5174/contacts?tab=agents                              │
-# │    Pivot table agente × dia (heatmap âmbar por duração de pausas) +      │
-# │    lista plana de pausas por motivo com export CSV.                       │
-# │    NOTA: backend /reports/agent-availability pendente de implementação    │
-# │    → aba exibe skeleton/loading até endpoint disponível.                  │
-# │    PauseReasonModal: pausar agente no Agent Assist → modal com motivos.   │
+# │  PASSO 8 — Análise de dados (Análise + Agentes + Eventos)                │
+# │    Qualidade:  http://localhost:5174/analise/qualidade                    │
+# │      Group_by campanha/formulário/avaliador/data; tabela com ScoreBar    │
+# │    Processos:  http://localhost:5174/analise/processos                    │
+# │      Group_by flow_id/campaign_id; OutcomeBar + completion/failure rates  │
+# │    Agentes:    http://localhost:5174/contacts/agents → tab Relatório      │
+# │      Performance diária por tipo de agente; mini-bars por taxa            │
+# │    Eventos:    http://localhost:5174/contacts/events                      │
+# │      Stream unificado; filtrar por session_id ou event_type              │
+# │    Arc 8 Disponibilidade: http://localhost:5174/contacts?tab=agents       │
+# │      Pivot table agente × dia + lista de pausas por motivo (CSV).        │
+# │      PauseReasonModal: pausar agente no Agent Assist → modal de motivos.  │
 # │                                                                            │
 # │  PASSO 9 — Calendar API (Fases 1–4)                                      │
 # │    http://localhost:5174/workflow/calendar                                │

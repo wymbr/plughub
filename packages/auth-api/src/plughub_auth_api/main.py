@@ -20,6 +20,7 @@ from fastapi import FastAPI
 
 from . import db as db_mod
 from .config import get_settings
+from .groups_router import groups_router
 from .password import hash_password
 from .permissions import ensure_permissions_schema
 from .router import router
@@ -179,6 +180,7 @@ def build_app() -> FastAPI:
         return {"status": "ok", "service": "auth-api"}
 
     app.include_router(router)
+    app.include_router(groups_router)
     return app
 
 

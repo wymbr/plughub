@@ -23,6 +23,7 @@ import AvaliacoesPage from '@/modules/evaluation/AvaliacoesPage'
 import EvalReportsPage from '@/modules/evaluation/ReportsPage'
 import { AgentAssistPage } from '@/modules/agent-assist/AgentAssistPage'
 import AccessPage from '@/modules/access/AccessPage'
+import GroupsPage from '@/modules/groups/GroupsPage'
 // Atendimento
 import SessionsPage from '@/modules/contacts/SessionsPage'
 import AgentsPage   from '@/modules/contacts/AgentsPage'
@@ -51,46 +52,54 @@ export const routes: RouteObject[] = [
     children: [
       { index: true, element: <HomePage /> },
 
-      // ── Atendimento ────────────────────────────────────────────────
-      { path: 'contacts/sessions', element: <SessionsPage /> },
+      // ── Console ────────────────────────────────────────────────────
+      { path: 'console',           element: <AgentAssistPage /> },
+      { path: 'agent-assist',      element: <Navigate to="/console" replace /> },
+
+      // ── Monitor (live operational views) ──────────────────────────
+      // Monitor/Sessions → /flow/monitor (live pool view)
       { path: 'contacts/agents',   element: <AgentsPage   /> },
       { path: 'contacts/pools',    element: <PoolsPage    /> },
       { path: 'contacts/events',   element: <EventsPage   /> },
-      { path: 'agent-assist',      element: <AgentAssistPage /> },
-
-      // Legacy redirects: /contacts → /contacts/sessions
-      { path: 'contacts',          element: <Navigate to="/contacts/sessions" replace /> },
+      { path: 'flow/monitor',      element: <FlowMonitorPage /> },
+      { path: 'flow/processos',    element: <ProcessosPage   /> },
+      // Legacy redirects
+      { path: 'contacts',          element: <Navigate to="/analise/sessions"  replace /> },
+      { path: 'contacts/sessions', element: <Navigate to="/analise/sessions"  replace /> },
       { path: 'monitor',           element: <Navigate to="/flow/monitor"      replace /> },
 
       // ── Fluxo ──────────────────────────────────────────────────────
-      { path: 'agent-flow/editor',   element: <AgentFlowEditorPage /> },
-      { path: 'agent-flow/deploy',   element: <AgentFlowDeployPage /> },
-      { path: 'flow/monitor',        element: <FlowMonitorPage     /> },
-      { path: 'flow/processos',      element: <ProcessosPage       /> },
+      { path: 'agent-flow/editor',  element: <AgentFlowEditorPage /> },
+      { path: 'agent-flow/deploy',  element: <AgentFlowDeployPage /> },
       // Legacy redirects
-      { path: 'agent-flow/monitor',  element: <Navigate to="/flow/monitor"   replace /> },
-      { path: 'agent-flow/report',   element: <Navigate to="/contacts/sessions" replace /> },
-      { path: 'skill-flows',         element: <Navigate to="/agent-flow/editor" replace /> },
+      { path: 'agent-flow/monitor', element: <Navigate to="/flow/monitor"      replace /> },
+      { path: 'agent-flow/report',  element: <Navigate to="/analise/sessions"  replace /> },
+      { path: 'skill-flows',        element: <Navigate to="/agent-flow/editor" replace /> },
 
       // ── Workflow routes (still accessible directly) ─────────────
       { path: 'workflow/editor',   element: <WorkflowEditorPage /> },
       { path: 'workflow/calendar', element: <WorkflowCalendarPage /> },
       // Redirects
-      { path: 'workflow/monitor',  element: <Navigate to="/flow/monitor"      replace /> },
-      { path: 'workflow/report',   element: <Navigate to="/contacts/sessions" replace /> },
-      { path: 'workflows',         element: <Navigate to="/flow/monitor"      replace /> },
-      { path: 'campaigns',         element: <Navigate to="/contacts/sessions" replace /> },
+      { path: 'workflow/monitor',  element: <Navigate to="/flow/monitor"     replace /> },
+      { path: 'workflow/report',   element: <Navigate to="/analise/sessions" replace /> },
+      { path: 'workflows',         element: <Navigate to="/flow/monitor"     replace /> },
+      { path: 'campaigns',         element: <Navigate to="/analise/sessions" replace /> },
 
-      // ── Análise ────────────────────────────────────────────────────
-      { path: 'analise/contatos',  element: <AnaliseContatosPage  /> },
-      { path: 'analise/agentes',   element: <AnaliseAgentesPage   /> },
+      // ── Analytics (historical views) ──────────────────────────────
+      { path: 'analise/sessions',  element: <SessionsPage         /> },
+      { path: 'analise/agents',    element: <AnaliseAgentesPage   /> },
+      { path: 'analise/events',    element: <EventsPage           /> },
       { path: 'analise/processos', element: <AnaliseProcessosPage /> },
-      { path: 'analise/qualidade', element: <AnaliseQualidadePage /> },
+      { path: 'analise/quality',   element: <AnaliseQualidadePage /> },
+      // Legacy redirects
+      { path: 'analise/contatos',  element: <Navigate to="/analise/sessions" replace /> },
+      { path: 'analise/agentes',   element: <Navigate to="/analise/agents"   replace /> },
+      { path: 'analise/qualidade', element: <Navigate to="/analise/quality"  replace /> },
 
       // ── Dashboards ────────────────────────────────────────────────
       { path: 'dashboards', element: <DashboardsPage /> },
       // Legacy redirects
-      { path: 'reports',    element: <Navigate to="/analise/contatos" replace /> },
+      { path: 'reports',    element: <Navigate to="/analise/sessions" replace /> },
 
       // ── Evaluation ────────────────────────────────────────────────
       { path: 'evaluation/forms',        element: <FormsPage /> },
@@ -108,8 +117,9 @@ export const routes: RouteObject[] = [
       { path: 'config/canais',     element: <Navigate to="/config/channels" replace /> },
       { path: 'config/masking',    element: <MaskingPage /> },
       { path: 'config/billing',    element: <BillingPage /> },
-      { path: 'config/agent-reports', element: <Navigate to="/analise/agentes"   replace /> },
+      { path: 'config/agent-reports', element: <Navigate to="/analise/agents"    replace /> },
       { path: 'config/access',     element: <AccessPage /> },
+      { path: 'config/groups',     element: <GroupsPage /> },
       { path: 'config/calendars',  element: <CalendarsPage /> },
       { path: 'workflow/triggers', element: <WorkflowCalendarPage /> },
 

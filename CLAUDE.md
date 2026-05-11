@@ -537,7 +537,7 @@ Single-app shell in `packages/platform-ui/`. Design tokens: `primary=#1B4F8A`, `
 
 Roles: `operator` (Monitor+Contacts), `supervisor` (+Evaluation+Reports), `admin` (+Config+Skills), `developer` (+DevTools), `business` (cross-cutting, no operational items). **ABAC gates** on nav items: `operacao` field gates Monitor/Editor/Calendar/Deploy/AgentAssist; `visualizar` gates Reports/Análise tabs.
 
-Nav groups: Atendimento (📞), Fluxo/Editor (⚙️), Avaliação (✓), Configuração (⚙️), Developer (👨‍💻). Legacy redirects: `/workflows` → `/workflow/monitor`, `/skill-flows` → `/agent-flow/editor`, `/reports` → `/contacts?tab=analise`.
+Nav groups (navKey): Home 🏠, Console 🖥️ (contacts.operacao), Monitor 📡 (Sessions/Agents/Pools/Events/Processes), Fluxo 🔄 (Editor/Deploy → skill_flows.operacao), Avaliação ✓ (Forms/Campaigns/Knowledge/Evaluations), Analytics 📊 (Sessions/Agents/Events/Processes/Quality → visualizar/report), Configuração ⚙️ (Dashboards/Resources/Platform/Channels/Calendars/Masking/Billing/Access). Legacy redirects: `/workflows` → `/workflow/monitor`, `/skill-flows` → `/agent-flow/editor`, `/reports` → `/contacts?tab=analise`.
 
 **Skill Deploy Lifecycle**: `deploy_status` (draft/published) + `skill_deployments` table. `PUT /v1/skills` always sets `deploy_status=draft` on new skills, NEVER modifies it on updates. `POST /v1/skills/:id/deploy` — only action that sets published.
 
@@ -587,6 +587,24 @@ Nav groups: Atendimento (📞), Fluxo/Editor (⚙️), Avaliação (✓), Config
 
 ---
 
+## Arc 9 — Agent Groups & Supervisor Scope
+
+`AgentGroup` is a people-management entity, orthogonal to Pool (Pool = routing; Group = org chart). Tables in `auth` schema: `agent_groups`, `agent_group_members` (agent_type_id + is_human), `agent_group_users`, `agent_group_supervisors`, `agent_group_shifts` (days_of_week[], time_start/end TIME, timezone).
+
+**Login/refresh denormalization**: `resolve_supervisor_scope(pool, user_id, role)` in auth-api computes active groups at JWT issue time via shift resolution (spec DOW 0=Sun; Python `weekday()` converted via `(dow+1)%7`). JWT carries `supervised_groups[]`, `supervised_agent_types[]`, `supervised_user_ids[]`. Admin role → `([], [], [])` = no restriction. Supervisor with active groups but no members → `["__no_active_shift__"]` sentinel (prevents empty=unrestricted misinterpretation).
+
+**analytics-api scope filtering**: `PoolPrincipal.supervised_agent_types` (None = unrestricted, list = filter). `_apply_agent_scope()` for segments/performance/availability (direct WHERE). `_agent_scope_session_join()` for sessions (LEFT JOIN on segments FINAL — sessions table has no agent_type_id column). All 5 report endpoints pass `supervised_agent_types` to query functions.
+
+**auth-api REST** (`/v1/groups`, admin-token): full CRUD for groups + sub-resources (members, users, supervisors, shifts). `groups_router.py` registered in `main.py`.
+
+**platform-ui**: `GroupsPage` at `/config/groups` (roles: admin, ABAC `config.users`). List + side drawer with 4 tabs (Info, Members, Supervisors, Shifts). Nav entry added to Configuração group. i18n namespace `groups` (en + pt-BR).
+
+Pending: Monitor and Console transparent scope filtering from JWT `supervised_agent_types`.
+
+→ See [`docs/modules/arc9-agent-groups.md`](docs/modules/arc9-agent-groups.md)
+
+---
+
 ## Pending (Next Iteration)
 
 ### Usage Metering — Channel Gateway Adapters
@@ -594,11 +612,6 @@ Nav groups: Atendimento (📞), Fluxo/Editor (⚙️), Avaliação (✓), Config
 
 ### Pricing Module
 - **Integração metering × pricing** *(deferred)*: módulo que aplica planos e escreve `{tenant}:quota:limit:*`.
-
-### Arc 9 — Agent Groups & Supervisor Scope *(não implementado)*
-- `AgentGroup` como entidade de gestão de pessoas (ortogonal a Pool). Tabelas: `agent_groups`, `agent_group_members`, `agent_group_users`, `agent_group_supervisors`, `agent_group_shifts`. JWT carrega `supervised_groups[]`, `supervised_agent_types[]`, `supervised_user_ids[]` — denormalizados no login/refresh. Shifts resolvem qual supervisor está ativo por janela horária. analytics-api filtra queries de sessões/agentes via LEFT JOIN pré-agregado quando `supervised_agent_types` não-vazio. platform-ui: nova página Config/Groups; Monitor e Console filtram transparentemente por escopo do JWT.
-
-→ See [`docs/modules/arc9-agent-groups.md`](docs/modules/arc9-agent-groups.md)
 
 ### CLAUDE.md — Otimização
 - **Fase 3** *(next)*: Revisão final para confirmar target ≤ 800 linhas; mover seções remanescentes se necessário.

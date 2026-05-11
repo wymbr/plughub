@@ -783,14 +783,16 @@ class WebchatAdapter:
         started_at = await self._registry.unregister(self._contact_id)
         await self._publish_event(
             ContactClosedEvent(
-                contact_id = self._contact_id,
-                session_id = self._session_id,
-                tenant_id  = self._tenant_id,
-                reason     = reason,  # type: ignore[arg-type]
-                started_at = started_at or self._started_at,
+                contact_id  = self._contact_id,
+                session_id  = self._session_id,
+                tenant_id   = self._tenant_id,
+                reason      = reason,  # type: ignore[arg-type]
+                started_at  = started_at or self._started_at,
+                pool_id     = self._pool_id or "",
+                customer_id = self._contact_id,
             ).model_dump()
         )
-        logger.info("contact_closed contact_id=%s reason=%s", self._contact_id, reason)
+        logger.info("contact_closed contact_id=%s reason=%s pool=%s", self._contact_id, reason, self._pool_id)
 
     # ── Kafka helpers ──────────────────────────────────────────────────────────
 

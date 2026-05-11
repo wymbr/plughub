@@ -36,10 +36,22 @@ def _default_to() -> str:
 
 
 def _ch_fmt(iso: str | None) -> str:
+    """
+    Converts a datetime string to ClickHouse UTC format.
+    Supports ISO8601, 'YYYY-MM-DD', and relative offsets '-Nd' (e.g. '-7d').
+    """
     if not iso:
         return _default_to()
+    stripped = iso.strip()
+    # Relative offset: -Nd (N days ago from now)
+    if stripped.startswith("-") and stripped.endswith("d"):
+        try:
+            days = int(stripped[1:-1])
+            return (datetime.utcnow() - timedelta(days=days)).strftime("%Y-%m-%d %H:%M:%S")
+        except ValueError:
+            return _default_from()
     try:
-        dt = datetime.fromisoformat(iso.replace("Z", "+00:00"))
+        dt = datetime.fromisoformat(stripped.replace("Z", "+00:00"))
         return dt.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
     except Exception:
         return _default_to()

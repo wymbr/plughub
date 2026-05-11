@@ -1,0 +1,52 @@
+{
+  "title": "Agent Groups",
+  "subtitle": "Manage groups for supervisor scope and people organisation",
+  "newGroup": "New Group",
+  "empty": "No groups yet. Create one to assign supervisors and members.",
+  "confirmDelete": "Delete this group? This action cannot be undone.",
+  "noAdminToken": "Admin token required. Please log in with an admin account.",
+  "members": "Members",
+  "supervisors": "Supervisors",
+  "shifts": "Shifts",
+
+  "tab.info": "Info",
+  "tab.members": "Members",
+  "tab.supervisors": "Supervisors",
+  "tab.shifts": "Shifts",
+
+  "fieldName": "Group name",
+  "fieldNamePlaceholder": "e.g. Retention Team",
+  "fieldDescription": "Description",
+  "fieldDescriptionPlaceholder": "Optional description",
+  "fieldGroupId": "Group ID",
+  "fieldCreated": "Created",
+
+  "save": "Save",
+  "saved": "Saved",
+  "saving": "Saving…",
+  "create": "Create",
+  "cancel": "Cancel",
+  "add": "Add",
+  "remove": "Remove",
+  "delete": "Delete group",
+
+  "membersHint": "Add agent_type_ids that belong to this group. Mark as Human for human agent queues.",
+  "memberAgentTypeId": "agent_type_id (e.g. agente_retencao_v1)",
+  "memberIsHuman": "Human",
+  "noMembers": "No members yet.",
+
+  "supervisorsHint": "Supervisors are users who can see sessions for this group's agents in their scope.",
+  "supervisorUserId": "user_id (UUID)",
+  "noSupervisors": "No supervisors yet.",
+
+  "shiftsHint": "Shifts define when a supervisor is active. If no shifts are set, the supervisor is always active.",
+  "addShift": "Add Shift",
+  "shiftSupervisorId": "Supervisor user_id",
+  "shiftDays": "Active days",
+  "shiftStart": "Start",
+  "shiftEnd": "End",
+  "shiftTimezone": "Timezone",
+  "shiftActive": "Active",
+  "shiftInactive": "Inactive",
+  "noShifts": "No shifts configured. Supervisors without shifts are always active."
+}

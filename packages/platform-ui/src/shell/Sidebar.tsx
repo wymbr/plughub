@@ -35,43 +35,28 @@ const Sidebar: React.FC = () => {
       roles: ['operator', 'supervisor', 'admin', 'developer', 'business']
     },
 
-    // ── Atendimento ────────────────────────────────────────────────
+    // ── Console ────────────────────────────────────────────────────
     {
-      navKey: 'service',
-      label: t('nav.service'),
+      label: t('nav.console'),
+      href:  '/console',
+      icon:  '🖥️',
+      roles: ['operator', 'supervisor', 'admin'],
+      abac:  { module: 'contacts', field: 'operacao' },
+    },
+
+    // ── Monitor ────────────────────────────────────────────────────
+    {
+      navKey: 'monitor',
+      label: t('nav.monitor'),
       href: '#',
-      icon: '📞',
-      roles: ['operator', 'supervisor', 'admin', 'business'],
+      icon: '📡',
+      roles: ['operator', 'supervisor', 'admin'],
       children: [
-        {
-          label: t('nav.service.sessions'),
-          href:  '/contacts/sessions',
-          icon:  '📋',
-        },
-        {
-          label: t('nav.service.agents'),
-          href:  '/contacts/agents',
-          icon:  '👥',
-          abac:  { module: 'contacts', field: 'operacao' },
-        },
-        {
-          label: t('nav.service.pools'),
-          href:  '/contacts/pools',
-          icon:  '🏊',
-          abac:  { module: 'contacts', field: 'operacao' },
-        },
-        {
-          label: t('nav.service.events'),
-          href:  '/contacts/events',
-          icon:  '📡',
-          abac:  { module: 'contacts', field: 'operacao' },
-        },
-        {
-          label: t('nav.agentAssist'),
-          href:  '/agent-assist',
-          icon:  '🤖',
-          abac:  { module: 'contacts', field: 'operacao' },
-        },
+        { label: t('nav.monitor.sessions'),  href: '/flow/monitor',      icon: '📋', abac: { module: 'contacts',   field: 'operacao' } },
+        { label: t('nav.monitor.agents'),    href: '/contacts/agents',   icon: '👥', abac: { module: 'contacts',   field: 'operacao' } },
+        { label: t('nav.monitor.pools'),     href: '/contacts/pools',    icon: '🏊', abac: { module: 'contacts',   field: 'operacao' } },
+        { label: t('nav.monitor.events'),    href: '/contacts/events',   icon: '📡', abac: { module: 'contacts',   field: 'operacao' } },
+        { label: t('nav.monitor.processes'), href: '/flow/processos',    icon: '⚙️', abac: { module: 'workflows',  field: 'operacao' } },
       ]
     },
 
@@ -83,10 +68,8 @@ const Sidebar: React.FC = () => {
       icon: '🔄',
       roles: ['admin', 'developer', 'business', 'supervisor'],
       children: [
-        { label: t('nav.flow.editor'),   href: '/agent-flow/editor',   icon: '✏️', abac: { module: 'skill_flows', field: 'operacao' } },
-        { label: t('nav.flow.deploy'),   href: '/agent-flow/deploy',   icon: '🚀', abac: { module: 'skill_flows', field: 'operacao' } },
-        { label: t('nav.flow.monitor'),  href: '/flow/monitor',        icon: '📡', abac: { module: 'skill_flows', field: 'operacao' } },
-        { label: t('nav.flow.processos'),href: '/flow/processos',      icon: '⚙️', abac: { module: 'workflows',   field: 'operacao' } },
+        { label: t('nav.flow.editor'), href: '/agent-flow/editor', icon: '✏️', abac: { module: 'skill_flows', field: 'operacao' } },
+        { label: t('nav.flow.deploy'), href: '/agent-flow/deploy', icon: '🚀', abac: { module: 'skill_flows', field: 'operacao' } },
       ]
     },
 
@@ -102,11 +85,10 @@ const Sidebar: React.FC = () => {
         { label: t('nav.eval.campaigns'),   href: '/evaluation/campaigns',   icon: '📋', roles: ['supervisor', 'admin'],             abac: { module: 'evaluation', field: 'formularios' } },
         { label: t('nav.eval.knowledge'),   href: '/evaluation/knowledge',   icon: '📚', roles: ['admin'] },
         { label: t('nav.eval.evaluations'), href: '/evaluation/evaluations', icon: '🗂️', roles: ['operator', 'supervisor', 'admin'] },
-        { label: t('nav.eval.reports'),     href: '/evaluation/reports',     icon: '📊', roles: ['supervisor', 'admin', 'business'], abac: { module: 'evaluation', field: 'report' } },
       ]
     },
 
-    // ── Análise ────────────────────────────────────────────────────
+    // ── Analytics ──────────────────────────────────────────────────
     {
       navKey: 'analise',
       label: t('nav.analise'),
@@ -114,10 +96,11 @@ const Sidebar: React.FC = () => {
       icon: '📊',
       roles: ['supervisor', 'admin', 'business'],
       children: [
-        { label: t('nav.analise.contacts'), href: '/analise/contatos',  icon: '📋', abac: { module: 'contacts', field: 'visualizar' } },
-        { label: t('nav.analise.agents'),   href: '/analise/agentes',   icon: '👥', abac: { module: 'contacts', field: 'visualizar' } },
-        { label: t('nav.analise.processos'),href: '/analise/processos', icon: '⚙️', abac: { module: 'workflows', field: 'operacao'  } },
-        { label: t('nav.analise.quality'),  href: '/analise/qualidade', icon: '✓',  abac: { module: 'evaluation', field: 'report'   } },
+        { label: t('nav.analise.sessions'),  href: '/analise/sessions',  icon: '📋', abac: { module: 'contacts',   field: 'visualizar' } },
+        { label: t('nav.analise.agents'),    href: '/analise/agents',    icon: '👥', abac: { module: 'contacts',   field: 'visualizar' } },
+        { label: t('nav.analise.events'),    href: '/analise/events',    icon: '📡', abac: { module: 'contacts',   field: 'visualizar' } },
+        { label: t('nav.analise.processes'), href: '/analise/processos', icon: '⚙️', abac: { module: 'workflows',  field: 'operacao'   } },
+        { label: t('nav.analise.quality'),   href: '/analise/quality',   icon: '✓',  abac: { module: 'evaluation', field: 'report'     } },
       ]
     },
 
@@ -137,6 +120,7 @@ const Sidebar: React.FC = () => {
         { label: t('nav.masking'),       href: '/config/masking',       icon: '🔒', abac: { module: 'config', field: 'masking'   } },
         { label: t('nav.billing'),       href: '/config/billing',       icon: '💳', roles: ['admin', 'business'] },
         { label: t('nav.access'),        href: '/config/access',        icon: '🔐', abac: { module: 'config', field: 'users'     } },
+        { label: t('nav.groups'),        href: '/config/groups',        icon: '👥', abac: { module: 'config', field: 'users'     } },
       ]
     },
 

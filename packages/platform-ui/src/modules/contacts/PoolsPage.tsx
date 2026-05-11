@@ -345,7 +345,6 @@ export default function PoolsPage() {
               <th className="text-left px-5 py-3 font-medium">Pool</th>
               <th className="text-center px-3 py-3 font-medium w-28">Status</th>
               <th className="text-center px-3 py-3 font-medium w-24">Disponíveis</th>
-              <th className="text-center px-3 py-3 font-medium w-24">Em sessão</th>
               <th className="text-center px-3 py-3 font-medium w-20">Fila</th>
               <th className="text-center px-3 py-3 font-medium w-28">Espera est.</th>
               <th className="text-center px-3 py-3 font-medium w-20">SLA</th>
@@ -391,19 +390,19 @@ export default function PoolsPage() {
 
                     {/* Available */}
                     <td className="px-3 py-3 text-center">
-                      <span className="text-sm font-bold" style={{ color: pool.available > 0 ? '#22c55e' : '#6b7280' }}>
-                        {pool.has_snapshot ? pool.available : '—'}
-                      </span>
+                      {pool.has_snapshot
+                        ? <span className="text-sm font-bold" style={{ color: pool.available > 0 ? '#22c55e' : '#6b7280' }}>{pool.available}</span>
+                        : <span className="text-xs text-amber-600" title="Snapshot Redis expirado — aguardando próximo evento de roteamento">⚠ sem dados</span>
+                      }
                     </td>
-
-                    {/* Busy (total - available - paused, approximated from queue logic) */}
-                    <td className="px-3 py-3 text-center text-slate-500 text-xs">—</td>
 
                     {/* Queue */}
                     <td className="px-3 py-3 text-center">
-                      {pool.queue_length > 0
-                        ? <span className="text-sm font-bold text-yellow-400">{pool.queue_length}</span>
-                        : <span className="text-xs text-slate-600">{pool.has_snapshot ? '0' : '—'}</span>
+                      {!pool.has_snapshot
+                        ? <span className="text-xs text-slate-600">—</span>
+                        : pool.queue_length > 0
+                          ? <span className="text-sm font-bold text-yellow-400">{pool.queue_length}</span>
+                          : <span className="text-xs text-slate-600">0</span>
                       }
                     </td>
 
@@ -442,7 +441,7 @@ export default function PoolsPage() {
                   {/* Queue drill-down row */}
                   {expanded && (
                     <tr key={`${pool.pool_id}-queue`} className="border-b border-slate-800">
-                      <td colSpan={9} className="p-0" style={{ background: '#0d1b2e' }}>
+                      <td colSpan={8} className="p-0" style={{ background: '#0d1b2e' }}>
                         <div className="pl-8 border-l-2 border-blue-800 ml-5 my-1">
                           <div className="px-4 pt-2 pb-1 text-[11px] font-semibold text-slate-500 uppercase tracking-wider">
                             Contatos em fila — {pool.pool_id}

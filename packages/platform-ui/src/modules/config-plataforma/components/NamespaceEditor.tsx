@@ -8,12 +8,13 @@
  *   - Edit inline: scope selector (🌐 Global default vs 🏢 Tenant)
  *   - Reset button removes the tenant override (falls back to global default)
  *
- * Namespaces removed from here (have dedicated UIs):
+ * Namespaces removed from here (have dedicated UIs or deferred):
  *   sentiment    → SentimentBandsEditor (tab Sentimento)
  *   dashboard    → Dashboards module (template-level config)
  *   webchat      → Configuração/Canais/WebChat
  *   audit_policy → Configuração/Mascaramento (MaskingPage)
  *   masking      → removed (legacy, replaced by audit_policy)
+ *   quota        → deferred (Pricing/Metering module, not yet implemented)
  */
 import React, { useState, useCallback } from 'react'
 import { useNamespace, useMultiNamespace, putConfig, deleteConfig, type ConfigEntry } from '../api/config-hooks'
@@ -38,30 +39,24 @@ const NAMESPACES: NsEntry[] = [
     id:           'routing_timeouts',
     namespaceIds: ['routing', 'session'],
     sections: [
-      { ns: 'routing', label: 'Roteamento (SLA & TTL)' },
-      { ns: 'session', label: 'Timeouts de Componentes' },
+      { ns: 'routing', label: 'Routing (SLA & TTL)' },
+      { ns: 'session', label: 'Component Timeouts' },
     ],
-    label: 'Roteamento & Timeouts',
+    label: 'Routing & Timeouts',
     icon: '🔀', color: 'bg-blue-400',
-    desc: 'SLA, snapshot_ttl_s | TTLs: ai_gateway, channel_gateway, transcript, replayer. Pesos/fatores ficam nas configurações de pool.',
+    desc: 'SLA, snapshot_ttl_s | TTLs: ai_gateway, channel_gateway, transcript, replayer. Weights/factors stay in pool settings.',
   },
   {
     id: 'consumer',
     label: 'Consumer Analytics',
     icon: '📥', color: 'bg-yellow-400',
-    desc: 'Kafka consumer da analytics-api: batch_size, timeout_ms, restart_delay_s, max_restart_delay_s',
-  },
-  {
-    id: 'quota',
-    label: 'Quotas',
-    icon: '📏', color: 'bg-orange-400',
-    desc: 'max_concurrent_sessions — limite operacional de sessões simultâneas por tenant',
+    desc: 'analytics-api Kafka consumer: batch_size, timeout_ms, restart_delay_s, max_restart_delay_s',
   },
   {
     id: 'expurgo',
-    label: 'Expurgo',
+    label: 'Data Retention',
     icon: '🗑️', color: 'bg-slate-400',
-    desc: 'Retenção de dados: voice_recording_days (gravações), attachment_days (anexos de mensagem) — aplica a DB e file storage',
+    desc: 'Data retention periods: voice_recording_days (recordings), attachment_days (message attachments) — applies to DB and file storage',
   },
 ]
 

@@ -1,0 +1,52 @@
+{
+  "title": "Grupos de Agentes",
+  "subtitle": "Gerencie grupos para escopo de supervisão e organização de pessoas",
+  "newGroup": "Novo Grupo",
+  "empty": "Nenhum grupo ainda. Crie um para atribuir supervisores e membros.",
+  "confirmDelete": "Excluir este grupo? Esta ação não pode ser desfeita.",
+  "noAdminToken": "Token de administrador necessário. Faça login com uma conta admin.",
+  "members": "Membros",
+  "supervisors": "Supervisores",
+  "shifts": "Turnos",
+
+  "tab.info": "Info",
+  "tab.members": "Membros",
+  "tab.supervisors": "Supervisores",
+  "tab.shifts": "Turnos",
+
+  "fieldName": "Nome do grupo",
+  "fieldNamePlaceholder": "ex: Equipe Retenção",
+  "fieldDescription": "Descrição",
+  "fieldDescriptionPlaceholder": "Descrição opcional",
+  "fieldGroupId": "ID do grupo",
+  "fieldCreated": "Criado em",
+
+  "save": "Salvar",
+  "saved": "Salvo",
+  "saving": "Salvando…",
+  "create": "Criar",
+  "cancel": "Cancelar",
+  "add": "Adicionar",
+  "remove": "Remover",
+  "delete": "Excluir grupo",
+
+  "membersHint": "Adicione agent_type_ids que pertencem a este grupo. Marque como Humano para filas de agentes humanos.",
+  "memberAgentTypeId": "agent_type_id (ex: agente_retencao_v1)",
+  "memberIsHuman": "Humano",
+  "noMembers": "Nenhum membro ainda.",
+
+  "supervisorsHint": "Supervisores são usuários que podem ver sessões dos agentes deste grupo em seu escopo.",
+  "supervisorUserId": "user_id (UUID)",
+  "noSupervisors": "Nenhum supervisor ainda.",
+
+  "shiftsHint": "Turnos definem quando um supervisor está ativo. Se não houver turnos, o supervisor está sempre ativo.",
+  "addShift": "Adicionar Turno",
+  "shiftSupervisorId": "user_id do supervisor",
+  "shiftDays": "Dias ativos",
+  "shiftStart": "Início",
+  "shiftEnd": "Fim",
+  "shiftTimezone": "Fuso horário",
+  "shiftActive": "Ativo",
+  "shiftInactive": "Inativo",
+  "noShifts": "Nenhum turno configurado. Supervisores sem turnos estão sempre ativos."
+}

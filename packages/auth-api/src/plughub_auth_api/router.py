@@ -81,13 +81,19 @@ def _user_to_response(row: dict[str, Any]) -> UserResponse:
     )
 
 
-def _make_token_response(
+async def _make_token_response(
+    pool: asyncpg.Pool,
     user: dict[str, Any],
     settings: Settings,
 ) -> tuple[TokenResponse, str]:
     """Gera access_token + refresh_token. Retorna (TokenResponse, plain_refresh_token)."""
     plain_refresh = generate_refresh_token()
     module_config: dict[str, Any] = user.get("module_config") or {}
+    role: str = (list(user["roles"]) or ["operator"])[0]
+    # Arc 9 — resolve supervisor scope at token generation time
+    sup_groups, sup_agent_types, sup_user_ids = await db_mod.resolve_supervisor_scope(
+        pool, str(user["id"]), role,
+    )
     access = create_access_token(
         user_id=str(user["id"]),
         tenant_id=user["tenant_id"],
@@ -97,6 +103,9 @@ def _make_token_response(
         accessible_pools=list(user["accessible_pools"]),
         settings=settings,
         module_config=module_config,
+        supervised_groups=sup_groups,
+        supervised_agent_types=sup_agent_types,
+        supervised_user_ids=sup_user_ids,
     )
     expires_in = settings.access_token_expire_minutes * 60
     return (
@@ -147,7 +156,7 @@ async def login(body: LoginRequest, request: Request) -> TokenResponse:
     if not user["active"]:
         raise HTTPException(status_code=403, detail="User account is inactive")
 
-    token_resp, plain_refresh = _make_token_response(user, settings)
+    token_resp, plain_refresh = await _make_token_response(pool, user, settings)
     await db_mod.create_session(
         pool,
         user_id=str(user["id"]),
@@ -177,7 +186,7 @@ async def refresh(body: RefreshRequest, request: Request) -> TokenResponse:
     if not user or not user["active"]:
         raise HTTPException(status_code=403, detail="User account is inactive")
 
-    token_resp, plain_refresh = _make_token_response(user, settings)
+    token_resp, plain_refresh = await _make_token_response(pool, user, settings)
     rotated = await db_mod.rotate_session(
         pool,
         old_token_hash=old_hash,

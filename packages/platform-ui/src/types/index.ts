@@ -670,8 +670,23 @@ export interface DashboardTemplate {
   tenant_id:    string
   name:         string
   description?: string
-  cards:        DashboardCard[]
+  /** Cards: legacy (type+config) or new-format (tool_id+query+tool_config). */
+  cards:        (DashboardCard | import('@/dashboard/tools/types').NewDashboardCard)[]
+  /** Runtime filter declarations — added in Part 3 (default: []). */
+  global_filters?: import('@/dashboard/tools/types').GlobalFilter[]
   created_by:   string
   created_at:   string
   updated_at?:  string
 }
+
+// ─── New card schema (tool_id + query + tool_config) ──────────────────────────
+// Re-exported from dashboard/tools/types for convenience.
+export type {
+  NewDashboardCard,
+  CardQuery,
+  QueryParam,
+  FixedQueryParam,
+  RuntimeQueryParam,
+  GlobalFilter,
+  DisplayToolDataShape,
+} from '@/dashboard/tools/types'

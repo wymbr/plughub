@@ -131,7 +131,8 @@ async def report_sessions(
         agent_id         = agent_id,
         insight_category = insight_category,
         insight_tags     = tags_list,
-        accessible_pools = pool_principal.accessible_pools,
+        accessible_pools        = pool_principal.accessible_pools,
+        supervised_agent_types  = pool_principal.supervised_agent_types,
         ani              = ani,
         dnis             = dnis,
         page      = page,
@@ -484,7 +485,8 @@ async def get_segments_report(
         agent_type_id    = agent_type_id,
         role             = role,
         outcome          = outcome,
-        accessible_pools = pool_principal.accessible_pools,
+        accessible_pools       = pool_principal.accessible_pools,
+        supervised_agent_types = pool_principal.supervised_agent_types,
         page      = page,
         page_size = ps,
     )
@@ -531,8 +533,9 @@ async def get_agent_performance_report(
         to_dt            = to_dt,
         pool_id          = pool_id,
         agent_type_id    = agent_type_id,
-        role             = role,
-        accessible_pools = pool_principal.accessible_pools,
+        role                   = role,
+        accessible_pools       = pool_principal.accessible_pools,
+        supervised_agent_types = pool_principal.supervised_agent_types,
     )
     return _respond(data, format, f"agent_performance_{_today_label()}.csv")
 
@@ -769,8 +772,9 @@ async def get_agent_performance_daily(
         from_dt   = from_dt,
         to_dt     = to_dt,
         pool_id          = pool_id,
-        agent_type_id    = agent_type_id,
-        accessible_pools = pool_principal.accessible_pools,
+        agent_type_id          = agent_type_id,
+        accessible_pools       = pool_principal.accessible_pools,
+        supervised_agent_types = pool_principal.supervised_agent_types,
     )
     return _respond(data, format, f"agent_performance_daily_{_today_label()}.csv")
 
@@ -857,15 +861,17 @@ async def get_agent_availability(
     """
     ps = _clamp_page_size(page_size, format == "csv")
     data = await query_agent_availability(
-        store             = request.app.state.store,
+        client            = request.app.state.store.new_client(),
+        database          = request.app.state.store._database,
         tenant_id         = tenant_id,
         from_dt           = from_dt,
         to_dt             = to_dt,
         pool_id           = pool_id,
-        agent_type_id     = agent_type_id,
-        accessible_pools  = pool_principal.accessible_pools,
-        page              = page,
-        page_size         = ps,
+        agent_type_id          = agent_type_id,
+        accessible_pools       = pool_principal.accessible_pools,
+        supervised_agent_types = pool_principal.supervised_agent_types,
+        page                   = page,
+        page_size              = ps,
     )
     return _respond(data, format, f"agent_availability_{_today_label()}.csv")
 

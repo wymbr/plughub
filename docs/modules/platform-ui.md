@@ -204,38 +204,87 @@ Build: **513 kB JS / 150 kB gzip** (0 TypeScript errors).
 
 ## Nav structure — groups, roles and ABAC gates
 
-The Sidebar has expandable collapsible groups (children[]). The `business` role is **cross-cutting**: it is included in every group's `roles[]` but operational items are hidden via ABAC `operacao` field (business users have `operacao: none`).
+Source of truth: `src/shell/Sidebar.tsx`. Sidebar is collapsible (icon-only strip when collapsed). Groups with `children[]` are expandable accordions; leaf items are direct `<Link>` entries.
 
-| Group | Roles | Children / ABAC gate |
-|-------|-------|----------------------|
-| **Atendimento** (📞) | operator, supervisor, admin, **business** | Contatos (no gate); Monitor 📡, AgentAssist 🤖 → `contacts.operacao` |
-| **Workflow** (⚙️) | operator, supervisor, admin, **business** | Editor ▶️, Monitor 📡, Calendar 📅 → `workflows.operacao`; Report 📊 → `workflows.visualizar` |
-| **AgentFlow** (🔄) | admin, developer, **business** | Editor ✏️, Monitor 📡, Deploy 🚀 → `skill_flows.operacao`; Report 📊 → `skill_flows.visualizar` |
-| **Avaliação** (✓) | operator, supervisor, admin, **business** | Forms, Campaigns → `evaluation.formularios`; Reports → `evaluation.relatorio`; others role-gated |
-| **Configuração** (⚙️) | admin, **business** | Templates de Dashboard 📊 → `config.plataforma`; Recursos/Plataforma/Mascaramento/Acesso → ABAC config fields; Faturamento (no ABAC gate — always visible to admin + business) |
-| **Developer** (👨‍💻) | developer, admin | (no children) |
+### Top-level items
 
-**Analytics group was dissolved** — its content lives in: Contacts (MonitorTab + AnaliseTab), workflow/report, agent-flow/report, evaluation/reports. No separate Analytics nav group exists.
+| Item | Icon | href | Roles | ABAC gate |
+|------|------|------|-------|-----------|
+| Home | 🏠 | `/` | operator, supervisor, admin, developer, business | — |
+| Console | 🖥️ | `/console` | operator, supervisor, admin | `contacts.operacao` |
 
-**Two-tier ABAC pattern for analytics access:**
-- `operacao` gates **active operational items** (Monitor, Editor, Calendar, Deploy, AgentAssist) — users with `operacao: none` (including `business`) don't see these items
-- `visualizar` gates **read-only analytical items** (Report, Análise tab) — allows business/analyst roles to access dashboards and reports without operational access
+### Monitor group (navKey: `monitor`)
 
-**Contacts tab-level ABAC** — `ContactsPage` filters its own tabs at render time:
-- `Lista` tab — always visible (role-gated at group level)
-- `Monitor` tab — requires `contacts.operacao`
-- `Análise` tab — requires `contacts.visualizar`
-Active tab falls back to first visible tab if the URL-requested tab is not accessible.
+Icon: 📡 — roles: operator, supervisor, admin
 
-**Templates de Dashboard** — the DashboardsPage (`/dashboards`) is for template management only (admin). It moved from a top-level nav item to inside Configuração, gated by `config.plataforma`. Dashboard content (analytics cards) is embedded inside each module's respective page and is accessed through the module's own `visualizar` permission, not a separate dashboard route.
+| Child | Icon | href | ABAC gate |
+|-------|------|------|-----------|
+| Sessions | 📋 | `/flow/monitor` | `contacts.operacao` |
+| Agents | 👥 | `/contacts/agents` | `contacts.operacao` |
+| Pools | 🏊 | `/contacts/pools` | `contacts.operacao` |
+| Events | 📡 | `/contacts/events` | `contacts.operacao` |
+| Processes | ⚙️ | `/flow/processos` | `workflows.operacao` |
+
+### Fluxo group (navKey: `flow`)
+
+Icon: 🔄 — roles: admin, developer, business, supervisor
+
+| Child | Icon | href | ABAC gate |
+|-------|------|------|-----------|
+| Editor | ✏️ | `/agent-flow/editor` | `skill_flows.operacao` |
+| Deploy | 🚀 | `/agent-flow/deploy` | `skill_flows.operacao` |
+
+### Avaliação group (navKey: `quality`)
+
+Icon: ✓ — roles: operator, supervisor, admin, business
+
+| Child | Icon | href | Roles (override) | ABAC gate |
+|-------|------|------|------------------|-----------|
+| Forms | 📝 | `/evaluation/forms` | admin | `evaluation.formularios` |
+| Campaigns | 📋 | `/evaluation/campaigns` | supervisor, admin | `evaluation.formularios` |
+| Knowledge | 📚 | `/evaluation/knowledge` | admin | — |
+| Evaluations | 🗂️ | `/evaluation/evaluations` | operator, supervisor, admin | — |
+
+### Analytics group (navKey: `analise`)
+
+Icon: 📊 — roles: supervisor, admin, business
+
+| Child | Icon | href | ABAC gate |
+|-------|------|------|-----------|
+| Sessions | 📋 | `/analise/sessions` | `contacts.visualizar` |
+| Agents | 👥 | `/analise/agents` | `contacts.visualizar` |
+| Events | 📡 | `/analise/events` | `contacts.visualizar` |
+| Processes | ⚙️ | `/analise/processos` | `workflows.operacao` |
+| Quality | ✓ | `/analise/quality` | `evaluation.report` |
+
+### Configuração group (navKey: `config`)
+
+Icon: ⚙️ — roles: admin, business
+
+| Child | Icon | href | ABAC gate |
+|-------|------|------|-----------|
+| Dashboards | 📊 | `/dashboards` | `config.platform` |
+| Resources | 📦 | `/config/resources` | `config.resources` |
+| Platform | 🖥️ | `/config/platform` | `config.platform` |
+| Channels | 📡 | `/config/channels` | `config.platform` |
+| Calendars | 📅 | `/config/calendars` | `config.platform` |
+| Masking | 🔒 | `/config/masking` | `config.masking` |
+| Billing | 💳 | `/config/billing` | roles: admin, business (no ABAC gate) |
+| Access | 🔐 | `/config/access` | `config.users` |
+
+### Filtering rules
+
+Items are filtered in two passes: (1) `roles[]` — if present, session.role must be in the list; (2) `passesAbac()` — if `abac` is set and `moduleConfig` is populated (non-empty), and role is not admin/supervisor, calls `perms.can(module, field)`. Admin and supervisor bypass all ABAC checks. When `moduleConfig` is absent (legacy accounts), ABAC is skipped and items are shown by role only.
+
+**ABAC tier semantics:**
+- `operacao` gates operational write items (Monitor, Console, Editor, Deploy) — users with `operacao: none` (e.g. business) don't see these
+- `visualizar` gates read-only analytics items (Analise tabs, report pages)
+- `report` gates quality/evaluation reports (evaluation.report)
 
 Legacy redirects in `routes.tsx`:
 - `/workflows` → `/workflow/monitor`
-- `/campaigns` → `/workflow/report`
-- `/config/calendars` → `/workflow/calendar`
 - `/skill-flows` → `/agent-flow/editor`
 - `/reports` → `/contacts?tab=analise`
-- `/business` → `/` (business accesses modules via ABAC)
 
 ## Skill Deploy Lifecycle (Phase 1) — ✅ implemented
 

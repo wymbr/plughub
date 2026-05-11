@@ -46,11 +46,15 @@ _bearer = HTTPBearer(auto_error=False)
 
 class PoolPrincipal:
     """
-    Lightweight identity object carrying pool-scoped access information.
+    Lightweight identity object carrying pool-scoped and agent-group-scoped access.
 
     accessible_pools:
       None       → no restriction (all pools visible)
       list[str]  → caller may only see data for these pool_ids
+
+    supervised_agent_types (Arc 9):
+      None       → no restriction (all agent types visible)
+      list[str]  → caller may only see sessions/segments involving these agent_type_ids
     """
 
     def __init__(
@@ -58,8 +62,10 @@ class PoolPrincipal:
         accessible_pools: list[str] | None,
         tenant_id: str | None,
         sub: str,
+        supervised_agent_types: list[str] | None = None,
     ) -> None:
-        self.accessible_pools = accessible_pools
+        self.accessible_pools       = accessible_pools
+        self.supervised_agent_types = supervised_agent_types
         self.tenant_id = tenant_id
         self.sub = sub
 
@@ -113,8 +119,13 @@ async def optional_pool_principal(
     # auth-api convention: accessible_pools=[] means global access (admin/developer)
     accessible_pools: list[str] | None = None if not raw_pools else list(raw_pools)
 
+    # Arc 9 — supervised_agent_types: [] = no restriction (admin); non-empty = filter
+    raw_agent_types = payload.get("supervised_agent_types", [])
+    supervised_agent_types: list[str] | None = None if not raw_agent_types else list(raw_agent_types)
+
     return PoolPrincipal(
         accessible_pools=accessible_pools,
         tenant_id=tenant_id,
         sub=sub,
+        supervised_agent_types=supervised_agent_types,
     )

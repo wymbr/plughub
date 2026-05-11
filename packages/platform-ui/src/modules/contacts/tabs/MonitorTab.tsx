@@ -97,6 +97,7 @@ function PoolHeatmapCard({ pool, highlighted, selected, onClick }: {
       </div>
       <div className="flex gap-3 text-xs mt-auto" style={{ color: accent + 'cc' }}>
         <span>✅ {pool.available}</span>
+        {pool.busy > 0 && <span>🔴 {pool.busy}</span>}
         <span>⏳ {pool.queue_length}</span>
       </div>
       {pool.avg_score !== null && (
@@ -111,10 +112,10 @@ function PoolHeatmapCard({ pool, highlighted, selected, onClick }: {
 function PoolBarsCard({ pool, highlighted, selected, onClick }: {
   pool: PoolView; highlighted: boolean; selected: boolean; onClick: () => void
 }) {
-  const total  = pool.available + pool.queue_length
-  const avPct  = total > 0 ? (pool.available / total) * 100 : 0
-  const qPct   = total > 0 ? (pool.queue_length / total) * 100 : 0
-  const accent = scoreToAccent(pool.avg_score)
+  const totalAgents = pool.available + pool.busy
+  const avPct   = totalAgents > 0 ? (pool.available / totalAgents) * 100 : 0
+  const busyPct = totalAgents > 0 ? (pool.busy / totalAgents) * 100 : 0
+  const accent  = scoreToAccent(pool.avg_score)
 
   return (
     <div onClick={onClick}
@@ -134,13 +135,24 @@ function PoolBarsCard({ pool, highlighted, selected, onClick }: {
         </div>
       </div>
 
-      {/* Queue bar */}
+      {/* Busy bar */}
+      <div className="mb-2">
+        <div className="flex justify-between text-xs text-gray-500 mb-0.5">
+          <span>Ocupados</span><span>{pool.busy}</span>
+        </div>
+        <div className="w-full h-2 bg-gray-100 rounded-full overflow-hidden">
+          <div className="h-full rounded-full transition-all" style={{ width: `${busyPct}%`, backgroundColor: '#3b82f6' }} />
+        </div>
+      </div>
+
+      {/* Queue (contacts waiting — separate from agent count) */}
       <div className="mb-2">
         <div className="flex justify-between text-xs text-gray-500 mb-0.5">
           <span>Na fila</span><span>{pool.queue_length}</span>
         </div>
-        <div className="w-full h-2 bg-gray-100 rounded-full overflow-hidden">
-          <div className="h-full rounded-full transition-all" style={{ width: `${qPct}%`, backgroundColor: '#f59e0b' }} />
+        <div className="w-full h-1.5 bg-gray-100 rounded-full overflow-hidden">
+          <div className="h-full rounded-full transition-all"
+            style={{ width: pool.queue_length > 0 ? '100%' : '0%', backgroundColor: '#f59e0b', opacity: 0.7 }} />
         </div>
       </div>
 
@@ -156,12 +168,11 @@ function PoolBarsCard({ pool, highlighted, selected, onClick }: {
 function PoolDonutCard({ pool, highlighted, selected, onClick }: {
   pool: PoolView; highlighted: boolean; selected: boolean; onClick: () => void
 }) {
-  const total   = pool.available + pool.queue_length
-  const avPct   = total > 0 ? pool.available / total : 0
+  const totalAgents = pool.available + pool.busy
+  const avPct   = totalAgents > 0 ? pool.available / totalAgents : 0
   const r       = 28
   const circ    = 2 * Math.PI * r
   const avDash  = avPct * circ
-  const accent  = scoreToAccent(pool.avg_score)
 
   return (
     <div onClick={onClick}
@@ -171,7 +182,7 @@ function PoolDonutCard({ pool, highlighted, selected, onClick }: {
         {pool.pool_id.replace(/_/g, ' ')}
       </div>
 
-      {/* SVG donut */}
+      {/* SVG donut — available % of total agents */}
       <svg width="72" height="72" viewBox="0 0 72 72">
         <circle cx="36" cy="36" r={r} fill="none" stroke="#f3f4f6" strokeWidth="10" />
         <circle cx="36" cy="36" r={r} fill="none"
@@ -190,6 +201,9 @@ function PoolDonutCard({ pool, highlighted, selected, onClick }: {
           <span className="w-2 h-2 rounded-full bg-green-500 inline-block" /> {pool.available}
         </span>
         <span className="flex items-center gap-0.5">
+          <span className="w-2 h-2 rounded-full bg-blue-500 inline-block" /> {pool.busy}
+        </span>
+        <span className="flex items-center gap-0.5">
           <span className="w-2 h-2 rounded-full bg-amber-400 inline-block" /> {pool.queue_length}
         </span>
       </div>
@@ -200,9 +214,9 @@ function PoolDonutCard({ pool, highlighted, selected, onClick }: {
 function PoolTileCard({ pool, highlighted, selected, onClick }: {
   pool: PoolView; highlighted: boolean; selected: boolean; onClick: () => void
 }) {
-  const total  = pool.available + pool.queue_length
-  const avPct  = total > 0 ? Math.round((pool.available / total) * 100) : 0
-  const color  = avPct >= 50 ? '#059669' : avPct >= 25 ? '#d97706' : '#dc2626'
+  const totalAgents = pool.available + pool.busy
+  const avPct = totalAgents > 0 ? Math.round((pool.available / totalAgents) * 100) : 0
+  const color = avPct >= 50 ? '#059669' : avPct >= 25 ? '#d97706' : '#dc2626'
 
   return (
     <div onClick={onClick}
@@ -216,7 +230,11 @@ function PoolTileCard({ pool, highlighted, selected, onClick }: {
         {pool.pool_id.replace(/_/g, ' ')}
       </div>
       <div className="text-xs text-gray-400">
-        {pool.available} disp · {pool.queue_length} fila
+        <span className="text-green-600">{pool.available}</span> disp
+        {' · '}
+        <span className="text-blue-500">{pool.busy}</span> ocup
+        {' · '}
+        <span className="text-amber-500">{pool.queue_length}</span> fila
       </div>
     </div>
   )
@@ -240,6 +258,9 @@ function PoolTableRow({ pool, highlighted, selected, onClick }: {
       </td>
       <td className="px-4 py-3 text-center">
         <span className="font-semibold text-green-700 tabular-nums">{pool.available}</span>
+      </td>
+      <td className="px-4 py-3 text-center">
+        <span className="font-semibold text-blue-600 tabular-nums">{pool.busy}</span>
       </td>
       <td className="px-4 py-3 text-center">
         <span className="font-semibold text-amber-600 tabular-nums">{pool.queue_length}</span>
@@ -688,7 +709,7 @@ export function MonitorTab({ tenantId, filters }: Props) {
                   <table className="w-full text-sm">
                     <thead className="bg-gray-50 border-b border-gray-200">
                       <tr>
-                        {['Pool','Disponíveis','Na fila','SLA alvo','Sentimento','Canais',''].map(col => (
+                        {['Pool','Disponíveis','Ocupados','Na fila','SLA alvo','Sentimento','Canais',''].map(col => (
                           <th key={col} className="text-left text-xs font-semibold text-gray-500 uppercase tracking-wide px-4 py-2.5 whitespace-nowrap">
                             {col}
                           </th>

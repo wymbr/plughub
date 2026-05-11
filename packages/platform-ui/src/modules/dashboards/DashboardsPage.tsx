@@ -23,7 +23,10 @@ import 'react-grid-layout/css/styles.css'
 import 'react-resizable/css/styles.css'
 import { useTranslation } from 'react-i18next'
 import { useAuth } from '@/auth/useAuth'
-import { TimeseriesChart, type DisplayType } from '@/components/TimeseriesChart'
+import { AddCardModal } from '@/dashboard/AddCardModal'
+import { CardRenderer } from '@/dashboard/CardRenderer'
+import { FilterBar } from '@/dashboard/FilterBar'
+import { FilterConfigPanel } from '@/dashboard/FilterConfigPanel'
 import {
   deleteTemplate,
   loadPersonalLayout,
@@ -35,10 +38,9 @@ import {
 } from '@/api/dashboard-hooks'
 import type {
   DashboardCard,
-  DashboardCardType,
   DashboardTemplate,
-  KpiCardConfig,
-  PoolStatusCardConfig,
+  GlobalFilter,
+  NewDashboardCard,
   TimeseriesCardConfig,
 } from '@/types'
 
@@ -48,238 +50,7 @@ function uuid(): string {
   return crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).slice(2)
 }
 
-const TENANT_ID = import.meta.env.VITE_TENANT_ID ?? 'tenant_demo'
-
-// ─── Default card catalogue (used in "Add card" modal) ────────────────────────
-
-interface CardPreset {
-  type:   DashboardCardType
-  label:  string
-  icon:   string
-  defaultConfig: TimeseriesCardConfig | KpiCardConfig | PoolStatusCardConfig
-  defaultW: number
-  defaultH: number
-}
-
-const CARD_PRESETS: CardPreset[] = [
-  {
-    type: 'timeseries_volume',
-    label: 'Volume de Sessões',
-    icon: '📊',
-    defaultConfig: {
-      url:         '/reports/timeseries/volume',
-      title:       'Volume de Sessões',
-      valueLabel:  'Sessões',
-      displayType: 'bar',
-      interval:    60,
-    } as TimeseriesCardConfig,
-    defaultW: 6, defaultH: 4,
-  },
-  {
-    type: 'timeseries_handle_time',
-    label: 'Tempo Médio de Atendimento',
-    icon: '⏱️',
-    defaultConfig: {
-      url:         '/reports/timeseries/handle_time',
-      title:       'Tempo Médio',
-      valueLabel:  'Duração média',
-      displayType: 'line',
-      interval:    60,
-    } as TimeseriesCardConfig,
-    defaultW: 6, defaultH: 4,
-  },
-  {
-    type: 'timeseries_score',
-    label: 'Nota Média de Avaliação',
-    icon: '⭐',
-    defaultConfig: {
-      url:         '/reports/timeseries/score',
-      title:       'Nota Média',
-      valueLabel:  'Nota',
-      displayType: 'line',
-      interval:    60,
-    } as TimeseriesCardConfig,
-    defaultW: 6, defaultH: 4,
-  },
-  {
-    type: 'pool_status',
-    label: 'Status dos Pools',
-    icon: '🟢',
-    defaultConfig: {
-      title:  'Status dos Pools',
-    } as PoolStatusCardConfig,
-    defaultW: 4, defaultH: 3,
-  },
-]
-
-// ─── Card renderer ────────────────────────────────────────────────────────────
-
-function CardContent({ card, tenantId }: { card: DashboardCard; tenantId: string }) {
-  if (card.type.startsWith('timeseries_')) {
-    const cfg = card.config as TimeseriesCardConfig
-    const formatType = card.type === 'timeseries_handle_time'
-      ? 'duration_ms'
-      : card.type === 'timeseries_score'
-        ? 'score'
-        : 'count'
-    return (
-      <TimeseriesChart
-        baseUrl={cfg.url}
-        tenantId={tenantId}
-        title={cfg.title}
-        valueLabel={cfg.valueLabel}
-        displayType={cfg.displayType ?? 'bar'}
-        formatType={formatType}
-        defaultInterval={cfg.interval ?? 60}
-        defaultBreakdownBy={cfg.breakdownBy}
-        poolId={cfg.poolId}
-        compact
-        pollMs={30_000}
-      />
-    )
-  }
-
-  if (card.type === 'pool_status') {
-    const cfg = card.config as PoolStatusCardConfig
-    return (
-      <div className="h-full flex flex-col">
-        <p className="text-xs text-gray-500 px-1 pb-1">{cfg.title}</p>
-        <div className="flex-1 flex items-center justify-center text-xs text-gray-400">
-          {/* SSE operational — pending */}
-        </div>
-      </div>
-    )
-  }
-
-  return (
-    <div className="h-full flex items-center justify-center text-xs text-gray-400">
-      {card.type}
-    </div>
-  )
-}
-
-// ─── Display type metadata ────────────────────────────────────────────────────
-
-const DISPLAY_OPTIONS: { value: DisplayType; label: string; icon: string; desc: string }[] = [
-  { value: 'bar',   label: 'Barras',      icon: '▐',  desc: 'Comparação por período' },
-  { value: 'line',  label: 'Linha',       icon: '╱',  desc: 'Tendência ao longo do tempo' },
-  { value: 'area',  label: 'Área',        icon: '◣',  desc: 'Linha com área preenchida' },
-  { value: 'pie',   label: 'Pizza',       icon: '◔',  desc: 'Proporção por categoria' },
-  { value: 'table', label: 'Tabela',      icon: '☰',  desc: 'Dados tabulares ordenáveis' },
-  { value: 'tile',  label: 'KPI / Tile',  icon: '◈',  desc: 'Número grande + tendência' },
-]
-
-// ─── Add Card Modal ───────────────────────────────────────────────────────────
-
-function AddCardModal({
-  onAdd,
-  onClose,
-}: {
-  onAdd: (preset: CardPreset, displayType: DisplayType) => void
-  onClose: () => void
-}) {
-  const { t } = useTranslation('dashboards')
-  const [selectedPreset, setSelectedPreset] = useState<CardPreset | null>(null)
-  const [displayType, setDisplayType]       = useState<DisplayType>('bar')
-
-  function handleAdd() {
-    if (!selectedPreset) return
-    onAdd(selectedPreset, displayType)
-    onClose()
-  }
-
-  // When preset changes, set a sensible default display type
-  function selectPreset(p: CardPreset) {
-    setSelectedPreset(p)
-    const cfg = p.defaultConfig as TimeseriesCardConfig
-    setDisplayType(cfg.displayType ?? 'bar')
-  }
-
-  const isTimeseries = selectedPreset?.type.startsWith('timeseries_') ?? false
-
-  return (
-    <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
-      <div className="bg-white rounded-xl shadow-xl w-full max-w-lg p-6 flex flex-col gap-5">
-        <div className="flex items-center justify-between">
-          <h2 className="text-base font-semibold text-gray-800">{t('addCard')}</h2>
-          <button onClick={onClose} className="text-gray-400 hover:text-gray-600 text-xl leading-none">×</button>
-        </div>
-
-        {/* Step 1 — pick data source */}
-        <div>
-          <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">
-            {t('card.type')}
-          </p>
-          <div className="grid grid-cols-2 gap-2">
-            {CARD_PRESETS.map(preset => (
-              <button
-                key={preset.type}
-                onClick={() => selectPreset(preset)}
-                className={`flex items-center gap-3 px-3 py-2.5 rounded-lg border text-left transition-colors ${
-                  selectedPreset?.type === preset.type
-                    ? 'border-primary bg-blue-50 text-primary'
-                    : 'border-gray-200 text-gray-700 hover:border-primary hover:bg-blue-50/50'
-                }`}
-              >
-                <span className="text-xl">{preset.icon}</span>
-                <span className="text-xs font-medium leading-snug">{t(`cardTypes.${preset.type}`, preset.label)}</span>
-              </button>
-            ))}
-          </div>
-        </div>
-
-        {/* Step 2 — pick display type (only for timeseries cards) */}
-        {isTimeseries && (
-          <div>
-            <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">
-              {t('card.displayType')}
-            </p>
-            <div className="grid grid-cols-3 gap-2">
-              {DISPLAY_OPTIONS.map(opt => (
-                <button
-                  key={opt.value}
-                  onClick={() => setDisplayType(opt.value)}
-                  title={opt.desc}
-                  className={`flex flex-col items-center gap-1 px-2 py-2 rounded-lg border text-center
-                    transition-colors ${
-                    displayType === opt.value
-                      ? 'border-primary bg-blue-50 text-primary'
-                      : 'border-gray-200 text-gray-600 hover:border-primary hover:bg-blue-50/50'
-                  }`}
-                >
-                  <span className="text-base font-mono">{opt.icon}</span>
-                  <span className="text-xs font-medium">{t(`displayTypes.${opt.value}`, opt.label)}</span>
-                </button>
-              ))}
-            </div>
-            <p className="text-xs text-gray-400 mt-1.5">
-              {DISPLAY_OPTIONS.find(o => o.value === displayType)?.desc}
-            </p>
-          </div>
-        )}
-
-        {/* Action buttons */}
-        <div className="flex gap-2 pt-1">
-          <button
-            onClick={handleAdd}
-            disabled={!selectedPreset}
-            className="flex-1 bg-primary text-white text-sm font-medium py-2 rounded hover:opacity-90
-              disabled:opacity-40 transition-opacity"
-          >
-            {t('card.add')}
-          </button>
-          <button
-            onClick={onClose}
-            className="flex-1 border border-gray-200 text-gray-600 text-sm py-2 rounded
-              hover:bg-gray-50 transition-colors"
-          >
-            {t('card.cancel')}
-          </button>
-        </div>
-      </div>
-    </div>
-  )
-}
+// AddCardModal is imported from @/dashboard/AddCardModal (new 3-step flow)
 
 // ─── New Template Modal ───────────────────────────────────────────────────────
 
@@ -406,19 +177,39 @@ export default function DashboardsPage() {
   const { template } = useTemplate(activeTemplateId, adminToken, tenantId)
 
   // Cards state (current working copy)
-  const [cards, setCards] = useState<DashboardCard[]>([])
+  const [cards, setCards] = useState<(DashboardCard | NewDashboardCard)[]>([])
   const [dirty,  setDirty]  = useState(false)
   const [editMode, setEditMode] = useState(false)
+
+  // Global filters declared on the template (admin-configurable)
+  const [globalFilters, setGlobalFilters] = useState<GlobalFilter[]>([])
+
+  // Runtime filter values — user-controlled via FilterBar
+  const [runtimeFilters, setRuntimeFilters] = useState<Record<string, unknown>>({})
 
   // Load personal layout override (or template cards on first load)
   useEffect(() => {
     if (!template) {
       // Template was deleted or deselected — clear the grid
       setCards([])
+      setGlobalFilters([])
+      setRuntimeFilters({})
       setDirty(false)
       setEditMode(false)
       return
     }
+    // Initialise global filters from template
+    const templateFilters = template.global_filters ?? []
+    setGlobalFilters(templateFilters)
+    // Seed runtime filters with each filter's default value
+    const defaults: Record<string, unknown> = {}
+    for (const f of templateFilters) {
+      if (f.default !== null && f.default !== undefined) {
+        defaults[f.filter_key] = f.default
+      }
+    }
+    setRuntimeFilters(defaults)
+
     loadPersonalLayout(tenantId, userId).then(personal => {
       // Only apply personal layout if it matches the same set of card IDs
       if (personal && personal.length === template.cards.length) {
@@ -431,6 +222,28 @@ export default function DashboardsPage() {
     setDirty(false)
     setEditMode(false)
   }, [template, tenantId, userId])
+
+  // ── Filter helpers ──────────────────────────────────────────────────────────
+
+  function setRuntimeFilter(key: string, value: unknown) {
+    setRuntimeFilters(prev => ({ ...prev, [key]: value }))
+  }
+
+  function resetRuntimeFilters() {
+    const defaults: Record<string, unknown> = {}
+    for (const f of globalFilters) {
+      if (f.default !== null && f.default !== undefined) {
+        defaults[f.filter_key] = f.default
+      }
+    }
+    setRuntimeFilters(defaults)
+  }
+
+  // Admin: update global_filters on the working template copy
+  function updateGlobalFilters(filters: GlobalFilter[]) {
+    setGlobalFilters(filters)
+    setDirty(true)
+  }
 
   // Modals
   const [showAddCard,     setShowAddCard]     = useState(false)
@@ -456,21 +269,8 @@ export default function DashboardsPage() {
 
   // ── Card actions ────────────────────────────────────────────────────────────
 
-  function addCard(preset: CardPreset, displayType: DisplayType) {
-    // Merge the chosen displayType into the config (only meaningful for timeseries cards)
-    const config = preset.type.startsWith('timeseries_')
-      ? { ...(preset.defaultConfig as TimeseriesCardConfig), displayType }
-      : preset.defaultConfig
-
-    const newCard: DashboardCard = {
-      id:     uuid(),
-      x:      0, y: Infinity,
-      w:      preset.defaultW,
-      h:      preset.defaultH,
-      type:   preset.type,
-      config,
-    }
-    setCards(prev => [...prev, newCard])
+  function addCard(card: NewDashboardCard) {
+    setCards(prev => [...prev, card])
     setDirty(true)
   }
 
@@ -485,16 +285,17 @@ export default function DashboardsPage() {
     if (!activeTemplateId || !template) return
     setSaving(true)
     if (isAdmin && adminToken) {
-      // Admin: save to shared template
+      // Admin: save cards + global_filters to shared template
       const updated: DashboardTemplate = {
         ...template,
         cards,
+        global_filters: globalFilters,
         updated_at: new Date().toISOString(),
       }
       await saveTemplate(updated, adminToken)
       reloadTemplates()
     } else {
-      // Regular user: save personal layout
+      // Regular user: save personal layout only
       await savePersonalLayout(tenantId, userId, cards)
     }
     setSaving(false)
@@ -580,6 +381,14 @@ export default function DashboardsPage() {
         </div>
       </div>
 
+      {/* Filter bar — shown when template has global_filters */}
+      <FilterBar
+        filters={globalFilters}
+        values={runtimeFilters}
+        onChange={setRuntimeFilter}
+        onReset={resetRuntimeFilters}
+      />
+
       <div className="flex flex-1 overflow-hidden">
 
         {/* Sidebar — admin only */}
@@ -628,6 +437,14 @@ export default function DashboardsPage() {
                 <p className="text-xs text-gray-400 px-4 py-3">{t('noTemplates')}</p>
               )}
             </nav>
+
+            {/* Filter config — admin, edit mode only */}
+            {editMode && activeTemplateId && (
+              <FilterConfigPanel
+                filters={globalFilters}
+                onChange={updateGlobalFilters}
+              />
+            )}
           </aside>
         )}
 
@@ -680,12 +497,14 @@ export default function DashboardsPage() {
                   key={card.id}
                   className="bg-white rounded-lg border border-gray-200 shadow-sm overflow-hidden flex flex-col"
                 >
-                  {/* Card header (edit mode) */}
-                  {editMode && (
-                    <div className="flex items-center justify-between px-3 py-1.5 border-b border-gray-100 bg-gray-50 flex-shrink-0">
-                      <span className="text-xs text-gray-500 truncate">
-                        {(card.config as TimeseriesCardConfig).title ?? card.type}
-                      </span>
+                  {/* Card header — always show title; delete button only in edit mode */}
+                  <div className="flex items-center justify-between px-3 py-1.5 border-b border-gray-100 bg-gray-50 flex-shrink-0">
+                    <span className="text-xs font-medium text-gray-600 truncate">
+                      {'title' in card
+                        ? (card as { title: string }).title
+                        : ((card.config as TimeseriesCardConfig).title ?? card.type)}
+                    </span>
+                    {editMode && (
                       <button
                         onClick={() => removeCard(card.id)}
                         className="text-gray-400 hover:text-red-500 text-sm leading-none ml-2 flex-shrink-0"
@@ -693,11 +512,15 @@ export default function DashboardsPage() {
                       >
                         ×
                       </button>
-                    </div>
-                  )}
+                    )}
+                  </div>
                   {/* Card content */}
                   <div className="flex-1 p-2 min-h-0">
-                    <CardContent card={card} tenantId={tenantId} />
+                    <CardRenderer
+                      card={card}
+                      tenantId={tenantId}
+                      runtimeFilters={runtimeFilters}
+                    />
                   </div>
                 </div>
               ))}
@@ -709,7 +532,8 @@ export default function DashboardsPage() {
       {/* Modals */}
       {showAddCard && (
         <AddCardModal
-          onAdd={(preset, dt) => addCard(preset, dt)}
+          tenantId={tenantId}
+          onAdd={addCard}
           onClose={() => setShowAddCard(false)}
         />
       )}

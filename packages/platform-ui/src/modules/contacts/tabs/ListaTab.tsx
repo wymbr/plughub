@@ -5,7 +5,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import type { ContactFilters, ContactRow, ContactsApiResponse } from '../types'
 import {
-  formatMs, formatDt, CHANNEL_ICONS, OUTCOME_COLORS,
+  formatMs, formatDt, CHANNEL_ICONS,
 } from '../types'
 
 const PAGE_SIZE = 50
@@ -97,7 +97,7 @@ export function ListaTab({ tenantId, filters, onOpenDetail }: Props) {
           <table className="w-full text-sm">
             <thead className="sticky top-0 bg-gray-50 border-b border-gray-200 z-10">
               <tr>
-                {['Session ID','Canal','Pool','Origem','Destino','Iniciado','Encerrado','Duração','Status / Outcome','Segmentos'].map(col => (
+                {['Session ID','Canal','Pool','Origem','Destino','Iniciado','Encerrado','Duração','Status','Segmentos'].map(col => (
                   <th key={col} className="text-left text-xs font-semibold text-gray-500 uppercase tracking-wide px-4 py-2.5 whitespace-nowrap">
                     {col}
                   </th>
@@ -147,17 +147,46 @@ export function ListaTab({ tenantId, filters, onOpenDetail }: Props) {
 
 // ─── Row ──────────────────────────────────────────────────────────────────────
 
+// ── Status helpers ────────────────────────────────────────────────────────────
+
+const ABANDONED_REASONS = new Set([
+  'customer_abandon', 'no_resource', 'max_wait_exceeded',
+  'customer_disconnect', 'customer_hangup', 'session_timeout',
+])
+
+function sessionStatusBadge(row: ContactRow) {
+  if (!row.closed_at) {
+    return (
+      <span className="inline-flex items-center gap-1 text-xs font-semibold px-2 py-0.5 rounded-full bg-green-100 text-green-700">
+        <span className="w-1.5 h-1.5 rounded-full bg-green-500 inline-block" /> ativo
+      </span>
+    )
+  }
+  if (row.close_reason && ABANDONED_REASONS.has(row.close_reason)) {
+    return (
+      <span className="inline-flex items-center gap-1 text-xs font-semibold px-2 py-0.5 rounded-full bg-amber-100 text-amber-700"
+        title={row.close_reason}>
+        abandonado
+      </span>
+    )
+  }
+  return (
+    <span className="inline-block text-xs px-2 py-0.5 rounded-full bg-gray-100 text-gray-500">
+      encerrado
+    </span>
+  )
+}
+
+// ── Row ───────────────────────────────────────────────────────────────────────
+
 function ContactRowItem({ row, onClick }: { row: ContactRow; onClick: () => void }) {
-  const isActive = !row.closed_at
-  const outcome  = row.outcome
-  const outColor = outcome ? (OUTCOME_COLORS[outcome] ?? '#6b7280') : null
-  const shortId  = row.session_id.length > 16 ? '…' + row.session_id.slice(-14) : row.session_id
+  const shortId = row.session_id.length > 16 ? '…' + row.session_id.slice(-14) : row.session_id
 
   return (
     <tr onClick={onClick} className="hover:bg-primary/5 cursor-pointer transition-colors">
       <td className="px-4 py-3 font-mono text-xs text-gray-700 whitespace-nowrap">{shortId}</td>
       <td className="px-4 py-3 text-gray-600 whitespace-nowrap">
-        {CHANNEL_ICONS[row.channel] ?? '⬡'} {row.channel}
+        {CHANNEL_ICONS[row.channel] ?? '⬡'} {row.channel || <span className="text-gray-300">—</span>}
       </td>
       <td className="px-4 py-3 text-gray-500 text-xs whitespace-nowrap max-w-[120px] truncate" title={row.pool_id ?? ''}>
         {row.pool_id?.replace(/_/g, ' ') ?? '—'}
@@ -170,21 +199,13 @@ function ContactRowItem({ row, onClick }: { row: ContactRow; onClick: () => void
       </td>
       <td className="px-4 py-3 text-gray-500 text-xs tabular-nums whitespace-nowrap">{formatDt(row.opened_at)}</td>
       <td className="px-4 py-3 text-gray-500 text-xs tabular-nums whitespace-nowrap">
-        {isActive ? <span className="text-green-600 font-medium">Em andamento</span> : formatDt(row.closed_at)}
+        {!row.closed_at
+          ? <span className="text-green-600 font-medium">Em andamento</span>
+          : formatDt(row.closed_at)}
       </td>
       <td className="px-4 py-3 text-gray-700 tabular-nums whitespace-nowrap text-xs">{formatMs(row.handle_time_ms)}</td>
-      <td className="px-4 py-3 whitespace-nowrap">
-        {isActive ? (
-          <span className="inline-flex items-center gap-1 text-xs font-semibold px-2 py-0.5 rounded-full bg-green-100 text-green-700">
-            <span className="w-1.5 h-1.5 rounded-full bg-green-500 inline-block" /> ativo
-          </span>
-        ) : outcome && outColor ? (
-          <span className="inline-block text-xs font-semibold px-2 py-0.5 rounded-full"
-            style={{ backgroundColor: outColor + '20', color: outColor }}>
-            {outcome}
-          </span>
-        ) : <span className="text-gray-400 text-xs">—</span>}
-      </td>
+      {/* Status — active / encerrado / abandonado */}
+      <td className="px-4 py-3 whitespace-nowrap">{sessionStatusBadge(row)}</td>
       <td className="px-4 py-3 text-center">
         {row.segment_count > 0 ? (
           <span className="inline-block text-xs font-semibold px-2 py-0.5 rounded-full bg-blue-50 text-blue-600 tabular-nums">

@@ -16,6 +16,27 @@ interface Props {
   canJoin?:  boolean
 }
 
+// ── Outcome badge ──────────────────────────────────────────────────────────
+
+const OUTCOME_COLORS: Record<string, { bg: string; text: string }> = {
+  resolved:        { bg: '#d1fae5', text: '#065f46' },
+  escalated:       { bg: '#fef3c7', text: '#92400e' },
+  escalated_human: { bg: '#fef3c7', text: '#92400e' },
+  transferred:     { bg: '#dbeafe', text: '#1e40af' },
+  abandoned:       { bg: '#fee2e2', text: '#991b1b' },
+  timeout:         { bg: '#f3e8ff', text: '#6b21a8' },
+}
+
+function OutcomeBadge({ outcome }: { outcome: string }) {
+  const c = OUTCOME_COLORS[outcome] ?? { bg: '#f3f4f6', text: '#374151' }
+  return (
+    <span className="text-xs px-1.5 py-0.5 rounded font-medium"
+      style={{ backgroundColor: c.bg, color: c.text }}>
+      {outcome}
+    </span>
+  )
+}
+
 // ── Role badge ─────────────────────────────────────────────────────────────
 
 const ROLE_COLORS: Record<SegmentRole, { bg: string; text: string }> = {
@@ -75,10 +96,15 @@ function SegmentRow({
 
       {/* Content */}
       <div className="flex-1 min-w-0">
-        {/* Row 1: role + agent type + active badge */}
+        {/* Row 1: role + agent name + human indicator + active badge */}
         <div className="flex items-center gap-2 flex-wrap mb-1">
           <RoleBadge role={segment.role} />
           <span className="text-sm font-medium text-gray-800 truncate">{agentLabel}</span>
+          {segment.agent_type === 'human' && (
+            <span className="text-xs px-1.5 py-0.5 rounded bg-amber-50 text-amber-700 font-medium flex-shrink-0">
+              👤 humano
+            </span>
+          )}
           <span className={`text-xs font-semibold px-1.5 py-0.5 rounded-full ml-auto flex-shrink-0 ${
             isActive
               ? 'bg-green-100 text-green-700'
@@ -102,23 +128,16 @@ function SegmentRow({
           )}
         </div>
 
-        {/* Row 3: outcome + sequence + parent */}
+        {/* Row 3: outcome + sequence + parent (agent_type badge moved to Row 1) */}
         <div className="flex items-center gap-2 mt-0.5 flex-wrap">
           {segment.outcome && (
-            <span className="text-xs px-1.5 py-0.5 rounded bg-blue-50 text-blue-700">
-              {segment.outcome}
-            </span>
+            <OutcomeBadge outcome={segment.outcome} />
           )}
           {segment.sequence_index > 0 && (
             <span className="text-xs text-gray-400">handoff #{segment.sequence_index}</span>
           )}
           {segment.parent_segment_id && (
-            <span className="text-xs text-gray-400">
-              ↳ especialista
-            </span>
-          )}
-          {segment.agent_type === 'human' && (
-            <span className="text-xs px-1.5 py-0.5 rounded bg-amber-50 text-amber-700">humano</span>
+            <span className="text-xs text-gray-400">↳ especialista</span>
           )}
         </div>
       </div>

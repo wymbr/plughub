@@ -10,7 +10,9 @@
  * to avoid clobbering the shared template.
  */
 import { useEffect, useState } from 'react'
-import type { DashboardCard, DashboardTemplate } from '@/types'
+import type { DashboardCard, DashboardTemplate, NewDashboardCard } from '@/types'
+
+type AnyDashboardCard = DashboardCard | NewDashboardCard
 
 // ─── Config API helpers ───────────────────────────────────────────────────────
 
@@ -81,7 +83,7 @@ async function configListNamespace(namespace: string, adminToken?: string, tenan
 // ─── Template CRUD ────────────────────────────────────────────────────────────
 
 /** Fetch all templates for the tenant */
-export async function listTemplates(tenantId: string, adminToken: string): Promise<DashboardTemplate[]> {
+export async function listTemplates(tenantId: string, adminToken?: string): Promise<DashboardTemplate[]> {
   const all = await configListNamespace('dashboards', adminToken, tenantId)
   const templates: DashboardTemplate[] = []
   for (const [key, raw] of Object.entries(all)) {
@@ -129,7 +131,7 @@ function layoutKey(tenantId: string, userId: string): string {
 export async function savePersonalLayout(
   tenantId: string,
   userId: string,
-  cards: DashboardCard[],
+  cards: AnyDashboardCard[],
   adminToken?: string,
 ): Promise<void> {
   if (!adminToken) {
@@ -145,7 +147,7 @@ export async function loadPersonalLayout(
   tenantId: string,
   userId: string,
   adminToken?: string,
-): Promise<DashboardCard[] | null> {
+): Promise<AnyDashboardCard[] | null> {
   try {
     if (adminToken) {
       const raw = await configGet('dashboards', layoutKey(tenantId, userId), adminToken, tenantId)
@@ -176,7 +178,7 @@ export function useTemplates(tenantId: string, adminToken: string): TemplateList
   const [rev, setRev]             = useState(0)
 
   useEffect(() => {
-    if (!tenantId || !adminToken) {
+    if (!tenantId) {
       setLoading(false)
       return
     }

@@ -108,6 +108,57 @@ def _meta(page: int, page_size: int, total: int, from_dt: str, to_dt: str) -> di
     }
 
 
+def _apply_agent_scope(
+    conditions: list[str],
+    supervised_agent_types: "list[str] | None",
+) -> bool:
+    """
+    Arc 9 — Mutates *conditions* in-place to add an agent_type_id IN (...) filter.
+
+    supervised_agent_types=None  → no-op (all agent types visible)
+    supervised_agent_types=[…]   → append AND agent_type_id IN ('a','b',…)
+    supervised_agent_types=[]    → caller has no agent type access → caller must return empty
+    """
+    if supervised_agent_types is None:
+        return True
+    if not supervised_agent_types:
+        return False
+    type_list = ", ".join(f"'{t}'" for t in supervised_agent_types)
+    conditions.append(f"agent_type_id IN ({type_list})")
+    return True
+
+
+def _agent_scope_session_join(
+    db: str,
+    tenant_id: str,
+    supervised_agent_types: "list[str] | None",
+) -> tuple[str, str]:
+    """
+    Arc 9 — Returns (join_sql, extra_where) for sessions queries.
+
+    Sessions don't have agent_type_id directly — scope is applied via a
+    LEFT JOIN on segments FINAL to find sessions that had at least one
+    segment from a supervised agent type.
+
+    Returns ("", "") when no filter is needed.
+    Returns (join_sql, "AND _scope.session_id IS NOT NULL") when filtering.
+    Returns ("", "AND 1=0") when supervised_agent_types=[] (no access).
+    """
+    if supervised_agent_types is None:
+        return "", ""
+    if not supervised_agent_types:
+        return "", "AND 1=0"
+    type_list = ", ".join(f"'{t}'" for t in supervised_agent_types)
+    join_sql = f"""
+        LEFT JOIN (
+            SELECT DISTINCT session_id
+            FROM {db}.segments FINAL
+            WHERE tenant_id = {{tenant_id:String}}
+              AND agent_type_id IN ({type_list})
+        ) AS _scope ON _scope.session_id = s.session_id"""
+    return join_sql, "AND _scope.session_id IS NOT NULL"
+
+
 def _apply_pool_scope(
     conditions: list[str],
     accessible_pools: "list[str] | None",
@@ -142,17 +193,18 @@ async def query_sessions_report(
     from_dt:   str | None = None,
     to_dt:     str | None = None,
     *,
-    channel:          str | None       = None,
-    outcome:          str | None       = None,
-    close_reason:     str | None       = None,
-    pool_id:          str | None       = None,
-    session_id:       str | None       = None,
-    agent_id:         str | None       = None,
-    insight_category: str | None       = None,
-    insight_tags:     list[str] | None = None,
-    accessible_pools: list[str] | None = None,
-    ani:              str | None       = None,
-    dnis:             str | None       = None,
+    channel:                str | None       = None,
+    outcome:                str | None       = None,
+    close_reason:           str | None       = None,
+    pool_id:                str | None       = None,
+    session_id:             str | None       = None,
+    agent_id:               str | None       = None,
+    insight_category:       str | None       = None,
+    insight_tags:           list[str] | None = None,
+    accessible_pools:       list[str] | None = None,
+    supervised_agent_types: list[str] | None = None,
+    ani:                    str | None       = None,
+    dnis:                   str | None       = None,
     page:      int = 1,
     page_size: int = 100,
 ) -> dict:
@@ -160,11 +212,14 @@ async def query_sessions_report(
     until = _ch_fmt(to_dt)   if to_dt   else _default_to()
     if accessible_pools is not None and not accessible_pools:
         return {"data": [], "meta": _meta(page, page_size, 0, since, until)}
+    if supervised_agent_types is not None and not supervised_agent_types:
+        return {"data": [], "meta": _meta(page, page_size, 0, since, until)}
     try:
         return await asyncio.to_thread(
             _fetch_sessions, client, database, tenant_id, since, until,
             channel, outcome, close_reason, pool_id, session_id,
-            agent_id, insight_category, insight_tags, accessible_pools, page, page_size,
+            agent_id, insight_category, insight_tags, accessible_pools,
+            supervised_agent_types, page, page_size,
             ani, dnis,
         )
     except Exception as exc:
@@ -179,6 +234,7 @@ def _fetch_sessions(
     session_id: str | None, agent_id: str | None,
     insight_category: str | None, insight_tags: list[str] | None,
     accessible_pools: list[str] | None,
+    supervised_agent_types: list[str] | None,
     page: int, page_size: int,
     ani: str | None = None, dnis: str | None = None,
 ) -> dict:
@@ -272,118 +328,129 @@ def _fetch_sessions(
         conditions.append("s.dnis LIKE {dnis_like:String}")
         params["dnis_like"] = f"%{dnis}%"
 
-    where = " AND ".join(conditions)
+    # Arc 9 — agent scope: sessions that had at least one segment from a supervised agent type
+    _agent_join, _agent_where = _agent_scope_session_join(db, tenant_id, supervised_agent_types)
+    if _agent_where:
+        where = f"{where} {_agent_where}"
+
     offset = (page - 1) * page_size
 
     total = _count(
         client,
-        f"SELECT count() FROM {db}.sessions AS s FINAL WHERE {where}",
+        f"SELECT count() FROM {db}.sessions AS s FINAL {_agent_join} WHERE {where}",
         params,
     )
 
-    # Use correlated subqueries against segments table to recover pool_id, outcome,
-    # and handle_time_ms which may be missing/empty in the sessions row when the
-    # contact_closed event didn't carry them (ReplacingMergeTree last-write-wins issue).
-    # Falls back to 0/null when segments table doesn't exist yet.
+    # ClickHouse 23.8 does NOT support correlated subqueries with outer-query aliases
+    # (e.g. "WHERE tenant_id = s.tenant_id") in the SELECT clause — it raises:
+    #   Code 47: Missing columns 's.session_id' 's.tenant_id'
+    #
+    # Fix: use pre-aggregated LEFT JOINs instead of correlated subqueries.
+    # Each JOIN is scoped to {tenant_id:String} so it remains efficient.
+    # handle_time_ms is a plain COALESCE over current-row columns — no subquery needed.
+    #
+    # Fallback strategy:
+    #   Tier 1: full JOINs + s.ani / s.dnis
+    #   Tier 2: full JOINs + NULL ani/dnis  (ANI/DNIS columns not yet migrated)
+    #   Tier 3: bare sessions query          (segments/agent_events tables absent)
+
+    # Arc 9: prepend agent scope JOIN (empty string when no restriction)
+    _joins = f"""{_agent_join}
+        -- channel recovery: any non-empty channel row for this session
+        LEFT JOIN (
+            SELECT session_id, anyIf(channel, channel != '') AS channel
+            FROM {db}.sessions
+            WHERE tenant_id = {{tenant_id:String}} AND channel != ''
+            GROUP BY session_id
+        ) AS _ch ON _ch.session_id = s.session_id
+        -- pool_id recovery: earliest primary-segment pool for this session
+        LEFT JOIN (
+            SELECT session_id, argMin(pool_id, started_at) AS pool_id
+            FROM {db}.segments FINAL
+            WHERE tenant_id = {{tenant_id:String}}
+              AND (parent_segment_id IS NULL OR parent_segment_id = '')
+              AND pool_id != ''
+            GROUP BY session_id
+        ) AS _pool ON _pool.session_id = s.session_id
+        -- outcome recovery: most-recent closed segment outcome
+        LEFT JOIN (
+            SELECT session_id, argMax(outcome, ended_at) AS outcome
+            FROM {db}.segments FINAL
+            WHERE tenant_id = {{tenant_id:String}}
+              AND outcome IS NOT NULL AND outcome != ''
+            GROUP BY session_id
+        ) AS _seg_out ON _seg_out.session_id = s.session_id
+        -- outcome fallback: most-recent agent_done outcome
+        LEFT JOIN (
+            SELECT session_id, argMax(outcome, timestamp) AS outcome
+            FROM {db}.agent_events FINAL
+            WHERE tenant_id = {{tenant_id:String}}
+              AND event_type = 'agent_done'
+              AND outcome IS NOT NULL AND outcome != ''
+            GROUP BY session_id
+        ) AS _ae_out ON _ae_out.session_id = s.session_id
+        -- segment count per session
+        LEFT JOIN (
+            SELECT session_id, count() AS cnt
+            FROM {db}.segments FINAL
+            WHERE tenant_id = {{tenant_id:String}}
+            GROUP BY session_id
+        ) AS _sc ON _sc.session_id = s.session_id"""
+
+    # Use __ANI_DNIS__ placeholder instead of str.format() to avoid conflicts
+    # with ClickHouse's own {param:Type} syntax inside _joins.
+    _rich_sql = f"""
+        SELECT
+            s.session_id,
+            s.tenant_id,
+            COALESCE(NULLIF(s.channel,  ''), _ch.channel)     AS channel,
+            COALESCE(NULLIF(s.pool_id,  ''), _pool.pool_id)   AS pool_id,
+            s.customer_id,
+            s.opened_at,
+            s.closed_at,
+            s.close_reason,
+            COALESCE(NULLIF(s.outcome, ''), _seg_out.outcome, _ae_out.outcome) AS outcome,
+            s.wait_time_ms,
+            COALESCE(
+                s.handle_time_ms,
+                if(s.closed_at IS NOT NULL AND s.opened_at IS NOT NULL,
+                   toInt64(dateDiff('millisecond', s.opened_at, s.closed_at)), NULL)
+            ) AS handle_time_ms,
+            __ANI_DNIS__,
+            COALESCE(_sc.cnt, 0) AS segment_count
+        FROM {db}.sessions AS s FINAL
+        {_joins}
+        WHERE {where}
+        ORDER BY s.opened_at DESC
+        LIMIT {page_size} OFFSET {offset}"""
+
     try:
-        result = client.query(f"""
-            SELECT
-                s.session_id,
-                s.tenant_id,
-                -- channel: parse_routed writes channel='' which overwrites parse_inbound's real
-                -- channel in ReplacingMergeTree. Recover it from any non-empty historical row.
-                COALESCE(
-                    NULLIF(s.channel, ''),
-                    (
-                        SELECT channel
-                        FROM {db}.sessions
-                        WHERE tenant_id = s.tenant_id
-                          AND session_id = s.session_id
-                          AND channel != ''
-                        LIMIT 1
-                    )
-                ) AS channel,
-                -- pool_id: prefer sessions row when non-empty; else take from primary segment
-                COALESCE(
-                    NULLIF(s.pool_id, ''),
-                    (
-                        SELECT pool_id
-                        FROM {db}.segments FINAL
-                        WHERE tenant_id = s.tenant_id
-                          AND session_id = s.session_id
-                          AND (parent_segment_id IS NULL OR parent_segment_id = '')
-                          AND pool_id != ''
-                        ORDER BY started_at ASC
-                        LIMIT 1
-                    )
-                ) AS pool_id,
-                s.customer_id,
-                s.opened_at,
-                s.closed_at,
-                s.close_reason,
-                -- outcome: prefer sessions row when set;
-                -- else take from most recent primary segment (participant_left event carries it);
-                -- else fall back to agent_events (agent_done event always has it).
-                -- contact_closed events do NOT carry outcome, so sessions.outcome is always NULL
-                -- without one of these two fallbacks.
-                COALESCE(
-                    NULLIF(s.outcome, ''),
-                    (
-                        SELECT outcome
-                        FROM {db}.segments FINAL
-                        WHERE tenant_id = s.tenant_id
-                          AND session_id = s.session_id
-                          AND outcome IS NOT NULL AND outcome != ''
-                        ORDER BY ended_at DESC
-                        LIMIT 1
-                    ),
-                    (
-                        SELECT outcome
-                        FROM {db}.agent_events FINAL
-                        WHERE tenant_id = s.tenant_id
-                          AND session_id = s.session_id
-                          AND event_type = 'agent_done'
-                          AND outcome IS NOT NULL AND outcome != ''
-                        ORDER BY timestamp DESC
-                        LIMIT 1
-                    )
-                ) AS outcome,
-                s.wait_time_ms,
-                -- handle_time_ms: prefer stored value; else compute from timestamps
-                COALESCE(
-                    s.handle_time_ms,
-                    if(
-                        s.closed_at IS NOT NULL AND s.opened_at IS NOT NULL,
-                        toInt64(dateDiff('millisecond', s.opened_at, s.closed_at)),
-                        NULL
-                    )
-                ) AS handle_time_ms,
-                s.ani,
-                s.dnis,
-                (
-                    SELECT count()
-                    FROM {db}.segments FINAL
-                    WHERE tenant_id = s.tenant_id AND session_id = s.session_id
-                ) AS segment_count
-            FROM {db}.sessions AS s FINAL
-            WHERE {where}
-            ORDER BY s.opened_at DESC
-            LIMIT {page_size} OFFSET {offset}
-        """, parameters=params)
+        # Tier 1: ANI/DNIS columns present
+        result = client.query(
+            _rich_sql.replace("__ANI_DNIS__", "s.ani, s.dnis"),
+            parameters=params,
+        )
     except Exception:
-        # Fallback: segments table or ANI/DNIS columns may not exist yet
-        result = client.query(f"""
-            SELECT
-                s.session_id, s.tenant_id, s.channel, s.pool_id, s.customer_id,
-                s.opened_at, s.closed_at, s.close_reason, s.outcome,
-                s.wait_time_ms, s.handle_time_ms,
-                NULL AS ani, NULL AS dnis,
-                0 AS segment_count
-            FROM {db}.sessions AS s FINAL
-            WHERE {where}
-            ORDER BY s.opened_at DESC
-            LIMIT {page_size} OFFSET {offset}
-        """, parameters=params)
+        try:
+            # Tier 2: ANI/DNIS columns not yet migrated
+            result = client.query(
+                _rich_sql.replace("__ANI_DNIS__", "NULL AS ani, NULL AS dnis"),
+                parameters=params,
+            )
+        except Exception:
+            # Tier 3: segments / agent_events tables absent — bare minimum
+            result = client.query(f"""
+                SELECT
+                    s.session_id, s.tenant_id, s.channel, s.pool_id, s.customer_id,
+                    s.opened_at, s.closed_at, s.close_reason, s.outcome,
+                    s.wait_time_ms, s.handle_time_ms,
+                    NULL AS ani, NULL AS dnis, 0 AS segment_count
+                FROM {db}.sessions AS s FINAL
+                {_agent_join}
+                WHERE {where}
+                ORDER BY s.opened_at DESC
+                LIMIT {page_size} OFFSET {offset}
+            """, parameters=params)
 
     return {"data": _rows_to_dicts(result), "meta": _meta(page, page_size, total, since, until)}
 
@@ -1033,12 +1100,13 @@ async def query_segments_report(
     from_dt:   str | None = None,
     to_dt:     str | None = None,
     *,
-    session_id:       str | None       = None,
-    pool_id:          str | None       = None,
-    agent_type_id:    str | None       = None,
-    role:             str | None       = None,
-    outcome:          str | None       = None,
-    accessible_pools: list[str] | None = None,
+    session_id:             str | None       = None,
+    pool_id:                str | None       = None,
+    agent_type_id:          str | None       = None,
+    role:                   str | None       = None,
+    outcome:                str | None       = None,
+    accessible_pools:       list[str] | None = None,
+    supervised_agent_types: list[str] | None = None,
     page:      int = 1,
     page_size: int = 100,
 ) -> dict:
@@ -1046,10 +1114,13 @@ async def query_segments_report(
     until = _ch_fmt(to_dt)   if to_dt   else _default_to()
     if accessible_pools is not None and not accessible_pools:
         return {"data": [], "meta": _meta(page, page_size, 0, since, until)}
+    if supervised_agent_types is not None and not supervised_agent_types:
+        return {"data": [], "meta": _meta(page, page_size, 0, since, until)}
     try:
         return await asyncio.to_thread(
             _fetch_segments, client, database, tenant_id, since, until,
-            session_id, pool_id, agent_type_id, role, outcome, accessible_pools, page, page_size,
+            session_id, pool_id, agent_type_id, role, outcome,
+            accessible_pools, supervised_agent_types, page, page_size,
         )
     except Exception as exc:
         logger.warning("query_segments_report failed tenant=%s: %s", tenant_id, exc)
@@ -1063,6 +1134,7 @@ def _fetch_segments(
     agent_type_id: str | None, role: str | None,
     outcome: str | None,
     accessible_pools: list[str] | None,
+    supervised_agent_types: list[str] | None,
     page: int, page_size: int,
 ) -> dict:
     conditions = [
@@ -1088,6 +1160,7 @@ def _fetch_segments(
         conditions.append("outcome = {outcome:String}")
         params["outcome"] = outcome
     _apply_pool_scope(conditions, accessible_pools)
+    _apply_agent_scope(conditions, supervised_agent_types)
 
     where  = " AND ".join(conditions)
     offset = (page - 1) * page_size
@@ -1126,10 +1199,11 @@ async def query_agent_performance_report(
     from_dt:   str | None = None,
     to_dt:     str | None = None,
     *,
-    pool_id:          str | None       = None,
-    agent_type_id:    str | None       = None,
-    role:             str | None       = None,
-    accessible_pools: list[str] | None = None,
+    pool_id:                str | None       = None,
+    agent_type_id:          str | None       = None,
+    role:                   str | None       = None,
+    accessible_pools:       list[str] | None = None,
+    supervised_agent_types: list[str] | None = None,
 ) -> dict:
     """
     Aggregate performance metrics per (agent_type_id, pool_id, role).
@@ -1150,11 +1224,13 @@ async def query_agent_performance_report(
     until = _ch_fmt(to_dt)   if to_dt   else _default_to()
     if accessible_pools is not None and not accessible_pools:
         return {"data": [], "meta": {"total": 0, "from_dt": since, "to_dt": until}}
+    if supervised_agent_types is not None and not supervised_agent_types:
+        return {"data": [], "meta": {"total": 0, "from_dt": since, "to_dt": until}}
     try:
         return await asyncio.to_thread(
             _fetch_agent_performance,
             client, database, tenant_id, since, until,
-            pool_id, agent_type_id, role, accessible_pools,
+            pool_id, agent_type_id, role, accessible_pools, supervised_agent_types,
         )
     except Exception as exc:
         logger.warning(
@@ -1172,7 +1248,8 @@ def _fetch_agent_performance(
     pool_id:         str | None,
     agent_type_id:   str | None,
     role:            str | None,
-    accessible_pools: list[str] | None = None,
+    accessible_pools:       list[str] | None = None,
+    supervised_agent_types: list[str] | None = None,
 ) -> dict:
     conditions = [
         "tenant_id = {tenant_id:String}",
@@ -1191,6 +1268,7 @@ def _fetch_agent_performance(
         conditions.append("role = {role:String}")
         params["role"] = role
     _apply_pool_scope(conditions, accessible_pools)
+    _apply_agent_scope(conditions, supervised_agent_types)
 
     where = " AND ".join(conditions)
 
@@ -1412,9 +1490,10 @@ async def query_agent_performance_daily(
     from_dt:   str | None = None,
     to_dt:     str | None = None,
     *,
-    pool_id:          str | None       = None,
-    agent_type_id:    str | None       = None,
-    accessible_pools: list[str] | None = None,
+    pool_id:                str | None       = None,
+    agent_type_id:          str | None       = None,
+    accessible_pools:       list[str] | None = None,
+    supervised_agent_types: list[str] | None = None,
 ) -> dict:
     """
     Returns daily pre-aggregated performance metrics from the mv_agent_performance_daily
@@ -1439,11 +1518,13 @@ async def query_agent_performance_daily(
 
     if accessible_pools is not None and not accessible_pools:
         return {"data": [], "meta": {"total": 0, "from_date": since_date, "to_date": until_date}}
+    if supervised_agent_types is not None and not supervised_agent_types:
+        return {"data": [], "meta": {"total": 0, "from_date": since_date, "to_date": until_date}}
     try:
         return await asyncio.to_thread(
             _fetch_agent_performance_daily,
             client, database, tenant_id, since_date, until_date,
-            pool_id, agent_type_id, accessible_pools,
+            pool_id, agent_type_id, accessible_pools, supervised_agent_types,
         )
     except Exception as exc:
         logger.warning("query_agent_performance_daily failed tenant=%s: %s", tenant_id, exc)
@@ -1458,7 +1539,8 @@ def _fetch_agent_performance_daily(
     until_date:      str,
     pool_id:         str | None,
     agent_type_id:   str | None,
-    accessible_pools: list[str] | None,
+    accessible_pools:       list[str] | None,
+    supervised_agent_types: list[str] | None = None,
 ) -> dict:
     conditions = [
         "tenant_id = {tenant_id:String}",
@@ -1474,6 +1556,7 @@ def _fetch_agent_performance_daily(
         conditions.append("agent_type_id = {agent_type_id:String}")
         params["agent_type_id"] = agent_type_id
     _apply_pool_scope(conditions, accessible_pools)
+    _apply_agent_scope(conditions, supervised_agent_types)
 
     where = " AND ".join(conditions)
 
@@ -1626,16 +1709,17 @@ def _fetch_session_complexity(
 # ─── Arc 8: agent pause availability ──────────────────────────────────────────
 
 async def query_agent_availability(
-    client:           Any,
-    database:         str,
-    tenant_id:        str,
-    from_dt:          str | None = None,
-    to_dt:            str | None = None,
-    pool_id:          str | None = None,
-    agent_type_id:    str | None = None,
-    accessible_pools: list[str] | None = None,
-    page:             int = 1,
-    page_size:        int = 100,
+    client:                 Any,
+    database:               str,
+    tenant_id:              str,
+    from_dt:                str | None = None,
+    to_dt:                  str | None = None,
+    pool_id:                str | None = None,
+    agent_type_id:          str | None = None,
+    accessible_pools:       list[str] | None = None,
+    supervised_agent_types: list[str] | None = None,
+    page:                   int = 1,
+    page_size:              int = 100,
 ) -> dict:
     """
     Aggregate pause intervals per (agent_type_id, pool_id, date).
@@ -1652,10 +1736,13 @@ async def query_agent_availability(
     try:
         if accessible_pools is not None and len(accessible_pools) == 0:
             return {"data": [], "meta": _meta(page, page_size, 0, since, until)}
+        if supervised_agent_types is not None and len(supervised_agent_types) == 0:
+            return {"data": [], "meta": _meta(page, page_size, 0, since, until)}
         return await asyncio.to_thread(
             _fetch_agent_availability,
             client, database, tenant_id,
-            since, until, pool_id, agent_type_id, accessible_pools,
+            since, until, pool_id, agent_type_id,
+            accessible_pools, supervised_agent_types,
             page, page_size,
         )
     except Exception as exc:
@@ -1664,16 +1751,17 @@ async def query_agent_availability(
 
 
 def _fetch_agent_availability(
-    client:           Any,
-    db:               str,
-    tenant_id:        str,
-    since:            str,
-    until:            str,
-    pool_id:          str | None,
-    agent_type_id:    str | None,
-    accessible_pools: list[str] | None,
-    page:             int,
-    page_size:        int,
+    client:                 Any,
+    db:                     str,
+    tenant_id:              str,
+    since:                  str,
+    until:                  str,
+    pool_id:                str | None,
+    agent_type_id:          str | None,
+    accessible_pools:       list[str] | None,
+    supervised_agent_types: list[str] | None,
+    page:                   int,
+    page_size:              int,
 ) -> dict:
     offset = (page - 1) * page_size
     conditions = [
@@ -1690,6 +1778,7 @@ def _fetch_agent_availability(
         conditions.append("agent_type_id = {agent_type_id:String}")
         params["agent_type_id"] = agent_type_id
     _apply_pool_scope(conditions, accessible_pools)
+    _apply_agent_scope(conditions, supervised_agent_types)
 
     where = " AND ".join(conditions)
 

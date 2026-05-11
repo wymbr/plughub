@@ -4,6 +4,7 @@ export interface PoolSnapshot {
   pool_id:       string
   tenant_id:     string
   available:     number
+  busy?:         number   // present from routing-engine v2+; absent in older snapshots
   queue_length:  number
   sla_target_ms: number
   channel_types: string[]
@@ -33,6 +34,7 @@ export interface PoolView {
   pool_id:         string
   tenant_id:       string
   available:       number
+  busy:            number
   queue_length:    number
   sla_target_ms:   number
   channel_types:   string[]

@@ -118,6 +118,17 @@ class Router:
         # Contact could not be allocated — queued
         queued_result = self._build_queued_result(event, now)
 
+        # Release active-count from the session's previous pool.
+        # Covers the escalation case: AI segment ends, session moves to a human
+        # pool's queue.  agent_done fires only on full session close, so without
+        # this call the origin pool's busy counter would stay elevated until the
+        # session eventually closes.
+        asyncio.create_task(
+            self._release_session_from_pool(
+                event.tenant_id, event.session_id, event.pool_id
+            )
+        )
+
         # Publish queue.position_updated so subscribers (UI, channel-gateway)
         # can inform the customer of their queue position and estimated wait time.
         if event.pool_id and pools:
@@ -186,6 +197,27 @@ class Router:
         except Exception as exc:
             logger.warning(
                 "Failed to write pool snapshot for pool %s: %s", pool_id, exc
+            )
+
+    async def _release_session_from_pool(
+        self,
+        tenant_id:   str,
+        session_id:  str,
+        new_pool_id: str | None = None,
+    ) -> None:
+        """
+        Fire-and-forget wrapper: releases the session's active-count from its
+        current pool when it moves to a queue without an agent being allocated.
+        See InstanceRegistry.release_session_from_pool for full semantics.
+        """
+        try:
+            await self._instances.release_session_from_pool(
+                tenant_id, session_id, new_pool_id
+            )
+        except Exception as exc:
+            logger.warning(
+                "Failed to release session %s from previous pool: %s",
+                session_id, exc,
             )
 
     async def _allocate(
@@ -258,7 +290,8 @@ class Router:
             )
 
         await self._instances.mark_busy(
-            event.tenant_id, best_pool.pool_id, best_instance.instance_id
+            event.tenant_id, best_pool.pool_id, best_instance.instance_id,
+            session_id=event.session_id,
         )
         if best_instance.execution_model == "stateful":
             await self._instances.set_session_affinity(
@@ -365,7 +398,8 @@ class Router:
                 if rscore < 0:
                     continue
                 await self._instances.mark_busy(
-                    event.tenant_id, pool.pool_id, inst.instance_id
+                    event.tenant_id, pool.pool_id, inst.instance_id,
+                    session_id=event.session_id,
                 )
                 return RoutingResult(
                     session_id=event.session_id, tenant_id=event.tenant_id,
