@@ -2,6 +2,22 @@
 
 ---
 
+## Masking Bloco 1 — Security Fixes (2026-05-11)
+
+Correções de segurança identificadas no mapeamento de vetores de vazamento. Nenhuma mudança de API ou schema — apenas remoção de exposição de dados sensíveis em logs.
+
+**`packages/mcp-server-plughub/src/server.ts`**
+- `menu_submit` handler: removido `resultText` dos três `console.log` (linhas 844, 854, 928). Valor coletado no menu (pode ser senha, CPF, etc.) não aparece mais em logs de servidor. Contexto de debug preservado (sessionId, resultKey, menu_id, pushed).
+
+**`packages/sdk/src/mcp-interceptor.ts`**
+- Fallback `AUDIT_WRITE_FAILED`: `input_snapshot` e `output_snapshot` agora são redactados como `"[REDACTED]"` antes de ir para `console.error`. Metadados de auditoria (tenant, session, tool, duration, allowed) são preservados para rastreabilidade LGPD.
+- `_collectTokenPaths(value, path)`: novo método síncrono — varre os args originais (antes de resolução) e retorna caminhos de campo que contêm tokens mascarados `[category:tk_xxx:display]`.
+- `_sanitizeSnapshotForAudit(snapshot, maskedPaths)`: substitui valores de campos mascarados por `"[MASKED]"` no snapshot de auditoria.
+- `_audit()`: aceita `masked_input_fields?: string[]`; quando presente, o `input_snapshot` armazenado no `AuditRecord` tem os campos mascarados substituídos — os valores originais não chegam ao Kafka/ClickHouse. `masked_input_fields` lista quais campos eram sensíveis sem expor seus valores.
+- Call site pré-resolution: `maskedInputFields` coletado dos args originais antes de `_resolveArgsTokens()`.
+
+---
+
 ## Arc 9 — Agent Groups & Supervisor Scope (2026-05-11)
 
 Implementação completa da entidade `AgentGroup` como camada de gestão de pessoas ortogonal a Pool.

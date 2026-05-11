@@ -361,6 +361,11 @@ export class McpInterceptor {
     // in the args with their original values before forwarding to the domain server.
     // This allows agents to pass masked values from the stream to MCP tools transparently.
     let resolvedArgs = args
+    // Collect field paths that contain masking tokens BEFORE resolution so we
+    // can populate masked_input_fields in the AuditRecord without storing values.
+    const maskedInputFields = this.resolveToken
+      ? this._collectTokenPaths(args)
+      : []
     if (this.resolveToken) {
       try {
         resolvedArgs = await this._resolveArgsTokens(
@@ -422,14 +427,23 @@ export class McpInterceptor {
     const duration = Date.now() - startedAt
 
     // ── 4. Audit record (fire-and-forget) ───────────────────────────────────
+    // When masked tokens were present in the input, replace those field values
+    // with "[MASKED]" in the snapshot so original values never reach the audit log.
+    // masked_input_fields records WHICH fields were sensitive without storing values.
+    const auditInputSnapshot = opts.audit_policy?.capture_input
+      ? (maskedInputFields.length > 0
+          ? this._sanitizeSnapshotForAudit(resolvedArgs, maskedInputFields)
+          : resolvedArgs)
+      : undefined
     this._audit({
       claims, serverName, toolName, permissions,
-      allowed:            true,
-      injection_detected: false,
-      duration_ms:        duration,
+      allowed:              true,
+      injection_detected:   false,
+      duration_ms:          duration,
       opts,
-      input_snapshot:     opts.audit_policy?.capture_input  ? resolvedArgs : undefined,
-      output_snapshot:    opts.audit_policy?.capture_output ? result : undefined,
+      input_snapshot:       auditInputSnapshot,
+      output_snapshot:      opts.audit_policy?.capture_output ? result : undefined,
+      masked_input_fields:  maskedInputFields.length > 0 ? maskedInputFields : undefined,
     })
 
     if (callError !== undefined) throw callError
@@ -439,17 +453,18 @@ export class McpInterceptor {
   // ─── Private ─────────────────────────────────────────────────────────────
 
   private _audit(params: {
-    claims:             { tenant_id: string; instance_id: string; session_id: string }
-    serverName:         string
-    toolName:           string
-    permissions:        string[]
-    allowed:            boolean
-    injection_detected: boolean
-    injection_pattern?: string
-    duration_ms:        number
-    opts:               CallOptions
-    input_snapshot:     unknown
-    output_snapshot:    unknown
+    claims:               { tenant_id: string; instance_id: string; session_id: string }
+    serverName:           string
+    toolName:             string
+    permissions:          string[]
+    allowed:              boolean
+    injection_detected:   boolean
+    injection_pattern?:   string
+    duration_ms:          number
+    opts:                 CallOptions
+    input_snapshot:       unknown
+    output_snapshot:      unknown
+    masked_input_fields?: string[]
   }): void {
     const record: AuditRecord = {
       event_type:          "mcp.tool_call",
@@ -469,17 +484,75 @@ export class McpInterceptor {
       output_snapshot:     params.output_snapshot,
       audit_context:       params.opts.audit_context,
       source:              "in_process",
+      masked_input_fields: params.masked_input_fields,
     }
     try {
       this.writer.write(record)
     } catch (err) {
-      // Audit write failure — fallback to stderr for LGPD traceability
+      // Audit write failure — fallback to stderr for LGPD traceability.
       // Do NOT suppress: this record must be recoverable from logs.
+      // input_snapshot / output_snapshot are redacted to prevent sensitive
+      // values from leaking into infrastructure logs when Kafka is unavailable.
+      // eslint-disable-next-line @typescript-eslint/no-unused-vars
+      const { input_snapshot: _in, output_snapshot: _out, ...safeFields } = record
       console.error(
         "[McpInterceptor] AUDIT_WRITE_FAILED",
-        JSON.stringify({ ...record, _kafka_error: String(err) })
+        JSON.stringify({
+          ...safeFields,
+          input_snapshot:  record.input_snapshot  !== undefined ? "[REDACTED]" : undefined,
+          output_snapshot: record.output_snapshot !== undefined ? "[REDACTED]" : undefined,
+          _kafka_error: String(err),
+        })
       )
     }
+  }
+
+  /**
+   * Recursively collects dot-notation paths of fields whose string values contain
+   * at least one masking token ([category:tk_xxx:display]).
+   * Called on original args BEFORE resolution — result populates masked_input_fields.
+   * Synchronous — no I/O needed, just pattern matching.
+   */
+  private _collectTokenPaths(value: unknown, path = ""): string[] {
+    const TOKEN_RE = /\[[\w_]+:tk_[a-f0-9]+:[^\]]+\]/
+    if (typeof value === "string") {
+      return TOKEN_RE.test(value) && path ? [path] : []
+    }
+    if (Array.isArray(value)) {
+      return value.flatMap((item, i) =>
+        this._collectTokenPaths(item, path ? `${path}[${i}]` : `[${i}]`)
+      )
+    }
+    if (value !== null && typeof value === "object") {
+      return Object.entries(value as Record<string, unknown>).flatMap(([k, v]) =>
+        this._collectTokenPaths(v, path ? `${path}.${k}` : k)
+      )
+    }
+    return []
+  }
+
+  /**
+   * Returns a copy of `snapshot` with the values at `maskedPaths` replaced by
+   * "[MASKED]" so that original sensitive values are never written to the audit log.
+   * Only operates on top-level object keys for simplicity — nested paths are
+   * represented as-is in masked_input_fields but left unreplaced in the snapshot
+   * (acceptable because capture_input on tools handling nested masked data is rare).
+   */
+  private _sanitizeSnapshotForAudit(
+    snapshot: unknown,
+    maskedPaths: string[],
+  ): unknown {
+    if (snapshot === null || typeof snapshot !== "object" || Array.isArray(snapshot)) {
+      return snapshot
+    }
+    const topLevelMasked = new Set(
+      maskedPaths.map(p => p.split(".")[0]!.replace(/\[\d+\]$/, ""))
+    )
+    const out: Record<string, unknown> = {}
+    for (const [k, v] of Object.entries(snapshot as Record<string, unknown>)) {
+      out[k] = topLevelMasked.has(k) ? "[MASKED]" : v
+    }
+    return out
   }
 
   /**

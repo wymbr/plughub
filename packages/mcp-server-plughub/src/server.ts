@@ -841,7 +841,7 @@ export async function startServer(config: ServerConfig): Promise<void> {
                 const resultKey = agentKey !== "_default_"
                   ? `menu:result:${sessionId}:${agentKey}`
                   : `menu:result:${sessionId}`
-                console.log(`[menu_submit] LPUSH ${resultKey} = "${resultText}" (agents_only match)`)
+                console.log(`[menu_submit] LPUSH ${resultKey} [value] (agents_only match)`)
                 await redis.lpush(resultKey, resultText)
                 pushed = true
                 break
@@ -851,7 +851,7 @@ export async function startServer(config: ServerConfig): Promise<void> {
                 const resultKey = agentKey !== "_default_"
                   ? `menu:result:${sessionId}:${agentKey}`
                   : `menu:result:${sessionId}`
-                console.log(`[menu_submit] LPUSH ${resultKey} = "${resultText}" (visibility includes ${agentPid})`)
+                console.log(`[menu_submit] LPUSH ${resultKey} [value] (visibility includes ${agentPid})`)
                 await redis.lpush(resultKey, resultText)
                 pushed = true
                 break
@@ -925,7 +925,7 @@ export async function startServer(config: ServerConfig): Promise<void> {
         )
       } catch { /* non-fatal */ }
 
-      console.log(`[menu_submit] Done. pushed=${pushed} menu_id=${menu_id} result="${resultText}"`)
+      console.log(`[menu_submit] Done. pushed=${pushed} menu_id=${menu_id}`)
       res.json({ ok: true, event_id: eventId, pushed })
     } catch (err) {
       console.error("[menu_submit] Fatal error:", err)
