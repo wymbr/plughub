@@ -1,22 +1,26 @@
 /**
  * SkillFlowsPage.tsx
  * Monaco-based YAML editor for SkillFlow definitions.
- * Migrated from packages/operator-console/src/components/SkillFlowEditor.tsx
  *
  * Layout:
  *   ┌──────────────────────────────────────────────────────┐
  *   │  Page header (title + keyboard hint)                 │
  *   ├──────────────┬───────────────────────────────────────┤
- *   │  Skill list  │  Monaco YAML editor                   │
+ *   │  Skill tree  │  Monaco YAML editor                   │
  *   │  search      │                                       │
- *   │  search      │  ─────────────────────────────────    │
- *   │  rows…       │  Status bar                           │
+ *   │  ▾ Agentes   │  ─────────────────────────────────    │
+ *   │    ▾ pasta   │  Status bar                           │
+ *   │      skill   │                                       │
+ *   │  ▾ Workflows │                                       │
  *   └──────────────┴───────────────────────────────────────┘
  *
- * Skills are stored as JSON in the Agent Registry API and displayed as YAML.
- * On save, the YAML is parsed back to JSON and PUT to /v1/skills/:id.
+ * Grouping rules:
+ *   - classification.type === 'orchestrator'  → Workflows group
+ *   - everything else                         → Agentes group
+ *   - skill YAML field `folder: "path/sub"`   → tree organisation (view-only, not physical)
+ *   - max 2 folder levels; search collapses tree to flat list
  */
-import React, { useCallback, useEffect, useRef, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import Editor from '@monaco-editor/react'
 import * as yaml from 'js-yaml'
 import { useAuth } from '@/auth/useAuth'
@@ -30,6 +34,9 @@ skill_id: skill_novo_v1
 name: "New Skill"
 version: "1.0"
 description: "Describe what this skill does."
+
+# Optional: visual grouping in the editor sidebar (not a physical path)
+# folder: "project/subfolder"
 
 classification:
   type: horizontal       # vertical | horizontal | orchestrator
@@ -51,10 +58,31 @@ knowledge_domains: []
 #       outcome: resolved
 `
 
+// ── Types ─────────────────────────────────────────────────────────────────────
+
+type ClassificationAware = Skill & {
+  classification?: { type?: string; domain?: string }
+  folder?:         string
+}
+
+type FolderNode = {
+  path:     string                // full path, e.g. "clientes/retencao"
+  label:    string                // last segment
+  skills:   ClassificationAware[]
+  children: FolderNode[]
+}
+
+type RootGroup = {
+  key:     'agents' | 'workflows'
+  label:   string
+  folders: FolderNode[]
+  unfiled: ClassificationAware[]  // skills without a folder field
+  total:   number
+}
+
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
 function skillToYaml(obj: Record<string, unknown>): string {
-  // Strip server-added fields before displaying
   const { tenant_id, created_at, updated_at, created_by, status, ...rest } = obj
   void tenant_id; void created_at; void updated_at; void created_by; void status
   try {
@@ -93,6 +121,66 @@ async function apiFetchRaw(url: string, init?: RequestInit): Promise<Record<stri
     throw new Error(body.detail ?? body.error ?? `HTTP ${res.status}`)
   }
   return res.json() as Promise<Record<string, unknown>>
+}
+
+// ── Folder tree builder ───────────────────────────────────────────────────────
+
+function buildFolderTree(allSkills: ClassificationAware[]): RootGroup[] {
+  const agents    = allSkills.filter(s => s.classification?.type !== 'orchestrator')
+  const workflows = allSkills.filter(s => s.classification?.type === 'orchestrator')
+
+  const groups: RootGroup[] = []
+
+  for (const [key, label, list] of [
+    ['agents',    'Agentes',   agents]    as const,
+    ['workflows', 'Workflows', workflows] as const,
+  ]) {
+    if (list.length === 0) continue
+
+    const folderMap = new Map<string, ClassificationAware[]>()
+    const unfiled: ClassificationAware[] = []
+
+    for (const skill of list) {
+      const raw    = skill.folder
+      const folder = raw?.trim().replace(/^\/+|\/+$/g, '')
+      if (!folder) { unfiled.push(skill); continue }
+      if (!folderMap.has(folder)) folderMap.set(folder, [])
+      folderMap.get(folder)!.push(skill)
+    }
+
+    // Build two-level tree from folder paths
+    const rootMap = new Map<string, FolderNode>()
+    for (const [path, skills] of folderMap) {
+      const parts = path.split('/').slice(0, 2)
+      const root  = parts[0]
+
+      if (!rootMap.has(root)) {
+        rootMap.set(root, { path: root, label: root, skills: [], children: [] })
+      }
+      const rootNode = rootMap.get(root)!
+
+      if (parts.length === 1) {
+        rootNode.skills.push(...skills)
+      } else {
+        const subPath = `${root}/${parts[1]}`
+        let sub = rootNode.children.find(c => c.path === subPath)
+        if (!sub) {
+          sub = { path: subPath, label: parts[1], skills: [], children: [] }
+          rootNode.children.push(sub)
+        }
+        sub.skills.push(...skills)
+      }
+    }
+
+    const folders = Array.from(rootMap.values()).sort((a, b) => a.label.localeCompare(b.label))
+    groups.push({ key, label, folders, unfiled, total: list.length })
+  }
+
+  return groups
+}
+
+function folderTotal(node: FolderNode): number {
+  return node.skills.length + node.children.reduce((sum, c) => sum + folderTotal(c), 0)
 }
 
 // ── Status bar ───────────────────────────────────────────────────────────────
@@ -137,17 +225,14 @@ function StatusBar({ kind, message }: { kind: StatusKind; message: string }) {
 
 // ── Skill list item ───────────────────────────────────────────────────────────
 
-type ClassificationAware = Skill & {
-  classification?: { type?: string; domain?: string }
-}
-
 function SkillListItem({
-  skill, selected, modified, onClick,
+  skill, selected, modified, indent = 12, onClick,
 }: {
-  skill: ClassificationAware
+  skill:    ClassificationAware
   selected: boolean
   modified: boolean
-  onClick: () => void
+  indent?:  number
+  onClick:  () => void
 }) {
   const typeColor = skill.classification?.type === 'orchestrator'
     ? 'text-violet-400'
@@ -158,12 +243,13 @@ function SkillListItem({
   return (
     <div
       onClick={onClick}
-      className={`cursor-pointer border-b border-gray-800 px-3 py-2.5 transition-colors hover:bg-gray-800/60 ${
+      style={{ paddingLeft: `${indent}px` }}
+      className={`cursor-pointer border-b border-gray-800 pr-3 py-2.5 transition-colors hover:bg-gray-800/60 ${
         selected ? 'bg-gray-800 border-l-2 border-l-violet-500' : 'border-l-2 border-l-transparent'
       }`}
     >
       <div className="flex items-center gap-1.5 mb-0.5">
-        {modified && <span className="text-yellow-400 text-xs font-bold">●</span>}
+        {modified && <span className="text-yellow-400 text-xs font-bold shrink-0">●</span>}
         <span className="text-xs font-semibold text-gray-100 font-mono truncate">
           {skill.skill_id}
         </span>
@@ -175,6 +261,124 @@ function SkillListItem({
           <span className="text-xs text-gray-500">{skill.status}</span>
         )}
       </div>
+    </div>
+  )
+}
+
+// ── Folder node ───────────────────────────────────────────────────────────────
+
+function FolderItem({
+  node, depth, selectedId, isModified, expandedFolders, onToggle, onSelect,
+}: {
+  node:            FolderNode
+  depth:           number
+  selectedId:      string | null
+  isModified:      boolean
+  expandedFolders: Set<string>
+  onToggle:        (path: string) => void
+  onSelect:        (skillId: string) => void
+}) {
+  const isOpen      = expandedFolders.has(node.path)
+  const baseIndent  = 12 + depth * 14
+  const childIndent = baseIndent + 14
+
+  return (
+    <div>
+      <div
+        onClick={() => onToggle(node.path)}
+        style={{ paddingLeft: `${baseIndent}px` }}
+        className="flex items-center gap-1.5 pr-3 py-1.5 cursor-pointer hover:bg-gray-800/40 border-b border-gray-800/30"
+      >
+        <span className="text-gray-600 text-[10px] w-3 shrink-0">{isOpen ? '▾' : '▸'}</span>
+        <span className="text-xs text-gray-400 font-medium truncate">{node.label}</span>
+        <span className="ml-auto text-[10px] text-gray-600">{folderTotal(node)}</span>
+      </div>
+
+      {isOpen && (
+        <>
+          {node.children.map(child => (
+            <FolderItem
+              key={child.path}
+              node={child}
+              depth={depth + 1}
+              selectedId={selectedId}
+              isModified={isModified}
+              expandedFolders={expandedFolders}
+              onToggle={onToggle}
+              onSelect={onSelect}
+            />
+          ))}
+          {node.skills.map(s => (
+            <SkillListItem
+              key={s.skill_id}
+              skill={s}
+              selected={selectedId === s.skill_id}
+              modified={selectedId === s.skill_id && isModified}
+              indent={childIndent}
+              onClick={() => onSelect(s.skill_id)}
+            />
+          ))}
+        </>
+      )}
+    </div>
+  )
+}
+
+// ── Root group section ────────────────────────────────────────────────────────
+
+function RootGroupSection({
+  group, selectedId, isModified, expandedFolders, isExpanded,
+  onToggleRoot, onToggleFolder, onSelect,
+}: {
+  group:           RootGroup
+  selectedId:      string | null
+  isModified:      boolean
+  expandedFolders: Set<string>
+  isExpanded:      boolean
+  onToggleRoot:    (key: string) => void
+  onToggleFolder:  (path: string) => void
+  onSelect:        (skillId: string) => void
+}) {
+  return (
+    <div>
+      {/* Root header */}
+      <div
+        onClick={() => onToggleRoot(group.key)}
+        className="flex items-center gap-1.5 px-3 py-2 cursor-pointer hover:bg-gray-800/40 border-b border-gray-800 sticky top-0 bg-gray-900 z-10"
+      >
+        <span className="text-gray-500 text-[10px] w-3 shrink-0">{isExpanded ? '▾' : '▸'}</span>
+        <span className="text-[11px] font-bold text-gray-300 uppercase tracking-wider">
+          {group.label}
+        </span>
+        <span className="ml-auto text-[10px] text-gray-600">{group.total}</span>
+      </div>
+
+      {isExpanded && (
+        <>
+          {group.folders.map(folder => (
+            <FolderItem
+              key={folder.path}
+              node={folder}
+              depth={0}
+              selectedId={selectedId}
+              isModified={isModified}
+              expandedFolders={expandedFolders}
+              onToggle={onToggleFolder}
+              onSelect={onSelect}
+            />
+          ))}
+          {group.unfiled.map(s => (
+            <SkillListItem
+              key={s.skill_id}
+              skill={s}
+              selected={selectedId === s.skill_id}
+              modified={selectedId === s.skill_id && isModified}
+              indent={16}
+              onClick={() => onSelect(s.skill_id)}
+            />
+          ))}
+        </>
+      )}
     </div>
   )
 }
@@ -207,14 +411,39 @@ const SkillFlowsPage: React.FC = () => {
     return () => clearInterval(id)
   }, [refreshList])
 
+  // ── Folder tree state ──────────────────────────────────────────────────────
+  const [expandedRoots,   setExpandedRoots]   = useState<Set<string>>(new Set(['agents', 'workflows']))
+  const [expandedFolders, setExpandedFolders] = useState<Set<string>>(new Set())
+
+  const folderTree = useMemo(
+    () => buildFolderTree(skills as ClassificationAware[]),
+    [skills],
+  )
+
+  function toggleRoot(key: string) {
+    setExpandedRoots(prev => {
+      const next = new Set(prev)
+      if (next.has(key)) next.delete(key); else next.add(key)
+      return next
+    })
+  }
+
+  function toggleFolder(path: string) {
+    setExpandedFolders(prev => {
+      const next = new Set(prev)
+      if (next.has(path)) next.delete(path); else next.add(path)
+      return next
+    })
+  }
+
   // ── Editor state ───────────────────────────────────────────────────────────
-  const [selectedId,       setSelectedId]       = useState<string | null>(null)
-  const [editorValue,      setEditorValue]      = useState(BLANK_TEMPLATE)
-  const [savedValue,       setSavedValue]       = useState(BLANK_TEMPLATE)
-  const [statusKind,       setStatusKind]       = useState<StatusKind>('idle')
-  const [statusMsg,        setStatusMsg]        = useState('Selecione uma skill ou crie uma nova')
-  const [search,    setSearch]    = useState('')
-  const [confirmDel, setConfirmDel] = useState(false)
+  const [selectedId,  setSelectedId]  = useState<string | null>(null)
+  const [editorValue, setEditorValue] = useState(BLANK_TEMPLATE)
+  const [savedValue,  setSavedValue]  = useState(BLANK_TEMPLATE)
+  const [statusKind,  setStatusKind]  = useState<StatusKind>('idle')
+  const [statusMsg,   setStatusMsg]   = useState('Selecione uma skill ou crie uma nova')
+  const [search,      setSearch]      = useState('')
+  const [confirmDel,  setConfirmDel]  = useState(false)
 
   const isModified = editorValue !== savedValue
   const editorRef  = useRef<unknown>(null)
@@ -253,8 +482,8 @@ const SkillFlowsPage: React.FC = () => {
       setStatusMsg(`Erro de YAML: ${parseResult.error}`)
       return
     }
-    const payload = parseResult.data
-    const skillId = (payload.skill_id as string | undefined) || selectedId
+    const payload  = parseResult.data
+    const skillId  = (payload.skill_id as string | undefined) || selectedId
     if (!skillId) {
       setStatusKind('error')
       setStatusMsg('skill_id é obrigatório no YAML.')
@@ -269,7 +498,6 @@ const SkillFlowsPage: React.FC = () => {
         headers: operatorHeaders(tenantId),
         body:    JSON.stringify(payload),
       })
-
       setSavedValue(editorValue)
       setSelectedId(skillId)
       setStatusKind('saved')
@@ -339,7 +567,7 @@ const SkillFlowsPage: React.FC = () => {
     return () => window.removeEventListener('keydown', onKeyDown)
   })
 
-  // ── Filtered list ──────────────────────────────────────────────────────────
+  // ── Flat filtered list (for search mode) ──────────────────────────────────
   const filteredSkills = skills.filter(s =>
     !search ||
     s.skill_id.toLowerCase().includes(search.toLowerCase()) ||
@@ -363,7 +591,6 @@ const SkillFlowsPage: React.FC = () => {
 
         <div className="flex-1" />
 
-        {/* Action buttons */}
         <div className="flex items-center gap-2 pr-2">
           <span className="text-xs text-gray-600 hidden lg:block">⌘S para salvar</span>
 
@@ -416,8 +643,9 @@ const SkillFlowsPage: React.FC = () => {
       {/* ── Body ──────────────────────────────────────────────────────────── */}
       <div className="flex flex-1 overflow-hidden">
 
-        {/* ── Left sidebar: skill list ───────────────────────────────────── */}
-        <div className="w-60 shrink-0 bg-gray-900 border-r border-gray-800 flex flex-col overflow-hidden">
+        {/* ── Left sidebar: skill tree ───────────────────────────────────── */}
+        <div className="w-64 shrink-0 bg-gray-900 border-r border-gray-800 flex flex-col overflow-hidden">
+
           {/* Search */}
           <div className="px-3 py-2.5 border-b border-gray-800 shrink-0">
             <input
@@ -428,27 +656,56 @@ const SkillFlowsPage: React.FC = () => {
             />
           </div>
 
-          {/* Skill list */}
+          {/* Tree or flat list */}
           <div className="flex-1 overflow-y-auto">
-            {listLoading && filteredSkills.length === 0 && (
+            {listLoading && skills.length === 0 && (
               <div className="flex justify-center py-8">
                 <Spinner />
               </div>
             )}
-            {!listLoading && filteredSkills.length === 0 && (
-              <p className="text-center text-xs text-gray-500 py-6">
-                {search ? 'Nenhum resultado' : 'Nenhuma skill no registry'}
-              </p>
+
+            {/* ── Search mode: flat list ─────────────────────────────────── */}
+            {search && (
+              <>
+                {filteredSkills.length === 0 && (
+                  <p className="text-center text-xs text-gray-500 py-6">Nenhum resultado</p>
+                )}
+                {filteredSkills.map(s => (
+                  <SkillListItem
+                    key={s.skill_id}
+                    skill={s as ClassificationAware}
+                    selected={selectedId === s.skill_id}
+                    modified={selectedId === s.skill_id && isModified}
+                    indent={12}
+                    onClick={() => selectSkill(s.skill_id)}
+                  />
+                ))}
+              </>
             )}
-            {filteredSkills.map(s => (
-              <SkillListItem
-                key={s.skill_id}
-                skill={s as ClassificationAware}
-                selected={selectedId === s.skill_id}
-                modified={selectedId === s.skill_id && isModified}
-                onClick={() => selectSkill(s.skill_id)}
-              />
-            ))}
+
+            {/* ── Browse mode: folder tree ───────────────────────────────── */}
+            {!search && (
+              <>
+                {!listLoading && folderTree.length === 0 && (
+                  <p className="text-center text-xs text-gray-500 py-6">
+                    Nenhuma skill no registry
+                  </p>
+                )}
+                {folderTree.map(group => (
+                  <RootGroupSection
+                    key={group.key}
+                    group={group}
+                    selectedId={selectedId}
+                    isModified={isModified}
+                    expandedFolders={expandedFolders}
+                    isExpanded={expandedRoots.has(group.key)}
+                    onToggleRoot={toggleRoot}
+                    onToggleFolder={toggleFolder}
+                    onSelect={selectSkill}
+                  />
+                ))}
+              </>
+            )}
           </div>
 
           {/* Footer: count */}
@@ -466,7 +723,7 @@ const SkillFlowsPage: React.FC = () => {
             <span>⌘S para salvar</span>
             <span>·</span>
             <span className="hidden md:block">
-              Campos: skill_id · name · version · description · classification · tools · flow
+              Campos: skill_id · name · version · classification · folder · tools · flow
             </span>
           </div>
 
@@ -481,16 +738,16 @@ const SkillFlowsPage: React.FC = () => {
               onChange={handleEditorChange}
               onMount={editor => { editorRef.current = editor }}
               options={{
-                fontSize:             13,
-                lineNumbers:          'on',
-                minimap:              { enabled: false },
-                scrollBeyondLastLine: false,
-                wordWrap:             'on',
-                tabSize:              2,
-                insertSpaces:         true,
-                renderWhitespace:     'boundary',
+                fontSize:                13,
+                lineNumbers:             'on',
+                minimap:                 { enabled: false },
+                scrollBeyondLastLine:    false,
+                wordWrap:                'on',
+                tabSize:                 2,
+                insertSpaces:            true,
+                renderWhitespace:        'boundary',
                 bracketPairColorization: { enabled: true },
-                padding:              { top: 12 },
+                padding:                 { top: 12 },
                 fontFamily: "'JetBrains Mono', 'Fira Code', Consolas, monospace",
               }}
             />
