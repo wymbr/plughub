@@ -20,6 +20,9 @@ RUN printf 'server {\n\
     root /usr/share/nginx/html;\n\
     index index.html;\n\
 \n\
+    # Docker internal DNS resolver — prevents stale upstream IPs after container restarts\n\
+    resolver 127.0.0.11 valid=10s ipv6=off;\n\
+\n\
     # auth-api (Arc 7a)\n\
     location ~ ^/auth(/|$) {\n\
         proxy_pass         http://auth-api:3200;\n\

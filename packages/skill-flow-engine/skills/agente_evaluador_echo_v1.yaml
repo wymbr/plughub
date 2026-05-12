@@ -1,0 +1,115 @@
+# agente_evaluador_echo_v1.yaml
+#
+# Avaliador de teste — espelho de conversa em tempo real via receive step.
+#
+# Propósito:
+#   Validar o mecanismo receive → notify → receive (cyclic DAG).
+#   Para cada mensagem recebida de primary ou customer, ecoa o conteúdo
+#   como nota interna agents_only. Permite confirmar que:
+#     - receive:waiting/{sessionId} HASH está sendo populado
+#     - orchestrator-bridge está fazendo LPUSH em receive:result/{sid}/{iid}
+#     - echo suppression funciona (mensagens do próprio agente não voltam)
+#     - inviter_participant_id está disponível no ContextStore
+#
+# Ativação:
+#   Via pool hook on_human_start do pool retencao_humano.
+#   O agente entra como specialist/evaluator assim que o agente humano
+#   ingressa na sessão — antes de qualquer interação.
+#
+# Fluxo:
+#   anunciar → aguardar_mensagem ⇄ ecoar_mensagem  (ciclo)
+#                ↓ timeout / disconnect / max_iterations
+#              encerrar
+#
+# Invariantes:
+#   - Nunca envia mensagem ao cliente — toda visibility é agents_only
+#   - Ciclo limitado a 100 iterações (max_iterations) para evitar loop eterno
+#   - Timeout de 10 min sem mensagem encerra graciosamente
+#   - on_failure avança — nunca bloqueia o encerramento da sessão
+
+id: skill_evaluador_echo_v1
+name: "Evaluador Echo v1 — espelho de conversa em tempo real"
+version: "1.0"
+description: |
+  Avaliador de teste que escuta a conversa em tempo real via receive step
+  e ecoa cada mensagem recebida como nota agents_only.
+  Serve para validar o mecanismo receive → notify → receive (cyclic DAG).
+classification:
+  type: orchestrator
+  domain: quality
+
+entry: anunciar
+
+steps:
+
+  # ── Anunciar presença ─────────────────────────────────────────────────────
+  # Sinaliza ao agente humano que o evaluador echo está ativo.
+  # Visibility agents_only — o cliente não vê.
+  - id: anunciar
+    type: notify
+    message: "👁️ [Echo Evaluator] Ativo — espelhando mensagens de primary e customer (agents_only)."
+    visibility: agents_only
+    on_success: aguardar_mensagem
+    on_failure: encerrar
+
+  # ── Aguardar próxima mensagem ─────────────────────────────────────────────
+  # Suspende passivamente aguardando qualquer mensagem de primary ou customer.
+  # Não envia nenhum prompt ao canal — apenas escuta.
+  #
+  # notify (opcional): sinaliza ao inviter que o receive está ativo.
+  # Útil para confirmar que o receive registrou seu filtro no HASH receive:waiting.
+  #
+  # filter:
+  #   author_role: [primary, customer] — escuta agente humano e cliente
+  #   event_types: [message_sent]      — apenas mensagens normais (não eventos internos)
+  #
+  # max_iterations: 100 turnos — suficiente para qualquer sessão real de teste
+  # timeout_s: 600  — 10 min sem mensagem → encerra graciosamente
+  - id: aguardar_mensagem
+    type: receive
+    notify:
+      message: "👁️ [Echo] aguardando próxima mensagem..."
+      visibility: agents_only
+    filter:
+      author_role: [primary, customer]
+      event_types: [message_sent]
+    timeout_s: 600
+    max_iterations: 100
+    output_as: evento_recebido
+    on_message:        ecoar_mensagem
+    on_timeout:        encerrar
+    on_disconnect:     encerrar
+    on_max_iterations: encerrar
+    on_failure:        encerrar
+
+  # ── Ecoar mensagem recebida ───────────────────────────────────────────────
+  # Repete a mensagem como nota interna agents_only.
+  # Interpola campos do ReceivedEventPayload armazenado em pipeline_state.
+  #
+  # ReceivedEventPayload (output do receive step):
+  #   { event_type, author_id, author_role, content, received_at }
+  #
+  # Visibility alternativa (mais targeted — apenas o inviter vê):
+  #   visibility:
+  #     - "@ctx.segment.inviter_participant_id"
+  #
+  # Para o teste básico usamos agents_only para que qualquer agente veja o eco.
+  - id: ecoar_mensagem
+    type: notify
+    message: "🔁 [{{$.pipeline_state.evento_recebido.author_role}}] {{$.pipeline_state.evento_recebido.content}}"
+    visibility: agents_only
+    on_success: aguardar_mensagem    # ← back-edge: forma o ciclo declarativo
+    on_failure: aguardar_mensagem    # falha no notify não quebra o ciclo
+
+  # ── Encerramento ──────────────────────────────────────────────────────────
+  # Timeout / disconnect / max_iterations / failure → encerra graciosamente.
+  - id: encerrar
+    type: notify
+    message: "👁️ [Echo Evaluator] Encerrando — sessão finalizada ou limite atingido."
+    visibility: agents_only
+    on_success: finalizar
+    on_failure: finalizar
+
+  - id: finalizar
+    type: complete
+    outcome: resolved

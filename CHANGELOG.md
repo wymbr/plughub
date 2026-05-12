@@ -2,6 +2,45 @@
 
 ---
 
+## Receive Step — Full Implementation + Bug Fixes (2026-05-12)
+
+### `packages/skill-flow-engine/src/steps/receive.ts`
+- **Sentinel clearing fix**: ao retornar com sucesso do BLPOP, limpa todas as chaves `*:__notified__` de `ctx.state.results` antes de retornar o payload. Sem essa limpeza, em flows cíclicos (receive → notify → receive) o sentinel `ecoar_mensagem:__notified__` = `"completed"` permanecia após a primeira iteração e bloqueava silenciosamente todas as execuções subsequentes do `notify`.
+- **Activity flag (CrashDetector)**: seta `receive:active:{tenant}:{session}:{instance}` com TTL 30s e renova via `setInterval(15s)` durante o BLPOP — evita re-enfileiramento falso por expiração de heartbeat.
+- **Lock renewal**: chama `ctx.renewLock(timeoutSec + 60)` antes do BLPOP; aborta graciosamente se o lock foi assumido por outra instância (crash recovery).
+- **Inline notify (pre-block)**: envia `step.notify.message` com `visibility: agents_only` (padrão) antes de registrar no HASH e bloquear — sinaliza prontidão ao agente convidante.
+- **Ciclos declarativos**: contador `_receive_iterations_{stepId}` em `pipeline_state.results`; ao atingir `max_iterations` zera o contador e retorna `on_max_iterations`.
+- **BLPOP duplo**: monitora `receive:result:{sid}:{iid}` (evento) e `session:closed:{sid}` (sessão fechada) simultaneamente; retorna `on_disconnect` quando a sessão fecha durante espera.
+
+### `packages/orchestrator-bridge/src/plughub_orchestrator_bridge/main.py`
+- **Fix double re-arm para mensagens de customer**: em `process_contact_event`, o branch `if event_type == "message_sent"` adicionou um guard `if _ms_author_role == "customer": return` — mensagens de customer já são roteadas para `receive:waiting` por `process_inbound`; sem o guard, o evento analytics publicado ao Kafka (`conversations.events`) era consumido e roteava novamente, causando dois `BLPOP` wakes por mensagem de customer e dois bubbles `[Echo] aguardando...`.
+- **`_route_to_receive_waiting`**: função helper que roteia eventos stream para instâncias bloqueadas em receive; filtra por `event_types`, `author_role`, `visibility`; echo suppression via `instance_id_of_author`; LPUSH em `receive:result:{sid}:{iid}`.
+- **Bridge contract**: em cada `message_sent` de agente (publicado por `notification_send` ou `message_send` via `conversations.events` Kafka), o bridge roteia para os waiting receivers que passam no filtro; customer messages chegam diretamente de `process_inbound`.
+
+### `packages/platform-ui/Dockerfile`
+- Adicionado `resolver 127.0.0.11 valid=10s ipv6=off;` no bloco `server {}` do nginx — previne caching de IPs de containers após rebuilds (Docker DNS resolver interno).
+
+### `packages/skill-flow-engine/skills/agente_evaluador_echo_v1.yaml`
+- Skill de teste para o mecanismo receive → notify → receive (cyclic DAG).
+- Ecoa cada mensagem de `primary` ou `customer` como nota `agents_only`.
+- Valida: registro em `receive:waiting`, LPUSH do bridge, echo suppression, `inviter_participant_id` no ContextStore.
+- Ativação via pool hook `on_human_start` de `retencao_humano`.
+- `max_iterations: 100`, `timeout_s: 600`.
+
+### `packages/schemas/src/skill.ts` (Task #79)
+- `ReceiveStepFilterSchema`: `author_role?`, `visibility?`, `event_types?`
+- `ReceiveStepNotifySchema`: `message`, `visibility?`
+- `ReceiveStepSchema`: `type: "receive"`, `filter?`, `notify?`, `timeout_s?`, `max_iterations?`, `on_max_iterations?`, `output_as?`, `on_message`, `on_timeout?`, `on_disconnect?`, `on_failure`
+- `StepSchema` union atualizado para incluir `ReceiveStepSchema`
+
+### `packages/skill-flow-engine/src/redis-keys.ts` (Task #80)
+- `receiveResult(sessionId, instanceId)` → `receive:result:{sid}:{iid}`
+- `receiveWaiting(sessionId)` → `receive:waiting:{sid}`
+- `sessionClosed(sessionId)` → `session:closed:{sid}`
+- `activeInstance(tenantId, sessionId, instanceId)` → `receive:active:{tid}:{sid}:{iid}`
+
+---
+
 ## Arc 10 Phase E — Dashboard Journey Cards (2026-05-11)
 
 ### `packages/analytics-api/src/plughub_analytics_api/display_formatters.py`

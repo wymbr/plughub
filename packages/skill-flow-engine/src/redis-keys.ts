@@ -68,8 +68,33 @@ export const redisKeys = {
   /**
    * Activity flag: sinaliza ao CrashDetector que o agente está vivo e bloqueado
    * num BLPOP — evita re-enfileiramento falso por expiração do heartbeat (30s).
-   * Renovado a cada 15s pelo menu step.
+   * Renovado a cada 15s pelo menu step e pelo receive step.
    */
   activeInstance: (tenantId: string, sessionId: string, instanceId: string) =>
     `${tenantId}:session:${sessionId}:active_instance:${instanceId}`,
+
+  /**
+   * BLPOP key: receive step aguarda evento aqui.
+   *
+   * Cada instância recebe sua própria fila isolada (instanceId obrigatório):
+   *   receive:result:{sessionId}:{instanceId}
+   *
+   * Bridge consulta receive:waiting:{sessionId} para descobrir quais instâncias
+   * estão bloqueadas e aplica o filtro antes de fazer LPUSH nesta fila.
+   */
+  receiveResult: (sessionId: string, instanceId: string) =>
+    `receive:result:${sessionId}:${instanceId}`,
+
+  /**
+   * HASH de presença: armazena os critérios de filtro de cada agente bloqueado
+   * em receive step.
+   *
+   * Key:   receive:waiting:{sessionId}
+   * Field: instanceId
+   * Value: JSON({ author_role?, visibility?, event_types })
+   *
+   * Bridge faz HGETALL e avalia o filtro antes de rotear o evento.
+   * Removido via HDEL após desbloqueio.
+   */
+  receiveWaiting: (sessionId: string) => `receive:waiting:${sessionId}`,
 }

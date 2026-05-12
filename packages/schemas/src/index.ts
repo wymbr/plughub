@@ -307,6 +307,8 @@ export {
   ResolveCrmLookupSchema,
   ResolveStepSchema,
   MentionCommandSchema,
+  ReceiveFilterSchema,
+  ReceiveStepSchema,
   FlowStepSchema,
   SkillFlowSchema,
   SkillSchema,
@@ -341,6 +343,8 @@ export type {
   ResolveCrmLookup,
   ResolveStep,
   MentionCommand,
+  ReceiveFilter,
+  ReceiveStep,
 } from "./skill"
 
 // ── Usage Metering ───────────────────────────

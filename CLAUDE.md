@@ -314,6 +314,7 @@ Ranges: [ 0.3, 1.0] → satisfied | [-0.3, 0.3] → neutral | [-0.6,-0.3] → fr
 | `collect` | Contacts target via channel, awaits response | workflow-api → Channel Gateway |
 | `resolve` | Inline context accumulation (5-phase pipeline) | ContextStore + AI Gateway |
 | `begin_transaction` / `end_transaction` | Masked input atomic block | in-memory only |
+| `receive` | Suspends awaiting next stream message from any participant (no prompt sent to channel) | Redis BLPOP on `receive:result:{sid}:{iid}` |
 
 `menu` interaction modes: `text`, `button` (≤3 WhatsApp), `list`, `checklist`, `form`. Fallback for unsupported channels in Channel Gateway adapter only.
 

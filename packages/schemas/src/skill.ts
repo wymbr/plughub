@@ -576,6 +576,125 @@ export const ResolveStepSchema = z.object({
 })
 export type ResolveStep = z.infer<typeof ResolveStepSchema>
 
+// ── ReceiveStep — suspends awaiting next matching stream event (no prompt sent) ──
+
+/**
+ * Filter criteria for the receive step.
+ * All declared fields must match (AND semantics).
+ * Omitted fields are treated as wildcard (match any).
+ */
+export const ReceiveFilterSchema = z.object({
+  /**
+   * Restrict to events authored by these roles.
+   * Omitted → accept events from any role.
+   * Common: ["primary", "customer"] for evaluator agents.
+   * Echo suppression is always applied by the bridge — the instance's own
+   * messages are never pushed to its own receive:result queue.
+   */
+  author_role: z.array(
+    z.enum(["primary", "specialist", "supervisor", "evaluator", "reviewer", "customer"])
+  ).optional(),
+  /**
+   * Restrict to events with matching visibility value.
+   * Omitted → accept events with any visibility.
+   */
+  visibility: z.enum(["all", "agents_only"]).nullable().optional(),
+  /**
+   * Stream event types to accept.
+   * Default: ["message_sent"] — normal channel messages only.
+   */
+  event_types: z.array(z.string().min(1)).default(["message_sent"]),
+})
+export type ReceiveFilter = z.infer<typeof ReceiveFilterSchema>
+
+/**
+ * ReceiveStep — suspends the skill flow until a matching stream event arrives.
+ *
+ * Unlike menu (which sends a prompt to the channel and awaits a customer reply),
+ * receive passively listens to the session stream and unblocks when a matching
+ * event is published by any participant. No message is sent to the customer.
+ *
+ * Primary use case: Supervisor Evaluator agent — listens to the conversation
+ * in real-time, analyses each turn via a reason step, and sends targeted
+ * feedback to the inviter agent only.
+ *
+ * Cyclic DAG support:
+ *   receive → reason → notify → (back-edge) receive
+ *   max_iterations bounds the cycle; on_max_iterations handles graceful exit.
+ *   The engine tracks iterations in pipeline_state._receive_iterations_{id}.
+ *
+ * Redis mechanism (same pattern as menu):
+ *   HSET receive:waiting:{sessionId}  {instanceId}  <filter JSON>
+ *   BLPOP receive:result:{sessionId}:{instanceId}   session:closed:{sessionId}
+ *   HDEL  receive:waiting:{sessionId} {instanceId}  (on exit)
+ *
+ * Bridge contract:
+ *   On every stream event matching event_types, bridge checks
+ *   receive:waiting:{sessionId}, applies filter, and LPUSH to matching
+ *   receive:result queues. Echo suppression: bridge always skips events
+ *   authored by the blocked instance itself.
+ *
+ * Semântica do timeout_s:
+ *   -1 → blocks indefinitely (only exits on session:closed or matching event)
+ *   >0 → unblocks after N seconds → on_timeout
+ * Default: -1
+ */
+export const ReceiveStepSchema = z.object({
+  id:   z.string(),
+  type: z.literal("receive"),
+
+  /**
+   * Filter criteria applied by the bridge before pushing to receive:result.
+   * Omitting filter (or all its fields) accepts any stream event.
+   */
+  filter: ReceiveFilterSchema.optional(),
+
+  /**
+   * Seconds to block awaiting a matching event.
+   *   -1 → indefinite (default)
+   *   >0 → timeout after N seconds → on_timeout
+   */
+  timeout_s: z.number().int().min(-1).default(-1),
+
+  /**
+   * Maximum loop iterations before transitioning to on_max_iterations.
+   * Required (and enforced at runtime) when the step has a back-edge (cyclic flow).
+   * The engine tracks the counter in pipeline_state._receive_iterations_{id}.
+   */
+  max_iterations: z.number().int().positive().optional(),
+
+  /**
+   * Key in pipeline_state.results where the received event payload is stored.
+   * Shape: { event_type, author_id, author_role, content, received_at }
+   */
+  output_as: z.string().optional(),
+
+  /**
+   * Optional message sent to the session BEFORE blocking.
+   * Visibility defaults to "agents_only" — does not disturb the customer.
+   * Useful to signal readiness or status to the inviter agent.
+   */
+  notify: z.object({
+    message:    z.string().min(1),
+    visibility: z.union([
+      z.enum(["all", "agents_only"]),
+      z.array(z.string().min(1)).min(1),
+    ]).default("agents_only"),
+  }).optional(),
+
+  /** Transition after a matching event is received — required */
+  on_message:        z.string(),
+  /** Transition on timeout; uses on_failure when absent */
+  on_timeout:        z.string().optional(),
+  /** Transition when the session closes while blocked; uses on_failure when absent */
+  on_disconnect:     z.string().optional(),
+  /** Transition when max_iterations is reached */
+  on_max_iterations: z.string().optional(),
+  /** Transition on unrecoverable error — required */
+  on_failure:        z.string(),
+})
+export type ReceiveStep = z.infer<typeof ReceiveStepSchema>
+
 // ── MentionCommand — comandos que um agente especialista reconhece via @mention ──
 
 /**
@@ -625,6 +744,8 @@ export const FlowStepSchema = z.discriminatedUnion("type", [
   EndTransactionStepSchema,
   // Arc 5 / Context-Aware Fase 3: coleta de contexto inline
   ResolveStepSchema,
+  // Real-time stream listener (Supervisor Evaluator, cyclic flows)
+  ReceiveStepSchema,
   // Arc 4: workflow automation
   z.object({
     type:           z.literal("suspend"),
@@ -661,6 +782,7 @@ export type SuspendStep          = Extract<FlowStep, { type: "suspend" }>
 // Arc 4 extension — collect step
 // CollectStep type already exported above
 // Masked input — transaction steps already exported above (BeginTransactionStep, EndTransactionStep)
+// Real-time stream listener — ReceiveStep and ReceiveFilter already exported above
 
 /** Flow de orquestração — presente apenas quando type === "orchestrator" */
 export const SkillFlowSchema = z.object({

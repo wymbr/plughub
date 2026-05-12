@@ -646,6 +646,102 @@ async def _write_pre_hook_context(
         )
 
 
+# ── receive:waiting router ────────────────────────────────────────────────────
+
+async def _route_to_receive_waiting(
+    redis_client:         aioredis.Redis,
+    session_id:           str,
+    event_type:           str,
+    author_id:            str,
+    author_role:          str,
+    visibility:           str,
+    content:              str,
+    instance_id_of_author: str | None = None,
+) -> int:
+    """
+    Route a stream event to any receive:waiting agents whose filter matches.
+
+    Called from:
+      - conversations.inbound handler (customer messages)
+      - notification_send path (agent messages, via Kafka conversations.events)
+
+    Filter semantics (all fields AND):
+      event_types   — event must be in the list (default: ["message_sent"])
+      author_role   — event author_role must be in the list (null = any)
+      visibility    — event visibility must match (null = any)
+
+    Echo suppression: the instance that authored the event never receives it in
+    its own receive:result queue (prevents the evaluator from analysing its own
+    output and entering an infinite loop).
+
+    Returns the number of instances notified.
+    """
+    waiting: dict[str, str] = {}
+    try:
+        raw = await redis_client.hgetall(f"receive:waiting:{session_id}")
+        if raw:
+            waiting = {
+                (k.decode() if isinstance(k, bytes) else k): (v.decode() if isinstance(v, bytes) else v)
+                for k, v in raw.items()
+            }
+    except Exception:
+        return 0
+
+    if not waiting:
+        return 0
+
+    notified = 0
+    now_iso  = datetime.now(timezone.utc).isoformat()
+    payload  = json.dumps({
+        "event_type":  event_type,
+        "author_id":   author_id,
+        "author_role": author_role,
+        "content":     content,
+        "received_at": now_iso,
+    })
+
+    for inst_id, filt_json in waiting.items():
+        # Echo suppression: never route an event back to the instance that authored it
+        if instance_id_of_author and inst_id == instance_id_of_author:
+            continue
+
+        try:
+            filt = json.loads(filt_json)
+        except Exception:
+            filt = {}
+
+        # Check event_type filter
+        allowed_event_types = filt.get("event_types") or ["message_sent"]
+        if event_type not in allowed_event_types:
+            continue
+
+        # Check author_role filter (null = accept any role)
+        allowed_roles = filt.get("author_role")
+        if allowed_roles is not None and author_role not in allowed_roles:
+            continue
+
+        # Check visibility filter (null = accept any visibility)
+        allowed_visibility = filt.get("visibility")
+        if allowed_visibility is not None and visibility != allowed_visibility:
+            continue
+
+        # All filters passed — push to this instance's receive:result queue
+        try:
+            await redis_client.lpush(f"receive:result:{session_id}:{inst_id}", payload)
+            notified += 1
+            logger.debug(
+                "receive:result pushed: session=%s instance=%s event=%s author=%s",
+                session_id, inst_id, event_type, author_role,
+            )
+        except Exception as exc:
+            logger.warning(
+                "receive:result LPUSH failed: session=%s instance=%s — %s",
+                session_id, inst_id, exc,
+            )
+
+    return notified
+
+
 # ── Pool lifecycle hooks ──────────────────────────────────────────────────────
 
 async def fire_pool_hooks(
@@ -1680,6 +1776,49 @@ async def process_routed(
             )
         except Exception:
             pass
+
+        # ── Write inviter_participant_id to ContextStore (conference only) ─────
+        # When this activation is a conference specialist invite (e.g. Supervisor
+        # Evaluator), write the inviting agent's instance_id into the specialist's
+        # segment-scoped ContextStore namespace.  This allows the specialist's
+        # notify steps to target ONLY the inviter via:
+        #   visibility: ["@ctx.segment.inviter_participant_id"]
+        # which resolves to the segment-prefixed tag at runtime:
+        #   @ctx.segment.{_part_seg_id}.inviter_participant_id
+        #
+        # The inviter is identified as the current primary instance stored in
+        # session:{session_id}:meta.instance_id — written by activate_human_agent
+        # (human) or left intact from the previous primary native agent.
+        if conference_id and _part_seg_id and tenant_id:
+            try:
+                _inviter_id  = ""
+                _raw_meta    = await redis_client.get(f"session:{session_id}:meta")
+                if _raw_meta:
+                    _parsed_meta = json.loads(_raw_meta)
+                    _inviter_id  = _parsed_meta.get("instance_id", "")
+                if _inviter_id:
+                    _ctx_key   = f"{tenant_id}:ctx:{session_id}"
+                    _ctx_now   = datetime.now(timezone.utc).isoformat()
+                    _ctx_field = f"segment.{_part_seg_id}.inviter_participant_id"
+                    _ctx_entry = json.dumps({
+                        "value":      _inviter_id,
+                        "confidence": 1.0,
+                        "source":     "bridge:conference",
+                        "visibility": "agents_only",
+                        "updated_at": _ctx_now,
+                    })
+                    await redis_client.hset(_ctx_key, _ctx_field, _ctx_entry)
+                    await redis_client.expire(_ctx_key, _stl())
+                    logger.debug(
+                        "inviter_participant_id written: session=%s seg=%s inviter=%s",
+                        session_id, _part_seg_id, _inviter_id,
+                    )
+            except Exception as _inviter_exc:
+                logger.warning(
+                    "Could not write inviter_participant_id: session=%s — %s",
+                    session_id, _inviter_exc,
+                )
+
         asyncio.create_task(_publish_participant_event(
             session_id=session_id,
             tenant_id=tenant_id,
@@ -2397,6 +2536,51 @@ async def process_contact_event(
                         "G2: could not process deferred on_human_end: session=%s — %s",
                         session_id, exc,
                     )
+        return
+
+    # ── Agent message_sent → route to receive:waiting instances ──────────────
+    # Published by message_send tool (human agent) and by notification_send
+    # (AI agent, visibility=all only).  Enables the receive step to see
+    # messages from role=primary and role=specialist in addition to the
+    # customer inbound path already handled in process_inbound.
+    #
+    # Echo suppression: pass author_id as instance_id_of_author so an AI agent
+    # does not receive its own notification_send messages in its receive queue.
+    # For human agents author_id is participant_id (not an instance_id), so the
+    # suppression check in _route_to_receive_waiting will never match — correct.
+    if event_type == "message_sent":
+        _ms_session_id   = msg.get("session_id", "")
+        _ms_author_id    = msg.get("author_id", "")
+        _ms_author_role  = msg.get("author_role", "primary")
+        _ms_visibility   = msg.get("visibility", "all")
+        _ms_content      = msg.get("content", "")
+        # Customer messages are already routed to receive:waiting by process_inbound
+        # (lines ~3731-3740). Routing them again here would cause double BLPOP wakes,
+        # producing a duplicate "aguardando" re-arm bubble for every customer message.
+        if _ms_author_role == "customer":
+            return
+        if _ms_session_id:
+            try:
+                _n = await _route_to_receive_waiting(
+                    redis_client          = redis_client,
+                    session_id            = _ms_session_id,
+                    event_type            = "message_sent",
+                    author_id             = _ms_author_id,
+                    author_role           = _ms_author_role,
+                    visibility            = _ms_visibility,
+                    content               = _ms_content,
+                    instance_id_of_author = _ms_author_id,
+                )
+                if _n:
+                    logger.debug(
+                        "receive:waiting routed agent message: session=%s author=%s role=%s notified=%d",
+                        _ms_session_id, _ms_author_id, _ms_author_role, _n,
+                    )
+            except Exception as _exc:
+                logger.warning(
+                    "receive:waiting routing failed for agent message: session=%s — %s",
+                    _ms_session_id, _exc,
+                )
         return
 
     if event_type != "contact_closed":
@@ -3540,6 +3724,35 @@ async def process_inbound(
                         session_id, agent_key, result_key, reply_text[:80],
                     )
             delivered = True
+
+        # ── Native AI agents in receive step: route by filter ─────────────────
+        # receive:waiting agents listen to any participant's messages (not just the
+        # customer) — but customer inbound messages are routed here too.
+        # Each agent declares its filter (author_role, visibility, event_types) and
+        # only receives events that pass ALL filter predicates.
+        # Echo suppression: author instance_id is unknown for customer messages
+        # (customers are not instances), so instance_id_of_author=None is correct.
+        try:
+            n_receive = await _route_to_receive_waiting(
+                redis_client          = redis_client,
+                session_id            = session_id,
+                event_type            = "message_sent",
+                author_id             = contact_id or "customer",
+                author_role           = "customer",
+                visibility            = "all",
+                content               = reply_text if not any_masked else "[entrada mascarada]",
+                instance_id_of_author = None,  # customers are not instances
+            )
+            if n_receive:
+                logger.info(
+                    "receive:waiting notified %d agent(s) of customer message: session=%s",
+                    n_receive, session_id,
+                )
+                delivered = True
+        except Exception as _rx_exc:
+            logger.warning(
+                "receive:waiting routing error: session=%s — %s", session_id, _rx_exc,
+            )
 
         if has_stream_consumers:
             # ── External-MCP agents: XADD to session stream ───────────────────

@@ -26,6 +26,7 @@ import { executeCollect }          from "./steps/collect"
 import { executeBeginTransaction } from "./steps/begin-transaction"
 import { executeEndTransaction }   from "./steps/end-transaction"
 import { executeResolve }          from "./steps/resolve"
+import { executeReceive }          from "./steps/receive"
 
 // ─────────────────────────────────────────────
 // Tipos de contexto e resultado de step
@@ -204,6 +205,7 @@ export async function executeStep(
     case "begin_transaction": return executeBeginTransaction(step, ctx)
     case "end_transaction":   return executeEndTransaction(step, ctx)
     case "resolve":           return executeResolve(step, ctx)
+    case "receive":           return executeReceive(step, ctx)
     default:
       // TypeScript garante exhaustiveness via discriminated union
       throw new Error(`Tipo de step desconhecido: ${(step as FlowStep).type}`)

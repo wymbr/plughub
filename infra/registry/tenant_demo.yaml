@@ -52,7 +52,8 @@ pools:
     # on_human_start: dispara quando o agente humano entra na sessão (Fase A — wired).
     # on_human_end:   dispara quando o agente humano chama agent_done (Fase B — stub).
     hooks:
-      on_human_start: []  # vazio: copilot ainda é ativado manualmente via @mention
+      on_human_start:
+        - pool: evaluador_echo_ia  # avaliador echo — teste do receive step
       on_human_end:
         - pool: wrapup_ia  # Wrap-up obrigatório com agente humano (agents_only)
         - pool: nps_ia     # NPS isolado com cliente (visibility array)
@@ -122,6 +123,16 @@ pools:
     description: "Pool do agente NPS — pesquisa isolada com o cliente (visibility array)"
     channel_types: [webchat, whatsapp]
     sla_target_ms: 120000
+
+  - pool_id: evaluador_echo_ia
+    # Pool do avaliador echo — teste do receive step em tempo real.
+    # Acionado via pool hook on_human_start do pool retencao_humano.
+    # NÃO recebe tráfego direto de clientes — apenas via conferência.
+    # Escuta mensagens de primary e customer e ecoa como nota agents_only.
+    # Use para validar o mecanismo receive → notify → receive (cyclic DAG).
+    description: "Pool do avaliador echo — teste do receive step (agents_only)"
+    channel_types: [webchat, whatsapp]
+    sla_target_ms: 30000
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Agent Types
@@ -312,6 +323,24 @@ agent_types:
     capabilities:
       channels: webchat,whatsapp
       finalization: "true"
+
+  # Avaliador echo — teste do receive step em tempo real.
+  # Acionado via on_human_start do pool retencao_humano.
+  # Escuta primary + customer via receive step e ecoa como nota agents_only.
+  # role: evaluator — nunca recebe tráfego direto de clientes.
+  - agent_type_id: agente_evaluador_echo_v1
+    framework: plughub-native
+    execution_model: stateless
+    role: executor
+    max_concurrent_sessions: 20
+    pools: [evaluador_echo_ia]
+    skills: [{skill_id: skill_evaluador_echo_v1}]
+    permissions:
+      - mcp-server-plughub:agent_heartbeat
+      - mcp-server-plughub:notification_send
+    capabilities:
+      channels: webchat,whatsapp
+      real_time_evaluation: "true"
 
   # Agente de avaliação pós-sessão — NÃO deve estar em pool de roteamento ao vivo.
   # Recebe tráfego apenas via evaluation.requested (Session Replayer), nunca via
