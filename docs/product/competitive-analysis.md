@@ -15,6 +15,22 @@ Em 2025–2026, o mercado de agentes IA para contact center e automação enterp
 
 ---
 
+## A virada de categoria — lifecycle-centric
+
+Os três arquétipos competem dentro de dois mental models históricos. **CCaaS opera num modelo interaction-centric**: a unidade de gestão é a interação individual (chamada, chat, ticket), e os KPIs são AHT, FCR e SLA por interação. **CRM opera num modelo record-centric**: a unidade é o registro (case, opportunity, account), e a interação é apenas um campo no registro. Os dois mundos coexistem mal — uma "case" no Service Cloud pode agrupar seis interações, mas o roteamento, SLA e qualidade continuam medidos por interação.
+
+Pointillist (adquirida pela Genesys), Adobe Customer Journey Analytics e similares tentam ser camada de analytics de jornada, mas sem amarração operacional ao roteador. Pega tem cases como primitive operacional, mas é BPM, não contact center.
+
+O PlugHub propõe um terceiro modelo: **lifecycle-centric**. A unidade é a **Journey** — processo completo do cliente atravessando múltiplos contatos, canais, dias e participantes (humanos e IA), com SLA, roteamento e analytics medidos no nível da jornada e drillable até o turno individual. Essa terceira via tem três consequências competitivas:
+
+- **Torna o CRM redundante** para casos de uso onde o registro central é o processo, não a entidade (cobrança, onboarding, retenção, suporte recorrente)
+- **Comoditiza a interação no CCaaS** — interação vira instância dentro de uma jornada, não a unidade de medida
+- **Unifica inbound e outbound** sob a mesma definição declarativa (Skill Flow), sem módulos separados, com o media gateway interno executando o pacing de discagem
+
+Para o comprador enterprise, isso muda a pergunta inicial. Não é mais "qual é meu melhor CCaaS?" ou "qual é meu melhor CRM?" — é "como gerencio o lifecycle do cliente como uma unidade coerente, com analytics e operação no mesmo lugar?".
+
+---
+
 ## Comparativo por plataforma
 
 ### Google Vertex AI / Gemini Enterprise
@@ -121,8 +137,16 @@ Em 2025–2026, o mercado de agentes IA para contact center e automação enterp
 | BYO framework | LangChain+ | Apex/DX | AI Studio | Cognigy | Templates | CXA | Nativo | Nativo | 70+ nodes | **✅ Qualquer** |
 | Humano + IA mesma sessão | Handoff | Handoff | Handoff | Handoff | Handoff | Handoff | N/A | N/A | N/A | **✅ Conference** |
 | Session Replay | CCAI | Test Center | QM | QM | QM | QM | Tracing | Tracing | Logs | **✅ + Diff** |
-| Billing previsível | Não | Não | Parcial | Sim | Parcial | Parcial | Parcial | Não | Parcial | **✅ Por instância** |
-| Operator console | Sim | Sim | Sim | Sim | Sim | Sim | Não | Não | Não | **✅** |
+| Billing previsível | Não | Não | Parcial | Sim | Parcial | Parcial | Parcial | Não | Parcial | **✅ Licenças simultâneas (humanos + IA)** |
+| Supervisão operacional em tempo real | Sim | Sim | Sim | Sim | Sim | Sim | Não | Não | Não | **✅** |
+| Escopo granular de supervisor (grupo + turno + módulo) | Parcial | Parcial | Custom | Custom | Custom | Custom | N/A | N/A | N/A | **✅ JWT-resolved nativo** |
+| Voz com stack interno (gravação + transcrição + STT/TTS) | Parcial (CCAI) | Parceiro (Vonage) | Sim | Sim | Sim | Parceiro (AWS) | N/A | N/A | N/A | **✅ SIP + WebRTC nativos** |
+| Motor único para todos os fluxos | Múltiplos (Agent Engine + CCAI + Vertex) | Múltiplos (Atlas + Flow + MC + SC) | Múltiplos (Architect + AI Studio + Outbound) | Múltiplos (CXone + Cognigy + Outbound) | Parcial | Múltiplos (CXA + Autopilot + Outbound) | Só engine IA | Só engine IA | Só workflow | **✅ Skill Flow unificado** |
+| Customização completa por pool/fila | Limitada | Tópicos+ações | Por queue | Por queue | Por queue | Por queue | N/A | N/A | N/A | **✅ Inbound + outbound + especialistas + wrap-up + hooks por pool** |
+| Visibilidade por participante (per-field per-role) | Não (Model Armor pré-LLM) | Parcial (Trust Layer pré-LLM) | Não | Não | Não | Não | N/A | N/A | N/A | **✅ Por participante + por campo + por role** |
+| Delegação de dados sensíveis com supervisão | Não | Não | Não | Não | Não | Não | N/A | N/A | N/A | **✅ Humano supervisiona sem ver o dado** |
+| Outbound unificado (mesmo motor que inbound) | Não (CCAI sep.) | Não | Módulo sep. | Módulo sep. | Config sep. | Módulo sep. | N/A | N/A | Custom | **✅ Mesmo motor + dialer interno** |
+| Journey multi-contato como primitive (routing + analytics) | Não | Case (CRM-side) | Pointillist (analytics) | XM (parcial) | Não | Não | Thread (técnico) | Não | Não | **✅ Routing + Analytics** |
 
 ---
 

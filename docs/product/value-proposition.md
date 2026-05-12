@@ -10,7 +10,7 @@ O PlugHub entra no mercado como uma **camada nova** — não substitui o CCaaS n
 
 ---
 
-## Os quatro diferenciais defensáveis
+## Os seis diferenciais defensáveis
 
 ### 1. Igualdade humano/IA no primitivo de roteamento
 
@@ -72,19 +72,77 @@ Isso permite **fatorar agentes-IA complexos em orquestrador + especialistas reut
 
 Três consequências diretas: **padronização de atendimento** (o especialista se comporta igual para robô e para humano na mesma sessão híbrida); **desenvolvimento e testes uma única vez para múltiplos consumidores** (certificar `billing_especialista` cobre todos os caminhos de invocação); e **trajetória de automação gradual** (a operação começa com humanos usando @mention e migra para orquestrador automático incrementalmente, sem reescrever o especialista).
 
-Para replicar isso, um competidor precisaria redesenhar o modelo de sessão — não adicionar uma feature.
+**Especialistas podem atuar ou sugerir.** O mesmo specialist pode ser declarado como **atuante** (participante visível na sessão, conduz a interação diretamente com o cliente no canal) ou **sugestivo** (roda em background, popula sugestões e ações recomendadas para o agente humano, sem aparecer ao cliente). É o mesmo artefato YAML em dois modos de operação — a escolha vive na declaração, não no código. Um especialista de retenção pode ser atuante numa campanha automatizada e sugestivo num atendimento humano-conduzido. O objetivo das duas formas é o mesmo: **aumentar a produtividade e a capacidade de atendimento do humano** — seja substituindo-o em trechos onde a automação é confiável, seja amplificando sua decisão em tempo real onde o humano deve permanecer no comando.
 
-### 4. Billing por capacidade configurada
+**Delegação de dados sensíveis sem perda de supervisão.** Um padrão operacional que decorre direto do modelo: o agente humano em conversa pode delegar a captura ou o tratamento de dados sensíveis (cartão de crédito, CPF, credenciais bancárias, dados médicos) a um especialista. O humano **vê o progresso** da operação — etapa atual, status de validação, tempo decorrido — mas **não vê os dados em si**, que ficam mascarados na sua visualização enquanto o especialista, com permissão explícita, opera sobre o conteúdo real. O humano pode **retomar controle a qualquer momento** se o fluxo precisar ajuste. Ao concluir, o especialista entrega de volta apenas o resultado (ex.: `payment_token`, status de validação) — o dado bruto nunca passou pela tela do humano.
+
+Isso resolve em paralelo um conjunto duro de requisitos: **escopo PCI-DSS reduzido** (o operador da conversa não tem acesso ao PAN), **LGPD** (minimização de exposição por role), **SOX** (audit trail completo de quem viu o quê em cada etapa). Para o cliente final não há transferência, não há atrito, não há aviso de "agora você fala com o sistema seguro" — ele continua na mesma conversa, no mesmo canal. Para a operação, há ganho de produtividade porque o humano não precisa sair da conversa para registrar dados sensíveis em sistemas paralelos.
+
+**Visibilidade é configurável por participante, por campo e por role — não binária (masked/unmasked).** Em uma sessão híbrida, a mesma mensagem do cliente pode ter o CPF tokenizado para o agente humano que conduz, em texto pleno para o especialista cadastral que valida, com auditoria completa para o supervisor que monitora, e suprimida no log de avaliação de qualidade. Cada papel vê o necessário; nada mais.
+
+Para replicar tudo isso, um competidor precisaria redesenhar o modelo de sessão — não adicionar uma feature.
+
+### 4. Motor único, primitivo único, billing por concorrência
+
+A divisão típica dos competidores: **um motor para cada tipo de fluxo**. Salesforce roda Atlas Reasoning Engine para agentes, Flow para automação, Marketing Cloud para outbound e Service Cloud para wrap-up — quatro stacks com configuração e billing próprios. Genesys tem Architect para IVR, AI Studio para bots e Outbound Engagement como módulo separado. NICE tem CXone para inbound, Cognigy para conversational AI e Outbound como produto à parte (ex-Mature). Gemini Enterprise tem Agent Engine + CCAI + Vertex Agent Builder.
+
+PlugHub colapsa tudo em **um motor que executa um único primitivo declarativo (Skill Flow YAML)**. Todas as variantes de fluxo seguem o mesmo modelo:
+
+| Tipo de fluxo | Exemplo |
+|---|---|
+| Inbound | Atendimento conversacional ao cliente que chega |
+| Outbound | Campanha de cobrança, onboarding ativo, pesquisa NPS proativa |
+| Workflow / processo | Aprovação de crédito, coleta assíncrona multicanal |
+| Agente especialista | `billing_especialista`, `juridico_ia`, `wrap_up`, `nps_pos_atendimento` — convocados por `@mention`, step `task` ou Pool Hook |
+| Pool Hook | `on_human_start`, `on_human_end`, `post_human` — disparam especialistas automaticamente |
+
+Note que **wrap-up de atendimento, NPS pós-conversa e demais automações de pós-atendimento são especialistas como quaisquer outros** — não há categoria à parte. Cada **pool (fila de espera) customiza todos esses fluxos independentemente**: o pool de retenção tem inbound, outbound, especialistas e hooks diferentes do pool de SAP técnico. A configuração vive em YAML versionado, não em UI fragmentada por módulo. O mesmo motor executa todos — não há "engine de outbound" separado do "engine de inbound" separado do "engine de workflow".
+
+**Billing acompanha a unificação**. A métrica de licenciamento é **agentes simultâneos logados — humanos e IA tratados pela mesma unidade**. É exatamente o modelo de "concurrent agent license" que o comprador enterprise já conhece de CCaaS tradicional, estendido para incluir agentes IA na mesma curva. Um agente IA logado é uma instância de skill-flow disponível para receber alocação do Routing Engine; um agente humano logado é um operador disponível na sua estação. Os dois competem pelos mesmos slots da fila e contam pela mesma métrica de licença.
+
+Em pico de carga, o cliente paga pelo que está logado *naquele momento*; em vale, proporcionalmente menos. Não há SKU separado por tipo de fluxo (todos os flows compartilham o pool de licenças), não há "módulo de outbound" com pricing próprio, e não há cobrança por skill-flow implantado mas sem instância logada.
 
 | Modelo | Variáveis de custo | Previsibilidade |
 |---|---|---|
-| Gemini Enterprise | Seats + runtime GB-hora + tokens + storage + indexação | Muito baixa |
-| Agentforce (Flex Credits) | Actions + créditos + tokens + implementação por agente | Baixa |
-| Genesys | Seats + AI tokens por consumo | Média |
-| LangGraph / n8n | Seats + execuções por nó | Baixa |
-| **PlugHub** | **Instâncias configuradas** | **Alta** |
+| Gemini Enterprise | Seats + runtime GB-hora + tokens + storage + indexação + CCAI para outbound | Muito baixa |
+| Agentforce | Actions + créditos + tokens + implementação + Marketing Cloud para outbound | Baixa |
+| Genesys | Seats + AI tokens por consumo + Outbound Engagement separado | Média |
+| NICE Mpower | Seats + Outbound como produto à parte + Cognigy | Média |
+| LangGraph / n8n | Seats + execuções por nó (só engine IA / só workflow) | Baixa |
+| **PlugHub** | **Licenças simultâneas de agentes logados (humanos + IA)** | **Alta** |
 
-O cliente compra N instâncias de agente IA e M agentes humanos. O preço é fixo independente do volume de turnos, tokens ou mensagens. "Bill shock" — documentado como o principal problema de adoção do Agentforce — é impossível por design.
+"Bill shock" — documentado como o principal problema de adoção do Agentforce — é impossível por design. Para o CFO, isso resolve previsibilidade ("compro N licenças concurrent, sei o que pago no pico"), capacity planning ("sigo o pico de agentes logados, não a soma de tudo configurado") e simplicidade ("um SKU, um SLA, uma curva de utilização"). Para a operação, elimina a complexidade de operar dois ou três produtos com configurações fragmentadas e times distintos.
+
+### 5. Outbound unificado — sem módulo separado, com dialer interno
+
+Todo CCaaS no mercado vende inbound e outbound como dois produtos com modelos de configuração distintos. Genesys, NICE e Talkdesk têm "Outbound Campaigns" como módulo licenciado à parte; Five9 tem outbound nativo mas em configuração separada do inbound; Salesforce Agentforce praticamente não tem outbound fora do Marketing Cloud.
+
+No PlugHub o motor é um só. Uma campanha de cobrança, pesquisa NPS ou onboarding com etapas manuais é um Skill Flow declarativo, idêntico em primitivos a um atendimento inbound. O **media gateway interno** — SIP/PSTN para telefonia tradicional, WebRTC para web/mobile, ambos com gravação, transcrição, STT e TTS nativos — executa o loop de discagem: a cada janela acordada, avalia disponibilidade de agentes em tempo real, calcula o pacing necessário pelo algoritmo declarado no flow (power, predictive, progressive ou preview), dispara o lote dimensionado para a capacidade ociosa e dá baixa no mailing apenas em contato bem-sucedido. Tentativas malsucedidas voltam para a fila de retry com política configurável.
+
+A consequência arquitetural elegante: **após a conexão, o fluxo outbound é tratado como inbound, sem diferenciação**. Mesmo context package, mesmo roteamento, mesmo session replay, mesma avaliação de qualidade. O agente que atende não precisa saber se o contato foi inbound ou outbound — a experiência operacional é uniforme.
+
+Compliance regulatória (abandonment ratio TCPA/LGPD, listas DNC, janela horária por timezone do contato) é **invariante do motor**, não responsabilidade do YAML — um cliente que configure errado o flow não consegue violar regulação, porque o guard fica no media gateway.
+
+Para o comprador: uma licença, uma operação, uma configuração, um SLA. Para o CFO: redução de custo de licença e de complexidade operacional comparada a operar dialer separado.
+
+### 6. Journey — gestão lifecycle-centric
+
+A indústria divide-se historicamente entre dois mental models. **CCaaS é interaction-centric**: mede interações individuais (chamada, chat, ticket) e os KPIs são AHT, FCR e SLA por interação. **CRM é record-centric**: mantém cases como registros e a interação é um campo no registro. Os dois mundos coexistem mal — uma "case" no Service Cloud pode agrupar seis interações, mas o roteamento, SLA e qualidade continuam medidos por interação.
+
+Pointillist (adquirida pela Genesys) e Adobe Customer Journey Analytics tentam ser camada de analytics de jornada, mas sem amarração operacional ao roteador. Pega tem cases operacionais, mas é BPM, não contact center.
+
+PlugHub trata **Journey como primitive simultaneamente operacional e analítica**:
+
+| Dimensão | Como funciona |
+|---|---|
+| **Operacional** | Routing Engine conhece a jornada — pode preferir o especialista que já atendeu o contato anterior; SLA é medido na jornada, não no contato individual; ContextStore agrupa estado da jornada inteira |
+| **Analítica** | Relatórios em ClickHouse rolam para nível de jornada (TTR, contagem de contatos, distribuição de canais, custo total) e drillam até turno individual |
+| **Multi-canal e multi-sessão** | Uma jornada de onboarding atravessa webchat → e-mail → SMS → voz → callback em sessões e dias diferentes, e ainda é tratada como unidade coerente |
+| **Multi-contato** | Inbound e outbound da mesma jornada compartilham `journey_id`; relatórios cruzam ambos lados naturalmente |
+
+Essa é a virada de categoria: o PlugHub não compete como "contact center" nem como "CRM". Compete como **gestão de lifecycle**. Para casos de uso onde o registro central é o processo (cobrança, onboarding, retenção, suporte recorrente), isso **torna o CRM redundante**; para atendimento ad-hoc, **comoditiza o CCaaS** ao transformar interação em instância dentro de uma jornada.
+
+Para o comprador enterprise, a pergunta troca. Não é mais "qual é meu melhor CCaaS?" ou "qual é meu melhor CRM?" — é "como gerencio o lifecycle do cliente como uma unidade coerente, com analytics e operação no mesmo lugar?".
 
 ---
 
@@ -94,7 +152,7 @@ O cliente compra N instâncias de agente IA e M agentes humanos. O preço é fix
 
 **Journey — processo multi-sessão sem CRM externo**: unidade de serviço acima da sessão que agrupa todo o histórico de um processo num único `journey_id`, com KPIs de resolução mensuráveis por tipo de processo. Equivale ao "case" de CRMs enterprise, mas nativo ao roteador — sem integração adicional.
 
-**Agent Groups com escopo de supervisor por turno**: supervisores recebem no JWT um escopo filtrado pelos grupos e turnos ativos (`supervised_agent_types[]`), com granularidade que o Enlighten Actions da NICE não oferece sem customização. Relatórios e dashboards já chegam pré-filtrados sem configuração por sessão.
+**Agent Groups com escopo de supervisor por grupo, turno e módulo**: supervisores recebem no JWT um escopo filtrado pelos grupos e turnos ativos (`supervised_agent_types[]`) que **cada módulo aplica automaticamente** — Contatos, Avaliação, Dashboards e Relatórios pré-filtram dados, listas de agentes e filas para o escopo autorizado. O supervisor não vê dados fora do grupo, não acessa pools que não supervisiona, não intervém em sessões de outros pools. Granularidade que o Enlighten Actions da NICE não oferece sem customização extensa.
 
 **Session Replayer com Comparison Mode** permite diff turn-a-turn entre duas execuções usando similaridade de Jaccard. Útil para avaliação de agentes IA pré-produção e para auditoria de mudanças de prompt.
 
@@ -108,12 +166,12 @@ O cliente compra N instâncias de agente IA e M agentes humanos. O preço é fix
 
 ## O que o PlugHub não é
 
-- **Não é um CCaaS** — não inclui PSTN, linha 0800, workforce management, discagem preditiva
-- **Não é um framework de agente** — não substitui LangGraph, CrewAI ou Anthropic SDK
+- **Não é um framework de agente** — não substitui LangGraph, CrewAI ou Anthropic SDK; orquestra agentes construídos com eles
 - **Não é um BPM** — não substitui Camunda ou Pega; integra com eles via MCP
 - **Não é um LLM** — o AI Gateway é stateless e troca de provedor por configuração
+- **Não substitui Workforce Management dedicado** — não inclui forecasting de demanda, scheduling de turnos nem gestão de aderência de WFM clássicos (Verint, Calabrio); integra com WFM externos via MCP quando necessário
 
-O PlugHub é a **camada de orquestração** entre esses mundos.
+O PlugHub combina **canais e voz (CCaaS), motor de orquestração (Skill Flow), runtime de agentes (humanos + IA), gestão de jornada multi-contato e camada de compliance (MCP guard + dialer guard)** em uma stack unificada — substituindo as três a quatro plataformas que tradicionalmente compõem essa função no contact center enterprise.
 
 ---
 

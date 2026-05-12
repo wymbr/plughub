@@ -22,7 +22,9 @@ O PlugHub atende três perfis de comprador:
 
 ### Atendimento omnichannel
 
-Suporte nativo a **WhatsApp, Webchat, Voz (WebRTC), E-mail, SMS, Instagram e Telegram**. O Channel Gateway normaliza cada canal para um envelope de evento uniforme — agentes nunca conhecem o protocolo do canal de origem. Menus são renderizados nativamente (botões no WhatsApp, formulários no Webchat) ou coletados sequencialmente em canais sem suporte nativo.
+Suporte nativo a **WhatsApp, Webchat, Voz (PSTN/SIP e WebRTC), E-mail, SMS, Instagram e Telegram**. O Channel Gateway normaliza cada canal para um envelope de evento uniforme — agentes nunca conhecem o protocolo do canal de origem. Menus são renderizados nativamente (botões no WhatsApp, formulários no Webchat) ou coletados sequencialmente em canais sem suporte nativo.
+
+O suporte a voz é construído sobre **dois media gateways internos** — um para SIP/PSTN (telefonia tradicional, com conectividade a operadoras e linhas 0800) e outro para WebRTC (web/mobile), ambos com gravação, transcrição, STT e TTS nativos. A plataforma é dona do stack de voz fim a fim, sem dependência de provedor terceiro para gravação, transcrição ou conversão de áudio.
 
 ### Roteamento multicritério
 
@@ -64,13 +66,21 @@ Todo atendimento pode ser avaliado por um Agente Avaliador com formulários conf
 
 ### Supervisão operacional em tempo real
 
-O Operator Console oferece heatmap de sentimento por pool, drill-down de sessões ativas com transcrição ao vivo, e capacidade de intervenção direta do supervisor sem passar pelo ciclo MCP. O Co-pilot analisa cada turno em background e popula sugestões de resposta e flags de risco para o agente humano.
+A plataforma oferece supervisão operacional distribuída pelos módulos relevantes — heatmap de sentimento por pool nos dashboards, drill-down de sessões ativas com transcrição ao vivo no Monitor de Contatos, intervenção direta do supervisor numa sessão sem passar pelo ciclo MCP. O Co-pilot analisa cada turno em background e popula sugestões de resposta e flags de risco para o agente humano.
 
-Supervisores operam com **escopo por grupo e turno**: o sistema de Agent Groups permite definir quais agentes cada supervisor acompanha em cada turno do dia, e esse escopo é resolvido no JWT no momento do login — relatórios, heatmaps e listas de agentes já chegam pré-filtrados, sem configuração adicional por sessão.
+**O supervisor opera com escopo granular por grupo, turno e módulo**. O sistema de Agent Groups define quais agentes cada supervisor acompanha em cada turno do dia, e esse escopo é resolvido no JWT no login. **Cada módulo (Contatos, Avaliação, Dashboards, Relatórios) aplica o escopo automaticamente** — o supervisor não vê dados de agentes fora do grupo, não acessa filas (pools) que não supervisiona, não pode intervir em sessões de outros pools, e não enxerga relatórios fora do escopo autorizado. Sem configuração por sessão e sem possibilidade de bypass.
 
-### Faturamento por capacidade configurada
+### Motor único para todos os fluxos
 
-Diferente de todas as alternativas do mercado (que faturam por seat + consumo + tokens + storage + implementação), o PlugHub fatura por **capacidade configurada**: número de instâncias de agente ativas. O cliente sabe no mês 1 o que vai pagar no mês 13.
+Inbound, outbound, workflow de processo, agentes especialistas (convocados por `@mention` ou `task` step), wrap-up pós-atendimento e Pool Hooks (`on_human_start`, `on_human_end`, `post_human`) seguem o **mesmo primitivo declarativo (Skill Flow YAML) executado pelo mesmo motor**. Cada pool customiza seu conjunto completo de fluxos independentemente — o pool de retenção tem inbound, outbound, especialistas e wrap-up distintos do pool de SAP técnico. Não há engine separado de outbound, dialer separado, workflow tool separada ou "copilot" como módulo à parte. Um motor, uma configuração, uma versão YAML.
+
+### Faturamento por licenças simultâneas (humanos + IA)
+
+Diferente de todas as alternativas do mercado (que faturam por seat + consumo + tokens + storage + implementação, com SKUs separados para outbound e workflow), o PlugHub fatura por **agentes simultâneos logados — humanos e IA tratados pela mesma unidade**. É exatamente o modelo de "concurrent agent license" que o CCaaS tradicional já usa para operadores humanos, estendido para incluir agentes IA na mesma curva. Inbound, outbound, especialistas (incluindo wrap-up e NPS) compartilham o mesmo pool de licenças. O cliente compra N licenças e sabe exatamente o que pagará no mês 13 — não há cobrança extra por skill-flow implantado-mas-sem-instância-logada, e capacity planning segue o pico real de agentes ativos.
+
+### Tratamento de dados sensíveis com supervisão sem visibilidade
+
+Visibilidade dentro de uma sessão é **configurável por participante, por campo e por role** — não binária. O padrão operacional mais distintivo: o agente humano pode delegar a captura de dados sensíveis (cartão, CPF, credenciais) a um especialista que tem permissão para operar sobre o dado, enquanto o próprio humano vê o progresso da operação mas não o conteúdo. Permite escopo PCI-DSS reduzido, conformidade LGPD/SOX e ainda assim continuidade da conversa sem transferência do cliente.
 
 ## Arquitetura em uma linha
 
