@@ -130,7 +130,9 @@ async def compute_expires_at(
     if not use_business:
         return now + timedelta(hours=ttl_hours)
 
-    calendar_id = schedule.get("calendar_id")
+    # evaluation_calendar_id (campaign-level) takes precedence over
+    # schedule.calendar_id (legacy field inside SamplingRules JSONB).
+    calendar_id = campaign.get("evaluation_calendar_id") or schedule.get("calendar_id")
     if not calendar_id:
         return now + timedelta(hours=ttl_hours)
 

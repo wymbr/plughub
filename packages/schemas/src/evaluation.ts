@@ -508,6 +508,23 @@ export const EvaluationCampaignSchema = z.object({
   form_id:         z.string().min(1),
   /** Pool from which evaluator agents are allocated */
   evaluator_pool:  z.string().min(1),
+  /**
+   * Pool being evaluated — used for sampling (only sessions handled by this
+   * pool are eligible). Different from evaluator_pool (the pool that runs
+   * the evaluator agents). Optional: null means all pools are sampled.
+   */
+  evaluation_pool_id:     z.string().optional(),
+  /**
+   * Calendar used for scheduling evaluation windows and SLA calculations.
+   * Determines business hours for deadline computation and schedule windows.
+   */
+  evaluation_calendar_id: z.string().optional(),
+  /**
+   * GatewayConfig IDs available to evaluator agents in this campaign.
+   * Allows campaign-specific model selection (e.g. a stronger model for
+   * high-stakes quality evaluations). Empty = use agent-type defaults.
+   */
+  gateway_config_ids:     z.array(z.string()).default([]),
   sampling:        SamplingRulesSchema,
   reviewer:        ReviewerRulesSchema,
   schedule:        CampaignScheduleSchema,

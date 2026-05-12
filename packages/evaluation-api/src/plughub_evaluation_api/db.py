@@ -239,6 +239,12 @@ ALTER TABLE evaluation.campaigns
     ADD COLUMN IF NOT EXISTS review_workflow_skill_id TEXT,
     ADD COLUMN IF NOT EXISTS contestation_policy JSONB NOT NULL DEFAULT '{}';
 
+-- evaluation.campaigns: evaluation pool + calendar + gateway configs (Task #74/#75)
+ALTER TABLE evaluation.campaigns
+    ADD COLUMN IF NOT EXISTS evaluation_pool_id     TEXT,           -- pool being evaluated (sampling filter)
+    ADD COLUMN IF NOT EXISTS evaluation_calendar_id TEXT,           -- calendar for SLA + scheduling windows
+    ADD COLUMN IF NOT EXISTS gateway_config_ids     TEXT[] NOT NULL DEFAULT '{}';
+
 -- evaluation.results: workflow motor state tracking
 ALTER TABLE evaluation.results
     ADD COLUMN IF NOT EXISTS workflow_instance_id TEXT,
@@ -416,6 +422,9 @@ async def create_campaign(
     reviewer_rules: dict | None = None,
     schedule: dict | None = None,
     created_by: str = "operator",
+    evaluation_pool_id: str | None = None,
+    evaluation_calendar_id: str | None = None,
+    gateway_config_ids: list[str] | None = None,
 ) -> dict[str, Any]:
     campaign_id = _new_id("evcampaign_")
     async with pool.acquire() as conn:
@@ -423,8 +432,10 @@ async def create_campaign(
             """
             INSERT INTO evaluation.campaigns
                 (id, tenant_id, name, description, form_id, pool_id,
-                 sampling_rules, reviewer_rules, schedule, created_by)
-            VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb,$8::jsonb,$9::jsonb,$10)
+                 sampling_rules, reviewer_rules, schedule, created_by,
+                 evaluation_pool_id, evaluation_calendar_id, gateway_config_ids)
+            VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb,$8::jsonb,$9::jsonb,$10,
+                    $11,$12,$13)
             RETURNING *
             """,
             campaign_id, tenant_id, name, description, form_id, pool_id,
@@ -432,6 +443,9 @@ async def create_campaign(
             json.dumps(reviewer_rules or {}),
             json.dumps(schedule or {}),
             created_by,
+            evaluation_pool_id,
+            evaluation_calendar_id,
+            gateway_config_ids or [],
         )
     return _row(row)  # type: ignore[return-value]
 
@@ -449,6 +463,7 @@ async def list_campaigns(
     pool: asyncpg.Pool,
     tenant_id: str,
     pool_id: str | None = None,
+    evaluation_pool_id: str | None = None,
     status: str | None = None,
     limit: int = 50,
     offset: int = 0,
@@ -458,6 +473,9 @@ async def list_campaigns(
     if pool_id:
         args.append(pool_id)
         cond += f" AND pool_id=${len(args)}"
+    if evaluation_pool_id:
+        args.append(evaluation_pool_id)
+        cond += f" AND evaluation_pool_id=${len(args)}"
     if status:
         args.append(status)
         cond += f" AND status=${len(args)}"
@@ -477,7 +495,8 @@ async def update_campaign(
 ) -> dict[str, Any] | None:
     allowed = {"name", "description", "status", "sampling_rules", "reviewer_rules", "schedule",
                "total_instances", "completed_instances", "avg_score",
-               "review_workflow_skill_id", "contestation_policy"}
+               "review_workflow_skill_id", "contestation_policy",
+               "evaluation_pool_id", "evaluation_calendar_id", "gateway_config_ids"}
     updates = {k: v for k, v in fields.items() if k in allowed}
     if not updates:
         return await get_campaign(pool, campaign_id, tenant_id)

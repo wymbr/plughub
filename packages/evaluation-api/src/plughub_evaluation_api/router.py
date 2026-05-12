@@ -309,6 +309,10 @@ class CampaignCreate(BaseModel):
     review_workflow_skill_id:   str | None = None   # e.g. "skill_revisao_treplica_v1"
     contestation_policy:        dict = Field(default_factory=dict)
     created_by:                 str = "operator"
+    # Task #74/#75 — evaluation scope + infra
+    evaluation_pool_id:         str | None = None   # pool being evaluated (sampling filter)
+    evaluation_calendar_id:     str | None = None   # calendar for SLA + scheduling windows
+    gateway_config_ids:         list[str] = Field(default_factory=list)  # model configs for evaluators
 
 
 class CampaignUpdate(BaseModel):
@@ -320,6 +324,10 @@ class CampaignUpdate(BaseModel):
     schedule:                   dict | None = None
     review_workflow_skill_id:   str | None = None
     contestation_policy:        dict | None = None
+    # Task #74/#75
+    evaluation_pool_id:         str | None = None
+    evaluation_calendar_id:     str | None = None
+    gateway_config_ids:         list[str] | None = None
 
 
 @router.get("/v1/evaluation/campaigns")
@@ -327,12 +335,20 @@ async def list_campaigns(
     request: Request,
     tenant_id: str,
     pool_id: str | None = None,
+    evaluation_pool_id: str | None = None,
     status: str | None = None,
     limit: int = 50,
     offset: int = 0,
 ) -> dict:
     pool = _pool(request)
-    rows = await _db.list_campaigns(pool, tenant_id, pool_id=pool_id, status=status, limit=limit, offset=offset)
+    rows = await _db.list_campaigns(
+        pool, tenant_id,
+        pool_id=pool_id,
+        evaluation_pool_id=evaluation_pool_id,
+        status=status,
+        limit=limit,
+        offset=offset,
+    )
     return {"tenant_id": tenant_id, "campaigns": rows, "count": len(rows)}
 
 
@@ -344,7 +360,6 @@ async def create_campaign(body: CampaignCreate, request: Request) -> dict:
     if not form:
         raise HTTPException(400, detail=f"form {body.form_id} not found for tenant")
     data = body.model_dump()
-    # Persist new v2 fields separately (update_campaign handles jsonb fields)
     row = await _db.create_campaign(
         pool,
         tenant_id=data["tenant_id"],
@@ -356,8 +371,11 @@ async def create_campaign(body: CampaignCreate, request: Request) -> dict:
         reviewer_rules=data.get("reviewer_rules"),
         schedule=data.get("schedule"),
         created_by=data.get("created_by", "operator"),
+        evaluation_pool_id=data.get("evaluation_pool_id"),
+        evaluation_calendar_id=data.get("evaluation_calendar_id"),
+        gateway_config_ids=data.get("gateway_config_ids") or [],
     )
-    # Patch in new v2 fields if provided
+    # Patch v2 scalar fields not handled by create (jsonb fields via update)
     v2_updates: dict[str, Any] = {}
     if data.get("review_workflow_skill_id"):
         v2_updates["review_workflow_skill_id"] = data["review_workflow_skill_id"]
@@ -960,6 +978,15 @@ async def check_sample(body: SampleCheckBody, request: Request) -> dict:
         raise HTTPException(404, detail="campaign not found")
     if campaign["status"] != "active":
         return {"should_sample": False, "reason": f"campaign status={campaign['status']}"}
+
+    # Hard filter: if campaign is scoped to a specific pool being evaluated,
+    # only sessions from that pool are eligible.
+    evaluation_pool_id = campaign.get("evaluation_pool_id")
+    if evaluation_pool_id and body.session_meta.get("pool_id") != evaluation_pool_id:
+        return {
+            "should_sample": False,
+            "reason":        f"session pool {body.session_meta.get('pool_id')!r} != evaluation_pool_id {evaluation_pool_id!r}",
+        }
 
     sampling_rules = campaign.get("sampling_rules") or {}
     sampled = should_sample(
