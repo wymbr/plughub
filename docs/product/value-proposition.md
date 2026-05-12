@@ -90,7 +90,11 @@ O cliente compra N instâncias de agente IA e M agentes humanos. O preço é fix
 
 ## Diferenciais secundários
 
-**Skill Flow com 11 tipos de step declarativos** incluindo `suspend` (timers em horas úteis via Calendar API), `collect` (contato outbound assíncrono multicanal), `resolve` (acumulação de contexto inline) e `begin_transaction`/`end_transaction` (captura segura de dados sensíveis). Nenhum CCaaS analisado tem motor de fluxo comparável em expressividade declarativa.
+**Skill Flow com 13 tipos de step declarativos** incluindo `suspend` (timers em horas úteis via Calendar API), `collect` (contato outbound assíncrono multicanal), `resolve` (acumulação de contexto inline) e `begin_transaction`/`end_transaction` (captura segura de dados sensíveis em bloco atômico). Nenhum CCaaS analisado tem motor de fluxo comparável em expressividade declarativa.
+
+**Journey — processo multi-sessão sem CRM externo**: unidade de serviço acima da sessão que agrupa todo o histórico de um processo num único `journey_id`, com KPIs de resolução mensuráveis por tipo de processo. Equivale ao "case" de CRMs enterprise, mas nativo ao roteador — sem integração adicional.
+
+**Agent Groups com escopo de supervisor por turno**: supervisores recebem no JWT um escopo filtrado pelos grupos e turnos ativos (`supervised_agent_types[]`), com granularidade que o Enlighten Actions da NICE não oferece sem customização. Relatórios e dashboards já chegam pré-filtrados sem configuração por sessão.
 
 **Session Replayer com Comparison Mode** permite diff turn-a-turn entre duas execuções usando similaridade de Jaccard. Útil para avaliação de agentes IA pré-produção e para auditoria de mudanças de prompt.
 

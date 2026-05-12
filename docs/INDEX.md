@@ -1,6 +1,6 @@
 # PlugHub — Portal de Conhecimento
 
-> Última atualização: 2026-05-04 · Versão da plataforma: v25+
+> Última atualização: 2026-05-12 · Versão da plataforma: v25+
 
 Este arquivo é o ponto de entrada único para toda a documentação do PlugHub.
 Cada seção mapeia um público e um nível de detalhe diferente.
@@ -14,6 +14,7 @@ Cada seção mapeia um público e um nível de detalhe diferente.
 | O que é o PlugHub e para quem serve | [product/overview.md](product/overview.md) |
 | Como a plataforma compete no mercado | [product/competitive-analysis.md](product/competitive-analysis.md) |
 | O que cada tela da UI faz | [Módulos funcionais](#módulos-funcionais-modulos) |
+| Como um Arc/feature funciona internamente | [Arcos de implementação](#arcos-de-implementação-arcos) |
 | Como um pacote específico funciona internamente | [Pacotes técnicos](#pacotes-técnicos-pacotes) |
 | Como implementar um padrão (mascaramento, mention, etc.) | [Guias temáticos](#guias-temáticos-guias) |
 | Por que uma decisão arquitetural foi tomada | [ADRs](#adrs-adr) |
@@ -44,7 +45,7 @@ gates de acesso ABAC, APIs envolvidas e os pacotes de backend que o sustentam.
 
 | Arquivo | Rota UI | Roles | Descrição |
 |---|---|---|---|
-| [modulos/contatos.md](modulos/contatos.md) | `/contacts` | operator+ | Lista de contatos, Monitor em tempo real (SSE), Análise (timeseries, score) |
+| [modulos/contatos.md](modulos/contatos.md) | `/contacts` | operator+ | Lista de contatos, aba Agentes, Monitor em tempo real (SSE), Análise (timeseries, score), EventsPage |
 | [modulos/agent-assist.md](modulos/agent-assist.md) | `/agent-assist` | operator+ | Interface do agente humano: chat, RightPanel, co-pilot, pausa |
 
 ### Automação
@@ -53,6 +54,7 @@ gates de acesso ABAC, APIs envolvidas e os pacotes de backend que o sustentam.
 |---|---|---|---|
 | [modulos/workflow.md](modulos/workflow.md) | `/workflow/*` | operator+ | Editor de workflows, Monitor de instâncias, Calendar, Report de campanhas |
 | [modulos/agentflow.md](modulos/agentflow.md) | `/agent-flow/*` | admin+ | Editor YAML de SkillFlows, Monitor, Deploy lifecycle, @mention, Pool Hooks |
+| [modulos/processos.md](modulos/processos.md) | `/agent-flow/processos` | operator+ | Jornadas (Arc 10) e Instâncias de workflow — monitoramento multi-sessão |
 
 ### Qualidade
 
@@ -66,11 +68,37 @@ gates de acesso ABAC, APIs envolvidas e os pacotes de backend que o sustentam.
 |---|---|---|---|
 | [modulos/configuracao-recursos.md](modulos/configuracao-recursos.md) | `/config/resources` | admin | Pools, Agent Types, Skills, Instâncias, Canais, Agentes Humanos |
 | [modulos/configuracao-plataforma.md](modulos/configuracao-plataforma.md) | `/config/platform` | admin | 13+ namespaces de configuração via Config API |
-| [modulos/mascaramento.md](modulos/mascaramento.md) | `/config/masking` | admin | Regras de mascaramento de dados sensíveis, audit capture, retenção |
+| [modulos/mascaramento.md](modulos/mascaramento.md) | `/config/masking` | admin | Regras de mascaramento de dados sensíveis, audit capture, retenção, display rules |
 | [modulos/controle-acesso.md](modulos/controle-acesso.md) | `/config/access` | admin | Usuários RBAC + ABAC, JWT, module_config, ModulePermissionForm |
-| [modulos/dashboards.md](modulos/dashboards.md) | `/dashboards` | admin | Templates de dashboard drag-and-drop com cards de timeseries |
+| [modulos/grupos.md](modulos/grupos.md) | `/config/groups` | admin | Agent Groups, supervisores por turno, escopo de supervisor no JWT (Arc 9) |
+| [modulos/dashboards.md](modulos/dashboards.md) | `/dashboards` | admin | Dashboard #35: DisplayTool registry, 5 tipos de card, ENDPOINT_CATALOG, FilterBar |
 | [modulos/faturamento.md](modulos/faturamento.md) | `/config/billing` | admin, business | Faturamento por capacidade: base + reserve pools |
 | [modulos/relatorios-agentes.md](modulos/relatorios-agentes.md) | `/config/agent-reports` | supervisor+ | Disponibilidade e pausas de agentes humanos (pivot + flat table) |
+
+---
+
+## Arcos de implementação (`arcos/`)
+
+Documentação técnica detalhada por Arc ou componente. Cobre implementação, contratos internos,
+schemas de banco, eventos Kafka e decisões de design. Referenciado pelo CLAUDE.md.
+
+| Arquivo | Conteúdo |
+|---|---|
+| [arcos/arc4-workflow.md](arcos/arc4-workflow.md) | Arc 4 — Workflow, Calendar, Collect, Webhooks, Skill Deploy lifecycle |
+| [arcos/arc5-segments.md](arcos/arc5-segments.md) | Arc 5 — ContactSegment analytics, ClickHouse tables, endpoints de relatório |
+| [arcos/arc6-evaluation.md](arcos/arc6-evaluation.md) | Arc 6 — Quality Evaluation Platform completo (Forms, Campaigns, Contestação, RAG) |
+| [arcos/arc7-auth.md](arcos/arc7-auth.md) | Arc 7 — Auth, RBAC, ABAC, performance routing, JWT completo |
+| [arcos/arc8-agent-availability.md](arcos/arc8-agent-availability.md) | Arc 8 — Disponibilidade e pausas de agentes humanos, ClickHouse pipeline |
+| [arcos/arc9-agent-groups.md](arcos/arc9-agent-groups.md) | Arc 9 — Agent Groups, Supervisor Scope, shift resolution, JWT claims |
+| [arcos/arc10-journey.md](arcos/arc10-journey.md) | Arc 10 — Journey multi-sessão, fases A–E, Kafka journey.events, display endpoints |
+| [arcos/instance-bootstrap.md](arcos/instance-bootstrap.md) | Instance Bootstrap — reconciliação Kubernetes-style, RegistrySyncer, hot-reload |
+| [arcos/platform-ui.md](arcos/platform-ui.md) | Frontend Architecture — design system, módulos, nav groups, ABAC, i18n |
+| [arcos/ai-gateway.md](arcos/ai-gateway.md) | AI Gateway — multi-account rotation, AccountSelector, copilot emitter, modelos |
+| [arcos/usage-metering.md](arcos/usage-metering.md) | Usage Metering — dimensões, Redis quota, assertQuota, cycle reset |
+| [arcos/pricing.md](arcos/pricing.md) | Pricing Module — faturamento por capacidade, base + reserve pools, billing API |
+| [arcos/session-replayer.md](arcos/session-replayer.md) | Session Replayer — ensure-before-read, Hydrator, ReplayContext, Comparison Mode |
+| [arcos/session-conference-lifecycle.md](arcos/session-conference-lifecycle.md) | Ciclo de vida de conferência — modelo 3 camadas, gaps G1–G6, fixes aplicados |
+| [arcos/dashboard.md](arcos/dashboard.md) | Dashboard #35 — DisplayTool registry, ENDPOINT_CATALOG, GlobalFilters, journey cards |
 
 ---
 
@@ -92,7 +120,6 @@ persistência, eventos e relação com outros módulos.
 | [pacotes/channel-gateway.md](pacotes/channel-gateway.md) | `channel-gateway` | Python 3.11+ |
 | [pacotes/channel-gateway-webchat.md](pacotes/channel-gateway-webchat.md) | `channel-gateway` (WebChat) | Python 3.11+ |
 | [pacotes/auth-api.md](pacotes/auth-api.md) | `auth-api` | Python 3.11+ |
-| [pacotes/notification-agent.md](pacotes/notification-agent.md) | `notification-agent` | Python 3.11+ |
 | [pacotes/platform-ui.md](pacotes/platform-ui.md) | `platform-ui` | React 18 + TypeScript |
 | [pacotes/evaluation-agent.md](pacotes/evaluation-agent.md) | `evaluation-agent` | Python 3.11+ |
 | [pacotes/clickhouse-consumer.md](pacotes/clickhouse-consumer.md) | `analytics-api` consumer | Python 3.11+ |
@@ -130,10 +157,6 @@ Documentação de padrões e workflows que cruzam múltiplos pacotes.
 | [guias/webhook-patterns.md](guias/webhook-patterns.md) | Webhooks — dois padrões: trigger (nova sessão) e resume (retorno de sistema externo); comportamento do step `collect` |
 | [guias/timeouts-e-deteccao-de-falhas.md](guias/timeouts-e-deteccao-de-falhas.md) | Timeouts e detecção de falhas — TTLs por componente, CrashDetector, heartbeat |
 | [guias/conferencia-agente-ia-mapeamento.md](guias/conferencia-agente-ia-mapeamento.md) | Conferência — mapeamento de fluxos de IA em conferência |
-| [guias/changelog-2026-04-15.md](guias/changelog-2026-04-15.md) | Changelog 2026-04-15 — ferramentas MCP BPM/supervisor, fila de agentes humanos |
-| [guias/changelog-2026-04-16.md](guias/changelog-2026-04-16.md) | Changelog 2026-04-16 — framework external-mcp, heartbeats, wait_for_message |
-| [guias/changelog-2026-04-16b.md](guias/changelog-2026-04-16b.md) | Changelog 2026-04-16b — complemento ao changelog anterior |
-| [guias/changelog-2026-04-29.md](guias/changelog-2026-04-29.md) | Changelog 2026-04-29 — Sistema ABAC completo (Tasks #17–#23) |
 
 ---
 
@@ -228,13 +251,8 @@ Não consulte estes documentos para implementação — use os correspondentes a
 | [deprecated/standards/operator-console-migration.md](deprecated/standards/operator-console-migration.md) | Plano de migração — operator-console foi removido (migração concluída) |
 | [deprecated/sections/visao_negocial.md](deprecated/sections/visao_negocial.md) | Substituído por [product/overview.md](product/overview.md) |
 | [deprecated/sections/visao_negocial_v24.md](deprecated/sections/visao_negocial_v24.md) | Substituído por [product/](product/) |
-
----
-
-## Legenda
-
-| Símbolo | Significado |
-|---|---|
-| ✅ | Documento completo e revisado |
-| 📋 | Stub — estrutura criada, conteúdo pendente |
-| ⏳ | Pendente de implementação no backend |
+| [pacotes/notification-agent.md](pacotes/notification-agent.md) | Package nunca implementado no monorepo — spec v24.0 seção 8.3 (planejado) |
+| [guias/changelog-2026-04-15.md](guias/changelog-2026-04-15.md) | Changelog histórico pré-CHANGELOG.md — referência apenas |
+| [guias/changelog-2026-04-16.md](guias/changelog-2026-04-16.md) | Changelog histórico pré-CHANGELOG.md — referência apenas |
+| [guias/changelog-2026-04-16b.md](guias/changelog-2026-04-16b.md) | Changelog histórico pré-CHANGELOG.md — referência apenas |
+| [guias/changelog-2026-04-29.md](guias/changelog-2026-04-29.md) | Changelog histórico pré-CHANGELOG.md — referência apenas |

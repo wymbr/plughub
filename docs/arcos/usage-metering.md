@@ -98,7 +98,7 @@ if limit and active > int(limit):
     raise QuotaExceededError("concurrent_sessions")
 ```
 
-Quota limits are written **directly by pricing-api** when a plan is activated — not seeded by Config API. See `docs/modules/pricing.md`.
+Quota limits are written **directly by pricing-api** when a plan is activated — not seeded by Config API. See `docs/arcos/pricing.md`.
 
 ---
 

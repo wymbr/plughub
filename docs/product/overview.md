@@ -40,13 +40,19 @@ O ponto mais relevante para operações em escala: o mesmo especialista pode ser
 
 ### Skill Flow declarativo
 
-Flows de orquestração são declarados em YAML com 11 tipos de step (`task`, `choice`, `reason`, `invoke`, `notify`, `menu`, `suspend`, `collect`, `escalate`, `complete`, `resolve`). Suportam timers em horas úteis via Calendar API, coleta assíncrona multicanal, aprovações e contestações. O mesmo motor roda tanto flows de atendimento em tempo real quanto workflows de processo batch.
+Flows de orquestração são declarados em YAML com 13 tipos de step (`task`, `choice`, `reason`, `invoke`, `notify`, `menu`, `suspend`, `collect`, `escalate`, `complete`, `resolve`, `begin_transaction`, `end_transaction`). Suportam timers em horas úteis via Calendar API, coleta assíncrona multicanal, aprovações e contestações, e captura mascarada de dados sensíveis em bloco atômico (`begin_transaction`/`end_transaction`). O mesmo motor roda tanto flows de atendimento em tempo real quanto workflows de processo batch.
 
 ### Automação de processos multicanal
 
 O step `collect` permite que um workflow inicie proativamente um contato — via WhatsApp, e-mail, SMS ou voz — no horário configurado, suspenda aguardando resposta por N horas em horário comercial e retome automaticamente quando o cliente responder (ou escale para um agente humano no timeout). Uma campanha de cobrança, pesquisa NPS ou onboarding com etapas manuais é inteiramente descrita num único YAML, sem módulo separado de outbound.
 
 O mesmo mecanismo suporta **retornos multicanal**: um fluxo iniciado num canal (webchat de atendimento) pode aguardar uma etapa posterior em outro (aprovação por SMS, upload por e-mail). O cliente experimenta continuidade; o ContextStore mantém o estado da sessão independente do canal de retorno.
+
+### Journey — processos que transcendem a sessão
+
+Uma **Journey** é a unidade de serviço acima da sessão individual — agrupa todos os contatos de um mesmo processo de atendimento num único `journey_id`, independente de quantas sessões, dias ou canais o processo atravesse. Um processo de onboarding com análise de crédito, aprovação interna e confirmação com o cliente pode envolver três sessões separadas e ainda ser tratado como uma jornada coesa, com histórico unificado e KPIs de resolução mensuráveis por tipo de processo.
+
+A Journey pode ser iniciada por um agente IA (via MCP tool `journey_start`), por um agente humano (via `@journey:<skill_id>` no Agent Assist) ou automaticamente pela própria skill (flag `creates_journey: true` no YAML). Sessões subsequentes criadas por `collect` steps são vinculadas à Journey automaticamente. Isso é equivalente ao conceito de "case" em CRMs como Salesforce Service Cloud — mas nativo ao roteador, sem exigir CRM externo.
 
 ### Integração via MCP com proteção nativa
 
@@ -59,6 +65,8 @@ Todo atendimento pode ser avaliado por um Agente Avaliador com formulários conf
 ### Supervisão operacional em tempo real
 
 O Operator Console oferece heatmap de sentimento por pool, drill-down de sessões ativas com transcrição ao vivo, e capacidade de intervenção direta do supervisor sem passar pelo ciclo MCP. O Co-pilot analisa cada turno em background e popula sugestões de resposta e flags de risco para o agente humano.
+
+Supervisores operam com **escopo por grupo e turno**: o sistema de Agent Groups permite definir quais agentes cada supervisor acompanha em cada turno do dia, e esse escopo é resolvido no JWT no momento do login — relatórios, heatmaps e listas de agentes já chegam pré-filtrados, sem configuração adicional por sessão.
 
 ### Faturamento por capacidade configurada
 

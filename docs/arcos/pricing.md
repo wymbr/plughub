@@ -11,7 +11,7 @@
 
 A tenant pays for the capacity they configure (e.g. "10 human agent slots in the retention pool") regardless of whether those slots are fully utilized. This model makes costs predictable and avoids penalizing efficient operations.
 
-Consumption metering still happens (see `docs/modules/usage-metering.md`) but is not used for billing — it is used for operational analytics and future overage alerts.
+Consumption metering still happens (see `docs/arcos/usage-metering.md`) but is not used for billing — it is used for operational analytics and future overage alerts.
 
 ---
 
