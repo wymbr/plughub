@@ -18,6 +18,8 @@
 | [`agent.registry.events`](#agentregistryevents) | agent-registry | routing-engine (kafka_listener) | Registro e atualização de pools e tipos |
 | [`rules.escalation.events`](#rulesescalationevents) | rules-engine | audit, monitoring | Escalações disparadas (modo ativo) |
 | [`rules.shadow.events`](#rulesshadowevents) | rules-engine | monitoring | Disparos em shadow mode (sem ação real) |
+| [`dialer.compliance.events`](#dialercomplianceevents) | media-gateway | audit, compliance-dashboard, supervisor | Decisões e bloqueios do compliance guard do dialer outbound |
+| [`journey.events`](#journeyevents) | mcp-server-plughub, skill-flow-engine, channel-gateway | clickhouse-consumer, analytics, dashboard | Lifecycle de jornada multi-contato — base do modelo analítico (Arc 10) |
 
 ---
 
@@ -449,6 +451,300 @@ Idêntico a `rules.escalation.events`, mas com `shadow_mode: true`.
 
 ---
 
+## `dialer.compliance.events`
+
+> Status do schema: **Proposta** — alinhar com [`arcos/dialer-compliance-invariants.md`](arcos/dialer-compliance-invariants.md)
+
+**Propósito**: Registra toda decisão do compliance guard do media gateway em campanhas outbound — dial attempts, bloqueios, mudanças de pacing, alterações de DNC e disparos de threshold de abandonment. Garante audit trail completo para compliance regulatório (TCPA, LGPD, Anatel, GDPR) com retenção mínima de 7 anos.
+
+**Produtor**: `media-gateway` (SIP/PSTN e WebRTC) — compliance guard interno
+
+**Consumidores**:
+- `clickhouse-consumer` — persistência analítica e cálculo de abandonment ratio em janela móvel
+- Dashboards de compliance — visualização operacional para supervisores e legal
+- Auditoria externa — exportação para SIEM e ferramentas de compliance
+
+**Chave de partição**: `campaign_id` (garante ordem de eventos por campanha — crítico para cálculo correto de abandonment ratio em janela móvel)
+
+**Retenção**: 7 anos mínimos (configurável via `dialer.compliance.audit_retention_years` na Config API).
+
+### Schemas por evento
+
+#### `dial_attempt`
+
+```json
+{
+  "event":              "dial_attempt",
+  "tenant_id":          "string",
+  "campaign_id":        "uuid",
+  "contact_id":         "uuid",
+  "mailing_entry_id":   "uuid",
+  "phone_number":       "string (E.164)",
+  "contact_timezone":   "string (IANA, ex: America/Sao_Paulo)",
+  "window_applied": {
+    "jurisdiction":     "BR | US | UK | EU",
+    "start_local":      "HH:MM",
+    "end_local":        "HH:MM"
+  },
+  "pacing": {
+    "algorithm":        "preview | progressive | power | predictive",
+    "multiplier":       1.0
+  },
+  "decision":           "dial | block | defer",
+  "decision_reason":    "string | null",
+  "timestamp":          "ISO datetime"
+}
+```
+
+#### `dial_blocked`
+
+```json
+{
+  "event":              "dial_blocked",
+  "tenant_id":          "string",
+  "campaign_id":        "uuid",
+  "contact_id":         "uuid",
+  "phone_number_hash":  "string (sha256)",
+  "block_reason":       "dnc | window | quota | abandonment",
+  "dnc_level":          "national | tenant | campaign | null",
+  "timestamp":          "ISO datetime"
+}
+```
+
+> **Privacy by design**: bloqueios por DNC armazenam `phone_number_hash` em vez do número em claro — a evidência de auditoria está preservada sem expor PII no audit trail.
+
+#### `dial_deferred`
+
+```json
+{
+  "event":                       "dial_deferred",
+  "tenant_id":                   "string",
+  "campaign_id":                 "uuid",
+  "contact_id":                  "uuid",
+  "defer_reason":                "outside_window | quota_exhausted | pacing_constraint",
+  "next_valid_window_start":     "ISO datetime",
+  "timestamp":                   "ISO datetime"
+}
+```
+
+#### `pacing_change`
+
+```json
+{
+  "event":            "pacing_change",
+  "tenant_id":        "string",
+  "campaign_id":      "uuid",
+  "previous": {
+    "algorithm":      "preview | progressive | power | predictive",
+    "multiplier":     1.0
+  },
+  "new": {
+    "algorithm":      "preview | progressive | power | predictive",
+    "multiplier":     1.0
+  },
+  "change_reason":    "manual | auto_throttle | abandonment_threshold | quota | schedule",
+  "operator_id":      "string | null",
+  "timestamp":        "ISO datetime"
+}
+```
+
+> **Invariante**: quando `change_reason = "abandonment_threshold"`, o operador não pode reverter via mensagem `manual` até a janela móvel cair abaixo do threshold. O media gateway rejeita pacing_change manual nessa condição.
+
+#### `dnc_added`
+
+```json
+{
+  "event":              "dnc_added",
+  "tenant_id":          "string",
+  "phone_number_hash":  "string (sha256)",
+  "level":              "national | tenant | campaign",
+  "source":             "national_sync | upload | opt_out_during_call | api | regulatory_request",
+  "campaign_id":        "uuid | null",
+  "operator_id":        "string | null",
+  "expires_at":         "ISO datetime | null",
+  "timestamp":          "ISO datetime"
+}
+```
+
+> `expires_at: null` significa entrada permanente (regra DNC nacional padrão). Entradas com expiração são típicas de opt-outs temporários sob legislação específica.
+
+#### `abandonment_threshold_crossed`
+
+```json
+{
+  "event":              "abandonment_threshold_crossed",
+  "tenant_id":          "string",
+  "campaign_id":        "uuid",
+  "ratio_observed":     0.035,
+  "threshold":          0.03,
+  "window_days":        30,
+  "sample_size":        4823,
+  "action_taken":       "force_1_to_1 | alert_only",
+  "timestamp":          "ISO datetime"
+}
+```
+
+> Quando emitido, o media gateway já forçou a transição declarada em `action_taken`. Supervisores são notificados via WebSocket; reativação de pacing predictive depende de janela móvel cair abaixo do threshold.
+
+---
+
+## `journey.events`
+
+> Status do schema: **Proposta** — alinhar com [`arcos/arc10-journey.md`](arcos/arc10-journey.md) (operacional) e [`arcos/journey-analytics.md`](arcos/journey-analytics.md) (analítico)
+
+**Propósito**: Lifecycle de jornada multi-contato como unidade transversal aos demais tópicos. É a fonte da verdade do modelo analítico de Journey (drill-down nos quatro níveis: jornada → contato → sessão → turno).
+
+**Produtores**:
+- `mcp-server-plughub` — `journey.started`, `journey.contact_attached`, `journey.closed`, `journey.reclassified`
+- `skill-flow-engine` — `journey.started` (quando flow declara `creates_journey: true`)
+- `channel-gateway` — `session.opened`, `session.closed`, `turn.created`, `contact.resolved`
+
+**Consumidores**:
+- `clickhouse-consumer` — populates `journey_events`, `journey_summary`, `contact_summary`
+- Analytics e dashboards — agregações em tempo real
+- Auditoria — rastreabilidade de reclassificações
+
+**Chave de partição**: `journey_id` quando presente; `contact_id` para eventos pré-attachment.
+
+**Retenção**: 7 anos em ClickHouse (alinhada com retenção do compliance), configurável.
+
+### Schemas por evento
+
+#### `journey.started`
+
+```json
+{
+  "event":           "journey.started",
+  "tenant_id":       "string",
+  "journey_id":      "uuid",
+  "journey_type":    "string (cobrança, onboarding, retenção, suporte, ...)",
+  "initiator": {
+    "type":          "agent_ia | agent_humano | skill_flow | api | system",
+    "id":            "string"
+  },
+  "customer_id":     "string",
+  "metadata":        { },
+  "timestamp":       "ISO datetime"
+}
+```
+
+#### `journey.contact_attached`
+
+```json
+{
+  "event":              "journey.contact_attached",
+  "tenant_id":          "string",
+  "journey_id":         "uuid",
+  "contact_id":         "uuid",
+  "attachment_mode":    "creation | retroactive",
+  "attached_by": {
+    "type":             "skill_flow | classifier | operator | api",
+    "id":               "string"
+  },
+  "previous_journey_id": "uuid | null",
+  "timestamp":          "ISO datetime"
+}
+```
+
+> `attachment_mode = "retroactive"` indica que o contato foi vinculado a uma jornada existente após o fato — dispara recálculo das agregações `journey_summary` para a jornada afetada. Quando `previous_journey_id` é não-nulo, indica mudança de attachment (raro mas suportado).
+
+#### `contact.resolved`
+
+```json
+{
+  "event":           "contact.resolved",
+  "tenant_id":       "string",
+  "journey_id":      "uuid | null",
+  "contact_id":      "uuid",
+  "outcome":         "resolved | escalated_human | transferred_agent | callback | abandoned",
+  "handoff_reason":  "string | null",
+  "timestamp":       "ISO datetime"
+}
+```
+
+> Relacionado a `conversations.events`/`conversation_completed` mas no nível de contato (não de sessão única). Um contato pode envolver múltiplas sessões antes de resolver.
+
+#### `session.opened` / `session.closed`
+
+```json
+{
+  "event":           "session.opened | session.closed",
+  "tenant_id":       "string",
+  "journey_id":      "uuid | null",
+  "contact_id":      "uuid",
+  "session_id":      "uuid",
+  "channel":         "whatsapp | webchat | voz_sip | voz_webrtc | sms | email | instagram | telegram",
+  "participants": [
+    {
+      "role":        "cliente | humano | ia_orquestrador | especialista | supervisor",
+      "id":          "string",
+      "visibility":  "full | masked | suppressed"
+    }
+  ],
+  "timestamp":       "ISO datetime"
+}
+```
+
+> `participants[].visibility` registra o nível de visibilidade configurado para cada participante naquela sessão — fundamental para o audit trail do padrão de delegação de dados sensíveis (supervisor vê tudo, humano principal pode ver mascarado durante delegação a especialista).
+
+#### `turn.created`
+
+```json
+{
+  "event":           "turn.created",
+  "tenant_id":       "string",
+  "journey_id":      "uuid | null",
+  "contact_id":      "uuid",
+  "session_id":      "uuid",
+  "turn_id":         "uuid",
+  "participant": {
+    "role":          "cliente | humano | ia_orquestrador | especialista | supervisor",
+    "id":            "string"
+  },
+  "sentiment_score": -1.0,
+  "tokens_in":       0,
+  "tokens_out":      0,
+  "timestamp":       "ISO datetime"
+}
+```
+
+> `sentiment_score` é preenchido apenas quando `participant.role = "cliente"` (caso contrário `null`). `tokens_in`/`tokens_out` são preenchidos para turnos de agentes IA (caso contrário `null`).
+
+#### `journey.closed`
+
+```json
+{
+  "event":           "journey.closed",
+  "tenant_id":       "string",
+  "journey_id":      "uuid",
+  "final_outcome":   "resolved | abandoned | escalated_external | timeout",
+  "closed_by": {
+    "type":          "skill_flow | operator | timeout | system",
+    "id":            "string"
+  },
+  "timestamp":       "ISO datetime"
+}
+```
+
+#### `journey.reclassified`
+
+```json
+{
+  "event":                 "journey.reclassified",
+  "tenant_id":             "string",
+  "journey_id":            "uuid",
+  "journey_type_previous": "string",
+  "journey_type_new":      "string",
+  "reason":                "string",
+  "operator_id":           "string",
+  "timestamp":             "ISO datetime"
+}
+```
+
+> Reclassificação retroativa dispara rebuild da agregação `journey_summary` para a jornada afetada. O evento persiste em `audit_events` paralelamente, com retenção 7 anos para rastreabilidade regulatória.
+
+---
+
 ## Fluxo de Eventos — Atendimento Padrão
 
 ```
@@ -484,4 +780,59 @@ Idêntico a `rules.escalation.events`, mas com `shadow_mode: true`.
 4. rules-engine          → mcp-server conversation_escalate  (modo active apenas)
 5. routing-engine        → conversations.routed         (novo pool de destino)
 ```
+
+## Fluxo de Eventos — Campanha Outbound
+
+```
+1. skill-flow (outbound) → journey.events (journey.started, journey_type=cobrança)
+2. media-gateway         → [loop a cada ciclo de pacing]
+   a. avalia disponibilidade de agentes
+   b. seleciona N contatos do mailing (N = capacity × multiplier)
+   c. para cada contato:
+      - media-gateway    → dialer.compliance.events (dial_attempt)
+      - se DNC/window/quota: media-gateway → dialer.compliance.events (dial_blocked ou dial_deferred)
+      - se OK: discagem real via SIP/WebRTC
+3. [contato atende]
+4. media-gateway         → channel-gateway (voice session estabelecida)
+5. channel-gateway       → conversations.inbound        (a partir daqui o fluxo é idêntico ao inbound)
+6. routing-engine        → conversations.routed
+7. channel-gateway       → journey.events (journey.contact_attached + session.opened)
+   [atendimento em curso — turnos publicam em journey.events (turn.created)]
+8. mcp-server            → conversations.events (conversation_completed)
+9. channel-gateway       → journey.events (session.closed + contact.resolved)
+10. [se mailing completo] skill-flow → journey.events (journey.closed)
+```
+
+**Pontos relevantes**:
+- Após o passo 5, **não há distinção operacional entre inbound e outbound** — context package, roteamento, session replay e avaliação seguem o mesmo caminho
+- Baixa no mailing ocorre apenas em `contact.resolved` com `outcome` adequado (não em `dial_blocked` nem `dial_deferred`)
+- O compliance guard é avaliado em cada iteração do loop de pacing — `pacing_change` pode ser emitido autonomamente se threshold de abandonment for cruzado
+
+## Fluxo de Eventos — Jornada Multi-contato
+
+```
+1. [primeiro contato]
+   channel-gateway       → conversations.inbound
+   skill-flow            → journey.events (journey.started)
+   skill-flow            → journey.events (journey.contact_attached, attachment_mode=creation)
+   [atendimento em curso, encerra com callback agendado]
+   skill-flow            → journey.events (session.closed, contact.resolved outcome=callback)
+
+2. [N horas úteis depois — collect step retoma]
+   skill-flow            → conversations.inbound        (novo contato via outbound)
+   [novo contato segue o fluxo de Campanha Outbound, mas linka à journey existente]
+   skill-flow            → journey.events (journey.contact_attached, attachment_mode=creation, journey_id=mesma)
+
+3. [classificador retroativo descobre que outro contato N+1 era da mesma jornada]
+   classifier            → journey.events (journey.contact_attached, attachment_mode=retroactive)
+   clickhouse-consumer   → rebuild de journey_summary para a journey afetada
+
+4. [jornada conclui — pode ser por skill_flow, operator, timeout ou system]
+   skill-flow            → journey.events (journey.closed, final_outcome=resolved)
+```
+
+**Pontos relevantes**:
+- `journey_id` é dimensão obrigatória em todos os eventos de contato/sessão/turno após o attachment
+- Late-binding retroativo (passo 3) dispara recálculo automático via materialized views — não exige operação manual
+- Reclassificação de `journey_type` emite evento separado (`journey.reclassified`) e força replay da agregação afetada
 

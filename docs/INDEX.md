@@ -32,7 +32,7 @@ Documentação voltada ao público comercial, de gestão e de novos usuários da
 | [product/overview.md](product/overview.md) | O que é o PlugHub, proposta de valor, arquitetura em uma página |
 | [product/target-audience.md](product/target-audience.md) | Perfis de público-alvo: gestores, supervisores, integradores, desenvolvedores |
 | [product/value-proposition.md](product/value-proposition.md) | Diferenciais por papel, benefícios mensuráveis, casos de uso |
-| [product/competitive-analysis.md](product/competitive-analysis.md) | Comparação com Genesys, Salesforce Agentforce, Gemini Enterprise, LangGraph, n8n |
+| [product/competitive-analysis.md](product/competitive-analysis.md) | Comparação com Gemini Enterprise, Agentforce, Genesys, NICE/Cognigy, Five9, Talkdesk, LangGraph, CrewAI, n8n; tese lifecycle-centric vs. interaction-centric (CCaaS) vs. record-centric (CRM) |
 
 ---
 
@@ -99,6 +99,8 @@ schemas de banco, eventos Kafka e decisões de design. Referenciado pelo CLAUDE.
 | [arcos/session-replayer.md](arcos/session-replayer.md) | Session Replayer — ensure-before-read, Hydrator, ReplayContext, Comparison Mode |
 | [arcos/session-conference-lifecycle.md](arcos/session-conference-lifecycle.md) | Ciclo de vida de conferência — modelo 3 camadas, gaps G1–G6, fixes aplicados |
 | [arcos/dashboard.md](arcos/dashboard.md) | Dashboard #35 — DisplayTool registry, ENDPOINT_CATALOG, GlobalFilters, journey cards |
+| [arcos/dialer-compliance-invariants.md](arcos/dialer-compliance-invariants.md) | **Proposta** — Invariantes arquiteturais do compliance guard do media gateway (TCPA/LGPD/Anatel): abandonment ratio, DNC, janela horária, pacing limits, audit |
+| [arcos/journey-analytics.md](arcos/journey-analytics.md) | **Proposta** — Modelo analítico Journey em ClickHouse, drill-down nos 4 níveis (jornada → contato → sessão → turno), KPIs padrão, endpoints, late-binding e replay |
 
 ---
 
