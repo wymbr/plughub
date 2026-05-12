@@ -19,7 +19,7 @@ PlugHub is an enterprise orchestration platform that connects agents — human a
 | Estrutura do repositório | árvore de diretórios do nível `packages/` |
 | Kafka topics | tabela de tópicos × producer × consumer |
 | Convenções de nomenclatura | padrões de ID |
-| Seções de arquitetura ativa | resumo de 15–20 linhas com link para `docs/modules/` |
+| Seções de arquitetura ativa | resumo de 15–20 linhas com link para `docs/arcos/` |
 | Pending genuíno | máx 50 linhas — apenas itens não implementados |
 
 ### O que NÃO pertence ao CLAUDE.md
@@ -28,9 +28,9 @@ PlugHub is an enterprise orchestration platform that connects agents — human a
 |----------|----------|
 | Itens marcados com ✅ | `CHANGELOG.md` |
 | Histórico de implementação (task #N, testes X/Y, build N kB) | `CHANGELOG.md` |
-| Documentação completa de um Arc ou módulo (> 50 linhas) | `docs/modules/{arc}.md` |
-| Snippets de código longos (> 10 linhas) fora de invariantes | `docs/modules/{arc}.md` |
-| Detalhes de UI (props, componentes, hooks por feature) | `docs/modules/{arc}.md` |
+| Documentação completa de um Arc ou módulo (> 50 linhas) | `docs/arcos/{arc}.md` |
+| Snippets de código longos (> 10 linhas) fora de invariantes | `docs/arcos/{arc}.md` |
+| Detalhes de UI (props, componentes, hooks por feature) | `docs/arcos/{arc}.md` |
 | "Pendente (fase 2)" que já foi implementado | Deletar |
 
 ### Estrutura de arquivos de referência
@@ -41,13 +41,23 @@ plughub/
   TODO.md            ← itens genuinamente não implementados
   CHANGELOG.md       ← histórico de implementações concluídas
   docs/
-    modules/
+    modulos/                  ← docs de páginas/features da UI (uma por rota)
+    arcos/                    ← docs de implementação por Arc (detalhe técnico)
       arc4-workflow.md        ← Arc 4 completo (workflow, calendar, collect, webhooks)
       arc5-segments.md        ← Arc 5 ContactSegment analytics
       arc6-evaluation.md      ← Arc 6 Evaluation platform completo
       arc7-auth.md            ← Arc 7 Auth + ABAC completo
+      arc8-agent-availability.md ← Arc 8 disponibilidade e pausas
+      arc9-agent-groups.md    ← Arc 9 Agent Groups + Supervisor Scope
+      arc10-journey.md        ← Arc 10 Journey multi-session
       instance-bootstrap.md   ← reconciliação, RegistrySyncer, hot-reload
       platform-ui.md          ← Frontend Architecture + Agent Assist UI
+      ai-gateway.md           ← AI Gateway multi-account, copilot, stateless
+      usage-metering.md       ← metering por dimensão, Redis, quota
+      pricing.md              ← faturamento por capacidade, billing API
+      session-replayer.md     ← Session Replayer, Hydrator, ReplayContext
+      session-conference-lifecycle.md ← modelo de 3 camadas, gaps conhecidos
+      dashboard.md            ← Dashboard #35, DisplayTool registry, catalog
     guias/
       context-store.md        ← ContextStore, @ctx.*, segment-scoped
       masked-input.md         ← Masked Input, begin_transaction
@@ -65,7 +75,7 @@ plughub/
 
 1. **Feature pequena** (< 20 linhas): inline na seção H2 existente mais próxima.
 2. **Feature média** (20–50 linhas): subseção `###` dentro da seção H2 mais próxima.
-3. **Feature grande** (> 50 linhas): criar `docs/modules/{nome}.md`; adicionar resumo de 15–20 linhas aqui.
+3. **Feature grande** (> 50 linhas): criar `docs/arcos/{nome}.md`; adicionar resumo de 15–20 linhas aqui.
 4. **Fase pendente concluída**: mover do `## Pending` para `CHANGELOG.md`; atualizar `TODO.md`; **nunca deixar ✅ aqui**.
 
 ### Regra de persistência de planejamento
@@ -76,6 +86,20 @@ plughub/
 | Decisão técnica (> 3 linhas) | Entrada em `TODO.md` com raciocínio |
 | Invariante ou regra arquitetural | Seção neste arquivo |
 | Implementação concluída | `CHANGELOG.md` |
+
+### Convenção de pastas de documentação
+
+| Pasta | Conteúdo | Quando criar arquivo aqui |
+|---|---|---|
+| `docs/modulos/` | Docs de páginas e features da UI | Nova rota/módulo de interface |
+| `docs/arcos/` | Docs de implementação por Arc | Arc novo ou refactoring de backend significativo |
+| `docs/guias/` | Padrões transversais a múltiplos pacotes | Novo padrão (mascaramento, @mention, hooks, etc.) |
+| `docs/adr/` | Decisões arquiteturais com trade-offs | Toda decisão estrutural relevante |
+| `docs/pacotes/` | Contratos públicos de cada pacote | Novo pacote no monorepo |
+
+### Regra de atualização de documentação
+
+> Toda entrada em `CHANGELOG.md` deve ter um doc correspondente **criado ou atualizado** antes de ser considerada concluída. Se a feature afeta uma rota de UI → atualizar `docs/modulos/`. Se é um Arc ou backend significativo → atualizar ou criar `docs/arcos/`. Se é um padrão transversal → atualizar `docs/guias/`.
 
 ---
 
@@ -236,7 +260,7 @@ Kubernetes-style reconciliation controller in `orchestrator-bridge/instance_boot
 
 **RegistrySyncer** runs before Bootstrap: upserts pools+agent_types from `infra/registry/*.yaml`; prunes stale (`REGISTRY_SYNC_PRUNE=true`). Skill sync: PUTs `skill-flow-engine/skills/*.yaml` before pools; regex `^skill_[a-z0-9_]+_v\d+$`. **Skill hot-reload** (3-elo): startup PUT → `registry.changed` Kafka → `_skill_flow_cache[skill_id]` invalidation → immediate effect without restart. Instance IDs: `{agent_type_id}-{n+1:03d}`. Human agents NOT managed by Bootstrap. Seed no longer writes Redis keys.
 
-→ See [`docs/modules/instance-bootstrap.md`](docs/modules/instance-bootstrap.md)
+→ See [`docs/arcos/instance-bootstrap.md`](docs/arcos/instance-bootstrap.md)
 
 ---
 
@@ -447,7 +471,7 @@ Pattern: ensure-before-read with optional Hydrator. Pipeline: `session_closed` �
 
 `ReplayContext` extended for Arc 6: `evaluation_form`, `campaign_context`, `knowledge_snippets` (top-5). **Comparison Mode**: `comparison_turns` with Jaccard similarity (threshold 0.4); `buildComparisonReport()` with divergence_points. `ReplayEvent.delta_ms` preserves original intervals; `speed_factor` scales timing (default 10x batch).
 
-→ See [`docs/modules/session-replayer.md`](docs/modules/session-replayer.md), [`docs/adr/adr-session-replayer.md`](docs/adr/adr-session-replayer.md)
+→ See [`docs/arcos/session-replayer.md`](docs/arcos/session-replayer.md), [`docs/adr/adr-session-replayer.md`](docs/adr/adr-session-replayer.md)
 
 ---
 
@@ -455,7 +479,7 @@ Pattern: ensure-before-read with optional Hydrator. Pipeline: `session_closed` �
 
 Three independent layers must not be collapsed: **(1) contact lifecycle** (customer perspective, statistics frozen at customer departure); **(2) agent segment lifecycle** (each participant's window, pool resource freed at `agent_done`); **(3) conference infrastructure** (the room, destroyed only when all participants leave). The current implementation conflates layers 1 and 3 — `_trigger_contact_close()` currently serves both. Known gaps: G1 (AHT inflated by wrap-up time), G2 (`remaining` ignores AI specialists), G3 (AI instance restored while still running), G4 (supervisor has no heartbeat cleanup), G5 (primary AI close expels supervisor), G6 (redundant restore on agent_done close). Fixes applied 2026-05-10: busy counter on cross-pool transfer, pool counter on queue entry, `agent_done` publish from bridge for native/YAML-fallback agents.
 
-→ See [`docs/modules/session-conference-lifecycle.md`](docs/modules/session-conference-lifecycle.md)
+→ See [`docs/arcos/session-conference-lifecycle.md`](docs/arcos/session-conference-lifecycle.md)
 
 ---
 
@@ -467,7 +491,7 @@ Dimensions wired: `sessions` (Core, SET NX guard), `messages` (Core, visibility=
 
 Redis: `{t}:usage:current:{dimension}` (45d), `{t}:quota:limit:{dimension}`, `{t}:quota:concurrent_sessions`. `assertQuota` (INCRBY-check-rollback). Cycle reset: `POST /admin/cycle-reset` (port 3950).
 
-→ See [`docs/modules/usage-metering.md`](docs/modules/usage-metering.md)
+→ See [`docs/arcos/usage-metering.md`](docs/arcos/usage-metering.md)
 
 ---
 
@@ -489,7 +513,7 @@ Masked fields delivery chain: `step.masked` → `notification_send` args → `co
 
 Endpoints: `GET /v1/pricing/invoice/{tenant_id}` (JSON + `?format=xlsx`), `POST /v1/pricing/resources/{tenant_id}`, `POST /v1/pricing/reserve/{tenant_id}/{pool_id}/activate|deactivate`. Config API namespace `pricing`: `unit_prices`, `reserve_markup_pct`, `billing_cycle_day`, `currency`. Platform-UI BillingPage at `/config/billing` (role: admin). Quota limits written to Redis on plan activation — not seeded by Config API.
 
-→ See [`docs/modules/pricing.md`](docs/modules/pricing.md)
+→ See [`docs/arcos/pricing.md`](docs/arcos/pricing.md)
 
 ---
 
@@ -511,7 +535,7 @@ Pre-hook ContextStore writes (before hooks fire): `session.close_origin`, `sessi
 
 ClickHouse tables: `analytics.segments` (`ReplacingMergeTree` ORDER BY `(tenant_id, session_id, segment_id)`), `analytics.session_timeline` (enriched with `segment_id`), `mv_agent_performance_daily` (AggregatingMergeTree), `mv_segment_summary`. Endpoints: `GET /reports/segments`, `GET /reports/agents/performance`, `GET /reports/agent-performance/daily`, `GET /reports/sessions/complexity`.
 
-→ See [`docs/modules/arc5-segments.md`](docs/modules/arc5-segments.md), [`docs/adr/adr-contact-segments.md`](docs/adr/adr-contact-segments.md)
+→ See [`docs/arcos/arc5-segments.md`](docs/arcos/arc5-segments.md), [`docs/adr/adr-contact-segments.md`](docs/adr/adr-contact-segments.md)
 
 ---
 
@@ -521,7 +545,7 @@ ClickHouse tables: `analytics.segments` (`ReplacingMergeTree` ORDER BY `(tenant_
 
 Config: `PLUGHUB_ANTHROPIC_API_KEYS=sk-1,sk-2,sk-3` (multi-key activates AccountSelector). `PLUGHUB_OPENAI_API_KEYS` optional fallback. Model profiles: `realtime` (Sonnet → gpt-4o), `balanced` (Haiku → gpt-4o-mini), `evaluation` (Haiku — isolated from realtime). Config API namespace `ai_gateway`: `account_rotation_enabled`, `throttle_retry_after_s`, `evaluation_model`.
 
-→ See [`docs/modules/ai-gateway.md`](docs/modules/ai-gateway.md)
+→ See [`docs/arcos/ai-gateway.md`](docs/arcos/ai-gateway.md)
 
 ---
 
@@ -529,7 +553,7 @@ Config: `PLUGHUB_ANTHROPIC_API_KEYS=sk-1,sk-2,sk-3` (multi-key activates Account
 
 Pipeline for tracking human agent pauses. Config API namespace `agent_activity`, key `pause_reasons` (seedable pause reason list). Pause endpoints: `PUT /api/agent-pause` and `PUT /api/agent-resume` in mcp-server-plughub — updates Redis state, publishes `agent_pause`/`agent_ready` to `agent.lifecycle` Kafka with `reason_id`/`reason_label`. ClickHouse table: `agent_pause_intervals` (ReplacingMergeTree). Analytics: `GET /reports/agent-availability` with pool scoping. Platform-UI: `AgentReportsPage.tsx` at `/contacts/reports/agents`.
 
-→ See [`docs/modules/arc8-agent-availability.md`](docs/modules/arc8-agent-availability.md)
+→ See [`docs/arcos/arc8-agent-availability.md`](docs/arcos/arc8-agent-availability.md)
 
 ---
 
@@ -545,7 +569,7 @@ Nav groups (navKey): Home 🏠, Console 🖥️ (contacts.operacao), Monitor �
 
 **Agent Assist UI** at `/agent-assist`: 4-tab right panel (Estado, Capacidades, Contexto, Histórico). Substitution mode for menu cards. Visibility array routing for NPS/wrap-up agents. Optimistic echo for button selections.
 
-→ See [`docs/modules/platform-ui.md`](docs/modules/platform-ui.md)
+→ See [`docs/arcos/platform-ui.md`](docs/arcos/platform-ui.md)
 
 ---
 
@@ -557,7 +581,7 @@ Nav groups (navKey): Home 🏠, Console 🖥️ (contacts.operacao), Monitor �
 
 **Performance routing** (Arc 7d): `performance_score = resolution_rate × (1 − escalation_rate)`. Blending: `(1-w) × competency + w × performance`; `w = performance_score_weight` (default 0.0, env `PLUGHUB_PERFORMANCE_SCORE_WEIGHT`). Redis key `{tenant}:agent_perf:{agent_type_id}` (TTL 6h). Batch job in analytics-api runs every 5min, lookback 7 days, min 5 sessions for statistical significance.
 
-→ See [`docs/modules/arc7-auth.md`](docs/modules/arc7-auth.md)
+→ See [`docs/arcos/arc7-auth.md`](docs/arcos/arc7-auth.md)
 
 ---
 
@@ -569,7 +593,7 @@ Nav groups (navKey): Home 🏠, Console 🖥️ (contacts.operacao), Monitor �
 
 **mcp-server-knowledge** (TypeScript, port 3401): pgvector knowledge base for RAG. Tools: `knowledge_search`, `knowledge_upsert`, `knowledge_delete`. **agente_avaliacao_v1**: loads form + knowledge snippets via `evaluation_context_get`, scores each criterion with evidence, submits via `evaluation_submit`. Analytics: `evaluation_results` + `evaluation_events` ClickHouse tables; `GET /reports/evaluations` + `/reports/evaluations/summary`.
 
-→ See [`docs/modules/arc6-evaluation.md`](docs/modules/arc6-evaluation.md)
+→ See [`docs/arcos/arc6-evaluation.md`](docs/arcos/arc6-evaluation.md)
 
 ---
 
@@ -585,7 +609,7 @@ Nav groups (navKey): Home 🏠, Console 🖥️ (contacts.operacao), Monitor �
 
 **Skill Deploy** (Phase 2): `POST /v1/skills/:id/deploy` → `skill_deployments` table → `publishRegistryChanged`. Scheduled deploy via `skill_scheduled_deploy_v1` workflow YAML. `GET /v1/skills/:id/handoff-status` for safe deploys.
 
-→ See [`docs/modules/arc4-workflow.md`](docs/modules/arc4-workflow.md)
+→ See [`docs/arcos/arc4-workflow.md`](docs/arcos/arc4-workflow.md)
 
 ---
 
@@ -601,7 +625,7 @@ Nav groups (navKey): Home 🏠, Console 🖥️ (contacts.operacao), Monitor �
 
 **platform-ui**: `GroupsPage` at `/config/groups` (roles: admin, ABAC `config.users`). List + side drawer with 4 tabs (Info, Members, Supervisors, Shifts). Nav entry added to Configuração group. i18n namespace `groups` (en + pt-BR). `Session.supervisedAgentTypes` + `CurrentUser.supervisedAgentTypes` added to auth layer. Monitor Heatmap filtered by `accessiblePools`; Agents/Instances tabs filtered by `supervisedAgentTypes` (client-side, transparent). Console already scoped via `accessiblePools` in `AgentAssistContext.fetchPools`.
 
-→ See [`docs/modules/arc9-agent-groups.md`](docs/modules/arc9-agent-groups.md)
+→ See [`docs/arcos/arc9-agent-groups.md`](docs/arcos/arc9-agent-groups.md)
 
 ---
 
@@ -619,7 +643,7 @@ Journey é a unidade de serviço que transcende a sessão — agrupa todos os co
 
 **Kafka**: `journey.events` — 8 tipos: `journey_started`, `journey_session_linked`, `journey_suspended`, `journey_resumed`, `journey_completed`, `journey_failed`, `journey_cancelled`, `journey_merged`.
 
-→ See [`docs/modules/arc10-journey.md`](docs/modules/arc10-journey.md)
+→ See [`docs/arcos/arc10-journey.md`](docs/arcos/arc10-journey.md)
 
 ---
 
