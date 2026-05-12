@@ -1,9 +1,27 @@
 # docker-compose.demo.yml
-# PlugHub Platform — Demo Environment (Arc 2 → Arc 9)
+# PlugHub Platform — Demo Environment (Arc 2 → Arc 10)
 #
 # Stack completa: infra + todos os módulos de aplicação + observabilidade
 #
 # Novidades neste build (2026-05-11):
+#
+#   • Arc 10 — Journey: Multi-Session Service Automation (Fases A–E)
+#     Journey como unidade de serviço que transcende a sessão.
+#     workflow-api: tabela workflow.journeys + 6 endpoints /v1/journeys/**
+#       (inclui POST /from-instance/{id}); Kafka topic journey.events.
+#     mcp-server-plughub: tools journey_start, journey_link_session, journey_merge.
+#     skill-flow-worker: flag creates_journey:true no YAML auto-cria Journey.
+#     collect step: propaga journey_id para sessões filhas via collect.events.
+#     analytics-api: consumer journey.events → journey_events ClickHouse;
+#       GET /reports/journeys (KPI strip por skill_id);
+#       4 display endpoints: journey-active-count, journey-resolution-rate,
+#       journey-funnel, journey-median-duration.
+#     platform-ui: ProcessosPage (tabs Jornadas/Instâncias + MergeButton);
+#       HistoricoTab "Processos em aberto"; ActionBar "Iniciar Processo";
+#       4 dashboard cards de jornada (catalog.ts).
+#       http://localhost:5174/workflow/monitor (tab Jornadas)
+#       http://localhost:5174/agent-assist (Console com Processos em aberto)
+#       http://localhost:5174/dashboards (cards journey-*)
 #
 #   • Arc 9 — Agent Groups & Supervisor Scope
 #     AgentGroup como entidade de gestão de pessoas ortogonal a Pool.
@@ -233,8 +251,35 @@ volumes:
 # │    Ex: Segunda 08:00–12:00 + 13:00–18:00 (pausa de almoço)               │
 # │    Namespace: tenant-config → Fuso horário padrão configurável            │
 # │                                                                            │
+# │  PASSO 10 — Arc 10: Journey (processos multi-sessão)                     │
+# │                                                                            │
+# │    A. ProcessosPage — Monitor de jornadas                                │
+# │       http://localhost:5174/workflow/monitor (tab Jornadas)               │
+# │       • Tab Instâncias: view existente de workflow instances              │
+# │       • Tab Jornadas: lista + KPI strip (ativas, resolução, duração)     │
+# │         Selecionar jornada → painel detalhe + botão "⛓ Unir jornadas"   │
+# │                                                                            │
+# │    B. Console — Iniciar Processo e Processos em aberto                   │
+# │       http://localhost:5174/agent-assist                                  │
+# │       Login: operator@plughub.local / changeme_operator                   │
+# │       • Abrir um contato ativo → aba Histórico → seção                   │
+# │         "Processos em aberto" (jornadas active/suspended do cliente)      │
+# │       • ActionBar → botão "🗺️ Processo ▾" → selecionar skill →          │
+# │         "Portabilidade Demo" → confirmar → cria jornada no workflow-api  │
+# │       • Verificar em ProcessosPage que a jornada aparece como active      │
+# │                                                                            │
+# │    C. Dashboard — cards de jornada                                        │
+# │       http://localhost:5174/dashboards                                    │
+# │       • Adicionar card → escolher tool metric_card → endpoint             │
+# │         "KPI: Jornadas Ativas" → confirmar                               │
+# │       • Adicionar card → bar_chart → "Taxa de Resolução por Jornada"     │
+# │       • Adicionar card → donut → "Funil de Jornadas"                     │
+# │       • Adicionar card → bar_chart → "Duração Mediana de Jornadas"       │
+# │       • Filtrar por período → cards atualizam com dados reais            │
+# │                                                                            │
 # │  Observabilidade                                                           │
 # │    Kafdrop  (Kafka UI):         http://localhost:9002                      │
+# │      → verificar topic journey.events com eventos após criar jornada      │
 # │    Redis Commander (Redis UI): http://localhost:8081                      │
 # └────────────────────────────────────────────────────────────────────────────┘
 #
@@ -373,6 +418,7 @@ services:
           workflow.events
           calendar.events
           collect.events
+          journey.events
         "
         for topic in $$TOPICS; do
           $$KAFKA --bootstrap-server $$BROKER --create --if-not-exists \
@@ -967,6 +1013,8 @@ services:
       PLUGHUB_WORKFLOW_REDIS_URL:        redis://redis:6379
       PLUGHUB_WORKFLOW_KAFKA_BROKERS:    kafka:29092
       PLUGHUB_WORKFLOW_KAFKA_TOPIC:      workflow.events
+      PLUGHUB_WORKFLOW_COLLECT_TOPIC:    collect.events
+      PLUGHUB_WORKFLOW_JOURNEY_TOPIC:    journey.events
       PLUGHUB_WORKFLOW_CALENDAR_API_URL:      http://calendar-api:3700
       PLUGHUB_WORKFLOW_AGENT_REGISTRY_URL:   http://agent-registry:3300
     depends_on:

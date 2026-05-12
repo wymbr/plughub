@@ -62,6 +62,7 @@ knowledge_domains: []
 
 type ClassificationAware = Skill & {
   classification?: { type?: string; domain?: string }
+  flow_model?:     'agent' | 'workflow'
   folder?:         string
 }
 
@@ -126,8 +127,11 @@ async function apiFetchRaw(url: string, init?: RequestInit): Promise<Record<stri
 // ── Folder tree builder ───────────────────────────────────────────────────────
 
 function buildFolderTree(allSkills: ClassificationAware[]): RootGroup[] {
-  const agents    = allSkills.filter(s => s.classification?.type !== 'orchestrator')
-  const workflows = allSkills.filter(s => s.classification?.type === 'orchestrator')
+  // flow_model is computed server-side from the skill's flow steps:
+  //   "workflow" — contains suspend/collect steps → needs workflow-api multi-session machinery
+  //   "agent"    — runs synchronously within a single agent session (default / undefined)
+  const agents    = allSkills.filter(s => s.flow_model !== 'workflow')
+  const workflows = allSkills.filter(s => s.flow_model === 'workflow')
 
   const groups: RootGroup[] = []
 

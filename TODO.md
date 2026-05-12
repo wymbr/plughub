@@ -159,6 +159,33 @@ Ver CHANGELOG 2026-05-11. 4 endpoints display + 4 entradas em `catalog.ts`.
 
 ---
 
+## Skill-flow Engine — Step `receive` + DAG Cíclico
+
+**Motivação**: habilitar agentes de supervisão online (Supervisor Evaluator) implementados como skill-flow YAML, sem necessidade de SDK nativo. Atualmente o engine só suporta DAGs acíclicos; o Agente 2 precisa de loop contínuo de escuta.
+
+**Decisão técnica acordada (2026-05-12)**:
+- Novo tipo de step `receive` — suspende o workflow aguardando a próxima mensagem do stream da sessão, independente do remetente e da visibilidade
+- Suporte a aresta de volta (`next: receive_step`) no engine, criando ciclo controlado pelo step `catch` (limite de rounds ou condição de saída)
+- `receive` observa **todas** as mensagens (`visibility: all`) — distinto do `menu` que só captura input do cliente via canal
+- Output: `{ author_role, author_id, content, visibility, event_id, timestamp }`
+
+**Para implementar:**
+1. `skill-flow-engine`: adicionar `ReceiveStep` ao interpretador + lógica de BLPOP no stream Redis da sessão (similar ao `menu` mas sem `interaction.request` ao canal)
+2. `@plughub/schemas`: adicionar `"receive"` ao union de step types
+3. Validação de DAG: detectar ciclos; permitir ciclo somente quando o caminho de volta passa por `catch` com `max_iterations`
+4. `skill-flow-worker`: garantir que instâncias em `receive` não bloqueiem threads do worker (usar await assíncrono)
+5. CLAUDE.md: adicionar `receive` à tabela de 13 step types
+
+**Doc de referência**: `docs/arcos/evaluation-agents.md` — Agente 2 (Supervisor Evaluator) descreve o padrão de uso completo.
+
+---
+
+## Evaluation Agents — Documentação
+
+Doc criado: `docs/arcos/evaluation-agents.md` — cobre os três arquétipos (Avaliador por Formulário, Supervisor Evaluator, Copilot/Especialista) com modelos de participação, visibilidade, fluxos YAML e comparativo.
+
+---
+
 ## CLAUDE.md — Otimização (Fase 3)
 
 **Fase 3**: Revisão final para confirmar CLAUDE.md ≤ 800 linhas. Mover seções remanescentes se necessário. Fase 2 concluída — ver CHANGELOG 2026-05-09.

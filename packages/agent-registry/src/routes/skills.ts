@@ -68,8 +68,9 @@ skillsRouter.post("/", async (req: Request, res: Response, next: NextFunction) =
         knowledge_domains: body.knowledge_domains ?? [],
         compatibility:    body.compatibility ?? Prisma.DbNull,
         flow:             body.flow != null ? (body.flow as unknown as Prisma.InputJsonValue) : Prisma.DbNull,
+        flow_model:       _computeFlowModel(body.flow),
         created_by:       createdBy,
-      },
+      } as any,
     })
 
     return res.status(201).json(_formatSkill(skill))
@@ -154,6 +155,7 @@ skillsRouter.put("/:skill_id", async (req: Request, res: Response, next: NextFun
       knowledge_domains: body.knowledge_domains ?? [],
       compatibility:    body.compatibility ?? Prisma.DbNull,
       flow:             body.flow != null ? (body.flow as unknown as Prisma.InputJsonValue) : Prisma.DbNull,
+      flow_model:       _computeFlowModel(body.flow),
       status:           "active",
       // deploy_status intentionally NOT updated on save — only the deploy action changes it
     }
@@ -217,6 +219,28 @@ function _getUserId(req: Request): string {
 function _formatSkill(skill: Record<string, unknown>): Record<string, unknown> {
   const { id: _id, interface_schema, ...rest } = skill
   return { ...rest, interface: interface_schema }
+}
+
+/**
+ * Derives the execution model from the skill's flow definition.
+ *
+ * Returns "workflow" when the flow contains at least one step of type
+ * "suspend" or "collect" — these steps require the workflow-api persistence
+ * and resume machinery (multi-session, async).
+ *
+ * Returns "agent" for all other flows, which execute synchronously within
+ * a single agent session turn.
+ */
+function _computeFlowModel(flow: unknown): "agent" | "workflow" {
+  if (!flow || typeof flow !== "object" || Array.isArray(flow)) return "agent"
+  const steps = (flow as Record<string, unknown>).steps
+  if (!Array.isArray(steps)) return "agent"
+  const hasWorkflowStep = steps.some((s: unknown) => {
+    if (!s || typeof s !== "object" || Array.isArray(s)) return false
+    const t = (s as Record<string, unknown>).type
+    return t === "suspend" || t === "collect"
+  })
+  return hasWorkflowStep ? "workflow" : "agent"
 }
 
 // ─────────────────────────────────────────────

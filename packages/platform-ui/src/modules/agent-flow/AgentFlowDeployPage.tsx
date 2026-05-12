@@ -37,6 +37,8 @@ interface Skill {
   version?:         string
   description?:     string
   classification?:  Record<string, unknown>
+  /** Computed server-side: "workflow" if flow has suspend/collect steps; "agent" otherwise. */
+  flow_model?:      'agent' | 'workflow'
   folder?:          string   // optional view-only grouping path, e.g. "project/sub"
   interface?:       InterfaceSchema | null  // interface_schema exposed as "interface"
 }
@@ -350,8 +352,8 @@ interface SkillGroup {
 
 /** Groups skills into optgroup sections: root type → folder path (flat, no nesting in HTML) */
 function groupSkillsForSelect(skills: Skill[]): SkillGroup[] {
-  const agents    = skills.filter(s => (s.classification?.type as string | undefined) !== 'orchestrator')
-  const workflows = skills.filter(s => (s.classification?.type as string | undefined) === 'orchestrator')
+  const agents    = skills.filter(s => s.flow_model !== 'workflow')
+  const workflows = skills.filter(s => s.flow_model === 'workflow')
 
   const groups: SkillGroup[] = []
 

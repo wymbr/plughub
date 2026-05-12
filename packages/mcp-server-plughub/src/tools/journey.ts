@@ -71,7 +71,7 @@ async function callWorkflowApi(
       "x-tenant-id":   tenantId,
       "x-internal":    "1",
     },
-    body: body ? JSON.stringify(body) : undefined,
+    ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
   })
   const data = await resp.json().catch(() => ({ detail: resp.statusText }))
   return { ok: resp.ok, status: resp.status, data }
@@ -90,9 +90,9 @@ export function registerJourneyTools(server: McpServer, deps: JourneyDeps): void
     "A Journey groups all sessions involved in resolving a single service process " +
     "and enables end-to-end observability and KPIs. " +
     "Returns journey_id and workflow_instance_id.",
-    JourneyStartInputSchema.shape,
-    async (input) => {
-      const parsed = JourneyStartInputSchema.safeParse(input)
+    JourneyStartInputSchema.shape as any,
+    async (rawInput: Record<string, unknown>) => {
+      const parsed = JourneyStartInputSchema.safeParse(rawInput)
       if (!parsed.success) {
         return mcpError("INVALID_INPUT", parsed.error.message)
       }
@@ -137,9 +137,9 @@ export function registerJourneyTools(server: McpServer, deps: JourneyDeps): void
     "Use when a customer contacts again as part of the same service process " +
     "(e.g. a follow-up call or a collect step response). " +
     "Merged journeys cannot receive new sessions.",
-    JourneyLinkSessionInputSchema.shape,
-    async (input) => {
-      const parsed = JourneyLinkSessionInputSchema.safeParse(input)
+    JourneyLinkSessionInputSchema.shape as any,
+    async (rawInput: Record<string, unknown>) => {
+      const parsed = JourneyLinkSessionInputSchema.safeParse(rawInput)
       if (!parsed.success) {
         return mcpError("INVALID_INPUT", parsed.error.message)
       }
@@ -174,9 +174,9 @@ export function registerJourneyTools(server: McpServer, deps: JourneyDeps): void
     "This operation is irreversible. " +
     "Use when duplicate journeys are detected for the same service process, " +
     "or when a follow-up contact spawned a new journey that belongs to an existing one.",
-    JourneyMergeInputSchema.shape,
-    async (input) => {
-      const parsed = JourneyMergeInputSchema.safeParse(input)
+    JourneyMergeInputSchema.shape as any,
+    async (rawInput: Record<string, unknown>) => {
+      const parsed = JourneyMergeInputSchema.safeParse(rawInput)
       if (!parsed.success) {
         return mcpError("INVALID_INPUT", parsed.error.message)
       }

@@ -153,6 +153,11 @@ export interface Skill {
     vertical?: string
     domain?: string
   }
+  /** Execution model derived from flow steps at save time.
+   *  "workflow" — has suspend/collect steps; needs workflow-api multi-session machinery.
+   *  "agent"    — runs synchronously within a single agent session.
+   *  Undefined for legacy records; treat as "agent". */
+  flow_model?: 'agent' | 'workflow'
   status: string
   created_at: string
 }

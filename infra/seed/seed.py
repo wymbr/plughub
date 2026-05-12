@@ -247,6 +247,11 @@ POOLS = [
             ],
             "post_human": [],
         },
+        # Arc 10 — journeys disponíveis para o botão "Iniciar Processo" no Console
+        "mentionable_journeys": [
+            "skill_portabilidade_demo_v1",
+            "skill_reembolso_demo_v1",
+        ],
     },
     {
         "pool_id":       "wrapup_ia",
@@ -276,7 +281,7 @@ POOLS = [
 
 # Pools that will be sent to the registry API (routing_expression + is_human_pool
 # are Routing Engine Redis fields, not registry fields — strip them for the POST body).
-REGISTRY_POOL_FIELDS = {"pool_id", "description", "channel_types", "sla_target_ms", "hooks"}
+REGISTRY_POOL_FIELDS = {"pool_id", "description", "channel_types", "sla_target_ms", "hooks", "mentionable_journeys"}
 
 # ─── Channel Endpoints — demo entries ────────────────────────────────────────
 # Visible in Platform UI → Configuration → Channels

@@ -86,7 +86,8 @@
       "errorRequired": "Name and form are required",
       "errorMessage": "{{error}}",
       "cancel": "Cancel",
-      "submit": "{{saving|Create campaign|Creating…}}"
+      "submit": "Create campaign",
+      "submit_saving": "Creating…"
     },
     "detail": {
       "emptyTitle": "📋",

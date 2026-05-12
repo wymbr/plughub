@@ -175,6 +175,10 @@ model Skill {
   deploy_status String   @default("draft")
   published_at  DateTime?
 
+  /// Execution model derived from flow steps: "workflow" if any step is suspend/collect (needs workflow-api);
+  /// "agent" for all other flows (runs synchronously within the agent session).
+  flow_model    String   @default("agent")
+
   created_at  DateTime @default(now())
   updated_at  DateTime @updatedAt
   created_by  String

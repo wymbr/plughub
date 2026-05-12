@@ -86,7 +86,8 @@
       "errorRequired": "Nome e formulário são obrigatórios",
       "errorMessage": "{{error}}",
       "cancel": "Cancelar",
-      "submit": "{{saving|Criar campanha|Criando…}}"
+      "submit": "Criar campanha",
+      "submit_saving": "Criando…"
     },
     "detail": {
       "emptyTitle": "📋",

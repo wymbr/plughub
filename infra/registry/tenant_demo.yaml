@@ -44,6 +44,10 @@ pools:
       copilot:    copilot_sac
       auth:       auth_ia       # @auth      → convida agente_auth_ia_v1 (PIN texto)
       auth_form:  auth_form_ia  # @auth_form → convida agente_auth_form_v1 (formulário)
+    # Arc 10 — skills disponíveis para "Iniciar Processo" no Console (ActionBar)
+    mentionable_journeys:
+      - skill_portabilidade_demo_v1
+      - skill_reembolso_demo_v1
     # Pool lifecycle hooks — acionam especialistas em pontos do ciclo de atendimento.
     # on_human_start: dispara quando o agente humano entra na sessão (Fase A — wired).
     # on_human_end:   dispara quando o agente humano chama agent_done (Fase B — stub).
