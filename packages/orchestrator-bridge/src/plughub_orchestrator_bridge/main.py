@@ -875,7 +875,9 @@ async def fire_pool_hooks(
 
         # Mark this conference_id as hook-spawned so process_routed can detect
         # when the hook agent completes and decrement the pending counter.
-        if hook_type in ("on_human_end", "post_human"):
+        # Also covers on_human_start so those agents are excluded from the
+        # active_ai_specialists set (G2 guard) and never block on_human_end hooks.
+        if hook_type in ("on_human_end", "post_human", "on_human_start"):
             try:
                 await redis_client.setex(
                     f"session:{session_id}:hook_conf:{conference_id}",
@@ -1459,6 +1461,18 @@ async def process_routed(
                     )
                     await redis_client.sadd(f"session:{session_id}:ai_agents", yaml_instance_id)
                     await redis_client.expire(f"session:{session_id}:ai_agents", _stl())
+                    # Arc 11: store participant metadata for supervisor_state (F1)
+                    await redis_client.setex(
+                        f"session:{session_id}:ai_participant:{yaml_instance_id}",
+                        14400,
+                        json.dumps({
+                            "role":          "primary",
+                            "agent_type_id": agent_type_id,
+                            "pool_id":       pool_id,
+                            "segment_id":    "",
+                            "joined_at":     datetime.now(timezone.utc).isoformat(),
+                        }),
+                    )
                     # Guard against premature restore: process_contact_event checks
                     # this key before calling _restore_instance on contact_closed.
                     # Cleared when activate_native_agent returns (natural path).
@@ -1773,6 +1787,21 @@ async def process_routed(
                 f"session:{session_id}:segment:{native_instance_id}",
                 14400,
                 _part_seg_id,
+            )
+
+            # Arc 11 — Store AI participant metadata for supervisor_state (F1)
+            # Read by supervisor_state tool to build the participants[] array.
+            # Key: session:{id}:ai_participant:{instance_id}  TTL: session TTL
+            await redis_client.setex(
+                f"session:{session_id}:ai_participant:{native_instance_id}",
+                14400,
+                json.dumps({
+                    "role":          _part_role,
+                    "agent_type_id": agent_type_id,
+                    "pool_id":       pool_id,
+                    "segment_id":    _part_seg_id,
+                    "joined_at":     _part_joined_iso,
+                }),
             )
         except Exception:
             pass

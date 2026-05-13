@@ -34,6 +34,8 @@ import { registerCalendarTools }    from "./tools/calendar"
 import type { CalendarDeps }        from "./tools/calendar"
 import { registerJourneyTools }     from "./tools/journey"
 import type { JourneyDeps }         from "./tools/journey"
+import { registerAgentEventTools }  from "./tools/agent-events"
+import type { AgentEventDeps }      from "./tools/agent-events"
 import { createRedisClient, keys } from "./infra/redis"
 import { createKafkaProducer }     from "./infra/kafka"
 import { createRegistryClient }    from "./infra/registry-client"
@@ -109,6 +111,8 @@ export function createServer(allDeps?: AllDeps): McpServer {
     tenantId:       process.env["PLUGHUB_TENANT_ID"] ?? process.env["TENANT_ID"] ?? "tenant_demo",
   }
 
+  const agentEventDeps: AgentEventDeps = { redis, kafka }
+
   // Registrar todas as tools
   registerBpmTools(server, bpmDeps)
   registerRuntimeTools(server, runtimeDeps)
@@ -121,6 +125,7 @@ export function createServer(allDeps?: AllDeps): McpServer {
   registerDeployTools(server, deployDeps)
   registerCalendarTools(server, calendarDeps)
   registerJourneyTools(server, journeyDeps)
+  registerAgentEventTools(server, agentEventDeps)
 
   return server
 }
@@ -594,6 +599,100 @@ export async function startServer(config: ServerConfig): Promise<void> {
         } catch { /* non-fatal */ }
       }
 
+      // Arc 11 Fase D — AI participants + pipeline transitions for OrchestrationTab
+      let aiParticipants:      unknown[] = []
+      let pipelineTransitions: unknown[] = []
+      try {
+        const instanceIds = await redis.smembers(`session:${sessionId}:ai_agents`)
+        if (instanceIds.length > 0 && tenantId) {
+          let pipelineState: Record<string, unknown> | null = null
+          try {
+            const pipeRaw2 = await redis.get(`${tenantId}:pipeline:${sessionId}`)
+            if (pipeRaw2) {
+              pipelineState = JSON.parse(pipeRaw2) as Record<string, unknown>
+              pipelineTransitions = (pipelineState["transitions"] as unknown[]) ?? []
+            }
+          } catch { /* non-fatal */ }
+
+          let menuWaiting:    Record<string, string> = {}
+          let receiveWaiting: Record<string, string> = {}
+          try {
+            menuWaiting    = await redis.hgetall(`menu:waiting:${sessionId}`)    ?? {}
+            receiveWaiting = await redis.hgetall(`receive:waiting:${sessionId}`) ?? {}
+          } catch { /* non-fatal */ }
+
+          for (const instanceId of instanceIds) {
+            let role = "primary", agentTypeId = "", poolId = "", segmentId = ""
+            let joinedAt = new Date().toISOString()
+            try {
+              const partRaw = await redis.get(`session:${sessionId}:ai_participant:${instanceId}`)
+              if (partRaw) {
+                const part = JSON.parse(partRaw) as Record<string, string>
+                role        = part["role"]          ?? "primary"
+                agentTypeId = part["agent_type_id"] ?? ""
+                poolId      = part["pool_id"]       ?? ""
+                segmentId   = part["segment_id"]    ?? ""
+                joinedAt    = part["joined_at"]     ?? joinedAt
+              }
+            } catch { /* non-fatal */ }
+
+            let currentStep: string | null = null, stepType = "unknown"
+            let stepStatus: "running" | "waiting" | "done" | "error" = "running"
+            let waitingFor: string | null = null, sinceMs = 0
+
+            if (pipelineState) {
+              currentStep = (pipelineState["current_step_id"] as string) ?? null
+              const pipeStatus = pipelineState["status"] as string
+              const updatedAt  = (pipelineState["updated_at"] as string) ?? null
+              if (updatedAt) sinceMs = Date.now() - new Date(updatedAt).getTime()
+              if      (pipeStatus === "completed") stepStatus = "done"
+              else if (pipeStatus === "failed")    stepStatus = "error"
+              else if (pipeStatus === "suspended") { stepStatus = "waiting"; stepType = "suspend"; waitingFor = "approval" }
+              else {
+                if (menuWaiting[instanceId] !== undefined) {
+                  stepStatus = "waiting"; stepType = "menu"; waitingFor = "menu"
+                } else if (receiveWaiting[instanceId] !== undefined) {
+                  stepStatus = "waiting"; stepType = "receive"; waitingFor = "receive"
+                } else {
+                  stepStatus = "running"
+                  if (currentStep) {
+                    const lower = currentStep.toLowerCase()
+                    if      (lower.includes("reason"))  stepType = "reason"
+                    else if (lower.includes("invoke"))  stepType = "invoke"
+                    else if (lower.includes("task"))    stepType = "task"
+                    else if (lower.includes("notify"))  stepType = "notify"
+                    else if (lower.includes("choice"))  stepType = "choice"
+                    else if (lower.includes("collect")) stepType = "collect"
+                    else if (lower.includes("resolve")) stepType = "resolve"
+                  }
+                }
+              }
+            }
+
+            aiParticipants.push({
+              instance_id:   instanceId,
+              agent_type_id: agentTypeId || instanceId.replace(/-\d{3}$/, ""),
+              pool_id:       poolId,
+              role, segment_id: segmentId, joined_at: joinedAt,
+              ai_state: {
+                current_step: currentStep, step_type: stepType,
+                step_status:  stepStatus,  waiting_for: waitingFor,
+                since_ms:     Math.max(0, sinceMs),
+              },
+            })
+          }
+        } else if (tenantId) {
+          // No AI agents but fetch transitions for pipeline view
+          try {
+            const pipeRaw2 = await redis.get(`${tenantId}:pipeline:${sessionId}`)
+            if (pipeRaw2) {
+              const ps = JSON.parse(pipeRaw2) as Record<string, unknown>
+              pipelineTransitions = (ps["transitions"] as unknown[]) ?? []
+            }
+          } catch { /* non-fatal */ }
+        }
+      } catch { /* non-fatal — ai_participants section */ }
+
       res.json({
         session_id:   sessionId,
         turn_count:   turns.length,
@@ -622,9 +721,86 @@ export async function startServer(config: ServerConfig): Promise<void> {
             .flatMap((t: Record<string, unknown>) => (t["insights"] as unknown[]) ?? []),
           contact_context: contactContext,
         },
+        /** Arc 11 Fase D — AI agents active in this session with Skill-Flow state */
+        ai_participants:      aiParticipants,
+        /** Arc 11 Fase D — Skill-Flow step transition history */
+        pipeline_transitions: pipelineTransitions,
       })
     } catch {
       res.status(500).json({ error: "state_unavailable" })
+    }
+  })
+
+  // POST /api/inject-context/:sessionId
+  // Arc 11 Fase D — Supervisor injects a key/value into the ContextStore for an active session.
+  // Body: { key: string, value: unknown, confidence?: number, source?: string }
+  // Writes to Redis hash {tenantId}:ctx:{sessionId} as a ContextEntry JSON blob.
+  app.post("/api/inject-context/:sessionId", async (req: Request, res: Response) => {
+    const { sessionId } = req.params
+    const { key, value, confidence = 0.9, source = "supervisor_inject" } = req.body as {
+      key?: string; value?: unknown; confidence?: number; source?: string
+    }
+    if (!key || value === undefined) {
+      res.status(400).json({ error: "key and value are required" })
+      return
+    }
+    try {
+      // Resolve tenantId from session meta
+      let tenantId: string | null = null
+      try {
+        const metaRaw = await redis.get(`session:${sessionId}:meta`)
+        if (metaRaw) tenantId = (JSON.parse(metaRaw) as Record<string, string>)["tenant_id"] ?? null
+      } catch { /* non-fatal */ }
+      if (!tenantId) { res.status(404).json({ error: "session_not_found" }); return }
+
+      const entry = {
+        value,
+        confidence: Math.min(1, Math.max(0, Number(confidence) || 0.9)),
+        source,
+        visibility: "agents_only",
+        updated_at: new Date().toISOString(),
+      }
+      await redis.hset(`${tenantId}:ctx:${sessionId}`, key, JSON.stringify(entry))
+      res.json({ ok: true, key, session_id: sessionId, tenant_id: tenantId })
+    } catch {
+      res.status(500).json({ error: "inject_failed" })
+    }
+  })
+
+  // POST /api/force-complete/:sessionId
+  // Arc 11 Fase D — Supervisor forces a running Skill-Flow pipeline to the completed state.
+  // Body: { reason?: string, outcome?: string }
+  // Updates {tenantId}:pipeline:{sessionId} status → "completed" in Redis.
+  app.post("/api/force-complete/:sessionId", async (req: Request, res: Response) => {
+    const { sessionId } = req.params
+    const { reason = "supervisor_force_complete", outcome = "resolved" } = req.body as {
+      reason?: string; outcome?: string
+    }
+    try {
+      // Resolve tenantId from session meta
+      let tenantId: string | null = null
+      try {
+        const metaRaw = await redis.get(`session:${sessionId}:meta`)
+        if (metaRaw) tenantId = (JSON.parse(metaRaw) as Record<string, string>)["tenant_id"] ?? null
+      } catch { /* non-fatal */ }
+      if (!tenantId) { res.status(404).json({ error: "session_not_found" }); return }
+
+      const pipeKey = `${tenantId}:pipeline:${sessionId}`
+      let pipeline: Record<string, unknown> = {}
+      try {
+        const pipeRaw = await redis.get(pipeKey)
+        if (pipeRaw) pipeline = JSON.parse(pipeRaw) as Record<string, unknown>
+      } catch { /* non-fatal */ }
+
+      pipeline["status"]                = "completed"
+      pipeline["force_complete_reason"] = reason
+      pipeline["force_complete_outcome"] = outcome
+      pipeline["force_complete_at"]     = new Date().toISOString()
+      await redis.set(pipeKey, JSON.stringify(pipeline))
+
+      res.json({ ok: true, session_id: sessionId, reason, outcome })
+    } catch {
+      res.status(500).json({ error: "force_complete_failed" })
     }
   })
 
@@ -1246,15 +1422,20 @@ export async function startServer(config: ServerConfig): Promise<void> {
         }
 
         // ── session.closed ────────────────────────────────────────────────────
-        // Session ended (customer hangup, timeout, agent_done, etc.).
-        // Remove from the subscribed set and unsubscribe from the Redis channel.
-        // The UI will handle the visual state transition on its own.
+        // Session ended. Only unsubscribe from the Redis channel when reason is
+        // "agent_done" — which _trigger_contact_close() publishes AFTER all
+        // on_human_end hooks (wrapup, NPS) have completed. For earlier close
+        // signals such as "client_disconnect" or "timeout", the session channel
+        // must remain open so hook agents can still reach the human agent.
         if (event["type"] === "session.closed" && typeof event["session_id"] === "string") {
           const closedId = event["session_id"]
-          subscribedSessions.delete(closedId)
-          subscriber.unsubscribe(`agent:events:${closedId}`, (err) => {
-            if (err) console.error("Redis session unsubscribe error:", err)
-          })
+          const closeReason = typeof event["reason"] === "string" ? event["reason"] : ""
+          if (closeReason === "agent_done") {
+            subscribedSessions.delete(closedId)
+            subscriber.unsubscribe(`agent:events:${closedId}`, (err) => {
+              if (err) console.error("Redis session unsubscribe error:", err)
+            })
+          }
         }
       } catch { /* ignore parse errors */ }
     }

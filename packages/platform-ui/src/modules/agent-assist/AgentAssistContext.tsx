@@ -118,7 +118,7 @@ export interface AgentAssistContextValue {
   // WS
   statuses:   Map<string, PoolConnectionStatus>;
   lastEvent:  TaggedWsEvent | null;
-  send:       (text: string, sessionId: string) => void;
+  send:       (text: string, sessionId: string, visibility?: string) => void;
 
   // Contacts (critical to persist)
   contacts:            Map<string, ContactSession>;

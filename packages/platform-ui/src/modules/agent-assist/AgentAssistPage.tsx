@@ -28,6 +28,7 @@ import { useAgentAssist, aggregateStatus } from "./AgentAssistContext";
 import { useSupervisorState }              from "./hooks/useSupervisorState";
 import { useSupervisorCapabilities }       from "./hooks/useSupervisorCapabilities";
 import { useCopilotState }                 from "./hooks/useCopilotState";
+import { useMentionableAgents }            from "./hooks/useMentionableAgents";
 import { Header }           from "./components/Header";
 import { ActionBar }        from "./components/ActionBar";
 import { ChatArea }         from "./components/ChatArea";
@@ -37,7 +38,8 @@ import { PauseReasonModal }  from "./components/PauseReasonModal";
 import { RightPanel }        from "./components/RightPanel";
 import { ContactList }       from "./components/ContactList";
 import { ToastContainer }    from "./components/ToastContainer";
-import { HistoricoTab }      from "./components/tabs/HistoricoTab";
+import { HistoricoTab }          from "./components/tabs/HistoricoTab";
+import { DelegarTarefaDrawer }  from "./components/DelegarTarefaDrawer";
 
 type CenterTab = "atual" | "historico";
 
@@ -77,17 +79,33 @@ export const AgentAssistPage: React.FC = () => {
   const [lastCopilotEvent, setLastCopilotEvent] = useState(0);
   const [isPaused,         setIsPaused]         = useState(false);
   const [showPauseModal,   setShowPauseModal]   = useState(false);
+  // Arc 11 Fase C — message selection and delegation
+  const [selectedMessageIds, setSelectedMessageIds] = useState<Set<string>>(new Set());
+  const [showDelegarDrawer,  setShowDelegarDrawer]  = useState(false);
+  const [delegatedAgents,    setDelegatedAgents]    = useState<Set<string>>(new Set());
 
   // Reset substitution mode when selected contact changes
   useEffect(() => {
     setSubstitutionMode(false);
   }, [selectedSessionId]);
 
+  // Reset message selection when contact changes
+  useEffect(() => {
+    setSelectedMessageIds(new Set());
+  }, [selectedSessionId]);
+
+  // ── Derived state needed before hook calls (avoids TDZ reference error) ─
+  const selected = selectedSessionId ? contacts.get(selectedSessionId) ?? null : null;
+
   // ── Supervisor/copilot hooks — scoped to selected contact ───────────────
-  const lastWsEvent     = lastEvent as import("./types").WsServerEvent | null;
-  const supervisorState = useSupervisorState(selectedSessionId, lastWsEvent);
-  const capabilities    = useSupervisorCapabilities(selectedSessionId, supervisorState);
+  const lastWsEvent = lastEvent as import("./types").WsServerEvent | null;
+  const { state: supervisorState, refresh: refreshSupervisorState } = useSupervisorState(selectedSessionId, lastWsEvent);
+  const capabilities = useSupervisorCapabilities(selectedSessionId, supervisorState);
   const copilotSuggestions = useCopilotState(selectedSessionId, lastCopilotEvent);
+
+  // Arc 11 Fase B — mentionable agents for the current contact's pool
+  const currentPoolId     = selected?.poolId ?? null;
+  const mentionableAgents = useMentionableAgents(currentPoolId);
 
   // Listen for copilot.updated on selected session
   useEffect(() => {
@@ -98,7 +116,12 @@ export const AgentAssistPage: React.FC = () => {
         event.session_id === selectedSessionId) {
       setLastCopilotEvent(Date.now());
     }
-  }, [lastEvent, selectedSessionId]);
+    // Arc 11 Fase C — notify when a delegated agent finishes its task
+    if (event.type === "session.agent_done" && delegatedAgents.size > 0) {
+      addToast("Agente delegado concluiu a tarefa", "info");
+      setDelegatedAgents(new Set());
+    }
+  }, [lastEvent, selectedSessionId, delegatedAgents.size, addToast]);
 
   // Sync supervisor data back into the selected contact's state
   useEffect(() => {
@@ -135,8 +158,12 @@ export const AgentAssistPage: React.FC = () => {
   const handleSend = useCallback(
     (text: string) => {
       if (!selectedSessionId) return;
-      send(text, selectedSessionId);
-      const isMention = text.trimStart().startsWith("@");
+      const isMention   = text.trimStart().startsWith("@");
+      const isClosed    = contacts.get(selectedSessionId)?.sessionClosed ?? false;
+      // During wrap-up (sessionClosed=true) or for @mentions, force agents_only
+      // so messages don't leak to the customer after agent_done.
+      const visibility  = (isMention || isClosed) ? "agents_only" : undefined;
+      send(text, selectedSessionId, visibility);
       setContacts(prev => {
         const c = prev.get(selectedSessionId);
         if (!c) return prev;
@@ -148,13 +175,13 @@ export const AgentAssistPage: React.FC = () => {
             author:     "agent_human",
             text,
             timestamp:  new Date().toISOString(),
-            visibility: isMention ? "agents_only" : undefined,
+            visibility,
           }],
         });
         return next;
       });
     },
-    [send, selectedSessionId, setContacts]
+    [send, selectedSessionId, setContacts, contacts]
   );
 
   const handleClose = useCallback(
@@ -295,6 +322,47 @@ export const AgentAssistPage: React.FC = () => {
     [addToast, t]
   );
 
+  // Arc 11 — terminate an AI segment via @mention
+  const handleTerminateSegment = useCallback(
+    (instanceId: string) => {
+      handleSend(`@${instanceId} terminate_self`);
+    },
+    [handleSend],
+  );
+
+  // Arc 11 Fase B — invite a specialist via @mention
+  const handleAddSpecialist = useCallback(
+    (agentTypeId: string, context: string) => {
+      const text = context ? `@${agentTypeId} ${context}` : `@${agentTypeId}`;
+      handleSend(text);
+      addToast(`Especialista ${agentTypeId} convidado`, "info");
+    },
+    [handleSend, addToast],
+  );
+
+  // Arc 11 Fase C — toggle a single message in/out of the delegation context
+  const handleToggleMessageSelection = useCallback((messageId: string) => {
+    setSelectedMessageIds(prev => {
+      const next = new Set(prev);
+      if (next.has(messageId)) next.delete(messageId); else next.add(messageId);
+      return next;
+    });
+  }, []);
+
+  // Arc 11 Fase C — submit the delegation via @mention command
+  const handleDelegate = useCallback(
+    (agentTypeId: string, instruction: string, _visibility: "all" | "agents_only") => {
+      if (!selectedSessionId) return;
+      handleSend(`@${agentTypeId} ${instruction}`);
+      setDelegatedAgents(prev => new Set([...prev, agentTypeId]));
+      const agentLabel = agentTypeId.replace(/_v\d+$/, "").replace(/_/g, " ");
+      addToast(`Tarefa delegada para ${agentLabel}`, "info");
+      setShowDelegarDrawer(false);
+      setSelectedMessageIds(new Set());
+    },
+    [selectedSessionId, handleSend, addToast],
+  );
+
   // ── Iniciar Processo (Arc 10 Phase D) ────────────────────────────────────
   const handleIniciarProcesso = useCallback(
     async (skillId: string) => {
@@ -319,13 +387,18 @@ export const AgentAssistPage: React.FC = () => {
   );
 
   // ── Derived state ────────────────────────────────────────────────────────
-  const selected     = selectedSessionId ? contacts.get(selectedSessionId) ?? null : null;
+  // NOTE: `selected` is declared above hook calls — see "Derived state before hooks" comment.
   const wsStatus     = aggregateStatus(statuses, activePools);
   const headerPoolId = selected?.poolId ?? activePools[0] ?? "";
   // Pool-level mentionable_journeys for the active contact's pool (Arc 10 Phase D)
   const mentionableJourneys = (
     availablePools.find(p => p.pool_id === selected?.poolId)?.mentionable_journeys ?? []
   );
+  // Arc 11 Fase C — text of selected messages, pre-fills the delegation instruction textarea
+  const prefilledContext = [...selectedMessageIds]
+    .map(id => selected?.messages.find(m => m.id === id)?.text ?? "")
+    .filter(Boolean)
+    .join("\n---\n");
 
   // ── Render ────────────────────────────────────────────────────────────────
   return (
@@ -395,14 +468,21 @@ export const AgentAssistPage: React.FC = () => {
               onToggleSubstitutionMode={() => setSubstitutionMode(prev => !prev)}
               mentionableJourneys={mentionableJourneys}
               onIniciarProcesso={handleIniciarProcesso}
+              mentionableAgents={mentionableAgents}
+              onAddSpecialist={handleAddSpecialist}
+              selectedCount={selectedMessageIds.size}
+              onDelegar={() => setShowDelegarDrawer(true)}
             />
           </div>
 
           {/* Right-panel tab bar */}
           <div className="w-[280px] flex-shrink-0 border-l border-gray-200 flex bg-white">
             {(["estado", "capacidades", "contexto"] as ActiveTab[]).map((id) => {
-              const labels = { estado: t("rightTab.estado"), capacidades: t("rightTab.capacidades"), contexto: t("rightTab.contexto") };
-              const label = labels[id];
+              const labels: Record<string, string> = {
+                estado:      t("rightTab.estado"),
+                capacidades: t("rightTab.capacidades"),
+                contexto:    t("rightTab.contexto"),
+              };
               return (
                 <button
                   key={id}
@@ -413,10 +493,24 @@ export const AgentAssistPage: React.FC = () => {
                       : "text-gray-500 hover:text-gray-700"
                   }`}
                 >
-                  {label}
+                  {labels[id]}
                 </button>
               );
             })}
+            {/* Arc 11 Fase D — Orquestração tab: supervisor only */}
+            {(session?.role === "supervisor" || session?.role === "admin") && (
+              <button
+                onClick={() => setActiveTab("orquestracao")}
+                className={`flex-1 h-full flex items-end justify-center pb-2.5 text-xs font-medium transition-colors ${
+                  activeTab === "orquestracao"
+                    ? "border-b-2 border-indigo-600 text-indigo-600"
+                    : "text-gray-500 hover:text-gray-700"
+                }`}
+                title="Orquestração — supervisor"
+              >
+                Orq.
+              </button>
+            )}
           </div>
 
         </div>
@@ -478,6 +572,8 @@ export const AgentAssistPage: React.FC = () => {
                     } : null}
                     substitutionMode={substitutionMode}
                     onMenuSubmit={handleMenuSubmit}
+                    selectedMessageIds={selectedMessageIds}
+                    onToggleSelection={handleToggleMessageSelection}
                   />
                 )}
 
@@ -501,6 +597,9 @@ export const AgentAssistPage: React.FC = () => {
               customerId={selected?.contactId ?? null}
               onInviteAgent={handleInviteAgent}
               onEscalate={handleEscalate}
+              sessionMessages={selected?.messages ?? []}
+              onTerminateSegment={handleTerminateSegment}
+              onRefreshState={refreshSupervisorState}
             />
           </div>
 
@@ -534,6 +633,15 @@ export const AgentAssistPage: React.FC = () => {
           onCancel={() => setShowPauseModal(false)}
         />
       )}
+
+      {/* Arc 11 Fase C — Delegar Tarefa drawer */}
+      <DelegarTarefaDrawer
+        open={showDelegarDrawer}
+        agents={mentionableAgents}
+        prefilledContext={prefilledContext}
+        onDelegate={handleDelegate}
+        onClose={() => setShowDelegarDrawer(false)}
+      />
 
       <ToastContainer toasts={toasts} onDismiss={dismissToast} />
     </div>

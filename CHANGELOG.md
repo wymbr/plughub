@@ -2,6 +2,259 @@
 
 ---
 
+## Bugfix — Pool Lifecycle Hooks (wrapup + NPS) não chegavam ao Console (2026-05-13)
+
+Dois bugs introduzidos durante Arc 11 Fases C+D impediam que wrapup e NPS funcionassem.
+
+**Bug 1 — `packages/mcp-server-plughub/src/server.ts`**
+O WS server desfazia a subscription de `agent:events:{sessionId}` ao receber qualquer `session.closed`, inclusive o `reason=client_disconnect` publicado pelo bridge ANTES de disparar os hooks `on_human_end`. Com isso, todas as mensagens de wrapup/NPS eram perdidas quando o cliente desconectava.
+- Fix: só cancela subscription quando `reason === "agent_done"` (publicado por `_trigger_contact_close()` após todos os hooks terminarem).
+
+**Bug 2 — `packages/orchestrator-bridge/src/plughub_orchestrator_bridge/main.py` linha 878**
+O guarda G2 (`active_ai_specialists`) excluía hooks do set via chave `hook_conf` apenas para `on_human_end` e `post_human`. Agentes de hook `on_human_start` (como o Echo evaluator) não recebiam a chave e entravam no set. Como rodam em loop `receive→notify→receive` indefinido, nunca saíam — quando o agente humano clicava Desligar, G2 detectava count=1 e adiava os hooks para sempre.
+- Fix: incluir `on_human_start` no conjunto de tipos que gravam a chave `hook_conf`.
+
+**`packages/platform-ui/src/modules/agent-assist/AgentAssistContext.tsx`**
+- `session.closed reason=client_disconnect`: mantém o contato ativo (`sessionClosed=true`, `pendingCloseModal=false`) em vez de removê-lo — hooks ainda precisam interagir com o agente humano.
+- `session.closed reason=agent_done`: remove o contato (todos os hooks completaram).
+
+**`packages/platform-ui/src/modules/agent-assist/AgentAssistPage.tsx`**
+- `handleSend`: quando `sessionClosed=true` força `visibility=agents_only` para que respostas do agente após o encerramento vão para o BLPOP do hook (não para o cliente).
+
+---
+
+## Arc 11 — Console Orchestration: Fases C + D — Delegar Tarefa + OrchestrationTab (2026-05-13)
+
+Spec completa: [`docs/arcos/arc11-console-orchestration.md`](docs/arcos/arc11-console-orchestration.md)
+
+### Fase C (F3) — Delegar Tarefa: seleção de mensagens + drawer
+
+**`packages/platform-ui/src/modules/agent-assist/types.ts`** (Task #100)
+- `ActiveTab` expanded: `"estado" | "capacidades" | "contexto" | "orquestracao"`.
+- `AiState`, `AiParticipantInfo`, `PipelineTransition` interfaces added (synced from WSL path).
+- `SupervisorState.ai_participants?: AiParticipantInfo[]` + `pipeline_transitions?: PipelineTransition[]` added.
+
+**`packages/platform-ui/src/modules/agent-assist/components/MessageBubble.tsx`** (Task #100)
+- New props: `isSelected?: boolean`, `onToggleSelection?: () => void`.
+- When `onToggleSelection` provided: wraps bubble in `group` flex row with hover-only checkbox button.
+- Selected state: `ring-1 ring-orange-400 rounded-2xl` on bubble wrapper; checkbox shows orange fill + `✓`.
+
+**`packages/platform-ui/src/modules/agent-assist/components/ChatArea.tsx`** (Task #100)
+- New props: `selectedMessageIds?: Set<string>`, `onToggleSelection?: (messageId: string) => void`.
+- Orange selection toolbar shown above scroll area when `selectedMessageIds.size > 0`.
+- Each `MessageBubble` receives `isSelected` + `onToggleSelection` forwarded.
+
+**`packages/platform-ui/src/modules/agent-assist/components/ActionBar.tsx`** (Task #100)
+- `DelegarButton` sub-component: orange accent, count badge overlay (max "9+") when `selectedCount > 0`.
+- New `ActionBarProps`: `selectedCount?: number`, `onDelegar?: () => void`.
+- Button shown when `onDelegar` is provided and `mentionableAgents.length > 0`.
+
+**`packages/platform-ui/src/modules/agent-assist/components/DelegarTarefaDrawer.tsx`** (Task #100, new file)
+- Slide-in right drawer (fixed, `w-80`); 3-section form: agent picker + instruction textarea + visibility radio.
+- Pre-fills instruction from `prefilledContext` prop (concatenation of selected message texts).
+- Escape closes; ⌘↵ submits. Orange accent throughout.
+
+**`packages/platform-ui/src/modules/agent-assist/AgentAssistPage.tsx`** (Task #100)
+- State: `selectedMessageIds: Set<string>`, `showDelegarDrawer`, `delegatedAgents: Set<string>`.
+- `handleToggleMessageSelection(messageId)` — toggles set membership.
+- `prefilledContext` — joins selected message texts with `\n---\n` separator.
+- `handleDelegate(agentTypeId, instruction, visibility)` — calls `handleSend(@{id} {instr})`, adds toast, clears selection, closes drawer.
+- `useEffect` resets selection on contact change.
+- Fixed TDZ bug: `selected` declaration moved before hook calls.
+
+### Fase D (F4) — OrchestrationTab: supervisor view + interventions
+
+**`packages/mcp-server-plughub/src/server.ts`** (Task #101)
+- `GET /api/supervisor_state/:sessionId`: extended with `ai_participants` (array from `session:{id}:ai_agents` SET + per-instance metadata + pipeline-state derivation) and `pipeline_transitions` (from `{tenant}:pipeline:{sessionId}.transitions[]`). Same logic as MCP tool `supervisor.ts`.
+- `POST /api/inject-context/:sessionId`: writes ContextStore entry `{key: ContextEntry}` to `{tenantId}:ctx:{sessionId}` Redis hash. Body: `{ key, value, confidence?, source? }`. Reads `tenantId` from `session:{id}:meta`.
+- `POST /api/force-complete/:sessionId`: updates `{tenantId}:pipeline:{sessionId}` status → `"completed"` with `force_complete_reason`, `force_complete_outcome`, `force_complete_at`. Body: `{ reason?, outcome? }`.
+
+**`packages/platform-ui/src/modules/agent-assist/hooks/useSupervisorState.ts`** (Task #102)
+- Return type changed from `SupervisorState | null` to `{ state: SupervisorState | null; refresh: () => void }`.
+- `refresh` exposes the internal `fetchState` callback for on-demand re-fetch (used by OrchestrationTab after supervisor interventions).
+
+**`packages/platform-ui/src/modules/agent-assist/components/AiParticipantCard.tsx`** (Task #102, synced to Windows path)
+- Copied from WSL path to Windows development path (the two are physically distinct directories).
+
+**`packages/platform-ui/src/modules/agent-assist/components/tabs/OrchestrationTab.tsx`** (Task #102, new file)
+- Three sections: (1) AI agents list (`AiParticipantCard` per participant); (2) pipeline transition timeline — reverse-chronological, step-type icons, formatted timestamps; (3) Supervisor interventions: `InjectContextForm` (key + value + confidence, POST to `/api/inject-context`) + `ForceCompleteConfirm` (2-step confirm, POST to `/api/force-complete`).
+- Both intervention forms call `onRefresh()` on success to trigger immediate state re-poll.
+
+**`packages/platform-ui/src/modules/agent-assist/components/RightPanel.tsx`** (Task #102)
+- New props: `mcpBase?: string`, `onRefreshState?: () => void`.
+- `OrchestrationTab` imported and rendered when `activeTab === "orquestracao"`.
+
+**`packages/platform-ui/src/modules/agent-assist/AgentAssistPage.tsx`** (Task #102)
+- `useSupervisorState` destructured as `{ state: supervisorState, refresh: refreshSupervisorState }`.
+- Tab bar: "Orq." tab added; gated on `session.role === "supervisor" || "admin"`.
+- `RightPanel` receives `onRefreshState={refreshSupervisorState}`.
+
+---
+
+## Arc 11 — Console Orchestration: Fase A — Cartões de Participantes AI (2026-05-13)
+
+Spec completa: [`docs/arcos/arc11-console-orchestration.md`](docs/arcos/arc11-console-orchestration.md)
+
+### Backend — `supervisor_state` extended with `ai_participants[]`
+
+**`packages/orchestrator-bridge/src/plughub_orchestrator_bridge/main.py`** (Task #94)
+- Native agent activation path: after `segment_id` write, sets `session:{session_id}:ai_participant:{instance_id}` (TTL 4h) with `{ role, agent_type_id, pool_id, segment_id, joined_at }`.
+- YAML fallback path: same write after `sadd ai_agents`, `role: "primary"`.
+
+**`packages/mcp-server-plughub/src/tools/supervisor.ts`** (Task #94)
+- Section 8 added: reads `session:{id}:ai_agents` SET, pipeline_state (`{tenant_id}:pipeline:{session_id}`), `menu:waiting:{session_id}` hash, `receive:waiting:{session_id}` hash.
+- Per instance: reads `session:{id}:ai_participant:{instance_id}` for metadata; derives `ai_state { current_step, step_type, step_status, waiting_for, since_ms }`.
+- Step derivation rules: menu:waiting hit → `step_status=waiting, step_type=menu`; receive:waiting hit → `waiting, receive`; pipeline.status=`suspended` → `waiting, suspend`; `completed` → `done`; `failed` → `error`; otherwise → `running`, type inferred from step_id naming.
+- `ai_participants: AiParticipant[]` added to supervisor_state JSON response.
+
+### Frontend — `AiParticipantCard` + polling + drawer
+
+**`packages/platform-ui/src/modules/agent-assist/types.ts`** (Task #95)
+- `AiState` interface: `current_step`, `step_type`, `step_status`, `waiting_for`, `since_ms`.
+- `AiParticipantInfo` interface: `instance_id`, `agent_type_id`, `pool_id`, `role`, `segment_id`, `joined_at`, `ai_state`.
+- `SupervisorState.ai_participants?: AiParticipantInfo[]` added.
+
+**`packages/platform-ui/src/modules/agent-assist/hooks/useSupervisorState.ts`** (Task #95)
+- Added 3 s periodic `setInterval` poll alongside the existing event-driven refresh. Keeps AI participant step state live even when no WS events arrive.
+
+**`packages/platform-ui/src/modules/agent-assist/components/AiParticipantCard.tsx`** (Task #95, new file)
+- Card shows: `🤖` icon, formatted agent_type_id, role badge (primary/specialist/supervisor), status chip (running/waiting/done/error with CSS animation for running), step ID formatted as `type: label`, elapsed time, waiting_for pill when applicable.
+- Click opens drawer: agent metadata + step detail + last 5 messages from this agent in the session + "Encerrar segmento" button (disabled when status=done).
+- "Encerrar segmento" calls `onTerminateSegment(instance_id)` which sends `@{instance_id} terminate_self` via WS and closes the drawer.
+
+**`packages/platform-ui/src/modules/agent-assist/components/tabs/EstadoTab.tsx`** (Task #95)
+- New props: `sessionMessages?: ChatMessage[]`, `onTerminateSegment?: (instanceId: string) => void`.
+- "Agentes AI na Sessão" section added at top of tab (only shown when `ai_participants.length > 0`), renders one `AiParticipantCard` per participant.
+
+**`packages/platform-ui/src/modules/agent-assist/components/RightPanel.tsx`** (Task #95)
+- New props: `sessionMessages?: ChatMessage[]`, `onTerminateSegment?` threaded down to `EstadoTab`.
+
+**`packages/platform-ui/src/modules/agent-assist/AgentAssistPage.tsx`** (Task #95)
+- `handleTerminateSegment(instanceId)` → calls `handleSend(\`@${instanceId} terminate_self\`)`.
+- `RightPanel` call updated with `sessionMessages={selected?.messages ?? []}` and `onTerminateSegment={handleTerminateSegment}`.
+
+---
+
+## Arc 11 — Console Orchestration: Fase B — Adicionar Especialista (2026-05-13)
+
+Spec completa: [`docs/arcos/arc11-console-orchestration.md`](docs/arcos/arc11-console-orchestration.md)
+
+### Backend — `GET /v1/pools/:poolId/mentionable-agents` (Task #97)
+
+**`packages/agent-registry/src/routes/pools.ts`** (Task #97)
+- New route `GET /v1/pools/:pool_id/mentionable-agents` inserted before the generic `GET /v1/pools/:pool_id` (critical ordering — prevents Express matching sub-path as `:pool_id`).
+- Reads `pool.mentionable_pools` (JSON array of pool_id strings); returns `{agents:[]}` when empty.
+- `prisma.agentType.findMany` WHERE `tenant_id` + `status: active` + `pools.some.pool.pool_id IN mentionablePoolIds`; includes pools JOIN to resolve `pool_id` per agent.
+- Response shape: `{ agents: [{ agent_type_id, pool_id, description, capabilities }] }`.
+
+### Frontend — `AdicionarEspecialistaButton` + `useMentionableAgents` (Task #98)
+
+**`packages/platform-ui/src/modules/agent-assist/types.ts`** (Task #98)
+- `MentionableAgent` interface: `{ agent_type_id, pool_id: string|null, description: string|null, capabilities: Record<string, unknown> }`.
+- `PoolInfo.mentionable_pools?: string[]` added.
+
+**`packages/platform-ui/src/modules/agent-assist/hooks/useMentionableAgents.ts`** (Task #98, new file)
+- Fetches `GET /v1/pools/${poolId}/mentionable-agents` on `poolId` change.
+- Returns `MentionableAgent[]`; defaults to `[]` on error or when `poolId` is null.
+- Cleanup cancellation pattern (`cancelled` flag) prevents stale state on rapid poolId changes.
+
+**`packages/platform-ui/src/modules/agent-assist/components/ActionBar.tsx`** (Task #98)
+- `AdicionarEspecialistaButton` sub-component with 2-step inline flow:
+  - Step 1: scrollable dropdown list of agents — name, description, `agent_type_id`, `pool_id`.
+  - Step 2: back chevron + context `<textarea>` (⌘↵ submits, Esc closes) + "Convidar" button.
+  - Purple accent (`text-purple-700 bg-purple-50 border-purple-200`); hidden when `mentionableAgents` is empty.
+- New `ActionBarProps`: `mentionableAgents?: MentionableAgent[]`, `onAddSpecialist?: (agentTypeId: string, context: string) => void`.
+- Button rendered before `<IniciarProcessoButton>` in the action row.
+
+**`packages/platform-ui/src/modules/agent-assist/AgentAssistPage.tsx`** (Task #98)
+- `useMentionableAgents(currentPoolId)` — `currentPoolId = selected?.poolId ?? null`.
+- `handleAddSpecialist(agentTypeId, context)` → `handleSend(`@${agentTypeId} ${context}`)` + info toast.
+- `ActionBar` call updated: `mentionableAgents={mentionableAgents}` + `onAddSpecialist={handleAddSpecialist}`.
+
+---
+
+## Arc 12 — Agent Business Events: Fases C + D (2026-05-13)
+
+Spec completa: [`docs/arcos/arc12-agent-business-events.md`](docs/arcos/arc12-agent-business-events.md)
+
+### Fase C — 3 analytics endpoints
+
+**`packages/analytics-api/src/plughub_analytics_api/reports_query.py`** (Task #92)
+- `query_agent_events_series()` / `_fetch_agent_events_series()` — time-series by period × category; granularity `hour|day|week`; `startsWith(category, ...)` prefix filter
+- `query_agent_events_summary()` / `_fetch_agent_events_summary()` — aggregation by `group_by` (`category|skill_id|pool_id|agent_type_id`); pagination; validated against `VALID_GROUP_BY` set
+- `query_agent_events_categories()` / `_fetch_agent_events_categories()` — catalogue of active category prefixes (max 500); pool/skill filter
+
+**`packages/analytics-api/src/plughub_analytics_api/reports.py`** (Task #92)
+- `GET /reports/agent-events/series` — params: `tenant_id`, `from`, `to`, `category`, `pool_id`, `skill_id`, `granularity`, `format`
+- `GET /reports/agent-events/summary` — params: `tenant_id`, `from`, `to`, `category`, `pool_id`, `group_by`, `page`, `page_size`, `format`
+- `GET /reports/agent-events/categories` — params: `tenant_id`, `from`, `to`, `pool_id`, `skill_id` (JSON only)
+
+### Fase D — Dashboard cards (2 cards)
+
+**`packages/analytics-api/src/plughub_analytics_api/display_formatters.py`** (Task #93)
+- `_fetch_agent_event_timeseries_sync()` — daily aggregation (count + avg value) for a category prefix
+- `_fetch_agent_event_summary_sync()` — grouped aggregation (top 20 groups by event count)
+- `fmt_agent_event_timeseries()` — async; returns `LineChartData` with series `['Total', 'Média']`
+- `fmt_agent_event_summary()` — async; returns `BarChartData`; `group_by` validated against allowed set
+
+**`packages/analytics-api/src/plughub_analytics_api/display.py`** (Task #93)
+- `GET /reports/display/agent-event-timeseries` — params: `tenant_id`, `from`, `to`, `category`, `pool_id`
+- `GET /reports/display/agent-event-summary` — params: `tenant_id`, `from`, `to`, `category`, `pool_id`, `group_by`
+- Route count updated from 14 → 16 in module docstring
+
+**`packages/platform-ui/src/dashboard/catalog.ts`** (Task #93)
+- `agent-event-timeseries` — `LineChartData`; configurable params: `category`, `pool_id`
+- `agent-event-summary` — `BarChartData`; configurable params: `category`, `pool_id`, `group_by`; `group_by` placeholder lists all valid values for discoverability
+
+---
+
+## Arc 12 — Agent Business Events: Fases A + B (2026-05-13)
+
+Spec completa: [`docs/arcos/arc12-agent-business-events.md`](docs/arcos/arc12-agent-business-events.md)
+
+### Fase A — Schema + ClickHouse DDL + analytics-api consumer
+
+**`packages/schemas/src/agent-events.ts`** (Task #88)
+- `AGENT_EVENT_CATEGORY_REGEX` — `^[a-z0-9_]+(\.[a-z0-9_]+){1,4}$` (2–5 dot-separated segments)
+- `AGENT_EVENT_PII_TAG_KEYS` — set of 20 blocked PII keywords (`cpf`, `cnpj`, `phone`, `email`, `token`, `api_key`, …)
+- `AgentBusinessEventSchema` — full event schema with `event_id`, `tenant_id`, `session_id`, `journey_id` (nullable), `agent_type_id`, `skill_id`, `pool_id`, `category`, `category_l1..l4` (pre-decomposed), `value`, `tags`, `emitted_at`
+- `AgentEventInputSchema` — agent-facing input with max 10 tags, 64-char limits
+- `decomposeCategoryLevels()` — splits category into `{l1, l2, l3, l4}` with empty-string defaults
+- Exported from `packages/schemas/src/index.ts`
+
+**`packages/analytics-api/src/plughub_analytics_api/clickhouse.py`** (Task #89)
+- `_DDL_AGENT_BUSINESS_EVENTS` — `MergeTree()` (immutable events, no dedup), partitioned by month, ORDER BY `(tenant_id, category_l1, category_l2, category_l3, emitted_at)`, TTL 2 years
+- `_AGENT_BUSINESS_EVENT_COLS` + `insert_agent_business_event()` method on `AnalyticsStore`
+- `_agent_business_event_row()` row builder with fallback category decomposition and tag coercion to `dict[str, str]`
+
+**`packages/analytics-api/src/plughub_analytics_api/models.py`** (Task #89)
+- `parse_agent_business_event()` — validates required fields, coerces `value` to float, decomposes category levels, sanitises tags
+
+**`packages/analytics-api/src/plughub_analytics_api/consumer.py`** (Task #89)
+- Topic `agent.events` added to `_TOPICS`
+- Parser `parse_agent_business_event` added to `_PARSERS`
+- `agent_business_events` table dispatch added to `_write_row()`
+
+### Fase B — MCP Tool `agent_event`
+
+**`packages/mcp-server-plughub/src/tools/agent-events.ts`** (Task #90)
+- `AgentEventToolInputSchema` — extends `AgentEventInputSchema` with `session_token` + `session_id`
+- Full validation chain:
+  - JWT decode (`verifySessionToken`) → resolves `tenant_id`, `agent_type_id`, `instance_id`
+  - PII tag key check (case-insensitive against `AGENT_EVENT_PII_TAG_KEYS`)
+  - Namespace isolation: `category_l1 === pool_id` from `session:{id}:meta` (enforced when pool_id resolvable)
+  - Rate limit: `{tenant_id}:agent_event_count:{session_id}` Redis INCR, max 50 (env `AGENT_EVENT_RATE_LIMIT`)
+- Context enrichment from Redis `session:{id}:meta`: `pool_id`, `skill_id`, `journey_id` (best-effort, non-fatal)
+- Publishes to Kafka topic `agent.events` with full `AgentBusinessEvent` payload (category_l1..l4 pre-decomposed)
+- Returns `{ event_id, category, value, emitted_at, session_event_count }`
+
+**`packages/mcp-server-plughub/src/server.ts`** (Task #90)
+- Import `registerAgentEventTools` + `AgentEventDeps`
+- `agentEventDeps = { redis, kafka }` wired
+- `registerAgentEventTools(server, agentEventDeps)` registered
+
+---
+
 ## AI Gateway — AccountSelector: preferred_config_ids[] por InferenceRequest (2026-05-13)
 
 ### `packages/ai-gateway/src/plughub_ai_gateway/account_selector.py` (Task #76)
