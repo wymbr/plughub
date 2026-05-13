@@ -83,6 +83,10 @@
       "authority": "Alçada",
       "autoLockTimeout": "Bloquear resultado automaticamente ao expirar prazo",
       "skillInfo": "Skill: {{skill}} — define o número real de rounds e timeouts. Os valores acima são usados como fallback e exibição na UI.",
+      "evaluationPoolLabel": "Pool avaliado",
+      "selectPool": "Todos os pools",
+      "evaluationCalendarLabel": "Calendário de SLA",
+      "selectCalendar": "Sem calendário (horário corrido)",
       "errorRequired": "Nome e formulário são obrigatórios",
       "errorMessage": "{{error}}",
       "cancel": "Cancelar",
@@ -104,7 +108,11 @@
       "maxRounds": "Máx. rounds: {{rounds}}",
       "reviewDeadline": "Prazo por round: {{hours}}h",
       "autoLock": "Bloquear no timeout: {{enabled|Sim|Não}}",
-      "noPolicy": "Sem política de contestação"
+      "noPolicy": "Sem política de contestação",
+      "evaluationPool": "Pool avaliado",
+      "evaluationCalendar": "Calendário de SLA",
+      "noPool": "Todos os pools",
+      "noCalendar": "Horário corrido"
     },
     "progress": "Progresso"
   },

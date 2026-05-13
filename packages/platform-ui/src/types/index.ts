@@ -447,6 +447,9 @@ export interface EvaluationCampaign {
   reviewer_rules:           ReviewerRules
   contestation_policy?:     ContestationPolicy
   review_workflow_skill_id?: string
+  evaluation_pool_id?:      string
+  evaluation_calendar_id?:  string
+  gateway_config_ids?:      string[]
   total_instances:          number
   completed:                number
   pending:                  number

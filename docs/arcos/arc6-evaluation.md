@@ -50,11 +50,16 @@ EvaluationForm {
 
 ```typescript
 SamplingRules {
-  mode: "all" | "random" | "pool_filter" | "segment_filter"
-  sample_rate?: number          // 0.0–1.0 (modo random)
-  pool_ids?: string[]           // filtro por pool
-  outcome_filter?: string[]     // filtro por outcome (resolved/escalated/…)
-  min_duration_ms?: number      // ignora sessões muito curtas
+  mode: "all" | "percentage" | "fixed"
+  rate?: number                 // 0.0–1.0 (modo percentage)
+  every_n?: number              // N (modo fixed — amostra 1 a cada N sessões)
+  min_duration_s?: number       // ignora sessões mais curtas que N segundos
+  agent_type_ids?: string[]     // whitelist de agent_type_ids (vazio = qualquer)
+  pool_ids?: string[]           // whitelist de pool_ids (vazio = qualquer)
+  channels?: string[]           // whitelist de canais (vazio = qualquer)
+  outcome_filter?: string[]     // whitelist de outcomes de sessão (vazio = qualquer)
+  default_priority?: number     // prioridade padrão 1–10 (padrão: 5)
+  priority_overrides?: {field: string; value: string; priority: number}[]
 }
 
 ReviewerRules {
@@ -83,14 +88,23 @@ EvaluationCampaign {
   campaign_id: string
   tenant_id: string
   name: string
+  description?: string
   form_id: string
-  pool_id?: string
-  sampling: SamplingRules
+  status: "draft" | "active" | "paused" | "closed"
+  sampling_rules: SamplingRules
   reviewer_rules: ReviewerRules
-  contestation_policy: ContestationPolicy   // configura ciclos de revisão/contestação
-  review_workflow_skill_id: string          // skill YAML que roda como motor de estado (ex: "skill_revisao_treplica_v1")
-  status: "active" | "paused" | "completed"
-  evaluator_pool_id: string     // pool do agente_avaliacao_v1
+  contestation_policy?: ContestationPolicy   // configura ciclos de revisão/contestação
+  review_workflow_skill_id?: string          // skill YAML motor de estado (ex: "skill_revisao_treplica_v1")
+  // Novos campos (2026-05-13)
+  evaluation_pool_id?: string      // pool sob avaliação — hard filter em check_sample
+  evaluation_calendar_id?: string  // calendário de SLA — usado em compute_expires_at (business hours)
+  gateway_config_ids?: string[]    // GatewayConfig IDs dos agentes avaliadores (reservado para AI Gateway)
+  // Campos calculados (read-only)
+  total_instances: number
+  completed: number
+  pending: number
+  in_review: number
+  avg_score: number | null
   created_at, updated_at: string
 }
 ```

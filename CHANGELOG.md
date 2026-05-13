@@ -2,6 +2,43 @@
 
 ---
 
+## Arc 6 — EvaluationCampaign: evaluation_pool_id + evaluation_calendar_id + gateway_config_ids (2026-05-13)
+
+### `packages/schemas/src/evaluation.ts` (Task #74)
+- `EvaluationCampaignSchema` extended with 3 new optional fields:
+  - `evaluation_pool_id?: z.string()` — pool under evaluation; used as hard filter in `check_sample`
+  - `evaluation_calendar_id?: z.string()` — calendar for business-hours SLA deadline calculation in `compute_expires_at`; takes precedence over legacy `schedule.calendar_id`
+  - `gateway_config_ids?: z.array(z.string()).default([])` — GatewayConfig IDs allowed for the evaluation's AI agents (reserved for AI Gateway routing)
+
+### `packages/evaluation-api/src/plughub_evaluation_api/db.py` (Task #75)
+- Idempotent DDL migration via `ALTER TABLE ... ADD COLUMN IF NOT EXISTS` for all 3 columns in `evaluation.campaigns`
+- `create_campaign()`: accepts and inserts `evaluation_pool_id`, `evaluation_calendar_id`, `gateway_config_ids`
+- `update_campaign()`: allowed-set extended with the 3 new fields
+- `list_campaigns()`: optional `evaluation_pool_id` query filter added
+
+### `packages/evaluation-api/src/plughub_evaluation_api/router.py` (Task #75)
+- `CampaignCreate` and `CampaignUpdate` Pydantic models: added `evaluation_pool_id: str | None`, `evaluation_calendar_id: str | None`, `gateway_config_ids: list[str] = []`
+- `GET /v1/evaluation/campaigns`: `evaluation_pool_id` query param forwarded to db filter
+- `POST /v1/evaluation/campaigns/check-sample`: hard filter — if campaign has `evaluation_pool_id` and `session_meta.pool_id` doesn't match, returns `should_sample: false` immediately (before statistical sampling)
+
+### `packages/evaluation-api/src/plughub_evaluation_api/sampling.py` (Task #75)
+- `compute_expires_at()`: uses `campaign.evaluation_calendar_id` with fallback to legacy `schedule.calendar_id`
+
+### `packages/platform-ui/src/types/index.ts` (Task #77)
+- `EvaluationCampaign` interface: added `evaluation_pool_id?: string`, `evaluation_calendar_id?: string`, `gateway_config_ids?: string[]`
+
+### `packages/platform-ui/src/modules/evaluation/CampaignsPage.tsx` (Task #77)
+- `CreateModal`: added `usePoolOptions` hook (fetches `/v1/operational/pools`) and `useCalendarOptions` hook (fetches `/v1/calendars?tenant_id=`)
+- Two new selectors in modal form: **Pool avaliado** (hard filter for sampling) + **Calendário de SLA** (business-hours deadline)
+- New values passed to `createCampaign()` as `evaluation_pool_id` and `evaluation_calendar_id`
+- Detail panel: two new info cards showing pool and calendar for selected campaign
+
+### `packages/platform-ui/src/i18n/locales/{en,pt-BR}/evaluation.json` (Task #77)
+- Added keys under `campaigns.modal`: `evaluationPoolLabel`, `selectPool`, `evaluationCalendarLabel`, `selectCalendar`
+- Added keys under `campaigns.detail`: `evaluationPool`, `evaluationCalendar`, `noPool`, `noCalendar`
+
+---
+
 ## Receive Step — Full Implementation + Bug Fixes (2026-05-12)
 
 ### `packages/skill-flow-engine/src/steps/receive.ts`

@@ -3,7 +3,7 @@
  * /evaluation/campaigns — Campaign CRUD + live dashboard
  */
 
-import React, { useState } from 'react'
+import React, { useState, useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
 import {
   useCampaigns,
@@ -15,6 +15,36 @@ import {
 } from '@/api/evaluation-hooks'
 import type { EvaluationCampaign, CampaignReport } from '@/types'
 import { useAuth } from '@/auth/useAuth'
+
+// ── Lightweight data hooks for selectors ──────────────────────────────────────
+
+interface PoolOption { pool_id: string; description: string | null }
+
+function usePoolOptions(tenantId: string) {
+  const [pools, setPools] = useState<PoolOption[]>([])
+  useEffect(() => {
+    if (!tenantId) return
+    fetch('/v1/operational/pools', { headers: { 'x-tenant-id': tenantId } })
+      .then(r => r.ok ? r.json() : Promise.reject())
+      .then(body => setPools(body.items ?? []))
+      .catch(() => setPools([]))
+  }, [tenantId])
+  return pools
+}
+
+interface CalendarOption { id: string; name: string }
+
+function useCalendarOptions(tenantId: string) {
+  const [calendars, setCalendars] = useState<CalendarOption[]>([])
+  useEffect(() => {
+    if (!tenantId) return
+    fetch(`/v1/calendars?tenant_id=${encodeURIComponent(tenantId)}`)
+      .then(r => r.ok ? r.json() : Promise.reject())
+      .then(rows => setCalendars(Array.isArray(rows) ? rows : []))
+      .catch(() => setCalendars([]))
+  }, [tenantId])
+  return calendars
+}
 
 function StatusBadge({ status }: { status: string }) {
   const { t } = useTranslation('evaluation')
@@ -124,9 +154,13 @@ function CreateModal({ onClose, onCreated, adminToken }: CreateModalProps) {
   const { t } = useTranslation('evaluation')
   const { tenantId: TENANT } = useAuth()
   const { forms } = useForms(TENANT)
+  const poolOptions     = usePoolOptions(TENANT)
+  const calendarOptions = useCalendarOptions(TENANT)
   const [name, setName] = useState('')
   const [description, setDescription] = useState('')
   const [formId, setFormId] = useState('')
+  const [evaluationPoolId,     setEvaluationPoolId]     = useState('')
+  const [evaluationCalendarId, setEvaluationCalendarId] = useState('')
   const [samplingMode, setSamplingMode] = useState<'all' | 'percentage' | 'fixed'>('percentage')
   const [samplingRate, setSamplingRate] = useState('0.1')
   const [autoReview, setAutoReview] = useState(true)
@@ -155,6 +189,8 @@ function CreateModal({ onClose, onCreated, adminToken }: CreateModalProps) {
         description,
         status: 'draft',
         review_workflow_skill_id: workflowSkillId || undefined,
+        evaluation_pool_id:     evaluationPoolId     || undefined,
+        evaluation_calendar_id: evaluationCalendarId || undefined,
         sampling_rules: {
           mode: samplingMode,
           rate: samplingMode === 'percentage' ? parseFloat(samplingRate) : undefined,
@@ -224,6 +260,38 @@ function CreateModal({ onClose, onCreated, adminToken }: CreateModalProps) {
                 <option value="">{t('campaigns.modal.noWorkflow')}</option>
                 {WORKFLOW_SKILL_OPTIONS.map(o => (
                   <option key={o.value} value={o.value}>{o.label}</option>
+                ))}
+              </select>
+            </div>
+
+            {/* Evaluation pool */}
+            <div>
+              <label className="block text-xs font-medium text-gray-600 mb-1">{t('campaigns.modal.evaluationPoolLabel')}</label>
+              <select
+                className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm"
+                value={evaluationPoolId}
+                onChange={e => setEvaluationPoolId(e.target.value)}
+              >
+                <option value="">{t('campaigns.modal.selectPool')}</option>
+                {poolOptions.map(p => (
+                  <option key={p.pool_id} value={p.pool_id}>
+                    {p.description ? `${p.pool_id} — ${p.description}` : p.pool_id}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            {/* SLA calendar */}
+            <div>
+              <label className="block text-xs font-medium text-gray-600 mb-1">{t('campaigns.modal.evaluationCalendarLabel')}</label>
+              <select
+                className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm"
+                value={evaluationCalendarId}
+                onChange={e => setEvaluationCalendarId(e.target.value)}
+              >
+                <option value="">{t('campaigns.modal.selectCalendar')}</option>
+                {calendarOptions.map(c => (
+                  <option key={c.id} value={c.id}>{c.name}</option>
                 ))}
               </select>
             </div>
@@ -524,6 +592,30 @@ export default function CampaignsPage() {
                   </div>
                 ) : (
                   <div className="text-xs text-gray-400 italic">{t('campaigns.detail.noWorkflow')}</div>
+                )}
+              </div>
+
+              {/* Evaluation pool */}
+              <div className="bg-white border rounded p-3">
+                <div className="text-xs font-semibold text-gray-500 mb-2">{t('campaigns.detail.evaluationPool')}</div>
+                {selected.evaluation_pool_id ? (
+                  <div className="font-mono text-xs bg-gray-50 border rounded px-2 py-1 break-all text-gray-700">
+                    {selected.evaluation_pool_id}
+                  </div>
+                ) : (
+                  <div className="text-xs text-gray-400 italic">{t('campaigns.detail.noPool')}</div>
+                )}
+              </div>
+
+              {/* SLA calendar */}
+              <div className="bg-white border rounded p-3">
+                <div className="text-xs font-semibold text-gray-500 mb-2">{t('campaigns.detail.evaluationCalendar')}</div>
+                {selected.evaluation_calendar_id ? (
+                  <div className="font-mono text-xs bg-gray-50 border rounded px-2 py-1 break-all text-gray-700">
+                    {selected.evaluation_calendar_id}
+                  </div>
+                ) : (
+                  <div className="text-xs text-gray-400 italic">{t('campaigns.detail.noCalendar')}</div>
                 )}
               </div>
 

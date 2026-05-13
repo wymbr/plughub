@@ -83,6 +83,10 @@
       "authority": "Authority",
       "autoLockTimeout": "Lock result automatically on timeout",
       "skillInfo": "Skill: {{skill}} — defines actual number of rounds and timeouts. The values above are used as fallback and UI display.",
+      "evaluationPoolLabel": "Evaluation Pool",
+      "selectPool": "All pools",
+      "evaluationCalendarLabel": "SLA Calendar",
+      "selectCalendar": "No calendar (wall-clock)",
       "errorRequired": "Name and form are required",
       "errorMessage": "{{error}}",
       "cancel": "Cancel",
@@ -104,7 +108,11 @@
       "maxRounds": "Max. rounds: {{rounds}}",
       "reviewDeadline": "Review deadline: {{hours}}h",
       "autoLock": "Lock on timeout: {{enabled|Yes|No}}",
-      "noPolicy": "No contestation policy"
+      "noPolicy": "No contestation policy",
+      "evaluationPool": "Evaluation pool",
+      "evaluationCalendar": "SLA calendar",
+      "noPool": "All pools",
+      "noCalendar": "Wall-clock"
     },
     "progress": "Progress"
   },
