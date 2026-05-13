@@ -141,7 +141,12 @@ class InferenceRequest(BaseModel):
     # Tool permission filter — populated from session_token JWT permissions[].
     # When non-empty, only tools whose 'name' appears in this list are forwarded
     # to the LLM. An empty list means no filtering (all tools visible).
-    permissions:   list[str]                    = Field(default_factory=list)
+    permissions:          list[str] = Field(default_factory=list)
+    # GatewayConfig IDs that should be preferred for account selection.
+    # Populated from EvaluationCampaign.gateway_config_ids so that evaluation
+    # workloads can be steered to dedicated API keys and avoid competing with
+    # realtime agent traffic. Empty list = no preference (normal rotation).
+    preferred_config_ids: list[str] = Field(default_factory=list)
 
 
 class InferenceResponse(BaseModel):

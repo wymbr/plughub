@@ -2,6 +2,40 @@
 
 ---
 
+## AI Gateway — AccountSelector: preferred_config_ids[] por InferenceRequest (2026-05-13)
+
+### `packages/ai-gateway/src/plughub_ai_gateway/account_selector.py` (Task #76)
+- `LLMAccount`: novo campo `config_id: str = ""` — GatewayConfig ID do agent-registry; identifica a qual configuração o API key pertence
+- `AccountSelector.pick()`: novo parâmetro `preferred_config_ids: list[str] | None`. Quando não-vazio: primeira tentativa restrita a accounts cujo `config_id` está na lista; se nenhum disponível (throttled/RPM), cai graciosamente para o pool completo (degradação graciosa — nunca falha por causa do filtro)
+- Método privado `_pick_least_loaded()` extraído para evitar duplicação entre preferred pass e full-pool pass
+
+### `packages/ai-gateway/src/plughub_ai_gateway/models.py` (Task #76)
+- `InferenceRequest`: novo campo `preferred_config_ids: list[str] = []` — lista de GatewayConfig IDs a preferir para esta chamada; populado a partir de `EvaluationCampaign.gateway_config_ids`
+
+### `packages/ai-gateway/src/plughub_ai_gateway/inference.py` (Task #76)
+- `InferenceEngine._call_with_fallback()`: aceita `preferred_config_ids` e passa para `account_selector.pick()` — tanto na chamada primária quanto na retry após throttle
+- `InferenceEngine.infer()`: extrai `req.preferred_config_ids` e passa para `_call_with_fallback()`
+
+### `packages/ai-gateway/src/plughub_ai_gateway/config.py` (Task #76)
+- `Settings`: dois novos campos `anthropic_config_ids: str = ""` e `openai_config_ids: str = ""` (env `PLUGHUB_ANTHROPIC_CONFIG_IDS`, `PLUGHUB_OPENAI_CONFIG_IDS`)
+- `get_anthropic_config_ids()` e `get_openai_config_ids()`: parseia CSV, retorna lista paralela às API keys; sempre padded com `""` para manter alinhamento index-a-index
+
+### `packages/ai-gateway/src/plughub_ai_gateway/main.py` (Task #76)
+- Passa `config_id=anthropic_config_ids[idx]` e `config_id=openai_config_ids[idx]` ao construir cada `LLMAccount`; backward compat total (sem config_id = `""` = sem preferência)
+
+### `packages/ai-gateway/.../tests/test_account_selector.py` (Task #76)
+- 3 novos testes: `preferred_config_ids` seleciona account correto, fallback quando preferido throttled, lista vazia = comportamento normal
+- 3 novos testes: `get_anthropic_config_ids()` parsing, padding, vazio
+
+**Uso típico — isolamento de avaliação:**
+```
+PLUGHUB_ANTHROPIC_API_KEYS=sk-realtime,sk-evaluation
+PLUGHUB_ANTHROPIC_CONFIG_IDS=gcfg_realtime,gcfg_evaluation
+```
+Então `EvaluationCampaign.gateway_config_ids=["gcfg_evaluation"]` → `InferenceRequest.preferred_config_ids=["gcfg_evaluation"]` → avaliação usa `sk-evaluation` sem competir com agentes realtime.
+
+---
+
 ## Arc 6 — EvaluationCampaign: evaluation_pool_id + evaluation_calendar_id + gateway_config_ids (2026-05-13)
 
 ### `packages/schemas/src/evaluation.ts` (Task #74)

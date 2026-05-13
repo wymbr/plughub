@@ -112,6 +112,7 @@ class InferenceEngine:
             profile=profile,
             messages=messages_list,
             tools=tools_list or None,
+            preferred_config_ids=req.preferred_config_ids,
         )
 
         # 4b. Metering — publica tokens consumidos em usage.events (fire-and-forget)
@@ -193,9 +194,10 @@ class InferenceEngine:
 
     async def _call_with_fallback(
         self,
-        profile:  Any,
-        messages: list[dict],
-        tools:    list[dict] | None,
+        profile:              Any,
+        messages:             list[dict],
+        tools:                list[dict] | None,
+        preferred_config_ids: list[str] | None = None,
     ) -> tuple[LLMResponse, str]:
         """
         Tries primary provider with AccountSelector-based account rotation;
@@ -205,6 +207,8 @@ class InferenceEngine:
         Account selection flow:
           1. If AccountSelector is configured, pick the least-loaded account
              for profile.provider → use that specific provider instance.
+             When preferred_config_ids is non-empty, prefer accounts whose
+             config_id is in the list (evaluation workload isolation).
           2. On 429/529 (rate-limit): mark the picked account as throttled,
              then re-pick a different account (same provider) and retry once.
           3. If still failing (retryable): fall through to profile.fallback.
@@ -215,7 +219,10 @@ class InferenceEngine:
         # ── Step 1: pick specific account via AccountSelector ──────────────
         provider_key: str | None = None
         if self._account_selector is not None:
-            provider_key = await self._account_selector.pick(primary_provider_name)
+            provider_key = await self._account_selector.pick(
+                primary_provider_name,
+                preferred_config_ids=preferred_config_ids or [],
+            )
             if provider_key is None:
                 logger.warning(
                     "_call_with_fallback: all accounts throttled for provider=%s — jumping to fallback",
@@ -269,7 +276,10 @@ class InferenceEngine:
                     provider_key,
                 )
                 # Retry once with the next available account
-                retry_key = await self._account_selector.pick(primary_provider_name)
+                retry_key = await self._account_selector.pick(
+                    primary_provider_name,
+                    preferred_config_ids=preferred_config_ids or [],
+                )
                 if retry_key is not None and retry_key != provider_key:
                     retry_provider = self._providers.get(retry_key)
                     if retry_provider is not None:

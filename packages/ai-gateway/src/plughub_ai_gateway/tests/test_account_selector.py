@@ -183,6 +183,63 @@ class TestAccountSelectorPick:
         assert result is None
 
 
+# ─── AccountSelector — preferred_config_ids ───────────────────────────────────
+
+class TestPreferredConfigIds:
+    @pytest.mark.asyncio
+    async def test_preferred_config_id_restricts_to_tagged_account(self) -> None:
+        """When preferred_config_ids is set, pick the matching account first."""
+        acc_realtime = LLMAccount(
+            provider="anthropic", api_key="sk-realtime",
+            rpm_limit=60, tpm_limit=100_000, config_id="gcfg_realtime",
+        )
+        acc_eval = LLMAccount(
+            provider="anthropic", api_key="sk-eval",
+            rpm_limit=60, tpm_limit=100_000, config_id="gcfg_evaluation",
+        )
+
+        redis = AsyncMock()
+        redis.mget = AsyncMock(return_value=[None, b"0", b"0"])  # not throttled
+        selector = AccountSelector(redis, [acc_realtime, acc_eval])
+        result = await selector.pick("anthropic", preferred_config_ids=["gcfg_evaluation"])
+        assert result == acc_eval.provider_key
+
+    @pytest.mark.asyncio
+    async def test_preferred_config_id_falls_back_when_preferred_throttled(self) -> None:
+        """When preferred account is throttled, fall back to the full pool."""
+        acc_realtime = LLMAccount(
+            provider="anthropic", api_key="sk-realtime",
+            rpm_limit=60, tpm_limit=100_000, config_id="gcfg_realtime",
+        )
+        acc_eval = LLMAccount(
+            provider="anthropic", api_key="sk-eval",
+            rpm_limit=60, tpm_limit=100_000, config_id="gcfg_evaluation",
+        )
+
+        redis = AsyncMock()
+        async def mget_mock(*args):
+            # Throttle gcfg_evaluation, allow gcfg_realtime
+            key_str = str(args)
+            if acc_eval.key_id in key_str:
+                return [b"1", None, None]   # throttled
+            return [None, b"0", b"0"]       # available
+
+        redis.mget = mget_mock
+        selector = AccountSelector(redis, [acc_realtime, acc_eval])
+        # Preferred account (eval) is throttled → should fall back to realtime
+        result = await selector.pick("anthropic", preferred_config_ids=["gcfg_evaluation"])
+        assert result == acc_realtime.provider_key
+
+    @pytest.mark.asyncio
+    async def test_empty_preferred_config_ids_uses_normal_selection(self) -> None:
+        """Empty preferred_config_ids = normal rotation (no preference)."""
+        acc = _make_account()
+        redis = _make_redis(throttled=False, rpm=0, tpm=0)
+        selector = AccountSelector(redis, [acc])
+        result = await selector.pick("anthropic", preferred_config_ids=[])
+        assert result == acc.provider_key
+
+
 # ─── AccountSelector — mark_throttled() ───────────────────────────────────────
 
 class TestMarkThrottled:
@@ -327,3 +384,30 @@ class TestSettingsKeyParsing:
         profiles = s.model_profiles
         assert "evaluation" in profiles
         assert profiles["evaluation"].provider == "anthropic"
+
+    def test_anthropic_config_ids_parsed_parallel_to_keys(self) -> None:
+        from plughub_ai_gateway.config import Settings
+        s = Settings(
+            anthropic_api_keys="sk-a,sk-b,sk-c",
+            anthropic_config_ids="gcfg_realtime,gcfg_evaluation,",
+        )
+        ids = s.get_anthropic_config_ids()
+        assert ids == ["gcfg_realtime", "gcfg_evaluation", ""]
+
+    def test_anthropic_config_ids_padded_when_shorter_than_keys(self) -> None:
+        from plughub_ai_gateway.config import Settings
+        s = Settings(
+            anthropic_api_keys="sk-a,sk-b,sk-c",
+            anthropic_config_ids="gcfg_only_one",
+        )
+        ids = s.get_anthropic_config_ids()
+        assert len(ids) == 3
+        assert ids[0] == "gcfg_only_one"
+        assert ids[1] == ""
+        assert ids[2] == ""
+
+    def test_anthropic_config_ids_empty_when_not_set(self) -> None:
+        from plughub_ai_gateway.config import Settings
+        s = Settings(anthropic_api_keys="sk-a,sk-b")
+        ids = s.get_anthropic_config_ids()
+        assert ids == ["", ""]

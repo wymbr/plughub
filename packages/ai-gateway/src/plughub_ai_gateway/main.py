@@ -78,15 +78,17 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     providers: dict = {}
     accounts:  list[LLMAccount] = []
 
-    anthropic_keys = settings.get_anthropic_keys()
+    anthropic_keys       = settings.get_anthropic_keys()
+    anthropic_config_ids = settings.get_anthropic_config_ids()
     if not anthropic_keys:
         logger.warning("No Anthropic API keys configured (PLUGHUB_ANTHROPIC_API_KEY[S])")
-    for api_key in anthropic_keys:
+    for idx, api_key in enumerate(anthropic_keys):
         acc = LLMAccount(
             provider="anthropic",
             api_key=api_key,
             rpm_limit=settings.anthropic_rpm_limit,
             tpm_limit=settings.anthropic_tpm_limit,
+            config_id=anthropic_config_ids[idx] if idx < len(anthropic_config_ids) else "",
         )
         provider_instance = AnthropicProvider(api_key=api_key)
         providers[acc.provider_key] = provider_instance   # "anthropic:{key_id}"
@@ -98,13 +100,15 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         providers["anthropic"] = providers[first_key.provider_key]
 
     # OpenAI — optional fallback provider (multi-key support)
-    openai_keys = settings.get_openai_keys()
-    for api_key in openai_keys:
+    openai_keys       = settings.get_openai_keys()
+    openai_config_ids = settings.get_openai_config_ids()
+    for idx, api_key in enumerate(openai_keys):
         acc = LLMAccount(
             provider="openai",
             api_key=api_key,
             rpm_limit=settings.openai_rpm_limit,
             tpm_limit=settings.openai_tpm_limit,
+            config_id=openai_config_ids[idx] if idx < len(openai_config_ids) else "",
         )
         provider_instance = OpenAIProvider(api_key=api_key)
         providers[acc.provider_key] = provider_instance   # "openai:{key_id}"

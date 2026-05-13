@@ -29,6 +29,11 @@ class LLMAccount:
     weight:     int = 1
     rpm_limit:  int = 60          # requests per minute
     tpm_limit:  int = 100_000     # tokens per minute
+    # GatewayConfig ID from agent-registry (empty string = untagged account).
+    # Used by AccountSelector.pick(preferred_config_ids=[...]) to restrict
+    # selection to specific accounts — e.g. evaluation campaigns pinning to
+    # dedicated API keys to avoid competing with realtime traffic.
+    config_id:  str = ""
 
     @property
     def key_id(self) -> str:
@@ -68,24 +73,71 @@ class AccountSelector:
         for account in accounts:
             self._accounts.setdefault(account.provider, []).append(account)
 
-    async def pick(self, provider: str) -> Optional[str]:
+    async def pick(
+        self,
+        provider: str,
+        preferred_config_ids: list[str] | None = None,
+    ) -> Optional[str]:
         """
         Returns the provider_key of the best available account for the given provider.
         Returns None if all accounts are throttled or none registered.
+
+        Args:
+            provider:             LLM provider name ("anthropic", "openai", …)
+            preferred_config_ids: When non-empty, first attempt restricts candidates
+                                  to accounts whose config_id is in this list (used by
+                                  evaluation campaigns to pin to dedicated API keys).
+                                  If no preferred account is available, falls through
+                                  gracefully to the full account pool so the call never
+                                  fails solely due to the preference filter.
         """
         accounts = self._accounts.get(provider, [])
         if not accounts:
             return None
 
-        # Fast path — single account (most common)
+        # ── Preferred-config-id filter (first pass) ────────────────────────
+        if preferred_config_ids:
+            preferred_set = set(preferred_config_ids)
+            preferred_accounts = [a for a in accounts if a.config_id in preferred_set]
+            if preferred_accounts:
+                result = await self._pick_least_loaded(preferred_accounts, provider)
+                if result is not None:
+                    return result
+                logger.warning(
+                    "AccountSelector: preferred accounts (%s) all unavailable for provider=%s"
+                    " — falling back to full pool",
+                    preferred_config_ids, provider,
+                )
+            else:
+                logger.debug(
+                    "AccountSelector: no accounts match preferred_config_ids=%s for provider=%s"
+                    " — using full pool",
+                    preferred_config_ids, provider,
+                )
+
+        # ── Normal selection — full account pool ───────────────────────────
+        return await self._pick_least_loaded(accounts, provider)
+
+    async def _pick_least_loaded(
+        self,
+        accounts: list[LLMAccount],
+        provider: str,
+    ) -> Optional[str]:
+        """
+        From the given candidate list, returns the provider_key of the
+        non-throttled account with the lowest utilization score.
+        Returns None if all candidates are unavailable.
+        """
+        # Fast path — single account
         if len(accounts) == 1:
             acc = accounts[0]
             if await self._is_available(acc):
                 return acc.provider_key
-            logger.warning("AccountSelector: single account throttled for provider=%s", provider)
+            logger.warning(
+                "AccountSelector: single account throttled for provider=%s", provider,
+            )
             return None
 
-        # Multi-account — find least-loaded non-throttled account
         best_key: Optional[str] = None
         best_util = float("inf")
 
@@ -99,7 +151,7 @@ class AccountSelector:
 
         if best_key is None:
             logger.warning(
-                "AccountSelector: all %d accounts throttled for provider=%s",
+                "AccountSelector: all %d candidates throttled for provider=%s",
                 len(accounts), provider,
             )
         return best_key

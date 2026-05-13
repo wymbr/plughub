@@ -26,16 +26,21 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="PLUGHUB_", case_sensitive=False)
 
     # Anthropic — single key (backward compat) or comma-separated list
-    anthropic_api_key:  str = ""
-    anthropic_api_keys: str = ""   # comma-separated; overrides anthropic_api_key when set
+    anthropic_api_key:   str = ""
+    anthropic_api_keys:  str = ""   # comma-separated; overrides anthropic_api_key when set
     anthropic_rpm_limit: int = 60
     anthropic_tpm_limit: int = 100_000
+    # GatewayConfig IDs — comma-separated, parallel to anthropic_api_keys.
+    # e.g. PLUGHUB_ANTHROPIC_CONFIG_IDS=gcfg_realtime,gcfg_evaluation
+    anthropic_config_ids: str = ""
 
     # OpenAI — optional fallback provider
-    openai_api_key:  str = ""
-    openai_api_keys: str = ""      # comma-separated; overrides openai_api_key when set
+    openai_api_key:   str = ""
+    openai_api_keys:  str = ""      # comma-separated; overrides openai_api_key when set
     openai_rpm_limit: int = 60
     openai_tpm_limit: int = 100_000
+    # GatewayConfig IDs — comma-separated, parallel to openai_api_keys.
+    openai_config_ids: str = ""
 
     # model_profile → model mapping (kept for backward compat with /v1/turn)
     model_fast:      str = "claude-haiku-4-5-20251001"
@@ -81,6 +86,33 @@ class Settings(BaseSettings):
         raw = self.openai_api_keys.strip() or self.openai_api_key.strip()
         keys = [k.strip() for k in raw.split(",") if k.strip()]
         return keys
+
+    def get_anthropic_config_ids(self) -> list[str]:
+        """
+        Returns GatewayConfig IDs parallel to get_anthropic_keys().
+        An empty string element means 'untagged' for that position.
+        Always returns a list of the same length as get_anthropic_keys()
+        (padded with empty strings when PLUGHUB_ANTHROPIC_CONFIG_IDS is shorter).
+        """
+        raw = self.anthropic_config_ids.strip()
+        ids = [i.strip() for i in raw.split(",")] if raw else []
+        keys = self.get_anthropic_keys()
+        # Pad / trim to match key count
+        while len(ids) < len(keys):
+            ids.append("")
+        return ids[: len(keys)]
+
+    def get_openai_config_ids(self) -> list[str]:
+        """
+        Returns GatewayConfig IDs parallel to get_openai_keys().
+        Padded with empty strings when PLUGHUB_OPENAI_CONFIG_IDS is shorter.
+        """
+        raw = self.openai_config_ids.strip()
+        ids = [i.strip() for i in raw.split(",")] if raw else []
+        keys = self.get_openai_keys()
+        while len(ids) < len(keys):
+            ids.append("")
+        return ids[: len(keys)]
 
     def model_for_profile(self, profile: str) -> str:
         """Backward compat with /v1/turn and /v1/reason."""
