@@ -15,17 +15,22 @@ FROM nginx:alpine
 COPY --from=builder /app/packages/platform-ui/dist /usr/share/nginx/html
 
 # Inline nginx config: SPA routing + reverse proxy to all PlugHub backends
+# IMPORTANT: proxy_pass must use a $variable (not a literal hostname) so nginx
+# re-resolves upstreams via Docker DNS on every request, preventing stale IPs
+# after sibling containers restart and get a new internal IP.
 RUN printf 'server {\n\
     listen 5174;\n\
     root /usr/share/nginx/html;\n\
     index index.html;\n\
 \n\
-    # Docker internal DNS resolver — prevents stale upstream IPs after container restarts\n\
+    # Docker internal DNS resolver with short TTL — enables dynamic re-resolution\n\
+    # when sibling containers restart and change IP.\n\
     resolver 127.0.0.11 valid=10s ipv6=off;\n\
 \n\
     # auth-api (Arc 7a)\n\
     location ~ ^/auth(/|$) {\n\
-        proxy_pass         http://auth-api:3200;\n\
+        set $up_auth http://auth-api:3200;\n\
+        proxy_pass         $up_auth;\n\
         proxy_http_version 1.1;\n\
         proxy_set_header   Host $host;\n\
         proxy_buffering    off;\n\
@@ -35,8 +40,9 @@ RUN printf 'server {\n\
     # mcp-server-plughub (agent WebSocket)\n\
     # /agent-ws → /agent/ws on the backend (path rewrite required)\n\
     location ~ ^/agent-ws {\n\
+        set $up_mcp http://mcp-server-plughub:3100;\n\
         rewrite ^/agent-ws(.*) /agent/ws$1 break;\n\
-        proxy_pass         http://mcp-server-plughub:3100;\n\
+        proxy_pass         $up_mcp;\n\
         proxy_http_version 1.1;\n\
         proxy_set_header   Upgrade $http_upgrade;\n\
         proxy_set_header   Connection "upgrade";\n\
@@ -47,7 +53,8 @@ RUN printf 'server {\n\
 \n\
     # mcp-server-plughub (REST /api)\n\
     location ~ ^/api(/|$) {\n\
-        proxy_pass         http://mcp-server-plughub:3100;\n\
+        set $up_mcp http://mcp-server-plughub:3100;\n\
+        proxy_pass         $up_mcp;\n\
         proxy_http_version 1.1;\n\
         proxy_set_header   Host $host;\n\
         proxy_buffering    off;\n\
@@ -56,7 +63,8 @@ RUN printf 'server {\n\
 \n\
     # workflow-api — must come before generic /v1 rule\n\
     location ~ ^/v1/workflow(/|$) {\n\
-        proxy_pass         http://workflow-api:3800;\n\
+        set $up_workflow http://workflow-api:3800;\n\
+        proxy_pass         $up_workflow;\n\
         proxy_http_version 1.1;\n\
         proxy_set_header   Host $host;\n\
         proxy_buffering    off;\n\
@@ -65,7 +73,8 @@ RUN printf 'server {\n\
 \n\
     # evaluation-api (Arc 6) — before generic /v1\n\
     location ~ ^/v1/evaluation(/|$) {\n\
-        proxy_pass         http://evaluation-api:3400;\n\
+        set $up_eval http://evaluation-api:3400;\n\
+        proxy_pass         $up_eval;\n\
         proxy_http_version 1.1;\n\
         proxy_set_header   Host $host;\n\
         proxy_buffering    off;\n\
@@ -74,7 +83,8 @@ RUN printf 'server {\n\
 \n\
     # mcp-server-knowledge (Arc 6 RAG) — before generic /v1\n\
     location ~ ^/v1/knowledge(/|$) {\n\
-        proxy_pass         http://mcp-server-knowledge:3401;\n\
+        set $up_knowledge http://mcp-server-knowledge:3401;\n\
+        proxy_pass         $up_knowledge;\n\
         proxy_http_version 1.1;\n\
         proxy_set_header   Host $host;\n\
         proxy_buffering    off;\n\
@@ -83,7 +93,8 @@ RUN printf 'server {\n\
 \n\
     # pricing-api (Arc 2) — before generic /v1\n\
     location ~ ^/v1/pricing(/|$) {\n\
-        proxy_pass         http://pricing-api:3900;\n\
+        set $up_pricing http://pricing-api:3900;\n\
+        proxy_pass         $up_pricing;\n\
         proxy_http_version 1.1;\n\
         proxy_set_header   Host $host;\n\
         proxy_buffering    off;\n\
@@ -92,7 +103,8 @@ RUN printf 'server {\n\
 \n\
     # calendar-api routes\n\
     location ~ ^/v1/(calendars|holiday-sets|associations|engine)(/|$) {\n\
-        proxy_pass         http://calendar-api:3700;\n\
+        set $up_calendar http://calendar-api:3700;\n\
+        proxy_pass         $up_calendar;\n\
         proxy_http_version 1.1;\n\
         proxy_set_header   Host $host;\n\
         proxy_buffering    off;\n\
@@ -101,7 +113,8 @@ RUN printf 'server {\n\
 \n\
     # agent-registry — generic /v1 catch-all\n\
     location ~ ^/v1(/|$) {\n\
-        proxy_pass         http://agent-registry:3300;\n\
+        set $up_registry http://agent-registry:3300;\n\
+        proxy_pass         $up_registry;\n\
         proxy_http_version 1.1;\n\
         proxy_set_header   Host $host;\n\
         proxy_buffering    off;\n\
@@ -116,7 +129,8 @@ RUN printf 'server {\n\
 \n\
     # config-api (namespace/key CRUD — all other /config/* routes)\n\
     location ~ ^/config/ {\n\
-        proxy_pass         http://config-api:3600;\n\
+        set $up_config http://config-api:3600;\n\
+        proxy_pass         $up_config;\n\
         proxy_http_version 1.1;\n\
         proxy_set_header   Host $host;\n\
         proxy_set_header   X-Admin-Token $http_x_admin_token;\n\
@@ -127,7 +141,8 @@ RUN printf 'server {\n\
     # analytics-api (dashboard SSE + reports)\n\
     # NOTE: using / (not (/|$)) so bare paths like /reports fall through to SPA fallback\n\
     location ~ ^/(dashboard|sessions|supervisor|reports)/ {\n\
-        proxy_pass         http://analytics-api:3500;\n\
+        set $up_analytics http://analytics-api:3500;\n\
+        proxy_pass         $up_analytics;\n\
         proxy_http_version 1.1;\n\
         proxy_set_header   Upgrade $http_upgrade;\n\
         proxy_set_header   Connection "";\n\
@@ -138,7 +153,8 @@ RUN printf 'server {\n\
 \n\
     # channel-gateway (webchat WebSocket + upload)\n\
     location ~ ^/webchat(/|$) {\n\
-        proxy_pass         http://channel-gateway:8010;\n\
+        set $up_channel http://channel-gateway:8010;\n\
+        proxy_pass         $up_channel;\n\
         proxy_http_version 1.1;\n\
         proxy_set_header   Upgrade $http_upgrade;\n\
         proxy_set_header   Connection "upgrade";\n\
