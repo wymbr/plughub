@@ -24,6 +24,7 @@ import EvalReportsPage from '@/modules/evaluation/ReportsPage'
 import { AgentAssistPage } from '@/modules/agent-assist/AgentAssistPage'
 import AccessPage from '@/modules/access/AccessPage'
 import GroupsPage from '@/modules/groups/GroupsPage'
+import AuditPage from '@/modules/audit/AuditPage'
 // Atendimento
 import SessionsPage from '@/modules/contacts/SessionsPage'
 import AgentsPage   from '@/modules/contacts/AgentsPage'
@@ -61,8 +62,9 @@ export const routes: RouteObject[] = [
       { path: 'contacts/agents',   element: <AgentsPage   /> },
       { path: 'contacts/pools',    element: <PoolsPage    /> },
       { path: 'contacts/events',   element: <EventsPage   /> },
-      { path: 'flow/monitor',      element: <FlowMonitorPage /> },
-      { path: 'flow/processos',    element: <ProcessosPage   /> },
+      { path: 'flow/monitor',      element: <FlowMonitorPage     /> },
+      // Monitor/Processes → KPI dashboard (completion rates, failure analysis)
+      { path: 'flow/processos',    element: <AnaliseProcessosPage /> },
       // Legacy redirects
       { path: 'contacts',          element: <Navigate to="/analise/sessions"  replace /> },
       { path: 'contacts/sessions', element: <Navigate to="/analise/sessions"  replace /> },
@@ -86,10 +88,11 @@ export const routes: RouteObject[] = [
       { path: 'campaigns',         element: <Navigate to="/analise/sessions" replace /> },
 
       // ── Analytics (historical views) ──────────────────────────────
-      { path: 'analise/sessions',  element: <SessionsPage         /> },
-      { path: 'analise/agents',    element: <AnaliseAgentesPage   /> },
-      { path: 'analise/events',    element: <EventsPage           /> },
-      { path: 'analise/processos', element: <AnaliseProcessosPage /> },
+      { path: 'analise/sessions',  element: <SessionsPage       /> },
+      { path: 'analise/agents',    element: <AnaliseAgentesPage /> },
+      { path: 'analise/events',    element: <EventsPage         /> },
+      // Analytics/Processes → Journey list + Workflow Instances (drill-down)
+      { path: 'analise/processos', element: <ProcessosPage      /> },
       { path: 'analise/quality',   element: <AnaliseQualidadePage /> },
       // Legacy redirects
       { path: 'analise/contatos',  element: <Navigate to="/analise/sessions" replace /> },
@@ -120,6 +123,7 @@ export const routes: RouteObject[] = [
       { path: 'config/agent-reports', element: <Navigate to="/analise/agents"    replace /> },
       { path: 'config/access',     element: <AccessPage /> },
       { path: 'config/groups',     element: <GroupsPage /> },
+      { path: 'audit',             element: <AuditPage /> },
       { path: 'config/calendars',  element: <CalendarsPage /> },
       { path: 'workflow/triggers', element: <WorkflowCalendarPage /> },
 

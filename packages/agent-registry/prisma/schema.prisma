@@ -30,6 +30,8 @@ model Pool {
   supervisor_config      Json?
   queue_config           Json?
   mentionable_pools      Json?   // Record<alias, pool_id> — @mention routing config
+  mentionable_journeys   Json?   // Record<alias, skill_id> — journey start shortcuts via @mention
+  agent_groups           String[] @default([]) // Agent group IDs this pool belongs to (Arc 9)
   hooks                  Json?   // PoolHooks — on_human_start, on_human_end, post_human
   calendar_id            String? // Reference to calendar-api calendar UUID (display cache)
 
@@ -170,6 +172,7 @@ model Skill {
   knowledge_domains  String[] @default([])
   compatibility      Json?
   flow               Json?   // presente apenas para type: orchestrator
+  delegation_input   Json?   // DelegationSchema — typed fields shown in DelegarTarefaDrawer
 
   /// Deploy lifecycle: "draft" (saved but not in production) | "published" (deployed to at least one pool)
   deploy_status String   @default("draft")

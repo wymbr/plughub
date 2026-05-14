@@ -140,6 +140,20 @@ class PoolConfig(BaseModel):
     # Used exclusively as a tie-breaker in decide() when two pools have equal score.
     queue_length:   int  = 0
 
+    # Alias → pool_id map declared on the pool in agent-registry (JSONB field).
+    # Populated by kafka_listener from pool.registered/pool.updated events.
+    # Written to ContextStore as session.pool.mentionable_pools so skill-flows
+    # can reference reachable pools by alias without hard-coding pool IDs.
+    mentionable_pools: dict[str, str] | None = None
+
+    # Alias → skill_id map for journey start shortcuts via @mention (Arc 10).
+    # Written to ContextStore as session.pool.mentionable_journeys.
+    mentionable_journeys: dict[str, str] | None = None
+
+    # Agent Group IDs (Arc 9) this pool belongs to.
+    # Written to ContextStore as session.pool.agent_groups[].
+    agent_groups: list[str] = Field(default_factory=list)
+
 
 # ─────────────────────────────────────────────
 # Queue

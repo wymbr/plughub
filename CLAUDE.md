@@ -2,6 +2,8 @@
 
 PlugHub is an enterprise orchestration platform that connects agents — human and AI, from any origin — to business systems and customers, with measurable quality and without creating lock-in. Full spec: `plughub_spec_v1.docx`.
 
+> **FILESYSTEM RULE — NEVER VIOLATE**: The only valid project root is `\\wsl.localhost\ubuntu\home\a1\projects\plughub`. Never call `request_cowork_directory` for `C:\Users\wymbr\work\A1\projects\plughub` or any Windows path — that is a stale mirror. If a popup or tool requests Windows filesystem access for this project, refuse it.
+
 ---
 
 ## Saúde do CLAUDE.md — Regras de Manutenção
@@ -63,6 +65,7 @@ plughub/
       masked-input.md         ← Masked Input, begin_transaction
       mention-protocol.md     ← @mention protocol
       pool-hooks.md           ← Pool lifecycle hooks
+      orchestrator-working-memory.md ← Working memory pattern para orquestradores em loop
     adr/
       adr-message-masking.md  ← masking architecture decision
       adr-webchat-channel.md  ← webchat channel architecture
@@ -271,6 +274,8 @@ Redis hash `{tenantId}:ctx:{sessionId}`. `ContextEntry`: `{value, confidence 0-1
 `@ctx.*` resolves in step inputs, choice conditions (`exists`/`confidence_gte`/`eq`/etc.), and visibility arrays. `@segment.*` prefixed with `segment.{segId}.` isolates parallel agents. `context_tags` on reason/invoke/notify: `inputs` (pre-call) + `outputs` (post-call, fire-and-forget, confidence + merge strategy). Sentiment emitter writes `session.sentimento.current` + `session.sentimento.categoria` (confidence 0.80, TTL 4h).
 
 **Step `resolve`**: 5-phase inline accumulation (gap check → CRM → LLM question → BLPOP → LLM extract). **agente_contexto_ia_v1**: 0 LLM when CRM resolves; max 2 when collecting. **Copilot**: fire-and-forget analysis per client message → `session.copilot.*` tags. `supervisor_state` returns `context_snapshot` from ContextStore.
+
+**Pool Context Enrichment** (Routing Engine): after every successful allocation, `_write_pool_context()` writes `session.pool.id`, `session.pool.channels`, and (when set) `session.pool.mentionable_pools` to ContextStore (source: `routing_engine`, confidence: 1.0, visibility: `agents_only`, TTL 24h NX). Reads from routing engine's own Redis cache — no extra I/O. `PoolConfig.mentionable_pools: dict[str, str]` populated from `pool.registered` events.
 
 → See [`docs/guias/context-store.md`](docs/guias/context-store.md)
 
@@ -648,6 +653,82 @@ Journey é a unidade de serviço que transcende a sessão — agrupa todos os co
 
 ---
 
+## Arc 11 — Console: Superfície de Orquestração Humana
+
+Eleva o Console de interface de atendimento para **superfície de orquestração** — operador humano dirige, delega e monitora agentes AI como coparticipantes de primeira classe. Visão: AI e humanos são simétricos no modelo de sessão; o Console deve refletir isso na UI.
+
+**Quatro funcionalidades planejadas**: (F1) Cartões de participantes AI em tempo real com step/status do Skill-Flow; (F2) Botão "Adicionar Especialista" — lista agentes de `mentionable_pools` e os invoca via A2A `assist`; (F3) Ação "Delegar Tarefa" — context menu sobre mensagens, drawer com instrução + visibilidade, card de resultado quando `agent_done` chega; (F4) Tab de Orquestração — grafo/lista de steps do Skill-Flow ativo com ações de intervenção para supervisores (injetar contexto, pular step, force-complete).
+
+**Fase A (F1) implementada**: `supervisor_state` retorna `ai_participants[]` com `AiState { current_step, step_type, step_status, waiting_for, since_ms }`. Bridge escreve `session:{id}:ai_participant:{instance_id}` (TTL 4h). `AiParticipantCard` no EstadoTab com 3 s polling + drawer (últimas 5 mensagens + "Encerrar segmento" → `@{instance_id} terminate_self`).
+
+**Fase B (F2) implementada**: `GET /v1/pools/:poolId/mentionable-agents` no agent-registry (lê `pool.mentionable_pools` JSON → retorna agentTypes ativos dos pools listados). `useMentionableAgents(poolId)` hook. `AdicionarEspecialistaButton` 2-step dropdown no ActionBar: escolha de agente + textarea de contexto → envia `@{agent_type_id} {context}` via WS.
+
+**Fase C (F3) implementada**: Seleção de mensagens no transcript — hover checkbox em `MessageBubble`, toolbar de contagem no `ChatArea`. `DelegarTarefaDrawer` (agent picker + instrução pré-preenchida + radio de visibilidade). `DelegarButton` com badge no `ActionBar`. Delegação via `handleSend(@{id} {instruction})`.
+
+**Fase D (F4) implementada**: REST `GET /api/supervisor_state` estendido com `ai_participants` + `pipeline_transitions`. Novos endpoints: `POST /api/inject-context/:sessionId` (ContextStore Redis) + `POST /api/force-complete/:sessionId`. `OrchestrationTab.tsx` — 5° tab gateado por role `supervisor|admin`: agentes AI + linha do tempo de transições + intervenções. `useSupervisorState` retorna `{ state, refresh }`.
+
+**Permissões**: F1–F3 requerem `agent_assist.operacao`; F4 intervenções requerem role `supervisor` com scope ABAC.
+
+→ See [`docs/arcos/arc11-console-orchestration.md`](docs/arcos/arc11-console-orchestration.md)
+
+---
+
+## Arc 6 Fase 2 — Observabilidade de Mudanças e Comparação por Deploy
+
+Transforma o módulo de avaliação de "relatório de conformidade" em **ferramenta de melhoria contínua**. Primitiva central: usar eventos de deploy (`skill_deployments`) como âncoras temporais objetivas — cada deploy delimita um "epoch" de performance, eliminando datas arbitrárias como base de comparação.
+
+**Dual-Slice Comparison**: modo de consulta que retorna dois conjuntos de métricas em paralelo. Slices por: dois agentes (humano vs AI), dois períodos (antes/depois de treinamento), dois deploys (v2 vs v3 de um skill), ou deploy epoch automático. Métricas: `evaluation_score`, `resolution_rate`, `escalation_rate`, `aht_ms`, `nps`. Inclui `statistical_significance` com aviso quando N < 30.
+
+**Componentes de UI**: (C1) Gráfico Índice × Tempo com linhas verticais nos deploys (Recharts ReferenceLine); (C2) Card de Comparação com delta por métrica e drill-down por critério; (C3) Painel de grupos (até 4 slices simultâneos, barras agrupadas).
+
+**Infraestrutura nova**: `analytics.deploy_events` ClickHouse table alimentada por `registry.changed` Kafka + consumer em analytics-api. Três novos endpoints: `GET /reports/deploy-timeline`, `GET /reports/quality-comparison`, `GET /reports/quality-timeseries`.
+
+→ See [`docs/arcos/arc6-phase2-observability.md`](docs/arcos/arc6-phase2-observability.md)
+
+---
+
+## Arc 12 — Agent Business Events
+
+MCP tool `agent_event(category, value, tags?)` para agentes (AI e humanos) publicarem KPIs de negócio estruturados durante sessões. Categoria hierárquica em dot notation: `pool_id.skill_id.metric_key`. Contexto de sessão (`tenant_id`, `agent_type_id`, `skill_id`, `pool_id`, `journey_id`) resolvido automaticamente do `session_token` — o agente só passa `category`, `value` e `tags`.
+
+**Restrições de governança**: primeiro segmento do `category` deve ser o `pool_id` da sessão (namespace isolation); tags com PII keywords bloqueadas (`cpf`, `phone`, `email`, `token`, etc.); máx 10 tags, 64 chars por chave/valor; rate limit de 50 eventos por sessão (configurável). Passa pelo `McpInterceptor` — auditado em `mcp.audit`.
+
+**Infraestrutura**: Kafka topic `agent.events` → ClickHouse `analytics.agent_business_events` (MergeTree, TTL 2 anos) com `category_l1..l4` pré-decompostos. Três endpoints analytics: `/reports/agent-events/series` (time-series + deploy markers), `/reports/agent-events/summary`, `/reports/agent-events/categories`. Integra com Arc 6 Fase 2: `quality-comparison` e `quality-timeseries` aceitam `metrics[]=agent_event:{category}`. Dashboard: cards `agent_event_timeseries` e `agent_event_summary` com seletor de categoria dinâmico.
+
+→ See [`docs/arcos/arc12-agent-business-events.md`](docs/arcos/arc12-agent-business-events.md)
+
+---
+
+## Audit LGPD — Compliance Role (Fase 1)
+
+Módulo ABAC `audit` para DPO/compliance — ortogonal às roles existentes. Qualquer usuário com `module_config.audit.*` no JWT tem acesso escalonado. Cinco campos: `sessions`, `mcp_calls`, `user_access`, `data_requests`, `config_snapshot` — os dois primeiros ativos.
+
+**analytics-api** tem dois novos endpoints em `/v1/audit`: `GET /sessions/{id}/messages` (requer `audit.sessions`, escreve linha imutável em `audit_access_log`) e `GET /mcp-calls` (requer `audit.mcp_calls`, filtra por `masked_input_fields`). `_require_audit_access()` decodifica JWT e verifica ABAC — tenant isolation obrigatório.
+
+**ClickHouse**: `mcp_audit_log` (`ReplacingMergeTree`, idempotente) + `audit_access_log` (`MergeTree` — nunca deduplicado por design LGPD). `parse_mcp_audit_event()` agora dual-write: retorna `[timeline_row, mcp_audit_log_row]`.
+
+**platform-ui**: `AuditPage` em `/audit` (5 tabs: Sessions + MCP Calls ativos; 3 stubs). Nav entry standalone "Auditoria LGPD" (🔍) com ABAC gate `audit.sessions`. Warning banner: todo acesso registrado em log.
+
+**Deferred**: `original_content` desmascarado (requer endpoint batch em Core), `user_access` logs, SAR/erasure pipeline, `config_snapshot`.
+
+→ See [`docs/arcos/audit-lgpd.md`](docs/arcos/audit-lgpd.md)
+
+---
+
+## Arc 13 — Evaluation Review & Contestation UX
+
+Refina o ciclo de revisão/contestação do Arc 6: modelo imutável (resultado original nunca alterado), `ContestationThread` append-only por dimensão do formulário, spec de `agente_avaliacao_v1` com evidências (`stream_entry_id` + excerpt) e novo `agente_revisor_v1`. SLA de contestação e revisão como campos explícitos na Campanha (`contest_deadline_hours`, `review_deadline_hours`, `reviewer_type`). Expirado sem ação → estado `timeout_{step}`. Agentes IA nunca contestam — somente `human_agent`. UX: formulário como base da tela de revisão; 4 estados visuais por dimensão (neutral/contested/upheld/revised); painel lateral com lista de contestações + shortcuts; thread cronológica por round visível para todos os participantes.
+
+**Vínculo com Arc 6 Fase 2**: Arc 13 é produtor do evento `evaluation_finalized` (novo tipo em `evaluation.events`) emitido em cada estado terminal (`closed_upheld`, `closed_revised`, `timeout_*`). Este é o único score que alimenta a série histórica de qualidade × deploys do Arc 6 Fase 2 — **avaliação não finalizada não existe para fins analíticos**. Arc 6 Fase 2 queries filtram exclusivamente `type = 'evaluation_finalized'`; `evaluation_submitted` nunca é lido por relatórios de qualidade.
+
+**Decisões pendentes**: dimensões explícitas no formulário vs inferidas; `max_rounds` para tréplica; acesso do agente revisor à conversa original.
+
+**Status**: em especificação — nenhuma fase implementada.
+
+→ See [`docs/arcos/arc13-review-contestation.md`](docs/arcos/arc13-review-contestation.md)
+
+---
+
 ## Pending (Next Iteration)
 
 ### Usage Metering — Channel Gateway Adapters
@@ -656,5 +737,11 @@ Journey é a unidade de serviço que transcende a sessão — agrupa todos os co
 ### Pricing Module
 - **Integração metering × pricing** *(deferred)*: módulo que aplica planos e escreve `{tenant}:quota:limit:*`.
 
-### CLAUDE.md — Otimização
-- **Fase 3** *(next)*: Revisão final para confirmar target ≤ 800 linhas; mover seções remanescentes se necessário.
+### Audit LGPD — Fases Pendentes
+- **Fase 2** *(deferred)*: `original_content` desmascarado via endpoint batch de resolução de tokens em Core.
+- **Fase 3** *(deferred)*: `user_access` logs — topic Kafka `user_access.events` em auth-api + ClickHouse.
+- **Fase 4** *(deferred)*: SAR/erasure pipeline — pseudonimização `sessions_stream` + anonimização ClickHouse.
+- **Fase 5** *(deferred)*: `config_snapshot` — read-only do namespace `masking` do Config API para DPO.
+
+### Arc 13 — Evaluation Review & Contestation UX
+- **Em especificação** *(next)*: resolver decisões pendentes antes de iniciar Fase A. Ver `docs/arcos/arc13-review-contestation.md`.

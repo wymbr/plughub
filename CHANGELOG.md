@@ -2,6 +2,214 @@
 
 ---
 
+## Pool Context Enrichment — Campos agent_groups e mentionable_journeys (2026-05-14)
+
+Completa o Pool Context Enrichment adicionando os dois campos que estavam bloqueados por falta de suporte no schema.
+
+### packages/schemas/src/agent-registry.ts
+- `PoolRegistrationSchema`: adicionados `mentionable_journeys: z.record(z.string()).optional()` e `agent_groups: z.array(z.string()).optional()`
+
+### packages/agent-registry/prisma/schema.prisma
+- Model `Pool`: adicionados `mentionable_journeys Json?` e `agent_groups String[] @default([])`
+- Requer `prisma migrate dev --name add_pool_groups_journeys` ao conectar
+
+### packages/agent-registry/src/routes/pools.ts
+- `POST /v1/pools`: persiste `mentionable_journeys` e `agent_groups` no create
+- `PUT /v1/pools/:pool_id`: atualiza `mentionable_journeys` e `agent_groups` no update
+- Ambos incluídos no payload do evento `pool.registered`/`pool.updated` via `_formatPool`
+
+### packages/routing-engine/src/plughub_routing/models.py
+- `PoolConfig`: adicionados `mentionable_journeys: dict[str, str] | None = None` e `agent_groups: list[str] = Field(default_factory=list)`
+
+### packages/routing-engine/src/plughub_routing/kafka_listener.py
+- `_handle_pool_event`: lê `mentionable_journeys` e `agent_groups` do payload e popula o `PoolConfig`
+- Log atualizado para incluir `agent_groups`
+
+### packages/routing-engine/src/plughub_routing/main.py
+- `_write_pool_context`: extrai `mentionable_journeys` e `agent_groups` do Redis cache do pool
+- Escreve `session.pool.mentionable_journeys` (condicional, quando presente) e `session.pool.agent_groups` (condicional, quando não vazio) no ContextStore
+- Skill-flows podem agora acessar `@ctx.session.pool.mentionable_journeys` e `@ctx.session.pool.agent_groups`
+
+---
+
+## Arc 12 Fase E — Integração do MetricSelector com Análise de Qualidade (2026-05-14)
+
+Fecha o ciclo de observabilidade do Arc 12: `agent_event` KPIs agora sobreponíveis em todas as telas de análise de qualidade, com seletor dinâmico de categorias.
+
+### analytics-api — reports_query.py
+- `_fetch_agent_event_slice(category, from_dt, to_dt, ...)`: query de AVG(value) na `agent_business_events` para uma categoria; retorna valor ou null
+- `_fetch_agent_event_timeseries(category, from_dt, to_dt, granularity, ...)`: série temporal de AVG(value) por período
+- `query_quality_comparison()`: aceita `metrics: list[str]` — para cada `agent_event:{category}`, chama `_fetch_agent_event_slice()` em paralelo e injeta no dict de métricas de cada fatia
+- `query_quality_timeseries()`: aceita `metrics: list[str]` — para cada `agent_event:{category}`, chama `_fetch_agent_event_timeseries()` e mescla na série
+- `query_quality_metrics()`: single-slice, mesma expansão de `metrics[]`
+- `_compute_delta()`: refatorado para ser key-agnostic — itera sobre todas as chaves presentes, não apenas as 4 base
+
+### analytics-api — reports.py
+- `GET /reports/quality-comparison`: parâmetro `metrics: list[str] = Query(default=[])` — aceita `metrics[]=agent_event:{category}` repetível
+- `GET /reports/quality-timeseries`: idem
+- `GET /reports/quality-metrics`: idem
+- `GET /reports/agent-events/categories`: novo endpoint — retorna lista de categorias distintas com contagem; usado pelo AddCardModal e MetricSelector
+
+### platform-ui — catalog.ts
+- `agent-event-timeseries`: endpoint `/reports/display/agent-event-timeseries`; `compatible_tools: ['line_chart', 'bar_chart']`; `configurable_params.category` com `options_from: '/reports/agent-events/categories'`
+- `agent-event-summary`: endpoint `/reports/display/agent-event-summary`; `compatible_tools: ['metric_card', 'table']`; mesmo `options_from`
+- `ConfigurableParam.options_from?: string` — nova propriedade opcional
+
+### platform-ui — AddCardModal.tsx
+- `StepConfigure`: prop `tenantId: string` adicionada
+- `paramOptions: Record<string, string[]>` via `useState`
+- `useEffect` por `endpoint.id + tenantId`: loop sobre params com `options_from`, fetch assíncrono, popula `paramOptions`
+- Render condicional: `paramOptions[param.key]` presente → `<select>` com categorias; ausente → `<input type="text">` original
+- `<select>` desabilitado com "Carregando categorias…" enquanto array está vazio; opção vazia para params opcionais
+
+### platform-ui — MetricSelector.tsx (novo arquivo)
+
+Componente compartilhado em `src/modules/analise/MetricSelector.tsx`:
+
+- `MetricDef`: `{ key: string, label, format, higherIsBetter, color? }` — `key` é `string` (aceita `agent_event:*`)
+- `BASE_METRIC_DEFS`: 4 defs (evaluation_score #1B4F8A, resolution_rate #059669, escalation_rate #DC2626, aht_ms #D97706)
+- `BASE_METRIC_KEYS`: `BASE_METRIC_DEFS.map(d => d.key)`
+- `makeAgentEventDef(category, idx)`: cria def com cor de `AGENT_EVENT_COLORS` (paleta de 6 cores violet/cyan/pink/green/amber/purple)
+- `buildMetricDefs(selectedMetrics)`: filtra base + map agent_event entries → `MetricDef[]`
+- `MetricSelector`: pills toggle para 4 base + pills removíveis para agent_event ativos + picker "+ Evento" com lazy-fetch de `/reports/agent-events/categories`; fechamento por clique externo via `useRef`
+
+### platform-ui — AnaliseComparacaoPage.tsx
+- Removidas definições inline de `MetricDef`, `BASE_METRIC_DEFS`, `buildMetricDefs`; importadas de `./MetricSelector`
+- `SliceMetrics.metrics: Record<string, number | null>` (era struct tipada com 4 chaves fixas)
+- Estado `selectedMetrics: string[]` + derivado `metricDefs = buildMetricDefs(selectedMetrics)`
+- `fetchSlice()`: append `&metrics[]={k}` para cada `agent_event:*` selecionado
+- `MetricSelector` adicionado na área de filtros globais
+- `GroupedBarChart` e `MetricTable` recebem `metricDefs: MetricDef[]` e iteram dinamicamente
+- `metricToChartValue(key, raw)`: `agent_event:*` → raw; `aht_ms` → `/60000`; outros → `×100`
+
+### platform-ui — AnaliseQualidadePage.tsx
+
+**TimeseriesView**:
+- `selectedMetrics` (default `['evaluation_score']`), `metricDefs = buildMetricDefs(selectedMetrics)`
+- `load()` append `metrics[]` para agent_event; `selectedMetrics` em deps
+- `chartData`: `score` (evaluation_score ×100) + `agent_event:*` keys raw
+- `YAxis` sem `domain` fixo — auto-escala
+- `<Legend>` adicionado; `<Line>` para evaluation_score + `{metricDefs.filter(agent_event).map(d => <Line dataKey={d.key}>)}` dinâmico
+- Tooltip dinâmico: label da MetricDef; `%` apenas para `score`
+- `MetricSelector` abaixo do filtro de datas
+
+**ComparisonView**:
+- `selectedMetrics` (default `BASE_METRIC_KEYS`), `metricDefs = buildMetricDefs(selectedMetrics)`
+- `run()` append `metrics[]`; `selectedMetrics` em `useCallback` deps
+- `metricDefs.map(def => <MetricComparisonRow>)` substitui 4 chamadas hardcoded
+- `MetricSelector` adicionado após os SliceForms
+
+**Doc:** `docs/arcos/arc12-agent-business-events.md`
+
+---
+
+## Arc 6 Fase 2 — Observabilidade de Mudanças e Comparação por Deploy (2026-05-14)
+
+Todas as fases A–D implementadas. Spec: [`docs/arcos/arc6-phase2-observability.md`](docs/arcos/arc6-phase2-observability.md).
+
+**Fase A — Infraestrutura Deploy Events**
+- `analytics.deploy_events` ClickHouse table (ReplacingMergeTree por `deploy_id`) em `clickhouse.py`.
+- `agent-registry/src/infra/kafka.ts`: `publishSkillDeployed()` chamado em `POST /v1/skills/:id/deploy`.
+- `analytics-api/consumer.py`: consumer `registry.changed` com `event_type: "skill_deployed"` → INSERT `deploy_events`.
+- `GET /reports/deploy-timeline` endpoint em `reports.py`.
+
+**Fase B — Quality Comparison**
+- `GET /reports/quality-comparison`: dual-slice com `evaluation_score`, `resolution_rate`, `escalation_rate`, `aht_ms`, delta + `statistical_significance` (warn N < 30).
+- `AnaliseQualidadePage.tsx`: tab "Comparação" com `SliceForm` + `MetricComparisonRow` (deltas coloridos ▲▼→).
+
+**Fase C — Timeseries com Deploy Markers**
+- `GET /reports/quality-timeseries`: retorna pontos diários/semanais + `deploy_markers[]`.
+- `AnaliseQualidadePage.tsx`: tab "Tendência", Recharts `LineChart` + `ReferenceLine` por deploy (linhas laranja tracejadas, hover com versão).
+
+**Fase D — Painel de Grupos de Comparação**
+- `GET /reports/quality-metrics`: slice única — usado em parallel fetch pelo frontend.
+- `AnaliseComparacaoPage.tsx`: rota `/analise/comparison`, `ComparisonGroupBuilder` (até 4 slices), `GroupedBarChart` (barras agrupadas por KPI), `MetricTable` com N < 30 badges.
+
+---
+
+## Skill-flow DAG Validation + Worker Non-blocking Receive (2026-05-14)
+
+Completa os dois itens pendentes do step `receive` (pontos 3 e 4 do TODO).
+
+**`packages/skill-flow-engine/src/engine.ts`**
+- `_getSuccessors(step)` (novo): extrai todos os IDs de próximo step de qualquer step type — cobre todos os campos de transição (`on_success`, `on_failure`, `on_message`, `on_timeout`, `on_disconnect`, `on_max_iterations`, `branches[].next`, `strategy.on_success/on_failure`). Filtra sentinelas do engine (`__complete__`, `__suspended__`, etc.).
+- `validateFlow(flow)` (novo, exportado): DFS three-colour (white/gray/black) sobre o grafo de steps. Detecta back-edges (ciclos). Para cada ciclo encontrado, verifica se algum node do ciclo é um `receive` step com `max_iterations` definido. Lança erro descritivo se ciclo não guarded for encontrado. Chamado em `run()` antes do lock, uma vez por execução (O(V+E) — negligível vs BLPOP).
+
+**`packages/skill-flow-engine/src/index.ts`**
+- `validateFlow` adicionado ao export público — permite que skill-registry e testes externos validem flows sem instanciar o engine.
+
+**`packages/skill-flow-worker/src/worker.ts`**
+- `_inflight: Set<Promise<void>>` adicionado a `SkillFlowWorker` — rastreia todas as execuções em andamento para graceful drain no shutdown.
+- `eachMessage`: substituído `await this.handleMessage()` por fire-and-forget com `.catch()` + `.finally(() => _inflight.delete(p))`. Retorna imediatamente — Kafka commita o offset e processa a próxima mensagem sem esperar o BLPOP do `receive` (que pode durar até 4h).
+- `gracefulShutdown` (SIGTERM/SIGINT): agora drena `_inflight` via `Promise.allSettled([..._inflight])` antes de desconectar o Redis. Sessions com `receive` ativo recebem o sentinela `session:closed` do orchestrator-bridge, desbloqueando o BLPOP rapidamente.
+
+---
+
+## Pool Context Enrichment — Routing Engine → ContextStore (2026-05-14)
+
+Routing Engine agora escreve contexto do pool alocado no ContextStore após cada roteamento bem-sucedido, tornando `@ctx.session.pool.*` disponível em skill-flows sem consulta ao agent-registry.
+
+**`packages/routing-engine/src/plughub_routing/models.py`**
+- `PoolConfig`: novo campo `mentionable_pools: dict[str, str] | None = None` — alias→pool_id map proveniente do agent-registry. Compatível com `extra="ignore"` existente (campo explícito agora).
+
+**`packages/routing-engine/src/plughub_routing/kafka_listener.py`**
+- `_handle_pool_event()`: passa `mentionable_pools=pool_data.get("mentionable_pools") or None` ao construir `PoolConfig`. Log atualizado para incluir aliases de pools mencionáveis.
+
+**`packages/routing-engine/src/plughub_routing/main.py`**
+- `_write_pool_context()` (novo): lê `{tenant_id}:pool_config:{pool_id}` do Redis (cache próprio do routing engine, sem I/O extra), escreve 2–3 entradas no hash ContextStore `{tenant_id}:ctx:{session_id}`:
+  - `session.pool.id` → pool_id (string, confidence 1.0)
+  - `session.pool.channels` → channel_types (list, confidence 1.0)
+  - `session.pool.mentionable_pools` → dict alias→pool_id (omitido se vazio)
+  - visibility: `agents_only`; TTL 24h com NX (não sobrescreve TTL existente)
+- `_process_message()`: chama `_write_pool_context()` via `asyncio.create_task()` após `result.allocated == True` (fire-and-forget, nunca falha o roteamento).
+
+---
+
+## Audit Profile — LGPD Compliance Role (2026-05-14)
+
+Perfil de auditoria LGPD implementado como módulo ABAC `audit`, sem criar role fixa. Docs: [`docs/arcos/audit-lgpd.md`](docs/arcos/audit-lgpd.md).
+
+**`infra/modules.yaml`** — Módulo `audit` com 5 campos: `sessions`, `mcp_calls`, `user_access`, `data_requests`, `config_snapshot`. Seedado em `auth.module_registry`.
+
+**`packages/analytics-api/src/plughub_analytics_api/clickhouse.py`**
+- DDL `_DDL_MCP_AUDIT_LOG`: `ReplacingMergeTree`, colunas `event_id/tenant_id/session_id/instance_id/server_name/tool_name/allowed/injection_detected/duration_ms/source/masked_input_fields/timestamp/date`. Idempotente para replay de consumer.
+- DDL `_DDL_AUDIT_ACCESS_LOG`: `MergeTree` (não-deduplicado por design — todo acesso DPO é registro permanente). Colunas: `access_id/tenant_id/accessed_by/resource/resource_id/accessed_at/date`.
+- Ambos adicionados a `_ALL_DDL`.
+- Métodos: `insert_mcp_audit_log()`, `insert_audit_access_log()`, `query_mcp_audit_calls()` (filtros: tenant_id, session_id, from_dt, to_dt, masked_only, limit).
+
+**`packages/analytics-api/src/plughub_analytics_api/models.py`**
+- `parse_mcp_audit_event()` agora retorna `list[dict] | None` (dual-write pattern). Primeiro item: `session_timeline` row (existente). Segundo item: novo `mcp_audit_log` row com `masked_input_fields` completo. Compatível com `_process_message` que já normaliza para lista.
+
+**`packages/analytics-api/src/plughub_analytics_api/consumer.py`**
+- `_write_row()`: dois novos branches `mcp_audit_log` e `audit_access_log`.
+
+**`packages/analytics-api/src/plughub_analytics_api/audit_router.py`** (novo)
+- Router FastAPI prefix `/v1/audit`.
+- `_require_audit_access(field, credentials)`: decodifica JWT, verifica `module_config.audit.{field} >= read_only`, impõe tenant isolation. Raises 401/403/503.
+- `GET /v1/audit/sessions/{session_id}/messages`: requer `audit.sessions`. Lê `analytics.messages` (conteúdo mascarado). Side-effect: insere linha imutável em `audit_access_log` (fire-and-forget).
+- `GET /v1/audit/mcp-calls`: requer `audit.mcp_calls`. Tenant isolation JWT vs query param. Parâmetros: `session_id`, `from_dt`, `to_dt`, `masked_only=true`, `limit=200`.
+
+**`packages/analytics-api/src/plughub_analytics_api/main.py`**
+- Import e registro de `audit_router`.
+
+**`packages/platform-ui/src/modules/audit/AuditPage.tsx`** (novo)
+- 5 tabs: Sessions (ativo), MCP Calls (ativo), User Access / Data Requests / Config Snapshot (stubs "Em desenvolvimento").
+- Auth via `getAccessToken()` (JWT in-memory). Base URL `VITE_ANALYTICS_URL`.
+- Warning banner vermelho em todos os tabs: "Todo acesso a esta área é registrado em log de auditoria".
+- SessionsTab: busca por session_id, renderiza timeline com role color chips e tokens mascarados.
+- McpCallsTab: filtros (session_id, masked_only checkbox, from/to datetime), tabela com `masked_input_fields` como badges amarelos, badge de injection_detected.
+
+**`packages/platform-ui/src/shell/Sidebar.tsx`**
+- Item standalone "Auditoria LGPD" (ícone 🔍) entre Analytics e Configuração. Roles: admin, supervisor. ABAC gate: `audit.sessions`.
+
+**`packages/platform-ui/src/app/routes.tsx`**
+- Import `AuditPage` + rota `{ path: 'audit', element: <AuditPage /> }`.
+
+**`packages/platform-ui/src/i18n/locales/en/shell.json`** — `nav.audit = "Audit"`
+**`packages/platform-ui/src/i18n/locales/pt-BR/shell.json`** — `nav.audit = "Auditoria LGPD"`
+
+---
+
 ## Bugfix — G2: on_human_end hooks não disparavam para especialistas plughub-native (2026-05-13)
 
 **`packages/orchestrator-bridge/src/plughub_orchestrator_bridge/main.py`**

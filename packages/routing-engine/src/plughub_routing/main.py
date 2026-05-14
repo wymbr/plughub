@@ -191,6 +191,17 @@ async def _process_message(
                 event.session_id, result.instance_id,
                 result.pool_id, result.priority_score, result.routing_mode,
             )
+            # Write session.pool.* to ContextStore so skill-flows can reference
+            # @ctx.session.pool.id, @ctx.session.pool.channels, and
+            # @ctx.session.pool.mentionable_pools without querying agent-registry.
+            asyncio.create_task(
+                _write_pool_context(
+                    redis_client,
+                    event.tenant_id,
+                    event.session_id,
+                    result.pool_id or "",
+                )
+            )
         else:
             logger.warning(
                 "Queued session=%s channel=%s tenant=%s pool=%s — no agents available",
@@ -277,6 +288,83 @@ async def _persist_queued_contact(
         logger.warning(
             "Could not send waiting notification to customer: session=%s — %s",
             event.session_id, exc,
+        )
+
+
+async def _write_pool_context(
+    redis_client: aioredis.Redis,
+    tenant_id:    str,
+    session_id:   str,
+    pool_id:      str,
+    ttl_seconds:  int = 86_400,
+) -> None:
+    """
+    Writes session.pool.* entries to the ContextStore Redis hash so skill-flows
+    can reference @ctx.session.pool.id, @ctx.session.pool.channels, and
+    @ctx.session.pool.mentionable_pools without querying the agent-registry.
+
+    Reads pool_config from the routing engine's own Redis cache
+    ({tenant_id}:pool_config:{pool_id}) to avoid an additional I/O path.
+
+    Visibility is "agents_only" — pool topology is never exposed to the customer
+    channel. Confidence is 1.0 — these are factual routing decisions, not inferred.
+
+    Fire-and-forget: called via asyncio.create_task(); swallows all exceptions.
+    TTL set with NX so only the first allocation write wins; subsequent reconnect
+    routing events do not reset the TTL beyond the original session lifetime.
+    """
+    if not pool_id:
+        return
+    try:
+        ctx_key = f"{tenant_id}:ctx:{session_id}"
+        now_str = datetime.now(timezone.utc).isoformat()
+
+        # Read pool config from routing engine Redis cache — no new I/O path
+        channel_types:        list[str]       = []
+        mentionable_pools:    dict | None     = None
+        mentionable_journeys: dict | None     = None
+        agent_groups:         list[str]       = []
+        raw = await redis_client.get(f"{tenant_id}:pool_config:{pool_id}")
+        if raw:
+            pool_cfg             = json.loads(raw)
+            channel_types        = pool_cfg.get("channel_types", [])
+            mentionable_pools    = pool_cfg.get("mentionable_pools") or None
+            mentionable_journeys = pool_cfg.get("mentionable_journeys") or None
+            agent_groups         = pool_cfg.get("agent_groups") or []
+
+        def _entry(value: object) -> str:
+            return json.dumps({
+                "value":      value,
+                "confidence": 1.0,
+                "source":     "routing_engine",
+                "visibility": "agents_only",
+                "updated_at": now_str,
+            })
+
+        mapping: dict[str, str] = {
+            "session.pool.id":       _entry(pool_id),
+            "session.pool.channels": _entry(channel_types),
+        }
+        if mentionable_pools:
+            mapping["session.pool.mentionable_pools"] = _entry(mentionable_pools)
+        if mentionable_journeys:
+            mapping["session.pool.mentionable_journeys"] = _entry(mentionable_journeys)
+        if agent_groups:
+            mapping["session.pool.agent_groups"] = _entry(agent_groups)
+
+        await redis_client.hset(ctx_key, mapping=mapping)
+        # EXPIRE with NX: only sets TTL if no TTL is currently on the key,
+        # so we never shorten an expiry already set by another component.
+        await redis_client.expire(ctx_key, ttl_seconds, nx=True)
+
+        logger.debug(
+            "ContextStore pool context written: tenant=%s session=%s pool=%s channels=%s",
+            tenant_id, session_id, pool_id, channel_types,
+        )
+    except Exception as exc:
+        logger.warning(
+            "Failed to write pool context to ContextStore: session=%s — %s",
+            session_id, exc,
         )
 
 

@@ -44,6 +44,8 @@ poolsRouter.post("/", async (req: Request, res: Response, next: NextFunction) =>
         supervisor_config:     body.supervisor_config ?? Prisma.DbNull,
         queue_config:          body.queue_config ?? Prisma.DbNull,
         mentionable_pools:     body.mentionable_pools ?? Prisma.DbNull,
+        mentionable_journeys:  body.mentionable_journeys ?? Prisma.DbNull,
+        agent_groups:          body.agent_groups ?? [],
         hooks:                 body.hooks ?? Prisma.DbNull,
         calendar_id:           body.calendar_id ?? null,
         created_by:            createdBy,
@@ -127,6 +129,8 @@ poolsRouter.put("/:pool_id", async (req: Request, res: Response, next: NextFunct
         ...(body.supervisor_config     !== undefined && { supervisor_config:     body.supervisor_config }),
         ...(body.queue_config          !== undefined && { queue_config:          body.queue_config }),
         ...(body.mentionable_pools     !== undefined && { mentionable_pools:     body.mentionable_pools }),
+        ...(body.mentionable_journeys  !== undefined && { mentionable_journeys:  body.mentionable_journeys }),
+        ...(body.agent_groups          !== undefined && { agent_groups:          body.agent_groups }),
         ...(body.hooks                 !== undefined && { hooks:                 body.hooks }),
         ...(body.calendar_id           !== undefined && { calendar_id:           body.calendar_id }),
       } as any,
@@ -142,6 +146,73 @@ poolsRouter.put("/:pool_id", async (req: Request, res: Response, next: NextFunct
     })
 
     return res.json(formatted)
+  } catch (err) {
+    return next(err)
+  }
+})
+
+// ─────────────────────────────────────────────
+// GET /v1/pools/:pool_id/mentionable-agents
+// Returns AI agent types available for @mention / Delegar in this pool,
+// derived from pool.mentionable_pools: Record<alias, pool_id>.
+// Response: { agents: { agent_type_id, pool_id, description? }[] }
+// ─────────────────────────────────────────────
+poolsRouter.get("/:pool_id/mentionable-agents", async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const tenantId = _getTenantId(req)
+    const poolId   = req.params["pool_id"]!
+
+    const pool = await prisma.pool.findUnique({
+      where: { pool_id_tenant_id: { pool_id: poolId, tenant_id: tenantId } },
+    })
+    if (!pool) return res.status(404).json({ error: "Pool não encontrado" })
+
+    // mentionable_pools: Record<alias, pool_id>  e.g. { copilot: "copilot_sac", auth: "auth_ia" }
+    const mentionablePools = pool.mentionable_pools as Record<string, string> | null
+    if (!mentionablePools || Object.keys(mentionablePools).length === 0) {
+      return res.json({ agents: [] })
+    }
+
+    const targetPoolIds = Object.values(mentionablePools)
+
+    // Find all active non-human agent types belonging to the mentionable pools
+    const agentTypes = await prisma.agentType.findMany({
+      where: {
+        tenant_id: tenantId,
+        status:    "active",
+        framework: { not: "human" },
+        pools: {
+          some: {
+            pool: { pool_id: { in: targetPoolIds }, tenant_id: tenantId },
+          },
+        },
+      },
+      include: { pools: { include: { pool: true } } },
+    })
+
+    // Build alias-indexed response: one entry per alias (key in mentionable_pools)
+    // so the UI can construct @alias mentions (not @agent_type_id which is not a valid alias)
+    const agents: Array<{
+      alias:         string;
+      agent_type_id: string;
+      pool_id:       string;
+      description?:  string;
+    }> = []
+
+    for (const [alias, targetPoolId] of Object.entries(mentionablePools)) {
+      const matchingAt = agentTypes.find(at =>
+        (at.pools as any[]).some((atp: any) => atp.pool?.pool_id === targetPoolId)
+      )
+      if (!matchingAt) continue
+      agents.push({
+        alias,
+        agent_type_id: matchingAt.agent_type_id,
+        pool_id:       targetPoolId,
+        description:   (matchingAt.capabilities as Record<string, unknown>)?.["description"] as string ?? undefined,
+      })
+    }
+
+    return res.json({ agents })
   } catch (err) {
     return next(err)
   }

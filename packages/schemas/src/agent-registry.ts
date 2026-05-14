@@ -153,6 +153,17 @@ export const PoolRegistrationSchema = z.object({
    */
   mentionable_pools:      z.record(z.string()).optional(),
   /**
+   * Mapa alias → skill_id para iniciar journeys via @mention.
+   * Exibido como dropdown no ActionBar do Console (botão "Iniciar Processo").
+   * Exemplo: { cobranca: "skill_cobranca_v1", portabilidade: "skill_portabilidade_v2" }
+   */
+  mentionable_journeys:   z.record(z.string()).optional(),
+  /**
+   * IDs dos Agent Groups (Arc 9) aos quais este pool pertence.
+   * Escrito no ContextStore como session.pool.agent_groups[] após cada roteamento.
+   */
+  agent_groups:           z.array(z.string()).optional(),
+  /**
    * @deprecated Usar `hooks.on_human_start` com pool explícito.
    * skill_id do Co-pilot associado a esta fila.
    */

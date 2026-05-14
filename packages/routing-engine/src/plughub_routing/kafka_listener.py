@@ -171,17 +171,22 @@ class RegistryEventHandler:
         try:
             expr_data = pool_data.get("routing_expression") or {}
             config = PoolConfig(
-                pool_id        = pool_data["pool_id"],
-                tenant_id      = tenant_id,
-                channel_types  = pool_data.get("channel_types", []),
-                sla_target_ms  = pool_data.get("sla_target_ms", 480_000),
-                routing_expression = RoutingExpression(**expr_data),
-                is_human_pool  = bool(pool_data.get("supervisor_config")),
+                pool_id              = pool_data["pool_id"],
+                tenant_id            = tenant_id,
+                channel_types        = pool_data.get("channel_types", []),
+                sla_target_ms        = pool_data.get("sla_target_ms", 480_000),
+                routing_expression   = RoutingExpression(**expr_data),
+                is_human_pool        = bool(pool_data.get("supervisor_config")),
+                mentionable_pools    = pool_data.get("mentionable_pools") or None,
+                mentionable_journeys = pool_data.get("mentionable_journeys") or None,
+                agent_groups         = pool_data.get("agent_groups") or [],
             )
             await self._pools.save_pool_config(config)
             logger.info(
-                "Pool cache updated: tenant=%s pool=%s channels=%s",
+                "Pool cache updated: tenant=%s pool=%s channels=%s mentionable_pools=%s agent_groups=%s",
                 tenant_id, config.pool_id, config.channel_types,
+                list(config.mentionable_pools.keys()) if config.mentionable_pools else [],
+                config.agent_groups,
             )
         except Exception as exc:
             logger.error("Error processing pool event: %s — %s", pool_data, exc)
