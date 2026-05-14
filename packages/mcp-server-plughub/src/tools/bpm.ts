@@ -542,26 +542,51 @@ export function registerBpmTools(server: McpServer, deps?: BpmDeps): void {
         // Array visibility: write to session stream with the participant_id list.
         // The stream_subscriber delivers to the webchat client ONLY if
         // customer_participant_id is in the list.
-        // agent:events is NOT notified — agents listed in the array receive
-        // the message via their own stream subscription (session_context_get).
-        // conversations.outbound is NOT used.
+        // For menus (hasMenu=true), agent:events receives a menu.render event so
+        // Agent Assist UI can display interactive menu cards for wrap-up agents.
+        // For plain text (hasMenu=false), agent:events receives a message.text
+        // event when the visibility targets an agent (not customer-only).
         // Primary use case: NPS agent talks exclusively to the customer without
-        // the human agent seeing the messages.
+        // the human agent seeing the messages; wrap-up agent talks exclusively
+        // with the human agent after they clicked "Desligar".
         if (deps?.redis) {
           try {
-            await writeStreamEntry(deps.redis, {
-              stream_key:  `session:${parsed.session_id}:stream`,
-              type:        "message",
-              author_id:   authorId,
-              author_role: "specialist",
-              visibility:  parsed.visibility as string[],
-              segment_id:  parsed.segment_id,
-              payload: {
-                message_id: messageId,
-                content:    { type: "text", text: parsed.message },
-              },
-              timestamp,
-            })
+            if (hasMenu) {
+              // Interactive menu with array visibility: write interaction_request so
+              // webchat StreamSubscriber delivers it as an interaction.request WS event
+              // (with buttons / form fields), not just a plain text bubble.
+              await writeStreamEntry(deps.redis, {
+                stream_key:  `session:${parsed.session_id}:stream`,
+                type:        "interaction_request",
+                author_id:   authorId,
+                author_role: "specialist",
+                visibility:  parsed.visibility as string[],
+                segment_id:  parsed.segment_id,
+                payload: {
+                  menu_id:       messageId,
+                  interaction:   parsed.menu!.interaction,
+                  prompt:        parsed.message,
+                  options:       parsed.menu!.options        ?? [],
+                  fields:        parsed.menu!.fields         ?? null,
+                  masked_fields: parsed.menu!.masked_fields  ?? null,
+                },
+                timestamp,
+              })
+            } else {
+              await writeStreamEntry(deps.redis, {
+                stream_key:  `session:${parsed.session_id}:stream`,
+                type:        "message",
+                author_id:   authorId,
+                author_role: "specialist",
+                visibility:  parsed.visibility as string[],
+                segment_id:  parsed.segment_id,
+                payload: {
+                  message_id: messageId,
+                  content:    { type: "text", text: parsed.message },
+                },
+                timestamp,
+              })
+            }
           } catch { /* non-fatal — stream may not exist yet */ }
 
           // Determine if the visibility array targets the human agent.
@@ -643,15 +668,16 @@ export function registerBpmTools(server: McpServer, deps?: BpmDeps): void {
           if (menuTargetsAgent) {
             try {
               await deps.redis.publish(`agent:events:${parsed.session_id}`, JSON.stringify({
-                type:       "menu.render",
-                session_id: parsed.session_id,
-                menu_id:    messageId,
-                interaction: parsed.menu!.interaction,
-                prompt:     parsed.message,
-                options:    parsed.menu!.options  ?? [],
-                fields:     parsed.menu!.fields   ?? [],
+                type:         "menu.render",
+                session_id:   parsed.session_id,
+                menu_id:      messageId,
+                interaction:  parsed.menu!.interaction,
+                prompt:       parsed.message,
+                options:      parsed.menu!.options       ?? [],
+                fields:       parsed.menu!.fields        ?? [],
+                masked_fields: parsed.menu!.masked_fields ?? undefined,
                 timestamp,
-                visibility: parsed.visibility,
+                visibility:   parsed.visibility,
               }))
             } catch { /* non-fatal */ }
           }
