@@ -1731,6 +1731,7 @@ async def process_routed(
         # set by fire_pool_hooks() before this point.  Task-step specialists do not.
         # We track task-step specialists in a separate SET so the agent_closed path
         # can defer on_human_end hooks until they finish, avoiding message interleaving.
+        _is_hook_agent = False  # default; set inside the block below when conference_id is set
         if conference_id and native_instance_id:
             try:
                 _is_hook_agent = await redis_client.exists(
@@ -2132,6 +2133,84 @@ async def process_routed(
                     "Hook completion detection error: session=%s conference=%s — %s",
                     session_id, conference_id, exc,
                 )
+
+            # ── G2 fix (native inline): SREM + deferred on_human_end dispatch ──────
+            # For plughub-native specialists the skill flow runs inline inside
+            # activate_native_agent — runtime.ts agent_done is never called, so
+            # conference_agent_completed is never published to Kafka and the Kafka
+            # handler's G2 block (line ~2500) never executes.
+            # We must do the SREM + deferred hook check here, synchronously, after
+            # the skill flow returns.
+            if native_instance_id and not _is_hook_agent:
+                try:
+                    await redis_client.srem(
+                        f"session:{session_id}:active_ai_specialists", native_instance_id,
+                    )
+                    _native_rem_specs = await redis_client.scard(
+                        f"session:{session_id}:active_ai_specialists"
+                    )
+                    if _native_rem_specs == 0:
+                        _native_pend_raw = await redis_client.getdel(
+                            f"session:{session_id}:pending_on_human_end"
+                        )
+                        if _native_pend_raw:
+                            _npd = json.loads(
+                                _native_pend_raw if isinstance(_native_pend_raw, str)
+                                else _native_pend_raw.decode()
+                            )
+                            _npd_pool     = _npd.get("pool_id", "")
+                            _npd_tenant   = _npd.get("tenant_id", "")
+                            _npd_customer = _npd.get("customer_id", session_id)
+                            _npd_h_inst   = _npd.get("human_instance_id")
+                            _npd_cust_pid = _npd.get("customer_participant_id")
+                            logger.info(
+                                "All native specialists done — dispatching deferred on_human_end: "
+                                "session=%s pool=%s", session_id, _npd_pool,
+                            )
+                            if http and _npd_pool and _npd_tenant:
+                                _npd_pool_cfg = await get_pool_config(
+                                    http, _npd_tenant, _npd_pool
+                                )
+                                _npd_hooks = (
+                                    ((_npd_pool_cfg or {}).get("hooks") or {})
+                                    .get("on_human_end", [])
+                                )
+                                if _npd_hooks:
+                                    await _write_pre_hook_context(
+                                        redis_client, _npd_tenant, session_id,
+                                        close_origin="agent_closed",
+                                        human_instance_id=_npd_h_inst,
+                                        customer_participant_id=_npd_cust_pid,
+                                    )
+                                    asyncio.create_task(fire_pool_hooks(
+                                        http=http, redis_client=redis_client,
+                                        session_id=session_id,
+                                        pool_id=_npd_pool,
+                                        tenant_id=_npd_tenant,
+                                        customer_id=_npd_customer,
+                                        hook_type="on_human_end",
+                                    ))
+                                    asyncio.create_task(_hook_timeout_guard(
+                                        redis_client, session_id, "on_human_end",
+                                    ))
+                                    logger.info(
+                                        "on_human_end hooks dispatched (native deferred): "
+                                        "session=%s pool=%s count=%d",
+                                        session_id, _npd_pool, len(_npd_hooks),
+                                    )
+                                else:
+                                    asyncio.create_task(
+                                        _trigger_contact_close(redis_client, session_id)
+                                    )
+                            else:
+                                asyncio.create_task(
+                                    _trigger_contact_close(redis_client, session_id)
+                                )
+                except Exception as _g2n_exc:
+                    logger.warning(
+                        "G2 native: could not process deferred on_human_end: "
+                        "session=%s — %s", session_id, _g2n_exc,
+                    )
 
     elif framework == "human":
         await activate_human_agent(
@@ -3600,14 +3679,20 @@ async def process_inbound(
         delivered = False
 
         # ── Determinar mascaramento a partir do hash (com fallback legado) ──
-        any_masked = False
+        # any_masked: step-level flag (entire submission suppressed)
+        # all_masked_fields: union of per-field masked_fields across all waiting entries
+        any_masked        = False
+        all_masked_fields: set[str] = set()
         if waiting_hash:
             for _meta_json in waiting_hash.values():
                 try:
                     _meta = json.loads(_meta_json)
                     if _meta.get("masked"):
                         any_masked = True
-                        break
+                    # Collect per-field masked IDs (written by skill-flow-engine menu.ts)
+                    for _fid in (_meta.get("masked_fields") or []):
+                        if isinstance(_fid, str):
+                            all_masked_fields.add(_fid)
                 except Exception:
                     pass
         if not any_masked:
@@ -3630,6 +3715,26 @@ async def process_inbound(
                 visibility   = "agents_only"
                 logger.info(
                     "Masked menu reply suppressed for human agent: session=%s", session_id,
+                )
+            elif all_masked_fields and msg_type == "menu_result":
+                # Field-level masking: some form fields are sensitive, others are not.
+                # Redact individual masked field values instead of suppressing entirely.
+                try:
+                    result_obj = json.loads(reply_text) if isinstance(reply_text, str) else reply_text
+                    if isinstance(result_obj, dict):
+                        redacted = {
+                            k: ("••••••" if k in all_masked_fields else v)
+                            for k, v in result_obj.items()
+                        }
+                        display_text = f"[Formulário: {json.dumps(redacted, ensure_ascii=False)}]"
+                    else:
+                        display_text = f"[Seleção: {reply_text}]"
+                except Exception:
+                    display_text = f"[Seleção: {reply_text}]"
+                visibility = "all"
+                logger.info(
+                    "Field-level masked form reply redacted for human agent: session=%s fields=%s",
+                    session_id, list(all_masked_fields),
                 )
             else:
                 display_text = reply_text if msg_type == "text" else f"[Seleção: {reply_text}]"

@@ -2,6 +2,53 @@
 
 ---
 
+## Bugfix — G2: on_human_end hooks não disparavam para especialistas plughub-native (2026-05-13)
+
+**`packages/orchestrator-bridge/src/plughub_orchestrator_bridge/main.py`**
+
+**Causa raiz**: quando o agente humano clicava "Desligar" enquanto um especialista `plughub-native` (ex: `skill_auth_form_v1`) ainda estava em execução, o bridge corretamente armazenava `pending_on_human_end` no Redis e adiava o disparo dos hooks `on_human_end`. No entanto, o bloco responsável por processar esse key deferido — SREM de `active_ai_specialists` + GETDEL `pending_on_human_end` — existia **apenas** no handler Kafka de `conference_agent_completed` (linha ~2500), que é publicado pela ferramenta MCP `agent_done` do `runtime.ts`. Para agentes `plughub-native`, o skill flow executa **inline** no bridge via `activate_native_agent` (await bloqueante na linha 1867), sem nunca chamar a ferramenta MCP — portanto o evento Kafka nunca era publicado, e o `pending_on_human_end` ficava preso no Redis até expirar (300s). Resultado: wrapup e NPS nunca chegavam ao Console nem ao webchat quando havia especialista nativo ativo no momento do "Desligar".
+
+**Fix** (`main.py`):
+1. Inicializa `_is_hook_agent = False` antes do bloco `if conference_id and native_instance_id:` (linha 1734) para garantir que a variável esteja sempre definida no escopo.
+2. Adicionado bloco **G2 inline** ao fim da seção `if conference_id:` no caminho de conclusão nativo (após Fase B/C, antes de `elif framework == "human":`). Quando `activate_native_agent` retorna e o especialista não é hook agent (`not _is_hook_agent`):
+   - SREM `native_instance_id` de `session:{id}:active_ai_specialists`
+   - SCARD para verificar se restam outros especialistas
+   - Se 0: GETDEL `pending_on_human_end` → se existir, chama `_write_pre_hook_context` + `fire_pool_hooks(on_human_end)` + `_hook_timeout_guard`
+   - Fallbacks: sem hooks no pool → `_trigger_contact_close`; sem http/pool/tenant → `_trigger_contact_close`
+
+**Log de diagnóstico adicionado**: `"All native specialists done — dispatching deferred on_human_end: session=... pool=..."` + `"on_human_end hooks dispatched (native deferred): session=... pool=... count=..."`.
+
+**Verificado em produção**: NPS aparece no webchat com pergunta de 0-10 (botões de lista); wrapup aparece no Console com pergunta de classificação e campo de resumo. Ambos os agentes listados em "AGENTES AI NA SESSÃO" no painel direito do Console.
+
+---
+
+## Bugfix — NPS buttons no webchat + masked_fields em menu.render (2026-05-13)
+
+**`packages/mcp-server-plughub/src/tools/bpm.ts`**
+
+Dois bugs na entrega de mensagens pós-`agent_done` via array visibility:
+
+**Bug 1 — NPS buttons não apareciam no webchat**
+Para `isArrayVis && hasMenu`, o stream recebia `type: "message"` em vez de `type: "interaction_request"`. O `StreamSubscriber` do channel-gateway converte `interaction_request` → WS `interaction.request` (com botões clicáveis); `message` → WS `msg.text` (texto plano, sem botões). Resultado: o cliente via webchat recebia a pergunta NPS como texto em vez de ver os botões de resposta.
+- Fix: quando `isArrayVis && hasMenu`, escreve `type: "interaction_request"` no stream com payload completo (`menu_id`, `interaction`, `prompt`, `options`, `fields`, `masked_fields`).
+- Mensagens de texto simples (`isArrayVis && !hasMenu`) continuam usando `type: "message"` sem alteração.
+
+**Bug 2 — `masked_fields` ausente no `menu.render`**
+O evento `menu.render` publicado em `agent:events:{sessionId}` (para o Console) não incluía `masked_fields`. O handler `menu.render` do `AgentAssistContext` já suportava o campo; apenas não o recebia.
+- Fix: `menu.render` agora inclui `masked_fields: parsed.menu!.masked_fields ?? undefined`.
+
+---
+
+## Bugfix — NPS customer reply visível ao agente após sessionClosed (2026-05-13)
+
+**`packages/platform-ui/src/modules/agent-assist/AgentAssistContext.tsx`**
+
+No handler `message.text`, após `sessionClosed === true` mensagens com `author === "customer"` eram adicionadas ao array de mensagens do contato. Isso fazia a resposta do cliente ao NPS (ex: "1") aparecer na view do agente humano, que já havia encerrado seu atendimento.
+
+Fix: ao processar `message.text`, se `c.sessionClosed && msg.author === "customer"` o evento é silenciosamente ignorado. Mensagens de hook agents (wrapup, NPS) ainda chegam normalmente pois têm `author === "agent_ai"`.
+
+---
+
 ## Bugfix — Pool Lifecycle Hooks (wrapup + NPS) não chegavam ao Console (2026-05-13)
 
 Dois bugs introduzidos durante Arc 11 Fases C+D impediam que wrapup e NPS funcionassem.
