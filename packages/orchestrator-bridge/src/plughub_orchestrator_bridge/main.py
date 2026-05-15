@@ -3493,16 +3493,72 @@ async def process_contact_event(
                         remaining, session_id, instance_id,
                     )
             else:
-                # instance_id not in event (legacy path) — fall back to clearing everything
+                # instance_id not in event (legacy path) — fall back to clearing everything.
+                # Root cause of "Ocupados never decrements": instance_id is empty when the
+                # webchat human agent calls /api/agent_done because session:meta doesn't carry
+                # instance_id.  We must publish agent_done to agent.lifecycle WITH the pool
+                # info BEFORE deleting the human tracking keys, so the routing engine can
+                # call remove_conversation() and DECR pool:active_count.
                 logger.warning(
                     "agent_closed without instance_id — clearing all human tracking: session=%s",
                     session_id,
                 )
+                # 1. Read members and pool/tenant BEFORE deleting tracking keys.
+                _leg_members: set = set()
+                _leg_pool = _leg_ten = _leg_at = ""
+                try:
+                    _leg_members = await redis_client.smembers(
+                        f"session:{session_id}:human_agents"
+                    )
+                except Exception:
+                    pass
+                try:
+                    _leg_meta_raw = await redis_client.get(f"session:{session_id}:meta")
+                    if _leg_meta_raw:
+                        _leg_m = json.loads(_leg_meta_raw)
+                        _leg_pool = _leg_m.get("pool_id", "")
+                        _leg_ten  = _leg_m.get("tenant_id", "") or _leg_m.get("tenant", "")
+                        _leg_at   = _leg_m.get("agent_type_id", "")
+                except Exception:
+                    pass
+                # 2. Restore instances (resets routing state).
                 await _restore_all_instances(redis_client, session_id)
+                # 3. Publish agent_done for each human member so routing engine DECRs
+                #    pool:active_count.  Uses fallback_pools (not instance_meta) since
+                #    human agents in demo mode never wrote instance_meta via agent_ready.
+                if _kafka_producer and _leg_ten:
+                    for _leg_inst in _leg_members:
+                        _leg_inst_str = (
+                            _leg_inst if isinstance(_leg_inst, str) else _leg_inst.decode()
+                        )
+                        asyncio.create_task(_kafka_producer.send(
+                            TOPIC_LIFECYCLE,
+                            json.dumps({
+                                "event":           "agent_done",
+                                "tenant_id":       _leg_ten,
+                                "instance_id":     _leg_inst_str,
+                                "agent_type_id":   _leg_at,
+                                "pools":           [_leg_pool] if _leg_pool else [],
+                                "conversation_id": session_id,
+                                "timestamp":       datetime.now(timezone.utc).isoformat(),
+                            }).encode("utf-8"),
+                        ))
+                        logger.info(
+                            "agent_done published to lifecycle (legacy path): "
+                            "session=%s instance=%s pool=%s",
+                            session_id, _leg_inst_str, _leg_pool,
+                        )
+                else:
+                    logger.warning(
+                        "agent_done NOT published (legacy): session=%s "
+                        "has_producer=%s tenant=%r members=%d",
+                        session_id, _kafka_producer is not None, _leg_ten, len(_leg_members),
+                    )
+                # 4. Delete tracking keys AFTER publishing agent_done.
                 await redis_client.delete(f"session:{session_id}:human_agent")
                 await redis_client.delete(f"session:{session_id}:human_agents")
-                # Trigger contact close (no instance_id means we can't check hooks;
-                # fall back to immediate close so the customer WS is never left open).
+                # 5. Trigger contact close (no instance_id means we can't check hooks;
+                #    fall back to immediate close so the customer WS is never left open).
                 asyncio.create_task(_trigger_contact_close(redis_client, session_id))
 
     except Exception as exc:
