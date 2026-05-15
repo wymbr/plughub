@@ -572,6 +572,22 @@ class InstanceRegistry:
             json.dumps(contact_data),
             ex=ttl,
         )
+        # Patch queue_length in the pool snapshot in-place so the Monitor
+        # tile reflects the new queue position immediately, without waiting
+        # for the next routing event to call write_pool_snapshot.
+        # (write_pool_snapshot is scheduled via create_task inside router.route()
+        # BEFORE this ZADD executes, so the snapshot would show stale length 0.)
+        try:
+            snap_key = _pool_snapshot_key(tenant_id, pool_id)
+            raw_snap = await self._redis.get(snap_key)
+            if raw_snap:
+                snap = json.loads(raw_snap)
+                snap["queue_length"] = await self._redis.zcard(
+                    _queue_key(tenant_id, pool_id)
+                )
+                await self._redis.set(snap_key, json.dumps(snap), keepttl=True)
+        except Exception:
+            pass  # non-critical; self-corrects on next routing event
 
     async def remove_queued_contact(
         self, tenant_id: str, pool_id: str, session_id: str
@@ -579,6 +595,18 @@ class InstanceRegistry:
         """Remove contact from sorted set and delete stored JSON."""
         await self._redis.zrem(_queue_key(tenant_id, pool_id), session_id)
         await self._redis.delete(_queue_contact_key(tenant_id, session_id))
+        # Patch queue_length in snapshot in-place (mirrors add_queued_contact).
+        try:
+            snap_key = _pool_snapshot_key(tenant_id, pool_id)
+            raw_snap = await self._redis.get(snap_key)
+            if raw_snap:
+                snap = json.loads(raw_snap)
+                snap["queue_length"] = await self._redis.zcard(
+                    _queue_key(tenant_id, pool_id)
+                )
+                await self._redis.set(snap_key, json.dumps(snap), keepttl=True)
+        except Exception:
+            pass
 
     async def get_full_queued_contact(
         self, tenant_id: str, session_id: str
