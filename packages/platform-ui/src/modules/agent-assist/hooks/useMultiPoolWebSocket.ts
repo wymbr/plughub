@@ -192,14 +192,16 @@ export function useMultiPoolWebSocket(activePools: string[]): UseMultiPoolWebSoc
     };
   }, []);
 
-  const send = useCallback((text: string, sessionId: string) => {
+  const send = useCallback((text: string, sessionId: string, visibility?: string) => {
     if (!sessionId) return;
-    const envelope = JSON.stringify({
+    const payload: Record<string, unknown> = {
       type:       "message.text",
       session_id: sessionId,
       text,
       timestamp:  new Date().toISOString(),
-    });
+    };
+    if (visibility) payload["visibility"] = visibility;
+    const envelope = JSON.stringify(payload);
 
     // Each server-side WS connection has its own subscribedSessions set.
     // Only the connection that received conversation.assigned for this

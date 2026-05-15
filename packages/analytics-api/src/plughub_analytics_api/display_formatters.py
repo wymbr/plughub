@@ -876,3 +876,203 @@ async def fmt_journey_median_duration(
     except Exception as exc:
         logger.warning("fmt_journey_median_duration failed tenant=%s: %s", tenant_id, exc)
         return empty
+
+
+# ─── Arc 12: Agent Business Events display formatters ─────────────────────────
+
+def _fetch_agent_event_timeseries_sync(
+    client:    Any,
+    db:        str,
+    tenant_id: str,
+    since:     str,
+    until:     str,
+    category:  str,
+    pool_id:   str | None,
+) -> list[dict]:
+    """
+    Daily time-series for a specific category (exact or prefix match).
+    Returns {period, total_value, avg_value, event_count}.
+    """
+    conditions = [
+        "tenant_id = {tenant_id:String}",
+        f"emitted_at >= '{since}'",
+        f"emitted_at <= '{until}'",
+        "startsWith(category, {category:String})",
+    ]
+    params: dict = {"tenant_id": tenant_id, "category": category}
+    if pool_id:
+        conditions.append("pool_id = {pool_id:String}")
+        params["pool_id"] = pool_id
+
+    where = " AND ".join(conditions)
+    result = client.query(f"""
+        SELECT
+            toDate(emitted_at)   AS period,
+            sum(value)           AS total_value,
+            avg(value)           AS avg_value,
+            count()              AS event_count
+        FROM {db}.agent_business_events
+        WHERE {where}
+        GROUP BY period
+        ORDER BY period ASC
+    """, parameters=params)
+    return _run(client, "", {}) if not result else [
+        {
+            "period":      str(row[0]),
+            "total_value": float(row[1]),
+            "avg_value":   round(float(row[2]), 4),
+            "event_count": int(row[3]),
+        }
+        for row in result.result_rows
+    ]
+
+
+def _fetch_agent_event_summary_sync(
+    client:   Any,
+    db:       str,
+    tenant_id: str,
+    since:    str,
+    until:    str,
+    category: str | None,
+    pool_id:  str | None,
+    group_by: str,
+) -> list[dict]:
+    """
+    Aggregated summary per group_by dimension.
+    Returns {group_key, event_count, total_value, avg_value}.
+    """
+    conditions = [
+        "tenant_id = {tenant_id:String}",
+        f"emitted_at >= '{since}'",
+        f"emitted_at <= '{until}'",
+    ]
+    params: dict = {"tenant_id": tenant_id}
+    if category:
+        conditions.append("startsWith(category, {category:String})")
+        params["category"] = category
+    if pool_id:
+        conditions.append("pool_id = {pool_id:String}")
+        params["pool_id"] = pool_id
+
+    where = " AND ".join(conditions)
+    result = client.query(f"""
+        SELECT
+            {group_by}           AS group_key,
+            count()              AS event_count,
+            sum(value)           AS total_value,
+            avg(value)           AS avg_value
+        FROM {db}.agent_business_events
+        WHERE {where}
+        GROUP BY group_key
+        ORDER BY event_count DESC
+        LIMIT 20
+    """, parameters=params)
+    return [
+        {
+            "group_key":   str(row[0]),
+            "event_count": int(row[1]),
+            "total_value": float(row[2]),
+            "avg_value":   round(float(row[3]), 4),
+        }
+        for row in result.result_rows
+    ]
+
+
+async def fmt_agent_event_timeseries(
+    client:    Any,
+    database:  str,
+    tenant_id: str,
+    from_dt:   str | None,
+    to_dt:     str | None,
+    category:  str | None,
+    pool_id:   str | None,
+) -> dict:
+    """
+    Returns LineChartData — daily time-series for the given category.
+
+    category is required (no category = empty chart). Supports prefix matching:
+      category=retencao_humano.skill_v2  matches all metric keys under that skill.
+
+    Series:
+      'Total' — sum(value) per day
+      'Média' — avg(value) per day  (second Y axis hint via y2)
+
+    x_labels: ISO date strings.
+    """
+    since = _fmt_dt(from_dt) if from_dt else _default_from()
+    until = _fmt_dt(to_dt)   if to_dt   else _default_to()
+
+    empty: dict = {
+        "x_labels": [],
+        "series":   [
+            {"name": "Total", "data": []},
+            {"name": "Média", "data": []},
+        ],
+        "y_label": "",
+    }
+    if not category:
+        return empty
+    try:
+        rows = await asyncio.to_thread(
+            _fetch_agent_event_timeseries_sync,
+            client, database, tenant_id, since, until, category, pool_id,
+        )
+        x_labels  = [r["period"]      for r in rows]
+        total_data = [r["total_value"] for r in rows]
+        avg_data   = [r["avg_value"]   for r in rows]
+        return {
+            "x_labels": x_labels,
+            "series": [
+                {"name": "Total", "data": total_data},
+                {"name": "Média", "data": avg_data},
+            ],
+            "y_label": category.split(".")[-1] if category else "",
+        }
+    except Exception as exc:
+        logger.warning("fmt_agent_event_timeseries failed tenant=%s cat=%s: %s", tenant_id, category, exc)
+        return empty
+
+
+async def fmt_agent_event_summary(
+    client:    Any,
+    database:  str,
+    tenant_id: str,
+    from_dt:   str | None,
+    to_dt:     str | None,
+    category:  str | None,
+    pool_id:   str | None,
+    group_by:  str = "category",
+) -> dict:
+    """
+    Returns BarChartData — aggregated event totals grouped by group_by dimension.
+
+    group_by: category (default) | skill_id | pool_id | agent_type_id
+    Bar height = event_count; tooltip carries total_value and avg_value.
+    """
+    VALID_GROUP_BY = {"category", "skill_id", "pool_id", "agent_type_id"}
+    if group_by not in VALID_GROUP_BY:
+        group_by = "category"
+
+    since = _fmt_dt(from_dt) if from_dt else _default_from()
+    until = _fmt_dt(to_dt)   if to_dt   else _default_to()
+
+    empty: dict = {
+        "x_labels": [],
+        "series":   [{"name": "Eventos", "data": []}],
+        "y_label":  "count",
+    }
+    try:
+        rows = await asyncio.to_thread(
+            _fetch_agent_event_summary_sync,
+            client, database, tenant_id, since, until, category, pool_id, group_by,
+        )
+        x_labels = [r["group_key"]   for r in rows]
+        counts   = [r["event_count"] for r in rows]
+        return {
+            "x_labels": x_labels,
+            "series":   [{"name": "Eventos", "data": counts}],
+            "y_label":  "count",
+        }
+    except Exception as exc:
+        logger.warning("fmt_agent_event_summary failed tenant=%s: %s", tenant_id, exc)
+        return empty

@@ -433,6 +433,36 @@ PARTITION BY toYYYYMM(date)
 ORDER BY (tenant_id, event_id)
 """
 
+# ── Arc 12: agent_business_events — time-series KPIs emitted by agents via agent_event MCP tool.
+# category_l1..l4 are pre-decomposed from category at publish time for fast ClickHouse queries.
+# MergeTree (not Replacing) because events are immutable — no deduplication needed.
+# TTL 2 years; ORDER BY puts time last so range scans on category are efficient.
+_DDL_AGENT_BUSINESS_EVENTS = """
+CREATE TABLE IF NOT EXISTS {db}.agent_business_events
+(
+    event_id       String,
+    tenant_id      String,
+    session_id     String,
+    journey_id     Nullable(String),
+    agent_type_id  String,
+    skill_id       String,
+    pool_id        String,
+    category       String,
+    category_l1    String,
+    category_l2    String,
+    category_l3    String,
+    category_l4    String,
+    value          Float64,
+    tags           Map(String, String),
+    emitted_at     DateTime64(3, 'UTC'),
+    date           Date
+)
+ENGINE = MergeTree()
+PARTITION BY toYYYYMM(date)
+ORDER BY (tenant_id, category_l1, category_l2, category_l3, emitted_at)
+TTL toDateTime(emitted_at) + INTERVAL 2 YEAR
+"""
+
 # ── Arc 8: agent_pause_intervals — one row per pause interval per human agent.
 # ReplacingMergeTree on (tenant_id, instance_id, paused_at): the close row
 # (with resumed_at + duration_ms) wins over the open row on background merge
@@ -569,6 +599,7 @@ _ALL_DDL = [
     _DDL_CONTACT_INSIGHTS,
     _DDL_AGENT_PAUSE_INTERVALS,
     _DDL_JOURNEY_EVENTS,
+    _DDL_AGENT_BUSINESS_EVENTS,
     # Materialized views — must come AFTER the source tables they reference.
     # AggregatingMergeTree with POPULATE backfills existing data on first creation.
     _DDL_MV_AGENT_PERFORMANCE,
@@ -966,6 +997,24 @@ class AnalyticsStore:
             "journey_events",
             [_journey_event_row(row)],
             self._JOURNEY_EVENT_COLS,
+        )
+
+    # agent_business_events (Arc 12)
+
+    _AGENT_BUSINESS_EVENT_COLS = [
+        "event_id", "tenant_id", "session_id", "journey_id",
+        "agent_type_id", "skill_id", "pool_id",
+        "category", "category_l1", "category_l2", "category_l3", "category_l4",
+        "value", "tags", "emitted_at", "date",
+    ]
+
+    async def insert_agent_business_event(self, row: dict) -> None:
+        """Insert a business KPI event from the agent.events Kafka topic (Arc 12)."""
+        await asyncio.to_thread(
+            self._insert,
+            "agent_business_events",
+            [_agent_business_event_row(row)],
+            self._AGENT_BUSINESS_EVENT_COLS,
         )
 
     # ── Arc 5: segment_id lookups (for post-hoc enrichment) ───────────────────
@@ -1414,6 +1463,46 @@ def _journey_event_row(d: dict) -> list:
         d.get("session_outcome") or None,
         _parse_dt(started_at_str) if started_at_str else None,
         _parse_dt(ended_at_str)   if ended_at_str   else None,
+        _parse_dt(ts) or datetime.utcnow(),
+        _today_utc(ts),
+    ]
+
+
+def _agent_business_event_row(d: dict) -> list:
+    """Row builder for agent_business_events table (Arc 12).
+
+    category_l1..l4 arrive pre-decomposed from the MCP tool publish step.
+    Fallback decomposition is applied here in case the consumer receives a
+    raw payload that skipped the MCP layer (e.g. replayed from DLQ).
+    tags must be a dict[str, str] — non-string values are coerced to str.
+    """
+    ts       = d.get("emitted_at") or d.get("timestamp")
+    category = d.get("category", "")
+    # Fallback decomposition from category string when pre-decomposed fields absent
+    parts = category.split(".") if category else []
+    def _level(key: str, idx: int) -> str:
+        return d.get(key) or (parts[idx] if len(parts) > idx else "")
+
+    tags_raw = d.get("tags") or {}
+    if not isinstance(tags_raw, dict):
+        tags_raw = {}
+    tags = {str(k): str(v) for k, v in tags_raw.items()}
+
+    return [
+        d.get("event_id", ""),
+        d.get("tenant_id", ""),
+        d.get("session_id", ""),
+        d.get("journey_id") or None,
+        d.get("agent_type_id", "") or "",
+        d.get("skill_id", "") or "",
+        d.get("pool_id", "") or "",
+        category,
+        _level("category_l1", 0),
+        _level("category_l2", 1),
+        _level("category_l3", 2),
+        _level("category_l4", 3),
+        float(d.get("value", 0.0)),
+        tags,
         _parse_dt(ts) or datetime.utcnow(),
         _today_utc(ts),
     ]

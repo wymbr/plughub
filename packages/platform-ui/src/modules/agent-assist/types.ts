@@ -44,6 +44,8 @@ export interface WsMenuRender {
   prompt: string;
   options?: Array<{ id: string; label: string }>;
   fields?: Array<{ id: string; label: string; type: string }>;
+  /** Field IDs whose values must be masked (rendered as ●●●●●● in echoes). */
+  masked_fields?: string[] | null;
 }
 
 // ── Menu card data (attached to ChatMessage for rich rendering) ───────────────
@@ -67,12 +69,15 @@ export interface MenuField {
  * MenuCard renders in interactive mode automatically, no manual toggle needed.
  */
 export interface ChatMenuData {
-  menu_id:      string;
-  interaction:  "text" | "button" | "list" | "checklist" | "form";
-  prompt:       string;
-  options?:     MenuOption[];
-  fields?:      MenuField[];
-  targetsSelf?: boolean;
+  menu_id:       string;
+  interaction:   "text" | "button" | "list" | "checklist" | "form";
+  prompt:        string;
+  options?:      MenuOption[];
+  fields?:       MenuField[];
+  targetsSelf?:  boolean;
+  /** Field IDs that are masked (type="password" in webchat). Used to redact values
+   *  in the stream echo so the operator Console never displays raw masked input. */
+  masked_fields?: string[];
 }
 
 export interface WsAgentTyping {
@@ -204,6 +209,10 @@ export interface SupervisorState {
   sla: SlaState;
   customer_context: CustomerContext;
   issue_status?: string;
+  /** Arc 11 — AI participants active in this session, with Skill-Flow step state. */
+  ai_participants?: AiParticipantInfo[];
+  /** Arc 11 Fase D — Skill-Flow step transition history from pipeline_state.transitions[] */
+  pipeline_transitions?: PipelineTransition[];
 }
 
 // ── supervisor_capabilities response ─────────────────────────────────────────
@@ -278,7 +287,41 @@ export interface ContactSession {
 
 // ── App state ─────────────────────────────────────────────────────────────────
 
-export type ActiveTab = "estado" | "capacidades" | "contexto";
+// ── Arc 11 — AI Participant state ─────────────────────────────────────────────
+
+export interface AiState {
+  /** Current Skill-Flow step ID, or null if not running a flow. */
+  current_step:  string | null;
+  /** Inferred step type: "reason" | "invoke" | "task" | "menu" | "receive" | "suspend" | "unknown" */
+  step_type:     string;
+  /** Execution status derived from pipeline_state + waiting hashes. */
+  step_status:   "running" | "waiting" | "done" | "error";
+  /** What the step is waiting for, e.g. "menu" | "receive" | "approval" */
+  waiting_for:   string | null;
+  /** Milliseconds elapsed in the current step. */
+  since_ms:      number;
+}
+
+export interface AiParticipantInfo {
+  instance_id:   string;
+  agent_type_id: string;
+  pool_id:       string;
+  role:          string;   // "primary" | "specialist" | "supervisor"
+  segment_id:    string;
+  joined_at:     string;
+  ai_state:      AiState;
+}
+
+/** Arc 11 Fase D — a single Skill-Flow step transition logged in pipeline_state.transitions[] */
+export interface PipelineTransition {
+  from_step:  string | null;
+  to_step:    string;
+  reason?:    string;
+  timestamp:  string;
+}
+
+/** Right panel tabs: Estado · Contexto · Histórico */
+export type ActiveTab = "estado" | "contexto" | "historico";
 
 export interface Toast {
   id: string;
@@ -323,4 +366,40 @@ export interface CopilotSuggestions {
   acoes_recomendadas: string[];
   /** ISO-8601 timestamp of the last analysis */
   last_analysis: string | null;
+}
+
+// ── Mentionable agent (Arc 11 Fase B) ────────────────────────────────────────
+
+export interface MentionableAgent {
+  /** The @mention alias (key in mentionable_pools, e.g. "copilot", "auth", "auth_form").
+   *  Always use this for @mention commands — NOT agent_type_id. */
+  alias:         string;
+  agent_type_id: string;
+  pool_id:       string;
+  description?:  string;
+}
+
+// ── Delegation input schema — typed fields for DelegarTarefaDrawer ────────────
+
+/** A single field in a delegation_input schema. */
+export interface DelegationField {
+  /** Field key, used as the serialization label. */
+  id:           string;
+  /** Human-readable label shown above the field. */
+  label:        string;
+  /** Renders as <select>, <input type="text">, or <input type="number">. */
+  type:         "select" | "text" | "number";
+  placeholder?: string;
+  required?:    boolean;
+  /** Only for type === "select". */
+  options?:     Array<{ value: string; label: string }>;
+}
+
+/**
+ * Typed parameter schema declared in a skill YAML's delegation_input section.
+ * When present, DelegarTarefaDrawer renders typed fields instead of the
+ * free-text textarea fallback.
+ */
+export interface DelegationSchema {
+  fields: DelegationField[];
 }

@@ -23,6 +23,30 @@ classification:
   type: orchestrator
   domain: customer_service
 
+# Typed parameters shown in DelegarTarefaDrawer when an operator delegates to this agent.
+# Each field renders as the specified input type; the submitted values are serialized
+# into a readable instruction string sent as an @mention command.
+delegation_input:
+  fields:
+    - id: objetivo
+      label: "Objetivo da delegação"
+      type: select
+      required: true
+      options:
+        - value: sugerir_resposta
+          label: "Sugerir resposta ao cliente"
+        - value: analisar_risco
+          label: "Analisar risco / flags"
+        - value: resumir_contexto
+          label: "Resumir contexto da conversa"
+        - value: outro
+          label: "Outro (descrever abaixo)"
+    - id: contexto_extra
+      label: "Contexto adicional"
+      type: text
+      placeholder: "Informações relevantes para o co-pilot…"
+      required: false
+
 mention_commands:
   ativa:
     description: "Ativa o co-pilot — dispara análise do contexto e envia sugestão"

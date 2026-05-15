@@ -22,6 +22,7 @@ Topics → tables mapping:
   evaluation.events          → evaluation_results + evaluation_events (Arc 6)
   journey.events             → journey_events (Arc 10)
   mcp.audit                  → session_timeline   (segment_id enriched via SegmentEnricher)
+  agent.events               → agent_business_events (Arc 12)
 
 Batch strategy:
   Uses consumer.getmany(batch_size, timeout_ms) — processes one partition batch
@@ -62,6 +63,7 @@ from .models import (
     parse_evaluation_event,
     parse_journey_event,
     parse_mcp_audit_event,
+    parse_agent_business_event,
 )
 from .segment_enricher import SegmentEnricher
 
@@ -82,6 +84,7 @@ _TOPICS = [
     "evaluation.events",
     "journey.events",
     "mcp.audit",
+    "agent.events",
 ]
 
 # Maps topic → parser function.
@@ -102,6 +105,7 @@ _PARSERS = {
     "evaluation.events":          parse_evaluation_event,
     "journey.events":             parse_journey_event,
     "mcp.audit":                  parse_mcp_audit_event,
+    "agent.events":               parse_agent_business_event,
 }
 
 # Topics that require segment_id enrichment before being passed to the parser.
@@ -410,6 +414,8 @@ async def _write_row(
             await store.upsert_agent_pause_interval(row)
         elif table == "journey_events":
             await store.insert_journey_event(row)
+        elif table == "agent_business_events":
+            await store.insert_agent_business_event(row)
         else:
             logger.warning("Unknown table=%s from topic=%s offset=%s", table, topic, offset)
     except Exception as exc:

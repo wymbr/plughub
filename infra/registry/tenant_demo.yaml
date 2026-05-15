@@ -49,11 +49,10 @@ pools:
       - skill_portabilidade_demo_v1
       - skill_reembolso_demo_v1
     # Pool lifecycle hooks — acionam especialistas em pontos do ciclo de atendimento.
-    # on_human_start: dispara quando o agente humano entra na sessão (Fase A — wired).
-    # on_human_end:   dispara quando o agente humano chama agent_done (Fase B — stub).
+    # on_human_start: reservado para avaliadores em tempo real (Echo desativado no demo).
+    # on_human_end:   dispara wrapup (agents_only) + NPS (customer-only) em paralelo.
     hooks:
-      on_human_start:
-        - pool: evaluador_echo_ia  # avaliador echo — teste do receive step
+      on_human_start: []  # Echo evaluator removido do demo — era agente de debug do receive step
       on_human_end:
         - pool: wrapup_ia  # Wrap-up obrigatório com agente humano (agents_only)
         - pool: nps_ia     # NPS isolado com cliente (visibility array)

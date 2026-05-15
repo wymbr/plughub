@@ -301,6 +301,10 @@ export const AgentAssistProvider: React.FC<{ children: React.ReactNode }> = ({ c
         const c = prev.get(sid);
         if (!c) return prev;
         if (c.messages.some(m => m.id === msg.id)) return prev;
+        // After sessionClosed, customer messages are NPS/hook responses directed
+        // at the hook agents (not the human agent). Suppress them so the agent
+        // doesn't see the customer's NPS answer in their closed-session view.
+        if (c.sessionClosed && msg.author === "customer") return prev;
         const isSelected = sid === selectedSessionRef.current;
         const next = new Map(prev);
         next.set(sid, {
@@ -355,8 +359,17 @@ export const AgentAssistProvider: React.FC<{ children: React.ReactNode }> = ({ c
       // state and can still interact with hook agents.  The actual removal happens
       // when reason === "agent_done" (published by _trigger_contact_close after all
       // hooks have completed).
-      if (event.reason === "client_disconnect" || event.reason === "timeout") {
-        addToast("Cliente desconectou. Aguardando encerramento...", "warning");
+      if (
+        event.reason === "client_disconnect" ||
+        event.reason === "customer_disconnect" ||
+        event.reason === "session_timeout" ||
+        event.reason === "timeout"
+      ) {
+        const reasonLabel =
+          event.reason === "session_timeout" || event.reason === "timeout"
+            ? "Sessão encerrada por inatividade."
+            : "Cliente desconectou.";
+        addToast(`${reasonLabel} Aguardando encerramento...`, "warning", /* persistent */ true);
         setContacts(prev => {
           const c = prev.get(sid);
           if (!c) return prev;
@@ -403,12 +416,14 @@ export const AgentAssistProvider: React.FC<{ children: React.ReactNode }> = ({ c
         text:      event.prompt,
         timestamp: new Date().toISOString(),
         menuData: {
-          menu_id:     event.menu_id,
-          interaction: event.interaction,
-          prompt:      event.prompt,
-          options:     event.options,
-          fields:      event.fields,
+          menu_id:      event.menu_id,
+          interaction:  event.interaction,
+          prompt:       event.prompt,
+          options:      event.options,
+          fields:       event.fields,
           targetsSelf,
+          masked_fields: (event.masked_fields as string[] | null | undefined)
+            ?.filter((f): f is string => typeof f === "string") ?? undefined,
         },
       };
       setContacts(prev => {

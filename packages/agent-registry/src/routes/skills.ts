@@ -69,6 +69,9 @@ skillsRouter.post("/", async (req: Request, res: Response, next: NextFunction) =
         compatibility:    body.compatibility ?? Prisma.DbNull,
         flow:             body.flow != null ? (body.flow as unknown as Prisma.InputJsonValue) : Prisma.DbNull,
         flow_model:       _computeFlowModel(body.flow),
+        delegation_input: (body as any).delegation_input != null
+          ? ((body as any).delegation_input as unknown as Prisma.InputJsonValue)
+          : Prisma.DbNull,
         created_by:       createdBy,
       } as any,
     })
@@ -156,6 +159,9 @@ skillsRouter.put("/:skill_id", async (req: Request, res: Response, next: NextFun
       compatibility:    body.compatibility ?? Prisma.DbNull,
       flow:             body.flow != null ? (body.flow as unknown as Prisma.InputJsonValue) : Prisma.DbNull,
       flow_model:       _computeFlowModel(body.flow),
+      delegation_input: (body as any).delegation_input != null
+        ? ((body as any).delegation_input as unknown as Prisma.InputJsonValue)
+        : Prisma.DbNull,
       status:           "active",
       // deploy_status intentionally NOT updated on save — only the deploy action changes it
     }
@@ -219,6 +225,7 @@ function _getUserId(req: Request): string {
 function _formatSkill(skill: Record<string, unknown>): Record<string, unknown> {
   const { id: _id, interface_schema, ...rest } = skill
   return { ...rest, interface: interface_schema }
+  // delegation_input is forwarded as-is via ...rest
 }
 
 /**

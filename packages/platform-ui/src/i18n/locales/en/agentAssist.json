@@ -88,9 +88,9 @@
     "historico": "History"
   },
   "rightTab": {
-    "estado":      "State",
-    "capacidades": "Capabilities",
-    "contexto":    "Context"
+    "estado":    "State",
+    "contexto":  "Context",
+    "historico": "History"
   },
   "empty": {
     "activatePool":       "Activate a pool in the header to become available.",

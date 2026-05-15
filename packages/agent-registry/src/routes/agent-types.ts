@@ -384,6 +384,62 @@ agentTypesRouter.delete("/:agent_type_id/canary", async (req: Request, res: Resp
 })
 
 // ─────────────────────────────────────────────
+// GET /v1/agent-types/:agent_type_id/delegation-schema
+// Returns the delegation_input schema for the first skill of this agent type
+// that has one defined.  The Console's DelegarTarefaDrawer uses this to
+// render typed fields instead of a free-text textarea.
+// Returns { agent_type_id, skill_id, delegation_input } or 404 if no schema.
+// ─────────────────────────────────────────────
+agentTypesRouter.get("/:agent_type_id/delegation-schema", async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const tenantId    = _getTenantId(req)
+    const agentTypeId = req.params["agent_type_id"]!
+
+    const agentType = await prisma.agentType.findUnique({
+      where: {
+        agent_type_id_tenant_id: { agent_type_id: agentTypeId, tenant_id: tenantId },
+      },
+    })
+    if (!agentType) {
+      return res.status(404).json({ error: "Agent type não encontrado" })
+    }
+
+    // Extract skill_ids from the skills JSON field (SkillRef[])
+    const skillRefs = Array.isArray(agentType.skills) ? agentType.skills as SkillRef[] : []
+    if (skillRefs.length === 0) {
+      return res.status(404).json({ error: "Agent type has no skills", delegation_input: null })
+    }
+
+    const skillIds = skillRefs.map(s => s.skill_id)
+
+    // Find the first skill that has a delegation_input defined
+    const skill = await prisma.skill.findFirst({
+      where: {
+        tenant_id: tenantId,
+        skill_id:  { in: skillIds },
+        status:    "active",
+        // Only select skills that have delegation_input populated.
+        // Prisma requires { equals: Prisma.DbNull } — bare DbNull is not a valid JsonNullableFilter.
+        NOT: { delegation_input: { equals: Prisma.DbNull } },
+      },
+      select: { skill_id: true, delegation_input: true },
+    })
+
+    if (!skill) {
+      return res.status(404).json({ error: "No delegation schema defined", delegation_input: null })
+    }
+
+    return res.json({
+      agent_type_id:    agentTypeId,
+      skill_id:         skill.skill_id,
+      delegation_input: skill.delegation_input,
+    })
+  } catch (err) {
+    return next(err)
+  }
+})
+
+// ─────────────────────────────────────────────
 // Helpers
 // ─────────────────────────────────────────────
 function _getTenantId(req: Request): string {

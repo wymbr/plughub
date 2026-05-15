@@ -285,6 +285,10 @@ class RegistrySyncer:
             if raw.get("mention_commands"):
                 payload["mention_commands"] = raw["mention_commands"]
 
+            # delegation_input — typed fields shown in DelegarTarefaDrawer
+            if raw.get("delegation_input"):
+                payload["delegation_input"] = raw["delegation_input"]
+
             await self._upsert_skill(http, headers, skill_id, payload, report)
 
     async def _upsert_skill(

@@ -2292,3 +2292,310 @@ def _fetch_journeys(
         "kpis": kpi_rows,
         "meta": _meta(page, page_size, total, since, until),
     }
+
+
+# ─── Arc 12: Agent Business Events ────────────────────────────────────────────
+
+async def query_agent_events_series(
+    client:    Any,
+    database:  str,
+    tenant_id: str,
+    from_dt:   str | None = None,
+    to_dt:     str | None = None,
+    *,
+    category:    str | None = None,
+    pool_id:     str | None = None,
+    skill_id:    str | None = None,
+    granularity: str = "day",  # day | week | hour
+) -> dict:
+    """
+    Time-series of agent business events aggregated by (period, category).
+
+    granularity:
+      hour  — toStartOfHour(emitted_at)
+      day   — toDate(emitted_at)           [default]
+      week  — toMonday(emitted_at)
+
+    Returns:
+      data: list of {period, category, category_l1..l4, count, total_value, avg_value, min_value, max_value}
+      meta: {from_dt, to_dt, granularity, category, pool_id, skill_id}
+    """
+    since = _ch_fmt(from_dt) if from_dt else _default_from()
+    until = _ch_fmt(to_dt)   if to_dt   else _default_to()
+    try:
+        return await asyncio.to_thread(
+            _fetch_agent_events_series,
+            client, database, tenant_id, since, until,
+            category, pool_id, skill_id, granularity,
+        )
+    except Exception as exc:
+        logger.warning("query_agent_events_series failed tenant=%s: %s", tenant_id, exc)
+        return {
+            "data": [],
+            "meta": {
+                "from_dt": since, "to_dt": until,
+                "granularity": granularity, "category": category,
+                "pool_id": pool_id, "skill_id": skill_id,
+            },
+            "error": "data_unavailable",
+        }
+
+
+def _fetch_agent_events_series(
+    client:      Any,
+    db:          str,
+    tenant_id:   str,
+    since:       str,
+    until:       str,
+    category:    str | None,
+    pool_id:     str | None,
+    skill_id:    str | None,
+    granularity: str,
+) -> dict:
+    # Truncation function per granularity
+    trunc = {
+        "hour": "toStartOfHour(emitted_at)",
+        "week": "toMonday(emitted_at)",
+    }.get(granularity, "toDate(emitted_at)")
+
+    conditions = [
+        "tenant_id = {tenant_id:String}",
+        f"emitted_at >= '{since}'",
+        f"emitted_at <= '{until}'",
+    ]
+    params: dict = {"tenant_id": tenant_id}
+
+    if category:
+        # Support prefix match: "pool.skill" matches "pool.skill.metric_x"
+        conditions.append("startsWith(category, {category:String})")
+        params["category"] = category
+    if pool_id:
+        conditions.append("pool_id = {pool_id:String}")
+        params["pool_id"] = pool_id
+    if skill_id:
+        conditions.append("skill_id = {skill_id:String}")
+        params["skill_id"] = skill_id
+
+    where = " AND ".join(conditions)
+
+    result = client.query(f"""
+        SELECT
+            {trunc}              AS period,
+            category,
+            category_l1,
+            category_l2,
+            category_l3,
+            category_l4,
+            count()              AS count,
+            sum(value)           AS total_value,
+            avg(value)           AS avg_value,
+            min(value)           AS min_value,
+            max(value)           AS max_value
+        FROM {db}.agent_business_events
+        WHERE {where}
+        GROUP BY period, category, category_l1, category_l2, category_l3, category_l4
+        ORDER BY period ASC, category ASC
+    """, parameters=params)
+
+    return {
+        "data": _rows_to_dicts(result),
+        "meta": {
+            "from_dt":     since,
+            "to_dt":       until,
+            "granularity": granularity,
+            "category":    category,
+            "pool_id":     pool_id,
+            "skill_id":    skill_id,
+        },
+    }
+
+
+async def query_agent_events_summary(
+    client:    Any,
+    database:  str,
+    tenant_id: str,
+    from_dt:   str | None = None,
+    to_dt:     str | None = None,
+    *,
+    category: str | None = None,
+    pool_id:  str | None = None,
+    group_by: str = "category",  # category | skill_id | pool_id | agent_type_id
+    page:     int = 1,
+    page_size: int = 100,
+) -> dict:
+    """
+    Aggregated summary of agent business events grouped by the chosen dimension.
+
+    group_by:
+      category      — one row per distinct category value  [default]
+      skill_id      — one row per skill_id
+      pool_id       — one row per pool_id
+      agent_type_id — one row per agent_type_id
+
+    Returns:
+      data: list of {group_key, count, total_value, avg_value, min_value, max_value,
+                     first_seen, last_seen}
+      meta: pagination info
+    """
+    # Validate group_by to prevent injection
+    VALID_GROUP_BY = {"category", "skill_id", "pool_id", "agent_type_id"}
+    if group_by not in VALID_GROUP_BY:
+        group_by = "category"
+
+    since = _ch_fmt(from_dt) if from_dt else _default_from()
+    until = _ch_fmt(to_dt)   if to_dt   else _default_to()
+    try:
+        return await asyncio.to_thread(
+            _fetch_agent_events_summary,
+            client, database, tenant_id, since, until,
+            category, pool_id, group_by, page, page_size,
+        )
+    except Exception as exc:
+        logger.warning("query_agent_events_summary failed tenant=%s: %s", tenant_id, exc)
+        return {
+            "data": [],
+            "meta": _meta(page, page_size, 0, since, until),
+            "error": "data_unavailable",
+        }
+
+
+def _fetch_agent_events_summary(
+    client:    Any,
+    db:        str,
+    tenant_id: str,
+    since:     str,
+    until:     str,
+    category:  str | None,
+    pool_id:   str | None,
+    group_by:  str,
+    page:      int,
+    page_size: int,
+) -> dict:
+    conditions = [
+        "tenant_id = {tenant_id:String}",
+        f"emitted_at >= '{since}'",
+        f"emitted_at <= '{until}'",
+    ]
+    params: dict = {"tenant_id": tenant_id}
+
+    if category:
+        conditions.append("startsWith(category, {category:String})")
+        params["category"] = category
+    if pool_id:
+        conditions.append("pool_id = {pool_id:String}")
+        params["pool_id"] = pool_id
+
+    where = " AND ".join(conditions)
+
+    count_sql = f"""
+        SELECT count() FROM (
+            SELECT {group_by} AS group_key
+            FROM {db}.agent_business_events
+            WHERE {where}
+            GROUP BY group_key
+        ) AS s
+    """
+    total = _count(client, count_sql, params)
+
+    offset = (page - 1) * page_size
+    result = client.query(f"""
+        SELECT
+            {group_by}           AS group_key,
+            count()              AS count,
+            sum(value)           AS total_value,
+            avg(value)           AS avg_value,
+            min(value)           AS min_value,
+            max(value)           AS max_value,
+            min(emitted_at)      AS first_seen,
+            max(emitted_at)      AS last_seen
+        FROM {db}.agent_business_events
+        WHERE {where}
+        GROUP BY group_key
+        ORDER BY count DESC
+        LIMIT {page_size} OFFSET {offset}
+    """, parameters=params)
+
+    return {
+        "data": _rows_to_dicts(result),
+        "meta": _meta(page, page_size, total, since, until),
+    }
+
+
+async def query_agent_events_categories(
+    client:    Any,
+    database:  str,
+    tenant_id: str,
+    from_dt:   str | None = None,
+    to_dt:     str | None = None,
+    *,
+    pool_id:  str | None = None,
+    skill_id: str | None = None,
+) -> dict:
+    """
+    Catalogue of distinct category values active in the time window.
+
+    Used by the Dashboard AddCardModal to populate the category selector.
+
+    Returns:
+      data: list of {category, category_l1, category_l2, category_l3, category_l4,
+                     event_count, last_seen}
+      sorted by category ASC.
+    """
+    since = _ch_fmt(from_dt) if from_dt else _default_from()
+    until = _ch_fmt(to_dt)   if to_dt   else _default_to()
+    try:
+        return await asyncio.to_thread(
+            _fetch_agent_events_categories,
+            client, database, tenant_id, since, until,
+            pool_id, skill_id,
+        )
+    except Exception as exc:
+        logger.warning("query_agent_events_categories failed tenant=%s: %s", tenant_id, exc)
+        return {"data": [], "meta": {"from_dt": since, "to_dt": until}, "error": "data_unavailable"}
+
+
+def _fetch_agent_events_categories(
+    client:   Any,
+    db:       str,
+    tenant_id: str,
+    since:    str,
+    until:    str,
+    pool_id:  str | None,
+    skill_id: str | None,
+) -> dict:
+    conditions = [
+        "tenant_id = {tenant_id:String}",
+        f"emitted_at >= '{since}'",
+        f"emitted_at <= '{until}'",
+    ]
+    params: dict = {"tenant_id": tenant_id}
+
+    if pool_id:
+        conditions.append("pool_id = {pool_id:String}")
+        params["pool_id"] = pool_id
+    if skill_id:
+        conditions.append("skill_id = {skill_id:String}")
+        params["skill_id"] = skill_id
+
+    where = " AND ".join(conditions)
+
+    result = client.query(f"""
+        SELECT
+            category,
+            any(category_l1)     AS category_l1,
+            any(category_l2)     AS category_l2,
+            any(category_l3)     AS category_l3,
+            any(category_l4)     AS category_l4,
+            count()              AS event_count,
+            max(emitted_at)      AS last_seen
+        FROM {db}.agent_business_events
+        WHERE {where}
+        GROUP BY category
+        ORDER BY category ASC
+        LIMIT 500
+    """, parameters=params)
+
+    return {
+        "data": _rows_to_dicts(result),
+        "meta": {"from_dt": since, "to_dt": until, "pool_id": pool_id, "skill_id": skill_id},
+    }

@@ -18,6 +18,10 @@ interface MessageBubbleProps {
   substitutionMode?: boolean;
   onMenuSubmit?:     (menuId: string, result: SubmitResult) => void;
   maskingRules?:     MaskingRulesMap;
+  /** Arc 11 Fase C — whether this message is currently selected as delegation context */
+  isSelected?:       boolean;
+  /** Arc 11 Fase C — called when the user clicks the selection checkbox */
+  onToggleSelection?: () => void;
 }
 
 function agentLabel(agentTypeId: string | undefined): string {
@@ -91,6 +95,8 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({
   substitutionMode = false,
   onMenuSubmit,
   maskingRules,
+  isSelected = false,
+  onToggleSelection,
 }) => {
   if (message.menuData) {
     // When the menu targets the agent (targetsSelf), auto-enable interactive mode
@@ -134,11 +140,12 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({
       ? SPECIALIST_BUBBLE
       : BUBBLE_STYLES[message.author] ?? "bg-gray-100 text-gray-800 self-start";
 
-  return (
+  // Arc 11 Fase C — wrap in a row with an optional selection checkbox
+  const bubble = (
     <div
       className={`flex flex-col max-w-[80%] gap-0.5 ${
         isRight ? "self-end items-end" : "self-start items-start"
-      }`}
+      } ${isSelected ? "opacity-90 ring-1 ring-orange-400 rounded-2xl" : ""}`}
     >
       <span className={`text-[10px] px-1 flex items-center gap-1 ${labelStyle}`}>
         {isInternal && (
@@ -156,6 +163,30 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({
       <div className={`px-3 py-2 rounded-2xl text-sm leading-relaxed ${bubbleStyle}`}>
         {renderWithTokens(message.text, maskingRules)}
       </div>
+    </div>
+  );
+
+  if (!onToggleSelection) return bubble;
+
+  return (
+    <div className={`group flex items-start gap-1.5 ${isRight ? "flex-row-reverse self-end" : "self-start"}`}>
+      {/* Checkbox — always visible when selected, hover-only otherwise */}
+      <button
+        onClick={onToggleSelection}
+        title={isSelected ? "Remover da seleção" : "Selecionar para delegar"}
+        className={[
+          "flex-shrink-0 mt-4 w-4 h-4 rounded border-2 flex items-center justify-center",
+          "transition-all duration-100",
+          isSelected
+            ? "bg-orange-500 border-orange-500"
+            : "border-gray-300 bg-white opacity-0 group-hover:opacity-100 hover:border-orange-400",
+        ].join(" ")}
+      >
+        {isSelected && (
+          <span className="text-white text-[8px] font-bold leading-none">✓</span>
+        )}
+      </button>
+      {bubble}
     </div>
   );
 };

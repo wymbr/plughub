@@ -727,6 +727,28 @@ export const MentionCommandSchema = z.object({
 })
 export type MentionCommand = z.infer<typeof MentionCommandSchema>
 
+// ─────────────────────────────────────────────────────────────────────────────
+// DelegationInput — typed parameters shown in DelegarTarefaDrawer
+// ─────────────────────────────────────────────────────────────────────────────
+
+export const DelegationFieldSchema = z.object({
+  id:          z.string(),
+  label:       z.string(),
+  type:        z.enum(["select", "text", "number"]),
+  placeholder: z.string().optional(),
+  required:    z.boolean().optional(),
+  options:     z.array(z.object({
+    value: z.string(),
+    label: z.string(),
+  })).optional(),
+})
+export type DelegationField = z.infer<typeof DelegationFieldSchema>
+
+export const DelegationInputSchema = z.object({
+  fields: z.array(DelegationFieldSchema),
+})
+export type DelegationInput = z.infer<typeof DelegationInputSchema>
+
 /** Step discriminado por type */
 export const FlowStepSchema = z.discriminatedUnion("type", [
   TaskStepSchema,
@@ -866,6 +888,14 @@ export const SkillSchema = z.object({
    *       action: { terminate_self: true }
    */
   mention_commands: z.record(MentionCommandSchema).optional(),
+
+  /**
+   * delegation_input — typed parameters shown in DelegarTarefaDrawer when an
+   * operator delegates a task to this agent. When defined, the drawer renders
+   * form fields instead of a free-text textarea. Values are serialized into a
+   * readable instruction string sent as an @mention command.
+   */
+  delegation_input: DelegationInputSchema.optional(),
 }).refine(
   (skill: { classification: { type: string }; flow?: unknown }) => {
     if (skill.classification.type === "orchestrator") {

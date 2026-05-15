@@ -3,7 +3,7 @@
  * API pública do @plughub/skill-flow-engine.
  */
 
-export { SkillFlowEngine }                        from "./engine"
+export { SkillFlowEngine, validateFlow }           from "./engine"
 export type { SkillFlowEngineConfig, RunResult, ResumeContext } from "./engine"
 
 export { PipelineStateManager }        from "./state"

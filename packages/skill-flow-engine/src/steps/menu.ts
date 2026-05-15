@@ -39,13 +39,14 @@ export async function executeMenu(
   //    use valores calculados em steps anteriores (ex: pergunta gerada por reason).
   const resolvedPrompt = await interpolate(step.prompt, ctx, ctx.contextStore)
   const resolvedVisibility = await resolveVisibility(step.visibility ?? "all", ctx, ctx.contextStore)
-  try {
-    // Computa a lista de IDs mascarados usando a política centralizada.
-    // Para interações sem fields[] (text, button, list), usa o output_as/step.id como
-    // campo implícito — permite que o webchat renderize <input type="password"> quando masked=true.
-    const implicitFieldId = step.output_as ?? step.id
-    const maskedFieldIds  = computeMaskedFieldIds(step.masked, step.fields, implicitFieldId)
+  // Computa a lista de IDs mascarados usando a política centralizada.
+  // Declarado fora do try para que waitingMeta (abaixo) possa referenciá-lo.
+  // Para interações sem fields[] (text, button, list), usa o output_as/step.id como
+  // campo implícito — permite que o webchat renderize <input type="password"> quando masked=true.
+  const implicitFieldId = step.output_as ?? step.id
+  const maskedFieldIds  = computeMaskedFieldIds(step.masked, step.fields, implicitFieldId)
 
+  try {
     // Sempre inclui o objeto menu para todas as interações.
     // bpm.ts (mcp-server-plughub) decide o tipo de evento Kafka:
     //   - interaction !== "text" → sempre menu.payload → interaction.request no webchat
@@ -94,8 +95,12 @@ export async function executeMenu(
   // ou array incluindo o customer; agents_only vai para agentes internos.
   const waitingField = ctx.instanceId ?? "_default_"
   const waitingMeta  = JSON.stringify({
-    visibility: resolvedVisibility,
-    masked:     step.masked === true,
+    visibility:    resolvedVisibility,
+    masked:        step.masked === true,
+    // Include the computed per-field masked IDs so the orchestrator-bridge can
+    // redact individual form fields (e.g. senha, codigo_2fa) without suppressing
+    // the entire submission when only some fields are masked.
+    masked_fields: maskedFieldIds.length > 0 ? maskedFieldIds : [],
   })
   try {
     // HSET + EXPIRE: cada agente registra sua entrada no hash.

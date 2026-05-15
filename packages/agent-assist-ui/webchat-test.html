@@ -275,6 +275,10 @@
         addMsg('Agente entrou no atendimento', 'sys');
         return;
       }
+      if (msg.type === 'conn.ping') {
+        ws.send(JSON.stringify({ type: 'conn.pong' }));
+        return;
+      }
       if (msg.type === 'conn.session_ended') {
         setStatus('Sessão encerrada', 'err');
         addMsg('Atendimento encerrado.', 'sys');

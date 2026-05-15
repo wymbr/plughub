@@ -108,13 +108,13 @@ const PoolCombo: React.FC<PoolComboProps> = ({
         className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full border text-xs font-medium
           transition-colors whitespace-nowrap
           ${activeCount > 0
-            ? "bg-indigo-50 border-indigo-300 text-indigo-700 hover:bg-indigo-100"
-            : "bg-white border-gray-200 text-gray-500 hover:border-gray-300"
+            ? "bg-white/15 border-white/30 text-white hover:bg-white/25"
+            : "bg-white/8 border-white/20 text-blue-200 hover:bg-white/15"
           }`}
       >
         <span className={`w-2 h-2 rounded-full flex-shrink-0 ${comboDot}`} />
         {comboLabel}
-        <span className="text-gray-400 ml-0.5">{open ? "▲" : "▼"}</span>
+        <span className="text-blue-300 ml-0.5">{open ? "▲" : "▼"}</span>
       </button>
 
       {open && (
@@ -237,24 +237,26 @@ export const Header: React.FC<HeaderProps> = ({
   const activeCount = activePools.length;
 
   return (
-    <header className="bg-white border-b border-gray-200 flex-shrink-0">
+    // Primary brand colour (#1B4F8A) so the header is visually distinct from the
+    // white/light-gray content columns below.
+    <header className="bg-[#1B4F8A] flex-shrink-0 shadow-md">
       {/* ── Row 1: identity / session / status ── */}
       <div className="px-4 py-2 flex items-center justify-between gap-3">
         <div className="flex items-center gap-3 min-w-0">
-          <div className="w-8 h-8 rounded-full bg-indigo-600 flex items-center justify-center
-            text-white text-sm font-semibold flex-shrink-0">
+          <div className="w-8 h-8 rounded-full bg-white/20 border border-white/30
+            flex items-center justify-center text-white text-sm font-semibold flex-shrink-0">
             {agentName.charAt(0).toUpperCase()}
           </div>
           <div className="min-w-0">
-            <p className="text-sm font-semibold text-gray-800 leading-tight truncate">
+            <p className="text-sm font-semibold text-white leading-tight truncate">
               {agentName}
             </p>
-            <p className="text-xs text-gray-500 leading-tight truncate">
+            <p className="text-xs text-blue-200 leading-tight truncate">
               {sessionId
-                ? <>{poolId}<span className="ml-2 font-mono text-gray-400">{sessionId.slice(0, 8)}…</span></>
+                ? <>{poolId}<span className="ml-2 font-mono text-blue-300">{sessionId.slice(0, 8)}…</span></>
                 : activeCount === 0
-                  ? <span className="text-gray-400 italic">Offline — selecione um pool</span>
-                  : <span className="text-green-600 font-medium">Ready em {activeCount} pool{activeCount > 1 ? "s" : ""}</span>
+                  ? <span className="text-blue-300 italic">Offline — selecione um pool</span>
+                  : <span className="text-green-300 font-medium">Ready em {activeCount} pool{activeCount > 1 ? "s" : ""}</span>
               }
             </p>
           </div>
@@ -263,9 +265,9 @@ export const Header: React.FC<HeaderProps> = ({
         <div className="flex items-center gap-4 flex-shrink-0">
           {sessionStartedAt && sessionId && (
             <div className="flex items-center gap-1.5" title="Tempo de atendimento">
-              <span className="text-xs text-gray-400">⏱</span>
+              <span className="text-xs text-blue-300">⏱</span>
               <span className={`text-sm font-mono font-semibold tabular-nums ${
-                handleMs >= 30 * 60 * 1000 ? "text-orange-600" : "text-indigo-700"
+                handleMs >= 30 * 60 * 1000 ? "text-orange-300" : "text-white"
               }`}>
                 {formatElapsed(handleMs)}
               </span>
@@ -274,25 +276,25 @@ export const Header: React.FC<HeaderProps> = ({
 
           {sla && (
             <div className="flex items-center gap-2">
-              <span className="text-xs text-gray-500">SLA</span>
-              <div className="w-24 h-2 bg-gray-200 rounded-full overflow-hidden">
+              <span className="text-xs text-blue-200">SLA</span>
+              <div className="w-24 h-2 bg-white/20 rounded-full overflow-hidden">
                 <div
                   className={`h-full rounded-full transition-all duration-500 ${slaColor}`}
                   style={{ width: `${slaPercent}%` }}
                 />
               </div>
-              <span className="text-xs text-gray-600 w-10 text-right">
+              <span className="text-xs text-blue-100 w-10 text-right">
                 {formatElapsed(sla.elapsed_ms)}
               </span>
               {sla.breach_imminent && (
-                <span className="text-xs font-semibold text-red-600 animate-pulse">BREACH</span>
+                <span className="text-xs font-semibold text-red-300 animate-pulse">BREACH</span>
               )}
             </div>
           )}
 
           {contactCount > 0 && (
-            <div className="flex items-center gap-1 px-2 py-0.5 rounded-full bg-indigo-50
-              border border-indigo-200 text-indigo-700 text-xs font-medium"
+            <div className="flex items-center gap-1 px-2 py-0.5 rounded-full
+              bg-white/15 border border-white/25 text-white text-xs font-medium"
               title="Contatos em atendimento">
               <span>🎧</span>
               <span>Atendendo {contactCount}</span>
@@ -306,8 +308,8 @@ export const Header: React.FC<HeaderProps> = ({
               className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full border text-xs font-medium
                 transition-colors whitespace-nowrap ${
                 isPaused
-                  ? "bg-amber-50 border-amber-400 text-amber-700 hover:bg-amber-100"
-                  : "bg-white border-gray-200 text-gray-500 hover:border-gray-300 hover:text-gray-700"
+                  ? "bg-amber-400/20 border-amber-300 text-amber-200 hover:bg-amber-400/30"
+                  : "bg-white/10 border-white/25 text-blue-100 hover:bg-white/20"
               }`}
             >
               <span>{isPaused ? "⏸" : "▶"}</span>
@@ -317,7 +319,7 @@ export const Header: React.FC<HeaderProps> = ({
 
           <div className="flex items-center gap-1.5">
             <span className={`w-2 h-2 rounded-full ${STATUS_COLORS[wsStatus]}`} />
-            <span className="text-xs text-gray-500 capitalize">{wsStatus}</span>
+            <span className="text-xs text-blue-200 capitalize">{wsStatus}</span>
           </div>
         </div>
       </div>

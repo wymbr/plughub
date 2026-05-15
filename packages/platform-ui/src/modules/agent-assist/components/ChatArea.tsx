@@ -26,6 +26,10 @@ interface ChatAreaProps {
   sessionClosed?:    boolean;
   substitutionMode?: boolean;
   onMenuSubmit?:     (menuId: string, result: SubmitResult) => void;
+  /** Arc 11 Fase C — set of selected message IDs for delegation context */
+  selectedMessageIds?: Set<string>;
+  /** Arc 11 Fase C — toggle a message's selection state */
+  onToggleSelection?:  (messageId: string) => void;
 }
 
 const TREND_ICON: Record<string, string> = {
@@ -63,6 +67,8 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   sessionClosed,
   substitutionMode = false,
   onMenuSubmit,
+  selectedMessageIds,
+  onToggleSelection,
 }) => {
   const bottomRef    = useRef<HTMLDivElement | null>(null);
   const maskingRules = useMaskingDisplayRules();
@@ -133,6 +139,21 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
         </div>
       )}
 
+      {/* Arc 11 Fase C — selection toolbar */}
+      {selectedMessageIds && selectedMessageIds.size > 0 && (
+        <div className="flex items-center gap-2 px-3 py-1.5 bg-orange-50 border-b border-orange-200 flex-shrink-0">
+          <span className="text-[10px] font-bold text-orange-700 uppercase tracking-wide">
+            📋 Contexto
+          </span>
+          <span className="text-xs text-orange-600">
+            {selectedMessageIds.size} mensagem{selectedMessageIds.size !== 1 ? "s" : ""} selecionada{selectedMessageIds.size !== 1 ? "s" : ""}
+          </span>
+          <span className="text-[10px] text-orange-400 ml-1">
+            · Clique em Delegar para usar como instrução
+          </span>
+        </div>
+      )}
+
       <div className="flex-1 overflow-y-auto px-4 py-3 flex flex-col gap-3 bg-gray-50">
         {messages.length === 0 && (
           <div className="flex-1 flex items-center justify-center">
@@ -147,6 +168,8 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
             substitutionMode={substitutionMode}
             onMenuSubmit={onMenuSubmit}
             maskingRules={maskingRules}
+            isSelected={selectedMessageIds?.has(msg.id) ?? false}
+            onToggleSelection={onToggleSelection ? () => onToggleSelection(msg.id) : undefined}
           />
         ))}
 

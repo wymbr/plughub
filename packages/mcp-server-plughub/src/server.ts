@@ -1780,7 +1780,22 @@ export async function startServer(config: ServerConfig): Promise<void> {
         try {
           const waitingHash = await redis.hgetall(`menu:waiting:${targetSessionId}`)
           if (waitingHash && Object.keys(waitingHash).length > 0) {
-            const agentPid = agentInstanceId || poolId || "human_agent"
+            // Resolve the human agent's participant_id from ContextStore so that
+            // array-visibility menu steps (e.g. wrap-up using
+            // ["@ctx.session.human_agent_participant_id"]) match correctly.
+            // The bridge writes session.human_agent_participant_id before firing hooks.
+            // Mirrors the same lookup in the menu_submit handler.
+            let agentPid = agentInstanceId || poolId || "human_agent"
+            try {
+              const ctxTenantId = agentTenantId || (process.env["PLUGHUB_TENANT_ID"] ?? "tenant_demo")
+              const rawPid = await redis.hget(`${ctxTenantId}:ctx:${targetSessionId}`, "session.human_agent_participant_id")
+              if (rawPid) {
+                const pidEntry = JSON.parse(rawPid)
+                if (typeof pidEntry.value === "string" && pidEntry.value) {
+                  agentPid = pidEntry.value
+                }
+              }
+            } catch { /* fallback to instance/pool id */ }
             for (const [aKey, metaJson] of Object.entries(waitingHash)) {
               try {
                 const meta = JSON.parse(metaJson as string)

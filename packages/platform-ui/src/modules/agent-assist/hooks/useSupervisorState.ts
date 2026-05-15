@@ -13,7 +13,7 @@ const API_BASE = "/api";
 export function useSupervisorState(
   sessionId: string | null,
   lastEvent: WsServerEvent | null
-): SupervisorState | null {
+): { state: SupervisorState | null; refresh: () => void } {
   const [state, setState] = useState<SupervisorState | null>(null);
   const fetchingRef = useRef(false);
 
@@ -50,5 +50,5 @@ export function useSupervisorState(
     }
   }, [lastEvent, fetchState]);
 
-  return state;
+  return { state, refresh: fetchState };
 }

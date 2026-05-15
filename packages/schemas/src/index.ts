@@ -315,6 +315,8 @@ export {
   SkillRegistrationSchema,
   VersionPolicySchema,
   SkillRefSchema,
+  DelegationFieldSchema,
+  DelegationInputSchema,
 } from "./skill"
 
 export type {
@@ -345,6 +347,8 @@ export type {
   MentionCommand,
   ReceiveFilter,
   ReceiveStep,
+  DelegationField,
+  DelegationInput,
 } from "./skill"
 
 // ── Usage Metering ───────────────────────────
@@ -656,6 +660,20 @@ export type {
   UpdateChannelEndpoint,
   ChannelEndpointQuery,
 } from "./channel-endpoint"
+
+// ── Agent Business Events (Arc 12) ───────────────────────────────────────────
+export {
+  AGENT_EVENT_CATEGORY_REGEX,
+  AGENT_EVENT_PII_TAG_KEYS,
+  AgentBusinessEventSchema,
+  AgentEventInputSchema,
+  decomposeCategoryLevels,
+} from "./agent-events"
+
+export type {
+  AgentBusinessEvent,
+  AgentEventInput,
+} from "./agent-events"
 
 // ── ContextStore — unified contact context store ──────────────────────────────
 export {

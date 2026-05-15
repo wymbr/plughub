@@ -104,6 +104,15 @@ const Sidebar: React.FC = () => {
       ]
     },
 
+    // ── Auditoria LGPD ────────────────────────────────────────────
+    {
+      label: t('nav.audit'),
+      href:  '/audit',
+      icon:  '🔍',
+      roles: ['admin', 'supervisor'],
+      abac:  { module: 'audit', field: 'sessions' },
+    },
+
     // ── Configuração ───────────────────────────────────────────────
     {
       navKey: 'config',

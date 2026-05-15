@@ -4,19 +4,26 @@
  * All persistent state (WS connections, contact map, pool presence, toasts)
  * lives in AgentAssistContext (provided at Shell level) so it survives
  * navigation. This component only holds UI-local state that is fine to reset:
- *   activeTab, centerTab, showCloseModal, substitutionMode, lastCopilotEvent.
+ *   activeTab, showCloseModal, substitutionMode, filterKey, lastCopilotEvent.
  *
- * Layout:
- *   ┌────────────────────────────────────────────────────────────┐
- *   │  Header row 1: agente, pool, sessão, SLA, WS status        │
- *   │  Header row 2: pool combo dropdown                         │
- *   ├──────────┬──────────────────────────┬─────────────────────┤
- *   │  Contact │  [Atual | Histórico] tab │  Right Panel        │
- *   │  List    │  (selected contact)      │  [Estado|Cap|Ctx]   │
- *   │ (~200px) │     (flex-1)             │   (~280px)          │
- *   ├──────────┴──────────────────────────┴─────────────────────┤
- *   │  AgentInput  (shown only in "Atual" tab)                   │
- *   └────────────────────────────────────────────────────────────┘
+ * Layout (after UX redesign):
+ *   ┌────────────────────────────────────────────────────────────────┐
+ *   │  Header row 1: agente, pool, sessão, SLA, WS status            │
+ *   │  Header row 2: pool combo dropdown                             │
+ *   ├──────────┬───────────────────────────────┬────────────────────┤
+ *   │  Contact │  ParticipantFilterBar          │  Right Panel       │
+ *   │  List    │  ChatArea (current messages)   │  Estado|Ctx|Hist   │
+ *   │ (~200px) │  CopilotBanner                 │   (~280px)         │
+ *   │          │  AgentInput                    │                    │
+ *   └──────────┴───────────────────────────────┴────────────────────┘
+ *
+ * Changes from previous version:
+ *   - Removed Current/History center tab switcher (always current)
+ *   - Removed Capacidades tab from right panel (copilot → CopilotBanner)
+ *   - Removed Orquestração tab from right panel (AI cards → ParticipantFilterBar)
+ *   - Histórico tab added to right panel (was in center column)
+ *   - TransferCombo replaces flat Transferir button
+ *   - CollaborateCombo replaces AdicionarEspecialista + Delegar buttons
  */
 
 import React, { useCallback, useEffect, useState } from "react";
@@ -29,19 +36,22 @@ import { useSupervisorState }              from "./hooks/useSupervisorState";
 import { useSupervisorCapabilities }       from "./hooks/useSupervisorCapabilities";
 import { useCopilotState }                 from "./hooks/useCopilotState";
 import { useMentionableAgents }            from "./hooks/useMentionableAgents";
-import { Header }           from "./components/Header";
-import { ActionBar }        from "./components/ActionBar";
-import { ChatArea }         from "./components/ChatArea";
-import { AgentInput }       from "./components/AgentInput";
-import { CloseModal }        from "./components/CloseModal";
-import { PauseReasonModal }  from "./components/PauseReasonModal";
-import { RightPanel }        from "./components/RightPanel";
-import { ContactList }       from "./components/ContactList";
-import { ToastContainer }    from "./components/ToastContainer";
-import { HistoricoTab }          from "./components/tabs/HistoricoTab";
-import { DelegarTarefaDrawer }  from "./components/DelegarTarefaDrawer";
-
-type CenterTab = "atual" | "historico";
+import { Header }              from "./components/Header";
+import { ActionBar }           from "./components/ActionBar";
+import { ChatArea }            from "./components/ChatArea";
+import { AgentInput }          from "./components/AgentInput";
+import { CloseModal }          from "./components/CloseModal";
+import { PauseReasonModal }    from "./components/PauseReasonModal";
+import { RightPanel }          from "./components/RightPanel";
+import { ContactList }         from "./components/ContactList";
+import { ToastContainer }      from "./components/ToastContainer";
+import { DelegarTarefaDrawer } from "./components/DelegarTarefaDrawer";
+import {
+  ParticipantFilterBar,
+  FilterKey,
+  messageMatchesFilter,
+} from "./components/ParticipantFilterBar";
+import { CopilotBanner } from "./components/CopilotBanner";
 
 // ── AgentAssistPage ────────────────────────────────────────────────────────
 export const AgentAssistPage: React.FC = () => {
@@ -67,37 +77,34 @@ export const AgentAssistPage: React.FC = () => {
     toasts,
     addToast,
     dismissToast,
-    fetchHistory,
     handledSessions,
   } = useAgentAssist();
 
-  // ── UI-local state (resets on navigation — acceptable) ─────────────────
-  const [activeTab,       setActiveTab]       = useState<ActiveTab>("estado");
-  const [centerTab,       setCenterTab]       = useState<CenterTab>("atual");
-  const [showCloseModal,  setShowCloseModal]  = useState(false);
-  const [substitutionMode, setSubstitutionMode] = useState(false);
-  const [lastCopilotEvent, setLastCopilotEvent] = useState(0);
-  const [isPaused,         setIsPaused]         = useState(false);
-  const [showPauseModal,   setShowPauseModal]   = useState(false);
+  // ── UI-local state ─────────────────────────────────────────────────────
+  const [activeTab,         setActiveTab]         = useState<ActiveTab>("estado");
+  const [showCloseModal,    setShowCloseModal]     = useState(false);
+  const [substitutionMode,  setSubstitutionMode]   = useState(false);
+  const [lastCopilotEvent,  setLastCopilotEvent]   = useState(0);
+  const [isPaused,          setIsPaused]           = useState(false);
+  const [showPauseModal,    setShowPauseModal]      = useState(false);
+  // Participant filter bar
+  const [filterKey,         setFilterKey]          = useState<FilterKey>(null);
   // Arc 11 Fase C — message selection and delegation
   const [selectedMessageIds, setSelectedMessageIds] = useState<Set<string>>(new Set());
   const [showDelegarDrawer,  setShowDelegarDrawer]  = useState(false);
   const [delegatedAgents,    setDelegatedAgents]    = useState<Set<string>>(new Set());
 
-  // Reset substitution mode when selected contact changes
+  // Reset UI-local state when selected contact changes
   useEffect(() => {
     setSubstitutionMode(false);
-  }, [selectedSessionId]);
-
-  // Reset message selection when contact changes
-  useEffect(() => {
+    setFilterKey(null);
     setSelectedMessageIds(new Set());
   }, [selectedSessionId]);
 
-  // ── Derived state needed before hook calls (avoids TDZ reference error) ─
+  // ── Derived state needed before hook calls ────────────────────────────
   const selected = selectedSessionId ? contacts.get(selectedSessionId) ?? null : null;
 
-  // ── Supervisor/copilot hooks — scoped to selected contact ───────────────
+  // ── Supervisor/copilot hooks ───────────────────────────────────────────
   const lastWsEvent = lastEvent as import("./types").WsServerEvent | null;
   const { state: supervisorState, refresh: refreshSupervisorState } = useSupervisorState(selectedSessionId, lastWsEvent);
   const capabilities = useSupervisorCapabilities(selectedSessionId, supervisorState);
@@ -141,11 +148,10 @@ export const AgentAssistPage: React.FC = () => {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [supervisorState, capabilities]);
 
-  // ── Handlers ────────────────────────────────────────────────────────────
+  // ── Handlers ─────────────────────────────────────────────────────────
   const handleSelectContact = useCallback((sessionId: string) => {
     setSelectedSessionId(sessionId);
     setActiveTab("estado");
-    setCenterTab("atual");
     setContacts(prev => {
       const c = prev.get(sessionId);
       if (!c || c.unreadCount === 0) return prev;
@@ -158,12 +164,8 @@ export const AgentAssistPage: React.FC = () => {
   const handleSend = useCallback(
     (text: string) => {
       if (!selectedSessionId) return;
-      const isMention   = text.trimStart().startsWith("@");
-      const isClosed    = contacts.get(selectedSessionId)?.sessionClosed ?? false;
-      // During wrap-up (sessionClosed=true) or for @mentions, force agents_only
-      // so messages don't leak to the customer after agent_done.
-      const visibility  = (isMention || isClosed) ? "agents_only" : undefined;
-      send(text, selectedSessionId, visibility);
+      send(text, selectedSessionId);
+      const isMention = text.trimStart().startsWith("@");
       setContacts(prev => {
         const c = prev.get(selectedSessionId);
         if (!c) return prev;
@@ -175,13 +177,13 @@ export const AgentAssistPage: React.FC = () => {
             author:     "agent_human",
             text,
             timestamp:  new Date().toISOString(),
-            visibility,
+            visibility: isMention ? "agents_only" : undefined,
           }],
         });
         return next;
       });
     },
-    [send, selectedSessionId, setContacts, contacts]
+    [send, selectedSessionId, setContacts]
   );
 
   const handleClose = useCallback(
@@ -193,11 +195,6 @@ export const AgentAssistPage: React.FC = () => {
           headers: { "Content-Type": "application/json" },
           body:    JSON.stringify(payload),
         });
-        // Don't remove the contact yet — the bridge may fire on_human_end hooks
-        // (wrapup, NPS) that still need the agent to interact.  Mark the contact
-        // as wrapping-up so the UI can show a visual indicator.  The actual
-        // removal happens when session.closed arrives via WebSocket (published
-        // by the bridge after all hooks complete).
         setContacts(prev => {
           const c = prev.get(sessionId);
           if (!c) return prev;
@@ -216,22 +213,29 @@ export const AgentAssistPage: React.FC = () => {
   const handleMenuSubmit = useCallback(
     async (menuId: string, result: import("./components/MenuCard").SubmitResult) => {
       if (!selectedSessionId) return;
-      // Look up the actual interaction type and option label from the menu message
       const contact = contacts.get(selectedSessionId);
       const menuMsg = contact?.messages.find(m => m.menuData?.menu_id === menuId);
       const interaction = menuMsg?.menuData?.interaction ?? "button";
 
-      // Resolve display text: use option label for button/list, stringify for others
-      let displayText = typeof result === "string" ? result : JSON.stringify(result);
-      if (typeof result === "string" && menuMsg?.menuData?.options) {
-        const opt = menuMsg.menuData.options.find(o => o.id === result);
-        if (opt) displayText = opt.label;
+      let displayText: string;
+      if (typeof result === "string") {
+        // Button / list / text selection — look up human-readable label
+        const opt = menuMsg?.menuData?.options?.find(o => o.id === result);
+        displayText = opt ? opt.label : result;
+      } else {
+        // Form submission — redact masked field values before echoing to Console
+        const maskedFields = menuMsg?.menuData?.masked_fields;
+        if (maskedFields && maskedFields.length > 0) {
+          const redacted: Record<string, unknown> = { ...(result as Record<string, unknown>) };
+          for (const fieldId of maskedFields) {
+            if (fieldId in redacted) redacted[fieldId] = "••••••";
+          }
+          displayText = JSON.stringify(redacted);
+        } else {
+          displayText = JSON.stringify(result);
+        }
       }
 
-      // Optimistic local echo — same pattern as handleSend (line 138).
-      // The pub/sub message from menu_submit doesn't carry session_id, so the
-      // WS handler in AgentAssistContext would discard it.  Adding the message
-      // locally ensures the agent sees their selection immediately.
       const echoSessionId = selectedSessionId;
       setContacts(prev => {
         const c = prev.get(echoSessionId);
@@ -276,11 +280,9 @@ export const AgentAssistPage: React.FC = () => {
     });
   }, [selectedSessionId, handleClose, t]);
 
-  // Resume: direct (no modal)
   const handleResume = useCallback(() => {
     setIsPaused(false);
     addToast(t("message.agentResumed"), "info");
-    // Best-effort resume signal — mcp-server-plughub restores agent to ready state
     const poolId = activePools[0] ?? "";
     if (poolId) {
       fetch(`/api/agent-resume`, {
@@ -291,7 +293,6 @@ export const AgentAssistPage: React.FC = () => {
     }
   }, [activePools, addToast, t]);
 
-  // Pause: intercepted by PauseReasonModal
   const handlePauseRequest = useCallback(() => {
     setShowPauseModal(true);
   }, []);
@@ -302,7 +303,6 @@ export const AgentAssistPage: React.FC = () => {
       setIsPaused(true);
       const detail = note ? ` — ${note}` : "";
       addToast(t("message.agentPaused", { reason: reasonLabel, detail }), "info");
-      // Best-effort pause signal — mcp-server-plughub marks agent paused + publishes agent.lifecycle
       const poolId = activePools[0] ?? "";
       fetch(`/api/agent-pause`, {
         method:  "PUT",
@@ -313,34 +313,24 @@ export const AgentAssistPage: React.FC = () => {
     [activePools, addToast, t]
   );
 
-  const handleInviteAgent = useCallback(
-    (agentTypeId: string) => addToast(t("message.inviteSent", { agentTypeId }), "info"),
-    [addToast, t]
-  );
-  const handleEscalate = useCallback(
-    (targetPoolId: string) => addToast(t("message.escalatingTo", { poolId: targetPoolId }), "warning"),
-    [addToast, t]
-  );
-
   // Arc 11 — terminate an AI segment via @mention
   const handleTerminateSegment = useCallback(
-    (instanceId: string) => {
-      handleSend(`@${instanceId} terminate_self`);
-    },
+    (instanceId: string) => { handleSend(`@${instanceId} terminate_self`); },
     [handleSend],
   );
 
   // Arc 11 Fase B — invite a specialist via @mention
+  // alias = key in mentionable_pools (e.g. "auth", "copilot"), NOT agent_type_id
   const handleAddSpecialist = useCallback(
-    (agentTypeId: string, context: string) => {
-      const text = context ? `@${agentTypeId} ${context}` : `@${agentTypeId}`;
+    (alias: string, context: string) => {
+      const text = context ? `@${alias} ${context}` : `@${alias}`;
       handleSend(text);
-      addToast(`Especialista ${agentTypeId} convidado`, "info");
+      addToast(`Especialista @${alias} convidado`, "info");
     },
     [handleSend, addToast],
   );
 
-  // Arc 11 Fase C — toggle a single message in/out of the delegation context
+  // Arc 11 Fase C — toggle message selection
   const handleToggleMessageSelection = useCallback((messageId: string) => {
     setSelectedMessageIds(prev => {
       const next = new Set(prev);
@@ -349,21 +339,29 @@ export const AgentAssistPage: React.FC = () => {
     });
   }, []);
 
-  // Arc 11 Fase C — submit the delegation via @mention command
+  // Arc 11 Fase C — submit delegation
+  // alias = key in mentionable_pools (e.g. "auth", "copilot"), NOT agent_type_id
   const handleDelegate = useCallback(
-    (agentTypeId: string, instruction: string, _visibility: "all" | "agents_only") => {
+    (alias: string, instruction: string, _visibility: "all" | "agents_only") => {
       if (!selectedSessionId) return;
-      handleSend(`@${agentTypeId} ${instruction}`);
-      setDelegatedAgents(prev => new Set([...prev, agentTypeId]));
-      const agentLabel = agentTypeId.replace(/_v\d+$/, "").replace(/_/g, " ");
-      addToast(`Tarefa delegada para ${agentLabel}`, "info");
+      handleSend(`@${alias} ${instruction}`);
+      setDelegatedAgents(prev => new Set([...prev, alias]));
+      addToast(`Tarefa delegada para @${alias}`, "info");
       setShowDelegarDrawer(false);
       setSelectedMessageIds(new Set());
     },
     [selectedSessionId, handleSend, addToast],
   );
 
-  // ── Iniciar Processo (Arc 10 Phase D) ────────────────────────────────────
+  // Transfer to pool
+  const handleTransferTo = useCallback(
+    (poolId: string) => {
+      addToast(t("message.transferComingSoon") + ` → ${poolId}`, "info");
+    },
+    [addToast, t],
+  );
+
+  // Arc 10 Phase D — Iniciar Processo
   const handleIniciarProcesso = useCallback(
     async (skillId: string) => {
       if (!selectedSessionId) return;
@@ -386,23 +384,38 @@ export const AgentAssistPage: React.FC = () => {
     [selectedSessionId, session, addToast],
   );
 
-  // ── Derived state ────────────────────────────────────────────────────────
-  // NOTE: `selected` is declared above hook calls — see "Derived state before hooks" comment.
+  // ── Derived state ──────────────────────────────────────────────────────
   const wsStatus     = aggregateStatus(statuses, activePools);
   const headerPoolId = selected?.poolId ?? activePools[0] ?? "";
-  // Pool-level mentionable_journeys for the active contact's pool (Arc 10 Phase D)
   const mentionableJourneys = (
     availablePools.find(p => p.pool_id === selected?.poolId)?.mentionable_journeys ?? []
   );
-  // Arc 11 Fase C — text of selected messages, pre-fills the delegation instruction textarea
   const prefilledContext = [...selectedMessageIds]
     .map(id => selected?.messages.find(m => m.id === id)?.text ?? "")
     .filter(Boolean)
     .join("\n---\n");
 
-  // ── Render ────────────────────────────────────────────────────────────────
+  // Filtered messages for the chat area
+  const visibleMessages = filterKey === null
+    ? (selected?.messages ?? [])
+    : (selected?.messages ?? []).filter(m => messageMatchesFilter(m, filterKey));
+
+  // AI participants from supervisor state
+  const aiParticipants = supervisorState?.ai_participants ?? [];
+
+  // Supervisor / admin role check
+  const isSupervisor = session?.role === "supervisor" || session?.role === "admin";
+
+  // Right panel tab labels
+  const rightTabLabels: Record<string, string> = {
+    estado:    t("rightTab.estado"),
+    contexto:  t("rightTab.contexto"),
+    historico: t("rightTab.historico", { defaultValue: "Histórico" }),
+  };
+
+  // ── Render ────────────────────────────────────────────────────────────
   return (
-    <div className="flex flex-col h-full overflow-hidden bg-gray-50">
+    <div className="flex flex-col h-full overflow-hidden bg-slate-100">
       <Header
         agentName={agentName}
         poolId={headerPoolId}
@@ -422,11 +435,11 @@ export const AgentAssistPage: React.FC = () => {
         onPauseRequest={handlePauseRequest}
       />
 
-      {/* ── Unified 3-column layout ────────────────────────────────────────── */}
+      {/* ── Unified 3-column layout ─────────────────────────────────────── */}
       <div className="flex flex-col flex-1 overflow-hidden">
 
-        {/* ── Shared sub-header row (h-12) ────────────────────────────────── */}
-        <div className="flex h-12 flex-shrink-0 border-b border-gray-200">
+        {/* ── Shared sub-header row (h-12) ──────────────────────────────── */}
+        <div className="flex h-12 flex-shrink-0 border-b border-gray-200 bg-white">
 
           {/* Contact list header */}
           <div className="w-[200px] flex-shrink-0 bg-gray-100 border-r border-gray-200
@@ -439,30 +452,12 @@ export const AgentAssistPage: React.FC = () => {
             )}
           </div>
 
-          {/* Center column header: Atual / Histórico tabs + ActionBar */}
+          {/* Center column header: ActionBar only (no tab switcher) */}
           <div className="flex flex-1 overflow-hidden">
-            {/* Center tab pills */}
-            <div className="flex border-r border-gray-100">
-              {(["atual", "historico"] as CenterTab[]).map(tab => (
-                <button
-                  key={tab}
-                  onClick={() => setCenterTab(tab)}
-                  className={`px-4 h-full flex items-end justify-center pb-2.5 text-xs font-medium transition-colors ${
-                    centerTab === tab
-                      ? "border-b-2 border-indigo-600 text-indigo-600"
-                      : "text-gray-500 hover:text-gray-700"
-                  }`}
-                >
-                  {tab === "atual" ? t("centerTab.atual") : t("centerTab.historico")}
-                </button>
-              ))}
-            </div>
-
-            {/* ActionBar — only relevant in Atual tab */}
             <ActionBar
               contact={selected}
               onEncerrar={() => setShowCloseModal(true)}
-              onTransferir={() => addToast(t("message.transferComingSoon"), "info")}
+              onTransferTo={handleTransferTo}
               onDesligar={handleDesligar}
               substitutionMode={substitutionMode}
               onToggleSubstitutionMode={() => setSubstitutionMode(prev => !prev)}
@@ -475,47 +470,25 @@ export const AgentAssistPage: React.FC = () => {
             />
           </div>
 
-          {/* Right-panel tab bar */}
-          <div className="w-[280px] flex-shrink-0 border-l border-gray-200 flex bg-white">
-            {(["estado", "capacidades", "contexto"] as ActiveTab[]).map((id) => {
-              const labels: Record<string, string> = {
-                estado:      t("rightTab.estado"),
-                capacidades: t("rightTab.capacidades"),
-                contexto:    t("rightTab.contexto"),
-              };
-              return (
-                <button
-                  key={id}
-                  onClick={() => setActiveTab(id)}
-                  className={`flex-1 h-full flex items-end justify-center pb-2.5 text-xs font-medium transition-colors ${
-                    activeTab === id
-                      ? "border-b-2 border-indigo-600 text-indigo-600"
-                      : "text-gray-500 hover:text-gray-700"
-                  }`}
-                >
-                  {labels[id]}
-                </button>
-              );
-            })}
-            {/* Arc 11 Fase D — Orquestração tab: supervisor only */}
-            {(session?.role === "supervisor" || session?.role === "admin") && (
+          {/* Right-panel tab bar: Estado · Contexto · Histórico */}
+          <div className="w-[280px] flex-shrink-0 border-l border-gray-200 flex bg-slate-50">
+            {(["estado", "contexto", "historico"] as ActiveTab[]).map((id) => (
               <button
-                onClick={() => setActiveTab("orquestracao")}
+                key={id}
+                onClick={() => setActiveTab(id)}
                 className={`flex-1 h-full flex items-end justify-center pb-2.5 text-xs font-medium transition-colors ${
-                  activeTab === "orquestracao"
+                  activeTab === id
                     ? "border-b-2 border-indigo-600 text-indigo-600"
                     : "text-gray-500 hover:text-gray-700"
                 }`}
-                title="Orquestração — supervisor"
               >
-                Orq.
+                {rightTabLabels[id]}
               </button>
-            )}
+            ))}
           </div>
-
         </div>
 
-        {/* ── Content row ────────────────────────────────────────────────── */}
+        {/* ── Content row ──────────────────────────────────────────────── */}
         <div className="flex flex-1 overflow-hidden">
 
           {/* Contact list */}
@@ -528,78 +501,83 @@ export const AgentAssistPage: React.FC = () => {
             />
           </div>
 
-          {/* Center column */}
+          {/* Center column: ParticipantFilterBar + ChatArea + CopilotBanner + AgentInput */}
           <div className="flex flex-col flex-1 overflow-hidden bg-white">
-
-            {centerTab === "historico" ? (
-              /* ── Histórico tab ── */
-              <div className="flex-1 overflow-hidden">
-                <HistoricoTab
-                  customerId={selected?.contactId ?? null}
-                  tenantId={session?.tenantId}
-                />
+            {!selected ? (
+              <div className="flex-1 flex flex-col items-center justify-center text-gray-400 text-sm select-none gap-3">
+                {activePools.length === 0 ? (
+                  <>
+                    <span className="text-3xl">🟢</span>
+                    <p className="text-center leading-snug max-w-xs">
+                      {t("empty.activatePool")}
+                    </p>
+                  </>
+                ) : (
+                  <>
+                    <span className="text-3xl animate-pulse">⏳</span>
+                    <p>{t("empty.waitingForContact")}</p>
+                  </>
+                )}
               </div>
             ) : (
-              /* ── Atual tab ── */
               <>
-                {!selected ? (
-                  <div className="flex-1 flex flex-col items-center justify-center text-gray-400 text-sm select-none gap-3">
-                    {activePools.length === 0 ? (
-                      <>
-                        <span className="text-3xl">🟢</span>
-                        <p className="text-center leading-snug max-w-xs">
-                          {t("empty.activatePool")}
-                        </p>
-                      </>
-                    ) : (
-                      <>
-                        <span className="text-3xl animate-pulse">⏳</span>
-                        <p>{t("empty.waitingForContact")}</p>
-                      </>
-                    )}
-                  </div>
-                ) : (
-                  <ChatArea
-                    messages={selected.messages}
-                    aiTyping={aiTypingSessions.has(selected.sessionId)}
-                    sessionClosed={selected.sessionClosed}
-                    liveState={selected.supervisorState ? {
-                      sentimentScore: selected.supervisorState.sentiment.current,
-                      sentimentAlert: selected.supervisorState.sentiment.alert,
-                      sentimentTrend: selected.supervisorState.sentiment.trend,
-                      intent:         selected.supervisorState.intent.current,
-                      flags:          selected.supervisorState.flags,
-                    } : null}
-                    substitutionMode={substitutionMode}
-                    onMenuSubmit={handleMenuSubmit}
-                    selectedMessageIds={selectedMessageIds}
-                    onToggleSelection={handleToggleMessageSelection}
-                  />
-                )}
+                {/* Participant filter chips */}
+                <ParticipantFilterBar
+                  messages={selected.messages}
+                  aiParticipants={aiParticipants}
+                  filterKey={filterKey}
+                  onFilterChange={setFilterKey}
+                  isSupervisor={isSupervisor}
+                  sessionId={selected.sessionId}
+                  mcpBase=""
+                  onRefreshState={refreshSupervisorState}
+                  onTerminateSegment={handleTerminateSegment}
+                />
 
+                {/* Chat messages */}
+                <ChatArea
+                  messages={visibleMessages}
+                  aiTyping={aiTypingSessions.has(selected.sessionId)}
+                  sessionClosed={selected.sessionClosed}
+                  liveState={selected.supervisorState ? {
+                    sentimentScore: selected.supervisorState.sentiment.current,
+                    sentimentAlert: selected.supervisorState.sentiment.alert,
+                    sentimentTrend: selected.supervisorState.sentiment.trend,
+                    intent:         selected.supervisorState.intent.current,
+                    flags:          selected.supervisorState.flags,
+                  } : null}
+                  substitutionMode={substitutionMode}
+                  onMenuSubmit={handleMenuSubmit}
+                  selectedMessageIds={selectedMessageIds}
+                  onToggleSelection={handleToggleMessageSelection}
+                />
+
+                {/* Copilot banner (above input) */}
+                <CopilotBanner
+                  suggestions={copilotSuggestions}
+                  lastUpdate={lastCopilotEvent}
+                />
+
+                {/* Agent input */}
                 <AgentInput
                   onSend={handleSend}
                   disabled={!selected}
-                  sessionClosed={selected?.sessionClosed ?? false}
-                  capabilities={selected?.capabilities ?? null}
+                  sessionClosed={selected.sessionClosed}
+                  capabilities={selected.capabilities ?? null}
                 />
               </>
             )}
           </div>
 
           {/* Right panel */}
-          <div className="w-[280px] flex-shrink-0 border-l border-gray-200 overflow-hidden bg-white">
+          <div className="w-[280px] flex-shrink-0 border-l border-gray-200 overflow-hidden bg-slate-50">
             <RightPanel
               activeTab={activeTab}
               supervisorState={selected?.supervisorState ?? null}
-              capabilities={selected?.capabilities ?? null}
-              copilotSuggestions={copilotSuggestions}
               customerId={selected?.contactId ?? null}
-              onInviteAgent={handleInviteAgent}
-              onEscalate={handleEscalate}
+              tenantId={session?.tenantId}
               sessionMessages={selected?.messages ?? []}
               onTerminateSegment={handleTerminateSegment}
-              onRefreshState={refreshSupervisorState}
             />
           </div>
 

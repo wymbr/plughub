@@ -53,6 +53,9 @@ from .reports_query import (
     query_usage_report,
     query_workflow_summary,
     query_workflows_report,
+    query_agent_events_series,
+    query_agent_events_summary,
+    query_agent_events_categories,
 )
 from .timeseries_query import (
     query_handle_time_timeseries,
@@ -1004,4 +1007,116 @@ async def get_journeys_report(
         page_size   = ps,
     )
     return _respond(data, format, f"journeys_{_today_label()}.csv")
+
+
+# ─── GET /reports/agent-events/series ────────────────────────────────────────
+
+@router.get("/agent-events/series")
+async def get_agent_events_series(
+    request:     Request,
+    tenant_id:   str           = Query(...,    description="Tenant identifier"),
+    from_dt:     Optional[str] = Query(None,   description="ISO8601 start (default: 7d ago)"),
+    to_dt:       Optional[str] = Query(None,   description="ISO8601 end (default: now)"),
+    category:    Optional[str] = Query(None,   description="Category prefix filter (e.g. 'pool.skill')"),
+    pool_id:     Optional[str] = Query(None,   description="Filter by pool_id"),
+    skill_id:    Optional[str] = Query(None,   description="Filter by skill_id"),
+    granularity: str           = Query("day",  pattern="^(hour|day|week)$"),
+    format:      str           = Query("json", pattern="^(json|csv)$"),
+) -> Response:
+    """
+    Time-series of agent business events (Arc 12).
+
+    Returns one row per (period × category) with count, total_value, avg_value,
+    min_value, max_value.  Period resolution is controlled by granularity:
+      hour — toStartOfHour(emitted_at)
+      day  — toDate(emitted_at)  [default]
+      week — toMonday(emitted_at)
+
+    category filter supports prefix matching: ?category=retencao_humano.skill_retencao_v2
+    matches all metric_key values under that skill.
+    """
+    data = await query_agent_events_series(
+        client      = request.app.state.store.new_client(),
+        database    = request.app.state.store._database,
+        tenant_id   = tenant_id,
+        from_dt     = from_dt,
+        to_dt       = to_dt,
+        category    = category,
+        pool_id     = pool_id,
+        skill_id    = skill_id,
+        granularity = granularity,
+    )
+    return _respond(data, format, f"agent_events_series_{_today_label()}.csv")
+
+
+# ─── GET /reports/agent-events/summary ───────────────────────────────────────
+
+@router.get("/agent-events/summary")
+async def get_agent_events_summary(
+    request:   Request,
+    tenant_id: str           = Query(...,         description="Tenant identifier"),
+    from_dt:   Optional[str] = Query(None,         description="ISO8601 start (default: 7d ago)"),
+    to_dt:     Optional[str] = Query(None,         description="ISO8601 end (default: now)"),
+    category:  Optional[str] = Query(None,         description="Category prefix filter"),
+    pool_id:   Optional[str] = Query(None,         description="Filter by pool_id"),
+    group_by:  str           = Query("category",   pattern="^(category|skill_id|pool_id|agent_type_id)$"),
+    page:      int           = Query(1,            ge=1),
+    page_size: int           = Query(100,          ge=1),
+    format:    str           = Query("json",       pattern="^(json|csv)$"),
+) -> Response:
+    """
+    Aggregated summary of agent business events (Arc 12).
+
+    One row per distinct value of group_by dimension with count, total/avg/min/max value,
+    first_seen, last_seen.  Sorted by count DESC.
+
+    group_by: category (default) | skill_id | pool_id | agent_type_id
+    """
+    ps = _clamp_page_size(page_size, format == "csv")
+    data = await query_agent_events_summary(
+        client    = request.app.state.store.new_client(),
+        database  = request.app.state.store._database,
+        tenant_id = tenant_id,
+        from_dt   = from_dt,
+        to_dt     = to_dt,
+        category  = category,
+        pool_id   = pool_id,
+        group_by  = group_by,
+        page      = page,
+        page_size = ps,
+    )
+    return _respond(data, format, f"agent_events_summary_{_today_label()}.csv")
+
+
+# ─── GET /reports/agent-events/categories ────────────────────────────────────
+
+@router.get("/agent-events/categories")
+async def get_agent_events_categories(
+    request:   Request,
+    tenant_id: str           = Query(...,   description="Tenant identifier"),
+    from_dt:   Optional[str] = Query(None,  description="ISO8601 start (default: 7d ago)"),
+    to_dt:     Optional[str] = Query(None,  description="ISO8601 end (default: now)"),
+    pool_id:   Optional[str] = Query(None,  description="Filter by pool_id"),
+    skill_id:  Optional[str] = Query(None,  description="Filter by skill_id"),
+) -> Response:
+    """
+    Catalogue of distinct category values active in the time window (Arc 12).
+
+    Used by the Dashboard AddCardModal to populate the dynamic category selector.
+    Returns up to 500 entries sorted by category ASC.
+
+    Response shape:
+      data: list of {category, category_l1..l4, event_count, last_seen}
+      meta: {from_dt, to_dt, pool_id, skill_id}
+    """
+    data = await query_agent_events_categories(
+        client    = request.app.state.store.new_client(),
+        database  = request.app.state.store._database,
+        tenant_id = tenant_id,
+        from_dt   = from_dt,
+        to_dt     = to_dt,
+        pool_id   = pool_id,
+        skill_id  = skill_id,
+    )
+    return _respond(data, "json", "")
 

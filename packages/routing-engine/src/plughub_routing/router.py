@@ -291,7 +291,10 @@ class Router:
 
         await self._instances.mark_busy(
             event.tenant_id, best_pool.pool_id, best_instance.instance_id,
-            session_id=event.session_id,
+            # Conference invites (hooks, specialists) must NOT inherit the previous
+            # pool chain — each invite is an independent parallel participant.
+            # Passing session_id=None disables the cross-pool GETSET DECR.
+            session_id=event.session_id if not event.conference_id else None,
         )
         if best_instance.execution_model == "stateful":
             await self._instances.set_session_affinity(
@@ -399,7 +402,7 @@ class Router:
                     continue
                 await self._instances.mark_busy(
                     event.tenant_id, pool.pool_id, inst.instance_id,
-                    session_id=event.session_id,
+                    session_id=event.session_id if not event.conference_id else None,
                 )
                 return RoutingResult(
                     session_id=event.session_id, tenant_id=event.tenant_id,

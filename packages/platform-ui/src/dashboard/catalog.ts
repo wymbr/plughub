@@ -34,10 +34,12 @@ export interface EndpointDescriptor {
 }
 
 export interface ConfigurableParam {
-  key:         string
-  label:       string
-  placeholder: string
-  optional:    boolean
+  key:          string
+  label:        string
+  placeholder:  string
+  optional:     boolean
+  /** Endpoint URL; when present, AddCardModal renders a <select> populated from its response. */
+  options_from?: string
 }
 
 // ─── The 10 display endpoints ─────────────────────────────────────────────────
@@ -235,6 +237,51 @@ export const ENDPOINT_CATALOG: EndpointDescriptor[] = [
     defaultH:         4,
     configurable_params: [
       { key: 'skill_id', label: 'Skill (fixo)', placeholder: 'Ex: skill_portabilidade_v1', optional: true },
+    ],
+  },
+
+  // ─── Agent Business Events cards (Arc 12 — Fase D) ───────────────────────
+  {
+    id:               'agent-event-timeseries',
+    endpoint:         '/reports/display/agent-event-timeseries',
+    label:            'Eventos de Negócio (Série)',
+    icon:             '📈',
+    description:      'Volume diário e valor médio de eventos de negócio publicados por agentes AI/humanos',
+    compatible_tools: ['line_chart', 'bar_chart'],
+    default_tool:     'line_chart',
+    defaultW:         6,
+    defaultH:         4,
+    configurable_params: [
+      {
+        key:          'category',
+        label:        'Categoria de evento',
+        placeholder:  'Ex: retencao_humano.skill_portabilidade_v1.nps',
+        optional:     false,
+        options_from: '/reports/agent-events/categories',
+      },
+      { key: 'pool_id', label: 'Pool (fixo)', placeholder: 'Ex: retencao_humano', optional: true },
+    ],
+  },
+  {
+    id:               'agent-event-summary',
+    endpoint:         '/reports/display/agent-event-summary',
+    label:            'Eventos de Negócio (Resumo)',
+    icon:             '📊',
+    description:      'Total de eventos por dimensão (categoria, skill, pool ou tipo de agente)',
+    compatible_tools: ['bar_chart'],
+    default_tool:     'bar_chart',
+    defaultW:         6,
+    defaultH:         4,
+    configurable_params: [
+      {
+        key:          'category',
+        label:        'Categoria de evento',
+        placeholder:  'Ex: retencao_humano.skill_portabilidade_v1.nps',
+        optional:     false,
+        options_from: '/reports/agent-events/categories',
+      },
+      { key: 'pool_id',  label: 'Pool (fixo)', placeholder: 'Ex: retencao_humano', optional: true },
+      { key: 'group_by', label: 'Agrupar por', placeholder: 'category | skill_id | pool_id | agent_type_id', optional: true },
     ],
   },
 ]

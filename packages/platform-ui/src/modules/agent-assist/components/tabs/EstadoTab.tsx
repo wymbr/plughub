@@ -1,6 +1,7 @@
 /**
  * EstadoTab
- * Shows supervisor_state: sentiment gauge + trend chart, intent, flags, SLA.
+ * Shows supervisor_state: AI participants (Arc 11 F1), sentiment gauge +
+ * trend chart, intent, flags, SLA.
  */
 
 import React from "react";
@@ -13,10 +14,15 @@ import {
   ResponsiveContainer,
   ReferenceLine,
 } from "recharts";
-import { SupervisorState } from "../../types";
+import { ChatMessage, SupervisorState } from "../../types";
+import { AiParticipantCard } from "../AiParticipantCard";
 
 interface EstadoTabProps {
   state: SupervisorState | null;
+  /** Current session messages — forwarded to AiParticipantCard for the last-5 drawer. */
+  sessionMessages?: ChatMessage[];
+  /** Sends @{instanceId} terminate_self via WS (from AgentAssistPage.handleSend). */
+  onTerminateSegment?: (instanceId: string) => void;
 }
 
 function sentimentColor(value: number): string {
@@ -39,7 +45,11 @@ function trendIcon(trend: string): string {
   return "→";
 }
 
-export const EstadoTab: React.FC<EstadoTabProps> = ({ state }) => {
+export const EstadoTab: React.FC<EstadoTabProps> = ({
+  state,
+  sessionMessages = [],
+  onTerminateSegment,
+}) => {
   if (!state) {
     return (
       <div className="flex-1 flex items-center justify-center text-sm text-gray-400">
@@ -48,7 +58,7 @@ export const EstadoTab: React.FC<EstadoTabProps> = ({ state }) => {
     );
   }
 
-  const { sentiment, intent, flags, sla, turn_count } = state;
+  const { sentiment, intent, flags, sla, turn_count, ai_participants } = state;
 
   // Build chart data from trajectory
   const chartData = sentiment.trajectory.map((v, i) => ({
@@ -66,6 +76,26 @@ export const EstadoTab: React.FC<EstadoTabProps> = ({ state }) => {
 
   return (
     <div className="flex flex-col gap-4 p-3 overflow-y-auto h-full">
+
+      {/* ── Arc 11 F1 — AI Participants ── */}
+      {ai_participants && ai_participants.length > 0 && (
+        <section>
+          <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">
+            Agentes AI na Sessão
+          </h3>
+          <div className="flex flex-col gap-2">
+            {ai_participants.map(p => (
+              <AiParticipantCard
+                key={p.instance_id}
+                participant={p}
+                sessionMessages={sessionMessages}
+                onTerminateSegment={onTerminateSegment}
+              />
+            ))}
+          </div>
+        </section>
+      )}
+
       {/* Sentiment */}
       <section>
         <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">

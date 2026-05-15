@@ -87,6 +87,131 @@ export type RunResult =
   | { outcome: string; pipeline_state: PipelineState }
   | { error: "PRECONDITION_FAILED"; active_job_id: string }
 
+// ─────────────────────────────────────────────
+// DAG Cycle Validation
+// ─────────────────────────────────────────────
+
+/**
+ * Returns the set of step IDs that can follow this step.
+ * Covers all next-step fields across every step type.
+ * Special engine sentinels (__complete__, __suspended__, etc.) are excluded
+ * because they are not real step IDs.
+ */
+function _getSuccessors(step: SkillFlow["steps"][number]): string[] {
+  const s = step as Record<string, unknown>
+  const targets: string[] = []
+
+  // Standard fields present across most step types
+  for (const field of [
+    "next", "on_success", "on_failure",
+    // receive step
+    "on_message", "on_timeout", "on_disconnect", "on_max_iterations",
+  ]) {
+    if (typeof s[field] === "string") targets.push(s[field] as string)
+  }
+
+  // choice step — branches[].next
+  if (Array.isArray(s["branches"])) {
+    for (const branch of s["branches"] as Array<Record<string, unknown>>) {
+      if (typeof branch["next"] === "string") targets.push(branch["next"] as string)
+    }
+  }
+
+  // catch step — strategy may carry its own on_success / on_failure
+  if (s["type"] === "catch") {
+    const strategy = s["strategy"] as Record<string, unknown> | undefined
+    if (strategy) {
+      for (const field of ["on_success", "on_failure"]) {
+        if (typeof strategy[field] === "string") targets.push(strategy[field] as string)
+      }
+    }
+  }
+
+  // Filter out engine sentinels (not real step IDs)
+  return targets.filter(t =>
+    t !== "__complete__" &&
+    t !== "__awaiting_task__" &&
+    t !== "__awaiting_escalation__" &&
+    t !== "__suspended__" &&
+    t !== "__transaction_begin__" &&
+    t !== "__transaction_end__"
+  )
+}
+
+/**
+ * validateFlow
+ *
+ * Validates that every cycle in the flow step graph is controlled:
+ * a cycle is valid if and only if every cycle path contains a `receive`
+ * step with `max_iterations` explicitly defined.
+ *
+ * Uncontrolled cycles (no receive step with max_iterations) would run
+ * indefinitely, consuming Redis BLPOP slots without a natural exit.
+ *
+ * Algorithm: DFS with three-colour marking (white → gray → black).
+ * When a back-edge is found (gray → gray), the cycle is extracted from
+ * the current DFS path and checked for a guarding receive step.
+ *
+ * Throws on the first unguarded cycle found.
+ * Typically called once per flow before execution begins.
+ */
+export function validateFlow(flow: SkillFlow): void {
+  const stepMap = new Map(flow.steps.map(s => [s.id, s]))
+
+  // Build adjacency list
+  const adj = new Map<string, string[]>()
+  for (const step of flow.steps) {
+    adj.set(step.id, _getSuccessors(step).filter(id => stepMap.has(id)))
+  }
+
+  const WHITE = 0, GRAY = 1, BLACK = 2
+  const color  = new Map<string, number>()
+  const violations: string[] = []
+
+  function dfs(id: string, path: string[]): void {
+    const c = color.get(id) ?? WHITE
+    if (c === BLACK) return
+    if (c === GRAY) {
+      // Back-edge: extract cycle and check for guard
+      const cycleStart = path.indexOf(id)
+      const cycleNodes = path.slice(cycleStart)
+      const guarded = cycleNodes.some(nodeId => {
+        const s = stepMap.get(nodeId) as Record<string, unknown> | undefined
+        return s?.["type"] === "receive" && s["max_iterations"] !== undefined
+      })
+      if (!guarded) {
+        violations.push(
+          cycleNodes.join(" → ") + ` → ${id}  (no guarded receive step)`
+        )
+      }
+      return
+    }
+
+    color.set(id, GRAY)
+    path.push(id)
+    for (const succ of adj.get(id) ?? []) {
+      dfs(succ, path)
+    }
+    path.pop()
+    color.set(id, BLACK)
+  }
+
+  for (const step of flow.steps) {
+    if ((color.get(step.id) ?? WHITE) === WHITE) {
+      dfs(step.id, [])
+    }
+  }
+
+  if (violations.length > 0) {
+    const skillId = (flow as Record<string, unknown>)["skill_id"] ?? "unknown"
+    throw new Error(
+      `SkillFlow "${skillId}" has unguarded cycles — cycles are only allowed ` +
+      `when every cycle path passes through a "receive" step with max_iterations defined.\n` +
+      violations.map(v => `  Cycle: ${v}`).join("\n")
+    )
+  }
+}
+
 /** Arc 4: resume context passed from workflow-api when resuming a suspended step. */
 export interface ResumeContext {
   decision:  "approved" | "rejected" | "input" | "timeout"
@@ -157,6 +282,12 @@ export class SkillFlowEngine {
     const pipelineSessionId = params.pipelineSessionId ?? sessionId
     const resumeContext     = params.resumeContext
     const segmentId         = params.segmentId
+
+    // ── DAG validation: detect unguarded cycles ───────────────────────────
+    // Throws if the flow contains a cycle that does not pass through a
+    // receive step with max_iterations — such cycles would run forever.
+    // Called once per run() invocation (O(V+E), negligible cost).
+    validateFlow(flow)
 
     // ── Idempotência: tenta adquirir lock exclusivo ───────────────────────
     const lockAcquired = await this.stateManager.acquireLock(tenantId, pipelineSessionId, instanceId)

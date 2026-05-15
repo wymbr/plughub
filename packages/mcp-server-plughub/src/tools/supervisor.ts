@@ -191,6 +191,136 @@ export function registerSupervisorTools(server: McpServer, deps: SupervisorDeps)
       const urgency        = Math.min(elapsedMs / slaTargetMs, 1)
       const breachImminent = urgency > 0.85
 
+      // 8. AI participants — Arc 11 Fase A
+      // Reads instance IDs from session:{id}:ai_agents, then for each:
+      //   - session:{id}:ai_participant:{instance_id} → role, agent_type_id, pool_id
+      //   - {tenant_id}:pipeline:{session_id}        → pipeline_state (shared)
+      //   - menu:waiting:{session_id} hash           → detect menu-blocked instances
+      //   - receive:waiting:{session_id} hash        → detect receive-blocked instances
+      type AiParticipant = {
+        instance_id:    string
+        agent_type_id:  string
+        pool_id:        string
+        role:           string
+        segment_id:     string
+        joined_at:      string
+        ai_state: {
+          current_step:  string | null
+          step_type:     string
+          step_status:   "running" | "waiting" | "done" | "error"
+          waiting_for:   string | null
+          since_ms:      number
+        }
+      }
+      const aiParticipants: AiParticipant[] = []
+
+      try {
+        const instanceIds = await redis.smembers(`session:${parsed.session_id}:ai_agents`)
+
+        if (instanceIds.length > 0 && tenantId) {
+          // Read pipeline_state once (shared by all agents in the session)
+          let pipelineState: Record<string, unknown> | null = null
+          try {
+            const pipeRaw = await redis.get(`${tenantId}:pipeline:${parsed.session_id}`)
+            if (pipeRaw) pipelineState = JSON.parse(pipeRaw) as Record<string, unknown>
+          } catch { /* non-fatal */ }
+
+          // Read waiting hashes once
+          let menuWaiting:    Record<string, string> = {}
+          let receiveWaiting: Record<string, string> = {}
+          try {
+            menuWaiting    = await redis.hgetall(`menu:waiting:${parsed.session_id}`)    ?? {}
+            receiveWaiting = await redis.hgetall(`receive:waiting:${parsed.session_id}`) ?? {}
+          } catch { /* non-fatal */ }
+
+          for (const instanceId of instanceIds) {
+            // Participant metadata written by orchestrator-bridge
+            let role         = "primary"
+            let agentTypeId  = ""
+            let poolId       = ""
+            let segmentId    = ""
+            let joinedAt     = new Date().toISOString()
+            try {
+              const partRaw = await redis.get(
+                `session:${parsed.session_id}:ai_participant:${instanceId}`
+              )
+              if (partRaw) {
+                const part = JSON.parse(partRaw) as Record<string, string>
+                role        = part["role"]          ?? "primary"
+                agentTypeId = part["agent_type_id"] ?? ""
+                poolId      = part["pool_id"]       ?? ""
+                segmentId   = part["segment_id"]    ?? ""
+                joinedAt    = part["joined_at"]     ?? joinedAt
+              }
+            } catch { /* non-fatal */ }
+
+            // Derive ai_state from pipeline_state + waiting signals
+            let currentStep:  string | null          = null
+            let stepType      = "unknown"
+            let stepStatus:   AiParticipant["ai_state"]["step_status"] = "running"
+            let waitingFor:   string | null          = null
+            let sinceMs       = 0
+
+            if (pipelineState) {
+              currentStep = (pipelineState["current_step_id"] as string) ?? null
+              const pipeStatus = pipelineState["status"] as string
+              const updatedAt  = pipelineState["updated_at"] as string ?? null
+              if (updatedAt) sinceMs = Date.now() - new Date(updatedAt).getTime()
+
+              if (pipeStatus === "completed") {
+                stepStatus = "done"
+              } else if (pipeStatus === "failed") {
+                stepStatus = "error"
+              } else if (pipeStatus === "suspended") {
+                stepStatus = "waiting"
+                stepType   = "suspend"
+                waitingFor = "approval"
+              } else {
+                // in_progress — check waiting signals
+                if (menuWaiting[instanceId] !== undefined) {
+                  stepStatus = "waiting"
+                  stepType   = "menu"
+                  waitingFor = "menu"
+                } else if (receiveWaiting[instanceId] !== undefined) {
+                  stepStatus = "waiting"
+                  stepType   = "receive"
+                  waitingFor = "receive"
+                } else {
+                  stepStatus = "running"
+                  // Best-effort step_type from step_id naming
+                  if (currentStep) {
+                    const lower = currentStep.toLowerCase()
+                    if      (lower.includes("reason"))  stepType = "reason"
+                    else if (lower.includes("invoke"))  stepType = "invoke"
+                    else if (lower.includes("task"))    stepType = "task"
+                    else if (lower.includes("notify"))  stepType = "notify"
+                    else if (lower.includes("choice"))  stepType = "choice"
+                    else if (lower.includes("collect")) stepType = "collect"
+                    else if (lower.includes("resolve")) stepType = "resolve"
+                  }
+                }
+              }
+            }
+
+            aiParticipants.push({
+              instance_id:   instanceId,
+              agent_type_id: agentTypeId || instanceId.replace(/-\d{3}$/, ""),
+              pool_id:       poolId,
+              role,
+              segment_id:    segmentId,
+              joined_at:     joinedAt,
+              ai_state: {
+                current_step:  currentStep,
+                step_type:     stepType,
+                step_status:   stepStatus,
+                waiting_for:   waitingFor,
+                since_ms:      Math.max(0, sinceMs),
+              },
+            })
+          }
+        }
+      } catch { /* non-fatal — AI participants section */ }
+
       return {
         content: [{
           type: "text" as const,
@@ -217,6 +347,8 @@ export function registerSupervisorTools(server: McpServer, deps: SupervisorDeps)
               breach_imminent: breachImminent,
             },
             snapshot_at: snapshotAt,
+            // Arc 11 — AI participants with real-time step state
+            ai_participants: aiParticipants,
             customer_context: {
               historical_insights:   ctxInsights,
               conversation_insights: turns

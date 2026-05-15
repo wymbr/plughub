@@ -776,3 +776,61 @@ def parse_journey_event(payload: dict[str, Any]) -> dict | None:
         "session_started_at":     payload.get("session_started_at") or None,
         "session_ended_at":       payload.get("session_ended_at") or None,
     }
+
+
+# ─── agent.events (Arc 12) ────────────────────────────────────────────────────
+
+def parse_agent_business_event(payload: dict[str, Any]) -> dict | None:
+    """
+    Maps agent.events topic → agent_business_events table.
+
+    The mcp-server pre-decomposes category into category_l1..l4 at publish time,
+    so the consumer simply passes them through.  If a level is absent it defaults
+    to an empty string.
+    """
+    tenant_id  = payload.get("tenant_id")
+    session_id = payload.get("session_id")
+    category   = payload.get("category")
+
+    if not tenant_id or not session_id or not category:
+        return None
+
+    value = payload.get("value")
+    if value is None:
+        return None
+
+    try:
+        value = float(value)
+    except (TypeError, ValueError):
+        return None
+
+    # category levels — pre-decomposed by mcp-server; fall back to splitting here
+    # in case an older publisher omits them.
+    parts = category.split(".")
+    category_l1 = payload.get("category_l1") or (parts[0] if len(parts) > 0 else "")
+    category_l2 = payload.get("category_l2") or (parts[1] if len(parts) > 1 else "")
+    category_l3 = payload.get("category_l3") or (parts[2] if len(parts) > 2 else "")
+    category_l4 = payload.get("category_l4") or (parts[3] if len(parts) > 3 else "")
+
+    tags = payload.get("tags") or {}
+    if not isinstance(tags, dict):
+        tags = {}
+
+    return {
+        "table":          "agent_business_events",
+        "event_id":       payload.get("event_id") or _gen_id(),
+        "tenant_id":      tenant_id,
+        "session_id":     session_id,
+        "journey_id":     payload.get("journey_id") or None,
+        "agent_type_id":  payload.get("agent_type_id") or "",
+        "skill_id":       payload.get("skill_id") or "",
+        "pool_id":        payload.get("pool_id") or "",
+        "category":       category,
+        "category_l1":    category_l1,
+        "category_l2":    category_l2,
+        "category_l3":    category_l3,
+        "category_l4":    category_l4,
+        "value":          value,
+        "tags":           {str(k): str(v) for k, v in tags.items()},
+        "emitted_at":     payload.get("emitted_at") or _now(),
+    }

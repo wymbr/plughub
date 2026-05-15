@@ -6,7 +6,7 @@ These endpoints feed the new-format dashboard cards (Part 4 of Dashboard #35).
 Each endpoint returns a data shape compatible with one or more DisplayTools
 defined in platform-ui/src/dashboard/tools/.
 
-Routes (14 total):
+Routes (16 total):
   GET /reports/display/session-volume            → LineChartData  (bar/line)
   GET /reports/display/handle-time               → LineChartData  (line/bar)
   GET /reports/display/evaluation-score          → LineChartData  (line/bar)
@@ -21,6 +21,8 @@ Routes (14 total):
   GET /reports/display/journey-resolution-rate   → BarChartData   (bar_chart)
   GET /reports/display/journey-funnel            → DonutData      (donut)
   GET /reports/display/journey-median-duration   → BarChartData   (bar_chart)
+  GET /reports/display/agent-event-timeseries    → LineChartData  (line_chart)
+  GET /reports/display/agent-event-summary       → BarChartData   (bar_chart)
 
 Common query params:
   tenant_id   string   required
@@ -40,6 +42,8 @@ from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import JSONResponse
 
 from .display_formatters import (
+    fmt_agent_event_summary,
+    fmt_agent_event_timeseries,
     fmt_agent_performance,
     fmt_evaluation_score,
     fmt_handle_time,
@@ -396,5 +400,66 @@ async def display_journey_median_duration(
         from_dt   = from_,
         to_dt     = to,
         skill_id  = skill_id,
+    )
+    return JSONResponse(content=data)
+
+
+# ─── GET /reports/display/agent-event-timeseries ─────────────────────────────
+
+@router.get("/agent-event-timeseries")
+async def display_agent_event_timeseries(
+    request:        Request,
+    tenant_id:      str           = Query(...,   description="Tenant identifier"),
+    from_:          Optional[str] = Query(None,  alias="from", description="Period start"),
+    to:             Optional[str] = Query(None,  description="Period end"),
+    category:       Optional[str] = Query(None,  description="Category prefix filter (dot-notation, e.g. pool.skill.metric)"),
+    pool_id:        Optional[str] = Query(None,  description="Filter by pool_id (category_l1)"),
+    pool_principal: PoolPrincipal = Depends(optional_pool_principal),
+) -> JSONResponse:
+    """Daily count and average value for agent business events — compatible with line_chart.
+
+    Series returned: ['Total', 'Média'].
+    Requires `category` or `pool_id` to scope the query; returns empty series otherwise.
+    """
+    store = request.app.state.store
+    data  = await fmt_agent_event_timeseries(
+        client    = store.new_client(),
+        database  = store._database,
+        tenant_id = tenant_id,
+        from_dt   = from_,
+        to_dt     = to,
+        category  = category,
+        pool_id   = pool_id,
+    )
+    return JSONResponse(content=data)
+
+
+# ─── GET /reports/display/agent-event-summary ────────────────────────────────
+
+@router.get("/agent-event-summary")
+async def display_agent_event_summary(
+    request:        Request,
+    tenant_id:      str           = Query(...,   description="Tenant identifier"),
+    from_:          Optional[str] = Query(None,  alias="from", description="Period start"),
+    to:             Optional[str] = Query(None,  description="Period end"),
+    category:       Optional[str] = Query(None,  description="Category prefix filter"),
+    pool_id:        Optional[str] = Query(None,  description="Filter by pool_id (category_l1)"),
+    group_by:       Optional[str] = Query("category", description="Grouping key: category|skill_id|pool_id|agent_type_id"),
+    pool_principal: PoolPrincipal = Depends(optional_pool_principal),
+) -> JSONResponse:
+    """Aggregated event counts grouped by a dimension — compatible with bar_chart.
+
+    Default group_by is 'category'. Top 20 groups returned, sorted by event count desc.
+    """
+    store = request.app.state.store
+    data  = await fmt_agent_event_summary(
+        client    = store.new_client(),
+        database  = store._database,
+        tenant_id = tenant_id,
+        from_dt   = from_,
+        to_dt     = to,
+        category  = category,
+        pool_id   = pool_id,
+        group_by  = group_by or "category",
     )
     return JSONResponse(content=data)

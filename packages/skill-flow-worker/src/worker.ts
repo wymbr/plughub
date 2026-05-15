@@ -31,6 +31,19 @@ export class SkillFlowWorker {
   private engineRunner: EngineRunner
   private running = false
 
+  /**
+   * Tracks in-flight runInstance promises.
+   *
+   * Skill-flows that contain a `receive` step will block on a Redis BLPOP
+   * for up to 4 hours waiting for a stream event. If we awaited runInstance
+   * inside eachMessage, the Kafka partition would stall for that entire window.
+   *
+   * Instead, we fire runInstance without awaiting and track the promise here
+   * so that graceful shutdown (SIGTERM/SIGINT) can drain all in-flight
+   * executions before exiting.
+   */
+  private readonly _inflight = new Set<Promise<void>>()
+
   constructor(settings: WorkerSettings) {
     this.settings = settings
     this.kafka = new Kafka({
@@ -64,11 +77,20 @@ export class SkillFlowWorker {
       fromBeginning: false,
     })
 
-    // Handle graceful shutdown
+    // Handle graceful shutdown — drain all in-flight executions before exiting.
+    // Flows with a `receive` step may block for minutes/hours on a Redis BLPOP;
+    // the session:closed sentinel pushed by the orchestrator-bridge will unblock
+    // them so this drain should resolve quickly once services begin shutting down.
     const gracefulShutdown = async (signal: string) => {
       console.log(`Received ${signal}, shutting down gracefully...`)
       this.running = false
       await consumer.disconnect()
+
+      if (this._inflight.size > 0) {
+        console.log(`Waiting for ${this._inflight.size} in-flight execution(s) to finish...`)
+        await Promise.allSettled([...this._inflight])
+      }
+
       await this.redis.quit()
       process.exit(0)
     }
@@ -80,15 +102,22 @@ export class SkillFlowWorker {
 
     await consumer.run({
       eachMessage: async ({ topic, partition, message }) => {
-        try {
-          await this.handleMessage(message.value?.toString() ?? '')
-        } catch (err) {
-          const error = err instanceof Error ? err.message : String(err)
-          console.error(
-            `Error processing message from ${topic} partition ${partition}: ${error}`,
-          )
-          // Continue processing other messages
-        }
+        // Do NOT await handleMessage — skill-flows with a `receive` step block
+        // on a Redis BLPOP and would stall the Kafka consumer partition for the
+        // entire wait window (up to 4 hours) if awaited here.
+        // Instead, fire-and-forget and track the promise for graceful drain.
+        const p: Promise<void> = this.handleMessage(message.value?.toString() ?? '')
+          .catch(err => {
+            const error = err instanceof Error ? err.message : String(err)
+            console.error(
+              `Error processing message from ${topic} partition ${partition}: ${error}`,
+            )
+          })
+          .finally(() => { this._inflight.delete(p) })
+
+        this._inflight.add(p)
+        // Return immediately — Kafka commits the offset and picks up the next message.
+        // In-flight executions continue in the background.
       },
     })
   }

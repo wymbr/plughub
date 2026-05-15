@@ -1,9 +1,66 @@
 # docker-compose.demo.yml
-# PlugHub Platform — Demo Environment (Arc 2 → Arc 10)
+# PlugHub Platform — Demo Environment (Arc 2 → Arc 12)
 #
 # Stack completa: infra + todos os módulos de aplicação + observabilidade
 #
-# Novidades neste build (2026-05-11):
+# Novidades neste build (2026-05-13):
+#
+#   • Console UX Redesign — Arc 11 fase de polimento
+#     ParticipantFilterBar: barra horizontal de chips acima do chat.
+#       Chips: "Todos" | "Cliente" | "Agente" | um por agente AI (com badge de
+#       contagem). Clicar filtra as mensagens. AI que saiu aparece dimmed.
+#       Supervisores/admin: chip "⚙️ Supervisão" expansível com intervenções
+#       inline (injetar contexto + force-complete), substituindo a aba Orq.
+#     CopilotBanner: banner compacto entre ChatArea e AgentInput com
+#       sugestao_resposta, flags_risco e acoes_recomendadas. Botão ✕ descarta
+#       para aquela janela de atualização. Substitui a aba Capacidades.
+#     ActionBar redesenhado:
+#       TransferCombo — dropdown ↗ Transferir ▾ com destinos de escalação
+#         (pool_id, reason, estimativa de espera, badge Recomendado).
+#       CollaborateCombo — unifica AdicionarEspecialista + Delegar em
+#         "🤝 Colaborar ▾" com duas seções: "Convidar Especialista" (2-step)
+#         e "Delegar Tarefa" (abre DelegarTarefaDrawer). Badge laranja com
+#         count de mensagens selecionadas.
+#     Painel direito: 3 abas Estado · Contexto · Histórico (eram 4/5 abas).
+#       Aba Histórico migrada da coluna central para o painel direito.
+#       Switcher "Atual/Histórico" da coluna central removido.
+#     platform-ui: http://localhost:5174/agent-assist
+#
+#   • Bugfix — Pool Lifecycle Hooks (wrapup + NPS) + Resposta NPS não vaza ao agente
+#     (1) server.ts: WS cancela subscrição só em reason=agent_done (era qualquer
+#         session.closed); hooks on_human_end chegam corretamente ao Console.
+#     (2) orchestrator-bridge main.py: on_human_start hooks agora gravam hook_conf
+#         no Redis; G2 não bloqueia on_human_end indefinidamente.
+#     (3) AgentAssistContext.tsx: message.text com author=customer ignorado após
+#         sessionClosed=true; resposta "1" do NPS não aparece mais ao agente.
+#     Validação: encerrar sessão → ver wrapup (agents_only) → cliente responde NPS
+#     → agente NÃO vê a resposta do cliente.
+#
+# Novidades anteriores (2026-05-12):
+#
+#   • Arc 11 — Console: Superfície de Orquestração Humana (Fases A–D)
+#     Console elevado de interface de atendimento para orquestrador de agentes AI.
+#     F1 (Fase A): AiParticipantCard no EstadoTab — step atual, status e drawer
+#       por participante AI; polling 3 s via GET /api/supervisor_state estendido.
+#     F2 (Fase B): AdicionarEspecialistaButton no ActionBar — dropdown de agentes
+#       disponíveis (GET /v1/pools/:id/mentionable-agents) + textarea de contexto.
+#     F3 (Fase C): DelegarTarefaDrawer — hover checkboxes em MessageBubble,
+#       toolbar de contagem no ChatArea, DelegarButton com badge numérico.
+#     F4 (Fase D): OrchestrationTab — 5° tab gateado por role supervisor/admin;
+#       linha do tempo de transições de step + intervenções de supervisor:
+#       POST /api/inject-context (ContextStore) + POST /api/force-complete.
+#     platform-ui: http://localhost:5174/agent-assist (login supervisor para F4)
+#
+#   • Arc 12 — Agent Business Events
+#     MCP tool agent_event(category, value, tags?) para AI e humanos publicarem
+#     KPIs de negócio estruturados; Kafka topic agent.events → ClickHouse
+#     analytics.agent_business_events. Governança: namespace = pool_id, PII
+#     keywords bloqueadas, rate limit 50 eventos/sessão.
+#     analytics-api: /reports/agent-events/series, /summary, /categories.
+#     platform-ui: dashboard cards agent_event_timeseries + agent_event_summary.
+#     http://localhost:5174/dashboards (cards agent-event-*)
+#
+# Novidades anteriores (2026-05-11):
 #
 #   • Arc 10 — Journey: Multi-Session Service Automation (Fases A–E)
 #     Journey como unidade de serviço que transcende a sessão.
@@ -102,10 +159,15 @@
 #     Multi-pool WebSocket, Presence Sidebar, ContactList priorizada por SLA
 #
 # Uso:
-#   docker compose -f docker-compose.demo.yml up --build
+#   docker compose -f docker-compose.demo.yml up --build                        # build + start
 #   docker compose -f docker-compose.demo.yml up --build --scale e2e-runner=0  # sem runner
 #   docker compose -f docker-compose.demo.yml logs -f e2e-runner               # acompanhar testes
 #   docker compose -f docker-compose.demo.yml down -v                          # limpar ambiente
+#
+# Para forçar rebuild sem cache (ex: após mudanças de código não refletidas):
+#   docker compose -f docker-compose.demo.yml build --no-cache platform-ui
+#   docker compose -f docker-compose.demo.yml up
+#   (ou: build --no-cache sem serviço específico para rebuildar tudo)
 #
 # ┌─ URLs de acesso ───────────────────────────────────────────────────────────┐
 # │                                                                             │
@@ -160,6 +222,8 @@
 #   E2E_EXTRA_ARGS="--ctx"              # cenário 17 (ContextStore + resolve step)
 #   E2E_EXTRA_ARGS="--permissions"      # cenário 27 (Arc 6 v2 ABAC permissions)
 #   E2E_EXTRA_ARGS="--workflow-review"  # cenário 28 (Arc 6 v2 review/contestation cycle)
+#   E2E_EXTRA_ARGS="--orchestration"    # cenário 29 (Arc 11 Console orchestration F1–F4)
+#   E2E_EXTRA_ARGS="--agent-events"     # cenário 30 (Arc 12 agent business events)
 #
 # Variáveis de ambiente opcionais:
 #   ANTHROPIC_API_KEY — para testes com inferência LLM real (cenários 19, 26)
@@ -277,10 +341,51 @@ volumes:
 # │       • Adicionar card → bar_chart → "Duração Mediana de Jornadas"       │
 # │       • Filtrar por período → cards atualizam com dados reais            │
 # │                                                                            │
+# │                                                                            │
+# │  PASSO 11 — Arc 11: Console de Orquestração (F1–F4)                      │
+# │                                                                            │
+# │    A. Cartões AI e Tab Orquestração (F1 + F4 — supervisor)                │
+# │       http://localhost:5174/agent-assist                                  │
+# │       Login: supervisor@plughub.local / changeme_supervisor               │
+# │       • Abrir um contato ativo com agente AI participante                 │
+# │       • EstadoTab → AiParticipantCard: step atual + badge de role         │
+# │         Clicar no card → drawer com últimas mensagens + "Encerrar seg."   │
+# │       • Tab "Orq." (visível apenas supervisor/admin):                     │
+# │         – Linha do tempo de transições de step com ícone por tipo         │
+# │         – "Injetar Contexto": key + value + confidence → POST             │
+# │           Verificar em Redis Commander: {tenant}:ctx:{sessionId}          │
+# │         – "Encerrar Fluxo": 2-step confirm → POST force-complete          │
+# │           Verificar pipeline_state.status = "completed" no Redis          │
+# │                                                                            │
+# │    B. Adicionar Especialista (F2 — operator)                              │
+# │       Login: operator@plughub.local / changeme_operator                   │
+# │       • Abrir contato → ActionBar → botão "＋ Especialista ▾"             │
+# │       • Selecionar agente → textarea de contexto → confirmar              │
+# │       • Verificar AiParticipantCard aparece no EstadoTab em 3 s           │
+# │                                                                            │
+# │    C. Delegar Tarefa (F3 — operator)                                      │
+# │       • Na transcrição: hover sobre mensagem → checkbox laranja           │
+# │       • Selecionar 1+ mensagens → toolbar "📋 Contexto" no ChatArea       │
+# │       • ActionBar → DelegarButton com badge numérico → abre drawer        │
+# │       • Escolher agente + instrução (pré-preenchida) + visibilidade       │
+# │       • Confirmar → @mention enviado → agente AI entra na sessão          │
+# │                                                                            │
+# │  PASSO 12 — Arc 12: Agent Business Events                                 │
+# │                                                                            │
+# │    Verificar Kafka e Dashboard:                                            │
+# │    • Kafdrop → topic agent.events → mensagens após sessão com agente AI   │
+# │    • Dashboard: Adicionar card → tool agent_event_timeseries →            │
+# │      selecionar categoria (ex: retencao_humano.agente_retencao_v1.nps)   │
+# │      → confirmar → série temporal de valores do evento                    │
+# │    • Adicionar card → agent_event_summary → tabela por categoria          │
+# │                                                                            │
 # │  Observabilidade                                                           │
 # │    Kafdrop  (Kafka UI):         http://localhost:9002                      │
 # │      → verificar topic journey.events com eventos após criar jornada      │
+# │      → verificar topic agent.events com KPIs de negócio (Arc 12)         │
 # │    Redis Commander (Redis UI): http://localhost:8081                      │
+# │      → {tenant}:ctx:{sessionId} após inject-context (Arc 11 F4)          │
+# │      → {tenant}:pipeline:{sessionId} após force-complete (Arc 11 F4)     │
 # └────────────────────────────────────────────────────────────────────────────┘
 #
 # Fluxo de teste end-to-end manual:
@@ -419,6 +524,7 @@ services:
           calendar.events
           collect.events
           journey.events
+          agent.events
         "
         for topic in $$TOPICS; do
           $$KAFKA --bootstrap-server $$BROKER --create --if-not-exists \

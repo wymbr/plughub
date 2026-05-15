@@ -9,7 +9,7 @@
  * On confirm, calls onAdd(card: NewDashboardCard).
  * tenant_id is always injected as a fixed param.
  */
-import React, { useState } from 'react'
+import React, { useState, useEffect } from 'react'
 import { ENDPOINT_CATALOG, type EndpointDescriptor } from './catalog'
 import { listDisplayTools, getDisplayTool } from './tools/registry'
 import type { NewDashboardCard, QueryParam } from './tools/types'
@@ -156,18 +156,37 @@ function StepVisualization({
 
 function StepConfigure({
   endpoint,
+  tenantId,
   title,
   onTitleChange,
   fixedParams,
   onParamChange,
 }: {
   endpoint:      EndpointDescriptor
+  tenantId:      string
   title:         string
   onTitleChange: (v: string) => void
   fixedParams:   Record<string, string>
   onParamChange: (key: string, value: string) => void
 }) {
   const hasParams = (endpoint.configurable_params?.length ?? 0) > 0
+  const [paramOptions, setParamOptions] = useState<Record<string, string[]>>({})
+
+  // Fetch options for params with options_from
+  useEffect(() => {
+    const params = endpoint.configurable_params ?? []
+    params.forEach(param => {
+      if (!param.options_from) return
+      const url = `${param.options_from}?tenant_id=${encodeURIComponent(tenantId)}`
+      fetch(url)
+        .then(r => r.ok ? r.json() : Promise.reject())
+        .then((body: { data?: Array<{ category: string }> }) => {
+          const opts = body.data?.map(d => d.category) ?? []
+          setParamOptions(prev => ({ ...prev, [param.key]: opts }))
+        })
+        .catch(() => {})
+    })
+  }, [endpoint, tenantId])
 
   return (
     <div className="flex flex-col gap-4">
@@ -209,13 +228,26 @@ function StepConfigure({
                 {param.label}
                 {!param.optional && <span className="text-red-500 ml-0.5">*</span>}
               </label>
-              <input
-                type="text"
-                value={fixedParams[param.key] ?? ''}
-                onChange={e => onParamChange(param.key, e.target.value)}
-                placeholder={param.placeholder}
-                className="w-full border border-gray-200 rounded px-3 py-1.5 text-sm text-gray-700 focus:outline-none focus:ring-1 focus:ring-primary placeholder:text-gray-300"
-              />
+              {param.options_from && paramOptions[param.key] ? (
+                <select
+                  value={fixedParams[param.key] ?? ''}
+                  onChange={e => onParamChange(param.key, e.target.value)}
+                  className="w-full border border-gray-200 rounded px-3 py-1.5 text-sm text-gray-700 focus:outline-none focus:ring-1 focus:ring-primary bg-white"
+                >
+                  <option value="">— selecione —</option>
+                  {paramOptions[param.key].map(opt => (
+                    <option key={opt} value={opt}>{opt}</option>
+                  ))}
+                </select>
+              ) : (
+                <input
+                  type="text"
+                  value={fixedParams[param.key] ?? ''}
+                  onChange={e => onParamChange(param.key, e.target.value)}
+                  placeholder={param.options_from ? 'Carregando opções…' : param.placeholder}
+                  className="w-full border border-gray-200 rounded px-3 py-1.5 text-sm text-gray-700 focus:outline-none focus:ring-1 focus:ring-primary placeholder:text-gray-300"
+                />
+              )}
             </div>
           ))}
         </div>
@@ -368,6 +400,7 @@ export function AddCardModal({ tenantId, onAdd, onClose }: AddCardModalProps) {
           {step === 3 && selectedEndpoint && (
             <StepConfigure
               endpoint={selectedEndpoint}
+              tenantId={tenantId}
               title={title}
               onTitleChange={setTitle}
               fixedParams={fixedParams}

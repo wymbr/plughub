@@ -57,6 +57,7 @@
     "agent_reports": "Agent Reports",
     "access": "Access",
     "groups": "Groups",
+    "audit": "Audit",
     "developer": "Developer"
   },
   "topbar": {
