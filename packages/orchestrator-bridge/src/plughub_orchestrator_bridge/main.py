@@ -3011,6 +3011,36 @@ async def process_contact_event(
                         duration_ms=_hm_dur,
                     ))
 
+                    # ── Decrement pool active_count via routing engine ─────────
+                    # The customer_side path calls _restore_all_instances() to
+                    # reset agent state in Redis, but does NOT publish agent_done
+                    # to agent.lifecycle — so the routing engine's
+                    # remove_conversation() never fires and pool:active_count
+                    # stays incremented indefinitely (phantom "Ocupados").
+                    #
+                    # Publishing agent_done here triggers remove_conversation()
+                    # in the routing engine's LifecycleEventHandler, which DECRs
+                    # pool:active_count and patches the pool snapshot in-place.
+                    # Same pattern as the agent_closed path at line ~3265.
+                    if _kafka_producer and _hm_ten:
+                        asyncio.create_task(_kafka_producer.send(
+                            TOPIC_LIFECYCLE,
+                            json.dumps({
+                                "event":           "agent_done",
+                                "tenant_id":       _hm_ten,
+                                "instance_id":     _hm_inst_str,
+                                "agent_type_id":   _hm_at,
+                                "pools":           [_hm_pool] if _hm_pool else [],
+                                "conversation_id": session_id,
+                                "timestamp":       datetime.now(timezone.utc).isoformat(),
+                            }).encode("utf-8"),
+                        ))
+                        logger.info(
+                            "agent_done published to lifecycle: "
+                            "session=%s instance=%s pool=%s (customer_side)",
+                            session_id, _hm_inst_str, _hm_pool,
+                        )
+
                 # ── Clean up all human-agent tracking for this session ────────
                 await redis_client.delete(f"session:{session_id}:human_agent")
                 await redis_client.delete(f"session:{session_id}:human_agents")
