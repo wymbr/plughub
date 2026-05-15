@@ -21,12 +21,15 @@ Redis key structure:
 
 from __future__ import annotations
 import json
+import logging
 from datetime import datetime, timezone
 
 import redis.asyncio as aioredis
 
 from .models import AgentInstance, InstanceMeta, PoolConfig, QueuedContact, RoutingExpression
 from .config import get_settings
+
+logger = logging.getLogger("plughub.routing.registry")
 
 
 # ─────────────────────────────────────────────
@@ -258,10 +261,17 @@ class InstanceRegistry:
         """
         Removes a completed conversation from the instance.
         Called on agent_done. SREM is atomic — no race condition.
+
+        Also deletes the session:serving:pool key so that reconnects or
+        re-routings of this session_id start with a clean slate and the
+        same-pool re-entry guard in mark_busy does not fire spuriously.
         """
         await self._redis.srem(
             _instance_conversations_key(tenant_id, instance_id), conversation_id
         )
+        # Clear the serving-pool marker for this session so stale 24h-TTL keys
+        # don't block a future routing for the same session_id.
+        await self._redis.delete(_session_serving_pool_key(tenant_id, conversation_id))
         # Decrement active-session counters and update snapshots in-place.
         # We look up which pools this instance belongs to from its meta record.
         # For the common single-pool case this is exact; for multi-pool agents
@@ -359,14 +369,72 @@ class InstanceRegistry:
         """
         Increments current_sessions on the instance and updates pool active-count.
 
-        session_id (optional) — when provided, enables cross-pool transfer detection.
-        If the session was previously served by a different pool (escalation), that
-        pool's active-count is decremented and its snapshot is patched in-place.
-        This covers the case where agent_done fires only on full session close, not
-        on segment handoff.
+        session_id (optional) — when provided, enables three guards:
+
+        0. Closed-session guard: if the session is already closing/closed
+           (session:{id}:close_fired or session:{id}:closed keys exist), mark_busy
+           is a no-op.  This prevents active_count from being incremented for a
+           session that already had its counter decremented by remove_conversation().
+           The primary guard lives in _process_message() (routing engine main.py);
+           this is a belt-and-suspenders second layer for tight-race conditions.
+
+        1. Same-pool re-entry guard: if the session is already counted in pool_id
+           (prev_pool == pool_id), mark_busy is a no-op.  This prevents double-
+           counting when a specialist returns and _try_affinity re-routes the
+           primary's session back to the same pool.
+
+        2. Cross-pool transfer: if the session was previously served by a different
+           pool (escalation / agent_transfer), that pool's active-count is
+           decremented and its snapshot is patched in-place.
 
         Uses KEEPTTL to preserve the original instance TTL (see comment below).
         """
+        # Guard 0 — belt-and-suspenders closed-session check (primary guard is in
+        # _process_message in main.py; this catches the tight-race window).
+        if session_id:
+            is_closing = await self._redis.exists(
+                f"session:{session_id}:close_fired",
+                f"session:{session_id}:closed",
+            )
+            if is_closing:
+                logger.warning(
+                    "mark_busy: skipping INCR for already-closing session=%s pool=%s",
+                    session_id, pool_id,
+                )
+                return
+
+        prev_pool_for_decr: str | None = None
+
+        if session_id:
+            serving_key = _session_serving_pool_key(tenant_id, session_id)
+            prev_raw    = await self._redis.getset(serving_key, pool_id)
+            await self._redis.expire(serving_key, 86_400)   # 24h TTL
+
+            # Normalise bytes → str (Redis client may return bytes when
+            # decode_responses is not set on the connection pool).
+            if isinstance(prev_raw, bytes):
+                prev_raw = prev_raw.decode()
+
+            if prev_raw:
+                if prev_raw.startswith("queued:"):
+                    # The session was parked in this pool's queue by
+                    # release_session_from_pool but NOT yet counted in
+                    # active_count.  We must NOT skip the INCR below.
+                    # The previous pool's counter was already decremented
+                    # inside release_session_from_pool, so no cross-DECR
+                    # needed here either — fall through to the INCR.
+                    pass
+                elif prev_raw == pool_id:
+                    # True same-pool re-entry: session already counted in
+                    # active_count for this pool (e.g. specialist returns →
+                    # _try_affinity fires → mark_busy called again for the
+                    # primary pool).  No-op — prevents double-counting.
+                    return
+                else:
+                    # Cross-pool transfer: session was counted in a different
+                    # pool.  Decrement that pool's counter after the INCR.
+                    prev_pool_for_decr = prev_raw
+
         key = _instance_key(tenant_id, instance_id)
         raw = await self._redis.get(key)
         if not raw:
@@ -398,26 +466,19 @@ class InstanceRegistry:
         # Increment atomic active-session counter for the new pool.
         await self._redis.incr(_pool_active_count_key(tenant_id, pool_id))
 
-        # Cross-pool transfer handling (escalation / agent_transfer).
-        # agent_done only fires when the full SESSION closes, not when a segment
-        # ends on escalation. So we detect transfers here: if this session was
-        # previously served by a different pool, decrement that pool's counter now.
-        if session_id:
-            serving_key = _session_serving_pool_key(tenant_id, session_id)
-            prev_pool   = await self._redis.getset(serving_key, pool_id)
-            await self._redis.expire(serving_key, 86_400)   # 24h TTL
-            if prev_pool and prev_pool != pool_id:
-                new_val = await self._redis.decr(_pool_active_count_key(tenant_id, prev_pool))
-                if new_val < 0:
-                    await self._redis.set(_pool_active_count_key(tenant_id, prev_pool), 0)
-                    new_val = 0
-                # Patch previous pool snapshot so SSE reflects the change immediately
-                snap_key = _pool_snapshot_key(tenant_id, prev_pool)
-                raw_snap = await self._redis.get(snap_key)
-                if raw_snap:
-                    snap = json.loads(raw_snap)
-                    snap["busy"] = new_val
-                    await self._redis.set(snap_key, json.dumps(snap), keepttl=True)
+        # Cross-pool transfer: decrement the previous pool's counter and patch snapshot.
+        if prev_pool_for_decr:
+            new_val = await self._redis.decr(_pool_active_count_key(tenant_id, prev_pool_for_decr))
+            if new_val < 0:
+                await self._redis.set(_pool_active_count_key(tenant_id, prev_pool_for_decr), 0)
+                new_val = 0
+            # Patch previous pool snapshot so SSE reflects the change immediately
+            snap_key = _pool_snapshot_key(tenant_id, prev_pool_for_decr)
+            raw_snap = await self._redis.get(snap_key)
+            if raw_snap:
+                snap = json.loads(raw_snap)
+                snap["busy"] = new_val
+                await self._redis.set(snap_key, json.dumps(snap), keepttl=True)
 
     async def release_session_from_pool(
         self,
@@ -443,19 +504,35 @@ class InstanceRegistry:
         """
         serving_key = _session_serving_pool_key(tenant_id, session_id)
         if new_pool_id:
-            prev_pool = await self._redis.getset(serving_key, new_pool_id)
+            # Write a "queued:" sentinel (not the bare pool_id) so that a
+            # subsequent mark_busy can distinguish "session is parked in queue,
+            # active_count NOT yet incremented" from "session is already counted
+            # in active_count for this pool".  Using the bare pool_id caused
+            # the same-pool re-entry guard in mark_busy to fire as a no-op,
+            # leaving active_count at 0 after the agent dequeued the contact.
+            prev_pool = await self._redis.getset(serving_key, f"queued:{new_pool_id}")
             await self._redis.expire(serving_key, 86_400)   # 24h TTL
         else:
             prev_pool = await self._redis.get(serving_key)
 
-        if prev_pool and prev_pool != new_pool_id:
-            new_val = await self._redis.decr(_pool_active_count_key(tenant_id, prev_pool))
+        # Normalise bytes → str
+        if isinstance(prev_pool, bytes):
+            prev_pool = prev_pool.decode()
+
+        # Strip "queued:" prefix if present (written by a previous queuing cycle).
+        # This can occur on re-queuing: session was queued, re-routed on a new
+        # event, and is being queued again before ever being allocated.
+        _QUEUED_PFX = "queued:"
+        actual_prev = prev_pool[len(_QUEUED_PFX):] if prev_pool and prev_pool.startswith(_QUEUED_PFX) else prev_pool
+
+        if actual_prev and actual_prev != new_pool_id:
+            new_val = await self._redis.decr(_pool_active_count_key(tenant_id, actual_prev))
             if new_val < 0:
-                await self._redis.set(_pool_active_count_key(tenant_id, prev_pool), 0)
+                await self._redis.set(_pool_active_count_key(tenant_id, actual_prev), 0)
                 new_val = 0
             # Patch the previous pool's snapshot in-place so SSE clients see the
             # update without waiting for the next routing event.
-            snap_key = _pool_snapshot_key(tenant_id, prev_pool)
+            snap_key = _pool_snapshot_key(tenant_id, actual_prev)
             raw_snap = await self._redis.get(snap_key)
             if raw_snap:
                 snap = json.loads(raw_snap)

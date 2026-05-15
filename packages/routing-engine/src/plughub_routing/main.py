@@ -172,6 +172,28 @@ async def _process_message(
             )
         return
 
+    # Guard: do not route (and therefore do not INCR active_count) for sessions
+    # that are already closing or closed.  This prevents a race condition where:
+    #   1. WS1 closes → _trigger_contact_close sets close_fired + publishes agent_done
+    #                  → remove_conversation() DECRs active_count and deletes serving-pool key
+    #   2. Browser refresh → WS2 connects with same session_id → publishes new
+    #      conversations.inbound → mark_busy() fires (serving key gone → guard misses)
+    #                            → active_count INCR'd again (counter stuck at 1)
+    #   3. WS2 closes → bridge idempotency guard (close_fired already set) → no agent_done
+    #                  → no DECR → counter permanently stuck
+    # Checking both keys covers two states: close_fired = bridge initiated close;
+    # session:{id}:closed = routing engine confirmed close from contact_closed event.
+    is_closing = await redis_client.exists(
+        f"session:{event.session_id}:close_fired",
+        f"session:{event.session_id}:closed",
+    )
+    if is_closing:
+        logger.info(
+            "routing: skipping already-closing session=%s pool=%s",
+            event.session_id, event.pool_id,
+        )
+        return
+
     try:
         result = await router.route(event)
 
