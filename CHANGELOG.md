@@ -2,6 +2,35 @@
 
 ---
 
+## Fix: Mensagens do wrap-up não apareciam no Console após F5 do cliente (2026-05-15)
+
+### Causa raiz
+`fire_pool_hooks()` no bridge publica `conversations.inbound` via Kafka para os agentes de hook (wrap-up, NPS) **depois** que `session:{id}:closed` já foi setado (linha 2802 do bridge, antes de `fire_pool_hooks()` na linha 3129). O routing engine, ao receber esses eventos, verificava `session:{id}:closed` no guard de `_process_message()` → retornava imediatamente → `conversations.routed` nunca publicado → `activate_native_agent()` nunca chamado → wrap-up nunca iniciava → nenhuma mensagem aparecia no Console.
+
+O banner "Wrap-up em andamento" aparecia porque é gerado pelo `hook_pending` key, independente do routing. O Agente Wrapup V1 aparecia no painel Estado mas com status inicial sem avançar.
+
+### Fix
+`packages/routing-engine/src/plughub_routing/main.py` — `_process_message()`:
+- O guard `is_closing` agora é condicionado a `not event.conference_id`
+- Eventos de conferência (`conference_id` setado por `fire_pool_hooks()` e routing de `@mention`) são isentos do guard — são ativações legítimas em sessões já encerrando
+- Seguro: o router já passa `session_id=None` para `mark_busy()` quando `conference_id` está presente, então nunca incrementa `active_count` nem atualiza o serving-pool key
+
+### Containers afetados
+- `routing-engine` (único rebuild necessário)
+
+## Fix: active_count stuck após reconexão webchat (F5) + guard janela de hooks (2026-05-15)
+
+### Causa raiz — Bug 1 (active_count stuck)
+Ao recarregar a página (F5) durante uma sessão ativa, o webchat cliente publicava novo `conversations.inbound`. O serving-pool key `{tenant}:session:pool:{session_id}` havia sido deletado por `remove_conversation()` no fechamento do WS anterior, então `mark_busy()` Guard 0 não detectava a sessão como ativa → `INCR active_count` → contador travado em 1 permanentemente.
+
+### Fix — Bug 1
+`packages/channel-gateway/src/plughub_channel_gateway/adapters/webchat.py`:
+- Guard expandido para 5 chaves: `{tenant}:session:pool:{session_id}`, `session:{id}:closed`, `session:{id}:close_fired`, `session:{id}:hook_pending:on_human_end`, `session:{id}:hook_pending:post_human`
+- Cobre a janela de reconexão durante hooks ativos (até 180s)
+
+### Containers afetados
+- `channel-gateway`
+
 ## Pool Context Enrichment — Campos agent_groups e mentionable_journeys (2026-05-14)
 
 Completa o Pool Context Enrichment adicionando os dois campos que estavam bloqueados por falta de suporte no schema.

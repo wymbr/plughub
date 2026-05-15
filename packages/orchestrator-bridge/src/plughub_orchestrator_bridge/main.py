@@ -1061,6 +1061,22 @@ async def _trigger_contact_close(
     # 0. Notify the agent WebSocket that the session is now truly closed.
     #    This is deferred from agent_done (which publishes "session.agent_done")
     #    so hook agents (wrapup, NPS) can interact with the human agent first.
+    #
+    #    Also clean up human-agent tracking keys here (when hooks were fired).
+    #    In the no-hook path, these are deleted in process_contact_event before
+    #    calling _trigger_contact_close.  In the hook path, they MUST stay alive
+    #    until this point so that wrap-up/NPS messages are forwarded to the Console
+    #    (the notify/menu delivery path reads human_agent to decide pub/sub routing).
+    try:
+        await redis_client.delete(
+            f"session:{session_id}:human_agent",
+            f"session:{session_id}:human_agents",
+        )
+    except Exception as exc:
+        logger.warning(
+            "_trigger_contact_close: could not delete human_agent keys: session=%s — %s",
+            session_id, exc,
+        )
     try:
         await redis_client.publish(
             f"agent:events:{session_id}",
@@ -3052,10 +3068,6 @@ async def process_contact_event(
                             session_id, _hm_inst_str, _hm_pool,
                         )
 
-                # ── Clean up all human-agent tracking for this session ────────
-                await redis_client.delete(f"session:{session_id}:human_agent")
-                await redis_client.delete(f"session:{session_id}:human_agents")
-
                 # ── Check for on_human_end hooks (wrap-up agent) ─────────────
                 # Even when the *client* disconnected, we still fire on_human_end
                 # hooks so that wrap-up agents (NPS, encerramento) can execute.
@@ -3063,6 +3075,15 @@ async def process_contact_event(
                 # in "post-session" mode — its messages go to the stream but the
                 # client won't see them.  The hooks guarantee that the session is
                 # properly closed on the platform side.
+                #
+                # IMPORTANT: human_agent / human_agents tracking keys are deleted
+                # AFTER this hook check, not before.  The delivery path for hook
+                # agent messages (notify_send, menu steps) checks
+                # session:{id}:human_agent to know whether to publish to
+                # agent:events:{session_id}.  Deleting it before hooks fire causes
+                # wrap-up messages to be silently dropped (is_human=None).
+                # When hooks are dispatched → defer deletion to _trigger_contact_close().
+                # When no hooks → delete immediately below.
                 _cs_pool_id    = ""
                 _cs_tenant_id  = ""
                 _cs_customer_id = ""
@@ -3124,7 +3145,13 @@ async def process_contact_event(
                         )
 
                 if not _cs_hooks_fired:
-                    # No hooks or meta unavailable — close the contact immediately
+                    # No hooks or meta unavailable — clean up and close immediately.
+                    # When hooks ARE fired, these keys must survive until all hook
+                    # agents complete so that their messages are forwarded to the
+                    # Console (is_human check in notify/menu delivery path).
+                    # _trigger_contact_close() handles deletion in the hook case.
+                    await redis_client.delete(f"session:{session_id}:human_agent")
+                    await redis_client.delete(f"session:{session_id}:human_agents")
                     asyncio.create_task(
                         _trigger_contact_close(redis_client, session_id)
                     )

@@ -235,16 +235,70 @@ class WebchatAdapter:
         )
 
         if self._pool_id:
-            await self._publish_inbound({
-                "session_id":              self._session_id,
-                "tenant_id":               tenant_id,
-                "customer_id":             self._contact_id,
-                "channel":                 "webchat",
-                "pool_id":                 self._pool_id,
-                "started_at":              self._started_at,
-                "elapsed_ms":              0,
-                "customer_participant_id":  self._customer_participant_id,
-            })
+            # Reconnect guard: check whether this session should be re-routed before
+            # publishing a new routing request.
+            #
+            # When a webchat client refreshes (F5), the browser reconnects with the
+            # same JWT (same session_id) and _publish_inbound would fire again.
+            # The routing engine would then call mark_busy a second time, incrementing
+            # active_count without a corresponding decrement — only one agent_done
+            # fires at session end, leaving busy counters stuck high in the Monitor.
+            #
+            # Five Redis keys guard against spurious re-routing:
+            #
+            #   {tenant}:session:pool:{session_id}  — written by mark_busy when the
+            #       session is first allocated; deleted by remove_conversation on
+            #       agent_done.  Presence = session is currently being served → skip.
+            #       A "queued:" prefix means the session is waiting in queue → skip.
+            #
+            #   session:{session_id}:closed  — written by orchestrator-bridge when it
+            #       receives contact_closed (set immediately on client disconnect and
+            #       on agent_done).  Presence = session has ended → skip.
+            #
+            #   session:{session_id}:close_fired  — written by orchestrator-bridge
+            #       _trigger_contact_close() as a NX idempotency guard.  Presence =
+            #       full teardown already started → skip.
+            #
+            #   session:{session_id}:hook_pending:on_human_end  — written by
+            #       fire_pool_hooks() in orchestrator-bridge when on_human_end hooks
+            #       (NPS, wrap-up) are dispatched.  The conference infrastructure is
+            #       intentionally kept alive during this phase so the customer can
+            #       interact with hook agents (e.g. NPS survey).  serving_key is
+            #       deleted BEFORE hooks start (to prevent cross-pool DECR chain), so
+            #       without this guard a client page-reload during the hook phase
+            #       would bypass the serving_key check and trigger ghost routing.
+            #       Presence (value > 0 or 0 after last hook completed) = hooks are
+            #       running or just finished → skip.
+            #
+            #   session:{session_id}:hook_pending:post_human  — same pattern for
+            #       post_human phase hooks that fire after on_human_end hooks complete.
+            #
+            # redis.exists() with N keys returns the count of existing keys (0..N).
+            # Any nonzero result means at least one guard is active → skip routing.
+            _stale = await self._redis.exists(
+                f"{tenant_id}:session:pool:{self._session_id}",
+                f"session:{self._session_id}:closed",
+                f"session:{self._session_id}:close_fired",
+                f"session:{self._session_id}:hook_pending:on_human_end",
+                f"session:{self._session_id}:hook_pending:post_human",
+            )
+            if _stale:
+                logger.info(
+                    "webchat reconnect — session already routed or closed, skipping routing: "
+                    "session=%s pool=%s (guard_keys_found=%d)",
+                    self._session_id, self._pool_id, _stale,
+                )
+            else:
+                await self._publish_inbound({
+                    "session_id":              self._session_id,
+                    "tenant_id":               tenant_id,
+                    "customer_id":             self._contact_id,
+                    "channel":                 "webchat",
+                    "pool_id":                 self._pool_id,
+                    "started_at":              self._started_at,
+                    "elapsed_ms":              0,
+                    "customer_participant_id":  self._customer_participant_id,
+                })
 
         # ── Concurrent tasks ───────────────────────────────────────────────────
         receive_task  = asyncio.create_task(self._receive_loop(),         name="webchat_recv")

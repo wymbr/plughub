@@ -422,6 +422,14 @@ class InstanceRegistry:
         # Guard 0 — belt-and-suspenders closed-session check (primary guard is in
         # _process_message in main.py; this catches the tight-race window).
         if session_id:
+            # Guard 0 — belt-and-suspenders closed-session check.
+            # Primary guard is in _process_message in main.py; this catches tight-race windows.
+            #
+            # NOTE: Do NOT add hook_pending keys here. When on_human_end/post_human hooks
+            # fire, the hook agents (NPS, wrap-up) are themselves routed via mark_busy with
+            # the same session_id. Adding hook_pending to this guard would block those
+            # legitimate hook-agent allocations. The hook-phase reconnect guard lives
+            # exclusively in channel-gateway/adapters/webchat.py (5-key exists() check).
             is_closing = await self._redis.exists(
                 f"session:{session_id}:close_fired",
                 f"session:{session_id}:closed",

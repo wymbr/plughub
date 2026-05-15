@@ -183,16 +183,25 @@ async def _process_message(
     #                  → no DECR → counter permanently stuck
     # Checking both keys covers two states: close_fired = bridge initiated close;
     # session:{id}:closed = routing engine confirmed close from contact_closed event.
-    is_closing = await redis_client.exists(
-        f"session:{event.session_id}:close_fired",
-        f"session:{event.session_id}:closed",
-    )
-    if is_closing:
-        logger.info(
-            "routing: skipping already-closing session=%s pool=%s",
-            event.session_id, event.pool_id,
+    #
+    # EXCEPTION: conference events (conference_id set) are hook/specialist invitations
+    # dispatched by fire_pool_hooks() AFTER the session is already closing (e.g. wrap-up
+    # and NPS agents in on_human_end).  These must be allowed through — they are
+    # legitimate activations on a closing session.  The router already passes
+    # session_id=None to mark_busy() for conference events, so they never INCR the
+    # active_count or update the serving-pool key; they are safe to route even when
+    # session:{id}:closed is set.
+    if not event.conference_id:
+        is_closing = await redis_client.exists(
+            f"session:{event.session_id}:close_fired",
+            f"session:{event.session_id}:closed",
         )
-        return
+        if is_closing:
+            logger.info(
+                "routing: skipping already-closing session=%s pool=%s",
+                event.session_id, event.pool_id,
+            )
+            return
 
     try:
         result = await router.route(event)
