@@ -289,12 +289,24 @@ class InstanceRegistry:
         try:
             meta = await self.get_instance_meta(tenant_id, instance_id)
             pools_to_decr = meta.pools if meta else (fallback_pools or [])
+            logger.info(
+                "remove_conversation: tenant=%s instance=%s conv=%s "
+                "meta_pools=%s fallback_pools=%s decr_pools=%s",
+                tenant_id, instance_id, conversation_id,
+                meta.pools if meta else None,
+                fallback_pools,
+                pools_to_decr,
+            )
             if pools_to_decr:
                 for pool_id in pools_to_decr:
                     new_val = await self._redis.decr(_pool_active_count_key(tenant_id, pool_id))
                     if new_val < 0:
                         await self._redis.set(_pool_active_count_key(tenant_id, pool_id), 0)
                         new_val = 0
+                    logger.info(
+                        "remove_conversation: DECR pool=%s new_active_count=%d",
+                        pool_id, new_val,
+                    )
                     # Patch the busy field in the existing snapshot so the SSE
                     # dashboard reflects the change without waiting for the next
                     # routing event to trigger write_pool_snapshot.
@@ -304,8 +316,17 @@ class InstanceRegistry:
                         snap = json.loads(raw_snap)
                         snap["busy"] = new_val
                         await self._redis.set(snap_key, json.dumps(snap), keepttl=True)
-        except Exception:
-            pass  # counter miscount is non-critical; self-corrects on next routing
+            else:
+                logger.warning(
+                    "remove_conversation: NO pools to decrement for "
+                    "tenant=%s instance=%s conv=%s — counter NOT decremented",
+                    tenant_id, instance_id, conversation_id,
+                )
+        except Exception as exc:
+            logger.error(
+                "remove_conversation: FAILED tenant=%s instance=%s conv=%s — %s",
+                tenant_id, instance_id, conversation_id, exc, exc_info=True,
+            )
 
     async def get_instance_meta(
         self, tenant_id: str, instance_id: str
