@@ -823,6 +823,22 @@ async def fire_pool_hooks(
                 session_id, exc,
             )
 
+    # ── Break cross-pool GETSET chain before dispatching parallel hooks ──────
+    # routing-engine mark_busy() uses {tenant}:session:pool:{session_id} (GETSET)
+    # to detect sequential agent transfers and DECR the previous pool.  Hook agents
+    # (NPS + wrapup) are dispatched in PARALLEL — whichever routes SECOND would
+    # find the first hook's pool_id and DECR it while it is still running.
+    # Deleting the key here makes each hook INCR its own pool independently.
+    # retencao_humano is DECR'd by the human's own remove_conversation (agent_done).
+    if tenant_id and session_id:
+        try:
+            await redis_client.delete(f"{tenant_id}:session:pool:{session_id}")
+        except Exception as _e:
+            logger.warning(
+                "fire_pool_hooks: could not clear session serving key: session=%s — %s",
+                session_id, _e,
+            )
+
     for entry in hook_list:
         target_pool = entry.get("pool") if isinstance(entry, dict) else None
         if not target_pool:
@@ -1630,6 +1646,24 @@ async def process_routed(
             except Exception:
                 pass
 
+        # ── Populate routing-engine instance meta (bootstrap gap) ─────────────
+        # instance_bootstrap.py creates AI instances directly in Redis without
+        # publishing agent_ready to Kafka.  Routing engine's remove_conversation()
+        # calls get_instance_meta() → reads this hash → if empty, DECR is skipped
+        # silently → active_count accumulates on every session.
+        # Writing the hash here ensures the routing engine can DECR correctly.
+        if native_instance_id and pool_id and tenant_id:
+            try:
+                await redis_client.hset(
+                    f"{tenant_id}:routing:instance:{native_instance_id}:meta",
+                    mapping={"pools": json.dumps([pool_id]), "agent_type_id": agent_type_id},
+                )
+            except Exception as _meta_exc:
+                logger.warning(
+                    "Could not write instance meta: instance=%s — %s",
+                    native_instance_id, _meta_exc,
+                )
+
         # ── Conference dedup: skip if specialist from this pool already active ─
         # A repeat @mention while the specialist is already running would cause the
         # routing engine to generate another conversations.routed for the same pool.
@@ -1968,6 +2002,24 @@ async def process_routed(
             except Exception:
                 pass
 
+        # ── Clear specialist conference key ───────────────────────────────────
+        # For plughub-native agents, runtime.ts agent_done is never called so
+        # conference_agent_completed is never published → the Kafka handler that
+        # normally cleans up this key never runs.  Without this delete the key
+        # persists with its 4h TTL and the dedup guard blocks re-invocation of
+        # the same pool within the same session (e.g. calling @auth_form twice).
+        if conference_id and pool_id:
+            try:
+                await redis_client.delete(
+                    f"session:{session_id}:conference:specialist:{pool_id}"
+                )
+                logger.info(
+                    "Specialist conference key cleared: session=%s pool=%s",
+                    session_id, pool_id,
+                )
+            except Exception:
+                pass
+
         # ── Fase C: participant_left ───────────────────────────────────────────
         _part_duration_ms = int(
             (datetime.now(timezone.utc) - _part_joined_at).total_seconds() * 1000
@@ -2051,13 +2103,14 @@ async def process_routed(
                 if hook_label:
                     _hl = hook_label if isinstance(hook_label, str) else hook_label.decode()
                     completed_hook_type = _hl.split(":")[0]   # "on_human_end" or "post_human"
+                    _hook_target_pool   = _hl.split(":", 1)[1] if ":" in _hl else ""
 
                     remaining_hooks = await redis_client.decr(
                         f"session:{session_id}:hook_pending:{completed_hook_type}"
                     )
                     logger.info(
-                        "Hook agent completed: session=%s conference=%s hook=%s remaining=%d",
-                        session_id, conference_id, completed_hook_type, remaining_hooks,
+                        "Hook agent completed: session=%s conference=%s hook=%s pool=%s remaining=%d",
+                        session_id, conference_id, completed_hook_type, _hook_target_pool, remaining_hooks,
                     )
 
                     if remaining_hooks <= 0:
@@ -2759,20 +2812,84 @@ async def process_contact_event(
             #    mensagens do cliente já enfileiradas.
             #    NOTA: usa :stream (não :messages) — :messages é uma List do canal-gateway.
             try:
-                # Quando múltiplos agentes estão bloqueados em menu steps simultâneos
-                # (ex: NPS + wrap-up), cada BLPOP consome UMA entrada do list.
-                # LPUSH N cópias do sinal para garantir que todos os BLPOPs desbloqueiem.
-                n_waiting = 1
+                # Quando múltiplos agentes estão bloqueados em menu steps simultâneos,
+                # cada BLPOP consome UMA entrada do list.
+                # IMPORTANTE: só enviar session:closed para agentes *customer-facing*
+                # (visibility == "all").  Agentes de hook como wrapup e NPS usam
+                # visibility de participante específico (["human_pid"] / ["cust_pid"]) —
+                # se receberem o sinal, sairão via on_disconnect e pularão os steps de
+                # texto antes de o agente humano ter chance de responder.
+                n_waiting = 0
+                _no_menu_entries = True
                 try:
                     _wh = await redis_client.hgetall(f"menu:waiting:{session_id}")
-                    if _wh and len(_wh) > 1:
-                        n_waiting = len(_wh)
+                    if _wh:
+                        _no_menu_entries = False
+                        # Read tenant_id for activity-key checks.
+                        # menu.ts sets {tenant}:session:{sid}:active_instance:{instanceId}
+                        # while the BLPOP is running and deletes it in the finally block
+                        # (on timeout, response, or disconnect).  If the key is absent the
+                        # agent's BLPOP already exited — a session:closed push would be
+                        # consumed by a hook agent (wrapup/NPS) instead, causing it to
+                        # exit prematurely via on_disconnect before collecting human input.
+                        _fix_a_tenant: str | None = None
+                        try:
+                            _fa_meta_raw = await redis_client.get(
+                                f"session:{session_id}:meta"
+                            )
+                            if _fa_meta_raw:
+                                _fa_meta_s = (
+                                    _fa_meta_raw if isinstance(_fa_meta_raw, str)
+                                    else _fa_meta_raw.decode()
+                                )
+                                _fix_a_tenant = json.loads(_fa_meta_s).get("tenant_id")
+                        except Exception:
+                            pass
+                        for _fa_field, _meta_json in _wh.items():
+                            try:
+                                _fa_field_s = (
+                                    _fa_field if isinstance(_fa_field, str)
+                                    else _fa_field.decode()
+                                )
+                                _fa_meta_s2 = (
+                                    _meta_json if isinstance(_meta_json, str)
+                                    else _meta_json.decode()
+                                )
+                                _meta_vis = json.loads(_fa_meta_s2).get("visibility")
+                                # Somente agentes com visibility "all" (ou null/legacy)
+                                # esperam input do cliente — esses precisam do sinal.
+                                if _meta_vis == "all" or _meta_vis is None:
+                                    if _fix_a_tenant:
+                                        # Check activity key: only count agents whose
+                                        # BLPOP is still active (key set by menu.ts).
+                                        _akey = (
+                                            f"{_fix_a_tenant}:session:{session_id}"
+                                            f":active_instance:{_fa_field_s}"
+                                        )
+                                        if await redis_client.exists(_akey):
+                                            n_waiting += 1
+                                        # else: agent already exited BLPOP — skip
+                                    else:
+                                        # tenant_id unavailable — fall back to old
+                                        # behaviour (count all customer-facing entries)
+                                        n_waiting += 1
+                            except Exception:
+                                # Malformed entry — include for safety
+                                n_waiting += 1
                 except Exception:
                     pass
-                closed_key = f"session:closed:{session_id}"
-                for _ in range(n_waiting):
-                    await redis_client.lpush(closed_key, reason)
-                await redis_client.expire(closed_key, 300)
+                if _no_menu_entries:
+                    # No menu:waiting hash at all — push 1 for legacy agents
+                    # that use the list without the hash registration.
+                    n_waiting = 1
+                # Note: if menu:waiting has entries but ALL customer-facing agents
+                # already exited their BLPOPs, n_waiting stays 0.  Do NOT push —
+                # any push would be consumed by a hook agent starting later.
+                if n_waiting > 0:
+                    closed_key = f"session:closed:{session_id}"
+                    for _ in range(n_waiting):
+                        await redis_client.lpush(closed_key, reason)
+                    await redis_client.expire(closed_key, 300)
             except Exception as exc:
                 logger.warning("Could not push session:closed: session=%s — %s", session_id, exc)
 
@@ -3137,6 +3254,28 @@ async def process_contact_event(
                     duration_ms=_ha_duration_ms,
                 ))
 
+                # ── Decrement human pool active_count via routing engine ──────
+                # mcp-server's /api/agent_done publishes contact_closed to
+                # conversations.events but never agent_done to agent.lifecycle —
+                # so routing engine's remove_conversation() is never triggered
+                # for human agents, causing active_count to accumulate
+                # indefinitely.  We publish agent_done here (same pattern as the
+                # AI-agent fix at the top of this file) so the routing engine
+                # calls remove_conversation() and DECRs the counter.
+                if _kafka_producer and _ha_tenant:
+                    asyncio.create_task(_kafka_producer.send(
+                        TOPIC_LIFECYCLE,
+                        json.dumps({
+                            "event":           "agent_done",
+                            "tenant_id":       _ha_tenant,
+                            "instance_id":     instance_id,
+                            "agent_type_id":   _ha_agent_type_id,
+                            "pools":           [_ha_pool] if _ha_pool else [],
+                            "conversation_id": session_id,
+                            "timestamp":       datetime.now(timezone.utc).isoformat(),
+                        }).encode("utf-8"),
+                    ))
+
                 await redis_client.srem(f"session:{session_id}:human_agents", instance_id)
                 remaining = await redis_client.scard(f"session:{session_id}:human_agents")
                 if remaining <= 0:
@@ -3193,7 +3332,9 @@ async def process_contact_event(
                         pass
 
                     if _active_spec_count > 0:
-                        # Defer hooks — specialists still replying.
+                        # Defer hooks — specialists still active.
+                        # Store the hook config so conference_agent_completed can pick
+                        # it up when the last specialist finishes.
                         try:
                             await redis_client.setex(
                                 f"session:{session_id}:pending_on_human_end",
@@ -3221,6 +3362,32 @@ async def process_contact_event(
                             )
                             # Fallthrough to immediate dispatch if we can't defer safely
                             _active_spec_count = 0
+
+                        # Signal all waiting specialists to abort immediately.
+                        # Specialists in a `menu` or `receive` step are blocked on
+                        # BLPOP(menu:result:{sid}, session:closed:{sid}).  Pushing to
+                        # session:closed:{sid} once per active specialist unblocks each
+                        # BLPOP right away — they exit cleanly via on_disconnect, which
+                        # triggers conference_agent_completed and fires the deferred hooks
+                        # without waiting for the full form-collection timeout.
+                        if _active_spec_count > 0:
+                            try:
+                                closed_key = f"session:closed:{session_id}"
+                                # One push per specialist — each BLPOP consumes one item.
+                                for _ in range(_active_spec_count):
+                                    await redis_client.lpush(closed_key, "agent_hangup")
+                                # Short TTL: the values are consumed by BLPOP; the key
+                                # disappears naturally, but 60 s guards against leaks.
+                                await redis_client.expire(closed_key, 60)
+                                logger.info(
+                                    "Sent abort signal to %d specialist(s): session=%s",
+                                    _active_spec_count, session_id,
+                                )
+                            except Exception as _exc:
+                                logger.warning(
+                                    "Could not send specialist abort signal: session=%s — %s",
+                                    session_id, _exc,
+                                )
 
                     if _active_spec_count == 0:
                         if http and _pool_id_hooks and _tenant_id_hooks:
@@ -3984,6 +4151,95 @@ async def _restore_all_instances(
         logger.warning("Could not restore all instances: session=%s — %s", session_id, exc)
 
 
+# ── Session watchdog ──────────────────────────────────────────────────────────
+
+async def _sweep_orphaned_sessions(redis_client: aioredis.Redis) -> None:
+    """
+    Scans all session:*:meta keys and fires _trigger_contact_close() for every
+    session that has no active WebSocket keepalive key and has not yet been
+    marked as closed.
+
+    Detection criteria (all three must be true):
+      1. session:{id}:meta       exists  — a channel-gateway session was opened
+      2. session:{id}:ws_alive   missing — WebSocket keepalive has expired or
+                                           was never set (pre-watchdog sessions)
+      3. session:{id}:closed     missing — bridge has not yet processed close
+      4. session:{id}:close_fired missing — _trigger_contact_close not already
+                                             in flight for this session
+
+    Uses SCAN in batches of 100 to avoid blocking Redis.
+    """
+    closed_count = 0
+    cursor = 0
+    while True:
+        cursor, keys = await redis_client.scan(
+            cursor, match="session:*:meta", count=100
+        )
+        for meta_key in keys:
+            # Extract session_id from "session:{id}:meta"
+            parts = meta_key.split(":")
+            if len(parts) != 3:
+                continue
+            session_id = parts[1]
+
+            # Skip if already closed or close already in flight
+            already_closed = await redis_client.exists(
+                f"session:{session_id}:closed",
+                f"session:{session_id}:close_fired",
+            )
+            if already_closed:
+                continue
+
+            # Skip if WebSocket keepalive is still present
+            ws_alive = await redis_client.exists(f"session:{session_id}:ws_alive")
+            if ws_alive:
+                continue
+
+            logger.warning(
+                "session_watchdog: orphaned session detected "
+                "(no ws_alive, not closed) — session=%s",
+                session_id,
+            )
+            await _trigger_contact_close(redis_client, session_id)
+            closed_count += 1
+
+        if cursor == 0:
+            break
+
+    if closed_count:
+        logger.info("session_watchdog: recovered %d orphaned session(s)", closed_count)
+
+
+async def _session_watchdog(redis_client: aioredis.Redis) -> None:
+    """
+    Background task that periodically calls _sweep_orphaned_sessions().
+
+    WebSocket sessions that die without publishing a clean ContactClosedEvent
+    (crash, network drop, pre-fix bug) leave pool:active_count incremented
+    indefinitely, making the Monitor show phantom "Ocupado" slots.
+
+    The channel-gateway now writes session:{id}:ws_alive (TTL = idle_timeout +
+    120s) and refreshes it on every received frame.  When that key expires the
+    watchdog considers the session orphaned and fires _trigger_contact_close(),
+    which decodes session:meta, publishes conversations.events contact_closed,
+    and lets the existing process_contact_event path restore agent instances
+    and decrement pool counters.
+
+    Interval is configurable via SESSION_WATCHDOG_INTERVAL_S (default 120s).
+    """
+    interval_s = int(os.getenv("SESSION_WATCHDOG_INTERVAL_S", "120"))
+    logger.info("session_watchdog started (interval=%ds)", interval_s)
+
+    while True:
+        await asyncio.sleep(interval_s)
+        try:
+            await _sweep_orphaned_sessions(redis_client)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.error("session_watchdog sweep error: %s", exc, exc_info=True)
+
+
 # ── Main loop ─────────────────────────────────────────────────────────────────
 
 async def run() -> None:
@@ -4080,6 +4336,10 @@ async def run() -> None:
         # immediately when registry.changed signals a config update.
         heartbeat_task = asyncio.create_task(bootstrap.heartbeat_loop())
 
+        # Session watchdog — sweeps for orphaned WebSocket sessions that died
+        # without publishing a ContactClosedEvent and repairs pool counters.
+        watchdog_task = asyncio.create_task(_session_watchdog(redis_client))
+
         try:
             async for msg in consumer:
                 asyncio.create_task(_dispatch(msg.value, msg.topic, http, redis_client, bootstrap))
@@ -4087,6 +4347,11 @@ async def run() -> None:
             heartbeat_task.cancel()
             try:
                 await heartbeat_task
+            except asyncio.CancelledError:
+                pass
+            watchdog_task.cancel()
+            try:
+                await watchdog_task
             except asyncio.CancelledError:
                 pass
             await consumer.stop()

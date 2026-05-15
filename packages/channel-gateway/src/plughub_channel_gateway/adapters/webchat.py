@@ -209,6 +209,18 @@ class WebchatAdapter:
             self._customer_participant_id,
         )
 
+        # WebSocket keepalive key — refreshed on every received frame by
+        # _receive_loop.  The session watchdog in orchestrator-bridge uses
+        # the absence of this key to detect orphaned sessions whose WebSocket
+        # died without publishing a clean ContactClosedEvent.
+        # TTL = idle timeout + ping window + safety buffer.
+        _alive_ttl = int(float(self._settings.ws_connection_timeout_s) + 120)
+        await self._redis.setex(
+            f"session:{self._session_id}:ws_alive",
+            _alive_ttl,
+            "1",
+        )
+
         await self._publish_event(
             ContactOpenEvent(
                 contact_id=self._contact_id,
@@ -252,7 +264,7 @@ class WebchatAdapter:
                 elif task.exception() is not None:
                     exc = task.exception()
                     if isinstance(exc, asyncio.TimeoutError):
-                        close_reason = "session_timeout"
+                        close_reason = "timeout"
                     elif isinstance(exc, WebSocketDisconnect):
                         close_reason = "client_disconnect"
                     else:
@@ -428,6 +440,18 @@ class WebchatAdapter:
                     )
                 except asyncio.TimeoutError:
                     raise  # propagate → session_timeout
+
+            # Refresh keepalive on every received frame so the watchdog knows
+            # the WebSocket is still alive.  Fire-and-forget — never raises.
+            try:
+                _alive_ttl = int(float(self._settings.ws_connection_timeout_s) + 120)
+                await self._redis.setex(
+                    f"session:{self._session_id}:ws_alive",
+                    _alive_ttl,
+                    "1",
+                )
+            except Exception:
+                pass
 
             try:
                 data = json.loads(raw)
@@ -780,6 +804,13 @@ class WebchatAdapter:
     # ── Close ──────────────────────────────────────────────────────────────────
 
     async def _close(self, reason: str) -> None:
+        # Remove the keepalive key immediately so the watchdog doesn't see this
+        # session as orphaned in the interval between now and the Kafka event
+        # being processed by the bridge.
+        try:
+            await self._redis.delete(f"session:{self._session_id}:ws_alive")
+        except Exception:
+            pass
         started_at = await self._registry.unregister(self._contact_id)
         await self._publish_event(
             ContactClosedEvent(
