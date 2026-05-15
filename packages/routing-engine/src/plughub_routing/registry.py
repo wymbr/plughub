@@ -256,7 +256,8 @@ class InstanceRegistry:
         )
 
     async def remove_conversation(
-        self, tenant_id: str, instance_id: str, conversation_id: str
+        self, tenant_id: str, instance_id: str, conversation_id: str,
+        fallback_pools: list[str] | None = None,
     ) -> None:
         """
         Removes a completed conversation from the instance.
@@ -265,6 +266,11 @@ class InstanceRegistry:
         Also deletes the session:serving:pool key so that reconnects or
         re-routings of this session_id start with a clean slate and the
         same-pool re-entry guard in mark_busy does not fire spuriously.
+
+        fallback_pools: pool list to use when instance_meta is absent (e.g.
+        human agents in demo mode that never published agent_ready and therefore
+        have no persisted meta). The bridge includes pools[] in every agent_done
+        payload it synthesises, so this covers the human-agent counter decrement.
         """
         await self._redis.srem(
             _instance_conversations_key(tenant_id, instance_id), conversation_id
@@ -278,10 +284,13 @@ class InstanceRegistry:
         # we decrement all pools (floor 0) which may transiently undercount a
         # sibling pool — acceptable given 120s snapshot TTL and self-correction
         # on the next routing event.
+        # When meta is absent (human agents that skip agent_ready in demo mode)
+        # fall back to the pools list supplied by the caller.
         try:
             meta = await self.get_instance_meta(tenant_id, instance_id)
-            if meta:
-                for pool_id in meta.pools:
+            pools_to_decr = meta.pools if meta else (fallback_pools or [])
+            if pools_to_decr:
+                for pool_id in pools_to_decr:
                     new_val = await self._redis.decr(_pool_active_count_key(tenant_id, pool_id))
                     if new_val < 0:
                         await self._redis.set(_pool_active_count_key(tenant_id, pool_id), 0)

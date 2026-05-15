@@ -246,7 +246,13 @@ class LifecycleEventHandler:
         elif event_type == "agent_done":
             conversation_id = event.get("conversation_id", "")
             if conversation_id:
-                await self._instances.remove_conversation(tenant_id, instance_id, conversation_id)
+                # Pass fallback_pools from the event payload so that human agents
+                # (which never publish agent_ready and therefore have no instance_meta)
+                # still trigger the pool active_count DECR correctly.
+                await self._instances.remove_conversation(
+                    tenant_id, instance_id, conversation_id,
+                    fallback_pools=event.get("pools") or [],
+                )
         elif event_type in ("agent_paused", "agent_logout"):
             await self._deactivate_instance(tenant_id, instance_id, event)
         else:
