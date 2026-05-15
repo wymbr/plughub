@@ -2949,6 +2949,11 @@ async def process_contact_event(
                 _human_members = await redis_client.smembers(
                     f"session:{session_id}:human_agents"
                 )
+                logger.info(
+                    "customer_side close: session=%s human_members=%s",
+                    session_id,
+                    [m.decode() if isinstance(m, bytes) else m for m in (_human_members or [])],
+                )
                 _last_human_instance_id: str | None = None
                 for _hm_inst in (_human_members or []):
                     _hm_inst_str = (
@@ -3022,6 +3027,12 @@ async def process_contact_event(
                     # in the routing engine's LifecycleEventHandler, which DECRs
                     # pool:active_count and patches the pool snapshot in-place.
                     # Same pattern as the agent_closed path at line ~3265.
+                    logger.info(
+                        "customer_side agent_done check: session=%s instance=%s "
+                        "pool=%s tenant=%s has_producer=%s",
+                        session_id, _hm_inst_str, _hm_pool, _hm_ten,
+                        _kafka_producer is not None,
+                    )
                     if _kafka_producer and _hm_ten:
                         asyncio.create_task(_kafka_producer.send(
                             TOPIC_LIFECYCLE,
