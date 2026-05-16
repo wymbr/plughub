@@ -253,6 +253,8 @@ export interface PoolInfo {
   display_name?:        string;
   channel_types:        string[];
   sla_target_ms:        number | null;
+  /** Maximum time to reply to a customer message (ms). Null = no per-message SLA. */
+  max_reply_time_ms:    number | null;
   /** skill_ids that can be mentioned / started via Journey in this pool */
   mentionable_journeys?: string[];
 }
@@ -274,6 +276,8 @@ export interface ContactSession {
   poolId:           string;
   /** SLA target in ms for this contact — from pool config or supervisorState */
   slaTargetMs:      number | null;
+  /** Maximum reply time per customer message (ms). Null = no per-message SLA configured. */
+  maxReplyTimeMs:   number | null;
   messages:         ChatMessage[];
   supervisorState:  SupervisorState | null;
   capabilities:     SupervisorCapabilities | null;
@@ -283,6 +287,13 @@ export interface ContactSession {
   /** true after session.closed arrives — contact is visually locked until agent submits outcome */
   sessionClosed:    boolean;
   pendingCloseModal: boolean;
+  /**
+   * Timestamp of the last customer message with visibility "all".
+   * Used to compute how long the customer has been waiting for a response.
+   * Set on every customer message; reset to null when agent (human) responds or session closes.
+   * Null means the agent has already responded (or no customer message has arrived yet).
+   */
+  lastCustomerMessageAt: Date | null;
 }
 
 // ── App state ─────────────────────────────────────────────────────────────────
@@ -320,8 +331,8 @@ export interface PipelineTransition {
   timestamp:  string;
 }
 
-/** Right panel tabs: Estado · Contexto · Histórico */
-export type ActiveTab = "estado" | "contexto" | "historico";
+/** Right panel tabs: Agentes · Contexto · Histórico (Arc 11 Fase 2 — Estado replaced by Agentes) */
+export type ActiveTab = "agentes" | "contexto" | "historico";
 
 export interface Toast {
   id: string;

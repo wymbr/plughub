@@ -51,7 +51,8 @@ import {
   FilterKey,
   messageMatchesFilter,
 } from "./components/ParticipantFilterBar";
-import { CopilotBanner } from "./components/CopilotBanner";
+import { CopilotBanner }  from "./components/CopilotBanner";
+import { JourneyPanel }   from "./components/JourneyPanel";
 
 // ── AgentAssistPage ────────────────────────────────────────────────────────
 export const AgentAssistPage: React.FC = () => {
@@ -81,7 +82,7 @@ export const AgentAssistPage: React.FC = () => {
   } = useAgentAssist();
 
   // ── UI-local state ─────────────────────────────────────────────────────
-  const [activeTab,         setActiveTab]         = useState<ActiveTab>("estado");
+  const [activeTab,         setActiveTab]         = useState<ActiveTab>("agentes");
   const [showCloseModal,    setShowCloseModal]     = useState(false);
   const [substitutionMode,  setSubstitutionMode]   = useState(false);
   const [lastCopilotEvent,  setLastCopilotEvent]   = useState(0);
@@ -93,12 +94,15 @@ export const AgentAssistPage: React.FC = () => {
   const [selectedMessageIds, setSelectedMessageIds] = useState<Set<string>>(new Set());
   const [showDelegarDrawer,  setShowDelegarDrawer]  = useState(false);
   const [delegatedAgents,    setDelegatedAgents]    = useState<Set<string>>(new Set());
+  // Arc 11 Fase 2 Fase E — center area tab
+  const [centralTab, setCentralTab] = useState<"current" | "journey">("current");
 
   // Reset UI-local state when selected contact changes
   useEffect(() => {
     setSubstitutionMode(false);
     setFilterKey(null);
     setSelectedMessageIds(new Set());
+    setCentralTab("current");
   }, [selectedSessionId]);
 
   // ── Derived state needed before hook calls ────────────────────────────
@@ -151,7 +155,7 @@ export const AgentAssistPage: React.FC = () => {
   // ── Handlers ─────────────────────────────────────────────────────────
   const handleSelectContact = useCallback((sessionId: string) => {
     setSelectedSessionId(sessionId);
-    setActiveTab("estado");
+    setActiveTab("agentes");
     setContacts(prev => {
       const c = prev.get(sessionId);
       if (!c || c.unreadCount === 0) return prev;
@@ -406,9 +410,9 @@ export const AgentAssistPage: React.FC = () => {
   // Supervisor / admin role check
   const isSupervisor = session?.role === "supervisor" || session?.role === "admin";
 
-  // Right panel tab labels
+  // Right panel tab labels (Arc 11 Fase C: "estado" → "agentes")
   const rightTabLabels: Record<string, string> = {
-    estado:    t("rightTab.estado"),
+    agentes:   t("rightTab.agentes",  { defaultValue: "Agentes"  }),
     contexto:  t("rightTab.contexto"),
     historico: t("rightTab.historico", { defaultValue: "Histórico" }),
   };
@@ -463,16 +467,12 @@ export const AgentAssistPage: React.FC = () => {
               onToggleSubstitutionMode={() => setSubstitutionMode(prev => !prev)}
               mentionableJourneys={mentionableJourneys}
               onIniciarProcesso={handleIniciarProcesso}
-              mentionableAgents={mentionableAgents}
-              onAddSpecialist={handleAddSpecialist}
-              selectedCount={selectedMessageIds.size}
-              onDelegar={() => setShowDelegarDrawer(true)}
             />
           </div>
 
-          {/* Right-panel tab bar: Estado · Contexto · Histórico */}
+          {/* Right-panel tab bar: Agentes · Contexto · Histórico */}
           <div className="w-[280px] flex-shrink-0 border-l border-gray-200 flex bg-slate-50">
-            {(["estado", "contexto", "historico"] as ActiveTab[]).map((id) => (
+            {(["agentes", "contexto", "historico"] as ActiveTab[]).map((id) => (
               <button
                 key={id}
                 onClick={() => setActiveTab(id)}
@@ -501,7 +501,7 @@ export const AgentAssistPage: React.FC = () => {
             />
           </div>
 
-          {/* Center column: ParticipantFilterBar + ChatArea + CopilotBanner + AgentInput */}
+          {/* Center column: [tab bar] ParticipantFilterBar + ChatArea/JourneyPanel + CopilotBanner + AgentInput */}
           <div className="flex flex-col flex-1 overflow-hidden bg-white">
             {!selected ? (
               <div className="flex-1 flex flex-col items-center justify-center text-gray-400 text-sm select-none gap-3">
@@ -521,50 +521,80 @@ export const AgentAssistPage: React.FC = () => {
               </div>
             ) : (
               <>
-                {/* Participant filter chips */}
-                <ParticipantFilterBar
-                  messages={selected.messages}
-                  aiParticipants={aiParticipants}
-                  filterKey={filterKey}
-                  onFilterChange={setFilterKey}
-                  isSupervisor={isSupervisor}
-                  sessionId={selected.sessionId}
-                  mcpBase=""
-                  onRefreshState={refreshSupervisorState}
-                  onTerminateSegment={handleTerminateSegment}
-                />
+                {/* Arc 11 Fase E — center area tab switcher: Atual · Journey */}
+                <div className="flex items-center border-b border-gray-200 bg-white flex-shrink-0 px-2">
+                  {(["current", "journey"] as const).map(tab => (
+                    <button
+                      key={tab}
+                      onClick={() => setCentralTab(tab)}
+                      className={[
+                        "px-3 py-2 text-xs font-medium transition-colors",
+                        centralTab === tab
+                          ? "border-b-2 border-indigo-600 text-indigo-600"
+                          : "text-gray-500 hover:text-gray-700",
+                      ].join(" ")}
+                    >
+                      {tab === "current" ? "Atual" : "Journey"}
+                    </button>
+                  ))}
+                </div>
 
-                {/* Chat messages */}
-                <ChatArea
-                  messages={visibleMessages}
-                  aiTyping={aiTypingSessions.has(selected.sessionId)}
-                  sessionClosed={selected.sessionClosed}
-                  liveState={selected.supervisorState ? {
-                    sentimentScore: selected.supervisorState.sentiment.current,
-                    sentimentAlert: selected.supervisorState.sentiment.alert,
-                    sentimentTrend: selected.supervisorState.sentiment.trend,
-                    intent:         selected.supervisorState.intent.current,
-                    flags:          selected.supervisorState.flags,
-                  } : null}
-                  substitutionMode={substitutionMode}
-                  onMenuSubmit={handleMenuSubmit}
-                  selectedMessageIds={selectedMessageIds}
-                  onToggleSelection={handleToggleMessageSelection}
-                />
+                {centralTab === "journey" ? (
+                  /* ── Journey tab ── */
+                  <JourneyPanel
+                    customerId={selected.contactId}
+                    tenantId={session?.tenantId}
+                    currentSessionId={selected.sessionId}
+                  />
+                ) : (
+                  /* ── Atual tab (existing behavior) ── */
+                  <>
+                    {/* Participant filter chips */}
+                    <ParticipantFilterBar
+                      messages={selected.messages}
+                      aiParticipants={aiParticipants}
+                      filterKey={filterKey}
+                      onFilterChange={setFilterKey}
+                      isSupervisor={isSupervisor}
+                      sessionId={selected.sessionId}
+                      mcpBase=""
+                      onRefreshState={refreshSupervisorState}
+                      onTerminateSegment={handleTerminateSegment}
+                    />
 
-                {/* Copilot banner (above input) */}
-                <CopilotBanner
-                  suggestions={copilotSuggestions}
-                  lastUpdate={lastCopilotEvent}
-                />
+                    {/* Chat messages */}
+                    <ChatArea
+                      messages={visibleMessages}
+                      aiTyping={aiTypingSessions.has(selected.sessionId)}
+                      sessionClosed={selected.sessionClosed}
+                      liveState={selected.supervisorState ? {
+                        sentimentScore: selected.supervisorState.sentiment.current,
+                        sentimentAlert: selected.supervisorState.sentiment.alert,
+                        sentimentTrend: selected.supervisorState.sentiment.trend,
+                        intent:         selected.supervisorState.intent.current,
+                        flags:          selected.supervisorState.flags,
+                      } : null}
+                      substitutionMode={substitutionMode}
+                      onMenuSubmit={handleMenuSubmit}
+                      selectedMessageIds={selectedMessageIds}
+                      onToggleSelection={handleToggleMessageSelection}
+                    />
 
-                {/* Agent input */}
-                <AgentInput
-                  onSend={handleSend}
-                  disabled={!selected}
-                  sessionClosed={selected.sessionClosed}
-                  capabilities={selected.capabilities ?? null}
-                />
+                    {/* Copilot banner (above input) */}
+                    <CopilotBanner
+                      suggestions={copilotSuggestions}
+                      lastUpdate={lastCopilotEvent}
+                    />
+
+                    {/* Agent input */}
+                    <AgentInput
+                      onSend={handleSend}
+                      disabled={!selected}
+                      sessionClosed={selected.sessionClosed}
+                      capabilities={selected.capabilities ?? null}
+                    />
+                  </>
+                )}
               </>
             )}
           </div>
@@ -576,8 +606,16 @@ export const AgentAssistPage: React.FC = () => {
               supervisorState={selected?.supervisorState ?? null}
               customerId={selected?.contactId ?? null}
               tenantId={session?.tenantId}
+              sessionId={selected?.sessionId ?? null}
               sessionMessages={selected?.messages ?? []}
               onTerminateSegment={handleTerminateSegment}
+              agentName={agentName}
+              substitutionMode={substitutionMode}
+              onToggleSubstitutionMode={() => setSubstitutionMode(prev => !prev)}
+              mentionableAgents={mentionableAgents}
+              onAddSpecialist={handleAddSpecialist}
+              onDelegar={() => setShowDelegarDrawer(true)}
+              sessionClosed={selected?.sessionClosed ?? false}
             />
           </div>
 

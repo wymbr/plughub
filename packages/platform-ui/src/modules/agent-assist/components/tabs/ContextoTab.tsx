@@ -1,24 +1,32 @@
 /**
- * ContextoTab
+ * ContextoTab — Arc 11 Fase 2 (Fase D)
+ *
  * Shows:
+ *   0. IntentFlagsCard — intent.current + flags[] from supervisorState
+ *      (migrated from EstadoTab, which was removed in Fase C)
  *   1. ContextSnapshotCard — flat ContextStore snapshot keyed by tag name
  *      (new format: context_snapshot present → preferred)
+ *      + ManualTagForm — agent can add/edit tags inline → POST /api/inject-context
  *   2. ContactContextCard  — legacy structured fields (contact_context fallback)
  *   3. Historical insights — long-term memory from previous contacts
  *   4. Conversation insights — session-scoped insights
  */
 
-import React from "react";
+import React, { useState } from "react";
 import {
   ContactContextData,
   ContactContextField,
   ContextEntry,
   CustomerContext,
   InsightItem,
+  SupervisorState,
 } from "../../types";
 
 interface ContextoTabProps {
-  context: CustomerContext | null;
+  context:        CustomerContext | null;
+  /** Session ID used for manual tag writes via POST /api/inject-context/:sessionId */
+  sessionId?:     string | null;
+  supervisorState?: SupervisorState | null;
 }
 
 // ── helpers ──────────────────────────────────────────────────────────────────
@@ -51,9 +59,11 @@ function sourceLabel(source: string): string {
     customer_input:    "cliente",
     mcp_call:          "CRM",
     ai_inferred:       "inferido",
+    human_agent:       "agente",
     insight_historico: "histórico",
     insight_conversa:  "conversa",
     pipeline_state:    "sessão",
+    routing_engine:    "roteamento",
   };
   // Handle prefixed sources like "mcp_call:mcp-server-crm:customer_get"
   // or "ai_inferred:sentiment_emitter"
@@ -79,6 +89,8 @@ function tagLabel(tag: string): string {
     "session.pergunta_coleta":     "Pergunta coleta",
     "session.sentimento.current":   "Score sentimento",
     "session.sentimento.categoria": "Categoria sentimento",
+    "session.pool.id":              "Pool",
+    "session.close_origin":         "Origem fechamento",
     "account.plano_atual":         "Plano",
     "account.status_conta":        "Status conta",
   };
@@ -118,6 +130,192 @@ function groupByNamespace(
       entries: groups[ns],
     }));
 }
+
+// ── IntentFlagsCard ───────────────────────────────────────────────────────────
+// Migrated from EstadoTab (Fase C). Shows intent.current + flags[].
+
+const IntentFlagsCard: React.FC<{ state: SupervisorState }> = ({ state }) => {
+  const { intent, flags } = state;
+  const hasIntent = !!intent.current;
+  const hasFlags  = flags.length > 0;
+  if (!hasIntent && !hasFlags) return null;
+
+  return (
+    <section className="bg-violet-50 border border-violet-200 rounded-lg overflow-hidden">
+      <div className="flex items-center gap-2 px-3 py-2 bg-violet-100 border-b border-violet-200">
+        <span className="text-xs font-semibold text-violet-800 uppercase tracking-wide flex-1">
+          Intenção &amp; Flags
+        </span>
+        <span className="text-[10px] text-violet-500 font-medium">
+          turn {state.turn_count}
+        </span>
+      </div>
+
+      <div className="px-3 py-2 flex flex-col gap-2">
+        {/* Intent */}
+        {hasIntent && (
+          <div className="flex items-start gap-2">
+            <span className="text-[10px] text-gray-500 w-16 shrink-0 pt-0.5">Intenção</span>
+            <div className="flex-1 min-w-0 flex items-center gap-2 flex-wrap">
+              <span className="text-xs font-medium text-gray-900">{intent.current}</span>
+              <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium ${confidenceColor(intent.confidence)}`}>
+                {(intent.confidence * 100).toFixed(0)}%
+              </span>
+            </div>
+          </div>
+        )}
+
+        {/* Flags */}
+        {hasFlags && (
+          <div className="flex items-start gap-2">
+            <span className="text-[10px] text-gray-500 w-16 shrink-0 pt-0.5">Flags</span>
+            <div className="flex flex-wrap gap-1 flex-1">
+              {flags.map((f) => (
+                <span key={f}
+                  className="text-[10px] px-2 py-0.5 rounded-full bg-orange-100 text-orange-700 border border-orange-200 font-medium">
+                  {f}
+                </span>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+    </section>
+  );
+};
+
+// ── ManualTagForm ─────────────────────────────────────────────────────────────
+// Allows the human agent to add/edit a ContextStore tag inline.
+// Calls POST /api/inject-context/:sessionId → { key, value, confidence }.
+
+type WriteStatus = "idle" | "busy" | "ok" | "error";
+
+const SUGGESTED_PREFIXES = ["caller.", "account.", "session."];
+
+const ManualTagForm: React.FC<{ sessionId: string; onDone: () => void }> = ({
+  sessionId,
+  onDone,
+}) => {
+  const [key,    setKey]   = useState("");
+  const [value,  setValue] = useState("");
+  const [conf,   setConf]  = useState("0.9");
+  const [status, setStatus] = useState<WriteStatus>("idle");
+  const [errMsg, setErrMsg] = useState("");
+
+  const canSubmit = key.trim().length > 0 && value.trim().length > 0 && status !== "busy";
+
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!canSubmit) return;
+    setStatus("busy");
+    setErrMsg("");
+    try {
+      const res = await fetch(`/api/inject-context/${sessionId}`, {
+        method:  "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          key:        key.trim(),
+          value:      value.trim(),
+          confidence: Number(conf) || 0.9,
+        }),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      setStatus("ok");
+      setTimeout(() => {
+        setStatus("idle");
+        setKey(""); setValue(""); setConf("0.9");
+        onDone();
+      }, 1500);
+    } catch (err) {
+      setErrMsg(String(err));
+      setStatus("error");
+    }
+  }
+
+  if (status === "ok") {
+    return (
+      <div className="flex items-center gap-1.5 text-green-700 text-xs py-1.5 px-1">
+        <span>✓</span>
+        <span>Tag salva com sucesso.</span>
+      </div>
+    );
+  }
+
+  return (
+    <form onSubmit={handleSubmit} className="flex flex-col gap-1.5 pt-2">
+      {/* Tag key */}
+      <div className="flex flex-col gap-0.5">
+        <label className="text-[10px] text-gray-500">Chave (ex: caller.observacao)</label>
+        <input
+          type="text"
+          value={key}
+          onChange={e => setKey(e.target.value)}
+          placeholder="caller.observacao"
+          list="tag-prefix-suggestions"
+          className="text-xs border border-gray-300 rounded px-2 py-1 focus:outline-none
+            focus:ring-1 focus:ring-teal-400 text-gray-700 bg-white placeholder-gray-400"
+          autoComplete="off"
+        />
+        <datalist id="tag-prefix-suggestions">
+          {SUGGESTED_PREFIXES.map(p => (
+            <option key={p} value={p} />
+          ))}
+        </datalist>
+      </div>
+
+      {/* Value */}
+      <div className="flex flex-col gap-0.5">
+        <label className="text-[10px] text-gray-500">Valor</label>
+        <textarea
+          value={value}
+          onChange={e => setValue(e.target.value)}
+          placeholder="Valor do contexto…"
+          rows={2}
+          className="text-xs border border-gray-300 rounded px-2 py-1 resize-none
+            focus:outline-none focus:ring-1 focus:ring-teal-400 text-gray-700
+            bg-white placeholder-gray-400"
+          onKeyDown={e => {
+            if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) handleSubmit(e as unknown as React.FormEvent);
+          }}
+        />
+      </div>
+
+      {/* Confidence */}
+      <div className="flex items-center gap-2">
+        <label className="text-[10px] text-gray-500 w-20 shrink-0">Confiança</label>
+        <select
+          value={conf}
+          onChange={e => setConf(e.target.value)}
+          className="text-[10px] border border-gray-200 rounded px-1.5 py-0.5
+            focus:outline-none focus:ring-1 focus:ring-teal-400 bg-white text-gray-700"
+        >
+          <option value="1.0">1.0 — confirmado</option>
+          <option value="0.9">0.9 — alta certeza</option>
+          <option value="0.7">0.7 — provável</option>
+          <option value="0.5">0.5 — incerto</option>
+        </select>
+      </div>
+
+      {/* Error */}
+      {status === "error" && (
+        <p className="text-[10px] text-red-600">{errMsg || "Erro ao salvar."}</p>
+      )}
+
+      {/* Actions */}
+      <div className="flex gap-1.5">
+        <button
+          type="submit"
+          disabled={!canSubmit}
+          className="flex-1 py-1 text-[10px] font-semibold text-white
+            bg-teal-600 hover:bg-teal-700 rounded transition-colors
+            disabled:opacity-40 disabled:cursor-not-allowed"
+        >
+          {status === "busy" ? "Salvando…" : "Salvar · ⌘↵"}
+        </button>
+      </div>
+    </form>
+  );
+};
 
 // ── ContactContextCard ────────────────────────────────────────────────────────
 
@@ -193,7 +391,7 @@ const ContactContextCard: React.FC<{ cc: ContactContextData }> = ({ cc }) => {
   );
 };
 
-// ── ContextSnapshotCard (new ContextStore format) ────────────────────────────
+// ── ContextSnapshotCard (new ContextStore format) ─────────────────────────────
 
 interface CtxFieldRowProps {
   tag:   string;
@@ -231,9 +429,14 @@ const CtxFieldRow: React.FC<CtxFieldRowProps> = ({ tag, entry }) => {
   );
 };
 
-const ContextSnapshotCard: React.FC<{ snapshot: Record<string, ContextEntry> }> = ({ snapshot }) => {
+const ContextSnapshotCard: React.FC<{
+  snapshot:  Record<string, ContextEntry>;
+  sessionId?: string | null;
+  onTagSaved?: () => void;
+}> = ({ snapshot, sessionId, onTagSaved }) => {
+  const [addOpen, setAddOpen] = useState(false);
   const groups = groupByNamespace(snapshot);
-  if (groups.length === 0) return null;
+  if (groups.length === 0 && !sessionId) return null;
 
   return (
     <section className="bg-teal-50 border border-teal-200 rounded-lg overflow-hidden">
@@ -242,10 +445,39 @@ const ContextSnapshotCard: React.FC<{ snapshot: Record<string, ContextEntry> }> 
         <span className="text-xs font-semibold text-teal-800 uppercase tracking-wide">
           Context Store
         </span>
-        <span className="text-[10px] text-teal-600 font-medium">
-          {Object.keys(snapshot).length} campos
-        </span>
+        <div className="flex items-center gap-2">
+          <span className="text-[10px] text-teal-600 font-medium">
+            {Object.keys(snapshot).length} campos
+          </span>
+          {sessionId && (
+            <button
+              onClick={() => setAddOpen(v => !v)}
+              title={addOpen ? "Cancelar" : "Adicionar tag"}
+              className={[
+                "w-5 h-5 flex items-center justify-center rounded text-xs font-bold transition-colors",
+                addOpen
+                  ? "bg-teal-600 text-white"
+                  : "text-teal-600 hover:bg-teal-200",
+              ].join(" ")}
+            >
+              {addOpen ? "×" : "+"}
+            </button>
+          )}
+        </div>
       </div>
+
+      {/* Manual tag form (toggleable) */}
+      {addOpen && sessionId && (
+        <div className="px-3 pb-2 border-b border-teal-100 bg-teal-50/60">
+          <ManualTagForm
+            sessionId={sessionId}
+            onDone={() => {
+              setAddOpen(false);
+              onTagSaved?.();
+            }}
+          />
+        </div>
+      )}
 
       {/* Groups */}
       {groups.map(({ ns, label, entries }) => (
@@ -262,6 +494,13 @@ const ContextSnapshotCard: React.FC<{ snapshot: Record<string, ContextEntry> }> 
           </div>
         </div>
       ))}
+
+      {/* Empty state when no tags yet but form available */}
+      {groups.length === 0 && (
+        <p className="px-3 py-2 text-[11px] text-teal-500 italic">
+          Nenhum dado no Context Store ainda.
+        </p>
+      )}
     </section>
   );
 };
@@ -296,10 +535,21 @@ const InsightCard: React.FC<{ item: InsightItem; historical: boolean }> = ({
 
 // ── ContextoTab ───────────────────────────────────────────────────────────────
 
-export const ContextoTab: React.FC<ContextoTabProps> = ({ context }) => {
+export const ContextoTab: React.FC<ContextoTabProps> = ({
+  context,
+  sessionId,
+  supervisorState,
+}) => {
+  // Callback passed to ContextSnapshotCard so a supervisor_state refresh
+  // can be triggered after a successful tag write (parent must poll or trigger).
+  // For now we just log — the 3s polling in useSupervisorState will pick it up.
+  const handleTagSaved = () => {
+    /* no-op: useSupervisorState polls every 3s; tag will appear on next fetch */
+  };
+
   if (!context) {
     return (
-      <div className="flex-1 flex items-center justify-center text-sm text-gray-400">
+      <div className="flex-1 flex items-center justify-center text-sm text-gray-400 p-4 h-full">
         Aguardando dados…
       </div>
     );
@@ -315,17 +565,41 @@ export const ContextoTab: React.FC<ContextoTabProps> = ({ context }) => {
   return (
     <div className="flex flex-col gap-4 p-3 overflow-y-auto h-full">
 
-      {/* ── ContextStore snapshot (new, preferred) ── */}
-      {context_snapshot && Object.keys(context_snapshot).length > 0 && (
-        <ContextSnapshotCard snapshot={context_snapshot} />
+      {/* ── 0. Intent + Flags (from supervisorState, migrated from EstadoTab) ── */}
+      {supervisorState && (
+        <IntentFlagsCard state={supervisorState} />
       )}
 
-      {/* ── Legacy Contact Context (fallback when no context_snapshot) ── */}
+      {/* ── 1. ContextStore snapshot (new, preferred) ── */}
+      {context_snapshot && (
+        <ContextSnapshotCard
+          snapshot={context_snapshot}
+          sessionId={sessionId}
+          onTagSaved={handleTagSaved}
+        />
+      )}
+
+      {/* ── When no context_snapshot yet, still show the write form ── */}
+      {!context_snapshot && sessionId && (
+        <section className="bg-teal-50 border border-teal-200 rounded-lg overflow-hidden">
+          <div className="flex items-center justify-between px-3 py-2 bg-teal-100 border-b border-teal-200">
+            <span className="text-xs font-semibold text-teal-800 uppercase tracking-wide">
+              Context Store
+            </span>
+            <span className="text-[10px] text-teal-500 italic">vazio</span>
+          </div>
+          <div className="px-3 pb-3">
+            <ManualTagForm sessionId={sessionId} onDone={handleTagSaved} />
+          </div>
+        </section>
+      )}
+
+      {/* ── 2. Legacy Contact Context (fallback when no context_snapshot) ── */}
       {!context_snapshot && contact_context && (
         <ContactContextCard cc={contact_context} />
       )}
 
-      {/* ── Historical Insights ── */}
+      {/* ── 3. Historical Insights ── */}
       <section>
         <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">
           Memória histórica ({historical_insights.length})
@@ -343,7 +617,7 @@ export const ContextoTab: React.FC<ContextoTabProps> = ({ context }) => {
         )}
       </section>
 
-      {/* ── Conversation Insights ── */}
+      {/* ── 4. Conversation Insights ── */}
       <section>
         <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">
           Insights desta conversa ({conversation_insights.length})

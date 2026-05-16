@@ -65,19 +65,35 @@ export function registerSupervisorTools(server: McpServer, deps: SupervisorDeps)
     async (input: Record<string, unknown>) => {
       const parsed = SupervisorStateInputSchema.parse(input)
 
-      // 1. Read session metadata (tenant, started_at, pool, sla target)
-      let tenantId   = ""
-      let startedAt  = Date.now()
-      let slaTargetMs = 480_000  // 8 min default
+      // 1. Read session metadata (tenant, started_at, pool, sla targets)
+      let tenantId      = ""
+      let poolId        = ""
+      let startedAt     = Date.now()
+      let slaTargetMs   = 480_000  // 8 min default
+      let maxReplyTimeMs: number | null = null
 
       try {
         const metaRaw = await redis.get(`session:${parsed.session_id}:meta`)
         if (metaRaw) {
           const meta = JSON.parse(metaRaw) as Record<string, string>
-          tenantId  = meta["tenant_id"] ?? ""
+          tenantId = meta["tenant_id"] ?? ""
+          poolId   = meta["pool_id"]   ?? ""
           if (meta["started_at"]) startedAt = new Date(meta["started_at"]).getTime()
         }
       } catch { /* use defaults */ }
+
+      // 1b. Read pool config from routing-engine Redis cache to get sla_target_ms
+      //     and max_reply_time_ms — both optional (session meta may have neither).
+      if (tenantId && poolId) {
+        try {
+          const cfgRaw = await redis.get(`${tenantId}:pool_config:${poolId}`)
+          if (cfgRaw) {
+            const cfg = JSON.parse(cfgRaw) as Record<string, unknown>
+            if (typeof cfg["sla_target_ms"] === "number")   slaTargetMs   = cfg["sla_target_ms"]
+            if (typeof cfg["max_reply_time_ms"] === "number") maxReplyTimeMs = cfg["max_reply_time_ms"]
+          }
+        } catch { /* non-fatal — use defaults */ }
+      }
 
       // 2. Read AI state written by orchestrator-bridge per turn
       //    Key: session:{id}:ai → { current_turn: { partial_params, snapshot_at }, consolidated_turns: [...] }
@@ -341,10 +357,11 @@ export function registerSupervisorTools(server: McpServer, deps: SupervisorDeps)
             },
             flags: (partials["flags"] as string[]) ?? [],
             sla: {
-              elapsed_ms:      elapsedMs,
-              target_ms:       slaTargetMs,
-              urgency:         Math.round(urgency * 100) / 100,
-              breach_imminent: breachImminent,
+              elapsed_ms:        elapsedMs,
+              target_ms:         slaTargetMs,
+              max_reply_time_ms: maxReplyTimeMs,
+              urgency:           Math.round(urgency * 100) / 100,
+              breach_imminent:   breachImminent,
             },
             snapshot_at: snapshotAt,
             // Arc 11 — AI participants with real-time step state

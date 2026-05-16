@@ -175,6 +175,7 @@ class RegistryEventHandler:
                 tenant_id            = tenant_id,
                 channel_types        = pool_data.get("channel_types", []),
                 sla_target_ms        = pool_data.get("sla_target_ms", 480_000),
+                max_reply_time_ms    = pool_data.get("max_reply_time_ms") or None,
                 routing_expression   = RoutingExpression(**expr_data),
                 is_human_pool        = bool(pool_data.get("supervisor_config")),
                 mentionable_pools    = pool_data.get("mentionable_pools") or None,

@@ -87,6 +87,30 @@ function formatElapsed(ms: number): string {
   return `${m}:${s.toString().padStart(2, "0")}`;
 }
 
+// ── Response-wait indicator ────────────────────────────────────────────────────
+// When the pool has max_reply_time_ms configured, thresholds are ratio-based:
+//   ≥ 100% of limit → urgent  |  ≥ 50% → attention  |  < 50% → normal
+// Fallback (no limit configured): 180 s = urgent, 60 s = attention.
+type WaitLevel = "normal" | "attention" | "urgent";
+
+function waitLevel(waitMs: number, maxReplyTimeMs: number | null): WaitLevel {
+  if (maxReplyTimeMs) {
+    const ratio = waitMs / maxReplyTimeMs;
+    if (ratio >= 1.0) return "urgent";
+    if (ratio >= 0.5) return "attention";
+    return "normal";
+  }
+  if (waitMs >= 180_000) return "urgent";
+  if (waitMs >= 60_000)  return "attention";
+  return "normal";
+}
+
+const WAIT_COLOR: Record<WaitLevel, string> = {
+  normal:    "text-green-600",
+  attention: "text-yellow-600",
+  urgent:    "text-red-600 font-bold animate-pulse",
+};
+
 // ── Display identity: prefer contactId (ANI/user_id), fallback to short sessionId ──
 function displayId(contact: ContactSession): string {
   if (contact.contactId) return contact.contactId;
@@ -112,11 +136,17 @@ const ContactRow: React.FC<RowProps> = ({ contact, selected, aiTyping, onSelect 
   const handleMs    = nowMs - contact.sessionStartedAt.getTime();
   const level       = urgencyLevel(contact, nowMs);
   const sentimentScore = contact.supervisorState?.sentiment.current ?? null;
-  const sla         = contact.supervisorState?.sla ?? null;
-  const slaPercent  = sla ? Math.min(sla.percentage, 100) : 0;
-  const slaBarColor =
-    !sla ? "bg-gray-300"
-    : sla.breach_imminent ? "bg-red-500"
+
+  // SLA bar: prefer supervisorState.sla (most accurate), fall back to pool's
+  // slaTargetMs (available from the first moment the contact arrives).
+  const slaFromState  = contact.supervisorState?.sla ?? null;
+  const slaTargetMs   = slaFromState?.target_ms ?? contact.slaTargetMs ?? null;
+  const slaPercent    = slaTargetMs
+    ? Math.min(Math.round((handleMs / slaTargetMs) * 100), 100)
+    : (slaFromState ? Math.min(slaFromState.percentage, 100) : null);
+  const slaBreaching  = slaFromState?.breach_imminent ?? (slaPercent !== null && slaPercent >= 100);
+  const slaBarColor   = slaPercent === null ? "bg-gray-300"
+    : slaBreaching || slaPercent >= 100 ? "bg-red-500"
     : slaPercent > 70 ? "bg-yellow-400"
     : "bg-green-400";
 
@@ -153,7 +183,7 @@ const ContactRow: React.FC<RowProps> = ({ contact, selected, aiTyping, onSelect 
         if (el) el.style.borderLeftColor = borderAccent;
       }}
     >
-      {/* Row 1: channel icon + identity + unread badge */}
+      {/* Row 1: channel icon + identity + pool badge + unread badge */}
       <div className="flex items-center gap-1.5 min-w-0">
         <span
           className="text-base leading-none flex-shrink-0"
@@ -167,6 +197,15 @@ const ContactRow: React.FC<RowProps> = ({ contact, selected, aiTyping, onSelect 
         >
           {displayId(contact)}
         </span>
+        {contact.poolId && (
+          <span
+            className="flex-shrink-0 text-[10px] text-indigo-500 bg-indigo-50 border border-indigo-200
+              px-1 py-0.5 rounded truncate max-w-[72px]"
+            title={contact.poolId}
+          >
+            {contact.poolId.replace(/_/g, " ")}
+          </span>
+        )}
         {contact.unreadCount > 0 && (
           <span className="flex-shrink-0 min-w-[1.25rem] h-5 rounded-full bg-indigo-500
             text-white text-[10px] font-bold flex items-center justify-center px-1">
@@ -175,22 +214,32 @@ const ContactRow: React.FC<RowProps> = ({ contact, selected, aiTyping, onSelect 
         )}
       </div>
 
-      {/* Row 2: sentiment dot + wait time + SLA mini-bar + ai typing */}
+      {/* Row 2: 💬 response-wait + timer + SLA bar + ai typing + enc badge */}
       <div className="flex items-center gap-1.5 mt-1">
-        <span
-          className={`w-2 h-2 rounded-full flex-shrink-0 ${sentimentColor(sentimentScore)}`}
-          title={`Sentimento: ${sentimentScore?.toFixed(2) ?? "n/a"}`}
-        />
+
+        {/* Response-wait indicator — only when customer is waiting and session is open */}
+        {!contact.sessionClosed && contact.lastCustomerMessageAt && (() => {
+          const waitMs = nowMs - contact.lastCustomerMessageAt.getTime();
+          const wLevel = waitLevel(waitMs, contact.maxReplyTimeMs);
+          return (
+            <span
+              className={`text-[11px] font-mono tabular-nums flex-shrink-0 ${WAIT_COLOR[wLevel]}`}
+              title="Aguardando sua resposta"
+            >
+              💬 {formatElapsed(waitMs)}
+            </span>
+          );
+        })()}
 
         <span
           className={`text-[11px] font-mono tabular-nums flex-shrink-0
             ${contact.sessionClosed ? "text-gray-400" : URGENCY_TIMER[level]}`}
           title="Tempo em atendimento"
         >
-          {formatElapsed(handleMs)}
+          ⏱ {formatElapsed(handleMs)}
         </span>
 
-        {sla && (
+        {slaPercent !== null && (
           <div
             className="flex-1 h-1 bg-gray-200 rounded-full overflow-hidden ml-1"
             title={`SLA ${slaPercent.toFixed(0)}%`}

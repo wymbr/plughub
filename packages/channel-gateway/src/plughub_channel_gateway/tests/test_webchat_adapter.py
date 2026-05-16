@@ -265,6 +265,153 @@ class TestConnectionLifecycle:
         for field in ["contact_id", "session_id", "channel", "started_at"]:
             assert field in open_event
 
+    async def test_new_session_publishes_routing_request(
+        self, mock_producer, registry, context_reader, settings, mock_redis
+    ):
+        """New session (no guard keys present) MUST publish a routing request."""
+        # Guard uses redis.exists(serving_key, closed_key, close_fired_key,
+        # hook_pending:on_human_end, hook_pending:post_human) → 5 args.
+        # Returning 0 means none of the guard keys exist → session is genuinely new.
+        # Stream/other checks use exists with a single key → keep returning 1.
+        async def _exists_side_effect(*keys, **kwargs):
+            return 0 if len(keys) == 5 else 1  # 0 = no guard active, 1 = stream exists
+
+        mock_redis.exists = AsyncMock(side_effect=_exists_side_effect)
+        ws = make_ws_mock([])
+        adapter = make_adapter(ws, mock_producer, registry, context_reader, settings, mock_redis)
+        await adapter.handle()
+
+        inbound_calls = [
+            json.loads(c.kwargs["value"].decode())
+            for c in mock_producer.send.call_args_list
+            if c.args[0] == settings.kafka_topic_inbound
+        ]
+        routing_calls = [e for e in inbound_calls if "pool_id" in e and "customer_id" in e]
+        assert len(routing_calls) == 1, "Expected exactly one routing request for a new session"
+        assert routing_calls[0]["session_id"] == SESSION_ID
+        assert routing_calls[0]["pool_id"] == "test_pool"
+
+    async def test_reconnect_during_session_skips_routing_request(
+        self, mock_producer, registry, context_reader, settings, mock_redis
+    ):
+        """
+        Reconnect guard (during-session case): when the serving pool key exists in
+        Redis, the adapter MUST NOT publish a new conversations.inbound routing request.
+
+        Without this guard a browser refresh (F5) during an active session causes
+        mark_busy to be called twice for the same session, leaving active_count stuck
+        high in the Monitor because only one agent_done fires at session end.
+        """
+        # Guard call (5 keys) returns 1: serving_key found → session is being served.
+        async def _exists_side_effect(*keys, **kwargs):
+            return 1  # any guard key active → skip; stream exists too
+
+        mock_redis.exists = AsyncMock(side_effect=_exists_side_effect)
+        ws = make_ws_mock([])
+        adapter = make_adapter(ws, mock_producer, registry, context_reader, settings, mock_redis)
+        await adapter.handle()
+
+        inbound_calls = [
+            json.loads(c.kwargs["value"].decode())
+            for c in mock_producer.send.call_args_list
+            if c.args[0] == settings.kafka_topic_inbound
+        ]
+        routing_calls = [e for e in inbound_calls if "pool_id" in e and "customer_id" in e]
+        assert routing_calls == [], (
+            "Reconnect during active session must NOT publish a routing request"
+        )
+
+    async def test_post_session_reconnect_skips_routing_request(
+        self, mock_producer, registry, context_reader, settings, mock_redis
+    ):
+        """
+        Reconnect guard (post-session case): when the session is already closed
+        (session:closed key exists), the adapter MUST NOT publish a routing request
+        even if the serving pool key was already deleted by remove_conversation.
+
+        This covers the scenario where a webchat client reloads the page AFTER the
+        session has fully ended — the serving_key is gone (deleted by agent_done flow)
+        but session:closed is still set (TTL 7d).  Without this check, each page
+        reload after session end would increment active_count, causing ghost Ocupados.
+        """
+        # Guard call (5 keys) returns 1: session:closed key found → skip routing.
+        # serving_key is absent; only one of the five keys found is enough to block.
+        async def _exists_side_effect(*keys, **kwargs):
+            return 1  # session:closed is set → block routing; stream exists too
+
+        mock_redis.exists = AsyncMock(side_effect=_exists_side_effect)
+        ws = make_ws_mock([])
+        adapter = make_adapter(ws, mock_producer, registry, context_reader, settings, mock_redis)
+        await adapter.handle()
+
+        inbound_calls = [
+            json.loads(c.kwargs["value"].decode())
+            for c in mock_producer.send.call_args_list
+            if c.args[0] == settings.kafka_topic_inbound
+        ]
+        routing_calls = [e for e in inbound_calls if "pool_id" in e and "customer_id" in e]
+        assert routing_calls == [], (
+            "Post-session reconnect must NOT publish a routing request when session:closed exists"
+        )
+
+    async def test_reconnect_during_on_human_end_hooks_skips_routing(
+        self, mock_producer, registry, context_reader, settings, mock_redis
+    ):
+        """
+        Reconnect guard (hook phase case): when on_human_end hooks (NPS, wrap-up) are
+        active, serving_key is already deleted but session:closed is not yet set.
+        The hook_pending:on_human_end key covers this gap.
+
+        Scenario: human agent_done fires → remove_conversation deletes serving_key →
+        fire_pool_hooks() sets hook_pending:on_human_end and starts NPS/wrap-up agents
+        in parallel → client F5 → reconnect → adapter must NOT re-route.
+        """
+        async def _exists_side_effect(*keys, **kwargs):
+            # 5-key guard call: hook_pending:on_human_end exists → block routing.
+            # Single-key stream checks: return 1 (stream is alive during hook phase).
+            return 1
+
+        mock_redis.exists = AsyncMock(side_effect=_exists_side_effect)
+        ws = make_ws_mock([])
+        adapter = make_adapter(ws, mock_producer, registry, context_reader, settings, mock_redis)
+        await adapter.handle()
+
+        inbound_calls = [
+            json.loads(c.kwargs["value"].decode())
+            for c in mock_producer.send.call_args_list
+            if c.args[0] == settings.kafka_topic_inbound
+        ]
+        routing_calls = [e for e in inbound_calls if "pool_id" in e and "customer_id" in e]
+        assert routing_calls == [], (
+            "Reconnect during on_human_end hook phase must NOT publish a routing request"
+        )
+
+    async def test_reconnect_during_post_human_hooks_skips_routing(
+        self, mock_producer, registry, context_reader, settings, mock_redis
+    ):
+        """
+        Reconnect guard (post_human hook phase): hook_pending:post_human key is set
+        after on_human_end hooks complete but before session:closed is written.
+        Client F5 during this phase must not trigger ghost routing.
+        """
+        async def _exists_side_effect(*keys, **kwargs):
+            return 1  # hook_pending:post_human (or any guard key) found → block
+
+        mock_redis.exists = AsyncMock(side_effect=_exists_side_effect)
+        ws = make_ws_mock([])
+        adapter = make_adapter(ws, mock_producer, registry, context_reader, settings, mock_redis)
+        await adapter.handle()
+
+        inbound_calls = [
+            json.loads(c.kwargs["value"].decode())
+            for c in mock_producer.send.call_args_list
+            if c.args[0] == settings.kafka_topic_inbound
+        ]
+        routing_calls = [e for e in inbound_calls if "pool_id" in e and "customer_id" in e]
+        assert routing_calls == [], (
+            "Reconnect during post_human hook phase must NOT publish a routing request"
+        )
+
 
 # ── Inbound text messages ─────────────────────────────────────────────────────
 

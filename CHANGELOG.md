@@ -2,6 +2,136 @@
 
 ---
 
+## max_reply_time_ms — SLA de resposta por mensagem (2026-05-16)
+
+Campo opcional `max_reply_time_ms` adicionado ao Pool para definir o tempo máximo de resposta do agente a cada mensagem do cliente, independente do SLA total de sessão (`sla_target_ms`).
+
+### Backend
+
+**`@plughub/schemas` `agent-registry.ts`**
+- `PoolRegistrationSchema`: novo campo `max_reply_time_ms: z.number().int().positive().optional()`
+
+**`agent-registry` Prisma + routes**
+- `prisma/schema.prisma`: `max_reply_time_ms Int?` no modelo `Pool`
+- `prisma/migrations/20260516000000_add_pool_max_reply_time_ms/migration.sql`: `ALTER TABLE pools ADD COLUMN max_reply_time_ms INTEGER`
+- `routes/pools.ts`: incluído no `create` (`?? null`) e no `update` (spread condicional). `_formatPool` já é dinâmico — sem alteração necessária.
+
+**`routing-engine`**
+- `models.py` `PoolConfig`: campo `max_reply_time_ms: int | None = None`
+- `registry.py` `write_pool_snapshot()`: parâmetro `max_reply_time_ms` opcional; escrito no snapshot Redis apenas quando não-nulo
+- `kafka_listener.py` `_handle_pool_event()`: propaga `pool_data.get("max_reply_time_ms")` para `PoolConfig`
+- `main.py` `_write_pool_context()`: lê `max_reply_time_ms` do pool_config Redis e escreve `session.pool.max_reply_time_ms` no ContextStore quando não-nulo
+
+**`mcp-server-plughub` `tools/supervisor.ts`**
+- `supervisor_state`: lê `pool_id` do `session:meta`, busca `{tenantId}:pool_config:{poolId}` no Redis, extrai `sla_target_ms` e `max_reply_time_ms`
+- Resposta `sla`: inclui `max_reply_time_ms` (null quando não configurado)
+
+### Frontend
+
+**`platform-ui`**
+- `types/index.ts` `Pool`: campo `max_reply_time_ms?: number | null`
+- `modules/agent-assist/types.ts` `PoolInfo`: campo `max_reply_time_ms: number | null`
+- `modules/agent-assist/types.ts` `ContactSession`: campo `maxReplyTimeMs: number | null`
+- `AgentAssistContext.tsx`: `fetchPools` mapeia `max_reply_time_ms`; `makeContact` inicializa `maxReplyTimeMs: null`; contact criado na chegada recebe `maxReplyTimeMs` do `poolInfo`
+- `ContactList.tsx` `waitLevel()`: agora aceita `maxReplyTimeMs` como segundo parâmetro. Com limite: 50% = atenção, 100% = urgente. Sem limite: fallback hardcoded 60s/180s.
+- `ActionBar.tsx`: novo componente `ReplySlaChip` — mostra `💬 {elapsed}` colorido (verde/âmbar/vermelho pulsante) quando sessão aberta + cliente aguardando + pool tem `maxReplyTimeMs` configurado. Limiar: 70% = warning, 100% = breach.
+- `config-recursos/PoolsPage.tsx`: SLA e tempo máx. de resposta agora exibidos lado a lado no formulário de pool. Campo `max_reply_time_ms` opcional, `placeholder="Sem limite"`.
+
+---
+
+## Arc 11 Fase 2 — Fase E: Área central abas Atual + Journey (2026-05-16)
+
+### Mudanças
+
+**`components/JourneyPanel.tsx`** (novo)
+- Painel do journey para a aba central. Layout: strip superior com dados do journey + dois painéis (lista de sessões | transcript read-only).
+- `useCustomerJourneys(tenantId, customerId)`: busca journeys do cliente via `GET /analytics/reports/journeys?customer_id=X`. Prioridade: journey com `origin_session_id === currentSessionId` → journey ativo/suspenso mais recente → primeiro da lista.
+- `useCustomerSessions(customerId)`: busca histórico via `GET /analytics/sessions/customer/:id` (mesmo endpoint do `useCustomerHistory`). Filtra sessões abertas após `journey.created_at - 1min`.
+- `useTranscript(sessionId)`: busca transcript via `GET /api/conversation_history/:sessionId` (endpoint existente).
+- `SessionListItem`: item da lista de sessões com ícone de outcome, badge "atual" / "origem", data e duração.
+- `TranscriptViewer`: exibe mensagens read-only com banner "🔒 somente leitura", auto-scroll to bottom, bubble colors por author.
+- Estados: sem customer → "Cliente não identificado"; sem journey → "Contato standalone" (mensagem explicativa); com journey → view completa.
+- Auto-seleciona a sessão atual ao abrir o painel.
+
+**`AgentAssistPage.tsx`**
+- Import `JourneyPanel`
+- Estado `centralTab: "current" | "journey"` (default `"current"`, reset em `selectedSessionId` change)
+- Tab switcher "Atual · Journey" renderizado como barra compacta acima do conteúdo central (quando `selected` existe)
+- `centralTab === "journey"` → `<JourneyPanel>` (hidei ChatArea + CopilotBanner + AgentInput + ParticipantFilterBar)
+- `centralTab === "current"` → comportamento idêntico ao anterior
+
+---
+
+## Arc 11 Fase 2 — Fase D: Aba Contexto enriquecida (2026-05-16)
+
+### Mudanças
+
+**`components/tabs/ContextoTab.tsx`** — reescrita parcial
+- Props adicionadas: `sessionId?: string | null`, `supervisorState?: SupervisorState | null`
+- **`IntentFlagsCard`** (novo): card violeta exibindo `intent.current` (com % de confiança) + `flags[]` como chips laranja. Migrado do EstadoTab (removido na Fase C). Aparece apenas quando `supervisorState` fornecido.
+- **`ManualTagForm`** (novo): form inline com campo chave (datalist com `caller.` / `account.` / `session.`), textarea de valor, select de confiança (0.5–1.0). Submit → `POST /api/inject-context/:sessionId` com `{ key, value, confidence }`. Feedback visual: "Salvando…" / "✓ Tag salva" com auto-limpa após 1.5s. ESC cancela. ⌘↵ submete.
+- **`ContextSnapshotCard`**: botão "+" no header abre/fecha `ManualTagForm` inline. Exibe mesmo quando snapshot vazio. Props: `sessionId`, `onTagSaved`.
+- `sourceLabel()` ampliado: `human_agent` → "agente", `routing_engine` → "roteamento".
+- Quando `context_snapshot` ausente mas `sessionId` presente: exibe card teal com form aberto (sempre visível).
+- Ordem de renderização: IntentFlagsCard → ContextSnapshotCard+form → legacy ContactContextCard → Insights histórico → Insights conversa.
+
+**`components/RightPanel.tsx`**
+- Prop adicionada: `sessionId?: string | null`
+- `ContextoTab` recebe `sessionId` e `supervisorState`
+- Docstring atualizada para Fase D
+
+**`AgentAssistPage.tsx`**
+- `RightPanel`: prop `sessionId={selected?.sessionId ?? null}` adicionada
+
+---
+
+## Arc 11 Fase 2 — Fase C: Aba Agentes (substitui State) (2026-05-16)
+
+### Mudanças
+
+**`types.ts`** — `ActiveTab`: `"estado"` → `"agentes"`
+
+**`components/tabs/AgentesTab.tsx`** (novo)
+- **Seção A — Ativos na Sessão**: `HumanAgentCard` (blue, primary, "● Atendendo", `···` → Substituir inline menu) + `AiParticipantCard` existente por AI participant; texto "Nenhum agente AI" quando vazio
+- **Seção B — Adicionar Agente**: `AgentInviteRow` por agente mentionável com estado ⚪→🔄→🟢→✅ derivado de `ai_participants`; convite expande textarea inline; pending aliases rastreados em state local e limpos quando agente entra em `ai_participants`; botão "📤 Delegar Tarefa" abre drawer existente
+- **Seção C — Pós-Atendimento**: oculto (Arc 14 pendente)
+- Prop `substitutionMode` + `onToggleSubstitutionMode` migradas de ActionBar para `HumanAgentCard.···` menu
+
+**`components/RightPanel.tsx`**
+- Import `AgentesTab` (substitui `EstadoTab` no render)
+- Interface ampliada: `agentName`, `substitutionMode`, `onToggleSubstitutionMode`, `mentionableAgents`, `onAddSpecialist`, `onDelegar`, `sessionClosed`
+
+**`AgentAssistPage.tsx`**
+- `activeTab` default: `"estado"` → `"agentes"`
+- `handleSelectContact`: `setActiveTab("agentes")`
+- `rightTabLabels`: chave `estado` → `agentes`; defaultValue `"Agentes"`
+- Tab array: `["estado","contexto","historico"]` → `["agentes","contexto","historico"]`
+- `RightPanel`: 7 novas props passadas
+
+---
+
+## Arc 11 Fase 2 — Fase B: Barra superior simplificada + sentimento compacto (2026-05-16)
+
+### Mudanças
+
+**`ActionBar.tsx`**
+- Removida a seção de identidade do contato (channel icon, displayId, pool badge) — migrada definitivamente para a lista esquerda (Fase A)
+- Removida a `SlaBar` e seu import de `SlaState` — SLA já está na lista esquerda
+- Removido o botão "Substituir" da barra principal — moverá para Aba Agentes (Fase C); props `substitutionMode`/`onToggleSubstitutionMode` mantidas na interface para não quebrar o pai
+- Adicionado `SentimentChip`: indicador compacto com emoji + label colorido derivado de `contact.supervisorState?.sentiment.current`; escala: 😊 Satisfeito (≥0.3) · 😐 Neutro (-0.3–0.3) · 😤 Frustrado (-0.6– -0.3) · 😡 Irritado (<-0.6); usa tokens Tailwind green-700/orange-600/red-600/gray-500; só aparece quando sessão aberta e dado disponível
+- Banner "⚠️ Sessão encerrada" simplificado (antes dependia de `!sla`)
+
+**`Header.tsx`**
+- Removida sub-linha com `poolId + sessionId` — só exibe estado ready/offline do agente
+- Removido bloco de timer de sessão (`sessionStartedAt` + `handleMs` state + `useEffect`)
+- Removido bloco de SLA (`sla`, `slaPercent`, `slaColor`)
+- Removido `formatElapsed()` (ficou órfão após remoção do timer)
+- Removido `SlaState` do import de tipos
+- Props `poolId?`, `sessionId?`, `sla?`, `sessionStartedAt?` marcadas como `@deprecated` e mantidas na interface para não quebrar o pai
+- Row 1 final: avatar + nome + estado ready/offline | badge contatos + botão pausa + WS status
+
+---
+
 ## Fix: Mensagens do wrap-up não apareciam no Console após F5 do cliente (2026-05-15)
 
 ### Causa raiz

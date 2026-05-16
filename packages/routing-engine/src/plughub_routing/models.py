@@ -116,10 +116,12 @@ class PoolConfig(BaseModel):
     # new fields are added to pool_config (e.g. mentionable_pools, supervisor_config).
     model_config = ConfigDict(extra="ignore")
 
-    pool_id:        str
-    tenant_id:      str
-    channel_types:  list[str]
-    sla_target_ms:  int
+    pool_id:           str
+    tenant_id:         str
+    channel_types:     list[str]
+    sla_target_ms:     int
+    # Maximum reply time per customer message (ms). None = no per-message SLA.
+    max_reply_time_ms: int | None = None
 
     # Spec 4.6 — weights for priority_score
     routing_expression: RoutingExpression = Field(default_factory=RoutingExpression)

@@ -84,6 +84,8 @@ export interface Pool {
   description?: string
   channel_types: string[]
   sla_target_ms: number
+  /** Maximum reply time per customer message (ms). Null = no per-message SLA. */
+  max_reply_time_ms?: number | null
   calendar_id?: string
   routing_skills?: string[]
   routing_expression?: RoutingExpression

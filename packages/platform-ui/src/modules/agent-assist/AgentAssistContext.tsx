@@ -51,18 +51,20 @@ function makeToastId(): string { return `toast-${++toastSeq}`; }
 function makeContact(sessionId: string, poolId: string, channel = "webchat"): ContactSession {
   return {
     sessionId,
-    contactId:         null,
-    customerName:      null,
+    contactId:             null,
+    customerName:          null,
     channel,
     poolId,
-    slaTargetMs:       null,
-    messages:          [],
-    supervisorState:   null,
-    capabilities:      null,
-    sessionStartedAt:  new Date(),
-    unreadCount:       0,
-    sessionClosed:     false,
-    pendingCloseModal: false,
+    slaTargetMs:           null,
+    maxReplyTimeMs:        null,
+    messages:              [],
+    supervisorState:       null,
+    capabilities:          null,
+    sessionStartedAt:      new Date(),
+    unreadCount:           0,
+    sessionClosed:         false,
+    pendingCloseModal:     false,
+    lastCustomerMessageAt: null,
   };
 }
 
@@ -88,15 +90,15 @@ async function fetchPools(accessiblePools: string[], accessToken?: string): Prom
     if (accessToken) headers["Authorization"] = `Bearer ${accessToken}`;
     const res  = await fetch(`${API_BASE}/pools`, { headers });
     if (!res.ok) return [];
-    const json = await res.json() as
-      | { pools: Array<{ pool_id: string; display_name?: string; channel_types?: string[]; sla_target_ms?: number | null }> }
-      | Array<{ pool_id: string; display_name?: string; channel_types?: string[]; sla_target_ms?: number | null }>;
+    type RawPool = { pool_id: string; display_name?: string; channel_types?: string[]; sla_target_ms?: number | null; max_reply_time_ms?: number | null };
+    const json = await res.json() as { pools: RawPool[] } | RawPool[];
     const data = Array.isArray(json) ? json : (json.pools ?? []);
     const list: PoolInfo[] = data.map(p => ({
       pool_id:               p.pool_id,
       display_name:          p.display_name,
       channel_types:         p.channel_types ?? [],
       sla_target_ms:         p.sla_target_ms ?? null,
+      max_reply_time_ms:     p.max_reply_time_ms ?? null,
       mentionable_journeys:  (p as Record<string, unknown>)['mentionable_journeys'] as string[] | undefined,
     }));
     if (accessiblePools.length === 0) return list;
@@ -131,7 +133,7 @@ export interface AgentAssistContextValue {
 
   // Toasts
   toasts:       Toast[];
-  addToast:     (message: string, type?: Toast["type"], persistent?: boolean) => void;
+  addToast:     (message: string, type?: Toast["type"], persistent?: boolean) => string;
   dismissToast: (id: string) => void;
 
   // History
@@ -194,12 +196,13 @@ export const AgentAssistProvider: React.FC<{ children: React.ReactNode }> = ({ c
   const [toasts, setToasts] = useState<Toast[]>([]);
 
   const addToast = useCallback(
-    (message: string, type: Toast["type"] = "info", persistent = false) => {
+    (message: string, type: Toast["type"] = "info", persistent = false): string => {
       const id = makeToastId();
       setToasts(prev => [...prev, { id, message, type, persistent }]);
       if (!persistent) {
         setTimeout(() => setToasts(prev => prev.filter(t => t.id !== id)), 5000);
       }
+      return id;
     },
     []
   );
@@ -216,6 +219,9 @@ export const AgentAssistProvider: React.FC<{ children: React.ReactNode }> = ({ c
   const notifiedAssignments   = useRef<Set<string>>(new Set());
   const pendingClosedSessions = useRef<Map<string, string>>(new Map());
   const handledSessions       = useRef<Set<string>>(new Set());
+  // Tracks the persistent "Aguardando encerramento..." toast ID per session so
+  // it can be dismissed when session.closed reason="agent_done" arrives.
+  const disconnectToastIds    = useRef<Map<string, string>>(new Map());
 
   // ── History loader ────────────────────────────────────────────────────────
   const fetchHistory = useCallback(async (sessionId: string) => {
@@ -258,8 +264,9 @@ export const AgentAssistProvider: React.FC<{ children: React.ReactNode }> = ({ c
                     !notifiedAssignments.current.has(session_id);
       notifiedAssignments.current.add(session_id);
 
-      const poolInfo   = availablePools.find(p => p.pool_id === resolvedPool);
-      const slaTargetMs = poolInfo?.sla_target_ms ?? null;
+      const poolInfo      = availablePools.find(p => p.pool_id === resolvedPool);
+      const slaTargetMs   = poolInfo?.sla_target_ms    ?? null;
+      const maxReplyTimeMs = poolInfo?.max_reply_time_ms ?? null;
 
       setContacts(prev => {
         if (prev.has(session_id)) return prev;
@@ -270,6 +277,7 @@ export const AgentAssistProvider: React.FC<{ children: React.ReactNode }> = ({ c
           ...makeContact(session_id, resolvedPool),
           contactId:         contact_id ?? null,
           slaTargetMs,
+          maxReplyTimeMs,
           sessionClosed:     alreadyClosed,
           pendingCloseModal: alreadyClosed,
         });
@@ -306,11 +314,24 @@ export const AgentAssistProvider: React.FC<{ children: React.ReactNode }> = ({ c
         // doesn't see the customer's NPS answer in their closed-session view.
         if (c.sessionClosed && msg.author === "customer") return prev;
         const isSelected = sid === selectedSessionRef.current;
+
+        // Track how long the customer has been waiting for a response.
+        // Set lastCustomerMessageAt when a customer message arrives (visibility "all").
+        // Reset to null when the human agent responds — customer is no longer waiting.
+        const isCustomerMsg  = msg.author === "customer" &&
+          (msg.visibility === "all" || msg.visibility === undefined || msg.visibility === null);
+        const isAgentHumanMsg = msg.author === "agent_human";
+        const lastCustomerMessageAt =
+          isCustomerMsg  ? new Date() :
+          isAgentHumanMsg ? null :
+          c.lastCustomerMessageAt;  // unchanged for system/AI messages
+
         const next = new Map(prev);
         next.set(sid, {
           ...c,
           messages:    [...c.messages, msg],
           unreadCount: isSelected ? 0 : c.unreadCount + 1,
+          lastCustomerMessageAt,
         });
         return next;
       });
@@ -369,7 +390,8 @@ export const AgentAssistProvider: React.FC<{ children: React.ReactNode }> = ({ c
           event.reason === "session_timeout" || event.reason === "timeout"
             ? "Sessão encerrada por inatividade."
             : "Cliente desconectou.";
-        addToast(`${reasonLabel} Aguardando encerramento...`, "warning", /* persistent */ true);
+        const toastId = addToast(`${reasonLabel} Aguardando encerramento...`, "warning", /* persistent */ true);
+        disconnectToastIds.current.set(sid, toastId);
         setContacts(prev => {
           const c = prev.get(sid);
           if (!c) return prev;
@@ -378,7 +400,7 @@ export const AgentAssistProvider: React.FC<{ children: React.ReactNode }> = ({ c
           // CloseModal — the bridge is running on_human_end hooks and will send
           // session.closed reason="agent_done" when they finish, at which point
           // the contact is removed automatically.
-          next.set(sid, { ...c, sessionClosed: true, pendingCloseModal: false });
+          next.set(sid, { ...c, sessionClosed: true, pendingCloseModal: false, lastCustomerMessageAt: null });
           return next;
         });
         return;
@@ -386,6 +408,13 @@ export const AgentAssistProvider: React.FC<{ children: React.ReactNode }> = ({ c
 
       // For "agent_done" (and any other reason): all hooks have completed —
       // clean up session→pool mapping and remove the contact.
+      // Dismiss the persistent "Aguardando encerramento..." toast if it was shown
+      // when the customer disconnected earlier.
+      const pendingToastId = disconnectToastIds.current.get(sid);
+      if (pendingToastId) {
+        dismissToast(pendingToastId);
+        disconnectToastIds.current.delete(sid);
+      }
       unregisterSession(sid);
       pendingClosedSessions.current.delete(sid);
       setContacts(prev => {
@@ -458,7 +487,7 @@ export const AgentAssistProvider: React.FC<{ children: React.ReactNode }> = ({ c
       return;
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [lastEvent, addToast, fetchHistory, registerSession, unregisterSession]);
+  }, [lastEvent, addToast, dismissToast, fetchHistory, registerSession, unregisterSession]);
 
   // Clear typing timers on unmount (full app unmount, not navigation)
   useEffect(() => {

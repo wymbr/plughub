@@ -712,11 +712,12 @@ class InstanceRegistry:
 
     async def write_pool_snapshot(
         self,
-        tenant_id:     str,
-        pool_id:       str,
-        sla_target_ms: int,
-        channel_types: list[str],
-        snapshot_ttl:  int = 120,
+        tenant_id:         str,
+        pool_id:           str,
+        sla_target_ms:     int,
+        channel_types:     list[str],
+        max_reply_time_ms: int | None = None,
+        snapshot_ttl:      int = 120,
     ) -> None:
         """
         Writes an operational pool snapshot to Redis after each routing event.
@@ -726,7 +727,7 @@ class InstanceRegistry:
         available    = await self.get_available_count(tenant_id, pool_id)
         busy         = await self.get_busy_count(tenant_id, pool_id)
         queue_length = await self.get_queue_length(tenant_id, pool_id)
-        snapshot = {
+        snapshot: dict = {
             "pool_id":       pool_id,
             "tenant_id":     tenant_id,
             "available":     available,
@@ -736,6 +737,8 @@ class InstanceRegistry:
             "channel_types": channel_types,
             "updated_at":    datetime.now(timezone.utc).isoformat(),
         }
+        if max_reply_time_ms is not None:
+            snapshot["max_reply_time_ms"] = max_reply_time_ms
         await self._redis.set(
             _pool_snapshot_key(tenant_id, pool_id),
             json.dumps(snapshot),

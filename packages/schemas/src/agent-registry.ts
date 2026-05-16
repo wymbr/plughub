@@ -133,6 +133,12 @@ export const PoolRegistrationSchema = z.object({
   description:            z.string().optional(),
   channel_types:          z.array(ChannelSchema).min(1),
   sla_target_ms:          z.number().int().positive(),
+  /**
+   * Tempo máximo (ms) para o agente responder a cada mensagem do cliente.
+   * Opcional — sem limite por mensagem quando ausente.
+   * Independente do sla_target_ms (que mede o atendimento como um todo).
+   */
+  max_reply_time_ms:      z.number().int().positive().optional(),
   routing_expression:     RoutingExpressionSchema.optional(),
   evaluation:             PoolEvaluationConfigSchema.optional(),
   /** ID explícito do evaluation template (alternativa ao template resolvido por skill_id_template). */

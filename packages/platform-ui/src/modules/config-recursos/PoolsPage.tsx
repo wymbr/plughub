@@ -284,12 +284,13 @@ const PoolsPage: React.FC = () => {
   const [calExceptions, setCalExceptions] = useState<ExceptionEntry[]>([])
 
   const [formData, setFormData] = useState({
-    pool_id:       '',
-    description:   '',
-    channel_types: [] as string[],
-    sla_target_ms: 30000,
-    calendar_id:   '',
-    routing_weights: { ...ROUTING_WEIGHTS_DEFAULTS } as RoutingWeights,
+    pool_id:           '',
+    description:       '',
+    channel_types:     [] as string[],
+    sla_target_ms:     30000,
+    max_reply_time_ms: null as number | null,
+    calendar_id:       '',
+    routing_weights:   { ...ROUTING_WEIGHTS_DEFAULTS } as RoutingWeights,
   })
 
   // ── data loading ─────────────────────────────────────────────────────────────
@@ -396,7 +397,7 @@ const PoolsPage: React.FC = () => {
     setEditingPool(null)
     setFormData({
       pool_id: '', description: '', channel_types: [], sla_target_ms: 30000,
-      calendar_id: '', routing_weights: { ...ROUTING_WEIGHTS_DEFAULTS },
+      max_reply_time_ms: null, calendar_id: '', routing_weights: { ...ROUTING_WEIGHTS_DEFAULTS },
     })
     setCalExceptions([])
     setError('')
@@ -408,9 +409,10 @@ const PoolsPage: React.FC = () => {
     setFormData({
       pool_id:         pool.pool_id,
       description:     pool.description || '',
-      channel_types:   pool.channel_types,
-      sla_target_ms:   pool.sla_target_ms,
-      calendar_id:     pool.calendar_id || '',
+      channel_types:     pool.channel_types,
+      sla_target_ms:     pool.sla_target_ms,
+      max_reply_time_ms: pool.max_reply_time_ms ?? null,
+      calendar_id:       pool.calendar_id || '',
       routing_weights: buildDefaultWeights(pool),
     })
     setCalExceptions([])  // will be loaded async below
@@ -464,9 +466,10 @@ const PoolsPage: React.FC = () => {
       const poolId = editingPool ? editingPool.pool_id : formData.pool_id
 
       const payload = {
-        description:   formData.description,
-        channel_types: formData.channel_types,
-        sla_target_ms: formData.sla_target_ms,
+        description:       formData.description,
+        channel_types:     formData.channel_types,
+        sla_target_ms:     formData.sla_target_ms,
+        ...(formData.max_reply_time_ms !== null && { max_reply_time_ms: formData.max_reply_time_ms }),
         ...(formData.calendar_id ? { calendar_id: formData.calendar_id } : { calendar_id: undefined }),
         ...(routing_skills.length ? { routing_skills } : {}),
         routing_weights: rw,
@@ -656,12 +659,30 @@ const PoolsPage: React.FC = () => {
           </div>
 
           {/* ── SLA ───────────────────────────────────────────────────────────── */}
-          <Input
-            label={t('pools.fields.slaTargetMs')}
-            type="number"
-            value={formData.sla_target_ms}
-            onChange={e => setFormData({ ...formData, sla_target_ms: parseInt(e.target.value) })}
-          />
+          <div className="flex gap-3">
+            <div className="flex-1">
+              <Input
+                label={t('pools.fields.slaTargetMs')}
+                type="number"
+                value={formData.sla_target_ms}
+                onChange={e => setFormData({ ...formData, sla_target_ms: parseInt(e.target.value) })}
+              />
+              <p className="text-xs text-gray-400 mt-0.5">SLA total do atendimento (ms)</p>
+            </div>
+            <div className="flex-1">
+              <Input
+                label="Tempo máx. de resposta (ms)"
+                type="number"
+                placeholder="Sem limite"
+                value={formData.max_reply_time_ms ?? ''}
+                onChange={e => {
+                  const v = e.target.value
+                  setFormData({ ...formData, max_reply_time_ms: v === '' ? null : parseInt(v) })
+                }}
+              />
+              <p className="text-xs text-gray-400 mt-0.5">Por mensagem do cliente — opcional</p>
+            </div>
+          </div>
 
           {/* ── Calendar ──────────────────────────────────────────────────────── */}
           <div>

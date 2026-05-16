@@ -331,8 +331,9 @@ async def _write_pool_context(
 ) -> None:
     """
     Writes session.pool.* entries to the ContextStore Redis hash so skill-flows
-    can reference @ctx.session.pool.id, @ctx.session.pool.channels, and
-    @ctx.session.pool.mentionable_pools without querying the agent-registry.
+    can reference @ctx.session.pool.id, @ctx.session.pool.channels,
+    @ctx.session.pool.mentionable_pools, and @ctx.session.pool.max_reply_time_ms
+    without querying the agent-registry.
 
     Reads pool_config from the routing engine's own Redis cache
     ({tenant_id}:pool_config:{pool_id}) to avoid an additional I/O path.
@@ -351,10 +352,11 @@ async def _write_pool_context(
         now_str = datetime.now(timezone.utc).isoformat()
 
         # Read pool config from routing engine Redis cache — no new I/O path
-        channel_types:        list[str]       = []
-        mentionable_pools:    dict | None     = None
-        mentionable_journeys: dict | None     = None
-        agent_groups:         list[str]       = []
+        channel_types:        list[str]   = []
+        mentionable_pools:    dict | None = None
+        mentionable_journeys: dict | None = None
+        agent_groups:         list[str]   = []
+        max_reply_time_ms:    int | None  = None
         raw = await redis_client.get(f"{tenant_id}:pool_config:{pool_id}")
         if raw:
             pool_cfg             = json.loads(raw)
@@ -362,6 +364,7 @@ async def _write_pool_context(
             mentionable_pools    = pool_cfg.get("mentionable_pools") or None
             mentionable_journeys = pool_cfg.get("mentionable_journeys") or None
             agent_groups         = pool_cfg.get("agent_groups") or []
+            max_reply_time_ms    = pool_cfg.get("max_reply_time_ms") or None
 
         def _entry(value: object) -> str:
             return json.dumps({
@@ -382,6 +385,8 @@ async def _write_pool_context(
             mapping["session.pool.mentionable_journeys"] = _entry(mentionable_journeys)
         if agent_groups:
             mapping["session.pool.agent_groups"] = _entry(agent_groups)
+        if max_reply_time_ms is not None:
+            mapping["session.pool.max_reply_time_ms"] = _entry(max_reply_time_ms)
 
         await redis_client.hset(ctx_key, mapping=mapping)
         # EXPIRE with NX: only sets TTL if no TTL is currently on the key,

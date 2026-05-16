@@ -25,6 +25,7 @@ model Pool {
   description            String?
   channel_types          String[]
   sla_target_ms          Int
+  max_reply_time_ms      Int?    // Maximum reply time per customer message (ms). Optional.
   routing_expression     Json?
   evaluation_template_id String?
   supervisor_config      Json?

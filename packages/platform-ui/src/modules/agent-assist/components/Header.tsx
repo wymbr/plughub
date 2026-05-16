@@ -1,20 +1,33 @@
 /**
- * Header
- * Row 1: agent name / session info / handle-time / SLA / WS status
+ * Header — Arc 11 Fase 2 (Fase B)
+ * Row 1: agent name / ready state / contact-count badge / pause / WS status
  * Row 2: pool combo dropdown — "X/Y Pools" button that opens a popover
  *        with per-pool toggle rows (replaces the overflow pill bar)
+ *
+ * Removed (Fase B): session-specific sub-line (poolId + sessionId), handle-time
+ * counter, SLA bar. Those signals now live exclusively in the left contact list
+ * where the agent can compare across all active sessions.
+ *
+ * Props poolId / sessionId / sla / sessionStartedAt are kept in the interface
+ * (marked @deprecated) so the parent compiles without changes. They are no
+ * longer rendered. Remove them when the parent is updated.
  */
 
-import React, { useEffect, useRef, useState } from "react";
-import { PoolInfo, PoolConnectionStatus, SlaState, WsStatus } from "../types";
+import React, { useRef, useState, useEffect } from "react";
+// useEffect kept for PoolCombo's outside-click handler
+import { PoolInfo, PoolConnectionStatus, WsStatus } from "../types";
 
 interface HeaderProps {
   agentName:        string;
-  poolId:           string;
-  sessionId:        string | null;
+  /** @deprecated — session identity now shown only in the contact list (Fase B) */
+  poolId?:           string;
+  /** @deprecated — session identity now shown only in the contact list (Fase B) */
+  sessionId?:        string | null;
   wsStatus:         WsStatus;
-  sla:              SlaState | null;
-  sessionStartedAt: Date | null;
+  /** @deprecated — SLA now shown only in the contact list (Fase B) */
+  sla?:              unknown;
+  /** @deprecated — timer now shown only in the contact list and ActionBar (Fase B) */
+  sessionStartedAt?: Date | null;
   contactCount?:    number;
   pools:            PoolInfo[];
   activePools:      string[];
@@ -27,14 +40,6 @@ interface HeaderProps {
   onPauseRequest?:  () => void;   // pause path (intercepted by PauseReasonModal)
 }
 
-function formatElapsed(ms: number): string {
-  const totalSec = Math.floor(ms / 1000);
-  const h = Math.floor(totalSec / 3600);
-  const m = Math.floor((totalSec % 3600) / 60);
-  const s = totalSec % 60;
-  if (h > 0) return `${h}:${m.toString().padStart(2, "0")}:${s.toString().padStart(2, "0")}`;
-  return `${m}:${s.toString().padStart(2, "0")}`;
-}
 
 const STATUS_COLORS: Record<WsStatus, string> = {
   connected:    "bg-green-500",
@@ -202,11 +207,7 @@ const PoolCombo: React.FC<PoolComboProps> = ({
 // ── Main component ─────────────────────────────────────────────────────────────
 export const Header: React.FC<HeaderProps> = ({
   agentName,
-  poolId,
-  sessionId,
   wsStatus,
-  sla,
-  sessionStartedAt,
   contactCount = 0,
   pools,
   activePools,
@@ -218,30 +219,16 @@ export const Header: React.FC<HeaderProps> = ({
   onTogglePause,
   onPauseRequest,
 }) => {
-  const [handleMs, setHandleMs] = useState<number>(0);
-
-  useEffect(() => {
-    if (!sessionStartedAt) { setHandleMs(0); return; }
-    setHandleMs(Date.now() - sessionStartedAt.getTime());
-    const id = setInterval(() => setHandleMs(Date.now() - sessionStartedAt.getTime()), 1_000);
-    return () => clearInterval(id);
-  }, [sessionStartedAt]);
-
-  const slaPercent = sla ? Math.min(sla.percentage, 100) : 0;
-  const slaColor =
-    !sla            ? "bg-gray-300" :
-    sla.breach_imminent ? "bg-red-500" :
-    slaPercent > 70 ? "bg-yellow-400" :
-                      "bg-green-500";
-
   const activeCount = activePools.length;
 
   return (
     // Primary brand colour (#1B4F8A) so the header is visually distinct from the
     // white/light-gray content columns below.
     <header className="bg-[#1B4F8A] flex-shrink-0 shadow-md">
-      {/* ── Row 1: identity / session / status ── */}
+      {/* ── Row 1: agent identity / ready state / controls / status ── */}
       <div className="px-4 py-2 flex items-center justify-between gap-3">
+
+        {/* Left: avatar + name + ready state */}
         <div className="flex items-center gap-3 min-w-0">
           <div className="w-8 h-8 rounded-full bg-white/20 border border-white/30
             flex items-center justify-center text-white text-sm font-semibold flex-shrink-0">
@@ -251,46 +238,19 @@ export const Header: React.FC<HeaderProps> = ({
             <p className="text-sm font-semibold text-white leading-tight truncate">
               {agentName}
             </p>
-            <p className="text-xs text-blue-200 leading-tight truncate">
-              {sessionId
-                ? <>{poolId}<span className="ml-2 font-mono text-blue-300">{sessionId.slice(0, 8)}…</span></>
-                : activeCount === 0
-                  ? <span className="text-blue-300 italic">Offline — selecione um pool</span>
-                  : <span className="text-green-300 font-medium">Ready em {activeCount} pool{activeCount > 1 ? "s" : ""}</span>
+            <p className="text-xs leading-tight">
+              {activeCount === 0
+                ? <span className="text-blue-300 italic">Offline — selecione um pool</span>
+                : <span className="text-green-300 font-medium">
+                    Ready em {activeCount} pool{activeCount > 1 ? "s" : ""}
+                  </span>
               }
             </p>
           </div>
         </div>
 
-        <div className="flex items-center gap-4 flex-shrink-0">
-          {sessionStartedAt && sessionId && (
-            <div className="flex items-center gap-1.5" title="Tempo de atendimento">
-              <span className="text-xs text-blue-300">⏱</span>
-              <span className={`text-sm font-mono font-semibold tabular-nums ${
-                handleMs >= 30 * 60 * 1000 ? "text-orange-300" : "text-white"
-              }`}>
-                {formatElapsed(handleMs)}
-              </span>
-            </div>
-          )}
-
-          {sla && (
-            <div className="flex items-center gap-2">
-              <span className="text-xs text-blue-200">SLA</span>
-              <div className="w-24 h-2 bg-white/20 rounded-full overflow-hidden">
-                <div
-                  className={`h-full rounded-full transition-all duration-500 ${slaColor}`}
-                  style={{ width: `${slaPercent}%` }}
-                />
-              </div>
-              <span className="text-xs text-blue-100 w-10 text-right">
-                {formatElapsed(sla.elapsed_ms)}
-              </span>
-              {sla.breach_imminent && (
-                <span className="text-xs font-semibold text-red-300 animate-pulse">BREACH</span>
-              )}
-            </div>
-          )}
+        {/* Right: contact-count badge / pause / WS status */}
+        <div className="flex items-center gap-3 flex-shrink-0">
 
           {contactCount > 0 && (
             <div className="flex items-center gap-1 px-2 py-0.5 rounded-full
