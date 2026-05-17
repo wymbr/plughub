@@ -847,6 +847,40 @@ async def fire_pool_hooks(
             )
             continue
 
+        # Arc 14: read `side` from hook YAML entry (default "agent" — backward compat).
+        # "agent"    → segment interacts with the human agent (wrap-up, resumo).
+        # "customer" → segment interacts with the customer (NPS, satisfaction survey).
+        hook_side = "agent"
+        nps_on_disconnect = "timeout"
+        if isinstance(entry, dict):
+            hook_side          = entry.get("side", "agent") or "agent"
+            nps_on_disconnect  = entry.get("nps_on_disconnect", "timeout") or "timeout"
+
+        # Arc 14 Fase D: skip customer-side hooks when nps_on_disconnect="skip"
+        # and the client already disconnected.
+        if hook_side == "customer" and nps_on_disconnect == "skip":
+            try:
+                _co_raw = await redis_client.hget(
+                    f"{tenant_id}:ctx:{session_id}", "session.close_origin"
+                )
+                if _co_raw:
+                    _co_entry    = json.loads(
+                        _co_raw if isinstance(_co_raw, str) else _co_raw.decode()
+                    )
+                    _close_origin = _co_entry.get("value", "")
+                    if _close_origin == "customer_disconnect":
+                        logger.info(
+                            "fire_pool_hooks: NPS hook skipped (nps_on_disconnect=skip, "
+                            "customer_disconnect): session=%s pool=%s",
+                            session_id, target_pool,
+                        )
+                        continue
+            except Exception as _nd_exc:
+                logger.warning(
+                    "fire_pool_hooks: could not check nps_on_disconnect: session=%s — %s",
+                    session_id, _nd_exc,
+                )
+
         conference_id = str(uuid.uuid4())
 
         # ConversationInboundEvent — routing engine picks up on pool_id + conference_id.
@@ -878,9 +912,9 @@ async def fire_pool_hooks(
                 json.dumps(event).encode("utf-8"),
             )
             logger.info(
-                "Pool hook fired: hook=%s origin_pool=%s → target_pool=%s "
+                "Pool hook fired: hook=%s side=%s origin_pool=%s → target_pool=%s "
                 "session=%s conference=%s",
-                hook_type, pool_id, target_pool, session_id, conference_id,
+                hook_type, hook_side, pool_id, target_pool, session_id, conference_id,
             )
         except Exception as exc:
             logger.error(
@@ -893,17 +927,119 @@ async def fire_pool_hooks(
         # when the hook agent completes and decrement the pending counter.
         # Also covers on_human_start so those agents are excluded from the
         # active_ai_specialists set (G2 guard) and never block on_human_end hooks.
+        #
+        # Arc 14: hook_conf value extended from "{hook_type}:{pool}" to
+        # "{hook_type}:{pool}:{side}" so process_routed knows the segment side.
+        # Backward compat: parse uses split(":", 2) and defaults missing side to "agent".
         if hook_type in ("on_human_end", "post_human", "on_human_start"):
             try:
                 await redis_client.setex(
                     f"session:{session_id}:hook_conf:{conference_id}",
                     14400,
-                    f"{hook_type}:{target_pool}",
+                    f"{hook_type}:{target_pool}:{hook_side}",
                 )
             except Exception as exc:
                 logger.warning(
                     "fire_pool_hooks: could not mark hook conference: session=%s conf=%s — %s",
                     session_id, conference_id, exc,
+                )
+
+        # Arc 14: INCR posatt:active counter for this hook segment.
+        # Decremented in process_routed when the hook agent completes.
+        # When the counter reaches 0, _destroy_conference() is called.
+        # Only tracked for on_human_end and post_human (not on_human_start).
+        if hook_type in ("on_human_end", "post_human"):
+            try:
+                await redis_client.incr(f"session:{session_id}:posatt:active")
+                await redis_client.expire(f"session:{session_id}:posatt:active", 14400)
+                # Arc 14 Fase E: track customer-side hooks separately.
+                # _close_contact_layer() fires only after posatt:customer_active hits 0,
+                # keeping the customer WebSocket open while NPS is running.
+                if hook_side == "customer":
+                    await redis_client.incr(f"session:{session_id}:posatt:customer_active")
+                    await redis_client.expire(f"session:{session_id}:posatt:customer_active", 14400)
+                logger.debug(
+                    "fire_pool_hooks: posatt:active INCR — session=%s hook=%s side=%s conf=%s",
+                    session_id, hook_type, hook_side, conference_id,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "fire_pool_hooks: could not INCR posatt:active: session=%s — %s",
+                    session_id, exc,
+                )
+
+            # Arc 14 Fase B: register the fixed-side participant in the posatt
+            # participants SET so process_routed can publish a targeted session.closed
+            # when this segment completes.
+            #   side=customer → fixed participant = customer_participant_id
+            #   side=agent    → fixed participant = human_agent_participant_id
+            # The hook agent itself is added in process_routed when it joins.
+            try:
+                _fixed_pid: str | None = None
+                if hook_side == "customer":
+                    _cpid_raw = await redis_client.get(
+                        f"session:{session_id}:customer_participant_id"
+                    )
+                    if _cpid_raw:
+                        _fixed_pid = (
+                            _cpid_raw if isinstance(_cpid_raw, str) else _cpid_raw.decode()
+                        )
+                else:
+                    # Read human_agent_participant_id from ContextStore
+                    _ha_raw = await redis_client.hget(
+                        f"{tenant_id}:ctx:{session_id}",
+                        "session.human_agent_participant_id",
+                    )
+                    if _ha_raw:
+                        _ha_entry = json.loads(
+                            _ha_raw if isinstance(_ha_raw, str) else _ha_raw.decode()
+                        )
+                        _fixed_pid = _ha_entry.get("value")
+                if _fixed_pid:
+                    _pset_key = f"session:{session_id}:posatt:{conference_id}:participants"
+                    await redis_client.sadd(_pset_key, _fixed_pid)
+                    await redis_client.expire(_pset_key, 14400)
+                    logger.debug(
+                        "fire_pool_hooks: posatt participants fixed-side registered: "
+                        "session=%s conf=%s side=%s pid=%s",
+                        session_id, conference_id, hook_side, _fixed_pid,
+                    )
+
+                    # Arc 14 Fase C: wrap_up_pending flag — block the human agent from
+                    # receiving a new contact until the wrap-up segment completes.
+                    # Checked by routing-engine get_ready_instances() to skip the instance.
+                    # Deleted in process_routed() when the agent-side hook segment concludes.
+                    # TTL = hook timeout + 5 min safety margin so it auto-expires even
+                    # if the cleanup path is never reached (e.g. bridge crash).
+                    if hook_side == "agent" and hook_type == "on_human_end":
+                        try:
+                            _wp_key = (
+                                f"{tenant_id}:instance:{_fixed_pid}:wrap_up_pending"
+                            )
+                            await redis_client.setex(
+                                _wp_key, _HOOK_TIMEOUT_S + 300, session_id
+                            )
+                            logger.info(
+                                "fire_pool_hooks: wrap_up_pending set — session=%s "
+                                "instance=%s key=%s",
+                                session_id, _fixed_pid, _wp_key,
+                            )
+                        except Exception as _wp_exc:
+                            logger.warning(
+                                "fire_pool_hooks: could not set wrap_up_pending: "
+                                "session=%s instance=%s — %s",
+                                session_id, _fixed_pid, _wp_exc,
+                            )
+                else:
+                    logger.debug(
+                        "fire_pool_hooks: no fixed-side participant found: "
+                        "session=%s conf=%s side=%s",
+                        session_id, conference_id, hook_side,
+                    )
+            except Exception as exc:
+                logger.warning(
+                    "fire_pool_hooks: could not register posatt participants: session=%s — %s",
+                    session_id, exc,
                 )
 
 
@@ -989,58 +1125,55 @@ async def _mark_contact_ended(
     return now
 
 
-async def _trigger_contact_close(
+async def _close_contact_layer(
     redis_client: aioredis.Redis,
     session_id:   str,
 ) -> None:
     """
-    Publish the two events that close a contact from the bridge side:
+    Arc 14 — Layer 1 close: close the customer-facing channel immediately.
 
-    1. conversations.outbound  session.closed  → channel-gateway closes customer WS
-    2. conversations.events    contact_closed  → process_contact_event does full cleanup
+    Publishes:
+      1. conversations.outbound  session.closed  → channel-gateway closes customer WS
+      2. conversations.events    contact_closed  → analytics (AHT uses contact_ended_at,
+                                                   not the time this fires)
 
-    reason "agent_done" → customer_side=True in process_contact_event, which:
-      - signals BLPOP / XADD session:closed
-      - notifies any remaining human agents
-      - restores all AI instances
+    Guarded by session:{id}:contact_close_fired (NX, TTL 7d) — idempotent.
+    May be called concurrently with posatt hooks still running; those hooks
+    will discover the customer is gone and handle it via their own skill-flow
+    branches (Arc 14 decision D2).
 
-    Called when either:
-    - The last on_human_end hook agent completes (counter → 0)
-    - A pool has no on_human_end hooks (immediate close)
+    Called immediately when the contact ends — before posatt hooks fire.
+    In the no-hook path _trigger_contact_close() calls this first.
     """
     global _kafka_producer
     if _kafka_producer is None:
         logger.warning(
-            "_trigger_contact_close: Kafka producer not ready — session=%s", session_id,
+            "_close_contact_layer: Kafka producer not ready — session=%s", session_id,
         )
         return
 
-    # Idempotency guard: only the first caller wins.  SET NX with TTL 7d.
-    # This prevents double-close when both a hook completion and the timeout guard
-    # race to call _trigger_contact_close for the same session.
+    # Idempotency guard — separate from _destroy_conference's close_fired key
+    # so each function can be called independently without blocking the other.
     try:
         acquired = await redis_client.set(
-            f"session:{session_id}:close_fired",
+            f"session:{session_id}:contact_close_fired",
             "1",
             nx=True,
             ex=604800,
         )
         if not acquired:
             logger.debug(
-                "_trigger_contact_close: close already fired for session=%s — skipping",
+                "_close_contact_layer: already fired for session=%s — skipping",
                 session_id,
             )
             return
     except Exception as exc:
         logger.warning(
-            "_trigger_contact_close: could not acquire close_fired guard: session=%s — %s "
-            "(proceeding anyway)",
+            "_close_contact_layer: could not acquire guard: session=%s — %s (proceeding)",
             session_id, exc,
         )
-        # Non-fatal — proceed even if Redis SET failed; double-close is benign
-        # (channel-gateway handles duplicate session.closed gracefully).
 
-    # Resolve contact_id, channel, tenant_id, pool_id, started_at from session meta.
+    # Resolve session meta (contact_id, channel, tenant_id, pool_id, started_at).
     contact_id  = session_id
     channel     = "webchat"
     tenant_id   = ""
@@ -1054,50 +1187,12 @@ async def _trigger_contact_close(
             tenant_id   = meta.get("tenant_id", "") or meta.get("tenant", "")
     except Exception as exc:
         logger.warning(
-            "_trigger_contact_close: could not read session meta: session=%s — %s",
+            "_close_contact_layer: could not read session meta: session=%s — %s",
             session_id, exc,
         )
 
-    # 0. Notify the agent WebSocket that the session is now truly closed.
-    #    This is deferred from agent_done (which publishes "session.agent_done")
-    #    so hook agents (wrapup, NPS) can interact with the human agent first.
-    #
-    #    Also clean up human-agent tracking keys here (when hooks were fired).
-    #    In the no-hook path, these are deleted in process_contact_event before
-    #    calling _trigger_contact_close.  In the hook path, they MUST stay alive
-    #    until this point so that wrap-up/NPS messages are forwarded to the Console
-    #    (the notify/menu delivery path reads human_agent to decide pub/sub routing).
+    # 1. Close the customer WebSocket.
     try:
-        await redis_client.delete(
-            f"session:{session_id}:human_agent",
-            f"session:{session_id}:human_agents",
-        )
-    except Exception as exc:
-        logger.warning(
-            "_trigger_contact_close: could not delete human_agent keys: session=%s — %s",
-            session_id, exc,
-        )
-    try:
-        await redis_client.publish(
-            f"agent:events:{session_id}",
-            json.dumps({
-                "type":       "session.closed",
-                "session_id": session_id,
-                "reason":     "agent_done",
-            }),
-        )
-        logger.info(
-            "_trigger_contact_close: published session.closed to agent:events: session=%s",
-            session_id,
-        )
-    except Exception as exc:
-        logger.warning(
-            "_trigger_contact_close: could not publish agent session.closed: session=%s — %s",
-            session_id, exc,
-        )
-
-    try:
-        # 1. Close the customer WebSocket.
         await _kafka_producer.send_and_wait(
             "conversations.outbound",
             json.dumps({
@@ -1109,30 +1204,27 @@ async def _trigger_contact_close(
             }).encode("utf-8"),
         )
         logger.info(
-            "_trigger_contact_close: published conversations.outbound session.closed: "
+            "_close_contact_layer: published conversations.outbound session.closed: "
             "session=%s contact_id=%s channel=%s",
             session_id, contact_id, channel,
         )
     except Exception as exc:
         logger.error(
-            "_trigger_contact_close: failed to publish outbound close: session=%s — %s",
+            "_close_contact_layer: failed to publish outbound close: session=%s — %s",
             session_id, exc,
         )
 
+    # 2. Publish contact_closed analytics event.
+    # reason "agent_done" → customer_side=True in process_contact_event.
+    # Include full session data so analytics-api builds a complete sessions row.
     try:
-        # 2. Trigger full bridge cleanup via existing process_contact_event path.
-        # reason "agent_done" → customer_side=True → LPUSH/XADD + instance restore.
-        # Include session data from meta so analytics-api can build a complete sessions row
-        # (pool_id, started_at, customer_id, channel) — avoids an empty row in ClickHouse.
         _pool_id_close     = meta.get("pool_id", "") if meta else ""
         _started_at_close  = meta.get("started_at", "") if meta else ""
         _customer_id_close = meta.get("customer_id", "") if meta else ""
         _channel_close     = meta.get("channel", "webchat") if meta else "webchat"
 
         # G1 fix: read the true contact end time recorded by _mark_contact_ended().
-        # analytics-api parse_conversations_event() already reads ended_at from the
-        # payload and uses it for handle_time_ms, decoupling AHT from wrap-up time.
-        # Falls back to now() only when the key is absent (e.g. crash recovery).
+        # Falls back to now() only when the key is absent (crash recovery path).
         _ended_at_close = ""
         try:
             _raw_ended = await redis_client.get(f"session:{session_id}:contact_ended_at")
@@ -1159,15 +1251,134 @@ async def _trigger_contact_close(
             }).encode("utf-8"),
         )
         logger.info(
-            "_trigger_contact_close: published conversations.events contact_closed: "
+            "_close_contact_layer: published conversations.events contact_closed: "
             "session=%s pool=%s ended_at=%s",
             session_id, _pool_id_close, _ended_at_close,
         )
     except Exception as exc:
         logger.error(
-            "_trigger_contact_close: failed to publish contact_closed: session=%s — %s",
+            "_close_contact_layer: failed to publish contact_closed: session=%s — %s",
             session_id, exc,
         )
+
+
+async def _destroy_conference(
+    redis_client: aioredis.Redis,
+    session_id:   str,
+) -> None:
+    """
+    Arc 14 — Layer 3 destroy: clean up conference infrastructure once all
+    posatt segments have finished.
+
+    Actions:
+      - Deletes human_agent tracking keys (they MUST stay alive during posatt
+        so that hook agent messages are forwarded to the Console correctly).
+      - Publishes session.closed to agent:events:{session_id} (broadcast) so
+        all Console connections for this session close gracefully.
+        (Arc 14 Fase B will make this targeted per-segment instead.)
+
+    Guarded by session:{id}:close_fired (NX, TTL 7d) — idempotent.
+    Called by the last posatt segment to complete (posatt:active hits 0),
+    or by _trigger_contact_close in the no-hook path.
+    """
+    # Arc 14 — posatt guard: if any posatt hook segments are still running,
+    # do NOT destroy the conference yet.  The last posatt segment to complete
+    # will call _destroy_conference() again (via process_routed decrement path)
+    # once posatt:active reaches 0.
+    try:
+        posatt_raw = await redis_client.get(f"session:{session_id}:posatt:active")
+        if posatt_raw:
+            remaining = int(posatt_raw if isinstance(posatt_raw, str) else posatt_raw.decode())
+            if remaining > 0:
+                logger.info(
+                    "_destroy_conference: posatt:active=%d — deferring destroy (hooks still running): session=%s",
+                    remaining, session_id,
+                )
+                return
+    except Exception as exc:
+        logger.warning(
+            "_destroy_conference: could not read posatt:active: session=%s — %s (proceeding)",
+            session_id, exc,
+        )
+
+    # Idempotency guard — same key as the old _trigger_contact_close used,
+    # preserved for backward compat with existing watchdog/crash recovery logic.
+    try:
+        acquired = await redis_client.set(
+            f"session:{session_id}:close_fired",
+            "1",
+            nx=True,
+            ex=604800,
+        )
+        if not acquired:
+            logger.debug(
+                "_destroy_conference: already fired for session=%s — skipping",
+                session_id,
+            )
+            return
+    except Exception as exc:
+        logger.warning(
+            "_destroy_conference: could not acquire close_fired guard: session=%s — %s "
+            "(proceeding anyway)",
+            session_id, exc,
+        )
+
+    # Delete human-agent tracking keys.
+    # These MUST stay alive during posatt hooks so that wrap-up/NPS messages
+    # are routed correctly to the Console (human_agent key is read by the
+    # notify/menu delivery path).  Now that all posatt segments are done, it
+    # is safe to remove them.
+    try:
+        await redis_client.delete(
+            f"session:{session_id}:human_agent",
+            f"session:{session_id}:human_agents",
+        )
+    except Exception as exc:
+        logger.warning(
+            "_destroy_conference: could not delete human_agent keys: session=%s — %s",
+            session_id, exc,
+        )
+
+    # Broadcast session.closed to all Console connections for this session.
+    # (Arc 14 Fase B: replace broadcast with targeted recipients per segment.)
+    try:
+        await redis_client.publish(
+            f"agent:events:{session_id}",
+            json.dumps({
+                "type":       "session.closed",
+                "session_id": session_id,
+                "reason":     "conference_destroyed",
+            }),
+        )
+        logger.info(
+            "_destroy_conference: published session.closed to agent:events: session=%s",
+            session_id,
+        )
+    except Exception as exc:
+        logger.warning(
+            "_destroy_conference: could not publish session.closed: session=%s — %s",
+            session_id, exc,
+        )
+
+
+async def _trigger_contact_close(
+    redis_client: aioredis.Redis,
+    session_id:   str,
+) -> None:
+    """
+    Backward-compatible wrapper — closes both layers in sequence.
+
+    Used by:
+    - No-hook path (pool has no on_human_end hooks): Layer 1 + Layer 3 fire immediately.
+    - Crash/watchdog/timeout paths that may not distinguish between the two layers.
+    - AI primary agent completion (no hooks involved).
+
+    In the hook path (Arc 14), the bridge calls _close_contact_layer() immediately
+    on contact end and _destroy_conference() when the last posatt segment finishes,
+    so _trigger_contact_close() is NOT called in that path.
+    """
+    await _close_contact_layer(redis_client, session_id)
+    await _destroy_conference(redis_client, session_id)
 
 
 # ── Participant event publishing — Fase C (analytics) ─────────────────────────
@@ -1798,6 +2009,25 @@ async def process_routed(
                         "AI task-specialist tracked: session=%s instance=%s conference=%s",
                         session_id, native_instance_id, conference_id,
                     )
+                else:
+                    # Arc 14 Fase B: hook agent joining — add its instance_id to the
+                    # posatt participants SET so the targeted session.closed includes it.
+                    try:
+                        _pset_key = (
+                            f"session:{session_id}:posatt:{conference_id}:participants"
+                        )
+                        await redis_client.sadd(_pset_key, native_instance_id)
+                        # TTL was already set by fire_pool_hooks; extend as safety.
+                        await redis_client.expire(_pset_key, 14400)
+                        logger.debug(
+                            "posatt hook agent registered: session=%s conf=%s instance=%s",
+                            session_id, conference_id, native_instance_id,
+                        )
+                    except Exception as _pset_exc:
+                        logger.warning(
+                            "Could not add hook agent to posatt participants: "
+                            "session=%s — %s", session_id, _pset_exc,
+                        )
             except Exception as exc:
                 logger.warning(
                     "Could not track AI specialist: session=%s — %s", session_id, exc,
@@ -2106,11 +2336,18 @@ async def process_routed(
             await _mark_contact_ended(redis_client, session_id)
             asyncio.create_task(_trigger_contact_close(redis_client, session_id))
 
-        # ── Fase B/C: hook completion detection ───────────────────────────────
-        # hook_conf key stores "{hook_type}:{target_pool}" (e.g. "on_human_end:finalizacao_ia").
-        # Parse hook_type to determine which counter to decrement and what to do next:
-        #   on_human_end → when counter hits 0: check post_human hooks (Fase C) or close
-        #   post_human   → when counter hits 0: always trigger contact close
+        # ── Arc 14 / Fase B/C: hook completion detection ─────────────────────
+        # hook_conf key stores "{hook_type}:{target_pool}:{side}" (Arc 14 extended
+        # from the old "{hook_type}:{target_pool}" format — backward compat: missing
+        # side part defaults to "agent").
+        #
+        # Algorithm (Arc 14 Fase A):
+        #   1. DECR hook_pending:{hook_type} (tracks completion per hook_type)
+        #   2. If last on_human_end: dispatch post_human BEFORE DECRing posatt:active
+        #      (so post_human INCRs are already in place before our DECR)
+        #   3. DECR posatt:active (one per hook segment completing, regardless of type)
+        #   4. If posatt:active == 0 and no new segments dispatched → _destroy_conference()
+        #      (Layer 1 — customer WS — was already closed by _close_contact_layer())
         if conference_id:
             try:
                 hook_label = await redis_client.getdel(
@@ -2118,85 +2355,203 @@ async def process_routed(
                 )
                 if hook_label:
                     _hl = hook_label if isinstance(hook_label, str) else hook_label.decode()
-                    completed_hook_type = _hl.split(":")[0]   # "on_human_end" or "post_human"
-                    _hook_target_pool   = _hl.split(":", 1)[1] if ":" in _hl else ""
+                    _hl_parts           = _hl.split(":", 2)
+                    completed_hook_type = _hl_parts[0]                                 # "on_human_end" or "post_human"
+                    _hook_target_pool   = _hl_parts[1] if len(_hl_parts) > 1 else ""
+                    _hook_side          = _hl_parts[2] if len(_hl_parts) > 2 else "agent"  # Arc 14
 
                     remaining_hooks = await redis_client.decr(
                         f"session:{session_id}:hook_pending:{completed_hook_type}"
                     )
                     logger.info(
-                        "Hook agent completed: session=%s conference=%s hook=%s pool=%s remaining=%d",
-                        session_id, conference_id, completed_hook_type, _hook_target_pool, remaining_hooks,
+                        "Hook agent completed: session=%s conference=%s hook=%s pool=%s side=%s remaining=%d",
+                        session_id, conference_id, completed_hook_type, _hook_target_pool,
+                        _hook_side, remaining_hooks,
                     )
 
-                    if remaining_hooks <= 0:
-                        if completed_hook_type == "on_human_end":
-                            # ── Fase C: check for post_human hooks ────────────
-                            # If post_human hooks are declared, dispatch them now.
-                            # Otherwise go straight to contact close.
-                            _ph_pool = _ph_tenant = _ph_customer = ""
-                            try:
-                                _ph_raw = await redis_client.get(f"session:{session_id}:meta")
-                                if _ph_raw:
-                                    _ph_meta    = json.loads(_ph_raw)
-                                    _ph_pool    = _ph_meta.get("pool_id", "")
-                                    _ph_tenant  = (
-                                        _ph_meta.get("tenant_id", "")
-                                        or _ph_meta.get("tenant", "")
-                                    )
-                                    _ph_customer = (
-                                        _ph_meta.get("customer_id", session_id) or session_id
-                                    )
-                            except Exception as _ph_exc:
-                                logger.debug(
-                                    "Could not read meta for post_human check: "
-                                    "session=%s — %s", session_id, _ph_exc,
-                                )
-                            _dispatched_post = False
-                            if http and _ph_pool and _ph_tenant:
-                                try:
-                                    _ph_config = await get_pool_config(
-                                        http, _ph_tenant, _ph_pool
-                                    )
-                                    _post_human_list = (
-                                        ((_ph_config or {}).get("hooks") or {})
-                                        .get("post_human", [])
-                                    )
-                                    if _post_human_list:
-                                        asyncio.create_task(fire_pool_hooks(
-                                            http=http,
-                                            redis_client=redis_client,
-                                            session_id=session_id,
-                                            pool_id=_ph_pool,
-                                            tenant_id=_ph_tenant,
-                                            customer_id=_ph_customer,
-                                            hook_type="post_human",
-                                        ))
-                                        # Safety net for post_human hooks too
-                                        asyncio.create_task(_hook_timeout_guard(
-                                            redis_client, session_id, "post_human",
-                                        ))
-                                        logger.info(
-                                            "post_human hooks dispatched: session=%s pool=%s count=%d "
-                                            "(timeout guard scheduled: %ds)",
-                                            session_id, _ph_pool, len(_post_human_list),
-                                            _HOOK_TIMEOUT_S,
-                                        )
-                                        _dispatched_post = True
-                                except Exception as _ph_exc2:
-                                    logger.warning(
-                                        "Could not check post_human hooks: session=%s — %s",
-                                        session_id, _ph_exc2,
-                                    )
-                            if not _dispatched_post:
-                                asyncio.create_task(
-                                    _trigger_contact_close(redis_client, session_id)
-                                )
-                        else:
-                            # post_human complete → trigger contact close
-                            asyncio.create_task(
-                                _trigger_contact_close(redis_client, session_id)
+                    # Arc 14 Fase B: publish targeted session.closed for this segment.
+                    # Read the participant SET registered by fire_pool_hooks (fixed-side)
+                    # and by process_routed on hook-agent join.
+                    # recipients=[...] → only those agents tear down their session view.
+                    # The broadcast session.closed (reason=conference_destroyed) from
+                    # _destroy_conference() still fires as the global cleanup signal.
+                    try:
+                        _pset_key = (
+                            f"session:{session_id}:posatt:{conference_id}:participants"
+                        )
+                        _raw_pids = await redis_client.smembers(_pset_key)
+                        _recipients = [
+                            (p.decode() if isinstance(p, bytes) else p)
+                            for p in (_raw_pids or [])
+                        ]
+                        if _recipients:
+                            await redis_client.publish(
+                                f"agent:events:{session_id}",
+                                json.dumps({
+                                    "type":       "session.closed",
+                                    "session_id": session_id,
+                                    "reason":     "posatt_segment_complete",
+                                    "recipients": _recipients,
+                                }),
                             )
+                            await redis_client.delete(_pset_key)
+                            logger.info(
+                                "posatt segment closed: session=%s conf=%s hook=%s "
+                                "recipients=%s",
+                                session_id, conference_id, completed_hook_type, _recipients,
+                            )
+                        else:
+                            logger.debug(
+                                "posatt segment closed: no participants SET found — "
+                                "session=%s conf=%s", session_id, conference_id,
+                            )
+                    except Exception as _tgt_exc:
+                        logger.warning(
+                            "Could not publish posatt targeted session.closed: "
+                            "session=%s — %s", session_id, _tgt_exc,
+                        )
+
+                    # Arc 14 Fase C: wrap_up_pending cleanup.
+                    # When the agent-side (wrap-up) segment completes, delete the flag
+                    # so the routing-engine can allocate new contacts to this agent.
+                    # We read the human agent's instance_id from ContextStore
+                    # (same key written by _write_pre_hook_context before hooks fire).
+                    if _hook_side == "agent":
+                        try:
+                            _wup_raw = await redis_client.hget(
+                                f"{tenant_id}:ctx:{session_id}",
+                                "session.human_agent_participant_id",
+                            )
+                            if _wup_raw:
+                                _wup_entry  = json.loads(
+                                    _wup_raw if isinstance(_wup_raw, str)
+                                    else _wup_raw.decode()
+                                )
+                                _wup_iid = _wup_entry.get("value")
+                                if _wup_iid and tenant_id:
+                                    _wp_key = (
+                                        f"{tenant_id}:instance:{_wup_iid}:wrap_up_pending"
+                                    )
+                                    await redis_client.delete(_wp_key)
+                                    logger.info(
+                                        "wrap_up_pending cleared: session=%s instance=%s",
+                                        session_id, _wup_iid,
+                                    )
+                        except Exception as _wup_exc:
+                            logger.warning(
+                                "Could not clear wrap_up_pending: session=%s — %s",
+                                session_id, _wup_exc,
+                            )
+
+                    # Arc 14 Fase E: when a customer-side hook (NPS) completes,
+                    # DECR posatt:customer_active and close the customer WS when
+                    # the counter reaches 0 (all NPS/survey segments finished).
+                    # In the no-customer-hook path, _close_contact_layer() fires
+                    # immediately in the agent_done handler above.
+                    if _hook_side == "customer":
+                        try:
+                            _cust_remaining = await redis_client.decr(
+                                f"session:{session_id}:posatt:customer_active"
+                            )
+                            logger.info(
+                                "posatt:customer_active DECR: session=%s conf=%s "
+                                "hook=%s remaining=%d",
+                                session_id, conference_id, completed_hook_type,
+                                _cust_remaining,
+                            )
+                            if _cust_remaining <= 0:
+                                asyncio.create_task(
+                                    _close_contact_layer(redis_client, session_id)
+                                )
+                        except Exception as _ca_exc:
+                            logger.warning(
+                                "Could not DECR posatt:customer_active: session=%s — %s",
+                                session_id, _ca_exc,
+                            )
+
+                    # Arc 14: dispatch post_human BEFORE DECRing posatt:active so that
+                    # fire_pool_hooks() INCRs posatt:active for each new segment FIRST.
+                    _dispatched_post = False
+                    if remaining_hooks <= 0 and completed_hook_type == "on_human_end":
+                        _ph_pool = _ph_tenant = _ph_customer = ""
+                        try:
+                            _ph_raw = await redis_client.get(f"session:{session_id}:meta")
+                            if _ph_raw:
+                                _ph_meta     = json.loads(_ph_raw)
+                                _ph_pool     = _ph_meta.get("pool_id", "")
+                                _ph_tenant   = (
+                                    _ph_meta.get("tenant_id", "")
+                                    or _ph_meta.get("tenant", "")
+                                )
+                                _ph_customer = (
+                                    _ph_meta.get("customer_id", session_id) or session_id
+                                )
+                        except Exception as _ph_exc:
+                            logger.debug(
+                                "Could not read meta for post_human check: "
+                                "session=%s — %s", session_id, _ph_exc,
+                            )
+                        if http and _ph_pool and _ph_tenant:
+                            try:
+                                _ph_config = await get_pool_config(
+                                    http, _ph_tenant, _ph_pool
+                                )
+                                _post_human_list = (
+                                    ((_ph_config or {}).get("hooks") or {})
+                                    .get("post_human", [])
+                                )
+                                if _post_human_list:
+                                    # fire_pool_hooks INCRs posatt:active for each post_human hook
+                                    asyncio.create_task(fire_pool_hooks(
+                                        http=http,
+                                        redis_client=redis_client,
+                                        session_id=session_id,
+                                        pool_id=_ph_pool,
+                                        tenant_id=_ph_tenant,
+                                        customer_id=_ph_customer,
+                                        hook_type="post_human",
+                                    ))
+                                    asyncio.create_task(_hook_timeout_guard(
+                                        redis_client, session_id, "post_human",
+                                    ))
+                                    logger.info(
+                                        "post_human hooks dispatched: session=%s pool=%s count=%d "
+                                        "(timeout guard scheduled: %ds)",
+                                        session_id, _ph_pool, len(_post_human_list),
+                                        _HOOK_TIMEOUT_S,
+                                    )
+                                    _dispatched_post = True
+                            except Exception as _ph_exc2:
+                                logger.warning(
+                                    "Could not check post_human hooks: session=%s — %s",
+                                    session_id, _ph_exc2,
+                                )
+
+                    # Arc 14: DECR posatt:active for this completing hook segment.
+                    # Done AFTER dispatching post_human so INCRs precede this DECR.
+                    _posatt_remaining = -1
+                    try:
+                        _posatt_remaining = await redis_client.decr(
+                            f"session:{session_id}:posatt:active"
+                        )
+                        logger.info(
+                            "posatt:active DECR: session=%s conference=%s hook=%s remaining=%d",
+                            session_id, conference_id, completed_hook_type, _posatt_remaining,
+                        )
+                    except Exception as _pa_exc:
+                        logger.warning(
+                            "Could not DECR posatt:active: session=%s — %s",
+                            session_id, _pa_exc,
+                        )
+
+                    # Destroy conference when all posatt segments finished AND no new
+                    # segments were just dispatched (post_human dispatch adds more INCRs).
+                    # _close_contact_layer() already closed the customer WS immediately.
+                    if _posatt_remaining <= 0 and not _dispatched_post:
+                        asyncio.create_task(
+                            _destroy_conference(redis_client, session_id)
+                        )
+
             except Exception as exc:
                 logger.warning(
                     "Hook completion detection error: session=%s conference=%s — %s",
@@ -2948,8 +3303,35 @@ async def process_contact_event(
 
             # ── Notify all active human agents that the session ended ─────────
             _hooks_pending = False  # set True when on_human_end hooks are dispatched
+
+            # Arc 14 Fase E guard: if _close_contact_layer() already fired (e.g.
+            # the server closed the customer WS after NPS completed), the channel-
+            # gateway sends a secondary contact_closed(reason="agent_done") that
+            # reaches this handler.  Treating it as a real customer close would:
+            #   1. Broadcast session.closed (no recipients) → Console tears down wrap-up
+            #   2. Re-dispatch on_human_end hooks → posatt:active inflated
+            # When contact_close_fired is set the hook path is already managing
+            # the close lifecycle; skip both actions.
+            _ccf_already = False
+            try:
+                _ccf_raw = await redis_client.get(
+                    f"session:{session_id}:contact_close_fired"
+                )
+                _ccf_already = bool(_ccf_raw)
+            except Exception:
+                pass
+            if _ccf_already:
+                # Prevent the session-key cleanup block below (if not _hooks_pending)
+                # from deleting keys that posatt hooks still need.
+                _hooks_pending = True
+                logger.debug(
+                    "customer_side close: contact_close_fired set — skipping agent "
+                    "broadcast and hook re-dispatch (hook path owns this close): "
+                    "session=%s reason=%s", session_id, reason,
+                )
+
             is_human = await redis_client.get(f"session:{session_id}:human_agent")
-            if is_human:
+            if is_human and not _ccf_already:
                 closed_event = {
                     "type":       "session.closed",
                     "session_id": session_id,
@@ -3122,7 +3504,7 @@ async def process_contact_event(
                         # ContextStore ANTES de disparar os hooks.
                         await _write_pre_hook_context(
                             redis_client, _cs_tenant_id, session_id,
-                            close_origin="client_disconnect",
+                            close_origin="customer_disconnect",
                             human_instance_id=_last_human_instance_id,
                             customer_participant_id=_cs_meta.get("customer_participant_id") if _cs_meta else None,
                         )
@@ -3160,8 +3542,13 @@ async def process_contact_event(
                         session_id,
                     )
 
-            else:
-                # No human agent was active — close the contact immediately
+            elif not _ccf_already:
+                # No human agent was active — close the contact immediately.
+                # Arc 14 Fase E: when contact_close_fired is already set it means
+                # _close_contact_layer() fired (hook path is managing the close).
+                # In that case the else branch must be skipped — calling
+                # _trigger_contact_close() here would fire _destroy_conference()
+                # while posatt hooks (wrapup) are still running.
                 asyncio.create_task(
                     _trigger_contact_close(redis_client, session_id)
                 )
@@ -3467,11 +3854,6 @@ async def process_contact_event(
                                 .get("on_human_end", [])
                             )
                             if _on_human_end:
-                                # NÃO envia "atendimento encerrado" ao cliente aqui —
-                                # os hook agents (NPS, wrap-up) ainda vão interagir.
-                                # A mensagem de encerramento é enviada somente quando
-                                # _trigger_contact_close() executa (após todos os hooks).
-
                                 # Escreve close_origin + customer/human participant_id no
                                 # ContextStore ANTES de disparar os hooks.
                                 await _write_pre_hook_context(
@@ -3480,9 +3862,28 @@ async def process_contact_event(
                                     human_instance_id=instance_id,
                                     customer_participant_id=_meta_hooks.get("customer_participant_id") if _meta_hooks else None,
                                 )
+
+                                # Arc 14 Fase E: only close the customer WS immediately
+                                # when there are NO customer-side hooks (NPS/survey).
+                                # If a side=customer hook exists, the WS must stay open
+                                # so the NPS agent can deliver its menu prompts.
+                                # _close_contact_layer() fires from process_routed when
+                                # posatt:customer_active reaches 0 (last NPS segment done).
+                                _has_customer_hooks = any(
+                                    (
+                                        e.get("side", "agent")
+                                        if isinstance(e, dict) else "agent"
+                                    ) == "customer"
+                                    for e in _on_human_end
+                                )
+                                if not _has_customer_hooks:
+                                    asyncio.create_task(
+                                        _close_contact_layer(redis_client, session_id)
+                                    )
+
                                 # Pool has on_human_end hooks — dispatch them.
-                                # _trigger_contact_close fires when all agents complete
-                                # (hook_pending counter reaches 0 in process_routed).
+                                # _destroy_conference() fires when posatt:active hits 0
+                                # (each hook completion DECRs in process_routed).
                                 asyncio.create_task(fire_pool_hooks(
                                     http=http, redis_client=redis_client,
                                     session_id=session_id,
@@ -3493,8 +3894,7 @@ async def process_contact_event(
                                 ))
                                 # Safety net: if hook agents never start or complete
                                 # (e.g. pool has no running instances), force-close
-                                # the contact after _HOOK_TIMEOUT_S seconds so the
-                                # customer WebSocket is never left open indefinitely.
+                                # the conference after _HOOK_TIMEOUT_S seconds.
                                 asyncio.create_task(_hook_timeout_guard(
                                     redis_client, session_id, "on_human_end",
                                 ))

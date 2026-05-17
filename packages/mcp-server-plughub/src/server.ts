@@ -42,6 +42,8 @@ import { createRegistryClient }    from "./infra/registry-client"
 import { createPostgresClient }    from "./infra/postgres"
 import { parseMentions }           from "./lib/mention-parser"
 import { writeStreamEntry }        from "./lib/write-stream-entry"
+import { MaskingService }          from "./lib/masking"
+import type { ContextMaskingConfig } from "@plughub/schemas"
 
 // ─────────────────────────────────────────────
 // Configuração do servidor
@@ -425,6 +427,258 @@ async function unregisterHumanAgent(
   console.log(`[agent-ws] Human agent unregistered: instance=${instanceId} pool=${poolId}`)
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// ContextStore masking helpers
+// Spec: docs/guias/context-masking-rules.md
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Extract role from a Bearer JWT without signature verification.
+ * Auth middleware upstream already validated the token — we only need claims.
+ */
+function extractJwtRole(authHeader: string | undefined): string {
+  if (!authHeader?.startsWith("Bearer ")) return "operator"
+  try {
+    const payloadB64 = authHeader.slice(7).split(".")[1] ?? ""
+    const payload = JSON.parse(
+      Buffer.from(payloadB64, "base64url").toString("utf8")
+    ) as Record<string, unknown>
+    const role = (payload["role"] ?? (payload["roles"] as string[])?.[0]) as string | undefined
+    return role ?? "operator"
+  } catch {
+    return "operator"
+  }
+}
+
+/** Namespaces visible to operator by default (conservative). Overridden per-pool. */
+const DEFAULT_OPERATOR_NAMESPACES = ["service", "journey", "session"]
+
+// ── ContextMaskingConfig in-process cache ─────────────────────────────────────
+// TTL 60s — short enough to pick up Config API changes, long enough to be safe
+// under polling loads. Keyed by tenantId.
+const CONTEXT_MASKING_CACHE_TTL_MS = 60_000
+interface CachedMaskingConfig { config: ContextMaskingConfig; expiresAt: number }
+const contextMaskingConfigCache = new Map<string, CachedMaskingConfig>()
+
+/** Invalidate the cached config for a tenant (called on config.changed events). */
+function invalidateContextMaskingCache(tenantId: string): void {
+  contextMaskingConfigCache.delete(tenantId)
+}
+
+/**
+ * Resolve the ContextMaskingConfig for a tenant, with in-process TTL cache.
+ * Delegates to MaskingService.loadContextMaskingConfig() on a cache miss.
+ */
+async function getContextMaskingConfig(
+  redis:    { get(key: string): Promise<string | null> },
+  tenantId: string,
+): Promise<ContextMaskingConfig> {
+  const cached = contextMaskingConfigCache.get(tenantId)
+  if (cached && cached.expiresAt > Date.now()) return cached.config
+  const config = await MaskingService.loadContextMaskingConfig(redis, tenantId)
+  contextMaskingConfigCache.set(tenantId, { config, expiresAt: Date.now() + CONTEXT_MASKING_CACHE_TTL_MS })
+  return config
+}
+
+// ── Pattern matching (specificity algorithm) ──────────────────────────────────
+
+/**
+ * Compute specificity score for a rule matching a given tag × role pair.
+ *
+ * Returns null if the rule does not match. Higher score = more specific.
+ *
+ * Pattern specificity:
+ *   exact match    → 20
+ *   prefix glob    → 10  ("caller.*" matches "caller.cpf")
+ *   wildcard *     →  0  (matches anything)
+ *
+ * Role specificity added on top:
+ *   matches caller's role category exactly → +2
+ *   matches "*"                            → +0
+ */
+function ruleSpecificity(
+  pattern:      string,
+  ruleRole:     "operator" | "supervisor" | "*",
+  tag:          string,
+  callerCategory: "operator" | "supervisor",
+): number | null {
+  // Pattern match
+  let patternScore: number
+  if (pattern === tag) {
+    patternScore = 20
+  } else if (pattern.endsWith(".*")) {
+    const prefix = pattern.slice(0, -2) // "caller.*" → "caller"
+    const tagNs  = tag.split(".").slice(0, prefix.split(".").length).join(".")
+    if (tagNs !== prefix) return null
+    patternScore = 10
+  } else if (pattern === "*") {
+    patternScore = 0
+  } else {
+    // Non-glob pattern that isn't an exact match — no match
+    return null
+  }
+
+  // Role match
+  let roleScore: number
+  if (ruleRole === "*") {
+    roleScore = 0
+  } else if (ruleRole === callerCategory) {
+    roleScore = 2
+  } else {
+    // Rule targets a different role category — skip
+    return null
+  }
+
+  return patternScore + roleScore
+}
+
+/**
+ * Find the most specific ContextMaskingRule for a tag × caller role pair.
+ * Returns the matching rule, or null when no rule matches.
+ */
+function resolveContextMaskingRule(
+  tag:    string,
+  callerRole: string,
+  config: ContextMaskingConfig,
+): import("@plughub/schemas").ContextMaskingRule | null {
+  const callerCategory: "operator" | "supervisor" =
+    ["supervisor", "admin", "evaluator", "reviewer"].includes(callerRole)
+      ? "supervisor"
+      : "operator"
+
+  let bestRule: import("@plughub/schemas").ContextMaskingRule | null = null
+  let bestScore = -1
+
+  for (const rule of config.rules) {
+    const score = ruleSpecificity(rule.pattern, rule.role, tag, callerCategory)
+    if (score === null) continue
+    if (score > bestScore) {
+      bestScore = score
+      bestRule  = rule
+    }
+  }
+
+  return bestRule
+}
+
+// ── Visual type application ───────────────────────────────────────────────────
+
+/**
+ * Apply a ContextMaskingType to a raw value string.
+ *
+ * Each type is a pure visual presentation — no data-type semantics.
+ */
+function applyMaskingTypeToValue(raw: string, type: import("@plughub/schemas").ContextMaskingType): string {
+  const digits = raw.replace(/\D/g, "")
+  switch (type) {
+    case "plain":
+      return raw
+    case "hidden":
+      return ""   // signal: caller will omit field
+    case "full":
+      return "***"
+    case "last_2":
+      return digits.length >= 2
+        ? `***${digits.slice(-2)}`
+        : "***"
+    case "last_4":
+      return digits.length >= 4
+        ? `***${digits.slice(-4)}`
+        : digits.length > 0 ? `***${digits}` : "***"
+    case "first_1":
+      return raw.length > 0 ? `${raw[0]}***` : "***"
+    case "first_word": {
+      const word = raw.split(/\s+/)[0] ?? ""
+      return word.length > 0 ? `${word} ***` : "***"
+    }
+    case "email_domain": {
+      const atIdx = raw.indexOf("@")
+      if (atIdx > 0) {
+        const local  = raw.slice(0, atIdx)
+        const domain = raw.slice(atIdx) // includes "@"
+        return `${local[0] ?? "*"}***${domain}`
+      }
+      return raw.length > 0 ? `${raw[0]}***` : "***"
+    }
+    case "financial":
+      return "R$ ****,**"
+    default:
+      return "***"
+  }
+}
+
+// ── Main masking function (dynamic, async) ────────────────────────────────────
+
+/**
+ * Filter and mask a raw ContextStore hgetall snapshot.
+ *
+ * Replaces the former synchronous applyContextMasking() that relied on the
+ * hardcoded TAG_PII_CATEGORY map. Rules are now loaded from Config API Redis
+ * (with in-process TTL cache), falling back to DEFAULT_CONTEXT_MASKING_CONFIG.
+ *
+ * Spec: docs/guias/context-masking-rules.md
+ */
+async function applyContextMaskingDynamic(
+  rawHash:      Record<string, string>,
+  role:         string,
+  allowedNs:    string[],
+  redis:        { get(key: string): Promise<string | null> },
+  tenantId:     string,
+): Promise<Record<string, unknown>> {
+  const isSupervisor = ["supervisor", "admin", "evaluator", "reviewer"].includes(role)
+  const config       = await getContextMaskingConfig(redis, tenantId)
+  const result: Record<string, unknown> = {}
+
+  for (const [tag, raw] of Object.entries(rawHash)) {
+    let entry: Record<string, unknown>
+    try { entry = JSON.parse(raw) as Record<string, unknown> }
+    catch { entry = { value: raw } }
+
+    const ns = tag.split(".")[0] ?? ""
+
+    // agent.* — always removed (per-participant visibility, resolved elsewhere)
+    if (ns === "agent") continue
+
+    // Namespace gate — operator sees only allowedNs namespaces
+    if (!isSupervisor && !allowedNs.includes(ns)) continue
+
+    // Resolve masking rule for this tag × role
+    const matchedRule = resolveContextMaskingRule(tag, role, config)
+
+    // Determine effective masking type
+    let maskType: import("@plughub/schemas").ContextMaskingType
+    if (matchedRule) {
+      maskType = matchedRule.type
+    } else if (!isSupervisor) {
+      maskType = config.default_unmatched_operator
+    } else {
+      maskType = "plain"
+    }
+
+    // Apply type
+    if (maskType === "hidden") {
+      // Field omitted entirely — do not add to result
+      continue
+    }
+
+    if (maskType === "plain") {
+      result[tag] = entry
+    } else {
+      // Mask the value field; annotate entry with pii metadata for the UI
+      const maskedValue = applyMaskingTypeToValue(String(entry["value"] ?? ""), maskType)
+      result[tag] = {
+        ...entry,
+        value:    maskedValue,
+        pii:      true,
+        masked:   true,
+        category: maskType,
+      }
+    }
+  }
+
+  return result
+}
+
 export async function startServer(config: ServerConfig): Promise<void> {
   const app = express()
   app.use(express.json())
@@ -531,14 +785,19 @@ export async function startServer(config: ServerConfig): Promise<void> {
         else if (delta < -0.1) trend = "declining"
       }
 
-      // Read tenant_id and historical context from session meta
-      let tenantId   = ""
+      // Viewer role — extracted from Bearer JWT for masking decisions
+      const viewerRole = extractJwtRole(req.headers.authorization)
+
+      // Read tenant_id, pool_id and historical context from session meta
+      let tenantId = ""
+      let poolId   = ""
       let ctxInsights: unknown[] = []
       try {
         const metaRaw = await redis.get(`session:${sessionId}:meta`)
         if (metaRaw) {
           const meta = JSON.parse(metaRaw) as Record<string, string>
           tenantId = meta["tenant_id"] ?? ""
+          poolId   = meta["pool_id"]   ?? ""
         }
       } catch { /* non-fatal */ }
 
@@ -548,6 +807,34 @@ export async function startServer(config: ServerConfig): Promise<void> {
           if (ctxRaw) {
             const ctx = JSON.parse(ctxRaw) as Record<string, unknown>
             ctxInsights = (ctx["historical_insights"] as unknown[]) ?? []
+          }
+        } catch { /* non-fatal */ }
+      }
+
+      // Read pool context_visibility — determines which namespaces operator can see
+      let operatorNamespaces = DEFAULT_OPERATOR_NAMESPACES
+      if (tenantId && poolId) {
+        try {
+          const cfgRaw = await redis.get(`${tenantId}:pool_config:${poolId}`)
+          if (cfgRaw) {
+            const cfg = JSON.parse(cfgRaw) as Record<string, unknown>
+            const cv  = cfg["context_visibility"] as Record<string, unknown> | undefined
+            if (Array.isArray(cv?.["operator_namespaces"])) {
+              operatorNamespaces = cv["operator_namespaces"] as string[]
+            }
+          }
+        } catch { /* non-fatal — use default */ }
+      }
+
+      // Read ContextStore snapshot (v2) — primary source for ContextoTab
+      // Applies namespace filtering and PII masking based on viewer role.
+      // Rules loaded dynamically from Config API (with in-process TTL cache).
+      let contextSnapshot: Record<string, unknown> | null = null
+      if (tenantId) {
+        try {
+          const hash = await redis.hgetall(`${tenantId}:ctx:${sessionId}`)
+          if (hash && Object.keys(hash).length > 0) {
+            contextSnapshot = await applyContextMaskingDynamic(hash, viewerRole, operatorNamespaces, redis, tenantId)
           }
         } catch { /* non-fatal */ }
       }
@@ -719,7 +1006,10 @@ export async function startServer(config: ServerConfig): Promise<void> {
           historical_insights:   ctxInsights,
           conversation_insights: turns
             .flatMap((t: Record<string, unknown>) => (t["insights"] as unknown[]) ?? []),
-          contact_context: contactContext,
+          // context_snapshot: ContextStore data filtered and masked by viewer role (v2)
+          context_snapshot: contextSnapshot,
+          // contact_context: legacy pipeline_state field (v1 — present only when ContextStore absent)
+          contact_context: contextSnapshot ? null : contactContext,
         },
         /** Arc 11 Fase D — AI agents active in this session with Skill-Flow state */
         ai_participants:      aiParticipants,
@@ -744,6 +1034,19 @@ export async function startServer(config: ServerConfig): Promise<void> {
       res.status(400).json({ error: "key and value are required" })
       return
     }
+
+    // Phase 2 — namespace write permission by role
+    const writeRole = extractJwtRole(req.headers.authorization)
+    const writeNs   = (key as string).split(".")[0] ?? ""
+    const OPERATOR_WRITABLE_NS = ["agent", "service"]
+    if (writeRole === "operator" && !OPERATOR_WRITABLE_NS.includes(writeNs)) {
+      res.status(403).json({
+        error:   "forbidden_namespace",
+        message: `Role 'operator' cannot write to namespace '${writeNs}'. Allowed: ${OPERATOR_WRITABLE_NS.join(", ")}.`,
+      })
+      return
+    }
+
     try {
       // Resolve tenantId from session meta
       let tenantId: string | null = null
@@ -1422,15 +1725,48 @@ export async function startServer(config: ServerConfig): Promise<void> {
         }
 
         // ── session.closed ────────────────────────────────────────────────────
-        // Session ended. Only unsubscribe from the Redis channel when reason is
-        // "agent_done" — which _trigger_contact_close() publishes AFTER all
-        // on_human_end hooks (wrapup, NPS) have completed. For earlier close
-        // signals such as "client_disconnect" or "timeout", the session channel
-        // must remain open so hook agents can still reach the human agent.
+        // Session ended — unsubscribe and tear down the session view.
+        //
+        // Three sources (Arc 14 Fase B):
+        //
+        //  reason="posatt_segment_complete" + recipients=[...]
+        //    A single posatt segment (wrap-up OR NPS) finished.
+        //    Only tear down if this agent's participant_id is in recipients.
+        //    The human agent's participant_id = agentInstanceId (set from the
+        //    conversation.assigned event, typically "human-{poolId}").
+        //    NPS completion → recipients contains customer + NPS agent IDs,
+        //    NOT the human agent → human WS stays open during wrap-up.
+        //    Wrap-up completion → recipients contains human agent + wrap-up agent
+        //    → human WS tears down.
+        //
+        //  reason="conference_destroyed"
+        //    Broadcast: all posatt segments done, conference infrastructure torn
+        //    down.  Always tear down regardless of recipients.
+        //
+        //  reason="agent_done"  (legacy / backward compat)
+        //    Broadcast from _trigger_contact_close (non-Arc-14 path). Always tear down.
+        //
         if (event["type"] === "session.closed" && typeof event["session_id"] === "string") {
-          const closedId = event["session_id"]
+          const closedId    = event["session_id"]
           const closeReason = typeof event["reason"] === "string" ? event["reason"] : ""
-          if (closeReason === "agent_done") {
+          const recipients  = Array.isArray(event["recipients"]) ? event["recipients"] as string[] : null
+
+          let shouldTearDown = false
+
+          if (closeReason === "posatt_segment_complete") {
+            // Targeted close: only tear down if this agent is in the recipients list.
+            // agentInstanceId is set from the conversation.assigned event (line ~1700).
+            if (recipients !== null && agentInstanceId && recipients.includes(agentInstanceId)) {
+              shouldTearDown = true
+            }
+          } else if (closeReason === "conference_destroyed" || closeReason === "agent_done") {
+            // Broadcast close — always tear down.
+            shouldTearDown = true
+          }
+          // Any other reason: keep the session channel open (e.g. "client_disconnect",
+          // "timeout" — posatt hooks may still be running).
+
+          if (shouldTearDown) {
             subscribedSessions.delete(closedId)
             subscriber.unsubscribe(`agent:events:${closedId}`, (err) => {
               if (err) console.error("Redis session unsubscribe error:", err)
@@ -1523,6 +1859,33 @@ export async function startServer(config: ServerConfig): Promise<void> {
 
     subscriber.on("message", (channel: string, message: string) => {
       console.log(`[agent-ws] pub/sub received channel=${channel} type=${(() => { try { return JSON.parse(message).type } catch { return "?" } })()}`)
+
+      // Arc 14 Fase B — recipient filter for posatt_segment_complete events.
+      // forward() calls ws.send() BEFORE checking recipients, so the frontend
+      // would receive every posatt_segment_complete and remove the contact
+      // regardless of whether this agent is the intended target.
+      // We apply the same recipients check here, before forwarding, so that:
+      //   • NPS completion (recipients = [customer, nps_agent]) is NOT sent to
+      //     the human agent's Console → wrap-up session stays open.
+      //   • Wrap-up completion (recipients = [wrapup_agent, human_agent]) IS
+      //     sent to the human agent's Console → session closes correctly.
+      // When agentInstanceId is not yet known (assignment hasn't arrived), we
+      // forward conservatively so the agent doesn't miss critical events.
+      try {
+        const _ev = JSON.parse(message) as Record<string, unknown>
+        if (_ev["type"] === "session.closed" && _ev["reason"] === "posatt_segment_complete") {
+          const _recip = Array.isArray(_ev["recipients"]) ? (_ev["recipients"] as string[]) : null
+          if (_recip !== null && agentInstanceId && !_recip.includes(agentInstanceId)) {
+            // This posatt segment close is not for this agent — skip forwarding.
+            // Do NOT unsubscribe: the session is still active (other segments running).
+            console.log(
+              `[agent-ws] posatt_segment_complete filtered (agent=${agentInstanceId} not in recipients=[${_recip.join(",")}]) — not forwarded`
+            )
+            return
+          }
+        }
+      } catch { /* ignore parse errors — fall through to forward */ }
+
       forward(channel, message)
 
       // ── Co-pilot Phase 2 — fire-and-forget background analysis ────────────
