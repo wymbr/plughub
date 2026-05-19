@@ -13,6 +13,7 @@
  */
 
 import React, { useState } from "react";
+import { useTranslation } from "react-i18next";
 import {
   ContactContextData,
   ContactContextField,
@@ -27,6 +28,8 @@ interface ContextoTabProps {
   /** Session ID used for manual tag writes via POST /api/inject-context/:sessionId */
   sessionId?:     string | null;
   supervisorState?: SupervisorState | null;
+  /** Logged-in user's role — used to filter ManualTagForm namespace suggestions. */
+  viewerRole?:    string;
 }
 
 // ── helpers ──────────────────────────────────────────────────────────────────
@@ -34,54 +37,55 @@ interface ContextoTabProps {
 function formatLastSeen(iso?: string): string {
   if (!iso) return "";
   try {
-    return new Date(iso).toLocaleDateString("pt-BR");
+    return new Date(iso).toLocaleDateString();
   } catch {
     return iso;
   }
 }
 
 function confidenceColor(c: number): string {
-  if (c >= 0.9) return "text-green-700 bg-green-100";
-  if (c >= 0.7) return "text-blue-700 bg-blue-100";
-  if (c >= 0.4) return "text-yellow-700 bg-yellow-100";
-  return "text-gray-500 bg-gray-100";
+  if (c >= 0.9) return "text-green-text bg-green-light";
+  if (c >= 0.7) return "text-primary bg-primary-light";
+  if (c >= 0.4) return "text-warning-text bg-warning-light";
+  return "text-muted bg-border";
 }
 
-function confidenceLabel(c: number): string {
-  if (c >= 0.9) return "confirmado";
-  if (c >= 0.7) return "alta certeza";
-  if (c >= 0.4) return "incerto";
-  return "desconhecido";
+function confidenceLabel(c: number, t: (key: string) => string): string {
+  if (c >= 0.9) return t('contexto.confidence_confirmed');
+  if (c >= 0.7) return t('contexto.confidence_highCertainty');
+  if (c >= 0.4) return t('contexto.confidence_uncertain');
+  return t('contexto.confidence_unknown');
 }
 
-function sourceLabel(source: string): string {
-  const labels: Record<string, string> = {
-    customer_input:    "cliente",
-    mcp_call:          "CRM",
-    ai_inferred:       "inferido",
-    human_agent:       "agente",
-    insight_historico: "histórico",
-    insight_conversa:  "conversa",
-    pipeline_state:    "sessão",
-    routing_engine:    "roteamento",
+function sourceLabel(source: string, t: (key: string) => string): string {
+  const keyMap: Record<string, string> = {
+    customer_input:    'contexto.source_customerInput',
+    mcp_call:          'contexto.source_mcpCall',
+    ai_inferred:       'contexto.source_aiInferred',
+    human_agent:       'contexto.source_humanAgent',
+    insight_historico: 'contexto.source_insightHistorico',
+    insight_conversa:  'contexto.source_insightConversa',
+    pipeline_state:    'contexto.source_pipelineState',
+    routing_engine:    'contexto.source_routingEngine',
   };
   // Handle prefixed sources like "mcp_call:mcp-server-crm:customer_get"
   // or "ai_inferred:sentiment_emitter"
   const prefix = source.split(":")[0];
-  return labels[source] ?? labels[prefix] ?? source;
+  const key = keyMap[source] ?? keyMap[prefix];
+  return key ? t(key) : source;
 }
 
 /** Human-readable label for a ContextStore tag name. */
-function tagLabel(tag: string): string {
+function tagLabel(tag: string, t: (key: string) => string): string {
   const wellKnown: Record<string, string> = {
-    "caller.nome":               "Nome",
+    "caller.nome":               t('contexto.fieldName'),
     "caller.cpf":                "CPF",
-    "caller.account_id":         "Conta",
-    "caller.telefone":           "Telefone",
+    "caller.account_id":         t('contexto.fieldAccount'),
+    "caller.telefone":           t('contexto.fieldPhone'),
     "caller.email":              "E-mail",
-    "caller.motivo_contato":     "Motivo",
-    "caller.intencao_primaria":  "Intenção",
-    "caller.sentimento_atual":   "Sentimento",
+    "caller.motivo_contato":     t('contexto.fieldReason'),
+    "caller.intencao_primaria":  t('contexto.fieldIntent'),
+    "caller.sentimento_atual":   t('contexto.fieldSentiment'),
     "caller.customer_id":        "Customer ID",
     "session.escalar_solicitado":  "Escalar?",
     "session.ultima_resposta":     "Última resposta IA",
@@ -102,31 +106,28 @@ function tagLabel(tag: string): string {
 
 /** Group ContextStore tags by namespace (first segment before the dot). */
 function groupByNamespace(
-  snapshot: Record<string, ContextEntry>
+  snapshot: Record<string, ContextEntry>,
+  t: (key: string) => string,
 ): Array<{ ns: string; label: string; entries: Array<{ tag: string; entry: ContextEntry }> }> {
-  const nsLabels: Record<string, string> = {
-    caller:  "Caller",
-    session: "Sessão",
-    account: "Conta",
-  };
+  // Canonical namespace order per context-store-taxonomy.md
+  const NS_ORDER = ["caller", "account", "service", "journey", "session", "agent", "history"];
   const groups: Record<string, Array<{ tag: string; entry: ContextEntry }>> = {};
   for (const [tag, entry] of Object.entries(snapshot)) {
     const ns = tag.includes(".") ? tag.split(".")[0] : "outros";
     if (!groups[ns]) groups[ns] = [];
     groups[ns].push({ tag, entry });
   }
-  // Canonical order: caller, session, account, then alphabetically
   const orderedNs = [
-    "caller", "session", "account",
-    ...Object.keys(groups).filter(
-      (ns) => !["caller", "session", "account"].includes(ns)
-    ).sort(),
+    ...NS_ORDER,
+    ...Object.keys(groups).filter((ns) => !NS_ORDER.includes(ns)).sort(),
   ];
   return orderedNs
     .filter((ns) => groups[ns]?.length)
     .map((ns) => ({
       ns,
-      label: nsLabels[ns] ?? ns.charAt(0).toUpperCase() + ns.slice(1),
+      label: t(`contexto.ns_${ns}`) !== `contexto.ns_${ns}`
+        ? t(`contexto.ns_${ns}`)
+        : ns.charAt(0).toUpperCase() + ns.slice(1),
       entries: groups[ns],
     }));
 }
@@ -135,19 +136,20 @@ function groupByNamespace(
 // Migrated from EstadoTab (Fase C). Shows intent.current + flags[].
 
 const IntentFlagsCard: React.FC<{ state: SupervisorState }> = ({ state }) => {
+  const { t } = useTranslation('agentAssist');
   const { intent, flags } = state;
   const hasIntent = !!intent.current;
   const hasFlags  = flags.length > 0;
   if (!hasIntent && !hasFlags) return null;
 
   return (
-    <section className="bg-violet-50 border border-violet-200 rounded-lg overflow-hidden">
-      <div className="flex items-center gap-2 px-3 py-2 bg-violet-100 border-b border-violet-200">
-        <span className="text-xs font-semibold text-violet-800 uppercase tracking-wide flex-1">
-          Intenção &amp; Flags
+    <section className="bg-ai-light border border-ai/30 rounded-lg overflow-hidden">
+      <div className="flex items-center gap-2 px-3 py-2 bg-ai-light border-b border-ai/30">
+        <span className="text-xs font-semibold text-ai-text uppercase tracking-wide flex-1">
+          {t('contexto.intentFlags')}
         </span>
-        <span className="text-[10px] text-violet-500 font-medium">
-          turn {state.turn_count}
+        <span className="text-2xs text-ai font-medium">
+          {t('contexto.turnLabel', { count: state.turn_count })}
         </span>
       </div>
 
@@ -155,10 +157,10 @@ const IntentFlagsCard: React.FC<{ state: SupervisorState }> = ({ state }) => {
         {/* Intent */}
         {hasIntent && (
           <div className="flex items-start gap-2">
-            <span className="text-[10px] text-gray-500 w-16 shrink-0 pt-0.5">Intenção</span>
+            <span className="text-2xs text-muted w-16 shrink-0 pt-0.5">{t('contexto.intentLabel')}</span>
             <div className="flex-1 min-w-0 flex items-center gap-2 flex-wrap">
-              <span className="text-xs font-medium text-gray-900">{intent.current}</span>
-              <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium ${confidenceColor(intent.confidence)}`}>
+              <span className="text-xs font-medium text-dark">{intent.current}</span>
+              <span className={`text-2xs px-1.5 py-0.5 rounded-full font-medium ${confidenceColor(intent.confidence)}`}>
                 {(intent.confidence * 100).toFixed(0)}%
               </span>
             </div>
@@ -168,11 +170,11 @@ const IntentFlagsCard: React.FC<{ state: SupervisorState }> = ({ state }) => {
         {/* Flags */}
         {hasFlags && (
           <div className="flex items-start gap-2">
-            <span className="text-[10px] text-gray-500 w-16 shrink-0 pt-0.5">Flags</span>
+            <span className="text-2xs text-muted w-16 shrink-0 pt-0.5">{t('contexto.flagsLabel')}</span>
             <div className="flex flex-wrap gap-1 flex-1">
               {flags.map((f) => (
                 <span key={f}
-                  className="text-[10px] px-2 py-0.5 rounded-full bg-orange-100 text-orange-700 border border-orange-200 font-medium">
+                  className="text-2xs px-2 py-0.5 rounded-full bg-contested-light text-contested-text border border-contested/30 font-medium">
                   {f}
                 </span>
               ))}
@@ -190,17 +192,28 @@ const IntentFlagsCard: React.FC<{ state: SupervisorState }> = ({ state }) => {
 
 type WriteStatus = "idle" | "busy" | "ok" | "error";
 
-const SUGGESTED_PREFIXES = ["caller.", "account.", "session."];
+/**
+ * Namespaces operators can write to (backend enforces this — datalist is UX guidance only).
+ * Per context-store-taxonomy.md Phase 2: operator → agent.* and service.* only.
+ */
+const OPERATOR_WRITE_PREFIXES = ["agent.", "service."];
+const SUPERVISOR_WRITE_PREFIXES = ["agent.", "service.", "caller.", "account.", "journey.", "history."];
 
-const ManualTagForm: React.FC<{ sessionId: string; onDone: () => void }> = ({
-  sessionId,
-  onDone,
-}) => {
+const ManualTagForm: React.FC<{
+  sessionId: string;
+  onDone:    () => void;
+  /** Viewer role — controls which namespace prefixes are suggested in the datalist. */
+  viewerRole?: string;
+}> = ({ sessionId, onDone, viewerRole = "operator" }) => {
+  const { t } = useTranslation('agentAssist');
   const [key,    setKey]   = useState("");
   const [value,  setValue] = useState("");
   const [conf,   setConf]  = useState("0.9");
   const [status, setStatus] = useState<WriteStatus>("idle");
   const [errMsg, setErrMsg] = useState("");
+
+  const isSupervisor = ["supervisor", "admin", "evaluator", "reviewer"].includes(viewerRole);
+  const suggestedPrefixes = isSupervisor ? SUPERVISOR_WRITE_PREFIXES : OPERATOR_WRITE_PREFIXES;
 
   const canSubmit = key.trim().length > 0 && value.trim().length > 0 && status !== "busy";
 
@@ -219,6 +232,10 @@ const ManualTagForm: React.FC<{ sessionId: string; onDone: () => void }> = ({
           confidence: Number(conf) || 0.9,
         }),
       });
+      if (res.status === 403) {
+        const body = await res.json().catch(() => ({})) as Record<string, unknown>;
+        throw new Error((body["message"] as string) ?? t('contexto.noPermission'));
+      }
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       setStatus("ok");
       setTimeout(() => {
@@ -227,16 +244,16 @@ const ManualTagForm: React.FC<{ sessionId: string; onDone: () => void }> = ({
         onDone();
       }, 1500);
     } catch (err) {
-      setErrMsg(String(err));
+      setErrMsg(String(err instanceof Error ? err.message : err));
       setStatus("error");
     }
   }
 
   if (status === "ok") {
     return (
-      <div className="flex items-center gap-1.5 text-green-700 text-xs py-1.5 px-1">
+      <div className="flex items-center gap-1.5 text-green-text text-xs py-1.5 px-1">
         <span>✓</span>
-        <span>Tag salva com sucesso.</span>
+        <span>{t('contexto.tagSaved')}</span>
       </div>
     );
   }
@@ -245,19 +262,19 @@ const ManualTagForm: React.FC<{ sessionId: string; onDone: () => void }> = ({
     <form onSubmit={handleSubmit} className="flex flex-col gap-1.5 pt-2">
       {/* Tag key */}
       <div className="flex flex-col gap-0.5">
-        <label className="text-[10px] text-gray-500">Chave (ex: caller.observacao)</label>
+        <label className="text-2xs text-muted">{t('contexto.tagKey')}</label>
         <input
           type="text"
           value={key}
           onChange={e => setKey(e.target.value)}
-          placeholder="caller.observacao"
+          placeholder={t('contexto.tagKeyPlaceholder')}
           list="tag-prefix-suggestions"
-          className="text-xs border border-gray-300 rounded px-2 py-1 focus:outline-none
-            focus:ring-1 focus:ring-teal-400 text-gray-700 bg-white placeholder-gray-400"
+          className="text-xs border border-border-strong rounded px-2 py-1 focus:outline-none
+            focus:ring-1 focus:ring-revised/40 text-dark bg-white placeholder-muted-light"
           autoComplete="off"
         />
         <datalist id="tag-prefix-suggestions">
-          {SUGGESTED_PREFIXES.map(p => (
+          {suggestedPrefixes.map(p => (
             <option key={p} value={p} />
           ))}
         </datalist>
@@ -265,15 +282,15 @@ const ManualTagForm: React.FC<{ sessionId: string; onDone: () => void }> = ({
 
       {/* Value */}
       <div className="flex flex-col gap-0.5">
-        <label className="text-[10px] text-gray-500">Valor</label>
+        <label className="text-2xs text-muted">{t('contexto.tagValue')}</label>
         <textarea
           value={value}
           onChange={e => setValue(e.target.value)}
-          placeholder="Valor do contexto…"
+          placeholder={t('contexto.tagValuePlaceholder')}
           rows={2}
-          className="text-xs border border-gray-300 rounded px-2 py-1 resize-none
-            focus:outline-none focus:ring-1 focus:ring-teal-400 text-gray-700
-            bg-white placeholder-gray-400"
+          className="text-xs border border-border-strong rounded px-2 py-1 resize-none
+            focus:outline-none focus:ring-1 focus:ring-revised/40 text-dark
+            bg-white placeholder-muted-light"
           onKeyDown={e => {
             if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) handleSubmit(e as unknown as React.FormEvent);
           }}
@@ -282,23 +299,23 @@ const ManualTagForm: React.FC<{ sessionId: string; onDone: () => void }> = ({
 
       {/* Confidence */}
       <div className="flex items-center gap-2">
-        <label className="text-[10px] text-gray-500 w-20 shrink-0">Confiança</label>
+        <label className="text-2xs text-muted w-20 shrink-0">{t('contexto.confidence')}</label>
         <select
           value={conf}
           onChange={e => setConf(e.target.value)}
-          className="text-[10px] border border-gray-200 rounded px-1.5 py-0.5
-            focus:outline-none focus:ring-1 focus:ring-teal-400 bg-white text-gray-700"
+          className="text-2xs border border-border rounded px-1.5 py-0.5
+            focus:outline-none focus:ring-1 focus:ring-revised/40 bg-white text-dark"
         >
-          <option value="1.0">1.0 — confirmado</option>
-          <option value="0.9">0.9 — alta certeza</option>
-          <option value="0.7">0.7 — provável</option>
-          <option value="0.5">0.5 — incerto</option>
+          <option value="1.0">{t('contexto.conf10')}</option>
+          <option value="0.9">{t('contexto.conf09')}</option>
+          <option value="0.7">{t('contexto.conf07')}</option>
+          <option value="0.5">{t('contexto.conf05')}</option>
         </select>
       </div>
 
       {/* Error */}
       {status === "error" && (
-        <p className="text-[10px] text-red-600">{errMsg || "Erro ao salvar."}</p>
+        <p className="text-2xs text-red-text">{errMsg || t('contexto.saveError')}</p>
       )}
 
       {/* Actions */}
@@ -306,11 +323,11 @@ const ManualTagForm: React.FC<{ sessionId: string; onDone: () => void }> = ({
         <button
           type="submit"
           disabled={!canSubmit}
-          className="flex-1 py-1 text-[10px] font-semibold text-white
-            bg-teal-600 hover:bg-teal-700 rounded transition-colors
+          className="flex-1 py-1 text-2xs font-semibold text-white
+            bg-revised hover:bg-revised-text rounded transition-colors
             disabled:opacity-40 disabled:cursor-not-allowed"
         >
-          {status === "busy" ? "Salvando…" : "Salvar · ⌘↵"}
+          {status === "busy" ? t('contexto.saving') : t('contexto.save')}
         </button>
       </div>
     </form>
@@ -322,21 +339,22 @@ const ManualTagForm: React.FC<{ sessionId: string; onDone: () => void }> = ({
 interface FieldRowProps {
   label: string;
   field: ContactContextField | undefined;
+  t:     (key: string, opts?: Record<string, unknown>) => string;
 }
 
-const FieldRow: React.FC<FieldRowProps> = ({ label, field }) => {
+const FieldRow: React.FC<FieldRowProps> = ({ label, field, t }) => {
   if (!field) return null;
   return (
-    <div className="flex items-start gap-2 py-1.5 border-b border-gray-100 last:border-0">
-      <span className="text-xs text-gray-500 w-28 shrink-0 pt-0.5">{label}</span>
+    <div className="flex items-start gap-2 py-1.5 border-b border-border last:border-0">
+      <span className="text-xs text-muted w-28 shrink-0 pt-0.5">{label}</span>
       <div className="flex-1 min-w-0">
-        <span className="text-sm font-medium text-gray-900 break-all">{field.value}</span>
+        <span className="text-sm font-medium text-dark break-all">{field.value}</span>
         <div className="flex gap-1.5 mt-0.5">
-          <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium ${confidenceColor(field.confidence)}`}>
-            {confidenceLabel(field.confidence)}
+          <span className={`text-2xs px-1.5 py-0.5 rounded-full font-medium ${confidenceColor(field.confidence)}`}>
+            {confidenceLabel(field.confidence, t)}
           </span>
-          <span className="text-[10px] text-gray-400 py-0.5">
-            via {sourceLabel(field.source)}
+          <span className="text-2xs text-muted-light py-0.5">
+            {t('contexto.via', { source: sourceLabel(field.source, t) })}
           </span>
         </div>
       </div>
@@ -345,6 +363,7 @@ const FieldRow: React.FC<FieldRowProps> = ({ label, field }) => {
 };
 
 const ContactContextCard: React.FC<{ cc: ContactContextData }> = ({ cc }) => {
+  const { t } = useTranslation('agentAssist');
   const scorePercent = cc.completeness_score !== undefined
     ? Math.round(cc.completeness_score * 100)
     : null;
@@ -356,36 +375,36 @@ const ContactContextCard: React.FC<{ cc: ContactContextData }> = ({ cc }) => {
   if (!hasData) return null;
 
   return (
-    <section className="bg-emerald-50 border border-emerald-200 rounded-lg overflow-hidden">
+    <section className="bg-green-light border border-green/30 rounded-lg overflow-hidden">
       {/* Header */}
-      <div className="flex items-center justify-between px-3 py-2 bg-emerald-100 border-b border-emerald-200">
-        <span className="text-xs font-semibold text-emerald-800 uppercase tracking-wide">
-          Contexto do Cliente
+      <div className="flex items-center justify-between px-3 py-2 bg-green-light border-b border-green/30">
+        <span className="text-xs font-semibold text-green-text uppercase tracking-wide">
+          {t('contexto.clientContext')}
         </span>
         {scorePercent !== null && (
-          <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full ${
+          <span className={`text-2xs font-semibold px-2 py-0.5 rounded-full ${
             scorePercent >= 80
-              ? "bg-emerald-600 text-white"
+              ? "bg-green text-white"
               : scorePercent >= 50
-              ? "bg-yellow-500 text-white"
-              : "bg-gray-300 text-gray-700"
+              ? "bg-warning text-white"
+              : "bg-border text-dark"
           }`}>
-            {scorePercent}% completo
+            {t('contexto.completeness', { pct: scorePercent })}
           </span>
         )}
       </div>
 
       {/* Fields */}
-      <div className="px-3 py-1 divide-y divide-gray-100">
-        <FieldRow label="Nome"       field={cc.nome} />
-        <FieldRow label="CPF"        field={cc.cpf} />
-        <FieldRow label="Conta"      field={cc.account_id} />
-        <FieldRow label="Telefone"   field={cc.telefone} />
-        <FieldRow label="E-mail"     field={cc.email} />
-        <FieldRow label="Motivo"     field={cc.motivo_contato} />
-        <FieldRow label="Intenção"   field={cc.intencao_primaria} />
-        <FieldRow label="Sentimento" field={cc.sentimento_atual} />
-        <FieldRow label="Resumo"     field={cc.resumo_conversa} />
+      <div className="px-3 py-1 divide-y divide-border">
+        <FieldRow label={t('contexto.fieldName')}      field={cc.nome}              t={t} />
+        <FieldRow label={t('contexto.fieldCpf')}       field={cc.cpf}               t={t} />
+        <FieldRow label={t('contexto.fieldAccount')}   field={cc.account_id}        t={t} />
+        <FieldRow label={t('contexto.fieldPhone')}     field={cc.telefone}          t={t} />
+        <FieldRow label={t('contexto.fieldEmail')}     field={cc.email}             t={t} />
+        <FieldRow label={t('contexto.fieldReason')}    field={cc.motivo_contato}    t={t} />
+        <FieldRow label={t('contexto.fieldIntent')}    field={cc.intencao_primaria} t={t} />
+        <FieldRow label={t('contexto.fieldSentiment')} field={cc.sentimento_atual}  t={t} />
+        <FieldRow label={t('contexto.fieldSummary')}   field={cc.resumo_conversa}   t={t} />
       </div>
     </section>
   );
@@ -396,9 +415,11 @@ const ContactContextCard: React.FC<{ cc: ContactContextData }> = ({ cc }) => {
 interface CtxFieldRowProps {
   tag:   string;
   entry: ContextEntry;
+  t:     (key: string, opts?: Record<string, unknown>) => string;
 }
 
-const CtxFieldRow: React.FC<CtxFieldRowProps> = ({ tag, entry }) => {
+const CtxFieldRow: React.FC<CtxFieldRowProps> = ({ tag, entry, t }) => {
+  const isMasked = entry.masked === true;
   const displayValue =
     entry.value === null || entry.value === undefined
       ? "—"
@@ -407,21 +428,29 @@ const CtxFieldRow: React.FC<CtxFieldRowProps> = ({ tag, entry }) => {
       : String(entry.value);
 
   return (
-    <div className="flex items-start gap-2 py-1.5 border-b border-gray-100 last:border-0">
-      <span className="text-xs text-gray-500 w-32 shrink-0 pt-0.5 capitalize">
-        {tagLabel(tag)}
+    <div className="flex items-start gap-2 py-1.5 border-b border-border last:border-0">
+      <span className="text-xs text-muted w-32 shrink-0 pt-0.5 capitalize">
+        {tagLabel(tag, t)}
       </span>
       <div className="flex-1 min-w-0">
-        <span className="text-sm font-medium text-gray-900 break-all">{displayValue}</span>
+        <span className={`text-sm font-medium break-all ${isMasked ? "text-muted-light font-mono tracking-wider" : "text-dark"}`}>
+          {displayValue}
+        </span>
         <div className="flex gap-1.5 mt-0.5 flex-wrap">
-          <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium ${confidenceColor(entry.confidence)}`}>
-            {confidenceLabel(entry.confidence)}
+          {isMasked ? (
+            <span className="text-2xs px-1.5 py-0.5 rounded-full font-semibold bg-warning-light text-warning-text border border-warning/30">
+              🔒 PII
+            </span>
+          ) : (
+            <span className={`text-2xs px-1.5 py-0.5 rounded-full font-medium ${confidenceColor(entry.confidence)}`}>
+              {confidenceLabel(entry.confidence, t)}
+            </span>
+          )}
+          <span className="text-2xs text-muted-light py-0.5">
+            {t('contexto.via', { source: sourceLabel(entry.source, t) })}
           </span>
-          <span className="text-[10px] text-gray-400 py-0.5">
-            via {sourceLabel(entry.source)}
-          </span>
-          {entry.visibility === "agents_only" && (
-            <span className="text-[10px] text-amber-600 py-0.5">🔒 agentes</span>
+          {entry.visibility === "agents_only" && !isMasked && (
+            <span className="text-2xs text-warning-text py-0.5">{t('contexto.agentsOnly')}</span>
           )}
         </div>
       </div>
@@ -430,34 +459,36 @@ const CtxFieldRow: React.FC<CtxFieldRowProps> = ({ tag, entry }) => {
 };
 
 const ContextSnapshotCard: React.FC<{
-  snapshot:  Record<string, ContextEntry>;
-  sessionId?: string | null;
+  snapshot:    Record<string, ContextEntry>;
+  sessionId?:  string | null;
   onTagSaved?: () => void;
-}> = ({ snapshot, sessionId, onTagSaved }) => {
+  viewerRole?: string;
+}> = ({ snapshot, sessionId, onTagSaved, viewerRole }) => {
+  const { t } = useTranslation('agentAssist');
   const [addOpen, setAddOpen] = useState(false);
-  const groups = groupByNamespace(snapshot);
+  const groups = groupByNamespace(snapshot, t);
   if (groups.length === 0 && !sessionId) return null;
 
   return (
-    <section className="bg-teal-50 border border-teal-200 rounded-lg overflow-hidden">
+    <section className="bg-revised-light border border-revised/30 rounded-lg overflow-hidden">
       {/* Header */}
-      <div className="flex items-center justify-between px-3 py-2 bg-teal-100 border-b border-teal-200">
-        <span className="text-xs font-semibold text-teal-800 uppercase tracking-wide">
-          Context Store
+      <div className="flex items-center justify-between px-3 py-2 bg-revised-light border-b border-revised/30">
+        <span className="text-xs font-semibold text-revised-text uppercase tracking-wide">
+          {t('contexto.contextStore')}
         </span>
         <div className="flex items-center gap-2">
-          <span className="text-[10px] text-teal-600 font-medium">
-            {Object.keys(snapshot).length} campos
+          <span className="text-2xs text-revised font-medium">
+            {t('contexto.fields', { count: Object.keys(snapshot).length })}
           </span>
           {sessionId && (
             <button
               onClick={() => setAddOpen(v => !v)}
-              title={addOpen ? "Cancelar" : "Adicionar tag"}
+              title={addOpen ? t('contexto.cancel') : t('contexto.addTag')}
               className={[
                 "w-5 h-5 flex items-center justify-center rounded text-xs font-bold transition-colors",
                 addOpen
-                  ? "bg-teal-600 text-white"
-                  : "text-teal-600 hover:bg-teal-200",
+                  ? "bg-revised text-white"
+                  : "text-revised hover:bg-revised-light",
               ].join(" ")}
             >
               {addOpen ? "×" : "+"}
@@ -468,9 +499,10 @@ const ContextSnapshotCard: React.FC<{
 
       {/* Manual tag form (toggleable) */}
       {addOpen && sessionId && (
-        <div className="px-3 pb-2 border-b border-teal-100 bg-teal-50/60">
+        <div className="px-3 pb-2 border-b border-revised/20 bg-revised-light/60">
           <ManualTagForm
             sessionId={sessionId}
+            viewerRole={viewerRole}
             onDone={() => {
               setAddOpen(false);
               onTagSaved?.();
@@ -483,13 +515,13 @@ const ContextSnapshotCard: React.FC<{
       {groups.map(({ ns, label, entries }) => (
         <div key={ns}>
           <div className="px-3 pt-2 pb-0.5">
-            <span className="text-[10px] font-semibold text-teal-700 uppercase tracking-wider">
+            <span className="text-2xs font-semibold text-revised-text uppercase tracking-wider">
               {label}
             </span>
           </div>
           <div className="px-3 pb-1">
             {entries.map(({ tag, entry }) => (
-              <CtxFieldRow key={tag} tag={tag} entry={entry} />
+              <CtxFieldRow key={tag} tag={tag} entry={entry} t={t} />
             ))}
           </div>
         </div>
@@ -497,8 +529,8 @@ const ContextSnapshotCard: React.FC<{
 
       {/* Empty state when no tags yet but form available */}
       {groups.length === 0 && (
-        <p className="px-3 py-2 text-[11px] text-teal-500 italic">
-          Nenhum dado no Context Store ainda.
+        <p className="px-3 py-2 text-xs text-revised italic">
+          {t('contexto.empty')}
         </p>
       )}
     </section>
@@ -510,28 +542,31 @@ const ContextSnapshotCard: React.FC<{
 const InsightCard: React.FC<{ item: InsightItem; historical: boolean }> = ({
   item,
   historical,
-}) => (
-  <div
-    className={`rounded-lg p-2.5 text-sm leading-snug ${
-      historical
-        ? "bg-blue-50 border border-blue-200 text-blue-900"
-        : "bg-purple-50 border border-purple-200 text-purple-900"
-    }`}
-  >
-    <p>{item.content}</p>
-    <div className="flex gap-3 mt-1 text-[10px] text-gray-500">
-      {item.confidence !== undefined && (
-        <span>Confiança: {(item.confidence * 100).toFixed(0)}%</span>
-      )}
-      {item.last_seen && (
-        <span>Visto: {formatLastSeen(item.last_seen)}</span>
-      )}
-      {item.turn !== undefined && (
-        <span>Turn: {item.turn}</span>
-      )}
+}) => {
+  const { t } = useTranslation('agentAssist');
+  return (
+    <div
+      className={`rounded-lg p-2.5 text-sm leading-snug ${
+        historical
+          ? "bg-primary-light border border-primary/30 text-primary"
+          : "bg-ai-light border border-ai/30 text-ai-text"
+      }`}
+    >
+      <p>{item.content}</p>
+      <div className="flex gap-3 mt-1 text-2xs text-muted">
+        {item.confidence !== undefined && (
+          <span>{t('contexto.insightConfidence', { pct: (item.confidence * 100).toFixed(0) })}</span>
+        )}
+        {item.last_seen && (
+          <span>{t('contexto.insightSeen', { date: formatLastSeen(item.last_seen) })}</span>
+        )}
+        {item.turn !== undefined && (
+          <span>{t('contexto.insightTurn', { count: item.turn })}</span>
+        )}
+      </div>
     </div>
-  </div>
-);
+  );
+};
 
 // ── ContextoTab ───────────────────────────────────────────────────────────────
 
@@ -539,7 +574,10 @@ export const ContextoTab: React.FC<ContextoTabProps> = ({
   context,
   sessionId,
   supervisorState,
+  viewerRole = "operator",
 }) => {
+  const { t } = useTranslation('agentAssist');
+
   // Callback passed to ContextSnapshotCard so a supervisor_state refresh
   // can be triggered after a successful tag write (parent must poll or trigger).
   // For now we just log — the 3s polling in useSupervisorState will pick it up.
@@ -549,8 +587,8 @@ export const ContextoTab: React.FC<ContextoTabProps> = ({
 
   if (!context) {
     return (
-      <div className="flex-1 flex items-center justify-center text-sm text-gray-400 p-4 h-full">
-        Aguardando dados…
+      <div className="flex-1 flex items-center justify-center text-sm text-muted-light p-4 h-full">
+        {t('contexto.waiting')}
       </div>
     );
   }
@@ -575,21 +613,22 @@ export const ContextoTab: React.FC<ContextoTabProps> = ({
         <ContextSnapshotCard
           snapshot={context_snapshot}
           sessionId={sessionId}
+          viewerRole={viewerRole}
           onTagSaved={handleTagSaved}
         />
       )}
 
       {/* ── When no context_snapshot yet, still show the write form ── */}
       {!context_snapshot && sessionId && (
-        <section className="bg-teal-50 border border-teal-200 rounded-lg overflow-hidden">
-          <div className="flex items-center justify-between px-3 py-2 bg-teal-100 border-b border-teal-200">
-            <span className="text-xs font-semibold text-teal-800 uppercase tracking-wide">
-              Context Store
+        <section className="bg-revised-light border border-revised/30 rounded-lg overflow-hidden">
+          <div className="flex items-center justify-between px-3 py-2 bg-revised-light border-b border-revised/30">
+            <span className="text-xs font-semibold text-revised-text uppercase tracking-wide">
+              {t('contexto.contextStore')}
             </span>
-            <span className="text-[10px] text-teal-500 italic">vazio</span>
+            <span className="text-2xs text-revised italic">{t('contexto.storeEmpty')}</span>
           </div>
           <div className="px-3 pb-3">
-            <ManualTagForm sessionId={sessionId} onDone={handleTagSaved} />
+            <ManualTagForm sessionId={sessionId} viewerRole={viewerRole} onDone={handleTagSaved} />
           </div>
         </section>
       )}
@@ -601,12 +640,12 @@ export const ContextoTab: React.FC<ContextoTabProps> = ({
 
       {/* ── 3. Historical Insights ── */}
       <section>
-        <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">
-          Memória histórica ({historical_insights.length})
+        <h3 className="text-xs font-semibold text-muted uppercase tracking-wide mb-2">
+          {t('contexto.historicalInsights', { count: historical_insights.length })}
         </h3>
         {historical_insights.length === 0 ? (
-          <p className="text-xs text-gray-400">
-            Sem histórico para este contato.
+          <p className="text-xs text-muted-light">
+            {t('contexto.noHistory')}
           </p>
         ) : (
           <div className="flex flex-col gap-2">
@@ -619,12 +658,12 @@ export const ContextoTab: React.FC<ContextoTabProps> = ({
 
       {/* ── 4. Conversation Insights ── */}
       <section>
-        <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">
-          Insights desta conversa ({conversation_insights.length})
+        <h3 className="text-xs font-semibold text-muted uppercase tracking-wide mb-2">
+          {t('contexto.conversationInsights', { count: conversation_insights.length })}
         </h3>
         {conversation_insights.length === 0 ? (
-          <p className="text-xs text-gray-400">
-            Nenhum insight registrado nesta sessão.
+          <p className="text-xs text-muted-light">
+            {t('contexto.noInsights')}
           </p>
         ) : (
           <div className="flex flex-col gap-2">

@@ -12,12 +12,18 @@
     "assigned":    "Sessão atribuída"
   },
   "close": {
-    "title":        "Encerrar Sessão",
-    "issueStatus":  "Status do Problema",
-    "outcome":      "Outcome",
-    "handoff":      "Motivo de Transferência",
-    "confirm":      "Encerrar Sessão",
-    "cancel":       "Cancelar"
+    "title":                "Encerrar Sessão",
+    "issueStatus":          "Status do Problema",
+    "issueStatusPlaceholder":"Ex: Portabilidade solicitada com sucesso",
+    "outcomeLabel":         "Desfecho",
+    "outcomeResolved":      "Resolvido",
+    "outcomeEscalated":     "Escalado",
+    "outcomeAbandoned":     "Abandonado",
+    "outcome":              "Desfecho",
+    "handoff":              "Motivo de Transferência",
+    "handoffPlaceholder":   "Descreva o motivo (opcional)",
+    "confirm":              "Encerrar Sessão",
+    "cancel":               "Cancelar"
   },
   "input": {
     "placeholder": "Digite uma mensagem…",
@@ -49,10 +55,76 @@
     "noContext": "Nenhum contexto disponível.",
     "agents":    "Somente agentes"
   },
+  "contexto": {
+    "intentFlags":    "Intenção & Flags",
+    "intentLabel":    "Intenção",
+    "flagsLabel":     "Flags",
+    "turnLabel":      "turn {{count}}",
+    "contextStore":   "Context Store",
+    "fields":         "{{count}} campos",
+    "addTag":         "Adicionar tag",
+    "cancel":         "Cancelar",
+    "tagKey":         "Chave (ex: caller.observacao)",
+    "tagKeyPlaceholder": "caller.observacao",
+    "tagValue":       "Valor",
+    "tagValuePlaceholder": "Valor do contexto…",
+    "confidence":     "Confiança",
+    "conf10":         "1.0 — confirmado",
+    "conf09":         "0.9 — alta certeza",
+    "conf07":         "0.7 — provável",
+    "conf05":         "0.5 — incerto",
+    "saveError":      "Erro ao salvar.",
+    "saving":         "Salvando…",
+    "save":           "Salvar · ⌘↵",
+    "tagSaved":       "Tag salva com sucesso.",
+    "noPermission":   "Sem permissão para este namespace.",
+    "clientContext":  "Contexto do Cliente",
+    "completeness":   "{{pct}}% completo",
+    "empty":          "Nenhum dado no Context Store ainda.",
+    "storeEmpty":     "vazio",
+    "confidence_confirmed":    "confirmado",
+    "confidence_highCertainty":"alta certeza",
+    "confidence_uncertain":    "incerto",
+    "confidence_unknown":      "desconhecido",
+    "source_customerInput":  "cliente",
+    "source_mcpCall":        "CRM",
+    "source_aiInferred":     "inferido",
+    "source_humanAgent":     "agente",
+    "source_insightHistorico":"histórico",
+    "source_insightConversa":"conversa",
+    "source_pipelineState":  "sessão",
+    "source_routingEngine":  "roteamento",
+    "insightConfidence":  "Confiança: {{pct}}%",
+    "insightSeen":        "Visto: {{date}}",
+    "insightTurn":        "Turn: {{count}}",
+    "waiting":            "Aguardando dados…",
+    "historicalInsights": "Memória histórica ({{count}})",
+    "noHistory":          "Sem histórico para este contato.",
+    "conversationInsights":"Insights desta conversa ({{count}})",
+    "noInsights":         "Nenhum insight registrado nesta sessão.",
+    "via":                "via {{source}}",
+    "agentsOnly":         "🔒 agentes",
+    "fieldName":      "Nome",
+    "fieldCpf":       "CPF",
+    "fieldAccount":   "Conta",
+    "fieldPhone":     "Telefone",
+    "fieldEmail":     "E-mail",
+    "fieldReason":    "Motivo",
+    "fieldIntent":    "Intenção",
+    "fieldSentiment": "Sentimento",
+    "fieldSummary":   "Resumo",
+    "ns_caller":  "Caller",
+    "ns_account": "Conta",
+    "ns_service": "Serviço",
+    "ns_journey": "Jornada",
+    "ns_session": "Sessão",
+    "ns_agent":   "Agente",
+    "ns_history": "Histórico"
+  },
   "history": {
-    "noHistory":    "Sem histórico de contatos.",
-    "loading":      "Carregando histórico…",
-    "notIdentified":"Cliente não identificado"
+    "noHistory":     "Sem histórico de contatos.",
+    "loading":       "Carregando histórico…",
+    "notIdentified": "Cliente não identificado"
   },
   "pause": {
     "title":     "Selecionar Motivo de Pausa",
@@ -63,37 +135,307 @@
     "required":  "Observação obrigatória para este motivo"
   },
   "substitution": {
-    "toggle":     "🔄 Substituir",
-    "active":     "🔄 Substituindo",
-    "observation":"Observação"
+    "toggle":      "🔄 Substituir",
+    "active":      "🔄 Substituindo",
+    "observation": "Observação"
   },
   "message": {
-    "closingWrapUp":        "Aguardando finalização (wrap-up/NPS)…",
-    "closingError":         "Erro ao encerrar atendimento.",
-    "menuSubmitFailed":     "Falha ao enviar resposta.",
-    "networkError":         "Erro de rede ao enviar resposta.",
-    "hungUpByAgent":        "Desligado pelo agente",
-    "agentResumed":         "Agente retomado — disponível para novos contatos.",
-    "agentPaused":          "Agente pausado ({{reason}}{{detail}}). Novos contatos não serão recebidos.",
-    "inviteSent":           "Convite enviado: {{agentTypeId}}",
-    "escalatingTo":         "Escalando para: {{poolId}}",
-    "transferComingSoon":   "Transferir: em breve",
-    "clientDisconnected":   "Cliente desconectou"
+    "closingWrapUp":      "Aguardando finalização (wrap-up/NPS)…",
+    "closingError":       "Erro ao encerrar atendimento.",
+    "menuSubmitFailed":   "Falha ao enviar resposta.",
+    "networkError":       "Erro de rede ao enviar resposta.",
+    "hungUpByAgent":      "Desligado pelo agente",
+    "agentResumed":       "Agente retomado — disponível para novos contatos.",
+    "agentPaused":        "Agente pausado ({{reason}}{{detail}}). Novos contatos não serão recebidos.",
+    "inviteSent":         "Convite enviado: {{agentTypeId}}",
+    "escalatingTo":       "Escalando para: {{poolId}}",
+    "transferComingSoon": "Transferir: em breve",
+    "clientDisconnected": "Cliente desconectou",
+    "delegateDone":       "Agente delegado concluiu a tarefa",
+    "specialistInvited":  "Especialista @{{alias}} convidado",
+    "taskDelegated":      "Tarefa delegada para @{{alias}}",
+    "processStarted":     "Processo \"{{name}}\" iniciado",
+    "processStartFailed": "Não foi possível iniciar o processo",
+    "processStartError":  "Erro ao iniciar processo"
   },
   "contacts": {
     "label": "Contatos"
   },
   "centerTab": {
     "atual":     "Atual",
-    "historico": "Histórico"
+    "historico": "Histórico",
+    "journey":   "Journey"
   },
   "rightTab": {
-    "estado":    "Estado",
-    "contexto":  "Contexto",
-    "historico": "Histórico"
+    "estado":        "Estado",
+    "agentes":       "Agentes",
+    "contexto":      "Contexto",
+    "historico":     "Histórico",
+    "orchestration": "Orquestração"
   },
   "empty": {
-    "activatePool":       "Ative um pool no cabeçalho para ficar disponível.",
-    "waitingForContact":  "Aguardando próximo atendimento…"
+    "activatePool":      "Ative um pool no cabeçalho para ficar disponível.",
+    "waitingForContact": "Aguardando próximo atendimento…"
+  },
+  "actionBar": {
+    "handleTimeTitle":  "Tempo de atendimento",
+    "selectContact":    "Selecione um contato para iniciar o atendimento",
+    "sessionClosed":    "Sessão encerrada",
+    "sentiment": {
+      "satisfied":  "Satisfeito",
+      "neutral":    "Neutro",
+      "frustrated": "Frustrado",
+      "angry":      "Irritado"
+    },
+    "sentimentTitle":   "Sentimento: {{label}} ({{score}})",
+    "transfer":         "Transferir",
+    "transferTo":       "Transferir para",
+    "noDestinations":   "Sem destinos disponíveis",
+    "recommended":      "✓ Recomendado",
+    "waitEstimate":     "~{{min}}min espera",
+    "process":          "Processo ▾",
+    "startProcess":     "Iniciar processo",
+    "replySlaTitle":    "Resposta: {{elapsed}} / limite {{limit}}"
+  },
+  "header": {
+    "ws": {
+      "connected":    "Conectado",
+      "connecting":   "Conectando…",
+      "disconnected": "Desconectado"
+    },
+    "offline":      "Offline — selecione um pool",
+    "readyIn":      "Pronto em {{count}} pool",
+    "readyIn_plural":"Pronto em {{count}} pools",
+    "attending":    "Atendendo {{count}}",
+    "paused":       "Pausado",
+    "pause":        "Pausar",
+    "resumeTitle":  "Retomar recebimento de contatos",
+    "pauseTitle":   "Pausar recebimento de contatos",
+    "comboPools":   "Pools ({{pools}})",
+    "comboAllPools":"Todos os pools",
+    "comboNoPools": "Sem pools",
+    "comboOffline": "Offline",
+    "noPools":      "Nenhum pool disponível",
+    "clickOffline": "Clique para Offline",
+    "clickReady":   "Clique para Ready"
+  },
+  "estado": {
+    "waiting":      "Aguardando dados…",
+    "aiAgents":     "Agentes AI na Sessão",
+    "sentimentAlert":"⚠ Alerta de sentimento crítico",
+    "slaTurn":      "SLA · Turn {{count}}",
+    "slaRisk":      "SLA em risco iminente",
+    "confidence":   "{{pct}}% confiança",
+    "sentimentLabel": {
+      "veryPositive": "Muito positivo",
+      "positive":     "Positivo",
+      "neutral":      "Neutro",
+      "negative":     "Negativo",
+      "veryNegative": "Muito negativo"
+    }
+  },
+  "agentes": {
+    "activeInSession":    "Ativos na Sessão",
+    "options":            "Opções",
+    "noAiAgents":         "Nenhum agente AI na sessão",
+    "addAgent":           "Adicionar Agente",
+    "noAgentsAvailable":  "Sem agentes disponíveis para este pool",
+    "delegateTask":       "Delegar Tarefa",
+    "invite":             "Convidar",
+    "inviteCtrlEnter":    "Convidar · ⌘↵",
+    "contextPlaceholder": "Contexto para o agente (opcional)…",
+    "cancel":             "Cancelar",
+    "waiting":            "Aguardando…",
+    "active":             "Ativo",
+    "substituting":       "substituindo",
+    "substitution": {
+      "stop":  "Parar substituição",
+      "start": "Substituir"
+    },
+    "status": {
+      "closed":    "✓ Encerrado",
+      "attending": "● Atendendo"
+    }
+  },
+  "capacidades": {
+    "waiting":            "Aguardando dados…",
+    "riskFlags":          "Flags de risco",
+    "responseSuggestion": "Sugestão de resposta",
+    "recommendedActions": "Ações recomendadas",
+    "noSuggestedAgents":  "Nenhum agente sugerido.",
+    "conference":         "Conferência",
+    "delegate":           "Delegar",
+    "escalations":        "Escalações",
+    "noEscalations":      "Nenhuma escalação disponível.",
+    "escalate":           "Escalar",
+    "recommended":        "Recomendado",
+    "estimatedWait":      "Espera estimada: {{wait}}",
+    "available":          "disponível(is)"
+  },
+  "historico": {
+    "openJourneys":      "Processos em aberto",
+    "loading":           "Carregando…",
+    "sessions_one":      "{{count}} sessão",
+    "sessions_other":    "{{count}} sessões",
+    "previousContacts":  "Contatos anteriores",
+    "reload":            "Recarregar histórico",
+    "loadingHistory":    "Carregando histórico…",
+    "historyError":      "Erro ao carregar histórico: {{error}}",
+    "noHistory":         "Sem contatos anteriores registrados.",
+    "noCustomer":        "Cliente não identificado nesta sessão.",
+    "pool":              "Pool",
+    "channel":           "Canal",
+    "closedAt":          "Encerrado",
+    "journeyStatus": {
+      "active":    "Ativo",
+      "suspended": "Suspenso",
+      "completed": "Concluído",
+      "failed":    "Falhou",
+      "cancelled": "Cancelado"
+    },
+    "outcome": {
+      "resolved":  "Resolvido",
+      "escalated": "Escalado",
+      "abandoned":  "Abandonado"
+    }
+  },
+  "delegar": {
+    "title":                 "Delegar Tarefa",
+    "close":                 "Fechar",
+    "specialistAgent":       "Agente especialista",
+    "noAgents":              "Nenhum agente disponível para este pool. Configure",
+    "loadingParams":         "Carregando parâmetros…",
+    "params":                "Parâmetros da delegação",
+    "fields_one":            "{{count}} campo",
+    "fields_other":          "{{count}} campos",
+    "prefilledContext":       "Contexto das mensagens selecionadas",
+    "prefilledFrom":         "Pré-preenchido a partir das mensagens selecionadas",
+    "select":                "— Selecionar —",
+    "instruction":           "Instrução",
+    "instructionPlaceholder":"Descreva o que o agente deve fazer nesta delegação…",
+    "visibility":            "Visibilidade da delegação",
+    "agentsOnly":            "Somente equipe",
+    "agentsOnlyHint":        "A delegação e a resposta do agente ficam invisíveis ao cliente",
+    "visibleToCustomer":     "Visível ao cliente",
+    "visibleToCustomerHint": "O agente responde diretamente na conversa com o cliente",
+    "delegate":              "Delegar",
+    "ctrlEnter":             "Ctrl + Enter para delegar"
+  },
+  "aiCard": {
+    "clickDetails":    "Clique para detalhes",
+    "lastMessages":    "Últimas mensagens",
+    "noMessages":      "Sem mensagens deste agente na sessão.",
+    "waitingFor":      "aguardando: {{what}}",
+    "terminateSegment":"Encerrar segmento",
+    "terminateInfo":   "Envia @{{instanceId}} terminate_self",
+    "internal":        "(interno)",
+    "closeLabel":      "Fechar",
+    "status": {
+      "running": "Rodando",
+      "waiting": "Aguardando",
+      "done":    "Concluído",
+      "error":   "Erro"
+    }
+  },
+  "contactList": {
+    "sessionClosed":    "Sessão encerrada",
+    "ended":            "encerrado",
+    "awaitingResponse": "Aguardando sua resposta",
+    "aiTyping":         "IA digitando"
+  },
+  "orchestration": {
+    "waiting":                "Aguardando dados da sessão…",
+    "aiAgents":               "Agentes AI ativos",
+    "noAiAgents":             "Nenhum agente AI ativo nesta sessão.",
+    "stepHistory":            "Histórico de steps ({{count}})",
+    "noTransitions":          "Nenhuma transição registrada.",
+    "supervisorInterventions":"Intervenções de supervisor",
+    "injectContext":          "Injetar contexto",
+    "openForm":               "Abrir",
+    "closeForm":              "Fechar",
+    "injectContextDesc":      "Escreve uma chave no ContextStore desta sessão (confiança configurável).",
+    "contextInjected":        "Contexto injetado com sucesso.",
+    "keyPlaceholder":         "chave (ex: caller.nome)",
+    "valuePlaceholder":       "valor",
+    "injecting":              "Injetando…",
+    "inject":                 "Injetar",
+    "forceComplete":          "⚡ Forçar encerramento",
+    "forceCompleteDesc":      "Marca o pipeline como \"completed\" no Redis. Use apenas em emergências.",
+    "forceCompleteConfirm":   "Isso forçará o encerramento do Skill-Flow. Confirma?",
+    "cancel":                 "Cancelar",
+    "confirm":                "Confirmar",
+    "closing":                "Encerrando…",
+    "pipelineClosed":         "Pipeline encerrado com sucesso.",
+    "forcePipelineBtn":       "⚡ Force-complete pipeline"
+  },
+  "presence": {
+    "title":       "Presença",
+    "noPools":     "Nenhum pool disponível",
+    "hint":        "Clique em um pool para alternar entre Ready e Offline.",
+    "ready":       "Ready",
+    "off":         "Off",
+    "expand":      "Expandir",
+    "collapse":    "Recolher",
+    "clickOffline":"Clique para Offline",
+    "clickReady":  "Clique para Ready"
+  },
+  "filterBar": {
+    "all":                "Todos",
+    "showAll":            "Mostrar todas as mensagens",
+    "supervision":        "Supervisão",
+    "interventions":      "Intervenções",
+    "leftConference":     "— já saiu da conferência",
+    "injectContext":      "Injetar contexto",
+    "contextPlaceholder": "Instrução ou contexto adicional para o agente AI…",
+    "injecting":          "Injetando…",
+    "inject":             "Injetar",
+    "forceComplete":      "⚡ Forçar conclusão do flow",
+    "executing":          "Executando…",
+    "injected":           "Contexto injetado.",
+    "completed":          "Completado.",
+    "failed":             "Falha.",
+    "networkError":       "Erro de rede.",
+    "customer":           "Cliente",
+    "agent":              "Agente"
+  },
+  "chatArea": {
+    "sessionClosedBanner": "Cliente desconectou — preencha o encerramento para liberar o contato.",
+    "waitingMessages":     "Aguardando mensagens…",
+    "selectionContext":    "📋 Contexto",
+    "selectionCount_one":  "{{count}} mensagem selecionada",
+    "selectionCount_other":"{{count}} mensagens selecionadas",
+    "selectionHint":       "· Clique em Delegar para usar como instrução",
+    "conversationAria":    "Conversa",
+    "aiTypingAria":        "Agente IA está digitando"
+  },
+  "agentInput": {
+    "wrapUpBanner":    "Wrap-up em andamento — responda às perguntas dos agentes de finalização abaixo.",
+    "label":           "Mensagem",
+    "placeholder":     "Digite sua mensagem… (Enter envia · Shift+Enter nova linha)",
+    "cannedAriaLabel": "Abrir frases rápidas e @especialistas (atalho: \"/\" no início da mensagem)",
+    "sendAriaLabel":   "Enviar mensagem",
+    "hint":            "Pressione Enter para enviar. Shift+Enter insere uma nova linha. Pressione barra para abrir frases rápidas."
+  },
+  "rightPanel": {
+    "selectContact": "Selecione um contato para ver os detalhes"
+  },
+  "canned": {
+    "title":            "Frases rápidas",
+    "specialists":      "Especialistas",
+    "noSpecialists":    "Sem especialistas disponíveis",
+    "searchPlaceholder":"Buscar frases ou @especialista…",
+    "noResults":        "Nenhum resultado para \"{{query}}\"",
+    "viaAt":            "via @menção"
+  },
+  "journey": {
+    "statusLabel": {
+      "active":    "Ativo",
+      "suspended": "Suspenso",
+      "completed": "Concluído",
+      "failed":    "Falhou",
+      "cancelled": "Cancelado"
+    },
+    "noJourneys":  "Nenhuma journey ativa para este cliente.",
+    "merge":       "Mesclar"
   }
 }

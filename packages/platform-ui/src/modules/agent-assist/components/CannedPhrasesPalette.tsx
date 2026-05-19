@@ -11,6 +11,7 @@
  */
 
 import React, { useEffect, useRef, useState, useCallback } from "react";
+import { useTranslation } from "react-i18next";
 import { SupervisorCapabilities } from "../types";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -85,6 +86,7 @@ export const CannedPhrasesPalette: React.FC<CannedPhrasesPaletteProps> = ({
   onSelect,
   onClose,
 }) => {
+  const { t } = useTranslation('agentAssist');
   const [query,     setQuery]     = useState("");
   const [activeIdx, setActiveIdx] = useState<number>(-1);
   const searchRef   = useRef<HTMLInputElement>(null);
@@ -168,27 +170,27 @@ export const CannedPhrasesPalette: React.FC<CannedPhrasesPaletteProps> = ({
       ref={containerRef}
       onKeyDown={handleKeyDown}
       className="absolute bottom-full left-0 right-0 mb-1 mx-2 z-50
-        bg-white rounded-xl border border-gray-200 shadow-xl
+        bg-white rounded-xl border border-border shadow-xl
         flex flex-col overflow-hidden"
       style={{ maxHeight: "360px" }}
     >
       {/* ── Search bar ── */}
-      <div className="flex items-center gap-2 px-3 py-2.5 border-b border-gray-100 flex-shrink-0">
-        <span className="text-sm font-mono text-indigo-600 font-bold select-none">/</span>
+      <div className="flex items-center gap-2 px-3 py-2.5 border-b border-border flex-shrink-0">
+        <span className="text-sm font-mono text-primary font-bold select-none">/</span>
         <input
           ref={searchRef}
           type="text"
           value={query}
           onChange={e => { setQuery(e.target.value); setActiveIdx(-1); }}
           onKeyDown={handleSearchKeyDown}
-          placeholder="Buscar frases ou @especialista…"
-          className="flex-1 text-sm outline-none placeholder-gray-400 bg-transparent"
+          placeholder={t('canned.searchPlaceholder')}
+          className="flex-1 text-sm outline-none placeholder-muted-light bg-transparent"
           autoComplete="off"
         />
         <kbd
           onClick={onClose}
-          className="text-[10px] text-gray-400 border border-gray-200 rounded px-1 py-0.5
-            cursor-pointer hover:bg-gray-50 font-mono select-none"
+          className="text-2xs text-muted-light border border-border rounded px-1 py-0.5
+            cursor-pointer hover:bg-surface-muted font-mono select-none"
         >
           ESC
         </kbd>
@@ -200,18 +202,18 @@ export const CannedPhrasesPalette: React.FC<CannedPhrasesPaletteProps> = ({
         {/* Frases rápidas */}
         {filteredPhrases.length > 0 && (
           <div>
-            <p className="px-3 pt-2.5 pb-1 text-[10px] font-semibold uppercase tracking-wider text-gray-400">
-              Frases rápidas
+            <p className="px-3 pt-2.5 pb-1 text-2xs font-semibold uppercase tracking-wider text-muted-light">
+              {t('canned.title')}
             </p>
             {filteredPhrases.map((phrase, i) => (
               <button
                 key={phrase.id}
                 onClick={() => { onSelect(phrase.text); onClose(); }}
                 className={`w-full text-left px-3 py-2 transition-colors flex flex-col gap-0.5
-                  ${activeIdx === i ? "bg-indigo-50" : "hover:bg-gray-50"}`}
+                  ${activeIdx === i ? "bg-primary-light" : "hover:bg-surface-muted"}`}
               >
-                <span className="text-xs font-semibold text-gray-700">{phrase.label}</span>
-                <span className="text-[11px] text-gray-500 truncate">{phrase.text}</span>
+                <span className="text-xs font-semibold text-dark">{phrase.label}</span>
+                <span className="text-xs text-muted truncate">{phrase.text}</span>
               </button>
             ))}
           </div>
@@ -220,9 +222,9 @@ export const CannedPhrasesPalette: React.FC<CannedPhrasesPaletteProps> = ({
         {/* Especialistas */}
         {filteredSpecialists.length > 0 && (
           <div>
-            <p className="px-3 pt-3 pb-1 text-[10px] font-semibold uppercase tracking-wider text-gray-400
-              border-t border-gray-100 mt-1">
-              Especialistas <span className="text-gray-300">(@mention)</span>
+            <p className="px-3 pt-3 pb-1 text-2xs font-semibold uppercase tracking-wider text-muted
+              border-t border-border mt-1">
+              {t('canned.specialists')} <span className="text-muted-light text-micro font-normal normal-case">{t('canned.viaAt')}</span>
             </p>
             {filteredSpecialists.map((sp, i) => {
               const globalIdx = filteredPhrases.length + i;
@@ -231,18 +233,18 @@ export const CannedPhrasesPalette: React.FC<CannedPhrasesPaletteProps> = ({
                   key={sp.alias}
                   onClick={() => { onSelect(`@${sp.alias} `); onClose(); }}
                   className={`w-full text-left px-3 py-2 transition-colors flex items-center gap-3
-                    ${activeIdx === globalIdx ? "bg-indigo-50" : "hover:bg-gray-50"}`}
+                    ${activeIdx === globalIdx ? "bg-primary-light" : "hover:bg-surface-muted"}`}
                 >
-                  <span className="flex-shrink-0 w-6 h-6 rounded-full bg-indigo-100
-                    flex items-center justify-center text-[11px] font-bold text-indigo-600">
+                  <span className="flex-shrink-0 w-6 h-6 rounded-full bg-primary-light
+                    flex items-center justify-center text-xs font-bold text-primary">
                     @
                   </span>
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2">
-                      <span className="text-xs font-semibold text-gray-700">{sp.label}</span>
-                      <code className="text-[10px] text-indigo-500 font-mono">@{sp.alias}</code>
+                      <span className="text-xs font-semibold text-dark">{sp.label}</span>
+                      <code className="text-2xs text-primary font-mono">@{sp.alias}</code>
                     </div>
-                    <span className="text-[11px] text-gray-400 truncate block">{sp.description}</span>
+                    <span className="text-xs text-muted-light truncate block">{sp.description}</span>
                   </div>
                 </button>
               );
@@ -252,8 +254,8 @@ export const CannedPhrasesPalette: React.FC<CannedPhrasesPaletteProps> = ({
 
         {/* Empty state */}
         {filteredPhrases.length === 0 && filteredSpecialists.length === 0 && (
-          <div className="py-8 text-center text-xs text-gray-400">
-            Nenhum resultado para "<span className="font-mono">{query}</span>"
+          <div className="py-8 text-center text-xs text-muted-light">
+            {t('canned.noResults', { query })}
           </div>
         )}
       </div>

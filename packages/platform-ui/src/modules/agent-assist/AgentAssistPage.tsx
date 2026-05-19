@@ -4,7 +4,7 @@
  * All persistent state (WS connections, contact map, pool presence, toasts)
  * lives in AgentAssistContext (provided at Shell level) so it survives
  * navigation. This component only holds UI-local state that is fine to reset:
- *   activeTab, showCloseModal, substitutionMode, filterKey, lastCopilotEvent.
+ *   activeTab, substitutionMode, filterKey, lastCopilotEvent.
  *
  * Layout (after UX redesign):
  *   ┌────────────────────────────────────────────────────────────────┐
@@ -29,6 +29,7 @@
 import React, { useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useAuth } from "@/auth/useAuth";
+import { Clock, WifiOff } from "lucide-react";
 
 import { ActiveTab, ClosePayload }         from "./types";
 import { useAgentAssist, aggregateStatus } from "./AgentAssistContext";
@@ -40,7 +41,6 @@ import { Header }              from "./components/Header";
 import { ActionBar }           from "./components/ActionBar";
 import { ChatArea }            from "./components/ChatArea";
 import { AgentInput }          from "./components/AgentInput";
-import { CloseModal }          from "./components/CloseModal";
 import { PauseReasonModal }    from "./components/PauseReasonModal";
 import { RightPanel }          from "./components/RightPanel";
 import { ContactList }         from "./components/ContactList";
@@ -83,7 +83,6 @@ export const AgentAssistPage: React.FC = () => {
 
   // ── UI-local state ─────────────────────────────────────────────────────
   const [activeTab,         setActiveTab]         = useState<ActiveTab>("agentes");
-  const [showCloseModal,    setShowCloseModal]     = useState(false);
   const [substitutionMode,  setSubstitutionMode]   = useState(false);
   const [lastCopilotEvent,  setLastCopilotEvent]   = useState(0);
   const [isPaused,          setIsPaused]           = useState(false);
@@ -108,6 +107,18 @@ export const AgentAssistPage: React.FC = () => {
   // ── Derived state needed before hook calls ────────────────────────────
   const selected = selectedSessionId ? contacts.get(selectedSessionId) ?? null : null;
 
+  // Auto-close sessions that arrive already closed (client disconnected before
+  // this agent received the contact). Arc 14: wrap-up is handled by hook agents,
+  // so we skip the manual CloseModal and call agent_done immediately with defaults.
+  useEffect(() => {
+    if (!selected?.pendingCloseModal || !selectedSessionId) return;
+    handleClose(selectedSessionId, {
+      issue_status: t("message.clientDisconnected"),
+      outcome:      "abandoned",
+    });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selected?.pendingCloseModal, selectedSessionId]);
+
   // ── Supervisor/copilot hooks ───────────────────────────────────────────
   const lastWsEvent = lastEvent as import("./types").WsServerEvent | null;
   const { state: supervisorState, refresh: refreshSupervisorState } = useSupervisorState(selectedSessionId, lastWsEvent);
@@ -129,7 +140,7 @@ export const AgentAssistPage: React.FC = () => {
     }
     // Arc 11 Fase C — notify when a delegated agent finishes its task
     if (event.type === "session.agent_done" && delegatedAgents.size > 0) {
-      addToast("Agente delegado concluiu a tarefa", "info");
+      addToast(t("message.delegateDone"), "info");
       setDelegatedAgents(new Set());
     }
   }, [lastEvent, selectedSessionId, delegatedAgents.size, addToast]);
@@ -329,7 +340,7 @@ export const AgentAssistPage: React.FC = () => {
     (alias: string, context: string) => {
       const text = context ? `@${alias} ${context}` : `@${alias}`;
       handleSend(text);
-      addToast(`Especialista @${alias} convidado`, "info");
+      addToast(t("message.specialistInvited", { alias }), "info");
     },
     [handleSend, addToast],
   );
@@ -350,7 +361,7 @@ export const AgentAssistPage: React.FC = () => {
       if (!selectedSessionId) return;
       handleSend(`@${alias} ${instruction}`);
       setDelegatedAgents(prev => new Set([...prev, alias]));
-      addToast(`Tarefa delegada para @${alias}`, "info");
+      addToast(t("message.taskDelegated", { alias }), "info");
       setShowDelegarDrawer(false);
       setSelectedMessageIds(new Set());
     },
@@ -377,12 +388,13 @@ export const AgentAssistPage: React.FC = () => {
           body:    JSON.stringify({ tenant_id: tenantId, skill_id: skillId, session_id: selectedSessionId }),
         });
         if (res.ok) {
-          addToast(`Processo "${skillId.replace(/^skill_|_v\d+$/g, "").replace(/_/g, " ")}" iniciado`, "info");
+          const name = skillId.replace(/^skill_|_v\d+$/g, "").replace(/_/g, " ");
+          addToast(t("message.processStarted", { name }), "info");
         } else {
-          addToast("Não foi possível iniciar o processo", "error");
+          addToast(t("message.processStartFailed"), "error");
         }
       } catch {
-        addToast("Erro ao iniciar processo", "error");
+        addToast(t("message.processStartError"), "error");
       }
     },
     [selectedSessionId, session, addToast],
@@ -419,7 +431,7 @@ export const AgentAssistPage: React.FC = () => {
 
   // ── Render ────────────────────────────────────────────────────────────
   return (
-    <div className="flex flex-col h-full overflow-hidden bg-slate-100">
+    <div className="flex flex-col h-full overflow-hidden bg-surface-alt">
       <Header
         agentName={agentName}
         poolId={headerPoolId}
@@ -443,16 +455,16 @@ export const AgentAssistPage: React.FC = () => {
       <div className="flex flex-col flex-1 overflow-hidden">
 
         {/* ── Shared sub-header row (h-12) ──────────────────────────────── */}
-        <div className="flex h-12 flex-shrink-0 border-b border-gray-200 bg-white">
+        <div className="flex h-12 flex-shrink-0 border-b border-border bg-white">
 
           {/* Contact list header */}
-          <div className="w-[200px] flex-shrink-0 bg-gray-100 border-r border-gray-200
+          <div className="w-[200px] flex-shrink-0 bg-surface-alt border-r border-border
                           flex items-center px-3 gap-1.5">
-            <span className="text-xs font-semibold text-gray-500 uppercase tracking-wide">
+            <span className="text-xs font-semibold text-muted uppercase tracking-wide">
               {t("contacts.label")}
             </span>
             {contacts.size > 0 && (
-              <span className="text-xs text-gray-400">({contacts.size})</span>
+              <span className="text-xs text-muted">({contacts.size})</span>
             )}
           </div>
 
@@ -460,7 +472,7 @@ export const AgentAssistPage: React.FC = () => {
           <div className="flex flex-1 overflow-hidden">
             <ActionBar
               contact={selected}
-              onEncerrar={() => setShowCloseModal(true)}
+              onEncerrar={() => { if (selected) handleClose(selected.sessionId, { issue_status: "closed", outcome: "resolved" }); }}
               onTransferTo={handleTransferTo}
               onDesligar={handleDesligar}
               substitutionMode={substitutionMode}
@@ -471,15 +483,15 @@ export const AgentAssistPage: React.FC = () => {
           </div>
 
           {/* Right-panel tab bar: Agentes · Contexto · Histórico */}
-          <div className="w-[280px] flex-shrink-0 border-l border-gray-200 flex bg-slate-50">
+          <div className="w-[280px] flex-shrink-0 border-l border-border flex bg-surface-muted">
             {(["agentes", "contexto", "historico"] as ActiveTab[]).map((id) => (
               <button
                 key={id}
                 onClick={() => setActiveTab(id)}
                 className={`flex-1 h-full flex items-end justify-center pb-2.5 text-xs font-medium transition-colors ${
                   activeTab === id
-                    ? "border-b-2 border-indigo-600 text-indigo-600"
-                    : "text-gray-500 hover:text-gray-700"
+                    ? "border-b-2 border-primary text-primary"
+                    : "text-muted hover:text-dark"
                 }`}
               >
                 {rightTabLabels[id]}
@@ -492,7 +504,7 @@ export const AgentAssistPage: React.FC = () => {
         <div className="flex flex-1 overflow-hidden">
 
           {/* Contact list */}
-          <div className="w-[200px] flex-shrink-0 bg-gray-100 border-r border-gray-200 overflow-hidden">
+          <div className="w-[200px] flex-shrink-0 bg-surface-alt border-r border-border overflow-hidden">
             <ContactList
               contacts={[...contacts.values()]}
               selectedSessionId={selectedSessionId}
@@ -504,17 +516,17 @@ export const AgentAssistPage: React.FC = () => {
           {/* Center column: [tab bar] ParticipantFilterBar + ChatArea/JourneyPanel + CopilotBanner + AgentInput */}
           <div className="flex flex-col flex-1 overflow-hidden bg-white">
             {!selected ? (
-              <div className="flex-1 flex flex-col items-center justify-center text-gray-400 text-sm select-none gap-3">
+              <div className="flex-1 flex flex-col items-center justify-center text-muted text-sm select-none gap-3">
                 {activePools.length === 0 ? (
                   <>
-                    <span className="text-3xl">🟢</span>
+                    <WifiOff className="w-8 h-8 text-muted-light" aria-hidden="true" />
                     <p className="text-center leading-snug max-w-xs">
                       {t("empty.activatePool")}
                     </p>
                   </>
                 ) : (
                   <>
-                    <span className="text-3xl animate-pulse">⏳</span>
+                    <Clock className="w-8 h-8 animate-pulse text-muted-light" aria-hidden="true" />
                     <p>{t("empty.waitingForContact")}</p>
                   </>
                 )}
@@ -522,7 +534,7 @@ export const AgentAssistPage: React.FC = () => {
             ) : (
               <>
                 {/* Arc 11 Fase E — center area tab switcher: Atual · Journey */}
-                <div className="flex items-center border-b border-gray-200 bg-white flex-shrink-0 px-2">
+                <div className="flex items-center border-b border-border bg-white flex-shrink-0 px-2">
                   {(["current", "journey"] as const).map(tab => (
                     <button
                       key={tab}
@@ -530,11 +542,11 @@ export const AgentAssistPage: React.FC = () => {
                       className={[
                         "px-3 py-2 text-xs font-medium transition-colors",
                         centralTab === tab
-                          ? "border-b-2 border-indigo-600 text-indigo-600"
-                          : "text-gray-500 hover:text-gray-700",
+                          ? "border-b-2 border-primary text-primary"
+                          : "text-muted hover:text-dark",
                       ].join(" ")}
                     >
-                      {tab === "current" ? "Atual" : "Journey"}
+                      {tab === "current" ? t("centerTab.atual") : t("centerTab.journey")}
                     </button>
                   ))}
                 </div>
@@ -600,7 +612,7 @@ export const AgentAssistPage: React.FC = () => {
           </div>
 
           {/* Right panel */}
-          <div className="w-[280px] flex-shrink-0 border-l border-gray-200 overflow-hidden bg-slate-50">
+          <div className="w-[280px] flex-shrink-0 border-l border-border overflow-hidden bg-surface-muted">
             <RightPanel
               activeTab={activeTab}
               supervisorState={selected?.supervisorState ?? null}
@@ -622,26 +634,6 @@ export const AgentAssistPage: React.FC = () => {
         </div>
       </div>
 
-      {/* Close modal */}
-      {(showCloseModal || selected?.pendingCloseModal) && selected && (
-        <CloseModal
-          defaultIssueStatus={selected.sessionClosed ? t("message.clientDisconnected") : ""}
-          defaultOutcome={selected.sessionClosed ? "abandoned" : "resolved"}
-          onConfirm={(payload) => {
-            setShowCloseModal(false);
-            handleClose(selected.sessionId, payload);
-          }}
-          onCancel={() => {
-            setShowCloseModal(false);
-            if (selected.sessionClosed) {
-              handleClose(selected.sessionId, {
-                issue_status: t("message.clientDisconnected"),
-                outcome: "abandoned",
-              });
-            }
-          }}
-        />
-      )}
 
       {showPauseModal && (
         <PauseReasonModal

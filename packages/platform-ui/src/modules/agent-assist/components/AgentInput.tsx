@@ -8,6 +8,8 @@
  */
 
 import React, { KeyboardEvent, useCallback, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
+import { Clock } from "lucide-react";
 import { SupervisorCapabilities } from "../types";
 import { CannedPhrasesPalette } from "./CannedPhrasesPalette";
 
@@ -26,6 +28,7 @@ export const AgentInput: React.FC<AgentInputProps> = ({
 }) => {
   // During wrap-up (sessionClosed=true) the input stays active so the agent
   // can respond to hook agent prompts (wrap-up notes, classification, etc.).
+  const { t } = useTranslation('agentAssist');
   const inputDisabled = disabled;
   const [text,         setText]         = useState("");
   const [showPalette,  setShowPalette]  = useState(false);
@@ -43,18 +46,19 @@ export const AgentInput: React.FC<AgentInputProps> = ({
     closePalette();
   }, [closePalette]);
 
-  // Keep textarea focused unless modal/palette is open
+  // Keep textarea focused when focus leaves to document.body — but only if
+  // focus is not moving to another interactive element inside this component
+  // or to an overlay (palette, modal).  This avoids creating a focus trap
+  // for keyboard users navigating away intentionally.
   const handleBlur = useCallback(
     (e: React.FocusEvent<HTMLTextAreaElement>) => {
       if (inputDisabled || showPalette) return;
       const rel = e.relatedTarget as Element | null;
-      if (!rel) {
-        requestAnimationFrame(() => {
-          if (!inputDisabled && !showPalette &&
-            (document.activeElement === document.body || document.activeElement === null)) {
-            textareaRef.current?.focus();
-          }
-        });
+      // Only re-focus if focus truly left the page (rel is null) and no
+      // other element within the agent-input area was clicked.
+      if (!rel && !showPalette) {
+        // Do NOT re-focus — let keyboard users navigate freely.
+        // The textarea can be re-activated by clicking or pressing Tab back.
       }
     },
     [inputDisabled, showPalette]
@@ -84,13 +88,14 @@ export const AgentInput: React.FC<AgentInputProps> = ({
   return (
     <div className={`border-t px-3 py-2 flex-shrink-0 relative ${
       sessionClosed
-        ? "border-amber-200 bg-amber-50"
-        : "border-gray-200 bg-white"
+        ? "border-warning/30 bg-warning-light"
+        : "border-border bg-white"
     }`}>
       {/* Wrap-up banner — input remains active so the agent can respond to hook agents */}
       {sessionClosed && (
-        <p className="text-xs text-amber-700 text-center leading-snug mb-2">
-          ⏳ Wrap-up em andamento — responda às perguntas dos agentes de finalização abaixo.
+        <p className="flex items-center justify-center gap-1.5 text-xs text-warning-text text-center leading-snug mb-2">
+          <Clock className="w-3.5 h-3.5 flex-shrink-0" aria-hidden="true" />
+          {t('agentInput.wrapUpBanner')}
         </p>
       )}
       {/* Canned phrases palette — floats above the input */}
@@ -107,42 +112,53 @@ export const AgentInput: React.FC<AgentInputProps> = ({
         <button
           onClick={() => setShowPalette(v => !v)}
           disabled={inputDisabled}
-          title='Frases rápidas e @especialistas (ou pressione "/" no início da mensagem)'
-          className={`flex-shrink-0 w-8 h-8 rounded-lg border text-sm font-mono font-semibold
-            flex items-center justify-center transition-colors self-end mb-0.5
+          aria-label={t('agentInput.cannedAriaLabel')}
+          aria-expanded={showPalette}
+          aria-controls="canned-palette"
+          className={`flex-shrink-0 w-11 h-11 rounded-lg border text-sm font-mono font-semibold
+            flex items-center justify-center transition-colors self-end
             disabled:opacity-40 disabled:cursor-not-allowed
             ${showPalette
-              ? "bg-indigo-600 border-indigo-600 text-white"
-              : "bg-white border-gray-200 text-gray-500 hover:border-indigo-400 hover:text-indigo-600"
+              ? "bg-primary border-primary text-white"
+              : "bg-surface border-border text-muted hover:border-primary hover:text-primary"
             }`}
         >
-          /
+          <span aria-hidden="true">/</span>
         </button>
 
         {/* Textarea */}
+        <label htmlFor="agent-message-input" className="sr-only">
+          {t('agentInput.label')}
+        </label>
         <textarea
           ref={textareaRef}
+          id="agent-message-input"
           value={text}
           onChange={e => setText(e.target.value)}
           onKeyDown={handleKeyDown}
           onBlur={handleBlur}
           disabled={inputDisabled}
           rows={2}
-          placeholder="Digite sua mensagem… (Enter envia · Shift+Enter nova linha · / para frases)"
-          className="flex-1 resize-none rounded-lg border border-gray-300 px-3 py-2 text-sm
-            focus:outline-none focus:ring-2 focus:ring-indigo-500
-            disabled:bg-gray-50 disabled:text-gray-400"
+          placeholder={t('agentInput.placeholder')}
+          aria-describedby="agent-input-hint"
+          className="flex-1 resize-none rounded-lg border border-border px-3 py-2 text-sm
+            focus:outline-none focus:ring-2 focus:ring-primary
+            disabled:bg-surface-muted disabled:text-muted"
         />
+        <p id="agent-input-hint" className="sr-only">
+          {t('agentInput.hint')}
+        </p>
 
         {/* Send button */}
         <button
           onClick={handleSend}
           disabled={inputDisabled || !text.trim()}
-          className="px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-medium
-            hover:bg-indigo-700 disabled:opacity-40 disabled:cursor-not-allowed
+          aria-label={t('agentInput.sendAriaLabel')}
+          className="px-4 py-2 h-11 rounded-lg bg-primary text-white text-sm font-medium
+            hover:bg-primary-dark disabled:opacity-40 disabled:cursor-not-allowed
             transition-colors self-end"
         >
-          Enviar
+          {t('input.send')}
         </button>
       </div>
     </div>

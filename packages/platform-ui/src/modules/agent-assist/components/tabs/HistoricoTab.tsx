@@ -9,6 +9,8 @@
  */
 
 import React, { useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
+import { Timer, User } from "lucide-react";
 import { ContactHistoryEntry } from "../../types";
 import { useCustomerHistory } from "../../hooks/useCustomerHistory";
 import type { Journey, JourneyStatus } from "@/modules/workflows/api/hooks";
@@ -26,14 +28,6 @@ const JOURNEY_STATUS_COLORS: Record<JourneyStatus, string> = {
   completed: '#059669',
   failed:    '#dc2626',
   cancelled: '#6b7280',
-}
-
-const JOURNEY_STATUS_LABELS: Record<JourneyStatus, string> = {
-  active:    'Ativo',
-  suspended: 'Suspenso',
-  completed: 'Concluído',
-  failed:    'Falhou',
-  cancelled: 'Cancelado',
 }
 
 function useCustomerJourneys(tenantId: string | null | undefined, customerId: string | null) {
@@ -66,17 +60,18 @@ function useCustomerJourneys(tenantId: string | null | undefined, customerId: st
 }
 
 function OpenJourneys({ tenantId, customerId }: { tenantId: string | null | undefined; customerId: string | null }) {
+  const { t } = useTranslation('agentAssist');
   const { journeys, loading } = useCustomerJourneys(tenantId, customerId)
 
   if (!loading && journeys.length === 0) return null
 
   return (
     <div className="px-3 pt-2 pb-0 flex-shrink-0">
-      <div className="text-[10px] font-semibold text-gray-400 uppercase tracking-wide mb-1.5">
-        Processos em aberto
+      <div className="text-2xs font-semibold text-muted-light uppercase tracking-wide mb-1.5">
+        {t('historico.openJourneys')}
       </div>
       {loading && (
-        <div className="text-xs text-gray-400 animate-pulse py-1">Carregando…</div>
+        <div className="text-xs text-muted-light animate-pulse py-1">{t('historico.loading')}</div>
       )}
       {!loading && journeys.map(j => {
         const color = JOURNEY_STATUS_COLORS[j.status]
@@ -85,21 +80,21 @@ function OpenJourneys({ tenantId, customerId }: { tenantId: string | null | unde
             className="flex items-start justify-between gap-2 px-2.5 py-1.5 rounded-lg border mb-1.5"
             style={{ borderColor: color + '40', background: color + '10' }}>
             <div className="flex-1 min-w-0">
-              <div className="text-[11px] font-mono text-gray-600 truncate font-medium">
+              <div className="text-xs font-mono text-muted truncate font-medium">
                 {j.skill_id.replace(/^skill_|_v\d+$/g, '').replace(/_/g, ' ')}
               </div>
-              <div className="text-[10px] text-gray-400 mt-0.5">
-                {j.session_count} sessão{j.session_count !== 1 ? 'ões' : ''}
+              <div className="text-2xs text-muted-light mt-0.5">
+                {t(j.session_count === 1 ? 'historico.sessions_one' : 'historico.sessions_other', { count: j.session_count })}
               </div>
             </div>
-            <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded flex-shrink-0"
+            <span className="text-2xs font-semibold px-1.5 py-0.5 rounded flex-shrink-0"
               style={{ background: color + '25', color }}>
-              {JOURNEY_STATUS_LABELS[j.status]}
+              {t(`historico.journeyStatus.${j.status}`)}
             </span>
           </div>
         )
       })}
-      <div className="border-b border-gray-100 mt-1 mb-2" />
+      <div className="border-b border-border mt-1 mb-2" />
     </div>
   )
 }
@@ -120,7 +115,7 @@ function channelIcon(channel: string): string {
 function formatDate(iso: string | null): string {
   if (!iso) return "—";
   try {
-    return new Date(iso).toLocaleString("pt-BR", {
+    return new Date(iso).toLocaleString(undefined, {
       day:    "2-digit",
       month:  "2-digit",
       year:   "numeric",
@@ -145,15 +140,20 @@ function formatDuration(ms: number | null): string {
 }
 
 function OutcomeBadge({ outcome }: { outcome: string | null }): JSX.Element {
-  const map: Record<string, { label: string; color: string }> = {
-    resolved:  { label: "Resolvido",  color: "bg-green-100 text-green-800" },
-    escalated: { label: "Escalado",   color: "bg-yellow-100 text-yellow-800" },
-    abandoned: { label: "Abandonado", color: "bg-red-100 text-red-800" },
+  const { t } = useTranslation('agentAssist');
+  const colorMap: Record<string, string> = {
+    resolved:  "bg-green-light text-green-text",
+    escalated: "bg-warning-light text-warning-text",
+    abandoned: "bg-red-light text-red-text",
   };
-  const def = map[outcome ?? ""] ?? { label: outcome ?? "—", color: "bg-gray-100 text-gray-700" };
+  const labelKey = outcome && ['resolved','escalated','abandoned'].includes(outcome)
+    ? `historico.outcome.${outcome}`
+    : null;
+  const label = labelKey ? t(labelKey) : (outcome ?? "—");
+  const color = colorMap[outcome ?? ""] ?? "bg-surface-alt text-dark";
   return (
-    <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium ${def.color}`}>
-      {def.label}
+    <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-2xs font-medium ${color}`}>
+      {label}
     </span>
   );
 }
@@ -161,13 +161,14 @@ function OutcomeBadge({ outcome }: { outcome: string | null }): JSX.Element {
 // ── Entry row ─────────────────────────────────────────────────────────────────
 
 const HistoryRow: React.FC<{ entry: ContactHistoryEntry }> = ({ entry }) => {
+  const { t } = useTranslation('agentAssist');
   const [expanded, setExpanded] = useState(false);
 
   return (
-    <div className="border border-gray-200 rounded-lg overflow-hidden">
+    <div className="border border-border rounded-lg overflow-hidden">
       {/* Summary row */}
       <button
-        className="w-full text-left px-3 py-2 flex items-center gap-2 hover:bg-gray-50 transition-colors"
+        className="w-full text-left px-3 py-2 flex items-center gap-2 hover:bg-surface-muted transition-colors"
         onClick={() => setExpanded((e) => !e)}
       >
         <span className="text-base shrink-0" aria-hidden>
@@ -176,40 +177,40 @@ const HistoryRow: React.FC<{ entry: ContactHistoryEntry }> = ({ entry }) => {
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-1.5 flex-wrap">
             <OutcomeBadge outcome={entry.outcome} />
-            <span className="text-xs text-gray-600 truncate">
+            <span className="text-xs text-muted truncate">
               {formatDate(entry.opened_at)}
             </span>
           </div>
-          <div className="text-[11px] text-gray-400 mt-0.5 flex gap-2">
-            <span>⏱ {formatDuration(entry.duration_ms)}</span>
+          <div className="text-xs text-muted-light mt-0.5 flex gap-2">
+            <span className="inline-flex items-center gap-0.5"><Timer className="w-3 h-3" aria-hidden="true" />{formatDuration(entry.duration_ms)}</span>
             {entry.close_reason && (
               <span className="truncate">{entry.close_reason}</span>
             )}
           </div>
         </div>
-        <span className="text-gray-400 text-xs shrink-0">
+        <span className="text-muted-light text-xs shrink-0">
           {expanded ? "▲" : "▼"}
         </span>
       </button>
 
       {/* Expanded details */}
       {expanded && (
-        <div className="px-3 pb-2 pt-0 bg-gray-50 border-t border-gray-100 text-[11px] text-gray-500 space-y-1">
+        <div className="px-3 pb-2 pt-0 bg-surface-muted border-t border-border text-xs text-muted space-y-1">
           <div>
-            <span className="font-medium text-gray-600">Pool:</span>{" "}
+            <span className="font-medium text-muted">{t('historico.pool')}:</span>{" "}
             {entry.pool_id || "—"}
           </div>
           <div>
-            <span className="font-medium text-gray-600">Canal:</span>{" "}
+            <span className="font-medium text-muted">{t('historico.channel')}:</span>{" "}
             {entry.channel}
           </div>
           {entry.closed_at && (
             <div>
-              <span className="font-medium text-gray-600">Encerrado:</span>{" "}
+              <span className="font-medium text-muted">{t('historico.closedAt')}:</span>{" "}
               {formatDate(entry.closed_at)}
             </div>
           )}
-          <div className="font-mono text-[10px] text-gray-400 truncate">
+          <div className="font-mono text-2xs text-muted-light truncate">
             {entry.session_id}
           </div>
         </div>
@@ -221,13 +222,14 @@ const HistoryRow: React.FC<{ entry: ContactHistoryEntry }> = ({ entry }) => {
 // ── HistoricoTab ──────────────────────────────────────────────────────────────
 
 export const HistoricoTab: React.FC<HistoricoTabProps> = ({ customerId, tenantId }) => {
+  const { t } = useTranslation('agentAssist');
   const { entries, loading, error, refetch } = useCustomerHistory(customerId);
 
   if (!customerId) {
     return (
-      <div className="flex-1 flex flex-col items-center justify-center text-sm text-gray-400 p-4 gap-2">
-        <span className="text-2xl">👤</span>
-        <span>Cliente não identificado nesta sessão.</span>
+      <div className="flex-1 flex flex-col items-center justify-center text-sm text-muted-light p-4 gap-2">
+        <User className="w-8 h-8 text-muted-light" aria-hidden="true" />
+        <span>{t('historico.noCustomer')}</span>
       </div>
     );
   }
@@ -239,15 +241,15 @@ export const HistoricoTab: React.FC<HistoricoTabProps> = ({ customerId, tenantId
       <OpenJourneys tenantId={tenantId} customerId={customerId} />
 
       {/* Header */}
-      <div className="flex items-center justify-between px-3 py-2 border-b border-gray-100 flex-shrink-0">
-        <span className="text-xs font-semibold text-gray-500 uppercase tracking-wide">
-          Contatos anteriores
+      <div className="flex items-center justify-between px-3 py-2 border-b border-border flex-shrink-0">
+        <span className="text-xs font-semibold text-muted uppercase tracking-wide">
+          {t('historico.previousContacts')}
         </span>
         <button
           onClick={refetch}
           disabled={loading}
-          className="text-xs text-indigo-600 hover:text-indigo-800 disabled:opacity-50 transition-colors"
-          title="Recarregar histórico"
+          className="text-xs text-primary hover:text-primary-dark disabled:opacity-50 transition-colors"
+          title={t('historico.reload')}
         >
           {loading ? "…" : "↻"}
         </button>
@@ -257,22 +259,22 @@ export const HistoricoTab: React.FC<HistoricoTabProps> = ({ customerId, tenantId
       <div className="flex-1 overflow-y-auto p-3">
         {loading && entries.length === 0 && (
           <div className="flex items-center justify-center h-full">
-            <span className="text-sm text-gray-400 animate-pulse">
-              Carregando histórico…
+            <span className="text-sm text-muted-light animate-pulse">
+              {t('historico.loadingHistory')}
             </span>
           </div>
         )}
 
         {error && (
-          <div className="text-xs text-red-600 bg-red-50 border border-red-200 rounded p-2">
-            Erro ao carregar histórico: {error}
+          <div className="text-xs text-red-text bg-red-light border border-red/30 rounded p-2">
+            {t('historico.historyError', { error })}
           </div>
         )}
 
         {!loading && !error && entries.length === 0 && (
-          <div className="flex flex-col items-center justify-center h-full text-sm text-gray-400 gap-1">
+          <div className="flex flex-col items-center justify-center h-full text-sm text-muted-light gap-1">
             <span className="text-xl">🗂</span>
-            <span>Sem contatos anteriores registrados.</span>
+            <span>{t('historico.noHistory')}</span>
           </div>
         )}
 
