@@ -66,6 +66,7 @@ plughub/
       mention-protocol.md     ← @mention protocol
       pool-hooks.md           ← Pool lifecycle hooks
       orchestrator-working-memory.md ← Working memory pattern para orquestradores em loop
+      conference-mechanics.md ← Mecanismo de conferência: Redis keys, eventos, posatt, teardown
     adr/
       adr-message-masking.md  ← masking architecture decision
       adr-webchat-channel.md  ← webchat channel architecture
@@ -103,6 +104,8 @@ plughub/
 ### Regra de atualização de documentação
 
 > Toda entrada em `CHANGELOG.md` deve ter um doc correspondente **criado ou atualizado** antes de ser considerada concluída. Se a feature afeta uma rota de UI → atualizar `docs/modulos/`. Se é um Arc ou backend significativo → atualizar ou criar `docs/arcos/`. Se é um padrão transversal → atualizar `docs/guias/`.
+
+> **Conference mechanics**: qualquer mudança no mecanismo de conferência (lifecycle, Redis keys, eventos Kafka/pub-sub, lógica de posatt, filtros no mcp-server, regras de teardown no platform-ui) **deve atualizar `docs/guias/conference-mechanics.md` e adicionar uma entrada em § Histórico de Problemas e Correções** antes de ser considerada concluída.
 
 ---
 
@@ -414,6 +417,24 @@ Portuguese is allowed ONLY in: i18n value strings (the translated text shown to 
 ❌  def mascaramento():  (Python function)
 ```
 
+### i18n Invariant — every visible string goes through `t()`
+
+Any change to `platform-ui` that adds or modifies **text visible to the user** MUST:
+
+1. Add the key to **both** locale files (`en/` and `pt-BR/`) before the PR.
+2. Use `useTranslation(namespace)` + `t('key')` in the component — never hardcode strings in JSX.
+3. Use the existing namespace for the module (see `docs/arcos/platform-ui.md` § i18n) or register a new one in `src/i18n/index.ts`.
+4. For helpers **outside React components** that produce translated strings: receive `t` as an explicit parameter — never call `useTranslation` at module level.
+
+```
+✅  <span>{t('header.offline')}</span>
+✅  addToast(t('message.saved'), 'info')
+✅  function label(x: string, t: TFunc): string { return t(`key.${x}`) }
+❌  <span>Offline</span>
+❌  addToast("Salvo com sucesso", 'info')
+❌  const { t } = useTranslation()   // outside a component/hook
+```
+
 ## What Never To Do
 
 - Never create a component that routes conversations without going through the Routing Engine
@@ -531,7 +552,7 @@ Hooks declared in pool YAML (`PoolHooks.on_human_start`/`on_human_end`/`post_hum
 
 Pre-hook ContextStore writes (before hooks fire): `session.close_origin`, `session.customer_participant_id`, `session.human_agent_participant_id`.
 
-→ See [`docs/guias/pool-hooks.md`](docs/guias/pool-hooks.md)
+→ See [`docs/guias/pool-hooks.md`](docs/guias/pool-hooks.md), [`docs/guias/conference-mechanics.md`](docs/guias/conference-mechanics.md)
 
 ---
 
@@ -647,7 +668,7 @@ Journey é a unidade de serviço que transcende a sessão — agrupa todos os co
 
 **Fases A–E implementadas**: `workflow-api` `/v1/journeys` (6 endpoints, inclui `POST /from-instance/{id}`) + MCP tools `journey_start`/`journey_link_session`/`journey_merge` + `analytics-api` consumer `journey.events` → `journey_events` ClickHouse. Phase B: `creates_journey:true` no YAML + skill-flow-worker auto-cria Journey; `collect` step propaga `journey_id`; `respond_collect` emite `journey_session_linked` quando sessão filha chega. Phase C: `GET /reports/journeys` (argMax aggregation, KPI strip por skill_id) + `ProcessosPage` com tabs Jornadas/Instâncias + hooks `useJourneys`/`useJourney`. Phase D: `HistoricoTab` seção "Processos em aberto" por `customer_id`; `ActionBar` botão "Iniciar Processo" dropdown filtrado por `pool.mentionable_journeys`; `MergeButton` no painel de detalhe de jornadas. Phase D.5: `journey_session_linked` enriquecido com `current_step`/`session_outcome`/`session_started_at`/`session_ended_at`; regra de interseção — `sessions.journey_id` apenas em collect sessions, nunca na origin; múltiplas journeys podem compartilhar `origin_session_id`. Phase E: 4 display endpoints no `display.py` + 4 entradas em `catalog.ts` — `journey-active-count` (metric_card), `journey-resolution-rate` (bar_chart), `journey-funnel` (donut), `journey-median-duration` (bar_chart); queries `argMax(status, event_time)` sobre `journey_events FINAL`.
 
-**Kafka**: `journey.events` — 8 tipos: `journey_started`, `journey_session_linked`, `journey_suspended`, `journey_resumed`, `journey_completed`, `journey_failed`, `journey_cancelled`, `journey_merged`.
+**Kafka**: `journey.events` — 9 tipos: `journey_started`, `journey_session_linked`, `journey_suspended`, `journey_resumed`, `journey_completed`, `journey_failed`, `journey_cancelled`, `journey_merged`, `journey_split`. **Fase F (split — especificada)**: `journey_split` tool extrai sessões collect para nova journey; `split_from_journey_id` (nullable UUID) no modelo rastreia proveniência; `origin_session_id` da journey origem é protegido (nunca movido, retorna 400 se incluído no split).
 
 → See [`docs/arcos/arc10-journey.md`](docs/arcos/arc10-journey.md)
 
@@ -715,15 +736,25 @@ Módulo ABAC `audit` para DPO/compliance — ortogonal às roles existentes. Qua
 
 ---
 
-## Arc 13 — Evaluation Review & Contestation UX
+## Arc 13 — Evaluation Review, Contestation & Calibration
 
-Refina o ciclo de revisão/contestação do Arc 6: modelo imutável (resultado original nunca alterado), `ContestationThread` append-only por dimensão do formulário, spec de `agente_avaliacao_v1` com evidências (`stream_entry_id` + excerpt) e novo `agente_revisor_v1`. SLA de contestação e revisão como campos explícitos na Campanha (`contest_deadline_hours`, `review_deadline_hours`, `reviewer_type`). Expirado sem ação → estado `timeout_{step}`. Agentes IA nunca contestam — somente `human_agent`. UX: formulário como base da tela de revisão; 4 estados visuais por dimensão (neutral/contested/upheld/revised); painel lateral com lista de contestações + shortcuts; thread cronológica por round visível para todos os participantes.
+Dois fluxos separados pelo tipo de agente avaliado. **Fluxo 1 (agente humano)**: revisor AI pré-publicação (gate de qualidade configurável por campanha) → contestação por dimensão → human reviewer sempre decisão final. `ContestationThread` append-only, imutável. `max_rounds` configurável (padrão 3, máx 5) via `ContestationPolicy`. **Fluxo 2 (agente AI)**: `evaluation_finalized` imediato sem contestação + curadoria amostral paralela por regras configuráveis (`score_extremes`, `deploy_baseline`, `score_outlier`, `na_excess`, `random_baseline`, `reviewer_signal`). Revisor AI gera `calibration_signal` como output secundário → `CurationReview` → curador humano complementa → `CalibrationNote` publicada no knowledge namespace → feedback ao avaliador via RAG. **Loop de evolução contínua**: `calibration_score` por skill version no Calibration Dashboard — correlaciona melhora do avaliador com deploy epochs (Arc 6 Fase 2).
 
-**Vínculo com Arc 6 Fase 2**: Arc 13 é produtor do evento `evaluation_finalized` (novo tipo em `evaluation.events`) emitido em cada estado terminal (`closed_upheld`, `closed_revised`, `timeout_*`). Este é o único score que alimenta a série histórica de qualidade × deploys do Arc 6 Fase 2 — **avaliação não finalizada não existe para fins analíticos**. Arc 6 Fase 2 queries filtram exclusivamente `type = 'evaluation_finalized'`; `evaluation_submitted` nunca é lido por relatórios de qualidade.
+**Vínculo com Arc 6 Fase 2**: `evaluation_finalized` é a única fonte de truth para relatórios de qualidade. Novo Kafka topic `calibration.events` + endpoint `GET /reports/evaluator-calibration` adicionam dimensão de calibração ao dashboard de qualidade.
 
-**Decisões pendentes**: dimensões explícitas no formulário vs inferidas; `max_rounds` para tréplica; acesso do agente revisor à conversa original.
+**Fases A e B implementadas (2026-05-18)**: DDL + CRUD completos, `contestation_router.py` (11 endpoints), Kafka emitters. `SessionMetricsExtractor` + `fill_auto_computed_criteria()` + `compute_auto_criterion_score()`. `agente_avaliacao_v1.yaml` v3.0: `dimension_threads[]` com `evidence_entries[]` obrigatório por dimensão, skip de critérios `auto_computed`, `calibration_notes` injetadas no LLM, `evaluated_agent_type` roteando contestação vs finalização imediata.
 
-**Status**: em especificação — nenhuma fase implementada.
+**Fase C implementada (2026-05-18)**: `agente_pre_revisor_v1.yaml` v1.0 — gate de qualidade pré-publicação. MCP tools `evaluation_threads_get` (GET threads por instância) + `evaluation_pre_review_submit` (POST pre-review com dimension_reviews[] + calibration_signal opcional). Fluxo: get_context → get_threads → check_has_threads → review (pre_review_rubric_v1) → submit_pre_review. action=approve|adjust; calibration_signal apenas para padrões sistemáticos.
+
+**Fase D implementada (2026-05-18)**: `agente_revisor_v1.yaml` v1.0 — árbitro pós-contestação (decision upheld/revised por dimensão contestada). MCP tool `evaluation_review_submit` (POST /review com dimension_decisions[]). `skill_revisao_treplica_v1.yaml` v2.0: roteia para AI (`dispatch_revisor_ai` task) ou humano (`aguardar_revisao_humana` suspend) por `reviewer_type`; suporta `ai_then_human` com fallback; `aguardar_proxima_contestacao` para múltiplos rounds; timeout → `congelar_resultado`.
+
+**Fase E implementada (2026-05-18)**: Human review UX na `AvaliacoesPage`. Novos tipos em `@/types`: `DimensionState`, `EvidenceEntry`, `ContestationThread`, `InstanceThreads`, `HumanDimensionDecision`. Novos hooks: `useContestationThreads` (GET /threads), `submitHumanReview` (POST /review), `submitDimensionContestation` (POST /contest). Componentes: `DimensionStateIndicator` (dot colorido por estado), `DimensionThreadCard` (card expansível com thread completo por round), `HumanReviewPanel` (upheld/revised + score_override + justification ≥20 palavras), `DimensionContestPanel13` (checkbox por dimensão + reason ≥10 palavras). `DetailPanel` detecta `isArc13 = threads.length > 0` — fallback transparente para Arc 6 quando sem threads.
+
+**Fase F implementada (2026-05-18)**: Campaign config UI na `CampaignsPage`. Novos campos em `ContestationPolicy`: `reviewer_type` ('ai'|'human'|'ai_then_human'), `contest_deadline_hours`, `use_business_hours`, `pre_review_enabled`, `pre_review_agent_pool`. Novos tipos: `CurationRuleType` (6 valores), `CurationSamplingRule`, `CurationRuleParams`. Hooks: `useCurationSamplingRules`, `saveCurationSamplingRules`. Componentes: `CurationRuleRow` (editor por regra com params condicionais), `CurationSamplingRulesEditor` (lista ordenada), `CurationSamplingRulesDetailPanel` (read/edit no detalhe de campanha). `CreateModal` gateado por `isArc13Skill = workflowSkillId === 'skill_revisao_treplica_v1'` — salva regras via segundo request após criar campanha.
+
+**Fase G implementada (2026-05-18)**: Calibration Dashboard. analytics-api: tabela ClickHouse `calibration_events` (ReplacingMergeTree), `parse_calibration_event` (consumer `calibration.events` — aceita `calibration_reviewed`, ignora `calibration_note_published`), `query_evaluator_calibration` (time-series + summary, `calibration_score = approved/total × 100`), `GET /reports/evaluator-calibration`. platform-ui: `useEvaluatorCalibration` hook (`CalibrationPoint`, `CalibrationSummary`), `CalibrationDashboard.tsx` em `/evaluation/calibration` (KPI strip, LineChart por skill_version × tempo, ReferenceLine 90%, tabela detalhada). Nav item "Calibração" (supervisor/admin), rota em `routes.tsx`, i18n en + pt-BR.
+
+**Fase H implementada (2026-05-18)**: Feedback loop RAG completo. `sampling_engine.py` — avalia 6 regras pós-`evaluation_finalized` (Fluxo 2) em background asyncio task; trigger composto. `contestation_router.resolve_curation` → `httpx POST /v1/knowledge/snippets` (namespace `evaluation:calibration:{campaign_id}`) → `mark_calibration_note_published` + `calibration_note_published` event. `list_curation_reviews` enriquecida com `campaign_id` + `calibration_signal`. `CuradoriaPage.tsx` em `/evaluation/curadoria`: KPI strip, filtros, `CurationCard` (trigger badges + sinal AI preview + 3 ações), `RecalibrateDrawer`. Nav item "Curadoria" (supervisor/admin). Arc 13 completo.
 
 → See [`docs/arcos/arc13-review-contestation.md`](docs/arcos/arc13-review-contestation.md)
 
@@ -743,5 +774,3 @@ Refina o ciclo de revisão/contestação do Arc 6: modelo imutável (resultado o
 - **Fase 4** *(deferred)*: SAR/erasure pipeline — pseudonimização `sessions_stream` + anonimização ClickHouse.
 - **Fase 5** *(deferred)*: `config_snapshot` — read-only do namespace `masking` do Config API para DPO.
 
-### Arc 13 — Evaluation Review & Contestation UX
-- **Em especificação** *(next)*: resolver decisões pendentes antes de iniciar Fase A. Ver `docs/arcos/arc13-review-contestation.md`.
