@@ -395,9 +395,12 @@ React 18 + TypeScript + Vite. **Original** porta de dev: 5175. Proxy: `/api` →
 1. UI abre em modo lobby (`wsSessionId=null`, conecta via `pool` no WS)
 2. `conversation.assigned` chega via `pool:events:{poolId}` → `setSessionId`, `fetchHistory`, atualiza URL
 3. Mensagens chegam por `message.text` WS events → adicionadas a `messages[]`
-4. Agente encerra → `handleClose` → POST `/api/agent_done/{sessionId}` → volta ao lobby
-5. Cliente desconecta → `session.closed` com `client_disconnect` → contato removido automaticamente (sem CloseModal — wrap-up é server-side via `agente_finalizacao_v1`)
-6. Agente clica "Desligar" → `handleDesligar` → `handleClose(sessionId, { issue_status: "Desligado pelo agente", outcome: "abandoned" })` → `agent_done` imediato sem modal
+4. Agente encerra → botão Close → `handleClose` → POST `/api/agent_done/{sessionId}`
+   com `{ issue_status: "closed", outcome: "resolved" }` — sem modal (Arc 14: wrap-up
+   é delegado aos hook agents `side: agent | customer`)
+5. Cliente desconecta → `session.closed` com `client_disconnect` → `pendingCloseModal: true`
+   → `useEffect` auto-dispara `agent_done` com `{ outcome: "abandoned" }` — sem modal
+6. Agente clica "Desligar" → `handleDesligar` → `handleClose` com `{ outcome: "abandoned" }` → `agent_done` imediato
 
 ## Componentes
 
@@ -405,8 +408,7 @@ React 18 + TypeScript + Vite. **Original** porta de dev: 5175. Proxy: `/api` →
 |---|---|
 | `Header` | Nome do agente, pool, session_id, status WS, SLA badge, timer de atendimento ao vivo |
 | `ChatArea` | Lista de mensagens + indicador de digitação AI + painel de sentimento ao vivo |
-| `AgentInput` | Input de texto, botão enviar, trigger do CloseModal |
-| `CloseModal` | issue_status, outcome, handoff_reason — usado apenas para encerramento manual explícito; **não** aparece em `session.closed` (wrap-up server-side via `agente_finalizacao_v1`) |
+| `AgentInput` | Input de texto, botão enviar |
 | `RightPanel` | Tab container: Estado / Capacidades / Contexto / Histórico |
 | `ToastContainer` | Notificações temporárias e persistentes |
 
@@ -481,6 +483,29 @@ Quando múltiplos agentes (NPS + wrap-up) estão bloqueados em `menu:waiting:{se
 ## Echo otimista de menu buttons (✅ implementado)
 
 `handleMenuSubmit` em `AgentAssistPage.tsx` adiciona a mensagem selecionada ao estado local React (id: `local-menu-{timestamp}`, author: `agent_human`, visibility: `agents_only`) antes do fetch para `/api/menu_submit`. Labels de opções são resolvidos via `menuData.options` (ex: id `resolvido` → label `✅ Resolvido`). Mesmo padrão do `handleSend` para texto digitado.
+
+## i18n — estado dos namespaces
+
+Toda string exibida ao usuário deve usar `useTranslation(namespace)` + `t(key)`.
+Locale padrão: `pt-BR`. Locale alternativo: `en`. Arquivos em `src/i18n/locales/`.
+
+| Namespace | Arquivo | Status |
+|---|---|---|
+| `agentAssist` | `agentAssist.json` | ✅ completo — cobre todo o módulo `modules/agent-assist/` |
+| `contacts` | `contacts.json` | ✅ completo |
+| `evaluation` | `evaluation.json` | ✅ completo |
+| `channels` | `channels.json` | ✅ completo |
+| `groups` | `groups.json` | ✅ completo |
+| `common` | `common.json` | ✅ completo |
+| `nav` | (dentro de `common`) | ✅ completo |
+
+**Regra de helpers fora de componentes React**: funções module-level que produzem strings
+traduzidas devem receber `t` como parâmetro explícito — não chamar `useTranslation` fora
+de componentes/hooks. Exemplo em `ContextoTab.tsx`: `confidenceLabel(c, t)`, `sourceLabel(s, t)`.
+
+**Convenção de tipo para `t` em props**: usar
+`t: (key: string, opts?: Record<string, unknown>) => string`
+para aceitar tanto chamadas simples (`t('key')`) quanto com interpolação (`t('key', { var })`).
 
 ## Build
 

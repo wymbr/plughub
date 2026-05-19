@@ -2,6 +2,1052 @@
 
 ---
 
+## platform-ui: i18n Console + remoção do modal de wrap-up manual (2026-05-19)
+
+Cobertura i18n completa do módulo agent-assist e remoção do fluxo manual de wrap-up
+que foi substituído pelos hook agents do Arc 14.
+
+### i18n — namespace `agentAssist` completo
+
+Todos os componentes do Console agora usam `useTranslation('agentAssist')` + `t(key)`.
+Nenhuma string hardcoded de PT-BR ou EN permanece no módulo:
+
+- `AgentAssistPage.tsx` — toasts, labels de tab central (Atual/Journey)
+- `AgentInput.tsx` — botão "Enviar"
+- `CannedPhrasesPalette.tsx` — empty state de busca
+- `Header.tsx` — fix interpolação `count` (reservado i18next) → `pools`
+- `AgentesTab.tsx` — title "Opções"
+- `ContextoTab.tsx` — refactoring completo: helpers `confidenceLabel`, `sourceLabel`,
+  `tagLabel`, `groupByNamespace` passam `t` como parâmetro; `FieldRowProps.t` e
+  `CtxFieldRowProps.t` tipados como `(key, opts?) => string`
+- `HistoricoTab.tsx` — locale de `formatDate` hardcode PT-BR → `undefined` (browser locale)
+- Locale files `en/agentAssist.json` + `pt-BR/agentAssist.json`:
+  - Adicionadas seções: `message.*`, `agentes.*`, `contexto.*`, `centerTab.*`, `canned.*`
+  - Fix: `comboPools` interpolation `{{count}}` → `{{pools}}`
+
+### Remoção do CloseModal — wrap-up delegado ao Arc 14
+
+- `CloseModal` removido de `AgentAssistPage.tsx` (import + state + JSX)
+- `onEncerrar` agora chama `handleClose` diretamente com defaults
+  `{ issue_status: "closed", outcome: "resolved" }` — sem modal
+- `pendingCloseModal` (cliente desconectou antes do agente receber o contato):
+  `useEffect` auto-dispara `agent_done` com `{ issue_status: t("clientDisconnected"), outcome: "abandoned" }`
+- Pós-atendimento (wrap-up, NPS, formulários) tratado exclusivamente pelos
+  hook agents do Arc 14 (`side: agent | customer`)
+
+---
+
+## Microcopy Review — PT-BR (2026-05-18)
+
+Revisão sistemática de copy UX em todas as superfícies principais. Critérios: idioma PT-BR consistente, tokens semânticos, clareza de CTAs, mensagens de erro empáticas e úteis, ellipsis correto.
+
+### `auth/LoginPage.tsx`
+- Toda a string de erro em inglês → PT-BR: `"E-mail ou senha incorretos."`, `"Sua conta está inativa. Entre em contato com o administrador."`, etc.
+- Labels "Email" → "E-mail", "Password" → "Senha"
+- Placeholder `"you@example.com"` → `"voce@empresa.com.br"`
+- CTA `"Sign In"` → `"Entrar"`, `"Signing in…"` → `"Entrando…"`
+- Subtítulo `"Enterprise Orchestration Platform"` → `"Plataforma de Orquestração Empresarial"`
+- Erro alert: tokens `bg-red-50 border-red-400 text-red-700` → `bg-red-light border-red text-red-text`
+- Removido hint de credencial de dev (segurança)
+
+### `components/ui/EmptyState.tsx`
+- `text-gray` → `text-muted` (token semântico correto)
+
+### `modules/agent-assist/components/ToastContainer.tsx`
+- `bg-indigo-600` → `bg-info` / `bg-warning` / `bg-red` (tokens semânticos)
+- `z-40` → `z-toast` (token de z-index)
+- `shadow-lg` → `shadow-toast`
+- Dismiss button: `tabIndex={-1}` removido; `aria-label="Fechar notificação"` adicionado
+- Adicionado `role="region" aria-label="Notificações" aria-live="polite"`
+
+### `modules/agent-assist/components/CannedPhrasesPalette.tsx`
+- `text-indigo-600` / `bg-indigo-100` / `bg-indigo-50` / `text-indigo-500` → tokens `primary`
+- Label seção "Especialistas (@mention)" → "Especialistas · via @menção" (menos técnico)
+- `border-gray-100` → `border-border`
+
+### `modules/agent-assist/components/CloseModal.tsx`
+- `focus:ring-indigo-500` → `focus:ring-primary`
+- Outcome buttons: `bg-indigo-600 border-indigo-600` → `bg-primary border-primary`; `hover:border-indigo-400` → `hover:border-primary`
+- CTA "Confirmar encerramento" → "Encerrar atendimento" — alinha com o título do modal e segue o padrão verbo+substantivo
+- `bg-red-600 hover:bg-red-700` → `bg-red hover:bg-red-text`
+
+### `modules/agent-assist/components/DelegarTarefaDrawer.tsx`
+- Visibilidade "🔒 Interno (agents_only)" → "🔒 Somente equipe" (remove ID técnico)
+- Visibilidade "🌐 Visível ao cliente (all)" → "🌐 Visível ao cliente"
+- Shortcut hint "⌘↵ para delegar" → "Ctrl + Enter para delegar" (Windows-compatible)
+- `text-gray-400` → `text-muted`
+
+### `modules/_placeholder/PlaceholderPage.tsx`
+- `"Back to Home"` → `"Ir para o início"` (PT-BR)
+
+### `i18n/locales/pt-BR/common.json`
+- `"Carregando..."` → `"Carregando…"` (ellipsis Unicode correto em ambas ocorrências)
+- `"Salvando..."` → `"Salvando…"`
+
+---
+
+## Accessibility Audit — WCAG 2.1 AA (2026-05-18)
+
+Auditoria completa e correções críticas/major. 9 Critical + 14 Major + 10 Minor identificados. Resolvidos nesta sessão: todos os Critical e a maioria dos Major.
+
+### `index.html`
+- `lang="en"` → `lang="pt-BR"` — corrige WCAG 3.1.1 (Language of Page)
+
+### `index.css`
+- `*:focus-visible` com `ring-2 ring-primary ring-offset-1` — focus ring visível para teclado (WCAG 2.4.7)
+- `@media (prefers-reduced-motion: reduce)` — zera todas animações/transições (WCAG 2.3.3)
+
+### `shell/Sidebar.tsx`
+- `<nav aria-label="Navegação principal">` em ambos modos collapsed/expanded (WCAG 1.3.1)
+- `aria-expanded` + `aria-controls` nos botões de grupo — estado comunicado ao SR (WCAG 4.1.2)
+- `<span aria-hidden="true">` em todos os emojis decorativos — elimina anúncios duplos (WCAG 1.3.1)
+- `aria-current="page"` no item ativo — localização comunicada (WCAG 2.4.8)
+- `aria-label` em vez de `title` nos botões Expandir/Recolher menu
+- Painel de filhos usa `hidden` nativo em vez de renderização condicional — semanticamente correto
+
+### `shell/TopBar.tsx`
+- `<div>` → `<header>` — landmark `banner` ARIA (WCAG 1.3.1)
+- `border-lightGray` → `border-border` / `text-gray` → `text-muted` — tokens corretos
+- Skip-navigation link: "Ir para o conteúdo principal" → `#main-content` (WCAG 2.4.1)
+- `aria-label` descritivo no botão de idioma (WCAG 4.1.2)
+- `aria-label` no bloco de info do usuário
+
+### `shell/Shell.tsx`
+- `<main id="main-content" tabIndex={-1}>` — alvo do skip-link, recebe foco programático (WCAG 2.4.1)
+
+### `components/ui/Table.tsx`
+- Linhas clicáveis: `tabIndex={0}`, `onKeyDown` (Enter/Space), `focus-visible:ring-2` (WCAG 2.1.1)
+- `scope="col"` nos cabeçalhos (WCAG 1.3.1)
+- `role="grid"` na tabela com linhas interativas (WCAG 4.1.2)
+- `aria-label` por linha com `rowActionLabel` configurável
+- `aria-busy="true"` no skeleton state
+- `motion-safe:animate-pulse` no skeleton — respeita prefers-reduced-motion
+- "No data available" → "Nenhum dado disponível" (idioma correto)
+
+### `modules/agent-assist/components/AgentInput.tsx` *(já aplicado em sessão anterior)*
+- `<label>` com `sr-only` + `htmlFor` na textarea (WCAG 1.3.1, 3.3.2)
+- `aria-label` descritivo no botão "/" (WCAG 4.1.2)
+- `aria-expanded` + `aria-controls` no botão de paleta (WCAG 4.1.2)
+- Remoção do soft focus-trap em `handleBlur` (WCAG 2.1.2)
+- Touch targets 44×44px no botão "/" e Enviar (WCAG 2.5.5)
+
+### `modules/agent-assist/components/ChatArea.tsx` *(já aplicado)*
+- `role="log"` + `aria-live="polite"` na lista de mensagens (WCAG 4.1.3)
+- `role="status"` no strip de sentimento com `aria-label` completo (WCAG 4.1.3)
+- `aria-label` na seta de tendência (WCAG 1.1.1)
+- `aria-hidden="true"` em spans decorativos
+- `motion-safe:animate-bounce` nos dots do typing indicator (WCAG 2.3.3)
+- Tokens: `bg-red-light border-red/20`, `bg-ai-light text-ai` (sem hardcoded indigo)
+
+### `modules/agent-assist/components/MessageBubble.tsx` *(já aplicado)*
+- `text-[10px]` → `text-xs` no rótulo de autor — corrige falha de tamanho de fonte (WCAG 1.4.4)
+- Checkbox de seleção: `w-11 h-11` touch target, `aria-pressed`, `aria-label`, `focus-visible:ring` (WCAG 2.5.5, 4.1.2)
+- Sempre focusável via teclado (não `opacity-0` para keyboard users)
+- SVG checkmark em vez de ✓ texto literal
+
+### Documentação
+- Criado `docs/arcos/accessibility-audit.md` — 33 findings com WCAG criterion, severidade, recomendação
+- Criado `docs/arcos/design-system-audit.md` — score 30/100 com sprint sequence
+
+---
+
+## Design System — Sprint 2: Missing Components (2026-05-18)
+
+Componentes compartilhados que substituem ~25 implementações duplicadas espalhadas pelo código.
+
+### Novo: `packages/platform-ui/src/components/ui/Drawer.tsx` (Task #108)
+
+Right slide-over reutilizável. Substitui implementações independentes em DelegarTarefaDrawer, GroupsPage, CurationReview drawer, CalibrationDashboard e outros.
+- Props: `isOpen`, `onClose`, `title`, `children`, `footer?`, `size` (sm/md/lg/xl), `disableBackdropClose?`, `description?`
+- Body scroll lock via `useEffect`
+- Escape key handler via `useEffect`
+- Focus trap completo (Tab / Shift+Tab ficam dentro do painel)
+- `role="dialog"`, `aria-modal`, `aria-labelledby`, `aria-describedby`
+- `z-overlay` (token de z-index = 30)
+- Backdrop com `aria-hidden="true"`
+- Botão de fechar com `aria-label="Fechar painel"`
+- Footer sticky opcional com `border-t border-border`
+
+### Novo: `packages/platform-ui/src/components/ui/Tabs.tsx` (Task #109)
+
+Tab bar horizontal acessível. Substitui implementações independentes em AgentAssistPage (5 tabs), ContactsPage, AuditPage, EvaluationForms e outros.
+- Props: `tabs: TabItem[]`, `activeTab`, `onChange`, `variant` (underline | pill), `panels?`, `aria-label?`
+- `TabItem`: `key`, `label`, `count?` (badge numérico), `disabled?`
+- ARIA completo: `role="tablist"`, `role="tab"`, `role="tabpanel"`, `aria-selected`, `aria-controls`
+- Navegação por teclado: ArrowLeft / ArrowRight / Home / End — foco DOM sincronizado
+- `tabIndex={0}` apenas na tab ativa (roving tabindex pattern)
+- Variante `underline`: underline animado com `::after`, `text-primary` na ativa
+- Variante `pill`: background `bg-surface` com sombra `shadow-card` na ativa
+- Badge de contagem (`count`) com estilo contextual (ativo vs inativo)
+- Exporta tipo `TabItem`
+
+### Novo: `packages/platform-ui/src/components/ui/Textarea.tsx` (Task #110)
+
+Primitive de formulário para texto multi-linha. Espelha API do Input.
+- Props: `label?`, `error?`, `hint?`, `maxLength?`, `showCount?` + todos os attrs nativos
+- `id` automático via `useId()` para associação label↔input sem props extra
+- Character counter com `aria-live="polite"` e `aria-atomic`; vira `text-warning font-semibold` nos últimos 10%
+- `aria-invalid` e `aria-describedby` para erro/hint
+- `resize-y` por padrão; `rows` padrão 3
+- `role="alert"` no error
+- Border `border-red bg-red-light/20` no estado de erro
+
+### Novo: `packages/platform-ui/src/components/ui/Checkbox.tsx` (Task #110)
+
+Input de seleção acessível. Substitui `<input type="checkbox">` com styling ad-hoc em AccessPage, ModulePermissionForm, FormsPage e outros.
+- Props: `label?`, `error?`, `indeterminate?` + todos os attrs nativos (exceto `type`)
+- `indeterminate` aplicado imperativamente via ref callback (não suportado por HTML attribute)
+- `focus-visible:ring-2` com offset
+- `group-has-[:disabled]` para opacidade do label quando input está disabled
+- `aria-invalid` e `aria-describedby` para erro
+
+### Novo: `packages/platform-ui/src/components/ui/Switch.tsx` (Task #110)
+
+Toggle acessível com label e description. Substitui implementações ad-hoc em config pages.
+- Props: `checked`, `onChange`, `label?`, `description?`, `disabled?`
+- `role="switch"`, `aria-checked`, `aria-describedby`
+- Transição `translate-x-5` / `translate-x-0` via CSS transition
+- `focus-visible:ring-2` com `ring-offset-2`
+- `htmlFor` no label apontando para o botão via id
+
+### Atualizado: `packages/platform-ui/src/components/ui/index.ts`
+
+Barrel agora exporta 17 componentes + 2 tipos (`BadgeVariant`, `TabItem`). Todos os novos componentes incluídos: `Checkbox`, `Drawer`, `Switch`, `Tabs`, `Textarea`.
+
+---
+
+## Design System — Sprint 1: Token Hygiene + Component Foundation (2026-05-18)
+
+Primeira fase do trabalho de design system identificado no audit (score 30/100).
+Ver auditoria completa em `docs/arcos/design-system-audit.md`.
+
+### `packages/platform-ui/tailwind.config.ts` — Extensão do sistema de tokens (Task #104)
+
+- Adicionados **tokens de hover**: `primary-dark` (#163F70), `secondary-dark` (#2484BE)
+- Adicionado **token de superfície principal**: `surface-muted` (#F9FAFB) — substitui `bg-gray-50` disperso
+- Adicionados **tokens de superfície**: `surface`, `surface-alt`, `border`, `border-strong`
+- Adicionados **aliases sem camelCase**: `light-gray` (alias de `lightGray`), `muted` (alias de `gray`), `muted-light`, `border`
+- Adicionadas **variantes de escala semântica**:
+  - `green-light` / `green-text` — backgrounds e texto success
+  - `warning-light` / `warning-text` — backgrounds e texto warning
+  - `red-light` / `red-text` — backgrounds e texto error
+  - `info` / `info-light` / `info-text` — cor info (mapeada ao secondary)
+  - `primary-light` — tint azul para seleções e badges
+- Adicionados **tokens de domínio** (previamente off-palette):
+  - `contested` / `contested-light` / `contested-text` — laranja, estado de contestação
+  - `revised` / `revised-light` / `revised-text` — teal, decisão de revisão com ajuste
+  - `ai` / `ai-light` / `ai-text` — indigo, indicadores de agente AI
+- Adicionada **escala de z-index**: `dropdown(10)`, `sticky(20)`, `overlay(30)`, `modal(40)`, `toast(50)`, `tooltip(60)`
+- Adicionada **escala de sombras**: `card`, `panel`, `modal`, `toast`
+
+### `packages/platform-ui/src/components/ui/Button.tsx` — Hover tokens + loading state (Task #105)
+
+- Substituídos `hover:bg-blue-900` / `hover:bg-blue-500` / `hover:bg-gray-200` por tokens: `hover:bg-primary-dark`, `hover:bg-secondary-dark`, `hover:bg-surface-alt`
+- Adicionado estado `loading` com spinner inline e `aria-busy`
+- Adicionados slots `leftIcon` / `rightIcon` com `aria-hidden`
+- `disabled` agora herda de `loading` (ambos bloqueiam interação)
+- `opacity-60` no lugar de `disabled:bg-gray-400` para não sobrescrever a cor do variant
+- `inline-flex items-center` adicionado para correta exibição de ícones
+
+### `packages/platform-ui/src/components/ui/Badge.tsx` — Cobertura de domínio (Task #106)
+
+- Exportado tipo `BadgeVariant` — 18 variantes total (era 4)
+- **Novas variantes genéricas**: `pending`, `processing`, `completed`, `cancelled`, `success`, `warning`, `error`, `info`
+- **Novas variantes de avaliação**: `approved`, `contested`, `rejected`, `revised`
+- **Novas variantes de tipo de agente**: `ai`, `human`
+- Prop `dot?: boolean` — prepend indicador colorido antes do label
+- Todas as variantes usam tokens semânticos (`bg-green-light`, `text-green-text`, etc.)
+
+### `packages/platform-ui/src/shell/Shell.tsx` + `Modal.tsx` (Task #107)
+
+- `Shell.tsx`: `bg-gray-50` → `bg-surface-muted` (único token no lugar de classe Tailwind direta)
+- `Modal.tsx` reescrito:
+  - Prop `size?: 'sm' | 'md' | 'lg' | 'xl'` (antes fixo em `max-w-md`)
+  - Prop `loading?: boolean` — overlay de loading sobre o body
+  - Prop `disableBackdropClose?: boolean`
+  - Escape key handler via `useEffect` + `keydown` listener
+  - Body scroll lock (`overflow: hidden`) via `useEffect`
+  - Focus management: `dialogRef.focus()` no open via `requestAnimationFrame`
+  - `role="dialog"`, `aria-modal="true"`, `aria-labelledby="modal-title"` no container
+  - Close button com `aria-label="Fechar"` e `aria-hidden="true"` no SVG
+  - Backdrop com `aria-hidden="true"`
+  - `z-modal` usando token de z-index em vez de `z-50` hardcoded
+  - Sombra `shadow-modal` em vez de `shadow-xl`
+  - Bordas usando token `border-border` em vez de `border-lightGray`
+
+### `packages/platform-ui/src/components/ui/PageHeader.tsx`
+
+- `<a href>` → `<Link to>` do react-router-dom (evita reload de página)
+- `<nav>` com `aria-label="Breadcrumb"`
+- `aria-current="page"` no crumb ativo
+- `aria-hidden="true"` no separador `/`
+- `text-gray` → `text-muted` (token)
+
+### Novo: `packages/platform-ui/src/components/ui/Alert.tsx`
+
+Componente compartilhado de feedback inline — substitui o padrão `div bg-red-50 border border-red-100` presente em 15+ arquivos.
+- 4 variantes: `info`, `success`, `warning`, `error`
+- Props: `title?`, `onDismiss?` (botão X), `className`
+- `role="alert"` para leitores de tela
+- Ícones SVG semânticos por variante
+- Usa exclusivamente tokens semânticos do design system
+
+### Novo: `packages/platform-ui/src/components/ui/index.ts`
+
+Barrel de exports para `@/components/ui` — 12 componentes exportados com nomes explícitos (sem `export *`). Inclui export de tipo `BadgeVariant`.
+
+---
+
+## Security & Bug Fixes — Code Review Round 2 (2026-05-18)
+
+Correções críticas identificadas em code review completo do projeto.
+
+### `packages/mcp-server-plughub/src/server.ts` — JWT auth em endpoints UI
+
+- **Task #98**: Adicionado `requireJwtRole()` com verificação de assinatura JWT via `jsonwebtoken.verify()` em todos os endpoints de UI:
+  - `GET /api/supervisor_state/:sessionId` → roles: operator, supervisor, admin, developer
+  - `POST /api/inject-context/:sessionId` → roles: operator, supervisor, admin, developer
+  - `POST /api/force-complete/:sessionId` → roles: supervisor, admin (mais restritivo)
+  - `PUT /api/agent-pause` → roles: operator, supervisor, admin
+  - `PUT /api/agent-resume` → roles: operator, supervisor, admin
+- `extractJwtRole()` (decode sem verificação de assinatura) removido de `supervisor_state` — substituído por `payload["role"]` do JWT verificado.
+
+### `packages/evaluation-api` — Arc 13 bugs
+
+**Task #99** — `contestation_state` errado na finalização de agente AI:
+- `router.py`: path `ai_agent` (Fluxo 2) usava `contestation_state="contestation_open"` em `finalize_result` e `emit_evaluation_finalized`. Corrigido para `"auto_finalized"`. Removido campo `initial_state` que nunca era usado.
+
+**Task #100** — `calibration_reviewed` não emitido para decisão `"approved"`:
+- `contestation_router.py` `resolve_curation`: `emit_calibration_reviewed` estava dentro de `if calibration_note:` — que é `None` para `approved`. Refatorado para buscar `campaign_id` e `evaluation_instance_id` do DB incondicionalmente; `emit_calibration_reviewed` emitido para todos os status (`approved`, `recalibrated`, `bias_flagged`). Calibration dashboard agora registra aprovações corretamente.
+
+**Task #101** — `max_rounds` nunca verificado, `current_round` nunca incrementado:
+- `db.py` `set_contestation_state`: adicionado parâmetro `current_round: int | None = None` com UPDATE condicional.
+- `contestation_router.py` `file_contestation`: chama `set_contestation_state` com `current_round=current_round` para persistir o round após cada contestação.
+- `contestation_router.py` `submit_review`: busca `contestation_policy.max_rounds` da campanha; verifica `cycles_completed = (review_round - 1) // 2 >= max_rounds`; se excedido → `next_state = "closed_max_rounds"` em vez de `"contestation_open"`; persiste `current_round=review_round`. Loops infinitos de contestação não são mais possíveis.
+
+### `packages/orchestrator-bridge` — Arc 14 Fase C wrap_up_pending
+
+**Task #102** — `wrap_up_pending` nunca bloqueava routing-engine:
+- `fire_pool_hooks`: key de `wrap_up_pending` agora usa `f"human-{pool_id}"` diretamente (pattern deterministico idêntico ao que routing-engine usa para indexar pool instances), em vez de `_fixed_pid` do ContextStore (que podia ser `None` se `_write_pre_hook_context` tivesse falhado).
+- Formato de `hook_conf` estendido de `"{hook_type}:{target_pool}:{side}"` para `"{hook_type}:{target_pool}:{side}:{origin_pool}"`. Parser atualizado para `split(":", 3)`.
+- Cleanup em `process_routed`: usa `_hook_origin_pool` (4° campo do `hook_conf`) para derivar `human-{origin_pool}` — não depende mais de ContextStore. Condição adicionada: `completed_hook_type == "on_human_end"` antes de limpar o flag.
+
+---
+
+## Arc 13 — Evaluation Review, Contestation & Calibration — Fase H: Feedback Loop RAG / Curation Module (2026-05-18)
+
+Fecha o loop completo de melhoria contínua do avaliador AI: `sampling_engine.py` faz curadoria amostral pós-`evaluation_finalized` para Fluxo 2 (AI avaliado), `CuradoriaPage` expõe a fila de curadoria ao curador humano, e `CalibrationNote` é publicada no knowledge namespace do `mcp-server-knowledge` para fechar o RAG feedback loop ao `agente_avaliacao_v1`.
+
+### `packages/evaluation-api` — sampling engine
+
+**`sampling_engine.py`** (novo):
+- `run_curation_sampling(pool, *, instance_id, tenant_id, campaign_id, normalized_score)` — entry point async chamado em background task após `evaluation_finalized` para Fluxo 2.
+- Helpers inline sem circular import: `_get_campaign_score_stats`, `_count_finalized_instances`, `_count_na_criteria`.
+- Avalia 5 regras (pula `reviewer_signal` explicitamente para Fluxo 2): `score_extremes`, `random_baseline` (hash determinístico do `instance_id`), `deploy_baseline`, `score_outlier` (min 5 amostras), `na_excess`.
+- Trigger composto: regras ativas concatenadas como string, ex. `"score_extremes,random_baseline"`.
+- Cria um único `CurationReview` por instância (insert-or-skip se já existe).
+
+**`router.py`** — após `emit_evaluation_finalized` no path `ai_agent`:
+- Importou `asyncio` e `run_curation_sampling`.
+- `asyncio.create_task(run_curation_sampling(...), name=f"curation-sampling-{body.instance_id}")` — não bloqueia resposta HTTP.
+
+**`config.py`**: campo `knowledge_api_url: str = "http://localhost:3401"` adicionado.
+
+### `packages/evaluation-api` — contestation_router (CalibrationNote → KB)
+
+**`contestation_router.py`** — `resolve_curation` endpoint:
+- Após criar/resolver `CurationReview`, se `status == "recalibrated"` ou `status == "bias_flagged"` com `calibration_note_text`:
+  - `httpx.AsyncClient.post(knowledge_api_url + "/v1/knowledge/snippets")` com namespace `evaluation:calibration:{campaign_id}`, conteúdo + metadados de dimensão/severidade.
+  - On success (200/201): `mark_calibration_note_published(note_id, kb_source_ref)` + emite `calibration_note_published` ao `evaluation.events`.
+  - Erros de I/O capturados — `kb_published=False` retornado sem falhar a ação do curador.
+- Emite `calibration_reviewed` ao topic `calibration.events` em todos os casos.
+- Retorna `{ ..., "kb_published": bool }`.
+
+**`db.py`** — `list_curation_reviews` reescrita:
+- Sempre faz JOIN com `evaluation.instances` para retornar `campaign_id`.
+- Correlated subquery retorna o `calibration_signal` mais recente do `pre_reviewer_ai` nos threads de contestação.
+- Parse defensivo: converte `calibration_signal` de JSON string para dict quando necessário (asyncpg JSONB variante).
+
+### `packages/platform-ui` — hooks + CuradoriaPage
+
+**`evaluation-hooks.ts`** — novos exports:
+- Interfaces: `CurationReview`, `CurationResolvePayload`.
+- `useCurationQueue(tenantId, opts, pollMs)` — fetch `GET /evaluation/curation-reviews`, polling configurável (padrão 15s), retorna `{ reviews, total, loading, error, reload }`.
+- `resolveCuration(reviewId, tenantId, userId, payload)` — `POST /evaluation/curation-reviews/{id}/resolve`.
+
+**`CuradoriaPage.tsx`** (novo — `/evaluation/curadoria`):
+- KPI strip: Aguardando, Total, label do filtro ativo.
+- Filtros: status (pending/approved/recalibrated/bias_flagged), campanha.
+- `CurationCard`: trigger badges coloridos, preview do `calibration_signal` do revisor AI, 3 botões (Aprovar / Recalibrar / Viés).
+- `RecalibrateDrawer`: pré-preenche observação do sinal AI; campos `noteText`, `curatorNotes`, `dimensionId`, `evaluatorId`, `skillVersion`, `severity`. Submit → `resolveCuration` com status `recalibrated` ou `bias_flagged`.
+- Polling 15s.
+
+**`routes.tsx`**: `{ path: 'evaluation/curadoria', element: <CuradoriaPage /> }`.
+
+**`Sidebar.tsx`**: nav item `{ label: t('nav.eval.curadoria'), href: '/evaluation/curadoria', icon: '🔍', roles: ['supervisor', 'admin'] }`.
+
+**i18n** (`shell.json` en + pt-BR): chave `nav.eval.curadoria` → `"Curation"` / `"Curadoria"`.
+
+→ Ver [`docs/arcos/arc13-review-contestation.md`](docs/arcos/arc13-review-contestation.md)
+
+---
+
+## Arc 13 — Evaluation Review, Contestation & Calibration — Fase G: Calibration Dashboard (2026-05-18)
+
+Implementa o pipeline completo de dados e a tela de Calibration Dashboard: Kafka consumer para `calibration.events`, ClickHouse DDL, endpoint `GET /reports/evaluator-calibration` na analytics-api, hook `useEvaluatorCalibration` e página `CalibrationDashboard` na platform-ui.
+
+### `packages/analytics-api` — ClickHouse DDL + consumer
+
+**`clickhouse.py`**:
+- `_DDL_CALIBRATION_EVENTS` — nova tabela `calibration_events` (ReplacingMergeTree por `(tenant_id, event_id)`): `event_id`, `tenant_id`, `campaign_id`, `evaluator_id`, `skill_version`, `decision` (LowCardinality: approved/recalibrated/bias_flagged), `dimension_id`, `severity`, `curator_id?`, `note_id?`, `event_time`, `date`.
+- `_calibration_event_row(d)` — row builder para inserção.
+- `AnalyticsStore.insert_calibration_event()` + `_CALIBRATION_EVENT_COLS`.
+- Adicionada à lista `_ALL_DDL`.
+
+**`models.py`**:
+- `parse_calibration_event(payload)` — parser do topic `calibration.events`. Aceita `calibration_reviewed` (retorna row para ClickHouse); ignora `calibration_note_published` (informacional).
+
+**`consumer.py`**:
+- Topic `calibration.events` adicionado a `_TOPICS` e `_PARSERS`.
+- `_write_row`: routing `calibration_events` → `store.insert_calibration_event`.
+- Docstring atualizado.
+
+### `packages/analytics-api` — endpoint
+
+**`reports_query.py`** — `query_evaluator_calibration` (async wrapper + `_fetch_evaluator_calibration` sync):
+- Parâmetros: `campaign_id`, `evaluator_id`, `skill_version`, `granularity` (day/week).
+- Query time-series: `calibration_score = countIf(decision='approved') * 100 / count()` por `(period, skill_version, evaluator_id)`.
+- Query summary: agregação total do período.
+- Retorna: `{ data, summary, meta }`.
+
+**`reports.py`** — `GET /reports/evaluator-calibration`:
+- Query params: `tenant_id`, `from_dt`, `to_dt`, `campaign_id`, `evaluator_id`, `skill_version`, `granularity`.
+- Delega a `query_evaluator_calibration`.
+
+### `packages/platform-ui` — hook + página
+
+**`evaluation-hooks.ts`** — `useEvaluatorCalibration`:
+- Interfaces exportadas: `CalibrationPoint`, `CalibrationSummary`, `CalibrationResult`.
+- Hook com `fetch` a `${ANALYTICS_BASE}/evaluator-calibration`, estado `{ data, summary, meta, loading, error, reload }`, polling opcional.
+
+**`CalibrationDashboard.tsx`** (novo — `/evaluation/calibration`):
+- Filtros: campanha (select), evaluator_id (input), granularidade (day/week).
+- KPI strip: Calibration Score geral, Aprovadas %, Recalibradas %, Viés %.
+- LineChart (Recharts): `calibration_score (%)` × tempo, uma série por `skill_version`, paleta rotativa de 7 cores. ReferenceLine em 90% (verde tracejada).
+- Tabela de dados brutos com score colorido (verde ≥ 90%, amarelo ≥ 75%, vermelho abaixo).
+- Estado vazio, loading e erro tratados.
+
+**`routes.tsx`**: rota `evaluation/calibration` → `<CalibrationDashboard />`.
+
+**`Sidebar.tsx`**: nav item "Calibração" (📐) em `/evaluation/calibration`, roles `supervisor|admin`.
+
+**i18n** `shell.json` (en + pt-BR): chave `nav.eval.calibration`.
+
+---
+
+## Arc 13 — Evaluation Review, Contestation & Calibration — Fase F: Campaign Config UI + Curation Sampling Rules (2026-05-18)
+
+Implementa a interface de configuração de campanha para Arc 13 na `CampaignsPage` da platform-ui: novos campos na `ContestationPolicy`, editor de regras de curadoria amostral (`CurationSamplingRule`) e painel de detalhe de campanha atualizado.
+
+### `packages/platform-ui/src/types/index.ts`
+
+Novos campos opcionais em `ContestationPolicy` (Arc 13):
+- `reviewer_type?: 'ai' | 'human' | 'ai_then_human'` — roteamento de resolução de contestação.
+- `contest_deadline_hours?: number` — prazo em horas para o avaliado contestar.
+- `use_business_hours?: boolean` — usa horário comercial (calendar-api) nos deadlines.
+- `pre_review_enabled?: boolean` — habilita gate de qualidade por AI pré-publicação.
+- `pre_review_agent_pool?: string | null` — pool do agente pré-revisor.
+
+Novos tipos de regras de curadoria amostral:
+- `CurationRuleType` — union `'score_extremes' | 'deploy_baseline' | 'score_outlier' | 'na_excess' | 'random_baseline' | 'reviewer_signal'`.
+- `CurationRuleParams` — campos opcionais: `threshold_low/high`, `sample_pct`, `sample_n`, `std_devs`, `na_threshold_pct`, `rate`.
+- `CurationSamplingRule` — entidade completa com `rule_id?`, `campaign_id`, `rule_type`, `enabled`, `priority`, `params`.
+
+### `packages/platform-ui/src/api/evaluation-hooks.ts`
+
+Novos hooks Arc 13 Fase F:
+- `useCurationSamplingRules(campaignId)` — `GET /v1/evaluation/campaigns/{id}/sampling-rules`; retorna `{ rules, loading, error, reload }`.
+- `saveCurationSamplingRules(campaignId, rules, token?)` — `PUT /v1/evaluation/campaigns/{id}/sampling-rules`; retorna a lista salva.
+
+### `packages/platform-ui/src/modules/evaluation/CampaignsPage.tsx`
+
+**Constantes novas:**
+- `REVIEWER_TYPE_OPTIONS` — 3 opções: `human`, `ai`, `ai_then_human` com labels descritivos.
+- `DEFAULT_CURATION_RULES` — 6 regras pré-configuradas (score_extremes e reviewer_signal habilitadas por padrão; score_outlier e deploy_baseline habilitadas; na_excess e random_baseline desabilitadas).
+
+**Novos componentes:**
+- `CurationRuleRow` — editor de uma regra: toggle enabled, campo priority, inputs condicionais por `rule_type` (threshold_low/high para score_extremes, sample_n para deploy_baseline, std_devs+sample_pct para score_outlier, na_threshold_pct para na_excess, rate para random_baseline — reviewer_signal sem params).
+- `CurationSamplingRulesEditor` — lista de `CurationRuleRow` em ordem de priority com drag-free reordering via flechas.
+- `CurationSamplingRulesDetailPanel` — painel de detalhe de campanha: modo leitura (bullet list por regra com resumo de params) + modo edição (chama `saveCurationSamplingRules`). Exibido apenas para campanhas com `review_workflow_skill_id === 'skill_revisao_treplica_v1'`.
+
+**`CreateModal` estendido (Arc 13 fields):**
+- Novos campos de estado: `contestDeadlineHours` (default '72'), `reviewerType` ('ai_then_human'), `useBusinessHours`, `preReviewEnabled`, `preReviewPool`, `curationRules` (DEFAULT_CURATION_RULES), `showCurationRules`.
+- `isArc13Skill = workflowSkillId === 'skill_revisao_treplica_v1'` — gatea seções Arc 13 no modal.
+- Quando `isArc13Skill`: exibe select `reviewer_type`, campos de deadline com toggle `use_business_hours`, toggle `pre_review_enabled` + input do pool, acordeão "Regras de curadoria amostral" com `CurationSamplingRulesEditor`.
+- `submit()`: passa novos campos em `contestation_policy`; após criar campanha, chama `saveCurationSamplingRules` quando `isArc13Skill && curationRules.length > 0`.
+
+**Painel de detalhe atualizado:**
+- Card de contestation policy exibe Arc 13 fields como grid de badges coloridos: reviewer_type (azul), pre_review (verde/cinza), use_business_hours (teal), auto_lock (âmbar).
+- `<CurationSamplingRulesDetailPanel>` renderizado abaixo do card de política para campanhas Arc 13.
+
+---
+
+## Arc 13 — Evaluation Review, Contestation & Calibration — Fase E: Human Review UX (2026-05-18)
+
+Implementa a interface de revisão humana com threads por dimensão na `AvaliacoesPage` da platform-ui. Suporte completo a Arc 13 (dimension threads) com fallback transparente para Arc 6 (criterion list).
+
+### `packages/platform-ui/src/types/index.ts`
+
+Novos tipos Arc 13:
+- `DimensionState` — union type dos estados visuais por dimensão (`neutral|pre_reviewed|contested|upheld|revised|timeout`).
+- `EvidenceEntry` — evidência individual em um thread entry (`stream_entry_id`, `excerpt`, `relevance_note`).
+- `ContestationThreadEntry` — entrada append-only de um thread: `round`, `author_role`, `action?`, `score`, `justification`, `evidence_entries[]`, `submitted_at`.
+- `ContestationThread` — thread completo de uma dimensão: `dimension_id`, `dimension_label?`, `current_state`, `original_score`, `current_score`, `entries[]`.
+- `InstanceThreads` — resposta de `GET /v1/evaluation/instances/{id}/threads`.
+- `HumanDimensionDecision` — payload de decisão por dimensão para o revisor humano.
+- `HumanReviewResponse` — resposta de `POST /v1/evaluation/instances/{id}/review`.
+- `DimensionContestationPayload` / `DimensionContestationResponse` — payload/resposta de `POST /v1/evaluation/instances/{id}/contest`.
+
+### `packages/platform-ui/src/api/evaluation-hooks.ts`
+
+Novos hooks e funções Arc 13:
+- `fetchContestationThreads(instanceId, accessToken?)` — `GET /v1/evaluation/instances/{id}/threads`, normaliza resposta.
+- `useContestationThreads(instanceId, accessToken?, pollMs?)` — React hook com polling opcional; retorna `{ data, loading, error, reload }`.
+- `submitHumanReview(instanceId, body, jwtToken)` — `POST /v1/evaluation/instances/{id}/review` para o revisor humano.
+- `submitDimensionContestation(instanceId, body, jwtToken)` — `POST /v1/evaluation/instances/{id}/contest` para o agente avaliado.
+
+### `packages/platform-ui/src/modules/evaluation/AvaliacoesPage.tsx`
+
+**Novos componentes Arc 13:**
+- `DimensionStateIndicator` — dot colorido + label por estado (`DIM_STATE_META` map).
+- `DimensionThreadCard` — card expansível por dimensão: header com estado/score, entradas por round com `ROUND_ROLE_LABELS`, evidências formatadas. Expandido por padrão quando `contested` ou `revised`.
+- `HumanReviewPanel` — revisor humano decide por dimensão contestada: upheld/revised radio, `score_override` (apenas revised, 0–10), `justification` (≥ 20 palavras, contador em tempo real). Chama `submitHumanReview`.
+- `DimensionContestPanel13` — agente avaliado contesta por dimensão (apenas `neutral` ou `pre_reviewed`): checkbox por dimensão, justification (≥ 10 palavras). Chama `submitDimensionContestation` com anti-replay `round`.
+
+**`DetailPanel` atualizado:**
+- Chama `useContestationThreads(result.instance_id)` em cada abertura.
+- Detecta `isArc13 = threads.length > 0` — ativo automaticamente quando a instância tem threads.
+- Modo Arc 13: exibe `DimensionThreadCard` list + `HumanReviewPanel` (review) ou `DimensionContestPanel13` (contest).
+- Modo Arc 6 (fallback): mantém `CriterionRow` list + `ReviewPanel`/`ContestPanel` sem alteração.
+- Badge "Arc 13" no header quando threads disponíveis.
+
+**Invariante de compatibilidade**: instâncias criadas antes do Arc 13 (sem threads) continuam funcionando exatamente como antes — sem alteração de comportamento.
+
+---
+
+## Arc 13 — Evaluation Review, Contestation & Calibration — Fase D: Revisor Pós-Contestação + Workflow (2026-05-18)
+
+Implementa o árbitro AI pós-contestação (`agente_revisor_v1`) e o motor de estado de revisão (`skill_revisao_treplica_v1` v2.0) que roteia para AI ou humano com base em `reviewer_type` da campanha.
+
+### `mcp-server-plughub` — `src/tools/evaluation.ts`
+
+**`evaluation_review_submit`** (novo):
+- Input: `session_token`, `instance_id`, `dimension_decisions[]`, `reviewer_id?`.
+- `DimensionDecisionSchema`: `dimension_id`, `decision` ("upheld"|"revised"), `score_override?` (obrigatório se revised), `evidence_entries[]?` (obrigatório se revised), `justification` (obrigatório).
+- Chama `POST /v1/evaluation/instances/{id}/review` na evaluation-api.
+- Retorna: `dimensions_upheld`, `dimensions_revised`, `contestation_state`, `current_round`, `finalized`.
+
+### `skill-flow-engine` — `skills/agente_revisor_v1.yaml` (novo — v1.0)
+
+Árbitro AI pós-contestação. Fluxo de 5 steps: `get_context` → `get_threads` → `filter_contested` → `review` (reason, prompt `post_contestation_rubric_v1`) → `submit_review`.
+
+- Só arbitra dimensões com `round=2` (contestadas pelo humano avaliado). Não toca dimensões não contestadas.
+- `output_schema.dimension_decisions[]`: `decision` (upheld|revised) + `score_override?` + `evidence_entries[]?` + `justification`.
+- `decision=revised` obriga `score_override` diferente do original + `evidence_entries` (mínimo 1).
+- `decision=upheld` requer apenas `justification` explicando por que a contestação não é procedente.
+- Lê `calibration_notes` antes de decidir (RAG de calibração).
+- Não emite `calibration_signal` — o revisor árbitro não é calibrador.
+- `complete_skip` quando sem dimensões contestadas (edge case).
+
+### `skill-flow-engine` — `skills/skill_revisao_treplica_v1.yaml` (v1.0 → v2.0)
+
+Motor de estado do ciclo de revisão. Atualizado com roteamento Arc 13.
+
+**Novo fluxo v2.0** (ciclo por round):
+1. `aguardar_contestacao` (suspend, `contest_deadline_hours`) — aguarda o agente humano contestar; timeout → `congelar_resultado`.
+2. `verificar_contestacao` (choice) — se `review_decision="contested"` → incrementa round; se não → `encerrar_aprovado`.
+3. `verificar_limite_rounds` (choice) — `current_round > max_rounds` → `congelar_resultado`.
+4. `rotear_revisor` (choice) — `reviewer_type="ai"` ou `"ai_then_human"` → `dispatch_revisor_ai`; default → `aguardar_revisao_humana`.
+5. `dispatch_revisor_ai` (task, `skill_revisao_v1`) — A2A para `agente_revisor_v1`; `on_failure` → `fallback_para_humano`.
+6. `fallback_para_humano` (choice) — só suspende para humano se `reviewer_type="ai_then_human"`; caso contrário `congelar_resultado`.
+7. `aguardar_revisao_humana` (suspend, `review_deadline_hours`) — deadline para revisor humano; timeout → `congelar_resultado`.
+8. `aguardar_proxima_contestacao` (suspend) — resultado publicado; aguarda próxima contestação do avaliado; timeout → `congelar_resultado`; recomeça o ciclo.
+
+Contexto esperado no ContextStore (escrito pela evaluation-api antes do trigger): `instance_id`, `result_id`, `reviewer_type`, `max_rounds`, `contest_deadline_hours`, `review_deadline_hours`, `use_business_hours`, `current_round` (init=0).
+
+---
+
+## Arc 13 — Evaluation Review, Contestation & Calibration — Fase C: Revisor AI Pré-Publicação (2026-05-18)
+
+Implementa o `agente_pre_revisor_v1` — gate de qualidade que atua antes do resultado ser publicado ao agente humano avaliado. Verifica evidências, calibração de notas e emite sinais de calibração para padrões sistemáticos do avaliador.
+
+### `mcp-server-plughub` — `src/tools/evaluation.ts`
+
+**`evaluation_threads_get`** (novo):
+- Input: `session_token`, `instance_id`.
+- Chama `GET /v1/evaluation/instances/{id}/threads` na evaluation-api.
+- Retorna `threads[]` — ContestationThreads round=1 do avaliador por dimensão.
+- Usado pelo `agente_pre_revisor_v1` para ler o que o avaliador produziu antes de revisar.
+
+**`evaluation_pre_review_submit`** (novo):
+- Input: `session_token`, `instance_id`, `dimension_reviews[]`, `calibration_signal?`.
+- `DimensionReviewSchema`: `dimension_id`, `action` ("approve"|"adjust"), `score_override?`, `revised_evidence[]?`, `justification` (obrigatório).
+- `CalibrationSignalPreReviewSchema`: `severity` ("low"|"medium"|"high"), `dimension_id`, `observation`.
+- Chama `POST /v1/evaluation/instances/{id}/pre-review` na evaluation-api.
+- `calibration_signal` presente → `curation_review_created: true` na resposta (assíncrono).
+- Retorna: `dimensions_adjusted`, `dimensions_approved`, `contestation_state`, `curation_review_created`.
+
+### `skill-flow-engine` — `skills/agente_pre_revisor_v1.yaml` (novo — v1.0)
+
+Fluxo de 5 steps: `get_context` → `get_threads` → `check_has_threads` → `review` (reason) → `submit_pre_review`.
+
+- `get_context`: `evaluation_context_get` — ReplayContext + form + calibration_notes (RAG).
+- `get_threads`: `evaluation_threads_get` — ContestationThreads round=1 do avaliador.
+- `check_has_threads`: choice — se sem threads, avança para `complete_skip` (avaliação legacy sem dimension_threads).
+- `review` (`pre_review_rubric_v1`): LLM revisa cada dimensão:
+  - Lê `evaluator_threads`, `replay_events`, `evaluation_form`, `knowledge_snippets`, `calibration_notes`.
+  - `output_schema.dimension_reviews[]`: `action` + `score_override?` + `revised_evidence[]?` + `justification`.
+  - `output_schema.calibration_signal?`: emitido apenas para padrões sistemáticos do avaliador (não discordância pontual).
+  - `action=adjust` obriga `score_override` + `revised_evidence[]` (mínimo 1 entry).
+- `submit_pre_review`: `evaluation_pre_review_submit` — persiste threads + avança estado da instância.
+
+**Invariantes da skill:**
+- Nunca abre contestação — é gate pré-publicação, não árbitro.
+- `calibration_signal` emitido apenas para padrões sistemáticos (severidade low/medium/high).
+- `complete_skip` quando threads vazios — não bloqueia o fluxo para avaliações sem dimension_threads.
+
+---
+
+## Arc 13 — Evaluation Review, Contestation & Calibration — Fase B: Session Metrics + Evidence Threads (2026-05-18)
+
+Completa o pipeline de avaliação com extração automática de métricas de sessão, threads de evidência estruturadas por dimensão, e integração do agente avaliador com notas de calibração do curador.
+
+### `evaluation-api`
+
+**`db.py`**:
+- `evaluation.instances`: novo campo `session_metrics JSONB` — armazena métricas extraídas pelo `SessionMetricsExtractor` (tempo, mensagens, escalação, custo LLM).
+- `set_instance_session_metrics()`: nova função CRUD para persistir métricas após `session_closed`.
+
+**`session_metrics_extractor.py`** (novo):
+- `SessionMetricsExtractor`: computa `session_metric.*` para uma `EvaluationInstance` após `session_closed`.
+  - `_compute_time_metrics`: `first_response_time_s`, `total_session_duration_s` — lê `stream_events` no PostgreSQL.
+  - `_compute_message_metrics`: `total_messages`, `agent_messages`, `customer_messages`, percentuais, `avg_agent_message_length`, `turns_to_resolution`.
+  - `_compute_outcome_metrics`: `escalated` (bool), `escalation_reason` — lê evento `agent_done` com `handoff_reason`.
+  - `_compute_llm_metrics`: `llm_calls_total`, `tokens_input_total`, `tokens_output_total` — lê `usage_events`.
+  - Todas as métricas são best-effort: falha individual não aborta as demais.
+- `compute_auto_criterion_score()`: interpolação linear entre `threshold_pass` e `threshold_fail` para critérios `auto_computed`.
+- `fill_auto_computed_criteria()`: preenche `criterion_responses` com scores auto-calculados antes do submit, eliminando a necessidade de o LLM avaliar esses critérios.
+
+**`router.py`**:
+- `IngestBody`: novos campos `dimension_threads: list[dict]` e `evaluated_agent_type: str`.
+- `ingest_result()`:
+  - Cria `ContestationThread` round=1 para cada dimensão em `dimension_threads` (com `evidence_entries[]`).
+  - Fluxo 2 (ai_agent): chama `finalize_result()` + emite `evaluation_finalized` imediatamente.
+  - Fluxo 1 (human_agent): verifica `pre_review_enabled` → define estado `pre_review_pending` ou `contestation_open`.
+  - Retorna `contestation_threads_created`, `contestation_state`, `evaluated_agent_type`.
+
+### `mcp-server-plughub`
+
+**`src/tools/evaluation.ts`**:
+- `EvidenceEntryInputSchema` (novo): `stream_entry_id`, `excerpt`, `relevance_note`.
+- `DimensionThreadInputSchema` (novo): `dimension_id`, `score`, `justification`, `evidence_entries[]` (mínimo 1).
+- `EvaluationSubmitInputSchema`: novos campos `dimension_threads[]` e `evaluated_agent_type`.
+- Handler `evaluation_submit`: repassa `dimension_threads` e `evaluated_agent_type` no payload enviado ao ingest.
+- Handler `evaluation_context_get`: busca `CalibrationNotes` publicadas da evaluation-api (`/v1/evaluation/calibration-notes?published_to_kb=true`) e retorna em `calibration_notes[]` — consumidas pelo agente avaliador via RAG.
+
+### `skill-flow-engine`
+
+**`skills/agente_avaliacao_v1.yaml`** (v2.0 → v3.0):
+- `evaluate` step (`evaluation_rubric_v2` → `evaluation_rubric_v3`):
+  - Nova instrução: ignorar critérios com `type=auto_computed` (preenchidos pelo `SessionMetricsExtractor`).
+  - Novo input: `calibration_notes` do `eval_context` — guia o LLM com feedback anterior do curador.
+  - Novo campo `output_schema.dimension_threads[]`: thread por dimensão com `dimension_id`, `score`, `justification` e `evidence_entries[]` (stream_entry_id + excerpt + relevance_note, mínimo 1 por dimensão).
+- `submit_result` step: passa `dimension_threads` e `evaluated_agent_type` para `evaluation_submit`.
+- Comentários atualizados para refletir dois fluxos (ai_agent → finalização imediata; human_agent → contestação).
+
+---
+
+## Arc 13 — Evaluation Review, Contestation & Calibration — Fase A: Data Model (2026-05-18)
+
+Implementa o modelo de dados e endpoints base para o ciclo completo de qualidade: contestação estruturada por dimensão para agentes humanos, curadoria amostral para agentes AI, e infraestrutura de calibração contínua.
+
+### `@plughub/schemas` — `src/evaluation.ts`
+
+- `EvaluationCriterionTypeSchema`: novo valor `"auto_computed"` — critérios computados automaticamente de `session_metric.*` sem LLM.
+- `EvaluationCriterionSchema`: novos campos `dimension_label`, `computation_source`, `threshold_pass`, `threshold_fail`, `comparison` (suporte ao tipo `auto_computed`).
+- `ContestationPolicySchema` (novo): `max_rounds` (padrão 3, máx 5), `contest_deadline_hours`, `use_business_hours`, `reviewer_type` ("ai"|"human"|"ai_then_human"), `pre_review_enabled`, `pre_review_agent_pool`, `review_deadline_hours`.
+- `ContestationStateSchema` (novo): state machine de contestação — 7 estados: `pre_review_pending`, `contestation_open`, `under_review`, `timeout_contestation`, `timeout_review`, `closed_upheld`, `closed_revised`.
+- `EvidenceEntrySchema` (novo): `stream_entry_id`, `excerpt`, `relevance_note` — formato Arc 13, diferente do `EvidenceRefSchema` Arc 6.
+- `CalibrationSignalSchema` (novo): `severity`, `dimension_id`, `observation`, `evaluator_id`, `skill_version`.
+- `ContestationThreadSchema` (novo): registro append-only por dimensão com `round`, `author_type`, `decision`, `score_override`, `evidence_entries`, `calibration_signal`.
+- `CurationReviewSchema` + `CurationReviewStatusSchema` (novos): fila de curadoria com `trigger`, `curator_id`, `status`, `calibration_note_id`.
+- `CalibrationNoteSchema` (novo): nota de calibração do avaliador com `published_to_kb`.
+- `CurationSamplingRuleSchema` + `CurationSamplingRuleTypeSchema` (novos): 6 regras configuráveis por campanha.
+- Novos Kafka events: `EvalFinalizedSchema` (`evaluation_finalized`), `CalibrationReviewedSchema` (`calibration_reviewed`), `CalibrationNotePublishedSchema` (`calibration_note_published`).
+
+### `evaluation-api`
+
+**`db.py`** — migrations DDL (idempotentes):
+- `evaluation.campaigns`: `pre_review_enabled BOOLEAN`, `pre_review_agent_pool TEXT`.
+- `evaluation.results`: `contestation_state TEXT`, `pre_review_complete BOOLEAN`, `evaluated_agent_type TEXT`, `finalized_at TIMESTAMPTZ`, `final_score NUMERIC`, `process_duration_ms BIGINT`.
+- Nova tabela `evaluation.contestation_threads` (append-only, indexed por instance+dimension+round).
+- Nova tabela `evaluation.curation_reviews` (fila de curadoria, indexed por tenant+status).
+- Nova tabela `evaluation.calibration_notes` (notas do curador, indexed por campaign+evaluator).
+- Nova tabela `evaluation.curation_sampling_rules` (regras por campanha, indexed por campaign+priority).
+
+**`db.py`** — funções CRUD:
+- `create_contestation_thread`, `list_contestation_threads`
+- `create_curation_review`, `resolve_curation_review`, `list_curation_reviews`
+- `create_calibration_note`, `mark_calibration_note_published`, `list_calibration_notes`
+- `create_sampling_rule`, `list_sampling_rules`, `update_sampling_rule`, `delete_sampling_rule`
+- `finalize_result`, `set_contestation_state`
+
+**`contestation_router.py`** (novo — `contestation_router` registrado em `main.py`):
+- `GET  /v1/evaluation/instances/{id}/threads` — lista threads por dimensão
+- `POST /v1/evaluation/instances/{id}/contest` — agente humano contesta dimensão
+- `POST /v1/evaluation/instances/{id}/review` — revisor submete decisão upheld/revised
+- `POST /v1/evaluation/instances/{id}/pre-review` — revisor AI pré-publicação; se `calibration_signal` → cria `CurationReview` automaticamente
+- `GET  /v1/evaluation/curations` — fila de curadoria (filtros: campaign_id, status)
+- `POST /v1/evaluation/curations/{id}/resolve` — curador aprova/recalibra/flag viés; cria `CalibrationNote` e emite `calibration_reviewed`
+- `GET  /v1/evaluation/calibration-notes` — histórico de notas de calibração
+- `POST /v1/evaluation/calibration-notes/{id}/publish` — marca nota como publicada no KB; emite `calibration_note_published`
+- `GET  /v1/evaluation/campaigns/{id}/sampling-rules` — lista regras de curadoria
+- `POST /v1/evaluation/campaigns/{id}/sampling-rules` — cria regra
+- `PUT  /v1/evaluation/campaigns/{id}/sampling-rules/{rid}` — atualiza regra
+- `DELETE /v1/evaluation/campaigns/{id}/sampling-rules/{rid}` — remove regra
+
+**`kafka_emitter.py`** — novos emitters:
+- `emit_calibration_reviewed` → topic `calibration.events`
+- `emit_calibration_note_published` → topic `evaluation.events`
+- `emit_evaluation_finalized` → topic `evaluation.events`
+
+**`main.py`**: `contestation_router` registrado no app FastAPI.
+
+---
+
+## Arc 10 — Journey — Fase F: Split de Jornadas (2026-05-18)
+
+Permite extrair sessões collect de uma journey para uma nova journey independente. Caso de uso: durante a execução de um processo, descobre-se que algumas sessões pertencem a um processo diferente.
+
+### `@plughub/schemas` — `src/journey.ts`
+
+- `JourneySchema`: novo campo `split_from_journey_id: UUID nullable` rastreia proveniência de journeys derivadas de split.
+- `JourneyEventTypeSchema`: `journey_split` removido o comentário `(future)` — agora ativo.
+- `JourneyEventSchema`: novos campos `source_journey_id`, `new_journey_id`, `session_ids[]`, `session_count`, `split_from_journey_id`.
+- Novos schemas de tool: `JourneySplitInputSchema` / `JourneySplitOutputSchema`.
+
+### `workflow-api`
+
+**`db.py`**:
+- Migration idempotente: `ALTER TABLE workflow.journeys ADD COLUMN IF NOT EXISTS split_from_journey_id UUID`.
+- `_row_to_journey`: serializa o novo campo.
+- `db_split_journey()`: cria nova journey com `split_from_journey_id`, re-linka `collect_instances` via JOIN em `instances.session_id`.
+
+**`kafka_emitter.py`**: `emit_journey_split()` publica `journey_split` no topic `journey.events` com `source_journey_id`, `new_journey_id`, `session_ids[]`, `session_count`.
+
+**`journey_router.py`**:
+- `GET /v1/journeys/{id}/collect-sessions`: retorna session IDs das collect_instances da journey para o picker do Monitor.
+- `POST /v1/journeys/{id}/split`: valida restrições (origin protegida, somente collect sessions, merged read-only), cria nova journey, re-linka sessões, opcionalmente dispara novo workflow, publica `journey_split` no Kafka.
+
+### `mcp-server-plughub` — `src/tools/journey.ts`
+
+Nova tool `journey_split(journey_id, session_ids[], skill_id?, metadata?)`. Chama `POST /v1/journeys/{id}/split`. Interceptada pelo McpInterceptor (auditoria automática).
+
+### `analytics-api`
+
+- `models.py`: `_JOURNEY_STATUS_MAP` inclui `journey_split: None` (audit event sem transição de status). `parse_journey_event` retorna `split_from_journey_id`, `new_journey_id`, `session_count`.
+- `clickhouse.py`: DDL de `journey_events` com 3 novas colunas (`split_from_journey_id`, `new_journey_id`, `session_count`). `_JOURNEY_EVENT_COLS` e `_journey_event_row` atualizados.
+
+### `platform-ui` — `ProcessosPage.tsx`
+
+- Novo componente `SplitDrawer`: modal com checklist de sessões collect (carregadas via `GET /v1/journeys/{id}/collect-sessions`), campo opcional de `skill_id`, validação client-side (origin bloqueada). Após split: fecha drawer, atualiza lista e seleciona a nova journey automaticamente.
+- Botão "✂️ Separar em nova jornada" no footer do painel de detalhe (visível para journeys `active`/`suspended`).
+
+### Invariants
+
+- `journey_split` é irreversível — use `journey_merge` para reagrupar.
+- `origin_session_id` da journey origem é protegido — retorna `400 origin_session_cannot_be_split` se incluído.
+- Somente sessões collect (`collect_instances.journey_id = source_journey_id`) são elegíveis.
+- Journey com `status: merged` retorna `409`.
+
+---
+
+## workflow-api — Fix: timeout scanner rodava antes do schema ser aplicado (2026-05-17)
+
+### Problema
+Em `main.py`, a chamada `ensure_schema(pool)` estava dentro de um `try/except` que silenciava a exceção com `logger.warning(...)` e continuava normalmente. Se o PostgreSQL ainda não estivesse pronto para aceitar DDL no momento em que o pool conectava (race condition frequente em docker-compose), o schema nunca era criado. Após `timeout_scan_interval_s` segundos (default 60), o scanner rodava `db_timeout_expired_instances()` e recebia `relation "workflow.instances" does not exist`.
+
+### Fix — `packages/workflow-api/src/plughub_workflow_api/main.py`
+Substituído o `try/except` silencioso por um retry loop com backoff exponencial (até 7 tentativas, 2s × attempt entre cada uma, total ~56s). Se todas as tentativas falharem, o lifespan levanta `RuntimeError` — o container falha e o Docker policy de restart reinicia até o PG estar pronto. O scanner só é criado **após** `ensure_schema()` ter sido confirmado com sucesso.
+
+---
+
+## Arc 14 — Pós-Atendimento: Segmentos Independentes — Fase C: Bloqueio do Agente Humano (2026-05-17)
+
+Impede que o routing-engine aloque um novo contato ao agente humano enquanto o segmento de wrap-up ainda está ativo.
+
+### `routing-engine` — `src/plughub_routing/registry.py`
+
+- Documentação do novo Redis key `{tenant_id}:instance:{instance_id}:wrap_up_pending` adicionada ao header.
+- **`get_ready_instances()`**: antes de incluir um candidato com `state=ready`, verifica a existência de `{tenant_id}:instance:{instance_id}:wrap_up_pending`. Se presente → `continue` (agente excluído do pool de candidatos). Falha no check é não-fatal (agente incluído como fallback).
+
+### `orchestrator-bridge` — `main.py`
+
+**`fire_pool_hooks()`** — quando `hook_type=on_human_end` e `hook_side=agent`:
+  - Após registrar o `_fixed_pid` no posatt participants SET (Fase B), escreve `{tenant_id}:instance:{human_instance_id}:wrap_up_pending = session_id` com TTL = `_HOOK_TIMEOUT_S + 300` (auto-expira como safety net em caso de crash da bridge).
+
+**`process_routed()` — hook completion** — quando `_hook_side == "agent"`:
+  - Após o publish do targeted `session.closed` (Fase B), lê `session.human_agent_participant_id` do ContextStore e deleta `{tenant_id}:instance:{human_instance_id}:wrap_up_pending`.
+  - Na próxima avaliação de candidatos, `get_ready_instances()` incluirá o agente normalmente.
+
+**Mecanismo**: não usa `agent_paused` event (que seria sobrescrito por heartbeats). Em vez disso, a flag Redis é verificada diretamente pelo routing-engine em tempo de roteamento — zero interferência com o ciclo de vida do agente e sem modificação no kafka_listener.
+
+---
+
+## Arc 14 — Pós-Atendimento: Segmentos Independentes — Fase D: nps_on_disconnect (2026-05-17)
+
+Implementa o comportamento configurável do segmento NPS quando o cliente se desconecta antes de ser atendido.
+
+### `@plughub/schemas` — `src/agent-registry.ts`
+
+- Campo `nps_on_disconnect: z.enum(["skip", "timeout"]).default("timeout")` adicionado a `PoolHookEntrySchema`.
+  - `"skip"` → hook customer-side não é despachado quando `close_origin == "customer_disconnect"`. Segmento é pulado silenciosamente (sem INCR `posatt:active`, sem Kafka).
+  - `"timeout"` → despachado normalmente; skill YAML pode encerrar via branch `@ctx.session.close_origin` ou aguardar `_HOOK_TIMEOUT_S`. Default backward-compat.
+
+### `orchestrator-bridge` — `main.py`
+
+**`fire_pool_hooks()`**: antes de criar cada `conference_id` para uma entrada `side=customer`, verifica:
+  1. `entry.nps_on_disconnect == "skip"`.
+  2. Lê `session.close_origin` do ContextStore (`{tenant}:ctx:{session_id}` hash).
+  3. Se `close_origin == "customer_disconnect"` → `continue` (skip da entrada, sem dispatch, sem INCR `posatt:active`).
+  
+Leitura `nps_on_disconnect` via `entry.get("nps_on_disconnect", "timeout")` — backward compat para hooks sem o campo.
+
+---
+
+## Arc 14 — Pós-Atendimento: Segmentos Independentes — Fase B: session.closed Targeted (2026-05-17)
+
+Implementa o fechamento direcionado por segmento: cada posatt segment publica `session.closed` apenas para os participantes que fazem parte daquele segmento, em vez de broadcast para todos.
+
+### `@plughub/schemas` — `src/stream.ts`
+
+- Campo `recipients?: z.array(z.string()).nullable().optional()` adicionado a `SessionClosedPayloadSchema`.
+  - `null` / ausente → broadcast (comportamento anterior preservado).
+  - `string[]` → teardown restrito aos `participant_id`s listados.
+
+### `orchestrator-bridge` — `main.py`
+
+**`fire_pool_hooks()`**: Ao disparar cada hook `on_human_end` / `post_human`, registra o participante do lado fixo no SET `session:{id}:posatt:{conf_id}:participants` (TTL 4h):
+  - `side=customer` → lê `session:{id}:customer_participant_id` (STRING Redis).
+  - `side=agent` → lê `session.human_agent_participant_id` do ContextStore (`{tenant}:ctx:{session_id}` hash).
+
+**`process_routed()` — hook agent join**: Quando um hook agent entra na conferência (`_is_hook_agent = True`), adiciona seu `native_instance_id` ao SET `posatt:{conf_id}:participants`.
+
+**`process_routed()` — hook completion**: Ao detectar conclusão de um segmento posatt:
+  1. Lê SMEMBERS `session:{id}:posatt:{conf_id}:participants`.
+  2. Publica `session.closed` com `reason=posatt_segment_complete` e `recipients=[...]` em `agent:events:{session_id}`.
+  3. Deleta o SET (cleanup).
+  O broadcast final (`reason=conference_destroyed`) de `_destroy_conference()` continua como sinal global de teardown quando todos os segmentos terminam.
+
+### `mcp-server-plughub` — `src/server.ts`
+
+Handler `session.closed` refatorado com lógica de três paths:
+  - `posatt_segment_complete` + `recipients` → teardown apenas se `agentInstanceId` estiver em `recipients`. NPS completion não afeta o agente humano; wrap-up completion encerra a view do agente humano.
+  - `conference_destroyed` → teardown incondicional (broadcast final).
+  - `agent_done` → teardown incondicional (path legado / backward compat).
+  - Qualquer outro reason → mantém canal aberto (hooks ainda podem estar em execução).
+
+---
+
+## Arc 14 — Pós-Atendimento: Segmentos Independentes — Fase A: Core Split (2026-05-17)
+
+Implementa a separação das camadas de encerramento de contato (Layer 1 × Layer 3) e o rastreamento de segmentos posatt independentes via `posatt:active` counter.
+
+### `@plughub/schemas` — `src/agent-registry.ts`
+
+- Campo `side: z.enum(["agent", "customer"]).default("agent")` adicionado a `PoolHookEntrySchema`.
+  - `"agent"` → hook interage com agente humano (wrap-up, resumo automático). Default backward-compat.
+  - `"customer"` → hook interage com cliente (NPS, pesquisa de satisfação).
+
+### `orchestrator-bridge` — `main.py`
+
+**Novas funções:**
+
+- **`_close_contact_layer(redis_client, session_id)`**: Layer 1 close — fecha o WebSocket do cliente imediatamente quando o contato encerra. Publica `conversations.outbound session.closed` + `conversations.events contact_closed` (analytics com `ended_at` do `_mark_contact_ended()`). Guard: `contact_close_fired` NX.
+
+- **`_destroy_conference(redis_client, session_id)`**: Layer 3 destroy — limpa infraestrutura da conferência quando o último segmento posatt terminar. Deleta `human_agent`/`human_agents` keys (que DEVEM permanecer vivas durante os hooks para roteamento de mensagens). Publica `session.closed` broadcast em `agent:events:{session_id}` (Arc 14 Fase B tornará isso targeted). Guard: `close_fired` NX (reutiliza a chave existente).
+
+- **`_trigger_contact_close(redis_client, session_id)`**: mantida como wrapper backward-compat que chama `_close_contact_layer()` + `_destroy_conference()` sequencialmente. Usado no no-hook path, watchdog, e paths de AI primary.
+
+**`fire_pool_hooks()` changes:**
+- Lê `side` de cada hook entry (`entry.get("side", "agent")`, default `"agent"`).
+- `INCR session:{id}:posatt:active` (TTL 4h) para cada hook `on_human_end` ou `post_human` disparado. Decrementado no completion em `process_routed()`.
+- Valor de `hook_conf` estendido de `"{hook_type}:{pool}"` para `"{hook_type}:{pool}:{side}"` — backward compat: parse usa `split(":", 2)` e missing side defaults para `"agent"`.
+- Log de `hook_type`, `side`, `origin_pool`, `target_pool` por hook disparado.
+
+**Hook path (human agent_done com on_human_end hooks):**
+- Chama `_close_contact_layer()` imediatamente após `_mark_contact_ended()`, ANTES de `fire_pool_hooks()`.
+- Antes (P2): cliente aguardava WS aberto até TODOS os hooks terminarem.
+- Depois (Arc 14 A): WS do cliente fecha imediatamente; hooks rodam em paralelo.
+- NPS e wrap-up descobrem que o cliente saiu via `@ctx.session.close_origin` e agem conforme YAML (decisão D2 do spec).
+
+**`process_routed()` hook completion (Arc 14 algorithm):**
+- Parseia `side` do valor estendido de `hook_conf` (`_hl_parts[2]`, default `"agent"`).
+- Dispatch post_human (se aplicável) ANTES de DECR `posatt:active` — garante que os INCRs de post_human precedam o DECR deste segmento (evita transição espúria a 0).
+- `DECR session:{id}:posatt:active` para cada hook completion, independente do tipo.
+- Quando `posatt:active == 0` e nenhum novo segmento foi despachado: `_destroy_conference()`.
+- Substitui as chamadas a `_trigger_contact_close()` no completion block (que era Layer 1 + Layer 3 juntos).
+
+**Comportamento resultante (P1 e P2 resolvidos):**
+- NPS e wrap-up são posatt segments independentes — cada um tem seu `posatt:active` contribution.
+- Cliente vê seu WS fechar imediatamente ao fim do contato (não mais aguarda wrap-up).
+- Wrap-up e NPS rodam em paralelo sem esperar um pelo outro.
+- Console do agente permanece aberto até o último posatt segment terminar (`_destroy_conference()`).
+- P3 (bloqueio do agente para próximo contato) e Fase B (targeted session.closed) permanecem como Arc 14 Fases C e B respectivamente — ver TODO.md.
+
+---
+
+## Sistema Dinâmico de Mascaramento ContextStore — Fase C: UI (2026-05-17)
+
+Seção 6 "Regras de Context Store" adicionada à `MaskingPage.tsx` — interface completa para configurar `ContextMaskingConfig` via Config API.
+
+### `platform-ui` — `src/modules/masking/MaskingPage.tsx`
+
+**Tipos inline** (sem import de schemas para isolar dependência):
+- `ContextMaskingType` union dos 9 valores visuais
+- `ContextMaskingRule` interface `{ pattern, role, type, label? }`
+- `ContextMaskingConfig` interface `{ rules[], default_unmatched_operator }`
+
+**Constante `MASKING_TYPE_INFO`**: mapa de cada `ContextMaskingType` para `{ label, sample }` — usado em selects e preview na tabela.
+
+**Em `MaskingPage()`**:
+- Lê `maskingEntries['context_rules']` do namespace `masking` (já carregado por `useNamespace`)
+- `saveContextRules(config)` → `putConfig('masking', 'context_rules', config, tenantId, adminToken)` → Redis `plughub:cfg:{tenantId}:masking:context_rules`
+
+**`ContextRulesSection` sub-component**:
+- Tabela com colunas: Padrão, Role, Tipo de máscara, Prévia (preview do sample), Label, Ações
+- Edição inline por linha (click ✏️ abre row edit in-place, ✓/✕ confirma/cancela)
+- Exclusão por linha (✕ vermelho)
+- Linha "adicionar nova regra" expansível (botão "+ Nova regra")
+- Select de `default_unmatched_operator` com preview inline
+- Botão "Salvar Regras" com badge "⚠ Alterações não salvas" quando há mudanças locais não persistidas
+- Hint de prioridade de regras: exact > glob > wildcard; role exato > `*`
+- Sincroniza state com `config` prop via `useEffect` (suporta reload após save)
+
+**Persistência**: `putConfig('masking', 'context_rules', { rules, default_unmatched_operator }, tenantId, adminToken)` escreve no Config API (port 3600) que propaga para Redis. `MaskingService.loadContextMaskingConfig()` em `mcp-server-plughub` lê a chave no próximo request (TTL cache 60s).
+
+---
+
+## Sistema Dinâmico de Mascaramento ContextStore — Fase B: Backend Dinâmico (2026-05-17)
+
+Substitui o `TAG_PII_CATEGORY` hardcoded em `server.ts` pelo algoritmo dinâmico de resolução de regras baseado em `ContextMaskingConfig` carregado do Config API.
+
+### `mcp-server-plughub` — `src/server.ts`
+
+**Removido**: `TAG_PII_CATEGORY` (mapa estático tag → categoria) e `maskPiiValue()` (switch por categoria).
+
+**Adicionado**:
+
+- **Cache em memória**: `contextMaskingConfigCache: Map<string, CachedMaskingConfig>` com TTL de 60s por tenant. `getContextMaskingConfig(redis, tenantId)` — retorna cache hit se válido, senão chama `MaskingService.loadContextMaskingConfig()` e armazena. `invalidateContextMaskingCache(tenantId)` — disponível para eventos futuros de `config.changed`.
+
+- **Algoritmo de especificidade** (`ruleSpecificity()`): pontua cada regra candidata:
+  - Pattern: exact = 20 pontos; glob (`caller.*`) = 10; wildcard (`*`) = 0; sem match = `null`
+  - Role: match exato da categoria do caller = +2; `*` = +0; categoria diferente = `null`
+
+- **`resolveContextMaskingRule(tag, callerRole, config)`**: varre todas as regras, seleciona a de maior pontuação. Traduz roles em duas categorias: `operator` (default) e `supervisor` (supervisor/admin/evaluator/reviewer). Retorna `null` quando nenhuma regra casa.
+
+- **`applyMaskingTypeToValue(raw, type)`**: aplica os 9 tipos visuais:
+  - `plain` → valor intacto; `hidden` → `""` (sinal de omissão); `full` → `"***"`
+  - `last_2` / `last_4` → preserva últimos N dígitos; `first_1` → preserva primeiro caractere; `first_word` → preserva primeira palavra
+  - `email_domain` → `X***@domain.com`; `financial` → `"R$ ****,**"`
+
+- **`applyContextMaskingDynamic(rawHash, role, allowedNs, redis, tenantId)`** (async): substitui o antigo `applyContextMasking()` síncrono. Fluxo:
+  1. Filtra `agent.*` (sempre omitido)
+  2. Filtra namespaces fora de `allowedNs` para operator
+  3. Chama `resolveContextMaskingRule()` → obtém `maskType`
+  4. Fallback: `config.default_unmatched_operator` para operator; `"plain"` para supervisor
+  5. Aplica: `hidden` → omite campo; `plain` → campo intacto; outros → aplica `applyMaskingTypeToValue()` e anota `{ pii: true, masked: true, category: maskType }`
+
+- **Handler `GET /api/supervisor_state`**: chamada atualizada para `await applyContextMaskingDynamic(hash, viewerRole, operatorNamespaces, redis, tenantId)`.
+
+**Import adicionado** no topo: `MaskingService` de `"./lib/masking"` e `ContextMaskingConfig` de `"@plughub/schemas"`.
+
+---
+
+## Sistema Dinâmico de Mascaramento ContextStore — Fase A: Schemas e Bootstrap (2026-05-17)
+
+Implementa a infraestrutura de tipos para o mecanismo 3D de mascaramento (tag × role × tipo) conforme especificado em `docs/guias/context-masking-rules.md`.
+
+### `@plughub/schemas` — `src/audit.ts`
+
+- `ContextMaskingTypeSchema` (z.enum): 9 tipos visuais de mascaramento — `plain`, `hidden`, `full`, `last_2`, `last_4`, `first_1`, `first_word`, `email_domain`, `financial`. Puramente semântica visual, sem vínculo a tipo de dado.
+- `ContextMaskingRuleSchema`: mapa `{ pattern, role, type, label? }`. `pattern` aceita nome exato ou glob com `*`. `role` = `"operator" | "supervisor" | "*"`. Resolução por especificidade: exact > glob > `*`; role específico > `*`.
+- `ContextMaskingConfigSchema`: `{ rules[], default_unmatched_operator }` com default `"plain"` (permissivo — maioria dos tags do ContextStore não são PII).
+- `DEFAULT_CONTEXT_MASKING_CONFIG`: fallback hardcoded que converte exatamente o `TAG_PII_CATEGORY` anterior, incluindo `account.limite_credito → hidden` (campo oculto para operator). Inclui catch-alls `caller.* → last_4` e `account.* → financial`.
+
+### `@plughub/schemas` — `src/index.ts`
+
+- Exports adicionados: `ContextMaskingTypeSchema`, `ContextMaskingRuleSchema`, `ContextMaskingConfigSchema`, `DEFAULT_CONTEXT_MASKING_CONFIG` (valor) + tipos `ContextMaskingType`, `ContextMaskingRule`, `ContextMaskingConfig`.
+
+### `mcp-server-plughub` — `src/lib/masking.ts`
+
+- `MaskingService.loadContextMaskingConfig(redis, tenantId)`: lookup chain em 3 tiers — `plughub:cfg:{tenantId}:masking:context_rules` → `plughub:cfg:__global__:masking:context_rules` → `DEFAULT_CONTEXT_MASKING_CONFIG`. Valida com `ContextMaskingConfigSchema.safeParse()` — schema inválido cai para o próximo tier.
+- `MaskingService.saveContextMaskingConfig(redis, scope, config)`: persiste configuração. `scope = "global"` escreve em `__global__`; string de tenant escreve override por-tenant.
+
+### `infra/config-seed/masking-context-rules.json`
+
+- Arquivo de seed criado com as regras globais padrão. Pode ser carregado por `saveContextMaskingConfig(redis, "global", ...)` durante bootstrap de novos ambientes.
+
+---
+
+## ContextStore Taxonomy — Mascaramento PII e Visibilidade por Role (2026-05-17)
+
+Implementa controle formal de acesso e mascaramento de dados PII na aba Contexto do Console, conforme `docs/guias/context-store-taxonomy.md`.
+
+### Taxonomia (documento)
+- **`docs/guias/context-store-taxonomy.md`** (criado): 7 namespaces (`caller`, `account`, `service`, `journey`, `session`, `agent`, `history`) com catálogo de tags por namespace, categorias PII por tag, matriz de visibilidade por role (operator/supervisor/admin/evaluator), `context_visibility.operator_namespaces` configurável por pool, `TAG_PII_CATEGORY` mapping, e plano de 4 fases.
+
+### Backend — Fase 1: mascaramento em supervisor_state
+
+**`mcp-server-plughub` `src/server.ts`**
+- Funções helper adicionadas antes de `startServer`: `extractJwtRole()` (decodifica role do Bearer JWT sem verificação — auth middleware já validou), `TAG_PII_CATEGORY` (mapa tag → categoria PII), `maskPiiValue()` (padrões por categoria: cpf, cnpj, phone, email_addr, financial), `DEFAULT_OPERATOR_NAMESPACES = ["service","journey","session"]`, `applyContextMasking()` (filtra namespaces por role + mascara PII para operator).
+- `GET /api/supervisor_state/:sessionId`: extrai `viewerRole` do header `Authorization`; lê `poolId` do session meta; busca `context_visibility.operator_namespaces` do pool_config Redis; lê ContextStore hash e aplica `applyContextMasking()`; resposta inclui `context_snapshot` filtrado/mascarado (entries PII têm `masked:true`, `pii:true`, `category`); `contact_context` (legacy) suprimido quando `context_snapshot` presente.
+
+### Backend — Fase 2: validação de namespace no inject-context
+
+**`mcp-server-plughub` `src/server.ts`**
+- `POST /api/inject-context/:sessionId`: extrai role do JWT; valida namespace da `key` — `operator` pode escrever apenas em `agent.*` e `service.*`; outros namespaces retornam `HTTP 403 forbidden_namespace`.
+
+### Schemas + Agent Registry + Routing Engine — Fase 3
+
+**`@plughub/schemas` `agent-registry.ts`**
+- `PoolRegistrationSchema`: novo campo `context_visibility?: { operator_namespaces: string[] }` com JSDoc explicando defaults e comportamento PII.
+
+**`agent-registry`**
+- `prisma/schema.prisma`: `context_visibility Json?` no modelo `Pool`
+- `prisma/migrations/20260517000000_add_pool_context_visibility/migration.sql`: `ALTER TABLE pools ADD COLUMN context_visibility JSONB`
+- `routes/pools.ts`: `create` inclui `context_visibility ?? DbNull`; `update` spread condicional. `_formatPool` já é dinâmico — propagado automaticamente no Kafka `pool.registered`.
+
+**`routing-engine`**
+- `models.py` `PoolConfig`: campo `context_visibility: dict | None = None`
+- `kafka_listener.py`: propaga `pool_data.get("context_visibility")` para `PoolConfig`
+- `save_pool_config()` usa `model_dump()` — `context_visibility` serializado automaticamente no Redis
+
+### Frontend — Fase 4
+
+**`platform-ui`**
+- `types/index.ts` `Pool`: campo `context_visibility?: { operator_namespaces: string[] } | null`
+- `modules/agent-assist/types.ts` `ContextEntry`: campos `pii?`, `masked?`, `category?` — set pelo backend quando valor mascarado
+- `ContextoTab.tsx`:
+  - `CtxFieldRow`: badge "🔒 PII" em amber para entradas mascaradas; valor exibido em `font-mono text-gray-400`; confidence badge suprimido quando mascarado
+  - `groupByNamespace()`: ordem canônica atualizada para `caller → account → service → journey → session → agent → history` + labels para novos namespaces
+  - `ManualTagForm`: aceita `viewerRole` prop; datalist filtrado — operator vê `agent.`, `service.`; supervisor+ vê todos; erro 403 exibe mensagem do backend em vez de "HTTP 403"
+  - `ContextoTab`: prop `viewerRole?: string` (default "operator"); propagado para `ContextSnapshotCard` e `ManualTagForm`
+- `RightPanel.tsx`: importa `useAuth`; lê `currentUser.role`; passa `viewerRole` para `ContextoTab`
+- `config-recursos/PoolsPage.tsx`: campo "Visibilidade do Context Store" no formulário de pool — input de texto com namespaces separados por vírgula; lido/gravado como `context_visibility.operator_namespaces`
+
+---
+
 ## max_reply_time_ms — SLA de resposta por mensagem (2026-05-16)
 
 Campo opcional `max_reply_time_ms` adicionado ao Pool para definir o tempo máximo de resposta do agente a cada mensagem do cliente, independente do SLA total de sessão (`sla_target_ms`).
