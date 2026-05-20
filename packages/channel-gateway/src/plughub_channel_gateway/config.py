@@ -84,6 +84,22 @@ class Settings(BaseSettings):
     webchat_serving_base_url:   str = "http://localhost:8010/webchat/v1/attachments"
     webchat_upload_base_url:    str = "http://localhost:8010/webchat/v1/upload"
 
+    # ── WhatsApp (Meta Cloud API) ─────────────────────────────────────────────
+    # System User token from Meta Business Manager (WABA).
+    # Can be overridden per-tenant via Redis: {tenant_id}:config:whatsapp:access_token
+    whatsapp_access_token:      str = ""
+    # Phone Number ID from Meta Developer Portal → WhatsApp → Phone Numbers.
+    # Can be overridden per-tenant via Redis: {tenant_id}:config:whatsapp:phone_number_id
+    whatsapp_phone_number_id:   str = ""
+    # Shared secret used to verify the HMAC-SHA256 of inbound webhook payloads.
+    # Set in Meta Developer Portal → WhatsApp → Configuration → Webhook → App Secret.
+    whatsapp_app_secret:        str = ""
+    # Token configured in Meta Developer Portal → WhatsApp → Configuration → Webhook.
+    # Used to verify the GET challenge. Global per installation — no tenant routing.
+    whatsapp_verify_token:      str = ""
+    # Meta Graph API base URL — override for mocks / BSP proxies.
+    whatsapp_graph_api_url:     str = "https://graph.facebook.com/v19.0"
+
 
 @lru_cache
 def get_settings() -> Settings:

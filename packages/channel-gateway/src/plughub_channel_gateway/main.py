@@ -16,10 +16,11 @@ import asyncpg
 import redis.asyncio as aioredis
 import uvicorn
 from aiokafka import AIOKafkaProducer
-from fastapi import FastAPI, WebSocket
+from fastapi import FastAPI, HTTPException, Request, WebSocket
 
 from .adapters.webchat import WebchatAdapter
 from .adapters.webchat_channel import WebchatChannelAdapter
+from .adapters.whatsapp import WhatsAppAdapter
 from .attachment_store import (
     AttachmentStore,
     FilesystemAttachmentStore,
@@ -35,11 +36,12 @@ logger = logging.getLogger("plughub.channel-gateway")
 
 # ── Application state (shared across requests) ────────────────────────────────
 
-_producer:         AIOKafkaProducer                      | None = None
-_registry:         SessionRegistry                       | None = None
-_context:          ContextReader                         | None = None
-_redis:            aioredis.Redis                        | None = None
-_attachment_store: FilesystemAttachmentStore | S3AttachmentStore | None = None
+_producer:           AIOKafkaProducer                      | None = None
+_registry:           SessionRegistry                       | None = None
+_context:            ContextReader                         | None = None
+_redis:              aioredis.Redis                        | None = None
+_attachment_store:   FilesystemAttachmentStore | S3AttachmentStore | None = None
+_whatsapp_adapter:   WhatsAppAdapter                      | None = None
 
 
 def _create_attachment_store(
@@ -80,7 +82,7 @@ def _create_attachment_store(
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global _producer, _registry, _context, _redis, _attachment_store
+    global _producer, _registry, _context, _redis, _attachment_store, _whatsapp_adapter
 
     settings    = get_settings()
     instance_id = str(uuid.uuid4())
@@ -106,8 +108,16 @@ async def lifespan(app: FastAPI):
     # ── Channel adapter registry ──────────────────────────────────────────────
     # Register one ChannelAdapter singleton per supported channel.
     # Adding a new channel: instantiate its adapter here and add to the dict.
+    _whatsapp_adapter = WhatsAppAdapter(
+        producer         = _producer,
+        redis            = _redis,
+        settings         = settings,
+        attachment_store = _attachment_store,
+    )
+
     _channel_adapters = {
-        "webchat": WebchatChannelAdapter(registry=_registry),
+        "webchat":  WebchatChannelAdapter(registry=_registry),
+        "whatsapp": _whatsapp_adapter,
     }
 
     outbound = OutboundConsumer(adapters=_channel_adapters, settings=settings)
@@ -191,6 +201,49 @@ async def websocket_endpoint(ws: WebSocket, pool_id: str) -> None:
         attachment_store = _attachment_store,
     )
     await adapter.handle()
+
+
+# ── WhatsApp webhook ──────────────────────────────────────────────────────────
+
+@app.get("/webhooks/whatsapp")
+async def whatsapp_verify(request: Request) -> str:
+    """
+    Meta webhook verification challenge.
+    Called once when the webhook URL is registered in Meta Developer Portal.
+    Responds with hub.challenge if hub.verify_token matches.
+    """
+    settings    = get_settings()
+    mode        = request.query_params.get("hub.mode")
+    token       = request.query_params.get("hub.verify_token")
+    challenge   = request.query_params.get("hub.challenge", "")
+
+    if mode == "subscribe" and token == settings.whatsapp_verify_token:
+        logger.info("whatsapp webhook verified successfully")
+        return challenge
+
+    logger.warning("whatsapp webhook verification failed — invalid token")
+    raise HTTPException(status_code=403, detail="Forbidden")
+
+
+@app.post("/webhooks/whatsapp", status_code=200)
+async def whatsapp_inbound(request: Request) -> dict:
+    """
+    Meta Cloud API inbound webhook.
+    HTTP 200 is returned immediately; processing happens in a background task.
+    """
+    body      = await request.body()
+    signature = request.headers.get("X-Hub-Signature-256", "")
+
+    if _whatsapp_adapter is None:
+        logger.error("whatsapp_adapter not initialised")
+        raise HTTPException(status_code=503, detail="Service unavailable")
+
+    if not _whatsapp_adapter.verify_signature(body, signature):
+        logger.warning("whatsapp inbound rejected — invalid HMAC signature")
+        raise HTTPException(status_code=400, detail="Invalid signature")
+
+    await _whatsapp_adapter.handle_inbound(body)
+    return {"status": "ok"}
 
 
 # ── Health check ──────────────────────────────────────────────────────────────

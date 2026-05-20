@@ -2,6 +2,36 @@
 
 ---
 
+## Channel Gateway — WhatsApp Adapter (2026-05-20)
+
+Implementação completa do canal WhatsApp via Meta Cloud API, com abstração de provider para suporte futuro a BSPs.
+
+### Arquivos criados
+
+- **`adapters/whatsapp_provider.py`**: `IWhatsAppProvider` Protocol + `MetaCloudProvider` (httpx, Graph API v19.0) + `MockWhatsAppProvider` (testes sem I/O de rede). Provider cobre: `send_text`, `send_interactive_buttons`, `send_interactive_list`, `send_media`, `get_media_url`, `download_media`.
+- **`adapters/whatsapp.py`**: `WhatsAppAdapter(ChannelAdapter)` singleton. Inbound: `verify_signature` HMAC-SHA256, `handle_inbound` (HTTP 200 imediato + background task), `_resolve_session` (lookup `channel:whatsapp:{contact_id}:session` TTL 24h), normalização de text/media/interactive/location. Outbound: `deliver_text`, `deliver_menu` (botões ≤3, list 4-10, sequential collect >10 ou form), `deliver_typing` (no-op), `deliver_session_closed` (cleanup Redis). Coleta sequencial de formulário com estado Redis TTL 30min.
+- **`tests/test_whatsapp_adapter.py`**: 30+ testes com `MockWhatsAppProvider`. Cobre signature, sessão, inbound text/media/interactive/location, outbound text/menu/typing/closed, coleta sequencial completa, payloads MetaCloudProvider.
+
+### Arquivos modificados
+
+- **`config.py`**: adicionado `whatsapp_access_token`, `whatsapp_phone_number_id`, `whatsapp_app_secret`, `whatsapp_verify_token`, `whatsapp_graph_api_url`.
+- **`main.py`**: endpoints `GET /webhooks/whatsapp` (challenge Meta) + `POST /webhooks/whatsapp` (inbound). `WhatsAppAdapter` instanciado no lifespan e registrado em `_channel_adapters["whatsapp"]`.
+
+### Decisões de arquitetura
+
+- Provider inicial: Meta Cloud API direta. BSPs adicionados implementando `IWhatsAppProvider`.
+- Credenciais: env var padrão por instalação + Redis override por tenant (mesmo padrão webchat JWT).
+- Session: `contact_id` = número E.164 do cliente, TTL 24h renovado por mensagem.
+- Media inbound: HTTP 200 imediato, download em background task.
+- `deliver_typing`: no-op (WhatsApp não tem API de typing indicator).
+- `deliver_session_closed`: limpeza Redis sem mensagem ao cliente.
+
+### Spec
+
+→ [`docs/arcos/channel-gateway-multi-channel.md`](docs/arcos/channel-gateway-multi-channel.md) § 8.2
+
+---
+
 ## Channel Gateway — Phase 1 Refactoring Multi-Canal (2026-05-20)
 
 Refactoring de base para suporte a múltiplos canais no `channel-gateway`. Sem breaking changes — comportamento do webchat inalterado.

@@ -1,7 +1,7 @@
 # Channel Gateway — Arquitetura Multi-Canal
 
-**Versão:** 1.0 — 2026-05-20  
-**Status:** Especificação aprovada, implementação pendente  
+**Versão:** 1.1 — 2026-05-20  
+**Status:** Phase 1 (abstrações) + WhatsApp implementados. SMS/Email/Voice pendentes.  
 **Escopo:** `packages/channel-gateway/`
 
 ---
@@ -392,59 +392,180 @@ chat:deliver:{contact_id}       pub/sub para entrega cross-instance
 
 ### 8.2 WhatsApp
 
-**Transporte:** Webhook HTTP POST (Meta Cloud API ou BSP parceiro)  
-**Auth:** HMAC-SHA256 com `X-Hub-Signature-256` header  
+**Transporte:** Webhook HTTP POST  
+**Provider inicial:** Meta Cloud API direta  
+**Auth inbound:** HMAC-SHA256 com `X-Hub-Signature-256` header  
 **Inbound endpoint:** `POST /webhooks/whatsapp`  
+**Verificação endpoint:** `GET /webhooks/whatsapp`
 
-**Inbound flow:**
+#### 8.2.1 Abstração de provider
+
+O `WhatsAppAdapter` não chama a Meta API diretamente — usa um `IWhatsAppProvider`
+Protocol. Isso permite suportar BSPs (Twilio, Infobip, 360dialog) sem tocar o
+adapter: cada BSP é um provider concreto que traduz para/do formato Meta canônico.
+
+```python
+class IWhatsAppProvider(Protocol):
+    async def send_text(self, to: str, text: str) -> str:
+        """Envia mensagem de texto. Retorna wamid."""
+
+    async def send_interactive_buttons(
+        self, to: str, body: str, buttons: list[dict]
+    ) -> str: ...
+
+    async def send_interactive_list(
+        self, to: str, header: str, body: str, sections: list[dict]
+    ) -> str: ...
+
+    async def send_media(
+        self, to: str, media_type: str, link: str, caption: str | None
+    ) -> str: ...
+
+    async def get_media_url(self, media_id: str) -> str:
+        """Resolve media_id → URL de download temporária (Graph API)."""
+
+    async def download_media(self, url: str) -> tuple[bytes, str]:
+        """Baixa mídia. Retorna (bytes, mime_type)."""
+```
+
+Provider padrão: `MetaCloudProvider` — chama `graph.facebook.com/v19.0/`.
+Provider de teste: `MockWhatsAppProvider` — respostas simuladas, sem I/O de rede.
+
+#### 8.2.2 Resolução de credenciais
+
+Mesmo padrão do webchat JWT: env var como default por instalação + override Redis
+por tenant (para SaaS). A resolução tenta Redis primeiro, cai no env var.
+
+```
+Env vars (padrão por instalação):
+  PLUGHUB_WHATSAPP_ACCESS_TOKEN      token de Sistema da WABA
+  PLUGHUB_WHATSAPP_PHONE_NUMBER_ID   phone_number_id da Meta
+  PLUGHUB_WHATSAPP_VERIFY_TOKEN      token de verificação do webhook (GET)
+
+Redis (override por tenant — opcional):
+  {tenant_id}:config:whatsapp:access_token
+  {tenant_id}:config:whatsapp:phone_number_id
+```
+
+O `PLUGHUB_WHATSAPP_VERIFY_TOKEN` é global por instalação — não há routing por
+tenant no endpoint de verificação GET.
+
+#### 8.2.3 Modelo de sessão
+
+`contact_id` = número E.164 do remetente (ex: `+5511999990000`).  
+`phone_number_id` = número de destino da instalação — fixo por configuração.
+
+Lookup de sessão ativa por número de cliente:
+
+```
+channel:whatsapp:{contact_id}:session   →  session_id  (TTL 24h)
+```
+
+Se a chave existe → reusa a sessão (continua conversa). Se não → nova sessão,
+novo roteamento. TTL renovado a cada mensagem recebida do cliente. O que acontece
+com sessões encerradas internamente enquanto a janela Meta ainda está aberta é
+responsabilidade do pool/routing — o gateway entrega apenas para sessões ativas.
+
+#### 8.2.4 Inbound flow
 
 ```
 Meta Cloud API ──POST──→ WhatsAppAdapter.verify_signature
-                              ↓ (HMAC válido)
-                         parse_inbound(body)
-                              ↓ NormalizedInboundEvent(content_type="text"|"image"|...)
-                              ↓ _publish_inbound → conversations.inbound
+                              ↓ HMAC inválido → HTTP 400
+                         HTTP 200 imediato  ←─────────────────────┐
+                              ↓                                     │
+                         asyncio.create_task(_process_inbound)      │
+                              ↓                                     │
+                         _resolve_session(contact_id)               │ responde antes
+                              ↓                                     │ de processar
+                         tipo == texto?                             │
+                              ↓ sim                                 │
+                         NormalizedInboundEvent(content_type="text")│
+                         _publish_inbound → conversations.inbound ──┘
+
+                         tipo == media?
+                              ↓
+                         provider.get_media_url(media_id)
+                              ↓
+                         provider.download_media(url)
+                              ↓
+                         AttachmentStore.store(bytes, mime_type)
+                              ↓
+                         NormalizedInboundEvent(content_type="image"|"document"|"video")
+                         _publish_inbound → conversations.inbound
 ```
 
-**Tipos de mensagem inbound suportados:**
+**HTTP 200 é retornado antes de qualquer processamento.** O Kafka publish ocorre
+dentro do background task, após download de mídia quando aplicável. O agente vê
+mensagens de mídia com 1-3s de delay — comportamento idêntico ao WhatsApp próprio.
+
+#### 8.2.5 Tipos de mensagem inbound suportados
 
 | Tipo Meta | `content_type` | Tratamento |
 |-----------|----------------|------------|
-| `text`    | `text`         | Direto     |
-| `image`, `audio`, `video`, `document` | `image`/`document`/`video` | Download CDN → AttachmentStore → NormalizedInboundEvent |
-| `interactive.button_reply` | `text` | Mapeado para menu.submit |
-| `interactive.list_reply`   | `text` | Mapeado para menu.submit |
-| `location` | `text` | Coordenadas formatadas como texto |
+| `text` | `text` | Direto — sem I/O adicional |
+| `image`, `video`, `document` | `image` / `video` / `document` | Background: `get_media_url` → download → AttachmentStore |
+| `audio` | `audio_transcript` | Background: download → STT opcional (fase futura); por ora armazenado como documento |
+| `interactive.button_reply` | `text` | Mapeado para `menu_result` |
+| `interactive.list_reply` | `text` | Mapeado para `menu_result` |
+| `location` | `text` | Formatado como `"lat:{lat} lng:{lng}"` |
+| `sticker` | — | Ignorado (log warning) |
 
-**Outbound — modos de mensagem:**
+#### 8.2.6 Outbound — modos de mensagem
 
-| `event_type` | Formato Meta | Condição |
+| Payload Kafka | Formato Meta | Condição |
 |---|---|---|
-| `notify` (texto simples) | `type: text` | Sempre |
-| `interaction.request` (menu ≤3 opções) | `type: interactive, interactive.type: button` | WhatsApp suporta até 3 botões |
-| `interaction.request` (menu 4-10 opções) | `type: interactive, interactive.type: list` | List message |
-| `interaction.request` (>10 opções ou form) | `type: text` (sequential collect) | Fallback para coleta sequencial |
-| Mídia | `type: image|document|video` com `link` | URL pública da mídia |
+| `message.text` | `type: text` | Sempre |
+| `menu.payload` ≤ 3 opções | `type: interactive, interactive.type: button` | Botões nativos WhatsApp |
+| `menu.payload` 4–10 opções | `type: interactive, interactive.type: list` | List message |
+| `menu.payload` > 10 opções ou `form` | `type: text` + coleta sequencial | Fallback (ver §8.2.7) |
+| `session.closed` | — | Nenhum envio ao cliente; limpeza de Redis apenas |
 
-**Coleta sequencial de formulário (fallback):**
+#### 8.2.7 Coleta sequencial de formulário (fallback)
 
-Quando a interação não cabe em Interactive Message, `_sequential_menu_collect`
-envia campos um a um via texto, acumula respostas no Redis
-(`channel:whatsapp:{session_id}:menu_collect`), e só publica o
-`NormalizedInboundEvent(menu_result)` ao receber o último campo.
+Quando a interação não cabe em Interactive Message (>10 opções, tipo `form`, ou
+campos `masked`), `_sequential_menu_collect` envia os campos um a um via texto,
+acumula respostas no Redis, e publica um único `NormalizedInboundEvent(menu_result)`
+ao receber o último campo.
 
-**Redis keys (proprietárias do WhatsApp):**
+Estado intermediário em `channel:whatsapp:{session_id}:menu_collect` (TTL 30min):
+`{ menu_id, fields: [...], current_index, answers: {...} }`.
+
+Campos `masked` em coleta sequencial: não há suporte nativo a input mascarado no
+WhatsApp. O campo é enviado como texto normal com instrução de privacidade
+(`"Este campo é confidencial. Sua resposta será tratada com segurança."`). O
+valor é armazenado mascarado no pipeline de mascaramento padrão.
+
+#### 8.2.8 Redis keys (proprietárias do WhatsApp)
+
 ```
-channel:whatsapp:{session_id}:menu_collect   estado da coleta sequencial
-{tenant_id}:config:whatsapp:token            token de acesso à Meta API
-{tenant_id}:config:whatsapp:verify_token     token de verificação do webhook
+channel:whatsapp:{contact_id}:session        session_id ativo (TTL 24h, renovado)
+channel:whatsapp:{session_id}:menu_collect   estado da coleta sequencial (TTL 30min)
+{tenant_id}:config:whatsapp:access_token     override de token por tenant
+{tenant_id}:config:whatsapp:phone_number_id  override de phone_number_id por tenant
 ```
 
-**Verificação de webhook Meta (GET):**  
-`GET /webhooks/whatsapp?hub.mode=subscribe&hub.verify_token=...&hub.challenge=...`  
-Respondido antes do adapter processar qualquer evento.
+#### 8.2.9 Verificação de webhook Meta (GET)
 
-**`channel_session_id`:** `wamid` do payload Meta (`messages[0].id`)
+```
+GET /webhooks/whatsapp?hub.mode=subscribe&hub.verify_token=TOKEN&hub.challenge=CHALLENGE
+→ Se hub.verify_token == PLUGHUB_WHATSAPP_VERIFY_TOKEN: responde CHALLENGE (HTTP 200)
+→ Caso contrário: HTTP 403
+```
+
+Endpoint único, sem routing por tenant. Respondido pelo `main.py` antes de
+instanciar o adapter (não requer Redis).
+
+#### 8.2.10 Testes sem número real
+
+**Testes automatizados:** `MockWhatsAppProvider` — respostas hardcoded, sem rede.
+Cobre 100% dos casos de inbound/outbound via pytest.
+
+**Testes de integração real:** Meta Developer sandbox — toda conta Meta Developer
+inclui um número de teste gratuito. Fluxo: criar app no Meta Developer Portal →
+configurar webhook com ngrok → usar o número de teste para enviar mensagens para
+até 5 números pessoais pré-autorizados. Sem aprovação de WABA necessária.
+
+**`channel_session_id`:** `wamid` do payload Meta (`entry[0].changes[0].value.messages[0].id`)
 
 ---
 
