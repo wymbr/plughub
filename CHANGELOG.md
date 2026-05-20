@@ -2,6 +2,29 @@
 
 ---
 
+## Channel Gateway — Phase 1 Refactoring Multi-Canal (2026-05-20)
+
+Refactoring de base para suporte a múltiplos canais no `channel-gateway`. Sem breaking changes — comportamento do webchat inalterado.
+
+### Arquivos criados
+
+- **`adapters/__init__.py`**: pacote adapters.
+- **`adapters/base.py`**: `ChannelAdapter` ABC com 4 métodos abstratos (`deliver_text`, `deliver_menu`, `deliver_typing`, `deliver_session_closed`). `channel: ClassVar[str]` identifica o canal. Um singleton por canal registrado no `OutboundConsumer`.
+- **`adapters/webchat_channel.py`**: `WebchatChannelAdapter(ChannelAdapter)` — singleton de entrega para webchat. Extrai lógica de dispatch do `OutboundConsumer` anterior. `deliver_text` persiste histórico (sem WS send — hybrid stream model). `deliver_menu` registra `masked_fields` no `SessionRegistry`. `deliver_typing` e `deliver_session_closed` enviam via WebSocket.
+
+### Arquivos modificados
+
+- **`models.py`**: `channel: Literal["webchat"]` → `channel: str = "webchat"` em `NormalizedInboundEvent`, `ContactOpenEvent`, `ContactClosedEvent`. Adicionado `content_type: Literal["text", "audio_transcript", "image", "document", "video"] = "text"` em `NormalizedInboundEvent`. Adicionado `channel_session_id: str | None = None` em `ContactOpenEvent` (wamid, CallSid, Message-ID etc.).
+- **`outbound_consumer.py`**: reescrito com `_adapters: dict[str, ChannelAdapter]`. Elimina `if channel != "webchat"` hardcoded — delega por `self._adapters.get(channel)`. Novos canais adicionados registrando o adapter no `main.py`, sem tocar o consumer.
+- **`main.py`**: instancia `WebchatChannelAdapter` e passa `adapters={"webchat": ...}` para `OutboundConsumer`.
+- **`tests/test_outbound_consumer.py`**: atualizado para nova API. Testa routing do consumer, `WebchatChannelAdapter` por tipo de mensagem, e tratamento de erros.
+
+### Spec
+
+→ [`docs/arcos/channel-gateway-multi-channel.md`](docs/arcos/channel-gateway-multi-channel.md)
+
+---
+
 ## Retry + Dead-Letter Queue nos consumers Kafka críticos (2026-05-20)
 
 Implementado padrão de retry com backoff exponencial + DLQ (`events.dead_letter`) nos três consumers Kafka críticos da plataforma, eliminando perda silenciosa de eventos em caso de falha transiente.

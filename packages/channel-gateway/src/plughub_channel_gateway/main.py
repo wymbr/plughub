@@ -19,6 +19,7 @@ from aiokafka import AIOKafkaProducer
 from fastapi import FastAPI, WebSocket
 
 from .adapters.webchat import WebchatAdapter
+from .adapters.webchat_channel import WebchatChannelAdapter
 from .attachment_store import (
     AttachmentStore,
     FilesystemAttachmentStore,
@@ -102,7 +103,14 @@ async def lifespan(app: FastAPI):
     _attachment_store = _create_attachment_store(settings, db_pool)
     await _attachment_store.ensure_schema()
 
-    outbound = OutboundConsumer(registry=_registry, settings=settings)
+    # ── Channel adapter registry ──────────────────────────────────────────────
+    # Register one ChannelAdapter singleton per supported channel.
+    # Adding a new channel: instantiate its adapter here and add to the dict.
+    _channel_adapters = {
+        "webchat": WebchatChannelAdapter(registry=_registry),
+    }
+
+    outbound = OutboundConsumer(adapters=_channel_adapters, settings=settings)
 
     pubsub_task   = asyncio.create_task(_registry.start_pubsub_listener())
     outbound_task = asyncio.create_task(outbound.run())

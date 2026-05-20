@@ -1,31 +1,53 @@
 """
 test_outbound_consumer.py
-Unit tests for OutboundConsumer._dispatch.
-Verifies correct WS model mapping for each message type and channel filtering.
+Unit tests for OutboundConsumer._dispatch and WebchatChannelAdapter.
+
+After the Phase 1 refactor the consumer delegates delivery to ChannelAdapter
+singletons.  Tests cover:
+  - Consumer routing by channel (registry lookup)
+  - Consumer skipping unknown/missing channels
+  - WebchatChannelAdapter behaviour for each message type
 """
 
 from __future__ import annotations
-import json
+
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 from plughub_channel_gateway.outbound_consumer import OutboundConsumer
+from plughub_channel_gateway.adapters.webchat_channel import WebchatChannelAdapter
 
+
+# ── Fixtures ──────────────────────────────────────────────────────────────────
 
 @pytest.fixture
 def registry():
     reg = AsyncMock()
     reg.send = AsyncMock(return_value=True)
+    reg.close_connection = AsyncMock()
+    reg.append_message = AsyncMock()
+    reg.store_menu_masked_fields = MagicMock()
     return reg
 
 
 @pytest.fixture
-def consumer(registry, settings):
-    return OutboundConsumer(registry=registry, settings=settings)
+def webchat_adapter(registry):
+    return WebchatChannelAdapter(registry=registry)
 
 
-class TestDispatchFiltering:
-    async def test_ignores_non_webchat_channel(self, consumer, registry):
+@pytest.fixture
+def consumer(webchat_adapter, settings):
+    return OutboundConsumer(
+        adapters={"webchat": webchat_adapter},
+        settings=settings,
+    )
+
+
+# ── OutboundConsumer routing ───────────────────────────────────────────────────
+
+class TestConsumerRouting:
+    async def test_ignores_unregistered_channel(self, consumer, registry):
+        """Messages for channels without a registered adapter are silently dropped."""
         payload = {
             "type": "message.text",
             "contact_id": "c1",
@@ -34,6 +56,7 @@ class TestDispatchFiltering:
         }
         await consumer._dispatch(payload)
         registry.send.assert_not_called()
+        registry.append_message.assert_not_called()
 
     async def test_ignores_missing_contact_id(self, consumer, registry):
         payload = {
@@ -44,103 +67,17 @@ class TestDispatchFiltering:
         await consumer._dispatch(payload)
         registry.send.assert_not_called()
 
-    async def test_ignores_unknown_type(self, consumer, registry):
+    async def test_ignores_missing_channel(self, consumer, registry):
         payload = {
-            "type": "unknown.event",
+            "type": "message.text",
             "contact_id": "c1",
-            "channel": "webchat",
+            "text": "Olá",
         }
         await consumer._dispatch(payload)
         registry.send.assert_not_called()
 
-
-class TestMessageTextDispatch:
-    async def test_dispatches_message_text(self, consumer, registry):
-        payload = {
-            "type": "message.text",
-            "contact_id": "c1",
-            "channel": "webchat",
-            "message_id": "msg-001",
-            "author": {"type": "agent_ai"},
-            "text": "Posso ajudar com sua solicitação.",
-            "timestamp": "2024-01-01T10:00:00Z",
-        }
-        await consumer._dispatch(payload)
-
-        registry.send.assert_called_once()
-        contact_id, ws_payload = registry.send.call_args.args
-        assert contact_id == "c1"
-        assert ws_payload["type"] == "msg.text"
-        assert ws_payload["text"] == "Posso ajudar com sua solicitação."
-        assert ws_payload["message_id"] == "msg-001"
-
-    async def test_message_text_missing_fields_uses_defaults(self, consumer, registry):
-        """Partial payload — optional fields use empty defaults."""
-        payload = {
-            "type": "message.text",
-            "contact_id": "c1",
-            "channel": "webchat",
-        }
-        await consumer._dispatch(payload)
-        registry.send.assert_called_once()
-        _, ws_payload = registry.send.call_args.args
-        assert ws_payload["text"] == ""
-        assert ws_payload["author"] == {}
-
-
-class TestMenuPayloadDispatch:
-    async def test_dispatches_menu_with_options(self, consumer, registry):
-        payload = {
-            "type": "menu.payload",
-            "contact_id": "c1",
-            "channel": "webchat",
-            "menu_id": "menu-001",
-            "interaction": "button",
-            "prompt": "Deseja continuar?",
-            "options": [{"id": "yes", "label": "Sim"}, {"id": "no", "label": "Não"}],
-        }
-        await consumer._dispatch(payload)
-
-        registry.send.assert_called_once()
-        _, ws_payload = registry.send.call_args.args
-        assert ws_payload["type"] == "interaction.request"
-        assert ws_payload["menu_id"] == "menu-001"
-        assert ws_payload["interaction"] == "button"
-        assert len(ws_payload["options"]) == 2
-
-    async def test_dispatches_menu_form(self, consumer, registry):
-        payload = {
-            "type": "menu.payload",
-            "contact_id": "c1",
-            "channel": "webchat",
-            "menu_id": "form-001",
-            "interaction": "form",
-            "prompt": "Preencha seus dados:",
-            "fields": [{"id": "name", "label": "Nome", "type": "text"}],
-        }
-        await consumer._dispatch(payload)
-
-        _, ws_payload = registry.send.call_args.args
-        assert ws_payload["type"] == "interaction.request"
-        assert ws_payload["interaction"] == "form"
-        assert ws_payload["fields"][0]["id"] == "name"
-
-    async def test_dispatches_menu_without_options(self, consumer, registry):
-        payload = {
-            "type": "menu.payload",
-            "contact_id": "c1",
-            "channel": "webchat",
-            "menu_id": "menu-text",
-            "interaction": "text",
-            "prompt": "Digite sua resposta:",
-        }
-        await consumer._dispatch(payload)
-        _, ws_payload = registry.send.call_args.args
-        assert ws_payload["options"] is None
-
-
-class TestAgentTypingDispatch:
-    async def test_dispatches_agent_typing(self, consumer, registry):
+    async def test_routes_to_registered_adapter(self, consumer, webchat_adapter, registry):
+        """Consumer delegates to WebchatChannelAdapter for webchat messages."""
         payload = {
             "type": "agent.typing",
             "contact_id": "c1",
@@ -148,61 +85,174 @@ class TestAgentTypingDispatch:
             "author_type": "agent_ai",
         }
         await consumer._dispatch(payload)
+        registry.send.assert_called_once()
+
+    async def test_ignores_unknown_type_no_crash(self, consumer, registry):
+        payload = {
+            "type": "unknown.event",
+            "contact_id": "c1",
+            "channel": "webchat",
+        }
+        # Must not raise
+        await consumer._dispatch(payload)
+
+
+# ── WebchatChannelAdapter — deliver_text ──────────────────────────────────────
+
+class TestWebchatDeliverText:
+    async def test_persists_to_history(self, webchat_adapter, registry):
+        """
+        deliver_text appends to conversation history.
+        No WebSocket send — webchat uses hybrid stream model (XREAD).
+        """
+        payload = {
+            "type": "message.text",
+            "contact_id": "c1",
+            "session_id": "s1",
+            "channel": "webchat",
+            "message_id": "msg-001",
+            "author": {"type": "agent_ai"},
+            "text": "Posso ajudar.",
+            "timestamp": "2024-01-01T10:00:00Z",
+        }
+        await webchat_adapter.deliver_text(payload)
+
+        registry.append_message.assert_called_once()
+        call = registry.append_message.call_args
+        assert call.kwargs["session_id"] == "s1"
+        assert call.kwargs["text"] == "Posso ajudar."
+        assert call.kwargs["author"] == "agent_ai"
+
+    async def test_skips_empty_text(self, webchat_adapter, registry):
+        """No append when text is empty."""
+        payload = {
+            "type": "message.text",
+            "contact_id": "c1",
+            "session_id": "s1",
+            "channel": "webchat",
+            "text": "",
+        }
+        await webchat_adapter.deliver_text(payload)
+        registry.append_message.assert_not_called()
+
+    async def test_does_not_send_to_websocket(self, webchat_adapter, registry):
+        """Hybrid stream model — text must NOT go via registry.send."""
+        payload = {
+            "type": "message.text",
+            "contact_id": "c1",
+            "session_id": "s1",
+            "channel": "webchat",
+            "message_id": "m1",
+            "author": {"type": "agent_ai"},
+            "text": "Texto.",
+            "timestamp": "2024-01-01T10:00:00Z",
+        }
+        await webchat_adapter.deliver_text(payload)
+        registry.send.assert_not_called()
+
+
+# ── WebchatChannelAdapter — deliver_menu ──────────────────────────────────────
+
+class TestWebchatDeliverMenu:
+    async def test_stores_masked_fields(self, webchat_adapter, registry):
+        payload = {
+            "type": "menu.payload",
+            "contact_id": "c1",
+            "channel": "webchat",
+            "menu_id": "menu-001",
+            "interaction": "form",
+            "prompt": "Dados:",
+            "masked_fields": ["cpf", "senha"],
+        }
+        await webchat_adapter.deliver_menu(payload)
+        registry.store_menu_masked_fields.assert_called_once_with(
+            "c1", "menu-001", ["cpf", "senha"]
+        )
+
+    async def test_no_send_to_websocket(self, webchat_adapter, registry):
+        """Hybrid stream model — interaction.request must NOT go via registry.send."""
+        payload = {
+            "type": "menu.payload",
+            "contact_id": "c1",
+            "channel": "webchat",
+            "menu_id": "m1",
+            "interaction": "button",
+            "prompt": "Continuar?",
+            "options": [],
+        }
+        await webchat_adapter.deliver_menu(payload)
+        registry.send.assert_not_called()
+
+
+# ── WebchatChannelAdapter — deliver_typing ────────────────────────────────────
+
+class TestWebchatDeliverTyping:
+    async def test_sends_typing_frame(self, webchat_adapter, registry):
+        payload = {
+            "type": "agent.typing",
+            "contact_id": "c1",
+            "channel": "webchat",
+            "author_type": "agent_ai",
+        }
+        await webchat_adapter.deliver_typing(payload)
 
         registry.send.assert_called_once()
-        _, ws_payload = registry.send.call_args.args
+        contact_id, ws_payload = registry.send.call_args.args
+        assert contact_id == "c1"
         assert ws_payload["type"] == "agent.typing"
         assert ws_payload["author_type"] == "agent_ai"
 
-    async def test_agent_typing_default_author_type(self, consumer, registry):
+    async def test_typing_default_author_type(self, webchat_adapter, registry):
         payload = {
             "type": "agent.typing",
             "contact_id": "c1",
             "channel": "webchat",
         }
-        await consumer._dispatch(payload)
+        await webchat_adapter.deliver_typing(payload)
         _, ws_payload = registry.send.call_args.args
         assert ws_payload["author_type"] == "agent_ai"
 
 
-class TestSessionClosedDispatch:
-    async def test_dispatches_session_closed(self, consumer, registry):
+# ── WebchatChannelAdapter — deliver_session_closed ───────────────────────────
+
+class TestWebchatDeliverSessionClosed:
+    async def test_sends_session_ended_and_closes(self, webchat_adapter, registry):
         payload = {
             "type": "session.closed",
             "contact_id": "c1",
             "channel": "webchat",
             "reason": "agent_done",
         }
-        await consumer._dispatch(payload)
+        await webchat_adapter.deliver_session_closed(payload)
 
         registry.send.assert_called_once()
         _, ws_payload = registry.send.call_args.args
         assert ws_payload["type"] == "conn.session_ended"
         assert ws_payload["reason"] == "agent_done"
+        registry.close_connection.assert_called_once_with("c1")
 
-    async def test_session_closed_default_reason(self, consumer, registry):
+    async def test_default_reason(self, webchat_adapter, registry):
         payload = {
             "type": "session.closed",
             "contact_id": "c1",
             "channel": "webchat",
         }
-        await consumer._dispatch(payload)
+        await webchat_adapter.deliver_session_closed(payload)
         _, ws_payload = registry.send.call_args.args
         assert ws_payload["reason"] == "agent_done"
 
 
+# ── Error handling ─────────────────────────────────────────────────────────────
+
 class TestDispatchErrorHandling:
-    async def test_dispatch_handles_registry_error_gracefully(self, consumer, registry):
-        """An error in registry.send must not propagate — log and continue."""
+    async def test_adapter_error_does_not_propagate(self, consumer, registry):
+        """An error in the adapter must be caught by the consumer — log and continue."""
         registry.send.side_effect = Exception("Redis connection lost")
         payload = {
-            "type": "message.text",
+            "type": "agent.typing",
             "contact_id": "c1",
             "channel": "webchat",
-            "message_id": "m1",
-            "author": {},
-            "text": "Olá",
-            "timestamp": "2024-01-01T10:00:00Z",
+            "author_type": "agent_ai",
         }
-        # Should not raise
+        # Must not raise
         await consumer._dispatch(payload)

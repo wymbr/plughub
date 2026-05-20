@@ -1,21 +1,34 @@
 """
 outbound_consumer.py
 Kafka consumer for conversations.outbound.
-Delivers messages and menus to clients via WebSocket,
-and closes sessions when session.closed arrives.
-Spec: channel-gateway-webchat.md — Consumo de conversations.outbound section
+
+Routes each outbound message to the correct ChannelAdapter based on the
+`channel` field in the payload.  Each adapter handles delivery to the
+customer in a channel-appropriate way.
+
+Architecture: channel-gateway-multi-channel.md § 6 (OutboundConsumer registry)
+
+Registry pattern
+----------------
+OutboundConsumer holds a dict[str, ChannelAdapter].  New channels are added
+by registering their adapter singleton at startup — no changes to this file.
+
+    consumer = OutboundConsumer(
+        adapters  = {"webchat": WebchatChannelAdapter(registry)},
+        settings  = settings,
+    )
 """
 
 from __future__ import annotations
+
 import asyncio
 import json
 import logging
 
 from aiokafka import AIOKafkaConsumer
 
+from .adapters.base import ChannelAdapter
 from .config import Settings
-from .models import WsMessageOutbound, WsMenuRender, WsAgentTyping, WsSessionClosed
-from .session_registry import SessionRegistry
 
 logger = logging.getLogger("plughub.channel-gateway.outbound")
 
@@ -23,24 +36,28 @@ logger = logging.getLogger("plughub.channel-gateway.outbound")
 class OutboundConsumer:
     def __init__(
         self,
-        registry: SessionRegistry,
-        settings: Settings,
+        adapters:  dict[str, ChannelAdapter],
+        settings:  Settings,
     ) -> None:
-        self._registry = registry
-        self._settings = settings
+        self._adapters  = adapters
+        self._settings  = settings
 
     async def run(self) -> None:
         consumer = AIOKafkaConsumer(
             self._settings.kafka_topic_outbound,
-            bootstrap_servers=self._settings.kafka_brokers,
-            group_id=self._settings.kafka_group_id,
-            auto_offset_reset="latest",
+            bootstrap_servers = self._settings.kafka_brokers,
+            group_id          = self._settings.kafka_group_id,
+            auto_offset_reset = "latest",
             # Low-latency tuning: reduce broker wait time before returning data.
-            fetch_max_wait_ms=100,
-            fetch_min_bytes=1,
+            fetch_max_wait_ms = 100,
+            fetch_min_bytes   = 1,
         )
         await consumer.start()
-        logger.info("outbound consumer started — topic=%s", self._settings.kafka_topic_outbound)
+        logger.info(
+            "outbound consumer started — topic=%s channels=%s",
+            self._settings.kafka_topic_outbound,
+            list(self._adapters),
+        )
 
         try:
             async for msg in consumer:
@@ -49,122 +66,52 @@ class OutboundConsumer:
             await consumer.stop()
 
     async def _dispatch(self, payload: dict) -> None:
-        msg_type    = payload.get("type")
-        contact_id  = payload.get("contact_id")
-        channel     = payload.get("channel")
+        msg_type   = payload.get("type")
+        contact_id = payload.get("contact_id")
+        channel    = payload.get("channel")
 
-        # Only process chat messages
-        if channel != "webchat" or not contact_id:
-            if channel or msg_type:
+        if not contact_id or not channel:
+            if msg_type or channel:
                 logger.debug(
                     "outbound skipped type=%s channel=%s contact_id=%s",
                     msg_type, channel, contact_id,
                 )
             return
 
+        adapter = self._adapters.get(channel)
+        if adapter is None:
+            logger.debug(
+                "outbound: no adapter registered for channel=%s type=%s contact_id=%s",
+                channel, msg_type, contact_id,
+            )
+            return
+
         logger.info(
-            "outbound dispatch type=%s contact_id=%s session_id=%s",
-            msg_type, contact_id, payload.get("session_id"),
+            "outbound dispatch type=%s channel=%s contact_id=%s session_id=%s",
+            msg_type, channel, contact_id, payload.get("session_id"),
         )
 
         try:
             if msg_type == "message.text":
-                # NOTE: In the hybrid stream model, webchat clients receive
-                # messages via the stream_subscriber (XREAD on session stream),
-                # NOT from the outbound consumer.  The notification_send tool
-                # XADDs messages to the canonical session stream for ALL
-                # visibility modes (all, agents_only, array).  Delivering here
-                # as well would cause duplicate bubbles in the webchat UI.
-                #
-                # registry.send() is therefore SKIPPED for message.text.
-                # Non-webchat channels (WhatsApp, SMS, etc.) will use their own
-                # adapter delivery path — not registry.send().
-                #
-                # Conversation history persistence is kept below so that the
-                # session:{id}:messages List (used for context in AI agents)
-                # remains populated.
-
-                # Persist to conversation history.
-                # Both AI (notification_send tool) and human (mcp-server WS handler)
-                # outbound messages arrive here with the same envelope format, so this
-                # single point captures all outbound regardless of agent type.
-                session_id  = payload.get("session_id", "")
-                text        = payload.get("text", "")
-                message_id  = payload.get("message_id", "")
-                author_type = payload.get("author", {}).get("type", "agent_ai")
-                timestamp   = payload.get("timestamp", "")
-                if session_id and text:
-                    await self._registry.append_message(
-                        session_id=session_id,
-                        message_id=message_id,
-                        author=author_type,
-                        text=text,
-                        timestamp=timestamp,
-                    )
+                await adapter.deliver_text(payload)
 
             elif msg_type == "menu.payload":
-                masked_fields: list[str] | None = payload.get("masked_fields") or None
-                channel: str = payload.get("channel", "webchat")
-
-                # Non-webchat channels do not natively support masked overlays.
-                # Log a warning so operators can configure masked_fallback for those channels.
-                if masked_fields and channel != "webchat":
-                    logger.warning(
-                        "menu.payload has masked_fields=%s for channel=%s "
-                        "(masked_fallback not yet implemented — fields will be sent unmasked)",
-                        masked_fields,
-                        channel,
-                    )
-
-                # Register masked_fields in SessionRegistry BEFORE sending the menu
-                # to the client. WebchatAdapter._handle_menu_submit will read and clear
-                # this entry to redact sensitive values from the agent-visible history.
-                if masked_fields:
-                    self._registry.store_menu_masked_fields(
-                        contact_id, payload["menu_id"], masked_fields
-                    )
-                    logger.debug(
-                        "stored masked_fields for contact_id=%s menu_id=%s fields=%s",
-                        contact_id, payload["menu_id"], masked_fields,
-                    )
-
-                # NOTE: In the hybrid stream model, webchat clients receive
-                # interaction_request events via the stream_subscriber (XREAD on
-                # session stream), NOT from the outbound consumer.  The
-                # notification_send tool XADDs interaction_request to the stream
-                # for ALL visibility modes (all, agents_only, array).  Delivering
-                # via registry.send() as well would cause duplicate forms in the
-                # webchat UI.
-                #
-                # We still process masked_fields above so that the
-                # WebchatAdapter._handle_menu_submit can redact sensitive values.
-                #
-                # Non-webchat channels will use their own adapter delivery path.
-                logger.debug(
-                    "menu.payload skipped registry.send for webchat (hybrid stream model) "
-                    "contact_id=%s menu_id=%s",
-                    contact_id, payload.get("menu_id"),
-                )
+                await adapter.deliver_menu(payload)
 
             elif msg_type == "agent.typing":
-                ws_msg = WsAgentTyping(author_type=payload.get("author_type", "agent_ai"))
-                await self._registry.send(contact_id, ws_msg.model_dump())
+                await adapter.deliver_typing(payload)
 
             elif msg_type == "session.closed":
-                # Platform signals end of contact — notify client then close the WS immediately.
-                await self._registry.send(
-                    contact_id,
-                    WsSessionClosed(reason=payload.get("reason", "agent_done")).model_dump(),
-                )
-                # Close the WebSocket so the customer's browser knows the session ended.
-                # This also unregisters the contact so the WebchatAdapter's receive loop
-                # raises WebSocketDisconnect, which publishes contact_closed to Kafka.
-                # The bridge handles that idempotently (human_agent flag already deleted).
-                await self._registry.close_connection(contact_id)
-                logger.info("session.closed: notified and closed contact_id=%s", contact_id)
+                await adapter.deliver_session_closed(payload)
 
             else:
-                logger.debug("unhandled outbound type=%s contact_id=%s", msg_type, contact_id)
+                logger.debug(
+                    "unhandled outbound type=%s channel=%s contact_id=%s",
+                    msg_type, channel, contact_id,
+                )
 
         except Exception as exc:
-            logger.error("dispatch error type=%s contact_id=%s: %s", msg_type, contact_id, exc)
+            logger.error(
+                "dispatch error type=%s channel=%s contact_id=%s: %s",
+                msg_type, channel, contact_id, exc,
+            )

@@ -212,7 +212,11 @@ class NormalizedInboundEvent(BaseModel):
     session_id: str
     timestamp: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     direction: Literal["inbound"] = "inbound"
-    channel: Literal["webchat"] = "webchat"
+    # Relaxed from Literal["webchat"] — supports all channels (whatsapp, sms, email, voice, …)
+    channel: str = "webchat"
+    # Origin type of the message content — aids AI Gateway in choosing the right handler.
+    # "audio_transcript" means the text was produced by STT and should be treated as spoken word.
+    content_type: Literal["text", "audio_transcript", "image", "document", "video"] = "text"
     author: MessageAuthor
     content: MessageContent
     context_snapshot: ContextSnapshot = Field(default_factory=ContextSnapshot)
@@ -225,8 +229,12 @@ class ContactOpenEvent(BaseModel):
     contact_id: str
     session_id: str
     tenant_id: str
-    channel: Literal["webchat"] = "webchat"
+    # Relaxed from Literal["webchat"] — supports all channels.
+    channel: str = "webchat"
     started_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+    # Channel-native identifier for this contact (e.g. WhatsApp wamid, Twilio CallSid,
+    # email Message-ID).  None for webchat (session_id is the native ID).
+    channel_session_id: str | None = None
 
 
 class ContactClosedEvent(BaseModel):
@@ -234,7 +242,8 @@ class ContactClosedEvent(BaseModel):
     contact_id: str
     session_id: str
     tenant_id: str
-    channel: Literal["webchat"] = "webchat"
+    # Relaxed from Literal["webchat"] — supports all channels.
+    channel: str = "webchat"
     reason: Literal["agent_done", "client_disconnect", "timeout"]
     started_at: str
     ended_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
