@@ -1,7 +1,7 @@
 # Channel Gateway — Arquitetura Multi-Canal
 
 **Versão:** 1.1 — 2026-05-20  
-**Status:** Phase 1 (abstrações) + WhatsApp + SMS implementados. Email/Voice pendentes.  
+**Status:** Phase 1 (abstrações) + WhatsApp + SMS + Email implementados. Voice pendente.  
 **Escopo:** `packages/channel-gateway/`
 
 ---

@@ -2,6 +2,42 @@
 
 ---
 
+## Channel Gateway — Email Adapter (2026-05-20)
+
+Implementação completa do canal Email via Mailgun, com abstração de provider para suporte futuro a SendGrid, AWS SES, Microsoft Graph API (Exchange/O365) e Gmail API.
+
+### Arquivos criados
+
+- **`adapters/email_provider.py`**: `IEmailProvider` Protocol + `ParsedEmail` / `EmailAttachment` dataclasses + `MailgunProvider` (HMAC-SHA256 webhook verify + multipart/form-data parse + send via Mailgun API v3) + `MockEmailProvider` (testes sem I/O). Helpers `_extract_email`, `_extract_attachments_from_mime`.
+- **`adapters/email.py`**: `EmailAdapter(ChannelAdapter)` singleton. Inbound: `process_inbound` (Mailgun HMAC-SHA256 + background task), `_resolve_session` (3 tiers: Reply-To address → In-Reply-To Message-ID → contact email hash → nova sessão), `_strip_quoted_text` (heurísticas: `>`, On/Em wrote, Outlook headers), `_store_attachments` (AttachmentStore). Outbound: `deliver_text` (MIME multipart text/plain + text/html via `mistune`, assinatura do agente, headers Reply-To + In-Reply-To + References), `deliver_menu` (lista numerada + coleta sequencial), `deliver_typing` (no-op), `deliver_session_closed` (cleanup Redis). `send_template` para MCP tool `email_send_template`.
+- **`tests/test_email_adapter.py`**: 35+ testes com `MockEmailProvider`. Cobre `_strip_quoted_text` (5 padrões de citação), `_markdown_to_html`, key helpers, MailgunProvider signature (válida, inválida, dev mode), MockEmailProvider, process_inbound, resolve_session (3 tiers + nova), deliver_text (subject Re:, reply-to, in_reply_to, assinatura, HTML), deliver_menu, deliver_typing, deliver_session_closed, fluxo completo de inbound (nova sessão, reply via Reply-To, strip de quoted text, armazenamento de Message-ID).
+
+### Arquivos modificados
+
+- **`config.py`**: adicionado `email_api_key`, `email_domain`, `email_signing_key`, `email_from_address`, `email_reply_domain`, `email_default_pool_id`, `email_provider`.
+- **`main.py`**: endpoint `POST /webhooks/email` (Mailgun multipart). `EmailAdapter` instanciado no lifespan e registrado em `_channel_adapters["email"]`.
+- **`docs/arcos/channel-gateway-multi-channel.md`**: seção 8.4 expandida de stub para 11 subseções.
+
+### Decisões de arquitetura
+
+- Provider inicial: Mailgun. Novos providers implementam `IEmailProvider` (Exchange/Gmail marcados como fase futura).
+- Mailbox config em Configuration/Channels (ChannelEndpoint), não env vars — múltiplas caixas simultâneas via Layer 2.
+- Session: Reply-To `reply+{session_id}@{domain}` como mecanismo primário; In-Reply-To e hash de endereço como fallback.
+- TTL da sessão: segue ciclo de vida do Core (`session.closed`) — sem TTL de inatividade no gateway.
+- Quoted text: strip heurístico antes de publicar no stream; `original_text` armazenado em `content.payload` para auditoria.
+- Histórico de thread: acumulado no stream PlugHub via `email_get_thread` MCP tool — não no quoted text do email.
+- Outbound: MIME multipart `text/plain` + `text/html` (Markdown → HTML via `mistune`), assinatura por `AgentType.email_signature`.
+- `deliver_typing`: no-op.
+- `deliver_session_closed`: cleanup Redis sem email ao cliente.
+- Lógica de triagem (protocolo, classificação, escalação): responsabilidade do agente Skill Flow, não do gateway.
+- Forward de email: não implementado — escalação via routing engine (`task` step).
+
+### Spec
+
+→ [`docs/arcos/channel-gateway-multi-channel.md`](docs/arcos/channel-gateway-multi-channel.md) § 8.4
+
+---
+
 ## Channel Gateway — SMS Adapter (2026-05-20)
 
 Implementação completa do canal SMS via Twilio, com abstração de provider para suporte futuro a Telnyx, Vonage e AWS SNS.

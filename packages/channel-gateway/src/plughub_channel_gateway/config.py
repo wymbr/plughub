@@ -100,6 +100,24 @@ class Settings(BaseSettings):
     # The routing engine maps the pool to available agents.
     sms_default_pool_id:         str = ""
 
+    # ── Email (Mailgun / IEmailProvider) ─────────────────────────────────────
+    # Mailgun API key for outbound sending.
+    # Per-mailbox override via ChannelEndpoint metadata in agent-registry.
+    email_api_key:               str = ""
+    # Mailgun domain (e.g. "empresa.com" or "sandbox<hash>.mailgun.org").
+    email_domain:                str = ""
+    # Mailgun webhook signing key (HMAC-SHA256 verification).
+    email_signing_key:           str = ""
+    # Default From address for outbound emails (e.g. "suporte@empresa.com").
+    email_from_address:          str = ""
+    # Subdomain used for Reply-To addresses: reply+{session_id}@{reply_domain}
+    # Requires Mailgun catch-all route on this subdomain.
+    email_reply_domain:          str = ""
+    # Default pool_id for new email sessions (overridden by ChannelEndpoint lookup).
+    email_default_pool_id:       str = ""
+    # Email provider selector: "mailgun" (default) or future providers.
+    email_provider:              str = "mailgun"
+
     # ── WhatsApp (Meta Cloud API) ─────────────────────────────────────────────
     # System User token from Meta Business Manager (WABA).
     # Can be overridden per-tenant via Redis: {tenant_id}:config:whatsapp:access_token

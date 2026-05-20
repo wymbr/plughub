@@ -18,6 +18,7 @@ import uvicorn
 from aiokafka import AIOKafkaProducer
 from fastapi import FastAPI, HTTPException, Request, WebSocket
 
+from .adapters.email import EmailAdapter
 from .adapters.sms import SMSAdapter
 from .adapters.webchat import WebchatAdapter
 from .adapters.webchat_channel import WebchatChannelAdapter
@@ -44,6 +45,7 @@ _redis:              aioredis.Redis                        | None = None
 _attachment_store:   FilesystemAttachmentStore | S3AttachmentStore | None = None
 _whatsapp_adapter:   WhatsAppAdapter                      | None = None
 _sms_adapter:        SMSAdapter                           | None = None
+_email_adapter:      EmailAdapter                         | None = None
 
 
 def _create_attachment_store(
@@ -84,7 +86,7 @@ def _create_attachment_store(
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global _producer, _registry, _context, _redis, _attachment_store, _whatsapp_adapter, _sms_adapter
+    global _producer, _registry, _context, _redis, _attachment_store, _whatsapp_adapter, _sms_adapter, _email_adapter
 
     settings    = get_settings()
     instance_id = str(uuid.uuid4())
@@ -121,11 +123,18 @@ async def lifespan(app: FastAPI):
         redis     = _redis,
         settings  = settings,
     )
+    _email_adapter = EmailAdapter(
+        producer         = _producer,
+        redis            = _redis,
+        settings         = settings,
+        attachment_store = _attachment_store,
+    )
 
     _channel_adapters = {
         "webchat":  WebchatChannelAdapter(registry=_registry),
         "whatsapp": _whatsapp_adapter,
         "sms":      _sms_adapter,
+        "email":    _email_adapter,
     }
 
     outbound = OutboundConsumer(adapters=_channel_adapters, settings=settings)
@@ -251,6 +260,26 @@ async def whatsapp_inbound(request: Request) -> dict:
         raise HTTPException(status_code=400, detail="Invalid signature")
 
     await _whatsapp_adapter.handle_inbound(body)
+    return {"status": "ok"}
+
+
+# ── Email webhook ─────────────────────────────────────────────────────────────
+
+@app.post("/webhooks/email", status_code=200)
+async def email_inbound(request: Request) -> dict:
+    """
+    Mailgun inbound email webhook.
+    Mailgun sends multipart/form-data with parsed email fields + raw MIME.
+    HTTP 200 returned immediately; processing in a background task.
+    """
+    headers = dict(request.headers)
+    body    = await request.body()
+
+    if _email_adapter is None:
+        logger.error("email_adapter not initialised")
+        raise HTTPException(status_code=503, detail="Service unavailable")
+
+    await _email_adapter.process_inbound(headers=headers, body=body)
     return {"status": "ok"}
 
 
