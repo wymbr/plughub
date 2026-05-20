@@ -26,6 +26,7 @@ from .attachment_store import (
 )
 from .config import get_settings, Settings
 from .context_reader import ContextReader
+from .endpoint_resolver import resolve_pool
 from .outbound_consumer import OutboundConsumer
 from .session_registry import SessionRegistry
 
@@ -134,7 +135,11 @@ async def websocket_endpoint(ws: WebSocket, pool_id: str) -> None:
     WebSocket endpoint for web chat contacts.
 
     Path params:
-      pool_id  — service pool to route this contact to (e.g. "retencao_humano").
+      pool_id  — channel identifier (webchat slug) or direct pool_id.
+                 Layer 2 lookup: if a ChannelEndpoint record exists in
+                 agent-registry for this identifier, its pool_id is used.
+                 Otherwise the identifier is treated as the pool_id directly
+                 (backward-compatible with existing single-pool deployments).
 
     Protocol:
       After accept the server sends conn.hello; the client must reply with
@@ -145,8 +150,27 @@ async def websocket_endpoint(ws: WebSocket, pool_id: str) -> None:
       Include cursor=<last_event_id> in conn.authenticate to resume the stream
       from the last received event — no messages are missed.
     """
-    settings      = get_settings()
-    resolved_pool = pool_id or settings.entry_point_pool_id
+    settings = get_settings()
+
+    # ── Layer 2: channel endpoint lookup ─────────────────────────────────────
+    # Try to resolve the path param as a channel identifier → pool_id via the
+    # agent-registry.  Falls back gracefully when:
+    #   • no active ChannelEndpoint record exists (new or unknown identifier)
+    #   • the registry is unreachable (network error, cold-start race)
+    # In both cases we treat the path param itself as the pool_id, preserving
+    # full backward compatibility for existing deployments.
+    resolved_pool: str
+    if pool_id and settings.agent_registry_url:
+        looked_up = await resolve_pool(
+            channel            = "webchat",
+            identifier         = pool_id,
+            tenant_id          = settings.tenant_id,
+            agent_registry_url = settings.agent_registry_url,
+            cache_ttl_s        = settings.endpoint_cache_ttl_s,
+        )
+        resolved_pool = looked_up or pool_id
+    else:
+        resolved_pool = pool_id or settings.entry_point_pool_id
 
     adapter = WebchatAdapter(
         ws               = ws,

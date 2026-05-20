@@ -34,6 +34,15 @@ class Settings(BaseSettings):
     # Defaults to the Kafka group_id for backward compatibility.
     tenant_id:                  str = "default"
 
+    # Agent Registry — used for channel endpoint lookup (Layer 2).
+    # Set via PLUGHUB_AGENT_REGISTRY_URL.
+    # Example: "http://agent-registry:3000"
+    agent_registry_url:         str = "http://localhost:3000"
+    # In-process TTL (seconds) for channel endpoint lookups.
+    # Keeps hot-path latency low while reflecting config changes within ~30s.
+    # Set via PLUGHUB_ENDPOINT_CACHE_TTL_S.
+    endpoint_cache_ttl_s:       int = 30
+
     # WebSocket
     ws_heartbeat_interval_s:    int = 30
     ws_connection_timeout_s:    int = 300   # close if idle for 5 min

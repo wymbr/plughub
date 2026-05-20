@@ -2,6 +2,43 @@
 
 ---
 
+## Channel Endpoints Layer 2 + Analytics Agents expandido (2026-05-20)
+
+### Channel Endpoints — Layer 2: channel-gateway endpoint resolver
+
+Implementado o lookup de channel endpoints no hot-path do WebSocket, completando a Layer 2 da pilha de roteamento do canal.
+
+**agent-registry** (`packages/agent-registry/src/routes/channel-endpoints.ts`):
+- `GET /v1/channel-endpoints` agora aceita o query param `identifier` como filtro; sem ele, retorna todos os endpoints do tenant/channel — backward compatible.
+
+**channel-gateway** (`packages/channel-gateway/`):
+- `pyproject.toml`: `httpx>=0.27.0` movido de `[dev]` para dependências principais.
+- `config.py`: dois novos settings com prefixo `PLUGHUB_`:
+  - `agent_registry_url` (default `http://localhost:3000`)
+  - `endpoint_cache_ttl_s` (default `30`)
+- Novo módulo `endpoint_resolver.py`:
+  - Cache em memória `dict[(tenant_id, channel, identifier), (pool_id, expires_at)]` com TTL configurável; evita round-trips no connect path.
+  - Double-check lock (asyncio.Lock) para prevenir cache stampede em conexões concorrentes.
+  - Negative caching: `None` também é armazenado com TTL para evitar bombardear o registry com slugs desconhecidos.
+  - `resolve_pool(channel, identifier, tenant_id, agent_registry_url, cache_ttl_s, http_timeout_s)` — retorna `pool_id | None`; erros de rede são logados e retornam `None` (nunca quebram o WebSocket accept).
+  - `invalidate(tenant_id, channel?)` — exposta para futura integração com consumer `registry.changed`.
+- `main.py` — `websocket_endpoint`:
+  - Tenta resolver via `resolve_pool('webchat', pool_id_param, …)`.
+  - Se retornar `None` (sem registro ativo ou registry indisponível), cai no fallback: `pool_id_param or settings.entry_point_pool_id` — 100% backward compatible.
+
+**Pendente (operacional)**: executar `prisma migrate dev --name add_channel_endpoint` no agent-registry para criar a tabela `channel_endpoints` em produção.
+
+### Analytics Agents — página expandida com abas Humanos / IA
+
+`AnaliseAgentesPage.tsx` reescrita com duas abas de primeiro nível:
+
+- **Humanos**: KPI strip (Sessões, TMO, Resolução, Escalação) + gráfico de tendência diária (Recharts LineChart) + seção de disponibilidade/pausas existente (Arc 8).
+- **IA**: KPI strip + gráfico de tendência + tabela de performance por `agent_type_id × pool` com badges coloridos de resolution/escalation.
+- Hooks: `useAgentPerformance` (`GET /analytics/reports/agents/performance`) + `useAgentPerformanceDaily` (`GET /analytics/reports/agent-performance/daily`).
+- Namespace i18n `agentReports` — locale files `en/agentReports.json` + `pt-BR/agentReports.json` completos.
+
+---
+
 ## platform-ui: i18n Console + remoção do modal de wrap-up manual (2026-05-19)
 
 Cobertura i18n completa do módulo agent-assist e remoção do fluxo manual de wrap-up

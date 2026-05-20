@@ -28,16 +28,18 @@ const VALID_CHANNELS = new Set(["webchat", "whatsapp", "voice", "sms", "email", 
 channelEndpointsRouter.get("/", async (req: Request, res: Response, next: NextFunction) => {
   try {
     const tenantId       = _getTenantId(req)
-    const channel        = req.query["channel"]          as string | undefined
-    const poolId         = req.query["pool_id"]          as string | undefined
-    const activeQ        = req.query["active"]           as string | undefined
+    const channel         = req.query["channel"]           as string | undefined
+    const identifier      = req.query["identifier"]        as string | undefined
+    const poolId          = req.query["pool_id"]           as string | undefined
+    const activeQ         = req.query["active"]            as string | undefined
     const gatewayConfigId = req.query["gateway_config_id"] as string | undefined
 
     const where: Record<string, unknown> = { tenant_id: tenantId }
-    if (channel)         where["channel"]          = channel
-    if (poolId)          where["pool_id"]          = poolId
-    if (activeQ !== undefined) where["active"]     = activeQ === "true"
-    if (gatewayConfigId) where["gateway_config_id"] = gatewayConfigId
+    if (channel)              where["channel"]          = channel
+    if (identifier)           where["identifier"]       = identifier
+    if (poolId)               where["pool_id"]          = poolId
+    if (activeQ !== undefined) where["active"]          = activeQ === "true"
+    if (gatewayConfigId)      where["gateway_config_id"] = gatewayConfigId
 
     const endpoints = await channelEndpoint.findMany({
       where,
