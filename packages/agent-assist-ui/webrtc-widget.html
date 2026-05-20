@@ -1,0 +1,915 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PlugHub WebRTC Widget</title>
+
+<!--
+  WebRTC Customer Widget — Arc 15 Fase F
+  ═══════════════════════════════════════
+  Standalone single-file widget (no build step required).
+  Connects to channel-gateway WS /ws/webrtc/{pool_id}, receives
+  webrtc.ready, negotiates medium (video/voice/text), connects to
+  LiveKit room, and handles renegotiation events.
+
+  Config block below — adjust for your deployment:
+    WS_BASE       → gateway WS URL
+    JWT_SECRET    → per-tenant secret (match channel-gateway config)
+    TENANT_ID     → your tenant ID
+    POOL_OPTIONS  → pools the user can select
+
+  LiveKit client SDK loaded from CDN (livekit-client@2).
+-->
+
+<!-- LiveKit JS client SDK from CDN -->
+<script src="https://cdn.jsdelivr.net/npm/livekit-client@2/dist/livekit-client.umd.min.js"></script>
+
+<style>
+  /* ── Reset ──────────────────────────────────────────────────────────────── */
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: #f0f4f8;
+    height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  /* ── Widget shell ───────────────────────────────────────────────────────── */
+  .widget {
+    width: 420px;
+    height: 680px;
+    background: #fff;
+    border-radius: 16px;
+    box-shadow: 0 8px 32px rgba(0,0,0,.14);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  /* ── Header ─────────────────────────────────────────────────────────────── */
+  .header {
+    background: #1B4F8A;
+    color: #fff;
+    padding: 14px 18px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-shrink: 0;
+  }
+  .header-title { font-size: 15px; font-weight: 600; }
+  .header-sub   { font-size: 11px; opacity: .75; margin-top: 2px; }
+  .status-dot {
+    display: inline-block;
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    background: #fbbf24;
+    margin-right: 5px;
+    transition: background .3s;
+  }
+  .status-dot.ok  { background: #34d399; }
+  .status-dot.err { background: #f87171; }
+
+  /* ── Medium indicator bar ───────────────────────────────────────────────── */
+  .medium-bar {
+    display: none;
+    align-items: center;
+    gap: 8px;
+    padding: 7px 14px;
+    background: #e0f2fe;
+    border-bottom: 1px solid #bae6fd;
+    font-size: 12px;
+    color: #0369a1;
+    flex-shrink: 0;
+  }
+  .medium-bar.visible { display: flex; }
+  .medium-icon { font-size: 15px; }
+  .medium-label { font-weight: 600; flex: 1; }
+  .medium-badge {
+    font-size: 10px;
+    background: #0ea5e9;
+    color: #fff;
+    border-radius: 4px;
+    padding: 2px 7px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: .03em;
+  }
+
+  /* ── Media area (video/voice) ───────────────────────────────────────────── */
+  .media-area {
+    display: none;
+    flex-direction: column;
+    background: #0f172a;
+    flex-shrink: 0;
+  }
+  .media-area.visible { display: flex; }
+  .video-grid {
+    position: relative;
+    height: 190px;
+    background: #1e293b;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  #remote-video {
+    width: 100%; height: 100%;
+    object-fit: cover;
+  }
+  #local-video {
+    position: absolute;
+    bottom: 8px; right: 8px;
+    width: 80px; height: 56px;
+    object-fit: cover;
+    border-radius: 6px;
+    border: 2px solid rgba(255,255,255,.3);
+    transform: scaleX(-1); /* mirror */
+    display: none;
+  }
+  .video-placeholder {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+    color: #64748b;
+    font-size: 12px;
+  }
+  .video-placeholder svg { opacity: .5; }
+
+  /* Waveform (voice medium) */
+  .waveform {
+    display: none;
+    align-items: center;
+    justify-content: center;
+    gap: 3px;
+    height: 56px;
+    padding: 8px 16px;
+    background: #1e293b;
+  }
+  .waveform.visible { display: flex; }
+  .wbar {
+    width: 3px;
+    border-radius: 3px;
+    background: #38bdf8;
+    height: 8px;
+    transition: height .15s ease;
+  }
+  .waveform.active .wbar {
+    animation: wave 0.8s ease-in-out infinite alternate;
+  }
+  @keyframes wave {
+    from { height: 4px; }
+    to   { height: 36px; }
+  }
+
+  /* Media controls */
+  .media-controls {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+    padding: 8px;
+    background: #0f172a;
+  }
+  .ctrl-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 38px; height: 38px;
+    border-radius: 50%;
+    border: none;
+    cursor: pointer;
+    font-size: 16px;
+    transition: background .15s, opacity .15s;
+    background: rgba(255,255,255,.12);
+    color: #fff;
+  }
+  .ctrl-btn:hover { background: rgba(255,255,255,.22); }
+  .ctrl-btn.muted { background: rgba(239,68,68,.7); }
+  .ctrl-btn.danger { background: #dc2626; }
+  .ctrl-btn.danger:hover { background: #b91c1c; }
+
+  /* ── Config row ─────────────────────────────────────────────────────────── */
+  .config-row {
+    display: flex;
+    gap: 6px;
+    align-items: center;
+    padding: 8px 12px;
+    border-bottom: 1px solid #e2e8f0;
+    flex-shrink: 0;
+  }
+  .config-row select, .config-row input {
+    border: 1px solid #d1d5db;
+    border-radius: 8px;
+    padding: 6px 10px;
+    font-size: 12px;
+    outline: none;
+    background: #fff;
+  }
+  .config-row select { flex: 1; }
+  .config-row button {
+    padding: 6px 14px;
+    font-size: 12px;
+    background: #1B4F8A;
+    color: #fff;
+    border: none;
+    border-radius: 8px;
+    cursor: pointer;
+    font-weight: 500;
+    flex-shrink: 0;
+  }
+  .config-row button:hover { background: #1a3f6f; }
+  .err-detail {
+    font-size: 10px;
+    color: #ef4444;
+    padding: 2px 14px 4px;
+    display: none;
+  }
+
+  /* ── Messages ───────────────────────────────────────────────────────────── */
+  .messages {
+    flex: 1;
+    overflow-y: auto;
+    padding: 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    background: #f8fafc;
+  }
+  .msg {
+    max-width: 80%;
+    padding: 8px 12px;
+    border-radius: 12px;
+    font-size: 13px;
+    line-height: 1.5;
+    word-break: break-word;
+  }
+  .msg.in  { background: #f1f5f9; color: #1e293b; align-self: flex-start; border-bottom-left-radius: 3px; }
+  .msg.out { background: #1B4F8A; color: #fff;    align-self: flex-end;   border-bottom-right-radius: 3px; }
+  .msg.sys { background: #fef3c7; color: #92400e; align-self: center; font-size: 11px; border-radius: 8px; padding: 4px 10px; }
+  .msg.err { background: #fee2e2; color: #991b1b; align-self: center; font-size: 11px; border-radius: 8px; padding: 4px 10px; }
+  .label { font-size: 10px; color: #94a3b8; margin-bottom: 2px; }
+  .label.right { text-align: right; }
+
+  /* Interaction card */
+  .ia-card { background: #f1f5f9; border-radius: 12px; padding: 10px 12px;
+             align-self: flex-start; max-width: 88%;
+             border-bottom-left-radius: 3px; font-size: 13px; }
+  .ia-card.done { opacity: .5; pointer-events: none; }
+  .ia-prompt { margin-bottom: 8px; color: #1e293b; line-height: 1.5; }
+  .ia-opt-btn {
+    display: block; width: 100%; margin: 3px 0;
+    padding: 6px 10px; background: #fff; color: #1e293b;
+    border: 1px solid #cbd5e1; border-radius: 6px; cursor: pointer;
+    text-align: left; font-size: 13px;
+  }
+  .ia-opt-btn:hover { background: #e0e7ff; border-color: #1B4F8A; }
+  .ia-text-row { display: flex; gap: 6px; margin-top: 4px; }
+  .ia-text-row input {
+    flex: 1; padding: 6px 10px; border-radius: 6px; font-size: 13px;
+    border: 1px solid #cbd5e1; outline: none;
+  }
+  .ia-text-row input:focus { border-color: #1B4F8A; }
+  .ia-send-btn {
+    padding: 6px 12px; font-size: 13px; border-radius: 6px;
+    background: #1B4F8A; color: #fff; border: none; cursor: pointer;
+  }
+
+  /* ── Input row ──────────────────────────────────────────────────────────── */
+  .input-row {
+    display: flex;
+    gap: 8px;
+    padding: 10px 12px;
+    border-top: 1px solid #e2e8f0;
+    background: #fff;
+    flex-shrink: 0;
+  }
+  textarea {
+    flex: 1;
+    border: 1px solid #d1d5db;
+    border-radius: 10px;
+    padding: 8px 12px;
+    font-size: 13px;
+    resize: none;
+    outline: none;
+    font-family: inherit;
+  }
+  textarea:focus { border-color: #1B4F8A; box-shadow: 0 0 0 2px rgba(27,79,138,.15); }
+  .send-btn {
+    background: #1B4F8A; color: #fff; border: none;
+    border-radius: 10px; padding: 8px 16px; font-size: 13px;
+    cursor: pointer; font-weight: 500; flex-shrink: 0;
+  }
+  .send-btn:hover { background: #1a3f6f; }
+  .send-btn:disabled { opacity: .45; cursor: not-allowed; }
+
+  /* Permission denied banner */
+  .perm-banner {
+    display: none;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 14px;
+    background: #fff7ed;
+    border-top: 1px solid #fed7aa;
+    font-size: 12px;
+    color: #c2410c;
+    flex-shrink: 0;
+  }
+  .perm-banner.visible { display: flex; }
+</style>
+</head>
+<body>
+<div class="widget" id="widget">
+
+  <!-- ── Header ─────────────────────────────────────────────────────────── -->
+  <div class="header">
+    <div>
+      <div class="header-title">PlugHub WebRTC</div>
+      <div class="header-sub">
+        <span class="status-dot" id="dot"></span>
+        <span id="status-text">Desconectado</span>
+      </div>
+    </div>
+    <div style="font-size:11px;opacity:.65" id="session-label"></div>
+  </div>
+
+  <!-- ── Medium indicator ──────────────────────────────────────────────── -->
+  <div class="medium-bar" id="medium-bar">
+    <span class="medium-icon" id="medium-icon">💬</span>
+    <span class="medium-label" id="medium-label">Texto</span>
+    <span class="medium-badge" id="medium-badge">text</span>
+  </div>
+
+  <!-- ── Media area (video/voice) ──────────────────────────────────────── -->
+  <div class="media-area" id="media-area">
+    <!-- Video grid (shown when medium=video) -->
+    <div class="video-grid" id="video-grid" style="display:none">
+      <video id="remote-video" autoplay playsinline></video>
+      <video id="local-video" autoplay playsinline muted></video>
+      <div class="video-placeholder" id="video-placeholder">
+        <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5"
+            d="M15 10l4.553-2.27A1 1 0 0121 8.645V15.36a1 1 0 01-1.447.894L15 14M3 8a2 2 0 012-2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2V8z"/>
+        </svg>
+        <span>Aguardando vídeo…</span>
+      </div>
+    </div>
+
+    <!-- Waveform (shown when medium=voice) -->
+    <div class="waveform" id="waveform">
+      <!-- 20 animated bars -->
+      <div class="wbar" style="animation-delay:0ms"></div>
+      <div class="wbar" style="animation-delay:40ms"></div>
+      <div class="wbar" style="animation-delay:80ms"></div>
+      <div class="wbar" style="animation-delay:120ms"></div>
+      <div class="wbar" style="animation-delay:160ms"></div>
+      <div class="wbar" style="animation-delay:200ms"></div>
+      <div class="wbar" style="animation-delay:240ms"></div>
+      <div class="wbar" style="animation-delay:280ms"></div>
+      <div class="wbar" style="animation-delay:320ms"></div>
+      <div class="wbar" style="animation-delay:360ms"></div>
+      <div class="wbar" style="animation-delay:400ms"></div>
+      <div class="wbar" style="animation-delay:440ms"></div>
+      <div class="wbar" style="animation-delay:480ms"></div>
+      <div class="wbar" style="animation-delay:520ms"></div>
+      <div class="wbar" style="animation-delay:560ms"></div>
+      <div class="wbar" style="animation-delay:600ms"></div>
+      <div class="wbar" style="animation-delay:640ms"></div>
+      <div class="wbar" style="animation-delay:680ms"></div>
+      <div class="wbar" style="animation-delay:720ms"></div>
+      <div class="wbar" style="animation-delay:760ms"></div>
+    </div>
+
+    <!-- Media controls -->
+    <div class="media-controls" id="media-controls" style="display:none">
+      <button class="ctrl-btn" id="btn-mic" title="Silenciar microfone" onclick="toggleMic()">🎤</button>
+      <button class="ctrl-btn" id="btn-cam" title="Câmera" onclick="toggleCam()" style="display:none">📷</button>
+      <button class="ctrl-btn danger" title="Encerrar chamada" onclick="hangup()">📵</button>
+    </div>
+  </div>
+
+  <!-- ── Config / connect row ─────────────────────────────────────────── -->
+  <div class="config-row">
+    <select id="pool-select">
+      <option value="webrtc_ia">webrtc_ia (vídeo)</option>
+      <option value="webrtc_voice">webrtc_voice (voz)</option>
+      <option value="webrtc_text">webrtc_text (texto)</option>
+    </select>
+    <button onclick="connectWebRTC().catch(showErr)">Conectar</button>
+  </div>
+  <div class="err-detail" id="err-detail"></div>
+
+  <!-- Permission denied fallback banner -->
+  <div class="perm-banner" id="perm-banner">
+    ⚠️ Câmera/microfone negados — continuando em modo texto.
+  </div>
+
+  <!-- ── Messages ──────────────────────────────────────────────────────── -->
+  <div class="messages" id="messages"></div>
+
+  <!-- ── Text input ────────────────────────────────────────────────────── -->
+  <div class="input-row">
+    <textarea id="msg-input" rows="2" placeholder="Mensagem… (Enter envia)"
+              onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendText();}"></textarea>
+    <button class="send-btn" id="send-btn" onclick="sendText()" disabled>Enviar</button>
+  </div>
+</div>
+
+<script>
+// ── Config ────────────────────────────────────────────────────────────────────
+const WS_BASE    = 'ws://localhost:8010/ws/webrtc';  // + /{pool_id}
+const JWT_SECRET = 'changeme_32chars_webchat_secret!';
+const TENANT_ID  = 'tenant_demo';
+
+// ── State ─────────────────────────────────────────────────────────────────────
+let ws              = null;
+let sessionId       = null;
+let currentMedium   = 'text';
+let room            = null;   // LiveKit Room
+let localTracks     = [];
+let micMuted        = false;
+let camOff          = false;
+let connected       = false;
+
+// LiveKit SDK (loaded via CDN, available on window.LivekitClient)
+const LK = window.LivekitClient;
+
+// ── JWT (HS256 via Web Crypto) ────────────────────────────────────────────────
+function b64url(bytes) {
+  const bin = typeof bytes === 'string' ? bytes
+    : String.fromCharCode(...new Uint8Array(bytes));
+  return btoa(bin).replace(/=/g,'').replace(/\+/g,'-').replace(/\//g,'_');
+}
+async function makeJWT(payload) {
+  const enc    = new TextEncoder();
+  const header = b64url(JSON.stringify({ alg: 'HS256', typ: 'JWT' }));
+  const body   = b64url(JSON.stringify(payload));
+  const input  = `${header}.${body}`;
+  const key    = await crypto.subtle.importKey(
+    'raw', enc.encode(JWT_SECRET),
+    { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']
+  );
+  const sig = await crypto.subtle.sign('HMAC', key, enc.encode(input));
+  return `${input}.${b64url(sig)}`;
+}
+
+// ── UI helpers ────────────────────────────────────────────────────────────────
+function setStatus(label, state) {
+  document.getElementById('status-text').textContent = label;
+  const dot = document.getElementById('dot');
+  dot.className = 'status-dot' + (state === 'ok' ? ' ok' : state === 'err' ? ' err' : '');
+  document.getElementById('send-btn').disabled = state !== 'ok';
+}
+
+function showErr(msg) {
+  const el = document.getElementById('err-detail');
+  if (typeof msg === 'object' && msg !== null) msg = msg.message || String(msg);
+  el.textContent = msg;
+  el.style.display = msg ? 'block' : 'none';
+  if (msg) addMsg('Erro: ' + msg, 'err');
+}
+
+function addMsg(text, dir, label) {
+  const msgs = document.getElementById('messages');
+  if (label) {
+    const l = document.createElement('div');
+    l.className = 'label' + (dir === 'out' ? ' right' : '');
+    l.textContent = label;
+    msgs.appendChild(l);
+  }
+  const d = document.createElement('div');
+  d.className = 'msg ' + dir;
+  d.textContent = text;
+  msgs.appendChild(d);
+  msgs.scrollTop = msgs.scrollHeight;
+}
+
+// ── Medium indicator ──────────────────────────────────────────────────────────
+const MEDIUM_META = {
+  video: { icon: '📹', label: 'Vídeo', badge: 'video' },
+  voice: { icon: '🎤', label: 'Voz',   badge: 'voice' },
+  text:  { icon: '💬', label: 'Texto', badge: 'text'  },
+};
+
+function applyMedium(medium) {
+  currentMedium = medium;
+  const meta = MEDIUM_META[medium] || MEDIUM_META.text;
+
+  document.getElementById('medium-icon').textContent  = meta.icon;
+  document.getElementById('medium-label').textContent = meta.label;
+  document.getElementById('medium-badge').textContent = meta.badge;
+  document.getElementById('medium-bar').classList.add('visible');
+
+  const mediaArea    = document.getElementById('media-area');
+  const videoGrid    = document.getElementById('video-grid');
+  const waveform     = document.getElementById('waveform');
+  const mediaCtrl    = document.getElementById('media-controls');
+  const btnCam       = document.getElementById('btn-cam');
+
+  if (medium === 'text') {
+    mediaArea.classList.remove('visible');
+    return;
+  }
+
+  mediaArea.classList.add('visible');
+  mediaCtrl.style.display = 'flex';
+
+  if (medium === 'video') {
+    videoGrid.style.display = 'flex';
+    waveform.classList.remove('visible');
+    btnCam.style.display = 'flex';
+  } else {
+    // voice
+    videoGrid.style.display = 'none';
+    waveform.classList.add('visible');
+    btnCam.style.display = 'none';
+  }
+}
+
+// ── getUserMedia with graceful fallback ───────────────────────────────────────
+async function requestMedia(medium) {
+  if (medium === 'text') return null;
+  const constraints =
+    medium === 'video'
+      ? { video: true, audio: true }
+      : { video: false, audio: true };
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia(constraints);
+    document.getElementById('perm-banner').classList.remove('visible');
+    return stream;
+  } catch (err) {
+    console.warn('[webrtc-widget] getUserMedia failed:', err.name, err.message);
+    // Fall back to text — show LGPD / permission notice
+    document.getElementById('perm-banner').classList.add('visible');
+    currentMedium = 'text';
+    applyMedium('text');
+    // Inform gateway we fell back to text
+    wsSend({ type: 'webrtc.renegotiated', medium: 'text' });
+    addMsg('Câmera/microfone indisponíveis — continuando em modo texto.', 'sys');
+    return null;
+  }
+}
+
+// ── LiveKit room management ───────────────────────────────────────────────────
+async function connectLiveKit(livekitUrl, livekitToken, medium) {
+  if (!LK) { console.error('[webrtc-widget] livekit-client not loaded'); return; }
+  if (room) { room.disconnect(); room = null; }
+
+  room = new LK.Room({
+    adaptiveStream: true,
+    dynacast:       true,
+  });
+
+  room.on(LK.RoomEvent.TrackSubscribed, (track, _pub, participant) => {
+    console.log('[webrtc-widget] track subscribed', track.kind, participant.identity);
+    if (track.kind === LK.Track.Kind.Video) {
+      const remoteVideo = document.getElementById('remote-video');
+      track.attach(remoteVideo);
+      document.getElementById('video-placeholder').style.display = 'none';
+      remoteVideo.style.display = 'block';
+    }
+    if (track.kind === LK.Track.Kind.Audio) {
+      const audio = track.attach();
+      document.body.appendChild(audio);
+    }
+  });
+
+  room.on(LK.RoomEvent.TrackUnsubscribed, (track) => {
+    track.detach();
+    if (track.kind === LK.Track.Kind.Video) {
+      document.getElementById('remote-video').style.display = 'none';
+      document.getElementById('video-placeholder').style.display = 'flex';
+    }
+  });
+
+  room.on(LK.RoomEvent.Disconnected, () => {
+    console.log('[webrtc-widget] room disconnected');
+    cleanupLocalTracks();
+  });
+
+  await room.connect(livekitUrl, livekitToken);
+  console.log('[webrtc-widget] LiveKit room connected, medium=', medium);
+
+  // Publish local tracks per medium
+  if (medium !== 'text') {
+    const stream = await requestMedia(medium);
+    if (stream && currentMedium !== 'text') {
+      localTracks = await LK.createLocalTracks({
+        audio: true,
+        video: medium === 'video',
+      });
+      for (const t of localTracks) {
+        await room.localParticipant.publishTrack(t);
+      }
+      // Show local video PiP
+      if (medium === 'video') {
+        const videoTrack = localTracks.find(t => t.kind === LK.Track.Kind.Video);
+        if (videoTrack) {
+          const localVideo = document.getElementById('local-video');
+          videoTrack.attach(localVideo);
+          localVideo.style.display = 'block';
+        }
+      }
+      // Activate waveform animation
+      if (medium === 'voice') {
+        document.getElementById('waveform').classList.add('active');
+      }
+    }
+  }
+
+  // Notify gateway the LiveKit connection is up
+  wsSend({ type: 'webrtc.connected', medium: currentMedium });
+}
+
+function cleanupLocalTracks() {
+  for (const t of localTracks) { try { t.stop(); } catch {} }
+  localTracks = [];
+  const localVideo = document.getElementById('local-video');
+  localVideo.style.display = 'none';
+  document.getElementById('waveform').classList.remove('active');
+}
+
+// ── Renegotiation (medium upgrade/downgrade) ──────────────────────────────────
+async function handleRenegotiate(newMedium) {
+  addMsg(`Qualidade alterada: ${MEDIUM_META[newMedium]?.label ?? newMedium}`, 'sys');
+  applyMedium(newMedium);
+  cleanupLocalTracks();
+
+  if (newMedium === 'text') {
+    // Disable video/audio publishing but keep room connected (DataChannel)
+    wsSend({ type: 'webrtc.renegotiated', medium: 'text' });
+    return;
+  }
+
+  // Re-request media and republish
+  const stream = await requestMedia(newMedium);
+  if (!stream || currentMedium === 'text') {
+    wsSend({ type: 'webrtc.renegotiated', medium: 'text' });
+    return;
+  }
+
+  if (room) {
+    localTracks = await LK.createLocalTracks({
+      audio: true,
+      video: newMedium === 'video',
+    });
+    for (const t of localTracks) {
+      await room.localParticipant.publishTrack(t);
+    }
+    if (newMedium === 'video') {
+      const videoTrack = localTracks.find(t => t.kind === LK.Track.Kind.Video);
+      if (videoTrack) {
+        const lv = document.getElementById('local-video');
+        videoTrack.attach(lv);
+        lv.style.display = 'block';
+      }
+    }
+    if (newMedium === 'voice') {
+      document.getElementById('waveform').classList.add('active');
+    }
+  }
+
+  wsSend({ type: 'webrtc.renegotiated', medium: newMedium });
+}
+
+// ── Media controls ────────────────────────────────────────────────────────────
+async function toggleMic() {
+  const audioTrack = localTracks.find(t => t.kind === LK.Track.Kind.Audio);
+  if (!audioTrack) return;
+  micMuted = !micMuted;
+  micMuted ? await audioTrack.mute() : await audioTrack.unmute();
+  const btn = document.getElementById('btn-mic');
+  btn.textContent = micMuted ? '🔇' : '🎤';
+  btn.classList.toggle('muted', micMuted);
+  btn.title = micMuted ? 'Reativar microfone' : 'Silenciar microfone';
+  if (currentMedium === 'voice') {
+    document.getElementById('waveform').classList.toggle('active', !micMuted);
+  }
+}
+
+async function toggleCam() {
+  const videoTrack = localTracks.find(t => t.kind === LK.Track.Kind.Video);
+  if (!videoTrack) return;
+  camOff = !camOff;
+  camOff ? await videoTrack.mute() : await videoTrack.unmute();
+  const btn = document.getElementById('btn-cam');
+  btn.textContent = camOff ? '🚫' : '📷';
+  btn.classList.toggle('muted', camOff);
+  btn.title = camOff ? 'Ligar câmera' : 'Desligar câmera';
+}
+
+function hangup() {
+  wsSend({ type: 'webrtc.hangup' });
+  teardown();
+  addMsg('Chamada encerrada.', 'sys');
+  setStatus('Encerrado', '');
+}
+
+// ── WS helpers ────────────────────────────────────────────────────────────────
+function wsSend(obj) {
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    console.log('[webrtc-widget] →', obj);
+    ws.send(JSON.stringify(obj));
+  }
+}
+
+function teardown() {
+  connected = false;
+  cleanupLocalTracks();
+  if (room) { room.disconnect(); room = null; }
+  if (ws)   { ws.close(); ws = null; }
+  applyMedium('text');
+  document.getElementById('medium-bar').classList.remove('visible');
+  document.getElementById('media-area').classList.remove('visible');
+  document.getElementById('media-controls').style.display = 'none';
+  document.getElementById('perm-banner').classList.remove('visible');
+}
+
+// ── Message rendering ─────────────────────────────────────────────────────────
+function renderInteraction(msg) {
+  const card = document.createElement('div');
+  card.className = 'ia-card';
+  card.dataset.menuId = msg.menu_id || '';
+
+  const prompt = document.createElement('div');
+  prompt.className = 'ia-prompt';
+  prompt.textContent = msg.prompt || msg.text || '';
+  card.appendChild(prompt);
+
+  const opts = msg.options || [];
+  if (opts.length > 0) {
+    for (const opt of opts) {
+      const btn = document.createElement('button');
+      btn.className = 'ia-opt-btn';
+      btn.textContent = opt.label || opt.id;
+      btn.onclick = () => {
+        wsSend({ type: 'webrtc.interaction_reply', menu_id: msg.menu_id, value: opt.id });
+        card.classList.add('done');
+        addMsg(opt.label || opt.id, 'out');
+      };
+      card.appendChild(btn);
+    }
+  } else {
+    // Text input fallback
+    const row = document.createElement('div');
+    row.className = 'ia-text-row';
+    const inp = document.createElement('input');
+    inp.type = 'text';
+    const sendBtn = document.createElement('button');
+    sendBtn.className = 'ia-send-btn';
+    sendBtn.textContent = 'OK';
+    sendBtn.onclick = () => {
+      const val = inp.value.trim();
+      if (!val) return;
+      wsSend({ type: 'webrtc.interaction_reply', menu_id: msg.menu_id, value: val });
+      card.classList.add('done');
+      addMsg(val, 'out');
+    };
+    inp.addEventListener('keydown', e => { if (e.key === 'Enter') sendBtn.click(); });
+    row.appendChild(inp);
+    row.appendChild(sendBtn);
+    card.appendChild(row);
+  }
+
+  document.getElementById('messages').appendChild(card);
+  document.getElementById('messages').scrollTop = 99999;
+}
+
+// ── Connect ───────────────────────────────────────────────────────────────────
+async function connectWebRTC() {
+  teardown();
+  showErr('');
+  document.getElementById('messages').innerHTML = '';
+  setStatus('Conectando…', '');
+
+  const poolId = document.getElementById('pool-select').value;
+  const now    = Math.floor(Date.now() / 1000);
+  const token  = await makeJWT({
+    sub:       'cliente-webrtc-' + Date.now(),
+    tenant_id: TENANT_ID,
+    channel:   'webrtc',
+    iat:       now,
+    exp:       now + 3600,
+  });
+
+  const url = `${WS_BASE}/${poolId}`;
+  console.log('[webrtc-widget] connecting to', url);
+  ws = new WebSocket(url);
+
+  ws.onopen = () => {
+    setStatus('Handshake…', '');
+    console.log('[webrtc-widget] WS open');
+  };
+
+  ws.onclose = (ev) => {
+    if (connected) {
+      addMsg('Conexão encerrada.', 'sys');
+      setStatus('Desconectado', 'err');
+    }
+    connected = false;
+  };
+
+  ws.onerror = () => {
+    setStatus('Erro WS', 'err');
+  };
+
+  ws.onmessage = async (ev) => {
+    let msg;
+    try { msg = JSON.parse(ev.data); } catch { return; }
+    console.log('[webrtc-widget] ←', msg);
+
+    // ── Handshake ──────────────────────────────────────────────────────────
+    if (msg.type === 'conn.hello') {
+      wsSend({ type: 'conn.authenticate', token });
+      return;
+    }
+    if (msg.type === 'conn.authenticated') {
+      sessionId = msg.session_id;
+      setStatus('Aguardando agente…', '');
+      document.getElementById('session-label').textContent =
+        sessionId ? sessionId.slice(0,8) + '…' : '';
+      addMsg('Conectado. Aguardando agente…', 'sys');
+      return;
+    }
+    if (msg.type === 'conn.error') {
+      setStatus('Erro', 'err');
+      showErr(msg.message || msg.code || 'auth_error');
+      return;
+    }
+
+    // ── WebRTC ready — agent assigned, room created ─────────────────────────
+    if (msg.type === 'webrtc.ready') {
+      const medium      = msg.negotiated_medium || 'text';
+      const livekitUrl  = msg.livekit_url;
+      const livekitToken = msg.livekit_token;
+
+      connected = true;
+      setStatus('Conectado', 'ok');
+      applyMedium(medium);
+      addMsg(`Agente conectado (${MEDIUM_META[medium]?.label ?? medium}).`, 'sys');
+
+      if (medium !== 'text' && livekitUrl && livekitToken) {
+        try {
+          await connectLiveKit(livekitUrl, livekitToken, medium);
+        } catch (err) {
+          console.error('[webrtc-widget] LiveKit connect error:', err);
+          addMsg('Não foi possível conectar ao LiveKit — continuando em texto.', 'sys');
+          applyMedium('text');
+          wsSend({ type: 'webrtc.renegotiated', medium: 'text' });
+        }
+      } else {
+        // text-only — just confirm
+        wsSend({ type: 'webrtc.connected', medium: 'text' });
+      }
+      return;
+    }
+
+    // ── Renegotiate (agent changed medium) ─────────────────────────────────
+    if (msg.type === 'webrtc.renegotiate') {
+      await handleRenegotiate(msg.medium || 'text');
+      return;
+    }
+
+    // ── Text message from agent ────────────────────────────────────────────
+    if (msg.type === 'webrtc.message') {
+      const text = msg.content?.text ?? msg.text ?? '';
+      if (text) addMsg(text, 'in', 'Agente');
+      return;
+    }
+
+    // ── Interaction (menu) ─────────────────────────────────────────────────
+    if (msg.type === 'webrtc.interaction') {
+      renderInteraction(msg);
+      return;
+    }
+
+    // ── Session closed ─────────────────────────────────────────────────────
+    if (msg.type === 'webrtc.session_closed') {
+      const reason = msg.close_reason || 'session_ended';
+      addMsg(`Atendimento encerrado (${reason}).`, 'sys');
+      setStatus('Encerrado', '');
+      teardown();
+      return;
+    }
+
+    // ── Typing indicator ───────────────────────────────────────────────────
+    if (msg.type === 'presence.typing') { /* ignore */ return; }
+
+    console.debug('[webrtc-widget] unhandled message:', msg);
+  };
+}
+
+// ── Send text ──────────────────────────────────────────────────────────────────
+function sendText() {
+  const input = document.getElementById('msg-input');
+  const text  = input.value.trim();
+  if (!text || !connected) return;
+  wsSend({ type: 'webrtc.message', content: { text } });
+  addMsg(text, 'out');
+  input.value = '';
+}
+</script>
+</body>
+</html>

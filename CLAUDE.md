@@ -761,7 +761,23 @@ Dois fluxos separados pelo tipo de agente avaliado. **Fluxo 1 (agente humano)**:
 
 ---
 
+## Arc 15 — Canal WebRTC com SFU Enterprise
+
+Canal WebRTC browser-to-SFU com medium negociado em tempo real (video → voice → text). Coexiste com canal voice (PSTN/Twilio): `voice` = callers externos via tronco, `webrtc` = clientes na webapp. **SFU**: LiveKit self-hosted (Docker/k8s) — gravação por egress, supervisão hidden subscriber, multi-participante. Twilio permanece exclusivamente como tronco PSTN no canal voice.
+
+**Medium negotiation**: `negotiate_medium(agent.media_capabilities, pool.webrtc_media_fallback_order)` — tenta video → voice → text; re-negocia quando agente muda (routing.assigned). **Signaling**: WS `/ws/webrtc/{pool_id}` → `webrtc.ready` (LiveKit URL + token + negotiated_medium). Tokens emitidos exclusivamente pelo Channel Gateway — nunca expostos ao browser. **STT/TTS**: mesmos FallbackSTTProvider/FallbackTTSProvider do canal voice; transporte muda de Twilio Media Streams para LiveKit server SDK PCM frames. **Gravação**: LiveKit Egress API (TrackCompositeEgress dual-channel) → AttachmentStore → recording.completed stream event. **Console overlay**: WebRTCOverlay.tsx embutido no Console — grid de vídeo ou waveform conforme medium; MediaControls; useWebRTCSession() hook. **Agent capability**: `media_capabilities: [video, voice, text]` em AgentTypeSchema — medium=text é fallback universal.
+
+Seis fases: A (infra + signaling), B (media negotiation + agent schema), C (STT/TTS pipeline), D (egress recording), E (Console UI), F (customer widget).
+
+→ See [`docs/arcos/arc15-webrtc.md`](docs/arcos/arc15-webrtc.md)
+
+---
+
 ## Pending (Next Iteration)
+
+### Arc 15 — WebRTC ✅ (todas as fases implementadas)
+Ver [`docs/arcos/arc15-webrtc.md`](docs/arcos/arc15-webrtc.md) para detalhe das 6 fases (A–F).
+- Decisão em aberto: bridge PSTN → WebRTC via LiveKit SIP Ingress (eliminar Twilio como canal separado).
 
 ### Usage Metering — Channel Gateway Adapters
 - `whatsapp_conversations`, `voice_minutes`, `sms_segments`, `email_messages` *(deferred)*: functions in `usage_emitter.py` ready, adapters not yet calling them.

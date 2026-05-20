@@ -1,0 +1,29 @@
+{
+  "medium": {
+    "video": "Video",
+    "voice": "Voice",
+    "text":  "Chat"
+  },
+  "overlay": {
+    "connecting":  "Connecting to room…",
+    "connected":   "Connected",
+    "waitingRoom": "Waiting for room",
+    "error":       "Connection error: {{message}}",
+    "micMuted":    "Microphone muted",
+    "listening":   "Listening"
+  },
+  "controls": {
+    "mute":        "Mute microphone",
+    "unmute":      "Unmute microphone",
+    "cameraOn":    "Turn camera on",
+    "cameraOff":   "Turn camera off",
+    "disconnect":  "Disconnect"
+  },
+  "supervisor": {
+    "connecting":  "Connecting as observer…",
+    "watching":    "Watching",
+    "waitingRoom": "Waiting for participants",
+    "voiceActive": "Voice call in progress",
+    "error":       "Unable to connect to room"
+  }
+}

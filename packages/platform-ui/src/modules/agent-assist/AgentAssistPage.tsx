@@ -51,8 +51,9 @@ import {
   FilterKey,
   messageMatchesFilter,
 } from "./components/ParticipantFilterBar";
-import { CopilotBanner }  from "./components/CopilotBanner";
-import { JourneyPanel }   from "./components/JourneyPanel";
+import { CopilotBanner }   from "./components/CopilotBanner";
+import { JourneyPanel }    from "./components/JourneyPanel";
+import { WebRTCOverlay }   from "./components/WebRTCOverlay";
 
 // ── AgentAssistPage ────────────────────────────────────────────────────────
 export const AgentAssistPage: React.FC = () => {
@@ -561,6 +562,15 @@ export const AgentAssistPage: React.FC = () => {
                 ) : (
                   /* ── Atual tab (existing behavior) ── */
                   <>
+                    {/* WebRTC overlay — renders only when channel=webrtc and medium≠text */}
+                    {selected.channel === "webrtc" && (
+                      <WebRTCOverlay
+                        sessionId={selected.sessionId}
+                        channel={selected.channel}
+                        agentIdentity={session?.userId ?? agentName}
+                      />
+                    )}
+
                     {/* Participant filter chips */}
                     <ParticipantFilterBar
                       messages={selected.messages}

@@ -2,6 +2,132 @@
 
 ---
 
+## Arc 15 Fase F — WebRTC: Widget do Cliente (2026-05-20)
+
+Widget standalone single-file para o cliente no browser. Conecta ao WS `/ws/webrtc/{pool_id}`, negocia medium, solicita `getUserMedia()`, conecta à sala LiveKit e publica tracks conforme medium. Fallback gracioso para text quando câmera/mic negados. Renegociação de medium sem reiniciar a sessão. Arc 15 completo.
+
+### Arquivos criados
+- `packages/agent-assist-ui/webrtc-widget.html` — widget completo: JWT HS256 via Web Crypto, handshake WS, `webrtc.ready` (LiveKit connect + getUserMedia + publish tracks), `webrtc.renegotiate` (upgrade/downgrade sem recriar room), medium indicator bar (📹/🎤/💬), video grid 2-up (remote full + local PiP espelhado), waveform 20 barras CSS animadas, media controls (mic/cam/hangup), interaction cards com opções e text input fallback, `getUserMedia` permission denial banner → fall back to text
+
+---
+
+## Arc 15 Fase E — WebRTC: Console Platform-UI Overlay (2026-05-20)
+
+Implementação da Fase E do canal WebRTC: overlay de mídia no Console do agente para sessões `channel=webrtc`. Adapta o visual ao medium negociado (video grid 2-up, waveform animado, ou nenhum overlay para text). Inclui hook de conexão LiveKit, controles de mídia, view somente-leitura para supervisores, e namespace i18n `webrtc` completo (en + pt-BR).
+
+### Arquivos criados
+- `packages/platform-ui/src/modules/agent-assist/hooks/useWebRTCSession.ts` — fetch token, `Room` LiveKit, publish local tracks, controles mic/câmera, cleanup automático; medium=text sem conexão de mídia
+- `packages/platform-ui/src/modules/agent-assist/components/VideoGrid.tsx` — grid 2-up com `track.attach()` nativo; PiP local espelhado; placeholder quando sem track remoto
+- `packages/platform-ui/src/modules/agent-assist/components/MediaControls.tsx` — mic/câmera/desconectar; câmera oculta em voice; badge de medium; i18n
+- `packages/platform-ui/src/modules/agent-assist/components/WebRTCOverlay.tsx` — container condicional por medium; AnimatedWaveform 20 barras CSS; status bar com timer; estados connecting/error
+- `packages/platform-ui/src/modules/agent-assist/components/WebRTCSupervisorView.tsx` — connect como observer sem publicar tracks; compact VideoGrid ou indicador voz
+- `packages/platform-ui/src/i18n/locales/en/webrtc.json` — namespace webrtc inglês
+- `packages/platform-ui/src/i18n/locales/pt-BR/webrtc.json` — namespace webrtc português
+
+### Arquivos modificados
+- `packages/platform-ui/package.json` — deps: `@livekit/components-react@^2.6.0`, `livekit-client@^2.5.0`
+- `packages/platform-ui/src/i18n/index.ts` — import + registro namespace `webrtc` (en + pt-BR)
+- `packages/platform-ui/src/modules/agent-assist/AgentAssistPage.tsx` — import `WebRTCOverlay`; render condicional antes do `ParticipantFilterBar` quando `selected.channel === "webrtc"`
+
+---
+
+## Arc 15 Fase D — WebRTC: Egress Recording (2026-05-20)
+
+Implementação da Fase D do canal WebRTC: gravação de segmentos via LiveKit Egress API, aviso LGPD antes de iniciar, download do arquivo → AttachmentStore → evento `recording.completed` no session stream. Guard de duplo início via Redis. Suite de testes com 30+ casos.
+
+### Arquivos modificados
+- `packages/channel-gateway/src/plughub_channel_gateway/config.py` — 3 novas variáveis WebRTC: `webrtc_recording_notice`, `webrtc_egress_output_dir`, `webrtc_egress_wait_s`
+- `packages/channel-gateway/src/plughub_channel_gateway/adapters/webrtc_provider.py` — `LiveKitProvider.start_egress()` (StartRoomCompositeEgressRequest + EncodedFileOutput) e `stop_egress()` (StopEgressRequest) implementados; dev_mode e ImportError com graceful fallback
+- `packages/channel-gateway/src/plughub_channel_gateway/adapters/webrtc.py` — `attachment_store` injetável; `_session_egress` dict; `_start_egress()` (Redis guard + LGPD notice TTS/text + provider call); `_stop_all_egress()` (idempotente); `_stop_egress_and_store()` (stop → sleep → read → commit → XADD stream → unlink); integração em `_on_routing_assigned`, `_close_session`, `deliver_session_closed`
+
+### Arquivos criados
+- `packages/channel-gateway/src/plughub_channel_gateway/tests/test_webrtc_egress.py` — 30+ testes: start guard, double-start, opt-out, stop+store (file → AttachmentStore → stream event), no-file graceful, idempotência, provider dev mode
+
+### Documentação
+- `docs/arcos/arc15-webrtc.md` — v1.4; Fase D marcada ✅; CLAUDE.md Pending atualizado
+
+---
+
+## Arc 15 Fase C — WebRTC: STT/TTS Pipeline + DataChannel (2026-05-20)
+
+Implementação da Fase C do canal WebRTC: pipeline completo de STT/TTS server-side usando LiveKit Python SDK, com resampler PCM 48kHz → 8kHz μ-law, injeção de TTS via LocalAudioTrack, normalização de DataChannel text/menu reply para Kafka/Redis.
+
+### Arquivos criados
+
+- **`packages/channel-gateway/src/plughub_channel_gateway/adapters/webrtc_room_client.py`**: Módulo de participação server-side em rooms LiveKit para o pipeline STT/TTS.
+  - `resample_pcm_48_to_8(pcm_48, num_channels)`: Downsampler 48kHz PCM → 8kHz μ-law usando audioop (Python ≤ 3.12) com fallback struct-based para Python 3.13+
+  - `mp3_to_pcm(mp3_bytes, target_sample_rate)`: Decode MP3 → PCM via pydub; graceful degradation (retorna `b""`) quando pydub/ffmpeg não está disponível
+  - `IWebRTCRoomClient` Protocol: `connect()`, `subscribe_customer_audio()`, `publish_audio()`, `disconnect()`
+  - `LiveKitRoomClient`: implementação produção usando `livekit.rtc.Room`; graceful degradation quando SDK não instalado; queue de 500 frames para backpressure; `LocalAudioTrack` publicado no primeiro `publish_audio()` call
+  - `MockRoomClient`: stub in-memory para testes com `inject_audio()` / `end_audio()` helpers
+
+- **`packages/channel-gateway/src/plughub_channel_gateway/tests/test_webrtc_stt_tts.py`**: 30+ testes cobrindo: resampler + μ-law helper, `MockRoomClient` compliance, STT pipeline → Kafka (`audio_transcript`), interim results not published, cancelled gracefully, audio resampled before STT, TTS inject calls `publish_audio`, TTS skipped on none/empty/mp3-failure, `deliver_text` triggers TTS on voice medium, DataChannel text → Kafka, interaction_reply → Redis, STT disabled, teardown via `_close_session` + `deliver_session_closed`, provider factories.
+
+### Arquivos modificados
+
+- **`packages/channel-gateway/src/plughub_channel_gateway/adapters/webrtc.py`**: WebRTCAdapter estendido com Phase C:
+  - Docstring atualizada: protocolo WS expandido com `webrtc.message`, `webrtc.interaction_reply`, `webrtc.renegotiate`; seção Phase C explicando pipeline STT/TTS e DataChannel
+  - Imports: `FallbackSTTProvider`, `FallbackTTSProvider`, `ISTTProvider`, `ITTSProvider`, `DeepgramSTTProvider`, `ElevenLabsTTSProvider`, `MockSTTProvider`, `MockTTSProvider` de `voice_provider`; `IWebRTCRoomClient`, `LiveKitRoomClient`, `mp3_to_pcm`, `resample_pcm_48_to_8` de `webrtc_room_client`
+  - `__init__`: parâmetros `stt_provider` e `tts_provider` + `_room_clients: dict[str, IWebRTCRoomClient]` + `_stt_tasks: dict[str, asyncio.Task]`
+  - `_build_stt_provider()`: Deepgram quando `voice_deepgram_api_key` + `webrtc_stt_enabled`; fallback `MockSTTProvider`
+  - `_build_tts_provider()`: ElevenLabs quando `voice_elevenlabs_api_key`; fallback `MockTTSProvider(synthesize_returns_none=True)`
+  - `deliver_text()`: dispara `_tts_inject()` quando `medium in ("voice","video")` e `webrtc_tts_injection_enabled=True`
+  - `_on_routing_assigned()`: inicia `_start_stt_pipeline()` quando `medium in ("voice","video")`
+  - `_receive_loop()`: `webrtc.message` → `_publish_inbound(content_type="text")`; `webrtc.interaction_reply` → `redis.lpush("menu:result:{session_id}", ...)`
+  - `_close_session()`: cancela `_stt_tasks[session_id]`; desconecta `_room_clients[session_id]`
+  - `deliver_session_closed()`: mesmo teardown de Phase C
+  - `_start_stt_pipeline()`: gera bot token (`hidden=True`); instancia `LiveKitRoomClient`; conecta; lança task `_stt_pipeline()`
+  - `_stt_pipeline()`: async generator interno `_audio_chunks()` que itera `subscribe_customer_audio()` → `resample_pcm_48_to_8()`; passa para `FallbackSTTProvider.stream()`; publica `is_final=True` via `_publish_transcript()`
+  - `_publish_transcript()`: Kafka `conversations.inbound` com `content_type="audio_transcript"`, `confidence`, `start_ms`, `end_ms`
+  - `_tts_inject()`: `FallbackTTSProvider.synthesize()` → `mp3_to_pcm()` → `room_client.publish_audio(24000 Hz)`
+
+- **`docs/arcos/arc15-webrtc.md`**: versão 1.2 → 1.3; status atualizado; Fase C marcada ✅ com todos os detalhes de implementação.
+
+---
+
+## Arc 15 Fase B — WebRTC: Media Capabilities + Re-negociação (2026-05-20)
+
+Implementação da Fase B do canal WebRTC: `media_capabilities` propagada do schema Zod → banco de dados → CRUD → stream de sessão → adaptador WebRTC. Inclui re-negociação de medium mid-session quando um novo agente assume a sessão.
+
+### Arquivos criados
+
+- **`packages/agent-registry/prisma/migrations/20260520200000_add_agent_media_capabilities/migration.sql`**: `ALTER TABLE "agent_types" ADD COLUMN "media_capabilities" TEXT[] DEFAULT ARRAY[]::TEXT[]`
+
+### Arquivos modificados
+
+- **`packages/schemas/src/agent-registry.ts`**: `media_capabilities: z.array(z.enum(["video","voice","text"])).default([])` adicionado ao `AgentTypeRegistrationSchema` (após `capabilities`, antes de `agent_classification`). Documentação inline: ordem implica preferência, vazio = text-only.
+
+- **`packages/schemas/src/agent-registry.test.ts`**: 4 novos casos de teste — defaults to empty array, validates all media types, validates single medium, rejects invalid medium ("audio").
+
+- **`packages/agent-registry/prisma/schema.prisma`**: campo `media_capabilities String[] @default([])` com comentário Arc 15 no modelo `AgentType`.
+
+- **`packages/agent-registry/src/routes/agent-types.ts`**: POST handler cria com `media_capabilities: body.media_capabilities ?? []`; PATCH handler propaga `media_capabilities` quando presente no body.
+
+- **`packages/orchestrator-bridge/src/plughub_orchestrator_bridge/main.py`**: `_write_routing_assigned_to_stream()` helper — escreve evento `routing.assigned` no stream `session:{id}:stream` com `agent_type.media_capabilities` e `pool` JSON. Chamado em todas as vias de ativação: native (`plughub-native`, antes de `activate_native_agent`), human (`framework == "human"`, antes de `activate_human_agent`), e external-mcp (`framework == "external-mcp"`, antes de `activate_external_mcp_agent`). Falhas são silenciosas (warning no log) para nunca bloquear o fluxo de roteamento.
+
+- **`packages/channel-gateway/src/plughub_channel_gateway/adapters/webrtc.py`**: `_stream_watcher` atualizado — primeiro `routing.assigned` → `_on_routing_assigned()` (setup completo: room + token + webrtc.ready); subsequentes → `_on_routing_renegotiate()` (re-negocia medium; envia `webrtc.renegotiate` apenas se medium mudou; reutiliza room existente). Novo método `_on_routing_renegotiate()`: extrai capabilities do evento, chama `negotiate_medium()`, compara com `self._mediums[session_id]`, atualiza Redis `channel:webrtc:{id}:medium`, envia `{"type":"webrtc.renegotiate","negotiated_medium":...,"room_name":...}`.
+
+---
+
+## Arc 15 Fase A — Canal WebRTC: Infra + Signaling (2026-05-20)
+
+Implementação da Fase A do canal WebRTC: provider abstraction (LiveKit SFU), WebSocket de signaling, negociação de medium, emissão de tokens LiveKit, e endpoint HTTP para agentes/supervisores entrarem na sala.
+
+### Arquivos criados
+
+- **`adapters/webrtc_provider.py`**: Data types (`RoomInfo`, `ParticipantInfo`, `TokenGrants`), Protocol `IWebRTCProvider` (runtime_checkable: `generate_token`, `create_room`, `delete_room`, `get_room`, `list_participants`, `start_egress`, `stop_egress`). `LiveKitProvider`: integração via `livekit-api` SDK, dev mode automático quando sem api_key/secret (tokens placeholder sem I/O de rede). `MockWebRTCProvider`: stub in-memory com gravação de calls para assertions (rooms_created, rooms_deleted, tokens_generated, egresses_started, egresses_stopped). Helpers: `build_room_name(session_id)` → `plughub-{session_id}`; `negotiate_medium(agent_capabilities, fallback_order)` → `"video"|"voice"|"text"`.
+
+- **`adapters/webrtc.py`**: `WebRTCAdapter(ChannelAdapter)` — singleton de signaling e entrega WebRTC. **Outbound delivery**: `deliver_text` → `webrtc.message`; `deliver_menu` → `webrtc.interaction`; `deliver_typing` → `webrtc.typing`; `deliver_session_closed` → `webrtc.session_closed` + WS close. Registra `_connections: dict[session_id → WebSocket]` para entrega via OutboundConsumer. **WS lifecycle** (`handle_ws`): accept → conn.ready → conn.hello → conn.authenticate (JWT HS256 com override Redis) → conn.authenticated; 3 tasks concorrentes — `_stream_watcher` (XREAD routing.assigned → negotiate_medium → create_room → generate_token → webrtc.ready; também detecta session.closed), `_receive_loop` (webrtc.hangup → contact_close Kafka; conn.ping → conn.pong), `_keepalive` (renova TTL Redis a cada 20s). **Token endpoint** (`get_token`): role=agent (can_publish=True, hidden=False) ou supervisor (can_publish=False, hidden=True); retorna {token, livekit_url, room_name, negotiated_medium}. Layer 2 pool resolution via `endpoint_resolver`. Classe interna `_AuthError` para erros estruturados no handshake.
+
+- **`tests/test_webrtc_adapter.py`**: Suite completa com 42+ testes. Cobre: `negotiate_medium` (7 casos: video preferred, voice fallback, text fallback, empty capabilities, pool override, no intersection, pool order), `build_room_name`, `TokenGrants` (customer/supervisor defaults), `MockWebRTCProvider` (token generation, room CRUD, list_participants, egress start/stop, counter), `LiveKitProvider` dev mode (token, create_room, get/delete/list, egress raises NotImplementedError), `WebRTCAdapter.deliver_text/menu/typing/session_closed` (com e sem conexão ativa), `get_token` (room not ready, room ready, agent/supervisor grants, identity), `_on_routing_assigned` (webrtc.ready content, medium negotiation, redis persistence, room creation), `_auth_handshake` (success, conn.authenticated sent, invalid token, publishes contact_open + routing.request, redis storage), `_close_session` (contact_close payload), `IWebRTCProvider` protocol compliance.
+
+### Arquivos modificados
+
+- **`config.py`**: +8 campos WebRTC — `webrtc_livekit_url`, `webrtc_livekit_api_key`, `webrtc_livekit_api_secret`, `webrtc_token_ttl_s`, `webrtc_default_pool_id`, `webrtc_default_medium_order`, `webrtc_stt_enabled`, `webrtc_tts_injection_enabled`.
+- **`main.py`**: `WebRTCAdapter` importado e instanciado no lifespan; registrado em `_channel_adapters["webrtc"]`. Endpoints: `WS /ws/webrtc/{pool_id}` (signaling lifecycle), `GET /webrtc/token/{session_id}?role=agent|supervisor&identity=<id>` (LiveKit token para agente/supervisor).
+
+---
+
 ## Channel Gateway — Voice: ElevenLabs TTS + Fallback Providers (2026-05-20)
 
 Adicionado suporte a ElevenLabs como provedor TTS primário de alta qualidade, e encadeamento automático de fallback para STT e TTS. Twilio permanece exclusivamente como tronco de voz PSTN — nunca produz TTS.

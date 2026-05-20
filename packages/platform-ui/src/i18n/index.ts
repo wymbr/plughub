@@ -21,6 +21,9 @@ import configPlataformaPtBr from './locales/pt-BR/configPlataforma.json'
 import dashboardsPtBr from './locales/pt-BR/dashboards.json'
 import homePtBr from './locales/pt-BR/home.json'
 import groupsPtBr from './locales/pt-BR/groups.json'
+import auditPtBr from './locales/pt-BR/audit.json'
+import channelsPtBr from './locales/pt-BR/channels.json'
+import webrtcPtBr from './locales/pt-BR/webrtc.json'
 
 // en
 import commonEn from './locales/en/common.json'
@@ -42,6 +45,9 @@ import configPlataformaEn from './locales/en/configPlataforma.json'
 import dashboardsEn from './locales/en/dashboards.json'
 import homeEn from './locales/en/home.json'
 import groupsEn from './locales/en/groups.json'
+import auditEn from './locales/en/audit.json'
+import channelsEn from './locales/en/channels.json'
+import webrtcEn from './locales/en/webrtc.json'
 
 i18n.use(initReactI18next).init({
   resources: {
@@ -65,6 +71,9 @@ i18n.use(initReactI18next).init({
       dashboards:      dashboardsPtBr,
       home:            homePtBr,
       groups:          groupsPtBr,
+      audit:           auditPtBr,
+      channels:        channelsPtBr,
+      webrtc:          webrtcPtBr,
     },
     en: {
       common:          commonEn,
@@ -86,6 +95,9 @@ i18n.use(initReactI18next).init({
       dashboards:      dashboardsEn,
       home:            homeEn,
       groups:          groupsEn,
+      audit:           auditEn,
+      channels:        channelsEn,
+      webrtc:          webrtcEn,
     }
   },
   lng: 'en',
@@ -95,7 +107,7 @@ i18n.use(initReactI18next).init({
     'contacts', 'billing', 'evaluation', 'access', 'masking',
     'agentAssist', 'agentReports', 'workflows', 'agentFlow',
     'calendars', 'service', 'campaigns', 'configPlataforma',
-    'dashboards', 'home', 'groups',
+    'dashboards', 'home', 'groups', 'audit', 'channels', 'webrtc',
   ],
   defaultNS: 'common',
   interpolation: {

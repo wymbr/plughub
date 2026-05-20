@@ -1,0 +1,29 @@
+{
+  "medium": {
+    "video": "Vídeo",
+    "voice": "Voz",
+    "text":  "Chat"
+  },
+  "overlay": {
+    "connecting":  "Conectando à sala…",
+    "connected":   "Conectado",
+    "waitingRoom": "Aguardando sala",
+    "error":       "Erro de conexão: {{message}}",
+    "micMuted":    "Microfone silenciado",
+    "listening":   "Ouvindo"
+  },
+  "controls": {
+    "mute":        "Silenciar microfone",
+    "unmute":      "Reativar microfone",
+    "cameraOn":    "Ligar câmera",
+    "cameraOff":   "Desligar câmera",
+    "disconnect":  "Desconectar"
+  },
+  "supervisor": {
+    "connecting":  "Conectando como observador…",
+    "watching":    "Observando",
+    "waitingRoom": "Aguardando participantes",
+    "voiceActive": "Chamada de voz em andamento",
+    "error":       "Não foi possível conectar à sala"
+  }
+}
