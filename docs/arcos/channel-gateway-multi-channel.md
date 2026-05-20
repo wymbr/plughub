@@ -747,39 +747,243 @@ operadora necessária para testes entre números Twilio.
 
 ### 8.4 Email
 
-**Transporte:** Webhook HTTP POST (Mailgun, SendGrid, AWS SES inbound)  
-**Auth:** API key ou HMAC por provider  
+**Transporte:** Webhook HTTP POST  
+**Auth:** HMAC-SHA256 (Mailgun: `X-Mailgun-Signature-V2`; extensível via `IEmailProvider`)  
 **Inbound endpoint:** `POST /webhooks/email`  
 
-**Inbound flow:**
+#### 8.4.1 Provider abstraction
 
-```
-Provider Email ──POST──→ EmailAdapter.verify_signature
-                             ↓ parse_inbound
-                             ↓ extrai texto (remove HTML → plain text)
-                             ↓ extrai attachments → AttachmentStore
-                             ↓ NormalizedInboundEvent
-                             ↓ _publish_inbound → conversations.inbound
-```
-
-**Identificação de sessão:**
-- `In-Reply-To` / `References` headers SMTP → identifica thread existente
-- Se thread nova → nova sessão
-- `contact_id` derivado do endereço `From:`
-
-**Outbound:**
-- MIME multipart (texto + HTML gerado de Markdown)
-- Attachments via AttachmentStore (URL pública referenciada no MIME)
-- Reply-To configurado com endereço único por sessão para correlação:
-  `reply+{session_id}@{domain}` — provider roteia de volta ao webhook
-
-**Redis keys (proprietárias do email):**
-```
-channel:email:{message_id_hash}:session     session_id para Message-ID
-channel:email:{contact_email_hash}:session  session ativa por endereço
+```python
+class IEmailProvider(Protocol):
+    async def verify_signature(self, headers: dict, body: bytes) -> bool: ...
+    async def parse_inbound(self, headers: dict, body: bytes) -> ParsedEmail: ...
+    async def send(
+        self,
+        to:           str,
+        subject:      str,
+        body_text:    str,
+        body_html:    str,
+        from_address: str,
+        reply_to:     str,
+        in_reply_to:  str | None,
+        references:   list[str],
+        attachments:  list[EmailAttachment],
+    ) -> str: ...   # → Message-ID enviado
 ```
 
-**`channel_session_id`:** `Message-ID` do header SMTP
+`ParsedEmail`: `message_id`, `from_address`, `to_address`, `subject`, `body_text`,
+`body_html`, `in_reply_to`, `references: list[str]`, `attachments: list[EmailAttachment]`.
+
+Implementações concretas: `MailgunProvider` (produção) + `MockEmailProvider` (testes).
+Providers futuros: SendGrid, AWS SES, Microsoft Graph API (Exchange/O365), Gmail API,
+IMAP/SMTP genérico (polling — fase futura, modelo diferente de webhook).
+
+#### 8.4.2 Configuração de mailbox — Configuration/Channels
+
+Cada caixa postal é um `ChannelEndpoint` no agent-registry com `channel: "email"` e
+`identifier` = endereço de entrada (ex: `suporte@empresa.com`). O `resolve_pool` do
+Layer 2 mapeia `identifier → pool_id` — múltiplas caixas simultâneas resolvidas sem
+código adicional.
+
+Configuração específica por mailbox (metadados do ChannelEndpoint):
+```json
+{
+  "provider":        "mailgun",
+  "from_address":    "suporte@empresa.com",
+  "reply_domain":    "mail.empresa.com",
+  "signing_key":     "<HMAC key Mailgun>",
+  "smtp_api_key":    "<Mailgun API key para envio>",
+  "domain":          "empresa.com",
+  "templates": {
+    "acknowledgment": "Recebemos seu e-mail. Protocolo: {{protocol_number}}. Em breve retornaremos.",
+    "closed":         "Seu atendimento foi encerrado. Protocolo: {{protocol_number}}."
+  }
+}
+```
+
+Credenciais residem no agent-registry (não em env vars), pois cada mailbox pode ter
+credenciais diferentes. `EmailAdapter._get_provider(mailbox_id)` busca a config via
+endpoint resolver e instancia o provider correto.
+
+#### 8.4.3 Modelo de sessão e Reply-To
+
+`contact_id` = endereço `From:` normalizado em lowercase (ex: `cliente@gmail.com`).
+
+**Reply-To como mecanismo primário de correlação:**
+
+```
+[1] Email novo do cliente → suporte@empresa.com
+        ↓ nova sessão (session_id = uuid-abc)
+
+[2] Agente responde via PlugHub → MIME outbound:
+        From:     suporte@empresa.com
+        To:       cliente@gmail.com
+        Reply-To: reply+uuid-abc@mail.empresa.com
+
+[3] Cliente responde ao email
+        → vai para reply+uuid-abc@mail.empresa.com
+        → Mailgun catch-all → POST /webhooks/email
+        → EmailAdapter extrai session_id do To: diretamente
+        → sessão continuada sem lookup Redis
+```
+
+**Fallback — In-Reply-To header SMTP:**
+Quando o cliente responde por outro meio (reencaminhamento, cliente sem suporte a
+Reply-To), o adapter extrai o `Message-ID` do header `In-Reply-To` e faz lookup
+`channel:email:{message_id_hash}:session` no Redis.
+
+**Fallback final — sessão ativa por endereço:**
+Se nenhum dos anteriores resolver, lookup `channel:email:{contact_email_hash}:session`.
+Email sem correlação alguma → nova sessão sempre.
+
+Redis keys:
+```
+channel:email:{contact_email_hash}:session    session_id ativo para este endereço
+channel:email:{message_id_hash}:session       session_id para Message-ID (TTL 30d)
+```
+
+TTL da sessão: segue o ciclo de vida do Core — encerrada via `session.closed`.
+Sem TTL de inatividade no gateway (email pode ficar dias sem resposta).
+
+Mailgun catch-all: `match_recipient("reply\+(.*)@mail\.empresa\.com")` → forward webhook.
+`mail.empresa.com` é subdomínio dedicado para Reply-To, separado do domínio de envio.
+
+#### 8.4.4 Inbound flow
+
+```
+Mailgun ──POST──→ POST /webhooks/email
+                      ↓ EmailAdapter.verify_signature  (HMAC-SHA256 Mailgun v2)
+                      ↓ provider.parse_inbound         (extrai headers, body, attachments)
+                      ↓ _handle_inbound (background task)
+                           ↓ _resolve_session (Reply-To → In-Reply-To → endereço)
+                           ↓ _extract_new_text          (strip quoted text)
+                           ↓ _store_attachments         (AttachmentStore)
+                           ↓ NormalizedInboundEvent(content_type="text")
+                           ↓ _publish_inbound → conversations.inbound
+```
+
+HTTP 200 retornado imediatamente — todo processamento em `asyncio.create_task`.
+
+#### 8.4.5 Extração de texto novo (strip quoted text)
+
+Emails inbound carregam o histórico citado abaixo da nova mensagem. O adapter extrai
+apenas o texto novo antes de publicar no stream:
+
+**Fontes de texto (prioridade):**
+1. `text/plain` do MIME — preferido por simplicidade
+2. `text/html` convertido com `html2text` — quando só vem HTML
+
+**Strip de quoted text — heurísticas:**
+- Linhas começando com `>`
+- Padrão `"On <date>, <name> wrote:"` / `"Em <data>, <nome> escreveu:"`
+- Separadores `---`, `___`, `***` precedendo o histórico
+- Header `"From: ... Sent: ... To: ... Subject: ..."` de reply Outlook
+
+O texto completo original (com quoted text) é armazenado como `original_content` no
+stream para auditoria LGPD. O agente vê apenas o texto novo em `content`.
+
+O agente de triagem acessa o histórico estruturado via `email_get_thread` — nunca
+depende do quoted text do email.
+
+#### 8.4.6 Histórico de thread
+
+Cada mensagem (inbound e outbound) é um evento no `session:{id}:stream`. O histórico
+é acumulado no stream do PlugHub — não no quoted text do email.
+
+`email_get_thread` retorna o histórico ordenado por timestamp:
+```json
+[
+  {"role": "customer", "text": "Preciso de ajuda com minha fatura.", "at": "..."},
+  {"role": "agent",    "text": "Olá! Vou verificar sua fatura.", "at": "..."},
+  {"role": "customer", "text": "O valor está errado.", "at": "..."}
+]
+```
+
+O email que o cliente recebe continua com o thread citado abaixo (comportamento
+nativo esperado) — mas o PlugHub não depende desse cited text para funcionar.
+
+#### 8.4.7 Outbound — MIME multipart
+
+```
+deliver_text(payload)
+  ↓ busca assinatura do agente (AgentType.email_signature)
+  ↓ renderiza Markdown → HTML (mistune)
+  ↓ monta MIME multipart/alternative:
+       text/plain  ← body_text + assinatura plain text
+       text/html   ← body_html (Markdown renderizado) + assinatura HTML
+  ↓ headers:
+       From:        <from_address da mailbox>
+       To:          <contact_id>
+       Subject:     Re: <subject original>
+       Reply-To:    reply+{session_id}@{reply_domain}
+       In-Reply-To: <Message-ID do email anterior>
+       References:  <cadeia de Message-IDs>
+  ↓ provider.send(...)
+```
+
+**Assinatura de agentes:** campo `email_signature` no cadastro de `AgentType`
+(HTML + plain text). Para agentes AI, assinatura padrão configurável por pool
+nos metadados do ChannelEndpoint. Appended automaticamente pelo adapter — o Skill
+Flow não precisa incluir a assinatura na mensagem.
+
+**Templates:** `deliver_menu` para email usa `email_send_template` em vez de
+coleta sequencial — email suporta HTML rico, formulários não interativos são
+renderizados como lista numerada com instrução de reply.
+
+#### 8.4.8 MCP tools para agentes (email-specific)
+
+Declarados no `mcp-server-plughub`, acessíveis via Skill Flow YAML:
+
+| Tool | Input | Output | Descrição |
+|---|---|---|---|
+| `email_get_thread` | `session_id` | `list[EmailMessage]` | Histórico completo do thread (estruturado, sem quoted text) |
+| `email_get_metadata` | `session_id` | `EmailMetadata` | Subject, From, CC, data, lista de attachments, Message-ID original |
+| `email_send_template` | `session_id`, `template_id`, `vars` | `message_id` | Envia template configurado na mailbox com variáveis substituídas |
+| `email_set_label` | `session_id`, `label` | `ok` | Marca o email com label/categoria (para relatórios e triagem) |
+| `email_get_attachment` | `session_id`, `filename` | `url` | URL pública do attachment pelo nome |
+
+Respostas livres de agentes (não-template) usam `notification_send` já existente
+no mcp-server → `conversations.outbound` Kafka → `deliver_text` no EmailAdapter.
+
+#### 8.4.9 Redis keys (proprietárias do email)
+
+```
+channel:email:{contact_email_hash}:session    session_id ativo por endereço (sem TTL fixo)
+channel:email:{message_id_hash}:session       session_id por Message-ID (TTL 30d)
+{mailbox_id}:config:email:signing_key         override de credencial por mailbox
+{mailbox_id}:config:email:smtp_api_key        override de API key por mailbox
+```
+
+#### 8.4.10 Verificação de webhook Mailgun
+
+Mailgun assina cada request com HMAC-SHA256 sobre `timestamp + token`:
+
+```python
+import hmac, hashlib
+
+def verify_mailgun(signing_key: str, token: str, timestamp: str, signature: str) -> bool:
+    value    = timestamp + token
+    computed = hmac.new(signing_key.encode(), value.encode(), hashlib.sha256).hexdigest()
+    return hmac.compare_digest(computed, signature)
+```
+
+Headers: `X-Mailgun-Timestamp`, `X-Mailgun-Token`, `X-Mailgun-Signature`.
+Dev mode: `signing_key` vazio → `verify_signature` retorna `True`.
+
+#### 8.4.11 Testes sem mailbox real
+
+**Testes automatizados:** `MockEmailProvider` — `sent_messages: list[dict]`,
+`verify_signature` sempre `True`, `parse_inbound` retorna `ParsedEmail` configurável.
+Cobre 100% dos casos via pytest.
+
+**Testes de integração real:** Mailgun sandbox — domínio `@sandbox<hash>.mailgun.org`
+disponível sem DNS próprio. Recebe emails reais para até 5 endereços autorizados.
+Inbound via ngrok. Sem aprovação de domínio necessária.
+
+**Pending (fase futura):** Microsoft Graph API (Exchange/O365), Gmail API (Pub/Sub),
+IMAP/SMTP genérico (polling — modelo diferente de webhook).
+
+**`channel_session_id`:** `Message-ID` do header SMTP do email inbound
 
 ---
 
