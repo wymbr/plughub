@@ -4,12 +4,6 @@
 
 ---
 
-## skill_scheduled_deploy_v1 — Registro no Registry
-
-Skill `skill_scheduled_deploy_v1` precisa existir como YAML no `infra/registry/skills/` para que o agendamento de deploys funcione em produção. Criada referência no código (Arc 4 / Arc 31), mas o arquivo YAML de definição não foi criado.
-
----
-
 ## Channel Endpoints — Layer 2 channel-gateway *(deferred)*
 
 Layers 1 (agent-registry), 3 (platform-ui) e 4 (schemas) completos — ver CHANGELOG 2026-05-07.
@@ -41,6 +35,25 @@ Quando qualquer adapter de voz/TTS for criado, deve consultar `rule.{category}.d
 
 ---
 
+## Analytics/Agents — Expansão do Relatório de Agentes *(a definir)*
+
+A página `/analise/agents` exibe hoje apenas dados de **pausa** de agentes humanos (Arc 8 — `agent_pause_intervals`). Precisa-se definir quais informações adicionais incluir, aproveitando dados já disponíveis no ClickHouse:
+
+**Candidatos para agentes humanos** (fonte: `segments`, `agent_events`, `agent_pause_intervals`):
+- Sessões atendidas no período, AHT médio, taxa de resolução, taxa de escalação
+- Disponibilidade online vs pausa (% do turno em pausa, por motivo)
+- Distribuição por pool e canal
+- Endpoint já existente: `GET /reports/agents/performance` (Arc 5, `mv_agent_performance_daily`)
+
+**Candidatos para agentes IA** (fonte: `segments`, `agent_business_events`, `evaluation_results`):
+- Volume de sessões, AHT médio, outcomes por skill version
+- KPIs de negócio emitidos via `agent_event` tool (Arc 12)
+- Score médio de avaliação por deploy epoch (Arc 6 Fase 2)
+
+**Decisão pendente**: quais métricas priorizar, separação em abas (Humanos / IA / Comparativo), filtros necessários (pool, agent_type_id, período, deploy epoch).
+
+---
+
 ## Audit LGPD — Fases Pendentes
 
 Fase 1 concluída — ver CHANGELOG 2026-05-14 e `docs/arcos/audit-lgpd.md`.
@@ -52,25 +65,5 @@ Fase 1 concluída — ver CHANGELOG 2026-05-14 e `docs/arcos/audit-lgpd.md`.
 
 ---
 
-
-## Arc 13 — Evaluation Review & Contestation UX *(em especificação)*
-
-Spec completo em `docs/arcos/arc13-review-contestation.md`.
-
-Decisões pendentes antes de implementar:
-- Dimensões explícitas no formulário (`dimension_id` em `EvaluationCriterion`) ou inferidas automaticamente dos critérios?
-- Tréplica: agente avaliado pode responder à revisão do revisor? (define `max_rounds` em `ContestationPolicy`)
-- `agente_revisor_v1` acessa conversa original via `ReplayContext` ou apenas `ContestationThread[]`?
-
-Fases planejadas: A (data model + endpoints) → B (evaluator agent spec + evidence) → C (reviewer agent spec) → D (human review UX) → E (campaign SLA config UI).
-
 ---
 
-## Arc 10 — Fase F: Split de Jornadas *(fase futura — decisões em aberto)*
-
-MCP tool `journey_split(journey_id, session_ids[])` — extrai sessões para nova journey.
-
-Decisões pendentes antes de implementar:
-- Destino do `workflow_instance_id` após o split
-- Nova journey recebe workflow existente ou inicia sem vínculo
-- Restrição sobre `origin_session_id` da journey original após extração

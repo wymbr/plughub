@@ -1,8 +1,37 @@
 {
   "title": "Relatórios de Agentes",
   "tabs": {
+    "humans":       "Agentes Humanos",
+    "ai":           "Agentes IA",
     "availability": "Disponibilidade",
     "pauses":       "Pausas"
+  },
+  "kpi": {
+    "sessions":   "Sessões",
+    "aht":        "TMO",
+    "resolution": "Resolução",
+    "escalation": "Escalação"
+  },
+  "trend": {
+    "title":      "Tendência Diária",
+    "resolution": "Resolução",
+    "escalation": "Escalação",
+    "loading":    "Carregando tendência…",
+    "noData":     "Sem dados no período selecionado."
+  },
+  "table": {
+    "title":      "Performance por Agente",
+    "agentType":  "Tipo de Agente",
+    "pool":       "Pool",
+    "sessions":   "Sessões",
+    "aht":        "TMO",
+    "resolution": "Resolução",
+    "escalation": "Escalação",
+    "loading":    "Carregando performance…",
+    "noData":     "Sem dados de performance."
+  },
+  "section": {
+    "availability": "Disponibilidade & Pausas"
   },
   "filters": {
     "from":                  "De",

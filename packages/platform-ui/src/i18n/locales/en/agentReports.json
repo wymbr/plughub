@@ -1,8 +1,37 @@
 {
   "title": "Agent Reports",
   "tabs": {
+    "humans":       "Human Agents",
+    "ai":           "AI Agents",
     "availability": "Availability",
     "pauses":       "Pauses"
+  },
+  "kpi": {
+    "sessions":   "Sessions",
+    "aht":        "AHT",
+    "resolution": "Resolution",
+    "escalation": "Escalation"
+  },
+  "trend": {
+    "title":      "Daily Trend",
+    "resolution": "Resolution",
+    "escalation": "Escalation",
+    "loading":    "Loading trend…",
+    "noData":     "No data for the selected period."
+  },
+  "table": {
+    "title":      "Performance by Agent",
+    "agentType":  "Agent Type",
+    "pool":       "Pool",
+    "sessions":   "Sessions",
+    "aht":        "AHT",
+    "resolution": "Resolution",
+    "escalation": "Escalation",
+    "loading":    "Loading performance…",
+    "noData":     "No performance data."
+  },
+  "section": {
+    "availability": "Availability & Pauses"
   },
   "filters": {
     "from":                  "From",
