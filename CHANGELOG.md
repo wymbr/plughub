@@ -2,6 +2,31 @@
 
 ---
 
+## Retry + Dead-Letter Queue nos consumers Kafka críticos (2026-05-20)
+
+Implementado padrão de retry com backoff exponencial + DLQ (`events.dead_letter`) nos três consumers Kafka críticos da plataforma, eliminando perda silenciosa de eventos em caso de falha transiente.
+
+### skill-flow-worker (`packages/skill-flow-worker/`)
+
+- **`config.ts`**: adicionado `kafkaDlqTopic: string` em `WorkerSettings` (env `KAFKA_DLQ_TOPIC`, default `events.dead_letter`).
+- **`worker.ts`**: reescrito com `DLQ producer` KafkaJS, método `_handleWithRetry()` (3 tentativas, backoff 500 ms → 1 000 ms) e `_publishDlq()`. Fire-and-forget de `runInstance()` preservado via `_inflight` Set — apenas o dispatch layer é retried. Erros de JSON skip imediato (sem retry). `DlqPayload`: `event_id`, `source_topic`, `consumer_group`, `service`, `error`, `attempt_count`, `payload_raw`, `failed_at`.
+
+### analytics-api (`packages/analytics-api/`)
+
+- **`config.py`**: adicionado `kafka_dlq_topic: str = "events.dead_letter"`.
+- **`consumer.py`**: adicionado `AIOKafkaProducer` (DLQ producer), constantes `MAX_ATTEMPTS=3`/`BACKOFF_BASE_MS=500`, funções `_process_with_retry()` e `_publish_dlq_analytics()`. `_process_message()` agora propaga exceções (sem `except Exception` externo); `_write_row()` já propagava. JSON malformado: skip imediato. Commit de offset após batch completo — mensagens DLQ-roteadas também commitadas.
+
+### orchestrator-bridge (`packages/orchestrator-bridge/`)
+
+- **`main.py`**: adicionado `KAFKA_DLQ_TOPIC` (env var), `_MAX_DISPATCH_ATTEMPTS=3`/`_DISPATCH_BACKOFF_BASE_MS=500`, função `_publish_dlq_bridge()` (usa `_kafka_producer` global já existente). `_dispatch()` reescrito como wrapper de retry; lógica movida para `_dispatch_once()`. Fire-and-forget via `asyncio.create_task` preservado — retries ocorrem dentro da task, sem bloquear o consumer loop.
+
+### Contrato DLQ uniforme
+
+Todos os três consumers publicam o mesmo formato `DlqPayload` no tópico `events.dead_letter`:
+`event_id`, `source_topic`, `consumer_group`, `service`, `error`, `attempt_count`, `payload_raw`, `failed_at`.
+
+---
+
 ## Channel Endpoints Layer 2 + Analytics Agents expandido (2026-05-20)
 
 ### Channel Endpoints — Layer 2: channel-gateway endpoint resolver

@@ -7,6 +7,7 @@ export interface WorkerSettings {
   kafkaBrokers:   string[]
   kafkaTopic:     string
   kafkaGroupId:   string
+  kafkaDlqTopic:  string
   workflowApiUrl: string
   calendarApiUrl: string
   mcpServerUrl:   string
@@ -34,6 +35,7 @@ export function loadSettings(): WorkerSettings {
     kafkaBrokers,
     kafkaTopic:      process.env.KAFKA_TOPIC        ?? 'workflow.events',
     kafkaGroupId:    process.env.KAFKA_GROUP_ID     ?? 'skill-flow-worker',
+    kafkaDlqTopic:   process.env.KAFKA_DLQ_TOPIC    ?? 'events.dead_letter',
     workflowApiUrl:  process.env.WORKFLOW_API_URL   ?? 'http://localhost:3800',
     calendarApiUrl:  process.env.CALENDAR_API_URL   ?? 'http://localhost:3700',
     mcpServerUrl:    process.env.MCP_SERVER_URL     ?? 'http://localhost:3100',

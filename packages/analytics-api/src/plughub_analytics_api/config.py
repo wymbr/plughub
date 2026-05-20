@@ -33,6 +33,7 @@ class Settings(BaseSettings):
     # ── Consumer behaviour ────────────────────────────────────────────────────
     consumer_batch_size:    int = 200   # max records per getmany() call
     consumer_timeout_ms:    int = 500   # getmany() poll timeout
+    kafka_dlq_topic:        str = "events.dead_letter"
 
     # ── Admin auth (JWT HS256) ────────────────────────────────────────────────
     # In production, replace with a strong random secret.

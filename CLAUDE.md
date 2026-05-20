@@ -366,6 +366,7 @@ Consumes: `conversations.routed`, `conversations.queued`, `conversations.abandon
 | `collect.events` | workflow-api | analytics-api |
 | `journey.events` | workflow-api | analytics-api → ClickHouse |
 | `usage.events` | Core, AI Gateway, Channel Gateway | usage-aggregator |
+| `events.dead_letter` | skill-flow-worker, analytics-api, orchestrator-bridge | ops/monitoring |
 
 ## Kafka Event Schemas — Zod Coverage
 

@@ -72,6 +72,7 @@ logger = logging.getLogger("plughub.orchestrator-bridge")
 # ── Config ────────────────────────────────────────────────────────────────────
 
 KAFKA_BROKERS       = os.getenv("KAFKA_BROKERS",       "localhost:9092")
+KAFKA_DLQ_TOPIC     = os.getenv("KAFKA_DLQ_TOPIC",     "events.dead_letter")
 REDIS_URL           = os.getenv("REDIS_URL",            "redis://localhost:6379")
 SKILL_FLOW_URL      = os.getenv("SKILL_FLOW_URL",       "http://localhost:3400")
 AGENT_REGISTRY_URL  = os.getenv("AGENT_REGISTRY_URL",  "http://localhost:3300")
@@ -105,6 +106,10 @@ TOPIC_CONFIG_CHANGED    = "config.changed"
 TOPIC_PARTICIPANTS      = "conversations.participants"
 TOPIC_LIFECYCLE         = "agent.lifecycle"
 GROUP_ID                = "orchestrator-bridge"
+
+# ── Reliability ───────────────────────────────────────────────────────────────
+_MAX_DISPATCH_ATTEMPTS    = 3
+_DISPATCH_BACKOFF_BASE_MS = 500   # 500ms → 1 000ms between retries
 
 # Namespaces whose changes directly affect how many agent instances should exist.
 # Any change to these namespaces triggers a full reconciliation.
@@ -928,15 +933,16 @@ async def fire_pool_hooks(
         # Also covers on_human_start so those agents are excluded from the
         # active_ai_specialists set (G2 guard) and never block on_human_end hooks.
         #
-        # Arc 14: hook_conf value extended from "{hook_type}:{pool}" to
-        # "{hook_type}:{pool}:{side}" so process_routed knows the segment side.
-        # Backward compat: parse uses split(":", 2) and defaults missing side to "agent".
+        # Arc 14: hook_conf value format: "{hook_type}:{target_pool}:{side}:{origin_pool}"
+        # where origin_pool is the pool the human agent belongs to (used for wrap_up_pending
+        # cleanup in process_routed so it can derive human-{origin_pool} instance_id).
+        # Backward compat: parse uses split(":", 3) and defaults missing parts gracefully.
         if hook_type in ("on_human_end", "post_human", "on_human_start"):
             try:
                 await redis_client.setex(
                     f"session:{session_id}:hook_conf:{conference_id}",
                     14400,
-                    f"{hook_type}:{target_pool}:{hook_side}",
+                    f"{hook_type}:{target_pool}:{hook_side}:{pool_id}",
                 )
             except Exception as exc:
                 logger.warning(
@@ -1011,10 +1017,13 @@ async def fire_pool_hooks(
                     # Deleted in process_routed() when the agent-side hook segment concludes.
                     # TTL = hook timeout + 5 min safety margin so it auto-expires even
                     # if the cleanup path is never reached (e.g. bridge crash).
+                    # Key uses human-{pool_id} — same format routing-engine uses to index
+                    # pool instances — NOT participant_id from ContextStore (unreliable).
                     if hook_side == "agent" and hook_type == "on_human_end":
                         try:
+                            _human_iid = f"human-{pool_id}"
                             _wp_key = (
-                                f"{tenant_id}:instance:{_fixed_pid}:wrap_up_pending"
+                                f"{tenant_id}:instance:{_human_iid}:wrap_up_pending"
                             )
                             await redis_client.setex(
                                 _wp_key, _HOOK_TIMEOUT_S + 300, session_id
@@ -1022,13 +1031,13 @@ async def fire_pool_hooks(
                             logger.info(
                                 "fire_pool_hooks: wrap_up_pending set — session=%s "
                                 "instance=%s key=%s",
-                                session_id, _fixed_pid, _wp_key,
+                                session_id, _human_iid, _wp_key,
                             )
                         except Exception as _wp_exc:
                             logger.warning(
                                 "fire_pool_hooks: could not set wrap_up_pending: "
-                                "session=%s instance=%s — %s",
-                                session_id, _fixed_pid, _wp_exc,
+                                "session=%s pool=%s — %s",
+                                session_id, pool_id, _wp_exc,
                             )
                 else:
                     logger.debug(
@@ -2355,10 +2364,11 @@ async def process_routed(
                 )
                 if hook_label:
                     _hl = hook_label if isinstance(hook_label, str) else hook_label.decode()
-                    _hl_parts           = _hl.split(":", 2)
-                    completed_hook_type = _hl_parts[0]                                 # "on_human_end" or "post_human"
+                    _hl_parts           = _hl.split(":", 3)  # "{hook_type}:{target_pool}:{side}:{origin_pool}"
+                    completed_hook_type = _hl_parts[0]
                     _hook_target_pool   = _hl_parts[1] if len(_hl_parts) > 1 else ""
-                    _hook_side          = _hl_parts[2] if len(_hl_parts) > 2 else "agent"  # Arc 14
+                    _hook_side          = _hl_parts[2] if len(_hl_parts) > 2 else "agent"
+                    _hook_origin_pool   = _hl_parts[3] if len(_hl_parts) > 3 else ""  # Arc 14 Fase C
 
                     remaining_hooks = await redis_client.decr(
                         f"session:{session_id}:hook_pending:{completed_hook_type}"
@@ -2414,29 +2424,25 @@ async def process_routed(
                     # Arc 14 Fase C: wrap_up_pending cleanup.
                     # When the agent-side (wrap-up) segment completes, delete the flag
                     # so the routing-engine can allocate new contacts to this agent.
-                    # We read the human agent's instance_id from ContextStore
-                    # (same key written by _write_pre_hook_context before hooks fire).
-                    if _hook_side == "agent":
+                    # Use origin_pool from hook_conf (4th field) to derive instance_id:
+                    # human-{origin_pool} — same key written by fire_pool_hooks.
+                    if _hook_side == "agent" and completed_hook_type == "on_human_end":
                         try:
-                            _wup_raw = await redis_client.hget(
-                                f"{tenant_id}:ctx:{session_id}",
-                                "session.human_agent_participant_id",
-                            )
-                            if _wup_raw:
-                                _wup_entry  = json.loads(
-                                    _wup_raw if isinstance(_wup_raw, str)
-                                    else _wup_raw.decode()
+                            if _hook_origin_pool and tenant_id:
+                                _wup_iid = f"human-{_hook_origin_pool}"
+                                _wp_key = (
+                                    f"{tenant_id}:instance:{_wup_iid}:wrap_up_pending"
                                 )
-                                _wup_iid = _wup_entry.get("value")
-                                if _wup_iid and tenant_id:
-                                    _wp_key = (
-                                        f"{tenant_id}:instance:{_wup_iid}:wrap_up_pending"
-                                    )
-                                    await redis_client.delete(_wp_key)
-                                    logger.info(
-                                        "wrap_up_pending cleared: session=%s instance=%s",
-                                        session_id, _wup_iid,
-                                    )
+                                await redis_client.delete(_wp_key)
+                                logger.info(
+                                    "wrap_up_pending cleared: session=%s instance=%s",
+                                    session_id, _wup_iid,
+                                )
+                            else:
+                                logger.warning(
+                                    "wrap_up_pending: no origin_pool in hook_conf — "
+                                    "key not deleted: session=%s", session_id,
+                                )
                         except Exception as _wup_exc:
                             logger.warning(
                                 "Could not clear wrap_up_pending: session=%s — %s",
@@ -4884,6 +4890,30 @@ async def run() -> None:
             await redis_client.aclose()
 
 
+async def _publish_dlq_bridge(payload: dict, topic: str, error: str) -> None:
+    """Publish a failed dispatch event to the dead-letter topic."""
+    if _kafka_producer is None:
+        logger.error("[dlq] Producer not available — cannot publish to DLQ topic=%s", topic)
+        return
+    dlq_payload = {
+        "event_id":       str(uuid.uuid4()),
+        "source_topic":   topic,
+        "consumer_group": GROUP_ID,
+        "service":        "orchestrator-bridge",
+        "error":          error,
+        "attempt_count":  _MAX_DISPATCH_ATTEMPTS,
+        "payload_raw":    json.dumps(payload),
+        "failed_at":      datetime.now(timezone.utc).isoformat(),
+    }
+    try:
+        await _kafka_producer.send_and_wait(
+            KAFKA_DLQ_TOPIC,
+            json.dumps(dlq_payload).encode("utf-8"),
+        )
+    except Exception as dlq_err:
+        logger.error("[dlq] Failed to publish to DLQ topic=%s: %s", topic, dlq_err)
+
+
 async def _dispatch(
     payload:      dict,
     topic:        str,
@@ -4891,40 +4921,77 @@ async def _dispatch(
     redis_client: aioredis.Redis,
     bootstrap:    InstanceBootstrap,
 ) -> None:
-    try:
-        if topic == TOPIC_ROUTED:
-            await process_routed(payload, http, redis_client)
-        elif topic == TOPIC_QUEUED:
-            await process_queued(payload, http, redis_client)
-        elif topic == TOPIC_INBOUND:
-            await process_inbound(payload, redis_client)
-        elif topic == TOPIC_EVENTS:
-            await process_contact_event(payload, redis_client, http)
-        elif topic == TOPIC_REGISTRY_CHANGED:
-            # Agent Registry published a structural change (AgentType/Pool/Skill CRUD).
-            entity_type = payload.get("entity_type", "?")
-            entity_id   = payload.get("entity_id",   "?")
-            logger.info(
-                "registry.changed received: entity=%s id=%s — scheduling instance re-bootstrap",
-                entity_type, entity_id,
-            )
-            # Skill update: invalidate the in-memory flow cache so the next agent
-            # activation fetches the updated flow from the Agent Registry.
-            # Using entity_id directly covers both:
-            #   - Registry path: skill_id == entity_id (e.g. "skill_copilot_sac_v1")
-            # Skills loaded via YAML fallback are never cached, so they reload
-            # from disk on every activation — no cache entry to invalidate.
-            if entity_type == "skill":
-                if entity_id in _skill_flow_cache:
-                    del _skill_flow_cache[entity_id]
-                    logger.info("Skill flow cache invalidated: skill_id=%s", entity_id)
-                else:
-                    logger.debug("Skill flow cache miss on invalidation (not cached): %s", entity_id)
-            bootstrap.request_refresh()
-        elif topic == TOPIC_CONFIG_CHANGED:
-            await _handle_config_changed(payload, bootstrap, http)
-    except Exception as exc:
-        logger.error("Dispatch error topic=%s: %s", topic, exc)
+    """
+    Dispatches a Kafka message to the appropriate handler with retry + DLQ.
+
+    Reliability contract:
+      • Each handler is retried up to _MAX_DISPATCH_ATTEMPTS times with
+        exponential backoff before the event is published to the dead-letter topic.
+      • This task runs fire-and-forget (asyncio.create_task) so the Kafka
+        consumer loop is never stalled waiting for long-running handlers.
+    """
+    last_error: BaseException | None = None
+
+    for attempt in range(1, _MAX_DISPATCH_ATTEMPTS + 1):
+        try:
+            await _dispatch_once(payload, topic, http, redis_client, bootstrap)
+            return  # success
+        except Exception as exc:
+            last_error = exc
+            if attempt < _MAX_DISPATCH_ATTEMPTS:
+                delay_ms = _DISPATCH_BACKOFF_BASE_MS * (2 ** (attempt - 1))
+                logger.warning(
+                    "[retry %d/%d] topic=%s error=%s delay=%dms",
+                    attempt, _MAX_DISPATCH_ATTEMPTS, topic, exc, delay_ms,
+                )
+                await asyncio.sleep(delay_ms / 1000)
+
+    err_str = str(last_error)
+    logger.error(
+        "[dlq] All %d attempts failed topic=%s error=%s",
+        _MAX_DISPATCH_ATTEMPTS, topic, err_str,
+    )
+    await _publish_dlq_bridge(payload, topic, err_str)
+
+
+async def _dispatch_once(
+    payload:      dict,
+    topic:        str,
+    http:         aiohttp.ClientSession,
+    redis_client: aioredis.Redis,
+    bootstrap:    InstanceBootstrap,
+) -> None:
+    if topic == TOPIC_ROUTED:
+        await process_routed(payload, http, redis_client)
+    elif topic == TOPIC_QUEUED:
+        await process_queued(payload, http, redis_client)
+    elif topic == TOPIC_INBOUND:
+        await process_inbound(payload, redis_client)
+    elif topic == TOPIC_EVENTS:
+        await process_contact_event(payload, redis_client, http)
+    elif topic == TOPIC_REGISTRY_CHANGED:
+        # Agent Registry published a structural change (AgentType/Pool/Skill CRUD).
+        entity_type = payload.get("entity_type", "?")
+        entity_id   = payload.get("entity_id",   "?")
+        logger.info(
+            "registry.changed received: entity=%s id=%s — scheduling instance re-bootstrap",
+            entity_type, entity_id,
+        )
+        # Skill update: invalidate the in-memory flow cache so the next agent
+        # activation fetches the updated flow from the Agent Registry.
+        # Using entity_id directly covers both:
+        #   - Registry path: skill_id == entity_id (e.g. "skill_copilot_sac_v1")
+        # Skills loaded via YAML fallback are never cached, so they reload
+        # from disk on every activation — no cache entry to invalidate.
+        if entity_type == "skill":
+            if entity_id in _skill_flow_cache:
+                del _skill_flow_cache[entity_id]
+                logger.info("Skill flow cache invalidated: skill_id=%s", entity_id)
+            else:
+                logger.debug("Skill flow cache miss on invalidation (not cached): %s", entity_id)
+        bootstrap.request_refresh()
+    elif topic == TOPIC_CONFIG_CHANGED:
+        await _handle_config_changed(payload, bootstrap, http)
 
 
 async def _handle_config_changed(

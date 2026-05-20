@@ -23,6 +23,7 @@ Topics → tables mapping:
   journey.events             → journey_events (Arc 10)
   mcp.audit                  → session_timeline   (segment_id enriched via SegmentEnricher)
   agent.events               → agent_business_events (Arc 12)
+  calibration.events         → calibration_events (Arc 13)
 
 Batch strategy:
   Uses consumer.getmany(batch_size, timeout_ms) — processes one partition batch
@@ -43,8 +44,10 @@ import asyncio
 import json
 import logging
 import signal
+import uuid
+from datetime import datetime, timezone
 
-from aiokafka import AIOKafkaConsumer  # type: ignore[import-untyped]
+from aiokafka import AIOKafkaConsumer, AIOKafkaProducer  # type: ignore[import-untyped]
 
 from .clickhouse import AnalyticsStore
 from .config import get_settings
@@ -64,6 +67,7 @@ from .models import (
     parse_journey_event,
     parse_mcp_audit_event,
     parse_agent_business_event,
+    parse_calibration_event,
 )
 from .segment_enricher import SegmentEnricher
 
@@ -85,6 +89,7 @@ _TOPICS = [
     "journey.events",
     "mcp.audit",
     "agent.events",
+    "calibration.events",
 ]
 
 # Maps topic → parser function.
@@ -106,6 +111,7 @@ _PARSERS = {
     "journey.events":             parse_journey_event,
     "mcp.audit":                  parse_mcp_audit_event,
     "agent.events":               parse_agent_business_event,
+    "calibration.events":         parse_calibration_event,
 }
 
 # Topics that require segment_id enrichment before being passed to the parser.
@@ -113,6 +119,10 @@ _ENRICHED_TOPICS = frozenset({"sentiment.updated", "mcp.audit"})
 
 # Redis key TTL for open pause intervals (24 h — covers overnight shifts)
 _PAUSE_KEY_TTL = 86_400
+
+# ── Reliability ───────────────────────────────────────────────────────────────
+MAX_ATTEMPTS    = 3
+BACKOFF_BASE_MS = 500   # 500ms → 1 000ms between retries
 
 
 async def run_consumer(store: AnalyticsStore, redis: object | None = None) -> None:
@@ -139,6 +149,12 @@ async def run_consumer(store: AnalyticsStore, redis: object | None = None) -> No
         value_deserializer=lambda v: v,  # raw bytes — manual JSON decode
     )
 
+    # ── DLQ producer ──────────────────────────────────────────────────────────
+    dlq_producer = AIOKafkaProducer(
+        bootstrap_servers=settings.kafka_brokers,
+        value_serializer=lambda v: json.dumps(v).encode("utf-8"),
+    )
+
     shutdown = asyncio.Event()
     loop     = asyncio.get_running_loop()
 
@@ -153,6 +169,7 @@ async def run_consumer(store: AnalyticsStore, redis: object | None = None) -> No
             pass  # Windows or nested event loop
 
     await consumer.start()
+    await dlq_producer.start()
     logger.info("Analytics consumer started — topics=%s", _TOPICS)
 
     try:
@@ -167,13 +184,93 @@ async def run_consumer(store: AnalyticsStore, redis: object | None = None) -> No
             for tp, messages in batch.items():
                 topic = tp.topic
                 for msg in messages:
-                    await _process_message(store, topic, msg, enricher, redis)
+                    await _process_with_retry(
+                        store, topic, msg, enricher, redis,
+                        dlq_producer, settings.kafka_dlq_topic, settings.kafka_group_id,
+                    )
 
-            # Commit after every batch succeeds
+            # Commit after every batch succeeds (DLQ-routed messages are also committed)
             await consumer.commit()
     finally:
         await consumer.stop()
+        await dlq_producer.stop()
         logger.info("Analytics consumer stopped")
+
+
+async def _process_with_retry(
+    store:     AnalyticsStore,
+    topic:     str,
+    msg:       object,
+    enricher:  SegmentEnricher | None,
+    redis:     object | None,
+    producer:  AIOKafkaProducer,
+    dlq_topic: str,
+    group_id:  str,
+) -> None:
+    """
+    Wraps _process_message with retry + DLQ.
+
+    Reliability contract:
+      • JSON decode errors are logged and skipped immediately (no retry — bad data
+        will always fail).
+      • All other failures (ClickHouse write errors, enrichment errors, parse
+        errors) are retried up to MAX_ATTEMPTS times with exponential backoff.
+      • After MAX_ATTEMPTS exhausted, the raw message bytes are published to the
+        DLQ topic so no event is permanently lost.
+    """
+    offset = getattr(msg, "offset", "?")
+    last_error: BaseException | None = None
+
+    for attempt in range(1, MAX_ATTEMPTS + 1):
+        try:
+            await _process_message(store, topic, msg, enricher, redis)
+            return  # success
+        except json.JSONDecodeError as exc:
+            logger.warning("Malformed JSON topic=%s offset=%s: %s", topic, offset, exc)
+            return  # no retry for structurally bad data
+        except Exception as exc:
+            last_error = exc
+            if attempt < MAX_ATTEMPTS:
+                delay_ms = BACKOFF_BASE_MS * (2 ** (attempt - 1))
+                logger.warning(
+                    "[retry %d/%d] topic=%s offset=%s error=%s delay=%dms",
+                    attempt, MAX_ATTEMPTS, topic, offset,
+                    exc, delay_ms,
+                )
+                await asyncio.sleep(delay_ms / 1000)
+
+    # All retries exhausted — publish to DLQ
+    err_str = str(last_error)
+    logger.error(
+        "[dlq] All %d attempts failed topic=%s offset=%s error=%s",
+        MAX_ATTEMPTS, topic, offset, err_str,
+    )
+    await _publish_dlq_analytics(msg, topic, err_str, producer, dlq_topic, group_id)
+
+
+async def _publish_dlq_analytics(
+    msg:       object,
+    topic:     str,
+    error:     str,
+    producer:  AIOKafkaProducer,
+    dlq_topic: str,
+    group_id:  str,
+) -> None:
+    raw_bytes: bytes = getattr(msg, "value", None) or b""
+    payload = {
+        "event_id":      str(uuid.uuid4()),
+        "source_topic":  topic,
+        "consumer_group": group_id,
+        "service":       "analytics-api",
+        "error":         error,
+        "attempt_count": MAX_ATTEMPTS,
+        "payload_raw":   raw_bytes.decode("utf-8", errors="replace"),
+        "failed_at":     datetime.now(timezone.utc).isoformat(),
+    }
+    try:
+        await producer.send_and_wait(dlq_topic, value=payload)
+    except Exception as dlq_err:
+        logger.error("[dlq] Failed to publish to DLQ: %s", dlq_err)
 
 
 async def _process_message(
@@ -183,56 +280,51 @@ async def _process_message(
     enricher: SegmentEnricher | None = None,
     redis:    object | None = None,
 ) -> None:
-    """Deserialises one Kafka message, enriches if needed, parses, and writes to ClickHouse."""
+    """Deserialises one Kafka message, enriches if needed, parses, and writes to ClickHouse.
+
+    Raises on any error so _process_with_retry can decide whether to retry or DLQ.
+    JSONDecodeError propagates as-is (caller treats it as a skip, not a retry).
+    """
     offset = getattr(msg, "offset", "?")
-    try:
-        raw     = json.loads(msg.value.decode("utf-8"))  # type: ignore[union-attr]
-        parser  = _PARSERS.get(topic)
-        if parser is None:
-            logger.debug("No parser for topic=%s offset=%s — skipped", topic, offset)
-            return
+    raw    = json.loads(msg.value.decode("utf-8"))  # type: ignore[union-attr]
+    parser = _PARSERS.get(topic)
+    if parser is None:
+        logger.debug("No parser for topic=%s offset=%s — skipped", topic, offset)
+        return
 
-        # ── Arc 5: post-hoc segment_id enrichment ────────────────────────────
-        if topic in _ENRICHED_TOPICS and enricher is not None:
-            result = await _parse_with_enrichment(raw, topic, parser, enricher)
-        else:
-            result = parser(raw)
+    # ── Arc 5: post-hoc segment_id enrichment ────────────────────────────
+    if topic in _ENRICHED_TOPICS and enricher is not None:
+        result = await _parse_with_enrichment(raw, topic, parser, enricher)
+    else:
+        result = parser(raw)
 
-        if result is None:
-            return  # skipped by parser (unknown event_type or missing fields)
+    if result is None:
+        return  # skipped by parser (unknown event_type or missing fields)
 
-        # Normalise to a list so routed/queued can return multiple rows
-        rows = result if isinstance(result, list) else [result]
+    # Normalise to a list so routed/queued can return multiple rows
+    rows = result if isinstance(result, list) else [result]
 
-        # ── Arc 8: pause interval Redis state machine ─────────────────────────
-        # agent.lifecycle may return action=open (store in Redis) or
-        # action=close_check (look up Redis, compute duration, emit close row).
-        if topic == "agent.lifecycle" and redis is not None:
-            resolved: list[dict] = []
-            for row in rows:
-                action = row.get("action")
-                if action == "open":
-                    row = await _handle_pause_open(row, redis)
-                    resolved.append(row)
-                elif action == "close_check":
-                    close_row = await _handle_pause_close(row, redis)
-                    if close_row is not None:
-                        resolved.append(close_row)
-                    # None means no open pause → normal agent_ready, skip
-                else:
-                    resolved.append(row)
-            rows = resolved
-
+    # ── Arc 8: pause interval Redis state machine ─────────────────────────
+    # agent.lifecycle may return action=open (store in Redis) or
+    # action=close_check (look up Redis, compute duration, emit close row).
+    if topic == "agent.lifecycle" and redis is not None:
+        resolved: list[dict] = []
         for row in rows:
-            await _write_row(store, row, topic, offset)
+            action = row.get("action")
+            if action == "open":
+                row = await _handle_pause_open(row, redis)
+                resolved.append(row)
+            elif action == "close_check":
+                close_row = await _handle_pause_close(row, redis)
+                if close_row is not None:
+                    resolved.append(close_row)
+                # None means no open pause → normal agent_ready, skip
+            else:
+                resolved.append(row)
+        rows = resolved
 
-    except json.JSONDecodeError as exc:
-        logger.warning("Malformed JSON on topic=%s offset=%s: %s", topic, offset, exc)
-    except Exception as exc:
-        logger.error(
-            "Unexpected error processing topic=%s offset=%s: %s",
-            topic, offset, exc, exc_info=True,
-        )
+    for row in rows:
+        await _write_row(store, row, topic, offset)
 
 
 def _pause_redis_key(tenant_id: str, instance_id: str) -> str:
@@ -416,6 +508,8 @@ async def _write_row(
             await store.insert_journey_event(row)
         elif table == "agent_business_events":
             await store.insert_agent_business_event(row)
+        elif table == "calibration_events":
+            await store.insert_calibration_event(row)
         else:
             logger.warning("Unknown table=%s from topic=%s offset=%s", table, topic, offset)
     except Exception as exc:
@@ -423,5 +517,4 @@ async def _write_row(
             "ClickHouse write failed table=%s topic=%s offset=%s: %s",
             table, topic, offset, exc, exc_info=True,
         )
-        # Re-raise so the caller can decide whether to skip or retry.
-        # Currently caller logs + skips to not block the consumer.
+        # Re-raise so _process_with_retry can decide whether to retry or DLQ.
