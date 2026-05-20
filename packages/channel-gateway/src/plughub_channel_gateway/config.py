@@ -84,6 +84,22 @@ class Settings(BaseSettings):
     webchat_serving_base_url:   str = "http://localhost:8010/webchat/v1/attachments"
     webchat_upload_base_url:    str = "http://localhost:8010/webchat/v1/upload"
 
+    # ── SMS (Twilio / ISMSProvider) ───────────────────────────────────────────
+    # Twilio Account SID. Can be overridden per-tenant via Redis:
+    # {tenant_id}:config:sms:account_sid
+    sms_account_sid:             str = ""
+    # Twilio Auth Token for HMAC-SHA1 webhook verification and API calls.
+    # Can be overridden per-tenant via Redis: {tenant_id}:config:sms:auth_token
+    sms_auth_token:              str = ""
+    # Twilio phone number (E.164) used as the sender for outbound SMS.
+    # Can be overridden per-tenant via Redis: {tenant_id}:config:sms:from_number
+    sms_from_number:             str = ""
+    # SMS provider selector: "twilio" (default) or future providers.
+    sms_provider:                str = "twilio"
+    # Default pool_id used when creating a new SMS session.
+    # The routing engine maps the pool to available agents.
+    sms_default_pool_id:         str = ""
+
     # ── WhatsApp (Meta Cloud API) ─────────────────────────────────────────────
     # System User token from Meta Business Manager (WABA).
     # Can be overridden per-tenant via Redis: {tenant_id}:config:whatsapp:access_token

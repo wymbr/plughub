@@ -1,7 +1,7 @@
 # Channel Gateway — Arquitetura Multi-Canal
 
 **Versão:** 1.1 — 2026-05-20  
-**Status:** Phase 1 (abstrações) + WhatsApp implementados. SMS/Email/Voice pendentes.  
+**Status:** Phase 1 (abstrações) + WhatsApp + SMS implementados. Email/Voice pendentes.  
 **Escopo:** `packages/channel-gateway/`
 
 ---
@@ -571,41 +571,177 @@ até 5 números pessoais pré-autorizados. Sem aprovação de WABA necessária.
 
 ### 8.3 SMS
 
-**Transporte:** Webhook HTTP POST (Twilio, Telnyx, Vonage, AWS SNS)  
-**Auth:** API key header ou HMAC por provider  
+**Transporte:** Webhook HTTP POST  
+**Auth:** HMAC por provider (Twilio: HMAC-SHA1 `X-Twilio-Signature`; extensível via `ISMSProvider`)  
 **Inbound endpoint:** `POST /webhooks/sms`  
 
-**Inbound flow:**
+#### 8.3.1 Provider abstraction
 
-```
-Provider SMS ──POST──→ SMSAdapter.verify_signature
-                           ↓ parse_inbound → NormalizedInboundEvent(content_type="text")
-                           ↓ _publish_inbound → conversations.inbound
-```
-
-**Particularidades:**
-- SMS não tem conceito de sessão nativa — o `contact_id` é derivado do número
-  do remetente (E.164 normalizado)
-- Sessão é determinada por lookup no Redis: existe sessão ativa para este
-  número? → continua; senão → nova sessão
-- Concatenação de SMS longos: mensagens >160 chars fragmentadas pelo provider
-  chegam em múltiplos webhooks com mesmo `SmsSid` (Twilio) ou `messageId`;
-  o adapter acumula fragmentos no Redis e publica o evento só quando completo
-- Coleta sequencial de formulário é o único modo de interação (sem botões)
-
-**Outbound:**
-- Texto simples com truncamento automático em 1600 chars (10 segmentos)
-- Sem suporte a mídia (MMS é canal separado — futuro)
-- Menus formatados como texto numerado: `"1. Opção A\n2. Opção B\nResponda com o número"`
-
-**Redis keys (proprietárias do SMS):**
-```
-channel:sms:{contact_id}:session          session_id ativo para este número
-channel:sms:{session_id}:sms_parts:{sid}  fragmentos de SMS concatenado
-channel:sms:{session_id}:menu_collect     estado da coleta sequencial
+```python
+class ISMSProvider(Protocol):
+    async def send_text(self, to: str, body: str) -> str: ...        # → message SID
+    async def verify_signature(
+        self, url: str, params: dict, signature: str
+    ) -> bool: ...
 ```
 
-**`channel_session_id`:** `SmsSid` do provider (ou equivalente)
+Implementações concretas: `TwilioProvider` (produção) + `MockSMSProvider` (testes).
+A `SMSAdapter` recebe `provider: ISMSProvider | None = None`; se `None`, instancia
+`TwilioProvider` com credenciais resolvidas do Redis ou env vars.
+
+Adicionar novo provider (Telnyx, Vonage, AWS SNS): implementar o Protocol, registrar
+no `_get_provider()` via env var `PLUGHUB_SMS_PROVIDER` — sem tocar no adapter.
+
+#### 8.3.2 Resolução de credenciais
+
+Mesma cadeia do WhatsApp: env var por instalação → Redis override por tenant.
+
+```
+Env vars padrão:              PLUGHUB_SMS_ACCOUNT_SID
+                               PLUGHUB_SMS_AUTH_TOKEN
+                               PLUGHUB_SMS_FROM_NUMBER
+                               PLUGHUB_SMS_PROVIDER          (twilio | telnyx | mock)
+
+Redis override por tenant:    {tenant_id}:config:sms:account_sid
+                               {tenant_id}:config:sms:auth_token
+                               {tenant_id}:config:sms:from_number
+```
+
+`_resolve_credential(key, default)` tenta Redis primeiro; fallback para env var.
+Dev mode: se `SMS_AUTH_TOKEN` vazio, `verify_signature` retorna `True` (bypass).
+
+#### 8.3.3 Modelo de sessão
+
+`contact_id` = número do remetente em E.164 normalizado (ex: `+5511999990000`).
+
+```
+Redis: channel:sms:{contact_id}:session  →  session_id  (TTL 24h, renovado a cada inbound)
+```
+
+Enquanto a key existir, todo inbound do número vai para o mesmo `session_id`.
+Quando o Core encerra a sessão (`session.closed`), o adapter deleta a key — próximo
+contato do mesmo número gera nova sessão (mesmo mecanismo do WhatsApp).
+
+`ContactOpenEvent.channel = "sms"`, `channel_session_id = SmsMessageSid` do primeiro
+fragmento (ou mensagem única).
+
+#### 8.3.4 Inbound flow
+
+```
+Twilio ──POST──→ POST /webhooks/sms
+                     ↓ SMSAdapter.verify_signature  (HMAC-SHA1 do URL + params)
+                     ↓ parse_inbound_form           (Twilio envia form-encoded, não JSON)
+                     ↓ _handle_inbound (background task)
+                          ↓ _accumulate_parts       (SMS concatenado)
+                          ↓ quando completo: _resolve_session
+                          ↓                    ↓ sessão ativa → renovar TTL
+                          ↓                    ↓ nova sessão → contact_open + publish
+                          ↓ NormalizedInboundEvent(content_type="text")
+                          ↓ _publish_inbound → conversations.inbound
+```
+
+**HTTP 200 é retornado imediatamente** — Twilio espera resposta rápida ou considera
+falha. Todo processamento ocorre em `asyncio.create_task(_handle_inbound)`.
+
+Resposta ao Twilio: XML vazio `<Response/>` (TwiML) — evita que Twilio faça callback
+de voz indesejado.
+
+#### 8.3.5 Concatenação de SMS longos
+
+SMS >160 chars é dividido pelo provider em múltiplos webhooks com o mesmo
+`SmsMessageSid` e campos `NumSegments` + `PartSequenceNumber` (UDH) ou índice implícito.
+
+Estratégia Twilio:
+1. Cada webhook carrega `SmsMessageSid`, `NumSegments`, `Body` (fragmento)
+2. Adapter armazena fragmentos em Redis com TTL 5min:
+
+```
+channel:sms:{session_id}:sms_parts:{SmsMessageSid}  →  JSON list de fragmentos
+```
+
+3. Quando `len(fragments) == NumSegments`: concatena em ordem, publica evento único
+4. Fragmentos expirados sem completar: descartados silenciosamente (log warning)
+
+Nota: Twilio pode também receber SMS longos como mensagem única quando suportado
+pelo carrier. O adapter aceita ambos os formatos (`NumSegments == 1` → publicação imediata).
+
+#### 8.3.6 Outbound — divisão em segmentos
+
+Textos longos são divididos em múltiplos SMS de até 153 chars (reserva 7 chars para
+cabeçalho UDH em multipart) com sufixo `(N/T)`:
+
+```python
+MAX_SEGMENT   = 153          # chars por segmento com UDH
+MAX_SEGMENTS  = 10           # limite máximo (1530 chars de conteúdo)
+SUFFIX_TPLT   = " ({n}/{t})" # sufixo de 6-8 chars
+```
+
+Texto ≤ 160 chars → enviado como SMS único sem sufixo.
+Texto > 1530 chars → truncado em 1530 chars + `…` antes de dividir.
+
+Menus formatados como texto numerado:
+```
+Por favor, escolha uma opção:
+1. Suporte técnico
+2. Faturamento
+3. Outros
+
+Responda com o número da opção.
+```
+
+#### 8.3.7 Coleta sequencial de formulário
+
+Único modo de interação — SMS não tem botões nativos. Mesma máquina de estados
+do WhatsApp, adaptada para SMS:
+
+Estado intermediário em `channel:sms:{session_id}:menu_collect` (TTL 30min):
+`{ menu_id, fields: [...], current_index, answers: {...} }`.
+
+Cada campo é enviado como texto simples; resposta do usuário é qualquer texto livre
+ou número (para menus). Campos `masked`: instrução de privacidade no texto, sem
+diferença visual possível em SMS.
+
+Validação de resposta numérica para menus: se `options` definidas e resposta não for
+índice válido → reenvio da pergunta com aviso: `"Opção inválida. Por favor, responda com 1, 2 ou 3."`.
+
+#### 8.3.8 Redis keys (proprietárias do SMS)
+
+```
+channel:sms:{contact_id}:session              session_id ativo (TTL 24h, renovado)
+channel:sms:{session_id}:sms_parts:{smsSid}   fragmentos de SMS concatenado (TTL 5min)
+channel:sms:{session_id}:menu_collect         estado da coleta sequencial (TTL 30min)
+{tenant_id}:config:sms:account_sid            override de credencial por tenant
+{tenant_id}:config:sms:auth_token             override de auth token por tenant
+{tenant_id}:config:sms:from_number            override de número remetente por tenant
+```
+
+#### 8.3.9 Verificação de webhook Twilio
+
+Twilio assina cada request com HMAC-SHA1 sobre `URL_completo + params_sorted_alphabetically`.
+
+```python
+import hmac, hashlib, base64
+
+def verify_twilio(url: str, params: dict, token: str, signature: str) -> bool:
+    s = url + "".join(f"{k}{v}" for k, v in sorted(params.items()))
+    computed = base64.b64encode(
+        hmac.new(token.encode(), s.encode(), hashlib.sha1).digest()
+    ).decode()
+    return hmac.compare_digest(computed, signature)
+```
+
+Dev mode: `SMS_AUTH_TOKEN` vazio → `verify_signature` retorna `True`.
+
+#### 8.3.10 Testes sem número real
+
+**Testes automatizados:** `MockSMSProvider` — respostas hardcoded, `sent_messages: list[dict]`,
+sem rede. Cobre 100% dos casos via pytest.
+
+**Testes de integração real:** Twilio Trial — conta gratuita inclui número virtual
+(~US$1 de crédito inicial). Recebe SMS reais para testes via ngrok. Sem aprovação de
+operadora necessária para testes entre números Twilio.
+
+**`channel_session_id`:** `SmsMessageSid` do payload Twilio
 
 ---
 

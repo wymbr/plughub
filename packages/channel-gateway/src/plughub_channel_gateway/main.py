@@ -18,6 +18,7 @@ import uvicorn
 from aiokafka import AIOKafkaProducer
 from fastapi import FastAPI, HTTPException, Request, WebSocket
 
+from .adapters.sms import SMSAdapter
 from .adapters.webchat import WebchatAdapter
 from .adapters.webchat_channel import WebchatChannelAdapter
 from .adapters.whatsapp import WhatsAppAdapter
@@ -42,6 +43,7 @@ _context:            ContextReader                         | None = None
 _redis:              aioredis.Redis                        | None = None
 _attachment_store:   FilesystemAttachmentStore | S3AttachmentStore | None = None
 _whatsapp_adapter:   WhatsAppAdapter                      | None = None
+_sms_adapter:        SMSAdapter                           | None = None
 
 
 def _create_attachment_store(
@@ -82,7 +84,7 @@ def _create_attachment_store(
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global _producer, _registry, _context, _redis, _attachment_store, _whatsapp_adapter
+    global _producer, _registry, _context, _redis, _attachment_store, _whatsapp_adapter, _sms_adapter
 
     settings    = get_settings()
     instance_id = str(uuid.uuid4())
@@ -114,10 +116,16 @@ async def lifespan(app: FastAPI):
         settings         = settings,
         attachment_store = _attachment_store,
     )
+    _sms_adapter = SMSAdapter(
+        producer  = _producer,
+        redis     = _redis,
+        settings  = settings,
+    )
 
     _channel_adapters = {
         "webchat":  WebchatChannelAdapter(registry=_registry),
         "whatsapp": _whatsapp_adapter,
+        "sms":      _sms_adapter,
     }
 
     outbound = OutboundConsumer(adapters=_channel_adapters, settings=settings)
@@ -244,6 +252,32 @@ async def whatsapp_inbound(request: Request) -> dict:
 
     await _whatsapp_adapter.handle_inbound(body)
     return {"status": "ok"}
+
+
+# ── SMS webhook ───────────────────────────────────────────────────────────────
+
+@app.post("/webhooks/sms", status_code=200)
+async def sms_inbound(request: Request) -> str:
+    """
+    Twilio SMS inbound webhook.
+    Twilio sends form-encoded bodies and expects a TwiML XML response.
+    HTTP 200 + empty TwiML is returned immediately; processing is in a background task.
+    """
+    params    = dict(await request.form())
+    signature = request.headers.get("X-Twilio-Signature", "")
+    url       = str(request.url)
+
+    if _sms_adapter is None:
+        logger.error("sms_adapter not initialised")
+        raise HTTPException(status_code=503, detail="Service unavailable")
+
+    await _sms_adapter.process_inbound(
+        params=params,
+        signature=signature,
+        url=url,
+    )
+    # Twilio requires a TwiML response; empty <Response/> suppresses any callback action
+    return "<Response/>"
 
 
 # ── Health check ──────────────────────────────────────────────────────────────

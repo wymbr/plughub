@@ -2,6 +2,39 @@
 
 ---
 
+## Channel Gateway — SMS Adapter (2026-05-20)
+
+Implementação completa do canal SMS via Twilio, com abstração de provider para suporte futuro a Telnyx, Vonage e AWS SNS.
+
+### Arquivos criados
+
+- **`adapters/sms_provider.py`**: `ISMSProvider` Protocol + `TwilioProvider` (HMAC-SHA1 webhook verify, REST API, split_sms automático) + `MockSMSProvider` (testes sem I/O). Helper `split_sms()` divide textos longos em segmentos ≤153 chars com sufixo `(N/T)`, limite de 10 segmentos.
+- **`adapters/sms.py`**: `SMSAdapter(ChannelAdapter)` singleton. Inbound: `process_inbound` (Twilio HMAC-SHA1 + background task), `_accumulate_parts` (buffer Redis de fragmentos SMS por `SmsMessageSid`, TTL 5min, idempotente contra retries Twilio), `_resolve_session` (lookup `channel:sms:{contact_id}:session` TTL 24h). Outbound: `deliver_text` (auto-split multi-segmento), `deliver_menu` (sequential collect — único modo SMS), `deliver_typing` (no-op), `deliver_session_closed` (cleanup Redis). Coleta sequencial com validação de opção numérica e reprompt automático.
+- **`tests/test_sms_adapter.py`**: 35+ testes com `MockSMSProvider`. Cobre `split_sms`, TwilioProvider signature, MockSMSProvider, process_inbound, accumulate_parts (ordem, duplicatas), session resolution, deliver_text/menu/typing/closed, sequential collect completo (texto livre, seleção numérica, opção inválida, último campo → menu_result, campo masked).
+
+### Arquivos modificados
+
+- **`config.py`**: adicionado `sms_account_sid`, `sms_auth_token`, `sms_from_number`, `sms_provider`, `sms_default_pool_id`.
+- **`main.py`**: endpoint `POST /webhooks/sms` (Twilio form-encoded, resposta TwiML `<Response/>`). `SMSAdapter` instanciado no lifespan e registrado em `_channel_adapters["sms"]`.
+- **`docs/arcos/channel-gateway-multi-channel.md`**: seção 8.3 expandida de stub para 10 subseções (provider abstraction, credenciais, sessão, inbound flow, concatenação, outbound split, coleta sequencial, Redis keys, verificação Twilio, testes).
+
+### Decisões de arquitetura
+
+- Provider inicial: Twilio. Novos providers implementam `ISMSProvider` sem tocar no adapter.
+- Credenciais: env var padrão por instalação + Redis override por tenant.
+- Session: enquanto `session_id` ativo no Redis para o número (E.164), envia para ele. Session encerrada = próximo contato é novo. TTL 24h renovável.
+- Concatenação inbound: acumula fragmentos por `SmsMessageSid`, publica quando completo. TTL 5min no buffer.
+- Outbound: divide em segmentos ≤153 chars com sufixo `(1/N)` quando necessário (máx 10 segmentos).
+- `deliver_typing`: no-op (SMS não tem typing indicator).
+- `deliver_session_closed`: limpeza Redis sem mensagem ao cliente.
+- Coleta sequencial: único modo de interação SMS. Validação de seleção numérica com reprompt automático para opções inválidas.
+
+### Spec
+
+→ [`docs/arcos/channel-gateway-multi-channel.md`](docs/arcos/channel-gateway-multi-channel.md) § 8.3
+
+---
+
 ## Channel Gateway — WhatsApp Adapter (2026-05-20)
 
 Implementação completa do canal WhatsApp via Meta Cloud API, com abstração de provider para suporte futuro a BSPs.
