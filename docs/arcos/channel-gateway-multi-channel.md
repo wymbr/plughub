@@ -1,7 +1,7 @@
 # Channel Gateway — Arquitetura Multi-Canal
 
 **Versão:** 1.1 — 2026-05-20  
-**Status:** Phase 1 (abstrações) + WhatsApp + SMS + Email implementados. Voice pendente.  
+**Status:** Phase 1 (abstrações) + WhatsApp + SMS + Email + Voice implementados.  
 **Escopo:** `packages/channel-gateway/`
 
 ---
@@ -1074,41 +1074,48 @@ Operam exatamente como hoje no webchat:
   - `visibility: agents_only` → agente humano vê na tela
   - `visibility: all` → VoiceAdapter converte para TTS → cliente ouve
 
-### 9.7 Interfaces de provider
+### 9.7 Interfaces de provider e seleção de TTS/STT
 
-```python
-class IVoiceProvider(Protocol):
-    async def answer_call(self, call_id: str, bot_stream_url: str) -> str:
-        """Atende chamada e abre conference. Retorna conference_id."""
+Três Protocols independentes — cada um pode ser substituído sem afetar os outros:
 
-    async def add_participant(self, conference_id: str,
-                              address: str, **kwargs) -> str:
-        """Adiciona leg à conference. Retorna participant_id."""
+| Interface | Responsabilidade |
+|---|---|
+| `IVoiceProvider` | CPaaS: controle de chamada e conference (Twilio) |
+| `ISTTProvider` | Speech-to-Text streaming (Deepgram WebSocket) |
+| `ITTSProvider` | Text-to-Speech REST (ElevenLabs / Twilio Say) |
 
-    async def remove_participant(self, conference_id: str,
-                                 participant_id: str) -> None: ...
+**Twilio é exclusivamente tronco de voz** — nunca produz TTS no plano de dados. O áudio TTS é sintetizado por um provedor externo e injetado via `conference.announce_url`.
 
-    async def coaching_mode(self, conference_id: str,
-                            coach_id: str, agent_id: str) -> None:
-        """Supervisor ouve tudo, apenas agente ouve supervisor."""
+#### Seleção de TTS
 
-    async def hangup(self, call_id: str) -> None: ...
+| Provider | Env var | Comportamento |
+|---|---|---|
+| `ElevenLabsTTSProvider` | `PLUGHUB_VOICE_ELEVENLABS_API_KEY` | Primário — REST API, retorna MP3 bytes |
+| `DeepgramAuraTTSProvider` | `PLUGHUB_VOICE_TTS_PROVIDER=deepgram_aura` | Alternativo de alta qualidade |
+| `TwilioSayTTSProvider` | (padrão quando sem chave externa) | Fallback — delega ao `<Say>` do Twilio, sem API externa |
 
+A factory `_build_tts_provider()` em `VoiceAdapter` monta automaticamente um `FallbackTTSProvider` quando há providers externos configurados, com `TwilioSay` sempre como último recurso (nunca falha).
 
-class ISTTProvider(Protocol):
-    async def stream(self, audio_chunk: bytes,
-                     sample_rate: int = 8000) -> AsyncIterator[str]:
-        """Streaming STT — yields transcripts parciais e finais."""
+#### Seleção de STT
 
+| Provider | Env var | Comportamento |
+|---|---|---|
+| `DeepgramSTTProvider` | `PLUGHUB_VOICE_DEEPGRAM_API_KEY` | Primário — WebSocket streaming, modelo nova-2 |
+| `MockSTTProvider` (fallback) | (automático) | Silencioso — mantém a chamada ativa sem STT |
 
-class ITTSProvider(Protocol):
-    async def synthesize(self, text: str,
-                         voice_id: str | None = None) -> bytes:
-        """Converte texto em áudio PCM/μ-law."""
+A factory `_build_stt_provider()` monta um `FallbackSTTProvider([deepgram, mock])` quando a API key está configurada. Queda do Deepgram não derruba a chamada.
+
+#### Encadeamento de fallback
+
 ```
+FallbackTTSProvider
+  ├── ElevenLabsTTSProvider  ← primary (returns MP3 bytes or None on error)
+  └── TwilioSayTTSProvider   ← last resort (returns None → CPaaS <Say>)
 
-**Implementações iniciais:** `TelnyxProvider`, `DeepgramSTTProvider`,
-`DeepgramAuraTTSProvider`. ElevenLabs como alternativa TTS de alta qualidade.
+FallbackSTTProvider
+  ├── DeepgramSTTProvider    ← primary (yields STTResult stream)
+  └── MockSTTProvider        ← last resort (silent, call stays alive)
+```
 
 ### 9.8 Redis keys (proprietárias do voice)
 
@@ -1120,6 +1127,133 @@ channel:voice:{session_id}:agent_leg  participant_id do agente humano (quando pr
 ```
 
 **`channel_session_id`:** `CallSid` do CPaaS
+
+### 9.9 Modos de input — DTMF vs STT
+
+O tipo de input aceito em `interaction.request` (menu/collect de voz) é controlado
+pelo parâmetro `input_mode` no payload do step:
+
+| `input_mode` | Mecanismo | Uso recomendado |
+|---|---|---|
+| `"dtmf"` | Aguarda evento `dtmf` no WS (dígito no teclado) | Menus numéricos (≤9 opções) |
+| `"voice"` | Aguarda transcript Deepgram final | Campos livres, nomes, endereços |
+| `"any"` | Aceita o que chegar primeiro | Menus simples com fallback de voz |
+
+**DTMF no Twilio Media Streams** — o WebSocket recebe tipos de evento separados:
+
+```json
+// Áudio do cliente (→ Deepgram STT quando input_mode = "voice" ou "any")
+{"event": "media", "media": {"track": "inbound_track", "payload": "<base64 μ-law>"}}
+
+// DTMF (→ capturado diretamente quando input_mode = "dtmf" ou "any")
+{"event": "dtmf", "dtmf": {"track": "inbound_track", "digit": "2"}}
+```
+
+Quando `input_mode: "dtmf"`, o áudio ainda flui para Deepgram (transcrição
+passiva no stream), mas a resolução do collect aguarda o evento `dtmf` — sem
+latência de STT. O texto TTS deve instruir o canal de input esperado:
+
+- `"dtmf"` → *"Pressione 1 para Suporte Técnico, 2 para Financeiro…"*
+- `"voice"` → *"Diga o assunto do seu contato…"*
+- `"any"`   → *"Pressione ou diga o número da opção…"*
+
+Estado de coleta ativa no Redis (TTL 30min):
+
+```
+channel:voice:{session_id}:collect
+  { menu_id, fields: [...], current_index, answers: {}, input_mode }
+```
+
+### 9.10 Chamada outbound — `collect` step de workflow
+
+O Skill Flow `collect` step pode contatar o cliente via voz. O `workflow-api`
+publica em `collect.events`; o `VoiceAdapter` consome esse tópico e executa a
+discagem.
+
+**Fluxo:**
+
+```
+collect.events (channel: "voice")
+  { target: "+5511...", pool_id: "...", collect_token: "...",
+    trunk_id: "...", journey_id?: "..." }
+        ↓
+VoiceAdapter._handle_collect_event
+        ↓
+TwilioVoiceProvider.create_call(to=target, from_=DID_do_trunk)
+        ↓
+cliente atende → POST /webhooks/voice/inbound (call_sid novo)
+        ↓
+VoiceAdapter detecta pending_collect:{call_sid} no Redis
+        ↓
+sessão aberta com pool_id do collect event — tratamento idêntico ao inbound
+```
+
+Redis key de correlação (TTL 5min — descartada se cliente não atender):
+
+```
+channel:voice:pending_collect:{call_sid}   { collect_token, pool_id, journey_id? }
+```
+
+### 9.11 Twilio — detalhes do protocolo
+
+**CPaaS inicial:** Twilio (consistente com SMS). Verificação de assinatura idêntica
+ao `TwilioProvider` de SMS: HMAC-SHA1 sobre `URL + params_sorted`. Header:
+`X-Twilio-Signature`.
+
+**TwiML de resposta para inbound:**
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Start>
+    <Stream url="wss://{host}/voice/media" track="inbound_track">
+      <Parameter name="session_id" value="{session_id}"/>
+    </Stream>
+  </Start>
+  <Dial>
+    <Conference waitUrl="{wait_url}" beep="false"
+                startConferenceOnEnter="true"
+                statusCallbackEvent="leave join end"
+                statusCallback="{host}/webhooks/voice/status">
+      plughub-{session_id}
+    </Conference>
+  </Dial>
+</Response>
+```
+
+`<Start><Stream>` abre o WS de áudio em paralelo; `<Dial>` coloca o cliente na
+conference. O áudio do cliente flui simultaneamente para o nosso WS.
+
+**TTS na conference** — via Twilio REST + endpoint `/voice/tts/{tts_id}`:
+
+1. `VoiceAdapter` armazena texto em Redis:
+   `channel:voice:tts:{tts_id}` → `{ text, voice }` (TTL 60s)
+2. REST: `conference.update(announce_url="/voice/tts/{tts_id}")` → Twilio chama
+   o endpoint e reproduz para todos os participantes da conference
+3. Endpoint `/voice/tts/{tts_id}` retorna TwiML:
+   `<Response><Say voice="{voice}">{text}</Say></Response>`
+
+Voice padrão: `Polly.Camila-Neural` (Amazon Polly via Twilio, PT-BR).
+Alternativa: `PLUGHUB_VOICE_TTS_PROVIDER=deepgram_aura` — sintetiza audio bytes
+e serve como URL de áudio.
+
+**Adição de agente humano à conference:**
+
+```python
+await voice_provider.add_participant(
+    conference_sid = conference_sid,
+    to             = agent_sip_uri_or_webrtc_identity,
+    from_          = voice_from_number,
+)
+```
+
+**Redis keys adicionais (Twilio-specific):**
+
+```
+channel:voice:{session_id}:conference_sid   SID da conference no Twilio
+channel:voice:tts:{tts_id}                  texto TTS pendente (TTL 60s)
+channel:voice:pending_collect:{call_sid}     correlação de discagem outbound (TTL 5min)
+```
 
 ---
 

@@ -118,6 +118,61 @@ class Settings(BaseSettings):
     # Email provider selector: "mailgun" (default) or future providers.
     email_provider:              str = "mailgun"
 
+    # ── Voice (Twilio / IVoiceProvider) ──────────────────────────────────────
+    # Twilio Account SID for voice calls.
+    # Per-DID override via ChannelEndpoint metadata in agent-registry.
+    voice_account_sid:              str = ""
+    # Twilio Auth Token for HMAC-SHA1 webhook verification and REST API calls.
+    voice_auth_token:               str = ""
+    # Twilio phone number (E.164) used as caller ID for outbound calls.
+    # Inbound DID routing uses ChannelEndpoint (identifier = DID number).
+    voice_from_number:              str = ""
+    # Voice CPaaS provider selector: "twilio" (default) or future providers.
+    voice_provider:                 str = "twilio"
+    # Default pool_id for new voice sessions when no ChannelEndpoint matches the DID.
+    voice_default_pool_id:          str = ""
+    # STT provider: "deepgram" (default).
+    voice_stt_provider:             str = "deepgram"
+    # Deepgram API key for STT (and optionally Deepgram Aura TTS).
+    voice_deepgram_api_key:         str = ""
+    # STT language (BCP-47). Deepgram: pt-BR, en-US, es, etc.
+    voice_stt_language:             str = "pt-BR"
+    # TTS provider: "twilio_say" (Twilio built-in <Say>, no extra API)
+    #               "deepgram_aura" (Deepgram Aura REST, higher quality)
+    voice_tts_provider:             str = "twilio_say"
+    # Twilio Say / Deepgram Aura voice ID.
+    # Twilio Say: "Polly.Camila-Neural" (PT-BR), "Polly.Joanna-Neural" (EN)
+    # Deepgram Aura: "aura-asteria-en", "aura-zeus-en"
+    voice_tts_voice_id:             str = "Polly.Camila-Neural"
+    # Public HTTPS host for TwiML callback URLs sent to Twilio.
+    # Example: "https://plughub.empresa.com". In dev, use an ngrok URL.
+    voice_webhook_host:             str = "https://example.com"
+    # Twilio hold music URL while customer waits in conference.
+    # Empty = silence. Use a public MP3/WAV URL.
+    voice_conference_wait_url:      str = ""
+    # Enable STT transcription of the human agent's microphone (optional).
+    # Requires dual-channel audio stream from CPaaS.
+    voice_agent_stt_enabled:        bool = False
+    # ElevenLabs TTS — primary high-quality TTS provider (non-Twilio).
+    # Leave empty to fall back to TwilioSay (<Say> verb, no extra API).
+    # Set via PLUGHUB_VOICE_ELEVENLABS_API_KEY.
+    voice_elevenlabs_api_key:       str = ""
+    # ElevenLabs voice ID.  Default: "Adam" (pNInz6obpgDQGcFmaJgB) — multilingual.
+    # Browse voices: https://elevenlabs.io/voice-library
+    voice_elevenlabs_voice_id:      str = "pNInz6obpgDQGcFmaJgB"
+    # TTS fallback provider when primary fails.
+    # "twilio_say" (default) — Twilio built-in <Say>, no external API required.
+    # "deepgram_aura"        — Deepgram Aura REST TTS.
+    voice_tts_fallback_provider:    str = "twilio_say"
+    # STT fallback provider when Deepgram fails.
+    # "mock" (default) — silent fallback, no STT output (safe for production).
+    voice_stt_fallback_provider:    str = "mock"
+    # Default TTS recording notice text played before each recorded segment.
+    # Override per-tenant via Config API namespace "voice", key "recording_notice".
+    voice_default_recording_notice: str = (
+        "Esta chamada poderá ser gravada para fins de qualidade e treinamento."
+    )
+
     # ── WhatsApp (Meta Cloud API) ─────────────────────────────────────────────
     # System User token from Meta Business Manager (WABA).
     # Can be overridden per-tenant via Redis: {tenant_id}:config:whatsapp:access_token
