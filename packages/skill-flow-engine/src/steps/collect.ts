@@ -109,7 +109,7 @@ export async function executeCollect(
       step_id:        step.id,
       collect_token:  collectToken,
       target:         step.target,
-      channel:        step.channel,
+      ...(step.channel    ? { channel:     step.channel }    : {}),
       interaction:    step.interaction,
       prompt:         step.prompt,
       ...(step.options    ? { options:      step.options }    : {}),

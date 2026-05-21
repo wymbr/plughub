@@ -41,6 +41,15 @@ export interface SkillFlowEngineConfig {
   contextStore?: IContextStore
 
   /**
+   * Arc 16 — Journey ContextStore namespace.
+   * When provided, @ctx.journey.* reads/writes target the journey Redis hash
+   * {tenant}:ctx:journey:{journeyId} instead of the session hash.
+   * The skill-flow-worker sets this when the workflow instance has a journey_id.
+   * Optional — when absent, @ctx.journey.* resolves normally from the session hash.
+   */
+  journeyId?: string
+
+  /**
    * Arc 4 — Optional. Wired by workflow-api to persist WorkflowInstance to PostgreSQL
    * and calculate the business-hours deadline for a suspend step.
    * If absent, the suspend step falls back to wall-clock hours.
@@ -69,7 +78,7 @@ export interface SkillFlowEngineConfig {
     step_id:        string
     collect_token:  string
     target:         { type: string; id: string }
-    channel:        string
+    channel?:       string   // optional — channel-gateway selects by requires[] when absent
     interaction:    string
     prompt:         string
     options?:       Array<{ id: string; label: string }>
@@ -276,12 +285,19 @@ export class SkillFlowEngine {
     resumeContext?: ResumeContext
     /** Segment UUID for segment-scoped ContextStore writes. */
     segmentId?:        string
+    /**
+     * Arc 16 — Journey ID. When set, @ctx.journey.* reads/writes target the journey
+     * Redis hash {tenant}:ctx:journey:{journeyId}. Overrides config.journeyId.
+     */
+    journeyId?:        string
   }): Promise<RunResult> {
     const { tenantId, sessionId, customerId, skillId, flow, sessionContext } = params
     const instanceId        = params.instanceId        ?? "unknown"
     const pipelineSessionId = params.pipelineSessionId ?? sessionId
     const resumeContext     = params.resumeContext
     const segmentId         = params.segmentId
+    // run() param takes precedence over config-level journeyId
+    const journeyId         = params.journeyId ?? this.config.journeyId
 
     // ── DAG validation: detect unguarded cycles ───────────────────────────
     // Throws if the flow contains a cycle that does not pass through a
@@ -303,6 +319,7 @@ export class SkillFlowEngine {
         tenantId, sessionId, pipelineSessionId, customerId, skillId, flow, sessionContext, instanceId,
         ...(resumeContext ? { resumeContext } : {}),
         ...(segmentId ? { segmentId } : {}),
+        ...(journeyId ? { journeyId } : {}),
       })
     } finally {
       // Libera apenas se ainda somos o titular do lock
@@ -325,8 +342,9 @@ export class SkillFlowEngine {
     instanceId:        string
     resumeContext?:    ResumeContext
     segmentId?:        string
+    journeyId?:        string
   }): Promise<RunResult> {
-    const { tenantId, sessionId, pipelineSessionId, customerId, skillId, flow, sessionContext, instanceId, resumeContext, segmentId } = params
+    const { tenantId, sessionId, pipelineSessionId, customerId, skillId, flow, sessionContext, instanceId, resumeContext, segmentId, journeyId } = params
 
     // 1. Retomar ou iniciar pipeline (usa pipelineSessionId para state isolation)
     let state = await this.stateManager.get(tenantId, pipelineSessionId)
@@ -376,7 +394,7 @@ export class SkillFlowEngine {
       // pipelineSessionId → usado para state/lock
       const ctx = this._buildContext(
         tenantId, sessionId, pipelineSessionId, customerId, sessionContext, state, stepMap, instanceId,
-        maskedScope, transactionOnFailure ?? null, resumeContext, segmentId,
+        maskedScope, transactionOnFailure ?? null, resumeContext, segmentId, journeyId,
       )
 
       // Executar step
@@ -511,6 +529,7 @@ export class SkillFlowEngine {
     transactionOnFailure: string | null,
     resumeContext?:       ResumeContext,
     segmentId?:           string,
+    journeyId?:           string,
   ): StepContext {
     const self = this
 
@@ -523,6 +542,8 @@ export class SkillFlowEngine {
       redis: self.config.redis,
       instanceId,
       ...(segmentId ? { segmentId } : {}),
+      // Arc 16: journey namespace — @ctx.journey.* reads/writes target journey hash
+      ...(journeyId ? { journeyId } : {}),
       // Masked input — in-memory transaction scope (mutable, never persisted)
       maskedScope:          maskedScope,
       transactionOnFailure: transactionOnFailure,

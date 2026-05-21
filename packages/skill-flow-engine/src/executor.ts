@@ -39,6 +39,13 @@ export interface StepContext {
   instanceId?:    string
   /** Segment UUID for segment-scoped ContextStore writes (scope: segment in YAML). Optional. */
   segmentId?:     string
+  /**
+   * Arc 16 — Journey ContextStore namespace.
+   * When present, @ctx.journey.* reads/writes target {tenant}:ctx:journey:{journeyId}
+   * instead of the session hash. Provided by the skill-flow-worker when the
+   * workflow instance has a journey_id.
+   */
+  journeyId?:     string
   customerId:     string
   sessionContext: Record<string, unknown>
   state:          PipelineState
@@ -124,7 +131,7 @@ export interface StepContext {
     step_id:        string
     collect_token:  string
     target:         { type: string; id: string }
-    channel:        string
+    channel?:       string   // optional — channel-gateway selects by requires[] when absent
     interaction:    string
     prompt:         string
     options?:       Array<{ id: string; label: string }>
