@@ -741,6 +741,36 @@ class VoiceAdapter(ChannelAdapter):
 
     # ── Outbound delivery ────────────────────────────────────────────────────
 
+    # ── ChannelAdapter ABC implementation ────────────────────────────────────
+
+    async def deliver_text(self, payload: dict) -> None:
+        """ABC: synthesize text via TTS and play it in the active call."""
+        session_id = payload.get("session_id", "")
+        if not session_id:
+            return
+        text = (
+            payload.get("text")
+            or payload.get("content", {}).get("text", "")
+            or ""
+        )
+        if text:
+            await self._deliver_tts(session_id, text)
+
+    async def deliver_menu(self, payload: dict) -> None:
+        """ABC: deliver interactive menu / collect prompt via TTS + DTMF."""
+        session_id = payload.get("session_id", "")
+        if session_id:
+            await self._deliver_interaction(session_id, payload)
+
+    async def deliver_typing(self, payload: dict) -> None:
+        """ABC: no-op — voice channel has no typing indicator concept."""
+
+    async def deliver_session_closed(self, payload: dict) -> None:
+        """ABC: hang up the CPaaS call when the platform closes the session."""
+        session_id = payload.get("session_id", "")
+        if session_id:
+            await self._deliver_session_closed(session_id, payload)
+
     async def deliver_outbound(self, event_type: str, payload: dict) -> None:
         """
         Route outbound Kafka event to the correct delivery method.
