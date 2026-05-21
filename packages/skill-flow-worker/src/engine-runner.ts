@@ -101,6 +101,8 @@ export class EngineRunner {
         sessionContext:
           ((instance.pipeline_state as Record<string, unknown>)['contact_context'] as Record<string, unknown>) ?? {},
         instanceId:  instance.id,
+        // Arc 16: pass journeyId so @ctx.journey.* resolves to {tenant}:ctx:journey:{id}
+        ...(instance.journey_id ? { journeyId: instance.journey_id } : {}),
         ...(resumeContext ? { resumeContext } : {}),
       })
 
@@ -263,7 +265,7 @@ export class EngineRunner {
     step_id:        string
     collect_token:  string
     target:         { type: string; id: string }
-    channel:        string
+    channel?:       string   // optional — channel-gateway selects by requires[] when absent
     interaction:    string
     prompt:         string
     options?:       Array<{ id: string; label: string }>
@@ -279,7 +281,7 @@ export class EngineRunner {
       step_id:        params.step_id,
       collect_token:  params.collect_token,
       target:         params.target,
-      channel:        params.channel,
+      ...(params.channel ? { channel: params.channel } : {}),
       interaction:    params.interaction,
       prompt:         params.prompt,
       timeout_hours:  params.timeout_hours,

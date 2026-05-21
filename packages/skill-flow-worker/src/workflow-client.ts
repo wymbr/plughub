@@ -49,7 +49,7 @@ export interface PersistCollectParams {
   step_id:        string
   collect_token:  string
   target:         { type: string; id: string }
-  channel:        string
+  channel?:       string   // optional — channel-gateway selects by requires[] when absent
   interaction:    string
   prompt:         string
   options?:       Array<{ id: string; label: string }>
