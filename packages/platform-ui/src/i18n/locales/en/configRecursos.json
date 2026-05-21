@@ -16,10 +16,89 @@
       "description": "Description",
       "channelTypes": "Channels",
       "slaTargetMs": "SLA (ms)",
-      "status": "Status"
+      "status": "Status",
+      "calendar": "Calendar",
+      "priority": "Priority",
+      "default": "default",
+      "noLimit": "No limit",
+      "noneOption": "— None —",
+      "slaHint": "Total service SLA (ms)",
+      "maxReplyLabel": "Max. reply time (ms)",
+      "maxReplyHint": "Per customer message — optional",
+      "noCalendars": "No calendars available. Create one in Configuration → Calendars.",
+      "domainDefault": "default: {{value}}"
     },
     "empty": "No pools registered.",
-    "createFirst": "Create first pool"
+    "createFirst": "Create first pool",
+    "exceptions": {
+      "label": "Pool Exceptions",
+      "hint": "Unique dates that override calendar rules only for this pool. Priority 1 — above holidays and weekly schedule.",
+      "none": "No exceptions configured for this pool.",
+      "closedAllDay": "Closed all day",
+      "specialHours": "Special hours",
+      "to": "to",
+      "addInterval": "+ interval",
+      "add": "Add exception",
+      "descPlaceholder": "Description (e.g. Maintenance)"
+    },
+    "contextVisibility": {
+      "label": "Context Store Visibility",
+      "hint": "Namespaces visible to the operator in the Context tab. Separate with commas. Default: service, journey, session. PII namespaces (caller, account, history) appear masked when included."
+    },
+    "inboundJourneyResume": {
+      "label": "Enable Inbound Journey Resume",
+      "hint": "When enabled, the pool's AI agent skill should call journey_check_pending() at the start of each inbound session to detect and offer resumption of active multi-session service journeys. Requires the skill YAML to include the journey check step. Default: off."
+    },
+    "routingFixed": {
+      "label": "Routing Weights — Fixed",
+      "hint": "Importance of each competency skill in this pool. Set to 0 to ignore the skill in routing.",
+      "empty": "No competency skills registered. Configure in Resources → Skills."
+    },
+    "routingDynamic": {
+      "label": "Routing Weights — Dynamic",
+      "hint": "Influence of each real-time factor on queue ordering. 0 = ignore, 9 = maximum influence.",
+      "reset": "↺ Restore dynamic defaults",
+      "sla":      { "label": "SLA Urgency",     "hint": "Wait time ÷ SLA target" },
+      "wait":     { "label": "Wait time",        "hint": "Normalized absolute wait" },
+      "tier":     { "label": "Customer tier",    "hint": "platinum > gold > standard" },
+      "churn":    { "label": "Churn risk",       "hint": "Churn score from profile" },
+      "business": { "label": "Business value",   "hint": "Customer business_score" }
+    }
+  },
+  "competencySkills": {
+    "infoBanner": "Competency skills are used in static routing — agents and pools declare a level (0-9) per skill. Stored in competency_skills in the Config API.",
+    "adminToken": "Admin Token",
+    "adminTokenPlaceholder": "Token for write access",
+    "adminTokenWarning": "⚠ Set the admin token to edit",
+    "newSkill": "+ New Skill",
+    "keyPlaceholder": "e.g. english",
+    "save": "Save",
+    "cancel": "Cancel",
+    "edit": "✏ Edit",
+    "empty": "No competency skills registered.",
+    "keyRequired": "Key required",
+    "keyInvalid": "Key: lowercase letters, digits and _ only",
+    "keyExists": "Key \"{{key}}\" already exists",
+    "adminRequired": "Admin token required to save",
+    "adminRequiredDelete": "Admin token required to delete",
+    "confirmDelete": "Remove competency skill \"{{key}}\"?",
+    "columns": {
+      "key": "Key",
+      "domain": "Domain (0-9)",
+      "actions": "Actions"
+    },
+    "domainHints": {
+      "0": "Not required",
+      "1": "Minimum",
+      "2": "Basic",
+      "3": "Basic",
+      "4": "Intermediate",
+      "5": "Intermediate",
+      "6": "Good",
+      "7": "Advanced",
+      "8": "Advanced",
+      "9": "Expert"
+    }
   },
   "agentTypes": {
     "title": "Agent Types",

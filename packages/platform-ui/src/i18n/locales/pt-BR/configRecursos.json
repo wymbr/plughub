@@ -16,10 +16,89 @@
       "description": "Descrição",
       "channelTypes": "Canais",
       "slaTargetMs": "SLA (ms)",
-      "status": "Status"
+      "status": "Status",
+      "calendar": "Calendário",
+      "priority": "Prioridade",
+      "default": "padrão",
+      "noLimit": "Sem limite",
+      "noneOption": "— Nenhum —",
+      "slaHint": "SLA total do atendimento (ms)",
+      "maxReplyLabel": "Tempo máx. de resposta (ms)",
+      "maxReplyHint": "Por mensagem do cliente — opcional",
+      "noCalendars": "Nenhum calendário disponível. Crie em Configuração → Calendários.",
+      "domainDefault": "padrão: {{value}}"
     },
     "empty": "Nenhum pool cadastrado.",
-    "createFirst": "Criar primeiro pool"
+    "createFirst": "Criar primeiro pool",
+    "exceptions": {
+      "label": "Exceções deste Pool",
+      "hint": "Datas únicas que sobrescrevem as regras do calendário somente para este pool. Prioridade 1 — acima de feriados e do horário semanal.",
+      "none": "Nenhuma exceção configurada para este pool.",
+      "closedAllDay": "Fechado o dia todo",
+      "specialHours": "Horário especial",
+      "to": "até",
+      "addInterval": "+ intervalo",
+      "add": "Adicionar exceção",
+      "descPlaceholder": "Descrição (ex: Manutenção)"
+    },
+    "contextVisibility": {
+      "label": "Visibilidade do Context Store",
+      "hint": "Namespaces visíveis ao operator na aba Contexto. Separe por vírgula. Padrão: service, journey, session. Namespaces PII (caller, account, history) aparecem mascarados quando incluídos."
+    },
+    "inboundJourneyResume": {
+      "label": "Habilitar Retomada de Jornada no Inbound",
+      "hint": "Quando habilitado, o skill do agente AI do pool deve chamar journey_check_pending() no início de cada atendimento inbound para detectar e oferecer a retomada de jornadas de serviço em andamento. Requer que o YAML do skill inclua o step de verificação de jornada. Padrão: desabilitado."
+    },
+    "routingFixed": {
+      "label": "Pesos de Roteamento — Fixos",
+      "hint": "Importância de cada competency skill neste pool. Defina 0 para ignorar a skill no roteamento.",
+      "empty": "Nenhuma competency skill cadastrada. Configure em Recursos → Skills."
+    },
+    "routingDynamic": {
+      "label": "Pesos de Roteamento — Dinâmicos",
+      "hint": "Influência de cada fator em tempo real na ordenação da fila. 0 = ignorar, 9 = máxima influência.",
+      "reset": "↺ Restaurar padrões dinâmicos",
+      "sla":      { "label": "Urgência SLA",     "hint": "Tempo de espera ÷ SLA alvo" },
+      "wait":     { "label": "Tempo de espera",  "hint": "Espera absoluta normalizada" },
+      "tier":     { "label": "Tier do cliente",  "hint": "platinum > gold > standard" },
+      "churn":    { "label": "Risco de churn",   "hint": "Score de churn do perfil" },
+      "business": { "label": "Valor de negócio", "hint": "business_score do cliente" }
+    }
+  },
+  "competencySkills": {
+    "infoBanner": "Competency skills são usadas no roteamento estático — agentes e pools declaram um nível (0-9) por skill. Armazenadas em competency_skills na Config API.",
+    "adminToken": "Admin Token",
+    "adminTokenPlaceholder": "Token para escrita",
+    "adminTokenWarning": "⚠ Defina o admin token para editar",
+    "newSkill": "+ Nova Skill",
+    "keyPlaceholder": "ex: ingles",
+    "save": "Salvar",
+    "cancel": "Cancelar",
+    "edit": "✏ Editar",
+    "empty": "Nenhuma competency skill cadastrada.",
+    "keyRequired": "Key obrigatória",
+    "keyInvalid": "Key: apenas letras minúsculas, dígitos e _",
+    "keyExists": "Key \"{{key}}\" já existe",
+    "adminRequired": "Admin token obrigatório para salvar",
+    "adminRequiredDelete": "Admin token obrigatório para excluir",
+    "confirmDelete": "Remover competency skill \"{{key}}\"?",
+    "columns": {
+      "key": "Chave",
+      "domain": "Domínio (0-9)",
+      "actions": "Ações"
+    },
+    "domainHints": {
+      "0": "Não requerido",
+      "1": "Mínimo",
+      "2": "Básico",
+      "3": "Básico",
+      "4": "Intermediário",
+      "5": "Intermediário",
+      "6": "Bom",
+      "7": "Avançado",
+      "8": "Avançado",
+      "9": "Especialista"
+    }
   },
   "agentTypes": {
     "title": "Tipos de Agente",

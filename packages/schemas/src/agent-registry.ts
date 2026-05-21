@@ -116,6 +116,31 @@ const PoolHookEntrySchema = z.object({
    * participante de conferência na sessão existente.
    */
   pool: z.string().regex(/^[a-z0-9_]+$/),
+  /**
+   * Lado do segmento pós-atendimento (Arc 14).
+   *
+   * "agent"    — o hook interage com o agente humano (wrap-up, resumo).
+   *              Quando este segmento terminar, o agente é liberado para
+   *              o próximo contato.
+   * "customer" — o hook interage com o cliente (NPS, pesquisa de satisfação).
+   *              Quando este segmento terminar, o canal do cliente é fechado
+   *              caso ainda esteja aberto.
+   *
+   * Default: "agent" (backward compatible — todos os hooks existentes são
+   * agent-side implicitamente).
+   */
+  side: z.enum(["agent", "customer"]).default("agent"),
+  /**
+   * Arc 14 Fase D — comportamento quando o cliente desconectou antes do hook
+   * (close_origin == "customer_disconnect"). Relevante apenas para side="customer".
+   *
+   *  "skip"    → segmento não é despachado; pulado silenciosamente.
+   *  "timeout" → despachado normalmente; skill YAML decide via
+   *              @ctx.session.close_origin (ou expira pelo _HOOK_TIMEOUT_S).
+   *
+   * Default: "timeout" (backward compatible).
+   */
+  nps_on_disconnect: z.enum(["skip", "timeout"]).default("timeout"),
 })
 export type PoolHookEntry = z.infer<typeof PoolHookEntrySchema>
 
@@ -159,11 +184,11 @@ export const PoolRegistrationSchema = z.object({
    */
   mentionable_pools:      z.record(z.string()).optional(),
   /**
-   * Mapa alias → skill_id para iniciar journeys via @mention.
+   * Lista de skill_ids que podem ser iniciados via "Iniciar Processo" no Console (ActionBar).
    * Exibido como dropdown no ActionBar do Console (botão "Iniciar Processo").
-   * Exemplo: { cobranca: "skill_cobranca_v1", portabilidade: "skill_portabilidade_v2" }
+   * Exemplo: ["skill_portabilidade_v1", "skill_reembolso_v1"]
    */
-  mentionable_journeys:   z.record(z.string()).optional(),
+  mentionable_journeys:   z.array(z.string()).optional(),
   /**
    * IDs dos Agent Groups (Arc 9) aos quais este pool pertence.
    * Escrito no ContextStore como session.pool.agent_groups[] após cada roteamento.
@@ -200,6 +225,34 @@ export const PoolRegistrationSchema = z.object({
    * calendar.calendar_associations. The UI keeps both in sync.
    */
   calendar_id:            z.string().uuid().optional(),
+  /**
+   * ContextStore visibility configuration for the ContextoTab.
+   * Controls which namespaces the operator role can see.
+   *
+   * Default (when absent): ["service", "journey", "session"]
+   * PII namespaces (caller, account, history) always appear masked when included.
+   * supervisor/admin always see all namespaces with full values.
+   *
+   * Examples:
+   *   SAC genérico:  operator_namespaces: ["service", "journey", "session"]
+   *   Cobrança:      operator_namespaces: ["service", "journey", "session", "account", "history"]
+   */
+  context_visibility:     z.object({
+    operator_namespaces: z.array(z.string()).min(1),
+  }).optional(),
+  /**
+   * Arc 16 Phase E — Inbound Journey Resume (opt-in, default false).
+   *
+   * When true, the skill deployed on this pool's AI agent should call
+   * journey_check_pending(customer_id) at the start of each inbound session
+   * to detect whether the customer has a pending collect step awaiting response
+   * and offer to continue that service process.
+   *
+   * This flag is informational — the platform UI uses it to signal the skill
+   * author that journey resume logic should be included in the pool's skill YAML.
+   * The routing engine and channel-gateway do not read this field.
+   */
+  inbound_journey_resume: z.boolean().default(false).optional(),
 })
 export type PoolRegistration = z.infer<typeof PoolRegistrationSchema>
 
@@ -258,6 +311,16 @@ export const AgentTypeRegistrationSchema = z.object({
 
   /** Capabilities declaradas — união das skills + capacidades próprias */
   capabilities: z.record(z.string()).default({}),
+
+  /**
+   * Meios de mídia suportados pelo agente para o canal WebRTC.
+   * Valores possíveis: "video" | "voice" | "text"
+   * Ordem implica preferência (primeiro = preferido).
+   * Vazio ou ausente → apenas text (fallback universal).
+   */
+  media_capabilities: z.array(
+    z.enum(["video", "voice", "text"])
+  ).default([]),
 
   agent_classification: AgentClassificationSchema.optional(),
 

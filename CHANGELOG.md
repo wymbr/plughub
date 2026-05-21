@@ -2,6 +2,122 @@
 
 ---
 
+## Arc 16 Fases D + E — Channel Capability Negotiation + Inbound Journey Resume (2026-05-21)
+
+Implementação das Fases D e E do Arc 16 — Three-Tier Business Process Orchestration.
+
+### Fase D — Channel Capability Negotiation
+
+O step `collect` passa a aceitar `requires: [text|audio|video|file_upload|masked_input|rich_menu]` em vez de `channel` explícito. O Channel Gateway seleciona o canal outbound baseado na matriz de capacidades e no contexto de Journey.
+
+**`packages/channel-gateway/src/plughub_channel_gateway/`**
+- `channel_capability_registry.py` (NOVO) — módulo central de Arc 16 Phase D:
+  - `CHANNEL_CAPABILITIES` — matriz estática de capacidades por canal (whatsapp, sms, email, voice, webchat, webrtc)
+  - `_CHANNEL_PRIORITY` — ordem de preferência quando múltiplos canais satisfazem os requisitos
+  - `channel_satisfies(channel, requires)` — verifica se um canal suporta todos os capabilities solicitados
+  - `select_channel(available, requires, preferred)` — algoritmo 2-step: honra preferência, depois escolhe por prioridade
+  - `read_journey_channel_context(redis, tenant_id, journey_id)` — lê `journey.available_channels` + `journey.canal_preferido` do ContextStore de Journey
+  - `write_journey_channel_context(redis, tenant_id, journey_id, channel, contact_id)` — escreve `journey.available_channels`, `journey.canal_preferido`, `journey.{channel}_contact_id`; limpa `journey.pending_collect_info` quando resposta chega; TTL 30 dias NX
+  - `get_journey_contact_id(redis, tenant_id, journey_id, channel)` — recupera o contact_id do cliente para um canal na journey
+  - `write_journey_pending_collect(redis, tenant_id, journey_id, requires, channel, contact_id)` — grava `journey.pending_collect_info` para que `journey_check_pending` MCP tool consiga descobrir journeys com collect pendente
+- `main.py` — consumer `collect.events` estendido de voice-only para todos os canais:
+  - `_collect_events_consumer()` usa group_id `-collect` e filtra apenas `collect.requested`
+  - `_dispatch_collect_event()` — routing em 2 passos: (1) canal explícito → adapter direto; (2) sem canal → `read_journey_channel_context` + `select_channel` + `get_journey_contact_id`; grava `write_journey_pending_collect` após despacho
+- `adapters/whatsapp.py` — `handle_collect_event()` envia prompt via provider + grava `pending_collect` Redis (TTL 30 min); inbound verifica `pending_collect`, chama `write_journey_channel_context`, enriquece evento com `collect_token`/`journey_id`/`response_text`
+- `adapters/sms.py` — idem WhatsApp (via `_send_text_to_contact`)
+- `adapters/email.py` — idem para email (via `deliver_text`); inbound chama `write_journey_channel_context` antes de publicar
+
+**`packages/schemas/src/`**
+- `skill.ts` — `CollectStepSchema`: `channel` agora `z.string().optional()`, campo `requires: z.array(ChannelCapabilitySchema).optional()` adicionado; `ChannelCapabilitySchema` (`"text"|"audio"|"video"|"file_upload"|"masked_input"|"rich_menu"`) exportado
+
+### Fase E — Inbound Journey Resume via Agente de Pool (agent-side opt-in)
+
+Abordagem: Channel Gateway e Routing Engine não são modificados. O agente AI do pool detecta e oferece a retomada como parte natural da conversa.
+
+**`packages/mcp-server-plughub/src/tools/journey.ts`**
+- `journey_check_pending(customer_id, channel?, limit?)` — nova MCP tool (Arc 16 Phase E):
+  - Consulta `GET /v1/journeys?customer_id=...&status=active` no workflow-api
+  - Para cada journey, lê `journey.pending_collect_info` do Redis (ContextStore de Journey)
+  - Filtra por capacidade de canal se `channel` fornecido (via `_channelSatisfies` — mirror de `CHANNEL_CAPABILITIES`)
+  - Retorna `[{ journey_id, skill_id, pool_id, pending_channel, pending_contact_id, requires[], dispatched_at }]`
+  - Auditada via McpInterceptor; permissão ABAC `journey.read`
+- `_CHANNEL_CAPABILITIES` + `_channelSatisfies()` — helper local em sync com `channel_capability_registry.py`
+- `JourneyCheckPendingInputSchema` — schema de validação Zod
+
+**`packages/agent-registry/`**
+- `prisma/schema.prisma` — `inbound_journey_resume Boolean @default(false)` adicionado ao model `Pool`
+- `prisma/migrations/20260521000000_add_pool_inbound_journey_resume/migration.sql` — migration correspondente
+- `src/routes/pools.ts` — create e update incluem `inbound_journey_resume`
+
+**`packages/schemas/src/agent-registry.ts`**
+- `PoolRegistrationSchema` — `inbound_journey_resume: z.boolean().default(false).optional()` (doc explica que é flag informacional para o skill author; routing engine não o lê)
+
+**`packages/platform-ui/`**
+- `modules/config-recursos/PoolsPage.tsx` — toggle "Enable Inbound Journey Resume" no formulário de pool (checkbox com label + hint); estado `formData.inbound_journey_resume`; incluído no payload de criação/edição
+- `i18n/locales/en/configRecursos.json` — `pools.inboundJourneyResume.label/hint`
+- `i18n/locales/pt-BR/configRecursos.json` — `pools.inboundJourneyResume.label/hint`
+
+---
+
+## Arc 16 Fases B + C — Journey Public API + MCP Tools Tier 1 Poller (2026-05-21)
+
+Implementação das Fases B e C do Arc 16.
+
+### Fase B — Journey Public API Surface
+
+**`packages/workflow-api/`** — `journey_router.py`: `GET /v1/journeys` aceita `pool_id` como filtro (Arc 16 Tier 1 poller); `POST /v1/journeys/{id}/resume` encapsula `resume_token` interno — callers só passam `context` + `decision`; `db.py`: `db_list_journeys` suporta `pool_id`; migration `20260521000001_add_journey_pool_id` adiciona coluna `pool_id` em `workflow.journeys` com índice `(tenant_id, pool_id, status)`
+
+**`packages/schemas/src/journey.ts`** — `JourneySchema` com `pool_id: z.string().nullable()`; novos schemas `JourneyListSuspendedInputSchema`, `JourneyListSuspendedOutputSchema`, `JourneyResumeInputSchema`, `JourneyResumeOutputSchema`
+
+### Fase C — MCP Tools Tier 1 Poller
+
+**`packages/mcp-server-plughub/src/tools/journey.ts`** — tools `journey_list_suspended(pool_id, skill_id?, limit?)` e `journey_resume(journey_id, context?, decision)` registrados em `registerJourneyTools`
+
+**`packages/auth-api/`** — módulo `workflows` no `modules.yaml` com campos `journey.resume` e `journey.read`; `PermissionChecker` valida em `journey_list_suspended` e `journey_resume`
+
+---
+
+## Arc 16 Fase A — Journey ContextStore Namespace (2026-05-21)
+
+Implementação da Fase A do Arc 16 — Three-Tier Business Process Orchestration. Introduz o namespace `journey.*` no ContextStore: um Redis hash compartilhado entre todas as sessões de uma mesma Journey, resolvendo o problema de dados coletados em sessões `collect` serem invisíveis para o Business Workflow do Tier 1.
+
+### Contrato do namespace
+Redis key: `{tenantId}:ctx:journey:{journeyId}`. Cada field = tag name → JSON `{value, confidence, source, visibility, updated_at}`. TTL 30 dias, renovado em toda escrita. `@ctx.journey.*` lê deste hash; `context_tags.outputs` com prefixo `journey.*` redireciona escrita para o hash journey em vez do hash de sessão.
+
+### Arquivos modificados
+
+**@plughub/schemas** (`packages/schemas/src/`)
+- `workflow.ts` — `journey_id: z.string().uuid().optional()` adicionado a `WorkflowTimedOutSchema`, `WorkflowFailedSchema`, `WorkflowCancelledSchema` (os 4 anteriores já estavam)
+- `journey.ts` — `pool_id: z.string().nullable()` + `failure_reason: z.string().nullable()` em `JourneySchema`; novos Arc 16 schemas: `JourneyListSuspendedInputSchema`, `JourneyListSuspendedOutputSchema`, `JourneyResumeInputSchema`, `JourneyResumeOutputSchema`, `JourneyCheckPendingInputSchema`, `JourneyCheckPendingOutputSchema`
+- `index.ts` — exporta todos os novos schemas de Journey + `JourneySplitInputSchema`/`OutputSchema` que faltavam
+
+**workflow-api** (`packages/workflow-api/src/plughub_workflow_api/`)
+- `kafka_emitter.py` — todos os 7 `emit_*` aceitam `journey_id: str | None = None` e o incluem no payload condicionalmente
+- `router.py` — todos os call sites de `emit_*` passam `journey_id=instance.get("journey_id")`
+- `timeout_job.py` — `emit_timed_out` e `emit_resumed` (collect timeout) passam `journey_id=instance.get("journey_id")`
+
+**skill-flow-engine** (`packages/skill-flow-engine/src/`)
+- `executor.ts` — `journeyId?: string` adicionado a `StepContext` com doc Arc 16
+- `engine.ts` — `journeyId?: string` em `SkillFlowEngineConfig` e parâmetros `run()`/`_execute()`/`_buildContext()`; propagado ao `StepContext`
+- `interpolate.ts` — `resolveCtxRef()` detecta `tag.startsWith("journey.")` e redireciona para `contextStore.getValue("journey:" + ctx.journeyId, tag, customerId)`
+- `context-accumulator-util.ts` — `extractOutputsToCtx()` aceita `journeyId?: string`; escreve em `"journey:" + journeyId` quando tag começa com `journey.`
+- `steps/invoke.ts` — passa `ctx.journeyId` no call site de `extractOutputsToCtx`
+- `steps/reason.ts` — passa `ctx.journeyId` no call site de `extractOutputsToCtx`
+- `steps/resolve.ts` — passa `ctx.journeyId` no call site de `extractOutputsToCtx`
+
+**skill-flow-worker** (`packages/skill-flow-worker/src/`)
+- `engine-runner.ts` — `engine.run()` passa `journeyId: instance.journey_id` quando disponível
+
+**ai-gateway** (`packages/ai-gateway/src/plughub_ai_gateway/`)
+- `models.py` — `journey_id: str | None = None` em `InferenceRequest`
+- `inference.py` — `_build_journey_context_block()` lê `{tenant}:ctx:journey:{id}` do Redis e filtra confidence < 0.3; `_prepend_journey_context()` injeta bloco no system message; `infer()` chama ambos quando `req.journey_id` está presente
+
+**mcp-server-plughub** (`packages/mcp-server-plughub/src/`)
+- `tools/journey.ts` — `JourneyDeps` recebe `redis: Redis`; novos schemas `JourneyContextGetInputSchema`, `JourneyContextSetInputSchema`; novos tools `journey_context_get` (lê hash journey do Redis com filtro de tags opcional) e `journey_context_set` (escreve tag com prefixo `journey.*` obrigatório, TTL 30d)
+- `server.ts` — `journeyDeps` passa `redis` para `registerJourneyTools`
+
+---
+
 ## Arc 15 Fase F — WebRTC: Widget do Cliente (2026-05-20)
 
 Widget standalone single-file para o cliente no browser. Conecta ao WS `/ws/webrtc/{pool_id}`, negocia medium, solicita `getUserMedia()`, conecta à sala LiveKit e publica tracks conforme medium. Fallback gracioso para text quando câmera/mic negados. Renegociação de medium sem reiniciar a sessão. Arc 15 completo.

@@ -4,6 +4,12 @@
 
 ---
 
+## Arc 16 — Three-Tier Business Process Orchestration *(COMPLETO)*
+
+Todas as fases A–E implementadas. Ver CHANGELOG e [`docs/arcos/arc16-flow-orchestration.md`](docs/arcos/arc16-flow-orchestration.md).
+
+---
+
 ## Usage Metering — Channel Gateway Adapters *(deferred)*
 
 Funções em `usage_emitter.py` implementadas, mas os adapters de canal ainda não as chamam. Será wired quando cada adapter for criado:

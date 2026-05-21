@@ -61,6 +61,7 @@ from ..models import (
     MessageContent,
     NormalizedInboundEvent,
 )
+from ..channel_capability_registry import write_journey_channel_context
 from .base import ChannelAdapter
 from .email_provider import (
     EmailAttachment,
@@ -195,28 +196,58 @@ class EmailAdapter(ChannelAdapter):
                 attachments = parsed.attachments,
             )
 
-            # Publish normalised event
-            event = NormalizedInboundEvent(
-                message_id       = str(uuid.uuid4()),
-                contact_id       = parsed.from_address,
-                session_id       = session_id,
-                channel          = "email",
-                content_type     = "text",
-                author           = MessageAuthor(type="customer"),
-                content          = MessageContent(
-                    type    = "text",
-                    text    = new_text,
-                    payload = {
-                        "subject":          parsed.subject,
-                        "message_id":       parsed.message_id,
-                        "in_reply_to":      parsed.in_reply_to,
-                        "attachment_refs":  attachment_refs,
-                        "original_text":    original_text,
-                    },
-                ),
-                context_snapshot = ContextSnapshot(),
-            )
-            await self._publish_inbound(event.model_dump())
+            # ── Arc 16 Phase D: capability-based pending collect ─────────────
+            pending_collect_key = f"channel:email:{parsed.from_address}:pending_collect"
+            pending_raw = await self._redis.get(pending_collect_key)
+            if pending_raw:
+                pending = json.loads(pending_raw)
+                await self._redis.delete(pending_collect_key)
+                journey_id_p = pending.get("journey_id")
+                if journey_id_p:
+                    await write_journey_channel_context(
+                        redis      = self._redis,
+                        tenant_id  = tenant_id,
+                        journey_id = journey_id_p,
+                        channel    = "email",
+                        contact_id = parsed.from_address,
+                    )
+                payload = NormalizedInboundEvent(
+                    message_id       = str(uuid.uuid4()),
+                    contact_id       = parsed.from_address,
+                    session_id       = session_id,
+                    channel          = "email",
+                    content_type     = "text",
+                    author           = MessageAuthor(type="customer"),
+                    content          = MessageContent(type="text", text=new_text),
+                    context_snapshot = ContextSnapshot(),
+                ).model_dump()
+                payload["collect_token"] = pending.get("collect_token")
+                payload["journey_id"]    = journey_id_p
+                payload["response_text"] = new_text
+                await self._publish_inbound(payload)
+            else:
+                # Publish normalised event
+                event = NormalizedInboundEvent(
+                    message_id       = str(uuid.uuid4()),
+                    contact_id       = parsed.from_address,
+                    session_id       = session_id,
+                    channel          = "email",
+                    content_type     = "text",
+                    author           = MessageAuthor(type="customer"),
+                    content          = MessageContent(
+                        type    = "text",
+                        text    = new_text,
+                        payload = {
+                            "subject":          parsed.subject,
+                            "message_id":       parsed.message_id,
+                            "in_reply_to":      parsed.in_reply_to,
+                            "attachment_refs":  attachment_refs,
+                            "original_text":    original_text,
+                        },
+                    ),
+                    context_snapshot = ContextSnapshot(),
+                )
+                await self._publish_inbound(event.model_dump())
 
         except Exception as exc:
             logger.exception("email inbound processing failed: %s", exc)
@@ -482,6 +513,58 @@ class EmailAdapter(ChannelAdapter):
                 "email: session closed contact=%s session=%s",
                 contact_id, session_id,
             )
+
+    # ── Collect event — outbound capability-based (Arc 16 Phase D) ───────────
+
+    async def handle_collect_event(self, event: dict) -> None:
+        """
+        Send a collect prompt to the customer via email and store a pending_collect
+        key so the inbound handler can correlate the customer's reply.
+
+        Called by _collect_events_consumer() when collect.requested arrives with
+        channel="email" (explicit or capability-selected).
+
+        Redis key: channel:email:{contact_id}:pending_collect
+          → {collect_token, journey_id, pool_id}  TTL = 30 min
+        """
+        contact_id    = event.get("target", "")
+        collect_token = event.get("collect_token", "")
+        journey_id    = event.get("journey_id")
+        prompt        = event.get("prompt", "")
+        tenant_id     = event.get("tenant_id", self._settings.tenant_id)
+        pool_id       = event.get("pool_id", "")
+
+        if not contact_id or not prompt:
+            logger.warning(
+                "email handle_collect_event: missing target or prompt "
+                "(collect_token=%s)", collect_token,
+            )
+            return
+
+        # Reuse deliver_text with a minimal payload
+        await self.deliver_text({
+            "contact_id": contact_id,
+            "session_id": "",   # no session yet for capability-based collect
+            "tenant_id":  tenant_id,
+            "content":    {"text": prompt},
+            "metadata":   {"subject": "Mensagem do atendimento"},
+        })
+
+        pending = {
+            "collect_token": collect_token,
+            "journey_id":    journey_id,
+            "pool_id":       pool_id,
+        }
+        await self._redis.setex(
+            f"channel:email:{contact_id}:pending_collect",
+            1_800,  # 30 min
+            json.dumps(pending),
+        )
+
+        logger.info(
+            "email collect sent: contact=%s collect_token=%s journey=%s",
+            contact_id, collect_token, journey_id,
+        )
 
     # ── MCP tool support ──────────────────────────────────────────────────────
 

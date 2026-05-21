@@ -42,6 +42,7 @@ interface ExceptionEntry {
 function PoolExceptionsEditor({
   exceptions, onChange,
 }: { exceptions: ExceptionEntry[]; onChange: (e: ExceptionEntry[]) => void }) {
+  const { t } = useTranslation('configRecursos')
   const [newDate,  setNewDate]  = useState('')
   const [newLabel, setNewLabel] = useState('')
   const [closed,   setClosed]   = useState(true)
@@ -68,45 +69,45 @@ function PoolExceptionsEditor({
       {/* Existing list */}
       <div className="max-h-36 overflow-y-auto space-y-1">
         {exceptions.length === 0 ? (
-          <p className="text-xs text-gray-400 italic">Nenhuma exceção configurada para este pool.</p>
+          <p className="text-xs text-muted-light italic">{t('pools.exceptions.none')}</p>
         ) : exceptions.map((exc, i) => (
-          <div key={i} className="flex items-start gap-2 px-2 py-1.5 bg-orange-50 border border-orange-100 rounded text-sm">
-            <span className="font-mono text-xs text-gray-600 w-24 flex-shrink-0 pt-0.5">{exc.date}</span>
+          <div key={i} className="flex items-start gap-2 px-2 py-1.5 bg-contested-light border border-contested/20 rounded text-sm">
+            <span className="font-mono text-xs text-muted w-24 flex-shrink-0 pt-0.5">{exc.date}</span>
             <div className="flex-1 min-w-0">
-              {exc.label && <p className="text-xs text-gray-700 truncate mb-0.5">{exc.label}</p>}
+              {exc.label && <p className="text-xs text-dark truncate mb-0.5">{exc.label}</p>}
               {exc.override_slots === null ? (
-                <span className="text-xs text-red-600 font-medium">Fechado o dia todo</span>
+                <span className="text-xs text-red-text font-medium">{t('pools.exceptions.closedAllDay')}</span>
               ) : (
-                <span className="text-xs text-orange-700">
+                <span className="text-xs text-contested-text">
                   {exc.override_slots.map(s => `${s.open}–${s.close}`).join(', ')}
                 </span>
               )}
             </div>
             <button type="button" onClick={() => remove(i)}
-              className="text-red-400 hover:text-red-600 text-xs flex-shrink-0 pt-0.5">✕</button>
+              className="text-red hover:text-red-text text-xs flex-shrink-0 pt-0.5">✕</button>
           </div>
         ))}
       </div>
 
       {/* Add form */}
-      <div className="border border-dashed border-orange-200 rounded-lg p-3 space-y-2 bg-orange-50/40">
+      <div className="border border-dashed border-contested/30 rounded-lg p-3 space-y-2 bg-contested-light/40">
         <div className="flex gap-2">
           <input type="date" value={newDate} onChange={e => setNewDate(e.target.value)}
-            className="text-sm border border-gray-300 rounded px-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-orange-400 bg-white" />
-          <input type="text" placeholder="Descrição (ex: Manutenção)" value={newLabel}
+            className="text-sm border border-border-strong rounded px-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-contested/40 bg-white" />
+          <input type="text" placeholder={t('pools.exceptions.descPlaceholder')} value={newLabel}
             onChange={e => setNewLabel(e.target.value)} onKeyDown={e => e.key === 'Enter' && add()}
-            className="flex-1 text-sm border border-gray-300 rounded px-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-orange-400 bg-white" />
+            className="flex-1 text-sm border border-border-strong rounded px-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-contested/40 bg-white" />
         </div>
         <div className="flex items-center gap-4">
           <label className="flex items-center gap-2 cursor-pointer">
             <input type="radio" checked={closed} onChange={() => setClosed(true)}
-              className="text-red-500 focus:ring-red-400" />
-            <span className="text-xs text-gray-700">Fechado o dia todo</span>
+              className="text-red focus:ring-red/40" />
+            <span className="text-xs text-dark">{t('pools.exceptions.closedAllDay')}</span>
           </label>
           <label className="flex items-center gap-2 cursor-pointer">
             <input type="radio" checked={!closed} onChange={() => setClosed(false)}
-              className="text-orange-500 focus:ring-orange-400" />
-            <span className="text-xs text-gray-700">Horário especial</span>
+              className="text-contested focus:ring-contested/40" />
+            <span className="text-xs text-dark">{t('pools.exceptions.specialHours')}</span>
           </label>
         </div>
         {!closed && (
@@ -114,26 +115,26 @@ function PoolExceptionsEditor({
             {newSlots.map((sl, idx) => (
               <div key={idx} className="flex items-center gap-2">
                 <input type="time" value={sl.open} onChange={e => updateSlot(idx, 'open', e.target.value)}
-                  className="text-sm border border-gray-300 rounded px-2 py-1 bg-white focus:outline-none focus:ring-1 focus:ring-orange-400" />
-                <span className="text-xs text-gray-400">até</span>
+                  className="text-sm border border-border-strong rounded px-2 py-1 bg-white focus:outline-none focus:ring-1 focus:ring-contested/40" />
+                <span className="text-xs text-muted-light">{t('pools.exceptions.to')}</span>
                 <input type="time" value={sl.close} onChange={e => updateSlot(idx, 'close', e.target.value)}
-                  className="text-sm border border-gray-300 rounded px-2 py-1 bg-white focus:outline-none focus:ring-1 focus:ring-orange-400" />
+                  className="text-sm border border-border-strong rounded px-2 py-1 bg-white focus:outline-none focus:ring-1 focus:ring-contested/40" />
                 {newSlots.length > 1 && (
                   <button type="button" onClick={() => setNewSlots(prev => prev.filter((_, i) => i !== idx))}
-                    className="text-gray-400 hover:text-red-500 text-sm leading-none">×</button>
+                    className="text-muted-light hover:text-red text-sm leading-none">×</button>
                 )}
               </div>
             ))}
             {newSlots.length < 4 && (
               <button type="button"
                 onClick={() => setNewSlots(prev => [...prev, { open: prev[prev.length-1]?.close ?? '18:00', close: '23:00' }])}
-                className="text-xs text-orange-600 hover:text-orange-800 mt-0.5">+ intervalo</button>
+                className="text-xs text-contested hover:text-contested-text mt-0.5">{t('pools.exceptions.addInterval')}</button>
             )}
           </div>
         )}
         <button type="button" onClick={add} disabled={!newDate}
-          className="w-full px-3 py-1.5 text-xs bg-orange-500 text-white rounded-lg hover:bg-orange-600 disabled:opacity-50 transition-colors">
-          Adicionar exceção
+          className="w-full px-3 py-1.5 text-xs bg-contested text-white rounded-lg hover:bg-contested-text disabled:opacity-50 transition-colors">
+          {t('pools.exceptions.add')}
         </button>
       </div>
     </div>
@@ -179,11 +180,11 @@ function Drawer({
           ${isOpen ? 'translate-x-0' : 'translate-x-full'}`}
       >
         {/* Header */}
-        <div className="flex items-center justify-between px-5 py-4 border-b border-gray-200 shrink-0">
-          <span className="font-semibold text-gray-900 text-base">{title}</span>
+        <div className="flex items-center justify-between px-5 py-4 border-b border-border shrink-0">
+          <span className="font-semibold text-dark text-base">{title}</span>
           <button
             onClick={onClose}
-            className="text-gray-400 hover:text-gray-700 text-xl leading-none w-7 h-7 flex items-center justify-center rounded hover:bg-gray-100 transition-colors"
+            className="text-muted-light hover:text-dark text-xl leading-none w-7 h-7 flex items-center justify-center rounded hover:bg-surface-alt transition-colors"
             aria-label="Fechar"
           >
             ✕
@@ -195,7 +196,7 @@ function Drawer({
         </div>
         {/* Footer */}
         {footer && (
-          <div className="flex justify-end gap-2 px-5 py-3.5 border-t border-gray-200 shrink-0 bg-gray-50">
+          <div className="flex justify-end gap-2 px-5 py-3.5 border-t border-border shrink-0 bg-surface-muted">
             {footer}
           </div>
         )}
@@ -221,8 +222,8 @@ function WeightSlider({
   return (
     <div className="flex items-center gap-3">
       <div className="w-32 shrink-0">
-        <p className="text-xs font-medium text-gray-700 leading-tight">{label}</p>
-        <p className="text-[10px] text-gray-400 leading-tight">{hint}</p>
+        <p className="text-xs font-medium text-dark leading-tight">{label}</p>
+        <p className="text-2xs text-muted-light leading-tight">{hint}</p>
       </div>
       <input
         type="range"
@@ -233,8 +234,8 @@ function WeightSlider({
         onChange={e => onChange(Number(e.target.value))}
         className="flex-1 accent-primary"
       />
-      <span className="w-12 text-right text-xs font-mono font-bold text-gray-700 shrink-0">
-        {value} <span className="text-gray-400 font-normal">/{pct}%</span>
+      <span className="w-12 text-right text-xs font-mono font-bold text-dark shrink-0">
+        {value} <span className="text-muted-light font-normal">/{pct}%</span>
       </span>
     </div>
   )
@@ -253,23 +254,23 @@ const CHANNEL_OPTIONS = [
   { value: 'webrtc',    label: 'WebRTC'    },
 ]
 
-const DINAMICOS_META: Array<{
-  key: keyof RoutingWeightsDinamicos
-  label: string
-  hint: string
-  default: number
-}> = [
-  { key: 'sla',      label: 'Urgência SLA',     hint: 'Tempo de espera ÷ SLA alvo',       default: 9 },
-  { key: 'wait',     label: 'Tempo de espera',  hint: 'Espera absoluta normalizada',       default: 7 },
-  { key: 'tier',     label: 'Tier do cliente',  hint: 'platinum > gold > standard',        default: 5 },
-  { key: 'churn',    label: 'Risco de churn',   hint: 'Score de churn do perfil',          default: 8 },
-  { key: 'business', label: 'Valor de negócio', hint: 'business_score do cliente',         default: 3 },
-]
-
 const PoolsPage: React.FC = () => {
   const { session } = useAuth()
   const { t } = useTranslation('configRecursos')
   const { t: tCommon } = useTranslation('common')
+
+  const DINAMICOS_META: Array<{
+    key: keyof RoutingWeightsDinamicos
+    label: string
+    hint: string
+    default: number
+  }> = [
+    { key: 'sla',      label: t('pools.routingDynamic.sla.label'),      hint: t('pools.routingDynamic.sla.hint'),      default: 9 },
+    { key: 'wait',     label: t('pools.routingDynamic.wait.label'),     hint: t('pools.routingDynamic.wait.hint'),     default: 7 },
+    { key: 'tier',     label: t('pools.routingDynamic.tier.label'),     hint: t('pools.routingDynamic.tier.hint'),     default: 5 },
+    { key: 'churn',    label: t('pools.routingDynamic.churn.label'),    hint: t('pools.routingDynamic.churn.hint'),    default: 8 },
+    { key: 'business', label: t('pools.routingDynamic.business.label'), hint: t('pools.routingDynamic.business.hint'), default: 3 },
+  ]
 
   const [pools,     setPools]     = useState<Pool[]>([])
   const [calendars, setCalendars] = useState<CalendarOption[]>([])
@@ -288,9 +289,11 @@ const PoolsPage: React.FC = () => {
     description:       '',
     channel_types:     [] as string[],
     sla_target_ms:     30000,
-    max_reply_time_ms: null as number | null,
-    calendar_id:       '',
-    routing_weights:   { ...ROUTING_WEIGHTS_DEFAULTS } as RoutingWeights,
+    max_reply_time_ms:      null as number | null,
+    calendar_id:            '',
+    context_visibility_ns:  '' as string,   // comma-separated operator_namespaces
+    inbound_journey_resume: false,
+    routing_weights:        { ...ROUTING_WEIGHTS_DEFAULTS } as RoutingWeights,
   })
 
   // ── data loading ─────────────────────────────────────────────────────────────
@@ -397,7 +400,7 @@ const PoolsPage: React.FC = () => {
     setEditingPool(null)
     setFormData({
       pool_id: '', description: '', channel_types: [], sla_target_ms: 30000,
-      max_reply_time_ms: null, calendar_id: '', routing_weights: { ...ROUTING_WEIGHTS_DEFAULTS },
+      max_reply_time_ms: null, calendar_id: '', context_visibility_ns: '', inbound_journey_resume: false, routing_weights: { ...ROUTING_WEIGHTS_DEFAULTS },
     })
     setCalExceptions([])
     setError('')
@@ -411,9 +414,11 @@ const PoolsPage: React.FC = () => {
       description:     pool.description || '',
       channel_types:     pool.channel_types,
       sla_target_ms:     pool.sla_target_ms,
-      max_reply_time_ms: pool.max_reply_time_ms ?? null,
-      calendar_id:       pool.calendar_id || '',
-      routing_weights: buildDefaultWeights(pool),
+      max_reply_time_ms:     pool.max_reply_time_ms ?? null,
+      calendar_id:           pool.calendar_id || '',
+      context_visibility_ns:  (pool.context_visibility?.operator_namespaces ?? []).join(', '),
+      inbound_journey_resume: pool.inbound_journey_resume ?? false,
+      routing_weights:        buildDefaultWeights(pool),
     })
     setCalExceptions([])  // will be loaded async below
     setError('')
@@ -471,6 +476,10 @@ const PoolsPage: React.FC = () => {
         sla_target_ms:     formData.sla_target_ms,
         ...(formData.max_reply_time_ms !== null && { max_reply_time_ms: formData.max_reply_time_ms }),
         ...(formData.calendar_id ? { calendar_id: formData.calendar_id } : { calendar_id: undefined }),
+        ...(formData.context_visibility_ns.trim()
+          ? { context_visibility: { operator_namespaces: formData.context_visibility_ns.split(',').map(s => s.trim()).filter(Boolean) } }
+          : {}),
+        inbound_journey_resume: formData.inbound_journey_resume,
         ...(routing_skills.length ? { routing_skills } : {}),
         routing_weights: rw,
       }
@@ -531,21 +540,21 @@ const PoolsPage: React.FC = () => {
     { key: 'sla_target_ms', label: t('pools.fields.slaTargetMs') },
     {
       key: 'calendar_id',
-      label: 'Calendário',
+      label: t('pools.fields.calendar'),
       render: (id?: string) => id
         ? <span className="text-xs font-mono text-secondary">{calendars.find(c => c.id === id)?.name ?? id}</span>
         : <span className="text-xs text-gray">—</span>,
     },
     {
       key: 'routing_weights',
-      label: 'Prioridade',
+      label: t('pools.fields.priority'),
       render: (rw?: RoutingWeights, row?: Pool) => {
         const weights = rw ?? (row ? buildDefaultWeights(row) : null)
-        if (!weights) return <span className="text-xs text-gray">padrão</span>
+        if (!weights) return <span className="text-xs text-gray">{t('pools.fields.default')}</span>
         const skills = Object.entries(weights.fixos).filter(([, w]) => w > 0)
         return (
           <div className="flex flex-col gap-0.5">
-            <span className="text-[10px] font-mono text-gray" title={
+            <span className="text-2xs font-mono text-gray" title={
               `SLA:${weights.dinamicos.sla} Wait:${weights.dinamicos.wait} ` +
               `Tier:${weights.dinamicos.tier} Churn:${weights.dinamicos.churn} ` +
               `Biz:${weights.dinamicos.business}`
@@ -555,7 +564,7 @@ const PoolsPage: React.FC = () => {
             {skills.length > 0 && (
               <div className="flex gap-1 flex-wrap">
                 {skills.map(([k, w]) => (
-                  <span key={k} className="text-[10px] px-1 py-0 rounded bg-green-50 text-green-700 border border-green-200 font-mono">
+                  <span key={k} className="text-2xs px-1 py-0 rounded bg-green-light text-green-text border border-green/30 font-mono">
                     {k}·{w}
                   </span>
                 ))}
@@ -573,7 +582,7 @@ const PoolsPage: React.FC = () => {
   ]
 
   const calendarOptions = [
-    { value: '', label: '— Nenhum —' },
+    { value: '', label: t('pools.fields.noneOption') },
     ...calendars.map(c => ({ value: c.id, label: c.name })),
   ]
 
@@ -617,7 +626,7 @@ const PoolsPage: React.FC = () => {
       >
         <div className="space-y-5">
           {error && (
-            <div className="bg-red-50 border border-red-300 text-red-700 px-3 py-2 rounded text-sm">
+            <div className="bg-red-light border border-red/30 text-red-text px-3 py-2 rounded text-sm">
               {error}
             </div>
           )}
@@ -667,34 +676,34 @@ const PoolsPage: React.FC = () => {
                 value={formData.sla_target_ms}
                 onChange={e => setFormData({ ...formData, sla_target_ms: parseInt(e.target.value) })}
               />
-              <p className="text-xs text-gray-400 mt-0.5">SLA total do atendimento (ms)</p>
+              <p className="text-xs text-muted-light mt-0.5">{t('pools.fields.slaHint')}</p>
             </div>
             <div className="flex-1">
               <Input
-                label="Tempo máx. de resposta (ms)"
+                label={t('pools.fields.maxReplyLabel')}
                 type="number"
-                placeholder="Sem limite"
+                placeholder={t('pools.fields.noLimit')}
                 value={formData.max_reply_time_ms ?? ''}
                 onChange={e => {
                   const v = e.target.value
                   setFormData({ ...formData, max_reply_time_ms: v === '' ? null : parseInt(v) })
                 }}
               />
-              <p className="text-xs text-gray-400 mt-0.5">Por mensagem do cliente — opcional</p>
+              <p className="text-xs text-muted-light mt-0.5">{t('pools.fields.maxReplyHint')}</p>
             </div>
           </div>
 
           {/* ── Calendar ──────────────────────────────────────────────────────── */}
           <div>
             <Select
-              label="Calendário"
+              label={t('pools.fields.calendar')}
               value={formData.calendar_id}
               onChange={e => setFormData({ ...formData, calendar_id: e.target.value })}
               options={calendarOptions}
             />
             {calendars.length === 0 && (
               <p className="text-xs text-gray mt-1">
-                Nenhum calendário disponível. Crie em Configuração → Calendários.
+                {t('pools.fields.noCalendars')}
               </p>
             )}
           </div>
@@ -703,38 +712,59 @@ const PoolsPage: React.FC = () => {
           {formData.calendar_id && (
             <div>
               <div className="mb-2">
-                <p className="text-sm font-semibold text-dark">Exceções deste Pool</p>
-                <p className="text-xs text-gray mt-0.5">
-                  Datas únicas que sobrescrevem as regras do calendário somente para este pool.
-                  Prioridade 1 — acima de feriados e do horário semanal.
-                </p>
+                <p className="text-sm font-semibold text-dark">{t('pools.exceptions.label')}</p>
+                <p className="text-xs text-gray mt-0.5">{t('pools.exceptions.hint')}</p>
               </div>
               <PoolExceptionsEditor exceptions={calExceptions} onChange={setCalExceptions} />
             </div>
           )}
 
+          {/* ── Context visibility — operator namespace filter ─────────────────── */}
+          <div>
+            <div className="mb-1">
+              <p className="text-sm font-semibold text-dark">{t('pools.contextVisibility.label')}</p>
+              <p className="text-xs text-gray mt-0.5">{t('pools.contextVisibility.hint')}</p>
+            </div>
+            <input
+              type="text"
+              placeholder="service, journey, session"
+              value={formData.context_visibility_ns}
+              onChange={e => setFormData({ ...formData, context_visibility_ns: e.target.value })}
+              className="w-full border border-border rounded px-3 py-1.5 text-sm text-dark focus:outline-none focus:ring-1 focus:ring-primary"
+            />
+          </div>
+
+          {/* ── Inbound Journey Resume ───────────────────────────────────────── */}
+          <div className="flex items-start gap-3 p-3 rounded border border-border bg-surface-muted">
+            <input
+              id="inbound_journey_resume"
+              type="checkbox"
+              checked={formData.inbound_journey_resume}
+              onChange={e => setFormData({ ...formData, inbound_journey_resume: e.target.checked })}
+              className="mt-0.5 h-4 w-4 rounded border-border text-primary focus:ring-primary"
+            />
+            <label htmlFor="inbound_journey_resume" className="flex-1 cursor-pointer">
+              <span className="text-sm font-semibold text-dark block">{t('pools.inboundJourneyResume.label')}</span>
+              <span className="text-xs text-gray mt-0.5 block">{t('pools.inboundJourneyResume.hint')}</span>
+            </label>
+          </div>
+
           {/* ── Routing weights — Fixos ───────────────────────────────────────── */}
           <div>
             <div className="mb-2">
-              <p className="text-sm font-semibold text-dark">Pesos de Roteamento — Fixos</p>
-              <p className="text-xs text-gray mt-0.5">
-                Importância de cada competency skill neste pool.
-                Defina 0 para ignorar a skill no roteamento.
-              </p>
+              <p className="text-sm font-semibold text-dark">{t('pools.routingFixed.label')}</p>
+              <p className="text-xs text-gray mt-0.5">{t('pools.routingFixed.hint')}</p>
             </div>
 
             {competencySkills.length === 0 ? (
-              <p className="text-xs text-gray italic py-2">
-                Nenhuma competency skill cadastrada.
-                Configure em Recursos → Skills.
-              </p>
+              <p className="text-xs text-gray italic py-2">{t('pools.routingFixed.empty')}</p>
             ) : (
-              <div className="flex flex-col gap-2.5 border border-gray-200 rounded p-3 bg-gray-50">
+              <div className="flex flex-col gap-2.5 border border-border rounded p-3 bg-surface-muted">
                 {competencySkills.map(skill => (
                   <WeightSlider
                     key={skill.key}
                     label={skill.key}
-                    hint={`padrão: ${skill.domain}`}
+                    hint={t('pools.fields.domainDefault', { value: skill.domain })}
                     value={formData.routing_weights.fixos[skill.key] ?? 0}
                     onChange={v => setFixoWeight(skill.key, v)}
                   />
@@ -746,13 +776,10 @@ const PoolsPage: React.FC = () => {
           {/* ── Routing weights — Dinâmicos ───────────────────────────────────── */}
           <div>
             <div className="mb-2">
-              <p className="text-sm font-semibold text-dark">Pesos de Roteamento — Dinâmicos</p>
-              <p className="text-xs text-gray mt-0.5">
-                Influência de cada fator em tempo real na ordenação da fila.
-                0 = ignorar, 9 = máxima influência.
-              </p>
+              <p className="text-sm font-semibold text-dark">{t('pools.routingDynamic.label')}</p>
+              <p className="text-xs text-gray mt-0.5">{t('pools.routingDynamic.hint')}</p>
             </div>
-            <div className="flex flex-col gap-2.5 border border-gray-200 rounded p-3 bg-gray-50">
+            <div className="flex flex-col gap-2.5 border border-border rounded p-3 bg-surface-muted">
               {DINAMICOS_META.map(({ key, label, hint }) => (
                 <WeightSlider
                   key={key}
@@ -776,7 +803,7 @@ const PoolsPage: React.FC = () => {
               }
               className="mt-1.5 text-xs text-secondary hover:text-primary transition-colors"
             >
-              ↺ Restaurar padrões dinâmicos
+              {t('pools.routingDynamic.reset')}
             </button>
           </div>
         </div>

@@ -35,6 +35,8 @@ model Pool {
   agent_groups           String[] @default([]) // Agent group IDs this pool belongs to (Arc 9)
   hooks                  Json?   // PoolHooks — on_human_start, on_human_end, post_human
   calendar_id            String? // Reference to calendar-api calendar UUID (display cache)
+  context_visibility     Json?   // { operator_namespaces: string[] } — ContextoTab namespace filter
+  inbound_journey_resume Boolean @default(false) // Arc 16 Phase E: opt-in for journey_check_pending on inbound
 
   created_at  DateTime @default(now())
   updated_at  DateTime @updatedAt
@@ -76,6 +78,10 @@ model AgentType {
   permissions  String[] @default([])
   capabilities Json     @default("{}")
   prompt_id    String?
+
+  // Arc 15: meios de mídia suportados para o canal WebRTC
+  // Valores: "video" | "voice" | "text"
+  media_capabilities String[] @default([])
 
   agent_classification Json?
 
