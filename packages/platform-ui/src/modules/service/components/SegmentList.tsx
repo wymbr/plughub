@@ -5,6 +5,8 @@
  * Only active segments (ended_at === null) allow supervisor join.
  */
 import React from 'react'
+import { Timer, Loader2 } from 'lucide-react'
+import { useTranslation } from 'react-i18next'
 import { useSessionSegments } from '../api/hooks'
 import type { ContactSegment, SegmentRole } from '../types'
 
@@ -83,61 +85,62 @@ function SegmentRow({
   segment: ContactSegment
   onClick: () => void
 }) {
+  const { t } = useTranslation('contacts')
   const isActive  = segment.ended_at === null
   const agentLabel = segment.agent_type_id.replace(/_/g, ' ').replace(/\bv\d+$/, '').trim()
 
   return (
     <div
       onClick={onClick}
-      className="flex items-start gap-3 px-4 py-3 hover:bg-gray-50 cursor-pointer border-b border-gray-100 transition-colors last:border-b-0"
+      className="flex items-start gap-3 px-4 py-3 hover:bg-surface-muted cursor-pointer border-b border-border transition-colors last:border-b-0"
     >
       {/* Active indicator stripe */}
-      <div className={`w-1 self-stretch rounded-full flex-shrink-0 mt-0.5 ${isActive ? 'bg-green-500' : 'bg-gray-200'}`} />
+      <div className={`w-1 self-stretch rounded-full flex-shrink-0 mt-0.5 ${isActive ? 'bg-green' : 'bg-border'}`} />
 
       {/* Content */}
       <div className="flex-1 min-w-0">
         {/* Row 1: role + agent name + human indicator + active badge */}
         <div className="flex items-center gap-2 flex-wrap mb-1">
           <RoleBadge role={segment.role} />
-          <span className="text-sm font-medium text-gray-800 truncate">{agentLabel}</span>
+          <span className="text-sm font-medium text-dark truncate">{agentLabel}</span>
           {segment.agent_type === 'human' && (
-            <span className="text-xs px-1.5 py-0.5 rounded bg-amber-50 text-amber-700 font-medium flex-shrink-0">
-              👤 humano
+            <span className="text-xs px-1.5 py-0.5 rounded bg-warning-light text-warning-text font-medium flex-shrink-0">
+              👤 {t('segments.human')}
             </span>
           )}
           <span className={`text-xs font-semibold px-1.5 py-0.5 rounded-full ml-auto flex-shrink-0 ${
             isActive
-              ? 'bg-green-100 text-green-700'
-              : 'bg-gray-100 text-gray-500'
+              ? 'bg-green-light text-green-text'
+              : 'bg-surface-alt text-muted'
           }`}>
-            {isActive ? '● ao vivo' : 'encerrado'}
+            {isActive ? t('segments.live') : t('segments.closed')}
           </span>
         </div>
 
         {/* Row 2: timing */}
-        <div className="flex items-center gap-3 text-xs text-gray-500">
+        <div className="flex items-center gap-3 text-xs text-muted">
           <span>⏰ {fmtTime(segment.started_at)}</span>
           {!isActive && segment.ended_at && (
             <span>→ {fmtTime(segment.ended_at)}</span>
           )}
           {segment.duration_ms !== null && (
-            <span className="font-mono">⏱ {fmtDuration(segment.duration_ms)}</span>
+            <span className="font-mono inline-flex items-center gap-0.5"><Timer className="w-3 h-3" aria-hidden="true" />{fmtDuration(segment.duration_ms)}</span>
           )}
           {isActive && (
-            <span className="text-green-600 animate-pulse">em andamento</span>
+            <span className="text-green-text animate-pulse">{t('segments.inProgress')}</span>
           )}
         </div>
 
-        {/* Row 3: outcome + sequence + parent (agent_type badge moved to Row 1) */}
+        {/* Row 3: outcome + sequence + parent */}
         <div className="flex items-center gap-2 mt-0.5 flex-wrap">
           {segment.outcome && (
             <OutcomeBadge outcome={segment.outcome} />
           )}
           {segment.sequence_index > 0 && (
-            <span className="text-xs text-gray-400">handoff #{segment.sequence_index}</span>
+            <span className="text-xs text-muted-light">{t('segments.handoff', { index: segment.sequence_index })}</span>
           )}
           {segment.parent_segment_id && (
-            <span className="text-xs text-gray-400">↳ especialista</span>
+            <span className="text-xs text-muted-light">{t('segments.specialist')}</span>
           )}
         </div>
       </div>
@@ -145,11 +148,11 @@ function SegmentRow({
       {/* Right: join indicator */}
       <div className="flex-shrink-0 flex flex-col items-end gap-1">
         {isActive ? (
-          <span className="text-xs font-semibold text-indigo-600 flex items-center gap-1">
-            <span>👁</span> entrar
+          <span className="text-xs font-semibold text-primary flex items-center gap-1">
+            {t('segments.join')}
           </span>
         ) : (
-          <span className="text-xs text-gray-300">›</span>
+          <span className="text-xs text-border-strong">›</span>
         )}
       </div>
     </div>
@@ -159,11 +162,12 @@ function SegmentRow({
 // ── Empty / loading / error states ────────────────────────────────────────
 
 function Placeholder({ loading, error }: { loading: boolean; error: string | null }) {
+  const { t } = useTranslation('contacts')
   if (loading) {
     return (
-      <div className="flex flex-col items-center justify-center h-full gap-3 text-gray-400 py-16">
-        <span className="text-2xl animate-spin">⏳</span>
-        <span className="text-sm">Carregando segmentos…</span>
+      <div className="flex flex-col items-center justify-center h-full gap-3 text-muted-light py-16">
+        <Loader2 className="w-6 h-6 animate-spin text-muted-light" aria-hidden="true" />
+        <span className="text-sm">{t('segments.loading')}</span>
       </div>
     )
   }
@@ -171,17 +175,17 @@ function Placeholder({ loading, error }: { loading: boolean; error: string | nul
     return (
       <div className="flex flex-col items-center justify-center h-full gap-3 py-16 px-4">
         <span className="text-3xl">⚠️</span>
-        <span className="text-sm text-red-600 font-medium text-center">Erro ao carregar segmentos</span>
-        <span className="text-xs text-red-400 text-center">{error}</span>
-        <span className="text-xs text-gray-400 text-center mt-1">Verifique se o analytics-api está em execução.</span>
+        <span className="text-sm text-red-text font-medium text-center">{t('segments.errorTitle')}</span>
+        <span className="text-xs text-red text-center">{error}</span>
+        <span className="text-xs text-muted-light text-center mt-1">{t('segments.errorHint')}</span>
       </div>
     )
   }
   return (
-    <div className="flex flex-col items-center justify-center h-full gap-3 text-gray-400 py-16">
+    <div className="flex flex-col items-center justify-center h-full gap-3 text-muted-light py-16">
       <span className="text-3xl">📭</span>
-      <span className="text-sm">Nenhum segmento encontrado para esta sessão.</span>
-      <span className="text-xs opacity-60">Os segmentos aparecem quando agentes entram na sessão.</span>
+      <span className="text-sm">{t('segments.empty')}</span>
+      <span className="text-xs opacity-60">{t('segments.emptyHint')}</span>
     </div>
   )
 }
@@ -189,41 +193,42 @@ function Placeholder({ loading, error }: { loading: boolean; error: string | nul
 // ── SegmentList (main) ─────────────────────────────────────────────────────
 
 export function SegmentList({ tenantId, sessionId, onSelect, onBack, canJoin = true }: Props) {
+  const { t } = useTranslation('contacts')
   const { segments, loading, error } = useSessionSegments(tenantId, sessionId)
 
   const activeCount = segments.filter(s => s.ended_at === null).length
 
   return (
-    <div className="flex flex-col h-full overflow-hidden bg-white rounded-xl border border-gray-200">
+    <div className="flex flex-col h-full overflow-hidden bg-white rounded-xl border border-border">
       {/* Header */}
-      <div className="flex items-center gap-3 px-4 py-3 border-b border-gray-200 flex-shrink-0 bg-gray-50">
+      <div className="flex items-center gap-3 px-4 py-3 border-b border-border flex-shrink-0 bg-surface-muted">
         <button
           onClick={onBack}
-          className="text-xs text-gray-500 hover:text-gray-700 border border-gray-200 rounded px-2 py-1 bg-white transition-colors"
+          className="text-xs text-muted hover:text-dark border border-border rounded px-2 py-1 bg-white transition-colors"
         >
-          ← Contatos
+          {t('detail.back')}
         </button>
         <div className="flex-1 min-w-0">
-          <p className="text-sm font-semibold text-gray-800">Segmentos</p>
-          <p className="text-xs text-gray-500 font-mono truncate">
-            sessão …{sessionId.slice(-12)}
+          <p className="text-sm font-semibold text-dark">{t('segments.title')}</p>
+          <p className="text-xs text-muted font-mono truncate">
+            {t('segments.session', { id: sessionId.slice(-12) })}
           </p>
         </div>
         <div className="flex items-center gap-2 flex-shrink-0">
           {activeCount > 0 && (
-            <span className="text-xs bg-green-100 text-green-700 font-semibold px-2 py-0.5 rounded-full">
-              {activeCount} ativo{activeCount !== 1 ? 's' : ''}
+            <span className="text-xs bg-green-light text-green-text font-semibold px-2 py-0.5 rounded-full">
+              {t('segments.active', { count: activeCount })}
             </span>
           )}
-          <span className="text-xs text-gray-400">{segments.length} total</span>
+          <span className="text-xs text-muted-light">{t('segments.total', { count: segments.length })}</span>
         </div>
       </div>
 
       {/* Info note */}
       {segments.length > 0 && (
-        <div className="px-4 py-2 bg-indigo-50 border-b border-indigo-100 flex-shrink-0">
-          <p className="text-xs text-indigo-600">
-            💡 Cada segmento representa a participação de um agente. Clique num segmento <strong>ao vivo</strong> para entrar como supervisor.
+        <div className="px-4 py-2 bg-primary-light border-b border-primary/20 flex-shrink-0">
+          <p className="text-xs text-primary">
+            💡 {t('segments.hint')}
           </p>
         </div>
       )}

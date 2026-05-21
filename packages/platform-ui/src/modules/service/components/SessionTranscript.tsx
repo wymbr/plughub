@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type React from 'react'
+import { Play } from 'lucide-react'
+import { useTranslation } from 'react-i18next'
 import { useSessionStream, useSupervisor } from '../api/hooks'
 import { SupervisorJoinButton, SupervisorPanel } from './SupervisorPanel'
 import { renderWithTokens, useMaskingDisplayRules } from '@/components/MaskedToken'
@@ -221,6 +223,7 @@ interface Props {
 }
 
 export function SessionTranscript({ tenantId, sessionId, onBack, canJoin = true, segment }: Props) {
+  const { t }                                      = useTranslation('contacts')
   const { entries, status }                        = useSessionStream(tenantId, sessionId)
   const { state: supState, join, message, leave }  = useSupervisor(tenantId, sessionId)
   const maskingRules                               = useMaskingDisplayRules()
@@ -293,9 +296,9 @@ export function SessionTranscript({ tenantId, sessionId, onBack, canJoin = true,
   return (
     <div style={s.container}>
       <div style={s.header}>
-        <button style={s.backBtn} onClick={onBack}>{'←'} Segmentos</button>
+        <button style={s.backBtn} onClick={onBack}>{t('transcript.back')}</button>
         <span style={{ fontSize: 14, color: '#94a3b8' }}>
-          {'Sessão '}
+          {t('transcript.session')}{' '}
           <code style={{ fontSize: 12, color: '#e2e8f0', backgroundColor: '#1e293b', borderRadius: 4, padding: '1px 6px' }}>
             {sessionId}
           </code>
@@ -311,12 +314,12 @@ export function SessionTranscript({ tenantId, sessionId, onBack, canJoin = true,
         )}
         {canJoin && isSupActive && (
           <span style={{ fontSize: 12, color: '#f59e0b', border: '1px solid #f59e0b44', borderRadius: 4, padding: '2px 8px', marginLeft: 'auto', fontWeight: 600 }}>
-            {'\u{1F441}'} supervisionando
+            {t('transcript.supervising')}
           </span>
         )}
         {!isSupActive && (
           <span style={{ fontSize: 11, color: canJoin ? '#475569' : '#374151', border: `1px solid ${canJoin ? '#334155' : '#1f2937'}`, borderRadius: 4, padding: '2px 6px', marginLeft: 'auto' }}>
-            {canJoin ? 'leitura' : 'encerrado · somente leitura'}
+            {canJoin ? t('transcript.readOnly') : t('transcript.closedReadOnly')}
           </span>
         )}
       </div>
@@ -326,7 +329,7 @@ export function SessionTranscript({ tenantId, sessionId, onBack, canJoin = true,
         {segment && before.length > 0 && (
           <div style={{ marginBottom: 8 }}>
             <button onClick={() => setShowBefore(!showBefore)} style={{ background: 'none', border: 'none', color: '#475569', cursor: 'pointer', fontSize: 12, padding: '4px 0' }}>
-              {showBefore ? '▾' : '▸'} Antes do segmento · {before.length} eventos
+              {showBefore ? '▾' : '▸'} {t('transcript.beforeSegment', { count: before.length })}
             </button>
             {showBefore && before.map(e => <EntryRow key={e.entry_id} e={e} showEvents={showEvents} maskingRules={maskingRules} />)}
           </div>
@@ -337,42 +340,74 @@ export function SessionTranscript({ tenantId, sessionId, onBack, canJoin = true,
           <div ref={duringRef} style={{ display: 'flex', alignItems: 'center', gap: 10, margin: '8px 0' }}>
             <span style={{ flex: 1, height: 2, background: 'linear-gradient(90deg, transparent, #22c55e)', display: 'block' }} />
             <span style={{ fontSize: 11, color: '#22c55e', fontWeight: 600, whiteSpace: 'nowrap' }}>
-              {'▶'} Início do segmento · {segment.started_at ? fmtTs(segment.started_at) : ''}
+              <Play className="w-3 h-3 inline-block" aria-hidden="true" /> {t('transcript.segmentStart')} · {segment.started_at ? fmtTs(segment.started_at) : ''}
             </span>
             <span style={{ flex: 1, height: 2, background: 'linear-gradient(90deg, #22c55e, transparent)', display: 'block' }} />
           </div>
         )}
 
         {/* ── During segment ── */}
-        {during.length === 0 && <p style={s.placeholder}>Nenhum evento no stream ainda.</p>}
+        {during.length === 0 && <p style={s.placeholder}>{t('transcript.noEvents')}</p>}
         {during.map(e => <EntryRow key={e.entry_id} e={e} showEvents={showEvents} maskingRules={maskingRules} />)}
 
         {/* ── Segment insights ── */}
         {segmentInsights.length > 0 && (
           <div style={{ marginTop: 12, display: 'flex', flexDirection: 'column', gap: 6 }}>
             <span style={{ fontSize: 11, color: '#64748b', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em' }}>
-              Insights ({segmentInsights.length})
+              {t('transcript.insights', { count: segmentInsights.length })}
             </span>
             {segmentInsights.map(row => <InsightCard key={row.insight_id} row={row} />)}
           </div>
         )}
 
         {/* ── Segment end marker ── */}
-        {segment && segment.ended_at && (
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10, margin: '8px 0' }}>
-            <span style={{ flex: 1, height: 2, background: 'linear-gradient(90deg, transparent, #ef4444)', display: 'block' }} />
-            <span style={{ fontSize: 11, color: '#ef4444', fontWeight: 600, whiteSpace: 'nowrap' }}>
-              {'■'} Fim do segmento · {fmtTs(segment.ended_at)}
-            </span>
-            <span style={{ flex: 1, height: 2, background: 'linear-gradient(90deg, #ef4444, transparent)', display: 'block' }} />
-          </div>
-        )}
+        {segment && (() => {
+          // Prefer the authoritative ended_at from ClickHouse.
+          // Fallback: find participant_left event for this segment's agent in the
+          // during/after entries (covers cases where ended_at is not yet written,
+          // e.g. specialist that escalated without an explicit close).
+          const endedAt = segment.ended_at
+          if (endedAt) {
+            return (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, margin: '8px 0' }}>
+                <span style={{ flex: 1, height: 2, background: 'linear-gradient(90deg, transparent, #ef4444)', display: 'block' }} />
+                <span style={{ fontSize: 11, color: '#ef4444', fontWeight: 600, whiteSpace: 'nowrap' }}>
+                  {'■'} {t('transcript.segmentEnd')} · {fmtTs(endedAt)}
+                </span>
+                <span style={{ flex: 1, height: 2, background: 'linear-gradient(90deg, #ef4444, transparent)', display: 'block' }} />
+              </div>
+            )
+          }
+          // Look for participant_left event.
+          // Strategy: try exact participant_id match first (author_id or payload field),
+          // then fall back to any participant_left in 'during' — which is already
+          // time-filtered to this segment's window, so it is always the right event.
+          const matchesParticipant = (e: StreamEntry) =>
+            e.author_id === segment.participant_id ||
+            (e as unknown as Record<string, unknown>).participant_id === segment.participant_id
+
+          const leftEvent =
+            [...during, ...after].find(e => e.type === 'participant_left' && matchesParticipant(e)) ??
+            during.find(e => e.type === 'participant_left')
+          if (leftEvent) {
+            return (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, margin: '8px 0' }}>
+                <span style={{ flex: 1, height: 2, background: 'linear-gradient(90deg, transparent, #f97316)', display: 'block' }} />
+                <span style={{ fontSize: 11, color: '#f97316', fontWeight: 600, whiteSpace: 'nowrap' }}>
+                  {'↩'} {t('transcript.participantLeft')} · {leftEvent.timestamp ? fmtTs(leftEvent.timestamp) : ''}
+                </span>
+                <span style={{ flex: 1, height: 2, background: 'linear-gradient(90deg, #f97316, transparent)', display: 'block' }} />
+              </div>
+            )
+          }
+          return null
+        })()}
 
         {/* ── After segment ── */}
         {segment && after.length > 0 && (
           <div style={{ marginTop: 8 }}>
             <button onClick={() => setShowAfter(!showAfter)} style={{ background: 'none', border: 'none', color: '#475569', cursor: 'pointer', fontSize: 12, padding: '4px 0' }}>
-              {showAfter ? '▾' : '▸'} Após o segmento · {after.length} eventos
+              {showAfter ? '▾' : '▸'} {t('transcript.afterSegment', { count: after.length })}
             </button>
             {showAfter && after.map(e => <EntryRow key={e.entry_id} e={e} showEvents={showEvents} maskingRules={maskingRules} />)}
           </div>
@@ -382,7 +417,7 @@ export function SessionTranscript({ tenantId, sessionId, onBack, canJoin = true,
         {!segment && (
           <div style={{ marginTop: 8, textAlign: 'center' }}>
             <button onClick={() => setShowEvents(!showEvents)} style={{ background: 'none', border: '1px solid #334155', color: '#94a3b8', borderRadius: 6, padding: '4px 12px', cursor: 'pointer', fontSize: 12 }}>
-              {showEvents ? 'Ocultar eventos' : 'Mostrar eventos'}
+              {showEvents ? t('transcript.hideEvents') : t('transcript.showEvents')}
             </button>
           </div>
         )}
@@ -404,13 +439,13 @@ function EntryRow({ e, showEvents, maskingRules }: {
   showEvents: boolean
   maskingRules?: import('@/components/MaskedToken').MaskingRulesMap
 }) {
+  const { t } = useTranslation('contacts')
   const isEvent = SYSTEM_TYPES_SET.has(e.type)
   if (isEvent) return showEvents ? <EventRow e={e} /> : null
 
-  const text = extractText(e.content)
-  const isAgent = e.author_role !== 'customer'
+  const isAgent    = e.author_role !== 'customer'
   const isInternal = e.visibility === 'agents_only'
-  const rendered = renderWithTokens(text, maskingRules)
+  const normalized = normalizeContent(e.content)
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', alignItems: isAgent ? 'flex-end' : 'flex-start' }}>
@@ -427,11 +462,11 @@ function EntryRow({ e, showEvents, maskingRules }: {
             : { backgroundColor: '#1e3a5f', color: '#bfdbfe' })
       }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 2 }}>
-          {isInternal && <span style={{ fontSize: 9, fontWeight: 700, color: '#d97706', textTransform: 'uppercase' }}>Interno</span>}
+          {isInternal && <span style={{ fontSize: 9, fontWeight: 700, color: '#d97706', textTransform: 'uppercase' }}>{t('transcript.internal')}</span>}
           <RoleBadge role={e.author_role} />
           <span style={{ fontSize: 10, color: '#64748b' }}>{e.timestamp ? fmtTs(e.timestamp) : ''}</span>
         </div>
-        <div style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{rendered}</div>
+        <ContentRenderer normalized={normalized} maskingRules={maskingRules} />
       </div>
     </div>
   )
@@ -501,21 +536,137 @@ function StatusDot({ status }: { status: string }) {
   return <span title={status} style={{ display: 'inline-block', width: 8, height: 8, borderRadius: '50%', backgroundColor: color, boxShadow: status === 'connected' ? `0 0 0 3px ${color}33` : 'none' }} />
 }
 
-function extractText(content: unknown): string {
-  if (!content) return ''
-  if (typeof content === 'string') return content
+// ─── Content normalisation ────────────────────────────────────────────────────
+//
+// The stream stores content in several shapes depending on the sender:
+//   • Human / customer  → plain string
+//   • notify step       → { type:"text", text:"..." }
+//   • menu step         → { type:"menu", text:"...", options:[{id,label},...] }
+//   • Specialist outer  → { message_id:"...", content:{ type, text, options? } }
+//   • Legacy            → { text:"..." }  (no type)
+//
+// normalizeContent() unwraps all shapes into a single NormalizedContent so
+// ContentRenderer can render each type uniformly.
+
+interface NormalizedText    { kind: 'text';   text: string }
+interface NormalizedMenu    { kind: 'menu';   text: string; options: { id: string; label: string }[]; mode?: string }
+interface NormalizedButton  { kind: 'button'; text: string; options: { id: string; label: string }[] }
+interface NormalizedForm    { kind: 'form';   text: string; fields: { id: string; label: string; type?: string }[] }
+interface NormalizedUnknown { kind: 'raw';    json: string }
+type NormalizedContent = NormalizedText | NormalizedMenu | NormalizedButton | NormalizedForm | NormalizedUnknown
+
+function normalizeContent(content: unknown): NormalizedContent {
+  if (!content) return { kind: 'text', text: '' }
+  if (typeof content === 'string') return { kind: 'text', text: content }
+
   if (typeof content === 'object' && content !== null) {
-    const c = content as Record<string, unknown>
-    if (typeof c.text === 'string') return c.text
-    return JSON.stringify(content, null, 2)
+    let obj = content as Record<string, unknown>
+
+    // Unwrap specialist wrapper: { message_id, content: { type, text, ... } }
+    if (obj.message_id && obj.content && typeof obj.content === 'object') {
+      obj = obj.content as Record<string, unknown>
+    }
+
+    const type    = typeof obj.type    === 'string' ? obj.type    : ''
+    const text    = typeof obj.text    === 'string' ? obj.text    : ''
+    const options = Array.isArray(obj.options) ? obj.options as { id: string; label: string }[] : []
+    const fields  = Array.isArray(obj.fields)  ? obj.fields  as { id: string; label: string; type?: string }[] : []
+
+    if (type === 'text' || (!type && text)) return { kind: 'text', text }
+    if (type === 'menu')   return { kind: 'menu',   text, options, mode: typeof obj.mode === 'string' ? obj.mode : undefined }
+    if (type === 'button') return { kind: 'button', text, options }
+    if (type === 'form')   return { kind: 'form',   text, fields }
+    if (type === 'list')   return { kind: 'menu',   text, options }
+
+    // Fallback: try to extract any text-ish field before giving up
+    if (text) return { kind: 'text', text }
   }
-  return String(content)
+
+  return { kind: 'raw', json: JSON.stringify(content, null, 2) }
+}
+
+// ─── ContentRenderer ─────────────────────────────────────────────────────────
+
+function ContentRenderer({ normalized, maskingRules }: {
+  normalized: NormalizedContent
+  maskingRules?: import('@/components/MaskedToken').MaskingRulesMap
+}) {
+  const { t } = useTranslation('contacts')
+  if (normalized.kind === 'text') {
+    return <div style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{renderWithTokens(normalized.text, maskingRules)}</div>
+  }
+
+  if (normalized.kind === 'menu' || normalized.kind === 'button') {
+    const isButton = normalized.kind === 'button'
+    return (
+      <div>
+        {normalized.text && (
+          <div style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word', marginBottom: normalized.options.length ? 8 : 0 }}>
+            {renderWithTokens(normalized.text, maskingRules)}
+          </div>
+        )}
+        {normalized.options.length > 0 && (
+          <div style={{ display: 'flex', flexDirection: isButton ? 'row' : 'column', flexWrap: 'wrap', gap: 4, marginTop: 2 }}>
+            {normalized.options.map((opt, i) => (
+              <div key={opt.id ?? i} style={{
+                display: 'inline-flex', alignItems: 'center', gap: 6,
+                padding: isButton ? '4px 10px' : '3px 8px',
+                borderRadius: isButton ? 12 : 4,
+                border: '1px solid #334155',
+                backgroundColor: '#0f172a',
+                color: '#94a3b8',
+                fontSize: 11,
+                cursor: 'default',
+              }}>
+                {!isButton && <span style={{ color: '#475569', fontWeight: 600, minWidth: 14 }}>{i + 1}.</span>}
+                {opt.label ?? opt.id}
+              </div>
+            ))}
+          </div>
+        )}
+        {!isButton && normalized.options.length === 0 && (
+          <span style={{ fontSize: 10, color: '#475569', fontStyle: 'italic' }}>{t('transcript.menuNoOptions')}</span>
+        )}
+      </div>
+    )
+  }
+
+  if (normalized.kind === 'form') {
+    return (
+      <div>
+        {normalized.text && (
+          <div style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word', marginBottom: 6 }}>
+            {renderWithTokens(normalized.text, maskingRules)}
+          </div>
+        )}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+          {normalized.fields.map((f, i) => (
+            <div key={f.id ?? i} style={{ display: 'flex', gap: 6, alignItems: 'center', fontSize: 11, color: '#64748b' }}>
+              <span style={{ color: '#475569' }}>□</span>
+              <span>{f.label ?? f.id}</span>
+              {f.type && <span style={{ color: '#334155', fontSize: 10 }}>({f.type})</span>}
+            </div>
+          ))}
+        </div>
+      </div>
+    )
+  }
+
+  // Raw fallback — collapse by default to avoid wall of JSON
+  return (
+    <details style={{ fontSize: 11 }}>
+      <summary style={{ cursor: 'pointer', color: '#64748b', userSelect: 'none' }}>{t('transcript.structuredContent')}</summary>
+      <pre style={{ marginTop: 6, padding: '6px 8px', backgroundColor: '#0f172a', borderRadius: 4, overflowX: 'auto', color: '#94a3b8', fontSize: 11, lineHeight: 1.4 }}>
+        {normalized.json}
+      </pre>
+    </details>
+  )
 }
 
 function fmtTs(iso: string): string {
   try {
     const d = new Date(iso)
-    return d.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+    return d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', second: '2-digit' })
   } catch { return iso }
 }
 

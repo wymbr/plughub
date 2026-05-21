@@ -1,5 +1,6 @@
 import { useRef, useState } from 'react'
 import type React from 'react'
+import { useTranslation } from 'react-i18next'
 import type { SupervisorState } from '../types'
 
 interface Props {
@@ -9,6 +10,7 @@ interface Props {
 }
 
 export function SupervisorPanel({ state, onMessage, onLeave }: Props) {
+  const { t } = useTranslation('contacts')
   const [text, setText]             = useState('')
   const [visibility, setVisibility] = useState<'agents_only' | 'all'>('agents_only')
   const [sending, setSending]       = useState(false)
@@ -27,17 +29,17 @@ export function SupervisorPanel({ state, onMessage, onLeave }: Props) {
   }
 
   const visColor  = visibility === 'agents_only' ? '#22c55e' : '#f59e0b'
-  const visLabel  = visibility === 'agents_only' ? 'apenas agentes' : 'todos'
+  const visLabel  = visibility === 'agents_only' ? t('transcript.visAgentsOnly') : t('transcript.visAll')
   const visToggle = visibility === 'agents_only' ? 'all' : 'agents_only'
 
   return (
     <div style={s.panel}>
       <div style={s.statusBar}>
         <span style={s.dot} />
-        <span style={s.statusText}>Supervisor ativo</span>
-        <span style={s.joinedAt}>{state.joinedAt ? `desde ${fmtTime(state.joinedAt)}` : ''}</span>
+        <span style={s.statusText}>{t('transcript.supervisorActive')}</span>
+        <span style={s.joinedAt}>{state.joinedAt ? t('transcript.joinedSince', { time: fmtTime(state.joinedAt) }) : ''}</span>
         <button style={s.leaveBtn} onClick={onLeave} disabled={state.status === 'leaving'}>
-          {state.status === 'leaving' ? 'Saindo…' : 'Sair'}
+          {state.status === 'leaving' ? t('transcript.leaving') : t('transcript.leave')}
         </button>
       </div>
       {state.error && <div style={s.errBanner}>⚠ {state.error}</div>}
@@ -45,7 +47,7 @@ export function SupervisorPanel({ state, onMessage, onLeave }: Props) {
         <textarea
           ref={textareaRef} value={text}
           onChange={e => setText(e.target.value)} onKeyDown={handleKeyDown}
-          placeholder="Mensagem de supervisão… (Enter para enviar)"
+          placeholder={t('transcript.msgPlaceholder')}
           style={s.textarea} rows={2} disabled={sending} autoFocus
         />
         <div style={s.footer}>
@@ -56,9 +58,9 @@ export function SupervisorPanel({ state, onMessage, onLeave }: Props) {
             <span style={{ ...s.visDot, backgroundColor: visColor }} />
             {visLabel}
           </button>
-          <span style={s.hint}>Shift+Enter para nova linha</span>
+          <span style={s.hint}>{t('transcript.shiftEnterHint')}</span>
           <button style={{ ...s.sendBtn, opacity: (!text.trim() || sending) ? 0.4 : 1 }} onClick={handleSend} disabled={!text.trim() || sending}>
-            {sending ? 'Enviando…' : 'Enviar'}
+            {sending ? t('transcript.sending') : t('transcript.send')}
           </button>
         </div>
       </div>
@@ -67,11 +69,12 @@ export function SupervisorPanel({ state, onMessage, onLeave }: Props) {
 }
 
 export function SupervisorJoinButton({ onJoin, joining, error }: { onJoin: () => void; joining: boolean; error: string | null }) {
+  const { t } = useTranslation('contacts')
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
       {error && <span style={{ fontSize: 11, color: '#fca5a5' }}>{error}</span>}
       <button style={{ ...s.joinBtn, opacity: joining ? 0.6 : 1 }} onClick={onJoin} disabled={joining}>
-        {joining ? 'Entrando…' : '⌥ Entrar como supervisor'}
+        {joining ? t('transcript.joining') : t('transcript.joinAsSuper')}
       </button>
     </div>
   )

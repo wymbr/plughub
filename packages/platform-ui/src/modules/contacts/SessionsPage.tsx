@@ -65,16 +65,16 @@ function ContactInsightsPanel({ tenantId, sessionId }: { tenantId: string; sessi
   }, [tenantId, sessionId])
 
   if (loading) return (
-    <div className="flex items-center justify-center h-full text-gray-400 text-sm gap-2">
+    <div className="flex items-center justify-center h-full text-muted-light text-sm gap-2">
       <span className="animate-spin text-lg">⟳</span> {t('insights.loading')}
     </div>
   )
 
   if (rows.length === 0) return (
-    <div className="flex flex-col items-center justify-center h-full text-gray-400 gap-2 p-8">
+    <div className="flex flex-col items-center justify-center h-full text-muted-light gap-2 p-8">
       <span className="text-3xl">📭</span>
       <p className="text-sm text-center">{error ? t('insights.loadError') : t('insights.empty')}</p>
-      {error && <p className="text-xs text-red-400">{error}</p>}
+      {error && <p className="text-xs text-red-text">{error}</p>}
     </div>
   )
 
@@ -83,8 +83,8 @@ function ContactInsightsPanel({ tenantId, sessionId }: { tenantId: string; sessi
       {rows.map(row => {
         const isHistorico = row.insight_type?.startsWith('insight.historico')
         const isConvo     = row.insight_type?.startsWith('insight.conversa')
-        const borderColor = isHistorico ? 'border-violet-400' : isConvo ? 'border-teal-400' : 'border-blue-300'
-        const badgeBg     = isHistorico ? 'bg-violet-100 text-violet-700' : isConvo ? 'bg-teal-100 text-teal-700' : 'bg-blue-100 text-blue-700'
+        const borderColor = isHistorico ? 'border-ai' : isConvo ? 'border-revised' : 'border-primary/30'
+        const badgeBg     = isHistorico ? 'bg-ai-light text-ai-text' : isConvo ? 'bg-revised-light text-revised-text' : 'bg-primary-light text-primary'
         const dt = row.timestamp
           ? new Date(row.timestamp).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' })
           : '—'
@@ -92,19 +92,19 @@ function ContactInsightsPanel({ tenantId, sessionId }: { tenantId: string; sessi
           <div key={row.insight_id} className={`bg-white border-l-4 ${borderColor} rounded-lg shadow-sm px-4 py-3 space-y-1.5`}>
             <div className="flex items-center gap-2 flex-wrap">
               <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${badgeBg}`}>{row.insight_type}</span>
-              {row.category && <span className="text-xs px-2 py-0.5 rounded-full bg-gray-100 text-gray-600">{row.category}</span>}
-              <span className="ml-auto text-xs text-gray-400 tabular-nums">{dt}</span>
+              {row.category && <span className="text-xs px-2 py-0.5 rounded-full bg-surface-alt text-muted">{row.category}</span>}
+              <span className="ml-auto text-xs text-muted-light tabular-nums">{dt}</span>
             </div>
-            {row.value && <p className="text-sm text-gray-700 font-medium leading-snug">{row.value}</p>}
+            {row.value && <p className="text-sm text-dark font-medium leading-snug">{row.value}</p>}
             {row.tags?.length > 0 && (
               <div className="flex flex-wrap gap-1">
                 {row.tags.map(tag => (
-                  <span key={tag} className="text-xs px-2 py-0.5 rounded border border-gray-200 text-gray-500 bg-gray-50">#{tag}</span>
+                  <span key={tag} className="text-xs px-2 py-0.5 rounded border border-border text-muted bg-surface-muted">#{tag}</span>
                 ))}
               </div>
             )}
             {row.agent_id && (
-              <p className="text-xs text-gray-400">{t('insights.registeredBy')} <code className="bg-gray-100 rounded px-1">{row.agent_id}</code></p>
+              <p className="text-xs text-muted-light">{t('insights.registeredBy')} <code className="bg-surface-alt rounded px-1">{row.agent_id}</code></p>
             )}
           </div>
         )
@@ -128,6 +128,7 @@ function ContactDetail({ tenantId, sessionId, onBack }: {
           tenantId={tenantId}
           sessionId={sessionId}
           segment={detailSegment}
+          canJoin={detailSegment.ended_at === null}
           onBack={() => setDetailSegment(null)}
         />
       </div>
@@ -135,14 +136,7 @@ function ContactDetail({ tenantId, sessionId, onBack }: {
   }
 
   return (
-    <div className="flex flex-col h-full bg-gray-50">
-      <div className="flex items-center gap-0 border-b border-gray-200 bg-white px-4 flex-shrink-0">
-        <button onClick={onBack} className="mr-4 text-sm text-gray-500 hover:text-primary py-3 transition-colors">
-          {t('detail.back')}
-        </button>
-        <span className="text-sm font-medium text-gray-700 py-3">{t('detail.segments')}</span>
-        <span className="ml-auto text-xs text-gray-400 font-mono py-3 truncate max-w-xs">{sessionId}</span>
-      </div>
+    <div className="flex flex-col h-full bg-surface-muted">
       <div className="flex-1 overflow-hidden">
         <SegmentList
           tenantId={tenantId}
@@ -157,7 +151,7 @@ function ContactDetail({ tenantId, sessionId, onBack }: {
 
 // ── Filter bar ─────────────────────────────────────────────────────────────────
 
-const inp = 'text-sm border border-gray-300 rounded-lg px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-primary/30'
+const inp = 'text-sm border border-border-strong rounded-lg px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-primary/30'
 
 function FilterBar({ filters, setFilters }: {
   filters: SessionFilters
@@ -180,10 +174,10 @@ function FilterBar({ filters, setFilters }: {
     || filters.fromDt !== DEFAULT_FILTERS.fromDt || filters.toDt !== DEFAULT_FILTERS.toDt)
 
   return (
-    <div className="bg-white border-b border-gray-200 px-4 py-2.5 flex-shrink-0">
+    <div className="bg-white border-b border-border px-4 py-2.5 flex-shrink-0">
       <div className="flex flex-wrap items-center gap-2">
 
-        <div className="flex items-center gap-1.5 text-xs text-gray-500">
+        <div className="flex items-center gap-1.5 text-xs text-muted">
           <span>{t('filter.from')}</span>
           <input type="date" value={filters.fromDt} onChange={e => set('fromDt', e.target.value)} className={inp} />
           <span>{t('filter.to')}</span>
@@ -203,27 +197,27 @@ function FilterBar({ filters, setFilters }: {
         </select>
 
         <select value={filters.sessionType} onChange={e => set('sessionType', e.target.value)} className={`${inp} bg-white`}>
-          <option value="">Todos os tipos</option>
+          <option value="">{t('sessions.allTypes')}</option>
           <option value="inbound">Inbound</option>
           <option value="outbound">Outbound</option>
         </select>
 
         <select value={filters.sessionStatus} onChange={e => set('sessionStatus', e.target.value)} className={`${inp} bg-white`}>
-          <option value="">Todos os status</option>
-          <option value="active">Ativo</option>
-          <option value="closed">Encerrado</option>
-          <option value="abandoned">Abandonado</option>
+          <option value="">{t('sessions.allStatuses')}</option>
+          <option value="active">{t('sessions.status.active')}</option>
+          <option value="closed">{t('sessions.status.closed')}</option>
+          <option value="abandoned">{t('sessions.status.abandoned')}</option>
         </select>
 
         <button onClick={() => setShowExtra(v => !v)}
           className={`text-xs px-3 py-1.5 rounded-lg border transition-colors flex items-center gap-1 ${
             showExtra || hasExtra
               ? 'bg-primary/10 text-primary border-primary/30 font-semibold'
-              : 'text-gray-500 border-gray-300 hover:border-primary hover:text-primary'
+              : 'text-muted border-border-strong hover:border-primary hover:text-primary'
           }`}>
           {showExtra ? '▲' : '▼'} {t('filter.moreFilters')}
           {hasExtra && (
-            <span className="ml-1 inline-flex items-center justify-center w-4 h-4 rounded-full bg-primary text-white text-[10px] font-bold">
+            <span className="ml-1 inline-flex items-center justify-center w-4 h-4 rounded-full bg-primary text-white text-2xs font-bold">
               {[filters.poolId, filters.agentId, filters.ani, filters.dnis, filters.insightCategory, filters.insightTags].filter(Boolean).length}
             </span>
           )}
@@ -231,14 +225,14 @@ function FilterBar({ filters, setFilters }: {
 
         {hasAny && (
           <button onClick={clearAll}
-            className="text-xs text-gray-400 hover:text-red-500 px-2 py-1.5 rounded-lg border border-gray-200 hover:border-red-300 transition-colors ml-auto">
+            className="text-xs text-muted-light hover:text-red px-2 py-1.5 rounded-lg border border-border hover:border-red/30 transition-colors ml-auto">
             {t('filter.clearFilters')}
           </button>
         )}
       </div>
 
       {showExtra && (
-        <div className="flex flex-wrap items-center gap-2 mt-2 pt-2 border-t border-gray-100">
+        <div className="flex flex-wrap items-center gap-2 mt-2 pt-2 border-t border-border">
           {([
             { key: 'poolId',          label: t('filter.pool'),          placeholder: 'ex: sac_ia',    width: 'w-36' },
             { key: 'agentId',         label: t('filter.agent'),         placeholder: 'participant…',  width: 'w-44' },
@@ -248,7 +242,7 @@ function FilterBar({ filters, setFilters }: {
             { key: 'insightTags',     label: t('filter.tags'),          placeholder: 'tag1,tag2',     width: 'w-36' },
           ] as { key: keyof SessionFilters; label: string; placeholder: string; width: string }[]).map(f => (
             <div key={f.key} className="flex items-center gap-1">
-              <span className="text-xs text-gray-400 whitespace-nowrap">{f.label}:</span>
+              <span className="text-xs text-muted-light whitespace-nowrap">{f.label}:</span>
               <input type="text" value={filters[f.key] as string}
                 onChange={e => set(f.key, e.target.value)}
                 placeholder={f.placeholder}
@@ -272,7 +266,7 @@ export default function SessionsPage() {
 
   if (!tenantId) {
     return (
-      <div className="flex items-center justify-center h-full text-gray-400 text-sm">
+      <div className="flex items-center justify-center h-full text-muted-light text-sm">
         {t('noTenant')}
       </div>
     )
@@ -304,13 +298,7 @@ export default function SessionsPage() {
   }
 
   return (
-    <div className="flex flex-col h-full overflow-hidden bg-gray-50">
-      <div className="bg-white flex-shrink-0 border-b border-gray-200">
-        <div className="px-4 pt-3 pb-2">
-          <span className="font-bold text-gray-800 text-base">Sessões</span>
-        </div>
-      </div>
-
+    <div className="flex flex-col h-full overflow-hidden bg-surface-muted">
       <FilterBar filters={filters} setFilters={setFilters} />
 
       <div className="flex-1 overflow-hidden">

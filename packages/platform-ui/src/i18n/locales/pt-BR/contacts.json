@@ -1,5 +1,6 @@
 {
   "title": "Contatos",
+  "noTenantSelected": "Nenhum tenant selecionado.",
   "tabs": {
     "list":      "Lista",
     "report":    "Relatório",
@@ -41,6 +42,9 @@
     "next":       "Próxima →",
     "active":     "Em andamento",
     "liveStatus": "ativo",
+    "abandoned":  "abandonado",
+    "closed":     "encerrado",
+    "httpError":  "Erro HTTP {{status}}",
     "columns": {
       "sessionId":  "Session ID",
       "channel":    "Canal",
@@ -56,12 +60,91 @@
     "count_one":   "{{count}} contato",
     "count_other": "{{count}} contatos"
   },
+  "segments": {
+    "title":        "Segmentos",
+    "session":      "sessão …{{id}}",
+    "active_one":   "{{count}} ativo",
+    "active_other": "{{count}} ativos",
+    "total":        "{{count}} total",
+    "hint":         "Cada segmento representa a participação de um agente. Clique num segmento ao vivo para entrar como supervisor.",
+    "loading":      "Carregando segmentos…",
+    "errorTitle":   "Erro ao carregar segmentos",
+    "errorHint":    "Verifique se o analytics-api está em execução.",
+    "empty":        "Nenhum segmento encontrado para esta sessão.",
+    "emptyHint":    "Os segmentos aparecem quando agentes entram na sessão.",
+    "human":        "humano",
+    "live":         "● ao vivo",
+    "closed":       "encerrado",
+    "inProgress":   "em andamento",
+    "handoff":      "handoff #{{index}}",
+    "specialist":   "↳ especialista",
+    "join":         "👁 entrar"
+  },
+  "transcript": {
+    "back":             "← Segmentos",
+    "session":          "Sessão",
+    "supervising":      "👁 supervisionando",
+    "readOnly":         "leitura",
+    "closedReadOnly":   "encerrado · somente leitura",
+    "beforeSegment":    "Antes do segmento · {{count}} eventos",
+    "afterSegment":     "Após o segmento · {{count}} eventos",
+    "segmentStart":     "Início do segmento",
+    "segmentEnd":       "Fim do segmento",
+    "participantLeft":  "Participante saiu",
+    "noEvents":         "Nenhum evento no stream ainda.",
+    "insights":         "Insights ({{count}})",
+    "hideEvents":       "Ocultar eventos",
+    "showEvents":       "Mostrar eventos",
+    "internal":         "Interno",
+    "menuNoOptions":    "menu sem opções",
+    "structuredContent":"Conteúdo estruturado ▸",
+    "supervisorActive": "Supervisor ativo",
+    "joinedSince":      "desde {{time}}",
+    "leaving":          "Saindo…",
+    "leave":            "Sair",
+    "joining":          "Entrando…",
+    "joinAsSuper":      "⌥ Entrar como supervisor",
+    "visAgentsOnly":    "apenas agentes",
+    "visAll":           "todos",
+    "msgPlaceholder":   "Mensagem de supervisão… (Enter para enviar)",
+    "shiftEnterHint":   "Shift+Enter para nova linha",
+    "sending":          "Enviando…",
+    "send":             "Enviar"
+  },
   "monitor": {
     "loading":       "Aguardando dados dos pools…",
     "noData":        "Sem dados de pool disponíveis.",
     "available":     "disponível",
     "queue":         "fila",
     "sla":           "SLA",
+    "allPools":      "Todos os pools",
+    "highlight":     "{{count}} de {{total}} em destaque",
+    "scope": {
+      "sessions":  "Sessões",
+      "processes": "Processos"
+    },
+    "viz": {
+      "heatmap": "Heatmap",
+      "bars":    "Barras",
+      "donut":   "Disco",
+      "tiles":   "Tiles %",
+      "table":   "Tabela"
+    },
+    "pill": {
+      "connecting": "Conectando",
+      "connected":  "Ao vivo",
+      "error":      "Erro SSE",
+      "closed":     "Fechado"
+    },
+    "table": {
+      "pool":      "Pool",
+      "available": "Disponíveis",
+      "busy":      "Ocupados",
+      "queue":     "Na fila",
+      "slaTarget": "SLA alvo",
+      "sentiment": "Sentimento",
+      "channels":  "Canais"
+    },
     "breadcrumbs": {
       "pools":    "Pools",
       "sessions": "Sessões",
@@ -77,6 +160,137 @@
       "title":   "Segmentos",
       "empty":   "Nenhum segmento.",
       "loading": "Carregando segmentos…"
+    }
+  },
+  "pools": {
+    "title":      "Pools",
+    "refresh":    "↻ Atualizar",
+    "updatedAt":  "Atualizado {{time}}",
+    "allStatuses":"Todos os status",
+    "noData":     "Nenhum pool encontrado",
+    "loadError":  "Erro ao carregar pools",
+    "noSnapshot": "⚠ sem dados",
+    "queueOf":    "Contatos em fila — {{pool}}",
+    "slaExceeded":"SLA excedido",
+    "summary": {
+      "available": "Agentes disponíveis",
+      "queued":    "Contatos em fila",
+      "withQueue": "Pools com fila",
+      "total":     "Total de pools"
+    },
+    "status": {
+      "available": "Disponível",
+      "queued":    "Em fila",
+      "empty":     "Sem agentes",
+      "unknown":   "Sem dados"
+    },
+    "columns": {
+      "pool":      "Pool",
+      "status":    "Status",
+      "available": "Disponíveis",
+      "queue":     "Fila",
+      "estWait":   "Espera est.",
+      "sla":       "SLA",
+      "channels":  "Canais",
+      "snapshot":  "Snapshot"
+    },
+    "card": {
+      "available": "Disponíveis",
+      "inSession": "Em sessão",
+      "queue":     "Fila",
+      "estWait":   "Espera est."
+    },
+    "queue": {
+      "loading": "Carregando fila…",
+      "empty":   "Nenhum contato em fila neste pool.",
+      "columns": {
+        "position": "#",
+        "session":  "Sessão",
+        "waiting":  "Aguardando",
+        "estWait":  "Espera est. (restante)"
+      }
+    },
+    "age": {
+      "now":     "agora",
+      "seconds": "{{s}}s atrás",
+      "minutes": "{{m}}min atrás"
+    }
+  },
+  "agents": {
+    "title":   "Agentes",
+    "all":     "Todos",
+    "refresh": "↻ Atualizar",
+    "instanceCount_one":   "{{count}} instância",
+    "instanceCount_other": "{{count}} instâncias",
+    "byPool":       "Pool",
+    "noInstances":  "Nenhuma instância encontrada",
+    "clearFilters": "Tente remover os filtros",
+    "loadError":    "Erro ao carregar instâncias",
+    "unknown":      "(desconhecido)",
+    "tabs": {
+      "monitor": "Monitor",
+      "report":  "Relatório"
+    },
+    "columns": {
+      "instance": "Instância",
+      "type":     "Tipo",
+      "status":   "Status",
+      "sessions": "Sessões",
+      "channels": "Canais",
+      "since":    "Desde"
+    },
+    "status": {
+      "login":    "Conectando",
+      "ready":    "Pronto",
+      "busy":     "Em sessão",
+      "paused":   "Pausado",
+      "draining": "Drenando",
+      "logout":   "Desconectado"
+    },
+    "report": {
+      "noData":    "Nenhum dado no período",
+      "loadError": "Erro ao carregar dados",
+      "kpi": {
+        "sessions":   "Sessões",
+        "resolution": "Resolução média",
+        "escalation": "Escalonamento",
+        "avgTime":    "Tempo médio"
+      },
+      "columns": {
+        "date":       "Data",
+        "agent":      "Agente",
+        "pool":       "Pool",
+        "sessions":   "Sessões",
+        "avgTime":    "Tempo méd.",
+        "resolution": "Resolução",
+        "escalation": "Escalonamento",
+        "transfer":   "Transferência",
+        "human":      "Humano"
+      }
+    },
+    "availability": {
+      "tabLabel":   "Disponibilidade",
+      "pausesLabel":"Pausas",
+      "noData":     "Sem dados no período.",
+      "noPauses":   "Nenhum registro de pausa no período.",
+      "exportCsv":  "⬇ Exportar CSV",
+      "loading":    "Carregando…",
+      "loadError":  "Erro ao carregar dados: {{error}}",
+      "results":    "{{count}} resultados",
+      "prevPage":   "← Ant.",
+      "nextPage":   "Próx. →",
+      "page":       "{{page}} / {{total}}",
+      "pauseTooltip":"{{count}} pausa(s) · {{duration}}",
+      "columns": {
+        "agent":    "Agente",
+        "pool":     "Pool",
+        "date":     "Data",
+        "total":    "Total",
+        "reason":   "Motivo",
+        "count":    "Qtd",
+        "duration": "Duração",
+        "avgPause": "Média/pausa"
+      }
     }
   },
   "analysis": {
@@ -99,5 +313,210 @@
     "contacts":          "Contatos",
     "avgHandleChart":    "Tempo Médio de Atendimento",
     "time":              "Tempo"
+  },
+  "sessions": {
+    "allTypes":    "Todos os tipos",
+    "allStatuses": "Todos os status",
+    "status": {
+      "active":    "Ativo",
+      "closed":    "Encerrado",
+      "abandoned": "Abandonado"
+    }
+  },
+  "quality": {
+    "noTenant": "Nenhum tenant selecionado.",
+    "from":     "De",
+    "to":       "Até",
+    "tabs": {
+      "summary":    "Resumo",
+      "timeseries": "Tendência",
+      "comparison": "Comparação"
+    },
+    "groupBy": "Agrupar por",
+    "groupByOptions": {
+      "campaign_id":  "Campanha",
+      "form_id":      "Formulário",
+      "evaluator_id": "Avaliador",
+      "date":         "Data"
+    },
+    "scoreLabels": {
+      "excellent": "Excelente",
+      "good":      "Bom",
+      "fair":      "Regular",
+      "poor":      "Ruim"
+    },
+    "kpi": {
+      "evaluations":   "Avaliações",
+      "avgScore":      "Nota Média",
+      "contestations": "Contestações"
+    },
+    "table": {
+      "evaluations": "Avaliações",
+      "avgScore":    "Nota Média",
+      "minMax":      "Mín / Máx",
+      "distribution":"Distribuição",
+      "contested":   "Contestadas",
+      "approved":    "Aprovadas",
+      "rejected":    "Rejeitadas",
+      "withFlags":   "c/ Flags"
+    },
+    "noData": "Nenhuma avaliação no período",
+    "timeseries": {
+      "campaign":      "Campanha",
+      "skill":         "Skill",
+      "granularity":   "Granularidade",
+      "daily":         "Diário",
+      "weekly":        "Semanal",
+      "deploys":       "Deploys:",
+      "noData":        "Sem dados no período",
+      "scoreLineName": "Nota de Avaliação",
+      "periodLabel":   "Período: {{period}}"
+    },
+    "comparison": {
+      "sliceTitle":   "Fatia {{prefix}}",
+      "sliceLabel":   "Rótulo",
+      "sliceAgentType":"Tipo de agente (opt.)",
+      "globalFilters":"Filtros Globais",
+      "pool":         "Pool (opt.)",
+      "campaign":     "Campanha (opt.)",
+      "compare":      "Comparar",
+      "comparing":    "Calculando...",
+      "sufficiency":  "✓ Amostra suficiente — n_A={{nA}}, n_B={{nB}}",
+      "insufficiency":"⚠ {{warning}}",
+      "metric":       "Métrica",
+      "delta":        "Delta (B−A)",
+      "sessions":     "Sessões",
+      "evaluations":  "Avaliações",
+      "emptyState":   "Configure as fatias e clique em Comparar",
+      "sliceADefault":"Antes",
+      "sliceBDefault":"Depois"
+    },
+    "metrics": {
+      "evaluationScore":   "Nota de Avaliação",
+      "resolutionRate":    "Taxa de Resolução",
+      "escalationRate":    "Taxa de Escalação",
+      "ahtMin":            "TMA (min)",
+      "label":             "Métricas",
+      "addEvent":          "+ Evento",
+      "loadingCategories": "Carregando categorias…",
+      "noCategories":      "Nenhuma categoria disponível",
+      "removeEvent":       "Remover {{cat}}"
+    }
+  },
+  "events": {
+    "title":                "Eventos",
+    "allTypes":             "Todos os tipos",
+    "sessionIdPlaceholder": "Session ID (busca exata)",
+    "poolIdPlaceholder":    "Pool ID",
+    "loading":              "Carregando…",
+    "serviceUnavailable":   "Serviço indisponível. Tente novamente em instantes.",
+    "empty":                "Nenhum evento encontrado com os filtros aplicados.",
+    "eventLabel_one":       "evento",
+    "eventLabel_other":     "eventos",
+    "columns": {
+      "timestamp": "Timestamp",
+      "sessionId": "Session ID",
+      "type":      "Tipo",
+      "channel":   "Canal",
+      "pool":      "Pool",
+      "author":    "Autor",
+      "role":      "Role"
+    }
+  },
+  "processes": {
+    "title":    "Processos",
+    "refresh":  "↻ Atualizar",
+    "noTenant": "Nenhum tenant selecionado.",
+    "tabs": {
+      "journeys":  "Jornadas",
+      "instances": "Instâncias"
+    },
+    "journeyStatus": {
+      "all":       "Todos",
+      "active":    "Ativo",
+      "suspended": "Suspenso",
+      "completed": "Concluído",
+      "failed":    "Falhou",
+      "cancelled": "Cancelado"
+    },
+    "wfStatus": {
+      "all":       "Todos",
+      "active":    "Ativo",
+      "suspended": "Suspenso",
+      "completed": "Concluído",
+      "failed":    "Falhou",
+      "timed_out": "Expirado",
+      "cancelled": "Cancelado"
+    },
+    "wfSuspend": {
+      "approval": "Aprovação pendente",
+      "input":    "Aguardando entrada",
+      "webhook":  "Aguardando webhook",
+      "timer":    "Timer agendado"
+    },
+    "journeys": {
+      "loading":          "Carregando…",
+      "empty":            "Nenhuma jornada encontrada",
+      "selectPrompt":     "Selecione uma jornada para ver detalhes",
+      "kpiTotal":         "total",
+      "kpiResolution":    "resolução",
+      "kpiP50":           "p50",
+      "customerLabel":    "cliente",
+      "sessions_one":     "{{count}} sessão",
+      "sessions_other":   "{{count}} sessões",
+      "merge": {
+        "button":  "⛓ Unir jornadas",
+        "merging": "…",
+        "header":  "Mesclar nesta jornada"
+      },
+      "split": {
+        "title":         "Separar em nova jornada",
+        "sessionsLabel": "Sessões collect a mover",
+        "loading":       "Carregando sessões…",
+        "noSessions":    "Nenhuma sessão collect vinculada a esta jornada.",
+        "skillLabel":    "Skill-flow para nova jornada",
+        "skillOptional": "(opcional)",
+        "skillHint":     "Se informado, um novo workflow será disparado automaticamente para a jornada criada.",
+        "originLabel":   "origem",
+        "cancel":        "Cancelar",
+        "confirm":       "Separar",
+        "splitting":     "Separando…",
+        "confirmCount":  "Separar ({{count}})"
+      },
+      "detail": {
+        "status":           "Status",
+        "linkedSessions":   "Sessões vinculadas",
+        "timeline":         "Timeline",
+        "started":          "Iniciado",
+        "lastEvent":        "Últ. evento",
+        "originSession":    "Sessão de origem",
+        "workflowInstance": "Instância de workflow",
+        "customer":         "Cliente",
+        "splitButton":      "✂️ Separar em nova jornada"
+      }
+    },
+    "instances": {
+      "loading":       "Carregando…",
+      "empty":         "Nenhum processo encontrado",
+      "selectPrompt":  "Selecione um processo para ver detalhes",
+      "sessionLabel":  "sessão",
+      "confirmCancel": "Cancelar esta instância de processo?",
+      "detail": {
+        "status":         "Status",
+        "currentStep":    "Step atual",
+        "outcome":        "Outcome",
+        "timeline":       "Timeline",
+        "created":        "Criado",
+        "suspended":      "Suspenso",
+        "resumed":        "Retomado",
+        "completed":      "Concluído",
+        "suspendReason":  "Motivo da suspensão",
+        "resumeToken":    "Token de retomada",
+        "tokenClickHint": "Clique para copiar",
+        "expires":        "Expira",
+        "originSession":  "Sessão de origem",
+        "cancelButton":   "Cancelar processo"
+      }
+    }
   }
 }

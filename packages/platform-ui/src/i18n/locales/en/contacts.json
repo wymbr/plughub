@@ -1,5 +1,6 @@
 {
   "title": "Contacts",
+  "noTenantSelected": "No tenant selected.",
   "tabs": {
     "list":      "List",
     "report":    "Report",
@@ -39,8 +40,11 @@
     "page":       "Page {{page}} of {{total}}",
     "prev":       "← Previous",
     "next":       "Next →",
-    "active":     "Active",
+    "active":     "In progress",
     "liveStatus": "active",
+    "abandoned":  "abandoned",
+    "closed":     "closed",
+    "httpError":  "HTTP error {{status}}",
     "columns": {
       "sessionId":  "Session ID",
       "channel":    "Channel",
@@ -56,12 +60,91 @@
     "count_one":   "{{count}} contact",
     "count_other": "{{count}} contacts"
   },
+  "segments": {
+    "title":        "Segments",
+    "session":      "session …{{id}}",
+    "active_one":   "{{count}} active",
+    "active_other": "{{count}} active",
+    "total":        "{{count}} total",
+    "hint":         "Each segment represents an agent's participation. Click a live segment to join as supervisor.",
+    "loading":      "Loading segments…",
+    "errorTitle":   "Error loading segments",
+    "errorHint":    "Check if analytics-api is running.",
+    "empty":        "No segments found for this session.",
+    "emptyHint":    "Segments appear when agents join the session.",
+    "human":        "human",
+    "live":         "● live",
+    "closed":       "closed",
+    "inProgress":   "in progress",
+    "handoff":      "handoff #{{index}}",
+    "specialist":   "↳ specialist",
+    "join":         "👁 join"
+  },
+  "transcript": {
+    "back":             "← Segments",
+    "session":          "Session",
+    "supervising":      "👁 supervising",
+    "readOnly":         "read-only",
+    "closedReadOnly":   "closed · read-only",
+    "beforeSegment":    "Before segment · {{count}} events",
+    "afterSegment":     "After segment · {{count}} events",
+    "segmentStart":     "Segment start",
+    "segmentEnd":       "Segment end",
+    "participantLeft":  "Participant left",
+    "noEvents":         "No events in the stream yet.",
+    "insights":         "Insights ({{count}})",
+    "hideEvents":       "Hide events",
+    "showEvents":       "Show events",
+    "internal":         "Internal",
+    "menuNoOptions":    "menu with no options",
+    "structuredContent":"Structured content ▸",
+    "supervisorActive": "Supervisor active",
+    "joinedSince":      "since {{time}}",
+    "leaving":          "Leaving…",
+    "leave":            "Leave",
+    "joining":          "Joining…",
+    "joinAsSuper":      "⌥ Join as supervisor",
+    "visAgentsOnly":    "agents only",
+    "visAll":           "everyone",
+    "msgPlaceholder":   "Supervision message… (Enter to send)",
+    "shiftEnterHint":   "Shift+Enter for new line",
+    "sending":          "Sending…",
+    "send":             "Send"
+  },
   "monitor": {
     "loading":       "Loading pool data…",
     "noData":        "No pool data available.",
     "available":     "available",
     "queue":         "queue",
     "sla":           "SLA",
+    "allPools":      "All pools",
+    "highlight":     "{{count}} of {{total}} highlighted",
+    "scope": {
+      "sessions":  "Sessions",
+      "processes": "Processes"
+    },
+    "viz": {
+      "heatmap": "Heatmap",
+      "bars":    "Bars",
+      "donut":   "Donut",
+      "tiles":   "Tiles %",
+      "table":   "Table"
+    },
+    "pill": {
+      "connecting": "Connecting",
+      "connected":  "Live",
+      "error":      "SSE Error",
+      "closed":     "Closed"
+    },
+    "table": {
+      "pool":      "Pool",
+      "available": "Available",
+      "busy":      "Busy",
+      "queue":     "Queue",
+      "slaTarget": "SLA Target",
+      "sentiment": "Sentiment",
+      "channels":  "Channels"
+    },
     "breadcrumbs": {
       "pools":    "Pools",
       "sessions": "Sessions",
@@ -77,6 +160,137 @@
       "title":   "Segments",
       "empty":   "No segments.",
       "loading": "Loading segments…"
+    }
+  },
+  "pools": {
+    "title":      "Pools",
+    "refresh":    "↻ Refresh",
+    "updatedAt":  "Updated {{time}}",
+    "allStatuses":"All statuses",
+    "noData":     "No pools found",
+    "loadError":  "Error loading pools",
+    "noSnapshot": "⚠ no data",
+    "queueOf":    "Contacts in queue — {{pool}}",
+    "slaExceeded":"SLA exceeded",
+    "summary": {
+      "available": "Available agents",
+      "queued":    "Contacts in queue",
+      "withQueue": "Pools with queue",
+      "total":     "Total pools"
+    },
+    "status": {
+      "available": "Available",
+      "queued":    "In queue",
+      "empty":     "No agents",
+      "unknown":   "No data"
+    },
+    "columns": {
+      "pool":      "Pool",
+      "status":    "Status",
+      "available": "Available",
+      "queue":     "Queue",
+      "estWait":   "Est. wait",
+      "sla":       "SLA",
+      "channels":  "Channels",
+      "snapshot":  "Snapshot"
+    },
+    "card": {
+      "available": "Available",
+      "inSession": "In session",
+      "queue":     "Queue",
+      "estWait":   "Est. wait"
+    },
+    "queue": {
+      "loading": "Loading queue…",
+      "empty":   "No contacts in queue for this pool.",
+      "columns": {
+        "position": "#",
+        "session":  "Session",
+        "waiting":  "Waiting",
+        "estWait":  "Est. wait (remaining)"
+      }
+    },
+    "age": {
+      "now":     "just now",
+      "seconds": "{{s}}s ago",
+      "minutes": "{{m}}min ago"
+    }
+  },
+  "agents": {
+    "title":   "Agents",
+    "all":     "All",
+    "refresh": "↻ Refresh",
+    "instanceCount_one":   "{{count}} instance",
+    "instanceCount_other": "{{count}} instances",
+    "byPool":       "Pool",
+    "noInstances":  "No instances found",
+    "clearFilters": "Try removing filters",
+    "loadError":    "Error loading instances",
+    "unknown":      "(unknown)",
+    "tabs": {
+      "monitor": "Monitor",
+      "report":  "Report"
+    },
+    "columns": {
+      "instance": "Instance",
+      "type":     "Type",
+      "status":   "Status",
+      "sessions": "Sessions",
+      "channels": "Channels",
+      "since":    "Since"
+    },
+    "status": {
+      "login":    "Connecting",
+      "ready":    "Ready",
+      "busy":     "In session",
+      "paused":   "Paused",
+      "draining": "Draining",
+      "logout":   "Disconnected"
+    },
+    "report": {
+      "noData":    "No data in period",
+      "loadError": "Error loading data",
+      "kpi": {
+        "sessions":   "Sessions",
+        "resolution": "Avg. Resolution",
+        "escalation": "Escalation",
+        "avgTime":    "Avg. Time"
+      },
+      "columns": {
+        "date":       "Date",
+        "agent":      "Agent",
+        "pool":       "Pool",
+        "sessions":   "Sessions",
+        "avgTime":    "Avg. Time",
+        "resolution": "Resolution",
+        "escalation": "Escalation",
+        "transfer":   "Transfer",
+        "human":      "Human"
+      }
+    },
+    "availability": {
+      "tabLabel":   "Availability",
+      "pausesLabel":"Pauses",
+      "noData":     "No data for selected period.",
+      "noPauses":   "No pause records for selected period.",
+      "exportCsv":  "⬇ Export CSV",
+      "loading":    "Loading…",
+      "loadError":  "Error loading data: {{error}}",
+      "results":    "{{count}} results",
+      "prevPage":   "← Prev",
+      "nextPage":   "Next →",
+      "page":       "{{page}} / {{total}}",
+      "pauseTooltip":"{{count}} pause(s) · {{duration}}",
+      "columns": {
+        "agent":    "Agent",
+        "pool":     "Pool",
+        "date":     "Date",
+        "total":    "Total",
+        "reason":   "Reason",
+        "count":    "Count",
+        "duration": "Duration",
+        "avgPause": "Avg per pause"
+      }
     }
   },
   "analysis": {
@@ -99,5 +313,210 @@
     "contacts":          "Contacts",
     "avgHandleChart":    "Average Handle Time",
     "time":              "Time"
+  },
+  "sessions": {
+    "allTypes":    "All types",
+    "allStatuses": "All statuses",
+    "status": {
+      "active":    "Active",
+      "closed":    "Closed",
+      "abandoned": "Abandoned"
+    }
+  },
+  "quality": {
+    "noTenant": "No tenant selected.",
+    "from":     "From",
+    "to":       "To",
+    "tabs": {
+      "summary":    "Summary",
+      "timeseries": "Trend",
+      "comparison": "Comparison"
+    },
+    "groupBy": "Group by",
+    "groupByOptions": {
+      "campaign_id":  "Campaign",
+      "form_id":      "Form",
+      "evaluator_id": "Evaluator",
+      "date":         "Date"
+    },
+    "scoreLabels": {
+      "excellent": "Excellent",
+      "good":      "Good",
+      "fair":      "Fair",
+      "poor":      "Poor"
+    },
+    "kpi": {
+      "evaluations":   "Evaluations",
+      "avgScore":      "Avg. Score",
+      "contestations": "Contestations"
+    },
+    "table": {
+      "evaluations": "Evaluations",
+      "avgScore":    "Avg. Score",
+      "minMax":      "Min / Max",
+      "distribution":"Distribution",
+      "contested":   "Contested",
+      "approved":    "Approved",
+      "rejected":    "Rejected",
+      "withFlags":   "With Flags"
+    },
+    "noData": "No evaluations in period",
+    "timeseries": {
+      "campaign":      "Campaign",
+      "skill":         "Skill",
+      "granularity":   "Granularity",
+      "daily":         "Daily",
+      "weekly":        "Weekly",
+      "deploys":       "Deploys:",
+      "noData":        "No data in period",
+      "scoreLineName": "Evaluation Score",
+      "periodLabel":   "Period: {{period}}"
+    },
+    "comparison": {
+      "sliceTitle":   "Slice {{prefix}}",
+      "sliceLabel":   "Label",
+      "sliceAgentType":"Agent type (opt.)",
+      "globalFilters":"Global Filters",
+      "pool":         "Pool (opt.)",
+      "campaign":     "Campaign (opt.)",
+      "compare":      "Compare",
+      "comparing":    "Calculating...",
+      "sufficiency":  "✓ Sufficient sample — n_A={{nA}}, n_B={{nB}}",
+      "insufficiency":"⚠ {{warning}}",
+      "metric":       "Metric",
+      "delta":        "Delta (B−A)",
+      "sessions":     "Sessions",
+      "evaluations":  "Evaluations",
+      "emptyState":   "Configure slices and click Compare",
+      "sliceADefault":"Before",
+      "sliceBDefault":"After"
+    },
+    "metrics": {
+      "evaluationScore":   "Evaluation Score",
+      "resolutionRate":    "Resolution Rate",
+      "escalationRate":    "Escalation Rate",
+      "ahtMin":            "AHT (min)",
+      "label":             "Metrics",
+      "addEvent":          "+ Event",
+      "loadingCategories": "Loading categories…",
+      "noCategories":      "No categories available",
+      "removeEvent":       "Remove {{cat}}"
+    }
+  },
+  "events": {
+    "title":                "Events",
+    "allTypes":             "All types",
+    "sessionIdPlaceholder": "Session ID (exact match)",
+    "poolIdPlaceholder":    "Pool ID",
+    "loading":              "Loading…",
+    "serviceUnavailable":   "Service unavailable. Please try again.",
+    "empty":                "No events found with the applied filters.",
+    "eventLabel_one":       "event",
+    "eventLabel_other":     "events",
+    "columns": {
+      "timestamp": "Timestamp",
+      "sessionId": "Session ID",
+      "type":      "Type",
+      "channel":   "Channel",
+      "pool":      "Pool",
+      "author":    "Author",
+      "role":      "Role"
+    }
+  },
+  "processes": {
+    "title":    "Processes",
+    "refresh":  "↻ Refresh",
+    "noTenant": "No tenant selected.",
+    "tabs": {
+      "journeys":  "Journeys",
+      "instances": "Instances"
+    },
+    "journeyStatus": {
+      "all":       "All",
+      "active":    "Active",
+      "suspended": "Suspended",
+      "completed": "Completed",
+      "failed":    "Failed",
+      "cancelled": "Cancelled"
+    },
+    "wfStatus": {
+      "all":       "All",
+      "active":    "Active",
+      "suspended": "Suspended",
+      "completed": "Completed",
+      "failed":    "Failed",
+      "timed_out": "Timed out",
+      "cancelled": "Cancelled"
+    },
+    "wfSuspend": {
+      "approval": "Awaiting approval",
+      "input":    "Awaiting input",
+      "webhook":  "Awaiting webhook",
+      "timer":    "Scheduled timer"
+    },
+    "journeys": {
+      "loading":          "Loading…",
+      "empty":            "No journeys found",
+      "selectPrompt":     "Select a journey to view details",
+      "kpiTotal":         "total",
+      "kpiResolution":    "resolution",
+      "kpiP50":           "p50",
+      "customerLabel":    "customer",
+      "sessions_one":     "{{count}} session",
+      "sessions_other":   "{{count}} sessions",
+      "merge": {
+        "button":  "⛓ Merge journeys",
+        "merging": "Merging…",
+        "header":  "Merge into this journey"
+      },
+      "split": {
+        "title":         "Split into new journey",
+        "sessionsLabel": "Collect sessions to move",
+        "loading":       "Loading sessions…",
+        "noSessions":    "No collect sessions linked to this journey.",
+        "skillLabel":    "Skill-flow for new journey",
+        "skillOptional": "(optional)",
+        "skillHint":     "If provided, a new workflow will be triggered automatically for the created journey.",
+        "originLabel":   "origin",
+        "cancel":        "Cancel",
+        "confirm":       "Split",
+        "splitting":     "Splitting…",
+        "confirmCount":  "Split ({{count}})"
+      },
+      "detail": {
+        "status":           "Status",
+        "linkedSessions":   "Linked sessions",
+        "timeline":         "Timeline",
+        "started":          "Started",
+        "lastEvent":        "Last event",
+        "originSession":    "Origin session",
+        "workflowInstance": "Workflow instance",
+        "customer":         "Customer",
+        "splitButton":      "✂️ Split into new journey"
+      }
+    },
+    "instances": {
+      "loading":       "Loading…",
+      "empty":         "No processes found",
+      "selectPrompt":  "Select a process to view details",
+      "sessionLabel":  "session",
+      "confirmCancel": "Cancel this process instance?",
+      "detail": {
+        "status":         "Status",
+        "currentStep":    "Current step",
+        "outcome":        "Outcome",
+        "timeline":       "Timeline",
+        "created":        "Created",
+        "suspended":      "Suspended",
+        "resumed":        "Resumed",
+        "completed":      "Completed",
+        "suspendReason":  "Suspend reason",
+        "resumeToken":    "Resume token",
+        "tokenClickHint": "Click to copy",
+        "expires":        "Expires",
+        "originSession":  "Origin session",
+        "cancelButton":   "Cancel process"
+      }
+    }
   }
 }
