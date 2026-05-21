@@ -99,12 +99,10 @@ class VoiceAdapter(ChannelAdapter):
         stt_provider:     ISTTProvider   | None = None,
         tts_provider:     ITTSProvider   | None = None,
     ) -> None:
-        super().__init__(
-            producer=producer,
-            redis=redis,
-            settings=settings,
-            store=attachment_store,
-        )
+        self._producer  = producer
+        self._redis     = redis
+        self._settings  = settings
+        self._store     = attachment_store
         self._voice = voice_provider or self._build_voice_provider()
         self._stt   = stt_provider   or self._build_stt_provider()
         self._tts   = tts_provider   or self._build_tts_provider()
