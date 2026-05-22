@@ -1,0 +1,194 @@
+# skill_atendimento_auth_v1.yaml
+# Atendimento Auth → SAC — Composição Tier 2
+#
+# Demonstra o padrão "verificação de identidade → serviço autenticado".
+# Um cliente prova quem é antes de acessar o SAC — evita que não-clientes
+# consumam atendimento especializado.
+#
+# Pool: auth_sac_ia (pool dedicado — não conflita com auth_form_ia)
+# Tier: 2 (Execution Workflow — orchestration, sem I/O direto com cliente)
+#
+# Diferença em relação ao skill_auth_form_v1:
+#   skill_auth_form_v1 → auth mascarado puro → escalada para retencao_humano
+#   skill_atendimento_auth_v1 → auth simples → SAC (cria Journey de atendimento)
+#
+# Fluxo Phase 1 (determinístico — sem masking real):
+#   1. saudacao          — notify: explica que auth é necessária para acessar SAC
+#   2. coletar_codigo    — menu text: pede código de acesso (demo: qualquer 4 dígitos)
+#   3. validar_codigo    — choice: eq "1234" → auth_sucesso | else → auth_falhou
+#   4. auth_sucesso      — notify: identidade confirmada
+#   5. menu_continuar    — menu button: SAC | Encerrar (cliente decide se quer atendimento)
+#   6. escalar_sac       — escalate → sac_ia (skill_atendimento_sac_v1 com Journey)
+#   7. auth_falhou       — notify: código inválido, 2ª tentativa
+#   8. coletar_codigo_2  — menu text: segunda tentativa
+#   9. validar_codigo_2  — choice: eq "1234" → auth_sucesso | else → encerrar_falha
+#  10. encerrar_falha    — notify: auth falhou → complete abandoned
+#  11. finalizar         — complete resolved (cliente optou por encerrar)
+#
+# Fluxo Phase 2 (masking real — task step):
+#   Substituir os steps coletar_codigo / validar_codigo por:
+#   - task: skill_auth_form_v1 (mode: assist, execution_mode: sync)
+#     O Tier 3 autentica via formulário mascarado e escreve
+#     pipeline_state.auth_status = { status:"ok", ... } ao concluir.
+#   - choice: pipeline_state.auth_status.status eq "ok" → auth_sucesso | else → encerrar_falha
+#
+# Para ativar Phase 2:
+#   1. Adicionar pool auth_sac_ia ao tenant_demo.yaml
+#   2. Registrar agente_auth_sac_v1 com este skill
+#   3. Adicionar 5ª opção "SAC autenticado" na triagem v2 apontando para auth_sac_ia
+#      (ou substituir a opção auth atual — depende do cenário de demo desejado)
+#
+# Nota: agente_triagem_v2.yaml mantém a opção "Auth Demo" apontando para auth_form_ia
+# porque aquele cenário testa especificamente o masking de campos (form overlay).
+# Este skill testa o PADRÃO DE COMPOSIÇÃO auth → serviço autenticado.
+
+id: skill_atendimento_auth_v1
+name: "Atendimento Auth v1 — Composição Auth → SAC"
+version: "1.0"
+description: |
+  Tier 2 que demonstra o padrão de composição: verificação de identidade
+  seguida de acesso ao SAC com Journey registrada.
+  Phase 1: auth por código simples (demo "1234") sem masking real.
+  Phase 2: task step → skill_auth_form_v1 (masking real) antes do SAC.
+classification:
+  type: orchestrator
+  domain: composite
+
+entry: saudacao
+
+steps:
+
+  # ── Etapa 1: saudação + explicação do fluxo ───────────────────────────────────
+  - id: saudacao
+    type: notify
+    message: "Olá! Para acessar nosso SAC, precisamos verificar sua identidade. Isso garante que apenas clientes autenticados recebam atendimento especializado."
+    on_success: coletar_codigo
+    on_failure: coletar_codigo
+
+  # ── Etapa 2: coletar código de acesso (Phase 1 — sem masking) ────────────────
+  # Phase 1: código em texto simples para validação demo.
+  # O cliente vê o que digita — demonstra o FLUXO, não o masking.
+  # Phase 2: substituir por task step → skill_auth_form_v1 (form mascarado real).
+  # Código válido para o demo: 1234
+  - id: coletar_codigo
+    type: menu
+    prompt: "Digite seu código de acesso (4 dígitos):\n\n💡 Demo: use o código 1234 para autenticar com sucesso."
+    interaction: text
+    output_as: codigo_digitado
+    timeout_s: 120
+    on_success: validar_codigo
+    on_failure: encerrar_timeout
+    on_timeout: encerrar_timeout
+    on_disconnect: encerrar_timeout
+
+  # ── Etapa 3: validar código (Phase 1 — hardcoded demo) ───────────────────────
+  # Phase 2: substituir por invoke mcp-server-auth:validate_pin com @masked.codigo
+  - id: validar_codigo
+    type: choice
+    conditions:
+      - field: "$.pipeline_state.codigo_digitado"
+        operator: eq
+        value: "1234"
+        next: auth_sucesso
+    default: auth_falhou_1
+
+  # ── Caminho sucesso: oferecer SAC ────────────────────────────────────────────
+
+  - id: auth_sucesso
+    type: notify
+    message: "✅ Identidade verificada com sucesso! Você agora tem acesso ao SAC autenticado."
+    on_success: menu_continuar
+    on_failure: menu_continuar
+
+  - id: menu_continuar
+    type: menu
+    prompt: "Como posso te ajudar?"
+    interaction: button
+    options:
+      - id: sac
+        label: "💬 Ir para o SAC"
+      - id: encerrar
+        label: "✅ Estou bem, obrigado"
+    output_as: decisao_pos_auth
+    timeout_s: 120
+    on_success: roteador_pos_auth
+    on_failure: finalizar
+    on_timeout: finalizar
+    on_disconnect: finalizar
+
+  - id: roteador_pos_auth
+    type: choice
+    conditions:
+      - field: "$.pipeline_state.decisao_pos_auth"
+        operator: eq
+        value: "sac"
+        next: avisar_sac
+    default: finalizar
+
+  - id: avisar_sac
+    type: notify
+    message: "Transferindo para o SAC. Uma jornada de atendimento será aberta para registrar seu caso."
+    on_success: escalar_sac
+    on_failure: escalar_sac
+
+  # Escala para sac_ia onde skill_atendimento_sac_v1 criará a Journey.
+  - id: escalar_sac
+    type: escalate
+    target:
+      pool: sac_ia
+    context: pipeline_state
+    error_reason: escalated_sac_authenticated
+    on_failure: encerrar_fallback
+
+  # ── Caminho falha 1ª tentativa: oferecer 2ª chance ───────────────────────────
+
+  - id: auth_falhou_1
+    type: notify
+    message: "Código incorreto. Você tem mais uma tentativa.\n\n💡 Dica demo: o código correto é 1234."
+    on_success: coletar_codigo_2
+    on_failure: encerrar_falha
+
+  - id: coletar_codigo_2
+    type: menu
+    prompt: "Digite novamente seu código de acesso:"
+    interaction: text
+    output_as: codigo_digitado_2
+    timeout_s: 120
+    on_success: validar_codigo_2
+    on_failure: encerrar_timeout
+    on_timeout: encerrar_timeout
+    on_disconnect: encerrar_timeout
+
+  - id: validar_codigo_2
+    type: choice
+    conditions:
+      - field: "$.pipeline_state.codigo_digitado_2"
+        operator: eq
+        value: "1234"
+        next: auth_sucesso
+    default: encerrar_falha
+
+  # ── Terminais ─────────────────────────────────────────────────────────────────
+
+  - id: encerrar_falha
+    type: notify
+    message: "❌ Não foi possível verificar sua identidade após 2 tentativas. Por segurança, o acesso foi encerrado. Se precisar de ajuda, entre em contato com nosso suporte."
+    on_success: finalizar_falha
+    on_failure: finalizar_falha
+
+  - id: encerrar_fallback
+    type: complete
+    outcome: failed
+    issue_status: "Escalação para sac_ia falhou após auth bem-sucedida"
+
+  - id: finalizar
+    type: complete
+    outcome: resolved
+
+  - id: finalizar_falha
+    type: complete
+    outcome: abandoned
+
+  - id: encerrar_timeout
+    type: complete
+    outcome: abandoned

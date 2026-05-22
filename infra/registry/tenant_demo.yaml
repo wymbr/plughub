@@ -82,6 +82,34 @@ pools:
     channel_types: [webchat, whatsapp]
     sla_target_ms: 30000
 
+  - pool_id: portabilidade_ia
+    # Pool do agente de intake de portabilidade.
+    # Coleta número atual + operadora destino e inicia Journey Tier 1.
+    # Phase 1: agente_portabilidade_ia_v1 com skill_portabilidade_intake_v1.
+    # Phase 2: trocar para skill_atendimento_portabilidade_v1 (Tier 2 com task step).
+    description: "Pool do agente de portabilidade — coleta dados e inicia Journey"
+    channel_types: [webchat, whatsapp]
+    sla_target_ms: 300000
+
+  - pool_id: reembolso_ia
+    # Pool do agente de intake de reembolso.
+    # Coleta número do pedido + motivo e inicia Journey Tier 1.
+    # Phase 1: agente_reembolso_ia_v1 com skill_reembolso_intake_v1.
+    # Phase 2: trocar para skill_atendimento_reembolso_v1 (Tier 2 com task step).
+    description: "Pool do agente de reembolso — coleta dados e inicia Journey"
+    channel_types: [webchat, whatsapp]
+    sla_target_ms: 300000
+
+  - pool_id: auth_sac_ia
+    # Pool da composição Auth → SAC (Tier 2 — Sprint 1D).
+    # Verifica identidade do cliente antes de rotear para sac_ia.
+    # Phase 1: código demo hardcoded "1234" (sem masking real).
+    # Phase 2: trocar step de coleta por task step → skill_auth_form_v1 (masking real).
+    # Triagem v2: opção "🔐 SAC autenticado" aponta para este pool.
+    description: "Pool de composição auth → SAC — verifica identidade antes do atendimento"
+    channel_types: [webchat, whatsapp]
+    sla_target_ms: 180000
+
   - pool_id: copilot_sac
     # Pool do co-pilot especialista SAC.
     # Ativado via @mention pelo agente humano de retenção (@copilot).
@@ -166,6 +194,59 @@ agent_types:
     max_concurrent_sessions: 10
     pools: [sac_ia]
     skills: [{skill_id: skill_atendimento_sac_v1}]
+    permissions:
+      - mcp-server-plughub:agent_heartbeat
+      - mcp-server-plughub:notification_send
+      - mcp-server-plughub:conversation_escalate
+      - mcp-server-plughub:interaction_request
+    capabilities:
+      channels: webchat,whatsapp
+
+  # Portabilidade — intake determinístico + início de Journey (Sprint 1B)
+  # Phase 2: trocar skill_portabilidade_intake_v1 → skill_atendimento_portabilidade_v1
+  - agent_type_id: agente_portabilidade_ia_v1
+    framework: plughub-native
+    execution_model: stateless
+    role: executor
+    max_concurrent_sessions: 10
+    pools: [portabilidade_ia]
+    skills: [{skill_id: skill_portabilidade_intake_v1}]
+    permissions:
+      - mcp-server-plughub:agent_heartbeat
+      - mcp-server-plughub:notification_send
+      - mcp-server-plughub:interaction_request
+      - mcp-server-plughub:context_set
+      - mcp-server-plughub:journey_start
+    capabilities:
+      channels: webchat,whatsapp
+
+  # Reembolso — intake determinístico + início de Journey (Sprint 1C)
+  # Phase 2: trocar skill_reembolso_intake_v1 → skill_atendimento_reembolso_v1
+  - agent_type_id: agente_reembolso_ia_v1
+    framework: plughub-native
+    execution_model: stateless
+    role: executor
+    max_concurrent_sessions: 10
+    pools: [reembolso_ia]
+    skills: [{skill_id: skill_reembolso_intake_v1}]
+    permissions:
+      - mcp-server-plughub:agent_heartbeat
+      - mcp-server-plughub:notification_send
+      - mcp-server-plughub:interaction_request
+      - mcp-server-plughub:context_set
+      - mcp-server-plughub:journey_start
+    capabilities:
+      channels: webchat,whatsapp
+
+  # Auth → SAC — composição Tier 2 (Sprint 1D)
+  # Phase 2: substituir steps text por task → skill_auth_form_v1 (masking real)
+  - agent_type_id: agente_auth_sac_v1
+    framework: plughub-native
+    execution_model: stateless
+    role: executor
+    max_concurrent_sessions: 10
+    pools: [auth_sac_ia]
+    skills: [{skill_id: skill_atendimento_auth_v1}]
     permissions:
       - mcp-server-plughub:agent_heartbeat
       - mcp-server-plughub:notification_send

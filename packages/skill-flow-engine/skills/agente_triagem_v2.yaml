@@ -63,7 +63,9 @@ steps:
       - id: reembolso
         label: "💰 Solicitar reembolso"
       - id: auth
-        label: "🔐 Demo de autenticação segura"
+        label: "🔐 Demo de formulário mascarado"
+      - id: auth_sac
+        label: "🔑 SAC autenticado (auth + SAC)"
     output_as: opcao_escolhida
     timeout_s: 120
     on_success: roteador
@@ -82,15 +84,19 @@ steps:
       - field: "$.pipeline_state.opcao_escolhida"
         operator: eq
         value: "portabilidade"
-        next: em_breve_portabilidade
+        next: avisar_portabilidade
       - field: "$.pipeline_state.opcao_escolhida"
         operator: eq
         value: "reembolso"
-        next: em_breve_reembolso
+        next: avisar_reembolso
       - field: "$.pipeline_state.opcao_escolhida"
         operator: eq
         value: "auth"
         next: avisar_auth
+      - field: "$.pipeline_state.opcao_escolhida"
+        operator: eq
+        value: "auth_sac"
+        next: avisar_auth_sac
     default: menu_principal
 
   # ── Caminho A: SAC ────────────────────────────────────────────────────────────
@@ -108,24 +114,40 @@ steps:
     error_reason: escalated_sac
     on_failure: encerrar_fallback
 
-  # ── Caminho B: Portabilidade (stub Sprint 1B) ─────────────────────────────────
-  - id: em_breve_portabilidade
+  # ── Caminho B: Portabilidade ─────────────────────────────────────────────────
+  - id: avisar_portabilidade
     type: notify
-    message: "⚠️ O fluxo de portabilidade estará disponível em breve. Selecione outra opção ou aguarde o SAC."
-    on_success: menu_principal
-    on_failure: menu_principal
+    message: "📱 Perfeito! Vou iniciar o processo de portabilidade. Coletaremos seus dados e abriremos uma solicitação junto à operadora."
+    on_success: escalar_portabilidade
+    on_failure: escalar_portabilidade
 
-  # ── Caminho C: Reembolso (stub Sprint 1C) ─────────────────────────────────────
-  - id: em_breve_reembolso
+  - id: escalar_portabilidade
+    type: escalate
+    target:
+      pool: portabilidade_ia
+    context: pipeline_state
+    error_reason: escalated_portabilidade
+    on_failure: encerrar_fallback
+
+  # ── Caminho C: Reembolso ─────────────────────────────────────────────────────
+  - id: avisar_reembolso
     type: notify
-    message: "⚠️ O fluxo de reembolso estará disponível em breve. Selecione outra opção ou aguarde o SAC."
-    on_success: menu_principal
-    on_failure: menu_principal
+    message: "💰 Certo! Vou registrar sua solicitação de reembolso. Coletaremos os dados do pedido e abriremos uma análise."
+    on_success: escalar_reembolso
+    on_failure: escalar_reembolso
 
-  # ── Caminho D: Auth Demo ──────────────────────────────────────────────────────
+  - id: escalar_reembolso
+    type: escalate
+    target:
+      pool: reembolso_ia
+    context: pipeline_state
+    error_reason: escalated_reembolso
+    on_failure: encerrar_fallback
+
+  # ── Caminho D: Auth Demo (formulário mascarado puro) ─────────────────────────
   - id: avisar_auth
     type: notify
-    message: "Ótimo! Vou iniciar a demonstração de autenticação segura com formulário mascarado."
+    message: "Ótimo! Vou iniciar a demonstração de formulário mascarado. Você verá um overlay com campos de e-mail, senha e código 2FA."
     on_success: escalar_auth
     on_failure: escalar_auth
 
@@ -135,6 +157,21 @@ steps:
       pool: auth_form_ia
     context: pipeline_state
     error_reason: escalated_auth
+    on_failure: encerrar_fallback
+
+  # ── Caminho E: SAC autenticado (auth → SAC, Tier 2 composição) ───────────────
+  - id: avisar_auth_sac
+    type: notify
+    message: "🔑 Ótimo! Vamos verificar sua identidade antes de acessar o SAC. Digite o código de acesso quando solicitado."
+    on_success: escalar_auth_sac
+    on_failure: escalar_auth_sac
+
+  - id: escalar_auth_sac
+    type: escalate
+    target:
+      pool: auth_sac_ia
+    context: pipeline_state
+    error_reason: escalated_auth_sac
     on_failure: encerrar_fallback
 
   # ── Fallback de escalação ─────────────────────────────────────────────────────
