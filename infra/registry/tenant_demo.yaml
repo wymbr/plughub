@@ -140,14 +140,15 @@ pools:
 
 agent_types:
 
-  # IVR de entrada — botões, sem LLM
+  # IVR de entrada — menu determinístico, sem LLM (Sprint 1A)
+  # Phase 2: trocar skill_triagem_v2 → skill_demo_ia_v1 para reverter ao IVR original
   - agent_type_id: agente_demo_ia_v1
     framework: plughub-native
     execution_model: stateless
     role: executor
     max_concurrent_sessions: 10
     pools: [demo_ia]
-    skills: [{skill_id: skill_demo_ia_v1}]
+    skills: [{skill_id: skill_triagem_v2}]
     permissions:
       - mcp-server-plughub:agent_heartbeat
       - mcp-server-plughub:notification_send
@@ -156,14 +157,15 @@ agent_types:
     capabilities:
       channels: webchat,whatsapp
 
-  # SAC via LLM (Claude)
+  # SAC — execução determinística com Journey (Sprint 1A)
+  # Phase 2: trocar skill_atendimento_sac_v1 → skill_sac_ia_v1 para habilitar LLM
   - agent_type_id: agente_sac_ia_v1
     framework: plughub-native
     execution_model: stateless
     role: executor
     max_concurrent_sessions: 10
     pools: [sac_ia]
-    skills: [{skill_id: skill_sac_ia_v1}]
+    skills: [{skill_id: skill_atendimento_sac_v1}]
     permissions:
       - mcp-server-plughub:agent_heartbeat
       - mcp-server-plughub:notification_send
@@ -171,7 +173,6 @@ agent_types:
       - mcp-server-plughub:interaction_request
     capabilities:
       channels: webchat,whatsapp
-      llm: "true"
 
   # Agente de fila — mantém o cliente esperando e escala para humano
   - agent_type_id: agente_fila_v1

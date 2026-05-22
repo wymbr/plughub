@@ -1,0 +1,229 @@
+# skill_atendimento_sac_v1.yaml
+# SAC — Execução Determinística (Tier 2)
+#
+# Skill de execução SAC sem LLM — validação Phase 1 do plano de testes.
+# Substituirá os steps notify por steps reason (LLM real) na Phase 2.
+#
+# Pool: sac_ia
+# Agent: agente_sac_ia_v1 (atualizado para apontar para este skill no Sprint 1A)
+# creates_journey: true — Journey criada automaticamente no primeiro step.
+#
+# Fluxo:
+#   1. saudacao               — notify: boas-vindas + aviso de jornada registrada
+#   2. menu_motivo            — menu list: escolha o motivo do contato
+#   3. roteador_motivo        — choice: distribui por motivo
+#
+#   Caminho A — info_plano:
+#     4a. resposta_info_plano → menu_resolucao
+#
+#   Caminho B — status_servico:
+#     4b. resposta_status     → menu_resolucao
+#
+#   Caminho C — problema_tecnico:
+#     4c. coletar_descricao   → acusar_recebimento → menu_resolucao
+#
+#   Caminho D — falar_especialista:
+#     4d. avisar_escalada     → escalar → retencao_humano
+#
+#   5. menu_resolucao         — menu button: Resolvido | Falar com especialista
+#   6. roteador_resolucao     — choice: resolve ou escala
+#   7. avisar_escalada        — notify → escalar → retencao_humano
+#   8. finalizar_resolvido    — complete outcome: resolved
+#   9. finalizar_timeout      — complete outcome: abandoned
+#  10. encerrar_fallback      — complete outcome: failed
+#
+# Dados gerados (observáveis no Monitor e Analytics):
+#   journey.events: journey_started → (journey_completed | journey_suspended)
+#   conversations.participants: segmentos sac_ia + retencao_humano (quando escala)
+#   on_human_end hooks: wrapup_ia + nps_ia disparados automaticamente pelo pool retencao_humano
+#   usage.events: sessions, messages
+#
+# Phase 2 — LLM:
+#   - Substituir resposta_info_plano, resposta_status, acusar_recebimento por steps reason
+#   - Adicionar acumular_contexto (task agente_contexto_ia_v1) antes de escalar
+#   - Habilitar context_tags.outputs para escrever session.motivo_contato no ContextStore
+
+id: skill_atendimento_sac_v1
+name: "Atendimento SAC v1 — Execução Determinística"
+version: "1.0"
+description: |
+  Skill de execução SAC (Tier 2) — determinístico, sem LLM.
+  Cria Journey automaticamente (creates_journey: true).
+  Apresenta menu de motivo de contato e responde com conteúdo fixo.
+  Oferece escalação para retenção humana com hooks NPS + wrap-up.
+  Phase 1: conteúdo fixo — valida fluxo, dados e integrações.
+  Phase 2: steps reason substituem as respostas fixas (LLM real).
+classification:
+  type: orchestrator
+  domain: customer_service
+
+creates_journey: true
+
+entry: saudacao
+
+steps:
+
+  # ── Etapa 1: saudação ─────────────────────────────────────────────────────────
+  - id: saudacao
+    type: notify
+    message: "Olá! Você está no SAC PlugHub Demo. Sua jornada de atendimento foi registrada e estamos prontos para ajudar."
+    on_success: menu_motivo
+    on_failure: menu_motivo
+
+  # ── Etapa 2: menu de motivo ───────────────────────────────────────────────────
+  # list suporta mais de 3 opções. Channel Gateway adapta para canais sem suporte.
+  - id: menu_motivo
+    type: menu
+    prompt: "Qual é o motivo do seu contato?"
+    interaction: list
+    options:
+      - id: info_plano
+        label: "📋 Informações sobre o plano"
+      - id: status_servico
+        label: "🔍 Status do serviço"
+      - id: problema_tecnico
+        label: "🔧 Problema técnico"
+      - id: falar_especialista
+        label: "👤 Falar com especialista humano"
+    output_as: motivo_contato
+    timeout_s: 120
+    on_success: roteador_motivo
+    on_failure: finalizar_timeout
+    on_timeout: finalizar_timeout
+    on_disconnect: finalizar_timeout
+
+  # ── Etapa 3: roteador por motivo ─────────────────────────────────────────────
+  - id: roteador_motivo
+    type: choice
+    conditions:
+      - field: "$.pipeline_state.motivo_contato"
+        operator: eq
+        value: "info_plano"
+        next: resposta_info_plano
+      - field: "$.pipeline_state.motivo_contato"
+        operator: eq
+        value: "status_servico"
+        next: resposta_status
+      - field: "$.pipeline_state.motivo_contato"
+        operator: eq
+        value: "problema_tecnico"
+        next: coletar_descricao
+      - field: "$.pipeline_state.motivo_contato"
+        operator: eq
+        value: "falar_especialista"
+        next: avisar_escalada
+    default: menu_motivo
+
+  # ── Caminho A: Informações sobre o plano ─────────────────────────────────────
+  # Phase 2: substituir por step reason com prompt contextual.
+  - id: resposta_info_plano
+    type: notify
+    message: |
+      📋 *Informações sobre nosso serviço:*
+
+      • Plano Básico: atendimento por chat e e-mail, 8h às 18h
+      • Plano Pro: chat, WhatsApp e voz, 8h às 22h, SLA de 4h
+      • Plano Enterprise: todos os canais, 24/7, SLA garantido de 1h
+
+      Para contratar ou migrar de plano, posso conectá-lo a um especialista.
+    on_success: menu_resolucao
+    on_failure: menu_resolucao
+
+  # ── Caminho B: Status do serviço ─────────────────────────────────────────────
+  # Phase 2: substituir por invoke ao status-api ou step reason.
+  - id: resposta_status
+    type: notify
+    message: |
+      🔍 *Status dos serviços PlugHub Demo:*
+
+      • Chat / WhatsApp: ✅ Operacional
+      • Voz (PSTN):      ✅ Operacional
+      • WebRTC:          ✅ Operacional
+      • API Gateway:     ✅ Operacional
+
+      Última verificação: há menos de 1 minuto. Sem incidentes ativos.
+    on_success: menu_resolucao
+    on_failure: menu_resolucao
+
+  # ── Caminho C: Problema técnico ──────────────────────────────────────────────
+  - id: coletar_descricao
+    type: menu
+    prompt: "Descreva brevemente o problema técnico que está enfrentando:"
+    interaction: text
+    output_as: descricao_problema
+    timeout_s: 180
+    on_success: acusar_recebimento
+    on_failure: finalizar_timeout
+    on_timeout: finalizar_timeout
+    on_disconnect: finalizar_timeout
+
+  # Phase 2: substituir por step reason que analisa a descrição e decide se resolve
+  # diretamente ou escala para humano.
+  - id: acusar_recebimento
+    type: notify
+    message: "✅ Problema registrado! Nossa equipe de suporte técnico irá analisar e retornar em até 2 horas úteis. Enquanto isso, posso te ajudar com mais alguma coisa?"
+    on_success: menu_resolucao
+    on_failure: menu_resolucao
+
+  # ── Menu de resolução ─────────────────────────────────────────────────────────
+  # Botões (≤ 3) — funciona nativamente em WhatsApp e WebChat.
+  - id: menu_resolucao
+    type: menu
+    prompt: "Posso te ajudar com mais alguma coisa?"
+    interaction: button
+    options:
+      - id: resolvido
+        label: "✅ Resolvido, obrigado!"
+      - id: especialista
+        label: "👤 Falar com especialista"
+    output_as: decisao_resolucao
+    timeout_s: 120
+    on_success: roteador_resolucao
+    on_failure: finalizar_resolvido
+    on_timeout: finalizar_resolvido
+    on_disconnect: finalizar_resolvido
+
+  - id: roteador_resolucao
+    type: choice
+    conditions:
+      - field: "$.pipeline_state.decisao_resolucao"
+        operator: eq
+        value: "resolvido"
+        next: finalizar_resolvido
+      - field: "$.pipeline_state.decisao_resolucao"
+        operator: eq
+        value: "especialista"
+        next: avisar_escalada
+    default: avisar_escalada
+
+  # ── Caminho D: Escalada para agente humano ────────────────────────────────────
+  # Phase 2: inserir step task (agente_contexto_ia_v1, mode: assist) antes de
+  # avisar_escalada para enriquecer pipeline_state com dados do cliente.
+  - id: avisar_escalada
+    type: notify
+    message: "Entendido! Vou conectar você agora a um de nossos especialistas. Um momento, por favor."
+    on_success: escalar
+    on_failure: escalar
+
+  - id: escalar
+    type: escalate
+    target:
+      pool: retencao_humano
+    context: pipeline_state
+    error_reason: escalated_to_human
+    on_failure: encerrar_fallback
+
+  # ── Fallback de escalação ─────────────────────────────────────────────────────
+  - id: encerrar_fallback
+    type: complete
+    outcome: failed
+    issue_status: "Escalação para humano falhou — pool retencao_humano indisponível"
+
+  # ── Fechamentos ───────────────────────────────────────────────────────────────
+  - id: finalizar_resolvido
+    type: complete
+    outcome: resolved
+
+  - id: finalizar_timeout
+    type: complete
+    outcome: abandoned

@@ -1,0 +1,149 @@
+# agente_triagem_v2.yaml
+# Triagem v2 — Agente IVR Determinístico Multi-Cenário (Tier 3)
+#
+# Substituto de agente_demo_ia_v1 para o pool demo_ia.
+# Sem LLM (nenhum step reason) — validação Phase 1 do plano de testes.
+#
+# Pool: demo_ia
+# Escaladas:
+#   sac_ia       — atendimento SAC com Journey (skill_atendimento_sac_v1)
+#   auth_form_ia — demonstração de formulário mascarado
+#   portabilidade_ia / reembolso_ia — stub "em breve" até Sprint 1B/1C
+#
+# Fluxo:
+#   1. saudacao               — notify: boas-vindas
+#   2. menu_principal         — menu list (4 opções)
+#   3. roteador               — choice: distribui por opção
+#   4a. avisar_sac            — notify → escalar_sac → sac_ia
+#   4b. em_breve_portabilidade — notify "em breve" → menu_principal
+#   4c. em_breve_reembolso    — notify "em breve" → menu_principal
+#   4d. avisar_auth           — notify → escalar_auth → auth_form_ia
+#   5. encerrar_fallback       — complete failed (quando escalação falha)
+#   6. finalizar              — complete resolved (timeout / disconnect)
+#
+# Phase 2: substituir os stubs "em breve" por escalações reais
+# para portabilidade_ia e reembolso_ia (Sprint 1B/1C).
+
+id: skill_triagem_v2
+name: "Triagem v2 — IVR Determinístico Multi-Cenário"
+version: "1.0"
+description: |
+  Agente de triagem determinístico (sem LLM) para o pool demo_ia.
+  Apresenta menu list com 4 cenários de teste: SAC com Journey,
+  Portabilidade, Reembolso e Auth Demo com formulário mascarado.
+  Phase 1: Portabilidade e Reembolso exibem mensagem "em breve".
+  Phase 2: Todos os caminhos ativos (Sprint 1B/1C).
+classification:
+  type: orchestrator
+  domain: customer_service
+
+entry: saudacao
+
+steps:
+
+  # ── Etapa 1: saudação ─────────────────────────────────────────────────────────
+  - id: saudacao
+    type: notify
+    message: "Olá! Bem-vindo ao PlugHub Demo. Sou o assistente virtual e vou direcionar seu atendimento."
+    on_success: menu_principal
+    on_failure: menu_principal
+
+  # ── Etapa 2: menu principal ───────────────────────────────────────────────────
+  # Usa interaction: list — suporta mais de 3 opções em WhatsApp e WebChat.
+  # Em canais sem suporte a list, o Channel Gateway converte para texto numerado.
+  - id: menu_principal
+    type: menu
+    prompt: "Como posso te ajudar hoje? Selecione uma opção:"
+    interaction: list
+    options:
+      - id: sac
+        label: "💬 SAC — Atendimento ao cliente"
+      - id: portabilidade
+        label: "📱 Portabilidade de número"
+      - id: reembolso
+        label: "💰 Solicitar reembolso"
+      - id: auth
+        label: "🔐 Demo de autenticação segura"
+    output_as: opcao_escolhida
+    timeout_s: 120
+    on_success: roteador
+    on_failure: finalizar
+    on_timeout: finalizar
+    on_disconnect: finalizar
+
+  # ── Etapa 3: roteador ─────────────────────────────────────────────────────────
+  - id: roteador
+    type: choice
+    conditions:
+      - field: "$.pipeline_state.opcao_escolhida"
+        operator: eq
+        value: "sac"
+        next: avisar_sac
+      - field: "$.pipeline_state.opcao_escolhida"
+        operator: eq
+        value: "portabilidade"
+        next: em_breve_portabilidade
+      - field: "$.pipeline_state.opcao_escolhida"
+        operator: eq
+        value: "reembolso"
+        next: em_breve_reembolso
+      - field: "$.pipeline_state.opcao_escolhida"
+        operator: eq
+        value: "auth"
+        next: avisar_auth
+    default: menu_principal
+
+  # ── Caminho A: SAC ────────────────────────────────────────────────────────────
+  - id: avisar_sac
+    type: notify
+    message: "Perfeito! Vou conectá-lo ao SAC. Uma jornada de atendimento será aberta para registrar seu caso."
+    on_success: escalar_sac
+    on_failure: escalar_sac
+
+  - id: escalar_sac
+    type: escalate
+    target:
+      pool: sac_ia
+    context: pipeline_state
+    error_reason: escalated_sac
+    on_failure: encerrar_fallback
+
+  # ── Caminho B: Portabilidade (stub Sprint 1B) ─────────────────────────────────
+  - id: em_breve_portabilidade
+    type: notify
+    message: "⚠️ O fluxo de portabilidade estará disponível em breve. Selecione outra opção ou aguarde o SAC."
+    on_success: menu_principal
+    on_failure: menu_principal
+
+  # ── Caminho C: Reembolso (stub Sprint 1C) ─────────────────────────────────────
+  - id: em_breve_reembolso
+    type: notify
+    message: "⚠️ O fluxo de reembolso estará disponível em breve. Selecione outra opção ou aguarde o SAC."
+    on_success: menu_principal
+    on_failure: menu_principal
+
+  # ── Caminho D: Auth Demo ──────────────────────────────────────────────────────
+  - id: avisar_auth
+    type: notify
+    message: "Ótimo! Vou iniciar a demonstração de autenticação segura com formulário mascarado."
+    on_success: escalar_auth
+    on_failure: escalar_auth
+
+  - id: escalar_auth
+    type: escalate
+    target:
+      pool: auth_form_ia
+    context: pipeline_state
+    error_reason: escalated_auth
+    on_failure: encerrar_fallback
+
+  # ── Fallback de escalação ─────────────────────────────────────────────────────
+  - id: encerrar_fallback
+    type: complete
+    outcome: failed
+    issue_status: "Escalação falhou — pool de destino indisponível"
+
+  # ── Finalização por timeout / disconnect ──────────────────────────────────────
+  - id: finalizar
+    type: complete
+    outcome: resolved
