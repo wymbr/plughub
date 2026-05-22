@@ -54,8 +54,16 @@ pools:
     hooks:
       on_human_start: []  # Echo evaluator removido do demo — era agente de debug do receive step
       on_human_end:
-        - pool: wrapup_ia  # Wrap-up obrigatório com agente humano (agents_only)
-        - pool: nps_ia     # NPS isolado com cliente (visibility array)
+        # Arc 14: side=agent → segmento interage com o agente humano.
+        # wrap_up_pending gravado no Redis enquanto este segmento estiver ativo —
+        # routing-engine não aloca novo contato ao agente até o wrap-up concluir.
+        - pool: wrapup_ia
+          side: agent
+        # Arc 14: side=customer → segmento interage com o cliente.
+        # nps_on_disconnect=skip → se o cliente desconectou, NPS não é disparado.
+        - pool: nps_ia
+          side: customer
+          nps_on_disconnect: skip
       post_human: []
 
   - pool_id: avaliacao_ia
@@ -97,13 +105,6 @@ pools:
     description: "Pool do agente de autenticação via formulário seguro — campos mistos"
     channel_types: [webchat, whatsapp]
     sla_target_ms: 60000
-
-  - pool_id: finalizacao_ia
-    # DEPRECATED — substituído por wrapup_ia + nps_ia (dois agentes paralelos).
-    # Mantido para retrocompatibilidade com deploys que ainda referenciam este pool.
-    description: "[DEPRECATED] Pool do agente de finalização — usar wrapup_ia + nps_ia"
-    channel_types: [webchat, whatsapp]
-    sla_target_ms: 120000
 
   - pool_id: wrapup_ia
     # Pool do agente de wrap-up pós-atendimento.
@@ -273,21 +274,6 @@ agent_types:
     capabilities:
       channels: webchat,whatsapp
       masked_input: "true"
-
-  # [DEPRECATED] Agente de finalização de contato — substituído por nps_v1 + wrapup_v1
-  - agent_type_id: agente_finalizacao_v1
-    framework: plughub-native
-    execution_model: stateless
-    role: executor
-    max_concurrent_sessions: 20
-    pools: [finalizacao_ia]
-    skills: [{skill_id: skill_finalizacao_v1}]
-    permissions:
-      - mcp-server-plughub:agent_heartbeat
-      - mcp-server-plughub:notification_send
-      - mcp-server-plughub:interaction_request
-    capabilities:
-      channels: webchat,whatsapp
 
   # Agente NPS — pesquisa de satisfação isolada com o cliente.
   # Usa visibility array (customer_participant_id) para que o agente humano

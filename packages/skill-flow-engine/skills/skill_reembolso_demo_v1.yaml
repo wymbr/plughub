@@ -1,9 +1,11 @@
 id: skill_reembolso_demo_v1
 name: Reembolso Demo
-version: "1.0"
+version: "1.1"
 description: |
-  Fluxo de solicitação de reembolso — demonstração Arc 10 Journey.
+  Fluxo de solicitação de reembolso — demonstração Arc 10 + Arc 16.
   Processo multi-sessão com análise, aprovação financeira e confirmação de pagamento.
+  Lê @ctx.journey.numero_pedido e @ctx.journey.motivo_reembolso escritos pelo intake
+  (agente_reembolso_intake_v1). Collect steps usam requires: [text] — canal neutro.
   Criação automática de Journey via creates_journey: true.
   Tempo estimado: 2–5 dias úteis.
 classification:
@@ -48,8 +50,8 @@ steps:
 
   - id: coletar_informacoes
     type: collect
-    channel: webchat
-    message: "📎 Precisamos de informações adicionais. Por favor, envie o comprovante de compra."
+    requires: [text]
+    message: "📎 Para prosseguir com o reembolso do pedido @ctx.journey.numero_pedido, precisamos de informações adicionais. Por favor, envie o comprovante de compra."
     timeout_hours: 48
     on_response:
       next: analisar_caso
@@ -73,8 +75,8 @@ steps:
 
   - id: confirmar_pagamento
     type: collect
-    channel: webchat
-    message: "💰 O reembolso foi processado. Você já recebeu o valor em sua conta?"
+    requires: [text]
+    message: "💰 O reembolso do pedido @ctx.journey.numero_pedido foi processado. Você já recebeu o crédito em sua conta?"
     timeout_hours: 24
     on_response:
       next: encerrar_sucesso
