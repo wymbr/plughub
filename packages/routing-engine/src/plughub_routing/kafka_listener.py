@@ -181,6 +181,7 @@ class RegistryEventHandler:
                 mentionable_pools    = pool_data.get("mentionable_pools") or None,
                 mentionable_journeys = pool_data.get("mentionable_journeys") or None,
                 agent_groups         = pool_data.get("agent_groups") or [],
+                context_visibility   = pool_data.get("context_visibility") or None,
             )
             await self._pools.save_pool_config(config)
             logger.info(
@@ -231,6 +232,23 @@ class LifecycleEventHandler:
                 pools         = event.get("pools") or [],
                 agent_type_id = event.get("agent_type_id", ""),
             )
+            # Refresh pool snapshots immediately on agent_ready so Monitor
+            # shows the pool from login time, not only after the first routing
+            # event triggers write_pool_snapshot().
+            #
+            # Always do a full write_pool_snapshot() (via _refresh_pool_snapshots
+            # with no delta).  Full recount is idempotent: multiple calls give the
+            # same correct result.  The reconciliation loop sends agent_ready for
+            # ALL AI agents every 15 s — a fast-patch delta approach would compound
+            # with each cycle and cause massive overcounting.  Full recount avoids
+            # this because it sums actual ready-instance capacity each time.
+            #
+            # remove_conversation() already patches the snapshot +1 for immediate
+            # UI feedback; this full recount confirms (and matches) that value.
+            if self._pools:
+                asyncio.create_task(
+                    self._refresh_pool_snapshots(tenant_id, event.get("pools") or [])
+                )
             # Drain queue — if an agent becomes ready and there are contacts
             # waiting in any of its pools, dequeue the highest-priority one
             # and re-publish it to conversations.inbound for re-routing.
@@ -409,26 +427,148 @@ class LifecycleEventHandler:
             # trigger additional drains.
             return
 
+    async def _refresh_pool_snapshots(
+        self, tenant_id: str, pool_ids: list[str], delta: int | None = None
+    ) -> None:
+        """
+        Refreshes pool snapshots for each pool_id.
+
+        Called fire-and-forget on agent_ready so Monitor reflects the pool's
+        available/busy counts immediately.
+
+        Two modes:
+        - delta is None (initial login / snapshot absent): always do a full
+          write_pool_snapshot() which sums capacity across all ready instances.
+          This is correct at login time when the pool transitions from 0 → N.
+        - delta is set (one agent returned from a session): try a fast-patch
+          first (+delta to existing snapshot). If the snapshot has expired
+          (TTL 3600s normally keeps it alive; rare miss), fall back to a full
+          recount so the counter is never permanently lost.
+
+        This prevents hook pools (wrapup_ia, nps_ia) with 400 agents from
+        showing available += 400 every time a single agent finishes a session.
+        """
+        assert self._pools is not None
+        for pool_id in pool_ids:
+            try:
+                if delta is not None:
+                    patched = await self._instances.patch_pool_snapshot_available(
+                        tenant_id, pool_id, delta
+                    )
+                    if patched:
+                        logger.debug(
+                            "Pool snapshot fast-patched on agent_ready: "
+                            "tenant=%s pool=%s delta=%+d",
+                            tenant_id, pool_id, delta,
+                        )
+                        continue
+                    # Snapshot absent — fall through to full recount below
+                    logger.debug(
+                        "Pool snapshot absent on agent_ready fast-patch, "
+                        "falling back to full recount: tenant=%s pool=%s",
+                        tenant_id, pool_id,
+                    )
+                pool = await self._pools.get_pool(tenant_id, pool_id)
+                if pool:
+                    await self._instances.write_pool_snapshot(
+                        tenant_id=     tenant_id,
+                        pool_id=       pool_id,
+                        sla_target_ms= pool.sla_target_ms,
+                        channel_types= pool.channel_types,
+                    )
+                    logger.debug(
+                        "Pool snapshot (full recount) written on agent_ready: "
+                        "tenant=%s pool=%s",
+                        tenant_id, pool_id,
+                    )
+            except Exception as exc:
+                logger.warning(
+                    "Failed to refresh pool snapshot on agent_ready: pool=%s — %s",
+                    pool_id, exc,
+                )
+
     async def _deactivate_instance(
         self, tenant_id: str, instance_id: str, event: dict
     ) -> None:
-        """Removes instance from all pool sets (paused/logout)."""
+        """
+        Removes instance from all pool sets (paused/logout) and refreshes
+        pool snapshots so the Monitor reflects the change immediately.
+
+        For agent_logout the mcp-server may already have DEL'd the instance key
+        before the Kafka event arrives.  In that case get_instance() returns None
+        but we still need to clean up pool sets and snapshots.  We fall back to
+        the pool list carried in the event payload (populated since the fix that
+        sends pools=[allPools] on full logout).
+        """
+        event_type = event.get("event", "")
+        new_state  = "paused" if event_type == "agent_paused" else "logged_out"
+
+        # Determine which pools need cleanup.
+        # Primary source: instance key in Redis (most accurate).
+        # Fallback: pools list in the Kafka event (set by mcp-server on logout).
+        affected_pools: list[str] = []
         try:
             instance = await self._instances.get_instance(tenant_id, instance_id)
-            if not instance:
-                return
-            status = event.get("event", "")
-            instance.state = "paused" if status == "agent_paused" else "logged_out"
-            await self._instances.set_instance(instance)
-            logger.debug(
-                "Instance deactivated: tenant=%s instance=%s state=%s",
-                tenant_id, instance_id, instance.state,
-            )
+            if instance:
+                instance.state = new_state
+                await self._instances.set_instance(instance)
+                affected_pools = list(instance.pools)
+                logger.info(
+                    "[deactivate] Instance found and deactivated: "
+                    "tenant=%s instance=%s state=%s pools=%s",
+                    tenant_id, instance_id, new_state, affected_pools,
+                )
+            else:
+                # Instance key already deleted (mcp-server DEL'd before Kafka delivery).
+                # Use the pool list from the event payload to clean up pool sets.
+                affected_pools = event.get("pools") or []
+                logger.info(
+                    "[deactivate] Instance already deleted; using event pools=%s "
+                    "tenant=%s instance=%s",
+                    affected_pools, tenant_id, instance_id,
+                )
+                if affected_pools:
+                    # Remove from both ready and busy sets for each pool.
+                    # NOTE: LifecycleEventHandler has no self._redis; use the
+                    # redis client that lives on the InstanceRegistry instead.
+                    _redis = self._instances._redis
+                    for pool_id in affected_pools:
+                        r1 = await _redis.srem(
+                            f"{tenant_id}:pool:{pool_id}:instances", instance_id
+                        )
+                        r2 = await _redis.srem(
+                            f"{tenant_id}:pool:{pool_id}:busy_instances", instance_id
+                        )
+                        logger.info(
+                            "[deactivate] SREM pool=%s instances=%s busy_instances=%s",
+                            pool_id, r1, r2,
+                        )
         except Exception as exc:
             logger.error(
                 "Error deactivating instance: tenant=%s instance=%s — %s",
                 tenant_id, instance_id, exc,
             )
+            return
+
+        # Refresh pool snapshots for all affected pools so the Monitor
+        # immediately reflects the agent going offline.
+        # refresh_pool_snapshot lives on InstanceRegistry, not PoolRegistry.
+        # self._instances is always set; self._pools is optional (used only for
+        # pool config lookups like get_pool()).
+        if affected_pools:
+            for pool_id in affected_pools:
+                try:
+                    await self._instances.refresh_pool_snapshot(tenant_id, pool_id)
+                    logger.info(
+                        "[deactivate] Pool snapshot refreshed: "
+                        "tenant=%s pool=%s instance=%s",
+                        tenant_id, pool_id, instance_id,
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "[deactivate] Could not refresh pool snapshot: tenant=%s pool=%s — %s",
+                        tenant_id, pool_id, exc,
+                    )
 
 
 def _map_status_to_state(status: str) -> str:

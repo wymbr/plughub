@@ -36,6 +36,7 @@ import { registerJourneyTools }     from "./tools/journey"
 import type { JourneyDeps }         from "./tools/journey"
 import { registerAgentEventTools }  from "./tools/agent-events"
 import type { AgentEventDeps }      from "./tools/agent-events"
+import jwt                         from "jsonwebtoken"
 import { createRedisClient, keys } from "./infra/redis"
 import { createKafkaProducer }     from "./infra/kafka"
 import { createRegistryClient }    from "./infra/registry-client"
@@ -111,6 +112,7 @@ export function createServer(allDeps?: AllDeps): McpServer {
   const journeyDeps: JourneyDeps = {
     workflowApiUrl: process.env["WORKFLOW_API_URL"]  ?? "http://localhost:3800",
     tenantId:       process.env["PLUGHUB_TENANT_ID"] ?? process.env["TENANT_ID"] ?? "tenant_demo",
+    redis,  // Arc 16: journey_context_get/set write to {tenant}:ctx:journey:{id}
   }
 
   const agentEventDeps: AgentEventDeps = { redis, kafka }
@@ -254,8 +256,13 @@ async function refreshPoolInstances(
 // ─────────────────────────────────────────────────────────────────────────────
 //
 // Called when a human agent connects to the Agent Assist UI WebSocket.
-// Creates a stable instance_id for this pool (one per pool, not per browser tab)
-// so the routing engine always has a consistent handle.
+//
+// Instance model — PER USER (not per pool):
+//   instanceId = "human-{userId}"  — one Redis key shared across all pools.
+//   When the agent logs into an additional pool the existing instance is read,
+//   poolId is merged into pools[], and the key is overwritten.  The routing
+//   engine's LifecycleEventHandler receives agent_ready with the full merged
+//   pools list and makes the instance available in every listed pool.
 //
 // Step 1 — Redis: upsert the instance directly so it is immediately visible to
 //   the routing engine's Redis reads, even before Kafka is processed.
@@ -264,13 +271,16 @@ async function refreshPoolInstances(
 //   which re-publishes any already-queued contacts back to conversations.inbound.
 //
 async function registerHumanAgent(
-  poolId: string,
+  poolId:               string,
+  userId:               string,
+  maxConcurrentSessions: number,
   redis:  import("ioredis").default,
   kafka:  { publish: (topic: string, payload: Record<string, unknown>) => Promise<void> },
 ): Promise<void> {
   const tenantId        = process.env["PLUGHUB_TENANT_ID"] ?? "tenant_demo"
   const registryUrl     = process.env["AGENT_REGISTRY_URL"] ?? "http://localhost:3300"
-  const instanceId      = `human-${poolId}`   // stable per pool
+  // Per-user instance key — falls back to per-pool for old clients without user_id
+  const instanceId      = userId ? `human-${userId}` : `human-${poolId}`
   const now             = new Date().toISOString()
 
   // ── Step 0: ensure pool exists in Agent Registry (PostgreSQL) ──────────────
@@ -313,15 +323,30 @@ async function registerHumanAgent(
     console.warn(`[agent-ws] Pool registration request failed (non-fatal): pool=${poolId}`, err)
   }
 
+  // ── Read existing instance to merge pools (multi-pool login) ─────────────────
+  let existingPools: string[] = []
+  let existingCurrentSessions = 0
+  try {
+    const existingRaw = await redis.get(`${tenantId}:instance:${instanceId}`)
+    if (existingRaw) {
+      const existing = JSON.parse(existingRaw) as Record<string, unknown>
+      if (Array.isArray(existing["pools"])) existingPools = existing["pools"] as string[]
+      if (typeof existing["current_sessions"] === "number") {
+        existingCurrentSessions = existing["current_sessions"] as number
+      }
+    }
+  } catch { /* non-fatal — treat as fresh registration */ }
+  const mergedPools = Array.from(new Set([...existingPools, poolId]))
+
   const instance = {
     instance_id:      instanceId,
     agent_type_id:    `human_agent_${poolId}`,
     tenant_id:        tenantId,
     pool_id:          poolId,
-    pools:            [poolId],
+    pools:            mergedPools,
     execution_model:  "stateful",
-    max_concurrent:   10,
-    current_sessions: 0,
+    max_concurrent:   maxConcurrentSessions,
+    current_sessions: existingCurrentSessions,
     status:           "ready",
     registered_at:    now,
     source:           "human_login",
@@ -381,50 +406,113 @@ async function registerHumanAgent(
     agent_type_id:            `human_agent_${poolId}`,
     status:                   "ready",
     execution_model:          "stateful",   // required: prevents stateless default in routing engine
-    current_sessions:         0,
-    pools:                    [poolId],
-    max_concurrent_sessions:  10,
+    current_sessions:         existingCurrentSessions,
+    pools:                    mergedPools,
+    max_concurrent_sessions:  maxConcurrentSessions,
     timestamp:                now,
   })
 
-  console.log(`[agent-ws] Human agent registered: instance=${instanceId} pool=${poolId}`)
+  console.log(`[agent-ws] Human agent registered: instance=${instanceId} pools=${mergedPools.join(",")}`)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// unregisterHumanAgent — mark instance as logged_out when agent disconnects
+// unregisterHumanAgent — remove poolId from the per-user instance
 // ─────────────────────────────────────────────────────────────────────────────
+//
+// Two outcomes:
+//   • Partial logout (agent still logged into other pools):
+//       Remove poolId from pools[]; update Redis; publish agent_ready with
+//       the remaining pools so the routing engine re-evaluates availability.
+//   • Full logout (last pool):
+//       DEL the instance key entirely; publish agent_logout.
+//
 async function unregisterHumanAgent(
   poolId: string,
+  userId: string,
   redis:  import("ioredis").default,
   kafka:  { publish: (topic: string, payload: Record<string, unknown>) => Promise<void> },
 ): Promise<void> {
   const tenantId   = process.env["PLUGHUB_TENANT_ID"] ?? "tenant_demo"
-  const instanceId = `human-${poolId}`
+  const instanceId = userId ? `human-${userId}` : `human-${poolId}`
   const now        = new Date().toISOString()
 
-  // Update status in Redis immediately
+  console.log(`[unregister] START pool=${poolId} user=${userId} instanceId=${instanceId} tenant=${tenantId}`)
+
+  let remainingPools: string[] = []
+  let allPools: string[]       = [poolId]
+  let currentSessions = 0
+
+  // Remove poolId from the instance's pools list
   try {
     const raw = await redis.get(`${tenantId}:instance:${instanceId}`)
+    console.log(`[unregister] Instance key found=${!!raw} key=${tenantId}:instance:${instanceId}`)
     if (raw) {
       const inst = JSON.parse(raw) as Record<string, unknown>
-      inst["status"] = "logged_out"
-      await redis.set(`${tenantId}:instance:${instanceId}`, JSON.stringify(inst))
+      allPools       = Array.isArray(inst["pools"]) ? inst["pools"] as string[] : [poolId]
+      remainingPools = allPools.filter(p => p !== poolId)
+      if (typeof inst["current_sessions"] === "number") {
+        currentSessions = inst["current_sessions"] as number
+      }
+      console.log(`[unregister] allPools=${allPools.join(",")} remainingPools=${remainingPools.join(",") || "(none)"}`)
     }
-    await redis.srem(`${tenantId}:pool:${poolId}:instances`, instanceId)
-  } catch { /* non-fatal */ }
+    // Always remove from this pool's routing sets (ready + busy)
+    const r1 = await redis.srem(`${tenantId}:pool:${poolId}:instances`,      instanceId)
+    const r2 = await redis.srem(`${tenantId}:pool:${poolId}:busy_instances`, instanceId)
+    const r3 = await redis.srem(`${tenantId}:pool_roster:${poolId}`,         instanceId)
+    console.log(`[unregister] SREM instances=${r1} busy_instances=${r2} pool_roster=${r3}`)
+  } catch (e) {
+    console.error(`[unregister] ERROR in setup block:`, e)
+  }
 
-  // Notify routing engine
-  await kafka.publish("agent.lifecycle", {
-    event:        "agent_logout",
-    tenant_id:    tenantId,
-    instance_id:  instanceId,
-    agent_type_id:`human_agent_${poolId}`,
-    status:       "logout",
-    pools:        [poolId],
-    timestamp:    now,
-  })
-
-  console.log(`[agent-ws] Human agent unregistered: instance=${instanceId} pool=${poolId}`)
+  if (remainingPools.length === 0) {
+    // Full logout — publish BEFORE DEL so the routing-engine can still read the
+    // instance key if it processes the event before we delete it.
+    console.log(`[unregister] Full logout — publishing agent_logout for instance=${instanceId} pools=${allPools.join(",")}`)
+    await kafka.publish("agent.lifecycle", {
+      event:        "agent_logout",
+      tenant_id:    tenantId,
+      instance_id:  instanceId,
+      agent_type_id:`human_agent_${poolId}`,
+      status:       "logout",
+      // Send the full pool list so the routing-engine can clean up every pool set
+      // and refresh their snapshots, even if the instance key has already been deleted.
+      pools:        allPools,
+      timestamp:    now,
+    })
+    // DEL after publish — routing-engine may have already processed the event, which
+    // is fine; the key is gone and get_instance() will return None gracefully.
+    try {
+      const delResult = await redis.del(`${tenantId}:instance:${instanceId}`)
+      console.log(`[unregister] DEL instance key result=${delResult} (1=deleted, 0=not found)`)
+    } catch (e) { console.error(`[unregister] DEL failed:`, e) }
+    console.log(`[agent-ws] Human agent fully unregistered: instance=${instanceId}`)
+  } else {
+    // Still active in other pools — update and keep ready
+    try {
+      const raw = await redis.get(`${tenantId}:instance:${instanceId}`)
+      if (raw) {
+        const inst = JSON.parse(raw) as Record<string, unknown>
+        inst["pools"] = remainingPools
+        await redis.set(`${tenantId}:instance:${instanceId}`, JSON.stringify(inst))
+      }
+    } catch { /* non-fatal */ }
+    // Partial logout — update routing engine with remaining pools
+    await kafka.publish("agent.lifecycle", {
+      event:            "agent_ready",
+      tenant_id:        tenantId,
+      instance_id:      instanceId,
+      agent_type_id:    `human_agent_${poolId}`,
+      status:           "ready",
+      execution_model:  "stateful",
+      current_sessions: currentSessions,
+      pools:            remainingPools,
+      timestamp:        now,
+    })
+    console.log(
+      `[agent-ws] Human agent unregistered from pool=${poolId}, ` +
+      `remaining pools=${remainingPools.join(",")} instance=${instanceId}`
+    )
+  }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -432,21 +520,59 @@ async function unregisterHumanAgent(
 // Spec: docs/guias/context-masking-rules.md
 // ─────────────────────────────────────────────────────────────────────────────
 
+const _JWT_SECRET = process.env["PLUGHUB_JWT_SECRET"] ?? ""
+
 /**
- * Extract role from a Bearer JWT without signature verification.
- * Auth middleware upstream already validated the token — we only need claims.
+ * Verify a Bearer JWT and return its payload.
+ * Throws if the token is missing, malformed, or the signature is invalid.
+ * Falls back to decode-only when PLUGHUB_JWT_SECRET is not configured (dev only).
+ */
+function verifyJwtPayload(authHeader: string | undefined): Record<string, unknown> {
+  if (!authHeader?.startsWith("Bearer ")) throw new Error("Missing Bearer token")
+  const token = authHeader.slice(7)
+  if (_JWT_SECRET) {
+    // Production path — full signature verification
+    return jwt.verify(token, _JWT_SECRET, { algorithms: ["HS256"] }) as Record<string, unknown>
+  }
+  // Dev fallback — decode without verification (logs a warning at startup)
+  const payloadB64 = token.split(".")[1] ?? ""
+  return JSON.parse(Buffer.from(payloadB64, "base64url").toString("utf8")) as Record<string, unknown>
+}
+
+/**
+ * Extract role from a verified JWT.
+ * Throws 401 when the token is missing or invalid.
  */
 function extractJwtRole(authHeader: string | undefined): string {
-  if (!authHeader?.startsWith("Bearer ")) return "operator"
   try {
-    const payloadB64 = authHeader.slice(7).split(".")[1] ?? ""
-    const payload = JSON.parse(
-      Buffer.from(payloadB64, "base64url").toString("utf8")
-    ) as Record<string, unknown>
+    const payload = verifyJwtPayload(authHeader)
     const role = (payload["role"] ?? (payload["roles"] as string[])?.[0]) as string | undefined
     return role ?? "operator"
   } catch {
-    return "operator"
+    return "operator"   // fallback for non-UI callers (agent MCP sessions authenticated separately)
+  }
+}
+
+/**
+ * Guard for UI endpoints that require a valid signed JWT with a minimum role.
+ * Responds 401 if the token is missing/invalid, 403 if the role is insufficient.
+ */
+function requireJwtRole(
+  authHeader: string | undefined,
+  allowedRoles: string[],
+  res: Response,
+): Record<string, unknown> | null {
+  try {
+    const payload = verifyJwtPayload(authHeader)
+    const role = (payload["role"] ?? (payload["roles"] as string[])?.[0]) as string | undefined
+    if (!role || !allowedRoles.includes(role)) {
+      res.status(403).json({ error: "Insufficient role", required: allowedRoles })
+      return null
+    }
+    return payload
+  } catch {
+    res.status(401).json({ error: "Unauthorized" })
+    return null
   }
 }
 
@@ -758,6 +884,9 @@ export async function startServer(config: ServerConfig): Promise<void> {
 
   // GET /supervisor_state/:sessionId
   app.get("/api/supervisor_state/:sessionId", async (req: Request, res: Response) => {
+    const payload = requireJwtRole(req.headers.authorization, ["operator", "supervisor", "admin", "developer"], res)
+    if (!payload) return
+
     const { sessionId } = req.params
     try {
       // Read live session AI state from Redis if available
@@ -785,8 +914,8 @@ export async function startServer(config: ServerConfig): Promise<void> {
         else if (delta < -0.1) trend = "declining"
       }
 
-      // Viewer role — extracted from Bearer JWT for masking decisions
-      const viewerRole = extractJwtRole(req.headers.authorization)
+      // Viewer role — taken from verified JWT payload for masking decisions
+      const viewerRole = (payload["role"] as string) ?? "operator"
 
       // Read tenant_id, pool_id and historical context from session meta
       let tenantId = ""
@@ -1026,6 +1155,9 @@ export async function startServer(config: ServerConfig): Promise<void> {
   // Body: { key: string, value: unknown, confidence?: number, source?: string }
   // Writes to Redis hash {tenantId}:ctx:{sessionId} as a ContextEntry JSON blob.
   app.post("/api/inject-context/:sessionId", async (req: Request, res: Response) => {
+    const payload = requireJwtRole(req.headers.authorization, ["operator", "supervisor", "admin", "developer"], res)
+    if (!payload) return
+
     const { sessionId } = req.params
     const { key, value, confidence = 0.9, source = "supervisor_inject" } = req.body as {
       key?: string; value?: unknown; confidence?: number; source?: string
@@ -1036,7 +1168,7 @@ export async function startServer(config: ServerConfig): Promise<void> {
     }
 
     // Phase 2 — namespace write permission by role
-    const writeRole = extractJwtRole(req.headers.authorization)
+    const writeRole = (payload["role"] as string) ?? "operator"
     const writeNs   = (key as string).split(".")[0] ?? ""
     const OPERATOR_WRITABLE_NS = ["agent", "service"]
     if (writeRole === "operator" && !OPERATOR_WRITABLE_NS.includes(writeNs)) {
@@ -1075,6 +1207,9 @@ export async function startServer(config: ServerConfig): Promise<void> {
   // Body: { reason?: string, outcome?: string }
   // Updates {tenantId}:pipeline:{sessionId} status → "completed" in Redis.
   app.post("/api/force-complete/:sessionId", async (req: Request, res: Response) => {
+    const payload = requireJwtRole(req.headers.authorization, ["supervisor", "admin"], res)
+    if (!payload) return
+
     const { sessionId } = req.params
     const { reason = "supervisor_force_complete", outcome = "resolved" } = req.body as {
       reason?: string; outcome?: string
@@ -1422,13 +1557,15 @@ export async function startServer(config: ServerConfig): Promise<void> {
 
   // ── Arc 8 — Human agent pause / resume REST endpoints ────────────────────
   // Called by the Agent Assist UI when the human clicks "Pausar" (with a reason)
-  // or "Retomar". These mirror the MCP tool path (agent_pause / agent_ready in
-  // runtime.ts) but do not require a session JWT — the agent is identified by
-  // their pool_id, from which the instance_id is derived using the convention
-  // established in runtime.ts:  instanceId = "human-${poolId}"
+  // or "Retomar". The agent is identified by the JWT sub claim (userId) so that
+  // the instance key matches the per-user model: instanceId = "human-${userId}".
+  // Falls back to "human-${poolId}" for old tokens that lack a sub claim.
   // ─────────────────────────────────────────────────────────────────────────
 
   app.put("/api/agent-pause", async (req: Request, res: Response) => {
+    const payload = requireJwtRole(req.headers.authorization, ["operator", "supervisor", "admin"], res)
+    if (!payload) return
+
     try {
       const body = req.body as Record<string, unknown>
       const poolId     = (body["pool_id"]     as string | undefined) ?? ""
@@ -1442,7 +1579,8 @@ export async function startServer(config: ServerConfig): Promise<void> {
       }
 
       const tenantId   = process.env["PLUGHUB_TENANT_ID"] ?? "tenant_demo"
-      const instanceId = `human-${poolId}`
+      const jwtUserId  = typeof payload["sub"] === "string" ? payload["sub"] : ""
+      const instanceId = jwtUserId ? `human-${jwtUserId}` : `human-${poolId}`
       const instanceKey = keys.agentInstance(tenantId, instanceId)
 
       // Verify instance exists
@@ -1486,6 +1624,9 @@ export async function startServer(config: ServerConfig): Promise<void> {
   })
 
   app.put("/api/agent-resume", async (req: Request, res: Response) => {
+    const payload = requireJwtRole(req.headers.authorization, ["operator", "supervisor", "admin"], res)
+    if (!payload) return
+
     try {
       const body = req.body as Record<string, unknown>
       const poolId = (body["pool_id"] as string | undefined) ?? ""
@@ -1496,7 +1637,8 @@ export async function startServer(config: ServerConfig): Promise<void> {
       }
 
       const tenantId   = process.env["PLUGHUB_TENANT_ID"] ?? "tenant_demo"
-      const instanceId = `human-${poolId}`
+      const jwtUserId2 = typeof payload["sub"] === "string" ? payload["sub"] : ""
+      const instanceId = jwtUserId2 ? `human-${jwtUserId2}` : `human-${poolId}`
       const instanceKey = keys.agentInstance(tenantId, instanceId)
 
       // Verify instance exists and is paused
@@ -1632,7 +1774,11 @@ export async function startServer(config: ServerConfig): Promise<void> {
   wss.on("connection", (ws: WebSocket, request: http.IncomingMessage) => {
     const url    = new URL(request.url ?? "", `http://${request.headers.host}`)
     const poolId = url.searchParams.get("pool") ?? ""
-    console.log(`[agent-ws] New WebSocket connection: pool=${poolId} from=${request.socket.remoteAddress}`)
+    // Per-user identity — sent by platform-ui from the JWT sub claim.
+    // Falls back to poolId-based key for old clients that do not send user_id.
+    const userId              = url.searchParams.get("user_id") ?? ""
+    const maxConcurrentSessions = Math.max(1, parseInt(url.searchParams.get("max_concurrent") ?? "3", 10))
+    console.log(`[agent-ws] New WebSocket connection: pool=${poolId} user=${userId || "(legacy)"} max_concurrent=${maxConcurrentSessions} from=${request.socket.remoteAddress}`)
 
     // All sessions currently subscribed on this WebSocket connection.
     // There is intentionally NO concept of "active session" here — every assigned
@@ -1852,8 +1998,8 @@ export async function startServer(config: ServerConfig): Promise<void> {
         pendingUnregister.delete(poolId)
         console.log(`[agent-ws] Cancelled pending unregister (StrictMode reconnect) pool=${poolId}`)
       }
-      registerHumanAgent(poolId, redis, kafka).catch((err) =>
-        console.error(`[agent-ws] registerHumanAgent pool=${poolId}:`, err)
+      registerHumanAgent(poolId, userId, maxConcurrentSessions, redis, kafka).catch((err) =>
+        console.error(`[agent-ws] registerHumanAgent pool=${poolId} user=${userId}:`, err)
       )
     }
 
@@ -1932,7 +2078,7 @@ export async function startServer(config: ServerConfig): Promise<void> {
         // Without this, the instance expires and the agent becomes invisible to routing.
         if (msg["type"] === "pong" && poolId) {
           const tenantId   = process.env["PLUGHUB_TENANT_ID"] ?? "tenant_demo"
-          const instanceId = `human-${poolId}`
+          const instanceId = userId ? `human-${userId}` : `human-${poolId}`
           kafka.publish("agent.lifecycle", {
             event:                   "agent_heartbeat",
             tenant_id:               tenantId,
@@ -1942,7 +2088,7 @@ export async function startServer(config: ServerConfig): Promise<void> {
             execution_model:         "stateful",
             current_sessions:        subscribedSessions.size,
             pools:                   [poolId],
-            max_concurrent_sessions: 10,
+            max_concurrent_sessions: maxConcurrentSessions,
             timestamp:               new Date().toISOString(),
           }).catch(() => {/* non-fatal */})
           return
@@ -2312,6 +2458,7 @@ export async function startServer(config: ServerConfig): Promise<void> {
 
     ws.on("close", () => {
       clearInterval(pingInterval)
+      console.log(`[agent-ws] WS closed: pool=${poolId} user=${userId} instanceId=human-${userId || poolId}`)
       // Write participant_left for every session still open on this connection.
       for (const sid of subscribedSessions) {
         writeParticipantEvent("participant_left", sid).catch(() => {})
@@ -2322,13 +2469,17 @@ export async function startServer(config: ServerConfig): Promise<void> {
       // Use a grace period so that React 18 StrictMode's rapid close→open cycle
       // does NOT unregister the agent — the new connection will cancel this timer.
       if (poolId) {
+        console.log(`[agent-ws] Scheduling unregister in ${UNREGISTER_GRACE_MS}ms: pool=${poolId} user=${userId}`)
         const timer = setTimeout(() => {
+          console.log(`[agent-ws] Grace period elapsed — calling unregisterHumanAgent pool=${poolId} user=${userId}`)
           pendingUnregister.delete(poolId)
-          unregisterHumanAgent(poolId, redis, kafka).catch((err) =>
-            console.error(`[agent-ws] unregisterHumanAgent pool=${poolId}:`, err)
+          unregisterHumanAgent(poolId, userId, redis, kafka).catch((err) =>
+            console.error(`[agent-ws] unregisterHumanAgent pool=${poolId} user=${userId}:`, err)
           )
         }, UNREGISTER_GRACE_MS)
         pendingUnregister.set(poolId, timer)
+      } else {
+        console.log(`[agent-ws] WS close — no poolId, skipping unregister`)
       }
     })
 

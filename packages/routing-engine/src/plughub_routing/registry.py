@@ -13,6 +13,9 @@ Redis key structure:
   {tenant_id}:pool_config:{pool_id}                         — pool config JSON (TTL 24h, via PLUGHUB_POOL_CONFIG_TTL_SECONDS)
   {tenant_id}:pools                                         — set of pool_ids for the tenant
   {tenant_id}:pool:{pool_id}:queue                          — sorted set of contacts (score = queued_at_ms)
+  {tenant_id}:instance:{instance_id}:wrap_up_pending        — Arc 14 Fase C: set by bridge during wrap-up;
+                                                              blocks get_ready_instances from returning this
+                                                              instance until wrap-up segment completes (TTL auto-expires)
   {tenant_id}:queue_contact:{session_id}                    — queued contact JSON
   session_instance:{session_id}                             — session affinity (stateful)
   {tenant_id}:routing:instance:{instance_id}:meta           — HASH no TTL (pools, agent_type_id)
@@ -133,8 +136,21 @@ class InstanceRegistry:
             raw = await self._redis.get(_instance_key(tenant_id, iid))
             if not raw:
                 # Instance key expired (TTL ran out) but ID is still in the pool set.
-                # Remove the stale entry to keep the set consistent.
-                await self._redis.srem(_pool_instances_key(tenant_id, pool_id), iid)
+                # Skip without evicting: removing the stale entry HERE causes an
+                # off-by-1 bug in write_pool_snapshot().
+                #
+                # Problem: when _allocate() calls get_ready_instances() and evicts
+                # the stale entry (SREM), the ready_set shrinks from N to N-1 BEFORE
+                # mark_busy() fires.  mark_busy() then removes the allocated instance
+                # → N-2.  write_pool_snapshot() (called after mark_busy) computes
+                # total_instances = len(ready_instances) + at_capacity = (N-2) + 1 = N-1
+                # instead of the correct N.  Both available and total appear 1 too low
+                # in the Monitor while the session is active.
+                #
+                # Fix: stale entries are evicted explicitly in write_pool_snapshot()
+                # AFTER mark_busy() has already updated the ready_set, so the cleanup
+                # cannot race with mark_busy().  The bootstrap heartbeat (every 15 s)
+                # also restores expired keys, making stale entries transient (< 15 s).
                 continue
             try:
                 data = json.loads(raw)
@@ -143,6 +159,20 @@ class InstanceRegistry:
                     data["state"] = data["status"]
                 inst = AgentInstance.model_validate(data)
                 if inst.state == "ready" and inst.current_sessions < inst.max_concurrent:
+                    # Arc 14 Fase C: skip instances with an active wrap-up segment.
+                    # The bridge sets {tenant}:instance:{id}:wrap_up_pending (TTL auto-expires)
+                    # when an on_human_end hook with side=agent is dispatched, and deletes it
+                    # when the wrap-up completes.  This prevents the routing engine from
+                    # allocating a new contact while the agent is still in post-call wrap-up.
+                    try:
+                        _iid_str = iid if isinstance(iid, str) else iid.decode()
+                        _wp = await self._redis.exists(
+                            f"{tenant_id}:instance:{_iid_str}:wrap_up_pending"
+                        )
+                        if _wp:
+                            continue
+                    except Exception:
+                        pass  # non-fatal: if check fails, include instance anyway
                     instances.append(inst)
             except Exception:
                 continue
@@ -275,9 +305,10 @@ class InstanceRegistry:
         await self._redis.srem(
             _instance_conversations_key(tenant_id, instance_id), conversation_id
         )
-        # Clear the serving-pool marker for this session so stale 24h-TTL keys
-        # don't block a future routing for the same session_id.
-        await self._redis.delete(_session_serving_pool_key(tenant_id, conversation_id))
+        # NOTE: serving-pool deletion is deferred below — inside the try block —
+        # so we can guard it against conference specialists wiping the primary
+        # contact's serving_pool key.  See guarded delete after pools_to_decr.
+
         # Decrement active-session counters and update snapshots in-place.
         # We look up which pools this instance belongs to from its meta record.
         # For the common single-pool case this is exact; for multi-pool agents
@@ -289,39 +320,148 @@ class InstanceRegistry:
         try:
             meta = await self.get_instance_meta(tenant_id, instance_id)
             pools_to_decr = meta.pools if meta else (fallback_pools or [])
+
+            # Phase 2 (runs FIRST, before the pools gate): Decrement current_sessions
+            # in the instance key and restore state=ready when the agent drops below
+            # max_concurrent capacity.  This MUST run even when pools_to_decr is empty
+            # (e.g. YAML-fallback agents that never published agent_ready to Kafka and
+            # therefore have no instance_meta, and whose agent_done event omits pools).
+            # Without this early update the instance stays stuck as status=busy forever,
+            # causing stale busy instances to accumulate across sessions and degrading
+            # the Monitor's "available" counter on every new contact.
+            new_current_sessions: int | None = None
+            new_state: str | None = None
+            inst_pools: list[str] = []
+            try:
+                inst_key = _instance_key(tenant_id, instance_id)
+                raw_inst = await self._redis.get(inst_key)
+                if raw_inst:
+                    inst_data = json.loads(raw_inst)
+                    # Normalise status → state alias (mcp-server compat)
+                    if "status" in inst_data and "state" not in inst_data:
+                        inst_data["state"] = inst_data["status"]
+                    inst = AgentInstance.model_validate(inst_data)
+                    # Capture pools from instance data as ultimate fallback (used below
+                    # when neither instance_meta nor the agent_done event carry pools).
+                    inst_pools = list(inst.pools or [])
+                    old_sessions = inst.current_sessions
+                    inst.current_sessions = max(0, inst.current_sessions - 1)
+                    if inst.current_sessions < inst.max_concurrent:
+                        inst.state = "ready"
+                    new_current_sessions = inst.current_sessions
+                    new_state = inst.state
+                    out = inst.model_dump()
+                    out["status"] = out.pop("state")
+                    # Preserve human-agent source field so bridge detection still works
+                    if "source" in inst_data:
+                        out["source"] = inst_data["source"]
+                    await self._redis.set(inst_key, json.dumps(out), keepttl=True)
+                    logger.info(
+                        "remove_conversation: instance=%s current_sessions=%d→%d state=%s",
+                        instance_id, old_sessions, inst.current_sessions, inst.state,
+                    )
+            except Exception as exc:
+                logger.warning(
+                    "remove_conversation: failed to update instance state for %s: %s",
+                    instance_id, exc,
+                )
+
+            # Effective pools: prefer meta/event pools; fall back to instance data pools.
+            # inst_pools is the last resort so we can still SADD/SREM the pool sets and
+            # patch the snapshot even when the agent_done event has no pools field.
+            effective_pools = pools_to_decr or inst_pools
+
+            # ── Guarded serving-pool deletion ─────────────────────────────────
+            # Only delete the serving_pool key if it currently points to one of
+            # the pools we are about to decrement.  A conference specialist (e.g.
+            # auth_form_ia) shares the same session_id as the primary contact; if
+            # we delete unconditionally we wipe the primary's "retencao_humano"
+            # entry, causing the primary's own remove_conversation to skip the
+            # cross-pool chain and leaving active_count[retencao] stuck at 1.
+            serving_key = _session_serving_pool_key(tenant_id, conversation_id)
+            raw_sp = await self._redis.get(serving_key)
+            sp_val = (raw_sp.decode() if isinstance(raw_sp, bytes) else raw_sp) if raw_sp else None
+            if sp_val is not None:
+                # strip optional "queued:" prefix used during queue waits
+                sp_clean = sp_val[len("queued:"):] if sp_val.startswith("queued:") else sp_val
+                if sp_clean in effective_pools:
+                    await self._redis.delete(serving_key)
+                    logger.info(
+                        "remove_conversation: deleted serving_pool key session=%s pool=%s",
+                        conversation_id, sp_clean,
+                    )
+                else:
+                    logger.info(
+                        "remove_conversation: SKIPPED serving_pool delete "
+                        "session=%s current_pool=%s our_pools=%s "
+                        "(conference specialist — primary contact owns this key)",
+                        conversation_id, sp_clean, effective_pools,
+                    )
+            else:
+                # Key absent (already cleaned up or never set) — safe no-op
+                pass
+            # ──────────────────────────────────────────────────────────────────
             logger.info(
                 "remove_conversation: tenant=%s instance=%s conv=%s "
-                "meta_pools=%s fallback_pools=%s decr_pools=%s",
+                "meta_pools=%s fallback_pools=%s inst_pools=%s effective_pools=%s",
                 tenant_id, instance_id, conversation_id,
                 meta.pools if meta else None,
                 fallback_pools,
-                pools_to_decr,
+                inst_pools,
+                effective_pools,
             )
-            if pools_to_decr:
-                for pool_id in pools_to_decr:
-                    new_val = await self._redis.decr(_pool_active_count_key(tenant_id, pool_id))
-                    if new_val < 0:
-                        await self._redis.set(_pool_active_count_key(tenant_id, pool_id), 0)
-                        new_val = 0
-                    logger.info(
-                        "remove_conversation: DECR pool=%s new_active_count=%d",
-                        pool_id, new_val,
-                    )
-                    # Patch the busy field in the existing snapshot so the SSE
-                    # dashboard reflects the change without waiting for the next
-                    # routing event to trigger write_pool_snapshot.
-                    snap_key = _pool_snapshot_key(tenant_id, pool_id)
-                    raw_snap = await self._redis.get(snap_key)
-                    if raw_snap:
-                        snap = json.loads(raw_snap)
-                        snap["busy"] = new_val
-                        await self._redis.set(snap_key, json.dumps(snap), keepttl=True)
-            else:
+            if not effective_pools:
                 logger.warning(
-                    "remove_conversation: NO pools to decrement for "
-                    "tenant=%s instance=%s conv=%s — counter NOT decremented",
+                    "remove_conversation: NO pools found for "
+                    "tenant=%s instance=%s conv=%s — active_count NOT decremented "
+                    "(instance state already reset above)",
                     tenant_id, instance_id, conversation_id,
                 )
+                return
+
+            # Phase 1: Decrement active_count atomically for each pool.
+            new_active_counts: dict[str, int] = {}
+            for pool_id in effective_pools:
+                new_val = await self._redis.decr(_pool_active_count_key(tenant_id, pool_id))
+                if new_val < 0:
+                    await self._redis.set(_pool_active_count_key(tenant_id, pool_id), 0)
+                    new_val = 0
+                new_active_counts[pool_id] = new_val
+                logger.info(
+                    "remove_conversation: DECR pool=%s new_active_count=%d",
+                    pool_id, new_val,
+                )
+
+            # Phase 3: Update pool set membership and patch snapshots.
+            for pool_id in effective_pools:
+                new_val = new_active_counts[pool_id]
+                pool_key = _pool_instances_key(tenant_id, pool_id)
+                busy_key = _pool_busy_instances_key(tenant_id, pool_id)
+
+                # Restore ready_set membership if agent is now below capacity
+                if new_state == "ready":
+                    await self._redis.sadd(pool_key, instance_id)
+                # Remove from busy_set when fully idle
+                if new_current_sessions == 0:
+                    await self._redis.srem(busy_key, instance_id)
+
+                # Patch snapshot with updated busy + available so the SSE dashboard
+                # reflects the change without waiting for the next routing event.
+                snap_key = _pool_snapshot_key(tenant_id, pool_id)
+                raw_snap = await self._redis.get(snap_key)
+                if raw_snap:
+                    snap = json.loads(raw_snap)
+                    snap["busy"] = new_val
+                    # Increment available by 1: one session ended, so one extra
+                    # capacity slot is now free.  This is always +1 regardless of
+                    # max_concurrent because: if the instance was at capacity and
+                    # transitioned busy→ready it gained exactly 1 slot; if it was
+                    # already in the ready_set it still gained exactly 1 slot.
+                    # Using SCARD here would regress to the instance-count model
+                    # instead of the capacity-sum model written by write_pool_snapshot.
+                    snap["available"] = snap.get("available", 0) + 1
+                    await self._redis.set(snap_key, json.dumps(snap), keepttl=True)
+
         except Exception as exc:
             logger.error(
                 "remove_conversation: FAILED tenant=%s instance=%s conv=%s — %s",
@@ -374,6 +514,21 @@ class InstanceRegistry:
             _instance_meta_key(tenant_id, instance_id),
             _instance_conversations_key(tenant_id, instance_id),
         )
+
+    async def get_session_serving_pool(
+        self, tenant_id: str, session_id: str
+    ) -> str | None:
+        """
+        Returns the pool_id currently serving this session (from the serving_pool key).
+        Returns None if the session has no active allocation.
+        Strips the 'queued:' prefix used during queue waits.
+        Used by the router to detect same-pool re-entry for conference events.
+        """
+        raw = await self._redis.get(_session_serving_pool_key(tenant_id, session_id))
+        if not raw:
+            return None
+        val = raw.decode() if isinstance(raw, bytes) else raw
+        return val[len("queued:"):] if val.startswith("queued:") else val
 
     async def get_session_affinity(self, session_id: str) -> str | None:
         """
@@ -585,17 +740,23 @@ class InstanceRegistry:
         contact_data: dict,
         queued_at_ms: int,
         ttl:          int = 14_400,
-    ) -> None:
+    ) -> bool:
         """
         Persist a queued contact.
         Sorted set score = queued_at_ms (lowest = oldest = served first for FIFO
         base, though queue_scorer may override with priority).
         Full event JSON is stored separately so it can be re-published verbatim
         to conversations.inbound when the contact is dequeued.
+
+        Returns True if the contact was newly added, False if it was already in the
+        queue (re-queue from periodic drain). Callers use this to suppress duplicate
+        "waiting" notifications to the customer.
         """
-        await self._redis.zadd(
+        added = await self._redis.zadd(
             _queue_key(tenant_id, pool_id), {session_id: queued_at_ms}
         )
+        # Redis ZADD returns the number of NEW elements added (0 if already existed)
+        newly_added = bool(added)
         await self._redis.set(
             _queue_contact_key(tenant_id, session_id),
             json.dumps(contact_data),
@@ -617,6 +778,8 @@ class InstanceRegistry:
                 await self._redis.set(snap_key, json.dumps(snap), keepttl=True)
         except Exception:
             pass  # non-critical; self-corrects on next routing event
+
+        return newly_added
 
     async def remove_queued_contact(
         self, tenant_id: str, pool_id: str, session_id: str
@@ -710,6 +873,19 @@ class InstanceRegistry:
         """Returns the number of contacts waiting in the pool queue."""
         return await self._redis.zcard(_queue_key(tenant_id, pool_id))
 
+    async def get_total_instances_count(self, tenant_id: str, pool_id: str) -> int:
+        """
+        Returns the count of distinct instances registered to this pool.
+        Uses SUNION(ready_set, busy_set) to avoid double-counting agents with
+        max_concurrent > 1, who appear in both sets simultaneously while serving
+        a session below their capacity limit.
+        """
+        union = await self._redis.sunion(
+            _pool_instances_key(tenant_id, pool_id),
+            _pool_busy_instances_key(tenant_id, pool_id),
+        )
+        return len(union)
+
     async def write_pool_snapshot(
         self,
         tenant_id:         str,
@@ -717,25 +893,136 @@ class InstanceRegistry:
         sla_target_ms:     int,
         channel_types:     list[str],
         max_reply_time_ms: int | None = None,
-        snapshot_ttl:      int = 120,
+        snapshot_ttl:      int = 3600,
     ) -> None:
         """
         Writes an operational pool snapshot to Redis after each routing event.
         TTL: 120s — refreshed on every route() or dequeue() call.
         Key: {tenant_id}:pool:{pool_id}:snapshot
+
+        Fields:
+          available       — instances currently in 'ready' state (idle capacity)
+          busy            — active sessions being served (may exceed instance count
+                            when max_concurrent > 1)
+          total_instances — distinct instances registered to this pool (ready + busy),
+                            regardless of session load; dimensioning metric
+          queue_length    — contacts waiting in queue
         """
-        available    = await self.get_available_count(tenant_id, pool_id)
-        busy         = await self.get_busy_count(tenant_id, pool_id)
-        queue_length = await self.get_queue_length(tenant_id, pool_id)
+        # ── Step 1: snapshot the ready_set BEFORE calling get_ready_instances() ──
+        # We read all set members now so that the SCARD used for total_instances
+        # is consistent with the state at routing time (right after mark_busy()).
+        # Do NOT evict stale entries here — stale entries (expired keys still in the
+        # set) must remain so that len(_all_pool_members) gives the correct total.
+        # The bootstrap heartbeat (every 15 s) restores expired keys automatically.
+        _pool_set_key       = _pool_instances_key(tenant_id, pool_id)
+        _all_pool_members   = await self._redis.smembers(_pool_set_key)
+        _all_pool_member_ids = {
+            m.decode() if isinstance(m, bytes) else m for m in _all_pool_members
+        }
+
+        # ── Step 2: enumerate valid ready instances ──────────────────────────────
+        # get_ready_instances() returns instances with valid keys, state=ready,
+        # available capacity, and no wrap_up_pending.  It skips — but does NOT
+        # evict — entries whose keys have expired (see comment there).
+        ready_instances      = await self.get_ready_instances(tenant_id, pool_id)
+        _ready_instance_ids  = {inst.instance_id for inst in ready_instances}
+
+        # ── Steps 3 & 4 combined: total_capacity, available, total_instances ────────
+        #
+        # Pool membership spans TWO Redis sets:
+        #   • ready_set  ({tenant}:pool:{pool}:instances)     — read above as _all_pool_members
+        #   • busy_set   ({tenant}:pool:{pool}:busy_instances) — read below
+        #
+        # The bootstrap may remove an instance from the ready_set when it goes
+        # busy (and add it to the busy_set), so instances in the busy_set but NOT
+        # in the ready_set are invisible to loops that only iterate over
+        # _all_pool_member_ids.  We must inspect the busy_set separately.
+        #
+        # total_capacity = gross capacity across ALL instances (ready_set ∪ busy_set),
+        #                  regardless of current load.
+        # available      = max(0, total_capacity − busy)
+        #                  where busy = atomic active_count (INCR/DECR in
+        #                  mark_busy / remove_conversation).
+        # total_instances = number of DISTINCT agents dimensioned to the pool
+        #                   (ready_set ∪ valid busy_set entries).
+        _default_max_concurrent = (
+            ready_instances[0].max_concurrent if ready_instances else 1
+        )
+
+        # --- Capacity from ready_set members ---
+        total_capacity = sum(inst.max_concurrent for inst in ready_instances)
+        for _mid in _all_pool_member_ids - _ready_instance_ids:
+            # Members that exist in the ready_set but were skipped by
+            # get_ready_instances() (state=busy, wrap_up_pending, etc.)
+            _raw_mid = await self._redis.get(_instance_key(tenant_id, _mid))
+            if _raw_mid:
+                try:
+                    _inst_data = json.loads(_raw_mid)
+                    total_capacity += _inst_data.get(
+                        "max_concurrent", _default_max_concurrent
+                    )
+                except Exception:
+                    total_capacity += _default_max_concurrent
+            else:
+                # Key expired — bootstrap restores within ~15 s; count full capacity
+                total_capacity += _default_max_concurrent
+
+        # --- Capacity from busy_set members NOT in ready_set ---
+        # These are instances the bootstrap moved OUT of the ready_set because they
+        # are busy.  They are already counted in total_instances via
+        # valid_busy_not_in_ready_set, but we also need their max_concurrent in
+        # total_capacity so the available calculation is correct.
+        busy_key  = _pool_busy_instances_key(tenant_id, pool_id)
+        busy_iids = await self._redis.smembers(busy_key)
+        valid_busy_not_in_ready_set = 0
+        for _iid in busy_iids:
+            iid_str = _iid.decode() if isinstance(_iid, bytes) else _iid
+            if iid_str in _all_pool_member_ids:
+                # Already counted via ready_set loop above; skip.
+                # (happens when _sync_pool_sets re-adds a busy instance to the
+                # ready_set during the 5-min reconciliation pass)
+                continue
+            raw_inst = await self._redis.get(_instance_key(tenant_id, iid_str))
+            if not raw_inst:
+                # State key expired → stale busy entry; evict
+                await self._redis.srem(busy_key, _iid)
+                continue
+            try:
+                state = json.loads(raw_inst)
+                if state.get("current_sessions", 0) > 0:
+                    # Genuinely busy instance outside the ready_set — count for
+                    # BOTH total_instances and total_capacity.
+                    valid_busy_not_in_ready_set += 1
+                    total_capacity += state.get(
+                        "max_concurrent", _default_max_concurrent
+                    )
+                else:
+                    # Idle but still in busy_set — evict (remove_conversation()
+                    # should have cleaned this; tolerate here for robustness).
+                    await self._redis.srem(busy_key, _iid)
+            except Exception:
+                await self._redis.srem(busy_key, _iid)
+
+        busy      = await self.get_busy_count(tenant_id, pool_id)
+        available = max(0, total_capacity - busy)
+
+        # total_instances = total concurrent capacity across all agents in this pool
+        # (sum of max_concurrent, not count of distinct agents).
+        # For pools where max_concurrent=1 per agent (AI pools), this equals the
+        # agent count.  For human pools where max_concurrent>1, this gives the
+        # correct dimensioning metric: e.g. 1 agent × max_concurrent=3 → total=3.
+        total_instances = total_capacity
+        queue_length     = await self.get_queue_length(tenant_id, pool_id)
         snapshot: dict = {
-            "pool_id":       pool_id,
-            "tenant_id":     tenant_id,
-            "available":     available,
-            "busy":          busy,
-            "queue_length":  queue_length,
-            "sla_target_ms": sla_target_ms,
-            "channel_types": channel_types,
-            "updated_at":    datetime.now(timezone.utc).isoformat(),
+            "pool_id":          pool_id,
+            "tenant_id":        tenant_id,
+            "available":        available,
+            "busy":             busy,
+            "total_instances":  total_instances,
+            "queue_length":     queue_length,
+            "sla_target_ms":    sla_target_ms,
+            "channel_types":    channel_types,
+            "updated_at":       datetime.now(timezone.utc).isoformat(),
         }
         if max_reply_time_ms is not None:
             snapshot["max_reply_time_ms"] = max_reply_time_ms
@@ -756,6 +1043,59 @@ class InstanceRegistry:
             return json.loads(raw)
         except Exception:
             return None
+
+    async def refresh_pool_snapshot(
+        self, tenant_id: str, pool_id: str
+    ) -> None:
+        """
+        Convenience wrapper: recompute and write the pool snapshot, reusing the
+        sla_target_ms, channel_types, and max_reply_time_ms from the existing
+        snapshot so callers don't need to supply pool config.
+
+        Used after agent_logout / agent_paused events where only the capacity
+        numbers need updating, not the pool-level config fields.
+        Falls back to defaults if no existing snapshot is found.
+        """
+        existing = await self.get_pool_snapshot(tenant_id, pool_id)
+        sla_target_ms     = int(existing.get("sla_target_ms", 480_000)) if existing else 480_000
+        channel_types     = existing.get("channel_types", []) if existing else []
+        max_reply_time_ms = existing.get("max_reply_time_ms") if existing else None
+        await self.write_pool_snapshot(
+            tenant_id,
+            pool_id,
+            sla_target_ms=sla_target_ms,
+            channel_types=channel_types,
+            max_reply_time_ms=max_reply_time_ms,
+        )
+
+    async def patch_pool_snapshot_available(
+        self, tenant_id: str, pool_id: str, delta: int
+    ) -> bool:
+        """
+        Increments snap["available"] by delta if the snapshot already exists.
+
+        Used when a single agent returns from a session — only one capacity slot
+        is freed, so we add +delta (typically max_concurrent_sessions of that
+        one instance, usually 1) instead of doing a full recount via
+        write_pool_snapshot() which would sum all ready instances and produce
+        a large jump for hook pools (e.g. wrapup_ia with 400 agents → +400).
+
+        Returns True when the snapshot existed and was patched.
+        Returns False when no snapshot was present; the caller must fall back
+        to a full write_pool_snapshot().
+        """
+        snap_key = _pool_snapshot_key(tenant_id, pool_id)
+        raw_snap = await self._redis.get(snap_key)
+        if not raw_snap:
+            return False
+        try:
+            snap = json.loads(raw_snap)
+        except Exception:
+            return False
+        snap["available"] = snap.get("available", 0) + delta
+        snap["updated_at"] = datetime.now(timezone.utc).isoformat()
+        await self._redis.set(snap_key, json.dumps(snap), keepttl=True)
+        return True
 
     async def get_agent_performance_score(
         self,
