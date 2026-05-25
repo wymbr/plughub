@@ -202,6 +202,52 @@ async def get_pool_config(
     return None
 
 
+async def _write_routing_assigned_to_stream(
+    redis_client: aioredis.Redis,
+    session_id:   str,
+    agent_type:   dict,
+    pool_config:  dict,
+    segment_id:   str,
+    instance_id:  str,
+) -> None:
+    """
+    Write a routing.assigned entry to the session stream.
+
+    The WebRTC adapter (_stream_watcher) watches for this event to negotiate
+    the media medium (video / voice / text), create the LiveKit room, and send
+    webrtc.ready to the customer browser.  Non-WebRTC sessions ignore the event.
+
+    Written on every agent activation (native, human, external-mcp) so that
+    the WebRTC adapter can react regardless of framework.  Fire-and-forget safe
+    — a failure here never blocks the main routing path.
+
+    Arc 15 Phase B.
+    """
+    try:
+        await redis_client.xadd(
+            f"session:{session_id}:stream",
+            {
+                "type":        "routing.assigned",
+                "agent_type":  json.dumps({
+                    "media_capabilities": agent_type.get("media_capabilities", []),
+                }),
+                "pool":        json.dumps(pool_config),
+                "segment_id":  segment_id,
+                "instance_id": instance_id,
+            },
+            maxlen=500,
+        )
+        logger.debug(
+            "routing.assigned written: session=%s instance=%s caps=%s",
+            session_id, instance_id, agent_type.get("media_capabilities", []),
+        )
+    except Exception as exc:
+        logger.warning(
+            "Could not write routing.assigned to stream: session=%s — %s",
+            session_id, exc,
+        )
+
+
 async def get_skill_flow(
     http: aiohttp.ClientSession,
     tenant_id: str,
@@ -1798,6 +1844,7 @@ async def process_routed(
             # is never called and _pool_active_count_key stays elevated. We publish
             # agent_done here immediately after the instance is restored.
             if _kafka_producer and yaml_instance_id:
+                _yaml_pools = list((yaml_snapshot or {}).get("pools") or ([pool_id] if pool_id else []))
                 asyncio.create_task(_kafka_producer.send(
                     TOPIC_LIFECYCLE,
                     json.dumps({
@@ -1805,6 +1852,7 @@ async def process_routed(
                         "tenant_id":       tenant_id,
                         "instance_id":     yaml_instance_id,
                         "agent_type_id":   agent_type_id,
+                        "pools":           _yaml_pools,   # required by remove_conversation()
                         "conversation_id": session_id,
                         "timestamp":       datetime.now(timezone.utc).isoformat(),
                     }).encode("utf-8"),
@@ -2154,6 +2202,20 @@ async def process_routed(
             joined_at=_part_joined_iso,
         ))
 
+        # ── Arc 15 Phase B: signal WebRTC adapter for medium negotiation ─────────
+        # Publishes routing.assigned to the session stream so the WebRTC
+        # _stream_watcher can negotiate media (video/voice/text) and send
+        # webrtc.ready before the skill flow starts.  Non-WebRTC sessions
+        # ignore this event.
+        await _write_routing_assigned_to_stream(
+            redis_client=redis_client,
+            session_id=session_id,
+            agent_type=agent_type,
+            pool_config={"pool_id": pool_id},
+            segment_id=_part_seg_id,
+            instance_id=native_instance_id,
+        )
+
         agent_result = await activate_native_agent(
             http=http, redis_client=redis_client,
             session_id=session_id, customer_id=customer_id,
@@ -2229,6 +2291,38 @@ async def process_routed(
                     tenant_id, native_instance_id, exc,
                 )
 
+        # Notify routing-engine of the instance transition:
+        #   1. agent_ready  — triggers _drain_queue_for_agent() so queued contacts
+        #                     are offered to this instance immediately. Also triggers
+        #                     _refresh_pool_snapshots() so Monitor reflects the restored
+        #                     capacity without waiting for the next routing event.
+        #                     max_concurrent_sessions read from the instance snapshot so
+        #                     the routing-engine models capacity correctly (#276).
+        #   2. agent_done   — triggers remove_conversation() → DECR pool active_count.
+        #                     Must fire AFTER agent_ready so the drain sees correct counts.
+        if _kafka_producer and native_instance_id:
+            _snap_max_concurrent = int(
+                (native_snapshot or {}).get("max_concurrent_sessions")
+                or (native_snapshot or {}).get("max_concurrent")
+                or 1
+            )
+            _snap_pools = list((native_snapshot or {}).get("pools") or ([pool_id] if pool_id else []))
+            asyncio.create_task(_kafka_producer.send(
+                TOPIC_LIFECYCLE,
+                json.dumps({
+                    "event":                   "agent_ready",
+                    "tenant_id":               tenant_id,
+                    "instance_id":             native_instance_id,
+                    "agent_type_id":           agent_type_id,
+                    "status":                  "ready",
+                    "execution_model":         (native_snapshot or {}).get("execution_model", "stateless"),
+                    "current_sessions":        0,
+                    "max_concurrent_sessions": _snap_max_concurrent,
+                    "pools":                   _snap_pools,
+                    "timestamp":               datetime.now(timezone.utc).isoformat(),
+                }).encode("utf-8"),
+            ))
+
         # Notify routing-engine to decrement the pool's busy counter.
         # For plughub-native agents the bridge manages lifecycle via direct Redis
         # writes; mcp-server never publishes agent_done, so remove_conversation()
@@ -2242,6 +2336,7 @@ async def process_routed(
                     "tenant_id":       tenant_id,
                     "instance_id":     native_instance_id,
                     "agent_type_id":   agent_type_id,
+                    "pools":           _snap_pools,   # required by remove_conversation()
                     "conversation_id": session_id,
                     "timestamp":       datetime.now(timezone.utc).isoformat(),
                 }).encode("utf-8"),
@@ -2643,6 +2738,15 @@ async def process_routed(
                     )
 
     elif framework == "human":
+        # ── Arc 15 Phase B: signal WebRTC adapter before activating human agent ──
+        await _write_routing_assigned_to_stream(
+            redis_client=redis_client,
+            session_id=session_id,
+            agent_type=agent_type,
+            pool_config={"pool_id": pool_id},
+            segment_id="",   # segment_id assigned inside activate_human_agent
+            instance_id=result.get("instance_id", ""),
+        )
         await activate_human_agent(
             redis_client=redis_client,
             session_id=session_id, pool_id=pool_id,
@@ -2665,6 +2769,15 @@ async def process_routed(
         # wait_for_assignment (BLPOP). O bridge faz LPUSH do context_package
         # e retorna imediatamente — o agente gerencia seu próprio ciclo de vida
         # e chama agent_done ao concluir.
+        # ── Arc 15 Phase B: signal WebRTC adapter ────────────────────────────
+        await _write_routing_assigned_to_stream(
+            redis_client=redis_client,
+            session_id=session_id,
+            agent_type=agent_type,
+            pool_config={"pool_id": pool_id},
+            segment_id="",
+            instance_id=result.get("instance_id", ""),
+        )
         await activate_external_mcp_agent(
             redis_client=redis_client,
             session_id=session_id, pool_id=pool_id,
@@ -3255,10 +3368,6 @@ async def process_contact_event(
                                 n_waiting += 1
                 except Exception:
                     pass
-                if _no_menu_entries:
-                    # No menu:waiting hash at all — push 1 for legacy agents
-                    # that use the list without the hash registration.
-                    n_waiting = 1
                 # Note: if menu:waiting has entries but ALL customer-facing agents
                 # already exited their BLPOPs, n_waiting stays 0.  Do NOT push —
                 # any push would be consumed by a hook agent starting later.
@@ -3598,9 +3707,45 @@ async def process_contact_event(
                         # Still running — natural path will restore + publish agent_done
                         skipped_count += 1
                     else:
-                        # Not running (or crash recovery) — restore immediately
+                        # Not running (or crash recovery) — restore immediately.
+                        # Read routing snapshot BEFORE _restore_instance() deletes it,
+                        # then publish agent_done so the routing engine DECR's the counter.
+                        # This handles the case where the bridge restarted AFTER the 4h
+                        # ai_completing TTL expired but contact_closed was never re-processed.
+                        _csnap_raw = await redis_client.get(
+                            f"session:{session_id}:routing:{inst_str}"
+                        )
                         await _restore_instance(redis_client, session_id, ai_inst_id)
                         restored_count += 1
+                        if _csnap_raw and _kafka_producer:
+                            try:
+                                _csnap  = json.loads(_csnap_raw)
+                                _c_ten  = _csnap.get("tenant_id", "")
+                                _c_pool = _csnap.get("pool_id", "")
+                                _c_inst = _csnap.get("instance_id", inst_str)
+                                _c_at   = (_csnap.get("snapshot") or {}).get("agent_type_id", "")
+                                if _c_ten and _c_inst:
+                                    asyncio.create_task(_kafka_producer.send(
+                                        TOPIC_LIFECYCLE,
+                                        json.dumps({
+                                            "event":           "agent_done",
+                                            "tenant_id":       _c_ten,
+                                            "instance_id":     _c_inst,
+                                            "agent_type_id":   _c_at,
+                                            "conversation_id": session_id,
+                                            "pools":           [_c_pool] if _c_pool else [],
+                                            "timestamp":       datetime.now(timezone.utc).isoformat(),
+                                        }).encode("utf-8"),
+                                    ))
+                                    logger.info(
+                                        "crash-recovery agent_done: session=%s inst=%s pool=%s",
+                                        session_id, inst_str, _c_pool,
+                                    )
+                            except Exception as _cad_exc:
+                                logger.warning(
+                                    "crash-recovery agent_done: session=%s inst=%s — %s",
+                                    session_id, inst_str, _cad_exc,
+                                )
                 await redis_client.delete(f"session:{session_id}:ai_agents")
                 logger.info(
                     "AI instance(s) on contact_closed: session=%s restored=%d skipped_completing=%d",
@@ -4556,6 +4701,63 @@ async def process_inbound(
                     )
             delivered = True
 
+            # ── Write customer response to canonical stream for AI-agent sessions ──
+            # Mirrors the is_human branch's stream write (above) so NPS scores,
+            # form submissions, and other menu responses appear in the
+            # Analytics/Sessions transcript even when no human agent is present.
+            # Skipped when is_human — the human branch already wrote it.
+            if not is_human:
+                if any_masked:
+                    _ai_stream_display = "[entrada mascarada]"
+                    _ai_stream_vis     = "agents_only"
+                elif all_masked_fields and msg_type == "menu_result":
+                    try:
+                        _result_obj = (
+                            json.loads(reply_text)
+                            if isinstance(reply_text, str) else reply_text
+                        )
+                        if isinstance(_result_obj, dict):
+                            _redacted = {
+                                k: ("••••••" if k in all_masked_fields else v)
+                                for k, v in _result_obj.items()
+                            }
+                            _ai_stream_display = f"[Formulário: {json.dumps(_redacted, ensure_ascii=False)}]"
+                        else:
+                            _ai_stream_display = f"[Seleção: {reply_text}]"
+                    except Exception:
+                        _ai_stream_display = f"[Seleção: {reply_text}]"
+                    _ai_stream_vis = "all"
+                else:
+                    _ai_stream_display = (
+                        reply_text if msg_type == "text"
+                        else f"[Seleção: {reply_text}]"
+                    )
+                    _ai_stream_vis = "all"
+
+                try:
+                    await redis_client.xadd(
+                        stream_key,
+                        {
+                            "event_id":    msg.get("message_id", str(uuid.uuid4())),
+                            "type":        "message",
+                            "timestamp":   msg.get("timestamp", datetime.now(timezone.utc).isoformat()),
+                            "author_id":   author.get("id") or contact_id or "customer",
+                            "author_role": "customer",
+                            "visibility":  _ai_stream_vis,
+                            "content":     json.dumps({"text": _ai_stream_display}),
+                        },
+                    )
+                    await redis_client.expire(stream_key, _stl())
+                    logger.debug(
+                        "XADD customer AI-menu reply to stream: session=%s masked=%s",
+                        session_id, bool(any_masked),
+                    )
+                except Exception as _xadd_ai_exc:
+                    logger.warning(
+                        "Could not XADD customer AI-menu reply to stream: session=%s — %s",
+                        session_id, _xadd_ai_exc,
+                    )
+
         # ── Native AI agents in receive step: route by filter ─────────────────
         # receive:waiting agents listen to any participant's messages (not just the
         # customer) — but customer inbound messages are routed here too.
@@ -4625,6 +4827,87 @@ async def process_inbound(
 
     except Exception as exc:
         logger.error("Error forwarding inbound message: session=%s — %s", session_id, exc)
+
+
+# ── Startup stale ai_completing cleanup ───────────────────────────────────────
+
+async def _cleanup_stale_completing_at_startup(redis_client: aioredis.Redis) -> None:
+    """
+    At startup, every ai_completing key left in Redis is stale: the coroutine
+    that set it was killed when the previous bridge process exited.
+
+    For each stale key we:
+      1. Read the routing snapshot (session:{sid}:routing:{inst}) BEFORE
+         _restore_instance() deletes it.
+      2. Restore the instance to ready state.
+      3. Publish agent_done to Kafka so the routing engine DECR's the busy counter.
+
+    This fixes the "ghost busy counter" bug that occurs when the bridge is
+    restarted while a posatt AI skill flow (e.g. wrapup_ia) is running:
+    the process dies, ai_completing survives in Redis for up to 4h, and
+    contact_closed's skip-branch never publishes agent_done.
+    """
+    try:
+        keys = await redis_client.keys("session:*:ai_completing:*")
+        if not keys:
+            return
+        logger.info(
+            "Startup: found %d stale ai_completing key(s) — will restore + publish agent_done",
+            len(keys),
+        )
+        for key in keys:
+            # Key format: session:{session_id}:ai_completing:{instance_id}
+            # session_id and instance_id never contain ":" so a fixed split works.
+            parts = key.split(":", 3)
+            if len(parts) != 4 or parts[0] != "session" or parts[2] != "ai_completing":
+                logger.warning("Startup cleanup: unexpected key format %r — skipping", key)
+                continue
+            session_id  = parts[1]
+            instance_id = parts[3]
+            try:
+                # Read snapshot before _restore_instance() deletes it.
+                snap_raw = await redis_client.get(
+                    f"session:{session_id}:routing:{instance_id}"
+                )
+                await _restore_instance(redis_client, session_id, instance_id)
+                await redis_client.delete(key)   # clear the stale completing flag
+                if snap_raw and _kafka_producer:
+                    snap_info  = json.loads(snap_raw)
+                    tenant_id  = snap_info.get("tenant_id", "")
+                    pool_id    = snap_info.get("pool_id", "")
+                    inst_id    = snap_info.get("instance_id", instance_id)
+                    agent_type = (snap_info.get("snapshot") or {}).get("agent_type_id", "")
+                    if tenant_id and inst_id:
+                        # Use await here (startup, no event-loop contention)
+                        await _kafka_producer.send(
+                            TOPIC_LIFECYCLE,
+                            json.dumps({
+                                "event":           "agent_done",
+                                "tenant_id":       tenant_id,
+                                "instance_id":     inst_id,
+                                "agent_type_id":   agent_type,
+                                "conversation_id": session_id,
+                                "pools":           [pool_id] if pool_id else [],
+                                "timestamp":       datetime.now(timezone.utc).isoformat(),
+                            }).encode("utf-8"),
+                        )
+                        logger.info(
+                            "Startup cleanup: agent_done published — "
+                            "session=%s inst=%s pool=%s",
+                            session_id, inst_id, pool_id,
+                        )
+                elif not snap_raw:
+                    logger.warning(
+                        "Startup cleanup: no routing snapshot for session=%s inst=%s — "
+                        "counter not decremented (manual redis reset may be needed)",
+                        session_id, instance_id,
+                    )
+            except Exception as exc:
+                logger.warning(
+                    "Startup cleanup: error processing key=%r — %s", key, exc
+                )
+    except Exception as exc:
+        logger.warning("Startup ai_completing cleanup failed: %s", exc)
 
 
 # ── Instance restore helpers ──────────────────────────────────────────────────
@@ -4849,6 +5132,11 @@ async def run() -> None:
         for r in reports:
             level = logging.WARNING if r.errors else logging.INFO
             logger.log(level, "Startup reconciliation: %s", r.summary())
+
+        # 2b. Clean up any stale ai_completing keys left from a previous bridge run.
+        #     Must run AFTER the Kafka producer is ready (above) and AFTER reconcile()
+        #     has restored instance Redis state, so agent_done can be published correctly.
+        await _cleanup_stale_completing_at_startup(redis_client)
 
         # Write readiness signal to Redis so E2E tests and health probes can
         # detect that the initial reconciliation completed without polling logs.

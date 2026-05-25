@@ -2,6 +2,53 @@
 
 ---
 
+## Fix: primeira pergunta do wrap-up pulada após desconexão do cliente (2026-05-25)
+
+**Sintoma**: no cenário webchat F5 (cliente desconecta), o agente humano era notificado e o wrap-up era acionado; o agente via a primeira pergunta (`menu text`) mas não conseguia respondê-la — o fluxo avançava automaticamente para a segunda pergunta. Todas as perguntas seguintes se comportavam normalmente.
+
+**Root cause** — `packages/orchestrator-bridge/src/plughub_orchestrator_bridge/main.py`, `process_contact_event()`:
+
+Quando o cliente desconectava e **nenhum agente estava num `menu` step** (situação normal — o agente humano estava apenas atendendo), a função `hgetall("menu:waiting:{session_id}")` retornava vazio, ativando o fallback legado:
+
+```python
+if _no_menu_entries:
+    # No menu:waiting hash at all — push 1 for legacy agents
+    n_waiting = 1
+```
+
+Esse bloco empurrava 1 valor para `session:closed:{sessionId}` com TTL de 300s. Como nenhum BLPOP estava ativo no momento, o valor permanecia na lista. O agente de wrap-up (hook `on_human_end`) era disparado 5–15s depois; quando seu primeiro step `menu` executava `BLPOP([menu:result:{sid}:{iid}, session:closed:{sid}])`, consumia imediatamente o valor pendente em `session:closed`, retornando pelo branch `on_disconnect` → `on_failure`. Como o YAML do wrap-up tem `on_failure` do primeiro step apontando para o segundo step, o fluxo "pulava" a primeira pergunta.
+
+**Fix**: removido o bloco legado (linhas 3371–3374):
+```python
+# REMOVIDO:
+if _no_menu_entries:
+    # No menu:waiting hash at all — push 1 for legacy agents
+    # that use the list without the hash registration.
+    n_waiting = 1
+```
+
+Quando não há `menu:waiting` hash (nenhum agente bloqueado em BLPOP), `n_waiting` permanece 0 e nenhum valor é enviado para `session:closed`. O primeiro step do wrap-up agora aguarda normalmente pela resposta do agente.
+
+**Impacto zero em outros cenários**: agentes em BLPOP ativo continuam recebendo o sinal via a lógica de hash `menu:waiting` + verificação de `active_instance` key, que foi implementada exatamente para substituir o fallback legado.
+
+---
+
+## Fix: customer responses to AI menu steps missing from Analytics/Sessions transcript (2026-05-21)
+
+**Root cause**: `process_inbound()` in orchestrator-bridge wrote customer menu/form submissions to the canonical stream (`session:{id}:stream`) only when a human agent was active. For native AI-agent sessions (NPS, auth_form hooks, Skill Flow menu steps), responses were routed to `menu:result:*` LPUSH keys and to Kafka analytics, but never written to the stream. The analytics-api session stream SSE endpoint reads from Redis, so the customer's reply was invisible in the Analytics/Sessions segment transcript.
+
+**Fix** — `packages/orchestrator-bridge/src/plughub_orchestrator_bridge/main.py`:
+- Inside `if waiting_hash:` block (after routing to AI agents via `menu:result` LPUSH), added `if not is_human:` stream write that mirrors the human branch's masking logic:
+  - `any_masked = True` → `visibility: "agents_only"`, content `"[entrada mascarada]"`
+  - `all_masked_fields` (field-level) → `visibility: "all"`, content `"[Formulário: {redacted JSON}]"`
+  - else → `visibility: "all"`, content `"[Seleção: <reply_text>]"` (for button/list) or raw text (for text type)
+- The `xadd` writes `event_id`, `type: "message"`, `author_id`, `author_role: "customer"`, `visibility`, `content` (JSON `{"text": ...}`) — all fields expected by `_parse_entry()` in analytics-api.
+- Double-write guard: skipped when `is_human` (human branch already wrote).
+
+**Result**: NPS scores, form submissions, and menu responses now appear in the segment transcript for AI-only sessions. The `entryBelongsToSpecialist` filter in `SessionTranscript.tsx` correctly includes them because `segmentTalksToCustomers()` finds the NPS/auth_form agent's outbound entries and returns `true`.
+
+---
+
 ## Arc 16 Fases D + E — Channel Capability Negotiation + Inbound Journey Resume (2026-05-21)
 
 Implementação das Fases D e E do Arc 16 — Three-Tier Business Process Orchestration.
