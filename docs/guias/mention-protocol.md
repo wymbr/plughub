@@ -1,5 +1,7 @@
 # Protocolo @mention — Endereçamento de Participantes em Conferência
 
+> Última atualização: 2026-05-25 · Estado: Arc 16
+
 > Spec de referência: v1.0 · Módulos: `mcp-server-plughub`, `agent-registry`, `skill-flow-engine`, `agent-assist-ui`
 
 ---

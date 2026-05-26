@@ -12,6 +12,7 @@
  *   GET /reports/quality-comparison   (Arc 6 Fase 2-B)
  */
 import React, { useCallback, useEffect, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import {
   CartesianGrid, Legend, Line, LineChart,
   ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis,
@@ -66,10 +67,10 @@ function deltaColor(v: number | null, higherIsBetter = true): string {
 
 function KpiCard({ label, value, sub }: { label: string; value: string; sub?: string }) {
   return (
-    <div className="bg-white border border-gray-200 rounded-lg px-5 py-3 flex flex-col gap-0.5 min-w-[140px]">
-      <span className="text-[11px] text-gray-400 uppercase tracking-wide">{label}</span>
-      <span className="text-2xl font-bold text-gray-800 leading-none">{value}</span>
-      {sub && <span className="text-[11px] text-gray-400">{sub}</span>}
+    <div className="bg-white border border-border rounded-lg px-5 py-3 flex flex-col gap-0.5 min-w-[140px]">
+      <span className="text-xs text-muted-light uppercase tracking-wide">{label}</span>
+      <span className="text-2xl font-bold text-dark leading-none">{value}</span>
+      {sub && <span className="text-xs text-muted-light">{sub}</span>}
     </div>
   )
 }
@@ -77,11 +78,7 @@ function KpiCard({ label, value, sub }: { label: string; value: string; sub?: st
 // ── Tab bar ───────────────────────────────────────────────────────────────────
 
 type Tab = 'summary' | 'timeseries' | 'comparison'
-const TABS: { id: Tab; label: string }[] = [
-  { id: 'summary',    label: 'Resumo' },
-  { id: 'timeseries', label: 'Tendência' },
-  { id: 'comparison', label: 'Comparação' },
-]
+const TAB_IDS: Tab[] = ['summary', 'timeseries', 'comparison']
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // TAB: RESUMO
@@ -107,20 +104,16 @@ interface SummaryRow {
 
 type GroupBy = 'campaign_id' | 'form_id' | 'evaluator_id' | 'date'
 
-const GROUP_BY_OPTIONS: { value: GroupBy; label: string }[] = [
-  { value: 'campaign_id',  label: 'Campanha' },
-  { value: 'form_id',      label: 'Formulário' },
-  { value: 'evaluator_id', label: 'Avaliador' },
-  { value: 'date',         label: 'Data' },
-]
+const GROUP_BY_VALUES: GroupBy[] = ['campaign_id', 'form_id', 'evaluator_id', 'date']
 
 function ScoreBar({ row }: { row: SummaryRow }) {
+  const { t } = useTranslation('contacts')
   const total = row.total_evaluated || 1
   const segments = [
-    { count: row.score_excellent, color: '#059669', label: 'Excelente' },
-    { count: row.score_good,      color: '#2D9CDB', label: 'Bom' },
-    { count: row.score_fair,      color: '#D97706', label: 'Regular' },
-    { count: row.score_poor,      color: '#DC2626', label: 'Ruim' },
+    { count: row.score_excellent, color: '#059669', label: t('quality.scoreLabels.excellent') },
+    { count: row.score_good,      color: '#2D9CDB', label: t('quality.scoreLabels.good') },
+    { count: row.score_fair,      color: '#D97706', label: t('quality.scoreLabels.fair') },
+    { count: row.score_poor,      color: '#DC2626', label: t('quality.scoreLabels.poor') },
   ]
   return (
     <div className="flex h-4 rounded overflow-hidden w-24 gap-px" title={
@@ -137,6 +130,7 @@ function ScoreBar({ row }: { row: SummaryRow }) {
 }
 
 function SummaryView({ tenantId }: { tenantId: string }) {
+  const { t } = useTranslation('contacts')
   const [fromDt,  setFromDt]  = useState(iso7DaysAgo)
   const [toDt,    setToDt]    = useState(isoToday)
   const [groupBy, setGroupBy] = useState<GroupBy>('campaign_id')
@@ -189,7 +183,7 @@ function SummaryView({ tenantId }: { tenantId: string }) {
     const active = sortKey === k
     return (
       <th onClick={() => handleSort(k)}
-        className={`px-3 py-2.5 font-medium text-${align} cursor-pointer select-none whitespace-nowrap hover:text-gray-700 transition-colors ${active ? 'text-primary' : 'text-gray-500'}`}>
+        className={`px-3 py-2.5 font-medium text-${align} cursor-pointer select-none whitespace-nowrap hover:text-dark transition-colors ${active ? 'text-primary' : 'text-muted'}`}>
         {label}{active ? (sortAsc ? ' ↑' : ' ↓') : ''}
       </th>
     )
@@ -198,71 +192,71 @@ function SummaryView({ tenantId }: { tenantId: string }) {
   return (
     <div className="flex flex-col h-full overflow-hidden">
       {/* Filter bar */}
-      <div className="bg-white border-b border-gray-200 px-5 py-2.5 flex items-center gap-3 flex-shrink-0 flex-wrap">
-        <div className="flex items-center gap-1.5"><label className="text-xs text-gray-500">De</label>
+      <div className="bg-white border-b border-border px-5 py-2.5 flex items-center gap-3 flex-shrink-0 flex-wrap">
+        <div className="flex items-center gap-1.5"><label className="text-xs text-muted">{t('quality.from')}</label>
           <input type="date" value={fromDt} onChange={e => setFromDt(e.target.value)}
-            className="text-xs border border-gray-300 rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-primary/40" />
+            className="text-xs border border-border-strong rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-primary/40" />
         </div>
-        <div className="flex items-center gap-1.5"><label className="text-xs text-gray-500">Até</label>
+        <div className="flex items-center gap-1.5"><label className="text-xs text-muted">{t('quality.to')}</label>
           <input type="date" value={toDt} onChange={e => setToDt(e.target.value)}
-            className="text-xs border border-gray-300 rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-primary/40" />
+            className="text-xs border border-border-strong rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-primary/40" />
         </div>
-        <div className="flex items-center gap-1.5"><label className="text-xs text-gray-500">Agrupar por</label>
+        <div className="flex items-center gap-1.5"><label className="text-xs text-muted">{t('quality.groupBy')}</label>
           <select value={groupBy} onChange={e => setGroupBy(e.target.value as GroupBy)}
-            className="text-xs border border-gray-300 rounded px-2 py-1 bg-white focus:outline-none focus:ring-1 focus:ring-primary/40">
-            {GROUP_BY_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+            className="text-xs border border-border-strong rounded px-2 py-1 bg-white focus:outline-none focus:ring-1 focus:ring-primary/40">
+            {GROUP_BY_VALUES.map(v => <option key={v} value={v}>{t(`quality.groupByOptions.${v}`)}</option>)}
           </select>
         </div>
         <div className="flex-1" />
-        {loading ? <Spinner /> : <button onClick={load} className="text-xs text-gray-400 hover:text-gray-600 px-2 py-1">↻</button>}
+        {loading ? <Spinner /> : <button onClick={load} className="text-xs text-muted-light hover:text-muted px-2 py-1">↻</button>}
         <button onClick={exportCsv} disabled={data.length === 0}
-          className="text-xs border border-gray-200 rounded px-2.5 py-1 text-gray-600 hover:bg-gray-50 disabled:opacity-40">↓ CSV</button>
+          className="text-xs border border-border rounded px-2.5 py-1 text-muted hover:bg-surface-muted disabled:opacity-40">↓ CSV</button>
       </div>
       {/* KPI strip */}
       <div className="flex gap-3 px-5 py-3 flex-shrink-0 flex-wrap">
-        <KpiCard label="Avaliações" value={totalEvaluated.toLocaleString('pt-BR')} />
-        <KpiCard label="Nota Média" value={avgScore !== null ? pct(avgScore) : '—'}
-          sub={avgScore !== null ? (avgScore >= 0.9 ? 'Excelente' : avgScore >= 0.7 ? 'Bom' : avgScore >= 0.5 ? 'Regular' : 'Ruim') : undefined} />
-        <KpiCard label="Contestações" value={pct(totalEvaluated > 0 ? totalContested / totalEvaluated : null)}
-          sub={`${totalContested} de ${totalEvaluated}`} />
+        <KpiCard label={t('quality.kpi.evaluations')} value={totalEvaluated.toLocaleString()} />
+        <KpiCard label={t('quality.kpi.avgScore')} value={avgScore !== null ? pct(avgScore) : '—'}
+          sub={avgScore !== null ? (avgScore >= 0.9 ? t('quality.scoreLabels.excellent') : avgScore >= 0.7 ? t('quality.scoreLabels.good') : avgScore >= 0.5 ? t('quality.scoreLabels.fair') : t('quality.scoreLabels.poor')) : undefined} />
+        <KpiCard label={t('quality.kpi.contestations')} value={pct(totalEvaluated > 0 ? totalContested / totalEvaluated : null)}
+          sub={`${totalContested} / ${totalEvaluated}`} />
       </div>
-      {error && <div className="mx-5 mb-2 px-3 py-2 bg-red-50 border border-red-200 rounded text-xs text-red-600 flex-shrink-0">{error}</div>}
+      {error && <div className="mx-5 mb-2 px-3 py-2 bg-red-light border border-red/30 rounded text-xs text-red-text flex-shrink-0">{error}</div>}
       {/* Table */}
       <div className="flex-1 overflow-auto px-5 pb-5">
         {sorted.length === 0 && !loading ? (
-          <div className="flex flex-col items-center justify-center py-20 text-gray-400 gap-2">
-            <span className="text-3xl">✓</span><span className="text-sm">Nenhuma avaliação no período</span>
+          <div className="flex flex-col items-center justify-center py-20 text-muted-light gap-2">
+            <span className="text-3xl">✓</span><span className="text-sm">{t('quality.noData')}</span>
           </div>
         ) : (
-          <table className="w-full text-xs bg-white border border-gray-200 rounded-lg overflow-hidden border-separate border-spacing-0">
-            <thead className="sticky top-0 z-10 bg-gray-50 border-b border-gray-200">
+          <table className="w-full text-xs bg-white border border-border rounded-lg overflow-hidden border-separate border-spacing-0">
+            <thead className="sticky top-0 z-10 bg-surface-muted border-b border-border">
               <tr>
-                <Th label={GROUP_BY_OPTIONS.find(o => o.value === groupBy)?.label ?? 'Grupo'} k="group_key" />
-                <Th label="Avaliações" k="total_evaluated" align="right" />
-                <Th label="Nota Média" k="avg_score" align="right" />
-                <Th label="Mín / Máx" k="min_score" align="right" />
-                <th className="px-3 py-2.5 text-left text-gray-500 font-medium">Distribuição</th>
-                <Th label="Contestadas" k="count_contested" align="right" />
-                <Th label="Aprovadas" k="count_approved" align="right" />
-                <Th label="Rejeitadas" k="count_rejected" align="right" />
-                <Th label="c/ Flags" k="with_compliance_flags" align="right" />
+                <Th label={t(`quality.groupByOptions.${groupBy}`)} k="group_key" />
+                <Th label={t('quality.table.evaluations')} k="total_evaluated" align="right" />
+                <Th label={t('quality.table.avgScore')} k="avg_score" align="right" />
+                <Th label={t('quality.table.minMax')} k="min_score" align="right" />
+                <th className="px-3 py-2.5 text-left text-muted font-medium">{t('quality.table.distribution')}</th>
+                <Th label={t('quality.table.contested')} k="count_contested" align="right" />
+                <Th label={t('quality.table.approved')} k="count_approved" align="right" />
+                <Th label={t('quality.table.rejected')} k="count_rejected" align="right" />
+                <Th label={t('quality.table.withFlags')} k="with_compliance_flags" align="right" />
               </tr>
             </thead>
             <tbody>
               {sorted.map((row, i) => (
-                <tr key={i} className="border-t border-gray-100 hover:bg-gray-50">
-                  <td className="px-3 py-2.5 font-mono text-gray-700 max-w-[200px] truncate" title={row.group_key}>{row.group_key || '—'}</td>
+                <tr key={i} className="border-t border-border hover:bg-surface-muted">
+                  <td className="px-3 py-2.5 font-mono text-dark max-w-[200px] truncate" title={row.group_key}>{row.group_key || '—'}</td>
                   <td className="px-3 py-2.5 text-right font-medium">{row.total_evaluated.toLocaleString('pt-BR')}</td>
                   <td className="px-3 py-2.5 text-right font-bold" style={{ color: scoreColor(row.avg_score) }}>{pct(row.avg_score)}</td>
-                  <td className="px-3 py-2.5 text-right text-gray-500">{pct(row.min_score)} / {pct(row.max_score)}</td>
+                  <td className="px-3 py-2.5 text-right text-muted">{pct(row.min_score)} / {pct(row.max_score)}</td>
                   <td className="px-3 py-2.5"><ScoreBar row={row} /></td>
                   <td className="px-3 py-2.5 text-right">
-                    <span className={row.count_contested > 0 ? 'text-warning font-medium' : 'text-gray-400'}>{row.count_contested}</span>
+                    <span className={row.count_contested > 0 ? 'text-warning font-medium' : 'text-muted-light'}>{row.count_contested}</span>
                   </td>
-                  <td className="px-3 py-2.5 text-right text-gray-500">{row.count_approved}</td>
-                  <td className="px-3 py-2.5 text-right text-gray-500">{row.count_rejected}</td>
+                  <td className="px-3 py-2.5 text-right text-muted">{row.count_approved}</td>
+                  <td className="px-3 py-2.5 text-right text-muted">{row.count_rejected}</td>
                   <td className="px-3 py-2.5 text-right">
-                    <span className={row.with_compliance_flags > 0 ? 'text-red-500 font-medium' : 'text-gray-300'}>{row.with_compliance_flags}</span>
+                    <span className={row.with_compliance_flags > 0 ? 'text-red font-medium' : 'text-border-strong'}>{row.with_compliance_flags}</span>
                   </td>
                 </tr>
               ))}
@@ -287,6 +281,7 @@ interface SeriesPoint {
 interface DeployMarker { deploy_id: string; skill_id: string; version_label: string; deployed_at: string; deployed_by: string }
 
 function TimeseriesView({ tenantId }: { tenantId: string }) {
+  const { t } = useTranslation('contacts')
   const [fromDt,          setFromDt]          = useState(iso30DaysAgo)
   const [toDt,            setToDt]            = useState(isoToday)
   const [campaignId,      setCampaignId]      = useState('')
@@ -342,37 +337,37 @@ function TimeseriesView({ tenantId }: { tenantId: string }) {
   return (
     <div className="flex flex-col h-full overflow-hidden">
       {/* Filter bar */}
-      <div className="bg-white border-b border-gray-200 px-5 py-2.5 flex items-center gap-3 flex-shrink-0 flex-wrap">
-        <div className="flex items-center gap-1.5"><label className="text-xs text-gray-500">De</label>
+      <div className="bg-white border-b border-border px-5 py-2.5 flex items-center gap-3 flex-shrink-0 flex-wrap">
+        <div className="flex items-center gap-1.5"><label className="text-xs text-muted">{t('quality.from')}</label>
           <input type="date" value={fromDt} onChange={e => setFromDt(e.target.value)}
-            className="text-xs border border-gray-300 rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-primary/40" />
+            className="text-xs border border-border-strong rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-primary/40" />
         </div>
-        <div className="flex items-center gap-1.5"><label className="text-xs text-gray-500">Até</label>
+        <div className="flex items-center gap-1.5"><label className="text-xs text-muted">{t('quality.to')}</label>
           <input type="date" value={toDt} onChange={e => setToDt(e.target.value)}
-            className="text-xs border border-gray-300 rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-primary/40" />
+            className="text-xs border border-border-strong rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-primary/40" />
         </div>
-        <div className="flex items-center gap-1.5"><label className="text-xs text-gray-500">Campanha</label>
+        <div className="flex items-center gap-1.5"><label className="text-xs text-muted">{t('quality.timeseries.campaign')}</label>
           <input value={campaignId} onChange={e => setCampaignId(e.target.value)} placeholder="ID (opt.)"
-            className="text-xs border border-gray-300 rounded px-2 py-1 w-28 focus:outline-none focus:ring-1 focus:ring-primary/40" />
+            className="text-xs border border-border-strong rounded px-2 py-1 w-28 focus:outline-none focus:ring-1 focus:ring-primary/40" />
         </div>
-        <div className="flex items-center gap-1.5"><label className="text-xs text-gray-500">Skill</label>
+        <div className="flex items-center gap-1.5"><label className="text-xs text-muted">{t('quality.timeseries.skill')}</label>
           <input value={skillId} onChange={e => setSkillId(e.target.value)} placeholder="ID (opt.)"
-            className="text-xs border border-gray-300 rounded px-2 py-1 w-40 focus:outline-none focus:ring-1 focus:ring-primary/40" />
+            className="text-xs border border-border-strong rounded px-2 py-1 w-40 focus:outline-none focus:ring-1 focus:ring-primary/40" />
         </div>
         <div className="flex items-center gap-1.5">
-          <label className="text-xs text-gray-500">Granularidade</label>
+          <label className="text-xs text-muted">{t('quality.timeseries.granularity')}</label>
           <select value={granularity} onChange={e => setGranularity(e.target.value as 'day' | 'week')}
-            className="text-xs border border-gray-300 rounded px-2 py-1 bg-white focus:outline-none focus:ring-1 focus:ring-primary/40">
-            <option value="day">Diário</option>
-            <option value="week">Semanal</option>
+            className="text-xs border border-border-strong rounded px-2 py-1 bg-white focus:outline-none focus:ring-1 focus:ring-primary/40">
+            <option value="day">{t('quality.timeseries.daily')}</option>
+            <option value="week">{t('quality.timeseries.weekly')}</option>
           </select>
         </div>
         <div className="flex-1" />
-        {loading ? <Spinner /> : <button onClick={load} className="text-xs text-gray-400 hover:text-gray-600 px-2 py-1">↻</button>}
+        {loading ? <Spinner /> : <button onClick={load} className="text-xs text-muted-light hover:text-muted px-2 py-1">↻</button>}
       </div>
 
       {/* Metric selector */}
-      <div className="bg-white border-b border-gray-200 px-5 py-2.5 flex-shrink-0">
+      <div className="bg-white border-b border-border px-5 py-2.5 flex-shrink-0">
         <MetricSelector
           selected={selectedMetrics}
           onChange={setSelectedMetrics}
@@ -380,15 +375,15 @@ function TimeseriesView({ tenantId }: { tenantId: string }) {
         />
       </div>
 
-      {error && <div className="mx-5 mt-2 px-3 py-2 bg-red-50 border border-red-200 rounded text-xs text-red-600 flex-shrink-0">{error}</div>}
+      {error && <div className="mx-5 mt-2 px-3 py-2 bg-red-light border border-red/30 rounded text-xs text-red-text flex-shrink-0">{error}</div>}
 
       {/* Legend for deploy markers */}
       {markers.length > 0 && (
         <div className="flex items-center gap-2 px-5 py-2 flex-shrink-0 flex-wrap">
-          <span className="text-[11px] text-gray-400">Deploys:</span>
+          <span className="text-xs text-muted-light">{t('quality.timeseries.deploys')}</span>
           {markers.map(m => (
             <span key={m.deploy_id}
-              className="text-[11px] bg-primary/10 text-primary rounded px-1.5 py-0.5 font-mono"
+              className="text-xs bg-primary/10 text-primary rounded px-1.5 py-0.5 font-mono"
               title={`${m.deployed_at.slice(0, 10)} por ${m.deployed_by}`}>
               {m.skill_id} {m.version_label}
             </span>
@@ -399,8 +394,8 @@ function TimeseriesView({ tenantId }: { tenantId: string }) {
       {/* Chart */}
       <div className="flex-1 px-5 pb-5 pt-2 min-h-0">
         {series.length === 0 && !loading ? (
-          <div className="flex flex-col items-center justify-center h-full text-gray-400 gap-2">
-            <span className="text-3xl">📈</span><span className="text-sm">Sem dados no período</span>
+          <div className="flex flex-col items-center justify-center h-full text-muted-light gap-2">
+            <span className="text-3xl">📈</span><span className="text-sm">{t('quality.timeseries.noData')}</span>
           </div>
         ) : (
           <ResponsiveContainer width="100%" height="100%">
@@ -426,7 +421,7 @@ function TimeseriesView({ tenantId }: { tenantId: string }) {
                   const unit  = key === 'score' ? '%' : ''
                   return [`${value}${unit}`, label]
                 }}
-                labelFormatter={label => `Período: ${label}`}
+                labelFormatter={label => t('quality.timeseries.periodLabel', { period: label })}
                 contentStyle={{ fontSize: 12, borderRadius: 6, border: '1px solid #E5E7EB' }}
               />
               <Legend wrapperStyle={{ fontSize: 11 }} />
@@ -445,7 +440,7 @@ function TimeseriesView({ tenantId }: { tenantId: string }) {
                 <Line
                   type="monotone"
                   dataKey="score"
-                  name="Nota de Avaliação"
+                  name={t('quality.timeseries.scoreLineName')}
                   stroke="#1B4F8A"
                   strokeWidth={2}
                   dot={{ r: 2, fill: '#1B4F8A' }}
@@ -519,8 +514,8 @@ function MetricComparisonRow({
   higherIsBetter?: boolean
 }) {
   return (
-    <tr className="border-t border-gray-100">
-      <td className="px-3 py-2.5 text-xs text-gray-500 w-32">{label}</td>
+    <tr className="border-t border-border">
+      <td className="px-3 py-2.5 text-xs text-muted w-32">{label}</td>
       <td className="px-3 py-2.5 text-sm font-bold text-right" style={{ color: a !== null ? scoreColor(a > 1 ? 1 : a) : '#9CA3AF' }}>
         {formatter(a)}
       </td>
@@ -543,17 +538,18 @@ function SliceForm({
   toDt: string; setToDt: (v: string) => void
   agentType: string; setAgentType: (v: string) => void
 }) {
-  const inputCls = "text-xs border border-gray-300 rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-primary/40 w-full"
+  const { t } = useTranslation('contacts')
+  const inputCls = "text-xs border border-border-strong rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-primary/40 w-full"
   return (
     <div className="flex flex-col gap-2 flex-1 min-w-[180px]">
-      <div className="text-[11px] font-semibold text-gray-500 uppercase tracking-wide">Fatia {prefix}</div>
-      <div><label className="text-[11px] text-gray-400">Rótulo</label>
+      <div className="text-xs font-semibold text-muted uppercase tracking-wide">{t('quality.comparison.sliceTitle', { prefix })}</div>
+      <div><label className="text-xs text-muted-light">{t('quality.comparison.sliceLabel')}</label>
         <input value={label} onChange={e => setLabel(e.target.value)} className={inputCls} /></div>
-      <div><label className="text-[11px] text-gray-400">De</label>
+      <div><label className="text-xs text-muted-light">{t('quality.from')}</label>
         <input type="date" value={fromDt} onChange={e => setFromDt(e.target.value)} className={inputCls} /></div>
-      <div><label className="text-[11px] text-gray-400">Até</label>
+      <div><label className="text-xs text-muted-light">{t('quality.to')}</label>
         <input type="date" value={toDt} onChange={e => setToDt(e.target.value)} className={inputCls} /></div>
-      <div><label className="text-[11px] text-gray-400">Tipo de agente (opt.)</label>
+      <div><label className="text-xs text-muted-light">{t('quality.comparison.sliceAgentType')}</label>
         <input value={agentType} onChange={e => setAgentType(e.target.value)} placeholder="ex: agente_retencao_v1"
           className={inputCls} /></div>
     </div>
@@ -561,11 +557,12 @@ function SliceForm({
 }
 
 function ComparisonView({ tenantId }: { tenantId: string }) {
-  const [aLabel,          setALabel]          = useState('Antes')
+  const { t } = useTranslation('contacts')
+  const [aLabel,          setALabel]          = useState(() => t('quality.comparison.sliceADefault'))
   const [aFrom,           setAFrom]           = useState(iso30DaysAgo)
   const [aTo,             setATo]             = useState(iso7DaysAgo)
   const [aAgentType,      setAAgentType]      = useState('')
-  const [bLabel,          setBLabel]          = useState('Depois')
+  const [bLabel,          setBLabel]          = useState(() => t('quality.comparison.sliceBDefault'))
   const [bFrom,           setBFrom]           = useState(iso7DaysAgo)
   const [bTo,             setBTo]             = useState(isoToday)
   const [bAgentType,      setBAgentType]      = useState('')
@@ -607,7 +604,7 @@ function ComparisonView({ tenantId }: { tenantId: string }) {
   return (
     <div className="flex flex-col h-full overflow-auto">
       {/* Config panel */}
-      <div className="bg-white border-b border-gray-200 px-5 py-4 flex-shrink-0">
+      <div className="bg-white border-b border-border px-5 py-4 flex-shrink-0">
         <div className="flex gap-6 flex-wrap mb-4">
           <SliceForm prefix="A"
             label={aLabel} setLabel={setALabel}
@@ -615,25 +612,25 @@ function ComparisonView({ tenantId }: { tenantId: string }) {
             toDt={aTo} setToDt={setATo}
             agentType={aAgentType} setAgentType={setAAgentType}
           />
-          <div className="self-stretch w-px bg-gray-200 hidden sm:block" />
+          <div className="self-stretch w-px bg-border hidden sm:block" />
           <SliceForm prefix="B"
             label={bLabel} setLabel={setBLabel}
             fromDt={bFrom} setFromDt={setBFrom}
             toDt={bTo} setToDt={setBTo}
             agentType={bAgentType} setAgentType={setBAgentType}
           />
-          <div className="self-stretch w-px bg-gray-200 hidden sm:block" />
-          <div className="flex flex-col gap-2 min-w-[160px]">
-            <div className="text-[11px] font-semibold text-gray-500 uppercase tracking-wide">Filtros Globais</div>
-            <div><label className="text-[11px] text-gray-400">Pool (opt.)</label>
+          <div className="self-stretch w-px bg-border hidden sm:block" />
+          <div className="flex flex-col gap-2 min-w-40">
+            <div className="text-xs font-semibold text-muted uppercase tracking-wide">{t('quality.comparison.globalFilters')}</div>
+            <div><label className="text-xs text-muted-light">{t('quality.comparison.pool')}</label>
               <input value={poolId} onChange={e => setPoolId(e.target.value)} placeholder="pool_id"
-                className="text-xs border border-gray-300 rounded px-2 py-1 w-full focus:outline-none focus:ring-1 focus:ring-primary/40" /></div>
-            <div><label className="text-[11px] text-gray-400">Campanha (opt.)</label>
+                className="text-xs border border-border-strong rounded px-2 py-1 w-full focus:outline-none focus:ring-1 focus:ring-primary/40" /></div>
+            <div><label className="text-xs text-muted-light">{t('quality.comparison.campaign')}</label>
               <input value={campaignId} onChange={e => setCampaignId(e.target.value)} placeholder="campaign_id"
-                className="text-xs border border-gray-300 rounded px-2 py-1 w-full focus:outline-none focus:ring-1 focus:ring-primary/40" /></div>
+                className="text-xs border border-border-strong rounded px-2 py-1 w-full focus:outline-none focus:ring-1 focus:ring-primary/40" /></div>
           </div>
         </div>
-        <div className="mt-3 pt-3 border-t border-gray-100">
+        <div className="mt-3 pt-3 border-t border-border">
           <MetricSelector
             selected={selectedMetrics}
             onChange={setSelectedMetrics}
@@ -643,48 +640,48 @@ function ComparisonView({ tenantId }: { tenantId: string }) {
         <button onClick={run} disabled={loading}
           className="mt-3 flex items-center gap-2 px-4 py-2 bg-primary text-white rounded text-xs font-medium hover:bg-primary/90 disabled:opacity-50 transition-colors">
           {loading ? <Spinner /> : null}
-          {loading ? 'Calculando...' : 'Comparar'}
+          {loading ? t('quality.comparison.comparing') : t('quality.comparison.compare')}
         </button>
       </div>
 
-      {error && <div className="mx-5 mt-3 px-3 py-2 bg-red-50 border border-red-200 rounded text-xs text-red-600">{error}</div>}
+      {error && <div className="mx-5 mt-3 px-3 py-2 bg-red-light border border-red/30 rounded text-xs text-red-text">{error}</div>}
 
       {/* Results */}
       {result && (
         <div className="px-5 py-4 flex flex-col gap-4">
           {/* Significance badge */}
           {sig && (
-            <div className={`flex items-center gap-2 px-3 py-2 rounded text-xs font-medium ${sig.sufficient ? 'bg-green-50 text-green-700 border border-green-200' : 'bg-warning/10 text-warning border border-warning/30'}`}>
+            <div className={`flex items-center gap-2 px-3 py-2 rounded text-xs font-medium ${sig.sufficient ? 'bg-green-light text-green-text border border-green/30' : 'bg-warning/10 text-warning border border-warning/30'}`}>
               {sig.sufficient
-                ? `✓ Amostra suficiente — n_A=${sig.n_a}, n_B=${sig.n_b}`
-                : `⚠ ${sig.warning}`}
+                ? t('quality.comparison.sufficiency', { nA: sig.n_a, nB: sig.n_b })
+                : t('quality.comparison.insufficiency', { warning: sig.warning })}
             </div>
           )}
 
           {/* Slice headers + metrics table */}
-          <div className="bg-white border border-gray-200 rounded-lg overflow-hidden">
+          <div className="bg-white border border-border rounded-lg overflow-hidden">
             <table className="w-full text-sm border-separate border-spacing-0">
               <thead>
-                <tr className="bg-gray-50">
-                  <th className="px-3 py-3 text-left text-xs font-semibold text-gray-500 w-32">Métrica</th>
+                <tr className="bg-surface-muted">
+                  <th className="px-3 py-3 text-left text-xs font-semibold text-muted w-32">{t('quality.comparison.metric')}</th>
                   <th className="px-3 py-3 text-right text-xs font-semibold text-primary">{result.slice_a.label}</th>
                   <th className="px-3 py-3 text-right text-xs font-semibold text-accent">{result.slice_b.label}</th>
-                  <th className="px-3 py-3 text-right text-xs font-semibold text-gray-500">Delta (B−A)</th>
+                  <th className="px-3 py-3 text-right text-xs font-semibold text-muted">{t('quality.comparison.delta')}</th>
                 </tr>
               </thead>
               <tbody>
                 {/* Sample sizes */}
-                <tr className="border-t border-gray-100 bg-gray-50/50">
-                  <td className="px-3 py-2 text-xs text-gray-400">Sessões</td>
-                  <td className="px-3 py-2 text-xs text-right text-gray-500">{result.slice_a.n_sessions}</td>
-                  <td className="px-3 py-2 text-xs text-right text-gray-500">{result.slice_b.n_sessions}</td>
-                  <td className="px-3 py-2 text-xs text-right text-gray-400">—</td>
+                <tr className="border-t border-border bg-surface-muted/50">
+                  <td className="px-3 py-2 text-xs text-muted-light">{t('quality.comparison.sessions')}</td>
+                  <td className="px-3 py-2 text-xs text-right text-muted">{result.slice_a.n_sessions}</td>
+                  <td className="px-3 py-2 text-xs text-right text-muted">{result.slice_b.n_sessions}</td>
+                  <td className="px-3 py-2 text-xs text-right text-muted-light">—</td>
                 </tr>
-                <tr className="border-t border-gray-100 bg-gray-50/50">
-                  <td className="px-3 py-2 text-xs text-gray-400">Avaliações</td>
-                  <td className="px-3 py-2 text-xs text-right text-gray-500">{result.slice_a.n_evaluations}</td>
-                  <td className="px-3 py-2 text-xs text-right text-gray-500">{result.slice_b.n_evaluations}</td>
-                  <td className="px-3 py-2 text-xs text-right text-gray-400">—</td>
+                <tr className="border-t border-border bg-surface-muted/50">
+                  <td className="px-3 py-2 text-xs text-muted-light">{t('quality.comparison.evaluations')}</td>
+                  <td className="px-3 py-2 text-xs text-right text-muted">{result.slice_a.n_evaluations}</td>
+                  <td className="px-3 py-2 text-xs text-right text-muted">{result.slice_b.n_evaluations}</td>
+                  <td className="px-3 py-2 text-xs text-right text-muted-light">—</td>
                 </tr>
                 {/* Dynamic KPI rows (base + agent_event overlays) */}
                 {metricDefs.map(def => {
@@ -715,9 +712,9 @@ function ComparisonView({ tenantId }: { tenantId: string }) {
       )}
 
       {!result && !loading && !error && (
-        <div className="flex flex-col items-center justify-center flex-1 text-gray-400 gap-2 py-16">
+        <div className="flex flex-col items-center justify-center flex-1 text-muted-light gap-2 py-16">
           <span className="text-3xl">⇄</span>
-          <span className="text-sm">Configure as fatias e clique em Comparar</span>
+          <span className="text-sm">{t('quality.comparison.emptyState')}</span>
         </div>
       )}
     </div>
@@ -729,34 +726,34 @@ function ComparisonView({ tenantId }: { tenantId: string }) {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 export default function AnaliseQualidadePage() {
+  const { t } = useTranslation('contacts')
   const { tenantId } = useAuth()
   const [activeTab, setActiveTab] = useState<Tab>('summary')
 
   if (!tenantId) {
     return (
-      <div className="flex items-center justify-center h-full text-gray-400 text-sm">
-        Nenhum tenant selecionado.
+      <div className="flex items-center justify-center h-full text-muted-light text-sm">
+        {t('quality.noTenant')}
       </div>
     )
   }
 
   return (
-    <div className="flex flex-col h-full overflow-hidden bg-gray-50">
-      {/* Page header + tab bar */}
-      <div className="bg-white border-b border-gray-200 px-5 pt-3 flex-shrink-0">
-        <div className="font-semibold text-gray-800 text-sm mb-2">Análise de Qualidade</div>
+    <div className="flex flex-col h-full overflow-hidden bg-surface-muted">
+      {/* Tab bar */}
+      <div className="bg-white border-b border-border px-5 pt-3 flex-shrink-0">
         <div className="flex gap-0">
-          {TABS.map(tab => (
+          {TAB_IDS.map(id => (
             <button
-              key={tab.id}
-              onClick={() => setActiveTab(tab.id)}
+              key={id}
+              onClick={() => setActiveTab(id)}
               className={`px-4 py-2 text-xs font-medium border-b-2 transition-colors ${
-                activeTab === tab.id
+                activeTab === id
                   ? 'border-primary text-primary'
-                  : 'border-transparent text-gray-500 hover:text-gray-700'
+                  : 'border-transparent text-muted hover:text-dark'
               }`}
             >
-              {tab.label}
+              {t(`quality.tabs.${id}`)}
             </button>
           ))}
         </div>

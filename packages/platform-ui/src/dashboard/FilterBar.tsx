@@ -11,6 +11,7 @@
  *   multi_select → multiple <select> (or tag-style list of checkboxes)
  */
 import React from 'react'
+import { useTranslation } from 'react-i18next'
 import type { GlobalFilter } from './tools/types'
 
 // ─── Props ────────────────────────────────────────────────────────────────────
@@ -33,17 +34,19 @@ function FilterControl({
   value:    unknown
   onChange: (v: unknown) => void
 }) {
+  const { t } = useTranslation('dashboards')
   const strVal = value !== null && value !== undefined ? String(value) : ''
+  const filterLabel = t(`filters.labels.${filter.filter_key}`, { defaultValue: filter.label })
 
   if (filter.type === 'date') {
     return (
       <div className="flex items-center gap-1.5">
-        <label className="text-xs text-gray-500 whitespace-nowrap">{filter.label}</label>
+        <label className="text-xs text-muted whitespace-nowrap">{filterLabel}</label>
         <input
           type="date"
           value={strVal}
           onChange={e => onChange(e.target.value || null)}
-          className="text-xs border border-gray-200 rounded px-2 py-1 text-gray-700 focus:outline-none focus:ring-1 focus:ring-primary bg-white"
+          className="text-xs border border-border rounded px-2 py-1 text-dark focus:outline-none focus:ring-1 focus:ring-primary bg-white"
         />
       </div>
     )
@@ -52,13 +55,13 @@ function FilterControl({
   if (filter.type === 'select') {
     return (
       <div className="flex items-center gap-1.5">
-        <label className="text-xs text-gray-500 whitespace-nowrap">{filter.label}</label>
+        <label className="text-xs text-muted whitespace-nowrap">{filterLabel}</label>
         <select
           value={strVal}
           onChange={e => onChange(e.target.value || null)}
-          className="text-xs border border-gray-200 rounded px-2 py-1 text-gray-700 focus:outline-none focus:ring-1 focus:ring-primary bg-white"
+          className="text-xs border border-border rounded px-2 py-1 text-dark focus:outline-none focus:ring-1 focus:ring-primary bg-white"
         >
-          <option value="">Todos</option>
+          <option value="">{t('filters.all')}</option>
           {filter.options?.map(opt => (
             <option key={opt.value} value={opt.value}>{opt.label}</option>
           ))}
@@ -71,7 +74,7 @@ function FilterControl({
     const selected = Array.isArray(value) ? (value as string[]) : []
     return (
       <div className="flex items-center gap-1.5">
-        <label className="text-xs text-gray-500 whitespace-nowrap">{filter.label}</label>
+        <label className="text-xs text-muted whitespace-nowrap">{filterLabel}</label>
         <select
           multiple
           value={selected}
@@ -79,7 +82,7 @@ function FilterControl({
             const vals = Array.from(e.target.selectedOptions, o => o.value)
             onChange(vals.length > 0 ? vals : null)
           }}
-          className="text-xs border border-gray-200 rounded px-2 py-1 text-gray-700 focus:outline-none focus:ring-1 focus:ring-primary bg-white max-h-20"
+          className="text-xs border border-border rounded px-2 py-1 text-dark focus:outline-none focus:ring-1 focus:ring-primary bg-white max-h-20"
           size={Math.min(filter.options?.length ?? 3, 3)}
         >
           {filter.options?.map(opt => (
@@ -96,6 +99,8 @@ function FilterControl({
 // ─── FilterBar ────────────────────────────────────────────────────────────────
 
 export function FilterBar({ filters, values, onChange, onReset }: FilterBarProps) {
+  const { t } = useTranslation('dashboards')
+
   if (filters.length === 0) return null
 
   const hasActiveFilter = filters.some(f => {
@@ -104,7 +109,7 @@ export function FilterBar({ filters, values, onChange, onReset }: FilterBarProps
   })
 
   return (
-    <div className="flex items-center gap-4 px-6 py-2 border-b border-gray-200 bg-white flex-shrink-0 flex-wrap">
+    <div className="flex items-center gap-4 px-6 py-2 border-b border-border bg-white flex-shrink-0 flex-wrap">
       {filters.map(filter => (
         <FilterControl
           key={filter.filter_key}
@@ -117,10 +122,10 @@ export function FilterBar({ filters, values, onChange, onReset }: FilterBarProps
       {hasActiveFilter && (
         <button
           onClick={onReset}
-          className="text-xs text-gray-400 hover:text-gray-600 transition-colors ml-auto flex-shrink-0"
-          title="Limpar filtros"
+          className="text-xs text-muted-light hover:text-muted transition-colors ml-auto flex-shrink-0"
+          title={t('filters.clearFilters')}
         >
-          ↺ Limpar
+          {t('filters.clear')}
         </button>
       )}
     </div>

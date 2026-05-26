@@ -45,7 +45,9 @@
       "campaigns": "Campaigns",
       "knowledge": "Knowledge Base",
       "evaluations": "Evaluations",
-      "reports": "Reports"
+      "reports": "Reports",
+      "calibration": "Calibration",
+      "curadoria": "Curation"
     },
     "config": "Configuration",
     "resources": "Resources",

@@ -49,6 +49,7 @@ from ..models import (
     MessageContent,
     NormalizedInboundEvent,
 )
+from ..channel_capability_registry import write_journey_channel_context
 from .base import ChannelAdapter
 from .sms_provider import ISMSProvider, MockSMSProvider, TwilioProvider, split_sms
 
@@ -152,6 +153,44 @@ class SMSAdapter(ChannelAdapter):
                 contact_id=contact_id,
                 channel_session_id=sms_sid,
             )
+
+            # ── Arc 16 Phase D: capability-based pending collect ─────────────
+            # Check for a collect prompt sent via handle_collect_event().
+            # If found, emit the response with collect_token so skill-flow-worker
+            # can correlate and emit collect.responded back to workflow-api.
+            pending_collect_key = f"channel:sms:{contact_id}:pending_collect"
+            pending_raw = await self._redis.get(pending_collect_key)
+            if pending_raw:
+                pending = json.loads(pending_raw)
+                await self._redis.delete(pending_collect_key)
+                journey_id_p = pending.get("journey_id")
+                # Register channel contact in journey ContextStore
+                if journey_id_p:
+                    await write_journey_channel_context(
+                        redis      = self._redis,
+                        tenant_id  = tenant_id,
+                        journey_id = journey_id_p,
+                        channel    = "sms",
+                        contact_id = contact_id,
+                    )
+                extra = {
+                    "collect_token": pending.get("collect_token"),
+                    "journey_id":    journey_id_p,
+                    "response_text": full_text,
+                }
+                payload = NormalizedInboundEvent(
+                    message_id       = str(uuid.uuid4()),
+                    contact_id       = contact_id,
+                    session_id       = session_id,
+                    channel          = "sms",
+                    content_type     = "text",
+                    author           = MessageAuthor(type="customer"),
+                    content          = MessageContent(type="text", text=full_text),
+                    context_snapshot = ContextSnapshot(),
+                ).model_dump()
+                payload.update(extra)
+                await self._publish_inbound(payload)
+                return
 
             # Route through sequential collect state if active
             collect_key = f"channel:sms:{session_id}:menu_collect"
@@ -501,6 +540,57 @@ class SMSAdapter(ChannelAdapter):
         if contact_id:
             await self._redis.delete(f"channel:sms:{contact_id}:session")
             logger.info("sms: session closed contact=%s session=%s", contact_id, session_id)
+
+    # ── Collect event — outbound capability-based (Arc 16 Phase D) ───────────
+
+    async def handle_collect_event(self, event: dict) -> None:
+        """
+        Send a collect prompt to the customer via SMS and store a pending_collect
+        key so the inbound handler can correlate the customer's reply.
+
+        Called by _collect_events_consumer() when collect.requested arrives with
+        channel="sms" (explicit) or "sms" selected by capability-based routing.
+
+        Redis key: channel:sms:{contact_id}:pending_collect
+          → {collect_token, journey_id, pool_id, expires_at}  TTL = 30 min
+        """
+        contact_id    = event.get("target", "")
+        collect_token = event.get("collect_token", "")
+        journey_id    = event.get("journey_id")
+        prompt        = event.get("prompt", "")
+        tenant_id     = event.get("tenant_id", self._settings.tenant_id)
+        pool_id       = event.get("pool_id", self._settings.sms_default_pool_id or "")
+
+        if not contact_id or not prompt:
+            logger.warning(
+                "sms handle_collect_event: missing target or prompt "
+                "(collect_token=%s)", collect_token,
+            )
+            return
+
+        # Send prompt to customer
+        await self._send_text_to_contact(
+            contact_id=contact_id,
+            tenant_id=tenant_id,
+            text=prompt,
+        )
+
+        # Store pending collect for response correlation
+        pending = {
+            "collect_token": collect_token,
+            "journey_id":    journey_id,
+            "pool_id":       pool_id,
+        }
+        await self._redis.setex(
+            f"channel:sms:{contact_id}:pending_collect",
+            1_800,  # 30 min
+            json.dumps(pending),
+        )
+
+        logger.info(
+            "sms collect sent: contact=%s collect_token=%s journey=%s",
+            contact_id, collect_token, journey_id,
+        )
 
     # ── Internal helpers ──────────────────────────────────────────────────────
 

@@ -169,6 +169,7 @@
   "rightTab": {
     "estado":        "State",
     "agentes":       "Agents",
+    "acoes":         "Actions",
     "contexto":      "Context",
     "historico":     "History",
     "orchestration": "Orchestration"
@@ -233,6 +234,16 @@
       "negative":     "Negative",
       "veryNegative": "Very negative"
     }
+  },
+  "acoes": {
+    "agents":      "Agents",
+    "processes":   "Processes",
+    "trigger":     "Trigger",
+    "start":       "Start",
+    "cancel":      "Cancel",
+    "active":      "Active",
+    "waiting":     "Waiting",
+    "noProcesses": "No processes configured for this pool"
   },
   "agentes": {
     "activeInSession":    "Active in Session",
@@ -341,6 +352,7 @@
     "sessionClosed":    "Session closed",
     "ended":            "ended",
     "awaitingResponse": "Awaiting your response",
+    "responded": "Responded — awaiting next customer message",
     "aiTyping":         "AI typing"
   },
   "orchestration": {

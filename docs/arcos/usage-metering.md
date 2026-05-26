@@ -1,5 +1,7 @@
 # Usage Metering
 
+> Última atualização: 2026-05-25 · Estado: Arc 16
+>
 > Full reference for the usage metering pipeline: Kafka schema, dimensions, Redis counters, quota enforcement, and cycle reset.
 > See CLAUDE.md for architectural summary.
 
@@ -51,14 +53,16 @@ Schema: `UsageEventSchema` in `@plughub/schemas/src/usage.ts`
 | `llm_tokens_output` | AI Gateway | — | Sum of `usage.output_tokens` per inference |
 | `webchat_attachments` | Channel Gateway | — | 1 per uploaded file committed |
 
-### Pending (adapters not yet wired)
+### Pending (wiring, not the adapters)
+
+The channel adapters (WhatsApp, SMS, Email, Voice) were all created on 2026-05-20. What remains pending is the **wiring**: the adapters do not yet call the metering functions in `usage_emitter.py`. The emitter functions are ready; the adapter call sites still need to be added.
 
 | Dimension | Status |
 |---|---|
-| `whatsapp_conversations` | Function in `usage_emitter.py` ready — WhatsApp adapter not yet created |
-| `voice_minutes` | Function ready — WebRTC/Voice adapter not yet created |
-| `sms_segments` | Function ready — SMS adapter not yet created |
-| `email_messages` | Function ready — Email adapter not yet created |
+| `whatsapp_conversations` | Function in `usage_emitter.py` ready — WhatsApp adapter exists but does not yet call it |
+| `voice_minutes` | Function ready — Voice/WebRTC adapters exist but do not yet call it |
+| `sms_segments` | Function ready — SMS adapter exists but does not yet call it |
+| `email_messages` | Function ready — Email adapter exists but does not yet call it |
 
 ---
 

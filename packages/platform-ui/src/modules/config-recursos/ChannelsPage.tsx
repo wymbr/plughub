@@ -196,7 +196,7 @@ const ChannelsPage: React.FC = () => {
     <div className="flex h-full border border-lightGray rounded-lg overflow-hidden bg-white" style={{ minHeight: 520 }}>
 
       {/* ── Left sidebar ─────────────────────────────────────────────────────── */}
-      <div className="w-72 flex-shrink-0 border-r border-lightGray flex flex-col bg-gray-50 overflow-y-auto">
+      <div className="w-72 flex-shrink-0 border-r border-lightGray flex flex-col bg-surface-muted overflow-y-auto">
         <div className="px-4 py-3 border-b border-lightGray">
           <div className="text-sm font-bold text-dark">{t('channels.title')}</div>
           <div className="text-xs text-gray mt-0.5">{channels.length} {t('channels.configured')}</div>
@@ -243,7 +243,7 @@ const ChannelsPage: React.FC = () => {
                       className={`w-full text-left px-4 py-2 pl-10 flex items-center justify-between transition-colors border-l-2 ${
                         isSelected
                           ? 'bg-primary/5 border-l-primary'
-                          : 'bg-transparent border-l-transparent hover:bg-gray-50'
+                          : 'bg-transparent border-l-transparent hover:bg-surface-muted'
                       }`}
                     >
                       <span className={`text-xs ${isSelected ? 'text-primary font-semibold' : 'text-dark'}`}>

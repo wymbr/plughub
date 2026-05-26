@@ -13,6 +13,7 @@
  */
 import React, { useState } from 'react'
 import { useTranslation } from 'react-i18next'
+import { Users, ClipboardList, Timer, Monitor, Archive, Lock, Check, X, AlertTriangle, Pencil } from 'lucide-react'
 import { useAuth } from '@/auth/useAuth'
 import { useNamespace, putConfig } from '../config-plataforma/api/config-hooks'
 import type { DisplayScreen, DisplayVoice, MaskingDisplayRule } from '@/components/MaskedToken'
@@ -41,6 +42,41 @@ function badge(text: string, color: string) {
       border: `1px solid ${color}44`,
     }}>{text}</span>
   )
+}
+
+// ── ContextStore masking types (mirrors @plughub/schemas) ────────────────────
+
+type ContextMaskingType =
+  | 'plain' | 'hidden' | 'full' | 'last_2' | 'last_4'
+  | 'first_1' | 'first_word' | 'email_domain' | 'financial'
+
+interface ContextMaskingRule {
+  pattern: string
+  role:    'operator' | 'supervisor' | '*'
+  type:    ContextMaskingType
+  label?:  string
+}
+
+interface ContextMaskingConfig {
+  rules:                       ContextMaskingRule[]
+  default_unmatched_operator:  ContextMaskingType
+}
+
+const MASKING_TYPE_INFO: Record<ContextMaskingType, { label: string; sample: string }> = {
+  plain:        { label: 'Visível (sem máscara)',  sample: '11.222.333-45' },
+  hidden:       { label: 'Oculto (remove campo)', sample: '(oculto)' },
+  full:         { label: 'Totalmente mascarado',  sample: '***' },
+  last_2:       { label: 'Últimos 2 dígitos',     sample: '***-45' },
+  last_4:       { label: 'Últimos 4 dígitos',     sample: '****3345' },
+  first_1:      { label: 'Primeira letra',        sample: 'J***' },
+  first_word:   { label: 'Primeira palavra',      sample: 'João ***' },
+  email_domain: { label: 'Domínio visível',       sample: 'j***@empresa.com' },
+  financial:    { label: 'Valor financeiro',      sample: 'R$ ****,**' },
+}
+
+const EMPTY_CONTEXT_CONFIG: ContextMaskingConfig = {
+  rules: [],
+  default_unmatched_operator: 'plain',
 }
 
 // ── Main component ────────────────────────────────────────────────────────────
@@ -113,6 +149,27 @@ export default function MaskingPage() {
     return DEFAULT_DISPLAY_RULE
   }
 
+  // ── Context Store masking rules ─────────────────────────────────────────────
+
+  const rawContextRules = maskingEntries['context_rules']?.value ?? maskingEntries['context_rules']
+  const contextRulesConfig: ContextMaskingConfig = (
+    rawContextRules && typeof rawContextRules === 'object'
+  ) ? (rawContextRules as ContextMaskingConfig) : EMPTY_CONTEXT_CONFIG
+
+  async function saveContextRules(config: ContextMaskingConfig) {
+    if (!adminToken) { showToast(t('toast.tokenRequired'), false); return }
+    setSaving('context_rules')
+    try {
+      await putConfig('masking', 'context_rules', config, tenantId, adminToken)
+      reloadMasking()
+      showToast('Regras de ContextStore salvas com sucesso', true)
+    } catch (e) {
+      showToast(String(e), false)
+    } finally {
+      setSaving(null)
+    }
+  }
+
   function toggleRole(role: string) {
     const next = authorizedRoles.includes(role)
       ? authorizedRoles.filter(r => r !== role)
@@ -131,7 +188,7 @@ export default function MaskingPage() {
           borderRadius: 8, padding: '10px 18px', fontSize: 13,
           color: toast.ok ? '#6ee7b7' : '#fca5a5', boxShadow: '0 4px 20px #0008',
         }}>
-          {toast.ok ? '✓' : '✗'} {toast.msg}
+          {toast.ok ? <Check size={13} style={{ display: 'inline', marginRight: 6 }} aria-hidden="true" /> : <X size={13} style={{ display: 'inline', marginRight: 6 }} aria-hidden="true" />}{toast.msg}
         </div>
       )}
 
@@ -140,7 +197,7 @@ export default function MaskingPage() {
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 16 }}>
           <div>
             <h1 style={{ margin: 0, fontSize: 18, fontWeight: 700, color: '#e2e8f0' }}>
-              🔒 {t('header.title')}
+              <Lock size={18} style={{ display: 'inline', marginRight: 8, verticalAlign: 'middle' }} aria-hidden="true" />{t('header.title')}
             </h1>
             <p style={{ margin: '4px 0 0', fontSize: 13, color: '#64748b' }}>
               {t('header.description')}
@@ -159,20 +216,20 @@ export default function MaskingPage() {
             <button style={iconBtn} onClick={() => setShowToken(v => !v)}>
               {showToken ? '🙈' : '👁'}
             </button>
-            {adminToken && <span style={{ fontSize: 11, color: '#22c55e', fontWeight: 600 }}>✓</span>}
+            {adminToken && <Check size={13} style={{ color: '#22c55e' }} aria-hidden="true" />}
           </div>
         </div>
       </div>
 
       {/* Loading / error */}
       {loading && <div style={infoBox('#1e293b', '#94a3b8')}>{t('loading')}</div>}
-      {error   && <div style={infoBox('#7f1d1d22', '#fca5a5')}>⚠ {error}</div>}
+      {error   && <div style={{ ...infoBox('#7f1d1d22', '#fca5a5'), display: 'flex', alignItems: 'center', gap: 6 }}><AlertTriangle size={14} aria-hidden="true" />{error}</div>}
 
       <div style={{ padding: '20px 28px', display: 'flex', flexDirection: 'column', gap: 24 }}>
 
         {/* ── Section 1: Access Policy ─────────────────────────────────────── */}
         <Section
-          icon="👥"
+          icon={Users}
           title={t('section.access.title')}
           desc={t('section.access.description')}
         >
@@ -192,7 +249,7 @@ export default function MaskingPage() {
                     color: active ? '#93c5fd' : '#64748b',
                   }}
                 >
-                  {active ? '✓ ' : ''}{role}
+                  {active && <Check size={12} style={{ display: 'inline', marginRight: 4 }} aria-hidden="true" />}{role}
                 </button>
               )
             })}
@@ -206,7 +263,7 @@ export default function MaskingPage() {
 
         {/* ── Section 2: Audit Capture ──────────────────────────────────────── */}
         <Section
-          icon="📋"
+          icon={ClipboardList}
           title={t('section.audit.title')}
           desc={t('section.audit.description')}
         >
@@ -231,7 +288,7 @@ export default function MaskingPage() {
 
         {/* ── Section 3: Token Retention ────────────────────────────────────── */}
         <Section
-          icon="⏱"
+          icon={Timer}
           title={t('section.retention.title')}
           desc={t('section.retention.description')}
         >
@@ -246,7 +303,7 @@ export default function MaskingPage() {
 
         {/* ── Section 4: Categories overview ───────────────────────────────── */}
         <Section
-          icon="📋"
+          icon={ClipboardList}
           title={t('section.categories.title')}
           desc={t('section.categories.description')}
         >
@@ -280,7 +337,7 @@ export default function MaskingPage() {
 
         {/* ── Section 5: Display rules per category ────────────────────────── */}
         <Section
-          icon="🖥️"
+          icon={Monitor}
           title={t('section.displayRules.title', { defaultValue: 'Display Rules by Category' })}
           desc={t('section.displayRules.description', { defaultValue: 'Configure how masked tokens are shown per channel. Changes apply immediately to new sessions.' })}
         >
@@ -371,6 +428,19 @@ export default function MaskingPage() {
             })}
           </div>
         </Section>
+
+        {/* ── Section 6: Context Store field-level masking rules ─────────── */}
+        <Section
+          icon={Archive}
+          title="Regras de Context Store"
+          desc="Controla como cada tag do ContextStore é exibida por role (operator / supervisor). Aplicado em /api/supervisor_state e no painel de contexto do Console. Regras com padrão mais específico têm prioridade."
+        >
+          <ContextRulesSection
+            config={contextRulesConfig}
+            saving={saving === 'context_rules'}
+            onSave={saveContextRules}
+          />
+        </Section>
       </div>
     </div>
   )
@@ -378,13 +448,13 @@ export default function MaskingPage() {
 
 // ── Sub-components ─────────────────────────────────────────────────────────────
 
-function Section({ icon, title, desc, children }: {
-  icon: string; title: string; desc: string; children: React.ReactNode
+function Section({ icon: SectionIcon, title, desc, children }: {
+  icon: React.ElementType; title: string; desc: string; children: React.ReactNode
 }) {
   return (
     <div style={{ background: '#0d1f38', border: '1px solid #1e293b', borderRadius: 10, padding: '18px 20px' }}>
       <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12, marginBottom: 6 }}>
-        <span style={{ fontSize: 20 }}>{icon}</span>
+        <SectionIcon className="w-5 h-5 flex-shrink-0" style={{ color: '#94a3b8', marginTop: 2 } as React.CSSProperties} aria-hidden="true" />
         <div>
           <div style={{ fontWeight: 700, fontSize: 14, color: '#e2e8f0' }}>{title}</div>
           <div style={{ fontSize: 12, color: '#64748b', marginTop: 3, lineHeight: 1.5 }}>{desc}</div>
@@ -425,7 +495,7 @@ function ToggleCard({ label, sublabel, active, onToggle, saving, warning }: {
         </button>
       </div>
       {active && warning && (
-        <div style={{ marginTop: 8, fontSize: 11, color: '#fbbf24' }}>⚠ {warning}</div>
+        <div style={{ marginTop: 8, fontSize: 11, color: '#fbbf24', display: 'flex', alignItems: 'center', gap: 4 }}><AlertTriangle size={12} aria-hidden="true" />{warning}</div>
       )}
     </div>
   )
@@ -473,7 +543,7 @@ function RetentionEditor({ value, onSave, saving }: {
           </div>
           <div style={{ color: '#64748b', fontSize: 13 }}>{t('retention.days')}</div>
           <button onClick={() => { setDraft(String(value)); setEditing(true) }} style={editBtnStyle}>
-            ✏️ {t('retention.edit')}
+            <Pencil size={13} style={{ display: 'inline', marginRight: 4 }} aria-hidden="true" />{t('retention.edit')}
           </button>
         </>
       )}
@@ -539,4 +609,263 @@ function infoBox(bg: string, color: string): React.CSSProperties {
     margin: '8px 28px', padding: '10px 16px', background: bg,
     borderRadius: 8, fontSize: 13, color,
   }
+}
+
+// ── ContextRulesSection ────────────────────────────────────────────────────────
+
+const EMPTY_RULE: ContextMaskingRule = { pattern: '', role: 'operator', type: 'plain', label: '' }
+const ALL_TYPES = Object.keys(MASKING_TYPE_INFO) as ContextMaskingType[]
+const ROLE_OPTIONS: Array<ContextMaskingRule['role']> = ['operator', 'supervisor', '*']
+
+function ContextRulesSection({
+  config,
+  saving,
+  onSave,
+}: {
+  config:  ContextMaskingConfig
+  saving:  boolean
+  onSave:  (config: ContextMaskingConfig) => void
+}) {
+  const [rules,       setRules]       = useState<ContextMaskingRule[]>(config.rules)
+  const [defaultType, setDefaultType] = useState<ContextMaskingType>(config.default_unmatched_operator)
+  const [editIndex,   setEditIndex]   = useState<number | null>(null)
+  const [editDraft,   setEditDraft]   = useState<ContextMaskingRule>(EMPTY_RULE)
+  const [newDraft,    setNewDraft]    = useState<ContextMaskingRule>(EMPTY_RULE)
+  const [showAddRow,  setShowAddRow]  = useState(false)
+
+  // Sync when parent config changes (e.g. after reload)
+  React.useEffect(() => {
+    setRules(config.rules)
+    setDefaultType(config.default_unmatched_operator)
+  }, [config])
+
+  function startEdit(index: number) {
+    setEditIndex(index)
+    setEditDraft({ ...rules[index]! })
+  }
+
+  function cancelEdit() {
+    setEditIndex(null)
+  }
+
+  function commitEdit() {
+    if (!editDraft.pattern.trim()) return
+    const next = rules.map((r, i) => i === editIndex ? { ...editDraft, pattern: editDraft.pattern.trim() } : r)
+    setRules(next)
+    setEditIndex(null)
+  }
+
+  function deleteRule(index: number) {
+    setRules(rules.filter((_, i) => i !== index))
+    if (editIndex === index) setEditIndex(null)
+  }
+
+  function commitAdd() {
+    if (!newDraft.pattern.trim()) return
+    setRules([...rules, { ...newDraft, pattern: newDraft.pattern.trim() }])
+    setNewDraft(EMPTY_RULE)
+    setShowAddRow(false)
+  }
+
+  function handleSave() {
+    onSave({ rules, default_unmatched_operator: defaultType })
+  }
+
+  const hasChanges =
+    defaultType !== config.default_unmatched_operator ||
+    JSON.stringify(rules) !== JSON.stringify(config.rules)
+
+  return (
+    <div style={{ marginTop: 16 }}>
+      {/* Rules table */}
+      <div style={{ overflowX: 'auto', marginBottom: 14 }}>
+        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+          <thead>
+            <tr style={{ borderBottom: '1px solid #1e293b' }}>
+              {['Padrão (tag)', 'Role', 'Tipo de máscara', 'Prévia', 'Label', ''].map(h => (
+                <th key={h} style={{ padding: '6px 10px', textAlign: 'left', color: '#64748b', fontWeight: 600, whiteSpace: 'nowrap', fontSize: 11 }}>{h}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {rules.length === 0 && (
+              <tr>
+                <td colSpan={6} style={{ padding: '16px 10px', color: '#475569', textAlign: 'center', fontStyle: 'italic' }}>
+                  Nenhuma regra configurada — usando defaults do sistema
+                </td>
+              </tr>
+            )}
+            {rules.map((rule, i) => (
+              editIndex === i ? (
+                <tr key={i} style={{ background: '#0f1f3a', borderBottom: '1px solid #1e3a5f' }}>
+                  <td style={{ padding: '6px 8px' }}>
+                    <input
+                      value={editDraft.pattern}
+                      onChange={e => setEditDraft(d => ({ ...d, pattern: e.target.value }))}
+                      placeholder="caller.cpf ou caller.*"
+                      style={{ ...inputStyle, width: 160 }}
+                    />
+                  </td>
+                  <td style={{ padding: '6px 8px' }}>
+                    <select value={editDraft.role} onChange={e => setEditDraft(d => ({ ...d, role: e.target.value as ContextMaskingRule['role'] }))} style={selectStyle}>
+                      {ROLE_OPTIONS.map(r => <option key={r} value={r}>{r}</option>)}
+                    </select>
+                  </td>
+                  <td style={{ padding: '6px 8px' }}>
+                    <select value={editDraft.type} onChange={e => setEditDraft(d => ({ ...d, type: e.target.value as ContextMaskingType }))} style={selectStyle}>
+                      {ALL_TYPES.map(t => <option key={t} value={t}>{MASKING_TYPE_INFO[t].label}</option>)}
+                    </select>
+                  </td>
+                  <td style={{ padding: '6px 8px' }}>
+                    <code style={{ color: '#7dd3fc', fontSize: 11 }}>{MASKING_TYPE_INFO[editDraft.type].sample}</code>
+                  </td>
+                  <td style={{ padding: '6px 8px' }}>
+                    <input
+                      value={editDraft.label ?? ''}
+                      onChange={e => setEditDraft(d => ({ ...d, label: e.target.value }))}
+                      placeholder="Descrição opcional"
+                      style={{ ...inputStyle, width: 140 }}
+                    />
+                  </td>
+                  <td style={{ padding: '6px 8px', whiteSpace: 'nowrap' }}>
+                    <button onClick={commitEdit} style={{ ...saveBtnStyle, fontSize: 11, padding: '3px 10px', marginRight: 6 }} aria-label="Salvar"><Check size={12} aria-hidden="true" /></button>
+                    <button onClick={cancelEdit} style={{ ...cancelBtnStyle, fontSize: 11, padding: '3px 10px' }} aria-label="Cancelar"><X size={12} aria-hidden="true" /></button>
+                  </td>
+                </tr>
+              ) : (
+                <tr key={i} style={{ borderBottom: '1px solid #1a2640', transition: 'background 0.1s' }}
+                  onMouseEnter={e => (e.currentTarget.style.background = '#0f1a2e')}
+                  onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
+                  <td style={{ padding: '7px 10px' }}>
+                    <code style={{ color: '#7dd3fc', fontSize: 12, background: '#0c1a30', padding: '1px 5px', borderRadius: 3 }}>{rule.pattern}</code>
+                  </td>
+                  <td style={{ padding: '7px 10px' }}>
+                    <span style={{
+                      fontSize: 11, fontWeight: 600,
+                      color: rule.role === 'supervisor' ? '#a78bfa' : rule.role === '*' ? '#94a3b8' : '#60a5fa',
+                    }}>{rule.role}</span>
+                  </td>
+                  <td style={{ padding: '7px 10px', color: '#cbd5e1' }}>{MASKING_TYPE_INFO[rule.type].label}</td>
+                  <td style={{ padding: '7px 10px' }}>
+                    <code style={{ color: '#f59e0b', fontSize: 11 }}>{MASKING_TYPE_INFO[rule.type].sample}</code>
+                  </td>
+                  <td style={{ padding: '7px 10px', color: '#64748b' }}>{rule.label ?? '—'}</td>
+                  <td style={{ padding: '7px 10px', whiteSpace: 'nowrap' }}>
+                    <button onClick={() => startEdit(i)} style={{ ...editBtnStyle, fontSize: 11, padding: '2px 8px', marginRight: 6 }} aria-label="Editar"><Pencil size={11} aria-hidden="true" /></button>
+                    <button onClick={() => deleteRule(i)} style={{ ...cancelBtnStyle, fontSize: 11, padding: '2px 8px', color: '#ef4444', borderColor: '#ef444444' }} aria-label="Excluir"><X size={11} aria-hidden="true" /></button>
+                  </td>
+                </tr>
+              )
+            ))}
+
+            {/* Add-new row */}
+            {showAddRow && (
+              <tr style={{ background: '#0b1e38', borderBottom: '1px solid #1e3a5f' }}>
+                <td style={{ padding: '6px 8px' }}>
+                  <input
+                    value={newDraft.pattern}
+                    onChange={e => setNewDraft(d => ({ ...d, pattern: e.target.value }))}
+                    placeholder="caller.cpf ou caller.*"
+                    style={{ ...inputStyle, width: 160 }}
+                    autoFocus
+                  />
+                </td>
+                <td style={{ padding: '6px 8px' }}>
+                  <select value={newDraft.role} onChange={e => setNewDraft(d => ({ ...d, role: e.target.value as ContextMaskingRule['role'] }))} style={selectStyle}>
+                    {ROLE_OPTIONS.map(r => <option key={r} value={r}>{r}</option>)}
+                  </select>
+                </td>
+                <td style={{ padding: '6px 8px' }}>
+                  <select value={newDraft.type} onChange={e => setNewDraft(d => ({ ...d, type: e.target.value as ContextMaskingType }))} style={selectStyle}>
+                    {ALL_TYPES.map(t => <option key={t} value={t}>{MASKING_TYPE_INFO[t].label}</option>)}
+                  </select>
+                </td>
+                <td style={{ padding: '6px 8px' }}>
+                  <code style={{ color: '#7dd3fc', fontSize: 11 }}>{MASKING_TYPE_INFO[newDraft.type].sample}</code>
+                </td>
+                <td style={{ padding: '6px 8px' }}>
+                  <input
+                    value={newDraft.label ?? ''}
+                    onChange={e => setNewDraft(d => ({ ...d, label: e.target.value }))}
+                    placeholder="Descrição opcional"
+                    style={{ ...inputStyle, width: 140 }}
+                  />
+                </td>
+                <td style={{ padding: '6px 8px', whiteSpace: 'nowrap' }}>
+                  <button onClick={commitAdd} style={{ ...saveBtnStyle, fontSize: 11, padding: '3px 10px', marginRight: 6 }}>+ Adicionar</button>
+                  <button onClick={() => { setShowAddRow(false); setNewDraft(EMPTY_RULE) }} style={{ ...cancelBtnStyle, fontSize: 11, padding: '3px 10px' }} aria-label="Cancelar"><X size={12} aria-hidden="true" /></button>
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+
+      {/* Add row button */}
+      {!showAddRow && (
+        <button
+          onClick={() => setShowAddRow(true)}
+          style={{ ...editBtnStyle, fontSize: 12, marginBottom: 16 }}
+        >
+          + Nova regra
+        </button>
+      )}
+
+      {/* Default unmatched operator */}
+      <div style={{
+        display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16,
+        padding: '12px 14px', background: '#0f172a', borderRadius: 8, border: '1px solid #1e293b',
+      }}>
+        <div style={{ flex: 1 }}>
+          <div style={{ fontSize: 12, fontWeight: 600, color: '#e2e8f0' }}>Padrão para operator sem regra</div>
+          <div style={{ fontSize: 11, color: '#64748b', marginTop: 2 }}>
+            Aplicado quando nenhuma regra casa com a tag para o role <code style={{ color: '#94a3b8' }}>operator</code>.
+            Supervisors sem regra sempre veem <code style={{ color: '#94a3b8' }}>plain</code>.
+          </div>
+        </div>
+        <select
+          value={defaultType}
+          onChange={e => setDefaultType(e.target.value as ContextMaskingType)}
+          style={{ ...selectStyle, minWidth: 180 }}
+        >
+          {ALL_TYPES.map(t => (
+            <option key={t} value={t}>{MASKING_TYPE_INFO[t].label} — {MASKING_TYPE_INFO[t].sample}</option>
+          ))}
+        </select>
+      </div>
+
+      {/* Save */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+        <button
+          onClick={handleSave}
+          disabled={saving || !hasChanges}
+          style={{
+            ...saveBtnStyle,
+            opacity: saving || !hasChanges ? 0.5 : 1,
+            cursor: saving || !hasChanges ? 'not-allowed' : 'pointer',
+          }}
+        >
+          {saving ? 'Salvando…' : 'Salvar Regras'}
+        </button>
+        {hasChanges && (
+          <span style={{ fontSize: 11, color: '#fbbf24', display: 'inline-flex', alignItems: 'center', gap: 4 }}><AlertTriangle size={12} aria-hidden="true" />Alterações não salvas</span>
+        )}
+        {!hasChanges && rules.length > 0 && (
+          <span style={{ fontSize: 11, color: '#22c55e', display: 'inline-flex', alignItems: 'center', gap: 4 }}><Check size={12} aria-hidden="true" />Sincronizado</span>
+        )}
+        <span style={{ fontSize: 11, color: '#475569', marginLeft: 'auto' }}>
+          {rules.length} {rules.length === 1 ? 'regra' : 'regras'} configuradas
+        </span>
+      </div>
+
+      {/* Hint about specificity */}
+      <div style={{ marginTop: 12, padding: '8px 12px', background: '#0c1520', borderRadius: 6, border: '1px solid #1e293b' }}>
+        <p style={{ margin: 0, fontSize: 11, color: '#475569', lineHeight: 1.6 }}>
+          <strong style={{ color: '#64748b' }}>Prioridade de regras:</strong>{' '}
+          padrão exato (<code style={{ color: '#7dd3fc' }}>caller.cpf</code>) &gt; glob de namespace (<code style={{ color: '#7dd3fc' }}>caller.*</code>) &gt; curinga (<code style={{ color: '#7dd3fc' }}>*</code>).
+          Role exato supera <code style={{ color: '#7dd3fc' }}>*</code>. Role <code style={{ color: '#a78bfa' }}>supervisor</code> cobre supervisor, admin, evaluator e reviewer.
+        </p>
+      </div>
+    </div>
+  )
 }

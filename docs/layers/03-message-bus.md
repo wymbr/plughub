@@ -1,5 +1,6 @@
 # Layer 3 — Message Bus
 
+> Última atualização: 2026-05-25 · Estado: Arc 16
 > Spec de referência: v24.0 seções 2.4, 5.4
 > Responsabilidade: backbone de eventos assíncrono — desacopla produtores de consumidores, garante entrega e persistência de eventos da plataforma
 > Implementado por: Apache Kafka (`docker-compose.infra.yml`)
@@ -31,16 +32,34 @@ Para a documentação completa dos tópicos, schemas de eventos, produtores, con
 
 | Tópico | Produtores | Consumidores |
 |---|---|---|
-| `conversations.inbound` | channel-gateway | routing-engine |
-| `conversations.routed` | routing-engine | skill-flow-engine, agentes |
-| `conversations.queued` | routing-engine | routing-engine (monitoramento de fila) |
-| `conversations.events` | mcp-server-plughub (`agent_done`), rules-engine | rules-engine, Evaluation Agent, analytics |
-| `agent.lifecycle` | mcp-server-plughub | routing-engine, agent-registry |
-| `agent.registry.events` | agent-registry | routing-engine |
-| `rules.escalation.events` | rules-engine | routing-engine (Escalation Engine) |
-| `rules.shadow.events` | rules-engine | analytics, MLOps |
+| `conversations.inbound` | channel-gateway | Core, routing-engine |
+| `conversations.routed` | routing-engine | Core, rules-engine |
+| `conversations.queued` | routing-engine | rules-engine |
+| `conversations.abandoned` | routing-engine | Core, rules-engine |
+| `conversations.session_opened/closed` | Core | analytics, LGPD |
+| `conversations.message_sent` | Core | analytics |
+| `conversations.participants` | orchestrator-bridge | analytics-api → ClickHouse |
+| `rules.escalation.events` | rules-engine | routing-engine |
+| `rules.shadow.events` | rules-engine | analytics |
+| `rules.session_tagged` | rules-engine | analytics |
+| `registry.changed` | agent-registry | routing-engine, Core, orchestrator-bridge |
+| `config.changed` | Config API | orchestrator-bridge, routing-engine |
+| `gateway.heartbeat` | channel-gateway | routing-engine |
+| `agent.lifecycle` | mcp-server-plughub | routing-engine, analytics |
+| `agent.done` | routing-engine | rules-engine, analytics |
+| `queue.position_updated` | routing-engine | channel-gateway, analytics |
+| `mcp.audit` | McpInterceptor / proxy sidecar | analytics, LGPD |
+| `sentiment.updated` | ai-gateway | analytics-api |
+| `evaluation.events` | evaluation-api | analytics-api → ClickHouse |
+| `calibration.events` | evaluation-api | analytics-api → ClickHouse |
+| `workflow.events` | workflow-api | skill-flow-worker |
+| `collect.events` | workflow-api | analytics-api, channel-gateway |
+| `journey.events` | workflow-api | analytics-api → ClickHouse |
+| `agent.events` | agentes (via `agent_event` MCP tool) | analytics-api → ClickHouse |
+| `usage.events` | Core, ai-gateway, channel-gateway | usage-aggregator |
+| `events.dead_letter` | skill-flow-worker, analytics-api, orchestrator-bridge | ops/monitoring |
 
-Ver `kafka-eventos.md` para schemas completos e consumer groups.
+Ver `kafka-eventos.md` para schemas completos e consumer groups. Todos os eventos cross-package têm schemas Zod em `@plughub/schemas`.
 
 ---
 
@@ -72,7 +91,7 @@ Kafka Connect materializa em ClickHouse / warehouse externo (assíncrono)
 ```
 Consumer lag no tópico conversations.inbound ou conversations.routed
 ↓ KEDA detecta lag acima do threshold
-↓ escala replicas do Agent Pool horizontalmente
+↓ escala réplicas do Agent Pool horizontalmente
 ↓ lag reduz → KEDA escala para baixo
 ```
 

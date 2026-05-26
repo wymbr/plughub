@@ -1,5 +1,7 @@
 # Módulo: Configuração → Templates de Dashboard
 
+> Última atualização: 2026-05-25 · Estado: Arc 16
+
 > Rota UI: `/dashboards` | Roles: admin (templates); todos os roles (visualização via módulos)
 
 ## O que é
@@ -21,6 +23,10 @@ O módulo de Dashboards permite que administradores criem e gerenciem **template
 └──────────────────────────────────────────────┘
 ```
 
+## DisplayTool registry / `catalog.ts`
+
+Os tipos de card disponíveis são definidos no **DisplayTool registry** — o `ENDPOINT_CATALOG` em `catalog.ts` (`platform-ui`). Cada entrada do catálogo associa um endpoint analytics a um tipo de visualização (`metric_card`, `bar_chart`, `donut`, `line_chart`, etc.) e aos parâmetros aceitos. O backend correspondente vive em `display.py` (analytics-api). O `AddCardModal` lista os cards a partir desse catálogo.
+
 ## Tipos de card
 
 | Tipo | Dados | Visualização |
@@ -29,6 +35,28 @@ O módulo de Dashboards permite que administradores criem e gerenciem **template
 | `timeseries_handle_time` | `/reports/timeseries/handle_time` | Linha de tempo médio de atendimento |
 | `timeseries_score` | `/reports/timeseries/score` | Linha de score de qualidade médio |
 | `pool_status` | `/dashboard/operational` SSE | Status em tempo real dos pools |
+
+### Cards de Journey (Arc 10)
+
+| Card | Tipo | Conteúdo |
+|---|---|---|
+| `journey-active-count` | metric_card | Jornadas ativas |
+| `journey-resolution-rate` | bar_chart | Taxa de resolução por skill_id |
+| `journey-funnel` | donut | Funil de status das jornadas |
+| `journey-median-duration` | bar_chart | Duração mediana por skill_id |
+
+Queries baseadas em `argMax(status, event_time)` sobre `journey_events FINAL`.
+
+### Cards de Agent Business Events (Arc 12)
+
+| Card | Conteúdo |
+|---|---|
+| `agent_event_timeseries` | Série temporal de KPIs de negócio com marcadores de deploy; seletor dinâmico de categoria |
+| `agent_event_summary` | Resumo agregado por categoria |
+
+### Comparação por deploy (Arc 6 Fase 2)
+
+Cards de observabilidade de mudanças usam eventos de deploy como âncoras temporais: gráfico Índice × Tempo com `ReferenceLine` nos deploys, cards de comparação dual-slice (`/reports/quality-comparison`, `/reports/quality-timeseries`, `/reports/deploy-timeline`).
 
 Cada `TimeseriesChart` suporta:
 - **Compact mode** (sparkline + KPI) — para cards pequenos no dashboard

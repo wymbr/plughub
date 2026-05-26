@@ -26,7 +26,9 @@ interface UseAgentWebSocketReturn {
 }
 
 export function useAgentWebSocket(
-  poolId: string | null,
+  poolId:       string | null,
+  userId?:      string | null,
+  maxConcurrent?: number,
 ): UseAgentWebSocketReturn {
   const wsRef        = useRef<WebSocket | null>(null);
   const [status,     setStatus]     = useState<WsStatus>("disconnected");
@@ -45,11 +47,14 @@ export function useAgentWebSocket(
 
     intentionalClose.current = false;
 
-    // Connect with pool only — the server subscribes to session channels
-    // dynamically as conversation.assigned events arrive. We never pass
-    // session_id here because the connection outlives any single session.
+    // Connect with pool + identity params. The server uses user_id to key
+    // the per-user instance (shared across all pools) and max_concurrent to
+    // set the routing capacity. session_id is never sent here because the
+    // connection outlives any single session.
     const params = new URLSearchParams();
     params.set("pool", poolId);
+    if (userId) params.set("user_id", userId);
+    params.set("max_concurrent", String(maxConcurrent ?? 3));
     const url = `${WS_BASE}?${params.toString()}`;
     const ws = new WebSocket(url);
     wsRef.current = ws;
@@ -109,10 +114,10 @@ export function useAgentWebSocket(
       }
       ws.close();
     };
-    // Reconnect only when poolId changes (rare) or after an unexpected drop.
+    // Reconnect only when poolId/userId changes (rare) or after an unexpected drop.
     // Assigning/closing contacts does NOT trigger a reconnect.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [poolId, reconnectCount]);
+  }, [poolId, userId, maxConcurrent, reconnectCount]);
 
   const send = useCallback(
     (text: string, sessionId: string) => {

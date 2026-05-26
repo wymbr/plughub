@@ -14,6 +14,7 @@
  * Bands must be contiguous and cover [-1.0, 1.0] without gaps.
  */
 import React, { useState, useEffect, useCallback } from 'react'
+import { useTranslation } from 'react-i18next'
 import { useNamespace, putConfig, type ConfigEntry } from '../api/config-hooks'
 import Spinner from '@/components/ui/Spinner'
 
@@ -37,16 +38,6 @@ const DEFAULT_BANDS: SentimentBand[] = [
   { level: 3, min: -0.3, max:  0.3 },
   { level: 4, min:  0.3, max:  1.0 },
 ]
-
-// Placeholder labels shown in the editor (display-only, not stored)
-const LEVEL_HINT: Record<number, string> = {
-  1: 'Nível 1 — pior extremo',
-  2: 'Nível 2',
-  3: 'Nível 3',
-  4: 'Nível 4',
-  5: 'Nível 5',
-  6: 'Nível 6 — melhor extremo',
-}
 
 function levelHint(level: number, total: number) {
   if (level === 1) return `Nível ${level} — pior`
@@ -87,6 +78,7 @@ interface Props {
 }
 
 export function SentimentBandsEditor({ tenantId, adminToken }: Props) {
+  const { t } = useTranslation('configPlataforma')
   const { entries, loading, error, reload } = useNamespace(tenantId, 'sentiment')
   const [bands,   setBands]   = useState<SentimentBand[]>(DEFAULT_BANDS)
   const [saving,  setSaving]  = useState(false)
@@ -145,7 +137,7 @@ export function SentimentBandsEditor({ tenantId, adminToken }: Props) {
   const handleSave = useCallback(async () => {
     const err = validateBands(bands)
     if (err) { setSaveErr(err); return }
-    if (!adminToken) { setSaveErr('Admin token obrigatório'); return }
+    if (!adminToken) { setSaveErr(t('sentimentBands.adminRequired')); return }
 
     const sorted = [...bands].sort((a, b) => a.min - b.min).map((b, i) => ({ ...b, level: i + 1 }))
     setSaving(true); setSaveErr(null)
@@ -173,18 +165,14 @@ export function SentimentBandsEditor({ tenantId, adminToken }: Props) {
     <div className="p-6 max-w-xl">
       {/* Header */}
       <div className="flex items-center justify-between mb-1">
-        <h2 className="text-sm font-semibold text-gray-900">Faixas de Sentimento</h2>
+        <h2 className="text-sm font-semibold text-dark">{t('sentimentBands.title')}</h2>
         <div className="flex items-center gap-2">
           {loading && <Spinner />}
-          {error && <span className="text-xs text-red-600">⚠ {error}</span>}
+          {error && <span className="text-xs text-red-text">⚠ {error}</span>}
           <button onClick={reload} className="text-xs text-secondary hover:text-primary">↻</button>
         </div>
       </div>
-      <p className="text-xs text-gray-500 mb-5">
-        Define as faixas numéricas do score de sentimento (-1.0 a +1.0). Os rótulos exibidos
-        para operadores são definidos nos arquivos de idioma — aqui apenas os limites numéricos
-        e o nível interno (1 = pior, {bands.length} = melhor).
-      </p>
+      <p className="text-xs text-muted mb-5">{t('sentimentBands.subtitle')}</p>
 
       {/* Score visual bar */}
       <div className="mb-5">
@@ -201,7 +189,7 @@ export function SentimentBandsEditor({ tenantId, adminToken }: Props) {
             )
           })}
         </div>
-        <div className="flex justify-between text-[10px] text-gray-400 mt-0.5">
+        <div className="flex justify-between text-2xs text-muted-light mt-0.5">
           <span>-1.0</span><span>0</span><span>+1.0</span>
         </div>
       </div>
@@ -209,33 +197,33 @@ export function SentimentBandsEditor({ tenantId, adminToken }: Props) {
       {/* Bands list */}
       <div className="space-y-2 mb-4">
         {[...bands].sort((a, b) => a.min - b.min).map((band, i) => (
-          <div key={i} className="flex items-center gap-3 bg-gray-50 border border-gray-200 rounded px-3 py-2">
+          <div key={i} className="flex items-center gap-3 bg-surface-muted border border-border rounded px-3 py-2">
             <div className="w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold text-white shrink-0"
               style={{ backgroundColor: `hsl(${Math.round((i / (bands.length - 1)) * 120)},70%,45%)` }}>
               {band.level}
             </div>
-            <span className="text-xs text-gray-500 w-28 shrink-0">{levelHint(band.level, bands.length)}</span>
+            <span className="text-xs text-muted w-28 shrink-0">{levelHint(band.level, bands.length)}</span>
             <div className="flex items-center gap-1.5 flex-1">
               <input
                 type="number"
                 min={-1} max={1} step={0.05}
                 value={band.min}
                 onChange={e => updateBand(i, 'min', e.target.value)}
-                className="w-16 text-xs font-mono px-2 py-1 border border-gray-300 rounded focus:outline-none focus:border-blue-400"
+                className="w-16 text-xs font-mono px-2 py-1 border border-border-strong rounded focus:outline-none focus:border-primary"
               />
-              <span className="text-gray-400 text-xs">→</span>
+              <span className="text-muted-light text-xs">→</span>
               <input
                 type="number"
                 min={-1} max={1} step={0.05}
                 value={band.max}
                 onChange={e => updateBand(i, 'max', e.target.value)}
-                className="w-16 text-xs font-mono px-2 py-1 border border-gray-300 rounded focus:outline-none focus:border-blue-400"
+                className="w-16 text-xs font-mono px-2 py-1 border border-border-strong rounded focus:outline-none focus:border-primary"
               />
             </div>
             {bands.length > 2 && (
               <button
                 onClick={() => removeBand(i)}
-                className="text-xs text-red-400 hover:text-red-600 transition-colors shrink-0"
+                className="text-xs text-red hover:text-red-text transition-colors shrink-0"
                 title="Remover faixa"
               >✕</button>
             )}
@@ -247,7 +235,7 @@ export function SentimentBandsEditor({ tenantId, adminToken }: Props) {
       {bands.length < 6 && (
         <button
           onClick={addBand}
-          className="text-xs border border-dashed border-gray-300 rounded px-3 py-1.5 text-gray-500 hover:border-gray-400 hover:text-gray-700 transition-colors mb-4 w-full"
+          className="text-xs border border-dashed border-border-strong rounded px-3 py-1.5 text-muted hover:border-border hover:text-dark transition-colors mb-4 w-full"
         >
           + Adicionar faixa
         </button>
@@ -255,7 +243,7 @@ export function SentimentBandsEditor({ tenantId, adminToken }: Props) {
 
       {/* Validation error */}
       {(validationError || saveErr) && (
-        <p className="text-xs text-red-600 mb-3">{validationError ?? saveErr}</p>
+        <p className="text-xs text-red-text mb-3">{validationError ?? saveErr}</p>
       )}
 
       {/* Actions */}
@@ -263,18 +251,18 @@ export function SentimentBandsEditor({ tenantId, adminToken }: Props) {
         <button
           onClick={handleSave}
           disabled={saving || !!validationError || !adminToken || !dirty}
-          className="px-3 py-1.5 rounded text-xs font-semibold bg-primary text-white disabled:opacity-40 hover:bg-blue-800 transition-colors"
+          className="px-3 py-1.5 rounded text-xs font-semibold bg-primary text-white disabled:opacity-40 hover:bg-primary-dark transition-colors"
         >
-          {saving ? 'Salvando…' : 'Salvar'}
+          {saving ? t('namespace.saving') : t('namespace.save')}
         </button>
         <button
           onClick={handleReset}
-          className="px-3 py-1.5 rounded text-xs border border-gray-300 text-gray-600 hover:text-gray-900 transition-colors"
+          className="px-3 py-1.5 rounded text-xs border border-border-strong text-muted hover:text-dark transition-colors"
         >
           ↺ Restaurar padrões
         </button>
         {!adminToken && (
-          <span className="text-xs text-amber-600 self-center">⚠ Defina o admin token para salvar</span>
+          <span className="text-xs text-warning self-center">{t('namespace.adminRequiredHint')}</span>
         )}
       </div>
     </div>

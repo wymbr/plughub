@@ -20,7 +20,7 @@ const COLORS = [
 function Skeleton() {
   return (
     <div className="h-full flex items-center justify-center animate-pulse">
-      <svg viewBox="0 0 200 80" className="w-3/4 h-1/2 text-gray-200">
+      <svg viewBox="0 0 200 80" className="w-3/4 h-1/2 text-border">
         <polyline
           points="0,60 30,40 60,55 90,25 120,45 150,30 200,50"
           fill="none"
@@ -42,7 +42,7 @@ export const LineChartTool: React.FC<DisplayToolProps<LineChartData>> = ({
 
   if (error) {
     return (
-      <div className="h-full flex items-center justify-center text-xs text-red-400">
+      <div className="h-full flex items-center justify-center text-xs text-red">
         Indisponível
       </div>
     )

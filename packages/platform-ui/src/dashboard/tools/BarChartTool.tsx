@@ -24,7 +24,7 @@ function Skeleton() {
       {[60, 80, 45, 90, 70, 55, 85].map((h, i) => (
         <div
           key={i}
-          className="flex-1 rounded-t bg-gray-200"
+          className="flex-1 rounded-t bg-border"
           style={{ height: `${h}%` }}
         />
       ))}
@@ -42,7 +42,7 @@ export const BarChartTool: React.FC<DisplayToolProps<BarChartData>> = ({
 
   if (error) {
     return (
-      <div className="h-full flex items-center justify-center text-xs text-red-400">
+      <div className="h-full flex items-center justify-center text-xs text-red">
         Indisponível
       </div>
     )

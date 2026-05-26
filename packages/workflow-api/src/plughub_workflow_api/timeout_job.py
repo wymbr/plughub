@@ -72,6 +72,7 @@ async def _scan_once(app: Any) -> None:
                 current_step=instance.get("current_step"),
                 suspended_at=instance.get("suspended_at"),
                 next_open=None,   # future: query calendar-api next_open_slot
+                journey_id=instance.get("journey_id"),
             )
             logger.info(
                 "Instance %s (flow=%s) timed out at step '%s'",
@@ -141,6 +142,7 @@ async def _scan_once(app: Any) -> None:
                         resumed_from=instance.get("current_step") or "unknown",
                         next_step="__pending_engine__",
                         wait_duration_ms=wait_ms,
+                        journey_id=instance.get("journey_id"),
                     )
                     logger.info(
                         "Collect %s timed out — resumed instance %s with decision=timeout",

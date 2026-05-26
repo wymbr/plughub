@@ -1,5 +1,7 @@
 # Masked Input — Captura Segura de Dados Sensíveis
 
+> Última atualização: 2026-05-25 · Estado: Arc 16
+
 > Spec de referência: v1.0 · Módulos: `skill-flow-engine`, `mcp-server-plughub`, `channel-gateway`, `@plughub/schemas`
 
 ---

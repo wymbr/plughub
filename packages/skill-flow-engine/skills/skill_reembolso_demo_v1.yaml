@@ -20,6 +20,7 @@ steps:
     type: notify
     message: "📋 Solicitação de reembolso registrada. Iniciando análise do caso..."
     on_success: analisar_caso
+    on_failure: analisar_caso
 
   - id: analisar_caso
     type: suspend
@@ -50,9 +51,13 @@ steps:
 
   - id: coletar_informacoes
     type: collect
+    target:
+      type: customer
+      id: "@ctx.journey.customer_id"
     requires: [text]
-    message: "📎 Para prosseguir com o reembolso do pedido @ctx.journey.numero_pedido, precisamos de informações adicionais. Por favor, envie o comprovante de compra."
+    prompt: "📎 Para prosseguir com o reembolso do pedido {{@ctx.journey.numero_pedido}}, precisamos de informações adicionais. Por favor, envie o comprovante de compra."
     timeout_hours: 48
+    output_as: informacoes_adicionais
     on_response:
       next: analisar_caso
     on_timeout:
@@ -62,6 +67,7 @@ steps:
     type: notify
     message: "✅ Reembolso aprovado! O valor será creditado em sua conta em até 5 dias úteis."
     on_success: aguardar_pagamento
+    on_failure: aguardar_pagamento
 
   - id: aguardar_pagamento
     type: suspend
@@ -75,9 +81,13 @@ steps:
 
   - id: confirmar_pagamento
     type: collect
+    target:
+      type: customer
+      id: "@ctx.journey.customer_id"
     requires: [text]
-    message: "💰 O reembolso do pedido @ctx.journey.numero_pedido foi processado. Você já recebeu o crédito em sua conta?"
+    prompt: "💰 O reembolso do pedido {{@ctx.journey.numero_pedido}} foi processado. Você já recebeu o crédito em sua conta?"
     timeout_hours: 24
+    output_as: confirmacao_pagamento
     on_response:
       next: encerrar_sucesso
     on_timeout:
@@ -87,16 +97,19 @@ steps:
     type: notify
     message: "❌ Reembolso não aprovado. O caso não atende aos critérios da política de devolução."
     on_success: encerrar_rejeitado
+    on_failure: encerrar_rejeitado
 
   - id: escalar_analise
     type: notify
     message: "⚠️ Prazo de análise excedido. Caso escalado para supervisor."
     on_success: encerrar_timeout
+    on_failure: encerrar_timeout
 
   - id: timeout_cliente
     type: notify
     message: "⏳ Informações não enviadas no prazo. Processo encerrado."
     on_success: encerrar_timeout
+    on_failure: encerrar_timeout
 
   - id: encerrar_sucesso
     type: complete
@@ -108,4 +121,4 @@ steps:
 
   - id: encerrar_timeout
     type: complete
-    outcome: abandoned
+    outcome: failed

@@ -36,14 +36,17 @@ entry: verificar_origem
 steps:
 
   # ── Verificar se o cliente está conectado ─────────────────────────────────
-  # Se close_origin é "client_disconnect", o cliente já saiu — NPS não faz
+  # Se close_origin é "customer_disconnect", o cliente já saiu — NPS não faz
   # sentido. Encerra sem interação.
+  # Nota: com nps_on_disconnect=skip no pool YAML, o bridge já evita despachar
+  # este agente quando o cliente desconecta; este choice é uma segunda linha de
+  # defesa para o caso de nps_on_disconnect=timeout (ou campo ausente).
   - id: verificar_origem
     type: choice
     conditions:
       - field: "@ctx.session.close_origin"
         operator: eq
-        value: "client_disconnect"
+        value: "customer_disconnect"
         next: encerrar_sem_pesquisa
     default: agradecimento
 

@@ -146,9 +146,9 @@ function Modal({
   return (
     <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
       <div className="bg-white rounded-xl shadow-xl w-full max-w-xl max-h-[90vh] flex flex-col">
-        <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
-          <h2 className="text-base font-semibold text-gray-800">{title}</h2>
-          <button onClick={onClose} className="text-gray-400 hover:text-gray-600 text-xl leading-none">×</button>
+        <div className="flex items-center justify-between px-6 py-4 border-b border-border">
+          <h2 className="text-base font-semibold text-dark">{title}</h2>
+          <button onClick={onClose} className="text-muted-light hover:text-muted text-xl leading-none">×</button>
         </div>
         <div className="flex-1 overflow-y-auto px-6 py-4">{children}</div>
       </div>
@@ -163,12 +163,12 @@ function ConfirmDelete({
   return (
     <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
       <div className="bg-white rounded-xl shadow-xl p-6 w-full max-w-sm">
-        <p className="text-sm text-gray-700 mb-4">
+        <p className="text-sm text-dark mb-4">
           {t('messages.deleteConfirm', { label })}
         </p>
         <div className="flex gap-2 justify-end">
-          <button onClick={onCancel} className="px-4 py-2 text-sm text-gray-600 hover:text-gray-800">{t('calendar.cancel')}</button>
-          <button onClick={onConfirm} className="px-4 py-2 text-sm bg-red-600 text-white rounded-lg hover:bg-red-700">{t('calendar.delete')}</button>
+          <button onClick={onCancel} className="px-4 py-2 text-sm text-muted hover:text-dark">{t('calendar.cancel')}</button>
+          <button onClick={onConfirm} className="px-4 py-2 text-sm bg-red text-white rounded-lg hover:bg-red-text">{t('calendar.delete')}</button>
         </div>
       </div>
     </div>
@@ -237,29 +237,29 @@ function WeeklyEditor({ schedule, onChange }: WeeklyEditorProps) {
         const entry  = dayEntry(day)
         const active = !!entry
         return (
-          <div key={day} className={`rounded-lg border ${active ? 'bg-indigo-50 border-indigo-200' : 'bg-gray-50 border-transparent'}`}>
+          <div key={day} className={`rounded-lg border ${active ? 'bg-primary-light border-primary/30' : 'bg-surface-muted border-transparent'}`}>
             {/* Day header row */}
             <div className="flex items-center gap-3 px-3 py-2">
               <button
                 type="button"
                 onClick={() => toggle(day)}
                 className={`w-5 h-5 rounded border-2 flex-shrink-0 flex items-center justify-center
-                  ${active ? 'bg-indigo-500 border-indigo-500 text-white' : 'border-gray-300'}`}
+                  ${active ? 'bg-primary border-primary text-white' : 'border-border-strong'}`}
               >
                 {active && <span className="text-xs">✓</span>}
               </button>
-              <span className={`w-8 text-sm font-medium ${active ? 'text-gray-800' : 'text-gray-400'}`}>
+              <span className={`w-8 text-sm font-medium ${active ? 'text-dark' : 'text-muted-light'}`}>
                 {DAY_LABELS[day]}
               </span>
               {!active && (
-                <span className="text-xs text-gray-400 italic">{t('calendar.closed')}</span>
+                <span className="text-xs text-muted-light italic">{t('calendar.closed')}</span>
               )}
               {active && entry.slots.length < 4 && (
                 <button
                   type="button"
                   onClick={() => addInterval(day)}
                   title="Adicionar intervalo"
-                  className="ml-auto text-xs text-indigo-500 hover:text-indigo-700 px-2 py-0.5 rounded hover:bg-indigo-100 transition-colors"
+                  className="ml-auto text-xs text-primary hover:text-primary-dark px-2 py-0.5 rounded hover:bg-primary-light transition-colors"
                 >
                   + intervalo
                 </button>
@@ -273,21 +273,21 @@ function WeeklyEditor({ schedule, onChange }: WeeklyEditorProps) {
                   type="time"
                   value={sl.open}
                   onChange={e => updateSlot(day, idx, 'open', e.target.value)}
-                  className="text-sm border border-gray-300 rounded px-2 py-0.5 focus:outline-none focus:ring-1 focus:ring-indigo-400 bg-white"
+                  className="text-sm border border-border-strong rounded px-2 py-0.5 focus:outline-none focus:ring-1 focus:ring-primary/40 bg-white"
                 />
-                <span className="text-xs text-gray-400">{t('messages.until')}</span>
+                <span className="text-xs text-muted-light">{t('messages.until')}</span>
                 <input
                   type="time"
                   value={sl.close}
                   onChange={e => updateSlot(day, idx, 'close', e.target.value)}
-                  className="text-sm border border-gray-300 rounded px-2 py-0.5 focus:outline-none focus:ring-1 focus:ring-indigo-400 bg-white"
+                  className="text-sm border border-border-strong rounded px-2 py-0.5 focus:outline-none focus:ring-1 focus:ring-primary/40 bg-white"
                 />
                 {entry.slots.length > 1 && (
                   <button
                     type="button"
                     onClick={() => removeInterval(day, idx)}
                     title="Remover intervalo"
-                    className="text-gray-400 hover:text-red-500 text-sm leading-none transition-colors"
+                    className="text-muted-light hover:text-red text-sm leading-none transition-colors"
                   >
                     ×
                   </button>
@@ -332,18 +332,18 @@ function HolidaysEditor({ holidays, onChange }: HolidaysEditorProps) {
     <div className="space-y-3">
       <div className="max-h-40 overflow-y-auto space-y-1">
         {holidays.length === 0 && (
-          <p className="text-xs text-gray-400 italic">{t('messages.noHolidaysAdded')}</p>
+          <p className="text-xs text-muted-light italic">{t('messages.noHolidaysAdded')}</p>
         )}
         {holidays.map((h, i) => (
-          <div key={i} className="flex items-center gap-2 px-2 py-1 bg-gray-50 rounded text-sm">
-            <span className="text-gray-500 font-mono text-xs w-20 flex-shrink-0">{h.date}</span>
+          <div key={i} className="flex items-center gap-2 px-2 py-1 bg-surface-muted rounded text-sm">
+            <span className="text-muted font-mono text-xs w-20 flex-shrink-0">{h.date}</span>
             {isRecurring(h.date) && (
-              <span className="text-[10px] bg-indigo-100 text-indigo-600 px-1.5 py-0 rounded-full flex-shrink-0">
+              <span className="text-2xs bg-primary-light text-primary px-1.5 py-0 rounded-full flex-shrink-0">
                 ↺
               </span>
             )}
-            <span className="flex-1 text-gray-800 truncate">{h.name}</span>
-            <button onClick={() => remove(i)} className="text-red-400 hover:text-red-600 text-xs flex-shrink-0">✕</button>
+            <span className="flex-1 text-dark truncate">{h.name}</span>
+            <button onClick={() => remove(i)} className="text-red hover:text-red-text text-xs flex-shrink-0">✕</button>
           </div>
         ))}
       </div>
@@ -353,7 +353,7 @@ function HolidaysEditor({ holidays, onChange }: HolidaysEditorProps) {
             type="date"
             value={newDate}
             onChange={e => setNewDate(e.target.value)}
-            className="text-sm border border-gray-300 rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-indigo-400"
+            className="text-sm border border-border-strong rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-primary/40"
           />
           <input
             type="text"
@@ -361,12 +361,12 @@ function HolidaysEditor({ holidays, onChange }: HolidaysEditorProps) {
             value={newName}
             onChange={e => setNewName(e.target.value)}
             onKeyDown={e => e.key === 'Enter' && add()}
-            className="flex-1 text-sm border border-gray-300 rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-indigo-400"
+            className="flex-1 text-sm border border-border-strong rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-primary/40"
           />
           <button
             type="button"
             onClick={add}
-            className="px-3 py-1 text-sm bg-indigo-500 text-white rounded hover:bg-indigo-600"
+            className="px-3 py-1 text-sm bg-primary text-white rounded hover:bg-primary-dark"
           >
             +
           </button>
@@ -376,10 +376,10 @@ function HolidaysEditor({ holidays, onChange }: HolidaysEditorProps) {
             type="checkbox"
             checked={recurring}
             onChange={e => setRecurring(e.target.checked)}
-            className="rounded border-gray-300 text-indigo-500 focus:ring-indigo-400"
+            className="rounded border-border-strong text-primary focus:ring-primary/40"
           />
-          <span className="text-xs text-gray-600">
-            {t('holidaySet.recurringLabel')} <span className="text-gray-400 font-mono">(MM-DD)</span>
+          <span className="text-xs text-muted">
+            {t('holidaySet.recurringLabel')} <span className="text-muted-light font-mono">(MM-DD)</span>
           </span>
         </label>
       </div>
@@ -428,17 +428,17 @@ function ExceptionsEditor({ exceptions, onChange }: ExceptionsEditorProps) {
       {/* Existing exceptions list */}
       <div className="max-h-48 overflow-y-auto space-y-1">
         {exceptions.length === 0 && (
-          <p className="text-xs text-gray-400 italic">{t('exceptions.noItems')}</p>
+          <p className="text-xs text-muted-light italic">{t('exceptions.noItems')}</p>
         )}
         {exceptions.map((exc, i) => (
-          <div key={i} className="flex items-start gap-2 px-2 py-1.5 bg-orange-50 border border-orange-100 rounded text-sm">
-            <span className="font-mono text-xs text-gray-600 w-24 flex-shrink-0 pt-0.5">{exc.date}</span>
+          <div key={i} className="flex items-start gap-2 px-2 py-1.5 bg-contested-light border border-contested/20 rounded text-sm">
+            <span className="font-mono text-xs text-muted w-24 flex-shrink-0 pt-0.5">{exc.date}</span>
             <div className="flex-1 min-w-0">
-              {exc.label && <p className="text-xs text-gray-700 truncate mb-0.5">{exc.label}</p>}
+              {exc.label && <p className="text-xs text-dark truncate mb-0.5">{exc.label}</p>}
               {exc.override_slots === null ? (
-                <span className="text-xs text-red-600 font-medium">{t('exceptions.closedAllDay')}</span>
+                <span className="text-xs text-red-text font-medium">{t('exceptions.closedAllDay')}</span>
               ) : (
-                <span className="text-xs text-orange-700">
+                <span className="text-xs text-contested-text">
                   {exc.override_slots.map(s => `${s.open}–${s.close}`).join(', ')}
                 </span>
               )}
@@ -446,21 +446,21 @@ function ExceptionsEditor({ exceptions, onChange }: ExceptionsEditorProps) {
             <button
               type="button"
               onClick={() => remove(i)}
-              className="text-red-400 hover:text-red-600 text-xs flex-shrink-0 pt-0.5"
+              className="text-red hover:text-red-text text-xs flex-shrink-0 pt-0.5"
             >✕</button>
           </div>
         ))}
       </div>
 
       {/* Add new exception */}
-      <div className="border border-dashed border-orange-200 rounded-lg p-3 space-y-2 bg-orange-50/40">
+      <div className="border border-dashed border-contested/30 rounded-lg p-3 space-y-2 bg-contested-light/40">
         {/* Date + label row */}
         <div className="flex gap-2">
           <input
             type="date"
             value={newDate}
             onChange={e => setNewDate(e.target.value)}
-            className="text-sm border border-gray-300 rounded px-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-orange-400 bg-white"
+            className="text-sm border border-border-strong rounded px-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-primary/40 bg-white"
           />
           <input
             type="text"
@@ -468,7 +468,7 @@ function ExceptionsEditor({ exceptions, onChange }: ExceptionsEditorProps) {
             value={newLabel}
             onChange={e => setNewLabel(e.target.value)}
             onKeyDown={e => e.key === 'Enter' && add()}
-            className="flex-1 text-sm border border-gray-300 rounded px-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-orange-400 bg-white"
+            className="flex-1 text-sm border border-border-strong rounded px-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-primary/40 bg-white"
           />
         </div>
 
@@ -479,18 +479,18 @@ function ExceptionsEditor({ exceptions, onChange }: ExceptionsEditorProps) {
               type="radio"
               checked={closed}
               onChange={() => setClosed(true)}
-              className="text-red-500 focus:ring-red-400"
+              className="text-red focus:ring-red/40"
             />
-            <span className="text-xs text-gray-700">{t('exceptions.closedAllDay')}</span>
+            <span className="text-xs text-dark">{t('exceptions.closedAllDay')}</span>
           </label>
           <label className="flex items-center gap-2 cursor-pointer">
             <input
               type="radio"
               checked={!closed}
               onChange={() => setClosed(false)}
-              className="text-orange-500 focus:ring-orange-400"
+              className="text-contested focus:ring-contested/40"
             />
-            <span className="text-xs text-gray-700">{t('exceptions.customHours')}</span>
+            <span className="text-xs text-dark">{t('exceptions.customHours')}</span>
           </label>
         </div>
 
@@ -503,20 +503,20 @@ function ExceptionsEditor({ exceptions, onChange }: ExceptionsEditorProps) {
                   type="time"
                   value={sl.open}
                   onChange={e => updateNewSlot(idx, 'open', e.target.value)}
-                  className="text-sm border border-gray-300 rounded px-2 py-1 bg-white focus:outline-none focus:ring-1 focus:ring-orange-400"
+                  className="text-sm border border-border-strong rounded px-2 py-1 bg-white focus:outline-none focus:ring-1 focus:ring-primary/40"
                 />
-                <span className="text-xs text-gray-400">{t('messages.until')}</span>
+                <span className="text-xs text-muted-light">{t('messages.until')}</span>
                 <input
                   type="time"
                   value={sl.close}
                   onChange={e => updateNewSlot(idx, 'close', e.target.value)}
-                  className="text-sm border border-gray-300 rounded px-2 py-1 bg-white focus:outline-none focus:ring-1 focus:ring-orange-400"
+                  className="text-sm border border-border-strong rounded px-2 py-1 bg-white focus:outline-none focus:ring-1 focus:ring-primary/40"
                 />
                 {newSlots.length > 1 && (
                   <button
                     type="button"
                     onClick={() => removeNewSlot(idx)}
-                    className="text-gray-400 hover:text-red-500 text-sm leading-none"
+                    className="text-muted-light hover:text-red text-sm leading-none"
                   >×</button>
                 )}
               </div>
@@ -525,7 +525,7 @@ function ExceptionsEditor({ exceptions, onChange }: ExceptionsEditorProps) {
               <button
                 type="button"
                 onClick={addNewSlot}
-                className="text-xs text-orange-600 hover:text-orange-800 mt-0.5"
+                className="text-xs text-contested hover:text-contested-text mt-0.5"
               >
                 + intervalo
               </button>
@@ -537,7 +537,7 @@ function ExceptionsEditor({ exceptions, onChange }: ExceptionsEditorProps) {
           type="button"
           onClick={add}
           disabled={!newDate}
-          className="w-full px-3 py-1.5 text-xs bg-orange-500 text-white rounded-lg hover:bg-orange-600 disabled:opacity-50 transition-colors"
+          className="w-full px-3 py-1.5 text-xs bg-contested text-white rounded-lg hover:bg-contested-text disabled:opacity-50 transition-colors"
         >
           {t('exceptions.addBtn')}
         </button>
@@ -550,9 +550,9 @@ function ExceptionsEditor({ exceptions, onChange }: ExceptionsEditorProps) {
 // Tab: Calendários
 // ═══════════════════════════════════════════════════════════════════════════════
 
-interface CalendarsTabProps { holidaySets: HolidaySet[] }
+interface CalendarsTabProps { holidaySets: HolidaySet[]; onGoToHolidaySets: () => void }
 
-function CalendarsTab({ holidaySets }: CalendarsTabProps) {
+function CalendarsTab({ holidaySets, onGoToHolidaySets }: CalendarsTabProps) {
   const { t } = useTranslation('calendars')
   const { tenantId } = useAuth()
   const calApi = makeCalApi(tenantId)
@@ -678,19 +678,19 @@ function CalendarsTab({ holidaySets }: CalendarsTabProps) {
   return (
     <div className="p-4 space-y-4">
       <div className="flex items-center justify-between">
-        <p className="text-sm text-gray-500">
+        <p className="text-sm text-muted">
           {t('calendar.info')}
         </p>
         <button
           onClick={openCreate}
-          className="px-4 py-2 text-sm bg-primary text-white rounded-lg hover:bg-blue-800 transition-colors"
+          className="px-4 py-2 text-sm bg-primary text-white rounded-lg hover:bg-primary-dark transition-colors"
         >
           + {t('calendar.new')}
         </button>
       </div>
 
       {loading && <div className="flex justify-center py-8"><Spinner /></div>}
-      {error   && <p className="text-sm text-red-600">{error}</p>}
+      {error   && <p className="text-sm text-red-text">{error}</p>}
 
       {!loading && calendars.length === 0 && (
         <EmptyState
@@ -704,30 +704,30 @@ function CalendarsTab({ holidaySets }: CalendarsTabProps) {
         <div className="space-y-2">
           {calendars.map(c => (
             <div key={c.id}
-              className="flex items-start gap-3 px-4 py-3 bg-white border border-gray-200 rounded-xl hover:border-indigo-200 transition-colors">
+              className="flex items-start gap-3 px-4 py-3 bg-white border border-border rounded-xl hover:border-primary/30 transition-colors">
               <div className="flex-1 min-w-0">
-                <p className="text-sm font-semibold text-gray-800">{c.name}</p>
-                {c.description && <p className="text-xs text-gray-500 mt-0.5">{c.description}</p>}
+                <p className="text-sm font-semibold text-dark">{c.name}</p>
+                {c.description && <p className="text-xs text-muted mt-0.5">{c.description}</p>}
                 <div className="flex items-center gap-3 mt-1.5 flex-wrap">
-                  <span className="text-[11px] bg-gray-100 text-gray-600 px-2 py-0.5 rounded-full">
+                  <span className="text-xs bg-surface-alt text-muted px-2 py-0.5 rounded-full">
                     🌍 {c.timezone}
                   </span>
                   {c.always_open ? (
-                    <span className="text-[11px] bg-indigo-600 text-white px-2 py-0.5 rounded-full font-medium">
+                    <span className="text-xs bg-primary text-white px-2 py-0.5 rounded-full font-medium">
                       ⚡ 24×7
                     </span>
                   ) : (
-                    <span className="text-[11px] bg-indigo-50 text-indigo-700 px-2 py-0.5 rounded-full truncate max-w-xs">
+                    <span className="text-xs bg-primary-light text-primary px-2 py-0.5 rounded-full truncate max-w-xs">
                       📅 {scheduleLabel(c)}
                     </span>
                   )}
                   {c.holiday_set_ids.length > 0 && (
-                    <span className="text-[11px] bg-amber-50 text-amber-700 px-2 py-0.5 rounded-full">
+                    <span className="text-xs bg-warning-light text-warning-text px-2 py-0.5 rounded-full">
                       🏖️ {c.holiday_set_ids.length} conj. feriados
                     </span>
                   )}
                   {(c.exceptions ?? []).length > 0 && (
-                    <span className="text-[11px] bg-orange-50 text-orange-700 px-2 py-0.5 rounded-full">
+                    <span className="text-xs bg-contested-light text-contested-text px-2 py-0.5 rounded-full">
                       ⚠️ {c.exceptions.length} {c.exceptions.length === 1 ? t('exceptions.count', { count: c.exceptions.length }) : t('exceptions.countPlural', { count: c.exceptions.length })}
                     </span>
                   )}
@@ -735,11 +735,11 @@ function CalendarsTab({ holidaySets }: CalendarsTabProps) {
               </div>
               <div className="flex gap-1 flex-shrink-0">
                 <button onClick={() => openEdit(c)}
-                  className="px-3 py-1.5 text-xs text-indigo-600 hover:bg-indigo-50 rounded-lg transition-colors">
+                  className="px-3 py-1.5 text-xs text-primary hover:bg-primary-light rounded-lg transition-colors">
                   {t('calendar.edit')}
                 </button>
                 <button onClick={() => setDelTarget(c)}
-                  className="px-3 py-1.5 text-xs text-red-500 hover:bg-red-50 rounded-lg transition-colors">
+                  className="px-3 py-1.5 text-xs text-red hover:bg-red-light rounded-lg transition-colors">
                   {t('calendar.delete')}
                 </button>
               </div>
@@ -752,40 +752,40 @@ function CalendarsTab({ holidaySets }: CalendarsTabProps) {
         <Modal title={editing ? t('calendar.editTitle', { name: editing.name }) : t('calendar.new')} onClose={() => setShowForm(false)}>
           <form onSubmit={submit} className="space-y-4">
             <div>
-              <label className="block text-xs font-medium text-gray-700 mb-1">{t('calendar.name')}</label>
+              <label className="block text-xs font-medium text-dark mb-1">{t('calendar.name')}</label>
               <input
                 required
                 value={fName}
                 onChange={e => setFName(e.target.value)}
                 placeholder={t('calendar.namePlaceholder')}
-                className="w-full text-sm border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-indigo-400"
+                className="w-full text-sm border border-border-strong rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary/40"
               />
             </div>
             <div>
-              <label className="block text-xs font-medium text-gray-700 mb-1">{t('calendar.description')}</label>
+              <label className="block text-xs font-medium text-dark mb-1">{t('calendar.description')}</label>
               <input
                 value={fDesc}
                 onChange={e => setFDesc(e.target.value)}
                 placeholder={t('calendar.descPlaceholder')}
-                className="w-full text-sm border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-indigo-400"
+                className="w-full text-sm border border-border-strong rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary/40"
               />
             </div>
             <div>
-              <label className="block text-xs font-medium text-gray-700 mb-1">{t('calendar.timezone')}</label>
+              <label className="block text-xs font-medium text-dark mb-1">{t('calendar.timezone')}</label>
               <select
                 value={fTz}
                 onChange={e => setFTz(e.target.value)}
-                className="w-full text-sm border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-indigo-400"
+                className="w-full text-sm border border-border-strong rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary/40"
               >
                 {TIMEZONES.map(tz => <option key={tz} value={tz}>{tz}</option>)}
               </select>
             </div>
 
             {/* 24x7 toggle */}
-            <div className="flex items-center justify-between px-3 py-2.5 bg-indigo-50 rounded-lg border border-indigo-100">
+            <div className="flex items-center justify-between px-3 py-2.5 bg-primary-light rounded-lg border border-primary/20">
               <div>
-                <p className="text-sm font-medium text-indigo-800">Funcionamento 24×7</p>
-                <p className="text-xs text-indigo-600 mt-0.5">
+                <p className="text-sm font-medium text-primary-dark">Funcionamento 24×7</p>
+                <p className="text-xs text-primary mt-0.5">
                   Sempre aberto — feriados e exceções ainda se aplicam
                 </p>
               </div>
@@ -793,7 +793,7 @@ function CalendarsTab({ holidaySets }: CalendarsTabProps) {
                 type="button"
                 onClick={() => setFAlwaysOpen(v => !v)}
                 className={`relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full transition-colors duration-200 ease-in-out focus:outline-none ${
-                  fAlwaysOpen ? 'bg-indigo-600' : 'bg-gray-300'
+                  fAlwaysOpen ? 'bg-primary' : 'bg-border-strong'
                 }`}
               >
                 <span className={`inline-block h-5 w-5 transform rounded-full bg-white shadow transition duration-200 ease-in-out mt-0.5 ${
@@ -804,58 +804,73 @@ function CalendarsTab({ holidaySets }: CalendarsTabProps) {
 
             {!fAlwaysOpen && (
               <div>
-                <label className="block text-xs font-medium text-gray-700 mb-2">{t('calendar.schedule')}</label>
+                <label className="block text-xs font-medium text-dark mb-2">{t('calendar.schedule')}</label>
                 <WeeklyEditor schedule={fSched} onChange={setFSched} />
               </div>
             )}
 
-            {holidaySets.length > 0 && (
-              <div>
-                <label className="block text-xs font-medium text-gray-700 mb-2">{t('calendar.holidaySets')}</label>
-                <div className="space-y-1 max-h-36 overflow-y-auto">
-                  {holidaySets.map(hs => (
-                    <label key={hs.id} className="flex items-center gap-2 cursor-pointer px-2 py-1 rounded hover:bg-gray-50">
-                      <input
-                        type="checkbox"
-                        checked={fHsIds.includes(hs.id)}
-                        onChange={() => toggleHolidaySet(hs.id)}
-                        className="rounded border-gray-300 text-indigo-500 focus:ring-indigo-400"
-                      />
-                      <span className="text-sm text-gray-700">{hs.name}</span>
-                      {hs.year && <span className="text-xs text-gray-400">({hs.year})</span>}
-                    </label>
-                  ))}
+            <div>
+              <label className="block text-xs font-medium text-dark mb-2">{t('calendar.holidaySets')}</label>
+              {holidaySets.length === 0 ? (
+                <div className="px-3 py-2.5 bg-surface-muted border border-border border-dashed rounded-lg flex items-center justify-between gap-3">
+                  <p className="text-xs text-muted-light">
+                    Nenhum template de feriado cadastrado.
+                  </p>
+                  <button
+                    type="button"
+                    onClick={onGoToHolidaySets}
+                    className="shrink-0 text-xs text-primary font-medium hover:underline"
+                  >
+                    Criar na aba Feriados →
+                  </button>
                 </div>
-                {conflictDates.length > 0 && (
-                  <div className="mt-2 px-3 py-2 bg-amber-50 border border-amber-200 rounded-lg">
-                    <p className="text-xs font-medium text-amber-700">
-                      ⚠️ {t('calendar.holidayConflict', { count: conflictDates.length })}
-                    </p>
-                    <p className="text-[11px] text-amber-600 mt-0.5 font-mono">
-                      {conflictDates.slice(0, 5).join(', ')}{conflictDates.length > 5 ? ` +${conflictDates.length - 5}` : ''}
-                    </p>
-                    <p className="text-[11px] text-amber-500 mt-0.5">{t('calendar.holidayConflictHint')}</p>
+              ) : (
+                <>
+                  <div className="space-y-1 max-h-36 overflow-y-auto">
+                    {holidaySets.map(hs => (
+                      <label key={hs.id} className="flex items-center gap-2 cursor-pointer px-2 py-1 rounded hover:bg-surface-muted">
+                        <input
+                          type="checkbox"
+                          checked={fHsIds.includes(hs.id)}
+                          onChange={() => toggleHolidaySet(hs.id)}
+                          className="rounded border-border-strong text-primary focus:ring-primary/40"
+                        />
+                        <span className="text-sm text-dark">{hs.name}</span>
+                        {hs.year && <span className="text-xs text-muted-light">({hs.year})</span>}
+                      </label>
+                    ))}
                   </div>
-                )}
-              </div>
-            )}
+                  {conflictDates.length > 0 && (
+                    <div className="mt-2 px-3 py-2 bg-warning-light border border-warning/30 rounded-lg">
+                      <p className="text-xs font-medium text-warning-text">
+                        ⚠️ {t('calendar.holidayConflict', { count: conflictDates.length })}
+                      </p>
+                      <p className="text-xs text-warning mt-0.5 font-mono">
+                        {conflictDates.slice(0, 5).join(', ')}{conflictDates.length > 5 ? ` +${conflictDates.length - 5}` : ''}
+                      </p>
+                      <p className="text-xs text-warning mt-0.5">{t('calendar.holidayConflictHint')}</p>
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
 
             {/* Exception days */}
             <div>
               <div className="mb-2">
-                <label className="block text-xs font-medium text-gray-700">{t('exceptions.title')}</label>
-                <p className="text-[11px] text-gray-400 mt-0.5">{t('exceptions.subtitle')}</p>
+                <label className="block text-xs font-medium text-dark">{t('exceptions.title')}</label>
+                <p className="text-xs text-muted-light mt-0.5">{t('exceptions.subtitle')}</p>
               </div>
               <ExceptionsEditor exceptions={fExceptions} onChange={setFExceptions} />
             </div>
 
-            <div className="flex gap-2 justify-end pt-2 border-t border-gray-100">
+            <div className="flex gap-2 justify-end pt-2 border-t border-border">
               <button type="button" onClick={() => setShowForm(false)}
-                className="px-4 py-2 text-sm text-gray-600 hover:text-gray-800">
+                className="px-4 py-2 text-sm text-muted hover:text-dark">
                 {t('calendar.cancel')}
               </button>
               <button type="submit" disabled={saving}
-                className="px-4 py-2 text-sm bg-primary text-white rounded-lg hover:bg-blue-800 disabled:opacity-50">
+                className="px-4 py-2 text-sm bg-primary text-white rounded-lg hover:bg-primary-dark disabled:opacity-50">
                 {saving ? t('calendar.saving') : (editing ? t('calendar.save') : t('calendar.create'))}
               </button>
             </div>
@@ -969,19 +984,19 @@ function HolidaysTab({ onSetsChange }: HolidaysTabProps) {
   return (
     <div className="p-4 space-y-4">
       <div className="flex items-center justify-between">
-        <p className="text-sm text-gray-500">
+        <p className="text-sm text-muted">
           {t('holidaySet.info')}
         </p>
         <button
           onClick={openCreate}
-          className="px-4 py-2 text-sm bg-primary text-white rounded-lg hover:bg-blue-800 transition-colors"
+          className="px-4 py-2 text-sm bg-primary text-white rounded-lg hover:bg-primary-dark transition-colors"
         >
           + {t('holidaySet.new')}
         </button>
       </div>
 
       {loading && <div className="flex justify-center py-8"><Spinner /></div>}
-      {error   && <p className="text-sm text-red-600">{error}</p>}
+      {error   && <p className="text-sm text-red-text">{error}</p>}
 
       {!loading && sets.length === 0 && (
         <EmptyState
@@ -994,52 +1009,52 @@ function HolidaysTab({ onSetsChange }: HolidaysTabProps) {
       {!loading && sets.length > 0 && (
         <div className="space-y-2">
           {sets.map(hs => (
-            <div key={hs.id} className="bg-white border border-gray-200 rounded-xl overflow-hidden hover:border-amber-200 transition-colors">
+            <div key={hs.id} className="bg-white border border-border rounded-xl overflow-hidden hover:border-warning/30 transition-colors">
               <div className="flex items-center gap-3 px-4 py-3">
                 <button
                   onClick={() => setExpanded(expanded === hs.id ? null : hs.id)}
                   className="flex-1 text-left min-w-0"
                 >
                   <div className="flex items-center gap-2">
-                    <span className="text-sm font-semibold text-gray-800">{hs.name}</span>
+                    <span className="text-sm font-semibold text-dark">{hs.name}</span>
                     {hs.year && (
-                      <span className="text-[11px] bg-amber-50 text-amber-700 px-2 py-0.5 rounded-full">
+                      <span className="text-xs bg-warning-light text-warning-text px-2 py-0.5 rounded-full">
                         {hs.year}
                       </span>
                     )}
-                    <span className="text-[11px] text-gray-400">
+                    <span className="text-xs text-muted-light">
                       {t('holidaySet.holidayCount', { count: (hs.holidays ?? []).length })}
                     </span>
                   </div>
                   {hs.description && (
-                    <p className="text-xs text-gray-500 mt-0.5 text-left">{hs.description}</p>
+                    <p className="text-xs text-muted mt-0.5 text-left">{hs.description}</p>
                   )}
                 </button>
                 <div className="flex gap-1 flex-shrink-0">
                   <button onClick={() => openEdit(hs)}
-                    className="px-3 py-1.5 text-xs text-indigo-600 hover:bg-indigo-50 rounded-lg transition-colors">
+                    className="px-3 py-1.5 text-xs text-primary hover:bg-primary-light rounded-lg transition-colors">
                     {t('calendar.edit')}
                   </button>
                   <button onClick={() => setDelTarget(hs)}
-                    className="px-3 py-1.5 text-xs text-red-500 hover:bg-red-50 rounded-lg transition-colors">
+                    className="px-3 py-1.5 text-xs text-red hover:bg-red-light rounded-lg transition-colors">
                     {t('calendar.delete')}
                   </button>
-                  <span className="text-gray-300 text-sm self-center">
+                  <span className="text-border-strong text-sm self-center">
                     {expanded === hs.id ? '▲' : '▼'}
                   </span>
                 </div>
               </div>
 
               {expanded === hs.id && (
-                <div className="border-t border-gray-100 px-4 py-3 bg-gray-50">
+                <div className="border-t border-border px-4 py-3 bg-surface-muted">
                   {(hs.holidays ?? []).length === 0 ? (
-                    <p className="text-xs text-gray-400 italic">{t('holidaySet.noHolidays')}</p>
+                    <p className="text-xs text-muted-light italic">{t('holidaySet.noHolidays')}</p>
                   ) : (
                     <div className="space-y-1">
                       {(hs.holidays ?? []).map((h, i) => (
                         <div key={i} className="flex items-center gap-3 text-sm">
-                          <span className="font-mono text-xs text-gray-500 w-24 flex-shrink-0">{h.date}</span>
-                          <span className="text-gray-700">{h.name}</span>
+                          <span className="font-mono text-xs text-muted w-24 flex-shrink-0">{h.date}</span>
+                          <span className="text-dark">{h.name}</span>
                         </div>
                       ))}
                     </div>
@@ -1056,47 +1071,47 @@ function HolidaysTab({ onSetsChange }: HolidaysTabProps) {
           <form onSubmit={submit} className="space-y-4">
             <div className="grid grid-cols-3 gap-3">
               <div className="col-span-2">
-                <label className="block text-xs font-medium text-gray-700 mb-1">{t('holidaySet.name')}</label>
+                <label className="block text-xs font-medium text-dark mb-1">{t('holidaySet.name')}</label>
                 <input
                   required
                   value={fName}
                   onChange={e => setFName(e.target.value)}
                   placeholder={t('holidaySet.namePlaceholder')}
-                  className="w-full text-sm border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-indigo-400"
+                  className="w-full text-sm border border-border-strong rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary/40"
                 />
               </div>
               <div>
-                <label className="block text-xs font-medium text-gray-700 mb-1">{t('holidaySet.year')}</label>
+                <label className="block text-xs font-medium text-dark mb-1">{t('holidaySet.year')}</label>
                 <input
                   type="number"
                   value={fYear}
                   onChange={e => setFYear(e.target.value)}
                   placeholder={t('holidaySet.yearPlaceholder')}
                   min="2000" max="2100"
-                  className="w-full text-sm border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-indigo-400"
+                  className="w-full text-sm border border-border-strong rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary/40"
                 />
               </div>
             </div>
             <div>
-              <label className="block text-xs font-medium text-gray-700 mb-1">{t('holidaySet.description')}</label>
+              <label className="block text-xs font-medium text-dark mb-1">{t('holidaySet.description')}</label>
               <input
                 value={fDesc}
                 onChange={e => setFDesc(e.target.value)}
                 placeholder={t('holidaySet.descPlaceholder')}
-                className="w-full text-sm border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-indigo-400"
+                className="w-full text-sm border border-border-strong rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary/40"
               />
             </div>
             <div>
-              <label className="block text-xs font-medium text-gray-700 mb-2">{t('holidaySet.holidays')}</label>
+              <label className="block text-xs font-medium text-dark mb-2">{t('holidaySet.holidays')}</label>
               <HolidaysEditor holidays={fHols} onChange={setFHols} />
             </div>
-            <div className="flex gap-2 justify-end pt-2 border-t border-gray-100">
+            <div className="flex gap-2 justify-end pt-2 border-t border-border">
               <button type="button" onClick={() => setShowForm(false)}
-                className="px-4 py-2 text-sm text-gray-600 hover:text-gray-800">
+                className="px-4 py-2 text-sm text-muted hover:text-dark">
                 {t('calendar.cancel')}
               </button>
               <button type="submit" disabled={saving}
-                className="px-4 py-2 text-sm bg-primary text-white rounded-lg hover:bg-blue-800 disabled:opacity-50">
+                className="px-4 py-2 text-sm bg-primary text-white rounded-lg hover:bg-primary-dark disabled:opacity-50">
                 {saving ? t('calendar.saving') : (editing ? t('calendar.save') : t('calendar.create'))}
               </button>
             </div>
@@ -1141,19 +1156,19 @@ export default function CalendarsPage() {
   if (!session || session.role === 'business') {
     return (
       <div className="flex items-center justify-center h-full">
-        <p className="text-gray-500">{t('association.restricted')}</p>
+        <p className="text-muted">{t('association.restricted')}</p>
       </div>
     )
   }
 
   return (
-    <div className="flex flex-col h-full bg-gray-50">
+    <div className="flex flex-col h-full bg-surface-muted">
       {/* Page header */}
       <div className="bg-white flex-shrink-0">
         <div className="px-6 pt-4 pb-1">
-          <h1 className="text-lg font-semibold text-gray-800">{t('title')}</h1>
+          <h1 className="text-lg font-semibold text-dark">{t('title')}</h1>
         </div>
-        <div className="flex border-b border-gray-200 px-4">
+        <div className="flex border-b border-border px-4">
           {TABS.map(({ id, label }) => (
             <button
               key={id}
@@ -1161,7 +1176,7 @@ export default function CalendarsPage() {
               className={`px-4 py-2.5 text-sm font-medium border-b-2 -mb-px transition-colors
                 ${tab === id
                   ? 'border-primary text-primary'
-                  : 'border-transparent text-gray-500 hover:text-gray-700'}`}
+                  : 'border-transparent text-muted hover:text-dark'}`}
             >
               {label}
             </button>
@@ -1171,7 +1186,7 @@ export default function CalendarsPage() {
 
       <div className="flex-1 overflow-y-auto">
         {tab === 'calendars' && (
-          <CalendarsTab holidaySets={holidaySets} />
+          <CalendarsTab holidaySets={holidaySets} onGoToHolidaySets={() => setTab('holiday-sets')} />
         )}
         {tab === 'holiday-sets' && (
           <HolidaysTab onSetsChange={setHolidaySets} />

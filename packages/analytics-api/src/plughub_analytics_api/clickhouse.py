@@ -88,6 +88,14 @@ _DDL_SESSIONS_MIGRATE_ANI_DNIS = (
     " ADD COLUMN IF NOT EXISTS dnis Nullable(String) DEFAULT NULL"
 )
 
+# sla_target_ms — pool SLA threshold (ms) at the time the session was served.
+# Used by get_pool_sla_1h to compute compliance %.  NULL = no SLA configured for that pool.
+# Populated by parse_routed when the routing result carries sla_target_ms.
+_DDL_SESSIONS_MIGRATE_SLA = (
+    "ALTER TABLE {db}.sessions"
+    " ADD COLUMN IF NOT EXISTS sla_target_ms Nullable(Int64) DEFAULT NULL"
+)
+
 _DDL_QUEUE_EVENTS = """
 CREATE TABLE IF NOT EXISTS {db}.queue_events
 (
@@ -420,6 +428,10 @@ CREATE TABLE IF NOT EXISTS {db}.journey_events
     session_id              Nullable(String),
     workflow_instance_id    Nullable(String),
     merged_into_journey_id  Nullable(String),
+    -- Phase F: split audit fields (journey_split only)
+    split_from_journey_id   Nullable(String),
+    new_journey_id          Nullable(String),
+    session_count           Nullable(Int32),
     -- D.5: session progression enrichment (journey_session_linked only)
     current_step            Nullable(String),
     session_outcome         Nullable(String),
@@ -427,6 +439,30 @@ CREATE TABLE IF NOT EXISTS {db}.journey_events
     session_ended_at        Nullable(DateTime64(3, 'UTC')),
     timestamp               DateTime64(3, 'UTC'),
     date                    Date
+)
+ENGINE = ReplacingMergeTree()
+PARTITION BY toYYYYMM(date)
+ORDER BY (tenant_id, event_id)
+"""
+
+# ── Arc 13: calibration_events — CurationReview outcomes from calibration.events Kafka topic.
+# Each row corresponds to one curator decision (approved / recalibrated / bias_flagged).
+# ReplacingMergeTree on (tenant_id, event_id) for at-least-once idempotency.
+_DDL_CALIBRATION_EVENTS = """
+CREATE TABLE IF NOT EXISTS {db}.calibration_events
+(
+    event_id      String,
+    tenant_id     String,
+    campaign_id   String,
+    evaluator_id  String,
+    skill_version String,
+    decision      LowCardinality(String),
+    dimension_id  String,
+    severity      LowCardinality(String),
+    curator_id    Nullable(String),
+    note_id       Nullable(String),
+    event_time    DateTime64(3, 'UTC'),
+    date          Date
 )
 ENGINE = ReplacingMergeTree()
 PARTITION BY toYYYYMM(date)
@@ -600,6 +636,7 @@ _ALL_DDL = [
     _DDL_AGENT_PAUSE_INTERVALS,
     _DDL_JOURNEY_EVENTS,
     _DDL_AGENT_BUSINESS_EVENTS,
+    _DDL_CALIBRATION_EVENTS,
     # Materialized views — must come AFTER the source tables they reference.
     # AggregatingMergeTree with POPULATE backfills existing data on first creation.
     _DDL_MV_AGENT_PERFORMANCE,
@@ -612,6 +649,7 @@ _ALL_DDL = [
 _MIGRATIONS = [
     _DDL_SESSIONS_MIGRATE,
     _DDL_SESSIONS_MIGRATE_ANI_DNIS,
+    _DDL_SESSIONS_MIGRATE_SLA,
     _DDL_SENTIMENT_EVENTS_MIGRATE_SEGMENT,
     _DDL_MESSAGES_MIGRATE_CONTENT,
 ]
@@ -986,6 +1024,8 @@ class AnalyticsStore:
         "event_id", "event_type", "tenant_id", "journey_id", "skill_id",
         "status", "customer_id", "origin_session_id", "session_id",
         "workflow_instance_id", "merged_into_journey_id",
+        # Phase F split fields
+        "split_from_journey_id", "new_journey_id", "session_count",
         "current_step", "session_outcome", "session_started_at", "session_ended_at",
         "timestamp", "date",
     ]
@@ -1015,6 +1055,23 @@ class AnalyticsStore:
             "agent_business_events",
             [_agent_business_event_row(row)],
             self._AGENT_BUSINESS_EVENT_COLS,
+        )
+
+    # calibration_events (Arc 13)
+
+    _CALIBRATION_EVENT_COLS = [
+        "event_id", "tenant_id", "campaign_id", "evaluator_id", "skill_version",
+        "decision", "dimension_id", "severity", "curator_id", "note_id",
+        "event_time", "date",
+    ]
+
+    async def insert_calibration_event(self, row: dict) -> None:
+        """Insert a curator decision from the calibration.events Kafka topic (Arc 13)."""
+        await asyncio.to_thread(
+            self._insert,
+            "calibration_events",
+            [_calibration_event_row(row)],
+            self._CALIBRATION_EVENT_COLS,
         )
 
     # ── Arc 5: segment_id lookups (for post-hoc enrichment) ───────────────────
@@ -1442,7 +1499,7 @@ def _agent_pause_interval_row(d: dict) -> list:
 
 
 def _journey_event_row(d: dict) -> list:
-    """Row builder for journey_events table (Arc 10 + D.5 enrichment)."""
+    """Row builder for journey_events table (Arc 10 + D.5 enrichment + Phase F split)."""
     ts             = d.get("timestamp")
     started_at_str = d.get("session_started_at")
     ended_at_str   = d.get("session_ended_at")
@@ -1458,6 +1515,10 @@ def _journey_event_row(d: dict) -> list:
         d.get("session_id") or None,
         d.get("workflow_instance_id") or None,
         d.get("merged_into_journey_id") or None,
+        # Phase F split fields
+        d.get("split_from_journey_id") or None,
+        d.get("new_journey_id") or None,
+        d.get("session_count") or None,
         # D.5 session progression fields
         d.get("current_step") or None,
         d.get("session_outcome") or None,
@@ -1503,6 +1564,29 @@ def _agent_business_event_row(d: dict) -> list:
         _level("category_l4", 3),
         float(d.get("value", 0.0)),
         tags,
+        _parse_dt(ts) or datetime.utcnow(),
+        _today_utc(ts),
+    ]
+
+
+def _calibration_event_row(d: dict) -> list:
+    """Row builder for calibration_events table (Arc 13).
+
+    Maps calibration_reviewed Kafka events to their ClickHouse representation.
+    event_time stored as DateTime64 UTC; date is the partition key.
+    """
+    ts = d.get("event_time") or d.get("timestamp")
+    return [
+        d.get("event_id", ""),
+        d.get("tenant_id", ""),
+        d.get("campaign_id", "") or "",
+        d.get("evaluator_id", "") or "",
+        d.get("skill_version", "") or "",
+        d.get("decision", "") or "",
+        d.get("dimension_id", "") or "",
+        d.get("severity", "") or "",
+        d.get("curator_id") or None,
+        d.get("note_id") or None,
         _parse_dt(ts) or datetime.utcnow(),
         _today_utc(ts),
     ]

@@ -7,6 +7,7 @@
  * Renders MonitorTab in sessions-only scope (Processos moved to /flow/processos).
  */
 import React, { useEffect, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { useAuth } from '@/auth/useAuth'
 import { listPools } from '@/api/registry'
 import { MonitorTab } from '@/modules/contacts/tabs/MonitorTab'
@@ -15,6 +16,7 @@ import { DEFAULT_FILTERS } from '@/modules/contacts/types'
 import type { Pool } from '@/types'
 
 export default function FlowMonitorPage() {
+  const { t } = useTranslation('contacts')
   const { tenantId } = useAuth()
   // Minimal filter state — pool and channel are the only relevant filters here
   const [filters, setFilters] = useState<ContactFilters>(DEFAULT_FILTERS)
@@ -29,7 +31,7 @@ export default function FlowMonitorPage() {
 
   if (!tenantId) {
     return (
-      <div className="flex items-center justify-center h-full text-gray-400 text-sm">
+      <div className="flex items-center justify-center h-full text-muted-light text-sm">
         Nenhum tenant selecionado.
       </div>
     )
@@ -38,14 +40,13 @@ export default function FlowMonitorPage() {
   return (
     <div className="flex flex-col h-full overflow-hidden">
       {/* Compact pool filter row */}
-      <div className="bg-white border-b border-gray-200 px-4 py-2 flex items-center gap-3 flex-shrink-0">
-        <span className="font-bold text-gray-800 text-base">Monitor</span>
-        <div className="flex items-center gap-2 ml-4">
+      <div className="bg-white border-b border-border px-4 py-2 flex items-center gap-3 flex-shrink-0">
+        <div className="flex items-center gap-2">
           <select
             value={filters.poolId}
             onChange={e => setFilters(f => ({ ...f, poolId: e.target.value }))}
-            className="text-xs border border-gray-300 rounded-lg px-2.5 py-1.5 bg-white focus:outline-none focus:ring-2 focus:ring-primary/30">
-            <option value="">Todos os pools</option>
+            className="text-xs border border-border-strong rounded-lg px-2.5 py-1.5 bg-white focus:outline-none focus:ring-2 focus:ring-primary/30">
+            <option value="">{t('monitor.allPools')}</option>
             {pools.map(p => (
               <option key={p.pool_id} value={p.pool_id}>{p.pool_id}</option>
             ))}
@@ -53,8 +54,8 @@ export default function FlowMonitorPage() {
           <select
             value={filters.channel}
             onChange={e => setFilters(f => ({ ...f, channel: e.target.value }))}
-            className="text-xs border border-gray-300 rounded-lg px-2.5 py-1.5 bg-white focus:outline-none focus:ring-2 focus:ring-primary/30">
-            <option value="">Todos os canais</option>
+            className="text-xs border border-border-strong rounded-lg px-2.5 py-1.5 bg-white focus:outline-none focus:ring-2 focus:ring-primary/30">
+            <option value="">{t('filter.allChannels')}</option>
             {['webchat','whatsapp','voice','email','sms'].map(c => (
               <option key={c} value={c}>{c}</option>
             ))}

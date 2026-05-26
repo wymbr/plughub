@@ -147,6 +147,11 @@ class InferenceRequest(BaseModel):
     # workloads can be steered to dedicated API keys and avoid competing with
     # realtime agent traffic. Empty list = no preference (normal rotation).
     preferred_config_ids: list[str] = Field(default_factory=list)
+    # Arc 16 — Journey ContextStore namespace.
+    # When set, journey context tags from {tenant}:ctx:journey:{journey_id}
+    # are injected into the system message so the agent can see cross-session
+    # business process state collected by previous workflow steps.
+    journey_id: str | None = Field(default=None, description="Journey UUID for context injection")
 
 
 class InferenceResponse(BaseModel):

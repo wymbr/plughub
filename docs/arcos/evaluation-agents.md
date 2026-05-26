@@ -1,6 +1,10 @@
 # Agentes de Avaliação de Qualidade — Modelos Arquiteturais
 
+> Última atualização: 2026-05-25 · Estado: Arc 16
+
 Três arquétipos de agentes para avaliação de qualidade de interações, com graus diferentes de intervenção no atendimento e requisitos de implementação distintos.
+
+> **Nota Arc 13.** O modelo de avaliação evoluiu com o Arc 13 (Evaluation Review, Contestation & Calibration): critérios `auto_computed` são preenchidos pelo `SessionMetricsExtractor` (não pelo LLM); o avaliador (`agente_avaliacao_v1` v3.0) produz `dimension_threads[]` com `evidence_entries[]` obrigatório por dimensão; e o roteamento de contestação vs finalização imediata depende de `evaluated_agent_type` (humano → contestação; AI → `evaluation_finalized` imediato + curadoria amostral). Ver [`docs/arcos/arc13-review-contestation.md`](arc13-review-contestation.md).
 
 ---
 
@@ -66,8 +70,8 @@ steps:
 
 **Função**: Observa uma sessão ativa em tempo real e envia alertas internos para o agente humano quando detecta padrões de risco (frustração, desvio de protocolo, oportunidade perdida, etc.).
 
-**Tipo**: Agente nativo SDK (Python ou TypeScript `@plughub/sdk`) — **não** skill-flow.  
-**Razão**: requer loop contínuo de escuta de mensagens da sessão; skill-flow não tem primitiva `receive` (passo que suspende aguardando qualquer mensagem do stream). O `menu` step suspende aguardando input do *cliente via canal*, não funciona para monitorar mensagens de agentes.
+**Tipo**: Agente nativo SDK (Python ou TypeScript `@plughub/sdk`) ou skill-flow YAML com o step `receive`.  
+**Contexto**: este agente requer um loop contínuo de escuta de mensagens da sessão. O `menu` step suspende aguardando input do *cliente via canal*, não serve para monitorar mensagens de agentes. O step `receive` — **já implementado** — suspende o workflow aguardando a próxima mensagem do stream da sessão (qualquer remetente, qualquer visibilidade) via Redis BLPOP em `receive:result:{sid}:{iid}`, permitindo reimplementar o Supervisor como YAML cíclico. O agente nativo SDK continua válido para lógica de janela deslizante mais elaborada.
 
 ### Modelo de participação
 
@@ -119,7 +123,7 @@ async def run(session_id: str, human_participant_id: str):
 
 - **Visibilidade de entrada**: `"all"` — recebe mensagens do cliente E do agente. Essencial para avaliar a qualidade das *respostas* do agente, não só o humor do cliente.
 - **Visibilidade de saída**: `[human_participant_id]` — somente o agente humano vê os alertas. O cliente nunca vê.
-- **`receive` step (planejado)**: quando o engine do skill-flow suportar step `receive` + DAG cíclico, este agente poderá ser reimplementado como YAML. Ver TODO.md.
+- **`receive` step (implementado)**: o engine do skill-flow já suporta o step `receive` (suspende aguardando a próxima mensagem do stream via Redis BLPOP). Este agente pode ser reimplementado como skill-flow YAML cíclico, sem necessidade do SDK nativo.
 - **Janela deslizante**: analisa os últimos N turnos, não a sessão inteira. Mantém latência baixa e custo LLM controlado.
 - **Ativação**: campanha com `online_supervisor_enabled: true` triggera o agente via `evaluation.events → orchestrator-bridge` quando a sessão é roteada para um pool monitorado.
 
@@ -168,14 +172,18 @@ steps:
         reply: string
 
   - id: send_reply
-    type: notify
-    content: "@step.compose_reply.output.reply"
-    visibility: ["@ctx.session.human_agent_participant_id"]
+    type: invoke
+    tool: notification_send
+    inputs:
+      content: "@step.compose_reply.output.reply"
+      visibility: ["@ctx.session.human_agent_participant_id"]
 
   - id: done
     type: complete
     outcome: resolved
 ```
+
+> **Arc 16 — `notify` depreciado.** O step type `notify` foi depreciado e substituído por `invoke: notification_send`. O sub-campo `notify` dentro de `suspend` é preservado por atomicidade. Skill-flows existentes com `type: notify` continuam funcionando, mas novos fluxos devem usar `invoke: notification_send`.
 
 ### Equivalência com o Copilot do AI Gateway
 
@@ -198,7 +206,7 @@ O Copilot do AI Gateway (`session.copilot.*` tags) é **proativo e fire-and-forg
 
 ---
 
-## Evolução planejada
+## Evolução
 
-- **`receive` step no Skill-flow Engine**: nova primitiva que suspende o workflow até a próxima mensagem do stream da sessão (qualquer remetente, qualquer visibilidade). Permitiria reimplementar o Agente 2 como YAML sem SDK. Requer suporte a DAG cíclico no engine. Ver TODO.md.
+- **`receive` step no Skill-flow Engine** *(implementado)*: primitiva que suspende o workflow até a próxima mensagem do stream da sessão (qualquer remetente, qualquer visibilidade), via Redis BLPOP em `receive:result:{sid}:{iid}`. Permite reimplementar o Agente 2 como skill-flow YAML cíclico, sem SDK nativo.
 - **Delegação de critérios a especialistas (Agente 1)**: step `task` antes de `submit_result`, com agregação de scores parciais. Não requer mudança de arquitetura — apenas YAML mais elaborado.

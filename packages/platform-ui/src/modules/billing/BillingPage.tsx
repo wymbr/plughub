@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
+import { Receipt, BarChart2, AlertTriangle, Bot, User, Globe } from 'lucide-react'
 import { useAuth } from '@/auth/useAuth'
 import Spinner from '@/components/ui/Spinner'
 import Badge from '@/components/ui/Badge'
@@ -9,14 +10,23 @@ import type { Invoice, InvoiceLineItem, ReserveGroup, InstallationResource } fro
 // ── Constants ──────────────────────────────────────────────────────────────────
 
 const RESOURCE_ICONS: Record<string, string> = {
-  ai_agent:        '🤖',
-  human_agent:     '👤',
   whatsapp_number: '📱',
   voice_trunk_in:  '📞',
   voice_trunk_out: '☎️',
   email_inbox:     '📧',
   sms_number:      '💬',
-  webchat_instance:'🌐',
+}
+type ResourceLucideIcon = React.FC<{ className?: string }>
+const RESOURCE_LUCIDE_ICONS: Record<string, ResourceLucideIcon> = {
+  ai_agent:        Bot,
+  human_agent:     User,
+  webchat_instance: Globe,
+}
+
+function ResourceIcon({ type }: { type: string }) {
+  const LucideIcon = RESOURCE_LUCIDE_ICONS[type]
+  if (LucideIcon) return <LucideIcon className="w-4 h-4 flex-shrink-0" aria-hidden="true" />
+  return <span className="text-sm">{RESOURCE_ICONS[type] ?? '📦'}</span>
 }
 
 const DIMENSION_LABELS: Record<string, { label: string; unit: string }> = {
@@ -122,7 +132,7 @@ function ResourceSidebar({ resources, loading, adminToken, onAdminToken }: Sideb
   }, {})
 
   return (
-    <div className="w-56 shrink-0 bg-gray-50 border-r border-lightGray flex flex-col">
+    <div className="w-56 shrink-0 bg-surface-muted border-r border-lightGray flex flex-col">
       <div className="px-4 py-3 border-b border-lightGray">
         <h3 className="text-xs font-semibold text-gray uppercase tracking-wide">{t('resources.title')}</h3>
       </div>
@@ -138,7 +148,7 @@ function ResourceSidebar({ resources, loading, adminToken, onAdminToken }: Sideb
               <div className="space-y-0.5">
                 {base.map(r => (
                   <div key={r.id} className="flex items-center gap-2 text-xs text-dark px-2 py-1 rounded hover:bg-white">
-                    <span className="text-sm">{RESOURCE_ICONS[r.resource_type] ?? '📦'}</span>
+                    <ResourceIcon type={r.resource_type} />
                     <span className="flex-1 truncate">{r.label || r.resource_type}</span>
                     <span className="text-gray font-mono shrink-0">×{r.quantity}</span>
                   </div>
@@ -159,7 +169,7 @@ function ResourceSidebar({ resources, loading, adminToken, onAdminToken }: Sideb
                       <p className="text-xs font-semibold text-dark truncate mb-1">{poolId}</p>
                       {items.map(r => (
                         <div key={r.id} className="flex items-center gap-1 text-xs text-gray">
-                          <span className="text-sm">{RESOURCE_ICONS[r.resource_type] ?? '📦'}</span>
+                          <ResourceIcon type={r.resource_type} />
                           <span className="flex-1 truncate">{r.label || r.resource_type}</span>
                           <span className="font-mono shrink-0">×{r.quantity}</span>
                         </div>
@@ -212,7 +222,7 @@ function InvoiceTab({ invoice, loading, error, tenantId, adminToken, onRefresh }
 
   const handleToggle = async (group: ReserveGroup) => {
     if (!adminToken) {
-      showToast(`⚠️ ${t('invoice.adminTokenRequired')}`)
+      showToast(t('invoice.adminTokenRequired'))
       return
     }
     setToggling(group.pool_id)
@@ -279,7 +289,7 @@ function InvoiceTab({ invoice, loading, error, tenantId, adminToken, onRefresh }
           <h4 className="text-sm font-semibold text-dark mb-2">{t('invoice.baseItems')}</h4>
           <div className="rounded-lg border border-lightGray overflow-hidden">
             <table className="w-full text-xs">
-              <thead className="bg-gray-50">
+              <thead className="bg-surface-muted">
                 <tr>
                   <th className="px-4 py-2.5 text-left font-semibold text-gray">{t('invoice.columns.resource')}</th>
                   <th className="px-4 py-2.5 text-right font-semibold text-gray">{t('invoice.columns.quantity')}</th>
@@ -292,7 +302,7 @@ function InvoiceTab({ invoice, loading, error, tenantId, adminToken, onRefresh }
                 {invoice.base_items.map((item: InvoiceLineItem, i: number) => (
                   <tr key={i} className={i % 2 === 1 ? 'bg-tableAlt' : 'bg-white'}>
                     <td className="px-4 py-2 text-dark">
-                      <span className="mr-1.5">{RESOURCE_ICONS[item.resource_type] ?? '📦'}</span>
+                      <ResourceIcon type={item.resource_type} />
                       {item.label || item.resource_type}
                     </td>
                     <td className="px-4 py-2 text-right font-mono text-dark">{item.quantity}</td>
@@ -307,7 +317,7 @@ function InvoiceTab({ invoice, loading, error, tenantId, adminToken, onRefresh }
                 ))}
               </tbody>
               <tfoot className="border-t border-lightGray">
-                <tr className="bg-gray-50">
+                <tr className="bg-surface-muted">
                   <td colSpan={4} className="px-4 py-2.5 text-right text-sm font-semibold text-dark">
                     {t('invoice.baseItems')}
                   </td>
@@ -331,7 +341,7 @@ function InvoiceTab({ invoice, loading, error, tenantId, adminToken, onRefresh }
                 {/* Group header */}
                 <div
                   className={`flex items-center justify-between px-4 py-2.5 ${
-                    group.active ? 'bg-green/10' : 'bg-gray-50'
+                    group.active ? 'bg-green/10' : 'bg-surface-muted'
                   }`}
                 >
                   <div className="flex items-center gap-2 min-w-0">
@@ -370,7 +380,7 @@ function InvoiceTab({ invoice, loading, error, tenantId, adminToken, onRefresh }
                       {group.items.map((item: InvoiceLineItem, i: number) => (
                         <tr key={i} className={i % 2 === 1 ? 'bg-tableAlt' : 'bg-white'}>
                           <td className="px-4 py-1.5 text-dark">
-                            <span className="mr-1.5">{RESOURCE_ICONS[item.resource_type] ?? '📦'}</span>
+                            <ResourceIcon type={item.resource_type} />
                             {item.label || item.resource_type}
                           </td>
                           <td className="px-4 py-1.5 text-right font-mono text-gray">×{item.quantity}</td>
@@ -384,7 +394,7 @@ function InvoiceTab({ invoice, loading, error, tenantId, adminToken, onRefresh }
                       ))}
                     </tbody>
                     <tfoot className="border-t border-lightGray">
-                      <tr className="bg-gray-50">
+                      <tr className="bg-surface-muted">
                         <td colSpan={3} className="px-4 py-1.5 text-right text-xs font-semibold text-dark">
                           {t('invoice.columns.subtotal')}
                         </td>
@@ -400,7 +410,7 @@ function InvoiceTab({ invoice, loading, error, tenantId, adminToken, onRefresh }
           </div>
 
           {/* Reserve total row */}
-          <div className="mt-2 px-4 py-2 bg-gray-50 rounded-lg border border-lightGray flex justify-between items-center">
+          <div className="mt-2 px-4 py-2 bg-surface-muted rounded-lg border border-lightGray flex justify-between items-center">
             <span className="text-sm font-semibold text-dark">{t('invoice.reserveItems')}</span>
             <span className="text-sm font-semibold text-dark font-mono">
               {fmtCurrency(invoice.reserve_total, currency)}
@@ -437,7 +447,7 @@ function ConsumptionTab({ tenantId }: { tenantId: string }) {
     <div className="flex-1 overflow-y-auto p-6 space-y-5">
       <div>
         <h3 className="text-base font-semibold text-dark">{t('consumption.title')}</h3>
-        <div className="mt-2 flex items-start gap-2 bg-blue-50 border border-blue-200 rounded-lg px-4 py-3 text-xs text-blue-700">
+        <div className="mt-2 flex items-start gap-2 bg-info-light border border-info/30 rounded-lg px-4 py-3 text-xs text-info-text">
           <span className="text-base shrink-0">ℹ️</span>
           <span>{t('consumption.notice')}</span>
         </div>
@@ -518,7 +528,11 @@ const BillingPage: React.FC = () => {
                     : 'border-transparent text-gray hover:text-dark'
                 }`}
               >
-                {tab === 'invoice' ? `🧾 ${t('tabs.invoice')}` : `📊 ${t('tabs.consumption')}`}
+                <>{tab === 'invoice'
+                  ? <><Receipt className="w-3.5 h-3.5 inline mr-1.5" aria-hidden="true" />{t('tabs.invoice')}</>
+                  : <><BarChart2 className="w-3.5 h-3.5 inline mr-1.5" aria-hidden="true" />{t('tabs.consumption')}</>
+                }</>
+
               </button>
             ))}
           </div>

@@ -113,10 +113,12 @@ function useAvailability(params: {
 // ── Availability sub-tab (pivot table) ───────────────────────────────────────
 
 const AvailabilitySubTab: React.FC<{ rows: AvailabilityRow[] }> = ({ rows }) => {
+  const { t } = useTranslation('contacts')
+
   if (rows.length === 0) {
     return (
-      <div className="flex-1 flex items-center justify-center text-gray-400 text-sm">
-        No data for selected period.
+      <div className="flex-1 flex items-center justify-center text-muted-light text-sm">
+        {t('agents.availability.noData')}
       </div>
     )
   }
@@ -138,48 +140,48 @@ const AvailabilitySubTab: React.FC<{ rows: AvailabilityRow[] }> = ({ rows }) => 
     <div className="flex-1 overflow-auto">
       <table className="min-w-full text-xs border-collapse">
         <thead className="sticky top-0 bg-white z-10">
-          <tr className="border-b border-gray-200">
-            <th className="text-left px-3 py-2 font-semibold text-gray-600 whitespace-nowrap min-w-[160px]">Agent</th>
-            <th className="text-left px-3 py-2 font-semibold text-gray-600 whitespace-nowrap min-w-[120px]">Pool</th>
+          <tr className="border-b border-border">
+            <th className="text-left px-3 py-2 font-semibold text-muted whitespace-nowrap min-w-40">{t('agents.availability.columns.agent')}</th>
+            <th className="text-left px-3 py-2 font-semibold text-muted whitespace-nowrap min-w-[120px]">{t('agents.availability.columns.pool')}</th>
             {dates.map(d => (
-              <th key={d} className="px-2 py-2 font-semibold text-gray-600 text-center whitespace-nowrap min-w-[80px]">
+              <th key={d} className="px-2 py-2 font-semibold text-muted text-center whitespace-nowrap min-w-20">
                 {d.slice(5)}
               </th>
             ))}
-            <th className="px-3 py-2 font-semibold text-gray-600 text-right whitespace-nowrap">Total</th>
+            <th className="px-3 py-2 font-semibold text-muted text-right whitespace-nowrap">{t('agents.availability.columns.total')}</th>
           </tr>
         </thead>
         <tbody>
           {[...groups.entries()].map(([key, { agent, pool, byDate }]) => {
             const totalMs = [...byDate.values()].reduce((s, r) => s + r.total_pause_ms, 0)
             return (
-              <tr key={key} className="border-b border-gray-100 hover:bg-gray-50 transition-colors">
-                <td className="px-3 py-2 text-gray-800 font-medium truncate max-w-[200px]" title={agent}>
+              <tr key={key} className="border-b border-border hover:bg-surface-muted transition-colors">
+                <td className="px-3 py-2 text-dark font-medium truncate max-w-[200px]" title={agent}>
                   {shortAgent(agent)}
                 </td>
-                <td className="px-3 py-2 text-gray-500 truncate max-w-[140px]" title={pool}>
+                <td className="px-3 py-2 text-muted truncate max-w-[140px]" title={pool}>
                   {shortPool(pool)}
                 </td>
                 {dates.map(d => {
                   const row = byDate.get(d)
-                  if (!row) return <td key={d} className="px-2 py-2 text-center text-gray-200">—</td>
+                  if (!row) return <td key={d} className="px-2 py-2 text-center text-border">—</td>
                   const pauseMs   = row.total_pause_ms
                   const intensity = Math.min(pauseMs / (4 * 3_600_000), 1)
                   const bg = pauseMs === 0
-                    ? 'bg-gray-50 text-gray-300'
+                    ? 'bg-surface-muted text-border-strong'
                     : intensity < 0.25
-                      ? 'bg-amber-50 text-amber-700'
+                      ? 'bg-warning-light text-warning-text'
                       : intensity < 0.5
-                        ? 'bg-amber-100 text-amber-800'
-                        : 'bg-amber-200 text-amber-900'
+                        ? 'bg-warning-light text-warning-text'
+                        : 'bg-warning text-white'
                   return (
                     <td key={d} className={`px-2 py-2 text-center font-mono tabular-nums ${bg}`}
-                        title={`${row.total_pauses} pause(s) · ${fmtDuration(pauseMs)}`}>
+                        title={t('agents.availability.pauseTooltip', { count: row.total_pauses, duration: fmtDuration(pauseMs) })}>
                       {pauseMs > 0 ? fmtDuration(pauseMs) : '—'}
                     </td>
                   )
                 })}
-                <td className="px-3 py-2 text-right font-semibold text-gray-700 tabular-nums">
+                <td className="px-3 py-2 text-right font-semibold text-dark tabular-nums">
                   {totalMs > 0 ? fmtDuration(totalMs) : '—'}
                 </td>
               </tr>
@@ -200,6 +202,8 @@ const PausesSubTab: React.FC<{
   onPage: (p: number) => void
   csvUrl: string
 }> = ({ rows, meta, page, onPage, csvUrl }) => {
+  const { t } = useTranslation('contacts')
+
   const flat: Array<{
     date: string; agent: string; pool: string
     reason: string; count: number; ms: number
@@ -219,9 +223,9 @@ const PausesSubTab: React.FC<{
 
   if (flat.length === 0) {
     return (
-      <div className="flex-1 flex flex-col items-center justify-center gap-2 text-gray-400 text-sm">
+      <div className="flex-1 flex flex-col items-center justify-center gap-2 text-muted-light text-sm">
         <span className="text-3xl">📋</span>
-        <p>No pause records for selected period.</p>
+        <p>{t('agents.availability.noPauses')}</p>
       </div>
     )
   }
@@ -230,48 +234,48 @@ const PausesSubTab: React.FC<{
 
   return (
     <div className="flex-1 flex flex-col overflow-hidden">
-      <div className="flex items-center justify-end px-4 py-2 border-b border-gray-100 bg-gray-50 flex-shrink-0">
+      <div className="flex items-center justify-end px-4 py-2 border-b border-border bg-surface-muted flex-shrink-0">
         <a href={csvUrl} download
           className="inline-flex items-center gap-1.5 px-3 py-1 rounded-md text-xs font-medium
-            border border-gray-300 text-gray-600 hover:bg-white hover:border-gray-400 transition-colors">
-          ⬇ Export CSV
+            border border-border-strong text-muted hover:bg-white hover:border-border transition-colors">
+          {t('agents.availability.exportCsv')}
         </a>
       </div>
 
       <div className="flex-1 overflow-auto">
         <table className="min-w-full text-xs border-collapse">
           <thead className="sticky top-0 bg-white z-10">
-            <tr className="border-b border-gray-200">
-              <th className="text-left px-3 py-2 font-semibold text-gray-600">Date</th>
-              <th className="text-left px-3 py-2 font-semibold text-gray-600">Agent</th>
-              <th className="text-left px-3 py-2 font-semibold text-gray-600">Pool</th>
-              <th className="text-left px-3 py-2 font-semibold text-gray-600">Reason</th>
-              <th className="text-right px-3 py-2 font-semibold text-gray-600">Count</th>
-              <th className="text-right px-3 py-2 font-semibold text-gray-600">Duration</th>
-              <th className="text-right px-3 py-2 font-semibold text-gray-600">Avg per pause</th>
+            <tr className="border-b border-border">
+              <th className="text-left px-3 py-2 font-semibold text-muted">{t('agents.availability.columns.date')}</th>
+              <th className="text-left px-3 py-2 font-semibold text-muted">{t('agents.availability.columns.agent')}</th>
+              <th className="text-left px-3 py-2 font-semibold text-muted">{t('agents.availability.columns.pool')}</th>
+              <th className="text-left px-3 py-2 font-semibold text-muted">{t('agents.availability.columns.reason')}</th>
+              <th className="text-right px-3 py-2 font-semibold text-muted">{t('agents.availability.columns.count')}</th>
+              <th className="text-right px-3 py-2 font-semibold text-muted">{t('agents.availability.columns.duration')}</th>
+              <th className="text-right px-3 py-2 font-semibold text-muted">{t('agents.availability.columns.avgPause')}</th>
             </tr>
           </thead>
           <tbody>
             {flat.map((r, i) => (
-              <tr key={i} className="border-b border-gray-100 hover:bg-gray-50 transition-colors">
-                <td className="px-3 py-2 text-gray-500 whitespace-nowrap font-mono">{r.date}</td>
-                <td className="px-3 py-2 text-gray-800 font-medium truncate max-w-[180px]" title={r.agent}>
+              <tr key={i} className="border-b border-border hover:bg-surface-muted transition-colors">
+                <td className="px-3 py-2 text-muted whitespace-nowrap font-mono">{r.date}</td>
+                <td className="px-3 py-2 text-dark font-medium truncate max-w-[180px]" title={r.agent}>
                   {shortAgent(r.agent)}
                 </td>
-                <td className="px-3 py-2 text-gray-500 truncate max-w-[130px]" title={r.pool}>
+                <td className="px-3 py-2 text-muted truncate max-w-[130px]" title={r.pool}>
                   {shortPool(r.pool)}
                 </td>
                 <td className="px-3 py-2">
                   <span className="inline-flex items-center px-2 py-0.5 rounded-full
-                    bg-amber-50 border border-amber-200 text-amber-700 font-medium whitespace-nowrap">
+                    bg-warning-light border border-warning/30 text-warning-text font-medium whitespace-nowrap">
                     {r.reason}
                   </span>
                 </td>
-                <td className="px-3 py-2 text-right tabular-nums text-gray-700">{r.count}</td>
-                <td className="px-3 py-2 text-right tabular-nums font-semibold text-gray-800">
+                <td className="px-3 py-2 text-right tabular-nums text-dark">{r.count}</td>
+                <td className="px-3 py-2 text-right tabular-nums font-semibold text-dark">
                   {fmtDuration(r.ms)}
                 </td>
-                <td className="px-3 py-2 text-right tabular-nums text-gray-500">
+                <td className="px-3 py-2 text-right tabular-nums text-muted">
                   {r.count > 0 ? fmtDuration(Math.round(r.ms / r.count)) : '—'}
                 </td>
               </tr>
@@ -281,17 +285,17 @@ const PausesSubTab: React.FC<{
       </div>
 
       {meta && totalPages > 1 && (
-        <div className="flex items-center justify-between px-4 py-2 border-t border-gray-100 bg-white flex-shrink-0">
-          <span className="text-xs text-gray-500">{meta.total} results</span>
+        <div className="flex items-center justify-between px-4 py-2 border-t border-border bg-white flex-shrink-0">
+          <span className="text-xs text-muted">{t('agents.availability.results', { count: meta.total })}</span>
           <div className="flex items-center gap-1">
             <button onClick={() => onPage(page - 1)} disabled={page <= 1}
-              className="px-2 py-1 text-xs rounded border border-gray-200 disabled:opacity-40 hover:bg-gray-50">
-              ← Prev
+              className="px-2 py-1 text-xs rounded border border-border disabled:opacity-40 hover:bg-surface-muted">
+              {t('agents.availability.prevPage')}
             </button>
-            <span className="text-xs text-gray-600 px-2">{page} / {totalPages}</span>
+            <span className="text-xs text-muted px-2">{t('agents.availability.page', { page, total: totalPages })}</span>
             <button onClick={() => onPage(page + 1)} disabled={page >= totalPages}
-              className="px-2 py-1 text-xs rounded border border-gray-200 disabled:opacity-40 hover:bg-gray-50">
-              Next →
+              className="px-2 py-1 text-xs rounded border border-border disabled:opacity-40 hover:bg-surface-muted">
+              {t('agents.availability.nextPage')}
             </button>
           </div>
         </div>
@@ -343,30 +347,30 @@ export function AgentsTab({ tenantId, filters }: Props) {
   return (
     <div className="flex flex-col h-full overflow-hidden bg-white">
       {/* Sub-tab bar */}
-      <div className="border-b border-gray-200 px-4 flex items-end gap-0 flex-shrink-0">
+      <div className="border-b border-border px-4 flex items-end gap-0 flex-shrink-0">
         {([
-          { id: 'availability' as SubTab, label: 'Availability' },
-          { id: 'pauses'       as SubTab, label: 'Pauses'       },
+          { id: 'availability' as SubTab, label: t('agents.availability.tabLabel') },
+          { id: 'pauses'       as SubTab, label: t('agents.availability.pausesLabel') },
         ]).map(s => (
           <button key={s.id} onClick={() => setSubTab(s.id)}
             className={`px-5 py-2.5 text-sm font-medium border-b-2 transition-colors ${
               subTab === s.id
                 ? 'border-primary text-primary'
-                : 'border-transparent text-gray-500 hover:text-gray-700'
+                : 'border-transparent text-muted hover:text-dark'
             }`}>
             {s.label}
           </button>
         ))}
         {loading && (
-          <span className="ml-auto self-center text-xs text-gray-400 animate-pulse pr-4">Loading…</span>
+          <span className="ml-auto self-center text-xs text-muted-light animate-pulse pr-4">{t('agents.availability.loading')}</span>
         )}
       </div>
 
       {/* Content */}
       <div className="flex-1 overflow-hidden flex flex-col">
         {error ? (
-          <div className="flex-1 flex items-center justify-center text-sm text-red-500">
-            Error loading data: {error}
+          <div className="flex-1 flex items-center justify-center text-sm text-red">
+            {t('agents.availability.loadError', { error })}
           </div>
         ) : subTab === 'availability' ? (
           <AvailabilitySubTab rows={data} />

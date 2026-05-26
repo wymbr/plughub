@@ -1,0 +1,91 @@
+{
+  "title": "Canais",
+  "tabs": {
+    "webchat":  "WebChat",
+    "whatsapp": "WhatsApp",
+    "voice":    "Voz",
+    "email":    "E-mail",
+    "sms":      "SMS",
+    "webhook":  "Webhook"
+  },
+  "subTabs": {
+    "accounts": "Integrações & Endpoints",
+    "settings": "Configurações de Runtime"
+  },
+  "loading": "Carregando…",
+  "status": {
+    "active":   "ativo",
+    "inactive": "inativo"
+  },
+  "identifierHints": {
+    "webchat":  "Slug de URL, ex: \"support\" → /webchat/support",
+    "whatsapp": "Número E.164, ex: +5511999999999",
+    "voice":    "DID / E.164, ex: +5511000000",
+    "sms":      "Short code ou long code, ex: 55119",
+    "email":    "Endereço, ex: suporte@empresa.com",
+    "webhook":  "Slug de URL, ex: \"salesforce\" → /channel/webhook/salesforce"
+  },
+  "integration": {
+    "new":                   "Nova Integração {{channel}}",
+    "noConfigurations":      "Nenhuma integração {{channel}} configurada.",
+    "noConfigurationsHint":  "Crie uma integração para configurar as credenciais de API e adicione números de telefone ou endereços como endpoints.",
+    "addFirst":              "+ Adicionar integração {{channel}}",
+    "addAnother":            "+ Adicionar outra integração {{channel}}",
+    "create":                "Criar integração",
+    "editCredentialsBtn":    "Editar credenciais",
+    "editCredentialsTitle":  "Editar credenciais",
+    "deleteBtn":             "Excluir",
+    "deleteConfirm":         "Confirmar exclusão",
+    "deleting":              "Excluindo…",
+    "credentialsLabel":      "Credenciais",
+    "credentialsSection":    "Credenciais de API",
+    "credentialsEncrypted":  "(armazenadas de forma criptografada)",
+    "credentialsKeepCurrent":"(deixe em branco para manter o valor atual)",
+    "credentialsNoFields":   "Sem campos de credencial para este canal.",
+    "saveCredentials":       "Salvar credenciais",
+    "settingsSection":       "Configurações"
+  },
+  "endpoint": {
+    "title":               "Endpoints",
+    "identifierHintFallback": "identificadores de roteamento para pools",
+    "webhookNote":         "Endpoints de webhook não precisam de credenciais de API — apenas configure um slug de URL e o pool de destino.",
+    "add":                 "+ Adicionar endpoint",
+    "addBtn":              "Adicionar endpoint",
+    "noEndpoints":         "Nenhum endpoint ainda. Clique em \"+ Adicionar endpoint\" para adicionar um número ou endereço {{channel}}.",
+    "noEndpointsStandalone":"Nenhum endpoint configurado. Clique em \"+ Adicionar endpoint\" para criar um.",
+    "deleteConfirm":       "Excluir este endpoint?",
+    "colIdentifier":       "Identificador",
+    "colDisplayName":      "Nome de exibição",
+    "colPool":             "Pool",
+    "colStatus":           "Status"
+  },
+  "form": {
+    "displayName":           "Nome de exibição",
+    "active":                "Ativo",
+    "identifier":            "Identificador",
+    "pool":                  "Pool",
+    "selectPool":            "— selecionar pool —",
+    "displayNamePlaceholder":"ex: Suporte Técnico",
+    "newValueOptional":      "Novo valor (opcional)",
+    "firstEndpoint":         "Primeiro endpoint",
+    "firstEndpointOptional": "— opcional, pode ser adicionado depois",
+    "identifierHintFallback":"Identificador do canal"
+  },
+  "actions": {
+    "save":        "Salvar",
+    "saving":      "Salvando…",
+    "cancel":      "Cancelar",
+    "edit":        "Editar",
+    "close":       "Fechar",
+    "delete":      "Excluir",
+    "saveChanges": "Salvar alterações"
+  },
+  "errors": {
+    "displayNameRequired":          "Nome de exibição é obrigatório",
+    "identifierRequired":           "Identificador é obrigatório",
+    "endpointIdentifierRequired":   "Identificador do endpoint é obrigatório",
+    "poolRequired":                 "Pool é obrigatório",
+    "endpointPoolRequired":         "Pool do endpoint é obrigatório",
+    "endpointDisplayNameRequired":  "Nome de exibição do endpoint é obrigatório"
+  }
+}

@@ -17,6 +17,7 @@
  *   quota        → deferred (Pricing/Metering module, not yet implemented)
  */
 import React, { useState, useCallback } from 'react'
+import { useTranslation } from 'react-i18next'
 import { useNamespace, useMultiNamespace, putConfig, deleteConfig, type ConfigEntry } from '../api/config-hooks'
 import Spinner from '@/components/ui/Spinner'
 
@@ -43,13 +44,13 @@ const NAMESPACES: NsEntry[] = [
       { ns: 'session', label: 'Component Timeouts' },
     ],
     label: 'Routing & Timeouts',
-    icon: '🔀', color: 'bg-blue-400',
+    icon: '🔀', color: 'bg-secondary',
     desc: 'SLA, snapshot_ttl_s | TTLs: ai_gateway, channel_gateway, transcript, replayer. Weights/factors stay in pool settings.',
   },
   {
     id: 'consumer',
     label: 'Consumer Analytics',
-    icon: '📥', color: 'bg-yellow-400',
+    icon: '📥', color: 'bg-warning',
     desc: 'analytics-api Kafka consumer: batch_size, timeout_ms, restart_delay_s, max_restart_delay_s',
   },
   {
@@ -87,6 +88,7 @@ function EditRow({
   onCancel:   () => void
   onSaved:    () => void
 }) {
+  const { t } = useTranslation('configPlataforma')
   const [raw,      setRaw]      = useState(prettyJson(entry.value))
   const [scope,    setScope]    = useState<'global' | 'tenant'>('global')
   const [saving,   setSaving]   = useState(false)
@@ -95,15 +97,15 @@ function EditRow({
   const handleChange = useCallback((text: string) => {
     setRaw(text)
     try { JSON.parse(text); setJsonError(null) }
-    catch { setJsonError('JSON inválido') }
-  }, [])
+    catch { setJsonError(t('namespace.jsonInvalid')) }
+  }, [t])
 
   const handleSave = useCallback(async () => {
     let parsed: unknown
     try { parsed = JSON.parse(raw) }
-    catch { setJsonError('Não é possível salvar — JSON inválido'); return }
+    catch { setJsonError(t('namespace.jsonInvalidSave')); return }
 
-    if (!adminToken) { setJsonError('Admin token obrigatório para salvar'); return }
+    if (!adminToken) { setJsonError(t('namespace.adminRequired')); return }
     setSaving(true); setJsonError(null)
     try {
       await putConfig(
@@ -133,8 +135,8 @@ function EditRow({
             onClick={() => setScope(s)}
             className={`px-3 py-1 rounded text-xs font-medium border transition-colors ${
               scope === s
-                ? 'border-blue-400 bg-blue-50 text-blue-700'
-                : 'border-gray-200 text-gray-500 hover:text-gray-700'
+                ? 'border-primary bg-primary-light text-primary'
+                : 'border-border text-muted hover:text-dark'
             }`}
           >
             {s === 'global' ? '🌐 Global default' : `🏢 Tenant: ${tenantId}`}
@@ -148,30 +150,30 @@ function EditRow({
         onChange={e => handleChange(e.target.value)}
         rows={rows}
         spellCheck={false}
-        className={`w-full font-mono text-xs p-2 rounded border bg-gray-50 text-gray-800 resize-y outline-none ${
-          jsonError ? 'border-red-400' : 'border-gray-300 focus:border-blue-400'
+        className={`w-full font-mono text-xs p-2 rounded border bg-surface-muted text-dark resize-y outline-none ${
+          jsonError ? 'border-red/40' : 'border-border-strong focus:border-primary'
         }`}
       />
-      {jsonError && <p className="text-xs text-red-600">{jsonError}</p>}
+      {jsonError && <p className="text-xs text-red-text">{jsonError}</p>}
 
       {/* Action buttons */}
       <div className="flex gap-2">
         <button
           onClick={handleSave}
           disabled={saving || !!jsonError || !adminToken}
-          className="px-3 py-1.5 rounded text-xs font-semibold bg-primary text-white disabled:opacity-40 hover:bg-blue-800 transition-colors"
+          className="px-3 py-1.5 rounded text-xs font-semibold bg-primary text-white disabled:opacity-40 hover:bg-primary-dark transition-colors"
         >
-          {saving ? 'Salvando…' : 'Salvar'}
+          {saving ? t('namespace.saving') : t('namespace.save')}
         </button>
         <button
           onClick={onCancel}
-          className="px-3 py-1.5 rounded text-xs border border-gray-300 text-gray-600 hover:text-gray-900 transition-colors"
+          className="px-3 py-1.5 rounded text-xs border border-border-strong text-muted hover:text-dark transition-colors"
         >
-          Cancelar
+          {t('namespace.cancel')}
         </button>
         {!adminToken && (
-          <span className="text-xs text-amber-600 self-center">
-            ⚠ Defina o admin token para salvar
+          <span className="text-xs text-warning self-center">
+            {t('namespace.adminRequiredHint')}
           </span>
         )}
       </div>
@@ -202,11 +204,12 @@ function ConfigRow({
   onSaved:      () => void
   onDeleted:    () => void
 }) {
+  const { t } = useTranslation('configPlataforma')
   const [deleting, setDeleting] = useState(false)
   const override = !isGlobal(entry)
 
   const handleDelete = useCallback(async () => {
-    if (!window.confirm(`Remover override de ${entryKey}? O valor global padrão será restaurado.`)) return
+    if (!window.confirm(t('namespace.resetConfirm', { key: entryKey }))) return
     setDeleting(true)
     try {
       await deleteConfig(entry.namespace ?? '', entryKey, tenantId, adminToken)
@@ -215,19 +218,19 @@ function ConfigRow({
   }, [entry, entryKey, tenantId, adminToken, onDeleted])
 
   return (
-    <div className={`flex items-start gap-4 px-5 py-3 border-b border-gray-100 ${
-      override ? 'bg-blue-50/40' : ''
+    <div className={`flex items-start gap-4 px-5 py-3 border-b border-border ${
+      override ? 'bg-primary-light/40' : ''
     }`}>
       {/* Key + badge */}
       <div className="w-52 shrink-0 pt-0.5">
-        <p className="text-xs font-semibold font-mono text-gray-700">{entryKey}</p>
+        <p className="text-xs font-semibold font-mono text-dark">{entryKey}</p>
         {override && (
-          <span className="text-[10px] font-medium text-blue-600 mt-0.5 block">
+          <span className="text-2xs font-medium text-primary mt-0.5 block">
             tenant override
           </span>
         )}
         {entry.description && (
-          <p className="text-[10px] text-gray-400 mt-0.5 leading-tight">{entry.description}</p>
+          <p className="text-2xs text-muted-light mt-0.5 leading-tight">{entry.description}</p>
         )}
       </div>
 
@@ -243,24 +246,24 @@ function ConfigRow({
         />
       ) : (
         <>
-          <pre className="flex-1 text-xs font-mono text-gray-600 whitespace-pre-wrap break-all max-h-20 overflow-hidden">
+          <pre className="flex-1 text-xs font-mono text-muted whitespace-pre-wrap break-all max-h-20 overflow-hidden">
             {prettyJson(entry.value)}
           </pre>
 
           <div className="flex gap-1.5 shrink-0">
             <button
               onClick={onEdit}
-              className="px-2 py-1 text-xs border border-gray-300 rounded text-gray-600 hover:text-gray-900 hover:border-gray-400 transition-colors"
+              className="px-2 py-1 text-xs border border-border-strong rounded text-muted hover:text-dark hover:border-border-strong transition-colors"
             >
-              ✏ Editar
+              {t('namespace.edit')}
             </button>
             {override && adminToken && (
               <button
                 onClick={handleDelete}
                 disabled={deleting}
-                className="px-2 py-1 text-xs border border-red-200 rounded text-red-500 hover:bg-red-50 disabled:opacity-40 transition-colors"
+                className="px-2 py-1 text-xs border border-red/30 rounded text-red hover:bg-red-light disabled:opacity-40 transition-colors"
               >
-                {deleting ? '…' : 'Reset'}
+                {deleting ? '…' : t('namespace.reset')}
               </button>
             )}
           </div>
@@ -279,7 +282,7 @@ interface Props {
 
 // ── NamespacePanel — single namespace view ─────────────────────────────────────
 
-function NamespacePanel({
+export function NamespacePanel({
   nsId, sectionLabel, tenantId, adminToken, editingKey, setEditingKey,
 }: {
   nsId:         string
@@ -289,27 +292,28 @@ function NamespacePanel({
   editingKey:   string | null
   setEditingKey: (k: string | null) => void
 }) {
+  const { t } = useTranslation('configPlataforma')
   const { entries, loading, error, reload } = useNamespace(tenantId, nsId)
   const sortedKeys = Object.keys(entries).sort()
 
   return (
     <>
       {sectionLabel && (
-        <div className="px-5 py-2 bg-gray-50 border-b border-gray-100 text-[10px] font-bold text-gray-500 uppercase tracking-widest">
-          {sectionLabel} <code className="normal-case font-normal text-gray-400">({nsId})</code>
-          {loading && <span className="ml-2 text-gray-400">…</span>}
-          {error   && <span className="ml-2 text-red-500">⚠ {error}</span>}
+        <div className="px-5 py-2 bg-surface-muted border-b border-border text-2xs font-bold text-muted uppercase tracking-widest">
+          {sectionLabel} <code className="normal-case font-normal text-muted-light">({nsId})</code>
+          {loading && <span className="ml-2 text-muted-light">…</span>}
+          {error   && <span className="ml-2 text-red">⚠ {error}</span>}
         </div>
       )}
       {!sectionLabel && loading && (
         <div className="flex justify-center py-6"><Spinner /></div>
       )}
       {!sectionLabel && error && (
-        <div className="px-5 py-2 text-xs text-red-600">⚠ {error}</div>
+        <div className="px-5 py-2 text-xs text-red-text">⚠ {error}</div>
       )}
       {!loading && sortedKeys.length === 0 && !error && (
-        <div className="px-5 py-6 text-center text-sm text-gray-400">
-          Nenhuma configuração em <code className="font-mono">{nsId}</code>.
+        <div className="px-5 py-6 text-center text-sm text-muted-light">
+          {t('namespace.noEntriesNs', { ns: nsId })}
         </div>
       )}
       {sortedKeys.map(key => (
@@ -333,6 +337,7 @@ function NamespacePanel({
 // ── NamespaceEditor ───────────────────────────────────────────────────────────
 
 export function NamespaceEditor({ tenantId, adminToken }: Props) {
+  const { t } = useTranslation('configPlataforma')
   const [selectedId, setSelectedId] = useState(NAMESPACES[0].id)
   const [editingKey, setEditingKey] = useState<string | null>(null)
 
@@ -342,7 +347,7 @@ export function NamespaceEditor({ tenantId, adminToken }: Props) {
   return (
     <div className="flex h-full overflow-hidden">
       {/* Namespace sidebar */}
-      <aside className="w-48 shrink-0 border-r border-gray-200 bg-gray-50 flex flex-col overflow-y-auto">
+      <aside className="w-48 shrink-0 border-r border-border bg-surface-muted flex flex-col overflow-y-auto">
         {NAMESPACES.map(n => {
           const active = n.id === selectedId
           return (
@@ -351,8 +356,8 @@ export function NamespaceEditor({ tenantId, adminToken }: Props) {
               onClick={() => { setSelectedId(n.id); setEditingKey(null) }}
               className={`flex items-center gap-2.5 px-3 py-2.5 text-left text-sm transition-colors border-l-2 ${
                 active
-                  ? 'border-l-primary bg-white text-gray-900 font-semibold'
-                  : 'border-l-transparent text-gray-600 hover:text-gray-900 hover:bg-white/60'
+                  ? 'border-l-primary bg-white text-dark font-semibold'
+                  : 'border-l-transparent text-muted hover:text-dark hover:bg-white/60'
               }`}
             >
               <span className={`w-2 h-2 rounded-full shrink-0 ${n.color}`} />
@@ -365,19 +370,19 @@ export function NamespaceEditor({ tenantId, adminToken }: Props) {
       {/* Right panel */}
       <div className="flex-1 flex flex-col overflow-hidden">
         {/* Namespace header */}
-        <div className="flex items-center gap-3 px-5 py-3 border-b border-gray-200 shrink-0">
+        <div className="flex items-center gap-3 px-5 py-3 border-b border-border shrink-0">
           <span className="text-base">{ns.icon}</span>
           <div className="flex-1 min-w-0">
-            <p className="text-sm font-semibold text-gray-900">{ns.label}</p>
-            <p className="text-xs text-gray-500 truncate">{ns.desc}</p>
+            <p className="text-sm font-semibold text-dark">{ns.label}</p>
+            <p className="text-xs text-muted truncate">{ns.desc}</p>
           </div>
         </div>
 
         {/* Column headers */}
-        <div className="flex gap-4 px-5 py-2 bg-gray-50 border-b border-gray-200 text-[10px] font-semibold text-gray-400 uppercase tracking-wide shrink-0">
-          <span className="w-52 shrink-0">Chave</span>
-          <span className="flex-1">Valor</span>
-          <span className="w-20 shrink-0 text-right">Ações</span>
+        <div className="flex gap-4 px-5 py-2 bg-surface-muted border-b border-border text-2xs font-semibold text-muted-light uppercase tracking-wide shrink-0">
+          <span className="w-52 shrink-0">{t('namespace.key')}</span>
+          <span className="flex-1">{t('namespace.value')}</span>
+          <span className="w-20 shrink-0 text-right">{t('namespace.actions')}</span>
         </div>
 
         {/* Rows — group or single */}

@@ -17,8 +17,6 @@ const ConfigRecursosIndex: React.FC = () => {
 
   return (
     <div>
-      <PageHeader title={t('title')} />
-
       <div className="mb-6 border-b border-lightGray flex gap-8">
         {tabs.map(tab => (
           <button

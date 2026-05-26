@@ -49,12 +49,13 @@ function primaryRole(roles: string[]): UserRole {
 }
 
 interface SessionMeta {
-  userId:         string
-  name:           string
-  email:          string
-  tenantId:       string
-  roles:          string[]
-  accessiblePools: string[]
+  userId:                 string
+  name:                   string
+  email:                  string
+  tenantId:               string
+  roles:                  string[]
+  accessiblePools:        string[]
+  maxConcurrentSessions?: number
 }
 
 // ── Stable current-user object ────────────────────────────────────────────────
@@ -63,14 +64,15 @@ interface SessionMeta {
  *  as a plain, stable object (no token fields). Safe to pass as props or
  *  spread across modules without re-rendering on token refresh. */
 export interface CurrentUser {
-  userId:               string
-  name:                 string
-  email:                string
-  tenantId:             string
-  role:                 UserRole        // highest-privilege role
-  roles:                string[]
-  accessiblePools:      string[]       // [] = all pools
-  supervisedAgentTypes: string[]       // [] = unrestricted (admin); non-empty = Arc 9 scope
+  userId:                 string
+  name:                   string
+  email:                  string
+  tenantId:               string
+  role:                   UserRole        // highest-privilege role
+  roles:                  string[]
+  accessiblePools:        string[]       // [] = all pools
+  supervisedAgentTypes:   string[]       // [] = unrestricted (admin); non-empty = Arc 9 scope
+  maxConcurrentSessions:  number
 }
 
 // ── Context types ─────────────────────────────────────────────────────────────
@@ -113,25 +115,27 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       id: string; email: string; name: string
       roles: string[]; tenant_id: string; accessible_pools: string[]
       supervised_agent_types?: string[]
+      max_concurrent_sessions?: number
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       module_config?: Record<string, any>
     },
   ): Session => {
     return {
-      userId:               user.id,
-      email:                user.email,
-      name:                 user.name,
-      role:                 primaryRole(user.roles),
-      roles:                user.roles,
-      tenantId:             user.tenant_id,
-      accessiblePools:      user.accessible_pools,
-      supervisedAgentTypes: user.supervised_agent_types ?? [],
-      moduleConfig:         (user.module_config ?? {}) as ModuleConfig,
-      installationId:       'default',
-      locale:               'pt-BR',
+      userId:                user.id,
+      email:                 user.email,
+      name:                  user.name,
+      role:                  primaryRole(user.roles),
+      roles:                 user.roles,
+      tenantId:              user.tenant_id,
+      accessiblePools:       user.accessible_pools,
+      supervisedAgentTypes:  user.supervised_agent_types ?? [],
+      maxConcurrentSessions: user.max_concurrent_sessions ?? 3,
+      moduleConfig:          (user.module_config ?? {}) as ModuleConfig,
+      installationId:        'default',
+      locale:                'pt-BR',
       accessToken,
       refreshToken,
-      expiresAt:            Date.now() + expiresIn * 1000,
+      expiresAt:             Date.now() + expiresIn * 1000,
     }
   }, [])
 
@@ -140,12 +144,13 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   const persistSession = useCallback((s: Session) => {
     localStorage.setItem(REFRESH_TOKEN_KEY, s.refreshToken)
     const meta: SessionMeta = {
-      userId:         s.userId,
-      name:           s.name,
-      email:          s.email,
-      tenantId:       s.tenantId,
-      roles:          s.roles,
-      accessiblePools: s.accessiblePools,
+      userId:                s.userId,
+      name:                  s.name,
+      email:                 s.email,
+      tenantId:              s.tenantId,
+      roles:                 s.roles,
+      accessiblePools:       s.accessiblePools,
+      maxConcurrentSessions: s.maxConcurrentSessions,
     }
     localStorage.setItem(SESSION_META_KEY, JSON.stringify(meta))
   }, [])
@@ -286,19 +291,20 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   const currentUser = useMemo<CurrentUser | null>(() => {
     if (!session) return null
     return {
-      userId:               session.userId,
-      name:                 session.name,
-      email:                session.email,
-      tenantId:             session.tenantId,
-      role:                 session.role,
-      roles:                session.roles,
-      accessiblePools:      session.accessiblePools,
-      supervisedAgentTypes: session.supervisedAgentTypes,
+      userId:                session.userId,
+      name:                  session.name,
+      email:                 session.email,
+      tenantId:              session.tenantId,
+      role:                  session.role,
+      roles:                 session.roles,
+      accessiblePools:       session.accessiblePools,
+      supervisedAgentTypes:  session.supervisedAgentTypes,
+      maxConcurrentSessions: session.maxConcurrentSessions,
     }
   }, [
     session?.userId, session?.name, session?.email, session?.tenantId,
     session?.role, session?.roles, session?.accessiblePools,
-    session?.supervisedAgentTypes,
+    session?.supervisedAgentTypes, session?.maxConcurrentSessions,
   ])
 
   // ── Context value ────────────────────────────────────────────────────────────

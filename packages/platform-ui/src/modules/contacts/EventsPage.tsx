@@ -6,6 +6,8 @@
  * Key filter: session_id for exact-match lookups.
  */
 import React, { useCallback, useEffect, useRef, useState } from 'react'
+import { AlertTriangle, SearchX } from 'lucide-react'
+import { useTranslation } from 'react-i18next'
 import { useAuth } from '@/auth/useAuth'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -59,12 +61,14 @@ const DEFAULT_FILTERS: Filters = {
   eventType: '',
 }
 
-const inp = 'text-sm border border-gray-300 rounded-lg px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-primary/30 bg-white'
+const inp = 'text-sm border border-border-strong rounded-lg px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-primary/30 bg-white'
 
 function FilterBar({ filters, setFilters }: {
   filters: Filters
   setFilters: React.Dispatch<React.SetStateAction<Filters>>
 }) {
+  const { t } = useTranslation('contacts')
+
   function set<K extends keyof Filters>(key: K, val: Filters[K]) {
     setFilters(prev => ({ ...prev, [key]: val }))
   }
@@ -72,41 +76,41 @@ function FilterBar({ filters, setFilters }: {
     || filters.fromDt !== DEFAULT_FILTERS.fromDt || filters.toDt !== DEFAULT_FILTERS.toDt)
 
   return (
-    <div className="bg-white border-b border-gray-200 px-4 py-2.5 flex-shrink-0">
+    <div className="bg-white border-b border-border px-4 py-2.5 flex-shrink-0">
       <div className="flex flex-wrap items-center gap-2">
-        <div className="flex items-center gap-1.5 text-xs text-gray-500">
-          <span>De</span>
+        <div className="flex items-center gap-1.5 text-xs text-muted">
+          <span>{t('filter.from')}</span>
           <input type="date" value={filters.fromDt} onChange={e => set('fromDt', e.target.value)} className={inp} />
-          <span>Até</span>
+          <span>{t('filter.to')}</span>
           <input type="date" value={filters.toDt}   onChange={e => set('toDt',   e.target.value)} className={inp} />
         </div>
 
         <input type="text" value={filters.sessionId}
           onChange={e => set('sessionId', e.target.value)}
-          placeholder="Session ID (busca exata)"
+          placeholder={t('events.sessionIdPlaceholder')}
           className={`${inp} w-56`} />
 
         <select value={filters.channel} onChange={e => set('channel', e.target.value)} className={inp}>
-          <option value="">Todos os canais</option>
+          <option value="">{t('filter.allChannels')}</option>
           {['webchat','whatsapp','voice','email','sms','instagram','telegram','webrtc'].map(c => (
             <option key={c} value={c}>{c}</option>
           ))}
         </select>
 
         <select value={filters.eventType} onChange={e => set('eventType', e.target.value)} className={inp}>
-          <option value="">Todos os tipos</option>
-          {EVENT_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
+          <option value="">{t('events.allTypes')}</option>
+          {EVENT_TYPES.map(ev => <option key={ev} value={ev}>{ev}</option>)}
         </select>
 
         <input type="text" value={filters.poolId}
           onChange={e => set('poolId', e.target.value)}
-          placeholder="Pool ID"
+          placeholder={t('events.poolIdPlaceholder')}
           className={`${inp} w-36`} />
 
         {hasAny && (
           <button onClick={() => setFilters(DEFAULT_FILTERS)}
-            className="text-xs text-gray-400 hover:text-red-500 px-2 py-1.5 rounded-lg border border-gray-200 hover:border-red-300 transition-colors ml-auto">
-            Limpar filtros
+            className="text-xs text-muted-light hover:text-red px-2 py-1.5 rounded-lg border border-border hover:border-red/30 transition-colors ml-auto">
+            {t('filter.clearFilters')}
           </button>
         )}
       </div>
@@ -117,13 +121,25 @@ function FilterBar({ filters, setFilters }: {
 // ── Role badge ────────────────────────────────────────────────────────────────
 
 const ROLE_COLORS: Record<string, string> = {
-  primary:    'bg-blue-100 text-blue-700',
-  specialist: 'bg-purple-100 text-purple-700',
-  supervisor: 'bg-amber-100 text-amber-700',
-  evaluator:  'bg-teal-100 text-teal-700',
-  reviewer:   'bg-green-100 text-green-700',
-  system:     'bg-gray-100 text-gray-600',
+  primary:    'bg-primary-light text-primary',
+  specialist: 'bg-ai-light text-ai-text',
+  supervisor: 'bg-warning-light text-warning-text',
+  evaluator:  'bg-revised-light text-revised-text',
+  reviewer:   'bg-green-light text-green-text',
+  system:     'bg-surface-alt text-muted',
 }
+
+// ── Column keys ───────────────────────────────────────────────────────────────
+
+const COLUMN_KEYS = [
+  'events.columns.timestamp',
+  'events.columns.sessionId',
+  'events.columns.type',
+  'events.columns.channel',
+  'events.columns.pool',
+  'events.columns.author',
+  'events.columns.role',
+] as const
 
 // ── EventsPage ────────────────────────────────────────────────────────────────
 
@@ -131,6 +147,7 @@ const PAGE_SIZE = 100
 
 export default function EventsPage() {
   const { tenantId } = useAuth()
+  const { t, i18n } = useTranslation('contacts')
   const [filters, setFilters] = useState<Filters>(DEFAULT_FILTERS)
   const [rows,    setRows]    = useState<EventRow[]>([])
   const [total,   setTotal]   = useState(0)
@@ -171,73 +188,74 @@ export default function EventsPage() {
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE))
 
   if (!tenantId) return (
-    <div className="flex items-center justify-center h-full text-gray-400 text-sm">
-      Nenhum tenant selecionado.
+    <div className="flex items-center justify-center h-full text-muted-light text-sm">
+      {t('noTenant')}
     </div>
   )
 
   return (
-    <div className="flex flex-col h-full overflow-hidden bg-gray-50">
-      <div className="bg-white flex-shrink-0 border-b border-gray-200">
-        <div className="px-4 pt-3 pb-2">
-          <span className="font-bold text-gray-800 text-base">Eventos</span>
-        </div>
-      </div>
-
+    <div className="flex flex-col h-full overflow-hidden bg-surface-muted">
       <FilterBar filters={filters} setFilters={setFilters} />
 
       {/* Count bar */}
-      <div className="flex items-center gap-2 px-4 py-2 bg-white border-b border-gray-100 flex-shrink-0 text-xs text-gray-400">
+      <div className="flex items-center gap-2 px-4 py-2 bg-white border-b border-border flex-shrink-0 text-xs text-muted-light">
         {loading
-          ? <><span className="animate-spin">⟳</span> Carregando…</>
+          ? <><span className="animate-spin">⟳</span> {t('events.loading')}</>
           : error
-            ? <span className="text-red-500">{error}</span>
-            : <><strong className="text-gray-700">{total.toLocaleString('pt-BR')}</strong> evento{total !== 1 ? 's' : ''}</>
+            ? <span className="text-red">{error}</span>
+            : <><strong className="text-dark">{total.toLocaleString(i18n.language)}</strong> {t('events.eventLabel', { count: total })}</>
         }
       </div>
 
       {/* Table */}
       <div className="flex-1 overflow-auto">
         {rows.length === 0 && !loading ? (
-          <div className="flex flex-col items-center justify-center h-full text-gray-400 gap-2">
-            <span className="text-3xl">📭</span>
-            <span className="text-sm">Nenhum evento encontrado com os filtros aplicados.</span>
-            {error && <span className="text-xs text-red-400">{error}</span>}
-          </div>
+          error ? (
+            <div className="flex flex-col items-center justify-center h-full text-red gap-2">
+              <AlertTriangle className="w-8 h-8" aria-hidden="true" />
+              <span className="text-sm font-medium">{t('events.serviceUnavailable')}</span>
+              <span className="text-xs text-red-text">{error}</span>
+            </div>
+          ) : (
+            <div className="flex flex-col items-center justify-center h-full text-muted-light gap-2">
+              <SearchX className="w-8 h-8" aria-hidden="true" />
+              <span className="text-sm">{t('events.empty')}</span>
+            </div>
+          )
         ) : (
           <table className="w-full text-sm">
-            <thead className="sticky top-0 bg-gray-50 border-b border-gray-200 z-10">
+            <thead className="sticky top-0 bg-surface-muted border-b border-border z-10">
               <tr>
-                {['Timestamp','Session ID','Tipo','Canal','Pool','Autor','Role'].map(col => (
-                  <th key={col} className="text-left text-xs font-semibold text-gray-500 uppercase tracking-wide px-4 py-2.5 whitespace-nowrap">
-                    {col}
+                {COLUMN_KEYS.map(col => (
+                  <th key={col} className="text-left text-xs font-semibold text-muted uppercase tracking-wide px-4 py-2.5 whitespace-nowrap">
+                    {t(col)}
                   </th>
                 ))}
               </tr>
             </thead>
-            <tbody className="divide-y divide-gray-100">
+            <tbody className="divide-y divide-border">
               {rows.map(row => {
                 const dt = row.timestamp
-                  ? new Date(row.timestamp).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'medium' })
+                  ? new Date(row.timestamp).toLocaleString(i18n.language, { dateStyle: 'short', timeStyle: 'medium' })
                   : '—'
                 const shortSession = row.session_id.length > 14 ? '…' + row.session_id.slice(-12) : row.session_id
-                const roleBadge    = row.author_role ? (ROLE_COLORS[row.author_role] ?? 'bg-gray-100 text-gray-600') : ''
+                const roleBadge    = row.author_role ? (ROLE_COLORS[row.author_role] ?? 'bg-surface-alt text-muted') : ''
                 return (
                   <tr key={row.event_id} className="hover:bg-primary/5 transition-colors">
-                    <td className="px-4 py-2.5 font-mono text-xs text-gray-500 whitespace-nowrap tabular-nums">{dt}</td>
-                    <td className="px-4 py-2.5 font-mono text-xs text-blue-600 whitespace-nowrap" title={row.session_id}>
+                    <td className="px-4 py-2.5 font-mono text-xs text-muted whitespace-nowrap tabular-nums">{dt}</td>
+                    <td className="px-4 py-2.5 font-mono text-xs text-secondary whitespace-nowrap" title={row.session_id}>
                       {shortSession}
                     </td>
                     <td className="px-4 py-2.5">
-                      <span className="inline-block text-xs font-medium px-2 py-0.5 rounded-full bg-gray-100 text-gray-700 whitespace-nowrap">
+                      <span className="inline-block text-xs font-medium px-2 py-0.5 rounded-full bg-surface-alt text-dark whitespace-nowrap">
                         {row.type}
                       </span>
                     </td>
-                    <td className="px-4 py-2.5 text-gray-500 text-xs whitespace-nowrap">{row.channel ?? '—'}</td>
-                    <td className="px-4 py-2.5 text-gray-500 text-xs whitespace-nowrap max-w-[120px] truncate" title={row.pool_id ?? ''}>
+                    <td className="px-4 py-2.5 text-muted text-xs whitespace-nowrap">{row.channel ?? '—'}</td>
+                    <td className="px-4 py-2.5 text-muted text-xs whitespace-nowrap max-w-[120px] truncate" title={row.pool_id ?? ''}>
                       {row.pool_id?.replace(/_/g, ' ') ?? '—'}
                     </td>
-                    <td className="px-4 py-2.5 text-gray-600 text-xs font-mono whitespace-nowrap max-w-[160px] truncate" title={row.author_id ?? ''}>
+                    <td className="px-4 py-2.5 text-muted text-xs font-mono whitespace-nowrap max-w-40 truncate" title={row.author_id ?? ''}>
                       {row.author_id ?? '—'}
                     </td>
                     <td className="px-4 py-2.5">
@@ -257,16 +275,16 @@ export default function EventsPage() {
 
       {/* Pagination */}
       {totalPages > 1 && (
-        <div className="flex items-center justify-between px-4 py-2 bg-white border-t border-gray-200 flex-shrink-0 text-sm">
-          <span className="text-gray-500 text-xs">Página {page} de {totalPages}</span>
+        <div className="flex items-center justify-between px-4 py-2 bg-white border-t border-border flex-shrink-0 text-sm">
+          <span className="text-muted text-xs">{t('lista.page', { page, total: totalPages })}</span>
           <div className="flex gap-1">
             <button disabled={page <= 1} onClick={() => { setPage(page - 1); load(page - 1) }}
-              className="px-3 py-1 rounded border border-gray-200 text-xs text-gray-600 disabled:opacity-40 hover:border-primary hover:text-primary transition-colors">
-              ← Anterior
+              className="px-3 py-1 rounded border border-border text-xs text-muted disabled:opacity-40 hover:border-primary hover:text-primary transition-colors">
+              {t('lista.prev')}
             </button>
             <button disabled={page >= totalPages} onClick={() => { setPage(page + 1); load(page + 1) }}
-              className="px-3 py-1 rounded border border-gray-200 text-xs text-gray-600 disabled:opacity-40 hover:border-primary hover:text-primary transition-colors">
-              Próxima →
+              className="px-3 py-1 rounded border border-border text-xs text-muted disabled:opacity-40 hover:border-primary hover:text-primary transition-colors">
+              {t('lista.next')}
             </button>
           </div>
         </div>

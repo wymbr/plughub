@@ -1,108 +1,197 @@
 id: skill_revisao_treplica_v1
-name: Revisão com Tréplica (até 3 rounds)
-version: "1.0"
+name: "Motor de Revisão com Contestação — Arc 13 Fase D"
+version: "2.0"
 description: |
-  Motor de estado para ciclo de revisão de avaliação com até 3 rounds (tréplica).
-  Fluxo: avaliação → revisão → contestação → revisão → contestação → revisão → congelamento.
-  O contador de rounds é controlado pelo workflow; a UI ecoa o valor recebido no submit (anti-replay).
-  Timeout em qualquer round: resultado é congelado no estado atual sem escalação.
-  Para ciclo com réplica (2 rounds), use skill_revisao_replica_v1 ou ajuste value: 2 no verificar_limite.
+  Motor de estado para o ciclo completo de revisão/contestação de avaliação.
+  Controla deadlines, roteia para revisor AI ou humano, e gerencia múltiplos rounds.
+
+  Fluxo por round:
+    1. Aguarda contestação do agente humano avaliado (contest_deadline_hours)
+    2. Se contestou → roteia para revisor AI ou humano (reviewer_type)
+       - AI:    dispatch agente_revisor_v1 via task step
+       - human: suspend aguardando decisão humana (review_deadline_hours)
+       - ai_then_human: AI primeiro; se falhar → human
+    3. Verifica se max_rounds atingido → loop ou finaliza
+    4. Timeout em qualquer ponto → congela resultado no estado atual
+
+  Contexto esperado no ContextStore (escrito pela evaluation-api antes do trigger):
+    session.instance_id           — ID da EvaluationInstance
+    session.result_id             — ID do EvaluationResult
+    session.reviewer_type         — "ai" | "human" | "ai_then_human"
+    session.max_rounds            — máximo de rounds (padrão 3)
+    session.contest_deadline_hours — prazo para o avaliado contestar (horas)
+    session.review_deadline_hours  — prazo para o revisor humano decidir (horas)
+    session.use_business_hours    — true = apenas em horário comercial
+    session.current_round         — inicializado em 0; incrementado a cada contestação
+
+  Interação com evaluation-api:
+    - evaluation-api escreve session.review_decision antes de cada resume:
+        "approved"  — agente humano não contestou (prazo expirou sem contestação)
+        "contested" — agente humano contestou ≥1 dimensão
+        "reviewed"  — revisor humano submeteu decisão
+    - agente_revisor_v1 escreve via evaluation_review_submit (Kafka → evaluation-api)
+    - evaluation_lock congela o resultado em timeout ou max_rounds
 classification:
   type: vertical
 
-entry: init_round
+entry: aguardar_contestacao
 
 steps:
-  # Inicializa o round counter no ContextStore
-  - id: init_round
-    type: invoke
-    tool: context_write
-    input:
-      tag: session.current_round
-      value: 1
-    on_success: aguardar_revisao
-    on_failure: encerrar
 
-  # Suspende aguardando decisão de revisão humana (aprovação ou contestação)
-  - id: aguardar_revisao
-    type: suspend
-    reason: input
-    timeout_hours: 48
-    business_hours: true
-    on_resume:
-      next: verificar_decisao_revisao
-    on_timeout:
-      next: congelar_resultado
-
-  # Lê a decisão gravada pelo evaluation-api no ContextStore antes do resume
-  - id: verificar_decisao_revisao
-    type: choice
-    conditions:
-      - field: "@ctx.session.review_decision"
-        operator: eq
-        value: "approved"
-        next: encerrar_aprovado
-      - field: "@ctx.session.review_decision"
-        operator: eq
-        value: "contested"
-        next: incrementar_round
-    default: congelar_resultado
-
-  # Incrementa o round e verifica se o limite de tréplica foi atingido
-  - id: incrementar_round
-    type: invoke
-    tool: context_write
-    input:
-      tag: session.current_round
-      value: "{{add(@ctx.session.current_round, 1)}}"
-    on_success: verificar_limite
-    on_failure: congelar_resultado
-
-  # Limite de tréplica = 3 rounds. Para réplica, mudar value para 2.
-  - id: verificar_limite
-    type: choice
-    conditions:
-      - field: "@ctx.session.current_round"
-        operator: gt
-        value: 3
-        next: congelar_resultado
-    default: aguardar_contestacao
-
-  # Suspende aguardando a contestação do avaliado (quem recebeu a avaliação)
+  # ── Aguarda contestação do agente humano avaliado ─────────────────────────────
+  # Timeout: contest_deadline_hours (lido do ContextStore, padrão 72h).
+  # Se o prazo expirar sem contestação → contestation_state=timeout_contestation → congelar.
+  # Se o agente contestou → evaluation-api resume o workflow com review_decision="contested".
   - id: aguardar_contestacao
     type: suspend
     reason: input
     timeout_hours: 72
     business_hours: true
     on_resume:
-      next: verificar_decisao_contestacao
+      next: verificar_contestacao
     on_timeout:
       next: congelar_resultado
 
-  # Após contestação, volta para aguardar nova revisão com alçada superior
-  - id: verificar_decisao_contestacao
+  # ── Verifica se houve contestação ou aprovação tácita ────────────────────────
+  - id: verificar_contestacao
     type: choice
     conditions:
-      - field: "@ctx.session.review_decision"
+      - field:    "@ctx.session.review_decision"
         operator: eq
-        value: "contested"
-        next: aguardar_revisao
-    default: encerrar_aprovado
+        value:    "contested"
+        next:     incrementar_round
+    default: encerrar_aprovado  # approved ou qualquer outro valor → sem contestação
 
-  # Congela o resultado no estado atual (timeout ou limite de rounds atingido)
+  # ── Incrementa round e verifica limite (max_rounds) ──────────────────────────
+  - id: incrementar_round
+    type: invoke
+    tool: context_write
+    input:
+      tag:   session.current_round
+      value: "{{add(@ctx.session.current_round, 1)}}"
+    on_success: verificar_limite_rounds
+    on_failure: congelar_resultado
+
+  - id: verificar_limite_rounds
+    type: choice
+    conditions:
+      - field:    "@ctx.session.current_round"
+        operator: gt
+        value:    "@ctx.session.max_rounds"
+        next:     congelar_resultado
+    default: rotear_revisor
+
+  # ── Roteia para AI ou humano baseado em reviewer_type ────────────────────────
+  - id: rotear_revisor
+    type: choice
+    conditions:
+      - field:    "@ctx.session.reviewer_type"
+        operator: eq
+        value:    "ai"
+        next:     dispatch_revisor_ai
+      - field:    "@ctx.session.reviewer_type"
+        operator: eq
+        value:    "ai_then_human"
+        next:     dispatch_revisor_ai
+    default: aguardar_revisao_humana   # reviewer_type="human" ou fallback
+
+  # ── Dispatch do revisor AI (agente_revisor_v1) via A2A ───────────────────────
+  # O agente lê threads round=1, 1.5 e 2 via evaluation_threads_get,
+  # decide por dimensão e submete via evaluation_review_submit.
+  # on_failure → tenta roteamento para humano (ai_then_human) ou congela.
+  - id: dispatch_revisor_ai
+    type: task
+    target:
+      skill_id: skill_revisao_v1
+    mode: assist
+    on_success: verificar_revisao_ai
+    on_failure: fallback_para_humano
+
+  # ── Verifica resultado da revisão AI ─────────────────────────────────────────
+  # evaluation_review_submit sinaliza se o resultado foi finalizado (max_rounds)
+  # ou se ainda há rounds disponíveis.
+  - id: verificar_revisao_ai
+    type: choice
+    conditions:
+      - field:    "@ctx.session.review_decision"
+        operator: eq
+        value:    "finalized"
+        next:     encerrar_aprovado
+    default: aguardar_proxima_contestacao  # resultado publicado, aguarda próximo round
+
+  # ── Fallback para humano quando AI falha (ai_then_human) ─────────────────────
+  # Se reviewer_type="ai" (sem fallback humano) → congela diretamente.
+  - id: fallback_para_humano
+    type: choice
+    conditions:
+      - field:    "@ctx.session.reviewer_type"
+        operator: eq
+        value:    "ai_then_human"
+        next:     aguardar_revisao_humana
+    default: congelar_resultado
+
+  # ── Aguarda revisão humana (reviewer_type=human ou fallback) ─────────────────
+  # Timeout: review_deadline_hours (lido do ContextStore, padrão 48h).
+  # evaluation-api escreve session.review_decision="reviewed" antes do resume.
+  - id: aguardar_revisao_humana
+    type: suspend
+    reason: input
+    timeout_hours: 48
+    business_hours: true
+    on_resume:
+      next: verificar_revisao_humana
+    on_timeout:
+      next: congelar_resultado
+
+  - id: verificar_revisao_humana
+    type: choice
+    conditions:
+      - field:    "@ctx.session.review_decision"
+        operator: eq
+        value:    "reviewed"
+        next:     verificar_finalizacao_humana
+    default: congelar_resultado
+
+  # Verifica se o revisor humano finalizou (último round) ou se há mais rounds
+  - id: verificar_finalizacao_humana
+    type: choice
+    conditions:
+      - field:    "@ctx.session.current_round"
+        operator: gte
+        value:    "@ctx.session.max_rounds"
+        next:     encerrar_aprovado
+    default: aguardar_proxima_contestacao
+
+  # ── Aguarda próxima contestação do avaliado (próximo round) ──────────────────
+  # O resultado revisado foi publicado. O avaliado pode contestar novamente
+  # dentro de contest_deadline_hours (reinicia o prazo).
+  - id: aguardar_proxima_contestacao
+    type: suspend
+    reason: input
+    timeout_hours: 72
+    business_hours: true
+    on_resume:
+      next: verificar_contestacao   # mesmo handler — verifica se contestou ou aceitou
+    on_timeout:
+      next: congelar_resultado      # aceitação tácita por timeout
+
+  # ── Congela o resultado no estado atual ───────────────────────────────────────
+  # Acionado por: timeout em qualquer suspend, max_rounds atingido sem revisão,
+  # ou falha do revisor AI sem fallback humano.
   - id: congelar_resultado
     type: invoke
     tool: evaluation_lock
     input:
-      result_id: "@ctx.session.result_id"
+      result_id:   "@ctx.session.result_id"
       lock_reason: "review_timeout"
     on_success: encerrar
     on_failure: encerrar
 
-  - id: encerrar_aprovado
-    type: complete
+  # ── Terminadores ──────────────────────────────────────────────────────────────
+  - id:      encerrar_aprovado
+    type:    complete
     outcome: resolved
 
-  - id: encerrar
-    type: complete
+  - id:      encerrar
+    type:    complete
     outcome: resolved

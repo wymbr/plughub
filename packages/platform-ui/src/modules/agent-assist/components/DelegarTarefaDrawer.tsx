@@ -1,26 +1,25 @@
 /**
- * DelegarTarefaDrawer — Arc 11 Fase C (F3) + delegation_input
+ * DelegarTarefaDrawer — Arc 11 Fase C (F3) + delegation_input + console-acoes-tab
  *
  * Slide-in drawer for delegating a task to an AI specialist agent.
- * Opened from ActionBar "Delegar" button or from the message selection toolbar.
+ * Opened from the message selection toolbar (context menu).
  *
  * Behaviour:
  *   1. Operator selects an agent from the list of mentionable agents.
  *   2. If the agent's skill defines delegation_input, typed fields are rendered
- *      (select, text, number). Otherwise falls back to a free-text textarea.
- *   3. Chooses visibility (agents_only = internal; all = visible to customer).
- *   4. Submits → calls onDelegate(agentTypeId, instruction, visibility).
+ *      (select, text, number). No typed fields AND no prefilledContext → button
+ *      enabled immediately with no text input shown.
+ *   3. Visibility is owned by the agent's YAML (delegation_visibility) — no UI choice.
+ *      Default: agents_only. Resolved silently and passed to onDelegate.
+ *   4. Submits → calls onDelegate(alias, instruction, visibility).
  *
- * The parent converts the delegation into an @mention command via handleSend.
- * Typed fields are serialized to a human-readable instruction string so the
- * agent receives natural-language context without orchestrator-bridge changes.
- *
- * Serialization example:
- *   objetivo=Sugerir resposta ao cliente; contexto_extra=Cliente mencionou fatura
- *   → "[objetivo: Sugerir resposta ao cliente] [contexto_extra: Cliente mencionou fatura]"
+ * Typed fields are serialized to a human-readable instruction string:
+ *   → "[objetivo: Sugerir resposta ao cliente] [contexto_extra: fatura em aberto]"
  */
 
 import React, { useEffect, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
+import { Upload, Bot, X, Check, FileText } from "lucide-react";
 import { DelegationField, DelegationSchema, MentionableAgent } from "../types";
 import { useDelegationSchema } from "../hooks/useDelegationSchema";
 
@@ -76,14 +75,15 @@ function FieldSelect({ field, value, onChange }: {
   value:    string;
   onChange: (v: string) => void;
 }) {
+  const { t } = useTranslation('agentAssist');
   return (
     <select
       value={value}
       onChange={e => onChange(e.target.value)}
-      className="w-full text-xs border border-gray-300 rounded-lg px-3 py-2
-        focus:outline-none focus:ring-2 focus:ring-orange-400 bg-white text-gray-700"
+      className="w-full text-xs border border-border-strong rounded-lg px-3 py-2
+        focus:outline-none focus:ring-2 focus:ring-primary/40 bg-white text-dark"
     >
-      <option value="">— Selecionar —</option>
+      <option value="">{t('delegar.select')}</option>
       {(field.options ?? []).map(opt => (
         <option key={opt.value} value={opt.value}>{opt.label}</option>
       ))}
@@ -102,8 +102,8 @@ function FieldText({ field, value, onChange }: {
       value={value}
       onChange={e => onChange(e.target.value)}
       placeholder={field.placeholder ?? ""}
-      className="w-full text-xs border border-gray-300 rounded-lg px-3 py-2
-        focus:outline-none focus:ring-2 focus:ring-orange-400 text-gray-700 placeholder-gray-400"
+      className="w-full text-xs border border-border-strong rounded-lg px-3 py-2
+        focus:outline-none focus:ring-2 focus:ring-primary/40 text-dark placeholder-muted-light"
     />
   );
 }
@@ -117,14 +117,14 @@ export const DelegarTarefaDrawer: React.FC<DelegarTarefaDrawerProps> = ({
   onDelegate,
   onClose,
 }) => {
+  const { t } = useTranslation('agentAssist');
   const [pickedAgent,  setPickedAgent]  = useState<MentionableAgent | null>(null);
   const [freeText,     setFreeText]     = useState(prefilledContext);
   const [fieldValues,  setFieldValues]  = useState<Record<string, string>>({});
-  const [visibility,   setVisibility]   = useState<"all" | "agents_only">("agents_only");
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
-  // Fetch delegation schema whenever the picked agent changes
-  const { schema, loading: schemaLoading } = useDelegationSchema(
+  // Fetch delegation schema + delegation_visibility whenever the picked agent changes
+  const { schema, delegationVisibility, loading: schemaLoading } = useDelegationSchema(
     pickedAgent?.agent_type_id ?? null
   );
 
@@ -169,17 +169,12 @@ export const DelegarTarefaDrawer: React.FC<DelegarTarefaDrawerProps> = ({
     if (!pickedAgent) return false;
     if (schemaLoading) return false;
     if (schema) {
-      // All required fields must have a value
-      const missingRequired = schema.fields.some(
-        f => f.required && !(fieldValues[f.id] ?? "").trim()
-      );
-      if (missingRequired) return false;
-      // At least one field or context must have content
-      const hasContent =
-        schema.fields.some(f => (fieldValues[f.id] ?? "").trim().length > 0) ||
-        freeText.trim().length > 0;
-      return hasContent;
+      // Only required fields must be filled — no free-text requirement
+      return !schema.fields.some(f => f.required && !(fieldValues[f.id] ?? "").trim());
     }
+    // No schema: if no prefilledContext the button is immediately enabled (no input shown)
+    if (!prefilledContext) return true;
+    // With prefilledContext, the textarea is shown — require it not to be empty
     return freeText.trim().length > 0;
   }
 
@@ -191,7 +186,8 @@ export const DelegarTarefaDrawer: React.FC<DelegarTarefaDrawerProps> = ({
       : freeText.trim();
 
     // Use alias (e.g. "auth") as the @mention target — mcp-server resolves it via mentionable_pools.
-    onDelegate(pickedAgent.alias, instruction, visibility);
+    // Visibility is owned by the agent's YAML (delegation_visibility); default: agents_only.
+    onDelegate(pickedAgent.alias, instruction, delegationVisibility ?? "agents_only");
     setPickedAgent(null);
     setFreeText(prefilledContext);
     setFieldValues({});
@@ -209,20 +205,21 @@ export const DelegarTarefaDrawer: React.FC<DelegarTarefaDrawerProps> = ({
 
       {/* Drawer panel */}
       <div className="fixed right-0 top-0 bottom-0 z-50 w-80 bg-white shadow-xl
-        flex flex-col border-l border-gray-200 animate-slide-in-right">
+        flex flex-col border-l border-border animate-slide-in-right">
 
         {/* Header */}
         <div className="flex items-center justify-between px-4 py-3
-          border-b border-gray-200 flex-shrink-0 bg-orange-50">
+          border-b border-border flex-shrink-0 bg-primary-light">
           <div className="flex items-center gap-2">
-            <span className="text-base">📤</span>
-            <h3 className="text-sm font-semibold text-gray-800">Delegar Tarefa</h3>
+            <Upload className="w-4 h-4 text-primary" aria-hidden="true" />
+            <h3 className="text-sm font-semibold text-dark">{t('delegar.title')}</h3>
           </div>
           <button
             onClick={onClose}
-            className="text-gray-400 hover:text-gray-600 text-lg leading-none p-1"
+            className="text-muted-light hover:text-muted leading-none p-1"
+            aria-label={t('delegar.close')}
           >
-            ✕
+            <X className="w-4 h-4" aria-hidden="true" />
           </button>
         </div>
 
@@ -230,13 +227,13 @@ export const DelegarTarefaDrawer: React.FC<DelegarTarefaDrawerProps> = ({
 
           {/* Step 1 — pick agent */}
           <div>
-            <label className="block text-[10px] font-bold text-gray-500 uppercase tracking-wide mb-1.5">
-              Agente especialista
+            <label className="block text-2xs font-bold text-muted uppercase tracking-wide mb-1.5">
+              {t('delegar.specialistAgent')}
             </label>
             {agents.length === 0 ? (
-              <p className="text-xs text-gray-400">
-                Nenhum agente disponível para este pool. Configure{" "}
-                <code className="text-[10px] bg-gray-100 px-1 rounded">mentionable_pools</code>.
+              <p className="text-xs text-muted-light">
+                {t('delegar.noAgents')}{" "}
+                <code className="text-2xs bg-surface-alt px-1 rounded">mentionable_pools</code>.
               </p>
             ) : (
               <div className="flex flex-col gap-1">
@@ -247,28 +244,28 @@ export const DelegarTarefaDrawer: React.FC<DelegarTarefaDrawerProps> = ({
                     className={[
                       "w-full text-left px-3 py-2.5 rounded-lg border transition-colors",
                       pickedAgent?.agent_type_id === agent.agent_type_id
-                        ? "bg-orange-50 border-orange-300 ring-1 ring-orange-200"
-                        : "bg-gray-50 border-gray-200 hover:bg-orange-50 hover:border-orange-200",
+                        ? "bg-primary-light border-primary/30 ring-1 ring-primary/20"
+                        : "bg-surface-muted border-border hover:bg-primary-light hover:border-primary/30",
                     ].join(" ")}
                   >
                     <div className="flex items-center gap-1.5">
-                      <span className="text-sm">🤖</span>
-                      <span className="text-xs font-semibold text-gray-800">
+                      <Bot className="w-4 h-4 text-ai flex-shrink-0" aria-hidden="true" />
+                      <span className="text-xs font-semibold text-dark">
                         {formatAgentName(agent.agent_type_id)}
                       </span>
                       {pickedAgent?.agent_type_id === agent.agent_type_id && (
-                        <span className="ml-auto text-orange-500 text-xs">✓</span>
+                        <Check className="ml-auto w-3.5 h-3.5 text-primary" aria-hidden="true" />
                       )}
                     </div>
                     {agent.description && (
-                      <p className="text-[10px] text-gray-500 mt-0.5 ml-5 leading-snug">
+                      <p className="text-2xs text-muted mt-0.5 ml-5 leading-snug">
                         {agent.description}
                       </p>
                     )}
-                    <div className="text-[10px] text-gray-400 font-mono mt-0.5 ml-5">
-                      <span className="text-blue-500 font-semibold">@{agent.alias}</span>
+                    <div className="text-2xs text-muted-light font-mono mt-0.5 ml-5">
+                      <span className="text-secondary font-semibold">@{agent.alias}</span>
                       {agent.pool_id && (
-                        <span className="ml-1 text-orange-400">· {agent.pool_id}</span>
+                        <span className="ml-1 text-muted-light">· {agent.pool_id}</span>
                       )}
                     </div>
                   </button>
@@ -282,26 +279,26 @@ export const DelegarTarefaDrawer: React.FC<DelegarTarefaDrawerProps> = ({
             <div>
               {schemaLoading ? (
                 <div className="flex items-center gap-2 py-2">
-                  <div className="w-3 h-3 border-2 border-orange-400 border-t-transparent rounded-full animate-spin" />
-                  <span className="text-xs text-gray-400">Carregando parâmetros…</span>
+                  <div className="w-3 h-3 border-2 border-primary/40 border-t-transparent rounded-full animate-spin" />
+                  <span className="text-xs text-muted-light">{t('delegar.loadingParams')}</span>
                 </div>
               ) : schema ? (
                 /* ── Typed schema fields ── */
                 <div className="flex flex-col gap-3">
                   <div className="flex items-center gap-1.5 mb-0.5">
-                    <span className="text-[10px] font-bold text-gray-500 uppercase tracking-wide">
-                      Parâmetros da delegação
+                    <span className="text-2xs font-bold text-muted uppercase tracking-wide">
+                      {t('delegar.params')}
                     </span>
-                    <span className="text-[10px] bg-orange-100 text-orange-700 px-1.5 py-0.5 rounded font-medium">
-                      {schema.fields.length} campo{schema.fields.length !== 1 ? "s" : ""}
+                    <span className="text-2xs bg-primary-light text-primary px-1.5 py-0.5 rounded font-medium">
+                      {t(schema.fields.length === 1 ? 'delegar.fields_one' : 'delegar.fields_other', { count: schema.fields.length })}
                     </span>
                   </div>
 
                   {schema.fields.map(field => (
                     <div key={field.id}>
-                      <label className="block text-[10px] font-semibold text-gray-600 mb-1">
+                      <label className="block text-2xs font-semibold text-muted mb-1">
                         {field.label}
-                        {field.required && <span className="ml-1 text-red-400">*</span>}
+                        {field.required && <span className="ml-1 text-red">*</span>}
                       </label>
                       {field.type === "select" ? (
                         <FieldSelect
@@ -322,107 +319,69 @@ export const DelegarTarefaDrawer: React.FC<DelegarTarefaDrawerProps> = ({
                   {/* Optional extra context when schema exists */}
                   {prefilledContext && (
                     <div>
-                      <label className="block text-[10px] font-semibold text-gray-600 mb-1">
-                        Contexto das mensagens selecionadas
+                      <label className="block text-2xs font-semibold text-muted mb-1">
+                        {t('delegar.prefilledContext')}
                       </label>
                       <textarea
                         value={freeText}
                         onChange={e => setFreeText(e.target.value)}
                         rows={3}
-                        className="w-full text-xs border border-gray-300 rounded-lg px-3 py-2
-                          focus:outline-none focus:ring-2 focus:ring-orange-400 resize-none
-                          text-gray-700 placeholder-gray-400"
+                        className="w-full text-xs border border-border-strong rounded-lg px-3 py-2
+                          focus:outline-none focus:ring-2 focus:ring-primary/40 resize-none
+                          text-dark placeholder-muted-light"
                       />
-                      <p className="text-[10px] text-gray-400 mt-0.5">
-                        📋 Pré-preenchido a partir das mensagens selecionadas
+                      <p className="flex items-center gap-1 text-2xs text-muted-light mt-0.5">
+                        <FileText className="w-3 h-3" aria-hidden="true" />
+                        {t('delegar.prefilledFrom')}
                       </p>
                     </div>
                   )}
                 </div>
-              ) : (
-                /* ── Free-text fallback ── */
+              ) : prefilledContext ? (
+                /* ── Free-text fallback — only shown when prefilledContext exists ── */
                 <div>
-                  <label className="block text-[10px] font-bold text-gray-500 uppercase tracking-wide mb-1.5">
-                    Instrução
-                    <span className="ml-1 text-red-400">*</span>
+                  <label className="block text-2xs font-bold text-muted uppercase tracking-wide mb-1.5">
+                    {t('delegar.instruction')}
                   </label>
                   <textarea
                     ref={textareaRef}
                     value={freeText}
                     onChange={e => setFreeText(e.target.value)}
-                    placeholder="Descreva o que o agente deve fazer nesta delegação…"
+                    placeholder={t('delegar.instructionPlaceholder')}
                     rows={5}
-                    className="w-full text-xs border border-gray-300 rounded-lg px-3 py-2
-                      focus:outline-none focus:ring-2 focus:ring-orange-400 resize-none
-                      text-gray-700 placeholder-gray-400"
+                    className="w-full text-xs border border-border-strong rounded-lg px-3 py-2
+                      focus:outline-none focus:ring-2 focus:ring-primary/40 resize-none
+                      text-dark placeholder-muted-light"
                     onKeyDown={e => {
                       if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) handleSubmit();
                     }}
                   />
-                  {prefilledContext && (
-                    <p className="text-[10px] text-gray-400 mt-0.5">
-                      📋 Pré-preenchido a partir das mensagens selecionadas
-                    </p>
-                  )}
+                  <p className="flex items-center gap-1 text-2xs text-muted-light mt-0.5">
+                    <FileText className="w-3 h-3" aria-hidden="true" />
+                    {t('delegar.prefilledFrom')}
+                  </p>
                 </div>
-              )}
+              ) : null /* no schema + no prefilledContext → no input, button enabled immediately */
+              }
             </div>
           )}
 
-          {/* Step 3 — visibility */}
-          {pickedAgent && (
-            <div>
-              <label className="block text-[10px] font-bold text-gray-500 uppercase tracking-wide mb-1.5">
-                Visibilidade da delegação
-              </label>
-              <div className="flex flex-col gap-1.5">
-                {(["agents_only", "all"] as const).map(vis => (
-                  <label
-                    key={vis}
-                    className={[
-                      "flex items-start gap-2.5 p-2.5 rounded-lg border cursor-pointer transition-colors",
-                      visibility === vis
-                        ? "bg-orange-50 border-orange-300"
-                        : "bg-gray-50 border-gray-200 hover:bg-orange-50/50",
-                    ].join(" ")}
-                  >
-                    <input
-                      type="radio"
-                      name="delegation-visibility"
-                      value={vis}
-                      checked={visibility === vis}
-                      onChange={() => setVisibility(vis)}
-                      className="mt-0.5 accent-orange-500"
-                    />
-                    <div>
-                      <div className="text-xs font-medium text-gray-800">
-                        {vis === "agents_only" ? "🔒 Interno (agents_only)" : "🌐 Visível ao cliente (all)"}
-                      </div>
-                      <div className="text-[10px] text-gray-500 mt-0.5">
-                        {vis === "agents_only"
-                          ? "Cliente não vê a delegação nem a resposta do agente"
-                          : "Agente responde diretamente ao cliente na conversa"}
-                      </div>
-                    </div>
-                  </label>
-                ))}
-              </div>
-            </div>
-          )}
         </div>
 
         {/* Footer */}
-        <div className="border-t border-gray-200 px-4 py-3 flex-shrink-0 bg-white">
+        <div className="border-t border-border px-4 py-3 flex-shrink-0 bg-white">
           <button
             onClick={handleSubmit}
             disabled={!isValid()}
             className="w-full py-2 text-sm font-semibold text-white rounded-lg transition-colors
-              bg-orange-600 hover:bg-orange-700 disabled:opacity-40 disabled:cursor-not-allowed"
+              bg-primary hover:bg-primary-dark disabled:opacity-40 disabled:cursor-not-allowed
+              inline-flex items-center justify-center gap-2"
           >
-            📤 Delegar
+            <Upload className="w-4 h-4" aria-hidden="true" />
+            {t('delegar.delegate')}
           </button>
-          {!schema && (
-            <p className="text-[10px] text-gray-400 text-center mt-1.5">⌘↵ para delegar</p>
+          {!schema && !!prefilledContext && (
+            <p className="text-2xs text-muted text-center mt-1.5">{t('delegar.ctrlEnter')}</p>
           )}
         </div>
       </div>

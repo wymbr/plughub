@@ -10,6 +10,8 @@
  *   - Average duration
  */
 import React, { useCallback, useEffect, useState } from 'react'
+import { Settings } from 'lucide-react'
+import { useTranslation } from 'react-i18next'
 import { useAuth } from '@/auth/useAuth'
 import Spinner from '@/components/ui/Spinner'
 
@@ -37,10 +39,7 @@ interface SummaryResponse {
 
 type GroupBy = 'flow_id' | 'campaign_id'
 
-const GROUP_BY_OPTIONS: { value: GroupBy; label: string }[] = [
-  { value: 'flow_id',     label: 'Skill / Flow' },
-  { value: 'campaign_id', label: 'Campanha' },
-]
+const GROUP_BY_VALUES: GroupBy[] = ['flow_id', 'campaign_id']
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -64,10 +63,10 @@ function RateBar({ value, color }: { value: number; color: string }) {
   const w = Math.min(100, Math.max(0, value * 100)).toFixed(0)
   return (
     <div className="flex items-center gap-1.5">
-      <div className="w-20 h-1.5 rounded bg-gray-100 overflow-hidden">
+      <div className="w-20 h-1.5 rounded bg-surface-alt overflow-hidden">
         <div className="h-full rounded" style={{ width: `${w}%`, background: color }} />
       </div>
-      <span className="text-[11px] tabular-nums" style={{ color }}>{pct(value)}</span>
+      <span className="text-xs tabular-nums" style={{ color }}>{pct(value)}</span>
     </div>
   )
 }
@@ -75,20 +74,21 @@ function RateBar({ value, color }: { value: number; color: string }) {
 // ── Outcome distribution bar ──────────────────────────────────────────────────
 
 function OutcomeBar({ row }: { row: WorkflowSummaryRow }) {
+  const { t } = useTranslation('workflows')
   const total = row.total_triggered || 1
   const segments = [
-    { count: row.total_completed, color: '#059669', label: 'Concluído' },
-    { count: row.total_suspended, color: '#2D9CDB', label: 'Suspenso' },
-    { count: row.total_failed,    color: '#DC2626', label: 'Falhou' },
-    { count: row.total_timeout,   color: '#D97706', label: 'Timeout' },
-    { count: row.total_cancelled, color: '#6b7280', label: 'Cancelado' },
+    { count: row.total_completed, color: '#059669', statusKey: 'completed' },
+    { count: row.total_suspended, color: '#2D9CDB', statusKey: 'suspended' },
+    { count: row.total_failed,    color: '#DC2626', statusKey: 'failed' },
+    { count: row.total_timeout,   color: '#D97706', statusKey: 'timed_out' },
+    { count: row.total_cancelled, color: '#6b7280', statusKey: 'cancelled' },
   ]
   return (
     <div className="flex h-3 rounded overflow-hidden w-28 gap-px" title={
-      segments.map(s => `${s.label}: ${s.count}`).join(' · ')
+      segments.map(s => `${t(`statuses.${s.statusKey}`, { defaultValue: s.statusKey })}: ${s.count}`).join(' · ')
     }>
       {segments.map(s => s.count > 0
-        ? <div key={s.label} style={{ width: `${(s.count / total) * 100}%`, background: s.color }} />
+        ? <div key={s.statusKey} style={{ width: `${(s.count / total) * 100}%`, background: s.color }} />
         : null
       )}
     </div>
@@ -99,10 +99,10 @@ function OutcomeBar({ row }: { row: WorkflowSummaryRow }) {
 
 function KpiCard({ label, value, sub, color }: { label: string; value: string; sub?: string; color?: string }) {
   return (
-    <div className="bg-white border border-gray-200 rounded-lg px-5 py-3 flex flex-col gap-0.5 min-w-[140px]">
-      <span className="text-[11px] text-gray-400 uppercase tracking-wide">{label}</span>
+    <div className="bg-white border border-border rounded-lg px-5 py-3 flex flex-col gap-0.5 min-w-[140px]">
+      <span className="text-xs text-muted-light uppercase tracking-wide">{label}</span>
       <span className="text-2xl font-bold leading-none" style={{ color: color ?? '#1e293b' }}>{value}</span>
-      {sub && <span className="text-[11px] text-gray-400">{sub}</span>}
+      {sub && <span className="text-xs text-muted-light">{sub}</span>}
     </div>
   )
 }
@@ -111,6 +111,7 @@ function KpiCard({ label, value, sub, color }: { label: string; value: string; s
 
 export default function AnaliseProcessosPage() {
   const { tenantId } = useAuth()
+  const { t, i18n } = useTranslation('workflows')
 
   const [fromDt,    setFromDt]    = useState(iso7DaysAgo)
   const [toDt,      setToDt]      = useState(isoToday)
@@ -194,7 +195,7 @@ export default function AnaliseProcessosPage() {
     const active = sortKey === k
     return (
       <th onClick={() => handleSort(k)}
-        className={`px-3 py-2.5 font-medium text-${align} cursor-pointer select-none whitespace-nowrap hover:text-gray-700 transition-colors ${active ? 'text-primary' : 'text-gray-500'}`}>
+        className={`px-3 py-2.5 font-medium text-${align} cursor-pointer select-none whitespace-nowrap hover:text-dark transition-colors ${active ? 'text-primary' : 'text-muted'}`}>
         {label}{active ? (sortAsc ? ' ↑' : ' ↓') : ''}
       </th>
     )
@@ -202,35 +203,33 @@ export default function AnaliseProcessosPage() {
 
   if (!tenantId) {
     return (
-      <div className="flex items-center justify-center h-full text-gray-400 text-sm">
-        Nenhum tenant selecionado.
+      <div className="flex items-center justify-center h-full text-muted-light text-sm">
+        {t('analise.noTenant')}
       </div>
     )
   }
 
   return (
-    <div className="flex flex-col h-full overflow-hidden bg-gray-50">
+    <div className="flex flex-col h-full overflow-hidden bg-surface-muted">
 
       {/* Filter bar */}
-      <div className="bg-white border-b border-gray-200 px-5 py-2.5 flex items-center gap-3 flex-shrink-0 flex-wrap">
-        <span className="font-semibold text-gray-800 text-sm">Análise de Processos</span>
-
-        <div className="flex items-center gap-1.5 ml-2">
-          <label className="text-xs text-gray-500">De</label>
+      <div className="bg-white border-b border-border px-5 py-2.5 flex items-center gap-3 flex-shrink-0 flex-wrap">
+        <div className="flex items-center gap-1.5">
+          <label className="text-xs text-muted">De</label>
           <input type="date" value={fromDt} onChange={e => setFromDt(e.target.value)}
-            className="text-xs border border-gray-300 rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-primary/40" />
+            className="text-xs border border-border-strong rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-primary/40" />
         </div>
         <div className="flex items-center gap-1.5">
-          <label className="text-xs text-gray-500">Até</label>
+          <label className="text-xs text-muted">–</label>
           <input type="date" value={toDt} onChange={e => setToDt(e.target.value)}
-            className="text-xs border border-gray-300 rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-primary/40" />
+            className="text-xs border border-border-strong rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-primary/40" />
         </div>
         <div className="flex items-center gap-1.5">
-          <label className="text-xs text-gray-500">Agrupar por</label>
+          <label className="text-xs text-muted">{t('analise.groupBy')}</label>
           <select value={groupBy} onChange={e => setGroupBy(e.target.value as GroupBy)}
-            className="text-xs border border-gray-300 rounded px-2 py-1 bg-white focus:outline-none focus:ring-1 focus:ring-primary/40">
-            {GROUP_BY_OPTIONS.map(o => (
-              <option key={o.value} value={o.value}>{o.label}</option>
+            className="text-xs border border-border-strong rounded px-2 py-1 bg-white focus:outline-none focus:ring-1 focus:ring-primary/40">
+            {GROUP_BY_VALUES.map(v => (
+              <option key={v} value={v}>{t(`analise.groupByOptions.${v}`)}</option>
             ))}
           </select>
         </div>
@@ -239,91 +238,99 @@ export default function AnaliseProcessosPage() {
 
         {loading
           ? <Spinner />
-          : <button onClick={load} className="text-xs text-gray-400 hover:text-gray-600 transition-colors px-2 py-1">↻ Atualizar</button>
+          : <button onClick={load} className="text-xs text-muted-light hover:text-muted transition-colors px-2 py-1">
+              {t('analise.refresh')}
+            </button>
         }
         <button onClick={exportCsv} disabled={data.length === 0}
-          className="text-xs border border-gray-200 rounded px-2.5 py-1 text-gray-600 hover:bg-gray-50 disabled:opacity-40 transition-colors">
-          ↓ CSV
+          className="text-xs border border-border rounded px-2.5 py-1 text-muted hover:bg-surface-muted disabled:opacity-40 transition-colors">
+          {t('analise.exportCsv')}
         </button>
       </div>
 
       {/* KPI strip */}
       <div className="flex gap-3 px-5 py-3 flex-shrink-0 flex-wrap">
-        <KpiCard label="Disparados"   value={totalTriggered.toLocaleString('pt-BR')} />
-        <KpiCard label="Concluídos"   value={totalCompleted.toLocaleString('pt-BR')}
-          sub={totalTriggered > 0 ? `${pct(totalCompleted / totalTriggered)} do total` : undefined}
+        <KpiCard label={t('analise.kpi.triggered')} value={totalTriggered.toLocaleString(i18n.language)} />
+        <KpiCard label={t('analise.kpi.completed')} value={totalCompleted.toLocaleString(i18n.language)}
+          sub={totalTriggered > 0 ? t('analise.kpi.ofTotal', { pct: pct(totalCompleted / totalTriggered) }) : undefined}
           color="#059669" />
-        <KpiCard label="Falhas + Timeout" value={totalFailed.toLocaleString('pt-BR')}
-          sub={totalTriggered > 0 ? `${pct(totalFailed / totalTriggered)} do total` : undefined}
+        <KpiCard label={t('analise.kpi.failures')} value={totalFailed.toLocaleString(i18n.language)}
+          sub={totalTriggered > 0 ? t('analise.kpi.ofTotal', { pct: pct(totalFailed / totalTriggered) }) : undefined}
           color={totalFailed > 0 ? '#DC2626' : '#6b7280'} />
         <KpiCard
-          label="Conclusão média"
+          label={t('analise.kpi.avgCompletion')}
           value={wCompletion !== null ? pct(wCompletion) : '—'}
           color={wCompletion !== null && wCompletion >= 0.8 ? '#059669'
                : wCompletion !== null && wCompletion >= 0.6 ? '#1B4F8A'
                : '#D97706'}
         />
-        <KpiCard label="Duração média"  value={fmtDuration(wAvgDuration)} />
+        <KpiCard label={t('analise.kpi.avgDuration')} value={fmtDuration(wAvgDuration)} />
       </div>
 
       {/* Error */}
       {error && (
-        <div className="mx-5 mb-2 px-3 py-2 bg-red-50 border border-red-200 rounded text-xs text-red-600 flex-shrink-0">
-          Erro ao carregar dados: {error}
+        <div className="mx-5 mb-2 px-3 py-2 bg-red-light border border-red/30 rounded text-xs text-red-text flex-shrink-0">
+          {t('analise.loadError')} {error}
         </div>
       )}
 
       {/* Table */}
       <div className="flex-1 overflow-auto px-5 pb-5">
         {sorted.length === 0 && !loading ? (
-          <div className="flex flex-col items-center justify-center py-20 text-gray-400 gap-2">
-            <span className="text-3xl">⚙️</span>
-            <span className="text-sm">Nenhum workflow no período</span>
+          <div className="flex flex-col items-center justify-center py-20 text-muted-light gap-2">
+            <Settings className="w-10 h-10" aria-hidden="true" />
+            <span className="text-sm">{t('analise.empty')}</span>
           </div>
         ) : (
-          <table className="w-full text-xs bg-white border border-gray-200 rounded-lg overflow-hidden border-separate border-spacing-0">
-            <thead className="sticky top-0 z-10 bg-gray-50 border-b border-gray-200">
+          <table className="w-full text-xs bg-white border border-border rounded-lg overflow-hidden border-separate border-spacing-0">
+            <thead className="sticky top-0 z-10 bg-surface-muted border-b border-border">
               <tr>
-                <Th label={GROUP_BY_OPTIONS.find(o => o.value === groupBy)?.label ?? 'Grupo'} k="group_key" />
-                <Th label="Disparados"  k="total_triggered"  align="right" />
-                <th className="px-3 py-2.5 text-left text-gray-500 font-medium whitespace-nowrap">Distribuição</th>
-                <Th label="Concluídos"  k="total_completed"  align="right" />
-                <Th label="Falhou"      k="total_failed"     align="right" />
-                <Th label="Timeout"     k="total_timeout"    align="right" />
-                <Th label="Cancelado"   k="total_cancelled"  align="right" />
-                <Th label="Suspenso"    k="total_suspended"  align="right" />
-                <th className="px-3 py-2.5 text-left text-gray-500 font-medium whitespace-nowrap">Conclusão</th>
-                <th className="px-3 py-2.5 text-left text-gray-500 font-medium whitespace-nowrap">Falha</th>
-                <Th label="Duração méd." k="avg_duration_ms" align="right" />
+                <Th label={t(`analise.groupByOptions.${groupBy}`)} k="group_key" />
+                <Th label={t('analise.table.triggered')}  k="total_triggered"  align="right" />
+                <th className="px-3 py-2.5 text-left text-muted font-medium whitespace-nowrap">
+                  {t('analise.table.distribution')}
+                </th>
+                <Th label={t('analise.table.completed')}  k="total_completed"  align="right" />
+                <Th label={t('analise.table.failed')}     k="total_failed"     align="right" />
+                <Th label={t('analise.table.timeout')}    k="total_timeout"    align="right" />
+                <Th label={t('analise.table.cancelled')}  k="total_cancelled"  align="right" />
+                <Th label={t('analise.table.suspended')}  k="total_suspended"  align="right" />
+                <th className="px-3 py-2.5 text-left text-muted font-medium whitespace-nowrap">
+                  {t('analise.table.completion')}
+                </th>
+                <th className="px-3 py-2.5 text-left text-muted font-medium whitespace-nowrap">
+                  {t('analise.table.failure')}
+                </th>
+                <Th label={t('analise.table.avgDuration')} k="avg_duration_ms" align="right" />
               </tr>
             </thead>
             <tbody>
               {sorted.map((row, i) => (
-                <tr key={i} className="border-t border-gray-100 hover:bg-gray-50 transition-colors">
-                  <td className="px-3 py-2.5 font-mono text-gray-700 max-w-[220px] truncate" title={row.group_key}>
+                <tr key={i} className="border-t border-border hover:bg-surface-muted transition-colors">
+                  <td className="px-3 py-2.5 font-mono text-dark max-w-[220px] truncate" title={row.group_key}>
                     {row.group_key || '—'}
                   </td>
-                  <td className="px-3 py-2.5 text-right text-gray-700 font-medium">
-                    {row.total_triggered.toLocaleString('pt-BR')}
+                  <td className="px-3 py-2.5 text-right text-dark font-medium">
+                    {row.total_triggered.toLocaleString(i18n.language)}
                   </td>
                   <td className="px-3 py-2.5">
                     <OutcomeBar row={row} />
                   </td>
                   <td className="px-3 py-2.5 text-right">
-                    <span className="text-green-600 font-medium">{row.total_completed}</span>
+                    <span className="text-green-text font-medium">{row.total_completed}</span>
                   </td>
                   <td className="px-3 py-2.5 text-right">
-                    <span className={row.total_failed > 0 ? 'text-red-500 font-medium' : 'text-gray-300'}>
+                    <span className={row.total_failed > 0 ? 'text-red font-medium' : 'text-border-strong'}>
                       {row.total_failed}
                     </span>
                   </td>
                   <td className="px-3 py-2.5 text-right">
-                    <span className={row.total_timeout > 0 ? 'text-warning font-medium' : 'text-gray-300'}>
+                    <span className={row.total_timeout > 0 ? 'text-warning font-medium' : 'text-border-strong'}>
                       {row.total_timeout}
                     </span>
                   </td>
-                  <td className="px-3 py-2.5 text-right text-gray-400">{row.total_cancelled || <span className="text-gray-200">0</span>}</td>
-                  <td className="px-3 py-2.5 text-right text-gray-400">{row.total_suspended || <span className="text-gray-200">0</span>}</td>
+                  <td className="px-3 py-2.5 text-right text-muted-light">{row.total_cancelled || <span className="text-border">0</span>}</td>
+                  <td className="px-3 py-2.5 text-right text-muted-light">{row.total_suspended || <span className="text-border">0</span>}</td>
                   <td className="px-3 py-2.5">
                     <RateBar value={row.completion_rate}
                       color={row.completion_rate >= 0.8 ? '#059669' : row.completion_rate >= 0.6 ? '#1B4F8A' : '#D97706'} />
@@ -332,7 +339,7 @@ export default function AnaliseProcessosPage() {
                     <RateBar value={row.failure_rate}
                       color={row.failure_rate > 0.15 ? '#DC2626' : '#6b7280'} />
                   </td>
-                  <td className="px-3 py-2.5 text-right text-gray-500">
+                  <td className="px-3 py-2.5 text-right text-muted">
                     {fmtDuration(row.avg_duration_ms)}
                   </td>
                 </tr>

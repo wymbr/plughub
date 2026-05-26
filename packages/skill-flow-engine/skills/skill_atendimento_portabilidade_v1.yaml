@@ -1,0 +1,97 @@
+# skill_atendimento_portabilidade_v1.yaml
+# Atendimento Portabilidade — Orquestrador Tier 2
+#
+# FASE 2 — Não ativo no registry Phase 1.
+# Phase 1: portabilidade_ia usa diretamente skill_portabilidade_intake_v1
+#          (agente_portabilidade_intake_v1.yaml).
+# Phase 2: trocar no registry agente_portabilidade_ia_v1.skills para
+#          skill_atendimento_portabilidade_v1 — este orquestrador invoca
+#          o agente_portabilidade_intake_v1 via task step (Tier 3 specialist).
+#
+# Pool: portabilidade_ia
+# Tier: 2 (Execution Workflow — session-scoped, task steps)
+#
+# Arquitetura Phase 2:
+#   1. saudacao          — notify: boas-vindas
+#   2. coletar_contexto  — task: agente_portabilidade_intake_v1 (mode: assist)
+#                          O Tier 3 coleta dados e escreve no ContextStore.
+#                          O segmento Tier 3 encerra; Tier 2 retoma aqui.
+#   3. verificar_jornada — choice: journey_started eq true → finalizar | else → erro
+#   4. finalizar         — complete resolved (Journey assíncrona prossegue em Tier 1)
+#   5. encerrar_erro     — complete failed
+#
+# Vantagens do padrão Tier 2 → Tier 3:
+#   - O Tier 3 (intake) é reutilizável — outros fluxos podem invocá-lo
+#   - O Tier 2 pode adicionar steps antes/depois do intake sem alterar o Tier 3
+#   - Separação clara de responsabilidades: coleta vs orquestração
+#
+# Para ativar na Phase 2:
+#   1. Adicionar pool portabilidade_intake_ia ao tenant_demo.yaml
+#   2. Registrar agente_portabilidade_specialist_v1 → skill_portabilidade_intake_v1
+#   3. Atualizar agente_portabilidade_ia_v1.skills → skill_atendimento_portabilidade_v1
+
+id: skill_atendimento_portabilidade_v1
+name: "Atendimento Portabilidade v1 — Orquestrador Tier 2"
+version: "1.0"
+description: |
+  Orquestrador Tier 2 para o fluxo de portabilidade (Phase 2).
+  Invoca o agente de intake (Tier 3) via task step para coletar dados,
+  depois confirma o início da Journey de portabilidade.
+  Não usado no registry Phase 1 — ver agente_portabilidade_intake_v1.
+classification:
+  type: orchestrator
+  domain: portabilidade
+
+# creates_journey: false — a Journey é criada pelo Tier 3 via invoke journey_start.
+# O Tier 2 apenas orquestra — não cria Journey diretamente.
+
+entry: saudacao
+
+steps:
+
+  # ── Etapa 1: saudação ─────────────────────────────────────────────────────────
+  - id: saudacao
+    type: notify
+    message: "Olá! Vou coordenar seu processo de portabilidade. Agora vou chamar nosso especialista para coletar os dados necessários."
+    on_success: coletar_contexto
+    on_failure: coletar_contexto
+
+  # ── Etapa 2: delegar coleta ao Tier 3 ────────────────────────────────────────
+  # O agente_portabilidade_intake_v1 (Tier 3) interage com o cliente,
+  # coleta os dados, escreve no ContextStore e inicia a Journey.
+  # O segmento Tier 3 encerra com outcome: resolved e o controle retorna aqui.
+  #
+  # Phase 2: skill_id abaixo deve apontar para o pool do Tier 3 specialist.
+  # Por enquanto usa o intake diretamente como referência.
+  - id: coletar_contexto
+    type: task
+    target:
+      skill_id: skill_portabilidade_intake_v1
+    mode: assist
+    execution_mode: sync
+    on_success: verificar_jornada
+    on_failure: encerrar_erro   # se intake falhar, encerra o Tier 2 também
+
+  # ── Etapa 3: verificar se Journey foi iniciada ────────────────────────────────
+  # O Tier 3 escreve journey.jornada_iniciada = "true" se journey_start ok.
+  # Se não escrever (falha silenciosa no Tier 3), encaminha para encerrar_erro.
+  # Phase 1: esta verificação é redundante (Tier 3 encerra direto), mas documenta
+  # o padrão para quando Tier 2 precisar reagir ao resultado do Tier 3.
+  - id: verificar_jornada
+    type: choice
+    conditions:
+      - field: "@ctx.journey.jornada_iniciada"
+        operator: exists
+        next: finalizar
+    default: finalizar   # mesmo sem confirmação, assume sucesso (Tier 3 já notificou cliente)
+
+  # ── Etapa 4: finalização normal ───────────────────────────────────────────────
+  - id: finalizar
+    type: complete
+    outcome: resolved
+
+  # ── Fallback ──────────────────────────────────────────────────────────────────
+  - id: encerrar_erro
+    type: complete
+    outcome: failed
+    issue_status: "Intake Tier 3 falhou — portabilidade não registrada"

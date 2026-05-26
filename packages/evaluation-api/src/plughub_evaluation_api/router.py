@@ -53,6 +53,7 @@ Endpoints:
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from datetime import datetime, timezone
@@ -69,6 +70,7 @@ from .config import settings
 from . import db as _db
 from . import kafka_emitter as _kafka
 from .sampling import should_sample, compute_expires_at, compute_priority
+from .sampling_engine import run_curation_sampling
 
 logger = logging.getLogger("plughub.evaluation.router")
 
@@ -560,6 +562,9 @@ class IngestBody(BaseModel):
     comparison_report:  dict | None = None
     knowledge_snippets: list[dict] = Field(default_factory=list)
     criterion_responses: list[dict] = Field(default_factory=list)
+    # Arc 13 Fase B — per-dimension evidence and evaluation type
+    dimension_threads: list[dict] = Field(default_factory=list)  # [{dimension_id, score, justification, evidence_entries[]}]
+    evaluated_agent_type: str = "human_agent"  # "human_agent" | "ai_agent"
 
 
 @router.post("/v1/evaluation/ingest", status_code=201)
@@ -601,7 +606,89 @@ async def ingest_result(body: IngestBody, request: Request) -> dict:
             body.criterion_responses,
         )
 
-    # Emit Kafka
+    # ── Arc 13 Fase B: persist ContestationThread round=1 per dimension ──────
+    # One thread per dimension the evaluator scored — creates the immutable
+    # audit trail that contestation/review threads will be appended to.
+    thread_count = 0
+    if body.dimension_threads:
+        for dim in body.dimension_threads:
+            dim_id = dim.get("dimension_id") or dim.get("criterion_id", "unknown")
+            try:
+                await _db.create_contestation_thread(
+                    pool,
+                    tenant_id=body.tenant_id,
+                    evaluation_instance_id=body.instance_id,
+                    dimension_id=dim_id,
+                    round=1,
+                    author_type="evaluator_ai",
+                    author_id=body.evaluator_agent_id,
+                    text=dim.get("justification", ""),
+                    evidence_entries=dim.get("evidence_entries", []),
+                )
+                thread_count += 1
+            except Exception as exc:
+                logger.warning(
+                    "failed to create contestation thread for dimension=%s: %s",
+                    dim_id, exc,
+                )
+
+    # ── Arc 13 Fase B: set evaluated_agent_type + initial contestation_state ──
+    # Fluxo 2 (AI agent): finalize immediately (no contestation).
+    # Fluxo 1 (human agent): set contestation_open (or pre_review_pending if campaign has pre_review).
+    try:
+        campaign = await _db.get_campaign(pool, body.campaign_id, body.tenant_id)
+        pre_review = campaign.get("pre_review_enabled", False) if campaign else False
+    except Exception:
+        pre_review = False
+
+    if body.evaluated_agent_type == "ai_agent":
+        # Fluxo 2: immediate finalization — no contestation allowed for AI agents
+        await _db.finalize_result(
+            pool, result["id"],
+            contestation_state="auto_finalized",
+            final_score=float(body.overall_score or 0),
+            process_duration_ms=0,
+        )
+        await _kafka.emit_evaluation_finalized(
+            producer,
+            instance_id=body.instance_id,
+            session_id=body.session_id,
+            campaign_id=body.campaign_id,
+            tenant_id=body.tenant_id,
+            final_score=float(body.overall_score or 0),
+            final_scores_by_dimension=[
+                {"dimension_id": d.get("dimension_id", ""), "score": d.get("score", 0)}
+                for d in body.dimension_threads
+            ],
+            contestation_state="auto_finalized",
+            process_duration_ms=0,
+        )
+        # Fluxo 2: trigger curation sampling as non-blocking background task
+        asyncio.create_task(
+            run_curation_sampling(
+                pool,
+                instance_id=body.instance_id,
+                tenant_id=body.tenant_id,
+                campaign_id=body.campaign_id,
+                normalized_score=float(body.normalized_score or body.overall_score or 0),
+            ),
+            name=f"curation-sampling-{body.instance_id}",
+        )
+    else:
+        # Fluxo 1: human agent — set contestation_state based on pre_review config
+        initial_state = "pre_review_pending" if pre_review else "contestation_open"
+        await _db.set_contestation_state(
+            pool, result["id"], initial_state,
+            action_required=None,
+        )
+        # Also set evaluated_agent_type on result
+        async with pool.acquire() as conn:
+            await conn.execute(
+                "UPDATE evaluation.results SET evaluated_agent_type=$1, updated_at=now() WHERE id=$2",
+                body.evaluated_agent_type, result["id"],
+            )
+
+    # Emit Kafka lifecycle event
     await _kafka.emit_instance_completed(
         producer, settings.evaluation_topic,
         instance_id=body.instance_id,
@@ -618,6 +705,9 @@ async def ingest_result(body: IngestBody, request: Request) -> dict:
         "result_id":               result["id"],
         "instance_id":             body.instance_id,
         "criteria_rows_created":   len(criteria_rows),
+        "contestation_threads_created": thread_count,
+        "contestation_state":      initial_state,
+        "evaluated_agent_type":    body.evaluated_agent_type,
         "eval_status":             body.eval_status,
     }
 

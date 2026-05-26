@@ -136,7 +136,7 @@ function SliceForm({ slice, colorIdx, canRemove, onChange, onRemove }: SliceForm
         <div className="flex items-center gap-2">
           <div className="w-3 h-3 rounded-full" style={{ background: color }} />
           <input
-            className="text-sm font-semibold border-b border-transparent hover:border-gray-300 focus:border-primary focus:outline-none bg-transparent px-0"
+            className="text-sm font-semibold border-b border-transparent hover:border-border-strong focus:border-primary focus:outline-none bg-transparent px-0"
             value={slice.label}
             onChange={(e) => set('label', e.target.value)}
             maxLength={40}
@@ -145,7 +145,7 @@ function SliceForm({ slice, colorIdx, canRemove, onChange, onRemove }: SliceForm
         {canRemove && (
           <button
             onClick={onRemove}
-            className="text-red-400 hover:text-red-600 text-xs"
+            className="text-red hover:text-red-text text-xs"
           >
             Remover
           </button>
@@ -154,7 +154,7 @@ function SliceForm({ slice, colorIdx, canRemove, onChange, onRemove }: SliceForm
 
       <div className="grid grid-cols-2 gap-3">
         <div className="flex flex-col gap-1">
-          <label className="text-xs text-gray-500">De</label>
+          <label className="text-xs text-muted">De</label>
           <input
             type="date"
             className="border rounded px-2 py-1 text-sm focus:outline-none focus:ring-1 focus:ring-primary"
@@ -163,7 +163,7 @@ function SliceForm({ slice, colorIdx, canRemove, onChange, onRemove }: SliceForm
           />
         </div>
         <div className="flex flex-col gap-1">
-          <label className="text-xs text-gray-500">Até</label>
+          <label className="text-xs text-muted">Até</label>
           <input
             type="date"
             className="border rounded px-2 py-1 text-sm focus:outline-none focus:ring-1 focus:ring-primary"
@@ -174,7 +174,7 @@ function SliceForm({ slice, colorIdx, canRemove, onChange, onRemove }: SliceForm
       </div>
 
       <div className="flex flex-col gap-1">
-        <label className="text-xs text-gray-500">Tipo de agente (opcional)</label>
+        <label className="text-xs text-muted">Tipo de agente (opcional)</label>
         <input
           className="border rounded px-2 py-1 text-sm focus:outline-none focus:ring-1 focus:ring-primary"
           placeholder="ex: agente_retencao_v1"
@@ -200,31 +200,31 @@ function MetricTable({ results, metricDefs }: MetricTableProps) {
     <div className="overflow-x-auto">
       <table className="w-full text-sm border-collapse">
         <thead>
-          <tr className="bg-gray-50 border-b">
-            <th className="text-left px-4 py-2 font-semibold text-gray-700">Métrica</th>
+          <tr className="bg-surface-muted border-b">
+            <th className="text-left px-4 py-2 font-semibold text-dark">Métrica</th>
             {results.map((r, i) => (
               <th key={r.id} className="text-right px-4 py-2 font-semibold" style={{ color: SLICE_COLORS[i] }}>
                 {r.label}
               </th>
             ))}
             {loaded.length === 2 && (
-              <th className="text-right px-4 py-2 font-semibold text-gray-500">
+              <th className="text-right px-4 py-2 font-semibold text-muted">
                 Δ ({loaded[1].label} − {loaded[0].label})
               </th>
             )}
           </tr>
-          <tr className="bg-gray-50 border-b text-xs text-gray-500">
+          <tr className="bg-surface-muted border-b text-xs text-muted">
             <td className="px-4 py-1">N sessões / avaliações</td>
             {results.map((r) => (
               <td key={r.id} className="text-right px-4 py-1">
                 {r.loading ? <Spinner size="sm" /> : r.data
                   ? (
-                    <span className={hasLowN(r.data) ? 'text-orange-500' : ''}>
+                    <span className={hasLowN(r.data) ? 'text-warning' : ''}>
                       {r.data.n_sessions} / {r.data.n_evaluations}
                       {hasLowN(r.data) && ' ⚠'}
                     </span>
                   )
-                  : (r.error ? <span className="text-red-500">erro</span> : '—')}
+                  : (r.error ? <span className="text-red">erro</span> : '—')}
               </td>
             ))}
             {loaded.length === 2 && <td />}
@@ -247,8 +247,8 @@ function MetricTable({ results, metricDefs }: MetricTableProps) {
             const deltaUnit = def.key === 'aht_ms' ? ' min' : def.key.startsWith('agent_event:') ? '' : '%'
 
             return (
-              <tr key={def.key} className="border-b hover:bg-gray-50 transition-colors">
-                <td className="px-4 py-3 font-medium text-gray-700">{def.label}</td>
+              <tr key={def.key} className="border-b hover:bg-surface-muted transition-colors">
+                <td className="px-4 py-3 font-medium text-dark">{def.label}</td>
                 {results.map((r) => (
                   <td key={r.id} className="text-right px-4 py-3 tabular-nums">
                     {r.loading
@@ -412,18 +412,18 @@ export default function AnaliseComparacaoPage() {
     <div className="flex flex-col gap-6 p-6 max-w-6xl mx-auto">
       {/* Page header */}
       <div>
-        <h1 className="text-2xl font-bold text-gray-900">Comparação por Grupos</h1>
-        <p className="text-sm text-gray-500 mt-1">
+        <h1 className="text-2xl font-bold text-dark">Comparação por Grupos</h1>
+        <p className="text-sm text-muted mt-1">
           Compare até {MAX_SLICES} grupos — por período, tipo de agente ou versão de skill.
         </p>
       </div>
 
       {/* Global filters */}
       <div className="bg-white border rounded-lg p-4 flex flex-col gap-4">
-        <h2 className="text-sm font-semibold text-gray-700">Filtros globais</h2>
+        <h2 className="text-sm font-semibold text-dark">Filtros globais</h2>
         <div className="grid grid-cols-2 gap-4">
           <div className="flex flex-col gap-1">
-            <label className="text-xs text-gray-500">Pool</label>
+            <label className="text-xs text-muted">Pool</label>
             <input
               className="border rounded px-2 py-1 text-sm focus:outline-none focus:ring-1 focus:ring-primary"
               placeholder="ex: retencao_humano"
@@ -432,7 +432,7 @@ export default function AnaliseComparacaoPage() {
             />
           </div>
           <div className="flex flex-col gap-1">
-            <label className="text-xs text-gray-500">Campanha</label>
+            <label className="text-xs text-muted">Campanha</label>
             <input
               className="border rounded px-2 py-1 text-sm focus:outline-none focus:ring-1 focus:ring-primary"
               placeholder="ex: campanha_q2_2026"
@@ -453,7 +453,7 @@ export default function AnaliseComparacaoPage() {
       {/* Slice builder */}
       <div className="bg-white border rounded-lg p-4 flex flex-col gap-4">
         <div className="flex items-center justify-between">
-          <h2 className="text-sm font-semibold text-gray-700">
+          <h2 className="text-sm font-semibold text-dark">
             Grupos ({slices.length}/{MAX_SLICES})
           </h2>
           {slices.length < MAX_SLICES && (
@@ -496,7 +496,7 @@ export default function AnaliseComparacaoPage() {
         <>
           {/* Low-N warning banner */}
           {results.some(r => hasLowN(r.data)) && (
-            <div className="bg-orange-50 border border-orange-200 text-orange-700 text-sm rounded-lg px-4 py-3 flex items-start gap-2">
+            <div className="bg-warning-light border border-warning/30 text-warning-text text-sm rounded-lg px-4 py-3 flex items-start gap-2">
               <span>⚠</span>
               <span>
                 Um ou mais grupos têm N {'<'} 30 sessões ou avaliações. Os resultados podem
@@ -507,7 +507,7 @@ export default function AnaliseComparacaoPage() {
 
           {/* Error indicators */}
           {results.some(r => r.error) && (
-            <div className="bg-red-50 border border-red-200 text-red-700 text-sm rounded-lg px-4 py-3">
+            <div className="bg-red-light border border-red/30 text-red-text text-sm rounded-lg px-4 py-3">
               Erro ao carregar:{' '}
               {results.filter(r => r.error).map(r => r.label).join(', ')}
             </div>
@@ -515,7 +515,7 @@ export default function AnaliseComparacaoPage() {
 
           {/* Grouped bar chart */}
           <div className="bg-white border rounded-lg p-4">
-            <h2 className="text-sm font-semibold text-gray-700 mb-4">Gráfico de barras agrupadas</h2>
+            <h2 className="text-sm font-semibold text-dark mb-4">Gráfico de barras agrupadas</h2>
             {results.some(r => r.loading) ? (
               <div className="h-72 flex items-center justify-center">
                 <Spinner />
@@ -528,7 +528,7 @@ export default function AnaliseComparacaoPage() {
           {/* Comparison table */}
           <div className="bg-white border rounded-lg overflow-hidden">
             <div className="p-4 border-b">
-              <h2 className="text-sm font-semibold text-gray-700">Tabela comparativa</h2>
+              <h2 className="text-sm font-semibold text-dark">Tabela comparativa</h2>
             </div>
             {results.some(r => r.loading) ? (
               <div className="p-8 flex items-center justify-center">
@@ -543,7 +543,7 @@ export default function AnaliseComparacaoPage() {
 
       {/* Empty state */}
       {!hasResults && (
-        <div className="bg-gray-50 border border-dashed border-gray-300 rounded-lg p-12 text-center text-gray-500 text-sm">
+        <div className="bg-surface-muted border border-dashed border-border-strong rounded-lg p-12 text-center text-muted text-sm">
           Configure os grupos e clique em <strong>Calcular</strong> para ver os resultados.
         </div>
       )}

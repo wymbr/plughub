@@ -35,10 +35,10 @@ const CHANNEL_ICONS: Record<string, string> = {
 }
 
 const STATUS_COLORS: Record<string, string> = {
-  responded:  'bg-green-100 text-green-700',
-  timed_out:  'bg-red-100 text-red-700',
-  sent:       'bg-blue-100 text-blue-700',
-  requested:  'bg-yellow-100 text-yellow-700',
+  responded:  'bg-green-light text-green-text',
+  timed_out:  'bg-red-light text-red-text',
+  sent:       'bg-primary-light text-primary',
+  requested:  'bg-warning-light text-warning-text',
 }
 
 // ── API hook ───────────────────────────────────────────────────────────────────
@@ -92,9 +92,9 @@ function useCampaignData(
 
 function RateBadge({ rate }: { rate: number }) {
   const color =
-    rate >= 70 ? 'bg-green-100 text-green-700' :
-    rate >= 40 ? 'bg-yellow-100 text-yellow-700' :
-                 'bg-red-100 text-red-700'
+    rate >= 70 ? 'bg-green-light text-green-text' :
+    rate >= 40 ? 'bg-warning-light text-warning-text' :
+                 'bg-red-light text-red-text'
   return (
     <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold ${color}`}>
       {rate.toFixed(1)}%
@@ -107,7 +107,7 @@ function MiniBar({ responded, sent, timed_out, requested }: {
 }) {
   const { t } = useTranslation('campaigns')
   const total = responded + sent + timed_out + requested
-  if (total === 0) return <div className="h-2 bg-gray-100 rounded-full w-full" />
+  if (total === 0) return <div className="h-2 bg-surface-alt rounded-full w-full" />
 
   const pct = (n: number) => `${((n / total) * 100).toFixed(1)}%`
 
@@ -115,19 +115,19 @@ function MiniBar({ responded, sent, timed_out, requested }: {
     <div className="flex h-2 rounded-full overflow-hidden w-full gap-0.5">
       {responded > 0 && (
         <div title={`${t('statusLabels.responded')}: ${responded}`}
-          className="bg-green-400 rounded-l-full" style={{ width: pct(responded) }} />
+          className="bg-green rounded-l-full" style={{ width: pct(responded) }} />
       )}
       {sent > 0 && (
         <div title={`${t('statusLabels.sent')}: ${sent}`}
-          className="bg-blue-400" style={{ width: pct(sent) }} />
+          className="bg-secondary" style={{ width: pct(sent) }} />
       )}
       {timed_out > 0 && (
         <div title={`${t('statusLabels.timedOut')}: ${timed_out}`}
-          className="bg-red-400" style={{ width: pct(timed_out) }} />
+          className="bg-red" style={{ width: pct(timed_out) }} />
       )}
       {requested > 0 && (
         <div title={`${t('statusLabels.requested')}: ${requested}`}
-          className="bg-yellow-300 rounded-r-full" style={{ width: pct(requested) }} />
+          className="bg-warning rounded-r-full" style={{ width: pct(requested) }} />
       )}
     </div>
   )
@@ -146,19 +146,19 @@ function CampaignCard({
   return (
     <button
       onClick={onClick}
-      className={`w-full text-left px-4 py-3 border-b border-gray-100 hover:bg-gray-50 transition-colors ${
-        selected ? 'bg-blue-50 border-l-2 border-l-secondary' : ''
+      className={`w-full text-left px-4 py-3 border-b border-border hover:bg-surface-muted transition-colors ${
+        selected ? 'bg-primary-light border-l-2 border-l-secondary' : ''
       }`}
     >
       <div className="flex items-center justify-between mb-1">
-        <p className="text-sm font-medium text-gray-900 truncate max-w-[170px]">
+        <p className="text-sm font-medium text-dark truncate max-w-[170px]">
           {summary.campaign_id}
         </p>
         <RateBadge rate={summary.response_rate_pct} />
       </div>
       <div className="flex items-center justify-between mb-2">
-        <span className="text-xs text-gray-500">{summary.total} {t('statusLabels.shots')}</span>
-        <span className="text-xs text-gray-400">
+        <span className="text-xs text-muted">{summary.total} {t('statusLabels.shots')}</span>
+        <span className="text-xs text-muted-light">
           {summary.responded} {t('statusLabels.responded')}
         </span>
       </div>
@@ -174,10 +174,10 @@ function CampaignCard({
 
 function KpiCard({ label, value, sub }: { label: string; value: string; sub?: string }) {
   return (
-    <div className="bg-white border border-gray-200 rounded-lg p-4">
-      <p className="text-xs text-gray-500 mb-1">{label}</p>
-      <p className="text-2xl font-bold text-gray-900">{value}</p>
-      {sub && <p className="text-xs text-gray-400 mt-1">{sub}</p>}
+    <div className="bg-white border border-border rounded-lg p-4">
+      <p className="text-xs text-muted mb-1">{label}</p>
+      <p className="text-2xl font-bold text-dark">{value}</p>
+      {sub && <p className="text-xs text-muted-light mt-1">{sub}</p>}
     </div>
   )
 }
@@ -195,20 +195,20 @@ function ChannelBreakdown({ events }: { events: CollectEvent[] }) {
   if (channels.length === 0) return null
 
   return (
-    <div className="bg-white border border-gray-200 rounded-lg p-4">
-      <h3 className="text-sm font-semibold text-gray-700 mb-3">{t('detail.channelBreak')}</h3>
+    <div className="bg-white border border-border rounded-lg p-4">
+      <h3 className="text-sm font-semibold text-dark mb-3">{t('detail.channelBreak')}</h3>
       <div className="space-y-2">
         {channels.map(([ch, { total, responded }]) => (
           <div key={ch} className="flex items-center gap-2">
             <span className="text-base">{CHANNEL_ICONS[ch] ?? '📡'}</span>
-            <span className="text-sm text-gray-700 w-24 capitalize">{ch}</span>
-            <div className="flex-1 h-2 bg-gray-100 rounded-full overflow-hidden">
+            <span className="text-sm text-dark w-24 capitalize">{ch}</span>
+            <div className="flex-1 h-2 bg-surface-alt rounded-full overflow-hidden">
               <div
-                className="h-2 bg-green-400 rounded-full"
+                className="h-2 bg-green rounded-full"
                 style={{ width: total > 0 ? `${(responded / total) * 100}%` : '0%' }}
               />
             </div>
-            <span className="text-xs text-gray-500 w-16 text-right">
+            <span className="text-xs text-muted w-16 text-right">
               {responded}/{total}
             </span>
           </div>
@@ -219,14 +219,14 @@ function ChannelBreakdown({ events }: { events: CollectEvent[] }) {
 }
 
 function CollectEventRow({ event }: { event: CollectEvent }) {
-  const statusClass = STATUS_COLORS[event.status] ?? 'bg-gray-100 text-gray-600'
+  const statusClass = STATUS_COLORS[event.status] ?? 'bg-surface-alt text-muted'
 
   return (
-    <tr className="hover:bg-gray-50">
-      <td className="px-4 py-2 text-xs font-mono text-gray-500 max-w-[120px] truncate">
+    <tr className="hover:bg-surface-muted">
+      <td className="px-4 py-2 text-xs font-mono text-muted max-w-[120px] truncate">
         {event.collect_token.slice(0, 16)}…
       </td>
-      <td className="px-4 py-2 text-xs text-gray-700 capitalize">
+      <td className="px-4 py-2 text-xs text-dark capitalize">
         {CHANNEL_ICONS[event.channel] ?? '📡'} {event.channel}
       </td>
       <td className="px-4 py-2">
@@ -234,8 +234,8 @@ function CollectEventRow({ event }: { event: CollectEvent }) {
           {event.status}
         </span>
       </td>
-      <td className="px-4 py-2 text-xs text-gray-500">{fmtDate(event.send_at)}</td>
-      <td className="px-4 py-2 text-xs text-gray-500">{fmtDuration(event.elapsed_ms)}</td>
+      <td className="px-4 py-2 text-xs text-muted">{fmtDate(event.send_at)}</td>
+      <td className="px-4 py-2 text-xs text-muted">{fmtDuration(event.elapsed_ms)}</td>
     </tr>
   )
 }
@@ -257,10 +257,10 @@ function CampaignDetail({
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h2 className="text-lg font-semibold text-gray-900">{summary.campaign_id}</h2>
-          <p className="text-sm text-gray-500 mt-0.5">
+          <h2 className="text-lg font-semibold text-dark">{summary.campaign_id}</h2>
+          <p className="text-sm text-muted mt-0.5">
             {summary.total} {t('statusLabels.shots')} • {t('responseRate')}{' '}
-            <strong className="text-gray-700">{summary.response_rate_pct.toFixed(1)}%</strong>
+            <strong className="text-dark">{summary.response_rate_pct.toFixed(1)}%</strong>
           </p>
         </div>
         <RateBadge rate={summary.response_rate_pct} />
@@ -283,8 +283,8 @@ function CampaignDetail({
       </div>
 
       {/* Status bar */}
-      <div className="bg-white border border-gray-200 rounded-lg p-4">
-        <h3 className="text-sm font-semibold text-gray-700 mb-3">{t('detail.statusDist')}</h3>
+      <div className="bg-white border border-border rounded-lg p-4">
+        <h3 className="text-sm font-semibold text-dark mb-3">{t('detail.statusDist')}</h3>
         <MiniBar
           responded={summary.responded}
           sent={summary.sent}
@@ -293,12 +293,12 @@ function CampaignDetail({
         />
         <div className="flex gap-4 mt-2">
           {[
-            { label: t('detail.responded'), color: 'bg-green-400', count: summary.responded },
-            { label: t('detail.sent'),    color: 'bg-blue-400',  count: summary.sent },
-            { label: t('detail.expired'),   color: 'bg-red-400',   count: summary.timed_out },
-            { label: t('statusLabels.requested'),  color: 'bg-yellow-300', count: summary.requested },
+            { label: t('detail.responded'), color: 'bg-green',     count: summary.responded },
+            { label: t('detail.sent'),    color: 'bg-secondary',  count: summary.sent },
+            { label: t('detail.expired'),   color: 'bg-red',       count: summary.timed_out },
+            { label: t('statusLabels.requested'),  color: 'bg-warning', count: summary.requested },
           ].map(({ label, color, count }) => (
-            <div key={label} className="flex items-center gap-1.5 text-xs text-gray-600">
+            <div key={label} className="flex items-center gap-1.5 text-xs text-muted">
               <div className={`w-2.5 h-2.5 rounded-full ${color}`} />
               {label}: {count}
             </div>
@@ -310,21 +310,21 @@ function CampaignDetail({
       {campaignEvents.length > 0 && <ChannelBreakdown events={campaignEvents} />}
 
       {/* Collect events table */}
-      <div className="bg-white border border-gray-200 rounded-lg overflow-hidden">
-        <div className="px-4 py-3 border-b border-gray-100">
-          <h3 className="text-sm font-semibold text-gray-700">
+      <div className="bg-white border border-border rounded-lg overflow-hidden">
+        <div className="px-4 py-3 border-b border-border">
+          <h3 className="text-sm font-semibold text-dark">
             {t('detail.recentEvents')} ({campaignEvents.length})
           </h3>
         </div>
         {campaignEvents.length === 0 ? (
-          <div className="px-4 py-8 text-center text-sm text-gray-500">
+          <div className="px-4 py-8 text-center text-sm text-muted">
             {t('noRecentEvents', { defaultValue: 'No events recorded yet' })}
           </div>
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
-                <tr className="bg-gray-50 text-xs text-gray-500 uppercase tracking-wide">
+                <tr className="bg-surface-muted text-xs text-muted uppercase tracking-wide">
                   <th className="px-4 py-2 text-left">{t('detail.token')}</th>
                   <th className="px-4 py-2 text-left">{t('detail.channel')}</th>
                   <th className="px-4 py-2 text-left">{t('detail.status')}</th>
@@ -332,7 +332,7 @@ function CampaignDetail({
                   <th className="px-4 py-2 text-left">{t('detail.elapsed')}</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-gray-100">
+              <tbody className="divide-y divide-border">
                 {campaignEvents.slice(0, 50).map(e => (
                   <CollectEventRow key={e.collect_token} event={e} />
                 ))}
@@ -382,11 +382,11 @@ export default function CampaignsPage() {
   return (
     <div className="flex h-full overflow-hidden">
       {/* Sidebar */}
-      <aside className="w-80 border-r border-gray-200 bg-white flex flex-col shrink-0">
+      <aside className="w-80 border-r border-border bg-white flex flex-col shrink-0">
         {/* Header */}
-        <div className="px-4 py-4 border-b border-gray-100">
+        <div className="px-4 py-4 border-b border-border">
           <div className="flex items-center justify-between mb-3">
-            <h1 className="text-base font-semibold text-gray-900">{t('title')}</h1>
+            <h1 className="text-base font-semibold text-dark">{t('title')}</h1>
             <button
               onClick={refresh}
               className="text-xs text-secondary hover:text-primary transition-colors"
@@ -417,9 +417,9 @@ export default function CampaignsPage() {
                   })(),
                 },
               ].map(({ label, value }) => (
-                <div key={label} className="bg-gray-50 rounded-lg p-2 text-center">
-                  <p className="text-xs text-gray-500">{label}</p>
-                  <p className="text-sm font-bold text-gray-900">{value}</p>
+                <div key={label} className="bg-surface-muted rounded-lg p-2 text-center">
+                  <p className="text-xs text-muted">{label}</p>
+                  <p className="text-sm font-bold text-dark">{value}</p>
                 </div>
               ))}
             </div>
@@ -430,7 +430,7 @@ export default function CampaignsPage() {
             <select
               value={filterChannel}
               onChange={e => setFilterChannel(e.target.value)}
-              className="flex-1 text-xs border border-gray-200 rounded px-2 py-1.5 text-gray-700 bg-white"
+              className="flex-1 text-xs border border-border rounded px-2 py-1.5 text-dark bg-white"
             >
               <option value="">{t('filters.all')} {t('filters.channel')}</option>
               {CHANNEL_OPTIONS.filter(Boolean).map(ch => (
@@ -440,7 +440,7 @@ export default function CampaignsPage() {
             <select
               value={filterStatus}
               onChange={e => setFilterStatus(e.target.value)}
-              className="flex-1 text-xs border border-gray-200 rounded px-2 py-1.5 text-gray-700 bg-white"
+              className="flex-1 text-xs border border-border rounded px-2 py-1.5 text-dark bg-white"
             >
               <option value="">{t('filters.all')} {t('filters.status')}</option>
               {STATUS_OPTIONS.filter(Boolean).map(st => (
@@ -458,11 +458,11 @@ export default function CampaignsPage() {
             </div>
           ) : error ? (
             <div className="px-4 py-6 text-center">
-              <p className="text-sm text-red-600 mb-2">{t('errorLoading', { defaultValue: 'Error loading campaigns' })}</p>
-              <p className="text-xs text-gray-400">{error}</p>
+              <p className="text-sm text-red mb-2">{t('errorLoading', { defaultValue: 'Error loading campaigns' })}</p>
+              <p className="text-xs text-muted-light">{error}</p>
             </div>
           ) : summaries.length === 0 ? (
-            <div className="px-4 py-8 text-center text-sm text-gray-500">
+            <div className="px-4 py-8 text-center text-sm text-muted">
               {t('noData')}
             </div>
           ) : (
@@ -479,7 +479,7 @@ export default function CampaignsPage() {
       </aside>
 
       {/* Main content */}
-      <main className="flex-1 overflow-y-auto bg-gray-50">
+      <main className="flex-1 overflow-y-auto bg-surface-muted">
         {selectedSummary ? (
           <CampaignDetail
             summary={selectedSummary}

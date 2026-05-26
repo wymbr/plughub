@@ -11,6 +11,8 @@
  */
 
 import React, { useMemo, useState } from "react";
+import { useTranslation } from "react-i18next";
+import { Bot, X, Settings2, Clock, Check, AlertCircle } from "lucide-react";
 import { AiParticipantInfo, ChatMessage } from "../types";
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
@@ -40,39 +42,48 @@ function formatStepId(stepId: string | null): string {
 
 // ── Status badge ───────────────────────────────────────────────────────────────
 
-const STATUS_CONFIG = {
+type StatusIconComponent = React.FC<{ className?: string }>
+
+type StatusConfig = Record<string, {
+  Icon: StatusIconComponent
+  labelKey: string
+  classes: string
+  animate: string
+}>
+
+const STATUS_CONFIG: StatusConfig = {
   running: {
-    icon: "⚙",
-    label: "Rodando",
-    classes: "bg-indigo-100 text-indigo-700 border-indigo-300",
-    animate: "animate-spin inline-block",
+    Icon: Settings2,
+    labelKey: "aiCard.status.running",
+    classes: "bg-ai-light text-ai-text border-ai/30",
+    animate: "animate-spin",
   },
   waiting: {
-    icon: "⏳",
-    label: "Aguardando",
-    classes: "bg-amber-50 text-amber-700 border-amber-300",
+    Icon: Clock,
+    labelKey: "aiCard.status.waiting",
+    classes: "bg-warning-light text-warning-text border-warning/30",
     animate: "",
   },
   done: {
-    icon: "✓",
-    label: "Concluído",
-    classes: "bg-green-50 text-green-700 border-green-300",
+    Icon: Check,
+    labelKey: "aiCard.status.done",
+    classes: "bg-green-light text-green-text border-green/30",
     animate: "",
   },
   error: {
-    icon: "✕",
-    label: "Erro",
-    classes: "bg-red-50 text-red-700 border-red-300",
+    Icon: AlertCircle,
+    labelKey: "aiCard.status.error",
+    classes: "bg-red-light text-red-text border-red/30",
     animate: "",
   },
-} as const;
+}
 
-type StepStatus = keyof typeof STATUS_CONFIG;
+type StepStatus = "running" | "waiting" | "done" | "error";
 
 const ROLE_CLASSES: Record<string, string> = {
-  primary:    "bg-blue-100 text-blue-800",
-  specialist: "bg-purple-100 text-purple-800",
-  supervisor: "bg-gray-100 text-gray-700",
+  primary:    "bg-primary-light text-primary",
+  specialist: "bg-ai-light text-ai-text",
+  supervisor: "bg-surface-alt text-dark",
 };
 
 // ── Card ───────────────────────────────────────────────────────────────────────
@@ -88,11 +99,13 @@ export const AiParticipantCard: React.FC<AiParticipantCardProps> = ({
   sessionMessages,
   onTerminateSegment,
 }) => {
+  const { t } = useTranslation('agentAssist');
   const [drawerOpen, setDrawerOpen] = useState(false);
 
   const { instance_id, agent_type_id, role, ai_state } = participant;
   const statusKey = (ai_state.step_status ?? "running") as StepStatus;
   const cfg       = STATUS_CONFIG[statusKey] ?? STATUS_CONFIG.running;
+  const statusLabel = t(cfg.labelKey);
 
   // Last 5 messages from this AI agent in the current session
   const agentMessages = useMemo(
@@ -107,19 +120,19 @@ export const AiParticipantCard: React.FC<AiParticipantCardProps> = ({
     <>
       {/* ── Card ── */}
       <button
-        className="w-full text-left rounded-lg border border-gray-200 bg-white hover:bg-gray-50
-                   transition-colors p-2.5 focus:outline-none focus:ring-2 focus:ring-indigo-400"
+        className="w-full text-left rounded-lg border border-border bg-white hover:bg-surface-muted
+                   transition-colors p-2.5 focus:outline-none focus:ring-2 focus:ring-ai/40"
         onClick={() => setDrawerOpen(true)}
-        title="Clique para detalhes"
+        title={t('aiCard.clickDetails')}
       >
         {/* Top row: icon + name + role badge */}
         <div className="flex items-center gap-1.5 mb-1.5">
-          <span className="text-base">🤖</span>
-          <span className="text-xs font-semibold text-gray-800 truncate flex-1">
+          <Bot className="w-4 h-4 text-ai flex-shrink-0" aria-hidden="true" />
+          <span className="text-xs font-semibold text-dark truncate flex-1">
             {formatAgentTypeId(agent_type_id)}
           </span>
           <span
-            className={`text-[10px] font-medium px-1.5 py-0.5 rounded-full ${ROLE_CLASSES[role] ?? "bg-gray-100 text-gray-600"}`}
+            className={`text-2xs font-medium px-1.5 py-0.5 rounded-full ${ROLE_CLASSES[role] ?? "bg-surface-alt text-muted"}`}
           >
             {role}
           </span>
@@ -128,23 +141,23 @@ export const AiParticipantCard: React.FC<AiParticipantCardProps> = ({
         {/* Step row */}
         <div className="flex items-center gap-1.5">
           <span
-            className={`text-[10px] font-semibold border rounded px-1.5 py-0.5 ${cfg.classes}`}
+            className={`inline-flex items-center gap-1 text-2xs font-semibold border rounded px-1.5 py-0.5 ${cfg.classes}`}
           >
-            <span className={cfg.animate}>{cfg.icon}</span>
-            {" "}{cfg.label}
+            <cfg.Icon className={`w-3 h-3 ${cfg.animate}`} aria-hidden="true" />
+            {statusLabel}
           </span>
-          <span className="text-[10px] text-gray-500 truncate flex-1">
+          <span className="text-2xs text-muted truncate flex-1">
             {formatStepId(ai_state.current_step)}
           </span>
-          <span className="text-[10px] text-gray-400 flex-shrink-0">
+          <span className="text-2xs text-muted-light flex-shrink-0">
             {formatDuration(ai_state.since_ms)}
           </span>
         </div>
 
         {/* Waiting-for pill */}
         {ai_state.waiting_for && (
-          <div className="mt-1 text-[10px] text-amber-700 bg-amber-50 rounded px-1.5 py-0.5 inline-block">
-            aguardando: {ai_state.waiting_for}
+          <div className="mt-1 text-2xs text-warning-text bg-warning-light rounded px-1.5 py-0.5 inline-block">
+            {t('aiCard.waitingFor', { what: ai_state.waiting_for })}
           </div>
         )}
       </button>
@@ -164,66 +177,68 @@ export const AiParticipantCard: React.FC<AiParticipantCardProps> = ({
             onClick={e => e.stopPropagation()}
           >
             {/* Header */}
-            <div className="flex items-center gap-2 px-4 py-3 border-b border-gray-200">
-              <span className="text-lg">🤖</span>
+            <div className="flex items-center gap-2 px-4 py-3 border-b border-border">
+              <Bot className="w-5 h-5 text-ai flex-shrink-0" aria-hidden="true" />
               <div className="flex-1 min-w-0">
-                <p className="text-sm font-semibold text-gray-800 truncate">
+                <p className="text-sm font-semibold text-dark truncate">
                   {formatAgentTypeId(agent_type_id)}
                 </p>
-                <p className="text-[11px] text-gray-400 font-mono truncate">{instance_id}</p>
+                <p className="text-xs text-muted-light font-mono truncate">{instance_id}</p>
               </div>
               <button
                 onClick={() => setDrawerOpen(false)}
-                className="text-gray-400 hover:text-gray-600 text-lg leading-none flex-shrink-0"
+                className="text-muted-light hover:text-muted leading-none flex-shrink-0 p-1"
+                aria-label={t('aiCard.closeLabel')}
               >
-                ✕
+                <X className="w-4 h-4" aria-hidden="true" />
               </button>
             </div>
 
             {/* Step detail */}
-            <div className="px-4 py-3 border-b border-gray-100 bg-gray-50">
+            <div className="px-4 py-3 border-b border-border bg-surface-muted">
               <div className="flex items-center gap-2 mb-1">
                 <span
-                  className={`text-[11px] font-semibold border rounded px-1.5 py-0.5 ${cfg.classes}`}
+                  className={`inline-flex items-center gap-1 text-xs font-semibold border rounded px-1.5 py-0.5 ${cfg.classes}`}
                 >
-                  {cfg.icon} {cfg.label}
+                  <cfg.Icon className={`w-3 h-3 ${cfg.animate}`} aria-hidden="true" />
+                  {statusLabel}
                 </span>
-                <span className="text-[11px] text-gray-500">
+                <span className="text-xs text-muted">
                   {formatDuration(ai_state.since_ms)}
                 </span>
               </div>
-              <p className="text-xs text-gray-700 font-mono">
+              <p className="text-xs text-dark font-mono">
                 {formatStepId(ai_state.current_step)}
               </p>
               {ai_state.waiting_for && (
-                <p className="text-[11px] text-amber-700 mt-1">
-                  aguardando: {ai_state.waiting_for}
+                <p className="text-xs text-warning-text mt-1">
+                  {t('aiCard.waitingFor', { what: ai_state.waiting_for })}
                 </p>
               )}
             </div>
 
             {/* Last messages from this agent */}
             <div className="flex-1 overflow-y-auto px-4 py-3">
-              <h4 className="text-[11px] font-semibold text-gray-500 uppercase tracking-wide mb-2">
-                Últimas mensagens
+              <h4 className="text-xs font-semibold text-muted uppercase tracking-wide mb-2">
+                {t('aiCard.lastMessages')}
               </h4>
               {agentMessages.length === 0 ? (
-                <p className="text-xs text-gray-400">Sem mensagens deste agente na sessão.</p>
+                <p className="text-xs text-muted-light">{t('aiCard.noMessages')}</p>
               ) : (
                 <div className="flex flex-col gap-2">
                   {agentMessages.map(msg => (
                     <div
                       key={msg.id}
-                      className="text-xs bg-indigo-50 border border-indigo-100 rounded-lg px-2.5 py-2 text-gray-700"
+                      className="text-xs bg-ai-light border border-ai/20 rounded-lg px-2.5 py-2 text-dark"
                     >
-                      <span className="text-[10px] text-indigo-400 block mb-0.5">
+                      <span className="text-2xs text-ai block mb-0.5">
                         {new Date(msg.timestamp).toLocaleTimeString("pt-BR", {
                           hour: "2-digit",
                           minute: "2-digit",
                           second: "2-digit",
                         })}
                         {msg.visibility && msg.visibility !== "all" && (
-                          <span className="ml-1 text-amber-500">(interno)</span>
+                          <span className="ml-1 text-warning">{t('aiCard.internal')}</span>
                         )}
                       </span>
                       {msg.text}
@@ -234,21 +249,21 @@ export const AiParticipantCard: React.FC<AiParticipantCardProps> = ({
             </div>
 
             {/* Actions */}
-            <div className="px-4 py-3 border-t border-gray-200">
+            <div className="px-4 py-3 border-t border-border">
               <button
                 onClick={() => {
                   onTerminateSegment?.(instance_id);
                   setDrawerOpen(false);
                 }}
                 disabled={!onTerminateSegment || ai_state.step_status === "done"}
-                className="w-full py-2 px-3 text-sm font-medium text-red-600 border border-red-300
-                           rounded-lg hover:bg-red-50 disabled:opacity-40 disabled:cursor-not-allowed
+                className="w-full py-2 px-3 text-sm font-medium text-red-text border border-red/30
+                           rounded-lg hover:bg-red-light disabled:opacity-40 disabled:cursor-not-allowed
                            transition-colors"
               >
-                Encerrar segmento
+                {t('aiCard.terminateSegment')}
               </button>
-              <p className="text-[10px] text-gray-400 text-center mt-1.5">
-                Envia @{instance_id} terminate_self
+              <p className="text-2xs text-muted-light text-center mt-1.5">
+                {t('aiCard.terminateInfo', { instanceId: instance_id })}
               </p>
             </div>
           </div>

@@ -82,6 +82,117 @@ export const MaskedResultSchema = z.object({
 export type MaskedResult = z.infer<typeof MaskedResultSchema>
 
 // ─────────────────────────────────────────────
+// ContextStore field-level masking (dynamic rules)
+// ─────────────────────────────────────────────
+
+/**
+ * ContextMaskingType — visual presentation applied to a ContextStore tag value
+ * when delivered to a given role.
+ *
+ * These are purely display semantics — they carry no implied data-type semantics
+ * (e.g. "last_4" works on CPF, contract number, credit card, etc.).
+ *
+ * Stored in Config API: namespace "masking", key "context_rules"
+ * Redis: plughub:cfg:{tenantId}:masking:context_rules (tenant override)
+ *        plughub:cfg:__global__:masking:context_rules  (global default)
+ */
+export const ContextMaskingTypeSchema = z.enum([
+  "plain",        // no masking — show value as-is
+  "hidden",       // remove the field entirely from the response
+  "full",         // mask entire value → "***"
+  "last_2",       // show only last 2 chars → "***XX"
+  "last_4",       // show only last 4 chars → "***XXXX"
+  "first_1",      // show only first char → "X***"
+  "first_word",   // show only the first word, mask the rest
+  "email_domain", // keep domain, mask local part → "X***@domain.com"
+  "financial",    // generic financial mask → "R$ ****,**"
+])
+export type ContextMaskingType = z.infer<typeof ContextMaskingTypeSchema>
+
+/**
+ * ContextMaskingRule — maps a tag name pattern × role to a masking type.
+ *
+ * pattern: exact tag name ("caller.cpf") or glob with single wildcard
+ *          ("caller.*" matches "caller.cpf", "caller.nome", etc.)
+ *          "*" matches any tag.
+ *
+ * role:    "operator"  — agents / human operators in the Console
+ *          "supervisor" — covers supervisor, admin, evaluator, reviewer
+ *          "*"          — applies to all roles (base-layer wildcard)
+ *
+ * Resolution: most-specific match wins.
+ * Specificity score: exact > glob > "*"; role "operator" > "supervisor" > "*".
+ * Ties broken by position in the rules array (first wins).
+ */
+export const ContextMaskingRuleSchema = z.object({
+  /** Exact tag name or glob pattern with optional trailing "*" */
+  pattern: z.string().min(1),
+  /** Role this rule applies to */
+  role:    z.enum(["operator", "supervisor", "*"]),
+  /** Masking type to apply when pattern × role match */
+  type:    ContextMaskingTypeSchema,
+  /** Optional human-readable label for the Config UI */
+  label:   z.string().optional(),
+})
+export type ContextMaskingRule = z.infer<typeof ContextMaskingRuleSchema>
+
+/**
+ * ContextMaskingConfig — full set of rules for a tenant.
+ *
+ * Loaded from Config API on first request, cached in-process with TTL.
+ * Falls back to global defaults when no tenant-level config exists.
+ */
+export const ContextMaskingConfigSchema = z.object({
+  /**
+   * Ordered list of masking rules.
+   * Evaluation stops at the first matching rule (most-specific first).
+   */
+  rules: z.array(ContextMaskingRuleSchema).default([]),
+  /**
+   * Masking type applied when no rule matches a tag for the "operator" role.
+   * "plain" is the permissive default (most ContextStore tags are non-PII).
+   * Conservative deployments may set "hidden".
+   */
+  default_unmatched_operator: ContextMaskingTypeSchema.default("plain"),
+})
+export type ContextMaskingConfig = z.infer<typeof ContextMaskingConfigSchema>
+
+/**
+ * DEFAULT_CONTEXT_MASKING_RULES — global fallback rules.
+ *
+ * Converts the original hardcoded TAG_PII_CATEGORY map exactly:
+ *   caller.cpf              → last_2   (operator)
+ *   caller.cnpj             → last_2   (operator)
+ *   caller.telefone         → last_4   (operator)
+ *   caller.email            → email_domain (operator)
+ *   account.numero_contrato → last_4   (operator)
+ *   account.valor_fatura    → financial (operator)
+ *   account.limite_credito  → hidden   (operator)
+ *   caller.*                → last_4   (operator, catch-all for caller namespace)
+ *   account.*               → financial (operator, catch-all for account namespace)
+ *
+ * supervisor/* → plain (no masking for elevated roles).
+ */
+export const DEFAULT_CONTEXT_MASKING_CONFIG: ContextMaskingConfig = {
+  default_unmatched_operator: "plain",
+  rules: [
+    // ── exact rules (highest specificity) ──────────────────────────────────
+    { pattern: "caller.cpf",              role: "operator",   type: "last_2",       label: "CPF do cliente" },
+    { pattern: "caller.cnpj",             role: "operator",   type: "last_2",       label: "CNPJ do cliente" },
+    { pattern: "caller.telefone",         role: "operator",   type: "last_4",       label: "Telefone do cliente" },
+    { pattern: "caller.email",            role: "operator",   type: "email_domain", label: "E-mail do cliente" },
+    { pattern: "account.numero_contrato", role: "operator",   type: "last_4",       label: "Número do contrato" },
+    { pattern: "account.valor_fatura",    role: "operator",   type: "financial",    label: "Valor da fatura" },
+    { pattern: "account.limite_credito",  role: "operator",   type: "hidden",       label: "Limite de crédito" },
+    // ── glob catch-alls (medium specificity) ────────────────────────────────
+    { pattern: "caller.*",                role: "operator",   type: "last_4",       label: "Dados do cliente (genérico)" },
+    { pattern: "account.*",               role: "operator",   type: "financial",    label: "Dados da conta (genérico)" },
+    // ── supervisor: no masking on any field ────────────────────────────────
+    { pattern: "*",                       role: "supervisor", type: "plain",        label: "Supervisor vê tudo sem máscara" },
+  ],
+}
+
+// ─────────────────────────────────────────────
 // Política de acesso ao original_content
 // ─────────────────────────────────────────────
 

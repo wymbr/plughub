@@ -1,7 +1,25 @@
 # Session & Conference Lifecycle — Three-Layer Model
 
+> Última atualização: 2026-05-25 · Estado: Arc 16
 > Design reference for the orchestrator-bridge session lifecycle.
-> Covers current implementation, the correct three-layer model, and known gaps.
+> Covers the three-layer model and the gap history.
+
+---
+
+## Status — gaps G1–G6 resolved (2026-05-10)
+
+The six implementation gaps (G1–G6) described in the body of this document were **all addressed in the 2026-05-10 fix set** (see § Applied Fixes for the full detail). The gap analysis sections below are retained as design rationale — they describe the *original* problem each fix solved, not the current behavior.
+
+| Gap | Original problem | Resolution |
+|---|---|---|
+| G1 | Contact stats (AHT) included wrap-up/NPS time | `_mark_contact_ended()` freezes `contact_ended_at` at customer departure; `contact_closed` event carries `ended_at` |
+| G2 | `remaining` count ignored AI specialists | `session:{id}:active_ai_specialists` SET defers `on_human_end` until AI specialists complete |
+| G3 | AI instance restored while skill flow still running | `session:{id}:ai_completing:{instance_id}` marker defers restore to the natural `process_routed` path |
+| G4 | Supervisor with no heartbeat could block hook dispatch | Reclassified: supervisors have no lifecycle by design, are NOT tracked in `human_agents` — purely an analytics gap |
+| G5 | Primary AI close expelled conference participants silently | `participant_left` dedup guard emits the event for external conference specialists before key cleanup |
+| G6 | Redundant `_restore_all_instances` on `agent_done` close | Resolved by the G3 guards — the redundant scan is a no-op in practice |
+
+The three-layer model (contact / segment / conference) remains the target architecture; the 2026-05-10 fixes decouple the layers at the critical points (AHT freezing, instance restore, participant accounting) without the full `_trigger_contact_close()` two-stage split.
 
 ---
 
@@ -282,20 +300,20 @@ CONFERENCE DESTROYED when:
 
 ---
 
-## Implementation Gaps — Priority Order
+## Implementation Gaps — Resolution Status
 
-| # | Gap | Severity | Blocks prod? | Effort |
-|---|---|---|---|---|
-| G4 | Supervisor/evaluator stuck sessions | High | Yes (if supervisors in human_agents) | High |
-| G3 | AI instance restored while running | Medium-High | Stateful AI | Medium |
-| G1 | Contact stats include wrap-up time | Medium | No | High |
-| G2 | remaining ignores AI specialists | Medium | No | Medium |
-| G5 | AI close expels supervisor silently | Medium | No | Medium |
-| G6 | Redundant restore on agent_done close | Low | No | Low |
+All six gaps were resolved in the 2026-05-10 fix set. The table below records the original severity and the resolution.
 
-G4 requires first verifying whether supervisors are added to `human_agents`.
-G1 requires the most significant refactor (splitting `_trigger_contact_close` into two stages).
-G3 fix depends on the `agent_done` bridge publish being in place (done 2026-05-10).
+| # | Gap | Original severity | Status |
+|---|---|---|---|
+| G4 | Supervisor/evaluator stuck sessions | High | ✅ Resolved — reclassified (supervisors have no lifecycle, not in `human_agents`); remaining analytics-only gap |
+| G3 | AI instance restored while running | Medium-High | ✅ Resolved — `ai_completing` marker defers restore to `process_routed` |
+| G1 | Contact stats include wrap-up time | Medium | ✅ Resolved — `_mark_contact_ended()` + `ended_at` in `contact_closed` event |
+| G2 | remaining ignores AI specialists | Medium | ✅ Resolved — `active_ai_specialists` SET defers `on_human_end` |
+| G5 | AI close expels supervisor silently | Medium | ✅ Resolved — `participant_left` dedup guard for external specialists |
+| G6 | Redundant restore on agent_done close | Low | ✅ Resolved — no-op in practice via G3 guards |
+
+Note: the G1 fix freezes AHT via `_mark_contact_ended()` rather than the full two-stage split of `_trigger_contact_close()` proposed earlier in this document; the two-stage split remains a possible future refinement but is no longer required for correctness.
 
 ---
 

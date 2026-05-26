@@ -18,7 +18,7 @@ const PlaceholderPage: React.FC<PlaceholderPageProps> = ({ module = 'Este', phas
         description={`${module} — ${phase}`}
         action={
           <Button variant="secondary">
-            Back to Home
+            Ir para o início
           </Button>
         }
       />

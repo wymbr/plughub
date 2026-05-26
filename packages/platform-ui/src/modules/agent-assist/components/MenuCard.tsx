@@ -62,8 +62,8 @@ const ButtonInteraction: React.FC<InteractionProps> = ({ data, substitutionMode,
         className={[
           "px-3 py-1 text-xs rounded-full border transition-colors",
           substitutionMode
-            ? "border-amber-400 bg-amber-50 text-amber-800 hover:bg-amber-100 cursor-pointer font-medium"
-            : "border-indigo-300 bg-indigo-50 text-indigo-700 opacity-70 cursor-not-allowed select-none",
+            ? "border-warning/40 bg-warning-light text-warning-text hover:bg-warning/20 cursor-pointer font-medium"
+            : "border-ai/30 bg-ai-light text-ai-text opacity-70 cursor-not-allowed select-none",
         ].join(" ")}
         title={substitutionMode ? `Responder: ${opt.label}` : "Modo observação — apenas visualização"}
       >
@@ -77,25 +77,25 @@ const ButtonInteraction: React.FC<InteractionProps> = ({ data, substitutionMode,
 // List
 // ---------------------------------------------------------------------------
 const ListInteraction: React.FC<InteractionProps> = ({ data, substitutionMode, onSubmit }) => (
-  <ul className="mt-2 divide-y divide-gray-100 border border-gray-200 rounded-lg overflow-hidden text-xs">
+  <ul className="mt-2 divide-y divide-border border border-border rounded-lg overflow-hidden text-xs">
     {(data.options ?? []).map((opt, i) => (
       <li
         key={opt.id}
         onClick={substitutionMode ? () => onSubmit(opt.id) : undefined}
         className={[
-          "flex items-center gap-2 px-3 py-1.5 bg-white text-gray-700 transition-colors",
+          "flex items-center gap-2 px-3 py-1.5 bg-white text-dark transition-colors",
           substitutionMode
-            ? "cursor-pointer hover:bg-amber-50 hover:text-amber-900 font-medium"
+            ? "cursor-pointer hover:bg-warning-light hover:text-warning-text font-medium"
             : "opacity-70 select-none",
         ].join(" ")}
         title={substitutionMode ? `Selecionar: ${opt.label}` : undefined}
       >
         <span
           className={[
-            "w-4 h-4 rounded-full border flex items-center justify-center text-[9px] flex-shrink-0 font-medium",
+            "w-4 h-4 rounded-full border flex items-center justify-center text-micro flex-shrink-0 font-medium",
             substitutionMode
-              ? "border-amber-400 text-amber-700"
-              : "border-gray-300 text-gray-400",
+              ? "border-warning/40 text-warning-text"
+              : "border-border-strong text-muted-light",
           ].join(" ")}
         >
           {i + 1}
@@ -127,7 +127,7 @@ const ChecklistInteraction: React.FC<InteractionProps> = ({ data, substitutionMo
           <li
             key={opt.id}
             className={[
-              "flex items-center gap-2 text-gray-700",
+              "flex items-center gap-2 text-dark",
               substitutionMode ? "cursor-pointer select-none" : "opacity-70 select-none",
             ].join(" ")}
             onClick={substitutionMode ? () => toggle(opt.id) : undefined}
@@ -139,8 +139,8 @@ const ChecklistInteraction: React.FC<InteractionProps> = ({ data, substitutionMo
               readOnly={!substitutionMode}
               onChange={() => {}} /* controlled via li onClick above */
               className={[
-                "w-3.5 h-3.5 rounded border-gray-300 pointer-events-none",
-                substitutionMode ? "accent-amber-500" : "cursor-not-allowed",
+                "w-3.5 h-3.5 rounded border-border-strong pointer-events-none",
+                substitutionMode ? "accent-warning" : "cursor-not-allowed",
               ].join(" ")}
             />
             <span>{opt.label}</span>
@@ -151,8 +151,8 @@ const ChecklistInteraction: React.FC<InteractionProps> = ({ data, substitutionMo
         <button
           onClick={() => onSubmit(Array.from(selected))}
           disabled={selected.size === 0}
-          className="mt-2 px-3 py-1 rounded-md text-xs font-medium bg-amber-500 text-white
-                     hover:bg-amber-600 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+          className="mt-2 px-3 py-1 rounded-md text-xs font-medium bg-warning text-white
+                     hover:bg-warning-text disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
         >
           Confirmar seleção ({selected.size})
         </button>
@@ -187,7 +187,7 @@ const FormInteraction: React.FC<InteractionProps> = ({ data, substitutionMode, o
     <div className="mt-2 space-y-2 text-xs">
       {(data.fields ?? []).map((field) => (
         <div key={field.id} className="flex flex-col gap-0.5">
-          <label className={substitutionMode ? "text-amber-700 font-medium" : "text-gray-500 font-medium"}>
+          <label className={substitutionMode ? "text-warning-text font-medium" : "text-muted font-medium"}>
             {field.label}
           </label>
           <input
@@ -199,8 +199,8 @@ const FormInteraction: React.FC<InteractionProps> = ({ data, substitutionMode, o
             className={[
               "px-2 py-1 border rounded text-xs w-full transition-colors",
               substitutionMode
-                ? "border-amber-300 bg-white text-gray-800 focus:outline-none focus:ring-1 focus:ring-amber-400"
-                : "border-gray-200 text-gray-400 bg-gray-50 cursor-not-allowed",
+                ? "border-warning/30 bg-white text-dark focus:outline-none focus:ring-1 focus:ring-warning/40"
+                : "border-border text-muted-light bg-surface-muted cursor-not-allowed",
             ].join(" ")}
           />
         </div>
@@ -209,8 +209,8 @@ const FormInteraction: React.FC<InteractionProps> = ({ data, substitutionMode, o
         <button
           onClick={() => onSubmit(values)}
           disabled={!allFilled}
-          className="mt-1 px-3 py-1 rounded-md text-xs font-medium bg-amber-500 text-white
-                     hover:bg-amber-600 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+          className="mt-1 px-3 py-1 rounded-md text-xs font-medium bg-warning text-white
+                     hover:bg-warning-text disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
         >
           Enviar formulário
         </button>
@@ -227,8 +227,8 @@ const TextInteraction: React.FC<Omit<InteractionProps, "data">> = ({ substitutio
 
   if (!substitutionMode) {
     return (
-      <div className="mt-2 flex items-center gap-1.5 text-xs text-gray-400 italic">
-        <span className="w-3 h-3 rounded-full border border-gray-300 flex-shrink-0" />
+      <div className="mt-2 flex items-center gap-1.5 text-xs text-muted-light italic">
+        <span className="w-3 h-3 rounded-full border border-border-strong flex-shrink-0" />
         Aguardando resposta em texto livre do cliente…
       </div>
     );
@@ -241,14 +241,14 @@ const TextInteraction: React.FC<Omit<InteractionProps, "data">> = ({ substitutio
         onChange={(e) => setText(e.target.value)}
         rows={2}
         placeholder="Digite a resposta do cliente…"
-        className="px-2 py-1.5 border border-amber-300 rounded text-xs w-full resize-none
-                   focus:outline-none focus:ring-1 focus:ring-amber-400 text-gray-800 bg-white"
+        className="px-2 py-1.5 border border-warning/30 rounded text-xs w-full resize-none
+                   focus:outline-none focus:ring-1 focus:ring-warning/40 text-dark bg-white"
       />
       <button
         onClick={() => onSubmit(text)}
         disabled={text.trim() === ""}
-        className="self-start px-3 py-1 rounded-md text-xs font-medium bg-amber-500 text-white
-                   hover:bg-amber-600 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+        className="self-start px-3 py-1 rounded-md text-xs font-medium bg-warning text-white
+                   hover:bg-warning-text disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
       >
         Enviar resposta
       </button>
@@ -284,33 +284,33 @@ export const MenuCard: React.FC<MenuCardProps> = ({
       className={[
         "rounded-xl px-3 pt-2.5 pb-3 max-w-[90%] self-start shadow-sm border transition-colors",
         isAgentTarget
-          ? "border-emerald-300 bg-emerald-50/70"
+          ? "border-green/30 bg-green-light/70"
           : substitutionMode
-            ? "border-amber-300 bg-amber-50/70"
-            : "border-indigo-200 bg-indigo-50/60",
+            ? "border-warning/30 bg-warning-light/70"
+            : "border-ai/20 bg-ai-light/60",
       ].join(" ")}
     >
       <div className="flex items-center gap-1.5 mb-1.5">
         <span
           className={[
-            "text-[10px] rounded-full px-2 py-0.5 font-medium flex items-center gap-1 border",
+            "text-2xs rounded-full px-2 py-0.5 font-medium flex items-center gap-1 border",
             isAgentTarget
-              ? "bg-emerald-100 text-emerald-800 border-emerald-300"
+              ? "bg-green-light text-green-text border-green/30"
               : substitutionMode
-                ? "bg-amber-100 text-amber-800 border-amber-300"
-                : "bg-indigo-100 text-indigo-700 border-indigo-200",
+                ? "bg-warning-light text-warning-text border-warning/30"
+                : "bg-ai-light text-ai-text border-ai/20",
           ].join(" ")}
         >
           {icon} {label}
         </span>
-        <span className="text-[9px] text-gray-400 ml-auto">
+        <span className="text-micro text-muted-light ml-auto">
           {data.targetsSelf
             ? "IA → Agente · responda abaixo"
             : substitutionMode ? "IA → Cliente · substituição" : "IA → Cliente · observação"}
         </span>
       </div>
 
-      <p className="text-sm text-gray-800 leading-snug whitespace-pre-wrap">{data.prompt}</p>
+      <p className="text-sm text-dark leading-snug whitespace-pre-wrap">{data.prompt}</p>
 
       {data.interaction === "text"      && <TextInteraction      substitutionMode={substitutionMode} onSubmit={handleSubmit} />}
       {data.interaction === "button"    && <ButtonInteraction    {...interactionProps} />}

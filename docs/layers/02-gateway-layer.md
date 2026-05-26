@@ -1,8 +1,9 @@
 # Layer 2 — Gateway Layer
 
+> Última atualização: 2026-05-25 · Estado: Arc 16
 > Spec de referência: v24.0 seções 7.1–7.4, 2.2a
 > Responsabilidade: tradução entre o mundo físico dos canais e o envelope de eventos interno — autenticação de borda, normalização de mídia, controle de acesso LLM
-> Implementado por: `channel-gateway` (normalização), componentes de voz Go (Horizonte 1), `ai-gateway` (acesso a modelos)
+> Implementado por: `channel-gateway` (normalização + pipeline STT/TTS), `ai-gateway` (acesso a modelos)
 
 ---
 
@@ -26,7 +27,7 @@ A Gateway Layer opera na fronteira entre o exterior (canais de comunicação, pr
 | **WhatsApp / Chat / SMS / Email Adapters** | Python (channel-gateway) | Protocolo-específico: HMAC, dedup, janela, mídia, thread management |
 | **Voice Gateway** | Go | Recepção SIP, mixing de áudio, interface com STT Router. Alta concorrência e baixa latência. Horizonte 1. |
 | **STT Router** | Go | Roteamento de stream de áudio para NVIDIA Riva ou Deepgram com fallback automático. Fine-tuning LoRA por tenant. |
-| **WebRTC Gateway** | Go + LiveKit/Daily.co | Sinalização STUN/TURN, negociação SDP, monitoramento de qualidade, degradação adaptativa. Horizonte 2. |
+| **Canal WebRTC** | Python (channel-gateway) + LiveKit (SFU self-hosted) | Canal `webrtc` implementado (Arc 15) — signaling, negociação de medium (vídeo → voz → texto), pipeline STT/TTS, gravação por egress. Ver [`../arcos/arc15-webrtc.md`](../arcos/arc15-webrtc.md). |
 
 ### AI Gateway
 
@@ -118,5 +119,5 @@ Rules Engine avaliou em paralelo via pub/sub
 - Seção 2.2a — AI Gateway
 - Seção 7.1 — Messaging Gateway
 - Seção 7.3 — Email Multi-Provider
-- Seção 7.4 — WebRTC Gateway (Horizonte 2)
+- Seção 7.4 — WebRTC Gateway (canal `webrtc` implementado no Arc 15)
 - Seção 5.5 — SLAs por Componente

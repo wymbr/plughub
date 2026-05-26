@@ -13,7 +13,7 @@ export default defineConfig({
     port: 5174,
     proxy: {
       '^/auth': {
-        target: 'http://localhost:3200',
+        target: 'http://localhost:3202',
         changeOrigin: true
       },
       '^/api': {
@@ -44,6 +44,10 @@ export default defineConfig({
       },
       '^/v1/knowledge': {
         target: 'http://localhost:3400',
+        changeOrigin: true
+      },
+      '^/v1/audit': {
+        target: 'http://localhost:3500',
         changeOrigin: true
       },
       '^/v1': {

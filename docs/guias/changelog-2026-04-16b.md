@@ -1,5 +1,7 @@
 # Changelog 2026-04-16 — Sessão de Design: Conferência e Histórico
 
+> ⚠️ Changelog histórico (pré-CHANGELOG.md). Mantido apenas como referência. O changelog vivo é o CHANGELOG.md na raiz do repositório.
+
 ## Contexto
 
 Sessão de design explorando o modelo de conferência multi-participante e a estratégia de persistência de histórico de contatos para avaliação e litígio.

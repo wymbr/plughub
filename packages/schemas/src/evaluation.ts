@@ -297,12 +297,13 @@ export type ComparisonReport = z.infer<typeof ComparisonReportSchema>
 
 /**
  * Type of answer expected for a criterion.
- * score    → numeric 0–max_score
- * boolean  → yes/no
- * choice   → one of predefined options
- * text     → free text note (no score — informational only)
+ * score         → numeric 0–max_score
+ * boolean       → yes/no
+ * choice        → one of predefined options
+ * text          → free text note (no score — informational only)
+ * auto_computed → computed automatically from session_metric.* — no LLM needed (Arc 13)
  */
-export const EvaluationCriterionTypeSchema = z.enum(["score", "boolean", "choice", "text"])
+export const EvaluationCriterionTypeSchema = z.enum(["score", "boolean", "choice", "text", "auto_computed"])
 export type EvaluationCriterionType = z.infer<typeof EvaluationCriterionTypeSchema>
 
 /**
@@ -323,28 +324,40 @@ export type EvaluationDimensionDef = z.infer<typeof EvaluationDimensionDefSchema
 /**
  * EvaluationCriterion — a single evaluable question within a form.
  * Groups into dimensions; supports N/A answers and calibration examples.
+ * Arc 13: dimension_label + auto_computed type.
  */
 export const EvaluationCriterionSchema = z.object({
-  criterion_id:  z.string().min(1),
+  criterion_id:      z.string().min(1),
   /** Links this criterion to its parent dimension */
-  dimension_id:  z.string().min(1),
-  label:         z.string().min(1),
-  description:   z.string().optional(),
-  type:          EvaluationCriterionTypeSchema,
+  dimension_id:      z.string().min(1),
+  /** Human-readable label of the dimension group (Arc 13) */
+  dimension_label:   z.string().optional(),
+  label:             z.string().min(1),
+  description:       z.string().optional(),
+  type:              EvaluationCriterionTypeSchema,
   /** Relative weight within its dimension (0–1) */
-  weight:        z.number().min(0).max(1).default(1),
+  weight:            z.number().min(0).max(1).default(1),
   /** Upper bound of the numeric scale. Only relevant when type = "score" */
-  max_score:     z.number().positive().default(10),
+  max_score:         z.number().positive().default(10),
   /** Predefined answer options. Only relevant when type = "choice" */
-  options:       z.array(z.string()).optional(),
+  options:           z.array(z.string()).optional(),
   /** Whether the evaluator may mark this criterion as not applicable */
-  na_allowed:    z.boolean().default(false),
-  required:      z.boolean().default(true),
+  na_allowed:        z.boolean().default(false),
+  required:          z.boolean().default(true),
   /** Example transcripts for evaluator calibration */
   examples: z.object({
     good: z.array(z.string()).default([]),
     bad:  z.array(z.string()).default([]),
   }).optional(),
+  // ── Arc 13 — auto_computed fields ──────────────────────────────────────────
+  /** Source metric for auto_computed type. Format: "session_metric.{metric_name}" */
+  computation_source: z.string().optional(),
+  /** Value at or above/below which score = 1.0 */
+  threshold_pass:     z.number().optional(),
+  /** Value at or above/below which score = 0.0 */
+  threshold_fail:     z.number().optional(),
+  /** Direction of comparison for thresholds */
+  comparison:         z.enum(["lt", "gt", "lte", "gte"]).optional(),
 })
 export type EvaluationCriterion = z.infer<typeof EvaluationCriterionSchema>
 
@@ -693,3 +706,284 @@ export const EvaluationLifecycleEventSchema = z.discriminatedUnion("event_type",
   EvalCampaignStatusChangedSchema,
 ])
 export type EvaluationLifecycleEvent = z.infer<typeof EvaluationLifecycleEventSchema>
+
+// ═════════════════════════════════════════════════════════════════════════════
+// Arc 13 — Review, Contestation & Calibration
+// ═════════════════════════════════════════════════════════════════════════════
+
+// ─────────────────────────────────────────────
+// ContestationPolicy — updated fields
+// ─────────────────────────────────────────────
+
+/**
+ * ContestationPolicy — stored as JSONB in evaluation.campaigns.contestation_policy.
+ * Arc 13 adds: max_rounds, contest_deadline_hours, use_business_hours,
+ * reviewer_type, pre_review_enabled, pre_review_agent_pool.
+ */
+export const ContestationPolicySchema = z.object({
+  /** Maximum contestation rounds (padrão 3, máx 5) */
+  max_rounds:              z.number().int().min(1).max(5).default(3),
+  /** Hours the evaluated agent has to file a contestation after result publication */
+  contest_deadline_hours:  z.number().positive().default(48),
+  /** Whether deadlines respect business hours via calendar-api */
+  use_business_hours:      z.boolean().default(false),
+  /**
+   * Who reviews after contestation.
+   * "ai"          → agente_revisor_v1 always
+   * "human"       → pool-based human reviewer always
+   * "ai_then_human" → AI first; if contested again → human
+   */
+  reviewer_type:           z.enum(["ai", "human", "ai_then_human"]).default("ai"),
+  /** Whether to run AI pre-publication review before publishing to evaluated agent */
+  pre_review_enabled:      z.boolean().default(false),
+  /** Pool of the pre-publication reviewer agent (required if pre_review_enabled=true) */
+  pre_review_agent_pool:   z.string().nullable().optional(),
+  /** Hours the reviewer has to respond after contestation */
+  review_deadline_hours:   z.number().positive().default(72),
+  /** Roles allowed to contest (legacy ReviewerRules compat) */
+  contestation_roles:      z.array(z.string()).default([]),
+  /** Per-round reviewer role mappings (legacy compat) */
+  review_roles_by_round:   z.record(z.string(), z.string()).default({}),
+})
+export type ContestationPolicy = z.infer<typeof ContestationPolicySchema>
+
+// ─────────────────────────────────────────────
+// Contestation state machine
+// ─────────────────────────────────────────────
+
+/**
+ * ContestationState — state machine for Fluxo 1 (human agent evaluated).
+ * Stored in evaluation.results.contestation_state.
+ */
+export const ContestationStateSchema = z.enum([
+  "pre_review_pending",    // AI pre-reviewer active (not yet visible to evaluated agent)
+  "contestation_open",     // result published; agent may contest within deadline
+  "under_review",          // agent contested; reviewer working
+  "timeout_contestation",  // deadline passed without contestation → finalized
+  "timeout_review",        // reviewer deadline passed → finalized
+  "closed_upheld",         // reviewer upheld original scores
+  "closed_revised",        // reviewer revised one or more scores
+])
+export type ContestationState = z.infer<typeof ContestationStateSchema>
+
+// ─────────────────────────────────────────────
+// EvidenceEntry — Arc 13 format
+// ─────────────────────────────────────────────
+
+/**
+ * EvidenceEntry — a stream entry excerpt used as evidence in a ContestationThread.
+ * Different from EvidenceRef (Arc 6): uses stream_entry_id and relevance_note.
+ */
+export const EvidenceEntrySchema = z.object({
+  /** ID in the canonical Redis stream (e.g. "1715700000000-0") */
+  stream_entry_id: z.string().min(1),
+  /** Short excerpt of the message (masked content) */
+  excerpt:         z.string().max(500),
+  /** Why this excerpt justifies the score */
+  relevance_note:  z.string().max(500),
+})
+export type EvidenceEntry = z.infer<typeof EvidenceEntrySchema>
+
+// ─────────────────────────────────────────────
+// CalibrationSignal
+// ─────────────────────────────────────────────
+
+/**
+ * CalibrationSignal — optional output from the pre-publication AI reviewer.
+ * Stored as JSONB in ContestationThread.calibration_signal.
+ * Triggers a CurationReview when present.
+ */
+export const CalibrationSignalSchema = z.object({
+  severity:      z.enum(["low", "medium", "high"]),
+  dimension_id:  z.string().min(1),
+  /** Free-text observation about the evaluator's behaviour pattern */
+  observation:   z.string().min(1),
+  /** agent_type_id of the evaluator that generated the evaluated result */
+  evaluator_id:  z.string().min(1),
+  /** Skill version of the evaluator at the time of evaluation */
+  skill_version: z.string().min(1),
+})
+export type CalibrationSignal = z.infer<typeof CalibrationSignalSchema>
+
+// ─────────────────────────────────────────────
+// ContestationThread
+// ─────────────────────────────────────────────
+
+/**
+ * ContestationThread — append-only record for one actor's contribution to one dimension.
+ * Rounds: 1=evaluator, 1.5(stored as 1, author=pre_reviewer_ai)=pre-pub reviewer,
+ *          2=human_agent contest, 3=reviewer decision, 4+ = further rounds.
+ */
+export const ContestationThreadSchema = z.object({
+  thread_id:               z.string().uuid(),
+  evaluation_instance_id:  z.string().min(1),
+  /** dimension_id or criterion_id (fallback for forms without explicit dimension_id) */
+  dimension_id:            z.string().min(1),
+  round:                   z.number().int().positive(),
+  author_type:             z.enum([
+    "evaluator_ai",
+    "pre_reviewer_ai",
+    "human_agent",
+    "reviewer_ai",
+    "human_reviewer",
+  ]),
+  /** user_id or agent_type_id of the author */
+  author_id:               z.string().min(1),
+  /** Justification, contestation text, or review decision rationale */
+  text:                    z.string().min(1),
+  /** Decision from reviewer (upheld/revised). Only present for reviewer authors. */
+  decision:                z.enum(["upheld", "revised"]).nullable().optional(),
+  /** Score set by reviewer when decision=revised */
+  score_override:          z.number().min(0).nullable().optional(),
+  /** Evidence entries from the session stream */
+  evidence_entries:        z.array(EvidenceEntrySchema).default([]),
+  /** Calibration signal from pre_reviewer_ai (optional) */
+  calibration_signal:      CalibrationSignalSchema.nullable().optional(),
+  created_at:              z.string().datetime(),
+})
+export type ContestationThread = z.infer<typeof ContestationThreadSchema>
+
+// ─────────────────────────────────────────────
+// CurationReview
+// ─────────────────────────────────────────────
+
+/**
+ * CurationReview — a curation queue item, created by the Sampling Engine
+ * (Fluxo 2 / AI-evaluated agents) or by a calibration_signal intake (Fluxo 1).
+ */
+export const CurationReviewStatusSchema = z.enum([
+  "pending",       // awaiting curator assignment
+  "approved",      // curator approved the evaluation as-is
+  "recalibrated",  // curator created a CalibrationNote
+  "bias_flagged",  // curator flagged systematic evaluator bias (high severity)
+])
+export type CurationReviewStatus = z.infer<typeof CurationReviewStatusSchema>
+
+export const CurationReviewSchema = z.object({
+  review_id:               z.string().uuid(),
+  evaluation_instance_id:  z.string().min(1),
+  /**
+   * Trigger source. One or more comma-separated values:
+   * "sampling_rule:score_extremes" | "sampling_rule:deploy_baseline" | ... | "reviewer_signal"
+   */
+  trigger:                 z.string().min(1),
+  /** user_id of the assigned curator (null = pending assignment) */
+  curator_id:              z.string().nullable().optional(),
+  status:                  CurationReviewStatusSchema.default("pending"),
+  /** Curator's notes — complement to the calibration_signal observation */
+  curator_notes:           z.string().nullable().optional(),
+  /** FK to CalibrationNote if one was generated from this review */
+  calibration_note_id:     z.string().uuid().nullable().optional(),
+  created_at:              z.string().datetime(),
+  resolved_at:             z.string().datetime().nullable().optional(),
+})
+export type CurationReview = z.infer<typeof CurationReviewSchema>
+
+// ─────────────────────────────────────────────
+// CalibrationNote
+// ─────────────────────────────────────────────
+
+/**
+ * CalibrationNote — generated by curator from a CurationReview.
+ * Published to the campaign's knowledge namespace → read by agente_avaliacao_v1 via RAG.
+ */
+export const CalibrationNoteSchema = z.object({
+  note_id:        z.string().uuid(),
+  campaign_id:    z.string().min(1),
+  dimension_id:   z.string().min(1),
+  /** agent_type_id of the evaluator to be calibrated */
+  evaluator_id:   z.string().min(1),
+  /** Skill version of the evaluator at detection time */
+  skill_version:  z.string().min(1),
+  /** Combined note: AI signal observation + curator complement */
+  text:           z.string().min(1),
+  severity:       z.enum(["low", "medium", "high"]),
+  /** True after ingestion into the campaign knowledge namespace */
+  published_to_kb: z.boolean().default(false),
+  created_at:      z.string().datetime(),
+})
+export type CalibrationNote = z.infer<typeof CalibrationNoteSchema>
+
+// ─────────────────────────────────────────────
+// CurationSamplingRule
+// ─────────────────────────────────────────────
+
+/**
+ * Rule types for the Sampling Engine (Fluxo 2 — AI-evaluated agents).
+ * Evaluated in priority order; first match wins (unless multiple fire → merged trigger).
+ */
+export const CurationSamplingRuleTypeSchema = z.enum([
+  "score_extremes",   // top/bottom N% of scores
+  "deploy_baseline",  // first N evaluations after a new skill deploy
+  "score_outlier",    // score deviates > X std_dev from agent_type average
+  "na_excess",        // evaluator marked ≥ N criteria as na:true
+  "random_baseline",  // fixed % of all evaluations
+  "reviewer_signal",  // evaluator AI reviewer generated calibration_signal ≥ severity
+])
+export type CurationSamplingRuleType = z.infer<typeof CurationSamplingRuleTypeSchema>
+
+export const CurationSamplingRuleSchema = z.object({
+  rule_id:     z.string().uuid(),
+  campaign_id: z.string().min(1),
+  rule_type:   CurationSamplingRuleTypeSchema,
+  /**
+   * Rule-specific parameters (JSONB).
+   * score_extremes:  { top_pct: float, bottom_pct: float }
+   * deploy_baseline: { first_n: int }
+   * score_outlier:   { std_dev_threshold: float }
+   * na_excess:       { min_na_count: int }
+   * random_baseline: { rate: float }  (0–1)
+   * reviewer_signal: { min_severity: "low" | "medium" | "high" }
+   */
+  params:      z.record(z.unknown()).default({}),
+  enabled:     z.boolean().default(true),
+  /** Evaluation order — lower number = higher priority */
+  priority:    z.number().int().nonnegative().default(10),
+})
+export type CurationSamplingRule = z.infer<typeof CurationSamplingRuleSchema>
+
+// ─────────────────────────────────────────────
+// Arc 13 Kafka events
+// ─────────────────────────────────────────────
+
+/** evaluation_finalized — canonical score emitted after full contestation cycle */
+export const EvalFinalizedSchema = _evalBase.extend({
+  event_type:               z.literal("evaluation_finalized"),
+  final_score:              z.number().min(0).max(10),
+  final_scores_by_dimension: z.array(z.object({
+    dimension_id: z.string(),
+    score:        z.number(),
+  })).default([]),
+  process_duration_ms: z.number().nonnegative(),
+  contestation_state:  ContestationStateSchema,
+})
+export type EvalFinalized = z.infer<typeof EvalFinalizedSchema>
+
+/** calibration_reviewed — curator resolved a CurationReview */
+export const CalibrationReviewedSchema = z.object({
+  event_type:              z.literal("calibration_reviewed"),
+  event_id:                z.string().uuid(),
+  review_id:               z.string().uuid(),
+  campaign_id:             z.string().min(1),
+  evaluation_instance_id:  z.string().min(1),
+  skill_version:           z.string().min(1),
+  evaluator_id:            z.string().min(1),
+  decision:                CurationReviewStatusSchema,
+  calibration_note_id:     z.string().uuid().nullable().optional(),
+  tenant_id:               z.string().min(1),
+  timestamp:               z.string().datetime(),
+})
+export type CalibrationReviewed = z.infer<typeof CalibrationReviewedSchema>
+
+/** calibration_note_published — CalibrationNote ingested into knowledge namespace */
+export const CalibrationNotePublishedSchema = z.object({
+  event_type:   z.literal("calibration_note_published"),
+  event_id:     z.string().uuid(),
+  note_id:      z.string().uuid(),
+  campaign_id:  z.string().min(1),
+  evaluator_id: z.string().min(1),
+  severity:     z.enum(["low", "medium", "high"]),
+  tenant_id:    z.string().min(1),
+  timestamp:    z.string().datetime(),
+})
+export type CalibrationNotePublished = z.infer<typeof CalibrationNotePublishedSchema>

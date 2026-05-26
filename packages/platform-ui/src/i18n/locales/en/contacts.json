@@ -136,14 +136,34 @@
       "error":      "SSE Error",
       "closed":     "Closed"
     },
+    "kpi": {
+      "active":      "In progress",
+      "available":   "Available",
+      "online":      "Online",
+      "queue":       "In queue"
+    },
+    "stale": {
+      "label":    "Stale data — no routing activity in the last 2 minutes",
+      "lastSeen": "Last update: {{time}}"
+    },
+    "donut": {
+      "title": "Distribution by pool"
+    },
+    "donutChannel": {
+      "title": "Traffic by channel",
+      "centerLabel": "contacts",
+      "noData": "No contacts yet today"
+    },
     "table": {
-      "pool":      "Pool",
-      "available": "Available",
-      "busy":      "Busy",
-      "queue":     "Queue",
-      "slaTarget": "SLA Target",
-      "sentiment": "Sentiment",
-      "channels":  "Channels"
+      "pool":          "Pool",
+      "available":     "Available",
+      "busy":          "Busy",
+      "total":         "Total",
+      "occupancy":     "Occupancy",
+      "queue":         "Queue",
+      "slaTarget":     "SLA Target",
+      "avgWait":       "Avg Wait",
+      "slaCompliance": "SLA %"
     },
     "breadcrumbs": {
       "pools":    "Pools",

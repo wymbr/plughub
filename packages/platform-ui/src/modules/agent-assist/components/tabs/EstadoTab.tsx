@@ -5,6 +5,7 @@
  */
 
 import React from "react";
+import { useTranslation } from "react-i18next";
 import {
   LineChart,
   Line,
@@ -26,17 +27,17 @@ interface EstadoTabProps {
 }
 
 function sentimentColor(value: number): string {
-  if (value >= 0.3)  return "text-green-600";
-  if (value >= -0.3) return "text-yellow-600";
-  return "text-red-600";
+  if (value >= 0.3)  return "text-green-text";
+  if (value >= -0.3) return "text-warning-text";
+  return "text-red-text";
 }
 
-function sentimentLabel(value: number): string {
-  if (value >= 0.5)  return "Muito positivo";
-  if (value >= 0.2)  return "Positivo";
-  if (value >= -0.2) return "Neutro";
-  if (value >= -0.5) return "Negativo";
-  return "Muito negativo";
+function sentimentLabel(value: number, t: (key: string) => string): string {
+  if (value >= 0.5)  return t('estado.sentimentLabel.veryPositive');
+  if (value >= 0.2)  return t('estado.sentimentLabel.positive');
+  if (value >= -0.2) return t('estado.sentimentLabel.neutral');
+  if (value >= -0.5) return t('estado.sentimentLabel.negative');
+  return t('estado.sentimentLabel.veryNegative');
 }
 
 function trendIcon(trend: string): string {
@@ -50,10 +51,12 @@ export const EstadoTab: React.FC<EstadoTabProps> = ({
   sessionMessages = [],
   onTerminateSegment,
 }) => {
+  const { t } = useTranslation('agentAssist');
+
   if (!state) {
     return (
-      <div className="flex-1 flex items-center justify-center text-sm text-gray-400">
-        Aguardando dados…
+      <div className="flex-1 flex items-center justify-center text-sm text-muted-light">
+        {t('estado.waiting')}
       </div>
     );
   }
@@ -69,10 +72,10 @@ export const EstadoTab: React.FC<EstadoTabProps> = ({
   const slaPercent = Math.min(sla.percentage, 100);
   const slaBar =
     sla.breach_imminent
-      ? "bg-red-500"
+      ? "bg-red"
       : slaPercent > 70
-      ? "bg-yellow-400"
-      : "bg-green-500";
+      ? "bg-warning"
+      : "bg-green";
 
   return (
     <div className="flex flex-col gap-4 p-3 overflow-y-auto h-full">
@@ -80,8 +83,8 @@ export const EstadoTab: React.FC<EstadoTabProps> = ({
       {/* ── Arc 11 F1 — AI Participants ── */}
       {ai_participants && ai_participants.length > 0 && (
         <section>
-          <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">
-            Agentes AI na Sessão
+          <h3 className="text-xs font-semibold text-muted uppercase tracking-wide mb-2">
+            {t('estado.aiAgents')}
           </h3>
           <div className="flex flex-col gap-2">
             {ai_participants.map(p => (
@@ -98,23 +101,23 @@ export const EstadoTab: React.FC<EstadoTabProps> = ({
 
       {/* Sentiment */}
       <section>
-        <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">
-          Sentimento
+        <h3 className="text-xs font-semibold text-muted uppercase tracking-wide mb-2">
+          {t('state.sentiment')}
         </h3>
         <div className="flex items-baseline gap-2">
           <span className={`text-2xl font-bold ${sentimentColor(sentiment.current)}`}>
             {(sentiment.current * 100).toFixed(0)}%
           </span>
           <span className={`text-sm ${sentimentColor(sentiment.current)}`}>
-            {sentimentLabel(sentiment.current)}
+            {sentimentLabel(sentiment.current, t)}
           </span>
-          <span className="text-sm text-gray-400 ml-auto">
+          <span className="text-sm text-muted-light ml-auto">
             {trendIcon(sentiment.trend)} {sentiment.trend}
           </span>
         </div>
         {sentiment.alert && (
-          <div className="mt-1 text-xs font-semibold text-red-600 bg-red-50 border border-red-200 rounded px-2 py-1">
-            ⚠ Alerta de sentimento crítico
+          <div className="mt-1 text-xs font-semibold text-red-text bg-red-light border border-red/30 rounded px-2 py-1">
+            {t('estado.sentimentAlert')}
           </div>
         )}
 
@@ -144,16 +147,16 @@ export const EstadoTab: React.FC<EstadoTabProps> = ({
 
       {/* Intent */}
       <section>
-        <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">
-          Intenção
+        <h3 className="text-xs font-semibold text-muted uppercase tracking-wide mb-1">
+          {t('state.intent')}
         </h3>
         <div className="flex items-center gap-2">
-          <span className="text-sm font-medium text-gray-800">
+          <span className="text-sm font-medium text-dark">
             {intent.current ?? "—"}
           </span>
           {intent.current && (
-            <span className="text-xs text-gray-400">
-              {(intent.confidence * 100).toFixed(0)}% confiança
+            <span className="text-xs text-muted-light">
+              {t('estado.confidence', { pct: (intent.confidence * 100).toFixed(0) })}
             </span>
           )}
         </div>
@@ -162,7 +165,7 @@ export const EstadoTab: React.FC<EstadoTabProps> = ({
             {intent.history.slice(-4).map((h, i) => (
               <span
                 key={i}
-                className="text-[10px] bg-gray-100 text-gray-500 px-1.5 py-0.5 rounded"
+                className="text-2xs bg-surface-alt text-muted px-1.5 py-0.5 rounded"
               >
                 {h}
               </span>
@@ -174,14 +177,14 @@ export const EstadoTab: React.FC<EstadoTabProps> = ({
       {/* Flags */}
       {flags.length > 0 && (
         <section>
-          <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">
-            Flags
+          <h3 className="text-xs font-semibold text-muted uppercase tracking-wide mb-1">
+            {t('state.flags')}
           </h3>
           <div className="flex flex-wrap gap-1">
             {flags.map((f) => (
               <span
                 key={f}
-                className="text-[11px] bg-amber-100 text-amber-800 border border-amber-300 px-2 py-0.5 rounded-full font-medium"
+                className="text-xs bg-warning-light text-warning-text border border-warning/30 px-2 py-0.5 rounded-full font-medium"
               >
                 {f}
               </span>
@@ -192,23 +195,23 @@ export const EstadoTab: React.FC<EstadoTabProps> = ({
 
       {/* SLA */}
       <section>
-        <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">
-          SLA · Turn {turn_count}
+        <h3 className="text-xs font-semibold text-muted uppercase tracking-wide mb-1">
+          {t('estado.slaTurn', { count: turn_count })}
         </h3>
         <div className="flex items-center gap-2">
-          <div className="flex-1 h-2 bg-gray-200 rounded-full overflow-hidden">
+          <div className="flex-1 h-2 bg-border rounded-full overflow-hidden">
             <div
               className={`h-full rounded-full transition-all duration-500 ${slaBar}`}
               style={{ width: `${slaPercent}%` }}
             />
           </div>
-          <span className="text-xs text-gray-600 w-10 text-right">
+          <span className="text-xs text-muted w-10 text-right">
             {slaPercent.toFixed(0)}%
           </span>
         </div>
         {sla.breach_imminent && (
-          <p className="text-xs text-red-600 font-semibold mt-1 animate-pulse">
-            SLA em risco iminente
+          <p className="text-xs text-red-text font-semibold mt-1 animate-pulse">
+            {t('estado.slaRisk')}
           </p>
         )}
       </section>

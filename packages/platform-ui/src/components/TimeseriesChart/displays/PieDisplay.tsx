@@ -47,7 +47,7 @@ export function PieDisplay({ buckets, formatType, valueLabel, height, compact }:
 
   if (data.length === 0) {
     return (
-      <div className="flex items-center justify-center text-xs text-gray-400" style={{ height }}>
+      <div className="flex items-center justify-center text-xs text-muted-light" style={{ height }}>
         Sem dados no período
       </div>
     )

@@ -10,6 +10,7 @@
  * tenant_id is always injected as a fixed param.
  */
 import React, { useState, useEffect } from 'react'
+import { useTranslation } from 'react-i18next'
 import { ENDPOINT_CATALOG, type EndpointDescriptor } from './catalog'
 import { listDisplayTools, getDisplayTool } from './tools/registry'
 import type { NewDashboardCard, QueryParam } from './tools/types'
@@ -41,7 +42,7 @@ function StepDots({ current, total }: { current: number; total: number }) {
               ? 'w-4 h-1.5 bg-primary'
               : i < current
                 ? 'w-1.5 h-1.5 bg-primary/40'
-                : 'w-1.5 h-1.5 bg-gray-200'
+                : 'w-1.5 h-1.5 bg-border'
           }`}
         />
       ))}
@@ -58,13 +59,15 @@ function StepMetric({
   selected: EndpointDescriptor | null
   onSelect: (e: EndpointDescriptor) => void
 }) {
+  const { t } = useTranslation('dashboards')
+
   return (
     <div className="flex flex-col gap-3">
       <div>
-        <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-0.5">
-          O que você quer ver?
+        <p className="text-xs font-semibold text-muted uppercase tracking-wide mb-0.5">
+          {t('modal.metric.heading')}
         </p>
-        <p className="text-xs text-gray-400">Escolha a métrica que este card vai exibir.</p>
+        <p className="text-xs text-muted-light">{t('modal.metric.subtitle')}</p>
       </div>
 
       <div className="grid grid-cols-2 gap-2 max-h-72 overflow-y-auto pr-1">
@@ -74,15 +77,17 @@ function StepMetric({
             onClick={() => onSelect(ep)}
             className={`flex items-start gap-2.5 px-3 py-2.5 rounded-lg border text-left transition-colors ${
               selected?.id === ep.id
-                ? 'border-primary bg-blue-50 text-primary'
-                : 'border-gray-200 text-gray-700 hover:border-primary hover:bg-blue-50/40'
+                ? 'border-primary bg-primary-light text-primary'
+                : 'border-border text-dark hover:border-primary hover:bg-primary-light/40'
             }`}
           >
             <span className="text-lg flex-shrink-0 mt-0.5">{ep.icon}</span>
             <div className="min-w-0">
-              <p className="text-xs font-medium leading-snug truncate">{ep.label}</p>
-              <p className="text-xs text-gray-400 leading-snug mt-0.5 line-clamp-2">
-                {ep.description}
+              <p className="text-xs font-medium leading-snug truncate">
+                {t(`catalog.${ep.id}.label`, { defaultValue: ep.label })}
+              </p>
+              <p className="text-xs text-muted-light leading-snug mt-0.5 line-clamp-2">
+                {t(`catalog.${ep.id}.description`, { defaultValue: ep.description })}
               </p>
             </div>
           </button>
@@ -103,6 +108,8 @@ function StepVisualization({
   selected:  string
   onSelect:  (toolId: string) => void
 }) {
+  const { t } = useTranslation('dashboards')
+
   const tools = endpoint.compatible_tools
     .map(id => getDisplayTool(id))
     .filter(Boolean)
@@ -110,12 +117,14 @@ function StepVisualization({
   return (
     <div className="flex flex-col gap-3">
       <div>
-        <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-0.5">
-          Como você quer ver?
+        <p className="text-xs font-semibold text-muted uppercase tracking-wide mb-0.5">
+          {t('modal.visualization.heading')}
         </p>
-        <p className="text-xs text-gray-400">
-          Visualizações disponíveis para{' '}
-          <span className="font-medium text-gray-600">{endpoint.label}</span>.
+        <p className="text-xs text-muted-light">
+          {t('modal.visualization.subtitle')}{' '}
+          <span className="font-medium text-muted">
+            {t(`catalog.${endpoint.id}.label`, { defaultValue: endpoint.label })}
+          </span>.
         </p>
       </div>
 
@@ -128,18 +137,18 @@ function StepVisualization({
               onClick={() => onSelect(tool.id)}
               className={`flex items-center gap-3 px-4 py-3 rounded-lg border text-left transition-colors ${
                 selected === tool.id
-                  ? 'border-primary bg-blue-50'
-                  : 'border-gray-200 hover:border-primary hover:bg-blue-50/40'
+                  ? 'border-primary bg-primary-light'
+                  : 'border-border hover:border-primary hover:bg-primary-light/40'
               }`}
             >
-              <span className={`text-2xl font-mono ${selected === tool.id ? 'text-primary' : 'text-gray-400'}`}>
+              <span className={`text-2xl font-mono ${selected === tool.id ? 'text-primary' : 'text-muted-light'}`}>
                 {tool.icon}
               </span>
               <div>
-                <p className={`text-sm font-medium ${selected === tool.id ? 'text-primary' : 'text-gray-700'}`}>
+                <p className={`text-sm font-medium ${selected === tool.id ? 'text-primary' : 'text-dark'}`}>
                   {tool.label}
                 </p>
-                <p className="text-xs text-gray-400">{tool.description}</p>
+                <p className="text-xs text-muted-light">{tool.description}</p>
               </div>
               {selected === tool.id && (
                 <span className="ml-auto text-primary text-sm">✓</span>
@@ -169,6 +178,7 @@ function StepConfigure({
   fixedParams:   Record<string, string>
   onParamChange: (key: string, value: string) => void
 }) {
+  const { t } = useTranslation('dashboards')
   const hasParams = (endpoint.configurable_params?.length ?? 0) > 0
   const [paramOptions, setParamOptions] = useState<Record<string, string[]>>({})
 
@@ -191,50 +201,50 @@ function StepConfigure({
   return (
     <div className="flex flex-col gap-4">
       <div>
-        <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-0.5">
-          Configurar card
+        <p className="text-xs font-semibold text-muted uppercase tracking-wide mb-0.5">
+          {t('modal.configure.heading')}
         </p>
-        <p className="text-xs text-gray-400">
-          Defina o título e qualquer filtro fixo para este card.
+        <p className="text-xs text-muted-light">
+          {t('modal.configure.subtitle')}
         </p>
       </div>
 
       {/* Title */}
       <div>
-        <label className="block text-xs font-medium text-gray-600 mb-1">
-          Título do card
+        <label className="block text-xs font-medium text-muted mb-1">
+          {t('modal.configure.cardTitle')}
         </label>
         <input
           type="text"
           value={title}
           onChange={e => onTitleChange(e.target.value)}
-          className="w-full border border-gray-200 rounded px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-primary"
-          placeholder={endpoint.label}
+          className="w-full border border-border rounded px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-primary"
+          placeholder={t(`catalog.${endpoint.id}.label`, { defaultValue: endpoint.label })}
         />
       </div>
 
       {/* Configurable params */}
       {hasParams && (
         <div className="flex flex-col gap-3">
-          <p className="text-xs font-medium text-gray-600">
-            Filtros fixos{' '}
-            <span className="font-normal text-gray-400">
-              — deixe em branco para usar os filtros globais do dashboard
+          <p className="text-xs font-medium text-muted">
+            {t('modal.configure.fixedFilters')}{' '}
+            <span className="font-normal text-muted-light">
+              {t('modal.configure.fixedFiltersHint')}
             </span>
           </p>
           {endpoint.configurable_params!.map(param => (
             <div key={param.key}>
-              <label className="block text-xs text-gray-500 mb-1">
-                {param.label}
-                {!param.optional && <span className="text-red-500 ml-0.5">*</span>}
+              <label className="block text-xs text-muted mb-1">
+                {t(`catalog.params.${param.key}.label`, { defaultValue: param.label })}
+                {!param.optional && <span className="text-red ml-0.5">*</span>}
               </label>
               {param.options_from && paramOptions[param.key] ? (
                 <select
                   value={fixedParams[param.key] ?? ''}
                   onChange={e => onParamChange(param.key, e.target.value)}
-                  className="w-full border border-gray-200 rounded px-3 py-1.5 text-sm text-gray-700 focus:outline-none focus:ring-1 focus:ring-primary bg-white"
+                  className="w-full border border-border rounded px-3 py-1.5 text-sm text-dark focus:outline-none focus:ring-1 focus:ring-primary bg-white"
                 >
-                  <option value="">— selecione —</option>
+                  <option value="">{t('modal.configure.selectPlaceholder')}</option>
                   {paramOptions[param.key].map(opt => (
                     <option key={opt} value={opt}>{opt}</option>
                   ))}
@@ -244,8 +254,12 @@ function StepConfigure({
                   type="text"
                   value={fixedParams[param.key] ?? ''}
                   onChange={e => onParamChange(param.key, e.target.value)}
-                  placeholder={param.options_from ? 'Carregando opções…' : param.placeholder}
-                  className="w-full border border-gray-200 rounded px-3 py-1.5 text-sm text-gray-700 focus:outline-none focus:ring-1 focus:ring-primary placeholder:text-gray-300"
+                  placeholder={
+                    param.options_from
+                      ? t('modal.configure.loadingOptions')
+                      : t(`catalog.params.${param.key}.placeholder`, { defaultValue: param.placeholder })
+                  }
+                  className="w-full border border-border rounded px-3 py-1.5 text-sm text-dark focus:outline-none focus:ring-1 focus:ring-primary placeholder:text-border-strong"
                 />
               )}
             </div>
@@ -254,9 +268,9 @@ function StepConfigure({
       )}
 
       {/* Info: always-runtime params */}
-      <div className="rounded-lg bg-gray-50 border border-gray-100 px-3 py-2.5 text-xs text-gray-400">
-        <span className="font-medium text-gray-500">Período e tenant</span> são sempre controlados
-        pelos filtros globais do dashboard — não precisam ser configurados aqui.
+      <div className="rounded-lg bg-surface-muted border border-border px-3 py-2.5 text-xs text-muted-light">
+        <span className="font-medium text-muted">{t('modal.configure.periodNoteLabel')}</span>
+        {' '}{t('modal.configure.periodNoteBody')}
       </div>
     </div>
   )
@@ -265,6 +279,7 @@ function StepConfigure({
 // ─── Main modal ───────────────────────────────────────────────────────────────
 
 export function AddCardModal({ tenantId, onAdd, onClose }: AddCardModalProps) {
+  const { t } = useTranslation('dashboards')
   const [step, setStep] = useState<1 | 2 | 3>(1)
 
   const [selectedEndpoint, setSelectedEndpoint] = useState<EndpointDescriptor | null>(null)
@@ -277,7 +292,7 @@ export function AddCardModal({ tenantId, onAdd, onClose }: AddCardModalProps) {
   function confirmMetric(ep: EndpointDescriptor) {
     setSelectedEndpoint(ep)
     setSelectedToolId(ep.default_tool)
-    setTitle(ep.label)
+    setTitle(t(`catalog.${ep.id}.label`, { defaultValue: ep.label }))
     setFixedParams({})
     setStep(2)
   }
@@ -336,7 +351,7 @@ export function AddCardModal({ tenantId, onAdd, onClose }: AddCardModalProps) {
       w:           selectedEndpoint.defaultW,
       h:           selectedEndpoint.defaultH,
       tool_id:     selectedToolId,
-      title:       title.trim() || selectedEndpoint.label,
+      title:       title.trim() || t(`catalog.${selectedEndpoint.id}.label`, { defaultValue: selectedEndpoint.label }),
       query: {
         endpoint: selectedEndpoint.endpoint,
         params,
@@ -352,9 +367,9 @@ export function AddCardModal({ tenantId, onAdd, onClose }: AddCardModalProps) {
   // ── Step labels ───────────────────────────────────────────────────────────
 
   const STEP_LABELS: Record<number, string> = {
-    1: 'Escolher métrica',
-    2: 'Visualização',
-    3: 'Configurar',
+    1: t('modal.steps.1'),
+    2: t('modal.steps.2'),
+    3: t('modal.steps.3'),
   }
 
   const canAdvance1 = !!selectedEndpoint
@@ -366,17 +381,17 @@ export function AddCardModal({ tenantId, onAdd, onClose }: AddCardModalProps) {
       <div className="bg-white rounded-xl shadow-xl w-full max-w-lg flex flex-col overflow-hidden max-h-[90vh]">
 
         {/* Header */}
-        <div className="flex items-center justify-between px-6 pt-5 pb-4 border-b border-gray-100 flex-shrink-0">
+        <div className="flex items-center justify-between px-6 pt-5 pb-4 border-b border-border flex-shrink-0">
           <div className="flex flex-col gap-1">
-            <h2 className="text-base font-semibold text-gray-800">Adicionar card</h2>
+            <h2 className="text-base font-semibold text-dark">{t('modal.title')}</h2>
             <div className="flex items-center gap-2">
               <StepDots current={step - 1} total={3} />
-              <span className="text-xs text-gray-400">{STEP_LABELS[step]}</span>
+              <span className="text-xs text-muted-light">{STEP_LABELS[step]}</span>
             </div>
           </div>
           <button
             onClick={onClose}
-            className="text-gray-400 hover:text-gray-600 text-xl leading-none"
+            className="text-muted-light hover:text-muted text-xl leading-none"
           >
             ×
           </button>
@@ -387,7 +402,7 @@ export function AddCardModal({ tenantId, onAdd, onClose }: AddCardModalProps) {
           {step === 1 && (
             <StepMetric
               selected={selectedEndpoint}
-              onSelect={ep => { setSelectedEndpoint(ep); setSelectedToolId(ep.default_tool); setTitle(ep.label) }}
+              onSelect={ep => { setSelectedEndpoint(ep); setSelectedToolId(ep.default_tool); setTitle(t(`catalog.${ep.id}.label`, { defaultValue: ep.label })) }}
             />
           )}
           {step === 2 && selectedEndpoint && (
@@ -410,13 +425,13 @@ export function AddCardModal({ tenantId, onAdd, onClose }: AddCardModalProps) {
         </div>
 
         {/* Footer */}
-        <div className="flex gap-2 px-6 py-4 border-t border-gray-100 flex-shrink-0">
+        <div className="flex gap-2 px-6 py-4 border-t border-border flex-shrink-0">
           {step > 1 && (
             <button
               onClick={goBack}
-              className="px-4 py-2 border border-gray-200 text-gray-600 text-sm rounded hover:bg-gray-50 transition-colors"
+              className="px-4 py-2 border border-border text-muted text-sm rounded hover:bg-surface-muted transition-colors"
             >
-              ← Voltar
+              {t('modal.back')}
             </button>
           )}
 
@@ -424,9 +439,9 @@ export function AddCardModal({ tenantId, onAdd, onClose }: AddCardModalProps) {
 
           <button
             onClick={onClose}
-            className="px-4 py-2 border border-gray-200 text-gray-600 text-sm rounded hover:bg-gray-50 transition-colors"
+            className="px-4 py-2 border border-border text-muted text-sm rounded hover:bg-surface-muted transition-colors"
           >
-            Cancelar
+            {t('modal.cancel')}
           </button>
 
           {step === 1 && (
@@ -435,7 +450,7 @@ export function AddCardModal({ tenantId, onAdd, onClose }: AddCardModalProps) {
               disabled={!canAdvance1}
               className="px-4 py-2 bg-primary text-white text-sm font-medium rounded hover:opacity-90 disabled:opacity-40 transition-opacity"
             >
-              Próximo →
+              {t('modal.next')}
             </button>
           )}
           {step === 2 && (
@@ -444,7 +459,7 @@ export function AddCardModal({ tenantId, onAdd, onClose }: AddCardModalProps) {
               disabled={!canAdvance2}
               className="px-4 py-2 bg-primary text-white text-sm font-medium rounded hover:opacity-90 disabled:opacity-40 transition-opacity"
             >
-              Próximo →
+              {t('modal.next')}
             </button>
           )}
           {step === 3 && (
@@ -453,7 +468,7 @@ export function AddCardModal({ tenantId, onAdd, onClose }: AddCardModalProps) {
               disabled={!canAdvance3}
               className="px-4 py-2 bg-primary text-white text-sm font-medium rounded hover:opacity-90 disabled:opacity-40 transition-opacity"
             >
-              Adicionar card
+              {t('modal.addCard')}
             </button>
           )}
         </div>

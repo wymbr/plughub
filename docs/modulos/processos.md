@@ -1,5 +1,7 @@
 # Módulo: Processos
 
+> Última atualização: 2026-05-25 · Estado: Arc 16
+
 > Rota UI: `/agent-flow/processos` | Roles: operator+ | ABAC: `skill_flows.operacao`
 
 ## O que é
@@ -8,6 +10,8 @@ O módulo Processos é a visão de monitoramento de automação de longa duraç�
 
 - **Jornadas**: monitoramento de Journeys (Arc 10) — processos multi-sessão que transcendem um único contato
 - **Instâncias**: monitoramento de instâncias de Workflow (Arc 4) — execuções de fluxos automáticos
+
+No Arc 16, a Journey é formalizada como **superfície pública** de orquestração de processos de negócio: o `workflow-api` expõe `GET /v1/journeys?pool_id=...&status=suspended` e `POST /v1/journeys/{id}/resume` (encapsulando o `resume_token` interno), viabilizando o padrão de poller workflow (Tier 1 que monitora e retoma Journeys de outros processos). As MCP tools `journey_list_suspended`, `journey_resume` e `journey_check_pending` dão o mesmo acesso a agentes, sob a permissão ABAC `workflows.journey.*`.
 
 ## Aba Jornadas
 
@@ -33,6 +37,7 @@ Drawer lateral ao clicar numa jornada:
 - Timeline de sessões vinculadas (`session_id`, `outcome`, `started_at`, `ended_at`)
 - Status atual e histórico de eventos (`journey.events`)
 - Botão **Merge** para unificar jornadas duplicadas (`journey_merge` MCP tool)
+- Botão **✂️ Separar em nova jornada** (Fase F) — abre drawer com checklist de sessões collect para extrair para uma nova journey independente (`journey_split` MCP tool). Disponível apenas para jornadas `active` ou `suspended`.
 
 ## Aba Instâncias
 
@@ -67,13 +72,15 @@ Visualização das instâncias de Workflow criadas via `workflow-api`. Colunas: 
 | `POST /v1/journeys/from-instance/:id` | Cria jornada a partir de instância de workflow |
 | `POST /v1/journeys/:id/link` | Vincula sessão a uma jornada (`journey_link_session`) |
 | `POST /v1/journeys/merge` | Unifica duas jornadas (`journey_merge`) |
+| `GET /v1/journeys/:id/collect-sessions` | Lista session IDs collect elegíveis para split |
+| `POST /v1/journeys/:id/split` | Extrai sessões para nova jornada (`journey_split`) |
 | `GET /reports/journeys` | Relatório de jornadas com KPIs por skill_id |
 
 ## Kafka
 
 | Tópico | Eventos |
 |---|---|
-| `journey.events` | `journey_started`, `journey_session_linked`, `journey_suspended`, `journey_resumed`, `journey_completed`, `journey_failed`, `journey_cancelled`, `journey_merged` |
+| `journey.events` | `journey_started`, `journey_session_linked`, `journey_suspended`, `journey_resumed`, `journey_completed`, `journey_failed`, `journey_cancelled`, `journey_merged`, `journey_split` |
 
 ## Referências
 

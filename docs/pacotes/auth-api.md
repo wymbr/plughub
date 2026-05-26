@@ -1,6 +1,8 @@
 # Módulo: auth-api
 
-> **Responsabilidade:** autenticação real com JWT HS256, gestão de usuários, refresh token rotation e sistema ABAC de permissões por módulo.
+> Última atualização: 2026-05-25 · Estado: Arc 16
+
+> **Responsabilidade:** autenticação real com JWT HS256, gestão de usuários, refresh token rotation, sistema ABAC de permissões por módulo e gestão de Agent Groups (Arc 9).
 > **Porta:** 3200 · **Runtime:** Python 3.11+ · **Framework:** FastAPI + asyncpg + bcrypt + python-jose
 
 ---
@@ -13,6 +15,7 @@ O auth-api é o único componente do PlugHub responsável por autenticação e c
 2. Mantém o registro de usuários por tenant com roles e pools acessíveis
 3. Declara e distribui permissões de módulo (ABAC) embutidas no JWT
 4. Expõe operações CRUD de usuários para administração via `X-Admin-Token`
+5. Gerencia Agent Groups (Arc 9) — entidade de organograma ortogonal a Pool — e resolve o escopo de supervisão denormalizado no JWT
 
 Outros serviços validam o JWT localmente (sem chamada ao auth-api no hot path). A exceção são endpoints admin que verificam o `X-Admin-Token` configurado via env var.
 
@@ -99,6 +102,28 @@ CREATE TABLE auth.permission_templates (
 );
 ```
 
+### Agent Groups (Arc 9)
+
+`AgentGroup` é uma entidade de gestão de pessoas, **ortogonal a Pool** (Pool = roteamento; Group = organograma). Cinco tabelas no schema `auth`:
+
+| Tabela | Conteúdo |
+|---|---|
+| `agent_groups` | Definição do grupo (nome, descrição, tenant) |
+| `agent_group_members` | Membros do grupo — `agent_type_id` + `is_human` |
+| `agent_group_users` | Usuários humanos vinculados ao grupo |
+| `agent_group_supervisors` | Usuários supervisores do grupo |
+| `agent_group_shifts` | Turnos — `days_of_week[]`, `time_start`/`time_end` (TIME), `timezone` |
+
+### `resolve_supervisor_scope()` — denormalização de escopo no login/refresh
+
+No momento de emissão do JWT (login e refresh), `resolve_supervisor_scope(pool, user_id, role)` computa os grupos ativos via resolução de turno (spec usa DOW 0=Dom; `weekday()` do Python é convertido via `(dow+1)%7`). O resultado é denormalizado em três claims do JWT:
+
+- `supervised_groups[]` — IDs dos grupos ativos supervisionados
+- `supervised_agent_types[]` — `agent_type_id`s dos membros desses grupos
+- `supervised_user_ids[]` — IDs de usuários humanos membros desses grupos
+
+Regras: role `admin` → `([], [], [])` (sem restrição). Supervisor com grupos ativos mas sem membros → sentinela `["__no_active_shift__"]` (impede que lista vazia seja interpretada como "sem restrição"). Contas legacy sem grupos degradam graciosamente.
+
 ---
 
 ## JWT — claims do access token
@@ -118,14 +143,25 @@ Token HS256, TTL 1 hora (configurável via env).
       "formularios": { "access": "read_write", "scope": [] },
       "revisar":     { "access": "read_only",  "scope": ["pool_sac"] },
       "contestar":   { "access": "none",       "scope": [] }
+    },
+    "audit": {
+      "sessions":  { "access": "read_only", "scope": [] },
+      "mcp_calls": { "access": "read_only", "scope": [] }
+    },
+    "workflows": {
+      "journey.read":   { "access": "read_only",  "scope": [] },
+      "journey.resume": { "access": "write_only", "scope": [] }
     }
   },
+  "supervised_groups":      ["group_sac_turno_dia"],
+  "supervised_agent_types": ["agente_sac_v1"],
+  "supervised_user_ids":    ["uuid-de-agente-humano"],
   "exp": 1745971200,
   "iat": 1745967600
 }
 ```
 
-`accessible_pools: []` significa acesso a todos os pools (sem restrição de pool).
+`accessible_pools: []` significa acesso a todos os pools (sem restrição de pool). As claims `supervised_*` são preenchidas por `resolve_supervisor_scope()` (Arc 9) — `[]` em todas significa sem restrição de escopo de supervisão.
 
 ---
 
@@ -183,6 +219,22 @@ Token opaco de 43 chars URL-safe (~258 bits de entropia). O plain token é exibi
 | `DELETE` | `/auth/templates/{id}` | X-Admin-Token | Remove template |
 | `POST`   | `/auth/templates/{id}/apply` | X-Admin-Token | Materializa permissões para um usuário |
 
+### Agent Groups (Arc 9) — `/v1/groups` (X-Admin-Token)
+
+CRUD completo de grupos + sub-recursos (membros, usuários, supervisores, turnos). Registrado em `main.py` via `groups_router.py`.
+
+| Método | Rota | Descrição |
+|---|---|---|
+| `GET`    | `/v1/groups` | Lista grupos do tenant |
+| `POST`   | `/v1/groups` | Cria grupo |
+| `GET`    | `/v1/groups/{id}` | Detalhe do grupo |
+| `PATCH`  | `/v1/groups/{id}` | Atualiza grupo |
+| `DELETE` | `/v1/groups/{id}` | Remove grupo |
+| `PUT`    | `/v1/groups/{id}/members` | Define membros (`agent_type_id` + `is_human`) |
+| `PUT`    | `/v1/groups/{id}/users` | Define usuários do grupo |
+| `PUT`    | `/v1/groups/{id}/supervisors` | Define supervisores |
+| `PUT`    | `/v1/groups/{id}/shifts` | Define turnos (`days_of_week[]`, `time_start`/`time_end`, `timezone`) |
+
 ---
 
 ## Arquivos
@@ -196,8 +248,10 @@ Token opaco de 43 chars URL-safe (~258 bits de entropia). O plain token é exibi
 | `db.py` | DDL + CRUD asyncpg: users, sessions, CRUD completo |
 | `permissions.py` | DDL + CRUD: `ensure_permissions_schema`, grant/revoke/list/resolve, templates CRUD + apply |
 | `modules.py` | `seed_modules_from_yaml()`, `list_modules()` |
-| `router.py` | Todos os endpoints FastAPI |
-| `main.py` | FastAPI app + lifespan (asyncpg pool + seed) |
+| `groups.py` | DDL + CRUD das 5 tabelas de Agent Groups; `resolve_supervisor_scope()` (Arc 9) |
+| `groups_router.py` | Endpoints FastAPI `/v1/groups` + sub-recursos (registrado em `main.py`) |
+| `router.py` | Todos os endpoints FastAPI de auth/usuários/permissões |
+| `main.py` | FastAPI app + lifespan (asyncpg pool + seed); registra `router` e `groups_router` |
 
 ---
 
@@ -256,30 +310,6 @@ Valida JWT do auth-api para pool scoping: `PLUGHUB_ANALYTICS_AUTH_JWT_SECRET` de
 
 ---
 
-## Tests
+## Módulos ABAC seedados (`infra/modules.yaml`)
 
-`tests/test_router.py` — **58/58 testes**:
-
-| Classe | Testes | Cobertura |
-|---|---|---|
-| `TestHealth` | 1 | GET /health |
-| `TestLogin` | 4 | success, wrong password, inactive user, unknown email |
-| `TestRefresh` | 3 | success (rotation), expired, invalid |
-| `TestLogout` | 2 | success, already invalid (idempotent) |
-| `TestMe` | 3 | valid token, expired, no header |
-| `TestCreateUser` | 3 | success, duplicate email, validation |
-| `TestListUsers` | 1 | list with tenant filter |
-| `TestGetUser` | 2 | found, not found |
-| `TestUpdateUser` | 2 | name change, password change |
-| `TestDeleteUser` | 2 | success, not found |
-| `TestSeedAdmin` | 2 | absent (creates), present (no-op) |
-| `TestPasswordUtils` | 3 | hash, verify match, verify mismatch |
-| `TestJwtUtils` | 3 | create/decode round-trip, expired, tampered |
-| `TestHashRefreshToken` | 3 | deterministic, different inputs, length |
-| `TestGrantPermission` | 3 | success, idempotent upsert, multiple |
-| `TestListPermissions` | 2 | all, filtered by module |
-| `TestRevokePermission` | 2 | success, not found |
-| `TestResolvePermission` | 3 | global match, pool match, no match |
-| `TestTemplates` | 6 | CRUD completo |
-| `TestApplyTemplate` | 2 | apply with scope override, apply without |
-| `TestResolvePermissionsLogic` | 6 | wildcards, scope_type pool vs global, combined |
+`seed_modules_from_yaml()` faz upsert do `auth.module_registry` a partir de `infra/modules.yaml`. Módulos atuais incluem `evaluation`, `contacts`, `billing`, `config`, `skill_flows`, `workflows`, `agent_assist`, `campaigns` e `audit` (Audit LGPD — DPO/compliance, campos `sessions` e `mcp_calls` ativos). O módulo `workflows` ganhou os campos `journey.read` e `journey.resume` (Arc 16 Fase C), usados pelo `PermissionChecker` nas MCP tools `journey_list_suspended` e `journey_resume`.

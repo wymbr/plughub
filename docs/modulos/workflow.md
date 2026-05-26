@@ -1,5 +1,7 @@
 # Módulo: Workflow
 
+> Última atualização: 2026-05-25 · Estado: Arc 16
+
 > Rota UI: `/workflow/*` | Roles: operator, supervisor, admin (operação); business (relatório)
 
 ## O que é
@@ -15,7 +17,7 @@ O módulo Workflow permite criar e monitorar automações de processos com etapa
 | `/workflow/calendar` | `WorkflowCalendarPage.tsx` | Calendário de janelas de operação (calendar-api) |
 | `/workflow/report` | `WorkflowReportPage.tsx` | Relatório analítico de execuções (analytics-api) |
 
-Redirect legado: `/workflows` → `/workflow/monitor`, `/campaigns` → `/workflow/report`.
+Redirects legados oficiais: `/workflows` → `/workflow/monitor`, `/skill-flows` → `/agent-flow/editor`, `/reports` → `/contacts?tab=analise`.
 
 ## Gate ABAC
 
@@ -63,8 +65,8 @@ Relatório analítico agregado de instâncias: volume por flow_id, taxa de concl
 | Step | O que faz |
 |---|---|
 | `suspend` | Suspende workflow até sinal externo (aprovação, input, webhook, timer). Suporta `business_hours`, `timeout_hours`, `on_resume`, `on_timeout`, `on_reject` |
-| `collect` | Contata target via canal (WhatsApp/SMS/Email), apresenta interação estruturada, suspende até resposta ou expiração |
-| `notify` | Envia mensagem sem aguardar resposta |
+| `collect` | Contata target via canal, apresenta interação estruturada, suspende até resposta ou expiração. No Arc 16 aceita `requires: [text\|audio\|video\|file_upload\|masked_input\|rich_menu]` em vez de `channel` explícito — o Channel Gateway escolhe o canal outbound pela matriz de capacidades + contexto de Journey |
+| `notify` | **Depreciado (Arc 16)** — usar `invoke: notification_send`. O sub-campo `notify` dentro de `suspend` permanece válido |
 | `invoke` | Chama MCP tool (CRM, ERP, billing) |
 | `reason` | Chama AI Gateway para decisão inteligente |
 | `choice` | Branching condicional sobre pipeline_state ou ContextStore |
@@ -80,6 +82,16 @@ Sistemas externos (Salesforce, ERP) podem disparar flows via URL autenticada por
 | `GET /v1/workflow/webhooks/{id}/deliveries` | Log de entregas |
 
 Token format: `plughub_wh_<url-safe-43-chars>` (~258 bits de entropia). Armazenado como SHA-256 no banco.
+
+## Integração com Journey / Processos (Arc 10/16)
+
+O `workflow-api` também expõe a API pública de Journey — a unidade de serviço que agrupa múltiplas sessões de um mesmo processo:
+
+- `GET /v1/journeys` (filtros: `status`, `skill_id`, `customer_id`, `pool_id`), `POST /v1/journeys/{id}/resume` (encapsula o `resume_token` interno), `POST /v1/journeys/from-instance/{id}` — viabiliza o padrão Tier 1 poller (Arc 16).
+- Tópico Kafka `journey.events` (9 tipos) — consumido pelo analytics-api → ClickHouse `journey_events`.
+- `origin_session_id` na `WorkflowInstance` liga o workflow à sessão de contato parent; sessões `collect` recebem `journey_id`.
+
+As Journeys são monitoradas no módulo Processos (`/agent-flow/processos`). Ver `docs/arcos/arc10-journey.md` e `docs/arcos/arc16-flow-orchestration.md`.
 
 ## Collect Step — campanhas outbound
 

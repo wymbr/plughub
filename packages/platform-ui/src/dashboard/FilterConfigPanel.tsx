@@ -7,6 +7,7 @@
  * For the 'select' type, allows adding comma-separated option values.
  */
 import React, { useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { FILTER_PRESETS, type FilterPreset } from './FilterBar'
 import type { GlobalFilter } from './tools/types'
 
@@ -26,6 +27,7 @@ function OptionEditor({
   filter:   GlobalFilter
   onUpdate: (f: GlobalFilter) => void
 }) {
+  const { t } = useTranslation('dashboards')
   const [raw, setRaw] = useState(
     (filter.options ?? []).map(o => o.value).join(', ')
   )
@@ -40,17 +42,17 @@ function OptionEditor({
   }
 
   return (
-    <div className="mt-1 pl-2 border-l-2 border-gray-100">
-      <label className="block text-[10px] text-gray-400 mb-0.5">
-        Opções (separadas por vírgula)
+    <div className="mt-1 pl-2 border-l-2 border-border">
+      <label className="block text-2xs text-muted-light mb-0.5">
+        {t('filters.optionsLabel')}
       </label>
       <input
         type="text"
         value={raw}
         onChange={e => setRaw(e.target.value)}
         onBlur={e => commit(e.target.value)}
-        placeholder="Ex: pool_a, pool_b"
-        className="w-full text-xs border border-gray-200 rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-primary"
+        placeholder={t('filters.optionsPlaceholder')}
+        className="w-full text-xs border border-border rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-primary"
       />
     </div>
   )
@@ -59,6 +61,7 @@ function OptionEditor({
 // ─── Main panel ───────────────────────────────────────────────────────────────
 
 export function FilterConfigPanel({ filters, onChange }: FilterConfigPanelProps) {
+  const { t } = useTranslation('dashboards')
   const [showPresets, setShowPresets] = useState(false)
 
   // Active preset IDs — for each preset, check if all its filter_keys are present
@@ -92,17 +95,17 @@ export function FilterConfigPanel({ filters, onChange }: FilterConfigPanelProps)
   const availablePresets = FILTER_PRESETS.filter(p => !isPresetActive(p))
 
   return (
-    <div className="border-t border-gray-200 px-4 py-3">
+    <div className="border-t border-border px-4 py-3">
       <div className="flex items-center justify-between mb-2">
-        <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">
-          Filtros
+        <p className="text-xs font-semibold text-muted uppercase tracking-wide">
+          {t('filters.heading')}
         </p>
         {availablePresets.length > 0 && (
           <button
             onClick={() => setShowPresets(s => !s)}
-            className="text-[10px] text-primary hover:underline"
+            className="text-2xs text-primary hover:underline"
           >
-            + Adicionar
+            {t('filters.add')}
           </button>
         )}
       </div>
@@ -114,10 +117,12 @@ export function FilterConfigPanel({ filters, onChange }: FilterConfigPanelProps)
             <button
               key={preset.id}
               onClick={() => addPreset(preset)}
-              className="flex items-center gap-2 px-2 py-1.5 rounded border border-gray-200 hover:border-primary hover:bg-blue-50/40 text-left transition-colors"
+              className="flex items-center gap-2 px-2 py-1.5 rounded border border-border hover:border-primary hover:bg-primary-light/40 text-left transition-colors"
             >
               <span className="text-sm">{preset.icon}</span>
-              <span className="text-xs text-gray-700">{preset.label}</span>
+              <span className="text-xs text-dark">
+                {t(`filters.presets.${preset.id}.label`, { defaultValue: preset.label })}
+              </span>
             </button>
           ))}
         </div>
@@ -125,20 +130,20 @@ export function FilterConfigPanel({ filters, onChange }: FilterConfigPanelProps)
 
       {/* Active filters */}
       {activePresets.length === 0 && !showPresets && (
-        <p className="text-xs text-gray-400 italic">Nenhum filtro configurado</p>
+        <p className="text-xs text-muted-light italic">{t('filters.none')}</p>
       )}
 
       {activePresets.map(preset => (
         <div key={preset.id} className="mb-2">
           <div className="flex items-center justify-between">
-            <span className="text-xs font-medium text-gray-600 flex items-center gap-1">
+            <span className="text-xs font-medium text-muted flex items-center gap-1">
               <span>{preset.icon}</span>
-              {preset.label}
+              {t(`filters.presets.${preset.id}.label`, { defaultValue: preset.label })}
             </span>
             <button
               onClick={() => removePreset(preset)}
-              className="text-gray-400 hover:text-red-500 text-sm leading-none transition-colors"
-              title="Remover filtro"
+              className="text-muted-light hover:text-red text-sm leading-none transition-colors"
+              title={t('filters.remove')}
             >
               ×
             </button>

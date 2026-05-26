@@ -56,6 +56,7 @@ from .reports_query import (
     query_agent_events_series,
     query_agent_events_summary,
     query_agent_events_categories,
+    query_evaluator_calibration,
 )
 from .timeseries_query import (
     query_handle_time_timeseries,
@@ -1117,6 +1118,44 @@ async def get_agent_events_categories(
         to_dt     = to_dt,
         pool_id   = pool_id,
         skill_id  = skill_id,
+    )
+    return _respond(data, "json", "")
+
+
+# ─── GET /reports/evaluator-calibration (Arc 13) ──────────────────────────────
+
+@router.get("/evaluator-calibration")
+async def get_evaluator_calibration(
+    request:       Request,
+    tenant_id:     str           = Query(...,   description="Tenant identifier"),
+    from_dt:       Optional[str] = Query(None,  description="ISO8601 start (default: 7d ago)"),
+    to_dt:         Optional[str] = Query(None,  description="ISO8601 end (default: now)"),
+    campaign_id:   Optional[str] = Query(None,  description="Filter by campaign_id"),
+    evaluator_id:  Optional[str] = Query(None,  description="Filter by evaluator agent_type_id"),
+    skill_version: Optional[str] = Query(None,  description="Filter by skill version string"),
+    granularity:   str           = Query("day", description="Time bucket: day | week"),
+) -> Response:
+    """
+    Calibration Score time-series for the AI evaluator (Arc 13).
+
+    calibration_score = (approved / total_reviewed) × 100, per time bucket + skill version.
+
+    Response shape:
+      data:    list of {period, skill_version, evaluator_id, total, approved,
+                        recalibrated, bias_flagged, calibration_score}
+      summary: {total, approved, recalibrated, bias_flagged, calibration_score}
+      meta:    {from_dt, to_dt, campaign_id, evaluator_id, skill_version, granularity}
+    """
+    data = await query_evaluator_calibration(
+        client        = request.app.state.store.new_client(),
+        database      = request.app.state.store._database,
+        tenant_id     = tenant_id,
+        from_dt       = from_dt,
+        to_dt         = to_dt,
+        campaign_id   = campaign_id,
+        evaluator_id  = evaluator_id,
+        skill_version = skill_version,
+        granularity   = granularity,
     )
     return _respond(data, "json", "")
 

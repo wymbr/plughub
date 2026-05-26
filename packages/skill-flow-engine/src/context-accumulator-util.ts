@@ -36,6 +36,9 @@ export function resolveTagWithScope(
  * @param outputObj    Objeto de saída do LLM (ou outro step)
  * @param source       Origem da escrita (ex: "ai_inferred:step_id")
  * @param segmentId    Segment UUID for segment-scoped writes (optional)
+ * @param journeyId    Arc 16: when present, tags with "journey." prefix are written
+ *                     to the journey hash {tenant}:ctx:journey:{journeyId} instead of
+ *                     the session hash. Passed as virtual sessionId "journey:{journeyId}".
  */
 export async function extractOutputsToCtx(
   store:      IContextStore,
@@ -45,6 +48,7 @@ export async function extractOutputsToCtx(
   outputObj:  unknown,
   source:     string,
   segmentId?: string,
+  journeyId?: string,
 ): Promise<void> {
   if (!outputObj || typeof outputObj !== "object") return
 
@@ -54,8 +58,16 @@ export async function extractOutputsToCtx(
 
     const merge = (tagEntry.merge ?? "highest_confidence") as ContextMergeStrategy
     const resolvedTag = resolveTagWithScope(tagEntry.tag, (tagEntry as Record<string, unknown>).scope as string | undefined, segmentId)
+
+    // Arc 16: tags with "journey." prefix write to the journey ContextStore hash.
+    // The SDK maps store.set("journey:{journeyId}", tag, ...) → {tenant}:ctx:journey:{journeyId}.
+    const targetSessionId =
+      resolvedTag.startsWith("journey.") && journeyId
+        ? `journey:${journeyId}`
+        : sessionId
+
     await store.set(
-      sessionId,
+      targetSessionId,
       resolvedTag,
       {
         value,

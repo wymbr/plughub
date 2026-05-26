@@ -262,6 +262,38 @@ describe("AgentTypeRegistrationSchema", () => {
     ).not.toThrow()
   })
 
+  it("defaults media_capabilities to empty array", () => {
+    const result = AgentTypeRegistrationSchema.parse(baseAgent)
+    expect(result.media_capabilities).toEqual([])
+  })
+
+  it("validates media_capabilities with all media types", () => {
+    expect(() =>
+      AgentTypeRegistrationSchema.parse({
+        ...baseAgent,
+        media_capabilities: ["video", "voice", "text"],
+      })
+    ).not.toThrow()
+  })
+
+  it("validates media_capabilities with single medium", () => {
+    expect(() =>
+      AgentTypeRegistrationSchema.parse({
+        ...baseAgent,
+        media_capabilities: ["voice"],
+      })
+    ).not.toThrow()
+  })
+
+  it("rejects media_capabilities with invalid medium", () => {
+    expect(() =>
+      AgentTypeRegistrationSchema.parse({
+        ...baseAgent,
+        media_capabilities: ["audio"],   // invalid — not in enum
+      })
+    ).toThrow()
+  })
+
   it("rejects version_policy exact without exact_version", () => {
     expect(() =>
       AgentTypeRegistrationSchema.parse({

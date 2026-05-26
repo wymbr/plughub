@@ -5,3 +5,34 @@
 body {
   @apply bg-white;
 }
+
+/* ── Global accessibility base ───────────────────────────────────────────────
+ *
+ * 1. Remove the browser default focus outline globally, but restore a
+ *    visible focus ring via focus-visible for keyboard navigation.
+ *    This ensures mouse users don't see focus rings but keyboard/SR users do.
+ *
+ * 2. Apply prefers-reduced-motion to all animations and transitions.
+ *
+ * ──────────────────────────────────────────────────────────────────────── */
+
+/* 1. Global keyboard focus ring */
+*:focus {
+  outline: none;
+}
+
+*:focus-visible {
+  @apply outline-none ring-2 ring-primary ring-offset-1;
+}
+
+/* 2. Reduced motion */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

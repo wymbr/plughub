@@ -1,6 +1,6 @@
 # Arc 14 — Pós-Atendimento: Segmentos Independentes
 
-> **Status**: Em especificação — validação em andamento. Nenhuma fase implementada.
+> Última atualização: 2026-05-25 · Estado: Arc 16 · Status: Fases A, B, C e D implementadas (2026-05-17). Arc 14 completo.
 
 ---
 
@@ -253,14 +253,16 @@ Quando há supervisor + agente primary, o bloqueio de wrap-up se aplica apenas a
 
 ---
 
-## Fases de Implementação (Proposta)
+## Fases de Implementação
 
-| Fase | Escopo | Dependências |
-|------|--------|--------------|
-| **A** | Introduzir `posatt:active` counter; `_close_contact_layer()` separado de `_destroy_conference()`; conferência destruída pelo último segmento | Nenhuma |
-| **B** | `session.closed` com `recipients` targeted; cada segmento fecha apenas seus participantes | Fase A |
-| **C** | Bloqueio do agente humano para próximo contato até wrap-up terminar | Fase A |
-| **D** | NPS skip/timeout configurável em disconnect (`nps_on_disconnect`) | Fase A |
+As quatro fases foram implementadas em 2026-05-17 — Arc 14 completo.
+
+| Fase | Escopo | Dependências | Status |
+|------|--------|--------------|--------|
+| **A** | `posatt:active` counter introduzido; `_close_contact_layer()` separado de `_destroy_conference()`; conferência destruída pelo último segmento | Nenhuma | Implementada (2026-05-17) |
+| **B** | `session.closed` com `recipients` targeted; cada segmento fecha apenas seus participantes | Fase A | Implementada (2026-05-17) |
+| **C** | Bloqueio do agente humano para próximo contato até wrap-up terminar | Fase A | Implementada (2026-05-17) |
+| **D** | NPS skip/timeout configurável em disconnect (`nps_on_disconnect`) | Fase A | Implementada (2026-05-17) |
 
 ---
 
@@ -276,4 +278,4 @@ Quando há supervisor + agente primary, o bloqueio de wrap-up se aplica apenas a
 
 ---
 
-*Criado em 2026-05-16. Pendente de validação antes de iniciar Fase A.*
+*Criado em 2026-05-16. Implementado em 2026-05-17 — Fases A, B, C e D concluídas (ver CHANGELOG.md). Arc 14 completo.*

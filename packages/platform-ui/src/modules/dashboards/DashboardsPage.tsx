@@ -89,7 +89,12 @@ function NewTemplateModal({
       await saveTemplate(template, adminToken)
       onCreated(template)
     } catch (e) {
-      setError(String(e))
+      const msg = String(e)
+      setError(msg)
+      // On 401, clear the stored token so the user can re-enter a valid one
+      if (msg.includes('401')) {
+        localStorage.removeItem('plughub_admin_token')
+      }
       setSaving(false)
     }
   }
@@ -98,30 +103,30 @@ function NewTemplateModal({
     <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
       <div className="bg-white rounded-xl shadow-xl w-full max-w-sm p-6">
         <div className="flex items-center justify-between mb-4">
-          <h2 className="text-base font-semibold text-gray-800">{t('newTemplate')}</h2>
-          <button onClick={onClose} className="text-gray-400 hover:text-gray-600 text-xl leading-none">×</button>
+          <h2 className="text-base font-semibold text-dark">{t('newTemplate')}</h2>
+          <button onClick={onClose} className="text-muted-light hover:text-muted text-xl leading-none">×</button>
         </div>
         <div className="flex flex-col gap-3">
           <div>
-            <label className="block text-xs font-medium text-gray-600 mb-1">{t('templateName')} *</label>
+            <label className="block text-xs font-medium text-muted mb-1">{t('templateName')} *</label>
             <input
               value={name}
               onChange={e => setName(e.target.value)}
-              className="w-full border border-gray-200 rounded px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-primary"
+              className="w-full border border-border rounded px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-primary"
               placeholder="Ex: Dashboard Operacional"
             />
           </div>
           <div>
-            <label className="block text-xs font-medium text-gray-600 mb-1">{t('description')}</label>
+            <label className="block text-xs font-medium text-muted mb-1">{t('description')}</label>
             <input
               value={description}
               onChange={e => setDesc(e.target.value)}
-              className="w-full border border-gray-200 rounded px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-primary"
+              className="w-full border border-border rounded px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-primary"
               placeholder="Opcional"
             />
           </div>
           {error && (
-            <p className="text-xs text-red-600 bg-red-50 border border-red-200 rounded px-2 py-1">{error}</p>
+            <p className="text-xs text-red-text bg-red-light border border-red/30 rounded px-2 py-1">{error}</p>
           )}
           <div className="flex gap-2 pt-1">
             <button
@@ -133,7 +138,7 @@ function NewTemplateModal({
             </button>
             <button
               onClick={onClose}
-              className="flex-1 border border-gray-200 text-gray-600 text-sm py-2 rounded hover:bg-gray-50 transition-colors"
+              className="flex-1 border border-border text-muted text-sm py-2 rounded hover:bg-surface-muted transition-colors"
             >
               {t('card.cancel')}
             </button>
@@ -156,9 +161,11 @@ export default function DashboardsPage() {
   const [adminToken, setAdminToken] = useState(() =>
     localStorage.getItem('plughub_admin_token') ?? ''
   )
-  const saveAdminToken = (t: string) => {
-    setAdminToken(t)
-    localStorage.setItem('plughub_admin_token', t)
+  const saveAdminToken = (raw: string) => {
+    // Strip non-ISO-8859-1 characters so the value is always safe as an HTTP header
+    const safe = raw.replace(/[^\x00-\xFF]/g, '')
+    setAdminToken(safe)
+    localStorage.setItem('plughub_admin_token', safe)
   }
 
   // Template list (admin sidebar)
@@ -328,12 +335,12 @@ export default function DashboardsPage() {
     <div className="h-full flex flex-col">
 
       {/* Top bar */}
-      <div className="flex items-center justify-between px-6 py-3 border-b border-gray-200 bg-white">
+      <div className="flex items-center justify-between px-6 py-3 border-b border-border bg-white">
         <div className="flex items-center gap-3">
-          <span className="text-sm font-semibold text-gray-800">
-            {template?.name ?? 'Dashboard'}
-          </span>
-          {dirty && <span className="text-xs text-amber-500 font-medium">●</span>}
+          {template?.name && (
+            <span className="text-sm font-semibold text-dark">{template.name}</span>
+          )}
+          {dirty && <span className="text-xs text-warning font-medium">●</span>}
         </div>
 
         <div className="flex items-center gap-2">
@@ -345,7 +352,7 @@ export default function DashboardsPage() {
               className={`text-xs px-3 py-1.5 rounded border transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${
                 editMode
                   ? 'bg-primary text-white border-primary'
-                  : 'border-gray-200 text-gray-600 hover:bg-gray-50'
+                  : 'border-border text-muted hover:bg-surface-muted'
               }`}
             >
               {editMode ? t('exitEdit') : t('editMode')}
@@ -354,7 +361,7 @@ export default function DashboardsPage() {
           {editMode && (
             <button
               onClick={() => setShowAddCard(true)}
-              className="text-xs px-3 py-1.5 rounded border border-gray-200 text-gray-600 hover:bg-gray-50 transition-colors"
+              className="text-xs px-3 py-1.5 rounded border border-border text-muted hover:bg-surface-muted transition-colors"
             >
               {t('addCard')}
             </button>
@@ -374,8 +381,8 @@ export default function DashboardsPage() {
               type="password"
               value={adminToken}
               onChange={e => saveAdminToken(e.target.value)}
-              placeholder="Admin token"
-              className="text-xs border border-gray-200 rounded px-2 py-1.5 w-32 focus:outline-none focus:ring-1 focus:ring-primary"
+              placeholder="PLUGHUB_CONFIG_ADMIN_TOKEN"
+              className="text-xs border border-border rounded px-2 py-1.5 w-32 focus:outline-none focus:ring-1 focus:ring-primary"
             />
           )}
         </div>
@@ -393,13 +400,13 @@ export default function DashboardsPage() {
 
         {/* Sidebar — admin only */}
         {isAdmin && (
-          <aside className="w-52 border-r border-gray-200 bg-gray-50 flex flex-col overflow-y-auto flex-shrink-0">
-            <div className="px-4 py-3 border-b border-gray-200">
-              <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">{t('templates')}</p>
+          <aside className="w-52 border-r border-border bg-surface-muted flex flex-col overflow-y-auto flex-shrink-0">
+            <div className="px-4 py-3 border-b border-border">
+              <p className="text-xs font-semibold text-muted uppercase tracking-wide mb-2">{t('templates')}</p>
               <button
                 onClick={() => setShowNewTemplate(true)}
                 disabled={!adminToken}
-                className="w-full text-xs py-1.5 rounded border border-dashed border-gray-300 text-gray-500 hover:border-primary hover:text-primary disabled:opacity-40 transition-colors"
+                className="w-full text-xs py-1.5 rounded border border-dashed border-border-strong text-muted hover:border-primary hover:text-primary disabled:opacity-40 transition-colors"
                 title={!adminToken ? t('adminTokenRequired') : ''}
               >
                 {t('newTemplate')}
@@ -419,14 +426,14 @@ export default function DashboardsPage() {
                   className={`group flex items-center justify-between px-4 py-2 cursor-pointer transition-colors ${
                     activeTemplateId === tmpl.template_id
                       ? 'bg-primary/10 text-primary font-medium'
-                      : 'text-gray-700 hover:bg-gray-100'
+                      : 'text-dark hover:bg-surface-alt'
                   }`}
                   onClick={() => setActiveTemplateId(tmpl.template_id)}
                 >
                   <span className="text-xs truncate">{tmpl.name}</span>
                   <button
                     onClick={e => { e.stopPropagation(); handleDeleteTemplate(tmpl.template_id) }}
-                    className="opacity-0 group-hover:opacity-100 text-gray-400 hover:text-red-500 transition-all text-sm leading-none ml-1"
+                    className="opacity-0 group-hover:opacity-100 text-muted-light hover:text-red transition-all text-sm leading-none ml-1"
                     title={t('deleteTemplate')}
                   >
                     ×
@@ -434,7 +441,7 @@ export default function DashboardsPage() {
                 </div>
               ))}
               {!tmplLoading && templates.length === 0 && (
-                <p className="text-xs text-gray-400 px-4 py-3">{t('noTemplates')}</p>
+                <p className="text-xs text-muted-light px-4 py-3">{t('noTemplates')}</p>
               )}
             </nav>
 
@@ -449,9 +456,9 @@ export default function DashboardsPage() {
         )}
 
         {/* Grid area */}
-        <main className="flex-1 overflow-auto p-4 bg-gray-50" ref={gridRef}>
+        <main className="flex-1 overflow-auto p-4 bg-surface-muted" ref={gridRef}>
           {!activeTemplateId && !tmplLoading && (
-            <div className="flex flex-col items-center justify-center h-64 text-gray-400">
+            <div className="flex flex-col items-center justify-center h-64 text-muted-light">
               <span className="text-4xl mb-3">📊</span>
               <p className="text-sm">{t('noTemplate')}</p>
               {isAdmin && (
@@ -466,7 +473,7 @@ export default function DashboardsPage() {
           )}
 
           {activeTemplateId && cards.length === 0 && (
-            <div className="flex flex-col items-center justify-center h-64 text-gray-400">
+            <div className="flex flex-col items-center justify-center h-64 text-muted-light">
               <span className="text-4xl mb-3">🗂️</span>
               <p className="text-sm">{t('emptyDashboard')}</p>
               {isAdmin && editMode && (
@@ -495,11 +502,11 @@ export default function DashboardsPage() {
               {cards.map(card => (
                 <div
                   key={card.id}
-                  className="bg-white rounded-lg border border-gray-200 shadow-sm overflow-hidden flex flex-col"
+                  className="bg-white rounded-lg border border-border shadow-sm overflow-hidden flex flex-col"
                 >
                   {/* Card header — always show title; delete button only in edit mode */}
-                  <div className="flex items-center justify-between px-3 py-1.5 border-b border-gray-100 bg-gray-50 flex-shrink-0">
-                    <span className="text-xs font-medium text-gray-600 truncate">
+                  <div className="flex items-center justify-between px-3 py-1.5 border-b border-border bg-surface-muted flex-shrink-0">
+                    <span className="text-xs font-medium text-muted truncate">
                       {'title' in card
                         ? (card as { title: string }).title
                         : ((card.config as TimeseriesCardConfig).title ?? card.type)}
@@ -507,7 +514,7 @@ export default function DashboardsPage() {
                     {editMode && (
                       <button
                         onClick={() => removeCard(card.id)}
-                        className="text-gray-400 hover:text-red-500 text-sm leading-none ml-2 flex-shrink-0"
+                        className="text-muted-light hover:text-red text-sm leading-none ml-2 flex-shrink-0"
                         title={t('deleteCardTitle')}
                       >
                         ×

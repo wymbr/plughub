@@ -111,6 +111,16 @@ RUN printf 'server {\n\
         proxy_read_timeout 60s;\n\
     }\n\
 \n\
+    # analytics-api audit endpoints — must come before generic /v1 catch-all\n\
+    location ~ ^/v1/audit(/|$) {\n\
+        set $up_audit http://analytics-api:3500;\n\
+        proxy_pass         $up_audit;\n\
+        proxy_http_version 1.1;\n\
+        proxy_set_header   Host $host;\n\
+        proxy_buffering    off;\n\
+        proxy_read_timeout 60s;\n\
+    }\n\
+\n\
     # agent-registry — generic /v1 catch-all\n\
     location ~ ^/v1(/|$) {\n\
         set $up_registry http://agent-registry:3300;\n\

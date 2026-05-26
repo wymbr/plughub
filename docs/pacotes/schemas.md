@@ -1,5 +1,7 @@
 # Módulo: schemas (@plughub/schemas)
 
+> Última atualização: 2026-05-25 · Estado: Arc 16
+
 > Pacote: `schemas` (biblioteca)
 > Runtime: TypeScript / Node 20+, Zod 3.23+
 > Spec de referência: seções 3.4, 3.4a, 4.2, 4.5, 4.7
@@ -20,13 +22,27 @@ O `@plughub/schemas` é a **fonte da verdade** para todos os contratos de dados 
 
 ## Estrutura do Pacote
 
+O pacote cresceu para ~28 arquivos `.ts` à medida que cada Arc adicionou seus contratos. Os principais módulos de schema atuais:
+
 ```
 schemas/src/
   context-package.ts  ← ContextPackage, AgentDone, CustomerProfile, SessionItem
-  skill.ts            ← Skill, SkillFlow, todos os 8 tipos de step
-  agent-registry.ts   ← Pool, AgentType, PipelineState, RoutingDecision, TenantConfig
+  skill.ts            ← Skill, SkillFlow, os 14 tipos de step, ChannelCapability
+  agent-registry.ts   ← PoolRegistration, AgentTypeRegistration, PipelineState,
+                        RoutingDecision, TenantConfig
+  journey.ts          ← Journey (Arc 10/16), JourneyEvent + MCP I/O schemas
+  workflow.ts         ← WorkflowInstance, WorkflowEvent, CollectEvent (Arc 4)
+  usage.ts            ← UsageEvent — metering por dimensão
+  evaluation.ts       ← Evaluation forms/campaigns/results, EvaluationEvent (Arc 6)
+  audit.ts            ← AuditRecord — interceptação MCP (mcp.audit)
+  contact-segment.ts  ← ContactSegment, ConversationParticipantEvent (Arc 5)
+  platform-events.ts  ← eventos de plataforma (registry.changed, config.changed,
+                        sentiment.updated, queue.position_updated, etc.)
+  stream.ts           ← entradas do canonical stream (writeStreamEntry)
   index.ts            ← API pública — exports nomeados explícitos
 ```
+
+> A lista acima cobre os módulos centrais; o pacote inclui ainda schemas auxiliares (rules-events, journey/calendar helpers, etc.). A regra invariante permanece: nenhum tipo de domínio é redefinido fora deste pacote.
 
 ---
 
@@ -183,7 +199,7 @@ SkillFlow {
 }
 ```
 
-### Os 8 tipos de step (`FlowStepSchema`)
+### Os 14 tipos de step (`FlowStepSchema`)
 
 | Tipo | Campos principais |
 |---|---|
@@ -194,7 +210,17 @@ SkillFlow {
 | `complete` | `outcome: resolved\|escalated_human\|transferred_agent\|callback` |
 | `invoke` | `target: { mcp_server, tool }`, `input?`, `output_as`, `on_success`, `on_failure` |
 | `reason` | `prompt_id`, `input?`, `output_schema`, `output_as`, `max_format_retries [0–3]`, `on_success`, `on_failure` |
-| `notify` | `message` (suporta `{{$.pipeline_state.*}}`), `channel`, `on_success`, `on_failure` |
+| `notify` | `message`, `channel` — **depreciado no Arc 16** (usar `invoke: notification_send`) |
+| `menu` | captura input do cliente (`text\|button\|list\|checklist\|form`), suspende até resposta |
+| `suspend` | suspende o workflow até sinal externo (`approval\|input\|webhook\|timer`) |
+| `collect` | contata o alvo via canal (ou `requires[]` — Arc 16), aguarda resposta |
+| `resolve` | acumulação inline de contexto (pipeline de 5 fases) — ContextStore + AI Gateway |
+| `begin_transaction` / `end_transaction` | bloco atômico de masked input (in-memory only) |
+| `receive` | suspende aguardando a próxima mensagem do stream (sem prompt ao canal) |
+
+> O `begin_transaction`/`end_transaction` é contado como um par; a contagem de 14 reflete os tipos de step do CLAUDE.md (13 + `receive`).
+
+**Capabilities de canal (`ChannelCapabilitySchema`)** — Arc 16: o step `collect` aceita `requires: [text|audio|video|file_upload|masked_input|rich_menu]` em vez de `channel` explícito; o Channel Gateway seleciona o canal outbound pela matriz de capacidades.
 
 **`CatchStrategy`** — discriminated union por `type`:
 - `retry` → `max_attempts [1–5]`, `delay_ms`, `on_exhausted`
@@ -225,6 +251,11 @@ PoolRegistration {
   routing_expression?:    RoutingExpression
   evaluation_template_id?: string
   supervisor_config?:     SupervisorConfig
+
+  // @mention / Journey (Arc 10, 11, 16)
+  mentionable_pools?:     Record<string, string>   // pools alcançáveis via @mention
+  mentionable_journeys?:  Record<string, string>   // skills de Journey iniciáveis via @journey
+  inbound_journey_resume?: boolean   // flag informacional para o skill author (Arc 16 Fase E)
 }
 ```
 
@@ -268,6 +299,7 @@ AgentTypeRegistration {
   skills:                   SkillRef[] // obrigatório para role: "orchestrator"
   permissions:              string[]   // formato: "mcp-server-nome:tool_name"
   capabilities:             Record<string, string>
+  media_capabilities:       Array<"video"|"voice"|"text">   // Arc 15 — ordem = preferência; vazio = text-only
   agent_classification?:    { type: "vertical"|"horizontal", industry?, domain? }
   prompt_id?:               string | null  // null para agentes humanos
 }
@@ -319,6 +351,31 @@ TenantConfig {
   }
 }
 ```
+
+---
+
+## Cobertura de Eventos Kafka
+
+Todos os eventos Kafka cruzados entre pacotes têm um schema Zod neste pacote — o contrato do evento é validado tanto no producer quanto no consumer.
+
+| Tópico | Schema | Arquivo |
+|---|---|---|
+| `workflow.events` | `WorkflowEventSchema` | workflow.ts |
+| `collect.events` | `CollectEventSchema` | workflow.ts |
+| `journey.events` | `JourneyEventSchema` | journey.ts |
+| `usage.events` | `UsageEventSchema` | usage.ts |
+| `mcp.audit` | `AuditRecordSchema` | audit.ts |
+| `evaluation.events` | `EvaluationEventSchema` | evaluation.ts |
+| `conversations.participants` | `ConversationParticipantEventSchema` | contact-segment.ts |
+| `registry.changed` | `RegistryChangedEventSchema` | platform-events.ts |
+| `config.changed` | `ConfigChangedEventSchema` | platform-events.ts |
+| `sentiment.updated` | `SentimentUpdatedEventSchema` | platform-events.ts |
+| `queue.position_updated` | `QueuePositionUpdatedEventSchema` | platform-events.ts |
+| `conversations.routed/queued` | `ConversationRoutedEventSchema` | platform-events.ts |
+| `agent.lifecycle` | `AgentLifecycleEventSchema` | platform-events.ts |
+| `rules.escalation.events` | `RulesEscalationEventSchema` | rules-events.ts |
+
+`journey.ts` também exporta os schemas de I/O das MCP tools de Journey (`JourneyListSuspendedInputSchema`/`OutputSchema`, `JourneyResumeInputSchema`/`OutputSchema`, `JourneyCheckPendingInputSchema`/`OutputSchema`, `JourneySplitInputSchema`/`OutputSchema`).
 
 ---
 

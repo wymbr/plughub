@@ -93,9 +93,10 @@ def parse_routed(payload: dict[str, Any]) -> list[dict] | None:
     pool_id    = result.get("pool_id") or ""
     instance_id = result.get("instance_id") or ""
     routed_at  = payload.get("routed_at") or _now()
+    sla_target_ms = result.get("sla_target_ms")  # None when pool has no SLA or not yet propagated
 
     rows: list[dict] = [
-        # sessions — update with pool_id.
+        # sessions — update with pool_id and sla_target_ms.
         # NOTE: channel="" here because ConversationRoutedEvent (Zod schema) does not carry
         # channel — the Routing Engine only knows pool/agent. Writing channel="" will REPLACE
         # the parse_inbound row's channel="webchat" in ReplacingMergeTree (last-write-wins,
@@ -105,13 +106,14 @@ def parse_routed(payload: dict[str, Any]) -> list[dict] | None:
         # Do NOT change channel="" to channel=payload.get("channel","") here without also
         # updating ConversationRoutedEventSchema to carry the channel field.
         {
-            "table":      "sessions",
-            "session_id": session_id,
-            "tenant_id":  tenant_id,
-            "channel":    "",
-            "pool_id":    pool_id,
-            "opened_at":  routed_at,
-            "timestamp":  routed_at,
+            "table":         "sessions",
+            "session_id":    session_id,
+            "tenant_id":     tenant_id,
+            "channel":       "",
+            "pool_id":       pool_id,
+            "opened_at":     routed_at,
+            "timestamp":     routed_at,
+            "sla_target_ms": sla_target_ms,
         },
         # agent_events — routing entry
         {
@@ -457,6 +459,7 @@ def parse_mcp_audit_event(
         "duration_ms":         duration_ms,
         "source":              payload.get("source") or "",
         "data_categories":     payload.get("data_categories") or [],
+        "masked_input_fields": payload.get("masked_input_fields") or [],
     }
 
     return {
@@ -741,6 +744,7 @@ _JOURNEY_STATUS_MAP: dict[str, str | None] = {
     "journey_failed":          "failed",
     "journey_cancelled":       "cancelled",
     "journey_merged":          "merged",
+    "journey_split":           None,          # audit event — no status change on source journey
 }
 
 
@@ -770,6 +774,10 @@ def parse_journey_event(payload: dict[str, Any]) -> dict | None:
         "session_id":             payload.get("session_id") or None,
         "workflow_instance_id":   payload.get("workflow_instance_id") or None,
         "merged_into_journey_id": payload.get("merged_into_journey_id") or None,
+        # Phase F split fields (journey_split only)
+        "split_from_journey_id":  payload.get("split_from_journey_id") or None,
+        "new_journey_id":         payload.get("new_journey_id") or None,
+        "session_count":          payload.get("session_count") or None,
         # D.5 session progression fields (journey_session_linked only)
         "current_step":           payload.get("current_step") or None,
         "session_outcome":        payload.get("session_outcome") or None,
@@ -833,4 +841,50 @@ def parse_agent_business_event(payload: dict[str, Any]) -> dict | None:
         "value":          value,
         "tags":           {str(k): str(v) for k, v in tags.items()},
         "emitted_at":     payload.get("emitted_at") or _now(),
+    }
+
+
+# ─── calibration.events (Arc 13) ─────────────────────────────────────────────
+
+def parse_calibration_event(payload: dict[str, Any]) -> dict | None:
+    """
+    Maps calibration.events topic → calibration_events table.
+
+    Recognised event_type values:
+      calibration_reviewed        — curator took action on a CurationReview
+      calibration_note_published  — CalibrationNote was ingested into knowledge namespace
+
+    calibration_note_published events are skipped (informational only — not a
+    curated review decision).  Only calibration_reviewed carries the decision
+    field that feeds the calibration_score metric.
+    """
+    event_type = payload.get("event_type")
+    tenant_id  = payload.get("tenant_id")
+
+    if not event_type or not tenant_id:
+        return None
+
+    if event_type != "calibration_reviewed":
+        return None  # calibration_note_published — skip
+
+    campaign_id  = payload.get("campaign_id")
+    evaluator_id = payload.get("evaluator_id")
+    decision     = payload.get("decision")
+
+    if not campaign_id or not evaluator_id or not decision:
+        return None
+
+    return {
+        "table":          "calibration_events",
+        "event_id":       payload.get("event_id") or _gen_id(),
+        "tenant_id":      tenant_id,
+        "campaign_id":    campaign_id,
+        "evaluator_id":   evaluator_id,
+        "skill_version":  payload.get("skill_version") or "",
+        "decision":       decision,
+        "dimension_id":   payload.get("dimension_id") or "",
+        "severity":       payload.get("severity") or "",
+        "curator_id":     payload.get("curator_id") or None,
+        "note_id":        payload.get("note_id") or None,
+        "event_time":     payload.get("event_time") or payload.get("timestamp") or _now(),
     }

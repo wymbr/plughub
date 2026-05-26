@@ -29,6 +29,8 @@ export interface Session {
   accessiblePools: string[]        // [] = all pools (admin); non-empty = restricted
   /** Arc 9 — agent types this supervisor can see. [] = unrestricted (admin). */
   supervisedAgentTypes: string[]
+  /** Maximum simultaneous contacts this human agent can serve. Shared across all pools. */
+  maxConcurrentSessions: number
   installationId: string
   locale: 'pt-BR' | 'en'
   /** ABAC config por módulo, carregada do JWT. */
@@ -588,33 +590,36 @@ export interface EvaluationResultWithActions extends EvaluationResult {
 // ── Access Control / Users (Arc 7) ────────────────────────────────────────────
 
 export interface PlatformUser {
-  id:               string
-  tenant_id:        string
-  email:            string
-  name:             string
-  roles:            string[]
-  accessible_pools: string[]   // [] = all pools
-  module_config?:   ModuleConfig
-  active:           boolean
-  created_at:       string
-  updated_at:       string
+  id:                      string
+  tenant_id:               string
+  email:                   string
+  name:                    string
+  roles:                   string[]
+  accessible_pools:        string[]   // [] = all pools
+  module_config?:          ModuleConfig
+  active:                  boolean
+  max_concurrent_sessions?: number
+  created_at:              string
+  updated_at:              string
 }
 
 export interface CreateUserInput {
-  tenant_id:        string
-  email:            string
-  name:             string
-  password:         string
-  roles:            string[]
-  accessible_pools?: string[]
+  tenant_id:               string
+  email:                   string
+  name:                    string
+  password:                string
+  roles:                   string[]
+  accessible_pools?:       string[]
+  max_concurrent_sessions?: number
 }
 
 export interface UpdateUserInput {
-  name?:             string
-  password?:         string
-  roles?:            string[]
-  accessible_pools?: string[]
-  active?:           boolean
+  name?:                    string
+  password?:                string
+  roles?:                   string[]
+  accessible_pools?:        string[]
+  active?:                  boolean
+  max_concurrent_sessions?: number
 }
 
 export interface KnowledgeSnippet {

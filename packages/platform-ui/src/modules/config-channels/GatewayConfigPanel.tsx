@@ -18,7 +18,7 @@ import * as registryApi from '@/api/registry'
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
 const inputCls =
-  'w-full px-3 py-1.5 text-xs border border-gray-300 rounded-md focus:outline-none focus:border-primary bg-white text-dark placeholder-gray-400'
+  'w-full px-3 py-1.5 text-xs border border-border-strong rounded-md focus:outline-none focus:border-primary bg-white text-dark placeholder-muted-light'
 
 function Section({ title, subtitle, children }: {
   title:     string
@@ -26,10 +26,10 @@ function Section({ title, subtitle, children }: {
   children:  React.ReactNode
 }) {
   return (
-    <div className="mb-5 pb-5 border-b border-gray-100 last:border-0">
-      <div className="text-xs font-bold text-gray-500 uppercase tracking-wider mb-3">
+    <div className="mb-5 pb-5 border-b border-border last:border-0">
+      <div className="text-xs font-bold text-muted uppercase tracking-wider mb-3">
         {title}
-        {subtitle && <span className="font-normal ml-1 normal-case text-gray-400"> — {subtitle}</span>}
+        {subtitle && <span className="font-normal ml-1 normal-case text-muted-light"> — {subtitle}</span>}
       </div>
       {children}
     </div>
@@ -37,7 +37,7 @@ function Section({ title, subtitle, children }: {
 }
 
 function FieldLabel({ children }: { children: React.ReactNode }) {
-  return <label className="block text-xs font-medium text-gray-700 mb-1">{children}</label>
+  return <label className="block text-xs font-medium text-dark mb-1">{children}</label>
 }
 
 function Toggle({ checked, onChange }: { checked: boolean; onChange: (v: boolean) => void }) {
@@ -103,19 +103,19 @@ const GatewayConfigPanel: React.FC<Props> = ({ channel }) => {
     setCreating(false)
   }, [channel])
 
-  if (!meta) return <p className="text-sm text-gray-400 py-4">Channel not configured.</p>
+  if (!meta) return <p className="text-sm text-muted-light py-4">Channel not configured.</p>
 
   // Channels with no credentials (webhook just uses URL path config)
   if (meta.fields.length === 0 && meta.settingFields.length === 0) {
     return (
-      <p className="text-sm text-gray-400 py-4">
+      <p className="text-sm text-muted-light py-4">
         This channel type does not require API credentials.
       </p>
     )
   }
 
-  if (loading) return <p className="text-sm text-gray-400 py-4">Loading…</p>
-  if (error)   return <p className="text-sm text-red-600 py-4">⚠ {error}</p>
+  if (loading) return <p className="text-sm text-muted-light py-4">Loading…</p>
+  if (error)   return <p className="text-sm text-red-text py-4">⚠ {error}</p>
 
   return (
     <div className="space-y-4">
@@ -123,10 +123,10 @@ const GatewayConfigPanel: React.FC<Props> = ({ channel }) => {
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <p className="text-sm font-semibold text-gray-900">
+          <p className="text-sm font-semibold text-dark">
             {meta.icon} {meta.label} — API Credentials
           </p>
-          <p className="text-xs text-gray-500 mt-0.5">
+          <p className="text-xs text-muted mt-0.5">
             Manage API keys and integration settings for {meta.label}.
             Credentials are stored encrypted and masked after saving.
           </p>
@@ -134,7 +134,7 @@ const GatewayConfigPanel: React.FC<Props> = ({ channel }) => {
         <button
           onClick={() => { setCreating(true); setSelected(null) }}
           disabled={creating}
-          className="px-3 py-1.5 rounded text-xs font-semibold bg-primary text-white hover:bg-blue-800 disabled:opacity-40 transition-colors"
+          className="px-3 py-1.5 rounded text-xs font-semibold bg-primary text-white hover:bg-primary-dark disabled:opacity-40 transition-colors"
         >
           + Add integration
         </button>
@@ -152,39 +152,39 @@ const GatewayConfigPanel: React.FC<Props> = ({ channel }) => {
 
       {/* Existing configs */}
       {configs.length === 0 && !creating ? (
-        <div className="text-center py-8 border border-dashed border-gray-200 rounded-lg">
-          <p className="text-sm text-gray-400">No integrations configured.</p>
-          <p className="text-xs text-gray-400 mt-1">Click "+ Add integration" to set up your first {meta.label} integration.</p>
+        <div className="text-center py-8 border border-dashed border-border rounded-lg">
+          <p className="text-sm text-muted-light">No integrations configured.</p>
+          <p className="text-xs text-muted-light mt-1">Click "+ Add integration" to set up your first {meta.label} integration.</p>
         </div>
       ) : (
         <div className="space-y-3">
           {configs.map(cfg => (
-            <div key={cfg.id} className="border border-gray-200 rounded-lg overflow-hidden">
+            <div key={cfg.id} className="border border-border rounded-lg overflow-hidden">
               {/* Config row */}
               <div
-                className="flex items-center justify-between px-4 py-3 cursor-pointer hover:bg-gray-50 transition-colors"
+                className="flex items-center justify-between px-4 py-3 cursor-pointer hover:bg-surface-muted transition-colors"
                 onClick={() => setSelected(selected?.id === cfg.id ? null : cfg)}
               >
                 <div className="flex items-center gap-3">
-                  <span className={`w-2 h-2 rounded-full ${cfg.active ? 'bg-green-500' : 'bg-gray-300'}`} />
+                  <span className={`w-2 h-2 rounded-full ${cfg.active ? 'bg-green' : 'bg-border-strong'}`} />
                   <div>
-                    <span className="text-sm font-medium text-gray-800">{cfg.display_name}</span>
-                    <span className="ml-2 text-xs text-gray-400">ID: {cfg.id.slice(0, 8)}…</span>
+                    <span className="text-sm font-medium text-dark">{cfg.display_name}</span>
+                    <span className="ml-2 text-xs text-muted-light">ID: {cfg.id.slice(0, 8)}…</span>
                   </div>
                 </div>
                 <div className="flex items-center gap-3">
                   <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${
-                    cfg.active ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-500'
+                    cfg.active ? 'bg-green-light text-green-text' : 'bg-surface-alt text-muted'
                   }`}>
                     {cfg.active ? 'active' : 'inactive'}
                   </span>
-                  <span className="text-gray-400 text-sm">{selected?.id === cfg.id ? '▲' : '▼'}</span>
+                  <span className="text-muted-light text-sm">{selected?.id === cfg.id ? '▲' : '▼'}</span>
                 </div>
               </div>
 
               {/* Expanded detail */}
               {selected?.id === cfg.id && (
-                <div className="border-t border-gray-200 px-4 py-4 bg-gray-50">
+                <div className="border-t border-border px-4 py-4 bg-surface-muted">
                   <ConfigDetail
                     config={cfg}
                     meta={meta}
@@ -241,7 +241,7 @@ const ConfigForm: React.FC<ConfigFormProps> = ({ channel, meta, onSaved, onCance
   }
 
   return (
-    <div className="border border-primary/30 rounded-lg p-4 bg-blue-50/30 space-y-4">
+    <div className="border border-primary/30 rounded-lg p-4 bg-primary-light/30 space-y-4">
       <p className="text-xs font-semibold text-primary">New {meta.label} Integration</p>
 
       {/* General */}
@@ -304,19 +304,19 @@ const ConfigForm: React.FC<ConfigFormProps> = ({ channel, meta, onSaved, onCance
         </Section>
       )}
 
-      {error && <p className="text-xs text-red-600">{error}</p>}
+      {error && <p className="text-xs text-red-text">{error}</p>}
 
       <div className="flex gap-2">
         <button
           onClick={handleSave}
           disabled={saving}
-          className="px-3 py-1.5 rounded text-xs font-semibold bg-primary text-white disabled:opacity-40 hover:bg-blue-800 transition-colors"
+          className="px-3 py-1.5 rounded text-xs font-semibold bg-primary text-white disabled:opacity-40 hover:bg-primary-dark transition-colors"
         >
           {saving ? 'Saving…' : 'Save integration'}
         </button>
         <button
           onClick={onCancel}
-          className="px-3 py-1.5 rounded text-xs border border-gray-300 text-gray-600 hover:text-gray-900 transition-colors"
+          className="px-3 py-1.5 rounded text-xs border border-border-strong text-muted hover:text-dark transition-colors"
         >
           Cancel
         </button>
@@ -408,7 +408,7 @@ const ConfigDetail: React.FC<DetailProps> = ({ config, meta, tenantId, onSaved, 
             <Toggle checked={active} onChange={v => { setActive(v); mark() }} />
           </div>
         </div>
-        <p className="text-xs text-gray-400 mt-2">
+        <p className="text-xs text-muted-light mt-2">
           Created {new Date(config.created_at).toLocaleDateString('pt-BR')} ·
           Updated {new Date(config.updated_at).toLocaleDateString('pt-BR')}
         </p>
@@ -422,7 +422,7 @@ const ConfigDetail: React.FC<DetailProps> = ({ config, meta, tenantId, onSaved, 
               <div key={f.key}>
                 <FieldLabel>{f.label}</FieldLabel>
                 <div className="space-y-1">
-                  <div className={`${inputCls} font-mono text-gray-400 bg-gray-100`}>
+                  <div className={`${inputCls} font-mono text-muted-light bg-surface-alt`}>
                     {config.credentials?.[f.key] ? '••••••••' : '(not set)'}
                   </div>
                   <input
@@ -460,7 +460,7 @@ const ConfigDetail: React.FC<DetailProps> = ({ config, meta, tenantId, onSaved, 
         </Section>
       )}
 
-      {error && <p className="text-xs text-red-600">{error}</p>}
+      {error && <p className="text-xs text-red-text">{error}</p>}
 
       {/* Actions */}
       <div className="flex gap-2 items-center pt-1">
@@ -468,7 +468,7 @@ const ConfigDetail: React.FC<DetailProps> = ({ config, meta, tenantId, onSaved, 
           <button
             onClick={handleSave}
             disabled={saving}
-            className="px-3 py-1.5 rounded text-xs font-semibold bg-primary text-white disabled:opacity-40 hover:bg-blue-800 transition-colors"
+            className="px-3 py-1.5 rounded text-xs font-semibold bg-primary text-white disabled:opacity-40 hover:bg-primary-dark transition-colors"
           >
             {saving ? 'Saving…' : 'Save changes'}
           </button>
@@ -477,7 +477,7 @@ const ConfigDetail: React.FC<DetailProps> = ({ config, meta, tenantId, onSaved, 
         {!confirmDel ? (
           <button
             onClick={() => setConfirmDel(true)}
-            className="px-3 py-1.5 rounded text-xs border border-red-300 text-red-500 hover:bg-red-50 transition-colors"
+            className="px-3 py-1.5 rounded text-xs border border-red/30 text-red hover:bg-red-light transition-colors"
           >
             Delete
           </button>
@@ -486,13 +486,13 @@ const ConfigDetail: React.FC<DetailProps> = ({ config, meta, tenantId, onSaved, 
             <button
               onClick={handleDelete}
               disabled={deleting}
-              className="px-3 py-1.5 rounded text-xs font-semibold bg-red-600 text-white disabled:opacity-40 hover:bg-red-700 transition-colors"
+              className="px-3 py-1.5 rounded text-xs font-semibold bg-red text-white disabled:opacity-40 hover:bg-red-text transition-colors"
             >
               {deleting ? 'Deleting…' : 'Confirm delete'}
             </button>
             <button
               onClick={() => setConfirmDel(false)}
-              className="px-3 py-1.5 rounded text-xs border border-gray-300 text-gray-600 hover:text-gray-900 transition-colors"
+              className="px-3 py-1.5 rounded text-xs border border-border-strong text-muted hover:text-dark transition-colors"
             >
               Cancel
             </button>

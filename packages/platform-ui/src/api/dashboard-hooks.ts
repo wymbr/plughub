@@ -18,9 +18,19 @@ type AnyDashboardCard = DashboardCard | NewDashboardCard
 
 const CONFIG_BASE = '/config'    // proxied to config-api (port 3600)
 
+/**
+ * Strip characters outside the ISO-8859-1 range (0x00–0xFF) from a string
+ * before it is used as an HTTP header value.  Browsers throw a TypeError if a
+ * header value contains a code point above 0xFF (e.g. a zero-width space or
+ * an accented character accidentally pasted into the admin-token field).
+ */
+function asHeaderValue(s: string): string {
+  return s.replace(/[^\x00-\xFF]/g, '')
+}
+
 async function configGet(namespace: string, key: string, adminToken?: string, tenantId?: string): Promise<unknown> {
   const headers: Record<string, string> = {}
-  if (adminToken) headers['X-Admin-Token'] = adminToken
+  if (adminToken) headers['X-Admin-Token'] = asHeaderValue(adminToken)
   const params = tenantId ? `?tenant_id=${encodeURIComponent(tenantId)}` : ''
   const res = await fetch(`${CONFIG_BASE}/${namespace}/${key}${params}`, { headers })
   if (res.status === 404) return null
@@ -39,7 +49,7 @@ async function configPut(
 ): Promise<void> {
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
-    'X-Admin-Token': adminToken,
+    'X-Admin-Token': asHeaderValue(adminToken),
   }
   const body: Record<string, unknown> = { value }
   if (tenantId) body.tenant_id = tenantId
@@ -48,6 +58,7 @@ async function configPut(
     headers,
     body: JSON.stringify(body),
   })
+  if (res.status === 401) throw new Error(`Config PUT ${namespace}/${key}: HTTP 401 — admin token inválido. Verifique o valor de PLUGHUB_CONFIG_ADMIN_TOKEN e corrija o campo no topo da página.`)
   if (!res.ok) throw new Error(`Config PUT ${namespace}/${key}: HTTP ${res.status}`)
 }
 
@@ -60,14 +71,14 @@ async function configDelete(namespace: string, key: string, adminToken: string, 
   const params = qp.toString() ? `?${qp.toString()}` : ''
   const res = await fetch(`${CONFIG_BASE}/${namespace}/${key}${params}`, {
     method: 'DELETE',
-    headers: { 'X-Admin-Token': adminToken },
+    headers: { 'X-Admin-Token': asHeaderValue(adminToken) },
   })
   if (!res.ok && res.status !== 404) throw new Error(`Config DELETE: HTTP ${res.status}`)
 }
 
 async function configListNamespace(namespace: string, adminToken?: string, tenantId?: string): Promise<Record<string, unknown>> {
   const headers: Record<string, string> = {}
-  if (adminToken) headers['X-Admin-Token'] = adminToken
+  if (adminToken) headers['X-Admin-Token'] = asHeaderValue(adminToken)
   const params = tenantId ? `?tenant_id=${encodeURIComponent(tenantId)}` : ''
   const res = await fetch(`${CONFIG_BASE}/${namespace}${params}`, { headers })
   if (!res.ok) throw new Error(`Config list ${namespace}: HTTP ${res.status}`)

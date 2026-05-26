@@ -632,20 +632,27 @@ export function registerBpmTools(server: McpServer, deps?: BpmDeps): void {
         // publicamos em conversations.outbound para que o channel-gateway
         // entregue a interação ao cliente via o adapter webchat.
         if (hasMenu && deps?.kafka) {
-          await deps.kafka.publish("conversations.outbound", {
-            type:          "menu.payload",
-            contact_id:    contactId,
-            session_id:    parsed.session_id,
-            menu_id:       messageId,
-            channel,
-            interaction:   parsed.menu!.interaction,
-            prompt:        parsed.message,
-            options:       parsed.menu!.options        ?? [],
-            fields:        parsed.menu!.fields         ?? null,
-            masked_fields: parsed.menu!.masked_fields  ?? null,
-            visibility:    parsed.visibility,
-            timestamp,
-          })
+          try {
+            await deps.kafka.publish("conversations.outbound", {
+              type:          "menu.payload",
+              contact_id:    contactId,
+              session_id:    parsed.session_id,
+              menu_id:       messageId,
+              channel,
+              interaction:   parsed.menu!.interaction,
+              prompt:        parsed.message,
+              options:       parsed.menu!.options        ?? [],
+              fields:        parsed.menu!.fields         ?? null,
+              masked_fields: parsed.menu!.masked_fields  ?? null,
+              visibility:    parsed.visibility,
+              timestamp,
+            })
+          } catch (kafkaErr) {
+            console.warn(
+              `[notification_send] conversations.outbound (array-vis menu) publish failed for session ${parsed.session_id}:`,
+              kafkaErr instanceof Error ? kafkaErr.message : String(kafkaErr),
+            )
+          }
         }
 
         // Also publish menu to agent:events for Agent Assist UI (wrap-up menus),
@@ -749,34 +756,46 @@ export function registerBpmTools(server: McpServer, deps?: BpmDeps): void {
 
         // Kafka publish for conversation history persistence (outbound_consumer
         // appends to session messages list) and non-webchat channel delivery.
+        // Wrapped in try-catch: Kafka delivery is best-effort. A transient Kafka
+        // failure must NOT abort the skill flow — the Redis stream write above
+        // already guaranteed the webchat client received the message.
         if (deps?.kafka) {
-          if (hasMenu) {
-            await deps.kafka.publish("conversations.outbound", {
-              type:        "menu.payload",
-              contact_id:  contactId,
-              session_id:  parsed.session_id,
-              menu_id:     messageId,
-              channel,
-              interaction:   parsed.menu!.interaction,
-              prompt:        parsed.message,
-              options:       parsed.menu!.options        ?? [],
-              fields:        parsed.menu!.fields         ?? null,
-              masked_fields: parsed.menu!.masked_fields  ?? null,
-              timestamp,
-            })
-          } else {
-            await deps.kafka.publish("conversations.outbound", {
-              type:       "message.text",
-              contact_id: contactId,
-              session_id: parsed.session_id,
-              message_id: messageId,
-              channel,
-              direction:  "outbound",
-              author:     { type: "agent_ai", id: authorId },
-              content:    { type: "text", text: parsed.message },
-              text:       parsed.message,   // kept for channel-gateway backward compat
-              timestamp,
-            })
+          try {
+            if (hasMenu) {
+              await deps.kafka.publish("conversations.outbound", {
+                type:        "menu.payload",
+                contact_id:  contactId,
+                session_id:  parsed.session_id,
+                menu_id:     messageId,
+                channel,
+                interaction:   parsed.menu!.interaction,
+                prompt:        parsed.message,
+                options:       parsed.menu!.options        ?? [],
+                fields:        parsed.menu!.fields         ?? null,
+                masked_fields: parsed.menu!.masked_fields  ?? null,
+                timestamp,
+              })
+            } else {
+              await deps.kafka.publish("conversations.outbound", {
+                type:       "message.text",
+                contact_id: contactId,
+                session_id: parsed.session_id,
+                message_id: messageId,
+                channel,
+                direction:  "outbound",
+                author:     { type: "agent_ai", id: authorId },
+                content:    { type: "text", text: parsed.message },
+                text:       parsed.message,   // kept for channel-gateway backward compat
+                timestamp,
+              })
+            }
+          } catch (kafkaErr) {
+            // Non-fatal: log and continue. Webchat delivery via Redis stream is
+            // unaffected. Analytics will have a gap for this message only.
+            console.warn(
+              `[notification_send] conversations.outbound publish failed for session ${parsed.session_id}:`,
+              kafkaErr instanceof Error ? kafkaErr.message : String(kafkaErr),
+            )
           }
         }
       }

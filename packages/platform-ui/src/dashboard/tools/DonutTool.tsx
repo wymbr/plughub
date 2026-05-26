@@ -20,7 +20,7 @@ const COLORS = [
 function Skeleton() {
   return (
     <div className="h-full flex items-center justify-center animate-pulse">
-      <div className="w-20 h-20 rounded-full border-8 border-gray-200 border-t-gray-100" />
+      <div className="w-20 h-20 rounded-full border-8 border-border border-t-border" />
     </div>
   )
 }
@@ -35,9 +35,9 @@ function CustomTooltip({ active, payload }: { active?: boolean; payload?: Toolti
   if (!active || !payload?.length) return null
   const p = payload[0]
   return (
-    <div className="bg-white border border-gray-200 rounded shadow-sm px-2 py-1.5 text-xs">
-      <p className="font-medium text-gray-700">{p.name}</p>
-      <p className="text-gray-500">
+    <div className="bg-white border border-border rounded shadow-sm px-2 py-1.5 text-xs">
+      <p className="font-medium text-dark">{p.name}</p>
+      <p className="text-muted">
         {p.value.toLocaleString('pt-BR')} ({p.payload.pct.toFixed(1)}%)
       </p>
     </div>
@@ -53,7 +53,7 @@ export const DonutTool: React.FC<DisplayToolProps<DonutData>> = ({
 
   if (error) {
     return (
-      <div className="h-full flex items-center justify-center text-xs text-red-400">
+      <div className="h-full flex items-center justify-center text-xs text-red">
         Indisponível
       </div>
     )

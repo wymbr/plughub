@@ -1,5 +1,7 @@
 # Frontend Architecture — platform-ui as standard shell
 
+> Última atualização: 2026-05-25 · Estado: Arc 16
+
 All operator-facing UI lives in `packages/platform-ui/`. Never create standalone frontend packages.
 
 ## Shell structure
@@ -51,13 +53,15 @@ const { session } = useAuth()  // session.role: 'operator' | 'supervisor' | 'adm
 
 ## Roles
 
-| Role | Acesso |
+Os grupos de navegação são: Home 🏠, Console 🖥️, Monitor 📡, Fluxo 🔄, Avaliação ✓, Analytics 📊, Configuração ⚙️ (ver § Nav structure).
+
+| Role | Grupos acessíveis |
 |---|---|
-| `operator` | Monitor, Agent Assist, Analytics |
-| `supervisor` | operator + Avaliação, Relatórios |
-| `admin` | supervisor + Configuração, Skill Flows |
-| `developer` | admin + Developer Tools |
-| `business` | Home, Analytics, Business |
+| `operator` | Home, Console, Monitor, Avaliação |
+| `supervisor` | operator + Fluxo, Analytics |
+| `admin` | supervisor + Configuração |
+| `developer` | admin + Fluxo (Editor/Deploy), DevTools |
+| `business` | Home, Fluxo, Avaliação, Analytics, Configuração (cross-cutting, sem itens operacionais — `operacao: none` no ABAC) |
 
 ## Migrated panels — config-recursos tabs
 
@@ -79,7 +83,7 @@ The `packages/platform-ui/src/modules/config-recursos/` tab container holds 6 ta
 - `listHumanAgentTypes`, `createHumanAgentType`, `updateHumanAgentType`, `deleteAgentType` → `/v1/agent-types`
 - `operatorHeaders()` — variant of `headers()` that includes `x-user-id: operator`
 
-### Task #168 improvements (RegistryPanel migration)
+### RegistryPanel migration
 
 - `AgentTypesPage.tsx` — full rewrite: correct frameworks (plughub-native, human, external-mcp, langgraph, crewai, anthropic_sdk, azure_ai, google_vertex, generic_mcp), role select, max_concurrent_sessions, pool checkboxes, skills checkboxes, Deprecate→Confirm flow; pools rendered as chips in table
 - `SkillsPage.tsx` — full rewrite: removed create form (skills are YAML-managed), info banner pointing to skill-flow-engine/skills/, detail modal shows tools/knowledge_domains chips
@@ -93,8 +97,6 @@ The `packages/platform-ui/src/modules/config-recursos/` tab container holds 6 ta
 
 `ChannelType`, `GatewayConfig`, `CreateGatewayConfigInput`, `UpdateGatewayConfigInput`,
 `HumanAgentType`, `CreateHumanAgentInput`, `UpdateHumanAgentInput`, `AgentInstance`
-
-Build: **486 kB JS / 143 kB gzip** (0 TypeScript errors).
 
 ## Migrated panels — billing module
 
@@ -122,13 +124,11 @@ Route: `/config/billing` (role: `admin`). Nav entry: 💳 Faturamento under Conf
 
 `InvoiceLineItem`, `ReserveGroup`, `Invoice`, `InstallationResource`
 
-Build: **404 kB JS / 117 kB gzip** (0 TypeScript errors).
-
 ## Migrated panels — skill-flows module
 
-`packages/platform-ui/src/modules/skill-flows/SkillFlowsPage.tsx` — migrated from `packages/operator-console/src/components/SkillFlowEditor.tsx`.
+`packages/platform-ui/src/modules/skill-flows/SkillFlowsPage.tsx` — migrated from the former `operator-console` SkillFlowEditor.
 
-Route: `/skill-flows` (roles: `admin`, `developer`). Replaces the former `PlaceholderPage`.
+Route: `/agent-flow/editor` (roles: `admin`, `developer`). Replaces the former `PlaceholderPage`. The legacy path `/skill-flows` redirects to `/agent-flow/editor`.
 
 ### Features (fully ported)
 
@@ -145,13 +145,11 @@ Route: `/skill-flows` (roles: `admin`, `developer`). Replaces the former `Placeh
 
 `@monaco-editor/react@^4.7.0`, `js-yaml@^4.1.1`, `@types/js-yaml@^4.0.9`
 
-Build: **469 kB JS / 139 kB gzip** (0 TypeScript errors — Monaco adds ~65 kB gzipped).
-
 ## Migrated panels — campaigns module
 
-`packages/platform-ui/src/modules/campaigns/CampaignsPage.tsx` — migrated from `packages/operator-console/src/components/CampaignPanel.tsx`.
+`packages/platform-ui/src/modules/campaigns/CampaignsPage.tsx` — migrated from the former `operator-console` CampaignPanel.
 
-Route: `/campaigns` (roles: `operator`, `supervisor`, `admin`, `business`). Accessible via Analytics → Campanhas nav entry.
+Route: `/workflow/report` (roles: `operator`, `supervisor`, `admin`, `business`). Accessible via Analytics → Processos/Campanhas nav entry. The legacy path `/campaigns` redirects to `/workflow/report`.
 
 ### Features (fully ported)
 
@@ -161,9 +159,7 @@ Route: `/campaigns` (roles: `operator`, `supervisor`, `admin`, `business`). Acce
 - New types added to `src/types/index.ts`: `CampaignSummary`, `CollectEvent`
 - i18n: `nav.campanhas` added to pt-BR and en locales
 
-Build: **510 kB JS / 149 kB gzip** (0 TypeScript errors — Monaco included in bundle).
-
-## Migrated panels — config-plataforma module (task #171)
+## Migrated panels — config-plataforma module
 
 `packages/platform-ui/src/modules/config-plataforma/components/NamespaceEditor.tsx` — upgraded to match full `ConfigPanel` feature set from operator-console.
 
@@ -187,8 +183,6 @@ Route: `/config/platform` (role: `admin`), tab ⚙️ Configuração. No new rou
 ### `MaskingPage.tsx` updated
 
 Adapted to use `entries[key]?.value` instead of direct entry (due to type change).
-
-Build: **513 kB JS / 150 kB gzip** (0 TypeScript errors).
 
 ## Legacy standalone apps — ✅ migration completo, pacotes removidos
 
@@ -361,17 +355,17 @@ modules/agent-assist/
     Header.tsx                 ← handle-time, SLA bar, WS dot
     ChatArea.tsx               ← messages + live sentiment strip
     AgentInput.tsx             ← textarea + Encerrar button
-    CloseModal.tsx             ← issue_status + outcome + handoff_reason
     MessageBubble.tsx          ← per-author styles + MenuCard delegation
     MenuCard.tsx               ← read-only menu interaction preview
     ContactList.tsx            ← per-contact cards with sentiment/SLA/timer
-    RightPanel.tsx             ← 4-tab container
+    RightPanel.tsx             ← tab container (5º tab OrchestrationTab gateado por supervisor/admin — Arc 11)
     ToastContainer.tsx         ← fixed bottom-right notifications
     tabs/
-      EstadoTab.tsx            ← sentiment chart (recharts), intent, flags, SLA
+      EstadoTab.tsx            ← sentiment chart (recharts), intent, flags, SLA, AiParticipantCard (Arc 11)
       CapacidadesTab.tsx       ← suggested agents + escalation options
       ContextoTab.tsx          ← ContextSnapshotCard (teal) + ContactContextCard (emerald)
-      HistoricoTab.tsx         ← customer session history
+      HistoricoTab.tsx         ← customer session history + processos em aberto (Arc 10)
+      OrchestrationTab.tsx     ← Arc 11 — agentes AI + pipeline transitions + intervenções (supervisor/admin)
 ```
 
 **Legacy app** (`packages/agent-assist-ui/`, port 5175) — frozen, kept as reference.
@@ -396,8 +390,10 @@ React 18 + TypeScript + Vite. **Original** porta de dev: 5175. Proxy: `/api` →
 2. `conversation.assigned` chega via `pool:events:{poolId}` → `setSessionId`, `fetchHistory`, atualiza URL
 3. Mensagens chegam por `message.text` WS events → adicionadas a `messages[]`
 4. Agente encerra → botão Close → `handleClose` → POST `/api/agent_done/{sessionId}`
-   com `{ issue_status: "closed", outcome: "resolved" }` — sem modal (Arc 14: wrap-up
-   é delegado aos hook agents `side: agent | customer`)
+   com `{ issue_status: "closed", outcome: "resolved" }` — **sem modal**. O antigo
+   `CloseModal` (issue_status + outcome + handoff_reason) foi removido: a partir do
+   Arc 14, o wrap-up é delegado aos hook agents `side: agent | customer` e o
+   `agent_done` é disparado direto, sem coleta interativa de campos no encerramento.
 5. Cliente desconecta → `session.closed` com `client_disconnect` → `pendingCloseModal: true`
    → `useEffect` auto-dispara `agent_done` com `{ outcome: "abandoned" }` — sem modal
 6. Agente clica "Desligar" → `handleDesligar` → `handleClose` com `{ outcome: "abandoned" }` → `agent_done` imediato
@@ -507,6 +503,29 @@ de componentes/hooks. Exemplo em `ContextoTab.tsx`: `confidenceLabel(c, t)`, `so
 `t: (key: string, opts?: Record<string, unknown>) => string`
 para aceitar tanto chamadas simples (`t('key')`) quanto com interpolação (`t('key', { var })`).
 
-## Build
+---
 
-**566 kB JS / 164 kB gzip**
+# Módulos de UI adicionados por arcos posteriores
+
+## Arc 11 — Console como superfície de orquestração
+
+O Console ganhou componentes para tratar agentes AI como coparticipantes de primeira classe:
+
+- `AiParticipantCard` — no EstadoTab; mostra step/status do Skill-Flow de cada agente AI em tempo real (polling 3s) + drawer com últimas 5 mensagens e ação "Encerrar segmento".
+- `AdicionarEspecialistaButton` — dropdown 2-step no ActionBar; lista agentes de `mentionable_pools` e os invoca via `@mention` por A2A `assist`.
+- `DelegarTarefaDrawer` + `DelegarButton` — seleção de mensagens no transcript → drawer de delegação (agent picker + instrução + visibilidade); card de resultado quando `agent_done` chega.
+- `OrchestrationTab` — **5º tab** do RightPanel, gateado por role `supervisor|admin`: agentes AI + linha do tempo de `pipeline_transitions` + ações de intervenção (injetar contexto, force-complete).
+
+## Arc 13 — Calibração e Curadoria
+
+- `CalibrationDashboard` — rota `/evaluation/calibration` (roles `supervisor`, `admin`): KPI strip, LineChart de calibration score por skill version × tempo, ReferenceLine 90%, tabela detalhada. Hook `useEvaluatorCalibration`.
+- `CuradoriaPage` — rota `/evaluation/curadoria` (roles `supervisor`, `admin`): fila de curadoria do feedback loop RAG, `CurationCard` com trigger badges + sinal AI, `RecalibrateDrawer`.
+- Human review UX na `AvaliacoesPage`: `DimensionStateIndicator`, `DimensionThreadCard`, `HumanReviewPanel`, `DimensionContestPanel13`; campaign config na `CampaignsPage` (`CurationSamplingRulesEditor`).
+
+## Arc 15 — WebRTC overlay no Console
+
+- `WebRTCOverlay` — embutido no Console para sessões `channel=webrtc`; renderiza `VideoGrid` (2-up), waveform animado ou nenhum overlay conforme o medium negociado. `MediaControls`, `WebRTCSupervisorView` (observer read-only), hook `useWebRTCSession`. Namespace i18n `webrtc`.
+
+## Audit LGPD
+
+- `AuditPage` — rota `/audit` (5 tabs: Sessions + MCP Calls ativos, 3 stubs). Nav entry standalone "Auditoria LGPD" (🔍) com ABAC gate `audit.sessions`. Banner de aviso: todo acesso é registrado em log imutável.

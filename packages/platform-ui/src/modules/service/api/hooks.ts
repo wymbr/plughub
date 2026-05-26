@@ -13,7 +13,7 @@ async function safeJson<T>(res: Response): Promise<T> {
 }
 import type {
   ActiveSession, ConnectionStatus, ContactSegment, Metrics24h,
-  PoolSnapshot, PoolView, SentimentEntry, StreamEntry, SupervisorState
+  PoolSnapshot, PoolSlaEntry, PoolView, SentimentEntry, StreamEntry, SupervisorState
 } from '../types'
 
 const BASE = ''  // relative URLs — Vite proxies to analytics-api on port 3500
@@ -21,28 +21,72 @@ const BASE = ''  // relative URLs — Vite proxies to analytics-api on port 3500
 // ─── usePoolSnapshots ─────────────────────────────────────────────────────────
 
 export function usePoolSnapshots(tenantId: string): {
-  snapshots: PoolSnapshot[]
-  status:    ConnectionStatus
+  snapshots:   PoolSnapshot[]
+  status:      ConnectionStatus
+  lastUpdated: number | null   // epoch ms of last non-empty snapshot; null = never received
+  isStale:     boolean         // true when >120s since last real data (Redis TTL window)
 } {
-  const [snapshots, setSnapshots] = useState<PoolSnapshot[]>([])
-  const [status, setStatus]       = useState<ConnectionStatus>('connecting')
-  const esRef = useRef<EventSource | null>(null)
+  // Use a Map keyed by pool_id so pools that disappear from a partial SSE response are
+  // preserved rather than dropped. A pool is only removed when the user navigates away
+  // (unmount) or when all pools have been gone for >125s (isStale).
+  const snapshotMapRef = useRef<Map<string, PoolSnapshot>>(new Map())
+  const [snapshots,   setSnapshots]   = useState<PoolSnapshot[]>([])
+  const [status,      setStatus]      = useState<ConnectionStatus>('connecting')
+  const [lastUpdated, setLastUpdated] = useState<number | null>(null)
+  const [isStale,     setIsStale]     = useState(false)
+  const esRef         = useRef<EventSource | null>(null)
+  const staleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  // Refresh the 125s stale-detection timer whenever we get real data from any pool.
+  // The timer fires only when NO pool has pushed a snapshot for 2+ minutes.
+  const resetStaleTimer = (ts: number) => {
+    if (staleTimerRef.current) clearTimeout(staleTimerRef.current)
+    setIsStale(false)
+    staleTimerRef.current = setTimeout(() => setIsStale(true), 125_000)
+    setLastUpdated(ts)
+  }
 
   useEffect(() => {
     if (!tenantId) return
+    // Reset map when tenant changes
+    snapshotMapRef.current = new Map()
+    setSnapshots([])
+
     const url = `${BASE}/dashboard/operational?tenant_id=${encodeURIComponent(tenantId)}`
     const es  = new EventSource(url)
     esRef.current = es
     setStatus('connecting')
+
     es.addEventListener('pools', (e: MessageEvent) => {
-      try { setSnapshots(JSON.parse(e.data) as PoolSnapshot[]); setStatus('connected') } catch { /* ignore */ }
+      try {
+        const incoming = JSON.parse(e.data) as PoolSnapshot[]
+
+        if (incoming.length > 0) {
+          // Merge incoming snapshots into the map — never delete absent entries.
+          // This prevents a pool from vanishing from the UI when it temporarily has no
+          // routing activity while other pools are still active.
+          for (const s of incoming) snapshotMapRef.current.set(s.pool_id, s)
+          setSnapshots(Array.from(snapshotMapRef.current.values()))
+          resetStaleTimer(Date.now())
+        }
+        // When incoming is [] (all Redis TTLs expired), keep existing map and
+        // let the stale timer eventually mark the data as stale.
+        setStatus('connected')
+      } catch { /* ignore parse errors */ }
     })
+
     es.addEventListener('error', () => setStatus('error'))
     es.onopen = () => setStatus('connected')
-    return () => { es.close(); esRef.current = null; setStatus('closed') }
+
+    return () => {
+      es.close()
+      esRef.current = null
+      setStatus('closed')
+      if (staleTimerRef.current) clearTimeout(staleTimerRef.current)
+    }
   }, [tenantId])
 
-  return { snapshots, status }
+  return { snapshots, status, lastUpdated, isStale }
 }
 
 // ─── useSentimentLive ─────────────────────────────────────────────────────────
@@ -75,16 +119,34 @@ export function useMetrics24h(tenantId: string, intervalMs = 60_000): Metrics24h
   return metrics
 }
 
+// ─── usePoolSla ───────────────────────────────────────────────────────────────
+
+export function usePoolSla(tenantId: string, intervalMs = 60_000): PoolSlaEntry[] {
+  const [entries, setEntries] = useState<PoolSlaEntry[]>([])
+  const fetch_ = useCallback(async () => {
+    if (!tenantId) return
+    try {
+      const res = await fetch(`${BASE}/dashboard/pool-sla?tenant_id=${encodeURIComponent(tenantId)}`)
+      if (res.ok) setEntries(await safeJson(res))
+    } catch { /* stale data acceptable */ }
+  }, [tenantId])
+  useEffect(() => { fetch_(); const id = setInterval(fetch_, intervalMs); return () => clearInterval(id) }, [fetch_, intervalMs])
+  return entries
+}
+
 // ─── usePoolViews ─────────────────────────────────────────────────────────────
 
 export function usePoolViews(tenantId: string): {
-  pools:   PoolView[]
-  status:  ConnectionStatus
-  metrics: Metrics24h | null
+  pools:       PoolView[]
+  status:      ConnectionStatus
+  metrics:     Metrics24h | null
+  isStale:     boolean
+  lastUpdated: number | null
 } {
-  const { snapshots, status } = usePoolSnapshots(tenantId)
-  const sentimentEntries      = useSentimentLive(tenantId)
-  const metrics               = useMetrics24h(tenantId)
+  const { snapshots, status, isStale, lastUpdated } = usePoolSnapshots(tenantId)
+  const sentimentEntries = useSentimentLive(tenantId)
+  const slaEntries       = usePoolSla(tenantId)
+  const metrics          = useMetrics24h(tenantId)
 
   const sentimentMap = useMemo(() => {
     const m: Record<string, SentimentEntry> = {}
@@ -92,24 +154,37 @@ export function usePoolViews(tenantId: string): {
     return m
   }, [sentimentEntries])
 
+  const slaMap = useMemo(() => {
+    const m: Record<string, PoolSlaEntry> = {}
+    for (const e of slaEntries) m[e.pool_id] = e
+    return m
+  }, [slaEntries])
+
   const pools = useMemo<PoolView[]>(() => snapshots.map(s => {
     const sent = sentimentMap[s.pool_id] ?? null
+    const sla  = slaMap[s.pool_id]      ?? null
     return {
-      pool_id:         s.pool_id,
-      tenant_id:       s.tenant_id,
-      available:       s.available,
-      busy:            s.busy ?? 0,    // backward-compat: older snapshots won't have the field
-      queue_length:    s.queue_length,
-      sla_target_ms:   s.sla_target_ms,
-      channel_types:   s.channel_types,
-      updated_at:      s.updated_at,
-      avg_score:       sent?.avg_score   ?? null,
-      sentiment_count: sent?.count       ?? 0,
-      distribution:    sent?.distribution ?? null,
+      pool_id:            s.pool_id,
+      tenant_id:          s.tenant_id,
+      available:          s.available,
+      busy:               s.busy ?? 0,    // backward-compat: older snapshots won't have the field
+      total_instances:    s.total_instances ?? null,
+      queue_length:       s.queue_length,
+      sla_target_ms:      s.sla_target_ms,
+      channel_types:      s.channel_types,
+      updated_at:         s.updated_at,
+      avg_score:          sent?.avg_score   ?? null,
+      sentiment_count:    sent?.count       ?? 0,
+      distribution:       sent?.distribution ?? null,
+      // SLA performance (from /dashboard/pool-sla, null when no data yet)
+      avg_wait_ms:        sla?.avg_wait_ms        ?? null,
+      p90_wait_ms:        sla?.p90_wait_ms        ?? null,
+      sla_compliance_pct: sla?.sla_compliance_pct ?? null,
+      sla_sessions_count: sla?.sessions_count     ?? 0,
     }
-  }), [snapshots, sentimentMap])
+  }), [snapshots, sentimentMap, slaMap])
 
-  return { pools, status, metrics }
+  return { pools, status, metrics, isStale, lastUpdated }
 }
 
 // ─── useActiveSessions ────────────────────────────────────────────────────────

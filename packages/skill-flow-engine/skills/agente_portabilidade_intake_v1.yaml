@@ -1,0 +1,181 @@
+# agente_portabilidade_intake_v1.yaml
+# Portabilidade Intake — Agente de Coleta Determinístico (Tier 3)
+#
+# Roda em portabilidade_ia como agente principal na Phase 1.
+# Na Phase 2, será invocado via task step pelo Tier 2 (skill_atendimento_portabilidade_v1).
+#
+# Pool: portabilidade_ia
+# Tier: 3 (Interaction Agent — I/O atômico com o cliente)
+#
+# Responsabilidade:
+#   1. Coletar numero_atual e operadora_destino do cliente
+#   2. Persistir dados no ContextStore (namespace journey.*)
+#   3. Iniciar a Journey de portabilidade (Tier 1: skill_portabilidade_demo_v1)
+#   4. Confirmar ao cliente e encerrar o segmento
+#
+# A Journey continua de forma assíncrona — o cliente receberá
+# notificações via collect steps do skill_portabilidade_demo_v1
+# quando a operadora responder (1–3 dias úteis).
+#
+# Permissões necessárias:
+#   agent_heartbeat, notification_send, interaction_request
+#   context_set (escreve journey.* no ContextStore)
+#   journey_start (cria Journey + instância Tier 1)
+#
+# Fluxo:
+#   1. saudacao            — notify: boas-vindas ao fluxo de portabilidade
+#   2. coletar_numero      — menu text: número atual a ser portado
+#   3. coletar_operadora   — menu list: operadora de destino
+#   4. confirmar_dados     — notify: exibe dados coletados
+#   5. escrever_numero     — invoke context_set: journey.numero_atual
+#   6. escrever_operadora  — invoke context_set: journey.operadora_destino
+#   7. iniciar_jornada     — invoke journey_start: skill_portabilidade_demo_v1
+#   8. avisar_inicio       — notify: confirmação + prazo estimado
+#   9. finalizar           — complete outcome: resolved
+#  10. avisar_erro_jornada — notify: fallback se journey_start falhar
+#  11. encerrar_erro       — complete outcome: failed
+#  12. avisar_timeout      — notify: informa cliente de timeout/falha de menu
+#  13. finalizar_timeout   — complete outcome: failed
+
+id: skill_portabilidade_intake_v1
+name: "Portabilidade Intake v1 — Coleta e Início de Jornada"
+version: "1.0"
+description: |
+  Agente de coleta determinístico (Tier 3) para o fluxo de portabilidade.
+  Coleta número atual e operadora de destino via menus sem LLM.
+  Persiste os dados no namespace journey.* do ContextStore e inicia
+  a Journey de portabilidade (Tier 1: skill_portabilidade_demo_v1).
+  O cliente encerra o segmento e receberá contato futuro via collect.
+classification:
+  type: orchestrator
+  domain: portabilidade
+
+entry: saudacao
+
+steps:
+
+  # ── Etapa 1: saudação ─────────────────────────────────────────────────────────
+  - id: saudacao
+    type: notify
+    message: "Olá! Vou te ajudar com a portabilidade do seu número. O processo leva de 1 a 3 dias úteis e você receberá atualizações por aqui."
+    on_success: coletar_numero
+    on_failure: coletar_numero
+
+  # ── Etapa 2: coletar número atual ────────────────────────────────────────────
+  # O cliente digita o número que deseja portar (incluindo DDD).
+  - id: coletar_numero
+    type: menu
+    prompt: "Qual é o número de celular que deseja portar? (com DDD, ex: 11912345678)"
+    interaction: text
+    output_as: numero_atual
+    timeout_s: 180
+    on_success: coletar_operadora
+    on_failure: avisar_timeout
+    on_timeout: avisar_timeout
+    on_disconnect: finalizar_timeout
+
+  # ── Etapa 3: coletar operadora de destino ────────────────────────────────────
+  # Operadora para a qual o número será portado.
+  - id: coletar_operadora
+    type: menu
+    prompt: "Para qual operadora deseja portar o número?"
+    interaction: list
+    options:
+      - id: claro
+        label: "📶 Claro"
+      - id: vivo
+        label: "📶 Vivo"
+      - id: tim
+        label: "📶 TIM"
+      - id: oi
+        label: "📶 Oi"
+      - id: outros
+        label: "📶 Outra operadora"
+    output_as: operadora_destino
+    timeout_s: 120
+    on_success: confirmar_dados
+    on_failure: avisar_timeout
+    on_timeout: avisar_timeout
+    on_disconnect: finalizar_timeout
+
+  # ── Etapa 4: confirmar dados antes de iniciar ────────────────────────────────
+  - id: confirmar_dados
+    type: notify
+    message: "📋 Perfeito! Vou iniciar o processo com os seguintes dados:\n• Número: {{$.pipeline_state.numero_atual}}\n• Operadora destino: {{$.pipeline_state.operadora_destino}}\n\nAguarde enquanto registro sua solicitação..."
+    on_success: escrever_numero
+    on_failure: escrever_numero
+
+  # ── Etapa 5: persistir numero_atual no ContextStore (journey.*) ───────────────
+  # journey.* é o namespace compartilhado entre todas as sessões desta Journey.
+  # O skill_portabilidade_demo_v1 lê @ctx.journey.numero_atual nos seus steps.
+  - id: escrever_numero
+    type: invoke
+    tool: context_set
+    input:
+      tag: "journey.numero_atual"
+      value: "$.pipeline_state.numero_atual"
+      confidence: 1.0
+      visibility: "agents_only"
+    on_success: escrever_operadora
+    on_failure: escrever_operadora   # continua mesmo se context_set falhar
+
+  # ── Etapa 6: persistir operadora_destino no ContextStore (journey.*) ──────────
+  - id: escrever_operadora
+    type: invoke
+    tool: context_set
+    input:
+      tag: "journey.operadora_destino"
+      value: "$.pipeline_state.operadora_destino"
+      confidence: 1.0
+      visibility: "agents_only"
+    on_success: iniciar_jornada
+    on_failure: iniciar_jornada   # continua mesmo se context_set falhar
+
+  # ── Etapa 7: iniciar Journey de portabilidade (Tier 1) ───────────────────────
+  # journey_start cria Journey + WorkflowInstance para skill_portabilidade_demo_v1.
+  # O Tier 1 suspende imediatamente aguardando aprovação da operadora (48h).
+  # O cliente receberá o collect quando o workflow for resumido.
+  - id: iniciar_jornada
+    type: invoke
+    tool: journey_start
+    input:
+      skill_id: "skill_portabilidade_demo_v1"
+      session_id: "$.session.session_id"
+    on_success: avisar_inicio
+    on_failure: avisar_erro_jornada
+
+  # ── Etapa 8: confirmar início ao cliente ─────────────────────────────────────
+  - id: avisar_inicio
+    type: notify
+    message: "✅ Solicitação de portabilidade registrada com sucesso!\n\nEm até 48 horas úteis, a operadora responderá. Você receberá uma mensagem aqui para confirmar a transferência.\n\nSe precisar de mais alguma coisa, pode entrar em contato novamente."
+    on_success: finalizar
+    on_failure: finalizar
+
+  # ── Etapa 9: finalização normal ───────────────────────────────────────────────
+  - id: finalizar
+    type: complete
+    outcome: resolved
+
+  # ── Fallback: erro ao iniciar Journey ────────────────────────────────────────
+  - id: avisar_erro_jornada
+    type: notify
+    message: "⚠️ Houve um problema ao registrar sua solicitação. Por favor, tente novamente em alguns minutos ou entre em contato com nosso SAC."
+    on_success: encerrar_erro
+    on_failure: encerrar_erro
+
+  - id: encerrar_erro
+    type: complete
+    outcome: failed
+    issue_status: "journey_start falhou — skill_portabilidade_demo_v1 indisponível"
+
+  # ── Timeout / disconnect ───────────────────────────────────────────────────────
+  - id: avisar_timeout
+    type: notify
+    message: "Sua sessão foi encerrada por inatividade ou desconexão. Se precisar de ajuda com a portabilidade, entre em contato novamente."
+    on_success: finalizar_timeout
+    on_failure: finalizar_timeout
+
+  - id: finalizar_timeout
+    type: complete
+    outcome: failed
+    issue_status: "menu timeout ou disconnect — cliente não respondeu"

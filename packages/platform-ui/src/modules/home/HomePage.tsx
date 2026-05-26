@@ -4,6 +4,7 @@ import { useAuth } from '@/auth/useAuth'
 import { useTranslation } from 'react-i18next'
 import Card from '@/components/ui/Card'
 import Badge from '@/components/ui/Badge'
+import { Settings, BarChart2 } from 'lucide-react'
 
 const HomePage: React.FC = () => {
   const { session } = useAuth()
@@ -80,12 +81,12 @@ const HomePage: React.FC = () => {
             <p className="text-xs text-gray">{t('features.routingDesc')}</p>
           </div>
           <div className="text-center">
-            <p className="text-2xl mb-2">⚙️</p>
+            <Settings className="w-8 h-8 mb-2 mx-auto text-primary" aria-hidden="true" />
             <p className="font-semibold text-dark text-sm">{t('features.skills')}</p>
             <p className="text-xs text-gray">{t('features.skillsDesc')}</p>
           </div>
           <div className="text-center">
-            <p className="text-2xl mb-2">📊</p>
+            <BarChart2 className="w-8 h-8 mb-2 mx-auto text-primary" aria-hidden="true" />
             <p className="font-semibold text-dark text-sm">{t('features.analytics')}</p>
             <p className="text-xs text-gray">{t('features.analyticsDesc')}</p>
           </div>

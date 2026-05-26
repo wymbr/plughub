@@ -11,6 +11,7 @@
  */
 
 import React, { useState } from "react";
+import { Sparkles, X } from "lucide-react";
 import { CopilotSuggestions } from "../types";
 
 export interface CopilotBannerProps {
@@ -47,26 +48,26 @@ export const CopilotBanner: React.FC<CopilotBannerProps> = ({
   }
 
   return (
-    <div className="flex-shrink-0 border-t border-indigo-100 bg-indigo-50 px-3 py-2">
+    <div className="flex-shrink-0 border-t border-ai/20 bg-ai-light px-3 py-2">
       {/* ── Header row ── */}
       <div className="flex items-center justify-between mb-1">
-        <span className="flex items-center gap-1 text-[10px] font-bold text-indigo-500
+        <span className="flex items-center gap-1 text-2xs font-bold text-ai
           uppercase tracking-wide">
-          <span className="text-[11px]">✨</span>
+          <Sparkles className="w-3 h-3" aria-hidden="true" />
           Sugestão do Copilot
         </span>
         <button
           onClick={handleDismiss}
           title="Dispensar sugestão"
-          className="text-indigo-400 hover:text-indigo-600 text-xs leading-none"
+          className="text-ai hover:text-ai-text leading-none"
         >
-          ✕
+          <X className="w-3.5 h-3.5" aria-hidden="true" />
         </button>
       </div>
 
       {/* ── Suggested response ── */}
       {sugestao_resposta && sugestao_resposta.trim() && (
-        <p className="text-xs text-indigo-900 leading-snug line-clamp-3 mb-1.5">
+        <p className="text-xs text-ai-text leading-snug line-clamp-3 mb-1.5">
           {sugestao_resposta}
         </p>
       )}
@@ -77,8 +78,8 @@ export const CopilotBanner: React.FC<CopilotBannerProps> = ({
           {flags_risco.map(f => (
             <span
               key={f}
-              className="text-[10px] px-1.5 py-0.5 rounded bg-amber-100 text-amber-800
-                border border-amber-200 font-medium"
+              className="text-2xs px-1.5 py-0.5 rounded bg-warning-light text-warning-text
+                border border-warning/30 font-medium"
             >
               ⚠️ {f.replace(/_/g, " ")}
             </span>
@@ -92,8 +93,8 @@ export const CopilotBanner: React.FC<CopilotBannerProps> = ({
           {acoes_recomendadas.map(a => (
             <span
               key={a}
-              className="text-[10px] px-1.5 py-0.5 rounded bg-indigo-100 text-indigo-700
-                border border-indigo-200 font-medium"
+              className="text-2xs px-1.5 py-0.5 rounded bg-ai-light text-ai-text
+                border border-ai/30 font-medium"
             >
               → {a.replace(/_/g, " ")}
             </span>

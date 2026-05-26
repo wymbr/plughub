@@ -6,6 +6,7 @@
  * Inline form for create / edit (no modal).
  */
 import React, { useState, useEffect, useCallback } from 'react'
+import { useTranslation } from 'react-i18next'
 import { useAuth } from '@/auth/useAuth'
 import {
   listChannelEndpoints,
@@ -17,20 +18,10 @@ import {
 import type {
   ChannelEndpoint,
   ChannelEndpointChannel,
-  CreateChannelEndpointInput,
   Pool,
 } from '@/types'
 
-// ── Helpers ────────────────────────────────────────────────────────────────────
-
-const IDENTIFIER_HINT: Record<ChannelEndpointChannel, string> = {
-  webchat:  'URL slug, e.g. "support" → {host}/webchat/support',
-  whatsapp: 'E.164 number, e.g. +5511999999999',
-  voice:    'DID / E.164, e.g. +5511000000',
-  sms:      'Short code or long code, e.g. 55119',
-  email:    'Address, e.g. support@company.com',
-  webhook:  'URL slug, e.g. "salesforce" → {host}/channel/webhook/salesforce',
-}
+// ── Identifier placeholders (technical format, not translated) ─────────────────
 
 const IDENTIFIER_PLACEHOLDER: Record<ChannelEndpointChannel, string> = {
   webchat:  'support',
@@ -50,8 +41,6 @@ interface FormState {
   active:       boolean
 }
 
-// ── Empty form state ───────────────────────────────────────────────────────────
-
 const emptyForm = (): FormState => ({
   identifier:   '',
   pool_id:      '',
@@ -66,6 +55,7 @@ interface Props {
 }
 
 export const ChannelEndpointList: React.FC<Props> = ({ channel }) => {
+  const { t } = useTranslation('channels')
   const { tenantId } = useAuth()
 
   const [endpoints, setEndpoints] = useState<ChannelEndpoint[]>([])
@@ -73,7 +63,6 @@ export const ChannelEndpointList: React.FC<Props> = ({ channel }) => {
   const [loading,   setLoading]   = useState(true)
   const [error,     setError]     = useState<string | null>(null)
 
-  // Form state — null = closed, 'new' = creating, string id = editing
   const [formMode, setFormMode]   = useState<null | 'new' | string>(null)
   const [form,     setForm]       = useState<FormState>(emptyForm())
   const [saving,   setSaving]     = useState(false)
@@ -124,9 +113,9 @@ export const ChannelEndpointList: React.FC<Props> = ({ channel }) => {
 
   async function handleSave() {
     if (!tenantId) return
-    if (!form.identifier.trim()) { setFormErr('Identifier is required');   return }
-    if (!form.pool_id)           { setFormErr('Pool is required');          return }
-    if (!form.display_name.trim()) { setFormErr('Display name is required'); return }
+    if (!form.identifier.trim())   { setFormErr(t('errors.identifierRequired'));   return }
+    if (!form.pool_id)             { setFormErr(t('errors.poolRequired'));          return }
+    if (!form.display_name.trim()) { setFormErr(t('errors.displayNameRequired'));   return }
 
     setSaving(true); setFormErr(null)
     try {
@@ -150,7 +139,7 @@ export const ChannelEndpointList: React.FC<Props> = ({ channel }) => {
 
   async function handleDelete(id: string) {
     if (!tenantId) return
-    if (!confirm('Delete this endpoint?')) return
+    if (!confirm(t('endpoint.deleteConfirm'))) return
     try {
       await deleteChannelEndpoint(id, tenantId)
       await load()
@@ -159,17 +148,17 @@ export const ChannelEndpointList: React.FC<Props> = ({ channel }) => {
     }
   }
 
-  // ── Pool label helper ────────────────────────────────────────────────────────
-
   function poolLabel(poolId: string): string {
     const p = pools.find(x => x.pool_id === poolId)
-    return p ? `${p.pool_id}` : poolId
+    return p ? p.pool_id : poolId
   }
 
   // ── Render ───────────────────────────────────────────────────────────────────
 
-  if (loading) return <p className="text-sm text-gray-400 py-4">Loading…</p>
-  if (error)   return <p className="text-sm text-red-600 py-4">⚠ {error}</p>
+  if (loading) return <p className="text-sm text-muted-light py-4">{t('loading')}</p>
+  if (error)   return <p className="text-sm text-red-text py-4">⚠ {error}</p>
+
+  const identifierHint = t(`identifierHints.${channel}`, t('form.identifierHintFallback'))
 
   return (
     <div className="space-y-4">
@@ -177,14 +166,14 @@ export const ChannelEndpointList: React.FC<Props> = ({ channel }) => {
       {/* Header row */}
       <div className="flex items-center justify-between">
         <div>
-          <p className="text-xs text-gray-500">{IDENTIFIER_HINT[channel]}</p>
+          <p className="text-xs text-muted">{identifierHint}</p>
         </div>
         <button
           onClick={openNew}
           disabled={formMode !== null}
-          className="px-3 py-1.5 rounded text-xs font-semibold bg-primary text-white hover:bg-blue-800 disabled:opacity-40 transition-colors"
+          className="px-3 py-1.5 rounded text-xs font-semibold bg-primary text-white hover:bg-primary-dark disabled:opacity-40 transition-colors"
         >
-          + Add endpoint
+          {t('endpoint.add')}
         </button>
       </div>
 
@@ -206,32 +195,32 @@ export const ChannelEndpointList: React.FC<Props> = ({ channel }) => {
 
       {/* List */}
       {endpoints.length === 0 && formMode !== 'new' ? (
-        <p className="text-sm text-gray-400 py-2">No endpoints configured. Click "+ Add endpoint" to create one.</p>
+        <p className="text-sm text-muted-light py-2">{t('endpoint.noEndpointsStandalone')}</p>
       ) : (
         <table className="w-full text-sm border-collapse">
           <thead>
-            <tr className="text-left text-xs text-gray-500 border-b border-gray-200">
-              <th className="py-2 pr-4 font-medium">Identifier</th>
-              <th className="py-2 pr-4 font-medium">Pool</th>
-              <th className="py-2 pr-4 font-medium">Display name</th>
-              <th className="py-2 pr-4 font-medium">Status</th>
+            <tr className="text-left text-xs text-muted border-b border-border">
+              <th className="py-2 pr-4 font-medium">{t('endpoint.colIdentifier')}</th>
+              <th className="py-2 pr-4 font-medium">{t('endpoint.colPool')}</th>
+              <th className="py-2 pr-4 font-medium">{t('endpoint.colDisplayName')}</th>
+              <th className="py-2 pr-4 font-medium">{t('endpoint.colStatus')}</th>
               <th className="py-2 font-medium"></th>
             </tr>
           </thead>
           <tbody>
             {endpoints.map(ep => (
               <React.Fragment key={ep.id}>
-                <tr className="border-b border-gray-100 hover:bg-gray-50">
-                  <td className="py-2.5 pr-4 font-mono text-xs text-gray-700">{ep.identifier}</td>
-                  <td className="py-2.5 pr-4 text-xs text-gray-600">{poolLabel(ep.pool_id)}</td>
+                <tr className="border-b border-border hover:bg-surface-muted">
+                  <td className="py-2.5 pr-4 font-mono text-xs text-dark">{ep.identifier}</td>
+                  <td className="py-2.5 pr-4 text-xs text-muted">{poolLabel(ep.pool_id)}</td>
                   <td className="py-2.5 pr-4 text-xs">{ep.display_name}</td>
                   <td className="py-2.5 pr-4">
                     <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${
                       ep.active
-                        ? 'bg-green-100 text-green-700'
-                        : 'bg-gray-100 text-gray-500'
+                        ? 'bg-green-light text-green-text'
+                        : 'bg-surface-alt text-muted'
                     }`}>
-                      {ep.active ? 'active' : 'inactive'}
+                      {ep.active ? t('status.active') : t('status.inactive')}
                     </span>
                   </td>
                   <td className="py-2.5 flex gap-2 justify-end">
@@ -240,14 +229,14 @@ export const ChannelEndpointList: React.FC<Props> = ({ channel }) => {
                       disabled={formMode !== null}
                       className="text-xs text-secondary hover:text-primary disabled:opacity-40"
                     >
-                      Edit
+                      {t('actions.edit')}
                     </button>
                     <button
                       onClick={() => handleDelete(ep.id)}
                       disabled={formMode !== null}
-                      className="text-xs text-red-500 hover:text-red-700 disabled:opacity-40"
+                      className="text-xs text-red hover:text-red-text disabled:opacity-40"
                     >
-                      Delete
+                      {t('actions.delete')}
                     </button>
                   </td>
                 </tr>
@@ -299,15 +288,16 @@ function EndpointForm({
   form, setForm, pools, placeholder, identifierReadonly,
   saving, error, onSave, onCancel,
 }: FormProps) {
-  const inp = 'text-xs border border-gray-300 rounded px-2 py-1.5 focus:outline-none focus:border-primary w-full'
+  const { t } = useTranslation('channels')
+  const inp = 'text-xs border border-border-strong rounded px-2 py-1.5 focus:outline-none focus:border-primary w-full'
 
   return (
-    <div className="bg-gray-50 border border-gray-200 rounded-lg p-4 space-y-3">
+    <div className="bg-surface-muted border border-border rounded-lg p-4 space-y-3">
       <div className="grid grid-cols-2 gap-3">
         <div>
-          <label className="text-xs font-medium text-gray-700 block mb-1">Identifier</label>
+          <label className="text-xs font-medium text-dark block mb-1">{t('form.identifier')}</label>
           <input
-            className={inp + (identifierReadonly ? ' bg-gray-100 text-gray-500' : '')}
+            className={inp + (identifierReadonly ? ' bg-surface-alt text-muted' : '')}
             value={form.identifier}
             placeholder={placeholder}
             readOnly={identifierReadonly}
@@ -315,24 +305,24 @@ function EndpointForm({
           />
         </div>
         <div>
-          <label className="text-xs font-medium text-gray-700 block mb-1">Pool</label>
+          <label className="text-xs font-medium text-dark block mb-1">{t('form.pool')}</label>
           <select
             className={inp}
             value={form.pool_id}
             onChange={e => setForm(p => ({ ...p, pool_id: e.target.value }))}
           >
-            <option value="">— select pool —</option>
+            <option value="">{t('form.selectPool')}</option>
             {pools.map(p => (
               <option key={p.pool_id} value={p.pool_id}>{p.pool_id}</option>
             ))}
           </select>
         </div>
         <div>
-          <label className="text-xs font-medium text-gray-700 block mb-1">Display name</label>
+          <label className="text-xs font-medium text-dark block mb-1">{t('form.displayName')}</label>
           <input
             className={inp}
             value={form.display_name}
-            placeholder="e.g. Technical Support"
+            placeholder={t('form.displayNamePlaceholder')}
             onChange={e => setForm(p => ({ ...p, display_name: e.target.value }))}
           />
         </div>
@@ -343,26 +333,26 @@ function EndpointForm({
               checked={form.active}
               onChange={e => setForm(p => ({ ...p, active: e.target.checked }))}
             />
-            Active
+            {t('form.active')}
           </label>
         </div>
       </div>
 
-      {error && <p className="text-xs text-red-600">{error}</p>}
+      {error && <p className="text-xs text-red-text">{error}</p>}
 
       <div className="flex gap-2">
         <button
           onClick={onSave}
           disabled={saving}
-          className="px-3 py-1.5 rounded text-xs font-semibold bg-primary text-white disabled:opacity-40 hover:bg-blue-800 transition-colors"
+          className="px-3 py-1.5 rounded text-xs font-semibold bg-primary text-white disabled:opacity-40 hover:bg-primary-dark transition-colors"
         >
-          {saving ? 'Saving…' : 'Save'}
+          {saving ? t('actions.saving') : t('actions.save')}
         </button>
         <button
           onClick={onCancel}
-          className="px-3 py-1.5 rounded text-xs border border-gray-300 text-gray-600 hover:text-gray-900 transition-colors"
+          className="px-3 py-1.5 rounded text-xs border border-border-strong text-muted hover:text-dark transition-colors"
         >
-          Cancel
+          {t('actions.cancel')}
         </button>
       </div>
     </div>

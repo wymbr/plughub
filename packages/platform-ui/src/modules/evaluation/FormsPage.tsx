@@ -12,8 +12,10 @@
  *   crit.weight = crit.pts / dim.pts   (fraction of parent dimension)
  */
 
+import { Check, AlertTriangle, X } from 'lucide-react'
 import React, { useState, useRef, useEffect } from 'react'
 import { useBlocker } from 'react-router-dom'
+import { useTranslation } from 'react-i18next'
 import { useForms, createForm, updateForm, deleteForm } from '@/api/evaluation-hooks'
 import type { EvaluationForm, EvaluationDimension, EvaluationCriterion } from '@/types'
 import { useAuth } from '@/auth/useAuth'
@@ -83,18 +85,23 @@ function sum(ns: number[]) { return ns.reduce((a, b) => a + b, 0) }
 function SumBadge({ current, total }: { current: number; total: number }) {
   const ok = current === total
   return (
-    <span className={`text-xs font-mono px-2 py-0.5 rounded ${ok ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
-      {current} / {total} pts {ok ? '✓' : '⚠'}
+    <span className={`text-xs font-mono px-2 py-0.5 rounded ${ok ? 'bg-green-light text-green-text' : 'bg-red-light text-red-text'}`}>
+      {current} / {total} pts {ok ? <Check className="w-3 h-3 inline" aria-hidden="true" /> : <AlertTriangle className="w-3 h-3 inline" aria-hidden="true" />}
     </span>
   )
 }
 
 function StatusBadge({ status }: { status: string }) {
+  const { t } = useTranslation('evaluation')
   const styles: Record<string, string> = {
-    active:   'bg-green-100 text-green-800',
-    archived: 'bg-gray-100 text-gray-600',
+    active:   'bg-green-light text-green-text',
+    archived: 'bg-surface-alt text-muted',
   }
-  return <span className={`px-2 py-0.5 rounded text-xs font-medium ${styles[status] ?? 'bg-gray-100 text-gray-600'}`}>{status}</span>
+  return (
+    <span className={`px-2 py-0.5 rounded text-xs font-medium ${styles[status] ?? 'bg-surface-alt text-muted'}`}>
+      {t(`forms.${status}`, status)}
+    </span>
+  )
 }
 
 // ── CriterionEditor ───────────────────────────────────────────────────────────
@@ -108,19 +115,20 @@ interface CriterionEditorProps {
 }
 
 function CriterionEditor({ criterion, remainingPts, onChange, onDelete }: CriterionEditorProps) {
+  const { t } = useTranslation('evaluation')
   return (
-    <div className="border border-gray-200 rounded p-3 space-y-2 bg-gray-50">
+    <div className="border border-border rounded p-3 space-y-2 bg-surface-muted">
       <div className="flex gap-2 items-center">
         <input
-          className="flex-1 border border-gray-300 rounded px-2 py-1 text-sm"
-          placeholder="Label do critério"
+          className="flex-1 border border-border-strong rounded px-2 py-1 text-sm"
+          placeholder={t('forms.criterion.labelPlaceholder')}
           value={criterion.label}
           onChange={e => onChange({ ...criterion, label: e.target.value })}
         />
         {/* Pts input — shows empty when 0; smart-fills remaining pts on focus */}
         <div className="flex items-center gap-1 shrink-0">
           <input
-            className="w-16 border border-gray-300 rounded px-2 py-1 text-sm text-center"
+            className="w-16 border border-border-strong rounded px-2 py-1 text-sm text-center"
             type="number"
             min={0}
             value={criterion.pts === 0 ? '' : criterion.pts}
@@ -133,42 +141,49 @@ function CriterionEditor({ criterion, remainingPts, onChange, onDelete }: Criter
             }}
             onChange={e => onChange({ ...criterion, pts: Math.max(0, parseInt(e.target.value || '0', 10) || 0) })}
           />
-          <span className="text-xs text-gray-500">pts</span>
+          <span className="text-xs text-muted">{t('forms.pts')}</span>
         </div>
-        <button type="button" onClick={onDelete} className="text-red-500 hover:text-red-700 text-xs px-1">✕</button>
+        <button
+          type="button"
+          onClick={onDelete}
+          className="text-red hover:text-red-text px-1"
+          aria-label={t('forms.criterion.deleteAriaLabel')}
+        >
+          <X className="w-3.5 h-3.5" />
+        </button>
       </div>
 
       <textarea
-        className="w-full border border-gray-300 rounded px-2 py-1 text-sm resize-none"
+        className="w-full border border-border-strong rounded px-2 py-1 text-sm resize-none"
         rows={2}
-        placeholder="Descrição e instruções para o avaliador"
+        placeholder={t('forms.criterion.descriptionPlaceholder')}
         value={criterion.description}
         onChange={e => onChange({ ...criterion, description: e.target.value })}
       />
 
-      <div className="flex gap-4 items-center text-xs text-gray-600">
+      <div className="flex gap-4 items-center text-xs text-muted">
         <label className="flex items-center gap-1">
           <input
             type="checkbox"
             checked={criterion.allows_na}
             onChange={e => onChange({ ...criterion, allows_na: e.target.checked })}
           />
-          Permite N/A
+          {t('forms.criterion.allowsNa')}
         </label>
         <label className="flex items-center gap-2">
-          Nota máx:
+          {t('forms.criterion.maxScore')}
           <input
             type="number"
             min={1}
             max={10}
-            className="w-12 border border-gray-300 rounded px-1 py-0.5 text-center"
+            className="w-12 border border-border-strong rounded px-1 py-0.5 text-center"
             value={criterion.max_score}
             onChange={e => onChange({ ...criterion, max_score: Number(e.target.value) })}
           />
         </label>
         <input
-          className="flex-1 border border-gray-300 rounded px-2 py-0.5"
-          placeholder="applies_when (opcional)"
+          className="flex-1 border border-border-strong rounded px-2 py-0.5"
+          placeholder={t('forms.criterion.appliesWhenPlaceholder')}
           value={criterion.applies_when ?? ''}
           onChange={e => onChange({ ...criterion, applies_when: e.target.value || null })}
         />
@@ -186,6 +201,7 @@ interface DimensionEditorProps {
 }
 
 function DimensionEditor({ dim, onChange, onDelete }: DimensionEditorProps) {
+  const { t } = useTranslation('evaluation')
   const critSum = sum(dim.criteria.map(c => c.pts))
 
   const addCriterion = () => {
@@ -227,15 +243,15 @@ function DimensionEditor({ dim, onChange, onDelete }: DimensionEditorProps) {
       {/* Dimension header */}
       <div className="flex gap-2 items-center">
         <input
-          className="flex-1 border border-gray-300 rounded px-2 py-1 text-sm font-medium"
-          placeholder="Nome da dimensão"
+          className="flex-1 border border-border-strong rounded px-2 py-1 text-sm font-medium"
+          placeholder={t('forms.dimension.namePlaceholder')}
           value={dim.label}
           onChange={e => onChange({ ...dim, label: e.target.value })}
         />
         {/* Pts input — re-equalises criteria whenever total changes */}
         <div className="flex items-center gap-1 shrink-0">
           <input
-            className="w-16 border border-gray-300 rounded px-2 py-1 text-sm text-center font-medium"
+            className="w-16 border border-border-strong rounded px-2 py-1 text-sm text-center font-medium"
             type="number"
             min={0}
             max={TOTAL_PTS}
@@ -249,17 +265,19 @@ function DimensionEditor({ dim, onChange, onDelete }: DimensionEditorProps) {
               onChange({ ...dim, pts: newPts, criteria: newCriteria })
             }}
           />
-          <span className="text-xs text-gray-500">pts</span>
+          <span className="text-xs text-muted">{t('forms.pts')}</span>
         </div>
         <button
           type="button"
           onClick={() => {
-            if (!confirm(`Remover dimensão "${dim.label || 'sem nome'}" e todos os seus critérios?`)) return
+            const label = dim.label || t('forms.dimension.unnamed')
+            if (!confirm(t('forms.dimension.confirmDelete', { label }))) return
             onDelete()
           }}
-          className="text-red-400 hover:text-red-600 text-xs px-2"
+          className="text-red hover:text-red-text text-xs px-2"
         >
-          ✕ Dimensão
+          <X className="w-3.5 h-3.5 inline mr-1" aria-hidden="true" />
+          {t('forms.dimension.deleteLabel')}
         </button>
       </div>
 
@@ -286,9 +304,9 @@ function DimensionEditor({ dim, onChange, onDelete }: DimensionEditorProps) {
         <button
           type="button"
           onClick={addCriterion}
-          className={`text-xs border rounded px-2 py-1 ${critError ? 'text-red-600 hover:text-red-800 border-red-300' : 'text-blue-600 hover:text-blue-800 border-blue-300'}`}
+          className={`text-xs border rounded px-2 py-1 ${critError ? 'text-red-text hover:text-red-text/80 border-red/30' : 'text-primary hover:text-primary-dark border-primary/30'}`}
         >
-          + Critério
+          {t('forms.dimension.addCriterion')}
         </button>
         {dim.criteria.length > 0 && <SumBadge current={critSum} total={dim.pts} />}
       </div>
@@ -305,9 +323,11 @@ interface FormDetailProps {
   onNew:         () => void
   onDirtyChange: (dirty: boolean) => void
   onCancel:      () => void   // called when user cancels a new-form creation
+  triggerNew:    number       // increment to programmatically trigger startNew()
 }
 
-function FormDetail({ form, adminToken, onSaved, onNew, onDirtyChange, onCancel }: FormDetailProps) {
+function FormDetail({ form, adminToken, onSaved, onNew, onDirtyChange, onCancel, triggerNew }: FormDetailProps) {
+  const { t } = useTranslation('evaluation')
   const { tenantId: TENANT } = useAuth()
   const [editing, setEditing] = useState<WForm | null>(null)
   const [isDirty, setIsDirty] = useState(false)
@@ -363,6 +383,11 @@ function FormDetail({ form, adminToken, onSaved, onNew, onDirtyChange, onCancel 
     onNew()
   }
 
+  // Sidebar "+ New Form" button increments triggerNew to call startNew()
+  useEffect(() => {
+    if (triggerNew > 0) startNew()
+  }, [triggerNew]) // eslint-disable-line react-hooks/exhaustive-deps
+
   const save = async () => {
     if (!editing) return
     setSaving(true)
@@ -385,7 +410,7 @@ function FormDetail({ form, adminToken, onSaved, onNew, onDirtyChange, onCancel 
 
   const archive = async () => {
     if (!editing?.form_id) return
-    if (!confirm('Arquivar este formulário?')) return
+    if (!confirm(t('forms.detail.archiveConfirm'))) return
     setSaving(true)
     try {
       await deleteForm(editing.form_id, adminToken)
@@ -425,10 +450,10 @@ function FormDetail({ form, adminToken, onSaved, onNew, onDirtyChange, onCancel 
 
   if (!editing) {
     return (
-      <div className="flex-1 flex flex-col items-center justify-center text-gray-400 gap-4">
-        <p>Selecione um formulário ou crie um novo</p>
-        <button onClick={startNew} className="bg-primary text-white px-4 py-2 rounded text-sm hover:bg-blue-800">
-          + Novo Formulário
+      <div className="flex-1 flex flex-col items-center justify-center text-muted-light gap-4">
+        <p>{t('forms.detail.empty')}</p>
+        <button onClick={startNew} className="bg-primary text-white px-4 py-2 rounded text-sm hover:bg-primary-dark">
+          {t('forms.create')}
         </button>
       </div>
     )
@@ -446,28 +471,28 @@ function FormDetail({ form, adminToken, onSaved, onNew, onDirtyChange, onCancel 
       {/* Header */}
       <div className="flex items-center gap-3 p-4 border-b bg-white">
         <input
-          className="flex-1 text-lg font-semibold border-b border-transparent hover:border-gray-300 focus:border-primary outline-none py-0.5"
-          placeholder="Nome do formulário"
+          className="flex-1 text-lg font-semibold border-b border-transparent hover:border-border-strong focus:border-primary outline-none py-0.5"
+          placeholder={t('forms.detail.namePlaceholder')}
           value={editing.name}
           onChange={e => updateEditing({ ...editing, name: e.target.value })}
         />
         <StatusBadge status={editing.status} />
         {/* Total pts pill */}
-        <span className="text-xs font-medium bg-gray-100 text-gray-600 px-3 py-1 rounded-full">
-          Total: {TOTAL_PTS} pts
+        <span className="text-xs font-medium bg-surface-alt text-muted px-3 py-1 rounded-full">
+          {t('forms.detail.totalPts', { total: TOTAL_PTS })}
         </span>
         {/* + Novo / Cancelar: when creating a new form, show Cancelar instead */}
         {editing.form_id === '' ? (
           <button
             type="button"
             onClick={() => { setEditing(null); setIsDirty(false); onDirtyChange(false); onCancel() }}
-            className="text-xs text-gray-500 hover:text-gray-700 border rounded px-2 py-1"
+            className="text-xs text-muted hover:text-dark border rounded px-2 py-1"
           >
-            Cancelar
+            {t('forms.detail.cancel')}
           </button>
         ) : (
-          <button type="button" onClick={startNew} className="text-xs text-gray-500 hover:text-gray-700 border rounded px-2 py-1">
-            + Novo
+          <button type="button" onClick={startNew} className="text-xs text-muted hover:text-dark border rounded px-2 py-1">
+            {t('forms.detail.newBtn')}
           </button>
         )}
         {/* Descartar — reloads from last saved state */}
@@ -475,57 +500,64 @@ function FormDetail({ form, adminToken, onSaved, onNew, onDirtyChange, onCancel 
           <button
             type="button"
             onClick={() => { setEditing(apiToWorking(form)); setIsDirty(false); onDirtyChange(false) }}
-            className="text-xs text-gray-500 hover:text-gray-700 border rounded px-2 py-1"
+            className="text-xs text-muted hover:text-dark border rounded px-2 py-1"
           >
-            Descartar
+            {t('forms.detail.discard')}
           </button>
         )}
         {editing.form_id && (
-          <button type="button" onClick={archive} className="text-xs text-red-500 hover:text-red-700 border border-red-200 rounded px-2 py-1">
-            Arquivar
+          <button type="button" onClick={archive} className="text-xs text-red hover:text-red-text border border-red/30 rounded px-2 py-1">
+            {t('forms.detail.archive')}
           </button>
         )}
         <button
           type="button"
           onClick={save}
           disabled={saving || hasFormErrors}
-          title={hasFormErrors ? 'Corrija os erros de pontuação antes de salvar' : undefined}
-          className="bg-primary text-white text-sm px-4 py-1.5 rounded hover:bg-blue-800 disabled:opacity-40 disabled:cursor-not-allowed"
+          title={hasFormErrors ? t('forms.detail.saveErrorTooltip') : undefined}
+          className="bg-primary text-white text-sm px-4 py-1.5 rounded hover:bg-primary-dark disabled:opacity-40 disabled:cursor-not-allowed"
         >
-          {saving ? 'Salvando…' : 'Salvar'}
+          {saving ? t('forms.saving') : t('forms.save')}
         </button>
       </div>
 
       {/* Form-level errors banner */}
       {hasFormErrors && (
-        <div className="bg-red-50 border-b border-red-200 text-red-700 text-xs px-4 py-2 flex gap-3 flex-wrap">
+        <div className="bg-red-light border-b border-red/30 text-red-text text-xs px-4 py-2 flex gap-3 flex-wrap">
           {dimSumError && (
-            <span>⚠ Dimensões somam <strong>{dimSum}</strong> pts (esperado: {TOTAL_PTS} pts)</span>
+            <span dangerouslySetInnerHTML={{ __html: t('forms.errors.dimSum', { dimSum, total: TOTAL_PTS }).replace(
+              String(dimSum), `<strong>${dimSum}</strong>`
+            )}} />
           )}
-          {critSumErrors.map(d => (
-            <span key={d.dimension_id}>
-              ⚠ "{d.label || 'Dimensão sem nome'}": critérios somam <strong>{sum(d.criteria.map(c => c.pts))}</strong> pts (esperado: {d.pts} pts)
-            </span>
-          ))}
+          {critSumErrors.map(d => {
+            const critSum = sum(d.criteria.map(c => c.pts))
+            return (
+              <span key={d.dimension_id} dangerouslySetInnerHTML={{ __html: t('forms.errors.critSum', {
+                label:   d.label || t('forms.dimension.unnamed'),
+                critSum,
+                dimPts:  d.pts,
+              }).replace(String(critSum), `<strong>${critSum}</strong>`) }} />
+            )
+          })}
         </div>
       )}
-      {error && <div className="bg-red-50 text-red-700 text-sm px-4 py-2">{error}</div>}
+      {error && <div className="bg-red-light text-red-text text-sm px-4 py-2">{error}</div>}
 
       {/* Body */}
       <div className="flex-1 overflow-y-auto p-4 space-y-4">
         <textarea
-          className="w-full border border-gray-300 rounded px-3 py-2 text-sm resize-none"
+          className="w-full border border-border-strong rounded px-3 py-2 text-sm resize-none"
           rows={2}
-          placeholder="Descrição do formulário"
+          placeholder={t('forms.detail.descriptionPlaceholder')}
           value={editing.description}
           onChange={e => updateEditing({ ...editing, description: e.target.value })}
         />
 
-        <div className="flex gap-4 items-center text-sm text-gray-600">
+        <div className="flex gap-4 items-center text-sm text-muted">
           <label className="flex items-center gap-2">
-            Namespace do conhecimento:
+            {t('forms.detail.knowledgeNamespace')}
             <input
-              className="border border-gray-300 rounded px-2 py-1 text-sm w-48"
+              className="border border-border-strong rounded px-2 py-1 text-sm w-48"
               placeholder="evaluation_policies"
               value={editing.knowledge_namespace ?? ''}
               onChange={e => updateEditing({ ...editing, knowledge_namespace: e.target.value || null })}
@@ -541,7 +573,9 @@ function FormDetail({ form, adminToken, onSaved, onNew, onDirtyChange, onCancel 
           {/* Dimensions header */}
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-3">
-              <h3 className={`font-semibold ${dimSumError ? 'text-red-700' : 'text-gray-700'}`}>Dimensões</h3>
+              <h3 className={`font-semibold ${dimSumError ? 'text-red-text' : 'text-dark'}`}>
+                {t('forms.dimensions')}
+              </h3>
               {editing.dimensions.length > 0 && (
                 <SumBadge current={dimSum} total={TOTAL_PTS} />
               )}
@@ -549,9 +583,9 @@ function FormDetail({ form, adminToken, onSaved, onNew, onDirtyChange, onCancel 
             <button
               type="button"
               onClick={addDimension}
-              className="text-xs text-primary hover:text-blue-800 border border-blue-300 rounded px-2 py-1"
+              className="text-xs text-primary hover:text-primary-dark border border-primary/30 rounded px-2 py-1"
             >
-              + Dimensão
+              {t('forms.addDimension')}
             </button>
           </div>
 
@@ -565,8 +599,8 @@ function FormDetail({ form, adminToken, onSaved, onNew, onDirtyChange, onCancel 
           ))}
 
           {editing.dimensions.length === 0 && (
-            <p className="text-sm text-gray-400 text-center py-4">
-              Clique em "+ Dimensão" para adicionar dimensões ao formulário
+            <p className="text-sm text-muted-light text-center py-4">
+              {t('forms.detail.noDimensions')}
             </p>
           )}
         </div>
@@ -578,49 +612,65 @@ function FormDetail({ form, adminToken, onSaved, onNew, onDirtyChange, onCancel 
 // ── FormsPage ─────────────────────────────────────────────────────────────────
 
 export default function FormsPage() {
+  const { t } = useTranslation('evaluation')
   const { tenantId: TENANT } = useAuth()
   const [adminToken, setAdminToken] = useState('')
   const { forms, loading, reload }  = useForms(TENANT)
   const [selected, setSelected]     = useState<EvaluationForm | null>(null)
   const [isDirty,  setIsDirty]      = useState(false)
+  const [triggerNew, setTriggerNew] = useState(0)
 
   // Block React Router navigation while there are unsaved changes
   const blocker = useBlocker(isDirty)
   useEffect(() => {
     if (blocker.state === 'blocked') {
-      if (confirm('Há alterações não salvas. Descartar e sair?')) {
+      if (confirm(t('forms.blocker.discardAndLeave'))) {
         blocker.proceed()
       } else {
         blocker.reset()
       }
     }
-  }, [blocker])
+  }, [blocker, t])
 
   // Guard function: ask before discarding unsaved changes on sidebar click
   const handleSelectForm = (f: EvaluationForm) => {
     if (isDirty) {
-      if (!confirm('Há alterações não salvas. Descartar e abrir outro formulário?')) return
+      if (!confirm(t('forms.blocker.discardAndOpen'))) return
     }
     setSelected(f)
     setIsDirty(false)
   }
 
+  // "+ New Form" button in sidebar — guard dirty state then delegate to FormDetail
+  const handleNewFormRequest = () => {
+    if (isDirty && !confirm(t('forms.blocker.discardAndOpen'))) return
+    setSelected(null)
+    setIsDirty(false)
+    setTriggerNew(n => n + 1)
+  }
+
   return (
     <div className="flex h-full">
       {/* Sidebar */}
-      <aside className="w-72 border-r flex flex-col bg-gray-50">
-        <div className="p-3 border-b">
+      <aside className="w-72 border-r flex flex-col bg-surface-muted">
+        <div className="p-3 border-b flex gap-2">
           <input
-            className="w-full border border-gray-300 rounded px-2 py-1 text-xs"
+            className="flex-1 border border-border-strong rounded px-2 py-1 text-xs"
             type="password"
-            placeholder="Admin token"
+            placeholder={t('forms.sidebar.adminToken')}
             value={adminToken}
             onChange={e => setAdminToken(e.target.value)}
           />
+          <button
+            onClick={handleNewFormRequest}
+            className="bg-primary text-white text-xs px-2 py-1 rounded hover:bg-primary-dark"
+          >
+            {t('forms.detail.newBtn')}
+          </button>
         </div>
 
         <div className="flex-1 overflow-y-auto p-2 space-y-1">
-          {loading && <p className="text-sm text-gray-400 p-2">Carregando…</p>}
+          {loading && <p className="text-sm text-muted-light p-2">{t('loading')}</p>}
           {forms.map(f => (
             <button
               key={f.form_id}
@@ -628,17 +678,17 @@ export default function FormsPage() {
               className={`w-full text-left px-3 py-2 rounded text-sm transition-colors ${
                 selected?.form_id === f.form_id
                   ? 'bg-primary text-white'
-                  : 'hover:bg-gray-200 text-gray-700'
+                  : 'hover:bg-border text-dark'
               }`}
             >
               <div className="font-medium truncate">{f.name}</div>
               <div className="text-xs opacity-70">
-                {(f.dimensions ?? []).length} dimensões · {f.status}
+                {t('forms.sidebar.dimensionCount', { count: (f.dimensions ?? []).length })} · {t(`forms.${f.status}`, f.status)}
               </div>
             </button>
           ))}
           {!loading && forms.length === 0 && (
-            <p className="text-xs text-gray-400 text-center py-6">Nenhum formulário criado ainda</p>
+            <p className="text-xs text-muted-light text-center py-6">{t('forms.sidebar.noForms')}</p>
           )}
         </div>
       </aside>
@@ -651,6 +701,7 @@ export default function FormsPage() {
         onNew={() => setSelected(null)}
         onDirtyChange={setIsDirty}
         onCancel={() => setSelected(null)}
+        triggerNew={triggerNew}
       />
     </div>
   )

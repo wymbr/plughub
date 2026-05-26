@@ -201,6 +201,7 @@ async def trigger_workflow(
         flow_id=body.flow_id,
         session_id=body.session_id,
         trigger_type=body.trigger_type,
+        journey_id=instance.get("journey_id"),
     )
 
     return instance
@@ -297,6 +298,7 @@ async def persist_suspend(
         current_step=body.step_id,
         suspend_reason=body.reason,
         resume_expires_at=resume_expires_at,
+        journey_id=instance.get("journey_id"),
     )
 
     return {"resume_expires_at": resume_expires_at, "instance": updated}
@@ -377,6 +379,7 @@ async def resume_workflow(
         resumed_from=current_step,
         next_step="__pending_engine__",   # engine resolves after resumeContext is processed
         wait_duration_ms=wait_ms,
+        journey_id=instance.get("journey_id"),
     )
 
     return {
@@ -429,6 +432,7 @@ async def complete_workflow(
         flow_id=instance["flow_id"],
         outcome=body.outcome,
         duration_ms=duration_ms,
+        journey_id=instance.get("journey_id"),
     )
 
     return updated
@@ -464,6 +468,7 @@ async def fail_workflow(
         flow_id=instance["flow_id"],
         current_step=instance.get("current_step"),
         error=body.error,
+        journey_id=instance.get("journey_id"),
     )
 
     return updated
@@ -533,6 +538,7 @@ async def cancel_instance(
         flow_id=instance["flow_id"],
         cancelled_by=body.cancelled_by,
         reason=body.reason,
+        journey_id=instance.get("journey_id"),
     )
 
     return updated

@@ -1,5 +1,7 @@
 # Módulo: mcp-server-plughub
 
+> Última atualização: 2026-05-25 · Estado: Arc 16
+
 > Pacote: `mcp-server-plughub` (serviço)
 > Runtime: Node 20+, TypeScript
 > Transporte: SSE sobre HTTP, porta 3100
@@ -40,9 +42,9 @@ A escolha de SSE em vez de stdio é intencional: o servidor precisa atender múl
 
 | Dependência | Uso |
 |---|---|
-| Redis | Estado de instâncias de agente, fila de pools, insights de sessão |
-| Kafka | Eventos de ciclo de vida (`agent.lifecycle`), conclusão de conversa (`conversations.events`) |
-| Agent Registry | Validação de `agent_type_id` no `agent_login` |
+| Redis | Estado de instâncias de agente, fila de pools, insights de sessão, ContextStore, estado de participantes AI |
+| Kafka | Eventos de ciclo de vida (`agent.lifecycle`), `agent.done`, auditoria de MCP (`mcp.audit`) |
+| Agent Registry | Validação de `agent_type_id` no `agent_login`, resolução de `mentionable_pools` |
 
 ### Dependências de código
 
@@ -54,9 +56,28 @@ zod                    ← validação de input
 
 ---
 
+## Interceptação MCP
+
+Toda chamada de tool de domínio é interceptada antes de chegar ao domain MCP server:
+
+- **Agentes nativos (SDK)** — `McpInterceptor` in-process (`@plughub/sdk`), sem hop de rede.
+- **Agentes externos (LangGraph, CrewAI)** — proxy sidecar em `localhost:7422` (loopback only).
+
+Por chamada (< 1ms): validação de permissão (decode local do JWT) → injection guard (13+ padrões regex heurísticos) → registro de auditoria publicado no tópico Kafka `mcp.audit` (`AuditRecordSchema`, fire-and-forget). A política de auditoria é definida por tool, não por chamada — o caller não pode optar por sair (LGPD). As tools de Journey, `agent_event` e demais tools que tocam sistemas/estado de negócio passam todas pelo `McpInterceptor`.
+
+---
+
 ## Grupos de Tools
 
-O servidor expõe 22 tools organizadas em cinco grupos com consumidores distintos.
+O servidor expõe um conjunto amplo de tools (bem além das 22 originais) organizadas por consumidor. Além dos grupos clássicos (BPM, Agent Runtime, Evaluation, Supervisor, External Agent), o servidor expõe hoje:
+
+- **Journey (Arc 10/16)** — `journey_start`, `journey_link_session`, `journey_merge`, `journey_list_suspended`, `journey_resume`, `journey_check_pending`, `journey_context_get`, `journey_context_set`. Cobrem início de processo, vinculação de sessões `collect`, merge/split, padrão de poller Tier 1 e leitura/escrita do namespace `journey.*` do ContextStore.
+- **Agent Business Events (Arc 12)** — `agent_event(category, value, tags?)`: agentes (AI e humanos) publicam KPIs de negócio estruturados durante sessões → Kafka `agent.events`. Categoria hierárquica `pool_id.skill_id.metric_key`; namespace isolado pelo `pool_id` da sessão; tags com PII bloqueadas; rate limit por sessão.
+- **Operacionais (grupo `operational`)** — `queue_context_get`, `pool_status_get`, `system_availability_check`. Leem o snapshot de pool gravado pelo Routing Engine no Redis (`{tenant}:pool:{pool_id}:snapshot`, TTL 120s).
+- **Avaliação Arc 13** — `evaluation_threads_get` (lê threads de contestação por instância), `evaluation_pre_review_submit` (gate de qualidade pré-publicação), `evaluation_review_submit` (árbitro pós-contestação por dimensão).
+- **`notification_send`** — entrega de mensagem unidirecional ao cliente (Core → Channel Gateway). Substitui o step `notify`, depreciado no Arc 16 (`invoke: notification_send`). Aplica injection guard sobre o conteúdo.
+
+As subseções abaixo descrevem em detalhe os cinco grupos originais.
 
 ### Grupo 1: BPM (4 tools)
 
@@ -200,8 +221,8 @@ Chave: {tenant_id}:agent:conversations:{instance_id}  (Set) → UUIDs de convers
 3. Transição de estado pós-conclusão:
    - `current_sessions == 0` e estado não `paused` → `ready`
    - estado `draining` e `current_sessions == 0` → deleta instância e token do Redis
-4. Publica em `conversations.events`: evento `conversation_completed`
-5. Publica em `agent.lifecycle`: evento `agent_done`
+4. Publica em `agent.lifecycle`: evento `agent_done`
+5. Conclusão de conversa publicada em `agent.done` (consumida por Rules Engine e Analytics)
 
 #### `insight_register` — spec 3.4a
 
@@ -577,24 +598,27 @@ Todas as tools de Agent Runtime e Supervisor usam JWT. O fluxo:
 | `agent_ready` | `agent.lifecycle` | `agent_ready` |
 | `agent_busy` | `agent.lifecycle` | `agent_busy` |
 | `agent_done` | `agent.lifecycle` | `agent_done` |
-| `agent_done` | `conversations.events` | `conversation_completed` |
 | `agent_pause` | `agent.lifecycle` | `agent_pause` |
 | `agent_logout` | `agent.lifecycle` | `agent_logout` |
 | `agent_heartbeat` | `agent.lifecycle` | `agent_heartbeat` |
+| `agent_event` | `agent.events` | evento de negócio estruturado (Arc 12) |
+| tools de domínio interceptadas | `mcp.audit` | `AuditRecord` (fire-and-forget) |
 
-#### Schema do evento `conversation_completed` (conversations.events)
+> O ciclo de conclusão de atendimento é sinalizado em `agent.done` — consumido por Rules Engine e Analytics. O tópico legado `conversations.events` não é mais usado; a conclusão de conversa é publicada em `agent.done` pelo Routing Engine (e pelo orchestrator-bridge para agentes nativos / YAML-fallback).
+
+#### Schema do evento `agent_done` (agent.done)
 
 ```typescript
 {
-  event:          "conversation_completed"
-  tenant_id:      string
-  instance_id:    string
+  event:           "agent_done"
+  tenant_id:       string
+  instance_id:     string
   conversation_id: string
-  outcome:        "resolved" | "escalated_human" | "transferred_agent" | "callback"
-  issue_status:   IssueSchema[]
-  handoff_reason: string | undefined
-  completed_at:   ISO datetime
-  timestamp:      ISO datetime
+  outcome:         "resolved" | "escalated_human" | "transferred_agent" | "callback"
+  issue_status:    IssueSchema[]
+  handoff_reason:  string | undefined
+  completed_at:    ISO datetime
+  timestamp:       ISO datetime
 }
 ```
 

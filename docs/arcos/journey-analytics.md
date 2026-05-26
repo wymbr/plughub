@@ -1,5 +1,7 @@
 # Journey Analytics — Modelo de Dados e Drill-down
 
+> ⚠️ OBSOLETO — esta proposta de modelagem analítica (4 níveis journey→contato→sessão→turno) NÃO foi adotada. O Arc 10 implementado usa journey→session→segment com o tópico journey.events e a tabela ClickHouse journey_events. Ver arc10-journey.md. Documento mantido apenas como referência histórica.
+
 > Status: **Proposta de modelagem analítica — validar com time de Analytics e com Arc 10 (Journey)**
 > Último update: Maio 2026
 > Escopo: tabelas ClickHouse, endpoints de relatório, KPIs e drill-down nos quatro níveis hierárquicos

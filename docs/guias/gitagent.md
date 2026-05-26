@@ -1,5 +1,7 @@
 # GitAgent — Ciclo de vida completo
 
+> Última atualização: 2026-05-25 · Estado: Arc 16
+
 > Guia transversal: envolve `sdk`, `schemas`, `skill-flow-engine` e `agent-registry`
 > Spec de referência: seções 4.6e, 4.6h, 4.6i, 4.6k
 

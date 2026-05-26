@@ -1,5 +1,7 @@
 # Guia: Padrões de Webhook
 
+> Última atualização: 2026-05-25 · Estado: Arc 16
+
 > Audience: desenvolvedores e integradores que conectam sistemas externos ao PlugHub
 
 Existem dois padrões distintos de uso de webhook na plataforma. Cada um serve a um caso de uso diferente e usa endpoints diferentes. Entender qual aplicar evita confusão de design.
@@ -234,6 +236,34 @@ steps:
 ```
 
 Cada `collect` abre e fecha sua própria sessão de canal de forma independente. O ContextStore preserva todo o estado entre eles.
+
+### `requires` — negociação de canal por capacidade (Arc 16 Fase D)
+
+A partir do Arc 16, o campo `channel` no step `collect` passou a ser **opcional**.
+Em vez de fixar o canal, o `collect` pode declarar quais capacidades são necessárias
+via `requires`, e o Channel Gateway seleciona o canal outbound com base na matriz de
+capacidades por canal e no contexto da Journey (`journey.available_channels`,
+`journey.canal_preferido`):
+
+```yaml
+- id: coletar_documento
+  type: collect
+  requires: [file_upload, text]    # canal escolhido pelo Channel Gateway
+  output_as: anexo_cliente
+  on_response: { next: validar_documento }
+  on_timeout:  { next: escalar }
+```
+
+Valores aceitos em `requires`: `text`, `audio`, `video`, `file_upload`,
+`masked_input`, `rich_menu`. Usar `channel` explícito continua válido para forçar
+um canal específico.
+
+### Nota: `notify` como step type está depreciado (Arc 16)
+
+O step type `notify` foi **depreciado** no Arc 16 — use `invoke: notification_send`
+para enviar mensagens unidirecionais ao cliente. O sub-campo `notify` dentro do step
+`suspend` **permanece válido** (preservado por atomicidade) e não é afetado por esta
+depreciação.
 
 ---
 

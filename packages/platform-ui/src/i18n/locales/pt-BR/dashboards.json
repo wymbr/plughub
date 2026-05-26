@@ -44,5 +44,80 @@
     "pie":   "Pizza",
     "table": "Tabela",
     "tile":  "KPI tile"
+  },
+  "modal": {
+    "title":   "Adicionar card",
+    "cancel":  "Cancelar",
+    "back":    "← Voltar",
+    "next":    "Próximo →",
+    "addCard": "Adicionar card",
+    "steps": {
+      "1": "Escolher métrica",
+      "2": "Visualização",
+      "3": "Configurar"
+    },
+    "metric": {
+      "heading":  "O que você quer ver?",
+      "subtitle": "Escolha a métrica que este card vai exibir."
+    },
+    "visualization": {
+      "heading":  "Como você quer ver?",
+      "subtitle": "Visualizações disponíveis para"
+    },
+    "configure": {
+      "heading":          "Configurar card",
+      "subtitle":         "Defina o título e qualquer filtro fixo para este card.",
+      "cardTitle":        "Título do card",
+      "fixedFilters":     "Filtros fixos",
+      "fixedFiltersHint": "— deixe em branco para usar os filtros globais do dashboard",
+      "selectPlaceholder":"— selecione —",
+      "loadingOptions":   "Carregando opções…",
+      "periodNoteLabel":  "Período e tenant",
+      "periodNoteBody":   "são sempre controlados pelos filtros globais do dashboard — não precisam ser configurados aqui."
+    }
+  },
+  "filters": {
+    "heading":           "Filtros",
+    "add":               "+ Adicionar",
+    "none":              "Nenhum filtro configurado",
+    "remove":            "Remover filtro",
+    "clearFilters":      "Limpar filtros",
+    "clear":             "↺ Limpar",
+    "all":               "Todos",
+    "optionsLabel":      "Opções (separadas por vírgula)",
+    "optionsPlaceholder":"Ex: pool_a, pool_b",
+    "labels": {
+      "date_from": "De",
+      "date_to":   "Até",
+      "pool_id":   "Pool"
+    },
+    "presets": {
+      "date_range":    { "label": "Período (De / Até)" },
+      "pool_selector": { "label": "Pool" }
+    }
+  },
+  "catalog": {
+    "session-volume":          { "label": "Volume de Sessões",             "description": "Número de sessões por período de tempo" },
+    "handle-time":             { "label": "Tempo Médio de Atendimento",    "description": "Tempo médio de atendimento por período" },
+    "evaluation-score":        { "label": "Nota Média de Avaliação",       "description": "Nota média de avaliação por período" },
+    "sessions-by-pool":        { "label": "Sessões por Pool",              "description": "Volume de sessões agrupado por pool" },
+    "outcome-distribution":    { "label": "Distribuição de Outcomes",      "description": "Proporção de resolvidos, escalados e abandonados" },
+    "pool-status":             { "label": "Status dos Pools",              "description": "Disponibilidade, fila e SLA dos pools operacionais" },
+    "agent-performance":       { "label": "Performance de Agents",         "description": "Taxa de resolução e escalação por tipo de agent" },
+    "kpi-sessions":            { "label": "KPI: Total de Sessões",         "description": "Total de sessões no período com tendência" },
+    "kpi-resolution":          { "label": "KPI: Taxa de Resolução",        "description": "Taxa de resolução com variação vs período anterior" },
+    "kpi-score":               { "label": "KPI: Nota Média",               "description": "Nota média de avaliação com variação percentual" },
+    "journey-active-count":    { "label": "KPI: Jornadas Ativas",          "description": "Total de jornadas com status ativo e tendência vs período anterior" },
+    "journey-resolution-rate": { "label": "Taxa de Resolução por Jornada", "description": "Percentual de jornadas concluídas por skill (apenas jornadas finalizadas)" },
+    "journey-funnel":          { "label": "Funil de Jornadas",             "description": "Distribuição de jornadas por status (ativa, suspensa, concluída, falha)" },
+    "journey-median-duration": { "label": "Duração Mediana de Jornadas",   "description": "Duração mediana (p50) em minutos por skill para jornadas finalizadas" },
+    "agent-event-timeseries":  { "label": "Eventos de Negócio (Série)",    "description": "Volume diário e valor médio de eventos de negócio publicados por agentes AI/humanos" },
+    "agent-event-summary":     { "label": "Eventos de Negócio (Resumo)",   "description": "Total de eventos por dimensão (categoria, skill, pool ou tipo de agente)" },
+    "params": {
+      "pool_id":  { "label": "Pool (fixo)",         "placeholder": "Ex: retencao_humano" },
+      "skill_id": { "label": "Skill (fixo)",        "placeholder": "Ex: skill_portabilidade_v1" },
+      "category": { "label": "Categoria de evento", "placeholder": "Ex: retencao_humano.skill_portabilidade_v1.nps" },
+      "group_by": { "label": "Agrupar por",         "placeholder": "category | skill_id | pool_id | agent_type_id" }
+    }
   }
 }

@@ -16,6 +16,8 @@
 
 import React, { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { useTranslation } from "react-i18next";
+import { Timer, MessageSquare } from "lucide-react";
 import { ContactSession } from "../types";
 
 function formatElapsed(ms: number): string {
@@ -32,19 +34,20 @@ function formatElapsed(ms: number): string {
 // Scale: satisfied (≥0.3) · neutral (-0.3–0.3) · frustrated (-0.6– -0.3) · angry (<-0.6)
 interface SentimentInfo { emoji: string; label: string; cls: string }
 
-function sentimentInfo(score: number): SentimentInfo {
-  if (score >= 0.3)  return { emoji: "😊", label: "Satisfeito", cls: "text-green-700 bg-green-50 border-green-200" };
-  if (score >= -0.3) return { emoji: "😐", label: "Neutro",     cls: "text-gray-500 bg-gray-50 border-gray-200" };
-  if (score >= -0.6) return { emoji: "😤", label: "Frustrado",  cls: "text-orange-600 bg-orange-50 border-orange-200" };
-  return             { emoji: "😡", label: "Irritado",   cls: "text-red-600 bg-red-50 border-red-200" };
+function sentimentInfo(score: number, t: (key: string) => string): SentimentInfo {
+  if (score >= 0.3)  return { emoji: "😊", label: t('actionBar.sentiment.satisfied'),  cls: "text-green-text bg-green-light border-green/30" };
+  if (score >= -0.3) return { emoji: "😐", label: t('actionBar.sentiment.neutral'),    cls: "text-muted bg-surface border-border" };
+  if (score >= -0.6) return { emoji: "😤", label: t('actionBar.sentiment.frustrated'), cls: "text-contested-text bg-contested-light border-contested/30" };
+  return             { emoji: "😡", label: t('actionBar.sentiment.angry'),     cls: "text-red-text bg-red-light border-red/30" };
 }
 
 const SentimentChip: React.FC<{ score: number }> = ({ score }) => {
-  const { emoji, label, cls } = sentimentInfo(score);
+  const { t } = useTranslation('agentAssist');
+  const { emoji, label, cls } = sentimentInfo(score, t);
   return (
     <span
       className={`flex items-center gap-1 px-2 py-0.5 rounded-full border text-xs font-medium flex-shrink-0 ${cls}`}
-      title={`Sentimento: ${label} (${score.toFixed(2)})`}
+      title={t('actionBar.sentimentTitle', { label, score: score.toFixed(2) })}
     >
       {emoji} {label}
     </span>
@@ -64,38 +67,40 @@ function replySlaLevel(waitMs: number, limitMs: number): ReplySlaLevel {
 }
 
 const REPLY_SLA_CLS: Record<ReplySlaLevel, string> = {
-  ok:      "text-green-700 bg-green-50 border-green-200",
-  warning: "text-amber-700 bg-amber-50 border-amber-200 font-semibold",
-  breach:  "text-red-700 bg-red-50 border-red-200 font-bold animate-pulse",
+  ok:      "text-green-text bg-green-light border-green/30",
+  warning: "text-warning-text bg-warning-light border-warning/30 font-semibold",
+  breach:  "text-red-text bg-red-light border-red font-bold animate-pulse",
 };
 
 const ReplySlaChip: React.FC<{
-  lastCustomerMessageAt: Date;
-  maxReplyTimeMs:        number;
-}> = ({ lastCustomerMessageAt, maxReplyTimeMs }) => {
+  startedAt:     number;
+  maxReplyTimeMs:number;
+}> = ({ startedAt, maxReplyTimeMs }) => {
   const [nowMs, setNowMs] = useState(Date.now());
   useEffect(() => {
     const id = setInterval(() => setNowMs(Date.now()), 1_000);
     return () => clearInterval(id);
   }, []);
 
-  const waitMs  = nowMs - lastCustomerMessageAt.getTime();
+  const waitMs  = nowMs - startedAt;
   const level   = replySlaLevel(waitMs, maxReplyTimeMs);
   const elapsed = formatElapsed(waitMs);
   const limitFmt = formatElapsed(maxReplyTimeMs);
 
+  const { t } = useTranslation('agentAssist');
   return (
     <span
       className={`flex items-center gap-1 px-2 py-0.5 rounded-full border text-xs flex-shrink-0 ${REPLY_SLA_CLS[level]}`}
-      title={`Resposta: ${elapsed} / limite ${limitFmt}`}
+      title={t('actionBar.replySlaTitle', { elapsed, limit: limitFmt })}
     >
-      💬 {elapsed}
+      <MessageSquare className="w-3 h-3" aria-hidden="true" /> {elapsed}
     </span>
   );
 };
 
 // ── Handle-time counter ───────────────────────────────────────────────────────
 const HandleTimer: React.FC<{ startedAt: Date }> = ({ startedAt }) => {
+  const { t } = useTranslation('agentAssist');
   const [ms, setMs] = useState(Date.now() - startedAt.getTime());
   useEffect(() => {
     const id = setInterval(() => setMs(Date.now() - startedAt.getTime()), 1_000);
@@ -104,11 +109,11 @@ const HandleTimer: React.FC<{ startedAt: Date }> = ({ startedAt }) => {
 
   return (
     <span
-      className={`text-xs font-mono tabular-nums font-semibold
-        ${ms >= 30 * 60_000 ? "text-orange-600" : "text-gray-500"}`}
-      title="Tempo de atendimento"
+      className={`flex items-center gap-1 text-xs font-mono tabular-nums font-semibold
+        ${ms >= 30 * 60_000 ? "text-warning" : "text-muted"}`}
+      title={t('actionBar.handleTimeTitle')}
     >
-      ⏱ {formatElapsed(ms)}
+      <Timer className="w-3 h-3" aria-hidden="true" /> {formatElapsed(ms)}
     </span>
   );
 };
@@ -121,6 +126,7 @@ const TransferCombo: React.FC<{
   contact:     ContactSession;
   onTransferTo: (poolId: string) => void;
 }> = ({ contact, onTransferTo }) => {
+  const { t } = useTranslation('agentAssist');
   const [dropPos, setDropPos] = useState<DropPos | null>(null);
   const btnRef  = useRef<HTMLButtonElement>(null);
   const dropRef = useRef<HTMLDivElement>(null);
@@ -152,57 +158,57 @@ const TransferCombo: React.FC<{
         ref={btnRef}
         onClick={toggle}
         disabled={contact.sessionClosed}
-        title="Transferir para outro pool"
+        title={t('actionBar.transfer')}
         className="px-2.5 py-1 rounded text-xs font-medium border transition-colors
-          text-amber-700 bg-amber-50 border-amber-200 hover:bg-amber-100 hover:border-amber-300
+          text-warning-text bg-warning-light border-warning/30 hover:bg-warning/20 hover:border-warning/50
           disabled:opacity-40 disabled:cursor-not-allowed"
       >
-        ↗ Transferir {escalations.length > 0 ? "▾" : ""}
+        ↗ {t('actionBar.transfer')} {escalations.length > 0 ? "▾" : ""}
       </button>
 
       {open && dropPos && createPortal(
         <div
           ref={dropRef}
           style={{ position: "fixed", top: dropPos.top, left: dropPos.left }}
-          className="z-[9999] bg-white border border-gray-200 rounded-lg shadow-xl
+          className="z-dropdown bg-white border border-border rounded-lg shadow-modal
             min-w-[200px] overflow-hidden"
         >
-          <div className="px-2.5 py-1.5 text-[10px] font-bold text-gray-400 uppercase tracking-wide border-b border-gray-100">
-            Transferir para
+          <div className="px-2.5 py-1.5 text-2xs font-bold text-muted uppercase tracking-wide border-b border-border">
+            {t('actionBar.transferTo')}
           </div>
 
           {escalations.length === 0 ? (
-            <div className="px-3 py-2.5 text-xs text-gray-400 text-center">
-              Sem destinos disponíveis
+            <div className="px-3 py-2.5 text-xs text-muted text-center">
+              {t('actionBar.noDestinations')}
             </div>
           ) : (
             escalations.map(esc => (
               <button
                 key={esc.pool_id}
                 onClick={() => { onTransferTo(esc.pool_id); setDropPos(null); }}
-                className="w-full text-left px-3 py-2 hover:bg-amber-50 transition-colors
-                  border-b border-gray-50 last:border-0"
+                className="w-full text-left px-3 py-2 hover:bg-warning-light transition-colors
+                  border-b border-border last:border-0"
               >
                 <div className="flex items-center justify-between">
-                  <span className="text-xs font-semibold text-gray-800">
+                  <span className="text-xs font-semibold text-dark">
                     {esc.pool_id.replace(/_humano|_ia|_v\d+/gi, "").replace(/_/g, " ")}
                   </span>
                   {esc.recommended && (
-                    <span className="text-[9px] px-1.5 py-0.5 rounded bg-green-100
-                      text-green-700 border border-green-200 font-medium ml-2">
-                      ✓ Recomendado
+                    <span className="text-micro px-1.5 py-0.5 rounded bg-green-light
+                      text-green-text border border-green/30 font-medium ml-2">
+                      {t('actionBar.recommended')}
                     </span>
                   )}
                 </div>
-                <div className="text-[10px] text-gray-500 mt-0.5 flex gap-2">
+                <div className="text-2xs text-muted mt-0.5 flex gap-2">
                   {esc.reason && <span className="truncate">{esc.reason}</span>}
                   {esc.estimated_wait_s != null && esc.estimated_wait_s > 0 && (
-                    <span className="flex-shrink-0 text-gray-400">
-                      ~{Math.round(esc.estimated_wait_s / 60)}min espera
+                    <span className="flex-shrink-0 text-muted-light">
+                      {t('actionBar.waitEstimate', { min: Math.round(esc.estimated_wait_s / 60) })}
                     </span>
                   )}
                 </div>
-                <div className="text-[9px] text-gray-400 font-mono mt-0.5">
+                <div className="text-micro text-muted-light font-mono mt-0.5">
                   {esc.pool_id}
                 </div>
               </button>
@@ -215,84 +221,9 @@ const TransferCombo: React.FC<{
   );
 };
 
-// ── Iniciar Processo dropdown (Arc 10 Phase D) ────────────────────────────────
-const IniciarProcessoButton: React.FC<{
-  skills:    string[];
-  disabled?: boolean;
-  onSelect:  (skillId: string) => void;
-}> = ({ skills, disabled, onSelect }) => {
-  const [dropPos, setDropPos] = useState<DropPos | null>(null);
-  const btnRef  = useRef<HTMLButtonElement>(null);
-  const dropRef = useRef<HTMLDivElement>(null);
-  const open    = dropPos !== null;
-
-  useEffect(() => {
-    if (!open) return;
-    function handle(e: MouseEvent) {
-      const t = e.target as Node;
-      if (btnRef.current?.contains(t) || dropRef.current?.contains(t)) return;
-      setDropPos(null);
-    }
-    document.addEventListener("mousedown", handle);
-    return () => document.removeEventListener("mousedown", handle);
-  }, [open]);
-
-  if (skills.length === 0) return null;
-
-  function toggle() {
-    if (open) { setDropPos(null); return; }
-    if (btnRef.current) {
-      const r = btnRef.current.getBoundingClientRect();
-      setDropPos({ top: r.bottom + 4, left: r.left });
-    }
-  }
-
-  return (
-    <div className="flex-shrink-0">
-      <button
-        ref={btnRef}
-        onClick={toggle}
-        disabled={disabled}
-        title="Iniciar um processo (Journey) vinculado a esta sessão"
-        className="px-2.5 py-1 rounded text-xs font-medium border transition-colors
-          text-blue-700 bg-blue-50 border-blue-200 hover:bg-blue-100 hover:border-blue-300
-          disabled:opacity-40 disabled:cursor-not-allowed"
-      >
-        🗺️ Processo ▾
-      </button>
-      {open && dropPos && createPortal(
-        <div
-          ref={dropRef}
-          style={{ position: "fixed", top: dropPos.top, left: dropPos.left }}
-          className="z-[9999] bg-white border border-gray-200 rounded-lg shadow-xl
-            min-w-[180px] overflow-hidden"
-        >
-          <div className="px-2.5 py-1.5 text-[10px] font-bold text-gray-400 uppercase tracking-wide border-b border-gray-100">
-            Iniciar processo
-          </div>
-          {skills.map(skillId => (
-            <button
-              key={skillId}
-              onClick={() => { onSelect(skillId); setDropPos(null); }}
-              className="w-full text-left px-3 py-2 text-xs text-gray-700 hover:bg-blue-50
-                hover:text-blue-700 transition-colors border-b border-gray-50 last:border-0"
-            >
-              {skillId.replace(/^skill_|_v\d+$/g, '').replace(/_/g, ' ')}
-              <div className="text-[10px] text-gray-400 font-mono mt-0.5">{skillId}</div>
-            </button>
-          ))}
-        </div>,
-        document.body
-      )}
-    </div>
-  );
-};
-
 // ── Props ─────────────────────────────────────────────────────────────────────
 export interface ActionBarProps {
   contact:                  ContactSession | null;
-  /** Timestamp of the last customer message — used for the reply-SLA chip */
-  lastCustomerMessageAt?:   Date | null;
   onEncerrar:               () => void;
   /** Called when operator selects a pool from the TransferCombo */
   onTransferTo?:            (poolId: string) => void;
@@ -300,33 +231,32 @@ export interface ActionBarProps {
   /**
    * substitutionMode / onToggleSubstitutionMode: kept in props so the parent's
    * state and menu-card rendering still work. The toggle button lives in
-   * Aba Agentes (Fase C) — not rendered here.
+   * Aba Ações (console-acoes-tab) — not rendered here.
    */
   substitutionMode?:        boolean;
   onToggleSubstitutionMode?: () => void;
-  mentionableJourneys?:     string[];
-  onIniciarProcesso?:       (skillId: string) => void;
+  // Removed (console-acoes-tab): mentionableJourneys + onIniciarProcesso
+  // → Processes fully covered by Aba Ações (right panel Processos mode).
   // Removed (Fase E): mentionableAgents, onAddSpecialist, selectedCount, onDelegar
-  // → fully covered by Aba Agentes (right panel Seção B).
+  // → Agents fully covered by Aba Ações (right panel Agentes mode).
 }
 
 // ── Main component ─────────────────────────────────────────────────────────────
 export const ActionBar: React.FC<ActionBarProps> = ({
   contact,
-  lastCustomerMessageAt,
   onEncerrar,
   onTransferTo,
   onDesligar,
   // substitutionMode and onToggleSubstitutionMode intentionally unused here —
-  // button lives in Aba Agentes (Fase C).
-  mentionableJourneys = [],
-  onIniciarProcesso,
+  // button lives in Aba Ações (console-acoes-tab).
 }) => {
+  const { t } = useTranslation('agentAssist');
+
   if (!contact) {
     return (
       <div className="flex-1 bg-white flex items-center px-4 gap-2">
-        <span className="text-sm text-gray-300 select-none">—</span>
-        <span className="text-xs text-gray-400">Selecione um contato para iniciar o atendimento</span>
+        <span className="text-sm text-muted-light select-none">—</span>
+        <span className="text-xs text-muted">{t('actionBar.selectContact')}</span>
       </div>
     );
   }
@@ -335,18 +265,18 @@ export const ActionBar: React.FC<ActionBarProps> = ({
 
   return (
     <div className={`flex-1 flex items-center gap-2 px-3
-      ${contact.sessionClosed ? "bg-amber-50" : "bg-white"}`}
+      ${contact.sessionClosed ? "bg-warning-light" : "bg-white"}`}
     >
       {/* ── Handle timer ── */}
       <HandleTimer startedAt={contact.sessionStartedAt} />
 
-      {/* ── Reply-SLA chip — customer waiting + pool has reply limit ── */}
+      {/* ── Reply-SLA chip — only shown while timer is counting + pool has reply limit ── */}
       {!contact.sessionClosed
-        && (lastCustomerMessageAt ?? contact.lastCustomerMessageAt)
+        && contact.responseTimer.status === 'counting'
         && contact.maxReplyTimeMs
         && (
           <ReplySlaChip
-            lastCustomerMessageAt={(lastCustomerMessageAt ?? contact.lastCustomerMessageAt)!}
+            startedAt={contact.responseTimer.startedAt}
             maxReplyTimeMs={contact.maxReplyTimeMs}
           />
         )
@@ -358,7 +288,7 @@ export const ActionBar: React.FC<ActionBarProps> = ({
       )}
 
       {/* ── Divider ── */}
-      <div className="w-px h-5 bg-gray-200 flex-shrink-0 mx-1" />
+      <div className="w-px h-5 bg-border flex-shrink-0 mx-1" />
 
       {/* ── Action buttons ── */}
       <div className="flex items-center gap-1.5 flex-shrink-0">
@@ -373,22 +303,15 @@ export const ActionBar: React.FC<ActionBarProps> = ({
         <button
           onClick={onDesligar}
           disabled={contact.sessionClosed}
-          title="Desligar chamada"
+          title={t('input.hangup')}
           className="px-2.5 py-1 rounded text-xs font-medium border transition-colors
-            text-red-700 bg-red-50 border-red-200 hover:bg-red-100 hover:border-red-300
+            text-red-text bg-red-light border-red/30 hover:bg-red/10 hover:border-red/50
             disabled:opacity-40 disabled:cursor-not-allowed"
         >
-          📵 Desligar
+          {t('input.hangup')}
         </button>
 
-        {/* Iniciar Processo (Arc 10 Phase D) */}
-        {onIniciarProcesso && mentionableJourneys.length > 0 && (
-          <IniciarProcessoButton
-            skills={mentionableJourneys}
-            disabled={contact.sessionClosed}
-            onSelect={onIniciarProcesso}
-          />
-        )}
+        {/* Iniciar Processo removed — moved to Aba Ações (console-acoes-tab) */}
       </div>
 
       {/* ── Spacer ── */}
@@ -396,19 +319,19 @@ export const ActionBar: React.FC<ActionBarProps> = ({
 
       {/* ── Session-closed banner ── */}
       {contact.sessionClosed && (
-        <span className="text-xs text-amber-700 font-medium">
-          ⚠️ Sessão encerrada
+        <span className="text-xs text-warning-text font-medium">
+          {t('actionBar.sessionClosed')}
         </span>
       )}
 
       {/* ── Encerrar ── */}
       <button
         onClick={onEncerrar}
-        title="Encerrar atendimento e registrar desfecho"
+        title={t('input.close')}
         className="ml-2 px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors flex-shrink-0
-          bg-red-600 text-white hover:bg-red-700 border border-red-700 shadow-sm"
+          bg-red text-white hover:bg-red-text border border-red shadow-card"
       >
-        Encerrar
+        {t('input.close')}
       </button>
     </div>
   );

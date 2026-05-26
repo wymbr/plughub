@@ -1,5 +1,7 @@
 # Arc 5 — ContactSegment Analytics
 
+> Última atualização: 2026-05-25 · Estado: Arc 16
+>
 > Full reference for the ContactSegment data model, ClickHouse schema, and analytics endpoints.
 > See CLAUDE.md for architectural summary.
 

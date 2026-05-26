@@ -9,6 +9,7 @@
  * Write operations require an admin token (same pattern as NamespaceEditor).
  */
 import React, { useState, useCallback } from 'react'
+import { useTranslation } from 'react-i18next'
 import { useAuth } from '@/auth/useAuth'
 import {
   useNamespace,
@@ -18,19 +19,6 @@ import {
 import Spinner from '@/components/ui/Spinner'
 
 const NS = 'competency_skills'
-
-const DOMAIN_HINTS: Record<number, string> = {
-  0: 'Não requerido',
-  1: 'Mínimo',
-  2: 'Básico',
-  3: 'Básico',
-  4: 'Intermediário',
-  5: 'Intermediário',
-  6: 'Bom',
-  7: 'Avançado',
-  8: 'Avançado',
-  9: 'Especialista',
-}
 
 // ── helpers ────────────────────────────────────────────────────────────────────
 
@@ -46,6 +34,7 @@ function getDomain(value: unknown): number {
 // ── DomainBar — visual 0-9 pip bar ────────────────────────────────────────────
 
 function DomainBar({ value }: { value: number }) {
+  const { t } = useTranslation('configRecursos')
   return (
     <div className="flex items-center gap-1.5">
       <div className="flex gap-0.5">
@@ -53,15 +42,17 @@ function DomainBar({ value }: { value: number }) {
           <div
             key={i}
             className={`w-2 h-4 rounded-sm transition-colors ${
-              i < value ? 'bg-primary' : 'bg-gray-200'
+              i < value ? 'bg-primary' : 'bg-border'
             }`}
           />
         ))}
       </div>
-      <span className="text-xs font-mono font-bold text-gray-700 w-5 text-right">
+      <span className="text-xs font-mono font-bold text-dark w-5 text-right">
         {value}
       </span>
-      <span className="text-[10px] text-gray-400">{DOMAIN_HINTS[value]}</span>
+      <span className="text-2xs text-muted-light">
+        {t(`competencySkills.domainHints.${value}`)}
+      </span>
     </div>
   )
 }
@@ -75,6 +66,7 @@ function DomainSlider({
   value: number
   onChange: (v: number) => void
 }) {
+  const { t } = useTranslation('configRecursos')
   return (
     <div className="flex items-center gap-3 flex-1">
       <input
@@ -84,10 +76,12 @@ function DomainSlider({
         step={1}
         value={value}
         onChange={e => onChange(Number(e.target.value))}
-        className="flex-1 max-w-[160px] accent-primary"
+        className="flex-1 max-w-40 accent-primary"
       />
-      <span className="text-xs font-mono font-bold text-gray-700 w-5">{value}</span>
-      <span className="text-[10px] text-gray-400">{DOMAIN_HINTS[value]}</span>
+      <span className="text-xs font-mono font-bold text-dark w-5">{value}</span>
+      <span className="text-2xs text-muted-light">
+        {t(`competencySkills.domainHints.${value}`)}
+      </span>
     </div>
   )
 }
@@ -96,6 +90,7 @@ function DomainSlider({
 
 const SkillsPage: React.FC = () => {
   const { session } = useAuth()
+  const { t } = useTranslation('configRecursos')
   const tenantId = session?.tenantId ?? ''
 
   const { entries, loading, error: loadError, reload } = useNamespace(tenantId, NS)
@@ -125,13 +120,13 @@ const SkillsPage: React.FC = () => {
 
   const handleAddSave = useCallback(async () => {
     const key = newKey.trim()
-    if (!key) { setOpError('Key obrigatória'); return }
+    if (!key) { setOpError(t('competencySkills.keyRequired')); return }
     if (!/^[a-z0-9_]+$/.test(key)) {
-      setOpError('Key: apenas letras minúsculas, dígitos e _')
+      setOpError(t('competencySkills.keyInvalid'))
       return
     }
-    if (entries[key]) { setOpError(`Key "${key}" já existe`); return }
-    if (!adminToken) { setOpError('Admin token obrigatório para salvar'); return }
+    if (entries[key]) { setOpError(t('competencySkills.keyExists', { key })); return }
+    if (!adminToken) { setOpError(t('competencySkills.adminRequired')); return }
     setSaving(true); setOpError(null)
     try {
       await putConfig(NS, key, { domain: newDomain }, null, adminToken)
@@ -142,7 +137,7 @@ const SkillsPage: React.FC = () => {
     } finally {
       setSaving(false)
     }
-  }, [newKey, newDomain, adminToken, entries, reload])
+  }, [newKey, newDomain, adminToken, entries, reload, t])
 
   const handleEditStart = (key: string) => {
     setEditDomain(getDomain(entries[key]?.value))
@@ -152,7 +147,7 @@ const SkillsPage: React.FC = () => {
   }
 
   const handleEditSave = useCallback(async (key: string) => {
-    if (!adminToken) { setOpError('Admin token obrigatório para salvar'); return }
+    if (!adminToken) { setOpError(t('competencySkills.adminRequired')); return }
     setSaving(true); setOpError(null)
     try {
       await putConfig(NS, key, { domain: editDomain }, null, adminToken)
@@ -163,11 +158,11 @@ const SkillsPage: React.FC = () => {
     } finally {
       setSaving(false)
     }
-  }, [editDomain, adminToken, reload])
+  }, [editDomain, adminToken, reload, t])
 
   const handleDelete = useCallback(async (key: string) => {
-    if (!adminToken) { setOpError('Admin token obrigatório para excluir'); return }
-    if (!window.confirm(`Remover competency skill "${key}"?`)) return
+    if (!adminToken) { setOpError(t('competencySkills.adminRequiredDelete')); return }
+    if (!window.confirm(t('competencySkills.confirmDelete', { key }))) return
     setDeletingKey(key); setOpError(null)
     try {
       await deleteConfig(NS, key, null, adminToken)
@@ -177,57 +172,61 @@ const SkillsPage: React.FC = () => {
     } finally {
       setDeletingKey(null)
     }
-  }, [adminToken, reload])
+  }, [adminToken, reload, t])
 
   // ── render ────────────────────────────────────────────────────────────────────
 
   return (
     <div className="flex flex-col gap-4">
       {/* Info banner */}
-      <div className="bg-blue-50 border border-blue-200 rounded px-4 py-2.5 text-sm text-blue-800">
-        Competency skills são usadas no roteamento estático — agentes e pools declaram
-        um nível (0-9) por skill. Armazenadas em{' '}
-        <code className="font-mono text-xs bg-blue-100 px-1 rounded">competency_skills</code>{' '}
-        na Config API.
+      <div className="bg-info-light border border-info/30 rounded px-4 py-2.5 text-sm text-info-text">
+        {t('competencySkills.infoBanner', {
+          defaultValue:
+            'Competency skills are used in static routing — agents and pools declare a level (0-9) per skill. Stored in competency_skills in the Config API.',
+        })}
       </div>
 
       {/* Controls row */}
       <div className="flex items-center gap-3 flex-wrap">
-        <label className="text-xs font-semibold text-gray-600 shrink-0">Admin Token</label>
+        <label className="text-xs font-semibold text-muted shrink-0">
+          {t('competencySkills.adminToken')}
+        </label>
         <input
           type="password"
           value={adminToken}
           onChange={e => setAdminToken(e.target.value)}
-          placeholder="Token para escrita"
-          className="w-52 text-xs font-mono px-2 py-1.5 border border-gray-300 rounded focus:outline-none focus:border-blue-400 bg-white"
+          placeholder={t('competencySkills.adminTokenPlaceholder')}
+          className="w-52 text-xs font-mono px-2 py-1.5 border border-border-strong rounded focus:outline-none focus:border-primary bg-white"
         />
         {!adminToken && (
-          <span className="text-xs text-amber-600">⚠ Defina o admin token para editar</span>
+          <span className="text-xs text-warning">
+            {t('competencySkills.adminTokenWarning')}
+          </span>
         )}
         <button
           onClick={handleAddStart}
           disabled={isAdding}
-          className="ml-auto px-3 py-1.5 text-xs font-semibold bg-primary text-white rounded hover:bg-blue-800 disabled:opacity-40 transition-colors"
+          className="ml-auto px-3 py-1.5 text-xs font-semibold bg-primary text-white rounded hover:bg-primary-dark disabled:opacity-40 transition-colors"
         >
-          + Nova Skill
+          {t('competencySkills.newSkill')}
         </button>
       </div>
 
       {/* Error */}
       {(opError || loadError) && (
-        <div className="bg-red-50 border border-red-300 text-red-700 px-3 py-2 rounded text-xs flex justify-between items-center">
+        <div className="bg-red-light border border-red/30 text-red-text px-3 py-2 rounded text-xs flex justify-between items-center">
           <span>{opError ?? loadError}</span>
           <button onClick={() => setOpError(null)} className="ml-3 font-bold leading-none">✕</button>
         </div>
       )}
 
       {/* Table */}
-      <div className="border border-gray-200 rounded overflow-hidden">
+      <div className="border border-border rounded overflow-hidden">
         {/* Column header */}
-        <div className="flex gap-4 px-4 py-2 bg-gray-50 border-b border-gray-200 text-[10px] font-semibold text-gray-400 uppercase tracking-wide shrink-0">
-          <span className="w-44 shrink-0">Chave</span>
-          <span className="flex-1">Domínio (0-9)</span>
-          <span className="w-28 shrink-0 text-right">Ações</span>
+        <div className="flex gap-4 px-4 py-2 bg-surface-muted border-b border-border text-2xs font-semibold text-muted-light uppercase tracking-wide shrink-0">
+          <span className="w-44 shrink-0">{t('competencySkills.columns.key')}</span>
+          <span className="flex-1">{t('competencySkills.columns.domain')}</span>
+          <span className="w-28 shrink-0 text-right">{t('competencySkills.columns.actions')}</span>
         </div>
 
         {/* Loading */}
@@ -237,28 +236,28 @@ const SkillsPage: React.FC = () => {
 
         {/* Add row */}
         {isAdding && (
-          <div className="flex items-center gap-4 px-4 py-3 border-b border-blue-100 bg-blue-50/40">
+          <div className="flex items-center gap-4 px-4 py-3 border-b border-primary/20 bg-primary-light/40">
             <input
               value={newKey}
               onChange={e => setNewKey(e.target.value.toLowerCase().replace(/[^a-z0-9_]/g, ''))}
-              placeholder="ex: ingles"
+              placeholder={t('competencySkills.keyPlaceholder')}
               autoFocus
-              className="w-44 shrink-0 text-xs font-mono px-2 py-1.5 border border-gray-300 rounded focus:outline-none focus:border-blue-400 bg-white"
+              className="w-44 shrink-0 text-xs font-mono px-2 py-1.5 border border-border-strong rounded focus:outline-none focus:border-primary bg-white"
             />
             <DomainSlider value={newDomain} onChange={setNewDomain} />
             <div className="flex gap-1.5 shrink-0">
               <button
                 onClick={handleAddSave}
                 disabled={saving || !adminToken}
-                className="px-2.5 py-1 text-xs font-semibold bg-primary text-white rounded disabled:opacity-40 hover:bg-blue-800 transition-colors"
+                className="px-2.5 py-1 text-xs font-semibold bg-primary text-white rounded disabled:opacity-40 hover:bg-primary-dark transition-colors"
               >
-                {saving ? '…' : 'Salvar'}
+                {saving ? '…' : t('competencySkills.save')}
               </button>
               <button
                 onClick={() => { setIsAdding(false); setOpError(null) }}
-                className="px-2.5 py-1 text-xs border border-gray-300 rounded text-gray-600 hover:text-gray-900 transition-colors"
+                className="px-2.5 py-1 text-xs border border-border-strong rounded text-muted hover:text-dark transition-colors"
               >
-                Cancelar
+                {t('competencySkills.cancel')}
               </button>
             </div>
           </div>
@@ -266,13 +265,13 @@ const SkillsPage: React.FC = () => {
 
         {/* Empty state */}
         {!loading && sortedKeys.length === 0 && !isAdding && (
-          <div className="px-4 py-8 text-center text-sm text-gray-400">
-            Nenhuma competency skill cadastrada.{' '}
+          <div className="px-4 py-8 text-center text-sm text-muted-light">
+            {t('competencySkills.empty')}{' '}
             <button
               onClick={handleAddStart}
               className="text-primary hover:underline font-medium"
             >
-              + Nova Skill
+              {t('competencySkills.newSkill')}
             </button>
           </div>
         )}
@@ -286,9 +285,9 @@ const SkillsPage: React.FC = () => {
           return (
             <div
               key={key}
-              className="flex items-center gap-4 px-4 py-3 border-b border-gray-100 last:border-0"
+              className="flex items-center gap-4 px-4 py-3 border-b border-border last:border-0"
             >
-              <span className="w-44 shrink-0 text-xs font-mono font-semibold text-gray-700">
+              <span className="w-44 shrink-0 text-xs font-mono font-semibold text-dark">
                 {key}
               </span>
 
@@ -299,15 +298,15 @@ const SkillsPage: React.FC = () => {
                     <button
                       onClick={() => handleEditSave(key)}
                       disabled={saving || !adminToken}
-                      className="px-2.5 py-1 text-xs font-semibold bg-primary text-white rounded disabled:opacity-40 hover:bg-blue-800 transition-colors"
+                      className="px-2.5 py-1 text-xs font-semibold bg-primary text-white rounded disabled:opacity-40 hover:bg-primary-dark transition-colors"
                     >
-                      {saving ? '…' : 'Salvar'}
+                      {saving ? '…' : t('competencySkills.save')}
                     </button>
                     <button
                       onClick={() => { setEditingKey(null); setOpError(null) }}
-                      className="px-2.5 py-1 text-xs border border-gray-300 rounded text-gray-600 hover:text-gray-900 transition-colors"
+                      className="px-2.5 py-1 text-xs border border-border-strong rounded text-muted hover:text-dark transition-colors"
                     >
-                      Cancelar
+                      {t('competencySkills.cancel')}
                     </button>
                   </div>
                 </>
@@ -319,15 +318,15 @@ const SkillsPage: React.FC = () => {
                   <div className="flex gap-1.5 shrink-0">
                     <button
                       onClick={() => handleEditStart(key)}
-                      className="px-2 py-1 text-xs border border-gray-300 rounded text-gray-600 hover:text-gray-900 hover:border-gray-400 transition-colors"
+                      className="px-2 py-1 text-xs border border-border-strong rounded text-muted hover:text-dark hover:border-border transition-colors"
                     >
-                      ✏ Editar
+                      {t('competencySkills.edit')}
                     </button>
                     {adminToken && (
                       <button
                         onClick={() => handleDelete(key)}
                         disabled={isDeleting}
-                        className="px-2 py-1 text-xs border border-red-200 rounded text-red-500 hover:bg-red-50 disabled:opacity-40 transition-colors"
+                        className="px-2 py-1 text-xs border border-red/30 rounded text-red hover:bg-red-light disabled:opacity-40 transition-colors"
                       >
                         {isDeleting ? '…' : '🗑'}
                       </button>

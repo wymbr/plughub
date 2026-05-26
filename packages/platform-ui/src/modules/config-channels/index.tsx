@@ -21,7 +21,7 @@
  * Runtime Settings (Config API): sub-tab only for webchat.
  */
 import React, { useState, useEffect, useCallback } from 'react'
-import PageHeader from '@/components/ui/PageHeader'
+import { useTranslation } from 'react-i18next'
 import ChannelAccountCard from './ChannelAccountCard'
 import WebChatConfigPage  from './WebChatConfigPage'
 import WebhookConfigPage  from './WebhookConfigPage'
@@ -36,13 +36,13 @@ import * as registryApi from '@/api/registry'
 
 type ChannelTab = ChannelEndpointChannel
 
-const CHANNEL_TABS: { id: ChannelTab; label: string; icon: string }[] = [
-  { id: 'webchat',  label: 'WebChat',  icon: '💻' },
-  { id: 'whatsapp', label: 'WhatsApp', icon: '💬' },
-  { id: 'voice',    label: 'Voice',    icon: '📞' },
-  { id: 'email',    label: 'E-mail',   icon: '✉️'  },
-  { id: 'sms',      label: 'SMS',      icon: '📱' },
-  { id: 'webhook',  label: 'Webhook',  icon: '🔗' },
+const CHANNEL_TABS: { id: ChannelTab; icon: string }[] = [
+  { id: 'webchat',  icon: '💻' },
+  { id: 'whatsapp', icon: '💬' },
+  { id: 'voice',    icon: '📞' },
+  { id: 'email',    icon: '✉️'  },
+  { id: 'sms',      icon: '📱' },
+  { id: 'webhook',  icon: '🔗' },
 ]
 
 // Channels rendered without GatewayConfig parent (no API account needed)
@@ -55,24 +55,6 @@ type SubTab = 'accounts' | 'settings'
 
 // ── New integration form ───────────────────────────────────────────────────────
 
-const IDENTIFIER_HINT: Record<string, string> = {
-  webchat:  'URL slug, e.g. "support" → /webchat/support',
-  whatsapp: 'E.164 number, e.g. +5511999999999',
-  voice:    'DID / E.164, e.g. +5511000000',
-  sms:      'Short code or long code, e.g. 55119',
-  email:    'Address, e.g. support@company.com',
-  webhook:  'URL slug, e.g. "salesforce"',
-}
-
-const IDENTIFIER_PLACEHOLDER: Record<string, string> = {
-  webchat:  'support',
-  whatsapp: '+5511999999999',
-  voice:    '+5511000000',
-  sms:      '55119',
-  email:    'support@company.com',
-  webhook:  'salesforce',
-}
-
 interface NewIntegrationFormProps {
   channel:   string
   tenantId:  string
@@ -82,8 +64,9 @@ interface NewIntegrationFormProps {
 }
 
 const NewIntegrationForm: React.FC<NewIntegrationFormProps> = ({ channel, tenantId, pools, onSaved, onCancel }) => {
+  const { t } = useTranslation('channels')
   const meta = CHANNEL_META[channel]
-  const inputCls = 'w-full px-3 py-1.5 text-xs border border-gray-300 rounded-md focus:outline-none focus:border-primary bg-white placeholder-gray-400'
+  const inputCls = 'w-full px-3 py-1.5 text-xs border border-border-strong rounded-md focus:outline-none focus:border-primary bg-white placeholder-muted-light'
 
   // Integration fields
   const [displayName, setDisplayName] = useState(`${meta?.label ?? channel} — ${new Date().getFullYear()}`)
@@ -100,13 +83,12 @@ const NewIntegrationForm: React.FC<NewIntegrationFormProps> = ({ channel, tenant
   const [error,  setError]  = useState<string | null>(null)
 
   async function handleSave() {
-    if (!displayName.trim()) { setError('Display name is required'); return }
-    // Validate endpoint fields if any are partially filled
+    if (!displayName.trim()) { setError(t('errors.displayNameRequired')); return }
     const hasEpData = epIdentifier.trim() || epPoolId || epDisplayName.trim()
     if (hasEpData) {
-      if (!epIdentifier.trim()) { setError('Endpoint identifier is required'); return }
-      if (!epPoolId)             { setError('Endpoint pool is required');       return }
-      if (!epDisplayName.trim()) { setError('Endpoint display name is required'); return }
+      if (!epIdentifier.trim()) { setError(t('errors.endpointIdentifierRequired')); return }
+      if (!epPoolId)             { setError(t('errors.endpointPoolRequired'));       return }
+      if (!epDisplayName.trim()) { setError(t('errors.endpointDisplayNameRequired')); return }
     }
 
     setSaving(true); setError(null)
@@ -119,7 +101,6 @@ const NewIntegrationForm: React.FC<NewIntegrationFormProps> = ({ channel, tenant
         settings:     Object.fromEntries(Object.entries(settings).filter(([, v]) => v !== '')),
       }, tenantId)
 
-      // Create first endpoint if provided
       if (epIdentifier.trim() && epPoolId) {
         await registryApi.createChannelEndpoint({
           channel:           channel as import('@/types').ChannelEndpointChannel,
@@ -139,18 +120,20 @@ const NewIntegrationForm: React.FC<NewIntegrationFormProps> = ({ channel, tenant
     }
   }
 
+  const identifierHint = t(`identifierHints.${channel}`, t('form.identifierHintFallback'))
+
   return (
-    <div className="border border-primary/30 rounded-lg p-4 bg-blue-50/30 space-y-4 mb-4">
+    <div className="border border-primary/30 rounded-lg p-4 bg-primary-light/30 space-y-4 mb-4">
       <p className="text-xs font-semibold text-primary">
-        {meta?.icon} New {meta?.label ?? channel} Integration
+        {meta?.icon} {t('integration.new', { channel: meta?.label ?? channel })}
       </p>
 
       {/* ── Integration name + active ── */}
       <div>
         <div className="flex items-center justify-between mb-1">
-          <label className="text-xs font-medium text-gray-700">Display name</label>
+          <label className="text-xs font-medium text-dark">{t('form.displayName')}</label>
           <div className="flex items-center gap-2">
-            <label className="text-xs font-medium text-gray-700">Active</label>
+            <label className="text-xs font-medium text-dark">{t('form.active')}</label>
             <button
               type="button"
               onClick={() => setActive(v => !v)}
@@ -184,13 +167,13 @@ const NewIntegrationForm: React.FC<NewIntegrationFormProps> = ({ channel, tenant
       {/* ── API credentials ── */}
       {meta && meta.fields.length > 0 && (
         <div>
-          <p className="text-xs font-medium text-gray-600 mb-2">
-            API credentials <span className="text-gray-400">(stored encrypted)</span>
+          <p className="text-xs font-medium text-muted mb-2">
+            {t('integration.credentialsSection')} <span className="text-muted-light">{t('integration.credentialsEncrypted')}</span>
           </p>
           <div className="grid grid-cols-2 gap-3">
             {meta.fields.map(f => (
               <div key={f.key}>
-                <label className="block text-xs font-medium text-gray-700 mb-1">{f.label}</label>
+                <label className="block text-xs font-medium text-dark mb-1">{f.label}</label>
                 <input
                   type={f.sensitive ? 'password' : 'text'}
                   className={`${inputCls} font-mono`}
@@ -208,11 +191,11 @@ const NewIntegrationForm: React.FC<NewIntegrationFormProps> = ({ channel, tenant
       {/* ── Settings ── */}
       {meta && meta.settingFields.length > 0 && (
         <div>
-          <p className="text-xs font-medium text-gray-600 mb-2">Settings</p>
+          <p className="text-xs font-medium text-muted mb-2">{t('integration.settingsSection')}</p>
           <div className="grid grid-cols-2 gap-3">
             {meta.settingFields.map(f => (
               <div key={f.key}>
-                <label className="block text-xs font-medium text-gray-700 mb-1">{f.label}</label>
+                <label className="block text-xs font-medium text-dark mb-1">{f.label}</label>
                 <input
                   type={f.type ?? 'text'}
                   className={inputCls}
@@ -229,62 +212,62 @@ const NewIntegrationForm: React.FC<NewIntegrationFormProps> = ({ channel, tenant
       {/* ── First endpoint ── */}
       {channel !== 'webhook' && (
         <div className="border-t border-primary/10 pt-4">
-          <p className="text-xs font-medium text-gray-700 mb-1">
-            First endpoint
-            <span className="ml-1 text-gray-400 font-normal">— optional, can be added later</span>
+          <p className="text-xs font-medium text-dark mb-1">
+            {t('form.firstEndpoint')}
+            <span className="ml-1 text-muted-light font-normal">{t('form.firstEndpointOptional')}</span>
           </p>
-          <p className="text-[11px] text-gray-400 mb-3">{IDENTIFIER_HINT[channel] ?? 'Channel identifier'}</p>
+          <p className="text-xs text-muted-light mb-3">{identifierHint}</p>
           <div className="grid grid-cols-3 gap-3">
             <div>
-              <label className="block text-xs font-medium text-gray-700 mb-1">Identifier</label>
+              <label className="block text-xs font-medium text-dark mb-1">{t('form.identifier')}</label>
               <input
                 className={`${inputCls} font-mono`}
                 value={epIdentifier}
                 onChange={e => setEpIdentifier(e.target.value)}
-                placeholder={IDENTIFIER_PLACEHOLDER[channel] ?? ''}
+                placeholder={meta?.label ?? channel}
               />
             </div>
             <div>
-              <label className="block text-xs font-medium text-gray-700 mb-1">Pool</label>
+              <label className="block text-xs font-medium text-dark mb-1">{t('form.pool')}</label>
               <select
                 className={inputCls}
                 value={epPoolId}
                 onChange={e => setEpPoolId(e.target.value)}
               >
-                <option value="">— select pool —</option>
+                <option value="">{t('form.selectPool')}</option>
                 {pools.map(p => (
                   <option key={p.pool_id} value={p.pool_id}>{p.pool_id}</option>
                 ))}
               </select>
             </div>
             <div>
-              <label className="block text-xs font-medium text-gray-700 mb-1">Display name</label>
+              <label className="block text-xs font-medium text-dark mb-1">{t('form.displayName')}</label>
               <input
                 className={inputCls}
                 value={epDisplayName}
                 onChange={e => setEpDisplayName(e.target.value)}
-                placeholder="e.g. Technical Support"
+                placeholder={t('form.displayNamePlaceholder')}
               />
             </div>
           </div>
         </div>
       )}
 
-      {error && <p className="text-xs text-red-600">{error}</p>}
+      {error && <p className="text-xs text-red-text">{error}</p>}
 
       <div className="flex gap-2">
         <button
           onClick={handleSave}
           disabled={saving}
-          className="px-3 py-1.5 rounded text-xs font-semibold bg-primary text-white disabled:opacity-40 hover:bg-blue-800 transition-colors"
+          className="px-3 py-1.5 rounded text-xs font-semibold bg-primary text-white disabled:opacity-40 hover:bg-primary-dark transition-colors"
         >
-          {saving ? 'Saving…' : 'Create integration'}
+          {saving ? t('actions.saving') : t('integration.create')}
         </button>
         <button
           onClick={onCancel}
-          className="px-3 py-1.5 rounded text-xs border border-gray-300 text-gray-600 hover:text-gray-900 transition-colors"
+          className="px-3 py-1.5 rounded text-xs border border-border-strong text-muted hover:text-dark transition-colors"
         >
-          Cancel
+          {t('actions.cancel')}
         </button>
       </div>
     </div>
@@ -298,6 +281,7 @@ interface ChannelPanelProps {
 }
 
 const ChannelPanel: React.FC<ChannelPanelProps> = ({ channel }) => {
+  const { t } = useTranslation('channels')
   const { tenantId } = useAuth()
   const [configs,    setConfigs]    = useState<GatewayConfig[]>([])
   const [pools,      setPools]      = useState<Pool[]>([])
@@ -324,16 +308,14 @@ const ChannelPanel: React.FC<ChannelPanelProps> = ({ channel }) => {
 
   useEffect(() => { load() }, [load])
 
-  if (loading) return <p className="text-sm text-gray-400 py-4">Loading…</p>
-  if (error)   return <p className="text-sm text-red-600 py-4">⚠ {error}</p>
+  if (loading) return <p className="text-sm text-muted-light py-4">{t('loading')}</p>
+  if (error)   return <p className="text-sm text-red-text py-4">⚠ {error}</p>
 
   // Webhook: standalone endpoints, no GatewayConfig parent
   if (STANDALONE_CHANNELS.has(channel)) {
     return (
       <div>
-        <p className="text-xs text-gray-500 mb-4">
-          Webhook endpoints do not require API credentials — just configure a URL slug and target pool.
-        </p>
+        <p className="text-xs text-muted mb-4">{t('endpoint.webhookNote')}</p>
         <ChannelEndpointList channel={channel} />
       </div>
     )
@@ -343,7 +325,6 @@ const ChannelPanel: React.FC<ChannelPanelProps> = ({ channel }) => {
 
   return (
     <div className="space-y-3">
-      {/* New integration form */}
       {addingNew && (
         <NewIntegrationForm
           channel={channel}
@@ -354,18 +335,17 @@ const ChannelPanel: React.FC<ChannelPanelProps> = ({ channel }) => {
         />
       )}
 
-      {/* Integration account cards */}
       {configs.length === 0 && !addingNew ? (
-        <div className="text-center py-10 border border-dashed border-gray-200 rounded-lg">
-          <p className="text-sm text-gray-400">{meta?.icon} No {meta?.label ?? channel} integrations configured.</p>
-          <p className="text-xs text-gray-400 mt-1">
-            Create an integration to set up API credentials, then add your phone numbers or addresses as endpoints.
+        <div className="text-center py-10 border border-dashed border-border rounded-lg">
+          <p className="text-sm text-muted-light">
+            {meta?.icon} {t('integration.noConfigurations', { channel: meta?.label ?? channel })}
           </p>
+          <p className="text-xs text-muted-light mt-1">{t('integration.noConfigurationsHint')}</p>
           <button
             onClick={() => setAddingNew(true)}
-            className="mt-3 px-4 py-2 rounded text-xs font-semibold bg-primary text-white hover:bg-blue-800 transition-colors"
+            className="mt-3 px-4 py-2 rounded text-xs font-semibold bg-primary text-white hover:bg-primary-dark transition-colors"
           >
-            + Add {meta?.label ?? channel} integration
+            {t('integration.addFirst', { channel: meta?.label ?? channel })}
           </button>
         </div>
       ) : (
@@ -382,9 +362,9 @@ const ChannelPanel: React.FC<ChannelPanelProps> = ({ channel }) => {
           {!addingNew && (
             <button
               onClick={() => setAddingNew(true)}
-              className="w-full py-2 border border-dashed border-gray-200 rounded-lg text-xs text-gray-400 hover:text-primary hover:border-primary transition-colors"
+              className="w-full py-2 border border-dashed border-border rounded-lg text-xs text-muted-light hover:text-primary hover:border-primary transition-colors"
             >
-              + Add another {meta?.label ?? channel} integration
+              {t('integration.addAnother', { channel: meta?.label ?? channel })}
             </button>
           )}
         </>
@@ -396,6 +376,7 @@ const ChannelPanel: React.FC<ChannelPanelProps> = ({ channel }) => {
 // ── Root component ─────────────────────────────────────────────────────────────
 
 const ConfigChannelsIndex: React.FC = () => {
+  const { t } = useTranslation('channels')
   const [activeChannel, setActiveChannel] = useState<ChannelTab>('webchat')
   const [activeSubTab,  setActiveSubTab]  = useState<SubTab>('accounts')
 
@@ -406,10 +387,8 @@ const ConfigChannelsIndex: React.FC = () => {
 
   return (
     <div>
-      <PageHeader title="Channel Configuration" />
-
       {/* ── Channel selector ── */}
-      <div className="mb-0 border-b border-gray-200 flex gap-6">
+      <div className="mb-0 border-b border-border flex gap-6">
         {CHANNEL_TABS.map(tab => (
           <button
             key={tab.id}
@@ -417,18 +396,18 @@ const ConfigChannelsIndex: React.FC = () => {
             className={`py-3 px-1 font-semibold text-sm transition-colors border-b-2 flex items-center gap-1.5 ${
               activeChannel === tab.id
                 ? 'text-primary border-primary'
-                : 'text-gray-500 border-transparent hover:text-gray-800'
+                : 'text-muted border-transparent hover:text-dark'
             }`}
           >
             <span>{tab.icon}</span>
-            <span>{tab.label}</span>
+            <span>{t(`tabs.${tab.id}`)}</span>
           </button>
         ))}
       </div>
 
       {/* ── Sub-tab (Settings only shown for webchat) ── */}
       {HAS_SETTINGS.has(activeChannel) && (
-        <div className="mt-4 mb-6 flex gap-4 border-b border-gray-100">
+        <div className="mt-4 mb-6 flex gap-4 border-b border-border">
           {(['accounts', 'settings'] as SubTab[]).map(sub => (
             <button
               key={sub}
@@ -436,10 +415,10 @@ const ConfigChannelsIndex: React.FC = () => {
               className={`pb-2 px-1 text-xs font-medium transition-colors border-b-2 ${
                 activeSubTab === sub
                   ? 'text-primary border-primary'
-                  : 'text-gray-500 border-transparent hover:text-gray-800'
+                  : 'text-muted border-transparent hover:text-dark'
               }`}
             >
-              {sub === 'accounts' ? 'Integrations & Endpoints' : 'Runtime Settings'}
+              {t(`subTabs.${sub}`)}
             </button>
           ))}
         </div>

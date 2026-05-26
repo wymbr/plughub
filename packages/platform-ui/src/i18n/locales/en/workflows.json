@@ -127,5 +127,39 @@
     "selectOrCreate": "Select a webhook or create a new one",
     "description": "Webhooks allow external systems (Salesforce, ERP, etc.) to trigger workflows automatically via an authenticated URL.",
     "error": "Error"
+  },
+  "analise": {
+    "title":         "Process Analysis",
+    "groupBy":       "Group by",
+    "refresh":       "↻ Refresh",
+    "exportCsv":     "↓ CSV",
+    "loadError":     "Error loading data:",
+    "empty":         "No workflows in the period",
+    "noTenant":      "No tenant selected.",
+    "groupByOptions": {
+      "flow_id":     "Skill / Flow",
+      "campaign_id": "Campaign"
+    },
+    "kpi": {
+      "triggered":     "Triggered",
+      "completed":     "Completed",
+      "failures":      "Failures + Timeout",
+      "avgCompletion": "Avg. Completion",
+      "avgDuration":   "Avg. Duration",
+      "ofTotal":       "{{pct}} of total"
+    },
+    "table": {
+      "group":        "Group",
+      "distribution": "Distribution",
+      "completion":   "Completion",
+      "failure":      "Failure",
+      "avgDuration":  "Avg. Duration",
+      "triggered":    "Triggered",
+      "completed":    "Completed",
+      "failed":       "Failed",
+      "timeout":      "Timeout",
+      "cancelled":    "Cancelled",
+      "suspended":    "Suspended"
+    }
   }
 }

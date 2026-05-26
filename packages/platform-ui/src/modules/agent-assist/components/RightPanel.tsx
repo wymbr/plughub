@@ -1,25 +1,26 @@
 /**
- * RightPanel — Arc 11 Fase 2 (Fase D)
- * Tab content for Agentes / Contexto / Histórico.
+ * RightPanel — console-acoes-tab (Arc 11 refactor)
+ * Tab content for Ações / Contexto / Histórico.
  * The tab bar is rendered in the shared sub-header row of AgentAssistPage.
  *
- * Fase C: "Estado" tab replaced by "Agentes" tab (AgentesTab).
- * Fase D: ContextoTab enriched:
- *   - IntentFlagsCard — intent.current + flags[] (migrated from EstadoTab)
- *   - ManualTagForm — human agent writes/edits ContextStore tags inline
- *   - sessionId threaded here from AgentAssistPage → ContextoTab
+ * "Agentes" tab renamed to "Ações" (AcoesTab) — unifies agent invite/delegate
+ * and process invocation under a single toggle surface.
  */
 
 import React from "react";
+import { useTranslation } from "react-i18next";
+import { MousePointerClick } from "lucide-react";
 import {
   ActiveTab,
   ChatMessage,
   MentionableAgent,
+  MentionableProcess,
   SupervisorState,
 } from "../types";
-import { AgentesTab }   from "./tabs/AgentesTab";
+import { AcoesTab }    from "./tabs/AcoesTab";
 import { ContextoTab }  from "./tabs/ContextoTab";
 import { HistoricoTab } from "./tabs/HistoricoTab";
+import { useAuth }      from "../../../auth/useAuth";
 
 interface RightPanelProps {
   activeTab:                ActiveTab;
@@ -29,13 +30,14 @@ interface RightPanelProps {
   /** Session ID forwarded to ContextoTab for manual tag writes */
   sessionId?:               string | null;
   sessionMessages?:         ChatMessage[];
-  // ── Agentes tab props ──
+  // ── Ações tab props ──
   agentName:                string;
   substitutionMode:         boolean;
   onToggleSubstitutionMode: () => void;
   mentionableAgents:        MentionableAgent[];
-  onAddSpecialist:          (alias: string, context: string) => void;
-  onDelegar:                () => void;
+  onAddSpecialist:          (alias: string, instruction: string, visibility: "all" | "agents_only") => void;
+  mentionableProcesses:     MentionableProcess[];
+  onStartProcess:           (skillId: string, params: Record<string, string>, visibility: "all" | "agents_only") => void;
   sessionClosed:            boolean;
   onTerminateSegment?:      (instanceId: string) => void;
 }
@@ -52,18 +54,33 @@ export const RightPanel: React.FC<RightPanelProps> = ({
   onToggleSubstitutionMode,
   mentionableAgents,
   onAddSpecialist,
-  onDelegar,
+  mentionableProcesses,
+  onStartProcess,
   sessionClosed,
   onTerminateSegment,
 }) => {
+  const { t } = useTranslation('agentAssist');
+  const { currentUser } = useAuth();
+  const viewerRole = currentUser?.role ?? "operator";
   const context = supervisorState?.customer_context ?? null;
+
+  if (!sessionId) {
+    return (
+      <div className="flex flex-col h-full items-center justify-center gap-3 text-muted-light select-none px-4">
+        <MousePointerClick className="w-7 h-7" aria-hidden="true" />
+        <p className="text-xs text-center leading-snug">
+          {t('rightPanel.selectContact')}
+        </p>
+      </div>
+    );
+  }
 
   return (
     <div className="flex flex-col h-full bg-slate-50 overflow-hidden">
       <div className="flex-1 overflow-hidden relative">
 
-        {activeTab === "agentes" && (
-          <AgentesTab
+        {activeTab === "acoes" && (
+          <AcoesTab
             agentName={agentName}
             supervisorState={supervisorState}
             sessionMessages={sessionMessages}
@@ -72,8 +89,10 @@ export const RightPanel: React.FC<RightPanelProps> = ({
             onToggleSubstitutionMode={onToggleSubstitutionMode}
             mentionableAgents={mentionableAgents}
             onAddSpecialist={onAddSpecialist}
-            onDelegar={onDelegar}
+            mentionableProcesses={mentionableProcesses}
+            onStartProcess={onStartProcess}
             sessionClosed={sessionClosed}
+            hasContact={!!sessionId}
           />
         )}
 
@@ -82,6 +101,7 @@ export const RightPanel: React.FC<RightPanelProps> = ({
             context={context}
             sessionId={sessionId}
             supervisorState={supervisorState}
+            viewerRole={viewerRole}
           />
         )}
 

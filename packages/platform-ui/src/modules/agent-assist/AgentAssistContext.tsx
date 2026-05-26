@@ -35,6 +35,7 @@ import {
   ContactSession,
   PoolConnectionStatus,
   PoolInfo,
+  ResponseTimer,
   Toast,
   WsStatus,
 } from "./types";
@@ -51,20 +52,22 @@ function makeToastId(): string { return `toast-${++toastSeq}`; }
 function makeContact(sessionId: string, poolId: string, channel = "webchat"): ContactSession {
   return {
     sessionId,
-    contactId:             null,
-    customerName:          null,
+    contactId:         null,
+    customerName:      null,
     channel,
     poolId,
-    slaTargetMs:           null,
-    maxReplyTimeMs:        null,
-    messages:              [],
-    supervisorState:       null,
-    capabilities:          null,
-    sessionStartedAt:      new Date(),
-    unreadCount:           0,
-    sessionClosed:         false,
-    pendingCloseModal:     false,
-    lastCustomerMessageAt: null,
+    slaTargetMs:       null,
+    maxReplyTimeMs:    null,
+    messages:          [],
+    supervisorState:   null,
+    capabilities:      null,
+    sessionStartedAt:  new Date(),
+    unreadCount:       0,
+    sessionClosed:     false,
+    pendingCloseModal: false,
+    // Start counting immediately — agent is obligated to initiate regardless of
+    // who sent the first message (rule a from spec).
+    responseTimer:     { status: 'counting', startedAt: Date.now() } satisfies ResponseTimer,
   };
 }
 
@@ -181,7 +184,13 @@ export const AgentAssistProvider: React.FC<{ children: React.ReactNode }> = ({ c
   }, []);
 
   // ── Multi-pool WebSocket ──────────────────────────────────────────────────
-  const { statuses, lastEvent, send, registerSession, unregisterSession } = useMultiPoolWebSocket(activePools);
+  // Pass user identity so the server keys the Redis instance per-user rather
+  // than per-pool, enabling shared capacity across all logged-in pools.
+  const wsUserId       = session?.userId ?? ""
+  const wsMaxConcurrent = session?.maxConcurrentSessions ?? 3
+  const { statuses, lastEvent, send, registerSession, unregisterSession } = useMultiPoolWebSocket(
+    activePools, wsUserId, wsMaxConcurrent
+  );
 
   // ── Multi-contact state ───────────────────────────────────────────────────
   const [contacts, setContacts]           = useState<Map<string, ContactSession>>(new Map());
@@ -315,23 +324,38 @@ export const AgentAssistProvider: React.FC<{ children: React.ReactNode }> = ({ c
         if (c.sessionClosed && msg.author === "customer") return prev;
         const isSelected = sid === selectedSessionRef.current;
 
-        // Track how long the customer has been waiting for a response.
-        // Set lastCustomerMessageAt when a customer message arrives (visibility "all").
-        // Reset to null when the human agent responds — customer is no longer waiting.
-        const isCustomerMsg  = msg.author === "customer" &&
+        // ── Response timer state machine ────────────────────────────────────
+        // counting → agent owes a reply (live orange/red counter)
+        // frozen   → agent replied; green display of how long the reply took
+        //
+        // Rules:
+        //   Customer msg + counting → no change (keep original startedAt)
+        //   Customer msg + frozen   → reset to counting(now)
+        //   Agent reply  + counting → freeze(now - startedAt)
+        //   Agent reply  + frozen   → no change
+        const isCustomerMsg = msg.author === "customer" &&
           (msg.visibility === "all" || msg.visibility === undefined || msg.visibility === null);
-        const isAgentHumanMsg = msg.author === "agent_human";
-        const lastCustomerMessageAt =
-          isCustomerMsg  ? new Date() :
-          isAgentHumanMsg ? null :
-          c.lastCustomerMessageAt;  // unchanged for system/AI messages
+        const isAgentReply =
+          msg.author === "agent_human" ||
+          (msg.author === "agent_ai" &&
+            (msg.visibility === "all" || msg.visibility === undefined || msg.visibility === null));
+
+        let responseTimer = c.responseTimer;
+        if (isCustomerMsg && responseTimer.status === 'frozen') {
+          // rule: customer msg + frozen → zero and restart
+          responseTimer = { status: 'counting', startedAt: Date.now() };
+        } else if (isAgentReply && responseTimer.status === 'counting') {
+          // rule: agent reply + counting → freeze with elapsed time
+          responseTimer = { status: 'frozen', elapsedMs: Date.now() - responseTimer.startedAt };
+        }
+        // all other combinations → no change
 
         const next = new Map(prev);
         next.set(sid, {
           ...c,
-          messages:    [...c.messages, msg],
-          unreadCount: isSelected ? 0 : c.unreadCount + 1,
-          lastCustomerMessageAt,
+          messages:      [...c.messages, msg],
+          unreadCount:   isSelected ? 0 : c.unreadCount + 1,
+          responseTimer,
         });
         return next;
       });
@@ -400,7 +424,7 @@ export const AgentAssistProvider: React.FC<{ children: React.ReactNode }> = ({ c
           // CloseModal — the bridge is running on_human_end hooks and will send
           // session.closed reason="agent_done" when they finish, at which point
           // the contact is removed automatically.
-          next.set(sid, { ...c, sessionClosed: true, pendingCloseModal: false, lastCustomerMessageAt: null });
+          next.set(sid, { ...c, sessionClosed: true, pendingCloseModal: false });
           return next;
         });
         return;

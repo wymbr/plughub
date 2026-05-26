@@ -143,6 +143,9 @@ export const RoutingResultEventSchema = z.object({
   queued:          z.boolean().default(false),
   queue_eta_ms:    z.number().int().nullable().optional(),
   routed_at:       z.string().datetime(),
+  // SLA threshold (ms) of the selected pool — forwarded to analytics so the
+  // sessions table can compute sla_compliance_pct without a Redis lookup.
+  sla_target_ms:   z.number().int().positive().nullable().optional(),
   conference_id:   z.string().nullable().optional(),
   channel_identity: z.record(z.string()).nullable().optional(),
 })

@@ -1,5 +1,6 @@
 # Módulo: skill-flow-engine (@plughub/skill-flow)
 
+> Última atualização: 2026-05-25 · Estado: Arc 16
 > Pacote: `skill-flow-engine` (serviço + biblioteca)
 > Runtime: Node 20+, TypeScript
 > Spec de referência: seções 4.7, 4.7m, 4.7n, 9.5i
@@ -30,18 +31,23 @@ skill-flow-engine/src/
   executor.ts    ← executeStep() — dispatch por tipo de step
   state.ts       ← PipelineStateManager — leitura/escrita no Redis
   steps/
-    task.ts      ← delegação A2A (agent_delegate + polling)
-    choice.ts    ← ramificação condicional (JSONPath)
-    catch.ts     ← retry e fallback
-    escalate.ts  ← escalação para pool via Rules Engine
-    complete.ts  ← encerramento do pipeline
-    invoke.ts    ← chamada direta a tool MCP
-    reason.ts    ← inferência via AI Gateway
-    notify.ts    ← mensagem ao cliente via Notification Agent
-    (menu — step type suspense, retomado externamente via MenuSubmitEvent)
+    task.ts        ← delegação A2A (agent_delegate + polling)
+    choice.ts      ← ramificação condicional (JSONPath)
+    catch.ts       ← retry e fallback
+    escalate.ts    ← escalação para pool via Rules Engine
+    complete.ts    ← encerramento do pipeline
+    invoke.ts      ← chamada direta a tool MCP
+    reason.ts      ← inferência via AI Gateway
+    notify.ts      ← (depreciado no Arc 16 — usar `invoke: notification_send`)
+    menu.ts        ← captura de input do cliente; suspende até resposta
+    suspend.ts     ← suspende o workflow até sinal externo (workflow-api)
+    collect.ts     ← contata um alvo por canal e aguarda resposta
+    resolve.ts     ← acumulação de contexto inline (pipeline de 5 fases)
+    receive.ts     ← suspende aguardando a próxima mensagem do stream
+    transaction.ts ← begin_transaction / end_transaction (bloco atômico de masked input)
 ```
 
-> Nota: o step `menu` suspende o pipeline retornando `awaiting_selection`. A retomada acontece quando o Channel Gateway entrega um `MenuSubmitEvent` normalizado. Não há um `menu.ts` dedicado porque a suspensão é tratada pelo engine principal.
+> Nota: o step `notify` foi depreciado no Arc 16 — mensagens unidirecionais ao cliente devem usar `invoke` com a tool `notification_send`. O sub-campo `notify` dentro de `suspend` permanece válido.
 
 ---
 
@@ -137,7 +143,9 @@ notify message:   "Protocolo {{$.pipeline_state.results.protocolo}} registrado."
 
 ---
 
-## Os 9 Tipos de Step
+## Os 14 Tipos de Step
+
+Os steps a seguir são `task`, `choice`, `catch`, `escalate`, `complete`, `invoke`, `reason`, `notify` (depreciado), `menu`, `suspend`, `collect`, `resolve`, `receive` e o par atômico `begin_transaction`/`end_transaction`.
 
 ### `task` — Delegação A2A
 
@@ -419,9 +427,11 @@ Se o modelo retorna JSON inválido, o AI Gateway tenta correção até `max_form
 
 ---
 
-### `notify` — Mensagem ao Cliente (Unidirecional)
+### `notify` — Mensagem ao Cliente (Unidirecional) — *depreciado*
 
-Envia mensagem ao cliente via Notification Agent. Não aguarda resposta. Para interações que aguardam resposta, use `menu`.
+> ⚠️ Depreciado no Arc 16. Para enviar uma mensagem unidirecional ao cliente, use `invoke` com a tool `notification_send`. O schema abaixo é mantido por compatibilidade.
+
+Envia mensagem ao cliente sem aguardar resposta. Para interações que aguardam resposta, use `menu`.
 
 ```typescript
 {
@@ -482,7 +492,7 @@ Captura input do cliente e **suspende o pipeline** até receber resposta. O Chan
 
 ```
 Engine executa step menu
-  → Envia prompt ao cliente via Notification Agent
+  → Envia prompt ao cliente via Channel Gateway
   → Retorna __awaiting_selection__ ao engine
   → Engine persiste pipeline_state com status "in_progress"
   → Engine retorna (aguarda evento externo)
@@ -510,6 +520,70 @@ O step `menu` só valida formato (comprimento, seleções mínimas). Validação
 // step seguinte valida o negócio
 { id: "validar_cpf", type: "task", target: { skill_id: "skill_validacao_cpf_v1" }, on_failure: "reperguntar_cpf" }
 ```
+
+---
+
+### `suspend` — Suspensão até Sinal Externo
+
+Suspende o workflow até a chegada de um sinal externo. Diferente do `menu` (que aguarda resposta do cliente no canal), o `suspend` aguarda um evento de fora da conversa. É operado pela `workflow-api`.
+
+```typescript
+{
+  id:              string
+  type:            "suspend"
+  reason:          "approval" | "input" | "webhook" | "timer"
+  timeout_hours:   number
+  business_hours?: boolean    // usa a calendar-api para contar só horário útil
+  notify?:         { ... }    // sub-campo notify preservado — mensagem opcional ao suspender
+}
+```
+
+A retomada ocorre via `POST /v1/workflow/resume` na workflow-api, que re-aciona o engine com o `pipeline_state` atualizado.
+
+---
+
+### `collect` — Contato Outbound com Espera
+
+Contata um alvo por um canal e suspende o workflow até a resposta ou o timeout. Cumpre a função de retorno assíncrono dos workflows.
+
+```typescript
+{
+  id:           string
+  type:         "collect"
+  channel?:     string    // canal explícito — opcional desde o Arc 16
+  requires?:    Array<"text"|"audio"|"video"|"file_upload"|"masked_input"|"rich_menu">
+  campaign_id?: string
+  timeout_hours: number
+  on_response:  string
+  on_timeout:   string
+}
+```
+
+Quando `requires` é declarado (Arc 16 Fase D — channel capability negotiation), o `channel` é opcional: o Channel Gateway escolhe o canal de saída pela matriz de capacidades e pela preferência do cliente. Sessões criadas por `collect` recebem o `journey_id` via `collect.events`.
+
+---
+
+### `resolve` — Acumulação de Contexto Inline
+
+Resolve lacunas de contexto via um pipeline inline de 5 fases (verificação de lacuna → CRM → pergunta via LLM → BLPOP → extração via LLM) e escreve no ContextStore. Faz 0 chamadas LLM quando o CRM resolve a lacuna; no máximo 2 quando precisa coletar do cliente.
+
+---
+
+### `receive` — Aguardar Próxima Mensagem do Stream
+
+Suspende o pipeline aguardando a próxima mensagem de qualquer participante no canonical stream — sem enviar prompt ao canal. Implementado via Redis BLPOP em `receive:result:{sid}:{iid}`.
+
+---
+
+### `begin_transaction` / `end_transaction` — Bloco Atômico de Masked Input
+
+Delimitam um bloco atômico de captura de entrada mascarada (PINs, senhas). Os valores capturados ficam no namespace `@masked.*`, in-memory — nunca escritos em Redis, `pipeline_state`, stream ou logs. Em retry, os valores são sempre recoletados, nunca reusados. Ver [`../guias/masked-input.md`](../guias/masked-input.md).
+
+---
+
+## Resolução de Contexto — `@ctx.*` e ContextStore
+
+Além do `pipeline_state.results`, os steps resolvem referências `@ctx.*` contra o ContextStore (hash Redis por sessão). O `StepContext` carrega o `journeyId` quando a sessão pertence a uma Journey: referências `@ctx.journey.*` são redirecionadas para o hash de Journey (`{tenantId}:ctx:journey:{journeyId}`, Arc 16); `@segment.*` isola agentes paralelos. `context_tags.outputs` com prefixo `journey.*` grava no hash da Journey em vez do hash da sessão.
 
 ---
 
@@ -604,5 +678,10 @@ skill-flow-engine
 | step `complete` | ✅ Implementado |
 | step `invoke` | ✅ Implementado |
 | step `reason` | ✅ Implementado |
-| step `notify` | ✅ Implementado |
-| step `menu` — suspensão e retomada via `MenuSubmitEvent` | ⚠️ Suspensão implementada; retomada depende de integração com Channel Gateway |
+| step `notify` | ⚠️ Depreciado (Arc 16) — usar `invoke: notification_send` |
+| step `menu` — suspensão e retomada via `MenuSubmitEvent` | ✅ Implementado — Channel Gateway integrado |
+| step `suspend` | ✅ Implementado |
+| step `collect` (incl. `requires` / capability negotiation) | ✅ Implementado |
+| step `resolve` | ✅ Implementado |
+| step `receive` | ✅ Implementado |
+| step `begin_transaction` / `end_transaction` | ✅ Implementado |

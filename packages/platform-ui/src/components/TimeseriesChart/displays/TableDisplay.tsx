@@ -107,14 +107,14 @@ export function TableDisplay({
   return (
     <div className="overflow-auto" style={{ maxHeight: compact ? height : undefined }}>
       <table className="w-full text-xs border-collapse">
-        <thead className="sticky top-0 bg-gray-50 z-10">
-          <tr className="border-b border-gray-200">
+        <thead className="sticky top-0 bg-surface-muted z-10">
+          <tr className="border-b border-border">
             {columns.map(col => (
               <th
                 key={col.key}
                 onClick={() => toggleSort(col.key === '_label' ? '_bucket' : col.key)}
-                className={`px-2 py-2 text-xs font-semibold text-gray-500 whitespace-nowrap cursor-pointer
-                  select-none hover:text-gray-800 transition-colors
+                className={`px-2 py-2 text-xs font-semibold text-muted whitespace-nowrap cursor-pointer
+                  select-none hover:text-dark transition-colors
                   ${col.isText ? 'text-left' : 'text-right'}`}
               >
                 {col.label}
@@ -127,7 +127,7 @@ export function TableDisplay({
           {displayed.map((row, i) => (
             <tr
               key={i}
-              className="border-b border-gray-100 hover:bg-blue-50/40 transition-colors"
+              className="border-b border-border hover:bg-primary-light/40 transition-colors"
             >
               {columns.map(col => {
                 const rawKey = col.key
@@ -137,8 +137,8 @@ export function TableDisplay({
                     key={rawKey}
                     className={`px-2 py-1.5 ${
                       col.isText
-                        ? 'text-gray-600'
-                        : 'text-right font-mono text-gray-800 tabular-nums'
+                        ? 'text-muted'
+                        : 'text-right font-mono text-dark tabular-nums'
                     }`}
                   >
                     {col.isText ? String(val) : fmt(Number(val ?? 0))}
@@ -151,7 +151,7 @@ export function TableDisplay({
             <tr>
               <td
                 colSpan={columns.length}
-                className="py-6 text-center text-xs text-gray-400"
+                className="py-6 text-center text-xs text-muted-light"
               >
                 Nenhum dado
               </td>

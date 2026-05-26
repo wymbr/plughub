@@ -9,12 +9,15 @@
  * Used by: AnaliseComparacaoPage, AnaliseQualidadePage (TimeseriesView, ComparisonView)
  */
 import React, { useState, useEffect, useRef } from 'react'
+import { useTranslation } from 'react-i18next'
 
 // ── Metric definitions ─────────────────────────────────────────────────────────
 
 export interface MetricDef {
   key:              string
   label:            string
+  /** i18n key for translated label (contacts namespace) */
+  labelKey?:        string
   /** Format the raw backend value (already resolved) for display */
   format:           (v: number | null) => string
   higherIsBetter:   boolean
@@ -25,28 +28,32 @@ export interface MetricDef {
 export const BASE_METRIC_DEFS: MetricDef[] = [
   {
     key:            'evaluation_score',
-    label:          'Nota de Avaliação',
+    label:          'Evaluation Score',
+    labelKey:       'quality.metrics.evaluationScore',
     format:         (v) => v === null ? '—' : `${(v * 100).toFixed(1)}%`,
     higherIsBetter: true,
     color:          '#1B4F8A',
   },
   {
     key:            'resolution_rate',
-    label:          'Taxa de Resolução',
+    label:          'Resolution Rate',
+    labelKey:       'quality.metrics.resolutionRate',
     format:         (v) => v === null ? '—' : `${(v * 100).toFixed(1)}%`,
     higherIsBetter: true,
     color:          '#059669',
   },
   {
     key:            'escalation_rate',
-    label:          'Taxa de Escalação',
+    label:          'Escalation Rate',
+    labelKey:       'quality.metrics.escalationRate',
     format:         (v) => v === null ? '—' : `${(v * 100).toFixed(1)}%`,
     higherIsBetter: false,
     color:          '#DC2626',
   },
   {
     key:            'aht_ms',
-    label:          'TMA (min)',
+    label:          'AHT (min)',
+    labelKey:       'quality.metrics.ahtMin',
     format:         (v) => v === null ? '—' : `${(v / 60000).toFixed(1)}`,
     higherIsBetter: false,
     color:          '#D97706',
@@ -85,6 +92,7 @@ interface MetricSelectorProps {
 }
 
 export function MetricSelector({ selected, onChange, tenantId }: MetricSelectorProps) {
+  const { t } = useTranslation('contacts')
   const [categories,  setCategories]  = useState<string[]>([])
   const [loadingCats, setLoadingCats] = useState(false)
   const [showPicker,  setShowPicker]  = useState(false)
@@ -129,7 +137,7 @@ export function MetricSelector({ selected, onChange, tenantId }: MetricSelectorP
 
   return (
     <div className="flex flex-col gap-2">
-      <span className="text-xs font-medium text-gray-600">Métricas</span>
+      <span className="text-xs font-medium text-muted">{t('quality.metrics.label')}</span>
       <div className="flex flex-wrap gap-1.5 items-center">
         {/* Base metric toggles */}
         {BASE_METRIC_DEFS.map(m => (
@@ -139,10 +147,10 @@ export function MetricSelector({ selected, onChange, tenantId }: MetricSelectorP
             className={`text-xs rounded-full px-2.5 py-0.5 border transition-colors ${
               selected.includes(m.key)
                 ? 'bg-primary text-white border-primary'
-                : 'border-gray-300 text-gray-500 hover:border-primary hover:text-primary'
+                : 'border-border-strong text-muted hover:border-primary hover:text-primary'
             }`}
           >
-            {m.label}
+            {m.labelKey ? t(m.labelKey) : m.label}
           </button>
         ))}
 
@@ -152,12 +160,12 @@ export function MetricSelector({ selected, onChange, tenantId }: MetricSelectorP
           const short = cat.split('.').pop() ?? cat
           return (
             <span key={key}
-              className="flex items-center gap-1 text-xs bg-violet-50 text-violet-700 border border-violet-200 rounded-full px-2.5 py-0.5">
+              className="flex items-center gap-1 text-xs bg-ai-light text-ai-text border border-ai/30 rounded-full px-2.5 py-0.5">
               📈 {short}
               <button
                 onClick={() => toggle(key)}
-                className="ml-0.5 text-violet-400 hover:text-violet-700 leading-none"
-                aria-label={`Remover ${cat}`}
+                className="ml-0.5 text-ai hover:text-ai-text leading-none"
+                aria-label={t('quality.metrics.removeEvent', { cat })}
               >×</button>
             </span>
           )
@@ -169,15 +177,15 @@ export function MetricSelector({ selected, onChange, tenantId }: MetricSelectorP
             onClick={() => { setShowPicker(v => !v); if (!showPicker) fetchCategories() }}
             className="text-xs border border-dashed border-primary text-primary rounded-full px-2.5 py-0.5 hover:bg-primary hover:text-white transition-colors"
           >
-            + Evento
+            {t('quality.metrics.addEvent')}
           </button>
 
           {showPicker && (
-            <div className="absolute top-7 left-0 z-20 bg-white border border-gray-200 rounded-lg shadow-lg min-w-[280px] max-h-52 overflow-y-auto">
+            <div className="absolute top-7 left-0 z-20 bg-white border border-border rounded-lg shadow-lg min-w-[280px] max-h-52 overflow-y-auto">
               {loadingCats ? (
-                <div className="px-3 py-2 text-xs text-gray-400">Carregando categorias…</div>
+                <div className="px-3 py-2 text-xs text-muted-light">{t('quality.metrics.loadingCategories')}</div>
               ) : categories.length === 0 ? (
-                <div className="px-3 py-2 text-xs text-gray-400">Nenhuma categoria disponível</div>
+                <div className="px-3 py-2 text-xs text-muted-light">{t('quality.metrics.noCategories')}</div>
               ) : (
                 categories.map(cat => {
                   const key   = `agent_event:${cat}`
@@ -187,8 +195,8 @@ export function MetricSelector({ selected, onChange, tenantId }: MetricSelectorP
                       key={cat}
                       onClick={() => !added && addCategory(cat)}
                       disabled={added}
-                      className={`w-full text-left px-3 py-2 text-xs transition-colors hover:bg-gray-50 ${
-                        added ? 'text-gray-300 cursor-not-allowed' : 'text-gray-700'
+                      className={`w-full text-left px-3 py-2 text-xs transition-colors hover:bg-surface-muted ${
+                        added ? 'text-border-strong cursor-not-allowed' : 'text-dark'
                       }`}
                     >
                       {added ? '✓ ' : ''}{cat}

@@ -1,5 +1,7 @@
 # Arc 8 — Agent Availability & Pause Tracking
 
+> Última atualização: 2026-05-25 · Estado: Arc 16
+>
 > Full reference for human agent pause tracking, ClickHouse analytics, and the agent availability report.
 > See CLAUDE.md for architectural summary.
 

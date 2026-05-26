@@ -1,8 +1,9 @@
 # Layer 6 — MCP Layer
 
+> Última atualização: 2026-05-25 · Estado: Arc 16
 > Spec de referência: v24.0 seções 9.4, 9.5, 4.6 (spec 4.6k strategy section 11)
 > Responsabilidade: protocolo único de integração — expõe ferramentas de negócio aos agentes com autorização granular e auditoria em todas as chamadas
-> Implementado por: `mcp-server-plughub` (Agent Runtime e BPM tools), domain MCP Servers operados pelo tenant
+> Implementado por: `mcp-server-plughub` (Agent Runtime e BPM tools), `mcp-server-knowledge` (RAG), domain MCP Servers operados pelo tenant
 
 ---
 
@@ -10,9 +11,11 @@
 
 MCP é o único protocolo de integração da plataforma. Nenhum componente acessa sistemas de negócio diretamente — todo acesso ocorre via MCP tools autorizadas.
 
-A MCP Layer tem dois grupos distintos:
+A MCP Layer tem três grupos distintos:
 
-**`mcp-server-plughub`** — Agent Runtime tools (ciclo de vida do agente, insight, Supervisor) e BPM tools. Operado pela plataforma.
+**`mcp-server-plughub`** (TypeScript, Node 20+) — Agent Runtime tools (ciclo de vida do agente, insight, Supervisor) e BPM tools. Operado pela plataforma.
+
+**`mcp-server-knowledge`** (TypeScript, porta 3401) — base de conhecimento vetorial (pgvector) para agentes RAG. Tools: `knowledge_search`, `knowledge_upsert`, `knowledge_delete`. Introduzido no Arc 6, alimenta `agente_avaliacao_v1` com snippets e recebe `CalibrationNote` no namespace `evaluation:calibration:*` (Arc 13). Operado pela plataforma.
 
 **Domain MCP Servers** (`mcp-server-crm`, `mcp-server-telco`, etc.) — ferramentas de domínio de negócio específicas do tenant. Operados pelo tenant.
 
@@ -24,11 +27,11 @@ Toda chamada a um domain MCP Server é **interceptada** para validação de perm
 
 | Tipo de agente | Mecanismo de interceptação | Hop de rede |
 |---|---|---|
-| Agente nativo (usa SDK) | `PlugHubAdapter` em-processo | Nenhum |
+| Agente nativo (usa SDK) | `McpInterceptor` em-processo | Nenhum |
 | Agente externo (LangGraph, CrewAI) | `plughub-sdk proxy` sidecar em `localhost:7422` | Loopback apenas |
-| GitAgent (output de `regenerate`) | `PlugHubAdapter` em-processo (código gerado) | Nenhum |
+| GitAgent (output de `regenerate`) | `McpInterceptor` em-processo (código gerado) | Nenhum |
 
-O proxy sidecar valida `permissions[]` do JWT do `session_token` localmente (sem chamada de rede, ~0,1ms) e registra eventos de auditoria de forma assíncrona em buffer local drenado para Kafka. **Overhead total por chamada MCP: < 1ms.** Viável em deployments SaaS multi-site.
+Cada chamada interceptada executa três verificações em sequência (< 1ms total): **validação de permissão** (decode local do JWT do `session_token`, ~0,1ms) → **injection guard** (13+ padrões regex heurísticos) → **registro de auditoria** (evento `mcp.audit` em Kafka, fire-and-forget via buffer assíncrono). A política de auditoria é definida por tool — o chamador nunca pode optar por não ser auditado (LGPD). **Overhead total por chamada MCP: < 1ms.** Viável em deployments SaaS multi-site.
 
 ---
 
@@ -70,7 +73,7 @@ Cada domain MCP Server declara suas tools com `permissions[]` que são validados
 ## Interfaces
 
 **Entrada:**
-- Chamadas MCP de agentes (via PlugHubAdapter ou proxy sidecar)
+- Chamadas MCP de agentes (via `McpInterceptor` ou proxy sidecar)
 - Chamadas MCP do Skill Flow Engine (step `invoke`)
 
 **Saída:**
@@ -80,7 +83,7 @@ Cada domain MCP Server declara suas tools com `permissions[]` que são validados
 
 **Permissões:**
 - Declaradas no JWT do `session_token` como `permissions[]`
-- Validadas localmente pelo PlugHubAdapter ou proxy sidecar — sem chamada de rede
+- Validadas localmente pelo `McpInterceptor` ou proxy sidecar — sem chamada de rede
 - Sem permissão: a chamada é bloqueada e auditada; o agente recebe erro
 
 ---
@@ -89,9 +92,10 @@ Cada domain MCP Server declara suas tools com `permissions[]` que são validados
 
 **Agente nativo chama tool:**
 ```
-Agente → PlugHubAdapter (em-processo)
+Agente → McpInterceptor (em-processo)
 ↓ valida permissions[] do session_token (local, ~0.1ms)
-↓ registra evento de auditoria (assíncrono, buffer → Kafka)
+↓ injection guard (13+ padrões regex)
+↓ registra evento de auditoria mcp.audit (assíncrono, buffer → Kafka)
 ↓ encaminha para domain MCP Server
 ↓ retorna resultado ao agente
 ```
@@ -100,7 +104,8 @@ Agente → PlugHubAdapter (em-processo)
 ```
 Agente externo → localhost:7422 (proxy sidecar)
 ↓ valida permissions[] do session_token (local, ~0.1ms)
-↓ registra evento de auditoria (assíncrono, buffer → Kafka)
+↓ injection guard (13+ padrões regex)
+↓ registra evento de auditoria mcp.audit (assíncrono, buffer → Kafka)
 ↓ encaminha para domain MCP Server (rede interna)
 ↓ retorna resultado ao agente externo
 ```
@@ -133,5 +138,5 @@ Skill Flow → mcp-server-plughub (tool BPM)
 - Seção 9.4 — Agent Runtime tools e Supervisor tools
 - Seção 9.5 — Protocolo A2A
 - Seção 4.6 (spec 4.6k, strategy section 11) — MCP interception (hybrid proxy model)
-- [modulos/mcp-server-plughub.md](../modulos/mcp-server-plughub.md)
-- [modulos/sdk.md](../modulos/sdk.md) — PlugHubAdapter e proxy sidecar
+- [pacotes/mcp-server-plughub.md](../pacotes/mcp-server-plughub.md)
+- [pacotes/sdk.md](../pacotes/sdk.md) — `McpInterceptor` e proxy sidecar

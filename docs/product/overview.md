@@ -1,6 +1,6 @@
 # PlugHub — Visão Geral da Plataforma
 
-> Última atualização: Maio 2026
+> Última atualização: 2026-05-25 · Estado: Arc 16
 
 ## O que é o PlugHub
 
@@ -22,9 +22,9 @@ O PlugHub atende três perfis de comprador:
 
 ### Atendimento omnichannel
 
-Suporte nativo a **WhatsApp, Webchat, Voz (PSTN/SIP e WebRTC), E-mail, SMS, Instagram e Telegram**. O Channel Gateway normaliza cada canal para um envelope de evento uniforme — agentes nunca conhecem o protocolo do canal de origem. Menus são renderizados nativamente (botões no WhatsApp, formulários no Webchat) ou coletados sequencialmente em canais sem suporte nativo.
+Suporte nativo a **WhatsApp, Webchat, E-mail, SMS, Instagram e Telegram**, além de **WebRTC** (web/mobile) — implementado no Arc 15. O Channel Gateway normaliza cada canal para um envelope de evento uniforme — agentes nunca conhecem o protocolo do canal de origem. Menus são renderizados nativamente (botões no WhatsApp, formulários no Webchat) ou coletados sequencialmente em canais sem suporte nativo.
 
-O suporte a voz é construído sobre **dois media gateways internos** — um para SIP/PSTN (telefonia tradicional, com conectividade a operadoras e linhas 0800) e outro para WebRTC (web/mobile), ambos com gravação, transcrição, STT e TTS nativos. A plataforma é dona do stack de voz fim a fim, sem dependência de provedor terceiro para gravação, transcrição ou conversão de áudio.
+O canal **WebRTC** é construído sobre um SFU LiveKit self-hosted, com negociação de medium em tempo real (video → voice → text), gravação por egress, STT e TTS server-side. O canal de **voz/PSTN** opera sobre tronco Twilio, com STT (Deepgram) e TTS (ElevenLabs, com fallbacks) — o agente de IA atende em texto, convertido de/para áudio pelo `VoiceAdapter`. Uma decisão arquitetural em aberto avalia, no futuro, fazer a ponte PSTN → WebRTC via LiveKit SIP Ingress para unificar os dois canais de áudio.
 
 ### Roteamento multicritério
 
@@ -42,7 +42,7 @@ O ponto mais relevante para operações em escala: o mesmo especialista pode ser
 
 ### Skill Flow declarativo
 
-Flows de orquestração são declarados em YAML com 13 tipos de step (`task`, `choice`, `reason`, `invoke`, `notify`, `menu`, `suspend`, `collect`, `escalate`, `complete`, `resolve`, `begin_transaction`, `end_transaction`). Suportam timers em horas úteis via Calendar API, coleta assíncrona multicanal, aprovações e contestações, e captura mascarada de dados sensíveis em bloco atômico (`begin_transaction`/`end_transaction`). O mesmo motor roda tanto flows de atendimento em tempo real quanto workflows de processo batch.
+Flows de orquestração são declarados em YAML com 14 tipos de step (`task`, `choice`, `catch`, `escalate`, `complete`, `invoke`, `reason`, `notify`, `menu`, `suspend`, `collect`, `resolve`, `begin_transaction`/`end_transaction`, `receive`). Suportam timers em horas úteis via Calendar API, coleta assíncrona multicanal, aprovações e contestações, e captura mascarada de dados sensíveis em bloco atômico (`begin_transaction`/`end_transaction`). O mesmo motor roda tanto flows de atendimento em tempo real quanto workflows de processo batch.
 
 ### Automação de processos multicanal
 

@@ -20,12 +20,18 @@ import {
   reviewResult,
   createContestation,
   adjudicateContestation,
+  // Arc 13
+  useContestationThreads,
+  submitHumanReview,
+  submitDimensionContestation,
 } from '@/api/evaluation-hooks'
 import type {
   EvaluationResultWithActions,
   EvaluationCriterionResponse,
   EvaluationContestation,
   EvaluationCampaign,
+  // Arc 13
+  ContestationThread,
 } from '@/types'
 
 
@@ -33,9 +39,9 @@ import type {
 
 function ScorePill({ score }: { score: number }) {
   const bg =
-    score >= 0.8 ? 'bg-green-100 text-green-800' :
-    score >= 0.6 ? 'bg-yellow-100 text-yellow-800' :
-                   'bg-red-100 text-red-800'
+    score >= 0.8 ? 'bg-green-light text-green-text' :
+    score >= 0.6 ? 'bg-warning-light text-warning-text' :
+                   'bg-red-light text-red-text'
   // Display as 0–10 scale if ≤ 1, raw otherwise
   const display = score <= 1 ? (score * 10).toFixed(1) : score.toFixed(1)
   return <span className={`px-2 py-0.5 rounded text-sm font-bold ${bg}`}>{display}</span>
@@ -43,18 +49,18 @@ function ScorePill({ score }: { score: number }) {
 
 // STATUS_STYLES and status badge rendering with i18n support
 const STATUS_STYLES: Record<string, string> = {
-  submitted:        'bg-blue-100 text-blue-700',
-  approved:         'bg-green-100 text-green-800',
-  adjusted_approved:'bg-teal-100 text-teal-700',
-  rejected:         'bg-red-100 text-red-700',
-  contested:        'bg-orange-100 text-orange-700',
-  locked:           'bg-gray-100 text-gray-500',
+  submitted:        'bg-primary-light text-primary',
+  approved:         'bg-green-light text-green-text',
+  adjusted_approved:'bg-revised-light text-revised-text',
+  rejected:         'bg-red-light text-red-text',
+  contested:        'bg-contested-light text-contested-text',
+  locked:           'bg-surface-alt text-muted',
 }
 
 function StatusBadge({ status, t }: { status: string; t: (key: string) => string }) {
   const labelKey = `statuses.${status}`
   return (
-    <span className={`px-2 py-0.5 rounded text-xs font-medium ${STATUS_STYLES[status] ?? 'bg-gray-100 text-gray-500'}`}>
+    <span className={`px-2 py-0.5 rounded text-xs font-medium ${STATUS_STYLES[status] ?? 'bg-surface-alt text-muted'}`}>
       {t(labelKey) ?? status}
     </span>
   )
@@ -71,19 +77,19 @@ function CriterionRow({ cr }: { cr: EvaluationCriterionResponse }) {
   return (
     <div className="border-b last:border-0 py-2 px-3 text-sm">
       <div className="flex items-start gap-3">
-        <span className="font-mono text-xs text-gray-400 w-36 shrink-0 pt-0.5">{cr.criterion_id}</span>
+        <span className="font-mono text-xs text-muted-light w-36 shrink-0 pt-0.5">{cr.criterion_id}</span>
         <div className="flex-1">
           {cr.na ? (
-            <span className="text-gray-400 italic">N/A — {cr.na_reason}</span>
+            <span className="text-muted-light italic">N/A — {cr.na_reason}</span>
           ) : (
             <>
               <div className="flex items-center gap-2 mb-1">
                 <ScorePill score={cr.value ?? 0} />
                 {cr.evidence_refs && cr.evidence_refs.length > 0 && (
-                  <span className="text-xs text-gray-400">refs: [{cr.evidence_refs.join(', ')}]</span>
+                  <span className="text-xs text-muted-light">refs: [{cr.evidence_refs.join(', ')}]</span>
                 )}
               </div>
-              <p className="text-gray-600 text-xs leading-relaxed">{cr.justification}</p>
+              <p className="text-muted text-xs leading-relaxed">{cr.justification}</p>
             </>
           )}
         </div>
@@ -212,37 +218,37 @@ function ReviewPanel({
 
       {/* Open contestations — parsed per criterion */}
       {openContestations.length > 0 && (
-        <div className="border border-orange-200 rounded bg-orange-50">
-          <div className="text-xs font-semibold text-orange-700 px-3 pt-3 pb-1">
+        <div className="border border-contested/30 rounded bg-contested-light">
+          <div className="text-xs font-semibold text-contested-text px-3 pt-3 pb-1">
             ⚑ {t('review.openContestations')}
           </div>
           {openContestations.map(c => {
             const parsed = parseContestationReason(c.reason)
             return (
               <div key={c.contestation_id} className="px-3 pb-3 space-y-2">
-                <p className="text-xs text-gray-500">{t('review.from')}: <strong>{c.contested_by}</strong></p>
+                <p className="text-xs text-muted">{t('review.from')}: <strong>{c.contested_by}</strong></p>
                 {parsed.map((p, i) => (
-                  <div key={i} className={`rounded p-2 text-xs space-y-1 ${p.criterion_id ? 'bg-white border border-orange-100' : 'bg-orange-100'}`}>
+                  <div key={i} className={`rounded p-2 text-xs space-y-1 ${p.criterion_id ? 'bg-white border border-contested/20' : 'bg-contested-light'}`}>
                     {p.criterion_id && (
                       <div className="flex items-center gap-2">
-                        <span className="font-mono text-gray-500">{p.criterion_id}</span>
-                        <span className="text-gray-400">{p.score_label}</span>
+                        <span className="font-mono text-muted">{p.criterion_id}</span>
+                        <span className="text-muted-light">{p.score_label}</span>
                       </div>
                     )}
                     {p.system_evaluation && (
-                      <p className="text-gray-500 italic">{t('review.evaluatedAs')}: {p.system_evaluation}</p>
+                      <p className="text-muted italic">{t('review.evaluatedAs')}: {p.system_evaluation}</p>
                     )}
-                    <p className="text-orange-800 font-medium">{p.disagreement || p.criterion_id === '' ? p.disagreement : '—'}</p>
+                    <p className="text-contested-text font-medium">{p.disagreement || p.criterion_id === '' ? p.disagreement : '—'}</p>
                   </div>
                 ))}
                 <div className="flex gap-2 pt-1">
                   <button
                     onClick={() => adjudicate(c, 'accepted')}
-                    className="text-xs bg-green-100 text-green-700 px-2 py-0.5 rounded hover:bg-green-200"
+                    className="text-xs bg-green-light text-green-text px-2 py-0.5 rounded hover:bg-green/20"
                   >✓ {t('review.accepted')}</button>
                   <button
                     onClick={() => adjudicate(c, 'rejected')}
-                    className="text-xs bg-gray-100 text-gray-600 px-2 py-0.5 rounded hover:bg-gray-200"
+                    className="text-xs bg-surface-alt text-muted px-2 py-0.5 rounded hover:bg-border"
                   >✕ {t('review.rejected')}</button>
                 </div>
               </div>
@@ -253,12 +259,12 @@ function ReviewPanel({
 
       {/* Decision */}
       <div>
-        <div className="text-xs font-semibold text-gray-600 mb-2">{t('review.decision')}</div>
+        <div className="text-xs font-semibold text-muted mb-2">{t('review.decision')}</div>
         <div className="flex gap-4">
           {(['approved', 'adjusted_approved', 'rejected'] as const).map(d => (
             <label key={d} className="flex items-center gap-1.5 text-sm cursor-pointer">
               <input type="radio" value={d} checked={decision === d} onChange={() => setDecision(d)} />
-              <span className={d === 'approved' ? 'text-green-700' : d === 'adjusted_approved' ? 'text-teal-700' : 'text-red-700'}>
+              <span className={d === 'approved' ? 'text-green-text' : d === 'adjusted_approved' ? 'text-revised-text' : 'text-red-text'}>
                 {d === 'approved' ? '✓ ' + t('review.approve') : d === 'adjusted_approved' ? '~ ' + t('review.approveWithRemarks') : '✕ ' + t('review.reject')}
               </span>
             </label>
@@ -269,9 +275,9 @@ function ReviewPanel({
       {/* Per-criterion review notes */}
       {criteria.length > 0 && (
         <div>
-          <div className="text-xs font-semibold text-gray-600 mb-2">
+          <div className="text-xs font-semibold text-muted mb-2">
             {t('review.criterionNotes')}
-            <span className="text-gray-400 font-normal ml-1">({t('review.criterionNotesHint')})</span>
+            <span className="text-muted-light font-normal ml-1">({t('review.criterionNotesHint')})</span>
           </div>
           <div className="space-y-2">
             {criteria.map(cr => {
@@ -279,20 +285,20 @@ function ReviewPanel({
                 ? (cr.value <= 1 ? (cr.value * 10).toFixed(1) : cr.value.toFixed(1))
                 : null
               return (
-                <div key={cr.criterion_id} className="border rounded p-2 bg-gray-50">
+                <div key={cr.criterion_id} className="border rounded p-2 bg-surface-muted">
                   <div className="flex items-center gap-2 mb-1">
-                    <span className="font-mono text-xs text-gray-500">{cr.criterion_id}</span>
+                    <span className="font-mono text-xs text-muted">{cr.criterion_id}</span>
                     {scoreVal !== null && (
                       <span className={`text-xs font-bold px-1.5 py-0.5 rounded ${
-                        cr.value! >= 0.8 ? 'bg-green-100 text-green-800' :
-                        cr.value! >= 0.6 ? 'bg-yellow-100 text-yellow-800' :
-                                           'bg-red-100 text-red-800'
+                        cr.value! >= 0.8 ? 'bg-green-light text-green-text' :
+                        cr.value! >= 0.6 ? 'bg-warning-light text-warning-text' :
+                                           'bg-red-light text-red-text'
                       }`}>{scoreVal}/10</span>
                     )}
-                    {cr.na && <span className="text-xs text-gray-400 italic">N/A</span>}
+                    {cr.na && <span className="text-xs text-muted-light italic">N/A</span>}
                   </div>
                   <textarea
-                    className="w-full border border-gray-200 rounded px-2 py-1.5 text-xs resize-none bg-white"
+                    className="w-full border border-border rounded px-2 py-1.5 text-xs resize-none bg-white"
                     rows={2}
                     placeholder={`Comentário sobre "${cr.criterion_id}"…`}
                     value={crNotes[cr.criterion_id] ?? ''}
@@ -307,11 +313,11 @@ function ReviewPanel({
 
       {/* General note */}
       <div>
-        <label className="text-xs font-semibold text-gray-600 mb-1 block">
-          {t('review.generalNote')}{requiresNote && <span className="text-red-500 ml-1">*</span>}
+        <label className="text-xs font-semibold text-muted mb-1 block">
+          {t('review.generalNote')}{requiresNote && <span className="text-red ml-1">*</span>}
         </label>
         <textarea
-          className="w-full border border-gray-300 rounded px-3 py-2 text-sm resize-none"
+          className="w-full border border-border-strong rounded px-3 py-2 text-sm resize-none"
           rows={2}
           placeholder={requiresNote ? t('review.noteRequired') : t('review.noteOptional')}
           value={generalNote}
@@ -319,12 +325,12 @@ function ReviewPanel({
         />
       </div>
 
-      {error && <div className="text-red-600 text-xs bg-red-50 border border-red-100 rounded p-2">{error}</div>}
+      {error && <div className="text-red-text text-xs bg-red-light border border-red/20 rounded p-2">{error}</div>}
 
       <button
         onClick={submit}
         disabled={saving || !noteOk}
-        className="bg-primary text-white text-sm px-4 py-1.5 rounded hover:bg-blue-800 disabled:opacity-50 w-full"
+        className="bg-primary text-white text-sm px-4 py-1.5 rounded hover:bg-primary-dark disabled:opacity-50 w-full"
       >
         {saving ? t('review.saving') : t('review.submitReview')}
       </button>
@@ -360,37 +366,37 @@ function CriterionContestRow({
     : null
 
   return (
-    <div className={`border rounded mb-2 transition-colors ${state.checked ? 'border-orange-300 bg-orange-50' : 'border-gray-200 bg-white'}`}>
+    <div className={`border rounded mb-2 transition-colors ${state.checked ? 'border-contested/30 bg-contested-light' : 'border-border bg-white'}`}>
       {/* Criterion header — always visible */}
       <label className="flex items-start gap-3 p-3 cursor-pointer select-none">
         <input
           type="checkbox"
           checked={state.checked}
           onChange={onToggle}
-          className="mt-0.5 accent-orange-500"
+          className="mt-0.5 accent-contested"
         />
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 flex-wrap">
-            <span className="font-mono text-xs text-gray-500">{cr.criterion_id}</span>
+            <span className="font-mono text-xs text-muted">{cr.criterion_id}</span>
             {cr.na ? (
-              <span className="text-xs text-gray-400 italic">N/A</span>
+              <span className="text-xs text-muted-light italic">N/A</span>
             ) : scoreVal !== null ? (
               <span className={`text-xs font-bold px-1.5 py-0.5 rounded ${
-                cr.value! >= 0.8 ? 'bg-green-100 text-green-800' :
-                cr.value! >= 0.6 ? 'bg-yellow-100 text-yellow-800' :
-                                   'bg-red-100 text-red-800'
+                cr.value! >= 0.8 ? 'bg-green-light text-green-text' :
+                cr.value! >= 0.6 ? 'bg-warning-light text-warning-text' :
+                                   'bg-red-light text-red-text'
               }`}>{scoreVal}/10</span>
             ) : null}
           </div>
           {/* AI evaluator's justification — shown as context */}
           {cr.justification && (
-            <p className="text-xs text-gray-500 mt-0.5 leading-relaxed line-clamp-2">
+            <p className="text-xs text-muted mt-0.5 leading-relaxed line-clamp-2">
               {cr.justification}
             </p>
           )}
         </div>
         {!cr.na && (
-          <span className={`text-xs shrink-0 self-center font-medium ${state.checked ? 'text-orange-600' : 'text-gray-400'}`}>
+          <span className={`text-xs shrink-0 self-center font-medium ${state.checked ? 'text-contested' : 'text-muted-light'}`}>
             {state.checked ? '✓ ' + t('contest.title') : t('contest.title')}
           </span>
         )}
@@ -400,16 +406,16 @@ function CriterionContestRow({
       {state.checked && !cr.na && (
         <div className="px-3 pb-3 space-y-1">
           <div className="flex items-center justify-between">
-            <label className="text-xs font-semibold text-orange-700">
-              {t('contest.justification')} <span className="text-red-500">*</span>
+            <label className="text-xs font-semibold text-contested-text">
+              {t('contest.justification')} <span className="text-red">*</span>
             </label>
-            <span className={`text-xs ${tooShort ? 'text-red-500' : charCount >= MIN_CONTEST_CHARS ? 'text-green-600' : 'text-gray-400'}`}>
+            <span className={`text-xs ${tooShort ? 'text-red' : charCount >= MIN_CONTEST_CHARS ? 'text-green-text' : 'text-muted-light'}`}>
               {charCount}/{MIN_CONTEST_CHARS} {t('contest.minChars')}
             </span>
           </div>
           <textarea
             className={`w-full border rounded px-3 py-2 text-sm resize-none transition-colors ${
-              tooShort ? 'border-red-300' : charCount >= MIN_CONTEST_CHARS ? 'border-green-300' : 'border-orange-200'
+              tooShort ? 'border-red/30' : charCount >= MIN_CONTEST_CHARS ? 'border-green/30' : 'border-contested/30'
             }`}
             rows={3}
             placeholder={t('contest.justificationPlaceholder')}
@@ -418,7 +424,7 @@ function CriterionContestRow({
             autoFocus
           />
           {tooShort && (
-            <p className="text-xs text-red-500">{t('contest.charsRemaining', { count: MIN_CONTEST_CHARS - charCount })}</p>
+            <p className="text-xs text-red">{t('contest.charsRemaining', { count: MIN_CONTEST_CHARS - charCount })}</p>
           )}
         </div>
       )}
@@ -506,19 +512,19 @@ function ContestPanel({
   return (
     <div className="space-y-3">
       {/* Banner */}
-      <div className="bg-orange-50 border border-orange-200 rounded p-3">
-        <p className="text-xs font-semibold text-orange-800 mb-0.5">⚑ {t('contest.banner.title')}</p>
-        <p className="text-xs text-orange-700">
+      <div className="bg-contested-light border border-contested/30 rounded p-3">
+        <p className="text-xs font-semibold text-contested-text mb-0.5">⚑ {t('contest.banner.title')}</p>
+        <p className="text-xs text-contested-text">
           {t('contest.banner.description')}
         </p>
       </div>
 
       {/* Criteria list */}
       {criteria.length === 0 ? (
-        <p className="text-xs text-gray-400 italic text-center py-4">{t('contest.noCriteria')}</p>
+        <p className="text-xs text-muted-light italic text-center py-4">{t('contest.noCriteria')}</p>
       ) : (
         <div>
-          <div className="text-xs font-semibold text-gray-600 mb-2">
+          <div className="text-xs font-semibold text-muted mb-2">
             {t('contest.criteriaList', { count: contestedEntries.length })}
           </div>
           {criteria.map(cr => (
@@ -534,22 +540,494 @@ function ContestPanel({
       )}
 
       {error && (
-        <div className="text-red-600 text-xs bg-red-50 border border-red-100 rounded p-2">{error}</div>
+        <div className="text-red-text text-xs bg-red-light border border-red/20 rounded p-2">{error}</div>
       )}
 
       <div className="flex gap-2">
         <button
           onClick={onCancel}
-          className="flex-1 text-sm px-4 py-1.5 rounded border border-gray-300 text-gray-600 hover:bg-gray-50"
+          className="flex-1 text-sm px-4 py-1.5 rounded border border-border-strong text-muted hover:bg-surface-muted"
         >
           {t('contest.cancel')}
         </button>
         <button
           onClick={submit}
           disabled={saving || !allValid}
-          className="flex-1 bg-orange-600 text-white text-sm px-4 py-1.5 rounded hover:bg-orange-700 disabled:opacity-50"
+          className="flex-1 bg-contested text-white text-sm px-4 py-1.5 rounded hover:bg-contested-text disabled:opacity-50"
         >
           {saving ? t('contest.submitting') : t('contest.submit', { count: contestedEntries.length })}
+        </button>
+      </div>
+    </div>
+  )
+}
+
+// ── Arc 13 — DimensionStateIndicator ──────────────────────────────────────────
+
+const DIM_STATE_META: Record<string, { dot: string; label: string }> = {
+  neutral:      { dot: 'bg-border-strong',   label: 'Aguardando' },
+  pre_reviewed: { dot: 'bg-revised',      label: 'Pré-revisado' },
+  contested:    { dot: 'bg-contested',   label: 'Contestado' },
+  upheld:       { dot: 'bg-green',       label: 'Mantido' },
+  revised:      { dot: 'bg-secondary',   label: 'Revisado' },
+  timeout:      { dot: 'bg-border',   label: 'Timeout' },
+}
+
+function DimensionStateIndicator({ state }: { state: string }) {
+  const s = DIM_STATE_META[state] ?? DIM_STATE_META.neutral
+  return (
+    <span className="flex items-center gap-1">
+      <span className={`inline-block w-2 h-2 rounded-full shrink-0 ${s.dot}`} />
+      <span className="text-xs text-muted">{s.label}</span>
+    </span>
+  )
+}
+
+// ── Arc 13 — DimensionThreadCard ──────────────────────────────────────────────
+
+const ROUND_ROLE_LABELS: Record<string, string> = {
+  evaluator_ai:   'Avaliador IA',
+  pre_reviewer_ai:'Pré-revisor IA',
+  human_agent:    'Agente Avaliado',
+  reviewer_ai:    'Revisor IA',
+  human_reviewer: 'Revisor Humano',
+}
+
+const DIM_BORDER: Record<string, string> = {
+  contested:    'border-contested/30',
+  revised:      'border-secondary/30',
+  upheld:       'border-green/30',
+  pre_reviewed: 'border-revised/30',
+  timeout:      'border-border',
+  neutral:      'border-border',
+}
+
+function DimensionThreadCard({ thread }: { thread: ContestationThread }) {
+  const [expanded, setExpanded] = useState(
+    thread.current_state === 'contested' || thread.current_state === 'revised',
+  )
+
+  return (
+    <div className={`border rounded mb-2 ${DIM_BORDER[thread.current_state] ?? 'border-border'}`}>
+      {/* Header — always visible */}
+      <button
+        onClick={() => setExpanded(e => !e)}
+        className="w-full flex items-center gap-3 p-3 text-left hover:bg-surface-muted transition-colors"
+      >
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="font-medium text-sm text-dark truncate">
+              {thread.dimension_label ?? thread.dimension_id}
+            </span>
+            <DimensionStateIndicator state={thread.current_state} />
+          </div>
+          <div className="flex items-center gap-3 mt-0.5">
+            <span className="text-xs text-muted">
+              Orig: <ScorePill score={thread.original_score} />
+            </span>
+            {thread.current_score !== thread.original_score && (
+              <span className="text-xs text-muted">
+                → Atual: <ScorePill score={thread.current_score} />
+              </span>
+            )}
+          </div>
+        </div>
+        <span className="text-xs text-muted-light shrink-0">
+          {expanded ? '▲' : '▼'} {thread.entries.length}
+        </span>
+      </button>
+
+      {/* Expanded entries */}
+      {expanded && thread.entries.length > 0 && (
+        <div className="border-t divide-y">
+          {thread.entries.map((entry, i) => (
+            <div key={i} className="px-3 py-2">
+              <div className="flex items-center gap-2 mb-1 flex-wrap">
+                <span className={`text-xs font-semibold ${
+                  entry.round === 2    ? 'text-contested-text' :
+                  entry.round >= 3    ? 'text-primary'      :
+                  entry.round === 1.5 ? 'text-revised-text' :
+                                        'text-muted'
+                }`}>
+                  Round {entry.round} — {ROUND_ROLE_LABELS[entry.author_role] ?? entry.author_role}
+                </span>
+                {entry.action && (
+                  <span className="text-xs text-muted-light">({entry.action})</span>
+                )}
+                {entry.score !== null && entry.score !== undefined && (
+                  <ScorePill score={entry.score} />
+                )}
+                <span className="text-xs text-border-strong ml-auto">{fmt(entry.submitted_at)}</span>
+              </div>
+              <p className="text-xs text-muted leading-relaxed">{entry.justification}</p>
+              {entry.evidence_entries?.length > 0 && (
+                <div className="mt-1 space-y-1">
+                  {entry.evidence_entries.map((ev, j) => (
+                    <div key={j} className="bg-surface-muted border border-border rounded px-2 py-1 text-xs">
+                      <span className="font-mono text-border-strong">{ev.stream_entry_id}</span>
+                      <p className="text-muted italic mt-0.5">"{ev.excerpt}"</p>
+                      <p className="text-muted mt-0.5">{ev.relevance_note}</p>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ── Arc 13 — HumanReviewPanel (reviewer submits upheld/revised per dimension) ─
+
+const MIN_REVIEW_WORDS = 20
+
+function HumanReviewPanel({
+  threads,
+  instanceId,
+  jwtToken,
+  userId,
+  onDone,
+  onCancel,
+}: {
+  threads:    ContestationThread[]
+  instanceId: string
+  jwtToken:   string
+  userId:     string
+  onDone:     () => void
+  onCancel:   () => void
+}) {
+  const { t } = useTranslation('evaluation')
+  const contestedThreads = threads.filter(th => th.current_state === 'contested')
+
+  const [decisions, setDecisions] = useState<Record<string, {
+    decision: 'upheld' | 'revised'
+    score_override?: number
+    justification: string
+  }>>(() =>
+    Object.fromEntries(contestedThreads.map(th => [th.dimension_id, { decision: 'upheld', justification: '' }]))
+  )
+  const [saving, setSaving] = useState(false)
+  const [error,  setError]  = useState<string | null>(null)
+
+  const wordCount = (text: string) => text.trim().split(/\s+/).filter(Boolean).length
+
+  const allValid = contestedThreads.length > 0 && contestedThreads.every(th => {
+    const d = decisions[th.dimension_id]
+    if (!d || wordCount(d.justification) < MIN_REVIEW_WORDS) return false
+    if (d.decision === 'revised' && (d.score_override === undefined || d.score_override === null)) return false
+    return true
+  })
+
+  const submit = async () => {
+    if (!allValid) { setError(t('review.allFieldsRequired')); return }
+    setSaving(true); setError(null)
+    try {
+      await submitHumanReview(
+        instanceId,
+        {
+          dimension_decisions: contestedThreads.map(th => {
+            const d = decisions[th.dimension_id]
+            return {
+              dimension_id:  th.dimension_id,
+              decision:      d.decision,
+              score_override: d.decision === 'revised' ? d.score_override : undefined,
+              justification: d.justification,
+            }
+          }),
+          reviewer_id: userId,
+        },
+        jwtToken,
+      )
+      onDone()
+    } catch (e) {
+      setError(String(e))
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  if (contestedThreads.length === 0) {
+    return (
+      <p className="text-xs text-muted-light italic text-center py-4">
+        {t('review.noContestedDimensions')}
+      </p>
+    )
+  }
+
+  return (
+    <div className="space-y-4 border-t mt-4 pt-4">
+      <div className="text-xs font-semibold text-dark">
+        ✓ {t('review.dimensionDecisions')} ({contestedThreads.length})
+      </div>
+
+      {contestedThreads.map(th => {
+        const d = decisions[th.dimension_id] ?? { decision: 'upheld' as const, justification: '' }
+        const wc = wordCount(d.justification)
+        const tooFew = wc < MIN_REVIEW_WORDS
+
+        return (
+          <div key={th.dimension_id} className="border rounded p-3 bg-surface-muted">
+            <div className="flex items-center gap-2 mb-2">
+              <span className="font-medium text-sm text-dark">
+                {th.dimension_label ?? th.dimension_id}
+              </span>
+              <span className="text-xs text-muted">
+                Score original: {(th.original_score * 10).toFixed(1)}/10
+              </span>
+            </div>
+
+            {/* Upheld / Revised radio */}
+            <div className="flex gap-4 mb-2">
+              {(['upheld', 'revised'] as const).map(dec => (
+                <label key={dec} className="flex items-center gap-1.5 text-sm cursor-pointer">
+                  <input
+                    type="radio"
+                    value={dec}
+                    checked={d.decision === dec}
+                    onChange={() => setDecisions(prev => ({
+                      ...prev,
+                      [th.dimension_id]: { ...prev[th.dimension_id], decision: dec },
+                    }))}
+                  />
+                  <span className={dec === 'upheld' ? 'text-green-text' : 'text-primary'}>
+                    {dec === 'upheld' ? '✓ ' + t('review.uphold') : '↕ ' + t('review.revise')}
+                  </span>
+                </label>
+              ))}
+            </div>
+
+            {/* Score override — only for 'revised' */}
+            {d.decision === 'revised' && (
+              <div className="mb-2">
+                <label className="text-xs font-semibold text-muted mb-1 block">
+                  {t('review.newScore')} (0–10) <span className="text-red">*</span>
+                </label>
+                <input
+                  type="number"
+                  min={0} max={10} step={0.1}
+                  value={d.score_override !== undefined ? +(d.score_override * 10).toFixed(1) : ''}
+                  onChange={e => {
+                    const val = parseFloat(e.target.value)
+                    setDecisions(prev => ({
+                      ...prev,
+                      [th.dimension_id]: {
+                        ...prev[th.dimension_id],
+                        score_override: isNaN(val) ? undefined : +(val / 10).toFixed(3),
+                      },
+                    }))
+                  }}
+                  className="border border-border-strong rounded px-2 py-1 text-sm w-24"
+                  placeholder="0–10"
+                />
+              </div>
+            )}
+
+            <div>
+              <div className="flex items-center justify-between mb-1">
+                <label className="text-xs font-semibold text-muted">
+                  {t('review.justification')} <span className="text-red">*</span>
+                </label>
+                <span className={`text-xs ${tooFew ? 'text-red' : 'text-green-text'}`}>
+                  {wc}/{MIN_REVIEW_WORDS} {t('review.minWords')}
+                </span>
+              </div>
+              <textarea
+                className={`w-full border rounded px-3 py-2 text-sm resize-none ${tooFew ? 'border-red/30' : 'border-border-strong'}`}
+                rows={3}
+                placeholder={t('review.justificationPlaceholder')}
+                value={d.justification}
+                onChange={e => setDecisions(prev => ({
+                  ...prev,
+                  [th.dimension_id]: { ...prev[th.dimension_id], justification: e.target.value },
+                }))}
+              />
+            </div>
+          </div>
+        )
+      })}
+
+      {error && <div className="text-red-text text-xs bg-red-light border border-red/20 rounded p-2">{error}</div>}
+
+      <div className="flex gap-2">
+        <button
+          onClick={onCancel}
+          className="flex-1 text-sm px-4 py-1.5 rounded border border-border-strong text-muted hover:bg-surface-muted"
+        >
+          {t('review.cancel')}
+        </button>
+        <button
+          onClick={submit}
+          disabled={saving || !allValid}
+          className="flex-1 bg-primary text-white text-sm px-4 py-1.5 rounded hover:bg-primary-dark disabled:opacity-50"
+        >
+          {saving ? t('review.saving') : t('review.submitDimensionReview')}
+        </button>
+      </div>
+    </div>
+  )
+}
+
+// ── Arc 13 — DimensionContestPanel13 (human agent contests specific dimensions) ─
+
+const MIN_CONTEST_WORDS = 10
+
+function DimensionContestPanel13({
+  threads,
+  instanceId,
+  currentRound,
+  jwtToken,
+  onDone,
+  onCancel,
+}: {
+  threads:      ContestationThread[]
+  instanceId:   string
+  currentRound: number
+  jwtToken:     string
+  onDone:       () => void
+  onCancel:     () => void
+}) {
+  const { t } = useTranslation('evaluation')
+  // Only dimensions that are contestable (neutral or pre_reviewed)
+  const contestable = threads.filter(
+    th => th.current_state === 'neutral' || th.current_state === 'pre_reviewed',
+  )
+
+  const [sel, setSel] = useState<Record<string, { checked: boolean; reason: string }>>(() =>
+    Object.fromEntries(contestable.map(th => [th.dimension_id, { checked: false, reason: '' }]))
+  )
+  const [saving, setSaving] = useState(false)
+  const [error,  setError]  = useState<string | null>(null)
+
+  const wordCount = (text: string) => text.trim().split(/\s+/).filter(Boolean).length
+
+  const checked = contestable.filter(th => sel[th.dimension_id]?.checked)
+  const allValid = checked.length > 0 && checked.every(th =>
+    wordCount(sel[th.dimension_id]?.reason ?? '') >= MIN_CONTEST_WORDS
+  )
+
+  const submit = async () => {
+    if (!allValid) { setError(t('contest.allJustificationsRequired')); return }
+    setSaving(true); setError(null)
+    try {
+      await submitDimensionContestation(
+        instanceId,
+        {
+          dimension_ids: checked.map(th => th.dimension_id),
+          reasons:       Object.fromEntries(checked.map(th => [th.dimension_id, sel[th.dimension_id].reason])),
+          round:         currentRound,
+        },
+        jwtToken,
+      )
+      onDone()
+    } catch (e) {
+      setError(String(e))
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div className="space-y-3 border-t mt-4 pt-4">
+      <div className="bg-contested-light border border-contested/30 rounded p-3">
+        <p className="text-xs font-semibold text-contested-text mb-0.5">⚑ {t('contest.banner.title')}</p>
+        <p className="text-xs text-contested-text">{t('contest.banner.description')}</p>
+      </div>
+
+      {contestable.length === 0 ? (
+        <p className="text-xs text-muted-light italic text-center py-4">{t('contest.noDimensions')}</p>
+      ) : (
+        <div>
+          <div className="text-xs font-semibold text-muted mb-2">
+            {t('contest.dimensionList')} ({checked.length}/{contestable.length})
+          </div>
+          {contestable.map(th => {
+            const s = sel[th.dimension_id] ?? { checked: false, reason: '' }
+            const wc = wordCount(s.reason)
+            const tooFew = s.checked && wc < MIN_CONTEST_WORDS
+
+            return (
+              <div
+                key={th.dimension_id}
+                className={`border rounded mb-2 transition-colors ${s.checked ? 'border-contested/30 bg-contested-light' : 'border-border bg-white'}`}
+              >
+                <label className="flex items-start gap-3 p-3 cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={s.checked}
+                    onChange={() => setSel(prev => ({
+                      ...prev,
+                      [th.dimension_id]: { ...prev[th.dimension_id], checked: !prev[th.dimension_id].checked },
+                    }))}
+                    className="mt-0.5 accent-contested"
+                  />
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="font-medium text-sm text-dark">
+                        {th.dimension_label ?? th.dimension_id}
+                      </span>
+                      <DimensionStateIndicator state={th.current_state} />
+                      <ScorePill score={th.current_score} />
+                    </div>
+                    {/* Show evaluator AI's justification as context */}
+                    {th.entries[0]?.justification && (
+                      <p className="text-xs text-muted mt-0.5 leading-relaxed line-clamp-2">
+                        {th.entries[0].justification}
+                      </p>
+                    )}
+                  </div>
+                </label>
+
+                {s.checked && (
+                  <div className="px-3 pb-3 space-y-1">
+                    <div className="flex items-center justify-between">
+                      <label className="text-xs font-semibold text-contested-text">
+                        {t('contest.justification')} <span className="text-red">*</span>
+                      </label>
+                      <span className={`text-xs ${tooFew ? 'text-red' : wc >= MIN_CONTEST_WORDS ? 'text-green-text' : 'text-muted-light'}`}>
+                        {wc}/{MIN_CONTEST_WORDS} {t('contest.minWords')}
+                      </span>
+                    </div>
+                    <textarea
+                      className={`w-full border rounded px-3 py-2 text-sm resize-none ${tooFew ? 'border-red/30' : 'border-contested/30'}`}
+                      rows={3}
+                      placeholder={t('contest.justificationPlaceholder')}
+                      value={s.reason}
+                      onChange={e => setSel(prev => ({
+                        ...prev,
+                        [th.dimension_id]: { ...prev[th.dimension_id], reason: e.target.value },
+                      }))}
+                      autoFocus
+                    />
+                    {tooFew && (
+                      <p className="text-xs text-red">
+                        {t('contest.wordsRemaining', { count: MIN_CONTEST_WORDS - wc })}
+                      </p>
+                    )}
+                  </div>
+                )}
+              </div>
+            )
+          })}
+        </div>
+      )}
+
+      {error && <div className="text-red-text text-xs bg-red-light border border-red/20 rounded p-2">{error}</div>}
+
+      <div className="flex gap-2">
+        <button
+          onClick={onCancel}
+          className="flex-1 text-sm px-4 py-1.5 rounded border border-border-strong text-muted hover:bg-surface-muted"
+        >
+          {t('contest.cancel')}
+        </button>
+        <button
+          onClick={submit}
+          disabled={saving || !allValid}
+          className="flex-1 bg-contested text-white text-sm px-4 py-1.5 rounded hover:bg-contested-text disabled:opacity-50"
+        >
+          {saving ? t('contest.submitting') : t('contest.submit', { count: checked.length })}
         </button>
       </div>
     </div>
@@ -566,42 +1044,65 @@ function DetailPanel({
   onClose,
   onAction,
 }: {
-  result: EvaluationResultWithActions
-  jwtToken: string
+  result:     EvaluationResultWithActions
+  jwtToken:   string
   adminToken: string
-  userId: string
-  onClose: () => void
-  onAction: () => void
+  userId:     string
+  onClose:    () => void
+  onAction:   () => void
 }) {
   const { t } = useTranslation('evaluation')
   const [mode, setMode] = useState<'view' | 'review' | 'contest'>('view')
+
   const canReview  = result.available_actions?.includes('review')
   const canContest = result.available_actions?.includes('contest')
+
+  // Arc 13 — load contestation threads when an instance_id is present
+  const { data: threadData, loading: threadLoading, reload: reloadThreads } =
+    useContestationThreads(result.instance_id ?? null, jwtToken, 0)
+
+  // Arc 13 mode: when the instance has dimension threads
+  const isArc13 = (threadData?.threads?.length ?? 0) > 0
+  const threads  = threadData?.threads ?? []
+  const currentRound = threadData?.current_round ?? result.current_round ?? 0
+
+  const handleActionDone = () => {
+    setMode('view')
+    reloadThreads()
+    onAction()
+  }
 
   return (
     <aside className="w-[480px] border-l flex flex-col bg-white overflow-hidden">
       {/* Header */}
-      <div className="flex items-center gap-2 p-3 border-b bg-gray-50">
+      <div className="flex items-center gap-2 p-3 border-b bg-surface-muted">
         <div className="flex-1 min-w-0">
-          <div className="font-semibold text-sm text-gray-800 truncate">{t('detail.session')}: {result.session_id}</div>
-          <div className="text-xs text-gray-400 truncate">{t('detail.evaluator')}: {result.evaluator_id}</div>
+          <div className="font-semibold text-sm text-dark truncate">
+            {t('detail.session')}: {result.session_id}
+          </div>
+          <div className="text-xs text-muted-light truncate">
+            {t('detail.evaluator')}: {result.evaluator_id}
+            {isArc13 && (
+              <span className="ml-2 text-revised font-medium">· Arc 13</span>
+            )}
+          </div>
         </div>
         <ScorePill score={result.overall_score} />
         <StatusBadge status={result.eval_status} t={t} />
         {result.locked && <span title={t('detail.locked')}>🔒</span>}
-        <button onClick={onClose} className="text-gray-400 hover:text-gray-600 ml-1 text-lg leading-none">✕</button>
+        <button onClick={onClose} className="text-muted-light hover:text-muted ml-1 text-lg leading-none">✕</button>
       </div>
 
       {/* Action bar */}
       {(canReview || canContest) && !result.locked && (
-        <div className="flex gap-2 px-3 py-2 border-b bg-blue-50">
+        <div className="flex gap-2 px-3 py-2 border-b bg-primary-light">
           {canReview && (
             <button
               onClick={() => setMode(m => m === 'review' ? 'view' : 'review')}
               className={`text-xs px-3 py-1 rounded font-medium border transition-colors ${
                 mode === 'review'
                   ? 'bg-primary text-white border-primary'
-                  : 'bg-white text-primary border-primary hover:bg-blue-50'
+                  : 'bg-white text-primary border-primary hover:bg-primary-light'
               }`}
             >
               ✓ {t('detail.review')}
@@ -612,15 +1113,15 @@ function DetailPanel({
               onClick={() => setMode(m => m === 'contest' ? 'view' : 'contest')}
               className={`text-xs px-3 py-1 rounded font-medium border transition-colors ${
                 mode === 'contest'
-                  ? 'bg-orange-600 text-white border-orange-600'
-                  : 'bg-white text-orange-600 border-orange-600 hover:bg-orange-50'
+                  ? 'bg-contested text-white border-contested'
+                  : 'bg-white text-contested border-contested hover:bg-contested-light'
               }`}
             >
               ⚑ {t('detail.contest')}
             </button>
           )}
           {result.action_required && (
-            <span className="text-xs text-gray-500 self-center ml-auto">
+            <span className="text-xs text-muted self-center ml-auto">
               {t('detail.awaiting')}: {result.action_required === 'review' ? t('detail.awaitingReview') : t('detail.awaitingContest')}
               {result.deadline_at && ` · ${t('detail.deadline')} ${fmt(result.deadline_at)}`}
             </span>
@@ -630,11 +1131,12 @@ function DetailPanel({
 
       {/* Body */}
       <div className="flex-1 overflow-y-auto p-4 space-y-4">
+
         {/* Overview */}
         {result.overall_observation && (
-          <div className="bg-gray-50 rounded p-3">
-            <div className="text-xs font-semibold text-gray-600 mb-1">{t('detail.generalObservation')}</div>
-            <p className="text-sm text-gray-700">{result.overall_observation}</p>
+          <div className="bg-surface-muted rounded p-3">
+            <div className="text-xs font-semibold text-muted mb-1">{t('detail.generalObservation')}</div>
+            <p className="text-sm text-dark">{result.overall_observation}</p>
           </div>
         )}
 
@@ -642,16 +1144,16 @@ function DetailPanel({
         <div className="grid grid-cols-2 gap-3">
           {(result.highlights ?? []).length > 0 && (
             <div>
-              <div className="text-xs font-semibold text-green-700 mb-1">✓ {t('detail.highlights')}</div>
-              <ul className="text-xs text-gray-600 space-y-0.5">
+              <div className="text-xs font-semibold text-green-text mb-1">✓ {t('detail.highlights')}</div>
+              <ul className="text-xs text-muted space-y-0.5">
                 {result.highlights.map((h, i) => <li key={i}>• {h}</li>)}
               </ul>
             </div>
           )}
           {(result.improvement_points ?? []).length > 0 && (
             <div>
-              <div className="text-xs font-semibold text-orange-700 mb-1">↑ {t('detail.improvements')}</div>
-              <ul className="text-xs text-gray-600 space-y-0.5">
+              <div className="text-xs font-semibold text-contested-text mb-1">↑ {t('detail.improvements')}</div>
+              <ul className="text-xs text-muted space-y-0.5">
                 {result.improvement_points.map((p, i) => <li key={i}>• {p}</li>)}
               </ul>
             </div>
@@ -661,19 +1163,32 @@ function DetailPanel({
         {/* Compliance flags */}
         {(result.compliance_flags ?? []).length > 0 && (
           <div>
-            <div className="text-xs font-semibold text-red-700 mb-1">⚠ {t('detail.flags')}</div>
+            <div className="text-xs font-semibold text-red-text mb-1">⚠ {t('detail.flags')}</div>
             <div className="flex flex-wrap gap-1">
               {result.compliance_flags.map(f => (
-                <span key={f} className="bg-red-50 text-red-700 text-xs px-2 py-0.5 rounded">{f}</span>
+                <span key={f} className="bg-red-light text-red-text text-xs px-2 py-0.5 rounded">{f}</span>
               ))}
             </div>
           </div>
         )}
 
-        {/* Criteria — hidden when in contest mode (ContestPanel renders its own interactive list) */}
-        {mode !== 'contest' && (result.criterion_responses ?? []).length > 0 && (
+        {/* ── Arc 13: Dimension threads view ────────────────────────────────── */}
+        {isArc13 && mode !== 'contest' && (
           <div>
-            <div className="text-xs font-semibold text-gray-600 mb-2">{t('detail.evaluatedCriteria')}</div>
+            <div className="flex items-center gap-2 mb-2">
+              <span className="text-xs font-semibold text-muted">{t('detail.dimensionThreads')}</span>
+              {threadLoading && <span className="text-xs text-muted-light">⟳</span>}
+            </div>
+            {threads.map(th => (
+              <DimensionThreadCard key={th.dimension_id} thread={th} />
+            ))}
+          </div>
+        )}
+
+        {/* ── Arc 6 fallback: criteria list ─────────────────────────────────── */}
+        {!isArc13 && mode !== 'contest' && (result.criterion_responses ?? []).length > 0 && (
+          <div>
+            <div className="text-xs font-semibold text-muted mb-2">{t('detail.evaluatedCriteria')}</div>
             <div className="border rounded">
               {result.criterion_responses.map(cr => (
                 <CriterionRow key={cr.criterion_id} cr={cr} />
@@ -683,28 +1198,56 @@ function DetailPanel({
         )}
 
         {/* Metadata */}
-        <div className="text-xs text-gray-400 space-y-0.5">
+        <div className="text-xs text-muted-light space-y-0.5">
           <div>{t('detail.campaign')}: {result.campaign_id ?? '—'}</div>
-          <div>{t('detail.currentRound')}: {result.current_round ?? 0}</div>
+          <div>{t('detail.currentRound')}: {currentRound}</div>
           {result.lock_reason && <div>{t('detail.lockReason')}: {result.lock_reason}</div>}
           <div>{t('detail.createdAt')}: {fmt(result.created_at)}</div>
         </div>
 
-        {/* Action panels */}
-        {mode === 'review' && (
+        {/* ── Action panels ──────────────────────────────────────────────────── */}
+
+        {/* Review — Arc 13: HumanReviewPanel per dimension */}
+        {mode === 'review' && isArc13 && result.instance_id && (
+          <HumanReviewPanel
+            threads={threads}
+            instanceId={result.instance_id}
+            jwtToken={jwtToken}
+            userId={userId}
+            onDone={handleActionDone}
+            onCancel={() => setMode('view')}
+          />
+        )}
+
+        {/* Review — Arc 6 fallback: criterion-level ReviewPanel */}
+        {mode === 'review' && !isArc13 && (
           <ReviewPanel
             result={result}
             jwtToken={jwtToken}
             adminToken={adminToken}
-            onDone={() => { setMode('view'); onAction() }}
+            onDone={handleActionDone}
           />
         )}
-        {mode === 'contest' && (
+
+        {/* Contest — Arc 13: DimensionContestPanel13 per dimension */}
+        {mode === 'contest' && isArc13 && result.instance_id && (
+          <DimensionContestPanel13
+            threads={threads}
+            instanceId={result.instance_id}
+            currentRound={currentRound}
+            jwtToken={jwtToken}
+            onDone={handleActionDone}
+            onCancel={() => setMode('view')}
+          />
+        )}
+
+        {/* Contest — Arc 6 fallback: criterion-level ContestPanel */}
+        {mode === 'contest' && !isArc13 && (
           <ContestPanel
             result={result}
             userId={userId}
             jwtToken={jwtToken}
-            onDone={() => { setMode('view'); onAction() }}
+            onDone={handleActionDone}
             onCancel={() => setMode('view')}
           />
         )}
@@ -778,7 +1321,7 @@ export default function AvaliacoesPage() {
     <div className="flex flex-col h-full">
       {/* Filter bar */}
       <div className="border-b bg-white px-4 py-2 flex items-center gap-3 flex-wrap">
-        <span className="text-sm font-medium text-gray-700">{t('title')}</span>
+        <span className="text-sm font-medium text-dark">{t('title')}</span>
 
         {/* Quick filter: Aguardando minha ação */}
         <button
@@ -786,7 +1329,7 @@ export default function AvaliacoesPage() {
           className={`text-xs px-3 py-1 rounded-full border font-medium transition-colors ${
             myActionsOnly
               ? 'bg-primary text-white border-primary'
-              : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'
+              : 'bg-white text-muted border-border-strong hover:bg-surface-muted'
           }`}
         >
           ⚡ {t('filters.myActions')}
@@ -796,7 +1339,7 @@ export default function AvaliacoesPage() {
         <select
           value={statusFilter}
           onChange={e => setStatusFilter(e.target.value)}
-          className="border border-gray-300 rounded px-2 py-1 text-sm"
+          className="border border-border-strong rounded px-2 py-1 text-sm"
         >
           {STATUS_OPTIONS.map(o => (
             <option key={o.value} value={o.value}>{o.label}</option>
@@ -807,7 +1350,7 @@ export default function AvaliacoesPage() {
         <select
           value={campaignFilter}
           onChange={e => setCampaignFilter(e.target.value)}
-          className="border border-gray-300 rounded px-2 py-1 text-sm max-w-[200px]"
+          className="border border-border-strong rounded px-2 py-1 text-sm max-w-[200px]"
         >
           <option value="">{t('filters.allCampaigns')}</option>
           {(campaigns as EvaluationCampaign[]).map(c => (
@@ -823,15 +1366,15 @@ export default function AvaliacoesPage() {
           value={adminToken}
           onChange={e => setAdminToken(e.target.value)}
           placeholder={t('filters.adminTokenPlaceholder')}
-          className="border border-gray-300 rounded px-2 py-1 text-xs w-44"
+          className="border border-border-strong rounded px-2 py-1 text-xs w-44"
         />
 
         {jwtToken
-          ? <span className="text-xs text-green-600">✓ {t('filters.authenticated')}</span>
-          : <span className="text-xs text-orange-500">⚠ {t('filters.loginRequired')}</span>
+          ? <span className="text-xs text-green-text">✓ {t('filters.authenticated')}</span>
+          : <span className="text-xs text-warning">⚠ {t('filters.loginRequired')}</span>
         }
 
-        <button onClick={reload} className="text-xs text-gray-500 hover:text-gray-700 border border-gray-200 rounded px-2 py-1">
+        <button onClick={reload} className="text-xs text-muted hover:text-dark border border-border rounded px-2 py-1">
           ↺ {t('filters.reload')}
         </button>
       </div>
@@ -841,13 +1384,13 @@ export default function AvaliacoesPage() {
         {/* Table */}
         <div className="flex-1 overflow-auto">
           {loading && (
-            <div className="flex items-center justify-center h-32 text-gray-400 text-sm">{t('loading')}</div>
+            <div className="flex items-center justify-center h-32 text-muted-light text-sm">{t('loading')}</div>
           )}
           {!loading && error && (
-            <div className="p-4 text-red-600 text-sm">{t('error.loading')}: {error}</div>
+            <div className="p-4 text-red-text text-sm">{t('error.loading')}: {error}</div>
           )}
           {!loading && !error && displayed.length === 0 && (
-            <div className="flex flex-col items-center justify-center h-48 text-gray-400">
+            <div className="flex flex-col items-center justify-center h-48 text-muted-light">
               <span className="text-3xl mb-2">⭐</span>
               <p className="text-sm">{t('empty.noEvaluations')}</p>
               {myActionsOnly && (
@@ -858,7 +1401,7 @@ export default function AvaliacoesPage() {
           {!loading && displayed.length > 0 && (
             <table className="w-full text-sm border-collapse">
               <thead>
-                <tr className="border-b bg-gray-50 text-xs text-gray-500">
+                <tr className="border-b bg-surface-muted text-xs text-muted">
                   <th className="text-left px-4 py-2 font-medium">{t('table.session')}</th>
                   <th className="text-left px-4 py-2 font-medium">{t('table.campaign')}</th>
                   <th className="text-left px-4 py-2 font-medium">{t('table.evaluator')}</th>
@@ -878,19 +1421,19 @@ export default function AvaliacoesPage() {
                       onClick={() => setSelected(isSelected ? null : r)}
                       className={`border-b cursor-pointer transition-colors ${
                         isSelected
-                          ? 'bg-blue-50 border-l-2 border-l-primary'
-                          : 'hover:bg-gray-50'
+                          ? 'bg-primary-light border-l-2 border-l-primary'
+                          : 'hover:bg-surface-muted'
                       }`}
                     >
                       <td className="px-4 py-2">
-                        <code className="text-xs bg-gray-100 px-1 rounded text-gray-600 break-all">
+                        <code className="text-xs bg-surface-alt px-1 rounded text-muted break-all">
                           {r.session_id}
                         </code>
                       </td>
-                      <td className="px-4 py-2 text-xs text-gray-500 truncate max-w-[140px]">
+                      <td className="px-4 py-2 text-xs text-muted truncate max-w-[140px]">
                         {r.campaign_id ?? '—'}
                       </td>
-                      <td className="px-4 py-2 text-xs text-gray-500 truncate max-w-[140px]">
+                      <td className="px-4 py-2 text-xs text-muted truncate max-w-[140px]">
                         {r.evaluator_id}
                       </td>
                       <td className="px-4 py-2 text-center">
@@ -899,7 +1442,7 @@ export default function AvaliacoesPage() {
                       <td className="px-4 py-2">
                         <div className="flex items-center gap-1">
                           <StatusBadge status={r.eval_status} t={t} />
-                          {r.locked && <span className="text-xs text-gray-400" title={t('detail.locked')}>🔒</span>}
+                          {r.locked && <span className="text-xs text-muted-light" title={t('detail.locked')}>🔒</span>}
                         </div>
                       </td>
                       <td className="px-4 py-2">
@@ -910,8 +1453,8 @@ export default function AvaliacoesPage() {
                                 key={a}
                                 className={`text-xs px-2 py-0.5 rounded font-medium ${
                                   a === 'review'
-                                    ? 'bg-blue-100 text-blue-700'
-                                    : 'bg-orange-100 text-orange-700'
+                                    ? 'bg-primary-light text-primary'
+                                    : 'bg-contested-light text-contested-text'
                                 }`}
                               >
                                 {a === 'review' ? '✓ ' + t('detail.review') : '⚑ ' + t('detail.contest')}
@@ -919,10 +1462,10 @@ export default function AvaliacoesPage() {
                             ))}
                           </div>
                         ) : (
-                          <span className="text-xs text-gray-300">—</span>
+                          <span className="text-xs text-border-strong">—</span>
                         )}
                       </td>
-                      <td className="px-4 py-2 text-xs text-gray-400 whitespace-nowrap">
+                      <td className="px-4 py-2 text-xs text-muted-light whitespace-nowrap">
                         {fmt(r.created_at)}
                       </td>
                     </tr>

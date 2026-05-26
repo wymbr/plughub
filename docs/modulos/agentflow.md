@@ -1,5 +1,7 @@
 # Módulo: AgentFlow
 
+> Última atualização: 2026-05-25 · Estado: Arc 16
+
 > Rota UI: `/agent-flow/*` | Roles: admin, developer (operação); business (relatório)
 
 ## O que é
@@ -63,7 +65,7 @@ Instâncias de agentes IA ativos (`status: ready / busy / paused / draining`) co
 
 ## Skill Flow — step types
 
-11 tipos de step declarativos em YAML:
+14 tipos de step declarativos em YAML:
 
 | Tipo | Faz |
 |---|---|
@@ -74,11 +76,13 @@ Instâncias de agentes IA ativos (`status: ready / busy / paused / draining`) co
 | `complete` | Encerra com outcome definido |
 | `invoke` | Chama MCP tool diretamente |
 | `reason` | Invoca AI Gateway com `output_schema` |
-| `notify` | Envia mensagem ao cliente (unidirecional) |
+| `notify` | **Depreciado (Arc 16)** — envia mensagem ao cliente; usar `invoke: notification_send`. O sub-campo `notify` em `suspend` permanece válido por atomicidade |
 | `menu` | Captura input do cliente e suspende até resposta |
 | `suspend` | Suspende até sinal externo (aprovação, input, webhook, timer) |
-| `collect` | Contata target via canal, aguarda resposta, suspende até reply ou expiração |
+| `collect` | Contata target via canal, aguarda resposta, suspende até reply ou expiração. No Arc 16 aceita `requires: [text\|audio\|video\|file_upload\|masked_input\|rich_menu]` em vez de `channel` explícito — o Channel Gateway seleciona o canal por matriz de capacidades |
 | `resolve` | Coleta de contexto inline (gap check → CRM → LLM question → BLPOP → LLM extract) |
+| `begin_transaction` / `end_transaction` | Delimitam bloco atômico de Masked Input — coleta-validação-ação em memória; `@masked.*` nunca escrito em Redis/stream/logs |
+| `receive` | Suspende aguardando a próxima mensagem do stream de qualquer participante (sem prompt enviado ao canal) — BLPOP em `receive:result:{sid}:{iid}` |
 
 ## Padrão orquestrador + especialistas reutilizáveis
 
@@ -122,6 +126,10 @@ pools:
 ```
 
 Ações disponíveis em `mention_commands` do YAML: `set_context`, `trigger_step`, `terminate_self`.
+
+## Journey — `creates_journey` e `mentionable_journeys` (Arc 10/16)
+
+Uma skill pode declarar `creates_journey: true` no YAML — o skill-flow-worker cria automaticamente uma Journey no primeiro step, agrupando as sessões do processo. O pool pode declarar `mentionable_journeys` (análogo a `mentionable_pools`): aliases de `@journey:<skill_id>` que o agente primary usa para iniciar processos, e que alimentam o dropdown "Iniciar Processo" no Console. Ver módulo Processos.
 
 ## Pool Lifecycle Hooks
 

@@ -12,6 +12,8 @@
  */
 
 import React, { useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
+import { User, Bot, Settings2 } from "lucide-react";
 import { AiParticipantInfo, ChatMessage, CopilotSuggestions } from "../types";
 
 // ── Filter key helpers ────────────────────────────────────────────────────────
@@ -47,10 +49,12 @@ export function messageMatchesFilter(
 
 // ── Derived participant list ──────────────────────────────────────────────────
 
+type ParticipantIconComponent = React.FC<{ className?: string }>
+
 interface Participant {
   key:       FilterKey;
   label:     string;
-  icon:      string;
+  Icon:      ParticipantIconComponent;
   count:     number;
   /** true if still actively listed in ai_participants */
   active:    boolean;
@@ -63,7 +67,8 @@ interface Participant {
 
 function buildParticipants(
   messages: ChatMessage[],
-  aiParticipants: AiParticipantInfo[]
+  aiParticipants: AiParticipantInfo[],
+  t: (key: string) => string,
 ): Participant[] {
   const result: Participant[] = [];
 
@@ -82,13 +87,13 @@ function buildParticipants(
 
   // Customer
   if (counts.has("customer")) {
-    result.push({ key: "customer", label: "Cliente", icon: "👤",
+    result.push({ key: "customer", label: t('filterBar.customer'), Icon: User,
       count: counts.get("customer") ?? 0, active: true });
   }
 
   // Human agent
   if (counts.has("agent_human")) {
-    result.push({ key: "agent_human", label: "Agente", icon: "🧑",
+    result.push({ key: "agent_human", label: t('filterBar.agent'), Icon: User,
       count: counts.get("agent_human") ?? 0, active: true });
   }
 
@@ -106,7 +111,7 @@ function buildParticipants(
     result.push({
       key,
       label:       shortLabel,
-      icon:        "🤖",
+      Icon:        Bot,
       count:       counts.get(key) ?? 0,
       active:      true,
       role:        ap.role,
@@ -128,7 +133,7 @@ function buildParticipants(
     result.push({
       key,
       label:       shortLabel,
-      icon:        "🤖",
+      Icon:        Bot,
       count,
       active:      false, // left the conference
       agentTypeId: typeId,
@@ -150,6 +155,7 @@ interface InterventionsProps {
 const InterventionsPanel: React.FC<InterventionsProps> = ({
   sessionId, mcpBase, onRefresh, onClose,
 }) => {
+  const { t } = useTranslation('agentAssist');
   const [contextText, setContextText] = useState("");
   const [busy, setBusy] = useState<"inject" | "force" | null>(null);
   const [msg, setMsg] = useState<{ text: string; ok: boolean } | null>(null);
@@ -165,21 +171,21 @@ const InterventionsPanel: React.FC<InterventionsProps> = ({
         body:    JSON.stringify({ context: contextText.trim() }),
       });
       if (res.ok) {
-        setMsg({ text: "Contexto injetado.", ok: true });
+        setMsg({ text: t('filterBar.injected'), ok: true });
         setContextText("");
         onRefresh();
       } else {
-        setMsg({ text: "Falha ao injetar.", ok: false });
+        setMsg({ text: t('filterBar.failed'), ok: false });
       }
     } catch {
-      setMsg({ text: "Erro de rede.", ok: false });
+      setMsg({ text: t('filterBar.networkError'), ok: false });
     } finally {
       setBusy(null);
     }
   }
 
   async function handleForce() {
-    if (!window.confirm("Forçar conclusão do Skill-Flow ativo?")) return;
+    if (!window.confirm(t('filterBar.forceComplete'))) return;
     setBusy("force");
     setMsg(null);
     try {
@@ -187,51 +193,52 @@ const InterventionsPanel: React.FC<InterventionsProps> = ({
         method: "POST",
       });
       setMsg(res.ok
-        ? { text: "Completado.", ok: true }
-        : { text: "Falha.", ok: false });
+        ? { text: t('filterBar.completed'), ok: true }
+        : { text: t('filterBar.failed'), ok: false });
       if (res.ok) onRefresh();
     } catch {
-      setMsg({ text: "Erro de rede.", ok: false });
+      setMsg({ text: t('filterBar.networkError'), ok: false });
     } finally {
       setBusy(null);
     }
   }
 
   return (
-    <div className="absolute right-0 top-full mt-1 z-50 bg-white border border-gray-200
+    <div className="absolute right-0 top-full mt-1 z-50 bg-white border border-border
       rounded-xl shadow-lg w-72 p-3 space-y-2.5">
       <div className="flex items-center justify-between">
-        <span className="text-[10px] font-bold text-gray-400 uppercase tracking-wide">
-          Intervenções
+        <span className="text-2xs font-bold text-muted-light uppercase tracking-wide">
+          {t('filterBar.interventions')}
         </span>
         <button
           onClick={onClose}
-          className="text-gray-400 hover:text-gray-600 text-xs leading-none"
+          className="text-muted-light hover:text-muted text-xs leading-none"
+          aria-label={t('aiCard.closeLabel')}
         >✕</button>
       </div>
 
       {/* Inject context */}
       <div>
-        <label className="block text-[10px] font-semibold text-gray-500 mb-1">
-          Injetar contexto
+        <label className="block text-2xs font-semibold text-muted mb-1">
+          {t('filterBar.injectContext')}
         </label>
         <textarea
           rows={2}
           value={contextText}
           onChange={e => setContextText(e.target.value)}
-          placeholder="Instrução ou contexto adicional para o agente AI…"
-          className="w-full text-xs border border-gray-300 rounded-lg px-2 py-1.5
-            focus:outline-none focus:ring-2 focus:ring-indigo-400 resize-none
-            text-gray-700 placeholder-gray-400"
+          placeholder={t('filterBar.contextPlaceholder')}
+          className="w-full text-xs border border-border-strong rounded-lg px-2 py-1.5
+            focus:outline-none focus:ring-2 focus:ring-primary/40 resize-none
+            text-dark placeholder-muted-light"
         />
         <button
           onClick={handleInject}
           disabled={!contextText.trim() || busy !== null}
           className="mt-1.5 w-full py-1 text-xs font-semibold text-white
-            bg-indigo-600 hover:bg-indigo-700 rounded-lg transition-colors
+            bg-primary hover:bg-primary-dark rounded-lg transition-colors
             disabled:opacity-40 disabled:cursor-not-allowed"
         >
-          {busy === "inject" ? "Injetando…" : "Injetar"}
+          {busy === "inject" ? t('filterBar.injecting') : t('filterBar.inject')}
         </button>
       </div>
 
@@ -240,18 +247,18 @@ const InterventionsPanel: React.FC<InterventionsProps> = ({
         <button
           onClick={handleForce}
           disabled={busy !== null}
-          className="w-full py-1.5 text-xs font-semibold text-orange-700
-            bg-orange-50 border border-orange-200 hover:bg-orange-100
+          className="w-full py-1.5 text-xs font-semibold text-contested-text
+            bg-contested-light border border-contested/30 hover:bg-contested/10
             rounded-lg transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
         >
-          {busy === "force" ? "Executando…" : "⚡ Forçar conclusão do flow"}
+          {busy === "force" ? t('filterBar.executing') : t('filterBar.forceComplete')}
         </button>
       </div>
 
       {/* Status message */}
       {msg && (
-        <p className={`text-[10px] font-medium text-center rounded px-1.5 py-0.5
-          ${msg.ok ? "text-green-700 bg-green-50" : "text-red-700 bg-red-50"}`}>
+        <p className={`text-2xs font-medium text-center rounded px-1.5 py-0.5
+          ${msg.ok ? "text-green-text bg-green-light" : "text-red-text bg-red-light"}`}>
           {msg.text}
         </p>
       )}
@@ -287,9 +294,10 @@ export const ParticipantFilterBar: React.FC<ParticipantFilterBarProps> = ({
   onRefreshState,
   onTerminateSegment,
 }) => {
+  const { t } = useTranslation('agentAssist');
   const [supervisionOpen, setSupervisionOpen] = useState(false);
   const supervisionRef = useRef<HTMLDivElement>(null);
-  const participants = buildParticipants(messages, aiParticipants);
+  const participants = buildParticipants(messages, aiParticipants, t);
 
   // Hide the bar when there are no participants at all
   if (participants.length === 0) return null;
@@ -297,34 +305,34 @@ export const ParticipantFilterBar: React.FC<ParticipantFilterBarProps> = ({
   const total = messages.filter(m => m.author !== "system").length;
 
   return (
-    <div className="flex items-center gap-1.5 px-3 py-1.5 bg-gray-50 border-b border-gray-200
-      flex-shrink-0 overflow-x-auto min-h-[36px]">
+    <div className="flex items-center gap-1.5 px-3 py-1.5 bg-surface-muted border-b border-border
+      flex-shrink-0 overflow-x-auto min-h-9">
 
       {/* ── "Todos" chip ── */}
       <button
         onClick={() => onFilterChange(null)}
         className={[
-          "flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium",
+          "flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium",
           "border transition-colors flex-shrink-0",
           filterKey === null
-            ? "bg-indigo-600 text-white border-indigo-600"
-            : "bg-white text-gray-600 border-gray-300 hover:border-indigo-400 hover:text-indigo-600",
+            ? "bg-primary text-white border-primary"
+            : "bg-white text-muted border-border-strong hover:border-primary/40 hover:text-primary",
         ].join(" ")}
-        title="Mostrar todas as mensagens"
+        title={t('filterBar.showAll')}
       >
-        Todos
+        {t('filterBar.all')}
         <span className={[
-          "text-[9px] px-1 py-0.5 rounded-full leading-none",
+          "text-micro px-1 py-0.5 rounded-full leading-none",
           filterKey === null
-            ? "bg-indigo-500 text-white"
-            : "bg-gray-200 text-gray-500",
+            ? "bg-primary-dark text-white"
+            : "bg-border text-muted",
         ].join(" ")}>
           {total}
         </span>
       </button>
 
       {/* Divider */}
-      <div className="w-px h-4 bg-gray-200 flex-shrink-0" />
+      <div className="w-px h-4 bg-border flex-shrink-0" />
 
       {/* ── Participant chips ── */}
       {participants.map(p => {
@@ -337,32 +345,32 @@ export const ParticipantFilterBar: React.FC<ParticipantFilterBarProps> = ({
             title={[
               p.label,
               p.role ? `(${p.role})` : "",
-              isDimmed ? "— já saiu da conferência" : "",
+              isDimmed ? t('filterBar.leftConference') : "",
             ].filter(Boolean).join(" ")}
             className={[
-              "flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium",
+              "flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium",
               "border transition-colors flex-shrink-0",
               isSelected
-                ? "bg-indigo-600 text-white border-indigo-600"
+                ? "bg-primary text-white border-primary"
                 : isDimmed
-                  ? "bg-gray-50 text-gray-400 border-gray-200 hover:border-gray-300"
-                  : "bg-white text-gray-600 border-gray-300 hover:border-indigo-400 hover:text-indigo-600",
+                  ? "bg-surface-muted text-muted-light border-border hover:border-border-strong"
+                  : "bg-white text-muted border-border-strong hover:border-primary/40 hover:text-primary",
             ].join(" ")}
           >
-            <span className="text-[10px] leading-none">{p.icon}</span>
-            <span className="truncate max-w-[80px]">{p.label}</span>
+            <p.Icon className="w-3 h-3 flex-shrink-0" aria-hidden="true" />
+            <span className="truncate max-w-20">{p.label}</span>
             {p.count > 0 && (
               <span className={[
-                "text-[9px] px-1 py-0.5 rounded-full leading-none flex-shrink-0",
+                "text-micro px-1 py-0.5 rounded-full leading-none flex-shrink-0",
                 isSelected
-                  ? "bg-indigo-500 text-white"
-                  : "bg-gray-200 text-gray-500",
+                  ? "bg-primary-dark text-white"
+                  : "bg-border text-muted",
               ].join(" ")}>
                 {p.count}
               </span>
             )}
             {isDimmed && (
-              <span className="text-[9px] text-gray-300 leading-none" title="Saiu da conferência">●</span>
+              <span className="text-micro text-border-strong leading-none" title="Saiu da conferência">●</span>
             )}
           </button>
         );
@@ -373,16 +381,16 @@ export const ParticipantFilterBar: React.FC<ParticipantFilterBarProps> = ({
         <div className="relative flex-shrink-0 ml-auto" ref={supervisionRef}>
           <button
             onClick={() => setSupervisionOpen(o => !o)}
-            title="Intervenções de supervisor"
+            title={t('filterBar.interventions')}
             className={[
-              "flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium",
+              "flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium",
               "border transition-colors",
               supervisionOpen
-                ? "bg-indigo-100 text-indigo-700 border-indigo-300"
-                : "bg-white text-gray-500 border-gray-300 hover:border-indigo-300 hover:text-indigo-600",
+                ? "bg-primary-light text-primary border-primary/30"
+                : "bg-white text-muted border-border-strong hover:border-primary/30 hover:text-primary",
             ].join(" ")}
           >
-            ⚙️ Supervisão
+            <Settings2 className="w-3.5 h-3.5" aria-hidden="true" /> {t('filterBar.supervision')}
           </button>
 
           {supervisionOpen && (

@@ -75,14 +75,14 @@ function ScopeInput({
 
   return (
     <div className="mt-1">
-      <label className="text-xs text-gray-500 block mb-0.5">
+      <label className="text-xs text-muted block mb-0.5">
         Escopo por {scopeType === 'pool' ? 'pool' : 'campanha'}{' '}
-        <span className="text-gray-400">(vazio = acesso global)</span>
+        <span className="text-muted-light">(vazio = acesso global)</span>
       </label>
       <input
         type="text"
         disabled={disabled}
-        className="w-full text-xs border border-gray-300 rounded px-2 py-1 disabled:bg-gray-50 disabled:text-gray-400"
+        className="w-full text-xs border border-border-strong rounded px-2 py-1 disabled:bg-surface-muted disabled:text-muted-light"
         placeholder={`Ex: ${scopeType}:retencao_humano, ${scopeType}:sac`}
         value={draft}
         onChange={e => setDraft(e.target.value)}
@@ -91,12 +91,12 @@ function ScopeInput({
       {value.length > 0 && (
         <div className="flex flex-wrap gap-1 mt-1">
           {value.map(v => (
-            <span key={v} className="inline-flex items-center gap-0.5 bg-blue-50 text-blue-700 text-xs px-2 py-0.5 rounded">
+            <span key={v} className="inline-flex items-center gap-0.5 bg-primary-light text-primary text-xs px-2 py-0.5 rounded">
               {v}
               {!disabled && (
                 <button
                   type="button"
-                  className="hover:text-blue-900 ml-0.5"
+                  className="hover:text-primary-dark ml-0.5"
                   onClick={() => {
                     const next = value.filter(x => x !== v)
                     setDraft(next.join(', '))
@@ -133,13 +133,13 @@ function FieldRow({
     <div className="py-3 border-b last:border-0">
       <div className="flex items-start gap-3">
         <div className="flex-1 min-w-0">
-          <div className="text-sm font-medium text-gray-800">{schema.label}</div>
-          <div className="text-xs text-gray-500 mt-0.5 font-mono">{fieldKey}</div>
+          <div className="text-sm font-medium text-dark">{schema.label}</div>
+          <div className="text-xs text-muted mt-0.5 font-mono">{fieldKey}</div>
         </div>
         <div className="w-52 shrink-0">
           <select
             disabled={readOnly}
-            className="w-full text-sm border border-gray-300 rounded px-2 py-1.5 disabled:bg-gray-50"
+            className="w-full text-sm border border-border-strong rounded px-2 py-1.5 disabled:bg-surface-muted"
             value={fieldConfig.access}
             onChange={e => onChange({ ...fieldConfig, access: e.target.value as PermissionAccess })}
           >
@@ -187,20 +187,20 @@ function ModuleSection({
     <div className="border rounded-lg overflow-hidden mb-3">
       <button
         type="button"
-        className="w-full flex items-center gap-3 px-4 py-3 bg-gray-50 hover:bg-gray-100 transition-colors text-left"
+        className="w-full flex items-center gap-3 px-4 py-3 bg-surface-muted hover:bg-surface-alt transition-colors text-left"
         onClick={() => setOpen(v => !v)}
       >
         <span className="text-lg">{mod.icon}</span>
         <div className="flex-1">
-          <div className="text-sm font-semibold text-gray-800">{mod.label}</div>
-          <div className="text-xs text-gray-400">{fields.length} permissões</div>
+          <div className="text-sm font-semibold text-dark">{mod.label}</div>
+          <div className="text-xs text-muted-light">{fields.length} permissões</div>
         </div>
         {configured > 0 && (
-          <span className="bg-blue-100 text-blue-700 text-xs px-2 py-0.5 rounded-full font-medium">
+          <span className="bg-primary-light text-primary text-xs px-2 py-0.5 rounded-full font-medium">
             {configured} ativo{configured > 1 ? 's' : ''}
           </span>
         )}
-        <span className="text-gray-400 text-xs ml-2">{open ? '▲' : '▼'}</span>
+        <span className="text-muted-light text-xs ml-2">{open ? '▲' : '▼'}</span>
       </button>
 
       {open && (
@@ -252,7 +252,7 @@ export function ModulePermissionForm({
 
   if (active.length === 0) {
     return (
-      <div className={`text-sm text-gray-400 text-center py-8 ${className}`}>
+      <div className={`text-sm text-muted-light text-center py-8 ${className}`}>
         Nenhum módulo com permissões configuráveis encontrado.
       </div>
     )

@@ -345,8 +345,8 @@ export function TimeseriesChart({
         {/* Header row — hidden for tile (tile renders its own number) */}
         {!isTile && (
           <div className="flex items-baseline justify-between px-1 pb-1 flex-shrink-0">
-            <span className="text-xs text-gray-500 truncate">{title}</span>
-            <span className="text-lg font-bold text-gray-800 ml-2">{fmt(total)}</span>
+            <span className="text-xs text-muted truncate">{title}</span>
+            <span className="text-lg font-bold text-dark ml-2">{fmt(total)}</span>
           </div>
         )}
 
@@ -356,7 +356,7 @@ export function TimeseriesChart({
           </div>
         )}
         {!loading && error && (
-          <div className="flex-1 flex items-center justify-center text-xs text-red-400">indisponível</div>
+          <div className="flex-1 flex items-center justify-center text-xs text-red">indisponível</div>
         )}
         {!loading && !error && (
           <div className="flex-1 min-h-0">
@@ -401,11 +401,11 @@ export function TimeseriesChart({
   const showControls = displayType !== 'tile'
 
   return (
-    <div className="bg-white rounded-lg border border-gray-200 flex flex-col gap-3 p-4">
+    <div className="bg-white rounded-lg border border-border flex flex-col gap-3 p-4">
       {/* Header */}
       <div className="flex items-center justify-between gap-3 flex-wrap">
         <div>
-          <h3 className="text-sm font-semibold text-gray-800">{title}</h3>
+          <h3 className="text-sm font-semibold text-dark">{title}</h3>
           {!isTile && (
             <p className="text-2xl font-bold text-primary mt-0.5">{fmt(total)}</p>
           )}
@@ -418,7 +418,7 @@ export function TimeseriesChart({
               <select
                 value={interval}
                 onChange={e => setInterval(Number(e.target.value))}
-                className="text-xs border border-gray-200 rounded px-2 py-1 text-gray-600 focus:outline-none focus:ring-1 focus:ring-primary"
+                className="text-xs border border-border rounded px-2 py-1 text-muted focus:outline-none focus:ring-1 focus:ring-primary"
               >
                 {INTERVAL_OPTIONS.map(opt => (
                   <option key={opt.value} value={opt.value}>{opt.label}</option>
@@ -431,20 +431,20 @@ export function TimeseriesChart({
               type="datetime-local"
               value={fromDt.slice(0, 16)}
               onChange={e => setFromDt(e.target.value)}
-              className="text-xs border border-gray-200 rounded px-2 py-1 text-gray-600 focus:outline-none focus:ring-1 focus:ring-primary"
+              className="text-xs border border-border rounded px-2 py-1 text-muted focus:outline-none focus:ring-1 focus:ring-primary"
             />
-            <span className="text-gray-400 text-xs">→</span>
+            <span className="text-muted-light text-xs">→</span>
             <input
               type="datetime-local"
               value={toDt.slice(0, 16)}
               onChange={e => setToDt(e.target.value)}
-              className="text-xs border border-gray-200 rounded px-2 py-1 text-gray-600 focus:outline-none focus:ring-1 focus:ring-primary"
+              className="text-xs border border-border rounded px-2 py-1 text-muted focus:outline-none focus:ring-1 focus:ring-primary"
             />
 
             {/* Export */}
             <button
               onClick={handleExportCsv}
-              className="text-xs border border-gray-200 rounded px-2 py-1 text-gray-600 hover:bg-gray-50 transition-colors"
+              className="text-xs border border-border rounded px-2 py-1 text-muted hover:bg-surface-muted transition-colors"
               title="Exportar CSV agregado"
             >
               ↓ CSV
@@ -452,7 +452,7 @@ export function TimeseriesChart({
             {onExportRaw && (
               <button
                 onClick={onExportRaw}
-                className="text-xs border border-gray-200 rounded px-2 py-1 text-gray-600 hover:bg-gray-50 transition-colors"
+                className="text-xs border border-border rounded px-2 py-1 text-muted hover:bg-surface-muted transition-colors"
                 title="Exportar dados brutos"
               >
                 ↓ Bruto
@@ -469,12 +469,12 @@ export function TimeseriesChart({
         </div>
       )}
       {!loading && error && (
-        <div className="flex items-center justify-center text-sm text-red-400" style={{ height: chartH }}>
+        <div className="flex items-center justify-center text-sm text-red" style={{ height: chartH }}>
           Dados indisponíveis
         </div>
       )}
       {!loading && !error && buckets.length === 0 && !isTile && (
-        <div className="flex items-center justify-center text-sm text-gray-400" style={{ height: chartH }}>
+        <div className="flex items-center justify-center text-sm text-muted-light" style={{ height: chartH }}>
           Nenhum dado no período
         </div>
       )}

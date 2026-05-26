@@ -1,5 +1,7 @@
 # Módulo: agent-registry (@plughub/agent-registry)
 
+> Última atualização: 2026-05-25 · Estado: Arc 16
+
 > Pacote: `agent-registry` (serviço)
 > Runtime: TypeScript / Node 20+ · Express · PostgreSQL · Prisma
 > Spec de referência: seções 4.5, 4.7
@@ -45,20 +47,25 @@ agent-registry/
 
 ```prisma
 Pool {
-  id             String    // pool_id — snake_case, sem versão (ex: retencao_humano)
-  tenant_id      String
-  description    String?
-  channel_types  String[]  // Channel enum values
-  sla_target_ms  Int
-  status         String    // "active" | "inactive"
-  routing_expr   Json?     // RoutingExpression serializado
-  supervisor_cfg Json?     // SupervisorConfig serializado
-  created_at     DateTime
-  updated_at     DateTime
+  id                     String   // pool_id — snake_case, sem versão (ex: retencao_humano)
+  tenant_id              String
+  description            String?
+  channel_types          String[] // Channel enum values
+  sla_target_ms          Int
+  status                 String   // "active" | "inactive"
+  routing_expr           Json?    // RoutingExpression serializado
+  supervisor_cfg         Json?    // SupervisorConfig serializado
+  mentionable_pools      Json?    // { pool_id: label } — domínio de @mention
+  mentionable_journeys   Json?    // { skill_id: label } — journeys que o pool pode iniciar
+  inbound_journey_resume Boolean  @default(false)  // Arc 16 Fase E — flag informacional
+  created_at             DateTime
+  updated_at             DateTime
 
   @@unique([id, tenant_id])
 }
 ```
+
+> **`mentionable_pools`** define o domínio fechado de `@mention` do pool (apenas `role: primary`/`human` podem emitir menções). **`mentionable_journeys`** lista as journeys (`skill_id`) que um agente do pool pode iniciar via `@journey:<skill_id>` ou pelo botão "Iniciar Processo" do Console. **`inbound_journey_resume`** (Arc 16 Fase E) é uma flag informacional para o autor da skill — o Routing Engine não a lê.
 
 ### `AgentType`
 
@@ -72,6 +79,7 @@ AgentType {
   max_concurrent_sessions Int
   permissions             String[]  // "mcp-server-nome:tool_name"
   capabilities            Json
+  media_capabilities      String[]  @default([])  // Arc 15 — ["video","voice","text"]
   agent_classification    Json?
   prompt_id               String?
   traffic_weight          Float?    // canary: 0.10 → 0.20 → 0.50 → 1.00
@@ -85,6 +93,8 @@ AgentType {
   @@unique([id, tenant_id])
 }
 ```
+
+> **`media_capabilities`** (Arc 15 — canal WebRTC) declara os mediums que o agente suporta. A ordem implica preferência; lista vazia significa text-only. Usado pelo `negotiate_medium()` do Channel Gateway para escolher video → voice → text.
 
 ### `AgentInstance`
 
@@ -107,19 +117,29 @@ AgentInstance {
 
 ```prisma
 Skill {
-  skill_id    String
-  tenant_id   String
-  name        String
-  version     String
-  description String
-  definition  Json      // SkillSchema serializado completo
-  status      String    // "active" | "deprecated"
-  created_at  DateTime
-  updated_at  DateTime
+  skill_id      String
+  tenant_id     String
+  name          String
+  version       String
+  description   String
+  definition    Json     // SkillSchema serializado completo
+  status        String   // "active" | "deprecated"
+  deploy_status String   @default("draft")  // "draft" | "published"
+  created_at    DateTime
+  updated_at    DateTime
 
   @@unique([skill_id, tenant_id])
 }
 ```
+
+### Skill Deploy Lifecycle
+
+`deploy_status` separa a edição de uma skill da sua publicação:
+
+- `PUT /v1/skills/:id` — sempre cria novas skills com `deploy_status: "draft"` e **nunca** modifica o `deploy_status` em atualizações.
+- `POST /v1/skills/:id/deploy` — única ação que define `deploy_status: "published"`; grava um registro na tabela `skill_deployments` e publica `registry.changed`.
+
+A tabela `skill_deployments` mantém o histórico de publicações (deploy events), usada como âncora temporal por relatórios de qualidade (Arc 6 Fase 2).
 
 ---
 
@@ -131,8 +151,11 @@ Skill {
 | `GET` | `/v1/pools` | Listar pools do tenant |
 | `GET` | `/v1/pools/:id` | Consultar pool |
 | `PUT` | `/v1/pools/:id` | Atualizar pool (inclusive status) |
+| `GET` | `/v1/pools/:poolId/mentionable-agents` | Lista os tipos de agente ativos dos pools em `mentionable_pools` (Arc 11) |
 
 > Não existe `DELETE /v1/pools/:id`. Para desativar: `PUT /v1/pools/:id` com `{ "status": "inactive" }`.
+
+> `GET /v1/pools/:poolId/mentionable-agents` lê o `mentionable_pools` do pool, resolve os pools listados e retorna os `AgentType` ativos deles. Usado pelo Console (Arc 11 — "Adicionar Especialista") para oferecer a lista de especialistas invocáveis via A2A `assist`.
 
 ---
 
@@ -186,7 +209,8 @@ Cada chamada a `PATCH /v1/agent-types/:id/canary` avança para o próximo peso n
 | `POST` | `/v1/skills` | Registrar skill |
 | `GET` | `/v1/skills` | Listar skills do tenant |
 | `GET` | `/v1/skills/:id` | Consultar skill |
-| `PUT` | `/v1/skills/:id` | Atualizar skill |
+| `PUT` | `/v1/skills/:id` | Atualizar skill — sempre `deploy_status: "draft"` em novas; nunca altera o `deploy_status` em updates |
+| `POST` | `/v1/skills/:id/deploy` | Publica a skill (`deploy_status: "published"`) + registra em `skill_deployments` + publica `registry.changed` |
 
 A skill armazena a definição completa (`SkillSchema`) no campo `definition` (JSON). O `skill_id` segue o formato `skill_{name}_v{n}`.
 
@@ -243,7 +267,7 @@ Todas as rotas exigem JWT. O middleware `auth.ts` extrai e valida o token e popu
 
 ## Integração Kafka
 
-O `agent-registry` publica eventos no tópico `agent.registry.events` após operações de escrita em pools. Isso permite que o `routing-engine` mantenha seu cache Redis sempre sincronizado sem acesso direto ao PostgreSQL.
+O `agent-registry` publica eventos no tópico `registry.changed` após operações de escrita em pools e ao publicar uma skill. Isso permite que `routing-engine`, `Core` e `orchestrator-bridge` mantenham seus caches sincronizados sem acesso direto ao PostgreSQL.
 
 ### Eventos publicados
 
@@ -251,6 +275,7 @@ O `agent-registry` publica eventos no tópico `agent.registry.events` após oper
 |---|---|
 | `POST /v1/pools` | `pool.registered` |
 | `PUT /v1/pools/:pool_id` | `pool.updated` |
+| `POST /v1/skills/:id/deploy` | `registry.changed` (skill publicada) |
 
 **Schema:**
 
@@ -300,6 +325,6 @@ agent-registry → persiste em
   → PostgreSQL (pools, agent-types, skills, instances)
 
 agent-registry → publica em
-  → Kafka: agent.registry.events (pool.registered, pool.updated)
-     ← consumido por routing-engine para sincronizar cache Redis
+  → Kafka: registry.changed (pool.registered, pool.updated, skill publicada)
+     ← consumido por routing-engine, Core e orchestrator-bridge para sincronizar caches
 ```

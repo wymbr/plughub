@@ -30,7 +30,7 @@ const LoginPage: React.FC = () => {
     setError('')
 
     if (!email.trim() || !password) {
-      setError('Email and password are required.')
+      setError('E-mail e senha são obrigatórios.')
       return
     }
 
@@ -41,14 +41,14 @@ const LoginPage: React.FC = () => {
     } catch (err) {
       if (err instanceof AuthApiError) {
         if (err.status === 401) {
-          setError('Invalid email or password.')
+          setError('E-mail ou senha incorretos.')
         } else if (err.status === 403) {
-          setError('Your account is inactive. Contact your administrator.')
+          setError('Sua conta está inativa. Entre em contato com o administrador.')
         } else {
-          setError(`Authentication failed (${err.status}). Please try again.`)
+          setError(`Falha na autenticação (${err.status}). Tente novamente.`)
         }
       } else {
-        setError('Could not reach the authentication server. Check your connection.')
+        setError('Não foi possível conectar ao servidor. Verifique sua conexão.')
       }
     } finally {
       setIsLoading(false)
@@ -61,15 +61,15 @@ const LoginPage: React.FC = () => {
         {/* Logo / branding */}
         <div className="text-center mb-8">
           <h1 className="text-3xl font-bold text-primary">PlugHub</h1>
-          <p className="text-gray-500 text-sm mt-1">Enterprise Orchestration Platform</p>
+          <p className="text-muted text-sm mt-1">Plataforma de Orquestração Empresarial</p>
         </div>
 
-        <form onSubmit={handleSubmit} className="space-y-5">
+        <form onSubmit={handleSubmit} className="space-y-5" noValidate>
           <Input
             id="email"
-            label="Email"
+            label="E-mail"
             type="email"
-            placeholder="you@example.com"
+            placeholder="voce@empresa.com.br"
             value={email}
             onChange={(e) => setEmail(e.target.value)}
             required
@@ -79,7 +79,7 @@ const LoginPage: React.FC = () => {
 
           <Input
             id="password"
-            label="Password"
+            label="Senha"
             type="password"
             placeholder="••••••••"
             value={password}
@@ -91,7 +91,8 @@ const LoginPage: React.FC = () => {
           {error && (
             <div
               role="alert"
-              className="bg-red-50 border border-red-400 text-red-700 px-4 py-3 rounded text-sm"
+              aria-live="assertive"
+              className="bg-red-light border border-red text-red-text px-4 py-3 rounded-lg text-sm"
             >
               {error}
             </div>
@@ -101,15 +102,11 @@ const LoginPage: React.FC = () => {
             type="submit"
             variant="primary"
             className="w-full"
-            disabled={isLoading}
+            loading={isLoading}
           >
-            {isLoading ? 'Signing in…' : 'Sign In'}
+            {isLoading ? 'Entrando…' : 'Entrar'}
           </Button>
         </form>
-
-        <p className="text-gray-400 text-xs text-center mt-6">
-          Default admin: <span className="font-mono">admin@plughub.local</span>
-        </p>
       </div>
     </div>
   )

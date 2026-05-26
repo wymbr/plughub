@@ -2,12 +2,20 @@ import React, { useState } from 'react'
 import { Link, useLocation } from 'react-router-dom'
 import { useAuth } from '@/auth/useAuth'
 import { useTranslation } from 'react-i18next'
+import {
+  Home, Monitor, Radio, GitBranch, ClipboardCheck, BarChart2, Settings, Search,
+  FileText, List, Waves, Zap, Cpu, PenLine, Rocket, FileCheck, BookOpen,
+  Archive, Ruler, LayoutDashboard, Package, Tv2, Calendar, ShieldOff, CreditCard,
+  Lock, Users, Globe,
+} from 'lucide-react'
+
+type LucideIcon = React.FC<{ className?: string }>
 
 interface NavItem {
   navKey?: string
   label: string
   href: string
-  icon: string
+  icon: LucideIcon
   roles?: string[]
   abac?: { module: string; field: string }
   children?: NavItem[]
@@ -31,7 +39,7 @@ const Sidebar: React.FC = () => {
     {
       label: t('nav.home'),
       href: '/',
-      icon: '🏠',
+      icon: Home,
       roles: ['operator', 'supervisor', 'admin', 'developer', 'business']
     },
 
@@ -39,7 +47,7 @@ const Sidebar: React.FC = () => {
     {
       label: t('nav.console'),
       href:  '/console',
-      icon:  '🖥️',
+      icon:  Monitor,
       roles: ['operator', 'supervisor', 'admin'],
       abac:  { module: 'contacts', field: 'operacao' },
     },
@@ -49,14 +57,14 @@ const Sidebar: React.FC = () => {
       navKey: 'monitor',
       label: t('nav.monitor'),
       href: '#',
-      icon: '📡',
+      icon: Radio,
       roles: ['operator', 'supervisor', 'admin'],
       children: [
-        { label: t('nav.monitor.sessions'),  href: '/flow/monitor',      icon: '📋', abac: { module: 'contacts',   field: 'operacao' } },
-        { label: t('nav.monitor.agents'),    href: '/contacts/agents',   icon: '👥', abac: { module: 'contacts',   field: 'operacao' } },
-        { label: t('nav.monitor.pools'),     href: '/contacts/pools',    icon: '🏊', abac: { module: 'contacts',   field: 'operacao' } },
-        { label: t('nav.monitor.events'),    href: '/contacts/events',   icon: '📡', abac: { module: 'contacts',   field: 'operacao' } },
-        { label: t('nav.monitor.processes'), href: '/flow/processos',    icon: '⚙️', abac: { module: 'workflows',  field: 'operacao' } },
+        { label: t('nav.monitor.sessions'),  href: '/flow/monitor',      icon: FileText,  abac: { module: 'contacts',   field: 'operacao' } },
+        { label: t('nav.monitor.agents'),    href: '/contacts/agents',   icon: Users,     abac: { module: 'contacts',   field: 'operacao' } },
+        { label: t('nav.monitor.pools'),     href: '/contacts/pools',    icon: Waves,     abac: { module: 'contacts',   field: 'operacao' } },
+        { label: t('nav.monitor.events'),    href: '/contacts/events',   icon: Zap,       abac: { module: 'contacts',   field: 'operacao' } },
+        { label: t('nav.monitor.processes'), href: '/flow/processos',    icon: Cpu,       abac: { module: 'workflows',  field: 'operacao' } },
       ]
     },
 
@@ -65,11 +73,11 @@ const Sidebar: React.FC = () => {
       navKey: 'flow',
       label: t('nav.flow'),
       href: '#',
-      icon: '🔄',
+      icon: GitBranch,
       roles: ['admin', 'developer', 'business', 'supervisor'],
       children: [
-        { label: t('nav.flow.editor'), href: '/agent-flow/editor', icon: '✏️', abac: { module: 'skill_flows', field: 'operacao' } },
-        { label: t('nav.flow.deploy'), href: '/agent-flow/deploy', icon: '🚀', abac: { module: 'skill_flows', field: 'operacao' } },
+        { label: t('nav.flow.editor'), href: '/agent-flow/editor', icon: PenLine, abac: { module: 'skill_flows', field: 'operacao' } },
+        { label: t('nav.flow.deploy'), href: '/agent-flow/deploy', icon: Rocket,  abac: { module: 'skill_flows', field: 'operacao' } },
       ]
     },
 
@@ -78,13 +86,15 @@ const Sidebar: React.FC = () => {
       navKey: 'quality',
       label: t('nav.quality'),
       href: '#',
-      icon: '✓',
+      icon: ClipboardCheck,
       roles: ['operator', 'supervisor', 'admin', 'business'],
       children: [
-        { label: t('nav.eval.forms'),       href: '/evaluation/forms',       icon: '📝', roles: ['admin'],                           abac: { module: 'evaluation', field: 'formularios' } },
-        { label: t('nav.eval.campaigns'),   href: '/evaluation/campaigns',   icon: '📋', roles: ['supervisor', 'admin'],             abac: { module: 'evaluation', field: 'formularios' } },
-        { label: t('nav.eval.knowledge'),   href: '/evaluation/knowledge',   icon: '📚', roles: ['admin'] },
-        { label: t('nav.eval.evaluations'), href: '/evaluation/evaluations', icon: '🗂️', roles: ['operator', 'supervisor', 'admin'] },
+        { label: t('nav.eval.forms'),       href: '/evaluation/forms',       icon: FileCheck,    roles: ['admin'],                           abac: { module: 'evaluation', field: 'formularios' } },
+        { label: t('nav.eval.campaigns'),   href: '/evaluation/campaigns',   icon: List,         roles: ['supervisor', 'admin'],             abac: { module: 'evaluation', field: 'formularios' } },
+        { label: t('nav.eval.knowledge'),   href: '/evaluation/knowledge',   icon: BookOpen,     roles: ['admin'] },
+        { label: t('nav.eval.evaluations'), href: '/evaluation/evaluations', icon: Archive,      roles: ['operator', 'supervisor', 'admin'] },
+        { label: t('nav.eval.calibration'), href: '/evaluation/calibration', icon: Ruler,        roles: ['supervisor', 'admin'] },
+        { label: t('nav.eval.curadoria'),   href: '/evaluation/curadoria',   icon: Search,       roles: ['supervisor', 'admin'] },
       ]
     },
 
@@ -93,14 +103,14 @@ const Sidebar: React.FC = () => {
       navKey: 'analise',
       label: t('nav.analise'),
       href: '#',
-      icon: '📊',
+      icon: BarChart2,
       roles: ['supervisor', 'admin', 'business'],
       children: [
-        { label: t('nav.analise.sessions'),  href: '/analise/sessions',  icon: '📋', abac: { module: 'contacts',   field: 'visualizar' } },
-        { label: t('nav.analise.agents'),    href: '/analise/agents',    icon: '👥', abac: { module: 'contacts',   field: 'visualizar' } },
-        { label: t('nav.analise.events'),    href: '/analise/events',    icon: '📡', abac: { module: 'contacts',   field: 'visualizar' } },
-        { label: t('nav.analise.processes'), href: '/analise/processos', icon: '⚙️', abac: { module: 'workflows',  field: 'operacao'   } },
-        { label: t('nav.analise.quality'),   href: '/analise/quality',   icon: '✓',  abac: { module: 'evaluation', field: 'report'     } },
+        { label: t('nav.analise.sessions'),  href: '/analise/sessions',  icon: FileText,      abac: { module: 'contacts',   field: 'visualizar' } },
+        { label: t('nav.analise.agents'),    href: '/analise/agents',    icon: Users,         abac: { module: 'contacts',   field: 'visualizar' } },
+        { label: t('nav.analise.events'),    href: '/analise/events',    icon: Zap,           abac: { module: 'contacts',   field: 'visualizar' } },
+        { label: t('nav.analise.processes'), href: '/analise/processos', icon: Cpu,           abac: { module: 'workflows',  field: 'operacao'   } },
+        { label: t('nav.analise.quality'),   href: '/analise/quality',   icon: ClipboardCheck, abac: { module: 'evaluation', field: 'report'     } },
       ]
     },
 
@@ -108,7 +118,7 @@ const Sidebar: React.FC = () => {
     {
       label: t('nav.audit'),
       href:  '/audit',
-      icon:  '🔍',
+      icon:  Search,
       roles: ['admin', 'supervisor'],
       abac:  { module: 'audit', field: 'sessions' },
     },
@@ -118,18 +128,18 @@ const Sidebar: React.FC = () => {
       navKey: 'config',
       label: t('nav.config'),
       href: '#',
-      icon: '⚙️',
+      icon: Settings,
       roles: ['admin', 'business'],
       children: [
-        { label: t('nav.dashboards'),    href: '/dashboards',           icon: '📊', abac: { module: 'config', field: 'platform'  } },
-        { label: t('nav.resources'),     href: '/config/resources',     icon: '📦', abac: { module: 'config', field: 'resources' } },
-        { label: t('nav.platform'),      href: '/config/platform',      icon: '🖥️', abac: { module: 'config', field: 'platform'  } },
-        { label: t('nav.channels'),      href: '/config/channels',      icon: '📡', abac: { module: 'config', field: 'platform'  } },
-        { label: t('nav.calendars'),     href: '/config/calendars',     icon: '📅', abac: { module: 'config', field: 'platform'  } },
-        { label: t('nav.masking'),       href: '/config/masking',       icon: '🔒', abac: { module: 'config', field: 'masking'   } },
-        { label: t('nav.billing'),       href: '/config/billing',       icon: '💳', roles: ['admin', 'business'] },
-        { label: t('nav.access'),        href: '/config/access',        icon: '🔐', abac: { module: 'config', field: 'users'     } },
-        { label: t('nav.groups'),        href: '/config/groups',        icon: '👥', abac: { module: 'config', field: 'users'     } },
+        { label: t('nav.dashboards'),    href: '/dashboards',           icon: LayoutDashboard, abac: { module: 'config', field: 'platform'  } },
+        { label: t('nav.resources'),     href: '/config/resources',     icon: Package,         abac: { module: 'config', field: 'resources' } },
+        { label: t('nav.platform'),      href: '/config/platform',      icon: Tv2,             abac: { module: 'config', field: 'platform'  } },
+        { label: t('nav.channels'),      href: '/config/channels',      icon: Radio,           abac: { module: 'config', field: 'platform'  } },
+        { label: t('nav.calendars'),     href: '/config/calendars',     icon: Calendar,        abac: { module: 'config', field: 'platform'  } },
+        { label: t('nav.masking'),       href: '/config/masking',       icon: ShieldOff,       abac: { module: 'config', field: 'masking'   } },
+        { label: t('nav.billing'),       href: '/config/billing',       icon: CreditCard,      roles: ['admin', 'business'] },
+        { label: t('nav.access'),        href: '/config/access',        icon: Lock,            abac: { module: 'config', field: 'users'     } },
+        { label: t('nav.groups'),        href: '/config/groups',        icon: Users,           abac: { module: 'config', field: 'users'     } },
       ]
     },
 
@@ -161,7 +171,7 @@ const Sidebar: React.FC = () => {
   if (collapsed) {
     return (
       <aside className="w-11 bg-primary flex flex-col overflow-hidden flex-shrink-0 transition-all duration-200">
-        <nav className="flex-1 py-3 flex flex-col items-center gap-1">
+        <nav aria-label="Navegação principal" className="flex-1 py-3 flex flex-col items-center gap-1">
           {filteredItems.map(item => {
             const key = item.navKey ?? item.href
             const href = item.href === '#'
@@ -175,15 +185,16 @@ const Sidebar: React.FC = () => {
               <Link
                 key={key}
                 to={href}
-                title={item.label}
-                className={`w-9 h-9 flex items-center justify-center rounded-lg text-lg
+                aria-label={item.label}
+                aria-current={active ? 'page' : undefined}
+                className={`w-9 h-9 flex items-center justify-center rounded-lg
                   transition-colors
                   ${active
                     ? 'bg-white/15 text-white'
                     : 'text-white/60 hover:text-white hover:bg-white/10'
                   }`}
               >
-                {item.icon}
+                <item.icon className="w-4 h-4" aria-hidden="true" />
               </Link>
             )
           })}
@@ -191,11 +202,11 @@ const Sidebar: React.FC = () => {
 
         <button
           onClick={() => setCollapsed(false)}
-          title="Expandir menu"
+          aria-label="Expandir menu"
           className="w-full py-3 flex items-center justify-center text-white/50 hover:text-white
             transition-colors border-t border-white/10 text-sm"
         >
-          ›
+          <span aria-hidden="true">›</span>
         </button>
       </aside>
     )
@@ -206,19 +217,23 @@ const Sidebar: React.FC = () => {
     const hasChildren = item.children && item.children.length > 0
 
     if (hasChildren) {
-      const groupKey  = item.navKey ?? item.href
+      const groupKey   = item.navKey ?? item.href
       const isExpanded = expandedGroups.includes(groupKey)
+      const panelId    = `nav-panel-${groupKey}`
 
       return (
         <div key={groupKey}>
           <button
             onClick={() => toggleGroup(groupKey)}
+            aria-expanded={isExpanded}
+            aria-controls={panelId}
             className="w-full flex items-center gap-2 px-4 py-2 text-white/70 hover:text-white transition-colors text-sm group"
           >
-            <span className="text-lg">{item.icon}</span>
+            <item.icon className="w-4 h-4 flex-shrink-0" aria-hidden="true" />
             <span className="flex-1 text-left">{item.label}</span>
             <svg
-              className={`w-4 h-4 transition-transform ${isExpanded ? 'rotate-180' : ''}`}
+              aria-hidden="true"
+              className={`w-4 h-4 transition-transform motion-safe:transition-transform ${isExpanded ? 'rotate-180' : ''}`}
               fill="none" stroke="currentColor" viewBox="0 0 24 24"
             >
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
@@ -226,31 +241,35 @@ const Sidebar: React.FC = () => {
             </svg>
           </button>
 
-          {isExpanded && (
-            <div className="border-t border-white/10 mt-1 pt-1">
-              {item.children
-                ?.filter(child =>
-                  (!child.roles || child.roles.includes(session?.role || '')) &&
-                  passesAbac(child)
-                )
-                .map(child => renderNavItem(child, depth + 1))}
-            </div>
-          )}
+          <div
+            id={panelId}
+            hidden={!isExpanded}
+            className={isExpanded ? "border-t border-white/10 mt-1 pt-1" : ""}
+          >
+            {item.children
+              ?.filter(child =>
+                (!child.roles || child.roles.includes(session?.role || '')) &&
+                passesAbac(child)
+              )
+              .map(child => renderNavItem(child, depth + 1))}
+          </div>
         </div>
       )
     }
 
+    const active = isActive(item.href)
     return (
       <Link
         key={item.label}
         to={item.href}
+        aria-current={active ? 'page' : undefined}
         className={`flex items-center gap-2 px-4 py-2 text-sm transition-colors ${
-          isActive(item.href)
+          active
             ? 'bg-white/10 text-white font-semibold'
             : 'text-white/70 hover:text-white'
         } ${depth > 0 ? 'pl-8' : ''}`}
       >
-        <span className="text-lg">{item.icon}</span>
+        <item.icon className="w-4 h-4 flex-shrink-0" aria-hidden="true" />
         <span>{item.label}</span>
       </Link>
     )
@@ -258,7 +277,7 @@ const Sidebar: React.FC = () => {
 
   return (
     <aside className="w-56 bg-primary flex flex-col overflow-y-auto flex-shrink-0 transition-all duration-200">
-      <nav className="flex-1 py-4 space-y-1">
+      <nav aria-label="Navegação principal" className="flex-1 py-4 space-y-1">
         {filteredItems.map(item => renderNavItem(item))}
       </nav>
 
@@ -268,10 +287,10 @@ const Sidebar: React.FC = () => {
         </div>
         <button
           onClick={() => setCollapsed(true)}
-          title="Recolher menu"
+          aria-label="Recolher menu"
           className="text-white/40 hover:text-white/80 transition-colors text-xs px-1"
         >
-          ‹
+          <span aria-hidden="true">‹</span>
         </button>
       </div>
     </aside>

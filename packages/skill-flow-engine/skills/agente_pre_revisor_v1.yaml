@@ -1,0 +1,293 @@
+# agente_pre_revisor_v1.yaml
+# Skill Flow do Revisor AI Pré-Publicação — Arc 13 Fase C
+#
+# Propósito:
+#   Gate de qualidade que atua ANTES de publicar o resultado de avaliação ao agente
+#   humano avaliado. Melhora a qualidade da avaliação inicial, reduzindo contestações
+#   evitáveis causadas por evidências fracas, notas mal calibradas ou vieses sistemáticos.
+#
+# Ativação:
+#   Pelo workflow de revisão ANTES de contestation_open. Configurado por campanha:
+#   campaign.pre_review_enabled = true
+#   campaign.pre_review_agent_pool = "pool_revisao_pre_publicacao" (ou similar)
+#
+# Dois outputs:
+#   1. OUTPUT PRIMÁRIO — revisão de qualidade por dimensão (obrigatório):
+#      Para cada dimensão do formulário avaliado:
+#        - action: "approve" → aceita o score original sem alteração
+#        - action: "adjust"  → propõe score_override + revised_evidence + justification
+#
+#   2. OUTPUT SECUNDÁRIO — calibration_signal (opcional):
+#      Emitido apenas quando há evidência de padrão sistemático do avaliador —
+#      não por discordância pontual com uma nota. Um sinal de calibração dispara
+#      automaticamente uma CurationReview para o curador humano (assíncrono).
+#
+# Fluxo:
+#
+#   get_context (evaluation_context_get — ReplayContext completo)
+#       │
+#   get_threads (evaluation_threads_get — ContestationThreads round=1 do avaliador)
+#       │
+#   check_has_threads (choice: há threads para revisar?)
+#       ├─ no  → complete_skip (nada a revisar — avaliação sem dimension_threads)
+#       │
+#       └─ yes → review (reason: LLM revisa cada dimensão)
+#                    │
+#               submit_pre_review (invoke: evaluation_pre_review_submit)
+#                    │
+#            ┌───────┴──────────┐
+#            │                  │
+#       complete_ok      complete_error
+#
+# Inputs esperados (injetados pelo orchestrator):
+#   $.session.session_id        — sessão que foi avaliada
+#   $.session.participant_id    — instance_id do revisor pré-publicação (role: reviewer)
+#   $.session.session_token     — JWT do revisor
+#   $.session.evaluation_id     — ID da avaliação a revisar
+#   $.session.instance_id       — ID da EvaluationInstance (para buscar threads)
+#   $.session.tenant_id         — tenant
+#
+# O LLM recebe:
+#   transcript              — eventos originais da sessão avaliada
+#   evaluation_form         — formulário com dimensões e critérios (pesos, instruções)
+#   evaluator_threads       — ContestationThreads round=1 (score + justification + evidence_entries do avaliador)
+#   knowledge_snippets      — políticas, rubricas, scripts ideais (mesmo namespace do avaliador)
+#   calibration_notes       — notas de calibração anteriores do curador (RAG)
+#   session_meta            — metadados da sessão (channel, outcome, duration)
+#
+# O LLM devolve (output_schema abaixo):
+#   dimension_reviews[]:
+#     - dimension_id: string         (ID da dimensão revisada)
+#     - action: "approve"|"adjust"   (aceita ou propõe revisão)
+#     - score_override: number?      (novo score — obrigatório se action=adjust)
+#     - revised_evidence[]:          (evidências alternativas — obrigatório se action=adjust)
+#         stream_entry_id, excerpt, relevance_note
+#     - justification: string        (obrigatório em todos os casos)
+#   calibration_signal?:
+#     - severity: "low"|"medium"|"high"
+#     - dimension_id: string
+#     - observation: string          (padrão sistemático detectado — ≥ 20 palavras)
+#
+# Invariantes:
+#   - Nunca abre contestação (isso é direito do agente humano avaliado)
+#   - action=approve não requer score_override nem revised_evidence
+#   - action=adjust REQUER score_override E revised_evidence (mínimo 1 entry)
+#   - calibration_signal emitido apenas quando há evidência clara de padrão
+#     sistemático do avaliador — NÃO por discordância pontual
+#   - Revisor lê calibration_notes antes de avaliar (RAG de calibração)
+#   - Se os threads estiverem vazios (avaliação sem dimension_threads), avança
+#     para complete_skip — não bloqueia o fluxo
+
+id: skill_pre_revisao_v1
+name: "Revisor AI Pré-Publicação — Arc 13 Fase C"
+version: "1.0"
+description: >
+  Revisor AI que atua antes da publicação do resultado de avaliação ao agente humano.
+  Verifica qualidade das evidências, calibração das notas e consistência da avaliação.
+  Pode ajustar scores com nova evidência ou aprovar sem alteração.
+  Emite calibration_signal para padrões sistemáticos do avaliador (opcional).
+  Persiste via POST /v1/evaluation/instances/{id}/pre-review na evaluation-api.
+classification:
+  type: orchestrator
+  domain: quality
+
+entry: get_context
+
+steps:
+
+  # ── Step 1: buscar contexto completo (ReplayContext + form + snippets) ────────
+  - id:   get_context
+    type: invoke
+    tool:  evaluation_context_get
+    input:
+      session_token:  "$.session.session_token"
+      session_id:     "$.session.session_id"
+      participant_id: "$.session.participant_id"
+    output_as:  eval_context
+    on_success: get_threads
+    on_failure: complete_error
+
+  # ── Step 2: buscar ContestationThreads round=1 do avaliador por dimensão ──────
+  # Os threads contêm o score, justification e evidence_entries que o avaliador
+  # atribuiu a cada dimensão. O revisor os lê antes de avaliar.
+  - id:   get_threads
+    type: invoke
+    tool:  evaluation_threads_get
+    input:
+      session_token: "$.session.session_token"
+      instance_id:   "$.session.instance_id"
+    output_as:  threads_result
+    on_success: check_has_threads
+    on_failure: complete_error
+
+  # ── Step 3: verificar se há threads para revisar ──────────────────────────────
+  # Avaliações sem dimension_threads (legacy Arc 6 ou critérios só auto_computed)
+  # não têm o que revisar — avança diretamente para complete_skip.
+  - id:   check_has_threads
+    type: choice
+    conditions:
+      - field:    "$.pipeline_state.threads_result.threads"
+        operator: exists
+        next:     review
+    default: complete_skip
+
+  # ── Step 4: LLM revisa cada dimensão ─────────────────────────────────────────
+  # O prompt pre_review_rubric_v1 instrui o LLM a:
+  #   1. Ler cada thread round=1 (score + justification + evidence_entries do avaliador)
+  #   2. Cruzar com o transcript original e os knowledge_snippets
+  #   3. Para cada dimensão:
+  #      - Se o score e as evidências são adequados → action=approve
+  #      - Se o score está mal calibrado ou evidências não sustentam a nota → action=adjust:
+  #          a. Propor score_override diferente do original
+  #          b. Citar revised_evidence[] do transcript que suporta o novo score
+  #          c. Escrever justification explicando por que o score original estava errado
+  #   4. Verificar se há padrão sistemático do avaliador (não discordância isolada):
+  #      - Ex: "Avaliador consistentemente ignora evidências de tom em sessões de voz"
+  #      - Ex: "Avaliador penaliza channel=whatsapp com -2pts sem critério no formulário"
+  #      Se detectar padrão → emitir calibration_signal com severity e observation
+  #   5. Ler calibration_notes antes de decidir — se o curador já notou um padrão
+  #      anterior do avaliador, considerar ao avaliar se é recorrência
+  - id:         review
+    type:       reason
+    prompt_id:  pre_review_rubric_v1
+    input:
+      # Transcript com eventos originais
+      replay_events:       "$.pipeline_state.eval_context.context.replay_events"
+      # Formulário de avaliação com dimensões e critérios
+      evaluation_form:     "$.pipeline_state.eval_context.evaluation_form"
+      # Threads round=1 do avaliador — o que o revisor vai verificar
+      evaluator_threads:   "$.pipeline_state.threads_result.threads"
+      # Snippets de conhecimento (mesma base do avaliador)
+      knowledge_snippets_preloaded: "$.pipeline_state.eval_context.context.knowledge_snippets"
+      # Notas de calibração anteriores do curador (RAG)
+      calibration_notes:   "$.pipeline_state.eval_context.calibration_notes"
+      # Metadados da sessão
+      session_meta:        "$.pipeline_state.eval_context.context.session_meta"
+      # Participantes
+      participant_summary: "$.pipeline_state.eval_context.participant_summary"
+    output_schema:
+      dimension_reviews:
+        type: array
+        description: >
+          Uma entrada por dimensão revisada. Cobrindo todas as dimensões que o avaliador
+          pontuou (que estão nos evaluator_threads). Dimensões só com critérios
+          auto_computed podem ser omitidas (sem thread do avaliador).
+        required: true
+        minItems: 1
+        items:
+          type: object
+          properties:
+            dimension_id:
+              type: string
+              description: "ID da dimensão — deve corresponder a um thread do avaliador"
+              required: true
+            action:
+              type: string
+              enum: ["approve", "adjust"]
+              description: >
+                approve: o score e as evidências do avaliador estão adequados.
+                adjust: o score ou as evidências precisam de correção.
+              required: true
+            score_override:
+              type: number
+              description: >
+                Novo score proposto (0 a max_score da dimensão).
+                OBRIGATÓRIO quando action=adjust. Omitir quando action=approve.
+              required: false
+              nullable: true
+            revised_evidence:
+              type: array
+              description: >
+                Evidências alternativas ou complementares que suportam o score_override.
+                OBRIGATÓRIO quando action=adjust. Mínimo 1 entry.
+                Omitir quando action=approve.
+              required: false
+              minItems: 1
+              items:
+                type: object
+                properties:
+                  stream_entry_id:
+                    type: string
+                    description: "event_id do replay_event que serve como evidência"
+                    required: true
+                  excerpt:
+                    type: string
+                    description: "Trecho exato (≤ 200 chars) do original_content do evento"
+                    required: true
+                  relevance_note:
+                    type: string
+                    description: "Por que este evento suporta o score_override (1–3 frases)"
+                    required: true
+            justification:
+              type: string
+              description: >
+                Obrigatório em todos os casos — mínimo 20 palavras.
+                Para approve: por que o score original está correto.
+                Para adjust: por que o score original estava errado e o override é adequado.
+              required: true
+      calibration_signal:
+        type: object
+        description: >
+          OPCIONAL — emitir apenas quando há evidência de padrão SISTEMÁTICO do avaliador,
+          não por discordância isolada em uma única dimensão. Um sinal de calibração
+          dispara CurationReview para o curador humano. Exemplos de padrão legítimo:
+          "Avaliador ignora consistentemente o contexto de canal de voz", "Avaliador
+          penaliza sessões curtas mesmo sem critério para duração no formulário".
+        required: false
+        nullable: true
+        properties:
+          severity:
+            type: string
+            enum: ["low", "medium", "high"]
+            description: >
+              low: padrão menor, ajuste fino de calibração.
+              medium: padrão recorrente com impacto moderado nos scores.
+              high: viés sistemático que invalida múltiplas avaliações.
+            required: true
+          dimension_id:
+            type: string
+            description: "Dimensão onde o padrão foi detectado (ou a mais afetada)"
+            required: true
+          observation:
+            type: string
+            description: >
+              Descrição do padrão sistemático — mínimo 20 palavras. Deve ser específico
+              e baseado em evidências observadas nos threads. Não usar linguagem vaga como
+              "avaliador foi muito rigoroso".
+            required: true
+    output_as:  review_result
+    on_success: submit_pre_review
+    on_failure: complete_error
+
+  # ── Step 5: submeter revisão pré-publicação para evaluation-api ───────────────
+  # evaluation_pre_review_submit:
+  #   - Cria ContestationThread round=1 com author_type=pre_reviewer_ai por dimensão
+  #   - action=adjust → grava score_override e revised_evidence no thread
+  #   - calibration_signal presente → cria CurationReview (assíncrono, não bloqueia)
+  #   - Avança estado da instância: pre_review_pending → contestation_open
+  - id:   submit_pre_review
+    type: invoke
+    tool:  evaluation_pre_review_submit
+    input:
+      session_token:      "$.session.session_token"
+      instance_id:        "$.session.instance_id"
+      dimension_reviews:  "$.pipeline_state.review_result.dimension_reviews"
+      calibration_signal: "$.pipeline_state.review_result.calibration_signal"
+    output_as:  pre_review_submission
+    on_success: complete_ok
+    on_failure: complete_error
+
+  # ── Terminadores ──────────────────────────────────────────────────────────────
+  - id:      complete_ok
+    type:    complete
+    outcome: resolved
+
+  # Avaliação sem dimension_threads — revisor não tem o que verificar
+  # A instância avança diretamente para contestation_open pelo ingest path
+  - id:      complete_skip
+    type:    complete
+    outcome: resolved
+
+  - id:      complete_error
+    type:    complete
+    outcome: failed

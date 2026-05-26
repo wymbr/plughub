@@ -773,6 +773,22 @@ Seis fases: A (infra + signaling), B (media negotiation + agent schema), C (STT/
 
 ---
 
+## Arc 16 — Three-Tier Business Process Orchestration
+
+Formaliza o modelo de orquestração em três camadas: **Tier 1 — Business Workflow** (processo de negócio longa duração, channel-agnostic, Journey-scoped); **Tier 2 — Execution Workflow** (Skill Flow de escopo de sessão, sequencia agentes); **Tier 3 — Interaction Agent** (I/O atômico, uma tarefa, reutilizável). Tier 1 delega via `task`/`collect + skill` para Tier 2; Tier 2 usa `task` para invocar Tier 3. Tier 1 nunca conhece o canal; Tier 3 nunca conhece o processo.
+
+**Journey ContextStore namespace** (`@ctx.journey.*`): novo Redis hash `{tenantId}:ctx:journey:{journeyId}` compartilhado entre todas as sessões da Journey. Resolve o problema de dados coletados em sessões `collect` serem invisíveis para o Business Workflow. `context_tags.outputs` com prefixo `journey.*` redireciona escrita para o hash journey. TTL 30 dias, removido no fechamento da Journey.
+
+**Channel Capability Negotiation**: step `collect` passa a aceitar `requires: [file_upload | audio | video | text | masked_input | rich_menu]` em vez de `channel` explícito. Channel Gateway seleciona canal outbound baseado em `journey.available_channels` + `journey.canal_preferido` + matriz de capacidades por canal. Channel Gateway escreve `journey.available_channels` na primeira mensagem de cada canal.
+
+**Journey como superfície pública**: `GET /v1/journeys?pool_id=...&status=suspended` + `POST /v1/journeys/{id}/resume` encapsulam `resume_token` interno. `pool_id` persistido na Journey na criação. Dois novos MCP tools: `journey_list_suspended` + `journey_resume` (auditados via McpInterceptor). Viabiliza padrão de poller workflow: Tier 1 que monitora e retoma Journeys de outros processos.
+
+**notify como step type**: depreciado — substituído por `invoke: notification_send`. Sub-campo `notify` em `suspend` preservado por atomicidade. **Inbound Journey Resume** (Fase E): Channel Gateway verifica Journey ativa por `customer_id` no inbound sem sessão — implementa Journey como "Pending Delivery" oferecido em todos os canais.
+
+→ See [`docs/arcos/arc16-flow-orchestration.md`](docs/arcos/arc16-flow-orchestration.md)
+
+---
+
 ## Pending (Next Iteration)
 
 ### Arc 15 — WebRTC ✅ (todas as fases implementadas)

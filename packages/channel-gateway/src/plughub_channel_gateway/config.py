@@ -173,6 +173,39 @@ class Settings(BaseSettings):
         "Esta chamada poderá ser gravada para fins de qualidade e treinamento."
     )
 
+    # ── WebRTC (LiveKit SFU) ──────────────────────────────────────────────────
+    # LiveKit server URL (WebSocket).
+    # Example: "wss://livekit.empresa.com"
+    webrtc_livekit_url:             str = "wss://localhost:7880"
+    # LiveKit API key + secret (from livekit-server config / env LIVEKIT_KEYS).
+    # Used exclusively by Channel Gateway — never exposed to browsers.
+    webrtc_livekit_api_key:         str = ""
+    webrtc_livekit_api_secret:      str = ""
+    # JWT token TTL (seconds) for LiveKit room participants.
+    webrtc_token_ttl_s:             int = 3600
+    # Default pool_id for WebRTC sessions when no ChannelEndpoint matches.
+    webrtc_default_pool_id:         str = ""
+    # Medium fallback order when pool does not configure webrtc_media_fallback_order.
+    # Comma-separated, descending priority: "video,voice,text"
+    webrtc_default_medium_order:    str = "video,voice,text"
+    # Enable STT transcription of the customer audio track (Deepgram streaming).
+    webrtc_stt_enabled:             bool = True
+    # Enable TTS injection via LiveKit LocalAudioTrack (AI agents).
+    # Requires livekit full SDK (pip install livekit), not just livekit-api.
+    webrtc_tts_injection_enabled:   bool = False
+    # LGPD notice played (TTS) or sent as text before egress recording starts.
+    # Override per-tenant via Config API namespace "webrtc", key "recording_notice".
+    webrtc_recording_notice:        str = (
+        "Esta chamada poderá ser gravada para fins de qualidade e treinamento."
+    )
+    # Directory where LiveKit egress writes recording files.
+    # For production: mount a shared volume between the LiveKit container and
+    # the Channel Gateway container at this path.
+    webrtc_egress_output_dir:       str = "/var/plughub/webrtc-recordings"
+    # Seconds to wait after stop_egress before reading the output file.
+    # LiveKit needs time to finalize and flush the file.
+    webrtc_egress_wait_s:           float = 5.0
+
     # ── WhatsApp (Meta Cloud API) ─────────────────────────────────────────────
     # System User token from Meta Business Manager (WABA).
     # Can be overridden per-tenant via Redis: {tenant_id}:config:whatsapp:access_token

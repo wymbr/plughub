@@ -1,7 +1,7 @@
 # Padrão: Arquitetura Frontend — Platform UI
 
+> Última atualização: 2026-05-25 · Estado: Arc 16
 > Guia prático para construir módulos, componentes e features no shell unificado do PlugHub
-> Última atualização: 2026-04-28
 
 ---
 
@@ -30,7 +30,7 @@ Antes de criar uma pasta `modules/novo-algo/`, pergunte:
 | É uma visualização complementar a um módulo (ex: detalhe de item)? | ❌ Novo | ✅ Expandir |
 
 **Exemplo:**
-- Novo Skill Editor → Novo módulo `/skill-flows` (tem nav própria, editor + debug, visual complexo)
+- Novo Skill Editor → Novo módulo `/agent-flow/editor` (tem nav própria, editor + debug, visual complexo)
 - Nova coluna em tabela de Pools → Expandir `config-recursos` (é um detalhe de Pool, não seção independente)
 - Novo painel de Aprovações → Novo módulo `/approvals` (fluxo independente, nav própria)
 
@@ -385,7 +385,7 @@ export const routes: RouteObject[] = [
 const menuItems = [
   { label: 'Home', path: '/', icon: 'Home' },
   { label: 'Monitor', path: '/monitor', icon: 'Activity' },
-  { label: 'Workflows', path: '/workflows', icon: 'Zap' },
+  { label: 'Workflows', path: '/workflow/monitor', icon: 'Zap' },
   { label: 'Aprovações', path: '/approvals', icon: 'CheckCircle' },  // ← NOVO
   // ...
 ]
@@ -724,9 +724,39 @@ export const ProtectedByRole: React.FC<ProtectedByRoleProps> = ({
 </ProtectedByRole>
 ```
 
+### RBAC vs ABAC — quando usar cada um
+
+O `roles[]` da `Session` cobre o gate grosseiro de navegação (`operator`, `supervisor`,
+`admin`, `developer`, `business`). A partir do Arc 7, o JWT também carrega `module_config`
+— a base do **sistema ABAC** (Attribute-Based Access Control), que controla acesso por
+**módulo + campo** com níveis `none | read_only | write_only | read_write` e `scope[]`.
+
+Use o `PermissionChecker` para gates finos dentro de um módulo:
+
+```typescript
+const { can } = usePermissions()
+
+// can(module, field, minAccess?, scopeId?)
+if (can('evaluation', 'revisar')) { /* mostra ação de revisão */ }
+if (can('config', 'users', 'read_write')) { /* habilita edição */ }
+```
+
+Regra prática: **RBAC gate** decide se a rota/nav item aparece; **ABAC gate** decide
+quais campos e ações dentro da página o usuário pode usar. Contas legadas sem
+`module_config` sofrem degradação graciosa (fallback para o comportamento RBAC).
+
+→ Detalhes completos em [`../guias/abac-permission-system.md`](../guias/abac-permission-system.md).
+
 ---
 
 ## i18n: Adicionar Traduções
+
+> **Invariante de i18n.** Toda string visível ao usuário DEVE passar por `t()`.
+> Nunca faça hardcode de texto no JSX. Qualquer chave nova deve ser registrada em
+> **ambos** os arquivos de locale (`src/i18n/locales/en/` e `src/i18n/locales/pt-BR/`)
+> antes do PR, usando o namespace do módulo via `useTranslation(namespace)`.
+> Helpers fora de componentes React recebem `t` como parâmetro explícito —
+> nunca chamam `useTranslation` em nível de módulo.
 
 ### Estrutura recomendada
 
@@ -798,7 +828,7 @@ Usado em `/`, `/config/*`, `/dashboards`:
 
 ### Full-bleed (sem padding)
 
-Usado em `/monitor`, `/workflows`, `/agent-assist`:
+Usado em `/monitor`, `/workflow/monitor`, `/agent-assist`:
 
 ```typescript
 // Shell renderiza automaticamente:
@@ -819,7 +849,8 @@ const FULL_BLEED_ROUTES = [
   '/monitor',
   '/agent-assist',
   '/config/platform',
-  '/workflows',
+  '/workflow/monitor',
+  '/agent-flow/editor',
   '/approvals'  // ← Adicione aqui se quiser full-bleed
 ]
 ```
@@ -1019,6 +1050,6 @@ import type { Session } from '@/types'
 ## Suporte
 
 Para dúvidas sobre padrões, arquitetura ou implementação:
-- Consulte `docs/modulos/platform-ui.md` para referência da estrutura
-- Veja exemplos em módulos existentes: `src/modules/atendimento/`, `src/modules/workflows/`
+- Consulte `docs/pacotes/platform-ui.md` para referência da estrutura
+- Veja exemplos em módulos existentes: `src/modules/atendimento/`, `src/modules/workflow-monitor/`
 - Abra issue no repositório com a tag `frontend`

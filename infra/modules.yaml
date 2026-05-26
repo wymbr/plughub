@@ -93,6 +93,17 @@ modules:
         domain: [none, read_write]
         scopable: false
         default: none
+      # Arc 16 Phase C — Tier 1 poller ABAC fields
+      journey_read:
+        label: Visualizar journeys suspensas de um pool (journey_list_suspended)
+        domain: [none, read_only]
+        scopable: false
+        default: none
+      journey_resume:
+        label: Retomar journeys suspensas (journey_resume)
+        domain: [none, read_write]
+        scopable: false
+        default: none
 
   # ── Campanhas ─────────────────────────────────────────────────────────────────
   - module_id: campaigns

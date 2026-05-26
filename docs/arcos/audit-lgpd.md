@@ -1,5 +1,7 @@
 # Audit LGPD — Compliance Role Architecture
 
+> Última atualização: 2026-05-25 · Estado: Arc 16
+
 ## Overview
 
 The Audit module provides a dedicated ABAC-gated surface for Data Protection Officers (DPOs) and compliance teams to inspect personal data processed by the PlugHub platform, in accordance with LGPD requirements.

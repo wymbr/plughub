@@ -6,6 +6,7 @@
  */
 import React, { useState } from 'react'
 import { useTranslation } from 'react-i18next'
+import { X } from 'lucide-react'
 import { useAuth } from '@/auth/useAuth'
 import {
   useWorkflowInstances, useWorkflowInstance, cancelWorkflow,
@@ -141,7 +142,7 @@ export default function WorkflowMonitorPage() {
             <code style={{ fontSize: 12, color: '#93c5fd' }}>{inst.id}</code>
             <div style={{ fontSize: 12, color: '#64748b', marginTop: 2 }}>{inst.flow_id}</div>
           </div>
-          <button onClick={onClose} style={{ background: 'none', border: 'none', color: '#475569', cursor: 'pointer', fontSize: 18 }}>✕</button>
+          <button onClick={onClose} style={{ background: 'none', border: 'none', color: '#475569', cursor: 'pointer', display: 'flex', alignItems: 'center' }} aria-label="Fechar"><X size={16} aria-hidden="true" /></button>
         </div>
 
         <div style={{ flex: 1, overflowY: 'auto', padding: '16px 20px' }}>

@@ -1,14 +1,18 @@
 # Módulo: rules-engine (@plughub/rules-engine)
 
+> Última atualização: 2026-05-25 · Estado: Arc 16
+
 > Pacote: `rules-engine` (serviço)
 > Runtime: Python 3.11+, FastAPI
 > Spec de referência: seções 3.2, 3.2b
 
 ## O que é
 
-O `rules-engine` é o monitor contínuo de conversas em andamento. Ele observa parâmetros de sessão a cada turno e decide se uma conversa deve ser escalada para outro pool de atendimento — sem LLM, sem estado próprio, apenas avaliação declarativa de regras configuradas pelo tenant.
+O `rules-engine` é o avaliador de eventos pós-roteamento. Consome eventos de ciclo de roteamento e de encerramento de atendimento e decide, por avaliação declarativa de regras configuradas pelo tenant, se uma conversa deve ser escalada para outro pool — sem LLM, sem estado próprio.
 
-É **stateless**: não guarda estado entre avaliações. Todo o estado das sessões monitoradas vive externamente (Redis / ClickHouse). O Rules Engine recebe o contexto do chamador e aplica regras.
+É **stateless**: não mantém estado entre eventos. Cada evento é avaliado isoladamente; não há polling de Redis nem monitoramento de sentimento turno a turno. Todo o estado de sessão necessário chega no payload do evento.
+
+**Escopo (CLAUDE.md — Rules Engine — Scope):** consome `conversations.routed`, `conversations.queued`, `conversations.abandoned` e `agent.done`; publica em `rules.escalation.events` e `rules.shadow.events`. O Rules Engine **não** monitora Redis, **não** avalia sentimento, **não** toma decisões de roteamento e **não** mantém estado entre eventos.
 
 ---
 
@@ -128,12 +132,13 @@ draft → dry_run → shadow → active → disabled
 ## Fluxo de Escalonamento
 
 ```
-1. AI Gateway ou Supervisor entrega EvaluationContext ao Rules Engine (por turno)
+1. Evento pós-roteamento chega (conversations.routed/queued/abandoned, agent.done)
+   → o EvaluationContext é montado a partir do payload do evento
 2. RuleEvaluator.evaluate(rule, context) — avalia condições, aplica logic AND/OR
 3. Se triggered=True E rule.target_pool não é None:
-   ├── shadow mode → publica EscalationTrigger no Kafka (shadow topic), não age
+   ├── shadow mode → publica EscalationTrigger em rules.shadow.events, não age
    └── active mode → POST /tools/conversation_escalate no mcp-server (timeout 5s)
-                   → publica EscalationTrigger no Kafka (escalation topic)
+                   → publica EscalationTrigger em rules.escalation.events
 4. Se triggered=True mas sem target_pool → log apenas, nenhuma ação
 ```
 
@@ -294,113 +299,26 @@ EscalationDecision {
 
 ## Tópicos Kafka
 
-| Tópico | Direção | Evento | Quando |
-|---|---|---|---|
-| `conversations.events` | **Publica** | `escalation.triggered` | Regra active disparou e acionou mcp-server |
-| `conversations.events` | **Publica** | `escalation.shadow` | Regra shadow disparou (observação sem ação) |
-| `conversations.events` | **Consome** | `contact_closed` | Decisão de amostragem de avaliação |
-| `agent.lifecycle` | **Consome** | `agent_login` | Inicializa contadores de amostragem no Redis |
-| `agent.lifecycle` | **Consome** | `agent_done` | (futuro) arquivamento de contadores de sessão |
-| `evaluation.events` | **Publica** | `evaluation.requested` | Contato selecionado pela amostragem |
+| Tópico | Direção | Descrição |
+|---|---|---|
+| `conversations.routed` | **Consome** | Conversa roteada — aciona avaliação de regras |
+| `conversations.queued` | **Consome** | Conversa enfileirada — aciona avaliação de regras |
+| `conversations.abandoned` | **Consome** | Conversa abandonada — aciona avaliação de regras |
+| `agent.done` | **Consome** | Encerramento de atendimento — aciona avaliação de regras |
+| `rules.escalation.events` | **Publica** | Regra `active` disparou e acionou `conversation_escalate` |
+| `rules.shadow.events` | **Publica** | Regra `shadow` disparou (observação sem ação) |
+
+> O Rules Engine publica em tópicos dedicados (`rules.escalation.events` e `rules.shadow.events`), **não** em `conversations.events`. As escalações são consumidas pelo Routing Engine; os eventos shadow vão para Analytics.
 
 ---
 
-## Amostragem de Avaliações
+## Amostragem de Avaliações — fora do escopo do Rules Engine
 
-O Rules Engine é responsável por decidir se um `contact_closed` gera uma
-avaliação, mantendo contadores por sessão de agente no Redis e publicando
-`evaluation.requested` quando a cota de amostragem não foi atingida.
-
-### Contadores Redis
-
-```
-eval:sampling:{tenant_id}:{agent_session_id}   Hash   TTL: 48h
-  contacts_handled:   N   ← incrementado a cada contact_closed do agente
-  contacts_evaluated: M   ← incrementado quando avaliação é gerada
-```
-
-Inicializados com valor 0 no `agent_login`. TTL de segurança de 48h garante
-limpeza automática após logout mesmo que o evento de encerramento não chegue.
-
-### Algoritmo de cota
-
-```python
-deve_avaliar = floor(contacts_handled * sampling_rate) > contacts_evaluated
-```
-
-O algoritmo de cota produz convergência determinística: ao final da sessão,
-o número de avaliações geradas é exatamente `floor(total_contacts × rate)`.
-Desvios aleatórios acumulados não ocorrem — diferente de um algoritmo probabilístico.
-
-**Exemplo com `sampling_rate = 0.30` e 10 atendimentos:**
-
-| Atendimento | handled | floor(N×0.3) | evaluated | Avalia? |
-|---|---|---|---|---|
-| 1 | 1 | 0 | 0 | Não |
-| 2 | 2 | 0 | 0 | Não |
-| 3 | 3 | 0 | 0 | Não |
-| 4 | 4 | 1 | 0 | **Sim** → evaluated=1 |
-| 5–6 | 5–6 | 1 | 1 | Não |
-| 7 | 7 | 2 | 1 | **Sim** → evaluated=2 |
-| 8–9 | 8–9 | 2 | 2 | Não |
-| 10 | 10 | 3 | 2 | **Sim** → evaluated=3 |
-
-### Fluxo de decisão
-
-```
-contact_closed (conversations.events)
-  ↓
-Rules Engine lê agent_session_id + pool_id do evento
-  ↓
-HINCRBY eval:sampling:{tenant_id}:{agent_session_id} contacts_handled 1
-  ↓
-Lê contacts_handled e contacts_evaluated do hash
-  ↓
-Se floor(contacts_handled × sampling_rate) > contacts_evaluated:
-  ├── HINCRBY contacts_evaluated 1
-  ├── Monta payload evaluation.requested com context_package snapshot
-  └── Publica em evaluation.events
-```
-
-### Configuração por pool
-
-A `sampling_rate` é declarada na `PoolConfig` no Agent Registry e propagada ao
-Rules Engine via Kafka (mesmo mecanismo da `PoolConfig` do Routing Engine):
-
-```yaml
-pool_id: retencao_humano
-evaluation:
-  sampling_rate: 0.30          # 30% dos atendimentos
-  skill_id_template: "eval_{pool_id}_v1"
-```
-
-O Rules Engine mantém uma cópia em cache local (Redis ou memória) dos parâmetros
-de amostragem por pool, atualizada via kafka_listener.
-
-### Montagem do payload `evaluation.requested`
-
-O Rules Engine monta o payload completo do evento incluindo o `context_package`
-snapshot no momento do `contact_closed`. Não faz consultas adicionais — todos
-os campos necessários estão disponíveis no evento `contact_closed` ou no Redis
-da sessão.
-
-```python
-{
-    "evaluation_id":  str(uuid4()),
-    "triggered_by":   "contact_closed",
-    "triggered_at":   now_iso(),
-    "contact":        event.contact,
-    "agent": {
-        "agent_id":         event.agent_id,
-        "agent_session_id": event.agent_session_id,
-        "agent_type":       event.agent_type,
-        "pool_id":          event.pool_id,
-    },
-    "skill_id":        resolve_skill_id(pool_config, event.pool_id),
-    "context_package": event.context_package,   # snapshot imutável
-    "transcript_id":   event.transcript_id,
-}
-```
+> A criação de instâncias de avaliação **não** é responsabilidade do Rules Engine.
+> O *sampling engine* da `evaluation-api` (Arc 6) consome `session_closed` e
+> decide, segundo as regras de campanha, se gera uma instância de avaliação. O
+> Rules Engine não mantém contadores de amostragem, não consome `contact_closed`
+> para esse fim e não publica `evaluation.requested`.
 
 ---
 
@@ -408,16 +326,14 @@ da sessão.
 
 ```
 rules-engine
-  ├── recebe → EvaluationContext   (fornecido pelo AI Gateway / Supervisor por turno)
-  ├── consome → Kafka              (conversations.events:contact_closed, agent.lifecycle:agent_login)
+  ├── consome → Kafka              (conversations.routed/queued/abandoned, agent.done)
   ├── aciona → mcp-server-plughub  (conversation_escalate — modo active, HTTP POST)
-  ├── publica → Kafka              (escalation events + shadow events + evaluation.requested)
-  ├── lê/escreve → Redis           (contadores de amostragem por agent_session_id)
+  ├── publica → Kafka              (rules.escalation.events, rules.shadow.events)
   ├── lê → ClickHouse              (histórico de sessões para dry_run_historico)
   └── referencia → routing-engine  (target_pool é um pool_id gerenciado pelo Routing Engine)
 ```
 
-> **Nota sobre Redis no Rules Engine:** o acesso ao Redis é restrito à
-> funcionalidade de amostragem (contadores por sessão). O `EvaluationContext`
-> para avaliação de regras de escalonamento continua sendo fornecido pelo
-> chamador a cada invocação — esse caminho não acessa Redis diretamente.
+> **Nota sobre estado no Rules Engine:** o Rules Engine não mantém estado entre
+> eventos. Cada evento de roteamento ou de `agent.done` carrega no payload todo
+> o contexto necessário para a avaliação das regras. O acesso ao ClickHouse é
+> restrito ao `dry_run_historico` (sandbox), nunca ao caminho de produção.

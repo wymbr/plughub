@@ -11,6 +11,7 @@
 import { useState } from 'react'
 import type React from 'react'
 import { useTranslation } from 'react-i18next'
+import { Flame, Users, Zap, BarChart2 } from 'lucide-react'
 import { useAuth } from '@/auth/useAuth'
 import { usePoolViews } from './api/hooks'
 import { HeatmapGrid }      from './components/HeatmapGrid'
@@ -83,10 +84,11 @@ export default function MonitorPage() {
     )
   }
 
-  const monitorTabs: { id: MonitorTab; label: string; icon: string }[] = [
-    { id: 'heatmap',    label: t('monitor.heatmapTab', { defaultValue: 'Heatmap' }),   icon: '🔥' },
-    { id: 'agentes',    label: t('monitor.agentesTab', { defaultValue: 'Agents' }),   icon: '👥' },
-    { id: 'instancias', label: t('monitor.instanciasTab', { defaultValue: 'Instances' }), icon: '⚡' },
+  type MonitorTabIcon = React.FC<{ className?: string }>
+  const monitorTabs: { id: MonitorTab; label: string; Icon: MonitorTabIcon }[] = [
+    { id: 'heatmap',    label: t('monitor.heatmapTab',    { defaultValue: 'Heatmap'   }), Icon: Flame },
+    { id: 'agentes',    label: t('monitor.agentesTab',    { defaultValue: 'Agents'    }), Icon: Users },
+    { id: 'instancias', label: t('monitor.instanciasTab', { defaultValue: 'Instances' }), Icon: Zap   },
   ]
 
   return (
@@ -121,7 +123,7 @@ export default function MonitorPage() {
               display: 'flex', alignItems: 'center', gap: 6,
             }}
           >
-            <span>{tab.icon}</span>
+            <tab.Icon className="w-3.5 h-3.5 flex-shrink-0" aria-hidden="true" />
             <span>{tab.label}</span>
           </button>
         ))}
@@ -143,7 +145,7 @@ export default function MonitorPage() {
                 onClick={() => setShowMetrics(v => !v)}
                 title={t('monitor.showMetrics', { defaultValue: 'Show metrics panel' })}
               >
-                📊 {t('monitor.metrics', { defaultValue: 'Metrics' })}
+                <BarChart2 size={13} style={{ display: 'inline', marginRight: 4, verticalAlign: 'middle' }} aria-hidden="true" />{t('monitor.metrics', { defaultValue: 'Metrics' })}
               </button>
             )}
           </div>

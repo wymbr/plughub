@@ -1,12 +1,14 @@
 # Módulo: channel-gateway (@plughub/channel-gateway)
 
+> Última atualização: 2026-05-25 · Estado: Arc 16
+
 > Pacote: `channel-gateway` (serviço)
 > Runtime: Python 3.11+, FastAPI + aiokafka
 > Spec de referência: seções 3.5, 4.7m
 
 ## O que é
 
-O `channel-gateway` é a camada de normalização entre os canais externos (WhatsApp, SMS, web chat, e-mail, voz) e a plataforma PlugHub. Toda mensagem que entra ou sai da plataforma passa por ele.
+O `channel-gateway` é a camada de normalização entre os canais externos (WhatsApp, SMS, web chat, e-mail, voz, WebRTC) e a plataforma PlugHub. Toda mensagem que entra ou sai da plataforma passa por ele.
 
 É o **único** componente que conhece protocolos específicos de canal. Nenhum outro pacote depende de capacidades de canal.
 
@@ -15,9 +17,11 @@ O `channel-gateway` é a camada de normalização entre os canais externos (What
 ## Invariantes centrais
 
 > - **Nunca rotear conversas** — apenas normalizar e fazer bridge para o Kafka. O Routing Engine é o único árbitro de alocação.
-> - **Nunca acessar `pipeline_state`** — só o estado de sessão de canal (coleta de menu) no Redis.
+> - **Nunca acessar `pipeline_state`** — só o estado de sessão de canal (coleta de menu, conexões WS) no Redis.
 > - **Sempre emitir um único `MenuSubmitEvent`** por step de menu, independentemente de quantos turnos de canal foram necessários.
 > - **`MenuSubmitEvent` deve ser indistinguível** de uma mensagem inbound normal, do ponto de vista do Routing Engine.
+> - **Tokens (JWT, LiveKit) nunca são expostos na URL** — sempre via corpo de mensagem ou emitidos exclusivamente pelo gateway.
+> - **Renderização específica de canal vive exclusivamente nos adapters** — skill-flow e Routing Engine só conhecem o formato neutro.
 
 ---
 
@@ -25,17 +29,21 @@ O `channel-gateway` é a camada de normalização entre os canais externos (What
 
 ```
 channel-gateway/
-  src/
+  src/plughub_channel_gateway/
     adapters/
-      whatsapp.py   ← Meta Cloud API webhooks; Interactive Buttons, List Messages, texto
-      sms.py        ← Webhooks de SMS provider; texto com fallback de menu numerado
-      webchat.py    ← WebSocket; botões, listas, checkboxes e formulários nativos
-      email.py      ← Parse de inbound + SMTP/API outbound; fallback texto para menus
-    main.py         ← FastAPI + rotas de webhook + consumer Kafka de outbound
-    normalizer.py   ← Conversão de eventos de canal → formato neutro de plataforma
-    menu_collector.py ← Orquestração de coleta sequencial para canais sem suporte nativo
-    models.py       ← MenuPayload, MenuSubmitEvent, NormalizedInboundEvent, etc.
-    config.py       ← settings via variáveis de ambiente
+      whatsapp.py        ← Meta Cloud API webhooks; Interactive Buttons, List Messages, texto
+      sms.py             ← Webhooks de SMS provider; texto com fallback de menu numerado
+      webchat.py         ← WebSocket; botões, listas, checkboxes, formulários, upload de anexos
+      email.py           ← Parse de inbound + SMTP/API outbound; fallback texto para menus
+      voice.py           ← Twilio Media Streams (PSTN); STT/TTS pipeline
+      webrtc.py          ← WebRTC browser-to-SFU (Arc 15); signaling, media negotiation, egress
+      webrtc_provider.py ← Abstração de SFU (LiveKit); tokens, rooms, egress
+      webrtc_room_client.py ← Participação server-side em rooms LiveKit (pipeline STT/TTS)
+      voice_provider.py  ← FallbackSTTProvider / FallbackTTSProvider (compartilhados voice + webrtc)
+    main.py              ← FastAPI + rotas de webhook + WS + consumers Kafka
+    normalizer.py        ← Conversão de eventos de canal → formato neutro de plataforma
+    channel_capability_registry.py ← Arc 16 Fase D — matriz de capacidades + select_channel()
+    config.py            ← settings via variáveis de ambiente
 ```
 
 ---
@@ -44,7 +52,7 @@ channel-gateway/
 
 ### 1. Receber eventos inbound de canais
 
-Cada adapter implementa o protocolo do canal correspondente — webhooks HTTP (WhatsApp, SMS, e-mail), WebSocket (web chat) — e entrega eventos normalizados para a plataforma.
+Cada adapter implementa o protocolo do canal correspondente — webhooks HTTP (WhatsApp, SMS, e-mail), WebSocket (web chat), Media Streams / SFU (voz, WebRTC) — e entrega eventos normalizados para a plataforma.
 
 ### 2. Normalizar para formato neutro e publicar no Kafka
 
@@ -54,12 +62,16 @@ Toda mensagem inbound é convertida para um formato neutro de plataforma e publi
 
 O gateway consome o tópico `conversations.outbound`, identifica o canal do destinatário e delega ao adapter correspondente para entrega.
 
-### 4. Coletar input de menu (`MenuPayload`)
+### 4. Coletar input de menu
 
-Quando o Notification Agent envia um `MenuPayload` via `notification_send` no mcp-server, o Channel Gateway:
+Quando o Skill Flow executa um step `menu` (entregue via `invoke: notification_send` no mcp-server), o Channel Gateway:
 
-- **Canais com suporte nativo** (web chat): renderiza diretamente e aguarda um único evento de submit.
-- **Canais sem suporte nativo** (WhatsApp, SMS): executa coleta sequencial — envia cada campo/opção como mensagem separada, acumula respostas parciais no Redis (TTL-bound) e, ao completar todos os campos, emite um único `MenuSubmitEvent` para `conversations.inbound`.
+- **Canais com suporte nativo** (web chat, WebRTC): renderiza diretamente e aguarda um único evento de submit.
+- **Canais sem suporte nativo** (WhatsApp, SMS, e-mail): executa coleta sequencial — envia cada campo/opção como mensagem separada, acumula respostas parciais no Redis (TTL-bound) e, ao completar todos os campos, emite um único `MenuSubmitEvent` para `conversations.inbound`.
+
+### 5. Negociação de capacidade de canal (Arc 16 Fase D)
+
+Quando um step `collect` declara `requires: [...]` em vez de um `channel` explícito, o `channel_capability_registry.py` seleciona o canal outbound. O step `notify` foi depreciado em favor de `invoke: notification_send`.
 
 ---
 
@@ -67,10 +79,50 @@ Quando o Notification Agent envia um `MenuPayload` via `notification_send` no mc
 
 | Adapter | Canal | Protocolo | Status | Referência |
 |---|---|---|---|---|
-| `webchat.py` | Web Chat | WebSocket | ✅ Piloto | [channel-gateway-webchat.md](channel-gateway-webchat.md) |
-| `whatsapp.py` | WhatsApp | Meta Cloud API webhooks | Horizonte 2 | — |
-| `sms.py` | SMS | Webhooks de provider | Horizonte 2 | — |
-| `email.py` | E-mail | SMTP / API + inbound parse | Horizonte 2 | — |
+| `webchat.py` | Web Chat | WebSocket | ✅ Implementado | [channel-gateway-webchat.md](channel-gateway-webchat.md) |
+| `whatsapp.py` | WhatsApp | Meta Cloud API webhooks | ✅ Implementado | — |
+| `sms.py` | SMS | Webhooks de provider | ✅ Implementado | — |
+| `email.py` | E-mail | SMTP / API + inbound parse | ✅ Implementado | — |
+| `voice.py` | Voz (PSTN) | Twilio Media Streams | ✅ Implementado | — |
+| `webrtc.py` | WebRTC | LiveKit SFU (browser-to-SFU) | ✅ Implementado | [`docs/arcos/arc15-webrtc.md`](../arcos/arc15-webrtc.md) |
+
+`channel` e `medium` são distintos: `channel` é o canal específico (`whatsapp`, `webchat`, `voice`, `email`, `sms`, `webrtc`, etc.) — hard filter para roteamento; `medium` é o tipo base (`voice`, `video`, `message`, `email`) — fator de score.
+
+---
+
+## Canal WebRTC (Arc 15)
+
+Canal browser-to-SFU com medium negociado em tempo real (video → voice → text). Coexiste com o canal voice: `voice` = callers externos via tronco PSTN (Twilio), `webrtc` = clientes na webapp. **SFU**: LiveKit self-hosted (Docker/k8s). Implementado em 6 fases:
+
+| Fase | Escopo |
+|---|---|
+| A | Provider abstraction + WebSocket signaling (`/ws/webrtc/{pool_id}`) + emissão de tokens LiveKit |
+| B | `media_capabilities` propagada do schema → adapter; re-negociação de medium mid-session |
+| C | Pipeline STT/TTS server-side via LiveKit Python SDK; resampler PCM 48kHz → 8kHz μ-law; DataChannel text/menu |
+| D | Egress recording (LiveKit Egress API) → AttachmentStore → evento `recording.completed` no stream |
+| E | Console platform-ui overlay (`WebRTCOverlay.tsx`); video grid / waveform conforme medium |
+| F | Widget standalone do cliente no browser |
+
+**Medium negotiation**: `negotiate_medium(agent.media_capabilities, pool.webrtc_media_fallback_order)` tenta video → voice → text; re-negocia quando o agente muda. **Tokens** LiveKit são emitidos exclusivamente pelo Channel Gateway — nunca expostos ao browser. **STT/TTS** reusa os mesmos `FallbackSTTProvider` / `FallbackTTSProvider` do canal voice; o transporte muda de Twilio Media Streams para LiveKit server SDK PCM frames.
+
+---
+
+## Channel Capability Registry (Arc 16 Fase D)
+
+`channel_capability_registry.py` permite que o step `collect` declare `requires: [text|audio|video|file_upload|masked_input|rich_menu]` em vez de um `channel` explícito. O gateway escolhe o canal outbound em runtime.
+
+| Função | Papel |
+|---|---|
+| `CHANNEL_CAPABILITIES` | Matriz estática de capacidades por canal (whatsapp, sms, email, voice, webchat, webrtc) |
+| `_CHANNEL_PRIORITY` | Ordem de preferência quando múltiplos canais satisfazem os requisitos |
+| `channel_satisfies(channel, requires)` | Verifica se um canal suporta todos os capabilities solicitados |
+| `select_channel(available, requires, preferred)` | Algoritmo 2-step: honra preferência, depois escolhe por prioridade |
+| `read_journey_channel_context()` | Lê `journey.available_channels` + `journey.canal_preferido` do ContextStore de Journey |
+| `write_journey_channel_context()` | Escreve canais disponíveis / preferido / contact_id por canal na journey (TTL 30d NX) |
+| `get_journey_contact_id()` | Recupera o contact_id do cliente para um canal na journey |
+| `write_journey_pending_collect()` | Grava `journey.pending_collect_info` para descoberta de journeys com collect pendente |
+
+O consumer `collect.events` despacha em 2 passos: (1) canal explícito → adapter direto; (2) sem canal → `read_journey_channel_context` + `select_channel` + `get_journey_contact_id`.
 
 ---
 
@@ -94,25 +146,6 @@ Para interações sem suporte nativo (WhatsApp, SMS), o adapter executa a coleta
    Chave: channel:{channel}:{session_id}:menu_collect  (TTL-bound)
 3. Aguarda todas as respostas obrigatórias
 4. Agrega e emite um único MenuSubmitEvent → conversations.inbound
-```
-
----
-
-## Fluxo MenuPayload → MenuSubmitEvent
-
-```
-Notification Agent
-  └─ envia MenuPayload via mcp-server (notification_send)
-       │
-Channel Gateway
-  ├─ canal com suporte nativo (web chat)
-  │    └─ renderiza nativo → aguarda submit → MenuSubmitEvent
-  └─ canal sem suporte nativo (WhatsApp / SMS)
-       └─ coleta sequencial (múltiplos turnos) → agrega → MenuSubmitEvent
-            │
-conversations.inbound (Kafka)
-            │
-skill-flow  └─ retoma de __awaiting_selection__, armazena resultado, avança
 ```
 
 ---
@@ -145,9 +178,11 @@ O `result` varia de acordo com `interaction`:
 
 | Chave | Conteúdo | TTL |
 |---|---|---|
-| `channel:{channel}:{session_id}:menu_collect` | Estado parcial de coleta sequencial | TTL configurável (expira se usuário não responder) |
+| `channel:{channel}:{session_id}:menu_collect` | Estado parcial de coleta sequencial | TTL configurável |
+| `webchat:session:{contact_id}` | Mapa `contact_id` → conexão WS ativa | duração do contato (default 4h) |
+| `channel:webrtc:{session_id}:medium` | Medium negociado da sessão WebRTC | duração do contato |
 
-> O Channel Gateway acessa Redis **apenas** para o estado de coleta de menu. Nunca lê nem escreve `pipeline_state`.
+> O Channel Gateway acessa Redis **apenas** para estado de canal (coleta de menu, conexões WS, medium WebRTC). Nunca lê nem escreve `pipeline_state`.
 
 ---
 
@@ -157,6 +192,9 @@ O `result` varia de acordo com `interaction`:
 |---|---|---|
 | `conversations.inbound` | **Publica** | Todos os eventos inbound normalizados, incluindo `MenuSubmitEvent` |
 | `conversations.outbound` | **Consome** | Todos os outbound e `MenuPayload` originados pela plataforma |
+| `collect.events` | **Consome** | `collect.requested` — despacha prompt de coleta pelo canal apropriado (Arc 16) |
+| `gateway.heartbeat` | **Publica** | Heartbeat do gateway — consumido pelo Routing Engine (TTL de instâncias) |
+| `usage.events` | **Publica** | Eventos de metering — `webchat_attachments` (e funções prontas para `whatsapp_conversations`, `voice_minutes`, `sms_segments`, `email_messages`) |
 
 ---
 
@@ -164,10 +202,11 @@ O `result` varia de acordo com `interaction`:
 
 ```
 Python 3.11+
-FastAPI          ← endpoints de webhook
+FastAPI          ← endpoints de webhook + WebSocket
 aiokafka         ← producer/consumer Kafka assíncrono
-redis[hiredis]   ← estado de coleta sequencial (TTL-bound)
+redis[hiredis]   ← estado de canal (coleta, conexões WS, medium)
 pydantic         ← validação de payloads
+livekit-api      ← SFU para o canal WebRTC
 ```
 
 ---
@@ -176,7 +215,7 @@ pydantic         ← validação de payloads
 
 ```
 channel-gateway
-  └── depende de → @plughub/schemas  (MenuPayload, MenuSubmitEvent, contratos de mensagem)
+  └── depende de → @plughub/schemas  (MenuPayload, MenuSubmitEvent, CollectStepSchema, contratos de mensagem)
 ```
 
 Sem dependência de `skill-flow`, `ai-gateway` ou `routing-engine`.
@@ -187,11 +226,13 @@ Sem dependência de `skill-flow`, `ai-gateway` ou `routing-engine`.
 
 ```
 channel-gateway
-  ├── recebe de → canais externos    (webhooks WhatsApp/SMS/email, WebSocket webchat)
+  ├── recebe de → canais externos    (webhooks WhatsApp/SMS/email, WebSocket webchat, SFU webrtc, PSTN voice)
   ├── publica → conversations.inbound  (eventos normalizados + MenuSubmitEvent)
   ├── consome → conversations.outbound (mensagens e MenuPayload para entrega)
-  ├── lê/escreve → Redis             (estado de coleta sequencial — apenas menu)
-  └── é acionado por → Notification Agent (via mcp-server notification_send → MenuPayload)
+  ├── consome → collect.events         (coleta de canal — Arc 16)
+  ├── publica → gateway.heartbeat      (TTL de instâncias no Routing Engine)
+  ├── publica → usage.events           (metering por dimensão)
+  └── lê/escreve → Redis               (estado de canal — nunca pipeline_state)
 ```
 
-> **Nota de design:** Toda lógica de renderização e coleta específica de canal fica exclusivamente nos adapters dentro deste pacote. skill-flow, Notification Agent e Routing Engine nunca sabem qual canal está em uso — recebem e enviam sempre o formato neutro de plataforma.
+> **Nota de design:** Toda lógica de renderização e coleta específica de canal fica exclusivamente nos adapters dentro deste pacote. skill-flow e Routing Engine nunca sabem qual canal está em uso — recebem e enviam sempre o formato neutro de plataforma.

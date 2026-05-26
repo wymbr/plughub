@@ -1,7 +1,8 @@
 # Layer 1 — Channel Layer
 
+> Última atualização: 2026-05-25 · Estado: Arc 16
 > Spec de referência: v24.0 seções 3.5, 7.1–7.4
-> Responsabilidade: abstração e normalização de todos os canais de comunicação — WhatsApp, SMS, Chat Web/App, Email, Voz
+> Responsabilidade: abstração e normalização de todos os canais de comunicação — WhatsApp, SMS, Chat Web/App, Email, Voz, WebRTC
 > Implementado por: `channel-gateway`
 
 ---
@@ -24,10 +25,19 @@ O Channel Gateway também é responsável pela **coleta sequencial de MenuPayloa
 | **Chat Web Adapter** | WebSocket com fallback SSE, streaming de resposta token a token, reconexão com continuidade de sessão (janela 30min) |
 | **SMS Adapter** | Adaptação para canais de texto simples sem formatação rica |
 | **Email Adapter** | Inbound Processor (classificação, extração HTML, attachments), Thread Manager (agrupamento por In-Reply-To → References → similaridade, janela 7 dias), priorização por tier e sinais |
-| **Voice Adapter** | Interface com Voice Gateway e STT Router (componentes Go de alta concorrência, Horizonte 1) |
+| **Voice Adapter** | Interface com tronco PSTN (Twilio Media Streams) e pipeline STT/TTS server-side |
+| **WebRTC Adapter** | Canal browser-to-SFU (Arc 15) — sinalização WS `/ws/webrtc/{pool_id}`, sala LiveKit self-hosted, negociação de medium em tempo real (video → voice → text), pipeline STT/TTS via LiveKit Room SDK, gravação via Egress API |
 | **Channel Normalizer** | Converte todos os eventos de canal para envelope interno único; correlação cross-canal com mesmo `session_id` (janela 30min); rate limiting por `customer_id`, não por canal |
 
 ---
+
+## Canais suportados
+
+Oito canais ativos. `channel` é um filtro hard de roteamento (match obrigatório); `medium` (`voice`, `video`, `message`, `email`) é apenas fator de score.
+
+```
+whatsapp · webchat · voice · email · sms · instagram · telegram · webrtc
+```
 
 ## Interfaces
 
@@ -36,11 +46,12 @@ O Channel Gateway também é responsável pela **coleta sequencial de MenuPayloa
 | Canal | Protocolo | Observações |
 |---|---|---|
 | WhatsApp | Webhook HTTPS (Meta) | HMAC verificado, resposta 200 imediata, processamento assíncrono |
-| Chat Web | WebSocket / SSE (fallback) | Streaming de tokens |
+| Chat Web (`webchat`) | WebSocket / SSE (fallback) | Streaming de tokens; cliente não é participante nomeado |
 | SMS | Webhook HTTPS (provider) | — |
 | Email | SMTP inbound / API (SendGrid, SES, Mailgun, Exchange) | — |
-| Voz (SIP) | SIP trunk → Voice Gateway (Go) → STT Router | Áudio → transcrição → envelope normalizado |
-| WebRTC | WebRTC Gateway (Horizonte 2) | Mesmo pipeline STT; vídeo somente para agente humano |
+| Instagram / Telegram | Webhook HTTPS (provider) | — |
+| Voz (`voice`) | Tronco PSTN (Twilio Media Streams) → pipeline STT/TTS | Áudio → transcrição → envelope normalizado |
+| WebRTC (`webrtc`) | WS `/ws/webrtc/{pool_id}` → SFU LiveKit self-hosted | Arc 15 — clientes na webapp; medium negociado video → voice → text; STT/TTS server-side via LiveKit Room SDK |
 
 **Saída (para o restante da plataforma):**
 
@@ -86,6 +97,17 @@ Para canais que não suportam menus interativos (button, list, checklist, form),
 
 ---
 
+## Channel Capability Negotiation (Arc 16, Fase D)
+
+O step `collect` do Skill Flow passa a aceitar `requires: [text | audio | video | file_upload | masked_input | rich_menu]` em vez de um `channel` explícito. O Channel Gateway seleciona o canal outbound em tempo de execução:
+
+- `channel_capability_registry.py` mantém `CHANNEL_CAPABILITIES` — matriz estática de capacidades por canal (whatsapp, sms, email, voice, webchat, webrtc) — e `_CHANNEL_PRIORITY` para ordem de preferência.
+- `select_channel(available, requires, preferred)` — algoritmo 2-step: honra `journey.canal_preferido`, depois escolhe por prioridade entre os canais que satisfazem todos os `requires`.
+- O Channel Gateway escreve `journey.available_channels` no ContextStore de Journey na primeira mensagem de cada canal; o `collect` lê esse contexto para descobrir os canais disponíveis para o cliente.
+- `journey.pending_collect_info` é gravado após o despacho, permitindo a MCP tool `journey_check_pending` localizar journeys com `collect` pendente (Inbound Journey Resume, Arc 16 Fase E).
+
+---
+
 ## Considerações operacionais
 
 **Multi-site active-active:** cada site tem seus próprios Channel Gateways. O Global Load Balancer (Anycast / GeoDNS) distribui o tráfego. Sessões WebSocket usam sticky routing por `session_id` para manter a conexão no mesmo site enquanto ativa.
@@ -104,5 +126,7 @@ Para canais que não suportam menus interativos (button, list, checklist, form),
 - Seção 7.1 — Messaging Gateway (WhatsApp + Chat Web)
 - Seção 7.2 — Email Gateway
 - Seção 7.3 — Email Multi-Provider
-- Seção 7.4 — WebRTC Gateway (Horizonte 2)
+- Seção 7.4 — Canal WebRTC (implementado no Arc 15 — SFU LiveKit self-hosted)
 - Seção 5.1–5.3 — Arquitetura Multi-Site
+- [`../arcos/arc15-webrtc.md`](../arcos/arc15-webrtc.md) — Canal WebRTC
+- [`../arcos/arc16-flow-orchestration.md`](../arcos/arc16-flow-orchestration.md) — Channel Capability Negotiation

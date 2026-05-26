@@ -1,0 +1,49 @@
+{
+  "accessWarning": "Restricted access — all accesses are recorded in an immutable audit log.",
+  "tabs": {
+    "sessions":        "Sessions",
+    "mcp_calls":       "MCP Calls",
+    "user_access":     "Access Logs",
+    "data_requests":   "Data Requests",
+    "config_snapshot": "Masking Config"
+  },
+  "comingSoon": "coming soon",
+  "sessions": {
+    "accessNotice": "All access to session messages is recorded in the immutable audit log.",
+    "loadError":    "Error loading data",
+    "lookup":       "Look up",
+    "results":      "{{count}} messages — session {{sessionId}}",
+    "columns": {
+      "timestamp": "Timestamp",
+      "type":      "Type",
+      "author":    "Author",
+      "role":      "Role",
+      "content":   "Content"
+    }
+  },
+  "mcpCalls": {
+    "maskedOnly":   "Only calls with masked fields",
+    "refresh":      "↻ Refresh",
+    "loadError":    "Error loading data",
+    "noRecords":    "No records found",
+    "allowed":      "Allowed",
+    "blocked":      "Blocked",
+    "injectionYes": "Yes",
+    "columns": {
+      "timestamp": "Timestamp",
+      "server":    "Server",
+      "tool":      "Tool",
+      "allowed":   "Allowed",
+      "injection": "Injection",
+      "masked":    "Masked Fields",
+      "ms":        "ms",
+      "session":   "Session"
+    }
+  },
+  "stub": {
+    "inDevelopment": "{{label}} — in development",
+    "userAccess":    "User access logs",
+    "dataRequests":  "SAR / Erasure requests",
+    "configSnapshot":"Masking configuration snapshot"
+  }
+}

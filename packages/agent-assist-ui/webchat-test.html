@@ -109,13 +109,26 @@
   <!-- Pool + connect row -->
   <div class="config-row">
     <select id="pool-select">
-      <option value="sac_ia">sac_ia</option>
-      <option value="demo_ia">demo_ia</option>
-      <option value="fila_humano">fila_humano</option>
-      <option value="retencao_humano">retencao_humano</option>
-      <option value="auth_ia">auth_ia (PIN mascarado)</option>
-      <option value="auth_form_ia">auth_form_ia (formulário masked)</option>
-      <option value="copilot_sac">copilot_sac (@mention co-pilot)</option>
+      <optgroup label="── Entrada ──">
+        <option value="demo_ia">demo_ia (triagem IVR)</option>
+        <option value="sac_ia">sac_ia (SAC Journey)</option>
+      </optgroup>
+      <optgroup label="── Jornadas (Cenário B) ──">
+        <option value="portabilidade_ia">portabilidade_ia (portabilidade)</option>
+        <option value="reembolso_ia">reembolso_ia (reembolso)</option>
+        <option value="auth_sac_ia">auth_sac_ia (auth → SAC)</option>
+      </optgroup>
+      <optgroup label="── Humano ──">
+        <option value="fila_humano">fila_humano</option>
+        <option value="retencao_humano">retencao_humano</option>
+      </optgroup>
+      <optgroup label="── Auth / Masked ──">
+        <option value="auth_ia">auth_ia (PIN mascarado)</option>
+        <option value="auth_form_ia">auth_form_ia (formulário masked)</option>
+      </optgroup>
+      <optgroup label="── Especialistas ──">
+        <option value="copilot_sac">copilot_sac (@mention co-pilot)</option>
+      </optgroup>
     </select>
     <input id="token-input" placeholder="JWT (auto-gerado se vazio)" />
     <button id="connect-btn" onclick="connect().catch(onConnectErr)">Conectar</button>

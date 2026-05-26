@@ -49,6 +49,51 @@ async function _fetchSkillSnapshot(skillId: string, tenantId: string): Promise<u
   }
 }
 
+/**
+ * After a promote or rollback, propagate max_concurrent_sessions from the
+ * newly-promoted slot's config_json to every agent_type that belongs to the pool.
+ * Bootstrap will pick up the change via registry.changed and adjust instance count.
+ */
+async function _applyMaxConcurrentSessions(
+  poolId: string,
+  tenantId: string,
+  configJson: Record<string, unknown>,
+): Promise<void> {
+  const raw = configJson["max_concurrent_sessions"]
+  if (typeof raw !== "number" || raw < 1) return
+
+  const maxConcurrent = Math.max(1, Math.floor(raw))
+
+  try {
+    const atpRows = await (prisma as any).agentTypePool.findMany({
+      where: { pool_id: poolId, tenant_id: tenantId },
+    }) as Array<{ agent_type_id: string }>
+
+    if (atpRows.length === 0) return
+
+    await Promise.all(
+      atpRows.map((atp: { agent_type_id: string }) =>
+        (prisma as any).agentType.update({
+          where: {
+            agent_type_id_tenant_id: {
+              agent_type_id: atp.agent_type_id,
+              tenant_id:     tenantId,
+            },
+          },
+          data: { max_concurrent_sessions: maxConcurrent },
+        }),
+      ),
+    )
+
+    console.info(
+      `[pool-slots] max_concurrent_sessions=${maxConcurrent} applied to ${atpRows.length} agent_type(s) in pool ${poolId}`,
+    )
+  } catch (err) {
+    // Non-fatal: log and continue. Bootstrap still reconciles on registry.changed.
+    console.warn("[pool-slots] Could not update max_concurrent_sessions on agent_types:", err)
+  }
+}
+
 // ── GET /v1/pools/:pool_id/slots ───────────────────────────────────────────────
 
 poolSlotsRouter.get("/slots", async (req: Request, res: Response, next: NextFunction) => {
@@ -227,6 +272,13 @@ poolSlotsRouter.post("/promote", async (req: Request, res: Response, next: NextF
       })
     })
 
+    // Propagate max_concurrent_sessions from promoted slot → agent_types in this pool
+    await _applyMaxConcurrentSessions(
+      poolId,
+      tenantId,
+      (nextSlot["config_json"] ?? {}) as Record<string, unknown>,
+    )
+
     await publishRegistryChanged(tenantId, "pool", poolId, "updated")
 
     const updated = await (prisma as any).poolSkillSlot.findMany({
@@ -302,6 +354,13 @@ poolSlotsRouter.post("/rollback", async (req: Request, res: Response, next: Next
         where: { pool_id: poolId, tenant_id: tenantId, slot: "previous" },
       })
     })
+
+    // Propagate max_concurrent_sessions from restored slot → agent_types in this pool
+    await _applyMaxConcurrentSessions(
+      poolId,
+      tenantId,
+      (previousSlot["config_json"] ?? {}) as Record<string, unknown>,
+    )
 
     await publishRegistryChanged(tenantId, "pool", poolId, "updated")
 

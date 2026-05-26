@@ -226,4 +226,4 @@ steps:
 
   - id: finalizar_timeout
     type: complete
-    outcome: abandoned
+    outcome: failed

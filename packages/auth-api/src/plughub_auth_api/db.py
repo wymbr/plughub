@@ -73,6 +73,11 @@ ALTER TABLE auth.users
     ADD COLUMN IF NOT EXISTS module_config JSONB NOT NULL DEFAULT '{}'
 """
 
+DDL_MIGRATE_USERS_MAX_CONCURRENT = """
+ALTER TABLE auth.users
+    ADD COLUMN IF NOT EXISTS max_concurrent_sessions INT NOT NULL DEFAULT 3
+"""
+
 # ── Language Cleanup Phase 2 — rename Portuguese ABAC field keys in module_config
 # Each UPDATE is idempotent: the WHERE clause only matches rows that still carry
 # the old key name, so re-running on an already-migrated DB is a no-op.
@@ -174,6 +179,7 @@ async def ensure_schema(pool: asyncpg.Pool) -> None:
             await conn.execute(DDL_SESSIONS_IDX_EXP)
             await conn.execute(DDL_MODULE_REGISTRY)
             await conn.execute(DDL_MIGRATE_USERS_MODULE_CONFIG)
+            await conn.execute(DDL_MIGRATE_USERS_MAX_CONCURRENT)
             # Language Cleanup Phase 2 — rename Portuguese ABAC field names
             await conn.execute(DDL_MIGRATE_ABAC_RELATORIO)
             await conn.execute(DDL_MIGRATE_ABAC_RECURSOS)
@@ -198,14 +204,17 @@ async def create_user(
     name: str,
     roles: list[str],
     accessible_pools: list[str],
+    max_concurrent_sessions: int = 3,
 ) -> dict[str, Any]:
     row = await pool.fetchrow(
         """
-        INSERT INTO auth.users (tenant_id, email, password_hash, name, roles, accessible_pools)
-        VALUES ($1, $2, $3, $4, $5, $6)
-        RETURNING id, tenant_id, email, name, roles, accessible_pools, active, created_at, updated_at
+        INSERT INTO auth.users
+            (tenant_id, email, password_hash, name, roles, accessible_pools, max_concurrent_sessions)
+        VALUES ($1, $2, $3, $4, $5, $6, $7)
+        RETURNING id, tenant_id, email, name, roles, accessible_pools,
+                  max_concurrent_sessions, active, created_at, updated_at
         """,
-        tenant_id, email, password_hash, name, roles, accessible_pools,
+        tenant_id, email, password_hash, name, roles, accessible_pools, max_concurrent_sessions,
     )
     return dict(row)
 
@@ -253,7 +262,7 @@ async def list_users(
     rows = await pool.fetch(
         """
         SELECT id, tenant_id, email, name, roles, accessible_pools,
-               module_config, active, created_at, updated_at
+               module_config, max_concurrent_sessions, active, created_at, updated_at
         FROM auth.users
         WHERE tenant_id = $1
         ORDER BY created_at DESC
@@ -273,6 +282,7 @@ async def update_user(
     roles: list[str] | None = None,
     accessible_pools: list[str] | None = None,
     active: bool | None = None,
+    max_concurrent_sessions: int | None = None,
 ) -> dict[str, Any] | None:
     sets = []
     params: list[Any] = []
@@ -288,6 +298,8 @@ async def update_user(
         sets.append(f"accessible_pools = ${i}"); params.append(accessible_pools); i += 1
     if active is not None:
         sets.append(f"active = ${i}"); params.append(active); i += 1
+    if max_concurrent_sessions is not None:
+        sets.append(f"max_concurrent_sessions = ${i}"); params.append(max_concurrent_sessions); i += 1
 
     if not sets:
         return await get_user_by_id(pool, user_id)
@@ -300,7 +312,7 @@ async def update_user(
         UPDATE auth.users SET {", ".join(sets)}
         WHERE id = ${i}
         RETURNING id, tenant_id, email, name, roles, accessible_pools,
-                  module_config, active, created_at, updated_at
+                  module_config, max_concurrent_sessions, active, created_at, updated_at
         """,
         *params,
     )

@@ -525,6 +525,7 @@ services:
           collect.events
           journey.events
           agent.events
+          calibration.events
         "
         for topic in $$TOPICS; do
           $$KAFKA --bootstrap-server $$BROKER --create --if-not-exists \
@@ -582,6 +583,7 @@ services:
       AGENT_REGISTRY_URL: http://agent-registry:3300
       SKILL_FLOW_URL: http://skill-flow-service:3460
       CALENDAR_API_URL: http://calendar-api:3700
+      WORKFLOW_API_URL: http://workflow-api:3800
       PLUGHUB_TENANT_ID: tenant_demo
     depends_on:
       redis:
@@ -609,6 +611,7 @@ services:
       PLUGHUB_REDIS_URL: redis://redis:6379
       PLUGHUB_KAFKA_BROKERS: kafka:29092
       PLUGHUB_AGENT_REGISTRY_URL: http://agent-registry:3300
+      PLUGHUB_INSTANCE_TTL_SECONDS: 3600
     depends_on:
       redis:
         condition: service_healthy

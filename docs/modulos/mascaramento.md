@@ -1,5 +1,7 @@
 # Módulo: Configuração → Mascaramento
 
+> Última atualização: 2026-05-25 · Estado: Arc 16
+
 > Rota UI: `/config/masking` | Roles: admin
 
 ## O que é
@@ -82,6 +84,12 @@ Para captura de dados altamente sensíveis (PINs, senhas OTPs) que nunca devem e
 - `masked_scope` existe apenas em memória — nunca escrito em Redis, `pipeline_state` ou stream
 - `end_transaction` é exclusivamente o caminho de sucesso; rollback é automático e implícito
 - `reason` step dentro do bloco é erro de design — rejeitado pelo agent-registry (HTTP 422)
+
+## Relação com a Auditoria LGPD
+
+O módulo de Auditoria LGPD (`/audit`) é o consumidor designado do `original_content` desmascarado: usuários com `module_config.audit.sessions` no JWT (DPO/compliance) têm acesso ao conteúdo original das mensagens, com cada acesso registrado de forma imutável em `audit_access_log`. A política `authorized_roles` definida nesta página continua governando quais roles operacionais (`evaluator`, `reviewer`) veem o `original_content` via `session_context_get`.
+
+> A **Fase 2 do Audit LGPD** — resolução em batch dos tokens mascarados via endpoint dedicado no Core, exibindo o `original_content` diretamente na Auditoria — está pendente. Até lá, a Auditoria mostra o conteúdo mascarado.
 
 ## APIs envolvidas
 

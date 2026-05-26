@@ -1,0 +1,91 @@
+{
+  "title": "Channels",
+  "tabs": {
+    "webchat":  "WebChat",
+    "whatsapp": "WhatsApp",
+    "voice":    "Voice",
+    "email":    "E-mail",
+    "sms":      "SMS",
+    "webhook":  "Webhook"
+  },
+  "subTabs": {
+    "accounts": "Integrations & Endpoints",
+    "settings": "Runtime Settings"
+  },
+  "loading": "Loading…",
+  "status": {
+    "active":   "active",
+    "inactive": "inactive"
+  },
+  "identifierHints": {
+    "webchat":  "URL slug, e.g. \"support\" → /webchat/support",
+    "whatsapp": "E.164 number, e.g. +5511999999999",
+    "voice":    "DID / E.164, e.g. +5511000000",
+    "sms":      "Short code or long code, e.g. 55119",
+    "email":    "Address, e.g. support@company.com",
+    "webhook":  "URL slug, e.g. \"salesforce\" → /channel/webhook/salesforce"
+  },
+  "integration": {
+    "new":                   "New {{channel}} Integration",
+    "noConfigurations":      "No {{channel}} integrations configured.",
+    "noConfigurationsHint":  "Create an integration to set up API credentials, then add your phone numbers or addresses as endpoints.",
+    "addFirst":              "+ Add {{channel}} integration",
+    "addAnother":            "+ Add another {{channel}} integration",
+    "create":                "Create integration",
+    "editCredentialsBtn":    "Edit credentials",
+    "editCredentialsTitle":  "Edit credentials",
+    "deleteBtn":             "Delete",
+    "deleteConfirm":         "Confirm delete",
+    "deleting":              "Deleting…",
+    "credentialsLabel":      "Credentials",
+    "credentialsSection":    "API credentials",
+    "credentialsEncrypted":  "(stored encrypted)",
+    "credentialsKeepCurrent":"(leave blank to keep current)",
+    "credentialsNoFields":   "No credential fields for this channel.",
+    "saveCredentials":       "Save credentials",
+    "settingsSection":       "Settings"
+  },
+  "endpoint": {
+    "title":               "Endpoints",
+    "identifierHintFallback": "identifiers routing to pools",
+    "webhookNote":         "Webhook endpoints do not require API credentials — just configure a URL slug and target pool.",
+    "add":                 "+ Add endpoint",
+    "addBtn":              "Add endpoint",
+    "noEndpoints":         "No endpoints yet. Click \"+ Add endpoint\" to add a {{channel}} number or address.",
+    "noEndpointsStandalone":"No endpoints configured. Click \"+ Add endpoint\" to create one.",
+    "deleteConfirm":       "Delete this endpoint?",
+    "colIdentifier":       "Identifier",
+    "colDisplayName":      "Display name",
+    "colPool":             "Pool",
+    "colStatus":           "Status"
+  },
+  "form": {
+    "displayName":           "Display name",
+    "active":                "Active",
+    "identifier":            "Identifier",
+    "pool":                  "Pool",
+    "selectPool":            "— select pool —",
+    "displayNamePlaceholder":"e.g. Technical Support",
+    "newValueOptional":      "New value (optional)",
+    "firstEndpoint":         "First endpoint",
+    "firstEndpointOptional": "— optional, can be added later",
+    "identifierHintFallback":"Channel identifier"
+  },
+  "actions": {
+    "save":        "Save",
+    "saving":      "Saving…",
+    "cancel":      "Cancel",
+    "edit":        "Edit",
+    "close":       "Close",
+    "delete":      "Delete",
+    "saveChanges": "Save changes"
+  },
+  "errors": {
+    "displayNameRequired":          "Display name is required",
+    "identifierRequired":           "Identifier is required",
+    "endpointIdentifierRequired":   "Endpoint identifier is required",
+    "poolRequired":                 "Pool is required",
+    "endpointPoolRequired":         "Endpoint pool is required",
+    "endpointDisplayNameRequired":  "Endpoint display name is required"
+  }
+}

@@ -185,6 +185,13 @@ export interface ContextEntry {
   /** "agents_only" | "all" */
   visibility: string;
   updated_at: string;
+  /**
+   * PII masking metadata — set by supervisor_state when the caller's role cannot
+   * see the original value. `masked: true` means `value` is already the display_partial.
+   */
+  pii?:      boolean;
+  masked?:   boolean;
+  category?: string;
 }
 
 export interface CustomerContext {
@@ -266,6 +273,23 @@ export interface PoolInfo {
  * The App manages a Map<sessionId, ContactSession>.
  * The concept of "selected" contact lives only in App — not in the server.
  */
+/**
+ * Response timer state machine.
+ *
+ * counting — agent has an open obligation; live orange/red counter ticking from startedAt.
+ * frozen   — agent replied; green display showing how long the reply took (elapsedMs).
+ *
+ * Transitions:
+ *   Assignment created          → counting(now)
+ *   Customer msg + counting     → no change  (keep counting from original start)
+ *   Customer msg + frozen       → counting(now)   [reset and restart]
+ *   Agent reply  + counting     → frozen(now - startedAt)
+ *   Agent reply  + frozen       → no change
+ */
+export type ResponseTimer =
+  | { status: 'counting'; startedAt: number }
+  | { status: 'frozen';   elapsedMs: number };
+
 export interface ContactSession {
   sessionId:        string;
   contactId:        string | null;
@@ -288,12 +312,11 @@ export interface ContactSession {
   sessionClosed:    boolean;
   pendingCloseModal: boolean;
   /**
-   * Timestamp of the last customer message with visibility "all".
-   * Used to compute how long the customer has been waiting for a response.
-   * Set on every customer message; reset to null when agent (human) responds or session closes.
-   * Null means the agent has already responded (or no customer message has arrived yet).
+   * Response timer — tracks whether the agent still owes the customer a reply.
+   * Starts in `counting` on assignment (agent is obligated to initiate regardless
+   * of who sent the first message). See ResponseTimer for full transition table.
    */
-  lastCustomerMessageAt: Date | null;
+  responseTimer: ResponseTimer;
 }
 
 // ── App state ─────────────────────────────────────────────────────────────────
@@ -331,8 +354,8 @@ export interface PipelineTransition {
   timestamp:  string;
 }
 
-/** Right panel tabs: Agentes · Contexto · Histórico (Arc 11 Fase 2 — Estado replaced by Agentes) */
-export type ActiveTab = "agentes" | "contexto" | "historico";
+/** Right panel tabs: Ações · Contexto · Histórico (AcoesTab replaces AgentesTab) */
+export type ActiveTab = "acoes" | "contexto" | "historico";
 
 export interface Toast {
   id: string;
@@ -390,9 +413,32 @@ export interface MentionableAgent {
   description?:  string;
 }
 
-// ── Delegation input schema — typed fields for DelegarTarefaDrawer ────────────
+// ── Mentionable process (console-acoes-tab) ───────────────────────────────────
 
-/** A single field in a delegation_input schema. */
+/**
+ * A Journey-starting skill available for manual invocation in the current pool.
+ * Returned by GET /v1/pools/:poolId/mentionable-processes.
+ */
+export interface MentionableProcess {
+  /** Key in pool.mentionable_journeys (e.g. "portabilidade"). */
+  alias:                string;
+  skill_id:             string;
+  /** Human-readable name from skill.name. */
+  label:                string;
+  description?:         string;
+  /** Typed parameter schema from skill.delegation_input — null if no params needed. */
+  delegation_params:    DelegationSchema | null;
+  /**
+   * Visibility lock from skill YAML:
+   *   "agents_only" | "all" → locked, radio hidden in UI
+   *   null                  → show radio, default agents_only
+   */
+  delegation_visibility: "all" | "agents_only" | null;
+}
+
+// ── Delegation input schema — typed fields for AcaoItemRow / DelegarTarefaDrawer
+
+/** A single field in a delegation_input / delegation_params schema. */
 export interface DelegationField {
   /** Field key, used as the serialization label. */
   id:           string;
@@ -407,10 +453,15 @@ export interface DelegationField {
 }
 
 /**
- * Typed parameter schema declared in a skill YAML's delegation_input section.
- * When present, DelegarTarefaDrawer renders typed fields instead of the
- * free-text textarea fallback.
+ * Typed parameter schema declared in a skill YAML (delegation_input / delegation_params).
+ * When present, renders typed fields instead of free-text textarea.
+ *
+ * delegation_visibility:
+ *   "agents_only" | "all" → locked at YAML level; visibility radio hidden
+ *   null                  → show radio with default "agents_only"
  */
 export interface DelegationSchema {
-  fields: DelegationField[];
+  fields:               DelegationField[];
+  /** Visibility lock declared at agent-type (capabilities) or skill (flow) YAML level. */
+  delegation_visibility?: "all" | "agents_only" | null;
 }

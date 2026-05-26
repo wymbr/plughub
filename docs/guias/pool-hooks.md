@@ -1,7 +1,10 @@
 # Pool Lifecycle Hooks — Guia do Desenvolvedor
 
-> **Versão:** PlugHub Arc 3 (Fase A ✅) / Arc 3 (Fase B ✅) / Arc 3 (Fase C ⏳)  
-> **Fonte de verdade técnica:** `CLAUDE.md § Pool Lifecycle Hooks`
+> Última atualização: 2026-05-25 · Estado: Arc 16
+
+> **Fonte de verdade técnica:** `CLAUDE.md § Pool Lifecycle Hooks`  
+> **Mecanismo de conferência/posatt:** `docs/guias/conference-mechanics.md` é a referência canônica
+> do ciclo de vida da conferência, dos counters de posatt e do modelo de 3 camadas.
 
 ---
 
@@ -23,7 +26,7 @@ e o Routing Engine o trata como qualquer outra alocação.
 |------|--------|---------------|
 | `on_human_start` | ✅ Fase A | Agente humano entra na sessão (após `activate_human_agent`) |
 | `on_human_end` | ✅ Fase B | Último agente humano chama `agent_done` |
-| `post_human` | ⏳ Fase C | Após todos os `on_human_end` concluírem |
+| `post_human` | ✅ Fase C | Após todos os `on_human_end` concluírem |
 
 ---
 

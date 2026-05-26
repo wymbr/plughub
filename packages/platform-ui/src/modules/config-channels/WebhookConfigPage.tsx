@@ -111,7 +111,7 @@ const WebhookConfigPage: React.FC = () => {
     setSaveErr(null)
   }, [])
 
-  const inp = 'text-xs border border-gray-300 rounded px-2 py-1.5 focus:outline-none focus:border-primary font-mono'
+  const inp = 'text-xs border border-border-strong rounded px-2 py-1.5 focus:outline-none focus:border-primary font-mono'
 
   // ── Render ───────────────────────────────────────────────────────────────────
 
@@ -119,32 +119,32 @@ const WebhookConfigPage: React.FC = () => {
     <div className="max-w-2xl space-y-6">
 
       {/* Admin token */}
-      <div className="flex items-center gap-3 p-3 bg-gray-50 border border-gray-200 rounded-lg">
-        <label className="text-xs font-medium text-gray-600 shrink-0">Admin Token</label>
+      <div className="flex items-center gap-3 p-3 bg-surface-muted border border-border rounded-lg">
+        <label className="text-xs font-medium text-muted shrink-0">Admin Token</label>
         <input
           type={showToken ? 'text' : 'password'}
           value={adminToken}
           onChange={e => setAdminToken(e.target.value)}
           placeholder="Token to enable editing"
-          className="flex-1 text-xs px-2 py-1.5 border border-gray-300 rounded focus:outline-none focus:border-primary"
+          className="flex-1 text-xs px-2 py-1.5 border border-border-strong rounded focus:outline-none focus:border-primary"
         />
         <button
           onClick={() => setShowToken(v => !v)}
-          className="text-gray-400 hover:text-gray-600 text-sm"
+          className="text-muted-light hover:text-muted text-sm"
         >{showToken ? '🙈' : '👁'}</button>
-        {adminToken && <span className="text-xs text-green-600 font-semibold shrink-0">✓ active</span>}
+        {adminToken && <span className="text-xs text-green-text font-semibold shrink-0">✓ active</span>}
         <div className="flex items-center gap-2 ml-auto">
           {loading && <Spinner />}
-          {error && <span className="text-xs text-red-600">⚠ {error}</span>}
+          {error && <span className="text-xs text-red-text">⚠ {error}</span>}
           <button onClick={reload} className="text-xs text-secondary hover:text-primary">↻</button>
         </div>
       </div>
 
       {/* ── 1. HMAC Signature Verification ── */}
-      <section className="bg-white border border-gray-200 rounded-lg p-5 space-y-4">
+      <section className="bg-white border border-border rounded-lg p-5 space-y-4">
         <div>
-          <h3 className="text-sm font-semibold text-gray-900 mb-1">HMAC Signature Verification</h3>
-          <p className="text-xs text-gray-500">
+          <h3 className="text-sm font-semibold text-dark mb-1">HMAC Signature Verification</h3>
+          <p className="text-xs text-muted">
             When enabled, the channel gateway verifies each incoming request against a shared secret.
             The sender must include an HMAC signature in the configured header.
           </p>
@@ -158,14 +158,14 @@ const WebhookConfigPage: React.FC = () => {
             onChange={e => update('hmac_enabled', e.target.checked)}
             className="w-4 h-4"
           />
-          <span className="text-sm font-medium text-gray-700">Enable HMAC verification</span>
+          <span className="text-sm font-medium text-dark">Enable HMAC verification</span>
         </label>
 
         {cfg.hmac_enabled && (
           <div className="grid grid-cols-2 gap-4 pt-1">
             {/* Algorithm */}
             <div>
-              <label className="text-xs font-medium text-gray-700 block mb-1">Algorithm</label>
+              <label className="text-xs font-medium text-dark block mb-1">Algorithm</label>
               <select
                 value={cfg.hmac_algorithm}
                 onChange={e => update('hmac_algorithm', e.target.value as 'sha256' | 'sha512')}
@@ -178,7 +178,7 @@ const WebhookConfigPage: React.FC = () => {
 
             {/* Header name */}
             <div>
-              <label className="text-xs font-medium text-gray-700 block mb-1">Signature header</label>
+              <label className="text-xs font-medium text-dark block mb-1">Signature header</label>
               <input
                 type="text"
                 value={cfg.hmac_header}
@@ -191,9 +191,9 @@ const WebhookConfigPage: React.FC = () => {
         )}
 
         {cfg.hmac_enabled && (
-          <div className="p-3 bg-amber-50 border border-amber-200 rounded text-xs text-amber-700">
+          <div className="p-3 bg-warning-light border border-warning/30 rounded text-xs text-warning-text">
             <strong>Shared secret</strong> — configured per endpoint via Redis key
-            <code className="font-mono bg-amber-100 px-1 mx-1 rounded">
+            <code className="font-mono bg-warning-light px-1 mx-1 rounded">
               {'{'}{'{tenant_id}'}:webhook:secret:{'{'}{'{identifier}'}{'}'}
             </code>
             and is not editable here for security reasons.
@@ -202,10 +202,10 @@ const WebhookConfigPage: React.FC = () => {
       </section>
 
       {/* ── 2. IP Allowlist ── */}
-      <section className="bg-white border border-gray-200 rounded-lg p-5 space-y-3">
+      <section className="bg-white border border-border rounded-lg p-5 space-y-3">
         <div>
-          <h3 className="text-sm font-semibold text-gray-900 mb-1">IP / CIDR Allowlist</h3>
-          <p className="text-xs text-gray-500">
+          <h3 className="text-sm font-semibold text-dark mb-1">IP / CIDR Allowlist</h3>
+          <p className="text-xs text-muted">
             One IP address or CIDR block per line. Leave empty to allow all sources.
             Applied globally to all webhook endpoints for this tenant.
           </p>
@@ -215,18 +215,18 @@ const WebhookConfigPage: React.FC = () => {
           onChange={e => handleAllowlistChange(e.target.value)}
           rows={5}
           placeholder={'192.168.1.0/24\n10.0.0.1\n2001:db8::/32'}
-          className="w-full text-xs font-mono px-2 py-1.5 border border-gray-300 rounded focus:outline-none focus:border-primary resize-y"
+          className="w-full text-xs font-mono px-2 py-1.5 border border-border-strong rounded focus:outline-none focus:border-primary resize-y"
         />
         {cfg.ip_allowlist.length === 0 && (
-          <p className="text-xs text-amber-600">⚠ Empty allowlist — all source IPs are accepted.</p>
+          <p className="text-xs text-warning">⚠ Empty allowlist — all source IPs are accepted.</p>
         )}
       </section>
 
       {/* ── 3. Timeouts ── */}
-      <section className="bg-white border border-gray-200 rounded-lg p-5 space-y-4">
+      <section className="bg-white border border-border rounded-lg p-5 space-y-4">
         <div>
-          <h3 className="text-sm font-semibold text-gray-900 mb-1">Timeouts</h3>
-          <p className="text-xs text-gray-500">
+          <h3 className="text-sm font-semibold text-dark mb-1">Timeouts</h3>
+          <p className="text-xs text-muted">
             <strong>Request timeout</strong>: how long the gateway waits to read the full incoming payload.
             <br />
             <strong>Response window</strong>: how long the sender can wait for an async result (used when webhooks are synchronous).
@@ -234,7 +234,7 @@ const WebhookConfigPage: React.FC = () => {
         </div>
         <div className="grid grid-cols-2 gap-4">
           <div>
-            <label className="text-xs font-medium text-gray-700 block mb-1">Request timeout (ms)</label>
+            <label className="text-xs font-medium text-dark block mb-1">Request timeout (ms)</label>
             <input
               type="number" min={500} max={30000} step={500}
               value={cfg.request_timeout_ms}
@@ -243,7 +243,7 @@ const WebhookConfigPage: React.FC = () => {
             />
           </div>
           <div>
-            <label className="text-xs font-medium text-gray-700 block mb-1">Response window (ms)</label>
+            <label className="text-xs font-medium text-dark block mb-1">Response window (ms)</label>
             <input
               type="number" min={1000} max={120000} step={1000}
               value={cfg.response_window_ms}
@@ -255,37 +255,37 @@ const WebhookConfigPage: React.FC = () => {
       </section>
 
       {/* Error */}
-      {saveErr && <p className="text-xs text-red-600">{saveErr}</p>}
+      {saveErr && <p className="text-xs text-red-text">{saveErr}</p>}
 
       {/* Actions */}
       <div className="flex gap-2">
         <button
           onClick={saveAll}
           disabled={saving !== null || !adminToken || !dirty}
-          className="px-4 py-2 rounded text-sm font-semibold bg-primary text-white disabled:opacity-40 hover:bg-blue-800 transition-colors"
+          className="px-4 py-2 rounded text-sm font-semibold bg-primary text-white disabled:opacity-40 hover:bg-primary-dark transition-colors"
         >
           {saving === 'all' ? 'Saving…' : '💾 Save all changes'}
         </button>
         <button
           onClick={handleReset}
-          className="px-4 py-2 rounded text-sm border border-gray-300 text-gray-600 hover:text-gray-900 transition-colors"
+          className="px-4 py-2 rounded text-sm border border-border-strong text-muted hover:text-dark transition-colors"
         >
           ↺ Restore defaults
         </button>
       </div>
 
       {/* Info box */}
-      <section className="bg-blue-50 border border-blue-200 rounded-lg p-4 text-xs text-blue-700 space-y-2">
+      <section className="bg-info-light border border-info/30 rounded-lg p-4 text-xs text-info-text space-y-2">
         <p className="font-semibold">ℹ️ About channel webhooks vs. workflow webhooks</p>
         <p>
           <strong>Channel webhooks</strong> (this page) receive inbound contacts from external systems
           and route them to a pool via the routing engine. URL pattern:
-          <code className="font-mono bg-blue-100 px-1 mx-1 rounded">{'{host}/channel/webhook/{identifier}'}</code>
+          <code className="font-mono bg-info-light px-1 mx-1 rounded">{'{host}/channel/webhook/{identifier}'}</code>
         </p>
         <p>
           <strong>Workflow webhooks</strong> trigger a specific skill flow directly, bypassing routing.
           Managed in <em>Workflow → Webhooks / Triggers</em>. URL pattern:
-          <code className="font-mono bg-blue-100 px-1 mx-1 rounded">{'{host}/v1/workflow/webhook/{id}'}</code>
+          <code className="font-mono bg-info-light px-1 mx-1 rounded">{'{host}/v1/workflow/webhook/{id}'}</code>
         </p>
       </section>
     </div>

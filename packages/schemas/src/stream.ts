@@ -58,6 +58,9 @@ const SessionOpenedPayloadSchema = z.object({
 const SessionClosedPayloadSchema = z.object({
   outcome:      z.string().optional(),
   close_reason: z.string().optional(),
+  // Arc 14 Fase B: targeted close — only the listed participant_ids receive teardown.
+  // null / absent = broadcast to all subscribers (existing behaviour).
+  recipients:   z.array(z.string()).nullable().optional(),
 })
 
 const ParticipantJoinedPayloadSchema = z.object({

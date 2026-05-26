@@ -1,5 +1,7 @@
 # Changelog — 2026-04-15
 
+> ⚠️ Changelog histórico (pré-CHANGELOG.md). Mantido apenas como referência. O changelog vivo é o CHANGELOG.md na raiz do repositório.
+
 > Commits cobertos: `94eea57` → `95c7ec7` → `a188a7d` → `676be36`
 > Módulos afetados: `mcp-server-plughub`, `routing-engine`, `ai-gateway`, `agent-assist-ui`, `orchestrator-bridge`, `schemas`, `agent-registry`, `skill-flow-engine`, `channel-gateway`
 

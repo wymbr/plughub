@@ -40,6 +40,7 @@ router = APIRouter(prefix="/sessions")
 _STREAM_BLOCK_MS   = 2_000   # XREAD blocking timeout
 _SSE_KEEPALIVE_S   = 15      # send comment to keep connection alive
 _ACTIVE_WINDOW_H   = 24      # look back N hours for "active" sessions
+_WRAPUP_GRACE_MIN  = 10      # keep recently-closed sessions visible during hook wrap-up
 _DEFAULT_LIMIT     = 50
 _MAX_LIMIT         = 200
 
@@ -84,16 +85,25 @@ def _fetch_active_sessions(
 ) -> list[dict]:
     from datetime import timedelta
     since = (datetime.utcnow() - timedelta(hours=_ACTIVE_WINDOW_H)).strftime("%Y-%m-%d %H:%M:%S")
+    # Use FINAL to force deduplication of ReplacingMergeTree versions at query time,
+    # preventing sessions from flickering in/out during background ClickHouse merges.
+    # Include a grace window (_WRAPUP_GRACE_MIN) for recently-closed sessions that
+    # may still have wrap-up/NPS hooks running — Core fires session_closed (contact
+    # layer) before all posatt hooks complete, so ClickHouse briefly has closed_at set
+    # while the Console still shows the contact as active.
     result = client.query(f"""
         SELECT
             session_id,
             channel,
             opened_at,
             wait_time_ms
-        FROM {db}.sessions
+        FROM {db}.sessions FINAL
         WHERE tenant_id = {{tenant_id:String}}
           AND pool_id   = {{pool_id:String}}
-          AND closed_at IS NULL
+          AND (
+            closed_at IS NULL
+            OR closed_at >= now() - INTERVAL {_WRAPUP_GRACE_MIN} MINUTE
+          )
           AND opened_at >= '{since}'
         ORDER BY opened_at ASC
         LIMIT {limit}

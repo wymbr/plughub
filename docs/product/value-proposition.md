@@ -1,6 +1,6 @@
 # PlugHub — Proposta de Valor e Diferenciadores
 
-> Última atualização: Maio 2026
+> Última atualização: 2026-05-25 · Estado: Arc 16
 
 ## Posicionamento
 
@@ -113,15 +113,17 @@ Em pico de carga, o cliente paga pelo que está logado *naquele momento*; em val
 
 "Bill shock" — documentado como o principal problema de adoção do Agentforce — é impossível por design. Para o CFO, isso resolve previsibilidade ("compro N licenças concurrent, sei o que pago no pico"), capacity planning ("sigo o pico de agentes logados, não a soma de tudo configurado") e simplicidade ("um SKU, um SLA, uma curva de utilização"). Para a operação, elimina a complexidade de operar dois ou três produtos com configurações fragmentadas e times distintos.
 
-### 5. Outbound unificado — sem módulo separado, com dialer interno
+### 5. Outbound unificado — sem módulo separado
 
 Todo CCaaS no mercado vende inbound e outbound como dois produtos com modelos de configuração distintos. Genesys, NICE e Talkdesk têm "Outbound Campaigns" como módulo licenciado à parte; Five9 tem outbound nativo mas em configuração separada do inbound; Salesforce Agentforce praticamente não tem outbound fora do Marketing Cloud.
 
-No PlugHub o motor é um só. Uma campanha de cobrança, pesquisa NPS ou onboarding com etapas manuais é um Skill Flow declarativo, idêntico em primitivos a um atendimento inbound. O **media gateway interno** — SIP/PSTN para telefonia tradicional, WebRTC para web/mobile, ambos com gravação, transcrição, STT e TTS nativos — executa o loop de discagem: a cada janela acordada, avalia disponibilidade de agentes em tempo real, calcula o pacing necessário pelo algoritmo declarado no flow (power, predictive, progressive ou preview), dispara o lote dimensionado para a capacidade ociosa e dá baixa no mailing apenas em contato bem-sucedido. Tentativas malsucedidas voltam para a fila de retry com política configurável.
+No PlugHub o motor é um só. Uma campanha de cobrança, pesquisa NPS ou onboarding com etapas manuais é um Skill Flow declarativo, idêntico em primitivos a um atendimento inbound. O step `collect` inicia o contato outbound assíncrono multicanal (WhatsApp, e-mail, SMS e voz/PSTN). O canal de **voz/PSTN** (tronco Twilio, STT Deepgram, TTS ElevenLabs) e o canal **WebRTC** (Arc 15) cobrem o atendimento por áudio com gravação, STT e TTS server-side.
+
+> **Roadmap.** O canal de voz/PSTN já está entregue (tronco Twilio, com STT e TTS server-side). O que permanece **planejado** é o **dialer preditivo** — loop de discagem com pacing (power, predictive, progressive, preview), compliance guard de abandonment ratio TCPA/LGPD e listas DNC. Uma decisão arquitetural em aberto avalia ainda fazer a ponte PSTN → WebRTC via LiveKit SIP Ingress para unificar os canais de áudio.
 
 A consequência arquitetural elegante: **após a conexão, o fluxo outbound é tratado como inbound, sem diferenciação**. Mesmo context package, mesmo roteamento, mesmo session replay, mesma avaliação de qualidade. O agente que atende não precisa saber se o contato foi inbound ou outbound — a experiência operacional é uniforme.
 
-Compliance regulatória (abandonment ratio TCPA/LGPD, listas DNC, janela horária por timezone do contato) é **invariante do motor**, não responsabilidade do YAML — um cliente que configure errado o flow não consegue violar regulação, porque o guard fica no media gateway.
+Quando o dialer for entregue, a compliance regulatória (abandonment ratio TCPA/LGPD, listas DNC, janela horária por timezone do contato) será **invariante do motor**, não responsabilidade do YAML — um cliente que configure errado o flow não conseguirá violar regulação, porque o guard fica no media gateway.
 
 Para o comprador: uma licença, uma operação, uma configuração, um SLA. Para o CFO: redução de custo de licença e de complexidade operacional comparada a operar dialer separado.
 
@@ -148,7 +150,7 @@ Para o comprador enterprise, a pergunta troca. Não é mais "qual é meu melhor 
 
 ## Diferenciais secundários
 
-**Skill Flow com 13 tipos de step declarativos** incluindo `suspend` (timers em horas úteis via Calendar API), `collect` (contato outbound assíncrono multicanal), `resolve` (acumulação de contexto inline) e `begin_transaction`/`end_transaction` (captura segura de dados sensíveis em bloco atômico). Nenhum CCaaS analisado tem motor de fluxo comparável em expressividade declarativa.
+**Skill Flow com 14 tipos de step declarativos** incluindo `suspend` (timers em horas úteis via Calendar API), `collect` (contato outbound assíncrono multicanal), `resolve` (acumulação de contexto inline), `receive` (aguarda a próxima mensagem do stream sem prompt) e `begin_transaction`/`end_transaction` (captura segura de dados sensíveis em bloco atômico). Nenhum CCaaS analisado tem motor de fluxo comparável em expressividade declarativa.
 
 **Journey — processo multi-sessão sem CRM externo**: unidade de serviço acima da sessão que agrupa todo o histórico de um processo num único `journey_id`, com KPIs de resolução mensuráveis por tipo de processo. Equivale ao "case" de CRMs enterprise, mas nativo ao roteador — sem integração adicional.
 
@@ -171,7 +173,7 @@ Para o comprador enterprise, a pergunta troca. Não é mais "qual é meu melhor 
 - **Não é um LLM** — o AI Gateway é stateless e troca de provedor por configuração
 - **Não substitui Workforce Management dedicado** — não inclui forecasting de demanda, scheduling de turnos nem gestão de aderência de WFM clássicos (Verint, Calabrio); integra com WFM externos via MCP quando necessário
 
-O PlugHub combina **canais e voz (CCaaS), motor de orquestração (Skill Flow), runtime de agentes (humanos + IA), gestão de jornada multi-contato e camada de compliance (MCP guard + dialer guard)** em uma stack unificada — substituindo as três a quatro plataformas que tradicionalmente compõem essa função no contact center enterprise.
+O PlugHub combina **canais digitais e de voz — WebRTC e PSTN (CCaaS), motor de orquestração (Skill Flow), runtime de agentes (humanos + IA), gestão de jornada multi-contato e camada de compliance (MCP guard)** em uma stack unificada — substituindo as três a quatro plataformas que tradicionalmente compõem essa função no contact center enterprise. O dialer preditivo (com seu compliance guard) é uma capacidade de roadmap.
 
 ---
 

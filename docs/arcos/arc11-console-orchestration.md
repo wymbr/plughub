@@ -1,5 +1,7 @@
 # Arc 11 — Console: Superfície de Orquestração Humana
 
+> Última atualização: 2026-05-25 · Estado: Arc 16
+
 O Arc 11 eleva o Console de uma interface de atendimento para uma **superfície de orquestração** — onde o operador humano dirige, delega e monitora agentes AI como coparticipantes de primeira classe, com a mesma simetria que o modelo de sessão já suporta nos dados.
 
 ---

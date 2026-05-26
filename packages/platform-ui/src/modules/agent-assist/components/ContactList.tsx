@@ -14,7 +14,9 @@
  */
 
 import React, { useEffect, useState } from "react";
-import { ContactSession } from "../types";
+import { useTranslation } from "react-i18next";
+import { Timer, Sparkles, Clock, MessageSquare, CheckCheck } from "lucide-react";
+import { ContactSession, ResponseTimer } from "../types";
 
 interface ContactListProps {
   contacts:          ContactSession[];
@@ -41,11 +43,11 @@ function channelIcon(channel: string): string {
 
 // ── Sentiment colour ───────────────────────────────────────────────────────────
 function sentimentColor(score: number | null): string {
-  if (score === null) return "bg-gray-300";
-  if (score >= 0.3)   return "bg-green-400";
-  if (score >= -0.3)  return "bg-yellow-400";
-  if (score >= -0.6)  return "bg-orange-400";
-  return "bg-red-500";
+  if (score === null) return "bg-border-strong";
+  if (score >= 0.3)   return "bg-green";
+  if (score >= -0.3)  return "bg-warning";
+  if (score >= -0.6)  return "bg-contested";
+  return "bg-red";
 }
 
 // ── SLA urgency (for left-edge colour bar only) ────────────────────────────────
@@ -64,17 +66,17 @@ function urgencyLevel(contact: ContactSession, nowMs: number): UrgencyLevel {
 }
 
 const URGENCY_BORDER: Record<UrgencyLevel, string> = {
-  low:      "border-l-green-400",
-  medium:   "border-l-yellow-400",
-  high:     "border-l-orange-400",
-  critical: "border-l-red-500",
+  low:      "border-l-green",
+  medium:   "border-l-warning",
+  high:     "border-l-contested",
+  critical: "border-l-red",
 };
 
 const URGENCY_TIMER: Record<UrgencyLevel, string> = {
-  low:      "text-gray-400",
-  medium:   "text-yellow-600",
-  high:     "text-orange-500 font-semibold",
-  critical: "text-red-500 font-bold",
+  low:      "text-muted-light",
+  medium:   "text-warning-text",
+  high:     "text-contested font-semibold",
+  critical: "text-red font-bold",
 };
 
 // ── Elapsed time ───────────────────────────────────────────────────────────────
@@ -106,9 +108,9 @@ function waitLevel(waitMs: number, maxReplyTimeMs: number | null): WaitLevel {
 }
 
 const WAIT_COLOR: Record<WaitLevel, string> = {
-  normal:    "text-green-600",
-  attention: "text-yellow-600",
-  urgent:    "text-red-600 font-bold animate-pulse",
+  normal:    "text-green-text",
+  attention: "text-warning-text",
+  urgent:    "text-red-text font-bold animate-pulse",
 };
 
 // ── Display identity: prefer contactId (ANI/user_id), fallback to short sessionId ──
@@ -126,6 +128,7 @@ interface RowProps {
 }
 
 const ContactRow: React.FC<RowProps> = ({ contact, selected, aiTyping, onSelect }) => {
+  const { t } = useTranslation('agentAssist');
   const [nowMs, setNowMs] = useState<number>(Date.now());
 
   useEffect(() => {
@@ -145,16 +148,16 @@ const ContactRow: React.FC<RowProps> = ({ contact, selected, aiTyping, onSelect 
     ? Math.min(Math.round((handleMs / slaTargetMs) * 100), 100)
     : (slaFromState ? Math.min(slaFromState.percentage, 100) : null);
   const slaBreaching  = slaFromState?.breach_imminent ?? (slaPercent !== null && slaPercent >= 100);
-  const slaBarColor   = slaPercent === null ? "bg-gray-300"
-    : slaBreaching || slaPercent >= 100 ? "bg-red-500"
-    : slaPercent > 70 ? "bg-yellow-400"
-    : "bg-green-400";
+  const slaBarColor   = slaPercent === null ? "bg-border-strong"
+    : slaBreaching || slaPercent >= 100 ? "bg-red"
+    : slaPercent > 70 ? "bg-warning"
+    : "bg-green";
 
   // Tab visual: selected row bleeds right (box-shadow covers the container's right border)
   // creating the illusion of a browser tab extending into the white central surface.
   const borderAccent = contact.sessionClosed
     ? (selected ? "#ef4444" : "#fca5a5")
-    : (selected ? "#4f46e5" : URGENCY_BORDER[level].replace("border-l-", ""));
+    : (selected ? "#1B4F8A" : URGENCY_BORDER[level].replace("border-l-", ""));
 
   const selectedStyle: React.CSSProperties = selected
     ? {
@@ -171,11 +174,11 @@ const ContactRow: React.FC<RowProps> = ({ contact, selected, aiTyping, onSelect 
       onClick={onSelect}
       style={selectedStyle}
       className={`w-full text-left px-3 py-2.5 border-b transition-colors
-        focus:outline-none focus:ring-inset focus:ring-1 focus:ring-indigo-300
+        focus:outline-none focus:ring-inset focus:ring-1 focus:ring-primary
         border-l-[3px]
         ${contact.sessionClosed
-          ? `${selected ? "bg-white" : "bg-red-50 hover:bg-red-100"} border-b-red-100`
-          : `${selected ? "bg-white" : "bg-transparent hover:bg-white/60"} border-b-gray-100`
+          ? `${selected ? "bg-white" : "bg-red-light hover:bg-red/10"} border-b-red/20`
+          : `${selected ? "bg-white" : "bg-transparent hover:bg-white/60"} border-b-border`
         }
       `}
       // Inline left-border colour (urgency or selection)
@@ -187,19 +190,19 @@ const ContactRow: React.FC<RowProps> = ({ contact, selected, aiTyping, onSelect 
       <div className="flex items-center gap-1.5 min-w-0">
         <span
           className="text-base leading-none flex-shrink-0"
-          title={contact.sessionClosed ? "Sessão encerrada" : contact.channel}
+          title={contact.sessionClosed ? t('contactList.sessionClosed') : contact.channel}
         >
           {contact.sessionClosed ? "🔴" : channelIcon(contact.channel)}
         </span>
         <span
-          className="flex-1 text-xs font-medium text-gray-800 truncate font-mono"
+          className="flex-1 text-xs font-medium text-dark truncate font-mono"
           title={contact.contactId ?? contact.sessionId}
         >
           {displayId(contact)}
         </span>
         {contact.poolId && (
           <span
-            className="flex-shrink-0 text-[10px] text-indigo-500 bg-indigo-50 border border-indigo-200
+            className="flex-shrink-0 text-2xs text-primary bg-primary-light border border-primary/20
               px-1 py-0.5 rounded truncate max-w-[72px]"
             title={contact.poolId}
           >
@@ -207,8 +210,8 @@ const ContactRow: React.FC<RowProps> = ({ contact, selected, aiTyping, onSelect 
           </span>
         )}
         {contact.unreadCount > 0 && (
-          <span className="flex-shrink-0 min-w-[1.25rem] h-5 rounded-full bg-indigo-500
-            text-white text-[10px] font-bold flex items-center justify-center px-1">
+          <span className="flex-shrink-0 min-w-[1.25rem] h-5 rounded-full bg-primary
+            text-white text-2xs font-bold flex items-center justify-center px-1">
             {contact.unreadCount > 99 ? "99+" : contact.unreadCount}
           </span>
         )}
@@ -217,31 +220,47 @@ const ContactRow: React.FC<RowProps> = ({ contact, selected, aiTyping, onSelect 
       {/* Row 2: 💬 response-wait + timer + SLA bar + ai typing + enc badge */}
       <div className="flex items-center gap-1.5 mt-1">
 
-        {/* Response-wait indicator — only when customer is waiting and session is open */}
-        {!contact.sessionClosed && contact.lastCustomerMessageAt && (() => {
-          const waitMs = nowMs - contact.lastCustomerMessageAt.getTime();
+        {/* Response timer — shows agent's reply obligation.
+            counting (orange/red) = agent owes a reply, live counter.
+            frozen   (green ✓)   = agent replied; shows how long the reply took. */}
+        {!contact.sessionClosed && (() => {
+          const timer: ResponseTimer = contact.responseTimer;
+          if (timer.status === 'frozen') {
+            return (
+              <span
+                className="text-xs font-mono tabular-nums flex-shrink-0 text-green-text"
+                title={t('contactList.responded')}
+              >
+                <CheckCheck className="w-3 h-3 inline-block mr-0.5" aria-hidden="true" />
+                {formatElapsed(timer.elapsedMs)}
+              </span>
+            );
+          }
+          // counting — live counter
+          const waitMs = nowMs - timer.startedAt;
           const wLevel = waitLevel(waitMs, contact.maxReplyTimeMs);
           return (
             <span
-              className={`text-[11px] font-mono tabular-nums flex-shrink-0 ${WAIT_COLOR[wLevel]}`}
-              title="Aguardando sua resposta"
+              className={`text-xs font-mono tabular-nums flex-shrink-0 ${WAIT_COLOR[wLevel]}`}
+              title={t('contactList.awaitingResponse')}
             >
-              💬 {formatElapsed(waitMs)}
+              <MessageSquare className="w-3 h-3 inline-block mr-0.5" aria-hidden="true" />
+              {formatElapsed(waitMs)}
             </span>
           );
         })()}
 
         <span
-          className={`text-[11px] font-mono tabular-nums flex-shrink-0
-            ${contact.sessionClosed ? "text-gray-400" : URGENCY_TIMER[level]}`}
+          className={`inline-flex items-center gap-0.5 text-xs font-mono tabular-nums flex-shrink-0
+            ${contact.sessionClosed ? "text-muted-light" : URGENCY_TIMER[level]}`}
           title="Tempo em atendimento"
         >
-          ⏱ {formatElapsed(handleMs)}
+          <Timer className="w-3 h-3" aria-hidden="true" />{formatElapsed(handleMs)}
         </span>
 
         {slaPercent !== null && (
           <div
-            className="flex-1 h-1 bg-gray-200 rounded-full overflow-hidden ml-1"
+            className="flex-1 h-1 bg-border rounded-full overflow-hidden ml-1"
             title={`SLA ${slaPercent.toFixed(0)}%`}
           >
             <div
@@ -252,15 +271,15 @@ const ContactRow: React.FC<RowProps> = ({ contact, selected, aiTyping, onSelect 
         )}
 
         {aiTyping && (
-          <span className="flex-shrink-0 text-[10px] text-indigo-400 animate-pulse" title="IA digitando">
-            ✦
+          <span className="flex-shrink-0 animate-pulse text-ai" title={t('contactList.aiTyping')}>
+            <Sparkles className="w-3 h-3" aria-hidden="true" />
           </span>
         )}
 
         {contact.sessionClosed && (
-          <span className="flex-shrink-0 text-[10px] bg-red-100 text-red-600 font-semibold
-            px-1.5 py-0.5 rounded border border-red-200">
-            enc.
+          <span className="flex-shrink-0 text-2xs bg-red-light text-red-text font-semibold
+            px-1.5 py-0.5 rounded border border-red">
+            {t('contactList.ended')}
           </span>
         )}
       </div>
@@ -275,6 +294,7 @@ export const ContactList: React.FC<ContactListProps> = ({
   aiTypingSessions,
   onSelect,
 }) => {
+  const { t } = useTranslation('agentAssist');
   // FIFO: oldest sessionStartedAt first; closed contacts always last
   const sorted = [...contacts].sort((a, b) => {
     if (a.sessionClosed !== b.sessionClosed) return a.sessionClosed ? 1 : -1;
@@ -282,13 +302,13 @@ export const ContactList: React.FC<ContactListProps> = ({
   });
 
   return (
-    <div className="flex flex-col h-full bg-gray-100">
+    <div className="flex flex-col h-full bg-surface-alt">
       {/* Rows — header is rendered in the shared sub-header row of AgentAssistPage */}
       {contacts.length === 0 ? (
-        <div className="flex-1 flex flex-col items-center justify-center gap-2 text-gray-400 p-4">
-          <span className="text-2xl">⏳</span>
+        <div className="flex-1 flex flex-col items-center justify-center gap-2 text-muted p-4">
+          <Clock className="w-8 h-8 text-muted-light" aria-hidden="true" />
           <p className="text-xs text-center leading-snug">
-            Aguardando próximo atendimento…
+            {t('empty.waitingForContact')}
           </p>
         </div>
       ) : (

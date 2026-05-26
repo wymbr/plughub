@@ -1,6 +1,16 @@
 # Arc 6 — Plataforma de Avaliação de Qualidade
 
+> Última atualização: 2026-05-25 · Estado: Arc 16
+
 Plataforma completa de avaliação de qualidade de interações: formulários configuráveis, campanhas de amostragem, agentes avaliadores com RAG, revisão humana, contestação e relatórios analíticos.
+
+## Evolução posterior
+
+Este documento descreve o Arc 6 Fase 1. Partes substanciais — em especial o fluxo de revisão e contestação — foram **reescritas por arcos posteriores**. Ao consultar este doc, considere:
+
+- **(a) Arc 13 — Review, Contestation & Calibration** reescreveu substancialmente o fluxo de review/contestação descrito aqui. O modelo atual usa **contestação por dimensão** (`dimension_threads[]` com `evidence_entries[]` obrigatório por dimensão), `evaluation_finalized` como única fonte de verdade para relatórios de qualidade, dois agentes novos (`agente_pre_revisor_v1` — gate de qualidade pré-publicação; `agente_revisor_v1` — árbitro pós-contestação), além de curadoria amostral e calibração para o fluxo de agentes AI. As afirmações sobre `EvaluationContestation`/`ContestationRound` simples e `available_actions` neste doc estão **superadas** pelo Arc 13. Ver [`arc13-review-contestation.md`](arc13-review-contestation.md).
+- **(b) Arc 6 Fase 2 — Observabilidade de Mudanças** adicionou comparação estruturada de qualidade por **deploy epoch** (Dual-Slice Comparison, deploy timeline, endpoints `quality-comparison`/`quality-timeseries`). Ver [`arc6-phase2-observability.md`](arc6-phase2-observability.md).
+- **(c) UI**: além das páginas descritas neste doc, o módulo de avaliação ganhou `CalibrationDashboard` (`/evaluation/calibration` — calibration score por skill version) e `CuradoriaPage` (`/evaluation/curadoria` — fila de curadoria do feedback loop RAG), ambas introduzidas pelo Arc 13.
 
 ## Novos pacotes
 

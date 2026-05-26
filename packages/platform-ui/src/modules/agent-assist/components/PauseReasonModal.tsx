@@ -6,6 +6,7 @@
  */
 
 import React, { useEffect, useState } from "react";
+import { Pause } from "lucide-react";
 
 interface PauseReason {
   id:            string;
@@ -74,9 +75,9 @@ export const PauseReasonModal: React.FC<Props> = ({ onConfirm, onCancel }) => {
     >
       <div className="bg-white rounded-xl shadow-2xl w-full max-w-sm mx-4 overflow-hidden">
         {/* Header */}
-        <div className="px-5 py-4 border-b border-gray-100">
-          <h2 className="text-base font-semibold text-gray-800">Motivo da pausa</h2>
-          <p className="text-xs text-gray-500 mt-0.5">
+        <div className="px-5 py-4 border-b border-border">
+          <h2 className="text-base font-semibold text-dark">Motivo da pausa</h2>
+          <p className="text-xs text-muted mt-0.5">
             Selecione o motivo antes de pausar o recebimento de novos contatos.
           </p>
         </div>
@@ -85,7 +86,7 @@ export const PauseReasonModal: React.FC<Props> = ({ onConfirm, onCancel }) => {
         <div className="px-5 py-4">
           {loading ? (
             <div className="flex items-center justify-center py-6">
-              <span className="text-sm text-gray-400 animate-pulse">Carregando motivos…</span>
+              <span className="text-sm text-muted-light animate-pulse">Carregando motivos…</span>
             </div>
           ) : (
             <div className="flex flex-col gap-2">
@@ -95,8 +96,8 @@ export const PauseReasonModal: React.FC<Props> = ({ onConfirm, onCancel }) => {
                   className={`flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer
                     border transition-colors select-none ${
                     selected === r.id
-                      ? "border-amber-400 bg-amber-50"
-                      : "border-gray-200 hover:border-gray-300 hover:bg-gray-50"
+                      ? "border-warning bg-warning-light"
+                      : "border-border hover:border-border-strong hover:bg-surface-muted"
                   }`}
                 >
                   <input
@@ -105,11 +106,11 @@ export const PauseReasonModal: React.FC<Props> = ({ onConfirm, onCancel }) => {
                     value={r.id}
                     checked={selected === r.id}
                     onChange={() => { setSelected(r.id); setNote(""); }}
-                    className="accent-amber-500 w-3.5 h-3.5 flex-shrink-0"
+                    className="accent-warning w-3.5 h-3.5 flex-shrink-0"
                   />
-                  <span className="text-sm text-gray-700 font-medium">{r.label}</span>
+                  <span className="text-sm text-dark font-medium">{r.label}</span>
                   {r.requires_note && (
-                    <span className="ml-auto text-[10px] text-gray-400 font-normal">nota obrigatória</span>
+                    <span className="ml-auto text-2xs text-muted-light font-normal">nota obrigatória</span>
                   )}
                 </label>
               ))}
@@ -119,8 +120,8 @@ export const PauseReasonModal: React.FC<Props> = ({ onConfirm, onCancel }) => {
           {/* Note field — shown when selected reason requires it */}
           {needsNote && (
             <div className="mt-3">
-              <label className="block text-xs font-medium text-gray-600 mb-1">
-                Observação <span className="text-red-500">*</span>
+              <label className="block text-xs font-medium text-muted mb-1">
+                Observação <span className="text-red">*</span>
               </label>
               <textarea
                 autoFocus
@@ -128,23 +129,23 @@ export const PauseReasonModal: React.FC<Props> = ({ onConfirm, onCancel }) => {
                 onChange={e => setNote(e.target.value)}
                 placeholder="Descreva brevemente o motivo…"
                 rows={3}
-                className="w-full text-sm border border-gray-300 rounded-lg px-3 py-2
-                  focus:outline-none focus:ring-2 focus:ring-amber-400 focus:border-amber-400
-                  resize-none placeholder-gray-400"
+                className="w-full text-sm border border-border-strong rounded-lg px-3 py-2
+                  focus:outline-none focus:ring-2 focus:ring-warning/40 focus:border-warning
+                  resize-none placeholder-muted-light"
               />
               {note.trim().length > 0 && note.trim().length < 3 && (
-                <p className="text-xs text-red-500 mt-1">Mínimo de 3 caracteres.</p>
+                <p className="text-xs text-red mt-1">Mínimo de 3 caracteres.</p>
               )}
             </div>
           )}
         </div>
 
         {/* Footer */}
-        <div className="px-5 py-3 bg-gray-50 border-t border-gray-100 flex justify-end gap-2">
+        <div className="px-5 py-3 bg-surface-muted border-t border-border flex justify-end gap-2">
           <button
             onClick={onCancel}
-            className="px-4 py-1.5 rounded-lg text-sm font-medium text-gray-600
-              border border-gray-200 hover:bg-gray-100 transition-colors"
+            className="px-4 py-1.5 rounded-lg text-sm font-medium text-muted
+              border border-border hover:bg-surface-alt transition-colors"
           >
             Cancelar
           </button>
@@ -152,10 +153,10 @@ export const PauseReasonModal: React.FC<Props> = ({ onConfirm, onCancel }) => {
             onClick={handleConfirm}
             disabled={!canConfirm}
             className="px-4 py-1.5 rounded-lg text-sm font-semibold text-white
-              bg-amber-500 hover:bg-amber-600 disabled:opacity-40 disabled:cursor-not-allowed
+              bg-warning hover:bg-warning-text disabled:opacity-40 disabled:cursor-not-allowed
               transition-colors"
           >
-            ⏸ Pausar
+            <Pause className="w-3.5 h-3.5 inline mr-1" aria-hidden="true" />Pausar
           </button>
         </div>
       </div>

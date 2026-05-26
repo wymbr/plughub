@@ -1,5 +1,7 @@
 # Instance Bootstrap — Reconciliation-Driven Agent Instance Management
 
+> Última atualização: 2026-05-25 · Estado: Arc 16
+
 Implemented in `packages/orchestrator-bridge/src/plughub_orchestrator_bridge/instance_bootstrap.py`.
 
 **Principle**: Agent Registry is the single source of truth. The Bootstrap operates as a

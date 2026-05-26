@@ -16,6 +16,7 @@ import React, { useCallback, useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useAuth } from '@/auth/useAuth'
 import Spinner from '@/components/ui/Spinner'
+import { Users, X, Check } from 'lucide-react'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -196,12 +197,12 @@ export default function GroupsPage() {
   // ── Render ────────────────────────────────────────────────────────────────────
 
   return (
-    <div className="h-full flex flex-col bg-gray-50">
+    <div className="h-full flex flex-col bg-surface-muted">
       {/* Header */}
-      <div className="bg-white border-b border-gray-200 px-6 py-4 flex items-center justify-between">
+      <div className="bg-white border-b border-border px-6 py-4 flex items-center justify-between">
         <div>
-          <h1 className="text-xl font-semibold text-gray-900">{t('title')}</h1>
-          <p className="text-sm text-gray-500 mt-0.5">{t('subtitle')}</p>
+          <h1 className="text-xl font-semibold text-dark">{t('title')}</h1>
+          <p className="text-sm text-muted mt-0.5">{t('subtitle')}</p>
         </div>
         <div className="flex items-center gap-2">
           <input
@@ -210,22 +211,22 @@ export default function GroupsPage() {
             onChange={e => { setAdminToken(e.target.value); setTokenSaved(false) }}
             onKeyDown={e => { if (e.key === 'Enter') saveToken() }}
             placeholder={t('adminTokenPlaceholder')}
-            className="border border-gray-300 rounded-lg px-3 py-1.5 text-xs w-48 focus:outline-none focus:ring-2 focus:ring-blue-500"
+            className="border border-border-strong rounded-lg px-3 py-1.5 text-xs w-48 focus:outline-none focus:ring-2 focus:ring-primary/50"
           />
           {adminToken && (
             <button
               onClick={saveToken}
               className={`px-3 py-1.5 text-xs font-medium rounded-lg transition-colors ${
-                tokenSaved ? 'bg-green-100 text-green-700' : 'bg-blue-600 text-white hover:bg-blue-700'
+                tokenSaved ? 'bg-green-light text-green-text' : 'bg-primary text-white hover:bg-primary-dark'
               }`}
             >
-              {tokenSaved ? '✓' : t('adminTokenApply')}
+              {tokenSaved ? <Check className="w-3.5 h-3.5 inline" aria-hidden="true" /> : t('adminTokenApply')}
             </button>
           )}
           {adminToken && (
             <button
               onClick={() => setNewGroupOpen(true)}
-              className="px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 transition-colors"
+              className="px-4 py-2 bg-primary text-white text-sm font-medium rounded-lg hover:bg-primary-dark transition-colors"
             >
               + {t('newGroup')}
             </button>
@@ -235,9 +236,9 @@ export default function GroupsPage() {
 
       {/* Error banner */}
       {error && (
-        <div className="mx-6 mt-4 p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700 flex justify-between">
+        <div className="mx-6 mt-4 p-3 bg-red-light border border-red/30 rounded-lg text-sm text-red-text flex justify-between">
           {error}
-          <button onClick={() => setError(null)} className="ml-2 text-red-500 hover:text-red-700">✕</button>
+          <button onClick={() => setError(null)} className="ml-2 text-red hover:text-red-text" aria-label="Fechar erro"><X className="w-3.5 h-3.5" /></button>
         </div>
       )}
 
@@ -246,8 +247,8 @@ export default function GroupsPage() {
         {loading ? (
           <div className="flex justify-center py-16"><Spinner /></div>
         ) : groups.length === 0 ? (
-          <div className="text-center py-16 text-gray-400">
-            <div className="text-4xl mb-3">👥</div>
+          <div className="text-center py-16 text-muted-light">
+            <Users className="w-10 h-10 mb-3 mx-auto text-muted-light" aria-hidden="true" />
             <p className="text-sm">{t('empty')}</p>
           </div>
         ) : (
@@ -256,22 +257,22 @@ export default function GroupsPage() {
               <div
                 key={g.group_id}
                 onClick={() => openGroup(g.group_id)}
-                className="bg-white border border-gray-200 rounded-lg px-5 py-4 flex items-center justify-between cursor-pointer hover:border-blue-300 hover:shadow-sm transition-all"
+                className="bg-white border border-border rounded-lg px-5 py-4 flex items-center justify-between cursor-pointer hover:border-primary/30 hover:shadow-sm transition-all"
               >
                 <div>
-                  <p className="font-medium text-gray-900">{g.name}</p>
+                  <p className="font-medium text-dark">{g.name}</p>
                   {g.description && (
-                    <p className="text-sm text-gray-500 mt-0.5">{g.description}</p>
+                    <p className="text-sm text-muted mt-0.5">{g.description}</p>
                   )}
                 </div>
-                <div className="flex items-center gap-4 text-sm text-gray-500">
+                <div className="flex items-center gap-4 text-sm text-muted">
                   {g.member_count != null && (
                     <span>{g.member_count} {t('members').toLowerCase()}</span>
                   )}
                   {g.supervisor_count != null && (
                     <span>{g.supervisor_count} {t('supervisors').toLowerCase()}</span>
                   )}
-                  <span className="text-gray-300">›</span>
+                  <span className="text-border-strong">›</span>
                 </div>
               </div>
             ))}
@@ -284,16 +285,16 @@ export default function GroupsPage() {
         <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
           <div className="bg-white rounded-xl shadow-xl w-full max-w-md p-6">
             <h2 className="text-lg font-semibold mb-4">{t('newGroup')}</h2>
-            <label className="block text-sm font-medium text-gray-700 mb-1">{t('fieldName')}</label>
+            <label className="block text-sm font-medium text-dark mb-1">{t('fieldName')}</label>
             <input
-              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm mb-3 focus:outline-none focus:ring-2 focus:ring-blue-500"
+              className="w-full border border-border-strong rounded-lg px-3 py-2 text-sm mb-3 focus:outline-none focus:ring-2 focus:ring-primary/50"
               value={newName}
               onChange={e => setNewName(e.target.value)}
               placeholder={t('fieldNamePlaceholder')}
             />
-            <label className="block text-sm font-medium text-gray-700 mb-1">{t('fieldDescription')}</label>
+            <label className="block text-sm font-medium text-dark mb-1">{t('fieldDescription')}</label>
             <input
-              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm mb-5 focus:outline-none focus:ring-2 focus:ring-blue-500"
+              className="w-full border border-border-strong rounded-lg px-3 py-2 text-sm mb-5 focus:outline-none focus:ring-2 focus:ring-primary/50"
               value={newDesc}
               onChange={e => setNewDesc(e.target.value)}
               placeholder={t('fieldDescriptionPlaceholder')}
@@ -301,14 +302,14 @@ export default function GroupsPage() {
             <div className="flex justify-end gap-2">
               <button
                 onClick={() => { setNewGroupOpen(false); setNewName(''); setNewDesc('') }}
-                className="px-4 py-2 text-sm text-gray-600 hover:text-gray-900"
+                className="px-4 py-2 text-sm text-muted hover:text-dark"
               >
                 {t('cancel')}
               </button>
               <button
                 onClick={createGroup}
                 disabled={saving || !newName.trim()}
-                className="px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 disabled:opacity-50 transition-colors"
+                className="px-4 py-2 bg-primary text-white text-sm font-medium rounded-lg hover:bg-primary-dark disabled:opacity-50 transition-colors"
               >
                 {saving ? t('saving') : t('create')}
               </button>
@@ -362,33 +363,33 @@ function GroupDrawer({ group, loading, tab, onTabChange, adminToken, onClose, on
       {/* Panel */}
       <div className="w-full max-w-lg bg-white shadow-2xl flex flex-col">
         {/* Drawer header */}
-        <div className="border-b border-gray-200 px-6 py-4 flex items-center justify-between">
-          <h2 className="text-lg font-semibold text-gray-900">
+        <div className="border-b border-border px-6 py-4 flex items-center justify-between">
+          <h2 className="text-lg font-semibold text-dark">
             {loading ? '…' : group?.name ?? ''}
           </h2>
           <div className="flex items-center gap-2">
             {group && (
               <button
                 onClick={() => onDelete(group.group_id)}
-                className="px-3 py-1.5 text-sm text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+                className="px-3 py-1.5 text-sm text-red hover:bg-red-light rounded-lg transition-colors"
               >
                 {t('delete')}
               </button>
             )}
-            <button onClick={onClose} className="p-1.5 text-gray-400 hover:text-gray-700 rounded">✕</button>
+            <button onClick={onClose} className="p-1.5 text-muted-light hover:text-dark rounded" aria-label="Fechar"><X className="w-4 h-4" /></button>
           </div>
         </div>
 
         {/* Tabs */}
-        <div className="border-b border-gray-200 px-6 flex gap-1">
+        <div className="border-b border-border px-6 flex gap-1">
           {(['info', 'members', 'supervisors', 'shifts'] as const).map(tabKey => (
             <button
               key={tabKey}
               onClick={() => onTabChange(tabKey)}
               className={`px-3 py-3 text-sm font-medium border-b-2 transition-colors ${
                 tab === tabKey
-                  ? 'border-blue-600 text-blue-600'
-                  : 'border-transparent text-gray-500 hover:text-gray-700'
+                  ? 'border-primary text-primary'
+                  : 'border-transparent text-muted hover:text-dark'
               }`}
             >
               {t(`tab.${tabKey}`)}
@@ -442,17 +443,17 @@ function InfoTab({ group, adminToken, onRefresh, t }: {
   return (
     <div className="p-6 space-y-4">
       <div>
-        <label className="block text-sm font-medium text-gray-700 mb-1">{t('fieldName')}</label>
+        <label className="block text-sm font-medium text-dark mb-1">{t('fieldName')}</label>
         <input
-          className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+          className="w-full border border-border-strong rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/50"
           value={name}
           onChange={e => setName(e.target.value)}
         />
       </div>
       <div>
-        <label className="block text-sm font-medium text-gray-700 mb-1">{t('fieldDescription')}</label>
+        <label className="block text-sm font-medium text-dark mb-1">{t('fieldDescription')}</label>
         <textarea
-          className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none"
+          className="w-full border border-border-strong rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/50 resize-none"
           rows={3}
           value={desc}
           onChange={e => setDesc(e.target.value)}
@@ -462,13 +463,13 @@ function InfoTab({ group, adminToken, onRefresh, t }: {
         <button
           onClick={save}
           disabled={saving}
-          className="px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 disabled:opacity-50 transition-colors"
+          className="px-4 py-2 bg-primary text-white text-sm font-medium rounded-lg hover:bg-primary-dark disabled:opacity-50 transition-colors"
         >
           {saving ? t('saving') : t('save')}
         </button>
-        {saved && <span className="text-sm text-green-600">✓ {t('saved')}</span>}
+        {saved && <span className="inline-flex items-center gap-1 text-sm text-green-text"><Check className="w-3.5 h-3.5" aria-hidden="true" />{t('saved')}</span>}
       </div>
-      <div className="pt-4 border-t border-gray-100 text-xs text-gray-400 space-y-1">
+      <div className="pt-4 border-t border-border text-xs text-muted-light space-y-1">
         <p>{t('fieldGroupId')}: <span className="font-mono">{group.group_id}</span></p>
         <p>{t('fieldCreated')}: {new Date(group.created_at).toLocaleString()}</p>
       </div>
@@ -508,25 +509,25 @@ function MembersTab({ group, adminToken, onRefresh, t }: {
 
   return (
     <div className="p-6 space-y-4">
-      <p className="text-sm text-gray-500">{t('membersHint')}</p>
+      <p className="text-sm text-muted">{t('membersHint')}</p>
 
       {/* Add form */}
       <div className="flex gap-2 items-center">
         <input
-          className="flex-1 border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+          className="flex-1 border border-border-strong rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/50"
           placeholder={t('memberAgentTypeId')}
           value={agentTypeId}
           onChange={e => setAgentTypeId(e.target.value)}
           onKeyDown={e => e.key === 'Enter' && add()}
         />
-        <label className="flex items-center gap-1.5 text-sm text-gray-600 whitespace-nowrap">
+        <label className="flex items-center gap-1.5 text-sm text-muted whitespace-nowrap">
           <input type="checkbox" checked={isHuman} onChange={e => setIsHuman(e.target.checked)} className="rounded" />
           {t('memberIsHuman')}
         </label>
         <button
           onClick={add}
           disabled={adding || !agentTypeId.trim()}
-          className="px-3 py-2 bg-blue-600 text-white text-sm rounded-lg hover:bg-blue-700 disabled:opacity-50 whitespace-nowrap"
+          className="px-3 py-2 bg-primary text-white text-sm rounded-lg hover:bg-primary-dark disabled:opacity-50 whitespace-nowrap"
         >
           {t('add')}
         </button>
@@ -534,20 +535,20 @@ function MembersTab({ group, adminToken, onRefresh, t }: {
 
       {/* List */}
       {group.members.length === 0 ? (
-        <p className="text-sm text-gray-400 text-center py-4">{t('noMembers')}</p>
+        <p className="text-sm text-muted-light text-center py-4">{t('noMembers')}</p>
       ) : (
-        <div className="divide-y divide-gray-100 border border-gray-200 rounded-lg">
+        <div className="divide-y divide-border border border-border rounded-lg">
           {group.members.map(m => (
             <div key={m.agent_type_id} className="flex items-center justify-between px-4 py-3">
               <div>
-                <span className="text-sm font-mono text-gray-800">{m.agent_type_id}</span>
+                <span className="text-sm font-mono text-dark">{m.agent_type_id}</span>
                 {m.is_human && (
-                  <span className="ml-2 text-xs bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded">human</span>
+                  <span className="ml-2 text-xs bg-warning-light text-warning-text px-1.5 py-0.5 rounded">human</span>
                 )}
               </div>
               <button
                 onClick={() => remove(m.agent_type_id)}
-                className="text-xs text-red-500 hover:text-red-700"
+                className="text-xs text-red hover:text-red-text"
               >
                 {t('remove')}
               </button>
@@ -590,11 +591,11 @@ function SupervisorsTab({ group, adminToken, onRefresh, t }: {
 
   return (
     <div className="p-6 space-y-4">
-      <p className="text-sm text-gray-500">{t('supervisorsHint')}</p>
+      <p className="text-sm text-muted">{t('supervisorsHint')}</p>
 
       <div className="flex gap-2">
         <input
-          className="flex-1 border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+          className="flex-1 border border-border-strong rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/50"
           placeholder={t('supervisorUserId')}
           value={userId}
           onChange={e => setUserId(e.target.value)}
@@ -603,28 +604,28 @@ function SupervisorsTab({ group, adminToken, onRefresh, t }: {
         <button
           onClick={add}
           disabled={adding || !userId.trim()}
-          className="px-3 py-2 bg-blue-600 text-white text-sm rounded-lg hover:bg-blue-700 disabled:opacity-50"
+          className="px-3 py-2 bg-primary text-white text-sm rounded-lg hover:bg-primary-dark disabled:opacity-50"
         >
           {t('add')}
         </button>
       </div>
 
       {group.supervisors.length === 0 ? (
-        <p className="text-sm text-gray-400 text-center py-4">{t('noSupervisors')}</p>
+        <p className="text-sm text-muted-light text-center py-4">{t('noSupervisors')}</p>
       ) : (
-        <div className="divide-y divide-gray-100 border border-gray-200 rounded-lg">
+        <div className="divide-y divide-border border border-border rounded-lg">
           {group.supervisors.map(s => {
             const uid = s.user_id ?? s.id ?? ''
             return (
               <div key={uid} className="flex items-center justify-between px-4 py-3">
                 <div>
-                  <p className="text-sm text-gray-800">{s.name ?? s.email ?? uid}</p>
-                  {s.email && s.name && <p className="text-xs text-gray-400">{s.email}</p>}
-                  <p className="text-xs text-gray-400 font-mono">{uid}</p>
+                  <p className="text-sm text-dark">{s.name ?? s.email ?? uid}</p>
+                  {s.email && s.name && <p className="text-xs text-muted-light">{s.email}</p>}
+                  <p className="text-xs text-muted-light font-mono">{uid}</p>
                 </div>
                 <button
                   onClick={() => remove(uid)}
-                  className="text-xs text-red-500 hover:text-red-700"
+                  className="text-xs text-red hover:text-red-text"
                 >
                   {t('remove')}
                 </button>
@@ -696,10 +697,10 @@ function ShiftsTab({ group, adminToken, onRefresh, t }: {
   return (
     <div className="p-6 space-y-4">
       <div className="flex items-center justify-between">
-        <p className="text-sm text-gray-500">{t('shiftsHint')}</p>
+        <p className="text-sm text-muted">{t('shiftsHint')}</p>
         <button
           onClick={() => setShowAdd(s => !s)}
-          className="text-sm text-blue-600 hover:text-blue-800"
+          className="text-sm text-primary hover:text-primary-dark"
         >
           {showAdd ? t('cancel') : `+ ${t('addShift')}`}
         </button>
@@ -707,18 +708,18 @@ function ShiftsTab({ group, adminToken, onRefresh, t }: {
 
       {/* Add shift form */}
       {showAdd && (
-        <div className="border border-gray-200 rounded-lg p-4 space-y-3 bg-gray-50">
+        <div className="border border-border rounded-lg p-4 space-y-3 bg-surface-muted">
           <div>
-            <label className="block text-xs font-medium text-gray-600 mb-1">{t('shiftSupervisorId')}</label>
+            <label className="block text-xs font-medium text-muted mb-1">{t('shiftSupervisorId')}</label>
             <input
-              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              className="w-full border border-border-strong rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/50"
               placeholder="user-uuid"
               value={form.supervisor_user_id}
               onChange={e => setForm(f => ({ ...f, supervisor_user_id: e.target.value }))}
             />
           </div>
           <div>
-            <label className="block text-xs font-medium text-gray-600 mb-1">{t('shiftDays')}</label>
+            <label className="block text-xs font-medium text-muted mb-1">{t('shiftDays')}</label>
             <div className="flex gap-1">
               {DAY_LABELS.map((lbl, dow) => (
                 <button
@@ -726,8 +727,8 @@ function ShiftsTab({ group, adminToken, onRefresh, t }: {
                   onClick={() => toggleDay(dow)}
                   className={`w-9 h-9 rounded text-xs font-medium transition-colors ${
                     form.days_of_week.includes(dow)
-                      ? 'bg-blue-600 text-white'
-                      : 'bg-white border border-gray-300 text-gray-600 hover:border-blue-400'
+                      ? 'bg-primary text-white'
+                      : 'bg-white border border-border-strong text-muted hover:border-primary/40'
                   }`}
                 >
                   {lbl}
@@ -737,27 +738,27 @@ function ShiftsTab({ group, adminToken, onRefresh, t }: {
           </div>
           <div className="flex gap-3">
             <div className="flex-1">
-              <label className="block text-xs font-medium text-gray-600 mb-1">{t('shiftStart')}</label>
+              <label className="block text-xs font-medium text-muted mb-1">{t('shiftStart')}</label>
               <input
                 type="time"
-                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                className="w-full border border-border-strong rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/50"
                 value={form.time_start}
                 onChange={e => setForm(f => ({ ...f, time_start: e.target.value }))}
               />
             </div>
             <div className="flex-1">
-              <label className="block text-xs font-medium text-gray-600 mb-1">{t('shiftEnd')}</label>
+              <label className="block text-xs font-medium text-muted mb-1">{t('shiftEnd')}</label>
               <input
                 type="time"
-                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                className="w-full border border-border-strong rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/50"
                 value={form.time_end}
                 onChange={e => setForm(f => ({ ...f, time_end: e.target.value }))}
               />
             </div>
             <div className="flex-1">
-              <label className="block text-xs font-medium text-gray-600 mb-1">{t('shiftTimezone')}</label>
+              <label className="block text-xs font-medium text-muted mb-1">{t('shiftTimezone')}</label>
               <select
-                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                className="w-full border border-border-strong rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/50"
                 value={form.timezone}
                 onChange={e => setForm(f => ({ ...f, timezone: e.target.value }))}
               >
@@ -768,7 +769,7 @@ function ShiftsTab({ group, adminToken, onRefresh, t }: {
           <button
             onClick={add}
             disabled={adding || !form.supervisor_user_id.trim()}
-            className="w-full py-2 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 disabled:opacity-50 transition-colors"
+            className="w-full py-2 bg-primary text-white text-sm font-medium rounded-lg hover:bg-primary-dark disabled:opacity-50 transition-colors"
           >
             {adding ? t('saving') : t('addShift')}
           </button>
@@ -777,30 +778,30 @@ function ShiftsTab({ group, adminToken, onRefresh, t }: {
 
       {/* Shifts list */}
       {group.shifts.length === 0 && !showAdd ? (
-        <p className="text-sm text-gray-400 text-center py-4">{t('noShifts')}</p>
+        <p className="text-sm text-muted-light text-center py-4">{t('noShifts')}</p>
       ) : (
         <div className="space-y-2">
           {group.shifts.map(s => (
-            <div key={s.shift_id} className="border border-gray-200 rounded-lg px-4 py-3">
+            <div key={s.shift_id} className="border border-border rounded-lg px-4 py-3">
               <div className="flex items-start justify-between">
                 <div className="space-y-1">
-                  <p className="text-sm font-mono text-gray-700 text-xs">{s.supervisor_user_id}</p>
+                  <p className="text-sm font-mono text-dark text-xs">{s.supervisor_user_id}</p>
                   <div className="flex gap-1">
                     {DAY_LABELS.map((lbl, dow) => (
                       <span
                         key={dow}
                         className={`text-xs px-1.5 py-0.5 rounded ${
                           s.days_of_week.includes(dow)
-                            ? 'bg-blue-100 text-blue-700'
-                            : 'bg-gray-100 text-gray-400'
+                            ? 'bg-primary-light text-primary'
+                            : 'bg-surface-alt text-muted-light'
                         }`}
                       >
                         {lbl}
                       </span>
                     ))}
                   </div>
-                  <p className="text-xs text-gray-500">
-                    {s.time_start} – {s.time_end} <span className="text-gray-400">({s.timezone})</span>
+                  <p className="text-xs text-muted">
+                    {s.time_start} – {s.time_end} <span className="text-muted-light">({s.timezone})</span>
                   </p>
                 </div>
                 <div className="flex items-center gap-2">
@@ -808,15 +809,15 @@ function ShiftsTab({ group, adminToken, onRefresh, t }: {
                     onClick={() => toggleActive(s)}
                     className={`text-xs px-2 py-1 rounded-full font-medium transition-colors ${
                       s.active
-                        ? 'bg-green-100 text-green-700 hover:bg-green-200'
-                        : 'bg-gray-100 text-gray-500 hover:bg-gray-200'
+                        ? 'bg-green-light text-green-text hover:bg-green/20'
+                        : 'bg-surface-alt text-muted hover:bg-border'
                     }`}
                   >
                     {s.active ? t('shiftActive') : t('shiftInactive')}
                   </button>
                   <button
                     onClick={() => remove(s.shift_id)}
-                    className="text-xs text-red-500 hover:text-red-700"
+                    className="text-xs text-red hover:text-red-text transition-colors"
                   >
                     {t('remove')}
                   </button>

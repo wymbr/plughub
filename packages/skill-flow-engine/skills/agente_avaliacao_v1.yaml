@@ -8,6 +8,16 @@
 #   - N/A: critérios com applies_when não satisfeito são marcados na=true com na_reason
 #   - Direct ingest: evaluation_submit envia para evaluation-api /v1/evaluation/ingest
 #
+# Melhorias v3 (Arc 13 Fase B):
+#   - auto_computed: critérios com type=auto_computed são IGNORADOS pelo LLM
+#     (SessionMetricsExtractor os preenche automaticamente no ingest)
+#   - dimension_threads: o LLM produz um thread de evidência estruturado por dimensão,
+#     com evidence_entries[] contendo stream_entry_id, excerpt e relevance_note
+#   - calibration_notes: notas de calibração do knowledge namespace são lidas do
+#     eval_context e injetadas no LLM para guiar o scoring (feedback do curador)
+#   - evaluated_agent_type: "human_agent" | "ai_agent" passado ao evaluation_submit
+#     para acionar o fluxo correto de contestação/finalização na evaluation-api
+#
 # Fluxo:
 #
 #   evaluation_context_get
@@ -17,7 +27,7 @@
 #       │            │
 #       │        merge_snippets (inline — une pre-fetched + RAG hits)
 #       │            │
-#       └─ no  ──────┴──► evaluate (reason: LLM avalia TODOS os critérios)
+#       └─ no  ──────┴──► evaluate (reason: LLM avalia TODOS os critérios não-auto)
 #                              │
 #                         submit_result (invoke: evaluation_submit)
 #                              │
@@ -26,11 +36,12 @@
 #         complete_ok     complete_error
 #
 # Inputs esperados (injetados pelo orchestrator no session_context ou pipeline_state):
-#   $.session.session_id        — sessão a avaliar
-#   $.session.participant_id    — instance_id do avaliador (role: evaluator)
-#   $.session.session_token     — JWT do avaliador
-#   $.session.evaluation_id     — ID único desta avaliação (gerado pelo Replayer)
-#   $.session.tenant_id         — tenant
+#   $.session.session_id           — sessão a avaliar
+#   $.session.participant_id       — instance_id do avaliador (role: evaluator)
+#   $.session.session_token        — JWT do avaliador
+#   $.session.evaluation_id        — ID único desta avaliação (gerado pelo Replayer)
+#   $.session.tenant_id            — tenant
+#   $.session.evaluated_agent_type — "human_agent" | "ai_agent"
 #
 # O evaluation_context_get recupera do ReplayContext (escrito pelo Replayer):
 #   context.replay_events[]            — eventos com delta_ms e original_content
@@ -40,21 +51,33 @@
 #   context.campaign_id                — campanha de origem
 #   context.knowledge_snippets[]       — snippets pré-carregados pelo campaign
 #   context.comparison_mode            — flag de modo comparativo
+#   calibration_notes[]               — notas de calibração publicadas pelo curador
+#                                        (Arc 13: feedback ao avaliador via RAG)
 #
 # O LLM recebe:
 #   transcript (events com original_content, autores, timestamps relativos)
-#   form (dimensions[], cada critério com label, description, weight, allows_na, applies_when)
+#   form (dimensions[], cada critério com label, description, weight, allows_na,
+#         applies_when, type — IGNORAR critérios com type=auto_computed)
 #   knowledge_snippets (políticas, rubricas, scripts ideais)
+#   calibration_notes (notas de calibração do curador — guias de scoring)
 #   session_meta (channel, agent_type_id, outcome, duração)
 #
 # O LLM devolve (output_schema abaixo):
 #   criterion_responses[]:
-#     - criterion_id: string       (ID do critério no form)
+#     - criterion_id: string       (ID do critério no form — excluir auto_computed)
 #     - value: number | null       (0–10 ou null quando na=true)
 #     - na: boolean                (critério não aplicável?)
 #     - na_reason: string?         (por que N/A, obrigatório quando na=true)
 #     - justification: string      (fundamentação obrigatória)
-#     - evidence_refs[]: number[]  (turn_index dos eventos que fundamentam a nota)
+#     - evidence_refs[]: number[]  (turn_index dos eventos — compatibilidade Arc 6)
+#   dimension_threads[]:           (Arc 13 — thread por dimensão com evidências estruturadas)
+#     - dimension_id: string
+#     - score: number              (0–max_score da dimensão, ponderado pelos critérios)
+#     - justification: string      (síntese da dimensão, ≥ 30 palavras)
+#     - evidence_entries[]:        (mínimo 1 por dimensão avaliada)
+#         stream_entry_id: string  (event_id do stream_events que fundamenta)
+#         excerpt: string          (trecho exato da mensagem, ≤ 200 chars)
+#         relevance_note: string   (por que esse evento é relevante para a nota)
 #   overall_score: number          (0–10; média ponderada computada pelo LLM)
 #   overall_observation: string    (síntese da avaliação)
 #   highlights: string[]           (pontos positivos, ≤5 itens)
@@ -62,12 +85,14 @@
 #   compliance_flags: string[]     (violações detectadas)
 
 id: skill_avaliacao_v1
-name: "Avaliação de Qualidade v2 — Form-Aware + RAG + Evidence"
-version: "2.0"
+name: "Avaliação de Qualidade v3 — Arc 13 Dimension Threads + Calibration"
+version: "3.0"
 description: >
   Agente de avaliação pós-sessão com suporte a formulários dinâmicos,
-  busca RAG na base de conhecimento, referências de evidência por critério
-  e marcação N/A para critérios inaplicáveis. Persiste via evaluation-api.
+  busca RAG na base de conhecimento, notas de calibração do curador,
+  dimension_threads com evidence_entries estruturadas por stream_entry_id,
+  skip automático de critérios auto_computed e roteamento contestação/finalização
+  por tipo de agente avaliado. Persiste via evaluation-api (Arc 13 Fase B).
 classification:
   type: orchestrator
   domain: quality
@@ -121,26 +146,37 @@ steps:
     on_failure: evaluate   # degrade gracefully — avalia sem snippets RAG extras
 
   # ── Step 4: LLM avalia todos os critérios do formulário ───────────────────────
-  # O prompt evaluation_rubric_v2 instrui o LLM a:
+  # O prompt evaluation_rubric_v3 instrui o LLM a:
   #   1. Ler o formulário (form.dimensions[].criteria[]) com pesos e instruções
-  #   2. Para cada critério:
+  #   2. IGNORAR completamente critérios com type=auto_computed — SessionMetrics
+  #      os preenche automaticamente; incluí-los seria dupla contagem
+  #   3. Para cada critério não-auto:
   #      - verificar se applies_when é satisfeito (se não: na=true)
   #      - atribuir value (0–10) com base no transcript e nos knowledge_snippets
-  #      - citar evidence_refs (turn_index[] dos eventos que fundamentam a nota)
+  #      - citar evidence_refs (turn_index[] — compatibilidade Arc 6)
   #      - escrever justification obrigatória
-  #   3. Calcular overall_score como média ponderada dos critérios avaliados (na=false)
-  #   4. Produzir highlights, improvement_points, compliance_flags
+  #   4. Para cada dimensão (agrupamento de critérios):
+  #      - produzir dimension_thread com score ponderado e evidence_entries[]
+  #      - cada evidence_entry DEVE referenciar stream_entry_id de um replay_event,
+  #        incluir excerpt (≤200 chars) e relevance_note explicando a relação
+  #      - mínimo 1 evidence_entry por dimensão avaliada (na=false em ≥1 critério)
+  #   5. Ler calibration_notes (notas do curador) antes de atribuir notas —
+  #      se uma nota contradiz calibração prévia, justificar explicitamente
+  #   6. Calcular overall_score como média ponderada dos critérios avaliados (na=false)
+  #   7. Produzir highlights, improvement_points, compliance_flags
   - id:         evaluate
     type:       reason
-    prompt_id:  evaluation_rubric_v2
+    prompt_id:  evaluation_rubric_v3
     input:
       # Transcript com eventos originais (original_content disponível para evaluator)
       replay_events:       "$.pipeline_state.eval_context.context.replay_events"
-      # Formulário de avaliação com dimensões e critérios
+      # Formulário de avaliação com dimensões e critérios (inclui type por critério)
       evaluation_form:     "$.pipeline_state.eval_context.evaluation_form"
       # Snippets de conhecimento: pré-carregados + RAG hits fundidos
       knowledge_snippets_preloaded: "$.pipeline_state.eval_context.context.knowledge_snippets"
       knowledge_snippets_rag:       "$.pipeline_state.rag_snippets.results"
+      # Arc 13 Fase B: notas de calibração do curador (feedback anterior ao avaliador)
+      calibration_notes:   "$.pipeline_state.eval_context.calibration_notes"
       # Metadados da sessão para resolver applies_when
       session_meta:        "$.pipeline_state.eval_context.context.session_meta"
       # Sentimento para contextualizar avaliação de empatia/abordagem
@@ -153,8 +189,10 @@ steps:
       criterion_responses:
         type: array
         description: >
-          Uma entrada por critério do formulário. Quando na=true, value deve ser null
-          e na_reason deve explicar por que o critério não se aplica.
+          Uma entrada por critério do formulário com type != "auto_computed".
+          Critérios auto_computed devem ser omitidos — são preenchidos pelo
+          SessionMetricsExtractor no ingest. Quando na=true, value deve ser
+          null e na_reason deve explicar por que o critério não se aplica.
         required: true
         items:
           type: object
@@ -181,10 +219,65 @@ steps:
               required: true
             evidence_refs:
               type: array
-              description: "turn_index[] dos replay_events que fundamentam a nota"
+              description: "turn_index[] dos replay_events — mantido para compatibilidade Arc 6"
               items:
                 type: integer
               required: false
+      dimension_threads:
+        type: array
+        description: >
+          Arc 13 — Thread de evidência estruturada por dimensão do formulário.
+          Produzir uma entrada para cada dimensão que tenha ao menos um critério
+          avaliado (na=false). Dimensões com todos os critérios na=true ou
+          type=auto_computed podem ser omitidas.
+        required: true
+        items:
+          type: object
+          properties:
+            dimension_id:
+              type: string
+              description: "ID da dimensão conforme evaluation_form.dimensions[].id"
+              required: true
+            score:
+              type: number
+              description: >
+                Score da dimensão (0 a max_score), calculado como média ponderada
+                dos critérios avaliados (na=false) dentro da dimensão.
+              required: true
+            justification:
+              type: string
+              description: "Síntese da avaliação da dimensão — mínimo 30 palavras"
+              required: true
+            evidence_entries:
+              type: array
+              description: >
+                Evidências estruturadas que fundamentam o score da dimensão.
+                Mínimo 1 entrada por dimensão avaliada. Referenciar eventos
+                reais do replay_events via stream_entry_id.
+              required: true
+              minItems: 1
+              items:
+                type: object
+                properties:
+                  stream_entry_id:
+                    type: string
+                    description: >
+                      event_id do replay_event que serve como evidência
+                      (campo event_id ou id do evento no stream Redis).
+                    required: true
+                  excerpt:
+                    type: string
+                    description: >
+                      Trecho exato (≤ 200 caracteres) do conteúdo do evento
+                      que justifica a evidência. Não parafrasear — transcrever
+                      fielmente o que está no original_content do evento.
+                    required: true
+                  relevance_note:
+                    type: string
+                    description: >
+                      Explicação de por que este evento é relevante para
+                      o score desta dimensão (1–3 frases).
+                    required: true
       overall_score:
         type: number
         description: "Nota geral 0–10 (média ponderada dos critérios avaliados)"
@@ -222,6 +315,10 @@ steps:
   #   - o consumer da evaluation-api processa eval.instance.submitted e chama
   #     POST /v1/evaluation/ingest para persistir no PostgreSQL
   #   - reduz TTL do ReplayContext no Redis (já foi consumido)
+  #   - Arc 13 Fase B:
+  #     - dimension_threads cria ContestationThread round=1 por dimensão
+  #     - evaluated_agent_type="ai_agent" → finalize_result imediato
+  #     - evaluated_agent_type="human_agent" → abre fluxo de contestação
   - id:   submit_result
     type: invoke
     tool:  evaluation_submit
@@ -236,8 +333,12 @@ steps:
       highlights:           "$.pipeline_state.llm_result.highlights"
       improvement_points:   "$.pipeline_state.llm_result.improvement_points"
       compliance_flags:     "$.pipeline_state.llm_result.compliance_flags"
-      # Arc 6: critérios por item com evidence e N/A
+      # Arc 6: critérios por item com evidence e N/A (exceto auto_computed)
       criterion_responses:  "$.pipeline_state.llm_result.criterion_responses"
+      # Arc 13 Fase B: dimension_threads com evidence_entries estruturadas
+      dimension_threads:    "$.pipeline_state.llm_result.dimension_threads"
+      # Arc 13 Fase B: tipo do agente avaliado — aciona fluxo correto
+      evaluated_agent_type: "$.session.evaluated_agent_type"
       # instance_id e campaign_id são resolvidos pelo evaluation_submit
       # a partir do ReplayContext — não precisam ser passados explicitamente
       # a menos que o orchestrator queira sobrescrever

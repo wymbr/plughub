@@ -174,7 +174,7 @@ function DeliveryLog({ deliveries, loading }: { deliveries: WebhookDelivery[]; l
           </span>
           {d.latency_ms !== null && <span className="text-gray">{d.latency_ms} ms</span>}
           {d.instance_id && (
-            <code className="text-gray text-[10px]">inst …{d.instance_id.slice(-8)}</code>
+            <code className="text-gray text-2xs">inst …{d.instance_id.slice(-8)}</code>
           )}
           {d.error && (
             <span className="text-red flex-1 truncate">{d.error}</span>
@@ -341,7 +341,7 @@ function MetaField({ label, value, mono = false, copyable = false }: {
   }
   return (
     <div>
-      <div className="text-[10px] font-semibold text-gray uppercase tracking-wide mb-0.5">{label}</div>
+      <div className="text-2xs font-semibold text-gray uppercase tracking-wide mb-0.5">{label}</div>
       <div className="flex items-center gap-1.5">
         <span className={`text-xs text-dark break-all ${mono ? 'font-mono' : ''}`}>{value}</span>
         {copyable && (
@@ -398,7 +398,7 @@ export default function WebhooksTab() {
   return (
     <div className="flex flex-col flex-1 overflow-hidden">
       {/* ── Scope banner ──────────────────────────────────────────────────── */}
-      <div className="mx-4 mt-3 mb-0 px-3 py-2 bg-amber-50 border border-amber-200 rounded text-xs text-amber-700 shrink-0">
+      <div className="mx-4 mt-3 mb-0 px-3 py-2 bg-warning-light border border-warning/30 rounded text-xs text-warning-text shrink-0">
         <strong>Workflow webhooks</strong> — trigger a specific skill flow (Flow ID) directly, bypassing routing.
         For inbound contacts routed to a pool, use{' '}
         <strong>Configuration → Channels → Webhook</strong>.

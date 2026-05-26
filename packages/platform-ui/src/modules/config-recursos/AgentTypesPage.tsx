@@ -148,10 +148,10 @@ const AgentTypesPage: React.FC = () => {
   }
 
   const roleColor = (role: string) => {
-    if (role === 'orchestrator') return 'text-indigo-600 bg-indigo-50 border-indigo-200'
-    if (role === 'evaluator')    return 'text-yellow-600 bg-yellow-50 border-yellow-200'
-    if (role === 'supervisor')   return 'text-purple-600 bg-purple-50 border-purple-200'
-    return 'text-cyan-600 bg-cyan-50 border-cyan-200'
+    if (role === 'orchestrator') return 'text-primary bg-primary-light border-primary/30'
+    if (role === 'evaluator')    return 'text-warning-text bg-warning-light border-warning/30'
+    if (role === 'supervisor')   return 'text-ai-text bg-ai-light border-ai/30'
+    return 'text-secondary bg-info-light border-info/30'
   }
 
   const columns = [

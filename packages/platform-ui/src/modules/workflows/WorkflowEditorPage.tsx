@@ -6,6 +6,7 @@
  * Right panel: form + recent instances for selected flow.
  */
 import React, { useCallback, useEffect, useState } from 'react'
+import { Play } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { useAuth } from '@/auth/useAuth'
 import Spinner from '@/components/ui/Spinner'
@@ -222,7 +223,10 @@ export default function WorkflowEditorPage() {
                 onClick={handleTrigger}
                 disabled={triggering}
               >
-                {triggering ? t('editor.triggering') : `▶ ${t('editor.triggerNow')}`}
+                {triggering
+                  ? t('editor.triggering')
+                  : <><Play className="w-3 h-3 inline-block mr-1" aria-hidden="true" />{t('editor.triggerNow')}</>
+                }
               </button>
               <span style={{ fontSize: 11, color: '#475569' }}>
                 {t('editor.calendarNote')}

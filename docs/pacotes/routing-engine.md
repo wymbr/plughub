@@ -1,5 +1,7 @@
 # Módulo: routing-engine (@plughub/routing-engine)
 
+> Última atualização: 2026-05-25 · Estado: Arc 16
+
 > Pacote: `routing-engine` (serviço)
 > Runtime: Python 3.11+, FastAPI
 > Spec de referência: seções 3.3, 3.3a, 3.3b, 4.5, 4.6
@@ -144,6 +146,48 @@ O `RoutingDecision` retorna com `saturated: true` e `saturation_action` com o ti
 
 ---
 
+## Pool Context Enrichment
+
+Após **toda alocação bem-sucedida**, o Routing Engine chama `_write_pool_context()`, que escreve no ContextStore (`{tenantId}:ctx:{sessionId}`):
+
+| Tag | Conteúdo |
+|---|---|
+| `session.pool.id` | `pool_id` do pool alocado |
+| `session.pool.channels` | `channel_types` do pool |
+| `session.pool.mentionable_pools` | quando o `PoolConfig` declara `mentionable_pools` |
+
+Atributos da escrita: `source: "routing_engine"`, `confidence: 1.0`, `visibility: "agents_only"`, TTL 24h (NX — não sobrescreve). A leitura usa o cache Redis próprio do Routing Engine — sem I/O adicional. `PoolConfig.mentionable_pools` (`dict[str, str]`) é populado a partir dos eventos `pool.registered`.
+
+---
+
+## Performance Routing (Arc 7d)
+
+Além da compatibilidade de competência, a alocação pode ponderar o desempenho histórico do tipo de agente:
+
+```
+performance_score = resolution_rate × (1 − escalation_rate)
+
+score_final = (1 − w) × competency_score + w × performance_score
+              w = performance_score_weight   (default 0.0, env PLUGHUB_PERFORMANCE_SCORE_WEIGHT)
+```
+
+Com `w = 0.0` (default) o roteamento é puramente por competência — comportamento retrocompatível. O `performance_score` por tipo de agente é gravado pelo job batch da `analytics-api` (a cada 5min, lookback 7 dias, mínimo 5 sessões) na chave Redis `{tenant}:agent_perf:{agent_type_id}` (TTL 6h), lida pelo Routing Engine.
+
+---
+
+## Operational Visibility (spec 3.3c)
+
+Após cada evento de roteamento, o Routing Engine escreve um snapshot do pool no Redis:
+
+```
+{tenant_id}:pool:{pool_id}:snapshot   String JSON   TTL: 120s
+  → { pool_id, available, queue_length, sla_target_ms, channel_types, updated_at }
+```
+
+O snapshot alimenta as três MCP tools do grupo `operational` (`queue_context_get`, `pool_status_get`, `system_availability_check`). Quando um contato entra na fila, o Routing Engine publica `queue.position_updated` em Kafka — consumido por Channel Gateway e Analytics.
+
+---
+
 ## Detecção de Crash de Instâncias (`CrashDetector`)
 
 Background task que roda periodicamente (default: a cada `crash_check_interval_s`).
@@ -254,7 +298,7 @@ PoolConfig {
 }
 ```
 
-> **Importante:** `PoolConfig` nunca é lido do PostgreSQL diretamente — é populado no Redis pelo `kafka_listener` a partir dos eventos `pool.registered` e `pool.updated` publicados pelo `agent-registry` no tópico `agent.registry.events`. O Routing Engine nunca acessa o banco relacional. O TTL padrão do cache é 24h (configurável via `PLUGHUB_POOL_CONFIG_TTL_SECONDS`) — suficiente para cobrir reinicios normais sem perda de visibilidade de pools.
+> **Importante:** `PoolConfig` nunca é lido do PostgreSQL diretamente — é populado no Redis pelo `kafka_listener` a partir dos eventos `pool.registered` e `pool.updated` publicados pelo `agent-registry` no tópico `registry.changed`. O Routing Engine nunca acessa o banco relacional. O TTL padrão do cache é 24h (configurável via `PLUGHUB_POOL_CONFIG_TTL_SECONDS`) — suficiente para cobrir reinicios normais sem perda de visibilidade de pools.
 
 ---
 
@@ -278,10 +322,15 @@ PoolConfig {
 |---|---|---|
 | `conversations.inbound` | **Consome** | Eventos de entrada — aciona `route()` |
 | `conversations.inbound` | **Publica** (crash recovery) | Re-publica conversas órfãs de instâncias crashed |
+| `conversations.routed` / `conversations.queued` | **Publica** | Resultado da alocação — consumido por Core, Rules Engine |
+| `conversations.abandoned` | **Publica** | Contato abandonado — consumido por Core, Rules Engine |
+| `queue.position_updated` | **Publica** | Posição na fila atualizada — consumido por Channel Gateway, Analytics |
+| `registry.changed` | **Consome** | `pool.registered` / `pool.updated` — sincroniza `PoolConfig` no Redis |
 | `agent.lifecycle` | **Consome** | `agent_login/ready/busy/done/logout/heartbeat` — mantém estado no Redis |
 | `agent.lifecycle` | **Publica** | `agent_crash` — evento de audit de crash detectado |
 | `agents.decisions` | **Publica** | `RoutingDecision` para audit de cada decisão |
 | `evaluation.events` | **Consome** | `evaluation.requested` — aciona `SkillFlowEngine.run()` para avaliação |
+| `rules.escalation.events` | **Consome** | Escalações publicadas pelo Rules Engine — aciona re-alocação |
 
 ---
 
@@ -322,10 +371,13 @@ via `pipeline_state` salvo no Redis com chave `{tenant_id}:pipeline:{evaluation_
 
 ```
 routing-engine
-  ├── consome → agent-registry   (PoolConfig via kafka_listener — nunca direto ao PostgreSQL)
-  ├── lê/escreve → Redis         (instâncias, pools, filas, afinidade, contexto de sessão)
-  ├── consome → Kafka            (conversations.inbound, agent.lifecycle, evaluation.events)
-  ├── publica → Kafka            (agents.decisions, agent.lifecycle:agent_crash)
+  ├── consome → agent-registry   (PoolConfig via registry.changed — nunca direto ao PostgreSQL)
+  ├── lê/escreve → Redis         (instâncias, pools, filas, afinidade, contexto de sessão,
+  │                               ContextStore session.pool.*, pool snapshots)
+  ├── consome → Kafka            (conversations.inbound, registry.changed, agent.lifecycle,
+  │                               evaluation.events, rules.escalation.events)
+  ├── publica → Kafka            (conversations.routed/queued/abandoned, queue.position_updated,
+  │                               agents.decisions, agent.lifecycle:agent_crash)
   └── é chamado por:
         ├── mcp-server-plughub   (agent_delegate → aloca agente para step task)
         ├── rules-engine         (conversation_escalate → re-alocação via Escalation Engine)

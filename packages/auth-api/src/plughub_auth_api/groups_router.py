@@ -6,28 +6,28 @@ CRUD for AgentGroup entities and their members/supervisors/shifts.
 All endpoints are admin-authenticated (X-Admin-Token header).
 
 Routes:
-  GET    /v1/groups                             — list groups for tenant
-  POST   /v1/groups                             — create group
-  GET    /v1/groups/{group_id}                  — get group detail
-  PUT    /v1/groups/{group_id}                  — update group name/description
-  DELETE /v1/groups/{group_id}                  — delete group
+  GET    /auth/v1/groups                             — list groups for tenant
+  POST   /auth/v1/groups                             — create group
+  GET    /auth/v1/groups/{group_id}                  — get group detail
+  PUT    /auth/v1/groups/{group_id}                  — update group name/description
+  DELETE /auth/v1/groups/{group_id}                  — delete group
 
-  GET    /v1/groups/{group_id}/members          — list agent_type members
-  POST   /v1/groups/{group_id}/members          — add member
-  DELETE /v1/groups/{group_id}/members/{agent_type_id} — remove member
+  GET    /auth/v1/groups/{group_id}/members          — list agent_type members
+  POST   /auth/v1/groups/{group_id}/members          — add member
+  DELETE /auth/v1/groups/{group_id}/members/{agent_type_id} — remove member
 
-  GET    /v1/groups/{group_id}/users            — list human agent users
-  POST   /v1/groups/{group_id}/users            — add user
-  DELETE /v1/groups/{group_id}/users/{user_id}  — remove user
+  GET    /auth/v1/groups/{group_id}/users            — list human agent users
+  POST   /auth/v1/groups/{group_id}/users            — add user
+  DELETE /auth/v1/groups/{group_id}/users/{user_id}  — remove user
 
-  GET    /v1/groups/{group_id}/supervisors      — list supervisors
-  POST   /v1/groups/{group_id}/supervisors      — add supervisor
-  DELETE /v1/groups/{group_id}/supervisors/{user_id} — remove supervisor
+  GET    /auth/v1/groups/{group_id}/supervisors      — list supervisors
+  POST   /auth/v1/groups/{group_id}/supervisors      — add supervisor
+  DELETE /auth/v1/groups/{group_id}/supervisors/{user_id} — remove supervisor
 
-  GET    /v1/groups/{group_id}/shifts           — list shifts
-  POST   /v1/groups/{group_id}/shifts           — create shift
-  PUT    /v1/groups/{group_id}/shifts/{shift_id} — update shift
-  DELETE /v1/groups/{group_id}/shifts/{shift_id} — delete shift
+  GET    /auth/v1/groups/{group_id}/shifts           — list shifts
+  POST   /auth/v1/groups/{group_id}/shifts           — create shift
+  PUT    /auth/v1/groups/{group_id}/shifts/{shift_id} — update shift
+  DELETE /auth/v1/groups/{group_id}/shifts/{shift_id} — delete shift
 """
 from __future__ import annotations
 
@@ -43,7 +43,7 @@ from .config import Settings, get_settings
 
 logger = logging.getLogger("plughub.auth_api.groups")
 
-groups_router = APIRouter(prefix="/v1/groups", tags=["groups"])
+groups_router = APIRouter(prefix="/auth/v1/groups", tags=["groups"])
 
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -60,7 +60,9 @@ def _require_admin(
     x_admin_token: Annotated[str | None, Header()] = None,
     settings: Settings = Depends(_settings),
 ) -> None:
-    if settings.admin_token and x_admin_token != settings.admin_token:
+    if not settings.admin_token:
+        raise HTTPException(status_code=503, detail="Admin token not configured")
+    if x_admin_token != settings.admin_token:
         raise HTTPException(status_code=401, detail="Invalid admin token")
 
 

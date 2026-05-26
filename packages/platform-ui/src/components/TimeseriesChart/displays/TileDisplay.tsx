@@ -60,14 +60,14 @@ export function TileDisplay({
   const sparkData = buckets.map(b => ({ v: b.value }))
 
   const trendColor =
-    trendDir === 'up'   ? 'text-green-600' :
-    trendDir === 'down' ? 'text-red-500'   :
-    'text-gray-400'
+    trendDir === 'up'   ? 'text-green-text' :
+    trendDir === 'down' ? 'text-red'        :
+    'text-muted-light'
 
   const trendBg =
-    trendDir === 'up'   ? 'bg-green-50 border-green-200' :
-    trendDir === 'down' ? 'bg-red-50 border-red-200'     :
-    'bg-gray-50 border-gray-200'
+    trendDir === 'up'   ? 'bg-green-light border-green/30' :
+    trendDir === 'down' ? 'bg-red-light border-red/30'     :
+    'bg-surface-muted border-border'
 
   const trendIcon  = trendDir === 'up' ? '↑' : trendDir === 'down' ? '↓' : '→'
   const trendLabel =
@@ -81,7 +81,7 @@ export function TileDisplay({
       <div className="h-full flex flex-col px-1 pt-0.5">
         {/* Top row: KPI number + trend badge */}
         <div className="flex items-center justify-between gap-2 flex-shrink-0">
-          <span className="text-2xl font-bold text-gray-800 leading-none tabular-nums">
+          <span className="text-2xl font-bold text-dark leading-none tabular-nums">
             {fmt(total)}
           </span>
           {trendPct !== null && (
@@ -125,7 +125,7 @@ export function TileDisplay({
       style={{ height }}
     >
       {/* Title */}
-      <p className="text-sm text-gray-500">{title}</p>
+      <p className="text-sm text-muted">{title}</p>
 
       {/* Big number */}
       <p className="text-6xl font-bold text-primary tabular-nums leading-none">
@@ -139,11 +139,11 @@ export function TileDisplay({
           {trendIcon} {Math.abs(trendPct).toFixed(1)}% {trendLabel} no período
         </span>
       ) : (
-        <span className="text-xs text-gray-400">dados insuficientes para tendência</span>
+        <span className="text-xs text-muted-light">dados insuficientes para tendência</span>
       )}
 
       {/* Subtitle */}
-      <p className="text-xs text-gray-400">{valueLabel}</p>
+      <p className="text-xs text-muted-light">{valueLabel}</p>
 
       {/* Sparkline */}
       {sparkData.length > 1 && (

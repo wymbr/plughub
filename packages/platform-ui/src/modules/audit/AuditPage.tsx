@@ -12,17 +12,20 @@
  *   config_snapshot — masking config snapshot (stub — Fase 5)
  */
 import React, { useState, useEffect, useCallback } from 'react'
+import { useTranslation } from 'react-i18next'
 import { useAuth } from '@/auth/useAuth'
 import Spinner from '@/components/ui/Spinner'
+import { FileText, Wrench, User, File, Lock, AlertTriangle, Check, X, Construction } from 'lucide-react'
 
 type Tab = 'sessions' | 'mcp_calls' | 'user_access' | 'data_requests' | 'config_snapshot'
 
-const TABS: { key: Tab; label: string; active: boolean }[] = [
-  { key: 'sessions',        label: '📋 Sessões',        active: true  },
-  { key: 'mcp_calls',       label: '🔧 MCP Calls',      active: true  },
-  { key: 'user_access',     label: '👤 Acessos',        active: false },
-  { key: 'data_requests',   label: '📄 Req. de Dados',  active: false },
-  { key: 'config_snapshot', label: '🔒 Config Masking', active: false },
+type TabIconComponent = React.FC<{ className?: string }>
+const TABS: { key: Tab; Icon: TabIconComponent; active: boolean }[] = [
+  { key: 'sessions',        Icon: FileText, active: true  },
+  { key: 'mcp_calls',       Icon: Wrench,   active: true  },
+  { key: 'user_access',     Icon: User,     active: false },
+  { key: 'data_requests',   Icon: File,     active: false },
+  { key: 'config_snapshot', Icon: Lock,     active: false },
 ]
 
 // ── Session messages tab ──────────────────────────────────────────────────────
@@ -37,11 +40,12 @@ interface AuditMessage {
 }
 
 function SessionsTab({ getToken }: { getToken: () => Promise<string | null> }) {
-  const [input,    setInput]    = useState('')
+  const { t } = useTranslation('audit')
+  const [input,     setInput]     = useState('')
   const [sessionId, setSessionId] = useState('')
-  const [messages, setMessages] = useState<AuditMessage[]>([])
-  const [loading,  setLoading]  = useState(false)
-  const [error,    setError]    = useState<string | null>(null)
+  const [messages,  setMessages]  = useState<AuditMessage[]>([])
+  const [loading,   setLoading]   = useState(false)
+  const [error,     setError]     = useState<string | null>(null)
 
   async function lookup() {
     if (!input.trim()) return
@@ -60,7 +64,7 @@ function SessionsTab({ getToken }: { getToken: () => Promise<string | null> }) {
       setMessages(data.messages ?? [])
       setSessionId(input.trim())
     } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : 'Erro ao carregar')
+      setError(e instanceof Error ? e.message : t('sessions.loadError'))
     } finally {
       setLoading(false)
     }
@@ -68,8 +72,9 @@ function SessionsTab({ getToken }: { getToken: () => Promise<string | null> }) {
 
   return (
     <div className="flex flex-col gap-4 p-5">
-      <div className="bg-amber-50 border border-amber-200 rounded-lg px-4 py-2 text-xs text-amber-800">
-        ⚠️ Todo acesso a mensagens de sessão é registrado no log de auditoria imutável.
+      <div className="flex items-start gap-2 bg-warning-light border border-warning/30 rounded-lg px-4 py-2 text-xs text-warning-text">
+        <AlertTriangle className="w-3.5 h-3.5 flex-shrink-0 mt-0.5" aria-hidden="true" />
+        {t('sessions.accessNotice')}
       </div>
 
       <div className="flex gap-2">
@@ -78,45 +83,47 @@ function SessionsTab({ getToken }: { getToken: () => Promise<string | null> }) {
           onChange={e => setInput(e.target.value)}
           onKeyDown={e => e.key === 'Enter' && lookup()}
           placeholder="Session ID"
-          className="flex-1 border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-primary/40"
+          className="flex-1 border border-border-strong rounded px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-primary/40"
         />
         <button
           onClick={lookup}
           disabled={loading || !input.trim()}
           className="px-4 py-2 bg-primary text-white rounded text-sm font-medium hover:bg-primary/90 disabled:opacity-50 flex items-center gap-2">
           {loading && <Spinner size="sm" />}
-          Consultar
+          {t('sessions.lookup')}
         </button>
       </div>
 
       {error && (
-        <div className="text-sm text-red-600 bg-red-50 border border-red-200 rounded px-3 py-2">{error}</div>
+        <div className="text-sm text-red-text bg-red-light border border-red/30 rounded px-3 py-2">{error}</div>
       )}
 
       {messages.length > 0 && (
-        <div className="border border-gray-200 rounded-lg overflow-hidden">
-          <div className="bg-gray-50 px-4 py-2 border-b border-gray-200 text-xs text-gray-500 font-medium">
-            {messages.length} mensagens — sessão {sessionId}
+        <div className="border border-border rounded-lg overflow-hidden">
+          <div className="bg-surface-muted px-4 py-2 border-b border-border text-xs text-muted font-medium">
+            {t('sessions.results', { count: messages.length, sessionId })}
           </div>
           <div className="overflow-auto max-h-[60vh]">
             <table className="w-full text-xs">
-              <thead className="bg-gray-50 sticky top-0">
+              <thead className="bg-surface-muted sticky top-0">
                 <tr>
-                  {['Timestamp', 'Tipo', 'Autor', 'Role', 'Conteúdo'].map(h => (
-                    <th key={h} className="text-left px-4 py-2 text-gray-500 font-medium border-b border-gray-200">{h}</th>
+                  {(['timestamp', 'type', 'author', 'role', 'content'] as const).map(col => (
+                    <th key={col} className="text-left px-4 py-2 text-muted font-medium border-b border-border">
+                      {t(`sessions.columns.${col}`)}
+                    </th>
                   ))}
                 </tr>
               </thead>
               <tbody>
                 {messages.map((m, i) => (
-                  <tr key={m.stream_entry_id} className={i % 2 === 0 ? 'bg-white' : 'bg-gray-50'}>
-                    <td className="px-4 py-2 text-gray-400 font-mono whitespace-nowrap">
-                      {new Date(m.created_at).toLocaleString('pt-BR')}
+                  <tr key={m.stream_entry_id} className={i % 2 === 0 ? 'bg-white' : 'bg-surface-muted'}>
+                    <td className="px-4 py-2 text-muted-light font-mono whitespace-nowrap">
+                      {new Date(m.created_at).toLocaleString()}
                     </td>
-                    <td className="px-4 py-2 text-gray-600 font-mono">{m.event_type}</td>
-                    <td className="px-4 py-2 text-gray-500 font-mono">{m.author_id ?? '—'}</td>
-                    <td className="px-4 py-2 text-gray-500">{m.author_role ?? '—'}</td>
-                    <td className="px-4 py-2 text-gray-700 max-w-xs truncate">{m.content}</td>
+                    <td className="px-4 py-2 text-muted font-mono">{m.event_type}</td>
+                    <td className="px-4 py-2 text-muted font-mono">{m.author_id ?? '—'}</td>
+                    <td className="px-4 py-2 text-muted">{m.author_role ?? '—'}</td>
+                    <td className="px-4 py-2 text-dark max-w-xs truncate">{m.content}</td>
                   </tr>
                 ))}
               </tbody>
@@ -144,6 +151,7 @@ interface McpCall {
 }
 
 function McpCallsTab({ tenantId, getToken }: { tenantId: string; getToken: () => Promise<string | null> }) {
+  const { t } = useTranslation('audit')
   const [calls,      setCalls]      = useState<McpCall[]>([])
   const [loading,    setLoading]    = useState(false)
   const [error,      setError]      = useState<string | null>(null)
@@ -163,69 +171,78 @@ function McpCallsTab({ tenantId, getToken }: { tenantId: string; getToken: () =>
       const data = await res.json() as { calls: McpCall[] }
       setCalls(data.calls ?? [])
     } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : 'Erro ao carregar')
+      setError(e instanceof Error ? e.message : t('mcpCalls.loadError'))
     } finally {
       setLoading(false)
     }
-  }, [tenantId, getToken, maskedOnly])
+  }, [tenantId, getToken, maskedOnly, t])
 
   useEffect(() => { load() }, [load])
 
   return (
     <div className="flex flex-col gap-4 p-5">
       <div className="flex items-center gap-3">
-        <label className="flex items-center gap-2 text-sm text-gray-600 cursor-pointer">
+        <label className="flex items-center gap-2 text-sm text-muted cursor-pointer">
           <input type="checkbox" checked={maskedOnly} onChange={e => setMaskedOnly(e.target.checked)}
-            className="rounded border-gray-300" />
-          Somente calls com campos mascarados
+            className="rounded border-border-strong" />
+          {t('mcpCalls.maskedOnly')}
         </label>
         <button onClick={load} disabled={loading}
-          className="text-xs text-gray-400 hover:text-gray-600 px-2 py-1 transition-colors flex items-center gap-1">
-          {loading ? <Spinner size="sm" /> : '↻ Atualizar'}
+          className="text-xs text-muted-light hover:text-muted px-2 py-1 transition-colors flex items-center gap-1">
+          {loading ? <Spinner size="sm" /> : t('mcpCalls.refresh')}
         </button>
       </div>
 
       {error && (
-        <div className="text-sm text-red-600 bg-red-50 border border-red-200 rounded px-3 py-2">{error}</div>
+        <div className="text-sm text-red-text bg-red-light border border-red/30 rounded px-3 py-2">{error}</div>
       )}
 
-      <div className="border border-gray-200 rounded-lg overflow-hidden">
+      <div className="border border-border rounded-lg overflow-hidden">
         <div className="overflow-auto max-h-[65vh]">
           <table className="w-full text-xs">
-            <thead className="bg-gray-50 sticky top-0">
+            <thead className="bg-surface-muted sticky top-0">
               <tr>
-                {['Timestamp', 'Server', 'Tool', 'Permitido', 'Injeção', 'Mascarados', 'ms', 'Sessão'].map(h => (
-                  <th key={h} className="text-left px-3 py-2 text-gray-500 font-medium border-b border-gray-200">{h}</th>
+                {(['timestamp', 'server', 'tool', 'allowed', 'injection', 'masked', 'ms', 'session'] as const).map(col => (
+                  <th key={col} className="text-left px-3 py-2 text-muted font-medium border-b border-border">
+                    {t(`mcpCalls.columns.${col}`)}
+                  </th>
                 ))}
               </tr>
             </thead>
             <tbody>
               {calls.length === 0 && !loading ? (
                 <tr>
-                  <td colSpan={8} className="px-4 py-10 text-center text-gray-400">Nenhum registro encontrado</td>
+                  <td colSpan={8} className="px-4 py-10 text-center text-muted-light">
+                    {t('mcpCalls.noRecords')}
+                  </td>
                 </tr>
               ) : calls.map((c, i) => (
-                <tr key={c.event_id} className={i % 2 === 0 ? 'bg-white' : 'bg-gray-50'}>
-                  <td className="px-3 py-2 text-gray-400 font-mono whitespace-nowrap">
-                    {new Date(c.created_at).toLocaleString('pt-BR')}
+                <tr key={c.event_id} className={i % 2 === 0 ? 'bg-white' : 'bg-surface-muted'}>
+                  <td className="px-3 py-2 text-muted-light font-mono whitespace-nowrap">
+                    {new Date(c.created_at).toLocaleString()}
                   </td>
-                  <td className="px-3 py-2 font-mono text-gray-600">{c.server_name}</td>
-                  <td className="px-3 py-2 font-mono text-gray-700">{c.tool_name}</td>
+                  <td className="px-3 py-2 font-mono text-muted">{c.server_name}</td>
+                  <td className="px-3 py-2 font-mono text-dark">{c.tool_name}</td>
                   <td className="px-3 py-2">
-                    <span className={c.allowed ? 'text-green-600' : 'text-red-500'}>
-                      {c.allowed ? '✓' : '✗'}
-                    </span>
+                    {c.allowed
+                      ? <Check className="w-3.5 h-3.5 text-green-text" aria-label={t('mcpCalls.allowed')} />
+                      : <X     className="w-3.5 h-3.5 text-red"       aria-label={t('mcpCalls.blocked')} />
+                    }
                   </td>
                   <td className="px-3 py-2">
-                    {c.injection_detected && <span className="text-red-600 font-semibold">⚠ Sim</span>}
+                    {c.injection_detected && (
+                      <span className="inline-flex items-center gap-1 text-red-text font-semibold">
+                        <AlertTriangle className="w-3 h-3" aria-hidden="true" /> {t('mcpCalls.injectionYes')}
+                      </span>
+                    )}
                   </td>
-                  <td className="px-3 py-2 text-gray-500">
+                  <td className="px-3 py-2 text-muted">
                     {c.masked_input_fields.length > 0
                       ? c.masked_input_fields.join(', ')
-                      : <span className="text-gray-300">—</span>}
+                      : <span className="text-border-strong">—</span>}
                   </td>
-                  <td className="px-3 py-2 tabular-nums text-gray-400">{c.duration_ms}</td>
-                  <td className="px-3 py-2 font-mono text-gray-400 truncate max-w-[120px]">
+                  <td className="px-3 py-2 tabular-nums text-muted-light">{c.duration_ms}</td>
+                  <td className="px-3 py-2 font-mono text-muted-light truncate max-w-[120px]">
                     {c.session_id ?? '—'}
                   </td>
                 </tr>
@@ -240,11 +257,12 @@ function McpCallsTab({ tenantId, getToken }: { tenantId: string; getToken: () =>
 
 // ── Stub tab ──────────────────────────────────────────────────────────────────
 
-function StubTab({ label }: { label: string }) {
+function StubTab({ labelKey }: { labelKey: string }) {
+  const { t } = useTranslation('audit')
   return (
-    <div className="flex flex-col items-center justify-center h-64 text-gray-400 gap-2">
-      <div className="text-3xl">🚧</div>
-      <div className="text-sm">{label} — em desenvolvimento</div>
+    <div className="flex flex-col items-center justify-center h-64 text-muted-light gap-2">
+      <Construction className="w-8 h-8" aria-hidden="true" />
+      <div className="text-sm">{t('stub.inDevelopment', { label: t(labelKey) })}</div>
     </div>
   )
 }
@@ -252,27 +270,25 @@ function StubTab({ label }: { label: string }) {
 // ── Page ──────────────────────────────────────────────────────────────────────
 
 export default function AuditPage() {
+  const { t } = useTranslation('audit')
   const { tenantId, getAccessToken } = useAuth()
-  const [tab, setTab] = useState<Tab>('sessions')
+  const [activeTab, setActiveTab] = useState<Tab>('sessions')
 
   return (
-    <div className="flex flex-col h-full bg-gray-50">
+    <div className="flex flex-col h-full bg-surface-muted">
 
-      {/* Header */}
-      <div className="bg-white border-b border-gray-200 px-6 py-4 flex-shrink-0">
-        <h1 className="text-lg font-semibold text-gray-800">Auditoria LGPD</h1>
-        <p className="text-xs text-gray-500 mt-0.5">Acesso restrito — todos os acessos são registrados em log imutável.</p>
-      </div>
-
-      {/* Tabs */}
-      <div className="bg-white border-b border-gray-200 px-6 flex gap-0 flex-shrink-0">
-        {TABS.map(t => (
-          <button key={t.key} onClick={() => setTab(t.key)}
-            className="relative px-4 py-3 text-sm font-medium transition-colors"
-            style={{ color: tab === t.key ? '#1B4F8A' : '#6b7280' }}>
-            {t.label}
-            {!t.active && <span className="ml-1 text-[10px] text-gray-400">(em breve)</span>}
-            {tab === t.key && (
+      {/* Tab bar */}
+      <div className="bg-white border-b border-border px-6 flex gap-0 flex-shrink-0">
+        {TABS.map(tabDef => (
+          <button key={tabDef.key} onClick={() => setActiveTab(tabDef.key)}
+            className="relative inline-flex items-center gap-1.5 px-4 py-3 text-sm font-medium transition-colors"
+            style={{ color: activeTab === tabDef.key ? '#1B4F8A' : '#6b7280' }}>
+            <tabDef.Icon className="w-3.5 h-3.5" aria-hidden="true" />
+            {t(`tabs.${tabDef.key}`)}
+            {!tabDef.active && (
+              <span className="ml-1 text-2xs text-muted-light">({t('comingSoon')})</span>
+            )}
+            {activeTab === tabDef.key && (
               <span className="absolute bottom-0 left-0 right-0 h-0.5 bg-primary rounded-t" />
             )}
           </button>
@@ -281,11 +297,11 @@ export default function AuditPage() {
 
       {/* Content */}
       <div className="flex-1 overflow-auto">
-        {tab === 'sessions'        && <SessionsTab getToken={getAccessToken} />}
-        {tab === 'mcp_calls'       && <McpCallsTab tenantId={tenantId} getToken={getAccessToken} />}
-        {tab === 'user_access'     && <StubTab label="Logs de acesso de usuários" />}
-        {tab === 'data_requests'   && <StubTab label="Solicitações SAR / Erasure" />}
-        {tab === 'config_snapshot' && <StubTab label="Snapshot de configuração de masking" />}
+        {activeTab === 'sessions'        && <SessionsTab getToken={getAccessToken} />}
+        {activeTab === 'mcp_calls'       && <McpCallsTab tenantId={tenantId} getToken={getAccessToken} />}
+        {activeTab === 'user_access'     && <StubTab labelKey="stub.userAccess" />}
+        {activeTab === 'data_requests'   && <StubTab labelKey="stub.dataRequests" />}
+        {activeTab === 'config_snapshot' && <StubTab labelKey="stub.configSnapshot" />}
       </div>
 
     </div>

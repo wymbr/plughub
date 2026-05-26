@@ -35,8 +35,8 @@ function formatValue(value: number, format: MetricCardData['format']): string {
 function Skeleton() {
   return (
     <div className="h-full flex flex-col items-center justify-center gap-2 animate-pulse">
-      <div className="h-8 w-24 rounded bg-gray-200" />
-      <div className="h-3 w-16 rounded bg-gray-100" />
+      <div className="h-8 w-24 rounded bg-border" />
+      <div className="h-3 w-16 rounded bg-surface-alt" />
     </div>
   )
 }
@@ -52,7 +52,7 @@ export const MetricCardTool: React.FC<DisplayToolProps<MetricCardData>> = ({
 
   if (error) {
     return (
-      <div className="h-full flex items-center justify-center text-xs text-red-400">
+      <div className="h-full flex items-center justify-center text-xs text-red">
         Indisponível
       </div>
     )
@@ -64,18 +64,18 @@ export const MetricCardTool: React.FC<DisplayToolProps<MetricCardData>> = ({
 
   return (
     <div className="h-full flex flex-col items-center justify-center gap-1 px-2">
-      <span className="text-3xl font-bold text-gray-800 leading-none">
+      <span className="text-3xl font-bold text-dark leading-none">
         {formatted}
       </span>
 
-      <span className="text-xs text-gray-500 text-center truncate max-w-full">
+      <span className="text-xs text-muted text-center truncate max-w-full">
         {data.label}
       </span>
 
       {hasTrend && (
         <span
           className={`text-xs font-medium flex items-center gap-0.5 ${
-            positive ? 'text-green-600' : 'text-red-500'
+            positive ? 'text-green-text' : 'text-red'
           }`}
         >
           {positive ? '↑' : '↓'}

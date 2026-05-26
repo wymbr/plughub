@@ -60,24 +60,24 @@ const AUTHOR_LABELS: Record<AuthorType, string> = {
 
 const BUBBLE_STYLES: Record<AuthorType, string> = {
   customer:    "bg-slate-100 text-slate-800 self-start rounded-tl-none",
-  agent_human: "bg-indigo-600 text-white self-end rounded-tr-none",
-  agent_ai:    "bg-violet-100 text-violet-900 self-start rounded-tl-none",
-  system:      "bg-amber-50 text-amber-800 self-center text-xs italic border border-amber-200",
+  agent_human: "bg-primary text-white self-end rounded-tr-none",
+  agent_ai:    "bg-ai-light text-ai-text self-start rounded-tl-none",
+  system:      "bg-warning-light text-warning-text self-center text-xs italic border border-warning/30",
 };
 
 const LABEL_STYLES: Record<AuthorType, string> = {
   customer:    "text-left text-slate-400",
-  agent_human: "text-right text-indigo-400",
-  agent_ai:    "text-left text-violet-500",
-  system:      "text-center text-amber-600",
+  agent_human: "text-right text-primary/60",
+  agent_ai:    "text-left text-ai",
+  system:      "text-center text-warning",
 };
 
-const SPECIALIST_BUBBLE = "bg-teal-50 text-teal-900 self-start rounded-tl-none border border-teal-200";
-const SPECIALIST_LABEL  = "text-left text-teal-600";
+const SPECIALIST_BUBBLE = "bg-revised-light text-revised-text self-start rounded-tl-none border border-revised/30";
+const SPECIALIST_LABEL  = "text-left text-revised";
 
 const INTERNAL_BUBBLE =
-  "bg-amber-50 text-amber-900 self-start rounded-tl-none border border-dashed border-amber-400";
-const INTERNAL_LABEL = "text-left text-amber-600";
+  "bg-warning-light text-warning-text self-start rounded-tl-none border border-dashed border-warning/40";
+const INTERNAL_LABEL = "text-left text-warning";
 
 function formatTime(iso: string): string {
   try {
@@ -132,29 +132,29 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({
     ? INTERNAL_LABEL
     : isSpecialist
       ? SPECIALIST_LABEL
-      : LABEL_STYLES[message.author] ?? "text-left text-gray-500";
+      : LABEL_STYLES[message.author] ?? "text-left text-muted";
 
   const bubbleStyle = isInternal
     ? INTERNAL_BUBBLE
     : isSpecialist
       ? SPECIALIST_BUBBLE
-      : BUBBLE_STYLES[message.author] ?? "bg-gray-100 text-gray-800 self-start";
+      : BUBBLE_STYLES[message.author] ?? "bg-surface-alt text-dark self-start";
 
   // Arc 11 Fase C — wrap in a row with an optional selection checkbox
   const bubble = (
     <div
       className={`flex flex-col max-w-[80%] gap-0.5 ${
         isRight ? "self-end items-end" : "self-start items-start"
-      } ${isSelected ? "opacity-90 ring-1 ring-orange-400 rounded-2xl" : ""}`}
+      } ${isSelected ? "opacity-90 ring-1 ring-contested rounded-2xl" : ""}`}
     >
-      <span className={`text-[10px] px-1 flex items-center gap-1 ${labelStyle}`}>
+      <span className={`text-xs px-1 flex items-center gap-1 ${labelStyle}`}>
         {isInternal && (
-          <span className="inline-flex items-center bg-amber-200 text-amber-800 rounded px-1 py-0 text-[9px] font-semibold leading-tight">
+          <span className="inline-flex items-center bg-warning-light text-warning-text rounded px-1 py-0 text-micro font-semibold leading-tight">
             Interno
           </span>
         )}
         {isSpecialist && (
-          <span className="inline-flex items-center bg-teal-200 text-teal-800 rounded px-1 py-0 text-[9px] font-semibold leading-tight">
+          <span className="inline-flex items-center bg-revised-light text-revised-text rounded px-1 py-0 text-micro font-semibold leading-tight">
             Especialista
           </span>
         )}
@@ -170,21 +170,37 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({
 
   return (
     <div className={`group flex items-start gap-1.5 ${isRight ? "flex-row-reverse self-end" : "self-start"}`}>
-      {/* Checkbox — always visible when selected, hover-only otherwise */}
+      {/* Selection toggle — always keyboard-focusable, hover-only visually for mouse users */}
       <button
         onClick={onToggleSelection}
-        title={isSelected ? "Remover da seleção" : "Selecionar para delegar"}
+        aria-label={isSelected ? "Remover mensagem da seleção" : "Selecionar mensagem para delegar"}
+        aria-pressed={isSelected}
         className={[
-          "flex-shrink-0 mt-4 w-4 h-4 rounded border-2 flex items-center justify-center",
+          // 44×44px minimum touch target via padding; visual indicator is smaller
+          "flex-shrink-0 mt-2 w-11 h-11 rounded flex items-center justify-center",
           "transition-all duration-100",
+          "focus-visible:ring-2 focus-visible:ring-contested",
+          // Always show on keyboard focus; hover for mouse
           isSelected
-            ? "bg-orange-500 border-orange-500"
-            : "border-gray-300 bg-white opacity-0 group-hover:opacity-100 hover:border-orange-400",
+            ? ""
+            : "opacity-0 group-hover:opacity-100 focus-visible:opacity-100",
         ].join(" ")}
       >
-        {isSelected && (
-          <span className="text-white text-[8px] font-bold leading-none">✓</span>
-        )}
+        <span
+          aria-hidden="true"
+          className={[
+            "w-4 h-4 rounded border-2 flex items-center justify-center transition-colors",
+            isSelected
+              ? "bg-contested border-contested"
+              : "border-border bg-surface hover:border-contested",
+          ].join(" ")}
+        >
+          {isSelected && (
+            <svg className="w-2.5 h-2.5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
+            </svg>
+          )}
+        </span>
       </button>
       {bubble}
     </div>

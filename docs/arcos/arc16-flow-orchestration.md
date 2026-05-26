@@ -1,6 +1,6 @@
 # Arc 16 — Three-Tier Business Process Orchestration
 
-> Versão 1.0 — 2026-05-21
+> Última atualização: 2026-05-25 · Estado: Arc 16 · Status: Fases A–E implementadas (A–C em 2026-05-21, D–E em 2026-05-21)
 
 ## Visão Geral
 
@@ -541,31 +541,31 @@ Quando o cliente faz um novo contato em qualquer canal sem nenhuma sessão ativa
 
 ---
 
-### Fase B — Journey Public API Surface
+### Fase B — Journey Public API Surface *(implementada 2026-05-21)*
 
-**O que implementar:**
+**O que foi implementado:**
 
-- `WorkflowInstance` + `Journey`: adicionar coluna `pool_id` (nullable) na Journey, preenchida na criação quando originada de um pool
-- `GET /v1/journeys`: adicionar filtros `pool_id`, `status`, `reason`
-- `POST /v1/journeys/{id}/resume`: recebe context dict, escreve no journey namespace, delega a `POST /v1/workflow/instances/{wf_id}/resume`
-- Response de `POST /v1/journeys/{id}/resume`: inclui `next_step` para sistemas externos saberem o que aconteceu
+- `WorkflowInstance` + `Journey`: coluna `pool_id` (nullable) na Journey, preenchida na criação quando originada de um pool (migration `20260521000001_add_journey_pool_id` com índice `(tenant_id, pool_id, status)`)
+- `GET /v1/journeys`: filtro `pool_id` adicionado (Tier 1 poller); `db_list_journeys` suporta `pool_id`
+- `POST /v1/journeys/{id}/resume`: recebe context dict + decision, encapsula o `resume_token` interno e delega ao endpoint do workflow-api
+- `@plughub/schemas` (`journey.ts`): `JourneySchema` com `pool_id: z.string().nullable()`; novos schemas `JourneyListSuspendedInputSchema`, `JourneyListSuspendedOutputSchema`, `JourneyResumeInputSchema`, `JourneyResumeOutputSchema`
 
 **Pacotes afetados:** `workflow-api`, `@plughub/schemas`
 
 ---
 
-### Fase C — MCP Tools para Journey
+### Fase C — MCP Tools para Journey *(implementada 2026-05-21)*
 
-**O que implementar:**
+**O que foi implementado:**
 
-- `journey_list_suspended(pool_id, reason?, limit?)` — lista Journeys suspensas de um pool
-- `journey_resume(journey_id, context?)` — retoma Journey com contexto opcional
-- Ambos expostos em `mcp-server-plughub`, auditados via McpInterceptor
-- Permissão ABAC: `journey.resume` e `journey.read` como campos do módulo `workflows`
+- `journey_list_suspended(pool_id, skill_id?, limit?)` — lista Journeys suspensas de um pool
+- `journey_resume(journey_id, context?, decision)` — retoma Journey com contexto opcional
+- Ambos registrados em `registerJourneyTools` (`mcp-server-plughub/src/tools/journey.ts`), auditados via McpInterceptor
+- Permissão ABAC: campos `journey.resume` e `journey.read` adicionados ao módulo `workflows` no `modules.yaml`; `PermissionChecker` valida em ambas as tools
 
 **Viabiliza:** padrão de poller workflow (Tier 1 que gerencia Journeys de outros processos)
 
-**Pacotes afetados:** `mcp-server-plughub`, `auth-api` (novo campo ABAC)
+**Pacotes afetados:** `mcp-server-plughub`, `auth-api` (novos campos ABAC)
 
 ---
 

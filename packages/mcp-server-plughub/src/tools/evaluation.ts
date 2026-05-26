@@ -422,6 +422,31 @@ const EvidenceRefInputSchema = z.object({
   category:   z.enum(["positive", "negative", "neutral"]).default("neutral"),
 })
 
+// ── Arc 13 Fase B — EvidenceEntry (stream-based, for ContestationThread) ─────
+
+const EvidenceEntryInputSchema = z.object({
+  /** Stream entry ID from the canonical Redis stream (e.g. "1715700000000-0") */
+  stream_entry_id: z.string().min(1),
+  /** Short excerpt of the message content (masked) */
+  excerpt:         z.string().max(500),
+  /** Why this excerpt supports the score assigned */
+  relevance_note:  z.string().max(500),
+})
+
+/**
+ * DimensionThreadInput — Arc 13 Fase B: per-dimension evaluation with evidence.
+ * Required for each scored dimension. Skipped for auto_computed criteria.
+ */
+const DimensionThreadInputSchema = z.object({
+  dimension_id:     z.string().min(1),
+  /** Score assigned (0–max_score of the criterion) */
+  score:            z.number().min(0),
+  /** Justification for the score — required, min 10 chars */
+  justification:    z.string().min(10),
+  /** Evidence entries from the session stream — at least 1 required per scored dimension */
+  evidence_entries: z.array(EvidenceEntryInputSchema).min(1),
+})
+
 const EvaluationCriterionResponseInputSchema = z.object({
   criterion_id:  z.string().min(1),
   /** true when criterion is not applicable to this session */
@@ -517,6 +542,22 @@ const EvaluationSubmitInputSchema = z.object({
    * Attached to the EvaluationResult for audit and feedback loop.
    */
   knowledge_snippets: z.array(KnowledgeSnippetInputSchema).optional(),
+
+  // ── Arc 13 Fase B — per-dimension threads with evidence ──────────────────
+
+  /**
+   * Per-dimension evaluation with evidence entries.
+   * Arc 13: required for all scored (non-auto_computed) dimensions.
+   * Creates ContestationThread round=1 for each — the immutable audit trail.
+   */
+  dimension_threads: z.array(DimensionThreadInputSchema).optional(),
+
+  /**
+   * Type of agent being evaluated.
+   * "ai_agent"    → Fluxo 2: evaluation_finalized immediately, no contestation
+   * "human_agent" → Fluxo 1: contestation_open (or pre_review_pending)
+   */
+  evaluated_agent_type: z.enum(["human_agent", "ai_agent"]).default("human_agent"),
 })
 
 // ─── Registro das tools ───────────────────────────────────────────────────────
@@ -844,6 +885,25 @@ export function registerEvaluationTools(server: McpServer, deps: EvaluationDeps)
           }
         }
 
+        // ── Arc 13 Fase B: fetch CalibrationNotes for this campaign ──────────
+        // The evaluator AI reads these before scoring to calibrate its judgment.
+        let calibrationNotes: unknown[] = []
+        const campaignId = arc6Meta["campaign_id"] as string | undefined
+        if (campaignId && evaluationApiUrl) {
+          try {
+            const notesRes = await fetch(
+              `${evaluationApiUrl}/v1/evaluation/calibration-notes?campaign_id=${encodeURIComponent(campaignId)}&published_to_kb=true&limit=20`,
+              { headers: { "X-Tenant-ID": tenant_id } }
+            )
+            if (notesRes.ok) {
+              const notesData = await notesRes.json() as { notes?: unknown[] }
+              calibrationNotes = notesData.notes ?? []
+            }
+          } catch (err) {
+            console.warn("evaluation_context_get: failed to fetch calibration_notes", err)
+          }
+        }
+
         return ok({
           session_id,
           participant_id,
@@ -853,6 +913,8 @@ export function registerEvaluationTools(server: McpServer, deps: EvaluationDeps)
           ...(Object.keys(arc6Meta).length > 0 ? arc6Meta : {}),
           // Participant summary (always present for transparency)
           participant_summary: participantSummary,
+          // Arc 13 Fase B: calibration notes for RAG-based evaluator calibration
+          calibration_notes: calibrationNotes,
         })
       } catch (e) {
         return handleCaughtError(e)
@@ -866,12 +928,16 @@ export function registerEvaluationTools(server: McpServer, deps: EvaluationDeps)
     "Submete o resultado de avaliação de qualidade pós-sessão. " +
     "Publica EvaluationResult em evaluation.events (Kafka). " +
     "Arc 6: aceita criterion_responses[], form_id, campaign_id, instance_id e knowledge_snippets. " +
+    "Arc 13 Fase B: aceita dimension_threads[] (obrigatório por dimensão pontuada — " +
+    "cada entry com dimension_id, score, justification e evidence_entries[] de stream entries) e " +
+    "evaluated_agent_type ('human_agent'|'ai_agent'). " +
+    "Critérios auto_computed são ignorados — preenchidos automaticamente pelo SessionMetricsExtractor. " +
     "Quando instance_id presente, também publica eval.instance.submitted para o ciclo de vida " +
     "da EvaluationInstance na evaluation-api. " +
     "A persistência no PostgreSQL é responsabilidade de um consumer dedicado — " +
     "esta tool nunca escreve diretamente no banco. " +
     "Reduz o TTL do ReplayContext no Redis após submissão. " +
-    "Spec: Session Replayer.",
+    "Spec: Session Replayer + arc13-review-contestation.md.",
     EvaluationSubmitInputSchema.shape as any,
     async (input: Record<string, unknown>) => {
       try {
@@ -883,6 +949,8 @@ export function registerEvaluationTools(server: McpServer, deps: EvaluationDeps)
           comparison_turns, comparison_replay_outcome, comparison_replay_sentiment,
           // Arc 6
           criterion_responses, form_id, campaign_id, instance_id, knowledge_snippets,
+          // Arc 13 Fase B
+          dimension_threads, evaluated_agent_type,
         } = parsed
 
         const { tenant_id } = verifySessionToken(session_token)
@@ -993,6 +1061,12 @@ export function registerEvaluationTools(server: McpServer, deps: EvaluationDeps)
           result["knowledge_snippets"] = knowledge_snippets
         }
 
+        // ── Arc 13 Fase B: include dimension_threads and evaluated_agent_type ──
+        if (dimension_threads && dimension_threads.length > 0) {
+          result["dimension_threads"] = dimension_threads
+        }
+        result["evaluated_agent_type"] = evaluated_agent_type ?? "human_agent"
+
         // Publica evaluation.completed em evaluation.events — consumer persiste no PostgreSQL
         await kafka.publish("evaluation.events", result)
 
@@ -1037,6 +1111,257 @@ export function registerEvaluationTools(server: McpServer, deps: EvaluationDeps)
           criterion_responses_included: (criterion_responses?.length ?? 0) > 0,
           knowledge_snippets_included:  (knowledge_snippets?.length ?? 0) > 0,
           instance_lifecycle_published: resolved_instance_id !== undefined,
+        })
+      } catch (e) {
+        return handleCaughtError(e)
+      }
+    }
+  )
+
+  // ── evaluation_threads_get (Arc 13 Fase C) ───────────────────────────────
+  // Busca os ContestationThreads de uma EvaluationInstance por instância.
+  // Usado pelo agente_pre_revisor_v1 para ler os threads round=1 do avaliador.
+  server.tool(
+    "evaluation_threads_get",
+    "Retorna os ContestationThreads de uma EvaluationInstance. " +
+    "Cada thread corresponde a uma dimensão do formulário de avaliação. " +
+    "Arc 13 Fase C: usado pelo agente_pre_revisor_v1 para ler o thread round=1 " +
+    "(author_type=evaluator_ai) antes de submeter a revisão pré-publicação. " +
+    "Requer role evaluator ou reviewer no session_token.",
+    {
+      session_token: z.string().min(1).describe("JWT do agente revisor (role: evaluator ou reviewer)"),
+      instance_id:   z.string().min(1).describe("ID da EvaluationInstance a consultar"),
+    } as any,
+    async (input: Record<string, unknown>) => {
+      try {
+        const parsed = z.object({
+          session_token: z.string().min(1),
+          instance_id:   z.string().min(1),
+        }).parse(input)
+
+        const { tenant_id } = verifySessionToken(parsed.session_token)
+        const apiBase = evaluationApiUrl ?? "http://localhost:3400"
+
+        const resp = await fetch(
+          `${apiBase}/v1/evaluation/instances/${encodeURIComponent(parsed.instance_id)}/threads`,
+          { headers: { "X-Tenant-ID": tenant_id } }
+        )
+
+        if (!resp.ok) {
+          const text = await resp.text().catch(() => "")
+          return mcpError("threads_fetch_failed", `evaluation-api returned ${resp.status}: ${text}`)
+        }
+
+        const data = await resp.json() as Record<string, unknown>
+        return ok({ instance_id: parsed.instance_id, threads: data["threads"] ?? [] })
+      } catch (e) {
+        return handleCaughtError(e)
+      }
+    }
+  )
+
+  // ── evaluation_pre_review_submit (Arc 13 Fase C) ─────────────────────────
+  // Submete a revisão pré-publicação do revisor AI (agente_pre_revisor_v1).
+  // Escreve um ContestationThread round=1 com author_type=pre_reviewer_ai
+  // por dimensão revisada. Calibration_signal opcional → Curator Queue.
+  const EvidenceEntryPreReviewSchema = z.object({
+    stream_entry_id: z.string().min(1),
+    excerpt:         z.string().max(500),
+    relevance_note:  z.string().max(500),
+  })
+
+  const DimensionReviewSchema = z.object({
+    /** ID da dimensão do formulário */
+    dimension_id:     z.string().min(1),
+    /** approve → aceita o score original; adjust → propõe score_override */
+    action:           z.enum(["approve", "adjust"]),
+    /** Obrigatório quando action=adjust */
+    score_override:   z.number().min(0).optional(),
+    /** Evidências revisadas — obrigatório quando action=adjust */
+    revised_evidence: z.array(EvidenceEntryPreReviewSchema).optional(),
+    /** Justificativa — obrigatória em todos os casos */
+    justification:    z.string().min(10),
+  })
+
+  const CalibrationSignalPreReviewSchema = z.object({
+    severity:    z.enum(["low", "medium", "high"]),
+    dimension_id: z.string().min(1),
+    observation: z.string().min(10),
+  })
+
+  const EvaluationPreReviewSubmitInputSchema = z.object({
+    session_token:      z.string().min(1),
+    instance_id:        z.string().min(1),
+    /** Revisão por dimensão — mínimo 1 entry */
+    dimension_reviews:  z.array(DimensionReviewSchema).min(1),
+    /** Sinal de calibração (opcional) — disparado apenas quando há padrão sistemático */
+    calibration_signal: CalibrationSignalPreReviewSchema.optional(),
+  })
+
+  server.tool(
+    "evaluation_pre_review_submit",
+    "Submete a revisão pré-publicação do revisor AI (agente_pre_revisor_v1). " +
+    "Para cada dimensão: action=approve aceita o score original; " +
+    "action=adjust propõe score_override com revised_evidence[] e justification obrigatórios. " +
+    "calibration_signal (opcional): emitido apenas quando há evidência de padrão sistemático — " +
+    "não por discordância pontual. Dispara automaticamente uma CurationReview " +
+    "para o curador humano de forma assíncrona (não bloqueia). " +
+    "Endpoint: POST /v1/evaluation/instances/{id}/pre-review na evaluation-api. " +
+    "Arc 13 Fase C.",
+    EvaluationPreReviewSubmitInputSchema.shape as any,
+    async (input: Record<string, unknown>) => {
+      try {
+        const parsed = EvaluationPreReviewSubmitInputSchema.parse(input)
+        const { session_token, instance_id, dimension_reviews, calibration_signal } = parsed
+
+        const { tenant_id } = verifySessionToken(session_token)
+        const apiBase = evaluationApiUrl ?? "http://localhost:3400"
+
+        // Extrai agent_type_id do revisor para registrar como author_id
+        let reviewer_agent_id = "pre_reviewer_unknown"
+        try {
+          // O session_token do revisor contém sub = agent_type_id
+          const payload = JSON.parse(
+            Buffer.from(session_token.split(".")[1] ?? "", "base64url").toString("utf8")
+          ) as Record<string, unknown>
+          if (typeof payload["sub"] === "string") reviewer_agent_id = payload["sub"]
+          else if (typeof payload["agent_type_id"] === "string") reviewer_agent_id = payload["agent_type_id"]
+        } catch { /* non-fatal */ }
+
+        const body: Record<string, unknown> = {
+          dimension_reviews,
+          reviewer_agent_id,
+        }
+        if (calibration_signal !== undefined) {
+          body["calibration_signal"] = calibration_signal
+        }
+
+        const resp = await fetch(
+          `${apiBase}/v1/evaluation/instances/${encodeURIComponent(instance_id)}/pre-review`,
+          {
+            method:  "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "X-Tenant-ID":  tenant_id,
+            },
+            body: JSON.stringify(body),
+          }
+        )
+
+        if (!resp.ok) {
+          const text = await resp.text().catch(() => "")
+          return mcpError("pre_review_failed", `evaluation-api returned ${resp.status}: ${text}`)
+        }
+
+        const data = await resp.json() as Record<string, unknown>
+        return ok({
+          submitted:             true,
+          instance_id,
+          pre_review_complete:   data["pre_review_complete"] ?? true,
+          contestation_state:    data["contestation_state"],
+          dimensions_adjusted:   dimension_reviews.filter(d => d.action === "adjust").length,
+          dimensions_approved:   dimension_reviews.filter(d => d.action === "approve").length,
+          calibration_signal_sent: calibration_signal !== undefined,
+          curation_review_created: data["curation_review_created"] ?? false,
+        })
+      } catch (e) {
+        return handleCaughtError(e)
+      }
+    }
+  )
+
+  // ── evaluation_review_submit (Arc 13 Fase D) ─────────────────────────────
+  // Submete a decisão do revisor pós-contestação (agente_revisor_v1 ou revisor humano).
+  // Para cada dimensão contestada: upheld mantém a nota; revised propõe score_override.
+  const EvidenceEntryReviewSchema = z.object({
+    stream_entry_id: z.string().min(1),
+    excerpt:         z.string().max(500),
+    relevance_note:  z.string().max(500),
+  })
+
+  const DimensionDecisionSchema = z.object({
+    /** ID da dimensão contestada — deve ter round=2 na instância */
+    dimension_id:     z.string().min(1),
+    /** upheld: mantém nota do avaliador; revised: altera com score_override */
+    decision:         z.enum(["upheld", "revised"]),
+    /** Obrigatório quando decision=revised */
+    score_override:   z.number().min(0).optional(),
+    /** Obrigatório quando decision=revised — evidências que suportam a alteração */
+    evidence_entries: z.array(EvidenceEntryReviewSchema).optional(),
+    /** Justificativa — obrigatória em todos os casos */
+    justification:    z.string().min(10),
+  })
+
+  const EvaluationReviewSubmitInputSchema = z.object({
+    session_token:       z.string().min(1),
+    instance_id:         z.string().min(1),
+    /** Decisão por dimensão — apenas dimensões contestadas (round=2) */
+    dimension_decisions: z.array(DimensionDecisionSchema).min(1),
+    /** ID do revisor (user_id para humano, agent_type_id para AI) */
+    reviewer_id:         z.string().optional(),
+  })
+
+  server.tool(
+    "evaluation_review_submit",
+    "Submete a decisão do revisor pós-contestação por dimensão contestada. " +
+    "Usado pelo agente_revisor_v1 (reviewer_type=ai) e pelo workflow de revisão humana. " +
+    "decision=upheld mantém a nota original do avaliador. " +
+    "decision=revised exige score_override + evidence_entries[] obrigatórios. " +
+    "Justificativa obrigatória em todos os casos — mesmo quando upheld. " +
+    "Endpoint: POST /v1/evaluation/instances/{id}/review na evaluation-api. " +
+    "Arc 13 Fase D.",
+    EvaluationReviewSubmitInputSchema.shape as any,
+    async (input: Record<string, unknown>) => {
+      try {
+        const parsed = EvaluationReviewSubmitInputSchema.parse(input)
+        const { session_token, instance_id, dimension_decisions, reviewer_id } = parsed
+
+        const { tenant_id } = verifySessionToken(session_token)
+        const apiBase = evaluationApiUrl ?? "http://localhost:3400"
+
+        // Extrai reviewer_id do token se não fornecido
+        let resolvedReviewerId = reviewer_id
+        if (!resolvedReviewerId) {
+          try {
+            const payload = JSON.parse(
+              Buffer.from(session_token.split(".")[1] ?? "", "base64url").toString("utf8")
+            ) as Record<string, unknown>
+            if (typeof payload["sub"] === "string")              resolvedReviewerId = payload["sub"]
+            else if (typeof payload["agent_type_id"] === "string") resolvedReviewerId = payload["agent_type_id"]
+          } catch { /* non-fatal */ }
+        }
+
+        const body: Record<string, unknown> = {
+          dimension_decisions,
+          reviewer_id: resolvedReviewerId,
+        }
+
+        const resp = await fetch(
+          `${apiBase}/v1/evaluation/instances/${encodeURIComponent(instance_id)}/review`,
+          {
+            method:  "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "X-Tenant-ID":  tenant_id,
+            },
+            body: JSON.stringify(body),
+          }
+        )
+
+        if (!resp.ok) {
+          const text = await resp.text().catch(() => "")
+          return mcpError("review_failed", `evaluation-api returned ${resp.status}: ${text}`)
+        }
+
+        const data = await resp.json() as Record<string, unknown>
+        return ok({
+          submitted:           true,
+          instance_id,
+          contestation_state:  data["contestation_state"],
+          current_round:       data["current_round"],
+          finalized:           data["finalized"] ?? false,
+          dimensions_upheld:   dimension_decisions.filter(d => d.decision === "upheld").length,
+          dimensions_revised:  dimension_decisions.filter(d => d.decision === "revised").length,
         })
       } catch (e) {
         return handleCaughtError(e)

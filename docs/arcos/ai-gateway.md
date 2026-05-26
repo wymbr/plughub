@@ -1,5 +1,7 @@
 # AI Gateway — LLM Inference & Multi-Account Rotation
 
+> Última atualização: 2026-05-25 · Estado: Arc 16
+>
 > Full reference for AI Gateway architecture, multi-account rotation, model profiles, and sentiment emission.
 > See CLAUDE.md for architectural summary.
 
@@ -118,8 +120,19 @@ The `supervisor_state` tool reads this hash to show pool-level sentiment in real
   "permissions":   [...],          # from JWT — filtered before sending to LLM
   "output_schema": {...} | None,   # for reason step (structured output)
   "system":        str | None,
+  "journey_id":    str | None,     # Arc 16 — when set, AI Gateway prepends a Journey context block
 }
 ```
+
+### Journey context block (Arc 16 Fase A)
+
+When `journey_id` is present, AI Gateway builds a Journey-scoped context block before inference:
+
+- `_build_journey_context_block()` reads the Redis hash `{tenant}:ctx:journey:{journey_id}` (the `@ctx.journey.*` namespace shared across all sessions of the Journey) and filters entries with `confidence < 0.3`.
+- `_prepend_journey_context()` injects the rendered block into the system message.
+- `infer()` calls both helpers only when `req.journey_id` is set — sessions without a Journey are unaffected.
+
+This lets a Business Workflow agent see data collected in `collect` sessions of the same Journey. See [`docs/arcos/arc16-flow-orchestration.md`](arc16-flow-orchestration.md).
 
 `InferenceResponse`:
 ```python

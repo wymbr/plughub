@@ -1,5 +1,6 @@
 # PlugHub — Modelos de Dados e Persistência
 
+> Última atualização: 2026-05-25 · Estado: Arc 16
 > Camadas de persistência: Redis · PostgreSQL · ClickHouse
 > Convenção de chave: todas as chaves Redis são prefixadas com `{tenant_id}:` (isolamento multi-tenant)
 
@@ -8,13 +9,18 @@
 ## Sumário
 
 - [Redis — Visão Geral](#redis--visão-geral)
+- [Redis — Canonical Stream da Sessão](#redis--canonical-stream-da-sessão)
+- [Redis — ContextStore](#redis--contextstore)
+- [Redis — Sentiment Tracking](#redis--sentiment-tracking)
+- [Redis — Usage & Quota](#redis--usage--quota)
 - [Redis — mcp-server-plughub](#redis--mcp-server-plughub)
 - [Redis — skill-flow-engine](#redis--skill-flow-engine)
 - [Redis — routing-engine](#redis--routing-engine)
 - [Redis — ai-gateway](#redis--ai-gateway)
 - [Redis — rules-engine](#redis--rules-engine)
 - [PostgreSQL — agent-registry](#postgresql--agent-registry)
-- [ClickHouse — rules-engine](#clickhouse--rules-engine)
+- [PostgreSQL — outros schemas](#postgresql--outros-schemas)
+- [ClickHouse — Tabelas Analíticas](#clickhouse--tabelas-analíticas)
 - [Matriz de Acesso por Módulo](#matriz-de-acesso-por-módulo)
 
 ---
@@ -25,14 +31,20 @@ O Redis é a camada de estado operacional da plataforma — tudo que precisa ser
 
 | Subárvore | Módulo dono | Propósito |
 |---|---|---|
+| `session:{id}:stream` | core / mcp-server-plughub | **Canonical stream** — fonte única de eventos de sessão |
+| `{t}:ctx:{sessionId}` | ContextStore | Estado de sessão context-aware (`@ctx.*`) |
+| `{t}:ctx:journey:{journeyId}` | ContextStore (Arc 16) | Estado compartilhado entre sessões de uma Journey |
+| `session:{id}:sentiment` | core / ai-gateway | Array score-only de sentimento durante a sessão |
+| `{t}:usage:current:*` | usage-aggregator | Contadores de metering por dimensão |
+| `{t}:quota:limit:*` | usage-aggregator | Limites de quota por dimensão |
 | `{t}:agent:*` | mcp-server-plughub | Ciclo de vida de instâncias de agente |
 | `{t}:pool:{id}:available` | mcp-server-plughub | Set de instâncias disponíveis por pool |
 | `{t}:insight:*` | mcp-server / routing-engine | Insights de conversa e histórico do cliente |
-| `{t}:pending:*` | Notification Agent | Pending deliveries (outbound.*) |
 | `{t}:pipeline:*` | skill-flow-engine | Estado do pipeline e locks de execução |
 | `{t}:instance:*` | routing-engine | Snapshot de instâncias para alocação |
 | `{t}:pool_config:*` | routing-engine | Cache de configurações de pool |
 | `{t}:pool:{id}:queue` | routing-engine | Fila de contatos em espera |
+| `{t}:pool:{id}:snapshot` | routing-engine | Snapshot operacional de pool (TTL 120s) |
 | `{t}:routing:instance:*` | routing-engine | Metadata persistente (crash recovery) |
 | `{t}:session:{id}:context` | routing-engine | Contexto consolidado entregue ao agente |
 | `{t}:session:{id}:turn:*:params` | ai-gateway | Parâmetros extraídos por turno |
@@ -41,6 +53,98 @@ O Redis é a camada de estado operacional da plataforma — tudo que precisa ser
 | `rules:{t}:active` | rules-engine | Regras ativas do tenant |
 
 > `{t}` = `{tenant_id}` nas tabelas abaixo.
+
+---
+
+## Redis — Canonical Stream da Sessão
+
+### `session:{id}:stream` — STREAM
+
+A **fonte única de verdade** para todos os eventos de uma sessão. Cada entrada é
+adicionada via `XADD`. Toda escrita carrega `event_id`, `segment_id` (sempre flat),
+`author_id`/`author_role` (campos flat) e passa por validação Zod antes da escrita.
+
+> **Invariante**: todo `XADD` neste stream DEVE passar pelo helper `writeStreamEntry()`
+> em `lib/write-stream-entry.ts` — nunca chamar `redis.xadd()` diretamente. A única
+> exceção são os eventos `session_opened` / `session_closed`, escritos pelo Core no
+> `server.ts`.
+
+Mensagens carregam dois campos de conteúdo:
+
+| Campo | Conteúdo |
+|---|---|
+| `content` | Texto **mascarado** — tokens no formato `[{category}:{token_id}:{display_partial}]` |
+| `original_content` | Texto **não mascarado** — visível apenas a roles autorizados (`evaluator`, `reviewer`) para auditoria LGPD |
+
+O Channel Gateway reduz os tokens a apenas `display_partial` antes de entregar a
+mensagem ao cliente via WebSocket.
+
+---
+
+## Redis — ContextStore
+
+### `{t}:ctx:{sessionId}` — HASH
+
+Estado context-aware da sessão. Cada field do hash é um nome de tag mapeado para um
+`ContextEntry` serializado em JSON.
+
+```json
+{
+  "value":      "<any>",
+  "confidence": 0.0,
+  "source":     "mcp_call | ai_inferred | customer_input | routing_engine | ...",
+  "visibility": "all | agents_only | [\"part_id\", ...]",
+  "updated_at": "ISO datetime"
+}
+```
+
+Namespaces de tag: `caller.*` (dados do cliente), `session.*` (estado da sessão),
+`account.*` (dados da conta), `segment.{segId}.*` (isolado por agente paralelo).
+`@ctx.*` resolve estas tags em inputs de step, condições de `choice` e arrays de
+visibilidade. Faixas de confiança: ≥0.9 confirmado; ≥0.7 alta certeza; 0.4–0.7
+incerto; <0.4 desconhecido.
+
+### `{t}:ctx:journey:{journeyId}` — HASH (Arc 16)
+
+Hash de contexto compartilhado entre **todas as sessões de uma mesma Journey** —
+resolve o problema de dados coletados em sessões `collect` serem invisíveis para o
+Business Workflow do Tier 1. Mesma estrutura `ContextEntry` do hash de sessão.
+`@ctx.journey.*` lê deste hash; `context_tags.outputs` com prefixo `journey.*`
+redireciona a escrita para cá. TTL 30 dias, renovado em toda escrita; removido no
+fechamento da Journey.
+
+---
+
+## Redis — Sentiment Tracking
+
+### `session:{id}:sentiment` — STRING (array JSON)
+
+Array score-only de sentimento mantido durante a sessão. Os labels (`satisfied`,
+`neutral`, `frustrated`, `angry`) são calculados em tempo de leitura usando faixas
+configuráveis por tenant — **nunca são publicados no canonical stream**.
+
+```json
+[ { "score": 0.40, "timestamp": "ISO datetime" }, ... ]
+```
+
+TTL: mesmo TTL da sessão. No fechamento da sessão, o array é persistido em PostgreSQL
+na coluna `sentiment_timeline JSONB`.
+
+---
+
+## Redis — Usage & Quota
+
+Chaves de metering e quota escritas pelo pipeline de Usage Metering.
+
+| Chave | Tipo | Propósito |
+|---|---|---|
+| `{t}:usage:current:{dimension}` | STRING (contador) | Consumo acumulado no ciclo (TTL 45 dias) |
+| `{t}:quota:limit:{dimension}` | STRING | Limite de quota da dimensão |
+| `{t}:quota:concurrent_sessions` | STRING (contador) | Sessões concorrentes ativas |
+
+`dimension` ∈ `sessions`, `messages`, `llm_tokens_input`, `llm_tokens_output`,
+`webchat_attachments` (dimensões cabeadas). `assertQuota` aplica o padrão
+INCRBY-check-rollback. Reset de ciclo via `POST /admin/cycle-reset`.
 
 ---
 
@@ -305,9 +409,6 @@ Contexto consolidado entregue ao agente no início do atendimento. Construído p
   "conversation_id":       "uuid",
   "conversation_insights": [
     { "item_id": "...", "category": "insight.conversa.*|insight.historico.*", "content": {...}, "priority": 80 }
-  ],
-  "pending_deliveries": [
-    { "item_id": "...", "category": "outbound.*", "content": {...}, "priority": 60 }
   ]
 }
 ```
@@ -325,10 +426,6 @@ Insight histórico do cliente (`insight.historico.*`). Diferente dos insights de
 Escrito por consumer Kafka (`insight.historico.*` promovido a partir de `insight.conversa.*` no fechamento do contato).
 
 ---
-
-### `{t}:pending:{customer_id}:{item_id}` — STRING
-
-Pending delivery ativo (`outbound.*`). Representa uma entrega pendente para o cliente — promoção, lembrete, ação de follow-up — que deve ser apresentada no próximo atendimento.
 
 ---
 
@@ -513,47 +610,92 @@ Escrito e atualizado **exclusivamente pelo mcp-server-plughub** via tools Agent 
 
 ```
 Skill {
-  skill_id    String   PK — formato: skill_{name}_v{n}
-  tenant_id   String
-  name        String
-  version     String
-  description String
-  definition  Json     — SkillSchema serializado completo (inclui flow_definition)
-  status      String   — "active" | "deprecated"
-  created_at  DateTime
-  updated_at  DateTime
+  skill_id      String   PK — formato: skill_{name}_v{n}
+  tenant_id     String
+  name          String
+  version       String
+  description   String
+  definition    Json     — SkillSchema serializado completo (inclui flow_definition)
+  status        String   — "active" | "deprecated"
+  deploy_status String   — "draft" | "published"
+  created_at    DateTime
+  updated_at    DateTime
 
   UNIQUE (skill_id, tenant_id)
 }
 ```
 
+Regras de `deploy_status` (Skill Deploy Lifecycle):
+- `PUT /v1/skills` sempre cria com `deploy_status = "draft"`; **nunca** modifica o
+  campo em updates de skill existente
+- `POST /v1/skills/:id/deploy` é a única ação que define `published` — grava em
+  `skill_deployments` e publica `registry.changed`
+
 ---
 
-## ClickHouse — rules-engine
+## PostgreSQL — outros schemas
 
-O ClickHouse armazena o log de auditoria de escalações e os dados históricos de sessão usados em dry-run.
+Além do banco do `agent-registry`, a plataforma tem schemas PostgreSQL dedicados em
+outros serviços. Cada serviço é o único escritor do seu schema.
 
-### `escalation_audit` (tabela)
+### Schema `auth` — auth-api (porta 3200)
 
-Registra toda escalação disparada pelo Rules Engine (modo `active`), bem como os disparos de shadow mode.
+Store de usuários e sessões de autenticação, além das entidades de Agent Groups (Arc 9).
 
-| Coluna | Tipo | Descrição |
-|---|---|---|
-| `session_id` | String | Sessão escalada |
-| `tenant_id` | String | Tenant |
-| `rule_id` | String | Regra que disparou |
-| `rule_name` | String | Nome da regra |
-| `target_pool` | String | Pool de destino |
-| `shadow_mode` | Boolean | `true` = shadow (não escalou de fato) |
-| `triggered_at` | DateTime | Timestamp do disparo |
-| `sentiment_score` | Float64 | Score no momento do disparo |
-| `intent_confidence` | Float64 | Confiança da intenção |
-| `turn_count` | Int32 | Turnos sem resolução |
-| `elapsed_ms` | Int64 | Tempo total da sessão |
+| Tabela | Conteúdo |
+|---|---|
+| `users` | Usuários da plataforma (bcrypt password hash) |
+| `sessions` | Sessões de auth — refresh tokens (43 chars, SHA-256 armazenado) |
+| `module_registry` | Registro de módulos ABAC (seedado de `infra/modules.yaml`) |
+| `agent_groups` | Grupos de agentes (entidade de org chart, ortogonal a Pool) |
+| `agent_group_members` | Membros do grupo (`agent_type_id` + `is_human`) |
+| `agent_group_users` | Usuários humanos vinculados ao grupo |
+| `agent_group_supervisors` | Supervisores do grupo |
+| `agent_group_shifts` | Turnos (`days_of_week[]`, `time_start`/`time_end`, `timezone`) |
 
-Acessado pelo Rules Engine para:
-- Dry-run histórico — simular regra contra janela de sessões passadas
-- Relatório de escalações ativas (`GET /api/v1/rules/{id}/report`)
+### Schema `workflow` — workflow-api (porta 3800)
+
+| Tabela | Conteúdo |
+|---|---|
+| `workflow.instances` | `WorkflowInstance` — lifecycle de workflow (Arc 4) |
+| `workflow.journeys` | `Journey` — `journey_id`, `skill_id`, `customer_id`, `origin_session_id`, `status`, `pool_id`, `workflow_instance_id`, `split_from_journey_id`, `metadata` (Arc 10/16) |
+| `skill_deployments` | Histórico de deploys de skill — alimenta `deploy_status` (Arc 4 Fase 2) |
+| webhooks | Tokens `plughub_wh_*` (SHA-256 armazenado) + log de entregas |
+
+### evaluation-api (porta 3400)
+
+Forms, Campaigns, Instances, Results, Contestations e os artefatos do Arc 13
+(`ContestationThread`, `CurationReview`, `CalibrationNote`). As Instances de
+avaliação são criadas automaticamente pelo sampling engine no `session_closed`.
+
+### Sessões — `sentiment_timeline`
+
+A tabela de sessões persiste, no fechamento, o array de sentimento como
+`sentiment_timeline JSONB` (cópia do Redis `session:{id}:sentiment`).
+
+---
+
+## ClickHouse — Tabelas Analíticas
+
+O ClickHouse é a camada analítica da plataforma. As tabelas abaixo são populadas
+predominantemente por consumidores Kafka no `analytics-api` (ver `docs/kafka-eventos.md`).
+
+| Tabela | Engine | Alimentada por | Conteúdo |
+|---|---|---|---|
+| `analytics.segments` | ReplacingMergeTree | `conversations.participants` | `ContactSegment` — topologia de conferência (Arc 5) |
+| `analytics.session_timeline` | — | streams de sessão | Timeline de sessão enriquecida com `segment_id` |
+| `agent_pause_intervals` | ReplacingMergeTree | `agent.lifecycle` | Intervalos de pausa de agentes humanos (Arc 8) |
+| `evaluation_results` | — | `evaluation.events` | Resultados de avaliação de qualidade (Arc 6) |
+| `evaluation_events` | — | `evaluation.events` | Eventos do ciclo de avaliação (Arc 6) |
+| `journey_events` | — | `journey.events` | Lifecycle de jornada multi-sessão (Arc 10/16) |
+| `mcp_audit_log` | ReplacingMergeTree | `mcp.audit` | Audit trail de chamadas MCP (idempotente) |
+| `audit_access_log` | MergeTree | analytics-api `/v1/audit` | Acessos do DPO/compliance — nunca deduplicado (LGPD) |
+| `analytics.agent_business_events` | MergeTree | `agent.events` | KPIs de negócio publicados por agentes (Arc 12, TTL 2 anos) |
+| `analytics.deploy_events` | — | `registry.changed` | Eventos de deploy como âncoras temporais (Arc 6 Fase 2) |
+| `calibration_events` | ReplacingMergeTree | `calibration.events` | Calibração de avaliadores (Arc 13) |
+
+> O `analytics-api` também mantém materialized views agregadas (`mv_agent_performance_daily`,
+> `mv_segment_summary`) sobre as tabelas base.
 
 ---
 
@@ -565,13 +707,18 @@ Legenda: **E** = Escrita · **L** = Leitura · **—** = Sem acesso
 
 | Chave (padrão) | mcp-server | skill-flow | routing-engine | ai-gateway | rules-engine | channel-gw |
 |---|:---:|:---:|:---:|:---:|:---:|:---:|
+| `session:{id}:stream` | **E** | **E** | — | — | — | L |
+| `{t}:ctx:{sessionId}` | **E** | **E** | **E** | L | — | — |
+| `{t}:ctx:journey:{journeyId}` | **E** | **E** | — | L | — | — |
+| `session:{id}:sentiment` | — | — | — | **E** | — | — |
+| `{t}:usage:current:{dimension}` | — | — | — | **E** | — | **E** |
+| `{t}:quota:limit:{dimension}` | — | — | — | — | — | — |
 | `{t}:agent:instance:{id}` | **E** | — | L | — | — | — |
 | `{t}:agent:token:{token}` | **E** | — | — | — | — | — |
 | `{t}:pool:{id}:available` | **E** | — | L | — | — | — |
 | `{t}:agent:instance:{id}:conversations` | **E** | — | — | — | — | — |
 | `{t}:insight:{conv_id}:{item_id}` | **E** | — | L | — | — | — |
 | `{t}:insight:h:{cust_id}:{item_id}` | — | — | L | — | — | — |
-| `{t}:pending:{cust_id}:{item_id}` | — | — | L | — | — | — |
 | `{t}:pipeline:{session_id}` | — | **E** | — | — | — | — |
 | `{t}:pipeline:{session_id}:running` | — | **E** | — | — | — | — |
 | `{t}:pipeline:{session_id}:job:{step_id}` | — | **E** | — | — | — | — |
@@ -598,4 +745,7 @@ Legenda: **E** = Escrita · **L** = Leitura · **—** = Sem acesso
 | PostgreSQL | `AgentType` | agent-registry | routing-engine, mcp-server (via Kafka cache) |
 | PostgreSQL | `AgentInstance` | mcp-server-plughub | agent-registry (exposição via API) |
 | PostgreSQL | `Skill` | agent-registry | mcp-server, skill-flow (via referência) |
-| ClickHouse | `escalation_audit` | rules-engine | rules-engine (dry-run, relatórios) |
+| PostgreSQL | schema `auth` (`users`, `sessions`, `agent_groups`, ...) | auth-api | auth-api, analytics-api (scope) |
+| PostgreSQL | `workflow.journeys`, `workflow.instances`, `skill_deployments` | workflow-api | workflow-api, skill-flow-worker |
+| PostgreSQL | Forms / Campaigns / Instances | evaluation-api | evaluation-api |
+| ClickHouse | `analytics.segments`, `journey_events`, `evaluation_*`, `mcp_audit_log`, ... | analytics-api (consumers Kafka) | analytics-api (relatórios) |

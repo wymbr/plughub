@@ -1,10 +1,12 @@
 # Módulo: Agent Assist
 
+> Última atualização: 2026-05-25 · Estado: Arc 16
+
 > Rota UI: `/agent-assist` | Roles: operator, supervisor, admin
 
 ## O que é
 
-O Agent Assist é a interface principal do agente humano durante o atendimento. Exibe a fila de contatos ativos (por pool), a transcrição em tempo real da conversa via WebSocket, sugestões do co-pilot de IA, dados de contexto do cliente (ContextStore) e histórico de contatos anteriores. Permite que o agente responda, pause, escale, transfira e encerre a sessão.
+O Agent Assist é a interface principal do agente humano durante o atendimento — e, a partir do Arc 11, a **superfície de orquestração** (Console) do PlugHub. Exibe a fila de contatos ativos (por pool), a transcrição em tempo real da conversa via WebSocket, sugestões do co-pilot de IA, dados de contexto do cliente (ContextStore) e histórico de contatos anteriores. Permite que o agente responda, pause, escale, transfira e encerre a sessão — e também dirija, delegue e monitore agentes IA como coparticipantes de primeira classe (Arc 11).
 
 ## Especialistas por pool — o diferencial de produtividade
 
@@ -58,18 +60,49 @@ Transcrição em tempo real via WebSocket (`agent-ws`). Tipos de mensagem:
   - Modo observação: disabled (padrão)
   - Modo substituição: interativo (ativado via botão 🔄)
 
-### RightPanel — abas
+### RightPanel — 5 abas
 
 | Aba | Conteúdo | Fonte |
 |---|---|---|
-| **Estado** | Score de sentimento (linha temporal + trend), intenção detectada, flags de risco, SLA | ContextStore + `supervisor_state` |
+| **Estado** | Score de sentimento (linha temporal + trend), intenção detectada, flags de risco, SLA + `AiParticipantCard` (cartões de participantes IA em tempo real, Arc 11 Fase A) | ContextStore + `supervisor_state` |
 | **Capacidades** | Seção Co-pilot (sugestão de resposta, flags de risco, ações recomendadas) + agentes sugeridos para escalada | `GET /api/copilot_state/:sessionId` + `supervisor_state` |
 | **Contexto** | ContextSnapshotCard (teal) com campos agrupados por namespace (`caller.*`, `session.*`, `account.*`) | `supervisor_state` MCP tool → ContextStore |
 | **Histórico** | Últimos 20 contatos fechados do cliente identificado | `GET /analytics/sessions/customer/{id}` |
+| **Orquestração** | Agentes IA ativos + linha do tempo de transições do Skill-Flow + ações de intervenção (Arc 11 Fase D) — **visível apenas para roles `supervisor`/`admin`** | `GET /api/supervisor_state` (`ai_participants` + `pipeline_transitions`) |
 
 A aba Contexto detecta automaticamente o formato disponível:
 - **`context_snapshot` presente** → `ContextSnapshotCard` (teal) com campos agrupados por namespace, badge 🔒 para entradas `agents_only`
 - **Apenas `contact_context`** → `ContactContextCard` (emerald) — fallback legado
+
+A aba **Orquestração** só é renderizada quando `session.role === "supervisor" || "admin"` (gate no tab bar do `AgentAssistPage`).
+
+## Console como superfície de orquestração (Arc 11)
+
+O Arc 11 eleva o Agent Assist de interface de atendimento para superfície de orquestração: o operador humano e o Skill-Flow nativo usam as mesmas primitivas (pools, segments, A2A `task`/`assist`, ContextStore) — o Console é o ponto de entrada quando o humano está no controle.
+
+### Fase A — Cartões de participantes IA (`AiParticipantCard`)
+
+Cada instância IA ativa na sessão aparece como cartão no **EstadoTab**, ao lado dos cartões humanos: agent_type, role, step atual do Skill-Flow, `step_status` (running/waiting/done/error), `waiting_for` e tempo no segmento. Polling de 3 s sobre `supervisor_state` (`ai_participants[]` com `AiState { current_step, step_type, step_status, waiting_for, since_ms }`). A bridge escreve `session:{id}:ai_participant:{instance_id}` (TTL 4h). Clicar no cartão abre drawer com as últimas 5 mensagens do agente + botão "Encerrar segmento" → `@{instance_id} terminate_self`.
+
+### Fase B — Adicionar Especialista
+
+Botão `AdicionarEspecialistaButton` no ActionBar: dropdown 2-step (escolha de agente + textarea de contexto). Lista os agentes dos `mentionable_pools` do pool atual via `GET /v1/pools/:poolId/mentionable-agents` (agent-registry) — hook `useMentionableAgents(poolId)`. Ao confirmar, envia `@{agent_type_id} {context}` pelo WebSocket; o especialista entra como `specialist` e seu cartão aparece via Fase A.
+
+### Fase C — Delegar Tarefa
+
+Seleção de mensagens no transcript: hover-checkbox em `MessageBubble`, toolbar de contagem no `ChatArea`. O `DelegarButton` (com badge numérico) no ActionBar abre o `DelegarTarefaDrawer` — agent picker, instrução pré-preenchida com as mensagens selecionadas, e radio de visibilidade (`agents_only` para que o cliente não veja). Submete via `handleSend(@{id} {instruction})`. Quando o agente IA termina (`agent_done`), um card de resultado aparece no painel.
+
+### Fase D — Tab de Orquestração
+
+Quinta aba do RightPanel (`OrchestrationTab`), gateada por `supervisor`/`admin`. Lista os agentes IA da sessão, a linha do tempo de `pipeline_transitions` do Skill-Flow, e ações de intervenção: `InjectContextForm` → `POST /api/inject-context/:sessionId` (HSET no ContextStore Redis) e `ForceCompleteConfirm` → `POST /api/force-complete/:sessionId`. O hook `useSupervisorState` retorna `{ state, refresh }` — `refresh` permite re-poll on-demand após intervenções.
+
+## Botão "Iniciar Processo" (Journey — Arc 10)
+
+O ActionBar inclui o botão "Iniciar Processo": um dropdown filtrado por `pool.mentionable_journeys` que cria uma Journey (`journey_start` MCP tool) a partir da sessão atual. Vincula o atendimento ao módulo Processos (`/agent-flow/processos`). O `HistoricoTab` exibe ainda a seção "Processos em aberto" do `customer_id`.
+
+## WebRTCOverlay — sessões de vídeo/voz (Arc 15)
+
+Para sessões com `channel === "webrtc"`, o `WebRTCOverlay` é renderizado antes do `ParticipantFilterBar`: grid de vídeo 2-up, waveform animado ou nenhum overlay conforme o medium negociado (`video`/`voice`/`text`). Hook `useWebRTCSession()` faz a conexão LiveKit (publish de tracks locais, controles de mic/câmera). Supervisores entram como observadores via `WebRTCSupervisorView` (sem publicar tracks).
 
 ## Gate ABAC
 
@@ -153,4 +186,6 @@ O hook `useCopilotState` re-busca ao receber `copilot.updated` via Redis pub/sub
 - WS server: `packages/mcp-server-plughub/src/server.ts`
 - Co-pilot: `packages/ai-gateway/src/plughub_ai_gateway/copilot_emitter.py`
 - Pool Hooks: `packages/orchestrator-bridge/src/plughub_orchestrator_bridge/main.py` (funções `fire_pool_hooks`, `_write_pre_hook_context`)
-- Guia operacional: `docs/guias/conferencia-e-historico.md`
+- Arc 11 (Console / orquestração): `docs/arcos/arc11-console-orchestration.md`
+- Arc 15 (WebRTC): `docs/arcos/arc15-webrtc.md`
+- Guia operacional: `docs/sections/conferencia-e-historico.md`

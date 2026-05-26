@@ -1,6 +1,7 @@
 # ContextStore — Guia do Modelo de Contexto
 
-> **Versão:** PlugHub Arc 2+  
+> Última atualização: 2026-05-25 · Estado: Arc 16
+
 > **Substitui:** `contact_context` / `context_package` (legado — em depreciação)  
 > **Fonte de verdade técnica:** `CLAUDE.md § ContextStore — unified session state`
 
@@ -66,6 +67,38 @@ interface ContextEntry {
 | `caller.*` | Dados do cliente (nome, cpf, conta, motivo) | McpInterceptor; `context_tags.outputs` em reason/invoke |
 | `session.*` | Estado da sessão atual (sentimento, pergunta, histórico) | reason/invoke steps; `sentiment_emitter` |
 | `account.*` | Dados de conta (plano, status) | invoke step com buscar_crm |
+| `segment.{segId}.*` | Estado isolado de um agente em conferência multi-agente | reason/invoke steps do agente daquele segmento |
+| `journey.*` | Estado da Journey multi-sessão (Arc 16) — hash Redis **separado** | workflow-api; `context_tags.outputs` com prefixo `journey.*` |
+
+#### `segment.{segId}.*` — isolamento de agentes paralelos
+
+Quando vários agentes participam da mesma conferência (especialistas em paralelo),
+cada um precisa de um espaço de escrita que não colida com o dos demais. O prefixo
+`segment.{segId}.` isola esses dados. Em step inputs e visibilidade, a sintaxe
+`@segment.*` é resolvida pelo engine para `segment.{segId}.<campo>` usando o `segId`
+do agente em execução — cada agente vê apenas o seu próprio espaço de segmento.
+
+#### `journey.*` — namespace da Journey (Arc 16)
+
+O namespace `journey.*` **não** vive no hash de sessão. Reside em um hash Redis
+dedicado, compartilhado por todas as sessões de uma mesma Journey:
+
+```
+{tenantId}:ctx:journey:{journeyId}   ← Redis hash da Journey (TTL 30 dias)
+```
+
+`@ctx.journey.*` lê deste hash; em `context_tags.outputs`, qualquer tag com prefixo
+`journey.*` redireciona a escrita para o hash da Journey em vez do hash de sessão.
+Isso resolve o problema de dados coletados em sessões `collect` ficarem invisíveis
+para o Business Workflow do Tier 1. O hash é removido no fechamento da Journey.
+
+#### Pool Context Enrichment — `session.pool.*`
+
+Após cada alocação bem-sucedida, o **Routing Engine** escreve no ContextStore de
+sessão as tags `session.pool.id`, `session.pool.channels` e (quando configurado)
+`session.pool.mentionable_pools` — `_write_pool_context()`, source `routing_engine`,
+confidence `1.0`, visibilidade `agents_only`, TTL 24h NX. Os dados vêm do cache
+Redis do próprio Routing Engine — sem I/O adicional.
 
 ---
 

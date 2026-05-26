@@ -4,25 +4,30 @@
  *
  * Layout:
  *   ┌──────────────────────────────────────────────────────┐
- *   │  Page header (title + keyboard hint)                 │
+ *   │  Page header (keyboard hint + action buttons)        │
  *   ├──────────────┬───────────────────────────────────────┤
- *   │  Skill tree  │  Monaco YAML editor                   │
+ *   │  Skill tree  │  Monaco YAML editor  (vs-dark)        │
  *   │  search      │                                       │
- *   │  ▾ Agentes   │  ─────────────────────────────────    │
- *   │    ▾ pasta   │  Status bar                           │
+ *   │  ▾ Agents    │  ─────────────────────────────────    │
+ *   │    ▾ folder  │  Status bar                           │
  *   │      skill   │                                       │
  *   │  ▾ Workflows │                                       │
  *   └──────────────┴───────────────────────────────────────┘
  *
+ * Theme note: sidebar/header/status-bar and Monaco editor all use the light
+ * design-system tokens (theme="vs"). Consistent with VS Code / Notepad++ light
+ * mode which uses white background for code editing too.
+ *
  * Grouping rules:
  *   - classification.type === 'orchestrator'  → Workflows group
- *   - everything else                         → Agentes group
+ *   - everything else                         → Agents group
  *   - skill YAML field `folder: "path/sub"`   → tree organisation (view-only, not physical)
  *   - max 2 folder levels; search collapses tree to flat list
  */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import Editor from '@monaco-editor/react'
 import * as yaml from 'js-yaml'
+import { useTranslation } from 'react-i18next'
 import { useAuth } from '@/auth/useAuth'
 import Spinner from '@/components/ui/Spinner'
 import type { Skill } from '@/types'
@@ -67,8 +72,8 @@ type ClassificationAware = Skill & {
 }
 
 type FolderNode = {
-  path:     string                // full path, e.g. "clientes/retencao"
-  label:    string                // last segment
+  path:     string
+  label:    string
   skills:   ClassificationAware[]
   children: FolderNode[]
 }
@@ -77,7 +82,7 @@ type RootGroup = {
   key:     'agents' | 'workflows'
   label:   string
   folders: FolderNode[]
-  unfiled: ClassificationAware[]  // skills without a folder field
+  unfiled: ClassificationAware[]
   total:   number
 }
 
@@ -127,17 +132,14 @@ async function apiFetchRaw(url: string, init?: RequestInit): Promise<Record<stri
 // ── Folder tree builder ───────────────────────────────────────────────────────
 
 function buildFolderTree(allSkills: ClassificationAware[]): RootGroup[] {
-  // flow_model is computed server-side from the skill's flow steps:
-  //   "workflow" — contains suspend/collect steps → needs workflow-api multi-session machinery
-  //   "agent"    — runs synchronously within a single agent session (default / undefined)
   const agents    = allSkills.filter(s => s.flow_model !== 'workflow')
   const workflows = allSkills.filter(s => s.flow_model === 'workflow')
 
   const groups: RootGroup[] = []
 
   for (const [key, label, list] of [
-    ['agents',    'Agentes',   agents]    as const,
-    ['workflows', 'Workflows', workflows] as const,
+    ['agents',    'agents',    agents]    as const,
+    ['workflows', 'workflows', workflows] as const,
   ]) {
     if (list.length === 0) continue
 
@@ -152,7 +154,6 @@ function buildFolderTree(allSkills: ClassificationAware[]): RootGroup[] {
       folderMap.get(folder)!.push(skill)
     }
 
-    // Build two-level tree from folder paths
     const rootMap = new Map<string, FolderNode>()
     for (const [path, skills] of folderMap) {
       const parts = path.split('/').slice(0, 2)
@@ -188,25 +189,26 @@ function folderTotal(node: FolderNode): number {
 }
 
 // ── Status bar ───────────────────────────────────────────────────────────────
+// Light-theme colors; the bar sits at the bottom of the (dark) Monaco pane.
 
 type StatusKind = 'idle' | 'loading' | 'saving' | 'saved' | 'error' | 'parse_error'
 
 const STATUS_BG: Record<StatusKind, string> = {
-  idle:        'bg-gray-900',
-  loading:     'bg-gray-900',
-  saving:      'bg-indigo-950',
-  saved:       'bg-green-950',
-  error:       'bg-red-950',
-  parse_error: 'bg-red-950',
+  idle:        'bg-white border-t border-border',
+  loading:     'bg-white border-t border-border',
+  saving:      'bg-primary/10 border-t border-primary/20',
+  saved:       'bg-green-50 border-t border-green-200',
+  error:       'bg-red-light border-t border-red/30',
+  parse_error: 'bg-red-light border-t border-red/30',
 }
 
 const STATUS_COLOR: Record<StatusKind, string> = {
-  idle:        'text-gray-500',
-  loading:     'text-gray-400',
-  saving:      'text-violet-400',
-  saved:       'text-green-400',
-  error:       'text-red-400',
-  parse_error: 'text-red-400',
+  idle:        'text-muted',
+  loading:     'text-muted',
+  saving:      'text-primary',
+  saved:       'text-green-700',
+  error:       'text-red-text',
+  parse_error: 'text-red-text',
 }
 
 const STATUS_ICON: Record<StatusKind, string> = {
@@ -220,7 +222,7 @@ const STATUS_ICON: Record<StatusKind, string> = {
 
 function StatusBar({ kind, message }: { kind: StatusKind; message: string }) {
   return (
-    <div className={`h-7 shrink-0 border-t border-gray-800 flex items-center px-4 gap-2 text-xs font-mono ${STATUS_BG[kind]} ${STATUS_COLOR[kind]}`}>
+    <div className={`relative z-10 h-7 shrink-0 flex items-center px-4 gap-2 text-xs font-mono ${STATUS_BG[kind]} ${STATUS_COLOR[kind]}`}>
       {STATUS_ICON[kind] && <span>{STATUS_ICON[kind]}</span>}
       <span>{message}</span>
     </div>
@@ -228,6 +230,13 @@ function StatusBar({ kind, message }: { kind: StatusKind; message: string }) {
 }
 
 // ── Skill list item ───────────────────────────────────────────────────────────
+
+/** Classification type badge colors — semantic, data-driven, stay as Tailwind */
+function typeColor(type: string | undefined): string {
+  if (type === 'orchestrator') return 'text-violet-600'
+  if (type === 'vertical')     return 'text-sky-600'
+  return 'text-amber-600'
+}
 
 function SkillListItem({
   skill, selected, modified, indent = 12, onClick,
@@ -238,31 +247,29 @@ function SkillListItem({
   indent?:  number
   onClick:  () => void
 }) {
-  const typeColor = skill.classification?.type === 'orchestrator'
-    ? 'text-violet-400'
-    : skill.classification?.type === 'vertical'
-    ? 'text-cyan-400'
-    : 'text-yellow-400'
-
   return (
     <div
       onClick={onClick}
-      style={{ paddingLeft: `${indent}px` }}
-      className={`cursor-pointer border-b border-gray-800 pr-3 py-2.5 transition-colors hover:bg-gray-800/60 ${
-        selected ? 'bg-gray-800 border-l-2 border-l-violet-500' : 'border-l-2 border-l-transparent'
-      }`}
+      style={{
+        paddingLeft:  `${indent}px`,
+        background:   selected ? '#EBF2FA' : undefined,
+        borderLeft:   `2px solid ${selected ? '#1B4F8A' : 'transparent'}`,
+      }}
+      className="cursor-pointer border-b border-border pr-3 py-2.5 transition-colors hover:bg-primary/5"
     >
       <div className="flex items-center gap-1.5 mb-0.5">
-        {modified && <span className="text-yellow-400 text-xs font-bold shrink-0">●</span>}
-        <span className="text-xs font-semibold text-gray-100 font-mono truncate">
+        {modified && <span className="text-warning text-xs font-bold shrink-0">●</span>}
+        <span className="text-xs font-semibold text-secondary font-mono truncate">
           {skill.skill_id}
         </span>
       </div>
       <div className="flex items-center gap-2">
-        <span className={`text-xs ${typeColor}`}>{skill.classification?.type ?? '—'}</span>
-        <span className="text-xs text-gray-500">v{skill.version}</span>
+        <span className={`text-xs ${typeColor(skill.classification?.type)}`}>
+          {skill.classification?.type ?? '—'}
+        </span>
+        <span className="text-xs text-muted">v{skill.version}</span>
         {skill.status !== 'active' && (
-          <span className="text-xs text-gray-500">{skill.status}</span>
+          <span className="text-xs text-muted">{skill.status}</span>
         )}
       </div>
     </div>
@@ -291,11 +298,11 @@ function FolderItem({
       <div
         onClick={() => onToggle(node.path)}
         style={{ paddingLeft: `${baseIndent}px` }}
-        className="flex items-center gap-1.5 pr-3 py-1.5 cursor-pointer hover:bg-gray-800/40 border-b border-gray-800/30"
+        className="flex items-center gap-1.5 pr-3 py-1.5 cursor-pointer hover:bg-surface-muted border-b border-border/50"
       >
-        <span className="text-gray-600 text-[10px] w-3 shrink-0">{isOpen ? '▾' : '▸'}</span>
-        <span className="text-xs text-gray-400 font-medium truncate">{node.label}</span>
-        <span className="ml-auto text-[10px] text-gray-600">{folderTotal(node)}</span>
+        <span className="text-muted-light text-[10px] w-3 shrink-0">{isOpen ? '▾' : '▸'}</span>
+        <span className="text-xs text-muted font-medium truncate">{node.label}</span>
+        <span className="ml-auto text-[10px] text-muted-light">{folderTotal(node)}</span>
       </div>
 
       {isOpen && (
@@ -343,18 +350,19 @@ function RootGroupSection({
   onToggleFolder:  (path: string) => void
   onSelect:        (skillId: string) => void
 }) {
+  const { t } = useTranslation('agentFlow')
+
   return (
     <div>
-      {/* Root header */}
       <div
         onClick={() => onToggleRoot(group.key)}
-        className="flex items-center gap-1.5 px-3 py-2 cursor-pointer hover:bg-gray-800/40 border-b border-gray-800 sticky top-0 bg-gray-900 z-10"
+        className="flex items-center gap-1.5 px-3 py-2 cursor-pointer hover:bg-surface-muted border-b border-border sticky top-0 bg-white z-10"
       >
-        <span className="text-gray-500 text-[10px] w-3 shrink-0">{isExpanded ? '▾' : '▸'}</span>
-        <span className="text-[11px] font-bold text-gray-300 uppercase tracking-wider">
-          {group.label}
+        <span className="text-muted text-[10px] w-3 shrink-0">{isExpanded ? '▾' : '▸'}</span>
+        <span className="text-xs font-bold text-dark uppercase tracking-wider">
+          {t(`editor.groups.${group.key}`)}
         </span>
-        <span className="ml-auto text-[10px] text-gray-600">{group.total}</span>
+        <span className="ml-auto text-[10px] text-muted-light">{group.total}</span>
       </div>
 
       {isExpanded && (
@@ -391,6 +399,7 @@ function RootGroupSection({
 
 const SkillFlowsPage: React.FC = () => {
   const { tenantId } = useAuth()
+  const { t } = useTranslation('agentFlow')
 
   // ── Skill list state ───────────────────────────────────────────────────────
   const [skills,      setSkills]      = useState<Skill[]>([])
@@ -445,7 +454,7 @@ const SkillFlowsPage: React.FC = () => {
   const [editorValue, setEditorValue] = useState(BLANK_TEMPLATE)
   const [savedValue,  setSavedValue]  = useState(BLANK_TEMPLATE)
   const [statusKind,  setStatusKind]  = useState<StatusKind>('idle')
-  const [statusMsg,   setStatusMsg]   = useState('Selecione uma skill ou crie uma nova')
+  const [statusMsg,   setStatusMsg]   = useState(() => t('editor.status.idle'))
   const [search,      setSearch]      = useState('')
   const [confirmDel,  setConfirmDel]  = useState(false)
 
@@ -455,7 +464,7 @@ const SkillFlowsPage: React.FC = () => {
   // ── Load skill ─────────────────────────────────────────────────────────────
   const loadSkill = useCallback(async (skillId: string) => {
     setStatusKind('loading')
-    setStatusMsg(`Carregando ${skillId}…`)
+    setStatusMsg(t('editor.status.loading', { id: skillId }))
     setConfirmDel(false)
     try {
       const data = await apiFetchRaw(`/v1/skills/${encodeURIComponent(skillId)}`, {
@@ -465,15 +474,15 @@ const SkillFlowsPage: React.FC = () => {
       setEditorValue(yamlText)
       setSavedValue(yamlText)
       setStatusKind('idle')
-      setStatusMsg(`Carregado: ${skillId}`)
+      setStatusMsg(t('editor.status.loaded', { id: skillId }))
     } catch (e: unknown) {
       setStatusKind('error')
-      setStatusMsg(e instanceof Error ? e.message : 'Falha ao carregar skill')
+      setStatusMsg(e instanceof Error ? e.message : t('editor.status.loadFailed'))
     }
-  }, [tenantId])
+  }, [tenantId, t])
 
   function selectSkill(skillId: string) {
-    if (isModified && !confirm('Descartar alterações não salvas?')) return
+    if (isModified && !confirm(t('editor.discardConfirm'))) return
     setSelectedId(skillId)
     void loadSkill(skillId)
   }
@@ -483,19 +492,19 @@ const SkillFlowsPage: React.FC = () => {
     const parseResult = yamlToJson(editorValue)
     if (!parseResult.ok) {
       setStatusKind('parse_error')
-      setStatusMsg(`Erro de YAML: ${parseResult.error}`)
+      setStatusMsg(t('editor.status.yamlError', { error: parseResult.error }))
       return
     }
     const payload  = parseResult.data
     const skillId  = (payload.skill_id as string | undefined) || selectedId
     if (!skillId) {
       setStatusKind('error')
-      setStatusMsg('skill_id é obrigatório no YAML.')
+      setStatusMsg(t('editor.status.requiredId'))
       return
     }
 
     setStatusKind('saving')
-    setStatusMsg(`Salvando ${skillId}…`)
+    setStatusMsg(t('editor.status.saving', { id: skillId }))
     try {
       await apiFetchRaw(`/v1/skills/${encodeURIComponent(skillId)}`, {
         method:  'PUT',
@@ -505,11 +514,11 @@ const SkillFlowsPage: React.FC = () => {
       setSavedValue(editorValue)
       setSelectedId(skillId)
       setStatusKind('saved')
-      setStatusMsg(`Salvo: ${skillId}`)
+      setStatusMsg(t('editor.status.saved', { id: skillId }))
       void refreshList()
     } catch (e: unknown) {
       setStatusKind('error')
-      setStatusMsg(e instanceof Error ? e.message : 'Erro ao salvar')
+      setStatusMsg(e instanceof Error ? e.message : t('editor.status.saveFailed'))
     }
   }
 
@@ -530,17 +539,17 @@ const SkillFlowsPage: React.FC = () => {
       setSavedValue(BLANK_TEMPLATE)
       setConfirmDel(false)
       setStatusKind('idle')
-      setStatusMsg('Skill removida')
+      setStatusMsg(t('editor.status.deleted'))
       void refreshList()
     } catch (e: unknown) {
       setStatusKind('error')
-      setStatusMsg(e instanceof Error ? e.message : 'Erro ao remover')
+      setStatusMsg(e instanceof Error ? e.message : t('editor.status.deleteFailed'))
     }
   }
 
   // ── Discard ────────────────────────────────────────────────────────────────
   function handleDiscard() {
-    if (!confirm('Descartar todas as alterações não salvas?')) return
+    if (!confirm(t('editor.discardAllConfirm'))) return
     if (selectedId) void loadSkill(selectedId)
   }
 
@@ -555,7 +564,9 @@ const SkillFlowsPage: React.FC = () => {
       setStatusMsg(result.error)
     } else if (statusKind === 'parse_error') {
       setStatusKind('idle')
-      setStatusMsg(selectedId ? `Editando: ${selectedId}` : 'Nova skill')
+      setStatusMsg(selectedId
+        ? t('editor.status.editing', { id: selectedId })
+        : t('editor.status.newSkillStatus'))
     }
   }
 
@@ -571,7 +582,7 @@ const SkillFlowsPage: React.FC = () => {
     return () => window.removeEventListener('keydown', onKeyDown)
   })
 
-  // ── Flat filtered list (for search mode) ──────────────────────────────────
+  // ── Flat filtered list (search mode) ──────────────────────────────────────
   const filteredSkills = skills.filter(s =>
     !search ||
     s.skill_id.toLowerCase().includes(search.toLowerCase()) ||
@@ -580,56 +591,55 @@ const SkillFlowsPage: React.FC = () => {
 
   // ── Render ─────────────────────────────────────────────────────────────────
   return (
-    <div className="flex flex-col h-full bg-gray-950 text-gray-100">
+    <div className="flex flex-col h-full bg-surface-muted text-dark">
 
       {/* ── Page header ─────────────────────────────────────────────────── */}
-      <div className="h-11 shrink-0 bg-gray-900 border-b border-gray-800 flex items-center px-4 gap-4">
-        <span className="text-sm font-bold text-gray-100">Skill Flow Editor</span>
+      <div className="h-11 shrink-0 bg-white border-b border-border flex items-center px-4 gap-4">
 
         {selectedId && (
-          <span className="text-xs text-gray-500 font-mono">
+          <span className="text-xs text-muted font-mono">
             {selectedId}
-            {isModified && <span className="text-yellow-400 ml-1">●</span>}
+            {isModified && <span className="text-warning ml-1">●</span>}
           </span>
         )}
 
         <div className="flex-1" />
 
         <div className="flex items-center gap-2 pr-2">
-          <span className="text-xs text-gray-600 hidden lg:block">⌘S para salvar</span>
+          <span className="text-xs text-muted-light hidden lg:block">{t('editor.saveShortcut')}</span>
 
           {isModified && (
             <button
               onClick={handleDiscard}
-              className="px-3 py-1 text-xs font-semibold rounded border border-gray-700 text-gray-400 hover:bg-gray-800 transition-colors"
+              className="px-3 py-1 text-xs font-semibold rounded border border-border text-muted hover:bg-surface-muted transition-colors"
             >
-              Descartar
+              {t('editor.discard')}
             </button>
           )}
 
           {confirmDel ? (
             <>
-              <span className="text-xs text-red-400">Remover {selectedId}?</span>
+              <span className="text-xs text-red">{t('editor.confirmDeletePrompt', { id: selectedId })}</span>
               <button
                 onClick={() => void handleDelete()}
-                className="px-3 py-1 text-xs font-bold rounded border border-red-700 bg-red-950 text-red-400 hover:bg-red-900 transition-colors"
+                className="px-3 py-1 text-xs font-bold rounded border border-red/30 bg-red-light text-red-text hover:opacity-90 transition-opacity"
               >
-                Confirmar
+                {t('editor.confirmDelete')}
               </button>
               <button
                 onClick={() => setConfirmDel(false)}
-                className="px-3 py-1 text-xs rounded border border-gray-700 text-gray-400 hover:bg-gray-800 transition-colors"
+                className="px-3 py-1 text-xs rounded border border-border text-muted hover:bg-surface-muted transition-colors"
               >
-                Cancelar
+                {t('editor.cancel')}
               </button>
             </>
           ) : (
             selectedId && (
               <button
                 onClick={() => setConfirmDel(true)}
-                className="px-3 py-1 text-xs font-semibold rounded border border-red-800/50 text-red-400 hover:bg-red-950 transition-colors"
+                className="px-3 py-1 text-xs font-semibold rounded border border-red/30 text-red hover:bg-red-light transition-colors"
               >
-                Remover
+                {t('editor.delete')}
               </button>
             )
           )}
@@ -637,9 +647,9 @@ const SkillFlowsPage: React.FC = () => {
           <button
             onClick={() => void handleSave()}
             disabled={statusKind === 'saving' || !isModified}
-            className="px-4 py-1 text-xs font-bold rounded border border-violet-600 bg-violet-950 text-violet-300 hover:bg-violet-900 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+            className="px-4 py-1 text-xs font-bold rounded bg-primary text-white hover:bg-primary/90 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
           >
-            {statusKind === 'saving' ? 'Salvando…' : '⌘S Salvar'}
+            {statusKind === 'saving' ? t('editor.saving') : t('editor.save')}
           </button>
         </div>
       </div>
@@ -648,15 +658,15 @@ const SkillFlowsPage: React.FC = () => {
       <div className="flex flex-1 overflow-hidden">
 
         {/* ── Left sidebar: skill tree ───────────────────────────────────── */}
-        <div className="w-64 shrink-0 bg-gray-900 border-r border-gray-800 flex flex-col overflow-hidden">
+        <div className="w-64 shrink-0 bg-white border-r border-border flex flex-col overflow-hidden">
 
           {/* Search */}
-          <div className="px-3 py-2.5 border-b border-gray-800 shrink-0">
+          <div className="px-3 py-2.5 border-b border-border shrink-0">
             <input
               value={search}
               onChange={e => setSearch(e.target.value)}
-              placeholder="Buscar skills…"
-              className="w-full px-2 py-1.5 text-xs border border-gray-700 rounded bg-gray-800 text-gray-200 focus:outline-none focus:border-violet-600 placeholder-gray-500"
+              placeholder={t('editor.search')}
+              className="w-full px-2.5 py-1.5 text-xs border border-border-strong rounded-md bg-white text-dark focus:outline-none focus:border-primary placeholder:text-muted"
             />
           </div>
 
@@ -672,7 +682,7 @@ const SkillFlowsPage: React.FC = () => {
             {search && (
               <>
                 {filteredSkills.length === 0 && (
-                  <p className="text-center text-xs text-gray-500 py-6">Nenhum resultado</p>
+                  <p className="text-center text-xs text-muted-light py-6">{t('editor.noResults')}</p>
                 )}
                 {filteredSkills.map(s => (
                   <SkillListItem
@@ -691,8 +701,8 @@ const SkillFlowsPage: React.FC = () => {
             {!search && (
               <>
                 {!listLoading && folderTree.length === 0 && (
-                  <p className="text-center text-xs text-gray-500 py-6">
-                    Nenhuma skill no registry
+                  <p className="text-center text-xs text-muted-light py-6">
+                    {t('editor.noRegistry')}
                   </p>
                 )}
                 {folderTree.map(group => (
@@ -713,31 +723,30 @@ const SkillFlowsPage: React.FC = () => {
           </div>
 
           {/* Footer: count */}
-          <div className="px-3 py-2 border-t border-gray-800 text-xs text-gray-600 shrink-0">
-            {skills.length} skill{skills.length !== 1 ? 's' : ''} no registry
+          <div className="px-3 py-2 border-t border-border text-xs text-muted-light shrink-0">
+            {t('editor.skillCount', { count: skills.length })}
           </div>
         </div>
 
         {/* ── Editor area ───────────────────────────────────────────────── */}
-        <div className="flex flex-col flex-1 overflow-hidden">
-          {/* Hint bar */}
-          <div className="h-7 shrink-0 bg-gray-950 border-b border-gray-800 flex items-center px-4 gap-3 text-xs text-gray-600">
+        <div className="relative flex flex-col flex-1 min-h-0 overflow-hidden">
+
+          {/* Hint bar — explicitly above Monaco via z-index (Monaco uses absolute layers) */}
+          <div className="relative z-10 h-7 shrink-0 bg-white border-b border-border flex items-center px-4 gap-3 text-xs text-muted">
             <span>YAML</span>
-            <span>·</span>
-            <span>⌘S para salvar</span>
-            <span>·</span>
-            <span className="hidden md:block">
-              Campos: skill_id · name · version · classification · folder · tools · flow
-            </span>
+            <span className="text-muted-light">·</span>
+            <span>{t('editor.saveShortcut')}</span>
+            <span className="text-muted-light">·</span>
+            <span className="hidden md:block">{t('editor.hintFields')}</span>
           </div>
 
-          {/* Monaco */}
-          <div className="flex-1 overflow-hidden">
+          {/* Monaco — light theme (vs), consistent with app light mode */}
+          <div className="relative flex-1 min-h-0 overflow-hidden bg-white">
             <Editor
               key={selectedId ?? '__new__'}
               height="100%"
               defaultLanguage="yaml"
-              theme="vs-dark"
+              theme="vs"
               value={editorValue}
               onChange={handleEditorChange}
               onMount={editor => { editorRef.current = editor }}

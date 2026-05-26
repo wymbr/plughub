@@ -1,5 +1,7 @@
 # Módulo: platform-ui (`packages/platform-ui/`)
 
+> Última atualização: 2026-05-25 · Estado: Arc 16
+
 > Shell unificado para operadores, supervisores e administradores da plataforma PlugHub
 > Runtime: React 18 + TypeScript · Vite · React Router v6 · Tailwind CSS
 > Porta de desenvolvimento: 5174
@@ -8,20 +10,24 @@
 
 ## O que é
 
-O `platform-ui` é o **shell administrativo centralizado** de PlugHub — a interface unificada onde operadores, supervisores e administradores gerenciam pools, agentes, configurações, workflows, campanhas e assistência em tempo real. Substitui e consolida os apps legados (`operator-console`, `agent-assist-ui`) em uma única aplicação com roteamento compartilhado, autenticação unificada e design system consistente.
+O `platform-ui` é o **shell único de PlugHub** — a aplicação onde operadores, supervisores, administradores, desenvolvedores e perfis de negócio operam toda a plataforma. Consolidou e substituiu os apps legados (`operator-console`, `agent-assist-ui`) em uma única SPA com roteamento compartilhado, autenticação unificada, design system consistente e controle de acesso ABAC.
 
-**Escopo:**
-- Monitoramento de sessões e sentimento (pools, filas, agentes)
-- Gestão de recursos (pools, tipos de agente, skills, instâncias)
-- Configuração de canais e credenciais
-- Orquestração de workflows e campanhas
-- Supervisor assistido por IA (co-pilot)
-- Relatórios e analytics em tempo real
+> **Invariante:** nunca criar um novo `packages/my-ui/` standalone — toda nova superfície de UI é um módulo dentro do `platform-ui`.
+
+**Escopo (estado atual — Arc 16):**
+- Console de orquestração humana / Agent Assist (operador dirige agentes AI como coparticipantes)
+- Monitoramento de sessões, agentes, pools, eventos e processos
+- Editor visual de Skill Flows + deploy lifecycle
+- Plataforma de avaliação de qualidade (Forms, Campaigns, Knowledge, Evaluations, Calibração, Curadoria)
+- Analytics em tempo real (Sessions/Agents/Events/Processes/Quality)
+- Gestão de recursos (pools, tipos de agente, skills, instâncias), canais, calendários, masking e billing
+- Gestão de usuários e Agent Groups
+- Auditoria LGPD (módulo de compliance/DPO)
 
 **Não é responsável por:**
-- Interação com o cliente (Agent Assist UI — app separada para agentes)
 - Execução de skills (Skill Flow Engine)
 - Lógica de roteamento (Routing Engine)
+- Inferência LLM (AI Gateway)
 
 ---
 
@@ -244,33 +250,35 @@ O componente `Shell` detecta a rota e alterna entre dois layouts:
 
 | Rota | Layout | Padding |
 |---|---|---|
-| `/` (home), `/config/*` (config), `/dashboards`, `/reports` | Padrão | `px-6 py-6` com scroll |
-| `/monitor`, `/workflows`, `/agent-assist`, `/skill-flows` | Full-bleed | `overflow-hidden`, sem padding |
+| `/` (home), `/config/*`, `/evaluation/*`, `/audit` | Padrão | `px-6 py-6` com scroll |
+| `/monitor`, `/agent-assist`, `/agent-flow/editor`, `/workflow/*` | Full-bleed | `overflow-hidden`, sem padding |
 
 **Adicionar rota full-bleed:**
 
 ```typescript
 // src/shell/Shell.tsx
-const FULL_BLEED_ROUTES = ['/monitor', '/agent-assist', '/config/platform', '/workflows', '/sua-nova-rota']
+const FULL_BLEED_ROUTES = ['/monitor', '/agent-assist', '/config/platform', '/agent-flow/editor', '/sua-nova-rota']
 ```
 
 ### Sidebar — Navegação
 
-`Sidebar.tsx` renderiza:
-1. Logo + nome do tenant
-2. Menu de módulos (links via `useNavigate()`)
-3. Setor de user (perfil + logout)
+`Sidebar.tsx` renderiza logo + nome do tenant, os grupos de navegação e o setor de usuário. A navegação é organizada em **grupos** (`navKey`), e cada item pode ter gates ABAC.
 
-**Adicionar item de menu:**
+| Grupo | Ícone | Itens (resumo) | Gate ABAC |
+|---|---|---|---|
+| Home | 🏠 | Dashboard inicial | — |
+| Console | 🖥️ | Console / Agent Assist | `contacts.operacao` |
+| Monitor | 📡 | Sessions / Agents / Pools / Events / Processes | — |
+| Fluxo | 🔄 | Editor / Deploy | `skill_flows.operacao` |
+| Avaliação | ✓ | Forms / Campaigns / Knowledge / Evaluations / Calibração / Curadoria | `evaluation.*` |
+| Analytics | 📊 | Sessions / Agents / Events / Processes / Quality | `visualizar` / `report` |
+| Configuração | ⚙️ | Dashboards / Recursos / Plataforma / Canais / Calendários / Masking / Billing / Groups / Acesso | — |
 
-```typescript
-// src/shell/Sidebar.tsx
-const menuItems = [
-  { label: 'Monitor', path: '/monitor', icon: 'Activity' },
-  { label: 'Workflows', path: '/workflows', icon: 'Zap' },
-  { label: 'Seu Novo Módulo', path: '/novo-modulo', icon: 'Star' }, // ← Novo
-]
-```
+Itens standalone fora dos grupos: **Auditoria LGPD** (🔍, gate ABAC `audit.sessions`).
+
+**Redirects legados:** `/workflows` → `/workflow/monitor`; `/skill-flows` → `/agent-flow/editor`; `/reports` → `/contacts?tab=analise`.
+
+Os identificadores técnicos (rotas, `navKey`, tab IDs) são sempre em inglês — apenas os labels exibidos passam por `t()`.
 
 ---
 
@@ -312,44 +320,57 @@ Wrapper que redireciona para `/login` se não autenticado:
 </ProtectedRoute>
 ```
 
-### RBAC (Role-Based Access Control)
+### RBAC — papéis
 
-Verificar permissões de um usuário:
+Cinco papéis: `operator` (Console + Contacts), `supervisor` (+ Avaliação + Reports), `admin` (+ Configuração + Skills), `developer` (+ DevTools), `business` (transversal, sem itens operacionais). Verificação simples via `session.roles`:
 
 ```typescript
 const { session } = useAuth()
-
 const isAdmin = session?.roles.includes('admin')
-const isSupervisor = session?.roles.includes('supervisor')
-
-return isAdmin ? <AdminPanel /> : <OperatorView />
 ```
+
+### ABAC — controle de acesso por módulo (`module_config`)
+
+Além dos papéis, a `platform-ui` aplica **ABAC** (attribute-based access control). O JWT carrega `module_config`: para cada módulo (`evaluation`, `contacts`, `billing`, `config`, `skill_flows`, `workflows`, `agent_assist`, `campaigns`, `audit`) e cada campo, um nível de acesso (`none | read_only | write_only | read_write`) + lista de `scope[]`.
+
+```typescript
+// PermissionChecker — avaliado localmente a partir do module_config do JWT
+const perms = usePermissions()           // ou makePermissions(session.moduleConfig)
+perms.can('config', 'channels', 'read_write')      // boolean
+perms.can('evaluation', 'revisar', 'read_only', 'pool_sac')  // com scope
+```
+
+**Gates de navegação:** itens do menu são filtrados por dois campos ABAC transversais:
+- `operacao` — libera Monitor / Editor / Calendar / Deploy / Agent Assist
+- `visualizar` — libera abas de Reports / Análise
+
+`accessible_pools` no JWT faz filtro de linha em analytics; `supervisedAgentTypes` (Arc 9) restringe as abas Agents/Instances do Monitor de forma transparente. Contas legacy sem `module_config` degradam graciosamente (acesso liberado). Defesa em profundidade: o backend repete as verificações nos endpoints sensíveis.
 
 ---
 
 ## Módulos Implementados
 
-| Rota | Módulo | Status | Descrição |
-|---|---|---|---|
-| `/` | Home | ✅ | Dashboard inicial com KPIs |
-| `/monitor` | Atendimento (Monitor) | ✅ | Heatmap de pools, sessões ativas, transcrição ao vivo |
-| `/config/recursos` | Config Recursos | ✅ | CRUD de Pools, Agent Types, Skills, Instâncias |
-| `/config/platform` | Config Plataforma | ✅ | Plataforma (namespaces), Canais (credenciais), Billing |
-| `/workflows` | Workflows | ✅ | Orquestração, histórico, campanhas de coleta |
+A `platform-ui` é um produto completo. Os módulos abaixo estão entregues e em produção.
 
----
-
-## Módulos Placeholder (Roadmap)
-
-| Rota | Módulo | Fase | Status |
-|---|---|---|---|
-| `/agent-assist` | Agent Assist | Arc 2 | 📋 Integração do agente humano com co-pilot IA |
-| `/dashboards` | Dashboards | Arc 3 | 📋 Analytics em tempo real (SSE) |
-| `/reports` | Reports | Arc 3 | 📋 Relatórios e BI |
-| `/skill-flows` | Skill Flows | Arc 2 | 📋 Editor visual de skills + depuração |
-| `/config/access` | Access Control | Arc 2 | 📋 RBAC e permissões por role |
-| `/developer` | Developer Tools | Arc 3 | 📋 Logs, trace de APIs, playground MCP |
-| `/business` | Business Analytics | Arc 3 | 📋 Métricas de negócio |
+| Rota | Módulo | Descrição |
+|---|---|---|
+| `/` | Home | Dashboard inicial com KPIs |
+| `/agent-assist` | Console / Agent Assist | Superfície de orquestração humana — operador dirige agentes AI como coparticipantes (Arc 11); painel de 4–5 abas, delegação de tarefa, especialistas |
+| `/monitor` | Monitor | Sessions / Agents / Pools / Events / Processes — heatmap, transcrição ao vivo |
+| `/agent-flow/editor`, `/workflow/deploy` | Fluxo | Editor visual de Skill Flows + deploy lifecycle (draft/published) |
+| `/evaluation/forms` | Avaliação — Forms | CRUD de formulários de avaliação |
+| `/evaluation/campaigns` | Avaliação — Campaigns | Campanhas de amostragem + KPIs |
+| `/evaluation/knowledge` | Avaliação — Knowledge | Base de conhecimento vetorial (RAG) |
+| `/evaluation/avaliacoes` | Avaliação — Evaluations | Tabela unificada de avaliações, drill-down, revisão/contestação por dimensão (Arc 13) |
+| `/evaluation/calibration` | Avaliação — Calibração | Calibration Dashboard — score do avaliador AI por skill version (Arc 13) |
+| `/evaluation/curadoria` | Avaliação — Curadoria | Fila de curadoria do feedback loop RAG (Arc 13) |
+| `/contacts?tab=analise` | Analytics | Sessions / Agents / Events / Processes / Quality (analytics-api `/reports/*`) |
+| `/config/recursos` | Config — Recursos | CRUD de Pools, Agent Types, Skills, Instâncias |
+| `/config/platform` | Config — Plataforma | Namespaces de configuração, canais, calendários, masking |
+| `/config/billing` | Config — Billing | Faturamento por capacidade (BillingPage, role admin) |
+| `/config/groups` | Config — Groups | Agent Groups (Arc 9) — organograma + supervisores + turnos |
+| `/config/access` | Config — Acesso | Gestão de usuários + permissões ABAC (`module_config`) |
+| `/audit` | Auditoria LGPD | Módulo de compliance/DPO — Sessions + MCP Calls (ABAC `audit.*`) |
 
 ---
 

@@ -187,8 +187,8 @@ steps:
 
   - id: finalizar_falha
     type: complete
-    outcome: abandoned
+    outcome: failed
 
   - id: encerrar_timeout
     type: complete
-    outcome: abandoned
+    outcome: failed

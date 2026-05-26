@@ -1,5 +1,7 @@
 # Módulo: ai-gateway (@plughub/ai-gateway)
 
+> Última atualização: 2026-05-25 · Estado: Arc 16
+
 > Pacote: `ai-gateway` (serviço)
 > Runtime: Python 3.11+ · FastAPI · Anthropic SDK
 > Spec de referência: seção 2 (AI Gateway)
@@ -26,16 +28,17 @@ O `ai-gateway` é o **ponto único de acesso a LLMs** na plataforma. Nenhum comp
 ## Estrutura do Pacote
 
 ```
-ai-gateway/src/plughib-ai-gateway/
-  main.py         ← FastAPI app, rotas HTTP
-  gateway.py      ← AIGateway — engine legada (/v1/turn)
-  inference.py    ← InferenceEngine — engine nova (/inference)
-  reason.py       ← ReasonEngine — step reason do Skill Flow
-  context.py      ← Extração de parâmetros e flags semânticas
-  cache.py        ← SemanticCache — SHA-256 + Redis
-  rate_limit.py   ← RateLimiter — janela deslizante por tenant/agente
-  models.py       ← Modelos Pydantic (contratos de entrada/saída)
-  config.py       ← Configuração via variáveis de ambiente
+ai-gateway/src/plughub_ai_gateway/
+  main.py             ← FastAPI app, rotas HTTP
+  gateway.py          ← AIGateway — engine legada (/v1/turn)
+  inference.py        ← InferenceEngine — engine nova (/inference)
+  reason.py           ← ReasonEngine — step reason do Skill Flow
+  context.py          ← Extração de parâmetros e flags semânticas
+  cache.py            ← SemanticCache — SHA-256 + Redis
+  rate_limit.py       ← RateLimiter — janela deslizante por tenant/agente
+  account_selector.py ← AccountSelector — rotação multi-conta, throttle, fallback
+  models.py           ← Modelos Pydantic (contratos de entrada/saída)
+  config.py           ← Configuração via variáveis de ambiente
 ```
 
 ---
@@ -215,15 +218,51 @@ Se o JSON for inválido ou não conformar ao schema, o Skill Flow retenta até `
 
 O `model_profile` determina qual modelo LLM é usado para cada chamada:
 
-| Profile | Uso típico |
-|---|---|
-| `fast` | Steps de baixa complexidade, alta frequência |
-| `balanced` | Atendimento padrão — equilíbrio custo/qualidade |
-| `powerful` | Raciocínio complexo, step `reason` com schemas elaborados |
+| Profile | Modelo primário → fallback | Uso típico |
+|---|---|---|
+| `realtime` | Sonnet → gpt-4o | Turno de conversa em tempo real — latência sensível |
+| `balanced` | Haiku → gpt-4o-mini | Steps de fluxo, raciocínio padrão — equilíbrio custo/qualidade |
+| `evaluation` | Haiku | Avaliação de qualidade — isolado do caminho realtime |
 
 > **Invariante**: o `model_profile` nunca é hardcoded no código — é sempre lido da configuração. Trocar de modelo é mudança de config, não de código.
 
-O mapeamento `profile → modelo` e o fallback por profile são definidos em `config.py` via variáveis de ambiente.
+O mapeamento `profile → modelo` e o fallback por profile são definidos em `config.py` via variáveis de ambiente. O profile `evaluation` é deliberadamente isolado do `realtime` para que a carga de avaliação nunca compita com o atendimento ao vivo; é configurável via Config API namespace `ai_gateway` (chave `evaluation_model`).
+
+---
+
+## Multi-Account Rotation (`account_selector.py`)
+
+Quando há múltiplas chaves de API configuradas, o `AccountSelector` distribui as chamadas entre contas para maximizar throughput e absorver throttling de providers. É **Redis-backed e stateless por chamada** — nenhuma afinidade de conta é mantida em memória.
+
+### Algoritmo de seleção
+
+```
+Para cada conta candidata:
+  1. Verifica chave de throttle: ai_gw:{provider}:{key_id}:throttled
+     └── presente → conta descartada
+  2. score = rpm_used/rpm_limit × 0.7 + tpm_used/tpm_limit × 0.3
+Seleciona a conta de menor score (menos saturada)
+```
+
+### Throttling e fallback
+
+```
+Resposta 429 / 529 do provider
+  → mark_throttled(provider, key_id)   (TTL = throttle_retry_after_s)
+  → retry na próxima conta do mesmo provider
+  → contas do provider esgotadas → fallback cross-provider (FallbackConfig)
+```
+
+### Configuração
+
+| Variável / chave | Efeito |
+|---|---|
+| `PLUGHUB_ANTHROPIC_API_KEYS=sk-1,sk-2,sk-3` | Lista de chaves Anthropic — múltiplas chaves ativam o `AccountSelector` |
+| `PLUGHUB_OPENAI_API_KEYS` | Chaves OpenAI — fallback cross-provider opcional |
+| `ai_gateway.account_rotation_enabled` | Liga/desliga a rotação (Config API) |
+| `ai_gateway.throttle_retry_after_s` | TTL da chave de throttle |
+
+Com uma única chave, o `AccountSelector` não é acionado — comportamento single-account retrocompatível.
 
 ---
 
@@ -237,7 +276,7 @@ TurnRequest {
   tenant_id:        str
   agent_type_id:    str
   context_package:  ContextPackage
-  model_profile:    "fast" | "balanced" | "powerful"
+  model_profile:    "realtime" | "balanced" | "evaluation"
 }
 
 TurnResponse {
@@ -257,7 +296,9 @@ InferenceRequest {
   agent_type_id:    str
   messages:         list[Message]   # histórico normalizado
   system_prompt:    str
-  model_profile:    "fast" | "balanced" | "powerful"
+  model_profile:    "realtime" | "balanced" | "evaluation"
+  journey_id:       str | None = None   # Arc 16 — injeta bloco @ctx.journey.* no system prompt
+  permissions:      list[str] = []      # filtra a lista de tools antes de enviar ao LLM
 }
 
 InferenceResponse {
@@ -296,7 +337,7 @@ ReasonRequest {
   prompt_id:     str
   input:         dict             # snapshot do pipeline_state
   output_schema: dict             # JSON Schema
-  model_profile: "fast" | "balanced" | "powerful"
+  model_profile: "realtime" | "balanced" | "evaluation"
   attempt:       int              # 0 = primeira tentativa
 }
 

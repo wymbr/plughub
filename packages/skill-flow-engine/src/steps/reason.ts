@@ -53,6 +53,7 @@ export async function executeReason(
             validated.data,
             `ai_inferred:${step.id}`,
             ctx.segmentId,
+            ctx.journeyId,
           )
         }
 

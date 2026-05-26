@@ -7,6 +7,7 @@
  */
 import React, { useCallback, useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
+import { Radio } from 'lucide-react'
 import { useAuth } from '@/auth/useAuth'
 import Spinner from '@/components/ui/Spinner'
 import type { AgentInstance } from '@/types'
@@ -115,7 +116,7 @@ export default function AgentFlowMonitorPage() {
       {/* Top bar */}
       <div style={topBar}>
         <div>
-          <span style={{ fontWeight: 700, fontSize: 17, color: '#e2e8f0' }}>📡 {t('monitor.title')}</span>
+          <span style={{ fontWeight: 700, fontSize: 17, color: '#e2e8f0', display: 'inline-flex', alignItems: 'center', gap: 6 }}><Radio size={16} aria-hidden="true" />{t('monitor.title')}</span>
           <span style={{ marginLeft: 10, fontSize: 12, color: '#64748b' }}>
             {loading ? '⟳' : t('monitor.instanceCount', { count: instances.length })}
           </span>

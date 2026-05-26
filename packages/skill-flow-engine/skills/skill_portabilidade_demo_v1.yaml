@@ -21,6 +21,7 @@ steps:
     type: notify
     message: "🔄 Processo de portabilidade iniciado. Coletando seus dados de cadastro..."
     on_success: solicitar_operadora
+    on_failure: solicitar_operadora
 
   - id: solicitar_operadora
     type: suspend
@@ -47,9 +48,13 @@ steps:
 
   - id: aguardar_confirmacao
     type: collect
+    target:
+      type: customer
+      id: "@ctx.journey.customer_id"
     requires: [text]
-    message: "✅ Portabilidade do número @ctx.journey.numero_atual para @ctx.journey.operadora_destino foi pré-aprovada! Confirme para prosseguir com a transferência."
+    prompt: "✅ Portabilidade do número {{@ctx.journey.numero_atual}} para {{@ctx.journey.operadora_destino}} foi pré-aprovada! Confirme para prosseguir com a transferência."
     timeout_hours: 24
+    output_as: confirmacao_portabilidade
     on_response:
       next: confirmar_portabilidade
     on_timeout:
@@ -59,26 +64,31 @@ steps:
     type: notify
     message: "🎉 Portabilidade confirmada! Em até 1 dia útil o número estará ativo na nova operadora."
     on_success: encerrar_sucesso
+    on_failure: encerrar_sucesso
 
   - id: notificar_aprovado
     type: notify
     message: "✅ Portabilidade aprovada pela operadora. Aguardando confirmação do cliente."
     on_success: aguardar_confirmacao
+    on_failure: aguardar_confirmacao
 
   - id: notificar_rejeitado
     type: notify
     message: "❌ Portabilidade não aprovada pela operadora. Entre em contato para mais informações."
     on_success: encerrar_rejeitado
+    on_failure: encerrar_rejeitado
 
   - id: timeout_operadora
     type: notify
     message: "⏳ Prazo da operadora excedido. Reabrindo processo automaticamente."
     on_success: encerrar_timeout
+    on_failure: encerrar_timeout
 
   - id: timeout_cliente
     type: notify
     message: "⏳ Confirmação não recebida. Processo encerrado por inatividade."
     on_success: encerrar_timeout
+    on_failure: encerrar_timeout
 
   - id: encerrar_sucesso
     type: complete
@@ -90,4 +100,4 @@ steps:
 
   - id: encerrar_timeout
     type: complete
-    outcome: abandoned
+    outcome: failed

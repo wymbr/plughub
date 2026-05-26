@@ -1,14 +1,15 @@
 // ─── Pool snapshot (from GET /dashboard/operational SSE) ─────────────────────
 
 export interface PoolSnapshot {
-  pool_id:       string
-  tenant_id:     string
-  available:     number
-  busy?:         number   // present from routing-engine v2+; absent in older snapshots
-  queue_length:  number
-  sla_target_ms: number
-  channel_types: string[]
-  updated_at:    string
+  pool_id:          string
+  tenant_id:        string
+  available:        number
+  busy?:            number   // present from routing-engine v2+; absent in older snapshots
+  total_instances?: number   // present from routing-engine v3+; all instances regardless of state
+  queue_length:     number
+  sla_target_ms:    number
+  channel_types:    string[]
+  updated_at:       string
 }
 
 // ─── Sentiment live (from GET /dashboard/sentiment) ──────────────────────────
@@ -28,20 +29,36 @@ export interface SentimentEntry {
   updated_at:       string | null
 }
 
+// ─── Per-pool SLA performance (from GET /dashboard/pool-sla) ─────────────────
+
+export interface PoolSlaEntry {
+  pool_id:            string
+  avg_wait_ms:        number | null   // average queue wait time last 1h
+  p90_wait_ms:        number | null   // 90th percentile wait time last 1h
+  sla_compliance_pct: number | null   // % sessions served within sla_target_ms
+  sessions_count:     number          // sample size; 0 = no data yet
+}
+
 // ─── Merged pool view ─────────────────────────────────────────────────────────
 
 export interface PoolView {
-  pool_id:         string
-  tenant_id:       string
-  available:       number
-  busy:            number
-  queue_length:    number
-  sla_target_ms:   number
-  channel_types:   string[]
-  updated_at:      string
-  avg_score:       number | null
-  sentiment_count: number
-  distribution:    SentimentEntry['distribution'] | null
+  pool_id:            string
+  tenant_id:          string
+  available:          number
+  busy:               number
+  total_instances:    number | null  // null when routing-engine hasn't sent the field yet
+  queue_length:       number
+  sla_target_ms:      number
+  channel_types:      string[]
+  updated_at:         string
+  avg_score:          number | null
+  sentiment_count:    number
+  distribution:       SentimentEntry['distribution'] | null
+  // SLA performance (from /dashboard/pool-sla, polled every 60s)
+  avg_wait_ms:        number | null
+  p90_wait_ms:        number | null
+  sla_compliance_pct: number | null
+  sla_sessions_count: number
 }
 
 // ─── 24h metrics ──────────────────────────────────────────────────────────────

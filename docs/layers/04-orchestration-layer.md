@@ -1,5 +1,6 @@
 # Layer 4 — Orchestration Layer
 
+> Última atualização: 2026-05-25 · Estado: Arc 16
 > Spec de referência: v24.0 seções 3.2, 3.3, 4.7, 9.5
 > Responsabilidade: tomada de decisão da plataforma — alocação de agentes, interpretação de Skill Flow, monitoramento e escalação, acesso a modelos LLM
 > Implementado por: `routing-engine`, `rules-engine`, `skill-flow-engine`, `ai-gateway`
@@ -45,11 +46,12 @@ O Routing Engine é o único componente autorizado a rotear conversas. Nenhum ou
 
 ### Skill Flow Engine (`skill-flow-engine`, TypeScript)
 
-- Interpreta flows declarativos em JSON (9 tipos de step: task, choice, catch, escalate, complete, invoke, reason, notify, menu)
+- Interpreta flows declarativos em JSON — **14 tipos de step**: `task`, `choice`, `catch`, `escalate`, `complete`, `invoke`, `reason`, `notify`, `menu`, `suspend`, `collect`, `resolve`, `begin_transaction`/`end_transaction`, `receive`
 - Persiste `pipeline_state` no Redis a cada transição de step — nunca em memória apenas
 - Delega sub-tarefas a agentes via A2A (step `task`) passando pelo Routing Engine
 - Chama MCP tools diretamente (step `invoke`) e AI Gateway (step `reason`)
-- Coordena `notify` e `menu` via Notification Agent e Channel Gateway
+- Coordena `menu` (captura de input do cliente) via Channel Gateway. O step `notify` está **depreciado no Arc 16** — substituído por `invoke: notification_send` (Core → Channel Gateway); o sub-campo `notify` em `suspend` é preservado por atomicidade
+- Resolve referências `@ctx.*` em inputs de step, condições de `choice` e arrays de visibilidade via ContextStore; `@ctx.journey.*` lê do hash de Journey compartilhado
 - Retomada automática após interrupção — estado persistido garante continuidade
 
 ### AI Gateway (`ai-gateway`, Python)
@@ -78,8 +80,9 @@ O Routing Engine é o único componente autorizado a rotear conversas. Nenhum ou
 
 **Skill Flow Engine:**
 - Entrada: `conversations.routed` (Kafka) — evento de alocação com flow a executar
-- Saída: delegações A2A ao Routing Engine, chamadas a MCP, AI Gateway, Notification Agent
+- Saída: delegações A2A ao Routing Engine, chamadas a MCP, AI Gateway
 - Lê/escreve: `pipeline:{tenant_id}:pipeline:{session_id}` (Redis, TTL 24h)
+- Lê/escreve: ContextStore (`{tenant_id}:ctx:{session_id}` e `{tenant_id}:ctx:journey:{journey_id}`) — resolução `@ctx.*` e `context_tags.outputs`
 
 **AI Gateway:**
 - Entrada: HTTP POST `/inference`, `/v1/turn`, `/v1/reason`
@@ -104,9 +107,10 @@ conversations.inbound (Kafka)
                     ↓ Rules Engine avalia regras
                     ↓ rules.escalation.events → Escalation Engine
                       ↓ Routing Engine redireciona conversa
-  step notify → Notification Agent
+  step invoke: notification_send → Core → Channel Gateway (substitui notify, depreciado no Arc 16)
   step menu → Channel Gateway (coleta) → resultado normalizado
-  step complete → agent_done → conversations.events (Kafka)
+  step collect → workflow-api → Channel Gateway (contato em canal externo)
+  step complete → agent_done → agent.done (Kafka)
 ```
 
 ---
@@ -125,6 +129,26 @@ conversations.inbound (Kafka)
 
 ---
 
+## ContextStore — resolução progressiva de contexto
+
+O ContextStore é um hash Redis (`{tenant_id}:ctx:{session_id}`) que acumula fatos da sessão como `ContextEntry` (`{value, confidence, source, visibility, updated_at}`). Namespaces de tag: `caller.*`, `session.*`, `account.*`, `segment.{segId}.*` (isolado por agente). Referências `@ctx.*` resolvem em inputs de step, condições de `choice` e arrays de visibilidade. O step `resolve` faz acumulação inline em pipeline de 5 fases (gap check → CRM → pergunta LLM → BLPOP → extração LLM).
+
+O Arc 16 introduziu o **namespace de Journey** — `{tenant_id}:ctx:journey:{journey_id}`, um hash compartilhado por todas as sessões de uma mesma Journey. `@ctx.journey.*` lê deste hash; `context_tags.outputs` com prefixo `journey.*` redireciona a escrita para ele. TTL 30 dias, removido no fechamento da Journey.
+
+---
+
+## Orquestração em três camadas (Arc 16)
+
+O Arc 16 formaliza o modelo de orquestração em três tiers:
+
+- **Tier 1 — Business Workflow:** processo de negócio de longa duração, channel-agnostic, escopo de Journey. Delega via `task`/`collect + skill` para o Tier 2; nunca conhece o canal.
+- **Tier 2 — Execution Workflow:** Skill Flow de escopo de sessão, sequencia agentes. Usa `task` para invocar o Tier 3.
+- **Tier 3 — Interaction Agent:** I/O atômico, uma tarefa, reutilizável. Nunca conhece o processo.
+
+O step `collect` aceita `requires: [file_upload | audio | video | text | masked_input | rich_menu]` em vez de `channel` explícito — o Channel Gateway negocia o canal outbound pela matriz de capacidades.
+
+---
+
 ## Referência spec
 
 - Seção 3.2 — Rules Engine (Motor de Regras)
@@ -132,7 +156,7 @@ conversations.inbound (Kafka)
 - Seção 4.7 — Skill Flow e Skill Registry
 - Seção 9.5 — Protocolo A2A
 - Seção 2.2a — AI Gateway
-- [modulos/routing-engine.md](../modulos/routing-engine.md)
-- [modulos/rules-engine.md](../modulos/rules-engine.md)
-- [modulos/skill-flow-engine.md](../modulos/skill-flow-engine.md)
-- [modulos/ai-gateway.md](../modulos/ai-gateway.md)
+- [pacotes/routing-engine.md](../pacotes/routing-engine.md)
+- [pacotes/rules-engine.md](../pacotes/rules-engine.md)
+- [pacotes/skill-flow-engine.md](../pacotes/skill-flow-engine.md)
+- [pacotes/ai-gateway.md](../pacotes/ai-gateway.md)

@@ -42,6 +42,11 @@ export {
   MaskingAccessPolicySchema,
   AuditRecordSchema,
   DEFAULT_MASKING_RULES,
+  // ContextStore field-level masking (dynamic rules — Arc 11 Fase D)
+  ContextMaskingTypeSchema,
+  ContextMaskingRuleSchema,
+  ContextMaskingConfigSchema,
+  DEFAULT_CONTEXT_MASKING_CONFIG,
 } from "./audit"
 
 export type {
@@ -53,6 +58,10 @@ export type {
   MaskedResult,
   MaskingAccessPolicy,
   AuditRecord,
+  // ContextStore field-level masking
+  ContextMaskingType,
+  ContextMaskingRule,
+  ContextMaskingConfig,
 } from "./audit"
 
 // ── v2: Mensagem ─────────────────────────────
@@ -299,6 +308,7 @@ export {
   ReasonStepSchema,
   NotifyStepSchema,
   MenuStepSchema,
+  ChannelCapabilitySchema,
   CollectTargetSchema,
   CollectStepSchema,
   BeginTransactionStepSchema,
@@ -493,7 +503,7 @@ export type {
   CollectEvent,
 } from "./workflow"
 
-// ── Journey (Arc 10) ─────────────────────────
+// ── Journey (Arc 10 + Arc 16) ────────────────
 export {
   JourneyStatusSchema,
   JourneySchema,
@@ -503,6 +513,15 @@ export {
   JourneyStartOutputSchema,
   JourneyLinkSessionInputSchema,
   JourneyMergeInputSchema,
+  JourneySplitInputSchema,
+  JourneySplitOutputSchema,
+  // Arc 16 — three-tier orchestration MCP tools
+  JourneyListSuspendedInputSchema,
+  JourneyListSuspendedOutputSchema,
+  JourneyResumeInputSchema,
+  JourneyResumeOutputSchema,
+  JourneyCheckPendingInputSchema,
+  JourneyCheckPendingOutputSchema,
 } from "./journey"
 
 export type {
@@ -514,6 +533,15 @@ export type {
   JourneyStartOutput,
   JourneyLinkSessionInput,
   JourneyMergeInput,
+  JourneySplitInput,
+  JourneySplitOutput,
+  // Arc 16
+  JourneyListSuspendedInput,
+  JourneyListSuspendedOutput,
+  JourneyResumeInput,
+  JourneyResumeOutput,
+  JourneyCheckPendingInput,
+  JourneyCheckPendingOutput,
 } from "./journey"
 
 // ── Agent Registry ───────────────────────────

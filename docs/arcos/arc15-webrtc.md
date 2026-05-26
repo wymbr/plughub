@@ -1,7 +1,8 @@
 # Arc 15 — Canal WebRTC com SFU Enterprise
 
+> Última atualização: 2026-05-25 · Estado: Arc 16 · Status: Fases A + B + C + D + E + F implementadas — Arc 15 completo
+
 **Versão:** 1.6 — 2026-05-20  
-**Status:** Fases A + B + C + D + E + F implementadas — Arc 15 completo  
 **Escopo:** `packages/channel-gateway/` · `packages/agent-registry/` · `packages/routing-engine/` · `packages/platform-ui/` · infraestrutura LiveKit
 
 ---

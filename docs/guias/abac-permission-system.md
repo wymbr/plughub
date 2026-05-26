@@ -1,7 +1,28 @@
 # Sistema ABAC — Guia de Implementação
 
+> Última atualização: 2026-05-25 · Estado: Arc 16
+
 > Complementa o RBAC (role-based access control) com permissões declarativas por módulo.
 > Avaliado localmente na UI via `makePermissions()` — zero latência extra no hot path.
+> Também validado no backend via `PermissionChecker` (Python) — defesa em profundidade.
+
+---
+
+## Módulos ABAC registrados
+
+São **9 módulos** declarados em `infra/modules.yaml` e carregados em `auth.module_registry`:
+
+| Módulo | Propósito |
+|---|---|
+| `evaluation` | Formulários, campanhas, revisão e contestação de avaliações |
+| `contacts` | Console de atendimento, monitor de sessões |
+| `billing` | Faturamento e gestão de planos |
+| `config` | Configuração da plataforma, recursos, usuários |
+| `skill_flows` | Editor e deploy de Skill Flows |
+| `workflows` | Workflows e Journeys (campos `journey.read`, `journey.resume`) |
+| `agent_assist` | Operação do Agent Assist / Console |
+| `campaigns` | Campanhas |
+| `audit` | Auditoria LGPD — DPO/compliance (campos `sessions`, `mcp_calls`, etc.) |
 
 ---
 
@@ -321,3 +342,31 @@ makePermissions(session.moduleConfig)
   → Sidebar: passesAbac()
   → Componentes: botões, estados de acesso
 ```
+
+---
+
+## Validação no backend — `PermissionChecker`
+
+A avaliação ABAC **não ocorre apenas no frontend**. O `makePermissions()` da UI
+oculta botões e itens de menu para UX, mas a decisão de autorização real é repetida
+no backend antes de qualquer ação sensível — defesa em profundidade (invariante 5).
+
+Os serviços Python (`auth-api`, `evaluation-api`, `analytics-api`, e o
+`mcp-server-plughub` via interceptação) usam o `PermissionChecker` para decodificar
+o `module_config` do JWT e verificar acesso:
+
+```python
+checker = PermissionChecker(module_config)
+checker.can("evaluation", "revisar")                 # access != "none"
+checker.can("workflows", "journey.resume", scope_id="pool_sac")
+```
+
+`PermissionChecker.can(module, field, min_access?, scope_id?)` aplica a mesma
+hierarquia (`none < read_only < write_only < read_write`) e o mesmo escopo por pool
+da implementação TypeScript. Exemplos em uso: `journey_list_suspended` /
+`journey_resume` (módulo `workflows`), endpoints `/v1/audit/*` em analytics-api
+(`_require_audit_access()` valida `audit.sessions` / `audit.mcp_calls`), e os
+fluxos de review/contestação na evaluation-api.
+
+A graceful degradation também vale no backend: JWT sem `module_config` (contas
+legadas) não é bloqueado pelo ABAC — apenas pelo RBAC.

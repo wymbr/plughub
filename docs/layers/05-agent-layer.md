@@ -1,5 +1,6 @@
 # Layer 5 — Agent Layer
 
+> Última atualização: 2026-05-25 · Estado: Arc 16
 > Spec de referência: v24.0 seções 4.2, 4.6, 4.7, 8.3, 3.2a
 > Responsabilidade: execução dos atendimentos — agentes IA especializados, agentes externos, agentes humanos assistidos pelo Agent Assist
 > Implementado por: `sdk`, GitAgents, agentes externos (LangGraph, CrewAI), interface de agente humano
@@ -20,13 +21,12 @@ Todos os agentes, independentemente da origem, **acessam sistemas de negócio ex
 
 ### Agentes IA nativos (GitAgents)
 
-Agentes versionados em repositório Git com estrutura padronizada. Lógica declarada em flow YAML convertido para JSON no registro. Usam o SDK (`@plughub/sdk` / `plughub-sdk` Python) com `PlugHubAdapter` em-processo para interceptação MCP.
+Agentes versionados em repositório Git com estrutura padronizada. Lógica declarada em flow YAML convertido para JSON no registro. Usam o SDK (`@plughub/sdk` / `plughub-sdk` Python) com `McpInterceptor` em-processo para interceptação MCP.
 
 Agentes nativos da plataforma que seguem o mesmo padrão:
 - **Orchestrator** — executa Skill Flows declarativos
-- **Notification Agent** — detecta e entrega pendências `outbound.*`
-- **Evaluation Agent** (Horizonte 2) — avalia qualidade de atendimentos
-- **Reviewer Agent** (Horizonte 2) — revisa avaliações sinalizadas
+- **Evaluation Agent** (`agente_avaliacao_v1`) — avalia qualidade de atendimentos (Arc 6, implementado)
+- **Reviewer Agent** (`agente_revisor_v1`, `agente_pre_revisor_v1`) — revisa e arbitra avaliações contestadas (Arc 13, implementado)
 
 ### Agentes IA externos
 
@@ -62,8 +62,8 @@ O `agent_done` exige:
 
 **Saída (agente produz):**
 - Respostas ao cliente via `conversations.outbound` (Kafka) — entregues pelo Channel Gateway
-- Chamadas a MCP tools (via SDK + PlugHubAdapter ou proxy sidecar)
-- `agent_done` — sinaliza conclusão, publica em `conversations.events`
+- Chamadas a MCP tools (via SDK + `McpInterceptor` ou proxy sidecar)
+- `agent_done` — sinaliza conclusão, publica em `agent.done`
 
 **Acesso a sistemas:**
 - **Somente via MCP Layer** — agentes nunca acessam backends diretamente
@@ -81,9 +81,9 @@ Routing Engine aloca agente → conversations.routed
     → chama MCP tools para ações de negócio
     → responde ao cliente
 ↓ Ciclo se repete até resolução
-↓ agent_done → conversations.events (Kafka)
+↓ agent_done → agent.done (Kafka)
    ↓ Routing Engine fecha alocação
-   ↓ Evaluation Agent avalia (Horizonte 2)
+   ↓ Evaluation Agent avalia (Arc 6 — pós-sessão via Session Replayer)
 ```
 
 **Conferência (Agent Assist + agente IA):**
@@ -105,9 +105,9 @@ Agente humano em atendimento
 
 **Canary deployment:** novos agentes entram com `traffic_weight: 0.10`, sobem gradualmente (0.10 → 0.20 → 0.50 → 1.00). Rollback por convenção `{base}_v{n-1}`.
 
-**Tipo arquitetural:** todo agente é declarado como `inbound`, `outbound` ou `notification` no Agent Registry. Determina quais pools pode integrar e quais sinais de conclusão são válidos.
+**Tipo arquitetural:** todo agente é declarado como `inbound` ou `outbound` no Agent Registry. Determina quais pools pode integrar e quais sinais de conclusão são válidos.
 
-**Isolação de MCP:** `PlugHubAdapter` (em-processo, nativo) ou proxy sidecar (`localhost:7422`, externo). Nenhuma chamada MCP chega ao domain MCP Server sem validação de permissão e registro de auditoria.
+**Isolação de MCP:** `McpInterceptor` (em-processo, nativo) ou proxy sidecar (`localhost:7422`, externo). Nenhuma chamada MCP chega ao domain MCP Server sem validação de permissão, injection guard e registro de auditoria.
 
 **Auto-scaling:** KEDA escala o pool de agentes IA com base em consumer lag dos tópicos Kafka. Dimensionado por demanda real, não por CPU.
 
@@ -116,10 +116,8 @@ Agente humano em atendimento
 ## Referência spec
 
 - Seção 4.2 — Contrato de Execução do Agente
-- Seção 4.6a–4.6j — SDK (PlugHubAdapter, proxy sidecar)
+- Seção 4.6a–4.6j — SDK (`McpInterceptor`, proxy sidecar)
 - Seção 4.7 — Skill Registry (GitAgent, flow YAML)
-- Seção 8.3 — Notification Agent
 - Seção 3.2a — Agent Assist / Supervisor
-- [modulos/sdk.md](../modulos/sdk.md)
-- [modulos/notification-agent.md](../modulos/notification-agent.md)
-- [modulos/agent-assist.md](../modulos/agent-assist.md)
+- [pacotes/sdk.md](../pacotes/sdk.md)
+- [arcos/platform-ui.md](../arcos/platform-ui.md) — Agent Assist UI

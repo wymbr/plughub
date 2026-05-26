@@ -861,14 +861,17 @@ def _fetch_workflow_summary(
         group_by = "flow_id"
 
     conditions = [
-        f"tenant_id = '{tenant_id}'",
-        f"timestamp >= '{since}'",
-        f"timestamp <= '{until}'",
+        "tenant_id = {tenant_id:String}",
+        "timestamp >= {since:String}",
+        "timestamp <= {until:String}",
     ]
+    params: dict = {"tenant_id": tenant_id, "since": since, "until": until}
     if flow_id:
-        conditions.append(f"flow_id = '{flow_id}'")
+        conditions.append("flow_id = {flow_id:String}")
+        params["flow_id"] = flow_id
     if campaign_id:
-        conditions.append(f"campaign_id = '{campaign_id}'")
+        conditions.append("campaign_id = {campaign_id:String}")
+        params["campaign_id"] = campaign_id
 
     where = " AND ".join(conditions)
 
@@ -894,7 +897,7 @@ def _fetch_workflow_summary(
         GROUP BY group_key
         ORDER BY total_triggered DESC
         LIMIT 500
-    """, parameters={})
+    """, parameters=params)
 
     rows = _rows_to_dicts(result)
 
@@ -1880,13 +1883,19 @@ def _events_sql_branches(
     event_type:       str | None,
     session_id:       str | None,
     accessible_pools: list[str] | None,
-) -> list[str]:
+) -> tuple[list[str], dict]:
     """
-    Builds the list of UNION ALL branch SQL strings.
+    Builds the list of UNION ALL branch SQL strings and a shared parameters dict.
+
+    All user-controlled values are passed as ClickHouse named parameters
+    ({ev_tid:String} etc.) — never interpolated into the SQL string.
 
     Optimisation: when event_type is specified, only branches that can
     produce that type are included.  When event_type is None, all branches
     are included.
+
+    Returns: (branches, params) where params must be passed to every query
+    that uses the assembled UNION ALL SQL.
     """
     include_session  = (not event_type) or event_type in _SESSION_TYPES
     include_messages = (not event_type) or event_type in _MESSAGE_TYPES
@@ -1895,16 +1904,26 @@ def _events_sql_branches(
     include_ready    = (not event_type) or event_type in _READY_TYPES
     include_workflow = (not event_type) or (event_type and event_type.startswith("workflow_"))
 
-    # accessible_pools filter snippet for tables that have pool_id
+    # Shared named params for all branches
+    params: dict = {
+        "ev_tid":   tenant_id,
+        "ev_since": since,
+        "ev_until": until,
+    }
+    if session_id:
+        params["ev_sid"] = session_id
+
+    # accessible_pools — server-controlled (from JWT), not user input.
+    # Still use an IN-list but the values come from verified JWT claims.
     pool_scope = ""
     if accessible_pools:
         pool_list = ", ".join(f"'{p}'" for p in accessible_pools)
         pool_scope = f" AND pool_id IN ({pool_list})"
 
-    # session_id filter inside subqueries
-    sid_filter_sess   = (f" AND session_id = '{session_id}'" if session_id else "")
-    sid_filter_msg    = (f" AND m.session_id = '{session_id}'" if session_id else "")
-    sid_filter_agent  = (f" AND ae.session_id = '{session_id}'" if session_id else "")
+    # session_id filter inside subqueries — parameterised
+    sid_filter_sess  = " AND session_id = {ev_sid:String}"    if session_id else ""
+    sid_filter_msg   = " AND m.session_id = {ev_sid:String}"  if session_id else ""
+    sid_filter_agent = " AND ae.session_id = {ev_sid:String}" if session_id else ""
 
     branches: list[str] = []
 
@@ -1923,8 +1942,8 @@ def _events_sql_branches(
         'system'                          AS author_role,
         {_NULL}                           AS content
     FROM {db}.sessions FINAL
-    WHERE tenant_id = '{tenant_id}'
-      AND opened_at >= '{since}' AND opened_at <= '{until}'
+    WHERE tenant_id = {{ev_tid:String}}
+      AND opened_at >= {{ev_since:String}} AND opened_at <= {{ev_until:String}}
       {pool_scope}{sid_filter_sess}""")
 
         # session_closed
@@ -1934,16 +1953,16 @@ def _events_sql_branches(
         session_id,
         tenant_id,
         'session_closed'                  AS type,
-        closed_at                         AS timestamp,
+        assumeNotNull(closed_at)          AS timestamp,
         channel,
         pool_id,
         {_NULL}                           AS author_id,
         'system'                          AS author_role,
         if(close_reason IS NOT NULL, close_reason, {_NULL}) AS content
     FROM {db}.sessions FINAL
-    WHERE tenant_id = '{tenant_id}'
+    WHERE tenant_id = {{ev_tid:String}}
       AND closed_at IS NOT NULL
-      AND closed_at >= '{since}' AND closed_at <= '{until}'
+      AND closed_at >= {{ev_since:String}} AND closed_at <= {{ev_until:String}}
       {pool_scope}{sid_filter_sess}""")
 
     if include_messages:
@@ -1967,10 +1986,10 @@ def _events_sql_branches(
     LEFT JOIN (
         SELECT session_id, pool_id
         FROM {db}.sessions FINAL
-        WHERE tenant_id = '{tenant_id}'{pool_join_filter}
+        WHERE tenant_id = {{ev_tid:String}}{pool_join_filter}
     ) s ON m.session_id = s.session_id
-    WHERE m.tenant_id = '{tenant_id}'
-      AND m.timestamp >= '{since}' AND m.timestamp <= '{until}'
+    WHERE m.tenant_id = {{ev_tid:String}}
+      AND m.timestamp >= {{ev_since:String}} AND m.timestamp <= {{ev_until:String}}
       AND m.visibility = 'all'{sid_filter_msg}""")
 
     if include_agent:
@@ -1990,10 +2009,10 @@ def _events_sql_branches(
     LEFT JOIN (
         SELECT session_id, channel
         FROM {db}.sessions FINAL
-        WHERE tenant_id = '{tenant_id}'
+        WHERE tenant_id = {{ev_tid:String}}
     ) s ON ae.session_id = s.session_id
-    WHERE ae.tenant_id = '{tenant_id}'
-      AND ae.timestamp >= '{since}' AND ae.timestamp <= '{until}'
+    WHERE ae.tenant_id = {{ev_tid:String}}
+      AND ae.timestamp >= {{ev_since:String}} AND ae.timestamp <= {{ev_until:String}}
       {pool_scope.replace('pool_id', 'ae.pool_id')}{sid_filter_agent}""")
 
     if include_pause:
@@ -2010,8 +2029,8 @@ def _events_sql_branches(
         agent_type_id                     AS author_role,
         reason_label                      AS content
     FROM {db}.agent_pause_intervals FINAL
-    WHERE tenant_id = '{tenant_id}'
-      AND paused_at >= '{since}' AND paused_at <= '{until}'
+    WHERE tenant_id = {{ev_tid:String}}
+      AND paused_at >= {{ev_since:String}} AND paused_at <= {{ev_until:String}}
       {pool_scope}""")
 
     if include_ready:
@@ -2021,16 +2040,16 @@ def _events_sql_branches(
         {_NULL}                           AS session_id,
         tenant_id,
         'agent_ready'                     AS type,
-        resumed_at                        AS timestamp,
+        assumeNotNull(resumed_at)         AS timestamp,
         {_NULL}                           AS channel,
         pool_id,
         instance_id                       AS author_id,
         agent_type_id                     AS author_role,
         reason_label                      AS content
     FROM {db}.agent_pause_intervals FINAL
-    WHERE tenant_id = '{tenant_id}'
+    WHERE tenant_id = {{ev_tid:String}}
       AND resumed_at IS NOT NULL
-      AND resumed_at >= '{since}' AND resumed_at <= '{until}'
+      AND resumed_at >= {{ev_since:String}} AND resumed_at <= {{ev_until:String}}
       {pool_scope}""")
 
     if include_workflow:
@@ -2039,8 +2058,8 @@ def _events_sql_branches(
         # If a specific workflow type is requested, strip the prefix for the inner filter.
         wf_type_filter = ""
         if event_type and event_type.startswith("workflow_"):
-            inner_type = event_type[len("workflow_"):]
-            wf_type_filter = f" AND event_type = '{inner_type}'"
+            params["ev_wf_type"] = event_type[len("workflow_"):]
+            wf_type_filter = " AND event_type = {ev_wf_type:String}"
         branches.append(f"""
     SELECT
         we.event_id,
@@ -2054,11 +2073,11 @@ def _events_sql_branches(
         'workflow'                        AS author_role,
         if(we.status IS NOT NULL, we.status, {_NULL}) AS content
     FROM {db}.workflow_events FINAL we
-    WHERE we.tenant_id = '{tenant_id}'
-      AND we.timestamp >= '{since}' AND we.timestamp <= '{until}'
+    WHERE we.tenant_id = {{ev_tid:String}}
+      AND we.timestamp >= {{ev_since:String}} AND we.timestamp <= {{ev_until:String}}
       {wf_type_filter}""")
 
-    return branches
+    return branches, params
 
 
 async def query_events(
@@ -2104,7 +2123,7 @@ def _fetch_events(
     accessible_pools: list[str] | None,
     page: int, page_size: int,
 ) -> dict:
-    branches = _events_sql_branches(
+    branches, params = _events_sql_branches(
         db, tenant_id, since, until, event_type, session_id, accessible_pools,
     )
     if not branches:
@@ -2112,16 +2131,20 @@ def _fetch_events(
 
     union_sql = "\n    UNION ALL\n".join(branches)
 
-    # Outer filters applied after UNION to let ClickHouse push them down
+    # Outer filters applied after UNION — all values are ClickHouse named params.
     outer_conditions: list[str] = []
     if event_type:
-        outer_conditions.append(f"type = '{event_type}'")
+        outer_conditions.append("type = {out_event_type:String}")
+        params["out_event_type"] = event_type
     if pool_id:
-        outer_conditions.append(f"pool_id = '{pool_id}'")
+        outer_conditions.append("pool_id = {out_pool_id:String}")
+        params["out_pool_id"] = pool_id
     if channel:
-        outer_conditions.append(f"channel = '{channel}'")
+        outer_conditions.append("channel = {out_channel:String}")
+        params["out_channel"] = channel
     if session_id:
-        outer_conditions.append(f"session_id = '{session_id}'")
+        outer_conditions.append("session_id = {out_sid:String}")
+        params["out_sid"] = session_id
 
     outer_where = ("WHERE " + " AND ".join(outer_conditions)) if outer_conditions else ""
     offset = (page - 1) * page_size
@@ -2131,7 +2154,7 @@ def _fetch_events(
         FROM ({union_sql}) AS events
         {outer_where}
     """
-    total = _count(client, count_sql, {})
+    total = _count(client, count_sql, params)
 
     data_sql = f"""
         SELECT event_id, session_id, tenant_id, type, timestamp,
@@ -2141,7 +2164,7 @@ def _fetch_events(
         ORDER BY timestamp DESC
         LIMIT {page_size} OFFSET {offset}
     """
-    result = client.query(data_sql, parameters={})
+    result = client.query(data_sql, parameters=params)
     return {"data": _rows_to_dicts(result), "meta": _meta(page, page_size, total, since, until)}
 
 
@@ -2598,4 +2621,147 @@ def _fetch_agent_events_categories(
     return {
         "data": _rows_to_dicts(result),
         "meta": {"from_dt": since, "to_dt": until, "pool_id": pool_id, "skill_id": skill_id},
+    }
+
+
+# ─── /reports/evaluator-calibration (Arc 13) ─────────────────────────────────
+
+async def query_evaluator_calibration(
+    client:    Any,
+    database:  str,
+    tenant_id: str,
+    from_dt:   str | None = None,
+    to_dt:     str | None = None,
+    *,
+    campaign_id:  str | None = None,
+    evaluator_id: str | None = None,
+    skill_version: str | None = None,
+    granularity:   str = "day",   # "day" | "week"
+) -> dict:
+    """
+    Calibration score time-series per skill version × time.
+
+    calibration_score = approved_count / total_reviewed × 100
+
+    Returns:
+      data:    list of {period, skill_version, evaluator_id, total, approved,
+                        recalibrated, bias_flagged, calibration_score}
+      summary: {total, approved, recalibrated, bias_flagged, calibration_score}
+      meta:    {from_dt, to_dt, campaign_id, evaluator_id, granularity}
+    """
+    since = _ch_fmt(from_dt) if from_dt else _default_from()
+    until = _ch_fmt(to_dt)   if to_dt   else _default_to()
+    try:
+        return await asyncio.to_thread(
+            _fetch_evaluator_calibration,
+            client, database, tenant_id, since, until,
+            campaign_id, evaluator_id, skill_version, granularity,
+        )
+    except Exception as exc:
+        logger.warning("query_evaluator_calibration failed tenant=%s: %s", tenant_id, exc)
+        return {
+            "data": [],
+            "summary": {"total": 0, "approved": 0, "recalibrated": 0, "bias_flagged": 0, "calibration_score": None},
+            "meta": {"from_dt": since, "to_dt": until, "campaign_id": campaign_id, "granularity": granularity},
+            "error": "data_unavailable",
+        }
+
+
+def _fetch_evaluator_calibration(
+    client:       Any,
+    db:           str,
+    tenant_id:    str,
+    since:        str,
+    until:        str,
+    campaign_id:  str | None,
+    evaluator_id: str | None,
+    skill_version: str | None,
+    granularity:  str,
+) -> dict:
+    conditions = [
+        "tenant_id = {tenant_id:String}",
+        f"event_time >= '{since}'",
+        f"event_time < '{until}'",
+    ]
+    params: dict = {"tenant_id": tenant_id}
+
+    if campaign_id:
+        conditions.append("campaign_id = {campaign_id:String}")
+        params["campaign_id"] = campaign_id
+    if evaluator_id:
+        conditions.append("evaluator_id = {evaluator_id:String}")
+        params["evaluator_id"] = evaluator_id
+    if skill_version:
+        conditions.append("skill_version = {skill_version:String}")
+        params["skill_version"] = skill_version
+
+    where = " AND ".join(conditions)
+
+    # Period truncation expression per granularity
+    if granularity == "week":
+        period_expr = "toMonday(event_time)"
+    else:  # day (default)
+        period_expr = "toDate(event_time)"
+
+    # Time-series: group by (period, skill_version, evaluator_id)
+    ts_result = client.query(f"""
+        SELECT
+            {period_expr}                                                         AS period,
+            skill_version,
+            evaluator_id,
+            count()                                                               AS total,
+            countIf(decision = 'approved')                                        AS approved,
+            countIf(decision = 'recalibrated')                                    AS recalibrated,
+            countIf(decision = 'bias_flagged')                                    AS bias_flagged,
+            round(
+                if(count() > 0, countIf(decision = 'approved') * 100.0 / count(), null),
+                2
+            )                                                                     AS calibration_score
+        FROM {db}.calibration_events FINAL
+        WHERE {where}
+        GROUP BY period, skill_version, evaluator_id
+        ORDER BY period ASC, skill_version ASC
+    """, parameters=params)
+
+    rows = _rows_to_dicts(ts_result)
+
+    # Aggregate summary across the whole period
+    agg_result = client.query(f"""
+        SELECT
+            count()                               AS total,
+            countIf(decision = 'approved')        AS approved,
+            countIf(decision = 'recalibrated')    AS recalibrated,
+            countIf(decision = 'bias_flagged')    AS bias_flagged,
+            round(
+                if(count() > 0,
+                   countIf(decision = 'approved') * 100.0 / count(),
+                   null),
+                2
+            )                                     AS calibration_score
+        FROM {db}.calibration_events FINAL
+        WHERE {where}
+    """, parameters=params)
+
+    agg_rows = _rows_to_dicts(agg_result)
+    summary  = agg_rows[0] if agg_rows else {
+        "total": 0, "approved": 0, "recalibrated": 0, "bias_flagged": 0, "calibration_score": None,
+    }
+
+    # Normalise period to ISO string for JSON serialisation
+    for row in rows:
+        p = row.get("period")
+        if p is not None and not isinstance(p, str):
+            row["period"] = str(p)
+
+    return {
+        "data":    rows,
+        "summary": summary,
+        "meta": {
+            "from_dt":      since,
+            "to_dt":        until,
+            "campaign_id":  campaign_id,
+            "evaluator_id": evaluator_id,
+            "skill_version": skill_version,
+            "granularity":  granularity,
+        },
     }

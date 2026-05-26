@@ -225,6 +225,96 @@ poolsRouter.get("/:pool_id/mentionable-agents", async (req: Request, res: Respon
 })
 
 // ─────────────────────────────────────────────
+// GET /v1/pools/:pool_id/mentionable-processes
+// Returns Journey-starting skills available for manual invocation in this pool,
+// derived from pool.mentionable_journeys: Record<alias, skill_id>.
+//
+// Response:
+//   { processes: MentionableProcess[] }
+//
+// MentionableProcess:
+//   alias               — key in mentionable_journeys (e.g. "portabilidade")
+//   skill_id            — target skill (e.g. "skill_portabilidade_v1")
+//   label               — skill.name
+//   description         — skill.description
+//   delegation_params   — DelegationSchema | null (from skill.delegation_input)
+//   delegation_visibility — "all" | "agents_only" | null
+//                          null  → show visibility radio, default agents_only
+//                          value → locked; radio hidden in UI
+//                          Read from skill.flow.delegation_visibility (top-level YAML field)
+// ─────────────────────────────────────────────
+poolsRouter.get("/:pool_id/mentionable-processes", async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const tenantId = _getTenantId(req)
+    const poolId   = req.params["pool_id"]!
+
+    const pool = await prisma.pool.findUnique({
+      where: { pool_id_tenant_id: { pool_id: poolId, tenant_id: tenantId } },
+    })
+    if (!pool) return res.status(404).json({ error: "Pool não encontrado" })
+
+    // mentionable_journeys: Record<alias, skill_id>  e.g. { portabilidade: "skill_portabilidade_v1" }
+    const mentionableJourneys = pool.mentionable_journeys as Record<string, string> | null
+    if (!mentionableJourneys || Object.keys(mentionableJourneys).length === 0) {
+      return res.json({ processes: [] })
+    }
+
+    const targetSkillIds = Object.values(mentionableJourneys)
+
+    // Fetch active skills matching the declared skill_ids
+    const skills = await prisma.skill.findMany({
+      where: {
+        tenant_id: tenantId,
+        skill_id:  { in: targetSkillIds },
+        status:    "active",
+      },
+      select: {
+        skill_id:        true,
+        name:            true,
+        description:     true,
+        delegation_input: true,
+        flow:            true,
+      },
+    })
+
+    // Index skills by skill_id for O(1) lookup
+    const skillMap = new Map(skills.map(s => [s.skill_id, s]))
+
+    const processes: Array<{
+      alias:                string;
+      skill_id:             string;
+      label:                string;
+      description:          string;
+      delegation_params:    unknown;
+      delegation_visibility: string | null;
+    }> = []
+
+    for (const [alias, targetSkillId] of Object.entries(mentionableJourneys)) {
+      const skill = skillMap.get(targetSkillId)
+      if (!skill) continue
+
+      // delegation_visibility declared as top-level field in skill YAML → stored in flow JSON
+      const flow = skill.flow as Record<string, unknown> | null
+      const delegationVisibility =
+        (flow?.["delegation_visibility"] as "all" | "agents_only" | undefined) ?? null
+
+      processes.push({
+        alias,
+        skill_id:             skill.skill_id,
+        label:                skill.name,
+        description:          skill.description,
+        delegation_params:    skill.delegation_input ?? null,   // DelegationSchema | null
+        delegation_visibility: delegationVisibility,
+      })
+    }
+
+    return res.json({ processes })
+  } catch (err) {
+    return next(err)
+  }
+})
+
+// ─────────────────────────────────────────────
 // Helpers
 // ─────────────────────────────────────────────
 function _getTenantId(req: Request): string {

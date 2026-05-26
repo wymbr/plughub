@@ -1,5 +1,7 @@
 # Módulo: Configuração → Recursos
 
+> Última atualização: 2026-05-25 · Estado: Arc 16
+
 > Rota UI: `/config/resources` | Roles: admin, developer
 
 ## O que é
@@ -28,6 +30,9 @@ A aba de Recursos é onde administradores gerenciam os artefatos estruturais da 
 | `hooks.on_human_end` | PoolHookEntry[] | Agentes ativados quando último humano encerra |
 | `hooks.post_human` | PoolHookEntry[] | Agentes ativados após on_human_end concluir |
 | `mentionable_pools` | object | Aliases de @mention → pool_id de especialistas |
+| `mentionable_journeys` | object | Aliases de `@journey:<skill_id>` → tipos de Journey iniciáveis pelo pool (Arc 16); alimenta o botão "Iniciar Processo" no Console |
+| `webrtc_media_fallback_order` | string[] | Ordem de fallback de medium na negociação WebRTC: ex. `[video, voice, text]` (Arc 15) |
+| `inbound_journey_resume` | boolean | Flag informacional para o skill author — o agente do pool deve oferecer retomada de Journey pendente no inbound (Arc 16) |
 
 ## Agent Types
 
@@ -40,6 +45,15 @@ A aba de Recursos é onde administradores gerenciam os artefatos estruturais da 
 | `generic_mcp` | MCP client genérico |
 
 **Deprecate flow** (Agent Types): Deprecate → Confirmar → DELETE (soft-delete — não destrói instâncias ativas).
+
+### Campos relevantes do Agent Type
+
+| Campo | Tipo | Descrição |
+|---|---|---|
+| `framework` | enum | Runtime do agente (ver tabela acima) |
+| `role` | enum | `primary` / `specialist` / `supervisor` |
+| `max_concurrent_sessions` | int | Capacidade simultânea |
+| `media_capabilities` | string[] | Mídias suportadas: `[video, voice, text]` (Arc 15). A ordem implica preferência; vazio = text-only. Usado pela negociação de medium no canal WebRTC |
 
 ## Skills
 

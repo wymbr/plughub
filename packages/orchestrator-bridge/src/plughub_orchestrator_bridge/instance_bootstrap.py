@@ -283,6 +283,10 @@ class InstanceBootstrap:
                                 )
                             except Exception:
                                 pass
+                        # Publica snapshots para todos os pools imediatamente após
+                        # a reconciliação — garante que o Monitor veja todos os pools
+                        # desde o startup, sem esperar eventos de routing.
+                        await self._refresh_pool_snapshots()
                     else:
                         await self._heartbeat_tick()
 
@@ -464,6 +468,11 @@ class InstanceBootstrap:
                 except Exception:
                     pass
 
+        # Garante que todos os pools configurados sempre tenham um snapshot visível
+        # no feed SSE — evita que o KPI Online cresça gradualmente conforme mais
+        # pools recebem seu primeiro evento de routing.
+        await self._refresh_pool_snapshots()
+
         for iid, payload in list(self._registered.items()):
             tenant_id = payload.get("tenant_id", "")
             key       = f"{tenant_id}:instance:{iid}"
@@ -508,12 +517,132 @@ class InstanceBootstrap:
 
                 # Caminho normal: renova TTL ou restaura como ready
                 if status in ("busy", "paused"):
+                    # Self-heal: if the instance is marked busy/paused but all of
+                    # its pools show active_count=0, the sessions are stale (e.g.
+                    # crash recovery — sessions ended without agent_done).
+                    # Reset to ready so routing can use this instance again.
+                    if status == "busy":
+                        current_sessions = current.get("current_sessions", 0)
+                        if current_sessions > 0:
+                            instance_pools = payload.get("pools") or current.get("pools") or []
+                            all_pools_idle = True
+                            for _pool in instance_pools:
+                                raw_count = await self._redis.get(
+                                    f"{tenant_id}:pool:{_pool}:active_count"
+                                )
+                                if raw_count and int(raw_count) > 0:
+                                    all_pools_idle = False
+                                    break
+                            if all_pools_idle and instance_pools:
+                                # Stale-busy: reset to ready
+                                clean = {
+                                    k: v for k, v in payload.items()
+                                    if k not in ("draining", "pending_update")
+                                }
+                                clean["status"] = "ready"
+                                clean["state"]  = "ready"
+                                clean["current_sessions"] = 0
+                                await self._write_instance(tenant_id, iid, clean)
+                                self._registered[iid] = clean
+                                logger.warning(
+                                    "bootstrap heartbeat: self-healed stale-busy "
+                                    "instance %s (active_count=0 on all pools=%s)",
+                                    iid, instance_pools,
+                                )
+                                continue
                     await self._redis.expire(key, _INSTANCE_TTL_S)
                 else:
                     await self._write_instance(tenant_id, iid, payload)
 
             except Exception as exc:
                 logger.warning("Heartbeat tick failed for %s: %s", iid, exc)
+
+    # ─── Pool snapshot refresh ────────────────────────────────────────────────
+
+    async def _refresh_pool_snapshots(self) -> None:
+        """
+        Escreve snapshots para todos os pools configurados que ainda não têm
+        um snapshot no Redis (NX — não sobrescreve o snapshot mais recente do
+        routing-engine que tem TTL 120s e dados mais precisos).
+
+        Problema que resolve: pool snapshots são escritos pelo routing-engine
+        APENAS após eventos de routing (TTL 120s). Sem isso, pools sem contatos
+        recentes desaparecem do feed SSE e o KPI Online cresce gradualmente
+        conforme mais pools recebem seu primeiro evento de routing.
+
+        Estratégia:
+          - NX=True → só escreve se não existir snapshot no Redis.
+            Garante visibilidade imediata sem interferir com dados frescos do
+            routing-engine quando o pool está ativo.
+          - TTL 60s → menor que o TTL 120s do routing-engine. Se nenhum evento
+            de routing ocorrer em 60s, o bootstrap reescreve na próxima iteração
+            do heartbeat (15s).
+        """
+        for tenant_id, pool_map in self._pool_configs.items():
+            for pool_id, pool_data in pool_map.items():
+                try:
+                    snap_key      = f"{tenant_id}:pool:{pool_id}:snapshot"
+                    active_key    = f"{tenant_id}:pool:{pool_id}:active_count"
+                    queue_key     = f"{tenant_id}:pool:{pool_id}:queue"
+
+                    # Capacity-sum model — mirrors routing-engine's write_pool_snapshot():
+                    #   available = total_capacity − active_count
+                    #
+                    # We intentionally do NOT exclude busy/paused instances from
+                    # total_capacity.  Excluding them causes a crash-recovery bug:
+                    # when sessions end without an agent_done event (crash scenario),
+                    # active_count drops to 0 but instance state stays status=busy.
+                    # The old formula then produced available=8 with busy=0, which is
+                    # logically inconsistent and confuses the Monitor.
+                    #
+                    # Using total_capacity−active_count means:
+                    #  • Normal operation: total_capacity=10, active_count=2 → available=8 ✓
+                    #  • Crash recovery:   total_capacity=10, active_count=0 → available=10 ✓
+                    #    (stale-busy instances have no active session; self-heal
+                    #     in _heartbeat_tick will reset their state on the next cycle)
+                    total_capacity = 0
+                    for _iid, _pl in self._registered.items():
+                        if _pl.get("tenant_id") != tenant_id:
+                            continue
+                        if pool_id not in _pl.get("pools", []):
+                            continue
+                        if _pl.get("status") == "paused":
+                            # Paused instances are intentionally offline — skip.
+                            continue
+                        _mc = int(_pl.get("max_concurrent",
+                                   _pl.get("max_concurrent_sessions", 1)))
+                        total_capacity += _mc
+
+                    busy_raw      = await self._redis.get(active_key)
+                    busy          = max(0, int(busy_raw)) if busy_raw else 0
+                    available     = max(0, total_capacity - busy)
+                    queue_length  = int(await self._redis.zcard(queue_key) or 0)
+
+                    snapshot = {
+                        "pool_id":         pool_id,
+                        "tenant_id":       tenant_id,
+                        "available":       available,
+                        "busy":            busy,
+                        # total_instances = total concurrent capacity (sum of max_concurrent
+                        # across all non-paused agents).  Mirrors routing-engine formula.
+                        # For AI pools (max_concurrent=1): equals agent count.
+                        # For human pools (max_concurrent>1): equals N_agents × max_concurrent.
+                        "total_instances": total_capacity,
+                        "queue_length":    queue_length,
+                        "sla_target_ms":   pool_data.get("sla_target_ms", 480000),
+                        "channel_types":   pool_data.get("channel_types", []),
+                        "updated_at":      datetime.now(timezone.utc).isoformat(),
+                    }
+                    # NX: só escreve se o snapshot não existir no Redis.
+                    # O routing-engine sobrescreve com TTL 120s quando há routing events.
+                    await self._redis.set(
+                        snap_key, json.dumps(snapshot), ex=60, nx=True
+                    )
+                except Exception as exc:
+                    logger.debug(
+                        "Could not refresh pool snapshot for %s/%s: %s",
+                        tenant_id, pool_id, exc,
+                    )
 
     # ─── Helpers de I/O Redis ─────────────────────────────────────────────────
 
@@ -911,7 +1040,11 @@ def _build_desired_state(
                 "status":                  "ready",
                 "state":                   "ready",
                 "current_sessions":        0,
-                "max_concurrent":          max_concurrent,
+                # max_concurrent_sessions = number of instances to create.
+                # Each instance handles exactly 1 session at a time (stateless model).
+                # Setting max_concurrent = max_concurrent_sessions here would cause
+                # capacity = N × N instead of N × 1, inflating pool snapshots.
+                "max_concurrent":          1,
                 "max_concurrent_sessions": max_concurrent,
                 "pools":                   at_pools,
                 "channel_types":           channel_types,

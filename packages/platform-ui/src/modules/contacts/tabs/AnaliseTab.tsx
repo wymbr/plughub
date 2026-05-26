@@ -111,15 +111,15 @@ function HBar({ label, value, total, color, icon }: {
   const pct = total > 0 ? Math.round((value / total) * 100) : 0
   return (
     <div className="flex items-center gap-2 text-sm">
-      <span className="w-36 text-right text-xs text-gray-600 truncate shrink-0">
+      <span className="w-36 text-right text-xs text-muted truncate shrink-0">
         {icon ? `${icon} ` : ''}{label}
       </span>
-      <div className="flex-1 h-5 bg-gray-100 rounded-full overflow-hidden">
+      <div className="flex-1 h-5 bg-surface-alt rounded-full overflow-hidden">
         <div className="h-full rounded-full transition-all duration-500"
           style={{ width: `${pct}%`, backgroundColor: color }} />
       </div>
-      <span className="w-10 text-right text-xs font-semibold tabular-nums text-gray-700">{value}</span>
-      <span className="w-9 text-right text-xs text-gray-400 tabular-nums">{pct}%</span>
+      <span className="w-10 text-right text-xs font-semibold tabular-nums text-dark">{value}</span>
+      <span className="w-9 text-right text-xs text-muted-light tabular-nums">{pct}%</span>
     </div>
   )
 }
@@ -130,12 +130,12 @@ function KpiCard({ label, value, sub, color }: {
   label: string; value: string; sub?: string; color?: string
 }) {
   return (
-    <div className="bg-white rounded-xl border border-gray-200 px-5 py-4 flex flex-col gap-1">
-      <span className="text-xs text-gray-500">{label}</span>
+    <div className="bg-white rounded-xl border border-border px-5 py-4 flex flex-col gap-1">
+      <span className="text-xs text-muted">{label}</span>
       <span className="text-2xl font-bold tabular-nums" style={{ color: color ?? '#111827' }}>
         {value}
       </span>
-      {sub && <span className="text-xs text-gray-400">{sub}</span>}
+      {sub && <span className="text-xs text-muted-light">{sub}</span>}
     </div>
   )
 }
@@ -283,23 +283,23 @@ export function AnaliseTab({ tenantId, filters }: Props) {
   const tsToDt   = filters.toDt   || undefined
 
   return (
-    <div className="flex flex-col h-full overflow-auto bg-gray-50">
+    <div className="flex flex-col h-full overflow-auto bg-surface-muted">
 
       {/* Header bar */}
-      <div className="flex items-center gap-2 px-4 py-2 bg-white border-b border-gray-100 flex-shrink-0 text-xs text-gray-400">
+      <div className="flex items-center gap-2 px-4 py-2 bg-white border-b border-border flex-shrink-0 text-xs text-muted-light">
         {loading
           ? <><span className="animate-spin">⟳</span> Calculando métricas…</>
-          : <><strong className="text-gray-700">{sMet.total.toLocaleString('pt-BR')}</strong>
+          : <><strong className="text-dark">{sMet.total.toLocaleString('pt-BR')}</strong>
               &nbsp;contato{sMet.total !== 1 ? 's' : ''} analisados
               {sMet.total >= FETCH_LIMIT && (
-                <span className="ml-1 text-amber-500">(mostrando primeiros {FETCH_LIMIT})</span>
+                <span className="ml-1 text-warning">(mostrando primeiros {FETCH_LIMIT})</span>
               )}
               {segRows.length > 0 && (
-                <span className="ml-2 text-gray-300">·</span>
+                <span className="ml-2 text-border-strong">·</span>
               )}
               {segRows.length > 0 && (
                 <span className="ml-1">
-                  <strong className="text-gray-700">{segRows.length.toLocaleString('pt-BR')}</strong>
+                  <strong className="text-dark">{segRows.length.toLocaleString('pt-BR')}</strong>
                   &nbsp;atendimento{segRows.length !== 1 ? 's' : ''}
                 </span>
               )}
@@ -309,7 +309,7 @@ export function AnaliseTab({ tenantId, filters }: Props) {
 
       {/* Degraded banner — shown when sessions query fails but tab still renders */}
       {degraded && !loading && (
-        <div className="flex items-center gap-3 px-4 py-2 bg-amber-50 border-b border-amber-200 flex-shrink-0 text-xs text-amber-800">
+        <div className="flex items-center gap-3 px-4 py-2 bg-warning-light border-b border-warning/30 flex-shrink-0 text-xs text-warning-text">
           <span>⚠️</span>
           <span>
             Dados de contatos temporariamente indisponíveis ({error}).
@@ -317,14 +317,14 @@ export function AnaliseTab({ tenantId, filters }: Props) {
           </span>
           <button
             onClick={fetchAll}
-            className="ml-auto px-2 py-1 rounded border border-amber-400 hover:bg-amber-100 transition-colors font-medium"
+            className="ml-auto px-2 py-1 rounded border border-warning/40 hover:bg-warning/10 transition-colors font-medium"
           >
             ⟳ Tentar novamente
           </button>
         </div>
       )}
       {segError && !loading && (
-        <div className="flex items-center gap-3 px-4 py-2 bg-amber-50 border-b border-amber-200 flex-shrink-0 text-xs text-amber-800">
+        <div className="flex items-center gap-3 px-4 py-2 bg-warning-light border-b border-warning/30 flex-shrink-0 text-xs text-warning-text">
           <span>⚠️</span>
           <span>Dados de atendimentos temporariamente indisponíveis ({segError}). Outcome não disponível.</span>
         </div>
@@ -355,17 +355,17 @@ export function AnaliseTab({ tenantId, filters }: Props) {
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
 
           {/* Outcome distribution — from SEGMENTS (atendimentos) */}
-          <div className="bg-white rounded-xl border border-gray-200 p-5">
-            <h3 className="text-sm font-semibold text-gray-700 mb-1">Distribuição por Outcome</h3>
-            <p className="text-xs text-gray-400 mb-4">por atendimento (segment)</p>
+          <div className="bg-white rounded-xl border border-border p-5">
+            <h3 className="text-sm font-semibold text-dark mb-1">Distribuição por Outcome</h3>
+            <p className="text-xs text-muted-light mb-4">por atendimento (segment)</p>
             {loading ? (
               <div className="space-y-2">
                 {[1,2,3].map(i => (
-                  <div key={i} className="h-5 bg-gray-100 rounded animate-pulse" style={{ width: `${70 - i * 15}%` }} />
+                  <div key={i} className="h-5 bg-surface-alt rounded animate-pulse" style={{ width: `${70 - i * 15}%` }} />
                 ))}
               </div>
             ) : outcomeEntries.length === 0 ? (
-              <div className="text-center text-gray-400 text-sm py-6">
+              <div className="text-center text-muted-light text-sm py-6">
                 {segError ? 'Dados indisponíveis' : 'Sem atendimentos concluídos'}
               </div>
             ) : (
@@ -382,17 +382,17 @@ export function AnaliseTab({ tenantId, filters }: Props) {
           </div>
 
           {/* Channel distribution — from SESSIONS (contatos) */}
-          <div className="bg-white rounded-xl border border-gray-200 p-5">
-            <h3 className="text-sm font-semibold text-gray-700 mb-1">Distribuição por Canal</h3>
-            <p className="text-xs text-gray-400 mb-4">por contato (session)</p>
+          <div className="bg-white rounded-xl border border-border p-5">
+            <h3 className="text-sm font-semibold text-dark mb-1">Distribuição por Canal</h3>
+            <p className="text-xs text-muted-light mb-4">por contato (session)</p>
             {loading ? (
               <div className="space-y-2">
                 {[1,2,3].map(i => (
-                  <div key={i} className="h-5 bg-gray-100 rounded animate-pulse" style={{ width: `${70 - i * 15}%` }} />
+                  <div key={i} className="h-5 bg-surface-alt rounded animate-pulse" style={{ width: `${70 - i * 15}%` }} />
                 ))}
               </div>
             ) : channelEntries.length === 0 ? (
-              <div className="text-center text-gray-400 text-sm py-6">Sem dados</div>
+              <div className="text-center text-muted-light text-sm py-6">Sem dados</div>
             ) : (
               <div className="space-y-2.5">
                 {channelEntries.map(([ch, count]) => (
@@ -411,7 +411,7 @@ export function AnaliseTab({ tenantId, filters }: Props) {
         {/* ── Timeseries charts ─────────────────────────────────────────────── */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
 
-          <div className="bg-white rounded-xl border border-gray-200 p-5">
+          <div className="bg-white rounded-xl border border-border p-5">
             <TimeseriesChart
               baseUrl="/reports/timeseries/volume"
               tenantId={tenantId}
@@ -428,7 +428,7 @@ export function AnaliseTab({ tenantId, filters }: Props) {
             />
           </div>
 
-          <div className="bg-white rounded-xl border border-gray-200 p-5">
+          <div className="bg-white rounded-xl border border-border p-5">
             <TimeseriesChart
               baseUrl="/reports/timeseries/handle_time"
               tenantId={tenantId}
@@ -455,8 +455,8 @@ export function AnaliseTab({ tenantId, filters }: Props) {
           const poolEntries = Object.entries(poolMap).sort((a, b) => b[1] - a[1])
           if (poolEntries.length < 2) return null
           return (
-            <div className="bg-white rounded-xl border border-gray-200 p-5">
-              <h3 className="text-sm font-semibold text-gray-700 mb-4">Volume por Pool</h3>
+            <div className="bg-white rounded-xl border border-border p-5">
+              <h3 className="text-sm font-semibold text-dark mb-4">Volume por Pool</h3>
               <div className="space-y-2.5">
                 {poolEntries.map(([pid, count]) => (
                   <HBar key={pid}

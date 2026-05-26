@@ -146,7 +146,7 @@ Cliente webchat
 | `auth-api` | 3200 | JWT, usuários, ABAC |
 | `config-api` | 3600 | Namespaces de configuração |
 | `platform-ui` | 5174 | Console, Monitor, Analytics, Sessions |
-| `webchat-client` | 9090 | Simulação do cliente |
+| `webchat-client` | 5173 | Simulação do cliente |
 | `redis` | 6379 | ContextStore, stream, filas |
 | `kafka` | 9092 | Eventos entre serviços |
 | `clickhouse` | 8123 | Analytics persistido |
@@ -200,7 +200,7 @@ WEBCHAT_JWT_SECRET=demo-webchat-secret
 
 > **Convenção de IDs:** `TC-{Cenário}{Sequência}` — ex: TC-A1, TC-B2  
 > **Interfaces acessadas durante o teste:**
-> - **Webchat cliente:** http://localhost:9090
+> - **Webchat cliente:** http://localhost:5173/webchat-test.html
 > - **Console (operador):** http://localhost:5174 → /agent-assist
 > - **Monitor:** http://localhost:5174 → /monitor
 > - **Analytics:** http://localhost:5174 → /contacts/sessions
@@ -223,7 +223,7 @@ WEBCHAT_JWT_SECRET=demo-webchat-secret
 
 | # | Ator | Ação | Interface |
 |---|---|---|---|
-| 1 | Cliente | Abre http://localhost:9090 | Webchat |
+| 1 | Cliente | Abre http://localhost:5173/webchat-test.html | Webchat |
 | 2 | Cliente | Envia primeira mensagem (qualquer texto) | Webchat |
 | 3 | Sistema | Menu de triagem aparece com 4 botões | Webchat |
 | 4 | Cliente | Seleciona "Reclamação" | Webchat |

@@ -36,7 +36,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from .auth import Principal, require_principal
-from .query import get_metrics_24h, get_pool_snapshots, get_sentiment_live
+from .query import get_metrics_24h, get_pool_sla_1h, get_pool_snapshots, get_sentiment_live
 
 logger = logging.getLogger("plughub.analytics.dashboard")
 
@@ -189,4 +189,44 @@ async def dashboard_sentiment(
         )
     redis = request.app.state.redis
     data  = await get_sentiment_live(redis, tenant_id)
+    return JSONResponse(content=data)
+
+
+# ─── GET /dashboard/pool-sla ──────────────────────────────────────────────────
+
+@router.get("/pool-sla")
+async def dashboard_pool_sla(
+    request:   Request,
+    tenant_id: str = Query(..., description="Tenant identifier"),
+    principal: Principal = Depends(require_principal),
+) -> JSONResponse:
+    """
+    Per-pool SLA performance for the last 1 hour (ClickHouse).
+
+    Response: list of pool SLA entries:
+    [
+      {
+        "pool_id":              "demo_ia",
+        "avg_wait_ms":          4200.0,
+        "p90_wait_ms":          9800.0,
+        "sla_compliance_pct":   91.3,   // % of sessions served within sla_target_ms
+        "sessions_count":       47
+      },
+      ...
+    ]
+    Returns empty list when no sessions in the last hour or ClickHouse is unavailable.
+    sla_compliance_pct is null when sessions have no sla_target_ms set.
+    """
+    effective = principal.effective_tenant(tenant_id)
+    if effective != tenant_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access denied for requested tenant",
+        )
+    store = request.app.state.store
+    data  = await get_pool_sla_1h(
+        client    = store.new_client(),
+        database  = store._database,
+        tenant_id = tenant_id,
+    )
     return JSONResponse(content=data)

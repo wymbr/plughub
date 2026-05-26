@@ -2,15 +2,14 @@
  * AgentFlowDeployPage — /agent-flow/deploy
  *
  * Pool-centric 3-slot deploy lifecycle.
- * Spec: Task #31 revised
  *
  * Left panel  : pool list
  * Right panel :
- *   - 3-slot panel (Anterior / Corrente / Próxima)
- *     • Anterior + Corrente: read-only (imutável após promoção)
- *     • Próxima: editável — seleciona skill-flow + preenche config via interface_schema
- *       Botão "Copiar do Corrente": pré-preenche campos coincidentes, marca novos com badge
- *   - Promover / Rollback com confirmação
+ *   - 3-slot panel (Previous / Current / Next)
+ *     • Previous + Current: read-only (immutable after promotion)
+ *     • Next: editable — select skill-flow + fill config via interface_schema
+ *       "Copy from Current": pre-fills matching fields, highlights new ones
+ *   - Promote / Rollback with confirmation
  *
  * Rules enforced in UI:
  *   - Only "next" slot has an Edit button
@@ -19,6 +18,8 @@
  *   - On rollback: previous slot's skill + config restored as-is (no schema revalidation)
  */
 import React, { useCallback, useEffect, useState } from 'react'
+import { Settings } from 'lucide-react'
+import { useTranslation } from 'react-i18next'
 import { useAuth } from '@/auth/useAuth'
 import Spinner from '@/components/ui/Spinner'
 
@@ -39,8 +40,8 @@ interface Skill {
   classification?:  Record<string, unknown>
   /** Computed server-side: "workflow" if flow has suspend/collect steps; "agent" otherwise. */
   flow_model?:      'agent' | 'workflow'
-  folder?:          string   // optional view-only grouping path, e.g. "project/sub"
-  interface?:       InterfaceSchema | null  // interface_schema exposed as "interface"
+  folder?:          string
+  interface?:       InterfaceSchema | null
 }
 
 interface InterfaceSchema {
@@ -60,13 +61,13 @@ interface FieldSchema {
 }
 
 interface SlotData {
-  slot:          string
-  set:           boolean
-  skill_id?:     string | null
-  config_json?:  Record<string, unknown>
+  slot:           string
+  set:            boolean
+  skill_id?:      string | null
+  config_json?:   Record<string, unknown>
   yaml_snapshot?: unknown
-  set_at?:       string
-  set_by?:       string
+  set_at?:        string
+  set_by?:        string
 }
 
 interface SlotsResponse {
@@ -133,41 +134,51 @@ async function apiRollback(poolId: string, tenantId: string, token?: string | nu
 
 function fmtDateShort(iso?: string | null) {
   if (!iso) return '—'
-  return new Date(iso).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' })
+  return new Date(iso).toLocaleString(undefined, { dateStyle: 'short', timeStyle: 'short' })
 }
 
-const SLOT_LABEL: Record<string, string> = { previous: 'Anterior', current: 'Corrente', next: 'Próxima' }
-const SLOT_DESC:  Record<string, string> = {
-  previous: 'Alvo seguro de rollback — somente leitura',
-  current:  'Versão em produção — somente leitura',
-  next:     'Candidata preparada pelo desenvolvedor',
+/** Accent color per slot — semantic, data-driven — stays as inline style */
+const SLOT_COLOR: Record<string, string> = {
+  previous: '#94a3b8',
+  current:  '#22c55e',
+  next:     '#3b82f6',
 }
-const SLOT_COLOR: Record<string, string> = { previous: '#94a3b8', current: '#22c55e', next: '#3b82f6' }
-const SLOT_BG:    Record<string, string> = { previous: '#1c2535', current: '#0f2818', next: '#0c1b35' }
 
-// ── Config form: render fields from interface_schema ──────────────────────────
+/** Light-mode input style; readOnly uses muted surface */
+function _inputStyle(readOnly: boolean): React.CSSProperties {
+  return {
+    width: '100%', boxSizing: 'border-box',
+    background: readOnly ? '#f8fafc' : '#ffffff',
+    border: `1px solid ${readOnly ? '#e2e8f0' : '#cbd5e1'}`,
+    borderRadius: 5, padding: '6px 10px', fontSize: 12,
+    color: readOnly ? '#94a3b8' : '#1e293b',
+    outline: 'none', cursor: readOnly ? 'not-allowed' : 'text',
+  }
+}
+
+// ── Config form ───────────────────────────────────────────────────────────────
 
 interface ConfigFormProps {
-  schema:      InterfaceSchema | null | undefined
-  values:      Record<string, unknown>
-  onChange:    (key: string, value: unknown) => void
-  readOnly:    boolean
-  newFields?:  Set<string>   // fields added in this version (highlighted)
+  schema:     InterfaceSchema | null | undefined
+  values:     Record<string, unknown>
+  onChange:   (key: string, value: unknown) => void
+  readOnly:   boolean
+  newFields?: Set<string>
 }
 
 function ConfigForm({ schema, values, onChange, readOnly, newFields }: ConfigFormProps) {
+  const { t } = useTranslation('agentFlow')
+
   if (!schema?.properties || Object.keys(schema.properties).length === 0) {
     return (
-      <div style={{ fontSize: 12, color: '#475569', fontStyle: 'italic', padding: '8px 0' }}>
-        Esta skill não define parâmetros de configuração (interface_schema vazio).
-      </div>
+      <p className="text-xs text-muted italic py-2">{t('deploy.noConfigParams')}</p>
     )
   }
 
   const required = new Set(schema.required ?? [])
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+    <div className="flex flex-col gap-2.5">
       {Object.entries(schema.properties).map(([key, field]) => {
         const isNew      = newFields?.has(key)
         const isRequired = required.has(key)
@@ -175,18 +186,18 @@ function ConfigForm({ schema, values, onChange, readOnly, newFields }: ConfigFor
 
         return (
           <div key={key}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
-              <label style={{ fontSize: 12, color: '#94a3b8', fontWeight: 500 }}>
+            <div className="flex items-center gap-1.5 mb-1">
+              <label className="text-xs font-medium text-muted">
                 {key}
-                {isRequired && <span style={{ color: '#f87171', marginLeft: 2 }}>*</span>}
+                {isRequired && <span className="text-red ml-0.5">*</span>}
               </label>
               {isNew && (
-                <span style={{ fontSize: 10, padding: '1px 5px', borderRadius: 3, background: '#1d4ed822', color: '#60a5fa', border: '1px solid #1d4ed844' }}>
-                  novo
+                <span className="text-[10px] px-1.5 py-0.5 rounded bg-primary/10 text-primary border border-primary/20">
+                  {t('deploy.newField')}
                 </span>
               )}
               {field.description && (
-                <span style={{ fontSize: 11, color: '#475569' }}>— {field.description}</span>
+                <span className="text-xs text-muted-light ml-1">— {field.description}</span>
               )}
             </div>
 
@@ -197,21 +208,21 @@ function ConfigForm({ schema, values, onChange, readOnly, newFields }: ConfigFor
                 onChange={e => onChange(key, e.target.value)}
                 style={_inputStyle(readOnly)}
               >
-                <option value="">Selecione…</option>
+                <option value="">{t('deploy.selectOption')}</option>
                 {field.enum.map(opt => (
                   <option key={String(opt)} value={String(opt)}>{String(opt)}</option>
                 ))}
               </select>
             ) : field.type === 'boolean' ? (
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <div className="flex items-center gap-2">
                 <input
                   type="checkbox"
                   checked={Boolean(value)}
                   disabled={readOnly}
                   onChange={e => onChange(key, e.target.checked)}
-                  style={{ accentColor: '#3b82f6', width: 14, height: 14 }}
+                  className="accent-primary w-3.5 h-3.5"
                 />
-                <span style={{ fontSize: 12, color: readOnly ? '#475569' : '#94a3b8' }}>
+                <span className={`text-xs ${readOnly ? 'text-muted' : 'text-muted-light'}`}>
                   {Boolean(value) ? 'true' : 'false'}
                 </span>
               </div>
@@ -251,90 +262,84 @@ function ConfigForm({ schema, values, onChange, readOnly, newFields }: ConfigFor
   )
 }
 
-function _inputStyle(readOnly: boolean): React.CSSProperties {
-  return {
-    width: '100%', boxSizing: 'border-box',
-    background: readOnly ? '#0a0f1a' : '#0a1628',
-    border: `1px solid ${readOnly ? '#1e293b' : '#1e3a5f'}`,
-    borderRadius: 5, padding: '6px 10px', fontSize: 12,
-    color: readOnly ? '#475569' : '#e2e8f0',
-    outline: 'none', cursor: readOnly ? 'not-allowed' : 'text',
-  }
-}
-
 // ── Slot card ──────────────────────────────────────────────────────────────────
 
 interface SlotCardProps {
-  slotName:   string
-  data:       SlotData
-  skill?:     Skill | null
-  onEdit?:    () => void   // only for "next"
+  slotName:  string
+  data:      SlotData
+  skill?:    Skill | null
+  onEdit?:   () => void
 }
 
 function SlotCard({ slotName, data, skill, onEdit }: SlotCardProps) {
-  const color = SLOT_COLOR[slotName] ?? '#94a3b8'
-  const bg    = SLOT_BG[slotName]   ?? '#1e293b'
+  const { t } = useTranslation('agentFlow')
+  const color      = SLOT_COLOR[slotName] ?? '#94a3b8'
   const isEditable = slotName === 'next'
 
   return (
-    <div style={{
-      background: bg, borderRadius: 8, border: `1px solid ${color}33`,
-      borderTop: `3px solid ${color}`, padding: '14px 16px',
-      display: 'flex', flexDirection: 'column', gap: 10, minHeight: 180,
-    }}>
-      <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between' }}>
+    <div
+      className="bg-white rounded-lg border border-border flex flex-col gap-2.5 p-4 min-h-[180px]"
+      style={{ borderTop: `3px solid ${color}` }}
+    >
+      {/* Header */}
+      <div className="flex items-start justify-between">
         <div>
-          <div style={{ fontSize: 13, fontWeight: 700, color }}>{SLOT_LABEL[slotName]}</div>
-          <div style={{ fontSize: 11, color: '#475569', marginTop: 2 }}>{SLOT_DESC[slotName]}</div>
+          <div className="text-sm font-bold" style={{ color }}>{t(`deploy.slots.${slotName}`)}</div>
+          <div className="text-xs text-muted mt-0.5">{t(`deploy.slots.${slotName}Desc`)}</div>
         </div>
         {isEditable && onEdit && (
-          <button onClick={onEdit}
-            style={{ padding: '4px 10px', borderRadius: 4, fontSize: 11, background: '#1e3a5f', color: '#93c5fd', border: '1px solid #1d4ed822', cursor: 'pointer', flexShrink: 0 }}>
-            ✏ Editar
+          <button
+            onClick={onEdit}
+            className="shrink-0 px-2.5 py-1 text-xs rounded border border-primary/20 bg-primary/10 text-primary hover:bg-primary/20 transition-colors"
+          >
+            {t('deploy.editSlot')}
           </button>
         )}
         {!isEditable && data.set && (
-          <span style={{ fontSize: 10, color: '#334155', flexShrink: 0 }}>🔒 somente leitura</span>
+          <span className="text-xs text-muted-light shrink-0">{t('deploy.slotReadOnly')}</span>
         )}
       </div>
 
+      {/* Body */}
       {!data.set ? (
-        <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#334155', fontSize: 12 }}>
-          — vazio —
+        <div className="flex-1 flex items-center justify-center text-xs text-muted-light italic">
+          {t('deploy.emptySlot')}
         </div>
       ) : (
-        <div style={{ fontSize: 12, display: 'flex', flexDirection: 'column', gap: 6 }}>
+        <div className="text-xs flex flex-col gap-1.5">
+          {/* Skill ID */}
           <div>
-            <span style={{ color: '#475569' }}>Skill: </span>
-            <code style={{ color: color, fontSize: 11 }}>{data.skill_id ?? '—'}</code>
-            {skill?.name && <span style={{ color: '#475569', marginLeft: 6 }}>({skill.name})</span>}
+            <span className="text-muted">{t('deploy.skillLabel')}: </span>
+            <code className="font-mono text-[11px]" style={{ color }}>{data.skill_id ?? '—'}</code>
+            {skill?.name && <span className="text-muted ml-1.5">({skill.name})</span>}
           </div>
 
+          {/* Config preview */}
           {data.config_json && Object.keys(data.config_json).length > 0 && (
             <div>
-              <div style={{ color: '#475569', fontSize: 11, marginBottom: 4 }}>Configuração:</div>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+              <div className="text-muted text-[11px] mb-1">{t('deploy.configDisplay')}</div>
+              <div className="flex flex-col gap-0.5">
                 {Object.entries(data.config_json).slice(0, 5).map(([k, v]) => (
-                  <div key={k} style={{ display: 'flex', gap: 8 }}>
-                    <span style={{ color: '#475569', minWidth: 80, fontSize: 11 }}>{k}</span>
-                    <span style={{ color: '#64748b', fontSize: 11, wordBreak: 'break-all' }}>
+                  <div key={k} className="flex gap-2">
+                    <span className="text-muted text-[11px] min-w-[80px] shrink-0">{k}</span>
+                    <span className="text-muted-light text-[11px] font-mono break-all">
                       {typeof v === 'object' ? JSON.stringify(v) : String(v ?? '—')}
                     </span>
                   </div>
                 ))}
                 {Object.keys(data.config_json).length > 5 && (
-                  <div style={{ color: '#334155', fontSize: 10 }}>
-                    +{Object.keys(data.config_json).length - 5} campo(s)…
+                  <div className="text-muted-light text-[10px]">
+                    {t('deploy.moreFields', { count: Object.keys(data.config_json).length - 5 })}
                   </div>
                 )}
               </div>
             </div>
           )}
 
+          {/* Set by */}
           {data.set_at && (
-            <div style={{ color: '#334155', fontSize: 10, marginTop: 4 }}>
-              Definido por <span style={{ color: '#475569' }}>{data.set_by ?? '?'}</span>{' '}
-              em {fmtDateShort(data.set_at)}
+            <div className="text-muted-light text-[10px] mt-1">
+              {t('deploy.setAt', { user: data.set_by ?? '?', date: fmtDateShort(data.set_at) })}
             </div>
           )}
         </div>
@@ -343,25 +348,23 @@ function SlotCard({ slotName, data, skill, onEdit }: SlotCardProps) {
   )
 }
 
-// ── Skill grouping for select ─────────────────────────────────────────────────
+// ── Skill grouping for select ──────────────────────────────────────────────────
 
 interface SkillGroup {
-  label:  string    // optgroup label
+  label:  string
   skills: Skill[]
 }
 
-/** Groups skills into optgroup sections: root type → folder path (flat, no nesting in HTML) */
-function groupSkillsForSelect(skills: Skill[]): SkillGroup[] {
+function groupSkillsForSelect(skills: Skill[], agentLabel: string, workflowLabel: string): SkillGroup[] {
   const agents    = skills.filter(s => s.flow_model !== 'workflow')
   const workflows = skills.filter(s => s.flow_model === 'workflow')
 
   const groups: SkillGroup[] = []
 
-  for (const [rootLabel, list] of [['Agentes', agents], ['Workflows', workflows]] as [string, Skill[]][]) {
+  for (const [rootLabel, list] of [[agentLabel, agents], [workflowLabel, workflows]] as [string, Skill[]][]) {
     if (list.length === 0) continue
 
-    // Collect skills by folder path (max 2 levels)
-    const byFolder = new Map<string, Skill[]>()  // '' = unfiled
+    const byFolder = new Map<string, Skill[]>()
     for (const s of list) {
       const raw    = s.folder?.trim().replace(/^\/+|\/+$/g, '') ?? ''
       const folder = raw ? raw.split('/').slice(0, 2).join('/') : ''
@@ -369,7 +372,6 @@ function groupSkillsForSelect(skills: Skill[]): SkillGroup[] {
       byFolder.get(folder)!.push(s)
     }
 
-    // Emit unfiled first, then folders sorted alphabetically
     const unfiled = byFolder.get('') ?? []
     if (unfiled.length > 0) groups.push({ label: rootLabel, skills: unfiled })
 
@@ -382,7 +384,7 @@ function groupSkillsForSelect(skills: Skill[]): SkillGroup[] {
   return groups
 }
 
-// ── Next slot edit panel ───────────────────────────────────────────────────────
+// ── Next slot editor modal ────────────────────────────────────────────────────
 
 interface NextSlotEditorProps {
   poolId:       string
@@ -399,14 +401,21 @@ interface NextSlotEditorProps {
 function NextSlotEditor({
   skills, currentSlot, existingNext, onSave, onClose, saving, saveError,
 }: NextSlotEditorProps) {
-  const [selectedSkillId, setSelectedSkillId] = useState<string>(existingNext.skill_id ?? '')
-  const [configValues,    setConfigValues]    = useState<Record<string, unknown>>(existingNext.config_json ?? {})
-  const [newFields,       setNewFields]       = useState<Set<string>>(new Set())
+  const { t } = useTranslation('agentFlow')
+  const [selectedSkillId,       setSelectedSkillId]       = useState<string>(existingNext.skill_id ?? '')
+  const [configValues,          setConfigValues]          = useState<Record<string, unknown>>(existingNext.config_json ?? {})
+  const [newFields,             setNewFields]             = useState<Set<string>>(new Set())
+  // max_concurrent_sessions is a platform-level field stored in config_json but managed
+  // separately so it is not reset when the operator changes the skill-flow.
+  const [maxConcurrentSessions, setMaxConcurrentSessions] = useState<number>(
+    typeof existingNext.config_json?.max_concurrent_sessions === 'number'
+      ? existingNext.config_json.max_concurrent_sessions
+      : 1
+  )
 
   const selectedSkill = skills.find(s => s.skill_id === selectedSkillId) ?? null
   const schema        = selectedSkill?.interface ?? null
 
-  // When skill selection changes: reset config to defaults from schema
   const handleSkillChange = (skillId: string) => {
     setSelectedSkillId(skillId)
     setNewFields(new Set())
@@ -422,22 +431,19 @@ function NextSlotEditor({
     }
   }
 
-  // Copy from current slot: intersection merge with new fields highlighted
   const handleCopyFromCurrent = () => {
     if (!currentSlot.set || !currentSlot.config_json) return
-    const schemaProps = schema?.properties ?? {}
+    const schemaProps   = schema?.properties ?? {}
     const currentConfig = currentSlot.config_json
-
-    const merged: Record<string, unknown>  = { ...configValues }
+    const merged: Record<string, unknown> = { ...configValues }
     const detected = new Set<string>()
 
     for (const key of Object.keys(schemaProps)) {
       if (key in currentConfig) {
-        merged[key] = currentConfig[key]        // copy matching field
+        merged[key] = currentConfig[key]
       } else {
-        detected.add(key)                        // new field — not in current
+        detected.add(key)
       }
-      // fields in currentConfig but NOT in schemaProps are silently dropped
     }
 
     setConfigValues(merged)
@@ -449,42 +455,37 @@ function NextSlotEditor({
   }
 
   const handleSave = async () => {
-    if (!selectedSkillId) { alert('Selecione uma skill-flow'); return }
-    await onSave({ skill_id: selectedSkillId, config_json: configValues })
+    if (!selectedSkillId) { alert(t('deploy.selectSkillAlert')); return }
+    await onSave({
+      skill_id:    selectedSkillId,
+      config_json: { ...configValues, max_concurrent_sessions: maxConcurrentSessions },
+    })
   }
 
   const hasCurrent = currentSlot.set && !!currentSlot.config_json
 
   return (
-    <div style={{
-      position: 'fixed', inset: 0, background: 'rgba(0,0,0,.75)',
-      display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 999,
-    }}>
-      <div style={{
-        background: '#0f172a', border: '1px solid #1d4ed844', borderRadius: 10,
-        width: 580, maxHeight: '88vh', overflow: 'auto', padding: 28,
-        display: 'flex', flexDirection: 'column', gap: 18,
-      }}>
+    <div className="fixed inset-0 bg-black/75 flex items-center justify-center z-[999]">
+      <div className="bg-white border border-border rounded-xl w-[580px] max-h-[88vh] overflow-auto p-7 flex flex-col gap-5">
+
         {/* Header */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-          <div style={{ width: 10, height: 10, borderRadius: '50%', background: '#3b82f6' }} />
-          <span style={{ fontSize: 15, fontWeight: 700, color: '#f1f5f9' }}>
-            Configurar slot Próxima
-          </span>
+        <div className="flex items-center gap-2.5">
+          <div className="w-2.5 h-2.5 rounded-full shrink-0" style={{ background: SLOT_COLOR.next }} />
+          <span className="text-base font-bold text-dark">{t('deploy.configureNext')}</span>
         </div>
 
         {/* Skill selector */}
         <div>
-          <label style={{ fontSize: 11, fontWeight: 600, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.05em', display: 'block', marginBottom: 6 }}>
-            Skill-flow
+          <label className="text-xs font-semibold text-muted uppercase tracking-wider block mb-1.5">
+            {t('deploy.skillFlowLabel')}
           </label>
           <select
             value={selectedSkillId}
             onChange={e => handleSkillChange(e.target.value)}
-            style={{ width: '100%', background: '#1e293b', border: '1px solid #334155', borderRadius: 6, padding: '8px 10px', fontSize: 12, color: '#e2e8f0', outline: 'none', boxSizing: 'border-box' }}
+            className="w-full bg-white border border-border-strong rounded-md px-3 py-2 text-xs text-dark outline-none focus:border-primary box-border"
           >
-            <option value="">Selecione uma skill-flow…</option>
-            {groupSkillsForSelect(skills).map(group => (
+            <option value="">{t('deploy.selectSkillFlow')}</option>
+            {groupSkillsForSelect(skills, t('editor.groups.agents'), t('editor.groups.workflows')).map(group => (
               <optgroup key={group.label} label={group.label}>
                 {group.skills.map(s => (
                   <option key={s.skill_id} value={s.skill_id}>
@@ -495,28 +496,50 @@ function NextSlotEditor({
             ))}
           </select>
           {selectedSkill?.description && (
-            <div style={{ fontSize: 11, color: '#475569', marginTop: 4 }}>{selectedSkill.description}</div>
+            <div className="text-xs text-muted mt-1">{selectedSkill.description}</div>
           )}
         </div>
 
-        {/* Config form */}
+        {/* Concurrent sessions — platform-level capacity field, always visible */}
+        <div>
+          <label className="text-xs font-semibold text-muted uppercase tracking-wider block mb-1.5">
+            {t('deploy.concurrentSessionsLabel')}
+          </label>
+          <div className="flex items-center gap-3">
+            <input
+              type="number"
+              min={1}
+              max={500}
+              value={maxConcurrentSessions}
+              onChange={e => setMaxConcurrentSessions(Math.max(1, parseInt(e.target.value, 10) || 1))}
+              style={{ width: 90, ..._inputStyle(false) }}
+            />
+            <span className="text-xs text-muted leading-snug" style={{ maxWidth: 380 }}>
+              {t('deploy.concurrentSessionsDesc')}
+            </span>
+          </div>
+        </div>
+
+        {/* Skill-specific config form */}
         {selectedSkillId && (
           <div>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
-              <label style={{ fontSize: 11, fontWeight: 600, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-                Configuração
+            <div className="flex items-center justify-between mb-2.5">
+              <label className="text-xs font-semibold text-muted uppercase tracking-wider">
+                {t('deploy.configSection')}
               </label>
               {hasCurrent && (
-                <button onClick={handleCopyFromCurrent}
-                  style={{ fontSize: 11, padding: '4px 10px', borderRadius: 4, background: '#1e293b', color: '#60a5fa', border: '1px solid #334155', cursor: 'pointer' }}>
-                  ⬇ Copiar do Corrente
+                <button
+                  onClick={handleCopyFromCurrent}
+                  className="text-xs px-2.5 py-1 rounded border border-border bg-surface-alt text-primary hover:bg-primary/5 transition-colors"
+                >
+                  {t('deploy.copyFromCurrent')}
                 </button>
               )}
             </div>
 
             {newFields.size > 0 && (
-              <div style={{ marginBottom: 10, padding: '6px 10px', background: '#1d4ed811', border: '1px solid #1d4ed833', borderRadius: 4, fontSize: 11, color: '#60a5fa' }}>
-                {newFields.size} campo(s) novo(s) nesta versão — marcados com <strong>novo</strong>. Campos removidos foram descartados.
+              <div className="mb-2.5 px-3 py-1.5 bg-primary/5 border border-primary/20 rounded text-xs text-primary">
+                {t('deploy.newFieldsNotice', { count: newFields.size })}
               </div>
             )}
 
@@ -531,24 +554,30 @@ function NextSlotEditor({
         )}
 
         {saveError && (
-          <div style={{ padding: '8px 12px', background: '#7f1d1d', color: '#fca5a5', borderRadius: 4, fontSize: 12 }}>
+          <div className="px-3 py-2 bg-red-light border border-red/30 rounded text-xs text-red-text">
             {saveError}
           </div>
         )}
 
-        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10 }}>
-          <button onClick={onClose} disabled={saving}
-            style={{ padding: '8px 20px', borderRadius: 6, fontSize: 13, background: '#1e293b', color: '#94a3b8', border: '1px solid #334155', cursor: 'pointer' }}>
-            Cancelar
+        {/* Footer */}
+        <div className="flex justify-end gap-2.5">
+          <button
+            onClick={onClose}
+            disabled={saving}
+            className="px-5 py-2 rounded-md text-sm bg-white border border-border text-muted hover:bg-surface-muted transition-colors disabled:opacity-50"
+          >
+            {t('deploy.cancel')}
           </button>
-          <button onClick={handleSave} disabled={saving || !selectedSkillId}
-            style={{
-              padding: '8px 22px', borderRadius: 6, fontSize: 13, fontWeight: 600, border: 'none',
-              background: saving || !selectedSkillId ? '#1e3a5f' : '#1d4ed8',
-              color:      saving || !selectedSkillId ? '#334155' : '#fff',
-              cursor:     saving || !selectedSkillId ? 'not-allowed' : 'pointer',
-            }}>
-            {saving ? '⟳ Salvando…' : 'Salvar slot Próxima'}
+          <button
+            onClick={handleSave}
+            disabled={saving || !selectedSkillId}
+            className={`px-5 py-2 rounded-md text-sm font-semibold transition-colors ${
+              saving || !selectedSkillId
+                ? 'bg-surface-alt text-muted-light cursor-not-allowed'
+                : 'bg-primary text-white hover:bg-primary/90'
+            }`}
+          >
+            {saving ? t('deploy.saving') : t('deploy.saveNextSlot')}
           </button>
         </div>
       </div>
@@ -558,24 +587,46 @@ function NextSlotEditor({
 
 // ── Confirm modal ──────────────────────────────────────────────────────────────
 
-function ConfirmModal({ title, message, confirmLabel, confirmColor = '#1d4ed8', onConfirm, onCancel, running, error }: {
-  title: string; message: React.ReactNode; confirmLabel: string; confirmColor?: string
-  onConfirm: () => void; onCancel: () => void; running: boolean; error: string | null
+function ConfirmModal({
+  title, message, confirmLabel, confirmColor = '#1B4F8A',
+  onConfirm, onCancel, running, error,
+}: {
+  title:         string
+  message:       React.ReactNode
+  confirmLabel:  string
+  confirmColor?: string
+  onConfirm:     () => void
+  onCancel:      () => void
+  running:       boolean
+  error:         string | null
 }) {
+  const { t } = useTranslation('agentFlow')
+
   return (
-    <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,.7)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 999 }}>
-      <div style={{ background: '#0f172a', border: '1px solid #334155', borderRadius: 10, width: 420, padding: 28 }}>
-        <div style={{ fontSize: 16, fontWeight: 700, color: '#f1f5f9', marginBottom: 10 }}>{title}</div>
-        <div style={{ fontSize: 13, color: '#94a3b8', marginBottom: 20 }}>{message}</div>
-        {error && <div style={{ padding: '8px 12px', background: '#7f1d1d', color: '#fca5a5', borderRadius: 4, fontSize: 12, marginBottom: 16 }}>{error}</div>}
-        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10 }}>
-          <button onClick={onCancel} disabled={running}
-            style={{ padding: '8px 20px', borderRadius: 6, fontSize: 13, background: '#1e293b', color: '#94a3b8', border: '1px solid #334155', cursor: 'pointer' }}>
-            Cancelar
+    <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-[999]">
+      <div className="bg-white border border-border rounded-xl w-[420px] p-7 flex flex-col gap-4">
+        <div className="text-base font-bold text-dark">{title}</div>
+        <div className="text-sm text-muted leading-relaxed">{message}</div>
+        {error && (
+          <div className="px-3 py-2 bg-red-light border border-red/30 rounded text-xs text-red-text">
+            {error}
+          </div>
+        )}
+        <div className="flex justify-end gap-2.5 pt-1">
+          <button
+            onClick={onCancel}
+            disabled={running}
+            className="px-5 py-2 rounded-md text-sm bg-white border border-border text-muted hover:bg-surface-muted transition-colors disabled:opacity-50"
+          >
+            {t('deploy.cancel')}
           </button>
-          <button onClick={onConfirm} disabled={running}
-            style={{ padding: '8px 20px', borderRadius: 6, fontSize: 13, fontWeight: 600, background: running ? '#334155' : confirmColor, color: running ? '#64748b' : '#fff', border: 'none', cursor: running ? 'not-allowed' : 'pointer' }}>
-            {running ? '⟳ Aguarde…' : confirmLabel}
+          <button
+            onClick={onConfirm}
+            disabled={running}
+            className="px-5 py-2 rounded-md text-sm font-semibold text-white transition-colors disabled:opacity-50"
+            style={{ background: running ? '#94a3b8' : confirmColor }}
+          >
+            {running ? t('deploy.waiting') : confirmLabel}
           </button>
         </div>
       </div>
@@ -585,47 +636,28 @@ function ConfirmModal({ title, message, confirmLabel, confirmColor = '#1d4ed8', 
 
 // ── Role helpers ───────────────────────────────────────────────────────────────
 
-/** Can prepare the "next" slot — developer + admin */
 function hasEditRole(roles: string[]): boolean {
   return roles.some(r => r === 'developer' || r === 'admin')
 }
 
-/** Can promote / rollback — operator, supervisor + admin */
 function hasOperateRole(roles: string[]): boolean {
   return roles.some(r => r === 'operator' || r === 'supervisor' || r === 'admin')
-}
-
-const ROLE_BANNER: Record<string, { label: string; color: string; bg: string; border: string }> = {
-  developer: {
-    label:  'Você pode configurar o slot Próxima. Apenas operadores e supervisores podem promover ou reverter.',
-    color:  '#93c5fd', bg: '#0c1b35', border: '#1d4ed844',
-  },
-  operator: {
-    label:  'Você pode promover e reverter deploys. Apenas desenvolvedores podem configurar o slot Próxima.',
-    color:  '#86efac', bg: '#0a1f10', border: '#16a34a44',
-  },
-  supervisor: {
-    label:  'Você pode promover e reverter deploys. Apenas desenvolvedores podem configurar o slot Próxima.',
-    color:  '#86efac', bg: '#0a1f10', border: '#16a34a44',
-  },
 }
 
 // ── Main page ──────────────────────────────────────────────────────────────────
 
 export default function AgentFlowDeployPage() {
   const { getAccessToken, tenantId, session } = useAuth()
+  const { t } = useTranslation('agentFlow')
 
-  // Derived role capabilities — based on all roles the user holds
   const roles      = session?.roles ?? []
   const canEdit    = hasEditRole(roles)
   const canOperate = hasOperateRole(roles)
 
-  // Banner: pick the most specific role descriptor (developer > supervisor > operator)
   const bannerRole = roles.includes('developer') ? 'developer'
     : roles.includes('supervisor')               ? 'supervisor'
     : roles.includes('operator')                 ? 'operator'
     : null
-  // Admin has both capabilities — no banner needed
   const showBanner = bannerRole !== null && !(canEdit && canOperate)
 
   const [pools,        setPools]        = useState<Pool[]>([])
@@ -639,17 +671,14 @@ export default function AgentFlowDeployPage() {
   const [pageLoading, setPageLoading] = useState(true)
   const [pageError,   setPageError]   = useState<string | null>(null)
 
-  // Edit next slot
   const [editing,   setEditing]   = useState(false)
   const [saving,    setSaving]    = useState(false)
   const [saveError, setSaveError] = useState<string | null>(null)
 
-  // Promote / rollback
   const [confirmAction, setConfirmAction] = useState<'promote' | 'rollback' | null>(null)
   const [actionRunning, setActionRunning] = useState(false)
   const [actionError,   setActionError]   = useState<string | null>(null)
 
-  // Load master data
   useEffect(() => {
     if (!tenantId) return
     ;(async () => {
@@ -688,7 +717,6 @@ export default function AgentFlowDeployPage() {
     loadSlots(pool)
   }
 
-  // Save next slot
   const handleSaveNext = async (payload: { skill_id: string; config_json: Record<string, unknown> }) => {
     if (!selected || !tenantId) return
     setSaving(true); setSaveError(null)
@@ -705,7 +733,6 @@ export default function AgentFlowDeployPage() {
     }
   }
 
-  // Promote / rollback
   const handleConfirmAction = async () => {
     if (!selected || !tenantId || !confirmAction) return
     setActionRunning(true); setActionError(null)
@@ -731,61 +758,70 @@ export default function AgentFlowDeployPage() {
 
   const canPromote  = slots?.slots.next.set     === true
   const canRollback = slots?.slots.previous.set === true
+  const skillMap    = Object.fromEntries(skills.map(s => [s.skill_id, s]))
 
-  // Resolve skill names for slot cards
-  const skillMap = Object.fromEntries(skills.map(s => [s.skill_id, s]))
+  // ── Early exits ────────────────────────────────────────────────────────────
 
   if (!tenantId) return (
-    <div className="flex items-center justify-center h-full text-gray-400 text-sm">Nenhum tenant selecionado.</div>
+    <div className="flex items-center justify-center h-full text-muted-light text-sm">
+      {t('deploy.noTenant')}
+    </div>
   )
   if (pageLoading) return (
     <div className="flex items-center justify-center h-full"><Spinner /></div>
   )
   if (pageError) return (
-    <div className="flex items-center justify-center h-full text-red-400 text-sm">Erro: {pageError}</div>
+    <div className="flex items-center justify-center h-full text-red text-sm">
+      {t('deploy.error')}: {pageError}
+    </div>
   )
 
-  return (
-    <div style={{ display: 'flex', height: '100%', overflow: 'hidden', background: '#0a1628', color: '#e2e8f0' }}>
+  // ── Slot labels (for modal messages) ──────────────────────────────────────
 
-      {/* ─── Left: pool list ───────────────────────────────────────────── */}
-      <div style={{ width: 260, flexShrink: 0, borderRight: '1px solid #1e293b', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-        <div style={{ padding: '14px 16px 10px', borderBottom: '1px solid #1e293b', flexShrink: 0 }}>
-          <div style={{ fontSize: 15, fontWeight: 700, color: '#f1f5f9', marginBottom: 10 }}>Deploy de Skills</div>
+  const slotNext     = t('deploy.slots.next')
+  const slotCurrent  = t('deploy.slots.current')
+  const slotPrevious = t('deploy.slots.previous')
+
+  return (
+    <div className="flex h-full overflow-hidden bg-surface-muted text-dark">
+
+      {/* ─── Left: pool list ──────────────────────────────────────────────── */}
+      <div className="w-64 shrink-0 bg-white border-r border-border flex flex-col overflow-hidden">
+
+        {/* Header (no title — breadcrumb handles it) */}
+        <div className="px-4 py-3 border-b border-border shrink-0">
           <input
             value={filter}
             onChange={e => setFilter(e.target.value)}
-            placeholder="Filtrar pools…"
-            style={{ width: '100%', background: '#1e293b', border: '1px solid #334155', borderRadius: 6, padding: '6px 10px', fontSize: 12, color: '#e2e8f0', outline: 'none', boxSizing: 'border-box' }}
+            placeholder={t('deploy.filterPools')}
+            className="w-full px-3 py-1.5 text-xs bg-white border border-border-strong rounded-md text-dark placeholder:text-muted focus:outline-none focus:border-primary box-border"
           />
         </div>
 
-        <div style={{ flex: 1, overflowY: 'auto' }}>
+        {/* Pool list */}
+        <div className="flex-1 overflow-y-auto">
           {filteredPools.length === 0 ? (
-            <div style={{ padding: 24, textAlign: 'center', color: '#334155', fontSize: 12 }}>Nenhum pool encontrado</div>
+            <div className="px-6 py-6 text-center text-xs text-muted-light">{t('deploy.noPool')}</div>
           ) : filteredPools.map(pool => {
             const isActive = selected?.pool_id === pool.pool_id
             return (
-              <button key={pool.pool_id} onClick={() => handleSelectPool(pool)}
+              <button
+                key={pool.pool_id}
+                onClick={() => handleSelectPool(pool)}
+                className="w-full text-left px-4 py-2.5 border-b border-border transition-colors hover:bg-primary/5"
                 style={{
-                  width: '100%', textAlign: 'left', padding: '10px 16px',
-                  background: isActive ? '#1e3a5f' : 'transparent',
-                  borderLeft: `3px solid ${isActive ? '#3b82f6' : 'transparent'}`,
-                  borderBottom: '1px solid #1e293b', borderTop: 'none', borderRight: 'none',
-                  cursor: 'pointer', transition: 'background .12s',
-                }}>
-                <code style={{ fontSize: 11, color: isActive ? '#93c5fd' : '#e2e8f0', display: 'block', wordBreak: 'break-all' }}>
+                  background:  isActive ? '#EBF2FA' : undefined,
+                  borderLeft:  `3px solid ${isActive ? '#1B4F8A' : 'transparent'}`,
+                }}
+              >
+                <code className={`text-xs block break-all ${isActive ? 'text-primary' : 'text-dark'}`}>
                   {pool.pool_id}
                 </code>
                 {pool.description && (
-                  <div style={{ fontSize: 11, color: '#475569', marginTop: 2, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                    {pool.description}
-                  </div>
+                  <div className="text-xs text-muted mt-0.5 truncate">{pool.description}</div>
                 )}
                 {pool.channel_types && pool.channel_types.length > 0 && (
-                  <div style={{ fontSize: 10, color: '#334155', marginTop: 2 }}>
-                    {pool.channel_types.join(' · ')}
-                  </div>
+                  <div className="text-[10px] text-muted-light mt-0.5">{pool.channel_types.join(' · ')}</div>
                 )}
               </button>
             )
@@ -793,58 +829,58 @@ export default function AgentFlowDeployPage() {
         </div>
       </div>
 
-      {/* ─── Right: slot panel ────────────────────────────────────────── */}
-      <div style={{ flex: 1, overflow: 'auto', padding: 24, display: 'flex', flexDirection: 'column', gap: 20 }}>
+      {/* ─── Right: slot panel ────────────────────────────────────────────── */}
+      <div className="flex-1 overflow-auto p-6 flex flex-col gap-5">
 
         {/* Role permission banner */}
         {showBanner && bannerRole && (
-          <div style={{
-            padding: '8px 14px', borderRadius: 6, fontSize: 12,
-            background: ROLE_BANNER[bannerRole].bg,
-            color:      ROLE_BANNER[bannerRole].color,
-            border:     `1px solid ${ROLE_BANNER[bannerRole].border}`,
-            flexShrink: 0,
-          }}>
-            🔑 {ROLE_BANNER[bannerRole].label}
+          <div className={`px-3.5 py-2 rounded-md text-xs border shrink-0 ${
+            bannerRole === 'developer'
+              ? 'bg-blue-50 border-blue-200 text-blue-700'
+              : 'bg-green-50 border-green-200 text-green-700'
+          }`}>
+            🔑 {t(bannerRole === 'developer' ? 'deploy.bannerDeveloper' : 'deploy.bannerOperator')}
           </div>
         )}
 
+        {/* Empty state */}
         {!selected ? (
-          <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', color: '#334155', gap: 8 }}>
-            <span style={{ fontSize: 32 }}>⚙</span>
-            <span style={{ fontSize: 14 }}>Selecione um pool para gerenciar o deploy</span>
+          <div className="flex-1 flex flex-col items-center justify-center text-muted-light gap-2">
+            <Settings className="w-8 h-8 text-muted" aria-hidden="true" />
+            <span className="text-sm">{t('deploy.selectPool')}</span>
           </div>
         ) : (
           <>
-            {/* Header */}
-            <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between' }}>
+            {/* Pool header */}
+            <div className="flex items-start justify-between">
               <div>
-                <code style={{ fontSize: 16, fontWeight: 700, color: '#93c5fd' }}>{selected.pool_id}</code>
-                {selected.description && <div style={{ fontSize: 13, color: '#64748b', marginTop: 4 }}>{selected.description}</div>}
+                <code className="text-base font-bold text-primary">{selected.pool_id}</code>
+                {selected.description && (
+                  <div className="text-sm text-muted mt-1">{selected.description}</div>
+                )}
               </div>
-              <button onClick={() => loadSlots(selected)}
-                style={{ padding: '6px 14px', borderRadius: 6, fontSize: 12, background: '#1e293b', color: '#64748b', border: '1px solid #334155', cursor: 'pointer', flexShrink: 0 }}>
-                {slotsLoading ? <Spinner /> : '↻ Atualizar'}
+              <button
+                onClick={() => loadSlots(selected)}
+                className="shrink-0 px-3.5 py-1.5 rounded-md text-xs bg-white border border-border text-muted shadow-sm hover:bg-surface-muted transition-colors"
+              >
+                {slotsLoading ? <Spinner /> : t('actions.refresh')}
               </button>
             </div>
 
             {slotsError && (
-              <div style={{ padding: '10px 14px', background: '#7f1d1d', color: '#fca5a5', borderRadius: 6, fontSize: 12 }}>
-                Erro: {slotsError}
+              <div className="px-3.5 py-2.5 bg-red-light border border-red/30 rounded-md text-xs text-red-text">
+                {t('deploy.error')}: {slotsError}
               </div>
             )}
 
             {/* Slots */}
             <div>
-              <div style={{ marginBottom: 14 }}>
-                <div style={{ fontSize: 13, fontWeight: 700, color: '#f1f5f9', marginBottom: 2 }}>Slots de versão</div>
-                <div style={{ fontSize: 11, color: '#475569' }}>
-                  Próxima → Corrente → Anterior &nbsp;·&nbsp;
-                  Desenvolvedor configura Próxima; Operador promove ou reverte
-                </div>
+              <div className="mb-3.5">
+                <div className="text-sm font-bold text-dark mb-0.5">{t('deploy.slotsTitle')}</div>
+                <div className="text-xs text-muted">{t('deploy.slotsDesc')}</div>
               </div>
 
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 14 }}>
+              <div className="grid grid-cols-3 gap-3.5">
                 {(['previous', 'current', 'next'] as const).map(sn => {
                   const slotData  = slots?.slots[sn] ?? { slot: sn, set: false }
                   const slotSkill = slotData.skill_id ? (skillMap[slotData.skill_id] ?? null) : null
@@ -861,37 +897,40 @@ export default function AgentFlowDeployPage() {
               </div>
 
               {/* Action buttons */}
-              <div style={{ display: 'flex', gap: 12, marginTop: 16, alignItems: 'center', flexWrap: 'wrap' }}>
+              <div className="flex gap-3 mt-4 items-center flex-wrap">
                 <button
                   onClick={() => { setConfirmAction('promote'); setActionError(null) }}
                   disabled={!canPromote || !canOperate || slotsLoading}
-                  title={!canOperate ? 'Apenas operadores e supervisores podem promover' : undefined}
-                  style={{
-                    padding: '9px 22px', borderRadius: 6, fontSize: 13, fontWeight: 600, border: 'none',
-                    background: canPromote && canOperate && !slotsLoading ? '#1d4ed8' : '#1e293b',
-                    color:      canPromote && canOperate && !slotsLoading ? '#fff'    : '#334155',
-                    cursor:     canPromote && canOperate && !slotsLoading ? 'pointer' : 'not-allowed', transition: 'all .12s',
-                  }}>
-                  ↑ Promover (Próxima → Corrente)
+                  title={!canOperate ? t('deploy.bannerOperator') : undefined}
+                  className={`px-5 py-2 rounded-md text-sm font-semibold transition-colors ${
+                    canPromote && canOperate && !slotsLoading
+                      ? 'bg-primary text-white hover:bg-primary/90'
+                      : 'bg-surface-alt text-muted-light cursor-not-allowed'
+                  }`}
+                >
+                  {t('deploy.promote')}
                 </button>
+
                 <button
                   onClick={() => { setConfirmAction('rollback'); setActionError(null) }}
                   disabled={!canRollback || !canOperate || slotsLoading}
-                  title={!canOperate ? 'Apenas operadores e supervisores podem reverter' : undefined}
-                  style={{
-                    padding: '9px 22px', borderRadius: 6, fontSize: 13, fontWeight: 600, border: 'none',
-                    background: canRollback && canOperate && !slotsLoading ? '#78350f' : '#1e293b',
-                    color:      canRollback && canOperate && !slotsLoading ? '#fde68a' : '#334155',
-                    cursor:     canRollback && canOperate && !slotsLoading ? 'pointer' : 'not-allowed', transition: 'all .12s',
-                  }}>
-                  ↩ Rollback (Anterior → Corrente)
+                  title={!canOperate ? t('deploy.bannerOperator') : undefined}
+                  className={`px-5 py-2 rounded-md text-sm font-semibold transition-colors ${
+                    canRollback && canOperate && !slotsLoading
+                      ? 'text-white hover:opacity-90'
+                      : 'bg-surface-alt text-muted-light cursor-not-allowed'
+                  }`}
+                  style={canRollback && canOperate && !slotsLoading ? { background: '#b45309' } : undefined}
+                >
+                  {t('deploy.rollbackBtn')}
                 </button>
+
                 {slots && (
-                  <span style={{ fontSize: 12, color: '#334155' }}>
+                  <span className="text-xs text-muted-light">
                     {!canOperate
-                      ? 'Sem permissão para promover ou reverter — apenas operadores e supervisores.'
-                      : (!canPromote ? 'Configure o slot "Próxima" para habilitar a promoção. ' : '')
-                        + (!canRollback ? 'Sem slot "Anterior" para rollback.' : '')}
+                      ? t('deploy.noOpPermission')
+                      : (!canPromote ? t('deploy.setNextToPromote') + ' ' : '')
+                        + (!canRollback ? t('deploy.noPrevForRollback') : '')}
                   </span>
                 )}
               </div>
@@ -900,7 +939,7 @@ export default function AgentFlowDeployPage() {
         )}
       </div>
 
-      {/* ─── Modals ──────────────────────────────────────────────────── */}
+      {/* ─── Modals ───────────────────────────────────────────────────────── */}
 
       {editing && selected && slots && (
         <NextSlotEditor
@@ -918,19 +957,16 @@ export default function AgentFlowDeployPage() {
 
       {confirmAction === 'promote' && (
         <ConfirmModal
-          title="Promover versão"
+          title={t('deploy.promoteTitle')}
           message={
             <span>
-              O slot <strong style={{ color: '#3b82f6' }}>Próxima</strong> passará para{' '}
-              <strong style={{ color: '#22c55e' }}>Corrente</strong>, e o atual{' '}
-              <strong style={{ color: '#22c55e' }}>Corrente</strong> será arquivado em{' '}
-              <strong style={{ color: '#94a3b8' }}>Anterior</strong>.
+              {t('deploy.promoteNotice1', { next: slotNext, current: slotCurrent, previous: slotPrevious })}
               <br /><br />
-              Corrente e Anterior se tornarão imutáveis.
+              {t('deploy.promoteNotice2')}
             </span>
           }
-          confirmLabel="↑ Confirmar promoção"
-          confirmColor="#1d4ed8"
+          confirmLabel={t('deploy.confirmPromote')}
+          confirmColor="#1B4F8A"
           onConfirm={handleConfirmAction}
           onCancel={() => setConfirmAction(null)}
           running={actionRunning}
@@ -940,17 +976,16 @@ export default function AgentFlowDeployPage() {
 
       {confirmAction === 'rollback' && (
         <ConfirmModal
-          title="Rollback de versão"
+          title={t('deploy.rollbackTitle')}
           message={
             <span>
-              O slot <strong style={{ color: '#94a3b8' }}>Anterior</strong> será restaurado como{' '}
-              <strong style={{ color: '#22c55e' }}>Corrente</strong>, com a skill e configuração exatas que estavam em produção anteriormente.
+              {t('deploy.rollbackNotice1', { previous: slotPrevious, current: slotCurrent })}
               <br /><br />
-              O slot Anterior será removido após o rollback.
+              {t('deploy.rollbackNotice2')}
             </span>
           }
-          confirmLabel="↩ Confirmar rollback"
-          confirmColor="#78350f"
+          confirmLabel={t('deploy.confirmRollback')}
+          confirmColor="#b45309"
           onConfirm={handleConfirmAction}
           onCancel={() => setConfirmAction(null)}
           running={actionRunning}

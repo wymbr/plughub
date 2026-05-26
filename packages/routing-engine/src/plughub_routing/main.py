@@ -273,18 +273,25 @@ async def _persist_queued_contact(
     contact_data["queued_at_ms"] = now_ms
     contact_data["tier"]         = event.customer_profile.tier
 
+    newly_added = False
     try:
-        await instance_registry.add_queued_contact(
+        newly_added = await instance_registry.add_queued_contact(
             tenant_id    = event.tenant_id,
             pool_id      = pool_id,
             session_id   = event.session_id,
             contact_data = contact_data,
             queued_at_ms = now_ms,
         )
-        logger.info(
-            "Contact persisted to queue: session=%s pool=%s tenant=%s",
-            event.session_id, pool_id, event.tenant_id,
-        )
+        if newly_added:
+            logger.info(
+                "Contact persisted to queue: session=%s pool=%s tenant=%s",
+                event.session_id, pool_id, event.tenant_id,
+            )
+        else:
+            logger.debug(
+                "Contact already in queue (re-attempt suppressed notification): session=%s pool=%s",
+                event.session_id, pool_id,
+            )
     except Exception as exc:
         logger.error(
             "Failed to persist queued contact: session=%s — %s", event.session_id, exc
@@ -292,6 +299,10 @@ async def _persist_queued_contact(
 
     # Notify customer via conversations.outbound so channel-gateway delivers
     # a "waiting" message to the customer WebSocket while they're in queue.
+    # Only send on first enqueue — suppress on periodic drain re-attempts to
+    # avoid spamming the customer with repeated "waiting" messages.
+    if not newly_added:
+        return
     try:
         contact_id_raw = await redis_client.get(
             f"session:{event.session_id}:contact_id"
@@ -354,7 +365,7 @@ async def _write_pool_context(
         # Read pool config from routing engine Redis cache — no new I/O path
         channel_types:        list[str]   = []
         mentionable_pools:    dict | None = None
-        mentionable_journeys: dict | None = None
+        mentionable_journeys: list | None = None
         agent_groups:         list[str]   = []
         max_reply_time_ms:    int | None  = None
         raw = await redis_client.get(f"{tenant_id}:pool_config:{pool_id}")

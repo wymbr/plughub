@@ -1,6 +1,6 @@
 # Arc 12 — Agent Business Events
 
-> **Status:** Fases A–E concluídas (2026-05-14)
+> Última atualização: 2026-05-25 · Estado: Arc 16 · Status: Fases A–E concluídas (2026-05-14)
 
 Permite que agentes (AI e humanos) publiquem KPIs de negócio estruturados durante sessões, via MCP tool `agent_event`. Os eventos são armazenados no ClickHouse e integrados ao módulo de análise de qualidade como métricas sobrepostas.
 

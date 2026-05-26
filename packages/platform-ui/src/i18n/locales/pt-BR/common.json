@@ -9,8 +9,8 @@
   "search": "Buscar",
   "filter": "Filtrar",
   "export": "Exportar",
-  "loading": "Carregando...",
-  "saving": "Salvando...",
+  "loading": "Carregando…",
+  "saving": "Salvando…",
   "isRequired": "é obrigatório",
   "failedToSave": "Falha ao salvar",
   "optionalDescription": "Descrição opcional",
@@ -25,7 +25,7 @@
     "search": "Buscar",
     "filter": "Filtrar",
     "export": "Exportar",
-    "loading": "Carregando..."
+    "loading": "Carregando…"
   },
   "status": {
     "active": "Ativo",

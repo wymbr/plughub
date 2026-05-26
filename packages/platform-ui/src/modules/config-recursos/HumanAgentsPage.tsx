@@ -40,7 +40,7 @@ const HumanAgentsPage: React.FC = () => {
   return (
     <div className="border border-lightGray rounded-lg overflow-hidden bg-white" style={{ minHeight: 520 }}>
       {/* Inner tab bar */}
-      <div className="flex items-center gap-1 px-4 py-2 border-b border-lightGray bg-gray-50">
+      <div className="flex items-center gap-1 px-4 py-2 border-b border-lightGray bg-surface-muted">
         <span className="text-sm font-bold text-dark mr-4">{t('humanAgents.title')}</span>
         {(['live', 'profiles'] as const).map(tabId => (
           <button
@@ -150,7 +150,7 @@ function LiveTab({ onError }: { onError: (m: string) => void }) {
           />
         ) : (
           <table className="w-full text-xs border-collapse">
-            <thead className="bg-gray-50 sticky top-0">
+            <thead className="bg-surface-muted sticky top-0">
               <tr>
                 {[
                   t('humanAgents.tableHeaders.instanceId'),
@@ -170,7 +170,7 @@ function LiveTab({ onError }: { onError: (m: string) => void }) {
               {filtered.map(inst => (
                 <tr
                   key={inst.instance_id}
-                  className={`border-b border-lightGray ${acting === inst.instance_id ? 'bg-tableAlt' : 'hover:bg-gray-50'}`}
+                  className={`border-b border-lightGray ${acting === inst.instance_id ? 'bg-tableAlt' : 'hover:bg-surface-muted'}`}
                 >
                   <td className="px-3 py-2 font-mono text-gray">{inst.instance_id}</td>
                   <td className="px-3 py-2 text-dark font-medium">{inst.agent_type_id}</td>
@@ -280,7 +280,7 @@ function ProfilesTab({ onError }: { onError: (m: string) => void }) {
   return (
     <div className="flex flex-1 overflow-hidden">
       {/* Left sidebar */}
-      <div className="w-72 flex-shrink-0 border-r border-lightGray flex flex-col overflow-y-auto bg-gray-50">
+      <div className="w-72 flex-shrink-0 border-r border-lightGray flex flex-col overflow-y-auto bg-surface-muted">
         <div className="px-4 py-3 border-b border-lightGray flex items-center justify-between">
           <div>
             <div className="text-xs font-bold text-dark">{t('humanAgents.profiles.title')}</div>
@@ -367,7 +367,7 @@ function ProfileRow({ at, selected, onSelect }: {
       className={`w-full text-left px-4 py-2 transition-colors border-l-2 ${
         selected
           ? 'bg-primary/5 border-l-primary'
-          : 'bg-transparent border-l-transparent hover:bg-gray-100'
+          : 'bg-transparent border-l-transparent hover:bg-surface-alt'
       }`}
     >
       <div className={`text-xs font-medium ${selected ? 'text-primary' : 'text-dark'}`}>

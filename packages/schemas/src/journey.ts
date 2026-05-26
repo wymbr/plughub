@@ -32,7 +32,20 @@ export const JourneySchema = z.object({
   customer_id:             z.string().nullable(),
   origin_session_id:       z.string(),
   status:                  JourneyStatusSchema,
+  /**
+   * Arc 16: pool that owns this journey.
+   * Stable across skill version upgrades — resolves internally to active skill_ids.
+   * Used by journey_list_suspended to filter by accessible_pools[].
+   */
+  pool_id:                 z.string().nullable(),
+  /**
+   * Arc 16: machine-readable reason for terminal failures.
+   * Distinguishes collect_timeout vs workflow_error without expanding the status enum.
+   */
+  failure_reason:          z.string().nullable(),
   merged_into_journey_id:  z.string().uuid().nullable(),
+  /** Set when this journey was derived from a split — points to the source journey */
+  split_from_journey_id:   z.string().uuid().nullable(),
   metadata:                z.record(z.unknown()).nullable(),
   created_at:              z.string().datetime(),
   updated_at:              z.string().datetime(),
@@ -51,7 +64,7 @@ export const JourneyEventTypeSchema = z.enum([
   "journey_failed",           // process failed
   "journey_cancelled",        // cancelled by agent or timeout
   "journey_merged",           // secondary journey absorbed by primary
-  "journey_split",            // new journey created from extracted sessions (future)
+  "journey_split",            // sessions extracted from a journey into a new one
 ])
 export type JourneyEventType = z.infer<typeof JourneyEventTypeSchema>
 
@@ -85,6 +98,19 @@ export const JourneyEventSchema = z.object({
   workflow_instance_id:    z.string().uuid().nullable().optional(),
   /** Populated for journey_merged — the primary journey that absorbed this one */
   merged_into_journey_id:  z.string().uuid().optional(),
+  /**
+   * Populated for journey_split events.
+   * source_journey_id: the journey sessions were extracted from.
+   * new_journey_id: the newly created journey.
+   * session_ids: the sessions that were moved.
+   * session_count: convenience count of session_ids.
+   */
+  source_journey_id:       z.string().uuid().optional(),
+  new_journey_id:          z.string().uuid().optional(),
+  session_ids:             z.array(z.string()).optional(),
+  session_count:           z.number().int().optional(),
+  /** Set on journey_started when journey was created via split */
+  split_from_journey_id:   z.string().uuid().optional(),
   metadata:                z.record(z.unknown()).optional(),
 })
 export type JourneyEvent = z.infer<typeof JourneyEventSchema>
@@ -115,3 +141,94 @@ export const JourneyMergeInputSchema = z.object({
   journey_id_secondary: z.string().uuid().describe("Secondary journey — becomes merged"),
 })
 export type JourneyMergeInput = z.infer<typeof JourneyMergeInputSchema>
+
+export const JourneySplitInputSchema = z.object({
+  journey_id:  z.string().uuid().describe("Source journey to extract sessions from"),
+  session_ids: z.array(z.string()).min(1).describe(
+    "Collect session IDs to move to the new journey. Must not include the source journey's origin_session_id.",
+  ),
+  skill_id:    z.string().optional().describe(
+    "If provided, triggers a new workflow for the new journey immediately after split",
+  ),
+  metadata:    z.record(z.unknown()).optional().describe("Additional context for the new journey"),
+})
+export type JourneySplitInput = z.infer<typeof JourneySplitInputSchema>
+
+export const JourneySplitOutputSchema = z.object({
+  new_journey_id:           z.string().uuid(),
+  new_workflow_instance_id: z.string().uuid().nullable(),
+})
+export type JourneySplitOutput = z.infer<typeof JourneySplitOutputSchema>
+
+// ── Arc 16 MCP tool input/output schemas ─────────────────────────────────────
+
+/**
+ * journey_list_suspended — lists journeys in suspended status for a given pool.
+ * pool_id is stable across skill version upgrades; resolves internally to active skill_ids.
+ * Used by Tier 1 poller workflows and pool agents implementing inbound resume (Fase E).
+ */
+export const JourneyListSuspendedInputSchema = z.object({
+  pool_id:     z.string().describe("Pool that owns the journeys to list"),
+  customer_id: z.string().optional().describe("Filter to journeys for a specific customer"),
+  limit:       z.number().int().positive().max(100).default(20).describe("Max results to return"),
+})
+export type JourneyListSuspendedInput = z.infer<typeof JourneyListSuspendedInputSchema>
+
+export const JourneyListSuspendedOutputSchema = z.object({
+  journeys: z.array(z.object({
+    journey_id:    z.string().uuid(),
+    skill_id:      z.string(),
+    customer_id:   z.string().nullable(),
+    suspended_at:  z.string().datetime().nullable(),
+    resume_token:  z.string().nullable(),
+    metadata:      z.record(z.unknown()).nullable(),
+  })),
+})
+export type JourneyListSuspendedOutput = z.infer<typeof JourneyListSuspendedOutputSchema>
+
+/**
+ * journey_resume — resumes a suspended journey from the MCP layer.
+ * Wraps the workflow-api /resume endpoint, hiding the resume_token from callers.
+ */
+export const JourneyResumeInputSchema = z.object({
+  journey_id: z.string().uuid().describe("Journey to resume"),
+  decision:   z.enum(["approved", "rejected", "input"]).describe("Resume decision"),
+  payload:    z.record(z.unknown()).default({}).describe("Data provided by the resuming party"),
+  session_id: z.string().optional().describe(
+    "Current session to link to the journey on resume (for inbound Fase E pattern)",
+  ),
+})
+export type JourneyResumeInput = z.infer<typeof JourneyResumeInputSchema>
+
+export const JourneyResumeOutputSchema = z.object({
+  journey_id:           z.string().uuid(),
+  workflow_instance_id: z.string().uuid(),
+  resumed:              z.boolean(),
+})
+export type JourneyResumeOutput = z.infer<typeof JourneyResumeOutputSchema>
+
+/**
+ * journey_check_pending — checks whether a customer has suspended journeys
+ * compatible with the current channel. Called by pool agents on inbound contacts
+ * to implement Arc 16 Fase E (inbound journey resume).
+ * Only pools that opt in pay the processing cost (Option A — agent-explicit).
+ */
+export const JourneyCheckPendingInputSchema = z.object({
+  customer_id: z.string().describe("Customer to check for pending journeys"),
+  pool_id:     z.string().describe("Pool scope — only journeys owned by this pool are returned"),
+  channel:     z.string().optional().describe(
+    "Current contact channel — filters journeys by channel capability if provided",
+  ),
+})
+export type JourneyCheckPendingInput = z.infer<typeof JourneyCheckPendingInputSchema>
+
+export const JourneyCheckPendingOutputSchema = z.object({
+  has_pending:  z.boolean(),
+  journeys:     z.array(z.object({
+    journey_id:   z.string().uuid(),
+    skill_id:     z.string(),
+    suspended_at: z.string().datetime().nullable(),
+    metadata:     z.record(z.unknown()).nullable(),
+  })),
+})
+export type JourneyCheckPendingOutput = z.infer<typeof JourneyCheckPendingOutputSchema>

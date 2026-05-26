@@ -11,9 +11,9 @@ import type { DisplayToolProps, TableData } from './types'
 function Skeleton() {
   return (
     <div className="h-full flex flex-col gap-2 p-2 animate-pulse">
-      <div className="h-4 rounded bg-gray-200 w-full" />
+      <div className="h-4 rounded bg-border w-full" />
       {[1, 2, 3, 4].map(i => (
-        <div key={i} className="h-3 rounded bg-gray-100 w-full" />
+        <div key={i} className="h-3 rounded bg-surface-alt w-full" />
       ))}
     </div>
   )
@@ -37,7 +37,7 @@ export const TableTool: React.FC<DisplayToolProps<TableData>> = ({
 
   if (error) {
     return (
-      <div className="h-full flex items-center justify-center text-xs text-red-400">
+      <div className="h-full flex items-center justify-center text-xs text-red">
         Indisponível
       </div>
     )
@@ -64,7 +64,7 @@ export const TableTool: React.FC<DisplayToolProps<TableData>> = ({
   return (
     <div className="h-full flex flex-col overflow-hidden text-xs">
       {/* Fixed header */}
-      <div className="flex-shrink-0 bg-gray-50 border-b border-gray-100">
+      <div className="flex-shrink-0 bg-surface-muted border-b border-border">
         <table className="w-full table-fixed border-collapse">
           <thead>
             <tr>
@@ -72,9 +72,9 @@ export const TableTool: React.FC<DisplayToolProps<TableData>> = ({
                 <th
                   key={col.key}
                   onClick={col.sortable ? () => handleSort(col.key) : undefined}
-                  className={`px-3 py-1.5 font-semibold text-gray-500 ${
+                  className={`px-3 py-1.5 font-semibold text-muted ${
                     col.align === 'right' ? 'text-right' : col.align === 'center' ? 'text-center' : 'text-left'
-                  } ${col.sortable ? 'cursor-pointer select-none hover:text-gray-700' : ''}`}
+                  } ${col.sortable ? 'cursor-pointer select-none hover:text-dark' : ''}`}
                 >
                   {col.label}
                   {col.sortable && sortKey === col.key && (
@@ -95,7 +95,7 @@ export const TableTool: React.FC<DisplayToolProps<TableData>> = ({
               <tr>
                 <td
                   colSpan={data.columns.length}
-                  className="px-3 py-4 text-center text-gray-400"
+                  className="px-3 py-4 text-center text-muted-light"
                 >
                   Sem dados
                 </td>
@@ -104,12 +104,12 @@ export const TableTool: React.FC<DisplayToolProps<TableData>> = ({
             {rows.map((row, i) => (
               <tr
                 key={i}
-                className={i % 2 === 0 ? 'bg-white' : 'bg-gray-50/50'}
+                className={i % 2 === 0 ? 'bg-white' : 'bg-surface-muted/50'}
               >
                 {data.columns.map(col => (
                   <td
                     key={col.key}
-                    className={`px-3 py-1.5 text-gray-700 truncate ${
+                    className={`px-3 py-1.5 text-dark truncate ${
                       col.align === 'right' ? 'text-right' : col.align === 'center' ? 'text-center' : 'text-left'
                     }`}
                   >
@@ -123,7 +123,7 @@ export const TableTool: React.FC<DisplayToolProps<TableData>> = ({
       </div>
 
       {data.total !== undefined && data.total > data.rows.length && (
-        <div className="flex-shrink-0 px-3 py-1 border-t border-gray-100 text-gray-400 text-right">
+        <div className="flex-shrink-0 px-3 py-1 border-t border-border text-muted-light text-right">
           {data.rows.length} de {data.total.toLocaleString('pt-BR')}
         </div>
       )}

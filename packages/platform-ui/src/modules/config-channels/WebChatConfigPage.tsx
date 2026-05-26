@@ -108,32 +108,32 @@ const WebChatConfigPage: React.FC = () => {
     <div className="max-w-2xl space-y-6">
 
       {/* Admin token */}
-      <div className="flex items-center gap-3 p-3 bg-gray-50 border border-gray-200 rounded-lg">
-        <label className="text-xs font-medium text-gray-600 shrink-0">Admin Token</label>
+      <div className="flex items-center gap-3 p-3 bg-surface-muted border border-border rounded-lg">
+        <label className="text-xs font-medium text-muted shrink-0">Admin Token</label>
         <input
           type={showToken ? 'text' : 'password'}
           value={adminToken}
           onChange={e => setAdminToken(e.target.value)}
           placeholder="Token to enable editing"
-          className="flex-1 text-xs px-2 py-1.5 border border-gray-300 rounded focus:outline-none focus:border-primary"
+          className="flex-1 text-xs px-2 py-1.5 border border-border-strong rounded focus:outline-none focus:border-primary"
         />
         <button
           onClick={() => setShowToken(v => !v)}
-          className="text-gray-400 hover:text-gray-600 text-sm"
+          className="text-muted-light hover:text-muted text-sm"
         >{showToken ? '🙈' : '👁'}</button>
-        {adminToken && <span className="text-xs text-green-600 font-semibold shrink-0">✓ active</span>}
+        {adminToken && <span className="text-xs text-green-text font-semibold shrink-0">✓ active</span>}
         <div className="flex items-center gap-2 ml-auto">
           {loading && <Spinner />}
-          {error && <span className="text-xs text-red-600">⚠ {error}</span>}
+          {error && <span className="text-xs text-red-text">⚠ {error}</span>}
           <button onClick={reload} className="text-xs text-secondary hover:text-primary">↻</button>
         </div>
       </div>
 
       {/* ── 1. Authentication ── */}
-      <section className="bg-white border border-gray-200 rounded-lg p-5">
-        <h3 className="text-sm font-semibold text-gray-900 mb-1">WebSocket Authentication</h3>
-        <p className="text-xs text-gray-500 mb-4">
-          Maximum time (seconds) the server waits for the <code className="font-mono bg-gray-100 px-1 rounded">conn.authenticate</code> message
+      <section className="bg-white border border-border rounded-lg p-5">
+        <h3 className="text-sm font-semibold text-dark mb-1">WebSocket Authentication</h3>
+        <p className="text-xs text-muted mb-4">
+          Maximum time (seconds) the server waits for the <code className="font-mono bg-surface-alt px-1 rounded">conn.authenticate</code> message
           after the WebSocket connection is accepted. The connection is closed when the timeout elapses.
         </p>
         <div className="flex items-end gap-3">
@@ -146,7 +146,7 @@ const WebChatConfigPage: React.FC = () => {
               min={5} max={120} step={5}
               value={cfg.auth_timeout_s}
               onChange={e => update('auth_timeout_s', parseInt(e.target.value) || DEFAULTS.auth_timeout_s)}
-              className="w-32 text-xs font-mono px-2 py-1.5 border border-gray-300 rounded focus:outline-none focus:border-primary"
+              className="w-32 text-xs font-mono px-2 py-1.5 border border-border-strong rounded focus:outline-none focus:border-primary"
             />
           </div>
           <SaveBtn
@@ -158,9 +158,9 @@ const WebChatConfigPage: React.FC = () => {
       </section>
 
       {/* ── 2. Attachments ── */}
-      <section className="bg-white border border-gray-200 rounded-lg p-5">
-        <h3 className="text-sm font-semibold text-gray-900 mb-1">Attachment Policy</h3>
-        <p className="text-xs text-gray-500 mb-4">
+      <section className="bg-white border border-border rounded-lg p-5">
+        <h3 className="text-sm font-semibold text-dark mb-1">Attachment Policy</h3>
+        <p className="text-xs text-muted mb-4">
           Controls expiry and size limits per file type. Soft-delete occurs at
           <em> attachment_expiry_days</em>; physical delete happens 24h later.
         </p>
@@ -174,7 +174,7 @@ const WebChatConfigPage: React.FC = () => {
               min={1} max={365} step={1}
               value={cfg.attachment_expiry_days}
               onChange={e => update('attachment_expiry_days', parseInt(e.target.value) || DEFAULTS.attachment_expiry_days)}
-              className="w-24 text-xs font-mono px-2 py-1.5 border border-gray-300 rounded focus:outline-none focus:border-primary"
+              className="w-24 text-xs font-mono px-2 py-1.5 border border-border-strong rounded focus:outline-none focus:border-primary"
             />
           </div>
         </div>
@@ -191,7 +191,7 @@ const WebChatConfigPage: React.FC = () => {
           ).map(({ key, label, hint }) => (
             <div key={key}>
               <label className="text-xs font-medium text-dark block mb-0.5">{label}</label>
-              <p className="text-[10px] text-gray-400 mb-1">{hint}</p>
+              <p className="text-2xs text-muted-light mb-1">{hint}</p>
               <input
                 type="number"
                 min={1} max={2048} step={1}
@@ -200,7 +200,7 @@ const WebChatConfigPage: React.FC = () => {
                   ...cfg.upload_limits_mb,
                   [key]: parseInt(e.target.value) || DEFAULTS.upload_limits_mb[key],
                 })}
-                className="w-full text-xs font-mono px-2 py-1.5 border border-gray-300 rounded focus:outline-none focus:border-primary"
+                className="w-full text-xs font-mono px-2 py-1.5 border border-border-strong rounded focus:outline-none focus:border-primary"
               />
             </div>
           ))}
@@ -215,26 +215,26 @@ const WebChatConfigPage: React.FC = () => {
       </section>
 
       {/* Global save + error */}
-      {saveErr && <p className="text-xs text-red-600">{saveErr}</p>}
+      {saveErr && <p className="text-xs text-red-text">{saveErr}</p>}
 
       <div className="flex gap-2">
         <button
           onClick={saveAll}
           disabled={saving !== null || !adminToken || !dirty}
-          className="px-4 py-2 rounded text-sm font-semibold bg-primary text-white disabled:opacity-40 hover:bg-blue-800 transition-colors"
+          className="px-4 py-2 rounded text-sm font-semibold bg-primary text-white disabled:opacity-40 hover:bg-primary-dark transition-colors"
         >
           {saving === 'all' ? 'Saving…' : '💾 Save all changes'}
         </button>
         <button
           onClick={handleReset}
-          className="px-4 py-2 rounded text-sm border border-gray-300 text-gray-600 hover:text-gray-900 transition-colors"
+          className="px-4 py-2 rounded text-sm border border-border-strong text-muted hover:text-dark transition-colors"
         >
           ↺ Restore defaults
         </button>
       </div>
 
       {/* Info */}
-      <section className="bg-blue-50 border border-blue-200 rounded-lg p-4 text-xs text-blue-700 space-y-1">
+      <section className="bg-info-light border border-info/30 rounded-lg p-4 text-xs text-info-text space-y-1">
         <p className="font-semibold">ℹ️ About WebChat configuration</p>
         <p>
           These settings are read by the <strong>Channel Gateway</strong> (port 5000) at runtime via Config API.
@@ -261,7 +261,7 @@ function SaveBtn({ onClick, saving, disabled, label = 'Save' }: {
     <button
       onClick={onClick}
       disabled={saving || disabled}
-      className="px-3 py-1.5 rounded text-xs font-semibold bg-primary text-white disabled:opacity-40 hover:bg-blue-800 transition-colors"
+      className="px-3 py-1.5 rounded text-xs font-semibold bg-primary text-white disabled:opacity-40 hover:bg-primary-dark transition-colors"
     >
       {saving ? 'Saving…' : label}
     </button>

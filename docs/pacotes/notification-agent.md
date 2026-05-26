@@ -1,5 +1,7 @@
 # Módulo: notification-agent
 
+> ⚠️ OBSOLETO — este pacote nunca foi implementado no monorepo. O step type `notify` foi depreciado no Arc 16 (substituído por `invoke: notification_send`). Documento mantido apenas como referência histórica da spec v24.0.
+
 > Spec de referência: v24.0 seção 8.3
 > Responsabilidade: detectar pendências de entrega (`outbound.*`), oferecer ao cliente no momento certo e acionar o agente destino quando aceito
 > Tipo arquitetural: `notification` — distinto de `inbound` e `outbound`

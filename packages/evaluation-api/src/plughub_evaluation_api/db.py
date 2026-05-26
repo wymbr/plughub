@@ -264,6 +264,118 @@ ALTER TABLE evaluation.contestations
 -- ABAC module_config in the auth-api JWT (module_config.evaluation.revisar /
 -- module_config.evaluation.contestar). Drop the legacy table if it exists.
 DROP TABLE IF EXISTS evaluation.permissions;
+
+-- ── Arc 13 Fase B migrations ──────────────────────────────────────────────────
+
+-- evaluation.instances: session_metrics computed by SessionMetricsExtractor (Arc 13 Fase B)
+ALTER TABLE evaluation.instances
+    ADD COLUMN IF NOT EXISTS session_metrics JSONB;
+
+-- ── Arc 13 Fase A migrations ──────────────────────────────────────────────────
+
+-- evaluation.campaigns: pre-review and contestation policy fields (Arc 13)
+ALTER TABLE evaluation.campaigns
+    ADD COLUMN IF NOT EXISTS pre_review_enabled     BOOLEAN  NOT NULL DEFAULT FALSE,
+    ADD COLUMN IF NOT EXISTS pre_review_agent_pool  TEXT;
+
+-- evaluation.results: contestation state machine + pre_review tracking (Arc 13)
+ALTER TABLE evaluation.results
+    ADD COLUMN IF NOT EXISTS contestation_state  TEXT
+        CHECK (contestation_state IN (
+            'pre_review_pending', 'contestation_open', 'under_review',
+            'timeout_contestation', 'timeout_review', 'closed_upheld', 'closed_revised'
+        )),
+    ADD COLUMN IF NOT EXISTS pre_review_complete BOOLEAN NOT NULL DEFAULT FALSE,
+    ADD COLUMN IF NOT EXISTS evaluated_agent_type TEXT
+        CHECK (evaluated_agent_type IN ('human_agent', 'ai_agent')),
+    ADD COLUMN IF NOT EXISTS finalized_at        TIMESTAMPTZ,
+    ADD COLUMN IF NOT EXISTS final_score         NUMERIC(6,3),
+    ADD COLUMN IF NOT EXISTS process_duration_ms BIGINT;
+
+-- ── ContestationThread (Arc 13) ───────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS evaluation.contestation_threads (
+    id                      TEXT        PRIMARY KEY,        -- "evthread_{uuid}"
+    tenant_id               TEXT        NOT NULL,
+    evaluation_instance_id  TEXT        NOT NULL REFERENCES evaluation.instances(id),
+    dimension_id            TEXT        NOT NULL,           -- dimension_id or criterion_id (fallback)
+    round                   INTEGER     NOT NULL,
+    author_type             TEXT        NOT NULL
+        CHECK (author_type IN (
+            'evaluator_ai', 'pre_reviewer_ai', 'human_agent',
+            'reviewer_ai', 'human_reviewer'
+        )),
+    author_id               TEXT        NOT NULL,
+    text                    TEXT        NOT NULL DEFAULT '',
+    decision                TEXT        CHECK (decision IN ('upheld', 'revised')),
+    score_override          NUMERIC(6,3),
+    evidence_entries        JSONB       NOT NULL DEFAULT '[]',  -- EvidenceEntry[]
+    calibration_signal      JSONB,                              -- CalibrationSignal | NULL
+    created_at              TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_evthreads_instance
+    ON evaluation.contestation_threads (evaluation_instance_id, dimension_id, round);
+
+CREATE INDEX IF NOT EXISTS idx_evthreads_tenant
+    ON evaluation.contestation_threads (tenant_id, created_at DESC);
+
+-- ── CurationReview (Arc 13) ───────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS evaluation.curation_reviews (
+    id                      TEXT        PRIMARY KEY,        -- "evcuration_{uuid}"
+    tenant_id               TEXT        NOT NULL,
+    evaluation_instance_id  TEXT        NOT NULL REFERENCES evaluation.instances(id),
+    trigger                 TEXT        NOT NULL,           -- "sampling_rule:{name}" | "reviewer_signal" | combined
+    curator_id              TEXT,                           -- user_id (NULL = unassigned)
+    status                  TEXT        NOT NULL DEFAULT 'pending'
+        CHECK (status IN ('pending', 'approved', 'recalibrated', 'bias_flagged')),
+    curator_notes           TEXT,
+    calibration_note_id     TEXT,                           -- FK → calibration_notes.id (set after creation)
+    created_at              TIMESTAMPTZ NOT NULL DEFAULT now(),
+    resolved_at             TIMESTAMPTZ
+);
+
+CREATE INDEX IF NOT EXISTS idx_evcuration_tenant_status
+    ON evaluation.curation_reviews (tenant_id, status, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_evcuration_instance
+    ON evaluation.curation_reviews (evaluation_instance_id);
+
+-- ── CalibrationNote (Arc 13) ──────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS evaluation.calibration_notes (
+    id               TEXT        PRIMARY KEY,               -- "evcalnote_{uuid}"
+    tenant_id        TEXT        NOT NULL,
+    campaign_id      TEXT        NOT NULL REFERENCES evaluation.campaigns(id),
+    dimension_id     TEXT        NOT NULL,
+    evaluator_id     TEXT        NOT NULL,                  -- agent_type_id
+    skill_version    TEXT        NOT NULL,
+    text             TEXT        NOT NULL,
+    severity         TEXT        NOT NULL DEFAULT 'low'
+        CHECK (severity IN ('low', 'medium', 'high')),
+    published_to_kb  BOOLEAN     NOT NULL DEFAULT FALSE,
+    created_at       TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_evcalnotes_campaign
+    ON evaluation.calibration_notes (campaign_id, evaluator_id, created_at DESC);
+
+-- ── CurationSamplingRule (Arc 13) ─────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS evaluation.curation_sampling_rules (
+    id           TEXT        PRIMARY KEY,                   -- "evcsrule_{uuid}"
+    tenant_id    TEXT        NOT NULL,
+    campaign_id  TEXT        NOT NULL REFERENCES evaluation.campaigns(id),
+    rule_type    TEXT        NOT NULL
+        CHECK (rule_type IN (
+            'score_extremes', 'deploy_baseline', 'score_outlier',
+            'na_excess', 'random_baseline', 'reviewer_signal'
+        )),
+    params       JSONB       NOT NULL DEFAULT '{}',
+    enabled      BOOLEAN     NOT NULL DEFAULT TRUE,
+    priority     INTEGER     NOT NULL DEFAULT 10,
+    created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_evcsrules_campaign
+    ON evaluation.curation_sampling_rules (campaign_id, enabled, priority ASC);
 """
 
 
@@ -612,6 +724,26 @@ async def update_instance_status(
             f"UPDATE evaluation.instances SET {', '.join(set_parts)} "
             f"WHERE id=${len(args)-1} AND tenant_id=${len(args)} RETURNING *",
             *args,
+        )
+    return _row(row)
+
+
+async def set_instance_session_metrics(
+    pool: asyncpg.Pool,
+    instance_id: str,
+    tenant_id: str,
+    session_metrics: dict[str, Any],
+) -> dict[str, Any] | None:
+    """Persist computed session_metric.* values onto the EvaluationInstance."""
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            """
+            UPDATE evaluation.instances
+               SET session_metrics=$1::jsonb, updated_at=now()
+             WHERE id=$2 AND tenant_id=$3
+            RETURNING *
+            """,
+            json.dumps(session_metrics), instance_id, tenant_id,
         )
     return _row(row)
 
@@ -1046,6 +1178,403 @@ async def lock_result(
             """,
             locked_by, lock_reason, result_id,
         )
+    return _row(row)
+
+
+# ─── Arc 13 — ContestationThread ─────────────────────────────────────────────
+
+async def create_contestation_thread(
+    pool: asyncpg.Pool,
+    *,
+    tenant_id: str,
+    evaluation_instance_id: str,
+    dimension_id: str,
+    round: int,
+    author_type: str,
+    author_id: str,
+    text: str,
+    decision: str | None = None,
+    score_override: float | None = None,
+    evidence_entries: list[dict] | None = None,
+    calibration_signal: dict | None = None,
+) -> dict[str, Any]:
+    thread_id = _new_id("evthread_")
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            """
+            INSERT INTO evaluation.contestation_threads
+                (id, tenant_id, evaluation_instance_id, dimension_id, round,
+                 author_type, author_id, text, decision, score_override,
+                 evidence_entries, calibration_signal)
+            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::jsonb,$12::jsonb)
+            RETURNING *
+            """,
+            thread_id, tenant_id, evaluation_instance_id, dimension_id, round,
+            author_type, author_id, text, decision, score_override,
+            json.dumps(evidence_entries or []),
+            json.dumps(calibration_signal) if calibration_signal else None,
+        )
+    return _row(row)  # type: ignore[return-value]
+
+
+async def list_contestation_threads(
+    pool: asyncpg.Pool,
+    evaluation_instance_id: str,
+    tenant_id: str,
+    dimension_id: str | None = None,
+) -> list[dict[str, Any]]:
+    cond = "WHERE evaluation_instance_id=$1 AND tenant_id=$2"
+    args: list[Any] = [evaluation_instance_id, tenant_id]
+    if dimension_id:
+        args.append(dimension_id)
+        cond += f" AND dimension_id=${len(args)}"
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            f"SELECT * FROM evaluation.contestation_threads {cond} ORDER BY dimension_id, round ASC",
+            *args,
+        )
+    return _rows(rows)
+
+
+# ─── Arc 13 — CurationReview ──────────────────────────────────────────────────
+
+async def create_curation_review(
+    pool: asyncpg.Pool,
+    *,
+    tenant_id: str,
+    evaluation_instance_id: str,
+    trigger: str,
+) -> dict[str, Any]:
+    review_id = _new_id("evcuration_")
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            """
+            INSERT INTO evaluation.curation_reviews
+                (id, tenant_id, evaluation_instance_id, trigger)
+            VALUES ($1,$2,$3,$4)
+            RETURNING *
+            """,
+            review_id, tenant_id, evaluation_instance_id, trigger,
+        )
+    return _row(row)  # type: ignore[return-value]
+
+
+async def resolve_curation_review(
+    pool: asyncpg.Pool,
+    review_id: str,
+    tenant_id: str,
+    *,
+    status: str,
+    curator_id: str,
+    curator_notes: str | None = None,
+    calibration_note_id: str | None = None,
+) -> dict[str, Any] | None:
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            """
+            UPDATE evaluation.curation_reviews
+               SET status=$1, curator_id=$2, curator_notes=$3,
+                   calibration_note_id=$4, resolved_at=now()
+             WHERE id=$5 AND tenant_id=$6
+            RETURNING *
+            """,
+            status, curator_id, curator_notes, calibration_note_id, review_id, tenant_id,
+        )
+    return _row(row)
+
+
+async def list_curation_reviews(
+    pool: asyncpg.Pool,
+    tenant_id: str,
+    campaign_id: str | None = None,
+    status: str | None = None,
+    limit: int = 50,
+    offset: int = 0,
+) -> list[dict[str, Any]]:
+    """
+    List CurationReview records enriched with:
+      - i.campaign_id
+      - latest calibration_signal from pre_reviewer_ai thread (nullable)
+    Always joins evaluation.instances for enrichment.
+    """
+    args: list[Any] = [tenant_id]
+    conditions = ["cr.tenant_id=$1"]
+
+    if campaign_id:
+        args.append(campaign_id)
+        conditions.append(f"i.campaign_id=${len(args)}")
+    if status:
+        args.append(status)
+        conditions.append(f"cr.status=${len(args)}")
+
+    where = " AND ".join(conditions)
+    args.extend([limit, offset])
+
+    base = f"""
+        SELECT cr.*,
+               i.campaign_id AS campaign_id,
+               (
+                 SELECT ct.calibration_signal
+                   FROM evaluation.contestation_threads ct
+                  WHERE ct.evaluation_instance_id = cr.evaluation_instance_id
+                    AND ct.author_type = 'pre_reviewer_ai'
+                    AND ct.calibration_signal IS NOT NULL
+                  ORDER BY ct.created_at DESC
+                  LIMIT 1
+               ) AS calibration_signal
+          FROM evaluation.curation_reviews cr
+          JOIN evaluation.instances i ON i.id = cr.evaluation_instance_id
+         WHERE {where}
+         ORDER BY cr.created_at DESC
+         LIMIT ${len(args)-1} OFFSET ${len(args)}
+    """
+
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(base, *args)
+    results = _rows(rows)
+    # calibration_signal is returned as JSON string from asyncpg — parse it
+    for r in results:
+        if isinstance(r.get("calibration_signal"), str):
+            try:
+                r["calibration_signal"] = json.loads(r["calibration_signal"])
+            except Exception:
+                pass
+    return results
+
+
+# ─── Arc 13 — CalibrationNote ─────────────────────────────────────────────────
+
+async def create_calibration_note(
+    pool: asyncpg.Pool,
+    *,
+    tenant_id: str,
+    campaign_id: str,
+    dimension_id: str,
+    evaluator_id: str,
+    skill_version: str,
+    text: str,
+    severity: str = "low",
+) -> dict[str, Any]:
+    note_id = _new_id("evcalnote_")
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            """
+            INSERT INTO evaluation.calibration_notes
+                (id, tenant_id, campaign_id, dimension_id, evaluator_id,
+                 skill_version, text, severity)
+            VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+            RETURNING *
+            """,
+            note_id, tenant_id, campaign_id, dimension_id, evaluator_id,
+            skill_version, text, severity,
+        )
+    return _row(row)  # type: ignore[return-value]
+
+
+async def mark_calibration_note_published(
+    pool: asyncpg.Pool,
+    note_id: str,
+    tenant_id: str,
+) -> dict[str, Any] | None:
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "UPDATE evaluation.calibration_notes SET published_to_kb=TRUE WHERE id=$1 AND tenant_id=$2 RETURNING *",
+            note_id, tenant_id,
+        )
+    return _row(row)
+
+
+async def list_calibration_notes(
+    pool: asyncpg.Pool,
+    tenant_id: str,
+    campaign_id: str | None = None,
+    evaluator_id: str | None = None,
+    published_to_kb: bool | None = None,
+    limit: int = 50,
+    offset: int = 0,
+) -> list[dict[str, Any]]:
+    cond = "WHERE tenant_id=$1"
+    args: list[Any] = [tenant_id]
+    for col, val in [("campaign_id", campaign_id), ("evaluator_id", evaluator_id)]:
+        if val is not None:
+            args.append(val)
+            cond += f" AND {col}=${len(args)}"
+    if published_to_kb is not None:
+        args.append(published_to_kb)
+        cond += f" AND published_to_kb=${len(args)}"
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            f"SELECT * FROM evaluation.calibration_notes {cond} "
+            f"ORDER BY created_at DESC LIMIT ${len(args)+1} OFFSET ${len(args)+2}",
+            *args, limit, offset,
+        )
+    return _rows(rows)
+
+
+# ─── Arc 13 — CurationSamplingRule ────────────────────────────────────────────
+
+async def create_sampling_rule(
+    pool: asyncpg.Pool,
+    *,
+    tenant_id: str,
+    campaign_id: str,
+    rule_type: str,
+    params: dict | None = None,
+    enabled: bool = True,
+    priority: int = 10,
+) -> dict[str, Any]:
+    rule_id = _new_id("evcsrule_")
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            """
+            INSERT INTO evaluation.curation_sampling_rules
+                (id, tenant_id, campaign_id, rule_type, params, enabled, priority)
+            VALUES ($1,$2,$3,$4,$5::jsonb,$6,$7)
+            RETURNING *
+            """,
+            rule_id, tenant_id, campaign_id, rule_type,
+            json.dumps(params or {}), enabled, priority,
+        )
+    return _row(row)  # type: ignore[return-value]
+
+
+async def list_sampling_rules(
+    pool: asyncpg.Pool,
+    tenant_id: str,
+    campaign_id: str,
+) -> list[dict[str, Any]]:
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT * FROM evaluation.curation_sampling_rules
+             WHERE tenant_id=$1 AND campaign_id=$2
+             ORDER BY priority ASC, created_at ASC
+            """,
+            tenant_id, campaign_id,
+        )
+    return _rows(rows)
+
+
+async def update_sampling_rule(
+    pool: asyncpg.Pool,
+    rule_id: str,
+    tenant_id: str,
+    **fields: Any,
+) -> dict[str, Any] | None:
+    allowed = {"rule_type", "params", "enabled", "priority"}
+    updates = {k: v for k, v in fields.items() if k in allowed}
+    if not updates:
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT * FROM evaluation.curation_sampling_rules WHERE id=$1 AND tenant_id=$2",
+                rule_id, tenant_id,
+            )
+        return _row(row)
+    set_parts = []
+    args: list[Any] = []
+    idx = 1
+    for k, v in updates.items():
+        if k == "params":
+            set_parts.append(f"{k}=${idx}::jsonb")
+            args.append(json.dumps(v))
+        else:
+            set_parts.append(f"{k}=${idx}")
+            args.append(v)
+        idx += 1
+    args.extend([rule_id, tenant_id])
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            f"UPDATE evaluation.curation_sampling_rules SET {', '.join(set_parts)} "
+            f"WHERE id=${idx} AND tenant_id=${idx+1} RETURNING *",
+            *args,
+        )
+    return _row(row)
+
+
+async def delete_sampling_rule(pool: asyncpg.Pool, rule_id: str, tenant_id: str) -> bool:
+    async with pool.acquire() as conn:
+        result = await conn.execute(
+            "DELETE FROM evaluation.curation_sampling_rules WHERE id=$1 AND tenant_id=$2",
+            rule_id, tenant_id,
+        )
+    return result.split()[-1] != "0"
+
+
+# ─── Arc 13 — Result finalization helpers ─────────────────────────────────────
+
+async def finalize_result(
+    pool: asyncpg.Pool,
+    result_id: str,
+    *,
+    contestation_state: str,
+    final_score: float,
+    process_duration_ms: int,
+) -> dict[str, Any] | None:
+    """
+    Mark a result as evaluation_finalized.
+    Sets contestation_state, final_score, finalized_at, process_duration_ms.
+    Also sets eval_status='locked' (final state).
+    """
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            """
+            UPDATE evaluation.results
+               SET contestation_state  = $1,
+                   final_score         = $2,
+                   process_duration_ms = $3,
+                   finalized_at        = now(),
+                   eval_status         = 'locked',
+                   locked_at           = now(),
+                   locked_by           = 'arc13_finalization',
+                   lock_reason         = $4,
+                   action_required     = NULL,
+                   resume_token        = NULL,
+                   updated_at          = now()
+             WHERE id = $5
+               AND eval_status != 'locked'
+            RETURNING *
+            """,
+            contestation_state, final_score, process_duration_ms, contestation_state, result_id,
+        )
+    return _row(row)
+
+
+async def set_contestation_state(
+    pool: asyncpg.Pool,
+    result_id: str,
+    state: str,
+    *,
+    action_required: str | None = None,
+    current_round: int | None = None,
+) -> dict[str, Any] | None:
+    """Update contestation_state (and optionally action_required / current_round) on a result."""
+    if current_round is not None:
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                """
+                UPDATE evaluation.results
+                   SET contestation_state = $1,
+                       action_required    = $2,
+                       current_round      = $3,
+                       updated_at         = now()
+                 WHERE id = $4
+                RETURNING *
+                """,
+                state, action_required, current_round, result_id,
+            )
+    else:
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                """
+                UPDATE evaluation.results
+                   SET contestation_state = $1,
+                       action_required    = $2,
+                       updated_at         = now()
+                 WHERE id = $3
+                RETURNING *
+                """,
+                state, action_required, result_id,
+            )
     return _row(row)
 
 

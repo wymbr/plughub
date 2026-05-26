@@ -3,18 +3,19 @@ jwt_utils.py
 Emissão e decodificação de JWT HS256.
 
 Claims do access token:
-  sub                   — user UUID
-  tenant_id             — tenant do usuário
-  email                 — e-mail
-  name                  — nome de exibição
-  roles                 — lista de roles (operator | supervisor | admin | developer | business)
-  accessible_pools      — lista de pool_ids; [] = acesso a todos os pools
-  module_config         — config ABAC por módulo (ver infra/modules.yaml)
-                          ex: { "evaluation": { "contestar": { "access": "read_write", "scope": [] } } }
-  supervised_groups     — Arc 9: group_ids supervisionados ([] = sem restrição / admin)
-  supervised_agent_types — Arc 9: agent_type_ids expandidos dos grupos ativos
-  supervised_user_ids   — Arc 9: user_ids (agentes humanos) expandidos dos grupos ativos
-  exp / iat             — padrão JWT
+  sub                       — user UUID
+  tenant_id                 — tenant do usuário
+  email                     — e-mail
+  name                      — nome de exibição
+  roles                     — lista de roles (operator | supervisor | admin | developer | business)
+  accessible_pools          — lista de pool_ids; [] = acesso a todos os pools
+  module_config             — config ABAC por módulo (ver infra/modules.yaml)
+                              ex: { "evaluation": { "contestar": { "access": "read_write", "scope": [] } } }
+  supervised_groups         — Arc 9: group_ids supervisionados ([] = sem restrição / admin)
+  supervised_agent_types    — Arc 9: agent_type_ids expandidos dos grupos ativos
+  supervised_user_ids       — Arc 9: user_ids (agentes humanos) expandidos dos grupos ativos
+  max_concurrent_sessions   — capacidade de atendimento simultâneo do agente humano (default 3)
+  exp / iat                 — padrão JWT
 """
 from __future__ import annotations
 
@@ -44,21 +45,23 @@ def create_access_token(
     supervised_groups: list[str] | None = None,
     supervised_agent_types: list[str] | None = None,
     supervised_user_ids: list[str] | None = None,
+    max_concurrent_sessions: int = 3,
 ) -> str:
     expire = _now() + timedelta(minutes=settings.access_token_expire_minutes)
     payload: dict[str, Any] = {
-        "sub":                    user_id,
-        "tenant_id":              tenant_id,
-        "email":                  email,
-        "name":                   name,
-        "roles":                  roles,
-        "accessible_pools":       accessible_pools,
-        "module_config":          module_config or {},
-        "supervised_groups":      supervised_groups or [],
-        "supervised_agent_types": supervised_agent_types or [],
-        "supervised_user_ids":    supervised_user_ids or [],
-        "iat":                    _now(),
-        "exp":                    expire,
+        "sub":                      user_id,
+        "tenant_id":                tenant_id,
+        "email":                    email,
+        "name":                     name,
+        "roles":                    roles,
+        "accessible_pools":         accessible_pools,
+        "module_config":            module_config or {},
+        "supervised_groups":        supervised_groups or [],
+        "supervised_agent_types":   supervised_agent_types or [],
+        "supervised_user_ids":      supervised_user_ids or [],
+        "max_concurrent_sessions":  max_concurrent_sessions,
+        "iat":                      _now(),
+        "exp":                      expire,
     }
     return jwt.encode(payload, settings.jwt_secret, algorithm=settings.jwt_algorithm)
 

@@ -1,5 +1,7 @@
 # Módulo: Grupos de Agentes
 
+> Última atualização: 2026-05-25 · Estado: Arc 16
+
 > Rota UI: `/config/groups` | Roles: admin | ABAC: `config.users`
 
 ## O que é

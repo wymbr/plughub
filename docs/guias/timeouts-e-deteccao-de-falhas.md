@@ -1,6 +1,7 @@
 # Timeouts e Detecção de Falhas
 
-> Spec de referência: PlugHub v24.0 seções 4.5 e 4.6k  
+> Última atualização: 2026-05-25 · Estado: Arc 16
+
 > Módulos envolvidos: `routing-engine`, `mcp-server-plughub`, `channel-gateway`
 
 Este guia descreve os três mecanismos independentes que o PlugHub usa para detectar e recuperar falhas: queda de agente, desconexão de cliente e expiração de dados temporários.
@@ -106,39 +107,47 @@ Para evitar desconexões prematuras em conversas pausadas aguardando input do ag
 websocket_idle_timeout_s: int = 300
 ```
 
-### Sinal de desconexão — `session:closed`
+### Sinal de desconexão — item `session_closed` no stream
 
-Quando uma sessão é encerrada (por disconnect, timeout ou `agent_done`), o Orchestrator Bridge publica o sinal de fechamento no Redis:
+O `wait_for_message` (tool external-mcp) deixou de usar `BLPOP` em chaves de lista
+e passou a consumir o stream canônico da sessão via **`XREADGROUP`** (consumer-group
+do Redis Streams). A mensagem do cliente e o sinal de encerramento agora são
+**itens do mesmo stream** `session:{id}:stream` — não há mais multi-key blpop nem a
+chave `session:closed:{session_id}`.
 
-```
-SET session:closed:{session_id} "1"  EX 10
-```
-
-TTL de 10 segundos é suficiente para consumo imediato por qualquer componente que aguarda a sessão.
-
-O `wait_for_message` (tool external-mcp) monitora essa chave **em paralelo** ao BLPOP da mensagem do cliente, via multi-key blpop do ioredis:
+Quando uma sessão é encerrada (por disconnect, timeout ou `agent_done`), o
+encerramento é escrito como um item `type: "session_closed"` no próprio stream da
+sessão. O `wait_for_message`, ao ler esse item via `XREADGROUP`, reage à desconexão
+**imediatamente** — sem aguardar o timeout completo — e encerra com `agent_done`
+usando `outcome: "unresolved"`.
 
 ```typescript
-// packages/mcp-server-plughub/src/tools/external-agent.ts
-const resultKey  = `menu:result:${session_id}`
-const closedKey  = `session:closed:${session_id}`
-const waitingKey = `menu:waiting:${session_id}`
+// packages/mcp-server-plughub/src/tools/external-agent.ts (esquema)
+const streamKey = `session:${session_id}:stream`
 
-// Sinaliza ao bridge que mensagens devem ser entregues aqui
-await redis.set(waitingKey, "1", "EX", timeout_s + 10)
-try {
-  const result = await redis.blpop(resultKey, closedKey, timeout_s)
-  if (!result) return mcpError("timeout", "Cliente não respondeu no prazo")
-  const [key, raw] = result
-  if (key === closedKey) return mcpError("client_disconnected", "Cliente desconectou")
-  // key === resultKey — mensagem recebida normalmente
-  return ok({ message: JSON.parse(raw) })
-} finally {
-  redis.del(waitingKey).catch(() => {})
+// Lê o próximo item do stream via consumer-group; block = timeout
+const items = await redis.xreadgroup(
+  "GROUP", groupName, consumerName,
+  "BLOCK", timeout_s * 1000, "COUNT", 1,
+  "STREAMS", streamKey, ">"
+)
+if (!items) return mcpError("timeout", "Cliente não respondeu no prazo")
+
+const [, entries] = items[0]
+const [entryId, fields] = entries[0]
+const entry = parseStreamEntry(fields)
+await redis.xack(streamKey, groupName, entryId)
+
+if (entry.type === "session_closed") {
+  return mcpError("client_disconnected", "Cliente desconectou")
 }
+// entry.type === "message" — mensagem do cliente recebida normalmente
+return ok({ message: entry })
 ```
 
-Isso permite que o agente externo reaja à desconexão **imediatamente** (sem aguardar o timeout completo de `wait_for_message`) e encerre a sessão com `agent_done` usando `outcome: "unresolved"`.
+Vantagens do consumer-group: a posição de leitura é durável (reconexão sem perda de
+mensagens via cursor), e o mesmo stream serve tanto a mensagem quanto o sinal de
+encerramento — eliminando a necessidade de coordenar chaves separadas.
 
 ### Convenção `menu:waiting`
 
@@ -157,8 +166,7 @@ Se `wait_for_message` não setar essa chave antes do BLPOP, o bridge loga `"No a
 | `{tenant_id}:instance:{instance_id}` | 30s | Heartbeat de instância — renovado por eventos Kafka |
 | `{tenant_id}:queue:{pool_id}` (ZSET score) | 4h | Contato em fila aguardando agente |
 | `{tenant_id}:session:{session_id}` | 4h | Metadados da sessão ativa |
-| `menu:waiting:{session_id}` | `timeout_s + 10` | Flag para o bridge entregar mensagens ao BLPOP |
-| `session:closed:{session_id}` | 10s | Sinal de encerramento da sessão |
+| `menu:waiting:{session_id}` | `timeout_s + 10` | Flag para o bridge entregar mensagens ao BLPOP do step `menu` |
 | `{tenant_id}:pool_config:{pool_id}` | 24h | Configuração de pool (padrão; via `PLUGHUB_POOL_CONFIG_TTL_SECONDS`) |
 | `{tenant_id}:pipeline:{conversation_id}:running` | Enquanto em execução | Lock de execução do Skill Flow Engine — CrashDetector o respeita |
 
@@ -192,7 +200,5 @@ t≤45s   Router recebe evento em conversations.inbound
 
 - `packages/routing-engine/src/plughub_routing/crash_detector.py` — CrashDetector completo
 - `packages/routing-engine/src/plughub_routing/registry.py` — `_instance_key`, `_pool_instances_key`, TTL de instância
-- `packages/mcp-server-plughub/src/tools/external-agent.ts` — `wait_for_assignment` (heartbeat loop) e `wait_for_message` (menu:waiting + session:closed)
+- `packages/mcp-server-plughub/src/tools/external-agent.ts` — `wait_for_assignment` (heartbeat loop) e `wait_for_message` (XREADGROUP no stream da sessão)
 - `packages/channel-gateway/src/config.py` — `websocket_idle_timeout_s`
-- Spec v24.0 seção 4.5 — CrashDetector spec
-- Spec v24.0 seção 4.6k — framework external-mcp

@@ -42,7 +42,7 @@ steps:
     prompt: "📝 Wrap-up — por favor, descreva brevemente o que foi tratado neste atendimento:"
     visibility:
       - "@ctx.session.human_agent_participant_id"
-    timeout_s: 120
+    timeout_s: 30
     output_as: wrapup_resumo
     on_success: registrar_resumo
     on_failure: solicitar_classificacao
@@ -72,7 +72,7 @@ steps:
     prompt: "Como você classifica este atendimento?"
     visibility:
       - "@ctx.session.human_agent_participant_id"
-    timeout_s: 120
+    timeout_s: 30
     options:
       - id: resolvido
         label: "✅ Resolvido"
@@ -111,7 +111,7 @@ steps:
     prompt: "Há próximos passos necessários? (digite 'não' para pular)"
     visibility:
       - "@ctx.session.human_agent_participant_id"
-    timeout_s: 120
+    timeout_s: 30
     output_as: wrapup_proximos_passos
     on_success: registrar_proximos_passos
     on_failure: encerrar

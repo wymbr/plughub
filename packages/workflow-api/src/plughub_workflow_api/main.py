@@ -76,10 +76,23 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         min_size=2,
         max_size=10,
     )
-    try:
-        await ensure_schema(pool)
-    except Exception as exc:
-        logger.warning("Schema setup failed — will retry on first request: %s", exc)
+    # Retry ensure_schema — PostgreSQL may not yet accept DDL immediately after
+    # the connection pool opens (especially in docker-compose startup ordering).
+    _schema_ok = False
+    for _attempt in range(1, 8):
+        try:
+            await ensure_schema(pool)
+            _schema_ok = True
+            break
+        except Exception as exc:
+            _wait = 2.0 * _attempt
+            logger.warning(
+                "Schema setup failed (attempt %d/7) — retrying in %.1fs: %s",
+                _attempt, _wait, exc,
+            )
+            await asyncio.sleep(_wait)
+    if not _schema_ok:
+        raise RuntimeError("Could not apply workflow schema after 7 attempts — aborting startup")
 
     # Kafka
     producer = None

@@ -1,5 +1,7 @@
 # Conferência com Agente IA — Mapeamento de Gaps para Teste
 
+> ⚠️ OBSOLETO — este documento mapeava "gaps a implementar" para conferência multi-agente e @mention, hoje totalmente implementados (Arc 11; ver guias/conference-mechanics.md e guias/mention-protocol.md). Mantido apenas como referência histórica.
+
 > Spec de referência: PlugHub v24.0 seção 3.2a (Supervisor / Agent Assist), 4.6k (external-mcp)  
 > Cenário: agente humano convida agente externo-mcp para conferência usando `@pool_id:{params}`  
 > Data: 2026-04-16

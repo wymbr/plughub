@@ -1,5 +1,7 @@
 # Changelog — 2026-04-16
 
+> ⚠️ Changelog histórico (pré-CHANGELOG.md). Mantido apenas como referência. O changelog vivo é o CHANGELOG.md na raiz do repositório.
+
 > Commits cobertos: `c344be4` → `5db8fe4` → `e2b2721` → `c659490` → `597fbb9` → `c83e0c3` → `5fe8e40` → `770f3ca`
 > Módulos afetados: `mcp-server-plughub`, `routing-engine`, `agent-registry`
 

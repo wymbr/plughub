@@ -1,5 +1,7 @@
 # Módulo: Configuração → Controle de Acesso
 
+> Última atualização: 2026-05-25 · Estado: Arc 16
+
 > Rota UI: `/config/access` | Roles: admin
 
 ## O que é
@@ -30,16 +32,21 @@ O sistema ABAC complementa o RBAC com permissões granulares. Cada módulo regis
 
 ### Módulos e campos principais
 
+São 9 módulos ABAC registrados em `infra/modules.yaml`:
+
 | Módulo | Campos de permissão | Gate |
 |---|---|---|
 | `contacts` | `operacao`, `visualizar`, `exportar` | Monitor + AgentAssist; Análise |
-| `workflows` | `operacao`, `visualizar`, `cancelar`, `webhooks` | Editor, Monitor, Calendar; Report |
+| `workflows` | `operacao`, `visualizar`, `cancelar`, `webhooks`, `journey.read`, `journey.resume` | Editor, Monitor, Calendar; Report; Journey API (Arc 16) |
 | `skill_flows` | `operacao`, `visualizar`, `editar` | Editor, Monitor, Deploy; Report |
 | `evaluation` | `contestar`, `revisar`, `relatorio`, `formularios` | Ações de contestação/revisão; Reports; Forms |
 | `billing` | `visualizar`, `gerenciar` | Acesso ao módulo de Faturamento |
 | `config` | `plataforma`, `recursos`, `canais`, `usuarios`, `mascaramento` | Abas de Configuração |
-| `agent_assist` | `atender`, `supervisionar` | Atender contatos; entrar como supervisor |
+| `agent_assist` | `atender`, `supervisionar`, `operacao` | Atender contatos; entrar como supervisor; orquestração (Arc 11) |
 | `campaigns` | `visualizar`, `gerenciar` | Visualização e gestão de campanhas |
+| `audit` | `sessions`, `mcp_calls`, `user_access`, `data_requests`, `config_snapshot` | Audit LGPD — acesso DPO/compliance (`sessions` e `mcp_calls` ativos) |
+
+Os campos `workflows.journey.read` e `workflows.journey.resume` (Arc 16) governam as MCP tools `journey_list_suspended`, `journey_resume` e `journey_check_pending`.
 
 ### Hierarquia de acesso por campo
 
@@ -51,6 +58,18 @@ none < read_only < write_only < read_write
 
 - `scope: []` — acesso global (todos os pools/campanhas)
 - `scope: ["pool:retencao_humano", "pool:sac"]` — restrito a pools específicos
+
+### Claims de supervisor scope no JWT (Arc 9)
+
+Além dos campos ABAC, o JWT carrega três claims de escopo de supervisão, denormalizados no momento do login/refresh via `resolve_supervisor_scope()` (resolução de turnos dos Grupos de Agentes):
+
+| Claim | Significado |
+|---|---|
+| `supervised_groups[]` | IDs dos grupos sob supervisão no turno ativo |
+| `supervised_agent_types[]` | agent_type_ids dos membros dos grupos supervisionados |
+| `supervised_user_ids[]` | user_ids dos usuários nos grupos supervisionados |
+
+`admin` → `([], [], [])` (sem restrição). Supervisor com grupos mas sem turno ativo → sentinel `["__no_active_shift__"]` para impedir interpretação de array vazio como "sem restrição". O analytics-api usa `supervised_agent_types` para filtrar todos os relatórios de agentes. Ver módulo Grupos de Agentes.
 
 ## AccessPage — CRUD de usuários
 

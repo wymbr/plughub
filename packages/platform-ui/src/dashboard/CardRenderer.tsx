@@ -87,7 +87,7 @@ function NewCardContent({
 
   if (!tool) {
     return (
-      <div className="h-full flex items-center justify-center text-xs text-gray-400">
+      <div className="h-full flex items-center justify-center text-xs text-muted-light">
         Tool &quot;{card.tool_id}&quot; não registrado
       </div>
     )
@@ -136,8 +136,8 @@ function LegacyCardContent({ card, tenantId }: { card: DashboardCard; tenantId: 
     const cfg = card.config as PoolStatusCardConfig
     return (
       <div className="h-full flex flex-col">
-        <p className="text-xs text-gray-500 px-1 pb-1">{cfg.title}</p>
-        <div className="flex-1 flex items-center justify-center text-xs text-gray-400">
+        <p className="text-xs text-muted px-1 pb-1">{cfg.title}</p>
+        <div className="flex-1 flex items-center justify-center text-xs text-muted-light">
           {/* Operational pool status — pending backend (Part 4) */}
         </div>
       </div>
@@ -145,7 +145,7 @@ function LegacyCardContent({ card, tenantId }: { card: DashboardCard; tenantId: 
   }
 
   return (
-    <div className="h-full flex items-center justify-center text-xs text-gray-400">
+    <div className="h-full flex items-center justify-center text-xs text-muted-light">
       {card.type}
     </div>
   )

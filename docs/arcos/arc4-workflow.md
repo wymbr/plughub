@@ -1,6 +1,17 @@
 # Arc 4 — Workflow Automation
 
+> Última atualização: 2026-05-25 · Estado: Arc 16
+
 Permite que agentes nativos sejam usados como automação de processos com etapas manuais (aprovação, input, webhook, timer), sem BPM formal.
+
+## Nota de evolução — Arc 16
+
+O Arc 4 evoluiu com a entrada do Arc 16 (Three-Tier Business Process Orchestration):
+
+- **Step `collect` — Channel Capability Negotiation**: o campo `channel` tornou-se **opcional**. O step passa a aceitar `requires: [text | audio | video | file_upload | masked_input | rich_menu]` — o Channel Gateway seleciona o canal outbound baseado na matriz de capacidades e no contexto de Journey (`journey.available_channels` + `journey.canal_preferido`). Ver Arc 16 § Channel Capability Negotiation.
+- **Namespace `@ctx.journey.*`**: ContextStore ganhou um hash compartilhado entre todas as sessões de uma mesma Journey (`{tenantId}:ctx:journey:{journeyId}`, TTL 30 dias). `context_tags.outputs` com prefixo `journey.*` redireciona a escrita para o hash de Journey. Resolve a invisibilidade de dados coletados em sessões `collect` para o Business Workflow do Tier 1.
+- **Step `notify` depreciado**: substituído por `invoke: notification_send`. O sub-campo `notify` dentro de `suspend` é preservado por atomicidade.
+- **Propagação de `journey_id`**: sessões criadas por step `collect` recebem `journey_id` via Kafka `collect.events`; os emitters de `workflow.events` e `collect.events` carregam `journey_id` quando disponível.
 
 ## Novos pacotes
 
@@ -144,9 +155,9 @@ Tabela PostgreSQL `workflow.instances` (schema `workflow`).
 | `POST /v1/workflow/resume` | Sistema externo / aprovador | Valida token, verifica expiração, registra decisão, emite `workflow.resumed` |
 | `POST /v1/workflow/instances/{id}/complete` | Skill Flow worker | Marca completed, emite `workflow.completed` |
 | `POST /v1/workflow/instances/{id}/fail` | Skill Flow worker | Marca failed, emite `workflow.failed` |
-| `POST /v1/workflow/instances/{id}/cancel` | Operator Console | Cancela active/suspended, emite `workflow.cancelled` |
-| `GET /v1/workflow/instances` | Operator Console | Lista com filtros (tenant_id, status, flow_id) |
-| `GET /v1/workflow/instances/{id}` | Operator Console | Detalhe |
+| `POST /v1/workflow/instances/{id}/cancel` | platform-ui | Cancela active/suspended, emite `workflow.cancelled` |
+| `GET /v1/workflow/instances` | platform-ui | Lista com filtros (tenant_id, status, flow_id) |
+| `GET /v1/workflow/instances/{id}` | platform-ui | Detalhe |
 
 **Timeout scanner** — asyncio background task (intervalo configurável, padrão 60s). `UPDATE ... SET status='timed_out' WHERE status='suspended' AND resume_expires_at < now()` — atômico, sem double-processing.
 
@@ -237,6 +248,8 @@ CREATE TABLE workflow.webhook_deliveries (
 
 ## Status transitions
 
+`WorkflowInstance` percorre os estados: `active` → `suspended` (ao atingir um step `suspend`/`collect`) → `active` (ao receber resume) → `completed` | `failed` | `cancelled` | `timed_out`. Cada transição é persistida em `workflow.instances` e emite um evento correspondente no tópico Kafka `workflow.events`. O timeout scanner (asyncio, 60s) move `suspended` → `timed_out` de forma atômica quando `resume_expires_at < now()`. `cancel` só é válido a partir de `active` ou `suspended`.
+
 ## Kafka topic: workflow.events
 
 Publicado pelo workflow-api em todos os status transitions. Consumido pelo Skill Flow worker para disparar `engine.run()` com `resumeContext`.
@@ -278,7 +291,7 @@ O Skill Flow gera um UUID (`collect_token`) e o workflow-api o persiste no `coll
 
 ### Campaign = N instâncias com mesmo campaign_id
 
-Não há entidade "campaign" separada. Um `campaign_id` é um agrupador livre em `workflow.instances` e `collect_instances`. A CampaignPanel do Operator Console agrega via `collect_events` no ClickHouse.
+Não há entidade "campaign" separada. Um `campaign_id` é um agrupador livre em `workflow.instances` e `collect_instances`. A página de campanhas do platform-ui agrega via `collect_events` no ClickHouse.
 
 ### Implementado
 
@@ -296,11 +309,9 @@ Não há entidade "campaign" separada. Um `campaign_id` é um agrupador livre em
 - `packages/analytics-api/src/plughub_analytics_api/consumer.py` — topics `workflow.events` + `collect.events`
 - `packages/analytics-api/src/plughub_analytics_api/reports_query.py` — `query_workflows_report`, `query_campaigns_report` (com summary agregado por campaign_id)
 - `packages/analytics-api/src/plughub_analytics_api/reports.py` — `GET /reports/workflows`, `GET /reports/campaigns`
-- `packages/operator-console/src/components/CampaignPanel.tsx` — painel de campanhas: summary cards com response rate, mini-bar de status, detail com KPIs + channel breakdown + collect event list
-- `packages/operator-console/src/api/campaign-hooks.ts` — `useCampaignData` hook (poll 30s)
-- `packages/operator-console/src/types/index.ts` — `CollectEvent`, `CampaignSummary`, `campaign_id` em `WorkflowInstance`
-- `packages/operator-console/src/components/Header.tsx` — botão "Campaigns" na nav
-- `packages/operator-console/src/App.tsx` — view `campaigns` + `CampaignPanel`
+- `packages/platform-ui/src/modules/campaigns/CampaignsPage.tsx` — painel de campanhas: summary cards com response rate, mini-bar de status, detail com KPIs + channel breakdown + collect event list
+- `packages/platform-ui/` — `useCampaignData` hook (poll 30s)
+- `packages/platform-ui/src/types/index.ts` — `CollectEvent`, `CampaignSummary`, `campaign_id` em `WorkflowInstance`
 
 ### Kafka topics
 
@@ -366,12 +377,12 @@ onde foram acumulados pelo `agente_contexto_ia_v1` durante o atendimento.
 ## Implementado neste módulo
 
 - `packages/skill-flow-worker/` — TypeScript worker: consome `workflow.events`, roda engine.run() com resumeContext, wired com persistSuspend callback para deadline calculation
-- Operator Console — painel de instâncias Workflow (WorkflowPanel.tsx): status filter, timeline, resume token, cancel action
-- Operator Console — WebhookPanel (WebhookPanel.tsx): CRUD de webhooks, delivery log, one-time token display, activate/deactivate/rotate/delete
-- Operator Console — RegistryPanel (RegistryPanel.tsx): Pools / Agent Types / Skills / Running instances CRUD via agent-registry REST
-- Operator Console — SkillFlowEditor (SkillFlowEditor.tsx): Monaco YAML editor for SkillFlow definitions, live validation, JSON↔YAML conversion
-- Operator Console — ChannelPanel (ChannelPanel.tsx): channel credential management for WhatsApp, Webchat, Voice, Email, SMS, Instagram, Telegram, WebRTC; credentials masked on read
-- Operator Console — HumanAgentPanel (HumanAgentPanel.tsx): Live Status tab (human instances, operator actions) + Profiles tab (AgentType CRUD for human framework)
+- platform-ui — painel de instâncias Workflow: status filter, timeline, resume token, cancel action
+- platform-ui — gestão de webhooks: CRUD de webhooks, delivery log, one-time token display, activate/deactivate/rotate/delete
+- platform-ui — módulo `config-recursos`: Pools / Agent Types / Skills / Running instances CRUD via agent-registry REST
+- platform-ui — módulo `skill-flows`: Monaco YAML editor for SkillFlow definitions, live validation, JSON↔YAML conversion
+- platform-ui — `config-recursos/ChannelsPage`: channel credential management for WhatsApp, Webchat, Voice, Email, SMS, Instagram, Telegram, WebRTC; credentials masked on read
+- platform-ui — `config-recursos/HumanAgentsPage`: Live Status tab (human instances, operator actions) + Profiles tab (AgentType CRUD for human framework)
 - agent-registry — GatewayConfig model + migration + `routes/channels.ts` CRUD (`GET/POST /v1/channels`, `GET/PUT/DELETE /v1/channels/:id`)
 - agent-registry — `GET /v1/instances?framework=human`, `GET /v1/instances/:id` detail, `PATCH /v1/instances/:id` operator actions (pause/resume/force_logout)
 - Vite proxy configuration para `/v1/workflow` routes

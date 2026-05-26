@@ -1,5 +1,7 @@
 # Pricing Module — Capacity-Based Billing
 
+> Última atualização: 2026-05-25 · Estado: Arc 16
+>
 > Full reference for the pricing-api billing model, endpoints, invoice structure, and Config API integration.
 > See CLAUDE.md for architectural summary.
 

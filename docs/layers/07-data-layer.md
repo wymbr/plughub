@@ -1,5 +1,6 @@
 # Layer 7 — Data Layer
 
+> Última atualização: 2026-05-25 · Estado: Arc 16
 > Spec de referência: v24.0 seções 2.3, 5.1–5.4, 13.4
 > Responsabilidade: persistência de toda a plataforma — estado efêmero de sessão, registro de configuração, auditoria e analytics, armazenamento de mídia
 > Implementado por: Redis Cluster, PostgreSQL + pgvector, ClickHouse, Object Storage (S3/GCS)
@@ -31,12 +32,18 @@ Acesso em microssegundos. Operações atômicas (`DECR` para reserva de recursos
 |---|---|---|
 | Estado de sessão do agente (`agent:{instance_id}` HASH) | 30s (renovado por heartbeat) | mcp-server-plughub |
 | Pipeline state (`{tenant_id}:pipeline:{session_id}`) | 24h | skill-flow-engine |
+| Canonical stream (`session:{id}:stream`) — fonte única de eventos da sessão | Mesmo TTL da sessão | Core / skill-flow-engine |
+| ContextStore de sessão (`{tenant_id}:ctx:{session_id}` HASH) | 24h | skill-flow-engine / ai-gateway |
+| ContextStore de Journey (`{tenant_id}:ctx:journey:{journey_id}` HASH) | 30 dias | skill-flow-engine / workflow-api |
 | Session context do Routing Engine | 4h | routing-engine |
 | Estado de sessão AI (`session:{session_id}:ai`) | 24h | ai-gateway |
 | Fila de pool por prioridade (`pool:{pool_id}:queue` ZSET) | Sem TTL | routing-engine |
+| Snapshot de pool (`{tenant_id}:pool:{pool_id}:snapshot`) | 120s | routing-engine |
 | Regras ativas (`rules:active`) | Sem TTL | rules-engine |
+| Sentiment timeline (`session:{id}:sentiment`) | Mesmo TTL da sessão | ai-gateway |
 | Insight da conversa (`insight.conversa.*`) | Até `contact_closed` | mcp-server-plughub |
-| Pending Delivery Store (`outbound.*`) | Até entrega ou expiração | notification-agent (via MCP) |
+| Usage corrente (`{tenant}:usage:current:{dimension}`) | 45 dias | usage-aggregator |
+| Limites de quota (`{tenant}:quota:limit:{dimension}`, `{tenant}:quota:concurrent_sessions`) | Sem TTL | pricing-api / Core |
 
 **Multi-site:** 7 nodes (3 Site A + 3 Site B + 1 árbitro). Quorum de 4/7 para confirmar escrita. Sem split brain. Reservas atômicas via `DECR` — sem eleição de líder.
 
@@ -68,14 +75,20 @@ Colunar, append-only por design. Queries sobre bilhões de linhas em segundos. A
 
 **Tabelas principais:**
 
-| Tabela | Conteúdo | Producer |
+| Tabela | Conteúdo | Producer (via Kafka) |
 |---|---|---|
-| `escalation_audit` | Histórico de escalações com motivo, agente origem/destino, timestamp | rules-engine |
-| `mcp_audit` | Toda chamada MCP interceptada — tool, agente, resultado, latência | PlugHubAdapter / proxy sidecar |
-| `conversations_analytics` | Eventos de `conversations.events` materializados para queries | Kafka consumer |
-| `agent_quality_scores` | Scores calculados pelo Evaluation Agent por atendimento | Evaluation Agent (Horizonte 2) |
+| `analytics.segments` | `ContactSegment` por participante — topologia de conferência (`ReplacingMergeTree`) | analytics-api ← `conversations.participants` |
+| `analytics.session_timeline` | Linha do tempo da sessão enriquecida com `segment_id` | analytics-api |
+| `mcp_audit_log` | Toda chamada MCP interceptada — tool, agente, resultado, latência, injection (`ReplacingMergeTree`) | analytics-api ← `mcp.audit` |
+| `audit_access_log` | Acessos LGPD a dados de sessão — imutável, nunca deduplicado (`MergeTree`) | analytics-api |
+| `evaluation_results` / `evaluation_events` | Resultados e eventos da plataforma de avaliação (Arc 6) | analytics-api ← `evaluation.events` |
+| `calibration_events` | Eventos de calibração de avaliadores (Arc 13, `ReplacingMergeTree`) | analytics-api ← `calibration.events` |
+| `journey_events` | Eventos de Journey multi-sessão (Arc 10) | analytics-api ← `journey.events` |
+| `agent_business_events` | KPIs de negócio emitidos por agentes via `agent_event` (Arc 12, `MergeTree`, TTL 2 anos) | analytics-api ← `agent.events` |
+| `agent_pause_intervals` | Intervalos de pausa de agentes humanos (Arc 8, `ReplacingMergeTree`) | analytics-api ← `agent.lifecycle` |
+| `deploy_events` | Deploys de skill como âncoras temporais de epoch (Arc 6 Fase 2) | analytics-api ← `registry.changed` |
 
-**Alimentação:** Kafka consumer materializa eventos em tabelas analíticas — cada evento vira uma linha com schema fixo. Kafka Connect exporta incrementalmente para Snowflake/BigQuery/S3 Parquet.
+**Alimentação:** consumers em `analytics-api` materializam eventos Kafka em tabelas analíticas — cada evento vira uma linha com schema fixo. Kafka Connect exporta incrementalmente para Snowflake/BigQuery/S3 Parquet.
 
 ---
 
@@ -106,7 +119,7 @@ Os dados distribuídos entre Redis, Kafka e PostgreSQL não são adequados para 
 
 ## Considerações operacionais
 
-**`insight.historico.*` persiste via Kafka, nunca por escrita direta em PostgreSQL.** O fluxo é: `insight_register` publica `insight.registered` em `conversations.events`; consumer promove `insight.conversa.*` → `insight.historico.*` no `contact_closed`. A fronteira de persistência é o contato, não a sessão do agente.
+**`insight.historico.*` persiste via Kafka, nunca por escrita direta em PostgreSQL.** O fluxo é: `insight_register` publica o evento; consumer promove `insight.conversa.*` → `insight.historico.*` no `contact_closed`. A fronteira de persistência é o contato, não a sessão do agente.
 
 **Degradação Redis:** se Redis fica indisponível por < 30s, Rules Engine e Escalation Engine operam com último estado em cache local. Por > 30s, cada site opera de forma autônoma sem balanceamento cross-site.
 

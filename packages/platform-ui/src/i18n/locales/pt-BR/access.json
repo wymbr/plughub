@@ -35,7 +35,9 @@
     "deactivate": "Desativar",
     "reactivate": "Reativar",
     "loading": "Carregando usuários…",
-    "permissions": "Permissões de Módulo"
+    "permissions": "Permissões de Módulo",
+    "maxConcurrentSessions": "Sessões Simultâneas Máximas",
+    "maxConcurrentSessionsDescription": "Número máximo de contatos simultâneos que este agente pode atender."
   },
   "roles": {
     "operator": "Operator",

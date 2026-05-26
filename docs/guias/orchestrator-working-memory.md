@@ -1,5 +1,7 @@
 # Orquestrador Nativo — Working Memory via ContextStore
 
+> Última atualização: 2026-05-25 · Estado: Arc 16
+
 > **Contexto:** Este guia descreve o padrão recomendado para acumulação de contexto
 > em orquestradores nativos PlugHub que operam em loop (captura → LLM → delegar
 > especialista → repetir). Complementa [`context-store.md`](context-store.md) e

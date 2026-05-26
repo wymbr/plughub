@@ -63,7 +63,11 @@ def _require_admin(
     x_admin_token: Annotated[str | None, Header()] = None,
     settings: Settings = Depends(_settings),
 ) -> None:
-    if settings.admin_token and x_admin_token != settings.admin_token:
+    # Deny all admin requests when PLUGHUB_AUTH_ADMIN_TOKEN is not configured.
+    # An empty token would bypass auth entirely — fail closed instead.
+    if not settings.admin_token:
+        raise HTTPException(status_code=503, detail="Admin token not configured")
+    if x_admin_token != settings.admin_token:
         raise HTTPException(status_code=401, detail="Invalid admin token")
 
 
@@ -75,6 +79,7 @@ def _user_to_response(row: dict[str, Any]) -> UserResponse:
         name=row["name"],
         roles=list(row["roles"]),
         accessible_pools=list(row["accessible_pools"]),
+        max_concurrent_sessions=int(row.get("max_concurrent_sessions", 3)),
         active=row["active"],
         created_at=row["created_at"].isoformat() if hasattr(row["created_at"], "isoformat") else str(row["created_at"]),
         updated_at=row["updated_at"].isoformat() if hasattr(row["updated_at"], "isoformat") else str(row["updated_at"]),
@@ -106,6 +111,7 @@ async def _make_token_response(
         supervised_groups=sup_groups,
         supervised_agent_types=sup_agent_types,
         supervised_user_ids=sup_user_ids,
+        max_concurrent_sessions=int(user.get("max_concurrent_sessions", 3)),
     )
     expires_in = settings.access_token_expire_minutes * 60
     return (
@@ -120,6 +126,7 @@ async def _make_token_response(
                 roles=list(user["roles"]),
                 tenant_id=user["tenant_id"],
                 accessible_pools=list(user["accessible_pools"]),
+                max_concurrent_sessions=int(user.get("max_concurrent_sessions", 3)),
                 module_config=module_config,
             ),
         ),
@@ -220,6 +227,7 @@ async def me(request: Request) -> MeResponse:
         roles=claims["roles"],
         accessible_pools=claims["accessible_pools"],
         module_config=claims.get("module_config", {}),
+        max_concurrent_sessions=int(claims.get("max_concurrent_sessions", 3)),
     )
 
 
@@ -242,6 +250,7 @@ async def create_user(body: CreateUserRequest, request: Request) -> UserResponse
         name=body.name,
         roles=body.roles,
         accessible_pools=body.accessible_pools,
+        max_concurrent_sessions=body.max_concurrent_sessions,
     )
     return _user_to_response(row)
 
@@ -291,6 +300,7 @@ async def update_user(
         roles=body.roles,
         accessible_pools=body.accessible_pools,
         active=body.active,
+        max_concurrent_sessions=body.max_concurrent_sessions,
     )
     return _user_to_response(row)
 

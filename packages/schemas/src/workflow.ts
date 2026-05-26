@@ -161,6 +161,8 @@ export const WorkflowStartedSchema = z.object({
   flow_id:         z.string(),
   session_id:      z.string(),
   trigger_type:    WorkflowTriggerTypeSchema,
+  /** Arc 16: journey this instance belongs to, if any */
+  journey_id:      z.string().uuid().optional(),
 })
 export type WorkflowStarted = z.infer<typeof WorkflowStartedSchema>
 
@@ -174,6 +176,7 @@ export const WorkflowSuspendedSchema = z.object({
   suspend_reason:    SuspendReasonSchema,
   resume_expires_at: z.string().datetime(),
   // Token is NOT included in the Kafka event — delivered via notify only
+  journey_id:        z.string().uuid().optional(),
 })
 export type WorkflowSuspended = z.infer<typeof WorkflowSuspendedSchema>
 
@@ -187,6 +190,7 @@ export const WorkflowResumedSchema = z.object({
   resumed_from:  z.string(),   // step name where it was suspended
   next_step:     z.string(),   // step name it will resume at
   wait_duration_ms: z.number(), // actual wait time from suspended_at to now
+  journey_id:    z.string().uuid().optional(),
 })
 export type WorkflowResumed = z.infer<typeof WorkflowResumedSchema>
 
@@ -198,6 +202,7 @@ export const WorkflowCompletedSchema = z.object({
   flow_id:      z.string(),
   outcome:      z.string(),
   duration_ms:  z.number(),
+  journey_id:   z.string().uuid().optional(),
 })
 export type WorkflowCompleted = z.infer<typeof WorkflowCompletedSchema>
 
@@ -211,6 +216,7 @@ export const WorkflowTimedOutSchema = z.object({
   suspended_at: z.string().datetime(),
   // next_open: when the calendar next opens (for notification scheduling)
   next_open:    z.string().datetime().nullable(),
+  journey_id:   z.string().uuid().optional(),
 })
 export type WorkflowTimedOut = z.infer<typeof WorkflowTimedOutSchema>
 
@@ -222,6 +228,7 @@ export const WorkflowFailedSchema = z.object({
   flow_id:      z.string(),
   current_step: z.string().nullable(),
   error:        z.string(),
+  journey_id:   z.string().uuid().optional(),
 })
 export type WorkflowFailed = z.infer<typeof WorkflowFailedSchema>
 
@@ -233,6 +240,7 @@ export const WorkflowCancelledSchema = z.object({
   flow_id:       z.string(),
   cancelled_by:  z.string(),  // operator user id or "system"
   reason:        z.string().optional(),
+  journey_id:    z.string().uuid().optional(),
 })
 export type WorkflowCancelled = z.infer<typeof WorkflowCancelledSchema>
 

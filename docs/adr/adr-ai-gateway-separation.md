@@ -1,8 +1,10 @@
 # ADR: Separação de AI Gateway — Carga Operacional vs Avaliação
 
-**Status:** Proposto  
+**Status:** Aceito — implementado  
 **Data:** 2026-04-20  
 **Contexto:** Session Replayer / Evaluator (seção pending — CLAUDE.md)
+
+> **Nota de implementação:** a separação operação/avaliação foi realizada via perfis de modelo (`realtime` / `balanced` / `evaluation`) com `AccountSelector`, e não via dois deployments separados de AI Gateway. O perfil `evaluation` é isolado do `realtime` no nível de rotação de contas/keys, atingindo o mesmo objetivo de isolamento descrito nesta decisão.
 
 ---
 

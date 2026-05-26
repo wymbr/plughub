@@ -15,6 +15,13 @@ import type {
   KnowledgeSnippet,
   CampaignReport,
   AgentEvaluationReport,
+  // Arc 13
+  InstanceThreads,
+  HumanDimensionDecision,
+  HumanReviewResponse,
+  DimensionContestationPayload,
+  DimensionContestationResponse,
+  CurationSamplingRule,
 } from '@/types'
 
 const BASE = '/v1/evaluation'
@@ -411,6 +418,147 @@ export async function deleteSnippet(snippetId: string, token?: string): Promise<
 }
 
 
+// ── Arc 13 — ContestationThreads & Human Review ───────────────────────────────
+
+/**
+ * Fetch all contestation threads for a workflow instance.
+ * Calls GET /v1/evaluation/instances/{id}/threads — authentication via Bearer JWT.
+ */
+export async function fetchContestationThreads(
+  instanceId: string,
+  accessToken?: string,
+): Promise<InstanceThreads> {
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+  if (accessToken) headers['Authorization'] = `Bearer ${accessToken}`
+  const r = await fetch(`${BASE}/instances/${instanceId}/threads`, { headers })
+  if (!r.ok) throw new Error(`HTTP ${r.status}: ${await r.text()}`)
+  const d = await r.json()
+  return {
+    instance_id:   d.instance_id  ?? instanceId,
+    result_id:     d.result_id    ?? null,
+    current_round: d.current_round ?? 0,
+    threads:       d.threads       ?? [],
+  }
+}
+
+/**
+ * React hook that polls contestation threads for a given instance.
+ * Returns null data until the first load completes.
+ */
+export function useContestationThreads(
+  instanceId: string | null,
+  accessToken?: string,
+  pollMs = 0,
+) {
+  const [data, setData] = useState<InstanceThreads | null>(null)
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  const load = useCallback(async () => {
+    if (!instanceId) return
+    setLoading(true)
+    try {
+      const d = await fetchContestationThreads(instanceId, accessToken)
+      setData(d)
+      setError(null)
+    } catch (e) {
+      setError(String(e))
+    } finally {
+      setLoading(false)
+    }
+  }, [instanceId, accessToken])
+
+  useEffect(() => {
+    load()
+    if (pollMs > 0) {
+      const id = setInterval(load, pollMs)
+      return () => clearInterval(id)
+    }
+  }, [load, pollMs])
+
+  return { data, loading, error, reload: load }
+}
+
+/**
+ * Human reviewer submits upheld/revised decisions per contested dimension.
+ * Calls POST /v1/evaluation/instances/{id}/review — same endpoint as MCP evaluation_review_submit.
+ */
+export async function submitHumanReview(
+  instanceId: string,
+  body: { dimension_decisions: HumanDimensionDecision[]; reviewer_id?: string },
+  jwtToken: string,
+): Promise<HumanReviewResponse> {
+  const r = await fetch(`${BASE}/instances/${instanceId}/review`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${jwtToken}` },
+    body: JSON.stringify(body),
+  })
+  if (!r.ok) throw new Error(`HTTP ${r.status}: ${await r.text()}`)
+  return r.json()
+}
+
+/**
+ * Human agent (evaluated) submits dimension-level contestation.
+ * Calls POST /v1/evaluation/instances/{id}/contest — requires Bearer JWT with evaluation.contestar.
+ */
+export async function submitDimensionContestation(
+  instanceId: string,
+  body: DimensionContestationPayload,
+  jwtToken: string,
+): Promise<DimensionContestationResponse> {
+  const r = await fetch(`${BASE}/instances/${instanceId}/contest`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${jwtToken}` },
+    body: JSON.stringify(body),
+  })
+  if (!r.ok) throw new Error(`HTTP ${r.status}: ${await r.text()}`)
+  return r.json()
+}
+
+// ── Arc 13 — CurationSamplingRules ───────────────────────────────────────────
+
+/** Fetch curation sampling rules for a campaign. */
+export function useCurationSamplingRules(campaignId: string | null) {
+  const [rules, setRules] = useState<CurationSamplingRule[]>([])
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  const load = useCallback(async () => {
+    if (!campaignId) return
+    setLoading(true)
+    try {
+      const r = await fetch(`${BASE}/campaigns/${campaignId}/sampling-rules`)
+      if (!r.ok) throw new Error(`HTTP ${r.status}`)
+      const d = await r.json()
+      setRules(Array.isArray(d) ? d : (d?.rules ?? d?.data ?? []))
+      setError(null)
+    } catch (e) {
+      setError(String(e))
+    } finally {
+      setLoading(false)
+    }
+  }, [campaignId])
+
+  useEffect(() => { load() }, [load])
+  return { rules, loading, error, reload: load }
+}
+
+/** Save (full replace) curation sampling rules for a campaign. */
+export async function saveCurationSamplingRules(
+  campaignId: string,
+  rules: Omit<CurationSamplingRule, 'campaign_id' | 'rule_id'>[],
+  token?: string,
+): Promise<CurationSamplingRule[]> {
+  const r = await fetch(`${BASE}/campaigns/${campaignId}/sampling-rules`, {
+    method: 'PUT',
+    headers: adminHeaders(token),
+    body: JSON.stringify({ rules: rules.map(rule => ({ ...rule, campaign_id: campaignId })) }),
+  })
+  if (!r.ok) throw new Error(`HTTP ${r.status}: ${await r.text()}`)
+  const d = await r.json()
+  return Array.isArray(d) ? d : (d?.rules ?? d?.data ?? [])
+}
+
 // ── Analytics-API backed hooks (Arc 6 — /reports/evaluations*) ─────────────
 
 const ANALYTICS_BASE = import.meta.env.VITE_ANALYTICS_URL ?? '/reports'
@@ -527,4 +675,184 @@ export function useEvaluationsSummary(
   React.useEffect(() => { fetch_(); if (pollMs > 0) { const t = setInterval(fetch_, pollMs); return () => clearInterval(t) } }, [tenantId, params.campaign_id, params.group_by, pollMs])
 
   return { rows, group_by: groupBy, meta, loading, error }
+}
+
+// ── Calibration Dashboard (Arc 13 Fase G) ─────────────────────────────────────
+
+export interface CalibrationPoint {
+  period:            string
+  skill_version:     string
+  evaluator_id:      string
+  total:             number
+  approved:          number
+  recalibrated:      number
+  bias_flagged:      number
+  calibration_score: number | null
+}
+
+export interface CalibrationSummary {
+  total:             number
+  approved:          number
+  recalibrated:      number
+  bias_flagged:      number
+  calibration_score: number | null
+}
+
+export interface CalibrationResult {
+  data:    CalibrationPoint[]
+  summary: CalibrationSummary
+  meta:    Record<string, unknown>
+  loading: boolean
+  error:   string | null
+  reload:  () => void
+}
+
+export function useEvaluatorCalibration(
+  tenantId: string,
+  params: {
+    campaign_id?:   string
+    evaluator_id?:  string
+    skill_version?: string
+    from_dt?:       string
+    to_dt?:         string
+    granularity?:   'day' | 'week'
+  } = {},
+  pollMs = 0,
+): CalibrationResult {
+  const [data,    setData]    = useState<CalibrationPoint[]>([])
+  const [summary, setSummary] = useState<CalibrationSummary>({
+    total: 0, approved: 0, recalibrated: 0, bias_flagged: 0, calibration_score: null,
+  })
+  const [meta,    setMeta]    = useState<Record<string, unknown>>({})
+  const [loading, setLoading] = useState(false)
+  const [error,   setError]   = useState<string | null>(null)
+
+  const load = useCallback(() => {
+    const q = new URLSearchParams({ tenant_id: tenantId })
+    if (params.campaign_id)   q.set('campaign_id',   params.campaign_id)
+    if (params.evaluator_id)  q.set('evaluator_id',  params.evaluator_id)
+    if (params.skill_version) q.set('skill_version', params.skill_version)
+    if (params.from_dt)       q.set('from_dt',       params.from_dt)
+    if (params.to_dt)         q.set('to_dt',         params.to_dt)
+    if (params.granularity)   q.set('granularity',   params.granularity)
+    setLoading(true)
+    fetch(`${ANALYTICS_BASE}/evaluator-calibration?${q}`)
+      .then(r => r.json())
+      .then(d => {
+        setData(d.data ?? [])
+        setSummary(d.summary ?? { total: 0, approved: 0, recalibrated: 0, bias_flagged: 0, calibration_score: null })
+        setMeta(d.meta ?? {})
+        setError(null)
+      })
+      .catch(e => setError(String(e)))
+      .finally(() => setLoading(false))
+  }, [tenantId, params.campaign_id, params.evaluator_id, params.skill_version, params.from_dt, params.to_dt, params.granularity])
+
+  useEffect(() => {
+    load()
+    if (pollMs > 0) { const t = setInterval(load, pollMs); return () => clearInterval(t) }
+  }, [load, pollMs])
+
+  return { data, summary, meta, loading, error, reload: load }
+}
+
+
+// ── Curation Queue (Arc 13 Fase H) ─────────────────────────────────────────────
+
+export interface CurationReview {
+  id:                     string
+  tenant_id:              string
+  evaluation_instance_id: string
+  campaign_id:            string | null
+  trigger:                string
+  curator_id:             string | null
+  status:                 'pending' | 'approved' | 'recalibrated' | 'bias_flagged'
+  curator_notes:          string | null
+  calibration_note_id:    string | null
+  calibration_signal:     {
+    severity:      string
+    dimension_id:  string
+    observation:   string
+    evaluator_id:  string
+    skill_version: string
+  } | null
+  created_at:  string
+  resolved_at: string | null
+}
+
+export interface CurationResolvePayload {
+  status:                 'approved' | 'recalibrated' | 'bias_flagged'
+  curator_notes?:         string
+  calibration_note_text?: string
+  dimension_id?:          string
+  evaluator_id?:          string
+  skill_version?:         string
+  severity?:              string
+}
+
+/**
+ * Hook: curation review queue.
+ * Calls GET /v1/evaluation/curations with optional status + campaign filters.
+ */
+export function useCurationQueue(
+  tenantId: string,
+  opts: { status?: string; campaign_id?: string; limit?: number } = {},
+  pollMs = 0,
+) {
+  const [reviews, setReviews] = useState<CurationReview[]>([])
+  const [total,   setTotal]   = useState(0)
+  const [loading, setLoading] = useState(true)
+  const [error,   setError]   = useState<string | null>(null)
+
+  const load = useCallback(async () => {
+    setLoading(true)
+    try {
+      const q = new URLSearchParams()
+      if (opts.status)      q.set('status',      opts.status)
+      if (opts.campaign_id) q.set('campaign_id', opts.campaign_id)
+      if (opts.limit)       q.set('limit',       String(opts.limit))
+      const r = await fetch(`${BASE}/curations?${q}`, {
+        headers: { 'X-Tenant-ID': tenantId },
+      })
+      if (!r.ok) throw new Error(`HTTP ${r.status}`)
+      const d = await r.json()
+      setReviews(d.reviews ?? [])
+      setTotal(d.count ?? 0)
+      setError(null)
+    } catch (e) {
+      setError(String(e))
+    } finally {
+      setLoading(false)
+    }
+  }, [tenantId, opts.status, opts.campaign_id, opts.limit])
+
+  useEffect(() => {
+    load()
+    if (pollMs > 0) { const t = setInterval(load, pollMs); return () => clearInterval(t) }
+  }, [load, pollMs])
+
+  return { reviews, total, loading, error, reload: load }
+}
+
+/**
+ * Curator resolves a CurationReview.
+ * Calls POST /v1/evaluation/curations/{id}/resolve
+ */
+export async function resolveCuration(
+  reviewId: string,
+  tenantId: string,
+  userId: string,
+  body: CurationResolvePayload,
+): Promise<{ review: CurationReview; calibration_note: unknown; kb_published: boolean }> {
+  const r = await fetch(`${BASE}/curations/${reviewId}/resolve`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'X-Tenant-ID':  tenantId,
+      'X-User-ID':    userId,
+    },
+    body: JSON.stringify(body),
+  })
+  if (!r.ok) throw new Error(`HTTP ${r.status}: ${await r.text()}`)
+  return r.json()
 }

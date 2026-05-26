@@ -1,8 +1,9 @@
 # Layer 8 — MLOps Layer
 
-> Spec de referência: v24.0 seções 2.2 (frameworks), 7.3 (STT), Horizonte 2
+> Última atualização: 2026-05-25 · Estado: Arc 16
 > Responsabilidade: ciclo de vida de modelos — fine-tuning de STT por tenant, retraining de agentes, Model Registry
-> Status no Horizonte 1: **fora do repositório principal** — repositório de infra separado
+> Status: camada **fora do repositório principal** — repositório de infra separado (Horizonte 1)
+> Spec de referência: v24.0 seções 2.2 (frameworks), 7.3 (STT)
 
 ---
 
@@ -64,7 +65,7 @@ Esta camada vive **fora do monorepo principal** — repositório de infra separa
 
 **Fine-tuning LoRA:** técnica de fine-tuning eficiente (Low-Rank Adaptation) que adapta o Whisper ao vocabulário do tenant sem retreinar o modelo base completo. Reduz tempo de treinamento e custo de GPU.
 
-**Dimensionamento de GPU:** deve considerar streams WebRTC adicionalmente aos streams SIP quando o Horizonte 2 for ativado — o STT pipeline é compartilhado entre os dois canais de áudio.
+**Dimensionamento de GPU:** deve considerar os streams WebRTC (canal `webrtc` implementado — Arc 15) adicionalmente aos streams de voz/SIP — o STT pipeline é compartilhado entre os canais de áudio.
 
 **Lifecycle policies:** modelos antigos no Object Storage seguem lifecycle policies por versão — versões sem instâncias ativas são arquivadas ou removidas após período configurável.
 
@@ -87,5 +88,5 @@ Esta camada vive **fora do monorepo principal** — repositório de infra separa
 
 - Seção 2.2 — Frameworks e SDKs (Ray Train, HuggingFace, NVIDIA Riva)
 - Seção 7.3 — STT Router e fine-tuning
-- Seção 7.4 — WebRTC Gateway (pipeline STT compartilhado, Horizonte 2)
+- Seção 7.4 — WebRTC Gateway (pipeline STT compartilhado; canal WebRTC implementado no Arc 15)
 - Seção 13.4 — Data Mining (Horizonte 2 da Camada 3 analítica)

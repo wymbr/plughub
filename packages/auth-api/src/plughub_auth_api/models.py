@@ -38,6 +38,7 @@ class CreateUserRequest(BaseModel):
     name: str = ""
     roles: list[Role] = ["operator"]
     accessible_pools: list[str] = []   # [] = todos os pools
+    max_concurrent_sessions: int = Field(default=3, ge=1, le=50)
 
 
 class UpdateUserRequest(BaseModel):
@@ -46,6 +47,7 @@ class UpdateUserRequest(BaseModel):
     roles: list[Role] | None = None
     accessible_pools: list[str] | None = None
     active: bool | None = None
+    max_concurrent_sessions: int | None = Field(default=None, ge=1, le=50)
 
 
 # ─── Responses ────────────────────────────────────────────────────────────────
@@ -57,6 +59,7 @@ class TokenUserInfo(BaseModel):
     roles: list[str]
     tenant_id: str
     accessible_pools: list[str]
+    max_concurrent_sessions: int = 3     # capacity shared across all pools
     module_config: dict[str, Any] = {}   # ABAC config por módulo (carregado do JWT)
 
 
@@ -75,6 +78,7 @@ class UserResponse(BaseModel):
     name: str
     roles: list[str]
     accessible_pools: list[str]
+    max_concurrent_sessions: int = 3
     active: bool
     created_at: str
     updated_at: str
@@ -88,6 +92,7 @@ class MeResponse(BaseModel):
     roles: list[str]
     accessible_pools: list[str]
     module_config: dict[str, Any] = {}   # ABAC config por módulo
+    max_concurrent_sessions: int = 3
 
 
 # ─── Permissions & Templates ───────────────────────────────────────────────────

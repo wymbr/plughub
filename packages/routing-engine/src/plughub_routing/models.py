@@ -148,13 +148,20 @@ class PoolConfig(BaseModel):
     # can reference reachable pools by alias without hard-coding pool IDs.
     mentionable_pools: dict[str, str] | None = None
 
-    # Alias → skill_id map for journey start shortcuts via @mention (Arc 10).
+    # skill_id list for journey start shortcuts via @mention (Arc 10).
     # Written to ContextStore as session.pool.mentionable_journeys.
-    mentionable_journeys: dict[str, str] | None = None
+    # Stored as list[str] in agent-registry (array of skill IDs, no alias mapping).
+    mentionable_journeys: list[str] | None = None
 
     # Agent Group IDs (Arc 9) this pool belongs to.
     # Written to ContextStore as session.pool.agent_groups[].
     agent_groups: list[str] = Field(default_factory=list)
+
+    # ContextoTab namespace visibility config (Arc 11 / context-store-taxonomy).
+    # Determines which ContextStore namespaces operator role can read in the UI.
+    # Stored in pool_config Redis → read by mcp-server supervisor_state REST endpoint.
+    # None = use platform default (["service", "journey", "session"]).
+    context_visibility: dict | None = None
 
 
 # ─────────────────────────────────────────────
@@ -219,6 +226,9 @@ class RoutingResult(BaseModel):
     queued:         bool = False
     queue_eta_ms:   int | None = None
     routed_at:      str
+    # SLA threshold (ms) of the selected pool — forwarded to analytics so the
+    # sessions table can compute sla_compliance_pct without a Redis lookup.
+    sla_target_ms:    int | None = None
     # Passed through from ConversationInboundEvent when this routing was
     # triggered by an agent_join_conference invite (conference mode).
     conference_id:    str | None = None

@@ -1,0 +1,49 @@
+{
+  "accessWarning": "Acesso restrito — todos os acessos são registrados em log imutável.",
+  "tabs": {
+    "sessions":        "Sessões",
+    "mcp_calls":       "MCP Calls",
+    "user_access":     "Acessos",
+    "data_requests":   "Req. de Dados",
+    "config_snapshot": "Config Masking"
+  },
+  "comingSoon": "em breve",
+  "sessions": {
+    "accessNotice": "Todo acesso a mensagens de sessão é registrado no log de auditoria imutável.",
+    "loadError":    "Erro ao carregar",
+    "lookup":       "Consultar",
+    "results":      "{{count}} mensagens — sessão {{sessionId}}",
+    "columns": {
+      "timestamp": "Timestamp",
+      "type":      "Tipo",
+      "author":    "Autor",
+      "role":      "Role",
+      "content":   "Conteúdo"
+    }
+  },
+  "mcpCalls": {
+    "maskedOnly":   "Somente calls com campos mascarados",
+    "refresh":      "↻ Atualizar",
+    "loadError":    "Erro ao carregar",
+    "noRecords":    "Nenhum registro encontrado",
+    "allowed":      "Permitido",
+    "blocked":      "Bloqueado",
+    "injectionYes": "Sim",
+    "columns": {
+      "timestamp": "Timestamp",
+      "server":    "Server",
+      "tool":      "Tool",
+      "allowed":   "Permitido",
+      "injection": "Injeção",
+      "masked":    "Mascarados",
+      "ms":        "ms",
+      "session":   "Sessão"
+    }
+  },
+  "stub": {
+    "inDevelopment": "{{label}} — em desenvolvimento",
+    "userAccess":    "Logs de acesso de usuários",
+    "dataRequests":  "Solicitações SAR / Erasure",
+    "configSnapshot":"Snapshot de configuração de masking"
+  }
+}

@@ -14,6 +14,8 @@
  */
 
 import React, { useState } from "react";
+import { useTranslation } from "react-i18next";
+import { Pause, Search, Check } from "lucide-react";
 import { AiParticipantInfo, ChatMessage, PipelineTransition, SupervisorState } from "../../types";
 import { AiParticipantCard } from "../AiParticipantCard";
 
@@ -37,12 +39,16 @@ const STEP_TYPE_ICON: Record<string, string> = {
   notify:   "📢",
   menu:     "📝",
   receive:  "📨",
-  suspend:  "⏸",
   collect:  "📞",
   choice:   "🔀",
   escalate: "🚨",
-  resolve:  "🔍",
   complete: "✅",
+};
+
+// Step types whose icon is a lucide component (overrides STEP_TYPE_ICON)
+const STEP_TYPE_LUCIDE: Record<string, React.FC<{ className?: string }>> = {
+  suspend: Pause,
+  resolve: Search,
 };
 
 // ── Inject context form ────────────────────────────────────────────────────────
@@ -54,6 +60,7 @@ interface InjectFormProps {
 }
 
 const InjectContextForm: React.FC<InjectFormProps> = ({ sessionId, mcpBase, onDone }) => {
+  const { t } = useTranslation('agentAssist');
   const [key,   setKey]   = useState("");
   const [value, setValue] = useState("");
   const [conf,  setConf]  = useState("0.9");
@@ -83,9 +90,9 @@ const InjectContextForm: React.FC<InjectFormProps> = ({ sessionId, mcpBase, onDo
 
   if (ok) {
     return (
-      <div className="flex items-center gap-2 text-green-700 text-xs py-2">
-        <span>✓</span>
-        <span>Contexto injetado com sucesso.</span>
+      <div className="flex items-center gap-2 text-green-text text-xs py-2">
+        <Check className="w-3.5 h-3.5" aria-hidden="true" />
+        <span>{t('orchestration.contextInjected')}</span>
       </div>
     );
   }
@@ -96,15 +103,15 @@ const InjectContextForm: React.FC<InjectFormProps> = ({ sessionId, mcpBase, onDo
         <input
           value={key}
           onChange={e => setKey(e.target.value)}
-          placeholder="chave (ex: caller.nome)"
-          className="flex-1 text-xs border border-gray-300 rounded px-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-indigo-400 font-mono"
+          placeholder={t('orchestration.keyPlaceholder')}
+          className="flex-1 text-xs border border-border-strong rounded px-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-primary/40 font-mono"
           disabled={busy}
         />
         <input
           value={conf}
           onChange={e => setConf(e.target.value)}
           placeholder="conf"
-          className="w-14 text-xs border border-gray-300 rounded px-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-indigo-400 text-center"
+          className="w-14 text-xs border border-border-strong rounded px-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-primary/40 text-center"
           disabled={busy}
           type="number"
           min="0"
@@ -115,19 +122,19 @@ const InjectContextForm: React.FC<InjectFormProps> = ({ sessionId, mcpBase, onDo
       <textarea
         value={value}
         onChange={e => setValue(e.target.value)}
-        placeholder="valor"
+        placeholder={t('orchestration.valuePlaceholder')}
         rows={2}
-        className="text-xs border border-gray-300 rounded px-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-indigo-400 resize-none"
+        className="text-xs border border-border-strong rounded px-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-primary/40 resize-none"
         disabled={busy}
       />
-      {error && <p className="text-[11px] text-red-600">{error}</p>}
+      {error && <p className="text-xs text-red-text">{error}</p>}
       <button
         type="submit"
         disabled={busy || !key.trim() || !value.trim()}
-        className="self-end text-xs px-3 py-1.5 bg-indigo-600 text-white rounded hover:bg-indigo-700
+        className="self-end text-xs px-3 py-1.5 bg-primary text-white rounded hover:bg-primary-dark
                    disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
       >
-        {busy ? "Injetando…" : "Injetar"}
+        {busy ? t('orchestration.injecting') : t('orchestration.inject')}
       </button>
     </form>
   );
@@ -142,6 +149,7 @@ interface ForceCompleteProps {
 }
 
 const ForceCompleteConfirm: React.FC<ForceCompleteProps> = ({ sessionId, mcpBase, onDone }) => {
+  const { t } = useTranslation('agentAssist');
   const [busy,     setBusy]     = useState(false);
   const [error,    setError]    = useState<string | null>(null);
   const [ok,       setOk]       = useState(false);
@@ -151,10 +159,10 @@ const ForceCompleteConfirm: React.FC<ForceCompleteProps> = ({ sessionId, mcpBase
     return (
       <button
         onClick={() => setConfirm(true)}
-        className="w-full py-2 px-3 text-xs font-medium text-red-600 border border-red-300
-                   rounded-lg hover:bg-red-50 transition-colors"
+        className="w-full py-2 px-3 text-xs font-medium text-red border border-red/30
+                   rounded-lg hover:bg-red-light transition-colors"
       >
-        ⚡ Force-complete pipeline
+        {t('orchestration.forcePipelineBtn')}
       </button>
     );
   }
@@ -179,33 +187,33 @@ const ForceCompleteConfirm: React.FC<ForceCompleteProps> = ({ sessionId, mcpBase
 
   if (ok) {
     return (
-      <div className="flex items-center gap-2 text-green-700 text-xs py-2">
-        <span>✓</span>
-        <span>Pipeline encerrado com sucesso.</span>
+      <div className="flex items-center gap-2 text-green-text text-xs py-2">
+        <Check className="w-3.5 h-3.5" aria-hidden="true" />
+        <span>{t('orchestration.pipelineClosed')}</span>
       </div>
     );
   }
 
   return (
-    <div className="border border-red-200 rounded-lg p-3 bg-red-50 flex flex-col gap-2">
-      <p className="text-xs text-red-800 font-medium">
-        Isso forçará o encerramento do Skill-Flow. Confirma?
+    <div className="border border-red/30 rounded-lg p-3 bg-red-light flex flex-col gap-2">
+      <p className="text-xs text-red-text font-medium">
+        {t('orchestration.forceCompleteConfirm')}
       </p>
-      {error && <p className="text-[11px] text-red-600">{error}</p>}
+      {error && <p className="text-xs text-red-text">{error}</p>}
       <div className="flex gap-2">
         <button
           onClick={() => setConfirm(false)}
-          className="flex-1 py-1.5 text-xs text-gray-600 border border-gray-300 rounded hover:bg-gray-50 transition-colors"
+          className="flex-1 py-1.5 text-xs text-muted border border-border-strong rounded hover:bg-surface-muted transition-colors"
           disabled={busy}
         >
-          Cancelar
+          {t('orchestration.cancel')}
         </button>
         <button
           onClick={handleConfirm}
-          className="flex-1 py-1.5 text-xs text-white bg-red-600 rounded hover:bg-red-700 transition-colors disabled:opacity-50"
+          className="flex-1 py-1.5 text-xs text-white bg-red rounded hover:bg-red-text transition-colors disabled:opacity-50"
           disabled={busy}
         >
-          {busy ? "Encerrando…" : "Confirmar"}
+          {busy ? t('orchestration.closing') : t('orchestration.confirm')}
         </button>
       </div>
     </div>
@@ -231,12 +239,13 @@ export const OrchestrationTab: React.FC<OrchestrationTabProps> = ({
   mcpBase = "",
   onRefresh,
 }) => {
+  const { t } = useTranslation('agentAssist');
   const [showInjectForm, setShowInjectForm] = useState(false);
 
   if (!supervisorState) {
     return (
-      <div className="flex-1 flex items-center justify-center text-sm text-gray-400 p-4">
-        Aguardando dados da sessão…
+      <div className="flex-1 flex items-center justify-center text-sm text-muted-light p-4">
+        {t('orchestration.waiting')}
       </div>
     );
   }
@@ -255,11 +264,11 @@ export const OrchestrationTab: React.FC<OrchestrationTabProps> = ({
 
       {/* ── AI Agents ── */}
       <section>
-        <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">
-          Agentes AI activos
+        <h3 className="text-xs font-semibold text-muted uppercase tracking-wide mb-2">
+          {t('orchestration.aiAgents')}
         </h3>
         {participants.length === 0 ? (
-          <p className="text-xs text-gray-400">Nenhum agente AI ativo nesta sessão.</p>
+          <p className="text-xs text-muted-light">{t('orchestration.noAiAgents')}</p>
         ) : (
           <div className="flex flex-col gap-2">
             {participants.map(p => (
@@ -276,11 +285,11 @@ export const OrchestrationTab: React.FC<OrchestrationTabProps> = ({
 
       {/* ── Pipeline transitions ── */}
       <section>
-        <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">
-          Histórico de steps ({transitions.length})
+        <h3 className="text-xs font-semibold text-muted uppercase tracking-wide mb-2">
+          {t('orchestration.stepHistory', { count: transitions.length })}
         </h3>
         {transitions.length === 0 ? (
-          <p className="text-xs text-gray-400">Nenhuma transição registrada.</p>
+          <p className="text-xs text-muted-light">{t('orchestration.noTransitions')}</p>
         ) : (
           <div className="flex flex-col gap-1.5 max-h-52 overflow-y-auto">
             {[...transitions].reverse().map((t, i) => {
@@ -295,19 +304,26 @@ export const OrchestrationTab: React.FC<OrchestrationTabProps> = ({
               return (
                 <div
                   key={i}
-                  className="flex items-start gap-2 text-[11px] bg-gray-50 border border-gray-100 rounded px-2 py-1.5"
+                  className="flex items-start gap-2 text-xs bg-surface-muted border border-border rounded px-2 py-1.5"
                 >
-                  <span className="flex-shrink-0 mt-0.5">{STEP_TYPE_ICON[typeKey] ?? "▸"}</span>
+                  <span className="flex-shrink-0 mt-0.5">
+                    {(() => {
+                      const LucideIcon = STEP_TYPE_LUCIDE[typeKey];
+                      return LucideIcon
+                        ? <LucideIcon className="w-3 h-3" aria-hidden="true" />
+                        : (STEP_TYPE_ICON[typeKey] ?? "▸");
+                    })()}
+                  </span>
                   <div className="flex-1 min-w-0">
                     {t.from_step && (
-                      <span className="text-gray-400 mr-1">{formatStepLabel(t.from_step)} →</span>
+                      <span className="text-muted-light mr-1">{formatStepLabel(t.from_step)} →</span>
                     )}
-                    <span className="font-medium text-gray-700">{formatStepLabel(t.to_step)}</span>
+                    <span className="font-medium text-dark">{formatStepLabel(t.to_step)}</span>
                     {t.reason && (
-                      <span className="ml-1 text-gray-400">({t.reason})</span>
+                      <span className="ml-1 text-muted-light">({t.reason})</span>
                     )}
                   </div>
-                  <span className="text-gray-400 flex-shrink-0">{formatTime(t.timestamp)}</span>
+                  <span className="text-muted-light flex-shrink-0">{formatTime(t.timestamp)}</span>
                 </div>
               );
             })}
@@ -316,24 +332,24 @@ export const OrchestrationTab: React.FC<OrchestrationTabProps> = ({
       </section>
 
       {/* ── Supervisor interventions ── */}
-      <section className="border-t border-gray-100 pt-4">
-        <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3">
-          Intervenções de supervisor
+      <section className="border-t border-border pt-4">
+        <h3 className="text-xs font-semibold text-muted uppercase tracking-wide mb-3">
+          {t('orchestration.supervisorInterventions')}
         </h3>
 
         {/* Inject context */}
         <div className="mb-4">
           <div className="flex items-center justify-between mb-1">
-            <span className="text-xs font-medium text-gray-700">💉 Injetar contexto</span>
+            <span className="text-xs font-medium text-dark">{t('orchestration.injectContext')}</span>
             <button
               onClick={() => setShowInjectForm(v => !v)}
-              className="text-[11px] text-indigo-600 hover:underline"
+              className="text-xs text-primary hover:underline"
             >
-              {showInjectForm ? "Fechar" : "Abrir"}
+              {showInjectForm ? t('orchestration.closeForm') : t('orchestration.openForm')}
             </button>
           </div>
-          <p className="text-[11px] text-gray-400">
-            Escreve uma chave no ContextStore desta sessão (confiança configurável).
+          <p className="text-xs text-muted-light">
+            {t('orchestration.injectContextDesc')}
           </p>
           {showInjectForm && (
             <InjectContextForm sessionId={sessionId} mcpBase={mcpBase} onDone={handleActionDone} />
@@ -342,9 +358,9 @@ export const OrchestrationTab: React.FC<OrchestrationTabProps> = ({
 
         {/* Force complete */}
         <div>
-          <span className="text-xs font-medium text-gray-700 block mb-1">⚡ Forçar encerramento</span>
-          <p className="text-[11px] text-gray-400 mb-2">
-            Marca o pipeline como "completed" no Redis. Use apenas em emergências.
+          <span className="text-xs font-medium text-dark block mb-1">{t('orchestration.forceComplete')}</span>
+          <p className="text-xs text-muted-light mb-2">
+            {t('orchestration.forceCompleteDesc')}
           </p>
           <ForceCompleteConfirm sessionId={sessionId} mcpBase={mcpBase} onDone={handleActionDone} />
         </div>

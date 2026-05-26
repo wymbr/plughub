@@ -4,6 +4,7 @@
  */
 
 import React, { useState } from 'react'
+import { ClipboardList, User, BarChart2, TrendingUp, LineChart, AreaChart, Hash } from 'lucide-react'
 import {
   PieChart,
   Pie,
@@ -23,15 +24,15 @@ import { useAuth } from '@/auth/useAuth'
 import type { AgentEvaluationReport } from '@/types'
 
 function ScorePill({ score }: { score: number | null }) {
-  if (score === null) return <span className="text-gray-400 text-xs">—</span>
-  const bg = score >= 8 ? 'bg-green-100 text-green-800' : score >= 6 ? 'bg-yellow-100 text-yellow-800' : 'bg-red-100 text-red-800'
+  if (score === null) return <span className="text-muted-light text-xs">—</span>
+  const bg = score >= 8 ? 'bg-green-light text-green-text' : score >= 6 ? 'bg-warning-light text-warning-text' : 'bg-red-light text-red-text'
   return <span className={`px-2 py-0.5 rounded text-sm font-bold ${bg}`}>{score.toFixed(1)}</span>
 }
 
 function ProgressBar({ pct }: { pct: number }) {
   const clamp = Math.max(0, Math.min(100, pct))
   return (
-    <div className="w-full bg-gray-200 rounded-full h-1.5">
+    <div className="w-full bg-border rounded-full h-1.5">
       <div className="bg-primary h-1.5 rounded-full" style={{ width: `${clamp}%` }} />
     </div>
   )
@@ -49,9 +50,9 @@ function CampaignTab() {
     <div className="flex gap-6">
       {/* Campaign selector */}
       <div className="w-64 shrink-0">
-        <label className="block text-xs text-gray-500 mb-1">Campanha</label>
+        <label className="block text-xs text-muted mb-1">Campanha</label>
         <select
-          className="w-full border border-gray-300 rounded px-2 py-1.5 text-sm"
+          className="w-full border border-border-strong rounded px-2 py-1.5 text-sm"
           value={selectedId ?? ''}
           onChange={e => setSelectedId(e.target.value || null)}
         >
@@ -65,31 +66,31 @@ function CampaignTab() {
       {/* Report */}
       <div className="flex-1">
         {!selectedId && (
-          <div className="text-gray-400 text-sm text-center py-12">
+          <div className="text-muted-light text-sm text-center py-12">
             Selecione uma campanha para ver o relatório
           </div>
         )}
-        {selectedId && loading && <div className="text-gray-400 text-sm py-4">Carregando…</div>}
+        {selectedId && loading && <div className="text-muted-light text-sm py-4">Carregando…</div>}
         {report && (
           <div className="space-y-6">
             <div className="grid grid-cols-5 gap-3">
               {[
-                { label: 'Total', value: report.total, color: 'text-gray-700' },
-                { label: 'Concluídas', value: report.completed, color: 'text-green-700' },
-                { label: 'Pendentes', value: report.pending, color: 'text-yellow-700' },
-                { label: 'Em revisão', value: report.in_review, color: 'text-blue-700' },
-                { label: 'Expiradas', value: report.expired, color: 'text-red-600' },
+                { label: 'Total', value: report.total, color: 'text-dark' },
+                { label: 'Concluídas', value: report.completed, color: 'text-green-text' },
+                { label: 'Pendentes', value: report.pending, color: 'text-warning-text' },
+                { label: 'Em revisão', value: report.in_review, color: 'text-primary' },
+                { label: 'Expiradas', value: report.expired, color: 'text-red-text' },
               ].map(k => (
-                <div key={k.label} className="bg-gray-50 rounded p-3 text-center border">
+                <div key={k.label} className="bg-surface-muted rounded p-3 text-center border">
                   <div className={`text-2xl font-bold ${k.color}`}>{k.value}</div>
-                  <div className="text-xs text-gray-500 mt-1">{k.label}</div>
+                  <div className="text-xs text-muted mt-1">{k.label}</div>
                 </div>
               ))}
             </div>
 
             <div className="bg-white border rounded p-4 space-y-2">
               <div className="flex items-center justify-between">
-                <span className="text-sm font-semibold text-gray-700">Conclusão</span>
+                <span className="text-sm font-semibold text-dark">Conclusão</span>
                 <span className="text-sm font-bold text-primary">{report.completion_pct.toFixed(1)}%</span>
               </div>
               <ProgressBar pct={report.completion_pct} />
@@ -97,25 +98,25 @@ function CampaignTab() {
 
             <div className="grid grid-cols-3 gap-4">
               <div className="bg-white border rounded p-4 text-center">
-                <div className="text-xs text-gray-500 mb-1">Nota média</div>
+                <div className="text-xs text-muted mb-1">Nota média</div>
                 <ScorePill score={report.avg_score} />
               </div>
               <div className="bg-white border rounded p-4 text-center">
-                <div className="text-xs text-gray-500 mb-1">P25</div>
+                <div className="text-xs text-muted mb-1">P25</div>
                 <ScorePill score={report.score_p25} />
               </div>
               <div className="bg-white border rounded p-4 text-center">
-                <div className="text-xs text-gray-500 mb-1">P75</div>
+                <div className="text-xs text-muted mb-1">P75</div>
                 <ScorePill score={report.score_p75} />
               </div>
             </div>
 
             {report.top_flags?.length > 0 && (
               <div className="bg-white border rounded p-4">
-                <div className="text-sm font-semibold text-gray-700 mb-2">Flags mais frequentes</div>
+                <div className="text-sm font-semibold text-dark mb-2">Flags mais frequentes</div>
                 <div className="flex flex-wrap gap-2">
                   {report.top_flags.map(f => (
-                    <span key={f} className="bg-red-50 text-red-700 text-xs px-2 py-1 rounded border border-red-100">{f}</span>
+                    <span key={f} className="bg-red-light text-red-text text-xs px-2 py-1 rounded border border-red/20">{f}</span>
                   ))}
                 </div>
               </div>
@@ -137,46 +138,46 @@ function AgentTab() {
   return (
     <div className="space-y-4">
       <div>
-        <label className="block text-xs text-gray-500 mb-1">Filtrar por pool</label>
+        <label className="block text-xs text-muted mb-1">Filtrar por pool</label>
         <input
-          className="border border-gray-300 rounded px-2 py-1.5 text-sm w-48"
+          className="border border-border-strong rounded px-2 py-1.5 text-sm w-48"
           placeholder="Pool ID (opcional)"
           value={poolFilter}
           onChange={e => setPoolFilter(e.target.value)}
         />
       </div>
 
-      {loading && <div className="text-gray-400 text-sm">Carregando…</div>}
+      {loading && <div className="text-muted-light text-sm">Carregando…</div>}
 
       {!loading && rows.length === 0 && (
-        <div className="text-center text-gray-400 py-8">Sem dados de avaliação por agente</div>
+        <div className="text-center text-muted-light py-8">Sem dados de avaliação por agente</div>
       )}
 
       {rows.length > 0 && (
         <div className="overflow-x-auto">
           <table className="w-full text-sm border-collapse">
             <thead>
-              <tr className="bg-gray-50">
-                <th className="text-left px-3 py-2 text-xs font-semibold text-gray-600 border-b">Agente</th>
-                <th className="text-left px-3 py-2 text-xs font-semibold text-gray-600 border-b">Pool</th>
-                <th className="text-center px-3 py-2 text-xs font-semibold text-gray-600 border-b">Sessões</th>
-                <th className="text-center px-3 py-2 text-xs font-semibold text-gray-600 border-b">Avaliadas</th>
-                <th className="text-center px-3 py-2 text-xs font-semibold text-gray-600 border-b">Nota média</th>
-                <th className="text-left px-3 py-2 text-xs font-semibold text-gray-600 border-b">Principais melhorias</th>
+              <tr className="bg-surface-muted">
+                <th className="text-left px-3 py-2 text-xs font-semibold text-muted border-b">Agente</th>
+                <th className="text-left px-3 py-2 text-xs font-semibold text-muted border-b">Pool</th>
+                <th className="text-center px-3 py-2 text-xs font-semibold text-muted border-b">Sessões</th>
+                <th className="text-center px-3 py-2 text-xs font-semibold text-muted border-b">Avaliadas</th>
+                <th className="text-center px-3 py-2 text-xs font-semibold text-muted border-b">Nota média</th>
+                <th className="text-left px-3 py-2 text-xs font-semibold text-muted border-b">Principais melhorias</th>
               </tr>
             </thead>
             <tbody>
               {rows.map((r: AgentEvaluationReport) => (
-                <tr key={`${r.agent_type_id}-${r.pool_id}`} className="border-b hover:bg-gray-50">
-                  <td className="px-3 py-2 font-mono text-xs text-gray-600">{r.agent_type_id}</td>
-                  <td className="px-3 py-2 text-gray-600">{r.pool_id}</td>
-                  <td className="px-3 py-2 text-center text-gray-700">{r.total_sessions}</td>
-                  <td className="px-3 py-2 text-center text-gray-700">{r.evaluated}</td>
+                <tr key={`${r.agent_type_id}-${r.pool_id}`} className="border-b hover:bg-surface-muted">
+                  <td className="px-3 py-2 font-mono text-xs text-muted">{r.agent_type_id}</td>
+                  <td className="px-3 py-2 text-muted">{r.pool_id}</td>
+                  <td className="px-3 py-2 text-center text-dark">{r.total_sessions}</td>
+                  <td className="px-3 py-2 text-center text-dark">{r.evaluated}</td>
                   <td className="px-3 py-2 text-center"><ScorePill score={r.avg_score} /></td>
                   <td className="px-3 py-2">
                     <div className="flex flex-wrap gap-1">
                       {r.top_improvement?.slice(0, 2).map((t, i) => (
-                        <span key={i} className="bg-orange-50 text-orange-700 text-xs px-1.5 py-0.5 rounded max-w-32 truncate">{t}</span>
+                        <span key={i} className="bg-contested-light text-contested-text text-xs px-1.5 py-0.5 rounded max-w-32 truncate">{t}</span>
                       ))}
                     </div>
                   </td>
@@ -201,22 +202,22 @@ const GROUP_BY_OPTIONS = [
 
 function ScoreDistBar({ excellent, good, fair, poor }: { excellent: number; good: number; fair: number; poor: number }) {
   const total = excellent + good + fair + poor
-  if (total === 0) return <span className="text-gray-300 text-xs">—</span>
+  if (total === 0) return <span className="text-border-strong text-xs">—</span>
   const pct = (n: number) => ((n / total) * 100).toFixed(0)
   return (
     <div className="flex rounded overflow-hidden h-3 w-24 gap-px">
-      {excellent > 0 && <div className="bg-green-500" style={{ width: `${pct(excellent)}%` }} title={`Excelente: ${excellent}`} />}
-      {good > 0      && <div className="bg-emerald-400" style={{ width: `${pct(good)}%` }} title={`Bom: ${good}`} />}
-      {fair > 0      && <div className="bg-yellow-400" style={{ width: `${pct(fair)}%` }} title={`Regular: ${fair}`} />}
-      {poor > 0      && <div className="bg-red-400" style={{ width: `${pct(poor)}%` }} title={`Ruim: ${poor}`} />}
+      {excellent > 0 && <div className="bg-green" style={{ width: `${pct(excellent)}%` }} title={`Excelente: ${excellent}`} />}
+      {good > 0      && <div className="bg-secondary" style={{ width: `${pct(good)}%` }} title={`Bom: ${good}`} />}
+      {fair > 0      && <div className="bg-warning" style={{ width: `${pct(fair)}%` }} title={`Regular: ${fair}`} />}
+      {poor > 0      && <div className="bg-red" style={{ width: `${pct(poor)}%` }} title={`Ruim: ${poor}`} />}
     </div>
   )
 }
 
 function RateBadge({ numerator, denominator, warnBelow }: { numerator: number; denominator: number; warnBelow?: number }) {
-  if (denominator === 0) return <span className="text-gray-300 text-xs">—</span>
+  if (denominator === 0) return <span className="text-border-strong text-xs">—</span>
   const pct = (numerator / denominator) * 100
-  const color = warnBelow != null && pct < warnBelow ? 'text-red-600' : pct >= 80 ? 'text-green-700' : 'text-yellow-700'
+  const color = warnBelow != null && pct < warnBelow ? 'text-red-text' : pct >= 80 ? 'text-green-text' : 'text-warning-text'
   return <span className={`text-sm font-semibold ${color}`}>{pct.toFixed(1)}%</span>
 }
 
@@ -239,9 +240,9 @@ function AnalyticsTab() {
       {/* Filters */}
       <div className="flex items-end gap-4 flex-wrap">
         <div>
-          <label className="block text-xs text-gray-500 mb-1">Agrupar por</label>
+          <label className="block text-xs text-muted mb-1">Agrupar por</label>
           <select
-            className="border border-gray-300 rounded px-2 py-1.5 text-sm"
+            className="border border-border-strong rounded px-2 py-1.5 text-sm"
             value={groupBy}
             onChange={e => setGroupBy(e.target.value)}
           >
@@ -251,34 +252,34 @@ function AnalyticsTab() {
           </select>
         </div>
         <div>
-          <label className="block text-xs text-gray-500 mb-1">Campanha (opcional)</label>
+          <label className="block text-xs text-muted mb-1">Campanha (opcional)</label>
           <input
-            className="border border-gray-300 rounded px-2 py-1.5 text-sm w-48"
+            className="border border-border-strong rounded px-2 py-1.5 text-sm w-48"
             placeholder="campaign_id"
             value={campaignFilter}
             onChange={e => setCampaignFilter(e.target.value)}
           />
         </div>
         {meta.from_dt && (
-          <span className="text-xs text-gray-400 self-end pb-2">
+          <span className="text-xs text-muted-light self-end pb-2">
             {meta.from_dt.slice(0, 10)} → {meta.to_dt.slice(0, 10)} · {meta.total} grupos
           </span>
         )}
       </div>
 
       {/* Legend */}
-      <div className="flex items-center gap-4 text-xs text-gray-500">
-        <span className="flex items-center gap-1"><span className="inline-block w-3 h-3 rounded bg-green-500" /> Excelente ≥0.9</span>
-        <span className="flex items-center gap-1"><span className="inline-block w-3 h-3 rounded bg-emerald-400" /> Bom 0.7–0.9</span>
-        <span className="flex items-center gap-1"><span className="inline-block w-3 h-3 rounded bg-yellow-400" /> Regular 0.5–0.7</span>
-        <span className="flex items-center gap-1"><span className="inline-block w-3 h-3 rounded bg-red-400" /> Ruim &lt;0.5</span>
+      <div className="flex items-center gap-4 text-xs text-muted">
+        <span className="flex items-center gap-1"><span className="inline-block w-3 h-3 rounded bg-green" /> Excelente ≥0.9</span>
+        <span className="flex items-center gap-1"><span className="inline-block w-3 h-3 rounded bg-secondary" /> Bom 0.7–0.9</span>
+        <span className="flex items-center gap-1"><span className="inline-block w-3 h-3 rounded bg-warning" /> Regular 0.5–0.7</span>
+        <span className="flex items-center gap-1"><span className="inline-block w-3 h-3 rounded bg-red" /> Ruim &lt;0.5</span>
       </div>
 
-      {loading && <div className="text-gray-400 text-sm py-4">Carregando…</div>}
-      {error && <div className="text-red-500 text-sm bg-red-50 rounded p-3">{error}</div>}
+      {loading && <div className="text-muted-light text-sm py-4">Carregando…</div>}
+      {error && <div className="text-red text-sm bg-red-light rounded p-3">{error}</div>}
 
       {!loading && rows.length === 0 && !error && (
-        <div className="text-center text-gray-400 py-10">
+        <div className="text-center text-muted-light py-10">
           Sem dados de avaliação no período
         </div>
       )}
@@ -305,7 +306,7 @@ function AnalyticsTab() {
         return (
           <div className="bg-white border rounded p-4 flex items-center gap-6">
             <div className="shrink-0">
-              <div className="text-xs font-semibold text-gray-600 mb-2 text-center">Distribuição agregada</div>
+              <div className="text-xs font-semibold text-muted mb-2 text-center">Distribuição agregada</div>
               <ResponsiveContainer width={200} height={160}>
                 <PieChart>
                   <Pie
@@ -335,16 +336,16 @@ function AnalyticsTab() {
               {pieData.map(d => (
                 <div key={d.name} className="flex items-center gap-2">
                   <span className="w-3 h-3 rounded-full shrink-0" style={{ background: d.color }} />
-                  <span className="text-xs text-gray-600 flex-1">{d.name}</span>
-                  <span className="text-xs font-semibold text-gray-800 tabular-nums">{d.value}</span>
-                  <span className="text-xs text-gray-400 w-12 text-right tabular-nums">
+                  <span className="text-xs text-muted flex-1">{d.name}</span>
+                  <span className="text-xs font-semibold text-dark tabular-nums">{d.value}</span>
+                  <span className="text-xs text-muted-light w-12 text-right tabular-nums">
                     {((d.value / grandTotal) * 100).toFixed(1)}%
                   </span>
                 </div>
               ))}
               <div className="border-t pt-1 flex items-center gap-2 mt-1">
-                <span className="text-xs text-gray-500 flex-1">Total avaliações</span>
-                <span className="text-sm font-bold text-gray-800">{grandTotal}</span>
+                <span className="text-xs text-muted flex-1">Total avaliações</span>
+                <span className="text-sm font-bold text-dark">{grandTotal}</span>
               </div>
             </div>
           </div>
@@ -355,27 +356,27 @@ function AnalyticsTab() {
         <div className="overflow-x-auto">
           <table className="w-full text-sm border-collapse">
             <thead>
-              <tr className="bg-gray-50">
-                <th className="text-left px-3 py-2 text-xs font-semibold text-gray-600 border-b">
+              <tr className="bg-surface-muted">
+                <th className="text-left px-3 py-2 text-xs font-semibold text-muted border-b">
                   {GROUP_BY_OPTIONS.find(o => o.value === groupBy)?.label ?? groupBy}
                 </th>
-                <th className="text-center px-3 py-2 text-xs font-semibold text-gray-600 border-b">Avaliadas</th>
-                <th className="text-center px-3 py-2 text-xs font-semibold text-gray-600 border-b">Nota média</th>
-                <th className="text-center px-3 py-2 text-xs font-semibold text-gray-600 border-b">Distribuição</th>
-                <th className="text-center px-3 py-2 text-xs font-semibold text-gray-600 border-b">Aprovadas</th>
-                <th className="text-center px-3 py-2 text-xs font-semibold text-gray-600 border-b">Rejeitadas</th>
-                <th className="text-center px-3 py-2 text-xs font-semibold text-gray-600 border-b">Contestadas</th>
-                <th className="text-center px-3 py-2 text-xs font-semibold text-gray-600 border-b">Bloqueadas</th>
-                <th className="text-center px-3 py-2 text-xs font-semibold text-gray-600 border-b">⚑ Flags</th>
+                <th className="text-center px-3 py-2 text-xs font-semibold text-muted border-b">Avaliadas</th>
+                <th className="text-center px-3 py-2 text-xs font-semibold text-muted border-b">Nota média</th>
+                <th className="text-center px-3 py-2 text-xs font-semibold text-muted border-b">Distribuição</th>
+                <th className="text-center px-3 py-2 text-xs font-semibold text-muted border-b">Aprovadas</th>
+                <th className="text-center px-3 py-2 text-xs font-semibold text-muted border-b">Rejeitadas</th>
+                <th className="text-center px-3 py-2 text-xs font-semibold text-muted border-b">Contestadas</th>
+                <th className="text-center px-3 py-2 text-xs font-semibold text-muted border-b">Bloqueadas</th>
+                <th className="text-center px-3 py-2 text-xs font-semibold text-muted border-b">Flags</th>
               </tr>
             </thead>
             <tbody>
               {rows.map(r => (
-                <tr key={r.group_key} className="border-b hover:bg-gray-50">
-                  <td className="px-3 py-2 font-mono text-xs text-gray-700 max-w-48 truncate" title={r.group_key}>
+                <tr key={r.group_key} className="border-b hover:bg-surface-muted">
+                  <td className="px-3 py-2 font-mono text-xs text-dark max-w-48 truncate" title={r.group_key}>
                     {r.group_key}
                   </td>
-                  <td className="px-3 py-2 text-center text-gray-700">{r.total_evaluated}</td>
+                  <td className="px-3 py-2 text-center text-dark">{r.total_evaluated}</td>
                   <td className="px-3 py-2 text-center">
                     <ScorePill score={r.avg_score != null ? r.avg_score * 10 : null} />
                   </td>
@@ -396,11 +397,11 @@ function AnalyticsTab() {
                   <td className="px-3 py-2 text-center">
                     <RateBadge numerator={r.count_contested} denominator={r.total_evaluated} />
                   </td>
-                  <td className="px-3 py-2 text-center text-gray-600 text-sm">{r.count_locked}</td>
+                  <td className="px-3 py-2 text-center text-muted text-sm">{r.count_locked}</td>
                   <td className="px-3 py-2 text-center">
                     {r.with_compliance_flags > 0
-                      ? <span className="text-red-600 font-semibold text-sm">{r.with_compliance_flags}</span>
-                      : <span className="text-gray-300 text-xs">—</span>
+                      ? <span className="text-red-text font-semibold text-sm">{r.with_compliance_flags}</span>
+                      : <span className="text-border-strong text-xs">—</span>
                     }
                   </td>
                 </tr>
@@ -408,9 +409,9 @@ function AnalyticsTab() {
             </tbody>
             {rows.length > 1 && (
               <tfoot>
-                <tr className="bg-gray-50 border-t-2 font-semibold">
-                  <td className="px-3 py-2 text-xs text-gray-500">Total</td>
-                  <td className="px-3 py-2 text-center text-gray-700">
+                <tr className="bg-surface-muted border-t-2 font-semibold">
+                  <td className="px-3 py-2 text-xs text-muted">Total</td>
+                  <td className="px-3 py-2 text-center text-dark">
                     {rows.reduce((s, r) => s + r.total_evaluated, 0)}
                   </td>
                   <td className="px-3 py-2 text-center">
@@ -419,7 +420,7 @@ function AnalyticsTab() {
                       const wsum  = rows.reduce((s, r) => s + r.avg_score * r.total_evaluated, 0)
                       return total > 0
                         ? <ScorePill score={(wsum / total) * 10} />
-                        : <span className="text-gray-300 text-xs">—</span>
+                        : <span className="text-border-strong text-xs">—</span>
                     })()}
                   </td>
                   <td />
@@ -442,15 +443,15 @@ function AnalyticsTab() {
                       denominator={rows.reduce((s, r) => s + r.total_evaluated, 0)}
                     />
                   </td>
-                  <td className="px-3 py-2 text-center text-gray-700">
+                  <td className="px-3 py-2 text-center text-dark">
                     {rows.reduce((s, r) => s + r.count_locked, 0)}
                   </td>
                   <td className="px-3 py-2 text-center">
                     {(() => {
                       const total = rows.reduce((s, r) => s + r.with_compliance_flags, 0)
                       return total > 0
-                        ? <span className="text-red-600 font-semibold text-sm">{total}</span>
-                        : <span className="text-gray-300 text-xs">—</span>
+                        ? <span className="text-red-text font-semibold text-sm">{total}</span>
+                        : <span className="text-border-strong text-xs">—</span>
                     })()}
                   </td>
                 </tr>
@@ -471,11 +472,12 @@ const BREAKDOWN_OPTIONS = [
   { value: 'form_id',     label: 'Por formulário' },
 ]
 
-const DISPLAY_OPTIONS: { value: DisplayType; label: string; icon: string }[] = [
-  { value: 'line',  label: 'Linha',  icon: '📈' },
-  { value: 'area',  label: 'Área',   icon: '🏔️' },
-  { value: 'bar',   label: 'Barras', icon: '📊' },
-  { value: 'tile',  label: 'KPI',    icon: '🔢' },
+type DisplayIcon = React.FC<{ className?: string }>
+const DISPLAY_OPTIONS: { value: DisplayType; label: string; Icon: DisplayIcon }[] = [
+  { value: 'line',  label: 'Linha',  Icon: LineChart },
+  { value: 'area',  label: 'Área',   Icon: AreaChart },
+  { value: 'bar',   label: 'Barras', Icon: BarChart2 },
+  { value: 'tile',  label: 'KPI',    Icon: Hash },
 ]
 
 function TrendTab() {
@@ -494,10 +496,10 @@ function TrendTab() {
   return (
     <div className="space-y-5">
       {/* Controls */}
-      <div className="flex items-end gap-4 flex-wrap bg-gray-50 rounded p-3 border">
+      <div className="flex items-end gap-4 flex-wrap bg-surface-muted rounded p-3 border">
         {/* Display type toggle */}
         <div>
-          <label className="block text-xs text-gray-500 mb-1">Visualização</label>
+          <label className="block text-xs text-muted mb-1">Visualização</label>
           <div className="flex gap-1">
             {DISPLAY_OPTIONS.map(o => (
               <button
@@ -506,10 +508,10 @@ function TrendTab() {
                 className={`flex items-center gap-1 text-xs px-2.5 py-1 rounded border transition-colors ${
                   displayType === o.value
                     ? 'bg-primary text-white border-primary'
-                    : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'
+                    : 'bg-white text-muted border-border-strong hover:bg-surface-muted'
                 }`}
               >
-                {o.icon} {o.label}
+                <o.Icon className="w-3 h-3" aria-hidden="true" /> {o.label}
               </button>
             ))}
           </div>
@@ -517,9 +519,9 @@ function TrendTab() {
 
         {/* Breakdown selector */}
         <div>
-          <label className="block text-xs text-gray-500 mb-1">Agrupar série por</label>
+          <label className="block text-xs text-muted mb-1">Agrupar série por</label>
           <select
-            className="border border-gray-300 rounded px-2 py-1.5 text-sm"
+            className="border border-border-strong rounded px-2 py-1.5 text-sm"
             value={breakdownBy}
             onChange={e => setBreakdownBy(e.target.value)}
           >
@@ -531,9 +533,9 @@ function TrendTab() {
 
         {/* Campaign filter (optional — narrows the data before breakdown) */}
         <div>
-          <label className="block text-xs text-gray-500 mb-1">Filtrar campanha</label>
+          <label className="block text-xs text-muted mb-1">Filtrar campanha</label>
           <select
-            className="border border-gray-300 rounded px-2 py-1.5 text-sm max-w-[180px]"
+            className="border border-border-strong rounded px-2 py-1.5 text-sm max-w-[180px]"
             value={campaignId}
             onChange={e => setCampaignId(e.target.value)}
           >
@@ -598,11 +600,12 @@ function TrendTab() {
 
 // ── ReportsPage ────────────────────────────────────────────────────────────────
 
-const TABS = [
-  { id: 'campaign',  label: '📋 Por campanha' },
-  { id: 'agent',     label: '👤 Por agente' },
-  { id: 'analytics', label: '📊 Analytics' },
-  { id: 'trend',     label: '📈 Tendência' },
+type TabIcon = React.FC<{ className?: string }>
+const TABS: { id: string; label: string; Icon: TabIcon }[] = [
+  { id: 'campaign',  label: 'Por campanha', Icon: ClipboardList },
+  { id: 'agent',     label: 'Por agente',   Icon: User },
+  { id: 'analytics', label: 'Analytics',    Icon: BarChart2 },
+  { id: 'trend',     label: 'Tendência',    Icon: TrendingUp },
 ]
 
 export default function ReportsPage() {
@@ -616,12 +619,13 @@ export default function ReportsPage() {
           <button
             key={t.id}
             onClick={() => setTab(t.id)}
-            className={`px-4 py-3 text-sm transition-colors border-b-2 -mb-px ${
+            className={`flex items-center gap-1.5 px-4 py-3 text-sm transition-colors border-b-2 -mb-px ${
               tab === t.id
                 ? 'border-primary text-primary font-medium'
-                : 'border-transparent text-gray-500 hover:text-gray-700'
+                : 'border-transparent text-muted hover:text-dark'
             }`}
           >
+            <t.Icon className="w-3.5 h-3.5" aria-hidden="true" />
             {t.label}
           </button>
         ))}

@@ -1,5 +1,7 @@
 # Task #30 — Contacts & Navigation Restructure
 
+> ⚠️ Documento histórico — design de planejamento da Task #30 (2026-05-08), superado pela estrutura de navegação atual. Mantido apenas como referência. Ver CLAUDE.md § Frontend Architecture.
+
 > **Status:** Design fechado — pronto para implementação  
 > **Data:** 2026-05-08  
 > **Módulos afetados:** `platform-ui` (nav, Contacts, Flow, nova seção Análise)

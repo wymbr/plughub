@@ -1,5 +1,9 @@
 # Arc 9 — Agent Groups & Supervisor Scope
 
+> Última atualização: 2026-05-25 · Estado: Arc 16 · Status: Arc 9 implementado
+
+> **Arc 9 implementado** — `GroupsPage` (`/config/groups`), `groups_router.py` (CRUD de grupos + sub-recursos), claims JWT (`supervised_groups`, `supervised_agent_types`, `supervised_user_ids`) e os filtros de escopo em analytics-api estão em produção. Supervisor com grupos ativos mas sem nenhum membro recebe o sentinela `["__no_active_shift__"]` em `supervised_agent_types` — isso impede que a lista vazia seja interpretada como "sem restrição" (que é a semântica para admin). Este documento descreve o desenho original; o estado vigente está consolidado no CLAUDE.md § Arc 9.
+
 ## Problema
 
 Pool é a unidade de **roteamento** de contatos. Equipe é a unidade de **gestão de pessoas**. São conceitos ortogonais: um agente pode atender qualquer pool mas pertence a uma equipe; um supervisor precisa enxergar somente os agentes do seu grupo, independente de qual pool eles estão atendendo no momento.

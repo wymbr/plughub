@@ -130,5 +130,39 @@
     "selectOrCreate": "Selecione um webhook ou crie um novo",
     "description": "Webhooks permitem que sistemas externos (Salesforce, ERP, etc.) disparem workflows automaticamente via URL autenticada.",
     "error": "Erro"
+  },
+  "analise": {
+    "title":         "Análise de Processos",
+    "groupBy":       "Agrupar por",
+    "refresh":       "↻ Atualizar",
+    "exportCsv":     "↓ CSV",
+    "loadError":     "Erro ao carregar dados:",
+    "empty":         "Nenhum workflow no período",
+    "noTenant":      "Nenhum tenant selecionado.",
+    "groupByOptions": {
+      "flow_id":     "Skill / Flow",
+      "campaign_id": "Campanha"
+    },
+    "kpi": {
+      "triggered":     "Disparados",
+      "completed":     "Concluídos",
+      "failures":      "Falhas + Timeout",
+      "avgCompletion": "Conclusão média",
+      "avgDuration":   "Duração média",
+      "ofTotal":       "{{pct}} do total"
+    },
+    "table": {
+      "group":        "Grupo",
+      "distribution": "Distribuição",
+      "completion":   "Conclusão",
+      "failure":      "Falha",
+      "avgDuration":  "Duração méd.",
+      "triggered":    "Disparados",
+      "completed":    "Concluídos",
+      "failed":       "Falhou",
+      "timeout":      "Timeout",
+      "cancelled":    "Cancelado",
+      "suspended":    "Suspenso"
+    }
   }
 }

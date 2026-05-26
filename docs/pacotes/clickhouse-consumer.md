@@ -1,169 +1,122 @@
-# Módulo: ClickHouse Consumer (Piloto)
+# Módulo: ClickHouse Consumer (analytics-api)
 
-> Responsabilidade: consumir `evaluation.completed` de `evaluation.results`
-> e persistir scores e itens nas tabelas ClickHouse do piloto.
-> Pré-requisito do Dashboard.
+> Última atualização: 2026-05-25 · Estado: Arc 16
+
+> **Responsabilidade:** consumir múltiplos tópicos Kafka de eventos analíticos e
+> persistir as linhas resultantes nas tabelas ClickHouse da `analytics-api`.
 
 ---
 
 ## Visão geral
 
-Consumer Kafka de responsabilidade única. Não tem lógica de negócio.
-Lê `evaluation.completed`, extrai as entradas de scores e itens,
-e escreve nas duas tabelas ClickHouse definidas no Evaluation Agent.
+O ClickHouse consumer é o pipeline de ingestão da `analytics-api`. Não é um
+serviço isolado: o consumer (`consumer.py`) roda dentro da `analytics-api`, que
+também expõe os endpoints REST `/reports/*` lidos pela `platform-ui`.
 
-É o único componente da plataforma que escreve no ClickHouse.
-O Dashboard lê diretamente do ClickHouse — sem API intermediária.
+> **Importante:** a `analytics-api` **não** é o único componente que escreve no
+> ClickHouse, e a `platform-ui` **não** lê o ClickHouse diretamente. A UI consome
+> exclusivamente os endpoints `/reports/*` da `analytics-api`, que executam as
+> queries ClickHouse server-side (com pool scoping e scope de supervisão aplicados).
+
+O consumer tem responsabilidade única de ingestão: para cada tópico há um parser
+em `_PARSERS` que transforma o evento Kafka em uma ou mais linhas de tabela; o
+`_write_row` despacha cada linha para o método de `store` correspondente.
 
 ---
 
-## Tópico consumido
+## Tópicos consumidos
 
-| Tópico | Conteúdo |
+A `analytics-api` consome um conjunto amplo de tópicos analíticos:
+
+| Tópico | Tabela(s) ClickHouse alimentada(s) |
 |---|---|
-| `evaluation.results` | Eventos `evaluation.completed` publicados pelo Evaluation Agent |
+| `evaluation.events` | `evaluation_results`, `evaluation_events` |
+| `conversations.participants` | `analytics.segments`, `session_timeline` |
+| `journey.events` | `journey_events` |
+| `collect.events` | tabela de eventos de collect |
+| `calibration.events` | `calibration_events` |
+| `mcp.audit` | `mcp_audit_log` (+ `session_timeline`) |
+| `agent.events` | `analytics.agent_business_events` |
+| `evaluation.requested` / `conversations.session_closed` | `session_events` (via Stream Persister) |
+| `deploy_events` (de `registry.changed`) | `analytics.deploy_events` |
+
+A lista exata de tópicos vive em `_TOPICS` no `consumer.py`. Cada novo tópico
+analítico adiciona uma entrada em `_TOPICS` e um parser em `_PARSERS`.
 
 ---
 
 ## Fluxo de processamento
 
 ```
-evaluation.completed (evaluation.results)
+evento Kafka (qualquer tópico de _TOPICS)
   ↓
-  Para cada entrada em scores[]:
-    INSERT INTO evaluation_scores (...)
-    Para cada subsection em subsections[]:
-      Para cada item em items[]:
-        INSERT INTO evaluation_items (...)
+_PARSERS[topic](msg)  →  lista de rows { "table": <nome>, ... }
   ↓
-  Commit offset Kafka
+para cada row:
+  _write_row(row)  →  store.<método de upsert/insert da tabela>
+  ↓
+Commit offset Kafka
 ```
 
-A escrita é feita em batch por evento — todas as linhas de um
-`evaluation.completed` são inseridas numa única transação antes do
-commit do offset. Se a inserção falhar, o evento é reprocessado.
+Alguns parsers fazem **dual-write**: por exemplo, `parse_mcp_audit_event()`
+retorna duas linhas — uma para `session_timeline` e outra para `mcp_audit_log`.
+`parse_evaluation_event()` retorna uma linha de estado (`evaluation_results`) e
+uma linha de log (`evaluation_events`).
 
 ---
 
-## Mapeamento evaluation.completed → tabelas
+## Tabelas de avaliação (Arc 6)
 
-### `evaluation_scores`
-
-Uma linha por entrada em `scores[]`:
-
-```python
-for score in event["scores"]:
-    INSERT INTO evaluation_scores VALUES (
-        evaluation_id   = event["evaluation_id"],
-        contact_id      = event["contact_id"],
-        agent_id        = event["agent_id"],
-        agent_type      = event["agent_type"],
-        pool_id         = event["pool_id"],
-        skill_id        = event["skill_id"],
-        section_id      = score["section_id"],
-        score_type      = score["score_type"],       -- 'base_score' | 'context_score'
-        score           = score["score"],
-        triggered_by_key = score.get("triggered_by", {}).get key,
-        triggered_by_val = score.get("triggered_by", {}).get value,
-        evaluated_at    = event["evaluated_at"],
-        triggered_by_src = event["triggered_by"]
-    )
-```
-
-### `evaluation_items`
-
-Uma linha por item em cada sub-seção de cada seção:
-
-```python
-for score in event["scores"]:
-    for subsection in score["subsections"]:
-        for item in subsection["items"]:
-            INSERT INTO evaluation_items VALUES (
-                evaluation_id = event["evaluation_id"],
-                contact_id    = event["contact_id"],
-                agent_id      = event["agent_id"],
-                pool_id       = event["pool_id"],
-                section_id    = score["section_id"],
-                subsection_id = subsection["subsection_id"],
-                item_id       = item["item_id"],
-                value         = item["value"],
-                weight        = item["weight"],
-                justification = item["justification"],
-                evaluated_at  = event["evaluated_at"]
-            )
-```
-
----
-
-## DDL das tabelas ClickHouse
+As tabelas atuais de avaliação são `evaluation_results` e `evaluation_events`
+— **não** existem mais `evaluation_scores`/`evaluation_items`.
 
 ```sql
--- Scores por seção: agregações rápidas para dashboard
-CREATE TABLE IF NOT EXISTS evaluation_scores (
-    evaluation_id     UUID,
-    contact_id        UUID,
-    agent_id          UUID,
-    agent_type        Enum8('human' = 1, 'ai' = 2),
-    pool_id           String,
-    skill_id          String,
-    section_id        String,
-    score_type        Enum8('base_score' = 1, 'context_score' = 2),
-    score             Float32,
-    triggered_by_key  Nullable(String),
-    triggered_by_val  Nullable(String),
-    evaluated_at      DateTime,
-    triggered_by_src  String
-) ENGINE = MergeTree()
-  PARTITION BY toYYYYMM(evaluated_at)
-  ORDER BY (pool_id, agent_id, section_id, evaluated_at);
+-- Estado atual de cada resultado (ReplacingMergeTree — último eval_status vence)
+CREATE TABLE analytics.evaluation_results (
+    result_id        String,
+    instance_id      String,
+    session_id       String,
+    tenant_id        String,
+    evaluator_id     String,
+    form_id          String,
+    campaign_id      Nullable(String),
+    overall_score    Float64,
+    eval_status      String,
+    locked           UInt8,
+    compliance_flags Array(String),
+    timestamp        DateTime,
+    ingested_at      DateTime DEFAULT now()
+) ENGINE = ReplacingMergeTree(ingested_at)
+  ORDER BY (tenant_id, result_id);
 
--- Itens individuais: drill-down até justificativa
-CREATE TABLE IF NOT EXISTS evaluation_items (
-    evaluation_id   UUID,
-    contact_id      UUID,
-    agent_id        UUID,
-    pool_id         String,
-    section_id      String,
-    subsection_id   String,
-    item_id         String,
-    value           UInt8,
-    weight          UInt8,
-    justification   String,
-    evaluated_at    DateTime
+-- Log append-only de eventos (submitted/reviewed/contested/locked)
+CREATE TABLE analytics.evaluation_events (
+    event_id      String,
+    result_id     String,
+    session_id    String,
+    tenant_id     String,
+    event_type    String,
+    actor_id      String,
+    eval_status   String,
+    overall_score Nullable(Float64),
+    timestamp     DateTime,
+    ingested_at   DateTime DEFAULT now()
 ) ENGINE = MergeTree()
-  PARTITION BY toYYYYMM(evaluated_at)
-  ORDER BY (pool_id, agent_id, section_id, item_id, evaluated_at);
+  ORDER BY (tenant_id, result_id, timestamp);
 ```
 
-O DDL é executado na inicialização do consumer com `CREATE TABLE IF NOT EXISTS`
-— sem migrations separadas no piloto.
-
----
-
-## Configuração
-
-```yaml
-clickhouse_consumer:
-  kafka:
-    consumer_group: clickhouse-consumer
-    topic: evaluation.results
-    auto_offset_reset: earliest
-  clickhouse:
-    host: localhost
-    port: 8123
-    database: plughub
-    batch_timeout_ms: 500     # flush parcial se não acumular batch completo
-    batch_size: 100           # flush quando atingir N eventos
-```
+→ Ver [`docs/arcos/arc6-evaluation.md`](../arcos/arc6-evaluation.md) para o modelo
+completo de tabelas (segmentos, calibração, journey, deploy events, agent business
+events).
 
 ---
 
 ## O que o consumer não faz
 
-- Não calcula nem transforma scores — recebe valores já calculados
-- Não valida o conteúdo da avaliação — confia no Evaluation Agent
-- Não expõe API — o Dashboard lê diretamente do ClickHouse
-- Não escreve em PostgreSQL ou Redis
+- Não calcula nem transforma métricas de negócio — recebe valores já calculados
+- Não valida regras de domínio — confia nos produtores dos eventos
+- Não expõe API — os endpoints `/reports/*` são da `analytics-api` (mesmo processo)
+- O consumer em si não escreve em PostgreSQL ou Redis — apenas ClickHouse
 
 ---
 
@@ -171,7 +124,10 @@ clickhouse_consumer:
 
 | Módulo | Relação |
 |---|---|
-| `evaluation.results` (Kafka) | Fonte — consome `evaluation.completed` |
-| `Evaluation Agent` | Produtor do evento consumido |
-| `ClickHouse` | Destino — escreve `evaluation_scores` e `evaluation_items` |
-| `Dashboard` | Leitor — consome as tabelas via queries diretas |
+| `evaluation-api` | Produtor de `evaluation.events` e `calibration.events` |
+| `orchestrator-bridge` | Produtor de `conversations.participants` |
+| `workflow-api` | Produtor de `journey.events` e `collect.events` |
+| `McpInterceptor` / proxy sidecar | Produtor de `mcp.audit` |
+| `Agent Registry` | Produtor de `registry.changed` (origem de `deploy_events`) |
+| `ClickHouse` | Destino — dezenas de tabelas analíticas |
+| `platform-ui` | Consome os endpoints `/reports/*` da `analytics-api` — nunca o ClickHouse direto |

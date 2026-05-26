@@ -10,6 +10,8 @@
  *   Daily perf     : GET /reports/agent-performance/daily  (analytics-api)
  */
 import React, { useCallback, useEffect, useState } from 'react'
+import { Bot, BarChart2 } from 'lucide-react'
+import { useTranslation } from 'react-i18next'
 import { useAuth } from '@/auth/useAuth'
 import Spinner from '@/components/ui/Spinner'
 import { listPools } from '@/api/registry'
@@ -52,15 +54,6 @@ const STATUS_COLOR: Record<string, string> = {
   draining: '#f97316',
   logout:   '#6b7280',
 }
-const STATUS_LABEL: Record<string, string> = {
-  login:    'Conectando',
-  ready:    'Pronto',
-  busy:     'Em sessão',
-  paused:   'Pausado',
-  draining: 'Drenando',
-  logout:   'Desconectado',
-}
-
 const ALL_STATUSES = ['login', 'ready', 'busy', 'paused', 'draining', 'logout'] as const
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -95,6 +88,7 @@ async function fetchRuntimeInstances(
 }
 
 function MonitorSubTab({ tenantId }: { tenantId: string }) {
+  const { t, i18n } = useTranslation('contacts')
   const [instances,     setInstances]     = useState<RuntimeInstance[]>([])
   const [pools,         setPools]         = useState<Pool[]>([])
   const [loading,       setLoading]       = useState(false)
@@ -153,7 +147,7 @@ function MonitorSubTab({ tenantId }: { tenantId: string }) {
 
   const groups: AgentGroup[] = Object.values(
     instances.reduce<Record<string, AgentGroup>>((acc, inst) => {
-      const key = inst.agent_type_id ?? '(desconhecido)'
+      const key = inst.agent_type_id ?? t('agents.unknown')
       if (!acc[key]) acc[key] = { agentTypeId: key, instances: [], ready: 0, busy: 0, paused: 0 }
       acc[key].instances.push(inst)
       if (inst.status === 'ready')  acc[key].ready++
@@ -168,70 +162,72 @@ function MonitorSubTab({ tenantId }: { tenantId: string }) {
     : instances
 
   return (
-    <div className="flex flex-col h-full overflow-hidden bg-[#0a1628] text-slate-200">
+    <div className="flex flex-col h-full overflow-hidden bg-surface-muted">
 
       {/* Filter bar */}
-      <div className="flex items-center gap-3 px-4 py-2.5 border-b border-slate-800 flex-shrink-0 flex-wrap">
+      <div className="flex items-center gap-3 px-4 py-2.5 bg-white border-b border-border flex-shrink-0 flex-wrap">
         <div className="flex items-center gap-1.5">
-          <label className="text-xs text-slate-500 whitespace-nowrap">Pool</label>
+          <label className="text-xs text-muted whitespace-nowrap">Pool</label>
           <select value={filterPool} onChange={e => handleSetFilterPool(e.target.value)}
-            className="text-xs bg-slate-900 border border-slate-700 rounded px-2 py-1 text-slate-200 focus:outline-none focus:border-slate-500 min-w-[140px]">
-            <option value="">Todos</option>
+            className="text-xs bg-white border border-border-strong rounded px-2 py-1 text-dark focus:outline-none focus:ring-2 focus:ring-primary/30 min-w-[140px]">
+            <option value="">{t('agents.all')}</option>
             {pools.map(p => <option key={p.pool_id} value={p.pool_id}>{p.pool_id}</option>)}
           </select>
         </div>
         <div className="flex items-center gap-1.5">
-          <label className="text-xs text-slate-500 whitespace-nowrap">Status</label>
+          <label className="text-xs text-muted whitespace-nowrap">Status</label>
           <select value={filterStatus} onChange={e => handleSetFilterStatus(e.target.value)}
-            className="text-xs bg-slate-900 border border-slate-700 rounded px-2 py-1 text-slate-200 focus:outline-none focus:border-slate-500">
-            <option value="">Todos</option>
-            {ALL_STATUSES.map(s => <option key={s} value={s}>{STATUS_LABEL[s]}</option>)}
+            className="text-xs bg-white border border-border-strong rounded px-2 py-1 text-dark focus:outline-none focus:ring-2 focus:ring-primary/30">
+            <option value="">{t('agents.all')}</option>
+            {ALL_STATUSES.map(s => (
+              <option key={s} value={s}>{t(`agents.status.${s}`)}</option>
+            ))}
           </select>
         </div>
         <div className="flex-1" />
         {loading
           ? <Spinner />
-          : <button onClick={load} className="text-xs text-slate-500 hover:text-slate-300 transition-colors px-2 py-1">↻ Atualizar</button>
+          : <button onClick={load} className="text-xs text-muted-light hover:text-dark transition-colors px-2 py-1">{t('agents.refresh')}</button>
         }
-        <span className="text-xs text-slate-600">{instances.length} instâncias</span>
+        <span className="text-xs text-muted-light">{t('agents.instanceCount', { count: instances.length })}</span>
       </div>
 
       <div className="flex flex-1 overflow-hidden">
 
         {/* Left: agent type groups */}
-        <div className="w-64 flex-shrink-0 border-r border-slate-800 flex flex-col overflow-hidden">
-          <div className="px-3 py-2 border-b border-slate-800 flex-shrink-0">
-            <span className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider">Por tipo de agente</span>
+        <div className="w-64 flex-shrink-0 border-r border-border bg-white flex flex-col overflow-hidden">
+          <div className="px-3 py-2 border-b border-border flex-shrink-0">
+            <span className="text-xs font-semibold text-muted uppercase tracking-wider">{t('agents.byPool')}</span>
           </div>
           <button
-            className="w-full text-left px-4 py-2.5 border-b border-slate-800 transition-colors flex-shrink-0"
+            className="w-full text-left px-4 py-2.5 border-b border-border transition-colors flex-shrink-0"
             style={{
-              background: !selectedGroup ? '#1e293b' : 'transparent',
-              borderLeft: !selectedGroup ? '3px solid #3b82f6' : '3px solid transparent',
+              background: !selectedGroup ? '#EBF2FA' : 'transparent',
+              borderLeft: !selectedGroup ? '3px solid #1B4F8A' : '3px solid transparent',
             }}
             onClick={() => setSelectedGroup(null)}>
-            <div className="text-xs font-semibold text-slate-200">Todos</div>
-            <div className="text-xs text-slate-500 mt-0.5">{instances.length} instâncias</div>
+            <div className="text-xs font-semibold text-dark">{t('agents.all')}</div>
+            <div className="text-xs text-muted-light mt-0.5">{t('agents.instanceCount', { count: instances.length })}</div>
           </button>
           <div className="flex-1 overflow-y-auto">
             {groups.map(g => {
               const active = g.agentTypeId === selectedGroup
               return (
                 <button key={g.agentTypeId} onClick={() => setSelectedGroup(active ? null : g.agentTypeId)}
-                  className="w-full text-left px-4 py-2.5 border-b border-slate-800 transition-colors"
+                  className="w-full text-left px-4 py-2.5 border-b border-border transition-colors"
                   style={{
-                    background: active ? '#1e3a5f' : 'transparent',
-                    borderLeft: active ? '3px solid #3b82f6' : '3px solid transparent',
+                    background: active ? '#EBF2FA' : 'transparent',
+                    borderLeft: active ? '3px solid #1B4F8A' : '3px solid transparent',
                   }}>
-                  <div className="text-xs font-semibold truncate" style={{ color: active ? '#93c5fd' : '#e2e8f0' }}>
+                  <div className="text-xs font-semibold truncate" style={{ color: active ? '#1B4F8A' : '#1e293b' }}>
                     {g.agentTypeId}
                   </div>
                   <div className="flex gap-1 mt-1 flex-wrap">
-                    {g.ready  > 0 && <span className="text-[10px] px-1.5 py-0.5 rounded" style={{ background: '#22c55e22', color: '#22c55e' }}>{g.ready} pronto</span>}
-                    {g.busy   > 0 && <span className="text-[10px] px-1.5 py-0.5 rounded" style={{ background: '#3b82f622', color: '#3b82f6' }}>{g.busy} em sessão</span>}
-                    {g.paused > 0 && <span className="text-[10px] px-1.5 py-0.5 rounded" style={{ background: '#eab30822', color: '#eab308' }}>{g.paused} pausado</span>}
+                    {g.ready  > 0 && <span className="text-2xs px-1.5 py-0.5 rounded" style={{ background: '#22c55e22', color: '#22c55e' }}>{g.ready}</span>}
+                    {g.busy   > 0 && <span className="text-2xs px-1.5 py-0.5 rounded" style={{ background: '#3b82f622', color: '#3b82f6' }}>{g.busy}</span>}
+                    {g.paused > 0 && <span className="text-2xs px-1.5 py-0.5 rounded" style={{ background: '#eab30822', color: '#eab308' }}>{g.paused}</span>}
                     {g.ready === 0 && g.busy === 0 && g.paused === 0 && (
-                      <span className="text-[10px] text-slate-600">{g.instances.length} instância{g.instances.length !== 1 ? 's' : ''}</span>
+                      <span className="text-2xs text-muted-light">{g.instances.length}</span>
                     )}
                   </div>
                 </button>
@@ -242,36 +238,36 @@ function MonitorSubTab({ tenantId }: { tenantId: string }) {
 
         {/* Right: instance cards */}
         <div className="flex-1 flex flex-col overflow-hidden">
-          <div className="px-4 py-2.5 border-b border-slate-800 flex-shrink-0">
-            <span className="text-xs font-semibold text-slate-500">
-              {selectedGroup ? `Instâncias — ${selectedGroup}` : 'Todas as instâncias'}
+          <div className="px-4 py-2.5 bg-white border-b border-border flex-shrink-0">
+            <span className="text-xs font-semibold text-muted">
+              {selectedGroup ?? t('agents.all')}
             </span>
           </div>
           {error && (
-            <div className="mx-4 mt-3 px-3 py-2 bg-red-950 border border-red-800 rounded text-xs text-red-300">
-              Erro ao carregar instâncias: {error}
+            <div className="mx-4 mt-3 px-3 py-2 bg-red-light border border-red/30 rounded text-xs text-red-text">
+              {t('agents.loadError')}: {error}
             </div>
           )}
           <div className="flex-1 overflow-y-auto">
             {displayInstances.length === 0 && !loading && !error ? (
-              <div className="flex flex-col items-center justify-center py-16 text-slate-500 gap-2">
-                <span className="text-3xl">🤖</span>
-                <span className="text-sm">Nenhuma instância encontrada</span>
+              <div className="flex flex-col items-center justify-center py-16 text-muted-light gap-2">
+                <Bot className="w-10 h-10" aria-hidden="true" />
+                <span className="text-sm">{t('agents.noInstances')}</span>
                 {(filterPool || filterStatus) && (
-                  <span className="text-xs text-slate-600">Tente remover os filtros</span>
+                  <span className="text-xs text-muted">{t('agents.clearFilters')}</span>
                 )}
               </div>
             ) : (
               <table className="w-full text-xs border-collapse">
-                <thead className="sticky top-0 z-10" style={{ background: '#0f172a' }}>
-                  <tr className="text-slate-500 border-b border-slate-800">
-                    <th className="text-left px-4 py-2.5 font-medium">Instância</th>
-                    <th className="text-left px-3 py-2.5 font-medium">Tipo</th>
-                    <th className="text-center px-3 py-2.5 font-medium w-24">Status</th>
+                <thead className="sticky top-0 z-10 bg-white">
+                  <tr className="text-muted border-b border-border">
+                    <th className="text-left px-4 py-2.5 font-medium">{t('agents.columns.instance')}</th>
+                    <th className="text-left px-3 py-2.5 font-medium">{t('agents.columns.type')}</th>
+                    <th className="text-center px-3 py-2.5 font-medium w-24">{t('agents.columns.status')}</th>
                     <th className="text-left px-3 py-2.5 font-medium">Pool</th>
-                    <th className="text-center px-3 py-2.5 font-medium w-20">Sessões</th>
-                    <th className="text-left px-3 py-2.5 font-medium">Canais</th>
-                    <th className="text-right px-4 py-2.5 font-medium w-28">Desde</th>
+                    <th className="text-center px-3 py-2.5 font-medium w-20">{t('agents.columns.sessions')}</th>
+                    <th className="text-left px-3 py-2.5 font-medium">{t('agents.columns.channels')}</th>
+                    <th className="text-right px-4 py-2.5 font-medium w-28">{t('agents.columns.since')}</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -280,20 +276,20 @@ function MonitorSubTab({ tenantId }: { tenantId: string }) {
                     const poolName = inst.pool_id ?? inst.pools?.[0] ?? '—'
                     return (
                       <tr key={inst.instance_id}
-                        className="border-b border-slate-800/50 transition-colors hover:bg-slate-900/50"
+                        className="border-b border-border transition-colors hover:bg-primary/5"
                         style={{ borderLeft: `2px solid ${color}20` }}>
                         <td className="px-4 py-2.5">
-                          <code className="text-blue-300 font-semibold">{inst.instance_id}</code>
+                          <code className="text-secondary font-semibold">{inst.instance_id}</code>
                         </td>
-                        <td className="px-3 py-2.5 text-slate-400 truncate max-w-[180px]">{inst.agent_type_id}</td>
+                        <td className="px-3 py-2.5 text-muted truncate max-w-[180px]">{inst.agent_type_id}</td>
                         <td className="px-3 py-2.5 text-center">
-                          <span className="text-[11px] font-bold px-1.5 py-0.5 rounded"
+                          <span className="text-xs font-bold px-1.5 py-0.5 rounded"
                             style={{ background: color + '22', color }}>
-                            {STATUS_LABEL[inst.status] ?? inst.status}
+                            {t(`agents.status.${inst.status}`, { defaultValue: inst.status })}
                           </span>
                         </td>
-                        <td className="px-3 py-2.5 text-slate-400">{poolName}</td>
-                        <td className="px-3 py-2.5 text-center text-slate-300">
+                        <td className="px-3 py-2.5 text-muted">{poolName}</td>
+                        <td className="px-3 py-2.5 text-center text-dark">
                           {typeof inst.current_sessions === 'number'
                             ? `${inst.current_sessions}${inst.max_concurrent ? `/${inst.max_concurrent}` : ''}`
                             : '—'}
@@ -301,13 +297,13 @@ function MonitorSubTab({ tenantId }: { tenantId: string }) {
                         <td className="px-3 py-2.5">
                           <div className="flex gap-1 flex-wrap">
                             {(inst.channel_types ?? []).map(ch => (
-                              <span key={ch} className="text-[10px] px-1 py-0.5 rounded bg-slate-800 text-slate-500">{ch}</span>
+                              <span key={ch} className="text-2xs px-1 py-0.5 rounded bg-surface-alt text-muted">{ch}</span>
                             ))}
                           </div>
                         </td>
-                        <td className="px-4 py-2.5 text-right text-slate-600">
+                        <td className="px-4 py-2.5 text-right text-muted-light">
                           {inst.registered_at
-                            ? new Date(inst.registered_at).toLocaleTimeString('pt-BR')
+                            ? new Date(inst.registered_at).toLocaleTimeString(i18n.language)
                             : '—'}
                         </td>
                       </tr>
@@ -328,15 +324,16 @@ function MonitorSubTab({ tenantId }: { tenantId: string }) {
 function RateBar({ value, color }: { value: number; color: string }) {
   return (
     <div className="flex items-center gap-1.5">
-      <div className="w-16 h-1.5 rounded bg-gray-100 overflow-hidden">
+      <div className="w-16 h-1.5 rounded bg-surface-alt overflow-hidden">
         <div className="h-full rounded" style={{ width: `${(value * 100).toFixed(0)}%`, background: color }} />
       </div>
-      <span className="text-[11px] tabular-nums" style={{ color }}>{pct(value)}</span>
+      <span className="text-xs tabular-nums" style={{ color }}>{pct(value)}</span>
     </div>
   )
 }
 
 function ReportSubTab({ tenantId }: { tenantId: string }) {
+  const { t } = useTranslation('contacts')
   const [fromDt,        setFromDt]        = useState(iso7DaysAgo)
   const [toDt,          setToDt]          = useState(isoToday)
   const [filterPool,    setFilterPool]    = useState('')
@@ -420,75 +417,75 @@ function ReportSubTab({ tenantId }: { tenantId: string }) {
     const active = sortKey === k
     return (
       <th onClick={() => handleSort(k)}
-        className={`px-3 py-2.5 font-medium text-${align} cursor-pointer select-none whitespace-nowrap hover:text-gray-700 transition-colors ${active ? 'text-primary' : 'text-gray-500'}`}>
+        className={`px-3 py-2.5 font-medium text-${align} cursor-pointer select-none whitespace-nowrap hover:text-dark transition-colors ${active ? 'text-primary' : 'text-muted'}`}>
         {label}{active ? (sortAsc ? ' ↑' : ' ↓') : ''}
       </th>
     )
   }
 
   return (
-    <div className="flex flex-col h-full overflow-hidden bg-gray-50">
+    <div className="flex flex-col h-full overflow-hidden bg-surface-muted">
 
       {/* Filter bar */}
-      <div className="bg-white border-b border-gray-200 px-5 py-2.5 flex items-center gap-3 flex-shrink-0 flex-wrap">
+      <div className="bg-white border-b border-border px-5 py-2.5 flex items-center gap-3 flex-shrink-0 flex-wrap">
         <div className="flex items-center gap-1.5">
-          <label className="text-xs text-gray-500">De</label>
+          <label className="text-xs text-muted">{t('filter.from')}</label>
           <input type="date" value={fromDt} onChange={e => setFromDt(e.target.value)}
-            className="text-xs border border-gray-300 rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-primary/40" />
+            className="text-xs border border-border-strong rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-primary/40" />
         </div>
         <div className="flex items-center gap-1.5">
-          <label className="text-xs text-gray-500">Até</label>
+          <label className="text-xs text-muted">{t('filter.to')}</label>
           <input type="date" value={toDt} onChange={e => setToDt(e.target.value)}
-            className="text-xs border border-gray-300 rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-primary/40" />
+            className="text-xs border border-border-strong rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-primary/40" />
         </div>
         <div className="flex items-center gap-1.5">
-          <label className="text-xs text-gray-500">Pool</label>
+          <label className="text-xs text-muted">Pool</label>
           <select value={filterPool} onChange={e => setFilterPool(e.target.value)}
-            className="text-xs border border-gray-300 rounded px-2 py-1 bg-white focus:outline-none focus:ring-1 focus:ring-primary/40 min-w-[130px]">
-            <option value="">Todos</option>
+            className="text-xs border border-border-strong rounded px-2 py-1 bg-white focus:outline-none focus:ring-1 focus:ring-primary/40 min-w-[130px]">
+            <option value="">{t('agents.all')}</option>
             {pools.map(p => <option key={p.pool_id} value={p.pool_id}>{p.pool_id}</option>)}
           </select>
         </div>
         <div className="flex items-center gap-1.5">
-          <label className="text-xs text-gray-500">Agente</label>
+          <label className="text-xs text-muted">{t('filter.agent')}</label>
           <select value={filterAgent} onChange={e => setFilterAgent(e.target.value)}
-            className="text-xs border border-gray-300 rounded px-2 py-1 bg-white focus:outline-none focus:ring-1 focus:ring-primary/40 min-w-[160px]">
-            <option value="">Todos</option>
+            className="text-xs border border-border-strong rounded px-2 py-1 bg-white focus:outline-none focus:ring-1 focus:ring-primary/40 min-w-40">
+            <option value="">{t('agents.all')}</option>
             {agentTypes.map(a => <option key={a} value={a}>{a}</option>)}
           </select>
         </div>
         <div className="flex-1" />
         {loading
           ? <Spinner />
-          : <button onClick={load} className="text-xs text-gray-400 hover:text-gray-600 transition-colors px-2 py-1">↻ Atualizar</button>
+          : <button onClick={load} className="text-xs text-muted-light hover:text-muted transition-colors px-2 py-1">{t('agents.refresh')}</button>
         }
         <button onClick={exportCsv} disabled={data.length === 0}
-          className="text-xs border border-gray-200 rounded px-2.5 py-1 text-gray-600 hover:bg-gray-50 disabled:opacity-40 transition-colors">
+          className="text-xs border border-border rounded px-2.5 py-1 text-muted hover:bg-surface-muted disabled:opacity-40 transition-colors">
           ↓ CSV
         </button>
       </div>
 
       {/* KPI strip */}
       <div className="flex gap-3 px-5 py-3 flex-shrink-0 flex-wrap">
-        <div className="bg-white border border-gray-200 rounded-lg px-5 py-3 flex flex-col gap-0.5 min-w-[130px]">
-          <span className="text-[11px] text-gray-400 uppercase tracking-wide">Sessões</span>
-          <span className="text-2xl font-bold text-gray-800 leading-none">{totalSessions.toLocaleString('pt-BR')}</span>
+        <div className="bg-white border border-border rounded-lg px-5 py-3 flex flex-col gap-0.5 min-w-[130px]">
+          <span className="text-xs text-muted-light uppercase tracking-wide">{t('agents.report.kpi.sessions')}</span>
+          <span className="text-2xl font-bold text-dark leading-none">{totalSessions.toLocaleString()}</span>
         </div>
-        <div className="bg-white border border-gray-200 rounded-lg px-5 py-3 flex flex-col gap-0.5 min-w-[130px]">
-          <span className="text-[11px] text-gray-400 uppercase tracking-wide">Resolução média</span>
+        <div className="bg-white border border-border rounded-lg px-5 py-3 flex flex-col gap-0.5 min-w-[130px]">
+          <span className="text-xs text-muted-light uppercase tracking-wide">{t('agents.report.kpi.resolution')}</span>
           <span className="text-2xl font-bold leading-none" style={{ color: '#059669' }}>
             {wResolution !== null ? pct(wResolution) : '—'}
           </span>
         </div>
-        <div className="bg-white border border-gray-200 rounded-lg px-5 py-3 flex flex-col gap-0.5 min-w-[130px]">
-          <span className="text-[11px] text-gray-400 uppercase tracking-wide">Escalonamento</span>
+        <div className="bg-white border border-border rounded-lg px-5 py-3 flex flex-col gap-0.5 min-w-[130px]">
+          <span className="text-xs text-muted-light uppercase tracking-wide">{t('agents.report.kpi.escalation')}</span>
           <span className="text-2xl font-bold leading-none" style={{ color: wEscalation !== null && wEscalation > 0.15 ? '#DC2626' : '#1B4F8A' }}>
             {wEscalation !== null ? pct(wEscalation) : '—'}
           </span>
         </div>
-        <div className="bg-white border border-gray-200 rounded-lg px-5 py-3 flex flex-col gap-0.5 min-w-[130px]">
-          <span className="text-[11px] text-gray-400 uppercase tracking-wide">Tempo médio</span>
-          <span className="text-2xl font-bold text-gray-800 leading-none">
+        <div className="bg-white border border-border rounded-lg px-5 py-3 flex flex-col gap-0.5 min-w-[130px]">
+          <span className="text-xs text-muted-light uppercase tracking-wide">{t('agents.report.kpi.avgTime')}</span>
+          <span className="text-2xl font-bold text-dark leading-none">
             {avgDuration !== null ? fmtDuration(avgDuration) : '—'}
           </span>
         </div>
@@ -496,47 +493,47 @@ function ReportSubTab({ tenantId }: { tenantId: string }) {
 
       {/* Error */}
       {error && (
-        <div className="mx-5 mb-2 px-3 py-2 bg-red-50 border border-red-200 rounded text-xs text-red-600 flex-shrink-0">
-          Erro ao carregar dados: {error}
+        <div className="mx-5 mb-2 px-3 py-2 bg-red-light border border-red/30 rounded text-xs text-red-text flex-shrink-0">
+          {t('agents.report.loadError')}: {error}
         </div>
       )}
 
       {/* Table */}
       <div className="flex-1 overflow-auto px-5 pb-5">
         {sorted.length === 0 && !loading ? (
-          <div className="flex flex-col items-center justify-center py-20 text-gray-400 gap-2">
-            <span className="text-3xl">📊</span>
-            <span className="text-sm">Nenhum dado no período</span>
+          <div className="flex flex-col items-center justify-center py-20 text-muted-light gap-2">
+            <BarChart2 className="w-10 h-10" aria-hidden="true" />
+            <span className="text-sm">{t('agents.report.noData')}</span>
           </div>
         ) : (
-          <table className="w-full text-xs bg-white border border-gray-200 rounded-lg overflow-hidden border-separate border-spacing-0">
-            <thead className="sticky top-0 z-10 bg-gray-50 border-b border-gray-200">
+          <table className="w-full text-xs bg-white border border-border rounded-lg overflow-hidden border-separate border-spacing-0">
+            <thead className="sticky top-0 z-10 bg-surface-muted border-b border-border">
               <tr>
-                <Th label="Data"       k="period_date" />
-                <Th label="Agente"     k="agent_type_id" />
-                <Th label="Pool"       k="pool_id" />
-                <Th label="Sessões"    k="total_sessions"  align="right" />
-                <Th label="Tempo méd." k="avg_duration_ms" align="right" />
-                <th className="px-3 py-2.5 text-left text-gray-500 font-medium whitespace-nowrap">Resolução</th>
-                <th className="px-3 py-2.5 text-left text-gray-500 font-medium whitespace-nowrap">Escalonamento</th>
-                <th className="px-3 py-2.5 text-left text-gray-500 font-medium whitespace-nowrap">Transferência</th>
-                <th className="px-3 py-2.5 text-left text-gray-500 font-medium whitespace-nowrap">Humano</th>
+                <Th label={t('agents.report.columns.date')}       k="period_date" />
+                <Th label={t('agents.report.columns.agent')}      k="agent_type_id" />
+                <Th label={t('agents.report.columns.pool')}       k="pool_id" />
+                <Th label={t('agents.report.columns.sessions')}   k="total_sessions"  align="right" />
+                <Th label={t('agents.report.columns.avgTime')}    k="avg_duration_ms" align="right" />
+                <th className="px-3 py-2.5 text-left text-muted font-medium whitespace-nowrap">{t('agents.report.columns.resolution')}</th>
+                <th className="px-3 py-2.5 text-left text-muted font-medium whitespace-nowrap">{t('agents.report.columns.escalation')}</th>
+                <th className="px-3 py-2.5 text-left text-muted font-medium whitespace-nowrap">{t('agents.report.columns.transfer')}</th>
+                <th className="px-3 py-2.5 text-left text-muted font-medium whitespace-nowrap">{t('agents.report.columns.human')}</th>
               </tr>
             </thead>
             <tbody>
               {sorted.map((row, i) => (
-                <tr key={i} className="border-t border-gray-100 hover:bg-gray-50 transition-colors">
-                  <td className="px-3 py-2.5 text-gray-500 font-mono whitespace-nowrap">{row.period_date}</td>
-                  <td className="px-3 py-2.5 text-gray-700 font-mono max-w-[200px] truncate" title={row.agent_type_id}>
+                <tr key={i} className="border-t border-border hover:bg-surface-muted transition-colors">
+                  <td className="px-3 py-2.5 text-muted font-mono whitespace-nowrap">{row.period_date}</td>
+                  <td className="px-3 py-2.5 text-dark font-mono max-w-[200px] truncate" title={row.agent_type_id}>
                     {row.agent_type_id}
                   </td>
-                  <td className="px-3 py-2.5 text-gray-500 max-w-[140px] truncate" title={row.pool_id}>
+                  <td className="px-3 py-2.5 text-muted max-w-[140px] truncate" title={row.pool_id}>
                     {row.pool_id || '—'}
                   </td>
-                  <td className="px-3 py-2.5 text-right text-gray-700 font-medium">
-                    {row.total_sessions.toLocaleString('pt-BR')}
+                  <td className="px-3 py-2.5 text-right text-dark font-medium">
+                    {row.total_sessions.toLocaleString()}
                   </td>
-                  <td className="px-3 py-2.5 text-right text-gray-500">
+                  <td className="px-3 py-2.5 text-right text-muted">
                     {fmtDuration(row.avg_duration_ms)}
                   </td>
                   <td className="px-3 py-2.5">
@@ -567,35 +564,35 @@ type AgentTab = 'monitor' | 'report'
 
 export default function AgentsPage() {
   const { tenantId } = useAuth()
+  const { t } = useTranslation('contacts')
   const [activeTab, setActiveTab] = useState<AgentTab>('monitor')
 
   if (!tenantId) {
     return (
-      <div className="flex items-center justify-center h-full text-gray-400 text-sm">
-        Nenhum tenant selecionado.
+      <div className="flex items-center justify-center h-full text-muted-light text-sm">
+        {t('noTenant')}
       </div>
     )
   }
 
   const tabs: { id: AgentTab; label: string }[] = [
-    { id: 'monitor', label: 'Monitor' },
-    { id: 'report',  label: 'Relatório' },
+    { id: 'monitor', label: t('agents.tabs.monitor') },
+    { id: 'report',  label: t('agents.tabs.report') },
   ]
 
   return (
-    <div className="flex flex-col h-full overflow-hidden bg-[#0a1628]">
-      {/* Header + tab bar */}
-      <div className="flex-shrink-0 px-4 pt-3 border-b border-slate-800">
-        <span className="font-bold text-slate-100 text-base">Agentes</span>
-        <div className="flex gap-0 mt-2">
-          {tabs.map(t => (
-            <button key={t.id} onClick={() => setActiveTab(t.id)}
-              className="px-4 py-1.5 text-xs font-medium transition-colors border-b-2"
-              style={{
-                borderColor: activeTab === t.id ? '#3b82f6' : 'transparent',
-                color:       activeTab === t.id ? '#93c5fd' : '#64748b',
-              }}>
-              {t.label}
+    <div className="flex flex-col h-full overflow-hidden bg-white">
+      {/* Tab bar */}
+      <div className="flex-shrink-0 px-4 pt-3 border-b border-border">
+        <div className="flex gap-0">
+          {tabs.map(tab => (
+            <button key={tab.id} onClick={() => setActiveTab(tab.id)}
+              className={`px-4 py-1.5 text-xs font-medium transition-colors border-b-2 ${
+                activeTab === tab.id
+                  ? 'border-primary text-primary'
+                  : 'border-transparent text-muted hover:text-dark'
+              }`}>
+              {tab.label}
             </button>
           ))}
         </div>

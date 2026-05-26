@@ -31,12 +31,13 @@ import { useTranslation } from "react-i18next";
 import { useAuth } from "@/auth/useAuth";
 import { Clock, WifiOff } from "lucide-react";
 
-import { ActiveTab, ClosePayload }         from "./types";
+import { ActiveTab, ClosePayload, ResponseTimer } from "./types";
 import { useAgentAssist, aggregateStatus } from "./AgentAssistContext";
 import { useSupervisorState }              from "./hooks/useSupervisorState";
 import { useSupervisorCapabilities }       from "./hooks/useSupervisorCapabilities";
 import { useCopilotState }                 from "./hooks/useCopilotState";
-import { useMentionableAgents }            from "./hooks/useMentionableAgents";
+import { useMentionableAgents }     from "./hooks/useMentionableAgents";
+import { useMentionableProcesses }  from "./hooks/useMentionableProcesses";
 import { Header }              from "./components/Header";
 import { ActionBar }           from "./components/ActionBar";
 import { ChatArea }            from "./components/ChatArea";
@@ -83,7 +84,7 @@ export const AgentAssistPage: React.FC = () => {
   } = useAgentAssist();
 
   // ── UI-local state ─────────────────────────────────────────────────────
-  const [activeTab,         setActiveTab]         = useState<ActiveTab>("agentes");
+  const [activeTab,         setActiveTab]         = useState<ActiveTab>("acoes");
   const [substitutionMode,  setSubstitutionMode]   = useState(false);
   const [lastCopilotEvent,  setLastCopilotEvent]   = useState(0);
   const [isPaused,          setIsPaused]           = useState(false);
@@ -126,9 +127,10 @@ export const AgentAssistPage: React.FC = () => {
   const capabilities = useSupervisorCapabilities(selectedSessionId, supervisorState);
   const copilotSuggestions = useCopilotState(selectedSessionId, lastCopilotEvent);
 
-  // Arc 11 Fase B — mentionable agents for the current contact's pool
-  const currentPoolId     = selected?.poolId ?? null;
-  const mentionableAgents = useMentionableAgents(currentPoolId);
+  // Arc 11 / console-acoes-tab — mentionable agents and processes for current pool
+  const currentPoolId       = selected?.poolId ?? null;
+  const mentionableAgents   = useMentionableAgents(currentPoolId);
+  const mentionableProcesses = useMentionableProcesses(currentPoolId);
 
   // Listen for copilot.updated on selected session
   useEffect(() => {
@@ -167,7 +169,7 @@ export const AgentAssistPage: React.FC = () => {
   // ── Handlers ─────────────────────────────────────────────────────────
   const handleSelectContact = useCallback((sessionId: string) => {
     setSelectedSessionId(sessionId);
-    setActiveTab("agentes");
+    setActiveTab("acoes");
     setContacts(prev => {
       const c = prev.get(sessionId);
       if (!c || c.unreadCount === 0) return prev;
@@ -182,19 +184,28 @@ export const AgentAssistPage: React.FC = () => {
       if (!selectedSessionId) return;
       send(text, selectedSessionId);
       const isMention = text.trimStart().startsWith("@");
+      const now = Date.now();
       setContacts(prev => {
         const c = prev.get(selectedSessionId);
         if (!c) return prev;
         const next = new Map(prev);
+        // Freeze the response timer optimistically when the agent sends a
+        // customer-visible message (not a @mention, which is agents_only).
+        // Rules c/d: agent reply + counting → frozen; agent reply + frozen → no change.
+        const responseTimer: ResponseTimer =
+          !isMention && c.responseTimer.status === 'counting'
+            ? { status: 'frozen', elapsedMs: now - c.responseTimer.startedAt }
+            : c.responseTimer;
         next.set(selectedSessionId, {
           ...c,
           messages: [...c.messages, {
-            id:         `local-${Date.now()}`,
+            id:         `local-${now}`,
             author:     "agent_human",
             text,
-            timestamp:  new Date().toISOString(),
+            timestamp:  new Date(now).toISOString(),
             visibility: isMention ? "agents_only" : undefined,
           }],
+          responseTimer,
         });
         return next;
       });
@@ -338,8 +349,8 @@ export const AgentAssistPage: React.FC = () => {
   // Arc 11 Fase B — invite a specialist via @mention
   // alias = key in mentionable_pools (e.g. "auth", "copilot"), NOT agent_type_id
   const handleAddSpecialist = useCallback(
-    (alias: string, context: string) => {
-      const text = context ? `@${alias} ${context}` : `@${alias}`;
+    (alias: string, instruction: string, _visibility: "all" | "agents_only") => {
+      const text = instruction ? `@${alias} ${instruction}` : `@${alias}`;
       handleSend(text);
       addToast(t("message.specialistInvited", { alias }), "info");
     },
@@ -377,16 +388,24 @@ export const AgentAssistPage: React.FC = () => {
     [addToast, t],
   );
 
-  // Arc 10 Phase D — Iniciar Processo
+  // Arc 10 Phase D / console-acoes-tab — Start Process
+  // params: typed field values from the ProcessItemRow inline form (forwarded as journey metadata).
+  // visibility: respected by the @mention that the skill's notify steps will read from ContextStore.
   const handleIniciarProcesso = useCallback(
-    async (skillId: string) => {
+    async (skillId: string, params: Record<string, string> = {}, _visibility: "all" | "agents_only" = "all") => {
       if (!selectedSessionId) return;
       const tenantId = session?.tenantId ?? "";
+      const metadata = Object.keys(params).length > 0 ? { input: params } : undefined;
       try {
         const res = await fetch("/v1/journeys", {
           method:  "POST",
           headers: { "Content-Type": "application/json" },
-          body:    JSON.stringify({ tenant_id: tenantId, skill_id: skillId, session_id: selectedSessionId }),
+          body:    JSON.stringify({
+            tenant_id:  tenantId,
+            skill_id:   skillId,
+            session_id: selectedSessionId,
+            ...(metadata ? { metadata } : {}),
+          }),
         });
         if (res.ok) {
           const name = skillId.replace(/^skill_|_v\d+$/g, "").replace(/_/g, " ");
@@ -423,9 +442,9 @@ export const AgentAssistPage: React.FC = () => {
   // Supervisor / admin role check
   const isSupervisor = session?.role === "supervisor" || session?.role === "admin";
 
-  // Right panel tab labels (Arc 11 Fase C: "estado" → "agentes")
+  // Right panel tab labels (console-acoes-tab: "agentes" → "acoes")
   const rightTabLabels: Record<string, string> = {
-    agentes:   t("rightTab.agentes",  { defaultValue: "Agentes"  }),
+    acoes:     t("rightTab.acoes",    { defaultValue: "Ações"    }),
     contexto:  t("rightTab.contexto"),
     historico: t("rightTab.historico", { defaultValue: "Histórico" }),
   };
@@ -478,14 +497,12 @@ export const AgentAssistPage: React.FC = () => {
               onDesligar={handleDesligar}
               substitutionMode={substitutionMode}
               onToggleSubstitutionMode={() => setSubstitutionMode(prev => !prev)}
-              mentionableJourneys={mentionableJourneys}
-              onIniciarProcesso={handleIniciarProcesso}
             />
           </div>
 
           {/* Right-panel tab bar: Agentes · Contexto · Histórico */}
           <div className="w-[280px] flex-shrink-0 border-l border-border flex bg-surface-muted">
-            {(["agentes", "contexto", "historico"] as ActiveTab[]).map((id) => (
+            {(["acoes", "contexto", "historico"] as ActiveTab[]).map((id) => (
               <button
                 key={id}
                 onClick={() => setActiveTab(id)}
@@ -636,7 +653,8 @@ export const AgentAssistPage: React.FC = () => {
               onToggleSubstitutionMode={() => setSubstitutionMode(prev => !prev)}
               mentionableAgents={mentionableAgents}
               onAddSpecialist={handleAddSpecialist}
-              onDelegar={() => setShowDelegarDrawer(true)}
+              mentionableProcesses={mentionableProcesses}
+              onStartProcess={handleIniciarProcesso}
               sessionClosed={selected?.sessionClosed ?? false}
             />
           </div>

@@ -7,6 +7,7 @@
  */
 import React, { useCallback, useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
+import { BarChart2 } from 'lucide-react'
 import { useAuth } from '@/auth/useAuth'
 import Spinner from '@/components/ui/Spinner'
 
@@ -109,7 +110,7 @@ export default function AgentFlowReportPage() {
       {/* Top bar */}
       <div style={topBar}>
         <div>
-          <span style={{ fontWeight: 700, fontSize: 17, color: '#e2e8f0' }}>📊 {t('report.title')}</span>
+          <span style={{ fontWeight: 700, fontSize: 17, color: '#e2e8f0', display: 'inline-flex', alignItems: 'center', gap: 6 }}><BarChart2 size={16} aria-hidden="true" />{t('report.title')}</span>
           <span style={{ marginLeft: 10, fontSize: 12, color: '#64748b' }}>
             {loading ? '⟳' : t('report.skillsCount', { count: rows.length })}
           </span>

@@ -1,5 +1,7 @@
 # Arc 7 — Autenticação Real, Permissões e Roteamento por Performance
 
+> Última atualização: 2026-05-25 · Estado: Arc 16
+
 ## Arc 7a — auth-api (✅ implementado)
 
 Usuários reais, JWT HS256, session lifecycle com refresh token rotation.
@@ -429,7 +431,7 @@ Função `seed_modules_from_yaml()` lê `infra/modules.yaml` e faz upsert em `au
 
 ### `infra/modules.yaml` — registro central de módulos
 
-Arquivo YAML com 8 módulos registrados. Cada módulo define:
+Arquivo YAML com 9 módulos registrados (8 originais + `audit`, adicionado na Fase 1 do Audit LGPD). Cada módulo define:
 - `module_id`, `label`, `icon`, `nav_path`, `active`
 - `permission_schema`: mapa de campos, onde cada campo tem `label`, `domain` (lista de `PermissionAccess` permitidos), `scopable` (bool), `scope_type` (pool|campaign|global), `default`
 
@@ -442,11 +444,14 @@ Arquivo YAML com 8 módulos registrados. Cada módulo define:
 | `billing` | `visualizar`, `gerenciar` | Faturamento e preços |
 | `config` | `plataforma`, `recursos`, `canais`, `usuarios`, `mascaramento` | Configuração de plataforma |
 | `skill_flows` | **`operacao`**, `visualizar`, `editar` | AgentFlow — `operacao` gatea Editor, Monitor, Deploy |
-| `workflows` | **`operacao`**, `visualizar`, `cancelar`, `webhooks` | Automação — `operacao` gatea Editor, Monitor, Calendar |
+| `workflows` | **`operacao`**, `visualizar`, `cancelar`, `webhooks`, `journey.read`, `journey.resume` | Automação — `operacao` gatea Editor, Monitor, Calendar; `journey.read`/`journey.resume` adicionados no Arc 16 Fase C |
 | `agent_assist` | `atender`, `supervisionar` | Atendimento humano |
 | `campaigns` | `visualizar`, `gerenciar` | Campanhas de coleta |
+| `audit` | `sessions`, `mcp_calls`, `user_access`, `data_requests`, `config_snapshot` | Auditoria LGPD para DPO/compliance (Audit LGPD Fase 1 — `sessions` e `mcp_calls` ativos) |
 
 **Nota:** o módulo `analytics` foi removido do `infra/modules.yaml`. Seus dados estão disponíveis nas abas MonitorTab e AnaliseTab do ContactsPage, não como módulo ABAC separado.
+
+**Arc 16 Fase C — campos `journey.read` e `journey.resume`:** o módulo `workflows` ganhou os campos de permissão `journey.read` (consulta de journeys suspensas via `journey_list_suspended`) e `journey.resume` (retomada via `journey_resume`). O `PermissionChecker` valida ambos nas MCP tools correspondentes do Tier 1 poller.
 
 ### JWT — `module_config` incluído
 

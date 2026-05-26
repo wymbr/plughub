@@ -1,12 +1,13 @@
 /**
  * CalendarManager.tsx
- * CRUD de Calendários e Sets de Feriados (calendar-api port 3700).
+ * CRUD de Calendários e Listas de Feriados (calendar-api port 3700).
  *
  * Two sub-tabs:
- *   Calendários   — list/create/edit/delete
- *   Sets de Feriados — list/create/edit/delete
+ *   Calendars     — list/create/edit/delete
+ *   Holiday List  — list/create/edit/delete
  */
 import React, { useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import {
   useCalendars, useHolidaySets,
   createCalendar, updateCalendar, deleteCalendar,
@@ -14,7 +15,6 @@ import {
 } from '../api/calendar-hooks'
 import type { CalendarRecord, HolidaySet, WeeklySlot, Holiday } from '../api/calendar-hooks'
 
-const DAYS = ['Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb', 'Dom']
 const TIMEZONES = ['America/Sao_Paulo', 'America/Manaus', 'America/Belem', 'America/Fortaleza', 'America/Recife', 'America/Cuiaba', 'UTC']
 
 interface Props {
@@ -23,17 +23,30 @@ interface Props {
 }
 
 export function CalendarManager({ orgId, tenantId }: Props) {
+  const { t } = useTranslation('configPlataforma')
   const [tab, setTab] = useState<'calendars' | 'holidays'>('calendars')
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+    <div className="flex flex-col h-full">
       {/* Sub-tabs */}
-      <div style={subTabBarStyle}>
-        <SubTab active={tab === 'calendars'} onClick={() => setTab('calendars')}>📅 Calendários</SubTab>
-        <SubTab active={tab === 'holidays'}  onClick={() => setTab('holidays')}>🎉 Sets de Feriados</SubTab>
+      <div className="flex border-b border-border bg-white shrink-0 px-2">
+        {(['calendars', 'holidays'] as const).map(id => (
+          <button
+            key={id}
+            onClick={() => setTab(id)}
+            className={`flex items-center gap-1.5 py-3 px-4 text-sm font-medium border-b-2 transition-colors ${
+              tab === id
+                ? 'border-primary text-primary'
+                : 'border-transparent text-muted hover:text-dark'
+            }`}
+          >
+            {id === 'calendars' ? '📅' : '🎉'}{' '}
+            {t(id === 'calendars' ? 'calendarManager.tabCalendars' : 'calendarManager.tabHolidaySets')}
+          </button>
+        ))}
       </div>
 
-      <div style={{ flex: 1, overflow: 'hidden' }}>
+      <div className="flex-1 overflow-hidden">
         {tab === 'calendars' && <CalendarsList orgId={orgId} tenantId={tenantId} />}
         {tab === 'holidays'  && <HolidaySetsList orgId={orgId} tenantId={tenantId} />}
       </div>
@@ -41,63 +54,59 @@ export function CalendarManager({ orgId, tenantId }: Props) {
   )
 }
 
-function SubTab({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) {
-  return (
-    <button
-      onClick={onClick}
-      style={{
-        padding: '8px 18px', fontSize: 13, fontWeight: active ? 600 : 400,
-        background: 'none', border: 'none',
-        borderBottom: active ? '2px solid #3b82f6' : '2px solid transparent',
-        color: active ? '#93c5fd' : '#64748b', cursor: 'pointer',
-      }}
-    >
-      {children}
-    </button>
-  )
-}
-
 // ─── Calendars ────────────────────────────────────────────────────────────────
 
 function CalendarsList({ orgId, tenantId }: { orgId: string; tenantId: string }) {
+  const { t } = useTranslation('configPlataforma')
   const { calendars, loading, error, reload } = useCalendars(orgId, tenantId)
   const [modal, setModal] = useState<'create' | CalendarRecord | null>(null)
 
   async function handleDelete(id: string) {
-    if (!confirm('Remover este calendário?')) return
+    if (!confirm(t('calendarManager.removeCalendarConfirm'))) return
     await deleteCalendar(id).catch(e => alert(String(e)))
     reload()
   }
 
   return (
-    <div style={listContainer}>
+    <div className="flex flex-col h-full">
       {/* Toolbar */}
-      <div style={toolbar}>
-        <span style={{ color: '#94a3b8', fontSize: 13 }}>{calendars.length} calendário(s)</span>
-        {loading && <span style={{ color: '#64748b', fontSize: 12 }}>⟳</span>}
-        {error   && <span style={{ color: '#ef4444', fontSize: 12 }}>⚠ {error}</span>}
-        <button style={btnCreate} onClick={() => setModal('create')}>+ Novo</button>
+      <div className="flex items-center gap-2 px-5 py-3 border-b border-border bg-white shrink-0">
+        <span className="text-xs text-muted">{calendars.length}</span>
+        {loading && <span className="text-xs text-muted-light">⟳</span>}
+        {error   && <span className="text-xs text-red-text">⚠ {error}</span>}
+        <button
+          onClick={() => setModal('create')}
+          className="ml-auto px-3 py-1 text-xs font-semibold rounded bg-primary text-white hover:bg-primary/90 transition-colors"
+        >
+          {t('calendarManager.addNew')}
+        </button>
       </div>
 
       {/* List */}
-      <div style={listBody}>
+      <div className="flex-1 overflow-y-auto">
         {calendars.map(cal => (
-          <div key={cal.id} style={itemRow}>
-            <div style={{ flex: 1 }}>
-              <div style={{ fontWeight: 600, color: '#e2e8f0', fontSize: 14 }}>{cal.name}</div>
-              <div style={{ fontSize: 12, color: '#64748b', marginTop: 2 }}>
-                {cal.timezone} · {cal.weekly_schedule.length} slot(s) · {cal.holiday_set_ids.length} set(s) de feriados
+          <div key={cal.id} className="flex items-center gap-3 px-5 py-3.5 border-b border-border hover:bg-surface-muted/50 transition-colors">
+            <div className="flex-1 min-w-0">
+              <div className="text-sm font-semibold text-dark truncate">{cal.name}</div>
+              <div className="text-xs text-muted mt-0.5">
+                {cal.timezone} · {cal.weekly_schedule.length} slots · {cal.holiday_set_ids.length} {t('calendarManager.tabHolidaySets').toLowerCase()}
               </div>
-              {cal.description && <div style={{ fontSize: 12, color: '#475569', marginTop: 2 }}>{cal.description}</div>}
+              {cal.description && <div className="text-xs text-muted-light mt-0.5 truncate">{cal.description}</div>}
             </div>
-            <div style={{ display: 'flex', gap: 8 }}>
-              <button style={btnEdit} onClick={() => setModal(cal)}>✏</button>
-              <button style={btnDel} onClick={() => handleDelete(cal.id)}>✕</button>
+            <div className="flex gap-1.5 shrink-0">
+              <button
+                onClick={() => setModal(cal)}
+                className="px-2 py-1 text-xs border border-border-strong rounded text-muted hover:text-dark transition-colors"
+              >✏</button>
+              <button
+                onClick={() => handleDelete(cal.id)}
+                className="px-2 py-1 text-xs border border-red/30 rounded text-red hover:bg-red-light transition-colors"
+              >✕</button>
             </div>
           </div>
         ))}
         {!loading && calendars.length === 0 && (
-          <div style={emptyMsg}>Nenhum calendário cadastrado.</div>
+          <div className="py-10 text-center text-sm text-muted-light">{t('calendarManager.emptyCalendars')}</div>
         )}
       </div>
 
@@ -122,6 +131,8 @@ function CalendarModal({ initial, orgId, tenantId, onClose, onSaved }: {
   onClose:  () => void
   onSaved:  () => void
 }) {
+  const { t } = useTranslation('configPlataforma')
+  const days = t('calendarManager.days', { returnObjects: true }) as string[]
   const [name,        setName]        = useState(initial?.name ?? '')
   const [description, setDescription] = useState(initial?.description ?? '')
   const [timezone,    setTimezone]    = useState(initial?.timezone ?? 'America/Sao_Paulo')
@@ -132,17 +143,15 @@ function CalendarModal({ initial, orgId, tenantId, onClose, onSaved }: {
   function addSlot() {
     setSlots(prev => [...prev, { day: 0, open_time: '08:00', close_time: '18:00' }])
   }
-
   function updateSlot(i: number, field: keyof WeeklySlot, value: string | number) {
     setSlots(prev => prev.map((s, idx) => idx === i ? { ...s, [field]: value } : s))
   }
-
   function removeSlot(i: number) {
     setSlots(prev => prev.filter((_, idx) => idx !== i))
   }
 
   async function handleSave() {
-    if (!name.trim()) { setError('Nome obrigatório'); return }
+    if (!name.trim()) { setError(t('calendarManager.nameRequired')); return }
     setSaving(true); setError(null)
     try {
       if (initial) {
@@ -156,86 +165,110 @@ function CalendarModal({ initial, orgId, tenantId, onClose, onSaved }: {
   }
 
   return (
-    <Modal title={initial ? 'Editar Calendário' : 'Novo Calendário'} onClose={onClose}>
-      <FieldRow label="Nome">
-        <input style={inputStyle} value={name} onChange={e => setName(e.target.value)} placeholder="ex: Horário Comercial SP" />
+    <Modal title={initial ? t('calendarManager.editCalendar') : t('calendarManager.newCalendar')} onClose={onClose}>
+      <FieldRow label={t('calendarManager.fieldName')}>
+        <input className={inputCls} value={name} onChange={e => setName(e.target.value)} placeholder="ex: Horário Comercial SP" />
       </FieldRow>
-      <FieldRow label="Descrição">
-        <input style={inputStyle} value={description} onChange={e => setDescription(e.target.value)} placeholder="Opcional" />
+      <FieldRow label={t('calendarManager.fieldDescription')}>
+        <input className={inputCls} value={description} onChange={e => setDescription(e.target.value)} />
       </FieldRow>
-      <FieldRow label="Fuso horário">
-        <select style={inputStyle} value={timezone} onChange={e => setTimezone(e.target.value)}>
+      <FieldRow label={t('calendarManager.fieldTimezone')}>
+        <select className={inputCls} value={timezone} onChange={e => setTimezone(e.target.value)}>
           {TIMEZONES.map(tz => <option key={tz} value={tz}>{tz}</option>)}
         </select>
       </FieldRow>
 
       {/* Weekly schedule */}
-      <div style={{ marginTop: 16 }}>
-        <div style={{ fontSize: 12, fontWeight: 600, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 8 }}>
-          Horário semanal
+      <div className="mt-4">
+        <div className="text-[11px] font-semibold text-muted uppercase tracking-wider mb-2">
+          {t('calendarManager.weeklySchedule')}
         </div>
         {slots.map((slot, i) => (
-          <div key={i} style={{ display: 'flex', gap: 8, marginBottom: 6, alignItems: 'center' }}>
-            <select style={{ ...inputStyle, flex: '0 0 70px' }} value={slot.day} onChange={e => updateSlot(i, 'day', Number(e.target.value))}>
-              {DAYS.map((d, idx) => <option key={idx} value={idx}>{d}</option>)}
+          <div key={i} className="flex gap-2 mb-1.5 items-center">
+            <select className="text-xs border border-border-strong rounded px-2 py-1.5 bg-white text-dark focus:outline-none focus:border-primary w-20 shrink-0"
+              value={slot.day} onChange={e => updateSlot(i, 'day', Number(e.target.value))}>
+              {days.map((d, idx) => <option key={idx} value={idx}>{d}</option>)}
             </select>
-            <input style={{ ...inputStyle, flex: '0 0 80px' }} type="time" value={slot.open_time}  onChange={e => updateSlot(i, 'open_time',  e.target.value)} />
-            <span style={{ color: '#64748b', fontSize: 12 }}>até</span>
-            <input style={{ ...inputStyle, flex: '0 0 80px' }} type="time" value={slot.close_time} onChange={e => updateSlot(i, 'close_time', e.target.value)} />
-            <button style={btnDel} onClick={() => removeSlot(i)}>✕</button>
+            <input className="text-xs border border-border-strong rounded px-2 py-1.5 bg-white text-dark focus:outline-none focus:border-primary w-24 shrink-0"
+              type="time" value={slot.open_time} onChange={e => updateSlot(i, 'open_time', e.target.value)} />
+            <span className="text-xs text-muted-light">{t('calendarManager.slotTo')}</span>
+            <input className="text-xs border border-border-strong rounded px-2 py-1.5 bg-white text-dark focus:outline-none focus:border-primary w-24 shrink-0"
+              type="time" value={slot.close_time} onChange={e => updateSlot(i, 'close_time', e.target.value)} />
+            <button className="text-xs border border-red/30 rounded px-2 py-1 text-red hover:bg-red-light transition-colors"
+              onClick={() => removeSlot(i)}>✕</button>
           </div>
         ))}
-        <button style={btnSecondary} onClick={addSlot}>+ Adicionar horário</button>
+        <button className="mt-1 text-xs text-muted hover:text-dark border border-dashed border-border-strong rounded px-3 py-1 transition-colors"
+          onClick={addSlot}>{t('calendarManager.addSlot')}</button>
       </div>
 
-      {error && <div style={errStyle}>⚠ {error}</div>}
-      <div style={modalFooter}>
-        <button style={btnCreate} onClick={handleSave} disabled={saving}>{saving ? 'Salvando…' : 'Salvar'}</button>
-        <button style={btnSecondary} onClick={onClose}>Cancelar</button>
+      {error && <p className="mt-3 text-xs text-red-text">⚠ {error}</p>}
+      <div className="flex justify-end gap-2 mt-5">
+        <button className="px-4 py-1.5 text-xs font-semibold rounded bg-primary text-white hover:bg-primary/90 disabled:opacity-40 transition-colors"
+          onClick={handleSave} disabled={saving}>
+          {saving ? t('namespace.saving') : t('namespace.save')}
+        </button>
+        <button className="px-3 py-1.5 text-xs rounded border border-border-strong text-muted hover:text-dark transition-colors"
+          onClick={onClose}>{t('namespace.cancel')}</button>
       </div>
     </Modal>
   )
 }
 
-// ─── Holiday Sets ─────────────────────────────────────────────────────────────
+// ─── Holiday List ─────────────────────────────────────────────────────────────
 
 function HolidaySetsList({ orgId, tenantId }: { orgId: string; tenantId: string }) {
+  const { t } = useTranslation('configPlataforma')
   const { sets, loading, error, reload } = useHolidaySets(orgId, tenantId)
   const [modal, setModal] = useState<'create' | HolidaySet | null>(null)
 
   async function handleDelete(id: string) {
-    if (!confirm('Remover este set de feriados?')) return
+    if (!confirm(t('calendarManager.removeHolidaySetConfirm'))) return
     await deleteHolidaySet(id).catch(e => alert(String(e)))
     reload()
   }
 
   return (
-    <div style={listContainer}>
-      <div style={toolbar}>
-        <span style={{ color: '#94a3b8', fontSize: 13 }}>{sets.length} set(s)</span>
-        {loading && <span style={{ color: '#64748b', fontSize: 12 }}>⟳</span>}
-        {error   && <span style={{ color: '#ef4444', fontSize: 12 }}>⚠ {error}</span>}
-        <button style={btnCreate} onClick={() => setModal('create')}>+ Novo</button>
+    <div className="flex flex-col h-full">
+      <div className="flex items-center gap-2 px-5 py-3 border-b border-border bg-white shrink-0">
+        <span className="text-xs text-muted">{sets.length}</span>
+        {loading && <span className="text-xs text-muted-light">⟳</span>}
+        {error   && <span className="text-xs text-red-text">⚠ {error}</span>}
+        <button
+          onClick={() => setModal('create')}
+          className="ml-auto px-3 py-1 text-xs font-semibold rounded bg-primary text-white hover:bg-primary/90 transition-colors"
+        >
+          {t('calendarManager.addNew')}
+        </button>
       </div>
 
-      <div style={listBody}>
+      <div className="flex-1 overflow-y-auto">
         {sets.map(set => (
-          <div key={set.id} style={itemRow}>
-            <div style={{ flex: 1 }}>
-              <div style={{ fontWeight: 600, color: '#e2e8f0', fontSize: 14 }}>
-                {set.name} {set.year ? <span style={{ fontSize: 12, color: '#64748b' }}>({set.year})</span> : null}
+          <div key={set.id} className="flex items-center gap-3 px-5 py-3.5 border-b border-border hover:bg-surface-muted/50 transition-colors">
+            <div className="flex-1 min-w-0">
+              <div className="text-sm font-semibold text-dark">
+                {set.name}{' '}
+                {set.year ? <span className="text-xs text-muted font-normal">({set.year})</span> : null}
               </div>
-              <div style={{ fontSize: 12, color: '#64748b', marginTop: 2 }}>{set.holidays.length} feriado(s)</div>
-              {set.description && <div style={{ fontSize: 12, color: '#475569', marginTop: 2 }}>{set.description}</div>}
+              <div className="text-xs text-muted mt-0.5">
+                {set.holidays.length} {t('calendarManager.holidays').toLowerCase()}
+              </div>
+              {set.description && <div className="text-xs text-muted-light mt-0.5 truncate">{set.description}</div>}
             </div>
-            <div style={{ display: 'flex', gap: 8 }}>
-              <button style={btnEdit} onClick={() => setModal(set)}>✏</button>
-              <button style={btnDel}  onClick={() => handleDelete(set.id)}>✕</button>
+            <div className="flex gap-1.5 shrink-0">
+              <button
+                onClick={() => setModal(set)}
+                className="px-2 py-1 text-xs border border-border-strong rounded text-muted hover:text-dark transition-colors"
+              >✏</button>
+              <button
+                onClick={() => handleDelete(set.id)}
+                className="px-2 py-1 text-xs border border-red/30 rounded text-red hover:bg-red-light transition-colors"
+              >✕</button>
             </div>
           </div>
         ))}
         {!loading && sets.length === 0 && (
-          <div style={emptyMsg}>Nenhum set de feriados cadastrado.</div>
+          <div className="py-10 text-center text-sm text-muted-light">{t('calendarManager.emptyHolidaySets')}</div>
         )}
       </div>
 
@@ -259,6 +292,7 @@ function HolidaySetModal({ initial, orgId, tenantId, onClose, onSaved }: {
   onClose:  () => void
   onSaved:  () => void
 }) {
+  const { t } = useTranslation('configPlataforma')
   const [name,        setName]        = useState(initial?.name ?? '')
   const [description, setDescription] = useState(initial?.description ?? '')
   const [year,        setYear]        = useState<string>(initial?.year ? String(initial.year) : '')
@@ -269,17 +303,15 @@ function HolidaySetModal({ initial, orgId, tenantId, onClose, onSaved }: {
   function addHoliday() {
     setHolidays(prev => [...prev, { date: '', name: '', description: '' }])
   }
-
   function updateHoliday(i: number, field: keyof Holiday, value: string) {
     setHolidays(prev => prev.map((h, idx) => idx === i ? { ...h, [field]: value } : h))
   }
-
   function removeHoliday(i: number) {
     setHolidays(prev => prev.filter((_, idx) => idx !== i))
   }
 
   async function handleSave() {
-    if (!name.trim()) { setError('Nome obrigatório'); return }
+    if (!name.trim()) { setError(t('calendarManager.nameRequired')); return }
     const yearNum = year ? parseInt(year) : null
     setSaving(true); setError(null)
     try {
@@ -294,37 +326,48 @@ function HolidaySetModal({ initial, orgId, tenantId, onClose, onSaved }: {
   }
 
   return (
-    <Modal title={initial ? 'Editar Set de Feriados' : 'Novo Set de Feriados'} onClose={onClose}>
-      <FieldRow label="Nome">
-        <input style={inputStyle} value={name} onChange={e => setName(e.target.value)} placeholder="ex: Feriados Nacionais 2026" />
+    <Modal title={initial ? t('calendarManager.editHolidaySet') : t('calendarManager.newHolidaySet')} onClose={onClose}>
+      <FieldRow label={t('calendarManager.fieldName')}>
+        <input className={inputCls} value={name} onChange={e => setName(e.target.value)} placeholder="ex: Feriados Nacionais 2026" />
       </FieldRow>
-      <FieldRow label="Descrição">
-        <input style={inputStyle} value={description} onChange={e => setDescription(e.target.value)} placeholder="Opcional" />
+      <FieldRow label={t('calendarManager.fieldDescription')}>
+        <input className={inputCls} value={description} onChange={e => setDescription(e.target.value)} />
       </FieldRow>
-      <FieldRow label="Ano">
-        <input style={{ ...inputStyle, width: 100 }} type="number" value={year} onChange={e => setYear(e.target.value)} placeholder="ex: 2026" />
+      <FieldRow label={t('calendarManager.fieldYear')}>
+        <input className={`${inputCls} w-24`} type="number" value={year} onChange={e => setYear(e.target.value)} placeholder="ex: 2026" />
       </FieldRow>
 
       {/* Holidays */}
-      <div style={{ marginTop: 16 }}>
-        <div style={{ fontSize: 12, fontWeight: 600, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 8 }}>
-          Feriados
+      <div className="mt-4">
+        <div className="text-[11px] font-semibold text-muted uppercase tracking-wider mb-2">
+          {t('calendarManager.holidays')}
         </div>
         {holidays.map((h, i) => (
-          <div key={i} style={{ display: 'flex', gap: 8, marginBottom: 6, alignItems: 'center' }}>
-            <input style={{ ...inputStyle, flex: '0 0 120px' }} type="date" value={h.date}        onChange={e => updateHoliday(i, 'date',        e.target.value)} />
-            <input style={{ ...inputStyle, flex: 1           }} type="text" value={h.name}        onChange={e => updateHoliday(i, 'name',        e.target.value)} placeholder="Nome" />
-            <input style={{ ...inputStyle, flex: 1           }} type="text" value={h.description} onChange={e => updateHoliday(i, 'description', e.target.value)} placeholder="Descrição" />
-            <button style={btnDel} onClick={() => removeHoliday(i)}>✕</button>
+          <div key={i} className="flex gap-2 mb-1.5 items-center">
+            <input className="text-xs border border-border-strong rounded px-2 py-1.5 bg-white text-dark focus:outline-none focus:border-primary w-32 shrink-0"
+              type="date" value={h.date} onChange={e => updateHoliday(i, 'date', e.target.value)} />
+            <input className="text-xs border border-border-strong rounded px-2 py-1.5 bg-white text-dark focus:outline-none focus:border-primary flex-1"
+              type="text" value={h.name} onChange={e => updateHoliday(i, 'name', e.target.value)}
+              placeholder={t('calendarManager.holidayNamePlaceholder')} />
+            <input className="text-xs border border-border-strong rounded px-2 py-1.5 bg-white text-dark focus:outline-none focus:border-primary flex-1"
+              type="text" value={h.description} onChange={e => updateHoliday(i, 'description', e.target.value)}
+              placeholder={t('calendarManager.holidayDescPlaceholder')} />
+            <button className="text-xs border border-red/30 rounded px-2 py-1 text-red hover:bg-red-light transition-colors"
+              onClick={() => removeHoliday(i)}>✕</button>
           </div>
         ))}
-        <button style={btnSecondary} onClick={addHoliday}>+ Adicionar feriado</button>
+        <button className="mt-1 text-xs text-muted hover:text-dark border border-dashed border-border-strong rounded px-3 py-1 transition-colors"
+          onClick={addHoliday}>{t('calendarManager.addHoliday')}</button>
       </div>
 
-      {error && <div style={errStyle}>⚠ {error}</div>}
-      <div style={modalFooter}>
-        <button style={btnCreate} onClick={handleSave} disabled={saving}>{saving ? 'Salvando…' : 'Salvar'}</button>
-        <button style={btnSecondary} onClick={onClose}>Cancelar</button>
+      {error && <p className="mt-3 text-xs text-red-text">⚠ {error}</p>}
+      <div className="flex justify-end gap-2 mt-5">
+        <button className="px-4 py-1.5 text-xs font-semibold rounded bg-primary text-white hover:bg-primary/90 disabled:opacity-40 transition-colors"
+          onClick={handleSave} disabled={saving}>
+          {saving ? t('namespace.saving') : t('namespace.save')}
+        </button>
+        <button className="px-3 py-1.5 text-xs rounded border border-border-strong text-muted hover:text-dark transition-colors"
+          onClick={onClose}>{t('namespace.cancel')}</button>
       </div>
     </Modal>
   )
@@ -334,13 +377,13 @@ function HolidaySetModal({ initial, orgId, tenantId, onClose, onSaved }: {
 
 function Modal({ title, onClose, children }: { title: string; onClose: () => void; children: React.ReactNode }) {
   return (
-    <div style={overlay}>
-      <div style={modalBox}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
-          <h3 style={{ margin: 0, fontSize: 16, fontWeight: 700, color: '#e2e8f0' }}>{title}</h3>
-          <button style={{ background: 'none', border: 'none', color: '#64748b', cursor: 'pointer', fontSize: 18 }} onClick={onClose}>✕</button>
+    <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
+      <div className="bg-white rounded-xl shadow-xl p-6 w-[540px] max-w-[95vw]">
+        <div className="flex justify-between items-center mb-5">
+          <h3 className="text-base font-bold text-dark">{title}</h3>
+          <button className="text-muted hover:text-dark transition-colors text-lg leading-none" onClick={onClose}>✕</button>
         </div>
-        <div style={{ maxHeight: '60vh', overflowY: 'auto', paddingRight: 4 }}>
+        <div className="max-h-[60vh] overflow-y-auto pr-1">
           {children}
         </div>
       </div>
@@ -350,27 +393,13 @@ function Modal({ title, onClose, children }: { title: string; onClose: () => voi
 
 function FieldRow({ label, children }: { label: string; children: React.ReactNode }) {
   return (
-    <div style={{ marginBottom: 12 }}>
-      <label style={{ display: 'block', fontSize: 12, fontWeight: 600, color: '#94a3b8', marginBottom: 4 }}>{label}</label>
+    <div className="mb-3">
+      <label className="block text-xs font-semibold text-muted mb-1">{label}</label>
       {children}
     </div>
   )
 }
 
-// ─── Styles ───────────────────────────────────────────────────────────────────
+// ─── Shared style ─────────────────────────────────────────────────────────────
 
-const listContainer: React.CSSProperties = { display: 'flex', flexDirection: 'column', height: '100%' }
-const toolbar: React.CSSProperties = { display: 'flex', alignItems: 'center', gap: 10, padding: '12px 20px', borderBottom: '1px solid #1e293b', flexShrink: 0 }
-const listBody: React.CSSProperties = { flex: 1, overflowY: 'auto' }
-const itemRow: React.CSSProperties = { display: 'flex', alignItems: 'center', padding: '14px 20px', borderBottom: '1px solid #1e293b', gap: 12 }
-const emptyMsg: React.CSSProperties = { padding: '40px 24px', color: '#475569', textAlign: 'center', fontSize: 14 }
-const subTabBarStyle: React.CSSProperties = { display: 'flex', borderBottom: '1px solid #1e293b', backgroundColor: '#0a1628', flexShrink: 0 }
-const overlay: React.CSSProperties = { position: 'fixed', inset: 0, backgroundColor: 'rgba(0,0,0,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100 }
-const modalBox: React.CSSProperties = { backgroundColor: '#1e293b', borderRadius: 10, padding: 24, width: 540, maxWidth: '95vw', boxShadow: '0 20px 60px rgba(0,0,0,0.6)' }
-const modalFooter: React.CSSProperties = { display: 'flex', gap: 10, marginTop: 20, justifyContent: 'flex-end' }
-const errStyle: React.CSSProperties = { marginTop: 10, fontSize: 12, color: '#ef4444' }
-const inputStyle: React.CSSProperties = { width: '100%', background: '#0f172a', border: '1px solid #334155', borderRadius: 6, color: '#e2e8f0', fontSize: 13, padding: '6px 10px', outline: 'none', boxSizing: 'border-box' }
-const btnCreate: React.CSSProperties = { background: '#1e40af', border: 'none', color: '#e2e8f0', borderRadius: 6, padding: '5px 14px', cursor: 'pointer', fontSize: 13, fontWeight: 600, marginLeft: 'auto' }
-const btnEdit: React.CSSProperties = { background: 'none', border: '1px solid #334155', color: '#94a3b8', borderRadius: 6, padding: '4px 10px', cursor: 'pointer', fontSize: 12 }
-const btnDel: React.CSSProperties = { background: 'none', border: '1px solid #ef444466', color: '#ef4444', borderRadius: 6, padding: '4px 10px', cursor: 'pointer', fontSize: 12 }
-const btnSecondary: React.CSSProperties = { background: 'none', border: '1px solid #334155', color: '#94a3b8', borderRadius: 6, padding: '4px 12px', cursor: 'pointer', fontSize: 12 }
+const inputCls = 'w-full px-2.5 py-1.5 text-xs border border-border-strong rounded bg-white text-dark focus:outline-none focus:border-primary'

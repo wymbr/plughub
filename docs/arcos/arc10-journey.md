@@ -1,5 +1,7 @@
 # Arc 10 — Journey: Multi-Session Service Automation
 
+> Última atualização: 2026-05-25 · Estado: Arc 16
+
 ## Motivação
 
 A plataforma executa automação de serviços via skill-flow (agentes + workflow steps), mas toda a monitoração e relatórios são centrados na **sessão** — uma unidade de interação única. Serviços reais de atendimento frequentemente requerem múltiplos contatos ao longo do tempo: uma portabilidade leva 3 dias, um reembolso pode exigir análise e retorno, uma reclamação formal tem etapas burocráticas com prazos.
@@ -28,15 +30,38 @@ journey_id              UUID PK
 tenant_id               string
 skill_id                string            — qual skill-flow define o processo
 workflow_instance_id    UUID nullable FK  — instância ativa (atualizado on trigger)
+pool_id                 string nullable   — pool de origem; estável entre upgrades de skill; usado para filtro e access control
 customer_id             string nullable   — identificador do cliente
 origin_session_id       string            — sessão que iniciou a jornada (imutável)
 status                  enum              — active|suspended|completed|failed|cancelled|merged
+failure_reason          text nullable     — preenchido quando status=failed: collect_timeout | suspend_timeout | workflow_error | ...
 merged_into_journey_id  UUID nullable     — preenchido quando status = merged
+split_from_journey_id   UUID nullable     — preenchido quando originado de split
 metadata                JSONB nullable    — dados passados no journey_start
+session_snapshot        JSONB nullable    — cache desnormalizado para display (atualizado via Kafka, não é fonte de verdade)
 created_at              timestamptz
 updated_at              timestamptz
 completed_at            timestamptz nullable
 ```
+
+**Tabela `workflow.journey_sessions` (junction table — PostgreSQL — workflow-api):**
+
+Substituição do array `session_ids[]` por uma tabela de junção com FK real e metadados por sessão:
+
+```
+journey_id      UUID FK → journeys(journey_id)
+session_id      UUID FK → sessions(id)   — FK cross-schema (via DB link ou schema compartilhado)
+role            text    — collect | recontact (origem está em origin_session_id do journey)
+channel         text    — canal usado nessa sessão (whatsapp, webchat, voice, ...)
+sequence_idx    int     — ordem de vinculação (0-based)
+outcome         text    — resolved | escalated | abandoned | failed | ...
+linked_at       timestamptz
+PRIMARY KEY (journey_id, session_id)
+```
+
+**Decisão de modelagem (2026-05-21):** o campo `session_ids UUID[]` não é implementado. A junction table oferece FK real, queries eficientes nos dois sentidos (`WHERE journey_id = ?` e `WHERE session_id = ?`), e metadados ricos por sessão. O campo `session_snapshot JSONB` na tabela `journeys` serve como cache de display — preenchido pelo consumer de `journey.events` Kafka, nunca é fonte de verdade.
+
+**Quem escreve em `journey_sessions` (decisão 2026-05-21):** o `workflow-api` consome `collect.events` Kafka diretamente e faz o INSERT na junction table quando a sessão collect é criada. O Core continua escrevendo `sessions.journey_id` (campo simples na tabela de sessões). Nenhum REST cross-service entre Core e workflow-api para esse dado.
 
 **Tabela `workflow.collect_instances` (campo adicionado):**
 ```
@@ -70,7 +95,7 @@ Uma sessão pode ter **dois relacionamentos simultâneos e independentes** com j
 
 | Relacionamento | Campo | Quem escreve | Semântica |
 |---|---|---|---|
-| Sessão collect de uma journey | `sessions.journey_id = Journey_A` | Core (via `collect.events` Kafka) | Sessão criada pelo `collect` step *pertence* à journey |
+| Sessão collect de uma journey | `journey_sessions(journey_id, session_id)` + `sessions.journey_id = Journey_A` | Core (via `collect.events` Kafka) insere na junction table e escreve `sessions.journey_id` | Sessão criada pelo `collect` step *pertence* à journey |
 | Sessão de origem de outra journey | `journey_b.origin_session_id = session_id` | `journey_start` / MCP tool | Sessão foi o *ponto de início* da journey B |
 
 **Regra fundamental:** `journey_start` e `db_create_journey` **nunca escrevem** `sessions.journey_id`. Apenas o Core escreve esse campo, exclusivamente para sessões criadas por `collect` steps.
@@ -89,9 +114,9 @@ Journey A e Journey B são completamente independentes — a interseção é cap
 
 **Query "todas sessões de uma journey":**
 ```sql
-SELECT session_id FROM sessions WHERE journey_id = :journey_id
+SELECT session_id FROM workflow.journey_sessions WHERE journey_id = :journey_id
 UNION
-SELECT origin_session_id FROM journeys WHERE journey_id = :journey_id
+SELECT origin_session_id FROM workflow.journeys WHERE journey_id = :journey_id
 ```
 
 ---
@@ -194,7 +219,7 @@ Correlação automática de recontatos espontâneos (cliente recontatando sem `c
 |---|---|---|
 | `journey.events` | workflow-api | analytics-api → ClickHouse |
 
-**8 tipos de evento:**
+**9 tipos de evento:**
 
 ```
 journey_started         — journey criada, origin_session_id definida
@@ -205,6 +230,7 @@ journey_completed       — processo concluído com sucesso
 journey_failed          — processo falhou
 journey_cancelled       — cancelado por agente ou timeout
 journey_merged          — journey secundária absorvida por primária
+journey_split           — sessões collect extraídas para nova journey (Fase F)
 ```
 
 Schema Zod: `JourneyEventSchema` em `@plughub/schemas/src/journey.ts`.
@@ -335,13 +361,92 @@ Prefixo `/v1/journeys` (workflow-api, porta 3800):
 
 ---
 
-## Fase F — Split de jornadas *(deferred)*
+## Integração com o Arc 16 — Three-Tier Business Process Orchestration
 
-MCP tool `journey_split(journey_id, session_ids[])` — extrai sessões para nova journey.
+O Arc 16 estende o modelo de Journey para servir como superfície pública de orquestração de processos de negócio:
 
-**Decisões em aberto antes de implementar:**
-- O `workflow_instance_id` original permanece na journey original ou migra com as sessões extraídas?
-- A nova journey recebe um novo workflow trigger ou inicia sem workflow (`workflow_instance_id = null`)?
-- Quais restrições previnem split que invalide a `origin_session_id` da journey original?
+- **`pool_id` na Journey**: a tabela `workflow.journeys` ganhou a coluna `pool_id` (persistida na criação), usada para filtro e access control. `GET /v1/journeys` aceita `pool_id` como filtro — habilita o padrão de poller workflow (Tier 1 que monitora e retoma journeys de outros processos).
+- **Namespace `@ctx.journey.*`**: novo Redis hash `{tenantId}:ctx:journey:{journeyId}` compartilhado entre todas as sessões da Journey (TTL 30 dias). Resolve o problema de dados coletados em sessões `collect` serem invisíveis ao Business Workflow. `context_tags.outputs` com prefixo `journey.*` redireciona a escrita para esse hash.
+- **MCP tools do Tier 1 poller**: `journey_list_suspended(pool_id, skill_id?, limit?)` e `journey_resume(journey_id, context?, decision)` encapsulam o `resume_token` interno — auditadas via McpInterceptor; permissão ABAC `workflows.journey.read`/`journey.resume`.
+- **`journey_check_pending(customer_id, channel?, limit?)`**: descobre journeys com `collect` pendente para um cliente (Inbound Journey Resume, Arc 16 Fase E).
+- **Endpoints públicos**: `GET /v1/journeys?pool_id=...&status=suspended` e `POST /v1/journeys/{id}/resume` (callers passam apenas `context` + `decision`).
 
-UI: painel de sessões da journey no Monitor com seleção múltipla + botão "Separar em nova jornada".
+→ Ver [`docs/arcos/arc16-flow-orchestration.md`](arc16-flow-orchestration.md).
+
+---
+
+## Fase F — Split de jornadas *(implementado)*
+
+Extrai um subconjunto de sessões de uma journey para uma nova journey independente. Caso de uso típico: durante a execução, descobre-se que algumas sessões pertencem a um processo diferente do que foi originalmente iniciado.
+
+### Decisões resolvidas
+
+| Decisão | Resolução |
+|---|---|
+| `workflow_instance_id` após split | Permanece na journey **original**. O workflow é o motor do processo original; as sessões são realocadas, não o processo. |
+| Nova journey recebe workflow? | Inicia com `workflow_instance_id = null`, status `active`. Parâmetro opcional `skill_id` dispara novo workflow imediatamente. Default: sem workflow. |
+| Restrições sobre `origin_session_id` | Ver seção Restrições abaixo. |
+
+### MCP tool `journey_split`
+
+```typescript
+journey_split({
+  journey_id:   string,          // journey origem
+  session_ids:  string[],        // sessões collect a extrair (mín. 1)
+  skill_id?:    string,          // se passado, dispara novo workflow para a nova journey
+  metadata?:    Record<string, unknown>,
+}): {
+  new_journey_id:          string,
+  new_workflow_instance_id: string | null,  // null se skill_id não passado
+}
+```
+
+**Efeitos em sequência:**
+1. Valida restrições (ver abaixo) — retorna `400` se violado
+2. Cria nova journey com:
+   - `origin_session_id` = primeira sessão do conjunto (ordenada por `started_at`)
+   - `split_from_journey_id` = `journey_id` (campo novo, nullable UUID)
+   - `workflow_instance_id = null`, status `active`
+3. Para cada `session_id` em `session_ids[]`: atualiza `sessions.journey_id` = `new_journey_id`
+4. Se `skill_id` passado: chama `POST /v1/workflow/trigger` e atualiza `new_journey.workflow_instance_id`
+5. Publica `journey_split` no Kafka `journey.events` (source + destination)
+6. Interceptado pelo McpInterceptor (auditoria automática)
+
+### Restrições
+
+- **Somente sessões collect**: `session_ids[]` deve conter apenas sessões com `sessions.journey_id = source_journey_id`. Sessões standalone ou de outra journey retornam `400`.
+- **`origin_session_id` protegido**: se `session_ids[]` incluir o `origin_session_id` da journey origem, retorna `400 origin_session_cannot_be_split`.
+- **Journey merged é somente leitura**: se `source_journey.status = merged`, retorna `409`.
+- **Mínimo 1 sessão**: `session_ids[]` vazio retorna `400`.
+
+### Novo campo no modelo de dados
+
+```
+split_from_journey_id   UUID nullable   — preenchido na journey derivada de um split
+```
+
+Adicionado à tabela `workflow.journeys` e ao evento `journey_started` quando originado de split.
+
+### Evento Kafka — `journey_split`
+
+Nono tipo adicionado ao `journey.events`:
+
+```
+journey_split     — source_journey_id, new_journey_id, session_ids[], session_count
+```
+
+Schema Zod: campo `journey_split` adicionado ao `JourneyEventSchema` em `@plughub/schemas/src/journey.ts`.
+
+### UI
+
+Painel de sessões da journey no Monitor (tab Jornadas → detalhe lateral):
+- Modo de seleção múltipla de sessões collect com checkboxes
+- Botão "Separar em nova jornada" (sticky footer) — ativo quando ≥ 1 sessão selecionada e nenhuma é a `origin_session_id`
+- Drawer de confirmação com campo opcional de `skill_id` (dropdown filtrado por `pool.mentionable_journeys` do tenant) e preview das sessões a extrair
+- Após confirmação: navega para a nova journey no Monitor
+
+### Invariants adicionais
+
+- **`journey_split` é irreversível** — use `journey_merge` se necessário reagrupar
+- **`split_from_journey_id` é imutável** após criação da journey derivada
+- **`origin_session_id` da journey origem nunca muda** — o split nunca toca esse campo

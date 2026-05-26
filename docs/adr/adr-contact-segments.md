@@ -1,6 +1,6 @@
 # ADR: ContactSegment — Modelo de Segmentos de Atendimento e Taxonomia Unificada de Eventos
 
-**Status:** Proposto (design aprovado, implementação pendente Arc 5)  
+**Status:** Aceito — implementado (Arc 5)  
 **Data:** 2026-04-27  
 **Componentes:** `packages/schemas`, `packages/analytics-api`, `packages/skill-flow-engine`, `packages/orchestrator-bridge`
 

@@ -51,6 +51,7 @@ from ..models import (
     MessageContent,
     NormalizedInboundEvent,
 )
+from ..channel_capability_registry import write_journey_channel_context
 from .base import ChannelAdapter
 from .whatsapp_provider import IWhatsAppProvider, MetaCloudProvider
 
@@ -236,7 +237,40 @@ class WhatsAppAdapter(ChannelAdapter):
         text:       str,
         wamid:      str,
     ) -> None:
-        """Check sequential collect state first; if none, publish normally."""
+        """Check pending collect states first; if none, publish normally."""
+        # ── Arc 16 Phase D: capability-based pending collect ─────────────────
+        pending_collect_key = f"channel:whatsapp:{contact_id}:pending_collect"
+        pending_raw = await self._redis.get(pending_collect_key)
+        if pending_raw:
+            pending = json.loads(pending_raw)
+            await self._redis.delete(pending_collect_key)
+            journey_id_p = pending.get("journey_id")
+            # Register channel contact in journey ContextStore
+            if journey_id_p:
+                tenant_id = self._settings.tenant_id
+                await write_journey_channel_context(
+                    redis      = self._redis,
+                    tenant_id  = tenant_id,
+                    journey_id = journey_id_p,
+                    channel    = "whatsapp",
+                    contact_id = contact_id,
+                )
+            payload = NormalizedInboundEvent(
+                message_id       = str(uuid.uuid4()),
+                contact_id       = contact_id,
+                session_id       = session_id,
+                channel          = "whatsapp",
+                content_type     = "text",
+                author           = MessageAuthor(type="customer"),
+                content          = MessageContent(type="text", text=text),
+                context_snapshot = ContextSnapshot(),
+            ).model_dump()
+            payload["collect_token"] = pending.get("collect_token")
+            payload["journey_id"]    = journey_id_p
+            payload["response_text"] = text
+            await self._publish_inbound(payload)
+            return
+
         # Check if there's an active sequential collect waiting for a text answer
         collect_key = f"channel:whatsapp:{session_id}:menu_collect"
         collect_raw = await self._redis.get(collect_key)
@@ -593,6 +627,59 @@ class WhatsAppAdapter(ChannelAdapter):
             await self._redis.delete(f"channel:whatsapp:{session_id}:menu_collect")
         logger.info(
             "whatsapp session closed contact_id=%s session_id=%s", contact_id, session_id
+        )
+
+    # ── Collect event — outbound capability-based (Arc 16 Phase D) ───────────
+
+    async def handle_collect_event(self, event: dict) -> None:
+        """
+        Send a collect prompt to the customer via WhatsApp and store a
+        pending_collect key so the inbound handler can correlate the reply.
+
+        Called by _collect_events_consumer() when collect.requested arrives with
+        channel="whatsapp" (explicit or capability-selected).
+
+        Redis key: channel:whatsapp:{contact_id}:pending_collect
+          → {collect_token, journey_id, pool_id}  TTL = 30 min
+        """
+        contact_id    = event.get("target", "")
+        collect_token = event.get("collect_token", "")
+        journey_id    = event.get("journey_id")
+        prompt        = event.get("prompt", "")
+        tenant_id     = event.get("tenant_id", self._settings.tenant_id)
+        pool_id       = event.get("pool_id", self._settings.whatsapp_phone_number_id or "")
+
+        if not contact_id or not prompt:
+            logger.warning(
+                "whatsapp handle_collect_event: missing target or prompt "
+                "(collect_token=%s)", collect_token,
+            )
+            return
+
+        to = contact_id.lstrip("+")
+        try:
+            provider = await self._get_provider(tenant_id)
+            await provider.send_text(to, prompt)
+        except Exception as exc:
+            logger.error(
+                "whatsapp collect send failed contact=%s: %s", contact_id, exc,
+            )
+            return
+
+        pending = {
+            "collect_token": collect_token,
+            "journey_id":    journey_id,
+            "pool_id":       pool_id,
+        }
+        await self._redis.setex(
+            f"channel:whatsapp:{contact_id}:pending_collect",
+            1_800,  # 30 min
+            json.dumps(pending),
+        )
+
+        logger.info(
+            "whatsapp collect sent: contact=%s collect_token=%s journey=%s",
+            contact_id, collect_token, journey_id,
         )
 
     # ── Sequential collect helpers ─────────────────────────────────────────────

@@ -1,13 +1,14 @@
 # Dashboard — Generic Card System
 
-> Spec completo para o sistema de cards genéricos configuráveis.
+> Última atualização: 2026-05-25 · Estado: Arc 16
+> **Status: implementado.** O sistema de cards genéricos configuráveis (Dashboard #35) está em produção: `DisplayTool` registry, `ENDPOINT_CATALOG`/`catalog.ts`, os 5 tipos de card (`metric_card`, `table`, `bar_chart`, `line_chart`, `donut`), o `FilterBar` de runtime filters e os endpoints `/reports/display/*` no analytics-api. O texto abaixo descreve o estado atual da plataforma.
 > Inspirado no modelo Grafana: Display Tool + Query configurável + Runtime Filters.
 
 ---
 
-## Estado atual (o que já existe e não muda)
+## Base existente (camada que não muda)
 
-`DashboardsPage.tsx` já implementa:
+`DashboardsPage.tsx` implementa:
 - **react-grid-layout** — 12 colunas, `rowHeight=60`, drag-and-drop, resize, compactType vertical
 - **Template system** — admin cria templates compartilhados; usuários têm layout pessoal (override por `{tenant}:{userId}`)
 - **Storage** — Config API namespace `dashboards`, chaves `template:{uuid}` e `layout:{tenantId}:{userId}`
@@ -15,7 +16,7 @@
 - **Dirty flag + save** — template salvo como admin; layout pessoal salvo sem admin token (fallback localStorage)
 - **ABAC** — `config.platform` gate na Sidebar; `admin/developer` pode editar; outros só visualizam
 
-Nada disso muda. A evolução é cirúrgica: substituir o card type hardcoded por um **Display Tool Registry** e evoluir o schema do `DashboardCard.config`.
+Essa camada permaneceu intacta. A evolução foi cirúrgica: o card type hardcoded foi substituído por um **Display Tool Registry** e o schema do `DashboardCard.config` evoluiu para `tool_id` + `query` + `tool_config`.
 
 ---
 
@@ -63,7 +64,9 @@ platform-ui/src/dashboard/tools/
 
 ---
 
-## Tools Iniciais — Data Shapes
+## Tools — Data Shapes
+
+Os 5 tools abaixo estão registrados no `registry.ts`.
 
 ### `metric_card` — KPI / Número grande
 
@@ -281,15 +284,15 @@ Inserida entre o TopBar e a GridArea, visível em modo view e edit:
 
 ---
 
-## Analytics-API — Novos Endpoints de Display
+## Analytics-API — Endpoints de Display
 
 ### Princípio
 
-Endpoints novos com prefixo `/reports/display/` retornam dados **já no shape do tool**. Eles chamam internamente os endpoints analíticos existentes e formatam o resultado — não duplicam lógica, apenas transformam.
+Os endpoints com prefixo `/reports/display/` retornam dados **já no shape do tool**. Eles chamam internamente os endpoints analíticos existentes e formatam o resultado — não duplicam lógica, apenas transformam. O catálogo é declarado em `ENDPOINT_CATALOG` (`catalog.ts`) no frontend.
 
 Todos aceitam: `tenant_id` (required), `from` / `to` (ISO-8601 ou atalhos como `-7d`), `pool_id` (opcional).
 
-### Catálogo inicial
+### Catálogo (`ENDPOINT_CATALOG`)
 
 | Endpoint | Tool esperado | Descrição |
 |---|---|---|
@@ -303,6 +306,26 @@ Todos aceitam: `tenant_id` (required), `from` / `to` (ISO-8601 ou atalhos como `
 | `GET /reports/display/kpi-sessions` | `metric_card` | Total de sessões no período com trend vs período anterior |
 | `GET /reports/display/kpi-resolution` | `metric_card` | Taxa de resolução com trend |
 | `GET /reports/display/kpi-score` | `metric_card` | Nota média de avaliação com trend |
+
+### Cards de Journey (Arc 10 Fase E)
+
+Quatro entradas adicionadas ao `catalog.ts`, com queries `argMax(status, event_time)` sobre `journey_events FINAL`:
+
+| Endpoint / card | Tool | Descrição |
+|---|---|---|
+| `journey-active-count` | `metric_card` | Total de Journeys ativas |
+| `journey-resolution-rate` | `bar_chart` | Taxa de resolução de Journeys por skill_id |
+| `journey-funnel` | `donut` | Distribuição de Journeys por status (funil) |
+| `journey-median-duration` | `bar_chart` | Duração mediana de Journey por skill_id |
+
+### Cards de Agent Business Events (Arc 12 Fase D)
+
+Dois cards alimentados pelo tópico `agent.events` → `analytics.agent_business_events`, com seletor de categoria dinâmico:
+
+| Endpoint / card | Tool | Descrição |
+|---|---|---|
+| `agent_event_timeseries` | `line_chart` | Série temporal de um KPI de negócio (`category`) com deploy markers |
+| `agent_event_summary` | `table` / `metric_card` | Sumário agregado de eventos de negócio por categoria |
 
 ### Formato de resposta
 
@@ -337,29 +360,29 @@ Título do card é editável no passo 3 com sugestão automática.
 
 ---
 
-## Implementação — 4 Partes em Sequência
+## Implementação — 4 Partes (todas concluídas)
 
-### Parte 1 — Display Tool Registry (platform-ui only)
-- Criar `src/dashboard/tools/` com os 5 tools iniciais
-- Criar `registry.ts` com mapa `toolId → DisplayTool`
-- Criar `normalizeCard()` com backward compat adapter
-- Substituir `CardContent` switch pelo registry lookup
-- **Sem quebrar nada** — cards existentes continuam funcionando via adapter
+### Parte 1 — Display Tool Registry (platform-ui) ✅
+- `src/dashboard/tools/` com os 5 tools
+- `registry.ts` com mapa `toolId → DisplayTool`
+- `normalizeCard()` com backward compat adapter
+- `CardContent` switch substituído pelo registry lookup
+- Cards antigos continuam funcionando via adapter
 
-### Parte 2 — Card Schema + Card Builder
-- Atualizar `DashboardCard` e `DashboardTemplate` em `types/index.ts`
-- Atualizar `AddCardModal` com o fluxo de 3 passos
-- Catálogo de endpoints disponíveis hardcoded no frontend inicialmente
+### Parte 2 — Card Schema + Card Builder ✅
+- `DashboardCard` e `DashboardTemplate` evoluídos em `types/index.ts`
+- `AddCardModal` com o fluxo de 3 passos
+- Catálogo de endpoints declarado em `catalog.ts` (`ENDPOINT_CATALOG`)
 - `buildQueryUrl()` com merge de runtime params
 
-### Parte 3 — Runtime Filters
-- Adicionar `global_filters` ao `DashboardTemplate`
-- Implementar `FilterBar` component
-- Passar `runtimeFilters` state para todos os cards via context ou prop drilling
-- Integrar `buildQueryUrl()` com os filtros ativos
+### Parte 3 — Runtime Filters ✅
+- `global_filters` no `DashboardTemplate`
+- `FilterBar` component
+- `runtimeFilters` state propagado para todos os cards
+- `buildQueryUrl()` integrado com os filtros ativos
 
-### Parte 4 — Analytics-API endpoints `/reports/display/*`
-- Implementar os 10 endpoints em `analytics-api`
+### Parte 4 — Analytics-API endpoints `/reports/display/*` ✅
+- Endpoints implementados em `analytics-api` (incluindo os cards de Journey e agent_event)
 - Cada endpoint chama os existentes (`/reports/segments`, `/reports/agents/performance`, etc.) e formata
 - Adapter de data shape centralizado em `analytics_api/display_formatters.py`
 

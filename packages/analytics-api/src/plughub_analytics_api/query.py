@@ -179,6 +179,66 @@ def _empty_metrics() -> dict:
     }
 
 
+# ─── dashboard/pool-sla — per-pool wait-time aggregates (last 1h) ─────────────
+
+async def get_pool_sla_1h(client: Any, database: str, tenant_id: str) -> list[dict]:
+    """
+    Per-pool SLA performance over the last 1 hour based on wait_time_ms
+    already stored in analytics.sessions (written by Core on session_closed).
+
+    Returns a list of:
+      {
+        "pool_id":              str,
+        "avg_wait_ms":          float | None,  # average queue wait time
+        "p90_wait_ms":          float | None,  # 90th percentile
+        "sla_compliance_pct":   float | None,  # % sessions served within sla_target_ms
+        "sessions_count":       int            # sample size (0 = no data)
+      }
+
+    Note: sla_compliance_pct requires sla_target_ms to be present in the sessions
+    table. When it is absent (NULL / 0), compliance is returned as None.
+    """
+    try:
+        return await asyncio.to_thread(_fetch_pool_sla_1h, client, database, tenant_id)
+    except Exception as exc:
+        logger.warning("get_pool_sla_1h failed tenant=%s: %s", tenant_id, exc)
+        return []
+
+
+def _fetch_pool_sla_1h(client: Any, db: str, tenant_id: str) -> list[dict]:
+    rows = _run_query(client, f"""
+        SELECT
+            pool_id,
+            avgOrNull(wait_time_ms)                           AS avg_wait_ms,
+            quantileOrNull(0.90)(wait_time_ms)                AS p90_wait_ms,
+            countIf(wait_time_ms <= sla_target_ms
+                    AND sla_target_ms > 0)                    AS within_sla,
+            countIf(wait_time_ms IS NOT NULL
+                    AND sla_target_ms > 0)                    AS total_with_sla,
+            count()                                           AS sessions_count
+        FROM {db}.sessions FINAL
+        WHERE tenant_id     = {{tenant_id:String}}
+          AND opened_at     >= now() - INTERVAL 1 HOUR
+          AND wait_time_ms  IS NOT NULL
+          AND wait_time_ms  > 0
+        GROUP BY pool_id
+    """, {"tenant_id": tenant_id})
+
+    result = []
+    for r in rows:
+        total_with_sla = int(r.get("total_with_sla", 0) or 0)
+        within_sla     = int(r.get("within_sla", 0) or 0)
+        compliance     = round(within_sla / total_with_sla * 100, 1) if total_with_sla > 0 else None
+        result.append({
+            "pool_id":            r["pool_id"],
+            "avg_wait_ms":        round(float(r["avg_wait_ms"]), 0) if r.get("avg_wait_ms") is not None else None,
+            "p90_wait_ms":        round(float(r["p90_wait_ms"]), 0) if r.get("p90_wait_ms") is not None else None,
+            "sla_compliance_pct": compliance,
+            "sessions_count":     int(r.get("sessions_count", 0) or 0),
+        })
+    return result
+
+
 # ─── Redis helpers ────────────────────────────────────────────────────────────
 
 async def get_pool_snapshots(redis: Any, tenant_id: str) -> list[dict]:

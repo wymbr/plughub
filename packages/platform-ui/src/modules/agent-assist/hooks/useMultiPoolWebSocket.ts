@@ -59,13 +59,17 @@ interface UseMultiPoolWebSocketReturn {
 }
 
 function openConnection(
-  poolId: string,
+  poolId:       string,
+  userId:       string,
+  maxConcurrent: number,
   poolStateRef: React.MutableRefObject<Map<string, PoolState>>,
   setStatuses: React.Dispatch<React.SetStateAction<Map<string, PoolConnectionStatus>>>,
   setLastEvent: React.Dispatch<React.SetStateAction<TaggedWsEvent | null>>,
 ) {
   const params = new URLSearchParams();
   params.set("pool", poolId);
+  if (userId) params.set("user_id", userId);
+  params.set("max_concurrent", String(maxConcurrent));
   const url = `${WS_BASE}?${params.toString()}`;
 
   const ws = new WebSocket(url);
@@ -123,11 +127,11 @@ function openConnection(
         setStatuses(prev => new Map(prev).set(poolId, "disconnected"));
       }, DISCONNECT_DEBOUNCE_MS);
 
-      // Schedule reconnect
+      // Schedule reconnect — preserve userId/maxConcurrent captured in closure
       s.reconnectTimer = setTimeout(() => {
         const current = poolStateRef.current.get(poolId);
         if (current && !current.intentionalClose) {
-          openConnection(poolId, poolStateRef, setStatuses, setLastEvent);
+          openConnection(poolId, userId, maxConcurrent, poolStateRef, setStatuses, setLastEvent);
         }
       }, RECONNECT_DELAY_MS);
     } else {
@@ -151,7 +155,11 @@ function closeConnection(poolId: string, poolStateRef: React.MutableRefObject<Ma
   s.ws.close();
 }
 
-export function useMultiPoolWebSocket(activePools: string[]): UseMultiPoolWebSocketReturn {
+export function useMultiPoolWebSocket(
+  activePools:   string[],
+  userId?:       string,
+  maxConcurrent?: number,
+): UseMultiPoolWebSocketReturn {
   const poolStateRef    = useRef<Map<string, PoolState>>(new Map());
   const sessionPoolRef  = useRef<SessionPoolMap>(new Map());
   const [statuses,  setStatuses]  = useState<Map<string, PoolConnectionStatus>>(new Map());
@@ -165,7 +173,7 @@ export function useMultiPoolWebSocket(activePools: string[]): UseMultiPoolWebSoc
     // Open new connections
     for (const poolId of desired) {
       if (!current.has(poolId)) {
-        openConnection(poolId, poolStateRef, setStatuses, setLastEvent);
+        openConnection(poolId, userId ?? "", maxConcurrent ?? 3, poolStateRef, setStatuses, setLastEvent);
       }
     }
 

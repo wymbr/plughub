@@ -1,4 +1,5 @@
 import React from 'react'
+import { Link } from 'react-router-dom'
 
 interface PageHeaderProps {
   title: string
@@ -11,16 +12,16 @@ const PageHeader: React.FC<PageHeaderProps> = ({ title, breadcrumbs, actionButto
   return (
     <div className={`mb-6 ${className}`}>
       {breadcrumbs && breadcrumbs.length > 0 && (
-        <nav className="flex gap-2 text-xs text-gray mb-2">
+        <nav aria-label="Breadcrumb" className="flex gap-2 text-xs text-muted mb-2">
           {breadcrumbs.map((crumb, idx) => (
             <React.Fragment key={idx}>
-              {idx > 0 && <span>/</span>}
+              {idx > 0 && <span aria-hidden="true">/</span>}
               {crumb.href ? (
-                <a href={crumb.href} className="text-primary hover:underline">
+                <Link to={crumb.href} className="text-primary hover:underline focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary rounded">
                   {crumb.label}
-                </a>
+                </Link>
               ) : (
-                <span>{crumb.label}</span>
+                <span aria-current="page">{crumb.label}</span>
               )}
             </React.Fragment>
           ))}

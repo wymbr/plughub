@@ -21,6 +21,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from .config import settings
 from . import db as _db
 from .router import router
+from .contestation_router import contestation_router
 
 logging.basicConfig(
     level=logging.INFO,
@@ -177,6 +178,7 @@ def create_app() -> FastAPI:
             await app.state.db_pool.close()
 
     app.include_router(router)
+    app.include_router(contestation_router)  # Arc 13 — contestation, curation, calibration
     return app
 
 

@@ -23,6 +23,9 @@ class Settings(BaseSettings):
     # Workflow API (Arc 4 — review/contestation state machine)
     workflow_api_url: str = "http://localhost:3800"
 
+    # Knowledge API (mcp-server-knowledge — Arc 13 Fase H CalibrationNote publish)
+    knowledge_api_url: str = "http://localhost:3401"
+
     # JWT secret for reviewer/contestation identity (HS256)
     jwt_secret: str = "changeme_evaluation_jwt_secret"
 

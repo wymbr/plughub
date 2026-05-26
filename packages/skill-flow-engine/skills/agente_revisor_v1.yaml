@@ -1,0 +1,267 @@
+# agente_revisor_v1.yaml
+# Skill Flow do Revisor AI Pós-Contestação — Arc 13 Fase D
+#
+# Propósito:
+#   Árbitro AI que decide upheld/revised por dimensão contestada pelo agente humano.
+#   Ativado pelo workflow skill_revisao_treplica_v1 quando reviewer_type="ai" e o
+#   agente humano contestou (round=2 presente). Lê o historico completo (rounds 1,
+#   1.5 e 2) e decide com base no transcript original.
+#
+# Posição no fluxo Arc 13 (Fluxo 1 — agente humano avaliado):
+#   Round 1   → agente_avaliacao_v1   (avaliação inicial)
+#   Round 1★  → agente_pre_revisor_v1 (pré-publicação, se habilitado)
+#   Round 2   → human_agent           (contestação)
+#   Round 3   → agente_revisor_v1     (decisão final — este agente)
+#
+# Ativação:
+#   Pelo workflow skill_revisao_treplica_v1 como task step (A2A), quando:
+#     - contestation_state = "under_review"
+#     - reviewer_type = "ai" ou "ai_then_human" (primeira tentativa AI)
+#
+# Output por dimensão contestada:
+#   decision:       "upheld" | "revised"
+#   score_override: number?   (obrigatório se decision=revised)
+#   evidence_entries[]:       (obrigatório se decision=revised)
+#   justification:  string    (obrigatório em todos os casos)
+#
+# Fluxo:
+#
+#   get_context (evaluation_context_get — ReplayContext + form + calibration_notes)
+#       │
+#   get_threads (evaluation_threads_get — threads de TODOS os rounds por dimensão)
+#       │
+#   filter_contested (choice: há threads round=2?)
+#       ├─ no  → complete_skip (nenhuma contestação para revisar)
+#       │
+#       └─ yes → review (reason: LLM arbitra cada dimensão contestada)
+#                    │
+#               submit_review (invoke: evaluation_review_submit)
+#                    │
+#            ┌───────┴──────────┐
+#            │                  │
+#       complete_ok      complete_error
+#
+# Inputs esperados (injetados pelo workflow skill_revisao_treplica_v1):
+#   $.session.session_id        — sessão que foi avaliada
+#   $.session.participant_id    — instance_id do revisor (role: reviewer)
+#   $.session.session_token     — JWT do revisor AI
+#   $.session.instance_id       — ID da EvaluationInstance
+#   $.session.tenant_id         — tenant
+#
+# O LLM recebe:
+#   transcript              — eventos originais da sessão
+#   evaluation_form         — formulário com dimensões, critérios e pesos
+#   all_threads             — threads de todos os rounds: round=1 (avaliador),
+#                             round=1.5 (pre_reviewer_ai se presente) e round=2 (contestação)
+#   contested_dimension_ids — lista de dimensões que têm round=2 (para foco)
+#   knowledge_snippets      — políticas e rubricas do namespace da campanha
+#   calibration_notes       — notas de calibração do curador
+#   session_meta            — metadados da sessão
+#
+# O LLM devolve (output_schema abaixo):
+#   dimension_decisions[]:
+#     - dimension_id:     string           (apenas dimensões contestadas)
+#     - decision:         "upheld"|"revised"
+#     - score_override:   number?          (obrigatório quando revised)
+#     - evidence_entries[]:                (obrigatório quando revised, mínimo 1)
+#         stream_entry_id, excerpt, relevance_note
+#     - justification:    string           (obrigatório em todos os casos, ≥ 20 palavras)
+#
+# Invariantes:
+#   - Só arbitra dimensões que têm round=2 (contestadas pelo humano)
+#   - Não modifica dimensões não contestadas
+#   - decision=revised REQUER score_override (diferente do original) + evidence_entries
+#   - decision=upheld não requer score_override nem evidence_entries
+#   - Justificativa obrigatória mesmo quando upheld — explica por que a contestação
+#     não foi procedente
+#   - Lê calibration_notes antes de decidir (RAG de calibração)
+#   - Não emite calibration_signal — o revisor pós-contestação é árbitro, não calibrador
+
+id: skill_revisao_v1
+name: "Revisor AI Pós-Contestação — Arc 13 Fase D"
+version: "1.0"
+description: >
+  Árbitro AI que revisa contestações do agente humano avaliado.
+  Lê o histórico completo de threads (avaliação + pré-revisão + contestação) e decide
+  upheld (mantém nota) ou revised (altera com evidência) por dimensão contestada.
+  Submete via POST /v1/evaluation/instances/{id}/review na evaluation-api.
+  Ativado pelo workflow skill_revisao_treplica_v1 (reviewer_type=ai).
+classification:
+  type: orchestrator
+  domain: quality
+
+entry: get_context
+
+steps:
+
+  # ── Step 1: buscar contexto completo da sessão avaliada ───────────────────────
+  - id:   get_context
+    type: invoke
+    tool:  evaluation_context_get
+    input:
+      session_token:  "$.session.session_token"
+      session_id:     "$.session.session_id"
+      participant_id: "$.session.participant_id"
+    output_as:  eval_context
+    on_success: get_threads
+    on_failure: complete_error
+
+  # ── Step 2: buscar todos os threads da instância ──────────────────────────────
+  # Retorna threads de todos os rounds: 1 (avaliador), 1.5/pre_reviewer_ai (se houver),
+  # 2 (contestação humana). O LLM usa o histórico completo para contextualizar a decisão.
+  - id:   get_threads
+    type: invoke
+    tool:  evaluation_threads_get
+    input:
+      session_token: "$.session.session_token"
+      instance_id:   "$.session.instance_id"
+    output_as:  threads_result
+    on_success: filter_contested
+    on_failure: complete_error
+
+  # ── Step 3: verificar se há contestações (round=2) para revisar ───────────────
+  # Se não há threads de round=2, o agente humano não contestou nenhuma dimensão
+  # (estado under_review sem contestação real — edge case).
+  # Nesse caso avança para complete_skip sem bloquear o workflow.
+  - id:   filter_contested
+    type: choice
+    conditions:
+      - field:    "$.pipeline_state.threads_result.threads"
+        operator: exists
+        next:     review
+    default: complete_skip
+
+  # ── Step 4: LLM arbitra cada dimensão contestada ──────────────────────────────
+  # O prompt post_contestation_rubric_v1 instrui o LLM a:
+  #   1. Identificar dimensões com round=2 (author_type=human_agent)
+  #      — apenas essas serão arbitradas
+  #   2. Para cada dimensão contestada:
+  #      a. Ler o texto da contestação do agente humano (round=2)
+  #      b. Comparar com o score + evidência do avaliador (round=1) e do
+  #         pré-revisor (round=1.5/pre_reviewer_ai) se presente
+  #      c. Reler o transcript original com os eventos relevantes citados
+  #      d. Decidir:
+  #         - upheld: a contestação não é procedente — o score está correto
+  #           Justificar por que o argumento do agente não se sustenta no transcript
+  #         - revised: a contestação é procedente — o score deve ser corrigido
+  #           Obrigatório: propor score_override diferente do original
+  #           Obrigatório: citar evidence_entries que suportam o novo score
+  #   3. Ler calibration_notes antes de decidir — se o curador registrou viés
+  #      sistemático do avaliador, considerar ao avaliar upheld vs revised
+  #   4. Não arbitra dimensões sem round=2 — mantém as demais intactas
+  - id:         review
+    type:       reason
+    prompt_id:  post_contestation_rubric_v1
+    input:
+      # Transcript com eventos originais
+      replay_events:       "$.pipeline_state.eval_context.context.replay_events"
+      # Formulário de avaliação com dimensões e critérios
+      evaluation_form:     "$.pipeline_state.eval_context.evaluation_form"
+      # Todos os threads (rounds 1, 1.5 e 2) — histórico completo
+      all_threads:         "$.pipeline_state.threads_result.threads"
+      # Snippets de conhecimento (políticas, rubricas)
+      knowledge_snippets_preloaded: "$.pipeline_state.eval_context.context.knowledge_snippets"
+      # Notas de calibração do curador (RAG)
+      calibration_notes:   "$.pipeline_state.eval_context.calibration_notes"
+      # Metadados da sessão
+      session_meta:        "$.pipeline_state.eval_context.context.session_meta"
+      # Participantes
+      participant_summary: "$.pipeline_state.eval_context.participant_summary"
+    output_schema:
+      dimension_decisions:
+        type: array
+        description: >
+          Uma entrada por dimensão que possui round=2 (contestada pelo agente humano).
+          Não incluir dimensões sem contestação — o revisor árbitro só decide o que
+          foi contestado. O score das demais dimensões permanece como estava.
+        required: true
+        minItems: 1
+        items:
+          type: object
+          properties:
+            dimension_id:
+              type: string
+              description: "ID da dimensão — deve ter round=2 nos threads"
+              required: true
+            decision:
+              type: string
+              enum: ["upheld", "revised"]
+              description: >
+                upheld: a contestação não é procedente, score original mantido.
+                revised: a contestação é procedente, score alterado com evidência.
+              required: true
+            score_override:
+              type: number
+              description: >
+                Novo score proposto (0 a max_score da dimensão).
+                OBRIGATÓRIO quando decision=revised.
+                DEVE ser diferente do score do avaliador original.
+                Omitir quando decision=upheld.
+              required: false
+              nullable: true
+            evidence_entries:
+              type: array
+              description: >
+                Evidências do transcript que suportam a decisão revised.
+                OBRIGATÓRIO quando decision=revised. Mínimo 1 entry.
+                Omitir quando decision=upheld.
+              required: false
+              minItems: 1
+              items:
+                type: object
+                properties:
+                  stream_entry_id:
+                    type: string
+                    description: "event_id do replay_event que serve como evidência"
+                    required: true
+                  excerpt:
+                    type: string
+                    description: "Trecho exato (≤ 200 chars) do original_content do evento"
+                    required: true
+                  relevance_note:
+                    type: string
+                    description: "Por que este evento suporta a decisão (1–3 frases)"
+                    required: true
+            justification:
+              type: string
+              description: >
+                Obrigatório em todos os casos — mínimo 20 palavras.
+                Para upheld: por que a contestação não é procedente (argumento refutado
+                com referência ao transcript).
+                Para revised: por que a contestação é procedente (novo argumento ou
+                evidência não considerada na avaliação original).
+              required: true
+    output_as:  review_result
+    on_success: submit_review
+    on_failure: complete_error
+
+  # ── Step 5: submeter decisão para evaluation-api ──────────────────────────────
+  # evaluation_review_submit:
+  #   - Cria ContestationThread round=3 com author_type=reviewer_ai por dimensão
+  #   - decision=revised → grava score_override e evidence_entries no thread
+  #   - Verifica se max_rounds atingido → finaliza ou reabre contestation_open
+  #   - Se último round e algum revised → emite evaluation_finalized com final_score
+  - id:   submit_review
+    type: invoke
+    tool:  evaluation_review_submit
+    input:
+      session_token:       "$.session.session_token"
+      instance_id:         "$.session.instance_id"
+      dimension_decisions: "$.pipeline_state.review_result.dimension_decisions"
+    output_as:  review_submission
+    on_success: complete_ok
+    on_failure: complete_error
+
+  # ── Terminadores ──────────────────────────────────────────────────────────────
+  - id:      complete_ok
+    type:    complete
+    outcome: resolved
+
+  # Sem dimensões contestadas — workflow avança sem bloquear
+  - id:      complete_skip
+    type:    complete
+    outcome: resolved
+
+  - id:      complete_error
+    type:    complete
+    outcome: failed

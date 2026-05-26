@@ -1,7 +1,8 @@
 # Channel Gateway — Arquitetura Multi-Canal
 
-**Versão:** 1.1 — 2026-05-20  
-**Status:** Phase 1 (abstrações) + WhatsApp + SMS + Email + Voice implementados.  
+> Última atualização: 2026-05-25 · Estado: Arc 16 · Status: Phase 1 (abstrações) + WhatsApp + SMS + Email + Voice + WebRTC implementados
+
+**Versão:** 1.2 — 2026-05-25  
 **Escopo:** `packages/channel-gateway/`
 
 ---
@@ -50,9 +51,9 @@ no plano de controle (texto) e não precisa de nenhuma mudança.
 4. **STT do agente humano é opcional e "ligável"**: a fala do agente pode ser
    transcrita via Deepgram no segundo leg da conference bridge, sem nenhuma
    mudança de arquitetura — só ligar o pipe.
-5. **Providers são abstraídos**: CPaaS (Twilio/Telnyx), STT (Deepgram), TTS
-   (Deepgram Aura / ElevenLabs) ficam atrás de interfaces; a troca de
-   provider não exige refactor do adapter.
+5. **Providers são abstraídos**: CPaaS (`TwilioProvider`), STT (Deepgram), TTS
+   (ElevenLabs / Deepgram Aura / Twilio Say) ficam atrás de interfaces; a troca
+   ou adição de provider não exige refactor do adapter.
 
 ---
 
@@ -112,21 +113,23 @@ class ContactOpenEvent(BaseModel):
 ChannelAdapter (ABC)  —  adapters/base.py
 ├── WebSocketAdapter  —  adapters/ws_base.py
 │   ├── WebchatAdapter    adapters/webchat.py   (refatorado)
-│   └── WebRTCAdapter     adapters/webrtc.py    (futuro)
+│   └── WebRTCAdapter     adapters/webrtc.py    (Arc 15 — implementado)
 ├── WebhookAdapter    —  adapters/webhook_base.py
 │   ├── WhatsAppAdapter   adapters/whatsapp.py
 │   ├── SMSAdapter        adapters/sms.py
 │   └── EmailAdapter      adapters/email.py
 └── VoiceAdapter      —  adapters/voice.py
         IVoiceProvider (Protocol)
-        ├── TwilioProvider
-        └── TelnyxProvider
+        └── TwilioProvider
         ISTTProvider (Protocol)
-        └── DeepgramProvider
+        └── DeepgramSTTProvider
         ITTSProvider (Protocol)
-        ├── DeepgramAuraProvider
-        └── ElevenLabsProvider
+        ├── ElevenLabsTTSProvider
+        ├── DeepgramAuraTTSProvider
+        └── TwilioSayTTSProvider
 ```
+
+> O canal WebRTC (browser-to-SFU, LiveKit) foi implementado no Arc 15 (6 fases A–F). Tem hierarquia própria de providers — ver [`docs/arcos/arc15-webrtc.md`](arc15-webrtc.md). Apenas `TwilioProvider` foi implementado como `IVoiceProvider`; a abstração `IVoiceProvider` permite adicionar outros CPaaS sem refatorar o adapter.
 
 ---
 
@@ -1348,14 +1351,20 @@ com o filtro `identifier` adicionado na sessão anterior.
 16. Correlação por `In-Reply-To` / reply+{session_id}@ routing
 17. `main.py` — endpoint `POST /webhooks/email`
 
-### Fase 5 — Voice — planejamento separado
+### Fase 5 — Voice — implementada
 
 18. `adapters/voice.py` — `VoiceAdapter` + `IVoiceProvider` / `ISTTProvider` / `ITTSProvider`
-19. Provider `TelnyxProvider` (ou `TwilioProvider`)
+19. Provider `TwilioProvider` (CPaaS — único provider implementado)
 20. Provider `DeepgramSTTProvider` (streaming)
-21. Provider `DeepgramAuraTTSProvider`
+21. Providers `ElevenLabsTTSProvider` / `DeepgramAuraTTSProvider` / `TwilioSayTTSProvider`
 22. `main.py` — endpoints `/webhooks/voice/inbound` + `/webhooks/voice/status`
     + WS `/voice/media/{call_sid}`
+
+### Fase 6 — WebRTC — implementada (Arc 15)
+
+23. `adapters/webrtc.py` — `WebRTCAdapter` (browser-to-SFU via LiveKit); negociação
+    de medium, STT/TTS server-side, egress recording, signaling WS. 6 fases A–F
+    concluídas — ver [`docs/arcos/arc15-webrtc.md`](arc15-webrtc.md).
 
 ---
 

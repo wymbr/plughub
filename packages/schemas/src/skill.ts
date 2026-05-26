@@ -359,6 +359,22 @@ export const MenuStepSchema = z.object({
 // ── CollectStep — async multi-channel data collection (Arc 4 extension) ──────
 
 /**
+ * Arc 16 Phase D — Channel capability flags.
+ * Used in CollectStep.requires[] to express what the channel must support,
+ * allowing Channel Gateway to select the best available outbound channel
+ * from journey.available_channels rather than hardcoding a specific channel.
+ */
+export const ChannelCapabilitySchema = z.enum([
+  "text",         // basic text I/O (all channels)
+  "audio",        // voice / audio recording (voice, webrtc)
+  "video",        // video stream (webrtc)
+  "file_upload",  // file / document upload (whatsapp, email, webchat)
+  "masked_input", // password-overlay masked field (webchat)
+  "rich_menu",    // buttons / list menus (whatsapp, webchat)
+])
+export type ChannelCapability = z.infer<typeof ChannelCapabilitySchema>
+
+/**
  * Target for a collect step — who to contact.
  */
 export const CollectTargetSchema = z.object({
@@ -395,7 +411,21 @@ export const CollectStepSchema = z.object({
   target:  CollectTargetSchema,
 
   // ── How to contact ──
-  channel: z.enum(["whatsapp", "sms", "email", "voice", "webchat"]),
+  /**
+   * Explicit channel override. When set, the Channel Gateway uses this channel directly.
+   * When omitted, the Gateway selects the best available channel from
+   * journey.available_channels that satisfies all capabilities in `requires`.
+   * At least one of `channel` or `requires` must be present.
+   */
+  channel:  z.enum(["whatsapp", "sms", "email", "voice", "webchat", "webrtc"]).optional(),
+
+  /**
+   * Arc 16 Phase D — Channel capability requirements.
+   * When `channel` is omitted, the Channel Gateway selects an outbound channel
+   * whose capability set is a superset of this array.
+   * Resolved via journey.available_channels + journey.canal_preferido context tags.
+   */
+  requires: z.array(ChannelCapabilitySchema).optional(),
 
   // ── What to collect ──
   interaction: z.enum(["text", "button", "form"]).default("text"),

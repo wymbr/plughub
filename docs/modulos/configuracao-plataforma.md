@@ -1,5 +1,7 @@
 # Módulo: Configuração → Plataforma
 
+> Última atualização: 2026-05-25 · Estado: Arc 16
+
 > Rota UI: `/config/platform` | Roles: admin
 
 ## O que é
@@ -30,8 +32,7 @@ O Config API armazena configurações em PostgreSQL com cache Redis (TTL 60 s). 
 | `quota` | max_concurrent_sessions, llm_tokens_daily, messages_daily | orchestrator-bridge, Core |
 | `pricing` | unit_prices por recurso, reserve_markup_pct, billing_cycle_day, currency | pricing-api |
 | `ai_gateway` | Rotação multi-conta, throttle TTL, evaluation_model, fallback OpenAI | ai-gateway |
-| `routing` | performance_score_weight | routing-engine |
-| `agent_activity` | pause_reasons (motivos de pausa de agentes humanos) | platform-ui, orchestrator-bridge |
+| `agent_activity` | pause_reasons (motivos de pausa de agentes humanos) | platform-ui, mcp-server-plughub |
 | `evaluation` | workflow_context_ttl_s, default_review_skill_id, prazos de revisão/contestação | evaluation-api |
 | `dashboards` | default_template_id, allow_user_customization, max_cards_per_dashboard | platform-ui |
 

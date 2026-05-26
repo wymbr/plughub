@@ -1,6 +1,6 @@
 # Arc 11 Fase 2 — Console: Redesign de Orquestração
 
-> **Status**: Em especificação — validado. Nenhuma fase implementada.
+> Última atualização: 2026-05-25 · Estado: Arc 16 · Status: Implementado — Fases A, B, C, D e E concluídas (2026-05-16). Ver CHANGELOG.md.
 
 ---
 
@@ -255,4 +255,4 @@ A seção C da aba Agentes (Pós-Atendimento) depende do Arc 14 para existir. Se
 
 ---
 
-*Criado em 2026-05-16. Pronto para iniciar Fase A.*
+*Criado em 2026-05-16. Fases A–E concluídas (2026-05-16) — ver CHANGELOG.md. A Fase F (seção C da aba Agentes — Pós-Atendimento) depende do Arc 14, já implementado.*

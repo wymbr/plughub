@@ -8,6 +8,8 @@
  */
 
 import React from "react";
+import { useTranslation } from "react-i18next";
+import { Bot } from "lucide-react";
 import { CopilotSuggestions, SupervisorCapabilities } from "../../types";
 
 interface CapacidadesTabProps {
@@ -18,25 +20,25 @@ interface CapacidadesTabProps {
 }
 
 const RELEVANCE_BADGE: Record<string, string> = {
-  high:   "bg-green-100 text-green-700",
-  medium: "bg-yellow-100 text-yellow-700",
-  low:    "bg-gray-100 text-gray-500",
+  high:   "bg-green-light text-green-text",
+  medium: "bg-warning-light text-warning-text",
+  low:    "bg-surface-alt text-muted",
 };
 
 const CIRCUIT_BADGE: Record<string, string> = {
-  closed:    "bg-green-500",
-  half_open: "bg-yellow-500",
-  open:      "bg-red-500",
+  closed:    "bg-green",
+  half_open: "bg-warning",
+  open:      "bg-red",
 };
 
 const RISK_FLAG_BADGE: Record<string, string> = {
-  sentimento_negativo:      "bg-red-100 text-red-700",
-  intencao_cancelamento:    "bg-red-100 text-red-700",
-  sla_em_risco:             "bg-orange-100 text-orange-700",
-  frustracao_alta:          "bg-orange-100 text-orange-700",
-  escalacao_necessaria:     "bg-orange-100 text-orange-700",
-  protocolo_nao_seguido:    "bg-yellow-100 text-yellow-700",
-  dados_sensiveis:          "bg-purple-100 text-purple-700",
+  sentimento_negativo:      "bg-red-light text-red-text",
+  intencao_cancelamento:    "bg-red-light text-red-text",
+  sla_em_risco:             "bg-contested-light text-contested-text",
+  frustracao_alta:          "bg-contested-light text-contested-text",
+  escalacao_necessaria:     "bg-contested-light text-contested-text",
+  protocolo_nao_seguido:    "bg-warning-light text-warning-text",
+  dados_sensiveis:          "bg-ai-light text-ai-text",
 };
 
 function flagLabel(flag: string): string {
@@ -63,6 +65,7 @@ function formatTime(iso: string | null): string {
 // ── Co-pilot suggestions section ──────────────────────────────────────────────
 
 const CopilotSection: React.FC<{ copilot: CopilotSuggestions }> = ({ copilot }) => {
+  const { t } = useTranslation('agentAssist');
   const hasContent =
     copilot.sugestao_resposta ||
     copilot.flags_risco.length > 0 ||
@@ -71,15 +74,15 @@ const CopilotSection: React.FC<{ copilot: CopilotSuggestions }> = ({ copilot }) 
   if (!hasContent) return null;
 
   return (
-    <section className="border border-teal-200 rounded-lg bg-teal-50 overflow-hidden">
+    <section className="border border-revised/30 rounded-lg bg-revised-light overflow-hidden">
       {/* Header */}
-      <div className="flex items-center justify-between px-3 py-2 bg-teal-100 border-b border-teal-200">
+      <div className="flex items-center justify-between px-3 py-2 bg-revised-light border-b border-revised/30">
         <div className="flex items-center gap-1.5">
-          <span className="text-sm">🤖</span>
-          <span className="text-xs font-semibold text-teal-800">Co-pilot</span>
+          <Bot className="w-4 h-4 text-revised-text" aria-hidden="true" />
+          <span className="text-xs font-semibold text-revised-text">Co-pilot</span>
         </div>
         {copilot.last_analysis && (
-          <span className="text-[10px] text-teal-600">
+          <span className="text-2xs text-revised">
             {formatTime(copilot.last_analysis)}
           </span>
         )}
@@ -89,15 +92,15 @@ const CopilotSection: React.FC<{ copilot: CopilotSuggestions }> = ({ copilot }) 
         {/* Risk flags */}
         {copilot.flags_risco.length > 0 && (
           <div>
-            <p className="text-[10px] font-semibold text-teal-700 uppercase tracking-wide mb-1">
-              Flags de risco
+            <p className="text-2xs font-semibold text-revised-text uppercase tracking-wide mb-1">
+              {t('capacidades.riskFlags')}
             </p>
             <div className="flex flex-wrap gap-1">
               {copilot.flags_risco.map((flag) => (
                 <span
                   key={flag}
-                  className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium ${
-                    RISK_FLAG_BADGE[flag] ?? "bg-gray-100 text-gray-600"
+                  className={`text-2xs px-1.5 py-0.5 rounded-full font-medium ${
+                    RISK_FLAG_BADGE[flag] ?? "bg-surface-alt text-muted"
                   }`}
                 >
                   {flagLabel(flag)}
@@ -110,10 +113,10 @@ const CopilotSection: React.FC<{ copilot: CopilotSuggestions }> = ({ copilot }) 
         {/* Suggested response */}
         {copilot.sugestao_resposta && (
           <div>
-            <p className="text-[10px] font-semibold text-teal-700 uppercase tracking-wide mb-1">
-              Sugestão de resposta
+            <p className="text-2xs font-semibold text-revised-text uppercase tracking-wide mb-1">
+              {t('capacidades.responseSuggestion')}
             </p>
-            <blockquote className="text-xs text-gray-700 leading-relaxed bg-white border border-teal-200 rounded p-2 italic">
+            <blockquote className="text-xs text-dark leading-relaxed bg-white border border-revised/30 rounded p-2 italic">
               "{copilot.sugestao_resposta}"
             </blockquote>
           </div>
@@ -122,13 +125,13 @@ const CopilotSection: React.FC<{ copilot: CopilotSuggestions }> = ({ copilot }) 
         {/* Recommended actions */}
         {copilot.acoes_recomendadas.length > 0 && (
           <div>
-            <p className="text-[10px] font-semibold text-teal-700 uppercase tracking-wide mb-1">
-              Ações recomendadas
+            <p className="text-2xs font-semibold text-revised-text uppercase tracking-wide mb-1">
+              {t('capacidades.recommendedActions')}
             </p>
             <ul className="flex flex-col gap-1">
               {copilot.acoes_recomendadas.map((acao, i) => (
-                <li key={i} className="flex items-start gap-1.5 text-xs text-gray-700">
-                  <span className="text-teal-500 mt-0.5 flex-shrink-0">▸</span>
+                <li key={i} className="flex items-start gap-1.5 text-xs text-dark">
+                  <span className="text-revised mt-0.5 flex-shrink-0">▸</span>
                   <span>{flagLabel(acao)}</span>
                 </li>
               ))}
@@ -148,6 +151,7 @@ export const CapacidadesTab: React.FC<CapacidadesTabProps> = ({
   onInviteAgent,
   onEscalate,
 }) => {
+  const { t } = useTranslation('agentAssist');
   const hasCopilot =
     copilotSuggestions &&
     (copilotSuggestions.sugestao_resposta ||
@@ -156,8 +160,8 @@ export const CapacidadesTab: React.FC<CapacidadesTabProps> = ({
 
   if (!capabilities && !hasCopilot) {
     return (
-      <div className="flex-1 flex items-center justify-center text-sm text-gray-400">
-        Aguardando dados…
+      <div className="flex-1 flex items-center justify-center text-sm text-muted-light">
+        {t('capacidades.waiting')}
       </div>
     );
   }
@@ -174,58 +178,58 @@ export const CapacidadesTab: React.FC<CapacidadesTabProps> = ({
 
       {/* Suggested agents */}
       <section>
-        <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">
-          Agentes sugeridos
+        <h3 className="text-xs font-semibold text-muted uppercase tracking-wide mb-2">
+          {t('capacidades.suggestedAgents')}
         </h3>
         {suggested_agents.length === 0 ? (
-          <p className="text-xs text-gray-400">Nenhum agente sugerido.</p>
+          <p className="text-xs text-muted-light">{t('capacidades.noSuggestedAgents')}</p>
         ) : (
           <div className="flex flex-col gap-2">
             {suggested_agents.map((agent) => (
               <div
                 key={agent.agent_type_id}
-                className="border border-gray-200 rounded-lg p-2.5 bg-white"
+                className="border border-border rounded-lg p-2.5 bg-white"
               >
                 <div className="flex items-start justify-between gap-2">
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-1.5 flex-wrap">
-                      <span className="text-sm font-medium text-gray-800 truncate">
+                      <span className="text-sm font-medium text-dark truncate">
                         {agent.agent_type_id}
                       </span>
                       <span
-                        className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium ${
-                          RELEVANCE_BADGE[agent.relevance] ?? "bg-gray-100 text-gray-500"
+                        className={`text-2xs px-1.5 py-0.5 rounded-full font-medium ${
+                          RELEVANCE_BADGE[agent.relevance] ?? "bg-surface-alt text-muted"
                         }`}
                       >
                         {agent.relevance}
                       </span>
-                      <span className="flex items-center gap-0.5 text-[10px] text-gray-500">
+                      <span className="flex items-center gap-0.5 text-2xs text-muted">
                         <span
                           className={`w-1.5 h-1.5 rounded-full inline-block ${
-                            CIRCUIT_BADGE[agent.circuit_breaker] ?? "bg-gray-400"
+                            CIRCUIT_BADGE[agent.circuit_breaker] ?? "bg-muted-light"
                           }`}
                         />
                         {agent.circuit_breaker}
                       </span>
                     </div>
-                    <p className="text-[11px] text-gray-500 mt-0.5 leading-tight">
+                    <p className="text-xs text-muted mt-0.5 leading-tight">
                       {agent.reason}
                     </p>
-                    <div className="flex gap-2 mt-1 text-[10px] text-gray-400">
+                    <div className="flex gap-2 mt-1 text-2xs text-muted-light">
                       <span>{agent.interaction_model}</span>
                       <span>·</span>
-                      <span>{agent.available_instances} disponível(is)</span>
+                      <span>{agent.available_instances} {t('capacidades.available')}</span>
                     </div>
                   </div>
 
                   {onInviteAgent && agent.circuit_breaker !== "open" && (
                     <button
                       onClick={() => onInviteAgent(agent.agent_type_id)}
-                      className="flex-shrink-0 text-xs px-2 py-1 rounded-md bg-indigo-50 text-indigo-700 hover:bg-indigo-100 transition-colors"
+                      className="flex-shrink-0 text-xs px-2 py-1 rounded-md bg-ai-light text-ai-text hover:bg-ai/10 transition-colors"
                     >
                       {agent.interaction_model === "conference"
-                        ? "Conferência"
-                        : "Delegar"}
+                        ? t('capacidades.conference')
+                        : t('capacidades.delegate')}
                     </button>
                   )}
                 </div>
@@ -237,11 +241,11 @@ export const CapacidadesTab: React.FC<CapacidadesTabProps> = ({
 
       {/* Escalations */}
       <section>
-        <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">
-          Escalações
+        <h3 className="text-xs font-semibold text-muted uppercase tracking-wide mb-2">
+          {t('capacidades.escalations')}
         </h3>
         {escalations.length === 0 ? (
-          <p className="text-xs text-gray-400">Nenhuma escalação disponível.</p>
+          <p className="text-xs text-muted-light">{t('capacidades.noEscalations')}</p>
         ) : (
           <div className="flex flex-col gap-2">
             {escalations.map((esc) => (
@@ -249,36 +253,36 @@ export const CapacidadesTab: React.FC<CapacidadesTabProps> = ({
                 key={esc.pool_id}
                 className={`border rounded-lg p-2.5 ${
                   esc.recommended
-                    ? "border-indigo-300 bg-indigo-50"
-                    : "border-gray-200 bg-white"
+                    ? "border-primary/30 bg-primary-light"
+                    : "border-border bg-white"
                 }`}
               >
                 <div className="flex items-start justify-between gap-2">
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-1.5">
-                      <span className="text-sm font-medium text-gray-800">
+                      <span className="text-sm font-medium text-dark">
                         {esc.pool_id}
                       </span>
                       {esc.recommended && (
-                        <span className="text-[10px] px-1.5 py-0.5 bg-indigo-600 text-white rounded-full font-medium">
-                          Recomendado
+                        <span className="text-2xs px-1.5 py-0.5 bg-primary text-white rounded-full font-medium">
+                          {t('capacidades.recommended')}
                         </span>
                       )}
                     </div>
-                    <p className="text-[11px] text-gray-500 mt-0.5 leading-tight">
+                    <p className="text-xs text-muted mt-0.5 leading-tight">
                       {esc.reason}
                     </p>
-                    <p className="text-[10px] text-gray-400 mt-0.5">
-                      Espera estimada: {formatWait(esc.estimated_wait_s)}
+                    <p className="text-2xs text-muted-light mt-0.5">
+                      {t('capacidades.estimatedWait', { wait: formatWait(esc.estimated_wait_s) })}
                     </p>
                   </div>
 
                   {onEscalate && (
                     <button
                       onClick={() => onEscalate(esc.pool_id)}
-                      className="flex-shrink-0 text-xs px-2 py-1 rounded-md bg-orange-50 text-orange-700 hover:bg-orange-100 transition-colors"
+                      className="flex-shrink-0 text-xs px-2 py-1 rounded-md bg-contested-light text-contested-text hover:bg-contested/10 transition-colors"
                     >
-                      Escalar
+                      {t('capacidades.escalate')}
                     </button>
                   )}
                 </div>

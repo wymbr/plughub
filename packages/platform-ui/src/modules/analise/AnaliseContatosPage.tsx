@@ -36,7 +36,7 @@ const PERIOD_LABELS: Record<Period, string> = {
   year:  'Ano',
 }
 
-const inp = 'text-sm border border-gray-300 rounded-lg px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-primary/30 bg-white'
+const inp = 'text-sm border border-border-strong rounded-lg px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-primary/30 bg-white'
 
 // ── AnaliseContatosPage ───────────────────────────────────────────────────────
 
@@ -59,20 +59,20 @@ export default function AnaliseContatosPage() {
   }
 
   if (!tenantId) return (
-    <div className="flex items-center justify-center h-full text-gray-400 text-sm">
+    <div className="flex items-center justify-center h-full text-muted-light text-sm">
       Nenhum tenant selecionado.
     </div>
   )
 
   return (
-    <div className="flex flex-col h-full overflow-hidden bg-gray-50">
+    <div className="flex flex-col h-full overflow-hidden bg-surface-muted">
       {/* Header + filters */}
-      <div className="bg-white border-b border-gray-200 px-4 py-2.5 flex-shrink-0">
+      <div className="bg-white border-b border-border px-4 py-2.5 flex-shrink-0">
         <div className="flex items-center gap-3 flex-wrap">
-          <span className="font-bold text-gray-800 text-base">Contatos</span>
+          <span className="font-bold text-dark text-base">Contatos</span>
 
           {/* Period selector */}
-          <div className="flex items-center gap-0.5 bg-gray-100 rounded-lg p-0.5 ml-2">
+          <div className="flex items-center gap-0.5 bg-surface-alt rounded-lg p-0.5 ml-2">
             {(Object.keys(PERIOD_LABELS) as Period[]).map(p => (
               <button key={p} onClick={() => { setPeriod(p); setCustomFrom(''); setCustomTo('') }}
                 className="px-3 py-1 rounded-md text-xs font-medium transition-all"
@@ -87,7 +87,7 @@ export default function AnaliseContatosPage() {
           </div>
 
           {/* Custom date range */}
-          <div className="flex items-center gap-1.5 text-xs text-gray-500">
+          <div className="flex items-center gap-1.5 text-xs text-muted">
             <span>De</span>
             <input type="date" value={customFrom || fromDt}
               onChange={e => setCustomFrom(e.target.value)}

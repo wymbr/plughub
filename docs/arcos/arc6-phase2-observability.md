@@ -1,6 +1,13 @@
 # Arc 6 Fase 2 — Observabilidade de Mudanças e Comparação por Deploy
 
+> Última atualização: 2026-05-25 · Estado: Arc 16
+> **Status: implementado.** As quatro fases (A–D) descritas neste documento estão concluídas: tabela `analytics.deploy_events`, os três endpoints (`deploy-timeline`, `quality-comparison`, `quality-timeseries`) e os componentes de UI (gráfico Índice × Tempo, card de comparação, painel de grupos). O texto abaixo descreve o estado atual da plataforma — o que está escrito em tempo futuro ("serão criados") refere-se ao estado já entregue.
+
 Extensão da plataforma de avaliação para suportar **comparação estruturada de qualidade ao longo do tempo**, usando eventos de deploy como âncoras temporais objetivas. O objetivo é transformar o módulo de avaliação de "relatório de conformidade" em "ferramenta de melhoria contínua".
+
+## Integração com Arc 12 — Agent Business Events
+
+Os endpoints `quality-comparison` e `quality-timeseries` aceitam métricas de negócio emitidas por agentes via `agent_event` (Arc 12): o parâmetro `metrics[]` aceita o formato `agent_event:{category}` (ex. `metrics[]=agent_event:retencao_humano.skill_retencao_v1.upsell_aceito`), permitindo comparar KPIs de negócio entre deploy epochs e slices da mesma forma que `evaluation_score` ou `resolution_rate`. Ver [`arc12-agent-business-events.md`](arc12-agent-business-events.md).
 
 ---
 
@@ -62,9 +69,9 @@ Sequência de deploys para um skill (ou todos os skills de um pool), com timesta
 | `analytics.segments` | `agent_type`, `outcome`, `duration_ms`, `started_at` | ClickHouse |
 | `mv_agent_performance_daily` | `resolution_rate`, `escalation_rate`, `aht_ms` por dia | ClickHouse |
 
-### Nova tabela: `deploy_events` (ClickHouse)
+### Tabela `deploy_events` (ClickHouse)
 
-Para cruzar deploys com métricas em ClickHouse sem depender de JOIN cross-database:
+Cruza deploys com métricas em ClickHouse sem depender de JOIN cross-database:
 
 ```sql
 CREATE TABLE IF NOT EXISTS analytics.deploy_events (
@@ -84,7 +91,9 @@ Alimentada por: `agent-registry` publicando `registry.changed` Kafka com `event_
 
 ---
 
-## Endpoints novos
+## Endpoints
+
+Os três endpoints abaixo existem no `analytics-api`.
 
 ### 1. Deploy Timeline
 
@@ -256,53 +265,53 @@ O frontend usa `deploy_markers` para desenhar linhas verticais sobre a série te
 
 ---
 
-## Plano de Implementação
+## Fases de Implementação — todas concluídas
 
-### Fase A — Infraestrutura de Deploy Events
+### Fase A — Infraestrutura de Deploy Events ✅
 
 **Backend:**
 1. `analytics-api`: consumer `registry.changed` com `event_type: "skill_deployed"` → `INSERT INTO analytics.deploy_events`.
-2. `agent-registry`: publicar `registry.changed` com `event_type: "skill_deployed"` quando `POST /v1/skills/:id/deploy` é chamado (já existe o Kafka publish, ajustar payload).
+2. `agent-registry`: publica `registry.changed` com `event_type: "skill_deployed"` quando `POST /v1/skills/:id/deploy` é chamado.
 3. `GET /reports/deploy-timeline` no analytics-api.
 
-**Sem mudança de UI.** Fase A é infraestrutura pura.
+Fase A foi infraestrutura pura, sem mudança de UI.
 
 ---
 
-### Fase B — Quality Comparison Endpoint + Card de Comparação (C2)
+### Fase B — Quality Comparison Endpoint + Card de Comparação (C2) ✅
 
 **Backend:**
 1. `GET /reports/quality-comparison` (dual-slice) no analytics-api — ClickHouse queries com parâmetros de slice.
-2. Lógica de `deploy_epoch`: buscar próximo deploy para calcular intervalo.
+2. Lógica de `deploy_epoch`: busca o próximo deploy para calcular o intervalo.
 3. `statistical_significance` automático (N >= 30 por default, configurável).
 
 **Frontend:**
-1. `ComparisonCard` component com dropdowns de slice, tabela de deltas, badges de significância.
-2. Integração na página de Avaliações (tab ou sidebar).
+1. `ComparisonCard` — dropdowns de slice, tabela de deltas, badges de significância.
+2. Integrado na página de Avaliações (tab/sidebar).
 
 ---
 
-### Fase C — Index × Time com Deploy Markers (C1)
+### Fase C — Index × Time com Deploy Markers (C1) ✅
 
 **Backend:**
 1. `GET /reports/quality-timeseries` com `deploy_markers[]`.
-2. Granularidade `deploy_epoch` — agregar por janela de versão.
+2. Granularidade `deploy_epoch` — agrega por janela de versão.
 
 **Frontend:**
-1. `QualityTimeseriesChart` component (Recharts + ReferenceLine).
-2. Integrar em Analytics > Sessions e Analytics > Quality.
+1. `QualityTimeseriesChart` (Recharts + ReferenceLine).
+2. Integrado em Analytics > Sessions e Analytics > Quality.
 3. Toggle de granularidade + filtro de agente.
 
 ---
 
-### Fase D — Painel de Grupos de Comparação (C3)
+### Fase D — Painel de Grupos de Comparação (C3) ✅
 
 **Frontend:**
-1. Nova rota `/analytics/comparison` (ou tab em Analytics).
-2. `ComparisonGroupBuilder` — adicionar/remover slices com persistência em localStorage.
+1. Rota dedicada de comparação em Analytics.
+2. `ComparisonGroupBuilder` — adiciona/remove slices com persistência em localStorage.
 3. Gráfico de barras agrupadas por métrica.
 
-**Backend:** reutiliza endpoints de Fase B e C — sem novo backend.
+Fase D reutiliza os endpoints das Fases B e C — sem novo backend.
 
 ---
 

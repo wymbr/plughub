@@ -289,12 +289,38 @@ class Router:
                 allocated=False, routed_at=now,
             )
 
+        # Determine the session_id to pass to mark_busy:
+        # - Normal events: always pass session_id (enables same-pool guard + cross-pool DECR).
+        # - Conference events (hooks, specialists): normally pass None to avoid cross-pool
+        #   DECR for independent parallel participants.
+        # - EXCEPTION: if the conference event targets a pool that already owns the session
+        #   (e.g. a conference specialist escalating back to the primary pool), pass the
+        #   session_id so the same-pool re-entry guard fires and prevents a double INCR.
+        #   Without this, active_count[target_pool] would go 1→2 and never come back to 0.
+        mark_busy_session_id: str | None
+        if not event.conference_id:
+            mark_busy_session_id = event.session_id
+        else:
+            current_serving = await self._instances.get_session_serving_pool(
+                event.tenant_id, event.session_id
+            )
+            if current_serving and current_serving == best_pool.pool_id:
+                # Conference specialist is escalating back to the pool that already
+                # owns the session.  Pass session_id → same-pool guard returns early.
+                mark_busy_session_id = event.session_id
+                logger.info(
+                    "router.mark_busy: conference event targets already-serving pool=%s "
+                    "session=%s — passing session_id to trigger same-pool guard",
+                    best_pool.pool_id, event.session_id,
+                )
+            else:
+                # Fresh conference invite (hook, new specialist).  Pass None to avoid
+                # inheriting the cross-pool DECR chain from the primary contact.
+                mark_busy_session_id = None
+
         await self._instances.mark_busy(
             event.tenant_id, best_pool.pool_id, best_instance.instance_id,
-            # Conference invites (hooks, specialists) must NOT inherit the previous
-            # pool chain — each invite is an independent parallel participant.
-            # Passing session_id=None disables the cross-pool GETSET DECR.
-            session_id=event.session_id if not event.conference_id else None,
+            session_id=mark_busy_session_id,
         )
         if best_instance.execution_model == "stateful":
             await self._instances.set_session_affinity(
@@ -329,6 +355,7 @@ class Router:
             priority_score=prio_score if prio_score != float("inf") else 9999.0,
             routing_mode=mode,   # type: ignore[arg-type]
             allocated_site=self._local_site,
+            sla_target_ms=best_pool.sla_target_ms,
             routed_at=now,
             conference_id=event.conference_id,       # None for regular contacts
             channel_identity=event.channel_identity, # None for regular contacts
@@ -400,9 +427,19 @@ class Router:
                 rscore = score_resource(event, inst, pool)
                 if rscore < 0:
                     continue
+                # Same guard as the main route() path: for conference events,
+                # only pass None if the target pool is NOT already serving the session.
+                dequeue_sid: str | None
+                if not event.conference_id:
+                    dequeue_sid = event.session_id
+                else:
+                    cur_sp = await self._instances.get_session_serving_pool(
+                        event.tenant_id, event.session_id
+                    )
+                    dequeue_sid = event.session_id if (cur_sp and cur_sp == pool.pool_id) else None
                 await self._instances.mark_busy(
                     event.tenant_id, pool.pool_id, inst.instance_id,
-                    session_id=event.session_id if not event.conference_id else None,
+                    session_id=dequeue_sid,
                 )
                 return RoutingResult(
                     session_id=event.session_id, tenant_id=event.tenant_id,
@@ -410,6 +447,7 @@ class Router:
                     agent_type_id=inst.agent_type_id, pool_id=pool.pool_id,
                     resource_score=rscore, routing_mode="autonomous",
                     allocated_site=self._local_site, routed_at=now,
+                    sla_target_ms=pool.sla_target_ms,
                     conference_id=event.conference_id,       # propagate conference context
                     channel_identity=event.channel_identity, # propagate channel identity
                 )

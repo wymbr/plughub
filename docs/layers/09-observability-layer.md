@@ -1,8 +1,9 @@
 # Layer 9 — Observability Layer
 
-> Spec de referência: v24.0 seção 13 (Analytics e Observabilidade)
+> Última atualização: 2026-05-25 · Estado: Arc 16
 > Responsabilidade: visibilidade completa da plataforma — métricas técnicas, rastreabilidade de decisões IA, qualidade contínua, dashboards operacionais
-> Implementado por: ferramentas externas (não são módulos do monorepo)
+> Implementado por: ferramentas externas + dashboards nativos do `platform-ui`
+> Spec de referência: v24.0 seção 13 (Analytics e Observabilidade)
 
 ---
 
@@ -44,7 +45,7 @@ A observabilidade é organizada em três domínios complementares:
 
 **Adaptadores disponíveis no SDK:** OpenTelemetry, LangSmith, Langfuse, Datadog. Interface `TelemetryAdapter` para sistemas proprietários.
 
-**Agentes de plataforma** (Orchestrator, Notification Agent) são auditados como sequências de raciocínio — múltiplas chamadas LLM, múltiplas tools, cadeia de decisão rastreável no LangSmith/Langfuse.
+**Agentes de plataforma** (orquestradores, agentes de avaliação) são auditados como sequências de raciocínio — múltiplas chamadas LLM, múltiplas tools, cadeia de decisão rastreável no LangSmith/Langfuse.
 
 ### Qualidade contínua e analytics
 
@@ -54,6 +55,8 @@ A observabilidade é organizada em três domínios complementares:
 | **Apache Superset** | Dashboards operacionais e exploração ad-hoc conectados diretamente ao ClickHouse |
 | **dbt** | Transformações analíticas — marts de performance, jornada do cliente, KPIs de resolução, Knowledge Base Analytics |
 | **Kafka Connect** | Exportação incremental para Snowflake/BigQuery/S3 Parquet (tenants com infra própria) |
+
+Além das ferramentas externas, o `platform-ui` tem dashboards nativos: o módulo Dashboards (DisplayTool registry, cards configuráveis sobre os endpoints `/reports/*` da analytics-api) e o Calibration Dashboard (Arc 13 — calibração de avaliadores por skill version).
 
 ---
 
@@ -76,10 +79,10 @@ A observabilidade é organizada em três domínios complementares:
 ## Interfaces
 
 **Produção de dados pela plataforma:**
-- `conversations.events` (Kafka) → Kafka consumer → ClickHouse
+- Eventos Kafka (`conversations.session_opened/closed`, `agent.done`, `evaluation.events`, `journey.events`, etc.) → consumers da analytics-api → ClickHouse
 - AI Gateway → LangSmith/Langfuse (via SDK TelemetryAdapter)
 - Todos os componentes → Prometheus (endpoints `/metrics`)
-- PlugHubAdapter / proxy sidecar → audit log MCP → Kafka → ClickHouse
+- McpInterceptor / proxy sidecar → audit log MCP (`mcp.audit`) → Kafka → ClickHouse
 - STT Router → métricas WER por tenant → Prometheus
 
 **Consumo externo:**
@@ -98,7 +101,7 @@ A observabilidade é organizada em três domínios complementares:
 
 **Knowledge Base Analytics** (via dbt): auditoria completa de consultas a `mcp-server-knowledge` — cobertura de intent, eficácia de artigo, artigos órfãos, drift de relevância, cadeia de consulta, correlação com sentiment. Output é uma fila de trabalho para curadoria, não apenas relatório.
 
-**Dados de qualidade:** os mesmos dados do audit log MCP e do ClickHouse alimentam o Evaluation Agent (Horizonte 2) — sem nova infraestrutura necessária.
+**Dados de qualidade:** os mesmos dados do audit log MCP e do ClickHouse alimentam a plataforma de avaliação (Arc 6 + Arc 13 — `evaluation-api`, avaliadores de IA, contestação e calibração) — sem nova infraestrutura necessária.
 
 ---
 
@@ -108,4 +111,4 @@ A observabilidade é organizada em três domínios complementares:
 - Seção 13.4 — Modelo Analítico em Três Camadas
 - Seção 2.2 — Frameworks (LangSmith, Langfuse, Prometheus, OpenTelemetry)
 - Seção 5.5 — SLAs por Componente
-- Seção 1905 — Propagação de trace ID via SDK
+- Seção 13.x — Propagação de trace ID via SDK

@@ -1,5 +1,7 @@
 # Módulo: sdk (@plughub/sdk)
 
+> Última atualização: 2026-05-25 · Estado: Arc 16
+
 > Pacote: `sdk` (biblioteca + CLI)
 > Runtime: TypeScript / Node 20+ (TypeScript) | Python 3.11+ (pacote paralelo)
 > Spec de referência: seções 4.6a–4.6k

@@ -44,5 +44,80 @@
     "pie":   "Pie chart",
     "table": "Table",
     "tile":  "KPI tile"
+  },
+  "modal": {
+    "title":   "Add card",
+    "cancel":  "Cancel",
+    "back":    "← Back",
+    "next":    "Next →",
+    "addCard": "Add card",
+    "steps": {
+      "1": "Choose metric",
+      "2": "Visualization",
+      "3": "Configure"
+    },
+    "metric": {
+      "heading":  "What do you want to see?",
+      "subtitle": "Choose the metric this card will display."
+    },
+    "visualization": {
+      "heading":  "How do you want to see it?",
+      "subtitle": "Available visualizations for"
+    },
+    "configure": {
+      "heading":          "Configure card",
+      "subtitle":         "Set the title and any fixed filters for this card.",
+      "cardTitle":        "Card title",
+      "fixedFilters":     "Fixed filters",
+      "fixedFiltersHint": "— leave blank to use the dashboard's global filters",
+      "selectPlaceholder":"— select —",
+      "loadingOptions":   "Loading options…",
+      "periodNoteLabel":  "Period and tenant",
+      "periodNoteBody":   "are always controlled by the dashboard's global filters — no configuration needed here."
+    }
+  },
+  "filters": {
+    "heading":           "Filters",
+    "add":               "+ Add",
+    "none":              "No filters configured",
+    "remove":            "Remove filter",
+    "clearFilters":      "Reset filters",
+    "clear":             "↺ Reset",
+    "all":               "All",
+    "optionsLabel":      "Options (comma-separated)",
+    "optionsPlaceholder":"E.g.: pool_a, pool_b",
+    "labels": {
+      "date_from": "From",
+      "date_to":   "To",
+      "pool_id":   "Pool"
+    },
+    "presets": {
+      "date_range":    { "label": "Period (From / To)" },
+      "pool_selector": { "label": "Pool" }
+    }
+  },
+  "catalog": {
+    "session-volume":          { "label": "Session Volume",            "description": "Number of sessions per time period" },
+    "handle-time":             { "label": "Average Handle Time",       "description": "Average handle time per period" },
+    "evaluation-score":        { "label": "Average Evaluation Score",  "description": "Average evaluation score per period" },
+    "sessions-by-pool":        { "label": "Sessions by Pool",          "description": "Session volume grouped by pool" },
+    "outcome-distribution":    { "label": "Outcome Distribution",      "description": "Proportion of resolved, escalated, and abandoned" },
+    "pool-status":             { "label": "Pool Status",               "description": "Availability, queue length, and SLA for operational pools" },
+    "agent-performance":       { "label": "Agent Performance",         "description": "Resolution and escalation rate by agent type" },
+    "kpi-sessions":            { "label": "KPI: Total Sessions",       "description": "Total sessions in the period with trend" },
+    "kpi-resolution":          { "label": "KPI: Resolution Rate",      "description": "Resolution rate with variation vs previous period" },
+    "kpi-score":               { "label": "KPI: Average Score",        "description": "Average evaluation score with percentage variation" },
+    "journey-active-count":    { "label": "KPI: Active Journeys",      "description": "Total active journeys with trend vs previous period" },
+    "journey-resolution-rate": { "label": "Journey Resolution Rate",   "description": "Percentage of completed journeys by skill (finalized journeys only)" },
+    "journey-funnel":          { "label": "Journey Funnel",            "description": "Distribution of journeys by status (active, suspended, completed, failed)" },
+    "journey-median-duration": { "label": "Journey Median Duration",   "description": "Median duration (p50) in minutes by skill for finalized journeys" },
+    "agent-event-timeseries":  { "label": "Business Events (Series)",  "description": "Daily volume and average value of business events published by AI/human agents" },
+    "agent-event-summary":     { "label": "Business Events (Summary)", "description": "Total events by dimension (category, skill, pool, or agent type)" },
+    "params": {
+      "pool_id":  { "label": "Pool (fixed)",    "placeholder": "E.g.: retencao_humano" },
+      "skill_id": { "label": "Skill (fixed)",   "placeholder": "E.g.: skill_portabilidade_v1" },
+      "category": { "label": "Event category",  "placeholder": "E.g.: retencao_humano.skill_portabilidade_v1.nps" },
+      "group_by": { "label": "Group by",        "placeholder": "category | skill_id | pool_id | agent_type_id" }
+    }
   }
 }

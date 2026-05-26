@@ -35,6 +35,25 @@ logger = logging.getLogger("plughub.ai_gateway.inference")
 _RISK_FLAGS = {"high_frustration", "escalation_hint", "urgency"}
 
 
+def _prepend_journey_context(
+    messages: list[dict],
+    journey_block: str,
+) -> list[dict]:
+    """
+    Prepends journey context to the system message in a messages list.
+    If there is no system message, inserts one at the beginning.
+    Returns a new list (does not mutate the original).
+    """
+    result = list(messages)
+    for i, msg in enumerate(result):
+        if msg.get("role") == "system":
+            result[i] = {**msg, "content": msg["content"] + "\n\n" + journey_block}
+            return result
+    # No system message found — insert one
+    result.insert(0, {"role": "system", "content": journey_block})
+    return result
+
+
 class InferenceEngine:
     """
     AI Gateway inference engine.
@@ -79,6 +98,18 @@ class InferenceEngine:
 
         # 2. Cache check
         messages_list = [m.model_dump() for m in req.messages]
+
+        # Arc 16: inject journey context into the system message when journey_id is set.
+        # Reads {tenant_id}:ctx:journey:{journey_id} from Redis and prepends a
+        # "Journey context" block to the system role message so the agent is aware
+        # of cross-session state collected by previous workflow steps.
+        if req.journey_id:
+            journey_block = await self._build_journey_context_block(
+                req.tenant_id, req.journey_id
+            )
+            if journey_block:
+                messages_list = _prepend_journey_context(messages_list, journey_block)
+
         cached_data = await self._cache.get(req.tenant_id, messages_list)
         if cached_data is not None:
             return InferenceResponse(**{**cached_data, "cached": True})
@@ -334,6 +365,51 @@ class InferenceEngine:
                     tokens=response.input_tokens + response.output_tokens,
                 )
             return response, fallback_provider_name
+
+    # ── Arc 16: journey context injection ────────────────────────────────────
+
+    async def _build_journey_context_block(
+        self,
+        tenant_id:  str,
+        journey_id: str,
+    ) -> str:
+        """
+        Reads all tags from the journey Redis hash and formats them as a
+        human-readable context block for injection into the system message.
+
+        Redis key: {tenant_id}:ctx:journey:{journey_id}
+        Each field: tag_name → JSON { value, confidence, source, visibility, ... }
+
+        Returns an empty string if the hash does not exist or has no visible tags.
+        Visibility = "agents_only" is included; "all" is included.
+        Tags with confidence < 0.3 are omitted as too uncertain to be useful.
+        """
+        key = f"{tenant_id}:ctx:journey:{journey_id}"
+        try:
+            raw = await self._redis.hgetall(key)
+        except Exception as exc:
+            logger.warning("Failed to read journey context for %s: %s", journey_id, exc)
+            return ""
+
+        if not raw:
+            return ""
+
+        lines: list[str] = []
+        for tag, raw_value in raw.items():
+            try:
+                entry = json.loads(raw_value) if isinstance(raw_value, str) else raw_value
+                value = entry.get("value")
+                confidence = float(entry.get("confidence", 0.0))
+                if value is None or confidence < 0.3:
+                    continue
+                lines.append(f"  {tag}: {value}  (confidence={confidence:.2f})")
+            except (json.JSONDecodeError, TypeError, ValueError):
+                continue
+
+        if not lines:
+            return ""
+
+        return "Journey context (shared across sessions in this process):\n" + "\n".join(lines)
 
     async def _write_session_params(
         self,

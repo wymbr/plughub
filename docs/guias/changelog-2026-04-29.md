@@ -1,5 +1,7 @@
 # Changelog — 2026-04-29
 
+> ⚠️ Changelog histórico (pré-CHANGELOG.md). Mantido apenas como referência. O changelog vivo é o CHANGELOG.md na raiz do repositório.
+
 > Módulos afetados: `auth-api`, `platform-ui`, `analytics-api`
 > Tasks concluídas: #17 (ABAC auth-api), #18 (platform-ui types), #19 (makePermissions), #20 (AccessPage), #21 (Sidebar ABAC), #22 (evaluation permissions), #23 (evaluation ABAC propagation), #15 (contact_insights tests)
 

@@ -136,14 +136,34 @@
       "error":      "Erro SSE",
       "closed":     "Fechado"
     },
+    "kpi": {
+      "active":      "Em atendimento",
+      "available":   "Disponíveis",
+      "online":      "Online",
+      "queue":       "Na fila"
+    },
+    "stale": {
+      "label":    "Dados desatualizados — sem atividade de roteamento nos últimos 2 minutos",
+      "lastSeen": "Última atualização: {{time}}"
+    },
+    "donut": {
+      "title": "Distribuição por pool"
+    },
+    "donutChannel": {
+      "title": "Tráfego por canal",
+      "centerLabel": "contatos",
+      "noData": "Nenhum contato hoje ainda"
+    },
     "table": {
-      "pool":      "Pool",
-      "available": "Disponíveis",
-      "busy":      "Ocupados",
-      "queue":     "Na fila",
-      "slaTarget": "SLA alvo",
-      "sentiment": "Sentimento",
-      "channels":  "Canais"
+      "pool":          "Pool",
+      "available":     "Disponíveis",
+      "busy":          "Ocupados",
+      "total":         "Total",
+      "occupancy":     "Ocupação",
+      "queue":         "Na fila",
+      "slaTarget":     "SLA alvo",
+      "avgWait":       "Espera média",
+      "slaCompliance": "SLA %"
     },
     "breadcrumbs": {
       "pools":    "Pools",

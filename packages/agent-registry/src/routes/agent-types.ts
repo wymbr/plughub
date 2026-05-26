@@ -87,6 +87,7 @@ agentTypesRouter.post("/", async (req: Request, res: Response, next: NextFunctio
         skills:                 body.skills,
         permissions:            body.permissions ?? [],
         capabilities:           body.capabilities ?? {},
+        media_capabilities:     body.media_capabilities ?? [],
         prompt_id:              body.prompt_id ?? null,
         agent_classification:   body.agent_classification ?? Prisma.DbNull,
         created_by:             createdBy,
@@ -194,10 +195,11 @@ agentTypesRouter.delete("/:agent_type_id", async (req: Request, res: Response, n
 // ─────────────────────────────────────────────
 // PATCH /v1/agent-types/:agent_type_id
 // Updates mutable fields of an existing agent type.
-// Allowed fields: pools, role, max_concurrent_sessions, permissions,
+// Allowed fields: pools, skills, role, max_concurrent_sessions, permissions,
 //                 capabilities, prompt_id, agent_classification.
 // pools replacement: existing pool associations are removed and replaced
 // with the new set. Pools must exist and be active.
+// skills replacement: replaces the full skills JSON field; all skill_ids must exist.
 // Publishes registry.changed so the orchestrator-bridge reconciles immediately.
 // ─────────────────────────────────────────────
 agentTypesRouter.patch("/:agent_type_id", async (req: Request, res: Response, next: NextFunction) => {
@@ -206,10 +208,12 @@ agentTypesRouter.patch("/:agent_type_id", async (req: Request, res: Response, ne
     const agentTypeId = req.params["agent_type_id"]!
     const body        = req.body as {
       pools?:                   string[]
+      skills?:                  Array<{ skill_id: string; [key: string]: unknown }>
       role?:                    string
       max_concurrent_sessions?: number
       permissions?:             string[]
       capabilities?:            Record<string, unknown>
+      media_capabilities?:      string[]
       prompt_id?:               string | null
       agent_classification?:    unknown
     }
@@ -246,14 +250,37 @@ agentTypesRouter.patch("/:agent_type_id", async (req: Request, res: Response, ne
       poolRecords = found.map(p => ({ id: p.id }))
     }
 
+    // ── Validate skills if provided ───────────────────────────────────────────
+    if (body.skills !== undefined && body.skills.length > 0) {
+      const skillIds    = body.skills.map(s => s.skill_id)
+      const skillsFound = await prisma.skill.findMany({
+        where: {
+          tenant_id: tenantId,
+          skill_id:  { in: skillIds },
+          status:    "active",
+        },
+      })
+      const foundSkillIds = skillsFound.map(s => s.skill_id)
+      const missingSkills = skillIds.filter(id => !foundSkillIds.includes(id))
+      if (missingSkills.length > 0) {
+        return res.status(422).json({
+          error:   "skills_not_found",
+          detail:  `Skills não encontradas neste tenant: ${missingSkills.join(", ")}`,
+          missing: missingSkills,
+        })
+      }
+    }
+
     // ── Apply update ─────────────────────────────────────────────────────────
     const updateData: Record<string, unknown> = {}
     if (body.role                   !== undefined) updateData["role"]                    = body.role
     if (body.max_concurrent_sessions !== undefined) updateData["max_concurrent_sessions"] = body.max_concurrent_sessions
     if (body.permissions            !== undefined) updateData["permissions"]              = body.permissions
     if (body.capabilities           !== undefined) updateData["capabilities"]             = body.capabilities
+    if (body.media_capabilities     !== undefined) updateData["media_capabilities"]       = body.media_capabilities
     if (body.prompt_id              !== undefined) updateData["prompt_id"]                = body.prompt_id
     if (body.agent_classification   !== undefined) updateData["agent_classification"]     = body.agent_classification ?? Prisma.DbNull
+    if (body.skills                 !== undefined) updateData["skills"]                   = body.skills as unknown as Prisma.InputJsonValue
 
     if (poolRecords !== undefined) {
       // Replace pool associations: delete existing junction rows, then create new ones
@@ -385,10 +412,17 @@ agentTypesRouter.delete("/:agent_type_id/canary", async (req: Request, res: Resp
 
 // ─────────────────────────────────────────────
 // GET /v1/agent-types/:agent_type_id/delegation-schema
-// Returns the delegation_input schema for the first skill of this agent type
-// that has one defined.  The Console's DelegarTarefaDrawer uses this to
-// render typed fields instead of a free-text textarea.
-// Returns { agent_type_id, skill_id, delegation_input } or 404 if no schema.
+// Returns the delegation_input schema and delegation_visibility for this agent
+// type.  Used by the Console AcoesTab to render typed fields and lock/show
+// the visibility radio in the AcaoItemRow inline form.
+//
+// Always returns 200 (never 404 for "no schema") so the caller can still read
+// delegation_visibility even when the agent has no typed parameters:
+//   { agent_type_id, skill_id?, delegation_input, delegation_visibility }
+//   delegation_input      — DelegationSchema | null
+//   delegation_visibility — "all" | "agents_only" | null
+//     null  → show radio, default agents_only
+//     value → lock visibility, hide radio
 // ─────────────────────────────────────────────
 agentTypesRouter.get("/:agent_type_id/delegation-schema", async (req: Request, res: Response, next: NextFunction) => {
   try {
@@ -404,10 +438,20 @@ agentTypesRouter.get("/:agent_type_id/delegation-schema", async (req: Request, r
       return res.status(404).json({ error: "Agent type não encontrado" })
     }
 
+    // delegation_visibility declared at agent-type level inside capabilities.
+    const caps = agentType.capabilities as Record<string, unknown> | null
+    const delegationVisibility = (caps?.["delegation_visibility"] as "all" | "agents_only" | undefined) ?? null
+
     // Extract skill_ids from the skills JSON field (SkillRef[])
     const skillRefs = Array.isArray(agentType.skills) ? agentType.skills as SkillRef[] : []
+
     if (skillRefs.length === 0) {
-      return res.status(404).json({ error: "Agent type has no skills", delegation_input: null })
+      return res.json({
+        agent_type_id:        agentTypeId,
+        skill_id:             null,
+        delegation_input:     null,
+        delegation_visibility: delegationVisibility,
+      })
     }
 
     const skillIds = skillRefs.map(s => s.skill_id)
@@ -425,14 +469,11 @@ agentTypesRouter.get("/:agent_type_id/delegation-schema", async (req: Request, r
       select: { skill_id: true, delegation_input: true },
     })
 
-    if (!skill) {
-      return res.status(404).json({ error: "No delegation schema defined", delegation_input: null })
-    }
-
     return res.json({
-      agent_type_id:    agentTypeId,
-      skill_id:         skill.skill_id,
-      delegation_input: skill.delegation_input,
+      agent_type_id:        agentTypeId,
+      skill_id:             skill?.skill_id ?? null,
+      delegation_input:     skill?.delegation_input ?? null,
+      delegation_visibility: delegationVisibility,
     })
   } catch (err) {
     return next(err)

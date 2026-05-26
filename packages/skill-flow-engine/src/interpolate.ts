@@ -208,6 +208,13 @@ async function resolveCtxRef(
 
   // "@ctx.caller.cpf" → "caller.cpf"
   const tag = ref.replace(/^@ctx\./, "")
+
+  // Arc 16: @ctx.journey.* reads from the journey Redis hash
+  // The SDK maps getValue("journey:{journeyId}", tag) → {tenant}:ctx:journey:{journeyId}
+  if (tag.startsWith("journey.") && ctx.journeyId) {
+    return contextStore.getValue(`journey:${ctx.journeyId}`, tag, ctx.customerId)
+  }
+
   return contextStore.getValue(ctx.sessionId, tag, ctx.customerId)
 }
 

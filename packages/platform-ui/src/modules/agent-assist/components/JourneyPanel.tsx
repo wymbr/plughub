@@ -18,6 +18,7 @@
  */
 
 import React, { useEffect, useRef, useState } from "react";
+import { Timer } from "lucide-react";
 import type { Journey, JourneyStatus } from "@/modules/workflows/api/hooks";
 import { ContactHistoryEntry } from "../types";
 
@@ -183,32 +184,32 @@ const SessionListItem: React.FC<{
     <button
       onClick={onSelect}
       className={[
-        "w-full text-left px-3 py-2 flex items-start gap-2 transition-colors border-b border-gray-100 last:border-0",
+        "w-full text-left px-3 py-2 flex items-start gap-2 transition-colors border-b border-border last:border-0",
         selected
-          ? "bg-indigo-50 border-l-2 border-l-indigo-500"
-          : "hover:bg-gray-50 border-l-2 border-l-transparent",
+          ? "bg-primary-light border-l-2 border-l-primary"
+          : "hover:bg-surface-muted border-l-2 border-l-transparent",
       ].join(" ")}
     >
       <span className="text-base flex-shrink-0 mt-0.5">{icon}</span>
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-1.5 flex-wrap">
-          <span className="text-[11px] font-medium text-gray-800 truncate">
+          <span className="text-xs font-medium text-dark truncate">
             {poolLabel(row.poolId || "—")}
           </span>
           {row.isCurrent && (
-            <span className="text-[9px] font-bold bg-blue-100 text-blue-700 px-1 py-0 rounded uppercase tracking-wide">
+            <span className="text-micro font-bold bg-primary-light text-primary px-1 py-0 rounded uppercase tracking-wide">
               atual
             </span>
           )}
           {row.isOrigin && !row.isCurrent && (
-            <span className="text-[9px] font-bold bg-gray-100 text-gray-500 px-1 py-0 rounded uppercase tracking-wide">
+            <span className="text-micro font-bold bg-border text-muted px-1 py-0 rounded uppercase tracking-wide">
               origem
             </span>
           )}
         </div>
-        <div className="text-[10px] text-gray-400 mt-0.5 flex gap-2 flex-wrap">
+        <div className="text-2xs text-muted-light mt-0.5 flex gap-2 flex-wrap">
           <span>{formatDateTime(row.openedAt)}</span>
-          {row.durationMs !== null && <span>⏱ {formatDuration(row.durationMs)}</span>}
+          {row.durationMs !== null && <span className="inline-flex items-center gap-0.5"><Timer className="w-3 h-3" aria-hidden="true" />{formatDuration(row.durationMs)}</span>}
         </div>
       </div>
     </button>
@@ -226,10 +227,10 @@ const authorLabel = (author: string): string => {
 };
 
 const authorColor = (author: string): string => {
-  if (author === "customer")    return "bg-blue-50 text-blue-900 self-start mr-8";
-  if (author === "agent_human") return "bg-white border border-gray-200 text-gray-900 self-end ml-8";
-  if (author === "agent_ai")    return "bg-purple-50 text-purple-900 self-start mr-8";
-  return "bg-gray-100 text-gray-700 self-center text-center text-xs italic";
+  if (author === "customer")    return "bg-primary-light text-primary self-start mr-8";
+  if (author === "agent_human") return "bg-white border border-border text-dark self-end ml-8";
+  if (author === "agent_ai")    return "bg-ai-light text-ai-text self-start mr-8";
+  return "bg-surface-alt text-dark self-center text-center text-xs italic";
 };
 
 const TranscriptViewer: React.FC<{ sessionId: string | null }> = ({ sessionId }) => {
@@ -242,7 +243,7 @@ const TranscriptViewer: React.FC<{ sessionId: string | null }> = ({ sessionId })
 
   if (!sessionId) {
     return (
-      <div className="flex-1 flex items-center justify-center text-sm text-gray-400">
+      <div className="flex-1 flex items-center justify-center text-sm text-muted-light">
         Selecione uma sessão para ver o transcript.
       </div>
     );
@@ -250,7 +251,7 @@ const TranscriptViewer: React.FC<{ sessionId: string | null }> = ({ sessionId })
 
   if (loading) {
     return (
-      <div className="flex-1 flex items-center justify-center text-sm text-gray-400 animate-pulse">
+      <div className="flex-1 flex items-center justify-center text-sm text-muted-light animate-pulse">
         Carregando transcript…
       </div>
     );
@@ -258,7 +259,7 @@ const TranscriptViewer: React.FC<{ sessionId: string | null }> = ({ sessionId })
 
   if (error) {
     return (
-      <div className="flex-1 flex items-center justify-center text-sm text-red-500 p-4 text-center">
+      <div className="flex-1 flex items-center justify-center text-sm text-red p-4 text-center">
         Erro ao carregar transcript: {error}
       </div>
     );
@@ -266,29 +267,29 @@ const TranscriptViewer: React.FC<{ sessionId: string | null }> = ({ sessionId })
 
   if (messages.length === 0) {
     return (
-      <div className="flex-1 flex items-center justify-center text-sm text-gray-400">
+      <div className="flex-1 flex items-center justify-center text-sm text-muted-light">
         Sem mensagens registradas nesta sessão.
       </div>
     );
   }
 
   return (
-    <div className="flex-1 overflow-y-auto px-3 py-3 flex flex-col gap-2 bg-gray-50">
+    <div className="flex-1 overflow-y-auto px-3 py-3 flex flex-col gap-2 bg-surface-muted">
       {/* Read-only banner */}
-      <div className="flex items-center gap-1.5 text-[10px] text-gray-400 mb-1 sticky top-0 bg-gray-50 py-1">
+      <div className="flex items-center gap-1.5 text-2xs text-muted-light mb-1 sticky top-0 bg-surface-muted py-1">
         <span>🔒</span>
         <span>Transcript somente leitura — sessão {sessionId.slice(-8)}</span>
       </div>
 
       {messages.map((msg, i) => (
         <div key={msg.id ?? i} className={`flex flex-col max-w-[85%] ${authorColor(msg.author)}`}>
-          <span className="text-[9px] font-semibold text-gray-500 mb-0.5 px-1">
+          <span className="text-micro font-semibold text-muted mb-0.5 px-1">
             {authorLabel(msg.author)}
           </span>
           <div className="rounded-xl px-3 py-2 text-sm leading-snug whitespace-pre-wrap break-words">
             {msg.text}
           </div>
-          <span className="text-[9px] text-gray-400 mt-0.5 px-1">
+          <span className="text-micro text-muted-light mt-0.5 px-1">
             {formatDateTime(msg.timestamp)}
           </span>
         </div>
@@ -388,7 +389,7 @@ export const JourneyPanel: React.FC<JourneyPanelProps> = ({
   // ── No customer ──
   if (!customerId) {
     return (
-      <div className="flex-1 flex flex-col items-center justify-center text-gray-400 text-sm gap-2 p-4">
+      <div className="flex-1 flex flex-col items-center justify-center text-muted-light text-sm gap-2 p-4">
         <span className="text-2xl">👤</span>
         <span>Cliente não identificado — sem journey disponível.</span>
       </div>
@@ -398,7 +399,7 @@ export const JourneyPanel: React.FC<JourneyPanelProps> = ({
   // ── Loading ──
   if (journeysLoading) {
     return (
-      <div className="flex-1 flex items-center justify-center text-sm text-gray-400 animate-pulse p-4">
+      <div className="flex-1 flex items-center justify-center text-sm text-muted-light animate-pulse p-4">
         Verificando journey…
       </div>
     );
@@ -407,10 +408,10 @@ export const JourneyPanel: React.FC<JourneyPanelProps> = ({
   // ── Standalone (no journey) ──
   if (!matchedJourney) {
     return (
-      <div className="flex-1 flex flex-col items-center justify-center text-gray-400 text-sm gap-2 p-4">
+      <div className="flex-1 flex flex-col items-center justify-center text-muted-light text-sm gap-2 p-4">
         <span className="text-2xl">🗂️</span>
-        <span className="font-medium text-gray-600">Contato standalone</span>
-        <span className="text-xs text-center text-gray-400 max-w-xs">
+        <span className="font-medium text-muted">Contato standalone</span>
+        <span className="text-xs text-center text-muted-light max-w-xs">
           Este contato não está associado a nenhum journey. A aba Journey é usada quando
           o atendimento faz parte de um processo multi-sessão (Arc 10).
         </span>
@@ -423,26 +424,26 @@ export const JourneyPanel: React.FC<JourneyPanelProps> = ({
     <div className="flex flex-col flex-1 overflow-hidden">
 
       {/* Journey header strip */}
-      <div className="flex items-center gap-2 px-3 py-2 bg-indigo-50 border-b border-indigo-100 flex-shrink-0">
+      <div className="flex items-center gap-2 px-3 py-2 bg-primary-light border-b border-primary/20 flex-shrink-0">
         <span className="text-sm">{STATUS_ICON[matchedJourney.status]}</span>
         <div className="flex-1 min-w-0">
-          <span className="text-[11px] font-bold text-indigo-800 capitalize truncate block">
+          <span className="text-xs font-bold text-primary capitalize truncate block">
             {skillLabel(matchedJourney.skill_id)}
           </span>
-          <span className="text-[9px] text-indigo-500 font-mono">
+          <span className="text-micro text-primary font-mono opacity-70">
             {matchedJourney.journey_id.slice(-8)}
           </span>
         </div>
         <span className={[
-          "text-[10px] font-semibold px-2 py-0.5 rounded-full",
-          matchedJourney.status === "active"    ? "bg-blue-100 text-blue-700"   :
-          matchedJourney.status === "suspended" ? "bg-amber-100 text-amber-700" :
-          matchedJourney.status === "completed" ? "bg-green-100 text-green-700" :
-          "bg-gray-100 text-gray-600"
+          "text-2xs font-semibold px-2 py-0.5 rounded-full",
+          matchedJourney.status === "active"    ? "bg-primary-light text-primary"     :
+          matchedJourney.status === "suspended" ? "bg-warning-light text-warning-text" :
+          matchedJourney.status === "completed" ? "bg-green-light text-green-text"    :
+          "bg-surface-alt text-muted"
         ].join(" ")}>
           {STATUS_LABEL[matchedJourney.status]}
         </span>
-        <span className="text-[10px] text-indigo-400">
+        <span className="text-2xs text-primary opacity-70">
           {matchedJourney.session_count} sessão{matchedJourney.session_count !== 1 ? "ões" : ""}
         </span>
       </div>
@@ -451,9 +452,9 @@ export const JourneyPanel: React.FC<JourneyPanelProps> = ({
       <div className="flex flex-1 overflow-hidden">
 
         {/* Left: session list */}
-        <div className="w-[200px] flex-shrink-0 border-r border-gray-200 overflow-y-auto bg-white">
+        <div className="w-[200px] flex-shrink-0 border-r border-border overflow-y-auto bg-white">
           {sessionRows.length === 0 ? (
-            <div className="p-3 text-xs text-gray-400 italic text-center">
+            <div className="p-3 text-xs text-muted-light italic text-center">
               Carregando sessões…
             </div>
           ) : (

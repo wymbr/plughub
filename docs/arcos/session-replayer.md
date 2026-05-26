@@ -1,5 +1,7 @@
 # Session Replayer — Quality Evaluation Pipeline
 
+> Última atualização: 2026-05-25 · Estado: Arc 16
+>
 > Full reference for the session replay pipeline used by quality evaluation.
 > See CLAUDE.md for architectural summary and [`docs/adr/adr-session-replayer.md`](../adr/adr-session-replayer.md) for the architecture decision record.
 

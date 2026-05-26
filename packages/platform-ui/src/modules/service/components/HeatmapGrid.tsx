@@ -1,4 +1,5 @@
 import type React from 'react'
+import { Radio } from 'lucide-react'
 import type { PoolView } from '../types'
 import { PoolTile } from './PoolTile'
 
@@ -20,7 +21,7 @@ export function HeatmapGrid({ pools, selectedPoolId, onSelect, onDrillDown }: Pr
   if (sorted.length === 0) {
     return (
       <div style={emptyStyle}>
-        <div style={{ fontSize: 40, marginBottom: 12 }}>📡</div>
+        <Radio style={{ width: 40, height: 40, marginBottom: 12, color: '#64748b' }} aria-hidden="true" />
         <div style={{ fontSize: 16, fontWeight: 600, color: '#94a3b8' }}>Aguardando dados dos pools…</div>
         <div style={{ fontSize: 13, color: '#64748b', marginTop: 6 }}>
           Snapshots chegam a cada 5 segundos. Verifique se o Routing Engine está rodando.

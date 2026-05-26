@@ -130,7 +130,7 @@ const DisponibilidadeTab: React.FC<PivotProps> = ({ rows }) => {
   const { t } = useTranslation("agentReports");
   if (rows.length === 0) {
     return (
-      <div className="flex-1 flex items-center justify-center text-gray-400 text-sm">
+      <div className="flex-1 flex items-center justify-center text-muted-light text-sm">
         {t("availability.noData")}
       </div>
     );
@@ -155,40 +155,40 @@ const DisponibilidadeTab: React.FC<PivotProps> = ({ rows }) => {
     <div className="flex-1 overflow-auto">
       <table className="min-w-full text-xs border-collapse">
         <thead className="sticky top-0 bg-white z-10">
-          <tr className="border-b border-gray-200">
-            <th className="text-left px-3 py-2 font-semibold text-gray-600 whitespace-nowrap min-w-[160px]">Agent</th>
-            <th className="text-left px-3 py-2 font-semibold text-gray-600 whitespace-nowrap min-w-[120px]">Pool</th>
+          <tr className="border-b border-border">
+            <th className="text-left px-3 py-2 font-semibold text-muted whitespace-nowrap min-w-40">Agent</th>
+            <th className="text-left px-3 py-2 font-semibold text-muted whitespace-nowrap min-w-[120px]">Pool</th>
             {dates.map(d => (
-              <th key={d} className="px-2 py-2 font-semibold text-gray-600 text-center whitespace-nowrap min-w-[80px]">
+              <th key={d} className="px-2 py-2 font-semibold text-muted text-center whitespace-nowrap min-w-20">
                 {d.slice(5)}  {/* MM-DD */}
               </th>
             ))}
-            <th className="px-3 py-2 font-semibold text-gray-600 text-right whitespace-nowrap">Total</th>
+            <th className="px-3 py-2 font-semibold text-muted text-right whitespace-nowrap">Total</th>
           </tr>
         </thead>
         <tbody>
           {[...groups.entries()].map(([key, { agent, pool, byDate }]) => {
             const totalMs = [...byDate.values()].reduce((s, r) => s + r.total_pause_ms, 0);
             return (
-              <tr key={key} className="border-b border-gray-100 hover:bg-gray-50 transition-colors">
-                <td className="px-3 py-2 text-gray-800 font-medium truncate max-w-[200px]" title={agent}>
+              <tr key={key} className="border-b border-border hover:bg-surface-muted transition-colors">
+                <td className="px-3 py-2 text-dark font-medium truncate max-w-[200px]" title={agent}>
                   {shortAgent(agent)}
                 </td>
-                <td className="px-3 py-2 text-gray-500 truncate max-w-[140px]" title={pool}>
+                <td className="px-3 py-2 text-muted truncate max-w-[140px]" title={pool}>
                   {shortPool(pool)}
                 </td>
                 {dates.map(d => {
                   const row = byDate.get(d);
-                  if (!row) return <td key={d} className="px-2 py-2 text-center text-gray-200">—</td>;
+                  if (!row) return <td key={d} className="px-2 py-2 text-center text-border">—</td>;
                   const pauseMs = row.total_pause_ms;
                   const intensity = Math.min(pauseMs / (4 * 3_600_000), 1);  // cap at 4h
                   const bg = pauseMs === 0
-                    ? "bg-gray-50 text-gray-300"
+                    ? "bg-surface-muted text-border-strong"
                     : intensity < 0.25
-                      ? "bg-amber-50 text-amber-700"
+                      ? "bg-warning-light text-warning-text"
                       : intensity < 0.5
-                        ? "bg-amber-100 text-amber-800"
-                        : "bg-amber-200 text-amber-900";
+                        ? "bg-warning-light text-warning-text"
+                        : "bg-warning text-white";
                   return (
                     <td key={d} className={`px-2 py-2 text-center font-mono tabular-nums ${bg}`}
                         title={`${row.total_pauses} pausa(s) · ${fmtDuration(pauseMs)}`}>
@@ -196,7 +196,7 @@ const DisponibilidadeTab: React.FC<PivotProps> = ({ rows }) => {
                     </td>
                   );
                 })}
-                <td className="px-3 py-2 text-right font-semibold text-gray-700 tabular-nums">
+                <td className="px-3 py-2 text-right font-semibold text-dark tabular-nums">
                   {totalMs > 0 ? fmtDuration(totalMs) : "—"}
                 </td>
               </tr>
@@ -247,7 +247,7 @@ const PausasTab: React.FC<{
 
   if (flat.length === 0) {
     return (
-      <div className="flex-1 flex flex-col items-center justify-center gap-2 text-gray-400 text-sm">
+      <div className="flex-1 flex flex-col items-center justify-center gap-2 text-muted-light text-sm">
         <span className="text-3xl">📋</span>
         <p>{t("pauses.noData")}</p>
       </div>
@@ -259,12 +259,12 @@ const PausasTab: React.FC<{
   return (
     <div className="flex-1 flex flex-col overflow-hidden">
       {/* CSV export */}
-      <div className="flex items-center justify-end px-4 py-2 border-b border-gray-100 bg-gray-50 flex-shrink-0">
+      <div className="flex items-center justify-end px-4 py-2 border-b border-border bg-surface-muted flex-shrink-0">
         <a
           href={csvUrl}
           download
           className="inline-flex items-center gap-1.5 px-3 py-1 rounded-md text-xs font-medium
-            border border-gray-300 text-gray-600 hover:bg-white hover:border-gray-400 transition-colors"
+            border border-border-strong text-muted hover:bg-white hover:border-border-strong transition-colors"
         >
           ⬇ {t("pauses.exportCsv")}
         </a>
@@ -274,37 +274,37 @@ const PausasTab: React.FC<{
       <div className="flex-1 overflow-auto">
         <table className="min-w-full text-xs border-collapse">
           <thead className="sticky top-0 bg-white z-10">
-            <tr className="border-b border-gray-200">
-              <th className="text-left px-3 py-2 font-semibold text-gray-600">Date</th>
-              <th className="text-left px-3 py-2 font-semibold text-gray-600">Agent</th>
-              <th className="text-left px-3 py-2 font-semibold text-gray-600">Pool</th>
-              <th className="text-left px-3 py-2 font-semibold text-gray-600">{t("pauses.reason")}</th>
-              <th className="text-right px-3 py-2 font-semibold text-gray-600">{t("pauses.count")}</th>
-              <th className="text-right px-3 py-2 font-semibold text-gray-600">{t("pauses.duration")}</th>
-              <th className="text-right px-3 py-2 font-semibold text-gray-600">Avg per pause</th>
+            <tr className="border-b border-border">
+              <th className="text-left px-3 py-2 font-semibold text-muted">Date</th>
+              <th className="text-left px-3 py-2 font-semibold text-muted">Agent</th>
+              <th className="text-left px-3 py-2 font-semibold text-muted">Pool</th>
+              <th className="text-left px-3 py-2 font-semibold text-muted">{t("pauses.reason")}</th>
+              <th className="text-right px-3 py-2 font-semibold text-muted">{t("pauses.count")}</th>
+              <th className="text-right px-3 py-2 font-semibold text-muted">{t("pauses.duration")}</th>
+              <th className="text-right px-3 py-2 font-semibold text-muted">Avg per pause</th>
             </tr>
           </thead>
           <tbody>
             {flat.map((r, i) => (
-              <tr key={i} className="border-b border-gray-100 hover:bg-gray-50 transition-colors">
-                <td className="px-3 py-2 text-gray-500 whitespace-nowrap font-mono">{r.date}</td>
-                <td className="px-3 py-2 text-gray-800 font-medium truncate max-w-[180px]" title={r.agent}>
+              <tr key={i} className="border-b border-border hover:bg-surface-muted transition-colors">
+                <td className="px-3 py-2 text-muted whitespace-nowrap font-mono">{r.date}</td>
+                <td className="px-3 py-2 text-dark font-medium truncate max-w-[180px]" title={r.agent}>
                   {shortAgent(r.agent)}
                 </td>
-                <td className="px-3 py-2 text-gray-500 truncate max-w-[130px]" title={r.pool}>
+                <td className="px-3 py-2 text-muted truncate max-w-[130px]" title={r.pool}>
                   {shortPool(r.pool)}
                 </td>
                 <td className="px-3 py-2">
-                  <span className="inline-flex items-center px-2 py-0.5 rounded-full bg-amber-50
-                    border border-amber-200 text-amber-700 font-medium whitespace-nowrap">
+                  <span className="inline-flex items-center px-2 py-0.5 rounded-full bg-warning-light
+                    border border-warning/30 text-warning-text font-medium whitespace-nowrap">
                     {r.reason}
                   </span>
                 </td>
-                <td className="px-3 py-2 text-right tabular-nums text-gray-700">{r.count}</td>
-                <td className="px-3 py-2 text-right tabular-nums font-semibold text-gray-800">
+                <td className="px-3 py-2 text-right tabular-nums text-dark">{r.count}</td>
+                <td className="px-3 py-2 text-right tabular-nums font-semibold text-dark">
                   {fmtDuration(r.ms)}
                 </td>
-                <td className="px-3 py-2 text-right tabular-nums text-gray-500">
+                <td className="px-3 py-2 text-right tabular-nums text-muted">
                   {r.count > 0 ? fmtDuration(Math.round(r.ms / r.count)) : "—"}
                 </td>
               </tr>
@@ -315,23 +315,23 @@ const PausasTab: React.FC<{
 
       {/* Pagination */}
       {meta && totalPages > 1 && (
-        <div className="flex items-center justify-between px-4 py-2 border-t border-gray-100 bg-white flex-shrink-0">
-          <span className="text-xs text-gray-500">
+        <div className="flex items-center justify-between px-4 py-2 border-t border-border bg-white flex-shrink-0">
+          <span className="text-xs text-muted">
             {t("pagination.results", { count: meta.total })}
           </span>
           <div className="flex items-center gap-1">
             <button
               onClick={() => onPage(page - 1)}
               disabled={page <= 1}
-              className="px-2 py-1 text-xs rounded border border-gray-200 disabled:opacity-40 hover:bg-gray-50"
+              className="px-2 py-1 text-xs rounded border border-border disabled:opacity-40 hover:bg-surface-muted"
             >
               ← {t("pagination.prev")}
             </button>
-            <span className="text-xs text-gray-600 px-2">{page} / {totalPages}</span>
+            <span className="text-xs text-muted px-2">{page} / {totalPages}</span>
             <button
               onClick={() => onPage(page + 1)}
               disabled={page >= totalPages}
-              className="px-2 py-1 text-xs rounded border border-gray-200 disabled:opacity-40 hover:bg-gray-50"
+              className="px-2 py-1 text-xs rounded border border-border disabled:opacity-40 hover:bg-surface-muted"
             >
               {t("pagination.next")} →
             </button>
@@ -378,66 +378,66 @@ const AgentReportsPage: React.FC = () => {
   })();
 
   return (
-    <div className="flex flex-col h-full overflow-hidden bg-gray-50">
+    <div className="flex flex-col h-full overflow-hidden bg-surface-muted">
       <PageHeader
         title={t("title")}
         breadcrumbs={[{ label: t("breadcrumbs.config") }, { label: t("title") }]}
       />
 
       {/* ── Filter bar ── */}
-      <div className="bg-white border-b border-gray-200 px-6 py-3 flex flex-wrap items-end gap-4 flex-shrink-0">
+      <div className="bg-white border-b border-border px-6 py-3 flex flex-wrap items-end gap-4 flex-shrink-0">
         <div className="flex flex-col gap-1">
-          <label className="text-xs font-medium text-gray-500">{t("filters.from")}</label>
+          <label className="text-xs font-medium text-muted">{t("filters.from")}</label>
           <input
             type="date"
             value={fromDt}
             max={toDt}
             onChange={e => setFromDt(e.target.value)}
-            className="text-sm border border-gray-300 rounded-md px-2 py-1 focus:outline-none
-              focus:ring-2 focus:ring-indigo-400"
+            className="text-sm border border-border-strong rounded-md px-2 py-1 focus:outline-none
+              focus:ring-2 focus:ring-primary/40"
           />
         </div>
         <div className="flex flex-col gap-1">
-          <label className="text-xs font-medium text-gray-500">{t("filters.to")}</label>
+          <label className="text-xs font-medium text-muted">{t("filters.to")}</label>
           <input
             type="date"
             value={toDt}
             min={fromDt}
             max={isoToday()}
             onChange={e => setToDt(e.target.value)}
-            className="text-sm border border-gray-300 rounded-md px-2 py-1 focus:outline-none
-              focus:ring-2 focus:ring-indigo-400"
+            className="text-sm border border-border-strong rounded-md px-2 py-1 focus:outline-none
+              focus:ring-2 focus:ring-primary/40"
           />
         </div>
         <div className="flex flex-col gap-1">
-          <label className="text-xs font-medium text-gray-500">{t("filters.pool")}</label>
+          <label className="text-xs font-medium text-muted">{t("filters.pool")}</label>
           <input
             type="text"
             value={poolId}
             onChange={e => setPoolId(e.target.value.trim())}
             placeholder={t("filters.poolPlaceholder")}
-            className="text-sm border border-gray-300 rounded-md px-2 py-1 focus:outline-none
-              focus:ring-2 focus:ring-indigo-400 w-44"
+            className="text-sm border border-border-strong rounded-md px-2 py-1 focus:outline-none
+              focus:ring-2 focus:ring-primary/40 w-44"
           />
         </div>
         <div className="flex flex-col gap-1">
-          <label className="text-xs font-medium text-gray-500">{t("filters.agentType")}</label>
+          <label className="text-xs font-medium text-muted">{t("filters.agentType")}</label>
           <input
             type="text"
             value={agentId}
             onChange={e => setAgentId(e.target.value.trim())}
             placeholder={t("filters.agentTypePlaceholder")}
-            className="text-sm border border-gray-300 rounded-md px-2 py-1 focus:outline-none
-              focus:ring-2 focus:ring-indigo-400 w-48"
+            className="text-sm border border-border-strong rounded-md px-2 py-1 focus:outline-none
+              focus:ring-2 focus:ring-primary/40 w-48"
           />
         </div>
         {loading && (
-          <span className="text-xs text-gray-400 animate-pulse self-end pb-1.5">{t("filters.loading")}</span>
+          <span className="text-xs text-muted-light animate-pulse self-end pb-1.5">{t("filters.loading")}</span>
         )}
       </div>
 
       {/* ── Tab bar ── */}
-      <div className="bg-white border-b border-gray-200 px-6 flex items-end gap-0 flex-shrink-0">
+      <div className="bg-white border-b border-border px-6 flex items-end gap-0 flex-shrink-0">
         {([
           { id: "disponibilidade", label: t("tabs.availability") },
           { id: "pausas",          label: t("tabs.pauses") },
@@ -447,8 +447,8 @@ const AgentReportsPage: React.FC = () => {
             onClick={() => setTab(tabDef.id)}
             className={`px-5 py-2.5 text-sm font-medium border-b-2 transition-colors ${
               tab === tabDef.id
-                ? "border-indigo-600 text-indigo-600"
-                : "border-transparent text-gray-500 hover:text-gray-700"
+                ? "border-primary text-primary"
+                : "border-transparent text-muted hover:text-dark"
             }`}
           >
             {tabDef.label}
@@ -459,7 +459,7 @@ const AgentReportsPage: React.FC = () => {
       {/* ── Content ── */}
       <div className="flex-1 overflow-hidden bg-white flex flex-col">
         {error ? (
-          <div className="flex-1 flex items-center justify-center text-sm text-red-500">
+          <div className="flex-1 flex items-center justify-center text-sm text-red">
             {t("error.loading")}: {error}
           </div>
         ) : tab === "disponibilidade" ? (
