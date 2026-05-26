@@ -854,6 +854,20 @@ export async function startServer(config: ServerConfig): Promise<void> {
       skillFlowUrl: process.env["SKILL_FLOW_URL"]    ?? "http://localhost:3400",
       tenantId:     process.env["PLUGHUB_TENANT_ID"]  ?? process.env["TENANT_ID"] ?? "tenant_demo",
     })
+    registerDeployTools(mcpServer, {
+      agentRegistryUrl: process.env["AGENT_REGISTRY_URL"] ?? "http://localhost:3300",
+      tenantId:         process.env["PLUGHUB_TENANT_ID"]  ?? process.env["TENANT_ID"] ?? "tenant_demo",
+    })
+    registerCalendarTools(mcpServer, {
+      calendarApiUrl: process.env["CALENDAR_API_URL"] ?? "http://localhost:3700",
+      tenantId:       process.env["PLUGHUB_TENANT_ID"] ?? process.env["TENANT_ID"] ?? "tenant_demo",
+    })
+    registerJourneyTools(mcpServer, {
+      workflowApiUrl: process.env["WORKFLOW_API_URL"]  ?? "http://localhost:3800",
+      tenantId:       process.env["PLUGHUB_TENANT_ID"] ?? process.env["TENANT_ID"] ?? "tenant_demo",
+      redis,
+    })
+    registerAgentEventTools(mcpServer, { redis, kafka })
 
     transports.set(transport.sessionId, transport)
 
@@ -2500,7 +2514,12 @@ export async function startServer(config: ServerConfig): Promise<void> {
       console.log(`   Tools Evaluation:    transcript_get, evaluation_context_resolve, evaluation_publish`)
       console.log(`   Tools ExternalAgent: invoke, wait_for_assignment, send_message, wait_for_message`)
       console.log(`   Tools Delegation:    agent_delegate, agent_delegate_status`)
+      console.log(`   Tools Deploy:        skill_deploy, skill_handoff_status`)
+      console.log(`   Tools Calendar:      calendar_is_open, calendar_next_slot, calendar_add_duration, calendar_business_duration`)
+      console.log(`   Tools Journey:       journey_start, journey_link_session, journey_merge, journey_split, journey_context_get, journey_context_set, journey_list_suspended, journey_resume, journey_check_pending`)
+      console.log(`   Tools AgentEvents:   agent_event`)
       console.log(`   SKILL_FLOW_URL:      ${process.env["SKILL_FLOW_URL"] ?? "http://localhost:3400 (padrão — configure SKILL_FLOW_URL para Docker)"}`)
+      console.log(`   WORKFLOW_API_URL:    ${process.env["WORKFLOW_API_URL"] ?? "http://localhost:3800 (padrão)"}`)
       resolve()
     })
   })

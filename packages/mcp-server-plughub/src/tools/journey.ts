@@ -170,16 +170,31 @@ async function callWorkflowApi(
   tenantId: string,
   body?: unknown,
 ): Promise<{ ok: boolean; status: number; data: unknown }> {
-  const resp = await fetch(url, {
-    method,
-    headers: {
-      "Content-Type":  "application/json",
-      "x-tenant-id":   tenantId,
-      "x-internal":    "1",
-    },
-    ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
-  })
+  let resp: Response
+  try {
+    resp = await fetch(url, {
+      method,
+      headers: {
+        "Content-Type":  "application/json",
+        "x-tenant-id":   tenantId,
+        "x-internal":    "1",
+      },
+      ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+    })
+  } catch (networkErr) {
+    console.error(
+      `[journey] Network error calling ${method} ${url}:`,
+      networkErr instanceof Error ? networkErr.message : String(networkErr),
+    )
+    throw networkErr
+  }
   const data = await resp.json().catch(() => ({ detail: resp.statusText }))
+  if (!resp.ok) {
+    console.error(
+      `[journey] ${method} ${url} → HTTP ${resp.status}:`,
+      JSON.stringify(data),
+    )
+  }
   return { ok: resp.ok, status: resp.status, data }
 }
 
@@ -203,9 +218,11 @@ export function registerJourneyTools(server: McpServer, deps: JourneyDeps): void
     async (rawInput: Record<string, unknown>) => {
       const parsed = JourneyStartInputSchema.safeParse(rawInput)
       if (!parsed.success) {
+        console.error("[journey_start] INVALID_INPUT — rawInput:", JSON.stringify(rawInput), "error:", parsed.error.message)
         return mcpError("INVALID_INPUT", parsed.error.message)
       }
       const { skill_id, session_id, customer_id, metadata } = parsed.data
+      console.log(`[journey_start] skill_id=${skill_id} session_id=${session_id} url=${workflowApiUrl}/v1/journeys`)
 
       const result = await callWorkflowApi(
         `${workflowApiUrl}/v1/journeys`,
