@@ -58,6 +58,7 @@ classification:
   domain: customer_service
 
 creates_journey: true
+journey_type_id: atendimento_sac       # Arc 17: must be registered in Config/Resources → JourneyTypes
 
 entry: saudacao
 

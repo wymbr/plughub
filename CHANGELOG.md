@@ -2,6 +2,111 @@
 
 ---
 
+## max_concurrent_sessions — full stack (#274, #276, #277, #278, #281) (2026-05-26)
+
+Complete implementation of the `max_concurrent_sessions` limit across all layers. The feature was already partially scaffolded (#279 DB column, #280 mcp-server JWT read) — this entry documents that all remaining layers were verified complete and the tracker closed.
+
+**auth-api** (`router.py`):
+- `GET /me` returns `max_concurrent_sessions` from JWT claims (set at login from `auth.users` column). Live DB access available via admin `GET /users/{user_id}`. No separate profile endpoint needed — `GET /me` satisfies #274.
+
+**orchestrator-bridge** (`main.py`, lines 2304–2320):
+- `agent_ready` Kafka event includes `max_concurrent_sessions` read from instance snapshot key in Redis (#276).
+
+**mcp-server-plughub** (`tools/runtime.ts`, lines 267–281):
+- `agent_ready` Kafka event for human agents reads `max_concurrent_sessions` from Redis instance hash and publishes it in the lifecycle event (#277, #278).
+
+**platform-ui** (`modules/access/AccessPage.tsx`, lines 243–272):
+- User edit form has `maxConcurrentSessions` number input, wired to both `CreateUserInput` and `UpdateUserInput` payloads (#278, #281).
+
+---
+
+## Arc 17 — JourneyType Governance — Backend completo (#298, #299, #300) (2026-05-26)
+
+All three remaining Arc 17 backend tasks were verified as already fully implemented (tracker was stale).
+
+**#300 — workflow-api** (`db.py`, `journey_router.py`):
+- `journey_type_id TEXT` column added via idempotent `ALTER TABLE` migration.
+- `db_create_journey` and `db_create_journey_for_instance` accept and insert `journey_type_id`.
+- `_row_to_journey` serializes it; all GET endpoints return it.
+- `JourneyCreateRequest` and `JourneyFromInstanceRequest` Pydantic models include `journey_type_id: str | None`.
+
+**#298 — routing-engine** (`main.py` `_write_pool_context()`, `models.py` `PoolConfig`):
+- `PoolConfig.authorized_journey_types: list[str]` field populated from `pool.registered` / `pool.updated` Kafka events.
+- `_write_pool_context()` writes `session.authorized_journey_types` to ContextStore (always, even as `[]`; confidence 1.0, visibility `agents_only`).
+
+**#299 — mcp-server-plughub** (`tools/journey.ts` `journey_start`):
+- Reads `session.authorized_journey_types` from ContextStore via Redis.
+- If the list is present and `journey_type_id` is not in it → returns `JOURNEY_TYPE_NOT_AUTHORIZED` error with instructions to configure the pool.
+- If the key is absent entirely → returns same error (pool not configured).
+- Redis errors are logged and swallowed (fail-open to avoid blocking legitimate calls when ContextStore is temporarily unavailable).
+
+---
+
+## Arc 17 — Skill YAML validator: creates_journey requires journey_type_id (#301) (2026-05-26)
+
+Three-layer defense ensuring a skill YAML with `creates_journey: true` always carries a non-empty `journey_type_id`. Also fixes a latent bug where `creates_journey` / `journey_type_id` were invisible to the engine-runner because `flow_definition` only stored the nested `flow` sub-object.
+
+**agent-registry** (`validators/skill.ts`):
+- New `validateJourneyType(rawBody: unknown): string[]` — operates on raw `req.body` before Zod parsing (Zod strips unknown root-level fields like `creates_journey`). Returns a descriptive 422 error when `creates_journey: true` without a valid `journey_type_id`.
+- Both POST and PUT handlers in `routes/skills.ts` now invoke this validator before `CreateSkillSchema.parse()`, returning `{ error: "invalid_journey_type", details: [...] }` on failure.
+
+**workflow-api** (`router.py`, `_resolve_flow_definition`):
+- Bug fix: previously only stored `skill["flow"]` (the `SkillFlow` sub-object) as `flow_definition`. Root-level flags `creates_journey` and `journey_type_id` were never visible to the engine-runner, silently breaking Arc 10 Phase B auto-journey creation.
+- Fix: merges `creates_journey` and `journey_type_id` from the skill root into the `flow_def` dict before storing as `flow_definition` in instance metadata.
+
+**skill-flow-worker** (`engine-runner.ts`):
+- New runtime guard: if `flowDefinition['creates_journey'] === true` and `flowDefinition['journey_type_id']` is absent, calls `workflowClient.fail(instance.id, ...)` immediately before any execution begins. Prevents a journey with `type: none` from being silently created.
+
+---
+
+## Arc 17 — Monitor heatmap: journey counts per pool (#314) (2026-05-26)
+
+**analytics-api**:
+- `query.py`: new `get_pool_journey_counts(client, database, tenant_id)` — queries `journey_events` using `argMax(status, event_time)` to reconstruct current journey state per pool; returns `{ pool_id, active_journeys, suspended_journeys }` for pools with at least one active or suspended journey.
+- `dashboard.py`: new `GET /dashboard/pool-journeys?tenant_id=...` endpoint — same auth pattern as `/dashboard/pool-sla`; returns empty list when ClickHouse unavailable.
+
+**platform-ui**:
+- `types.ts`: new `PoolJourneyEntry` interface; `PoolView` extended with `active_journeys: number` and `suspended_journeys: number` (default 0).
+- `api/hooks.ts`: new `usePoolJourneys(tenantId, intervalMs=30_000)` hook; `usePoolViews` now calls it and merges journey counts into each `PoolView` via `journeyMap`.
+- `components/PoolTile.tsx`: purple `◈ N proc` badge in the top-left corner when `active_journeys + suspended_journeys > 0`; tooltip shows breakdown.
+
+---
+
+## Arc 17 — Dashboard journey cards: journey_type_id + pool_id filters (2026-05-26)
+
+**analytics-api** — 4 journey display formatters (`fmt_journey_active_count`, `fmt_journey_resolution_rate`, `fmt_journey_funnel`, `fmt_journey_median_duration`) and their 4 `_fetch_*_sync` helpers now accept `journey_type_id` and `pool_id` as optional filters applied as WHERE conditions. All 4 endpoints in `display.py` expose these as Query params.
+
+**platform-ui** — `catalog.ts`: all 4 journey display cards (`journey-active-count`, `journey-resolution-rate`, `journey-funnel`, `journey-median-duration`) now declare `journey_type_id` and `pool_id` as `configurable_params`. `en/dashboards.json` and `pt-BR/dashboards.json`: added `journey_type_id` param label/placeholder to the shared `params` section.
+
+---
+
+## Arc 17 — JourneyType Governance — UI Layer (2026-05-26)
+
+Full implementation of Arc 17 — schemas, agent-registry, analytics-api, and platform-UI. Backend tasks #298–301 (routing-engine, mcp-server, workflow-api, skill YAML) deferred to next iteration.
+
+**@plughub/schemas**: `JourneyTypeSchema` + `CreateJourneyTypeInputSchema` + `UpdateJourneyTypeInputSchema` added to `packages/schemas/src/journey-type.ts`.
+
+**agent-registry**: Prisma migration + CRUD REST (`GET/POST/PATCH/DELETE /v1/journey-types`). `authorized_journey_types: String[]` field added to Pool schema — create and update routes persist it.
+
+**analytics-api** (#302):
+- `journey_events` ClickHouse table extended with `journey_type_id Nullable(String)` + `pool_id Nullable(String)` columns; `_DDL_JOURNEY_EVENTS_MIGRATE_ARC17` migration applied at startup
+- `parse_journey_event()` in `models.py` extracts `journey_type_id` + `pool_id` from Kafka payload
+- `_journey_event_row()` in `clickhouse.py` writes both fields per event
+- `_fetch_journeys()` in `reports_query.py` applies `journey_type_id` and `pool_id` as `base_where` conditions on both the journey list query **and** the KPI aggregation subquery — filters are fully scoped end-to-end
+
+**platform-ui**:
+- `JourneyType`, `CreateJourneyTypeInput`, `UpdateJourneyTypeInput` in `src/types/index.ts`; `authorized_journey_types` added to `Pool`, `CreatePoolInput`, `UpdatePoolInput`
+- `listJourneyTypes`, `createJourneyType`, `updateJourneyType`, `deleteJourneyType` in `src/api/registry.ts`
+- Config/Resources: new "Journey Types" tab with inline CRUD table (key, description, SLA, edit/delete)
+- Config/Resources: Pool drawer — `authorized_journey_types` multi-select checkbox list, loads registered types on open
+- `hooks.ts`: `Journey.journey_type_id` + `Journey.pool_id` fields; `useJourneys` extended with `journeyTypeId` (5th param) + `poolId` (6th param) mapped to `/reports/journeys` query params
+- ProcessosPage JourneysTab: L1 journey-type chip row (All + one per registered type), pool dropdown filter, `journey_type_id` badge in list rows and detail panel, `pool_id` in detail panel
+- i18n: `journeyTypes.*` + `pools.authorizedJourneyTypes.*` + `tabs.journeyTypes` in `configRecursos.json` (en + pt-BR); `processes.journeys.filters.journeyType/pool/allPools`, `allTypes`, `detail.journeyType/pool` in `contacts.json` (en + pt-BR)
+
+→ [`docs/arcos/arc17-journey-types.md`](docs/arcos/arc17-journey-types.md)
+
+---
+
 ## Fix: primeira pergunta do wrap-up pulada após desconexão do cliente (2026-05-25)
 
 **Sintoma**: no cenário webchat F5 (cliente desconecta), o agente humano era notificado e o wrap-up era acionado; o agente via a primeira pergunta (`menu text`) mas não conseguia respondê-la — o fluxo avançava automaticamente para a segunda pergunta. Todas as perguntas seguintes se comportavam normalmente.

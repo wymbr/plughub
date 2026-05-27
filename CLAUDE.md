@@ -789,7 +789,24 @@ Formaliza o modelo de orquestração em três camadas: **Tier 1 — Business Wor
 
 ---
 
+## Arc 17 — JourneyType Governance
+
+Introduces `JourneyType` as a per-tenant governance entity: `journey_type_id` (slug), `description`, `sla_ms`. Pools declare `authorized_journey_types[]` — only listed types may be created by journeys initiated from that pool.
+
+**agent-registry**: Prisma table `journey_types` + CRUD REST `/v1/journey-types` (admin-token protected). `authorized_journey_types: String[]` column on Pool, propagated via `PoolRegistrationSchema`.
+
+**platform-ui — Config/Resources**: "Journey Types" tab with inline CRUD (key, description, SLA, edit/delete). Pool form: `authorized_journey_types` multi-select checkbox list. `Journey.journey_type_id` + `Journey.pool_id` fields added to `hooks.ts`. `useJourneys` extended with `journeyTypeId` + `poolId` params (5th and 6th arguments). ProcessosPage JourneysTab: L1 journey-type chip row (toggle filter), pool dropdown, purple `journey_type_id` badge on list rows and detail panel.
+
+**All backend tasks complete** (#298–302): routing-engine writes `session.authorized_journey_types` to ContextStore; mcp-server validates `journey_start` against authorized list (JOURNEY_TYPE_NOT_AUTHORIZED error); workflow-api has `journey_type_id` FK on journeys table; skill YAML enforces `journey_type_id` when `creates_journey: true` via 3-layer validator; analytics-api `/reports/journeys` accepts `journey_type_id` + `pool_id` query params.
+
+→ See [`docs/arcos/arc17-journey-types.md`](docs/arcos/arc17-journey-types.md)
+
+---
+
 ## Pending (Next Iteration)
+
+### Arc 17 — JourneyType Governance ✅ (todas as tarefas #295–#302 implementadas)
+Ver [`docs/arcos/arc17-journey-types.md`](docs/arcos/arc17-journey-types.md) e CHANGELOG 2026-05-26.
 
 ### Arc 15 — WebRTC ✅ (todas as fases implementadas)
 Ver [`docs/arcos/arc15-webrtc.md`](docs/arcos/arc15-webrtc.md) para detalhe das 6 fases (A–F).

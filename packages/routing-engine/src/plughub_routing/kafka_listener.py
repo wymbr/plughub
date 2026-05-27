@@ -180,8 +180,9 @@ class RegistryEventHandler:
                 is_human_pool        = bool(pool_data.get("supervisor_config")),
                 mentionable_pools    = pool_data.get("mentionable_pools") or None,
                 mentionable_journeys = pool_data.get("mentionable_journeys") or None,
-                agent_groups         = pool_data.get("agent_groups") or [],
-                context_visibility   = pool_data.get("context_visibility") or None,
+                agent_groups              = pool_data.get("agent_groups") or [],
+                context_visibility        = pool_data.get("context_visibility") or None,
+                authorized_journey_types  = pool_data.get("authorized_journey_types") or [],
             )
             await self._pools.save_pool_config(config)
             logger.info(

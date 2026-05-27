@@ -12,6 +12,7 @@ classification:
   type: vertical
 
 creates_journey: true
+journey_type_id: reembolso_cliente     # Arc 17: must be registered in Config/Resources → JourneyTypes
 
 entry: registrar_solicitacao
 

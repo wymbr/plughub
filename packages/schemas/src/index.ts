@@ -503,8 +503,13 @@ export type {
   CollectEvent,
 } from "./workflow"
 
-// ── Journey (Arc 10 + Arc 16) ────────────────
+// ── Journey (Arc 10 + Arc 16 + Arc 17) ───────
 export {
+  // Arc 17 — JourneyType platform definition
+  JourneyTypeSchema,
+  CreateJourneyTypeSchema,
+  UpdateJourneyTypeSchema,
+  // Arc 10 — Journey instance
   JourneyStatusSchema,
   JourneySchema,
   JourneyEventTypeSchema,
@@ -525,6 +530,11 @@ export {
 } from "./journey"
 
 export type {
+  // Arc 17
+  JourneyType,
+  CreateJourneyType,
+  UpdateJourneyType,
+  // Arc 10
   JourneyStatus,
   Journey,
   JourneyEventType,

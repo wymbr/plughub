@@ -15,6 +15,7 @@ import {
   RoutingWeights,
   ROUTING_WEIGHTS_DEFAULTS,
   RoutingWeightsDinamicos,
+  JourneyType,
 } from '@/types'
 import Button from '@/components/ui/Button'
 import Table from '@/components/ui/Table'
@@ -275,6 +276,7 @@ const PoolsPage: React.FC = () => {
   const [pools,     setPools]     = useState<Pool[]>([])
   const [calendars, setCalendars] = useState<CalendarOption[]>([])
   const [competencySkills, setCompetencySkills] = useState<CompetencySkill[]>([])
+  const [journeyTypes, setJourneyTypes] = useState<JourneyType[]>([])
   const [isLoading, setIsLoading] = useState(true)
   const [isOpen,    setIsOpen]    = useState(false)
   const [editingPool, setEditingPool] = useState<Pool | null>(null)
@@ -289,11 +291,12 @@ const PoolsPage: React.FC = () => {
     description:       '',
     channel_types:     [] as string[],
     sla_target_ms:     30000,
-    max_reply_time_ms:      null as number | null,
-    calendar_id:            '',
-    context_visibility_ns:  '' as string,   // comma-separated operator_namespaces
-    inbound_journey_resume: false,
-    routing_weights:        { ...ROUTING_WEIGHTS_DEFAULTS } as RoutingWeights,
+    max_reply_time_ms:           null as number | null,
+    calendar_id:                 '',
+    context_visibility_ns:       '' as string,   // comma-separated operator_namespaces
+    inbound_journey_resume:      false,
+    authorized_journey_types:    [] as string[],
+    routing_weights:             { ...ROUTING_WEIGHTS_DEFAULTS } as RoutingWeights,
   })
 
   // ── data loading ─────────────────────────────────────────────────────────────
@@ -353,6 +356,14 @@ const PoolsPage: React.FC = () => {
     } catch { /* stale ok */ }
   }, [session])
 
+  const loadJourneyTypes = useCallback(async () => {
+    if (!session) return
+    try {
+      const data = await registryApi.listJourneyTypes(session.tenantId)
+      setJourneyTypes(data.sort((a, b) => a.journey_type_id.localeCompare(b.journey_type_id)))
+    } catch { /* stale ok */ }
+  }, [session])
+
   const loadPools = useCallback(async () => {
     if (!session) return
     setIsLoading(true)
@@ -370,7 +381,8 @@ const PoolsPage: React.FC = () => {
     void loadPools()
     void loadCalendars()
     void loadCompetencySkills()
-  }, [loadPools, loadCalendars, loadCompetencySkills])
+    void loadJourneyTypes()
+  }, [loadPools, loadCalendars, loadCompetencySkills, loadJourneyTypes])
 
   // ── form helpers ──────────────────────────────────────────────────────────────
 
@@ -400,7 +412,9 @@ const PoolsPage: React.FC = () => {
     setEditingPool(null)
     setFormData({
       pool_id: '', description: '', channel_types: [], sla_target_ms: 30000,
-      max_reply_time_ms: null, calendar_id: '', context_visibility_ns: '', inbound_journey_resume: false, routing_weights: { ...ROUTING_WEIGHTS_DEFAULTS },
+      max_reply_time_ms: null, calendar_id: '', context_visibility_ns: '',
+      inbound_journey_resume: false, authorized_journey_types: [],
+      routing_weights: { ...ROUTING_WEIGHTS_DEFAULTS },
     })
     setCalExceptions([])
     setError('')
@@ -414,11 +428,12 @@ const PoolsPage: React.FC = () => {
       description:     pool.description || '',
       channel_types:     pool.channel_types,
       sla_target_ms:     pool.sla_target_ms,
-      max_reply_time_ms:     pool.max_reply_time_ms ?? null,
-      calendar_id:           pool.calendar_id || '',
-      context_visibility_ns:  (pool.context_visibility?.operator_namespaces ?? []).join(', '),
-      inbound_journey_resume: pool.inbound_journey_resume ?? false,
-      routing_weights:        buildDefaultWeights(pool),
+      max_reply_time_ms:           pool.max_reply_time_ms ?? null,
+      calendar_id:                 pool.calendar_id || '',
+      context_visibility_ns:       (pool.context_visibility?.operator_namespaces ?? []).join(', '),
+      inbound_journey_resume:      pool.inbound_journey_resume ?? false,
+      authorized_journey_types:    pool.authorized_journey_types ?? [],
+      routing_weights:             buildDefaultWeights(pool),
     })
     setCalExceptions([])  // will be loaded async below
     setError('')
@@ -435,6 +450,14 @@ const PoolsPage: React.FC = () => {
       channel_types: prev.channel_types.includes(ch)
         ? prev.channel_types.filter(c => c !== ch)
         : [...prev.channel_types, ch],
+    }))
+
+  const handleJourneyTypeToggle = (jt: string) =>
+    setFormData(prev => ({
+      ...prev,
+      authorized_journey_types: prev.authorized_journey_types.includes(jt)
+        ? prev.authorized_journey_types.filter(j => j !== jt)
+        : [...prev.authorized_journey_types, jt],
     }))
 
   const setFixoWeight = (skillKey: string, val: number) =>
@@ -479,7 +502,8 @@ const PoolsPage: React.FC = () => {
         ...(formData.context_visibility_ns.trim()
           ? { context_visibility: { operator_namespaces: formData.context_visibility_ns.split(',').map(s => s.trim()).filter(Boolean) } }
           : {}),
-        inbound_journey_resume: formData.inbound_journey_resume,
+        inbound_journey_resume:   formData.inbound_journey_resume,
+        authorized_journey_types: formData.authorized_journey_types,
         ...(routing_skills.length ? { routing_skills } : {}),
         routing_weights: rw,
       }
@@ -747,6 +771,39 @@ const PoolsPage: React.FC = () => {
               <span className="text-sm font-semibold text-dark block">{t('pools.inboundJourneyResume.label')}</span>
               <span className="text-xs text-gray mt-0.5 block">{t('pools.inboundJourneyResume.hint')}</span>
             </label>
+          </div>
+
+          {/* ── Authorized Journey Types ─────────────────────────────────────── */}
+          <div>
+            <div className="mb-2">
+              <p className="text-sm font-semibold text-dark">{t('pools.authorizedJourneyTypes.label')}</p>
+              <p className="text-xs text-gray mt-0.5">{t('pools.authorizedJourneyTypes.hint')}</p>
+            </div>
+            {journeyTypes.length === 0 ? (
+              <p className="text-xs text-gray italic py-1">{t('pools.authorizedJourneyTypes.none')}</p>
+            ) : (
+              <div className="border border-border rounded p-3 bg-surface-muted max-h-40 overflow-y-auto space-y-1.5">
+                {journeyTypes.map(jt => (
+                  <label key={jt.journey_type_id} className="flex items-center gap-2 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={formData.authorized_journey_types.includes(jt.journey_type_id)}
+                      onChange={() => handleJourneyTypeToggle(jt.journey_type_id)}
+                      className="w-4 h-4 rounded accent-primary"
+                    />
+                    <span className="text-sm font-mono text-dark">{jt.journey_type_id}</span>
+                    {jt.description && (
+                      <span className="text-xs text-muted-light truncate">{jt.description}</span>
+                    )}
+                  </label>
+                ))}
+              </div>
+            )}
+            {formData.authorized_journey_types.length === 0 && journeyTypes.length > 0 && (
+              <p className="text-xs text-muted-light mt-1 italic">
+                {t('pools.authorizedJourneyTypes.empty')}
+              </p>
+            )}
           </div>
 
           {/* ── Routing weights — Fixos ───────────────────────────────────────── */}

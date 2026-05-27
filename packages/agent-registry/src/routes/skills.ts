@@ -9,7 +9,7 @@
 
 import { Router, Request, Response, NextFunction } from "express"
 import { prisma, Prisma }      from "../db"
-import { CreateSkillSchema, UpdateSkillSchema, validateMaskedBlock } from "../validators/skill"
+import { CreateSkillSchema, UpdateSkillSchema, validateMaskedBlock, validateJourneyType } from "../validators/skill"
 import { publishRegistryChanged } from "../infra/kafka"
 import { config } from "../config"
 
@@ -22,6 +22,16 @@ skillsRouter.post("/", async (req: Request, res: Response, next: NextFunction) =
   try {
     const tenantId  = _getTenantId(req)
     const createdBy = _getUserId(req)
+    // ── Arc 17 (#301): creates_journey:true requires journey_type_id ──
+    // Must run on raw req.body — Zod strips unknown fields including creates_journey.
+    const journeyTypeErrors = validateJourneyType(req.body)
+    if (journeyTypeErrors.length > 0) {
+      return res.status(422).json({
+        error:   "invalid_journey_type",
+        details: journeyTypeErrors,
+      })
+    }
+
     const body      = CreateSkillSchema.parse(req.body)
 
     // ── Validação cruzada: mcp_servers das tools estão registrados ──
@@ -133,6 +143,15 @@ skillsRouter.put("/:skill_id", async (req: Request, res: Response, next: NextFun
   try {
     const tenantId  = _getTenantId(req)
     const skillId   = req.params["skill_id"]!
+    // ── Arc 17 (#301): creates_journey:true requires journey_type_id ──
+    const journeyTypeErrors = validateJourneyType(req.body)
+    if (journeyTypeErrors.length > 0) {
+      return res.status(422).json({
+        error:   "invalid_journey_type",
+        details: journeyTypeErrors,
+      })
+    }
+
     const body      = CreateSkillSchema.parse({ ...req.body, skill_id: skillId })
 
     // ── Validação de bloco masked ──

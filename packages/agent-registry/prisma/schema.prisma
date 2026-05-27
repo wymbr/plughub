@@ -31,8 +31,11 @@ model Pool {
   supervisor_config      Json?
   queue_config           Json?
   mentionable_pools      Json?   // Record<alias, pool_id> — @mention routing config
-  mentionable_journeys   Json?   // Record<alias, skill_id> — journey start shortcuts via @mention
-  agent_groups           String[] @default([]) // Agent group IDs this pool belongs to (Arc 9)
+  mentionable_journeys      Json?   // Record<alias, skill_id> — journey start shortcuts via @mention
+  // Arc 17: JourneyType IDs this pool is authorized to create.
+  // Written to ContextStore as session.authorized_journey_types[] after allocation.
+  authorized_journey_types  String[] @default([])
+  agent_groups              String[] @default([]) // Agent group IDs this pool belongs to (Arc 9)
   hooks                  Json?   // PoolHooks — on_human_start, on_human_end, post_human
   calendar_id            String? // Reference to calendar-api calendar UUID (display cache)
   context_visibility     Json?   // { operator_namespaces: string[] } — ContextoTab namespace filter
@@ -292,6 +295,27 @@ model PoolSkillSlot {
   @@unique([pool_id, tenant_id, slot])
   @@index([pool_id, tenant_id])
   @@map("pool_skill_slots")
+}
+
+// ─────────────────────────────────────────────
+// JourneyType — Arc 17: platform-level business process definitions
+// Tenants register these in Config/Resources.
+// All Journey instances must reference a registered JourneyType.
+// ─────────────────────────────────────────────
+
+model JourneyType {
+  id               String   @id @default(uuid())
+  journey_type_id  String   // slug, e.g. "portabilidade_telco"
+  tenant_id        String
+  sla_ms           Int?     // expected total completion time in ms (optional)
+  description      String?
+
+  created_at  DateTime @default(now())
+  updated_at  DateTime @updatedAt
+
+  @@unique([journey_type_id, tenant_id])
+  @@index([tenant_id])
+  @@map("journey_types")
 }
 
 // ─────────────────────────────────────────────

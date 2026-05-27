@@ -56,8 +56,8 @@ export function useWorkflowInstances(
       if (status) params.set('status', status)
       const res = await fetch(`/v1/workflow/instances?${params.toString()}`)
       if (res.ok) {
-        const data = await safeJson<{ instances?: WorkflowInstance[] }>(res)
-        setInstances(data.instances ?? [])
+        const data = await safeJson<WorkflowInstance[] | { instances?: WorkflowInstance[] }>(res)
+        setInstances(Array.isArray(data) ? data : (data.instances ?? []))
       }
     } catch { /* stale ok */ }
     finally { setLoading(false) }
@@ -124,6 +124,122 @@ export async function triggerWorkflow(payload: {
   return safeJson(res)
 }
 
+// ─── useWorkflowInstancesFiltered — Arc 18 B2 analytics drill-down ───────────
+
+export interface InstanceFilters {
+  status?:  string   // 'all' | WorkflowStatus
+  poolId?:  string
+  flowId?:  string
+  fromDt?:  string   // ISO date
+  toDt?:    string   // ISO date
+}
+
+export function useWorkflowInstancesFiltered(
+  tenantId:  string,
+  filters:   InstanceFilters = {},
+): { instances: WorkflowInstance[]; loading: boolean; error: string | null; refresh: () => void } {
+  const [instances, setInstances] = useState<WorkflowInstance[]>([])
+  const [loading,   setLoading]   = useState(false)
+  const [error,     setError]     = useState<string | null>(null)
+
+  const refresh = useCallback(async () => {
+    if (!tenantId) return
+    setLoading(true)
+    setError(null)
+    try {
+      const params = new URLSearchParams({ tenant_id: tenantId, limit: '200' })
+      if (filters.status && filters.status !== 'all') params.set('status', filters.status)
+      if (filters.poolId)  params.set('pool_id',  filters.poolId)
+      if (filters.flowId)  params.set('flow_id',  filters.flowId)
+      if (filters.fromDt)  params.set('from_dt',  filters.fromDt)
+      if (filters.toDt)    params.set('to_dt',    filters.toDt)
+      const url = `/v1/workflow/instances?${params}`
+      console.debug('[useWorkflowInstancesFiltered] GET', url)
+      const res = await fetch(url)
+      if (res.ok) {
+        const data: WorkflowInstance[] = await safeJson(res)
+        setInstances(Array.isArray(data) ? data : [])
+      } else {
+        const body = await res.text().catch(() => '')
+        const msg = `HTTP ${res.status} — ${body.slice(0, 200)}`
+        console.error('[useWorkflowInstancesFiltered]', msg)
+        setError(msg)
+        setInstances([])
+      }
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e)
+      console.error('[useWorkflowInstancesFiltered] network error:', msg)
+      setError(msg)
+    }
+    finally { setLoading(false) }
+  }, [tenantId, filters.status, filters.poolId, filters.flowId, filters.fromDt, filters.toDt])
+
+  useEffect(() => { refresh() }, [refresh])
+
+  return { instances, loading, error, refresh }
+}
+
+// ─── useWorkflowInstanceSessions — Arc 18 B2 instance → sessions drill-down ──
+
+export interface InstanceSession {
+  session_id:   string
+  type:         'origin' | 'collect'
+  step_id?:     string
+  channel?:     string
+  responded_at?: string
+}
+
+export function useWorkflowInstanceSessions(
+  instanceId: string | null,
+): { sessions: InstanceSession[]; loading: boolean } {
+  const [sessions, setSessions] = useState<InstanceSession[]>([])
+  const [loading,  setLoading]  = useState(false)
+
+  useEffect(() => {
+    if (!instanceId) { setSessions([]); return }
+    let cancelled = false
+    setLoading(true)
+    fetch(`/v1/workflow/instances/${encodeURIComponent(instanceId)}/sessions`)
+      .then(r => r.ok ? safeJson<{ sessions: InstanceSession[] }>(r) : Promise.reject(r.status))
+      .then(d => { if (!cancelled) setSessions(d.sessions ?? []) })
+      .catch(() => { if (!cancelled) setSessions([]) })
+      .finally(() => { if (!cancelled) setLoading(false) })
+    return () => { cancelled = true }
+  }, [instanceId])
+
+  return { sessions, loading }
+}
+
+// ─── useJourneyInstances — instances for a journey (Arc 18 drill-down) ───────
+
+export function useJourneyInstances(
+  journeyId: string | null,
+  tenantId:  string,
+): { instances: WorkflowInstance[]; loading: boolean; refresh: () => void } {
+  const [instances, setInstances] = useState<WorkflowInstance[]>([])
+  const [loading,   setLoading]   = useState(false)
+
+  const refresh = useCallback(async () => {
+    if (!journeyId || !tenantId) return
+    setLoading(true)
+    try {
+      const params = new URLSearchParams({ limit: '50' })
+      const res = await fetch(`/v1/journeys/${encodeURIComponent(journeyId)}/instances?${params}`, {
+        headers: { 'x-tenant-id': tenantId },
+      })
+      if (res.ok) {
+        const data = await safeJson<{ items?: WorkflowInstance[] }>(res)
+        setInstances(data.items ?? [])
+      }
+    } catch { /* stale ok */ }
+    finally { setLoading(false) }
+  }, [journeyId, tenantId])
+
+  useEffect(() => { refresh() }, [refresh])
+
+  return { instances, loading, refresh }
+}
+
 // ─── cancelWorkflow ───────────────────────────────────────────────────────────
 
 export async function cancelWorkflow(instanceId: string, tenantId: string): Promise<void> {
@@ -140,17 +256,21 @@ export async function cancelWorkflow(instanceId: string, tenantId: string): Prom
 export type JourneyStatus = 'active' | 'suspended' | 'completed' | 'failed' | 'cancelled'
 
 export interface Journey {
-  journey_id:           string
-  tenant_id:            string
-  skill_id:             string
-  status:               JourneyStatus
-  customer_id?:         string
-  origin_session_id?:   string
+  journey_id:            string
+  tenant_id:             string
+  skill_id:              string
+  status:                JourneyStatus
+  customer_id?:          string
+  origin_session_id?:    string
   workflow_instance_id?: string
-  created_at:           string
-  last_event_at?:       string
-  session_count:        number
-  metadata?:            Record<string, unknown>
+  /** Arc 17: governance type slug, null for pre-Arc-17 journeys */
+  journey_type_id?:      string | null
+  /** Arc 17: originating pool */
+  pool_id?:              string | null
+  created_at:            string
+  last_event_at?:        string
+  session_count:         number
+  metadata?:             Record<string, unknown>
 }
 
 export interface JourneyKpi {
@@ -165,10 +285,12 @@ export interface JourneyKpi {
 }
 
 export function useJourneys(
-  tenantId:  string,
-  skillId?:  string,
-  status?:   JourneyStatus | 'all',
-  intervalMs = 15_000,
+  tenantId:        string,
+  skillId?:        string,
+  status?:         JourneyStatus | 'all',
+  intervalMs =     15_000,
+  journeyTypeId?:  string,   // Arc 17: filter by journey_type_id slug
+  poolId?:         string,   // Arc 17: filter by pool_id
 ): { journeys: Journey[]; kpis: JourneyKpi[]; loading: boolean; refresh: () => void } {
   const [journeys, setJourneys] = useState<Journey[]>([])
   const [kpis,     setKpis]     = useState<JourneyKpi[]>([])
@@ -181,7 +303,9 @@ export function useJourneys(
       const params = new URLSearchParams({ tenant_id: tenantId, page_size: '200' })
       if (skillId)                        params.set('skill_id', skillId)
       if (status && status !== 'all')     params.set('status', status)
-      const res = await fetch(`/analytics/reports/journeys?${params.toString()}`)
+      if (journeyTypeId)                  params.set('journey_type_id', journeyTypeId)
+      if (poolId)                         params.set('pool_id', poolId)
+      const res = await fetch(`/reports/journeys?${params.toString()}`)
       if (res.ok) {
         const data = await safeJson<{ data?: Journey[]; kpis?: JourneyKpi[] }>(res)
         setJourneys(data.data ?? [])
@@ -189,10 +313,11 @@ export function useJourneys(
       }
     } catch { /* stale ok */ }
     finally { setLoading(false) }
-  }, [tenantId, skillId, status])
+  }, [tenantId, skillId, status, journeyTypeId, poolId])
 
   useEffect(() => {
     refresh()
+    if (!intervalMs) return          // intervalMs=0 → one-shot, no polling
     const id = setInterval(refresh, intervalMs)
     return () => clearInterval(id)
   }, [refresh, intervalMs])

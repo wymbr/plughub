@@ -363,19 +363,21 @@ async def _write_pool_context(
         now_str = datetime.now(timezone.utc).isoformat()
 
         # Read pool config from routing engine Redis cache — no new I/O path
-        channel_types:        list[str]   = []
-        mentionable_pools:    dict | None = None
-        mentionable_journeys: list | None = None
-        agent_groups:         list[str]   = []
-        max_reply_time_ms:    int | None  = None
+        channel_types:             list[str]   = []
+        mentionable_pools:         dict | None = None
+        mentionable_journeys:      list | None = None
+        agent_groups:              list[str]   = []
+        max_reply_time_ms:         int | None  = None
+        authorized_journey_types:  list[str]   = []
         raw = await redis_client.get(f"{tenant_id}:pool_config:{pool_id}")
         if raw:
-            pool_cfg             = json.loads(raw)
-            channel_types        = pool_cfg.get("channel_types", [])
-            mentionable_pools    = pool_cfg.get("mentionable_pools") or None
-            mentionable_journeys = pool_cfg.get("mentionable_journeys") or None
-            agent_groups         = pool_cfg.get("agent_groups") or []
-            max_reply_time_ms    = pool_cfg.get("max_reply_time_ms") or None
+            pool_cfg                  = json.loads(raw)
+            channel_types             = pool_cfg.get("channel_types", [])
+            mentionable_pools         = pool_cfg.get("mentionable_pools") or None
+            mentionable_journeys      = pool_cfg.get("mentionable_journeys") or None
+            agent_groups              = pool_cfg.get("agent_groups") or []
+            max_reply_time_ms         = pool_cfg.get("max_reply_time_ms") or None
+            authorized_journey_types  = pool_cfg.get("authorized_journey_types") or []
 
         def _entry(value: object) -> str:
             return json.dumps({
@@ -398,6 +400,8 @@ async def _write_pool_context(
             mapping["session.pool.agent_groups"] = _entry(agent_groups)
         if max_reply_time_ms is not None:
             mapping["session.pool.max_reply_time_ms"] = _entry(max_reply_time_ms)
+        # Arc 17: always write (even as []) so journey_start can check authorization
+        mapping["session.authorized_journey_types"] = _entry(authorized_journey_types)
 
         await redis_client.hset(ctx_key, mapping=mapping)
         # EXPIRE with NX: only sets TTL if no TTL is currently on the key,

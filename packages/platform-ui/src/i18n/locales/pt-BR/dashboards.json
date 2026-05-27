@@ -114,10 +114,11 @@
     "agent-event-timeseries":  { "label": "Eventos de Negócio (Série)",    "description": "Volume diário e valor médio de eventos de negócio publicados por agentes AI/humanos" },
     "agent-event-summary":     { "label": "Eventos de Negócio (Resumo)",   "description": "Total de eventos por dimensão (categoria, skill, pool ou tipo de agente)" },
     "params": {
-      "pool_id":  { "label": "Pool (fixo)",         "placeholder": "Ex: retencao_humano" },
-      "skill_id": { "label": "Skill (fixo)",        "placeholder": "Ex: skill_portabilidade_v1" },
-      "category": { "label": "Categoria de evento", "placeholder": "Ex: retencao_humano.skill_portabilidade_v1.nps" },
-      "group_by": { "label": "Agrupar por",         "placeholder": "category | skill_id | pool_id | agent_type_id" }
+      "pool_id":         { "label": "Pool (fixo)",         "placeholder": "Ex: retencao_humano" },
+      "skill_id":        { "label": "Skill (fixo)",        "placeholder": "Ex: skill_portabilidade_v1" },
+      "journey_type_id": { "label": "Tipo de Jornada",     "placeholder": "Ex: portabilidade_telco" },
+      "category":        { "label": "Categoria de evento", "placeholder": "Ex: retencao_humano.skill_portabilidade_v1.nps" },
+      "group_by":        { "label": "Agrupar por",         "placeholder": "category | skill_id | pool_id | agent_type_id" }
     }
   }
 }

@@ -30,6 +30,10 @@ export default defineConfig({
         target: 'http://localhost:3800',
         changeOrigin: true
       },
+      '^/v1/journeys': {
+        target: 'http://localhost:3800',
+        changeOrigin: true
+      },
       '^/v1/(calendars|holiday-sets|associations|engine)': {
         target: 'http://localhost:3700',
         changeOrigin: true

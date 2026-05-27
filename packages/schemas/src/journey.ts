@@ -1,14 +1,59 @@
 /**
  * journey.ts
  * Arc 10 — Journey: Multi-Session Service Automation
+ * Arc 17 — JourneyType: Platform-level business process definitions
  *
  * Journey is the business-level unit that transcends the session.
  * It groups all contacts (session_ids) involved in resolving a single
  * service process and enables end-to-end KPIs.
  *
  * journey_id ≠ workflow_instance_id — distinct entities with independent lifecycles.
+ *
+ * Arc 17 adds JourneyType — the platform-level definition that must exist before
+ * any Journey instance can be created. journey_type_id is a slug (e.g. "portabilidade_telco")
+ * unique per tenant. Pools declare which types they are authorized to create.
  */
 import { z } from "zod"
+
+// ── Journey Type (Arc 17) ─────────────────────────────────────────────────────
+
+/**
+ * JourneyType is the platform-level definition of a business process type.
+ * Configured in Config/Resources by platform admins (per tenant).
+ *
+ * journey_type_id follows the same naming convention as pool_id and agent_type_id:
+ * snake_case slug, e.g. "portabilidade_telco", "cancelamento_retention".
+ *
+ * Governance rule: Journey instances may only be created with a journey_type_id
+ * that is registered AND declared in the originating pool's authorized_journey_types[].
+ */
+export const JourneyTypeSchema = z.object({
+  journey_type_id: z.string().regex(/^[a-z0-9_]+$/).describe(
+    "Unique slug per tenant identifying this business process type (e.g. 'portabilidade_telco')"
+  ),
+  tenant_id:   z.string(),
+  sla_ms:      z.number().int().positive().describe(
+    "Expected total completion time in ms. Journeys exceeding this threshold are reported as above-SLA."
+  ),
+  description: z.string().optional(),
+  created_at:  z.string().datetime(),
+  updated_at:  z.string().datetime(),
+})
+export type JourneyType = z.infer<typeof JourneyTypeSchema>
+
+/** Input schema for POST /v1/journey-types */
+export const CreateJourneyTypeSchema = JourneyTypeSchema.omit({
+  tenant_id:  true,
+  created_at: true,
+  updated_at: true,
+})
+export type CreateJourneyType = z.infer<typeof CreateJourneyTypeSchema>
+
+/** Input schema for PATCH /v1/journey-types/:id */
+export const UpdateJourneyTypeSchema = CreateJourneyTypeSchema.partial().omit({
+  journey_type_id: true,
+})
+export type UpdateJourneyType = z.infer<typeof UpdateJourneyTypeSchema>
 
 // ── Status ────────────────────────────────────────────────────────────────────
 
@@ -28,6 +73,16 @@ export const JourneySchema = z.object({
   journey_id:              z.string().uuid(),
   tenant_id:               z.string(),
   skill_id:                z.string(),
+  /**
+   * Arc 17: references the registered JourneyType definition.
+   * Nullable for migration safety — existing journeys pre-Arc 17 have null.
+   */
+  journey_type_id:         z.string().nullable(),
+  /**
+   * Arc 17: sla_ms denormalized from JourneyType at creation time.
+   * Stored on the instance to enable SLA calculation without joining JourneyType at read time.
+   */
+  sla_ms:                  z.number().int().positive().nullable(),
   workflow_instance_id:    z.string().uuid().nullable(),
   customer_id:             z.string().nullable(),
   origin_session_id:       z.string(),
@@ -75,6 +130,8 @@ export const JourneyEventSchema = z.object({
   timestamp:               z.string().datetime(),
   tenant_id:               z.string(),
   journey_id:              z.string().uuid(),
+  /** Arc 17: propagated from Journey instance for analytics filtering */
+  journey_type_id:         z.string().optional(),
   skill_id:                z.string(),
   customer_id:             z.string().nullable().optional(),
   origin_session_id:       z.string().optional(),
@@ -118,9 +175,14 @@ export type JourneyEvent = z.infer<typeof JourneyEventSchema>
 // ── MCP tool input schemas ────────────────────────────────────────────────────
 
 export const JourneyStartInputSchema = z.object({
-  skill_id:   z.string().describe("Skill-flow that governs this service process"),
-  session_id: z.string().describe("Current session — becomes origin_session_id"),
-  metadata:   z.record(z.unknown()).optional().describe("Additional context passed to the workflow"),
+  /**
+   * Arc 17: registered journey type. Must exist in the platform AND be listed in
+   * the originating pool's authorized_journey_types[]. Required — no ad-hoc creation.
+   */
+  journey_type_id: z.string().describe("Registered journey type (e.g. 'portabilidade_telco')"),
+  skill_id:        z.string().describe("Skill-flow that governs this service process"),
+  session_id:      z.string().describe("Current session — becomes origin_session_id"),
+  metadata:        z.record(z.unknown()).optional().describe("Additional context passed to the workflow"),
 })
 export type JourneyStartInput = z.infer<typeof JourneyStartInputSchema>
 

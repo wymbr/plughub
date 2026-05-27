@@ -1,221 +1,137 @@
 /**
  * AnaliseProcessosPage — /analise/processos
  *
- * Workflow analytics: completion rates, failure analysis, avg duration.
- * Data source: GET /reports/workflow-summary (analytics-api, proxied via Vite)
+ * Analytics view of workflow instances with 3-level URL-param drill-down:
+ *   Level 1: /analise/processos                     — filtered instances table
+ *   Level 2: /analise/processos?instance=:id        — sessions of that instance
+ *   Level 3: /analise/processos?instance=:id&session=:sid — SessionTranscript
  *
- * Groups workflow_events by flow_id or campaign_id and shows:
- *   - Total triggered / completed / failed / timeout / cancelled / suspended
- *   - Completion rate and failure rate
- *   - Average duration
+ * Data source: GET /v1/workflow/instances (workflow-api, proxied via Vite)
  */
-import React, { useCallback, useEffect, useState } from 'react'
-import { Settings } from 'lucide-react'
+import React, { useMemo } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
+import { ChevronRight, FileText } from 'lucide-react'
 import { useAuth } from '@/auth/useAuth'
 import Spinner from '@/components/ui/Spinner'
-
-// ── Types ─────────────────────────────────────────────────────────────────────
-
-interface WorkflowSummaryRow {
-  group_key:        string
-  total_triggered:  number
-  total_completed:  number
-  total_failed:     number
-  total_timeout:    number
-  total_cancelled:  number
-  total_suspended:  number
-  completion_rate:  number   // 0.0–1.0
-  failure_rate:     number   // 0.0–1.0
-  avg_duration_ms:  number | null
-}
-
-interface SummaryResponse {
-  data:     WorkflowSummaryRow[]
-  group_by: string
-  meta:     { total: number; from_dt: string; to_dt: string }
-  error?:   string
-}
-
-type GroupBy = 'flow_id' | 'campaign_id'
-
-const GROUP_BY_VALUES: GroupBy[] = ['flow_id', 'campaign_id']
+import { SessionTranscript } from '@/modules/service/components/SessionTranscript'
+import * as registryApi from '@/api/registry'
+import type { Pool } from '@/types'
+import {
+  useWorkflowInstancesFiltered,
+  useWorkflowInstanceSessions,
+  type WorkflowInstance,
+  type WorkflowStatus,
+  type InstanceSession,
+} from '@/modules/workflows/api/hooks'
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 function isoToday(): string { return new Date().toISOString().slice(0, 10) }
-function iso7DaysAgo(): string {
-  const d = new Date(); d.setDate(d.getDate() - 6)
+function iso30DaysAgo(): string {
+  const d = new Date(); d.setDate(d.getDate() - 29)
   return d.toISOString().slice(0, 10)
 }
-function pct(v: number): string { return `${(v * 100).toFixed(1)}%` }
-function fmtDuration(ms: number | null): string {
-  if (ms === null || ms === undefined) return '—'
+function fmtDate(iso: string): string {
+  if (!iso) return '—'
+  try { return new Date(iso).toLocaleString(undefined, { dateStyle: 'short', timeStyle: 'short' }) }
+  catch { return iso }
+}
+function fmtDuration(from: string, to?: string | null): string {
+  if (!from || !to) return '—'
+  const ms = new Date(to).getTime() - new Date(from).getTime()
   if (ms < 60_000) return `${Math.round(ms / 1000)}s`
-  const m = Math.floor(ms / 60_000)
-  const s = Math.round((ms % 60_000) / 1000)
+  const m = Math.floor(ms / 60_000); const s = Math.round((ms % 60_000) / 1000)
   return s > 0 ? `${m}m ${s}s` : `${m}m`
 }
+function truncateId(id: string | undefined): string {
+  if (!id) return '—'
+  return id.length > 16 ? `…${id.slice(-12)}` : id
+}
 
-// ── Rate bar ──────────────────────────────────────────────────────────────────
+// ── StatusBadge ───────────────────────────────────────────────────────────────
 
-function RateBar({ value, color }: { value: number; color: string }) {
-  const w = Math.min(100, Math.max(0, value * 100)).toFixed(0)
+const STATUS_COLORS: Record<string, string> = {
+  active:    'bg-primary-light text-primary border-primary/30',
+  suspended: 'bg-warning-light text-warning border-warning/30',
+  completed: 'bg-green-light text-green border-green/30',
+  failed:    'bg-red-light text-red border-red/30',
+  timed_out: 'bg-warning-light text-warning border-warning/30',
+  cancelled: 'bg-surface-alt text-muted border-border',
+}
+
+function StatusBadge({ status }: { status: WorkflowStatus }) {
+  const { t } = useTranslation('contacts')
+  const cls = STATUS_COLORS[status] ?? 'bg-surface-alt text-muted border-border'
   return (
-    <div className="flex items-center gap-1.5">
-      <div className="w-20 h-1.5 rounded bg-surface-alt overflow-hidden">
-        <div className="h-full rounded" style={{ width: `${w}%`, background: color }} />
-      </div>
-      <span className="text-xs tabular-nums" style={{ color }}>{pct(value)}</span>
-    </div>
+    <span className={`inline-block text-xs px-2 py-0.5 rounded border font-medium ${cls}`}>
+      {t(`processes.wfStatus.${status}`, { defaultValue: status })}
+    </span>
   )
 }
 
-// ── Outcome distribution bar ──────────────────────────────────────────────────
+// ── SessionTypeBadge ──────────────────────────────────────────────────────────
 
-function OutcomeBar({ row }: { row: WorkflowSummaryRow }) {
-  const { t } = useTranslation('workflows')
-  const total = row.total_triggered || 1
-  const segments = [
-    { count: row.total_completed, color: '#059669', statusKey: 'completed' },
-    { count: row.total_suspended, color: '#2D9CDB', statusKey: 'suspended' },
-    { count: row.total_failed,    color: '#DC2626', statusKey: 'failed' },
-    { count: row.total_timeout,   color: '#D97706', statusKey: 'timed_out' },
-    { count: row.total_cancelled, color: '#6b7280', statusKey: 'cancelled' },
-  ]
+function SessionTypeBadge({ type }: { type: 'origin' | 'collect' }) {
+  const { t } = useTranslation('contacts')
+  const cls = type === 'origin'
+    ? 'bg-primary-light text-primary border-primary/30'
+    : 'bg-surface-alt text-muted border-border'
   return (
-    <div className="flex h-3 rounded overflow-hidden w-28 gap-px" title={
-      segments.map(s => `${t(`statuses.${s.statusKey}`, { defaultValue: s.statusKey })}: ${s.count}`).join(' · ')
-    }>
-      {segments.map(s => s.count > 0
-        ? <div key={s.statusKey} style={{ width: `${(s.count / total) * 100}%`, background: s.color }} />
-        : null
-      )}
-    </div>
+    <span className={`inline-block text-xs px-1.5 py-0.5 rounded border font-medium ${cls}`}>
+      {t(`processes.instances.sessions.type.${type}`, { defaultValue: type })}
+    </span>
   )
 }
 
-// ── KPI card ──────────────────────────────────────────────────────────────────
+// ── Level 1: Instances list ───────────────────────────────────────────────────
 
-function KpiCard({ label, value, sub, color }: { label: string; value: string; sub?: string; color?: string }) {
-  return (
-    <div className="bg-white border border-border rounded-lg px-5 py-3 flex flex-col gap-0.5 min-w-[140px]">
-      <span className="text-xs text-muted-light uppercase tracking-wide">{label}</span>
-      <span className="text-2xl font-bold leading-none" style={{ color: color ?? '#1e293b' }}>{value}</span>
-      {sub && <span className="text-xs text-muted-light">{sub}</span>}
-    </div>
-  )
+interface InstancesListProps {
+  tenantId: string
+  onSelectInstance: (id: string) => void
 }
 
-// ── Main page ─────────────────────────────────────────────────────────────────
+const PROC_PAGE_SIZE = 50
 
-export default function AnaliseProcessosPage() {
-  const { tenantId } = useAuth()
-  const { t, i18n } = useTranslation('workflows')
+function InstancesList({ tenantId, onSelectInstance }: InstancesListProps) {
+  const { t } = useTranslation('contacts')
+  const [fromDt,  setFromDt]  = React.useState(iso30DaysAgo)
+  const [toDt,    setToDt]    = React.useState(isoToday)
+  const [status,  setStatus]  = React.useState<string>('all')
+  const [poolId,  setPoolId]  = React.useState('')
+  const [flowId,  setFlowId]  = React.useState('')
+  const [page,    setPage]    = React.useState(1)
+  const [pools,   setPools]   = React.useState<Pool[]>([])
 
-  const [fromDt,    setFromDt]    = useState(iso7DaysAgo)
-  const [toDt,      setToDt]      = useState(isoToday)
-  const [groupBy,   setGroupBy]   = useState<GroupBy>('flow_id')
-  const [data,      setData]      = useState<WorkflowSummaryRow[]>([])
-  const [loading,   setLoading]   = useState(false)
-  const [error,     setError]     = useState<string | null>(null)
-  const [sortKey,   setSortKey]   = useState<keyof WorkflowSummaryRow>('total_triggered')
-  const [sortAsc,   setSortAsc]   = useState(false)
-
-  const load = useCallback(async () => {
+  React.useEffect(() => {
     if (!tenantId) return
-    setLoading(true); setError(null)
-    try {
-      const qs = new URLSearchParams({
-        tenant_id: tenantId,
-        from_dt:   fromDt,
-        to_dt:     toDt,
-        group_by:  groupBy,
-      })
-      const res  = await fetch(`/reports/workflow-summary?${qs}`)
-      const body = await res.json() as SummaryResponse
-      if (body.error) throw new Error(body.error)
-      setData(body.data ?? [])
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
-      setData([])
-    } finally { setLoading(false) }
-  }, [tenantId, fromDt, toDt, groupBy])
+    registryApi.listPools(tenantId).then(r => setPools(r.items)).catch(() => {})
+  }, [tenantId])
 
-  useEffect(() => { load() }, [load])
+  const filters = useMemo(() => ({
+    status:  status || undefined,
+    poolId:  poolId || undefined,
+    flowId:  flowId || undefined,
+    fromDt,
+    toDt,
+  }), [status, poolId, flowId, fromDt, toDt])
 
-  // ── Derived KPIs ─────────────────────────────────────────────────────────────
+  const { instances, loading, error, refresh } = useWorkflowInstancesFiltered(tenantId, filters)
 
-  const totalTriggered = data.reduce((s, r) => s + r.total_triggered, 0)
-  const totalCompleted = data.reduce((s, r) => s + r.total_completed, 0)
-  const totalFailed    = data.reduce((s, r) => s + r.total_failed + r.total_timeout, 0)
+  // Reset page when filters change
+  React.useEffect(() => { setPage(1) }, [filters])
 
-  const wCompletion    = totalTriggered > 0
-    ? data.reduce((s, r) => s + r.completion_rate * r.total_triggered, 0) / totalTriggered
-    : null
-  const wAvgDuration   = totalCompleted > 0
-    ? data.reduce((s, r) => r.avg_duration_ms !== null ? s + r.avg_duration_ms * r.total_completed : s, 0) / totalCompleted
-    : null
+  const totalPages    = Math.max(1, Math.ceil(instances.length / PROC_PAGE_SIZE))
+  const pagedInstances = instances.slice((page - 1) * PROC_PAGE_SIZE, page * PROC_PAGE_SIZE)
 
-  // ── Sort ──────────────────────────────────────────────────────────────────────
-
-  function handleSort(key: keyof WorkflowSummaryRow) {
-    if (key === sortKey) setSortAsc(a => !a)
-    else { setSortKey(key); setSortAsc(false) }
-  }
-
-  const sorted = [...data].sort((a, b) => {
-    const va = a[sortKey] ?? 0
-    const vb = b[sortKey] ?? 0
-    const cmp = typeof va === 'number' && typeof vb === 'number'
-      ? va - vb : String(va).localeCompare(String(vb))
-    return sortAsc ? cmp : -cmp
-  })
-
-  // ── CSV export ────────────────────────────────────────────────────────────────
-
-  function exportCsv() {
-    const cols: (keyof WorkflowSummaryRow)[] = [
-      'group_key', 'total_triggered', 'total_completed', 'total_failed',
-      'total_timeout', 'total_cancelled', 'total_suspended',
-      'completion_rate', 'failure_rate', 'avg_duration_ms',
-    ]
-    const header = cols.join(',')
-    const rows   = data.map(r => cols.map(c => r[c] ?? '').join(',')).join('\n')
-    const blob   = new Blob([header + '\n' + rows], { type: 'text/csv' })
-    const url    = URL.createObjectURL(blob)
-    const a      = document.createElement('a')
-    a.href = url; a.download = `processos_${fromDt}_${toDt}.csv`; a.click()
-    URL.revokeObjectURL(url)
-  }
-
-  // ── Th helper ─────────────────────────────────────────────────────────────────
-
-  function Th({ label, k, align = 'left' }: { label: string; k: keyof WorkflowSummaryRow; align?: string }) {
-    const active = sortKey === k
-    return (
-      <th onClick={() => handleSort(k)}
-        className={`px-3 py-2.5 font-medium text-${align} cursor-pointer select-none whitespace-nowrap hover:text-dark transition-colors ${active ? 'text-primary' : 'text-muted'}`}>
-        {label}{active ? (sortAsc ? ' ↑' : ' ↓') : ''}
-      </th>
-    )
-  }
-
-  if (!tenantId) {
-    return (
-      <div className="flex items-center justify-center h-full text-muted-light text-sm">
-        {t('analise.noTenant')}
-      </div>
-    )
-  }
+  const WF_STATUSES: string[] = ['all', 'active', 'suspended', 'completed', 'failed', 'timed_out', 'cancelled']
 
   return (
-    <div className="flex flex-col h-full overflow-hidden bg-surface-muted">
-
+    <div className="flex flex-col h-full overflow-hidden">
       {/* Filter bar */}
       <div className="bg-white border-b border-border px-5 py-2.5 flex items-center gap-3 flex-shrink-0 flex-wrap">
         <div className="flex items-center gap-1.5">
-          <label className="text-xs text-muted">De</label>
+          <label className="text-xs text-muted">{t('processes.instances.filters.from')}</label>
           <input type="date" value={fromDt} onChange={e => setFromDt(e.target.value)}
             className="text-xs border border-border-strong rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-primary/40" />
         </div>
@@ -224,123 +140,158 @@ export default function AnaliseProcessosPage() {
           <input type="date" value={toDt} onChange={e => setToDt(e.target.value)}
             className="text-xs border border-border-strong rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-primary/40" />
         </div>
-        <div className="flex items-center gap-1.5">
-          <label className="text-xs text-muted">{t('analise.groupBy')}</label>
-          <select value={groupBy} onChange={e => setGroupBy(e.target.value as GroupBy)}
-            className="text-xs border border-border-strong rounded px-2 py-1 bg-white focus:outline-none focus:ring-1 focus:ring-primary/40">
-            {GROUP_BY_VALUES.map(v => (
-              <option key={v} value={v}>{t(`analise.groupByOptions.${v}`)}</option>
-            ))}
-          </select>
-        </div>
+
+        <select value={status} onChange={e => setStatus(e.target.value)}
+          className="text-xs border border-border-strong rounded px-2 py-1 bg-white focus:outline-none focus:ring-1 focus:ring-primary/40">
+          {WF_STATUSES.map(s => (
+            <option key={s} value={s}>{t(`processes.wfStatus.${s}`, { defaultValue: s })}</option>
+          ))}
+        </select>
+
+        <select value={poolId} onChange={e => setPoolId(e.target.value)}
+          className="text-xs border border-border-strong rounded px-2 py-1 bg-white focus:outline-none focus:ring-1 focus:ring-primary/40">
+          <option value="">{t('processes.instances.filters.poolPlaceholder')}</option>
+          {pools.map(p => (
+            <option key={p.pool_id} value={p.pool_id}>{p.pool_id}</option>
+          ))}
+        </select>
+
+        <input type="text" value={flowId} onChange={e => setFlowId(e.target.value)}
+          placeholder={t('processes.instances.filters.flowPlaceholder')}
+          className="text-xs border border-border-strong rounded px-2 py-1 w-40 focus:outline-none focus:ring-1 focus:ring-primary/40" />
 
         <div className="flex-1" />
-
         {loading
           ? <Spinner />
-          : <button onClick={load} className="text-xs text-muted-light hover:text-muted transition-colors px-2 py-1">
-              {t('analise.refresh')}
+          : <button onClick={refresh}
+              className="text-xs text-muted-light hover:text-muted transition-colors px-2 py-1">
+              {t('processes.refresh')}
             </button>
         }
-        <button onClick={exportCsv} disabled={data.length === 0}
-          className="text-xs border border-border rounded px-2.5 py-1 text-muted hover:bg-surface-muted disabled:opacity-40 transition-colors">
-          {t('analise.exportCsv')}
-        </button>
       </div>
 
-      {/* KPI strip */}
-      <div className="flex gap-3 px-5 py-3 flex-shrink-0 flex-wrap">
-        <KpiCard label={t('analise.kpi.triggered')} value={totalTriggered.toLocaleString(i18n.language)} />
-        <KpiCard label={t('analise.kpi.completed')} value={totalCompleted.toLocaleString(i18n.language)}
-          sub={totalTriggered > 0 ? t('analise.kpi.ofTotal', { pct: pct(totalCompleted / totalTriggered) }) : undefined}
-          color="#059669" />
-        <KpiCard label={t('analise.kpi.failures')} value={totalFailed.toLocaleString(i18n.language)}
-          sub={totalTriggered > 0 ? t('analise.kpi.ofTotal', { pct: pct(totalFailed / totalTriggered) }) : undefined}
-          color={totalFailed > 0 ? '#DC2626' : '#6b7280'} />
-        <KpiCard
-          label={t('analise.kpi.avgCompletion')}
-          value={wCompletion !== null ? pct(wCompletion) : '—'}
-          color={wCompletion !== null && wCompletion >= 0.8 ? '#059669'
-               : wCompletion !== null && wCompletion >= 0.6 ? '#1B4F8A'
-               : '#D97706'}
-        />
-        <KpiCard label={t('analise.kpi.avgDuration')} value={fmtDuration(wAvgDuration)} />
+      {/* Count + pagination bar */}
+      <div className="flex items-center justify-between px-5 py-2 bg-white border-b border-border flex-shrink-0 text-xs">
+        <span className="text-muted-light">
+          {loading
+            ? <span className="animate-spin inline-block">⟳</span>
+            : <><strong className="text-dark">{t('processes.instances.totalCount', { count: instances.length })}</strong>
+                {totalPages > 1 && <span className="ml-2 text-muted">· {t('lista.page', { page, total: totalPages })}</span>}
+              </>
+          }
+        </span>
+        {totalPages > 1 && (
+          <div className="flex items-center gap-1">
+            <button disabled={page <= 1} onClick={() => setPage(p => p - 1)}
+              className="px-2 py-0.5 rounded border border-border text-muted disabled:opacity-40 hover:border-primary hover:text-primary transition-colors">
+              {t('lista.prev')}
+            </button>
+            {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
+              const start = Math.max(1, Math.min(page - 2, totalPages - 4))
+              return start + i
+            }).map(p => (
+              <button key={p} onClick={() => setPage(p)}
+                className={`px-2 py-0.5 rounded border transition-colors ${
+                  p === page ? 'bg-primary text-white border-primary' : 'border-border text-muted hover:border-primary hover:text-primary'
+                }`}>
+                {p}
+              </button>
+            ))}
+            <button disabled={page >= totalPages} onClick={() => setPage(p => p + 1)}
+              className="px-2 py-0.5 rounded border border-border text-muted disabled:opacity-40 hover:border-primary hover:text-primary transition-colors">
+              {t('lista.next')}
+            </button>
+          </div>
+        )}
       </div>
-
-      {/* Error */}
-      {error && (
-        <div className="mx-5 mb-2 px-3 py-2 bg-red-light border border-red/30 rounded text-xs text-red-text flex-shrink-0">
-          {t('analise.loadError')} {error}
-        </div>
-      )}
 
       {/* Table */}
-      <div className="flex-1 overflow-auto px-5 pb-5">
-        {sorted.length === 0 && !loading ? (
+      <div className="flex-1 overflow-auto px-5 py-4">
+        {error ? (
+          <div className="flex flex-col items-center justify-center py-20 text-red gap-2">
+            <FileText className="w-10 h-10 opacity-30" aria-hidden="true" />
+            <span className="text-sm font-medium">Erro ao carregar processos</span>
+            <span className="text-xs text-muted font-mono max-w-lg text-center break-all">{error}</span>
+          </div>
+        ) : instances.length === 0 && !loading ? (
           <div className="flex flex-col items-center justify-center py-20 text-muted-light gap-2">
-            <Settings className="w-10 h-10" aria-hidden="true" />
-            <span className="text-sm">{t('analise.empty')}</span>
+            <FileText className="w-10 h-10 opacity-30" aria-hidden="true" />
+            <span className="text-sm">{t('processes.instances.empty')}</span>
           </div>
         ) : (
           <table className="w-full text-xs bg-white border border-border rounded-lg overflow-hidden border-separate border-spacing-0">
             <thead className="sticky top-0 z-10 bg-surface-muted border-b border-border">
               <tr>
-                <Th label={t(`analise.groupByOptions.${groupBy}`)} k="group_key" />
-                <Th label={t('analise.table.triggered')}  k="total_triggered"  align="right" />
                 <th className="px-3 py-2.5 text-left text-muted font-medium whitespace-nowrap">
-                  {t('analise.table.distribution')}
-                </th>
-                <Th label={t('analise.table.completed')}  k="total_completed"  align="right" />
-                <Th label={t('analise.table.failed')}     k="total_failed"     align="right" />
-                <Th label={t('analise.table.timeout')}    k="total_timeout"    align="right" />
-                <Th label={t('analise.table.cancelled')}  k="total_cancelled"  align="right" />
-                <Th label={t('analise.table.suspended')}  k="total_suspended"  align="right" />
-                <th className="px-3 py-2.5 text-left text-muted font-medium whitespace-nowrap">
-                  {t('analise.table.completion')}
+                  {t('processes.instances.columns.flowId')}
                 </th>
                 <th className="px-3 py-2.5 text-left text-muted font-medium whitespace-nowrap">
-                  {t('analise.table.failure')}
+                  {t('processes.instances.columns.status')}
                 </th>
-                <Th label={t('analise.table.avgDuration')} k="avg_duration_ms" align="right" />
+                <th className="px-3 py-2.5 text-left text-muted font-medium whitespace-nowrap">
+                  {t('processes.instances.columns.pool')}
+                </th>
+                <th className="px-3 py-2.5 text-left text-muted font-medium whitespace-nowrap">
+                  {t('processes.instances.columns.originSession')}
+                </th>
+                <th className="px-3 py-2.5 text-left text-muted font-medium whitespace-nowrap">
+                  {t('processes.instances.columns.journey')}
+                </th>
+                <th className="px-3 py-2.5 text-left text-muted font-medium whitespace-nowrap">
+                  {t('processes.instances.columns.created')}
+                </th>
+                <th className="px-3 py-2.5 text-left text-muted font-medium whitespace-nowrap">
+                  {t('processes.instances.columns.duration')}
+                </th>
+                <th className="px-3 py-2.5 text-left text-muted font-medium whitespace-nowrap">
+                  {t('processes.instances.columns.outcome')}
+                </th>
               </tr>
             </thead>
             <tbody>
-              {sorted.map((row, i) => (
-                <tr key={i} className="border-t border-border hover:bg-surface-muted transition-colors">
-                  <td className="px-3 py-2.5 font-mono text-dark max-w-[220px] truncate" title={row.group_key}>
-                    {row.group_key || '—'}
-                  </td>
-                  <td className="px-3 py-2.5 text-right text-dark font-medium">
-                    {row.total_triggered.toLocaleString(i18n.language)}
-                  </td>
-                  <td className="px-3 py-2.5">
-                    <OutcomeBar row={row} />
-                  </td>
-                  <td className="px-3 py-2.5 text-right">
-                    <span className="text-green-text font-medium">{row.total_completed}</span>
-                  </td>
-                  <td className="px-3 py-2.5 text-right">
-                    <span className={row.total_failed > 0 ? 'text-red font-medium' : 'text-border-strong'}>
-                      {row.total_failed}
-                    </span>
-                  </td>
-                  <td className="px-3 py-2.5 text-right">
-                    <span className={row.total_timeout > 0 ? 'text-warning font-medium' : 'text-border-strong'}>
-                      {row.total_timeout}
-                    </span>
-                  </td>
-                  <td className="px-3 py-2.5 text-right text-muted-light">{row.total_cancelled || <span className="text-border">0</span>}</td>
-                  <td className="px-3 py-2.5 text-right text-muted-light">{row.total_suspended || <span className="text-border">0</span>}</td>
-                  <td className="px-3 py-2.5">
-                    <RateBar value={row.completion_rate}
-                      color={row.completion_rate >= 0.8 ? '#059669' : row.completion_rate >= 0.6 ? '#1B4F8A' : '#D97706'} />
+              {pagedInstances.map(inst => (
+                <tr key={inst.id}
+                  onClick={() => onSelectInstance(inst.id)}
+                  className="border-t border-border hover:bg-surface-muted transition-colors cursor-pointer">
+                  <td className="px-3 py-2.5 font-mono text-dark max-w-[180px] truncate" title={inst.flow_id}>
+                    {inst.flow_id || '—'}
                   </td>
                   <td className="px-3 py-2.5">
-                    <RateBar value={row.failure_rate}
-                      color={row.failure_rate > 0.15 ? '#DC2626' : '#6b7280'} />
+                    <StatusBadge status={inst.status} />
+                    {inst.suspend_reason && (
+                      <span className="ml-1.5 text-xs text-muted-light italic">
+                        {t(`processes.wfSuspend.${inst.suspend_reason}`, { defaultValue: inst.suspend_reason })}
+                      </span>
+                    )}
                   </td>
-                  <td className="px-3 py-2.5 text-right text-muted">
-                    {fmtDuration(row.avg_duration_ms)}
+                  <td className="px-3 py-2.5 font-mono text-muted-light text-xs max-w-[120px] truncate"
+                    title={(inst as WorkflowInstance & { pool_id?: string }).pool_id ?? ''}>
+                    {(inst as WorkflowInstance & { pool_id?: string }).pool_id || '—'}
+                  </td>
+                  <td className="px-3 py-2.5 font-mono text-xs">
+                    {inst.origin_session_id
+                      ? <span className="text-primary cursor-pointer hover:underline" title={inst.origin_session_id}>
+                          {truncateId(inst.origin_session_id)}
+                        </span>
+                      : <span className="text-border-strong">—</span>
+                    }
+                  </td>
+                  <td className="px-3 py-2.5 font-mono text-xs">
+                    {inst.session_id
+                      ? <span className="text-muted-light" title={inst.session_id}>
+                          {truncateId(inst.session_id)}
+                        </span>
+                      : <span className="text-border-strong">—</span>
+                    }
+                  </td>
+                  <td className="px-3 py-2.5 text-muted-light whitespace-nowrap">
+                    {fmtDate(inst.created_at)}
+                  </td>
+                  <td className="px-3 py-2.5 text-muted-light whitespace-nowrap">
+                    {fmtDuration(inst.created_at, inst.completed_at)}
+                  </td>
+                  <td className="px-3 py-2.5 text-muted-light">
+                    {inst.outcome || <span className="text-border-strong">—</span>}
                   </td>
                 </tr>
               ))}
@@ -348,6 +299,226 @@ export default function AnaliseProcessosPage() {
           </table>
         )}
       </div>
+    </div>
+  )
+}
+
+// ── Level 2: Session list for an instance ─────────────────────────────────────
+
+interface SessionsListProps {
+  tenantId:   string
+  instance:   WorkflowInstance
+  onBack:     () => void
+  onSelectSession: (sessionId: string) => void
+}
+
+function SessionsList({ tenantId, instance, onBack, onSelectSession }: SessionsListProps) {
+  const { t } = useTranslation('contacts')
+  const { sessions, loading } = useWorkflowInstanceSessions(instance.id)
+
+  return (
+    <div className="flex flex-col h-full overflow-hidden">
+      {/* Sub-breadcrumb */}
+      <div className="bg-white border-b border-border px-5 py-2.5 flex items-center gap-2 text-xs flex-shrink-0 sticky top-0 z-10">
+        <button onClick={onBack}
+          className="text-muted-light hover:text-dark transition-colors font-medium">
+          {t('processes.instances.breadcrumb')}
+        </button>
+        <ChevronRight className="w-3.5 h-3.5 text-border-strong" aria-hidden="true" />
+        <span className="text-dark font-medium font-mono" title={instance.id}>
+          {truncateId(instance.id)}
+        </span>
+        <span className="ml-1 text-muted-light">·</span>
+        <StatusBadge status={instance.status} />
+      </div>
+
+      {/* Instance metadata */}
+      <div className="bg-surface-muted border-b border-border px-5 py-3 flex items-start gap-6 flex-shrink-0 flex-wrap text-xs">
+        <div>
+          <span className="text-muted uppercase tracking-wide block mb-0.5">
+            {t('processes.instances.detail.flowId')}
+          </span>
+          <span className="font-mono text-dark">{instance.flow_id || '—'}</span>
+        </div>
+        {instance.current_step && (
+          <div>
+            <span className="text-muted uppercase tracking-wide block mb-0.5">
+              {t('processes.instances.detail.currentStep')}
+            </span>
+            <span className="font-mono text-dark">{instance.current_step}</span>
+          </div>
+        )}
+        {instance.origin_session_id && (
+          <div>
+            <span className="text-muted uppercase tracking-wide block mb-0.5">
+              {t('processes.instances.detail.originSession')}
+            </span>
+            <button
+              onClick={() => onSelectSession(instance.origin_session_id!)}
+              className="font-mono text-primary hover:underline">
+              {truncateId(instance.origin_session_id)}
+            </button>
+          </div>
+        )}
+        <div>
+          <span className="text-muted uppercase tracking-wide block mb-0.5">
+            {t('processes.instances.detail.created')}
+          </span>
+          <span className="text-dark">{fmtDate(instance.created_at)}</span>
+        </div>
+        {instance.completed_at && (
+          <div>
+            <span className="text-muted uppercase tracking-wide block mb-0.5">
+              {t('processes.instances.detail.completed')}
+            </span>
+            <span className="text-dark">{fmtDate(instance.completed_at)}</span>
+          </div>
+        )}
+        {instance.outcome && (
+          <div>
+            <span className="text-muted uppercase tracking-wide block mb-0.5">
+              {t('processes.instances.detail.outcome')}
+            </span>
+            <span className="text-dark">{instance.outcome}</span>
+          </div>
+        )}
+      </div>
+
+      {/* Sessions list */}
+      <div className="flex-1 overflow-auto px-5 py-4">
+        <h3 className="text-xs font-semibold text-muted uppercase tracking-wide mb-3">
+          {t('processes.instances.sessions.title')}
+        </h3>
+
+        {loading ? (
+          <div className="flex items-center gap-2 text-muted-light text-xs py-6">
+            <Spinner />
+            <span>{t('processes.instances.sessions.loading')}</span>
+          </div>
+        ) : sessions.length === 0 ? (
+          <p className="text-xs text-muted-light py-6">
+            {t('processes.instances.sessions.empty')}
+          </p>
+        ) : (
+          <div className="space-y-2">
+            {sessions.map((s: InstanceSession) => (
+              <button key={s.session_id}
+                onClick={() => onSelectSession(s.session_id)}
+                className="w-full text-left bg-white border border-border rounded-lg px-4 py-3 hover:border-primary/40 hover:bg-surface-muted transition-colors group">
+                <div className="flex items-center gap-3">
+                  <SessionTypeBadge type={s.type} />
+                  <span className="font-mono text-xs text-dark flex-1 truncate" title={s.session_id}>
+                    {s.session_id}
+                  </span>
+                  {s.channel && (
+                    <span className="text-xs text-muted-light">{s.channel}</span>
+                  )}
+                  {s.responded_at && (
+                    <span className="text-xs text-muted-light">
+                      {t('processes.instances.sessions.responded')}: {fmtDate(s.responded_at)}
+                    </span>
+                  )}
+                  {s.step_id && (
+                    <span className="text-xs text-muted-light font-mono">{s.step_id}</span>
+                  )}
+                  <ChevronRight className="w-3.5 h-3.5 text-border-strong group-hover:text-primary transition-colors" aria-hidden="true" />
+                </div>
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+// ── InstanceDetail loader — fetches single instance for Level 2 header ────────
+
+function useInstanceById(
+  tenantId: string,
+  instanceId: string | null,
+): { instance: WorkflowInstance | null; loading: boolean } {
+  const [instance, setInstance] = React.useState<WorkflowInstance | null>(null)
+  const [loading, setLoading]   = React.useState(false)
+
+  React.useEffect(() => {
+    if (!instanceId || !tenantId) { setInstance(null); return }
+    let cancelled = false
+    setLoading(true)
+    fetch(`/v1/workflow/instances/${encodeURIComponent(instanceId)}`)
+      .then(r => r.ok ? r.json() : Promise.reject(r.status))
+      .then(d => { if (!cancelled) setInstance(d as WorkflowInstance) })
+      .catch(() => { if (!cancelled) setInstance(null) })
+      .finally(() => { if (!cancelled) setLoading(false) })
+    return () => { cancelled = true }
+  }, [instanceId, tenantId])
+
+  return { instance, loading }
+}
+
+// ── Main page ─────────────────────────────────────────────────────────────────
+
+export default function AnaliseProcessosPage() {
+  const { tenantId } = useAuth()
+  const { t } = useTranslation('contacts')
+  const [searchParams, setSearchParams] = useSearchParams()
+
+  const instanceId = searchParams.get('instance')
+  const sessionId  = searchParams.get('session')
+
+  const { instance, loading: instanceLoading } = useInstanceById(tenantId ?? '', instanceId)
+
+  if (!tenantId) {
+    return (
+      <div className="flex items-center justify-center h-full text-muted-light text-sm">
+        {t('processes.noTenant')}
+      </div>
+    )
+  }
+
+  // ── Level 3: SessionTranscript ────────────────────────────────────────────
+
+  if (instanceId && sessionId) {
+    return (
+      <div className="h-full overflow-hidden">
+        <SessionTranscript
+          tenantId={tenantId}
+          sessionId={sessionId}
+          canJoin={false}
+          onBack={() => setSearchParams({ instance: instanceId })}
+        />
+      </div>
+    )
+  }
+
+  // ── Level 2: Sessions of instance ────────────────────────────────────────
+
+  if (instanceId) {
+    if (instanceLoading || !instance) {
+      return (
+        <div className="flex items-center justify-center h-full gap-2 text-muted-light text-sm">
+          <Spinner />
+        </div>
+      )
+    }
+    return (
+      <SessionsList
+        tenantId={tenantId}
+        instance={instance}
+        onBack={() => setSearchParams({})}
+        onSelectSession={sid => setSearchParams({ instance: instanceId, session: sid })}
+      />
+    )
+  }
+
+  // ── Level 1: Instances list ───────────────────────────────────────────────
+
+  return (
+    <div className="flex flex-col h-full overflow-hidden bg-surface-muted">
+      <InstancesList
+        tenantId={tenantId}
+        onSelectInstance={id => setSearchParams({ instance: id })}
+      />
     </div>
   )
 }

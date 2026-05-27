@@ -182,7 +182,7 @@ export const ENDPOINT_CATALOG: EndpointDescriptor[] = [
     ],
   },
 
-  // ─── Journey cards (Arc 10 — Phase E) ────────────────────────────────────
+  // ─── Journey cards (Arc 10 — Phase E; Arc 17 — journey_type_id + pool_id filters) ──────
   {
     id:               'journey-active-count',
     endpoint:         '/reports/display/journey-active-count',
@@ -194,7 +194,9 @@ export const ENDPOINT_CATALOG: EndpointDescriptor[] = [
     defaultW:         3,
     defaultH:         2,
     configurable_params: [
-      { key: 'skill_id', label: 'Skill (fixo)', placeholder: 'Ex: skill_portabilidade_v1', optional: true },
+      { key: 'skill_id',        label: 'Skill (fixo)',         placeholder: 'Ex: skill_portabilidade_v1', optional: true },
+      { key: 'journey_type_id', label: 'Tipo de Jornada',      placeholder: 'Ex: portabilidade_telco',    optional: true },
+      { key: 'pool_id',         label: 'Pool (fixo)',           placeholder: 'Ex: retencao_humano',        optional: true },
     ],
   },
   {
@@ -208,7 +210,9 @@ export const ENDPOINT_CATALOG: EndpointDescriptor[] = [
     defaultW:         6,
     defaultH:         4,
     configurable_params: [
-      { key: 'skill_id', label: 'Skill (fixo)', placeholder: 'Ex: skill_portabilidade_v1', optional: true },
+      { key: 'skill_id',        label: 'Skill (fixo)',         placeholder: 'Ex: skill_portabilidade_v1', optional: true },
+      { key: 'journey_type_id', label: 'Tipo de Jornada',      placeholder: 'Ex: portabilidade_telco',    optional: true },
+      { key: 'pool_id',         label: 'Pool (fixo)',           placeholder: 'Ex: retencao_humano',        optional: true },
     ],
   },
   {
@@ -222,7 +226,9 @@ export const ENDPOINT_CATALOG: EndpointDescriptor[] = [
     defaultW:         4,
     defaultH:         3,
     configurable_params: [
-      { key: 'skill_id', label: 'Skill (fixo)', placeholder: 'Ex: skill_portabilidade_v1', optional: true },
+      { key: 'skill_id',        label: 'Skill (fixo)',         placeholder: 'Ex: skill_portabilidade_v1', optional: true },
+      { key: 'journey_type_id', label: 'Tipo de Jornada',      placeholder: 'Ex: portabilidade_telco',    optional: true },
+      { key: 'pool_id',         label: 'Pool (fixo)',           placeholder: 'Ex: retencao_humano',        optional: true },
     ],
   },
   {
@@ -236,7 +242,9 @@ export const ENDPOINT_CATALOG: EndpointDescriptor[] = [
     defaultW:         6,
     defaultH:         4,
     configurable_params: [
-      { key: 'skill_id', label: 'Skill (fixo)', placeholder: 'Ex: skill_portabilidade_v1', optional: true },
+      { key: 'skill_id',        label: 'Skill (fixo)',         placeholder: 'Ex: skill_portabilidade_v1', optional: true },
+      { key: 'journey_type_id', label: 'Tipo de Jornada',      placeholder: 'Ex: portabilidade_telco',    optional: true },
+      { key: 'pool_id',         label: 'Pool (fixo)',           placeholder: 'Ex: retencao_humano',        optional: true },
     ],
   },
 

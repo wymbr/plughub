@@ -61,8 +61,17 @@ RUN printf 'server {\n\
         proxy_read_timeout 60s;\n\
     }\n\
 \n\
-    # workflow-api — must come before generic /v1 rule\n\
+    # workflow-api (/v1/workflow and /v1/journeys) — must come before generic /v1 rule\n\
     location ~ ^/v1/workflow(/|$) {\n\
+        set $up_workflow http://workflow-api:3800;\n\
+        proxy_pass         $up_workflow;\n\
+        proxy_http_version 1.1;\n\
+        proxy_set_header   Host $host;\n\
+        proxy_buffering    off;\n\
+        proxy_read_timeout 300s;\n\
+    }\n\
+\n\
+    location ~ ^/v1/journeys(/|$) {\n\
         set $up_workflow http://workflow-api:3800;\n\
         proxy_pass         $up_workflow;\n\
         proxy_http_version 1.1;\n\

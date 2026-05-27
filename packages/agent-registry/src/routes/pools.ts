@@ -51,6 +51,7 @@ poolsRouter.post("/", async (req: Request, res: Response, next: NextFunction) =>
         calendar_id:             body.calendar_id ?? null,
         context_visibility:      body.context_visibility ?? Prisma.DbNull,
         inbound_journey_resume:  body.inbound_journey_resume ?? false,
+        authorized_journey_types: body.authorized_journey_types ?? [],
         created_by:              createdBy,
       } as any,
     })
@@ -138,7 +139,8 @@ poolsRouter.put("/:pool_id", async (req: Request, res: Response, next: NextFunct
         ...(body.hooks                 !== undefined && { hooks:                 body.hooks }),
         ...(body.calendar_id              !== undefined && { calendar_id:              body.calendar_id }),
         ...(body.context_visibility       !== undefined && { context_visibility:       body.context_visibility }),
-        ...(body.inbound_journey_resume   !== undefined && { inbound_journey_resume:   body.inbound_journey_resume }),
+        ...(body.inbound_journey_resume      !== undefined && { inbound_journey_resume:      body.inbound_journey_resume }),
+        ...(body.authorized_journey_types    !== undefined && { authorized_journey_types:    body.authorized_journey_types }),
       } as any,
     })
 

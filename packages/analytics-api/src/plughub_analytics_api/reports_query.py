@@ -2177,9 +2177,12 @@ async def query_journeys_report(
     from_dt:   str | None = None,
     to_dt:     str | None = None,
     *,
-    skill_id:    str | None = None,
-    status:      str | None = None,
-    customer_id: str | None = None,
+    skill_id:        str | None = None,
+    status:          str | None = None,
+    customer_id:     str | None = None,
+    # Arc 17: JourneyType governance filters
+    journey_type_id: str | None = None,
+    pool_id:         str | None = None,
     page:      int = 1,
     page_size: int = 100,
 ) -> dict:
@@ -2196,7 +2199,7 @@ async def query_journeys_report(
     try:
         return await asyncio.to_thread(
             _fetch_journeys, client, database, tenant_id, since, until,
-            skill_id, status, customer_id, page, page_size,
+            skill_id, status, customer_id, journey_type_id, pool_id, page, page_size,
         )
     except Exception as exc:
         logger.warning("query_journeys_report failed tenant=%s: %s", tenant_id, exc)
@@ -2204,16 +2207,19 @@ async def query_journeys_report(
 
 
 def _fetch_journeys(
-    client:      Any,
-    db:          str,
-    tenant_id:   str,
-    since:       str,
-    until:       str,
-    skill_id:    str | None,
-    status:      str | None,
-    customer_id: str | None,
-    page:        int,
-    page_size:   int,
+    client:          Any,
+    db:              str,
+    tenant_id:       str,
+    since:           str,
+    until:           str,
+    skill_id:        str | None,
+    status:          str | None,
+    customer_id:     str | None,
+    # Arc 17: JourneyType governance filters
+    journey_type_id: str | None,
+    pool_id:         str | None,
+    page:            int,
+    page_size:       int,
 ) -> dict:
     """
     Reconstructs journey state from journey_events using argMax aggregations.
@@ -2233,6 +2239,13 @@ def _fetch_journeys(
     if customer_id:
         base_conditions.append("customer_id = {customer_id:String}")
         params["customer_id"] = customer_id
+    # Arc 17: JourneyType governance filters
+    if journey_type_id:
+        base_conditions.append("journey_type_id = {journey_type_id:String}")
+        params["journey_type_id"] = journey_type_id
+    if pool_id:
+        base_conditions.append("pool_id = {pool_id:String}")
+        params["pool_id"] = pool_id
 
     base_where = " AND ".join(base_conditions)
 
@@ -2243,11 +2256,14 @@ def _fetch_journeys(
     summary_sql = f"""
         SELECT
             journey_id,
-            argMax(skill_id,           timestamp)  AS skill_id,
-            argMax(status,             timestamp)  AS status,
-            argMax(customer_id,        timestamp)  AS customer_id,
-            argMax(origin_session_id,  timestamp)  AS origin_session_id,
-            argMax(workflow_instance_id, timestamp) AS workflow_instance_id,
+            argMaxIf(skill_id,             timestamp, skill_id           IS NOT NULL) AS skill_id,
+            argMaxIf(status,               timestamp, status             IS NOT NULL) AS status,
+            argMaxIf(customer_id,          timestamp, customer_id        IS NOT NULL) AS customer_id,
+            argMaxIf(origin_session_id,    timestamp, origin_session_id  IS NOT NULL) AS origin_session_id,
+            argMaxIf(workflow_instance_id, timestamp, workflow_instance_id IS NOT NULL) AS workflow_instance_id,
+            -- Arc 17: JourneyType governance
+            argMaxIf(journey_type_id,      timestamp, journey_type_id    IS NOT NULL) AS journey_type_id,
+            argMaxIf(pool_id,              timestamp, pool_id            IS NOT NULL) AS pool_id,
             min(timestamp)                         AS created_at,
             max(timestamp)                         AS last_event_at,
             countDistinctIf(
@@ -2261,9 +2277,10 @@ def _fetch_journeys(
     """
 
     # Apply status filter at HAVING level (status is aggregated)
+    # Use argMaxIf to ignore NULL-status events (e.g. journey_session_linked)
     having_extra = ""
     if status:
-        having_extra = f" AND argMax(status, timestamp) = '{status}'"
+        having_extra = f" AND argMaxIf(status, timestamp, status IS NOT NULL) = '{status}'"
 
     count_sql = f"SELECT count() FROM ({summary_sql}{having_extra}) AS j"
     total = _count(client, count_sql, params)
@@ -2291,8 +2308,8 @@ def _fetch_journeys(
             median(duration_ms)                                 AS median_duration_ms
         FROM (
             SELECT
-                argMax(skill_id,  timestamp)                          AS skill_id,
-                argMax(status,    timestamp)                          AS status,
+                argMaxIf(skill_id, timestamp, skill_id IS NOT NULL)  AS skill_id,
+                argMaxIf(status,   timestamp, status   IS NOT NULL)  AS status,
                 min(timestamp)                                        AS created_at,
                 max(timestamp)                                        AS last_event_at,
                 dateDiff('millisecond', min(timestamp), max(timestamp)) AS duration_ms,

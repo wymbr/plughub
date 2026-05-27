@@ -110,8 +110,9 @@ export function createServer(allDeps?: AllDeps): McpServer {
   }
 
   const journeyDeps: JourneyDeps = {
-    workflowApiUrl: process.env["WORKFLOW_API_URL"]  ?? "http://localhost:3800",
-    tenantId:       process.env["PLUGHUB_TENANT_ID"] ?? process.env["TENANT_ID"] ?? "tenant_demo",
+    workflowApiUrl:   process.env["WORKFLOW_API_URL"]   ?? "http://localhost:3800",
+    agentRegistryUrl: process.env["AGENT_REGISTRY_URL"] ?? "http://localhost:3300",
+    tenantId:         process.env["PLUGHUB_TENANT_ID"]  ?? process.env["TENANT_ID"] ?? "tenant_demo",
     redis,  // Arc 16: journey_context_get/set write to {tenant}:ctx:journey:{id}
   }
 
@@ -863,8 +864,9 @@ export async function startServer(config: ServerConfig): Promise<void> {
       tenantId:       process.env["PLUGHUB_TENANT_ID"] ?? process.env["TENANT_ID"] ?? "tenant_demo",
     })
     registerJourneyTools(mcpServer, {
-      workflowApiUrl: process.env["WORKFLOW_API_URL"]  ?? "http://localhost:3800",
-      tenantId:       process.env["PLUGHUB_TENANT_ID"] ?? process.env["TENANT_ID"] ?? "tenant_demo",
+      workflowApiUrl:   process.env["WORKFLOW_API_URL"]   ?? "http://localhost:3800",
+      agentRegistryUrl: process.env["AGENT_REGISTRY_URL"] ?? "http://localhost:3300",
+      tenantId:         process.env["PLUGHUB_TENANT_ID"]  ?? process.env["TENANT_ID"] ?? "tenant_demo",
       redis,
     })
     registerAgentEventTools(mcpServer, { redis, kafka })

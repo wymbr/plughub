@@ -971,9 +971,12 @@ async def get_journeys_report(
     tenant_id:   str           = Query(...,    description="Tenant identifier"),
     from_dt:     Optional[str] = Query(None,   description="ISO8601 start (default: 7d ago)"),
     to_dt:       Optional[str] = Query(None,   description="ISO8601 end (default: now)"),
-    skill_id:    Optional[str] = Query(None,   description="Filter by skill_id"),
-    status:      Optional[str] = Query(None,   description="Filter by journey status (active|suspended|completed|failed|cancelled)"),
-    customer_id: Optional[str] = Query(None,   description="Filter by customer_id"),
+    skill_id:        Optional[str] = Query(None,   description="Filter by skill_id"),
+    status:          Optional[str] = Query(None,   description="Filter by journey status (active|suspended|completed|failed|cancelled)"),
+    customer_id:     Optional[str] = Query(None,   description="Filter by customer_id"),
+    # Arc 17: JourneyType governance filters
+    journey_type_id: Optional[str] = Query(None,   description="Arc 17: filter by journey_type_id slug"),
+    pool_id:         Optional[str] = Query(None,   description="Arc 17: filter by pool_id"),
     page:        int           = Query(1,       ge=1),
     page_size:   int           = Query(100,     ge=1),
     format:      str           = Query("json",  pattern="^(json|csv)$"),
@@ -1000,12 +1003,15 @@ async def get_journeys_report(
         database    = request.app.state.store._database,
         tenant_id   = tenant_id,
         from_dt     = from_dt,
-        to_dt       = to_dt,
-        skill_id    = skill_id,
-        status      = status,
-        customer_id = customer_id,
-        page        = page,
-        page_size   = ps,
+        to_dt           = to_dt,
+        skill_id        = skill_id,
+        status          = status,
+        customer_id     = customer_id,
+        # Arc 17: JourneyType governance filters
+        journey_type_id = journey_type_id,
+        pool_id         = pool_id,
+        page            = page,
+        page_size       = ps,
     )
     return _respond(data, format, f"journeys_{_today_label()}.csv")
 

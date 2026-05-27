@@ -617,13 +617,23 @@ async def fmt_kpi_score(
 # ─── Journey formatters ────────────────────────────────────────────────────────
 
 def _fetch_journey_active_count_sync(
-    client:    Any,
-    db:        str,
-    tenant_id: str,
-    since:     str,
-    until:     str,
+    client:          Any,
+    db:              str,
+    tenant_id:       str,
+    since:           str,
+    until:           str,
+    skill_id:        str | None = None,
+    journey_type_id: str | None = None,
+    pool_id:         str | None = None,
 ) -> int:
     """Returns count of journeys whose latest status is 'active' in the period."""
+    extra = ""
+    if skill_id:
+        extra += f" AND skill_id = '{skill_id}'"
+    if journey_type_id:
+        extra += f" AND journey_type_id = '{journey_type_id}'"
+    if pool_id:
+        extra += f" AND pool_id = '{pool_id}'"
     sql = f"""
         SELECT countIf(latest_status = 'active') AS active_cnt
         FROM (
@@ -632,6 +642,7 @@ def _fetch_journey_active_count_sync(
             WHERE tenant_id = {{tenant_id:String}}
               AND event_time >= '{since}'
               AND event_time <  '{until}'
+              {extra}
             GROUP BY journey_id
         )
     """
@@ -640,12 +651,14 @@ def _fetch_journey_active_count_sync(
 
 
 async def fmt_journey_active_count(
-    client:    Any,
-    database:  str,
-    tenant_id: str,
-    from_dt:   str | None,
-    to_dt:     str | None,
-    skill_id:  str | None,  # reserved — not yet applied (all skills)
+    client:          Any,
+    database:        str,
+    tenant_id:       str,
+    from_dt:         str | None,
+    to_dt:           str | None,
+    skill_id:        str | None = None,
+    journey_type_id: str | None = None,  # Arc 17: filter by journey_type_id
+    pool_id:         str | None = None,  # Arc 17: filter by pool_id
 ) -> dict:
     """Returns MetricCardData — count of active journeys with trend vs prior period."""
     since = _fmt_dt(from_dt) if from_dt else _default_from()
@@ -657,9 +670,11 @@ async def fmt_journey_active_count(
         current, previous = await asyncio.gather(
             asyncio.to_thread(
                 _fetch_journey_active_count_sync, client, database, tenant_id, since, until,
+                skill_id, journey_type_id, pool_id,
             ),
             asyncio.to_thread(
                 _fetch_journey_active_count_sync, client, database, tenant_id, prev_since, prev_until,
+                skill_id, journey_type_id, pool_id,
             ),
         )
         result: dict = {"value": current, "label": "Jornadas Ativas", "format": "number"}
@@ -675,19 +690,25 @@ async def fmt_journey_active_count(
 # ─── journey-resolution-rate ──────────────────────────────────────────────────
 
 def _fetch_journey_resolution_rate_sync(
-    client:    Any,
-    db:        str,
-    tenant_id: str,
-    since:     str,
-    until:     str,
-    skill_id:  str | None,
+    client:          Any,
+    db:              str,
+    tenant_id:       str,
+    since:           str,
+    until:           str,
+    skill_id:        str | None,
+    journey_type_id: str | None = None,
+    pool_id:         str | None = None,
 ) -> list[dict]:
     """
     Resolution rate per skill_id — only journeys that have reached a terminal
     status (completed / failed / cancelled) are counted as denominator so that
     in-flight journeys don't dilute the rate.
     """
-    skill_filter = f"AND skill_id = '{skill_id}'" if skill_id else ""
+    extra = f"AND skill_id = '{skill_id}'" if skill_id else ""
+    if journey_type_id:
+        extra += f" AND journey_type_id = '{journey_type_id}'"
+    if pool_id:
+        extra += f" AND pool_id = '{pool_id}'"
     sql = f"""
         SELECT
             skill_id,
@@ -702,7 +723,7 @@ def _fetch_journey_resolution_rate_sync(
             WHERE tenant_id = {{tenant_id:String}}
               AND event_time >= '{since}'
               AND event_time <  '{until}'
-              {skill_filter}
+              {extra}
             GROUP BY journey_id, skill_id
             HAVING latest_status IN ('completed', 'failed', 'cancelled')
         )
@@ -713,12 +734,14 @@ def _fetch_journey_resolution_rate_sync(
 
 
 async def fmt_journey_resolution_rate(
-    client:    Any,
-    database:  str,
-    tenant_id: str,
-    from_dt:   str | None,
-    to_dt:     str | None,
-    skill_id:  str | None,
+    client:          Any,
+    database:        str,
+    tenant_id:       str,
+    from_dt:         str | None,
+    to_dt:           str | None,
+    skill_id:        str | None,
+    journey_type_id: str | None = None,  # Arc 17
+    pool_id:         str | None = None,  # Arc 17
 ) -> dict:
     """Returns BarChartData — journey resolution rate % per skill_id."""
     since = _fmt_dt(from_dt) if from_dt else _default_from()
@@ -732,7 +755,7 @@ async def fmt_journey_resolution_rate(
     try:
         rows = await asyncio.to_thread(
             _fetch_journey_resolution_rate_sync,
-            client, database, tenant_id, since, until, skill_id,
+            client, database, tenant_id, since, until, skill_id, journey_type_id, pool_id,
         )
         x_labels = [r.get("skill_id") or "unknown" for r in rows]
         data = [
@@ -749,15 +772,21 @@ async def fmt_journey_resolution_rate(
 # ─── journey-funnel ───────────────────────────────────────────────────────────
 
 def _fetch_journey_funnel_sync(
-    client:    Any,
-    db:        str,
-    tenant_id: str,
-    since:     str,
-    until:     str,
-    skill_id:  str | None,
+    client:          Any,
+    db:              str,
+    tenant_id:       str,
+    since:           str,
+    until:           str,
+    skill_id:        str | None,
+    journey_type_id: str | None = None,
+    pool_id:         str | None = None,
 ) -> list[dict]:
     """Returns status distribution (latest status) across all journeys in period."""
-    skill_filter = f"AND skill_id = '{skill_id}'" if skill_id else ""
+    extra = f"AND skill_id = '{skill_id}'" if skill_id else ""
+    if journey_type_id:
+        extra += f" AND journey_type_id = '{journey_type_id}'"
+    if pool_id:
+        extra += f" AND pool_id = '{pool_id}'"
     sql = f"""
         SELECT latest_status, count() AS cnt
         FROM (
@@ -766,7 +795,7 @@ def _fetch_journey_funnel_sync(
             WHERE tenant_id = {{tenant_id:String}}
               AND event_time >= '{since}'
               AND event_time <  '{until}'
-              {skill_filter}
+              {extra}
             GROUP BY journey_id
         )
         GROUP BY latest_status
@@ -776,12 +805,14 @@ def _fetch_journey_funnel_sync(
 
 
 async def fmt_journey_funnel(
-    client:    Any,
-    database:  str,
-    tenant_id: str,
-    from_dt:   str | None,
-    to_dt:     str | None,
-    skill_id:  str | None,
+    client:          Any,
+    database:        str,
+    tenant_id:       str,
+    from_dt:         str | None,
+    to_dt:           str | None,
+    skill_id:        str | None,
+    journey_type_id: str | None = None,  # Arc 17
+    pool_id:         str | None = None,  # Arc 17
 ) -> dict:
     """Returns DonutData — journey distribution by status (active/suspended/completed/failed/cancelled)."""
     since = _fmt_dt(from_dt) if from_dt else _default_from()
@@ -791,6 +822,7 @@ async def fmt_journey_funnel(
     try:
         rows = await asyncio.to_thread(
             _fetch_journey_funnel_sync, client, database, tenant_id, since, until, skill_id,
+            journey_type_id, pool_id,
         )
         return {
             "labels": [r.get("latest_status") or "unknown" for r in rows],
@@ -804,18 +836,24 @@ async def fmt_journey_funnel(
 # ─── journey-median-duration ─────────────────────────────────────────────────
 
 def _fetch_journey_median_duration_sync(
-    client:    Any,
-    db:        str,
-    tenant_id: str,
-    since:     str,
-    until:     str,
-    skill_id:  str | None,
+    client:          Any,
+    db:              str,
+    tenant_id:       str,
+    since:           str,
+    until:           str,
+    skill_id:        str | None,
+    journey_type_id: str | None = None,
+    pool_id:         str | None = None,
 ) -> list[dict]:
     """
     Median journey duration in ms per skill_id for terminal journeys only.
     Duration = max(event_time) − min(event_time) across events for each journey.
     """
-    skill_filter = f"AND skill_id = '{skill_id}'" if skill_id else ""
+    extra = f"AND skill_id = '{skill_id}'" if skill_id else ""
+    if journey_type_id:
+        extra += f" AND journey_type_id = '{journey_type_id}'"
+    if pool_id:
+        extra += f" AND pool_id = '{pool_id}'"
     sql = f"""
         SELECT
             skill_id,
@@ -831,7 +869,7 @@ def _fetch_journey_median_duration_sync(
             WHERE tenant_id = {{tenant_id:String}}
               AND event_time >= '{since}'
               AND event_time <  '{until}'
-              {skill_filter}
+              {extra}
             GROUP BY journey_id, skill_id
             HAVING latest_status IN ('completed', 'failed', 'cancelled')
         )
@@ -842,12 +880,14 @@ def _fetch_journey_median_duration_sync(
 
 
 async def fmt_journey_median_duration(
-    client:    Any,
-    database:  str,
-    tenant_id: str,
-    from_dt:   str | None,
-    to_dt:     str | None,
-    skill_id:  str | None,
+    client:          Any,
+    database:        str,
+    tenant_id:       str,
+    from_dt:         str | None,
+    to_dt:           str | None,
+    skill_id:        str | None,
+    journey_type_id: str | None = None,  # Arc 17
+    pool_id:         str | None = None,  # Arc 17
 ) -> dict:
     """Returns BarChartData — journey p50 duration in minutes per skill_id."""
     since = _fmt_dt(from_dt) if from_dt else _default_from()
@@ -861,7 +901,7 @@ async def fmt_journey_median_duration(
     try:
         rows = await asyncio.to_thread(
             _fetch_journey_median_duration_sync,
-            client, database, tenant_id, since, until, skill_id,
+            client, database, tenant_id, since, until, skill_id, journey_type_id, pool_id,
         )
         x_labels = [r.get("skill_id") or "unknown" for r in rows]
         data = [

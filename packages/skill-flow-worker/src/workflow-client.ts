@@ -144,7 +144,9 @@ export class WorkflowClient {
   async createJourneyForInstance(
     instanceId: string,
     tenantId: string,
+    journeyTypeId?: string,  // Arc 17: from skill YAML journey_type_id field
   ): Promise<{ journey_id: string }> {
+    const requestBody = journeyTypeId ? JSON.stringify({ journey_type_id: journeyTypeId }) : undefined
     const res = await fetch(`${this.baseUrl}/v1/journeys/from-instance/${encodeURIComponent(instanceId)}`, {
       method: 'POST',
       headers: {
@@ -152,12 +154,13 @@ export class WorkflowClient {
         'x-tenant-id': tenantId,
         'x-internal': '1',
       },
+      ...(requestBody !== undefined ? { body: requestBody } : {}),
     })
     if (!res.ok) {
       const text = await res.text()
       throw new Error(`Failed to create journey for instance ${instanceId}: HTTP ${res.status} — ${text}`)
     }
-    const body = (await res.json()) as { journey_id: string }
-    return { journey_id: body.journey_id }
+    const responseBody = (await res.json()) as { journey_id: string }
+    return { journey_id: responseBody.journey_id }
   }
 }

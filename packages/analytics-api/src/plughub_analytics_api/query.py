@@ -275,6 +275,54 @@ async def get_pool_snapshots(redis: Any, tenant_id: str) -> list[dict]:
         return []
 
 
+async def get_pool_journey_counts(client: Any, database: str, tenant_id: str) -> list[dict]:
+    """
+    Active + suspended journey counts per pool_id (ClickHouse).
+
+    Uses argMax(status, event_time) to reconstruct current journey state.
+    Only journeys with pool_id set (origin_pool recorded at creation) are returned.
+
+    Response: list of {pool_id, active_journeys, suspended_journeys}
+    Returns empty list when ClickHouse is unavailable or no data.
+    """
+    try:
+        return await asyncio.to_thread(_fetch_pool_journey_counts, client, database, tenant_id)
+    except Exception as exc:
+        logger.warning("get_pool_journey_counts failed tenant=%s: %s", tenant_id, exc)
+        return []
+
+
+def _fetch_pool_journey_counts(client: Any, db: str, tenant_id: str) -> list[dict]:
+    rows = _run_query(client, f"""
+        SELECT
+            pool_id,
+            countIf(status = 'active')                    AS active_journeys,
+            countIf(status = 'suspended')                 AS suspended_journeys
+        FROM (
+            SELECT
+                journey_id,
+                pool_id,
+                argMax(status, event_time)  AS status
+            FROM {db}.journey_events
+            WHERE tenant_id = {{tenant_id:String}}
+              AND pool_id   IS NOT NULL
+            GROUP BY journey_id, pool_id
+        )
+        WHERE status IN ('active', 'suspended')
+        GROUP BY pool_id
+    """, {"tenant_id": tenant_id})
+
+    return [
+        {
+            "pool_id":            r["pool_id"],
+            "active_journeys":    int(r.get("active_journeys",    0) or 0),
+            "suspended_journeys": int(r.get("suspended_journeys", 0) or 0),
+        }
+        for r in rows
+        if r.get("pool_id")
+    ]
+
+
 async def get_sentiment_live(redis: Any, tenant_id: str) -> list[dict]:
     """
     Reads all sentiment_live hashes for a tenant.

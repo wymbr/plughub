@@ -1,6 +1,10 @@
 /**
  * validators/skill.ts
  * Validação Zod dos payloads de skill + validações cross-step.
+ *
+ * Cross-field validators:
+ *   - validateMaskedBlock  — reason step inside begin/end_transaction block
+ *   - validateJourneyType  — creates_journey:true requires journey_type_id (#301)
  */
 
 import { z }           from "zod"
@@ -8,6 +12,35 @@ import { SkillSchema } from "@plughub/schemas"
 import type { FlowStep, SkillFlow } from "@plughub/schemas"
 
 export const CreateSkillSchema = SkillSchema
+
+// ─────────────────────────────────────────────
+// validateJourneyType (#301)
+// ─────────────────────────────────────────────
+
+/**
+ * Arc 17 (#301): validates that a skill body with `creates_journey: true` also
+ * declares a non-empty `journey_type_id`.
+ *
+ * These fields are root-level keys in the skill YAML — they are NOT part of
+ * the nested `flow` object and are stripped by the Zod schema, so this
+ * validator must operate on the **raw** request body before Zod parsing.
+ *
+ * @param rawBody  The untyped `req.body` object.
+ * @returns Array of error strings — empty when the payload is valid.
+ */
+export function validateJourneyType(rawBody: unknown): string[] {
+  if (!rawBody || typeof rawBody !== "object" || Array.isArray(rawBody)) return []
+  const body = rawBody as Record<string, unknown>
+  if (body["creates_journey"] !== true) return []
+  const jt = body["journey_type_id"]
+  if (typeof jt === "string" && jt.trim().length > 0) return []
+  return [
+    "Field journey_type_id is required when creates_journey is true. " +
+    "Declare a non-empty journey_type_id slug at the skill root level " +
+    "(e.g., journey_type_id: portabilidade_telco). " +
+    "The type must be registered in Config/Resources → Journey Types before deploying.",
+  ]
+}
 // SkillSchema is ZodEffects (has .refine). Access the inner ZodObject for partial operations.
 const _SkillBase = (SkillSchema as unknown as { _def: { schema: z.ZodObject<z.ZodRawShape> } })._def.schema
 export const UpdateSkillSchema = _SkillBase.partial().omit({ skill_id: true })

@@ -247,6 +247,9 @@ async def emit_journey_started(
     workflow_instance_id: str | None = None,
     customer_id:          str | None = None,
     metadata:             dict | None = None,
+    # Arc 17: JourneyType governance
+    journey_type_id:      str | None = None,
+    pool_id:              str | None = None,
 ) -> None:
     event: dict = {
         "event_type":          "journey_started",
@@ -258,6 +261,10 @@ async def emit_journey_started(
         "workflow_instance_id": workflow_instance_id,
         "customer_id":         customer_id,
     }
+    if journey_type_id:
+        event["journey_type_id"] = journey_type_id
+    if pool_id:
+        event["pool_id"] = pool_id
     if metadata:
         event["metadata"] = metadata
     await _emit(producer, topic, event)

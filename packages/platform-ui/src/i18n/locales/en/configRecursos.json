@@ -6,7 +6,8 @@
     "skills": "Skills",
     "instances": "Instances",
     "channels": "Channels",
-    "humanAgents": "Human Agents"
+    "humanAgents": "Human Agents",
+    "journeyTypes": "Journey Types"
   },
   "pools": {
     "title": "Pools",
@@ -48,6 +49,12 @@
     "inboundJourneyResume": {
       "label": "Enable Inbound Journey Resume",
       "hint": "When enabled, the pool's AI agent skill should call journey_check_pending() at the start of each inbound session to detect and offer resumption of active multi-session service journeys. Requires the skill YAML to include the journey check step. Default: off."
+    },
+    "authorizedJourneyTypes": {
+      "label": "Authorized Journey Types",
+      "hint": "Journey type slugs this pool is permitted to create. Leave empty to disable journey creation for this pool.",
+      "none": "No journey types registered — create them in the Journey Types tab first.",
+      "empty": "No journey types selected (journey creation disabled for this pool)"
     },
     "routingFixed": {
       "label": "Routing Weights — Fixed",
@@ -247,6 +254,41 @@
         "deprecating": "Processing…",
         "cancel": "Cancel"
       }
+    }
+  },
+  "journeyTypes": {
+    "hint": "Arc 17 — define named process types with optional SLA targets. Pools authorise which types they may create via authorized_journey_types[].",
+    "newButton": "+ New Journey Type",
+    "empty": "No journey types registered.",
+    "loadFailed": "Failed to load journey types",
+    "deleteConfirm": "Delete journey type \"{{id}}\"? All existing journeys will retain their reference but new ones may no longer be created with this type.",
+    "fields": {
+      "id": "Journey Type ID",
+      "idPlaceholder": "e.g. portabilidade_telco",
+      "description": "Description",
+      "descPlaceholder": "Short description",
+      "slaMs": "SLA (ms)",
+      "slaMsPlaceholder": "e.g. 86400000"
+    },
+    "columns": {
+      "id": "ID",
+      "description": "Description",
+      "slaMs": "SLA",
+      "actions": "Actions"
+    },
+    "validation": {
+      "idRequired": "Journey Type ID is required",
+      "idInvalid": "ID: lowercase letters, digits and _ only",
+      "slaInvalid": "SLA must be a number (milliseconds)"
+    },
+    "buttons": {
+      "save": "Save",
+      "saving": "Saving…",
+      "edit": "Edit",
+      "cancel": "Cancel",
+      "delete": "Delete",
+      "confirmDelete": "Confirm delete",
+      "deleting": "Deleting…"
     }
   },
   "channels": {

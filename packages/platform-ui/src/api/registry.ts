@@ -5,6 +5,7 @@ import {
   AgentInstance, CreateHumanAgentInput, UpdateHumanAgentInput,
   ChannelEndpoint, CreateChannelEndpointInput, UpdateChannelEndpointInput,
   ChannelEndpointChannel,
+  JourneyType, CreateJourneyTypeInput, UpdateJourneyTypeInput,
 } from '@/types'
 
 const getBaseUrl = () => {
@@ -319,4 +320,50 @@ export const deleteChannelEndpoint = async (id: string, tenantId: string): Promi
     headers: headers(tenantId),
   })
   if (!response.ok) throw new Error('Failed to delete channel endpoint')
+}
+
+// ── Arc 17: JourneyTypes ──────────────────────────────────────────────────────
+
+export const listJourneyTypes = async (tenantId: string): Promise<JourneyType[]> => {
+  const response = await fetch(`${getBaseUrl()}/v1/journey-types`, {
+    headers: headers(tenantId),
+  })
+  if (!response.ok) throw new Error('Failed to fetch journey types')
+  const data = await response.json()
+  return Array.isArray(data) ? data : (data.items ?? data.journey_types ?? [])
+}
+
+export const createJourneyType = async (
+  data: CreateJourneyTypeInput,
+  tenantId: string,
+): Promise<JourneyType> => {
+  const response = await fetch(`${getBaseUrl()}/v1/journey-types`, {
+    method: 'POST',
+    headers: headers(tenantId),
+    body: JSON.stringify(data),
+  })
+  if (!response.ok) throw new Error('Failed to create journey type')
+  return response.json()
+}
+
+export const updateJourneyType = async (
+  id: string,
+  data: UpdateJourneyTypeInput,
+  tenantId: string,
+): Promise<JourneyType> => {
+  const response = await fetch(`${getBaseUrl()}/v1/journey-types/${encodeURIComponent(id)}`, {
+    method: 'PATCH',
+    headers: headers(tenantId),
+    body: JSON.stringify(data),
+  })
+  if (!response.ok) throw new Error('Failed to update journey type')
+  return response.json()
+}
+
+export const deleteJourneyType = async (id: string, tenantId: string): Promise<void> => {
+  const response = await fetch(`${getBaseUrl()}/v1/journey-types/${encodeURIComponent(id)}`, {
+    method: 'DELETE',
+    headers: headers(tenantId),
+  })
+  if (!response.ok) throw new Error('Failed to delete journey type')
 }

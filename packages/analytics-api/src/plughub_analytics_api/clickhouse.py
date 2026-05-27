@@ -437,12 +437,22 @@ CREATE TABLE IF NOT EXISTS {db}.journey_events
     session_outcome         Nullable(String),
     session_started_at      Nullable(DateTime64(3, 'UTC')),
     session_ended_at        Nullable(DateTime64(3, 'UTC')),
+    -- Arc 17: JourneyType governance
+    journey_type_id         Nullable(String),
+    pool_id                 Nullable(String),
     timestamp               DateTime64(3, 'UTC'),
     date                    Date
 )
 ENGINE = ReplacingMergeTree()
 PARTITION BY toYYYYMM(date)
 ORDER BY (tenant_id, event_id)
+"""
+
+# Arc 17: add journey_type_id + pool_id columns for existing journey_events tables.
+_DDL_JOURNEY_EVENTS_MIGRATE_ARC17 = """
+ALTER TABLE {db}.journey_events
+    ADD COLUMN IF NOT EXISTS journey_type_id Nullable(String),
+    ADD COLUMN IF NOT EXISTS pool_id         Nullable(String)
 """
 
 # ── Arc 13: calibration_events — CurationReview outcomes from calibration.events Kafka topic.
@@ -652,6 +662,7 @@ _MIGRATIONS = [
     _DDL_SESSIONS_MIGRATE_SLA,
     _DDL_SENTIMENT_EVENTS_MIGRATE_SEGMENT,
     _DDL_MESSAGES_MIGRATE_CONTENT,
+    _DDL_JOURNEY_EVENTS_MIGRATE_ARC17,   # Arc 17: journey_type_id + pool_id
 ]
 
 
@@ -1027,6 +1038,8 @@ class AnalyticsStore:
         # Phase F split fields
         "split_from_journey_id", "new_journey_id", "session_count",
         "current_step", "session_outcome", "session_started_at", "session_ended_at",
+        # Arc 17: JourneyType governance
+        "journey_type_id", "pool_id",
         "timestamp", "date",
     ]
 
@@ -1524,6 +1537,9 @@ def _journey_event_row(d: dict) -> list:
         d.get("session_outcome") or None,
         _parse_dt(started_at_str) if started_at_str else None,
         _parse_dt(ended_at_str)   if ended_at_str   else None,
+        # Arc 17: JourneyType governance
+        d.get("journey_type_id") or None,
+        d.get("pool_id") or None,
         _parse_dt(ts) or datetime.utcnow(),
         _today_utc(ts),
     ]

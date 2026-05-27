@@ -163,6 +163,12 @@ class PoolConfig(BaseModel):
     # None = use platform default (["service", "journey", "session"]).
     context_visibility: dict | None = None
 
+    # Arc 17: JourneyType slugs this pool is authorized to create.
+    # Populated by kafka_listener from pool.registered/pool.updated events.
+    # Written to ContextStore as session.authorized_journey_types[] after allocation.
+    # journey_start MCP tool validates this list before creating a Journey instance.
+    authorized_journey_types: list[str] = Field(default_factory=list)
+
 
 # ─────────────────────────────────────────────
 # Queue

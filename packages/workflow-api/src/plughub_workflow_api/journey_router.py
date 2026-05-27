@@ -34,6 +34,8 @@ from .db import (
     db_create_journey_for_instance,
     db_get_instance,
     db_get_journey,
+    db_get_instance_sessions,
+    db_list_journey_instances,
     db_list_journeys,
     db_merge_journeys,
     db_resume_instance,
@@ -64,6 +66,9 @@ class JourneyCreateRequest(BaseModel):
     origin_session_id: str  = Field(..., description="Session that initiates the journey")
     customer_id:       str | None = Field(None, description="Customer identifier (caller.*)")
     pool_id:           str | None = Field(None, description="Pool that originated this journey — enables Tier 1 poller listing")
+    # Arc 17: JourneyType governance
+    journey_type_id:   str | None = Field(None, description="Arc 17: registered journey type slug (e.g. 'portabilidade_telco')")
+    sla_ms:            int | None = Field(None, description="Arc 17: denormalized sla_ms from JourneyType at creation time")
     metadata:          dict[str, Any] | None = Field(None)
 
 
@@ -181,6 +186,8 @@ async def create_journey(body: JourneyCreateRequest, request: Request) -> dict:
         customer_id       = body.customer_id,
         metadata          = body.metadata,
         pool_id           = body.pool_id,
+        journey_type_id   = body.journey_type_id,   # Arc 17
+        sla_ms            = body.sla_ms,            # Arc 17: denormalized from JourneyType
     )
     journey_id = journey["journey_id"]
 
@@ -217,13 +224,25 @@ async def create_journey(body: JourneyCreateRequest, request: Request) -> dict:
         workflow_instance_id = instance_id,
         customer_id          = body.customer_id,
         metadata             = body.metadata,
+        # Arc 17: JourneyType governance
+        journey_type_id      = body.journey_type_id,
+        pool_id              = body.pool_id,
     )
 
     return {**journey, "workflow_instance_id": instance_id}
 
 
+class JourneyFromInstanceRequest(BaseModel):
+    """Arc 17: optional body for creates_journey:true auto-creation path."""
+    journey_type_id: str | None = Field(None, description="Arc 17: registered journey type slug from skill YAML")
+
+
 @journey_router.post("/from-instance/{instance_id}", status_code=201)
-async def create_journey_for_instance(instance_id: str, request: Request) -> dict:
+async def create_journey_for_instance(
+    instance_id: str,
+    request:     Request,
+    body:        JourneyFromInstanceRequest = JourneyFromInstanceRequest(),
+) -> dict:
     """
     Arc 10 Phase B — creates_journey: true support.
 
@@ -235,12 +254,17 @@ async def create_journey_for_instance(instance_id: str, request: Request) -> dic
 
     The skill-flow-worker calls this endpoint at the start of execution (before
     engine.run()), so the journey exists before any step emits events.
+
+    Arc 17: optional body.journey_type_id carries the type slug from the YAML.
     """
     tenant_id = _tenant(request)
     pool      = request.app.state.pool
     producer  = request.app.state.producer
 
-    journey = await db_create_journey_for_instance(pool, instance_id, tenant_id)
+    journey = await db_create_journey_for_instance(
+        pool, instance_id, tenant_id,
+        journey_type_id = body.journey_type_id,
+    )
     if not journey:
         raise HTTPException(status_code=404, detail="WorkflowInstance not found")
 
@@ -256,6 +280,8 @@ async def create_journey_for_instance(instance_id: str, request: Request) -> dic
             origin_session_id    = journey.get("origin_session_id", ""),
             workflow_instance_id = instance_id,
             customer_id          = journey.get("customer_id"),
+            # Arc 17: JourneyType governance (from skill YAML via request body)
+            journey_type_id      = body.journey_type_id,
         )
 
     return journey
@@ -272,26 +298,64 @@ async def get_journey(journey_id: str, request: Request) -> dict:
 
 @journey_router.get("")
 async def list_journeys(
-    request:     Request,
-    status:      str | None = Query(None),
-    customer_id: str | None = Query(None),
-    skill_id:    str | None = Query(None),
-    pool_id:     str | None = Query(None, description="Filter by originating pool (Arc 16 Tier 1 poller)"),
-    limit:       int = Query(50, ge=1, le=200),
-    offset:      int = Query(0, ge=0),
+    request:         Request,
+    status:          str | None = Query(None),
+    customer_id:     str | None = Query(None),
+    skill_id:        str | None = Query(None),
+    pool_id:         str | None = Query(None, description="Filter by originating pool (Arc 16 Tier 1 poller)"),
+    journey_type_id: str | None = Query(None, description="Arc 17/18: filter by journey type slug"),
+    from_dt:         str | None = Query(None, description="Arc 18: ISO date lower bound (inclusive)"),
+    to_dt:           str | None = Query(None, description="Arc 18: ISO date upper bound (inclusive)"),
+    limit:           int = Query(50, ge=1, le=200),
+    offset:          int = Query(0, ge=0),
 ) -> dict:
     tenant_id = _tenant(request)
     items = await db_list_journeys(
         request.app.state.pool,
-        tenant_id   = tenant_id,
-        status      = status,
-        customer_id = customer_id,
-        skill_id    = skill_id,
-        pool_id     = pool_id,
-        limit       = limit,
-        offset      = offset,
+        tenant_id       = tenant_id,
+        status          = status,
+        customer_id     = customer_id,
+        skill_id        = skill_id,
+        pool_id         = pool_id,
+        journey_type_id = journey_type_id,
+        from_dt         = from_dt,
+        to_dt           = to_dt,
+        limit           = limit,
+        offset          = offset,
     )
     return {"items": items, "total": len(items), "limit": limit, "offset": offset}
+
+
+@journey_router.get("/{journey_id}/instances")
+async def list_journey_instances(
+    journey_id: str,
+    request:    Request,
+    limit:      int = Query(50, ge=1, le=200),
+    offset:     int = Query(0, ge=0),
+) -> dict:
+    """
+    Arc 18 C1 — List workflow instances linked to a journey.
+
+    Used by Analytics/Journeys drill-down:
+      /analise/journeys?journey=:id → shows the instances (processes) of that journey.
+
+    Returns { items, total, journey_id } ordered by created_at ASC.
+    """
+    tenant_id = _tenant(request)
+    pool      = request.app.state.pool
+
+    journey = await db_get_journey(pool, journey_id, tenant_id)
+    if not journey:
+        raise HTTPException(status_code=404, detail="Journey not found")
+
+    items = await db_list_journey_instances(pool, journey_id, tenant_id, limit, offset)
+    return {
+        "journey_id": journey_id,
+        "items":      items,
+        "total":      len(items),
+        "limit":      limit,
+        "offset":     offset,
+    }
 
 
 @journey_router.post("/{journey_id}/link-session", status_code=200)

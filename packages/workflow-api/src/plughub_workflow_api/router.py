@@ -64,6 +64,7 @@ from .db import (
     db_get_collect_by_token,
     db_get_instance,
     db_get_instance_by_token,
+    db_get_instance_sessions,
     db_get_webhook,
     db_get_webhook_by_token_hash,
     db_list_collects_by_campaign,
@@ -117,6 +118,7 @@ class TriggerRequest(BaseModel):
     # target {tenant}:ctx:{origin_session_id} rather than the workflow UUID.
     origin_session_id: str | None = None
     pool_id:           str | None = None
+    journey_id:        str | None = None
     context:           dict = Field(default_factory=dict)
     metadata:          dict = Field(default_factory=dict)
 
@@ -148,7 +150,16 @@ async def _resolve_flow_definition(
         if resp.status_code == 200:
             skill = resp.json()
             if skill.get("flow"):
-                return {**metadata, "flow_definition": skill["flow"]}
+                # Merge root-level skill flags (creates_journey, journey_type_id)
+                # into flow_definition so skill-flow-worker can read them from
+                # flowDefinition without needing a separate metadata lookup.
+                # Arc 17 (#301): journey_type_id must be present when creates_journey=true.
+                flow_def = dict(skill["flow"])
+                if skill.get("creates_journey"):
+                    flow_def["creates_journey"] = True
+                if skill.get("journey_type_id"):
+                    flow_def["journey_type_id"] = skill["journey_type_id"]
+                return {**metadata, "flow_definition": flow_def}
     except Exception as exc:  # noqa: BLE001
         logger.warning("Could not fetch flow_definition for %s from registry: %s", flow_id, exc)
 
@@ -188,6 +199,7 @@ async def trigger_workflow(
         "session_id":        body.session_id,
         "origin_session_id": body.origin_session_id,
         "pool_id":           body.pool_id,
+        "journey_id":        body.journey_id,
         "metadata":          resolved_metadata,
         "pipeline_state":    {"contact_context": body.context},
     })
@@ -479,15 +491,46 @@ async def fail_workflow(
 @router.get("/v1/workflow/instances")
 async def list_instances(
     tenant_id: str,
-    status:    str | None = None,
+    status:    str | None = None,   # all | active | suspended | completed | failed | timed_out | cancelled
     flow_id:   str | None = None,
+    pool_id:   str | None = None,
+    from_dt:   str | None = None,   # ISO date string (inclusive)
+    to_dt:     str | None = None,   # ISO date string (inclusive)
     limit:     int = 50,
     offset:    int = 0,
     pool=Depends(_pool),
 ) -> list[dict]:
     if limit > 200:
         limit = 200
-    return await db_list_instances(pool, tenant_id, status, flow_id, limit, offset)
+    return await db_list_instances(
+        pool, tenant_id, status, flow_id, pool_id, from_dt, to_dt, limit, offset
+    )
+
+
+@router.get("/v1/workflow/instances/{instance_id}/sessions")
+async def list_instance_sessions(
+    instance_id: str,
+    pool=Depends(_pool),
+) -> dict[str, Any]:
+    """
+    Returns all session_ids linked to a workflow instance.
+
+    Includes:
+    - origin_session_id: the customer session that triggered the workflow (type='origin')
+    - responded_session_id: sessions created when collect steps were responded to (type='collect')
+
+    Used by Analytics/Processes drill-down (Arc 18 B2).
+    """
+    instance = await db_get_instance(pool, instance_id)
+    if not instance:
+        raise HTTPException(404, "workflow instance not found")
+
+    sessions = await db_get_instance_sessions(pool, instance_id)
+    return {
+        "instance_id":  instance_id,
+        "session_ids":  [s["session_id"] for s in sessions],
+        "sessions":     sessions,
+    }
 
 
 @router.get("/v1/workflow/instances/{instance_id}")
@@ -714,9 +757,9 @@ async def respond_collect(
     settings = _settings(request)
     producer = _producer(request)
 
-    # Complete the collect_instance
+    # Complete the collect_instance (Arc 18 B1: store responded_session_id for drill-down)
     updated_collect = await db_complete_collect(
-        pool, body.collect_token, body.response_data
+        pool, body.collect_token, body.response_data, session_id=body.session_id
     )
     if not updated_collect:
         raise HTTPException(409, "Collect completion failed — concurrent update")

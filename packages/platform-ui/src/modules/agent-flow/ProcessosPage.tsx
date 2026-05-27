@@ -1,20 +1,21 @@
 /**
- * ProcessosPage — /flow/processos
+ * ProcessosPage — /flow/processos  (Monitor)
  *
- * Two-tab view for Arc 10 (Journey) + Arc 4 (Workflow Instances).
+ * Two-tab view:
+ * Tab "summary"   — Workflow execution KPIs + grouped table (arc18 A1)
+ * Tab "instances" — Live workflow instance list + detail panel
  *
- * Tab "journeys"  — Journey list from analytics-api + detail from workflow-api
- * Tab "instances" — Workflow instance lifecycle (existing view)
+ * Journey operational view has moved to MonitorJourneysPage (/monitor/journeys).
  */
-import React, { useState, useRef, useEffect } from 'react'
-import { X, Settings, Map, ClipboardList, FolderOpen } from 'lucide-react'
+import React, { useCallback, useEffect, useState } from 'react'
+import { BarChart2, ClipboardList, Settings, X } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { useAuth } from '@/auth/useAuth'
+import Spinner from '@/components/ui/Spinner'
 import {
   useWorkflowInstances, useWorkflowInstance, cancelWorkflow,
-  useJourneys, useJourney,
 } from '@/modules/workflows/api/hooks'
-import type { WorkflowStatus, JourneyStatus, Journey } from '@/modules/workflows/api/hooks'
+import type { WorkflowStatus } from '@/modules/workflows/api/hooks'
 import { Link } from 'react-router-dom'
 
 // ── Shared helpers ────────────────────────────────────────────────────────────
@@ -31,15 +32,7 @@ function fmtDuration(ms: number | null | undefined) {
   return `${(ms / 3_600_000).toFixed(1)}h`
 }
 
-// ── Journey tab ───────────────────────────────────────────────────────────────
-
-const JOURNEY_STATUS_COLORS: Record<JourneyStatus, string> = {
-  active:    '#3b82f6',
-  suspended: '#eab308',
-  completed: '#22c55e',
-  failed:    '#ef4444',
-  cancelled: '#6b7280',
-}
+// ── Instance status colours ───────────────────────────────────────────────────
 
 const WF_STATUS_COLORS: Record<WorkflowStatus, string> = {
   active:    '#3b82f6',
@@ -50,522 +43,331 @@ const WF_STATUS_COLORS: Record<WorkflowStatus, string> = {
   cancelled: '#6b7280',
 }
 
-// ── Journey merge helper ──────────────────────────────────────────────────────
+// ── Summary tab types & helpers ───────────────────────────────────────────────
 
-function MergeButton({ primary, candidates, tenantId, onMerged }: {
-  primary:    Journey
-  candidates: Journey[]
-  tenantId:   string
-  onMerged:   () => void
-}) {
-  const { t } = useTranslation('contacts')
-  const [open,    setOpen]    = useState(false)
-  const [merging, setMerging] = useState(false)
-  const ref = useRef<HTMLDivElement>(null)
+interface WorkflowSummaryRow {
+  group_key:        string
+  total_triggered:  number
+  total_completed:  number
+  total_failed:     number
+  total_timeout:    number
+  total_cancelled:  number
+  total_suspended:  number
+  completion_rate:  number
+  failure_rate:     number
+  avg_duration_ms:  number | null
+}
 
-  useEffect(() => {
-    if (!open) return
-    function handle(e: MouseEvent) {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false)
-    }
-    document.addEventListener('mousedown', handle)
-    return () => document.removeEventListener('mousedown', handle)
-  }, [open])
+interface SummaryResponse {
+  data:     WorkflowSummaryRow[]
+  group_by: string
+  meta:     { total: number; from_dt: string; to_dt: string }
+  error?:   string
+}
 
-  const others = candidates.filter(
-    j => j.journey_id !== primary.journey_id &&
-         (j.status === 'active' || j.status === 'suspended')
-  )
-  if (others.length === 0) return null
+type GroupBy = 'pool_id' | 'campaign_id'
+const GROUP_BY_VALUES: GroupBy[] = ['pool_id', 'campaign_id']
 
-  async function merge(sourceId: string) {
-    setMerging(true)
-    setOpen(false)
-    try {
-      const res = await fetch('/v1/journeys/merge', {
-        method:  'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({
-          tenant_id:         tenantId,
-          journey_id:        primary.journey_id,
-          source_journey_id: sourceId,
-        }),
-      })
-      if (res.ok) onMerged()
-    } catch { /* non-fatal */ }
-    finally { setMerging(false) }
-  }
+type WindowPreset = 'today' | '1d' | '7d'
+function presetToRange(preset: WindowPreset): { fromDt: string; toDt: string } {
+  const today = new Date()
+  const toDt  = today.toISOString().slice(0, 10)
+  if (preset === 'today') return { fromDt: toDt, toDt }
+  const from  = new Date(today)
+  from.setDate(from.getDate() - (preset === '1d' ? 1 : 6))
+  return { fromDt: from.toISOString().slice(0, 10), toDt }
+}
 
+function pct(v: number): string { return `${(v * 100).toFixed(1)}%` }
+
+function RateBar({ value, color }: { value: number; color: string }) {
+  const w = Math.min(100, Math.max(0, value * 100)).toFixed(0)
   return (
-    <div ref={ref} className="relative">
-      <button
-        onClick={() => setOpen(o => !o)}
-        disabled={merging}
-        className="w-full py-1.5 rounded border border-violet-300 bg-violet-50 text-violet-700 text-xs font-medium hover:bg-violet-100 transition-colors disabled:opacity-40"
-      >
-        {merging ? t('processes.journeys.merge.merging') : t('processes.journeys.merge.button')}
-      </button>
-      {open && (
-        <div className="absolute bottom-full left-0 right-0 mb-1 bg-white border border-border rounded-lg shadow-lg overflow-hidden z-50">
-          <div className="px-2.5 py-1.5 text-2xs font-bold text-muted uppercase tracking-wide border-b border-border">
-            {t('processes.journeys.merge.header')}
-          </div>
-          {others.map(j => (
-            <button key={j.journey_id} onClick={() => merge(j.journey_id)}
-              className="w-full text-left px-3 py-2 text-xs text-dark hover:bg-primary/5 transition-colors border-b border-border last:border-0">
-              <div className="font-mono text-muted">{j.journey_id.slice(0, 12)}…</div>
-              <div className="text-muted-light truncate mt-0.5">{j.skill_id}</div>
-            </button>
-          ))}
-        </div>
+    <div className="flex items-center gap-1.5">
+      <div className="w-20 h-1.5 rounded bg-surface-alt overflow-hidden">
+        <div className="h-full rounded" style={{ width: `${w}%`, background: color }} />
+      </div>
+      <span className="text-xs tabular-nums" style={{ color }}>{pct(value)}</span>
+    </div>
+  )
+}
+
+function OutcomeBar({ row }: { row: WorkflowSummaryRow }) {
+  const { t } = useTranslation('workflows')
+  const total = row.total_triggered || 1
+  const segments = [
+    { count: row.total_completed, color: '#059669', statusKey: 'completed' },
+    { count: row.total_suspended, color: '#2D9CDB', statusKey: 'suspended' },
+    { count: row.total_failed,    color: '#DC2626', statusKey: 'failed'    },
+    { count: row.total_timeout,   color: '#D97706', statusKey: 'timed_out' },
+    { count: row.total_cancelled, color: '#6b7280', statusKey: 'cancelled' },
+  ]
+  return (
+    <div className="flex h-3 rounded overflow-hidden w-28 gap-px" title={
+      segments.map(s => `${t(`statuses.${s.statusKey}`, { defaultValue: s.statusKey })}: ${s.count}`).join(' · ')
+    }>
+      {segments.map(s => s.count > 0
+        ? <div key={s.statusKey} style={{ width: `${(s.count / total) * 100}%`, background: s.color }} />
+        : null
       )}
     </div>
   )
 }
 
-// ── Journey split drawer ──────────────────────────────────────────────────────
+function KpiCard({ label, value, sub, color }: { label: string; value: string; sub?: string; color?: string }) {
+  return (
+    <div className="bg-white border border-border rounded-lg px-5 py-3 flex flex-col gap-0.5 min-w-[140px]">
+      <span className="text-xs text-muted-light uppercase tracking-wide">{label}</span>
+      <span className="text-2xl font-bold leading-none" style={{ color: color ?? '#1e293b' }}>{value}</span>
+      {sub && <span className="text-xs text-muted-light">{sub}</span>}
+    </div>
+  )
+}
 
-function SplitDrawer({ journey, tenantId, onSplit, onClose }: {
-  journey:  Journey
-  tenantId: string
-  onSplit:  (newJourneyId: string) => void
-  onClose:  () => void
-}) {
-  const { t } = useTranslation('contacts')
-  const [sessions,     setSessions]     = useState<string[]>([])
-  const [selected,     setSelected]     = useState<Set<string>>(new Set())
-  const [skillId,      setSkillId]      = useState('')
-  const [loading,      setLoading]      = useState(true)
-  const [splitting,    setSplitting]    = useState(false)
-  const [error,        setError]        = useState<string | null>(null)
+// ── Summary tab ───────────────────────────────────────────────────────────────
 
-  useEffect(() => {
-    setLoading(true)
-    fetch(`/v1/journeys/${journey.journey_id}/collect-sessions`, {
-      headers: { 'x-tenant-id': tenantId },
-    })
-      .then(r => r.json())
-      .then(d => { setSessions(d.collect_sessions ?? []); setLoading(false) })
-      .catch(() => { setSessions([]); setLoading(false) })
-  }, [journey.journey_id, tenantId])
+function SummaryTab({ tenantId }: { tenantId: string }) {
+  const { t, i18n } = useTranslation('workflows')
 
-  function toggle(sid: string) {
-    setSelected(prev => {
-      const next = new Set(prev)
-      if (next.has(sid)) next.delete(sid)
-      else next.add(sid)
-      return next
-    })
-  }
+  const [window_,     setWindow_]     = useState<WindowPreset>('7d')
+  const { fromDt, toDt } = presetToRange(window_)
+  const [groupBy,     setGroupBy]     = useState<GroupBy>('pool_id')
+  const [filterGroup, setFilterGroup] = useState<string>('')
+  const [data,        setData]        = useState<WorkflowSummaryRow[]>([])
+  const [loading,     setLoading]     = useState(false)
+  const [error,       setError]       = useState<string | null>(null)
+  const [sortKey,     setSortKey]     = useState<keyof WorkflowSummaryRow>('total_triggered')
+  const [sortAsc,     setSortAsc]     = useState(false)
 
-  async function doSplit() {
-    if (selected.size === 0) return
-    setSplitting(true)
-    setError(null)
+  // reset group filter when the groupBy dimension changes
+  useEffect(() => { setFilterGroup('') }, [groupBy])
+
+  const load = useCallback(async () => {
+    setLoading(true); setError(null)
     try {
-      const res = await fetch(`/v1/journeys/${journey.journey_id}/split`, {
-        method:  'POST',
-        headers: { 'Content-Type': 'application/json', 'x-tenant-id': tenantId },
-        body:    JSON.stringify({
-          session_ids: [...selected],
-          skill_id:    skillId.trim() || null,
-        }),
-      })
-      const data = await res.json()
-      if (!res.ok) { setError(data.detail ?? String(res.status)); return }
-      onSplit(data.new_journey_id)
+      const qs = new URLSearchParams({ tenant_id: tenantId, from_dt: fromDt, to_dt: toDt, group_by: groupBy })
+      const res  = await fetch(`/reports/workflow-summary?${qs}`)
+      const body = await res.json() as SummaryResponse
+      if (body.error) throw new Error(body.error)
+      setData(body.data ?? [])
     } catch (e) {
-      setError(String(e))
-    } finally {
-      setSplitting(false)
-    }
+      setError(e instanceof Error ? e.message : String(e))
+      setData([])
+    } finally { setLoading(false) }
+  }, [tenantId, fromDt, toDt, groupBy])
+
+  useEffect(() => { load() }, [load])
+
+  const totalTriggered = data.reduce((s, r) => s + r.total_triggered, 0)
+  const totalCompleted = data.reduce((s, r) => s + r.total_completed, 0)
+  const totalFailed    = data.reduce((s, r) => s + r.total_failed + r.total_timeout, 0)
+  const wCompletion    = totalTriggered > 0
+    ? data.reduce((s, r) => s + r.completion_rate * r.total_triggered, 0) / totalTriggered : null
+  const wAvgDuration   = totalCompleted > 0
+    ? data.reduce((s, r) => r.avg_duration_ms !== null ? s + r.avg_duration_ms * r.total_completed : s, 0) / totalCompleted : null
+
+  function handleSort(key: keyof WorkflowSummaryRow) {
+    if (key === sortKey) setSortAsc(a => !a)
+    else { setSortKey(key); setSortAsc(false) }
   }
 
-  const confirmLabel = splitting
-    ? t('processes.journeys.split.splitting')
-    : selected.size > 0
-      ? t('processes.journeys.split.confirmCount', { count: selected.size })
-      : t('processes.journeys.split.confirm')
+  const sorted = [...data].sort((a, b) => {
+    const va = a[sortKey] ?? 0; const vb = b[sortKey] ?? 0
+    const cmp = typeof va === 'number' && typeof vb === 'number'
+      ? va - vb : String(va).localeCompare(String(vb))
+    return sortAsc ? cmp : -cmp
+  })
+
+  // group-level filter derived from current data
+  const groupOptions = [...new Set(data.map(r => r.group_key).filter(Boolean))].sort()
+  const displayRows  = filterGroup ? sorted.filter(r => r.group_key === filterGroup) : sorted
+
+  function exportCsv() {
+    const cols: (keyof WorkflowSummaryRow)[] = [
+      'group_key', 'total_triggered', 'total_completed', 'total_failed',
+      'total_timeout', 'total_cancelled', 'total_suspended',
+      'completion_rate', 'failure_rate', 'avg_duration_ms',
+    ]
+    const blob = new Blob(
+      [cols.join(',') + '\n' + data.map(r => cols.map(c => r[c] ?? '').join(',')).join('\n')],
+      { type: 'text/csv' }
+    )
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url; a.download = `processos_${fromDt}_${toDt}.csv`; a.click()
+    URL.revokeObjectURL(url)
+  }
+
+  function Th({ label, k, align = 'left' }: { label: string; k: keyof WorkflowSummaryRow; align?: string }) {
+    const active = sortKey === k
+    return (
+      <th onClick={() => handleSort(k)}
+        className={`px-3 py-2.5 font-medium text-${align} cursor-pointer select-none whitespace-nowrap hover:text-dark transition-colors ${active ? 'text-primary' : 'text-muted'}`}>
+        {label}{active ? (sortAsc ? ' ↑' : ' ↓') : ''}
+      </th>
+    )
+  }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/40 backdrop-blur-sm"
-      onClick={e => { if (e.target === e.currentTarget) onClose() }}>
-      <div className="bg-white border border-border rounded-t-2xl sm:rounded-2xl w-full max-w-md p-5 shadow-2xl">
-
-        <div className="flex justify-between items-center mb-4">
-          <h3 className="text-sm font-bold text-dark">{t('processes.journeys.split.title')}</h3>
-          <button onClick={onClose} className="text-muted hover:text-dark" aria-label="Close"><X className="w-4 h-4" /></button>
+    <div className="flex flex-col h-full overflow-hidden bg-surface-muted">
+      {/* Filter bar */}
+      <div className="bg-white border-b border-border px-5 py-2.5 flex items-center gap-3 flex-shrink-0 flex-wrap">
+        <div className="flex items-center gap-1.5">
+          <label className="text-xs text-muted">{t('analise.period')}</label>
+          <select value={window_} onChange={e => setWindow_(e.target.value as WindowPreset)}
+            className="text-xs border border-border-strong rounded px-2 py-1 bg-white focus:outline-none focus:ring-1 focus:ring-primary/40">
+            <option value="today">{t('analise.periodOptions.today')}</option>
+            <option value="1d">{t('analise.periodOptions.1d')}</option>
+            <option value="7d">{t('analise.periodOptions.7d')}</option>
+          </select>
         </div>
-
-        {/* Session picker */}
-        <div className="mb-4">
-          <div className="text-xs font-bold text-muted uppercase tracking-wider mb-2">
-            {t('processes.journeys.split.sessionsLabel')}
-          </div>
-          {loading ? (
-            <div className="text-xs text-muted-light animate-pulse py-3 text-center">
-              {t('processes.journeys.split.loading')}
-            </div>
-          ) : sessions.length === 0 ? (
-            <div className="text-xs text-muted-light py-3 text-center">
-              {t('processes.journeys.split.noSessions')}
-            </div>
-          ) : (
-            <div className="space-y-1 max-h-40 overflow-y-auto border border-border rounded-lg p-2">
-              {sessions.map(sid => {
-                const isOrigin  = sid === journey.origin_session_id
-                const isChecked = selected.has(sid)
-                return (
-                  <label key={sid}
-                    className={`flex items-center gap-2.5 px-2 py-1.5 rounded cursor-pointer transition-colors ${
-                      isOrigin ? 'opacity-40 cursor-not-allowed' : 'hover:bg-primary/5'
-                    }`}>
-                    <input
-                      type="checkbox"
-                      disabled={isOrigin}
-                      checked={isChecked}
-                      onChange={() => !isOrigin && toggle(sid)}
-                      className="rounded border-border-strong bg-white text-primary"
-                    />
-                    <code className="text-xs text-dark flex-1 truncate">{sid}</code>
-                    {isOrigin && (
-                      <span className="text-2xs text-muted flex-shrink-0">
-                        {t('processes.journeys.split.originLabel')}
-                      </span>
-                    )}
-                  </label>
-                )
-              })}
-            </div>
-          )}
+        <div className="flex items-center gap-1.5">
+          <label className="text-xs text-muted">{t('analise.groupBy')}</label>
+          <select value={groupBy} onChange={e => setGroupBy(e.target.value as GroupBy)}
+            className="text-xs border border-border-strong rounded px-2 py-1 bg-white focus:outline-none focus:ring-1 focus:ring-primary/40">
+            {GROUP_BY_VALUES.map(v => (
+              <option key={v} value={v}>{t(`analise.groupByOptions.${v}`)}</option>
+            ))}
+          </select>
         </div>
-
-        {/* Optional skill_id */}
-        <div className="mb-4">
-          <div className="text-xs font-bold text-muted uppercase tracking-wider mb-2">
-            {t('processes.journeys.split.skillLabel')}{' '}
-            <span className="font-normal text-muted-light">{t('processes.journeys.split.skillOptional')}</span>
-          </div>
-          <input
-            value={skillId}
-            onChange={e => setSkillId(e.target.value)}
-            placeholder="skill_portabilidade_v1"
-            className="w-full text-xs bg-white border border-border-strong rounded-lg px-3 py-2 text-dark placeholder-muted-light focus:outline-none focus:ring-2 focus:ring-primary/30"
-          />
-          <div className="text-2xs text-muted-light mt-1">
-            {t('processes.journeys.split.skillHint')}
-          </div>
-        </div>
-
-        {error && (
-          <div className="mb-3 text-xs text-red-text bg-red-light border border-red/30 rounded-lg px-3 py-2">
-            {error}
+        {groupOptions.length > 0 && (
+          <div className="flex items-center gap-1.5">
+            <label className="text-xs text-muted">{t(`analise.groupByOptions.${groupBy}`)}</label>
+            <select value={filterGroup} onChange={e => setFilterGroup(e.target.value)}
+              className="text-xs border border-border-strong rounded px-2 py-1 bg-white focus:outline-none focus:ring-1 focus:ring-primary/40">
+              <option value="">{t('analise.filterAll')}</option>
+              {groupOptions.map(g => (
+                <option key={g} value={g}>{g}</option>
+              ))}
+            </select>
           </div>
         )}
-
-        {/* Actions */}
-        <div className="flex gap-2">
-          <button onClick={onClose}
-            className="flex-1 py-2 rounded-lg border border-border text-xs text-muted hover:text-dark hover:border-border-strong transition-colors">
-            {t('processes.journeys.split.cancel')}
+        <div className="flex-1" />
+        {loading ? <Spinner /> : (
+          <button onClick={load} className="text-xs text-muted-light hover:text-muted transition-colors px-2 py-1">
+            {t('analise.refresh')}
           </button>
-          <button
-            onClick={doSplit}
-            disabled={selected.size === 0 || splitting}
-            className="flex-1 py-2 rounded-lg bg-primary text-xs font-semibold text-white hover:bg-primary/90 transition-colors disabled:opacity-40 disabled:cursor-not-allowed">
-            {confirmLabel}
-          </button>
-        </div>
-      </div>
-    </div>
-  )
-}
-
-function JourneysTab({ tenantId }: { tenantId: string }) {
-  const { t, i18n } = useTranslation('contacts')
-  const [filterStatus, setFilterStatus] = useState<JourneyStatus | 'all'>('all')
-  const [selectedId,   setSelectedId]   = useState<string | null>(null)
-  const [splitOpen,    setSplitOpen]    = useState(false)
-
-  const statusParam = filterStatus === 'all' ? undefined : filterStatus
-  const { journeys, kpis, loading, refresh } = useJourneys(tenantId, undefined, statusParam)
-  const { journey: detail } = useJourney(selectedId)
-
-  const sorted = [...journeys].sort(
-    (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime(),
-  )
-
-  return (
-    <div className="flex flex-col h-full overflow-hidden">
-
-      {/* KPI strip */}
-      {kpis.length > 0 && (
-        <div className="flex gap-3 px-4 py-2.5 bg-white border-b border-border flex-shrink-0 overflow-x-auto">
-          {kpis.slice(0, 5).map(k => (
-            <div key={k.skill_id}
-              className="flex-shrink-0 bg-surface-muted border border-border rounded-lg px-3 py-2 min-w-[140px]">
-              <div className="text-2xs text-muted truncate font-mono">{k.skill_id}</div>
-              <div className="flex items-center gap-3 mt-1">
-                <div className="text-center">
-                  <div className="text-xs font-bold text-dark">{k.total_journeys}</div>
-                  <div className="text-micro text-muted-light">{t('processes.journeys.kpiTotal')}</div>
-                </div>
-                <div className="text-center">
-                  <div className="text-xs font-bold text-green-600">
-                    {(k.resolution_rate * 100).toFixed(0)}%
-                  </div>
-                  <div className="text-micro text-muted-light">{t('processes.journeys.kpiResolution')}</div>
-                </div>
-                <div className="text-center">
-                  <div className="text-xs font-bold text-dark">
-                    {fmtDuration(k.median_duration_ms)}
-                  </div>
-                  <div className="text-micro text-muted-light">{t('processes.journeys.kpiP50')}</div>
-                </div>
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
-
-      <div className="flex flex-1 overflow-hidden">
-
-        {/* Left: list */}
-        <div className="w-80 flex-shrink-0 border-r border-border bg-white flex flex-col overflow-hidden">
-
-          {/* Status filter */}
-          <div className="flex flex-wrap gap-1.5 px-3 py-2.5 border-b border-border flex-shrink-0">
-            {(['all', 'active', 'suspended', 'completed', 'failed'] as const).map(s => {
-              const active = filterStatus === s
-              const color  = s === 'all' ? '#3b82f6' : JOURNEY_STATUS_COLORS[s as JourneyStatus]
-              return (
-                <button key={s} onClick={() => { setFilterStatus(s); setSelectedId(null) }}
-                  className="text-xs px-2.5 py-1 rounded-md font-medium transition-all"
-                  style={{
-                    border:     `1px solid ${active ? color : '#e2e8f0'}`,
-                    background: active ? color + '22' : 'transparent',
-                    color:      active ? color : '#94a3b8',
-                  }}>
-                  {t(`processes.journeyStatus.${s}`)}
-                </button>
-              )
-            })}
-          </div>
-
-          {/* Journey list */}
-          <div className="flex-1 overflow-y-auto">
-            {loading && sorted.length === 0 && (
-              <div className="flex items-center justify-center py-12 text-muted-light text-sm animate-pulse">
-                {t('processes.journeys.loading')}
-              </div>
-            )}
-            {!loading && sorted.length === 0 && (
-              <div className="flex flex-col items-center justify-center py-12 text-muted-light text-sm gap-2">
-                <FolderOpen className="w-8 h-8" aria-hidden="true" />
-                <span>{t('processes.journeys.empty')}</span>
-              </div>
-            )}
-            {sorted.map(j => {
-              const color      = JOURNEY_STATUS_COLORS[j.status]
-              const isSelected = j.journey_id === selectedId
-              return (
-                <div key={j.journey_id}
-                  onClick={() => setSelectedId(j.journey_id === selectedId ? null : j.journey_id)}
-                  className="px-4 py-3 cursor-pointer transition-colors hover:bg-primary/5"
-                  style={{
-                    borderBottom: '1px solid #e2e8f0',
-                    background:   isSelected ? '#EBF2FA' : 'transparent',
-                    borderLeft:   isSelected ? `3px solid ${color}` : '3px solid transparent',
-                  }}>
-                  <div className="flex justify-between items-start gap-2">
-                    <div className="flex-1 min-w-0">
-                      <code className="text-xs font-semibold text-secondary">
-                        {j.journey_id.slice(0, 8)}…
-                      </code>
-                      <div className="text-xs text-muted mt-0.5 truncate font-mono">
-                        {j.skill_id}
-                      </div>
-                      {j.customer_id && (
-                        <div className="text-xs text-muted-light mt-0.5 truncate">
-                          {t('processes.journeys.customerLabel')}: {j.customer_id}
-                        </div>
-                      )}
-                    </div>
-                    <div className="flex flex-col items-end gap-1 flex-shrink-0">
-                      <span className="text-xs font-bold px-1.5 py-0.5 rounded"
-                        style={{ background: color + '33', color }}>
-                        {t(`processes.journeyStatus.${j.status}`, { defaultValue: j.status })}
-                      </span>
-                      <span className="text-2xs text-muted-light">
-                        {t('processes.journeys.sessions', { count: j.session_count })}
-                      </span>
-                    </div>
-                  </div>
-                  <div className="text-xs text-muted-light mt-1.5">{fmtDt(j.created_at, i18n.language)}</div>
-                </div>
-              )
-            })}
-          </div>
-        </div>
-
-        {/* Right: detail */}
-        {detail ? (
-          <div className="flex-1 flex flex-col overflow-hidden">
-            <div className="flex justify-between items-start px-5 py-3.5 bg-white border-b border-border flex-shrink-0">
-              <div>
-                <code className="text-xs text-secondary">{detail.journey_id}</code>
-                <div className="text-xs text-muted mt-0.5 font-mono">{detail.skill_id}</div>
-              </div>
-              <button onClick={() => setSelectedId(null)}
-                className="text-muted hover:text-dark" aria-label="Close"><X className="w-4 h-4" /></button>
-            </div>
-
-            <div className="flex-1 overflow-y-auto p-5 space-y-5">
-
-              {/* Status */}
-              <div>
-                <div className="text-xs font-bold text-muted uppercase tracking-wider mb-2">
-                  {t('processes.journeys.detail.status')}
-                </div>
-                <span className="text-xs font-bold px-2.5 py-1 rounded"
-                  style={{
-                    background: JOURNEY_STATUS_COLORS[detail.status] + '33',
-                    color: JOURNEY_STATUS_COLORS[detail.status],
-                  }}>
-                  {t(`processes.journeyStatus.${detail.status}`, { defaultValue: detail.status })}
-                </span>
-              </div>
-
-              {/* Session count */}
-              <div>
-                <div className="text-xs font-bold text-muted uppercase tracking-wider mb-2">
-                  {t('processes.journeys.detail.linkedSessions')}
-                </div>
-                <div className="text-2xl font-bold text-dark">{detail.session_count ?? 1}</div>
-              </div>
-
-              {/* Timeline */}
-              <div>
-                <div className="text-xs font-bold text-muted uppercase tracking-wider mb-2">
-                  {t('processes.journeys.detail.timeline')}
-                </div>
-                <div className="space-y-1.5">
-                  {[
-                    { dot: '#22c55e', label: t('processes.journeys.detail.started'),   ts: detail.created_at },
-                    detail.last_event_at
-                      ? { dot: '#3b82f6', label: t('processes.journeys.detail.lastEvent'), ts: detail.last_event_at }
-                      : null,
-                  ].filter(Boolean).map((entry, i) => (
-                    <div key={i} className="flex items-center gap-2 text-xs">
-                      <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ backgroundColor: entry!.dot }} />
-                      <span className="text-muted w-24 flex-shrink-0">{entry!.label}</span>
-                      <span className="text-muted-light">{fmtDt(entry!.ts, i18n.language)}</span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-
-              {/* Origin session */}
-              {detail.origin_session_id && (
-                <div>
-                  <div className="text-xs font-bold text-muted uppercase tracking-wider mb-2">
-                    {t('processes.journeys.detail.originSession')}
-                  </div>
-                  <Link
-                    to={`/contacts/sessions?sessionId=${detail.origin_session_id}`}
-                    className="text-xs text-secondary font-mono hover:underline">
-                    {detail.origin_session_id}
-                  </Link>
-                </div>
-              )}
-
-              {/* Linked workflow instance */}
-              {detail.workflow_instance_id && (
-                <div>
-                  <div className="text-xs font-bold text-muted uppercase tracking-wider mb-2">
-                    {t('processes.journeys.detail.workflowInstance')}
-                  </div>
-                  <code className="text-xs text-muted font-mono">{detail.workflow_instance_id}</code>
-                </div>
-              )}
-
-              {/* Customer */}
-              {detail.customer_id && (
-                <div>
-                  <div className="text-xs font-bold text-muted uppercase tracking-wider mb-2">
-                    {t('processes.journeys.detail.customer')}
-                  </div>
-                  <span className="text-xs text-dark">{detail.customer_id}</span>
-                </div>
-              )}
-
-            </div>
-
-            {/* Action buttons — only for active/suspended journeys */}
-            {(detail.status === 'active' || detail.status === 'suspended') && (
-              <div className="px-4 py-3 bg-white border-t border-border flex-shrink-0 space-y-2">
-                <MergeButton
-                  primary={detail}
-                  candidates={journeys}
-                  tenantId={tenantId}
-                  onMerged={() => { setSelectedId(null); refresh() }}
-                />
-                <button
-                  onClick={() => setSplitOpen(true)}
-                  className="w-full py-1.5 rounded border border-orange-300 bg-orange-50 text-orange-700 text-xs font-medium hover:bg-orange-100 transition-colors"
-                >
-                  {t('processes.journeys.detail.splitButton')}
-                </button>
-              </div>
-            )}
-
-            {/* Split drawer */}
-            {splitOpen && detail && (
-              <SplitDrawer
-                journey={detail}
-                tenantId={tenantId}
-                onClose={() => setSplitOpen(false)}
-                onSplit={(newId) => {
-                  setSplitOpen(false)
-                  refresh()
-                  setSelectedId(newId)
-                }}
-              />
-            )}
-          </div>
-        ) : (
-          <div className="flex-1 flex flex-col items-center justify-center text-muted-light">
-            <Map className="w-10 h-10 mb-3" aria-hidden="true" />
-            <div className="text-sm">{t('processes.journeys.selectPrompt')}</div>
-          </div>
         )}
-      </div>
-
-      {/* Refresh button bottom-right */}
-      <div className="absolute bottom-4 right-4">
-        <button onClick={refresh}
-          className="text-xs px-3 py-1.5 rounded border border-border bg-white text-muted hover:text-dark hover:border-border-strong transition-colors shadow-sm">
-          {t('processes.refresh')}
+        <button onClick={exportCsv} disabled={data.length === 0}
+          className="text-xs border border-border rounded px-2.5 py-1 text-muted hover:bg-surface-muted disabled:opacity-40 transition-colors">
+          {t('analise.exportCsv')}
         </button>
       </div>
+
+      {/* KPI strip */}
+      <div className="flex gap-3 px-5 py-3 flex-shrink-0 flex-wrap">
+        <KpiCard label={t('analise.kpi.triggered')} value={totalTriggered.toLocaleString(i18n.language)} />
+        <KpiCard label={t('analise.kpi.completed')} value={totalCompleted.toLocaleString(i18n.language)}
+          sub={totalTriggered > 0 ? t('analise.kpi.ofTotal', { pct: pct(totalCompleted / totalTriggered) }) : undefined}
+          color="#059669" />
+        <KpiCard label={t('analise.kpi.failures')} value={totalFailed.toLocaleString(i18n.language)}
+          sub={totalTriggered > 0 ? t('analise.kpi.ofTotal', { pct: pct(totalFailed / totalTriggered) }) : undefined}
+          color={totalFailed > 0 ? '#DC2626' : '#6b7280'} />
+        <KpiCard label={t('analise.kpi.avgCompletion')}
+          value={wCompletion !== null ? pct(wCompletion) : '—'}
+          color={wCompletion !== null && wCompletion >= 0.8 ? '#059669'
+               : wCompletion !== null && wCompletion >= 0.6 ? '#1B4F8A' : '#D97706'} />
+        <KpiCard label={t('analise.kpi.avgDuration')} value={fmtDuration(wAvgDuration)} />
+      </div>
+
+      {error && (
+        <div className="mx-5 mb-2 px-3 py-2 bg-red-light border border-red/30 rounded text-xs text-red-text flex-shrink-0">
+          {t('analise.loadError')} {error}
+        </div>
+      )}
+
+      {/* Table */}
+      <div className="flex-1 overflow-auto px-5 pb-5">
+        {displayRows.length === 0 && !loading ? (
+          <div className="flex flex-col items-center justify-center py-20 text-muted-light gap-2">
+            <BarChart2 className="w-10 h-10" aria-hidden="true" />
+            <span className="text-sm">{t('analise.empty')}</span>
+          </div>
+        ) : (
+          <table className="w-full text-xs bg-white border border-border rounded-lg overflow-hidden border-separate border-spacing-0">
+            <thead className="sticky top-0 z-10 bg-surface-muted border-b border-border">
+              <tr>
+                <Th label={t(`analise.groupByOptions.${groupBy}`)} k="group_key" />
+                <Th label={t('analise.table.triggered')}  k="total_triggered"  align="right" />
+                <th className="px-3 py-2.5 text-left text-muted font-medium whitespace-nowrap">
+                  {t('analise.table.distribution')}
+                </th>
+                <Th label={t('analise.table.completed')}  k="total_completed"  align="right" />
+                <Th label={t('analise.table.failed')}     k="total_failed"     align="right" />
+                <Th label={t('analise.table.timeout')}    k="total_timeout"    align="right" />
+                <Th label={t('analise.table.cancelled')}  k="total_cancelled"  align="right" />
+                <Th label={t('analise.table.suspended')}  k="total_suspended"  align="right" />
+                <th className="px-3 py-2.5 text-left text-muted font-medium whitespace-nowrap">
+                  {t('analise.table.completion')}
+                </th>
+                <th className="px-3 py-2.5 text-left text-muted font-medium whitespace-nowrap">
+                  {t('analise.table.failure')}
+                </th>
+                <Th label={t('analise.table.avgDuration')} k="avg_duration_ms" align="right" />
+              </tr>
+            </thead>
+            <tbody>
+              {displayRows.map((row, i) => (
+                <tr key={i} className="border-t border-border hover:bg-surface-muted transition-colors">
+                  <td className="px-3 py-2.5 font-mono text-dark max-w-[220px] truncate" title={row.group_key}>
+                    {row.group_key || '—'}
+                  </td>
+                  <td className="px-3 py-2.5 text-right text-dark font-medium">
+                    {row.total_triggered.toLocaleString(i18n.language)}
+                  </td>
+                  <td className="px-3 py-2.5"><OutcomeBar row={row} /></td>
+                  <td className="px-3 py-2.5 text-right">
+                    <span className="text-green-text font-medium">{row.total_completed}</span>
+                  </td>
+                  <td className="px-3 py-2.5 text-right">
+                    <span className={row.total_failed > 0 ? 'text-red font-medium' : 'text-border-strong'}>
+                      {row.total_failed}
+                    </span>
+                  </td>
+                  <td className="px-3 py-2.5 text-right">
+                    <span className={row.total_timeout > 0 ? 'text-warning font-medium' : 'text-border-strong'}>
+                      {row.total_timeout}
+                    </span>
+                  </td>
+                  <td className="px-3 py-2.5 text-right text-muted-light">{row.total_cancelled || <span className="text-border">0</span>}</td>
+                  <td className="px-3 py-2.5 text-right text-muted-light">{row.total_suspended || <span className="text-border">0</span>}</td>
+                  <td className="px-3 py-2.5">
+                    <RateBar value={row.completion_rate}
+                      color={row.completion_rate >= 0.8 ? '#059669' : row.completion_rate >= 0.6 ? '#1B4F8A' : '#D97706'} />
+                  </td>
+                  <td className="px-3 py-2.5">
+                    <RateBar value={row.failure_rate}
+                      color={row.failure_rate > 0.15 ? '#DC2626' : '#6b7280'} />
+                  </td>
+                  <td className="px-3 py-2.5 text-right text-muted">
+                    {fmtDuration(row.avg_duration_ms)}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
     </div>
   )
 }
 
-// ── Instances tab (existing view) ─────────────────────────────────────────────
+// ── Instances tab ─────────────────────────────────────────────────────────────
 
 function InstancesTab({ tenantId }: { tenantId: string }) {
   const { t, i18n } = useTranslation('contacts')
   const [filterStatus, setFilterStatus] = useState<WorkflowStatus | 'all'>('all')
   const [selectedId,   setSelectedId]   = useState<string | null>(null)
+  const [flowFilter,   setFlowFilter]   = useState('')
 
   const statusParam = filterStatus === 'all' ? undefined : filterStatus
   const { instances, loading, refresh } = useWorkflowInstances(tenantId, statusParam, 10_000)
   const { instance: detail }            = useWorkflowInstance(selectedId, 10_000)
 
-  const sorted = [...instances].sort(
-    (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime(),
-  )
+  const flowFilterTrimmed = flowFilter.trim().toLowerCase()
+  const sorted = [...instances]
+    .filter(inst => !flowFilterTrimmed || inst.flow_id.toLowerCase().includes(flowFilterTrimmed))
+    .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
 
   async function handleCancel() {
     if (!selectedId || !tenantId) return
@@ -583,9 +385,26 @@ function InstancesTab({ tenantId }: { tenantId: string }) {
       {/* Left: list */}
       <div className="w-80 flex-shrink-0 border-r border-border bg-white flex flex-col overflow-hidden">
 
+        {/* Flow filter */}
+        <div className="flex items-center gap-2 px-3 py-2 border-b border-border flex-shrink-0">
+          <input
+            type="text"
+            value={flowFilter}
+            onChange={e => setFlowFilter(e.target.value)}
+            placeholder={t('processes.instances.filters.flowPlaceholder')}
+            className="flex-1 text-xs border border-border-strong rounded px-2 py-1 bg-white focus:outline-none focus:ring-1 focus:ring-primary/40"
+          />
+          {flowFilter && (
+            <button onClick={() => setFlowFilter('')}
+              className="text-muted-light hover:text-muted transition-colors">
+              <X className="w-3 h-3" aria-hidden="true" />
+            </button>
+          )}
+        </div>
+
         {/* Status filter */}
         <div className="flex flex-wrap gap-1.5 px-3 py-2.5 border-b border-border flex-shrink-0">
-          {(['all', 'active', 'suspended', 'completed', 'failed'] as const).map(s => {
+          {(['all', 'active', 'suspended', 'completed', 'failed', 'timed_out', 'cancelled'] as const).map(s => {
             const active = filterStatus === s
             const color  = s === 'all' ? '#3b82f6' : WF_STATUS_COLORS[s as WorkflowStatus]
             return (
@@ -596,7 +415,7 @@ function InstancesTab({ tenantId }: { tenantId: string }) {
                   background: active ? color + '22' : 'transparent',
                   color:      active ? color : '#94a3b8',
                 }}>
-                {t(`processes.wfStatus.${s}`)}
+                {t(`processes.wfStatus.${s}`, { defaultValue: s })}
               </button>
             )
           })}
@@ -673,7 +492,6 @@ function InstancesTab({ tenantId }: { tenantId: string }) {
           </div>
 
           <div className="flex-1 overflow-y-auto p-5 space-y-5">
-
             {/* Status */}
             <div>
               <div className="text-xs font-bold text-muted uppercase tracking-wider mb-2">
@@ -785,12 +603,12 @@ function InstancesTab({ tenantId }: { tenantId: string }) {
 
 // ── ProcessosPage ─────────────────────────────────────────────────────────────
 
-type PageTab = 'journeys' | 'instances'
+type PageTab = 'summary' | 'instances'
 
 export default function ProcessosPage() {
   const { tenantId } = useAuth()
   const { t } = useTranslation('contacts')
-  const [tab, setTab] = useState<PageTab>('journeys')
+  const [tab, setTab] = useState<PageTab>('summary')
 
   if (!tenantId) return (
     <div className="flex items-center justify-center h-full text-muted-light text-sm">
@@ -803,18 +621,14 @@ export default function ProcessosPage() {
 
       {/* Tab bar */}
       <div className="flex items-center justify-end px-5 py-3 bg-white border-b border-border flex-shrink-0">
-
-        {/* Tab switcher */}
         <div className="flex items-center gap-1 bg-surface-muted border border-border rounded-lg p-1">
           {([
-            { key: 'journeys'  as PageTab, labelKey: 'processes.tabs.journeys',  Icon: Map      },
-            { key: 'instances' as PageTab, labelKey: 'processes.tabs.instances', Icon: Settings },
+            { key: 'summary'   as PageTab, labelKey: 'processes.tabs.summary',   Icon: BarChart2     },
+            { key: 'instances' as PageTab, labelKey: 'processes.tabs.instances', Icon: ClipboardList },
           ]).map(({ key, labelKey, Icon: TabIcon }) => (
             <button key={key} onClick={() => setTab(key)}
               className={`flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-md font-medium transition-all ${
-                tab === key
-                  ? 'bg-primary text-white shadow-sm'
-                  : 'text-muted hover:text-dark'
+                tab === key ? 'bg-primary text-white shadow-sm' : 'text-muted hover:text-dark'
               }`}>
               <TabIcon className="w-3.5 h-3.5" aria-hidden="true" />
               {t(labelKey)}
@@ -825,7 +639,7 @@ export default function ProcessosPage() {
 
       {/* Tab content */}
       <div className="flex-1 overflow-hidden relative">
-        {tab === 'journeys'  && <JourneysTab  tenantId={tenantId} />}
+        {tab === 'summary'   && <SummaryTab   tenantId={tenantId} />}
         {tab === 'instances' && <InstancesTab tenantId={tenantId} />}
       </div>
     </div>

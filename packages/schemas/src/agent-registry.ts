@@ -190,6 +190,20 @@ export const PoolRegistrationSchema = z.object({
    */
   mentionable_journeys:   z.array(z.string()).optional(),
   /**
+   * Arc 17 — JourneyType IDs this pool is authorized to create.
+   *
+   * Only journey_type_ids listed here may be used when calling journey_start
+   * from within a session routed to this pool. The routing engine writes
+   * session.authorized_journey_types[] to ContextStore after allocation
+   * (source: routing_engine, confidence: 1.0, visibility: agents_only, TTL 24h NX).
+   *
+   * journey_start tool rejects creation if journey_type_id is not in this list.
+   * Leaving this empty means no Journeys can be created from this pool.
+   *
+   * Example: ["portabilidade_telco", "cancelamento_retention"]
+   */
+  authorized_journey_types: z.array(z.string()).optional(),
+  /**
    * IDs dos Agent Groups (Arc 9) aos quais este pool pertence.
    * Escrito no ContextStore como session.pool.agent_groups[] após cada roteamento.
    */

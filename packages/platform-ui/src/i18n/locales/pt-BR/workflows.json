@@ -134,13 +134,20 @@
   "analise": {
     "title":         "Análise de Processos",
     "groupBy":       "Agrupar por",
+    "filterAll":     "Todos",
     "refresh":       "↻ Atualizar",
     "exportCsv":     "↓ CSV",
     "loadError":     "Erro ao carregar dados:",
     "empty":         "Nenhum workflow no período",
     "noTenant":      "Nenhum tenant selecionado.",
+    "period": "Período",
+    "periodOptions": {
+      "today": "Hoje",
+      "1d":    "Últimas 24h",
+      "7d":    "Últimos 7 dias"
+    },
     "groupByOptions": {
-      "flow_id":     "Skill / Flow",
+      "pool_id":     "Pool",
       "campaign_id": "Campanha"
     },
     "kpi": {
@@ -163,6 +170,28 @@
       "timeout":      "Timeout",
       "cancelled":    "Cancelado",
       "suspended":    "Suspenso"
+    },
+    "journeys": {
+      "notFound": "Jornada não encontrada",
+      "breadcrumbs": {
+        "journeys": "Jornadas"
+      },
+      "columns": {
+        "journeyId":   "ID da Jornada",
+        "status":      "Status",
+        "skill":       "Skill",
+        "journeyType": "Tipo",
+        "pool":        "Pool",
+        "sessions":    "Sessões",
+        "created":     "Criado",
+        "lastEvent":   "Último evento"
+      },
+      "detail": {
+        "skill":          "Skill",
+        "sessions":       "Sessões",
+        "instances":      "Instâncias de Workflow",
+        "instancesEmpty": "Nenhuma instância para esta jornada"
+      }
     }
   }
 }

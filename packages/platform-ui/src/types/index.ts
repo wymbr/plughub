@@ -93,6 +93,8 @@ export interface Pool {
   context_visibility?: { operator_namespaces: string[] } | null
   /** Arc 16 Phase E: opt-in for journey_check_pending on inbound. Default false. */
   inbound_journey_resume?: boolean
+  /** Arc 17: JourneyType slugs this pool is authorised to create. Empty = no journey creation. */
+  authorized_journey_types?: string[]
   routing_skills?: string[]
   routing_expression?: RoutingExpression
   routing_weights?: RoutingWeights
@@ -107,6 +109,7 @@ export interface CreatePoolInput {
   channel_types: string[]
   sla_target_ms: number
   calendar_id?: string
+  authorized_journey_types?: string[]
   routing_skills?: string[]
   routing_expression?: RoutingExpression
   routing_weights?: RoutingWeights
@@ -117,6 +120,7 @@ export interface UpdatePoolInput {
   channel_types?: string[]
   sla_target_ms?: number
   calendar_id?: string
+  authorized_journey_types?: string[]
   routing_skills?: string[]
   routing_expression?: RoutingExpression
   routing_weights?: RoutingWeights
@@ -285,6 +289,28 @@ export interface CreateHumanAgentInput {
 export interface UpdateHumanAgentInput {
   max_concurrent_sessions?: number
   permissions?: string[]
+}
+
+// ── Arc 17: JourneyType governance ──────────────────────────────────────────
+
+export interface JourneyType {
+  journey_type_id: string   // snake_case slug, unique per tenant
+  tenant_id:       string
+  description?:    string
+  sla_ms?:         number   // optional SLA in milliseconds
+  created_at:      string
+  updated_at:      string
+}
+
+export interface CreateJourneyTypeInput {
+  journey_type_id: string
+  description?:    string
+  sla_ms?:         number
+}
+
+export interface UpdateJourneyTypeInput {
+  description?:    string
+  sla_ms?:         number | null
 }
 
 export interface AgentInstance extends Instance {

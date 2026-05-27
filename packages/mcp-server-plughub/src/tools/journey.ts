@@ -24,18 +24,30 @@ import type { Redis }     from "ioredis"
 // ─── Dependências injetadas ───────────────────────────────────────────────────
 
 export interface JourneyDeps {
-  workflowApiUrl: string   // e.g. http://localhost:3800
-  tenantId:       string   // resolved from agent JWT context
-  redis:          Redis    // Arc 16: journey ContextStore read/write
+  workflowApiUrl:    string   // e.g. http://localhost:3800
+  agentRegistryUrl:  string   // e.g. http://localhost:3300 — Arc 17: lookup sla_ms
+  tenantId:          string   // resolved from agent JWT context
+  redis:             Redis    // Arc 16: journey ContextStore read/write
 }
 
 // ─── Schemas ──────────────────────────────────────────────────────────────────
 
 const JourneyStartInputSchema = z.object({
-  skill_id:   z.string().min(1).describe("Skill-flow that governs this service process"),
-  session_id: z.string().min(1).describe("Current session — becomes origin_session_id"),
+  /**
+   * Arc 17: journey_type_id is required and must satisfy two conditions:
+   * (1) The type must be registered in the platform for this tenant (via Config/Resources).
+   * (2) The originating pool must declare it in authorized_journey_types[] (written to
+   *     ContextStore as session.authorized_journey_types[] by the Routing Engine).
+   * Both checks are enforced here before the request is forwarded to workflow-api.
+   */
+  journey_type_id: z.string().min(1).describe(
+    "Registered journey type slug (e.g. 'portabilidade_telco'). " +
+    "Must be configured in Config/Resources AND authorized by the originating pool.",
+  ),
+  skill_id:    z.string().min(1).describe("Skill-flow that governs this service process"),
+  session_id:  z.string().min(1).describe("Current session — becomes origin_session_id"),
   customer_id: z.string().optional().describe("Customer identifier (caller.*)"),
-  metadata:   z.record(z.unknown()).optional().describe("Additional context passed to the workflow"),
+  metadata:    z.record(z.unknown()).optional().describe("Additional context passed to the workflow"),
 })
 
 const JourneyLinkSessionInputSchema = z.object({
@@ -204,7 +216,7 @@ async function callWorkflowApi(
 const JOURNEY_CTX_TTL_S = 30 * 24 * 60 * 60
 
 export function registerJourneyTools(server: McpServer, deps: JourneyDeps): void {
-  const { workflowApiUrl, tenantId, redis } = deps
+  const { workflowApiUrl, agentRegistryUrl, tenantId, redis } = deps
 
   // ── journey_start ─────────────────────────────────────────────────────────
 
@@ -213,6 +225,8 @@ export function registerJourneyTools(server: McpServer, deps: JourneyDeps): void
     "Create a Journey and trigger its governing skill-flow workflow. " +
     "A Journey groups all sessions involved in resolving a single service process " +
     "and enables end-to-end observability and KPIs. " +
+    "Arc 17: journey_type_id is required and must be registered in Config/Resources AND " +
+    "listed in the originating pool's authorized_journey_types[]. " +
     "Returns journey_id and workflow_instance_id.",
     JourneyStartInputSchema.shape as any,
     async (rawInput: Record<string, unknown>) => {
@@ -221,14 +235,81 @@ export function registerJourneyTools(server: McpServer, deps: JourneyDeps): void
         console.error("[journey_start] INVALID_INPUT — rawInput:", JSON.stringify(rawInput), "error:", parsed.error.message)
         return mcpError("INVALID_INPUT", parsed.error.message)
       }
-      const { skill_id, session_id, customer_id, metadata } = parsed.data
-      console.log(`[journey_start] skill_id=${skill_id} session_id=${session_id} url=${workflowApiUrl}/v1/journeys`)
+      const { journey_type_id, skill_id, session_id, customer_id, metadata } = parsed.data
+      console.log(`[journey_start] journey_type_id=${journey_type_id} skill_id=${skill_id} session_id=${session_id}`)
+
+      // ── Arc 17: authorization check ──────────────────────────────────────
+      // Read session.authorized_journey_types from ContextStore.
+      // Written by the Routing Engine after pool allocation.
+      // If the pool declared no authorized types (empty list), reject immediately.
+      try {
+        const ctxKey = `${tenantId}:ctx:${session_id}`
+        const raw    = await redis.hget(ctxKey, "session.authorized_journey_types")
+        if (raw) {
+          const entry   = JSON.parse(raw) as { value?: string[] }
+          const allowed = Array.isArray(entry.value) ? entry.value : []
+          if (!allowed.includes(journey_type_id)) {
+            console.warn(
+              `[journey_start] JOURNEY_TYPE_NOT_AUTHORIZED — journey_type_id=${journey_type_id}` +
+              ` allowed=${JSON.stringify(allowed)} session=${session_id}`,
+            )
+            return mcpError(
+              "JOURNEY_TYPE_NOT_AUTHORIZED",
+              `journey_type '${journey_type_id}' is not authorized for this pool. ` +
+              `Allowed types: [${allowed.join(", ")}]. ` +
+              "Configure authorized_journey_types on the pool in Config/Resources.",
+            )
+          }
+        } else {
+          // No authorized_journey_types key in ContextStore — pool may not have
+          // been allocated yet or does not have any types configured. Reject.
+          console.warn(
+            `[journey_start] JOURNEY_TYPE_NOT_AUTHORIZED — session.authorized_journey_types` +
+            ` not found in ContextStore for session=${session_id}`,
+          )
+          return mcpError(
+            "JOURNEY_TYPE_NOT_AUTHORIZED",
+            `session.authorized_journey_types not found for this session. ` +
+            "Ensure the originating pool has authorized_journey_types[] configured.",
+          )
+        }
+      } catch (redisErr) {
+        console.error("[journey_start] Redis error reading authorized_journey_types:", redisErr)
+        return mcpError("INTERNAL_ERROR", "Failed to verify journey_type authorization.")
+      }
+
+      // ── Arc 17: fetch sla_ms from agent-registry for denormalization ────────
+      // Stored on the Journey instance so SLA queries don't need to join JourneyType.
+      let sla_ms: number | null = null
+      try {
+        const jtResp = await fetch(
+          `${agentRegistryUrl}/v1/journey-types/${journey_type_id}`,
+          { headers: { "x-tenant-id": tenantId, "x-internal": "1" } },
+        )
+        if (jtResp.ok) {
+          const jt = await jtResp.json() as Record<string, unknown>
+          sla_ms = typeof jt["sla_ms"] === "number" ? jt["sla_ms"] : null
+        } else {
+          // journey_type not found in registry — reject (type may have been deleted)
+          console.warn(`[journey_start] journey_type '${journey_type_id}' not found in agent-registry — HTTP ${jtResp.status}`)
+          return mcpError(
+            "JOURNEY_TYPE_NOT_FOUND",
+            `journey_type '${journey_type_id}' does not exist in this tenant's registry. ` +
+            "Register it in Config/Resources before starting journeys.",
+          )
+        }
+      } catch (fetchErr) {
+        console.warn(`[journey_start] agent-registry unreachable for sla_ms lookup: ${fetchErr}`)
+        // Soft failure: proceed with sla_ms=null rather than blocking journey creation
+      }
 
       const result = await callWorkflowApi(
         `${workflowApiUrl}/v1/journeys`,
         "POST",
         tenantId,
         {
+          journey_type_id,
+          sla_ms,
           skill_id,
           origin_session_id: session_id,
           customer_id:       customer_id ?? null,

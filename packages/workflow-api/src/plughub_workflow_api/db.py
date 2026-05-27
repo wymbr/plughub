@@ -180,6 +180,9 @@ CREATE INDEX IF NOT EXISTS idx_jrn_workflow_instance
 ALTER TABLE workflow.instances       ADD COLUMN IF NOT EXISTS journey_id UUID REFERENCES workflow.journeys(journey_id) ON DELETE SET NULL;
 ALTER TABLE workflow.collect_instances ADD COLUMN IF NOT EXISTS journey_id UUID REFERENCES workflow.journeys(journey_id) ON DELETE SET NULL;
 
+-- Arc 18 B1: store the session created when a collect contact responds
+ALTER TABLE workflow.collect_instances ADD COLUMN IF NOT EXISTS responded_session_id TEXT;
+
 -- Arc 10 Phase F: split_from_journey_id tracks which journey a split-derived journey came from.
 ALTER TABLE workflow.journeys ADD COLUMN IF NOT EXISTS split_from_journey_id UUID REFERENCES workflow.journeys(journey_id) ON DELETE SET NULL;
 
@@ -187,6 +190,14 @@ ALTER TABLE workflow.journeys ADD COLUMN IF NOT EXISTS split_from_journey_id UUI
 -- a pool action (MCP tool journey_start called from an agent in a pool context).
 -- Enables GET /v1/journeys?pool_id=...&status=suspended for Tier 1 poller patterns.
 ALTER TABLE workflow.journeys ADD COLUMN IF NOT EXISTS pool_id TEXT;
+
+-- Arc 17: journey_type_id — references the registered JourneyType definition.
+-- Nullable for migration safety: existing journeys pre-Arc 17 have NULL.
+-- journey_type_id is validated by mcp-server journey_start before reaching here.
+ALTER TABLE workflow.journeys ADD COLUMN IF NOT EXISTS journey_type_id TEXT;
+-- sla_ms — denormalized from JourneyType.sla_ms at creation time.
+-- Stored on instance to enable SLA calculation without joining JourneyType at read time.
+ALTER TABLE workflow.journeys ADD COLUMN IF NOT EXISTS sla_ms INT;
 CREATE INDEX IF NOT EXISTS idx_jrn_pool_status
     ON workflow.journeys (tenant_id, pool_id, status)
     WHERE pool_id IS NOT NULL;
@@ -220,6 +231,20 @@ async def ensure_schema(pool: asyncpg.Pool) -> None:
 
 # ── Row serialisation ─────────────────────────────────────────────────────────
 
+def _json_col(val: Any) -> Any:
+    """Deserialise a JSONB or TEXT column value.
+
+    asyncpg returns JSONB columns as Python objects (dict/list).  TEXT columns
+    that store JSON come back as strings.  Handle both so _row_to_instance is
+    safe regardless of the PostgreSQL column type.
+    """
+    if val is None:
+        return {}
+    if isinstance(val, str):
+        return json.loads(val)
+    return val  # already a Python object (asyncpg JSONB auto-decode)
+
+
 def _row_to_instance(row: asyncpg.Record) -> dict[str, Any]:
     return {
         "id":                  str(row["id"]),
@@ -233,7 +258,7 @@ def _row_to_instance(row: asyncpg.Record) -> dict[str, Any]:
         "campaign_id":         row["campaign_id"],
         "status":            row["status"],
         "current_step":      row["current_step"],
-        "pipeline_state":    json.loads(row["pipeline_state"]),
+        "pipeline_state":    _json_col(row["pipeline_state"]),
         "suspend_reason":    row["suspend_reason"],
         "resume_token":      row["resume_token"],
         "resume_expires_at": row["resume_expires_at"].isoformat() if row["resume_expires_at"] else None,
@@ -242,7 +267,7 @@ def _row_to_instance(row: asyncpg.Record) -> dict[str, Any]:
         "completed_at":      row["completed_at"].isoformat()      if row["completed_at"]      else None,
         "outcome":           row["outcome"],
         "created_at":        row["created_at"].isoformat(),
-        "metadata":          json.loads(row["metadata"]),
+        "metadata":          _json_col(row["metadata"]),
         "journey_id":        str(row["journey_id"]) if row["journey_id"] else None,
     }
 
@@ -281,14 +306,14 @@ async def db_create_instance(pool: asyncpg.Pool, data: dict) -> dict:
         """
         INSERT INTO workflow.instances
             (installation_id, organization_id, tenant_id, flow_id,
-             session_id, origin_session_id, pool_id, current_step,
+             session_id, origin_session_id, pool_id, journey_id, current_step,
              pipeline_state, metadata)
-        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10::jsonb)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8::uuid,$9,$10::jsonb,$11::jsonb)
         RETURNING *
         """,
         data["installation_id"], data["organization_id"], data["tenant_id"],
         data["flow_id"], data.get("session_id"), data.get("origin_session_id"),
-        data.get("pool_id"), data.get("current_step"),
+        data.get("pool_id"), data.get("journey_id"), data.get("current_step"),
         json.dumps(data.get("pipeline_state", {})),
         json.dumps(data.get("metadata", {})),
     )
@@ -310,22 +335,38 @@ async def db_get_instance_by_token(pool: asyncpg.Pool, token: str) -> dict | Non
 
 
 async def db_list_instances(
-    pool: asyncpg.Pool,
+    pool:      asyncpg.Pool,
     tenant_id: str,
     status:    str | None = None,
     flow_id:   str | None = None,
+    pool_id:   str | None = None,
+    from_dt:   str | None = None,   # ISO date string
+    to_dt:     str | None = None,   # ISO date string
     limit:     int = 50,
     offset:    int = 0,
 ) -> list[dict]:
-    filters  = ["tenant_id = $1"]
-    params: list[Any] = [tenant_id]
+    filters:  list[str] = ["tenant_id = $1"]
+    params: list[Any]   = [tenant_id]
 
-    if status:
+    if status and status != "all":
         params.append(status)
         filters.append(f"status = ${len(params)}")
     if flow_id:
         params.append(flow_id)
         filters.append(f"flow_id = ${len(params)}")
+    if pool_id:
+        params.append(pool_id)
+        filters.append(f"pool_id = ${len(params)}")
+    if from_dt:
+        params.append(from_dt)
+        # Cast via ::text first so asyncpg does not infer a date type for the
+        # parameter (which would require a Python datetime.date, not a str).
+        filters.append(f"created_at >= (${len(params)}::text)::date::timestamptz")
+    if to_dt:
+        # Strict less-than against the start of the NEXT day — fully inclusive.
+        # e.g. to_dt="2026-05-27" → created_at < "2026-05-28 00:00:00+00"
+        params.append(to_dt)
+        filters.append(f"created_at < ((${len(params)}::text)::date + INTERVAL '1 day')::timestamptz")
 
     params.extend([limit, offset])
     rows = await pool.fetch(
@@ -338,6 +379,49 @@ async def db_list_instances(
         *params,
     )
     return [_row_to_instance(r) for r in rows]
+
+
+async def db_get_instance_sessions(
+    pool:        asyncpg.Pool,
+    instance_id: str,
+) -> list[dict]:
+    """
+    Returns all session_ids associated with a workflow instance.
+    Includes the origin_session_id from the instance itself plus any
+    responded_session_id values from collect_instances tied to this instance.
+    """
+    instance = await db_get_instance(pool, instance_id)
+    if not instance:
+        return []
+
+    sessions: list[dict] = []
+    if instance.get("origin_session_id"):
+        sessions.append({
+            "session_id": instance["origin_session_id"],
+            "type":       "origin",
+        })
+
+    # Collect sessions — sessions created when a collect step was responded to
+    rows = await pool.fetch(
+        """
+        SELECT collect_token, step_id, channel, responded_session_id, responded_at
+        FROM workflow.collect_instances
+        WHERE instance_id = $1
+          AND responded_session_id IS NOT NULL
+        ORDER BY responded_at ASC NULLS LAST
+        """,
+        instance_id,
+    )
+    for row in rows:
+        sessions.append({
+            "session_id":     row["responded_session_id"],
+            "type":           "collect",
+            "step_id":        row["step_id"],
+            "channel":        row["channel"],
+            "responded_at":   row["responded_at"].isoformat() if row["responded_at"] else None,
+        })
+
+    return sessions
 
 
 async def db_suspend_instance(
@@ -583,23 +667,25 @@ async def db_complete_collect(
     pool:          asyncpg.Pool,
     collect_token: str,
     response_data: dict,
+    session_id:    str | None = None,   # Arc 18 B1: session that responded
 ) -> dict | None:
     """
     Transition collect_instance (requested|sent) → responded.
-    Sets responded_at, response_data, and elapsed_ms.
+    Sets responded_at, response_data, elapsed_ms, and optionally responded_session_id.
     """
     row = await pool.fetchrow(
         """
         UPDATE workflow.collect_instances
-        SET status        = 'responded',
-            responded_at  = now(),
-            response_data = $2::jsonb,
-            elapsed_ms    = EXTRACT(EPOCH FROM (now() - created_at))::BIGINT * 1000
+        SET status                = 'responded',
+            responded_at          = now(),
+            response_data         = $2::jsonb,
+            elapsed_ms            = EXTRACT(EPOCH FROM (now() - created_at))::BIGINT * 1000,
+            responded_session_id  = COALESCE($3, responded_session_id)
         WHERE collect_token = $1
           AND status IN ('requested', 'sent')
         RETURNING *
         """,
-        collect_token, json.dumps(response_data),
+        collect_token, json.dumps(response_data), session_id,
     )
     return _row_to_collect(row) if row else None
 
@@ -883,6 +969,8 @@ def _row_to_journey(row: asyncpg.Record) -> dict[str, Any]:
         "customer_id":             row["customer_id"],
         "origin_session_id":       row["origin_session_id"],
         "pool_id":                 row["pool_id"],          # Arc 16 Phase B
+        "journey_type_id":         row["journey_type_id"],  # Arc 17
+        "sla_ms":                  row["sla_ms"],           # Arc 17: denormalized from JourneyType
         "status":                  row["status"],
         "merged_into_journey_id":  str(row["merged_into_journey_id"]) if row["merged_into_journey_id"] else None,
         "split_from_journey_id":   str(row["split_from_journey_id"]) if row["split_from_journey_id"] else None,
@@ -900,19 +988,22 @@ async def db_create_journey(
     origin_session_id: str,
     customer_id:       str | None = None,
     metadata:          dict | None = None,
-    pool_id:           str | None = None,  # Arc 16 Phase B
+    pool_id:           str | None = None,    # Arc 16 Phase B
+    journey_type_id:   str | None = None,   # Arc 17
+    sla_ms:            int | None = None,   # Arc 17: denormalized from JourneyType
 ) -> dict:
     """Create a new Journey with status='active'."""
     row = await pool.fetchrow(
         """
         INSERT INTO workflow.journeys
-            (tenant_id, skill_id, origin_session_id, customer_id, metadata, pool_id)
-        VALUES ($1,$2,$3,$4,$5::jsonb,$6)
+            (tenant_id, skill_id, origin_session_id, customer_id, metadata, pool_id,
+             journey_type_id, sla_ms)
+        VALUES ($1,$2,$3,$4,$5::jsonb,$6,$7,$8)
         RETURNING *
         """,
         tenant_id, skill_id, origin_session_id, customer_id,
         json.dumps(metadata) if metadata else None,
-        pool_id,
+        pool_id, journey_type_id, sla_ms,
     )
     return _row_to_journey(row)
 
@@ -930,19 +1021,22 @@ async def db_get_journey(
 
 
 async def db_list_journeys(
-    pool:        asyncpg.Pool,
-    tenant_id:   str,
-    status:      str | None = None,
-    customer_id: str | None = None,
-    skill_id:    str | None = None,
-    pool_id:     str | None = None,  # Arc 16 Phase B
-    limit:       int = 50,
-    offset:      int = 0,
+    pool:            asyncpg.Pool,
+    tenant_id:       str,
+    status:          str | None = None,
+    customer_id:     str | None = None,
+    skill_id:        str | None = None,
+    pool_id:         str | None = None,   # Arc 16 Phase B
+    journey_type_id: str | None = None,   # Arc 17 / Arc 18 C1
+    from_dt:         str | None = None,   # Arc 18 C1: ISO date string (inclusive)
+    to_dt:           str | None = None,   # Arc 18 C1: ISO date string (inclusive)
+    limit:           int = 50,
+    offset:          int = 0,
 ) -> list[dict]:
     filters: list[str] = ["tenant_id = $1"]
     params:  list[Any] = [tenant_id]
 
-    if status:
+    if status and status != "all":
         params.append(status)
         filters.append(f"status = ${len(params)}")
     if customer_id:
@@ -954,6 +1048,15 @@ async def db_list_journeys(
     if pool_id:
         params.append(pool_id)
         filters.append(f"pool_id = ${len(params)}")
+    if journey_type_id:
+        params.append(journey_type_id)
+        filters.append(f"journey_type_id = ${len(params)}")
+    if from_dt:
+        params.append(from_dt)
+        filters.append(f"created_at >= ${len(params)}::date::timestamptz")
+    if to_dt:
+        params.append(to_dt)
+        filters.append(f"created_at < (${len(params)}::date + INTERVAL '1 day')::timestamptz")
 
     params.extend([limit, offset])
     rows = await pool.fetch(
@@ -966,6 +1069,45 @@ async def db_list_journeys(
         *params,
     )
     return [_row_to_journey(r) for r in rows]
+
+
+async def db_list_journey_instances(
+    pool:       asyncpg.Pool,
+    journey_id: str,
+    tenant_id:  str,
+    limit:      int = 50,
+    offset:     int = 0,
+) -> list[dict]:
+    """
+    Arc 10 C — List all workflow instances linked to a journey.
+    Uses two-path lookup:
+      1. Direct: instances.journey_id = journey_id (set on new triggers via journey_router)
+      2. Fallback: workflow.journeys.workflow_instance_id (set by db_set_journey_workflow_instance
+         right after the instance is created — covers legacy instances where journey_id was not
+         written to the instances row because TriggerRequest lacked the field)
+    Both paths are tenant-scoped and deduplicated via DISTINCT ON.
+    """
+    rows = await pool.fetch(
+        """
+        SELECT wi.*
+        FROM workflow.instances wi
+        WHERE wi.tenant_id = $2
+          AND (
+            wi.journey_id = $1::uuid
+            OR wi.id IN (
+                SELECT workflow_instance_id
+                FROM workflow.journeys
+                WHERE journey_id = $1::uuid
+                  AND tenant_id  = $2
+                  AND workflow_instance_id IS NOT NULL
+            )
+          )
+        ORDER BY wi.created_at ASC
+        LIMIT $3 OFFSET $4
+        """,
+        UUID(journey_id), tenant_id, limit, offset,
+    )
+    return [_row_to_instance(r) for r in rows]
 
 
 async def db_set_journey_workflow_instance(
@@ -1008,9 +1150,10 @@ async def db_update_journey_status(
 
 
 async def db_create_journey_for_instance(
-    pool:        asyncpg.Pool,
-    instance_id: str,
-    tenant_id:   str,
+    pool:            asyncpg.Pool,
+    instance_id:     str,
+    tenant_id:       str,
+    journey_type_id: str | None = None,  # Arc 17: from skill YAML journey_type_id field
 ) -> dict | None:
     """
     Arc 10 Phase B — creates_journey: true support.
@@ -1047,11 +1190,13 @@ async def db_create_journey_for_instance(
             jrn_row = await conn.fetchrow(
                 """
                 INSERT INTO workflow.journeys
-                    (tenant_id, skill_id, origin_session_id, workflow_instance_id)
-                VALUES ($1,$2,$3,$4)
+                    (tenant_id, skill_id, origin_session_id, workflow_instance_id,
+                     journey_type_id)
+                VALUES ($1,$2,$3,$4,$5)
                 RETURNING *
                 """,
                 tenant_id, skill_id, origin_session_id, UUID(instance_id),
+                journey_type_id,  # Arc 17: null for YAML without journey_type_id
             )
             journey_id = jrn_row["journey_id"]
 

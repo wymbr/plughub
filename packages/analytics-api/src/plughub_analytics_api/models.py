@@ -783,6 +783,9 @@ def parse_journey_event(payload: dict[str, Any]) -> dict | None:
         "session_outcome":        payload.get("session_outcome") or None,
         "session_started_at":     payload.get("session_started_at") or None,
         "session_ended_at":       payload.get("session_ended_at") or None,
+        # Arc 17: JourneyType governance
+        "journey_type_id":        payload.get("journey_type_id") or None,
+        "pool_id":                payload.get("pool_id") or None,
     }
 
 

@@ -80,12 +80,39 @@ export function ListaTab({ tenantId, filters, onOpenDetail }: Props) {
   return (
     <div className="flex flex-col h-full overflow-hidden">
 
-      {/* Count bar */}
-      <div className="flex items-center gap-2 px-4 py-2 bg-white border-b border-border flex-shrink-0 text-xs text-muted-light">
-        {loading
-          ? <><span className="animate-spin">⟳</span> {t('lista.loading')}</>
-          : <strong className="text-dark">{t('lista.count', { count: total })}</strong>
-        }
+      {/* Count + pagination bar */}
+      <div className="flex items-center justify-between px-4 py-2 bg-white border-b border-border flex-shrink-0 text-xs">
+        <span className="text-muted-light">
+          {loading
+            ? <><span className="animate-spin inline-block">⟳</span> {t('lista.loading')}</>
+            : <><strong className="text-dark">{t('lista.count', { count: total })}</strong>
+                {totalPages > 1 && <span className="ml-2 text-muted">· {t('lista.page', { page, total: totalPages })}</span>}
+              </>
+          }
+        </span>
+        {totalPages > 1 && (
+          <div className="flex items-center gap-1">
+            <button disabled={page <= 1} onClick={() => changePage(page - 1)}
+              className="px-2 py-0.5 rounded border border-border text-muted disabled:opacity-40 hover:border-primary hover:text-primary transition-colors">
+              {t('lista.prev')}
+            </button>
+            {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
+              const start = Math.max(1, Math.min(page - 2, totalPages - 4))
+              return start + i
+            }).map(p => (
+              <button key={p} onClick={() => changePage(p)}
+                className={`px-2 py-0.5 rounded border transition-colors ${
+                  p === page ? 'bg-primary text-white border-primary' : 'border-border text-muted hover:border-primary hover:text-primary'
+                }`}>
+                {p}
+              </button>
+            ))}
+            <button disabled={page >= totalPages} onClick={() => changePage(page + 1)}
+              className="px-2 py-0.5 rounded border border-border text-muted disabled:opacity-40 hover:border-primary hover:text-primary transition-colors">
+              {t('lista.next')}
+            </button>
+          </div>
+        )}
       </div>
 
       {/* Table */}
@@ -116,33 +143,6 @@ export function ListaTab({ tenantId, filters, onOpenDetail }: Props) {
         )}
       </div>
 
-      {/* Pagination */}
-      {totalPages > 1 && (
-        <div className="flex items-center justify-between px-4 py-2 bg-white border-t border-border flex-shrink-0 text-sm">
-          <span className="text-muted text-xs">{t('lista.page', { page, total: totalPages })}</span>
-          <div className="flex gap-1">
-            <button disabled={page <= 1} onClick={() => changePage(page - 1)}
-              className="px-3 py-1 rounded border border-border text-xs text-muted disabled:opacity-40 hover:border-primary hover:text-primary transition-colors">
-              {t('lista.prev')}
-            </button>
-            {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
-              const start = Math.max(1, Math.min(page - 2, totalPages - 4))
-              return start + i
-            }).map(p => (
-              <button key={p} onClick={() => changePage(p)}
-                className={`px-3 py-1 rounded border text-xs transition-colors ${
-                  p === page ? 'bg-primary text-white border-primary' : 'border-border text-muted hover:border-primary hover:text-primary'
-                }`}>
-                {p}
-              </button>
-            ))}
-            <button disabled={page >= totalPages} onClick={() => changePage(page + 1)}
-              className="px-3 py-1 rounded border border-border text-xs text-muted disabled:opacity-40 hover:border-primary hover:text-primary transition-colors">
-              {t('lista.next')}
-            </button>
-          </div>
-        </div>
-      )}
     </div>
   )
 }

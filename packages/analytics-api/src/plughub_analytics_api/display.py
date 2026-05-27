@@ -312,22 +312,26 @@ async def display_kpi_score(
 
 @router.get("/journey-active-count")
 async def display_journey_active_count(
-    request:        Request,
-    tenant_id:      str           = Query(...,  description="Tenant identifier"),
-    from_:          Optional[str] = Query(None, alias="from", description="Period start"),
-    to:             Optional[str] = Query(None, description="Period end"),
-    skill_id:       Optional[str] = Query(None, description="Filter by skill_id"),
-    pool_principal: PoolPrincipal = Depends(optional_pool_principal),
+    request:         Request,
+    tenant_id:       str           = Query(...,  description="Tenant identifier"),
+    from_:           Optional[str] = Query(None, alias="from", description="Period start"),
+    to:              Optional[str] = Query(None, description="Period end"),
+    skill_id:        Optional[str] = Query(None, description="Filter by skill_id"),
+    journey_type_id: Optional[str] = Query(None, description="Arc 17: filter by journey_type_id slug"),
+    pool_id:         Optional[str] = Query(None, description="Arc 17: filter by pool_id"),
+    pool_principal:  PoolPrincipal = Depends(optional_pool_principal),
 ) -> JSONResponse:
     """Count of active journeys in period with trend — compatible with metric_card."""
     store = request.app.state.store
     data  = await fmt_journey_active_count(
-        client    = store.new_client(),
-        database  = store._database,
-        tenant_id = tenant_id,
-        from_dt   = from_,
-        to_dt     = to,
-        skill_id  = skill_id,
+        client          = store.new_client(),
+        database        = store._database,
+        tenant_id       = tenant_id,
+        from_dt         = from_,
+        to_dt           = to,
+        skill_id        = skill_id,
+        journey_type_id = journey_type_id,
+        pool_id         = pool_id,
     )
     return JSONResponse(content=data)
 
@@ -336,22 +340,26 @@ async def display_journey_active_count(
 
 @router.get("/journey-resolution-rate")
 async def display_journey_resolution_rate(
-    request:        Request,
-    tenant_id:      str           = Query(...,  description="Tenant identifier"),
-    from_:          Optional[str] = Query(None, alias="from", description="Period start"),
-    to:             Optional[str] = Query(None, description="Period end"),
-    skill_id:       Optional[str] = Query(None, description="Filter by skill_id"),
-    pool_principal: PoolPrincipal = Depends(optional_pool_principal),
+    request:         Request,
+    tenant_id:       str           = Query(...,  description="Tenant identifier"),
+    from_:           Optional[str] = Query(None, alias="from", description="Period start"),
+    to:              Optional[str] = Query(None, description="Period end"),
+    skill_id:        Optional[str] = Query(None, description="Filter by skill_id"),
+    journey_type_id: Optional[str] = Query(None, description="Arc 17: filter by journey_type_id slug"),
+    pool_id:         Optional[str] = Query(None, description="Arc 17: filter by pool_id"),
+    pool_principal:  PoolPrincipal = Depends(optional_pool_principal),
 ) -> JSONResponse:
     """Journey resolution rate % per skill_id (terminal journeys only) — compatible with bar_chart."""
     store = request.app.state.store
     data  = await fmt_journey_resolution_rate(
-        client    = store.new_client(),
-        database  = store._database,
-        tenant_id = tenant_id,
-        from_dt   = from_,
-        to_dt     = to,
-        skill_id  = skill_id,
+        client          = store.new_client(),
+        database        = store._database,
+        tenant_id       = tenant_id,
+        from_dt         = from_,
+        to_dt           = to,
+        skill_id        = skill_id,
+        journey_type_id = journey_type_id,
+        pool_id         = pool_id,
     )
     return JSONResponse(content=data)
 
@@ -360,22 +368,26 @@ async def display_journey_resolution_rate(
 
 @router.get("/journey-funnel")
 async def display_journey_funnel(
-    request:        Request,
-    tenant_id:      str           = Query(...,  description="Tenant identifier"),
-    from_:          Optional[str] = Query(None, alias="from", description="Period start"),
-    to:             Optional[str] = Query(None, description="Period end"),
-    skill_id:       Optional[str] = Query(None, description="Filter by skill_id"),
-    pool_principal: PoolPrincipal = Depends(optional_pool_principal),
+    request:         Request,
+    tenant_id:       str           = Query(...,  description="Tenant identifier"),
+    from_:           Optional[str] = Query(None, alias="from", description="Period start"),
+    to:              Optional[str] = Query(None, description="Period end"),
+    skill_id:        Optional[str] = Query(None, description="Filter by skill_id"),
+    journey_type_id: Optional[str] = Query(None, description="Arc 17: filter by journey_type_id slug"),
+    pool_id:         Optional[str] = Query(None, description="Arc 17: filter by pool_id"),
+    pool_principal:  PoolPrincipal = Depends(optional_pool_principal),
 ) -> JSONResponse:
     """Journey distribution by status (active/suspended/completed/failed/cancelled) — compatible with donut."""
     store = request.app.state.store
     data  = await fmt_journey_funnel(
-        client    = store.new_client(),
-        database  = store._database,
-        tenant_id = tenant_id,
-        from_dt   = from_,
-        to_dt     = to,
-        skill_id  = skill_id,
+        client          = store.new_client(),
+        database        = store._database,
+        tenant_id       = tenant_id,
+        from_dt         = from_,
+        to_dt           = to,
+        skill_id        = skill_id,
+        journey_type_id = journey_type_id,
+        pool_id         = pool_id,
     )
     return JSONResponse(content=data)
 
@@ -384,22 +396,26 @@ async def display_journey_funnel(
 
 @router.get("/journey-median-duration")
 async def display_journey_median_duration(
-    request:        Request,
-    tenant_id:      str           = Query(...,  description="Tenant identifier"),
-    from_:          Optional[str] = Query(None, alias="from", description="Period start"),
-    to:             Optional[str] = Query(None, description="Period end"),
-    skill_id:       Optional[str] = Query(None, description="Filter by skill_id"),
-    pool_principal: PoolPrincipal = Depends(optional_pool_principal),
+    request:         Request,
+    tenant_id:       str           = Query(...,  description="Tenant identifier"),
+    from_:           Optional[str] = Query(None, alias="from", description="Period start"),
+    to:              Optional[str] = Query(None, description="Period end"),
+    skill_id:        Optional[str] = Query(None, description="Filter by skill_id"),
+    journey_type_id: Optional[str] = Query(None, description="Arc 17: filter by journey_type_id slug"),
+    pool_id:         Optional[str] = Query(None, description="Arc 17: filter by pool_id"),
+    pool_principal:  PoolPrincipal = Depends(optional_pool_principal),
 ) -> JSONResponse:
     """Journey p50 duration in minutes per skill_id (terminal journeys) — compatible with bar_chart."""
     store = request.app.state.store
     data  = await fmt_journey_median_duration(
-        client    = store.new_client(),
-        database  = store._database,
-        tenant_id = tenant_id,
-        from_dt   = from_,
-        to_dt     = to,
-        skill_id  = skill_id,
+        client          = store.new_client(),
+        database        = store._database,
+        tenant_id       = tenant_id,
+        from_dt         = from_,
+        to_dt           = to,
+        skill_id        = skill_id,
+        journey_type_id = journey_type_id,
+        pool_id         = pool_id,
     )
     return JSONResponse(content=data)
 

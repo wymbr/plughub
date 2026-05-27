@@ -131,13 +131,20 @@
   "analise": {
     "title":         "Process Analysis",
     "groupBy":       "Group by",
+    "filterAll":     "All",
     "refresh":       "↻ Refresh",
     "exportCsv":     "↓ CSV",
     "loadError":     "Error loading data:",
     "empty":         "No workflows in the period",
     "noTenant":      "No tenant selected.",
+    "period": "Period",
+    "periodOptions": {
+      "today": "Today",
+      "1d":    "Last 24h",
+      "7d":    "Last 7 days"
+    },
     "groupByOptions": {
-      "flow_id":     "Skill / Flow",
+      "pool_id":     "Pool",
       "campaign_id": "Campaign"
     },
     "kpi": {
@@ -160,6 +167,28 @@
       "timeout":      "Timeout",
       "cancelled":    "Cancelled",
       "suspended":    "Suspended"
+    },
+    "journeys": {
+      "notFound": "Journey not found",
+      "breadcrumbs": {
+        "journeys": "Journeys"
+      },
+      "columns": {
+        "journeyId":   "Journey ID",
+        "status":      "Status",
+        "skill":       "Skill",
+        "journeyType": "Type",
+        "pool":        "Pool",
+        "sessions":    "Sessions",
+        "created":     "Created",
+        "lastEvent":   "Last event"
+      },
+      "detail": {
+        "skill":          "Skill",
+        "sessions":       "Sessions",
+        "instances":      "Workflow Instances",
+        "instancesEmpty": "No instances for this journey"
+      }
     }
   }
 }

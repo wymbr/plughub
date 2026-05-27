@@ -4,6 +4,12 @@
 
 ---
 
+## Arc 17 — JourneyType Governance *(COMPLETO)*
+
+Todas as tarefas #298–#301 implementadas. Ver CHANGELOG e [`docs/arcos/arc17-journey-types.md`](docs/arcos/arc17-journey-types.md).
+
+---
+
 ## Arc 16 — Three-Tier Business Process Orchestration *(COMPLETO)*
 
 Todas as fases A–E implementadas. Ver CHANGELOG e [`docs/arcos/arc16-flow-orchestration.md`](docs/arcos/arc16-flow-orchestration.md).
