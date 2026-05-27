@@ -99,9 +99,50 @@ export async function executeSuspend(
     }
   }
 
+  // ── Already resumed in a prior run — replay the same outcome ────────────────
+  // If the decision is stored it means this suspend was resumed during an earlier
+  // engine run (e.g. approval round).  A later engine run (e.g. for the collect
+  // response) must skip this step rather than suspending again.
+  const storedDecision = ctx.state.results[decisionKey] as string | undefined
+  if (storedDecision) {
+    const storedPayload = (ctx.state.results[`${step.id}:__resume_payload__`] ?? {}) as Record<string, unknown>
+    switch (storedDecision) {
+      case "approved":
+      case "input":
+        return {
+          next_step_id:      step.on_resume.next,
+          output_as:         step.id,
+          output_value:      storedPayload,
+          transition_reason: "resumed",
+        }
+      case "rejected":
+        if (step.on_reject) {
+          return {
+            next_step_id:      step.on_reject.next,
+            output_as:         step.id,
+            output_value:      storedPayload,
+            transition_reason: "on_failure",
+          }
+        }
+        return {
+          next_step_id:      step.on_resume.next,
+          output_as:         step.id,
+          output_value:      storedPayload,
+          transition_reason: "resumed",
+        }
+      case "timeout":
+        return {
+          next_step_id:      step.on_timeout.next,
+          output_as:         step.id,
+          output_value:      storedPayload,
+          transition_reason: "on_failure",
+        }
+    }
+  }
+
   // ── Suspend path ──────────────────────────────────────────────────────────
 
-  // Idempotency: already fully suspended (sentinel written)
+  // Idempotency: already fully suspended (sentinel written) and not yet resumed
   if (ctx.state.results[sentinelKey] === "suspended") {
     return {
       next_step_id:      "__suspended__",

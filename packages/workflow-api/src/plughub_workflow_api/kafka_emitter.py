@@ -120,6 +120,7 @@ async def emit_resumed(
     next_step:        str,
     wait_duration_ms: int,
     journey_id:       str | None = None,
+    response_data:    dict | None = None,  # collect step: response payload forwarded to engine
 ) -> None:
     event: dict = {
         "event_type":       "workflow.resumed",
@@ -134,6 +135,8 @@ async def emit_resumed(
     }
     if journey_id:
         event["journey_id"] = journey_id
+    if response_data:
+        event["response_data"] = response_data
     await _emit(producer, topic, event)
 
 

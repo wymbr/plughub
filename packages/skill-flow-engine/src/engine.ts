@@ -351,6 +351,15 @@ export class SkillFlowEngine {
 
     if (state?.status === "in_progress") {
       // Retomada após falha do orquestrador — continua do current_step_id
+    } else if (state?.status === "suspended" && resumeContext) {
+      // Arc 4 — Resuming a suspended workflow.
+      // Keep the stored results (sentinel keys, decision keys, step outputs) and
+      // continue from state.current_step_id (the step that suspended).
+      // The step executor's resume path (ctx.resumeContext.step_id check) handles it.
+      // Resetting to a fresh state here would discard all idempotency keys and
+      // cause every prior suspend/collect step to re-execute on replay.
+      state = { ...state, status: "in_progress" as const }
+      await this.stateManager.save(tenantId, pipelineSessionId, state)
     } else {
       // Novo pipeline — inicia do entry
       state = PipelineStateManager.create(skillId, flow.entry)

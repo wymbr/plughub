@@ -76,6 +76,30 @@ export async function executeCollect(
     }
   }
 
+  // ── Already responded in a prior run — replay the same outcome ──────────────
+  // If the decision is stored it means this collect was responded during an earlier
+  // engine run. A later engine run (replaying from the start) must skip this step
+  // rather than suspending again.
+  const storedDecision = ctx.state.results[decisionKey] as string | undefined
+  if (storedDecision) {
+    const storedPayload = (ctx.state.results[`${step.id}:__collect_response__`] ?? {}) as Record<string, unknown>
+    if (storedDecision === "input") {
+      return {
+        next_step_id:      step.on_response.next,
+        output_as:         step.output_as,
+        output_value:      storedPayload,
+        transition_reason: "resumed",
+      }
+    }
+    // timeout
+    return {
+      next_step_id:      step.on_timeout.next,
+      output_as:         step.output_as,
+      output_value:      storedPayload,
+      transition_reason: "on_failure",
+    }
+  }
+
   // ── Already suspended (idempotency check) ────────────────────────────────
   if (ctx.state.results[sentinelKey] === "collected") {
     return { next_step_id: "__suspended__", transition_reason: "suspended" }

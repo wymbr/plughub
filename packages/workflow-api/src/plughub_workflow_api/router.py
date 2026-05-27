@@ -712,6 +712,21 @@ async def persist_collect(
         journey_id=journey_id,
     )
 
+    # ── Suspend the instance while awaiting the collect response ──────────────
+    # Mirrors the suspend-step pattern: sets status='suspended' so that
+    # respond_collect can atomically call db_resume_instance and emit
+    # workflow.resumed when the target replies.
+    # collect_token is used as resume_token (unique, already the correlation key).
+    await db_suspend_instance(
+        pool,
+        instance_id=instance_id,
+        step_id=body.step_id,
+        resume_token=body.collect_token,
+        suspend_reason="input",
+        resume_expires_at=expires_at,
+        pipeline_state=instance["pipeline_state"],
+    )
+
     return {"send_at": send_at, "expires_at": expires_at, "collect": collect}
 
 
@@ -799,6 +814,7 @@ async def respond_collect(
             resumed_from=instance.get("current_step") or "unknown",
             next_step="__pending_engine__",
             wait_duration_ms=wait_ms,
+            response_data=body.response_data or None,
         )
     else:
         updated_instance = instance
