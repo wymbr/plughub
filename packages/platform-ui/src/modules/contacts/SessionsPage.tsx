@@ -1,12 +1,14 @@
 /**
- * SessionsPage — /contacts/sessions
+ * SessionsPage — /analise/sessions
  *
- * Unified view of all contact sessions (inbound + outbound),
- * live and historical. Active sessions show with a green badge.
- * Drill-down into a session overlays the full page.
+ * Three-level drill-down (matches Journeys / Processes pattern):
+ *   Level 1: filtered session list
+ *   Level 2: segment list for a specific session  (breadcrumb bar)
+ *   Level 3: SessionTranscript for a specific segment
  */
 import React, { useState, useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
+import { ChevronRight } from 'lucide-react'
 import { useAuth } from '@/auth/useAuth'
 import { SessionTranscript } from '@/modules/service/components/SessionTranscript'
 import { SegmentList }       from '@/modules/service/components/SegmentList'
@@ -15,138 +17,17 @@ import type { ContactFilters } from './types'
 import { DEFAULT_FILTERS }   from './types'
 import { ListaTab }          from './tabs/ListaTab'
 
-// ── Extended filters for sessions ─────────────────────────────────────────────
+// ── Extended filters ──────────────────────────────────────────────────────────
 
 interface SessionFilters extends ContactFilters {
-  sessionType:   string   // inbound | outbound | ''
-  sessionStatus: string   // active | closed | abandoned | ''
+  sessionType:   string
+  sessionStatus: string
 }
 
 const DEFAULT_SESSION_FILTERS: SessionFilters = {
   ...DEFAULT_FILTERS,
   sessionType:   '',
   sessionStatus: '',
-}
-
-// ── Insight panel ─────────────────────────────────────────────────────────────
-
-interface InsightRow {
-  insight_id:   string
-  tenant_id:    string
-  session_id:   string
-  insight_type: string
-  category:     string | null
-  value:        string | null
-  tags:         string[]
-  agent_id:     string | null
-  timestamp:    string
-}
-
-function ContactInsightsPanel({ tenantId, sessionId }: { tenantId: string; sessionId: string }) {
-  const { t } = useTranslation('contacts')
-  const [rows,    setRows]    = useState<InsightRow[]>([])
-  const [loading, setLoading] = useState(true)
-  const [error,   setError]   = useState('')
-
-  useEffect(() => {
-    let cancelled = false
-    setLoading(true); setError('')
-    const params = new URLSearchParams({ tenant_id: tenantId, session_id: sessionId, page_size: '200' })
-    fetch(`/reports/contact-insights?${params}`)
-      .then(r => r.json())
-      .then((data: any) => {
-        if (cancelled) return
-        setRows(Array.isArray(data) ? data : (data.data ?? []))
-        if (data.error) setError(data.error)
-      })
-      .catch(e => { if (!cancelled) setError(String(e)) })
-      .finally(() => { if (!cancelled) setLoading(false) })
-    return () => { cancelled = true }
-  }, [tenantId, sessionId])
-
-  if (loading) return (
-    <div className="flex items-center justify-center h-full text-muted-light text-sm gap-2">
-      <span className="animate-spin text-lg">⟳</span> {t('insights.loading')}
-    </div>
-  )
-
-  if (rows.length === 0) return (
-    <div className="flex flex-col items-center justify-center h-full text-muted-light gap-2 p-8">
-      <span className="text-3xl">📭</span>
-      <p className="text-sm text-center">{error ? t('insights.loadError') : t('insights.empty')}</p>
-      {error && <p className="text-xs text-red-text">{error}</p>}
-    </div>
-  )
-
-  return (
-    <div className="flex flex-col gap-2 p-4 overflow-y-auto">
-      {rows.map(row => {
-        const isHistorico = row.insight_type?.startsWith('insight.historico')
-        const isConvo     = row.insight_type?.startsWith('insight.conversa')
-        const borderColor = isHistorico ? 'border-ai' : isConvo ? 'border-revised' : 'border-primary/30'
-        const badgeBg     = isHistorico ? 'bg-ai-light text-ai-text' : isConvo ? 'bg-revised-light text-revised-text' : 'bg-primary-light text-primary'
-        const dt = row.timestamp
-          ? new Date(row.timestamp).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' })
-          : '—'
-        return (
-          <div key={row.insight_id} className={`bg-white border-l-4 ${borderColor} rounded-lg shadow-sm px-4 py-3 space-y-1.5`}>
-            <div className="flex items-center gap-2 flex-wrap">
-              <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${badgeBg}`}>{row.insight_type}</span>
-              {row.category && <span className="text-xs px-2 py-0.5 rounded-full bg-surface-alt text-muted">{row.category}</span>}
-              <span className="ml-auto text-xs text-muted-light tabular-nums">{dt}</span>
-            </div>
-            {row.value && <p className="text-sm text-dark font-medium leading-snug">{row.value}</p>}
-            {row.tags?.length > 0 && (
-              <div className="flex flex-wrap gap-1">
-                {row.tags.map(tag => (
-                  <span key={tag} className="text-xs px-2 py-0.5 rounded border border-border text-muted bg-surface-muted">#{tag}</span>
-                ))}
-              </div>
-            )}
-            {row.agent_id && (
-              <p className="text-xs text-muted-light">{t('insights.registeredBy')} <code className="bg-surface-alt rounded px-1">{row.agent_id}</code></p>
-            )}
-          </div>
-        )
-      })}
-    </div>
-  )
-}
-
-// ── ContactDetail ─────────────────────────────────────────────────────────────
-
-function ContactDetail({ tenantId, sessionId, onBack }: {
-  tenantId: string; sessionId: string; onBack: () => void
-}) {
-  const { t } = useTranslation('contacts')
-  const [detailSegment, setDetailSegment] = useState<ContactSegment | null>(null)
-
-  if (detailSegment) {
-    return (
-      <div style={{ height: '100%', backgroundColor: '#0f172a' }}>
-        <SessionTranscript
-          tenantId={tenantId}
-          sessionId={sessionId}
-          segment={detailSegment}
-          canJoin={detailSegment.ended_at === null}
-          onBack={() => setDetailSegment(null)}
-        />
-      </div>
-    )
-  }
-
-  return (
-    <div className="flex flex-col h-full bg-surface-muted">
-      <div className="flex-1 overflow-hidden">
-        <SegmentList
-          tenantId={tenantId}
-          sessionId={sessionId}
-          onSelect={seg => setDetailSegment(seg)}
-          onBack={onBack}
-        />
-      </div>
-    </div>
-  )
 }
 
 // ── Filter bar ─────────────────────────────────────────────────────────────────
@@ -263,6 +144,10 @@ export default function SessionsPage() {
 
   const [filters,         setFilters]         = useState<SessionFilters>(DEFAULT_SESSION_FILTERS)
   const [detailSessionId, setDetailSessionId] = useState<string | null>(null)
+  const [detailSegment,   setDetailSegment]   = useState<ContactSegment | null>(null)
+
+  // Clear segment when session changes
+  useEffect(() => { setDetailSegment(null) }, [detailSessionId])
 
   if (!tenantId) {
     return (
@@ -272,17 +157,59 @@ export default function SessionsPage() {
     )
   }
 
-  if (detailSessionId) {
+  // ── Level 3: transcript ─────────────────────────────────────────────────────
+
+  if (detailSessionId && detailSegment) {
     return (
-      <ContactDetail
-        tenantId={tenantId}
-        sessionId={detailSessionId}
-        onBack={() => setDetailSessionId(null)}
-      />
+      <div className="h-full overflow-hidden">
+        <SessionTranscript
+          tenantId={tenantId}
+          sessionId={detailSessionId}
+          segment={detailSegment}
+          canJoin={detailSegment.ended_at === null}
+          onBack={() => setDetailSegment(null)}
+        />
+      </div>
     )
   }
 
-  // Merge extended filters back into ContactFilters shape for ListaTab
+  // ── Level 2: segment list ───────────────────────────────────────────────────
+
+  if (detailSessionId) {
+    const shortId = detailSessionId.length > 16
+      ? '…' + detailSessionId.slice(-14)
+      : detailSessionId
+
+    return (
+      <div className="flex flex-col h-full overflow-hidden">
+        {/* Breadcrumb */}
+        <div className="bg-white border-b border-border px-5 py-2.5 flex items-center gap-2 text-xs flex-shrink-0 sticky top-0 z-10">
+          <button
+            onClick={() => setDetailSessionId(null)}
+            className="text-muted-light hover:text-dark transition-colors font-medium"
+          >
+            {t('sessions.breadcrumbs.sessions')}
+          </button>
+          <ChevronRight className="w-3.5 h-3.5 text-border-strong" aria-hidden="true" />
+          <span className="text-dark font-medium font-mono" title={detailSessionId}>{shortId}</span>
+        </div>
+
+        {/* Segment list — showBack=false because breadcrumb handles navigation */}
+        <div className="flex-1 overflow-hidden">
+          <SegmentList
+            tenantId={tenantId}
+            sessionId={detailSessionId}
+            onSelect={seg => setDetailSegment(seg)}
+            onBack={() => setDetailSessionId(null)}
+            showBack={false}
+          />
+        </div>
+      </div>
+    )
+  }
+
+  // ── Level 1: session list ───────────────────────────────────────────────────
+
   const contactFilters: ContactFilters = {
     fromDt:          filters.fromDt,
     toDt:            filters.toDt,

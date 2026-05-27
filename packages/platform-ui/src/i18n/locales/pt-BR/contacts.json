@@ -334,6 +334,30 @@
     "avgHandleChart":    "Tempo Médio de Atendimento",
     "time":              "Tempo"
   },
+  "analise": {
+    "journeys": {
+      "breadcrumbs": {
+        "journeys":  "← Jornadas",
+        "instances": "Instâncias"
+      },
+      "columns": {
+        "journeyId":   "ID da Jornada",
+        "status":      "Status",
+        "skill":       "Skill",
+        "journeyType": "Tipo",
+        "pool":        "Pool",
+        "sessions":    "Sessões",
+        "created":     "Criado",
+        "lastEvent":   "Últ. evento"
+      },
+      "detail": {
+        "skill":           "Skill",
+        "sessions":        "Sessões",
+        "instances":       "Instâncias de workflow",
+        "instancesEmpty":  "Nenhuma instância de workflow vinculada a esta jornada."
+      }
+    }
+  },
   "sessions": {
     "allTypes":    "Todos os tipos",
     "allStatuses": "Todos os status",
@@ -341,6 +365,9 @@
       "active":    "Ativo",
       "closed":    "Encerrado",
       "abandoned": "Abandonado"
+    },
+    "breadcrumbs": {
+      "sessions": "← Sessões"
     }
   },
   "quality": {
@@ -448,6 +475,7 @@
     "refresh":  "↻ Atualizar",
     "noTenant": "Nenhum tenant selecionado.",
     "tabs": {
+      "summary":   "Resumo",
       "journeys":  "Jornadas",
       "instances": "Instâncias"
     },
@@ -476,8 +504,17 @@
     },
     "journeys": {
       "loading":          "Carregando…",
+      "totalCount":       "{{count}} jornadas",
       "empty":            "Nenhuma jornada encontrada",
       "selectPrompt":     "Selecione uma jornada para ver detalhes",
+      "filters": {
+        "from":        "De",
+        "skill":       "Skill",
+        "journeyType": "Tipo",
+        "pool":        "Pool",
+        "allPools":    "Todos os pools"
+      },
+      "allTypes":          "Todos os tipos",
       "kpiTotal":         "total",
       "kpiResolution":    "resolução",
       "kpiP50":           "p50",
@@ -506,6 +543,8 @@
       "detail": {
         "status":           "Status",
         "linkedSessions":   "Sessões vinculadas",
+        "journeyType":      "Tipo de Jornada",
+        "pool":             "Pool",
         "timeline":         "Timeline",
         "started":          "Iniciado",
         "lastEvent":        "Últ. evento",
@@ -517,14 +556,42 @@
     },
     "instances": {
       "loading":       "Carregando…",
+      "totalCount":    "{{count}} processos",
       "empty":         "Nenhum processo encontrado",
       "selectPrompt":  "Selecione um processo para ver detalhes",
       "sessionLabel":  "sessão",
+      "breadcrumb":    "← Processos",
+      "filters": {
+        "flowPlaceholder": "Filtrar por flow_id…",
+        "poolPlaceholder": "Todos os pools",
+        "from":            "De"
+      },
+      "columns": {
+        "flowId":        "Flow",
+        "status":        "Status",
+        "pool":          "Pool",
+        "originSession": "Sessão de origem",
+        "journey":       "Jornada",
+        "created":       "Criado",
+        "duration":      "Duração",
+        "outcome":       "Resultado"
+      },
+      "sessions": {
+        "title":   "Sessões",
+        "loading": "Carregando sessões…",
+        "empty":   "Nenhuma sessão registrada para esta instância.",
+        "responded": "respondeu",
+        "type": {
+          "origin":  "origem",
+          "collect": "collect"
+        }
+      },
       "confirmCancel": "Cancelar esta instância de processo?",
       "detail": {
         "status":         "Status",
+        "flowId":         "Flow",
         "currentStep":    "Step atual",
-        "outcome":        "Outcome",
+        "outcome":        "Resultado",
         "timeline":       "Timeline",
         "created":        "Criado",
         "suspended":      "Suspenso",

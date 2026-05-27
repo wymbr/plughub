@@ -334,6 +334,30 @@
     "avgHandleChart":    "Average Handle Time",
     "time":              "Time"
   },
+  "analise": {
+    "journeys": {
+      "breadcrumbs": {
+        "journeys":  "← Journeys",
+        "instances": "Instances"
+      },
+      "columns": {
+        "journeyId":   "Journey ID",
+        "status":      "Status",
+        "skill":       "Skill",
+        "journeyType": "Type",
+        "pool":        "Pool",
+        "sessions":    "Sessions",
+        "created":     "Created",
+        "lastEvent":   "Last event"
+      },
+      "detail": {
+        "skill":           "Skill",
+        "sessions":        "Sessions",
+        "instances":       "Workflow instances",
+        "instancesEmpty":  "No workflow instances linked to this journey."
+      }
+    }
+  },
   "sessions": {
     "allTypes":    "All types",
     "allStatuses": "All statuses",
@@ -341,6 +365,9 @@
       "active":    "Active",
       "closed":    "Closed",
       "abandoned": "Abandoned"
+    },
+    "breadcrumbs": {
+      "sessions": "← Sessions"
     }
   },
   "quality": {
@@ -448,6 +475,7 @@
     "refresh":  "↻ Refresh",
     "noTenant": "No tenant selected.",
     "tabs": {
+      "summary":   "Summary",
       "journeys":  "Journeys",
       "instances": "Instances"
     },
@@ -476,8 +504,17 @@
     },
     "journeys": {
       "loading":          "Loading…",
+      "totalCount":       "{{count}} journeys",
       "empty":            "No journeys found",
       "selectPrompt":     "Select a journey to view details",
+      "filters": {
+        "from":        "From",
+        "skill":       "Skill",
+        "journeyType": "Type",
+        "pool":        "Pool",
+        "allPools":    "All pools"
+      },
+      "allTypes":          "All types",
       "kpiTotal":         "total",
       "kpiResolution":    "resolution",
       "kpiP50":           "p50",
@@ -506,6 +543,8 @@
       "detail": {
         "status":           "Status",
         "linkedSessions":   "Linked sessions",
+        "journeyType":      "Journey Type",
+        "pool":             "Pool",
         "timeline":         "Timeline",
         "started":          "Started",
         "lastEvent":        "Last event",
@@ -517,12 +556,40 @@
     },
     "instances": {
       "loading":       "Loading…",
+      "totalCount":    "{{count}} processes",
       "empty":         "No processes found",
       "selectPrompt":  "Select a process to view details",
       "sessionLabel":  "session",
+      "breadcrumb":    "← Processes",
+      "filters": {
+        "flowPlaceholder": "Filter by flow_id…",
+        "poolPlaceholder": "All pools",
+        "from":            "From"
+      },
+      "columns": {
+        "flowId":        "Flow",
+        "status":        "Status",
+        "pool":          "Pool",
+        "originSession": "Origin session",
+        "journey":       "Journey",
+        "created":       "Created",
+        "duration":      "Duration",
+        "outcome":       "Outcome"
+      },
+      "sessions": {
+        "title":   "Sessions",
+        "loading": "Loading sessions…",
+        "empty":   "No sessions recorded for this instance.",
+        "responded": "responded",
+        "type": {
+          "origin":  "origin",
+          "collect": "collect"
+        }
+      },
       "confirmCancel": "Cancel this process instance?",
       "detail": {
         "status":         "Status",
+        "flowId":         "Flow",
         "currentStep":    "Current step",
         "outcome":        "Outcome",
         "timeline":       "Timeline",

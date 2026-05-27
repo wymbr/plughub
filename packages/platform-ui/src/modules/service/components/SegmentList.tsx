@@ -16,6 +16,9 @@ interface Props {
   onSelect:  (segment: ContactSegment) => void
   onBack:    () => void
   canJoin?:  boolean
+  /** When false, the built-in back button in the header is hidden.
+   *  Use when the parent renders its own breadcrumb navigation. */
+  showBack?: boolean
 }
 
 // ── Outcome badge ──────────────────────────────────────────────────────────
@@ -192,7 +195,7 @@ function Placeholder({ loading, error }: { loading: boolean; error: string | nul
 
 // ── SegmentList (main) ─────────────────────────────────────────────────────
 
-export function SegmentList({ tenantId, sessionId, onSelect, onBack, canJoin = true }: Props) {
+export function SegmentList({ tenantId, sessionId, onSelect, onBack, canJoin = true, showBack = true }: Props) {
   const { t } = useTranslation('contacts')
   const { segments, loading, error } = useSessionSegments(tenantId, sessionId)
 
@@ -201,13 +204,15 @@ export function SegmentList({ tenantId, sessionId, onSelect, onBack, canJoin = t
   return (
     <div className="flex flex-col h-full overflow-hidden bg-white rounded-xl border border-border">
       {/* Header */}
-      <div className="flex items-center gap-3 px-4 py-3 border-b border-border flex-shrink-0 bg-surface-muted">
-        <button
-          onClick={onBack}
-          className="text-xs text-muted hover:text-dark border border-border rounded px-2 py-1 bg-white transition-colors"
-        >
-          {t('detail.back')}
-        </button>
+      <div className="flex items-center gap-3 px-4 py-3 border-b border-border flex-shrink-0 bg-surface-muted sticky top-0 z-10">
+        {showBack && (
+          <button
+            onClick={onBack}
+            className="text-xs text-muted hover:text-dark border border-border rounded px-2 py-1 bg-white transition-colors"
+          >
+            {t('detail.back')}
+          </button>
+        )}
         <div className="flex-1 min-w-0">
           <p className="text-sm font-semibold text-dark">{t('segments.title')}</p>
           <p className="text-xs text-muted font-mono truncate">

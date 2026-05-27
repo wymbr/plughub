@@ -672,8 +672,8 @@ function fmtTs(iso: string): string {
 
 const s: Record<string, React.CSSProperties> = {
   container:   { display: 'flex', flexDirection: 'column', height: '100%', backgroundColor: '#0f172a', color: '#e2e8f0' },
-  header:      { display: 'flex', alignItems: 'center', gap: 10, padding: '10px 16px', borderBottom: '1px solid #1e293b', flexWrap: 'wrap' },
+  header:      { display: 'flex', alignItems: 'center', gap: 10, padding: '10px 16px', borderBottom: '1px solid #1e293b', flexWrap: 'wrap', flexShrink: 0, position: 'sticky', top: 0, zIndex: 10, backgroundColor: '#0f172a' },
   backBtn:     { background: 'none', border: '1px solid #334155', color: '#94a3b8', borderRadius: 6, padding: '4px 12px', cursor: 'pointer', fontSize: 13 },
-  stream:      { flex: 1, overflowY: 'auto', padding: '12px 16px', display: 'flex', flexDirection: 'column', gap: 8 },
+  stream:      { flex: 1, minHeight: 0, overflowY: 'auto', padding: '12px 16px', display: 'flex', flexDirection: 'column', gap: 8 },
   placeholder: { color: '#475569', fontStyle: 'italic', fontSize: 13, textAlign: 'center', marginTop: 24 },
 }
