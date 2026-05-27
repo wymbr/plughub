@@ -91,7 +91,7 @@ CREATE TABLE IF NOT EXISTS workflow.collect_instances (
     step_id         TEXT        NOT NULL,
     target_type     TEXT        NOT NULL,
     target_id       TEXT        NOT NULL,
-    channel         TEXT        NOT NULL,
+    channel         TEXT,                              -- nullable: Arc 16 selects by requires[] when absent
     interaction     TEXT        NOT NULL,
     prompt          TEXT        NOT NULL,
     options_json    JSONB       NOT NULL DEFAULT '[]',
@@ -198,6 +198,11 @@ ALTER TABLE workflow.journeys ADD COLUMN IF NOT EXISTS journey_type_id TEXT;
 -- sla_ms — denormalized from JourneyType.sla_ms at creation time.
 -- Stored on instance to enable SLA calculation without joining JourneyType at read time.
 ALTER TABLE workflow.journeys ADD COLUMN IF NOT EXISTS sla_ms INT;
+
+-- Arc 16 Phase D: channel is now optional on collect_instances — channel-gateway
+-- selects the outbound channel by requires[] capability when channel IS NULL.
+-- DROP NOT NULL is idempotent in PostgreSQL (no-op if already nullable).
+ALTER TABLE workflow.collect_instances ALTER COLUMN channel DROP NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_jrn_pool_status
     ON workflow.journeys (tenant_id, pool_id, status)
     WHERE pool_id IS NOT NULL;
@@ -583,7 +588,7 @@ async def db_create_collect(
     step_id:       str,
     target_type:   str,
     target_id:     str,
-    channel:       str,
+    channel:       str | None,   # optional — channel-gateway selects by requires[] when absent (Arc 16)
     interaction:   str,
     prompt:        str,
     options:       list,

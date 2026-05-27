@@ -598,7 +598,7 @@ class CollectPersistRequest(BaseModel):
     step_id:        str
     collect_token:  str
     target:         dict                  # { type, id }
-    channel:        str
+    channel:        str | None = None     # optional — channel-gateway selects by requires[] when absent (Arc 16)
     interaction:    str
     prompt:         str
     options:        list = Field(default_factory=list)

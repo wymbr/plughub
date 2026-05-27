@@ -376,7 +376,7 @@ async def emit_collect_requested(
     collect_token: str,
     target_type:   str,
     target_id:     str,
-    channel:       str,
+    channel:       str | None,   # optional — channel-gateway selects by requires[] when absent (Arc 16)
     interaction:   str,
     prompt:        str,
     options:       list,
@@ -395,12 +395,13 @@ async def emit_collect_requested(
         "collect_token": collect_token,
         "target_type":   target_type,
         "target_id":     target_id,
-        "channel":       channel,
         "interaction":   interaction,
         "prompt":        prompt,
         "send_at":       send_at,
         "expires_at":    expires_at,
     }
+    if channel is not None:
+        event["channel"] = channel
     if campaign_id:
         event["campaign_id"] = campaign_id
     if options:
