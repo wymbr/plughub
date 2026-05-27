@@ -31,22 +31,19 @@ function nextRpcId(): number {
 }
 
 export class EngineRunner {
-  private engine: SkillFlowEngine
+  // redis is stored so each runInstance can create a per-run SkillFlowEngine
+  // whose persistSuspend/persistCollect closures capture the workflow instance UUID.
+  // A shared engine cannot capture per-run instance IDs because the engine uses
+  // origin_session_id (not instance.id) as its sessionId — they differ when a
+  // workflow is triggered from a real contact session.
+  private redis: Redis
   private workflowClient: WorkflowClient
   private settings: WorkerSettings
 
   constructor(config: EngineRunnerConfig) {
+    this.redis          = config.redis
     this.workflowClient = config.workflowClient
-    this.settings = config.settings
-
-    const engineConfig: SkillFlowEngineConfig = {
-      redis:           config.redis,
-      mcpCall:         this.mcpCall.bind(this),
-      aiGatewayCall:   this.aiGatewayCall.bind(this),
-      persistSuspend:  this.persistSuspend.bind(this),
-      persistCollect:  this.persistCollect.bind(this),
-    }
-    this.engine = new SkillFlowEngine(engineConfig)
+    this.settings       = config.settings
   }
 
   async runInstance(
@@ -106,7 +103,21 @@ export class EngineRunner {
       // Falls back to instance.id for headless workflows with no session origin.
       const contextSessionId = instance.origin_session_id ?? instance.id
 
-      const result = await this.engine.run({
+      // Create a per-run engine so that persistSuspend / persistCollect closures
+      // capture the workflow instance UUID (instance.id).  A shared engine cannot
+      // do this because the engine's sessionId is contextSessionId (= origin_session_id
+      // when triggered from a contact), which differs from the workflow instance UUID
+      // that workflow-api requires in the URL path.
+      const capturedInstanceId = instance.id
+      const engine = new SkillFlowEngine({
+        redis:          this.redis,
+        mcpCall:        this.mcpCall.bind(this),
+        aiGatewayCall:  this.aiGatewayCall.bind(this),
+        persistSuspend: (params) => this._persistSuspend(capturedInstanceId, params),
+        persistCollect: (params) => this._persistCollect(capturedInstanceId, params),
+      })
+
+      const result = await engine.run({
         tenantId:    instance.tenant_id,
         sessionId:   contextSessionId,
         customerId:  'workflow',
@@ -246,19 +257,24 @@ export class EngineRunner {
     return body.result ?? body
   }
 
-  // ── persistSuspend — POST /v1/workflow/instances/{id}/persist-suspend ──────
+  // ── _persistSuspend — POST /v1/workflow/instances/{id}/persist-suspend ──────
+  // instanceId is captured from runInstance — always the workflow UUID, never
+  // origin_session_id or any other session identifier.
 
-  private async persistSuspend(params: {
-    tenant_id:     string
-    session_id:    string
-    step_id:       string
-    resume_token:  string
-    reason:        string
-    timeout_hours: number
-    business_hours: boolean
-    calendar_id?:  string
-    metadata?:     Record<string, unknown>
-  }): Promise<{ resume_expires_at: string }> {
+  private async _persistSuspend(
+    instanceId: string,
+    params: {
+      tenant_id:     string
+      session_id:    string
+      step_id:       string
+      resume_token:  string
+      reason:        string
+      timeout_hours: number
+      business_hours: boolean
+      calendar_id?:  string
+      metadata?:     Record<string, unknown>
+    },
+  ): Promise<{ resume_expires_at: string }> {
     const persistParams: PersistSuspendParams = {
       step_id:        params.step_id,
       resume_token:   params.resume_token,
@@ -268,29 +284,34 @@ export class EngineRunner {
       ...(params.calendar_id ? { calendar_id: params.calendar_id } : {}),
       ...(params.metadata    ? { metadata:    params.metadata    } : {}),
     }
-    return this.workflowClient.persistSuspend(params.session_id, persistParams)
+    return this.workflowClient.persistSuspend(instanceId, persistParams)
   }
 
-  // ── persistCollect — POST /v1/workflow/instances/{id}/collect/persist ──────
+  // ── _persistCollect — POST /v1/workflow/instances/{id}/collect/persist ──────
+  // instanceId is captured from runInstance — always the workflow UUID, never
+  // origin_session_id or any other session identifier.
 
-  private async persistCollect(params: {
-    tenant_id:      string
-    session_id:     string
-    step_id:        string
-    collect_token:  string
-    target:         { type: string; id: string }
-    channel?:       string   // optional — channel-gateway selects by requires[] when absent
-    interaction:    string
-    prompt:         string
-    options?:       Array<{ id: string; label: string }>
-    fields?:        Array<{ id: string; label: string; type: string }>
-    scheduled_at?:  string
-    delay_hours?:   number
-    timeout_hours:  number
-    business_hours: boolean
-    calendar_id?:   string
-    campaign_id?:   string
-  }): Promise<{ send_at: string; expires_at: string }> {
+  private async _persistCollect(
+    instanceId: string,
+    params: {
+      tenant_id:      string
+      session_id:     string
+      step_id:        string
+      collect_token:  string
+      target:         { type: string; id: string }
+      channel?:       string   // optional — channel-gateway selects by requires[] when absent
+      interaction:    string
+      prompt:         string
+      options?:       Array<{ id: string; label: string }>
+      fields?:        Array<{ id: string; label: string; type: string }>
+      scheduled_at?:  string
+      delay_hours?:   number
+      timeout_hours:  number
+      business_hours: boolean
+      calendar_id?:   string
+      campaign_id?:   string
+    },
+  ): Promise<{ send_at: string; expires_at: string }> {
     const collectParams: PersistCollectParams = {
       step_id:        params.step_id,
       collect_token:  params.collect_token,
@@ -307,6 +328,6 @@ export class EngineRunner {
       ...(params.calendar_id  ? { calendar_id:  params.calendar_id  } : {}),
       ...(params.campaign_id  ? { campaign_id:  params.campaign_id  } : {}),
     }
-    return this.workflowClient.persistCollect(params.session_id, collectParams)
+    return this.workflowClient.persistCollect(instanceId, collectParams)
   }
 }
