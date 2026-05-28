@@ -47,7 +47,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 import httpx
-from fastapi import APIRouter, Depends, Header, HTTPException, Request
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
 from .calendar_client import calculate_deadline
@@ -82,6 +82,7 @@ from .kafka_emitter import (
     emit_collect_requested,
     emit_collect_responded,
     emit_completed,
+    emit_events_batch,
     emit_failed,
     emit_journey_session_linked,
     emit_resumed,
@@ -214,6 +215,7 @@ async def trigger_workflow(
         session_id=body.session_id,
         trigger_type=body.trigger_type,
         journey_id=instance.get("journey_id"),
+        pool_id=body.pool_id,
     )
 
     return instance
@@ -1141,4 +1143,131 @@ async def trigger_via_webhook(
         "flow_id":     webhook["flow_id"],
         "webhook_id":  webhook["id"],
         "status":      "accepted",
+    }
+
+
+# ── Admin: historical backfill ────────────────────────────────────────────────
+
+@router.post("/admin/backfill-events")
+async def backfill_events(
+    request:        Request,
+    tenant_id:      str = Query(..., description="Tenant to backfill"),
+    limit_per_page: int = Query(1000, description="Instances per page"),
+    _auth:          None = Depends(_require_admin),
+    pool=Depends(_pool),
+):
+    """
+    Re-emits synthetic workflow.* Kafka events for all historical instances
+    of the given tenant that are in PostgreSQL but not yet in ClickHouse.
+
+    Safe to run multiple times: ReplacingMergeTree deduplicates by
+    (tenant_id, instance_id, timestamp).
+
+    Returns { instances_processed, events_emitted }.
+    """
+    settings = _settings(request)
+    producer = _producer(request)
+
+    # Status → terminal Kafka event_type
+    _TERMINAL = {
+        "completed": "workflow.completed",
+        "failed":    "workflow.failed",
+        "timed_out": "workflow.timed_out",
+        "cancelled": "workflow.cancelled",
+    }
+
+    instances_processed = 0
+    events: list[dict] = []
+    offset = 0
+
+    while True:
+        page = await db_list_instances(
+            pool,
+            tenant_id=tenant_id,
+            limit=limit_per_page,
+            offset=offset,
+        )
+        if not page:
+            break
+
+        for inst in page:
+            iid        = inst["id"]
+            fid        = inst["flow_id"]
+            tid        = inst["tenant_id"]
+            created_at = inst.get("created_at") or ""
+            completed_at = inst.get("completed_at") or created_at
+            status     = inst.get("status", "")
+
+            # workflow.started — always emit
+            events.append({
+                "event_type":      "workflow.started",
+                "timestamp":       created_at,
+                "installation_id": inst.get("installation_id") or settings.installation_id,
+                "organization_id": inst.get("organization_id") or settings.organization_id,
+                "tenant_id":       tid,
+                "instance_id":     iid,
+                "flow_id":         fid,
+                "session_id":      inst.get("session_id"),
+                "trigger_type":    "backfill",
+                "campaign_id":     inst.get("campaign_id"),
+                "journey_id":      inst.get("journey_id"),
+                "pool_id":         inst.get("pool_id"),
+            })
+
+            # terminal event
+            terminal_type = _TERMINAL.get(status)
+            if terminal_type:
+                ts = completed_at or created_at
+                ev: dict = {
+                    "event_type":  terminal_type,
+                    "timestamp":   ts,
+                    "tenant_id":   tid,
+                    "instance_id": iid,
+                    "flow_id":     fid,
+                }
+                if inst.get("campaign_id"):
+                    ev["campaign_id"] = inst["campaign_id"]
+                if inst.get("journey_id"):
+                    ev["journey_id"] = inst["journey_id"]
+
+                if terminal_type == "workflow.completed":
+                    try:
+                        from datetime import datetime as _dt
+                        t0 = _dt.fromisoformat(created_at.replace("Z", "+00:00"))
+                        t1 = _dt.fromisoformat(ts.replace("Z", "+00:00"))
+                        ev["duration_ms"] = int((t1 - t0).total_seconds() * 1000)
+                    except Exception:
+                        ev["duration_ms"] = 0
+                    ev["outcome"] = inst.get("outcome") or "unknown"
+
+                elif terminal_type == "workflow.failed":
+                    ev["current_step"] = None
+                    ev["error"]        = "backfill"
+
+                elif terminal_type == "workflow.timed_out":
+                    ev["current_step"] = None
+                    ev["suspended_at"] = None
+                    ev["next_open"]    = None
+
+                elif terminal_type == "workflow.cancelled":
+                    ev["cancelled_by"] = "backfill"
+                    ev["reason"]       = None
+
+                events.append(ev)
+
+            instances_processed += 1
+
+        offset += len(page)
+        if len(page) < limit_per_page:
+            break
+
+    emitted = await emit_events_batch(producer, settings.kafka_topic, events)
+
+    logger.info(
+        "backfill-events: tenant=%s instances_processed=%d events_emitted=%d",
+        tenant_id, instances_processed, emitted,
+    )
+    return {
+        "instances_processed": instances_processed,
+        "events_emitted":      emitted,
     }

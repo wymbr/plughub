@@ -17,6 +17,7 @@ import {
 } from '@/modules/workflows/api/hooks'
 import type { WorkflowStatus } from '@/modules/workflows/api/hooks'
 import { Link } from 'react-router-dom'
+import { listPools } from '@/api/registry'
 
 // ── Shared helpers ────────────────────────────────────────────────────────────
 
@@ -65,8 +66,8 @@ interface SummaryResponse {
   error?:   string
 }
 
-type GroupBy = 'pool_id' | 'campaign_id'
-const GROUP_BY_VALUES: GroupBy[] = ['pool_id', 'campaign_id']
+type GroupBy = 'pool_id' | 'flow_id' | 'campaign_id'
+const GROUP_BY_VALUES: GroupBy[] = ['pool_id', 'flow_id', 'campaign_id']
 
 type WindowPreset = 'today' | '1d' | '7d'
 function presetToRange(preset: WindowPreset): { fromDt: string; toDt: string } {
@@ -124,10 +125,40 @@ function KpiCard({ label, value, sub, color }: { label: string; value: string; s
   )
 }
 
+// ── Pool options hook ─────────────────────────────────────────────────────────
+//
+// When groupBy === 'pool_id':
+//   • restricted user  (accessiblePools.length > 0) → use those pool IDs directly
+//   • admin / operator (accessiblePools.length === 0) → fetch all pools from registry
+// For other groupBy dimensions the options are derived from the returned data.
+
+function usePoolOptions(tenantId: string, accessiblePools: string[]) {
+  const [allPools, setAllPools] = useState<string[]>([])
+
+  useEffect(() => {
+    if (accessiblePools.length > 0) {
+      // restricted: JWT already has the allowed list
+      setAllPools([...accessiblePools].sort())
+      return
+    }
+    // unrestricted (admin): load every pool registered for this tenant
+    listPools(tenantId)
+      .then(res => {
+        const ids = (res.items ?? []).map((p) => p.pool_id).sort()
+        setAllPools(ids)
+      })
+      .catch(() => setAllPools([]))
+  }, [tenantId, accessiblePools])
+
+  return allPools
+}
+
 // ── Summary tab ───────────────────────────────────────────────────────────────
 
 function SummaryTab({ tenantId }: { tenantId: string }) {
   const { t, i18n } = useTranslation('workflows')
+  const { session }  = useAuth()
+  const accessiblePools = session?.accessiblePools ?? []
 
   const [window_,     setWindow_]     = useState<WindowPreset>('7d')
   const { fromDt, toDt } = presetToRange(window_)
@@ -138,6 +169,8 @@ function SummaryTab({ tenantId }: { tenantId: string }) {
   const [error,       setError]       = useState<string | null>(null)
   const [sortKey,     setSortKey]     = useState<keyof WorkflowSummaryRow>('total_triggered')
   const [sortAsc,     setSortAsc]     = useState(false)
+
+  const poolOptions = usePoolOptions(tenantId, accessiblePools)
 
   // reset group filter when the groupBy dimension changes
   useEffect(() => { setFilterGroup('') }, [groupBy])
@@ -178,8 +211,12 @@ function SummaryTab({ tenantId }: { tenantId: string }) {
     return sortAsc ? cmp : -cmp
   })
 
-  // group-level filter derived from current data
-  const groupOptions = [...new Set(data.map(r => r.group_key).filter(Boolean))].sort()
+  // group-level filter options:
+  //   pool_id → from JWT/registry (so pools without recent activity still appear)
+  //   others  → derived from returned data
+  const groupOptions = groupBy === 'pool_id'
+    ? poolOptions
+    : [...new Set(data.map(r => r.group_key).filter(Boolean))].sort()
   const displayRows  = filterGroup ? sorted.filter(r => r.group_key === filterGroup) : sorted
 
   function exportCsv() {

@@ -212,6 +212,7 @@ CREATE TABLE IF NOT EXISTS {db}.workflow_events
     tenant_id       String,
     instance_id     String,
     flow_id         String,
+    pool_id         Nullable(String),
     campaign_id     Nullable(String),
     event_type      String,
     status          Nullable(String),
@@ -229,6 +230,11 @@ ENGINE = ReplacingMergeTree()
 PARTITION BY toYYYYMM(date)
 ORDER BY (tenant_id, instance_id, timestamp)
 """
+
+_ALTER_WORKFLOW_EVENTS_POOL_ID = (
+    "ALTER TABLE {db}.workflow_events"
+    " ADD COLUMN IF NOT EXISTS pool_id Nullable(String) DEFAULT NULL"
+)
 
 _DDL_COLLECT_EVENTS = """
 CREATE TABLE IF NOT EXISTS {db}.collect_events
@@ -663,6 +669,7 @@ _MIGRATIONS = [
     _DDL_SENTIMENT_EVENTS_MIGRATE_SEGMENT,
     _DDL_MESSAGES_MIGRATE_CONTENT,
     _DDL_JOURNEY_EVENTS_MIGRATE_ARC17,   # Arc 17: journey_type_id + pool_id
+    _ALTER_WORKFLOW_EVENTS_POOL_ID,       # Add pool_id to workflow_events
 ]
 
 

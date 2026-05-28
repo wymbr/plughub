@@ -148,6 +148,7 @@
     },
     "groupByOptions": {
       "pool_id":     "Pool",
+      "flow_id":     "Fluxo",
       "campaign_id": "Campanha"
     },
     "kpi": {

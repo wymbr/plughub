@@ -528,6 +528,7 @@ def parse_workflow_event(payload: dict[str, Any]) -> dict | None:
         "tenant_id":        tenant_id,
         "instance_id":      instance_id,
         "flow_id":          flow_id,
+        "pool_id":          payload.get("pool_id"),
         "campaign_id":      payload.get("campaign_id"),
         "event_type":       event_type,
         "status":           _WORKFLOW_STATUS_MAP.get(event_type),

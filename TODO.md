@@ -4,6 +4,21 @@
 
 ---
 
+## Arc 18 — Workflow Execution Trace
+
+Spec em [`docs/arcos/arc18-workflow-execution-trace.md`](docs/arcos/arc18-workflow-execution-trace.md). Três fases sequenciais:
+
+Navegação hierárquica em páginas dedicadas (não painéis laterais). Spec em [`docs/arcos/arc18-workflow-execution-trace.md`](docs/arcos/arc18-workflow-execution-trace.md).
+
+- **Fase A** — `GET /v1/workflow/instances/{id}/trace` no workflow-api: lê `transitions[]` do JSONB (Redis first para ativas, fallback DB), enriquece com `step_type`/`step_label` do `flow_definition`, junta `collect_instances` (channel, status, session_id). Deriva `trigger_type` da origem — sem migration.
+- **Fase B.1** — `AnalyticsProcessesPage` (lista de instâncias): adicionar colunas `started_at`, `ended_at`, `duration`; clicar na linha navega para `/analytics/processes/:instanceId`.
+- **Fase B.2** — `AnalyticsJourneysPage` (lista de jornadas): idem com `completed_at` e duração; clicar navega para `/analytics/journeys/:journeyId`.
+- **Fase C** — `ProcessDetailPage` (`/analytics/processes/:instanceId`): 4 seções — Origin (trigger_type + links), Parameters (inputs ↔ outputs), `ProcessStepTimeline`, hook `useInstanceTrace`. Reutilizado de ambas as rotas.
+- **Fase D** — `JourneyDetailPage` (`/analytics/journeys/:journeyId`): timeline de eventos da Journey + lista de processos enriquecida com link para `ProcessDetailPage`.
+- **Fase E** *(deferred)* — Analytics por step: `workflow_step_events` ClickHouse + consumer Kafka + heatmap na SummaryTab.
+
+---
+
 ## Arc 17 — JourneyType Governance *(COMPLETO)*
 
 Todas as tarefas #298–#301 implementadas. Ver CHANGELOG e [`docs/arcos/arc17-journey-types.md`](docs/arcos/arc17-journey-types.md).

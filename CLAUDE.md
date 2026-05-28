@@ -803,7 +803,66 @@ Introduces `JourneyType` as a per-tenant governance entity: `journey_type_id` (s
 
 ---
 
+## Arc 18 — Workflow Execution Trace
+
+Completes the Analytics/Journey and Analytics/Process drill-down by exposing step-level execution visibility. No new infrastructure: all data already exists in `pipeline_state.transitions` (JSONB in `workflow.instances`) and `workflow.collect_instances`.
+
+Uses **hierarchical page navigation** (not side panels): each level is a full dedicated page with its own route. Enriched list columns: `started_at`, `ended_at`, `duration_ms` added to both process and journey lists.
+
+**New endpoint** `GET /v1/workflow/instances/{id}/trace` in workflow-api: reads `transitions[]` from JSONB (Redis first for active/suspended, DB fallback), enriches with `step_type`/`step_label` from `flow_definition`, merges `collect_instances` (channel, status, responded_at, session_id). Derives `trigger_type` (`session`|`webhook`|`yaml_auto`|`api`) from origin fields — no new DB column.
+
+**`ProcessDetailPage`** (`/analytics/processes/:instanceId`): 4 sections — Origin (trigger_type + links), Parameters (inputs ↔ outputs), `ProcessStepTimeline` (vertical step trace with suspend/resume detail and collect→session links). Reused from both Processes list and Journey drill-down.
+
+**`JourneyDetailPage`** (`/analytics/journeys/:journeyId`): journey event timeline + enriched process list; clicking a process row navigates to `ProcessDetailPage` with journey breadcrumb context.
+
+**New hook** `useInstanceTrace(instanceId, pollMs?)` in `hooks.ts`. **Fase E** (deferred): `workflow_step_events` ClickHouse table + aggregate analytics by step (failure heatmap, avg time per step).
+
+→ See [`docs/arcos/arc18-workflow-execution-trace.md`](docs/arcos/arc18-workflow-execution-trace.md)
+
+---
+
 ## Pending (Next Iteration)
+
+### Journey — Eliminação planejada (longo prazo)
+
+Decisão arquitetural: **Journey será eliminado** quando o momento for oportuno. A razão é que "Journey" é conceitualmente apenas um Workflow de nível Tier 1 que invoca outros workflows via step `task`. A entidade separada não se justifica — o modelo de pool já é o ponto de controle correto para quais agentes podem fazer o quê. Não há restrições adicionais necessárias além do cadastro em pool.
+
+O que será removido: tabelas `journeys` e `journey_types`; endpoints `/v1/journeys` e `/v1/journey-types`; campos `journey_id`/`journey_type_id`/`authorized_journey_types`/`mentionable_journeys` nos modelos; MCP tools `journey_*`; Config UI Journey Types + campos de pool; Monitor/Analytics pages de Journey; Arcos 10, 16, 17 migram para CHANGELOG.
+
+O que sobrevive: nenhuma entidade de substituição. O step `task` no trace da instância já registra qual skill foi invocada, com qual outcome e timestamp — rastreabilidade suficiente sem FK entre instâncias. Business Workflow (Tier 1) = WorkflowInstance comum que usa step `task` para invocar Tier 2; a hierarquia é visível no trace, não no modelo de dados.
+
+**Regra até a eliminação**: não investir em novas features na entidade Journey. Manter o que existe funcionando, mas não expandir.
+
+### Modelo Unificado de Contexto — session_id para tudo
+
+**Direção arquitetural definitiva**: `session_id` e `segment_id` são os identificadores universais para qualquer contexto de execução — contatos e workflows são o mesmo conceito, diferenciados por `session_type`.
+
+```
+sessions
+  session_id    — UUID universal (contato OU workflow)
+  session_type  — "contact" | "workflow"
+  status, created_at, ...
+
+segments
+  session_id    — contexto dono (contato ou workflow)
+  segment_id    — UUID desta participação
+  flow_id / agent_type_id   — o que está participando
+  role          — primary | specialist | supervisor
+  step_id       — task step que disparou (quando aplicável)
+  started_at / ended_at / outcome
+```
+
+**Consequências**:
+- `workflow_instance_id` vira `session_id` do tipo `"workflow"` — `workflow.instances` torna-se extensão de `sessions`
+- ContextStore: `{tenant}:ctx:{session_id}` para tudo — workflows não precisam de namespace separado (`@ctx.journey.*` eliminado)
+- Um workflow invocado por uma sessão via `task` step aparece como segmento especialista da sessão (`session_id` da sessão)
+- Um workflow invocado por outro workflow aparece como segmento especialista do workflow pai
+- Journey eliminado — a correlação entre execuções é o próprio `session_id` do contexto que as originou
+- O skill-flow-engine já converge para isso: usa `origin_session_id` como chave Redis quando disponível
+
+**O mesmo drill-down** (contexto → segmentos → trace de steps) funciona para contatos e workflows sem adaptação. `analytics.segments` atual já implementa metade — a extensão é `session_type` e tornar `session_id` o par universal.
+
+**Não implementar até a eliminação do Journey estar completa.**
 
 ### Arc 17 — JourneyType Governance ✅ (todas as tarefas #295–#302 implementadas)
 Ver [`docs/arcos/arc17-journey-types.md`](docs/arcos/arc17-journey-types.md) e CHANGELOG 2026-05-26.

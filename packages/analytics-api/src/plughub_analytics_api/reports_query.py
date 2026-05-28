@@ -35,8 +35,12 @@ def _default_to() -> str:
     return datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
 
 
-def _ch_fmt(iso: str | None) -> str:
-    """Converts an ISO8601 string (or relative '-Nd' offset) to ClickHouse UTC datetime."""
+def _ch_fmt(iso: str | None, upper: bool = False) -> str:
+    """Converts an ISO8601 string (or relative '-Nd' offset) to ClickHouse UTC datetime.
+
+    When upper=True and the input is a date-only string (YYYY-MM-DD), the time is
+    set to 23:59:59 so the full day is included in upper-bound filters.
+    """
     if not iso:
         return _default_to()
     stripped = iso.strip()
@@ -49,6 +53,9 @@ def _ch_fmt(iso: str | None) -> str:
             return _default_from()
     try:
         dt = datetime.fromisoformat(stripped.replace("Z", "+00:00"))
+        # Date-only input (no time component): for upper bounds use end-of-day
+        if upper and len(stripped) <= 10:
+            dt = dt.replace(hour=23, minute=59, second=59)
         return dt.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
     except Exception:
         return _default_to()
@@ -209,7 +216,7 @@ async def query_sessions_report(
     page_size: int = 100,
 ) -> dict:
     since = _ch_fmt(from_dt) if from_dt else _default_from()
-    until = _ch_fmt(to_dt)   if to_dt   else _default_to()
+    until = _ch_fmt(to_dt, upper=True) if to_dt else _default_to()
     if accessible_pools is not None and not accessible_pools:
         return {"data": [], "meta": _meta(page, page_size, 0, since, until)}
     if supervised_agent_types is not None and not supervised_agent_types:
@@ -474,7 +481,7 @@ async def query_contact_insights_report(
     page_size: int = 100,
 ) -> dict:
     since = _ch_fmt(from_dt) if from_dt else _default_from()
-    until = _ch_fmt(to_dt)   if to_dt   else _default_to()
+    until = _ch_fmt(to_dt, upper=True) if to_dt else _default_to()
     try:
         return await asyncio.to_thread(
             _fetch_contact_insights, client, database, tenant_id, since, until,
@@ -551,7 +558,7 @@ async def query_agents_report(
     page_size: int = 100,
 ) -> dict:
     since = _ch_fmt(from_dt) if from_dt else _default_from()
-    until = _ch_fmt(to_dt)   if to_dt   else _default_to()
+    until = _ch_fmt(to_dt, upper=True) if to_dt else _default_to()
     if accessible_pools is not None and not accessible_pools:
         return {"data": [], "meta": _meta(page, page_size, 0, since, until)}
     try:
@@ -628,7 +635,7 @@ async def query_quality_report(
     page_size: int = 100,
 ) -> dict:
     since = _ch_fmt(from_dt) if from_dt else _default_from()
-    until = _ch_fmt(to_dt)   if to_dt   else _default_to()
+    until = _ch_fmt(to_dt, upper=True) if to_dt else _default_to()
     if accessible_pools is not None and not accessible_pools:
         return {"data": [], "meta": _meta(page, page_size, 0, since, until)}
     try:
@@ -696,7 +703,7 @@ async def query_usage_report(
     page_size: int = 100,
 ) -> dict:
     since = _ch_fmt(from_dt) if from_dt else _default_from()
-    until = _ch_fmt(to_dt)   if to_dt   else _default_to()
+    until = _ch_fmt(to_dt, upper=True) if to_dt else _default_to()
     try:
         return await asyncio.to_thread(
             _fetch_usage, client, database, tenant_id, since, until,
@@ -761,7 +768,7 @@ async def query_workflows_report(
     page_size: int = 100,
 ) -> dict:
     since = _ch_fmt(from_dt) if from_dt else _default_from()
-    until = _ch_fmt(to_dt)   if to_dt   else _default_to()
+    until = _ch_fmt(to_dt, upper=True) if to_dt else _default_to()
     try:
         return await asyncio.to_thread(
             _fetch_workflows, client, database, tenant_id, since, until,
@@ -827,24 +834,30 @@ async def query_workflow_summary(
     from_dt:   str | None = None,
     to_dt:     str | None = None,
     *,
-    group_by:    str = "flow_id",       # "flow_id" | "campaign_id"
-    flow_id:     str | None = None,
-    campaign_id: str | None = None,
+    group_by:         str        = "pool_id",   # "pool_id" | "flow_id" | "campaign_id"
+    flow_id:          str | None = None,
+    campaign_id:      str | None = None,
+    pool_id:          str | None = None,
+    accessible_pools: list[str] | None = None,  # None = unrestricted; non-empty list = scope
 ) -> dict:
     """
-    Summarised workflow metrics grouped by flow_id or campaign_id.
+    Summarised workflow metrics grouped by pool_id, flow_id, or campaign_id.
 
     Returns one row per group with:
       group_key, total_triggered, total_completed, total_failed,
       total_timeout, total_cancelled, total_suspended,
       completion_rate, failure_rate, avg_duration_ms
+
+    accessible_pools: when non-empty list, restricts results to those pool IDs.
+    None means unrestricted (admin / open-access mode).
+    (mirrors the same scoping used by all other report endpoints).
     """
     since = _ch_fmt(from_dt) if from_dt else _default_from()
-    until = _ch_fmt(to_dt)   if to_dt   else _default_to()
+    until = _ch_fmt(to_dt, upper=True) if to_dt else _default_to()
     try:
         return await asyncio.to_thread(
             _fetch_workflow_summary, client, database, tenant_id, since, until,
-            group_by, flow_id, campaign_id,
+            group_by, flow_id, campaign_id, pool_id, list(accessible_pools) if accessible_pools else [],
         )
     except Exception as exc:
         logger.warning("query_workflow_summary failed tenant=%s: %s", tenant_id, exc)
@@ -855,10 +868,12 @@ def _fetch_workflow_summary(
     client: Any, db: str, tenant_id: str,
     since: str, until: str,
     group_by: str, flow_id: str | None, campaign_id: str | None,
+    pool_id: str | None = None,
+    accessible_pools: list[str] | None = None,
 ) -> dict:
     # Validate group_by — only allow known values
-    if group_by not in ("flow_id", "campaign_id"):
-        group_by = "flow_id"
+    if group_by not in ("pool_id", "flow_id", "campaign_id"):
+        group_by = "pool_id"
 
     conditions = [
         "tenant_id = {tenant_id:String}",
@@ -866,6 +881,16 @@ def _fetch_workflow_summary(
         "timestamp <= {until:String}",
     ]
     params: dict = {"tenant_id": tenant_id, "since": since, "until": until}
+    if pool_id:
+        # explicit single-pool filter (user picked one pool from the combo)
+        conditions.append("pool_id = {pool_id:String}")
+        params["pool_id"] = pool_id
+    elif accessible_pools:
+        # scope to the user's permission set ("All" = all pools they can see)
+        placeholders = ", ".join(f"{{ap_{i}:String}}" for i in range(len(accessible_pools)))
+        conditions.append(f"pool_id IN ({placeholders})")
+        for i, ap in enumerate(accessible_pools):
+            params[f"ap_{i}"] = ap
     if flow_id:
         conditions.append("flow_id = {flow_id:String}")
         params["flow_id"] = flow_id
@@ -875,25 +900,43 @@ def _fetch_workflow_summary(
 
     where = " AND ".join(conditions)
 
-    # group_key: for campaign_id, NULL/empty maps to '(sem campanha)'
+    # group_key: NULL/empty pool/campaign maps to a readable label
     if group_by == "campaign_id":
         group_expr = "if(campaign_id IS NOT NULL AND campaign_id != '', campaign_id, '(sem campanha)')"
+    elif group_by == "pool_id":
+        group_expr = "if(pool_id IS NOT NULL AND pool_id != '', pool_id, '(sem pool)')"
     else:
         group_expr = "flow_id"
 
+    # Use a subquery that computes the LAST event per instance so that
+    # an instance which was suspended and later completed/failed is counted
+    # only in its terminal state — not in both suspended AND the terminal bucket.
     result = client.query(f"""
         SELECT
-            {group_expr}                                                        AS group_key,
-            countDistinctIf(instance_id, event_type = 'triggered')             AS total_triggered,
-            countDistinctIf(instance_id, event_type = 'completed')             AS total_completed,
-            countDistinctIf(instance_id, event_type = 'failed')                AS total_failed,
-            countDistinctIf(instance_id, event_type = 'timeout')               AS total_timeout,
-            countDistinctIf(instance_id, event_type = 'cancelled')             AS total_cancelled,
-            countDistinctIf(instance_id, event_type = 'suspended')             AS total_suspended,
-            avgIf(duration_ms, event_type IN ('completed','failed')
-                  AND duration_ms IS NOT NULL AND duration_ms > 0)             AS avg_duration_ms
-        FROM {db}.workflow_events FINAL
-        WHERE {where}
+            group_key,
+            countIf(has_started)                                                           AS total_triggered,
+            countIf(last_event = 'workflow.completed')                                     AS total_completed,
+            countIf(last_event = 'workflow.failed')                                        AS total_failed,
+            countIf(last_event = 'workflow.timed_out')                                     AS total_timeout,
+            countIf(last_event = 'workflow.cancelled')                                     AS total_cancelled,
+            countIf(last_event = 'workflow.suspended')                                     AS total_suspended,
+            avgIf(final_duration_ms,
+                  last_event IN ('workflow.completed', 'workflow.failed')
+                  AND final_duration_ms > 0)                                               AS avg_duration_ms
+        FROM (
+            SELECT
+                instance_id,
+                {group_expr}                                                               AS group_key,
+                countIf(event_type = 'workflow.started') > 0                              AS has_started,
+                argMax(event_type, timestamp)                                              AS last_event,
+                maxIf(duration_ms,
+                      event_type IN ('workflow.completed', 'workflow.failed')
+                      AND isNotNull(duration_ms) AND duration_ms > 0)                     AS final_duration_ms
+            FROM {db}.workflow_events FINAL
+            WHERE {where}
+            GROUP BY instance_id, group_key
+        )
+        WHERE has_started = 1
         GROUP BY group_key
         ORDER BY total_triggered DESC
         LIMIT 500
@@ -935,7 +978,7 @@ async def query_campaigns_report(
     page_size: int = 100,
 ) -> dict:
     since = _ch_fmt(from_dt) if from_dt else _default_from()
-    until = _ch_fmt(to_dt)   if to_dt   else _default_to()
+    until = _ch_fmt(to_dt, upper=True) if to_dt else _default_to()
     try:
         return await asyncio.to_thread(
             _fetch_campaigns, client, database, tenant_id, since, until,
@@ -1028,7 +1071,7 @@ async def query_participation_report(
     page_size: int = 100,
 ) -> dict:
     since = _ch_fmt(from_dt) if from_dt else _default_from()
-    until = _ch_fmt(to_dt)   if to_dt   else _default_to()
+    until = _ch_fmt(to_dt, upper=True) if to_dt else _default_to()
     if accessible_pools is not None and not accessible_pools:
         return {"data": [], "meta": _meta(page, page_size, 0, since, until)}
     try:
@@ -1116,7 +1159,7 @@ async def query_segments_report(
     page_size: int = 100,
 ) -> dict:
     since = _ch_fmt(from_dt) if from_dt else _default_from()
-    until = _ch_fmt(to_dt)   if to_dt   else _default_to()
+    until = _ch_fmt(to_dt, upper=True) if to_dt else _default_to()
     if accessible_pools is not None and not accessible_pools:
         return {"data": [], "meta": _meta(page, page_size, 0, since, until)}
     if supervised_agent_types is not None and not supervised_agent_types:
@@ -1226,7 +1269,7 @@ async def query_agent_performance_report(
         abandoned_count / timeout_count / handoff_count — raw breakdowns
     """
     since = _ch_fmt(from_dt) if from_dt else _default_from()
-    until = _ch_fmt(to_dt)   if to_dt   else _default_to()
+    until = _ch_fmt(to_dt, upper=True) if to_dt else _default_to()
     if accessible_pools is not None and not accessible_pools:
         return {"data": [], "meta": {"total": 0, "from_dt": since, "to_dt": until}}
     if supervised_agent_types is not None and not supervised_agent_types:
@@ -1334,7 +1377,7 @@ async def query_evaluations_report(
     Filters: campaign_id, form_id, evaluator_id, eval_status.
     """
     since = _ch_fmt(from_dt) if from_dt else _default_from()
-    until = _ch_fmt(to_dt)   if to_dt   else _default_to()
+    until = _ch_fmt(to_dt, upper=True) if to_dt else _default_to()
     try:
         return await asyncio.to_thread(
             _fetch_evaluations, client, database, tenant_id, since, until,
@@ -1414,7 +1457,7 @@ async def query_evaluations_summary(
     group_by controls the breakdown dimension.
     """
     since = _ch_fmt(from_dt) if from_dt else _default_from()
-    until = _ch_fmt(to_dt)   if to_dt   else _default_to()
+    until = _ch_fmt(to_dt, upper=True) if to_dt else _default_to()
     # Whitelist grouping dimensions
     allowed_groups = {"campaign_id", "evaluator_id", "form_id", "date"}
     if group_by not in allowed_groups:
@@ -1623,7 +1666,7 @@ async def query_session_complexity(
     Use min_handoffs=1 to filter only sessions that had at least one agent transfer.
     """
     since = _ch_fmt(from_dt) if from_dt else _default_from()
-    until = _ch_fmt(to_dt)   if to_dt   else _default_to()
+    until = _ch_fmt(to_dt, upper=True) if to_dt else _default_to()
 
     if accessible_pools is not None and not accessible_pools:
         return {"data": [], "meta": _meta(page, page_size, 0, since, until)}
@@ -2102,7 +2145,7 @@ async def query_events(
     Returns: { data: [EventRow], meta: { total, page, page_size, from_dt, to_dt } }
     """
     since = _ch_fmt(from_dt) if from_dt else _default_from()
-    until = _ch_fmt(to_dt)   if to_dt   else _default_to()
+    until = _ch_fmt(to_dt, upper=True) if to_dt else _default_to()
     if accessible_pools is not None and not accessible_pools:
         return {"data": [], "meta": _meta(page, page_size, 0, since, until)}
     try:
@@ -2195,7 +2238,7 @@ async def query_journeys_report(
       meta: pagination info
     """
     since = _ch_fmt(from_dt) if from_dt else _default_from()
-    until = _ch_fmt(to_dt)   if to_dt   else _default_to()
+    until = _ch_fmt(to_dt, upper=True) if to_dt else _default_to()
     try:
         return await asyncio.to_thread(
             _fetch_journeys, client, database, tenant_id, since, until,
@@ -2361,7 +2404,7 @@ async def query_agent_events_series(
       meta: {from_dt, to_dt, granularity, category, pool_id, skill_id}
     """
     since = _ch_fmt(from_dt) if from_dt else _default_from()
-    until = _ch_fmt(to_dt)   if to_dt   else _default_to()
+    until = _ch_fmt(to_dt, upper=True) if to_dt else _default_to()
     try:
         return await asyncio.to_thread(
             _fetch_agent_events_series,
@@ -2483,7 +2526,7 @@ async def query_agent_events_summary(
         group_by = "category"
 
     since = _ch_fmt(from_dt) if from_dt else _default_from()
-    until = _ch_fmt(to_dt)   if to_dt   else _default_to()
+    until = _ch_fmt(to_dt, upper=True) if to_dt else _default_to()
     try:
         return await asyncio.to_thread(
             _fetch_agent_events_summary,
@@ -2582,7 +2625,7 @@ async def query_agent_events_categories(
       sorted by category ASC.
     """
     since = _ch_fmt(from_dt) if from_dt else _default_from()
-    until = _ch_fmt(to_dt)   if to_dt   else _default_to()
+    until = _ch_fmt(to_dt, upper=True) if to_dt else _default_to()
     try:
         return await asyncio.to_thread(
             _fetch_agent_events_categories,
@@ -2667,7 +2710,7 @@ async def query_evaluator_calibration(
       meta:    {from_dt, to_dt, campaign_id, evaluator_id, granularity}
     """
     since = _ch_fmt(from_dt) if from_dt else _default_from()
-    until = _ch_fmt(to_dt)   if to_dt   else _default_to()
+    until = _ch_fmt(to_dt, upper=True) if to_dt else _default_to()
     try:
         return await asyncio.to_thread(
             _fetch_evaluator_calibration,

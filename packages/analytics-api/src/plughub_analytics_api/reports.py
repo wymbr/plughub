@@ -938,27 +938,30 @@ async def get_workflow_summary(
     tenant_id:      str           = Query(...,          description="Tenant identifier"),
     from_dt:        Optional[str] = Query(None,         description="Start date (YYYY-MM-DD or ISO8601); default: 7d ago"),
     to_dt:          Optional[str] = Query(None,         description="End date; default: now"),
-    group_by:       str           = Query("flow_id",    pattern="^(flow_id|campaign_id)$"),
+    group_by:       str           = Query("pool_id",    pattern="^(pool_id|flow_id|campaign_id)$"),
+    pool_id:        Optional[str] = Query(None,         description="Filter by specific pool_id"),
     flow_id:        Optional[str] = Query(None,         description="Filter by specific flow_id"),
     campaign_id:    Optional[str] = Query(None,         description="Filter by specific campaign_id"),
     pool_principal: PoolPrincipal = Depends(optional_pool_principal),
 ) -> Response:
     """
-    Aggregated workflow metrics grouped by flow_id or campaign_id.
+    Aggregated workflow metrics grouped by pool_id, flow_id, or campaign_id.
 
     One row per group with: total_triggered, total_completed, total_failed,
     total_timeout, total_cancelled, total_suspended,
     completion_rate, failure_rate, avg_duration_ms.
     """
     data = await query_workflow_summary(
-        client      = request.app.state.store.new_client(),
-        database    = request.app.state.store._database,
-        tenant_id   = tenant_id,
-        from_dt     = from_dt,
-        to_dt       = to_dt,
-        group_by    = group_by,
-        flow_id     = flow_id,
-        campaign_id = campaign_id,
+        client           = request.app.state.store.new_client(),
+        database         = request.app.state.store._database,
+        tenant_id        = tenant_id,
+        from_dt          = from_dt,
+        to_dt            = to_dt,
+        group_by         = group_by,
+        pool_id          = pool_id,
+        flow_id          = flow_id,
+        campaign_id      = campaign_id,
+        accessible_pools = pool_principal.accessible_pools,
     )
     return JSONResponse(content=data)
 

@@ -145,6 +145,7 @@
     },
     "groupByOptions": {
       "pool_id":     "Pool",
+      "flow_id":     "Flow",
       "campaign_id": "Campaign"
     },
     "kpi": {
