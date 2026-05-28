@@ -821,9 +821,27 @@ Uses **hierarchical page navigation** (not side panels): each level is a full de
 
 ---
 
+## Arc 19 — Modelo Unificado de Sessão: Workflow como Canal Webhook
+
+Elimina a dualidade contact/workflow tratando workflows como canal `webhook` na channel-gateway. Cada skill registrada num pool webhook é um "endpoint" (análogo a DIN de voz ou número WA). O trigger cria uma sessão normal, o routing engine aloca instância skill-flow do pool, e o `session_id` é o identificador persistente por toda a execução — incluindo múltiplos ciclos de suspend/resume.
+
+**Status `suspended`** adicionado ao domain de sessão. No `suspend()`, o agente fecha o segmento e devolve ao pool (`agent_ready`); a sessão persiste com TTL estendido. No resume, nova alocação normal → novo segmento. **Resume_token lookup** via hash Redis `{tenant}:resume_tokens → session_id`.
+
+**WebhookAdapter** em `channel-gateway/adapters/webhook.py`: `POST /v1/channels/webhook/{skill_id}` (trigger), `POST /v1/channels/webhook/resume/{token}` (resume), `GET /v1/channels/webhook/{session_id}/status`. **Pool webhook**: `channel_types: [webhook]` + `skill_id` como endpoint.
+
+**O que é eliminado**: `workflow-api` lifecycle endpoints, `WorkflowInstance` entidade separada, `skill-flow-worker` Kafka consumer, `workflow.events` topic, entidade Journey (Fase F), Monitor/Processes e Analytics/Processes páginas separadas. **O que é unificado**: Monitor/Sessions com filtro `channel_type`, Analytics/Sessions, ContextStore `{tenant}:ctx:{session_id}` universal, `analytics.segments` sem alteração.
+
+**Collect step**: sessão filho com `parent_session_id → workflow_session_id`. Resume via webhook adapter quando cliente responde.
+
+**6 fases**: A (WebhookAdapter + channel type), B (status suspended + TTL), C (orchestrator-bridge: skill-flow como agente nativo), D (workflow-api deprecation), E (Monitor/Analytics unificados), F (Journey + cleanup).
+
+→ See [`docs/arcos/arc19-unified-session-model.md`](docs/arcos/arc19-unified-session-model.md)
+
+---
+
 ## Pending (Next Iteration)
 
-### Journey — Eliminação planejada (longo prazo)
+### Journey — Eliminação planejada (Arc 19 Fase F)
 
 Decisão arquitetural: **Journey será eliminado** quando o momento for oportuno. A razão é que "Journey" é conceitualmente apenas um Workflow de nível Tier 1 que invoca outros workflows via step `task`. A entidade separada não se justifica — o modelo de pool já é o ponto de controle correto para quais agentes podem fazer o quê. Não há restrições adicionais necessárias além do cadastro em pool.
 
@@ -833,36 +851,11 @@ O que sobrevive: nenhuma entidade de substituição. O step `task` no trace da i
 
 **Regra até a eliminação**: não investir em novas features na entidade Journey. Manter o que existe funcionando, mas não expandir.
 
-### Modelo Unificado de Contexto — session_id para tudo
+### Modelo Unificado de Contexto — session_id para tudo (Arc 19)
 
-**Direção arquitetural definitiva**: `session_id` e `segment_id` são os identificadores universais para qualquer contexto de execução — contatos e workflows são o mesmo conceito, diferenciados por `session_type`.
+**Direção arquitetural definitiva implementada pelo Arc 19**: `session_id` universal via canal `webhook`. Workflow = sessão com `channel_type: webhook`. Status `suspended` no domain de sessão. ContextStore `{tenant}:ctx:{session_id}` unificado. `analytics.segments` cobre tudo sem alteração. Ver Arc 19 acima e [`docs/arcos/arc19-unified-session-model.md`](docs/arcos/arc19-unified-session-model.md).
 
-```
-sessions
-  session_id    — UUID universal (contato OU workflow)
-  session_type  — "contact" | "workflow"
-  status, created_at, ...
-
-segments
-  session_id    — contexto dono (contato ou workflow)
-  segment_id    — UUID desta participação
-  flow_id / agent_type_id   — o que está participando
-  role          — primary | specialist | supervisor
-  step_id       — task step que disparou (quando aplicável)
-  started_at / ended_at / outcome
-```
-
-**Consequências**:
-- `workflow_instance_id` vira `session_id` do tipo `"workflow"` — `workflow.instances` torna-se extensão de `sessions`
-- ContextStore: `{tenant}:ctx:{session_id}` para tudo — workflows não precisam de namespace separado (`@ctx.journey.*` eliminado)
-- Um workflow invocado por uma sessão via `task` step aparece como segmento especialista da sessão (`session_id` da sessão)
-- Um workflow invocado por outro workflow aparece como segmento especialista do workflow pai
-- Journey eliminado — a correlação entre execuções é o próprio `session_id` do contexto que as originou
-- O skill-flow-engine já converge para isso: usa `origin_session_id` como chave Redis quando disponível
-
-**O mesmo drill-down** (contexto → segmentos → trace de steps) funciona para contatos e workflows sem adaptação. `analytics.segments` atual já implementa metade — a extensão é `session_type` e tornar `session_id` o par universal.
-
-**Não implementar até a eliminação do Journey estar completa.**
+**Não implementar até Arc 19 Fase F (eliminação Journey) estar completa.**
 
 ### Arc 17 — JourneyType Governance ✅ (todas as tarefas #295–#302 implementadas)
 Ver [`docs/arcos/arc17-journey-types.md`](docs/arcos/arc17-journey-types.md) e CHANGELOG 2026-05-26.

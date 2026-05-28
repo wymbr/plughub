@@ -4,6 +4,21 @@
 
 ---
 
+## Arc 19 — Modelo Unificado de Sessão: Workflow como Canal Webhook
+
+Spec em [`docs/arcos/arc19-unified-session-model.md`](docs/arcos/arc19-unified-session-model.md). Elimina a dualidade contact/workflow tratando workflows como canal `webhook` na channel-gateway.
+
+- **Fase A** — WebhookAdapter (`channel-gateway/adapters/webhook.py`): endpoints trigger/resume/status + `channel_type: webhook` no schema + routing engine reconhece pools webhook
+- **Fase B** — Status `suspended` no domain de sessão + TTL extension no executor suspend() + hash Redis `resume_tokens`
+- **Fase C** — orchestrator-bridge: skill-flow como agente nativo de pool webhook; eliminar `skill-flow-worker`
+- **Fase D** — workflow-api deprecation: redirect `/v1/workflow/trigger` → webhook adapter; manter `/v1/workflow/instances` read-only
+- **Fase E** — Monitor e Analytics unificados: filtro `channel_type` substitui páginas separadas; badge para sessões `suspended`
+- **Fase F** — Eliminação Journey (Arc 10/16/17 → CHANGELOG) + remoção `workflow.events` topic + cleanup `skill-flow-worker` package
+
+**Pré-requisito**: não implementar até a eliminação do Journey (Fase F) estar pronta para execução.
+
+---
+
 ## Arc 18 — Workflow Execution Trace
 
 Spec em [`docs/arcos/arc18-workflow-execution-trace.md`](docs/arcos/arc18-workflow-execution-trace.md). Três fases sequenciais:
