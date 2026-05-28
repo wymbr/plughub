@@ -14,6 +14,26 @@
 tenant_id: tenant_demo
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Journey Types
+# Synced by RegistrySyncer via POST /v1/journey-types (409 → PATCH on drift).
+# Each pool that may initiate this type must list it in authorized_journey_types.
+# ─────────────────────────────────────────────────────────────────────────────
+
+journey_types:
+
+  - journey_type_id: portabilidade_telco
+    description: "Portabilidade de número entre operadoras de telefonia"
+    sla_ms: 172800000   # 48 horas úteis em ms
+
+  - journey_type_id: reembolso_produto
+    description: "Solicitação de reembolso de produto ou serviço"
+    sla_ms: 432000000   # 5 dias úteis em ms
+
+  - journey_type_id: atendimento_sac
+    description: "Atendimento SAC genérico com processo de suporte"
+    sla_ms: 86400000    # 24 horas em ms
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Pools
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -90,6 +110,7 @@ pools:
     description: "Pool do agente de portabilidade — coleta dados e inicia Journey"
     channel_types: [webchat, whatsapp]
     sla_target_ms: 300000
+    authorized_journey_types: ["portabilidade_telco"]
 
   - pool_id: reembolso_ia
     # Pool do agente de intake de reembolso.
@@ -99,6 +120,7 @@ pools:
     description: "Pool do agente de reembolso — coleta dados e inicia Journey"
     channel_types: [webchat, whatsapp]
     sla_target_ms: 300000
+    authorized_journey_types: ["reembolso_produto"]
 
   - pool_id: auth_sac_ia
     # Pool da composição Auth → SAC (Tier 2 — Sprint 1D).

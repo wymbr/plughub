@@ -69,19 +69,22 @@ logger = logging.getLogger("plughub.registry-syncer")
 
 @dataclass
 class SyncReport:
-    tenant_id:        str
-    pools_created:    int = 0
-    pools_skipped:    int = 0   # already existed and no change needed
-    pools_errors:     int = 0
-    types_created:    int = 0
-    types_updated:    int = 0   # PATCH applied
-    types_skipped:    int = 0   # already existed and identical (PATCH returned 200 with no change)
-    types_errors:     int = 0
-    types_deleted:    int = 0   # pruned — present in registry but absent from YAML
-    skills_upserted:  int = 0   # created or updated in Agent Registry
-    skills_skipped:   int = 0   # no valid id: field — using YAML fallback at runtime
-    skills_errors:    int = 0
-    errors:           list[str] = field(default_factory=list)
+    tenant_id:              str
+    pools_created:          int = 0
+    pools_skipped:          int = 0   # already existed and no change needed
+    pools_errors:           int = 0
+    types_created:          int = 0
+    types_updated:          int = 0   # PATCH applied
+    types_skipped:          int = 0   # already existed and identical (PATCH returned 200 with no change)
+    types_errors:           int = 0
+    types_deleted:          int = 0   # pruned — present in registry but absent from YAML
+    journey_types_created:  int = 0
+    journey_types_skipped:  int = 0   # already existed (409) or PATCH no-op
+    journey_types_errors:   int = 0
+    skills_upserted:        int = 0   # created or updated in Agent Registry
+    skills_skipped:         int = 0   # no valid id: field — using YAML fallback at runtime
+    skills_errors:          int = 0
+    errors:                 list[str] = field(default_factory=list)
 
     def summary(self) -> str:
         return (
@@ -89,6 +92,8 @@ class SyncReport:
             f"pools(created={self.pools_created} skip={self.pools_skipped} err={self.pools_errors}) "
             f"agent_types(created={self.types_created} updated={self.types_updated} "
             f"skip={self.types_skipped} deleted={self.types_deleted} err={self.types_errors}) "
+            f"journey_types(created={self.journey_types_created} skip={self.journey_types_skipped} "
+            f"err={self.journey_types_errors}) "
             f"skills(upserted={self.skills_upserted} skip={self.skills_skipped} err={self.skills_errors})"
         )
 
@@ -183,6 +188,10 @@ class RegistrySyncer:
 
         # ── Sync skills FIRST (agent types reference skill_ids) ───────────
         await self._sync_skills(http, headers, report)
+
+        # ── Sync journey types (pools reference them) ──────────────────
+        for jt in cfg.get("journey_types", []):
+            await self._sync_journey_type(http, headers, jt, report)
 
         # ── Sync pools (agent types reference them) ────────────────────
         for pool in cfg.get("pools", []):
@@ -318,6 +327,60 @@ class RegistrySyncer:
             msg = f"skill {skill_id}: PUT exception — {exc}"
             logger.error("  %s", msg)
             report.skills_errors += 1
+
+    # ── Journey type sync ─────────────────────────────────────────────────────
+
+    async def _sync_journey_type(
+        self,
+        http:    aiohttp.ClientSession,
+        headers: dict,
+        jt:      dict,
+        report:  SyncReport,
+    ) -> None:
+        """
+        Upsert a journey type in the Agent Registry.
+          POST /v1/journey-types  → 201  created
+          POST /v1/journey-types  → 409  exists → PATCH to apply any drift
+        """
+        jtid = jt.get("journey_type_id", "<unknown>")
+        url  = f"{self._registry_url}/v1/journey-types"
+
+        try:
+            async with http.post(url, headers=headers, json=jt,
+                                 timeout=aiohttp.ClientTimeout(total=15)) as resp:
+                if resp.status == 201:
+                    logger.info("  journey_type %s created", jtid)
+                    report.journey_types_created += 1
+                    return
+                elif resp.status != 409:
+                    body = await _safe_json(resp)
+                    msg  = f"journey_type {jtid}: POST returned {resp.status} — {body}"
+                    logger.error("  %s", msg)
+                    report.journey_types_errors += 1
+                    report.errors.append(msg)
+                    return
+        except Exception as exc:
+            msg = f"journey_type {jtid}: POST exception — {exc}"
+            logger.error("  %s", msg)
+            report.journey_types_errors += 1
+            report.errors.append(msg)
+            return
+
+        # 409 → already exists, PATCH mutable fields (sla_ms, description)
+        patch_body = {k: v for k, v in jt.items() if k != "journey_type_id"}
+        patch_url  = f"{self._registry_url}/v1/journey-types/{jtid}"
+        try:
+            async with http.patch(patch_url, headers=headers, json=patch_body,
+                                  timeout=aiohttp.ClientTimeout(total=15)) as resp:
+                if resp.status in (200, 204):
+                    logger.debug("  journey_type %s already exists (no drift)", jtid)
+                else:
+                    body = await _safe_json(resp)
+                    logger.warning("  journey_type %s: PATCH returned %s — %s", jtid, resp.status, body)
+                report.journey_types_skipped += 1
+        except Exception as exc:
+            logger.warning("  journey_type %s: PATCH exception — %s", jtid, exc)
+            report.journey_types_skipped += 1  # non-fatal — type exists, just couldn't update
 
     # ── Pool sync ─────────────────────────────────────────────────────────────
 

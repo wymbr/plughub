@@ -139,6 +139,7 @@ steps:
     type: invoke
     tool: journey_start
     input:
+      journey_type_id: "portabilidade_telco"
       skill_id: "skill_portabilidade_demo_v1"
       session_id: "$.session.session_id"
     on_success: avisar_inicio

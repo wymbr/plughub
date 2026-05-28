@@ -64,6 +64,7 @@ async def emit_started(
     session_id:      str | None,
     trigger_type:    str,
     journey_id:      str | None = None,
+    pool_id:         str | None = None,
 ) -> None:
     event: dict = {
         "event_type":      "workflow.started",
@@ -75,6 +76,7 @@ async def emit_started(
         "flow_id":         flow_id,
         "session_id":      session_id,
         "trigger_type":    trigger_type,
+        "pool_id":         pool_id,
     }
     if journey_id:
         event["journey_id"] = journey_id
@@ -364,6 +366,32 @@ async def emit_journey_split(
         "session_ids":       session_ids,
         "session_count":     len(session_ids),
     })
+
+
+# ── Batch emit (backfill / replay) ───────────────────────────────────────────
+
+async def emit_events_batch(
+    producer:  Any | None,
+    topic:     str,
+    events:    list[dict],
+) -> int:
+    """
+    Emits a pre-built list of event dicts to the given topic.
+    Each dict must already contain 'event_type' and 'timestamp'.
+    Returns the number of events successfully sent.
+    Errors are logged but never raised — best-effort delivery.
+    """
+    sent = 0
+    for event in events:
+        try:
+            await _emit(producer, topic, event)
+            sent += 1
+        except Exception as exc:
+            logger.warning(
+                "emit_events_batch: failed event_type=%s instance=%s: %s",
+                event.get("event_type"), event.get("instance_id"), exc,
+            )
+    return sent
 
 
 # ── Collect events (topic: collect.events) ────────────────────────────────────

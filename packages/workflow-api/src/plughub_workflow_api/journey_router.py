@@ -132,10 +132,13 @@ async def _trigger_workflow(
     journey_id:        str,
     tenant_id:         str,
     metadata:          dict | None,
+    pool_id:           str | None = None,
 ) -> str:
     """
     Trigger workflow-api /v1/trigger for the journey's skill-flow.
     Returns the workflow instance_id.
+    pool_id is forwarded so workflow_events.pool_id is populated in ClickHouse
+    and Monitor/Processes can group workflows by pool.
     """
     settings = request.app.state.settings
     workflow_url = getattr(settings, "workflow_api_url", "http://localhost:3800")
@@ -148,6 +151,7 @@ async def _trigger_workflow(
         "journey_id":       journey_id,
         "trigger_type":     "journey",
         "metadata":         metadata or {},
+        "pool_id":          pool_id,
     }
 
     async with httpx.AsyncClient(timeout=10.0) as client:
@@ -201,6 +205,7 @@ async def create_journey(body: JourneyCreateRequest, request: Request) -> dict:
             journey_id        = journey_id,
             tenant_id         = tenant_id,
             metadata          = body.metadata,
+            pool_id           = body.pool_id,
         )
     except HTTPException:
         raise
@@ -516,6 +521,7 @@ async def split_journey(journey_id: str, body: JourneySplitRequest, request: Req
                 journey_id        = new_journey_id,
                 tenant_id         = tenant_id,
                 metadata          = body.metadata,
+                pool_id           = source.get("pool_id"),
             )
             if new_workflow_instance_id:
                 await db_set_journey_workflow_instance(pool, new_journey_id, new_workflow_instance_id)

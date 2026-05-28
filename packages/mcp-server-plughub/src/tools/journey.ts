@@ -303,6 +303,22 @@ export function registerJourneyTools(server: McpServer, deps: JourneyDeps): void
         // Soft failure: proceed with sla_ms=null rather than blocking journey creation
       }
 
+      // ── Read pool_id from ContextStore (set by Routing Engine on allocation) ──
+      // session.pool.id is written by routing-engine after every allocation so
+      // pool_id propagates all the way to workflow_events for Monitor/Processes.
+      let pool_id: string | null = null
+      try {
+        const ctxKey  = `${tenantId}:ctx:${session_id}`
+        const rawPool = await redis.hget(ctxKey, "session.pool.id")
+        if (rawPool) {
+          const poolEntry = JSON.parse(rawPool) as { value?: string }
+          pool_id = typeof poolEntry.value === "string" ? poolEntry.value : null
+        }
+      } catch (redisErr) {
+        console.warn("[journey_start] failed to read session.pool.id from ContextStore:", redisErr)
+        // Non-fatal — continue without pool_id
+      }
+
       const result = await callWorkflowApi(
         `${workflowApiUrl}/v1/journeys`,
         "POST",
@@ -313,6 +329,7 @@ export function registerJourneyTools(server: McpServer, deps: JourneyDeps): void
           skill_id,
           origin_session_id: session_id,
           customer_id:       customer_id ?? null,
+          pool_id,
           metadata:          metadata ?? null,
         },
       )
