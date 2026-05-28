@@ -1,6 +1,6 @@
 # Arc 19 — Modelo Unificado de Sessão: Workflow como Canal Webhook
 
-> Criado: 2026-05-28 · Estado: Especificação v1
+> Criado: 2026-05-28 · Estado: Especificação v2 — revisado 2026-05-28
 
 ## Premissa
 
@@ -173,47 +173,395 @@ O `pipeline_state` (já persistido a cada step) sobrevive naturalmente — a ses
 
 ## O que é Unificado
 
-### Monitor
+### Monitor e Analytics
 
-```
-Sessions (todas)
-  ├── channel_type: webchat
-  ├── channel_type: whatsapp
-  ├── channel_type: voice
-  ├── channel_type: webhook     ← processos de negócio
-  └── channel_type: webrtc
-
-Status: active | suspended | closed | abandoned
-```
-
-Sessões `suspended` aparecem no Monitor como processos em espera — visibilidade que hoje não existe para workflows.
-
-### Analytics
-
-`analytics.segments` já tem `session_id`, `pool_id`, `agent_type_id`, `started_at`, `ended_at`. Não muda nada. Workflows aparecem como segmentos com `pool_id = portabilidade_processo`.
-
-`analytics.session_timeline` captura tudo via stream — inclusive os períodos `suspended` entre segmentos.
+Monitor/Processes e Analytics/Processes são eliminadas. Workflows aparecem nas mesmas páginas de Sessions com filtro `channel_type: webhook`. Ver modelos detalhados nas seções **Monitor — Modelo Final** e **Analytics — Modelo Final** abaixo.
 
 ### ContextStore
 
 `{tenant}:ctx:{session_id}` para tudo. Sem namespace `journey.*` separado. Um workflow invocado por `task` step de outro workflow usa o `session_id` do workflow pai como `parent_session_id` — hierarquia visível no trace sem FK especial.
 
+### analytics.segments
+
+Já tem `session_id`, `pool_id`, `agent_type_id`, `started_at`, `ended_at`. Não muda nada. Workflows aparecem como segmentos com `pool_id = portabilidade_processo`. `analytics.session_timeline` captura tudo via stream — inclusive os períodos `suspended` entre segmentos.
+
+**TMA para sessions webhook**: calculado como `SUM(segment.duration_ms)` por `session_id` — não como `session.ended_at - session.started_at`. Isso exclui o tempo suspenso (que pode ser horas ou dias) do tempo real de execução.
+
+---
+
+## Segregação Workflow vs. Agente
+
+O Arc 19 formaliza a distinção entre workflows e agentes como dois perfis de skill com conjuntos de steps disjuntos. O critério é **consciência de canal**: workflows são channel-agnostic (orquestram o quê), agentes são channel-aware (executam o como).
+
+### Perfil `workflow` — `channel_type: webhook`
+
+Steps disponíveis:
+
+| Step | Papel |
+|---|---|
+| `task` | Delega para agente ou sub-workflow via routing engine |
+| `choice` | Branching condicional sobre pipeline_state |
+| `catch` | Retry e fallback antes de escalação |
+| `escalate` | Roteamento para pool via rules engine |
+| `complete` | Encerra com outcome definido |
+| `invoke` | Chama MCP tool diretamente |
+| `reason` | Invoca AI Gateway com output_schema |
+| `suspend` | Suspende sessão até sinal externo (TTL estendido no Redis) |
+| `collect` | Cria sessão-filho de contato e suspende até ela fechar |
+| `receive` | Suspende aguardando próximo evento externo (sem prompt ao canal) |
+
+Steps proibidos: `menu`, `notify`, `begin_transaction`, `end_transaction`.
+
+Workflows não conhecem o canal do cliente. Se precisam enviar uma mensagem, delegam para um agente via `task`. Se precisam coletar dados, usam `collect` (que cria uma sessão-filho atendida por um agente channel-aware).
+
+### Perfil `agent` — qualquer `channel_type` exceto `webhook`
+
+Steps disponíveis:
+
+| Step | Papel |
+|---|---|
+| `task` | Delega para especialista ou sub-workflow |
+| `choice` | Branching condicional |
+| `catch` | Retry e fallback |
+| `escalate` | Roteamento para pool |
+| `complete` | Encerra segmento |
+| `invoke` | Chama MCP tool |
+| `reason` | Invoca AI Gateway |
+| `notify` | Envia mensagem ao cliente via canal |
+| `menu` | Captura input do cliente (text / button / list / form) |
+| `begin_transaction` / `end_transaction` | Bloco atômico de input mascarado |
+| `receive` | Suspende aguardando próxima mensagem do canal |
+
+Steps proibidos: `suspend`, `collect`.
+
+Agentes completam segmentos. Só sessões (workflows) suspendem.
+
+### Validação
+
+O engine valida o perfil no parse da skill YAML — erro em configuração, não em runtime. Pool `channel_type: webhook` só aceita skills com perfil `workflow`. Pools com outros channel_types só aceitam skills com perfil `agent`.
+
 ---
 
 ## Collect Step no Novo Modelo
 
-O `collect` step dispara um contato de saída via channel-gateway (exatamente como hoje), mas o link entre a sessão-filho e a sessão-pai workflow é via `parent_session_id`:
+O `collect` step é exclusivo de workflows. Cria uma sessão-filho de contato (channel-aware) sem especificar o canal diretamente — o canal é negociado via capabilities (Arc 16):
 
 ```
-sessão workflow (session_type: workflow)
+sessão workflow (channel_type: webhook)
   └── parent_session_id: null
 
-    collect step → cria sessão de contato (session_type: contact)
+    collect step → cria sessão de contato (channel_type: negociado)
       └── parent_session_id: {workflow_session_id}
-          channel_type: webchat | whatsapp | ...
+          channel_type: webchat | whatsapp | voice | ...
+          (atendida por agente com perfil agent)
 ```
 
-Quando o cliente responde, a sessão-filho fecha e o webhook de `collect` resume a sessão workflow pai.
+O workflow suspende durante o `collect`. Quando a sessão-filho fecha, o webhook adapter recebe o sinal de resume e retoma a sessão workflow pai com o resultado da coleta no `pipeline_state`.
+
+O workflow nunca conhece qual canal foi usado — só recebe o resultado estruturado. O agente alocado para a sessão-filho é o responsável pelo I/O com o cliente.
+
+---
+
+## Session Trace — Observabilidade de Execução Webhook
+
+O trace de execução step-a-step de sessions webhook é absorvido do Arc 18 com fonte de dados e superfície de UI adaptadas ao modelo Arc 19.
+
+### Fonte de dados
+
+`pipeline_state.transitions[]` é gravado pelo `PipelineStateManager.addTransition()` em cada transição de step — isso não muda. O que muda é onde o dado vive e como é preservado para histórico:
+
+| Estado da session | Fonte do trace |
+|---|---|
+| `active` / `suspended` | Redis `{tenant}:pipeline:{session_id}` (TTL estendido pelo suspend()) |
+| `closed` (recente) | Redis (ainda dentro do TTL pós-close) |
+| `closed` (histórico) | ClickHouse `analytics.session_traces` |
+
+**Persistência em `complete()`**: ao fechar uma session webhook, o executor emite um evento Kafka `session_trace_completed` com o array `transitions[]` completo. O consumer em `analytics-api` persiste no ClickHouse. Sem PostgreSQL envolvido.
+
+```
+complete() executor
+  → XADD session:{id}:stream  session_closed
+  → Kafka: session_trace_completed { session_id, transitions[], outputs, trigger_type }
+    → analytics-api consumer → ClickHouse analytics.session_traces
+```
+
+### Endpoint
+
+`GET /v1/sessions/{id}/trace` — novo endpoint no Core ou analytics-api (não no workflow-api).
+
+Lógica: lê Redis primeiro (sessions ativas/suspensas). Para sessões fechadas com trace não mais no Redis, lê `analytics.session_traces`. Enriquece cada step com `step_type` e `step_label` do `flow_definition` (presente no ContextStore durante execução, ou no pool config).
+
+Resposta: `SessionTrace` (renomeado de `InstanceTrace` do Arc 18):
+
+```typescript
+interface SessionTrace {
+  session_id:        string
+  skill_id:          string
+  status:            "active" | "suspended" | "closed" | "abandoned"
+  trigger_type:      "api" | "webhook" | "task" | "scheduled" | "yaml_auto"
+  origin_session_id: string | null    // session que invocou via task step
+  pool_id:           string
+  contact_context:   Record<string, unknown>   // inputs do trigger
+  outputs:           Record<string, unknown>   // outputs acumulados (output_as)
+  transitions:       StepTransition[]
+  current_step:      string | null
+  outcome:           string | null
+  created_at:        string
+  suspended_at:      string | null
+  closed_at:         string | null
+  duration_ms:       number | null             // SUM(segment.duration_ms)
+}
+
+interface StepTransition {
+  step_id:           string
+  step_type:         string
+  step_label:        string
+  timestamp:         string
+  reason:            "completed" | "suspended" | "resumed" | "on_failure" | "skipped" | "escalated"
+  next_step:         string | null
+  suspend_reason?:   "approval" | "input" | "webhook" | "timer"
+  resume_decision?:  "approved" | "rejected" | "input" | "timeout"
+  resume_timestamp?: string
+  collect?: {
+    status:          "pending" | "responded" | "expired"
+    channel?:        string
+    send_at?:        string
+    expires_at?:     string
+    responded_at?:   string
+    child_session_id?: string    // link para a sessão-filho via parent_session_id
+  }
+}
+```
+
+`trigger_type` é derivado dos metadados da session — sem campo novo na tabela:
+- `task` step A2A → `trigger_type: task`
+- scheduler → `trigger_type: scheduled`
+- `POST /v1/channels/webhook/{skill_id}` sem `origin_session_id` → `trigger_type: api`
+- request com metadado `webhook_source` → `trigger_type: webhook`
+- `creates_journey: true` no YAML → `trigger_type: yaml_auto`
+
+`duration_ms` para sessions webhook = `SUM(segment.duration_ms)` — exclui tempo suspenso.
+
+### UI — Aba Trace no detalhe de session
+
+Em `Analytics/Sessions`, ao abrir uma session com `channel_type: webhook`, o detalhe exibe uma aba **Trace** além das abas de segmentos e transcript.
+
+A aba Trace contém quatro seções (mesmo design do Arc 18 `ProcessDetailPage`):
+
+```
+┌─ ORIGEM ──────────────────────────────────────────────────┐
+│  trigger_type badge · link para origin_session_id se task  │
+└────────────────────────────────────────────────────────────┘
+┌─ PARÂMETROS ──────────────────────────────────────────────┐
+│  Entrada (contact_context)  │  Saída (outputs acumulados)  │
+└────────────────────────────────────────────────────────────┘
+┌─ EXECUÇÃO ─────────────────────────────────────────────────┐
+│  ProcessStepTimeline — um item por transição               │
+│                                                            │
+│  ◉ verificar_elegibilidade  [task]       ✓ completed        │
+│  ◉ solicitar_operadora      [suspend]    ⏸ suspended        │
+│      Motivo: aprovação · Retomado: ... · Decisão: aprovado  │
+│  ◉ aguardar_confirmacao     [collect]    ✓ completed        │
+│      ┌─ Canal: whatsapp · Status: responded ──────────┐    │
+│      │ Enviado: ...  Respondido: ...                  │    │
+│      │ ↗ Ver sessão de resposta …abc123               │    │
+│      └────────────────────────────────────────────────┘    │
+│  ◉ finalizar               [complete]   ✓ completed        │
+└────────────────────────────────────────────────────────────┘
+```
+
+**Collect cards** mostram `child_session_id` como link navegável para a sessão-filho em `Analytics/Sessions` — rastreabilidade completa entre workflow e contatos gerados.
+
+**Polling**: para sessions `active` ou `suspended`, o hook `useSessionTrace` poleia a cada 5 segundos.
+
+### Novos arquivos
+
+| Componente | Arquivo | Descrição |
+|---|---|---|
+| Backend | `analytics-api/session_trace_consumer.py` | Consome `session_trace_completed`, persiste ClickHouse |
+| Backend | `analytics-api/session_trace_endpoint.py` | `GET /v1/sessions/{id}/trace` |
+| Backend | ClickHouse DDL | `analytics.session_traces` (`session_id`, `skill_id`, `transitions JSON`, `outputs JSON`, `trigger_type`, `closed_at`) |
+| Frontend | `SessionTraceTab.tsx` | Aba Trace no session detail |
+| Frontend | `ProcessStepTimeline.tsx` | Componente de timeline (portado do Arc 18 spec) |
+| Frontend | `hooks.ts` | `useSessionTrace(sessionId, pollMs?)` |
+| i18n | `contacts.json` (en + pt-BR) | Chaves `trace.*` (portadas do Arc 18 spec) |
+
+---
+
+## Monitor — Modelo Final
+
+O Monitor é a superfície **operacional** — informa o estado recente para tomada de decisão imediata. Cobre desde o snapshot de agora até as últimas 24h como contexto. Os dados vêm de fontes mistas: Redis para snapshots, ClickHouse para tendências recentes.
+
+Filtro de período disponível em todas as abas: `now` | `last_hour` | `last_24h` | `today`.
+
+---
+
+### Monitor / Sessions
+
+**Filtros**: `channel_type` (all | webchat | whatsapp | voice | webrtc | webhook) · `period` · `pool`
+
+**Métricas**:
+
+| Métrica | Descrição |
+|---|---|
+| Total | Total de sessões no período |
+| In Progress | Sessões com status `active` |
+| Suspended | Sessões com status `suspended` (snapshot + total no período) |
+| Resolved | Fechadas com `close_reason: flow_complete` (outcome success) |
+| Escalated | Fechadas com `close_reason: agent_transfer` |
+| Failure | Fechadas com `close_reason: system_error` |
+| Timeout | Fechadas com `close_reason: session_timeout` ou `max_wait_exceeded` |
+| Cancelled | Fechadas com `close_reason: customer_abandon` / `customer_hangup` / `customer_disconnect` |
+| TMA | Tempo médio de atendimento — para webhook: `AVG(SUM(segment.duration_ms))` por session |
+
+Sessões `suspended` têm badge visual distinto na lista — representam processos aguardando sinal externo.
+
+Monitor/Processes é eliminada. Workflows aparecem aqui com `channel_type: webhook`.
+
+---
+
+### Monitor / Pools
+
+**Filtros**: `period`
+
+**Por pool**:
+
+**Queue**
+- Sessões em fila agora
+
+**Resources**
+
+| Métrica | Humano/AI | Webhook |
+|---|---|---|
+| Total | Instâncias configuradas | `max_concurrent_sessions` |
+| Available | `agent_ready` | slots livres |
+| Busy | `agent_busy` | instâncias ativas |
+| Paused | Agentes em pausa + motivo | N/A |
+| Máximo no período | Pico de busy no intervalo selecionado | Pico de instâncias ativas |
+
+---
+
+### Monitor / Agents
+
+**Filtros**: `period` · `pools`
+
+Aplica-se a agentes humanos e AI. Skill-flow instances (pools webhook) não aparecem aqui — cobertos pelo Monitor/Pools.
+
+**Por agente**:
+- Status: `active` | `paused` (+ motivo) | `logoff`
+- Login time
+- Pause time
+- TMA
+- Wrap-up time
+
+**Totais no período**:
+- Max Sessions configurado
+- Busy (sessões simultâneas agora)
+- Available
+- Máximo de atendimentos no período
+- Máximo de sessões simultâneas no período
+
+---
+
+### Monitor / Events
+
+**Filtros**: `period` · `pool` · `category` (regex sobre dot-notation)
+
+Eventos de negócio emitidos por agentes via `agent_event` (Arc 12). Nenhum evento interno de plataforma.
+
+**Cards por tipo de evento**:
+- `total` — contador de ocorrências no período
+- `distribution` — `(total de cada valor) / total de eventos` por chave
+- `average` — `(soma dos valores) / total de eventos`
+
+**Formato do evento**:
+```
+category: {pool_id}.{skill_id}.{metric_key}   # filtrável via regex
+  key: nome da dimensão
+    value: valor do evento
+    type:
+      volume      → counter puro
+      distribution → breakdown por valor [key1, key2, ...]
+      average     → valor numérico para média
+```
+
+---
+
+## Analytics — Modelo Final
+
+O Analytics é a superfície **histórica** — análise retrospectiva com período livre, drill-down profundo e dados do ClickHouse. Não tem restrição de janela temporal.
+
+---
+
+### Analytics / Sessions
+
+**Filtros**: `channel_type` · `period` · `pool` · `ANI` · `DNIS` · `agent_id`
+
+- ANI/DNIS para sessions webhook: ANI = `customer_id`, DNIS = `skill_id` (o "DIN" do endpoint)
+
+**Hierarquia**: lista de sessions → lista de segments → detalhe do segment
+
+Analytics/Processes é eliminada. Workflows aparecem aqui com `channel_type: webhook`.
+
+---
+
+### Analytics / Pools
+
+**Filtros**: `period` · `pools`
+
+Análise de capacidade ao longo do tempo com granularidade configurável (hora / dia / mês).
+
+**Queue**: máximo de sessões em fila por intervalo — gráfico + tabela com os pontos
+
+**Resources ao longo do tempo**:
+- Busy máximo por intervalo (gráfico + tabela)
+- Total de recursos logados / capacidade configurada ao longo do tempo
+  - Pools humanos/AI: total logado
+  - Pools webhook: `max_concurrent_sessions` como linha de referência (capacidade)
+- Available ao longo do tempo
+- Busy ao longo do tempo
+
+---
+
+### Analytics / Agents
+
+**Filtros**: `period` · `pools` · `channel`
+
+Aplica-se a agentes humanos e AI. Skill-flow instances referenciadas via pool.
+
+**Por agente — consolidado no período**:
+
+| Métrica | Agregação |
+|---|---|
+| Login time | Total · Máximo · Média |
+| Pause time | Total · Máximo · Média |
+| TMA | Média |
+| Wrap-up time | Total · Máximo · Média |
+| Sessions atendidas | Total |
+| Busy ao longo do tempo | Série temporal |
+| Máximo de atendimentos por intervalo | Série temporal |
+| Sessões simultâneas ao longo do tempo | Série temporal |
+
+**Drill-down**: lista de segments que geraram os dados consolidados
+
+---
+
+### Analytics / Events
+
+**Filtros**: `period` · `pool` · `channel` · `category` (regex sobre dot-notation)
+
+Eventos de negócio do Arc 12. Nenhum evento interno de plataforma.
+
+**Visualização**: dados brutos para construção de gráficos ao longo do tempo, com granularidade configurável.
+
+**Gráficos por tipo**:
+- `total` — série temporal de contagem de eventos
+- `distribution` — série temporal de breakdown por valor
+- `average` — série temporal de média de valor numérico
+
+**Lista de categories** com valores, tipo e histórico.
+
+**Drill-down**: lista de segments onde os eventos foram gerados — ponte Arc 12 → Arc 5 via `analytics.agent_business_events.session_id → analytics.segments.session_id`.
 
 ---
 
@@ -244,6 +592,11 @@ Quando o cliente responde, a sessão-filho fecha e o webhook de `collect` resume
 - Remover páginas separadas Monitor/Processes e Analytics/Processes
 - Adicionar filtro `channel_type` ao Monitor/Sessions e Analytics/Sessions
 - Badge visual para sessões `suspended` no Monitor
+- Monitor/Sessions: métricas Suspended, Failure, Timeout, Cancelled com mapeamento para `close_reason`
+- Monitor/Pools: diferenciação entre pools humanos/AI (logados) e webhook (capacidade configurada)
+- Analytics/Sessions: filtros ANI/DNIS com mapeamento por `channel_type`
+- Analytics/Agents: série temporal + drill-down para segments
+- Monitor/Events e Analytics/Events: visualização Arc 12 com filtro regex de category
 
 ### Fase F — Eliminação Journey + cleanup
 - Remover entidade Journey conforme já especificado
@@ -254,13 +607,19 @@ Quando o cliente responde, a sessão-filho fecha e o webhook de `collect` resume
 
 ## Decisões em Aberto
 
-1. **`session_type`** campo na tabela `sessions`: necessário para filtrar contact vs workflow em queries SQL, ou suficiente filtrar por `channel_type = webhook`? Preferência: `channel_type` é suficiente — evita campo redundante.
+1. **`session_type`** — ~~necessário campo separado?~~ **Fechado**: `channel_type: webhook` é suficiente para filtrar contact vs. workflow em queries SQL. Sem campo redundante.
 
-2. **`parent_session_id`**: deve ficar na tabela `sessions` ou só no ContextStore? Recomendação: tabela, para joins analíticos diretos.
+2. **`parent_session_id`** — **Fechado**: fica na tabela `sessions` (não só no ContextStore) para joins analíticos diretos.
 
-3. **Migração de instâncias ativas**: instâncias de workflow em execução no momento da migração precisam de um bridge — `workflow-api` serve ambos os formatos por um período de transição.
+3. **Migração de instâncias ativas**: instâncias de workflow em execução no momento da migração precisam de um bridge — `workflow-api` serve ambos os formatos por um período de transição. Instâncias ativas no momento da migração continuam no modelo antigo até `complete()` ou timeout.
 
 4. **Capacidade do pool webhook**: `max_concurrent_sessions` controla paralelismo. Skill-flow instances são stateless (estado no Redis), então o limite é de CPU/memória, não de conexões persistentes. Valor default razoável: 100.
+
+5. **Validação de perfil workflow/agent no engine**: a validação dos step types proibidos por perfil pode ocorrer em (a) parse do YAML no deploy, (b) parse no engine ao iniciar execução, ou (c) ambos. Recomendação: ambos — erro de deploy para YAML inválido, guard no engine como safety net.
+
+6. **TMA no Monitor/Sessions para `channel_type` misto**: quando o filtro inclui todos os canais, o TMA precisa usar lógica diferente por tipo — `SUM(segment.duration_ms)` para webhook, `session.ended_at - session.started_at` para contatos. A query de Monitor deve bifurcar por `channel_type` ou usar sempre a lógica de segments (mais consistente).
+
+7. **`collect` sem canal explícito**: o `collect` step passa a usar capabilities negotiation (Arc 16) em vez de especificar `channel` diretamente. Requer que o pool de destino declare `channel_capability_requirements`. Para pools que ainda especificam canal explícito, manter suporte por compatibilidade até remoção do campo.
 
 ---
 

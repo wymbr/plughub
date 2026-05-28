@@ -19,18 +19,15 @@ Spec em [`docs/arcos/arc19-unified-session-model.md`](docs/arcos/arc19-unified-s
 
 ---
 
-## Arc 18 — Workflow Execution Trace
+## Arc 18 — Workflow Execution Trace *(DEPRECATED pelo Arc 19)*
 
-Spec em [`docs/arcos/arc18-workflow-execution-trace.md`](docs/arcos/arc18-workflow-execution-trace.md). Três fases sequenciais:
+A spec original em [`docs/arcos/arc18-workflow-execution-trace.md`](docs/arcos/arc18-workflow-execution-trace.md) está superseded pelo Arc 19.
 
-Navegação hierárquica em páginas dedicadas (não painéis laterais). Spec em [`docs/arcos/arc18-workflow-execution-trace.md`](docs/arcos/arc18-workflow-execution-trace.md).
+**Por que deprecated**: todas as superfícies de Arc 18 dependem de entidades eliminadas pelo Arc 19 — `workflow-api` (deprecado Fase D), `Analytics/Processes` (eliminado, merge em Analytics/Sessions), `Analytics/Journeys` (eliminado com Journey na Fase F), rotas `/analytics/processes/:instanceId` e `/analytics/journeys/:journeyId` (desaparecem).
 
-- **Fase A** — `GET /v1/workflow/instances/{id}/trace` no workflow-api: lê `transitions[]` do JSONB (Redis first para ativas, fallback DB), enriquece com `step_type`/`step_label` do `flow_definition`, junta `collect_instances` (channel, status, session_id). Deriva `trigger_type` da origem — sem migration.
-- **Fase B.1** — `AnalyticsProcessesPage` (lista de instâncias): adicionar colunas `started_at`, `ended_at`, `duration`; clicar na linha navega para `/analytics/processes/:instanceId`.
-- **Fase B.2** — `AnalyticsJourneysPage` (lista de jornadas): idem com `completed_at` e duração; clicar navega para `/analytics/journeys/:journeyId`.
-- **Fase C** — `ProcessDetailPage` (`/analytics/processes/:instanceId`): 4 seções — Origin (trigger_type + links), Parameters (inputs ↔ outputs), `ProcessStepTimeline`, hook `useInstanceTrace`. Reutilizado de ambas as rotas.
-- **Fase D** — `JourneyDetailPage` (`/analytics/journeys/:journeyId`): timeline de eventos da Journey + lista de processos enriquecida com link para `ProcessDetailPage`.
-- **Fase E** *(deferred)* — Analytics por step: `workflow_step_events` ClickHouse + consumer Kafka + heatmap na SummaryTab.
+**O que sobrevive do conceito**: step-level trace ainda tem valor. No modelo Arc 19 passa a ser uma aba "Trace" no detalhe de session em `Analytics/Sessions` para sessions com `channel_type: webhook`. Fonte de dados: Redis `pipeline_state.transitions[]` (sessões ativas/suspensas) com fallback para stream persistido (sessões fechadas). Implementar como parte da **Arc 19 Fase E**.
+
+**Fase E deferred** (ClickHouse step analytics — `workflow_step_events` table + heatmap) ainda é válida conceitualmente, mas a implementação muda: eventos de step de sessions webhook, não de workflow_instances.
 
 ---
 

@@ -803,21 +803,13 @@ Introduces `JourneyType` as a per-tenant governance entity: `journey_type_id` (s
 
 ---
 
-## Arc 18 — Workflow Execution Trace
+## Arc 18 — Workflow Execution Trace *(deprecated pelo Arc 19)*
 
-Completes the Analytics/Journey and Analytics/Process drill-down by exposing step-level execution visibility. No new infrastructure: all data already exists in `pipeline_state.transitions` (JSONB in `workflow.instances`) and `workflow.collect_instances`.
+Spec original superseded pelo Arc 19. Todas as superfícies dependiam de entidades eliminadas: `workflow-api` (deprecado), `Analytics/Processes` e `Analytics/Journeys` (eliminados), rotas `/analytics/processes/:instanceId` e `/analytics/journeys/:journeyId` (desaparecem).
 
-Uses **hierarchical page navigation** (not side panels): each level is a full dedicated page with its own route. Enriched list columns: `started_at`, `ended_at`, `duration_ms` added to both process and journey lists.
+**Conceito que sobrevive**: step-level trace (`ProcessStepTimeline`) reaproveitado como aba "Trace" no detalhe de session em Analytics/Sessions para `channel_type: webhook`. Fonte: Redis `pipeline_state.transitions[]` (ativas/suspensas), stream persistido (fechadas). Implementar como parte da Arc 19 Fase E.
 
-**New endpoint** `GET /v1/workflow/instances/{id}/trace` in workflow-api: reads `transitions[]` from JSONB (Redis first for active/suspended, DB fallback), enriches with `step_type`/`step_label` from `flow_definition`, merges `collect_instances` (channel, status, responded_at, session_id). Derives `trigger_type` (`session`|`webhook`|`yaml_auto`|`api`) from origin fields — no new DB column.
-
-**`ProcessDetailPage`** (`/analytics/processes/:instanceId`): 4 sections — Origin (trigger_type + links), Parameters (inputs ↔ outputs), `ProcessStepTimeline` (vertical step trace with suspend/resume detail and collect→session links). Reused from both Processes list and Journey drill-down.
-
-**`JourneyDetailPage`** (`/analytics/journeys/:journeyId`): journey event timeline + enriched process list; clicking a process row navigates to `ProcessDetailPage` with journey breadcrumb context.
-
-**New hook** `useInstanceTrace(instanceId, pollMs?)` in `hooks.ts`. **Fase E** (deferred): `workflow_step_events` ClickHouse table + aggregate analytics by step (failure heatmap, avg time per step).
-
-→ See [`docs/arcos/arc18-workflow-execution-trace.md`](docs/arcos/arc18-workflow-execution-trace.md)
+→ See [`docs/arcos/arc18-workflow-execution-trace.md`](docs/arcos/arc18-workflow-execution-trace.md) (spec original, para referência histórica)
 
 ---
 
@@ -825,15 +817,19 @@ Uses **hierarchical page navigation** (not side panels): each level is a full de
 
 Elimina a dualidade contact/workflow tratando workflows como canal `webhook` na channel-gateway. Cada skill registrada num pool webhook é um "endpoint" (análogo a DIN de voz ou número WA). O trigger cria uma sessão normal, o routing engine aloca instância skill-flow do pool, e o `session_id` é o identificador persistente por toda a execução — incluindo múltiplos ciclos de suspend/resume.
 
-**Status `suspended`** adicionado ao domain de sessão. No `suspend()`, o agente fecha o segmento e devolve ao pool (`agent_ready`); a sessão persiste com TTL estendido. No resume, nova alocação normal → novo segmento. **Resume_token lookup** via hash Redis `{tenant}:resume_tokens → session_id`.
+**Status `suspended`** adicionado ao domain de sessão. No `suspend()`, o agente fecha o segmento e devolve ao pool (`agent_ready`); a sessão persiste com TTL estendido no Redis (EXPIRE calibrado ao `timeout_hours` — substitui PostgreSQL para durabilidade). No resume, nova alocação normal → novo segmento. **Resume_token lookup** via hash Redis `{tenant}:resume_tokens → session_id`.
+
+**Segregação workflow vs. agente**: perfil `workflow` (channel_type: webhook) permite steps `task/choice/catch/escalate/complete/invoke/reason/suspend/collect/receive` — proibidos `menu/notify/begin_transaction/end_transaction`. Perfil `agent` (demais channels) permite `menu/notify/begin_transaction/end_transaction` — proibidos `suspend/collect`. Validado em parse do YAML + guard no engine.
+
+**Collect step revisado**: exclusivo de workflows. Cria sessão-filho de contato com channel negociado por capabilities (Arc 16). Workflow suspende; agente channel-aware atende a sessão-filho e retorna resultado. Workflow nunca conhece o canal usado.
 
 **WebhookAdapter** em `channel-gateway/adapters/webhook.py`: `POST /v1/channels/webhook/{skill_id}` (trigger), `POST /v1/channels/webhook/resume/{token}` (resume), `GET /v1/channels/webhook/{session_id}/status`. **Pool webhook**: `channel_types: [webhook]` + `skill_id` como endpoint.
 
-**O que é eliminado**: `workflow-api` lifecycle endpoints, `WorkflowInstance` entidade separada, `skill-flow-worker` Kafka consumer, `workflow.events` topic, entidade Journey (Fase F), Monitor/Processes e Analytics/Processes páginas separadas. **O que é unificado**: Monitor/Sessions com filtro `channel_type`, Analytics/Sessions, ContextStore `{tenant}:ctx:{session_id}` universal, `analytics.segments` sem alteração.
+**O que é eliminado**: `workflow-api` lifecycle endpoints, `WorkflowInstance` entidade separada, `skill-flow-worker` Kafka consumer, `workflow.events` topic, entidade Journey (Fase F), Monitor/Processes e Analytics/Processes páginas separadas.
 
-**Collect step**: sessão filho com `parent_session_id → workflow_session_id`. Resume via webhook adapter quando cliente responde.
+**Monitor unificado** (4 abas — período: now/last_hour/last_24h/today): Sessions (channel_type filter, badge suspended, métricas Resolved/Escalated/Failure/Timeout/Cancelled/TMA), Pools (snapshot + tendência; webhook pools mostram capacidade configurada), Agents (humanos/AI; skill-flow instances via Pools), Events (Arc 12 business events, filtro regex de category). **Analytics unificado** (4 abas): Sessions (ANI/DNIS por channel_type; hierarquia sessions→segments→detalhe), Pools (time-series capacity), Agents (consolidado + drill-down segments), Events (time-series Arc 12 + drill-down segments). TMA webhook = `SUM(segment.duration_ms)`, não wall-clock.
 
-**6 fases**: A (WebhookAdapter + channel type), B (status suspended + TTL), C (orchestrator-bridge: skill-flow como agente nativo), D (workflow-api deprecation), E (Monitor/Analytics unificados), F (Journey + cleanup).
+**6 fases**: A (WebhookAdapter + channel type), B (status suspended + TTL Redis), C (orchestrator-bridge: skill-flow como agente nativo), D (workflow-api deprecation), E (Monitor/Analytics unificados), F (Journey + cleanup).
 
 → See [`docs/arcos/arc19-unified-session-model.md`](docs/arcos/arc19-unified-session-model.md)
 
