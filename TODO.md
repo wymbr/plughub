@@ -8,14 +8,14 @@
 
 Spec em [`docs/arcos/arc19-unified-session-model.md`](docs/arcos/arc19-unified-session-model.md). Elimina a dualidade contact/workflow tratando workflows como canal `webhook` na channel-gateway.
 
-- **Fase A** — WebhookAdapter (`channel-gateway/adapters/webhook.py`): endpoints trigger/resume/status + `channel_type: webhook` no schema + routing engine reconhece pools webhook
-- **Fase B** — Status `suspended` no domain de sessão + TTL extension no executor suspend() + hash Redis `resume_tokens`
-- **Fase C** — orchestrator-bridge: skill-flow como agente nativo de pool webhook; eliminar `skill-flow-worker`
-- **Fase D** — workflow-api deprecation: redirect `/v1/workflow/trigger` → webhook adapter; manter `/v1/workflow/instances` read-only
-- **Fase E** — Monitor e Analytics unificados: filtro `channel_type` substitui páginas separadas; badge para sessões `suspended`
-- **Fase F** — Eliminação Journey (Arc 10/16/17 → CHANGELOG) + remoção `workflow.events` topic + cleanup `skill-flow-worker` package
+- **Fase A** ✅ — WebhookAdapter + `channel_type: webhook` + routing engine (2026-05-28)
+- **Fase B** ✅ — Status `suspended` + TTL extension + hash Redis `resume_tokens` + stream events (2026-05-28)
+- **Fase C** ✅ — orchestrator-bridge: `persistSuspendWebhook` wired in skill-flow-service; `_handle_webhook_session_resumed`; `process_inbound` http param (2026-05-28)
+- **Fase D** ✅ — workflow-api: proxy trigger/resume → channel-gateway; 410 Gone para persist-suspend/complete/fail/cancel/collect; `business_hours` + `calendar_id` em `persistSuspendWebhook` (2026-05-28)
+- **Fase E** ✅ — Monitor e Analytics unificados: filtro `channel_type`/`webhook` badge/`suspended` badge; Events tab (Arc 12); status filter analytics end-to-end (2026-05-28)
+- **Fase F** ✅ — Eliminação Journey (Arc 10/16/17 → CHANGELOG); platform-ui limpa; Arcs 10/16/17 retired (2026-05-28)
 
-**Pré-requisito**: não implementar até a eliminação do Journey (Fase F) estar pronta para execução.
+**Arc 19 completo.** Cleanup residual (infra): remover `workflow.events` topic do Kafka e arquivar o package `skill-flow-worker`.
 
 ---
 
@@ -28,18 +28,6 @@ A spec original em [`docs/arcos/arc18-workflow-execution-trace.md`](docs/arcos/a
 **O que sobrevive do conceito**: step-level trace ainda tem valor. No modelo Arc 19 passa a ser uma aba "Trace" no detalhe de session em `Analytics/Sessions` para sessions com `channel_type: webhook`. Fonte de dados: Redis `pipeline_state.transitions[]` (sessões ativas/suspensas) com fallback para stream persistido (sessões fechadas). Implementar como parte da **Arc 19 Fase E**.
 
 **Fase E deferred** (ClickHouse step analytics — `workflow_step_events` table + heatmap) ainda é válida conceitualmente, mas a implementação muda: eventos de step de sessions webhook, não de workflow_instances.
-
----
-
-## Arc 17 — JourneyType Governance *(COMPLETO)*
-
-Todas as tarefas #298–#301 implementadas. Ver CHANGELOG e [`docs/arcos/arc17-journey-types.md`](docs/arcos/arc17-journey-types.md).
-
----
-
-## Arc 16 — Three-Tier Business Process Orchestration *(COMPLETO)*
-
-Todas as fases A–E implementadas. Ver CHANGELOG e [`docs/arcos/arc16-flow-orchestration.md`](docs/arcos/arc16-flow-orchestration.md).
 
 ---
 

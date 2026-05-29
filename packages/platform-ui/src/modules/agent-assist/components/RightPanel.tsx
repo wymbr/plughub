@@ -14,7 +14,6 @@ import {
   ActiveTab,
   ChatMessage,
   MentionableAgent,
-  MentionableProcess,
   SupervisorState,
 } from "../types";
 import { AcoesTab }    from "./tabs/AcoesTab";
@@ -36,8 +35,6 @@ interface RightPanelProps {
   onToggleSubstitutionMode: () => void;
   mentionableAgents:        MentionableAgent[];
   onAddSpecialist:          (alias: string, instruction: string, visibility: "all" | "agents_only") => void;
-  mentionableProcesses:     MentionableProcess[];
-  onStartProcess:           (skillId: string, params: Record<string, string>, visibility: "all" | "agents_only") => void;
   sessionClosed:            boolean;
   onTerminateSegment?:      (instanceId: string) => void;
 }
@@ -54,8 +51,6 @@ export const RightPanel: React.FC<RightPanelProps> = ({
   onToggleSubstitutionMode,
   mentionableAgents,
   onAddSpecialist,
-  mentionableProcesses,
-  onStartProcess,
   sessionClosed,
   onTerminateSegment,
 }) => {
@@ -89,8 +84,6 @@ export const RightPanel: React.FC<RightPanelProps> = ({
             onToggleSubstitutionMode={onToggleSubstitutionMode}
             mentionableAgents={mentionableAgents}
             onAddSpecialist={onAddSpecialist}
-            mentionableProcesses={mentionableProcesses}
-            onStartProcess={onStartProcess}
             sessionClosed={sessionClosed}
             hasContact={!!sessionId}
           />

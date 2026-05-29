@@ -364,7 +364,6 @@ Consumes: `conversations.routed`, `conversations.queued`, `conversations.abandon
 | `evaluation.events` | evaluation-api | analytics-api → ClickHouse |
 | `workflow.events` | workflow-api | skill-flow-worker |
 | `collect.events` | workflow-api | analytics-api |
-| `journey.events` | workflow-api | analytics-api → ClickHouse |
 | `usage.events` | Core, AI Gateway, Channel Gateway | usage-aggregator |
 | `events.dead_letter` | skill-flow-worker, analytics-api, orchestrator-bridge | ops/monitoring |
 
@@ -383,7 +382,6 @@ All cross-package Kafka events have Zod schemas in `@plughub/schemas`:
 | `agent.lifecycle` | `AgentLifecycleEventSchema` | `platform-events.ts` |
 | `workflow.events` | `WorkflowEventSchema` | `workflow.ts` |
 | `collect.events` | `CollectEventSchema` | `workflow.ts` |
-| `journey.events` | `JourneyEventSchema` | `journey.ts` |
 | `usage.events` | `UsageEventSchema` | `usage.ts` |
 | `conversations.participants` | `ConversationParticipantEventSchema` | `contact-segment.ts` |
 | `mcp.audit` | `AuditRecordSchema` | `audit.ts` |
@@ -657,24 +655,6 @@ Nav groups (navKey): Home 🏠, Console 🖥️ (contacts.operacao), Monitor �
 
 ---
 
-## Arc 10 — Journey: Multi-Session Service Automation
-
-Journey é a unidade de serviço que transcende a sessão — agrupa todos os contatos (`session_id[]`) de um mesmo processo de atendimento. Nível acima de Session na hierarquia de observabilidade: Journey → Session → Segment (drill-down aditivo, sem quebrar modelo existente).
-
-**Entidade Journey**: `journey_id` (UUID, separado de `workflow_instance_id`), `tenant_id`, `skill_id`, `workflow_instance_id` (nullable FK), `customer_id`, `origin_session_id`, `status` (`active|suspended|completed|failed|cancelled`), `metadata`. Sessions ganham campo `journey_id` nullable — sessões standalone não mudam.
-
-**Formas de iniciar**: (1) MCP tool `journey_start(skill_id, session_id, metadata?)` — chamada por AI agent ou humano; (2) `@mention` `@journey:<skill_id>` por agente primário — pool config `mentionable_journeys`; (3) flag `creates_journey: true` na skill YAML — automático no primeiro step; (4) botão "Iniciar Processo" no ActionBar do Console (chama a mesma MCP tool). Toda criação passa pelo McpInterceptor (auditoria).
-
-**Vinculação de sessões subsequentes**: sessões criadas por `collect` step recebem `journey_id` via Kafka `collect.events`. Recontatos manuais via `journey_link_session(journey_id, session_id)`. Correlação automática de recontatos espontâneos é fase posterior.
-
-**Fases A–E implementadas**: `workflow-api` `/v1/journeys` (6 endpoints, inclui `POST /from-instance/{id}`) + MCP tools `journey_start`/`journey_link_session`/`journey_merge` + `analytics-api` consumer `journey.events` → `journey_events` ClickHouse. Phase B: `creates_journey:true` no YAML + skill-flow-worker auto-cria Journey; `collect` step propaga `journey_id`; `respond_collect` emite `journey_session_linked` quando sessão filha chega. Phase C: `GET /reports/journeys` (argMax aggregation, KPI strip por skill_id) + `ProcessosPage` com tabs Jornadas/Instâncias + hooks `useJourneys`/`useJourney`. Phase D: `HistoricoTab` seção "Processos em aberto" por `customer_id`; `ActionBar` botão "Iniciar Processo" dropdown filtrado por `pool.mentionable_journeys`; `MergeButton` no painel de detalhe de jornadas. Phase D.5: `journey_session_linked` enriquecido com `current_step`/`session_outcome`/`session_started_at`/`session_ended_at`; regra de interseção — `sessions.journey_id` apenas em collect sessions, nunca na origin; múltiplas journeys podem compartilhar `origin_session_id`. Phase E: 4 display endpoints no `display.py` + 4 entradas em `catalog.ts` — `journey-active-count` (metric_card), `journey-resolution-rate` (bar_chart), `journey-funnel` (donut), `journey-median-duration` (bar_chart); queries `argMax(status, event_time)` sobre `journey_events FINAL`.
-
-**Kafka**: `journey.events` — 9 tipos: `journey_started`, `journey_session_linked`, `journey_suspended`, `journey_resumed`, `journey_completed`, `journey_failed`, `journey_cancelled`, `journey_merged`, `journey_split`. **Fase F (split — especificada)**: `journey_split` tool extrai sessões collect para nova journey; `split_from_journey_id` (nullable UUID) no modelo rastreia proveniência; `origin_session_id` da journey origem é protegido (nunca movido, retorna 400 se incluído no split).
-
-→ See [`docs/arcos/arc10-journey.md`](docs/arcos/arc10-journey.md)
-
----
-
 ## Arc 11 — Console: Superfície de Orquestração Humana
 
 Eleva o Console de interface de atendimento para **superfície de orquestração** — operador humano dirige, delega e monitora agentes AI como coparticipantes de primeira classe. Visão: AI e humanos são simétricos no modelo de sessão; o Console deve refletir isso na UI.
@@ -711,7 +691,7 @@ Transforma o módulo de avaliação de "relatório de conformidade" em **ferrame
 
 ## Arc 12 — Agent Business Events
 
-MCP tool `agent_event(category, value, tags?)` para agentes (AI e humanos) publicarem KPIs de negócio estruturados durante sessões. Categoria hierárquica em dot notation: `pool_id.skill_id.metric_key`. Contexto de sessão (`tenant_id`, `agent_type_id`, `skill_id`, `pool_id`, `journey_id`) resolvido automaticamente do `session_token` — o agente só passa `category`, `value` e `tags`.
+MCP tool `agent_event(category, value, tags?)` para agentes (AI e humanos) publicarem KPIs de negócio estruturados durante sessões. Categoria hierárquica em dot notation: `pool_id.skill_id.metric_key`. Contexto de sessão (`tenant_id`, `agent_type_id`, `skill_id`, `pool_id`) resolvido automaticamente do `session_token` — o agente só passa `category`, `value` e `tags`.
 
 **Restrições de governança**: primeiro segmento do `category` deve ser o `pool_id` da sessão (namespace isolation); tags com PII keywords bloqueadas (`cpf`, `phone`, `email`, `token`, etc.); máx 10 tags, 64 chars por chave/valor; rate limit de 50 eventos por sessão (configurável). Passa pelo `McpInterceptor` — auditado em `mcp.audit`.
 
@@ -773,36 +753,6 @@ Seis fases: A (infra + signaling), B (media negotiation + agent schema), C (STT/
 
 ---
 
-## Arc 16 — Three-Tier Business Process Orchestration
-
-Formaliza o modelo de orquestração em três camadas: **Tier 1 — Business Workflow** (processo de negócio longa duração, channel-agnostic, Journey-scoped); **Tier 2 — Execution Workflow** (Skill Flow de escopo de sessão, sequencia agentes); **Tier 3 — Interaction Agent** (I/O atômico, uma tarefa, reutilizável). Tier 1 delega via `task`/`collect + skill` para Tier 2; Tier 2 usa `task` para invocar Tier 3. Tier 1 nunca conhece o canal; Tier 3 nunca conhece o processo.
-
-**Journey ContextStore namespace** (`@ctx.journey.*`): novo Redis hash `{tenantId}:ctx:journey:{journeyId}` compartilhado entre todas as sessões da Journey. Resolve o problema de dados coletados em sessões `collect` serem invisíveis para o Business Workflow. `context_tags.outputs` com prefixo `journey.*` redireciona escrita para o hash journey. TTL 30 dias, removido no fechamento da Journey.
-
-**Channel Capability Negotiation**: step `collect` passa a aceitar `requires: [file_upload | audio | video | text | masked_input | rich_menu]` em vez de `channel` explícito. Channel Gateway seleciona canal outbound baseado em `journey.available_channels` + `journey.canal_preferido` + matriz de capacidades por canal. Channel Gateway escreve `journey.available_channels` na primeira mensagem de cada canal.
-
-**Journey como superfície pública**: `GET /v1/journeys?pool_id=...&status=suspended` + `POST /v1/journeys/{id}/resume` encapsulam `resume_token` interno. `pool_id` persistido na Journey na criação. Dois novos MCP tools: `journey_list_suspended` + `journey_resume` (auditados via McpInterceptor). Viabiliza padrão de poller workflow: Tier 1 que monitora e retoma Journeys de outros processos.
-
-**notify como step type**: depreciado — substituído por `invoke: notification_send`. Sub-campo `notify` em `suspend` preservado por atomicidade. **Inbound Journey Resume** (Fase E): Channel Gateway verifica Journey ativa por `customer_id` no inbound sem sessão — implementa Journey como "Pending Delivery" oferecido em todos os canais.
-
-→ See [`docs/arcos/arc16-flow-orchestration.md`](docs/arcos/arc16-flow-orchestration.md)
-
----
-
-## Arc 17 — JourneyType Governance
-
-Introduces `JourneyType` as a per-tenant governance entity: `journey_type_id` (slug), `description`, `sla_ms`. Pools declare `authorized_journey_types[]` — only listed types may be created by journeys initiated from that pool.
-
-**agent-registry**: Prisma table `journey_types` + CRUD REST `/v1/journey-types` (admin-token protected). `authorized_journey_types: String[]` column on Pool, propagated via `PoolRegistrationSchema`.
-
-**platform-ui — Config/Resources**: "Journey Types" tab with inline CRUD (key, description, SLA, edit/delete). Pool form: `authorized_journey_types` multi-select checkbox list. `Journey.journey_type_id` + `Journey.pool_id` fields added to `hooks.ts`. `useJourneys` extended with `journeyTypeId` + `poolId` params (5th and 6th arguments). ProcessosPage JourneysTab: L1 journey-type chip row (toggle filter), pool dropdown, purple `journey_type_id` badge on list rows and detail panel.
-
-**All backend tasks complete** (#298–302): routing-engine writes `session.authorized_journey_types` to ContextStore; mcp-server validates `journey_start` against authorized list (JOURNEY_TYPE_NOT_AUTHORIZED error); workflow-api has `journey_type_id` FK on journeys table; skill YAML enforces `journey_type_id` when `creates_journey: true` via 3-layer validator; analytics-api `/reports/journeys` accepts `journey_type_id` + `pool_id` query params.
-
-→ See [`docs/arcos/arc17-journey-types.md`](docs/arcos/arc17-journey-types.md)
-
----
-
 ## Arc 18 — Workflow Execution Trace *(deprecated pelo Arc 19)*
 
 Spec original superseded pelo Arc 19. Todas as superfícies dependiam de entidades eliminadas: `workflow-api` (deprecado), `Analytics/Processes` e `Analytics/Journeys` (eliminados), rotas `/analytics/processes/:instanceId` e `/analytics/journeys/:journeyId` (desaparecem).
@@ -825,36 +775,17 @@ Elimina a dualidade contact/workflow tratando workflows como canal `webhook` na 
 
 **WebhookAdapter** em `channel-gateway/adapters/webhook.py`: `POST /v1/channels/webhook/{skill_id}` (trigger), `POST /v1/channels/webhook/resume/{token}` (resume), `GET /v1/channels/webhook/{session_id}/status`. **Pool webhook**: `channel_types: [webhook]` + `skill_id` como endpoint.
 
-**O que é eliminado**: `workflow-api` lifecycle endpoints, `WorkflowInstance` entidade separada, `skill-flow-worker` Kafka consumer, `workflow.events` topic, entidade Journey (Fase F), Monitor/Processes e Analytics/Processes páginas separadas.
+**O que é eliminado**: `workflow-api` lifecycle endpoints, `WorkflowInstance` entidade separada, `skill-flow-worker` Kafka consumer, `workflow.events` topic, entidade Journey ✅ (Fase F concluída 2026-05-28), Monitor/Processes e Analytics/Processes páginas separadas.
 
 **Monitor unificado** (4 abas — período: now/last_hour/last_24h/today): Sessions (channel_type filter, badge suspended, métricas Resolved/Escalated/Failure/Timeout/Cancelled/TMA), Pools (snapshot + tendência; webhook pools mostram capacidade configurada), Agents (humanos/AI; skill-flow instances via Pools), Events (Arc 12 business events, filtro regex de category). **Analytics unificado** (4 abas): Sessions (ANI/DNIS por channel_type; hierarquia sessions→segments→detalhe), Pools (time-series capacity), Agents (consolidado + drill-down segments), Events (time-series Arc 12 + drill-down segments). TMA webhook = `SUM(segment.duration_ms)`, não wall-clock.
 
-**6 fases**: A (WebhookAdapter + channel type), B (status suspended + TTL Redis), C (orchestrator-bridge: skill-flow como agente nativo), D (workflow-api deprecation), E (Monitor/Analytics unificados), F (Journey + cleanup).
+**6 fases**: A ✅ (WebhookAdapter + channel type), B ✅ (status suspended + TTL Redis), C ✅ (orchestrator-bridge: skill-flow como agente nativo), D ✅ (workflow-api deprecation), E ✅ (Monitor/Analytics unificados), F ✅ (Journey entity elimination — 2026-05-28). **Arc 19 completo.**
 
 → See [`docs/arcos/arc19-unified-session-model.md`](docs/arcos/arc19-unified-session-model.md)
 
 ---
 
 ## Pending (Next Iteration)
-
-### Journey — Eliminação planejada (Arc 19 Fase F)
-
-Decisão arquitetural: **Journey será eliminado** quando o momento for oportuno. A razão é que "Journey" é conceitualmente apenas um Workflow de nível Tier 1 que invoca outros workflows via step `task`. A entidade separada não se justifica — o modelo de pool já é o ponto de controle correto para quais agentes podem fazer o quê. Não há restrições adicionais necessárias além do cadastro em pool.
-
-O que será removido: tabelas `journeys` e `journey_types`; endpoints `/v1/journeys` e `/v1/journey-types`; campos `journey_id`/`journey_type_id`/`authorized_journey_types`/`mentionable_journeys` nos modelos; MCP tools `journey_*`; Config UI Journey Types + campos de pool; Monitor/Analytics pages de Journey; Arcos 10, 16, 17 migram para CHANGELOG.
-
-O que sobrevive: nenhuma entidade de substituição. O step `task` no trace da instância já registra qual skill foi invocada, com qual outcome e timestamp — rastreabilidade suficiente sem FK entre instâncias. Business Workflow (Tier 1) = WorkflowInstance comum que usa step `task` para invocar Tier 2; a hierarquia é visível no trace, não no modelo de dados.
-
-**Regra até a eliminação**: não investir em novas features na entidade Journey. Manter o que existe funcionando, mas não expandir.
-
-### Modelo Unificado de Contexto — session_id para tudo (Arc 19)
-
-**Direção arquitetural definitiva implementada pelo Arc 19**: `session_id` universal via canal `webhook`. Workflow = sessão com `channel_type: webhook`. Status `suspended` no domain de sessão. ContextStore `{tenant}:ctx:{session_id}` unificado. `analytics.segments` cobre tudo sem alteração. Ver Arc 19 acima e [`docs/arcos/arc19-unified-session-model.md`](docs/arcos/arc19-unified-session-model.md).
-
-**Não implementar até Arc 19 Fase F (eliminação Journey) estar completa.**
-
-### Arc 17 — JourneyType Governance ✅ (todas as tarefas #295–#302 implementadas)
-Ver [`docs/arcos/arc17-journey-types.md`](docs/arcos/arc17-journey-types.md) e CHANGELOG 2026-05-26.
 
 ### Arc 15 — WebRTC ✅ (todas as fases implementadas)
 Ver [`docs/arcos/arc15-webrtc.md`](docs/arcos/arc15-webrtc.md) para detalhe das 6 fases (A–F).

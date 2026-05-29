@@ -1,20 +1,14 @@
 /**
  * AcoesTab — console-acoes-tab spec (Arc 11 refactor)
  *
- * Replaces AgentesTab as the single orchestration surface in the right panel.
- * Three vertical sections:
+ * Two vertical sections:
  *
  *   Seção A — Ativos na Sessão
- *     Human agent card + AI participant cards (unchanged from AgentesTab).
+ *     Human agent card + AI participant cards.
  *
- *   Toggle — Agentes | Processos
- *     Switches between the list of mentionable agents and the list of
- *     mentionable processes (skills). Processes mode is wired in Phase C.
- *
- *   Seção B — Lista dinâmica
- *     Agentes mode: AcaoItemRow × N — each row unifies invite + delegate
- *       into a single "Acionar" button with an inline YAML-driven form.
- *     Processos mode: ProcessItemRow × M — Phase C stub (empty placeholder).
+ *   Seção B — Agentes disponíveis (AcaoItemRow × N)
+ *     Each row unifies invite + delegate into a single "Acionar" button
+ *     with an inline YAML-driven form.
  *
  * Key behaviours of AcaoItemRow:
  *   • Expands an inline form when the operator clicks "Acionar".
@@ -23,18 +17,19 @@
  *   • delegation_visibility from YAML → locks and hides the visibility radio.
  *   • Ctrl+Enter confirms the open form.
  *   • State machine: available → expanded → pending → active → done (re-invoke).
+ *
+ * Note: Processos/Journey mode removed in Arc 19 Fase F.
  */
 
 import React, { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { User, Bot, Cpu } from "lucide-react";
+import { User, Bot } from "lucide-react";
 import {
   AiParticipantInfo,
   ChatMessage,
   DelegationField,
   DelegationSchema,
   MentionableAgent,
-  MentionableProcess,
   SupervisorState,
 } from "../../types";
 import { AiParticipantCard }   from "../AiParticipantCard";
@@ -304,143 +299,6 @@ const AcaoItemRow: React.FC<AcaoItemRowProps> = ({
   );
 };
 
-// ── ProcessItemRow ────────────────────────────────────────────────────────────
-// Renders one mentionable process with an inline expand form.
-// delegation_params are already available in the MentionableProcess object —
-// no extra API fetch is required (unlike agents where schema is lazy-loaded).
-
-interface ProcessItemRowProps {
-  proc:      MentionableProcess;
-  disabled:  boolean;
-  onStart:   (skillId: string, params: Record<string, string>, visibility: "all" | "agents_only") => void;
-}
-
-const ProcessItemRow: React.FC<ProcessItemRowProps> = ({ proc, disabled, onStart }) => {
-  const { t } = useTranslation('agentAssist');
-  const schema    = proc.delegation_params;
-  const hasFields = (schema?.fields.length ?? 0) > 0;
-
-  const [expanded,    setExpanded]    = useState(false);
-  const [fieldValues, setFieldValues] = useState<Record<string, string>>({});
-
-  // Reset field values when schema fields change
-  useEffect(() => {
-    if (schema) {
-      const init: Record<string, string> = {};
-      schema.fields.forEach(f => { init[f.id] = ""; });
-      setFieldValues(init);
-    }
-  }, [schema]);
-
-  function isFormValid(): boolean {
-    if (!schema) return true;
-    return !schema.fields.some(f => f.required && !(fieldValues[f.id] ?? "").trim());
-  }
-
-  function handleConfirm() {
-    if (!isFormValid()) return;
-    const params: Record<string, string> = {};
-    schema?.fields.forEach(f => { if ((fieldValues[f.id] ?? "").trim()) params[f.id] = fieldValues[f.id].trim(); });
-    onStart(proc.skill_id, params, proc.delegation_visibility ?? "agents_only");
-    setExpanded(false);
-    setFieldValues({});
-  }
-
-  function handleClickStart() {
-    if (disabled) return;
-    if (hasFields) {
-      setExpanded(v => !v);
-    } else {
-      onStart(proc.skill_id, {}, proc.delegation_visibility ?? "agents_only");
-    }
-  }
-
-  return (
-    <div className="rounded-lg border border-border bg-white overflow-hidden">
-      {/* Main row */}
-      <div className="flex items-center gap-2 p-2.5">
-        <Cpu className="w-4 h-4 text-primary flex-shrink-0" aria-hidden="true" />
-        <div className="flex-1 min-w-0">
-          <div className="text-xs font-semibold text-dark truncate">{proc.label}</div>
-          {proc.description && (
-            <div className="text-2xs text-muted leading-snug mt-0.5 truncate">{proc.description}</div>
-          )}
-          <div className="text-2xs text-muted-light font-mono">{proc.skill_id}</div>
-        </div>
-        <button
-          onClick={handleClickStart}
-          disabled={disabled}
-          className={[
-            "px-2 py-0.5 rounded border text-2xs font-medium flex-shrink-0 transition-colors",
-            expanded
-              ? "text-muted bg-surface-muted border-border hover:bg-surface-alt"
-              : "text-primary bg-primary-light border-primary/30 hover:bg-primary/10",
-            disabled ? "opacity-40 cursor-not-allowed" : "",
-          ].join(" ")}
-        >
-          {expanded ? t('acoes.cancel') : t('acoes.start')}
-        </button>
-      </div>
-
-      {/* Inline form — visible when expanded and process has fields */}
-      {expanded && hasFields && schema && (
-        <div
-          className="px-2.5 pb-2.5 border-t border-border bg-surface-muted"
-          onKeyDown={e => {
-            if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) handleConfirm();
-            if (e.key === "Escape") { setExpanded(false); setFieldValues({}); }
-          }}
-        >
-          {/* Typed YAML fields */}
-          <div className="flex flex-col gap-2 mt-2">
-            {schema.fields.map(field => (
-              <div key={field.id}>
-                <label className="block text-2xs font-semibold text-muted mb-0.5">
-                  {field.label}
-                  {field.required && <span className="ml-1 text-red">*</span>}
-                </label>
-                {field.type === "select" ? (
-                  <FieldSelect
-                    field={field}
-                    value={fieldValues[field.id] ?? ""}
-                    onChange={v => setFieldValues(prev => ({ ...prev, [field.id]: v }))}
-                  />
-                ) : (
-                  <FieldText
-                    field={field}
-                    value={fieldValues[field.id] ?? ""}
-                    onChange={v => setFieldValues(prev => ({ ...prev, [field.id]: v }))}
-                  />
-                )}
-              </div>
-            ))}
-          </div>
-
-          {/* Confirm / Cancel */}
-          <div className="flex gap-1.5 mt-2">
-            <button
-              onClick={handleConfirm}
-              disabled={!isFormValid()}
-              className="flex-1 py-1 text-2xs font-semibold text-white
-                bg-primary hover:bg-primary-dark rounded transition-colors
-                disabled:opacity-40 disabled:cursor-not-allowed"
-            >
-              {t('acoes.start')}
-            </button>
-            <button
-              onClick={() => { setExpanded(false); setFieldValues({}); }}
-              className="px-2 py-1 text-2xs text-muted border border-border
-                rounded hover:bg-surface-alt transition-colors"
-            >
-              {t('acoes.cancel')}
-            </button>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-};
-
 // ── HumanAgentCard (unchanged from AgentesTab) ────────────────────────────────
 
 interface HumanAgentCardProps {
@@ -538,9 +396,6 @@ export interface AcoesTabProps {
   // Seção B — Agentes
   mentionableAgents:        MentionableAgent[];
   onAddSpecialist:          (alias: string, instruction: string, visibility: "all" | "agents_only") => void;
-  // Seção B — Processos (Phase C — required but may be empty)
-  mentionableProcesses:     MentionableProcess[];
-  onStartProcess:           (skillId: string, params: Record<string, string>, visibility: "all" | "agents_only") => void;
   // Session state
   sessionClosed:            boolean;
   hasContact:               boolean;
@@ -557,13 +412,10 @@ export const AcoesTab: React.FC<AcoesTabProps> = ({
   onToggleSubstitutionMode,
   mentionableAgents,
   onAddSpecialist,
-  mentionableProcesses,
-  onStartProcess,
   sessionClosed,
   hasContact,
 }) => {
   const { t } = useTranslation('agentAssist');
-  const [mode, setMode] = useState<"agents" | "processes">("agents");
   const [pendingAliases, setPendingAliases] = useState<Set<string>>(new Set());
 
   const aiParticipants = supervisorState?.ai_participants ?? [];
@@ -585,8 +437,6 @@ export const AcoesTab: React.FC<AcoesTabProps> = ({
     onAddSpecialist(alias, instruction, visibility);
     setPendingAliases(prev => new Set([...prev, alias]));
   }
-
-  const hasProcesses = mentionableProcesses.length > 0;
 
   return (
     <div className="flex flex-col gap-4 p-3 overflow-y-auto h-full">
@@ -619,86 +469,27 @@ export const AcoesTab: React.FC<AcoesTabProps> = ({
         </div>
       </section>
 
-      {/* ── Toggle Agentes | Processos ── */}
-      <div className="flex rounded-lg border border-border overflow-hidden bg-surface-muted">
-        <button
-          onClick={() => setMode("agents")}
-          className={[
-            "flex-1 py-1.5 text-2xs font-semibold transition-colors",
-            mode === "agents"
-              ? "bg-white text-dark shadow-sm"
-              : "text-muted hover:bg-white/60",
-          ].join(" ")}
-        >
-          {t('acoes.agents')}
-          {mentionableAgents.length > 0 && (
-            <span className="ml-1 text-2xs bg-primary-light text-primary
-              px-1 rounded-full font-bold">{mentionableAgents.length}</span>
-          )}
-        </button>
-        <button
-          onClick={() => hasProcesses && setMode("processes")}
-          disabled={!hasProcesses}
-          title={!hasProcesses ? t('acoes.noProcesses') : undefined}
-          className={[
-            "flex-1 py-1.5 text-2xs font-semibold transition-colors",
-            mode === "processes"
-              ? "bg-white text-dark shadow-sm"
-              : "text-muted hover:bg-white/60",
-            !hasProcesses ? "opacity-40 cursor-not-allowed" : "",
-          ].join(" ")}
-        >
-          {t('acoes.processes')}
-          {hasProcesses && (
-            <span className="ml-1 text-2xs bg-primary-light text-primary
-              px-1 rounded-full font-bold">{mentionableProcesses.length}</span>
-          )}
-        </button>
-      </div>
-
-      {/* ── Seção B: Lista dinâmica ── */}
-      {mode === "agents" ? (
-        <section>
-          {mentionableAgents.length === 0 ? (
-            <p className="text-xs text-muted-light text-center py-2 italic">
-              {t('agentes.noAgentsAvailable')}
-            </p>
-          ) : (
-            <div className="flex flex-col gap-2">
-              {mentionableAgents.map(agent => (
-                <AcaoItemRow
-                  key={agent.alias}
-                  agent={agent}
-                  participants={aiParticipants}
-                  pendingAliases={pendingAliases}
-                  disabled={!hasContact || sessionClosed}
-                  onAcionar={handleAcionar}
-                />
-              ))}
-            </div>
-          )}
-        </section>
-      ) : (
-        /* ── Processos mode — Phase C ── */
-        <section>
-          {mentionableProcesses.length === 0 ? (
-            <p className="text-xs text-muted-light text-center py-2 italic">
-              {t('acoes.noProcesses')}
-            </p>
-          ) : (
-            <div className="flex flex-col gap-2">
-              {mentionableProcesses.map(proc => (
-                <ProcessItemRow
-                  key={proc.alias}
-                  proc={proc}
-                  disabled={!hasContact || sessionClosed}
-                  onStart={onStartProcess}
-                />
-              ))}
-            </div>
-          )}
-        </section>
-      )}
+      {/* ── Seção B: Agentes disponíveis ── */}
+      <section>
+        {mentionableAgents.length === 0 ? (
+          <p className="text-xs text-muted-light text-center py-2 italic">
+            {t('agentes.noAgentsAvailable')}
+          </p>
+        ) : (
+          <div className="flex flex-col gap-2">
+            {mentionableAgents.map(agent => (
+              <AcaoItemRow
+                key={agent.alias}
+                agent={agent}
+                participants={aiParticipants}
+                pendingAliases={pendingAliases}
+                disabled={!hasContact || sessionClosed}
+                onAcionar={handleAcionar}
+              />
+            ))}
+          </div>
+        )}
+      </section>
     </div>
   );
 };

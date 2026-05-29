@@ -262,8 +262,6 @@ export interface PoolInfo {
   sla_target_ms:        number | null;
   /** Maximum time to reply to a customer message (ms). Null = no per-message SLA. */
   max_reply_time_ms:    number | null;
-  /** skill_ids that can be mentioned / started via Journey in this pool */
-  mentionable_journeys?: string[];
 }
 
 // ── Multi-contact session state ───────────────────────────────────────────────
@@ -411,29 +409,6 @@ export interface MentionableAgent {
   agent_type_id: string;
   pool_id:       string;
   description?:  string;
-}
-
-// ── Mentionable process (console-acoes-tab) ───────────────────────────────────
-
-/**
- * A Journey-starting skill available for manual invocation in the current pool.
- * Returned by GET /v1/pools/:poolId/mentionable-processes.
- */
-export interface MentionableProcess {
-  /** Key in pool.mentionable_journeys (e.g. "portabilidade"). */
-  alias:                string;
-  skill_id:             string;
-  /** Human-readable name from skill.name. */
-  label:                string;
-  description?:         string;
-  /** Typed parameter schema from skill.delegation_input — null if no params needed. */
-  delegation_params:    DelegationSchema | null;
-  /**
-   * Visibility lock from skill YAML:
-   *   "agents_only" | "all" → locked, radio hidden in UI
-   *   null                  → show radio, default agents_only
-   */
-  delegation_visibility: "all" | "agents_only" | null;
 }
 
 // ── Delegation input schema — typed fields for AcaoItemRow / DelegarTarefaDrawer

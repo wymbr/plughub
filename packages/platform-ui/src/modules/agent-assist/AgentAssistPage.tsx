@@ -37,7 +37,6 @@ import { useSupervisorState }              from "./hooks/useSupervisorState";
 import { useSupervisorCapabilities }       from "./hooks/useSupervisorCapabilities";
 import { useCopilotState }                 from "./hooks/useCopilotState";
 import { useMentionableAgents }     from "./hooks/useMentionableAgents";
-import { useMentionableProcesses }  from "./hooks/useMentionableProcesses";
 import { Header }              from "./components/Header";
 import { ActionBar }           from "./components/ActionBar";
 import { ChatArea }            from "./components/ChatArea";
@@ -53,7 +52,6 @@ import {
   messageMatchesFilter,
 } from "./components/ParticipantFilterBar";
 import { CopilotBanner }   from "./components/CopilotBanner";
-import { JourneyPanel }    from "./components/JourneyPanel";
 import { WebRTCOverlay }   from "./components/WebRTCOverlay";
 
 // ── AgentAssistPage ────────────────────────────────────────────────────────
@@ -95,15 +93,11 @@ export const AgentAssistPage: React.FC = () => {
   const [selectedMessageIds, setSelectedMessageIds] = useState<Set<string>>(new Set());
   const [showDelegarDrawer,  setShowDelegarDrawer]  = useState(false);
   const [delegatedAgents,    setDelegatedAgents]    = useState<Set<string>>(new Set());
-  // Arc 11 Fase 2 Fase E — center area tab
-  const [centralTab, setCentralTab] = useState<"current" | "journey">("current");
-
   // Reset UI-local state when selected contact changes
   useEffect(() => {
     setSubstitutionMode(false);
     setFilterKey(null);
     setSelectedMessageIds(new Set());
-    setCentralTab("current");
   }, [selectedSessionId]);
 
   // ── Derived state needed before hook calls ────────────────────────────
@@ -127,10 +121,9 @@ export const AgentAssistPage: React.FC = () => {
   const capabilities = useSupervisorCapabilities(selectedSessionId, supervisorState);
   const copilotSuggestions = useCopilotState(selectedSessionId, lastCopilotEvent);
 
-  // Arc 11 / console-acoes-tab — mentionable agents and processes for current pool
-  const currentPoolId       = selected?.poolId ?? null;
-  const mentionableAgents   = useMentionableAgents(currentPoolId);
-  const mentionableProcesses = useMentionableProcesses(currentPoolId);
+  // Arc 11 / console-acoes-tab — mentionable agents for current pool
+  const currentPoolId     = selected?.poolId ?? null;
+  const mentionableAgents = useMentionableAgents(currentPoolId);
 
   // Listen for copilot.updated on selected session
   useEffect(() => {
@@ -388,44 +381,9 @@ export const AgentAssistPage: React.FC = () => {
     [addToast, t],
   );
 
-  // Arc 10 Phase D / console-acoes-tab — Start Process
-  // params: typed field values from the ProcessItemRow inline form (forwarded as journey metadata).
-  // visibility: respected by the @mention that the skill's notify steps will read from ContextStore.
-  const handleIniciarProcesso = useCallback(
-    async (skillId: string, params: Record<string, string> = {}, _visibility: "all" | "agents_only" = "all") => {
-      if (!selectedSessionId) return;
-      const tenantId = session?.tenantId ?? "";
-      const metadata = Object.keys(params).length > 0 ? { input: params } : undefined;
-      try {
-        const res = await fetch("/v1/journeys", {
-          method:  "POST",
-          headers: { "Content-Type": "application/json" },
-          body:    JSON.stringify({
-            tenant_id:  tenantId,
-            skill_id:   skillId,
-            session_id: selectedSessionId,
-            ...(metadata ? { metadata } : {}),
-          }),
-        });
-        if (res.ok) {
-          const name = skillId.replace(/^skill_|_v\d+$/g, "").replace(/_/g, " ");
-          addToast(t("message.processStarted", { name }), "info");
-        } else {
-          addToast(t("message.processStartFailed"), "error");
-        }
-      } catch {
-        addToast(t("message.processStartError"), "error");
-      }
-    },
-    [selectedSessionId, session, addToast],
-  );
-
   // ── Derived state ──────────────────────────────────────────────────────
   const wsStatus     = aggregateStatus(statuses, activePools);
   const headerPoolId = selected?.poolId ?? activePools[0] ?? "";
-  const mentionableJourneys = (
-    availablePools.find(p => p.pool_id === selected?.poolId)?.mentionable_journeys ?? []
-  );
   const prefilledContext = [...selectedMessageIds]
     .map(id => selected?.messages.find(m => m.id === id)?.text ?? "")
     .filter(Boolean)
@@ -531,7 +489,7 @@ export const AgentAssistPage: React.FC = () => {
             />
           </div>
 
-          {/* Center column: [tab bar] ParticipantFilterBar + ChatArea/JourneyPanel + CopilotBanner + AgentInput */}
+          {/* Center column: ParticipantFilterBar + ChatArea + CopilotBanner + AgentInput */}
           <div className="flex flex-col flex-1 overflow-hidden bg-white">
             {!selected ? (
               <div className="flex-1 flex flex-col items-center justify-center text-muted text-sm select-none gap-3">
@@ -551,89 +509,59 @@ export const AgentAssistPage: React.FC = () => {
               </div>
             ) : (
               <>
-                {/* Arc 11 Fase E — center area tab switcher: Atual · Journey */}
-                <div className="flex items-center border-b border-border bg-white flex-shrink-0 px-2">
-                  {(["current", "journey"] as const).map(tab => (
-                    <button
-                      key={tab}
-                      onClick={() => setCentralTab(tab)}
-                      className={[
-                        "px-3 py-2 text-xs font-medium transition-colors",
-                        centralTab === tab
-                          ? "border-b-2 border-primary text-primary"
-                          : "text-muted hover:text-dark",
-                      ].join(" ")}
-                    >
-                      {tab === "current" ? t("centerTab.atual") : t("centerTab.journey")}
-                    </button>
-                  ))}
-                </div>
-
-                {centralTab === "journey" ? (
-                  /* ── Journey tab ── */
-                  <JourneyPanel
-                    customerId={selected.contactId}
-                    tenantId={session?.tenantId}
-                    currentSessionId={selected.sessionId}
+                {/* WebRTC overlay — renders only when channel=webrtc and medium≠text */}
+                {selected.channel === "webrtc" && (
+                  <WebRTCOverlay
+                    sessionId={selected.sessionId}
+                    channel={selected.channel}
+                    agentIdentity={session?.userId ?? agentName}
                   />
-                ) : (
-                  /* ── Atual tab (existing behavior) ── */
-                  <>
-                    {/* WebRTC overlay — renders only when channel=webrtc and medium≠text */}
-                    {selected.channel === "webrtc" && (
-                      <WebRTCOverlay
-                        sessionId={selected.sessionId}
-                        channel={selected.channel}
-                        agentIdentity={session?.userId ?? agentName}
-                      />
-                    )}
-
-                    {/* Participant filter chips */}
-                    <ParticipantFilterBar
-                      messages={selected.messages}
-                      aiParticipants={aiParticipants}
-                      filterKey={filterKey}
-                      onFilterChange={setFilterKey}
-                      isSupervisor={isSupervisor}
-                      sessionId={selected.sessionId}
-                      mcpBase=""
-                      onRefreshState={refreshSupervisorState}
-                      onTerminateSegment={handleTerminateSegment}
-                    />
-
-                    {/* Chat messages */}
-                    <ChatArea
-                      messages={visibleMessages}
-                      aiTyping={aiTypingSessions.has(selected.sessionId)}
-                      sessionClosed={selected.sessionClosed}
-                      liveState={selected.supervisorState ? {
-                        sentimentScore: selected.supervisorState.sentiment.current,
-                        sentimentAlert: selected.supervisorState.sentiment.alert,
-                        sentimentTrend: selected.supervisorState.sentiment.trend,
-                        intent:         selected.supervisorState.intent.current,
-                        flags:          selected.supervisorState.flags,
-                      } : null}
-                      substitutionMode={substitutionMode}
-                      onMenuSubmit={handleMenuSubmit}
-                      selectedMessageIds={selectedMessageIds}
-                      onToggleSelection={handleToggleMessageSelection}
-                    />
-
-                    {/* Copilot banner (above input) */}
-                    <CopilotBanner
-                      suggestions={copilotSuggestions}
-                      lastUpdate={lastCopilotEvent}
-                    />
-
-                    {/* Agent input */}
-                    <AgentInput
-                      onSend={handleSend}
-                      disabled={!selected}
-                      sessionClosed={selected.sessionClosed}
-                      capabilities={selected.capabilities ?? null}
-                    />
-                  </>
                 )}
+
+                {/* Participant filter chips */}
+                <ParticipantFilterBar
+                  messages={selected.messages}
+                  aiParticipants={aiParticipants}
+                  filterKey={filterKey}
+                  onFilterChange={setFilterKey}
+                  isSupervisor={isSupervisor}
+                  sessionId={selected.sessionId}
+                  mcpBase=""
+                  onRefreshState={refreshSupervisorState}
+                  onTerminateSegment={handleTerminateSegment}
+                />
+
+                {/* Chat messages */}
+                <ChatArea
+                  messages={visibleMessages}
+                  aiTyping={aiTypingSessions.has(selected.sessionId)}
+                  sessionClosed={selected.sessionClosed}
+                  liveState={selected.supervisorState ? {
+                    sentimentScore: selected.supervisorState.sentiment.current,
+                    sentimentAlert: selected.supervisorState.sentiment.alert,
+                    sentimentTrend: selected.supervisorState.sentiment.trend,
+                    intent:         selected.supervisorState.intent.current,
+                    flags:          selected.supervisorState.flags,
+                  } : null}
+                  substitutionMode={substitutionMode}
+                  onMenuSubmit={handleMenuSubmit}
+                  selectedMessageIds={selectedMessageIds}
+                  onToggleSelection={handleToggleMessageSelection}
+                />
+
+                {/* Copilot banner (above input) */}
+                <CopilotBanner
+                  suggestions={copilotSuggestions}
+                  lastUpdate={lastCopilotEvent}
+                />
+
+                {/* Agent input */}
+                <AgentInput
+                  onSend={handleSend}
+                  disabled={!selected}
+                  sessionClosed={selected.sessionClosed}
+                  capabilities={selected.capabilities ?? null}
+                />
               </>
             )}
           </div>
@@ -653,8 +581,6 @@ export const AgentAssistPage: React.FC = () => {
               onToggleSubstitutionMode={() => setSubstitutionMode(prev => !prev)}
               mentionableAgents={mentionableAgents}
               onAddSpecialist={handleAddSpecialist}
-              mentionableProcesses={mentionableProcesses}
-              onStartProcess={handleIniciarProcesso}
               sessionClosed={selected?.sessionClosed ?? false}
             />
           </div>

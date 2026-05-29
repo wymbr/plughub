@@ -102,7 +102,6 @@ async function fetchPools(accessiblePools: string[], accessToken?: string): Prom
       channel_types:         p.channel_types ?? [],
       sla_target_ms:         p.sla_target_ms ?? null,
       max_reply_time_ms:     p.max_reply_time_ms ?? null,
-      mentionable_journeys:  (p as Record<string, unknown>)['mentionable_journeys'] as string[] | undefined,
     }));
     if (accessiblePools.length === 0) return list;
     return list.filter(p => accessiblePools.includes(p.pool_id));

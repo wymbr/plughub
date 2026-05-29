@@ -154,17 +154,14 @@
     "delegateDone":       "Delegated agent completed the task",
     "specialistInvited":  "Specialist @{{alias}} invited",
     "taskDelegated":      "Task delegated to @{{alias}}",
-    "processStarted":     "Process \"{{name}}\" started",
-    "processStartFailed": "Unable to start the process",
-    "processStartError":  "Error starting process"
+    "processStarted":     "Process \"{{name}}\" started"
   },
   "contacts": {
     "label": "Contacts"
   },
   "centerTab": {
     "atual":     "Current",
-    "historico": "History",
-    "journey":   "Journey"
+    "historico": "History"
   },
   "rightTab": {
     "estado":        "State",
@@ -194,8 +191,6 @@
     "noDestinations":   "No destinations available",
     "recommended":      "✓ Recommended",
     "waitEstimate":     "~{{min}}min wait",
-    "process":          "Process ▾",
-    "startProcess":     "Start process",
     "replySlaTitle":    "Response: {{elapsed}} / limit {{limit}}"
   },
   "header": {
@@ -237,13 +232,10 @@
   },
   "acoes": {
     "agents":      "Agents",
-    "processes":   "Processes",
     "trigger":     "Trigger",
-    "start":       "Start",
     "cancel":      "Cancel",
     "active":      "Active",
-    "waiting":     "Waiting",
-    "noProcesses": "No processes configured for this pool"
+    "waiting":     "Waiting"
   },
   "agentes": {
     "activeInSession":    "Active in Session",
@@ -284,10 +276,6 @@
     "available":            "available"
   },
   "historico": {
-    "openJourneys":      "Open processes",
-    "loading":           "Loading…",
-    "sessions_one":      "{{count}} session",
-    "sessions_other":    "{{count}} sessions",
     "previousContacts":  "Previous contacts",
     "reload":            "Reload history",
     "loadingHistory":    "Loading history…",
@@ -297,19 +285,13 @@
     "pool":              "Pool",
     "channel":           "Channel",
     "closedAt":          "Closed",
-    "journeyStatus": {
-      "active":    "Active",
-      "suspended": "Suspended",
-      "completed": "Completed",
-      "failed":    "Failed",
-      "cancelled": "Cancelled"
-    },
     "outcome": {
       "resolved":  "Resolved",
       "escalated": "Escalated",
       "abandoned":  "Abandoned"
     }
   },
+
   "delegar": {
     "title":                 "Delegate Task",
     "close":                 "Close",
@@ -439,15 +421,4 @@
     "noResults":        "No results for \"{{query}}\"",
     "viaAt":            "via @mention"
   },
-  "journey": {
-    "statusLabel": {
-      "active":    "Active",
-      "suspended": "Suspended",
-      "completed": "Completed",
-      "failed":    "Failed",
-      "cancelled": "Cancelled"
-    },
-    "noJourneys":  "No active journeys for this customer.",
-    "merge":       "Merge"
-  }
 }

@@ -1,6 +1,6 @@
 # Arc 19 — Modelo Unificado de Sessão: Workflow como Canal Webhook
 
-> Criado: 2026-05-28 · Estado: Especificação v2 — revisado 2026-05-28
+> Criado: 2026-05-28 · Estado: **COMPLETO** — Todas as 6 fases implementadas (A–F, 2026-05-28)
 
 ## Premissa
 
@@ -567,36 +567,57 @@ Eventos de negócio do Arc 12. Nenhum evento interno de plataforma.
 
 ## Fases de Implementação
 
-### Fase A — Canal webhook + adapter
-- `channel-gateway`: `adapters/webhook.py` com endpoints trigger/resume/status
-- `@plughub/schemas`: `channel_type` enum adiciona `"webhook"`
-- `routing-engine`: tratar pools `channel_type: webhook` — aloca instâncias skill-flow
+### Fase A — Canal webhook + adapter ✅ (2026-05-28)
 
-### Fase B — Status `suspended` no modelo de sessão
-- `@plughub/schemas`: adicionar `"suspended"` ao SessionStatus
-- Core: publicar `session_suspended` / `session_resumed` no stream
-- Redis: TTL extension no suspend executor
-- `resume_tokens` hash no executor suspend
+**Implementado** em #354–#358. Todas as alterações descritas abaixo estão em produção.
 
-### Fase C — orchestrator-bridge: skill-flow como agente nativo de pool webhook
-- `instance_bootstrap.py`: reconhecer `channel_type: webhook` → criar instâncias skill-flow
-- `process_routed()`: para pools webhook, iniciar skill-flow engine diretamente
-- Eliminar `skill-flow-worker` Kafka consumer
+- **`@plughub/schemas`** (`common.ts`, `agent-registry.ts`): `ChannelSchema` + `"webhook"`, `SessionStatusSchema` + `"suspended"`, `PoolRegistrationSchema` + `webhook_skill_id` + `max_concurrent_sessions`.
+- **`channel-gateway`** (`adapters/webhook.py`, `main.py`): `WebhookAdapter` completo — `handle_trigger`, `handle_resume`, `get_status`, 3 endpoints HTTP.
+- **`routing-engine`** (`models.py`, `kafka_listener.py`, `registry.py`, `router.py`): `ConversationInboundEvent.channel` aceita `"webhook"`; `PoolConfig` com `webhook_skill_id` + `max_concurrent_sessions`; `write_pool_snapshot()` com lógica de capacidade para pools webhook; todos os call sites atualizados.
+- **`agent-registry`** (Prisma migration, `pools.ts`): colunas `webhook_skill_id` e `max_concurrent_sessions` no modelo `Pool`; CRUD persistindo ambas.
 
-### Fase D — workflow-api deprecation
-- Redirecionar `/v1/workflow/trigger` → webhook adapter (compatibilidade)
-- Migrar lógica `business_hours` para skill-flow-engine
-- Manter `/v1/workflow/instances` como read-only (analytics histórica)
+**Limitação desta fase**: o routing engine reconhece pools webhook e inclui as métricas de capacidade no snapshot, mas ainda não aloca instâncias skill-flow nesses pools (alocação real depende da Fase C — orchestrator-bridge). Fase B (status `suspended` e resume_token) precede Fase C no sequenciamento.
 
-### Fase E — Monitor e Analytics unificados
-- Remover páginas separadas Monitor/Processes e Analytics/Processes
-- Adicionar filtro `channel_type` ao Monitor/Sessions e Analytics/Sessions
-- Badge visual para sessões `suspended` no Monitor
-- Monitor/Sessions: métricas Suspended, Failure, Timeout, Cancelled com mapeamento para `close_reason`
-- Monitor/Pools: diferenciação entre pools humanos/AI (logados) e webhook (capacidade configurada)
-- Analytics/Sessions: filtros ANI/DNIS com mapeamento por `channel_type`
-- Analytics/Agents: série temporal + drill-down para segments
-- Monitor/Events e Analytics/Events: visualização Arc 12 com filtro regex de category
+### Fase B — Status `suspended` + stream events ✅ (2026-05-28)
+
+**Implementado** em #359–#361.
+
+- **`@plughub/schemas`** (`stream.ts`): `StreamEventTypeSchema` + `"session_suspended"` + `"session_resumed"`. `SessionSuspendedPayloadSchema` e `SessionResumedPayloadSchema` definidos e exportados via `StreamPayloads`.
+- **`skill-flow-engine`** (`executor.ts`, `steps/suspend.ts`): `StepContext.persistSuspendWebhook` callback; `executeSuspend()` com caminho Redis-only (sem PostgreSQL); sentinela dois estágios (`"suspending"` → `"suspended"`); resume path com `decision` (approved/rejected/timeout) + persisted `decisionKey` para replay safety.
+- **`orchestrator-bridge`** (`main.py`): `"suspended"` em `_escalation_outcomes`; publicação de `session_suspended` no canonical stream + atualização de status key para `"suspended"` quando `_ai_outcome == "suspended"`.
+- **`channel-gateway`** (`adapters/webhook.py`): `handle_resume()` escreve `session_resumed` no stream antes do Kafka; status key resetado para `"active"` com `keepttl=True`; falhas de escrita são non-fatal.
+- **Tests** (`test_webhook_adapter.py`): suite completa cobrindo trigger, resume token resolution, get_status, stream writes (Fase B), ordering guarantees e non-fatal paths.
+
+### Fase C — orchestrator-bridge: skill-flow como agente nativo de pool webhook ✅ (2026-05-28)
+
+**skill-flow-service** (`/execute`): aceita `webhook_pool: boolean` e `resume_context: { step_id, decision, payload }`. Quando `webhook_pool=true`, wires `persistSuspendWebhook` no engine — estende TTLs de `stream`, `ctx`, `pipeline`, `status` e registra `resume_token` no hash `{tenant}:resume_tokens`.
+
+**orchestrator-bridge**:
+- `activate_native_agent()` + `webhook_pool` + `resume_context` params → forwarded no payload.
+- `process_routed()`: detecta pools webhook via `pool_config:{pool_id}.channel_types`, escreve `session:{id}:meta` (NX) com `agent_type_id`, `pool_id`, `customer_id`, `instance_id`.
+- `_handle_webhook_session_resumed()`: lê meta, chama `activate_native_agent(webhook_pool=True, resume_context=...)`, fecha sessão se outcome != "suspended", restaura instância ao pool, publica `agent_ready` + `agent_done`.
+- `process_inbound()` ganha parâmetro `http`; detecta `event_type=session_resumed` e despacha para o helper antes de qualquer outro check.
+- `_dispatch_once()` passa `http` para `process_inbound`.
+
+17 unit tests em `tests/test_webhook_bridge.py`.
+
+### Fase D — workflow-api deprecation ✅ (2026-05-28)
+
+`POST /v1/workflow/trigger` proxies to `POST {channel_gateway_url}/v1/channels/webhook/{flow_id}` — normalises `trigger_type="manual"` → `"api"`, forwards metadata fields. `POST /v1/workflow/resume` dual-path: `tenant_id` present → proxies to `POST {channel_gateway_url}/v1/channels/webhook/resume/{token}`; absent → legacy PostgreSQL path. Deprecated endpoints return 410 Gone: `persist-suspend`, `complete`, `fail`, `cancel`, `collect/persist`, `collect/respond`. `GET /instances` + `GET /instances/{id}` kept read-only.
+
+`StepContext.persistSuspendWebhook` extended with `business_hours?` and `calendar_id?`. skill-flow-service calls `POST {CALENDAR_API_URL}/v1/engine/add-business-duration` when `business_hours=true && calendar_id` set; falls back to wall-clock on error. TTL derived from actual deadline.
+
+### Fase E — Monitor e Analytics unificados ✅ (2026-05-28)
+
+**analytics-api**: `status` column added to `analytics.sessions` (migration at startup). `parse_inbound` sets `active`; `session_suspended` → `suspended`; `contact_closed` → `closed`. `GET /reports/sessions` gains `status` filter with backward-compat `closed` handling.
+
+**orchestrator-bridge**: publishes `session_suspended` to `conversations.events` Kafka when skill-flow writes suspended status to Redis.
+
+**platform-ui — MonitorTab**: `webhook` added to `CHANNEL_COLORS` (indigo `#6366F1`). Webhook pools show `webhook` badge in `PoolRow`. `SessionRow` shows yellow `suspended` badge when `sess.status === 'suspended'`. `MonitorScope` extended with `'events'`. New `EventsView` component calls `GET /reports/agent-events/summary?period=24h` with optional `category_regex`, polls every 30s, renders category/pool/count/avg/last-seen table.
+
+**platform-ui — Analytics/Sessions**: `webhook` added to channel dropdown. `suspended` added to status dropdown. `status` field wired end-to-end: `ContactFilters` type → `SessionsPage` filter state → `contactFilters` object → `ListaTab` query params → `?status=` API param. `ContactRow` type gains `status?: string | null`.
+
+**i18n**: `monitor.scope.events`, `monitor.events.*` (title, filterPlaceholder, refresh, loading, empty, 5 column headers), `sessions.status.suspended`.
 
 ### Fase F — Eliminação Journey + cleanup
 - Remover entidade Journey conforme já especificado

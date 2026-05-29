@@ -2,6 +2,192 @@
 
 ---
 
+## Arc 19 Fase F — Journey entity elimination (#341–#353) (2026-05-28)
+
+Complete removal of the Journey entity from the entire PlugHub platform. Journey was architecturally redundant — it was conceptually just a Tier-1 Workflow that invokes other workflows via the `task` step. The session trace (Arc 19 unified model) provides sufficient hierarchy visibility without a separate entity.
+
+**@plughub/schemas**: Removed `JourneySchema`, `JourneyTypeSchema`, `JourneyEventSchema`, all `journey_*` fields from `WorkflowEventSchema`/`CollectEventSchema`/`PoolRegistrationSchema`, and `creates_journey`/`journey_type_id` from skill YAML types.
+
+**agent-registry**: Dropped `journey_types` Prisma table; removed `authorized_journey_types` and `mentionable_journeys` columns from Pool; dropped `/v1/journey-types` CRUD REST; removed mentionable-processes endpoint; removed `mentionable_journeys` from pool registration schema.
+
+**workflow-api**: Removed `journeys` table and all `/v1/journeys` endpoints (create/get/list/resume/link/merge/split). Removed `journey_id` FK from `workflow_instances`.
+
+**mcp-server-plughub**: Removed 8 MCP tools: `journey_start`, `journey_link_session`, `journey_merge`, `journey_split`, `journey_list_suspended`, `journey_resume`, `journey_check_pending`, and the mentionable-processes tool used by `agent_delegate`.
+
+**routing-engine**: Removed `session.authorized_journey_types` write to ContextStore after pool allocation; removed `mentionable_journeys` from `PoolConfig`; removed `mentionable_journeys` from pool context enrichment writes.
+
+**skill-flow-engine + skill-flow-worker**: Removed `creates_journey` flag processing; removed `journey_id` propagation to child sessions in collect steps; removed `journey_session_linked` Kafka emit in `respond_collect`; removed `journey_id` from `WorkflowContext`.
+
+**analytics-api**: Removed Kafka consumer for `journey.events`; dropped `journey_events` ClickHouse table; removed `/reports/journeys` endpoint and `query_journeys` function; removed `journey_type_id`/`pool_id` journey filters.
+
+**channel-gateway**: Removed `inbound_journey_resume` check from inbound normalisation (Arc 16 Fase E); removed journey lookup by `customer_id` before session creation.
+
+**infra YAMLs**: Removed `journey_type_id` from all skill YAMLs; removed `journey_types` and `authorized_journey_types` from all registry pool/agent YAML files.
+
+**platform-ui** (tasks #350–#352): Removed Journey Types tab from Config/Resources; removed `authorized_journey_types` and `mentionable_journeys` fields from Pool form; replaced `MonitorJourneysPage` with redirect to `/monitor`; replaced `AnalyticsJourneysPage` (and ProcessosPage JourneysTab) with redirect to `/analise/sessions`; replaced `JourneyPanel` center-column component with null stub; removed `useMentionableProcesses` hook; removed AcoesTab "Processos" mode (`ProcessItemRow`, toggle, `mentionableProcesses`/`onStartProcess` props); removed `handleIniciarProcesso` callback from `AgentAssistPage`; removed `centralTab` Atual|Journey switcher; removed `mentionable_journeys` from `PoolInfo` type and `AgentAssistContext` pool mapping; removed `MentionableProcess` interface from `types.ts`; removed all journey/process i18n keys from both `en/agentAssist.json` and `pt-BR/agentAssist.json`.
+
+**Arcs retired to CHANGELOG**: Arc 10 (Journey multi-session), Arc 16 (Three-Tier Business Process Orchestration), Arc 17 (JourneyType Governance). Their docs remain in `docs/arcos/` for historical reference.
+
+---
+
+## Arc 19 Fase E — Monitor e Analytics unificados (#366–#373) (2026-05-28)
+
+Extends Monitor and Analytics/Sessions to fully reflect Arc 19's unified session model — webhook sessions with `suspended` status are visible alongside regular contacts.
+
+**analytics-api** (`clickhouse.py`, `models.py`, `reports_query.py`, `reports.py`):
+- Added `status TEXT DEFAULT ''` column to `analytics.sessions` via `_DDL_SESSIONS_MIGRATE_STATUS` migration (executes at startup if column absent).
+- `parse_inbound` sets `status: "active"` on every new inbound session row.
+- `parse_conversations_event` handles two new event types: `session_suspended` → writes `status: "suspended"`; `contact_closed` → writes `status: "closed"`.
+- `report_sessions` endpoint gains optional `status` query param with special handling: `status=closed` matches rows where `status = 'closed' OR status IS NULL` (backward compat for pre-Arc-19 rows with no status).
+
+**orchestrator-bridge** (`main.py`):
+- When skill-flow writes `session:{id}:status = suspended` to Redis, bridge now also publishes `session_suspended` event to `conversations.events` Kafka topic so analytics-api indexes it.
+
+**platform-ui — MonitorTab** (`tabs/MonitorTab.tsx`):
+- `MonitorScope` extended from `'sessions' | 'processes'` to `'sessions' | 'processes' | 'events'`.
+- `CHANNEL_COLORS` gains `webhook: '#6366F1'` (indigo).
+- `PoolRow` shows a `webhook` badge (indigo) when `pool.channel_types?.includes('webhook')`.
+- `SessionList`/`SessionRow` (service module) displays a yellow `suspended` badge when `sess.status === 'suspended'`.
+- New `EventsView` component: calls `GET /reports/agent-events/summary?period=24h` with optional `category_regex` filter, polls every 30 s, renders table of category/pool/count/avg/last-seen.
+- Scope toggle bar gains an **Events** button (`BarChart2` icon) wired to `EventsView`.
+
+**platform-ui — Analytics/Sessions** (`contacts/SessionsPage.tsx`, `contacts/tabs/ListaTab.tsx`, `contacts/types.ts`):
+- `webhook` added to the channel dropdown.
+- `suspended` added to the status dropdown (between `active` and `closed`).
+- `status` field added to `ContactFilters` and `ContactRow` types.
+- `status` wired end-to-end from `SessionsPage` filter state → `contactFilters` object → `ListaTab` query params → API `?status=`.
+
+**i18n** (`en/contacts.json`, `pt-BR/contacts.json`):
+- `monitor.scope.events` — Events tab label.
+- `monitor.events.*` — title, filter placeholder, refresh, loading, empty, and 5 column headers.
+- `sessions.status.suspended` — Suspended / Suspenso.
+
+---
+
+## Arc 19 Fase D — workflow-api: proxy trigger/resume → channel-gateway, deprecate lifecycle endpoints (#364, #365) (2026-05-28)
+
+Redirects external workflow entry points to the Arc 19 unified session model and marks all PostgreSQL-backed lifecycle endpoints as deprecated (410 Gone).
+
+**workflow-api** (`router.py`, `config.py`):
+- `Settings` gains `channel_gateway_url: str = "http://localhost:8010"` (env: `PLUGHUB_WORKFLOW_CHANNEL_GATEWAY_URL`).
+- `POST /v1/workflow/trigger` now proxies to `POST {channel_gateway_url}/v1/channels/webhook/{flow_id}`. Normalises `trigger_type="manual"` → `"api"`. Forwards `tenant_id`, `customer_id`, `trigger_type`, and a merged `metadata` dict (includes `context`, `origin_session_id`, `pool_id`, `journey_id` when present). Returns the channel-gateway response body directly. Returns 502 if the gateway is unreachable or returns a non-2xx.
+- `POST /v1/workflow/resume` gains a dual-path: when `tenant_id` is present (Arc 19 webhook session), proxies to `POST {channel_gateway_url}/v1/channels/webhook/resume/{token}` with `{ tenant_id, payload: { **payload, decision } }`. When `tenant_id` is absent, falls through to the existing PostgreSQL-backed legacy path (backward compat for pre-Arc19 instances).
+- `ResumeRequest` adds optional field `tenant_id: str | None = None`.
+- `POST /v1/workflow/instances/{id}/persist-suspend` → 410 Gone (deprecated — suspend handled by orchestrator-bridge via `persistSuspendWebhook` Redis callback).
+- `POST /v1/workflow/complete`, `POST /v1/workflow/fail`, `POST /v1/workflow/instances/{id}/cancel` → 410 Gone.
+- `POST /v1/workflow/collect/persist`, `POST /v1/workflow/collect/respond` → 410 Gone.
+- GET endpoints (`/v1/workflow/instances`, `/v1/workflow/instances/{id}`) kept read-only as-is for observability.
+
+**skill-flow-engine** (`executor.ts`, `steps/suspend.ts`):
+- `StepContext.persistSuspendWebhook` params extended with `business_hours?: boolean` and `calendar_id?: string` — forwarded from the `suspend` step config so the callback can compute business-hours-aware deadlines.
+- `executeSuspend()` spreads `business_hours` and `calendar_id` into the `persistSuspendWebhook` call when present.
+
+**skill-flow-service** (`packages/e2e-tests/services/skill-flow-service/src/index.ts`):
+- `CALENDAR_API_URL` constant added (env: `CALENDAR_API_URL`, default `http://localhost:3700`).
+- `persistSuspendWebhookFn` extended: when `params.business_hours === true && params.calendar_id` is set, calls `POST {CALENDAR_API_URL}/v1/engine/add-business-duration` with `{ tenant_id, entity_type: "calendar", entity_id: calendar_id, from_dt: now, hours: timeout_hours }`. Uses the returned `deadline` as `resume_expires_at`. Falls back to wall-clock on calendar-api error or non-2xx response. TTL for Redis EXPIRE recomputed from actual deadline (`(deadline - now) / 1000 + 3600`).
+
+**Tests** (`packages/workflow-api/src/plughub_workflow_api/tests/test_router.py`):
+- Full rewrite to reflect Arc 19 Fase D behavior.
+- `TestTrigger` (6 tests): proxy URL formed correctly, `"manual"` normalised to `"api"`, non-manual trigger_type preserved, metadata fields (`context`, `origin_session_id`, `pool_id`, `journey_id`) forwarded, 422 for missing required fields, 502 on gateway error.
+- `TestPersistSuspend` (2 tests): both assert 410.
+- `TestResume` (7 tests): webhook path (3 tests — proxy URL, payload with decision, 502 on error) and legacy path (4 tests — existing PostgreSQL logic, exercised when `tenant_id` is absent).
+- `TestDeprecated` (5 tests): complete, fail, cancel, collect/persist, collect/respond all assert 410.
+
+---
+
+## Arc 19 Fase C — orchestrator-bridge: skill-flow instances as webhook pool native agents (#362, #363) (2026-05-28)
+
+Wires the orchestrator-bridge and skill-flow-service so that webhook pool sessions are started and resumed directly through the bridge's native-agent activation path, eliminating the separate workflow-api lifecycle for webhook channels.
+
+**skill-flow-service** (`packages/e2e-tests/services/skill-flow-service/src/index.ts`):
+- `/execute` endpoint now accepts two new optional body fields: `webhook_pool: boolean` and `resume_context: { step_id, decision, payload }`.
+- When `webhook_pool=true`, a `persistSuspendWebhook` callback is wired into `SkillFlowEngine` config. The callback: extends TTL of all four session Redis keys (`stream`, `ctx`, `pipeline`, `status`) by `ceil(timeout_hours × 3600) + 3600s`; writes the resume token to `{tenant}:resume_tokens` hash with the same TTL.
+- When `resume_context` is provided, it is passed as `resumeContext` to `engine.run()` so the suspended `suspend` step follows its `on_resume` / `on_reject` / `on_timeout` path.
+- `dedicatedRedis` is declared before the `persistSuspendWebhook` closure so the callback captures a stable reference while `finally { dedicatedRedis.disconnect() }` still runs correctly.
+
+**orchestrator-bridge** (`packages/orchestrator-bridge/src/plughub_orchestrator_bridge/main.py`):
+- `activate_native_agent()` gains two keyword parameters: `webhook_pool: bool = False` and `resume_context: dict | None = None`. Both are forwarded in the skill-flow-service POST payload when set.
+- `process_routed()` detects webhook pools by reading `{tenant_id}:pool_config:{pool_id}` from Redis and checking `channel_types` contains `"webhook"`. On detection and successful instance allocation, writes session meta (`session:{session_id}:meta`) with `NX` guard and TTL (`_stl()`) — contains `agent_type_id`, `pool_id`, `customer_id`, `instance_id` for use by the resume handler. Passes `webhook_pool=True` to `activate_native_agent`.
+- New `_handle_webhook_session_resumed()` helper: reads `session:{session_id}:meta`, fetches agent skills from Agent Registry, calls `activate_native_agent` with `webhook_pool=True` and `resume_context`. Terminal outcome (anything except `"suspended"`) triggers `_mark_contact_ended` + `_trigger_contact_close`. After execution (terminal or suspended), restores the instance snapshot to `{tenant}:instance:{instance_id}` (status=ready, current_sessions decremented) and re-adds it to the pool set. Publishes `agent_ready` + `agent_done` lifecycle events on `TOPIC_LIFECYCLE` for routing-engine capacity tracking.
+- `process_inbound()` gains a third parameter `http: aiohttp.ClientSession | None = None`. A new early-return branch at the top detects `event_type == "session_resumed"` and dispatches to `_handle_webhook_session_resumed`. If `http` is None a WARNING is logged and the event is skipped. The function docstring is updated to document four (not three) event types.
+- `_dispatch_once()` updated to pass `http=http` to `process_inbound`.
+
+**Tests** (`packages/orchestrator-bridge/src/plughub_orchestrator_bridge/tests/test_webhook_bridge.py`):
+- 17 pytest-asyncio tests covering `_handle_webhook_session_resumed` guard paths (missing session_id, tenant_id, no meta, no agent_type_id), happy path (activate called with correct webhook_pool + resume_context), terminal vs suspended outcome (contact close gated), instance restore (snapshot written + pool sadd), Kafka lifecycle events (agent_ready + agent_done published, skipped when producer is None), and `process_inbound` routing (session_resumed → handler, session_resumed + http=None → warning, customer msg → no handler, mention_routing → process_mention_routing, no-author event → skipped).
+
+---
+
+## Arc 19 Fase B — stream events session_suspended / session_resumed (#359, #360, #361) (2026-05-28)
+
+Implements the canonical stream events for webhook session lifecycle transitions. After this phase, consumers (analytics-api, Monitor) can observe suspension and resumption transitions directly from the session stream, independently of Kafka routing events.
+
+**@plughub/schemas** (`stream.ts`):
+- `StreamEventTypeSchema` extended with `"session_suspended"` and `"session_resumed"`.
+- `SessionSuspendedPayloadSchema` — `{ step_id, resume_token, resume_expires_at }`. Published when skill-flow engine returns `outcome: "suspended"` for a webhook pool session.
+- `SessionResumedPayloadSchema` — `{ step_id, resume_token, payload? }`. Published when a valid resume token arrives at the webhook adapter.
+- Both schemas exported in `StreamPayloads` map for typed deserialization by consumers.
+
+**skill-flow-engine** (`executor.ts`, `steps/suspend.ts`):
+- `StepContext` gains optional `persistSuspendWebhook` callback — Redis-only TTL extension path for webhook sessions (no PostgreSQL). Signature: `(params: { step_id, resume_token, timeout_hours }) => Promise<{ resume_expires_at: string }>`.
+- `executeSuspend()` in `suspend.ts` implements the Arc 19 Redis-only path: when `ctx.persistSuspendWebhook` is set (and `ctx.persistSuspend` is not), calls it to extend all session Redis key TTLs and register the resume token in `{tenant}:resume_tokens` hash.
+- Two-phase idempotency sentinel (`"suspending"` → `"suspended"`) prevents token regeneration on crash + retry. Token is written to `pipeline_state.results` under `{step.id}:__resume_token__` before the persist call so a crashed process reuses the same token.
+- Resume path: detects `ctx.resumeContext.step_id === step.id`, follows `on_resume` / `on_reject` / `on_timeout` depending on `decision`. Resume decision persisted in `results[decisionKey]` for replay safety.
+
+**orchestrator-bridge** (`main.py`):
+- `"suspended"` added to `_escalation_outcomes` tuple — prevents `_trigger_contact_close()` from firing when the skill-flow engine returns `outcome: "suspended"`. The session must remain alive (TTL extended in Redis) awaiting a resume signal.
+- `session_suspended` stream event written to `session:{session_id}:stream` via `redis_client.xadd` when `_ai_outcome == "suspended" and not conference_id`. Fields: `event_id`, `type: session_suspended`, `author_id/role`, `visibility: agents_only`, `segment_id`, `payload { step_id, resume_token, resume_expires_at }`.
+- `resume_token` and `resume_expires_at` extracted from `pipeline_state.results` by scanning for keys ending in `:__resume_token__` and `:__expires_at__` — the engine writes these keys in `suspend.ts`.
+- Status key `{tenant_id}:session:{session_id}:status` set to `"suspended"` via `setex` so `WebhookAdapter.get_status()` reflects the transition immediately.
+- Stream write failure is non-fatal — logged as WARNING, resume flow unblocked.
+
+**channel-gateway** (`adapters/webhook.py`):
+- `handle_resume()` writes `session_resumed` to `session:{session_id}:stream` **before** publishing `conversations.inbound` to Kafka — ensures analytics-api and Monitor consumers see the transition before re-allocation fires.
+- Status key reset to `"active"` via `redis.set(..., keepttl=True)` — preserves the existing TTL set by `persistSuspendWebhook` without resetting it.
+- Stream write failure and status key failure are non-fatal — logged as WARNING, Kafka event and token deletion proceed normally.
+- `event.timestamp` unified: `now_iso` computed once before the stream write and reused in the Kafka event for temporal consistency.
+
+**Tests** (`packages/channel-gateway/src/plughub_channel_gateway/tests/test_webhook_adapter.py`):
+- Full unit test suite for `WebhookAdapter` covering Fase A (trigger, resume token resolution, status query, no-op outbound) and Fase B (stream write, status key reset, non-fatal failure paths, ordering guarantee xadd-before-kafka).
+
+→ [`docs/arcos/arc19-unified-session-model.md`](docs/arcos/arc19-unified-session-model.md)
+
+---
+
+## Arc 19 Fase A — Canal webhook + adapter (#354, #355, #356, #357, #358) (2026-05-28)
+
+Foundation layer for the unified session model. Introduces `channel_type: webhook` as a first-class channel so that workflow-style pools are routed by the same path as any other contact channel.
+
+**@plughub/schemas** (`common.ts`, `agent-registry.ts`):
+- `ChannelSchema` enum extended with `"webhook"`.
+- `SessionStatusSchema` extended with `"suspended"` (needed by Fase B suspend executor; added here to keep schema aligned with spec from the start).
+- `PoolRegistrationSchema` gains `webhook_skill_id: string | null` (the skill endpoint / "DIN" of the pool — required when `channel_types` includes `"webhook"`) and `max_concurrent_sessions: number | null` (capacity ceiling for webhook pools; informational for human/AI pools).
+
+**channel-gateway** (`adapters/webhook.py`, `main.py`):
+- New `WebhookAdapter(ChannelAdapter)` following the same pattern as `WebchatAdapter`, `WhatsAppAdapter`, etc.
+- `handle_trigger(skill_id, body)` — validates tenant, looks up pool config by `webhook_skill_id`, builds and publishes `conversations.inbound` event, returns `session_id`.
+- `handle_resume(resume_token, body)` — resolves `{tenant}:resume_tokens` hash (token → `session_id:step_id:expires_at`), wakes the suspended session, returns `session_id`. Resume token logic is wired for Fase B executor.
+- `get_status(session_id)` — returns current session status (`active | suspended | closed`) from Redis.
+- No-op outbound methods (`deliver_outbound`, `send_typing`) — webhook sessions never receive messages directly; they use `notify` steps targeting child sessions via `collect`.
+- Three HTTP endpoints registered in `main.py`: `POST /v1/channels/webhook/{skill_id}`, `POST /v1/channels/webhook/resume/{resume_token}`, `GET /v1/channels/webhook/{session_id}/status`.
+
+**routing-engine** (`models.py`, `kafka_listener.py`, `registry.py`, `router.py`):
+- `ConversationInboundEvent.channel` Literal extended with `"webhook"` — events produced by the WebhookAdapter now validate correctly.
+- `PoolConfig` gains `webhook_skill_id: str | None` and `max_concurrent_sessions: int | None` — populated from `pool.registered` / `pool.updated` Kafka events via `kafka_listener._handle_pool_event()`.
+- `InstanceRegistry.write_pool_snapshot()` updated with new optional parameters. For webhook pools (`"webhook" in channel_types`), when `max_concurrent_sessions` is set, `available` and `total_instances` in the snapshot are derived from that ceiling (not from logged-in agent instances — there are none at Fase A). Active count (`busy`) still drives `available = max(0, max_concurrent_sessions - busy)`.
+- `webhook_skill_id` and `max_concurrent_sessions` written to the pool snapshot dict so the Monitor can display configured capacity for webhook pools.
+- `refresh_pool_snapshot()` preserves webhook fields from the existing snapshot when refreshing on heartbeat.
+- All three `write_pool_snapshot()` call sites updated: `router._write_snapshot()`, `kafka_listener._refresh_pool_snapshots()`, and `registry.refresh_pool_snapshot()`.
+
+**agent-registry** (Prisma, `pools.ts`):
+- Migration `20260528000000_arc19_webhook_pool_fields`: `ALTER TABLE "pools" ADD COLUMN "webhook_skill_id" TEXT, ADD COLUMN "max_concurrent_sessions" INTEGER`.
+- `model Pool` in `schema.prisma` updated with both new nullable columns.
+- `POST /v1/pools` and `PUT /v1/pools/:pool_id` persist `webhook_skill_id` and `max_concurrent_sessions`.
+- `pool.registered` / `pool.updated` Kafka events already carry these fields via `_formatPool()` — no changes needed to the event publisher.
+
+→ [`docs/arcos/arc19-unified-session-model.md`](docs/arcos/arc19-unified-session-model.md)
+
+---
+
 ## max_concurrent_sessions — full stack (#274, #276, #277, #278, #281) (2026-05-26)
 
 Complete implementation of the `max_concurrent_sessions` limit across all layers. The feature was already partially scaffolded (#279 DB column, #280 mcp-server JWT read) — this entry documents that all remaining layers were verified complete and the tracker closed.

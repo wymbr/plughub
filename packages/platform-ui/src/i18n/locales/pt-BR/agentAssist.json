@@ -154,17 +154,14 @@
     "delegateDone":       "Agente delegado concluiu a tarefa",
     "specialistInvited":  "Especialista @{{alias}} convidado",
     "taskDelegated":      "Tarefa delegada para @{{alias}}",
-    "processStarted":     "Processo \"{{name}}\" iniciado",
-    "processStartFailed": "Não foi possível iniciar o processo",
-    "processStartError":  "Erro ao iniciar processo"
+    "processStarted":     "Processo \"{{name}}\" iniciado"
   },
   "contacts": {
     "label": "Contatos"
   },
   "centerTab": {
     "atual":     "Atual",
-    "historico": "Histórico",
-    "journey":   "Journey"
+    "historico": "Histórico"
   },
   "rightTab": {
     "estado":        "Estado",
@@ -194,8 +191,6 @@
     "noDestinations":   "Sem destinos disponíveis",
     "recommended":      "✓ Recomendado",
     "waitEstimate":     "~{{min}}min espera",
-    "process":          "Processo ▾",
-    "startProcess":     "Iniciar processo",
     "replySlaTitle":    "Resposta: {{elapsed}} / limite {{limit}}"
   },
   "header": {
@@ -237,13 +232,10 @@
   },
   "acoes": {
     "agents":      "Agentes",
-    "processes":   "Processos",
     "trigger":     "Acionar",
-    "start":       "Iniciar",
     "cancel":      "Cancelar",
     "active":      "Ativo",
-    "waiting":     "Aguardando",
-    "noProcesses": "Nenhum processo configurado para este pool"
+    "waiting":     "Aguardando"
   },
   "agentes": {
     "activeInSession":    "Ativos na Sessão",
@@ -284,10 +276,6 @@
     "available":          "disponível(is)"
   },
   "historico": {
-    "openJourneys":      "Processos em aberto",
-    "loading":           "Carregando…",
-    "sessions_one":      "{{count}} sessão",
-    "sessions_other":    "{{count}} sessões",
     "previousContacts":  "Contatos anteriores",
     "reload":            "Recarregar histórico",
     "loadingHistory":    "Carregando histórico…",
@@ -297,13 +285,6 @@
     "pool":              "Pool",
     "channel":           "Canal",
     "closedAt":          "Encerrado",
-    "journeyStatus": {
-      "active":    "Ativo",
-      "suspended": "Suspenso",
-      "completed": "Concluído",
-      "failed":    "Falhou",
-      "cancelled": "Cancelado"
-    },
     "outcome": {
       "resolved":  "Resolvido",
       "escalated": "Escalado",
@@ -438,16 +419,5 @@
     "searchPlaceholder":"Buscar frases ou @especialista…",
     "noResults":        "Nenhum resultado para \"{{query}}\"",
     "viaAt":            "via @menção"
-  },
-  "journey": {
-    "statusLabel": {
-      "active":    "Ativo",
-      "suspended": "Suspenso",
-      "completed": "Concluído",
-      "failed":    "Falhou",
-      "cancelled": "Cancelado"
-    },
-    "noJourneys":  "Nenhuma journey ativa para este cliente.",
-    "merge":       "Mesclar"
   }
 }
