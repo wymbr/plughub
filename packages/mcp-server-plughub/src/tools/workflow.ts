@@ -11,15 +11,21 @@
  * Channel-gateway writes the context to ContextStore BEFORE publishing to
  * Kafka, so the first skill-flow step already has @ctx.* available.
  *
- * Invariants:
- *   - No business logic — routes to channel-gateway only
- *   - session_token carries tenant_id + origin session_id (used as origin_session_id)
- *   - Errors returned as MCP error response, never thrown unhandled
+ * Design notes:
+ *   - tenant_id and origin_session_id are passed explicitly as inputs.
+ *     In skill-flow YAML invoke steps, use $.tenant_id and $.session_id
+ *     which are built-in references added to the JSONPath evalContext.
+ *   - context_* prefixed inputs are collected into the ContextStore seed dict.
+ *     Key mapping: "context_session_foo_bar" → "session.foo.bar" (underscores
+ *     after the first two segments become dots). For explicit control, pass
+ *     context as flat "ctx_tag" fields where the tag uses underscores as
+ *     dot separators: ctx_session_numero_atual → "session.numero.atual"
+ *     ... or simply pass context_json (JSON string).
+ *   - Errors returned as MCP error response, never thrown unhandled.
  */
 
 import { z }              from "zod"
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
-import { verifySessionToken, InvalidTokenError } from "../infra/jwt"
 import { withGuard }      from "../infra/tool-guard"
 
 // ─── Dependências injetadas ──────────────────────────────────────────────────
@@ -31,8 +37,8 @@ export interface WorkflowDeps {
 // ─── Schemas ─────────────────────────────────────────────────────────────────
 
 const WorkflowTriggerInputSchema = z.object({
-  session_token: z.string().min(1).describe(
-    "Agent session token (carries tenant_id and origin session_id)"
+  tenant_id: z.string().min(1).describe(
+    "Tenant ID. In skill-flow YAML use $.tenant_id (built-in reference)."
   ),
 
   skill_id: z.string().min(1).describe(
@@ -40,16 +46,19 @@ const WorkflowTriggerInputSchema = z.object({
     "(e.g. 'skill_portabilidade_demo_v1'). Must be registered in a webhook pool."
   ),
 
-  context: z.record(z.string()).optional().describe(
-    "ContextStore seed entries for the new session. " +
-    "Dict of {tag: value} where both are strings. " +
-    "Example: {\"session.numero_atual\": \"11999999999\"}. " +
-    "Written to ContextStore before routing so the workflow can read them from step 1."
+  origin_session_id: z.string().optional().describe(
+    "Current session ID — stored as session.origin_session_id in the new workflow " +
+    "session ContextStore for traceability. In skill-flow YAML use $.session_id."
+  ),
+
+  context_json: z.string().optional().describe(
+    "JSON-encoded ContextStore seed entries {tag: value} for the new session. " +
+    "Written before routing so workflow step 1 can read them via @ctx.*. " +
+    "Example: '{\"session.numero_atual\": \"11999999999\"}'"
   ),
 
   customer_id: z.string().optional().describe(
-    "Customer identifier for the new webhook session. " +
-    "Defaults to the customer_id from the origin session when omitted."
+    "Customer identifier for the new webhook session."
   ),
 })
 
@@ -59,46 +68,45 @@ export function registerWorkflowTools(
   server: McpServer,
   deps:   WorkflowDeps,
 ) {
-  // ── workflow_trigger ────────────────────────────────────────────────────────
-
   server.tool(
     "workflow_trigger",
     "Trigger an async webhook workflow session (Arc 19 unified session model). " +
     "Creates a new session with channel_type=webhook, seeds its ContextStore with " +
     "the provided context entries, and links it to the current session via " +
     "origin_session_id. The workflow runs independently — the current session " +
-    "continues normally after this call. " +
-    "Returns the new workflow session_id.",
+    "continues normally after this call. Returns { workflow_session_id, status }.",
     WorkflowTriggerInputSchema.shape,
-    withGuard(async (input) => {
-      // ── Decode session token ────────────────────────────────────────────────
-      let tenantId:    string
-      let sessionId:   string
-      let customerId:  string | undefined
+    withGuard("workflow_trigger", async (input: Record<string, unknown>) => {
+      const parsed = WorkflowTriggerInputSchema.safeParse(input)
+      if (!parsed.success) {
+        return {
+          content: [{ type: "text" as const, text: `Invalid input: ${parsed.error.message}` }],
+          isError: true,
+        }
+      }
+      const { tenant_id, skill_id, origin_session_id, context_json, customer_id } = parsed.data
 
-      try {
-        const decoded = verifySessionToken(input.session_token)
-        tenantId   = decoded.tenant_id
-        sessionId  = decoded.session_id
-        customerId = input.customer_id ?? (decoded as any).customer_id
-      } catch (err) {
-        if (err instanceof InvalidTokenError) {
+      // ── Parse context_json ────────────────────────────────────────────────
+      let context: Record<string, string> = {}
+      if (context_json) {
+        try {
+          context = JSON.parse(context_json) as Record<string, string>
+        } catch {
           return {
-            content: [{ type: "text" as const, text: `Invalid session token: ${err.message}` }],
+            content: [{ type: "text" as const, text: `Invalid context_json: must be a valid JSON object string` }],
             isError: true,
           }
         }
-        throw err
       }
 
-      // ── POST to channel-gateway trigger endpoint ────────────────────────────
-      const url  = `${deps.channelGatewayUrl}/v1/channels/webhook/${encodeURIComponent(input.skill_id)}`
+      // ── POST to channel-gateway trigger endpoint ───────────────────────────
+      const url  = `${deps.channelGatewayUrl}/v1/channels/webhook/${encodeURIComponent(skill_id)}`
       const body = {
-        tenant_id:         tenantId,
-        trigger_type:      "task",          // initiated by an agent task
-        origin_session_id: sessionId,       // traceability link
-        customer_id:       customerId,
-        context:           input.context ?? {},
+        tenant_id,
+        trigger_type:      "task",
+        origin_session_id: origin_session_id ?? null,
+        customer_id:       customer_id ?? null,
+        context,
       }
 
       let res: Response
@@ -130,8 +138,8 @@ export function registerWorkflowTools(
           type: "text" as const,
           text: JSON.stringify({
             workflow_session_id: data.session_id,
-            origin_session_id:   sessionId,
-            skill_id:            input.skill_id,
+            origin_session_id:   origin_session_id ?? null,
+            skill_id,
             status:              "triggered",
           }),
         }],

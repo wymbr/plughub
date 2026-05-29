@@ -119,9 +119,26 @@ export async function resolveInputValue(
   ctx:          StepContext,
   contextStore?: IContextStore,
 ): Promise<unknown> {
-  if (typeof value !== "string") return value
-  if (!SINGLE_REF_REGEX.test(value)) return value
-  return resolveRef(value, ctx, contextStore)
+  if (typeof value === "string") {
+    // Pure reference → resolve as raw value
+    if (SINGLE_REF_REGEX.test(value)) {
+      return resolveRef(value, ctx, contextStore)
+    }
+    // Template string with {{...}} placeholders → interpolate (returns string)
+    // Enables invoke step inputs like:
+    //   context_json: '{"session.foo": "{{$.pipeline_state.foo}}"}'
+    if (value.includes("{{")) {
+      return interpolate(value, ctx, contextStore)
+    }
+    return value
+  }
+  // Recursively resolve nested plain objects so that invoke step inputs like
+  //   context: { "session.foo": "$.pipeline_state.foo" }
+  // have their values resolved just like top-level string inputs.
+  if (value !== null && typeof value === "object" && !Array.isArray(value)) {
+    return resolveInputMap(value as Record<string, unknown>, ctx, contextStore)
+  }
+  return value
 }
 
 // ── resolveInputMap — resolve mapa de inputs de step ────────────────────────
@@ -239,6 +256,13 @@ function resolveJsonPathRef(ref: string, ctx: StepContext): unknown {
     const evalContext = {
       pipeline_state: ctx.state.results,
       session:        ctx.sessionContext,
+      // Always-available built-in fields — accessible as $.session_id, $.tenant_id etc.
+      // Useful in invoke steps that need the current session or tenant identifier
+      // without requiring the caller to put them in sessionContext explicitly.
+      session_id:     ctx.sessionId,
+      tenant_id:      ctx.tenantId,
+      customer_id:    ctx.customerId,
+      instance_id:    ctx.instanceId,
     }
     return JSONPath({ path: ref, json: evalContext as object, wrap: false })
   } catch {

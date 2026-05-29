@@ -134,10 +134,12 @@ steps:
     type: invoke
     tool: workflow_trigger
     input:
-      skill_id: "skill_portabilidade_demo_v1"
-      context:
-        "session.numero_atual":      "$.pipeline_state.numero_atual"
-        "session.operadora_destino": "$.pipeline_state.operadora_destino"
+      skill_id:          "skill_portabilidade_demo_v1"
+      tenant_id:         "$.tenant_id"
+      origin_session_id: "$.session_id"
+      # context_json usa template {{}} para interpolar os valores coletados.
+      # A skill-flow-engine expande {{$.pipeline_state.*}} antes de chamar o MCP.
+      context_json: '{"session.numero_atual": "{{$.pipeline_state.numero_atual}}", "session.operadora_destino": "{{$.pipeline_state.operadora_destino}}"}'
     on_success: avisar_inicio
     on_failure: avisar_inicio   # continua mesmo se o trigger falhar (graceful)
 
