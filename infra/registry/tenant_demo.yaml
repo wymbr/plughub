@@ -87,6 +87,16 @@ pools:
     channel_types: [webchat, whatsapp]
     sla_target_ms: 300000
 
+  - pool_id: portabilidade_processo_ia
+    # Arc 19: pool webhook para o processo assíncrono de portabilidade.
+    # Disparado pelo intake via workflow_trigger MCP tool.
+    # Executa skill_portabilidade_demo_v1: suspend 48h → collect → complete.
+    description: "Pool webhook — processo assíncrono de portabilidade (Arc 19)"
+    channel_types: [webhook]
+    skill_id: skill_portabilidade_demo_v1
+    max_concurrent_sessions: 20
+    sla_target_ms: 172800000  # 48h em ms
+
   - pool_id: reembolso_ia
     # Pool do agente de intake de reembolso.
     # Coleta número do pedido + motivo e persiste no ContextStore.
@@ -384,6 +394,24 @@ agent_types:
     capabilities:
       channels: webchat,whatsapp
       finalization: "true"
+
+  # Arc 19: Agente de processo de portabilidade (webhook pool).
+  # Disparado pelo intake via workflow_trigger. Executa skill_portabilidade_demo_v1:
+  #   notify → suspend (48h aguarda aprovação operadora) → choice → collect → complete.
+  - agent_type_id: agente_portabilidade_processo_v1
+    framework: plughub-native
+    execution_model: stateless
+    role: executor
+    max_concurrent_sessions: 20
+    pools: [portabilidade_processo_ia]
+    skills: [{skill_id: skill_portabilidade_demo_v1}]
+    permissions:
+      - mcp-server-plughub:agent_heartbeat
+      - mcp-server-plughub:notification_send
+      - mcp-server-plughub:context_set
+      - mcp-server-plughub:context_get
+    capabilities:
+      channels: webhook
 
   # Avaliador echo — teste do receive step em tempo real.
   # Acionado via on_human_start do pool retencao_humano.

@@ -4018,6 +4018,17 @@ async def process_contact_event(
                             "timestamp":       datetime.now(timezone.utc).isoformat(),
                         }).encode("utf-8"),
                     ))
+                    logger.info(
+                        "agent_done published to lifecycle (human agent): "
+                        "session=%s instance=%s pool=%s tenant=%s",
+                        session_id, instance_id, _ha_pool, _ha_tenant,
+                    )
+                else:
+                    logger.warning(
+                        "agent_done NOT published (human agent): session=%s "
+                        "has_producer=%s tenant=%r pool=%r",
+                        session_id, _kafka_producer is not None, _ha_tenant, _ha_pool,
+                    )
 
                 await redis_client.srem(f"session:{session_id}:human_agents", instance_id)
                 remaining = await redis_client.scard(f"session:{session_id}:human_agents")

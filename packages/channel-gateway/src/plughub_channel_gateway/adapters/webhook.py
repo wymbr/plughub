@@ -121,6 +121,7 @@ class WebhookAdapter(ChannelAdapter):
         session_id  = str(uuid.uuid4())
         customer_id = customer_id or f"sys:{trigger_type}:{uuid.uuid4().hex[:8]}"
 
+        now_str = datetime.now(timezone.utc).isoformat()
         event = {
             "event_id":          str(uuid.uuid4()),
             "session_id":        session_id,
@@ -132,7 +133,10 @@ class WebhookAdapter(ChannelAdapter):
             "trigger_type":      trigger_type,
             "metadata":          metadata or {},
             "origin_session_id": origin_session_id,
-            "timestamp":         datetime.now(timezone.utc).isoformat(),
+            "timestamp":         now_str,
+            # Arc 19: required by ConversationInboundEvent schema in routing-engine.
+            # For webhook sessions there is no prior wait time — started_at == trigger time.
+            "started_at":        now_str,
         }
 
         # ── Seed ContextStore before publishing to Kafka ─────────────────────
@@ -270,6 +274,10 @@ class WebhookAdapter(ChannelAdapter):
             "step_id":      step_id,
             "payload":      payload or {},
             "timestamp":    now_iso,
+            # Arc 19: required by ConversationInboundEvent schema in routing-engine.
+            # On resume, elapsed_ms could reflect the suspend duration, but the
+            # routing engine does not use it for webhook re-allocation. Use now_iso.
+            "started_at":   now_iso,
         }
 
         await self._publish(event, topic="conversations.inbound")
