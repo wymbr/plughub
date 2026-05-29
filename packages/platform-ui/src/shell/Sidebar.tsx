@@ -4,7 +4,7 @@ import { useAuth } from '@/auth/useAuth'
 import { useTranslation } from 'react-i18next'
 import {
   Home, Monitor, Radio, GitBranch, ClipboardCheck, BarChart2, Settings, Search,
-  FileText, List, Waves, Zap, Cpu, PenLine, Rocket, FileCheck, BookOpen,
+  FileText, List, Waves, Zap, PenLine, Rocket, FileCheck, BookOpen,
   Archive, Ruler, LayoutDashboard, Package, Tv2, Calendar, ShieldOff, CreditCard,
   Lock, Users, Globe,
 } from 'lucide-react'
@@ -64,7 +64,6 @@ const Sidebar: React.FC = () => {
         { label: t('nav.monitor.agents'),    href: '/contacts/agents',   icon: Users,     abac: { module: 'contacts',   field: 'operacao' } },
         { label: t('nav.monitor.pools'),     href: '/contacts/pools',    icon: Waves,     abac: { module: 'contacts',   field: 'operacao' } },
         { label: t('nav.monitor.events'),    href: '/contacts/events',   icon: Zap,       abac: { module: 'contacts',   field: 'operacao' } },
-        { label: t('nav.monitor.processes'), href: '/flow/processos',    icon: Cpu,       abac: { module: 'workflows',  field: 'operacao' } },
       ]
     },
 
@@ -109,7 +108,6 @@ const Sidebar: React.FC = () => {
         { label: t('nav.analise.sessions'),  href: '/analise/sessions',  icon: FileText,      abac: { module: 'contacts',   field: 'visualizar' } },
         { label: t('nav.analise.agents'),    href: '/analise/agents',    icon: Users,         abac: { module: 'contacts',   field: 'visualizar' } },
         { label: t('nav.analise.events'),    href: '/analise/events',    icon: Zap,           abac: { module: 'contacts',   field: 'visualizar' } },
-        { label: t('nav.analise.processes'), href: '/analise/processos', icon: Cpu,           abac: { module: 'workflows',  field: 'operacao'   } },
         { label: t('nav.analise.quality'),   href: '/analise/quality',   icon: ClipboardCheck, abac: { module: 'evaluation', field: 'report'     } },
       ]
     },
