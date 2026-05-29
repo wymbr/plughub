@@ -39,6 +39,36 @@ A spec original em [`docs/arcos/arc18-workflow-execution-trace.md`](docs/arcos/a
 
 ---
 
+## Collect step — `persistCollectWebhook` em resume_tokens *(deferred)*
+
+O step `collect` em modo webhook suspende e grava o `collect_token` apenas no `pipeline_state.results`. Diferente do step `suspend` (que grava em `{tenant}:resume_tokens`), o collect não expõe o token via o hash Redis, então o endpoint `POST /v1/channels/webhook/resume/{token}` não consegue encontrá-lo.
+
+**Fix necessário no skill-flow-engine** (`steps/collect.ts`): chamar `ctx.persistCollectWebhook(collectToken, sessionId, stepId, expiresAt)` que grava `{collectToken} → {session_id}:{step_id}:{expires_at}` em `{tenant}:resume_tokens`, exatamente como `persistSuspendWebhook` faz. Com isso, a mesma URL de resume funciona para suspend e collect sem workaround.
+
+**Workaround atual (demo)**: `redis-cli HSET "tenant_demo:resume_tokens" {collect_token} "{session_id}:{step_id}:{expires_at}"` antes de chamar o endpoint.
+
+---
+
+## Webhook collect — detecção de processo pendente para cliente *(deferred)*
+
+Quando o `aguardar_confirmacao` (collect step) executa, ele aguarda resposta do cliente via canal. No webchat, o cliente não tem sessão aberta — precisaria abrir uma nova sessão e o sistema detectar que há um processo pendente.
+
+**Dois caminhos possíveis:**
+1. **Sistema-iniciado**: o collect step cria uma sessão outbound usando `contact_identifier` (coletado no intake). Requer que o channel-gateway suporte sessões outbound para webchat com `customer_id` como identificador.
+2. **Cliente-iniciado**: quando o cliente abre nova sessão webchat, o routing engine consulta se há collect pendente para o `customer_id` e roteia direto para a confirmação. Requer hook no routing antes da alocação normal.
+
+**Canais com ANI** (WhatsApp, voz): `customer_id` já é o número do cliente, então o collect pode criar a sessão outbound usando esse identificador diretamente. Para esses canais o fluxo funciona sem mudança adicional.
+
+---
+
+## Webhook workflow trace — segmentos históricos sem origin_session_id *(deferred)*
+
+A migração ClickHouse `_DDL_SESSIONS_MIGRATE_ORIGIN` adiciona a coluna `origin_session_id` à tabela `sessions`, mas sessões webhook criadas antes da migração têm o campo NULL. O `WorkflowTraceList` não vai exibir o segmento de entrada (intake) para essas sessões. Apenas sessões criadas após a migração terão o link correto.
+
+Não requer ação — os dados históricos permanecem corretos para análise; apenas o link de rastreabilidade cross-session ficará ausente para sessões antigas.
+
+---
+
 ## Usage Metering — Channel Gateway Adapters *(deferred)*
 
 Funções em `usage_emitter.py` implementadas, mas os adapters de canal ainda não as chamam. Será wired quando cada adapter for criado:
