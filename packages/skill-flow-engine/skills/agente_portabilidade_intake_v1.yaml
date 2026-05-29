@@ -123,14 +123,32 @@ steps:
     on_success: avisar_inicio
     on_failure: avisar_inicio   # continua mesmo se context_set falhar
 
-  # ── Etapa 7: confirmar registro ao cliente ───────────────────────────────────
+  # ── Etapa 7: disparar workflow assíncrono de portabilidade ────────────────────
+  # Cria uma sessão independente com channel_type=webhook que vai:
+  #   - aguardar aprovação da operadora (suspend 48h)
+  #   - coletar confirmação do cliente (collect)
+  # O origin_session_id é injetado automaticamente pelo mcp-server a partir
+  # do session_token. O context semeia os dados coletados no ContextStore
+  # do novo workflow antes do primeiro step rodar.
+  - id: disparar_workflow
+    type: invoke
+    tool: workflow_trigger
+    input:
+      skill_id: "skill_portabilidade_demo_v1"
+      context:
+        "session.numero_atual":      "$.pipeline_state.numero_atual"
+        "session.operadora_destino": "$.pipeline_state.operadora_destino"
+    on_success: avisar_inicio
+    on_failure: avisar_inicio   # continua mesmo se o trigger falhar (graceful)
+
+  # ── Etapa 8: confirmar registro ao cliente ───────────────────────────────────
   - id: avisar_inicio
     type: notify
     message: "✅ Solicitação de portabilidade registrada com sucesso!\n\nEm até 48 horas úteis, a operadora responderá. Você receberá uma mensagem aqui para confirmar a transferência.\n\nSe precisar de mais alguma coisa, pode entrar em contato novamente."
     on_success: finalizar
     on_failure: finalizar
 
-  # ── Etapa 8: finalização normal ───────────────────────────────────────────────
+  # ── Etapa 9: finalização normal ───────────────────────────────────────────────
   - id: finalizar
     type: complete
     outcome: resolved

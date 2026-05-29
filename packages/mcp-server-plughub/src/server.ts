@@ -34,6 +34,8 @@ import { registerCalendarTools }    from "./tools/calendar"
 import type { CalendarDeps }        from "./tools/calendar"
 import { registerAgentEventTools }  from "./tools/agent-events"
 import type { AgentEventDeps }      from "./tools/agent-events"
+import { registerWorkflowTools }    from "./tools/workflow"
+import type { WorkflowDeps }        from "./tools/workflow"
 import jwt                         from "jsonwebtoken"
 import { createRedisClient, keys } from "./infra/redis"
 import { createKafkaProducer }     from "./infra/kafka"
@@ -854,6 +856,9 @@ export async function startServer(config: ServerConfig): Promise<void> {
       tenantId:       process.env["PLUGHUB_TENANT_ID"] ?? process.env["TENANT_ID"] ?? "tenant_demo",
     })
     registerAgentEventTools(mcpServer, { redis, kafka })
+    registerWorkflowTools(mcpServer, {
+      channelGatewayUrl: process.env["CHANNEL_GATEWAY_URL"] ?? "http://channel-gateway:8010",
+    })
 
     transports.set(transport.sessionId, transport)
 

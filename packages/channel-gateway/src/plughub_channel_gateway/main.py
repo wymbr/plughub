@@ -644,10 +644,12 @@ async def webrtc_token(
 # ── Webhook channel endpoints (Arc 19) ───────────────────────────────────────
 
 class WebhookTriggerRequest(BaseModel):
-    tenant_id:    str
-    trigger_type: str = "api"          # api | webhook | task | scheduled | yaml_auto
-    metadata:     dict | None = None
-    customer_id:  str | None = None
+    tenant_id:         str
+    trigger_type:      str = "api"          # api | webhook | task | scheduled | yaml_auto
+    metadata:          dict | None = None
+    customer_id:       str | None = None
+    origin_session_id: str | None = None    # Arc 19: session that triggered this workflow
+    context:           dict | None = None   # Arc 19: seed ContextStore entries {tag: value}
 
 class WebhookResumeRequest(BaseModel):
     tenant_id: str
@@ -669,11 +671,13 @@ async def webhook_trigger(skill_id: str, body: WebhookTriggerRequest) -> dict:
         raise HTTPException(status_code=503, detail="Webhook adapter not initialised")
 
     session_id = await _webhook_adapter.handle_trigger(
-        skill_id     = skill_id,
-        tenant_id    = body.tenant_id,
-        trigger_type = body.trigger_type,
-        metadata     = body.metadata,
-        customer_id  = body.customer_id,
+        skill_id           = skill_id,
+        tenant_id          = body.tenant_id,
+        trigger_type       = body.trigger_type,
+        metadata           = body.metadata,
+        customer_id        = body.customer_id,
+        origin_session_id  = body.origin_session_id,
+        context            = body.context,
     )
     return {"session_id": session_id}
 

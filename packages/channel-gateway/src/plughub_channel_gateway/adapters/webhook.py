@@ -91,11 +91,13 @@ class WebhookAdapter(ChannelAdapter):
 
     async def handle_trigger(
         self,
-        skill_id:     str,
-        tenant_id:    str,
-        trigger_type: TriggerType = "api",
-        metadata:     dict[str, Any] | None = None,
-        customer_id:  str | None = None,
+        skill_id:          str,
+        tenant_id:         str,
+        trigger_type:      TriggerType = "api",
+        metadata:          dict[str, Any] | None = None,
+        customer_id:       str | None = None,
+        origin_session_id: str | None = None,
+        context:           dict[str, Any] | None = None,
     ) -> str:
         """
         Create a new webhook session for the given skill_id.
@@ -104,29 +106,77 @@ class WebhookAdapter(ChannelAdapter):
         The customer_id is the "ANI" — optional, defaults to a generated UUID
         when the trigger is not customer-initiated (e.g. scheduled, api).
 
+        origin_session_id: Arc 19 — session that triggered this workflow
+          (e.g. a webchat intake session). Written to ContextStore as
+          session.origin_session_id so agents can trace the provenance.
+
+        context: Arc 19 — seed ContextStore entries for the new session.
+          Dict of {tag: value} pairs (string values). Written atomically
+          before the routing engine allocates an instance, so the skill-flow
+          can read them from step 1 via @ctx.* resolution.
+          Example: {"session.numero_atual": "11999999999"}
+
         Returns the new session_id.
         """
         session_id  = str(uuid.uuid4())
         customer_id = customer_id or f"sys:{trigger_type}:{uuid.uuid4().hex[:8]}"
 
         event = {
-            "event_id":    str(uuid.uuid4()),
-            "session_id":  session_id,
-            "tenant_id":   tenant_id,
-            "channel":     "webhook",
-            "pool_id":     None,        # routing engine resolves pool via skill_id
-            "skill_id":    skill_id,    # DNIS for webhook channel — routing key
-            "customer_id": customer_id,
-            "trigger_type": trigger_type,
-            "metadata":    metadata or {},
-            "timestamp":   datetime.now(timezone.utc).isoformat(),
+            "event_id":          str(uuid.uuid4()),
+            "session_id":        session_id,
+            "tenant_id":         tenant_id,
+            "channel":           "webhook",
+            "pool_id":           None,        # routing engine resolves pool via skill_id
+            "skill_id":          skill_id,    # DNIS for webhook channel — routing key
+            "customer_id":       customer_id,
+            "trigger_type":      trigger_type,
+            "metadata":          metadata or {},
+            "origin_session_id": origin_session_id,
+            "timestamp":         datetime.now(timezone.utc).isoformat(),
         }
+
+        # ── Seed ContextStore before publishing to Kafka ─────────────────────
+        # Writing context entries BEFORE routing ensures that when the routing
+        # engine allocates a skill-flow instance and the first step runs, all
+        # seeded tags are already available via @ctx.* resolution.
+        #
+        # context_entries format: {tag: value} — both strings.
+        # origin_session_id is always written as session.origin_session_id
+        # (confidence 1.0, visibility agents_only) when provided.
+        ctx_key   = f"{tenant_id}:ctx:{session_id}"
+        now_iso   = datetime.now(timezone.utc).isoformat()
+        ctx_writes: dict[str, str] = {}
+
+        if origin_session_id:
+            ctx_writes["session.origin_session_id"] = json.dumps({
+                "value":      origin_session_id,
+                "confidence": 1.0,
+                "source":     "webhook_trigger",
+                "visibility": "agents_only",
+                "updated_at": now_iso,
+            })
+
+        for tag, value in (context or {}).items():
+            ctx_writes[tag] = json.dumps({
+                "value":      str(value),
+                "confidence": 1.0,
+                "source":     "webhook_trigger",
+                "visibility": "agents_only",
+                "updated_at": now_iso,
+            })
+
+        if ctx_writes:
+            await self._redis.hset(ctx_key, mapping=ctx_writes)
+            # TTL 24h — extended by skill-flow-engine suspend executor if needed
+            await self._redis.expire(ctx_key, 86_400)
 
         await self._publish(event, topic="conversations.inbound")
 
         logger.info(
-            "webhook trigger: session=%s skill=%s trigger_type=%s tenant=%s",
+            "webhook trigger: session=%s skill=%s trigger_type=%s tenant=%s "
+            "origin=%s ctx_tags=%d",
             session_id, skill_id, trigger_type, tenant_id,
+            origin_session_id or "-", len(ctx_writes),
         )
         return session_id
 
