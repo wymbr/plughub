@@ -75,7 +75,10 @@ export function registerWorkflowTools(
     "the provided context entries, and links it to the current session via " +
     "origin_session_id. The workflow runs independently — the current session " +
     "continues normally after this call. Returns { workflow_session_id, status }.",
-    WorkflowTriggerInputSchema.shape,
+    // Pass empty schema to MCP SDK — ZodOptional<ZodString> is incompatible with
+    // ZodRawShapeCompat in the MCP SDK version used in this project. Full input
+    // validation is done inside the handler via WorkflowTriggerInputSchema.safeParse().
+    {},
     withGuard("workflow_trigger", async (input: Record<string, unknown>) => {
       const parsed = WorkflowTriggerInputSchema.safeParse(input)
       if (!parsed.success) {
