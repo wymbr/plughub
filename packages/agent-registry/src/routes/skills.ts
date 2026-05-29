@@ -133,14 +133,6 @@ skillsRouter.put("/:skill_id", async (req: Request, res: Response, next: NextFun
   try {
     const tenantId  = _getTenantId(req)
     const skillId   = req.params["skill_id"]!
-    // ── Arc 17 (#301): creates_journey:true requires journey_type_id ──
-    const journeyTypeErrors = validateJourneyType(req.body)
-    if (journeyTypeErrors.length > 0) {
-      return res.status(422).json({
-        error:   "invalid_journey_type",
-        details: journeyTypeErrors,
-      })
-    }
 
     const body      = CreateSkillSchema.parse({ ...req.body, skill_id: skillId })
 
