@@ -120,8 +120,8 @@ steps:
       value: "$.pipeline_state.operadora_destino"
       confidence: 1.0
       visibility: "agents_only"
-    on_success: avisar_inicio
-    on_failure: avisar_inicio   # continua mesmo se context_set falhar
+    on_success: disparar_workflow
+    on_failure: disparar_workflow   # continua mesmo se context_set falhar
 
   # ── Etapa 7: disparar workflow assíncrono de portabilidade ────────────────────
   # Cria uma sessão independente com channel_type=webhook que vai:
