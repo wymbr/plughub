@@ -25,28 +25,17 @@ steps:
     timeout_hours: 48
     business_hours: true
     on_resume:
-      next: verificar_aprovacao
+      next: notificar_aprovado    # decision=approved → approved
+    on_reject:
+      next: notificar_rejeitado   # decision=rejected → rejected
     on_timeout:
       next: timeout_operadora
-
-  - id: verificar_aprovacao
-    type: choice
-    conditions:
-      - field: "@ctx.session.review_decision"
-        operator: eq
-        value: "approved"
-        next: notificar_aprovado
-      - field: "@ctx.session.review_decision"
-        operator: eq
-        value: "rejected"
-        next: notificar_rejeitado
-    default: aguardar_confirmacao
 
   - id: aguardar_confirmacao
     type: collect
     target:
       type: customer
-      id: "@ctx.session.customer_participant_id"
+      id: "@ctx.session.contact_identifier"
     requires: [text]
     prompt: "✅ Portabilidade do número {{@ctx.session.numero_atual}} para {{@ctx.session.operadora_destino}} foi pré-aprovada! Confirme para prosseguir com a transferência."
     timeout_hours: 24

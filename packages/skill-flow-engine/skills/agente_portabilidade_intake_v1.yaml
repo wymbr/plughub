@@ -87,6 +87,22 @@ steps:
         label: "📶 Outra operadora"
     output_as: operadora_destino
     timeout_s: 120
+    on_success: coletar_contato
+    on_failure: avisar_timeout
+    on_timeout: avisar_timeout
+    on_disconnect: finalizar_timeout
+
+  # ── Etapa 3b: coletar contato para retorno (webchat) ─────────────────────────
+  # Em canais com ANI (WhatsApp, voz), o customer_id já é o número do cliente
+  # e este step pode ser pulado no futuro com um choice baseado em $.channel.
+  # No webchat coletamos telefone ou e-mail para que o collect step do processo
+  # consiga criar uma nova sessão outbound de confirmação após a aprovação.
+  - id: coletar_contato
+    type: menu
+    prompt: "Para te notificar quando a portabilidade for aprovada, qual seu número de celular ou e-mail? (ex: 11987654321 ou nome@email.com)"
+    interaction: text
+    output_as: contact_identifier
+    timeout_s: 180
     on_success: confirmar_dados
     on_failure: avisar_timeout
     on_timeout: avisar_timeout
@@ -95,7 +111,7 @@ steps:
   # ── Etapa 4: confirmar dados antes de iniciar ────────────────────────────────
   - id: confirmar_dados
     type: notify
-    message: "📋 Perfeito! Vou iniciar o processo com os seguintes dados:\n• Número: {{$.pipeline_state.numero_atual}}\n• Operadora destino: {{$.pipeline_state.operadora_destino}}\n\nAguarde enquanto registro sua solicitação..."
+    message: "📋 Perfeito! Vou iniciar o processo com os seguintes dados:\n• Número a portar: {{$.pipeline_state.numero_atual}}\n• Operadora destino: {{$.pipeline_state.operadora_destino}}\n• Contato para retorno: {{$.pipeline_state.contact_identifier}}\n\nAguarde enquanto registro sua solicitação..."
     on_success: escrever_numero
     on_failure: escrever_numero
 
@@ -109,7 +125,7 @@ steps:
       confidence: 1.0
       visibility: "agents_only"
     on_success: escrever_operadora
-    on_failure: escrever_operadora   # continua mesmo se context_set falhar
+    on_failure: escrever_operadora
 
   # ── Etapa 6: persistir operadora_destino no ContextStore (session.*) ───────────
   - id: escrever_operadora
@@ -120,16 +136,28 @@ steps:
       value: "$.pipeline_state.operadora_destino"
       confidence: 1.0
       visibility: "agents_only"
+    on_success: escrever_contato
+    on_failure: escrever_contato
+
+  # ── Etapa 6b: persistir contact_identifier no ContextStore ───────────────────
+  # Usado pelo collect step do processo para criar a sessão outbound de confirmação.
+  # Em canais com ANI, substituir por: value: "$.customer_id"
+  - id: escrever_contato
+    type: invoke
+    tool: context_set
+    input:
+      tag: "session.contact_identifier"
+      value: "$.pipeline_state.contact_identifier"
+      confidence: 1.0
+      visibility: "agents_only"
     on_success: disparar_workflow
-    on_failure: disparar_workflow   # continua mesmo se context_set falhar
+    on_failure: disparar_workflow
 
   # ── Etapa 7: disparar workflow assíncrono de portabilidade ────────────────────
   # Cria uma sessão independente com channel_type=webhook que vai:
   #   - aguardar aprovação da operadora (suspend 48h)
-  #   - coletar confirmação do cliente (collect)
-  # O origin_session_id é injetado automaticamente pelo mcp-server a partir
-  # do session_token. O context semeia os dados coletados no ContextStore
-  # do novo workflow antes do primeiro step rodar.
+  #   - coletar confirmação do cliente via nova sessão (collect)
+  # contact_identifier é o número/e-mail coletado para o retorno.
   - id: disparar_workflow
     type: invoke
     tool: workflow_trigger
@@ -137,11 +165,9 @@ steps:
       skill_id:          "skill_portabilidade_demo_v1"
       tenant_id:         "$.tenant_id"
       origin_session_id: "$.session_id"
-      # context_json usa template {{}} para interpolar os valores coletados.
-      # A skill-flow-engine expande {{$.pipeline_state.*}} antes de chamar o MCP.
-      context_json: '{"session.numero_atual": "{{$.pipeline_state.numero_atual}}", "session.operadora_destino": "{{$.pipeline_state.operadora_destino}}"}'
+      context_json: '{"session.numero_atual": "{{$.pipeline_state.numero_atual}}", "session.operadora_destino": "{{$.pipeline_state.operadora_destino}}", "session.contact_identifier": "{{$.pipeline_state.contact_identifier}}"}'
     on_success: avisar_inicio
-    on_failure: avisar_inicio   # continua mesmo se o trigger falhar (graceful)
+    on_failure: avisar_inicio
 
   # ── Etapa 8: confirmar registro ao cliente ───────────────────────────────────
   - id: avisar_inicio
