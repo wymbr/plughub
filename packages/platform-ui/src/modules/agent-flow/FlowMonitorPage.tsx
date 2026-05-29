@@ -56,7 +56,7 @@ export default function FlowMonitorPage() {
             onChange={e => setFilters(f => ({ ...f, channel: e.target.value }))}
             className="text-xs border border-border-strong rounded-lg px-2.5 py-1.5 bg-white focus:outline-none focus:ring-2 focus:ring-primary/30">
             <option value="">{t('filter.allChannels')}</option>
-            {['webchat','whatsapp','voice','email','sms'].map(c => (
+            {['webchat','whatsapp','voice','email','sms','instagram','telegram','webrtc','webhook'].map(c => (
               <option key={c} value={c}>{c}</option>
             ))}
           </select>
