@@ -420,5 +420,5 @@
     "searchPlaceholder":"Search phrases or @specialist…",
     "noResults":        "No results for \"{{query}}\"",
     "viaAt":            "via @mention"
-  },
+  }
 }
