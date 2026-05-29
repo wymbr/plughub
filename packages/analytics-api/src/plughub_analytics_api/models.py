@@ -57,6 +57,8 @@ def parse_inbound(payload: dict[str, Any]) -> dict | None:
     dnis = (payload.get("dnis") or payload.get("dialed_number") or payload.get("to")
             or meta.get("dnis") or meta.get("dialed_number") or meta.get("to") or None)
 
+    event_type = payload.get("event_type") or payload.get("type")
+
     return {
         "table":        "sessions",
         "session_id":   session_id,
@@ -73,6 +75,8 @@ def parse_inbound(payload: dict[str, Any]) -> dict | None:
         "timestamp":    payload.get("started_at") or _now(),
         "ani":          ani,
         "dnis":         dnis,
+        # Arc 19: mark re-opened (resumed) sessions as active; new sessions also start active.
+        "status":       "active",
     }
 
 
@@ -185,9 +189,10 @@ def parse_conversations_event(payload: dict[str, Any]) -> list[dict] | None:
     """
     Handles the multi-type conversations.events topic.
     Recognised event_type values:
-      contact_open    → sessions upsert
-      contact_closed  → sessions upsert (with closed_at, close_reason, outcome)
-      message_sent    → messages insert
+      contact_open       → sessions upsert
+      contact_closed     → sessions upsert (with closed_at, close_reason, outcome)
+      message_sent       → messages insert
+      session_suspended  → sessions upsert (Arc 19: status = 'suspended')
     All others are silently skipped.
     """
     event_type = payload.get("event_type") or payload.get("type")
@@ -240,6 +245,22 @@ def parse_conversations_event(payload: dict[str, Any]) -> list[dict] | None:
                 "outcome":        payload.get("outcome"),
                 "handle_time_ms": handle_time_ms,
                 "timestamp":      ended_at,
+                "status":         "closed",
+            }
+        ]
+
+    # Arc 19: webhook session suspended (skill-flow hit a suspend step).
+    # The orchestrator-bridge publishes this to conversations.events after writing
+    # the event to the canonical Redis stream, so analytics can track it in ClickHouse.
+    if event_type == "session_suspended":
+        return [
+            {
+                "table":      "sessions",
+                "session_id": session_id,
+                "tenant_id":  tenant_id,
+                "opened_at":  payload.get("timestamp") or _now(),
+                "timestamp":  payload.get("timestamp") or _now(),
+                "status":     "suspended",
             }
         ]
 
@@ -733,61 +754,9 @@ def parse_evaluation_event(payload: dict[str, Any]) -> list[dict] | None:
     return [result_row, event_row]
 
 
-# ─── journey.events (Arc 10) ──────────────────────────────────────────────────
-
-# Maps journey event_type → status stored in journey_events.status
-_JOURNEY_STATUS_MAP: dict[str, str | None] = {
-    "journey_started":         "active",
-    "journey_session_linked":  None,          # status unchanged, not a lifecycle transition
-    "journey_suspended":       "suspended",
-    "journey_resumed":         "active",
-    "journey_completed":       "completed",
-    "journey_failed":          "failed",
-    "journey_cancelled":       "cancelled",
-    "journey_merged":          "merged",
-    "journey_split":           None,          # audit event — no status change on source journey
-}
-
-
-def parse_journey_event(payload: dict[str, Any]) -> dict | None:
-    """Maps journey.* events → journey_events table (append-only audit log)."""
-    event_type = payload.get("event_type")
-    tenant_id  = payload.get("tenant_id")
-    journey_id = payload.get("journey_id")
-
-    if not event_type or not tenant_id or not journey_id:
-        return None
-
-    if event_type not in _JOURNEY_STATUS_MAP:
-        return None  # unknown event type — skip
-
-    return {
-        "table":                  "journey_events",
-        "event_id":               _gen_id(),
-        "event_type":             event_type,
-        "timestamp":              payload.get("timestamp") or _now(),
-        "tenant_id":              tenant_id,
-        "journey_id":             journey_id,
-        "skill_id":               payload.get("skill_id") or "",
-        "status":                 _JOURNEY_STATUS_MAP[event_type],
-        "customer_id":            payload.get("customer_id") or None,
-        "origin_session_id":      payload.get("origin_session_id") or None,
-        "session_id":             payload.get("session_id") or None,
-        "workflow_instance_id":   payload.get("workflow_instance_id") or None,
-        "merged_into_journey_id": payload.get("merged_into_journey_id") or None,
-        # Phase F split fields (journey_split only)
-        "split_from_journey_id":  payload.get("split_from_journey_id") or None,
-        "new_journey_id":         payload.get("new_journey_id") or None,
-        "session_count":          payload.get("session_count") or None,
-        # D.5 session progression fields (journey_session_linked only)
-        "current_step":           payload.get("current_step") or None,
-        "session_outcome":        payload.get("session_outcome") or None,
-        "session_started_at":     payload.get("session_started_at") or None,
-        "session_ended_at":       payload.get("session_ended_at") or None,
-        # Arc 17: JourneyType governance
-        "journey_type_id":        payload.get("journey_type_id") or None,
-        "pool_id":                payload.get("pool_id") or None,
-    }
+# journey.events (Arc 10) — REMOVED (Arc 19 Fase F)
+# Journey entity superseded by Arc 19 unified session model.
+# See CHANGELOG.md for history (Arcs 10, 16, 17).
 
 
 # ─── agent.events (Arc 12) ────────────────────────────────────────────────────

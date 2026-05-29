@@ -67,6 +67,20 @@ export interface SkillFlowEngineConfig {
   }) => Promise<{ resume_expires_at: string }>
 
   /**
+   * Arc 19 — Optional. Wired by orchestrator-bridge for webhook (workflow) sessions.
+   * Replaces the wall-clock fallback for webhook pools.
+   * See StepContext.persistSuspendWebhook for full contract.
+   * Priority: persistSuspend (Arc 4) → persistSuspendWebhook (Arc 19) → wall-clock.
+   */
+  persistSuspendWebhook?: (params: {
+    tenant_id:    string
+    session_id:   string
+    step_id:      string
+    resume_token: string
+    timeout_hours: number
+  }) => Promise<{ resume_expires_at: string }>
+
+  /**
    * Arc 4 — Optional. Wired by the Skill Flow worker to persist a collect_instance
    * in PostgreSQL, calculate send_at/expires_at via calendar-api, and publish
    * collect.requested to Kafka.
@@ -621,6 +635,12 @@ export class SkillFlowEngine {
       ...(self.config.persistSuspend
         ? { persistSuspend: (params: Parameters<NonNullable<StepContext["persistSuspend"]>>[0]) =>
               self.config.persistSuspend!({ tenant_id: tenantId, session_id: sessionId, ...params }) }
+        : {}),
+
+      // Arc 19 — wired only when caller provides persistSuspendWebhook (and persistSuspend is absent)
+      ...(!self.config.persistSuspend && self.config.persistSuspendWebhook
+        ? { persistSuspendWebhook: (params: Parameters<NonNullable<StepContext["persistSuspendWebhook"]>>[0]) =>
+              self.config.persistSuspendWebhook!({ tenant_id: tenantId, session_id: sessionId, ...params }) }
         : {}),
 
       // Arc 4 — wired only when caller provides persistCollect

@@ -57,7 +57,6 @@ from .db import (
     db_complete_instance,
     db_create_collect,
     db_create_instance,
-    db_create_journey_for_instance,
     db_create_webhook,
     db_delete_webhook,
     db_fail_instance,
@@ -84,7 +83,6 @@ from .kafka_emitter import (
     emit_completed,
     emit_events_batch,
     emit_failed,
-    emit_journey_session_linked,
     emit_resumed,
     emit_started,
     emit_suspended,
@@ -119,7 +117,6 @@ class TriggerRequest(BaseModel):
     # target {tenant}:ctx:{origin_session_id} rather than the workflow UUID.
     origin_session_id: str | None = None
     pool_id:           str | None = None
-    journey_id:        str | None = None
     context:           dict = Field(default_factory=dict)
     metadata:          dict = Field(default_factory=dict)
 
@@ -151,16 +148,7 @@ async def _resolve_flow_definition(
         if resp.status_code == 200:
             skill = resp.json()
             if skill.get("flow"):
-                # Merge root-level skill flags (creates_journey, journey_type_id)
-                # into flow_definition so skill-flow-worker can read them from
-                # flowDefinition without needing a separate metadata lookup.
-                # Arc 17 (#301): journey_type_id must be present when creates_journey=true.
-                flow_def = dict(skill["flow"])
-                if skill.get("creates_journey"):
-                    flow_def["creates_journey"] = True
-                if skill.get("journey_type_id"):
-                    flow_def["journey_type_id"] = skill["journey_type_id"]
-                return {**metadata, "flow_definition": flow_def}
+                return {**metadata, "flow_definition": dict(skill["flow"])}
     except Exception as exc:  # noqa: BLE001
         logger.warning("Could not fetch flow_definition for %s from registry: %s", flow_id, exc)
 
@@ -171,54 +159,46 @@ async def _resolve_flow_definition(
 async def trigger_workflow(
     body:    TriggerRequest,
     request: Request,
-    pool=Depends(_pool),
 ) -> dict[str, Any]:
     """
-    Create a new WorkflowInstance and signal that execution should begin.
-    The actual Skill Flow execution is delegated to a TypeScript worker that
-    consumes the workflow.started Kafka event.
+    Arc 19 Fase D — proxies to the channel-gateway WebhookAdapter.
 
-    If body.flow_id matches skill_*_v{n} and body.metadata has no flow_definition,
-    the skill's flow is automatically fetched from agent-registry and injected.
+    POST /v1/channels/webhook/{flow_id} creates a normal webhook session via
+    conversations.inbound Kafka.  The session_id returned by channel-gateway
+    is the single persistent identifier for the workflow execution.
+
+    Legacy fields (origin_session_id, pool_id, journey_id, context) are
+    forwarded inside metadata so the webhook adapter / orchestrator-bridge can
+    read them from pipeline_state.contact_context on first step.
     """
     settings = _settings(request)
-    producer = _producer(request)
+    trigger_type = body.trigger_type if body.trigger_type != "manual" else "api"
+    metadata: dict = dict(body.metadata)
+    if body.context:
+        metadata.setdefault("context", body.context)
+    if body.origin_session_id:
+        metadata.setdefault("origin_session_id", body.origin_session_id)
+    if body.pool_id:
+        metadata.setdefault("pool_id", body.pool_id)
 
-    # Resolve flow_definition when caller omits it (e.g. scheduled deploys)
-    resolved_metadata = await _resolve_flow_definition(
-        flow_id=body.flow_id,
-        tenant_id=body.tenant_id,
-        metadata=body.metadata,
-        registry_url=settings.agent_registry_url,
-    )
-
-    instance = await db_create_instance(pool, {
-        "installation_id":   settings.installation_id,
-        "organization_id":   settings.organization_id,
-        "tenant_id":         body.tenant_id,
-        "flow_id":           body.flow_id,
-        "session_id":        body.session_id,
-        "origin_session_id": body.origin_session_id,
-        "pool_id":           body.pool_id,
-        "journey_id":        body.journey_id,
-        "metadata":          resolved_metadata,
-        "pipeline_state":    {"contact_context": body.context},
-    })
-
-    await emit_started(
-        producer, settings.kafka_topic,
-        installation_id=settings.installation_id,
-        organization_id=settings.organization_id,
-        tenant_id=body.tenant_id,
-        instance_id=instance["id"],
-        flow_id=body.flow_id,
-        session_id=body.session_id,
-        trigger_type=body.trigger_type,
-        journey_id=instance.get("journey_id"),
-        pool_id=body.pool_id,
-    )
-
-    return instance
+    gw_url = f"{settings.channel_gateway_url}/v1/channels/webhook/{body.flow_id}"
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.post(gw_url, json={
+                "tenant_id":    body.tenant_id,
+                "trigger_type": trigger_type,
+                "metadata":     metadata or None,
+                "customer_id":  body.session_id or None,
+            })
+            resp.raise_for_status()
+            return resp.json()
+    except httpx.HTTPStatusError as exc:
+        raise HTTPException(
+            exc.response.status_code,
+            f"Channel gateway error: {exc.response.text}",
+        ) from exc
+    except Exception as exc:
+        raise HTTPException(502, f"Channel gateway unreachable: {exc}") from exc
 
 
 # ── Persist Suspend ───────────────────────────────────────────────────────────
@@ -240,90 +220,36 @@ class PersistSuspendRequest(BaseModel):
     metadata:       dict  = Field(default_factory=dict)
 
 
-@router.post("/v1/workflow/instances/{instance_id}/persist-suspend", status_code=200)
+@router.post("/v1/workflow/instances/{instance_id}/persist-suspend", status_code=410)
 async def persist_suspend(
     instance_id: str,
-    body:        PersistSuspendRequest,
     request:     Request,
-    pool=Depends(_pool),
 ) -> dict[str, Any]:
     """
-    Called by the TypeScript Skill Flow engine when it hits a suspend step.
-    Calculates the business-hours deadline, persists suspension state to PostgreSQL,
-    and publishes workflow.suspended to Kafka.
+    Arc 19 Fase D — deprecated.
 
-    Returns { resume_expires_at } so the engine can store it in pipeline_state.
+    Suspend state is now managed by the channel-gateway WebhookAdapter via
+    Redis (status suspended + TTL extension) and the orchestrator-bridge
+    persistSuspendWebhook callback.  This endpoint is no longer called.
     """
-    instance = await db_get_instance(pool, instance_id)
-    if not instance:
-        raise HTTPException(404, "workflow instance not found")
-    if instance["status"] not in ("active", "suspended"):
-        raise HTTPException(
-            409,
-            f"Cannot suspend instance in status '{instance['status']}'"
-        )
-
-    settings = _settings(request)
-    producer = _producer(request)
-
-    # Calculate deadline
-    now_utc = datetime.now(timezone.utc)
-
-    if body.scheduled_at:
-        # Timer-based suspend: use provided absolute datetime directly
-        try:
-            deadline = datetime.fromisoformat(body.scheduled_at)
-            if deadline.tzinfo is None:
-                deadline = deadline.replace(tzinfo=timezone.utc)
-        except ValueError as exc:
-            raise HTTPException(400, f"Invalid scheduled_at: {exc}") from exc
-    elif body.business_hours and body.entity_id:
-        deadline = await calculate_deadline(
-            calendar_api_url=settings.calendar_api_url,
-            tenant_id=instance["tenant_id"],
-            entity_type=body.entity_type,
-            entity_id=body.entity_id,
-            from_dt=now_utc,
-            hours=body.timeout_hours,
-        )
-    else:
-        from datetime import timedelta
-        deadline = now_utc + timedelta(hours=body.timeout_hours)
-
-    resume_expires_at = deadline.isoformat()
-
-    updated = await db_suspend_instance(
-        pool,
-        instance_id=instance_id,
-        step_id=body.step_id,
-        resume_token=body.resume_token,
-        suspend_reason=body.reason,
-        resume_expires_at=resume_expires_at,
-        pipeline_state=body.pipeline_state or instance["pipeline_state"],
+    raise HTTPException(
+        410,
+        "Deprecated in Arc 19 Fase D. Suspend is managed by the channel-gateway "
+        "WebhookAdapter and orchestrator-bridge persistSuspendWebhook callback.",
     )
-    if not updated:
-        raise HTTPException(409, "Suspension failed — concurrent update detected")
-
-    await emit_suspended(
-        producer, settings.kafka_topic,
-        tenant_id=instance["tenant_id"],
-        instance_id=instance_id,
-        flow_id=instance["flow_id"],
-        current_step=body.step_id,
-        suspend_reason=body.reason,
-        resume_expires_at=resume_expires_at,
-        journey_id=instance.get("journey_id"),
-    )
-
-    return {"resume_expires_at": resume_expires_at, "instance": updated}
 
 
 # ── Resume ────────────────────────────────────────────────────────────────────
 
 class ResumeRequest(BaseModel):
-    token:    str
-    decision: str   # approved | rejected | input | timeout
-    payload:  dict  = Field(default_factory=dict)
+    token:     str
+    decision:  str   # approved | rejected | input | timeout
+    payload:   dict  = Field(default_factory=dict)
+    # Arc 19 Fase D: when tenant_id is present the token belongs to a webhook
+    # session managed by channel-gateway; proxy the call there.
+    # When absent fall back to the legacy PostgreSQL-backed path for pre-Arc19
+    # workflow instances that still exist in the database.
+    tenant_id: str | None = None
 
 
 @router.post("/v1/workflow/resume", status_code=200)
@@ -333,13 +259,40 @@ async def resume_workflow(
     pool=Depends(_pool),
 ) -> dict[str, Any]:
     """
-    Resume a suspended workflow instance using its resume_token.
-    Validates the token, checks expiry, records the decision, and
-    publishes workflow.resumed to Kafka.
+    Resume a suspended workflow / webhook session using its resume_token.
 
-    The Skill Flow worker picks up workflow.resumed and calls engine.run()
-    with resumeContext = { decision, step_id, payload }.
+    Arc 19 Fase D behaviour:
+    - If body.tenant_id is provided → proxy to channel-gateway WebhookAdapter
+      (POST /v1/channels/webhook/resume/{token}).  The session is managed in
+      Redis; channel-gateway handles TTL, stream events, and re-allocation.
+    - If body.tenant_id is absent → legacy path: look up the WorkflowInstance
+      in PostgreSQL, validate the token, publish workflow.resumed to Kafka.
+      Kept for backward compatibility with pre-Arc19 instances.
     """
+    settings = _settings(request)
+
+    # ── Arc 19: webhook session managed by channel-gateway ────────────────────
+    if body.tenant_id:
+        gw_url = f"{settings.channel_gateway_url}/v1/channels/webhook/resume/{body.token}"
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                resp = await client.post(gw_url, json={
+                    "tenant_id": body.tenant_id,
+                    "payload":   {**body.payload, "decision": body.decision},
+                })
+                resp.raise_for_status()
+                return resp.json()
+        except httpx.HTTPStatusError as exc:
+            raise HTTPException(
+                exc.response.status_code,
+                f"Channel gateway error: {exc.response.text}",
+            ) from exc
+        except Exception as exc:
+            raise HTTPException(502, f"Channel gateway unreachable: {exc}") from exc
+
+    # ── Legacy: PostgreSQL-backed WorkflowInstance ────────────────────────────
+    producer = _producer(request)
+
     instance = await db_get_instance_by_token(pool, body.token)
     if not instance:
         raise HTTPException(404, "resume_token not found or already consumed")
@@ -357,17 +310,8 @@ async def resume_workflow(
         if datetime.now(timezone.utc) > expires:
             raise HTTPException(410, "resume_token has expired")
 
-    # Determine next step based on decision
-    # (The actual step routing happens in the engine via resumeContext)
-    # We just record the decision and notify the worker via Kafka
-
-    settings = _settings(request)
-    producer = _producer(request)
-
-    # Build next_step hint from pipeline_state (optional, for Kafka event only)
     current_step = instance.get("current_step") or "unknown"
 
-    # Resume the instance in DB (clears resume_token, sets status=active)
     updated = await db_resume_instance(
         pool,
         instance_id=instance["id"],
@@ -376,7 +320,6 @@ async def resume_workflow(
     if not updated:
         raise HTTPException(409, "Resume failed — concurrent update detected")
 
-    # Calculate wait duration
     wait_ms = 0
     if instance.get("suspended_at"):
         suspended_dt = datetime.fromisoformat(instance["suspended_at"])
@@ -391,17 +334,16 @@ async def resume_workflow(
         flow_id=instance["flow_id"],
         decision=body.decision,
         resumed_from=current_step,
-        next_step="__pending_engine__",   # engine resolves after resumeContext is processed
+        next_step="__pending_engine__",
         wait_duration_ms=wait_ms,
-        journey_id=instance.get("journey_id"),
     )
 
     return {
-        "instance_id":  instance["id"],
-        "flow_id":      instance["flow_id"],
-        "decision":     body.decision,
+        "instance_id":      instance["id"],
+        "flow_id":          instance["flow_id"],
+        "decision":         body.decision,
         "wait_duration_ms": wait_ms,
-        "instance":     updated,
+        "instance":         updated,
     }
 
 
@@ -412,80 +354,44 @@ class CompleteRequest(BaseModel):
     pipeline_state: dict = Field(default_factory=dict)
 
 
-@router.post("/v1/workflow/instances/{instance_id}/complete", status_code=200)
+@router.post("/v1/workflow/instances/{instance_id}/complete", status_code=410)
 async def complete_workflow(
     instance_id: str,
-    body:        CompleteRequest,
     request:     Request,
-    pool=Depends(_pool),
 ) -> dict[str, Any]:
-    """Called by the Skill Flow worker when the engine returns outcome='resolved'."""
-    instance = await db_get_instance(pool, instance_id)
-    if not instance:
-        raise HTTPException(404, "workflow instance not found")
+    """
+    Arc 19 Fase D — deprecated.
 
-    settings = _settings(request)
-    producer = _producer(request)
-
-    # Calculate duration
-    created = datetime.fromisoformat(instance["created_at"])
-    if created.tzinfo is None:
-        created = created.replace(tzinfo=timezone.utc)
-    duration_ms = int((datetime.now(timezone.utc) - created).total_seconds() * 1000)
-
-    updated = await db_complete_instance(
-        pool, instance_id, body.outcome, body.pipeline_state
+    Workflow completion is now signalled via agent_done from the
+    orchestrator-bridge, which closes the webhook session normally.
+    """
+    raise HTTPException(
+        410,
+        "Deprecated in Arc 19 Fase D. Workflow completion is handled by "
+        "agent_done in the orchestrator-bridge.",
     )
-    if not updated:
-        raise HTTPException(409, f"Cannot complete instance in status '{instance['status']}'")
-
-    await emit_completed(
-        producer, settings.kafka_topic,
-        tenant_id=instance["tenant_id"],
-        instance_id=instance_id,
-        flow_id=instance["flow_id"],
-        outcome=body.outcome,
-        duration_ms=duration_ms,
-        journey_id=instance.get("journey_id"),
-    )
-
-    return updated
 
 
 class FailRequest(BaseModel):
     error: str
 
 
-@router.post("/v1/workflow/instances/{instance_id}/fail", status_code=200)
+@router.post("/v1/workflow/instances/{instance_id}/fail", status_code=410)
 async def fail_workflow(
     instance_id: str,
-    body:        FailRequest,
     request:     Request,
-    pool=Depends(_pool),
 ) -> dict[str, Any]:
-    """Called by the Skill Flow worker when the engine raises an unrecoverable error."""
-    instance = await db_get_instance(pool, instance_id)
-    if not instance:
-        raise HTTPException(404, "workflow instance not found")
+    """
+    Arc 19 Fase D — deprecated.
 
-    settings = _settings(request)
-    producer = _producer(request)
-
-    updated = await db_fail_instance(pool, instance_id, body.error)
-    if not updated:
-        raise HTTPException(409, f"Cannot fail instance in status '{instance['status']}'")
-
-    await emit_failed(
-        producer, settings.kafka_topic,
-        tenant_id=instance["tenant_id"],
-        instance_id=instance_id,
-        flow_id=instance["flow_id"],
-        current_step=instance.get("current_step"),
-        error=body.error,
-        journey_id=instance.get("journey_id"),
+    Workflow failure is now propagated via session close with
+    close_reason=system_error from the orchestrator-bridge.
+    """
+    raise HTTPException(
+        410,
+        "Deprecated in Arc 19 Fase D. Workflow failure is signalled via "
+        "session close (close_reason=system_error) from the orchestrator-bridge.",
     )
-
-    return updated
 
 
 # ── List / Detail ─────────────────────────────────────────────────────────────
@@ -553,40 +459,22 @@ class CancelRequest(BaseModel):
     reason:       str | None = None
 
 
-@router.post("/v1/workflow/instances/{instance_id}/cancel", status_code=200)
+@router.post("/v1/workflow/instances/{instance_id}/cancel", status_code=410)
 async def cancel_instance(
     instance_id: str,
-    body:        CancelRequest,
     request:     Request,
-    pool=Depends(_pool),
 ) -> dict[str, Any]:
-    instance = await db_get_instance(pool, instance_id)
-    if not instance:
-        raise HTTPException(404, "workflow instance not found")
-    if instance["status"] in ("completed", "failed", "timed_out", "cancelled"):
-        raise HTTPException(
-            409,
-            f"Instance already in terminal status '{instance['status']}'"
-        )
+    """
+    Arc 19 Fase D — deprecated.
 
-    settings = _settings(request)
-    producer = _producer(request)
-
-    updated = await db_cancel_instance(pool, instance_id)
-    if not updated:
-        raise HTTPException(409, "Cancel failed — concurrent update detected")
-
-    await emit_cancelled(
-        producer, settings.kafka_topic,
-        tenant_id=instance["tenant_id"],
-        instance_id=instance_id,
-        flow_id=instance["flow_id"],
-        cancelled_by=body.cancelled_by,
-        reason=body.reason,
-        journey_id=instance.get("journey_id"),
+    Cancellation of webhook sessions is handled by the channel-gateway
+    (DELETE /v1/channels/webhook/{session_id} or operator session close).
+    """
+    raise HTTPException(
+        410,
+        "Deprecated in Arc 19 Fase D. Cancel webhook sessions via the "
+        "channel-gateway or the operator session-close flow.",
     )
-
-    return updated
 
 
 # ── Collect: Persist ──────────────────────────────────────────────────────────
@@ -615,121 +503,24 @@ class CollectPersistRequest(BaseModel):
     campaign_id:    str | None = None
 
 
-@router.post("/v1/workflow/instances/{instance_id}/collect/persist", status_code=201)
+@router.post("/v1/workflow/instances/{instance_id}/collect/persist", status_code=410)
 async def persist_collect(
     instance_id: str,
-    body:        CollectPersistRequest,
     request:     Request,
-    pool=Depends(_pool),
 ) -> dict[str, Any]:
     """
-    Called by the TypeScript Skill Flow engine when it hits a collect step.
+    Arc 19 Fase D — deprecated.
 
-    1. Determines send_at from scheduled_at / delay_hours / now
-    2. Calculates expires_at = send_at + timeout_hours (business-hours-aware)
-    3. Persists collect_instance with status='requested'
-    4. Publishes collect.requested to Kafka (channel-gateway picks this up
-       at send_at to initiate outbound contact)
-
-    Returns { send_at, expires_at } so the engine can store them in pipeline_state.
+    The collect step is now handled by the orchestrator-bridge / channel-gateway
+    via the unified session model.  The step suspends the webhook session and
+    creates a child contact session through the channel-gateway capability
+    negotiation (Arc 16).
     """
-    instance = await db_get_instance(pool, instance_id)
-    if not instance:
-        raise HTTPException(404, "workflow instance not found")
-
-    settings = _settings(request)
-    producer = _producer(request)
-    now_utc   = datetime.now(timezone.utc)
-
-    # ── Determine send_at ─────────────────────────────────────────────────────
-    if body.scheduled_at:
-        send_dt = datetime.fromisoformat(body.scheduled_at)
-        if send_dt.tzinfo is None:
-            send_dt = send_dt.replace(tzinfo=timezone.utc)
-    elif body.delay_hours is not None:
-        from datetime import timedelta
-        send_dt = now_utc + timedelta(hours=body.delay_hours)
-    else:
-        send_dt = now_utc
-
-    # ── Calculate expires_at (business-hours-aware) ───────────────────────────
-    if body.business_hours and body.entity_id:
-        expires_dt = await calculate_deadline(
-            calendar_api_url=settings.calendar_api_url,
-            tenant_id=instance["tenant_id"],
-            entity_type=body.entity_type,
-            entity_id=body.entity_id,
-            from_dt=send_dt,
-            hours=body.timeout_hours,
-        )
-    else:
-        from datetime import timedelta
-        expires_dt = send_dt + timedelta(hours=body.timeout_hours)
-
-    send_at    = send_dt.isoformat()
-    expires_at = expires_dt.isoformat()
-
-    # ── Propagate journey_id from instance (Arc 10 Phase B) ─────────────────
-    journey_id: str | None = instance.get("journey_id")
-
-    # ── Persist collect_instance ──────────────────────────────────────────────
-    collect = await db_create_collect(
-        pool,
-        collect_token=body.collect_token,
-        instance_id=instance_id,
-        tenant_id=instance["tenant_id"],
-        flow_id=instance["flow_id"],
-        campaign_id=body.campaign_id or instance.get("campaign_id"),
-        step_id=body.step_id,
-        target_type=body.target.get("type", "customer"),
-        target_id=body.target.get("id", ""),
-        channel=body.channel,
-        interaction=body.interaction,
-        prompt=body.prompt,
-        options=body.options,
-        fields=body.fields,
-        send_at=send_dt,
-        expires_at=expires_dt,
-        journey_id=journey_id,
+    raise HTTPException(
+        410,
+        "Deprecated in Arc 19 Fase D. Collect steps are handled by the "
+        "orchestrator-bridge and channel-gateway capability negotiation.",
     )
-
-    # ── Publish collect.requested ─────────────────────────────────────────────
-    await emit_collect_requested(
-        producer, settings.collect_topic,
-        tenant_id=instance["tenant_id"],
-        instance_id=instance_id,
-        flow_id=instance["flow_id"],
-        campaign_id=collect.get("campaign_id"),
-        step_id=body.step_id,
-        collect_token=body.collect_token,
-        target_type=body.target.get("type", "customer"),
-        target_id=body.target.get("id", ""),
-        channel=body.channel,
-        interaction=body.interaction,
-        prompt=body.prompt,
-        options=body.options,
-        fields=body.fields,
-        send_at=send_at,
-        expires_at=expires_at,
-        journey_id=journey_id,
-    )
-
-    # ── Suspend the instance while awaiting the collect response ──────────────
-    # Mirrors the suspend-step pattern: sets status='suspended' so that
-    # respond_collect can atomically call db_resume_instance and emit
-    # workflow.resumed when the target replies.
-    # collect_token is used as resume_token (unique, already the correlation key).
-    await db_suspend_instance(
-        pool,
-        instance_id=instance_id,
-        step_id=body.step_id,
-        resume_token=body.collect_token,
-        suspend_reason="input",
-        resume_expires_at=expires_at,
-        pipeline_state=instance["pipeline_state"],
-    )
-
-    return {"send_at": send_at, "expires_at": expires_at, "collect": collect}
 
 
 # ── Collect: Respond ──────────────────────────────────────────────────────────
@@ -745,121 +536,22 @@ class CollectRespondRequest(BaseModel):
     session_id:    str | None = None
 
 
-@router.post("/v1/workflow/collect/respond", status_code=200)
+@router.post("/v1/workflow/collect/respond", status_code=410)
 async def respond_collect(
-    body:    CollectRespondRequest,
     request: Request,
-    pool=Depends(_pool),
 ) -> dict[str, Any]:
     """
-    Receives a collect response from the channel-gateway.
+    Arc 19 Fase D — deprecated.
 
-    1. Looks up the collect_instance by collect_token
-    2. Transitions it to responded
-    3. Resumes the parent WorkflowInstance by delegating to resume_workflow logic
-    4. Publishes collect.responded to Kafka
-
-    The Skill Flow worker receives workflow.resumed and calls engine.run()
-    with resumeContext = { decision: "input", step_id, payload: response_data }.
+    Collect responses are now delivered to the webhook session via the
+    channel-gateway WebhookAdapter resume endpoint, which re-allocates the
+    skill-flow instance and injects the response into pipeline_state.
     """
-    collect = await db_get_collect_by_token(pool, body.collect_token)
-    if not collect:
-        raise HTTPException(404, "collect_token not found")
-    if collect["status"] not in ("requested", "sent"):
-        raise HTTPException(
-            409,
-            f"Collect is not awaiting response (status: '{collect['status']}')"
-        )
-
-    settings = _settings(request)
-    producer = _producer(request)
-
-    # Complete the collect_instance (Arc 18 B1: store responded_session_id for drill-down)
-    updated_collect = await db_complete_collect(
-        pool, body.collect_token, body.response_data, session_id=body.session_id
+    raise HTTPException(
+        410,
+        "Deprecated in Arc 19 Fase D. Collect responses are routed via "
+        "POST /v1/channels/webhook/resume/{token} on the channel-gateway.",
     )
-    if not updated_collect:
-        raise HTTPException(409, "Collect completion failed — concurrent update")
-
-    elapsed_ms = updated_collect.get("elapsed_ms") or 0
-
-    # Resume the parent workflow instance
-    instance = await db_get_instance(pool, collect["instance_id"])
-    if not instance:
-        logger.error(
-            "collect.respond: parent instance %s not found for token %s",
-            collect["instance_id"], body.collect_token,
-        )
-        raise HTTPException(404, "parent workflow instance not found")
-
-    # Only resume if still suspended (idempotency)
-    if instance["status"] == "suspended":
-        wait_ms = 0
-        if instance.get("suspended_at"):
-            suspended_dt = datetime.fromisoformat(instance["suspended_at"])
-            if suspended_dt.tzinfo is None:
-                suspended_dt = suspended_dt.replace(tzinfo=timezone.utc)
-            wait_ms = int((datetime.now(timezone.utc) - suspended_dt).total_seconds() * 1000)
-
-        updated_instance = await db_resume_instance(
-            pool,
-            instance_id=instance["id"],
-            pipeline_state=instance["pipeline_state"],
-        )
-
-        await emit_resumed(
-            producer, settings.kafka_topic,
-            tenant_id=instance["tenant_id"],
-            instance_id=instance["id"],
-            flow_id=instance["flow_id"],
-            decision="input",
-            resumed_from=instance.get("current_step") or "unknown",
-            next_step="__pending_engine__",
-            wait_duration_ms=wait_ms,
-            response_data=body.response_data or None,
-        )
-    else:
-        updated_instance = instance
-
-    # Publish collect.responded
-    await emit_collect_responded(
-        producer, settings.collect_topic,
-        tenant_id=instance["tenant_id"],
-        instance_id=instance["id"],
-        collect_token=body.collect_token,
-        channel=body.channel or collect["channel"],
-        response_data=body.response_data,
-        elapsed_ms=elapsed_ms,
-    )
-
-    # Arc 10 Phase B — link the new session to the Journey that owns the collect.
-    # D.5: include current_step from the workflow instance so the event log captures
-    # the workflow progression at the moment this contact was linked.
-    collect_journey_id: str | None = collect.get("journey_id")
-    if collect_journey_id and body.session_id:
-        try:
-            await emit_journey_session_linked(
-                producer, settings.journey_topic,
-                journey_id    = collect_journey_id,
-                tenant_id     = instance["tenant_id"],
-                skill_id      = instance["flow_id"],
-                session_id    = body.session_id,
-                current_step  = instance.get("current_step") or None,
-                # session_outcome / session_started_at / session_ended_at are
-                # populated by caller when session closes (manual link-session call)
-            )
-        except Exception as exc:
-            logger.warning(
-                "journey_session_linked emit failed journey=%s session=%s: %s",
-                collect_journey_id, body.session_id, exc,
-            )
-
-    return {
-        "collect_token": body.collect_token,
-        "elapsed_ms":    elapsed_ms,
-        "collect":       updated_collect,
-        "instance":      updated_instance,
-    }
 
 
 # ── Campaign query ─────────────────────────────────────────────────────────────
@@ -1210,7 +902,6 @@ async def backfill_events(
                 "session_id":      inst.get("session_id"),
                 "trigger_type":    "backfill",
                 "campaign_id":     inst.get("campaign_id"),
-                "journey_id":      inst.get("journey_id"),
                 "pool_id":         inst.get("pool_id"),
             })
 
@@ -1227,8 +918,6 @@ async def backfill_events(
                 }
                 if inst.get("campaign_id"):
                     ev["campaign_id"] = inst["campaign_id"]
-                if inst.get("journey_id"):
-                    ev["journey_id"] = inst["journey_id"]
 
                 if terminal_type == "workflow.completed":
                     try:

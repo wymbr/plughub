@@ -60,42 +60,6 @@ export class EngineRunner {
       return
     }
 
-    // Arc 17 (#301) — validate creates_journey:true requires journey_type_id
-    // Reject at runtime before any journey is created so the operator sees a
-    // clear error rather than a journey with no type (type:none).
-    const fd = flowDefinition as Record<string, unknown>
-    if (fd['creates_journey'] === true && !fd['journey_type_id']) {
-      const msg = `Skill "${instance.flow_id}" declares creates_journey:true but is missing journey_type_id — skill YAML is invalid`
-      console.error(`Instance ${instance.id}: ${msg}`)
-      await this.workflowClient.fail(instance.id, `YAML validation error: ${msg}`)
-      return
-    }
-
-    // Arc 10 Phase B — creates_journey: true
-    // If the skill YAML declares creates_journey:true and the instance has no
-    // journey_id yet, create the Journey before running the flow so that every
-    // subsequent step (collect, notify, etc.) is already linked to a Journey.
-    // Arc 17: journey_type_id is now required alongside creates_journey:true.
-    if (
-      (flowDefinition as Record<string, unknown>)['creates_journey'] === true &&
-      !instance.journey_id
-    ) {
-      const journeyTypeId = (flowDefinition as Record<string, unknown>)['journey_type_id'] as string | undefined
-      try {
-        const { journey_id } = await this.workflowClient.createJourneyForInstance(
-          instance.id,
-          instance.tenant_id,
-          journeyTypeId,
-        )
-        console.log(`Instance ${instance.id}: auto-created journey ${journey_id} (creates_journey:true, type:${journeyTypeId ?? 'none'})`)
-        // Reflect journey_id locally so subsequent code can read it if needed
-        instance = { ...instance, journey_id }
-      } catch (err) {
-        // Non-fatal: log and continue without a journey rather than failing the whole instance
-        console.warn(`Instance ${instance.id}: creates_journey auto-link failed: ${err}`)
-      }
-    }
-
     try {
       // Use origin_session_id as the ContextStore key when available so that
       // @ctx.* reads/writes target the originating customer session's hash
@@ -126,8 +90,6 @@ export class EngineRunner {
         sessionContext:
           ((instance.pipeline_state as Record<string, unknown>)['contact_context'] as Record<string, unknown>) ?? {},
         instanceId:  instance.id,
-        // Arc 16: pass journeyId so @ctx.journey.* resolves to {tenant}:ctx:journey:{id}
-        ...(instance.journey_id ? { journeyId: instance.journey_id } : {}),
         ...(resumeContext ? { resumeContext } : {}),
       })
 

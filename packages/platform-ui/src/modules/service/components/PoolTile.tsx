@@ -70,22 +70,6 @@ export function PoolTile({ pool, selected, onClick, onDrillDown }: Props) {
         </span>
       </div>
 
-      {/* Journey count badge — shown when pool has active or suspended journeys */}
-      {(pool.active_journeys > 0 || pool.suspended_journeys > 0) && (
-        <div style={{
-          position: 'absolute', top: 8, left: 10,
-          display: 'flex', alignItems: 'center', gap: 3,
-          fontSize: 9, fontWeight: 700, color: 'rgba(255,255,255,0.85)',
-          background: 'rgba(139,92,246,0.45)', borderRadius: 5,
-          padding: '2px 6px', letterSpacing: '0.3px',
-        }}
-          title={`${pool.active_journeys} active journeys, ${pool.suspended_journeys} suspended`}
-        >
-          <span style={{ color: '#c4b5fd' }}>◈</span>{' '}
-          {pool.active_journeys + pool.suspended_journeys} proc
-        </div>
-      )}
-
       {/* Drill-down button */}
       {onDrillDown && (
         <button

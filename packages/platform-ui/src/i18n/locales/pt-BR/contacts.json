@@ -121,7 +121,22 @@
     "highlight":     "{{count}} de {{total}} em destaque",
     "scope": {
       "sessions":  "Sessões",
-      "processes": "Processos"
+      "processes": "Processos",
+      "events":    "Eventos"
+    },
+    "events": {
+      "title":             "Eventos de negócio (últimas 24h)",
+      "filterPlaceholder": "Filtrar por categoria (regex)…",
+      "refresh":           "↻ Atualizar",
+      "loading":           "Carregando eventos…",
+      "empty":             "Nenhum evento de negócio nas últimas 24 horas.",
+      "col": {
+        "category": "Categoria",
+        "pool":     "Pool",
+        "count":    "Qtd.",
+        "avg":      "Valor médio",
+        "lastSeen": "Último evento"
+      }
     },
     "viz": {
       "heatmap": "Heatmap",
@@ -363,6 +378,7 @@
     "allStatuses": "Todos os status",
     "status": {
       "active":    "Ativo",
+      "suspended": "Suspenso",
       "closed":    "Encerrado",
       "abandoned": "Abandonado"
     },
@@ -571,7 +587,6 @@
         "status":        "Status",
         "pool":          "Pool",
         "originSession": "Sessão de origem",
-        "journey":       "Jornada",
         "created":       "Criado",
         "duration":      "Duração",
         "outcome":       "Resultado"

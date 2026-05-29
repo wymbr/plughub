@@ -14,16 +14,19 @@ import * as yaml from "js-yaml"
 import { Client } from "@modelcontextprotocol/sdk/client/index.js"
 import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js"
 import { SkillFlowEngine } from "@plughub/skill-flow-engine"
+import type { SkillFlowEngineConfig, ResumeContext } from "@plughub/skill-flow-engine"
 import { ContextStore } from "./context-store"
 import type { SkillFlow } from "@plughub/schemas"
 
 // ── Config ────────────────────────────────────────────────────────────────────
 
-const PORT           = parseInt(process.env["PORT"]           ?? "3400", 10)
-const REDIS_URL      = process.env["REDIS_URL"]               ?? "redis://localhost:6379"
-const MCP_SERVER_URL = process.env["MCP_SERVER_URL"]          ?? "http://localhost:3100"
-const MCP_AUTH_URL   = process.env["MCP_AUTH_URL"]            ?? "http://localhost:3150"
-const AI_GATEWAY_URL = process.env["AI_GATEWAY_URL"]          ?? "http://localhost:3200"
+const PORT            = parseInt(process.env["PORT"]            ?? "3400", 10)
+const REDIS_URL       = process.env["REDIS_URL"]                ?? "redis://localhost:6379"
+const MCP_SERVER_URL  = process.env["MCP_SERVER_URL"]           ?? "http://localhost:3100"
+const MCP_AUTH_URL    = process.env["MCP_AUTH_URL"]             ?? "http://localhost:3150"
+const AI_GATEWAY_URL  = process.env["AI_GATEWAY_URL"]           ?? "http://localhost:3200"
+// Arc 19 Fase D: calendar-api for business-hours deadline calculation on suspend steps
+const CALENDAR_API_URL = process.env["CALENDAR_API_URL"]        ?? "http://localhost:3700"
 
 // Map of named MCP server → base URL.
 // Add entries here when new domain MCP servers are introduced.
@@ -279,10 +282,20 @@ async function aiGatewayCall(payload: {
 // the first completes — causing serialization instead of parallelism.
 // The caller MUST disconnect the dedicated connection after engine.run() completes.
 
-function createEngine(tenantId: string, _sessionId: string): { engine: SkillFlowEngine; dedicatedRedis: Redis } {
+function createEngine(
+  tenantId: string,
+  _sessionId: string,
+  persistSuspendWebhook?: SkillFlowEngineConfig["persistSuspendWebhook"],
+): { engine: SkillFlowEngine; dedicatedRedis: Redis } {
   const dedicatedRedis = redis.duplicate()
   const contextStore = new ContextStore({ redis: dedicatedRedis, tenantId })
-  const engine = new SkillFlowEngine({ redis: dedicatedRedis, mcpCall, aiGatewayCall, contextStore })
+  const engine = new SkillFlowEngine({
+    redis: dedicatedRedis,
+    mcpCall,
+    aiGatewayCall,
+    contextStore,
+    ...(persistSuspendWebhook ? { persistSuspendWebhook } : {}),
+  })
   return { engine, dedicatedRedis }
 }
 
@@ -297,7 +310,8 @@ app.get("/health", (_req: Request, res: Response) => {
 })
 
 // POST /execute
-// Body: { tenant_id, session_id, customer_id, skill_id, flow, session_context, instance_id? }
+// Body: { tenant_id, session_id, customer_id, skill_id, flow, session_context, instance_id?,
+//         webhook_pool?, resume_context? }
 // Returns: { outcome, pipeline_state } | { error, active_job_id }
 app.post("/execute", async (req: Request, res: Response) => {
   const {
@@ -310,6 +324,8 @@ app.post("/execute", async (req: Request, res: Response) => {
     instance_id,
     pipeline_session_id,
     segment_id,
+    webhook_pool,
+    resume_context,
   } = req.body as {
     tenant_id:       string
     session_id:      string
@@ -324,6 +340,21 @@ app.post("/execute", async (req: Request, res: Response) => {
     pipeline_session_id?: string
     /** Segment UUID for segment-scoped ContextStore writes (scope: segment in YAML). */
     segment_id?:     string
+    /**
+     * Arc 19 — When true, this is a webhook pool session.
+     * The engine wires persistSuspendWebhook to extend Redis TTLs and write
+     * the resume_token to {tenant}:resume_tokens on suspend.
+     */
+    webhook_pool?:   boolean
+    /**
+     * Arc 19 — Resume context. Set when the session is being resumed after a suspend.
+     * The suspend step reads this instead of suspending again.
+     */
+    resume_context?: {
+      step_id:   string
+      decision:  "approved" | "rejected" | "input" | "timeout"
+      payload:   Record<string, unknown>
+    }
   }
 
   if (!tenant_id || !session_id || !customer_id || !skill_id || !flow) {
@@ -339,7 +370,94 @@ app.post("/execute", async (req: Request, res: Response) => {
     (pipeline_session_id ? ` pipeline=${pipeline_session_id}` : ""),
   )
 
-  const { engine, dedicatedRedis } = createEngine(tenant_id, session_id)
+  // Arc 19: declare dedicatedRedis before the persistSuspendWebhook closure so the
+  // callback can capture it. For non-webhook sessions this is identical to createEngine.
+  const dedicatedRedis = redis.duplicate()
+  const contextStore   = new ContextStore({ redis: dedicatedRedis, tenantId: tenant_id })
+
+  // Arc 19: wire persistSuspendWebhook for webhook pool sessions.
+  // The engine's _buildContext injects tenant_id and session_id into params automatically.
+  // Responsibility: extend all session Redis key TTLs + write resume_token to the hash.
+  const persistSuspendWebhookFn: SkillFlowEngineConfig["persistSuspendWebhook"] | undefined =
+    webhook_pool
+      ? async (params) => {
+          // ── Deadline calculation ────────────────────────────────────────────
+          // Arc 19 Fase D: when the suspend step requests business-hours-aware
+          // expiry (business_hours=true + calendar_id provided), call the
+          // calendar-api.  Fall back to wall-clock on any failure.
+          let expiresAt: string
+          if (params.business_hours && params.calendar_id) {
+            try {
+              const calResp = await fetch(
+                `${CALENDAR_API_URL}/v1/engine/add-business-duration`,
+                {
+                  method:  "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body:    JSON.stringify({
+                    tenant_id:   params.tenant_id,
+                    entity_type: "calendar",
+                    entity_id:   params.calendar_id,
+                    from_dt:     new Date().toISOString(),
+                    hours:       params.timeout_hours,
+                  }),
+                },
+              )
+              if (calResp.ok) {
+                const calData = await calResp.json() as { deadline?: string }
+                expiresAt = calData.deadline ?? new Date(Date.now() + params.timeout_hours * 3_600_000).toISOString()
+              } else {
+                console.warn(
+                  `[skill-flow-service] calendar-api ${calResp.status} — falling back to wall-clock deadline`,
+                )
+                expiresAt = new Date(Date.now() + params.timeout_hours * 3_600_000).toISOString()
+              }
+            } catch (err) {
+              console.warn(`[skill-flow-service] calendar-api unreachable — wall-clock fallback: ${err}`)
+              expiresAt = new Date(Date.now() + params.timeout_hours * 3_600_000).toISOString()
+            }
+          } else {
+            expiresAt = new Date(Date.now() + params.timeout_hours * 3_600_000).toISOString()
+          }
+
+          const ttlS = Math.ceil(
+            (new Date(expiresAt).getTime() - Date.now()) / 1000,
+          ) + 3600   // +1h buffer
+
+          // ── Extend session Redis key TTLs ────────────────────────────────────
+          // Non-fatal: EXPIRE on a missing key is silently ignored.
+          const sessionKeys = [
+            `session:${params.session_id}:stream`,
+            `${params.tenant_id}:ctx:${params.session_id}`,
+            `${params.tenant_id}:pipeline:${params.session_id}`,
+            `${params.tenant_id}:session:${params.session_id}:status`,
+          ]
+          for (const key of sessionKeys) {
+            try { await dedicatedRedis.expire(key, ttlS) } catch { /* non-fatal */ }
+          }
+
+          // ── Write resume_token to hash ───────────────────────────────────────
+          // WebhookAdapter.handle_resume() does HGET on this hash for token lookup.
+          const tokenValue = `${params.session_id}:${params.step_id}:${expiresAt}`
+          await dedicatedRedis.hset(
+            `${params.tenant_id}:resume_tokens`,
+            params.resume_token,
+            tokenValue,
+          )
+          // Keep the hash alive at least until the deadline (best-effort).
+          try { await dedicatedRedis.expire(`${params.tenant_id}:resume_tokens`, ttlS) } catch { /* non-fatal */ }
+
+          return { resume_expires_at: expiresAt }
+        }
+      : undefined
+
+  const engine = new SkillFlowEngine({
+    redis:        dedicatedRedis,
+    mcpCall,
+    aiGatewayCall,
+    contextStore,
+    ...(persistSuspendWebhookFn ? { persistSuspendWebhook: persistSuspendWebhookFn } : {}),
+  })
+
   try {
     const result = await engine.run({
       tenantId:       tenant_id,
@@ -353,6 +471,8 @@ app.post("/execute", async (req: Request, res: Response) => {
       // Use pipeline_session_id for lock/state isolation when provided
       // (conference specialists). sessionId is still used for message delivery.
       pipelineSessionId: pipeline_session_id,
+      // Arc 19: resume context — when set, the suspended step follows its on_resume path
+      ...(resume_context ? { resumeContext: resume_context as ResumeContext } : {}),
     })
 
     if ("error" in result && result.error === "PRECONDITION_FAILED") {

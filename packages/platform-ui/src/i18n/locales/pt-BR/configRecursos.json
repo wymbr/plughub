@@ -45,16 +45,6 @@
       "label": "Visibilidade do Context Store",
       "hint": "Namespaces visíveis ao operator na aba Contexto. Separe por vírgula. Padrão: service, journey, session. Namespaces PII (caller, account, history) aparecem mascarados quando incluídos."
     },
-    "inboundJourneyResume": {
-      "label": "Habilitar Retomada de Jornada no Inbound",
-      "hint": "Quando habilitado, o skill do agente AI do pool deve chamar journey_check_pending() no início de cada atendimento inbound para detectar e oferecer a retomada de jornadas de serviço em andamento. Requer que o YAML do skill inclua o step de verificação de jornada. Padrão: desabilitado."
-    },
-    "authorizedJourneyTypes": {
-      "label": "Tipos de Jornada Autorizados",
-      "hint": "Slugs de tipos de jornada que este pool pode criar. Deixe vazio para desabilitar a criação de jornadas neste pool.",
-      "none": "Nenhum tipo de jornada cadastrado — crie na aba Tipos de Jornada primeiro.",
-      "empty": "Nenhum tipo selecionado (criação de jornadas desabilitada para este pool)"
-    },
     "routingFixed": {
       "label": "Pesos de Roteamento — Fixos",
       "hint": "Importância de cada competency skill neste pool. Defina 0 para ignorar a skill no roteamento.",
@@ -253,41 +243,6 @@
         "deprecating": "Processando…",
         "cancel": "Cancelar"
       }
-    }
-  },
-  "journeyTypes": {
-    "hint": "Arc 17 — defina tipos de processo nomeados com metas de SLA opcionais. Pools autorizam quais tipos podem ser criados via authorized_journey_types[].",
-    "newButton": "+ Novo Tipo de Jornada",
-    "empty": "Nenhum tipo de jornada cadastrado.",
-    "loadFailed": "Falha ao carregar tipos de jornada",
-    "deleteConfirm": "Excluir tipo de jornada \"{{id}}\"? Jornadas existentes mantêm a referência, mas novas não poderão ser criadas com este tipo.",
-    "fields": {
-      "id": "ID do Tipo de Jornada",
-      "idPlaceholder": "ex: portabilidade_telco",
-      "description": "Descrição",
-      "descPlaceholder": "Descrição curta",
-      "slaMs": "SLA (ms)",
-      "slaMsPlaceholder": "ex: 86400000"
-    },
-    "columns": {
-      "id": "ID",
-      "description": "Descrição",
-      "slaMs": "SLA",
-      "actions": "Ações"
-    },
-    "validation": {
-      "idRequired": "O ID do tipo de jornada é obrigatório",
-      "idInvalid": "ID: apenas letras minúsculas, dígitos e _",
-      "slaInvalid": "SLA deve ser um número (milissegundos)"
-    },
-    "buttons": {
-      "save": "Salvar",
-      "saving": "Salvando…",
-      "edit": "Editar",
-      "cancel": "Cancelar",
-      "delete": "Excluir",
-      "confirmDelete": "Confirmar exclusão",
-      "deleting": "Excluindo…"
     }
   },
   "channels": {

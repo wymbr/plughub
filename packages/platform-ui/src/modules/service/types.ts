@@ -29,14 +29,6 @@ export interface SentimentEntry {
   updated_at:       string | null
 }
 
-// ─── Per-pool journey counts (from GET /dashboard/pool-journeys) ─────────────
-
-export interface PoolJourneyEntry {
-  pool_id:            string
-  active_journeys:    number   // journeys with current status = "active"
-  suspended_journeys: number   // journeys with current status = "suspended"
-}
-
 // ─── Per-pool SLA performance (from GET /dashboard/pool-sla) ─────────────────
 
 export interface PoolSlaEntry {
@@ -67,9 +59,6 @@ export interface PoolView {
   p90_wait_ms:        number | null
   sla_compliance_pct: number | null
   sla_sessions_count: number
-  // Journey counts (from /dashboard/pool-journeys, polled every 30s; 0 when no data)
-  active_journeys:    number
-  suspended_journeys: number
 }
 
 // ─── 24h metrics ──────────────────────────────────────────────────────────────
@@ -109,6 +98,8 @@ export interface ActiveSession {
   wait_time_ms:    number | null
   latest_score:    number | null
   latest_category: string | null
+  /** Arc 19: session status — 'active' | 'suspended' | null (pre-Arc-19) */
+  status?:         string | null
 }
 
 // ─── Stream entry ─────────────────────────────────────────────────────────────

@@ -21,6 +21,7 @@ export const ChannelSchema = z.enum([
   "instagram",
   "telegram",
   "webrtc",
+  "webhook",   // Arc 19 — canal de workflow (channel-agnostic, pool executa skill-flow)
 ])
 export type Channel = z.infer<typeof ChannelSchema>
 
@@ -32,7 +33,12 @@ export type MediumType = z.infer<typeof MediumTypeSchema>
 // Session
 // ─────────────────────────────────────────────
 
-export const SessionStatusSchema = z.enum(["active", "closed", "abandoned"])
+export const SessionStatusSchema = z.enum([
+  "active",     // em execução, agente alocado
+  "suspended",  // Arc 19 — workflow pausado aguardando sinal externo (sem agente alocado, Redis TTL estendido)
+  "closed",     // encerrada normalmente
+  "abandoned",  // nenhum agente atendeu antes do encerramento
+])
 export type SessionStatus = z.infer<typeof SessionStatusSchema>
 
 export const CloseReasonSchema = z.enum([

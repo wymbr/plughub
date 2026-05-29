@@ -348,6 +348,8 @@ async def activate_native_agent(
     conference_id: str = "",
     extra_context: dict | None = None,
     segment_id: str = "",
+    webhook_pool: bool = False,
+    resume_context: dict | None = None,
 ) -> dict:
     """
     Activate a plughub-native orchestrator agent by calling skill-flow-service.
@@ -411,6 +413,12 @@ async def activate_native_agent(
     # Allows parallel agents (NPS + wrap-up) to isolate their data per participation.
     if segment_id:
         payload["segment_id"] = segment_id
+    # Arc 19: webhook pool sessions wire persistSuspendWebhook in skill-flow-service.
+    if webhook_pool:
+        payload["webhook_pool"] = True
+    # Arc 19: resume context — when set, the engine picks up from the suspended step.
+    if resume_context:
+        payload["resume_context"] = resume_context
     # Conference specialists (hook agents) share the same session_id for
     # message delivery, but each needs its own pipeline_state and execution
     # lock.  Use the agent's unique segment_id — each participant in the
@@ -2216,6 +2224,50 @@ async def process_routed(
             instance_id=native_instance_id,
         )
 
+        # ── Arc 19 Fase C: detect webhook pool + write session meta ─────────────
+        # For webhook pool sessions the bridge writes session meta (NX) so that
+        # _handle_webhook_session_resumed can look up agent_type_id and pool_id
+        # when a resume_token arrives later on conversations.inbound.
+        _is_webhook_pool = False
+        try:
+            _raw_pool_cfg = await redis_client.get(f"{tenant_id}:pool_config:{pool_id}")
+            if _raw_pool_cfg:
+                _pool_cfg = json.loads(_raw_pool_cfg)
+                _is_webhook_pool = "webhook" in (_pool_cfg.get("channel_types") or [])
+        except Exception as _pool_exc:
+            logger.debug(
+                "Could not read pool config for webhook check: pool=%s — %s",
+                pool_id, _pool_exc,
+            )
+
+        if _is_webhook_pool and native_instance_id:
+            try:
+                _wh_meta = json.dumps({
+                    "contact_id":    customer_id,
+                    "channel":       "webhook",
+                    "agent_type_id": agent_type_id,
+                    "pool_id":       pool_id,
+                    "tenant_id":     tenant_id,
+                    "customer_id":   customer_id,
+                    "instance_id":   native_instance_id,
+                })
+                # NX: do not overwrite if already present (e.g. on a resume re-allocation)
+                await redis_client.set(
+                    f"session:{session_id}:meta",
+                    _wh_meta,
+                    nx=True,
+                    ex=_stl(),
+                )
+                logger.debug(
+                    "Webhook session meta written (NX): session=%s pool=%s instance=%s",
+                    session_id, pool_id, native_instance_id,
+                )
+            except Exception as _wh_exc:
+                logger.warning(
+                    "Could not write webhook session meta: session=%s — %s",
+                    session_id, _wh_exc,
+                )
+
         agent_result = await activate_native_agent(
             http=http, redis_client=redis_client,
             session_id=session_id, customer_id=customer_id,
@@ -2224,6 +2276,7 @@ async def process_routed(
             instance_id=native_instance_id,
             conference_id=conference_id,
             segment_id=_part_seg_id,
+            webhook_pool=_is_webhook_pool,
         )
 
         # ── Conference: notify the human agent that the AI has completed ──────
@@ -2433,12 +2486,96 @@ async def process_routed(
         # continua com outro agente — NÃO fechar o WebSocket do cliente.
         # O conversation_escalate (BPM tool) já publicou conversations.inbound
         # para alocar o próximo agente; fechar aqui causaria race condition.
-        _escalation_outcomes = ("escalated_human", "escalated_ai", "transferred")
+        # Arc 19: "suspended" is added so webhook sessions are NOT closed when
+        # the engine returns outcome: "suspended" — the session persists in Redis
+        # (TTL extended by persistSuspendWebhook) awaiting a resume signal.
+        _escalation_outcomes = ("escalated_human", "escalated_ai", "transferred", "suspended")
         _ai_outcome = (agent_result or {}).get("outcome", "")
         if not conference_id and _ai_outcome not in _escalation_outcomes:
             # G1 fix: freeze AHT at primary AI completion, before any hook agents run.
             await _mark_contact_ended(redis_client, session_id)
             asyncio.create_task(_trigger_contact_close(redis_client, session_id))
+
+        # ── Arc 19 Fase B: publish session_suspended to canonical stream ──────
+        # Fired for webhook pool sessions only (channel_type: webhook).
+        # Non-webhook sessions never return outcome: "suspended" because the
+        # engine guard (Arc 19 step profile enforcement) blocks the suspend step.
+        if _ai_outcome == "suspended" and not conference_id:
+            try:
+                # Extract resume_token and expires_at from pipeline_state.results.
+                # Keys: {step_id}:__resume_token__ and {step_id}:__expires_at__
+                _ps_results = (
+                    ((agent_result or {}).get("pipeline_state") or {}).get("results") or {}
+                )
+                _susp_token    = ""
+                _susp_expires  = ""
+                _susp_step_id  = ""
+                for _k, _v in _ps_results.items():
+                    if isinstance(_k, str) and _k.endswith(":__resume_token__"):
+                        _susp_token   = str(_v or "")
+                        _susp_step_id = _k[: -len(":__resume_token__")]
+                    elif isinstance(_k, str) and _k.endswith(":__expires_at__"):
+                        _susp_expires = str(_v or "")
+
+                await redis_client.xadd(
+                    f"session:{session_id}:stream",
+                    {
+                        "event_id":    str(uuid.uuid4()),
+                        "type":        "session_suspended",
+                        "timestamp":   datetime.now(timezone.utc).isoformat(),
+                        "author_id":   native_instance_id or agent_type_id,
+                        "author_role": "ai",
+                        "visibility":  json.dumps("agents_only"),
+                        "segment_id":  _left_seg_id or "",
+                        "payload":     json.dumps({
+                            "step_id":           _susp_step_id,
+                            "resume_token":      _susp_token,
+                            "resume_expires_at": _susp_expires,
+                        }),
+                    },
+                    maxlen=500,
+                )
+
+                # Update the status key so WebhookAdapter.get_status() returns "suspended".
+                # TTL: use the session TTL as a safe floor; the actual Redis key TTLs on
+                # the session stream were extended by persistSuspendWebhook (Fase C).
+                if tenant_id:
+                    await redis_client.setex(
+                        f"{tenant_id}:session:{session_id}:status",
+                        _stl(),
+                        "suspended",
+                    )
+
+                # Arc 19 Fase E: publish session_suspended to Kafka conversations.events
+                # so analytics-api can write status='suspended' to ClickHouse sessions table.
+                if _kafka_producer is not None and tenant_id:
+                    try:
+                        _susp_now = datetime.now(timezone.utc).isoformat()
+                        await _kafka_producer.send_and_wait(
+                            TOPIC_EVENTS,
+                            json.dumps({
+                                "event_type": "session_suspended",
+                                "session_id": session_id,
+                                "tenant_id":  tenant_id,
+                                "step_id":    _susp_step_id,
+                                "timestamp":  _susp_now,
+                            }).encode("utf-8"),
+                        )
+                    except Exception as _ke:
+                        logger.warning(
+                            "Could not publish session_suspended to Kafka: session=%s — %s",
+                            session_id, _ke,
+                        )
+
+                logger.info(
+                    "session_suspended published to stream: session=%s step=%s token=%s expires=%s",
+                    session_id, _susp_step_id, _susp_token, _susp_expires,
+                )
+            except Exception as _susp_exc:
+                logger.warning(
+                    "Could not publish session_suspended to stream: session=%s — %s",
+                    session_id, _susp_exc,
+                )
 
         # ── Arc 14 / Fase B/C: hook completion detection ─────────────────────
         # hook_conf key stores "{hook_type}:{target_pool}:{side}" (Arc 14 extended
@@ -4386,20 +4523,217 @@ async def process_mention_routing(
     )
 
 
+# ── Arc 19 Fase C: resume a suspended webhook session ─────────────────────────
+
+async def _handle_webhook_session_resumed(
+    event: dict,
+    redis_client: aioredis.Redis,
+    http: aiohttp.ClientSession,
+) -> None:
+    """
+    Arc 19 Fase C — Resume a suspended webhook session.
+
+    Triggered by event_type='session_resumed' on conversations.inbound (published
+    by WebhookAdapter.handle_resume()).  Bypasses the routing engine — directly
+    re-activates the skill-flow with the resume context so the suspended step
+    can follow its on_resume / on_reject / on_timeout path.
+
+    Session meta written by process_routed (NX) on first activation provides the
+    agent_type_id, pool_id, and instance_id needed for lifecycle management.
+    """
+    session_id = event.get("session_id", "")
+    tenant_id  = event.get("tenant_id", "")
+    step_id    = event.get("step_id", "")
+    payload    = event.get("payload") or {}
+
+    if not session_id or not tenant_id:
+        logger.warning("session_resumed: missing session_id or tenant_id — skipping")
+        return
+
+    # Read session meta written by process_routed (NX) on first activation
+    raw_meta = None
+    try:
+        raw_meta = await redis_client.get(f"session:{session_id}:meta")
+    except Exception as exc:
+        logger.error(
+            "session_resumed: could not read session meta: session=%s — %s",
+            session_id, exc,
+        )
+        return
+
+    if not raw_meta:
+        logger.error(
+            "session_resumed: no session meta found for session=%s "
+            "(was the session created via a webhook pool?)",
+            session_id,
+        )
+        return
+
+    meta          = json.loads(raw_meta)
+    agent_type_id = meta.get("agent_type_id", "")
+    pool_id       = meta.get("pool_id", "")
+    customer_id   = meta.get("customer_id", "")
+    instance_id   = meta.get("instance_id", "")
+
+    if not agent_type_id:
+        logger.error(
+            "session_resumed: agent_type_id not in meta for session=%s — cannot resume",
+            session_id,
+        )
+        return
+
+    # Extract decision from payload (WebhookAdapter embeds it as payload["decision"])
+    decision = payload.get("decision", "input")
+
+    logger.info(
+        "Resuming webhook session: session=%s agent=%s step=%s decision=%s",
+        session_id, agent_type_id, step_id, decision,
+    )
+
+    # Read instance snapshot for lifecycle restore after execution
+    native_snapshot: dict | None = None
+    if instance_id:
+        try:
+            raw_snap = await redis_client.get(f"{tenant_id}:instance:{instance_id}")
+            if raw_snap:
+                native_snapshot = json.loads(raw_snap)
+        except Exception:
+            pass
+
+    # Resolve skills from Agent Registry (activate_native_agent calls resolve_flow_for_agent
+    # which will perform its own registry lookup if skills is empty — safe fallback).
+    skills: list[dict] = []
+    try:
+        agent_type = await get_agent_type(http, tenant_id, agent_type_id)
+        if agent_type:
+            skills = agent_type.get("skills", [])
+    except Exception as _skill_exc:
+        logger.debug("session_resumed: could not fetch agent type skills: %s", _skill_exc)
+
+    # Build resume_context for skill-flow-service
+    resume_context = {
+        "step_id":   step_id,
+        "decision":  decision,
+        "payload":   payload,
+    }
+
+    # Re-activate skill flow with resume context (webhook_pool=True wires
+    # persistSuspendWebhook in skill-flow-service for any subsequent suspend steps)
+    agent_result = await activate_native_agent(
+        http=http,
+        redis_client=redis_client,
+        session_id=session_id,
+        customer_id=customer_id,
+        agent_type_id=agent_type_id,
+        tenant_id=tenant_id,
+        skills=skills,
+        instance_id=instance_id,
+        webhook_pool=True,
+        resume_context=resume_context,
+    )
+
+    _ai_outcome = (agent_result or {}).get("outcome", "")
+
+    # "suspended" = flow hit another suspend step; session persists in Redis.
+    # Any other terminal outcome closes the session.
+    if _ai_outcome != "suspended":
+        await _mark_contact_ended(redis_client, session_id)
+        asyncio.create_task(_trigger_contact_close(redis_client, session_id))
+
+    # Restore instance to pool (mirrors process_routed post-activation lifecycle)
+    if instance_id and native_snapshot:
+        try:
+            native_snapshot["current_sessions"] = max(
+                0, int(native_snapshot.get("current_sessions", 1)) - 1
+            )
+            native_snapshot["status"] = "ready"
+            await redis_client.set(
+                f"{tenant_id}:instance:{instance_id}",
+                json.dumps(native_snapshot),
+                ex=3600,
+            )
+            if pool_id:
+                await redis_client.sadd(
+                    f"{tenant_id}:pool:{pool_id}:instances", instance_id
+                )
+            logger.info(
+                "AI agent instance restored after webhook resume: "
+                "tenant=%s instance=%s pool=%s",
+                tenant_id, instance_id, pool_id,
+            )
+        except Exception as exc:
+            logger.warning(
+                "Could not restore AI agent instance after resume: session=%s — %s",
+                session_id, exc,
+            )
+
+    # Publish agent_ready + agent_done for routing-engine capacity tracking
+    if _kafka_producer and instance_id:
+        _snap_pools = list(
+            (native_snapshot or {}).get("pools") or ([pool_id] if pool_id else [])
+        )
+        _snap_max = int(
+            (native_snapshot or {}).get("max_concurrent_sessions")
+            or (native_snapshot or {}).get("max_concurrent")
+            or 1
+        )
+        asyncio.create_task(_kafka_producer.send(
+            TOPIC_LIFECYCLE,
+            json.dumps({
+                "event":                   "agent_ready",
+                "tenant_id":               tenant_id,
+                "instance_id":             instance_id,
+                "agent_type_id":           agent_type_id,
+                "status":                  "ready",
+                "execution_model":         (native_snapshot or {}).get("execution_model", "stateless"),
+                "current_sessions":        0,
+                "max_concurrent_sessions": _snap_max,
+                "pools":                   _snap_pools,
+                "timestamp":               datetime.now(timezone.utc).isoformat(),
+            }).encode("utf-8"),
+        ))
+        asyncio.create_task(_kafka_producer.send(
+            TOPIC_LIFECYCLE,
+            json.dumps({
+                "event":           "agent_done",
+                "tenant_id":       tenant_id,
+                "instance_id":     instance_id,
+                "agent_type_id":   agent_type_id,
+                "pools":           _snap_pools,
+                "conversation_id": session_id,
+                "timestamp":       datetime.now(timezone.utc).isoformat(),
+            }).encode("utf-8"),
+        ))
+
+
 # ── Process conversations.inbound — forward customer messages to human agent ──
 
 async def process_inbound(
     msg: dict,
     redis_client: aioredis.Redis,
+    http: aiohttp.ClientSession | None = None,
 ) -> None:
     """
-    Three event types share conversations.inbound:
+    Four event types share conversations.inbound:
       1. NormalizedInboundEvent (from channel-gateway) — has "author" field
       2. ConversationInboundEvent (from conversation_escalate) — no "author" field,
          consumed by the Routing Engine; nothing to do here.
       3. mention_routing event (from routeMentions in mcp-server-plughub) — has
          mention_routing=True and no "author" field; dispatched to active specialists.
+      4. session_resumed event (from WebhookAdapter.handle_resume) — has
+         event_type="session_resumed"; re-activates the skill-flow instance directly.
     """
+    if msg.get("event_type") == "session_resumed":
+        if http is not None:
+            await _handle_webhook_session_resumed(msg, redis_client, http)
+        else:
+            logger.warning(
+                "session_resumed received but http session not available — skipping resume"
+                " session_id=%s",
+                msg.get("session_id", ""),
+            )
+        return
+
     if msg.get("mention_routing"):
         await process_mention_routing(msg, redis_client)
         return
@@ -5254,7 +5588,7 @@ async def _dispatch_once(
     elif topic == TOPIC_QUEUED:
         await process_queued(payload, http, redis_client)
     elif topic == TOPIC_INBOUND:
-        await process_inbound(payload, redis_client)
+        await process_inbound(payload, redis_client, http)
     elif topic == TOPIC_EVENTS:
         await process_contact_event(payload, redis_client, http)
     elif topic == TOPIC_REGISTRY_CHANGED:

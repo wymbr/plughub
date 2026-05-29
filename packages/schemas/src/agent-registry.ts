@@ -159,6 +159,20 @@ export const PoolRegistrationSchema = z.object({
   channel_types:          z.array(ChannelSchema).min(1),
   sla_target_ms:          z.number().int().positive(),
   /**
+   * Arc 19 — Pool webhook: skill_id que este pool executa (o "DIN" do canal webhook).
+   * Obrigatório quando channel_types inclui "webhook". Um pool webhook tem exactamente
+   * um skill (o processo de negócio que ele gerencia). Determina o endpoint:
+   * POST /v1/channels/webhook/{skill_id}
+   */
+  webhook_skill_id:       z.string().optional(),
+  /**
+   * Arc 19 — Pool webhook: número máximo de sessões simultâneas.
+   * Para pools webhook, substitui o controle por agentes logados.
+   * Para pools humanos/AI, é informativo (UI e Monitor).
+   * Default: sem limite (ilimitado).
+   */
+  max_concurrent_sessions: z.number().int().positive().optional(),
+  /**
    * Tempo máximo (ms) para o agente responder a cada mensagem do cliente.
    * Opcional — sem limite por mensagem quando ausente.
    * Independente do sla_target_ms (que mede o atendimento como um todo).
@@ -183,26 +197,6 @@ export const PoolRegistrationSchema = z.object({
    *     billing:  billing_especialista # @billing → pool billing_especialista
    */
   mentionable_pools:      z.record(z.string()).optional(),
-  /**
-   * Lista de skill_ids que podem ser iniciados via "Iniciar Processo" no Console (ActionBar).
-   * Exibido como dropdown no ActionBar do Console (botão "Iniciar Processo").
-   * Exemplo: ["skill_portabilidade_v1", "skill_reembolso_v1"]
-   */
-  mentionable_journeys:   z.array(z.string()).optional(),
-  /**
-   * Arc 17 — JourneyType IDs this pool is authorized to create.
-   *
-   * Only journey_type_ids listed here may be used when calling journey_start
-   * from within a session routed to this pool. The routing engine writes
-   * session.authorized_journey_types[] to ContextStore after allocation
-   * (source: routing_engine, confidence: 1.0, visibility: agents_only, TTL 24h NX).
-   *
-   * journey_start tool rejects creation if journey_type_id is not in this list.
-   * Leaving this empty means no Journeys can be created from this pool.
-   *
-   * Example: ["portabilidade_telco", "cancelamento_retention"]
-   */
-  authorized_journey_types: z.array(z.string()).optional(),
   /**
    * IDs dos Agent Groups (Arc 9) aos quais este pool pertence.
    * Escrito no ContextStore como session.pool.agent_groups[] após cada roteamento.
@@ -254,19 +248,6 @@ export const PoolRegistrationSchema = z.object({
   context_visibility:     z.object({
     operator_namespaces: z.array(z.string()).min(1),
   }).optional(),
-  /**
-   * Arc 16 Phase E — Inbound Journey Resume (opt-in, default false).
-   *
-   * When true, the skill deployed on this pool's AI agent should call
-   * journey_check_pending(customer_id) at the start of each inbound session
-   * to detect whether the customer has a pending collect step awaiting response
-   * and offer to continue that service process.
-   *
-   * This flag is informational — the platform UI uses it to signal the skill
-   * author that journey resume logic should be included in the pool's skill YAML.
-   * The routing engine and channel-gateway do not read this field.
-   */
-  inbound_journey_resume: z.boolean().default(false).optional(),
 })
 export type PoolRegistration = z.infer<typeof PoolRegistrationSchema>
 

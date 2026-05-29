@@ -17,12 +17,14 @@ import redis.asyncio as aioredis
 import uvicorn
 from aiokafka import AIOKafkaProducer
 from fastapi import FastAPI, HTTPException, Request, WebSocket
+from pydantic import BaseModel
 
 from .adapters.email import EmailAdapter
 from .adapters.sms import SMSAdapter
 from .adapters.voice import VoiceAdapter
 from .adapters.webchat import WebchatAdapter
 from .adapters.webchat_channel import WebchatChannelAdapter
+from .adapters.webhook import WebhookAdapter
 from .adapters.webrtc import WebRTCAdapter
 from .adapters.whatsapp import WhatsAppAdapter
 from .attachment_store import (
@@ -31,11 +33,7 @@ from .attachment_store import (
     S3AttachmentStore,
 )
 from .channel_capability_registry import (
-    get_journey_contact_id,
-    read_journey_channel_context,
     select_channel,
-    write_journey_channel_context,
-    write_journey_pending_collect,
 )
 from .config import get_settings, Settings
 from .context_reader import ContextReader
@@ -57,6 +55,7 @@ _sms_adapter:        SMSAdapter                           | None = None
 _email_adapter:      EmailAdapter                         | None = None
 _voice_adapter:      VoiceAdapter                         | None = None
 _webrtc_adapter:     WebRTCAdapter                        | None = None
+_webhook_adapter:    WebhookAdapter                       | None = None
 
 
 def _create_attachment_store(
@@ -97,7 +96,7 @@ def _create_attachment_store(
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global _producer, _registry, _context, _redis, _attachment_store, _whatsapp_adapter, _sms_adapter, _email_adapter, _voice_adapter, _webrtc_adapter
+    global _producer, _registry, _context, _redis, _attachment_store, _whatsapp_adapter, _sms_adapter, _email_adapter, _voice_adapter, _webrtc_adapter, _webhook_adapter
 
     settings    = get_settings()
     instance_id = str(uuid.uuid4())
@@ -151,6 +150,11 @@ async def lifespan(app: FastAPI):
         redis    = _redis,
         settings = settings,
     )
+    _webhook_adapter = WebhookAdapter(
+        producer = _producer,
+        redis    = _redis,
+        settings = settings,
+    )
 
     _channel_adapters = {
         "webchat":  WebchatChannelAdapter(registry=_registry),
@@ -159,6 +163,7 @@ async def lifespan(app: FastAPI):
         "email":    _email_adapter,
         "voice":    _voice_adapter,
         "webrtc":   _webrtc_adapter,
+        "webhook":  _webhook_adapter,
     }
 
     outbound = OutboundConsumer(adapters=_channel_adapters, settings=settings)
@@ -169,10 +174,9 @@ async def lifespan(app: FastAPI):
 
         Routes collect.requested events to the correct adapter:
           - Explicit channel: dispatched directly to the matching adapter.
-          - No channel (capability-based): reads journey.available_channels and
-            journey.canal_preferido from the journey ContextStore, calls
-            select_channel() with the event's `requires[]` list, then dispatches
-            to the selected adapter.
+          - No channel (capability-based): calls select_channel() with the
+            event's `requires[]` list against all registered adapter channels,
+            then dispatches to the selected adapter.
 
         For voice: VoiceAdapter.handle_collect_event() initiates an outbound call.
         For other channels: the adapter's handle_collect_event() sends the collect
@@ -181,6 +185,9 @@ async def lifespan(app: FastAPI):
         Note: Only collect.requested events require dispatch; collect.sent /
         collect.responded / collect.timed_out are purely for analytics and are
         handled by analytics-api.
+
+        Arc 19 Fase F: Journey entity eliminated — capability selection no longer
+        reads journey ContextStore.
         """
         from aiokafka import AIOKafkaConsumer
         import json as _json
@@ -218,15 +225,18 @@ async def lifespan(app: FastAPI):
         Dispatch a single collect.requested event to the correct channel adapter.
 
         Channel resolution order:
-          1. event["channel"] is set → use it directly
-          2. event["channel"] is absent/empty + event["journey_id"] is set →
-             read journey context from ContextStore and use select_channel()
-          3. Fallback: warn and drop
+          1. event["channel"] is set → use it directly.
+          2. event["channel"] is absent/empty + event["requires"] is non-empty →
+             call select_channel() against all registered adapter channels and
+             dispatch to the best matching one.
+          3. Fallback: warn and drop.
+
+        Arc 19 Fase F: Journey entity eliminated — capability-based selection
+        no longer reads journey ContextStore; it operates directly on the set of
+        registered adapters.
         """
-        channel    = (event.get("channel") or "").strip()
-        journey_id = event.get("journey_id")
-        tenant_id  = event.get("tenant_id", settings.tenant_id)
-        requires   = event.get("requires") or []   # list[str] from CollectStep
+        channel  = (event.get("channel") or "").strip()
+        requires = event.get("requires") or []   # list[str] from CollectStep
 
         # ── Step 1: explicit channel ───────────────────────────────────────────
         if channel:
@@ -242,89 +252,47 @@ async def lifespan(app: FastAPI):
                 channel, event.get("instance_id"),
             )
             await adapter.handle_collect_event(event)
-            # Record pending collect in journey ContextStore for journey_check_pending MCP tool
-            if journey_id:
-                await write_journey_pending_collect(
-                    redis      = _redis,
-                    tenant_id  = tenant_id,
-                    journey_id = journey_id,
-                    requires   = requires,
-                    channel    = channel,
-                    contact_id = event.get("target"),
-                )
             return
 
         # ── Step 2: capability-based selection ────────────────────────────────
-        if not journey_id:
+        if not requires:
             logger.warning(
-                "collect.requested: no channel and no journey_id — cannot route "
+                "collect.requested: no channel and no requires list — cannot route "
                 "(instance=%s)", event.get("instance_id"),
             )
             return
 
-        available, preferred = await read_journey_channel_context(
-            redis      = _redis,
-            tenant_id  = tenant_id,
-            journey_id = journey_id,
-        )
-
-        if not available:
-            logger.warning(
-                "collect.requested: journey=%s has no available_channels in ContextStore "
-                "— cannot route (instance=%s)", journey_id, event.get("instance_id"),
-            )
-            return
+        # Use all registered adapter channels as the available set.
+        all_channels = list(adapters.keys())
 
         chosen = select_channel(
-            available_channels = available,
+            available_channels = all_channels,
             requires           = requires,
-            preferred_channel  = preferred,
+            preferred_channel  = None,
         )
         if chosen is None:
             logger.warning(
                 "collect.requested: no channel satisfies requires=%s "
-                "from available=%s (journey=%s)",
-                requires, available, journey_id,
+                "from registered=%s (instance=%s)",
+                requires, all_channels, event.get("instance_id"),
             )
             return
-
-        # Enrich event with resolved channel so the adapter has it
-        enriched = {**event, "channel": chosen}
-
-        # Inject the customer's contact_id for this channel (needed by non-voice adapters)
-        if not enriched.get("target"):
-            contact_id = await get_journey_contact_id(
-                redis      = _redis,
-                tenant_id  = tenant_id,
-                journey_id = journey_id,
-                channel    = chosen,
-            )
-            if contact_id:
-                enriched["target"] = contact_id
 
         adapter = adapters.get(chosen)
         if adapter is None:
             logger.debug(
                 "collect.requested: selected channel=%s has no handle_collect_event "
-                "— skipping (journey=%s)", chosen, journey_id,
+                "— skipping", chosen,
             )
             return
 
+        enriched = {**event, "channel": chosen}
         logger.info(
             "collect.requested: capability-selected channel=%s (requires=%s) "
-            "journey=%s instance=%s",
-            chosen, requires, journey_id, event.get("instance_id"),
+            "instance=%s",
+            chosen, requires, event.get("instance_id"),
         )
         await adapter.handle_collect_event(enriched)
-        # Record pending collect in journey ContextStore for journey_check_pending MCP tool
-        await write_journey_pending_collect(
-            redis      = _redis,
-            tenant_id  = tenant_id,
-            journey_id = journey_id,
-            requires   = requires,
-            channel    = chosen,
-            contact_id = enriched.get("target"),
-        )
 
     pubsub_task     = asyncio.create_task(_registry.start_pubsub_listener())
     outbound_task   = asyncio.create_task(outbound.run())
@@ -671,6 +639,87 @@ async def webrtc_token(
             detail="WebRTC room not ready for session — routing may still be in progress",
         )
     return result
+
+
+# ── Webhook channel endpoints (Arc 19) ───────────────────────────────────────
+
+class WebhookTriggerRequest(BaseModel):
+    tenant_id:    str
+    trigger_type: str = "api"          # api | webhook | task | scheduled | yaml_auto
+    metadata:     dict | None = None
+    customer_id:  str | None = None
+
+class WebhookResumeRequest(BaseModel):
+    tenant_id: str
+    payload:   dict | None = None
+
+
+@app.post("/v1/channels/webhook/{skill_id}", status_code=201)
+async def webhook_trigger(skill_id: str, body: WebhookTriggerRequest) -> dict:
+    """
+    Trigger a new webhook workflow session.
+
+    The skill_id is the endpoint identifier (analogous to a WA number or voice DIN).
+    The routing engine resolves the pool that owns this skill_id and allocates
+    a skill-flow instance to execute the workflow.
+
+    Returns: { session_id }
+    """
+    if _webhook_adapter is None:
+        raise HTTPException(status_code=503, detail="Webhook adapter not initialised")
+
+    session_id = await _webhook_adapter.handle_trigger(
+        skill_id     = skill_id,
+        tenant_id    = body.tenant_id,
+        trigger_type = body.trigger_type,
+        metadata     = body.metadata,
+        customer_id  = body.customer_id,
+    )
+    return {"session_id": session_id}
+
+
+@app.post("/v1/channels/webhook/resume/{resume_token}", status_code=200)
+async def webhook_resume(resume_token: str, body: WebhookResumeRequest) -> dict:
+    """
+    Resume a suspended webhook session using the resume_token generated at suspend time.
+
+    The token is resolved to a session_id via Redis hash {tenant_id}:resume_tokens.
+    After resume, the routing engine reallocates a skill-flow instance to continue
+    the workflow from the step that suspended.
+
+    Returns: { session_id }
+    Raises 404 if the token is unknown or expired.
+    """
+    if _webhook_adapter is None:
+        raise HTTPException(status_code=503, detail="Webhook adapter not initialised")
+
+    session_id = await _webhook_adapter.handle_resume(
+        resume_token = resume_token,
+        tenant_id    = body.tenant_id,
+        payload      = body.payload,
+    )
+    if session_id is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Resume token not found or expired",
+        )
+    return {"session_id": session_id}
+
+
+@app.get("/v1/channels/webhook/{session_id}/status", status_code=200)
+async def webhook_status(session_id: str, tenant_id: str) -> dict:
+    """
+    Query the current status of a webhook session.
+
+    Returns: { session_id, status: "active"|"suspended"|"closed" }
+    """
+    if _webhook_adapter is None:
+        raise HTTPException(status_code=503, detail="Webhook adapter not initialised")
+
+    return await _webhook_adapter.get_status(
+        session_id = session_id,
+        tenant_id  = tenant_id,
+    )
 
 
 # ── Health check ──────────────────────────────────────────────────────────────

@@ -1,8 +1,9 @@
 /**
  * steps/suspend.test.ts
- * Unit tests for the suspend step executor (Arc 4 — Workflow Automation).
+ * Unit tests for the suspend step executor.
  *
  * Covers:
+ *   Arc 4 (persistSuspend — workflow-api + PostgreSQL):
  *   1. First execution — suspends, generates token, calls persistSuspend, writes sentinel
  *   2. Idempotency A — sentinel "suspending" (crash after persist, retry suspends again)
  *   3. Idempotency B — sentinel "suspended" (fully suspended, returns __suspended__ immediately)
@@ -15,6 +16,10 @@
  *  10. Resume: input — follows on_resume.next with payload
  *  11. Resume: timeout — follows on_timeout.next
  *  12. Resume idempotency — decision already stored → uses stored decision
+ *
+ *   Arc 19 (persistSuspendWebhook — Redis-only):
+ *  13. First execution — calls persistSuspendWebhook (not persistSuspend), writes sentinel
+ *  14. persistSuspendWebhook takes precedence over wall-clock fallback when both absent
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest"
@@ -311,5 +316,79 @@ describe("executeSuspend — resume paths", () => {
 
     // Should suspend normally (resumeContext.step_id does not match step.id)
     expect(result.next_step_id).toBe("__suspended__")
+  })
+})
+
+// ─────────────────────────────────────────────
+// Arc 19 — persistSuspendWebhook (Redis-only)
+// ─────────────────────────────────────────────
+
+describe("executeSuspend — Arc 19 webhook path (persistSuspendWebhook)", () => {
+  it("13. uses persistSuspendWebhook when persistSuspend is absent", async () => {
+    const webhookExpiry = "2026-06-28T10:00:00.000Z"
+    const persistSuspendWebhook = vi.fn().mockResolvedValue({
+      resume_expires_at: webhookExpiry,
+    })
+
+    // Build ctx WITHOUT persistSuspend — simulates webhook session in orchestrator-bridge
+    const { persistSuspend: _omit, ...baseCtx } = makeCtx()
+    const ctx: StepContext = { ...baseCtx, persistSuspendWebhook }
+
+    const result = await executeSuspend(step, ctx)
+
+    expect(result.next_step_id).toBe("__suspended__")
+    expect(result.transition_reason).toBe("suspended")
+
+    // persistSuspendWebhook called with correct params
+    expect(persistSuspendWebhook).toHaveBeenCalledTimes(1)
+    expect(persistSuspendWebhook).toHaveBeenCalledWith(
+      expect.objectContaining({
+        step_id:       "aguardar_aprovacao",
+        resume_token:  expect.stringMatching(/^[0-9a-f-]{36}$/),
+        timeout_hours: 48,
+      })
+    )
+
+    // deadline stored from webhook callback return value
+    expect(ctx.state.results["aguardar_aprovacao:__expires_at__"]).toBe(webhookExpiry)
+
+    // sentinel written correctly
+    expect(ctx.state.results["aguardar_aprovacao:__suspended__"]).toBe("suspended")
+
+    // resume_token is a UUID stored in results
+    const token = ctx.state.results["aguardar_aprovacao:__resume_token__"]
+    expect(typeof token).toBe("string")
+    expect(token).toMatch(/^[0-9a-f-]{36}$/)
+  })
+
+  it("14. persistSuspendWebhook idempotency: reuses token from prior (crashed) run", async () => {
+    const webhookExpiry = "2026-06-28T10:00:00.000Z"
+    const persistSuspendWebhook = vi.fn().mockResolvedValue({
+      resume_expires_at: webhookExpiry,
+    })
+
+    // Simulate crash after token write but before 'suspended' sentinel
+    const { persistSuspend: _omit, ...baseCtx } = makeCtx({
+      state: makeState({
+        "aguardar_aprovacao:__resume_token__": "fixed-token-from-prior-run",
+        "aguardar_aprovacao:__suspended__":   "suspending",  // crash mid-suspend
+      }),
+    })
+    const ctx: StepContext = { ...baseCtx, persistSuspendWebhook }
+
+    const result = await executeSuspend(step, ctx)
+
+    expect(result.next_step_id).toBe("__suspended__")
+
+    // Token is REUSED from prior run, not regenerated
+    expect(ctx.state.results["aguardar_aprovacao:__resume_token__"]).toBe("fixed-token-from-prior-run")
+
+    // persistSuspendWebhook called with the same token (idempotency)
+    expect(persistSuspendWebhook).toHaveBeenCalledWith(
+      expect.objectContaining({ resume_token: "fixed-token-from-prior-run" })
+    )
+
+    // Final sentinel written
+    expect(ctx.state.results["aguardar_aprovacao:__suspended__"]).toBe("suspended")
   })
 })

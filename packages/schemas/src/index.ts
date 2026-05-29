@@ -503,57 +503,6 @@ export type {
   CollectEvent,
 } from "./workflow"
 
-// ── Journey (Arc 10 + Arc 16 + Arc 17) ───────
-export {
-  // Arc 17 — JourneyType platform definition
-  JourneyTypeSchema,
-  CreateJourneyTypeSchema,
-  UpdateJourneyTypeSchema,
-  // Arc 10 — Journey instance
-  JourneyStatusSchema,
-  JourneySchema,
-  JourneyEventTypeSchema,
-  JourneyEventSchema,
-  JourneyStartInputSchema,
-  JourneyStartOutputSchema,
-  JourneyLinkSessionInputSchema,
-  JourneyMergeInputSchema,
-  JourneySplitInputSchema,
-  JourneySplitOutputSchema,
-  // Arc 16 — three-tier orchestration MCP tools
-  JourneyListSuspendedInputSchema,
-  JourneyListSuspendedOutputSchema,
-  JourneyResumeInputSchema,
-  JourneyResumeOutputSchema,
-  JourneyCheckPendingInputSchema,
-  JourneyCheckPendingOutputSchema,
-} from "./journey"
-
-export type {
-  // Arc 17
-  JourneyType,
-  CreateJourneyType,
-  UpdateJourneyType,
-  // Arc 10
-  JourneyStatus,
-  Journey,
-  JourneyEventType,
-  JourneyEvent,
-  JourneyStartInput,
-  JourneyStartOutput,
-  JourneyLinkSessionInput,
-  JourneyMergeInput,
-  JourneySplitInput,
-  JourneySplitOutput,
-  // Arc 16
-  JourneyListSuspendedInput,
-  JourneyListSuspendedOutput,
-  JourneyResumeInput,
-  JourneyResumeOutput,
-  JourneyCheckPendingInput,
-  JourneyCheckPendingOutput,
-} from "./journey"
-
 // ── Agent Registry ───────────────────────────
 export {
   RoutingExpressionSchema,

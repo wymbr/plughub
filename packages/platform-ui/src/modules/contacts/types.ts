@@ -14,6 +14,8 @@ export interface ContactFilters {
   dnis:            string
   insightCategory: string
   insightTags:     string
+  /** Arc 19: filter by session status (active | suspended | closed) */
+  status?:         string
 }
 
 export interface ContactRow {
@@ -31,6 +33,8 @@ export interface ContactRow {
   ani:            string | null
   dnis:           string | null
   segment_count:  number
+  /** Arc 19: session status — 'active' | 'suspended' | 'closed' | null (pre-Arc-19) */
+  status?:        string | null
 }
 
 export interface ContactsApiResponse {
@@ -69,7 +73,7 @@ export function isoToday(): string { return new Date().toISOString().slice(0, 10
 
 export const CHANNEL_ICONS: Record<string, string> = {
   webchat: '💬', whatsapp: '📱', voice: '📞', email: '✉️',
-  sms: '📟', instagram: '📷', telegram: '✈️', webrtc: '🎥',
+  sms: '📟', instagram: '📷', telegram: '✈️', webrtc: '🎥', webhook: '🔗',
 }
 
 export const OUTCOME_COLORS: Record<string, string> = {

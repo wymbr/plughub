@@ -122,6 +122,29 @@ export interface StepContext {
   }): Promise<{ resume_expires_at: string }>
 
   /**
+   * Arc 19 — Optional. Wired by orchestrator-bridge for webhook (workflow) sessions.
+   * Replaces the wall-clock fallback for webhook pools: instead of writing to
+   * PostgreSQL, this callback:
+   *   1. Extends the TTL of all Redis session keys (stream, ctx, pipeline,
+   *      resume_tokens) by (timeout_hours * 3600 + 3600) seconds (+1h buffer).
+   *   2. Writes the resume_token to the {tenant}:resume_tokens hash:
+   *      field = resume_token, value = "{session_id}:{step_id}:{expires_at}"
+   *   3. Returns the wall-clock deadline as resume_expires_at.
+   *
+   * Priority: persistSuspend (Arc 4, PostgreSQL) → persistSuspendWebhook (Arc 19,
+   * Redis-only) → wall-clock fallback. Used when persistSuspend is absent.
+   */
+  persistSuspendWebhook?(params: {
+    step_id:        string
+    resume_token:   string
+    timeout_hours:  number
+    // Arc 19 Fase D: forwarded from the suspend step so the skill-flow-service
+    // can call the calendar-api for business-hours deadline calculation.
+    business_hours?: boolean
+    calendar_id?:    string
+  }): Promise<{ resume_expires_at: string }>
+
+  /**
    * Creates a collect_instance in PostgreSQL, calculates send_at and expires_at
    * using the calendar-api, and publishes collect.requested to Kafka.
    * Called by the collect step. Caller (workflow-api worker) wires this up.

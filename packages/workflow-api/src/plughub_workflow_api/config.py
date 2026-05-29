@@ -36,6 +36,9 @@ class Settings(BaseSettings):
     # Agent Registry (for resolving flow_definition when only flow_id is provided)
     agent_registry_url: str = "http://localhost:3300"
 
+    # Channel Gateway (Arc 19 Fase D — proxy target for /v1/workflow/trigger)
+    channel_gateway_url: str = "http://localhost:8010"
+
     # Timeout scanner interval in seconds
     timeout_scan_interval_s: int = 60
 

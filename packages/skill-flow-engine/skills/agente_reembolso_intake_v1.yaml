@@ -9,30 +9,19 @@
 #
 # Responsabilidade:
 #   1. Coletar numero_pedido e motivo_reembolso do cliente
-#   2. Persistir dados no ContextStore (namespace journey.*)
-#      — lidos pelo skill_reembolso_demo_v1 via @ctx.journey.numero_pedido
-#        e @ctx.journey.motivo_reembolso
-#   3. Iniciar a Journey de reembolso (Tier 1: skill_reembolso_demo_v1)
-#   4. Confirmar ao cliente o registro e o prazo estimado
-#
-# A Journey continua assincronamente — a análise interna leva até 72h úteis.
-# Se aprovado, o cliente receberá contato via collect step do Tier 1.
-# Se aprovado e pago, um segundo collect confirma o recebimento.
-# Se rejeitado, o cliente é notificado via notify step do Tier 1.
+#   2. Persistir dados no ContextStore (namespace session.*)
+#   3. Confirmar ao cliente o registro e o prazo estimado
 #
 # Fluxo:
 #   1. saudacao              — notify: boas-vindas ao fluxo de reembolso
 #   2. coletar_numero_pedido — menu text: número do pedido
 #   3. coletar_motivo        — menu list: motivo do reembolso
 #   4. confirmar_dados       — notify: exibe dados coletados
-#   5. escrever_numero       — invoke context_set: journey.numero_pedido
-#   6. escrever_motivo       — invoke context_set: journey.motivo_reembolso
-#   7. iniciar_jornada       — invoke journey_start: skill_reembolso_demo_v1
-#   8. avisar_inicio         — notify: confirmação + prazo estimado
-#   9. finalizar             — complete outcome: resolved
-#  10. avisar_erro_jornada   — notify: fallback se journey_start falhar
-#  11. encerrar_erro         — complete outcome: failed
-#  12. finalizar_timeout     — complete outcome: abandoned
+#   5. escrever_numero       — invoke context_set: session.numero_pedido
+#   6. escrever_motivo       — invoke context_set: session.motivo_reembolso
+#   7. avisar_inicio         — notify: confirmação + prazo estimado
+#   8. finalizar             — complete outcome: resolved
+#   9. finalizar_timeout     — complete outcome: failed
 
 id: skill_reembolso_intake_v1
 name: "Reembolso Intake v1 — Coleta e Início de Jornada"
@@ -40,9 +29,8 @@ version: "1.0"
 description: |
   Agente de coleta determinístico (Tier 3) para o fluxo de reembolso.
   Coleta número do pedido e motivo via menus sem LLM.
-  Persiste os dados no namespace journey.* do ContextStore e inicia
-  a Journey de reembolso (Tier 1: skill_reembolso_demo_v1).
-  A análise leva até 72h úteis; o cliente é notificado via collect.
+  Persiste os dados no namespace session.* do ContextStore.
+  O cliente encerra o segmento após confirmação do registro.
 classification:
   type: orchestrator
   domain: reembolso
@@ -100,71 +88,41 @@ steps:
     on_success: escrever_numero
     on_failure: escrever_numero
 
-  # ── Etapa 5: persistir numero_pedido no ContextStore (journey.*) ──────────────
-  # journey.* é compartilhado entre todas as sessões desta Journey.
-  # O skill_reembolso_demo_v1 lê @ctx.journey.numero_pedido nos steps
-  # coletar_informacoes e confirmar_pagamento.
+  # ── Etapa 5: persistir numero_pedido no ContextStore (session.*) ───────────────
   - id: escrever_numero
     type: invoke
     tool: context_set
     input:
-      tag: "journey.numero_pedido"
+      tag: "session.numero_pedido"
       value: "$.pipeline_state.numero_pedido"
       confidence: 1.0
       visibility: "agents_only"
     on_success: escrever_motivo
     on_failure: escrever_motivo   # continua mesmo se context_set falhar
 
-  # ── Etapa 6: persistir motivo_reembolso no ContextStore (journey.*) ───────────
-  # Lido pelo agente de análise interna via @ctx.journey.motivo_reembolso.
+  # ── Etapa 6: persistir motivo_reembolso no ContextStore (session.*) ────────────
   - id: escrever_motivo
     type: invoke
     tool: context_set
     input:
-      tag: "journey.motivo_reembolso"
+      tag: "session.motivo_reembolso"
       value: "$.pipeline_state.motivo_reembolso"
       confidence: 1.0
       visibility: "agents_only"
-    on_success: iniciar_jornada
-    on_failure: iniciar_jornada   # continua mesmo se context_set falhar
-
-  # ── Etapa 7: iniciar Journey de reembolso (Tier 1) ───────────────────────────
-  # journey_start cria Journey + WorkflowInstance para skill_reembolso_demo_v1.
-  # O Tier 1 suspende aguardando análise interna (72h — reason: approval).
-  # Se aprovado: skill emite collect para confirmar pagamento.
-  # Se rejeitado: skill emite notify e encerra a Journey com outcome: failed.
-  - id: iniciar_jornada
-    type: invoke
-    tool: journey_start
-    input:
-      skill_id: "skill_reembolso_demo_v1"
-      session_id: "$.session.session_id"
     on_success: avisar_inicio
-    on_failure: avisar_erro_jornada
+    on_failure: avisar_inicio   # continua mesmo se context_set falhar
 
-  # ── Etapa 8: confirmar registro ao cliente ────────────────────────────────────
+  # ── Etapa 7: confirmar registro ao cliente ────────────────────────────────────
   - id: avisar_inicio
     type: notify
     message: "✅ Solicitação de reembolso registrada com sucesso!\n\n📋 Protocolo: {{$.pipeline_state.numero_pedido}}\n⏱️ Prazo de análise: até 3 dias úteis\n\nSe aprovado, o valor será creditado em até 5 dias úteis adicionais. Você receberá uma mensagem aqui com a atualização."
     on_success: finalizar
     on_failure: finalizar
 
-  # ── Etapa 9: finalização normal ───────────────────────────────────────────────
+  # ── Etapa 8: finalização normal ───────────────────────────────────────────────
   - id: finalizar
     type: complete
     outcome: resolved
-
-  # ── Fallback: erro ao iniciar Journey ────────────────────────────────────────
-  - id: avisar_erro_jornada
-    type: notify
-    message: "⚠️ Não foi possível registrar sua solicitação no momento. Por favor, tente novamente em alguns minutos ou entre em contato com nosso SAC."
-    on_success: encerrar_erro
-    on_failure: encerrar_erro
-
-  - id: encerrar_erro
-    type: complete
-    outcome: failed
-    issue_status: "journey_start falhou — skill_reembolso_demo_v1 indisponível"
 
   # ── Timeout / disconnect ───────────────────────────────────────────────────────
   - id: finalizar_timeout

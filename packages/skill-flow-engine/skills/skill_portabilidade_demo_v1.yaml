@@ -2,18 +2,13 @@ id: skill_portabilidade_demo_v1
 name: Portabilidade Demo
 version: "1.1"
 description: |
-  Fluxo de portabilidade de número — demonstração Arc 10 + Arc 16.
-  Processo multi-sessão com 3 etapas: coleta de dados pelo agente intake
-  (agente_portabilidade_intake_v1), validação pela operadora (suspend/resume),
+  Fluxo de portabilidade de número — demonstração Arc 19 (webhook workflow).
+  Processo multi-sessão com 3 etapas: validação pela operadora (suspend/resume),
   confirmação com o cliente (collect com requires: [text] — canal neutro).
-  Lê @ctx.journey.numero_atual e @ctx.journey.operadora_destino escritos pelo intake.
-  Criação automática de Journey via creates_journey: true.
+  Lê @ctx.session.numero_atual e @ctx.session.operadora_destino escritos pelo intake.
   Tempo estimado: 1–3 dias úteis.
 classification:
   type: vertical
-
-creates_journey: true
-journey_type_id: portabilidade_telco   # Arc 17: must be registered in Config/Resources → JourneyTypes
 
 entry: coletar_dados
 
@@ -51,9 +46,9 @@ steps:
     type: collect
     target:
       type: customer
-      id: "@ctx.journey.customer_id"
+      id: "@ctx.session.customer_participant_id"
     requires: [text]
-    prompt: "✅ Portabilidade do número {{@ctx.journey.numero_atual}} para {{@ctx.journey.operadora_destino}} foi pré-aprovada! Confirme para prosseguir com a transferência."
+    prompt: "✅ Portabilidade do número {{@ctx.session.numero_atual}} para {{@ctx.session.operadora_destino}} foi pré-aprovada! Confirme para prosseguir com a transferência."
     timeout_hours: 24
     output_as: confirmacao_portabilidade
     on_response:

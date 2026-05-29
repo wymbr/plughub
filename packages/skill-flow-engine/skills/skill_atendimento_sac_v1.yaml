@@ -6,7 +6,6 @@
 #
 # Pool: sac_ia
 # Agent: agente_sac_ia_v1 (atualizado para apontar para este skill no Sprint 1A)
-# creates_journey: true — Journey criada automaticamente no primeiro step.
 #
 # Fluxo:
 #   1. saudacao               — notify: boas-vindas + aviso de jornada registrada
@@ -33,7 +32,6 @@
 #  10. encerrar_fallback      — complete outcome: failed
 #
 # Dados gerados (observáveis no Monitor e Analytics):
-#   journey.events: journey_started → (journey_completed | journey_suspended)
 #   conversations.participants: segmentos sac_ia + retencao_humano (quando escala)
 #   on_human_end hooks: wrapup_ia + nps_ia disparados automaticamente pelo pool retencao_humano
 #   usage.events: sessions, messages
@@ -48,7 +46,6 @@ name: "Atendimento SAC v1 — Execução Determinística"
 version: "1.0"
 description: |
   Skill de execução SAC (Tier 2) — determinístico, sem LLM.
-  Cria Journey automaticamente (creates_journey: true).
   Apresenta menu de motivo de contato e responde com conteúdo fixo.
   Oferece escalação para retenção humana com hooks NPS + wrap-up.
   Phase 1: conteúdo fixo — valida fluxo, dados e integrações.
@@ -56,9 +53,6 @@ description: |
 classification:
   type: orchestrator
   domain: customer_service
-
-creates_journey: true
-journey_type_id: atendimento_sac       # Arc 17: must be registered in Config/Resources → JourneyTypes
 
 entry: saudacao
 

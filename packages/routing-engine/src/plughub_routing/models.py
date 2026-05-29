@@ -44,7 +44,7 @@ class ConversationInboundEvent(BaseModel):
     session_id:   str
     tenant_id:    str
     customer_id:  str
-    channel:      Literal["whatsapp", "webchat", "voice", "email", "sms", "instagram", "telegram", "webrtc"]
+    channel:      Literal["whatsapp", "webchat", "voice", "email", "sms", "instagram", "telegram", "webrtc", "webhook"]
 
     # Target pool — set by channel-gateway on contact open (entry point config)
     # or by conversation_escalate (explicit escalation target).
@@ -148,11 +148,6 @@ class PoolConfig(BaseModel):
     # can reference reachable pools by alias without hard-coding pool IDs.
     mentionable_pools: dict[str, str] | None = None
 
-    # skill_id list for journey start shortcuts via @mention (Arc 10).
-    # Written to ContextStore as session.pool.mentionable_journeys.
-    # Stored as list[str] in agent-registry (array of skill IDs, no alias mapping).
-    mentionable_journeys: list[str] | None = None
-
     # Agent Group IDs (Arc 9) this pool belongs to.
     # Written to ContextStore as session.pool.agent_groups[].
     agent_groups: list[str] = Field(default_factory=list)
@@ -160,14 +155,20 @@ class PoolConfig(BaseModel):
     # ContextoTab namespace visibility config (Arc 11 / context-store-taxonomy).
     # Determines which ContextStore namespaces operator role can read in the UI.
     # Stored in pool_config Redis → read by mcp-server supervisor_state REST endpoint.
-    # None = use platform default (["service", "journey", "session"]).
+    # None = use platform default (["service", "session"]).
     context_visibility: dict | None = None
 
-    # Arc 17: JourneyType slugs this pool is authorized to create.
-    # Populated by kafka_listener from pool.registered/pool.updated events.
-    # Written to ContextStore as session.authorized_journey_types[] after allocation.
-    # journey_start MCP tool validates this list before creating a Journey instance.
-    authorized_journey_types: list[str] = Field(default_factory=list)
+    # Arc 19: Webhook pool fields.
+    # webhook_skill_id: the skill endpoint (the "DIN" of the webhook channel).
+    # Required when channel_types includes "webhook".  The WebhookAdapter uses this
+    # to correlate a trigger with its target pool and to record the DNIS in the
+    # conversations.inbound event.
+    webhook_skill_id: str | None = None
+    # max_concurrent_sessions: capacity ceiling for webhook pools.
+    # For webhook pools, capacity is controlled by this limit (not by logged-in
+    # agent instances).  For human/AI pools, this field is informational only.
+    # Included in the pool snapshot so the Monitor can display configured capacity.
+    max_concurrent_sessions: int | None = None
 
 
 # ─────────────────────────────────────────────

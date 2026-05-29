@@ -189,10 +189,14 @@ class Router:
         """Writes pool operational snapshot to Redis after a routing event."""
         try:
             await self._instances.write_pool_snapshot(
-                tenant_id=     tenant_id,
-                pool_id=       pool_id,
-                sla_target_ms= pool.sla_target_ms,
-                channel_types= pool.channel_types,
+                tenant_id=               tenant_id,
+                pool_id=                 pool_id,
+                sla_target_ms=           pool.sla_target_ms,
+                channel_types=           pool.channel_types,
+                max_reply_time_ms=       pool.max_reply_time_ms,
+                # Arc 19: forward webhook pool fields so snapshot includes them
+                webhook_skill_id=        pool.webhook_skill_id,
+                max_concurrent_sessions= pool.max_concurrent_sessions,
             )
         except Exception as exc:
             logger.warning(

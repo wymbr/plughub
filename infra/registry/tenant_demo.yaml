@@ -14,26 +14,6 @@
 tenant_id: tenant_demo
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Journey Types
-# Synced by RegistrySyncer via POST /v1/journey-types (409 → PATCH on drift).
-# Each pool that may initiate this type must list it in authorized_journey_types.
-# ─────────────────────────────────────────────────────────────────────────────
-
-journey_types:
-
-  - journey_type_id: portabilidade_telco
-    description: "Portabilidade de número entre operadoras de telefonia"
-    sla_ms: 172800000   # 48 horas úteis em ms
-
-  - journey_type_id: reembolso_produto
-    description: "Solicitação de reembolso de produto ou serviço"
-    sla_ms: 432000000   # 5 dias úteis em ms
-
-  - journey_type_id: atendimento_sac
-    description: "Atendimento SAC genérico com processo de suporte"
-    sla_ms: 86400000    # 24 horas em ms
-
-# ─────────────────────────────────────────────────────────────────────────────
 # Pools
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -64,10 +44,6 @@ pools:
       copilot:    copilot_sac
       auth:       auth_ia       # @auth      → convida agente_auth_ia_v1 (PIN texto)
       auth_form:  auth_form_ia  # @auth_form → convida agente_auth_form_v1 (formulário)
-    # Arc 10 — skills disponíveis para "Iniciar Processo" no Console (ActionBar)
-    mentionable_journeys:
-      - skill_portabilidade_demo_v1
-      - skill_reembolso_demo_v1
     # Pool lifecycle hooks — acionam especialistas em pontos do ciclo de atendimento.
     # on_human_start: reservado para avaliadores em tempo real (Echo desativado no demo).
     # on_human_end:   dispara wrapup (agents_only) + NPS (customer-only) em paralelo.
@@ -104,23 +80,21 @@ pools:
 
   - pool_id: portabilidade_ia
     # Pool do agente de intake de portabilidade.
-    # Coleta número atual + operadora destino e inicia Journey Tier 1.
+    # Coleta número atual + operadora destino e persiste no ContextStore.
     # Phase 1: agente_portabilidade_ia_v1 com skill_portabilidade_intake_v1.
     # Phase 2: trocar para skill_atendimento_portabilidade_v1 (Tier 2 com task step).
-    description: "Pool do agente de portabilidade — coleta dados e inicia Journey"
+    description: "Pool do agente de portabilidade — coleta dados do cliente"
     channel_types: [webchat, whatsapp]
     sla_target_ms: 300000
-    authorized_journey_types: ["portabilidade_telco"]
 
   - pool_id: reembolso_ia
     # Pool do agente de intake de reembolso.
-    # Coleta número do pedido + motivo e inicia Journey Tier 1.
+    # Coleta número do pedido + motivo e persiste no ContextStore.
     # Phase 1: agente_reembolso_ia_v1 com skill_reembolso_intake_v1.
     # Phase 2: trocar para skill_atendimento_reembolso_v1 (Tier 2 com task step).
-    description: "Pool do agente de reembolso — coleta dados e inicia Journey"
+    description: "Pool do agente de reembolso — coleta dados do cliente"
     channel_types: [webchat, whatsapp]
     sla_target_ms: 300000
-    authorized_journey_types: ["reembolso_produto"]
 
   - pool_id: auth_sac_ia
     # Pool da composição Auth → SAC (Tier 2 — Sprint 1D).
@@ -224,7 +198,7 @@ agent_types:
     capabilities:
       channels: webchat,whatsapp
 
-  # Portabilidade — intake determinístico + início de Journey (Sprint 1B)
+  # Portabilidade — intake determinístico (Sprint 1B)
   # Phase 2: trocar skill_portabilidade_intake_v1 → skill_atendimento_portabilidade_v1
   - agent_type_id: agente_portabilidade_ia_v1
     framework: plughub-native
@@ -238,11 +212,10 @@ agent_types:
       - mcp-server-plughub:notification_send
       - mcp-server-plughub:interaction_request
       - mcp-server-plughub:context_set
-      - mcp-server-plughub:journey_start
     capabilities:
       channels: webchat,whatsapp
 
-  # Reembolso — intake determinístico + início de Journey (Sprint 1C)
+  # Reembolso — intake determinístico (Sprint 1C)
   # Phase 2: trocar skill_reembolso_intake_v1 → skill_atendimento_reembolso_v1
   - agent_type_id: agente_reembolso_ia_v1
     framework: plughub-native
@@ -256,7 +229,6 @@ agent_types:
       - mcp-server-plughub:notification_send
       - mcp-server-plughub:interaction_request
       - mcp-server-plughub:context_set
-      - mcp-server-plughub:journey_start
     capabilities:
       channels: webchat,whatsapp
 

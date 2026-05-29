@@ -1,25 +1,38 @@
 """
 test_router.py
-Unit tests for the Workflow API router.
+Unit tests for the Workflow API router — Arc 19 Fase D.
 
 Strategy:
   - asyncpg pool is replaced with a MagicMock whose fetchrow/fetch/execute
     methods return controlled fake data
   - kafka producer is None (disabled)
-  - httpx AsyncClient used as ASGI test client
+  - httpx.AsyncClient is patched to mock channel-gateway calls
   - calendar_client.calculate_deadline is patched to avoid HTTP calls
 
+Arc 19 Fase D behaviour summary:
+  POST /v1/workflow/trigger         → proxies to channel-gateway → 201
+  POST /.../persist-suspend         → 410 Gone (deprecated)
+  POST /v1/workflow/resume
+      with tenant_id                → proxies to channel-gateway → 200
+      without tenant_id             → legacy PostgreSQL path → 200
+  POST /.../complete                → 410 Gone
+  POST /.../fail                    → 410 Gone
+  POST /.../cancel                  → 410 Gone
+  POST /.../collect/persist         → 410 Gone
+  POST /v1/workflow/collect/respond → 410 Gone
+  GET  /v1/workflow/instances       → read-only, kept as-is
+  GET  /v1/workflow/instances/{id}  → read-only, kept as-is
+  GET  /v1/health                   → kept as-is
+
 Coverage:
-  TestTrigger           — POST /v1/workflow/trigger
-  TestPersistSuspend    — POST /v1/workflow/instances/{id}/persist-suspend
-  TestResume            — POST /v1/workflow/resume
-  TestComplete          — POST /v1/workflow/instances/{id}/complete
-  TestFail              — POST /v1/workflow/instances/{id}/fail
-  TestCancel            — POST /v1/workflow/instances/{id}/cancel
-  TestList              — GET  /v1/workflow/instances
-  TestDetail            — GET  /v1/workflow/instances/{id}
-  TestHealth            — GET  /v1/health
-  TestTimeoutScanner    — timeout_job._scan_once
+  TestTrigger           — POST /v1/workflow/trigger proxies to channel-gateway
+  TestPersistSuspend    — returns 410
+  TestResume            — proxy path (tenant_id) + legacy path (no tenant_id)
+  TestDeprecated        — complete, fail, cancel, collect/persist, collect/respond → 410
+  TestList              — GET  /v1/workflow/instances (unchanged)
+  TestDetail            — GET  /v1/workflow/instances/{id} (unchanged)
+  TestHealth            — GET  /v1/health (unchanged)
+  TestTimeoutScanner    — timeout_job._scan_once (unchanged)
   TestWebhookCRUD       — POST/GET/PATCH/rotate/DELETE /v1/workflow/webhooks
   TestWebhookTrigger    — POST /v1/workflow/webhook/{id} (public endpoint)
   TestWebhookDeliveries — GET  /v1/workflow/webhooks/{id}/deliveries
@@ -94,6 +107,7 @@ def make_settings() -> Settings:
         database_url="postgresql://x:x@localhost/x",
         kafka_enabled=False,
         calendar_api_url="http://calendar:3700",
+        channel_gateway_url="http://channel-gateway:8010",
     )
 
 
@@ -107,80 +121,132 @@ def client():
 
 
 # ─────────────────────────────────────────────
-# TestTrigger
+# TestTrigger — Arc 19 Fase D: proxy to channel-gateway
 # ─────────────────────────────────────────────
 
 class TestTrigger:
-    def test_creates_instance_and_returns_201(self, client):
-        app.state.pool = make_pool(fetchrow_result=fake_row())
-        resp = client.post("/v1/workflow/trigger", json={
-            "tenant_id": "tenant-test",
-            "flow_id":   "wf_approval_v1",
-            "trigger_type": "manual",
-            "metadata": {"invoice_id": "INV-001"},
-        })
+    def _mock_gw_ok(self):
+        """Returns a mock httpx response for a successful channel-gateway call."""
+        mock_resp = MagicMock()
+        mock_resp.status_code = 201
+        mock_resp.json.return_value = {"session_id": "sess-abc-123"}
+        mock_resp.raise_for_status = MagicMock()
+        return mock_resp
+
+    def test_proxies_to_channel_gateway_and_returns_201(self, client):
+        mock_resp = self._mock_gw_ok()
+        with patch("plughub_workflow_api.router.httpx.AsyncClient") as mock_cls:
+            mock_client = AsyncMock()
+            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client.__aexit__ = AsyncMock(return_value=None)
+            mock_client.post = AsyncMock(return_value=mock_resp)
+            mock_cls.return_value = mock_client
+
+            resp = client.post("/v1/workflow/trigger", json={
+                "tenant_id":    "tenant-test",
+                "flow_id":      "skill_portabilidade_v1",
+                "trigger_type": "manual",
+                "metadata":     {"invoice_id": "INV-001"},
+            })
+
         assert resp.status_code == 201
         data = resp.json()
-        assert data["flow_id"] == "wf_approval_v1"
-        assert data["status"]  == "active"
+        assert data["session_id"] == "sess-abc-123"
+        # Verify proxy was called with correct URL and body
+        call_kwargs = mock_client.post.call_args
+        assert "skill_portabilidade_v1" in call_kwargs[0][0]
+        sent_body = call_kwargs[1]["json"]
+        assert sent_body["tenant_id"] == "tenant-test"
+        assert sent_body["trigger_type"] == "api"   # "manual" is normalized to "api"
 
-    def test_session_id_optional(self, client):
-        app.state.pool = make_pool(fetchrow_result=fake_row())
-        resp = client.post("/v1/workflow/trigger", json={
-            "tenant_id":  "t1",
-            "flow_id":    "wf_onboarding_v1",
-            "session_id": "session-abc",
-        })
+    def test_trigger_type_manual_normalized_to_api(self, client):
+        mock_resp = self._mock_gw_ok()
+        with patch("plughub_workflow_api.router.httpx.AsyncClient") as mock_cls:
+            mock_client = AsyncMock()
+            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client.__aexit__ = AsyncMock(return_value=None)
+            mock_client.post = AsyncMock(return_value=mock_resp)
+            mock_cls.return_value = mock_client
+
+            resp = client.post("/v1/workflow/trigger", json={
+                "tenant_id": "t1", "flow_id": "skill_test_v1",
+                "trigger_type": "manual",
+            })
+
         assert resp.status_code == 201
+        body = mock_client.post.call_args[1]["json"]
+        assert body["trigger_type"] == "api"
+
+    def test_non_manual_trigger_type_preserved(self, client):
+        mock_resp = self._mock_gw_ok()
+        with patch("plughub_workflow_api.router.httpx.AsyncClient") as mock_cls:
+            mock_client = AsyncMock()
+            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client.__aexit__ = AsyncMock(return_value=None)
+            mock_client.post = AsyncMock(return_value=mock_resp)
+            mock_cls.return_value = mock_client
+
+            resp = client.post("/v1/workflow/trigger", json={
+                "tenant_id": "t1", "flow_id": "skill_test_v1",
+                "trigger_type": "scheduled",
+            })
+
+        assert resp.status_code == 201
+        body = mock_client.post.call_args[1]["json"]
+        assert body["trigger_type"] == "scheduled"
+
+    def test_metadata_fields_forwarded(self, client):
+        mock_resp = self._mock_gw_ok()
+        with patch("plughub_workflow_api.router.httpx.AsyncClient") as mock_cls:
+            mock_client = AsyncMock()
+            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client.__aexit__ = AsyncMock(return_value=None)
+            mock_client.post = AsyncMock(return_value=mock_resp)
+            mock_cls.return_value = mock_client
+
+            resp = client.post("/v1/workflow/trigger", json={
+                "tenant_id":        "t1",
+                "flow_id":          "skill_test_v1",
+                "origin_session_id": "orig-sess",
+                "pool_id":           "retencao_webhook",
+                "context":           {"key": "val"},
+                "session_id":        "cust-sess",
+            })
+
+        assert resp.status_code == 201
+        body = mock_client.post.call_args[1]["json"]
+        assert body["customer_id"]          == "cust-sess"
+        meta = body["metadata"] or {}
+        assert meta.get("origin_session_id") == "orig-sess"
+        assert meta.get("pool_id")           == "retencao_webhook"
+        assert meta.get("context")           == {"key": "val"}
 
     def test_missing_required_fields_returns_422(self, client):
         resp = client.post("/v1/workflow/trigger", json={"tenant_id": "t1"})
         assert resp.status_code == 422
 
+    def test_gateway_error_returns_502(self, client):
+        import httpx
+        with patch("plughub_workflow_api.router.httpx.AsyncClient") as mock_cls:
+            mock_client = AsyncMock()
+            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client.__aexit__ = AsyncMock(return_value=None)
+            mock_client.post = AsyncMock(side_effect=Exception("connection refused"))
+            mock_cls.return_value = mock_client
+
+            resp = client.post("/v1/workflow/trigger", json={
+                "tenant_id": "t1", "flow_id": "skill_test_v1",
+            })
+
+        assert resp.status_code == 502
+
 
 # ─────────────────────────────────────────────
-# TestPersistSuspend
+# TestPersistSuspend — Arc 19 Fase D: 410 Gone
 # ─────────────────────────────────────────────
 
 class TestPersistSuspend:
-    def test_suspends_active_instance(self, client):
-        active_row     = fake_row({"status": "active"})
-        suspended_row  = fake_row({
-            "status":            "suspended",
-            "resume_token":      RESUME_TOKEN,
-            "suspend_reason":    "approval",
-            "resume_expires_at": datetime.now(timezone.utc) + timedelta(hours=48),
-            "suspended_at":      datetime.now(timezone.utc),
-        })
-        # fetchrow called twice: get_instance + update
-        app.state.pool = MagicMock()
-        app.state.pool.fetchrow  = AsyncMock(side_effect=[active_row, suspended_row])
-        app.state.pool.fetchval  = AsyncMock(return_value=1)
-
-        with patch(
-            "plughub_workflow_api.router.calculate_deadline",
-            new=AsyncMock(return_value=datetime.now(timezone.utc) + timedelta(hours=48))
-        ):
-            resp = client.post(
-                f"/v1/workflow/instances/{INSTANCE_ID}/persist-suspend",
-                json={
-                    "step_id":        "aguardar_aprovacao",
-                    "resume_token":   RESUME_TOKEN,
-                    "reason":         "approval",
-                    "timeout_hours":  48,
-                    "business_hours": True,
-                    "entity_type":    "workflow",
-                    "entity_id":      INSTANCE_ID,
-                },
-            )
-
-        assert resp.status_code == 200
-        data = resp.json()
-        assert "resume_expires_at" in data
-        assert data["instance"]["status"] == "suspended"
-
-    def test_not_found_returns_404(self, client):
-        app.state.pool = make_pool(fetchrow_result=None)
+    def test_returns_410_always(self, client):
         resp = client.post(
             f"/v1/workflow/instances/{INSTANCE_ID}/persist-suspend",
             json={
@@ -188,10 +254,10 @@ class TestPersistSuspend:
                 "timeout_hours": 24, "business_hours": False,
             },
         )
-        assert resp.status_code == 404
+        assert resp.status_code == 410
 
-    def test_terminal_status_returns_409(self, client):
-        app.state.pool = make_pool(fetchrow_result=fake_row({"status": "completed"}))
+    def test_returns_410_even_when_valid_payload(self, client):
+        # body does not matter — endpoint always 410 now
         resp = client.post(
             f"/v1/workflow/instances/{INSTANCE_ID}/persist-suspend",
             json={
@@ -199,107 +265,19 @@ class TestPersistSuspend:
                 "timeout_hours": 24, "business_hours": False,
             },
         )
-        assert resp.status_code == 409
-
-    def test_wall_clock_fallback_when_no_entity_id(self, client):
-        active_row    = fake_row({"status": "active"})
-        suspended_row = fake_row({
-            "status": "suspended",
-            "resume_token": RESUME_TOKEN,
-            "suspend_reason": "timer",
-            "resume_expires_at": datetime.now(timezone.utc) + timedelta(hours=24),
-            "suspended_at": datetime.now(timezone.utc),
-        })
-        app.state.pool = MagicMock()
-        app.state.pool.fetchrow = AsyncMock(side_effect=[active_row, suspended_row])
-        app.state.pool.fetchval = AsyncMock(return_value=1)
-
-        resp = client.post(
-            f"/v1/workflow/instances/{INSTANCE_ID}/persist-suspend",
-            json={
-                "step_id": "wait_step", "resume_token": RESUME_TOKEN,
-                "reason": "timer", "timeout_hours": 24,
-                "business_hours": True,
-                # entity_id omitted → falls back to wall-clock
-            },
-        )
-        assert resp.status_code == 200
-
-    def test_duplicate_resume_token_is_idempotent(self, client):
-        """
-        B2-01: If persist-suspend is called twice with the same resume_token
-        (engine crashed between persistSuspend and saving expiresKey), the second
-        call must succeed and return the ORIGINAL resume_expires_at — not a new one.
-        """
-        original_expires = datetime.now(timezone.utc) + timedelta(hours=48)
-
-        # First call: instance is active → transitions to suspended
-        active_row = fake_row({"status": "active"})
-        # Second call (retry): instance is already suspended with same token
-        # db_suspend_instance UPDATE preserves resume_expires_at via CASE expression
-        already_suspended_row = fake_row({
-            "status":            "suspended",
-            "resume_token":      RESUME_TOKEN,
-            "suspend_reason":    "approval",
-            "resume_expires_at": original_expires,
-            "suspended_at":      datetime.now(timezone.utc) - timedelta(seconds=5),
-        })
-
-        suspended_row = fake_row({
-            "status":            "suspended",
-            "resume_token":      RESUME_TOKEN,
-            "suspend_reason":    "approval",
-            "resume_expires_at": original_expires,
-            "suspended_at":      datetime.now(timezone.utc),
-        })
-
-        app.state.pool = MagicMock()
-        # Each persist-suspend call: fetchrow×2 (db_get_instance + db_suspend_instance)
-        # Request 1: active → suspended
-        # Request 2 (retry): already suspended → preserved
-        app.state.pool.fetchrow = AsyncMock(side_effect=[
-            active_row,            # request 1: db_get_instance
-            suspended_row,         # request 1: db_suspend_instance
-            already_suspended_row, # request 2 (retry): db_get_instance
-            already_suspended_row, # request 2 (retry): db_suspend_instance (preserves expires)
-        ])
-        app.state.pool.fetchval = AsyncMock(return_value=1)
-
-        payload = {
-            "step_id":        "aguardar_aprovacao",
-            "resume_token":   RESUME_TOKEN,
-            "reason":         "approval",
-            "timeout_hours":  48,
-            "business_hours": True,
-            # entity_id is required to trigger the calculate_deadline path
-            # (business_hours=True but no entity_id → wall-clock fallback, non-deterministic)
-            "entity_id":      INSTANCE_ID,
-        }
-
-        with patch(
-            "plughub_workflow_api.router.calculate_deadline",
-            new=AsyncMock(return_value=original_expires)
-        ):
-            resp1 = client.post(
-                f"/v1/workflow/instances/{INSTANCE_ID}/persist-suspend",
-                json=payload,
-            )
-            resp2 = client.post(
-                f"/v1/workflow/instances/{INSTANCE_ID}/persist-suspend",
-                json=payload,
-            )
-
-        assert resp1.status_code == 200
-        assert resp2.status_code == 200
-        # Both responses must carry the same resume_expires_at
-        assert resp1.json()["resume_expires_at"] == resp2.json()["resume_expires_at"]
+        assert resp.status_code == 410
 
 
 # ─────────────────────────────────────────────
-# TestResume
+# TestResume — Arc 19 Fase D: dual-path
 # ─────────────────────────────────────────────
 
 class TestResume:
+    """
+    With tenant_id → proxy to channel-gateway WebhookAdapter (Arc 19).
+    Without tenant_id → legacy PostgreSQL path (backward compat).
+    """
+
     def _suspended_row(self, future_expiry=True):
         expires = (
             datetime.now(timezone.utc) + timedelta(hours=1)
@@ -314,7 +292,58 @@ class TestResume:
             "suspended_at":      datetime.now(timezone.utc) - timedelta(minutes=30),
         })
 
-    def test_approves_and_returns_200(self, client):
+    def _mock_gw_ok(self):
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {"session_id": "sess-resumed"}
+        mock_resp.raise_for_status = MagicMock()
+        return mock_resp
+
+    # ── Arc 19 path (with tenant_id) ──────────────────────────────────────────
+
+    def test_webhook_resume_proxies_to_channel_gateway(self, client):
+        mock_resp = self._mock_gw_ok()
+        with patch("plughub_workflow_api.router.httpx.AsyncClient") as mock_cls:
+            mock_client = AsyncMock()
+            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client.__aexit__ = AsyncMock(return_value=None)
+            mock_client.post = AsyncMock(return_value=mock_resp)
+            mock_cls.return_value = mock_client
+
+            resp = client.post("/v1/workflow/resume", json={
+                "token":     RESUME_TOKEN,
+                "decision":  "approved",
+                "payload":   {"approved_by": "maria"},
+                "tenant_id": "tenant-test",
+            })
+
+        assert resp.status_code == 200
+        assert resp.json()["session_id"] == "sess-resumed"
+        call_url = mock_client.post.call_args[0][0]
+        assert f"resume/{RESUME_TOKEN}" in call_url
+        body = mock_client.post.call_args[1]["json"]
+        assert body["tenant_id"] == "tenant-test"
+        assert body["payload"]["decision"] == "approved"
+
+    def test_webhook_resume_gateway_error_returns_502(self, client):
+        with patch("plughub_workflow_api.router.httpx.AsyncClient") as mock_cls:
+            mock_client = AsyncMock()
+            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client.__aexit__ = AsyncMock(return_value=None)
+            mock_client.post = AsyncMock(side_effect=Exception("gateway down"))
+            mock_cls.return_value = mock_client
+
+            resp = client.post("/v1/workflow/resume", json={
+                "token":     RESUME_TOKEN,
+                "decision":  "approved",
+                "tenant_id": "t1",
+            })
+
+        assert resp.status_code == 502
+
+    # ── Legacy path (without tenant_id) ──────────────────────────────────────
+
+    def test_legacy_approves_and_returns_200(self, client):
         suspended  = self._suspended_row()
         active_row = fake_row({"status": "active", "resume_token": None})
         app.state.pool = MagicMock()
@@ -325,35 +354,35 @@ class TestResume:
             "token":    RESUME_TOKEN,
             "decision": "approved",
             "payload":  {"approved_by": "maria"},
+            # no tenant_id → legacy path
         })
         assert resp.status_code == 200
         data = resp.json()
         assert data["decision"] == "approved"
         assert "wait_duration_ms" in data
 
-    def test_token_not_found_returns_404(self, client):
+    def test_legacy_token_not_found_returns_404(self, client):
         app.state.pool = make_pool(fetchrow_result=None)
         resp = client.post("/v1/workflow/resume", json={
             "token": "nonexistent", "decision": "approved",
         })
         assert resp.status_code == 404
 
-    def test_not_suspended_returns_409(self, client):
+    def test_legacy_not_suspended_returns_409(self, client):
         app.state.pool = make_pool(fetchrow_result=fake_row({"status": "active", "resume_token": RESUME_TOKEN}))
         resp = client.post("/v1/workflow/resume", json={
             "token": RESUME_TOKEN, "decision": "approved",
         })
         assert resp.status_code == 409
 
-    def test_expired_token_returns_410(self, client):
+    def test_legacy_expired_token_returns_410(self, client):
         app.state.pool = make_pool(fetchrow_result=self._suspended_row(future_expiry=False))
         resp = client.post("/v1/workflow/resume", json={
             "token": RESUME_TOKEN, "decision": "approved",
         })
         assert resp.status_code == 410
 
-    def test_timeout_decision_skips_expiry_check(self, client):
-        # system-generated timeout: expired token should still succeed
+    def test_legacy_timeout_decision_skips_expiry_check(self, client):
         expired_suspended = self._suspended_row(future_expiry=False)
         active_row        = fake_row({"status": "active", "resume_token": None})
         app.state.pool = MagicMock()
@@ -367,72 +396,53 @@ class TestResume:
 
 
 # ─────────────────────────────────────────────
-# TestComplete / TestFail
+# TestDeprecated — Arc 19 Fase D: all 410 Gone
 # ─────────────────────────────────────────────
 
-class TestComplete:
-    def test_completes_active_instance(self, client):
-        completed = fake_row({"status": "completed", "completed_at": datetime.now(timezone.utc)})
-        app.state.pool = MagicMock()
-        app.state.pool.fetchrow = AsyncMock(side_effect=[fake_row(), completed])
-        app.state.pool.fetchval = AsyncMock(return_value=1)
+class TestDeprecated:
+    """
+    All lifecycle mutating endpoints that were replaced by channel-gateway
+    session management return 410 Gone.
+    """
 
-        resp = client.post(
-            f"/v1/workflow/instances/{INSTANCE_ID}/complete",
-            json={"outcome": "resolved", "pipeline_state": {}},
-        )
-        assert resp.status_code == 200
-        assert resp.json()["status"] == "completed"
-
-    def test_not_found_returns_404(self, client):
-        app.state.pool = make_pool(fetchrow_result=None)
+    def test_complete_returns_410(self, client):
         resp = client.post(
             f"/v1/workflow/instances/{INSTANCE_ID}/complete",
             json={"outcome": "resolved"},
         )
-        assert resp.status_code == 404
+        assert resp.status_code == 410
 
-
-class TestFail:
-    def test_fails_active_instance(self, client):
-        failed_row = fake_row({"status": "failed"})
-        app.state.pool = MagicMock()
-        app.state.pool.fetchrow = AsyncMock(side_effect=[fake_row(), failed_row])
-        app.state.pool.fetchval = AsyncMock(return_value=1)
-
+    def test_fail_returns_410(self, client):
         resp = client.post(
             f"/v1/workflow/instances/{INSTANCE_ID}/fail",
-            json={"error": "Unhandled exception in step X"},
+            json={"error": "some error"},
         )
-        assert resp.status_code == 200
-        assert resp.json()["status"] == "failed"
+        assert resp.status_code == 410
 
-
-# ─────────────────────────────────────────────
-# TestCancel
-# ─────────────────────────────────────────────
-
-class TestCancel:
-    def test_cancels_active_instance(self, client):
-        cancelled = fake_row({"status": "cancelled"})
-        app.state.pool = MagicMock()
-        app.state.pool.fetchrow = AsyncMock(side_effect=[fake_row(), cancelled])
-        app.state.pool.fetchval = AsyncMock(return_value=1)
-
-        resp = client.post(
-            f"/v1/workflow/instances/{INSTANCE_ID}/cancel",
-            json={"cancelled_by": "operator", "reason": "Teste"},
-        )
-        assert resp.status_code == 200
-        assert resp.json()["status"] == "cancelled"
-
-    def test_cannot_cancel_completed_instance(self, client):
-        app.state.pool = make_pool(fetchrow_result=fake_row({"status": "completed"}))
+    def test_cancel_returns_410(self, client):
         resp = client.post(
             f"/v1/workflow/instances/{INSTANCE_ID}/cancel",
             json={"cancelled_by": "operator"},
         )
-        assert resp.status_code == 409
+        assert resp.status_code == 410
+
+    def test_collect_persist_returns_410(self, client):
+        resp = client.post(
+            f"/v1/workflow/instances/{INSTANCE_ID}/collect/persist",
+            json={
+                "step_id": "s", "collect_token": "tok",
+                "target": {"type": "customer", "id": "c1"},
+                "interaction": "text", "prompt": "p",
+            },
+        )
+        assert resp.status_code == 410
+
+    def test_collect_respond_returns_410(self, client):
+        resp = client.post(
+            "/v1/workflow/collect/respond",
+            json={"collect_token": "tok", "response_data": {}},
+        )
+        assert resp.status_code == 410
 
 
 # ─────────────────────────────────────────────

@@ -72,7 +72,7 @@ function FilterBar({ filters, setFilters }: {
 
         <select value={filters.channel} onChange={e => set('channel', e.target.value)} className={`${inp} bg-white`}>
           <option value="">{t('filter.allChannels')}</option>
-          {['webchat','whatsapp','voice','email','sms','instagram','telegram','webrtc'].map(c => (
+          {['webchat','whatsapp','voice','email','sms','instagram','telegram','webrtc','webhook'].map(c => (
             <option key={c} value={c}>{c}</option>
           ))}
         </select>
@@ -86,6 +86,7 @@ function FilterBar({ filters, setFilters }: {
         <select value={filters.sessionStatus} onChange={e => set('sessionStatus', e.target.value)} className={`${inp} bg-white`}>
           <option value="">{t('sessions.allStatuses')}</option>
           <option value="active">{t('sessions.status.active')}</option>
+          <option value="suspended">{t('sessions.status.suspended')}</option>
           <option value="closed">{t('sessions.status.closed')}</option>
           <option value="abandoned">{t('sessions.status.abandoned')}</option>
         </select>
@@ -222,6 +223,7 @@ export default function SessionsPage() {
     dnis:            filters.dnis,
     insightCategory: filters.insightCategory,
     insightTags:     filters.insightTags,
+    status:          filters.sessionStatus || undefined,  // Arc 19: pass status filter
   }
 
   return (

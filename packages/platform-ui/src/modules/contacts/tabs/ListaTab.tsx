@@ -37,7 +37,7 @@ export function ListaTab({ tenantId, filters, onOpenDetail }: Props) {
         page_size: String(PAGE_SIZE),
       })
       const { fromDt, toDt, sessionIdSearch, channel, outcome, poolId,
-              agentId, ani, dnis, insightCategory, insightTags } = filters
+              agentId, ani, dnis, insightCategory, insightTags, status } = filters
       if (fromDt)          params.set('from_dt',          fromDt + 'T00:00:00')
       if (toDt)            params.set('to_dt',            toDt   + 'T23:59:59')
       if (sessionIdSearch) params.set('session_id',       sessionIdSearch)
@@ -49,6 +49,7 @@ export function ListaTab({ tenantId, filters, onOpenDetail }: Props) {
       if (dnis)            params.set('dnis',             dnis)
       if (insightCategory) params.set('insight_category', insightCategory)
       if (insightTags)     params.set('insight_tags',     insightTags)
+      if (status)          params.set('status',           status)          // Arc 19
 
       const res = await fetch(`/reports/sessions?${params}`)
       if (!res.ok) { setError(t('lista.httpError', { status: res.status })); return }

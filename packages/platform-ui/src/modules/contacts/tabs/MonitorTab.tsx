@@ -13,9 +13,9 @@
  *   - Lista de WorkflowInstances com filtro de status
  *   - Painel de detalhe à direita
  */
-import React, { useState, useMemo } from 'react'
+import React, { useState, useMemo, useCallback, useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Radio, Settings, ClipboardList, X, Clock, AlertTriangle } from 'lucide-react'
+import { Radio, Settings, ClipboardList, X, Clock, AlertTriangle, BarChart2 } from 'lucide-react'
 import type { ContactFilters } from '../types'
 import { usePoolViews } from '@/modules/service/api/hooks'
 import { SessionList }      from '@/modules/service/components/SessionList'
@@ -163,6 +163,7 @@ const CHANNEL_COLORS: Record<string, string> = {
   instagram: '#E1306C',
   telegram:  '#26A5E4',
   webrtc:    '#10B981',
+  webhook:   '#6366F1',  // Arc 19: webhook channel (indigo)
 }
 
 // ── Channel donut — shows contact traffic distribution by channel ─────────
@@ -279,6 +280,12 @@ function PoolRow({ pool, color, selected, onDrillDown }: {
           <span className="text-sm font-medium text-dark truncate max-w-[200px]">
             {pool.pool_id.replace(/_/g, ' ')}
           </span>
+          {pool.channel_types?.includes('webhook') && (
+            <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded flex-shrink-0"
+              style={{ background: '#6366f120', color: '#6366F1', border: '1px solid #6366f140' }}>
+              webhook
+            </span>
+          )}
         </div>
       </td>
       {/* Busy sessions */}
@@ -494,7 +501,7 @@ function PoolsOverview({ pools, metrics, selectedPool, onPoolClick, isStale, las
 
 // ── Processos (workflow instances) view ────────────────────────────────────
 
-type MonitorScope = 'sessions' | 'processes'
+type MonitorScope = 'sessions' | 'processes' | 'events'
 
 const WF_STATUS_COLORS: Record<WorkflowStatus, string> = {
   active:    '#3b82f6',
@@ -722,6 +729,142 @@ function ProcessosView({ tenantId }: { tenantId: string }) {
   )
 }
 
+// ── Events view — Arc 12 business events ──────────────────────────────────
+
+interface AgentEventSummaryRow {
+  category:   string
+  pool_id:    string | null
+  count:      number
+  sum_value:  number | null
+  avg_value:  number | null
+  first_seen: string
+  last_seen:  string
+}
+
+function EventsView({ tenantId }: { tenantId: string }) {
+  const { t } = useTranslation('contacts')
+  const [categoryFilter, setCategoryFilter] = useState('')
+  const [rows,    setRows]    = useState<AgentEventSummaryRow[]>([])
+  const [loading, setLoading] = useState(false)
+  const [error,   setError]   = useState<string | null>(null)
+
+  const fetchData = useCallback(async () => {
+    if (!tenantId) return
+    setLoading(true)
+    setError(null)
+    try {
+      const params = new URLSearchParams({
+        tenant_id: tenantId,
+        period:    '24h',
+        ...(categoryFilter.trim() ? { category_regex: categoryFilter.trim() } : {}),
+      })
+      const res = await fetch(`/reports/agent-events/summary?${params}`)
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      const data = await res.json()
+      setRows(Array.isArray(data) ? data : data.rows ?? [])
+    } catch (e) {
+      setError(String(e))
+    } finally {
+      setLoading(false)
+    }
+  }, [tenantId, categoryFilter])
+
+  useEffect(() => {
+    fetchData()
+    const id = setInterval(fetchData, 30_000)
+    return () => clearInterval(id)
+  }, [fetchData])
+
+  return (
+    <div className="flex flex-col h-full overflow-hidden bg-surface-muted">
+      {/* Toolbar */}
+      <div className="flex items-center gap-3 px-4 py-2.5 flex-shrink-0 border-b border-border bg-white">
+        <BarChart2 className="w-4 h-4 text-muted" aria-hidden="true" />
+        <span className="text-sm font-semibold text-dark">{t('monitor.events.title')}</span>
+        <input
+          type="text"
+          value={categoryFilter}
+          onChange={e => setCategoryFilter(e.target.value)}
+          placeholder={t('monitor.events.filterPlaceholder')}
+          className="ml-auto w-64 text-xs border border-border rounded-md px-3 py-1.5 bg-white text-dark placeholder-muted focus:outline-none focus:ring-1 focus:ring-primary"
+        />
+        <button onClick={fetchData}
+          className="text-xs px-3 py-1.5 rounded-md border border-border bg-white hover:bg-surface-alt text-muted transition-colors">
+          {t('monitor.events.refresh')}
+        </button>
+      </div>
+
+      {/* Content */}
+      <div className="flex-1 overflow-auto p-4">
+        {error && (
+          <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-red-50 border border-red-200 text-red-800 text-xs mb-4">
+            <AlertTriangle className="w-4 h-4 flex-shrink-0" aria-hidden="true" />
+            <span>{error}</span>
+          </div>
+        )}
+
+        {loading && rows.length === 0 && (
+          <div className="flex items-center justify-center h-32 text-muted text-sm">
+            <Clock className="w-5 h-5 animate-pulse mr-2" aria-hidden="true" />
+            {t('monitor.events.loading')}
+          </div>
+        )}
+
+        {!loading && rows.length === 0 && !error && (
+          <div className="flex flex-col items-center justify-center h-32 text-muted gap-2 text-sm">
+            <BarChart2 className="w-8 h-8 text-muted-light" aria-hidden="true" />
+            <span>{t('monitor.events.empty')}</span>
+          </div>
+        )}
+
+        {rows.length > 0 && (
+          <div className="bg-white rounded-xl border border-border overflow-auto">
+            <table className="w-full text-sm">
+              <thead className="bg-surface-muted border-b border-border sticky top-0 z-10">
+                <tr>
+                  {[
+                    t('monitor.events.col.category'),
+                    t('monitor.events.col.pool'),
+                    t('monitor.events.col.count'),
+                    t('monitor.events.col.avg'),
+                    t('monitor.events.col.lastSeen'),
+                  ].map((col, i) => (
+                    <th key={i}
+                      className="text-left text-xs font-semibold text-muted uppercase tracking-wide px-4 py-2.5 whitespace-nowrap">
+                      {col}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-border">
+                {rows.map((row, i) => (
+                  <tr key={i} className="hover:bg-primary/5 transition-colors">
+                    <td className="px-4 py-2.5">
+                      <code className="text-xs text-secondary font-mono">{row.category}</code>
+                    </td>
+                    <td className="px-4 py-2.5 text-xs text-muted">
+                      {row.pool_id ?? '—'}
+                    </td>
+                    <td className="px-4 py-2.5 text-center">
+                      <span className="font-bold tabular-nums text-dark">{row.count}</span>
+                    </td>
+                    <td className="px-4 py-2.5 text-center text-xs tabular-nums text-muted">
+                      {row.avg_value != null ? row.avg_value.toFixed(2) : '—'}
+                    </td>
+                    <td className="px-4 py-2.5 text-xs text-muted">
+                      {row.last_seen ? new Date(row.last_seen).toLocaleTimeString() : '—'}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
 // ── Main MonitorTab ────────────────────────────────────────────────────────
 
 type DrillLevel = 'pools' | 'sessions' | 'segments' | 'transcript'
@@ -790,8 +933,9 @@ export function MonitorTab({ tenantId, filters }: Props) {
         {/* Scope toggle */}
         <div className="flex items-center gap-0.5 bg-surface-alt rounded-lg p-0.5 flex-shrink-0">
           {([
-            { id: 'sessions'  as MonitorScope, labelKey: 'monitor.scope.sessions',  Icon: Radio    },
-            { id: 'processes' as MonitorScope, labelKey: 'monitor.scope.processes', Icon: Settings },
+            { id: 'sessions'  as MonitorScope, labelKey: 'monitor.scope.sessions',  Icon: Radio      },
+            { id: 'processes' as MonitorScope, labelKey: 'monitor.scope.processes', Icon: Settings   },
+            { id: 'events'    as MonitorScope, labelKey: 'monitor.scope.events',    Icon: BarChart2  },
           ]).map(({ id, labelKey, Icon: ScopeIcon }) => (
             <button key={id} onClick={() => setScope(id)}
               className="flex items-center gap-1 px-3 py-1 rounded-md text-xs font-medium transition-all"
@@ -855,6 +999,12 @@ export function MonitorTab({ tenantId, filters }: Props) {
       {scope === 'processes' && (
         <div className="flex-1 overflow-hidden">
           <ProcessosView tenantId={tenantId} />
+        </div>
+      )}
+
+      {scope === 'events' && (
+        <div className="flex-1 overflow-hidden">
+          <EventsView tenantId={tenantId} />
         </div>
       )}
 

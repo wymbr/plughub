@@ -42,9 +42,6 @@ classification:
   type: orchestrator
   domain: portabilidade
 
-# creates_journey: false — a Journey é criada pelo Tier 3 via invoke journey_start.
-# O Tier 2 apenas orquestra — não cria Journey diretamente.
-
 entry: saudacao
 
 steps:
@@ -72,18 +69,16 @@ steps:
     on_success: verificar_jornada
     on_failure: encerrar_erro   # se intake falhar, encerra o Tier 2 também
 
-  # ── Etapa 3: verificar se Journey foi iniciada ────────────────────────────────
-  # O Tier 3 escreve journey.jornada_iniciada = "true" se journey_start ok.
-  # Se não escrever (falha silenciosa no Tier 3), encaminha para encerrar_erro.
-  # Phase 1: esta verificação é redundante (Tier 3 encerra direto), mas documenta
-  # o padrão para quando Tier 2 precisar reagir ao resultado do Tier 3.
+  # ── Etapa 3: verificar se intake concluiu ────────────────────────────────────
+  # O Tier 3 escreve session.jornada_registrada = "true" ao confirmar ao cliente.
+  # Padrão: assume sucesso (Tier 3 já notificou cliente e encerrou seu segmento).
   - id: verificar_jornada
     type: choice
     conditions:
-      - field: "@ctx.journey.jornada_iniciada"
+      - field: "@ctx.session.jornada_registrada"
         operator: exists
         next: finalizar
-    default: finalizar   # mesmo sem confirmação, assume sucesso (Tier 3 já notificou cliente)
+    default: finalizar   # assume sucesso — Tier 3 já notificou cliente
 
   # ── Etapa 4: finalização normal ───────────────────────────────────────────────
   - id: finalizar

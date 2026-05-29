@@ -15,7 +15,6 @@ Tables, all in database `plughub`:
   evaluation_results     — Arc 6: EvaluationResult state (ReplacingMergeTree)
   evaluation_events      — Arc 6: lifecycle audit log (submitted/reviewed/contested/locked)
   contact_insights       — business events from agent flows (insight_register MCP tool)
-  journey_events         — Arc 10: Journey lifecycle events (append-only audit log)
 
 Materialized views (AggregatingMergeTree — incremental, POPULATE on creation):
 
@@ -236,6 +235,14 @@ _ALTER_WORKFLOW_EVENTS_POOL_ID = (
     " ADD COLUMN IF NOT EXISTS pool_id Nullable(String) DEFAULT NULL"
 )
 
+# Arc 19: session status column — tracks 'active', 'suspended', 'closed'.
+# Written by session_suspended / session_resumed stream events consumed by analytics-api.
+# NULL for pre-Arc-19 sessions (treated as 'closed' at query time).
+_DDL_SESSIONS_MIGRATE_STATUS = (
+    "ALTER TABLE {db}.sessions"
+    " ADD COLUMN IF NOT EXISTS status Nullable(String) DEFAULT NULL"
+)
+
 _DDL_COLLECT_EVENTS = """
 CREATE TABLE IF NOT EXISTS {db}.collect_events
 (
@@ -417,49 +424,9 @@ PARTITION BY toYYYYMM(date)
 ORDER BY (tenant_id, insight_id)
 """
 
-# ── Arc 10: journey_events — append-only audit log for journey lifecycle events.
-# Each row corresponds to one event from the journey.events Kafka topic.
-# ReplacingMergeTree() on (tenant_id, event_id) for at-least-once idempotency.
-_DDL_JOURNEY_EVENTS = """
-CREATE TABLE IF NOT EXISTS {db}.journey_events
-(
-    event_id                String,
-    event_type              String,
-    tenant_id               String,
-    journey_id              String,
-    skill_id                String,
-    status                  Nullable(String),
-    customer_id             Nullable(String),
-    origin_session_id       Nullable(String),
-    session_id              Nullable(String),
-    workflow_instance_id    Nullable(String),
-    merged_into_journey_id  Nullable(String),
-    -- Phase F: split audit fields (journey_split only)
-    split_from_journey_id   Nullable(String),
-    new_journey_id          Nullable(String),
-    session_count           Nullable(Int32),
-    -- D.5: session progression enrichment (journey_session_linked only)
-    current_step            Nullable(String),
-    session_outcome         Nullable(String),
-    session_started_at      Nullable(DateTime64(3, 'UTC')),
-    session_ended_at        Nullable(DateTime64(3, 'UTC')),
-    -- Arc 17: JourneyType governance
-    journey_type_id         Nullable(String),
-    pool_id                 Nullable(String),
-    timestamp               DateTime64(3, 'UTC'),
-    date                    Date
-)
-ENGINE = ReplacingMergeTree()
-PARTITION BY toYYYYMM(date)
-ORDER BY (tenant_id, event_id)
-"""
-
-# Arc 17: add journey_type_id + pool_id columns for existing journey_events tables.
-_DDL_JOURNEY_EVENTS_MIGRATE_ARC17 = """
-ALTER TABLE {db}.journey_events
-    ADD COLUMN IF NOT EXISTS journey_type_id Nullable(String),
-    ADD COLUMN IF NOT EXISTS pool_id         Nullable(String)
-"""
+# journey_events (Arc 10) — REMOVED (Arc 19 Fase F)
+# Journey entity superseded by Arc 19 unified session model.
+# See CHANGELOG.md for history (Arcs 10, 16, 17).
 
 # ── Arc 13: calibration_events — CurationReview outcomes from calibration.events Kafka topic.
 # Each row corresponds to one curator decision (approved / recalibrated / bias_flagged).
@@ -650,7 +617,6 @@ _ALL_DDL = [
     _DDL_EVALUATION_EVENTS,
     _DDL_CONTACT_INSIGHTS,
     _DDL_AGENT_PAUSE_INTERVALS,
-    _DDL_JOURNEY_EVENTS,
     _DDL_AGENT_BUSINESS_EVENTS,
     _DDL_CALIBRATION_EVENTS,
     # Materialized views — must come AFTER the source tables they reference.
@@ -668,8 +634,8 @@ _MIGRATIONS = [
     _DDL_SESSIONS_MIGRATE_SLA,
     _DDL_SENTIMENT_EVENTS_MIGRATE_SEGMENT,
     _DDL_MESSAGES_MIGRATE_CONTENT,
-    _DDL_JOURNEY_EVENTS_MIGRATE_ARC17,   # Arc 17: journey_type_id + pool_id
     _ALTER_WORKFLOW_EVENTS_POOL_ID,       # Add pool_id to workflow_events
+    _DDL_SESSIONS_MIGRATE_STATUS,         # Arc 19: session status (active|suspended|closed)
 ]
 
 
@@ -753,7 +719,7 @@ class AnalyticsStore:
         "session_id", "tenant_id", "channel", "pool_id", "customer_id",
         "opened_at", "closed_at", "close_reason", "outcome",
         "wait_time_ms", "handle_time_ms", "date",
-        "ani", "dnis",
+        "ani", "dnis", "status",
     ]
 
     async def upsert_session(self, row: dict) -> None:
@@ -1036,28 +1002,7 @@ class AnalyticsStore:
             self._AGENT_PAUSE_INTERVAL_COLS,
         )
 
-    # journey_events (Arc 10)
-
-    _JOURNEY_EVENT_COLS = [
-        "event_id", "event_type", "tenant_id", "journey_id", "skill_id",
-        "status", "customer_id", "origin_session_id", "session_id",
-        "workflow_instance_id", "merged_into_journey_id",
-        # Phase F split fields
-        "split_from_journey_id", "new_journey_id", "session_count",
-        "current_step", "session_outcome", "session_started_at", "session_ended_at",
-        # Arc 17: JourneyType governance
-        "journey_type_id", "pool_id",
-        "timestamp", "date",
-    ]
-
-    async def insert_journey_event(self, row: dict) -> None:
-        """Insert a lifecycle event from the journey.events Kafka topic (Arc 10)."""
-        await asyncio.to_thread(
-            self._insert,
-            "journey_events",
-            [_journey_event_row(row)],
-            self._JOURNEY_EVENT_COLS,
-        )
+    # journey_events (Arc 10) — REMOVED (Arc 19 Fase F)
 
     # agent_business_events (Arc 12)
 
@@ -1207,6 +1152,8 @@ def _session_row(d: dict) -> list:
         # ANI/DNIS — caller/source and dialed/destination identifiers (any channel)
         d.get("ani") or d.get("caller_id") or d.get("from") or None,
         d.get("dnis") or d.get("dialed_number") or d.get("to") or None,
+        # Arc 19: session status — 'active', 'suspended', or 'closed'. None = pre-Arc-19.
+        d.get("status") or None,
     ]
 
 
@@ -1518,38 +1465,7 @@ def _agent_pause_interval_row(d: dict) -> list:
     ]
 
 
-def _journey_event_row(d: dict) -> list:
-    """Row builder for journey_events table (Arc 10 + D.5 enrichment + Phase F split)."""
-    ts             = d.get("timestamp")
-    started_at_str = d.get("session_started_at")
-    ended_at_str   = d.get("session_ended_at")
-    return [
-        d.get("event_id", ""),
-        d.get("event_type", ""),
-        d.get("tenant_id", ""),
-        d.get("journey_id", ""),
-        d.get("skill_id", ""),
-        d.get("status") or None,
-        d.get("customer_id") or None,
-        d.get("origin_session_id") or None,
-        d.get("session_id") or None,
-        d.get("workflow_instance_id") or None,
-        d.get("merged_into_journey_id") or None,
-        # Phase F split fields
-        d.get("split_from_journey_id") or None,
-        d.get("new_journey_id") or None,
-        d.get("session_count") or None,
-        # D.5 session progression fields
-        d.get("current_step") or None,
-        d.get("session_outcome") or None,
-        _parse_dt(started_at_str) if started_at_str else None,
-        _parse_dt(ended_at_str)   if ended_at_str   else None,
-        # Arc 17: JourneyType governance
-        d.get("journey_type_id") or None,
-        d.get("pool_id") or None,
-        _parse_dt(ts) or datetime.utcnow(),
-        _today_utc(ts),
-    ]
+# _journey_event_row — REMOVED (Arc 19 Fase F)
 
 
 def _agent_business_event_row(d: dict) -> list:

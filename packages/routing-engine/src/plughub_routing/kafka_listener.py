@@ -179,17 +179,21 @@ class RegistryEventHandler:
                 routing_expression   = RoutingExpression(**expr_data),
                 is_human_pool        = bool(pool_data.get("supervisor_config")),
                 mentionable_pools    = pool_data.get("mentionable_pools") or None,
-                mentionable_journeys = pool_data.get("mentionable_journeys") or None,
                 agent_groups              = pool_data.get("agent_groups") or [],
                 context_visibility        = pool_data.get("context_visibility") or None,
-                authorized_journey_types  = pool_data.get("authorized_journey_types") or [],
+                # Arc 19: webhook pool endpoint skill and capacity ceiling
+                webhook_skill_id         = pool_data.get("webhook_skill_id") or None,
+                max_concurrent_sessions  = pool_data.get("max_concurrent_sessions") or None,
             )
             await self._pools.save_pool_config(config)
             logger.info(
-                "Pool cache updated: tenant=%s pool=%s channels=%s mentionable_pools=%s agent_groups=%s",
+                "Pool cache updated: tenant=%s pool=%s channels=%s mentionable_pools=%s "
+                "agent_groups=%s webhook_skill_id=%s max_concurrent_sessions=%s",
                 tenant_id, config.pool_id, config.channel_types,
                 list(config.mentionable_pools.keys()) if config.mentionable_pools else [],
                 config.agent_groups,
+                config.webhook_skill_id,
+                config.max_concurrent_sessions,
             )
         except Exception as exc:
             logger.error("Error processing pool event: %s — %s", pool_data, exc)
@@ -472,10 +476,14 @@ class LifecycleEventHandler:
                 pool = await self._pools.get_pool(tenant_id, pool_id)
                 if pool:
                     await self._instances.write_pool_snapshot(
-                        tenant_id=     tenant_id,
-                        pool_id=       pool_id,
-                        sla_target_ms= pool.sla_target_ms,
-                        channel_types= pool.channel_types,
+                        tenant_id=               tenant_id,
+                        pool_id=                 pool_id,
+                        sla_target_ms=           pool.sla_target_ms,
+                        channel_types=           pool.channel_types,
+                        max_reply_time_ms=       pool.max_reply_time_ms,
+                        # Arc 19: forward webhook pool fields
+                        webhook_skill_id=        pool.webhook_skill_id,
+                        max_concurrent_sessions= pool.max_concurrent_sessions,
                     )
                     logger.debug(
                         "Pool snapshot (full recount) written on agent_ready: "

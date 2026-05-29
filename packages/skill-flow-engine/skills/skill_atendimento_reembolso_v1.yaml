@@ -43,8 +43,6 @@ classification:
   type: orchestrator
   domain: reembolso
 
-# creates_journey: false — a Journey é criada pelo Tier 3 via invoke journey_start.
-
 entry: saudacao
 
 steps:

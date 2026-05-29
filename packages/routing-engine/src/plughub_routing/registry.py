@@ -888,12 +888,15 @@ class InstanceRegistry:
 
     async def write_pool_snapshot(
         self,
-        tenant_id:         str,
-        pool_id:           str,
-        sla_target_ms:     int,
-        channel_types:     list[str],
-        max_reply_time_ms: int | None = None,
-        snapshot_ttl:      int = 3600,
+        tenant_id:              str,
+        pool_id:                str,
+        sla_target_ms:          int,
+        channel_types:          list[str],
+        max_reply_time_ms:      int | None = None,
+        # Arc 19: webhook pool fields passed through from PoolConfig
+        webhook_skill_id:       str | None = None,
+        max_concurrent_sessions: int | None = None,
+        snapshot_ttl:           int = 3600,
     ) -> None:
         """
         Writes an operational pool snapshot to Redis after each routing event.
@@ -1013,6 +1016,18 @@ class InstanceRegistry:
         # correct dimensioning metric: e.g. 1 agent × max_concurrent=3 → total=3.
         total_instances = total_capacity
         queue_length     = await self.get_queue_length(tenant_id, pool_id)
+
+        # Arc 19: for webhook pools, capacity is controlled by max_concurrent_sessions
+        # (not by logged-in agent instances).  When max_concurrent_sessions is set and
+        # the pool is a webhook pool, override available/total with the configured limit
+        # so the Monitor snapshot reflects configured capacity, not instance-based capacity.
+        # Fase C (orchestrator-bridge) will wire up actual instance tracking for webhook pools.
+        is_webhook_pool = "webhook" in channel_types
+        if is_webhook_pool and max_concurrent_sessions is not None:
+            # Configured capacity ceiling — actual allocation tracked by active_count
+            available       = max(0, max_concurrent_sessions - busy)
+            total_instances = max_concurrent_sessions
+
         snapshot: dict = {
             "pool_id":          pool_id,
             "tenant_id":        tenant_id,
@@ -1026,6 +1041,11 @@ class InstanceRegistry:
         }
         if max_reply_time_ms is not None:
             snapshot["max_reply_time_ms"] = max_reply_time_ms
+        # Arc 19: always include webhook fields in snapshot when present
+        if webhook_skill_id is not None:
+            snapshot["webhook_skill_id"] = webhook_skill_id
+        if max_concurrent_sessions is not None:
+            snapshot["max_concurrent_sessions"] = max_concurrent_sessions
         await self._redis.set(
             _pool_snapshot_key(tenant_id, pool_id),
             json.dumps(snapshot),
@@ -1057,15 +1077,20 @@ class InstanceRegistry:
         Falls back to defaults if no existing snapshot is found.
         """
         existing = await self.get_pool_snapshot(tenant_id, pool_id)
-        sla_target_ms     = int(existing.get("sla_target_ms", 480_000)) if existing else 480_000
-        channel_types     = existing.get("channel_types", []) if existing else []
-        max_reply_time_ms = existing.get("max_reply_time_ms") if existing else None
+        sla_target_ms          = int(existing.get("sla_target_ms", 480_000)) if existing else 480_000
+        channel_types          = existing.get("channel_types", []) if existing else []
+        max_reply_time_ms      = existing.get("max_reply_time_ms") if existing else None
+        # Arc 19: preserve webhook pool fields from the existing snapshot
+        webhook_skill_id       = existing.get("webhook_skill_id") if existing else None
+        max_concurrent_sessions = existing.get("max_concurrent_sessions") if existing else None
         await self.write_pool_snapshot(
             tenant_id,
             pool_id,
-            sla_target_ms=sla_target_ms,
-            channel_types=channel_types,
-            max_reply_time_ms=max_reply_time_ms,
+            sla_target_ms=           sla_target_ms,
+            channel_types=           channel_types,
+            max_reply_time_ms=       max_reply_time_ms,
+            webhook_skill_id=        webhook_skill_id,
+            max_concurrent_sessions= max_concurrent_sessions,
         )
 
     async def patch_pool_snapshot_available(

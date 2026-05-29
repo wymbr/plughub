@@ -9,7 +9,6 @@
     "monitor.pools": "Pools",
     "monitor.events": "Events",
     "monitor.processes": "Processes",
-    "monitor.journeys": "Journeys",
     "service": "Service",
     "service.sessions": "Sessions",
     "service.agents": "Agents",
@@ -39,7 +38,6 @@
     "analise.events": "Events",
     "analise.processes": "Processes",
     "analise.processos": "Processes",
-    "analise.journeys": "Journeys",
     "analise.quality": "Quality",
     "quality": "Quality",
     "eval": {

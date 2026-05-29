@@ -38,20 +38,19 @@ poolsRouter.post("/", async (req: Request, res: Response, next: NextFunction) =>
         tenant_id:             tenantId,
         description:           body.description ?? null,
         channel_types:         body.channel_types,
-        sla_target_ms:         body.sla_target_ms,
-        max_reply_time_ms:     body.max_reply_time_ms ?? null,
-        routing_expression:    body.routing_expression ?? Prisma.DbNull,
+        sla_target_ms:           body.sla_target_ms,
+        webhook_skill_id:        body.webhook_skill_id ?? null,
+        max_concurrent_sessions: body.max_concurrent_sessions ?? null,
+        max_reply_time_ms:       body.max_reply_time_ms ?? null,
+        routing_expression:      body.routing_expression ?? Prisma.DbNull,
         evaluation_template_id: body.evaluation_template_id ?? null,
         supervisor_config:     body.supervisor_config ?? Prisma.DbNull,
         queue_config:          body.queue_config ?? Prisma.DbNull,
         mentionable_pools:     body.mentionable_pools ?? Prisma.DbNull,
-        mentionable_journeys:  body.mentionable_journeys ?? Prisma.DbNull,
         agent_groups:          body.agent_groups ?? [],
         hooks:                 body.hooks ?? Prisma.DbNull,
         calendar_id:             body.calendar_id ?? null,
         context_visibility:      body.context_visibility ?? Prisma.DbNull,
-        inbound_journey_resume:  body.inbound_journey_resume ?? false,
-        authorized_journey_types: body.authorized_journey_types ?? [],
         created_by:              createdBy,
       } as any,
     })
@@ -127,20 +126,19 @@ poolsRouter.put("/:pool_id", async (req: Request, res: Response, next: NextFunct
       data: {
         ...(body.description           !== undefined && { description:           body.description }),
         ...(body.channel_types         !== undefined && { channel_types:         body.channel_types }),
-        ...(body.sla_target_ms         !== undefined && { sla_target_ms:         body.sla_target_ms }),
-        ...(body.max_reply_time_ms     !== undefined && { max_reply_time_ms:     body.max_reply_time_ms }),
-        ...(body.routing_expression    !== undefined && { routing_expression:    body.routing_expression }),
+        ...(body.sla_target_ms           !== undefined && { sla_target_ms:           body.sla_target_ms }),
+        ...(body.webhook_skill_id        !== undefined && { webhook_skill_id:        body.webhook_skill_id }),
+        ...(body.max_concurrent_sessions !== undefined && { max_concurrent_sessions: body.max_concurrent_sessions }),
+        ...(body.max_reply_time_ms       !== undefined && { max_reply_time_ms:       body.max_reply_time_ms }),
+        ...(body.routing_expression      !== undefined && { routing_expression:      body.routing_expression }),
         ...(body.evaluation_template_id !== undefined && { evaluation_template_id: body.evaluation_template_id }),
         ...(body.supervisor_config     !== undefined && { supervisor_config:     body.supervisor_config }),
         ...(body.queue_config          !== undefined && { queue_config:          body.queue_config }),
         ...(body.mentionable_pools     !== undefined && { mentionable_pools:     body.mentionable_pools }),
-        ...(body.mentionable_journeys  !== undefined && { mentionable_journeys:  body.mentionable_journeys }),
         ...(body.agent_groups          !== undefined && { agent_groups:          body.agent_groups }),
         ...(body.hooks                 !== undefined && { hooks:                 body.hooks }),
         ...(body.calendar_id              !== undefined && { calendar_id:              body.calendar_id }),
         ...(body.context_visibility       !== undefined && { context_visibility:       body.context_visibility }),
-        ...(body.inbound_journey_resume      !== undefined && { inbound_journey_resume:      body.inbound_journey_resume }),
-        ...(body.authorized_journey_types    !== undefined && { authorized_journey_types:    body.authorized_journey_types }),
       } as any,
     })
 
@@ -221,96 +219,6 @@ poolsRouter.get("/:pool_id/mentionable-agents", async (req: Request, res: Respon
     }
 
     return res.json({ agents })
-  } catch (err) {
-    return next(err)
-  }
-})
-
-// ─────────────────────────────────────────────
-// GET /v1/pools/:pool_id/mentionable-processes
-// Returns Journey-starting skills available for manual invocation in this pool,
-// derived from pool.mentionable_journeys: Record<alias, skill_id>.
-//
-// Response:
-//   { processes: MentionableProcess[] }
-//
-// MentionableProcess:
-//   alias               — key in mentionable_journeys (e.g. "portabilidade")
-//   skill_id            — target skill (e.g. "skill_portabilidade_v1")
-//   label               — skill.name
-//   description         — skill.description
-//   delegation_params   — DelegationSchema | null (from skill.delegation_input)
-//   delegation_visibility — "all" | "agents_only" | null
-//                          null  → show visibility radio, default agents_only
-//                          value → locked; radio hidden in UI
-//                          Read from skill.flow.delegation_visibility (top-level YAML field)
-// ─────────────────────────────────────────────
-poolsRouter.get("/:pool_id/mentionable-processes", async (req: Request, res: Response, next: NextFunction) => {
-  try {
-    const tenantId = _getTenantId(req)
-    const poolId   = req.params["pool_id"]!
-
-    const pool = await prisma.pool.findUnique({
-      where: { pool_id_tenant_id: { pool_id: poolId, tenant_id: tenantId } },
-    })
-    if (!pool) return res.status(404).json({ error: "Pool não encontrado" })
-
-    // mentionable_journeys: Record<alias, skill_id>  e.g. { portabilidade: "skill_portabilidade_v1" }
-    const mentionableJourneys = pool.mentionable_journeys as Record<string, string> | null
-    if (!mentionableJourneys || Object.keys(mentionableJourneys).length === 0) {
-      return res.json({ processes: [] })
-    }
-
-    const targetSkillIds = Object.values(mentionableJourneys)
-
-    // Fetch active skills matching the declared skill_ids
-    const skills = await prisma.skill.findMany({
-      where: {
-        tenant_id: tenantId,
-        skill_id:  { in: targetSkillIds },
-        status:    "active",
-      },
-      select: {
-        skill_id:        true,
-        name:            true,
-        description:     true,
-        delegation_input: true,
-        flow:            true,
-      },
-    })
-
-    // Index skills by skill_id for O(1) lookup
-    const skillMap = new Map(skills.map(s => [s.skill_id, s]))
-
-    const processes: Array<{
-      alias:                string;
-      skill_id:             string;
-      label:                string;
-      description:          string;
-      delegation_params:    unknown;
-      delegation_visibility: string | null;
-    }> = []
-
-    for (const [alias, targetSkillId] of Object.entries(mentionableJourneys)) {
-      const skill = skillMap.get(targetSkillId)
-      if (!skill) continue
-
-      // delegation_visibility declared as top-level field in skill YAML → stored in flow JSON
-      const flow = skill.flow as Record<string, unknown> | null
-      const delegationVisibility =
-        (flow?.["delegation_visibility"] as "all" | "agents_only" | undefined) ?? null
-
-      processes.push({
-        alias,
-        skill_id:             skill.skill_id,
-        label:                skill.name,
-        description:          skill.description,
-        delegation_params:    skill.delegation_input ?? null,   // DelegationSchema | null
-        delegation_visibility: delegationVisibility,
-      })
-    }
-
-    return res.json({ processes })
   } catch (err) {
     return next(err)
   }

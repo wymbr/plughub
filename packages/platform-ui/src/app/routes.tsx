@@ -15,7 +15,6 @@ import AgentFlowEditorPage  from '@/modules/agent-flow/AgentFlowEditorPage'
 import AgentFlowDeployPage  from '@/modules/agent-flow/AgentFlowDeployPage'
 import FlowMonitorPage      from '@/modules/agent-flow/FlowMonitorPage'
 import ProcessosPage        from '@/modules/agent-flow/ProcessosPage'
-import MonitorJourneysPage  from '@/modules/agent-flow/MonitorJourneysPage'
 import BillingPage from '@/modules/billing/BillingPage'
 import FormsPage from '@/modules/evaluation/FormsPage'
 import EvalCampaignsPage from '@/modules/evaluation/CampaignsPage'
@@ -37,7 +36,6 @@ import EventsPage   from '@/modules/contacts/EventsPage'
 import AnaliseContatosPage  from '@/modules/analise/AnaliseContatosPage'
 import AnaliseAgentesPage   from '@/modules/analise/AnaliseAgentesPage'
 import AnaliseProcessosPage from '@/modules/analise/AnaliseProcessosPage'
-import AnaliseJourneysPage  from '@/modules/analise/AnaliseJourneysPage'
 import AnaliseQualidadePage from '@/modules/analise/AnaliseQualidadePage'
 import DashboardsPage from '@/modules/dashboards/DashboardsPage'
 import ConfigChannelsIndex from '@/modules/config-channels'
@@ -69,8 +67,6 @@ export const routes: RouteObject[] = [
       { path: 'flow/monitor',      element: <FlowMonitorPage     /> },
       // Monitor/Processes → KPI dashboard (completion rates, failure analysis)
       { path: 'flow/processos',    element: <ProcessosPage      /> },
-      // Monitor/Journeys → operational journey view (KPIs, list, detail, merge/split)
-      { path: 'monitor/journeys',  element: <MonitorJourneysPage /> },
       // Legacy redirects
       { path: 'contacts',          element: <Navigate to="/analise/sessions"  replace /> },
       { path: 'contacts/sessions', element: <Navigate to="/analise/sessions"  replace /> },
@@ -99,8 +95,6 @@ export const routes: RouteObject[] = [
       { path: 'analise/events',    element: <EventsPage         /> },
       // Analytics/Processes → Workflow Instances list (drill-down to sessions)
       { path: 'analise/processos', element: <AnaliseProcessosPage /> },
-      // Analytics/Journeys → Journey list (drill-down: journey → instances → sessions)
-      { path: 'analise/journeys',  element: <AnaliseJourneysPage  /> },
       { path: 'analise/quality',   element: <AnaliseQualidadePage /> },
       // Legacy redirects
       { path: 'analise/contatos',  element: <Navigate to="/analise/sessions" replace /> },

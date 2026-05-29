@@ -235,9 +235,6 @@ function InstancesList({ tenantId, onSelectInstance }: InstancesListProps) {
                   {t('processes.instances.columns.originSession')}
                 </th>
                 <th className="px-3 py-2.5 text-left text-muted font-medium whitespace-nowrap">
-                  {t('processes.instances.columns.journey')}
-                </th>
-                <th className="px-3 py-2.5 text-left text-muted font-medium whitespace-nowrap">
                   {t('processes.instances.columns.created')}
                 </th>
                 <th className="px-3 py-2.5 text-left text-muted font-medium whitespace-nowrap">
@@ -272,14 +269,6 @@ function InstancesList({ tenantId, onSelectInstance }: InstancesListProps) {
                     {inst.origin_session_id
                       ? <span className="text-primary cursor-pointer hover:underline" title={inst.origin_session_id}>
                           {truncateId(inst.origin_session_id)}
-                        </span>
-                      : <span className="text-border-strong">—</span>
-                    }
-                  </td>
-                  <td className="px-3 py-2.5 font-mono text-xs">
-                    {inst.session_id
-                      ? <span className="text-muted-light" title={inst.session_id}>
-                          {truncateId(inst.session_id)}
                         </span>
                       : <span className="text-border-strong">—</span>
                     }

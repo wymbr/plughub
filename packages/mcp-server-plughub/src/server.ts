@@ -32,8 +32,6 @@ import { registerDeployTools }      from "./tools/deploy"
 import type { DeployDeps }          from "./tools/deploy"
 import { registerCalendarTools }    from "./tools/calendar"
 import type { CalendarDeps }        from "./tools/calendar"
-import { registerJourneyTools }     from "./tools/journey"
-import type { JourneyDeps }         from "./tools/journey"
 import { registerAgentEventTools }  from "./tools/agent-events"
 import type { AgentEventDeps }      from "./tools/agent-events"
 import jwt                         from "jsonwebtoken"
@@ -109,13 +107,6 @@ export function createServer(allDeps?: AllDeps): McpServer {
     tenantId:       process.env["PLUGHUB_TENANT_ID"] ?? process.env["TENANT_ID"] ?? "tenant_demo",
   }
 
-  const journeyDeps: JourneyDeps = {
-    workflowApiUrl:   process.env["WORKFLOW_API_URL"]   ?? "http://localhost:3800",
-    agentRegistryUrl: process.env["AGENT_REGISTRY_URL"] ?? "http://localhost:3300",
-    tenantId:         process.env["PLUGHUB_TENANT_ID"]  ?? process.env["TENANT_ID"] ?? "tenant_demo",
-    redis,  // Arc 16: journey_context_get/set write to {tenant}:ctx:journey:{id}
-  }
-
   const agentEventDeps: AgentEventDeps = { redis, kafka }
 
   // Registrar todas as tools
@@ -129,7 +120,6 @@ export function createServer(allDeps?: AllDeps): McpServer {
   registerDelegationTools(server, delegationDeps)
   registerDeployTools(server, deployDeps)
   registerCalendarTools(server, calendarDeps)
-  registerJourneyTools(server, journeyDeps)
   registerAgentEventTools(server, agentEventDeps)
 
   return server
@@ -578,7 +568,7 @@ function requireJwtRole(
 }
 
 /** Namespaces visible to operator by default (conservative). Overridden per-pool. */
-const DEFAULT_OPERATOR_NAMESPACES = ["service", "journey", "session"]
+const DEFAULT_OPERATOR_NAMESPACES = ["service", "session"]
 
 // ── ContextMaskingConfig in-process cache ─────────────────────────────────────
 // TTL 60s — short enough to pick up Config API changes, long enough to be safe
@@ -2518,7 +2508,6 @@ export async function startServer(config: ServerConfig): Promise<void> {
       console.log(`   Tools Delegation:    agent_delegate, agent_delegate_status`)
       console.log(`   Tools Deploy:        skill_deploy, skill_handoff_status`)
       console.log(`   Tools Calendar:      calendar_is_open, calendar_next_slot, calendar_add_duration, calendar_business_duration`)
-      console.log(`   Tools Journey:       journey_start, journey_link_session, journey_merge, journey_split, journey_context_get, journey_context_set, journey_list_suspended, journey_resume, journey_check_pending`)
       console.log(`   Tools AgentEvents:   agent_event`)
       console.log(`   SKILL_FLOW_URL:      ${process.env["SKILL_FLOW_URL"] ?? "http://localhost:3400 (padrão — configure SKILL_FLOW_URL para Docker)"}`)
       console.log(`   WORKFLOW_API_URL:    ${process.env["WORKFLOW_API_URL"] ?? "http://localhost:3800 (padrão)"}`)

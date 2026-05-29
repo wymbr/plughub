@@ -20,7 +20,6 @@ Topics → tables mapping:
   collect.events             → collect_events
   conversations.participants → participation_intervals (participant_joined / left)
   evaluation.events          → evaluation_results + evaluation_events (Arc 6)
-  journey.events             → journey_events (Arc 10)
   mcp.audit                  → session_timeline   (segment_id enriched via SegmentEnricher)
   agent.events               → agent_business_events (Arc 12)
   calibration.events         → calibration_events (Arc 13)
@@ -64,7 +63,6 @@ from .models import (
     parse_collect_event,
     parse_participant_event,
     parse_evaluation_event,
-    parse_journey_event,
     parse_mcp_audit_event,
     parse_agent_business_event,
     parse_calibration_event,
@@ -86,7 +84,6 @@ _TOPICS = [
     "collect.events",
     "conversations.participants",
     "evaluation.events",
-    "journey.events",
     "mcp.audit",
     "agent.events",
     "calibration.events",
@@ -108,7 +105,6 @@ _PARSERS = {
     "collect.events":           parse_collect_event,
     "conversations.participants": parse_participant_event,
     "evaluation.events":          parse_evaluation_event,
-    "journey.events":             parse_journey_event,
     "mcp.audit":                  parse_mcp_audit_event,
     "agent.events":               parse_agent_business_event,
     "calibration.events":         parse_calibration_event,
@@ -504,8 +500,6 @@ async def _write_row(
             await store.insert_contact_insight(row)
         elif table == "agent_pause_intervals":
             await store.upsert_agent_pause_interval(row)
-        elif table == "journey_events":
-            await store.insert_journey_event(row)
         elif table == "agent_business_events":
             await store.insert_agent_business_event(row)
         elif table == "calibration_events":

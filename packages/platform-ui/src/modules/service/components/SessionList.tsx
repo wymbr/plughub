@@ -66,13 +66,18 @@ function SessionRow({ session: sess, onClick }: { session: ActiveSession; onClic
           {category}
         </span>
       </span>
+      {sess.status === 'suspended' && (
+        <span style={{ fontSize: 11, fontWeight: 700, color: '#ca8a04', background: '#fef9c3', border: '1px solid #fde047', borderRadius: 4, padding: '1px 6px', marginLeft: 4, flexShrink: 0 }}>
+          suspended
+        </span>
+      )}
       <span style={{ marginLeft: 'auto', color: '#334155', fontSize: 18, paddingRight: 4 }}>›</span>
     </div>
   )
 }
 
 function ChannelBadge({ channel }: { channel: string }) {
-  const icons: Record<string, string> = { webchat: '💬', whatsapp: '📱', voice: '📞', email: '✉️', sms: '📟', instagram: '📷', telegram: '✈️', webrtc: '🎥' }
+  const icons: Record<string, string> = { webchat: '💬', whatsapp: '📱', voice: '📞', email: '✉️', sms: '📟', instagram: '📷', telegram: '✈️', webrtc: '🎥', webhook: '🔗' }
   return <span style={{ fontSize: 12, color: '#94a3b8' }}>{icons[channel] ?? '⬡'} {channel}</span>
 }
 

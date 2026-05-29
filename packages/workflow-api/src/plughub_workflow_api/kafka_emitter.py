@@ -63,7 +63,6 @@ async def emit_started(
     flow_id:         str,
     session_id:      str | None,
     trigger_type:    str,
-    journey_id:      str | None = None,
     pool_id:         str | None = None,
 ) -> None:
     event: dict = {
@@ -78,8 +77,6 @@ async def emit_started(
         "trigger_type":    trigger_type,
         "pool_id":         pool_id,
     }
-    if journey_id:
-        event["journey_id"] = journey_id
     await _emit(producer, topic, event)
 
 
@@ -92,7 +89,6 @@ async def emit_suspended(
     current_step:      str,
     suspend_reason:    str,
     resume_expires_at: str,
-    journey_id:        str | None = None,
 ) -> None:
     # resume_token is intentionally NOT included in Kafka events
     # — it is delivered only via the notify mechanism or direct API response
@@ -106,8 +102,6 @@ async def emit_suspended(
         "suspend_reason":    suspend_reason,
         "resume_expires_at": resume_expires_at,
     }
-    if journey_id:
-        event["journey_id"] = journey_id
     await _emit(producer, topic, event)
 
 
@@ -121,7 +115,6 @@ async def emit_resumed(
     resumed_from:     str,
     next_step:        str,
     wait_duration_ms: int,
-    journey_id:       str | None = None,
     response_data:    dict | None = None,  # collect step: response payload forwarded to engine
 ) -> None:
     event: dict = {
@@ -135,8 +128,6 @@ async def emit_resumed(
         "next_step":        next_step,
         "wait_duration_ms": wait_duration_ms,
     }
-    if journey_id:
-        event["journey_id"] = journey_id
     if response_data:
         event["response_data"] = response_data
     await _emit(producer, topic, event)
@@ -150,7 +141,6 @@ async def emit_completed(
     flow_id:      str,
     outcome:      str,
     duration_ms:  int,
-    journey_id:   str | None = None,
 ) -> None:
     event: dict = {
         "event_type":   "workflow.completed",
@@ -161,8 +151,6 @@ async def emit_completed(
         "outcome":      outcome,
         "duration_ms":  duration_ms,
     }
-    if journey_id:
-        event["journey_id"] = journey_id
     await _emit(producer, topic, event)
 
 
@@ -175,7 +163,6 @@ async def emit_timed_out(
     current_step: str | None,
     suspended_at: str | None,
     next_open:    str | None,
-    journey_id:   str | None = None,
 ) -> None:
     event: dict = {
         "event_type":   "workflow.timed_out",
@@ -187,8 +174,6 @@ async def emit_timed_out(
         "suspended_at": suspended_at,
         "next_open":    next_open,
     }
-    if journey_id:
-        event["journey_id"] = journey_id
     await _emit(producer, topic, event)
 
 
@@ -200,7 +185,6 @@ async def emit_failed(
     flow_id:      str,
     current_step: str | None,
     error:        str,
-    journey_id:   str | None = None,
 ) -> None:
     event: dict = {
         "event_type":   "workflow.failed",
@@ -211,8 +195,6 @@ async def emit_failed(
         "current_step": current_step,
         "error":        error,
     }
-    if journey_id:
-        event["journey_id"] = journey_id
     await _emit(producer, topic, event)
 
 
@@ -224,7 +206,6 @@ async def emit_cancelled(
     flow_id:       str,
     cancelled_by:  str,
     reason:        str | None,
-    journey_id:    str | None = None,
 ) -> None:
     event: dict = {
         "event_type":   "workflow.cancelled",
@@ -235,137 +216,7 @@ async def emit_cancelled(
         "cancelled_by": cancelled_by,
         "reason":       reason,
     }
-    if journey_id:
-        event["journey_id"] = journey_id
     await _emit(producer, topic, event)
-
-
-# ── Journey events (topic: journey.events) — Arc 10 ──────────────────────────
-
-async def emit_journey_started(
-    producer:             Any | None,
-    topic:                str,
-    journey_id:           str,
-    tenant_id:            str,
-    skill_id:             str,
-    origin_session_id:    str,
-    workflow_instance_id: str | None = None,
-    customer_id:          str | None = None,
-    metadata:             dict | None = None,
-    # Arc 17: JourneyType governance
-    journey_type_id:      str | None = None,
-    pool_id:              str | None = None,
-) -> None:
-    event: dict = {
-        "event_type":          "journey_started",
-        "timestamp":           _now(),
-        "journey_id":          journey_id,
-        "tenant_id":           tenant_id,
-        "skill_id":            skill_id,
-        "origin_session_id":   origin_session_id,
-        "workflow_instance_id": workflow_instance_id,
-        "customer_id":         customer_id,
-    }
-    if journey_type_id:
-        event["journey_type_id"] = journey_type_id
-    if pool_id:
-        event["pool_id"] = pool_id
-    if metadata:
-        event["metadata"] = metadata
-    await _emit(producer, topic, event)
-
-
-async def emit_journey_session_linked(
-    producer:          Any | None,
-    topic:             str,
-    journey_id:        str,
-    tenant_id:         str,
-    skill_id:          str,
-    session_id:        str,
-    current_step:      str | None = None,
-    session_outcome:   str | None = None,
-    session_started_at: str | None = None,
-    session_ended_at:  str | None = None,
-) -> None:
-    event: dict = {
-        "event_type": "journey_session_linked",
-        "timestamp":  _now(),
-        "journey_id": journey_id,
-        "tenant_id":  tenant_id,
-        "skill_id":   skill_id,
-        "session_id": session_id,
-    }
-    if current_step:
-        event["current_step"] = current_step
-    if session_outcome:
-        event["session_outcome"] = session_outcome
-    if session_started_at:
-        event["session_started_at"] = session_started_at
-    if session_ended_at:
-        event["session_ended_at"] = session_ended_at
-    await _emit(producer, topic, event)
-
-
-async def emit_journey_status_changed(
-    producer:   Any | None,
-    topic:      str,
-    event_type: str,   # journey_suspended | journey_resumed | journey_completed | journey_failed | journey_cancelled
-    journey_id: str,
-    tenant_id:  str,
-    skill_id:   str,
-) -> None:
-    await _emit(producer, topic, {
-        "event_type": event_type,
-        "timestamp":  _now(),
-        "journey_id": journey_id,
-        "tenant_id":  tenant_id,
-        "skill_id":   skill_id,
-    })
-
-
-async def emit_journey_merged(
-    producer:             Any | None,
-    topic:                str,
-    journey_id:           str,      # secondary (now merged)
-    journey_id_primary:   str,
-    tenant_id:            str,
-    skill_id:             str,
-) -> None:
-    await _emit(producer, topic, {
-        "event_type":            "journey_merged",
-        "timestamp":             _now(),
-        "journey_id":            journey_id,
-        "merged_into_journey_id": journey_id_primary,
-        "tenant_id":             tenant_id,
-        "skill_id":              skill_id,
-    })
-
-
-async def emit_journey_split(
-    producer:          Any | None,
-    topic:             str,
-    source_journey_id: str,
-    new_journey_id:    str,
-    tenant_id:         str,
-    skill_id:          str,
-    session_ids:       list[str],
-) -> None:
-    """
-    Arc 10 Phase F — published when sessions are extracted from a journey into a new one.
-    journey_id = source_journey_id (the journey that lost sessions).
-    new_journey_id = the freshly created journey.
-    """
-    await _emit(producer, topic, {
-        "event_type":        "journey_split",
-        "timestamp":         _now(),
-        "journey_id":        source_journey_id,
-        "new_journey_id":    new_journey_id,
-        "source_journey_id": source_journey_id,
-        "tenant_id":         tenant_id,
-        "skill_id":          skill_id,
-        "session_ids":       session_ids,
-        "session_count":     len(session_ids),
-    })
 
 
 # ── Batch emit (backfill / replay) ───────────────────────────────────────────
@@ -414,7 +265,6 @@ async def emit_collect_requested(
     fields:        list,
     send_at:       str,
     expires_at:    str,
-    journey_id:    str | None = None,
 ) -> None:
     event: dict = {
         "event_type":    "collect.requested",
@@ -439,8 +289,6 @@ async def emit_collect_requested(
         event["options"] = options
     if fields:
         event["fields"] = fields
-    if journey_id:
-        event["journey_id"] = journey_id
     await _emit(producer, topic, event)
 
 

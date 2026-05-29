@@ -18,6 +18,9 @@ import { CustomerIdentitySchema, ParticipantSchema, SentimentEntrySchema } from 
 export const StreamEventTypeSchema = z.enum([
   "session_opened",
   "session_closed",
+  // Arc 19 — webhook (workflow) session lifecycle
+  "session_suspended",       // suspend step reached — waiting for external resume signal
+  "session_resumed",         // resume token received — engine re-activated
   "participant_joined",
   "participant_left",
   "customer_identified",
@@ -126,6 +129,36 @@ const FlowStepCompletedPayloadSchema = z.object({
   duration_ms: z.number().int().nonnegative().optional(),
 })
 
+// Arc 19 — webhook session suspend/resume payloads
+
+/**
+ * Published by orchestrator-bridge when the skill-flow engine returns
+ * outcome: "suspended" for a webhook pool session.
+ * Visibility: agents_only — no external channel delivery.
+ */
+const SessionSuspendedPayloadSchema = z.object({
+  /** The suspend step ID that initiated the suspension. */
+  step_id:           z.string(),
+  /** Opaque token the caller must supply to resume. */
+  resume_token:      z.string(),
+  /** ISO-8601 UTC deadline. After this, the step follows on_timeout. */
+  resume_expires_at: z.string(),
+})
+
+/**
+ * Published by the WebhookAdapter when a valid resume_token arrives at
+ * POST /v1/channels/webhook/resume/{token}.
+ * Visibility: agents_only — triggers re-allocation by routing engine.
+ */
+const SessionResumedPayloadSchema = z.object({
+  /** The suspend step ID being resumed. */
+  step_id:      z.string(),
+  /** The token that was consumed (single-use). */
+  resume_token: z.string(),
+  /** Caller-supplied payload (approved/rejected/input decision + data). */
+  payload:      z.record(z.unknown()).optional(),
+})
+
 // ─────────────────────────────────────────────
 // StreamEvent — evento base + payload tipado
 // ─────────────────────────────────────────────
@@ -151,6 +184,9 @@ export type StreamEvent = z.infer<typeof StreamEventSchema>
 export const StreamPayloads = {
   session_opened:        SessionOpenedPayloadSchema,
   session_closed:        SessionClosedPayloadSchema,
+  // Arc 19 — webhook session lifecycle
+  session_suspended:     SessionSuspendedPayloadSchema,
+  session_resumed:       SessionResumedPayloadSchema,
   participant_joined:    ParticipantJoinedPayloadSchema,
   participant_left:      ParticipantLeftPayloadSchema,
   customer_identified:   CustomerIdentifiedPayloadSchema,

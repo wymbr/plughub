@@ -212,6 +212,7 @@ async def query_sessions_report(
     supervised_agent_types: list[str] | None = None,
     ani:                    str | None       = None,
     dnis:                   str | None       = None,
+    status:                 str | None       = None,
     page:      int = 1,
     page_size: int = 100,
 ) -> dict:
@@ -227,7 +228,7 @@ async def query_sessions_report(
             channel, outcome, close_reason, pool_id, session_id,
             agent_id, insight_category, insight_tags, accessible_pools,
             supervised_agent_types, page, page_size,
-            ani, dnis,
+            ani, dnis, status,
         )
     except Exception as exc:
         logger.warning("query_sessions_report failed tenant=%s: %s", tenant_id, exc)
@@ -244,6 +245,7 @@ def _fetch_sessions(
     supervised_agent_types: list[str] | None,
     page: int, page_size: int,
     ani: str | None = None, dnis: str | None = None,
+    status: str | None = None,
 ) -> dict:
     conditions = [
         "s.tenant_id = {tenant_id:String}",
@@ -334,6 +336,15 @@ def _fetch_sessions(
     if dnis:
         conditions.append("s.dnis LIKE {dnis_like:String}")
         params["dnis_like"] = f"%{dnis}%"
+
+    # Arc 19: session status filter (active | suspended | closed).
+    # NULL status (pre-Arc-19 closed sessions) are treated as 'closed' for query purposes.
+    if status:
+        if status == "closed":
+            conditions.append("(s.status = {status:String} OR s.status IS NULL)")
+        else:
+            conditions.append("s.status = {status:String}")
+        params["status"] = status
 
     where = " AND ".join(conditions)
 
@@ -2211,170 +2222,9 @@ def _fetch_events(
     return {"data": _rows_to_dicts(result), "meta": _meta(page, page_size, total, since, until)}
 
 
-# ─── /reports/journeys (Arc 10) ───────────────────────────────────────────────
-
-async def query_journeys_report(
-    client:    Any,
-    database:  str,
-    tenant_id: str,
-    from_dt:   str | None = None,
-    to_dt:     str | None = None,
-    *,
-    skill_id:        str | None = None,
-    status:          str | None = None,
-    customer_id:     str | None = None,
-    # Arc 17: JourneyType governance filters
-    journey_type_id: str | None = None,
-    pool_id:         str | None = None,
-    page:      int = 1,
-    page_size: int = 100,
-) -> dict:
-    """
-    Journey list and KPI summary from journey_events ClickHouse table.
-
-    Returns:
-      data: list of journey summaries (one per journey_id)
-      kpis: per-skill_id aggregations (resolution_rate, median_duration_ms, avg_session_count)
-      meta: pagination info
-    """
-    since = _ch_fmt(from_dt) if from_dt else _default_from()
-    until = _ch_fmt(to_dt, upper=True) if to_dt else _default_to()
-    try:
-        return await asyncio.to_thread(
-            _fetch_journeys, client, database, tenant_id, since, until,
-            skill_id, status, customer_id, journey_type_id, pool_id, page, page_size,
-        )
-    except Exception as exc:
-        logger.warning("query_journeys_report failed tenant=%s: %s", tenant_id, exc)
-        return {"data": [], "kpis": [], "meta": _meta(page, page_size, 0, since, until), "error": "data_unavailable"}
-
-
-def _fetch_journeys(
-    client:          Any,
-    db:              str,
-    tenant_id:       str,
-    since:           str,
-    until:           str,
-    skill_id:        str | None,
-    status:          str | None,
-    customer_id:     str | None,
-    # Arc 17: JourneyType governance filters
-    journey_type_id: str | None,
-    pool_id:         str | None,
-    page:            int,
-    page_size:       int,
-) -> dict:
-    """
-    Reconstructs journey state from journey_events using argMax aggregations.
-    Each event carries the current journey status — we pick the latest.
-    session_count = 1 (origin) + count(distinct linked sessions).
-    """
-    base_conditions = [
-        "tenant_id = {tenant_id:String}",
-        f"timestamp >= '{since}'",
-        f"timestamp <= '{until}'",
-    ]
-    params: dict = {"tenant_id": tenant_id}
-
-    if skill_id:
-        base_conditions.append("skill_id = {skill_id:String}")
-        params["skill_id"] = skill_id
-    if customer_id:
-        base_conditions.append("customer_id = {customer_id:String}")
-        params["customer_id"] = customer_id
-    # Arc 17: JourneyType governance filters
-    if journey_type_id:
-        base_conditions.append("journey_type_id = {journey_type_id:String}")
-        params["journey_type_id"] = journey_type_id
-    if pool_id:
-        base_conditions.append("pool_id = {pool_id:String}")
-        params["pool_id"] = pool_id
-
-    base_where = " AND ".join(base_conditions)
-
-    # ── Journey summary (one row per journey_id) ──────────────────────────────
-    # We aggregate all events to reconstruct journey state.
-    # status comes from argMax on timestamp (last event wins).
-    # session_count = 1 (origin) + countDistinct of session_ids from link events.
-    summary_sql = f"""
-        SELECT
-            journey_id,
-            argMaxIf(skill_id,             timestamp, skill_id           IS NOT NULL) AS skill_id,
-            argMaxIf(status,               timestamp, status             IS NOT NULL) AS status,
-            argMaxIf(customer_id,          timestamp, customer_id        IS NOT NULL) AS customer_id,
-            argMaxIf(origin_session_id,    timestamp, origin_session_id  IS NOT NULL) AS origin_session_id,
-            argMaxIf(workflow_instance_id, timestamp, workflow_instance_id IS NOT NULL) AS workflow_instance_id,
-            -- Arc 17: JourneyType governance
-            argMaxIf(journey_type_id,      timestamp, journey_type_id    IS NOT NULL) AS journey_type_id,
-            argMaxIf(pool_id,              timestamp, pool_id            IS NOT NULL) AS pool_id,
-            min(timestamp)                         AS created_at,
-            max(timestamp)                         AS last_event_at,
-            countDistinctIf(
-                session_id,
-                event_type = 'journey_session_linked' AND session_id IS NOT NULL
-            ) + 1                                  AS session_count
-        FROM {db}.journey_events FINAL
-        WHERE {base_where}
-        GROUP BY journey_id
-        HAVING 1=1
-    """
-
-    # Apply status filter at HAVING level (status is aggregated)
-    # Use argMaxIf to ignore NULL-status events (e.g. journey_session_linked)
-    having_extra = ""
-    if status:
-        having_extra = f" AND argMaxIf(status, timestamp, status IS NOT NULL) = '{status}'"
-
-    count_sql = f"SELECT count() FROM ({summary_sql}{having_extra}) AS j"
-    total = _count(client, count_sql, params)
-
-    offset = (page - 1) * page_size
-    result = client.query(f"""
-        SELECT *
-        FROM ({summary_sql}{having_extra}) AS j
-        ORDER BY created_at DESC
-        LIMIT {page_size} OFFSET {offset}
-    """, parameters=params)
-
-    rows = _rows_to_dicts(result)
-
-    # ── KPI summary per skill_id ──────────────────────────────────────────────
-    kpi_result = client.query(f"""
-        SELECT
-            skill_id,
-            count()                                             AS total_journeys,
-            countIf(status = 'completed')                       AS completed_count,
-            countIf(status = 'failed')                          AS failed_count,
-            countIf(status = 'active')                          AS active_count,
-            round(countIf(status = 'completed') / count(), 4)   AS resolution_rate,
-            avg(session_count)                                  AS avg_session_count,
-            median(duration_ms)                                 AS median_duration_ms
-        FROM (
-            SELECT
-                argMaxIf(skill_id, timestamp, skill_id IS NOT NULL)  AS skill_id,
-                argMaxIf(status,   timestamp, status   IS NOT NULL)  AS status,
-                min(timestamp)                                        AS created_at,
-                max(timestamp)                                        AS last_event_at,
-                dateDiff('millisecond', min(timestamp), max(timestamp)) AS duration_ms,
-                countDistinctIf(
-                    session_id,
-                    event_type = 'journey_session_linked' AND session_id IS NOT NULL
-                ) + 1                                                 AS session_count
-            FROM {db}.journey_events FINAL
-            WHERE {base_where}
-            GROUP BY journey_id
-        ) AS j
-        GROUP BY skill_id
-        ORDER BY total_journeys DESC
-    """, parameters=params)
-
-    kpi_rows = _rows_to_dicts(kpi_result)
-
-    return {
-        "data": rows,
-        "kpis": kpi_rows,
-        "meta": _meta(page, page_size, total, since, until),
-    }
+# query_journeys_report / _fetch_journeys — REMOVED (Arc 19 Fase F)
+# Journey entity superseded by Arc 19 unified session model.
+# See CHANGELOG.md for history (Arcs 10, 16, 17).
 
 
 # ─── Arc 12: Agent Business Events ────────────────────────────────────────────

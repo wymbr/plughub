@@ -38,7 +38,6 @@ const BREADCRUMBS: Record<string, BreadcrumbDef> = {
   '/contacts/pools':         { section: 'nav.monitor', sectionHref: '/flow/monitor',    page: 'nav.monitor.pools' },
   '/contacts/events':        { section: 'nav.monitor', sectionHref: '/flow/monitor',    page: 'nav.monitor.events' },
   '/flow/processos':         { section: 'nav.monitor', sectionHref: '/flow/monitor',    page: 'nav.monitor.processes' },
-  '/monitor/journeys':       { section: 'nav.monitor', sectionHref: '/flow/monitor',    page: 'nav.monitor.journeys' },
 
   // ── Flow ───────────────────────────────────────────────────────────────────
   '/agent-flow/editor':      { section: 'nav.flow',    sectionHref: '/agent-flow/editor', page: 'nav.flow.editor' },
@@ -58,7 +57,6 @@ const BREADCRUMBS: Record<string, BreadcrumbDef> = {
   '/analise/agents':         { section: 'nav.analise', sectionHref: '/analise/sessions',  page: 'nav.analise.agents' },
   '/analise/events':         { section: 'nav.analise', sectionHref: '/analise/sessions',  page: 'nav.analise.events' },
   '/analise/processos':      { section: 'nav.analise', sectionHref: '/analise/sessions',  page: 'nav.analise.processes' },
-  '/analise/journeys':       { section: 'nav.analise', sectionHref: '/analise/sessions',  page: 'nav.analise.journeys' },
   '/analise/quality':        { section: 'nav.analise', sectionHref: '/analise/sessions',  page: 'nav.analise.quality' },
 
   // ── Configuration ──────────────────────────────────────────────────────────

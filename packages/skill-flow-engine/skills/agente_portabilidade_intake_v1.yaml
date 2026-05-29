@@ -9,9 +9,8 @@
 #
 # Responsabilidade:
 #   1. Coletar numero_atual e operadora_destino do cliente
-#   2. Persistir dados no ContextStore (namespace journey.*)
-#   3. Iniciar a Journey de portabilidade (Tier 1: skill_portabilidade_demo_v1)
-#   4. Confirmar ao cliente e encerrar o segmento
+#   2. Persistir dados no ContextStore (namespace session.*)
+#   3. Confirmar ao cliente e encerrar o segmento
 #
 # A Journey continua de forma assíncrona — o cliente receberá
 # notificações via collect steps do skill_portabilidade_demo_v1
@@ -19,23 +18,19 @@
 #
 # Permissões necessárias:
 #   agent_heartbeat, notification_send, interaction_request
-#   context_set (escreve journey.* no ContextStore)
-#   journey_start (cria Journey + instância Tier 1)
+#   context_set (escreve session.* no ContextStore)
 #
 # Fluxo:
 #   1. saudacao            — notify: boas-vindas ao fluxo de portabilidade
 #   2. coletar_numero      — menu text: número atual a ser portado
 #   3. coletar_operadora   — menu list: operadora de destino
 #   4. confirmar_dados     — notify: exibe dados coletados
-#   5. escrever_numero     — invoke context_set: journey.numero_atual
-#   6. escrever_operadora  — invoke context_set: journey.operadora_destino
-#   7. iniciar_jornada     — invoke journey_start: skill_portabilidade_demo_v1
-#   8. avisar_inicio       — notify: confirmação + prazo estimado
-#   9. finalizar           — complete outcome: resolved
-#  10. avisar_erro_jornada — notify: fallback se journey_start falhar
-#  11. encerrar_erro       — complete outcome: failed
-#  12. avisar_timeout      — notify: informa cliente de timeout/falha de menu
-#  13. finalizar_timeout   — complete outcome: failed
+#   5. escrever_numero     — invoke context_set: session.numero_atual
+#   6. escrever_operadora  — invoke context_set: session.operadora_destino
+#   7. avisar_inicio       — notify: confirmação + orientação de continuidade
+#   8. finalizar           — complete outcome: resolved
+#   9. avisar_timeout      — notify: informa cliente de timeout/falha de menu
+#  10. finalizar_timeout   — complete outcome: failed
 
 id: skill_portabilidade_intake_v1
 name: "Portabilidade Intake v1 — Coleta e Início de Jornada"
@@ -43,9 +38,8 @@ version: "1.0"
 description: |
   Agente de coleta determinístico (Tier 3) para o fluxo de portabilidade.
   Coleta número atual e operadora de destino via menus sem LLM.
-  Persiste os dados no namespace journey.* do ContextStore e inicia
-  a Journey de portabilidade (Tier 1: skill_portabilidade_demo_v1).
-  O cliente encerra o segmento e receberá contato futuro via collect.
+  Persiste os dados no namespace session.* do ContextStore.
+  O cliente encerra o segmento após confirmação.
 classification:
   type: orchestrator
   domain: portabilidade
@@ -105,69 +99,41 @@ steps:
     on_success: escrever_numero
     on_failure: escrever_numero
 
-  # ── Etapa 5: persistir numero_atual no ContextStore (journey.*) ───────────────
-  # journey.* é o namespace compartilhado entre todas as sessões desta Journey.
-  # O skill_portabilidade_demo_v1 lê @ctx.journey.numero_atual nos seus steps.
+  # ── Etapa 5: persistir numero_atual no ContextStore (session.*) ────────────────
   - id: escrever_numero
     type: invoke
     tool: context_set
     input:
-      tag: "journey.numero_atual"
+      tag: "session.numero_atual"
       value: "$.pipeline_state.numero_atual"
       confidence: 1.0
       visibility: "agents_only"
     on_success: escrever_operadora
     on_failure: escrever_operadora   # continua mesmo se context_set falhar
 
-  # ── Etapa 6: persistir operadora_destino no ContextStore (journey.*) ──────────
+  # ── Etapa 6: persistir operadora_destino no ContextStore (session.*) ───────────
   - id: escrever_operadora
     type: invoke
     tool: context_set
     input:
-      tag: "journey.operadora_destino"
+      tag: "session.operadora_destino"
       value: "$.pipeline_state.operadora_destino"
       confidence: 1.0
       visibility: "agents_only"
-    on_success: iniciar_jornada
-    on_failure: iniciar_jornada   # continua mesmo se context_set falhar
-
-  # ── Etapa 7: iniciar Journey de portabilidade (Tier 1) ───────────────────────
-  # journey_start cria Journey + WorkflowInstance para skill_portabilidade_demo_v1.
-  # O Tier 1 suspende imediatamente aguardando aprovação da operadora (48h).
-  # O cliente receberá o collect quando o workflow for resumido.
-  - id: iniciar_jornada
-    type: invoke
-    tool: journey_start
-    input:
-      journey_type_id: "portabilidade_telco"
-      skill_id: "skill_portabilidade_demo_v1"
-      session_id: "$.session.session_id"
     on_success: avisar_inicio
-    on_failure: avisar_erro_jornada
+    on_failure: avisar_inicio   # continua mesmo se context_set falhar
 
-  # ── Etapa 8: confirmar início ao cliente ─────────────────────────────────────
+  # ── Etapa 7: confirmar registro ao cliente ───────────────────────────────────
   - id: avisar_inicio
     type: notify
     message: "✅ Solicitação de portabilidade registrada com sucesso!\n\nEm até 48 horas úteis, a operadora responderá. Você receberá uma mensagem aqui para confirmar a transferência.\n\nSe precisar de mais alguma coisa, pode entrar em contato novamente."
     on_success: finalizar
     on_failure: finalizar
 
-  # ── Etapa 9: finalização normal ───────────────────────────────────────────────
+  # ── Etapa 8: finalização normal ───────────────────────────────────────────────
   - id: finalizar
     type: complete
     outcome: resolved
-
-  # ── Fallback: erro ao iniciar Journey ────────────────────────────────────────
-  - id: avisar_erro_jornada
-    type: notify
-    message: "⚠️ Houve um problema ao registrar sua solicitação. Por favor, tente novamente em alguns minutos ou entre em contato com nosso SAC."
-    on_success: encerrar_erro
-    on_failure: encerrar_erro
-
-  - id: encerrar_erro
-    type: complete
-    outcome: failed
-    issue_status: "journey_start falhou — skill_portabilidade_demo_v1 indisponível"
 
   # ── Timeout / disconnect ───────────────────────────────────────────────────────
   - id: avisar_timeout

@@ -1,20 +1,31 @@
 /**
  * steps/suspend.ts
- * Executor for step type: suspend (Arc 4 — Workflow Automation)
- * Spec: PlugHub Platform Arc 4
+ * Executor for step type: suspend.
  *
- * Pauses a Skill Flow execution indefinitely, waiting for an external signal.
- * Generates a resume_token, calculates deadline (business or wall-clock hours),
- * persists the WorkflowInstance via ctx.persistSuspend, and optionally sends
- * a notification with the token interpolated.
+ * Supports two backends (priority order):
+ *
+ *   1. Arc 4 — persistSuspend (workflow-api + PostgreSQL)
+ *      Persists WorkflowInstance to PostgreSQL and calculates business-hours
+ *      deadline via calendar-api. Used in the legacy workflow-api path.
+ *
+ *   2. Arc 19 — persistSuspendWebhook (Redis-only)
+ *      Extends TTLs of all session Redis keys and writes resume_token to the
+ *      {tenant}:resume_tokens hash. No PostgreSQL involved. Used by webhook
+ *      (workflow) sessions where the session IS the persistent record.
+ *
+ *   3. Fallback — wall-clock hours (no callback wired).
+ *
+ * Pauses execution indefinitely, waiting for an external signal.
+ * Generates a resume_token, calculates deadline, persists state, and optionally
+ * sends a notification with the token interpolated.
  *
  * Returns next_step_id: "__suspended__" — handled specially by engine.ts.
  *
  * Resume flow:
- *   When the workflow-api receives a valid resume_token, it calls engine.run()
- *   with resumeContext set. The suspend step detects ctx.resumeContext.step_id
- *   matches its own id and follows the appropriate on_resume / on_reject /
- *   on_timeout path — without suspending again.
+ *   When a valid resume_token arrives (via WebhookAdapter or workflow-api),
+ *   engine.run() is called with resumeContext set. The suspend step detects
+ *   ctx.resumeContext.step_id matches its own id and follows the appropriate
+ *   on_resume / on_reject / on_timeout path — without suspending again.
  *
  * Idempotency (two-stage sentinel):
  *   - sentinel "suspended": already suspended → return __suspended__ immediately.
@@ -185,8 +196,23 @@ export async function executeSuspend(
     // UPSERT (INSERT ... ON CONFLICT (resume_token) DO NOTHING RETURNING *).
     const result = await ctx.persistSuspend(persistParams)
     resumeExpiresAt = result.resume_expires_at
+  } else if (ctx.persistSuspendWebhook) {
+    // Arc 19 — Redis-only path for webhook (workflow) sessions.
+    // Extends all session Redis key TTLs and writes resume_token to the
+    // {tenant}:resume_tokens hash. The callback is idempotent on resume_token.
+    const result = await ctx.persistSuspendWebhook({
+      step_id:       step.id,
+      resume_token:  resumeToken,
+      timeout_hours: step.timeout_hours,
+      // Arc 19 Fase D: forward business_hours + calendar_id so the
+      // skill-flow-service can call the calendar-api for deadline calculation
+      // when the suspend step requests business-hours-aware expiry.
+      ...(step.business_hours !== undefined ? { business_hours: step.business_hours } : {}),
+      ...(step.calendar_id    ? { calendar_id: step.calendar_id }    : {}),
+    })
+    resumeExpiresAt = result.resume_expires_at
   } else {
-    // Fallback: wall-clock hours
+    // Fallback: wall-clock hours (no persistence backend wired)
     const deadline = new Date(Date.now() + step.timeout_hours * 3_600_000)
     resumeExpiresAt = deadline.toISOString()
   }

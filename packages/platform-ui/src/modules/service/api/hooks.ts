@@ -13,7 +13,7 @@ async function safeJson<T>(res: Response): Promise<T> {
 }
 import type {
   ActiveSession, ConnectionStatus, ContactSegment, Metrics24h,
-  PoolJourneyEntry, PoolSnapshot, PoolSlaEntry, PoolView, SentimentEntry, StreamEntry, SupervisorState
+  PoolSnapshot, PoolSlaEntry, PoolView, SentimentEntry, StreamEntry, SupervisorState
 } from '../types'
 
 const BASE = ''  // relative URLs — Vite proxies to analytics-api on port 3500
@@ -134,21 +134,6 @@ export function usePoolSla(tenantId: string, intervalMs = 60_000): PoolSlaEntry[
   return entries
 }
 
-// ─── usePoolJourneys ──────────────────────────────────────────────────────────
-
-export function usePoolJourneys(tenantId: string, intervalMs = 30_000): PoolJourneyEntry[] {
-  const [entries, setEntries] = useState<PoolJourneyEntry[]>([])
-  const fetch_ = useCallback(async () => {
-    if (!tenantId) return
-    try {
-      const res = await fetch(`${BASE}/dashboard/pool-journeys?tenant_id=${encodeURIComponent(tenantId)}`)
-      if (res.ok) setEntries(await safeJson(res))
-    } catch { /* stale data acceptable */ }
-  }, [tenantId])
-  useEffect(() => { fetch_(); const id = setInterval(fetch_, intervalMs); return () => clearInterval(id) }, [fetch_, intervalMs])
-  return entries
-}
-
 // ─── usePoolViews ─────────────────────────────────────────────────────────────
 
 export function usePoolViews(tenantId: string): {
@@ -161,7 +146,6 @@ export function usePoolViews(tenantId: string): {
   const { snapshots, status, isStale, lastUpdated } = usePoolSnapshots(tenantId)
   const sentimentEntries = useSentimentLive(tenantId)
   const slaEntries       = usePoolSla(tenantId)
-  const journeyEntries   = usePoolJourneys(tenantId)
   const metrics          = useMetrics24h(tenantId)
 
   const sentimentMap = useMemo(() => {
@@ -176,16 +160,9 @@ export function usePoolViews(tenantId: string): {
     return m
   }, [slaEntries])
 
-  const journeyMap = useMemo(() => {
-    const m: Record<string, PoolJourneyEntry> = {}
-    for (const e of journeyEntries) m[e.pool_id] = e
-    return m
-  }, [journeyEntries])
-
   const pools = useMemo<PoolView[]>(() => snapshots.map(s => {
-    const sent    = sentimentMap[s.pool_id] ?? null
-    const sla     = slaMap[s.pool_id]      ?? null
-    const journey = journeyMap[s.pool_id]  ?? null
+    const sent = sentimentMap[s.pool_id] ?? null
+    const sla  = slaMap[s.pool_id]      ?? null
     return {
       pool_id:            s.pool_id,
       tenant_id:          s.tenant_id,
@@ -204,11 +181,8 @@ export function usePoolViews(tenantId: string): {
       p90_wait_ms:        sla?.p90_wait_ms        ?? null,
       sla_compliance_pct: sla?.sla_compliance_pct ?? null,
       sla_sessions_count: sla?.sessions_count     ?? 0,
-      // Journey counts (from /dashboard/pool-journeys, 0 when no data)
-      active_journeys:    journey?.active_journeys    ?? 0,
-      suspended_journeys: journey?.suspended_journeys ?? 0,
     }
-  }), [snapshots, sentimentMap, slaMap, journeyMap])
+  }), [snapshots, sentimentMap, slaMap])
 
   return { pools, status, metrics, isStale, lastUpdated }
 }

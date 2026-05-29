@@ -145,67 +145,13 @@ CREATE INDEX IF NOT EXISTS idx_wh_tenant
 CREATE INDEX IF NOT EXISTS idx_wh_token_hash
     ON workflow.webhooks (token_hash);
 
--- ── journeys ──────────────────────────────────────────────────────────────────
--- Arc 10: Journey entity — business-level unit that transcends the session.
--- journey_id ≠ workflow_instance_id — distinct entities with independent lifecycles.
--- Sessions acquire journey_id via Phase B (collect step or manual link).
-
-CREATE TABLE IF NOT EXISTS workflow.journeys (
-    journey_id             UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
-    tenant_id              TEXT        NOT NULL,
-    skill_id               TEXT        NOT NULL,
-    workflow_instance_id   UUID        REFERENCES workflow.instances(id) ON DELETE SET NULL,
-    customer_id            TEXT,
-    origin_session_id      TEXT        NOT NULL,
-    status                 TEXT        NOT NULL DEFAULT 'active'
-                                       CHECK (status IN ('active','suspended','completed','failed','cancelled','merged')),
-    merged_into_journey_id UUID        REFERENCES workflow.journeys(journey_id) ON DELETE SET NULL,
-    metadata               JSONB,
-    created_at             TIMESTAMPTZ NOT NULL DEFAULT now(),
-    updated_at             TIMESTAMPTZ NOT NULL DEFAULT now(),
-    completed_at           TIMESTAMPTZ
-);
-
-CREATE INDEX IF NOT EXISTS idx_jrn_tenant_status
-    ON workflow.journeys (tenant_id, status);
-CREATE INDEX IF NOT EXISTS idx_jrn_tenant_customer
-    ON workflow.journeys (tenant_id, customer_id)
-    WHERE customer_id IS NOT NULL;
-CREATE INDEX IF NOT EXISTS idx_jrn_workflow_instance
-    ON workflow.journeys (workflow_instance_id)
-    WHERE workflow_instance_id IS NOT NULL;
-
--- Idempotent migrations: add journey_id FK to instances and collect_instances.
--- Must run AFTER workflow.journeys is created above.
-ALTER TABLE workflow.instances       ADD COLUMN IF NOT EXISTS journey_id UUID REFERENCES workflow.journeys(journey_id) ON DELETE SET NULL;
-ALTER TABLE workflow.collect_instances ADD COLUMN IF NOT EXISTS journey_id UUID REFERENCES workflow.journeys(journey_id) ON DELETE SET NULL;
-
 -- Arc 18 B1: store the session created when a collect contact responds
 ALTER TABLE workflow.collect_instances ADD COLUMN IF NOT EXISTS responded_session_id TEXT;
-
--- Arc 10 Phase F: split_from_journey_id tracks which journey a split-derived journey came from.
-ALTER TABLE workflow.journeys ADD COLUMN IF NOT EXISTS split_from_journey_id UUID REFERENCES workflow.journeys(journey_id) ON DELETE SET NULL;
-
--- Arc 16 Phase B: pool_id on Journey — populated at creation when the journey originates from
--- a pool action (MCP tool journey_start called from an agent in a pool context).
--- Enables GET /v1/journeys?pool_id=...&status=suspended for Tier 1 poller patterns.
-ALTER TABLE workflow.journeys ADD COLUMN IF NOT EXISTS pool_id TEXT;
-
--- Arc 17: journey_type_id — references the registered JourneyType definition.
--- Nullable for migration safety: existing journeys pre-Arc 17 have NULL.
--- journey_type_id is validated by mcp-server journey_start before reaching here.
-ALTER TABLE workflow.journeys ADD COLUMN IF NOT EXISTS journey_type_id TEXT;
--- sla_ms — denormalized from JourneyType.sla_ms at creation time.
--- Stored on instance to enable SLA calculation without joining JourneyType at read time.
-ALTER TABLE workflow.journeys ADD COLUMN IF NOT EXISTS sla_ms INT;
 
 -- Arc 16 Phase D: channel is now optional on collect_instances — channel-gateway
 -- selects the outbound channel by requires[] capability when channel IS NULL.
 -- DROP NOT NULL is idempotent in PostgreSQL (no-op if already nullable).
 ALTER TABLE workflow.collect_instances ALTER COLUMN channel DROP NOT NULL;
-CREATE INDEX IF NOT EXISTS idx_jrn_pool_status
-    ON workflow.journeys (tenant_id, pool_id, status)
-    WHERE pool_id IS NOT NULL;
 
 -- ── webhook_deliveries ─────────────────────────────────────────────────────────
 -- Append-only delivery log. Pruned by the caller (keep last N per webhook_id).
@@ -273,7 +219,6 @@ def _row_to_instance(row: asyncpg.Record) -> dict[str, Any]:
         "outcome":           row["outcome"],
         "created_at":        row["created_at"].isoformat(),
         "metadata":          _json_col(row["metadata"]),
-        "journey_id":        str(row["journey_id"]) if row["journey_id"] else None,
     }
 
 
@@ -299,7 +244,6 @@ def _row_to_collect(row: asyncpg.Record) -> dict[str, Any]:
         "response_data": json.loads(row["response_data"]),
         "elapsed_ms":    row["elapsed_ms"],
         "created_at":    row["created_at"].isoformat(),
-        "journey_id":    str(row["journey_id"]) if row["journey_id"] else None,
     }
 
 
@@ -311,14 +255,14 @@ async def db_create_instance(pool: asyncpg.Pool, data: dict) -> dict:
         """
         INSERT INTO workflow.instances
             (installation_id, organization_id, tenant_id, flow_id,
-             session_id, origin_session_id, pool_id, journey_id, current_step,
+             session_id, origin_session_id, pool_id, current_step,
              pipeline_state, metadata)
-        VALUES ($1,$2,$3,$4,$5,$6,$7,$8::uuid,$9,$10::jsonb,$11::jsonb)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10::jsonb)
         RETURNING *
         """,
         data["installation_id"], data["organization_id"], data["tenant_id"],
         data["flow_id"], data.get("session_id"), data.get("origin_session_id"),
-        data.get("pool_id"), data.get("journey_id"), data.get("current_step"),
+        data.get("pool_id"), data.get("current_step"),
         json.dumps(data.get("pipeline_state", {})),
         json.dumps(data.get("metadata", {})),
     )
@@ -595,7 +539,6 @@ async def db_create_collect(
     fields:        list,
     send_at:       datetime,
     expires_at:    datetime,
-    journey_id:    str | None = None,
 ) -> dict:
     """Create a collect_instance with status='requested'."""
     row = await pool.fetchrow(
@@ -603,15 +546,14 @@ async def db_create_collect(
         INSERT INTO workflow.collect_instances
             (collect_token, instance_id, tenant_id, flow_id, campaign_id,
              step_id, target_type, target_id, channel, interaction, prompt,
-             options_json, fields_json, send_at, expires_at, journey_id)
-        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12::jsonb,$13::jsonb,$14,$15,$16)
+             options_json, fields_json, send_at, expires_at)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12::jsonb,$13::jsonb,$14,$15)
         ON CONFLICT (collect_token) DO NOTHING
         RETURNING *
         """,
         collect_token, UUID(instance_id), tenant_id, flow_id, campaign_id,
         step_id, target_type, target_id, channel, interaction, prompt,
         json.dumps(options), json.dumps(fields), send_at, expires_at,
-        UUID(journey_id) if journey_id else None,
     )
     if row is None:
         # Idempotent — already exists; fetch and return
@@ -962,415 +904,3 @@ async def db_list_deliveries(
     )
     return [_row_to_delivery(r) for r in rows]
 
-
-# ── Journey CRUD (Arc 10) ──────────────────────────────────────────────────────
-
-def _row_to_journey(row: asyncpg.Record) -> dict[str, Any]:
-    return {
-        "journey_id":              str(row["journey_id"]),
-        "tenant_id":               row["tenant_id"],
-        "skill_id":                row["skill_id"],
-        "workflow_instance_id":    str(row["workflow_instance_id"]) if row["workflow_instance_id"] else None,
-        "customer_id":             row["customer_id"],
-        "origin_session_id":       row["origin_session_id"],
-        "pool_id":                 row["pool_id"],          # Arc 16 Phase B
-        "journey_type_id":         row["journey_type_id"],  # Arc 17
-        "sla_ms":                  row["sla_ms"],           # Arc 17: denormalized from JourneyType
-        "status":                  row["status"],
-        "merged_into_journey_id":  str(row["merged_into_journey_id"]) if row["merged_into_journey_id"] else None,
-        "split_from_journey_id":   str(row["split_from_journey_id"]) if row["split_from_journey_id"] else None,
-        "metadata":                json.loads(row["metadata"]) if row["metadata"] else None,
-        "created_at":              row["created_at"].isoformat(),
-        "updated_at":              row["updated_at"].isoformat(),
-        "completed_at":            row["completed_at"].isoformat() if row["completed_at"] else None,
-    }
-
-
-async def db_create_journey(
-    pool:              asyncpg.Pool,
-    tenant_id:         str,
-    skill_id:          str,
-    origin_session_id: str,
-    customer_id:       str | None = None,
-    metadata:          dict | None = None,
-    pool_id:           str | None = None,    # Arc 16 Phase B
-    journey_type_id:   str | None = None,   # Arc 17
-    sla_ms:            int | None = None,   # Arc 17: denormalized from JourneyType
-) -> dict:
-    """Create a new Journey with status='active'."""
-    row = await pool.fetchrow(
-        """
-        INSERT INTO workflow.journeys
-            (tenant_id, skill_id, origin_session_id, customer_id, metadata, pool_id,
-             journey_type_id, sla_ms)
-        VALUES ($1,$2,$3,$4,$5::jsonb,$6,$7,$8)
-        RETURNING *
-        """,
-        tenant_id, skill_id, origin_session_id, customer_id,
-        json.dumps(metadata) if metadata else None,
-        pool_id, journey_type_id, sla_ms,
-    )
-    return _row_to_journey(row)
-
-
-async def db_get_journey(
-    pool:       asyncpg.Pool,
-    journey_id: str,
-    tenant_id:  str,
-) -> dict | None:
-    row = await pool.fetchrow(
-        "SELECT * FROM workflow.journeys WHERE journey_id = $1 AND tenant_id = $2",
-        UUID(journey_id), tenant_id,
-    )
-    return _row_to_journey(row) if row else None
-
-
-async def db_list_journeys(
-    pool:            asyncpg.Pool,
-    tenant_id:       str,
-    status:          str | None = None,
-    customer_id:     str | None = None,
-    skill_id:        str | None = None,
-    pool_id:         str | None = None,   # Arc 16 Phase B
-    journey_type_id: str | None = None,   # Arc 17 / Arc 18 C1
-    from_dt:         str | None = None,   # Arc 18 C1: ISO date string (inclusive)
-    to_dt:           str | None = None,   # Arc 18 C1: ISO date string (inclusive)
-    limit:           int = 50,
-    offset:          int = 0,
-) -> list[dict]:
-    filters: list[str] = ["tenant_id = $1"]
-    params:  list[Any] = [tenant_id]
-
-    if status and status != "all":
-        params.append(status)
-        filters.append(f"status = ${len(params)}")
-    if customer_id:
-        params.append(customer_id)
-        filters.append(f"customer_id = ${len(params)}")
-    if skill_id:
-        params.append(skill_id)
-        filters.append(f"skill_id = ${len(params)}")
-    if pool_id:
-        params.append(pool_id)
-        filters.append(f"pool_id = ${len(params)}")
-    if journey_type_id:
-        params.append(journey_type_id)
-        filters.append(f"journey_type_id = ${len(params)}")
-    if from_dt:
-        params.append(from_dt)
-        filters.append(f"created_at >= ${len(params)}::date::timestamptz")
-    if to_dt:
-        params.append(to_dt)
-        filters.append(f"created_at < (${len(params)}::date + INTERVAL '1 day')::timestamptz")
-
-    params.extend([limit, offset])
-    rows = await pool.fetch(
-        f"""
-        SELECT * FROM workflow.journeys
-        WHERE {' AND '.join(filters)}
-        ORDER BY created_at DESC
-        LIMIT ${len(params) - 1} OFFSET ${len(params)}
-        """,
-        *params,
-    )
-    return [_row_to_journey(r) for r in rows]
-
-
-async def db_list_journey_instances(
-    pool:       asyncpg.Pool,
-    journey_id: str,
-    tenant_id:  str,
-    limit:      int = 50,
-    offset:     int = 0,
-) -> list[dict]:
-    """
-    Arc 10 C — List all workflow instances linked to a journey.
-    Uses two-path lookup:
-      1. Direct: instances.journey_id = journey_id (set on new triggers via journey_router)
-      2. Fallback: workflow.journeys.workflow_instance_id (set by db_set_journey_workflow_instance
-         right after the instance is created — covers legacy instances where journey_id was not
-         written to the instances row because TriggerRequest lacked the field)
-    Both paths are tenant-scoped and deduplicated via DISTINCT ON.
-    """
-    rows = await pool.fetch(
-        """
-        SELECT wi.*
-        FROM workflow.instances wi
-        WHERE wi.tenant_id = $2
-          AND (
-            wi.journey_id = $1::uuid
-            OR wi.id IN (
-                SELECT workflow_instance_id
-                FROM workflow.journeys
-                WHERE journey_id = $1::uuid
-                  AND tenant_id  = $2
-                  AND workflow_instance_id IS NOT NULL
-            )
-          )
-        ORDER BY wi.created_at ASC
-        LIMIT $3 OFFSET $4
-        """,
-        UUID(journey_id), tenant_id, limit, offset,
-    )
-    return [_row_to_instance(r) for r in rows]
-
-
-async def db_set_journey_workflow_instance(
-    pool:                 asyncpg.Pool,
-    journey_id:           str,
-    workflow_instance_id: str,
-) -> dict | None:
-    """Associate (or update) the active WorkflowInstance for a Journey."""
-    row = await pool.fetchrow(
-        """
-        UPDATE workflow.journeys
-        SET workflow_instance_id = $2,
-            updated_at           = now()
-        WHERE journey_id = $1
-        RETURNING *
-        """,
-        UUID(journey_id), UUID(workflow_instance_id),
-    )
-    return _row_to_journey(row) if row else None
-
-
-async def db_update_journey_status(
-    pool:       asyncpg.Pool,
-    journey_id: str,
-    status:     str,
-) -> dict | None:
-    """Update journey status; sets completed_at for terminal states."""
-    row = await pool.fetchrow(
-        """
-        UPDATE workflow.journeys
-        SET status       = $2,
-            completed_at = CASE WHEN $2 IN ('completed','failed','cancelled','merged') THEN now() ELSE completed_at END,
-            updated_at   = now()
-        WHERE journey_id = $1
-        RETURNING *
-        """,
-        UUID(journey_id), status,
-    )
-    return _row_to_journey(row) if row else None
-
-
-async def db_create_journey_for_instance(
-    pool:            asyncpg.Pool,
-    instance_id:     str,
-    tenant_id:       str,
-    journey_type_id: str | None = None,  # Arc 17: from skill YAML journey_type_id field
-) -> dict | None:
-    """
-    Arc 10 Phase B — creates_journey: true support.
-
-    Creates a Journey linked to an already-running WorkflowInstance, then
-    back-links the instance to the new journey.  Idempotent: if the instance
-    already has a journey_id, returns the existing Journey row unchanged.
-
-    Returns the Journey dict, or None if the instance was not found.
-    """
-    async with pool.acquire() as conn:
-        async with conn.transaction():
-            # 1. Fetch the instance (locked for update to avoid races)
-            inst_row = await conn.fetchrow(
-                "SELECT * FROM workflow.instances WHERE id = $1 FOR UPDATE",
-                UUID(instance_id),
-            )
-            if inst_row is None:
-                return None
-
-            # 2. Idempotent: already linked — just return the journey
-            if inst_row["journey_id"] is not None:
-                jrn_row = await conn.fetchrow(
-                    "SELECT * FROM workflow.journeys WHERE journey_id = $1",
-                    inst_row["journey_id"],
-                )
-                return _row_to_journey(jrn_row) if jrn_row else None
-
-            # 3. Derive skill_id from flow_id (they are the same in PlugHub)
-            skill_id = inst_row["flow_id"]
-            origin_session_id = inst_row["origin_session_id"] or inst_row["session_id"] or ""
-
-            # 4. Create the Journey
-            jrn_row = await conn.fetchrow(
-                """
-                INSERT INTO workflow.journeys
-                    (tenant_id, skill_id, origin_session_id, workflow_instance_id,
-                     journey_type_id)
-                VALUES ($1,$2,$3,$4,$5)
-                RETURNING *
-                """,
-                tenant_id, skill_id, origin_session_id, UUID(instance_id),
-                journey_type_id,  # Arc 17: null for YAML without journey_type_id
-            )
-            journey_id = jrn_row["journey_id"]
-
-            # 5. Back-link the instance to the journey
-            await conn.execute(
-                "UPDATE workflow.instances SET journey_id = $1 WHERE id = $2",
-                journey_id, UUID(instance_id),
-            )
-
-    return _row_to_journey(jrn_row)
-
-
-async def db_split_journey(
-    pool:              asyncpg.Pool,
-    source_journey_id: str,
-    session_ids:       list[str],
-    skill_id:          str,
-    tenant_id:         str,
-    metadata:          dict | None = None,
-) -> dict[str, Any]:
-    """
-    Arc 10 Phase F — Extract collect sessions from source_journey into a new journey.
-
-    Steps (single transaction):
-      1. Validate each session_id is a collect session of source_journey (sessions.journey_id = source_journey_id)
-      2. Compute new origin_session_id = earliest session by started_at (or session_id order as fallback)
-      3. Insert new journey with split_from_journey_id = source_journey_id
-      4. UPDATE sessions SET journey_id = new_journey_id WHERE session_id IN (...)
-         and journey_id = source_journey_id
-
-    Returns: dict with keys new_journey_id, new_journey (full row dict), moved_count.
-    Raises ValueError for invalid inputs (caller should convert to HTTP 400).
-
-    NOTE: sessions live in the agent-registry / core PostgreSQL database, not in
-    workflow schema. This function updates workflow.collect_instances.journey_id
-    (the workflow-api side of the link) only. The agent-registry sessions table
-    update must be performed by the caller via the agent-registry HTTP API or a
-    separate DB connection. We expose moved_count from collect_instances as a
-    consistency proxy.
-    """
-    if not session_ids:
-        raise ValueError("session_ids must not be empty")
-
-    async with pool.acquire() as conn:
-        async with conn.transaction():
-            # 1. Verify source journey exists and is not merged
-            src_row = await conn.fetchrow(
-                "SELECT * FROM workflow.journeys WHERE journey_id = $1 AND tenant_id = $2 FOR UPDATE",
-                UUID(source_journey_id), tenant_id,
-            )
-            if src_row is None:
-                raise ValueError("source journey not found")
-            if src_row["status"] == "merged":
-                raise ValueError("merged journey is read-only")
-            if src_row["origin_session_id"] in session_ids:
-                raise ValueError("origin_session_cannot_be_split")
-
-            # 2. Verify all session_ids are collect sessions of source journey
-            #    We validate via workflow.collect_instances.journey_id
-            placeholders = ", ".join(f"${i + 3}" for i in range(len(session_ids)))
-            count_row = await conn.fetchrow(
-                f"""
-                SELECT COUNT(*) AS cnt
-                FROM workflow.collect_instances
-                WHERE journey_id = $1
-                  AND tenant_id  = $2
-                  AND session_id IN ({placeholders})
-                """,
-                UUID(source_journey_id), tenant_id, *session_ids,
-            ) if False else None  # collect_instances uses collect_token as PK, not session_id
-
-            # Validate via collect_instances target_id which maps to the session's customer
-            # (session linking is on workflow.collect_instances.journey_id only when journey propagates)
-            # Simple: accept the list as declared — the MCP tool validates via agent-registry
-            # before calling this endpoint (belt-and-suspenders; hard validation is at HTTP layer)
-
-            # 3. Determine origin_session_id for new journey = first session_id in list
-            #    (caller should order by started_at; we take index 0 as canonical)
-            new_origin = session_ids[0]
-
-            # 4. Create new journey
-            new_row = await conn.fetchrow(
-                """
-                INSERT INTO workflow.journeys
-                    (tenant_id, skill_id, origin_session_id, split_from_journey_id, metadata)
-                VALUES ($1, $2, $3, $4, $5::jsonb)
-                RETURNING *
-                """,
-                tenant_id, skill_id, new_origin, UUID(source_journey_id),
-                json.dumps(metadata) if metadata else None,
-            )
-            new_journey_id = new_row["journey_id"]
-
-            # 5. Re-link collect_instances to new journey
-            moved = await conn.execute(
-                f"""
-                UPDATE workflow.collect_instances
-                SET journey_id = $1
-                WHERE journey_id = $2
-                  AND tenant_id  = $3
-                  AND session_id IN ({placeholders})
-                """,
-                new_journey_id, UUID(source_journey_id), tenant_id, *session_ids,
-            ) if False else "UPDATE 0"  # placeholder — actual session_id field not on collect_instances
-
-            # Real move: collect_instances does not store session_id directly.
-            # We link by updating all collect_instances whose parent instance's
-            # session_id matches one of the requested session_ids.
-            si_placeholders = ", ".join(f"${i + 4}" for i in range(len(session_ids)))
-            result = await conn.execute(
-                f"""
-                UPDATE workflow.collect_instances ci
-                SET journey_id = $1
-                FROM workflow.instances wi
-                WHERE ci.instance_id = wi.id
-                  AND ci.journey_id  = $2
-                  AND ci.tenant_id   = $3
-                  AND wi.session_id  IN ({si_placeholders})
-                """,
-                new_journey_id, UUID(source_journey_id), tenant_id, *session_ids,
-            )
-            moved_count = int(result.split()[-1]) if result else 0
-
-    return {
-        "new_journey_id": str(new_journey_id),
-        "new_journey":    _row_to_journey(new_row),
-        "moved_count":    moved_count,
-    }
-
-
-async def db_merge_journeys(
-    pool:                 asyncpg.Pool,
-    journey_id_primary:   str,
-    journey_id_secondary: str,
-) -> dict | None:
-    """
-    Merge secondary journey into primary:
-      - secondary.status = 'merged', secondary.merged_into_journey_id = primary
-      - primary.updated_at refreshed
-    Returns the updated primary journey. Rejects if secondary is already merged.
-    """
-    # Guard: secondary must not already be merged and must not equal primary
-    if journey_id_primary == journey_id_secondary:
-        return None
-
-    async with pool.acquire() as conn:
-        async with conn.transaction():
-            # Mark secondary as merged
-            await conn.execute(
-                """
-                UPDATE workflow.journeys
-                SET status                 = 'merged',
-                    merged_into_journey_id = $2,
-                    completed_at           = now(),
-                    updated_at             = now()
-                WHERE journey_id = $1
-                  AND status NOT IN ('merged', 'completed', 'failed', 'cancelled')
-                """,
-                UUID(journey_id_secondary), UUID(journey_id_primary),
-            )
-            # Touch primary updated_at
-            row = await conn.fetchrow(
-                """
-                UPDATE workflow.journeys
-                SET updated_at = now()
-                WHERE journey_id = $1
-                RETURNING *
-                """,
-                UUID(journey_id_primary),
-            )
-
-    return _row_to_journey(row) if row else None
