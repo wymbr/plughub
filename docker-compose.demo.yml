@@ -703,6 +703,12 @@ services:
       dockerfile: packages/e2e-tests/services/skill-flow-service/Dockerfile
     # Porta interna 3460 — evaluation-api ocupa 3400 externamente
     # Sem mapeamento externo: somente acessível via rede interna plughub-demo
+    volumes:
+      # Mount skills directory so YAML changes take effect without rebuilding.
+      # Changes to skill_*.yaml and agente_*.yaml files are picked up on the
+      # next skill-flow-service restart (or orchestrator-bridge restart which
+      # re-syncs all skills via RegistrySyncer).
+      - ./packages/skill-flow-engine/skills:/app/skills:ro
     environment:
       REDIS_URL: redis://redis:6379
       MCP_SERVER_URL: http://mcp-server-plughub:3100
@@ -1189,6 +1195,9 @@ services:
       # upserts pools + agent types into the Agent Registry automatically.
       # No external seed script needed for a fresh environment.
       - ./infra/registry:/registry:ro
+      # Skill YAMLs — mounted so RegistrySyncer picks up changes without rebuild.
+      # Restart orchestrator-bridge after editing any skill_*.yaml or agente_*.yaml.
+      - ./packages/skill-flow-engine/skills:/skills:ro
     environment:
       KAFKA_BROKERS:        kafka:29092
       REDIS_URL:            redis://redis:6379
@@ -1196,6 +1205,7 @@ services:
       AGENT_REGISTRY_URL:   http://agent-registry:3300
       BOOTSTRAP_TENANT_IDS: tenant_demo
       REGISTRY_CONFIG_DIR:  /registry
+      SKILLS_DIR:           /skills
     depends_on:
       kafka:
         condition: service_healthy

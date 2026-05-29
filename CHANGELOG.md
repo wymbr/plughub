@@ -2,6 +2,26 @@
 
 ---
 
+## Arc 19 Demo — Webhook workflow end-to-end fix (2026-05-29)
+
+Três bugs corrigidos que impediam o fluxo de portabilidade Arc 19 de rodar end-to-end na demo:
+
+**Bug 1 — `started_at` ausente no evento do WebhookAdapter** (`channel-gateway/adapters/webhook.py`):
+O `WebhookAdapter.handle_trigger()` publicava `conversations.inbound` sem o campo `started_at`, que é obrigatório em `ConversationInboundEvent` do routing-engine. O `model_validate()` lançava `ValidationError` silencioso e o evento era descartado com WARNING "Unrecognised inbound event". O routing engine nunca roteava a sessão webhook.
+Fix: adicionado `"started_at": now_str` ao payload do trigger. Idem no `handle_resume()` para o path de retomada.
+
+**Bug 2 — Pool webhook ausente no `tenant_demo.yaml`** (`infra/registry/tenant_demo.yaml`):
+Não havia pool com `channel_types: [webhook]` e `skill_id: skill_portabilidade_demo_v1`, então o routing engine não encontrava candidato para a sessão criada pelo trigger. Fix: adicionado pool `portabilidade_processo_ia` e agente `agente_portabilidade_processo_v1` com 20 instâncias.
+
+**Bug 3 — YAML da skill lendo `@ctx.session.review_decision` em vez de usar `on_reject`** (`skill-flow-engine/skills/skill_portabilidade_demo_v1.yaml`):
+O step `solicitar_operadora` (suspend) mandava para um `choice` que lia `@ctx.session.review_decision` do ContextStore — que nunca era escrito pelo fluxo normal. Fix: removido o choice step redundante; o suspend agora usa `on_resume/on_reject` nativos para rotear approved → `notificar_aprovado` e rejected → `notificar_rejeitado`.
+
+**Observabilidade** (`orchestrator-bridge/main.py`): adicionado `logger.info` no path WITH-instance-id do `agent_done` para human agents, que antes publicava silenciosamente sem log.
+
+**Verificação**: resume_token criado após intake (suspend executou); curl de resume com `decision=approved` completou o workflow até `closed` conforme visível em Analytics/Sessions.
+
+---
+
 ## Arc 19 Fase F — Journey entity elimination (#341–#353) (2026-05-28)
 
 Complete removal of the Journey entity from the entire PlugHub platform. Journey was architecturally redundant — it was conceptually just a Tier-1 Workflow that invokes other workflows via the `task` step. The session trace (Arc 19 unified model) provides sufficient hierarchy visibility without a separate entity.
