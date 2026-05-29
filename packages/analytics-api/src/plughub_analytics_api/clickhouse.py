@@ -243,6 +243,15 @@ _DDL_SESSIONS_MIGRATE_STATUS = (
     " ADD COLUMN IF NOT EXISTS status Nullable(String) DEFAULT NULL"
 )
 
+# Arc 19: origin_session_id — links a webhook workflow session back to the
+# intake session (webchat/voice/etc.) that triggered it via workflow_trigger.
+# Populated by parse_inbound from the conversations.inbound event field.
+# Used by the workflow-trace endpoint to fetch the input agent segment.
+_DDL_SESSIONS_MIGRATE_ORIGIN = (
+    "ALTER TABLE {db}.sessions"
+    " ADD COLUMN IF NOT EXISTS origin_session_id Nullable(String) DEFAULT NULL"
+)
+
 _DDL_COLLECT_EVENTS = """
 CREATE TABLE IF NOT EXISTS {db}.collect_events
 (
@@ -584,18 +593,18 @@ GROUP BY tenant_id, session_id
 # Readable SQL view over mv_segment_summary.
 # handoff_count = max sequence_index observed (0 = single agent, 1 = one hand-off, etc.).
 _DDL_V_SEGMENT_SUMMARY = """
-CREATE VIEW IF NOT EXISTS {db}.v_segment_summary AS
+CREATE OR REPLACE VIEW {db}.v_segment_summary AS
 SELECT
     tenant_id,
     session_id,
-    countMerge(segment_count_state)       AS segment_count,
-    countMerge(primary_count_state)       AS primary_segments,
-    countMerge(specialist_count_state)    AS specialist_segments,
-    countMerge(human_count_state)         AS human_segments,
-    sumMerge(total_duration_ms_state)     AS total_duration_ms,
-    maxMerge(max_sequence_state)          AS handoff_count,
-    countMerge(escalation_count_state)    AS escalation_count,
-    countMerge(resolved_count_state)      AS resolved_count
+    countMerge(segment_count_state)         AS segment_count,
+    countIfMerge(primary_count_state)       AS primary_segments,
+    countIfMerge(specialist_count_state)    AS specialist_segments,
+    countIfMerge(human_count_state)         AS human_segments,
+    sumMerge(total_duration_ms_state)       AS total_duration_ms,
+    maxMerge(max_sequence_state)            AS handoff_count,
+    countIfMerge(escalation_count_state)    AS escalation_count,
+    countIfMerge(resolved_count_state)      AS resolved_count
 FROM {db}.mv_segment_summary
 GROUP BY tenant_id, session_id
 """
@@ -636,6 +645,7 @@ _MIGRATIONS = [
     _DDL_MESSAGES_MIGRATE_CONTENT,
     _ALTER_WORKFLOW_EVENTS_POOL_ID,       # Add pool_id to workflow_events
     _DDL_SESSIONS_MIGRATE_STATUS,         # Arc 19: session status (active|suspended|closed)
+    _DDL_SESSIONS_MIGRATE_ORIGIN,         # Arc 19: origin_session_id (webhook → intake link)
 ]
 
 

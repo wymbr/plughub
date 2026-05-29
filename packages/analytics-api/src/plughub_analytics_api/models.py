@@ -77,6 +77,9 @@ def parse_inbound(payload: dict[str, Any]) -> dict | None:
         "dnis":         dnis,
         # Arc 19: mark re-opened (resumed) sessions as active; new sessions also start active.
         "status":       "active",
+        # Arc 19: webhook workflow sessions carry origin_session_id linking back to the
+        # intake agent session that triggered them via workflow_trigger MCP tool.
+        "origin_session_id": payload.get("origin_session_id") or None,
     }
 
 

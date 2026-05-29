@@ -2,6 +2,26 @@
 
 ---
 
+## Arc 19 — Session lifecycle + analytics status fix (2026-05-29)
+
+Quatro bugs corrigidos que impediam o status de sessões webhook de fechar corretamente no Analytics:
+
+**Bug 1 — Watchdog fechava sessões webhook suspensas** (`main.py _sweep_orphaned_sessions`):
+O `session_watchdog` varria `session:*:meta` e fechava qualquer sessão sem `ws_alive`. Sessões webhook nunca têm WebSocket, então todas caíam no sweep — incluindo sessões legitimamente suspensas aguardando resume_token. Fix: skip completo de `channel_type: webhook` no watchdog (o lifecycle delas é gerenciado por suspend/resume/complete, não por WebSocket keepalive).
+
+**Bug 2 — Resume não limpava os dois NX guards** (`main.py _handle_webhook_session_resumed`):
+`_close_contact_layer` usa `contact_close_fired` como guard NX; `_destroy_conference` usa `close_fired`. O fix anterior deletava só `close_fired`, deixando `contact_close_fired` setado pelo watchdog. Quando o workflow completava, `_close_contact_layer` encontrava o guard setado e pulava o publish do `contact_closed` → analytics ficava `active`. Fix: deletar ambos os guards (`contact_close_fired` + `close_fired` + `closed`) no resume.
+
+**Bug 3 — collect step não escrevia em resume_tokens** (workaround):
+O step `collect` em modo webhook não grava automaticamente o token em `{tenant}:resume_tokens` como o step `suspend` faz. Para o demo, o token é injetado manualmente via `redis-cli HSET`. Fix permanente pendente no TODO.
+
+**Bug 4 — skill YAML volumes não montados** (`docker-compose.demo.yml`):
+Mudanças em `skill_*.yaml` e `agente_*.yaml` não tinham efeito sem rebuild de imagem porque o `SKILLS_DIR` do bridge e do skill-flow-service apontavam para paths baked na imagem. Fix: volume mounts adicionados para ambos os serviços; agora `restart orchestrator-bridge` é suficiente.
+
+**Resultado verificado**: ciclo completo portabilidade — intake → webhook trigger → suspend (aguarda operadora) → resume approved → collect (aguarda cliente) → resume input → `encerrar_sucesso` → `__complete__` → session status `closed` em Analytics/Sessions.
+
+---
+
 ## Arc 19 Demo — Webhook workflow end-to-end fix (2026-05-29)
 
 Três bugs corrigidos que impediam o fluxo de portabilidade Arc 19 de rodar end-to-end na demo:

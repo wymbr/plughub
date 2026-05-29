@@ -14,7 +14,8 @@ const PAGE_SIZE = 50
 interface Props {
   tenantId:     string
   filters:      ContactFilters
-  onOpenDetail: (sessionId: string) => void
+  /** Arc 19: channel is passed alongside sessionId so the parent can detect webhook sessions */
+  onOpenDetail: (sessionId: string, channel: string) => void
 }
 
 export function ListaTab({ tenantId, filters, onOpenDetail }: Props) {
@@ -137,7 +138,7 @@ export function ListaTab({ tenantId, filters, onOpenDetail }: Props) {
             </thead>
             <tbody className="divide-y divide-border">
               {rows.map(row => (
-                <ContactRowItem key={row.session_id} row={row} onClick={() => onOpenDetail(row.session_id)} />
+                <ContactRowItem key={row.session_id} row={row} onClick={() => onOpenDetail(row.session_id, row.channel)} />
               ))}
             </tbody>
           </table>

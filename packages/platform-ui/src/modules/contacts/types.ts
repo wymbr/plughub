@@ -35,6 +35,8 @@ export interface ContactRow {
   segment_count:  number
   /** Arc 19: session status — 'active' | 'suspended' | 'closed' | null (pre-Arc-19) */
   status?:        string | null
+  /** Arc 19: origin_session_id — for webhook sessions, the intake session that triggered them */
+  origin_session_id?: string | null
 }
 
 export interface ContactsApiResponse {

@@ -111,6 +111,33 @@
     "sending":          "Enviando…",
     "send":             "Enviar"
   },
+  "trace": {
+    "title":                "Trace do workflow",
+    "loading":              "Carregando trace…",
+    "empty":                "Nenhum nó de trace encontrado.",
+    "errorLoad":            "Erro ao carregar trace",
+    "executions":           "{{count}} execução(ões)",
+    "suspensions":          "{{count}} suspensão(ões)",
+    "hint":                 "Execuções webhook mostram os steps. Nós de agente abrem o transcript da conversa.",
+    "back":                 "← Trace",
+    "execWindow":           "Janela de execução",
+    "inputContext":         "Contexto de entrada",
+    "stepTimeline":         "Linha do tempo de steps",
+    "pipelineExpired":      "Dados de steps indisponíveis",
+    "pipelineExpiredHint":  "O pipeline_state expira após o fechamento da sessão.",
+    "execMeta":             "Metadados de execução",
+    "pool":                 "Pool",
+    "agent":                "Tipo de agente",
+    "started":              "Início",
+    "ended":                "Fim",
+    "outcome":              "Resultado",
+    "close":                "Motivo de encerramento",
+    "type": {
+      "input":              "entrada",
+      "exec":               "execução",
+      "output":             "saída"
+    }
+  },
   "monitor": {
     "loading":       "Aguardando dados dos pools…",
     "noData":        "Sem dados de pool disponíveis.",

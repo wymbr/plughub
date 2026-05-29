@@ -111,6 +111,33 @@
     "sending":          "Sending…",
     "send":             "Send"
   },
+  "trace": {
+    "title":                "Workflow trace",
+    "loading":              "Loading trace…",
+    "empty":                "No trace nodes found.",
+    "errorLoad":            "Error loading trace",
+    "executions":           "{{count}} execution(s)",
+    "suspensions":          "{{count}} suspension(s)",
+    "hint":                 "Webhook executions show the step timeline. Agent nodes open the conversation transcript.",
+    "back":                 "← Trace",
+    "execWindow":           "Execution window",
+    "inputContext":         "Input context",
+    "stepTimeline":         "Step timeline",
+    "pipelineExpired":      "Step data not available",
+    "pipelineExpiredHint":  "Pipeline state expires after session close. Steps were recorded while the session was active.",
+    "execMeta":             "Execution metadata",
+    "pool":                 "Pool",
+    "agent":                "Agent type",
+    "started":              "Started",
+    "ended":                "Ended",
+    "outcome":              "Outcome",
+    "close":                "Close reason",
+    "type": {
+      "input":              "input",
+      "exec":               "exec",
+      "output":             "output"
+    }
+  },
   "monitor": {
     "loading":       "Loading pool data…",
     "noData":        "No pool data available.",

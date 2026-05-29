@@ -4,6 +4,14 @@
 
 ---
 
+## Skill hot-reload via YAML em disco sem restart *(deferred — dev/demo only)*
+
+**Fluxo editor → deploy já funciona**: `POST /v1/skills/:id/deploy` → `publishRegistryChanged` → bridge invalida `_skill_flow_cache` → próxima execução busca conteúdo atualizado do agent-registry. Nenhuma mudança necessária para este caminho.
+
+**Gap**: edição direta de arquivo YAML em disco (dev/demo) ainda requer `restart orchestrator-bridge` para o RegistrySyncer re-ler e fazer PUT para o agent-registry. A solução correta é um endpoint `POST /admin/skills/sync` (ou handler de `registry.changed` com `source: disk`) no bridge — chama `RegistrySyncer._sync_skills()` → PUT → `registry.changed` → cache invalidado. Deve ser acionado pelo processo de deploy YAML (CI/CD, script), não pelo editor.
+
+---
+
 ## Arc 19 — Modelo Unificado de Sessão: Workflow como Canal Webhook
 
 Spec em [`docs/arcos/arc19-unified-session-model.md`](docs/arcos/arc19-unified-session-model.md). Elimina a dualidade contact/workflow tratando workflows como canal `webhook` na channel-gateway.
@@ -25,9 +33,9 @@ A spec original em [`docs/arcos/arc18-workflow-execution-trace.md`](docs/arcos/a
 
 **Por que deprecated**: todas as superfícies de Arc 18 dependem de entidades eliminadas pelo Arc 19 — `workflow-api` (deprecado Fase D), `Analytics/Processes` (eliminado, merge em Analytics/Sessions), `Analytics/Journeys` (eliminado com Journey na Fase F), rotas `/analytics/processes/:instanceId` e `/analytics/journeys/:journeyId` (desaparecem).
 
-**O que sobrevive do conceito**: step-level trace ainda tem valor. No modelo Arc 19 passa a ser uma aba "Trace" no detalhe de session em `Analytics/Sessions` para sessions com `channel_type: webhook`. Fonte de dados: Redis `pipeline_state.transitions[]` (sessões ativas/suspensas) com fallback para stream persistido (sessões fechadas). Implementar como parte da **Arc 19 Fase E**.
+**O que sobrevive do conceito**: conforme documentado em `docs/arcos/arc19-unified-session-model.md` §Analytics/Sessions, a hierarquia correta é **lista de sessions → lista de segments → detalhe do segment**. Workflows webhook aparecem em Analytics/Sessions com `channel_type: webhook`; cada suspend/resume cria um segmento distinto; o padrão de navegação é idêntico ao de sessões normais (webchat, voice). Não há Trace tab separada — o usuário navega pelos segmentos da sessão webhook da mesma forma que navega pelos segmentos de qualquer outra sessão.
 
-**Fase E deferred** (ClickHouse step analytics — `workflow_step_events` table + heatmap) ainda é válida conceitualmente, mas a implementação muda: eventos de step de sessions webhook, não de workflow_instances.
+**Pendência real (prioridade demo):** Analytics/Sessions → ao clicar em uma sessão webhook com múltiplos segmentos, a UI deve mostrar a **lista de segmentos** antes de ir para o detalhe, e cada segmento na lista deve indicar o contexto do ciclo (ex: "Execução 1 — suspenso" / "Execução 2 — concluído"). Verificar se a navegação atual pula a lista de segmentos para sessões com um único segmento (comportamento correto para sessões normais) e mostrar corretamente a lista quando há múltiplos segmentos (caso webhook com suspend/resume).
 
 ---
 

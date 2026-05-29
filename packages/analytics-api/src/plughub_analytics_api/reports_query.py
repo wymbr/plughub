@@ -437,7 +437,9 @@ def _fetch_sessions(
                    toInt64(dateDiff('millisecond', s.opened_at, s.closed_at)), NULL)
             ) AS handle_time_ms,
             __ANI_DNIS__,
-            COALESCE(_sc.cnt, 0) AS segment_count
+            COALESCE(_sc.cnt, 0) AS segment_count,
+            COALESCE(s.status, 'closed') AS status,
+            s.origin_session_id
         FROM {db}.sessions AS s FINAL
         {_joins}
         WHERE {where}
@@ -464,7 +466,9 @@ def _fetch_sessions(
                     s.session_id, s.tenant_id, s.channel, s.pool_id, s.customer_id,
                     s.opened_at, s.closed_at, s.close_reason, s.outcome,
                     s.wait_time_ms, s.handle_time_ms,
-                    NULL AS ani, NULL AS dnis, 0 AS segment_count
+                    NULL AS ani, NULL AS dnis, 0 AS segment_count,
+                    COALESCE(s.status, 'closed') AS status,
+                    s.origin_session_id
                 FROM {db}.sessions AS s FINAL
                 {_agent_join}
                 WHERE {where}

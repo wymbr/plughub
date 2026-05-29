@@ -10,12 +10,15 @@ import React, { useState, useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
 import { ChevronRight } from 'lucide-react'
 import { useAuth } from '@/auth/useAuth'
-import { SessionTranscript } from '@/modules/service/components/SessionTranscript'
-import { SegmentList }       from '@/modules/service/components/SegmentList'
+import { SessionTranscript }   from '@/modules/service/components/SessionTranscript'
+import { SegmentList }         from '@/modules/service/components/SegmentList'
+import { WorkflowTraceList }   from '@/modules/service/components/WorkflowTraceList'
+import { WebhookSegmentDetail } from '@/modules/service/components/WebhookSegmentDetail'
 import type { ContactSegment } from '@/modules/service/types'
+import type { TraceNode }      from '@/modules/service/components/WorkflowTraceList'
 import type { ContactFilters } from './types'
-import { DEFAULT_FILTERS }   from './types'
-import { ListaTab }          from './tabs/ListaTab'
+import { DEFAULT_FILTERS }    from './types'
+import { ListaTab }           from './tabs/ListaTab'
 
 // ── Extended filters ──────────────────────────────────────────────────────────
 
@@ -143,12 +146,20 @@ export default function SessionsPage() {
   const { t } = useTranslation('contacts')
   const { tenantId } = useAuth()
 
-  const [filters,         setFilters]         = useState<SessionFilters>(DEFAULT_SESSION_FILTERS)
-  const [detailSessionId, setDetailSessionId] = useState<string | null>(null)
-  const [detailSegment,   setDetailSegment]   = useState<ContactSegment | null>(null)
+  const [filters,            setFilters]            = useState<SessionFilters>(DEFAULT_SESSION_FILTERS)
+  const [detailSessionId,    setDetailSessionId]    = useState<string | null>(null)
+  const [detailSessionCh,    setDetailSessionCh]    = useState<string | null>(null)
+  const [detailSegment,      setDetailSegment]      = useState<ContactSegment | null>(null)
+  const [detailWebhookNode,  setDetailWebhookNode]  = useState<TraceNode | null>(null)
 
-  // Clear segment when session changes
-  useEffect(() => { setDetailSegment(null) }, [detailSessionId])
+  // Clear drill-down state when session changes
+  useEffect(() => {
+    setDetailSegment(null)
+    setDetailWebhookNode(null)
+    if (!detailSessionId) setDetailSessionCh(null)
+  }, [detailSessionId])
+
+  const isWebhookSession = detailSessionCh === 'webhook'
 
   if (!tenantId) {
     return (
@@ -158,14 +169,49 @@ export default function SessionsPage() {
     )
   }
 
-  // ── Level 3: transcript ─────────────────────────────────────────────────────
+  // ── Level 3a: webhook exec detail ──────────────────────────────────────────
+
+  if (detailSessionId && detailWebhookNode) {
+    return (
+      <div className="flex flex-col h-full overflow-hidden">
+        {/* Breadcrumb */}
+        <div className="bg-white border-b border-border px-5 py-2.5 flex items-center gap-2 text-xs flex-shrink-0 sticky top-0 z-10">
+          <button
+            onClick={() => setDetailSessionId(null)}
+            className="text-muted-light hover:text-dark transition-colors font-medium"
+          >
+            {t('sessions.breadcrumbs.sessions')}
+          </button>
+          <ChevronRight className="w-3.5 h-3.5 text-border-strong" aria-hidden="true" />
+          <button
+            onClick={() => setDetailWebhookNode(null)}
+            className="text-muted-light hover:text-dark transition-colors font-medium font-mono"
+            title={detailSessionId}
+          >
+            {'…' + detailSessionId.slice(-14)}
+          </button>
+          <ChevronRight className="w-3.5 h-3.5 text-border-strong" aria-hidden="true" />
+          <span className="text-dark font-medium">{t('trace.execWindow')}</span>
+        </div>
+        <div className="flex-1 overflow-hidden p-3">
+          <WebhookSegmentDetail
+            tenantId={tenantId}
+            node={detailWebhookNode}
+            onBack={() => setDetailWebhookNode(null)}
+          />
+        </div>
+      </div>
+    )
+  }
+
+  // ── Level 3b: agent segment transcript ──────────────────────────────────────
 
   if (detailSessionId && detailSegment) {
     return (
       <div className="h-full overflow-hidden">
         <SessionTranscript
           tenantId={tenantId}
-          sessionId={detailSessionId}
+          sessionId={detailSegment.session_id}
           segment={detailSegment}
           canJoin={detailSegment.ended_at === null}
           onBack={() => setDetailSegment(null)}
@@ -174,7 +220,7 @@ export default function SessionsPage() {
     )
   }
 
-  // ── Level 2: segment list ───────────────────────────────────────────────────
+  // ── Level 2: trace list (webhook) or segment list (regular) ─────────────────
 
   if (detailSessionId) {
     const shortId = detailSessionId.length > 16
@@ -195,15 +241,25 @@ export default function SessionsPage() {
           <span className="text-dark font-medium font-mono" title={detailSessionId}>{shortId}</span>
         </div>
 
-        {/* Segment list — showBack=false because breadcrumb handles navigation */}
         <div className="flex-1 overflow-hidden">
-          <SegmentList
-            tenantId={tenantId}
-            sessionId={detailSessionId}
-            onSelect={seg => setDetailSegment(seg)}
-            onBack={() => setDetailSessionId(null)}
-            showBack={false}
-          />
+          {isWebhookSession ? (
+            /* Arc 19: webhook sessions use WorkflowTraceList (cross-session trace) */
+            <WorkflowTraceList
+              tenantId={tenantId}
+              sessionId={detailSessionId}
+              onSelectAgent={seg => setDetailSegment(seg)}
+              onSelectWebhook={node => setDetailWebhookNode(node)}
+            />
+          ) : (
+            /* Regular sessions use standard SegmentList */
+            <SegmentList
+              tenantId={tenantId}
+              sessionId={detailSessionId}
+              onSelect={seg => setDetailSegment(seg)}
+              onBack={() => setDetailSessionId(null)}
+              showBack={false}
+            />
+          )}
         </div>
       </div>
     )
@@ -234,7 +290,7 @@ export default function SessionsPage() {
         <ListaTab
           tenantId={tenantId}
           filters={contactFilters}
-          onOpenDetail={sid => setDetailSessionId(sid)}
+          onOpenDetail={(sid, ch) => { setDetailSessionId(sid); setDetailSessionCh(ch) }}
         />
       </div>
     </div>

@@ -4601,6 +4601,22 @@ async def _handle_webhook_session_resumed(
         session_id, agent_type_id, step_id, decision,
     )
 
+    # Arc 19: clear watchdog/crash-recovery flags that may have been set while
+    # the session was legitimately suspended. A valid resume proves the session
+    # is alive — stale close flags must be removed so that _close_contact_layer()
+    # and _destroy_conference() can fire correctly when the workflow completes.
+    # Two separate NX guard keys must be cleared:
+    #   contact_close_fired — used by _close_contact_layer (analytics publish)
+    #   close_fired         — used by _destroy_conference  (agent:events publish)
+    try:
+        await redis_client.delete(
+            f"session:{session_id}:contact_close_fired",
+            f"session:{session_id}:close_fired",
+            f"session:{session_id}:closed",
+        )
+    except Exception as _exc:
+        logger.debug("session_resumed: could not clear close flags: session=%s — %s", session_id, _exc)
+
     # Read instance snapshot for lifecycle restore after execution
     native_snapshot: dict | None = None
     if instance_id:
@@ -5352,6 +5368,20 @@ async def _sweep_orphaned_sessions(redis_client: aioredis.Redis) -> None:
             ws_alive = await redis_client.exists(f"session:{session_id}:ws_alive")
             if ws_alive:
                 continue
+
+            # Arc 19: skip ALL webhook channel sessions — they never have a
+            # WebSocket keepalive (ws_alive) because they are background workflow
+            # executions. The suspend/resume/complete lifecycle manages their
+            # closure. The crash detector + instance bootstrap handle stuck
+            # active webhook executions via the routing engine, not the watchdog.
+            try:
+                meta_raw = await redis_client.get(f"session:{session_id}:meta")
+                if meta_raw:
+                    _meta = json.loads(meta_raw)
+                    if _meta.get("channel_type") == "webhook" or _meta.get("channel") == "webhook":
+                        continue  # webhook sessions are never WebSocket orphans
+            except Exception:
+                pass
 
             logger.warning(
                 "session_watchdog: orphaned session detected "

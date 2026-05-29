@@ -471,3 +471,261 @@ def _safe_json(raw: str | None) -> Any:
         return json.loads(raw)
     except Exception:
         return raw
+
+
+# ─── GET /sessions/{session_id}/workflow-trace ────────────────────────────────
+#
+# Arc 19: Returns the ordered list of trace nodes for a webhook workflow session.
+#
+# Response shape:
+#   { nodes: [ TraceNode, ... ] }
+#
+# TraceNode:
+#   {
+#     node_type:      "input_origin" | "webhook_exec" | "specialist_output"
+#     segment_id:     str
+#     session_id:     str          -- may differ from the webhook session for input_origin
+#     agent_type_id:  str
+#     agent_type:     "human" | "ai"
+#     role:           str
+#     pool_id:        str
+#     started_at:     str (ISO)
+#     ended_at:       str | null
+#     duration_ms:    int | null
+#     outcome:        str | null
+#     close_reason:   str | null
+#     sequence_index: int
+#     is_origin:      bool          -- true only for the input_origin node
+#   }
+#
+# Ordering:
+#   1. input_origin node (from origin_session_id's primary segment), if present
+#   2. Webhook primary segments ordered by started_at ascending
+#   3. Specialist sub-segments interleaved at their parent's position
+
+@router.get("/{session_id}/workflow-trace")
+async def get_workflow_trace(
+    session_id: str,
+    request:    Request,
+    tenant_id:  str = Query(...),
+) -> JSONResponse:
+    """
+    Returns the ordered trace node list for a webhook workflow session.
+
+    Fetches:
+      1. origin_session_id from ClickHouse sessions table
+      2. Primary segment of the origin session (the intake agent)
+      3. All segments of the webhook session, ordered by started_at
+    """
+    store = request.app.state.store
+    try:
+        nodes = await asyncio.to_thread(
+            _build_workflow_trace, store.new_client(), store._database, tenant_id, session_id
+        )
+        return JSONResponse(content={"nodes": nodes})
+    except Exception as exc:
+        logger.warning("workflow_trace failed session=%s: %s", session_id, exc)
+        return JSONResponse(content={"nodes": [], "error": "data_unavailable"})
+
+
+def _build_workflow_trace(
+    client:     Any,
+    db:         str,
+    tenant_id:  str,
+    session_id: str,
+) -> list[dict]:
+    """
+    Synchronous helper (runs in a thread via asyncio.to_thread).
+
+    Step 1 — Look up origin_session_id for this webhook session.
+    Step 2 — If present, fetch the primary segment of the origin session.
+    Step 3 — Fetch all segments of the webhook session.
+    Step 4 — Assemble ordered nodes: [input_origin?, ...primary_execs, ...specialists].
+    """
+    nodes: list[dict] = []
+
+    # ── Step 1: resolve origin_session_id ────────────────────────────────────
+    origin_session_id: str | None = None
+    try:
+        res = client.query(
+            f"SELECT origin_session_id FROM {db}.sessions FINAL"
+            " WHERE tenant_id = {{tenant_id:String}} AND session_id = {{session_id:String}}"
+            " LIMIT 1",
+            parameters={"tenant_id": tenant_id, "session_id": session_id},
+        )
+        rows = _rows_to_dicts_local(res)
+        if rows:
+            origin_session_id = rows[0].get("origin_session_id") or None
+    except Exception as exc:
+        logger.debug("workflow_trace: could not fetch origin_session_id: %s", exc)
+
+    # ── Step 2: origin segment (intake agent) ─────────────────────────────────
+    if origin_session_id:
+        try:
+            res = client.query(
+                f"""
+                SELECT
+                    segment_id, session_id, tenant_id,
+                    participant_id, pool_id, agent_type_id,
+                    instance_id, role, agent_type,
+                    parent_segment_id, sequence_index,
+                    started_at, ended_at, duration_ms,
+                    outcome, close_reason, handoff_reason
+                FROM {db}.segments FINAL
+                WHERE tenant_id = {{tenant_id:String}}
+                  AND session_id = {{origin_session_id:String}}
+                  AND role = 'primary'
+                ORDER BY started_at ASC
+                LIMIT 1
+                """,
+                parameters={"tenant_id": tenant_id, "origin_session_id": origin_session_id},
+            )
+            origin_rows = _rows_to_dicts_local(res)
+            if origin_rows:
+                n = origin_rows[0]
+                n["node_type"] = "input_origin"
+                n["is_origin"] = True
+                nodes.append(n)
+        except Exception as exc:
+            logger.debug("workflow_trace: could not fetch origin segment: %s", exc)
+
+    # ── Step 3: webhook session segments ──────────────────────────────────────
+    try:
+        res = client.query(
+            f"""
+            SELECT
+                segment_id, session_id, tenant_id,
+                participant_id, pool_id, agent_type_id,
+                instance_id, role, agent_type,
+                parent_segment_id, sequence_index,
+                started_at, ended_at, duration_ms,
+                outcome, close_reason, handoff_reason
+            FROM {db}.segments FINAL
+            WHERE tenant_id = {{tenant_id:String}}
+              AND session_id = {{session_id:String}}
+            ORDER BY started_at ASC
+            """,
+            parameters={"tenant_id": tenant_id, "session_id": session_id},
+        )
+        seg_rows = _rows_to_dicts_local(res)
+    except Exception as exc:
+        logger.warning("workflow_trace: could not fetch segments: %s", exc)
+        seg_rows = []
+
+    # ── Step 4: classify and order segments ───────────────────────────────────
+    for seg in seg_rows:
+        if seg.get("parent_segment_id"):
+            seg["node_type"] = "specialist_output"
+        else:
+            seg["node_type"] = "webhook_exec"
+        seg["is_origin"] = False
+        nodes.append(seg)
+
+    return nodes
+
+
+def _rows_to_dicts_local(result: Any) -> list[dict]:
+    """Convert ClickHouse query result rows to list of dicts (local helper)."""
+    if not result or not result.result_rows:
+        return []
+    cols = result.column_names
+    out  = []
+    for row in result.result_rows:
+        d: dict = {}
+        for col, val in zip(cols, row):
+            if hasattr(val, "isoformat"):
+                val = val.isoformat()
+            d[col] = val
+        out.append(d)
+    return out
+
+
+# ─── GET /sessions/{session_id}/pipeline-state ────────────────────────────────
+#
+# Arc 19: Returns the pipeline_state (step transitions) and ContextStore entries
+# for a webhook workflow session. Used by WebhookSegmentDetail to show the rich
+# step-level view without accessing Redis from the browser.
+#
+# Response shape:
+#   {
+#     pipeline_state: {
+#       flow_id:         str
+#       current_step_id: str
+#       status:          str
+#       started_at:      str
+#       updated_at:      str
+#       transitions:     [ { from_step, to_step, reason, timestamp }, ... ]
+#     } | null,
+#     context: { [tag]: { value, confidence, source, visibility, updated_at } }
+#   }
+
+@router.get("/{session_id}/pipeline-state")
+async def get_pipeline_state(
+    session_id: str,
+    request:    Request,
+    tenant_id:  str = Query(...),
+) -> JSONResponse:
+    """
+    Reads pipeline_state from Redis for a webhook workflow session.
+    Also reads ContextStore entries (agents_only subset for analytics access).
+
+    Falls back to empty on error — Redis keys may have expired for old sessions.
+    """
+    redis = request.app.state.redis
+    try:
+        pipeline_key = f"{tenant_id}:pipeline:{session_id}"
+        ctx_key      = f"{tenant_id}:ctx:{session_id}"
+
+        pipeline_raw, ctx_raw = await asyncio.gather(
+            redis.get(pipeline_key),
+            redis.hgetall(ctx_key),
+            return_exceptions=True,
+        )
+
+        # ── Pipeline state ───────────────────────────────────────────────────
+        pipeline_state = None
+        if pipeline_raw and not isinstance(pipeline_raw, Exception):
+            try:
+                ps = json.loads(pipeline_raw)
+                pipeline_state = {
+                    "flow_id":         ps.get("flow_id", ""),
+                    "current_step_id": ps.get("current_step_id", ""),
+                    "status":          ps.get("status", ""),
+                    "started_at":      ps.get("started_at", ""),
+                    "updated_at":      ps.get("updated_at", ""),
+                    "transitions":     ps.get("transitions", []),
+                }
+            except Exception:
+                pass
+
+        # ── ContextStore — only agents_only or all visibility entries ────────
+        context: dict = {}
+        if ctx_raw and not isinstance(ctx_raw, Exception):
+            for tag, raw_val in ctx_raw.items():
+                if isinstance(tag, bytes):
+                    tag = tag.decode()
+                if isinstance(raw_val, bytes):
+                    raw_val = raw_val.decode()
+                try:
+                    entry = json.loads(raw_val)
+                    vis   = entry.get("visibility", "all")
+                    # Exclude customer-visible PII (visibility=all) from analytics access
+                    if vis in ("agents_only", "all"):
+                        context[tag] = {
+                            "value":      entry.get("value"),
+                            "confidence": entry.get("confidence"),
+                            "source":     entry.get("source"),
+                            "visibility": vis,
+                            "updated_at": entry.get("updated_at"),
+                        }
+                except Exception:
+                    pass
+
+        return JSONResponse(content={
+            "pipeline_state": pipeline_state,
+            "context":        context,
+        })
+
+    except Exception as exc:
+        logger.warning("pipeline_state failed session=%s: %s", session_id, exc)
+        return JSONResponse(content={"pipeline_state": None, "context": {}})
