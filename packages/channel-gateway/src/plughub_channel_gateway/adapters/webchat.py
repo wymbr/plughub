@@ -592,41 +592,48 @@ class WebchatAdapter:
                                     "participant_id": "...", "role": "..."}
         """
         channel = f"session:{self._session_id}:typing"
-        pubsub  = self._redis.pubsub()
-        await pubsub.subscribe(channel)
-        try:
-            async for msg in pubsub.listen():
-                if msg.get("type") != "message":
-                    continue
-                try:
-                    payload = json.loads(msg["data"])
-                except (json.JSONDecodeError, TypeError):
-                    continue
-                typing_type = payload.get("type")
-                try:
-                    if typing_type == "typing_start":
-                        await self._ws.send_json(
-                            WsTypingStart(
-                                participant_id = payload.get("participant_id", ""),
-                                role           = payload.get("role", "primary"),
-                            ).model_dump()
-                        )
-                    elif typing_type == "typing_stop":
-                        await self._ws.send_json(
-                            WsTypingStop(
-                                participant_id = payload.get("participant_id", ""),
-                            ).model_dump()
-                        )
-                except Exception:
-                    return  # WS closed
-        except asyncio.CancelledError:
-            pass
-        finally:
+        while True:
+            pubsub = self._redis.pubsub()
             try:
-                await pubsub.unsubscribe(channel)
-                await pubsub.aclose()
+                await pubsub.subscribe(channel)
+                async for msg in pubsub.listen():
+                    if msg.get("type") != "message":
+                        continue
+                    try:
+                        payload = json.loads(msg["data"])
+                    except (json.JSONDecodeError, TypeError):
+                        continue
+                    typing_type = payload.get("type")
+                    try:
+                        if typing_type == "typing_start":
+                            await self._ws.send_json(
+                                WsTypingStart(
+                                    participant_id = payload.get("participant_id", ""),
+                                    role           = payload.get("role", "primary"),
+                                ).model_dump()
+                            )
+                        elif typing_type == "typing_stop":
+                            await self._ws.send_json(
+                                WsTypingStop(
+                                    participant_id = payload.get("participant_id", ""),
+                                ).model_dump()
+                            )
+                    except Exception:
+                        return  # WS closed
+            except asyncio.CancelledError:
+                return
             except Exception:
+                # Redis pubsub connection timed out or dropped — reconnect silently.
+                # Typing notifications are best-effort; a brief gap is acceptable.
                 pass
+            finally:
+                try:
+                    await pubsub.unsubscribe(channel)
+                    await pubsub.aclose()
+                except Exception:
+                    pass
+            # Short pause before reconnect to avoid tight-loop on persistent failures
+            await asyncio.sleep(1)
 
     # ── Inbound handlers ───────────────────────────────────────────────────────
 
