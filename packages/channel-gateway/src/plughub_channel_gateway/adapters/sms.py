@@ -49,7 +49,6 @@ from ..models import (
     MessageContent,
     NormalizedInboundEvent,
 )
-from ..channel_capability_registry import write_journey_channel_context
 from .base import ChannelAdapter
 from .sms_provider import ISMSProvider, MockSMSProvider, TwilioProvider, split_sms
 
@@ -163,19 +162,8 @@ class SMSAdapter(ChannelAdapter):
             if pending_raw:
                 pending = json.loads(pending_raw)
                 await self._redis.delete(pending_collect_key)
-                journey_id_p = pending.get("journey_id")
-                # Register channel contact in journey ContextStore
-                if journey_id_p:
-                    await write_journey_channel_context(
-                        redis      = self._redis,
-                        tenant_id  = tenant_id,
-                        journey_id = journey_id_p,
-                        channel    = "sms",
-                        contact_id = contact_id,
-                    )
                 extra = {
                     "collect_token": pending.get("collect_token"),
-                    "journey_id":    journey_id_p,
                     "response_text": full_text,
                 }
                 payload = NormalizedInboundEvent(

@@ -51,7 +51,6 @@ from ..models import (
     MessageContent,
     NormalizedInboundEvent,
 )
-from ..channel_capability_registry import write_journey_channel_context
 from .base import ChannelAdapter
 from .whatsapp_provider import IWhatsAppProvider, MetaCloudProvider
 
@@ -244,17 +243,6 @@ class WhatsAppAdapter(ChannelAdapter):
         if pending_raw:
             pending = json.loads(pending_raw)
             await self._redis.delete(pending_collect_key)
-            journey_id_p = pending.get("journey_id")
-            # Register channel contact in journey ContextStore
-            if journey_id_p:
-                tenant_id = self._settings.tenant_id
-                await write_journey_channel_context(
-                    redis      = self._redis,
-                    tenant_id  = tenant_id,
-                    journey_id = journey_id_p,
-                    channel    = "whatsapp",
-                    contact_id = contact_id,
-                )
             payload = NormalizedInboundEvent(
                 message_id       = str(uuid.uuid4()),
                 contact_id       = contact_id,
@@ -266,7 +254,6 @@ class WhatsAppAdapter(ChannelAdapter):
                 context_snapshot = ContextSnapshot(),
             ).model_dump()
             payload["collect_token"] = pending.get("collect_token")
-            payload["journey_id"]    = journey_id_p
             payload["response_text"] = text
             await self._publish_inbound(payload)
             return

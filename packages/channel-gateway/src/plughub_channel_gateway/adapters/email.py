@@ -61,7 +61,6 @@ from ..models import (
     MessageContent,
     NormalizedInboundEvent,
 )
-from ..channel_capability_registry import write_journey_channel_context
 from .base import ChannelAdapter
 from .email_provider import (
     EmailAttachment,
@@ -202,15 +201,6 @@ class EmailAdapter(ChannelAdapter):
             if pending_raw:
                 pending = json.loads(pending_raw)
                 await self._redis.delete(pending_collect_key)
-                journey_id_p = pending.get("journey_id")
-                if journey_id_p:
-                    await write_journey_channel_context(
-                        redis      = self._redis,
-                        tenant_id  = tenant_id,
-                        journey_id = journey_id_p,
-                        channel    = "email",
-                        contact_id = parsed.from_address,
-                    )
                 payload = NormalizedInboundEvent(
                     message_id       = str(uuid.uuid4()),
                     contact_id       = parsed.from_address,
@@ -222,7 +212,6 @@ class EmailAdapter(ChannelAdapter):
                     context_snapshot = ContextSnapshot(),
                 ).model_dump()
                 payload["collect_token"] = pending.get("collect_token")
-                payload["journey_id"]    = journey_id_p
                 payload["response_text"] = new_text
                 await self._publish_inbound(payload)
             else:
