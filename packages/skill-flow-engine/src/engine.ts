@@ -73,11 +73,14 @@ export interface SkillFlowEngineConfig {
    * Priority: persistSuspend (Arc 4) → persistSuspendWebhook (Arc 19) → wall-clock.
    */
   persistSuspendWebhook?: (params: {
-    tenant_id:    string
-    session_id:   string
-    step_id:      string
-    resume_token: string
+    tenant_id:     string
+    session_id:    string
+    step_id:       string
+    resume_token:  string
     timeout_hours: number
+    /** Arc 19 Fase D: forwarded from suspend step for business-hours deadline calculation. */
+    business_hours?: boolean
+    calendar_id?:    string
   }) => Promise<{ resume_expires_at: string }>
 
   /**
