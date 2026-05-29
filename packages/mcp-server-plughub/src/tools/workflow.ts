@@ -75,19 +75,20 @@ export function registerWorkflowTools(
     "the provided context entries, and links it to the current session via " +
     "origin_session_id. The workflow runs independently — the current session " +
     "continues normally after this call. Returns { workflow_session_id, status }.",
-    // Pass empty schema to MCP SDK — ZodOptional<ZodString> is incompatible with
-    // ZodRawShapeCompat in the MCP SDK version used in this project. Full input
-    // validation is done inside the handler via WorkflowTriggerInputSchema.safeParse().
-    {},
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    WorkflowTriggerInputSchema.shape as any,
     withGuard("workflow_trigger", async (input: Record<string, unknown>) => {
+      console.log("[workflow_trigger] invoked input=%j", input)
       const parsed = WorkflowTriggerInputSchema.safeParse(input)
       if (!parsed.success) {
+        console.error("[workflow_trigger] validation failed: %s", parsed.error.message)
         return {
           content: [{ type: "text" as const, text: `Invalid input: ${parsed.error.message}` }],
           isError: true,
         }
       }
       const { tenant_id, skill_id, origin_session_id, context_json, customer_id } = parsed.data
+      console.log("[workflow_trigger] parsed ok tenant=%s skill=%s origin=%s", tenant_id, skill_id, origin_session_id)
 
       // ── Parse context_json ────────────────────────────────────────────────
       let context: Record<string, string> = {}
@@ -104,6 +105,7 @@ export function registerWorkflowTools(
 
       // ── POST to channel-gateway trigger endpoint ───────────────────────────
       const url  = `${deps.channelGatewayUrl}/v1/channels/webhook/${encodeURIComponent(skill_id)}`
+      console.log("[workflow_trigger] POST %s body=%j", url, { tenant_id, trigger_type: "task", origin_session_id })
       const body = {
         tenant_id,
         trigger_type:      "task",
