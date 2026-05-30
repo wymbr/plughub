@@ -39,25 +39,23 @@ A spec original em [`docs/arcos/arc18-workflow-execution-trace.md`](docs/arcos/a
 
 ---
 
-## Collect step — `persistCollectWebhook` em resume_tokens *(deferred)*
+## Step `delegate` + MCP tool `workflow_resume` *(a implementar)*
 
-O step `collect` em modo webhook suspende e grava o `collect_token` apenas no `pipeline_state.results`. Diferente do step `suspend` (que grava em `{tenant}:resume_tokens`), o collect não expõe o token via o hash Redis, então o endpoint `POST /v1/channels/webhook/resume/{token}` não consegue encontrá-lo.
+Decisão arquitetural: workflows nunca fazem I/O diretamente (`notify`, `collect`, `menu`). Para interagir com o cliente, o workflow usa o step `delegate` que suspende o workflow e despacha um agente especialista. O agente faz o I/O normalmente e ao concluir chama `workflow_resume` (MCP tool) para retomar o workflow.
 
-**Fix necessário no skill-flow-engine** (`steps/collect.ts`): chamar `ctx.persistCollectWebhook(collectToken, sessionId, stepId, expiresAt)` que grava `{collectToken} → {session_id}:{step_id}:{expires_at}` em `{tenant}:resume_tokens`, exatamente como `persistSuspendWebhook` faz. Com isso, a mesma URL de resume funciona para suspend e collect sem workaround.
+**Spec completa**: `docs/arcos/delegate-workflow-io.md`
 
-**Workaround atual (demo)**: `redis-cli HSET "tenant_demo:resume_tokens" {collect_token} "{session_id}:{step_id}:{expires_at}"` antes de chamar o endpoint.
+**Componentes a implementar:**
 
----
+1. **Step `delegate` no skill-flow-engine** (`steps/delegate.ts`) — combina suspend + agent dispatch. O engine gera `resume_token`, grava em `{tenant}:resume_tokens`, escreve `session.workflow_resume_token` no ContextStore da sessão-filho, despacha o agente via routing engine no pool declarado e retorna `__suspended__`.
 
-## Webhook collect — detecção de processo pendente para cliente *(deferred)*
+2. **MCP tool `workflow_resume`** (`tools/workflow.ts`) — chamada pelo agente ao concluir o I/O. Faz `POST /v1/channels/webhook/resume/{resume_token}` com `decision` e `payload`. O agente usa `@ctx.session.workflow_resume_token` para obter o token.
 
-Quando o `aguardar_confirmacao` (collect step) executa, ele aguarda resposta do cliente via canal. No webchat, o cliente não tem sessão aberta — precisaria abrir uma nova sessão e o sistema detectar que há um processo pendente.
+3. **Refactoring de `agent_delegate`** (`tools/delegation.ts`) — eliminar o modelo de polling. A nova versão é dispatch puro (sem job Redis, sem `agent_delegate_status`). O step `task` continua usando o mecanismo atual para especialistas de curta duração (conferencistas IA síncronos). O step `delegate` é exclusivo para I/O assíncrono com o cliente.
 
-**Dois caminhos possíveis:**
-1. **Sistema-iniciado**: o collect step cria uma sessão outbound usando `contact_identifier` (coletado no intake). Requer que o channel-gateway suporte sessões outbound para webchat com `customer_id` como identificador.
-2. **Cliente-iniciado**: quando o cliente abre nova sessão webchat, o routing engine consulta se há collect pendente para o `customer_id` e roteia direto para a confirmação. Requer hook no routing antes da alocação normal.
+4. **Perfil de step atualizado** — `collect` e `notify` movem para proibidos no perfil `workflow`. Apenas `task/delegate/choice/catch/escalate/complete/invoke/reason/suspend/receive` permitidos. Validado no parser YAML e no engine.
 
-**Canais com ANI** (WhatsApp, voz): `customer_id` já é o número do cliente, então o collect pode criar a sessão outbound usando esse identificador diretamente. Para esses canais o fluxo funciona sem mudança adicional.
+5. **Refactor de `skill_portabilidade_demo_v1.yaml`** — substituir `notify` e `collect` por `delegate` chamando agentes de I/O correspondentes.
 
 ---
 

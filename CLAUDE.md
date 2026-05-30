@@ -46,6 +46,7 @@ plughub/
     modulos/                  ← docs de páginas/features da UI (uma por rota)
     arcos/                    ← docs de implementação por Arc (detalhe técnico)
       arc4-workflow.md        ← Arc 4 completo (workflow, calendar, collect, webhooks)
+      delegate-workflow-io.md ← Padrão delegate: workflow delega I/O a agente via suspend/resume
       arc5-segments.md        ← Arc 5 ContactSegment analytics
       arc6-evaluation.md      ← Arc 6 Evaluation platform completo
       arc7-auth.md            ← Arc 7 Auth + ABAC completo
