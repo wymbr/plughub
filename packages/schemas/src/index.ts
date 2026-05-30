@@ -359,6 +359,8 @@ export type {
   ReceiveStep,
   DelegationField,
   DelegationInput,
+  SuspendStep,
+  DelegateStep,
 } from "./skill"
 
 // ── Usage Metering ───────────────────────────

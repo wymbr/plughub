@@ -32,6 +32,7 @@ import { withGuard }      from "../infra/tool-guard"
 
 export interface WorkflowDeps {
   channelGatewayUrl: string   // e.g. http://channel-gateway:8010
+  tenantId:          string
 }
 
 // ─── Schemas ─────────────────────────────────────────────────────────────────
@@ -147,6 +148,105 @@ export function registerWorkflowTools(
             skill_id,
             status:              "triggered",
           }),
+        }],
+      }
+    }),
+  )
+
+  // ── workflow_resume ─────────────────────────────────────────────────────────
+  //
+  // Called by an I/O agent at the end of its skill to resume the parent
+  // workflow that delegated work to it via the delegate() step.
+  //
+  // The agent reads the resume_token from its own ContextStore:
+  //   @ctx.session.workflow_resume_token   (written by the delegate step engine)
+  //
+  // This tool posts to channel-gateway POST /v1/channels/webhook/resume/{token}.
+  //
+  // decision values:
+  //   "input"    — agent collected data (e.g. customer confirmed, form filled)
+  //   "approved" — agent received an approval signal
+  //   "rejected" — agent received a rejection or cancellation
+  //   "timeout"  — agent timed out waiting for customer response
+  //
+  // payload: any data collected by the agent, merged into the delegate step's
+  //   output_value in the workflow pipeline_state.
+
+  server.tool(
+    "workflow_resume",
+    "Resume a parent workflow that delegated I/O to this agent via the delegate() step. " +
+    "Call this as the last step of your skill after completing the assigned I/O task. " +
+    "Pass resume_token from @ctx.session.workflow_resume_token (interpolated by skill-flow-engine). " +
+    "decision: 'input' (data collected), 'approved', 'rejected', or 'timeout'.",
+    {
+      resume_token: z.string().min(1).describe(
+        "The resume token for the parent workflow. In skill-flow YAML use " +
+        "@ctx.session.workflow_resume_token — the engine resolves it from ContextStore."
+      ),
+      decision: z.enum(["input", "approved", "rejected", "timeout"]).describe(
+        "Outcome of the I/O task. 'input' = data collected from customer. " +
+        "'approved'/'rejected' = explicit customer choice. 'timeout' = no response received."
+      ),
+      payload: z.record(z.unknown()).optional().describe(
+        "Data collected by the agent. Merged into the delegate step output in workflow pipeline_state."
+      ),
+    } as any,
+    withGuard("workflow_resume", async (input: Record<string, unknown>) => {
+      const parsed = z.object({
+        resume_token: z.string().min(1),
+        decision:     z.enum(["input", "approved", "rejected", "timeout"]),
+        payload:      z.record(z.unknown()).optional(),
+      }).safeParse(input)
+
+      if (!parsed.success) {
+        return {
+          isError: true,
+          content: [{ type: "text" as const, text: JSON.stringify({
+            error: "validation_error",
+            message: parsed.error.message,
+          }) }],
+        }
+      }
+
+      const { resume_token, decision, payload } = parsed.data
+
+      // POST to channel-gateway webhook resume endpoint
+      const url = `${deps.channelGatewayUrl}/v1/channels/webhook/resume/${encodeURIComponent(resume_token)}`
+      let res: Response
+      try {
+        res = await fetch(url, {
+          method:  "POST",
+          headers: { "Content-Type": "application/json" },
+          body:    JSON.stringify({
+            tenant_id: deps.tenantId,
+            payload:   { decision, ...(payload ?? {}) },
+          }),
+        })
+      } catch (err) {
+        return {
+          isError: true,
+          content: [{ type: "text" as const, text: JSON.stringify({
+            error: "channel_gateway_unreachable",
+            message: String(err),
+          }) }],
+        }
+      }
+
+      if (!res.ok) {
+        const text = await res.text().catch(() => "")
+        return {
+          isError: true,
+          content: [{ type: "text" as const, text: JSON.stringify({
+            error: `resume_failed_http_${res.status}`,
+            message: text,
+          }) }],
+        }
+      }
+
+      return {
+        content: [{
+          type: "text" as const,
+          text: JSON.stringify({ resumed: true, decision }),
         }],
       }
     }),

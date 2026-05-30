@@ -535,16 +535,36 @@ def _build_workflow_trace(
     session_id: str,
 ) -> list[dict]:
     """
-    Synchronous helper (runs in a thread via asyncio.to_thread).
+    Synchronous helper — builds the ordered trace node list for a webhook session.
 
-    Step 1 — Look up origin_session_id for this webhook session.
-    Step 2 — If present, fetch the primary segment of the origin session.
-    Step 3 — Fetch all segments of the webhook session.
-    Step 4 — Assemble ordered nodes: [input_origin?, ...primary_execs, ...specialists].
+    Star topology (see docs/arcos/delegate-workflow-io.md):
+      All child sessions (B, C, ...) have origin_session_id = root session A.
+      The trace for Session A shows intake origin + all child sessions flat.
+      The trace for Session B (webhook) shows its own segments + intake origin.
+
+    Steps:
+      1. Look up origin_session_id (is this session a child of another root?)
+      2. If origin exists → fetch intake origin segment (from origin session)
+      3. Fetch own segments (webhook execution windows)
+      4. Reverse lookup → find child sessions where origin_session_id = this session
+         (only for root sessions: Session A if it IS the root, or Session B when
+          viewing from Session B's perspective)
+      5. Assemble ordered nodes:
+           [input_origin?]
+           + [webhook_exec segments] interleaved with [delegate_child sessions]
+           all ordered by started_at ASC
     """
     nodes: list[dict] = []
+    _seg_cols = """
+        segment_id, session_id, tenant_id,
+        participant_id, pool_id, agent_type_id,
+        instance_id, role, agent_type,
+        parent_segment_id, sequence_index,
+        started_at, ended_at, duration_ms,
+        outcome, close_reason, handoff_reason
+    """
 
-    # ── Step 1: resolve origin_session_id ────────────────────────────────────
+    # ── Step 1: resolve origin_session_id of this session ────────────────────
     origin_session_id: str | None = None
     try:
         res = client.query(
@@ -559,18 +579,12 @@ def _build_workflow_trace(
     except Exception as exc:
         logger.debug("workflow_trace: could not fetch origin_session_id: %s", exc)
 
-    # ── Step 2: origin segment (intake agent) ─────────────────────────────────
+    # ── Step 2: origin segment (intake agent from root session) ───────────────
     if origin_session_id:
         try:
             res = client.query(
                 f"""
-                SELECT
-                    segment_id, session_id, tenant_id,
-                    participant_id, pool_id, agent_type_id,
-                    instance_id, role, agent_type,
-                    parent_segment_id, sequence_index,
-                    started_at, ended_at, duration_ms,
-                    outcome, close_reason, handoff_reason
+                SELECT {_seg_cols}
                 FROM {db}.segments FINAL
                 WHERE tenant_id = {{tenant_id:String}}
                   AND session_id = {{origin_session_id:String}}
@@ -589,17 +603,11 @@ def _build_workflow_trace(
         except Exception as exc:
             logger.debug("workflow_trace: could not fetch origin segment: %s", exc)
 
-    # ── Step 3: webhook session segments ──────────────────────────────────────
+    # ── Step 3: own segments (webhook execution windows) ──────────────────────
     try:
         res = client.query(
             f"""
-            SELECT
-                segment_id, session_id, tenant_id,
-                participant_id, pool_id, agent_type_id,
-                instance_id, role, agent_type,
-                parent_segment_id, sequence_index,
-                started_at, ended_at, duration_ms,
-                outcome, close_reason, handoff_reason
+            SELECT {_seg_cols}
             FROM {db}.segments FINAL
             WHERE tenant_id = {{tenant_id:String}}
               AND session_id = {{session_id:String}}
@@ -612,7 +620,6 @@ def _build_workflow_trace(
         logger.warning("workflow_trace: could not fetch segments: %s", exc)
         seg_rows = []
 
-    # ── Step 4: classify and order segments ───────────────────────────────────
     for seg in seg_rows:
         if seg.get("parent_segment_id"):
             seg["node_type"] = "specialist_output"
@@ -621,7 +628,59 @@ def _build_workflow_trace(
         seg["is_origin"] = False
         nodes.append(seg)
 
-    return nodes
+    # ── Step 4: reverse lookup — delegate child sessions ──────────────────────
+    # Star topology: child sessions have origin_session_id = this session_id.
+    # Fetch the primary segment of each child session (the I/O agent that was
+    # dispatched by a delegate() step). Ordered by started_at so they appear
+    # chronologically interleaved with the webhook_exec nodes.
+    try:
+        res = client.query(
+            f"""
+            SELECT s.session_id AS child_session_id, s.origin_session_id
+            FROM {db}.sessions FINAL AS s
+            WHERE s.tenant_id = {{tenant_id:String}}
+              AND s.origin_session_id = {{session_id:String}}
+            ORDER BY s.opened_at ASC
+            """,
+            parameters={"tenant_id": tenant_id, "session_id": session_id},
+        )
+        child_sessions = _rows_to_dicts_local(res)
+    except Exception as exc:
+        logger.debug("workflow_trace: could not fetch child sessions: %s", exc)
+        child_sessions = []
+
+    for child in child_sessions:
+        child_sid = child.get("child_session_id") or ""
+        if not child_sid:
+            continue
+        try:
+            res = client.query(
+                f"""
+                SELECT {_seg_cols}
+                FROM {db}.segments FINAL
+                WHERE tenant_id = {{tenant_id:String}}
+                  AND session_id = {{child_session_id:String}}
+                  AND role = 'primary'
+                ORDER BY started_at ASC
+                LIMIT 1
+                """,
+                parameters={"tenant_id": tenant_id, "child_session_id": child_sid},
+            )
+            child_segs = _rows_to_dicts_local(res)
+            for seg in child_segs:
+                seg["node_type"] = "delegate_child"
+                seg["is_origin"] = False
+                nodes.append(seg)
+        except Exception as exc:
+            logger.debug("workflow_trace: could not fetch child segment session=%s: %s", child_sid, exc)
+
+    # ── Step 5: sort all nodes by started_at (chronological) ─────────────────
+    # input_origin is always first; rest by started_at ASC
+    origin_nodes = [n for n in nodes if n.get("node_type") == "input_origin"]
+    other_nodes  = [n for n in nodes if n.get("node_type") != "input_origin"]
+    other_nodes.sort(key=lambda n: n.get("started_at") or "")
+
+    return origin_nodes + other_nodes
 
 
 def _rows_to_dicts_local(result: Any) -> list[dict]:

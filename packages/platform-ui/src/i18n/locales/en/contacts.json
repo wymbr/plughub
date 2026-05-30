@@ -135,7 +135,8 @@
     "type": {
       "input":              "input",
       "exec":               "exec",
-      "output":             "output"
+      "output":             "output",
+      "delegate":           "delegate"
     }
   },
   "monitor": {

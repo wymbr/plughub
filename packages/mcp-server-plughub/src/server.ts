@@ -111,6 +111,11 @@ export function createServer(allDeps?: AllDeps): McpServer {
 
   const agentEventDeps: AgentEventDeps = { redis, kafka }
 
+  const workflowDeps: WorkflowDeps = {
+    channelGatewayUrl: process.env["CHANNEL_GATEWAY_HTTP_URL"] ?? "http://localhost:8010",
+    tenantId:          process.env["PLUGHUB_TENANT_ID"] ?? process.env["TENANT_ID"] ?? "tenant_demo",
+  }
+
   // Registrar todas as tools
   registerBpmTools(server, bpmDeps)
   registerRuntimeTools(server, runtimeDeps)
@@ -123,6 +128,7 @@ export function createServer(allDeps?: AllDeps): McpServer {
   registerDeployTools(server, deployDeps)
   registerCalendarTools(server, calendarDeps)
   registerAgentEventTools(server, agentEventDeps)
+  registerWorkflowTools(server, workflowDeps)
 
   return server
 }

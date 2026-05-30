@@ -815,6 +815,33 @@ export const FlowStepSchema = z.discriminatedUnion("type", [
     on_reject:      z.object({ next: z.string() }).optional(),
     metadata:       z.record(z.unknown()).optional(),
   }),
+  // Delegate — workflow suspends and dispatches an agent to handle I/O.
+  // The agent calls workflow_resume (MCP tool) when done. Only valid in
+  // workflow profile (channel_type: webhook). Agents must never use delegate.
+  // See: docs/arcos/delegate-workflow-io.md
+  z.object({
+    type:           z.literal("delegate"),
+    id:             z.string(),
+    /** Pool where the I/O agent will be allocated via routing engine. */
+    pool:           z.string().min(1),
+    /**
+     * Key→value pairs written to the child session's ContextStore before
+     * the agent is activated. Supports @ctx.* and $.pipeline_state.* references.
+     * The engine always writes session.workflow_resume_token automatically —
+     * no need to declare it here.
+     */
+    context:        z.record(z.string()).optional(),
+    /** How long to wait for the agent to call workflow_resume. Default: 24h. */
+    timeout_hours:  z.number().positive().default(24),
+    business_hours: z.boolean().default(false),
+    calendar_id:    z.string().uuid().optional(),
+    /** Next step when agent calls workflow_resume with decision=input|approved. */
+    on_resume:      z.object({ next: z.string() }),
+    /** Next step when agent calls workflow_resume with decision=rejected. */
+    on_reject:      z.object({ next: z.string() }).optional(),
+    /** Next step when timeout_hours elapses without a resume. */
+    on_timeout:     z.object({ next: z.string() }),
+  }),
 ])
 export type FlowStep = z.infer<typeof FlowStepSchema>
 
@@ -831,6 +858,8 @@ export type NotifyStep    = z.infer<typeof NotifyStepSchema>
 export type MenuStep      = z.infer<typeof MenuStepSchema>
 // Arc 4 — suspend step (inline schema in FlowStepSchema discriminated union)
 export type SuspendStep          = Extract<FlowStep, { type: "suspend" }>
+// delegate step (inline schema in FlowStepSchema discriminated union)
+export type DelegateStep         = Extract<FlowStep, { type: "delegate" }>
 // Arc 4 extension — collect step
 // CollectStep type already exported above
 // Masked input — transaction steps already exported above (BeginTransactionStep, EndTransactionStep)

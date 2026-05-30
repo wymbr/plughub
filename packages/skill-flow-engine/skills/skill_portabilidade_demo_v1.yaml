@@ -1,80 +1,56 @@
 id: skill_portabilidade_demo_v1
 name: Portabilidade Demo
-version: "1.1"
+version: "2.0"
 description: |
   Fluxo de portabilidade de número — demonstração Arc 19 (webhook workflow).
-  Processo multi-sessão com 3 etapas: validação pela operadora (suspend/resume),
-  confirmação com o cliente (collect com requires: [text] — canal neutro).
-  Lê @ctx.session.numero_atual e @ctx.session.operadora_destino escritos pelo intake.
-  Tempo estimado: 1–3 dias úteis.
+  v2.0: usa step delegate para I/O com o cliente em vez de notify/collect direto.
+  Princípio: workflow nunca faz I/O — delega a agentes via delegate().
+  Etapas:
+    1. suspend: aguarda aprovação da operadora (48h)
+    2. delegate: agente entrega resultado e coleta confirmação do cliente
+  Lê @ctx.session.numero_atual, @ctx.session.operadora_destino e
+  @ctx.session.contact_identifier escritos pelo intake.
 classification:
   type: vertical
 
-entry: coletar_dados
+entry: solicitar_operadora
 
 steps:
-  - id: coletar_dados
-    type: notify
-    message: "🔄 Processo de portabilidade iniciado. Coletando seus dados de cadastro..."
-    on_success: solicitar_operadora
-    on_failure: solicitar_operadora
-
+  # ── Etapa 1: aguardar aprovação da operadora ─────────────────────────────────
+  # Suspend puro — o workflow dorme até o sinal externo de aprovação/rejeição.
+  # A notificação de início já foi enviada pelo intake antes de acionar o workflow.
   - id: solicitar_operadora
     type: suspend
     reason: approval
     timeout_hours: 48
     business_hours: true
     on_resume:
-      next: notificar_aprovado    # decision=approved → approved
+      next: notificar_e_confirmar    # decision=approved
     on_reject:
-      next: notificar_rejeitado   # decision=rejected → rejected
+      next: encerrar_rejeitado       # decision=rejected
     on_timeout:
-      next: timeout_operadora
+      next: encerrar_timeout
 
-  - id: aguardar_confirmacao
-    type: collect
-    target:
-      type: customer
-      id: "@ctx.session.contact_identifier"
-    requires: [text]
-    prompt: "✅ Portabilidade do número {{@ctx.session.numero_atual}} para {{@ctx.session.operadora_destino}} foi pré-aprovada! Confirme para prosseguir com a transferência."
+  # ── Etapa 2: notificar aprovação e coletar confirmação do cliente ─────────────
+  # delegate(): workflow suspende e despacha agente para I/O com o cliente.
+  # O agente recebe contact_identifier e numero_atual via context.
+  # Ao concluir, o agente chama workflow_resume com decision=input|timeout.
+  - id: notificar_e_confirmar
+    type: delegate
+    pool: portabilidade_confirmacao
+    context:
+      contact_identifier: "@ctx.session.contact_identifier"
+      numero_atual:        "@ctx.session.numero_atual"
+      operadora_destino:   "@ctx.session.operadora_destino"
     timeout_hours: 24
-    output_as: confirmacao_portabilidade
-    on_response:
-      next: confirmar_portabilidade
+    on_resume:
+      next: encerrar_sucesso          # decision=input (cliente confirmou)
+    on_reject:
+      next: encerrar_cancelado        # decision=rejected (cliente cancelou)
     on_timeout:
-      next: timeout_cliente
+      next: encerrar_timeout_cliente  # decision=timeout
 
-  - id: confirmar_portabilidade
-    type: notify
-    message: "🎉 Portabilidade confirmada! Em até 1 dia útil o número estará ativo na nova operadora."
-    on_success: encerrar_sucesso
-    on_failure: encerrar_sucesso
-
-  - id: notificar_aprovado
-    type: notify
-    message: "✅ Portabilidade aprovada pela operadora. Aguardando confirmação do cliente."
-    on_success: aguardar_confirmacao
-    on_failure: aguardar_confirmacao
-
-  - id: notificar_rejeitado
-    type: notify
-    message: "❌ Portabilidade não aprovada pela operadora. Entre em contato para mais informações."
-    on_success: encerrar_rejeitado
-    on_failure: encerrar_rejeitado
-
-  - id: timeout_operadora
-    type: notify
-    message: "⏳ Prazo da operadora excedido. Reabrindo processo automaticamente."
-    on_success: encerrar_timeout
-    on_failure: encerrar_timeout
-
-  - id: timeout_cliente
-    type: notify
-    message: "⏳ Confirmação não recebida. Processo encerrado por inatividade."
-    on_success: encerrar_timeout
-    on_failure: encerrar_timeout
-
+  # ── Desfechos ────────────────────────────────────────────────────────────────
   - id: encerrar_sucesso
     type: complete
     outcome: resolved
@@ -83,6 +59,14 @@ steps:
     type: complete
     outcome: failed
 
+  - id: encerrar_cancelado
+    type: complete
+    outcome: failed
+
   - id: encerrar_timeout
+    type: complete
+    outcome: failed
+
+  - id: encerrar_timeout_cliente
     type: complete
     outcome: failed

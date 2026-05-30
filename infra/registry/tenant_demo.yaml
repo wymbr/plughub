@@ -97,6 +97,15 @@ pools:
     max_concurrent_sessions: 20
     sla_target_ms: 172800000  # 48h em ms
 
+  - pool_id: portabilidade_confirmacao
+    # Arc 19 delegate pattern: pool do agente de I/O de confirmação de portabilidade.
+    # Acionado pelo delegate() step em skill_portabilidade_demo_v1 após aprovação
+    # da operadora. O agente notifica o cliente e coleta sua confirmação.
+    # O agente chama workflow_resume ao concluir, retomando o processo webhook.
+    description: "Pool de confirmação de portabilidade com o cliente (delegate I/O)"
+    channel_types: [webchat, whatsapp]
+    sla_target_ms: 86400000  # 24h em ms
+
   - pool_id: reembolso_ia
     # Pool do agente de intake de reembolso.
     # Coleta número do pedido + motivo e persiste no ContextStore.
@@ -412,6 +421,24 @@ agent_types:
       - mcp-server-plughub:context_get
     capabilities:
       channels: webhook
+
+  # Arc 19 delegate: agente de I/O de confirmação de portabilidade.
+  # Despachado pelo delegate() step do skill_portabilidade_demo_v1 após aprovação
+  # da operadora. Notifica o cliente, coleta confirmação e chama workflow_resume.
+  - agent_type_id: agente_confirmacao_portabilidade_v1
+    framework: plughub-native
+    execution_model: stateless
+    role: executor
+    max_concurrent_sessions: 10
+    pools: [portabilidade_confirmacao]
+    skills: [{skill_id: skill_agente_confirmacao_portabilidade_v1}]
+    permissions:
+      - mcp-server-plughub:agent_heartbeat
+      - mcp-server-plughub:notification_send
+      - mcp-server-plughub:interaction_request
+      - mcp-server-plughub:workflow_resume
+    capabilities:
+      channels: webchat,whatsapp
 
   # Avaliador echo — teste do receive step em tempo real.
   # Acionado via on_human_start do pool retencao_humano.

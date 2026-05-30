@@ -27,6 +27,7 @@ import { executeBeginTransaction } from "./steps/begin-transaction"
 import { executeEndTransaction }   from "./steps/end-transaction"
 import { executeResolve }          from "./steps/resolve"
 import { executeReceive }          from "./steps/receive"
+import { executeDelegate }         from "./steps/delegate"
 
 // ─────────────────────────────────────────────
 // Tipos de contexto e resultado de step
@@ -168,6 +169,26 @@ export interface StepContext {
   }): Promise<{ send_at: string; expires_at: string }>
 
   /**
+   * Arc 19 delegate step — wired by orchestrator-bridge for webhook sessions.
+   * Called when a delegate step executes for the first time.
+   * Responsibilities:
+   *   1. Create a child session in the target pool via routing engine
+   *      (publishes conversations.inbound with pool_id, origin_session_id)
+   *   2. Write context entries + workflow_resume_token to child ContextStore
+   *   3. origin_session_id is set to the root session (Session A) by the caller
+   * Returns the child_session_id for tracing.
+   * If absent, the delegate step falls back to on_timeout (config error).
+   */
+  persistDelegate?(params: {
+    step_id:           string
+    resume_token:      string
+    pool:              string
+    context:           Record<string, string>
+    timeout_hours:     number
+    origin_session_id: string
+  }): Promise<{ child_session_id: string }>
+
+  /**
    * When set, indicates this is a resume run rather than a fresh suspend.
    * The suspend step reads this instead of suspending again.
    */
@@ -236,6 +257,7 @@ export async function executeStep(
     case "end_transaction":   return executeEndTransaction(step, ctx)
     case "resolve":           return executeResolve(step, ctx)
     case "receive":           return executeReceive(step, ctx)
+    case "delegate":          return executeDelegate(step, ctx)
     default:
       // TypeScript garante exhaustiveness via discriminated union
       throw new Error(`Tipo de step desconhecido: ${(step as FlowStep).type}`)

@@ -18,7 +18,7 @@ import type { ContactSegment } from '../types'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
-export type TraceNodeType = 'input_origin' | 'webhook_exec' | 'specialist_output'
+export type TraceNodeType = 'input_origin' | 'webhook_exec' | 'specialist_output' | 'delegate_child'
 
 export interface TraceNode extends ContactSegment {
   node_type:  TraceNodeType
@@ -81,6 +81,13 @@ const NODE_CONFIG: Record<TraceNodeType, {
     bgClass:   'bg-green-50 border-green-200',
     textClass: 'text-green-800',
     dotClass:  'bg-green-400',
+  },
+  delegate_child: {
+    label:     'trace.type.delegate',
+    icon:      '⇄',
+    bgClass:   'bg-purple-50 border-purple-200',
+    textClass: 'text-purple-800',
+    dotClass:  'bg-purple-400',
   },
 }
 
@@ -186,6 +193,7 @@ export function WorkflowTraceList({ tenantId, sessionId, onSelectAgent, onSelect
     if (node.node_type === 'webhook_exec') {
       onSelectWebhook(node)
     } else {
+      // input_origin, specialist_output, delegate_child → agent transcript
       onSelectAgent(node)
     }
   }

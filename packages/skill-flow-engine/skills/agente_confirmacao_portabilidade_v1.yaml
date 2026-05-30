@@ -1,0 +1,85 @@
+# agente_confirmacao_portabilidade_v1.yaml
+# Agente de I/O para confirmação de portabilidade (Tier 3 — I/O atômico)
+#
+# Pool: portabilidade_confirmacao
+# Acionado por: delegate() step em skill_portabilidade_demo_v1
+#
+# Recebe via ContextStore (escrito pelo delegate step):
+#   session.workflow_resume_token  — token para retomar o workflow pai
+#   session.contact_identifier     — número/email do cliente para contato
+#   session.numero_atual           — número que está sendo portado
+#   session.operadora_destino      — operadora de destino
+#
+# Fluxo:
+#   1. notificar_aprovacao — notify: informa ao cliente que a portabilidade foi aprovada
+#   2. coletar_confirmacao — menu: pede confirmação do cliente (sim/não)
+#   3. retornar_confirmado / retornar_cancelado / retornar_timeout
+#      — invoke: chama workflow_resume com o resultado
+#   4. finalizar — complete
+
+id: skill_agente_confirmacao_portabilidade_v1
+name: "Portabilidade — Agente de Confirmação v1"
+version: "1.0"
+description: |
+  Agente de I/O de confirmação de portabilidade.
+  Notifica o cliente da aprovação e coleta sua confirmação para prosseguir.
+  Usa workflow_resume para retomar o processo webhook após a interação.
+classification:
+  type: vertical
+  domain: portabilidade
+
+entry: notificar_aprovacao
+
+steps:
+
+  # ── Etapa 1: notificar aprovação ──────────────────────────────────────────────
+  - id: notificar_aprovacao
+    type: notify
+    message: "✅ Sua solicitação de portabilidade do número {{@ctx.session.numero_atual}} para {{@ctx.session.operadora_destino}} foi aprovada pela operadora!"
+    on_success: coletar_confirmacao
+    on_failure: coletar_confirmacao
+
+  # ── Etapa 2: coletar confirmação ──────────────────────────────────────────────
+  - id: coletar_confirmacao
+    type: menu
+    prompt: "Deseja confirmar a portabilidade? A transferência será realizada em até 1 dia útil."
+    interaction: button
+    options:
+      - id: confirmar
+        label: "✅ Sim, confirmar portabilidade"
+      - id: cancelar
+        label: "❌ Cancelar solicitação"
+    output_as: resposta_cliente
+    timeout_s: 86400
+    on_success: retornar_resultado
+    on_failure: retornar_timeout
+    on_timeout: retornar_timeout
+    on_disconnect: retornar_timeout
+
+  # ── Etapa 3a: retornar resultado ao workflow ──────────────────────────────────
+  - id: retornar_resultado
+    type: invoke
+    tool: workflow_resume
+    input:
+      resume_token: "@ctx.session.workflow_resume_token"
+      decision: "input"
+      payload:
+        resposta: "$.pipeline_state.resposta_cliente"
+        confirmado: "$.pipeline_state.resposta_cliente == 'confirmar'"
+    on_success: finalizar
+    on_failure: finalizar
+
+  # ── Etapa 3b: timeout sem resposta ───────────────────────────────────────────
+  - id: retornar_timeout
+    type: invoke
+    tool: workflow_resume
+    input:
+      resume_token: "@ctx.session.workflow_resume_token"
+      decision: "timeout"
+    on_success: finalizar
+    on_failure: finalizar
+
+  # ── Finalização ───────────────────────────────────────────────────────────────
+  - id: finalizar
+    type: complete
+    outcome: resolved
