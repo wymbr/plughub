@@ -220,20 +220,20 @@ export function WebhookSegmentDetail({ tenantId, node, onBack }: Props) {
         )}
 
         {/* ── Step timeline ────────────────────────────────────────────────── */}
-        {ps && ps.transitions && ps.transitions.length > 0 && (
+        {ps && (
           <section>
             <h3 className="text-xs font-semibold text-muted uppercase tracking-wide mb-3">
               {t('trace.stepTimeline')} · {ps.flow_id}
             </h3>
             <div className="pl-1">
-              {ps.transitions.map((tr, idx) => (
+              {ps.transitions && ps.transitions.map((tr, idx) => (
                 <StepRow
                   key={`${tr.from_step}-${idx}`}
                   t={tr}
                   isLast={idx === ps.transitions.length - 1}
                 />
               ))}
-              {/* Final state node */}
+              {/* Current state node — always shown */}
               <div className="flex items-center gap-3">
                 <div className={`w-3.5 h-3.5 rounded-full border-2 flex-shrink-0 z-10 ${
                   ps.status === 'completed'
@@ -245,7 +245,13 @@ export function WebhookSegmentDetail({ tenantId, node, onBack }: Props) {
                     : 'bg-border border-border-strong'
                 }`} />
                 <span className="text-sm font-mono font-medium text-dark">{ps.current_step_id}</span>
-                <span className="text-xs text-muted ml-1">{ps.status}</span>
+                <span className={`text-xs px-1.5 py-0.5 rounded ml-1 ${
+                  ps.status === 'suspended'
+                    ? 'bg-amber-100 text-amber-700'
+                    : ps.status === 'completed'
+                    ? 'bg-green-100 text-green-700'
+                    : 'bg-surface-muted text-muted'
+                }`}>{ps.status}</span>
               </div>
             </div>
           </section>

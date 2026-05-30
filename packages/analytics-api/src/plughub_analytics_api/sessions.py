@@ -518,9 +518,54 @@ async def get_workflow_trace(
       3. All segments of the webhook session, ordered by started_at
     """
     store = request.app.state.store
+    redis = request.app.state.redis
+
+    # Redis fallback: ClickHouse may have lost origin_session_id for sessions
+    # created before the consumer fix (parse_routed overwrote it with NULL).
+    # Read it from the ContextStore, which is the authoritative source.
+    origin_session_id_override: str | None = None
+    try:
+        ctx_raw = await redis.hget(
+            f"{tenant_id}:ctx:{session_id}",
+            "session.origin_session_id",
+        )
+        if ctx_raw:
+            import json as _json
+            entry = _json.loads(ctx_raw)
+            origin_session_id_override = entry.get("value") or None
+    except Exception:
+        pass  # non-fatal — ClickHouse value used as primary
+
+    # Delegate child sessions: the delegate step writes
+    # {step_id}:__child_session_id__ to pipeline_state.results.
+    # Session C has origin_session_id = Session A (star topology), so the
+    # standard reverse-lookup (WHERE origin_session_id = Session B) misses it.
+    # Read pipeline_state from Redis to find delegate children directly.
+    delegate_child_ids: list[str] = []
+    try:
+        pipeline_key = f"{tenant_id}:pipeline:{session_id}"
+        ps_raw = await redis.get(pipeline_key)
+        if not ps_raw:
+            # Fallback for pre-fix sessions with segment-suffixed key
+            seg_keys = await redis.keys(f"{pipeline_key}--seg--*")
+            if seg_keys:
+                ps_raw = await redis.get(seg_keys[0])
+        if ps_raw:
+            import json as _json2
+            ps = _json2.loads(ps_raw)
+            results = ps.get("results") or {}
+            for k, v in results.items():
+                if isinstance(k, str) and k.endswith(":__child_session_id__") and v:
+                    delegate_child_ids.append(str(v))
+    except Exception:
+        pass  # non-fatal
+
     try:
         nodes = await asyncio.to_thread(
-            _build_workflow_trace, store.new_client(), store._database, tenant_id, session_id
+            _build_workflow_trace,
+            store.new_client(), store._database, tenant_id, session_id,
+            origin_session_id_override,
+            delegate_child_ids,
         )
         return JSONResponse(content={"nodes": nodes})
     except Exception as exc:
@@ -529,10 +574,12 @@ async def get_workflow_trace(
 
 
 def _build_workflow_trace(
-    client:     Any,
-    db:         str,
-    tenant_id:  str,
-    session_id: str,
+    client:                     Any,
+    db:                         str,
+    tenant_id:                  str,
+    session_id:                 str,
+    origin_session_id_override: str | None = None,
+    delegate_child_ids:         list[str] | None = None,
 ) -> list[dict]:
     """
     Synchronous helper — builds the ordered trace node list for a webhook session.
@@ -565,6 +612,9 @@ def _build_workflow_trace(
     """
 
     # ── Step 1: resolve origin_session_id of this session ────────────────────
+    # Primary: ClickHouse sessions FINAL (may be NULL for pre-fix sessions
+    # where parse_routed overwrote it). Fallback: override from Redis ContextStore
+    # passed by the async caller (get_workflow_trace).
     origin_session_id: str | None = None
     try:
         res = client.query(
@@ -578,6 +628,14 @@ def _build_workflow_trace(
             origin_session_id = rows[0].get("origin_session_id") or None
     except Exception as exc:
         logger.debug("workflow_trace: could not fetch origin_session_id: %s", exc)
+
+    # Apply Redis fallback when ClickHouse returned NULL
+    if not origin_session_id and origin_session_id_override:
+        origin_session_id = origin_session_id_override
+        logger.debug(
+            "workflow_trace: using Redis fallback for origin_session_id "
+            "session=%s origin=%s", session_id, origin_session_id,
+        )
 
     # ── Step 2: origin segment (intake agent from root session) ───────────────
     if origin_session_id:
@@ -628,15 +686,24 @@ def _build_workflow_trace(
         seg["is_origin"] = False
         nodes.append(seg)
 
-    # ── Step 4: reverse lookup — delegate child sessions ──────────────────────
-    # Star topology: child sessions have origin_session_id = this session_id.
-    # Fetch the primary segment of each child session (the I/O agent that was
-    # dispatched by a delegate() step). Ordered by started_at so they appear
-    # chronologically interleaved with the webhook_exec nodes.
+    # ── Step 4: delegate child sessions ───────────────────────────────────────
+    # Two sources for delegate children (star topology means children point
+    # to the ROOT session, not to Session B, so reverse lookup by
+    # origin_session_id = session_id would miss them):
+    #
+    #   a) pipeline_state.results: {step_id}:__child_session_id__ keys
+    #      written by executeDelegate — passed in as delegate_child_ids.
+    #      This is the primary, most reliable source.
+    #
+    #   b) ClickHouse reverse lookup origin_session_id = session_id (legacy:
+    #      catches any children that DO point to this session directly).
+    child_session_ids: set[str] = set(delegate_child_ids or [])
+
+    # Legacy reverse lookup (kept for backward compat)
     try:
         res = client.query(
             f"""
-            SELECT s.session_id AS child_session_id, s.origin_session_id
+            SELECT s.session_id AS child_session_id
             FROM {db}.sessions FINAL AS s
             WHERE s.tenant_id = {{tenant_id:String}}
               AND s.origin_session_id = {{session_id:String}}
@@ -644,13 +711,14 @@ def _build_workflow_trace(
             """,
             parameters={"tenant_id": tenant_id, "session_id": session_id},
         )
-        child_sessions = _rows_to_dicts_local(res)
+        for row in _rows_to_dicts_local(res):
+            sid = row.get("child_session_id") or ""
+            if sid:
+                child_session_ids.add(sid)
     except Exception as exc:
-        logger.debug("workflow_trace: could not fetch child sessions: %s", exc)
-        child_sessions = []
+        logger.debug("workflow_trace: could not fetch child sessions by origin: %s", exc)
 
-    for child in child_sessions:
-        child_sid = child.get("child_session_id") or ""
+    for child_sid in child_session_ids:
         if not child_sid:
             continue
         try:
@@ -740,6 +808,17 @@ async def get_pipeline_state(
             redis.hgetall(ctx_key),
             return_exceptions=True,
         )
+
+        # Backward-compat: pre-fix bridge stored webhook pipeline under
+        # {session_id}--seg--{8chars} (conference-specialist logic applied
+        # incorrectly to primary webhook agents).  Scan for the old key.
+        if not pipeline_raw or isinstance(pipeline_raw, Exception):
+            try:
+                seg_keys = await redis.keys(f"{pipeline_key}--seg--*")
+                if seg_keys:
+                    pipeline_raw = await redis.get(seg_keys[0])
+            except Exception:
+                pass
 
         # ── Pipeline state ───────────────────────────────────────────────────
         pipeline_state = None

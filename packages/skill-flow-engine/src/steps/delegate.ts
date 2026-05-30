@@ -31,6 +31,7 @@
 import { randomUUID }    from "crypto"
 import type { DelegateStep } from "@plughub/schemas"
 import type { StepContext, StepResult } from "../executor"
+import { resolveInputMap } from "../interpolate"
 
 export async function executeDelegate(
   step: DelegateStep,
@@ -124,11 +125,11 @@ export async function executeDelegate(
   if (ctx.persistSuspendWebhook) {
     try {
       const result = await ctx.persistSuspendWebhook({
-        step_id:        step.id,
+        step_id:       step.id,
         resume_token,
-        timeout_hours:  step.timeout_hours,
-        business_hours: step.business_hours,
-        calendar_id:    step.calendar_id,
+        timeout_hours: step.timeout_hours,
+        ...(step.business_hours !== undefined ? { business_hours: step.business_hours } : {}),
+        ...(step.calendar_id                 ? { calendar_id:    step.calendar_id }    : {}),
       })
       expires_at = result.resume_expires_at
     } catch (err) {
@@ -138,12 +139,20 @@ export async function executeDelegate(
   }
 
   // 2. Resolve context entries — interpolate @ctx.* and $.pipeline_state.*
+  // Uses the same resolveInputMap used by the invoke step so @ctx.* and
+  // $.pipeline_state.* references are properly resolved before being written
+  // to the child session's ContextStore.
   const resolvedContext: Record<string, string> = {}
   if (step.context) {
-    for (const [key, value] of Object.entries(step.context)) {
-      // Interpolation is handled by the engine before calling executeStep.
-      // Values arriving here are already resolved strings.
-      resolvedContext[key] = String(value)
+    const resolved = await resolveInputMap(
+      step.context as Record<string, unknown>,
+      ctx,
+      ctx.contextStore,
+    )
+    for (const [key, value] of Object.entries(resolved)) {
+      if (value !== undefined && value !== null) {
+        resolvedContext[key] = String(value)
+      }
     }
   }
 

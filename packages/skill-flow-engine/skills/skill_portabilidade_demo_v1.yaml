@@ -25,23 +25,64 @@ steps:
     timeout_hours: 48
     business_hours: true
     on_resume:
-      next: notificar_e_confirmar    # decision=approved
+      next: determinar_canal_confirmacao    # decision=approved → determina canal antes de delegar
     on_reject:
-      next: encerrar_rejeitado       # decision=rejected
+      next: encerrar_rejeitado             # decision=rejected
     on_timeout:
       next: encerrar_timeout
 
-  # ── Etapa 2: notificar aprovação e coletar confirmação do cliente ─────────────
-  # delegate(): workflow suspende e despacha agente para I/O com o cliente.
-  # O agente recebe contact_identifier e numero_atual via context.
-  # Ao concluir, o agente chama workflow_resume com decision=input|timeout.
+  # ── Etapa 1b: determinar canal de confirmação ─────────────────────────────────
+  # Session B define qual canal usar para contatar o cliente, ANTES de delegar.
+  # O agente_confirmacao lê session.confirmation_channel para decidir:
+  #   inbound_only → complete silencioso (Session B fica pendente; cliente reconnecta)
+  #   email        → envia email proativamente (implementar adapter)
+  #   whatsapp     → envia WhatsApp proativamente (implementar adapter)
+  # Heurística atual: contact_identifier com "@" → email; caso contrário, inbound_only.
+  # Adicionar caso "whatsapp" quando pool tiver adapter WhatsApp configurado.
+  - id: determinar_canal_confirmacao
+    type: choice
+    conditions:
+      - field:    "@ctx.session.contact_identifier"
+        operator: contains
+        value:    "@"
+        next:     setar_canal_email
+    default: setar_canal_inbound_only
+
+  - id: setar_canal_email
+    type: invoke
+    tool: context_set
+    input:
+      tag:        "session.confirmation_channel"
+      value:      "email"
+      confidence: 1.0
+      visibility: "agents_only"
+    on_success: notificar_e_confirmar
+    on_failure: notificar_e_confirmar
+
+  - id: setar_canal_inbound_only
+    type: invoke
+    tool: context_set
+    input:
+      tag:        "session.confirmation_channel"
+      value:      "inbound_only"
+      confidence: 1.0
+      visibility: "agents_only"
+    on_success: notificar_e_confirmar
+    on_failure: notificar_e_confirmar
+
+  # ── Etapa 2: delegar I/O ao agente de confirmação ────────────────────────────
+  # agente_confirmacao lê confirmation_channel e decide o comportamento:
+  #   inbound_only → complete sem chamar workflow_resume (Session B fica suspenso;
+  #                  pending_workflow key válida; cliente reconecta e confirma)
+  #   outbound     → contata cliente proativamente e chama workflow_resume
   - id: notificar_e_confirmar
     type: delegate
     pool: portabilidade_confirmacao
     context:
-      contact_identifier: "@ctx.session.contact_identifier"
-      numero_atual:        "@ctx.session.numero_atual"
-      operadora_destino:   "@ctx.session.operadora_destino"
+      contact_identifier:   "@ctx.session.contact_identifier"
+      numero_atual:          "@ctx.session.numero_atual"
+      operadora_destino:     "@ctx.session.operadora_destino"
+      confirmation_channel:  "@ctx.session.confirmation_channel"
     timeout_hours: 24
     on_resume:
       next: encerrar_sucesso          # decision=input (cliente confirmou)

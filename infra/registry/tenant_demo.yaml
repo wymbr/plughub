@@ -231,6 +231,8 @@ agent_types:
       - mcp-server-plughub:notification_send
       - mcp-server-plughub:interaction_request
       - mcp-server-plughub:context_set
+      - mcp-server-plughub:pending_workflow_get
+      - mcp-server-plughub:workflow_resume
     capabilities:
       channels: webchat,whatsapp
 

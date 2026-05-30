@@ -207,13 +207,18 @@ export default function SessionsPage() {
   // ── Level 3b: agent segment transcript ──────────────────────────────────────
 
   if (detailSessionId && detailSegment) {
+    // Cross-session navigation (e.g. input_origin from WorkflowTraceList belongs
+    // to a different session than detailSessionId). When segment.session_id differs
+    // from the current context session, omit the segment filter so SessionTranscript
+    // shows all messages instead of filtering by segment time-window.
+    const isCrossSession = detailSegment.session_id !== detailSessionId
     return (
       <div className="h-full overflow-hidden">
         <SessionTranscript
           tenantId={tenantId}
           sessionId={detailSegment.session_id}
-          segment={detailSegment}
-          canJoin={detailSegment.ended_at === null}
+          segment={isCrossSession ? undefined : detailSegment}
+          canJoin={!isCrossSession && detailSegment.ended_at === null}
           onBack={() => setDetailSegment(null)}
         />
       </div>

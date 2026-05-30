@@ -28,9 +28,40 @@ classification:
   type: vertical
   domain: portabilidade
 
-entry: notificar_aprovacao
+entry: verificar_canal
 
 steps:
+
+  # ── Etapa 0: verificar canal de operação ──────────────────────────────────────
+  # Session B seta session.confirmation_channel antes de delegar.
+  # Prioridade:
+  #   1. delegate_resume_token presente → conference specialist (cliente conectado)
+  #      → prosseguir com notify+menu normalmente
+  #   2. confirmation_channel == "inbound_only" → canal sem outbound (webchat, webrtc)
+  #      → complete silencioso: Session B fica suspenso no delegate step
+  #         pending_workflow key permanece válida
+  #         cliente reconecta → pending_workflow_get detecta → menu → workflow_resume
+  #   3. default → canal outbound (whatsapp, email, sms) → prosseguir
+  - id: verificar_canal
+    type: choice
+    conditions:
+      - field:    "@ctx.session.delegate_resume_token"
+        operator: exists
+        next:     notificar_aprovacao    # conference specialist — cliente conectado
+      - field:    "@ctx.session.confirmation_channel"
+        operator: eq
+        value:    "inbound_only"
+        next:     aguardar_inbound       # inbound-only: Session B fica pendente
+    default: notificar_aprovacao         # outbound capable → prosseguir
+
+  # ── Etapa 0b: aguardar inbound ────────────────────────────────────────────────
+  # Canal inbound-only (webchat, webrtc). Não é possível contatar o cliente
+  # proativamente. O agente encerra sem chamar workflow_resume, deixando
+  # Session B suspenso. O cliente reconecta via intake e o mecanismo
+  # pending_workflow_get oferece a continuação.
+  - id: aguardar_inbound
+    type: complete
+    outcome: resolved
 
   # ── Etapa 1: notificar aprovação ──────────────────────────────────────────────
   - id: notificar_aprovacao
@@ -50,13 +81,13 @@ steps:
       - id: cancelar
         label: "❌ Cancelar solicitação"
     output_as: resposta_cliente
-    timeout_s: 86400
+    timeout_s: 600     # 10 min — inbound: fecha sozinho se cliente não conectar
     on_success: retornar_resultado
     on_failure: retornar_timeout
     on_timeout: retornar_timeout
     on_disconnect: retornar_timeout
 
-  # ── Etapa 3a: retornar resultado ao workflow ──────────────────────────────────
+  # ── Etapa 3a: retornar resultado ao workflow (Session B) ─────────────────────
   - id: retornar_resultado
     type: invoke
     tool: workflow_resume
@@ -66,7 +97,7 @@ steps:
       payload:
         resposta: "$.pipeline_state.resposta_cliente"
         confirmado: "$.pipeline_state.resposta_cliente == 'confirmar'"
-    on_success: finalizar
+    on_success: retornar_sessao_pai
     on_failure: finalizar
 
   # ── Etapa 3b: timeout sem resposta ───────────────────────────────────────────
@@ -76,6 +107,21 @@ steps:
     input:
       resume_token: "@ctx.session.workflow_resume_token"
       decision: "timeout"
+    on_success: retornar_sessao_pai
+    on_failure: finalizar
+
+  # ── Etapa 3c: retornar à sessão pai (Session A-new) ───────────────────────────
+  # Quando o agente roda como conference specialist em Session A-new (não como
+  # sessão independente em Session C), o delegate_resume_token está disponível
+  # em @ctx.session.delegate_resume_token e resume o delegate step do pai.
+  # Quando roda em Session C (independente), este token é null → invoke falha
+  # silenciosamente → on_failure: finalizar. Comportamento correto para ambos.
+  - id: retornar_sessao_pai
+    type: invoke
+    tool: workflow_resume
+    input:
+      resume_token: "@ctx.session.delegate_resume_token"
+      decision: "input"
     on_success: finalizar
     on_failure: finalizar
 

@@ -103,10 +103,118 @@ steps:
     interaction: text
     output_as: contact_identifier
     timeout_s: 180
-    on_success: confirmar_dados
+    on_success: verificar_pendencia    # ← agora vai para verificação antes de confirmar
     on_failure: avisar_timeout
     on_timeout: avisar_timeout
     on_disconnect: finalizar_timeout
+
+  # ── Etapa 3c: verificar pendência para este contato ──────────────────────────
+  # Checa no Redis se já existe um processo pendente aguardando confirmação
+  # do cliente com este contato (portabilidade aprovada pela operadora).
+  # Resultado em $.pipeline_state.pendencia.found (true/false).
+  - id: verificar_pendencia
+    type: invoke
+    tool: pending_workflow_get
+    input:
+      contact_identifier: "$.pipeline_state.contact_identifier"
+      tenant_id:          "$.tenant_id"
+    output_as: pendencia
+    on_success: avaliar_pendencia
+    on_failure: confirmar_dados    # fallback: prossegue normalmente se a tool falhar
+
+  # ── Etapa 3d: avaliar se há pendência ────────────────────────────────────────
+  - id: avaliar_pendencia
+    type: choice
+    conditions:
+      - field:    "$.pipeline_state.pendencia.found"
+        operator: eq
+        value:    true
+        next:     menu_continuidade
+    default: confirmar_dados     # sem pendência → fluxo normal
+
+  # ── Etapa 3e: menu de continuidade (pendência encontrada) ────────────────────
+  # Informa o cliente que há um processo de portabilidade pendente e pergunta
+  # se deseja continuar, cancelar ou iniciar um novo atendimento.
+  - id: menu_continuidade
+    type: menu
+    prompt: "✅ Identificamos que sua portabilidade do número **{{$.pipeline_state.pendencia.context.numero_atual}}** para **{{$.pipeline_state.pendencia.context.operadora_destino}}** foi **aprovada pela operadora** e está aguardando sua confirmação!\n\nO que deseja fazer?"
+    interaction: button
+    options:
+      - id: continuar
+        label: "✅ Confirmar portabilidade"
+      - id: cancelar_pendente
+        label: "❌ Cancelar portabilidade"
+      - id: novo
+        label: "🔄 Novo atendimento"
+    output_as: decisao_continuidade
+    timeout_s: 300
+    on_success: processar_decisao
+    on_failure: confirmar_dados    # fallback: prossegue normalmente
+    on_timeout: confirmar_dados
+    on_disconnect: finalizar_timeout
+
+  # ── Etapa 3f: processar decisão de continuidade ───────────────────────────────
+  - id: processar_decisao
+    type: choice
+    conditions:
+      - field:    "$.pipeline_state.decisao_continuidade"
+        operator: eq
+        value:    "continuar"
+        next:     retomar_processo
+      - field:    "$.pipeline_state.decisao_continuidade"
+        operator: eq
+        value:    "cancelar_pendente"
+        next:     cancelar_processo
+    default: confirmar_dados    # "novo" → inicia novo atendimento
+
+  # ── Etapa 3g: retomar processo via conference specialist ─────────────────────
+  # Cria um agente de confirmação (agente_confirmacao_portabilidade_v1) como
+  # conference specialist DENTRO desta sessão (Session A-new). O agente roda
+  # no stream do cliente atual — sem troca de WebSocket.
+  # O specialist recebe workflow_resume_token (= token de Session B) via context
+  # e chama workflow_resume ao concluir. Session A-new suspende enquanto
+  # o specialist atende o cliente; encerra quando o specialist terminar.
+  - id: retomar_processo
+    type: delegate
+    pool: portabilidade_confirmacao
+    context:
+      workflow_resume_token: "$.pipeline_state.pendencia.resume_token"
+      numero_atual:          "$.pipeline_state.pendencia.context.numero_atual"
+      operadora_destino:     "$.pipeline_state.pendencia.context.operadora_destino"
+    timeout_hours: 1
+    on_resume:
+      next: finalizar       # specialist concluiu (via resume)
+    on_reject:
+      next: finalizar       # specialist cancelou
+    on_timeout:
+      next: finalizar       # timeout sem resposta do cliente
+
+  # ── Etapa 3h: cancelar processo pendente ─────────────────────────────────────
+  # Cancelamento é direto — sem precisar de specialist.
+  - id: cancelar_processo
+    type: invoke
+    tool: workflow_resume
+    input:
+      resume_token: "$.pipeline_state.pendencia.resume_token"
+      decision:     "rejected"
+      payload:
+        source:   "customer_reconnect"
+        resposta: "cancelar"
+    on_success: avisar_cancelamento
+    on_failure: avisar_erro_retomada
+
+  # ── Notificações de resultado ─────────────────────────────────────────────────
+  - id: avisar_cancelamento
+    type: notify
+    message: "❌ Portabilidade cancelada conforme sua solicitação. Se quiser iniciar um novo processo, é só entrar em contato novamente."
+    on_success: finalizar
+    on_failure: finalizar
+
+  - id: avisar_erro_retomada
+    type: notify
+    message: "Não foi possível processar sua solicitação no momento. Por favor, tente novamente mais tarde."
+    on_success: finalizar
+    on_failure: finalizar
 
   # ── Etapa 4: confirmar dados antes de iniciar ────────────────────────────────
   - id: confirmar_dados

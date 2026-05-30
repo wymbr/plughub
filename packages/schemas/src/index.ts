@@ -482,7 +482,7 @@ export {
 export type {
   SuspendReason,
   SuspendNotify,
-  SuspendStep,
+  // SuspendStep exported from ./skill — removed here to avoid duplicate identifier
   WorkflowStatus,
   WorkflowInstance,
   WorkflowTriggerType,

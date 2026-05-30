@@ -39,23 +39,20 @@ A spec original em [`docs/arcos/arc18-workflow-execution-trace.md`](docs/arcos/a
 
 ---
 
-## Step `delegate` + MCP tool `workflow_resume` *(a implementar)*
+## Step `delegate` + MCP tool `workflow_resume` ✅
 
-Decisão arquitetural: workflows nunca fazem I/O diretamente (`notify`, `collect`, `menu`). Para interagir com o cliente, o workflow usa o step `delegate` que suspende o workflow e despacha um agente especialista. O agente faz o I/O normalmente e ao concluir chama `workflow_resume` (MCP tool) para retomar o workflow.
+Padrão implementado completo. Componentes entregues:
 
-**Spec completa**: `docs/arcos/delegate-workflow-io.md`
-
-**Componentes a implementar:**
-
-1. **Step `delegate` no skill-flow-engine** (`steps/delegate.ts`) — combina suspend + agent dispatch. O engine gera `resume_token`, grava em `{tenant}:resume_tokens`, escreve `session.workflow_resume_token` no ContextStore da sessão-filho, despacha o agente via routing engine no pool declarado e retorna `__suspended__`.
-
-2. **MCP tool `workflow_resume`** (`tools/workflow.ts`) — chamada pelo agente ao concluir o I/O. Faz `POST /v1/channels/webhook/resume/{resume_token}` com `decision` e `payload`. O agente usa `@ctx.session.workflow_resume_token` para obter o token.
-
-3. **Refactoring de `agent_delegate`** (`tools/delegation.ts`) — eliminar o modelo de polling. A nova versão é dispatch puro (sem job Redis, sem `agent_delegate_status`). O step `task` continua usando o mecanismo atual para especialistas de curta duração (conferencistas IA síncronos). O step `delegate` é exclusivo para I/O assíncrono com o cliente.
-
-4. **Perfil de step atualizado** — `collect` e `notify` movem para proibidos no perfil `workflow`. Apenas `task/delegate/choice/catch/escalate/complete/invoke/reason/suspend/receive` permitidos. Validado no parser YAML e no engine.
-
-5. **Refactor de `skill_portabilidade_demo_v1.yaml`** — substituir `notify` e `collect` por `delegate` chamando agentes de I/O correspondentes.
+- `skill-flow-engine/src/steps/delegate.ts` — executor do step
+- `skill-flow-engine/src/engine.ts` — `persistDelegate` em `SkillFlowEngineConfig` + wiring em `_buildContext`
+- `mcp-server-plughub/src/tools/workflow.ts` — MCP tool `workflow_resume`
+- `channel-gateway/adapters/webhook.py` — `handle_delegate` (cria sessão-filho + ContextStore)
+- `channel-gateway/main.py` — `POST /v1/channels/webhook/delegate` (antes de `/{skill_id}`)
+- `e2e-tests/services/skill-flow-service/src/index.ts` — `persistDelegateFn` + `CHANNEL_GATEWAY_URL`
+- `docker-compose.demo.yml` — `CHANNEL_GATEWAY_URL` + `CALENDAR_API_URL` no skill-flow-service
+- `skill_portabilidade_demo_v1.yaml` v2.0 — usa `delegate` (sem notify/collect no workflow)
+- `agente_confirmacao_portabilidade_v1.yaml` — agente de I/O de confirmação
+- `infra/registry/tenant_demo.yaml` — pool `portabilidade_confirmacao`
 
 ---
 

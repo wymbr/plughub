@@ -864,6 +864,7 @@ export async function startServer(config: ServerConfig): Promise<void> {
     registerAgentEventTools(mcpServer, { redis, kafka })
     registerWorkflowTools(mcpServer, {
       channelGatewayUrl: process.env["CHANNEL_GATEWAY_URL"] ?? "http://channel-gateway:8010",
+      tenantId:          process.env["PLUGHUB_TENANT_ID"] ?? process.env["TENANT_ID"] ?? "tenant_demo",
     })
 
     transports.set(transport.sessionId, transport)

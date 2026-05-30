@@ -71,6 +71,50 @@ from .segment_enricher import SegmentEnricher
 
 logger = logging.getLogger("plughub.analytics.consumer")
 
+# ── Channel cache ─────────────────────────────────────────────────────────────
+# conversations.inbound carries channel ('webhook', 'webchat', etc.).
+# conversations.routed does NOT carry channel (routing engine only knows pool/agent)
+# so parse_routed writes channel='' which REPLACES the inbound row in
+# ReplacingMergeTree, losing the channel.  The recovery subquery in
+# reports_query.py compensates, but only before ClickHouse merges rows.
+#
+# Solution: cache session_id→channel when parse_inbound fires; inject it back
+# into the parse_routed sessions row before writing to ClickHouse.
+# Key: (tenant_id, session_id) → channel string.  FIFO eviction at _CHANNEL_CACHE_MAX.
+_channel_cache: dict[tuple[str, str], str] = {}
+_CHANNEL_CACHE_MAX = 50_000
+
+
+def _cache_inbound_channel(payload: dict) -> None:
+    """Store channel + origin_session_id for a session when conversations.inbound fires."""
+    session_id        = payload.get("session_id")
+    tenant_id         = payload.get("tenant_id")
+    channel           = payload.get("channel", "")
+    origin_session_id = payload.get("origin_session_id") or None
+    if session_id and tenant_id and (channel or origin_session_id):
+        key = (tenant_id, session_id)
+        if len(_channel_cache) >= _CHANNEL_CACHE_MAX:
+            _channel_cache.pop(next(iter(_channel_cache)))
+        _channel_cache[key] = (channel, origin_session_id)
+
+
+def _inject_cached_channel(rows: list[dict]) -> None:
+    """For parse_routed rows: restore channel + origin_session_id from cache."""
+    for row in rows:
+        if row.get("table") == "sessions":
+            key    = (row.get("tenant_id", ""), row.get("session_id", ""))
+            cached = _channel_cache.get(key)
+            if not cached:
+                continue
+            cached_channel, cached_origin = cached
+            # Restore channel if parse_routed wrote ''
+            if not row.get("channel", "") and cached_channel:
+                row["channel"] = cached_channel
+            # Restore origin_session_id if missing
+            if not row.get("origin_session_id") and cached_origin:
+                row["origin_session_id"] = cached_origin
+
+
 _TOPICS = [
     "conversations.inbound",
     "conversations.routed",
@@ -299,6 +343,15 @@ async def _process_message(
 
     # Normalise to a list so routed/queued can return multiple rows
     rows = result if isinstance(result, list) else [result]
+
+    # ── Channel preservation across parse_routed ──────────────────────────
+    # parse_inbound carries channel ('webhook', 'webchat', …); populate cache.
+    # parse_routed writes channel='' (routing event has no channel field);
+    # restore from cache so ReplacingMergeTree keeps the original channel.
+    if topic == "conversations.inbound":
+        _cache_inbound_channel(raw)
+    elif topic == "conversations.routed":
+        _inject_cached_channel(rows)
 
     # ── Arc 8: pause interval Redis state machine ─────────────────────────
     # agent.lifecycle may return action=open (store in Redis) or

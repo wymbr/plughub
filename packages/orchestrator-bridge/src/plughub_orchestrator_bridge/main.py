@@ -424,10 +424,17 @@ async def activate_native_agent(
     # lock.  Use the agent's unique segment_id — each participant in the
     # session has a distinct segment, so two hook agents running in parallel
     # on the same session never collide.
-    if segment_id:
+    #
+    # Arc 19: webhook sessions are PRIMARY (non-conference) agents — they must
+    # NOT use a segment-suffixed pipeline_session_id.  The analytics-api
+    # GET /sessions/{id}/pipeline-state reads from {tenant}:pipeline:{session_id}
+    # directly; a suffix would make the pipeline inaccessible to analytics.
+    # Only apply the suffix when conference_id is set (specialist isolation).
+    if segment_id and conference_id:
         payload["pipeline_session_id"] = f"{session_id}--seg--{segment_id[:8]}"
     elif conference_id:
         payload["pipeline_session_id"] = f"{session_id}--conf--{conference_id[:8]}"
+    # else: primary agents (including webhook) use session_id directly — no suffix
 
     url = f"{SKILL_FLOW_URL}/execute"
     try:

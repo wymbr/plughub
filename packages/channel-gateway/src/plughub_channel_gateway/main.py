@@ -655,6 +655,81 @@ class WebhookResumeRequest(BaseModel):
     tenant_id: str
     payload:   dict | None = None
 
+class WebhookDelegateRequest(BaseModel):
+    tenant_id:         str
+    pool_id:           str
+    customer_id:       str
+    origin_session_id: str
+    resume_token:      str
+    context:           dict[str, str] = {}
+    timeout_hours:     float = 24.0
+
+class WebhookDelegateConferenceRequest(BaseModel):
+    tenant_id:     str
+    pool_id:       str
+    session_id:    str     # parent session (customer connected here)
+    customer_id:   str
+    resume_token:  str     # delegate step resume token for parent session
+    context:       dict[str, str] = {}
+    timeout_hours: float = 1.0
+
+
+@app.post("/v1/channels/webhook/delegate-conference", status_code=201)
+async def webhook_delegate_conference(body: WebhookDelegateConferenceRequest) -> dict:
+    """
+    Create a conference specialist in an existing agent (webchat) session.
+
+    Called by skill-flow-service when delegate() fires in a non-webhook session
+    (e.g. intake reconnect — Session A-new). The specialist joins the parent
+    session as a conference participant; messages go to the parent stream so
+    the customer stays on the same WebSocket connection.
+
+    Returns: { session_id } — the PARENT session_id (specialist runs inside it).
+    """
+    if _webhook_adapter is None:
+        raise HTTPException(status_code=503, detail="Webhook adapter not initialised")
+
+    session_id = await _webhook_adapter.handle_delegate_conference(
+        tenant_id     = body.tenant_id,
+        pool_id       = body.pool_id,
+        session_id    = body.session_id,
+        customer_id   = body.customer_id,
+        resume_token  = body.resume_token,
+        context       = body.context,
+        timeout_hours = body.timeout_hours,
+    )
+    return {"session_id": session_id}
+
+
+@app.post("/v1/channels/webhook/delegate", status_code=201)
+async def webhook_delegate(body: WebhookDelegateRequest) -> dict:
+    """
+    Create a child session in a specific (non-webhook) pool for delegate I/O.
+
+    Called by the skill-flow-service when a delegate step fires in a webhook workflow.
+    The child session is a normal webchat session in the target pool. The agent
+    allocated to it receives workflow_resume_token in its ContextStore, enabling
+    it to resume the parent workflow when I/O is complete.
+
+    NOTE: This route must be declared BEFORE /{skill_id} to avoid being captured
+    by the path-parameter route in Starlette's first-match routing.
+
+    Returns: { session_id } — the new child session ID.
+    """
+    if _webhook_adapter is None:
+        raise HTTPException(status_code=503, detail="Webhook adapter not initialised")
+
+    child_session_id = await _webhook_adapter.handle_delegate(
+        tenant_id         = body.tenant_id,
+        pool_id           = body.pool_id,
+        customer_id       = body.customer_id,
+        origin_session_id = body.origin_session_id,
+        resume_token      = body.resume_token,
+        context           = body.context,
+        timeout_hours     = body.timeout_hours,
+    )
+    return {"session_id": child_session_id}
+
 
 @app.post("/v1/channels/webhook/{skill_id}", status_code=201)
 async def webhook_trigger(skill_id: str, body: WebhookTriggerRequest) -> dict:
@@ -708,6 +783,31 @@ async def webhook_resume(resume_token: str, body: WebhookResumeRequest) -> dict:
             detail="Resume token not found or expired",
         )
     return {"session_id": session_id}
+
+
+@app.get("/v1/channels/webhook/pending/{contact_identifier}", status_code=200)
+async def webhook_pending(contact_identifier: str, tenant_id: str) -> dict:
+    """
+    Check whether a customer has an active pending workflow awaiting confirmation.
+
+    Called by intake agents (via the pending_workflow_get MCP tool) after
+    collecting the customer's contact_identifier.  Returns the resume_token
+    needed to continue the workflow without creating a new one.
+
+    Returns:
+      { found: false }                          — no pending workflow
+      { found: true, resume_token, context }    — active pending workflow found
+    """
+    if _webhook_adapter is None:
+        raise HTTPException(status_code=503, detail="Webhook adapter not initialised")
+
+    result = await _webhook_adapter.get_pending_workflow(
+        tenant_id          = tenant_id,
+        contact_identifier = contact_identifier,
+    )
+    if result is None:
+        return {"found": False}
+    return {"found": True, **result}
 
 
 @app.get("/v1/channels/webhook/{session_id}/status", status_code=200)

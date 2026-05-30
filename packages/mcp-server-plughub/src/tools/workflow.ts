@@ -251,4 +251,80 @@ export function registerWorkflowTools(
       }
     }),
   )
+
+  // ── pending_workflow_get ─────────────────────────────────────────────────────
+  //
+  // Checks whether a customer has an active pending workflow awaiting their
+  // confirmation (created via the delegate() step pattern).
+  //
+  // Called by intake agents after collecting the customer's contact_identifier.
+  // If a pending workflow is found, the agent presents a menu so the customer
+  // can continue their existing process instead of starting a new one.
+  //
+  // The lookup is O(1): channel-gateway writes a {tenant}:pending_workflow:{id}
+  // key when delegate() creates Session C, validated against resume_tokens.
+  //
+  // Returns (output_as in YAML → $.pipeline_state.<output_as>):
+  //   { found: false }
+  //   { found: true, resume_token, context: { numero_atual, operadora_destino, ... } }
+
+  server.tool(
+    "pending_workflow_get",
+    "Check whether the customer has an active pending workflow awaiting their confirmation. " +
+    "Call this after collecting the customer contact_identifier. " +
+    "If found=true, present a menu so the customer can continue their existing process. " +
+    "Use the returned resume_token with workflow_resume to continue or cancel.",
+    {
+      contact_identifier: z.string().min(1).describe(
+        "Customer phone number or email collected during intake. " +
+        "Used as the lookup key for pending workflows."
+      ),
+      tenant_id: z.string().min(1).describe(
+        "Tenant ID. In skill-flow YAML use $.tenant_id."
+      ),
+    } as any,
+    withGuard("pending_workflow_get", async (input: Record<string, unknown>) => {
+      const parsed = z.object({
+        contact_identifier: z.string().min(1),
+        tenant_id:          z.string().min(1),
+      }).safeParse(input)
+
+      if (!parsed.success) {
+        return {
+          isError: true,
+          content: [{ type: "text" as const, text: JSON.stringify({
+            error: "invalid_input",
+            message: parsed.error.message,
+          }) }],
+        }
+      }
+
+      const { contact_identifier, tenant_id } = parsed.data
+      const url = `${deps.channelGatewayUrl}/v1/channels/webhook/pending/${encodeURIComponent(contact_identifier)}?tenant_id=${encodeURIComponent(tenant_id)}`
+
+      let res: Response
+      try {
+        res = await fetch(url)
+      } catch (err) {
+        return {
+          content: [{ type: "text" as const, text: JSON.stringify({ found: false }) }],
+        }
+      }
+
+      if (!res.ok) {
+        return {
+          content: [{ type: "text" as const, text: JSON.stringify({ found: false }) }],
+        }
+      }
+
+      const data = await res.json() as { found: boolean; resume_token?: string; context?: Record<string, string> }
+
+      return {
+        content: [{
+          type: "text" as const,
+          text: JSON.stringify(data),
+        }],
+      }
+    }),
+  )
 }

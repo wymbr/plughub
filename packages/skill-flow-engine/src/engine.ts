@@ -84,6 +84,24 @@ export interface SkillFlowEngineConfig {
   }) => Promise<{ resume_expires_at: string }>
 
   /**
+   * Arc 19 delegate step — Optional. Wired by skill-flow-service for webhook sessions.
+   * Called when a delegate step executes for the first time.
+   * Creates a child session in the target pool and writes context to its ContextStore.
+   * tenant_id and session_id are injected by _buildContext (same pattern as above).
+   * If absent, the delegate step falls back to on_timeout (config error).
+   */
+  persistDelegate?: (params: {
+    tenant_id:         string
+    session_id:        string   // parent (workflow) session
+    step_id:           string
+    resume_token:      string
+    pool:              string
+    context:           Record<string, string>
+    timeout_hours:     number
+    origin_session_id: string
+  }) => Promise<{ child_session_id: string }>
+
+  /**
    * Arc 4 — Optional. Wired by the Skill Flow worker to persist a collect_instance
    * in PostgreSQL, calculate send_at/expires_at via calendar-api, and publish
    * collect.requested to Kafka.
@@ -650,6 +668,12 @@ export class SkillFlowEngine {
       ...(self.config.persistCollect
         ? { persistCollect: (params: Parameters<NonNullable<StepContext["persistCollect"]>>[0]) =>
               self.config.persistCollect!({ tenant_id: tenantId, session_id: sessionId, ...params }) }
+        : {}),
+
+      // Arc 19 delegate — wired only when caller provides persistDelegate
+      ...(self.config.persistDelegate
+        ? { persistDelegate: (params: Parameters<NonNullable<StepContext["persistDelegate"]>>[0]) =>
+              self.config.persistDelegate!({ tenant_id: tenantId, session_id: sessionId, ...params }) }
         : {}),
 
       // Arc 4 — resume context forwarded only when present

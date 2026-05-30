@@ -42,6 +42,7 @@
     "next":       "Next →",
     "active":     "In progress",
     "liveStatus": "active",
+    "suspended":  "suspended",
     "abandoned":  "abandoned",
     "closed":     "closed",
     "httpError":  "HTTP error {{status}}",
