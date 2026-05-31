@@ -218,10 +218,15 @@ Para cada step de `suspend`/`delegate`, anexar:
   real do caso. *Futuro:* "corridas vs úteis" (business_hours) lado a lado; soma de
   segmentos (trabalho ativo) como métrica secundária no trace.
 - **MCP audit** (`mcp.audit` → ClickHouse) — tools chamadas pelos steps `invoke`
-  (`context_set`, `workflow_resume`, …) com allowed/injection/duração ("o que o workflow
-  fez nos bastidores").
+  (`context_set`, `workflow_resume`, …) com allowed/injection/duração. **Diferido:** no demo
+  o `skill-flow-service` chama o `mcp-server-plughub` via cliente MCP cru (não pelo
+  `McpInterceptor` do `@plughub/sdk`), então esses `invoke` **não geram `mcp.audit`** — o
+  painel ficaria vazio. Construir quando o caminho de execução passar pelo interceptor.
 - **Agent business events** (Arc 12 `agent_event`) emitidos durante o fluxo — KPIs de negócio.
-- **Transcript do specialist** (interação de confirmação com o cliente) linkado no nó de output.
+  **Diferido:** os agentes de portabilidade não emitem `agent_event` no demo (sem dado).
+- **Transcript do specialist ✅** — o `WorkflowTraceList` já roteia nós de agente
+  (`input_origin`/`specialist_output`/`delegate_child`) para `SessionTranscript`; clicar no
+  nó de output abre a conversa de confirmação.
 - **`close_reason`/`outcome` por ramo** (resolved/failed/timeout) e retries de step `catch`.
 - **Dados capturados no intake** (número/operadora/contato) no nó `input_origin`, com link
   pro transcript de A.

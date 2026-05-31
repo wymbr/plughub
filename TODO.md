@@ -18,13 +18,17 @@ Modelo corrigido e backend verde em [`docs/arcos/delegate-workflow-io.md`](docs/
   (`awaiting_customer_inbound`) e o cliente nunca reconecta, a `pending_workflow` key fica
   pendente para sempre. Implementar scanner que, ao estourar o timeout final, dispara
   `workflow_resume` com `decision=timeout` → B `on_timeout` → fecha como failed/timeout.
-- **Fase E — Workflow Execution Trace (step-level)**: o trace de detalhe de uma sessão
-  webhook hoje é baseado em segmentos (mostra quem participou), não nos steps do fluxo.
-  Adicionar a timeline de steps (de `pipeline_state.transitions[]` para ativas/suspensas;
-  do stream persistido para fechadas), com `payload_in`/`payload_out`/`resume_decision`/
-  `resumed_by` por step de suspend/delegate, + snapshot de ContextStore, tempo útil vs
-  corrido, MCP audit, agent_events e transcript do specialist. Design completo em
+- **Fase E — Workflow Execution Trace (step-level)** ✅ (E.1/E.2/E.3 + transcript):
+  step timeline já renderiza; `step_io` com `decision`/`payload`/`child_session_id` por step
+  (E.1); `resumed_by` por step (E.3); duration webhook = tempo decorrido total (E.2);
+  transcript do specialist via clique no nó de agente (já existia). Design em
   `docs/arcos/delegate-workflow-io.md` § Fase E.
+  - **E.4 diferido (sem dado no demo)**: (a) **MCP audit** por step — `skill-flow-service`
+    chama o mcp-server via cliente cru, não pelo `McpInterceptor`, então os `invoke` não
+    geram `mcp.audit`; construir quando a execução passar pelo interceptor. (b)
+    **agent_events** (Arc 12) — agentes de portabilidade não emitem. (c) snapshot de
+    ContextStore com evolução entre suspends (hoje só o estado atual no strip Input context).
+    (d) duration "corridas vs úteis" (business_hours) lado a lado.
 
 ## Scheduler central de timers *(diferido — ADR aceito)*
 
