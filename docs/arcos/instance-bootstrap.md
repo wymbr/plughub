@@ -1,6 +1,40 @@
 # Instance Bootstrap — Reconciliation-Driven Agent Instance Management
 
-> Última atualização: 2026-05-25 · Estado: Arc 16
+> Última atualização: 2026-05-31 · Estado: Arc 16 + Fase 3 (deploy-driven)
+
+## Fase 3b/3a — Provisionamento deploy-driven (2026-05-31)
+
+Além do caminho legado por `agent_type`, o bootstrap agora provisiona instâncias de IA
+a partir do **deploy do flow** (`PoolSkillSlot.current`), eliminando a dependência do
+`agent_type` para pools novos:
+
+- **Fonte**: `GET /v1/pools` (agent-registry) anexa `deployed_skill_id` +
+  `deployed_max_concurrent_sessions` lidos do slot `current` de cada pool.
+- **Builder** `_build_desired_from_deploy`: para cada pool com slot `current`, cria N
+  instâncias `{pool_id}-{n}` (N = concurrent sessions do slot) rodando a skill deployada,
+  com `skill_id`/`flow_id` no payload e `source=bootstrap_deploy`. Capacidade = `N × 1`.
+- **Transição segura**: pools já cobertos por um `agent_type` legado são pulados (zero
+  sobreposição). `skill_id` entrou no set MANAGED do diff de reconciliação.
+- **Execução (3a)**: a síntese de native agent_type é **centralizada em `get_agent_type`**
+  (`orchestrator-bridge/main.py`): no 404, se o `agent_type_id` for uma skill com flow,
+  `_synthesize_agent_type_from_skill` devolve um native agent_type — cobre todos os
+  caminhos de ativação (routed, conferência, queue, restore) num ponto único.
+- **Precedência (3c)**: deploy vence. `_build_desired_state` recebe `deployed_pool_ids` e
+  remove esses pools dos `pools` de cada agent_type (1:1 no demo → agent_type ignorado).
+  Migrar um pool real = configurar+promover seu slot (`PUT /slots/next` + `POST /promote`),
+  sem deletar agent_type.
+- **Auto-provisionamento (3c)**: `RegistrySyncer._sync_deploy_slots` cria os slots a partir
+  dos agent_types IA do YAML (idempotente), **opt-in** via `REGISTRY_SYNC_DEPLOY_SLOTS`
+  (default `false` enquanto a síntese não replica `mention_commands`/`role` de especialista).
+- **Invariante de modelo**: `AgentInstance` (routing-engine `models.py`) **deve** declarar
+  `skill_id`/`flow_id` — `mark_busy` revalida via Pydantic e descartaria campos não
+  declarados ao alocar, apagando a identidade da skill na instância busy.
+
+Pendente: Fase 3c (migrar pools reais do demo + aposentar `infra/registry/*.yaml` +
+RegistrySyncer) e Fase 3d (remover `agent_type` de schema/routing/segments).
+
+---
+
 
 Implemented in `packages/orchestrator-bridge/src/plughub_orchestrator_bridge/instance_bootstrap.py`.
 

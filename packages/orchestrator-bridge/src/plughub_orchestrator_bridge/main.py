@@ -166,6 +166,16 @@ async def get_agent_type(
                 return body
             if resp.status == 404:
                 logger.debug("Agent type not found in registry: tenant=%s agent=%s", tenant_id, agent_type_id)
+                # Fase 3a — deploy-driven: the agent_type_id may actually be a
+                # deployed skill_id (instances provisioned from PoolSkillSlot carry
+                # agent_type_id = skill_id). If a skill with that id has a flow,
+                # synthesize a native agent_type so EVERY activation path (routed,
+                # conference specialist, queue agent, restore) resolves it uniformly
+                # without depending on a registered agent_type.
+                synth = await _synthesize_agent_type_from_skill(http, tenant_id, agent_type_id)
+                if synth is not None:
+                    _agent_type_cache[cache_key] = synth
+                    return synth
             else:
                 logger.warning(
                     "Agent Registry returned HTTP %d for agent-type=%s", resp.status, agent_type_id
@@ -174,6 +184,35 @@ async def get_agent_type(
         logger.warning("Agent Registry unreachable (%s): %s", url, exc)
 
     return None
+
+
+async def _synthesize_agent_type_from_skill(
+    http: aiohttp.ClientSession,
+    tenant_id: str,
+    skill_id: str,
+) -> dict | None:
+    """
+    Fase 3a — build a native agent_type dict from a deployed skill, used when no
+    agent_type is registered for the given id but a skill with that id has a
+    flow. Returns None when the skill has no flow (so callers fall through to
+    their existing fallbacks).
+    """
+    flow = await get_skill_flow(http, tenant_id, skill_id)
+    if not flow:
+        return None
+    logger.info(
+        "Deploy-driven: synthesized native agent_type from skill_id=%s "
+        "(no registered agent_type)",
+        skill_id,
+    )
+    return {
+        "agent_type_id":          skill_id,
+        "framework":              "plughub-native",
+        "execution_model":        "stateless",
+        "skills":                 [{"skill_id": skill_id}],
+        "media_capabilities":     [],
+        "_synthesized_from_skill": True,
+    }
 
 
 async def get_pool_config(
@@ -1463,6 +1502,7 @@ async def _publish_participant_event(
     agent_type:     str,        # "human" | "native" | "external"
     role:           str,        # "primary" | "specialist"
     segment_id:     str = "",   # Arc 5: ContactSegment UUID
+    flow_id:        str = "",   # skill-flow deployado que o agente executou (avaliação IA)
     conference_id:  str = "",
     joined_at:      str = "",
     duration_ms:    int | None = None,
@@ -1499,6 +1539,8 @@ async def _publish_participant_event(
     }
     if conference_id:
         event["conference_id"] = conference_id
+    if flow_id:
+        event["flow_id"] = flow_id
     if parent_segment_id:
         event["parent_segment_id"] = parent_segment_id
     if joined_at:
@@ -1736,6 +1778,8 @@ async def process_routed(
         pass
 
     # ── Resolve agent type from Agent Registry ────────────────────────────────
+    # get_agent_type also synthesizes a native agent_type from a deployed skill
+    # when agent_type_id is actually a skill_id (Fase 3a deploy-driven).
     agent_type = await get_agent_type(http, tenant_id, agent_type_id)
 
     if agent_type is None:
@@ -2474,6 +2518,8 @@ async def process_routed(
             pass
         # Outcome from agent_result (populated by activate_native_agent)
         _part_outcome = agent_result.get("outcome") if agent_result else None
+        # flow_id = skill-flow deployado que o agente executou (avaliação IA por skill)
+        _part_flow_id = (((agent_result or {}).get("pipeline_state")) or {}).get("flow_id", "") or ""
         asyncio.create_task(_publish_participant_event(
             session_id=session_id,
             tenant_id=tenant_id,
@@ -2490,6 +2536,7 @@ async def process_routed(
             joined_at=_part_joined_iso,
             duration_ms=_part_duration_ms,
             outcome=_part_outcome,
+            flow_id=_part_flow_id,
         ))
         # G5 dedup guard: conference_agent_completed checks this key before emitting
         # participant_left for external conference specialists.  Native bridge agents
@@ -4734,6 +4781,7 @@ async def _handle_webhook_session_resumed(
         segment_id=_resume_seg_id, sequence_index=_resume_seq_idx,
         joined_at=_resume_joined_iso, duration_ms=_resume_duration_ms,
         outcome=_ai_outcome or None,
+        flow_id=(((agent_result or {}).get("pipeline_state")) or {}).get("flow_id", "") or "",
     ))
 
     # "suspended" = flow hit another suspend step; session persists in Redis.

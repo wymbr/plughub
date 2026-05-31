@@ -86,6 +86,12 @@ class AgentInstance(BaseModel):
     instance_id:      str
     agent_type_id:    str
     tenant_id:        str
+    # Fase 3a/3b — deploy-driven instances (source=bootstrap_deploy) carry the
+    # deployed skill_id. Declared here so it survives the model_validate →
+    # model_dump round-trip in mark_busy (Pydantic drops undeclared fields),
+    # keeping the skill identity available to the bridge after allocation.
+    skill_id:         str = ""
+    flow_id:          str = ""
     # pool_id is written by mcp-server (human agents) but omitted by the
     # orchestrator-bridge bootstrap (which uses pools: list[str] instead).
     # Optional to allow both sources to validate without errors.

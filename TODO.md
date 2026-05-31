@@ -30,6 +30,37 @@ Modelo corrigido e backend verde em [`docs/arcos/delegate-workflow-io.md`](docs/
     ContextStore com evolução entre suspends (hoje só o estado atual no strip Input context).
     (d) duration "corridas vs úteis" (business_hours) lado a lado.
 
+## Relatórios analíticos — Agentes e Pools
+
+Avaliação + proposta em [`docs/arcos/analytics-reports-redesign.md`](docs/arcos/analytics-reports-redesign.md).
+Hoje o Analytics/Agents mistura agente×pool e não separa humano×IA.
+
+- **Fase 1 — relatório de agentes**: humano por usuário×pool (lookup login), IA por
+  flow_id(skill)×pool; abas distintas; excluir webhook; daily trend de segments; link→Quality.
+  (`reports_query` + `AnaliseAgentesPage`.) `flow_id` no segments ✅.
+- **Fase 1b — tempo logado/ocupação (dado novo)**: consumer descarta agent_login/logout
+  (models.py:392); criar `agent_login_intervals` + handler + endpoint. Habilita disponibilidade.
+- **Fase 2 — relatório de Pools/Infra (novo)**: pool×canal×tempo — volumetria, tráfego no
+  tempo, comportamento de fila (espera/tamanho/abandono/agentes disponíveis), concorrência
+  vs capacidade (headroom), SLA. Fontes prontas (`queue_events`, `participation_intervals`,
+  `sessions`); faltam endpoints `/reports/pools/{volume,queue,occupancy}` + aba Analytics/Pools.
+- **Fase 3 — migrar provisionamento do demo para Config + Deploy** (elimina YAML/agent_type):
+  - **3b ✅** (2026-05-31): bootstrap provisiona por pool+deploy (`_build_desired_from_deploy`
+    lê `PoolSkillSlot.current` via `GET /v1/pools`); instância carrega `skill_id`;
+    `AgentInstance` do routing declara `skill_id`/`flow_id` (sobrevive ao `mark_busy`).
+  - **3a ✅** (2026-05-31): bridge `process_routed` sintetiza native agent_type pela `skill_id`
+    da instância quando não há agent_type. Validado: pool `teste_demo` 100% Config+Deploy.
+  - **3c** (em andamento): precedência invertida (deploy vence) ✅; síntese centralizada em
+    `get_agent_type` (cobre routed/conferência/queue/restore) ✅; `RegistrySyncer._sync_deploy_slots`
+    auto-provisiona slots do YAML, **opt-in** `REGISTRY_SYNC_DEPLOY_SLOTS=false` ✅; `demo_ia`
+    migrado e validado ✅. **Resta**: migrar demais pools de entrada/jornada; enriquecer síntese
+    p/ especialistas (`mention_commands`/`role`) antes de migrar @mention/conferência; aposentar
+    `infra/registry/*.yaml` + RegistrySyncer.
+  - **3d** (pendente, por último): remover `agent_type` de schema/routing/bootstrap/segments
+    + hack `_applyMaxConcurrentSessions` em `pool-slots.ts`.
+
+---
+
 ## Scheduler central de timers *(diferido — ADR aceito)*
 
 Consolidar os timers espalhados (timeout de suspend/delegate no channel-gateway,

@@ -318,19 +318,33 @@ class InstanceBootstrap:
 
         # ── 1. Estado desejado ─────────────────────────────────────────────────
         agent_types = await self._fetch_agent_types(http, tenant_id)
-        if not agent_types:
+
+        # Fetch ALL pools from the Registry once — used for channel_types lookup,
+        # full pool reconciliation (Section B) AND deploy-driven provisioning
+        # (Fase 3b: pools carrying a current deploy slot → deployed_skill_id).
+        registry_pools = await self._fetch_all_pools(http, tenant_id)
+        registry_pool_map: dict[str, dict] = {
+            p["pool_id"]: p for p in registry_pools if "pool_id" in p
+        }
+
+        # Fase 3b: pools provisioned via Config + Deploy (PoolSkillSlot.current).
+        # GET /v1/pools enriches each pool with deployed_skill_id when a current
+        # slot exists. These pools get instances from the deploy, not agent_types.
+        deployed_pools = [p for p in registry_pools if p.get("deployed_skill_id")]
+
+        if not agent_types and not deployed_pools:
             logger.warning(
-                "No agent types in registry for tenant=%s — reconciliation skipped",
+                "No agent types and no deployed pools in registry for tenant=%s "
+                "— reconciliation skipped",
                 tenant_id,
             )
             report.duration_ms = (time.monotonic() - t0) * 1000
             return report
 
-        # Fetch ALL pools from the Registry once — used for both channel_types
-        # lookup on instances AND full pool reconciliation (Section B).
-        registry_pools = await self._fetch_all_pools(http, tenant_id)
-        registry_pool_map: dict[str, dict] = {
-            p["pool_id"]: p for p in registry_pools if "pool_id" in p
+        # Fase 3c — deploy vence: pools com slot de deploy `current` são
+        # provisionados pelo builder deploy-driven; o builder de agent_type os ignora.
+        deployed_pool_ids: set[str] = {
+            p["pool_id"] for p in deployed_pools if p.get("pool_id")
         }
 
         all_pool_ids = _extract_all_pool_ids(agent_types)
@@ -338,7 +352,21 @@ class InstanceBootstrap:
             pid: registry_pool_map.get(pid, {}).get("channel_types", [])
             for pid in all_pool_ids
         }
-        desired = _build_desired_state(agent_types, pool_channel_types, tenant_id)
+        for p in deployed_pools:
+            pid = p.get("pool_id")
+            if pid and pid not in pool_channel_types:
+                pool_channel_types[pid] = p.get("channel_types", [])
+
+        desired = _build_desired_state(
+            agent_types, pool_channel_types, tenant_id, deployed_pool_ids
+        )
+
+        # Fase 3b/3c: deploy-driven instances own every pool with a current slot.
+        desired.update(
+            _build_desired_from_deploy(
+                deployed_pools, pool_channel_types, deployed_pool_ids, tenant_id
+            )
+        )
 
         # ── 2. Estado atual no Redis ───────────────────────────────────────────
         actual = await self._scan_instances_from_redis(tenant_id)
@@ -998,14 +1026,22 @@ def _extract_all_pool_ids(agent_types: list[dict]) -> list[str]:
 
 
 def _build_desired_state(
-    agent_types:       list[dict],
+    agent_types:        list[dict],
     pool_channel_types: dict[str, list[str]],
-    tenant_id:         str,
+    tenant_id:          str,
+    deployed_pool_ids:  set[str] | None = None,
 ) -> dict[str, dict]:
     """
     Constrói o mapa {instance_id → payload desejado} a partir dos agent types
     e dos channel_types dos pools associados.
+
+    Fase 3c — precedência: deploy vence. Pools que já têm um slot de deploy
+    `current` (deployed_pool_ids) são removidos dos `pools` de cada agent_type;
+    se nenhum pool restar, o agent_type é ignorado (foi migrado para
+    provisionamento deploy-driven). Permite migrar um pool real apenas
+    configurando+promovendo seu slot, sem remover o agent_type legado.
     """
+    deployed_pool_ids = deployed_pool_ids or set()
     desired: dict[str, dict] = {}
     for at in agent_types:
         if at.get("framework") == "human":
@@ -1016,9 +1052,16 @@ def _build_desired_state(
         execution_model = at.get("execution_model", "stateless")
         max_concurrent  = at.get("max_concurrent_sessions", 1)
         at_pools: list[str] = [
-            p["pool_id"] if isinstance(p, dict) else p
-            for p in at.get("pools", [])
+            pid
+            for pid in (
+                p["pool_id"] if isinstance(p, dict) else p
+                for p in at.get("pools", [])
+            )
+            if pid not in deployed_pool_ids
         ]
+        if not at_pools:
+            # Todos os pools deste agent_type migraram para deploy-driven.
+            continue
 
         # channel_types = união dos channel_types de todos os pools associados
         channel_types: list[str] = []
@@ -1053,13 +1096,81 @@ def _build_desired_state(
     return desired
 
 
+def _build_desired_from_deploy(
+    deployed_pools:     list[dict],
+    pool_channel_types: dict[str, list[str]],
+    deployed_pool_ids:  set[str],
+    tenant_id:          str,
+) -> dict[str, dict]:
+    """
+    Fase 3b/3c — provisionamento deploy-driven.
+
+    Constrói {instance_id → payload} a partir dos pools que têm um slot de
+    deploy `current` (PoolSkillSlot.current → deployed_skill_id), em vez de
+    agent_types. A capacidade vem do próprio slot de deploy
+    (deployed_max_concurrent_sessions = campo "Concurrent sessions" da tela).
+
+    Identidade da instância: {pool_id}-{n}. O `skill_id` deployado é gravado
+    no payload — é a fonte de verdade que o bridge usa (Fase 3a) para resolver
+    o flow, sem depender de agent_type.skills.
+
+    Fase 3c — deploy vence: estes pools são donos do provisionamento; o builder
+    de agent_type já os removeu (via deployed_pool_ids), então não há
+    sobreposição. (deployed_pool_ids é recebido para simetria/log; o filtro
+    efetivo é feito no builder de agent_type.)
+    """
+    desired: dict[str, dict] = {}
+    for pool in deployed_pools:
+        pool_id  = pool.get("pool_id")
+        skill_id = pool.get("deployed_skill_id")
+        if not pool_id or not skill_id:
+            continue
+
+        try:
+            max_concurrent = int(pool.get("deployed_max_concurrent_sessions") or 1)
+        except (TypeError, ValueError):
+            max_concurrent = 1
+        max_concurrent = max(1, max_concurrent)
+
+        channel_types = (
+            pool_channel_types.get(pool_id)
+            or pool.get("channel_types")
+            or ["webchat"]
+        )
+
+        for n in range(max_concurrent):
+            instance_id = f"{pool_id}-{n + 1:03d}"
+            desired[instance_id] = {
+                "instance_id":             instance_id,
+                # Transição: agent_type_id = skill_id (proxy 1:1 no demo) mantém
+                # compatibilidade com superfícies que ainda leem agent_type_id
+                # (segments, routing meta) até a Fase 3d removê-lo.
+                "agent_type_id":           skill_id,
+                # Fonte de verdade da Fase 3a — bridge resolve o flow por aqui.
+                "skill_id":                skill_id,
+                "flow_id":                 skill_id,
+                "tenant_id":               tenant_id,
+                "framework":               "plughub-native",
+                "execution_model":         "stateless",
+                "status":                  "ready",
+                "state":                   "ready",
+                "current_sessions":        0,
+                "max_concurrent":          1,
+                "max_concurrent_sessions": max_concurrent,
+                "pools":                   [pool_id],
+                "channel_types":           channel_types,
+                "source":                  "bootstrap_deploy",
+            }
+    return desired
+
+
 def _payload_diverged(current: dict, desired: dict) -> bool:
     """
     Retorna True se os campos gerenciáveis do payload atual divergem do desejado.
     Ignora campos transientes (status, timestamps, draining, pending_update, etc.).
     """
     MANAGED = {
-        "agent_type_id", "framework", "execution_model",
+        "agent_type_id", "skill_id", "framework", "execution_model",
         "max_concurrent", "max_concurrent_sessions",
         "pools", "channel_types", "source",
     }

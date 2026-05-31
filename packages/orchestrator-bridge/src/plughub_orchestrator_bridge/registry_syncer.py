@@ -84,6 +84,9 @@ class SyncReport:
     skills_upserted:        int = 0   # created or updated in Agent Registry
     skills_skipped:         int = 0   # no valid id: field — using YAML fallback at runtime
     skills_errors:          int = 0
+    deploy_slots_set:       int = 0   # Fase 3c — PoolSkillSlot.current promoted from YAML
+    deploy_slots_skipped:   int = 0   # already matching desired skill+capacity
+    deploy_slots_errors:    int = 0
     errors:                 list[str] = field(default_factory=list)
 
     def summary(self) -> str:
@@ -94,7 +97,9 @@ class SyncReport:
             f"skip={self.types_skipped} deleted={self.types_deleted} err={self.types_errors}) "
             f"journey_types(created={self.journey_types_created} skip={self.journey_types_skipped} "
             f"err={self.journey_types_errors}) "
-            f"skills(upserted={self.skills_upserted} skip={self.skills_skipped} err={self.skills_errors})"
+            f"skills(upserted={self.skills_upserted} skip={self.skills_skipped} err={self.skills_errors}) "
+            f"deploy_slots(set={self.deploy_slots_set} skip={self.deploy_slots_skipped} "
+            f"err={self.deploy_slots_errors})"
         )
 
 
@@ -210,7 +215,129 @@ class RegistrySyncer:
         if prune and declared_ids:
             await self._prune_agent_types(http, headers, declared_ids, report)
 
+        # ── Fase 3c: provision deploy slots (PoolSkillSlot.current) from the
+        # declared AI agent_types so the demo comes up deploy-driven. Idempotent.
+        # Opt-in (default off) during transition: the synthesized agent_type does
+        # not carry specialist config (mention_commands/role), so blanket
+        # auto-migration of @mention/conference pools is gated behind this flag.
+        if os.getenv("REGISTRY_SYNC_DEPLOY_SLOTS", "false").lower() == "true":
+            await self._sync_deploy_slots(http, headers, cfg.get("agent_types", []), report)
+
         return report
+
+    # ── Deploy-slot sync (Fase 3c) ──────────────────────────────────────────────
+
+    async def _sync_deploy_slots(
+        self,
+        http:        aiohttp.ClientSession,
+        headers:     dict,
+        agent_types: list[dict],
+        report:      SyncReport,
+    ) -> None:
+        """
+        Fase 3c — ensure each AI agent_type's pool has a deploy slot `current`
+        matching the agent_type's skill + capacity. Makes provisioning
+        deploy-driven (the bootstrap then sources instances from the slot, and
+        the agent_type becomes vestigial — removed in 3d).
+
+        Idempotent: only sets+promotes when the pool's current slot does not
+        already match the desired skill_id + max_concurrent_sessions. Human
+        agent_types (login-driven pools) are skipped.
+        """
+        for at in agent_types:
+            if at.get("framework") == "human":
+                continue
+
+            skills = at.get("skills") or []
+            skill_id = ""
+            for s in skills:
+                skill_id = s.get("skill_id", "") if isinstance(s, dict) else str(s)
+                if skill_id:
+                    break
+            if not skill_id:
+                continue  # no flow to deploy
+
+            try:
+                max_concurrent = int(at.get("max_concurrent_sessions") or 1)
+            except (TypeError, ValueError):
+                max_concurrent = 1
+            max_concurrent = max(1, max_concurrent)
+
+            for pool_ref in at.get("pools", []):
+                pool_id = pool_ref["pool_id"] if isinstance(pool_ref, dict) else pool_ref
+                if not pool_id:
+                    continue
+                await self._ensure_deploy_slot(
+                    http, headers, pool_id, skill_id, max_concurrent, report
+                )
+
+    async def _ensure_deploy_slot(
+        self,
+        http:           aiohttp.ClientSession,
+        headers:        dict,
+        pool_id:        str,
+        skill_id:       str,
+        max_concurrent: int,
+        report:         SyncReport,
+    ) -> None:
+        slots_url = f"{self._registry_url}/v1/pools/{pool_id}/slots"
+        try:
+            # Idempotency: skip if current slot already matches desired state.
+            async with http.get(
+                slots_url, headers=headers, timeout=aiohttp.ClientTimeout(total=10)
+            ) as resp:
+                if resp.status == 200:
+                    body = await resp.json()
+                    current = (body.get("slots") or {}).get("current") or {}
+                    cfg = current.get("config_json") or {}
+                    if (
+                        current.get("set")
+                        and current.get("skill_id") == skill_id
+                        and int(cfg.get("max_concurrent_sessions") or 0) == max_concurrent
+                    ):
+                        report.deploy_slots_skipped += 1
+                        return
+
+            # Configure the "next" slot then promote it to "current".
+            next_url = f"{slots_url}/next"
+            payload = {
+                "skill_id":    skill_id,
+                "config_json": {"max_concurrent_sessions": max_concurrent},
+            }
+            async with http.put(
+                next_url, headers=headers, json=payload,
+                timeout=aiohttp.ClientTimeout(total=10),
+            ) as resp:
+                if resp.status not in (200, 201):
+                    logger.warning(
+                        "RegistrySyncer: deploy slot PUT failed pool=%s skill=%s HTTP %d",
+                        pool_id, skill_id, resp.status,
+                    )
+                    report.deploy_slots_errors += 1
+                    return
+
+            async with http.post(
+                f"{slots_url.rsplit('/slots', 1)[0]}/promote",
+                headers=headers, timeout=aiohttp.ClientTimeout(total=10),
+            ) as resp:
+                if resp.status == 200:
+                    report.deploy_slots_set += 1
+                    logger.info(
+                        "RegistrySyncer: deploy slot promoted pool=%s skill=%s concurrent=%d",
+                        pool_id, skill_id, max_concurrent,
+                    )
+                else:
+                    logger.warning(
+                        "RegistrySyncer: deploy slot promote failed pool=%s HTTP %d",
+                        pool_id, resp.status,
+                    )
+                    report.deploy_slots_errors += 1
+        except Exception as exc:
+            logger.warning(
+                "RegistrySyncer: could not sync deploy slot pool=%s skill=%s — %s",
+                pool_id, skill_id, exc,
+            )
+            report.deploy_slots_errors += 1
 
     # ── Skill sync ────────────────────────────────────────────────────────────
 

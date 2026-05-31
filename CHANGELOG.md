@@ -2,6 +2,32 @@
 
 ---
 
+## Fase 3b + 3a — Provisionamento deploy-driven (pool + deploy, sem agent_type) (2026-05-31)
+
+Migração do provisionamento de instâncias de IA do `agent_type` (legado) para o **deploy do flow** (`PoolSkillSlot.current`). Fonte de verdade passa a ser o slot de deploy do pool: skill + capacidade ("Concurrent sessions").
+
+**Causa do gap** (confirmada empiricamente): pool criado via Config + skill deployada → `resources=0`. O `_applyMaxConcurrentSessions` (pool-slots.ts) só propagava capacidade para agent_types **pré-existentes** no pool; e o `instance_bootstrap` só criava instâncias a partir de `agent_types`. Pool sem agent_type = zero instâncias.
+
+**Fase 3b — bootstrap por pool+deploy** (`instance_bootstrap.py` + `agent-registry/routes/pools.ts`):
+- `GET /v1/pools` enriquecido com `deployed_skill_id` + `deployed_max_concurrent_sessions` (lidos do `PoolSkillSlot.current`).
+- Novo builder `_build_desired_from_deploy`: para cada pool com slot `current`, cria N instâncias `{pool_id}-{n}` (N = concurrent sessions do slot) rodando a skill deployada, com `skill_id`/`flow_id` no payload e `source=bootstrap_deploy`. Aditivo: pools já cobertos por agent_type legado são pulados (zero sobreposição na transição). `skill_id` adicionado ao set MANAGED do diff.
+
+**Fase 3a — bridge resolve a skill pela deploy** (`orchestrator-bridge/main.py`):
+- Em `process_routed`, quando `get_agent_type` retorna None e a instância carrega `skill_id` (deploy-driven), sintetiza um `agent_type` native (`skills=[{skill_id}]`) → caminho plughub-native existente resolve o flow via `get_skill_flow`, sem depender de `agent_type.skills`.
+
+**Bug corrigido** (`routing-engine/models.py`): `AgentInstance` não declarava `skill_id`/`flow_id`; o `mark_busy` revalidava via Pydantic e **descartava** esses campos ao alocar a instância, apagando o `skill_id` da instância busy. Campos declarados no modelo para sobreviver ao round-trip `model_validate → model_dump`.
+
+**Fase 3c (fundação)** — migração de pools reais + precedência:
+- **Precedência invertida (deploy vence)** (`instance_bootstrap.py`): `_build_desired_state` recebe `deployed_pool_ids` e remove esses pools dos `pools` de cada agent_type (se nenhum restar, ignora o agent_type). Pool com slot `current` é provisionado exclusivamente pelo builder deploy-driven. Migrar um pool = só configurar+promover seu slot, sem deletar agent_type.
+- **Síntese centralizada** (`main.py get_agent_type`): no 404, se o `agent_type_id` for uma skill com flow, sintetiza um native agent_type (`_synthesize_agent_type_from_skill`). Cobre **todos** os caminhos de ativação (routed, conferência, queue, restore) num ponto único — removido o bloco ad-hoc do `process_routed`.
+- **RegistrySyncer** (`registry_syncer.py`): `_sync_deploy_slots` provisiona `PoolSkillSlot.current` a partir dos agent_types IA do YAML (idempotente). **Opt-in** via `REGISTRY_SYNC_DEPLOY_SLOTS` (default `false`) — a síntese ainda não replica config de especialista (`mention_commands`/`role`), então auto-migração em massa de pools @mention/conferência fica gated.
+
+**Resultado verificado**: (1) pool `teste_demo` 100% Config+Deploy (skill `skill_triagem_v2`, 15 concurrent), **sem agent_type** → 15 instâncias → triagem IVR end-to-end. (2) pool **real** `demo_ia` migrado por deploy (slot promovido) → instâncias `agente_demo_ia_v1-*` substituídas por `demo_ia-*` → flow roda via síntese centralizada, sem regressão.
+
+**Pendente 3c/3d**: migrar demais pools de entrada/jornada; enriquecer síntese p/ especialistas (mention_commands/role) antes de migrar @mention/conferência; aposentar `infra/registry/*.yaml`; 3d remove `agent_type` do schema/routing/segments + hack `_applyMaxConcurrentSessions`.
+
+---
+
 ## Arc 19 — Session lifecycle + analytics status fix (2026-05-29)
 
 Quatro bugs corrigidos que impediam o status de sessões webhook de fechar corretamente no Analytics:

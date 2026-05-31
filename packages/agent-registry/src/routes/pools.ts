@@ -83,7 +83,32 @@ poolsRouter.get("/", async (req: Request, res: Response, next: NextFunction) => 
       orderBy: { created_at: "asc" },
     })
 
-    return res.json({ pools: pools.map(_formatPool), total: pools.length })
+    // Attach the live deploy slot (PoolSkillSlot.current) so consumers like the
+    // bootstrap can provision instances from the deploy — skill_id + concurrent
+    // sessions — instead of from legacy agent_types. Fase 3b.
+    const currentSlots = await (prisma as any).poolSkillSlot.findMany({
+      where: { tenant_id: tenantId, slot: "current" },
+    }) as Array<{ pool_id: string; skill_id: string | null; config_json: unknown }>
+    const slotByPool = new Map(
+      currentSlots
+        .filter((s) => !!s.skill_id)
+        .map((s) => [s.pool_id, s] as const),
+    )
+
+    const formatted = pools.map((p) => {
+      const base = _formatPool(p as unknown as Record<string, unknown>)
+      const slot = slotByPool.get((p as { pool_id: string }).pool_id)
+      if (slot && slot.skill_id) {
+        const cfg = (slot.config_json ?? {}) as Record<string, unknown>
+        const mcs = cfg["max_concurrent_sessions"]
+        base["deployed_skill_id"] = slot.skill_id
+        base["deployed_max_concurrent_sessions"] =
+          typeof mcs === "number" && mcs >= 1 ? Math.floor(mcs) : 1
+      }
+      return base
+    })
+
+    return res.json({ pools: formatted, total: formatted.length })
   } catch (err) {
     return next(err)
   }
