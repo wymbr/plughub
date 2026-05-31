@@ -2275,6 +2275,32 @@ async def process_routed(
                     session_id, _wh_exc,
                 )
 
+        # ── Arc 19 v2: ensure PRIMARY agent_type_id is in session meta ─────────
+        # The webhook resume path (_handle_webhook_session_resumed) reads
+        # agent_type_id from session:{id}:meta to re-allocate the agent when a
+        # delegate/suspend step is resumed. Webchat sessions (e.g. Session A-new's
+        # intake) have meta written by the WebchatAdapter WITHOUT agent_type_id, so
+        # a resume failed with "agent_type_id not in meta — cannot resume".
+        # Merge it in here (preserving existing meta fields) for the primary agent.
+        if not conference_id and native_instance_id:
+            try:
+                _raw_meta_m = await redis_client.get(f"session:{session_id}:meta")
+                _meta_m = json.loads(_raw_meta_m) if _raw_meta_m else {}
+                _meta_m["agent_type_id"] = agent_type_id
+                _meta_m["instance_id"]   = native_instance_id
+                if not _meta_m.get("pool_id"):
+                    _meta_m["pool_id"] = pool_id
+                if not _meta_m.get("tenant_id"):
+                    _meta_m["tenant_id"] = tenant_id
+                await redis_client.setex(
+                    f"session:{session_id}:meta", _stl(), json.dumps(_meta_m),
+                )
+            except Exception as _mm_exc:
+                logger.warning(
+                    "Could not merge agent_type_id into session meta: session=%s — %s",
+                    session_id, _mm_exc,
+                )
+
         agent_result = await activate_native_agent(
             http=http, redis_client=redis_client,
             session_id=session_id, customer_id=customer_id,

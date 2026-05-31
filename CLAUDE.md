@@ -6,6 +6,17 @@ PlugHub is an enterprise orchestration platform that connects agents — human a
 
 ---
 
+## Protocolo de Sessão e Contexto
+
+> **Teto de trabalho: 200k tokens/sessão.** No Max o Opus opera em 1M coberto pela assinatura, mas contexto inchado degrada qualidade (context rot) e gasta orçamento. O 1M é folga para picos, não espaço para encher.
+
+- **Modelo**: usar **Opus** (sobe a 1M automático no Max, coberto pela assinatura). **Nunca** fixar `sonnet`/Sonnet 4.6 — seu 1M consome *usage credits* mesmo no Max, gerando despesa fora da assinatura.
+- **Leitura seletiva**: este arquivo é o **índice**; o detalhe vive em `docs/` e só entra na sessão quando a tarefa exige. Não carregar a árvore `docs/` inteira no início — ler apenas o(s) arquivo(s) relevantes à tarefa (Arc N → só `docs/arcos/arcN-*.md`). Preferir `grep`/ranges a ler arquivos inteiros. `plughub_spec_v1.docx` é referência sob demanda, nunca carregada inteira sem necessidade explícita.
+- **Comandos**: `/compact` ao concluir uma etapa e ao passar de ~150k (não esperar estourar); `/clear` ao trocar para tarefa não relacionada. Na CLI, `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE=60` dispara o auto-compact antes do default (~83%).
+- **Higiene**: uma sessão = uma tarefa coerente. No Cowork o modelo é fixado ao abrir — abrir sessão **nova** já com Opus, não recuperar sessão presa em modelo errado. Evitar `cat` de arquivos grandes quando já há resumo aqui ou em `docs/`.
+
+---
+
 ## Saúde do CLAUDE.md — Regras de Manutenção
 
 > **Target: ≤ 800 linhas.** Quando ultrapassar, aplicar as regras abaixo.
@@ -662,14 +673,6 @@ Eleva o Console de interface de atendimento para **superfície de orquestração
 
 **Quatro funcionalidades planejadas**: (F1) Cartões de participantes AI em tempo real com step/status do Skill-Flow; (F2) Botão "Adicionar Especialista" — lista agentes de `mentionable_pools` e os invoca via A2A `assist`; (F3) Ação "Delegar Tarefa" — context menu sobre mensagens, drawer com instrução + visibilidade, card de resultado quando `agent_done` chega; (F4) Tab de Orquestração — grafo/lista de steps do Skill-Flow ativo com ações de intervenção para supervisores (injetar contexto, pular step, force-complete).
 
-**Fase A (F1) implementada**: `supervisor_state` retorna `ai_participants[]` com `AiState { current_step, step_type, step_status, waiting_for, since_ms }`. Bridge escreve `session:{id}:ai_participant:{instance_id}` (TTL 4h). `AiParticipantCard` no EstadoTab com 3 s polling + drawer (últimas 5 mensagens + "Encerrar segmento" → `@{instance_id} terminate_self`).
-
-**Fase B (F2) implementada**: `GET /v1/pools/:poolId/mentionable-agents` no agent-registry (lê `pool.mentionable_pools` JSON → retorna agentTypes ativos dos pools listados). `useMentionableAgents(poolId)` hook. `AdicionarEspecialistaButton` 2-step dropdown no ActionBar: escolha de agente + textarea de contexto → envia `@{agent_type_id} {context}` via WS.
-
-**Fase C (F3) implementada**: Seleção de mensagens no transcript — hover checkbox em `MessageBubble`, toolbar de contagem no `ChatArea`. `DelegarTarefaDrawer` (agent picker + instrução pré-preenchida + radio de visibilidade). `DelegarButton` com badge no `ActionBar`. Delegação via `handleSend(@{id} {instruction})`.
-
-**Fase D (F4) implementada**: REST `GET /api/supervisor_state` estendido com `ai_participants` + `pipeline_transitions`. Novos endpoints: `POST /api/inject-context/:sessionId` (ContextStore Redis) + `POST /api/force-complete/:sessionId`. `OrchestrationTab.tsx` — 5° tab gateado por role `supervisor|admin`: agentes AI + linha do tempo de transições + intervenções. `useSupervisorState` retorna `{ state, refresh }`.
-
 **Permissões**: F1–F3 requerem `agent_assist.operacao`; F4 intervenções requerem role `supervisor` com scope ABAC.
 
 → See [`docs/arcos/arc11-console-orchestration.md`](docs/arcos/arc11-console-orchestration.md)
@@ -724,20 +727,6 @@ Dois fluxos separados pelo tipo de agente avaliado. **Fluxo 1 (agente humano)**:
 
 **Vínculo com Arc 6 Fase 2**: `evaluation_finalized` é a única fonte de truth para relatórios de qualidade. Novo Kafka topic `calibration.events` + endpoint `GET /reports/evaluator-calibration` adicionam dimensão de calibração ao dashboard de qualidade.
 
-**Fases A e B implementadas (2026-05-18)**: DDL + CRUD completos, `contestation_router.py` (11 endpoints), Kafka emitters. `SessionMetricsExtractor` + `fill_auto_computed_criteria()` + `compute_auto_criterion_score()`. `agente_avaliacao_v1.yaml` v3.0: `dimension_threads[]` com `evidence_entries[]` obrigatório por dimensão, skip de critérios `auto_computed`, `calibration_notes` injetadas no LLM, `evaluated_agent_type` roteando contestação vs finalização imediata.
-
-**Fase C implementada (2026-05-18)**: `agente_pre_revisor_v1.yaml` v1.0 — gate de qualidade pré-publicação. MCP tools `evaluation_threads_get` (GET threads por instância) + `evaluation_pre_review_submit` (POST pre-review com dimension_reviews[] + calibration_signal opcional). Fluxo: get_context → get_threads → check_has_threads → review (pre_review_rubric_v1) → submit_pre_review. action=approve|adjust; calibration_signal apenas para padrões sistemáticos.
-
-**Fase D implementada (2026-05-18)**: `agente_revisor_v1.yaml` v1.0 — árbitro pós-contestação (decision upheld/revised por dimensão contestada). MCP tool `evaluation_review_submit` (POST /review com dimension_decisions[]). `skill_revisao_treplica_v1.yaml` v2.0: roteia para AI (`dispatch_revisor_ai` task) ou humano (`aguardar_revisao_humana` suspend) por `reviewer_type`; suporta `ai_then_human` com fallback; `aguardar_proxima_contestacao` para múltiplos rounds; timeout → `congelar_resultado`.
-
-**Fase E implementada (2026-05-18)**: Human review UX na `AvaliacoesPage`. Novos tipos em `@/types`: `DimensionState`, `EvidenceEntry`, `ContestationThread`, `InstanceThreads`, `HumanDimensionDecision`. Novos hooks: `useContestationThreads` (GET /threads), `submitHumanReview` (POST /review), `submitDimensionContestation` (POST /contest). Componentes: `DimensionStateIndicator` (dot colorido por estado), `DimensionThreadCard` (card expansível com thread completo por round), `HumanReviewPanel` (upheld/revised + score_override + justification ≥20 palavras), `DimensionContestPanel13` (checkbox por dimensão + reason ≥10 palavras). `DetailPanel` detecta `isArc13 = threads.length > 0` — fallback transparente para Arc 6 quando sem threads.
-
-**Fase F implementada (2026-05-18)**: Campaign config UI na `CampaignsPage`. Novos campos em `ContestationPolicy`: `reviewer_type` ('ai'|'human'|'ai_then_human'), `contest_deadline_hours`, `use_business_hours`, `pre_review_enabled`, `pre_review_agent_pool`. Novos tipos: `CurationRuleType` (6 valores), `CurationSamplingRule`, `CurationRuleParams`. Hooks: `useCurationSamplingRules`, `saveCurationSamplingRules`. Componentes: `CurationRuleRow` (editor por regra com params condicionais), `CurationSamplingRulesEditor` (lista ordenada), `CurationSamplingRulesDetailPanel` (read/edit no detalhe de campanha). `CreateModal` gateado por `isArc13Skill = workflowSkillId === 'skill_revisao_treplica_v1'` — salva regras via segundo request após criar campanha.
-
-**Fase G implementada (2026-05-18)**: Calibration Dashboard. analytics-api: tabela ClickHouse `calibration_events` (ReplacingMergeTree), `parse_calibration_event` (consumer `calibration.events` — aceita `calibration_reviewed`, ignora `calibration_note_published`), `query_evaluator_calibration` (time-series + summary, `calibration_score = approved/total × 100`), `GET /reports/evaluator-calibration`. platform-ui: `useEvaluatorCalibration` hook (`CalibrationPoint`, `CalibrationSummary`), `CalibrationDashboard.tsx` em `/evaluation/calibration` (KPI strip, LineChart por skill_version × tempo, ReferenceLine 90%, tabela detalhada). Nav item "Calibração" (supervisor/admin), rota em `routes.tsx`, i18n en + pt-BR.
-
-**Fase H implementada (2026-05-18)**: Feedback loop RAG completo. `sampling_engine.py` — avalia 6 regras pós-`evaluation_finalized` (Fluxo 2) em background asyncio task; trigger composto. `contestation_router.resolve_curation` → `httpx POST /v1/knowledge/snippets` (namespace `evaluation:calibration:{campaign_id}`) → `mark_calibration_note_published` + `calibration_note_published` event. `list_curation_reviews` enriquecida com `campaign_id` + `calibration_signal`. `CuradoriaPage.tsx` em `/evaluation/curadoria`: KPI strip, filtros, `CurationCard` (trigger badges + sinal AI preview + 3 ações), `RecalibrateDrawer`. Nav item "Curadoria" (supervisor/admin). Arc 13 completo.
-
 → See [`docs/arcos/arc13-review-contestation.md`](docs/arcos/arc13-review-contestation.md)
 
 ---
@@ -788,9 +777,8 @@ Elimina a dualidade contact/workflow tratando workflows como canal `webhook` na 
 
 ## Pending (Next Iteration)
 
-### Arc 15 — WebRTC ✅ (todas as fases implementadas)
-Ver [`docs/arcos/arc15-webrtc.md`](docs/arcos/arc15-webrtc.md) para detalhe das 6 fases (A–F).
-- Decisão em aberto: bridge PSTN → WebRTC via LiveKit SIP Ingress (eliminar Twilio como canal separado).
+### Arc 15 — WebRTC (decisão em aberto)
+- bridge PSTN → WebRTC via LiveKit SIP Ingress (eliminar Twilio como canal separado).
 
 ### Usage Metering — Channel Gateway Adapters
 - `whatsapp_conversations`, `voice_minutes`, `sms_segments`, `email_messages` *(deferred)*: functions in `usage_emitter.py` ready, adapters not yet calling them.

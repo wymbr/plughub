@@ -1,272 +1,162 @@
-# Delegate — I/O de Workflow via Agente Especialista
+# Delegate — A2A entre Agentes (Modelo Corrigido v2)
 
-> Criado: 2026-05-30 · Status: **especificado, pendente de implementação**
+> Atualizado: 2026-05-30 · **v2 supersede a v1.** A v1 (em git) modelava o delegate
+> como suspend de webhook + criação de sessão independente. Isso provou-se errado:
+> gerava sessão fantasma e contaminava sessões webchat como "webhook". A v2 abaixo
+> é o modelo vigente.
 
-## Motivação
+## Princípio
 
-O modelo Arc 19 trata workflows como canal `webhook` — processos de longa duração sem presença direta do cliente. A primeira implementação do fluxo de portabilidade usou steps `notify` e `collect` diretamente no workflow YAML, o que criou três problemas:
+`delegate()` é **A2A genérico**: um chamador (workflow OU agente) invoca outro **agente**.
+O agente-alvo roda como **conference specialist dentro do `session_id` do chamador**
+— produz um **segmento** (`segment_id` sob o `session_id` do chamador), **nunca** uma
+sessão própria nem um workflow filho.
 
-1. **Acoplamento de canal**: o workflow precisa saber como entregar mensagens e coletar respostas do cliente — trabalho do agente, não do workflow.
-2. **Mecanismo incompleto**: o step `collect` em modo webhook não escrevia em `resume_tokens`, exigindo workaround manual para retomada.
-3. **Fragmentação na analytics**: cada processo gerava 3 sessões independentes sem hierarquia clara, dificultando a visão consolidada do caso do cliente.
+Isso se apoia na premissa da unificação Arc 19: **toda sessão é uma conferência**. O
+specialist entra na conferência do chamador, seja ele webchat (agente) ou webhook
+(workflow). *(A validar: rodar specialist dentro de sessão webhook sem cliente vivo.)*
 
----
+## `task()` vs `delegate()`
 
-## Princípio arquitetural — separação de responsabilidades
+Ambos criam **segmento** no `session_id` do chamador (mesmo mecanismo de conferência).
+A diferença aparece no contexto de **workflow**:
 
-```
-Workflow:  orquestra, suspende, decide, delega. Nunca faz I/O.
-Agente:    interage com o cliente (menu, notify, collect). Nunca chama suspend().
-```
+| Função | Alvo | Cria workflow filho? | Mecanismo de espera |
+|---|---|---|---|
+| `task()` | agente **ou** workflow | sim, quando o alvo é workflow | polling (`agent_delegate` / `agent_delegate_status`) |
+| `delegate()` | **agente** (A2A) | **nunca** | suspend + `workflow_resume` (resume_token) |
 
-| Perfil      | Steps permitidos                                                        | Steps proibidos                                         |
-|-------------|-------------------------------------------------------------------------|---------------------------------------------------------|
-| `workflow`  | task, **delegate**, choice, catch, escalate, complete, invoke, reason, suspend, receive | notify, collect, menu, begin_transaction, end_transaction |
-| `agent`     | notify, collect, menu, begin_transaction, end_transaction, invoke, reason | suspend, **delegate**                                   |
+`delegate` usa suspend/resume (não polling) porque o agente delegado faz **I/O com o
+cliente** e pode demorar (minutos). Mas o retorno é, no caso comum, rápido — é um step
+normal que cede controle ao agente e retoma quando ele conclui.
 
-A validação é feita no parser do YAML e no engine ao iniciar execução.
-
----
-
-## Modelo de sessões — topologia estrela
-
-### Princípio
-
-Toda sessão criada em serviço de um contato de cliente tem `origin_session_id` apontando para **a sessão original do cliente** (a raiz). A hierarquia é **plana (estrela)**, não recursiva (cadeia).
+## Mecanismo do `delegate`
 
 ```
-Session A  (webchat, intake)          ← raiz, sem origin_session_id
-  ├── Session B  (webhook, processo)  ← origin_session_id = A
-  └── Session C  (webchat, confirmação) ← origin_session_id = A
-```
+CHAMADOR (B ou A-new)                         SPECIALIST (segmento do chamador)
 
-Session B cria Session C via `delegate()`. Ao criar Session C, o step herda e propaga `origin_session_id` da sessão raiz (`@ctx.session.origin_session_id`), não o próprio session_id. Com isso, qualquer profundidade de delegação sempre aponta para a raiz.
-
-```python
-# delegate() ao criar sessão-filho
-origin_for_child = ctx.origin_session_id or session_id  # raiz ou self se raiz
-```
-
-### Por que estrela e não cadeia
-
-| | Cadeia A→B→C | Estrela (A centro) |
-|---|---|---|
-| Lookup analytics | Recursivo (B→C→...) | Plano (WHERE origin = A) |
-| Entrada no Analytics | 3 entradas separadas | 1 entrada por caso |
-| WorkflowTraceList | Precisa percorrer cadeia | Um único SELECT |
-| Semântica de origin | "quem me criou" | "caso do cliente que originou" |
-
-### Comportamento para workflows sem intake
-
-Workflows acionados por API, scheduled ou sem sessão de origem têm `origin_session_id = NULL`. O WorkflowTraceList não mostra nó de entrada — apenas os segmentos do webhook. Correto e esperado.
-
-### Performance do reverse lookup
-
-```sql
-SELECT * FROM analytics.sessions FINAL
-WHERE tenant_id = ? AND origin_session_id = ?
-ORDER BY started_at
-```
-
-`origin_session_id` não está na ORDER BY key da tabela `sessions` (que é `(tenant_id, session_id)`). ClickHouse é columnar — o scan é aceitável dado que o número de filhos por raiz é pequeno (tipicamente 2–3). Se o volume de processos for alto, adicionar projection ou secondary index em `origin_session_id`.
-
----
-
-## Mecanismo: step `delegate`
-
-O step `delegate` combina `suspend()` com despacho de agente. É o único step onde um workflow cede controle a um agente para I/O com o cliente.
-
-### Sequência de execução
-
-```
-WORKFLOW (Session B, webhook)            AGENTE (Session C, canal correto)
-
-delegate()
+delegate(pool)
   → gera resume_token
   → grava em {tenant}:resume_tokens
-     campo:  resume_token
-     valor:  "{session_B_id}:{step_id}:{expires_at}"
-  → cria sessão Session C via routing engine:
-       pool: declarado no step
-       origin_session_id: @ctx.session.origin_session_id (= Session A)
-       context: { workflow_resume_token: resume_token, ...inputs }
-  → retorna __suspended__
-  → workflow dorme
-
-                                          agente alocado via routing engine
-                                          agente faz I/O com o cliente:
-                                            notify → menu → collect → ...
-                                          agente conclui
-                                          invoca workflow_resume:
-                                            token:    @ctx.session.workflow_resume_token
-                                            decision: "input" | "approved" | "rejected"
-                                            payload:  { dados coletados }
-                                          → POST /v1/channels/webhook/resume/{token}
-                                          agente encerra normalmente (outcome: resolved)
-
-channel-gateway processa resume:
-  → lookup resume_token → Session B ID + step_id
-  → routing engine aloca instância de portabilidade_processo_ia
-  → skill-flow-engine resume: step_id = aguardar_confirmacao, decision = input
-  → workflow continua
+  → despacha specialist NO MESMO session_id    agente alocado como conference
+     (handle_delegate_conference):             specialist (conference_id set)
+       conference_id, channel = do chamador     parent_segment_id = segmento primário
+       context + delegate_resume_token          do chamador
+  → suspende o FLUXO do chamador (espera A2A)   faz I/O (notify/menu) — ou deferred
+  → NÃO troca canal, NÃO marca webhook-         se canal sem outbound
+     suspended (salvo chamador webhook)         conclui → workflow_resume(resume_token)
+                                                 → retoma o fluxo do chamador
 ```
 
-### YAML do workflow
+**Regra única (decisão 2026-05-30):** o **fluxo** do chamador entra em `suspended`
+durante a espera A2A — seja o chamador agente ou workflow. Ambos registram "em espera";
+muda só a duração (agente retorna rápido, workflow pode demorar). O que a v1 errava e
+**não** deve acontecer: trocar o `channel` do chamador para `webhook`. O canal é
+**preservado** — A-new continua `webchat`, B continua `webhook`.
 
-```yaml
-- id: aguardar_confirmacao
-  type: delegate
-  pool: portabilidade_confirmacao          # pool onde o agente será alocado
-  context:                                 # passado ao ContextStore de Session C
-    numero_atual:    "@ctx.session.numero_atual"
-    contact_id:      "@ctx.session.contact_identifier"
-  timeout_hours: 24
-  on_resume:
-    next: confirmar_portabilidade          # decision = input | approved
-  on_reject:
-    next: confirmacao_rejeitada            # decision = rejected
-  on_timeout:
-    next: timeout_cliente                  # decision = timeout (fired by engine)
-```
+O **badge de status da sessão na lista** é derivado dos **participantes vivos**, não do
+estado interno do fluxo: enquanto o specialist está ativo (A-new com o cliente
+conversando), a sessão lê `active`; sem participante vivo (B depois que C adiou), lê
+`suspended`. Assim a regra de flow é única, mas a UI não mostra "suspended" para uma
+sessão em que o cliente está ativamente conversando.
 
-### YAML do agente de I/O (Session C)
+## Fluxo B → C (workflow → agente; canal inbound-only)
 
-```yaml
-id: skill_agente_confirmacao_portabilidade_v1
+1. B (webhook) resume da aprovação da operadora → `delegate(portabilidade_confirmacao)`.
+2. C (agente_confirmacao) roda como **segmento de B** (specialist). É agente pleno —
+   poderia fazer outbound (WhatsApp/SMS/e-mail) se o canal permitisse.
+3. Canal é `inbound_only` (webchat não tem outbound) → C **não alcança o cliente agora,
+   então adia**: encerra o segmento **sem chamar `workflow_resume`**. Adiar ≠ desistir —
+   ainda pode haver retentativa/aguardo do reconnect.
+4. B permanece **suspended**, marcado `awaiting_customer_inbound` — **mesma semântica do
+   suspend "aguardando autorização da operadora"**. `pending_workflow` key válida.
+5. O `workflow_resume` **com erro/timeout** só é chamado no **timeout final** da espera
+   (delegate timeout / timeout scanner) → B `on_timeout`. Um reconnect bem-sucedido
+   (A-new) resume **antes** disso, com sucesso.
 
-steps:
-  - id: notificar_aprovado
-    type: notify
-    message: "✅ Portabilidade do número {{@ctx.session.numero_atual}} foi aprovada! Confirme para prosseguir."
-    on_success: coletar_resposta
+Resultado nos relatórios: **nenhuma sessão C standalone**. B mostra um segmento da
+tentativa de confirmação (adiada) e fica suspenso aguardando inbound, até o reconnect
+(sucesso) ou o timeout final (falha).
 
-  - id: coletar_resposta
-    type: menu
-    prompt: "Deseja confirmar a portabilidade?"
-    interaction: button
-    options:
-      - id: sim
-        label: "✅ Sim, confirmar"
-      - id: nao
-        label: "❌ Cancelar"
-    output_as: resposta_cliente
-    timeout_s: 86400
-    on_success: retornar_ao_workflow
-    on_timeout: retornar_timeout
+## Fluxo A-new → C (agente → agente; reconnect)
 
-  - id: retornar_ao_workflow
-    type: invoke
-    tool: workflow_resume
-    input:
-      decision: "input"
-      payload:
-        resposta: "$.pipeline_state.resposta_cliente"
-    on_success: finalizar
+1. Cliente reconecta (webchat) → A-new intake detecta `pending_workflow` → menu → confirma
+   → `delegate(portabilidade_confirmacao)`.
+2. C roda como **segmento de A-new** (`segment_id` sob o `session_id` de A-new, sem sessão
+   própria). A-new **permanece `active`/webchat**.
+3. C faz o I/O real (notify→menu→confirma) → `workflow_resume` no token de **B** (B fecha)
+   → depois `workflow_resume` no `delegate_resume_token` de **A-new**.
+4. Fluxo do intake de A-new retoma → `finalizar` → A-new **fecha como webchat normal,
+   com 2 segmentos** (intake primário + confirmação specialist).
 
-  - id: retornar_timeout
-    type: invoke
-    tool: workflow_resume
-    input:
-      decision: "timeout"
-    on_success: finalizar
+## Mudanças por componente
 
-  - id: finalizar
-    type: complete
-    outcome: resolved
-```
+1. **skill-flow-service `persistDelegateFn`**: sempre `handle_delegate_conference`
+   (specialist no `session_id` do chamador). Remover o ramo `webhook_pool →
+   handle_delegate` independente.
+2. **channel-gateway**: aposentar `handle_delegate` (criação de sessão independente) —
+   ou restringi-lo a canais outbound reais e, nesse caso, gravar `session:{child}:meta`.
+   Resume do delegate preserva o `channel` do chamador (sem re-carimbar webhook).
+3. **orchestrator-bridge**: publicar `session_suspended` (status=suspended) **apenas**
+   para chamador de pool webhook. Chamador webchat/agente em delegate-wait permanece
+   `active`. Garantir que A-new feche quando o intake chega a `finalizar` após resume.
+   Validar suporte a conference specialist em sessão webhook (B).
+4. **analytics-api**: C deixa de existir; B/A-new têm `meta` real → `contact_closed`
+   sempre com `tenant_id`. Não regravar `channel` no resume. Segmentos vêm dos eventos
+   de participante (specialist → `parent_segment_id`).
+5. **platform-ui `ListaTab`**: classificar por `channel_type` real, não por presença de
+   step `delegate`/`suspend`. *(Fase C — pendente.)*
+6. **YAML `agente_confirmacao` `verificar_canal`**: **default = `aguardar_inbound` (adiar)**.
+   Só notifica proativamente quando `customer_present == "true"` (flag literal passado pelo
+   reconnect de A-new) OU canal outbound explícito (`email`, etc.). Não usar
+   `delegate_resume_token` (existe nos dois casos no v2) nem depender de
+   `confirmation_channel` (é `@ctx`-ref e pode não propagar — ver Pendências). `intake`
+   `retomar_processo` passa `customer_present: "true"`.
+7. **`handle_delegate_conference`**: grava o `resume_token` com o **step_id real** do pai
+   (passado pelo skill-flow-service), não o literal `"delegate_conference"` (que quebrava
+   o resume). Escreve a `pending_workflow` key quando há `contact_identifier` (B→C). Usa o
+   **canal real do pai** no inbound do specialist.
+8. **`handle_resume`** e **`parse_inbound`**: resume preserva o canal real (lê do meta);
+   `parse_inbound` ignora convites com `conference_id` (specialist ≠ contato novo).
 
-O agente obtém o `resume_token` de `@ctx.session.workflow_resume_token` — escrito pelo engine ao criar Session C via `delegate()`.
+## Como cada problema observado se resolve
 
----
-
-## MCP tool: `workflow_resume`
-
-Nova tool em `mcp-server-plughub/tools/workflow.ts`. Chamada pelo agente ao concluir o I/O.
-
-```typescript
-server.tool("workflow_resume", {
-  decision: z.enum(["input", "approved", "rejected", "timeout"]),
-  payload:  z.record(z.unknown()).optional(),
-}, async (input, ctx) => {
-  const token = await ctx.redis.hget(
-    `${ctx.tenantId}:ctx:${ctx.sessionId}`,
-    "session.workflow_resume_token"
-  )
-  if (!token) return mcpError("token_not_found", "workflow_resume_token missing from context")
-  const parsed = JSON.parse(token as string)
-  const resume_token = parsed.value ?? token
-
-  await fetch(`${CHANNEL_GATEWAY_URL}/v1/channels/webhook/resume/${resume_token}`, {
-    method: "POST",
-    body: JSON.stringify({
-      tenant_id: ctx.tenantId,
-      payload: { decision: input.decision, ...(input.payload ?? {}) },
-    }),
-    headers: { "Content-Type": "application/json" },
-  })
-  return ok({ resumed: true, decision: input.decision })
-})
-```
-
----
-
-## Impacto em `agent_delegate` — eliminação do polling
-
-O modelo de polling (`agent_delegate` → `agent_delegate_status`) é eliminado para I/O assíncrono. A distinção entre step `task` e step `delegate` é:
-
-| Step       | Duração       | Mecanismo               | Uso                                  |
-|------------|---------------|-------------------------|--------------------------------------|
-| `task`     | Segundos-min  | polling síncrono        | IA especialista, conferência interna |
-| `delegate` | Min-dias      | suspend + resume_token  | I/O com cliente, aprovações externas |
-
-`agent_delegate_status` pode ser removido quando o `task` step migrar para usar `delegate` internamente (fase futura). Por ora, o step `task` continua usando o mecanismo de polling existente para não quebrar YAMLs vigentes.
-
----
-
-## Analytics/Sessions — visualização unificada
-
-Com a topologia estrela, a WorkflowTraceList de Session A mostra:
-
-```
-Session A (webchat, intake)
-  STEP TIMELINE: agente portabilidade intake
-    coletar_numero    success → coletar_operadora
-    coletar_operadora success → coletar_contato
-    coletar_contato   success → disparar_workflow
-    disparar_workflow success → finalizar (workflow triggered)
-
-  PROCESSOS RELACIONADOS:
-    Session B (webhook) — processo assíncrono          [closed · resolved]
-      Step timeline: suspend → resumed → delegate → resumed → complete
-
-    Session C (webchat) — confirmação do cliente       [closed · resolved]
-      Transcript: mensagem de aprovação + resposta do cliente
-```
-
-O endpoint `GET /sessions/{A}/workflow-trace` faz dois queries paralelos:
-1. Segmentos de Session A (próprio intake)
-2. Reverse lookup: `WHERE origin_session_id = A` → retorna B e C, ordenados por `started_at`
-
----
-
-## Monitor/Sessions
-
-Session B e C continuam visíveis nos pools respectivos. Com `origin_session_id`, a coluna ORIGIN no Monitor pode exibir o ID de Session A como contexto. Quando `delegate()` estiver em execução em Session B, o bridge pode escrever `session.delegate_active_pool` no ContextStore para que o supervisor_state exponha qual pool está tratando o I/O no momento.
-
----
-
-## Arquivos a criar/modificar
-
-| Arquivo | Ação |
+| Problema | Resolução |
 |---|---|
-| `skill-flow-engine/src/steps/delegate.ts` | Criar — executor do step delegate |
-| `skill-flow-engine/src/executor.ts` | Adicionar `delegate` ao dispatcher de steps |
-| `@plughub/schemas` (`skill-flow.ts`) | Adicionar `DelegateStep` ao `SkillStepSchema` |
-| `mcp-server-plughub/src/tools/workflow.ts` | Adicionar MCP tool `workflow_resume` |
-| `mcp-server-plughub/src/tools/delegation.ts` | Simplificar `agent_delegate` — remover polling |
-| `channel-gateway/adapters/webhook.py` | Garantir que `handle_trigger` aceita `origin_session_id` para sessões-filho de delegate |
-| `analytics-api/sessions.py` | Endpoint `workflow-trace`: adicionar reverse lookup para sessões-filho |
-| `skill_portabilidade_demo_v1.yaml` | Refatorar — substituir `notify`/`collect` por `delegate` |
-| `agente_portabilidade_intake_v1.yaml` | Remover `notify` de início (ou manter por UX) |
-| `agente_confirmacao_portabilidade_v1.yaml` | Criar — agente de I/O de confirmação |
-| `infra/registry/tenant_demo.yaml` | Adicionar pool `portabilidade_confirmacao` + agente |
+| Session C aparece standalone | delegate nunca cria sessão → C é segmento do chamador |
+| A-new marcada como webhook | delegate-wait de chamador webchat não publica webhook-suspend nem regrava canal |
+| A-new presa em `active`, não finaliza | resume conference-native retoma o intake → `finalizar` → fecha |
+| C rodou 10min / `meta` ausente | C não é mais sessão; segmento de confirmação resolve rápido |
+
+## Fases de implementação
+
+- **Fase A** — Parar de materializar C: `persistDelegateFn` sempre conference; B→C
+  inbound_only marca B como `awaiting_customer_inbound`. Ganho visível: C some da lista.
+- **Fase B** — delegate-wait não-webhook: bridge não marca chamador webchat como
+  suspended/webhook; resume preserva canal e fecha A-new no `finalizar`.
+- **Fase C** — UI: heurística de classificação por `channel_type` real; badge de status
+  derivado de participantes vivos (não do estado interno do fluxo).
+- **Fase D** — Timeout scanner do delegate (item pré-existente): quando a espera de B
+  (`awaiting_customer_inbound`) estoura o timeout final, dispara `workflow_resume` com
+  decisão `timeout` → B `on_timeout`. Sem isso, B fica pendente para sempre se o cliente
+  não voltar.
+
+## `context_set` — tool de escrita no ContextStore (corrigido)
+
+**Causa-raiz encontrada:** `context_set` era referenciado em YAMLs (`setar_canal_*`,
+`escrever_*`) mas **não existia como tool registrado** — o step `invoke` chamava
+`mcpCall("context_set")`, falhava, caía no `on_failure` e a tag nunca era escrita. Por
+isso `confirmation_channel` (e qualquer escrita via context_set) chegava `nil` no ctx.
+
+**Fix:** registrado o tool `context_set` em `mcp-server-plughub` (`session.ts`):
+grava `{tenant}:ctx:{session}` campo `tag` = `{value, confidence, source, visibility,
+updated_at}`. Recebe `session_id` + `tenant_id` no input (o `mcpCall` do skill-flow não
+injeta contexto) — os YAMLs passam `$.session_id` / `$.tenant_id`. Permissão
+`context_set` já constava no registry dos agentes intake e processo.
+
+## Pontos a validar em runtime
+
+- Conference specialist dentro de sessão **webhook** B (sem cliente vivo) — o routing/
+  bridge ativam e produzem segmento corretamente?
+- `confirmation_channel` chega como `inbound_only` no contexto do specialist (na v1 o C
+  caía no menu de 10min, indício de que o contexto não propagou) — confirmar propagação.

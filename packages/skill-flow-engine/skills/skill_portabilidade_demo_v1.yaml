@@ -52,6 +52,8 @@ steps:
     type: invoke
     tool: context_set
     input:
+      session_id: "$.session_id"
+      tenant_id:  "$.tenant_id"
       tag:        "session.confirmation_channel"
       value:      "email"
       confidence: 1.0
@@ -63,6 +65,8 @@ steps:
     type: invoke
     tool: context_set
     input:
+      session_id: "$.session_id"
+      tenant_id:  "$.tenant_id"
       tag:        "session.confirmation_channel"
       value:      "inbound_only"
       confidence: 1.0

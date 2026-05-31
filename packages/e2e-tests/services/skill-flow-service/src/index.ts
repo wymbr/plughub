@@ -452,75 +452,42 @@ app.post("/execute", async (req: Request, res: Response) => {
         }
       : undefined
 
-  // Arc 19 delegate: wire persistDelegate.
-  // Two modes based on session type:
-  //   webhook_pool=true  → independent child session (webhook workflow delegates I/O agent)
-  //   webhook_pool=false → conference specialist in parent session (agent reconnect flow)
-  //     The specialist joins the parent session; messages go to the parent stream,
-  //     so the customer stays on the same WebSocket connection — no webchat redirect needed.
+  // Arc 19 delegate (v2): delegate() is A2A — the target agent ALWAYS runs as a
+  // conference specialist INSIDE the caller's session (a segment, never a
+  // standalone session nor a child workflow). This holds whether the caller is a
+  // webhook workflow (Session B) or a webchat agent (Session A-new reconnect).
+  // The specialist joins the parent session; messages go to the parent stream.
+  // child workflows are created by task(), not by delegate().
   const persistDelegateFn: SkillFlowEngineConfig["persistDelegate"] | undefined =
     async (params) => {
-      if (webhook_pool) {
-        // Webhook parent: create independent child session
-        const resp = await fetch(
-          `${CHANNEL_GATEWAY_URL}/v1/channels/webhook/delegate`,
-          {
-            method:  "POST",
-            headers: { "Content-Type": "application/json" },
-            body:    JSON.stringify({
-              tenant_id:         params.tenant_id,
-              pool_id:           params.pool,
-              customer_id,
-              origin_session_id: params.origin_session_id,
-              resume_token:      params.resume_token,
-              context:           params.context,
-              timeout_hours:     params.timeout_hours,
-            }),
-          },
+      const resp = await fetch(
+        `${CHANNEL_GATEWAY_URL}/v1/channels/webhook/delegate-conference`,
+        {
+          method:  "POST",
+          headers: { "Content-Type": "application/json" },
+          body:    JSON.stringify({
+            tenant_id:    params.tenant_id,
+            pool_id:      params.pool,
+            session_id:   params.session_id,
+            customer_id,
+            resume_token: params.resume_token,
+            step_id:      params.step_id,   // parent's real delegate step id (resume matching)
+            context:      params.context,
+            timeout_hours: params.timeout_hours,
+          }),
+        },
+      )
+      if (!resp.ok) {
+        const body = await resp.text().catch(() => "(unreadable)")
+        throw new Error(
+          `[skill-flow-service] persistDelegate (conference): channel-gateway ${resp.status}: ${body}`,
         )
-        if (!resp.ok) {
-          const body = await resp.text().catch(() => "(unreadable)")
-          throw new Error(
-            `[skill-flow-service] persistDelegate (independent): channel-gateway ${resp.status}: ${body}`,
-          )
-        }
-        const data = await resp.json() as { session_id: string }
-        console.log(
-          `[skill-flow-service] persistDelegate: child_session=${data.session_id} pool=${params.pool} step=${params.step_id}`,
-        )
-        return { child_session_id: data.session_id }
-      } else {
-        // Agent parent: conference specialist in parent session.
-        // Session C (created by Session B's delegate) closes on its own via
-        // menu timeout (timeout_s: 600) — no external signal needed.
-        const resp = await fetch(
-          `${CHANNEL_GATEWAY_URL}/v1/channels/webhook/delegate-conference`,
-          {
-            method:  "POST",
-            headers: { "Content-Type": "application/json" },
-            body:    JSON.stringify({
-              tenant_id:    params.tenant_id,
-              pool_id:      params.pool,
-              session_id:   params.session_id,
-              customer_id,
-              resume_token: params.resume_token,
-              context:      params.context,
-              timeout_hours: params.timeout_hours,
-            }),
-          },
-        )
-        if (!resp.ok) {
-          const body = await resp.text().catch(() => "(unreadable)")
-          throw new Error(
-            `[skill-flow-service] persistDelegate (conference): channel-gateway ${resp.status}: ${body}`,
-          )
-        }
-        const data = await resp.json() as { session_id: string }
-        console.log(
-          `[skill-flow-service] persistDelegate (conference): parent=${data.session_id} pool=${params.pool} step=${params.step_id}`,
-        )
-        return { child_session_id: data.session_id }   // same as parent for conference
       }
+      const data = await resp.json() as { session_id: string }
+      console.log(
+        `[skill-flow-service] persistDelegate (conference): parent=${data.session_id} pool=${params.pool} step=${params.step_id}`,
+      )
+      return { child_session_id: data.session_id }   // = parent session_id (segment)
     }
 
   const engine = new SkillFlowEngine({

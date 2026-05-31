@@ -42,17 +42,25 @@ steps:
   #         pending_workflow key permanece válida
   #         cliente reconecta → pending_workflow_get detecta → menu → workflow_resume
   #   3. default → canal outbound (whatsapp, email, sms) → prosseguir
+  # Discriminador: customer_present (passado SÓ pelo reconnect de A-new, onde o
+  # cliente está conectado). NÃO usar delegate_resume_token — ele agora existe nos
+  # dois casos (B→C e A-new→C são ambos conference no modelo v2).
+  # Default = adiar (aguardar_inbound). Só notifica proativamente quando há
+  # cliente conectado (customer_present, passado pelo reconnect) OU um canal
+  # outbound EXPLÍCITO. Isso é robusto a falha de propagação de confirmation_channel:
+  # sem sinal de "pode contatar agora", o seguro é adiar e deixar Session B pendente.
   - id: verificar_canal
     type: choice
     conditions:
-      - field:    "@ctx.session.delegate_resume_token"
-        operator: exists
-        next:     notificar_aprovacao    # conference specialist — cliente conectado
+      - field:    "@ctx.session.customer_present"
+        operator: eq
+        value:    "true"
+        next:     notificar_aprovacao    # cliente conectado (reconnect) → fazer I/O
       - field:    "@ctx.session.confirmation_channel"
         operator: eq
-        value:    "inbound_only"
-        next:     aguardar_inbound       # inbound-only: Session B fica pendente
-    default: notificar_aprovacao         # outbound capable → prosseguir
+        value:    "email"
+        next:     notificar_aprovacao    # canal outbound explícito (proativo) — quando houver adapter
+    default: aguardar_inbound            # sem cliente vivo e sem outbound → adiar (Session B fica pendente)
 
   # ── Etapa 0b: aguardar inbound ────────────────────────────────────────────────
   # Canal inbound-only (webchat, webrtc). Não é possível contatar o cliente

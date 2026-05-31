@@ -262,13 +262,24 @@ class WebhookAdapter(ChannelAdapter):
                 session_id, _exc,
             )
 
+        # Resolve the session's REAL channel — a resume must NOT redefine it.
+        # A webchat session being resumed (e.g. Session A-new's delegate step)
+        # must stay "webchat"; only genuine webhook workflows stay "webhook".
+        resume_channel = "webhook"
+        try:
+            raw_meta = await self._redis.get(f"session:{session_id}:meta")
+            if raw_meta:
+                resume_channel = json.loads(raw_meta).get("channel", "webhook") or "webhook"
+        except Exception:
+            pass
+
         # Publish session_resumed to the canonical stream via conversations.inbound
         # The Core / orchestrator-bridge will handle re-allocation.
         event = {
             "event_id":     str(uuid.uuid4()),
             "session_id":   session_id,
             "tenant_id":    tenant_id,
-            "channel":      "webhook",
+            "channel":      resume_channel,
             "event_type":   "session_resumed",
             "resume_token": resume_token,
             "step_id":      step_id,
@@ -542,8 +553,9 @@ class WebhookAdapter(ChannelAdapter):
         session_id:    str,    # PARENT session — customer is connected here
         customer_id:   str,
         resume_token:  str,    # delegate step resume token (for parent session)
-        context:       dict[str, str],
-        timeout_hours: float,
+        step_id:       str = "",  # parent's delegate step id (for the resume_token value)
+        context:       dict[str, str] = {},
+        timeout_hours: float = 1.0,
     ) -> str:
         """
         Create a conference specialist in an existing agent (webchat) session.
@@ -575,9 +587,13 @@ class WebhookAdapter(ChannelAdapter):
         # the timeout_hours budget.
         ttl_s   = int(timeout_hours * 3600) + 3600
         exp_at  = datetime.now(timezone.utc).isoformat()
+        # The resume_token must carry the PARENT's REAL delegate step_id so that
+        # handle_resume → engine resumeContext.step_id matches the suspended step.
+        # (Using a literal "delegate_conference" here broke the resume — the engine
+        # could not match the step and the parent never finalized.)
         try:
             hash_key    = f"{tenant_id}:resume_tokens"
-            token_value = f"{session_id}:delegate_conference:{exp_at}"
+            token_value = f"{session_id}:{step_id or 'delegate_conference'}:{exp_at}"
             await self._redis.hset(hash_key, resume_token, token_value)
             await self._redis.expire(hash_key, ttl_s)
         except Exception as _e:
@@ -608,6 +624,17 @@ class WebhookAdapter(ChannelAdapter):
             await self._redis.hset(ctx_key, mapping=ctx_writes)
             await self._redis.expire(ctx_key, ttl_s)
 
+        # ── Resolve the PARENT's real channel ─────────────────────────────────
+        # A specialist invite must NOT redefine the parent's channel. A webhook
+        # workflow (Session B) stays "webhook"; a webchat reconnect (Session A-new)
+        # stays "webchat". Read it from the parent session meta (fallback webchat).
+        parent_channel = "webchat"
+        try:
+            raw_meta = await self._redis.get(f"session:{session_id}:meta")
+            if raw_meta:
+                parent_channel = json.loads(raw_meta).get("channel", "webchat") or "webchat"
+        except Exception:
+            pass
 
         # ── Publish conversations.inbound as conference specialist ────────────
         # conference_id signals to routing engine + bridge that this is a
@@ -617,7 +644,7 @@ class WebhookAdapter(ChannelAdapter):
             "event_id":    str(uuid.uuid4()),
             "session_id":  session_id,       # PARENT — conference in this session
             "tenant_id":   tenant_id,
-            "channel":     "webchat",
+            "channel":     parent_channel,   # ← preserve parent channel (never flip)
             "pool_id":     pool_id,
             "conference_id": conference_id,  # ← specialist routing
             "customer_id": customer_id,
@@ -628,9 +655,34 @@ class WebhookAdapter(ChannelAdapter):
         }
         await self._publish(event, topic="conversations.inbound")
 
+        # ── Pending workflow lookup key (customer reconnect detection) ─────────
+        # When the delegating caller is a workflow that captured a contact_identifier
+        # (Session B → inbound_only confirmation), the customer is NOT connected here.
+        # Write the pending_workflow key so the customer's later reconnect (Session
+        # A-new intake) finds the parent resume_token via pending_workflow_get.
+        # Only written when contact_identifier is present (absent for the A-new→C
+        # reconnect delegate, where the customer is already connected).
+        contact_id = context.get("contact_identifier") or context.get("session.contact_identifier")
+        if contact_id:
+            pending_key   = f"{tenant_id}:pending_workflow:{contact_id}"
+            pending_value = json.dumps({
+                "resume_token":     resume_token,
+                "child_session_id": session_id,   # parent session hosts the specialist
+                "pool":             pool_id,
+                "context":          dict(context),
+            })
+            try:
+                await self._redis.set(pending_key, pending_value, ex=ttl_s)
+                logger.debug(
+                    "delegate_conference: pending_workflow key written contact=%s parent=%s",
+                    contact_id, session_id,
+                )
+            except Exception as _e:
+                logger.warning("delegate_conference: could not write pending_workflow key: %s", _e)
+
         logger.info(
-            "delegate_conference: specialist=%s pool=%s parent=%s tenant=%s",
-            conference_id, pool_id, session_id, tenant_id,
+            "delegate_conference: specialist=%s pool=%s parent=%s channel=%s tenant=%s",
+            conference_id, pool_id, session_id, parent_channel, tenant_id,
         )
         return session_id   # specialist runs inside the parent session
 

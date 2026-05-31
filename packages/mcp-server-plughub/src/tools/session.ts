@@ -875,4 +875,45 @@ export function registerSessionTools(server: McpServer, deps: SessionDeps): void
       }
     }
   )
+
+  // ── context_set ───────────────────────────────────────────────────────────
+  // Grava (ou atualiza) uma tag no ContextStore da sessão ({tenant}:ctx:{session}).
+  // Usado por steps `invoke tool: context_set` em skill-flows (workflow OU agente)
+  // que precisam persistir uma decisão da aplicação — p.ex. o workflow define
+  // session.confirmation_channel ANTES de delegar a confirmação ao agente.
+  // session_id e tenant_id são passados explicitamente (use $.session_id e
+  // $.tenant_id nos YAMLs). Não usa session_token — é uma escrita interna do flow.
+  const ContextSetInputSchema = z.object({
+    session_id: z.string().min(1).describe("Session ID. Em YAML use $.session_id."),
+    tenant_id:  z.string().min(1).describe("Tenant ID. Em YAML use $.tenant_id."),
+    tag:        z.string().min(1).describe("Tag namespaced, ex: session.confirmation_channel"),
+    value:      z.union([z.string(), z.number(), z.boolean()]).describe("Valor a gravar"),
+    confidence: z.number().min(0).max(1).optional(),
+    source:     z.string().optional(),
+    visibility: z.string().optional(),
+  })
+  server.tool(
+    "context_set",
+    "Grava uma tag no ContextStore da sessão ({tenant}:ctx:{session}). " +
+    "Usado por steps invoke do skill-flow para persistir decisões da aplicação " +
+    "(ex: session.confirmation_channel). Passe session_id e tenant_id ($.session_id / $.tenant_id).",
+    ContextSetInputSchema.shape as any,
+    async (input: Record<string, unknown>) => {
+      try {
+        const { session_id, tenant_id, tag, value, confidence, source, visibility } =
+          ContextSetInputSchema.parse(input)
+        const entry = JSON.stringify({
+          value:      String(value),
+          confidence: confidence ?? 1.0,
+          source:     source ?? "context_set",
+          visibility: visibility ?? "agents_only",
+          updated_at: new Date().toISOString(),
+        })
+        await (redis as any).hset(`${tenant_id}:ctx:${session_id}`, tag, entry)
+        return ok({ set: true, tag, session_id })
+      } catch (e) {
+        return handleCaughtError(e)
+      }
+    }
+  )
 }

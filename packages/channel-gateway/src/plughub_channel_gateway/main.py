@@ -670,6 +670,7 @@ class WebhookDelegateConferenceRequest(BaseModel):
     session_id:    str     # parent session (customer connected here)
     customer_id:   str
     resume_token:  str     # delegate step resume token for parent session
+    step_id:       str = "" # parent's delegate step id — used to build the resume_token value
     context:       dict[str, str] = {}
     timeout_hours: float = 1.0
 
@@ -695,6 +696,7 @@ async def webhook_delegate_conference(body: WebhookDelegateConferenceRequest) ->
         session_id    = body.session_id,
         customer_id   = body.customer_id,
         resume_token  = body.resume_token,
+        step_id       = body.step_id,
         context       = body.context,
         timeout_hours = body.timeout_hours,
     )

@@ -47,6 +47,14 @@ def parse_inbound(payload: dict[str, Any]) -> dict | None:
     if not session_id or not tenant_id:
         return None
 
+    # Conference specialist invites (conference_id present) are NOT new contacts —
+    # they are a participant (delegate target / @mention specialist) joining an
+    # existing session. Skip: creating a sessions row here would reset the parent's
+    # status to "active" and churn its channel. The participation shows up as a
+    # segment via the participant_joined/left events instead.
+    if payload.get("conference_id"):
+        return None
+
     # ANI/DNIS — source/destination identifiers, channel-agnostic:
     #   voice:     ANI = caller number, DNIS = dialed number
     #   whatsapp:  ANI = sender number, DNIS = business number

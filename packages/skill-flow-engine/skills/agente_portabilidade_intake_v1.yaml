@@ -181,6 +181,7 @@ steps:
       workflow_resume_token: "$.pipeline_state.pendencia.resume_token"
       numero_atual:          "$.pipeline_state.pendencia.context.numero_atual"
       operadora_destino:     "$.pipeline_state.pendencia.context.operadora_destino"
+      customer_present:      "true"   # cliente conectado neste reconnect → specialist faz I/O
     timeout_hours: 1
     on_resume:
       next: finalizar       # specialist concluiu (via resume)
@@ -228,6 +229,8 @@ steps:
     type: invoke
     tool: context_set
     input:
+      session_id: "$.session_id"
+      tenant_id:  "$.tenant_id"
       tag: "session.numero_atual"
       value: "$.pipeline_state.numero_atual"
       confidence: 1.0
@@ -240,6 +243,8 @@ steps:
     type: invoke
     tool: context_set
     input:
+      session_id: "$.session_id"
+      tenant_id:  "$.tenant_id"
       tag: "session.operadora_destino"
       value: "$.pipeline_state.operadora_destino"
       confidence: 1.0
@@ -254,6 +259,8 @@ steps:
     type: invoke
     tool: context_set
     input:
+      session_id: "$.session_id"
+      tenant_id:  "$.tenant_id"
       tag: "session.contact_identifier"
       value: "$.pipeline_state.contact_identifier"
       confidence: 1.0

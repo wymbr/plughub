@@ -4,6 +4,23 @@
 
 ---
 
+## Delegate v2 — itens restantes (pós-correção do ciclo de portabilidade)
+
+Modelo corrigido e backend verde em [`docs/arcos/delegate-workflow-io.md`](docs/arcos/delegate-workflow-io.md)
+(delegate sempre roda o alvo como segmento conference do chamador; A-new fecha como webchat;
+`context_set` registrado; specialist de B adia instantâneo). Restam:
+
+- **Fase C — heurística de canal na UI (`platform-ui` `ListaTab.tsx`)**: classificar a sessão
+  por `channel_type` real, não pela presença de step `delegate`/`suspend`. Hoje uma sessão
+  webchat que usa `delegate` é renderizada como workflow/webhook. Badge de status deve derivar
+  de participantes vivos (sessão com specialist ativo lê `active`, não `suspended`).
+- **Fase D — timeout scanner do delegate**: quando B fica `suspended`
+  (`awaiting_customer_inbound`) e o cliente nunca reconecta, a `pending_workflow` key fica
+  pendente para sempre. Implementar scanner que, ao estourar o timeout final, dispara
+  `workflow_resume` com `decision=timeout` → B `on_timeout` → fecha como failed/timeout.
+
+---
+
 ## Skill hot-reload via YAML em disco sem restart *(deferred — dev/demo only)*
 
 **Fluxo editor → deploy já funciona**: `POST /v1/skills/:id/deploy` → `publishRegistryChanged` → bridge invalida `_skill_flow_cache` → próxima execução busca conteúdo atualizado do agent-registry. Nenhuma mudança necessária para este caminho.
