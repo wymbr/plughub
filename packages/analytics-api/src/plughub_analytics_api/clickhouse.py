@@ -315,6 +315,7 @@ CREATE TABLE IF NOT EXISTS {db}.segments
     participant_id     String,
     pool_id            String,
     agent_type_id      String,
+    flow_id            String DEFAULT '',
     instance_id        String,
     role               String,
     agent_type         String,
@@ -335,6 +336,12 @@ ENGINE = ReplacingMergeTree(ingested_at)
 PARTITION BY toYYYYMM(date)
 ORDER BY (tenant_id, session_id, segment_id)
 """
+
+# Relatórios: flow_id (skill-flow deployado que o agente executou) por segmento.
+# Identidade correta de avaliação para IA (agent_type_id é deprecated).
+_DDL_SEGMENTS_MIGRATE_FLOW = (
+    "ALTER TABLE {db}.segments ADD COLUMN IF NOT EXISTS flow_id String DEFAULT ''"
+)
 
 # ── Arc 5: session_timeline — time-series events tied to segments.
 # Populated by multiple Kafka topics; segment_id enriched post-hoc via timestamp overlap.
@@ -646,6 +653,7 @@ _MIGRATIONS = [
     _ALTER_WORKFLOW_EVENTS_POOL_ID,       # Add pool_id to workflow_events
     _DDL_SESSIONS_MIGRATE_STATUS,         # Arc 19: session status (active|suspended|closed)
     _DDL_SESSIONS_MIGRATE_ORIGIN,         # Arc 19: origin_session_id (webhook → intake link)
+    _DDL_SEGMENTS_MIGRATE_FLOW,           # Relatórios: flow_id (skill deployado) por segmento
 ]
 
 
@@ -903,7 +911,7 @@ class AnalyticsStore:
 
     _SEGMENT_COLS = [
         "segment_id", "session_id", "tenant_id", "participant_id",
-        "pool_id", "agent_type_id", "instance_id", "role", "agent_type",
+        "pool_id", "agent_type_id", "flow_id", "instance_id", "role", "agent_type",
         "parent_segment_id", "sequence_index",
         "started_at", "ended_at", "duration_ms",
         "outcome", "close_reason", "handoff_reason", "issue_status",
@@ -1335,6 +1343,7 @@ def _segment_row(d: dict) -> list:
         d.get("participant_id", ""),
         d.get("pool_id", "") or "",
         d.get("agent_type_id", "") or "",
+        d.get("flow_id", "") or "",
         d.get("instance_id", d.get("participant_id", "")) or "",
         d.get("role", ""),
         d.get("agent_type", ""),
