@@ -219,7 +219,10 @@ export function registerWorkflowTools(
           headers: { "Content-Type": "application/json" },
           body:    JSON.stringify({
             tenant_id: deps.tenantId,
-            payload:   { decision, ...(payload ?? {}) },
+            // Fase E.3: source default "agent" (um agente retomou o workflow via
+            // delegate). Um source explícito no payload do chamador prevalece
+            // (ex.: intake cancelar → "customer_reconnect").
+            payload:   { decision, source: "agent", ...(payload ?? {}) },
           }),
         })
       } catch (err) {

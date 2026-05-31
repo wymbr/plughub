@@ -127,6 +127,7 @@
     "resumeDecision":       "resume",
     "resumePayload":        "payload",
     "childSession":         "child session",
+    "resumedBy":            "resumed by",
     "pipelineExpired":      "Step data not available",
     "pipelineExpiredHint":  "Pipeline state expires after session close. Steps were recorded while the session was active.",
     "execMeta":             "Execution metadata",

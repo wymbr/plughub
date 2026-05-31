@@ -851,6 +851,12 @@ async def get_pipeline_state(
                         if _key.endswith(_suffix):
                             _step = _key[: -len(_suffix)]
                             step_io.setdefault(_step, {})[_field] = _val
+                # Fase E.3: resumed_by = source do payload de resume
+                # (agent | external | timeout_scanner | customer_reconnect).
+                for _io in step_io.values():
+                    _pl = _io.get("payload")
+                    if isinstance(_pl, dict) and _pl.get("source"):
+                        _io["resumed_by"] = str(_pl["source"])
             except Exception:
                 pass
 

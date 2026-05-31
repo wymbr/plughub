@@ -185,7 +185,14 @@ expõe `step_io` (extraído de `pipeline_state.results`): por step, `decision` +
 `payload` (recebidos no resume) + `child_session_id` (do delegate). O
 `WebhookSegmentDetail` renderiza isso sob cada step no timeline. O "enviado antes do
 suspend" continua visível no strip de Input Context (as tags `session.*` que o delegate
-gravou). Pendente: `resumed_by` (E.3) e timestamps `suspended_at`/`resumed_at`.
+gravou).
+
+**E.3 implementado (2026-05-31):** `resumed_by` por step — derivado do `source` do payload
+de resume. Cada caminho carimba a fonte: tool `workflow_resume` → `agent` (um agente
+retomou), curl/operador direto → `external` (default no `handle_resume`), timeout scanner →
+`timeout_scanner`, intake cancelar → `customer_reconnect`. O `step_io` expõe `resumed_by`
+e o `WebhookSegmentDetail` mostra "retomado por: …". Pendente: timestamps
+`suspended_at`/`resumed_at`.
 
 Para cada step de `suspend`/`delegate`, anexar:
 

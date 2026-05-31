@@ -46,6 +46,7 @@ interface StepIO {
   decision?:         string
   payload?:          unknown
   child_session_id?: string
+  resumed_by?:       string
 }
 
 interface PipelineStateResponse {
@@ -97,7 +98,7 @@ function ReasonBadge({ reason }: { reason: string }) {
 
 function StepRow({ t: tr, io, isLast }: { t: StepTransition; io?: StepIO; isLast: boolean }) {
   const { t } = useTranslation('contacts')
-  const hasIo = io && (io.decision || (io.payload !== undefined && io.payload !== null) || io.child_session_id)
+  const hasIo = io && (io.decision || (io.payload !== undefined && io.payload !== null) || io.child_session_id || io.resumed_by)
   return (
     <div className="relative flex items-start gap-3 pb-4">
       {/* Vertical connector */}
@@ -119,6 +120,12 @@ function StepRow({ t: tr, io, isLast }: { t: StepTransition; io?: StepIO; isLast
         {/* Fase E.1: resume I/O (decision + payload recebido, child do delegate) */}
         {hasIo && (
           <div className="mt-1.5 rounded border border-border bg-surface-muted px-2 py-1 text-xs space-y-0.5">
+            {io!.resumed_by && (
+              <div>
+                <span className="text-muted">{t('trace.resumedBy')}: </span>
+                <span className="font-mono text-dark">{io!.resumed_by}</span>
+              </div>
+            )}
             {io!.decision && (
               <div>
                 <span className="text-muted">{t('trace.resumeDecision')}: </span>

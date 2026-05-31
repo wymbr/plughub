@@ -127,6 +127,7 @@
     "resumeDecision":       "resume",
     "resumePayload":        "payload",
     "childSession":         "sessão-filho",
+    "resumedBy":            "retomado por",
     "pipelineExpired":      "Dados de steps indisponíveis",
     "pipelineExpiredHint":  "O pipeline_state expira após o fechamento da sessão.",
     "execMeta":             "Metadados de execução",

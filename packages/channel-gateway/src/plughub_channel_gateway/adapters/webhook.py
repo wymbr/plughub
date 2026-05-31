@@ -203,6 +203,12 @@ class WebhookAdapter(ChannelAdapter):
 
         Returns session_id on success, None if the token is unknown/expired.
         """
+        # Fase E.3: garante uma fonte de resume (resumed_by). Quem entra aqui sem
+        # source é o resume externo (curl/operador/API); o tool workflow_resume marca
+        # "agent" e o timeout scanner marca "timeout_scanner".
+        payload = dict(payload or {})
+        payload.setdefault("source", "external")
+
         hash_key    = f"{tenant_id}:resume_tokens"
         token_value = await self._redis.hget(hash_key, resume_token)
 
