@@ -139,12 +139,13 @@ export function ListaTab({ tenantId, filters, onOpenDetail }: Props) {
             <tbody className="divide-y divide-border">
               {rows.map(row => (
                 <ContactRowItem key={row.session_id} row={row} onClick={() => {
-                  // Heuristic: sessions with channel='' but status='suspended' are
-                  // webhook sessions whose channel was lost due to the parse_routed
-                  // ReplacingMergeTree overwrite bug. Treat them as 'webhook' so
-                  // SessionsPage shows WorkflowTraceList instead of SegmentList.
-                  const effectiveChannel = row.channel || (row.status === 'suspended' ? 'webhook' : '')
-                  onOpenDetail(row.session_id, effectiveChannel)
+                  // Fase C: classify by the REAL channel_type — não por presença de
+                  // step delegate/suspend. O v2 preserva o canal no resume/conference
+                  // (webchat continua webchat, webhook continua webhook), então o canal
+                  // real decide a view: 'webhook' → WorkflowTraceList; demais → SegmentList.
+                  // (O antigo fallback 'suspended → webhook' classificava errado uma
+                  //  sessão webchat suspensa num delegate-wait.)
+                  onOpenDetail(row.session_id, row.channel || '')
                 }} />
               ))}
             </tbody>
@@ -167,8 +168,11 @@ const ABANDONED_REASONS = new Set([
 
 function SessionStatusBadge({ row }: { row: ContactRow }) {
   const { t } = useTranslation('contacts')
-  // Suspended: session open but engine waiting for external signal (webhook workflow)
-  if (!row.closed_at && row.status === 'suspended') {
+  // Fase C: badge "suspended" só para WEBHOOK (workflow sem cliente vivo aguardando
+  // sinal externo). Uma sessão webchat "suspended" está num delegate-wait com o cliente
+  // presente (specialist ativo) → lê como live, não suspended. (channel é um proxy de
+  // "não há cliente vivo"; um contador de participantes vivos exigiria suporte no backend.)
+  if (!row.closed_at && row.status === 'suspended' && row.channel === 'webhook') {
     return (
       <span className="inline-flex items-center gap-1 text-xs font-semibold px-2 py-0.5 rounded-full bg-primary-light text-primary">
         <span className="w-1.5 h-1.5 rounded-full bg-primary inline-block opacity-60" /> {t('lista.suspended')}

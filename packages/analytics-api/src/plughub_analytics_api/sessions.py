@@ -822,6 +822,12 @@ async def get_pipeline_state(
 
         # ── Pipeline state ───────────────────────────────────────────────────
         pipeline_state = None
+        # Fase E.1: I/O por step (o que cada suspend/delegate recebeu no resume).
+        # Extraído de pipeline_state.results, que guarda por step:
+        #   {step}:__resume_decision__  → decision (input|approved|rejected|timeout)
+        #   {step}:__resume_payload__   → payload recebido no resume
+        #   {step}:__child_session_id__ → sessão-filho/specialist do delegate
+        step_io: dict = {}
         if pipeline_raw and not isinstance(pipeline_raw, Exception):
             try:
                 ps = json.loads(pipeline_raw)
@@ -833,6 +839,18 @@ async def get_pipeline_state(
                     "updated_at":      ps.get("updated_at", ""),
                     "transitions":     ps.get("transitions", []),
                 }
+                results = ps.get("results", {}) or {}
+                for _key, _val in results.items():
+                    if not isinstance(_key, str):
+                        continue
+                    for _suffix, _field in (
+                        (":__resume_decision__",   "decision"),
+                        (":__resume_payload__",    "payload"),
+                        (":__child_session_id__",  "child_session_id"),
+                    ):
+                        if _key.endswith(_suffix):
+                            _step = _key[: -len(_suffix)]
+                            step_io.setdefault(_step, {})[_field] = _val
             except Exception:
                 pass
 
@@ -862,8 +880,9 @@ async def get_pipeline_state(
         return JSONResponse(content={
             "pipeline_state": pipeline_state,
             "context":        context,
+            "step_io":        step_io,
         })
 
     except Exception as exc:
         logger.warning("pipeline_state failed session=%s: %s", session_id, exc)
-        return JSONResponse(content={"pipeline_state": None, "context": {}})
+        return JSONResponse(content={"pipeline_state": None, "context": {}, "step_io": {}})

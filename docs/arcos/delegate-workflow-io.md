@@ -136,10 +136,96 @@ tentativa de confirmação (adiada) e fica suspenso aguardando inbound, até o r
   suspended/webhook; resume preserva canal e fecha A-new no `finalizar`.
 - **Fase C** — UI: heurística de classificação por `channel_type` real; badge de status
   derivado de participantes vivos (não do estado interno do fluxo).
-- **Fase D** — Timeout scanner do delegate (item pré-existente): quando a espera de B
-  (`awaiting_customer_inbound`) estoura o timeout final, dispara `workflow_resume` com
-  decisão `timeout` → B `on_timeout`. Sem isso, B fica pendente para sempre se o cliente
-  não voltar.
+- **Fase D** ✅ — Timeout scanner do delegate. Implementado em
+  `channel-gateway/adapters/webhook.py` (`run_timeout_scanner`, background task no
+  `lifespan`, intervalo 60s): varre `*:resume_tokens`, e para cada token com `expires_at`
+  (3º campo do valor) vencido dispara `handle_resume(decision="timeout")` → bridge
+  `_handle_webhook_session_resumed` → engine `on_timeout` do step. `handle_resume` consome
+  o token (HDEL), então cada expiração dispara uma vez. Cobre **suspend** (aprovação da
+  operadora, 48h — antes sem timeout pós-deprecação do workflow-api) **e delegate**
+  (confirmação inbound_only). `pending_workflow` key fica stale e é auto-limpa por
+  `get_pending_workflow` no próximo reconnect. **Nota arquitetural:** este scanner é o
+  primeiro corte; a consolidação num scheduler central (sorted-set + `timer.fired`) está
+  registrada em [`docs/adr/adr-timer-scheduler.md`](../adr/adr-timer-scheduler.md).
+- **Fase E** — Workflow Execution Trace (step-level). Ver seção dedicada abaixo.
+
+## Fase E — Workflow Execution Trace (step-level)
+
+> Conceito que sobrevive do Arc 18 (`ProcessStepTimeline`), reaproveitado como o trace
+> de detalhe de uma sessão webhook em Analytics/Sessions. Hoje o trace mostra só
+> participação; falta a timeline de steps.
+
+### Problema
+
+O `_build_workflow_trace` (`analytics-api/sessions.py`) é **baseado em segmentos**
+(`analytics.segments`): produz nós `input_origin` (intake), `webhook_exec` e
+`specialist_output`. Mostra **quem participou**, não **quais steps o fluxo executou** —
+por isso a sessão B aparece com só 2 nós (exec + output) em vez de toda a sequência
+(`solicitar_operadora` → `determinar_canal_confirmacao` → `setar_canal_*` →
+`notificar_e_confirmar` → `encerrar_sucesso`).
+
+### Duas camadas a unir no relatório
+
+- **Camada A — participação** (já existe): intake (input) → execução webhook → specialist
+  de confirmação (output). Vínculo do intake via `origin_session_id` (topologia estrela).
+- **Camada B — timeline de steps** (a implementar): cada step do fluxo com
+  `entered_at → left_at`, tipo do step e `transition_reason`.
+
+### Fontes de dados (sem infra nova)
+
+- **Sessões ativas/suspensas**: `pipeline_state.transitions[]` + `pipeline_state.results`
+  no Redis (`{tenant}:pipeline:{session}`). O engine já registra cada transição.
+- **Sessões fechadas**: stream canônico persistido (`session:{id}:stream`) — eventos
+  `session_suspended` (`step_id`, `resume_token`) e `session_resumed` (`step_id`, `payload`).
+
+### "Antes do suspend / depois do resume" (recurso da v1)
+
+**E.1 implementado (2026-05-31):** o endpoint `GET /sessions/{id}/pipeline-state` agora
+expõe `step_io` (extraído de `pipeline_state.results`): por step, `decision` +
+`payload` (recebidos no resume) + `child_session_id` (do delegate). O
+`WebhookSegmentDetail` renderiza isso sob cada step no timeline. O "enviado antes do
+suspend" continua visível no strip de Input Context (as tags `session.*` que o delegate
+gravou). Pendente: `resumed_by` (E.3) e timestamps `suspended_at`/`resumed_at`.
+
+Para cada step de `suspend`/`delegate`, anexar:
+
+- **`payload_in` (enviado antes do suspend)**: output do step + tags `session.*` gravadas
+  no ContextStore naquele ponto (ex.: `confirmation_channel`, `numero_atual`). De
+  `pipeline_state.results[step]` + snapshot do ctx.
+- **`payload_out` (recebido após o resume)**: `decision` + `payload`. Do evento
+  `session_resumed` (stream) e de `pipeline_state.results[{step}:__resume_payload__ /
+  __resume_decision__]`.
+- **`resumed_by`**: `session_resumed.author_id` / `payload.source` — distingue operador
+  (curl approve), cliente (reconnect via A-new) ou o timeout scanner (Fase D).
+- **`suspended_at` / `resumed_at`** + a razão do suspend.
+
+### Outras informações relevantes a incluir
+
+- **Snapshot do ContextStore por suspend** — as tags `session.*` no momento (a decisão tomada).
+- **Duration webhook ✅ (E.2 implementado)** — `reports_query.py` `_fetch_sessions`:
+  para canal `webhook`, `handle_time_ms` = **tempo decorrido total** do processo
+  (`closed_at − min(segment.started_at)`), via JOIN `_segdur`. Usa o início do primeiro
+  segmento porque o `opened_at` é re-carimbado a cada resume. Decisão (2026-05-31): o
+  decorrido total é mais útil como "duração" que a soma das durações de segmento (que dava
+  ~ms — tempo de engine, pouco informativo). Inclui as esperas (suspends) — é a duração
+  real do caso. *Futuro:* "corridas vs úteis" (business_hours) lado a lado; soma de
+  segmentos (trabalho ativo) como métrica secundária no trace.
+- **MCP audit** (`mcp.audit` → ClickHouse) — tools chamadas pelos steps `invoke`
+  (`context_set`, `workflow_resume`, …) com allowed/injection/duração ("o que o workflow
+  fez nos bastidores").
+- **Agent business events** (Arc 12 `agent_event`) emitidos durante o fluxo — KPIs de negócio.
+- **Transcript do specialist** (interação de confirmação com o cliente) linkado no nó de output.
+- **`close_reason`/`outcome` por ramo** (resolved/failed/timeout) e retries de step `catch`.
+- **Dados capturados no intake** (número/operadora/contato) no nó `input_origin`, com link
+  pro transcript de A.
+
+### Esboço de implementação
+
+Estender `GET /sessions/{id}/workflow-trace`: em cada nó de execução, anexar um array
+`steps[]` (de `pipeline_state.transitions` para ativas/suspensas; do stream persistido para
+fechadas), com os campos `payload_in`/`payload_out`/`resume_decision`/`resumed_by`/
+`suspended_at`/`resumed_at` nos steps de suspend/delegate. A UI expande o nó `webhook_exec`
+nessa timeline (substitui a antiga aba Trace do Arc 18).
 
 ## `context_set` — tool de escrita no ContextStore (corrigido)
 

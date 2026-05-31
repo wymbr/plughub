@@ -4677,6 +4677,34 @@ async def _handle_webhook_session_resumed(
         "payload":   payload,
     }
 
+    # ── Arc 19 v2: emit a participation segment for THIS resume window ─────────
+    # The resume re-executes the flow from the suspended step. That window must
+    # surface as its own segment, so the trace reads e.g.
+    #   intake (suspended) → confirmação specialist (resolved) → intake-resumed (resolved)
+    # Without this the only primary segment is the pre-suspend window (outcome=
+    # suspended), which é enganoso mesmo quando a sessão resolve. Espelha o padrão
+    # de process_routed (sequence_index, primary_segment, joined/left).
+    _resume_participant = instance_id or agent_type_id
+    _resume_joined_at   = datetime.now(timezone.utc)
+    _resume_joined_iso  = _resume_joined_at.isoformat()
+    _resume_seg_id      = str(uuid.uuid4())
+    _resume_seq_idx     = 0
+    try:
+        _seq_raw = await redis_client.incr(f"session:{session_id}:segment_seq")
+        _resume_seq_idx = int(_seq_raw) - 1
+        await redis_client.expire(f"session:{session_id}:segment_seq", _stl())
+        await redis_client.setex(f"session:{session_id}:primary_segment", 14400, _resume_seg_id)
+    except Exception:
+        pass
+    asyncio.create_task(_publish_participant_event(
+        session_id=session_id, tenant_id=tenant_id,
+        participant_id=_resume_participant, pool_id=pool_id,
+        agent_type_id=agent_type_id, event_type="participant_joined",
+        agent_type="native", role="primary",
+        segment_id=_resume_seg_id, sequence_index=_resume_seq_idx,
+        joined_at=_resume_joined_iso,
+    ))
+
     # Re-activate skill flow with resume context (webhook_pool=True wires
     # persistSuspendWebhook in skill-flow-service for any subsequent suspend steps)
     agent_result = await activate_native_agent(
@@ -4693,6 +4721,20 @@ async def _handle_webhook_session_resumed(
     )
 
     _ai_outcome = (agent_result or {}).get("outcome", "")
+
+    # ── Close the resume segment (outcome = whatever this window resolved to) ──
+    _resume_duration_ms = int(
+        (datetime.now(timezone.utc) - _resume_joined_at).total_seconds() * 1000
+    )
+    asyncio.create_task(_publish_participant_event(
+        session_id=session_id, tenant_id=tenant_id,
+        participant_id=_resume_participant, pool_id=pool_id,
+        agent_type_id=agent_type_id, event_type="participant_left",
+        agent_type="native", role="primary",
+        segment_id=_resume_seg_id, sequence_index=_resume_seq_idx,
+        joined_at=_resume_joined_iso, duration_ms=_resume_duration_ms,
+        outcome=_ai_outcome or None,
+    ))
 
     # "suspended" = flow hit another suspend step; session persists in Redis.
     # Any other terminal outcome closes the session.

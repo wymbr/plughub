@@ -42,9 +42,16 @@ interface ContextEntry {
   updated_at: string | null
 }
 
+interface StepIO {
+  decision?:         string
+  payload?:          unknown
+  child_session_id?: string
+}
+
 interface PipelineStateResponse {
   pipeline_state: PipelineState | null
   context:        Record<string, ContextEntry>
+  step_io?:       Record<string, StepIO>
 }
 
 interface Props {
@@ -88,7 +95,9 @@ function ReasonBadge({ reason }: { reason: string }) {
 
 // ── Step row ─────────────────────────────────────────────────────────────────
 
-function StepRow({ t: tr, isLast }: { t: StepTransition; isLast: boolean }) {
+function StepRow({ t: tr, io, isLast }: { t: StepTransition; io?: StepIO; isLast: boolean }) {
+  const { t } = useTranslation('contacts')
+  const hasIo = io && (io.decision || (io.payload !== undefined && io.payload !== null) || io.child_session_id)
   return (
     <div className="relative flex items-start gap-3 pb-4">
       {/* Vertical connector */}
@@ -107,6 +116,29 @@ function StepRow({ t: tr, isLast }: { t: StepTransition; isLast: boolean }) {
           → <span className="font-mono">{tr.to_step}</span>
           <span className="ml-3">{fmtTime(tr.timestamp)}</span>
         </div>
+        {/* Fase E.1: resume I/O (decision + payload recebido, child do delegate) */}
+        {hasIo && (
+          <div className="mt-1.5 rounded border border-border bg-surface-muted px-2 py-1 text-xs space-y-0.5">
+            {io!.decision && (
+              <div>
+                <span className="text-muted">{t('trace.resumeDecision')}: </span>
+                <span className="font-mono text-dark">{io!.decision}</span>
+              </div>
+            )}
+            {io!.payload !== undefined && io!.payload !== null && (
+              <div className="break-all">
+                <span className="text-muted">{t('trace.resumePayload')}: </span>
+                <span className="font-mono text-dark">{fmtValue(io!.payload)}</span>
+              </div>
+            )}
+            {io!.child_session_id && (
+              <div>
+                <span className="text-muted">{t('trace.childSession')}: </span>
+                <span className="font-mono text-dark">…{io!.child_session_id.slice(-12)}</span>
+              </div>
+            )}
+          </div>
+        )}
       </div>
     </div>
   )
@@ -141,6 +173,7 @@ export function WebhookSegmentDetail({ tenantId, node, onBack }: Props) {
 
   const ps           = data?.pipeline_state
   const ctx          = data?.context ?? {}
+  const stepIo       = data?.step_io ?? {}
   const agentLabel   = node.agent_type_id.replace(/_/g, ' ').replace(/\bv\d+$/, '').trim()
   const isActive     = node.ended_at === null
 
@@ -230,6 +263,7 @@ export function WebhookSegmentDetail({ tenantId, node, onBack }: Props) {
                 <StepRow
                   key={`${tr.from_step}-${idx}`}
                   t={tr}
+                  io={stepIo[tr.from_step]}
                   isLast={idx === ps.transitions.length - 1}
                 />
               ))}

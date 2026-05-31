@@ -415,7 +415,16 @@ def _fetch_sessions(
             FROM {db}.segments FINAL
             WHERE tenant_id = {{tenant_id:String}}
             GROUP BY session_id
-        ) AS _sc ON _sc.session_id = s.session_id"""
+        ) AS _sc ON _sc.session_id = s.session_id
+        -- Fase E.2: início do primeiro segmento da sessão. Usado para o tempo decorrido
+        -- total de webhook (closed_at − primeiro segmento), evitando o opened_at que é
+        -- re-carimbado a cada resume.
+        LEFT JOIN (
+            SELECT session_id, min(started_at) AS first_started_at
+            FROM {db}.segments FINAL
+            WHERE tenant_id = {{tenant_id:String}}
+            GROUP BY session_id
+        ) AS _segdur ON _segdur.session_id = s.session_id"""
 
     # Use __ANI_DNIS__ placeholder instead of str.format() to avoid conflicts
     # with ClickHouse's own {param:Type} syntax inside _joins.
@@ -431,10 +440,20 @@ def _fetch_sessions(
             s.close_reason,
             COALESCE(NULLIF(s.outcome, ''), _seg_out.outcome, _ae_out.outcome) AS outcome,
             s.wait_time_ms,
-            COALESCE(
-                s.handle_time_ms,
-                if(s.closed_at IS NOT NULL AND s.opened_at IS NOT NULL,
-                   toInt64(dateDiff('millisecond', s.opened_at, s.closed_at)), NULL)
+            -- Fase E.2: webhook duration = tempo decorrido total do processo
+            -- (closed_at − início do primeiro segmento). Usa first_started_at porque o
+            -- opened_at é re-carimbado a cada resume. Inclui as esperas (suspends) — é a
+            -- duração real do caso. Demais canais mantêm handle_time_ms / wall-clock.
+            if(
+                COALESCE(NULLIF(s.channel, ''), _ch.channel) = 'webhook',
+                if(s.closed_at IS NOT NULL AND _segdur.first_started_at IS NOT NULL,
+                   toInt64(dateDiff('millisecond', _segdur.first_started_at, s.closed_at)),
+                   NULL),
+                COALESCE(
+                    s.handle_time_ms,
+                    if(s.closed_at IS NOT NULL AND s.opened_at IS NOT NULL,
+                       toInt64(dateDiff('millisecond', s.opened_at, s.closed_at)), NULL)
+                )
             ) AS handle_time_ms,
             __ANI_DNIS__,
             COALESCE(_sc.cnt, 0) AS segment_count,

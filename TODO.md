@@ -18,6 +18,22 @@ Modelo corrigido e backend verde em [`docs/arcos/delegate-workflow-io.md`](docs/
   (`awaiting_customer_inbound`) e o cliente nunca reconecta, a `pending_workflow` key fica
   pendente para sempre. Implementar scanner que, ao estourar o timeout final, dispara
   `workflow_resume` com `decision=timeout` → B `on_timeout` → fecha como failed/timeout.
+- **Fase E — Workflow Execution Trace (step-level)**: o trace de detalhe de uma sessão
+  webhook hoje é baseado em segmentos (mostra quem participou), não nos steps do fluxo.
+  Adicionar a timeline de steps (de `pipeline_state.transitions[]` para ativas/suspensas;
+  do stream persistido para fechadas), com `payload_in`/`payload_out`/`resume_decision`/
+  `resumed_by` por step de suspend/delegate, + snapshot de ContextStore, tempo útil vs
+  corrido, MCP audit, agent_events e transcript do specialist. Design completo em
+  `docs/arcos/delegate-workflow-io.md` § Fase E.
+
+## Scheduler central de timers *(diferido — ADR aceito)*
+
+Consolidar os timers espalhados (timeout de suspend/delegate no channel-gateway,
+`_hook_timeout_guard` no bridge, timeout de `collect`) num módulo único de scheduling:
+sorted-set de deadlines (`ZADD`/`ZRANGEBYSCORE`) + poller único + evento `timer.fired`
+com os donos reagindo; calendar-api permanece o engine de prazo (calcula o *quando*, não
+dispara). Primeiro corte funcional já existe (`run_timeout_scanner` no channel-gateway).
+Decisão e mecanismo em [`docs/adr/adr-timer-scheduler.md`](docs/adr/adr-timer-scheduler.md).
 
 ---
 

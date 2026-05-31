@@ -297,6 +297,8 @@ async def lifespan(app: FastAPI):
     pubsub_task     = asyncio.create_task(_registry.start_pubsub_listener())
     outbound_task   = asyncio.create_task(outbound.run())
     collect_task    = asyncio.create_task(_collect_events_consumer())
+    # Arc 19 Fase D: expira suspends/delegates webhook vencidos (resume_tokens)
+    timeout_scan_task = asyncio.create_task(_webhook_adapter.run_timeout_scanner())
 
     logger.info("✅ Channel Gateway started (instance=%s)", instance_id)
     yield
@@ -305,6 +307,7 @@ async def lifespan(app: FastAPI):
     pubsub_task.cancel()
     outbound_task.cancel()
     collect_task.cancel()
+    timeout_scan_task.cancel()
     await _producer.stop()
     await db_pool.close()
     await _redis.aclose()

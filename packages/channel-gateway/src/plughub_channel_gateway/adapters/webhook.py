@@ -40,11 +40,12 @@ Resume token storage (written by skill-flow-engine suspend executor):
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import secrets
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Literal
 
 import redis.asyncio as aioredis
@@ -262,14 +263,20 @@ class WebhookAdapter(ChannelAdapter):
                 session_id, _exc,
             )
 
-        # Resolve the session's REAL channel — a resume must NOT redefine it.
-        # A webchat session being resumed (e.g. Session A-new's delegate step)
-        # must stay "webchat"; only genuine webhook workflows stay "webhook".
+        # Resolve the session's REAL channel + pool — a resume must NOT redefine them.
+        # A webchat session being resumed (e.g. Session A-new's delegate step) must
+        # stay "webchat"; only genuine webhook workflows stay "webhook". Likewise the
+        # pool_id must be preserved: parse_inbound writes pool_id from this event, so
+        # omitting it makes the ReplacingMergeTree overwrite the sessions row's pool
+        # with '' on every resume.
         resume_channel = "webhook"
+        resume_pool    = ""
         try:
             raw_meta = await self._redis.get(f"session:{session_id}:meta")
             if raw_meta:
-                resume_channel = json.loads(raw_meta).get("channel", "webhook") or "webhook"
+                _meta_r       = json.loads(raw_meta)
+                resume_channel = _meta_r.get("channel", "webhook") or "webhook"
+                resume_pool    = _meta_r.get("pool_id", "") or ""
         except Exception:
             pass
 
@@ -280,6 +287,7 @@ class WebhookAdapter(ChannelAdapter):
             "session_id":   session_id,
             "tenant_id":    tenant_id,
             "channel":      resume_channel,
+            "pool_id":      resume_pool,
             "event_type":   "session_resumed",
             "resume_token": resume_token,
             "step_id":      step_id,
@@ -586,7 +594,11 @@ class WebhookAdapter(ChannelAdapter):
         # delegate step when the specialist finishes. Written with TTL matching
         # the timeout_hours budget.
         ttl_s   = int(timeout_hours * 3600) + 3600
-        exp_at  = datetime.now(timezone.utc).isoformat()
+        # expires_at é o DEADLINE real (now + timeout_hours), não a hora de criação.
+        # O timeout scanner lê este campo; gravar now() fazia o token nascer "vencido"
+        # e o scanner disparava o timeout no primeiro ciclo (~60s) em vez de honrar o
+        # timeout_hours configurado.
+        exp_at  = (datetime.now(timezone.utc) + timedelta(hours=timeout_hours)).isoformat()
         # The resume_token must carry the PARENT's REAL delegate step_id so that
         # handle_resume → engine resumeContext.step_id matches the suspended step.
         # (Using a literal "delegate_conference" here broke the resume — the engine
@@ -685,6 +697,72 @@ class WebhookAdapter(ChannelAdapter):
             conference_id, pool_id, session_id, parent_channel, tenant_id,
         )
         return session_id   # specialist runs inside the parent session
+
+    # ──────────────────────────────────────────────────────────────────────────
+    # Timeout scanner (Arc 19 Fase D) — expira suspends/delegates vencidos
+    # ──────────────────────────────────────────────────────────────────────────
+
+    async def run_timeout_scanner(self, interval_s: int = 60) -> None:
+        """
+        Background task: expira tokens de resume vencidos.
+
+        Varre periodicamente os hashes {tenant}:resume_tokens. Para cada token
+        cujo expires_at (3º campo do valor) já passou, dispara handle_resume com
+        decision="timeout" — o engine roteia para o on_timeout do step suspenso
+        (suspend da operadora OU delegate de confirmação). Sem isso, uma sessão
+        webhook suspensa cujo sinal externo nunca chega (operadora não aprova,
+        cliente não reconecta) ficaria suspensa para sempre.
+
+        handle_resume consome o token (HDEL), então cada expiração dispara uma vez.
+        """
+        logger.info("webhook timeout scanner started (interval=%ds)", interval_s)
+        while True:
+            try:
+                await asyncio.sleep(interval_s)
+                await self._scan_expired_resume_tokens()
+            except asyncio.CancelledError:
+                logger.info("webhook timeout scanner stopped")
+                raise
+            except Exception as exc:
+                logger.warning("webhook timeout scanner iteration error: %s", exc)
+
+    async def _scan_expired_resume_tokens(self) -> None:
+        now = datetime.now(timezone.utc)
+        async for raw_key in self._redis.scan_iter(match="*:resume_tokens", count=100):
+            key       = raw_key if isinstance(raw_key, str) else raw_key.decode()
+            tenant_id = key.rsplit(":resume_tokens", 1)[0]
+            try:
+                entries = await self._redis.hgetall(key)
+            except Exception:
+                continue
+            for raw_token, raw_value in entries.items():
+                token = raw_token if isinstance(raw_token, str) else raw_token.decode()
+                value = raw_value if isinstance(raw_value, str) else raw_value.decode()
+                # value: {session_id}:{step_id}:{expires_at_iso}  (split com maxsplit=2
+                # preserva os ':' do timestamp ISO no terceiro campo)
+                parts = value.split(":", 2)
+                if len(parts) < 3:
+                    continue
+                try:
+                    expires_at = datetime.fromisoformat(parts[2].replace("Z", "+00:00"))
+                except Exception:
+                    continue
+                if now <= expires_at:
+                    continue
+                logger.info(
+                    "webhook timeout scanner: expiring token session=%s step=%s tenant=%s deadline=%s",
+                    parts[0], parts[1], tenant_id, parts[2],
+                )
+                try:
+                    await self.handle_resume(
+                        resume_token=token,
+                        tenant_id=tenant_id,
+                        payload={"decision": "timeout", "source": "timeout_scanner"},
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "webhook timeout scanner: handle_resume failed token=%s: %s", token, exc,
+                    )
 
     # ──────────────────────────────────────────────────────────────────────────
     # Internal helpers
