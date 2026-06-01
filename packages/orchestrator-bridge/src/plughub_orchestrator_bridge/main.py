@@ -205,14 +205,25 @@ async def _synthesize_agent_type_from_skill(
         "(no registered agent_type)",
         skill_id,
     )
-    return {
+    synth: dict = {
         "agent_type_id":          skill_id,
         "framework":              "plughub-native",
         "execution_model":        "stateless",
+        # role is not consumed at runtime (no reads in routing-engine or the
+        # bridge); evaluator-pool isolation comes from routing topology, not
+        # this field. Defaulted to "executor" only for cosmetic completeness.
+        "role":                   "executor",
         "skills":                 [{"skill_id": skill_id}],
         "media_capabilities":     [],
         "_synthesized_from_skill": True,
     }
+    # mention_commands rides inside the flow JSON (see RegistrySyncer._sync_skills).
+    # Carry it onto the synthesized agent_type so @mention specialists work under
+    # deploy-driven provisioning, where there is no registered agent_type to read.
+    mention_commands = flow.get("mention_commands")
+    if isinstance(mention_commands, dict):
+        synth["mention_commands"] = mention_commands
+    return synth
 
 
 async def get_pool_config(
@@ -4375,8 +4386,8 @@ async def process_contact_event(
 
 def _load_mention_commands(skill_id: str) -> dict | None:
     """
-    Load mention_commands from a skill YAML (SKILLS_DIR/{skill_id}.yaml).
-    Returns the dict or None if not found / not declared.
+    Dev fallback: load mention_commands from a skill YAML on disk
+    (SKILLS_DIR/{skill_id}.yaml). Returns the dict or None if not found.
     """
     flow = _load_yaml_fallback(skill_id)
     if flow is None:
@@ -4385,6 +4396,60 @@ def _load_mention_commands(skill_id: str) -> dict | None:
     if not isinstance(mention_commands, dict):
         return None
     return mention_commands
+
+
+def _mention_commands_from_cached_flow(*candidates: str) -> dict | None:
+    """
+    Read mention_commands from an already-cached skill flow. The flow is
+    populated in _skill_flow_cache when the specialist is activated, and
+    (deploy-driven) carries mention_commands nested inside it. Tries each
+    candidate id (skill_id, then agent_type_id) against the cache.
+    """
+    for candidate in filter(None, candidates):
+        flow = _skill_flow_cache.get(candidate)
+        if isinstance(flow, dict):
+            mc = flow.get("mention_commands")
+            if isinstance(mc, dict):
+                return mc
+    return None
+
+
+async def _resolve_mention_commands(
+    tenant_id: str,
+    skill_id: str,
+    agent_type_id: str,
+) -> tuple[dict | None, str]:
+    """
+    Resolve a specialist's mention_commands under deploy-driven provisioning.
+
+    Resolution order (registry as source of truth, disk only as dev fallback):
+      1. _skill_flow_cache — flow already fetched on specialist activation,
+         carrying mention_commands nested inside (RegistrySyncer._sync_skills).
+      2. Agent Registry fetch via get_skill_flow (cache cold) for each id.
+      3. Disk YAML by filename (_load_mention_commands) — legacy/dev fallback.
+
+    Returns (mention_commands | None, lookup_id).
+    """
+    candidates = list(filter(None, [skill_id, agent_type_id]))
+
+    cached = _mention_commands_from_cached_flow(*candidates)
+    if cached is not None:
+        return cached, (skill_id or agent_type_id)
+
+    async with aiohttp.ClientSession() as http:
+        for candidate in candidates:
+            flow = await get_skill_flow(http, tenant_id, candidate)
+            if isinstance(flow, dict):
+                mc = flow.get("mention_commands")
+                if isinstance(mc, dict):
+                    return mc, candidate
+
+    for candidate in candidates:
+        mc = _load_mention_commands(candidate)
+        if mc is not None:
+            return mc, candidate
+
+    return None, ""
 
 
 async def dispatch_mention_command(
@@ -4571,19 +4636,14 @@ async def process_mention_routing(
         )
         return
 
-    # Load mention_commands from skill YAML.
-    # Resolution order:
-    #   1. skill_id   → SKILLS_DIR/skill_copilot_sac_v1.yaml  (populated if file was named after skill_id)
-    #   2. agent_type_id → SKILLS_DIR/agente_copilot_v1.yaml  (the actual filename convention)
-    # YAML files are named after agent_type_id (e.g. agente_copilot_v1.yaml), not skill_id
-    # (skill_copilot_sac_v1), so the agent_type_id fallback is usually the one that resolves.
-    mention_commands: dict | None = None
-    lookup_id = ""
-    for candidate in filter(None, [skill_id, agent_type_id]):
-        mention_commands = _load_mention_commands(candidate)
-        if mention_commands is not None:
-            lookup_id = candidate
-            break
+    # Resolve mention_commands. Deploy-driven: the specialist carries
+    # skill_id (== synthesized agent_type_id), and mention_commands rides
+    # inside the skill flow (RegistrySyncer._sync_skills), round-tripped via
+    # agent-registry — no dependency on a disk filename matching the id.
+    # Disk YAML remains a dev fallback inside _resolve_mention_commands.
+    mention_commands, lookup_id = await _resolve_mention_commands(
+        tenant_id, skill_id, agent_type_id,
+    )
 
     if mention_commands is None:
         logger.warning(

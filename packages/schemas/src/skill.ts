@@ -884,6 +884,17 @@ export const SkillFlowSchema = z.object({
    *       confidence_min: 0.6
    */
   required_context: z.array(SkillRequiredContextSchema).optional(),
+
+  /**
+   * mention_commands — comandos @mention que este especialista reconhece.
+   * Conceitualmente é metadado de skill, mas viaja DENTRO do flow para
+   * round-trip pela agent-registry: o modelo Skill (Prisma) não tem coluna
+   * dedicada, então um campo top-level seria descartado na persistência.
+   * Declarado aqui para sobreviver ao CreateSkillSchema.parse (Zod descarta
+   * chaves não declaradas). RegistrySyncer._sync_skills aninha a partir do
+   * top-level do YAML; a síntese deploy-driven e o mention routing leem de volta.
+   */
+  mention_commands: z.record(MentionCommandSchema).optional(),
 }).refine(
   (flow: { entry: string; steps: Array<{ id: string }> }) => flow.steps.some((s) => s.id === flow.entry),
   { message: "entry deve referenciar um step existente", path: ["entry"] }

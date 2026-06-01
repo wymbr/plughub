@@ -30,8 +30,18 @@ a partir do **deploy do flow** (`PoolSkillSlot.current`), eliminando a dependên
   `skill_id`/`flow_id` — `mark_busy` revalida via Pydantic e descartaria campos não
   declarados ao alocar, apagando a identidade da skill na instância busy.
 
-Pendente: Fase 3c (migrar pools reais do demo + aposentar `infra/registry/*.yaml` +
-RegistrySyncer) e Fase 3d (remover `agent_type` de schema/routing/segments).
+**Fase 3c concluída (2026-06-01)**: todos os pools IA do demo migrados (slot+promote);
+`mention_commands` de especialista resolvido pela Skill via **embed no flow** —
+`mention_commands` declarado em `SkillFlowSchema` (sobrevive ao `CreateSkillSchema.parse`
+do Zod), aninhado no `flow` por `_sync_skills`, persistido na coluna `flow` (JSON),
+devolvido por `get_skill_flow`, carregado na síntese e resolvido em runtime por
+`_resolve_mention_commands` (cache do flow → agent-registry → disco fallback). `role`/
+`capabilities` não replicados (não consumidos em runtime). `REGISTRY_SYNC_DEPLOY_SLOTS=true`
+ligado e validado (`deploy_slots set=2 skip=14 err=0`).
+
+Pendente: aposentar `infra/registry/*.yaml` (agent_types) — exige fonte de slots para boot
+limpo, pois `_sync_deploy_slots` ainda deriva os slots dos agent_types; e Fase 3d (remover
+`agent_type` de schema/routing/segments + hack `_applyMaxConcurrentSessions`).
 
 ---
 

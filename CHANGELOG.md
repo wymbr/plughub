@@ -2,6 +2,25 @@
 
 ---
 
+## Fase 3c — Migração completa para deploy-driven + mention_commands via flow (2026-06-01)
+
+Conclui a Fase 3c: todos os pools IA do demo migrados para deploy-driven (slot+promote), `mention_commands` de especialista resolvido pela Skill (round-trip via agent-registry), e auto-provisionamento de slots ligado e validado.
+
+**mention_commands via embed no flow** (`schemas/src/skill.ts` + `orchestrator-bridge`):
+- Causa do gap: o `mention_commands` nunca round-trippava pela agent-registry — o modelo Prisma `Skill` não tem coluna dedicada, e o `CreateSkillSchema.parse` (Zod) **descartava** a chave quando aninhada em `flow`. No modelo legado funcionava só por leitura de disco por filename (`agente_copilot_v1.yaml`), que quebra no deploy-driven (instância carrega `skill_id`, não o nome do arquivo).
+- Fix: `mention_commands` declarado em `SkillFlowSchema` (sobrevive ao parse) → `RegistrySyncer._sync_skills` aninha o `mention_commands` do top-level do YAML **dentro do flow** → persiste na coluna `flow` (JSON) → `get_skill_flow` devolve. `_synthesize_agent_type_from_skill` carrega o `mention_commands` do flow na síntese; `process_mention_routing` resolve via novo `_resolve_mention_commands` (cache do flow → agent-registry → disco como fallback dev), eliminando o acoplamento ao filename.
+- `role`/`capabilities` avaliados e **não replicados**: confirmado que não são consumidos em runtime (routing-engine e bridge não leem). Isolamento de pools evaluator vem da topologia de roteamento, não do `role`. Síntese defaulta `role="executor"` só por completude cosmética.
+
+**Migração dos pools** (slot+promote via `scripts/migrate_entry_pools.sh` + `migrate_conference_pools.sh`): entrada/jornada (`sac_ia`, `portabilidade_ia`, `reembolso_ia`, `auth_sac_ia`, `auth_ia`, `auth_form_ia`, `contexto_ia`) e conferência/hook (`copilot_sac`, `nps_ia`, `wrapup_ia`, `portabilidade_processo_ia`, `portabilidade_confirmacao`, `evaluador_echo_ia`). Validado: `nps`/`wrapup` (hook `on_human_end`), portabilidade webhook+delegate (intake → suspend → delegate → confirmação → resolved).
+
+**Auto-provisionamento ligado** (`docker-compose.demo.yml`): `REGISTRY_SYNC_DEPLOY_SLOTS=true`. `_sync_deploy_slots` derivou os slots restantes dos agent_types IA do YAML — validado `deploy_slots(set=2 skip=14 err=0)` (set: `fila_humano` + `avaliacao_ia`; skip: os 14 já migrados manualmente; idempotente, pula `human`). `avaliacao_ia` registrou sem 422 nesta rodada (`skills upserted=23 err=0`).
+
+**Issues separados (não bloqueiam)**: (1) copilot `@mention` standby fecha em 0s — bug pré-existente de conferência (corrida na chave `menu:result` session-scoped), documentado no TODO, independente do deploy-driven. (2) `evaluador_echo_ia` provisionado mas não exercitado no demo (hook `on_human_start: []` desativado por design).
+
+**Pendente 3c/3d**: aposentar `infra/registry/*.yaml` (agent_types) requer fonte de slots para boot limpo (hoje `_sync_deploy_slots` deriva dos agent_types); 3d remove `agent_type` de schema/routing/bootstrap/segments + hack `_applyMaxConcurrentSessions`.
+
+---
+
 ## Fase 3b + 3a — Provisionamento deploy-driven (pool + deploy, sem agent_type) (2026-05-31)
 
 Migração do provisionamento de instâncias de IA do `agent_type` (legado) para o **deploy do flow** (`PoolSkillSlot.current`). Fonte de verdade passa a ser o slot de deploy do pool: skill + capacidade ("Concurrent sessions").

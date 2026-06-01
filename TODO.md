@@ -45,19 +45,50 @@ Hoje o Analytics/Agents mistura agente×pool e não separa humano×IA.
   vs capacidade (headroom), SLA. Fontes prontas (`queue_events`, `participation_intervals`,
   `sessions`); faltam endpoints `/reports/pools/{volume,queue,occupancy}` + aba Analytics/Pools.
 - **Fase 3 — migrar provisionamento do demo para Config + Deploy** (elimina YAML/agent_type):
-  - **3b ✅** (2026-05-31): bootstrap provisiona por pool+deploy (`_build_desired_from_deploy`
-    lê `PoolSkillSlot.current` via `GET /v1/pools`); instância carrega `skill_id`;
-    `AgentInstance` do routing declara `skill_id`/`flow_id` (sobrevive ao `mark_busy`).
-  - **3a ✅** (2026-05-31): bridge `process_routed` sintetiza native agent_type pela `skill_id`
-    da instância quando não há agent_type. Validado: pool `teste_demo` 100% Config+Deploy.
-  - **3c** (em andamento): precedência invertida (deploy vence) ✅; síntese centralizada em
-    `get_agent_type` (cobre routed/conferência/queue/restore) ✅; `RegistrySyncer._sync_deploy_slots`
-    auto-provisiona slots do YAML, **opt-in** `REGISTRY_SYNC_DEPLOY_SLOTS=false` ✅; `demo_ia`
-    migrado e validado ✅. **Resta**: migrar demais pools de entrada/jornada; enriquecer síntese
-    p/ especialistas (`mention_commands`/`role`) antes de migrar @mention/conferência; aposentar
-    `infra/registry/*.yaml` + RegistrySyncer.
+  - **3b / 3a / 3c — concluídas** — ver `CHANGELOG.md` (2026-05-31, 2026-06-01) e
+    `docs/arcos/instance-bootstrap.md`. Todos os pools IA migrados (slot+promote);
+    `mention_commands` via embed no flow; `REGISTRY_SYNC_DEPLOY_SLOTS=true` validado.
+  - **Aposentar `infra/registry/*.yaml` (agent_types)** — pendente: `_sync_deploy_slots`
+    ainda *deriva* os slots dos agent_types do YAML, então remover os agent_types exige antes
+    definir uma fonte de slots para boot limpo (slots diretos em vez de derivados de agent_type).
+    Slots já criados persistem em `pool_skill_slots` (PostgreSQL) — ambiente existente sobrevive;
+    o gap é só fresh-boot.
   - **3d** (pendente, por último): remover `agent_type` de schema/routing/bootstrap/segments
     + hack `_applyMaxConcurrentSessions` em `pool-slots.ts`.
+
+---
+
+## Copilot @mention standby — corrida na chave `menu:result` session-scoped
+
+**Bug pré-existente, independente do deploy-driven** (descoberto ao migrar `copilot_sac`,
+mas reproduz igual no caminho legado por `agent_type`). O step `aguardar` do
+`skill_copilot_sac_v1` é um `menu` `agents_only` com `timeout_s: -1` (standby até receber
+`@copilot ativa`). O engine suporta `-1` (`menu.ts` linha 84 → BLPOP timeout 0 = infinito),
+mas o BLPOP observa chaves **session-scoped** (`menu:result:{sessionId}` e
+`session:closed:{sessionId}`, `menu.ts` linhas 172-173). Num conference com agente humano
+*primary* ativo, cada mensagem do humano (incluindo o próprio texto `@copilot ...`) cai em
+`menu:result:{sessionId}` e estoura o standby do copilot na entrada → segmento de **0s** →
+`agent_done` apaga o `specialist_key` → a próxima mention cai em "specialist not active →
+new invite" (re-convite em loop, nunca despacha o comando).
+
+Sintoma confirmado: segmentos `skill copilot sac` de 0s em Analytics/Sessions; log do bridge
+repetindo `mention_routing: specialist pool=copilot_sac not active ... new invite`.
+
+A migração deploy-driven do copilot está OK (provisionamento, síntese, `specialist_key` com
+`skill=skill_copilot_sac_v1`, e `mention_commands` round-trip pela agent-registry — todos
+validados). O que falta é o standby segurar.
+
+Opções de fix (a decidir):
+- **Chave de standby instance-scoped para specialist**: o `aguardar` do copilot deveria
+  bloquear numa chave `menu:result:{sessionId}:{instanceId}` (ou dedicada ao specialist),
+  isolando-o do tráfego do *primary*. O `dispatch_mention_command` LPUSH já mira
+  `menu:result:{sessionId}` — precisaria mirar a chave instance-scoped do specialist ativo.
+- **Trocar o standby de `menu` por `receive`**: o step `receive` já bloqueia em chave própria
+  (`receive:result:{sid}:{iid}`) e suporta `-1` nativo; reescrever o `aguardar` como `receive`
+  + adaptar o dispatch. Mais alinhado ao propósito (escutar sinal, não renderizar menu).
+
+Não bloqueia a migração IA — `nps`/`wrapup` (menu com timeout positivo, visibility do humano)
+e `echo` (step `receive`) não sofrem a corrida.
 
 ---
 

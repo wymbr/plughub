@@ -404,6 +404,15 @@ class RegistrySyncer:
             if raw.get("required_context"):
                 flow["required_context"] = raw["required_context"]
 
+            # mention_commands rides INSIDE the flow JSON so it round-trips
+            # through agent-registry: the Skill model has no dedicated column,
+            # so a top-level payload field would be silently dropped. Deploy-
+            # driven synthesis (_synthesize_agent_type_from_skill) and mention
+            # routing read it back from get_skill_flow(). The `flow` column is
+            # stored as opaque JSON (no strict schema), so the extra key is safe.
+            if raw.get("mention_commands"):
+                flow["mention_commands"] = raw["mention_commands"]
+
             # Build skill payload — supply defaults for optional metadata
             description = raw.get("description") or raw.get("name") or skill_id
             if isinstance(description, str):
@@ -417,9 +426,6 @@ class RegistrySyncer:
                 "classification": raw.get("classification", {"type": "orchestrator"}),
                 "flow":           flow,
             }
-            # mention_commands lives at skill level (not inside flow)
-            if raw.get("mention_commands"):
-                payload["mention_commands"] = raw["mention_commands"]
 
             # delegation_input — typed fields shown in DelegarTarefaDrawer
             if raw.get("delegation_input"):
