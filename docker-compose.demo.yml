@@ -1210,11 +1210,6 @@ services:
       BOOTSTRAP_TENANT_IDS: tenant_demo
       REGISTRY_CONFIG_DIR:  /registry
       SKILLS_DIR:           /skills
-      # Fase 3c — RegistrySyncer auto-provisiona PoolSkillSlot.current a partir
-      # dos agent_types IA do YAML (idempotente; pula human; warning sem derrubar
-      # quando a skill não registra, ex. avaliacao_ia 422). Habilitado após a
-      # síntese passar a replicar mention_commands (embed no flow).
-      REGISTRY_SYNC_DEPLOY_SLOTS: "true"
     depends_on:
       kafka:
         condition: service_healthy

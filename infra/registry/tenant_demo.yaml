@@ -20,16 +20,19 @@ tenant_id: tenant_demo
 pools:
 
   - pool_id: demo_ia
+    deploy: { skill_id: skill_triagem_v2, max_concurrent_sessions: 10 }
     description: "Pool IA — entry point do fluxo IVR com botões (agente_demo_ia_v1)"
     channel_types: [webchat, whatsapp]
     sla_target_ms: 480000
 
   - pool_id: sac_ia
+    deploy: { skill_id: skill_atendimento_sac_v1, max_concurrent_sessions: 10 }
     description: "Pool IA — atendimento SAC via LLM (Claude)"
     channel_types: [webchat, whatsapp]
     sla_target_ms: 480000
 
   - pool_id: fila_humano
+    deploy: { skill_id: skill_fila_v1, max_concurrent_sessions: 50 }
     description: "Pool intermediário — fila para agente humano"
     channel_types: [webchat, whatsapp]
     sla_target_ms: 300000
@@ -63,6 +66,7 @@ pools:
       post_human: []
 
   - pool_id: avaliacao_ia
+    deploy: { skill_id: skill_avaliacao_v1, max_concurrent_sessions: 20 }
     # IMPORTANTE: este pool NÃO deve estar na cadeia de roteamento ao vivo.
     # Apenas agentes de avaliação pós-sessão devem ser registrados aqui.
     description: "Pool exclusivo para avaliação pós-sessão — sem tráfego ao vivo"
@@ -70,6 +74,7 @@ pools:
     sla_target_ms: 600000
 
   - pool_id: contexto_ia
+    deploy: { skill_id: skill_contexto_ia_v1, max_concurrent_sessions: 20 }
     # IMPORTANTE: pool de agentes especialistas em acumulação de contexto.
     # Invocados via task step (mode: assist) — sem tráfego direto de clientes.
     # Qualquer agente especialista pode invocar este pool para enriquecer
@@ -79,6 +84,7 @@ pools:
     sla_target_ms: 30000
 
   - pool_id: portabilidade_ia
+    deploy: { skill_id: skill_portabilidade_intake_v1, max_concurrent_sessions: 10 }
     # Pool do agente de intake de portabilidade.
     # Coleta número atual + operadora destino e persiste no ContextStore.
     # Phase 1: agente_portabilidade_ia_v1 com skill_portabilidade_intake_v1.
@@ -88,6 +94,7 @@ pools:
     sla_target_ms: 300000
 
   - pool_id: portabilidade_processo_ia
+    deploy: { skill_id: skill_portabilidade_demo_v1, max_concurrent_sessions: 20 }
     # Arc 19: pool webhook para o processo assíncrono de portabilidade.
     # Disparado pelo intake via workflow_trigger MCP tool.
     # Executa skill_portabilidade_demo_v1: suspend 48h → collect → complete.
@@ -98,6 +105,7 @@ pools:
     sla_target_ms: 172800000  # 48h em ms
 
   - pool_id: portabilidade_confirmacao
+    deploy: { skill_id: skill_agente_confirmacao_portabilidade_v1, max_concurrent_sessions: 10 }
     # Arc 19 delegate pattern: pool do agente de I/O de confirmação de portabilidade.
     # Acionado pelo delegate() step em skill_portabilidade_demo_v1 após aprovação
     # da operadora. O agente notifica o cliente e coleta sua confirmação.
@@ -107,6 +115,7 @@ pools:
     sla_target_ms: 86400000  # 24h em ms
 
   - pool_id: reembolso_ia
+    deploy: { skill_id: skill_reembolso_intake_v1, max_concurrent_sessions: 10 }
     # Pool do agente de intake de reembolso.
     # Coleta número do pedido + motivo e persiste no ContextStore.
     # Phase 1: agente_reembolso_ia_v1 com skill_reembolso_intake_v1.
@@ -116,6 +125,7 @@ pools:
     sla_target_ms: 300000
 
   - pool_id: auth_sac_ia
+    deploy: { skill_id: skill_atendimento_auth_v1, max_concurrent_sessions: 10 }
     # Pool da composição Auth → SAC (Tier 2 — Sprint 1D).
     # Verifica identidade do cliente antes de rotear para sac_ia.
     # Phase 1: código demo hardcoded "1234" (sem masking real).
@@ -126,6 +136,7 @@ pools:
     sla_target_ms: 180000
 
   - pool_id: copilot_sac
+    deploy: { skill_id: skill_copilot_sac_v1, max_concurrent_sessions: 10 }
     # Pool do co-pilot especialista SAC.
     # Ativado via @mention pelo agente humano de retenção (@copilot).
     # Nunca recebe tráfego direto de clientes — apenas convites via conferência.
@@ -134,6 +145,7 @@ pools:
     sla_target_ms: 15000
 
   - pool_id: auth_ia
+    deploy: { skill_id: skill_auth_ia_v1, max_concurrent_sessions: 20 }
     # Pool do agente de autenticação segura.
     # Executa o fluxo masked begin_transaction → coletar_pin → validar_pin → end_transaction.
     # Pode ser ativado diretamente ou via task step de outro agente.
@@ -142,6 +154,7 @@ pools:
     sla_target_ms: 60000
 
   - pool_id: auth_form_ia
+    deploy: { skill_id: skill_auth_form_v1, max_concurrent_sessions: 20 }
     # Pool do agente de autenticação via formulário.
     # Demonstra field-level masking: email (plain) + senha + codigo_2fa (masked).
     # Ideal para testar a renderização do formulário mascarado no webchat.
@@ -150,6 +163,7 @@ pools:
     sla_target_ms: 60000
 
   - pool_id: wrapup_ia
+    deploy: { skill_id: skill_wrapup_v1, max_concurrent_sessions: 20 }
     # Pool do agente de wrap-up pós-atendimento.
     # Acionado via pool hook on_human_end — obrigatório quando configurado.
     # Coleta notas internas do agente humano (resumo, classificação, próximos passos).
@@ -159,6 +173,7 @@ pools:
     sla_target_ms: 180000
 
   - pool_id: nps_ia
+    deploy: { skill_id: skill_nps_v1, max_concurrent_sessions: 20 }
     # Pool do agente NPS pós-atendimento.
     # Acionado via pool hook on_human_end, em paralelo com wrapup_ia.
     # Conversa exclusivamente com o cliente via visibility array.
@@ -168,6 +183,7 @@ pools:
     sla_target_ms: 120000
 
   - pool_id: evaluador_echo_ia
+    deploy: { skill_id: skill_evaluador_echo_v1, max_concurrent_sessions: 20 }
     # Pool do avaliador echo — teste do receive step em tempo real.
     # Acionado via pool hook on_human_start do pool retencao_humano.
     # NÃO recebe tráfego direto de clientes — apenas via conferência.
@@ -183,107 +199,11 @@ pools:
 
 agent_types:
 
-  # IVR de entrada — menu determinístico, sem LLM (Sprint 1A)
-  # Phase 2: trocar skill_triagem_v2 → skill_demo_ia_v1 para reverter ao IVR original
-  - agent_type_id: agente_demo_ia_v1
-    framework: plughub-native
-    execution_model: stateless
-    role: executor
-    max_concurrent_sessions: 10
-    pools: [demo_ia]
-    skills: [{skill_id: skill_triagem_v2}]
-    permissions:
-      - mcp-server-plughub:agent_heartbeat
-      - mcp-server-plughub:notification_send
-      - mcp-server-plughub:conversation_escalate
-      - mcp-server-plughub:interaction_request
-    capabilities:
-      channels: webchat,whatsapp
-
-  # SAC — execução determinística com Journey (Sprint 1A)
-  # Phase 2: trocar skill_atendimento_sac_v1 → skill_sac_ia_v1 para habilitar LLM
-  - agent_type_id: agente_sac_ia_v1
-    framework: plughub-native
-    execution_model: stateless
-    role: executor
-    max_concurrent_sessions: 10
-    pools: [sac_ia]
-    skills: [{skill_id: skill_atendimento_sac_v1}]
-    permissions:
-      - mcp-server-plughub:agent_heartbeat
-      - mcp-server-plughub:notification_send
-      - mcp-server-plughub:conversation_escalate
-      - mcp-server-plughub:interaction_request
-    capabilities:
-      channels: webchat,whatsapp
-
-  # Portabilidade — intake determinístico (Sprint 1B)
-  # Phase 2: trocar skill_portabilidade_intake_v1 → skill_atendimento_portabilidade_v1
-  - agent_type_id: agente_portabilidade_ia_v1
-    framework: plughub-native
-    execution_model: stateless
-    role: executor
-    max_concurrent_sessions: 10
-    pools: [portabilidade_ia]
-    skills: [{skill_id: skill_portabilidade_intake_v1}]
-    permissions:
-      - mcp-server-plughub:agent_heartbeat
-      - mcp-server-plughub:notification_send
-      - mcp-server-plughub:interaction_request
-      - mcp-server-plughub:context_set
-      - mcp-server-plughub:pending_workflow_get
-      - mcp-server-plughub:workflow_resume
-    capabilities:
-      channels: webchat,whatsapp
-
-  # Reembolso — intake determinístico (Sprint 1C)
-  # Phase 2: trocar skill_reembolso_intake_v1 → skill_atendimento_reembolso_v1
-  - agent_type_id: agente_reembolso_ia_v1
-    framework: plughub-native
-    execution_model: stateless
-    role: executor
-    max_concurrent_sessions: 10
-    pools: [reembolso_ia]
-    skills: [{skill_id: skill_reembolso_intake_v1}]
-    permissions:
-      - mcp-server-plughub:agent_heartbeat
-      - mcp-server-plughub:notification_send
-      - mcp-server-plughub:interaction_request
-      - mcp-server-plughub:context_set
-    capabilities:
-      channels: webchat,whatsapp
-
-  # Auth → SAC — composição Tier 2 (Sprint 1D)
-  # Phase 2: substituir steps text por task → skill_auth_form_v1 (masking real)
-  - agent_type_id: agente_auth_sac_v1
-    framework: plughub-native
-    execution_model: stateless
-    role: executor
-    max_concurrent_sessions: 10
-    pools: [auth_sac_ia]
-    skills: [{skill_id: skill_atendimento_auth_v1}]
-    permissions:
-      - mcp-server-plughub:agent_heartbeat
-      - mcp-server-plughub:notification_send
-      - mcp-server-plughub:conversation_escalate
-      - mcp-server-plughub:interaction_request
-    capabilities:
-      channels: webchat,whatsapp
-
-  # Agente de fila — mantém o cliente esperando e escala para humano
-  - agent_type_id: agente_fila_v1
-    framework: plughub-native
-    execution_model: stateless
-    role: executor
-    max_concurrent_sessions: 50
-    pools: [fila_humano]
-    skills: [{skill_id: skill_fila_v1}]
-    permissions:
-      - mcp-server-plughub:agent_heartbeat
-      - mcp-server-plughub:notification_send
-      - mcp-server-plughub:conversation_escalate
-    capabilities:
-      channels: webchat,whatsapp
+  # NOTA: agent_types IA aposentados (Fase 3c/A) — provisionamento agora vem do
+  # bloco `deploy:` de cada pool (ver seção Pools). O bridge sintetiza um
+  # agent_type native a partir da skill no 404. Apenas o agente humano permanece
+  # declarado aqui (login-driven; não bootstrap-managed) para que o prune do
+  # RegistrySyncer remova os agent_types IA órfãos do registry.
 
   # Agente humano de retenção — gerenciado pelo Agent Assist UI
   - agent_type_id: agente_retencao_humano_v1
@@ -296,182 +216,3 @@ agent_types:
     permissions: []
     capabilities:
       channels: webchat,whatsapp
-
-  # Agente de contexto — context-aware progressive resolution
-  # Invocado via task step (mode: assist) por agentes que precisam de contexto enriquecido.
-  # Nunca recebe tráfego direto — role: executor (specialist não é enum válido no Agent Registry).
-  - agent_type_id: agente_contexto_ia_v1
-    framework: plughub-native
-    execution_model: stateless
-    role: executor
-    max_concurrent_sessions: 20
-    pools: [contexto_ia]
-    skills: [{skill_id: skill_contexto_ia_v1}]
-    permissions:
-      - mcp-server-plughub:agent_heartbeat
-      - mcp-server-plughub:notification_send
-      - mcp-server-plughub:interaction_request
-      - mcp-server-crm:customer_get
-    capabilities:
-      channels: webchat,whatsapp
-      llm: "true"
-      context_resolution: "true"
-
-  # Co-pilot especialista SAC — ativado via @mention pelo agente humano de retenção
-  # Possui mention_commands: ativa, pausa, para
-  - agent_type_id: agente_copilot_v1
-    framework: plughub-native
-    execution_model: stateless
-    role: executor
-    max_concurrent_sessions: 10
-    pools: [copilot_sac]
-    skills: [{skill_id: skill_copilot_sac_v1}]
-    permissions:
-      - mcp-server-plughub:agent_heartbeat
-      - mcp-server-plughub:notification_send
-      - mcp-server-plughub:interaction_request
-    capabilities:
-      channels: webchat,whatsapp
-      llm: "true"
-      copilot: "true"
-
-  # Agente de autenticação — fluxo masked com begin/end_transaction
-  # Verifica PIN do cliente via mcp-server-auth de forma segura (sem expor PIN)
-  - agent_type_id: agente_auth_ia_v1
-    framework: plughub-native
-    execution_model: stateless
-    role: executor
-    max_concurrent_sessions: 20
-    pools: [auth_ia]
-    skills: [{skill_id: skill_auth_ia_v1}]
-    permissions:
-      - mcp-server-plughub:agent_heartbeat
-      - mcp-server-plughub:notification_send
-      - mcp-server-plughub:interaction_request
-      - mcp-server-auth:validate_pin
-      - mcp-server-auth:change_pin
-    capabilities:
-      channels: webchat,whatsapp
-      masked_input: "true"
-
-  # Agente de autenticação via formulário — campos mistos (email plain, senha+2fa masked)
-  # Conecte o webchat ao pool auth_form_ia para testar a renderização do formulário seguro.
-  - agent_type_id: agente_auth_form_v1
-    framework: plughub-native
-    execution_model: stateless
-    role: executor
-    max_concurrent_sessions: 20
-    pools: [auth_form_ia]
-    skills: [{skill_id: skill_auth_form_v1}]
-    permissions:
-      - mcp-server-plughub:agent_heartbeat
-      - mcp-server-plughub:notification_send
-      - mcp-server-plughub:interaction_request
-      - mcp-server-auth:validate_pin
-    capabilities:
-      channels: webchat,whatsapp
-      masked_input: "true"
-
-  # Agente NPS — pesquisa de satisfação isolada com o cliente.
-  # Usa visibility array (customer_participant_id) para que o agente humano
-  # NÃO veja as mensagens de avaliação. Evita animosidade.
-  - agent_type_id: agente_nps_v1
-    framework: plughub-native
-    execution_model: stateless
-    role: executor
-    max_concurrent_sessions: 20
-    pools: [nps_ia]
-    skills: [{skill_id: skill_nps_v1}]
-    permissions:
-      - mcp-server-plughub:agent_heartbeat
-      - mcp-server-plughub:notification_send
-      - mcp-server-plughub:interaction_request
-    capabilities:
-      channels: webchat,whatsapp
-
-  # Agente de wrap-up — notas internas pós-atendimento.
-  # Obrigatório quando configurado. Usa visibility agents_only.
-  - agent_type_id: agente_wrapup_v1
-    framework: plughub-native
-    execution_model: stateless
-    role: executor
-    max_concurrent_sessions: 20
-    pools: [wrapup_ia]
-    skills: [{skill_id: skill_wrapup_v1}]
-    permissions:
-      - mcp-server-plughub:agent_heartbeat
-      - mcp-server-plughub:notification_send
-      - mcp-server-plughub:interaction_request
-    capabilities:
-      channels: webchat,whatsapp
-      finalization: "true"
-
-  # Arc 19: Agente de processo de portabilidade (webhook pool).
-  # Disparado pelo intake via workflow_trigger. Executa skill_portabilidade_demo_v1:
-  #   notify → suspend (48h aguarda aprovação operadora) → choice → collect → complete.
-  - agent_type_id: agente_portabilidade_processo_v1
-    framework: plughub-native
-    execution_model: stateless
-    role: executor
-    max_concurrent_sessions: 20
-    pools: [portabilidade_processo_ia]
-    skills: [{skill_id: skill_portabilidade_demo_v1}]
-    permissions:
-      - mcp-server-plughub:agent_heartbeat
-      - mcp-server-plughub:notification_send
-      - mcp-server-plughub:context_set
-      - mcp-server-plughub:context_get
-    capabilities:
-      channels: webhook
-
-  # Arc 19 delegate: agente de I/O de confirmação de portabilidade.
-  # Despachado pelo delegate() step do skill_portabilidade_demo_v1 após aprovação
-  # da operadora. Notifica o cliente, coleta confirmação e chama workflow_resume.
-  - agent_type_id: agente_confirmacao_portabilidade_v1
-    framework: plughub-native
-    execution_model: stateless
-    role: executor
-    max_concurrent_sessions: 10
-    pools: [portabilidade_confirmacao]
-    skills: [{skill_id: skill_agente_confirmacao_portabilidade_v1}]
-    permissions:
-      - mcp-server-plughub:agent_heartbeat
-      - mcp-server-plughub:notification_send
-      - mcp-server-plughub:interaction_request
-      - mcp-server-plughub:workflow_resume
-    capabilities:
-      channels: webchat,whatsapp
-
-  # Avaliador echo — teste do receive step em tempo real.
-  # Acionado via on_human_start do pool retencao_humano.
-  # Escuta primary + customer via receive step e ecoa como nota agents_only.
-  # role: evaluator — nunca recebe tráfego direto de clientes.
-  - agent_type_id: agente_evaluador_echo_v1
-    framework: plughub-native
-    execution_model: stateless
-    role: executor
-    max_concurrent_sessions: 20
-    pools: [evaluador_echo_ia]
-    skills: [{skill_id: skill_evaluador_echo_v1}]
-    permissions:
-      - mcp-server-plughub:agent_heartbeat
-      - mcp-server-plughub:notification_send
-    capabilities:
-      channels: webchat,whatsapp
-      real_time_evaluation: "true"
-
-  # Agente de avaliação pós-sessão — NÃO deve estar em pool de roteamento ao vivo.
-  # Recebe tráfego apenas via evaluation.requested (Session Replayer), nunca via
-  # conversations.routed. Pool: avaliacao_ia (isolado).
-  - agent_type_id: agente_avaliacao_v1
-    framework: plughub-native
-    execution_model: stateless
-    role: evaluator
-    max_concurrent_sessions: 20
-    pools: [avaliacao_ia]
-    skills: [{skill_id: skill_avaliacao_v1}]
-    permissions:
-      - mcp-server-plughub:evaluation_context_get
-      - mcp-server-plughub:evaluation_submit
-    capabilities:
-      evaluation: "true"

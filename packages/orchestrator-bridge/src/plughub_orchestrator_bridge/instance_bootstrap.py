@@ -317,55 +317,38 @@ class InstanceBootstrap:
         report = ReconciliationReport(tenant_id=tenant_id, dry_run=dry_run)
 
         # ── 1. Estado desejado ─────────────────────────────────────────────────
-        agent_types = await self._fetch_agent_types(http, tenant_id)
-
-        # Fetch ALL pools from the Registry once — used for channel_types lookup,
-        # full pool reconciliation (Section B) AND deploy-driven provisioning
-        # (Fase 3b: pools carrying a current deploy slot → deployed_skill_id).
+        # Fetch ALL pools from the Registry once — used for full pool
+        # reconciliation (Section B) AND deploy-driven provisioning: a pool with
+        # a current deploy slot exposes deployed_skill_id (GET /v1/pools).
         registry_pools = await self._fetch_all_pools(http, tenant_id)
         registry_pool_map: dict[str, dict] = {
             p["pool_id"]: p for p in registry_pools if "pool_id" in p
         }
 
-        # Fase 3b: pools provisioned via Config + Deploy (PoolSkillSlot.current).
-        # GET /v1/pools enriches each pool with deployed_skill_id when a current
-        # slot exists. These pools get instances from the deploy, not agent_types.
+        # Deploy-driven provisioning (Fase 3d): instances come exclusively from
+        # each pool's current deploy slot (PoolSkillSlot.current → deployed_skill_id).
+        # agent_types are no longer a provisioning source — the bridge synthesizes
+        # a native agent_type from the skill on activation. Human pools are
+        # login-driven and carry no deploy slot.
         deployed_pools = [p for p in registry_pools if p.get("deployed_skill_id")]
 
-        if not agent_types and not deployed_pools:
+        if not deployed_pools:
             logger.warning(
-                "No agent types and no deployed pools in registry for tenant=%s "
-                "— reconciliation skipped",
+                "No deployed pools in registry for tenant=%s — reconciliation skipped",
                 tenant_id,
             )
             report.duration_ms = (time.monotonic() - t0) * 1000
             return report
 
-        # Fase 3c — deploy vence: pools com slot de deploy `current` são
-        # provisionados pelo builder deploy-driven; o builder de agent_type os ignora.
-        deployed_pool_ids: set[str] = {
-            p["pool_id"] for p in deployed_pools if p.get("pool_id")
-        }
-
-        all_pool_ids = _extract_all_pool_ids(agent_types)
         pool_channel_types: dict[str, list[str]] = {
-            pid: registry_pool_map.get(pid, {}).get("channel_types", [])
-            for pid in all_pool_ids
+            p["pool_id"]: p.get("channel_types", [])
+            for p in deployed_pools
+            if p.get("pool_id")
         }
-        for p in deployed_pools:
-            pid = p.get("pool_id")
-            if pid and pid not in pool_channel_types:
-                pool_channel_types[pid] = p.get("channel_types", [])
+        deployed_pool_ids: set[str] = set(pool_channel_types.keys())
 
-        desired = _build_desired_state(
-            agent_types, pool_channel_types, tenant_id, deployed_pool_ids
-        )
-
-        # Fase 3b/3c: deploy-driven instances own every pool with a current slot.
-        desired.update(
-            _build_desired_from_deploy(
-                deployed_pools, pool_channel_types, deployed_pool_ids, tenant_id
-            )
+        desired = _build_desired_from_deploy(
+            deployed_pools, pool_channel_types, deployed_pool_ids, tenant_id
         )
 
         # ── 2. Estado atual no Redis ───────────────────────────────────────────
@@ -455,7 +438,7 @@ class InstanceBootstrap:
 
         # ── 8. Reconcilia pool_config keys (write / update / delete) ───────────
         await self._reconcile_pool_configs(
-            http, tenant_id, registry_pools, all_pool_ids, report, dry_run=dry_run
+            http, tenant_id, registry_pools, report, dry_run=dry_run
         )
 
         # ── 9. Reconcilia SET global {tenant}:pools ─────────────────────────────
@@ -812,7 +795,6 @@ class InstanceBootstrap:
         http:           aiohttp.ClientSession,
         tenant_id:      str,
         registry_pools: list[dict],
-        active_pool_ids: list[str],
         report:         ReconciliationReport,
         dry_run:        bool = False,
     ) -> None:
@@ -953,26 +935,6 @@ class InstanceBootstrap:
 
     # ─── Helpers de I/O Registry ──────────────────────────────────────────────
 
-    async def _fetch_agent_types(
-        self, http: aiohttp.ClientSession, tenant_id: str
-    ) -> list[dict]:
-        """GET /v1/agent-types — retorna lista de agent types ativos do tenant."""
-        url     = f"{self._registry_url}/v1/agent-types"
-        headers = {"x-tenant-id": tenant_id}
-        try:
-            async with http.get(
-                url, headers=headers, timeout=aiohttp.ClientTimeout(total=10)
-            ) as resp:
-                if resp.status == 200:
-                    body = await resp.json()
-                    return body.get("agent_types", [])
-                logger.warning(
-                    "Agent Registry returned HTTP %d for agent-types list", resp.status
-                )
-        except Exception as exc:
-            logger.warning("Could not reach Agent Registry (%s): %s", url, exc)
-        return []
-
     async def _fetch_all_pools(
         self, http: aiohttp.ClientSession, tenant_id: str
     ) -> list[dict]:
@@ -1011,90 +973,6 @@ class InstanceBootstrap:
 
 
 # ─── Funções puras (sem I/O) ──────────────────────────────────────────────────
-
-def _extract_all_pool_ids(agent_types: list[dict]) -> list[str]:
-    """Coleta todos os pool IDs distintos dos agent types não-humanos."""
-    result: list[str] = []
-    for at in agent_types:
-        if at.get("framework") == "human":
-            continue
-        for p in at.get("pools", []):
-            pid = p["pool_id"] if isinstance(p, dict) else p
-            if pid not in result:
-                result.append(pid)
-    return result
-
-
-def _build_desired_state(
-    agent_types:        list[dict],
-    pool_channel_types: dict[str, list[str]],
-    tenant_id:          str,
-    deployed_pool_ids:  set[str] | None = None,
-) -> dict[str, dict]:
-    """
-    Constrói o mapa {instance_id → payload desejado} a partir dos agent types
-    e dos channel_types dos pools associados.
-
-    Fase 3c — precedência: deploy vence. Pools que já têm um slot de deploy
-    `current` (deployed_pool_ids) são removidos dos `pools` de cada agent_type;
-    se nenhum pool restar, o agent_type é ignorado (foi migrado para
-    provisionamento deploy-driven). Permite migrar um pool real apenas
-    configurando+promovendo seu slot, sem remover o agent_type legado.
-    """
-    deployed_pool_ids = deployed_pool_ids or set()
-    desired: dict[str, dict] = {}
-    for at in agent_types:
-        if at.get("framework") == "human":
-            continue
-
-        agent_type_id   = at["agent_type_id"]
-        framework       = at.get("framework", "")
-        execution_model = at.get("execution_model", "stateless")
-        max_concurrent  = at.get("max_concurrent_sessions", 1)
-        at_pools: list[str] = [
-            pid
-            for pid in (
-                p["pool_id"] if isinstance(p, dict) else p
-                for p in at.get("pools", [])
-            )
-            if pid not in deployed_pool_ids
-        ]
-        if not at_pools:
-            # Todos os pools deste agent_type migraram para deploy-driven.
-            continue
-
-        # channel_types = união dos channel_types de todos os pools associados
-        channel_types: list[str] = []
-        for pid in at_pools:
-            for ch in pool_channel_types.get(pid, []):
-                if ch not in channel_types:
-                    channel_types.append(ch)
-        if not channel_types:
-            channel_types = ["webchat"]
-
-        for n in range(max_concurrent):
-            instance_id = f"{agent_type_id}-{n + 1:03d}"
-            desired[instance_id] = {
-                "instance_id":             instance_id,
-                "agent_type_id":           agent_type_id,
-                "tenant_id":               tenant_id,
-                "framework":               framework,
-                "execution_model":         execution_model,
-                "status":                  "ready",
-                "state":                   "ready",
-                "current_sessions":        0,
-                # max_concurrent_sessions = number of instances to create.
-                # Each instance handles exactly 1 session at a time (stateless model).
-                # Setting max_concurrent = max_concurrent_sessions here would cause
-                # capacity = N × N instead of N × 1, inflating pool snapshots.
-                "max_concurrent":          1,
-                "max_concurrent_sessions": max_concurrent,
-                "pools":                   at_pools,
-                "channel_types":           channel_types,
-                "source":                  "bootstrap",
-            }
-    return desired
-
 
 def _build_desired_from_deploy(
     deployed_pools:     list[dict],

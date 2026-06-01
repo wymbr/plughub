@@ -39,9 +39,17 @@ devolvido por `get_skill_flow`, carregado na síntese e resolvido em runtime por
 `capabilities` não replicados (não consumidos em runtime). `REGISTRY_SYNC_DEPLOY_SLOTS=true`
 ligado e validado (`deploy_slots set=2 skip=14 err=0`).
 
-Pendente: aposentar `infra/registry/*.yaml` (agent_types) — exige fonte de slots para boot
-limpo, pois `_sync_deploy_slots` ainda deriva os slots dos agent_types; e Fase 3d (remover
-`agent_type` de schema/routing/segments + hack `_applyMaxConcurrentSessions`).
+**Fase 3d-parcial concluída (2026-06-01)**: slots agora vêm do bloco `deploy: { skill_id,
+max_concurrent_sessions }` de cada pool (`RegistrySyncer._sync_deploy_slots_from_pools`,
+sempre roda, idempotente). Os `agent_types` IA foram **aposentados do YAML** — só o agente
+humano resta declarado; o prune limpa os IA órfãos do registry. O reconcile é **deploy-only**:
+`_build_desired_state`/`_extract_all_pool_ids`/`_fetch_agent_types` removidos; o desired state
+vem só de `_build_desired_from_deploy` (pools com `deployed_skill_id`). Hack
+`_applyMaxConcurrentSessions` (pool-slots.ts) removido. Validado: boot limpo provisiona 295
+instâncias só dos slots, sem agent_type IA no registry.
+
+Pendente (Fase C): renomear `agent_type_id`→`skill_id`/`flow_id` (Redis/Kafka/ClickHouse/
+routing/segments) + identidade do agente humano por `user_id` + remover tabela/CRUD `AgentType`.
 
 ---
 
@@ -57,10 +65,10 @@ No restart needed for any configuration change — the controller self-heals.
 
 ```
 reconcile(tenant_id):
-  # Section A — Agent instances
-  agent_types    = GET /v1/agent-types
+  # Section A — Agent instances (deploy-only, Fase 3d)
   registry_pools = GET /v1/pools          ← single call, all pools
-  desired        = build_desired_state(agent_types, registry_pools)
+  deployed_pools = [p for p in registry_pools if p.deployed_skill_id]
+  desired        = build_desired_from_deploy(deployed_pools)   # {pool_id}-{n} per slot
   actual         = scan {tenant}:instance:* from Redis
 
   diff:

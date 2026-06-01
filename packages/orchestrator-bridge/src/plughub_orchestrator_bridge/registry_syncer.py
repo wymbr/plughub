@@ -215,61 +215,52 @@ class RegistrySyncer:
         if prune and declared_ids:
             await self._prune_agent_types(http, headers, declared_ids, report)
 
-        # ── Fase 3c: provision deploy slots (PoolSkillSlot.current) from the
-        # declared AI agent_types so the demo comes up deploy-driven. Idempotent.
-        # Opt-in (default off) during transition: the synthesized agent_type does
-        # not carry specialist config (mention_commands/role), so blanket
-        # auto-migration of @mention/conference pools is gated behind this flag.
-        if os.getenv("REGISTRY_SYNC_DEPLOY_SLOTS", "false").lower() == "true":
-            await self._sync_deploy_slots(http, headers, cfg.get("agent_types", []), report)
+        # ── Deploy slots (PoolSkillSlot.current) sourced from each pool's
+        # `deploy:` block (skill_id + max_concurrent_sessions). Canonical
+        # provisioning source after agent_types retirement (Fase 3c/A):
+        # the pool owns its deploy, the bootstrap sources instances from the
+        # slot, and the bridge synthesizes a native agent_type from the skill.
+        # Idempotent — always runs.
+        await self._sync_deploy_slots_from_pools(http, headers, cfg.get("pools", []), report)
 
         return report
 
     # ── Deploy-slot sync (Fase 3c) ──────────────────────────────────────────────
 
-    async def _sync_deploy_slots(
+    async def _sync_deploy_slots_from_pools(
         self,
-        http:        aiohttp.ClientSession,
-        headers:     dict,
-        agent_types: list[dict],
-        report:      SyncReport,
+        http:    aiohttp.ClientSession,
+        headers: dict,
+        pools:   list[dict],
+        report:  SyncReport,
     ) -> None:
         """
-        Fase 3c — ensure each AI agent_type's pool has a deploy slot `current`
-        matching the agent_type's skill + capacity. Makes provisioning
-        deploy-driven (the bootstrap then sources instances from the slot, and
-        the agent_type becomes vestigial — removed in 3d).
+        Fase 3c/A — ensure each pool with a `deploy:` block has a deploy slot
+        `current` matching the declared skill_id + max_concurrent_sessions.
+        Canonical provisioning source after agent_types retirement: the pool
+        owns its deploy; the bootstrap sources instances from the slot and the
+        bridge synthesizes a native agent_type from the skill on activation.
 
-        Idempotent: only sets+promotes when the pool's current slot does not
-        already match the desired skill_id + max_concurrent_sessions. Human
-        agent_types (login-driven pools) are skipped.
+        A pool without a `deploy:` block is skipped (human/login-driven pools,
+        or pools provisioned via the Config UI). Idempotent: _ensure_deploy_slot
+        only sets+promotes when the current slot does not already match.
         """
-        for at in agent_types:
-            if at.get("framework") == "human":
+        for pool in pools:
+            deploy = pool.get("deploy")
+            if not isinstance(deploy, dict):
                 continue
-
-            skills = at.get("skills") or []
-            skill_id = ""
-            for s in skills:
-                skill_id = s.get("skill_id", "") if isinstance(s, dict) else str(s)
-                if skill_id:
-                    break
-            if not skill_id:
-                continue  # no flow to deploy
-
+            pool_id  = pool.get("pool_id", "")
+            skill_id = deploy.get("skill_id", "")
+            if not pool_id or not skill_id:
+                continue
             try:
-                max_concurrent = int(at.get("max_concurrent_sessions") or 1)
+                max_concurrent = int(deploy.get("max_concurrent_sessions") or 1)
             except (TypeError, ValueError):
                 max_concurrent = 1
             max_concurrent = max(1, max_concurrent)
-
-            for pool_ref in at.get("pools", []):
-                pool_id = pool_ref["pool_id"] if isinstance(pool_ref, dict) else pool_ref
-                if not pool_id:
-                    continue
-                await self._ensure_deploy_slot(
-                    http, headers, pool_id, skill_id, max_concurrent, report
-                )
+            await self._ensure_deploy_slot(
+                http, headers, pool_id, skill_id, max_concurrent, report
+            )
 
     async def _ensure_deploy_slot(
         self,

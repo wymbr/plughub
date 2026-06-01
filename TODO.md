@@ -45,16 +45,15 @@ Hoje o Analytics/Agents mistura agente×pool e não separa humano×IA.
   vs capacidade (headroom), SLA. Fontes prontas (`queue_events`, `participation_intervals`,
   `sessions`); faltam endpoints `/reports/pools/{volume,queue,occupancy}` + aba Analytics/Pools.
 - **Fase 3 — migrar provisionamento do demo para Config + Deploy** (elimina YAML/agent_type):
-  - **3b / 3a / 3c — concluídas** — ver `CHANGELOG.md` (2026-05-31, 2026-06-01) e
-    `docs/arcos/instance-bootstrap.md`. Todos os pools IA migrados (slot+promote);
-    `mention_commands` via embed no flow; `REGISTRY_SYNC_DEPLOY_SLOTS=true` validado.
-  - **Aposentar `infra/registry/*.yaml` (agent_types)** — pendente: `_sync_deploy_slots`
-    ainda *deriva* os slots dos agent_types do YAML, então remover os agent_types exige antes
-    definir uma fonte de slots para boot limpo (slots diretos em vez de derivados de agent_type).
-    Slots já criados persistem em `pool_skill_slots` (PostgreSQL) — ambiente existente sobrevive;
-    o gap é só fresh-boot.
-  - **3d** (pendente, por último): remover `agent_type` de schema/routing/bootstrap/segments
-    + hack `_applyMaxConcurrentSessions` em `pool-slots.ts`.
+  - **3b / 3a / 3c / 3d-parcial — concluídas** — ver `CHANGELOG.md` (2026-05-31, 2026-06-01)
+    e `docs/arcos/instance-bootstrap.md`. Pools IA migrados; `mention_commands` via embed no
+    flow; slots vêm do `deploy:` de cada pool (boot limpo OK); agent_types IA aposentados do
+    YAML (só o human resta, prune limpa o registry); reconcile deploy-only; hack
+    `_applyMaxConcurrentSessions` e builder legado `_build_desired_state` removidos.
+  - **Fase C** (pendente — grande/mecânica): renomear o campo `agent_type_id`→`skill_id`/
+    `flow_id` em Redis/Kafka/ClickHouse/routing/segments; identidade do agente humano por
+    `user_id` (hoje ainda vive como `agent_type`); e só então remover a tabela/CRUD `AgentType`
+    (bloqueada por essa identidade humana). `agent_type_id` segue como carrier de `skill_id` até lá.
 
 ---
 

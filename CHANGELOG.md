@@ -2,6 +2,24 @@
 
 ---
 
+## Fase 3d (parcial) — Slots por pool.deploy, agent_types YAML aposentados, reconcile deploy-only (2026-06-01)
+
+Aposenta os `agent_types` IA como fonte de provisionamento. O pool passa a ser dono do seu deploy; o bootstrap reconcilia exclusivamente a partir dos slots.
+
+**Fonte de slots = `pool.deploy`** (decisão 1a): cada pool IA em `infra/registry/tenant_demo.yaml` ganhou `deploy: { skill_id, max_concurrent_sessions }`. `RegistrySyncer._sync_deploy_slots_from_pools` cria/promove o slot a partir do pool (substitui a antiga `_sync_deploy_slots` baseada em agent_types; sempre roda, idempotente). Env `REGISTRY_SYNC_DEPLOY_SLOTS` removido (morto).
+
+**agent_types IA aposentados do YAML**: a seção `agent_types` foi reduzida ao único agente humano (`agente_retencao_humano_v1`, login-driven). O prune do RegistrySyncer remove os 16 agent_types IA órfãos do registry (`agent_types deleted=16`), restando só `['agente_retencao_humano_v1']`.
+
+**reconcile deploy-only** (`instance_bootstrap.py`): removidos `_build_desired_state`, `_extract_all_pool_ids`, `_fetch_agent_types` e o param morto `active_pool_ids` de `_reconcile_pool_configs`. O reconcile agora monta o desired state só via `_build_desired_from_deploy` (pools com `deployed_skill_id`). O bridge sintetiza um agent_type native a partir da skill na ativação (404 → síntese).
+
+**Hack removido** (`agent-registry/routes/pool-slots.ts`): `_applyMaxConcurrentSessions` (propagava max_concurrent do slot para agent_types do pool) + as 2 chamadas em promote/rollback. Dead após a aposentadoria (a capacidade vive no slot).
+
+**Validado** (boot limpo, Redis vazio): `deploy_slots(set=0 skip=16 err=0)`, `agent_types deleted=16` → só o human; `Reconciliation created=295 errors=0` — 295 instâncias IA provisionadas exclusivamente pelos slots de deploy, sem nenhum agent_type IA no registry. Smoke-test `sac_ia` ok.
+
+**Decisão 2a — campo `agent_type_id` mantido como carrier de `skill_id`** (proxy 1:1 em `_build_desired_from_deploy`): segue load-bearing no routing (restrição em `router.py`, chaves `agent_perf:{agent_type_id}`, crash recovery). A renomeação `agent_type_id`→`skill_id`/`flow_id` e a remoção da tabela/CRUD `AgentType` (bloqueada pela identidade do agente humano, que ainda vive como agent_type) ficam para a **Fase C**.
+
+---
+
 ## Fase 3c — Migração completa para deploy-driven + mention_commands via flow (2026-06-01)
 
 Conclui a Fase 3c: todos os pools IA do demo migrados para deploy-driven (slot+promote), `mention_commands` de especialista resolvido pela Skill (round-trip via agent-registry), e auto-provisionamento de slots ligado e validado.
