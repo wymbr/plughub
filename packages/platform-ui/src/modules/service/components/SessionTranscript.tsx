@@ -289,8 +289,13 @@ export function SessionTranscript({ tenantId, sessionId, onBack, canJoin = true,
       })
     : insights
 
+  const segmentAgent = segment
+    ? (segment.agent_type === 'human' && segment.user_login
+        ? segment.user_login
+        : segment.participant_id)
+    : ''
   const segmentLabel = segment
-    ? `${segment.role} · ${segment.agent_type === 'human' ? '\u{1F464}' : '\u{1F916}'} ${segment.participant_id}`
+    ? `${segment.role} · ${segment.agent_type === 'human' ? '\u{1F464}' : '\u{1F916}'} ${segmentAgent}`
     : null
 
   return (

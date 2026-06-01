@@ -45,6 +45,12 @@ export const ContactSegmentSchema = z.object({
   participant_id:    z.string(),
   role:              z.enum(["primary", "specialist", "supervisor", "evaluator", "reviewer"]),
   agent_type:        z.enum(["ai", "human"]).default("ai"),
+  // Identity beyond the (deprecated) synthetic agent_type_id:
+  //   flow_id — AI: the deployed skill the agent ran ("" for humans)
+  //   user_id — human: the login user_id ("" for AI)
+  flow_id:           z.string().default(""),
+  user_id:           z.string().default(""),
+  user_login:        z.string().default(""),   // human: login/email for display
 
   // ── Timing
   started_at:        z.string(),          // ISO-8601
@@ -80,6 +86,10 @@ export const ConversationParticipantEventSchema = z.object({
   instance_id:      z.string().nullable().default(null),
   pool_id:          z.string().nullable().default(null),
   agent_type:       z.enum(["ai", "human"]).default("ai"),
+  // C1 identity: flow_id (AI, deployed skill) / user_id (human, login). Both optional.
+  flow_id:          z.string().nullable().optional(),
+  user_id:          z.string().nullable().optional(),
+  user_login:       z.string().nullable().optional(),
   channel:          z.string().nullable().default(null),
   conference_id:    z.string().nullable().default(null),
   joined_at:        z.string().optional(),   // ISO-8601, present on both joined/left

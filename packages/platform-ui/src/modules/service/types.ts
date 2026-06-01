@@ -129,6 +129,9 @@ export interface ContactSegment {
   participant_id:    string
   pool_id:           string
   agent_type_id:     string
+  flow_id?:          string          // AI: deployed skill the agent ran
+  user_id?:          string          // human: login user_id (stable)
+  user_login?:       string          // human: login/email for display
   instance_id:       string | null
   role:              SegmentRole
   agent_type:        "ai" | "human"

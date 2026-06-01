@@ -592,7 +592,16 @@ async def activate_human_agent(
     # agent_done, process_contact_event reads pool_id from meta to find the
     # pool_config and its on_human_end hooks. Without pool_id, no hooks fire
     # and the session closes immediately without NPS/wrap-up.
+    # C1 — human identity: read the login (email) off the instance so it can be
+    # denormalized onto the segment via the participant events (join + left).
+    _human_user_login = ""
     if instance_id:
+        try:
+            _raw_inst = await redis_client.get(f"{tenant_id}:instance:{instance_id}")
+            if _raw_inst:
+                _human_user_login = (json.loads(_raw_inst) or {}).get("user_login", "") or ""
+        except Exception:
+            pass
         try:
             raw_meta = await redis_client.get(f"session:{session_id}:meta")
             if raw_meta:
@@ -600,6 +609,7 @@ async def activate_human_agent(
                 meta["instance_id"]   = instance_id
                 meta["pool_id"]       = pool_id
                 meta["agent_type_id"] = routing_result.get("agent_type_id", "")
+                meta["user_login"]    = _human_user_login
                 await redis_client.setex(f"session:{session_id}:meta", _stl(), json.dumps(meta))
         except Exception as exc:
             logger.warning("Could not update session meta with instance_id: session=%s — %s", session_id, exc)
@@ -679,6 +689,7 @@ async def activate_human_agent(
         segment_id=_seg_id,
         sequence_index=_seq_idx,
         joined_at=_joined_iso,
+        user_login=_human_user_login,
     ))
 
 
@@ -1514,6 +1525,7 @@ async def _publish_participant_event(
     role:           str,        # "primary" | "specialist"
     segment_id:     str = "",   # Arc 5: ContactSegment UUID
     flow_id:        str = "",   # skill-flow deployado que o agente executou (avaliação IA)
+    user_login:     str = "",   # C1: login (email) do agente humano — identidade no relatório
     conference_id:  str = "",
     joined_at:      str = "",
     duration_ms:    int | None = None,
@@ -1552,6 +1564,15 @@ async def _publish_participant_event(
         event["conference_id"] = conference_id
     if flow_id:
         event["flow_id"] = flow_id
+    # C1 — human identity by user_id. The human participant_id is `human-{userId}`
+    # (instance key written by registerHumanAgent), so the login user_id is derived
+    # by stripping the prefix. AI segments use flow_id instead; user_id stays "".
+    if agent_type == "human" and participant_id.startswith("human-"):
+        derived_user_id = participant_id[len("human-"):]
+        if derived_user_id:
+            event["user_id"] = derived_user_id
+    if user_login:
+        event["user_login"] = user_login
     if parent_segment_id:
         event["parent_segment_id"] = parent_segment_id
     if joined_at:
@@ -4047,13 +4068,14 @@ async def process_contact_event(
                         )
                     except Exception:
                         pass
-                _ha_pool = _ha_agent_type_id = _ha_tenant = ""
+                _ha_pool = _ha_agent_type_id = _ha_tenant = _ha_user_login = ""
                 try:
                     _ha_raw_meta = await redis_client.get(f"session:{session_id}:meta")
                     if _ha_raw_meta:
                         _ha_m = json.loads(_ha_raw_meta)
                         _ha_pool          = _ha_m.get("pool_id", "")
                         _ha_agent_type_id = _ha_m.get("agent_type_id", "")
+                        _ha_user_login    = _ha_m.get("user_login", "") or ""
                         _ha_tenant        = (
                             _ha_m.get("tenant_id", "") or _ha_m.get("tenant", "")
                         )
@@ -4086,6 +4108,7 @@ async def process_contact_event(
                     sequence_index=_ha_seq_idx,
                     joined_at=_ha_joined_iso,
                     duration_ms=_ha_duration_ms,
+                    user_login=_ha_user_login,
                 ))
 
                 # ── Decrement human pool active_count via routing engine ──────

@@ -272,6 +272,7 @@ async function refreshPoolInstances(
 async function registerHumanAgent(
   poolId:               string,
   userId:               string,
+  userLogin:            string,
   maxConcurrentSessions: number,
   redis:  import("ioredis").default,
   kafka:  { publish: (topic: string, payload: Record<string, unknown>) => Promise<void> },
@@ -340,6 +341,10 @@ async function registerHumanAgent(
   const instance = {
     instance_id:      instanceId,
     agent_type_id:    `human_agent_${poolId}`,
+    // C1 — human analytics identity: user_id (stable login id) + user_login (email).
+    // Read by the orchestrator-bridge at activation and denormalized onto the segment.
+    user_id:          userId,
+    user_login:       userLogin,
     tenant_id:        tenantId,
     pool_id:          poolId,
     pools:            mergedPools,
@@ -403,6 +408,11 @@ async function registerHumanAgent(
     tenant_id:                tenantId,
     instance_id:              instanceId,
     agent_type_id:            `human_agent_${poolId}`,
+    // C1 — human login identity; must ride the agent_ready event so the routing
+    // engine's _upsert_instance preserves it (it rebuilds the Redis instance from
+    // this event, dropping anything not present here).
+    user_id:                  userId,
+    user_login:               userLogin,
     status:                   "ready",
     execution_model:          "stateful",   // required: prevents stateless default in routing engine
     current_sessions:         existingCurrentSessions,
@@ -1789,6 +1799,8 @@ export async function startServer(config: ServerConfig): Promise<void> {
     // Per-user identity — sent by platform-ui from the JWT sub claim.
     // Falls back to poolId-based key for old clients that do not send user_id.
     const userId              = url.searchParams.get("user_id") ?? ""
+    // C1 — human login (email) for analytics identity, denormalized onto the segment.
+    const userLogin           = url.searchParams.get("user_login") ?? ""
     const maxConcurrentSessions = Math.max(1, parseInt(url.searchParams.get("max_concurrent") ?? "3", 10))
     console.log(`[agent-ws] New WebSocket connection: pool=${poolId} user=${userId || "(legacy)"} max_concurrent=${maxConcurrentSessions} from=${request.socket.remoteAddress}`)
 
@@ -2010,7 +2022,7 @@ export async function startServer(config: ServerConfig): Promise<void> {
         pendingUnregister.delete(poolId)
         console.log(`[agent-ws] Cancelled pending unregister (StrictMode reconnect) pool=${poolId}`)
       }
-      registerHumanAgent(poolId, userId, maxConcurrentSessions, redis, kafka).catch((err) =>
+      registerHumanAgent(poolId, userId, userLogin, maxConcurrentSessions, redis, kafka).catch((err) =>
         console.error(`[agent-ws] registerHumanAgent pool=${poolId} user=${userId}:`, err)
       )
     }
@@ -2096,6 +2108,11 @@ export async function startServer(config: ServerConfig): Promise<void> {
             tenant_id:               tenantId,
             instance_id:             instanceId,
             agent_type_id:           `human_agent_${poolId}`,
+            // C1 — must ride every event that _upsert_instance rebuilds the
+            // instance from (agent_ready AND agent_heartbeat), else the periodic
+            // heartbeat wipes user_id/user_login set by agent_ready.
+            user_id:                 userId,
+            user_login:              userLogin,
             status:                  "ready",
             execution_model:         "stateful",
             current_sessions:        subscribedSessions.size,

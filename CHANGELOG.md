@@ -2,6 +2,30 @@
 
 ---
 
+## Fase C/C1 — Identidade do agente humano por user_id/user_login nos segments (2026-06-01)
+
+O agente humano passa a ser identificado no analytics pelo **login** (user_id estável + email para exibição), em vez do placeholder sintético `agent_type_id = human_agent_{pool}` — espelhando o que a IA já tem com `flow_id`. (Decisão da Fase C: **rename em massa de `agent_type_id` descartado** — 1198 ocorrências/136 arquivos, semanticamente errado p/ humano; o campo permanece como carrier. C1 entrega só a identidade humana.)
+
+**Threading (platform-ui → segment ClickHouse)**:
+- `platform-ui` (`useMultiPoolWebSocket.ts`, `AgentAssistContext.tsx`): query do WS leva `user_login` (= `session.email`).
+- `mcp-server` (`server.ts`): `registerHumanAgent` grava `user_id`/`user_login` na instância **e** nos eventos `agent_ready` **e `agent_heartbeat`**.
+- `routing-engine` (`models.py`, `kafka_listener.py`): `AgentInstance` declara `user_id`/`user_login` (sobrevive ao Pydantic) e `_upsert_instance` os propaga do evento.
+- `orchestrator-bridge` (`main.py`): `activate_human_agent` lê o `user_login` da instância → grava no session meta → passa ao `_publish_participant_event` (join + left). O `user_id` é derivado do `participant_id` (`human-{userId}`) dentro do publish.
+- `analytics-api` (`clickhouse.py`, `models.py`): colunas `user_id`/`user_login` no `segments` (+ migrações `ADD COLUMN IF NOT EXISTS`) + consumer.
+- `schemas` (`contact-segment.ts`): `user_id`/`user_login`/`flow_id` nos schemas.
+
+**Bug-chave (parecia "cache")**: o `agent_heartbeat` (a cada ~15s) passa pelo `_upsert_instance`, que **reconstrói** o `AgentInstance` a partir do evento — apagando `user_id`/`user_login` se eles não viajarem no heartbeat (mesma classe do `skill_id` da Fase 3b). Corrigido adicionando os campos ao `agent_ready` **e** ao `agent_heartbeat`, e declarando-os no modelo.
+
+**Exibição (C1b parcial)**: `/reports/segments` (`reports_query.py`) passa a **selecionar** `user_login`/`flow_id`/`user_id`; `SegmentList.tsx` e `SessionTranscript.tsx` mostram o `user_login` (email) para segmentos humanos (IA mantém o label da skill). `ContactSegment` (service `types.ts`) ganhou os campos.
+
+**Decisão — apelido voltado ao cliente NÃO incluído**: mostrar login/email ao cliente seria vazamento; o `name` já existe se um dia quiser nome amigável. Fora do escopo do C1.
+
+**Validado**: instância persiste `user_login: admin@plughub.local` (heartbeat não apaga mais); segment no ClickHouse com `user_login` preenchido; Analytics/Sessions (lista + detalhe) exibindo o email no segmento humano.
+
+**Pendente Fase C**: C1b-relatórios (Analytics/Agents agrupar humano por `user_id × pool` em vez de colapsar em `human_agent_{pool}`; IA por `flow_id`) — "Fase 1" do redesign de analytics; C2 (tirar humano da entidade `AgentType`) + C3 (remover tabela/CRUD `AgentType`).
+
+---
+
 ## Fase 3d (parcial) — Slots por pool.deploy, agent_types YAML aposentados, reconcile deploy-only (2026-06-01)
 
 Aposenta os `agent_types` IA como fonte de provisionamento. O pool passa a ser dono do seu deploy; o bootstrap reconcilia exclusivamente a partir dos slots.

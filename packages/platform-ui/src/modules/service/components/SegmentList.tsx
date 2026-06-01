@@ -90,7 +90,11 @@ function SegmentRow({
 }) {
   const { t } = useTranslation('contacts')
   const isActive  = segment.ended_at === null
-  const agentLabel = segment.agent_type_id.replace(/_/g, ' ').replace(/\bv\d+$/, '').trim()
+  // C1 — human segments are identified by the login (email), not the synthetic
+  // agent_type_id (human_agent_{pool}). AI segments keep the skill-derived label.
+  const agentLabel = segment.agent_type === 'human' && segment.user_login
+    ? segment.user_login
+    : segment.agent_type_id.replace(/_/g, ' ').replace(/\bv\d+$/, '').trim()
 
   return (
     <div

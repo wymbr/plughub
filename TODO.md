@@ -50,10 +50,17 @@ Hoje o Analytics/Agents mistura agente×pool e não separa humano×IA.
     flow; slots vêm do `deploy:` de cada pool (boot limpo OK); agent_types IA aposentados do
     YAML (só o human resta, prune limpa o registry); reconcile deploy-only; hack
     `_applyMaxConcurrentSessions` e builder legado `_build_desired_state` removidos.
-  - **Fase C** (pendente — grande/mecânica): renomear o campo `agent_type_id`→`skill_id`/
-    `flow_id` em Redis/Kafka/ClickHouse/routing/segments; identidade do agente humano por
-    `user_id` (hoje ainda vive como `agent_type`); e só então remover a tabela/CRUD `AgentType`
-    (bloqueada por essa identidade humana). `agent_type_id` segue como carrier de `skill_id` até lá.
+  - **Fase C — rename em massa DESCARTADO** (1198 ocorrências/136 arquivos, semanticamente
+    errado p/ humano); `agent_type_id` permanece como carrier. Re-escopada em C1/C1b/C2/C3:
+    - **C1 ✅** (2026-06-01): identidade do agente humano por `user_id`/`user_login` (login)
+      nos segments — threading platform-ui→mcp-server→routing-engine→bridge→analytics; colunas
+      no ClickHouse; exibição na lista e detalhe de Analytics/Sessions. Ver `CHANGELOG.md`.
+    - **C1b-relatórios** (pendente): Analytics/**Agents** agrupar humano por `user_id × pool`
+      (hoje colapsa em `human_agent_{pool}`) e IA por `flow_id`. = "Fase 1" do redesign de
+      analytics (`docs/arcos/analytics-reports-redesign.md`). Médio porte.
+    - **C2** (pendente): tirar o agente humano da entidade `AgentType` (login/routing/segments
+      por `user_id`; remover o human do YAML + prune vestigial).
+    - **C3** (pendente): remover a tabela/CRUD `AgentType` (bloqueada por C2).
 
 ---
 

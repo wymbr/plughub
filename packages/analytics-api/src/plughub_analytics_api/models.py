@@ -667,6 +667,8 @@ def parse_participant_event(payload: dict[str, Any]) -> list[dict] | None:
         "pool_id":           payload.get("pool_id") or "",
         "agent_type_id":     payload.get("agent_type_id") or "",
         "flow_id":           payload.get("flow_id") or "",
+        "user_id":           payload.get("user_id") or "",
+        "user_login":        payload.get("user_login") or "",
         "instance_id":       payload.get("participant_id") or "",
         "role":              payload.get("role") or "",
         "agent_type":        payload.get("agent_type") or "",

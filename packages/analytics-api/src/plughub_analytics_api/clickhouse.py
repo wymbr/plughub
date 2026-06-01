@@ -316,6 +316,8 @@ CREATE TABLE IF NOT EXISTS {db}.segments
     pool_id            String,
     agent_type_id      String,
     flow_id            String DEFAULT '',
+    user_id            String DEFAULT '',
+    user_login         String DEFAULT '',
     instance_id        String,
     role               String,
     agent_type         String,
@@ -341,6 +343,19 @@ ORDER BY (tenant_id, session_id, segment_id)
 # Identidade correta de avaliação para IA (agent_type_id é deprecated).
 _DDL_SEGMENTS_MIGRATE_FLOW = (
     "ALTER TABLE {db}.segments ADD COLUMN IF NOT EXISTS flow_id String DEFAULT ''"
+)
+
+# Relatórios (C1): identidade do agente humano por user_id (login). Para humanos
+# agent_type_id é o placeholder sintético human_agent_{pool}; user_id é a identidade
+# real. IA segue por flow_id; user_id fica '' para IA.
+_DDL_SEGMENTS_MIGRATE_USER = (
+    "ALTER TABLE {db}.segments ADD COLUMN IF NOT EXISTS user_id String DEFAULT ''"
+)
+
+# Relatórios (C1): login (email) do agente humano, denormalizado para exibição
+# ("quem atendeu" legível, em vez do UUID user_id ou do placeholder agent_type_id).
+_DDL_SEGMENTS_MIGRATE_USER_LOGIN = (
+    "ALTER TABLE {db}.segments ADD COLUMN IF NOT EXISTS user_login String DEFAULT ''"
 )
 
 # ── Arc 5: session_timeline — time-series events tied to segments.
@@ -654,6 +669,8 @@ _MIGRATIONS = [
     _DDL_SESSIONS_MIGRATE_STATUS,         # Arc 19: session status (active|suspended|closed)
     _DDL_SESSIONS_MIGRATE_ORIGIN,         # Arc 19: origin_session_id (webhook → intake link)
     _DDL_SEGMENTS_MIGRATE_FLOW,           # Relatórios: flow_id (skill deployado) por segmento
+    _DDL_SEGMENTS_MIGRATE_USER,           # C1: user_id (login) — identidade do agente humano
+    _DDL_SEGMENTS_MIGRATE_USER_LOGIN,     # C1: user_login (email) — exibição legível
 ]
 
 
@@ -911,7 +928,7 @@ class AnalyticsStore:
 
     _SEGMENT_COLS = [
         "segment_id", "session_id", "tenant_id", "participant_id",
-        "pool_id", "agent_type_id", "flow_id", "instance_id", "role", "agent_type",
+        "pool_id", "agent_type_id", "flow_id", "user_id", "user_login", "instance_id", "role", "agent_type",
         "parent_segment_id", "sequence_index",
         "started_at", "ended_at", "duration_ms",
         "outcome", "close_reason", "handoff_reason", "issue_status",
@@ -1344,6 +1361,8 @@ def _segment_row(d: dict) -> list:
         d.get("pool_id", "") or "",
         d.get("agent_type_id", "") or "",
         d.get("flow_id", "") or "",
+        d.get("user_id", "") or "",
+        d.get("user_login", "") or "",
         d.get("instance_id", d.get("participant_id", "")) or "",
         d.get("role", ""),
         d.get("agent_type", ""),

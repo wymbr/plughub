@@ -317,6 +317,8 @@ class LifecycleEventHandler:
                 state            = internal_state,
                 last_seen        = event.get("timestamp"),
                 registered_at    = event.get("timestamp", ""),
+                user_id          = event.get("user_id", ""),
+                user_login       = event.get("user_login", ""),
             )
             await self._instances.set_instance(instance)
             logger.debug(

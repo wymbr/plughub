@@ -62,6 +62,7 @@ function openConnection(
   poolId:       string,
   userId:       string,
   maxConcurrent: number,
+  userLogin:    string,
   poolStateRef: React.MutableRefObject<Map<string, PoolState>>,
   setStatuses: React.Dispatch<React.SetStateAction<Map<string, PoolConnectionStatus>>>,
   setLastEvent: React.Dispatch<React.SetStateAction<TaggedWsEvent | null>>,
@@ -69,6 +70,9 @@ function openConnection(
   const params = new URLSearchParams();
   params.set("pool", poolId);
   if (userId) params.set("user_id", userId);
+  // C1 — human identity: the login (email) is denormalized onto the segment so
+  // analytics reports show who served by login, not the synthetic agent_type_id.
+  if (userLogin) params.set("user_login", userLogin);
   params.set("max_concurrent", String(maxConcurrent));
   const url = `${WS_BASE}?${params.toString()}`;
 
@@ -131,7 +135,7 @@ function openConnection(
       s.reconnectTimer = setTimeout(() => {
         const current = poolStateRef.current.get(poolId);
         if (current && !current.intentionalClose) {
-          openConnection(poolId, userId, maxConcurrent, poolStateRef, setStatuses, setLastEvent);
+          openConnection(poolId, userId, maxConcurrent, userLogin, poolStateRef, setStatuses, setLastEvent);
         }
       }, RECONNECT_DELAY_MS);
     } else {
@@ -159,6 +163,7 @@ export function useMultiPoolWebSocket(
   activePools:   string[],
   userId?:       string,
   maxConcurrent?: number,
+  userLogin?:    string,
 ): UseMultiPoolWebSocketReturn {
   const poolStateRef    = useRef<Map<string, PoolState>>(new Map());
   const sessionPoolRef  = useRef<SessionPoolMap>(new Map());
@@ -173,7 +178,7 @@ export function useMultiPoolWebSocket(
     // Open new connections
     for (const poolId of desired) {
       if (!current.has(poolId)) {
-        openConnection(poolId, userId ?? "", maxConcurrent ?? 3, poolStateRef, setStatuses, setLastEvent);
+        openConnection(poolId, userId ?? "", maxConcurrent ?? 3, userLogin ?? "", poolStateRef, setStatuses, setLastEvent);
       }
     }
 

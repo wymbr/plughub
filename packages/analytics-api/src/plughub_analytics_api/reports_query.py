@@ -1258,6 +1258,7 @@ def _fetch_segments(
         SELECT
             segment_id, session_id, tenant_id,
             participant_id, pool_id, agent_type_id,
+            flow_id, user_id, user_login,
             instance_id, role, agent_type,
             parent_segment_id, sequence_index,
             started_at, ended_at, duration_ms,

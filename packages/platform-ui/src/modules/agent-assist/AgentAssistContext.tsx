@@ -187,8 +187,9 @@ export const AgentAssistProvider: React.FC<{ children: React.ReactNode }> = ({ c
   // than per-pool, enabling shared capacity across all logged-in pools.
   const wsUserId       = session?.userId ?? ""
   const wsMaxConcurrent = session?.maxConcurrentSessions ?? 3
+  const wsUserLogin    = session?.email ?? ""   // C1: denormalized onto the human segment
   const { statuses, lastEvent, send, registerSession, unregisterSession } = useMultiPoolWebSocket(
-    activePools, wsUserId, wsMaxConcurrent
+    activePools, wsUserId, wsMaxConcurrent, wsUserLogin
   );
 
   // ── Multi-contact state ───────────────────────────────────────────────────

@@ -92,6 +92,11 @@ class AgentInstance(BaseModel):
     # keeping the skill identity available to the bridge after allocation.
     skill_id:         str = ""
     flow_id:          str = ""
+    # C1 — human instances carry the login identity (user_id + user_login/email)
+    # so it survives the agent_ready upsert and the mark_busy round-trip (Pydantic
+    # drops undeclared fields). The bridge reads it to denormalize onto the segment.
+    user_id:          str = ""
+    user_login:       str = ""
     # pool_id is written by mcp-server (human agents) but omitted by the
     # orchestrator-bridge bootstrap (which uses pools: list[str] instead).
     # Optional to allow both sources to validate without errors.
