@@ -22,7 +22,9 @@ O agente humano passa a ser identificado no analytics pelo **login** (user_id es
 
 **Validado**: instância persiste `user_login: admin@plughub.local` (heartbeat não apaga mais); segment no ClickHouse com `user_login` preenchido; Analytics/Sessions (lista + detalhe) exibindo o email no segmento humano.
 
-**Pendente Fase C**: C1b-relatórios (Analytics/Agents agrupar humano por `user_id × pool` em vez de colapsar em `human_agent_{pool}`; IA por `flow_id`) — "Fase 1" do redesign de analytics; C2 (tirar humano da entidade `AgentType`) + C3 (remover tabela/CRUD `AgentType`).
+**C1b-A — relatório de agentes (Analytics/Agents)**: `_fetch_agent_performance` (`reports_query.py`) deixa de colapsar humanos em `human_agent_{pool}` — agrupa por identidade via subquery: humano por `user_id` (display `user_login`), IA por `flow_id`/skill (fallback `agent_type_id` p/ histórico); retorna `user_login`/`flow_id`/`user_id`/`agent_type`. `AnaliseAgentesPage.tsx`: divide `perfRows` por `agent_type` → aba **Human Agents** ganha tabela de performance por agente (linhas por `user_login`) + KPIs só de humanos; aba **AI Agents** só IA. Bug colateral corrigido: endpoint `agent-performance/daily` quebrava com `TypeError: date is not JSON serializable` (pré-existente, disparou ao haver dados na MV) — `period_date` agora stringificado.
+
+**Pendente Fase C**: C1b-B (MV `mv_agent_performance_daily` ainda keyed por `agent_type_id` → daily trend colapsa humano; + revisar dado de availability/pauses vazio no humano) — parte do redesign de analytics; C2 (tirar humano da entidade `AgentType`) + C3 (remover tabela/CRUD `AgentType`).
 
 ---
 

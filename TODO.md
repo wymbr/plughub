@@ -55,9 +55,12 @@ Hoje o Analytics/Agents mistura agente×pool e não separa humano×IA.
     - **C1 ✅** (2026-06-01): identidade do agente humano por `user_id`/`user_login` (login)
       nos segments — threading platform-ui→mcp-server→routing-engine→bridge→analytics; colunas
       no ClickHouse; exibição na lista e detalhe de Analytics/Sessions. Ver `CHANGELOG.md`.
-    - **C1b-relatórios** (pendente): Analytics/**Agents** agrupar humano por `user_id × pool`
-      (hoje colapsa em `human_agent_{pool}`) e IA por `flow_id`. = "Fase 1" do redesign de
-      analytics (`docs/arcos/analytics-reports-redesign.md`). Médio porte.
+    - **C1b-A ✅** (2026-06-01): Analytics/**Agents** — `_fetch_agent_performance` agrupa humano
+      por `user_id` (display `user_login`), IA por `flow_id`; abas Human/AI com tabela de
+      performance própria e KPIs filtrados. Ver `CHANGELOG.md`.
+    - **C1b-B** (pendente): MV `mv_agent_performance_daily` ainda keyed por `agent_type_id`
+      (daily trend colapsa humano) + dado de availability/pauses vazio no humano (Arc 8, revisar).
+      Parte do redesign de analytics (`docs/arcos/analytics-reports-redesign.md`).
     - **C2** (pendente): tirar o agente humano da entidade `AgentType` (login/routing/segments
       por `user_id`; remover o human do YAML + prune vestigial).
     - **C3** (pendente): remover a tabela/CRUD `AgentType` (bloqueada por C2).

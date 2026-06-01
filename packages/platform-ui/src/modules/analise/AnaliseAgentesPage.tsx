@@ -25,6 +25,10 @@ import { DEFAULT_FILTERS } from '@/modules/contacts/types'
 
 interface PerformanceRow {
   agent_type_id:     string
+  agent_type?:       string   // "human" | "native" | ...
+  user_login?:       string   // human: login/email for display
+  flow_id?:          string   // AI: deployed skill
+  user_id?:          string   // human: stable login id
   pool_id:           string
   role:              string
   total_sessions:    number
@@ -260,9 +264,12 @@ function PerformanceTable({
             return (
               <tr key={i} className="hover:bg-surface-muted transition-colors">
                 <td className={td}>
-                  <span className="font-medium">{shortId(r.agent_type_id)}</span>
+                  {/* C1b — human rows show the login (email); AI rows the skill label. */}
+                  <span className="font-medium">
+                    {r.agent_type === 'human' && r.user_login ? r.user_login : shortId(r.agent_type_id)}
+                  </span>
                   <span className="text-2xs text-muted-light ml-1 font-mono">
-                    {r.agent_type_id.match(/_v\d+$/)?.[0] ?? ''}
+                    {r.agent_type === 'human' ? '' : (r.agent_type_id.match(/_v\d+$/)?.[0] ?? '')}
                   </span>
                 </td>
                 <td className={`${td} text-muted font-mono text-2xs`}>{r.pool_id}</td>
@@ -343,7 +350,12 @@ export default function AnaliseAgentesPage() {
     </div>
   )
 
-  const kpiCards = buildKpis(perfLoading ? [] : perfRows, t)
+  // C1b — split performance rows by identity so each tab shows its own agents
+  // and KPIs: humans (by user_id, displayed via user_login) vs AI (by skill).
+  const humanRows = perfRows.filter(r => r.agent_type === 'human')
+  const aiRows    = perfRows.filter(r => r.agent_type !== 'human')
+  const tabRows   = pageTab === 'humans' ? humanRows : aiRows
+  const kpiCards  = buildKpis(perfLoading ? [] : tabRows, t)
 
   return (
     <div className="flex flex-col h-full overflow-hidden bg-surface-muted">
@@ -400,16 +412,28 @@ export default function AnaliseAgentesPage() {
           <TrendChart rows={dailyRows} loading={dailyLoading} t={t} />
         </div>
 
-        {/* Humanos: availability & pause section */}
+        {/* Humanos: performance por agente (por user_login) + availability & pause */}
         {pageTab === 'humans' && (
-          <div className="bg-white rounded-lg border border-border overflow-hidden">
-            <div className="px-4 py-2.5 border-b border-border bg-surface-muted">
-              <p className="text-xs font-semibold text-muted uppercase tracking-wide">
-                {t('section.availability')}
-              </p>
+          <>
+            <div className="bg-white rounded-lg border border-border overflow-hidden">
+              <div className="px-4 py-2.5 border-b border-border bg-surface-muted">
+                <p className="text-xs font-semibold text-muted uppercase tracking-wide">
+                  {t('table.title')}
+                </p>
+              </div>
+              <div className="p-3">
+                <PerformanceTable rows={humanRows} loading={perfLoading} t={t} />
+              </div>
             </div>
-            <AgentsTab tenantId={tenantId} filters={filters} />
-          </div>
+            <div className="bg-white rounded-lg border border-border overflow-hidden">
+              <div className="px-4 py-2.5 border-b border-border bg-surface-muted">
+                <p className="text-xs font-semibold text-muted uppercase tracking-wide">
+                  {t('section.availability')}
+                </p>
+              </div>
+              <AgentsTab tenantId={tenantId} filters={filters} />
+            </div>
+          </>
         )}
 
         {/* IA: performance table */}
@@ -421,7 +445,7 @@ export default function AnaliseAgentesPage() {
               </p>
             </div>
             <div className="p-3">
-              <PerformanceTable rows={perfRows} loading={perfLoading} t={t} />
+              <PerformanceTable rows={aiRows} loading={perfLoading} t={t} />
             </div>
           </div>
         )}

@@ -1355,9 +1355,18 @@ def _fetch_agent_performance(
 
     where = " AND ".join(conditions)
 
+    # C1b — agent identity dimension: humans by user_id (display user_login),
+    # AI by flow_id (deployed skill). The legacy agent_type_id collapses every
+    # human in a pool into one synthetic human_agent_{pool} row. Fallback to
+    # agent_type_id when user_id/flow_id are empty (historical segments).
     result = client.query(f"""
         SELECT
-            agent_type_id,
+            agent_key,
+            any(agent_type_id)                                            AS agent_type_id,
+            any(agent_type)                                               AS agent_type,
+            anyIf(user_login, user_login != '')                           AS user_login,
+            anyIf(flow_id, flow_id != '')                                 AS flow_id,
+            anyIf(user_id, user_id != '')                                 AS user_id,
             pool_id,
             role,
             count()                                                       AS total_sessions,
@@ -1374,10 +1383,17 @@ def _fetch_agent_performance(
             if(count() > 0,
                countIf(handoff_reason IS NOT NULL AND handoff_reason != '') / count(),
                0.0)                                                       AS handoff_rate
-        FROM {db}.segments FINAL
-        WHERE {where}
-        GROUP BY agent_type_id, pool_id, role
-        ORDER BY agent_type_id, pool_id, role
+        FROM (
+            SELECT
+                *,
+                if(agent_type = 'human',
+                   if(user_id != '', user_id, agent_type_id),
+                   if(flow_id != '', flow_id, agent_type_id))             AS agent_key
+            FROM {db}.segments FINAL
+            WHERE {where}
+        )
+        GROUP BY agent_key, pool_id, role
+        ORDER BY agent_key, pool_id, role
     """, parameters=params)
 
     rows = _rows_to_dicts(result)
@@ -1660,6 +1676,11 @@ def _fetch_agent_performance_daily(
     """, parameters=params)
 
     rows = _rows_to_dicts(result)
+    # ClickHouse returns Date columns as Python date objects, which the JSON
+    # encoder cannot serialize. Stringify (same pattern as the availability query).
+    for row in rows:
+        if hasattr(row.get("period_date"), "isoformat"):
+            row["period_date"] = row["period_date"].isoformat()
     return {
         "data": rows,
         "meta": {"total": len(rows), "from_date": since_date, "to_date": until_date},
