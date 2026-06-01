@@ -6,9 +6,7 @@
 import express, { Request, Response, NextFunction } from "express"
 import { ZodError }           from "zod"
 import { poolsRouter }            from "./routes/pools"
-import { agentTypesRouter }       from "./routes/agent-types"
 import { skillsRouter }           from "./routes/skills"
-import { importRouter }           from "./routes/import"
 import { instancesRouter }        from "./routes/instances"
 import { channelsRouter }         from "./routes/channels"
 import { channelEndpointsRouter } from "./routes/channel-endpoints"
@@ -37,8 +35,6 @@ app.use(express.json())
 // ── Rotas ──────────────────────────────────
 app.use("/v1/pools",              poolsRouter)
 app.use("/v1/pools/:pool_id",     poolSlotsRouter)   // slots sub-routes: /slots, /slots/next, /promote, /rollback
-app.use("/v1/agent-types/import", importRouter)   // antes de /v1/agent-types para não colidir
-app.use("/v1/agent-types",        agentTypesRouter)
 app.use("/v1/skills",             skillsRouter)
 app.use("/v1/skills/:skill_id",   skillSlotsRouter)   // slots sub-routes: /slots, /slots/:slot, /promote, /rollback
 app.use("/v1/instances",          instancesRouter)

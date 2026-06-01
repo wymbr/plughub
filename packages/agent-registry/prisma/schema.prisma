@@ -44,9 +44,7 @@ model Pool {
   updated_at  DateTime @updatedAt
   created_by  String
 
-  // Tipos de agente registrados neste pool
-  agent_types AgentTypePool[]
-  // Deploy slots: previous / current / next
+  // Deploy slots: previous / current / next (provisioning source — AgentType retired)
   skill_slots PoolSkillSlot[]
 
   @@unique([pool_id, tenant_id])
@@ -61,66 +59,11 @@ enum PoolStatus {
 }
 
 // ─────────────────────────────────────────────
-// AgentType — registro de tipo de agente
-// Spec 4.5: registro de tipo separado do pool
+// AgentType entity REMOVED (Fase 3d/C). AI provisioning is deploy-driven
+// (PoolSkillSlot → skill); the bridge synthesizes a native agent_type in-memory
+// from the skill. Human agents are login-driven (no registry record). The old
+// `agent_types` / `agent_type_pools` tables are dropped via `prisma db push`.
 // ─────────────────────────────────────────────
-
-model AgentType {
-  id              String   @id @default(uuid())
-  agent_type_id   String
-  tenant_id       String
-  status          AgentTypeStatus @default(active)
-
-  framework        String
-  execution_model  String
-  role             String   @default("executor")
-  max_concurrent_sessions Int @default(1)
-
-  skills       Json     @default("[]")   // SkillRef[]
-  permissions  String[] @default([])
-  capabilities Json     @default("{}")
-  prompt_id    String?
-
-  // Arc 15: meios de mídia suportados para o canal WebRTC
-  // Valores: "video" | "voice" | "text"
-  media_capabilities String[] @default([])
-
-  agent_classification Json?
-
-  // ── Canário: peso de tráfego para rollout gradual
-  // Spec 4.5: progressão 0.10 → 0.20 → 0.50 → 1.00
-  traffic_weight Float   @default(1.0)
-
-  created_at  DateTime @default(now())
-  updated_at  DateTime @updatedAt
-  created_by  String
-
-  pools     AgentTypePool[]
-  instances AgentInstance[]
-
-  @@unique([agent_type_id, tenant_id])
-  @@index([tenant_id])
-  @@index([tenant_id, status])
-  @@map("agent_types")
-}
-
-enum AgentTypeStatus {
-  active
-  inactive
-  deprecated
-}
-
-// Tabela de junção Pool ↔ AgentType
-model AgentTypePool {
-  agent_type    AgentType @relation(fields: [agent_type_id], references: [id], onDelete: Cascade)
-  agent_type_id String
-  pool          Pool      @relation(fields: [pool_id], references: [id], onDelete: Cascade)
-  pool_id       String
-  registered_at DateTime  @default(now())
-
-  @@id([agent_type_id, pool_id])
-  @@map("agent_type_pools")
-}
 
 // ─────────────────────────────────────────────
 // AgentInstance — instâncias de agentes em execução
@@ -142,7 +85,8 @@ model AgentInstance {
   created_at  DateTime @default(now())
   updated_at  DateTime @updatedAt
 
-  agent_type AgentType @relation(fields: [agent_type_id, tenant_id], references: [agent_type_id, tenant_id])
+  // AgentType relation retired (Fase 3d/C): agent_type_id kept as a plain column
+  // (carries the synthesized skill_id, or the human placeholder).
 
   @@unique([instance_id, tenant_id])
   @@index([tenant_id])

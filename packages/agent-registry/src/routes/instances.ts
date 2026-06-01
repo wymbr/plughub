@@ -31,8 +31,8 @@ instancesRouter.get("/", async (req: Request, res: Response, next: NextFunction)
   try {
     const tenantId = _getTenantId(req)
     const status    = req.query["status"]    as string | undefined
-    const poolId    = req.query["pool_id"]   as string | undefined
-    const framework = req.query["framework"] as string | undefined
+    // pool_id / framework filters retired with the AgentType relation (deploy-
+    // driven instances live in Redis, not this table).
     const page     = Math.max(1, parseInt((req.query["page"]  as string) ?? "1",  10))
     const limit    = Math.min(200, Math.max(1, parseInt((req.query["limit"] as string) ?? "50", 10)))
 
@@ -49,33 +49,6 @@ instancesRouter.get("/", async (req: Request, res: Response, next: NextFunction)
       where: {
         tenant_id: tenantId,
         ...(status && { status: status as never }),
-        ...((poolId || framework) && {
-          agent_type: {
-            ...(framework && { framework }),
-            ...(poolId && {
-              pools: {
-                some: {
-                  pool: {
-                    pool_id:   poolId,
-                    tenant_id: tenantId,
-                  },
-                },
-              },
-            }),
-          },
-        }),
-      },
-      include: {
-        agent_type: {
-          select: {
-            agent_type_id:           true,
-            framework:               true,
-            execution_model:         true,
-            max_concurrent_sessions: true,
-            traffic_weight:          true,
-            status:                  true,
-          },
-        },
       },
       orderBy: { updated_at: "desc" },
       skip:  (page - 1) * limit,
@@ -86,21 +59,6 @@ instancesRouter.get("/", async (req: Request, res: Response, next: NextFunction)
       where: {
         tenant_id: tenantId,
         ...(status && { status: status as never }),
-        ...((poolId || framework) && {
-          agent_type: {
-            ...(framework && { framework }),
-            ...(poolId && {
-              pools: {
-                some: {
-                  pool: {
-                    pool_id:   poolId,
-                    tenant_id: tenantId,
-                  },
-                },
-              },
-            }),
-          },
-        }),
       },
     })
 
@@ -126,21 +84,6 @@ instancesRouter.get("/:instance_id", async (req: Request, res: Response, next: N
 
     const inst = await prisma.agentInstance.findFirst({
       where: { instance_id: instanceId, tenant_id: tenantId },
-      include: {
-        agent_type: {
-          select: {
-            agent_type_id:           true,
-            framework:               true,
-            execution_model:         true,
-            max_concurrent_sessions: true,
-            traffic_weight:          true,
-            status:                  true,
-            pools: {
-              select: { pool: { select: { pool_id: true } } },
-            },
-          },
-        },
-      },
     })
     if (!inst) return res.status(404).json({ error: "Instância não encontrada" })
 

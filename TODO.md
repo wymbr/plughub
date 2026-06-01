@@ -61,9 +61,15 @@ Hoje o Analytics/Agents mistura agente×pool e não separa humano×IA.
     - **C1b-B** (pendente): MV `mv_agent_performance_daily` ainda keyed por `agent_type_id`
       (daily trend colapsa humano) + dado de availability/pauses vazio no humano (Arc 8, revisar).
       Parte do redesign de analytics (`docs/arcos/analytics-reports-redesign.md`).
-    - **C2** (pendente): tirar o agente humano da entidade `AgentType` (login/routing/segments
-      por `user_id`; remover o human do YAML + prune vestigial).
-    - **C3** (pendente): remover a tabela/CRUD `AgentType` (bloqueada por C2).
+    - **C2/C3/C4 ✅** (2026-06-01): entidade `AgentType` **REMOVIDA** (tabelas `agent_types` +
+      `agent_type_pools` dropadas via `prisma db push`). As UIs de CRUD eram código morto (não
+      roteadas) → deletadas sem migração. mentionable-agents/delegation/agent_login repontados
+      p/ deploy slots/skills. Ver `CHANGELOG.md`.
+    - **Cleanup residual** (inofensivo, dead code — varrer quando der): `_sync_agent_type`/
+      `_prune_agent_types` (registry_syncer.py, sem chamador); Path A `elif framework=="human"`
+      (main.py, inalcançável); `AgentTypeSchema` (@plughub/schemas) + `validators/agent-type.ts`
+      órfão. Testes do agent-registry que referenciavam agent_type foram deletados; revisar a
+      suíte se reativar CI.
 
 ---
 

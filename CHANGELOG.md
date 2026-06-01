@@ -2,6 +2,29 @@
 
 ---
 
+## Fase C/C2-C4 — Entidade `AgentType` REMOVIDA (2026-06-01)
+
+Remoção física completa da entidade `AgentType` — a IA já era deploy-driven (síntese via skill) e o humano login-driven, então o `AgentType` era vestigial. Descoberta-chave: as UIs de CRUD de AgentType (`AgentTypesPage`, `HumanAgentsPage`) eram **código morto** (não roteadas — `/monitor` redireciona para `/flow/monitor`), então não houve migração para o auth — só deleção.
+
+**UI (Fase 1 — código morto):** deletadas `AgentTypesPage.tsx`, `HumanAgentsPage.tsx`, `InstancesPage.tsx`, `MonitorPage.tsx` (service); funções AgentType removidas de `api/registry.ts`.
+
+**Sync/YAML (Fase 2):** `RegistrySyncer` parou de sincronizar/prune agent_types; seção `agent_types` removida do `tenant_demo.yaml`. Validado: humano segue ativado via Path B (`execution_model=stateful` no Redis), independente do registry.
+
+**Backend (Fase 3):**
+- `pools.ts` `mentionable-agents`: fonte = `PoolSkillSlot.current` (skill_id), não mais `agentType.findMany` — restaura a lista de especialistas da Console.
+- Novo `GET /v1/skills/:id/delegation-schema`; `useDelegationSchema` repontado p/ a skill.
+- `instances.ts`/`pools.ts`: removida a relação Prisma `agent_type` (include/where) — tabela `agent_instances` é legada/vazia no deploy-driven (instâncias vivem no Redis).
+- `mcp-server/registry-client.ts`: `agent_login` da IA valida contra `/v1/skills/:id` (identidade = skill_id; permissions vazias = sem filtro, o padrão deploy-driven).
+- `agent-types.ts` + `import.ts` deletados; rotas removidas do `app.ts`; log de startup do `index.ts` atualizado.
+
+**Prisma (Fase 4):** removidos `model AgentType`, enum `AgentTypeStatus`, `model AgentTypePool`, a back-ref `Pool.agent_types` e a relação `AgentInstance.agent_type` (FK → coluna simples). `prisma db push --accept-data-loss` (startup) **dropou** `agent_types` + `agent_type_pools`. Validado: tabelas inexistentes, agent-registry saudável, demo (humano/`@auth_form`/lista de especialistas) 100%.
+
+**Decisão registrada**: rename de `agent_type_id`→`skill_id`/`flow_id` permanece **descartado** — o campo segue como carrier (skill_id p/ IA, placeholder p/ humano).
+
+**Cleanup residual (inofensivo, dead code)**: funções `_sync_agent_type`/`_prune_agent_types` no `registry_syncer.py` (sem chamador); `elif framework == "human"` Path A no `main.py` (inalcançável — humano usa Path B); `AgentTypeSchema` em `@plughub/schemas` + `validators/agent-type.ts` (órfão). Removíveis numa varredura futura.
+
+---
+
 ## Fase C/C1 — Identidade do agente humano por user_id/user_login nos segments (2026-06-01)
 
 O agente humano passa a ser identificado no analytics pelo **login** (user_id estável + email para exibição), em vez do placeholder sintético `agent_type_id = human_agent_{pool}` — espelhando o que a IA já tem com `flow_id`. (Decisão da Fase C: **rename em massa de `agent_type_id` descartado** — 1198 ocorrências/136 arquivos, semanticamente errado p/ humano; o campo permanece como carrier. C1 entrega só a identidade humana.)

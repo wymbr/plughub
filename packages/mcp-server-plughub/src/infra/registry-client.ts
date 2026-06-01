@@ -27,7 +27,12 @@ export interface RegistryClient {
 export function createRegistryClient(baseUrl: string): RegistryClient {
   return {
     async getAgentType(tenantId, agentTypeId) {
-      const url = `${baseUrl}/v1/agent-types/${encodeURIComponent(agentTypeId)}`
+      // AgentType entity retired. In the deploy-driven model an agent's identity
+      // IS its deployed skill_id, so agent_login validates against the skill.
+      // Per-agent config (capacity, pools, permissions) now lives on the pool's
+      // deploy slot, not the agent identity — external login gets the permissive
+      // default (empty permissions ⇒ no MCP tool filtering, the deploy-driven norm).
+      const url = `${baseUrl}/v1/skills/${encodeURIComponent(agentTypeId)}`
       const res = await fetch(url, {
         headers: {
           "X-Tenant-Id": tenantId,
@@ -36,31 +41,16 @@ export function createRegistryClient(baseUrl: string): RegistryClient {
       })
       if (res.status === 404) return null
       if (!res.ok) {
-        throw new Error(`Agent Registry retornou ${res.status} para agent_type_id '${agentTypeId}'`)
+        throw new Error(`Agent Registry retornou ${res.status} para skill '${agentTypeId}'`)
       }
       const data = await res.json() as Record<string, unknown>
 
-      // Extrair pools: o endpoint retorna { pools: [{ pool_id: UUID, pool: { pool_id: string } }] }
-      // pool_id na join table é o UUID interno — o string identificador está em pool.pool_id.
-      const rawPools = data["pools"] as Array<Record<string, unknown>> | undefined
-      const pools = rawPools
-        ? rawPools.map(p => {
-            const nested = p["pool"] as Record<string, unknown> | undefined
-            return (nested?.["pool_id"] as string | undefined)
-                ?? (p["pool_id"] as string | undefined)
-                ?? ""
-          }).filter(Boolean)
-        : []
-
-      const rawPerms  = data["permissions"] as string[] | undefined
-      const permissions = Array.isArray(rawPerms) ? rawPerms : []
-
       return {
-        agent_type_id:           data["agent_type_id"] as string,
-        max_concurrent_sessions: (data["max_concurrent_sessions"] as number | undefined) ?? 1,
-        execution_model:         (data["execution_model"] as string | undefined) ?? "stateless",
-        pools,
-        permissions,
+        agent_type_id:           (data["skill_id"] as string | undefined) ?? agentTypeId,
+        max_concurrent_sessions: 1,
+        execution_model:         "stateless",
+        pools:                   [],
+        permissions:             [],
       }
     },
   }

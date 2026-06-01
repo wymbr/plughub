@@ -122,7 +122,6 @@ poolsRouter.get("/:pool_id", async (req: Request, res: Response, next: NextFunct
     const tenantId = _getTenantId(req)
     const pool     = await prisma.pool.findUnique({
       where:   { pool_id_tenant_id: { pool_id: req.params["pool_id"]!, tenant_id: tenantId } },
-      include: { agent_types: { include: { agent_type: true } } },
     })
 
     if (!pool) return res.status(404).json({ error: "Pool não encontrado" })
