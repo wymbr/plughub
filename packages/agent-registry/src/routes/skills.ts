@@ -127,6 +127,30 @@ skillsRouter.get("/:skill_id", async (req: Request, res: Response, next: NextFun
 })
 
 // ─────────────────────────────────────────────
+// GET /v1/skills/:skill_id/delegation-schema
+// Deploy-driven replacement for the retired agent-type delegation-schema:
+// delegation_input lives on the skill; visibility defaults to null (the UI then
+// shows the visibility radio, default agents_only).
+// ─────────────────────────────────────────────
+skillsRouter.get("/:skill_id/delegation-schema", async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const tenantId = _getTenantId(req)
+    const skill    = await prisma.skill.findUnique({
+      where: { skill_id_tenant_id: { skill_id: req.params["skill_id"]!, tenant_id: tenantId } },
+      select: { skill_id: true, delegation_input: true } as any,
+    }) as { skill_id: string; delegation_input: unknown } | null
+    if (!skill) return res.status(404).json({ error: "Skill não encontrada" })
+    return res.json({
+      skill_id:              skill.skill_id,
+      delegation_input:      skill.delegation_input ?? null,
+      delegation_visibility: null,
+    })
+  } catch (err) {
+    return next(err)
+  }
+})
+
+// ─────────────────────────────────────────────
 // PUT /v1/skills/:skill_id  — replace flow (upsert-style)
 // ─────────────────────────────────────────────
 skillsRouter.put("/:skill_id", async (req: Request, res: Response, next: NextFunction) => {

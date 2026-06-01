@@ -41,7 +41,9 @@ export function useDelegationSchema(agentTypeId: string | null): {
     let cancelled = false;
     setLoading(true);
 
-    fetch(`${API_BASE}/agent-types/${encodeURIComponent(agentTypeId)}/delegation-schema`, {
+    // AgentType retired: delegation_input lives on the skill, and (deploy-driven)
+    // agentTypeId carries the skill_id — fetch the skill's delegation-schema.
+    fetch(`${API_BASE}/skills/${encodeURIComponent(agentTypeId)}/delegation-schema`, {
       headers: { "x-tenant-id": "tenant_demo", "x-user-id": "operator" },
     })
       .then(r => {

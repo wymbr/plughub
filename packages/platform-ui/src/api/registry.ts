@@ -1,8 +1,8 @@
 import {
-  Pool, AgentType, Skill, Instance,
-  CreatePoolInput, UpdatePoolInput, CreateAgentTypeInput, CreateSkillInput,
+  Pool, Skill, Instance,
+  CreatePoolInput, UpdatePoolInput, CreateSkillInput,
   GatewayConfig, CreateGatewayConfigInput, UpdateGatewayConfigInput,
-  AgentInstance, CreateHumanAgentInput, UpdateHumanAgentInput,
+  AgentInstance,
   ChannelEndpoint, CreateChannelEndpointInput, UpdateChannelEndpointInput,
   ChannelEndpointChannel,
 } from '@/types'
@@ -64,41 +64,6 @@ export const updatePool = async (poolId: string, data: UpdatePoolInput, tenantId
     body: JSON.stringify(data)
   })
   if (!response.ok) throw new Error('Failed to update pool')
-  return response.json()
-}
-
-// Agent Types
-export const listAgentTypes = async (tenantId: string, poolId?: string): Promise<ListResponse<AgentType>> => {
-  const params = poolId ? `?pool_id=${poolId}` : ''
-  const response = await fetch(`${getBaseUrl()}/v1/agent-types${params}`, {
-    headers: headers(tenantId)
-  })
-  if (!response.ok) throw new Error('Failed to fetch agent types')
-  const data = await response.json()
-  // API returns { agent_types: [...], total: n }
-  return { items: data.agent_types ?? data.items ?? [], total: data.total ?? 0 }
-}
-
-export const getAgentType = async (agentTypeId: string, tenantId: string): Promise<AgentType> => {
-  const response = await fetch(`${getBaseUrl()}/v1/agent-types/${agentTypeId}`, {
-    headers: headers(tenantId)
-  })
-  if (!response.ok) throw new Error('Failed to fetch agent type')
-  return response.json()
-}
-
-export const createAgentType = async (data: CreateAgentTypeInput, tenantId: string): Promise<AgentType> => {
-  const payload = {
-    ...data,
-    pools:  data.pools.map(id => ({ pool_id: id })),
-    skills: data.skills ?? [],
-  }
-  const response = await fetch(`${getBaseUrl()}/v1/agent-types`, {
-    method: 'POST',
-    headers: operatorHeaders(tenantId),
-    body: JSON.stringify(payload)
-  })
-  if (!response.ok) throw new Error('Failed to create agent type')
   return response.json()
 }
 
@@ -189,43 +154,8 @@ export const instanceAction = async (
   if (!response.ok) throw new Error('Failed to perform instance action')
 }
 
-// Human Agent Types (framework=human)
-export const listHumanAgentTypes = async (tenantId: string): Promise<ListResponse<AgentType>> => {
-  const response = await fetch(`${getBaseUrl()}/v1/agent-types?framework=human`, {
-    headers: operatorHeaders(tenantId)
-  })
-  if (!response.ok) throw new Error('Failed to fetch human agent types')
-  const data = await response.json()
-  return { items: data.agent_types ?? data.items ?? [], total: data.total ?? 0 }
-}
-
-export const createHumanAgentType = async (data: CreateHumanAgentInput, tenantId: string): Promise<AgentType> => {
-  const response = await fetch(`${getBaseUrl()}/v1/agent-types`, {
-    method: 'POST',
-    headers: operatorHeaders(tenantId),
-    body: JSON.stringify({ ...data, framework: 'human', execution_model: 'stateful' }),
-  })
-  if (!response.ok) throw new Error('Failed to create human agent type')
-  return response.json()
-}
-
-export const updateHumanAgentType = async (agentTypeId: string, data: UpdateHumanAgentInput, tenantId: string): Promise<AgentType> => {
-  const response = await fetch(`${getBaseUrl()}/v1/agent-types/${agentTypeId}`, {
-    method: 'PUT',
-    headers: operatorHeaders(tenantId),
-    body: JSON.stringify(data),
-  })
-  if (!response.ok) throw new Error('Failed to update human agent type')
-  return response.json()
-}
-
-export const deleteAgentType = async (agentTypeId: string, tenantId: string): Promise<void> => {
-  const response = await fetch(`${getBaseUrl()}/v1/agent-types/${agentTypeId}`, {
-    method: 'DELETE',
-    headers: operatorHeaders(tenantId),
-  })
-  if (!response.ok) throw new Error('Failed to delete agent type')
-}
+// (Human Agent Types CRUD removed — AgentType entity retired. Human agents are
+// login-driven; live instances are managed via listHumanInstances/instanceAction.)
 
 // Channels (GatewayConfig)
 export const listChannels = async (tenantId: string): Promise<ListResponse<GatewayConfig>> => {

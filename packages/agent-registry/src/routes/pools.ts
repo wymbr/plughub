@@ -206,20 +206,16 @@ poolsRouter.get("/:pool_id/mentionable-agents", async (req: Request, res: Respon
 
     const targetPoolIds = Object.values(mentionablePools)
 
-    // Find all active non-human agent types belonging to the mentionable pools
-    const agentTypes = await prisma.agentType.findMany({
-      where: {
-        tenant_id: tenantId,
-        status:    "active",
-        framework: { not: "human" },
-        pools: {
-          some: {
-            pool: { pool_id: { in: targetPoolIds }, tenant_id: tenantId },
-          },
-        },
-      },
-      include: { pools: { include: { pool: true } } },
-    })
+    // AgentType retired: source each specialist from its target pool's current
+    // deploy slot (PoolSkillSlot.current → skill_id). The synthesized agent_type_id
+    // equals the skill_id (deploy-driven), so it still matches the live participant
+    // and formats to a readable name in the UI.
+    const currentSlots = await (prisma as any).poolSkillSlot.findMany({
+      where: { tenant_id: tenantId, slot: "current", pool_id: { in: targetPoolIds } },
+    }) as Array<{ pool_id: string; skill_id: string | null }>
+    const skillByPool = new Map<string, string>(
+      currentSlots.filter(s => !!s.skill_id).map(s => [s.pool_id, s.skill_id as string]),
+    )
 
     // Build alias-indexed response: one entry per alias (key in mentionable_pools)
     // so the UI can construct @alias mentions (not @agent_type_id which is not a valid alias)
@@ -227,19 +223,15 @@ poolsRouter.get("/:pool_id/mentionable-agents", async (req: Request, res: Respon
       alias:         string;
       agent_type_id: string;
       pool_id:       string;
-      description?:  string;
     }> = []
 
     for (const [alias, targetPoolId] of Object.entries(mentionablePools)) {
-      const matchingAt = agentTypes.find(at =>
-        (at.pools as any[]).some((atp: any) => atp.pool?.pool_id === targetPoolId)
-      )
-      if (!matchingAt) continue
+      const skillId = skillByPool.get(targetPoolId)
+      if (!skillId) continue
       agents.push({
         alias,
-        agent_type_id: matchingAt.agent_type_id,
+        agent_type_id: skillId,   // deploy-driven: agent_type_id == skill_id
         pool_id:       targetPoolId,
-        description:   (matchingAt.capabilities as Record<string, unknown>)?.["description"] as string ?? undefined,
       })
     }
 

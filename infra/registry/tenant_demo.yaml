@@ -194,25 +194,9 @@ pools:
     sla_target_ms: 30000
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Agent Types
+# Agent Types — entidade APOSENTADA (Fase 3d/C).
+# Provisionamento de IA vem do bloco `deploy:` de cada pool (seção Pools); o
+# bridge sintetiza um agent_type native a partir da skill no 404. Agentes humanos
+# são login-driven (instância `human-{userId}` com execution_model=stateful no
+# Redis) — não há agent_type no registry. O RegistrySyncer não lê esta seção.
 # ─────────────────────────────────────────────────────────────────────────────
-
-agent_types:
-
-  # NOTA: agent_types IA aposentados (Fase 3c/A) — provisionamento agora vem do
-  # bloco `deploy:` de cada pool (ver seção Pools). O bridge sintetiza um
-  # agent_type native a partir da skill no 404. Apenas o agente humano permanece
-  # declarado aqui (login-driven; não bootstrap-managed) para que o prune do
-  # RegistrySyncer remova os agent_types IA órfãos do registry.
-
-  # Agente humano de retenção — gerenciado pelo Agent Assist UI
-  - agent_type_id: agente_retencao_humano_v1
-    framework: human
-    execution_model: stateful
-    role: executor
-    max_concurrent_sessions: 3
-    pools: [retencao_humano]
-    skills: []
-    permissions: []
-    capabilities:
-      channels: webchat,whatsapp

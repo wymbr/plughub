@@ -202,18 +202,9 @@ class RegistrySyncer:
         for pool in cfg.get("pools", []):
             await self._sync_pool(http, headers, pool, report)
 
-        # ── Sync agent types ───────────────────────────────────────────────
-        declared_ids: set[str] = set()
-        for at in cfg.get("agent_types", []):
-            await self._sync_agent_type(http, headers, at, report)
-            atid = at.get("agent_type_id")
-            if atid:
-                declared_ids.add(atid)
-
-        # ── Prune stale agent types not present in YAML ────────────────
-        prune = os.getenv("REGISTRY_SYNC_PRUNE", "true").lower() == "true"
-        if prune and declared_ids:
-            await self._prune_agent_types(http, headers, declared_ids, report)
+        # AgentType entity retired (Fase 3d/C): no agent_types are synced or
+        # pruned. AI provisioning comes from each pool's `deploy:` block (below);
+        # human agents are login-driven (no registry agent_type).
 
         # ── Deploy slots (PoolSkillSlot.current) sourced from each pool's
         # `deploy:` block (skill_id + max_concurrent_sessions). Canonical
