@@ -63,10 +63,14 @@ Hoje o Analytics/Agents mistura agente×pool e não separa humano×IA.
   defaults já cobre); seletor de motivo já existe (`PauseReasonModal`). Único ajuste feito:
   **i18n** dos motivos default + textos do modal (seguiam fixos em pt-BR) → namespace `agentAssist`
   seção `pause` (en + pt-BR). Labels do Config API permanecem como configurados pelo tenant.
-- **Fase 2 — relatório de Pools/Infra (novo)**: pool×canal×tempo — volumetria, tráfego no
-  tempo, comportamento de fila (espera/tamanho/abandono/agentes disponíveis), concorrência
-  vs capacidade (headroom), SLA. Fontes prontas (`queue_events`, `participation_intervals`,
-  `sessions`); faltam endpoints `/reports/pools/{volume,queue,occupancy}` + aba Analytics/Pools.
+- **Fase 2 — relatório de Pools/Infra (novo)**: pool×canal×**endpoint**×tempo — volumetria,
+  fila (espera/tamanho/abandono/disponíveis), concorrência vs capacidade (headroom), SLA.
+  **Spec/ADR registrado** em [`docs/arcos/pools-infra-report.md`](docs/arcos/pools-infra-report.md)
+  — decisões fechadas: (a) concorrência via contadores no Routing Engine (pool + total, Redis,
+  carry-over no fechamento do bucket; `peak_total` ≠ soma dos max por pool); (b) capacidade =
+  configurada no pricing (snapshot reservado à Fila); (c) volume com dimensão `endpoint`=DNIS
+  (Arc 19). Pendente: Routing Engine (contadores+flush), 3 endpoints `/reports/pools/*`,
+  pricing expõe capacidade, aba `Analytics/Pools`.
 - **Fase 3 — migrar provisionamento do demo para Config + Deploy** (elimina YAML/agent_type):
   - **3b / 3a / 3c / 3d-parcial — concluídas** — ver `CHANGELOG.md` (2026-05-31, 2026-06-01)
     e `docs/arcos/instance-bootstrap.md`. Pools IA migrados; `mention_commands` via embed no
