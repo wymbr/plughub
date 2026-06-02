@@ -1980,23 +1980,24 @@ def _fetch_agent_availability(
         "tenant_id = {tenant_id:String}",
         f"started_at >= '{since}'",
         f"started_at <  '{until}'",
-        "instance_id LIKE 'human-%'",
+        "agent_type = 'human'",
+        "user_id != ''",
         "role IN ('primary', 'specialist')",
     ]
     if pool_id:
         busy_conditions.append("pool_id = {pool_id:String}")
-    if agent_type_id:
-        busy_conditions.append("agent_type_id = {agent_type_id:String}")
     _apply_pool_scope(busy_conditions, accessible_pools)
+    # Match the login-interval identity by constructing instance_id from user_id
+    # (reliable for humans via C1) rather than relying on segments.instance_id.
     busy_rows = _rows_to_dicts(client.query(f"""
         SELECT
-            instance_id,
+            concat('human-', user_id)   AS instance_id,
             pool_id,
             toDate(started_at)          AS period_date,
             sum(duration_ms)            AS busy_ms
         FROM {db}.segments FINAL
         WHERE {" AND ".join(busy_conditions)}
-        GROUP BY instance_id, pool_id, period_date
+        GROUP BY user_id, pool_id, period_date
     """, parameters=params))
 
     merged: dict = {}
