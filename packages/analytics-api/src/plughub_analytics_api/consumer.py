@@ -667,6 +667,36 @@ async def _handle_login_interval(raw: dict, store: object, redis: object) -> Non
             "duration_ms":   _iso_duration_ms(state.get("logged_in_at", ""), ts),
         })
 
+        # Close any OPEN pause interval — but only on an EXPLICIT logout, detected
+        # by the absence of the durable pause marker ({tenant}:agent_paused:{id},
+        # cleared synchronously by /api/agent-clear-pause before the grace-delayed
+        # agent_logout). On navigation/crash the marker persists (agent stays
+        # paused) → the pause interval stays open and continuous; resume closes it.
+        try:
+            durable = await redis.get(f"{tenant_id}:agent_paused:{instance_id}")  # type: ignore[union-attr]
+            if not durable:
+                pause_key = _pause_redis_key(tenant_id, instance_id)
+                pause_raw = await redis.get(pause_key)  # type: ignore[union-attr]
+                if pause_raw:
+                    pstate = _json.loads(pause_raw)
+                    await redis.delete(pause_key)  # type: ignore[union-attr]
+                    p_in = pstate.get("paused_at", "")
+                    await store.upsert_agent_pause_interval({  # type: ignore[attr-defined]
+                        "interval_id":   pstate.get("interval_id", ""),
+                        "tenant_id":     tenant_id,
+                        "instance_id":   instance_id,
+                        "agent_type_id": pstate.get("agent_type_id", ""),
+                        "pool_id":       pstate.get("pool_id", ""),
+                        "reason_id":     pstate.get("reason_id", ""),
+                        "reason_label":  pstate.get("reason_label", ""),
+                        "note":          pstate.get("note"),
+                        "paused_at":     p_in,
+                        "resumed_at":    ts,
+                        "duration_ms":   _iso_duration_ms(p_in, ts),
+                    })
+        except Exception as exc:
+            logger.debug("pause close on logout failed instance=%s: %s", instance_id, exc)
+
 
 async def _parse_with_enrichment(
     raw:      dict,

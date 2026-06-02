@@ -54,8 +54,9 @@ Hoje o Analytics/Agents mistura agente×pool e não separa humano×IA.
   e o heartbeat passam a carregar `status=paused` quando a key existe → o routing mantém
   `state=paused` (alocação exige `state=="ready"`, linha 161/652 do registry) → agente continua
   excluído sem cirurgia em sets; novo `GET /api/agent-state` + a UI lê ao montar (botão reflete
-  a realidade). Edge case documentado: logout real enquanto pausado sem resume = pausa órfã
-  (a key Redis do intervalo de pausa tem TTL 24h; cleanup futuro). Ver `CHANGELOG.md`.
+  a realidade). TTL por motivo (`max_minutes`) + logout explícito limpa a key (`POST
+  /api/agent-clear-pause`). Órfã resolvida: no `agent_logout` o analytics fecha a pausa aberta
+  **só** quando a key durável está ausente (= logout explícito), distinguindo de navegação. Ver `CHANGELOG.md`.
 - **Pausas — gestão de motivos (nova)**: hoje o backend grava reason_id/reason_label e o relatório
   já exibe donut, mas faltam (a) tela de Configuration para cadastrar/editar motivos +
   **associá-los a pools**, (b) seletor de motivo na UI do agente ao pausar. Config API já tem o

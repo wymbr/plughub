@@ -18,6 +18,8 @@ O estado de pausa não sobrevivia a trocar de tela: ao sair do Console, após o 
 
 Comportamento novo só afeta agente **pausado** (caminho ready normal intacto = baixo risco). Não foi preciso tratar o mismatch `agent_pause`/`agent_paused` do routing (a exclusão vem do estado).
 
+**Pausa órfã resolvida:** distinguir KEY durável (marcador de restauração) do INTERVALO de pausa no analytics. No `agent_logout`, o consumer fecha a pausa **aberta** somente quando a key durável está **ausente** (= logout explícito, que o `clear-pause` apaga antes do grace); na navegação/queda a key persiste → a pausa fica aberta e contínua, fechada depois pelo resume. Sem órfã no logout real, sem cortar a pausa na navegação.
+
 **Semântica de expiração (b+c):**
 - **TTL por motivo**: a key durável usa `max_minutes` do motivo (Config API `pause_reasons`) + 30min de tolerância (default 4h, teto 16h). O modal repassa `max_minutes` → endpoint. Uma pausa esquecida expira sozinha e o login seguinte começa `ready` (não arrasta para o dia seguinte). Queda/navegação dentro da janela preservam.
 - **Logout explícito limpa**: novo `POST /api/agent-clear-pause` chamado pelo `logout` central do `AuthContext` (cobre todos os caminhos; no-op se não-pausado). Encerrar o turno começa limpo; navegação/queda não passam por aqui.
