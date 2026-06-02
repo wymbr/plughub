@@ -588,13 +588,16 @@ async def _handle_login_interval(raw: dict, store: object, redis: object) -> Non
             except Exception:
                 return
         else:
+            _pools = raw.get("pools") or []
             state = {
                 "interval_id":   str(_uuid.uuid4()),
                 "logged_in_at":  ts,
                 "user_id":       raw.get("user_id", "") or "",
                 "user_login":    raw.get("user_login", "") or "",
                 "agent_type_id": raw.get("agent_type_id", "") or "",
-                "pool_id":       raw.get("pool_id", "") or "",
+                # agent_ready carries pools[] (not pool_id); fall back to pools[0]
+                # so the login interval shares the pool with busy/pause rows.
+                "pool_id":       raw.get("pool_id") or (_pools[0] if _pools else "") or "",
                 "pools_open":    {},
             }
             await store.upsert_agent_login_interval({  # type: ignore[attr-defined]

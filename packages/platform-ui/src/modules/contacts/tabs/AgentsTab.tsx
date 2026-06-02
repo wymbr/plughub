@@ -201,19 +201,23 @@ const AvailabilitySubTab: React.FC<{
     instance: string; label: string; pool: string
     logged: number; paused: number; available: number; pauses: number; busy: number
   }
+  // Aggregate per IDENTITY (instance) — logged time is per-agent (one clock), so a
+  // login row (pool may be blank) and busy/pause rows (real pool) must not split
+  // into separate lines. Pool column shows a representative (non-blank) pool.
   const groups = new Map<string, Agg>()
   for (const r of rows) {
-    const key = `${r.instance_id || r.agent_type_id}|${r.pool_id}`
+    const key = r.instance_id || r.agent_type_id
     const g = groups.get(key) ?? {
-      instance: r.instance_id, label: identityLabel(r), pool: r.pool_id,
+      instance: r.instance_id, label: '', pool: '',
       logged: 0, paused: 0, available: 0, pauses: 0, busy: 0,
     }
     g.logged    += r.logged_ms
     g.paused    += r.total_pause_ms
-    g.available += r.available_ms
     g.pauses    += r.total_pauses
     g.busy      += r.busy_ms
-    if (!g.label || g.label === r.agent_type_id) g.label = identityLabel(r)
+    if (r.user_login) g.label = r.user_login                        // login identity wins
+    else if (!g.label && r.agent_type_id) g.label = shortAgent(r.agent_type_id)
+    if (!g.pool && r.pool_id) g.pool = r.pool_id
     if (!g.instance && r.instance_id) g.instance = r.instance_id
     groups.set(key, g)
   }
@@ -237,8 +241,9 @@ const AvailabilitySubTab: React.FC<{
           </thead>
           <tbody>
             {aggRows.map((g, i) => {
-              const pct = g.logged > 0 ? Math.round((g.available / g.logged) * 100) : null
-              const occ = g.available > 0 ? Math.round((g.busy / g.available) * 100) : null
+              const available = Math.max(g.logged - g.paused, 0)
+              const pct = g.logged > 0 ? Math.round((available / g.logged) * 100) : null
+              const occ = available > 0 ? Math.round((g.busy / available) * 100) : null
               const clickable = !!g.instance
               return (
                 <tr key={i}
@@ -251,7 +256,7 @@ const AvailabilitySubTab: React.FC<{
                   <td className="px-3 py-2 text-muted truncate max-w-[140px]" title={g.pool}>{shortPool(g.pool)}</td>
                   <td className="px-3 py-2 text-right tabular-nums text-dark">{fmtDuration(g.logged)}</td>
                   <td className="px-3 py-2 text-right tabular-nums text-warning-text">{fmtDuration(g.paused)}</td>
-                  <td className="px-3 py-2 text-right tabular-nums font-semibold text-dark">{fmtDuration(g.available)}</td>
+                  <td className="px-3 py-2 text-right tabular-nums font-semibold text-dark">{fmtDuration(available)}</td>
                   <td className="px-3 py-2 text-right tabular-nums text-muted">{pct === null ? '—' : `${pct}%`}</td>
                   <td className="px-3 py-2 text-right tabular-nums text-dark">{fmtDuration(g.busy)}</td>
                   <td className="px-3 py-2 text-right tabular-nums font-semibold text-primary">{occ === null ? '—' : `${occ}%`}</td>
@@ -283,8 +288,15 @@ const PausesSubTab: React.FC<{
     reason: string; count: number; ms: number
   }> = []
 
+  // user_login lives on the agent's login rows; pause-only rows may lack it —
+  // resolve the label by instance_id so the Agent column is never empty.
+  const labelByInstance = new Map<string, string>()
   for (const r of rows) {
-    const agent = identityLabel(r)
+    if (r.user_login) labelByInstance.set(r.instance_id, r.user_login)
+  }
+
+  for (const r of rows) {
+    const agent = labelByInstance.get(r.instance_id) || identityLabel(r)
     if (r.reason_breakdown.length === 0) {
       if (r.total_pauses === 0) continue
       flat.push({ date: r.period_date, agent, pool: r.pool_id,
