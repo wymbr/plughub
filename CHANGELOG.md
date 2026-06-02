@@ -2,6 +2,18 @@
 
 ---
 
+## Ocupação do Agente (busy ÷ disponível) (2026-06-02)
+
+Fecha a visão de produtividade do agente no relatório de disponibilidade.
+
+**analytics-api** (`_fetch_agent_availability`): nova query de **busy** a partir de `segments FINAL` (soma `duration_ms` dos roles `primary`/`specialist`), agrupada por `(instance_id, pool_id, date)` — junta na mesma chave de identidade do relatório (segments já têm `instance_id`). Novo campo `busy_ms` por linha.
+
+**platform-ui** (`AgentsTab` → Disponibilidade): agrega `busy` por identidade e adiciona colunas **Ocupado** (tempo em atendimento) e **Ocupação** = `busy ÷ disponível` (padrão de contact center: % do tempo logado-menos-pausa gasto atendendo). i18n `busy`/`occupancy` (en + pt-BR). Ocupação pode passar de 100% para agentes multi-sessão (concorrência) — exibida como valor real.
+
+**Pausas — gestão de motivos**: decidido manter lista **global** (a pausa é do agente, remove de todos os pools → associação por pool é incorreta); Config UI descartada (overkill). Único ajuste: i18n dos motivos default + textos do `PauseReasonModal` (namespace `agentAssist.pause`, en + pt-BR); labels do Config API permanecem como configurados.
+
+---
+
 ## Pausa — Persistência através de Reconnect do Console (2026-06-02)
 
 O estado de pausa não sobrevivia a trocar de tela: ao sair do Console, após o grace o `unregisterHumanAgent` deleta a instância (logout); ao voltar, `registerHumanAgent` recriava como `ready` e o `isPaused` (estado UI-local) voltava a false.

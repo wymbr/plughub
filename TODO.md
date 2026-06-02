@@ -42,8 +42,8 @@ Hoje o Analytics/Agents mistura agente×pool e não separa humano×IA.
   + máquina de estados no consumer (reusa agent_ready/agent_login → abre, agent_logout → fecha;
   Redis `{tenant}:login:{instance}`); endpoint `agent-availability` reescrito por instance_id
   (logged_ms/available_ms/user_login) + donut de motivos no `AgentsTab`. Ver `CHANGELOG.md`.
-  Derivados pendentes: **ocupação** (busy dos segments ÷ logado) e **gestão de motivos de pausa**
-  (abaixo).
+  Derivados ✅: **ocupação** (busy dos segments ÷ disponível) e **gestão de motivos de pausa**
+  (i18n) — ambos concluídos 2026-06-02, ver `CHANGELOG.md`.
 - **Timeline do agente — presença por pool ✅** (2026-06-02): tabela `agent_pool_intervals`
   (diff de `pools[]` no consumer) + endpoint `/reports/agent-timeline` + componente
   `AgentTimeline` (swimlanes: Total + faixa por pool, overlay de pausas) com drill-down da

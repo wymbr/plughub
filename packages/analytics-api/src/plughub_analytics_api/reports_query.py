@@ -1900,7 +1900,10 @@ def _fetch_agent_availability(
     # (agent_login_intervals) with pauses (agent_pause_intervals) so the tab shows
     # logged / paused / available per identity. user_login comes from the login
     # interval; pauses join on instance_id.
-    base_conditions = ["tenant_id = {tenant_id:String}"]
+    # Human-only report: availability/pauses/occupancy is a human workforce view.
+    # Human instances are always "human-{userId}"; AI instances are "{type}-NNN"
+    # (incl. hook agents like nps/wrapup) — exclude them.
+    base_conditions = ["tenant_id = {tenant_id:String}", "instance_id LIKE 'human-%'"]
     params: dict = {"tenant_id": tenant_id}
     if pool_id:
         base_conditions.append("pool_id = {pool_id:String}")
@@ -1970,6 +1973,32 @@ def _fetch_agent_availability(
         GROUP BY instance_id, pool_id, period_date, reason_id, reason_label
     """, parameters=params))
 
+    # ── Busy time per (instance_id, pool_id, date) — from segments (active
+    # handling: primary + specialist roles). Powers occupancy = busy / logged.
+    # Joined on instance_id, the same identity key the report groups by. ──
+    busy_conditions = [
+        "tenant_id = {tenant_id:String}",
+        f"started_at >= '{since}'",
+        f"started_at <  '{until}'",
+        "instance_id LIKE 'human-%'",
+        "role IN ('primary', 'specialist')",
+    ]
+    if pool_id:
+        busy_conditions.append("pool_id = {pool_id:String}")
+    if agent_type_id:
+        busy_conditions.append("agent_type_id = {agent_type_id:String}")
+    _apply_pool_scope(busy_conditions, accessible_pools)
+    busy_rows = _rows_to_dicts(client.query(f"""
+        SELECT
+            instance_id,
+            pool_id,
+            toDate(started_at)          AS period_date,
+            sum(duration_ms)            AS busy_ms
+        FROM {db}.segments FINAL
+        WHERE {" AND ".join(busy_conditions)}
+        GROUP BY instance_id, pool_id, period_date
+    """, parameters=params))
+
     merged: dict = {}
 
     def _slot(inst: str, pool: str, period: str, atype: str) -> dict:
@@ -1986,6 +2015,7 @@ def _fetch_agent_availability(
                 "total_logins":   0,
                 "total_pauses":   0,
                 "total_pause_ms": 0,
+                "busy_ms":        0,
             }
         return merged[k]
 
@@ -2003,6 +2033,10 @@ def _fetch_agent_availability(
         m["total_pause_ms"] = int(r.get("total_pause_ms") or 0)
         if not m["agent_type_id"] and r.get("agent_type_id"):
             m["agent_type_id"] = r["agent_type_id"]
+
+    for r in busy_rows:
+        m = _slot(r["instance_id"], r["pool_id"], _dstr(r["period_date"]), "")
+        m["busy_ms"] = int(r.get("busy_ms") or 0)
 
     breakdown: dict = {}
     for r in reason_rows:

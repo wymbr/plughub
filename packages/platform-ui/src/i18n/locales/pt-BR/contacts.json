@@ -363,7 +363,9 @@
         "logged":   "Logado",
         "paused":   "Pausado",
         "available":"Disponível",
-        "availPct": "Disp. %"
+        "availPct": "Disp. %",
+        "busy":     "Ocupado",
+        "occupancy":"Ocupação"
       },
       "timeline": {
         "title":  "Linha do tempo do agente",

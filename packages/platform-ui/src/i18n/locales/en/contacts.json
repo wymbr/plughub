@@ -363,7 +363,9 @@
         "logged":   "Logged",
         "paused":   "Paused",
         "available":"Available",
-        "availPct": "Avail. %"
+        "availPct": "Avail. %",
+        "busy":     "Busy",
+        "occupancy":"Occupancy"
       },
       "timeline": {
         "title":  "Agent timeline",

@@ -40,6 +40,7 @@ interface AvailabilityRow {
   total_pauses:     number
   total_pause_ms:   number
   available_ms:     number
+  busy_ms:          number
   reason_breakdown: ReasonBreakdown[]
 }
 
@@ -198,19 +199,20 @@ const AvailabilitySubTab: React.FC<{
   // Aggregate across the date range per identity (instance_id) + pool.
   type Agg = {
     instance: string; label: string; pool: string
-    logged: number; paused: number; available: number; pauses: number
+    logged: number; paused: number; available: number; pauses: number; busy: number
   }
   const groups = new Map<string, Agg>()
   for (const r of rows) {
     const key = `${r.instance_id || r.agent_type_id}|${r.pool_id}`
     const g = groups.get(key) ?? {
       instance: r.instance_id, label: identityLabel(r), pool: r.pool_id,
-      logged: 0, paused: 0, available: 0, pauses: 0,
+      logged: 0, paused: 0, available: 0, pauses: 0, busy: 0,
     }
     g.logged    += r.logged_ms
     g.paused    += r.total_pause_ms
     g.available += r.available_ms
     g.pauses    += r.total_pauses
+    g.busy      += r.busy_ms
     if (!g.label || g.label === r.agent_type_id) g.label = identityLabel(r)
     if (!g.instance && r.instance_id) g.instance = r.instance_id
     groups.set(key, g)
@@ -229,11 +231,14 @@ const AvailabilitySubTab: React.FC<{
               <th className="text-right px-3 py-2 font-semibold text-muted whitespace-nowrap">{t('agents.availability.columns.paused')}</th>
               <th className="text-right px-3 py-2 font-semibold text-muted whitespace-nowrap">{t('agents.availability.columns.available')}</th>
               <th className="text-right px-3 py-2 font-semibold text-muted whitespace-nowrap">{t('agents.availability.columns.availPct')}</th>
+              <th className="text-right px-3 py-2 font-semibold text-muted whitespace-nowrap">{t('agents.availability.columns.busy')}</th>
+              <th className="text-right px-3 py-2 font-semibold text-muted whitespace-nowrap">{t('agents.availability.columns.occupancy')}</th>
             </tr>
           </thead>
           <tbody>
             {aggRows.map((g, i) => {
               const pct = g.logged > 0 ? Math.round((g.available / g.logged) * 100) : null
+              const occ = g.available > 0 ? Math.round((g.busy / g.available) * 100) : null
               const clickable = !!g.instance
               return (
                 <tr key={i}
@@ -248,6 +253,8 @@ const AvailabilitySubTab: React.FC<{
                   <td className="px-3 py-2 text-right tabular-nums text-warning-text">{fmtDuration(g.paused)}</td>
                   <td className="px-3 py-2 text-right tabular-nums font-semibold text-dark">{fmtDuration(g.available)}</td>
                   <td className="px-3 py-2 text-right tabular-nums text-muted">{pct === null ? '—' : `${pct}%`}</td>
+                  <td className="px-3 py-2 text-right tabular-nums text-dark">{fmtDuration(g.busy)}</td>
+                  <td className="px-3 py-2 text-right tabular-nums font-semibold text-primary">{occ === null ? '—' : `${occ}%`}</td>
                 </tr>
               )
             })}
