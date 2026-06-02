@@ -338,6 +338,15 @@ async function registerHumanAgent(
   } catch { /* non-fatal — treat as fresh registration */ }
   const mergedPools = Array.from(new Set([...existingPools, poolId]))
 
+  // Restore an active pause across reconnects: the durable marker
+  // ${tenant}:agent_paused:${instanceId} survives the instance deletion that a
+  // WS logout (Console navigation) performs. If present, register the agent as
+  // paused so routing keeps excluding it (allocation requires state=="ready").
+  let isPaused = false
+  try {
+    isPaused = (await redis.get(`${tenantId}:agent_paused:${instanceId}`)) !== null
+  } catch { /* non-fatal — treat as not paused */ }
+
   const instance = {
     instance_id:      instanceId,
     agent_type_id:    `human_agent_${poolId}`,
@@ -351,7 +360,7 @@ async function registerHumanAgent(
     execution_model:  "stateful",
     max_concurrent:   maxConcurrentSessions,
     current_sessions: existingCurrentSessions,
-    status:           "ready",
+    status:           isPaused ? "paused" : "ready",
     registered_at:    now,
     source:           "human_login",
   }
@@ -413,7 +422,9 @@ async function registerHumanAgent(
     // this event, dropping anything not present here).
     user_id:                  userId,
     user_login:               userLogin,
-    status:                   "ready",
+    // status reflects a restored pause so the routing engine's _upsert_instance
+    // keeps state="paused" (excluded) and _drain_queue_for_agent skips draining.
+    status:                   isPaused ? "paused" : "ready",
     execution_model:          "stateful",   // required: prevents stateless default in routing engine
     current_sessions:         existingCurrentSessions,
     pools:                    mergedPools,
@@ -421,7 +432,7 @@ async function registerHumanAgent(
     timestamp:                now,
   })
 
-  console.log(`[agent-ws] Human agent registered: instance=${instanceId} pools=${mergedPools.join(",")}`)
+  console.log(`[agent-ws] Human agent registered: instance=${instanceId} pools=${mergedPools.join(",")} status=${isPaused ? "paused" : "ready"}`)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1594,6 +1605,10 @@ export async function startServer(config: ServerConfig): Promise<void> {
       const reasonId   = (body["reason_id"]   as string | undefined) ?? ""
       const reasonLabel = (body["reason_label"] as string | undefined) ?? ""
       const note       = (body["note"]         as string | undefined) ?? ""
+      const maxMinutes = typeof body["max_minutes"] === "number" ? (body["max_minutes"] as number) : 0
+      // Durable pause TTL = reason's max_minutes + 30m grace (so a forgotten pause
+      // auto-expires and the next login starts ready); default 4h, capped at 16h.
+      const pauseTtlSec = Math.min(maxMinutes > 0 ? maxMinutes * 60 + 1800 : 4 * 3600, 16 * 3600)
 
       if (!poolId) {
         res.status(400).json({ error: "pool_id is required" })
@@ -1633,6 +1648,15 @@ export async function startServer(config: ServerConfig): Promise<void> {
         await redis.srem(keys.poolInstances(tenantId, pid), instanceId)
         await redis.srem(keys.poolAvailable(tenantId, pid), instanceId)
       }
+
+      // Durable pause marker — survives a full logout (WS disconnect on Console
+      // navigation deletes the instance). registerHumanAgent and the WS heartbeat
+      // read this to keep status="paused" across reconnects; resume deletes it.
+      await redis.set(
+        `${tenantId}:agent_paused:${instanceId}`,
+        JSON.stringify({ reason_id: reasonId, reason_label: reasonLabel, note, max_minutes: maxMinutes, paused_at: new Date().toISOString() }),
+        "EX", pauseTtlSec,
+      )
 
       // Publish agent_pause to agent.lifecycle with reason fields
       await kafka.publish("agent.lifecycle", {
@@ -1687,6 +1711,8 @@ export async function startServer(config: ServerConfig): Promise<void> {
       // Mark ready and re-add to every pool allocation set.
       inst["status"] = "ready"
       await redis.set(instanceKey, JSON.stringify(inst))
+      // Clear the durable pause marker so reconnects no longer restore the pause.
+      await redis.del(`${tenantId}:agent_paused:${instanceId}`)
       const pools: string[] = Array.isArray(inst["pools"]) ? (inst["pools"] as string[]) : [poolId]
       for (const pid of pools) {
         await redis.sadd(keys.poolInstances(tenantId, pid), instanceId)
@@ -1715,6 +1741,55 @@ export async function startServer(config: ServerConfig): Promise<void> {
     } catch (err) {
       console.error("[agent-resume] Error:", err)
       res.status(500).json({ error: "resume_failed" })
+    }
+  })
+
+  // ── GET /api/agent-state ──────────────────────────────────────────────────
+  // Returns whether the calling human agent is currently paused, from the durable
+  // pause marker. The Agent Assist UI reads this on mount so the Pause button
+  // reflects reality after a reconnect (the local React state resets to false).
+  app.get("/api/agent-state", async (req: Request, res: Response) => {
+    const payload = requireJwtRole(req.headers.authorization, ["operator", "supervisor", "admin"], res)
+    if (!payload) return
+    try {
+      const tenantId  = process.env["PLUGHUB_TENANT_ID"] ?? "tenant_demo"
+      const jwtUserId = typeof payload["sub"] === "string" ? payload["sub"] : ""
+      const poolId    = (req.query["pool_id"] as string | undefined) ?? ""
+      const instanceId = jwtUserId ? `human-${jwtUserId}` : `human-${poolId}`
+      const raw = await redis.get(`${tenantId}:agent_paused:${instanceId}`)
+      if (!raw) {
+        res.json({ paused: false })
+        return
+      }
+      let info: Record<string, unknown> = {}
+      try { info = JSON.parse(raw) as Record<string, unknown> } catch { /* ignore */ }
+      res.json({
+        paused:       true,
+        reason_id:    (info["reason_id"] as string) ?? "",
+        reason_label: (info["reason_label"] as string) ?? "",
+        paused_at:    (info["paused_at"] as string) ?? "",
+      })
+    } catch (err) {
+      console.error("[agent-state] Error:", err)
+      res.status(500).json({ error: "state_failed" })
+    }
+  })
+
+  // ── POST /api/agent-clear-pause ───────────────────────────────────────────
+  // Clears the durable pause marker on EXPLICIT logout (end of shift) so the next
+  // login starts ready. Navigation/crash do not hit this — only the Logout flow.
+  // Idempotent and best-effort; a no-op if the user is not a paused agent.
+  app.post("/api/agent-clear-pause", async (req: Request, res: Response) => {
+    const payload = requireJwtRole(req.headers.authorization, ["operator", "supervisor", "admin"], res)
+    if (!payload) return
+    try {
+      const tenantId  = process.env["PLUGHUB_TENANT_ID"] ?? "tenant_demo"
+      const jwtUserId = typeof payload["sub"] === "string" ? payload["sub"] : ""
+      if (jwtUserId) await redis.del(`${tenantId}:agent_paused:human-${jwtUserId}`)
+      res.json({ ok: true })
+    } catch (err) {
+      console.error("[agent-clear-pause] Error:", err)
+      res.status(500).json({ error: "clear_failed" })
     }
   })
 
@@ -2121,6 +2196,12 @@ export async function startServer(config: ServerConfig): Promise<void> {
         if (msg["type"] === "pong" && poolId) {
           const tenantId   = process.env["PLUGHUB_TENANT_ID"] ?? "tenant_demo"
           const instanceId = userId ? `human-${userId}` : `human-${poolId}`
+          // Carry the real status so a paused agent stays paused in routing across
+          // heartbeats (otherwise the default "ready" silently resumes them).
+          let hbStatus = "ready"
+          try {
+            if ((await redis.get(`${tenantId}:agent_paused:${instanceId}`)) !== null) hbStatus = "paused"
+          } catch { /* non-fatal */ }
           kafka.publish("agent.lifecycle", {
             event:                   "agent_heartbeat",
             tenant_id:               tenantId,
@@ -2131,7 +2212,7 @@ export async function startServer(config: ServerConfig): Promise<void> {
             // heartbeat wipes user_id/user_login set by agent_ready.
             user_id:                 userId,
             user_login:              userLogin,
-            status:                  "ready",
+            status:                  hbStatus,
             execution_model:         "stateful",
             current_sessions:        subscribedSessions.size,
             pools:                   [poolId],

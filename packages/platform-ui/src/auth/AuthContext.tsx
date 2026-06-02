@@ -233,6 +233,17 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     clearStorage()
 
     if (current) {
+      // Clear any durable agent pause marker on explicit logout (end of shift) so
+      // the next login starts ready. No-op if the user is not a paused agent;
+      // navigation/crash never reach this path. Best-effort, non-blocking.
+      try {
+        await fetch(`/api/agent-clear-pause`, {
+          method:  "POST",
+          headers: { Authorization: `Bearer ${current.accessToken}` },
+        })
+      } catch {
+        // best-effort
+      }
       try {
         await apiLogout(current.refreshToken, current.accessToken)
       } catch {

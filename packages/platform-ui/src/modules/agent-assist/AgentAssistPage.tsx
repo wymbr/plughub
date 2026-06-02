@@ -26,7 +26,7 @@
  *   - CollaborateCombo replaces AdicionarEspecialista + Delegar buttons
  */
 
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useAuth } from "@/auth/useAuth";
 import { Clock, WifiOff } from "lucide-react";
@@ -317,8 +317,22 @@ export const AgentAssistPage: React.FC = () => {
     setShowPauseModal(true);
   }, []);
 
+  // Restore the pause button state on mount: isPaused is UI-local (resets on
+  // navigation), but the durable pause marker survives. Read it once so the
+  // button reflects reality after a reconnect. The backend keeps the agent
+  // actually paused (registerHumanAgent + heartbeat carry status=paused).
+  const stateChecked = useRef(false);
+  useEffect(() => {
+    if (stateChecked.current || !session?.accessToken) return;
+    stateChecked.current = true;
+    fetch(`/api/agent-state`, { headers: { Authorization: `Bearer ${session.accessToken}` } })
+      .then(r => (r.ok ? r.json() : null))
+      .then(d => { if (d?.paused) setIsPaused(true); })
+      .catch(() => { /* non-fatal */ });
+  }, [session]);
+
   const handlePauseConfirm = useCallback(
-    (reasonId: string, reasonLabel: string, note?: string) => {
+    (reasonId: string, reasonLabel: string, note?: string, maxMinutes?: number) => {
       setShowPauseModal(false);
       setIsPaused(true);
       const detail = note ? ` — ${note}` : "";
@@ -327,7 +341,7 @@ export const AgentAssistPage: React.FC = () => {
       fetch(`/api/agent-pause`, {
         method:  "PUT",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${session?.accessToken ?? ""}` },
-        body:    JSON.stringify({ pool_id: poolId, reason_id: reasonId, reason_label: reasonLabel, note }),
+        body:    JSON.stringify({ pool_id: poolId, reason_id: reasonId, reason_label: reasonLabel, note, max_minutes: maxMinutes }),
       }).catch(() => { /* non-fatal */ });
     },
     [activePools, addToast, t, session]

@@ -2,6 +2,28 @@
 
 ---
 
+## Pausa — Persistência através de Reconnect do Console (2026-06-02)
+
+O estado de pausa não sobrevivia a trocar de tela: ao sair do Console, após o grace o `unregisterHumanAgent` deleta a instância (logout); ao voltar, `registerHumanAgent` recriava como `ready` e o `isPaused` (estado UI-local) voltava a false.
+
+**Descoberta-chave:** a alocação no routing exige `inst.state == "ready"` (`registry.py` linhas 161/652) — um agente `paused` é excluído **pelo estado**, sem depender de set membership. Então basta o `status="paused"` fluir.
+
+**mcp-server-plughub:**
+- **Key durável** `{tenant}:agent_paused:{instanceId}` (reason + paused_at, TTL 16h) — escrita no `/api/agent-pause`, deletada no `/api/agent-resume`. Sobrevive à deleção da instância no logout.
+- **`registerHumanAgent`**: lê a key; se presente, registra com `status="paused"` (instância + evento `agent_ready`) → o `_upsert_instance` do routing mantém `state="paused"` e o `_drain_queue_for_agent` não dreneia (checa `state != "ready"`).
+- **Heartbeat do WS** (`pong → agent_heartbeat`): passa a enviar `status` lido da key durável (antes hardcoded `"ready"`) — senão o heartbeat a cada ~15s ressuscitava o agente como ready. Agentes não-pausados: inalterado.
+- **Novo `GET /api/agent-state`** (auth): retorna `{paused, reason_id, reason_label}` da key durável.
+
+**platform-ui:** `AgentAssistPage` lê `/api/agent-state` ao montar (uma vez, quando há sessão) e seta `isPaused` → o botão reflete a realidade após reconnect.
+
+Comportamento novo só afeta agente **pausado** (caminho ready normal intacto = baixo risco). Não foi preciso tratar o mismatch `agent_pause`/`agent_paused` do routing (a exclusão vem do estado).
+
+**Semântica de expiração (b+c):**
+- **TTL por motivo**: a key durável usa `max_minutes` do motivo (Config API `pause_reasons`) + 30min de tolerância (default 4h, teto 16h). O modal repassa `max_minutes` → endpoint. Uma pausa esquecida expira sozinha e o login seguinte começa `ready` (não arrasta para o dia seguinte). Queda/navegação dentro da janela preservam.
+- **Logout explícito limpa**: novo `POST /api/agent-clear-pause` chamado pelo `logout` central do `AuthContext` (cobre todos os caminhos; no-op se não-pausado). Encerrar o turno começa limpo; navegação/queda não passam por aqui.
+
+---
+
 ## Fix — Pausa de Agente Humano chegava ao Analytics (2026-06-02)
 
 A pausa pelo Console nunca registrava no analytics (relatórios de pausa/donut vazios). Dois bugs pré-existentes:

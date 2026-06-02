@@ -49,14 +49,13 @@ Hoje o Analytics/Agents mistura agente×pool e não separa humano×IA.
   `AgentTimeline` (swimlanes: Total + faixa por pool, overlay de pausas) com drill-down da
   tabela de Disponibilidade. Ver `CHANGELOG.md`. Precisão por pool é aproximada (atribui o
   intervalo inteiro a cada pool tocado); sub-intervalos exatos por pool = refinamento futuro.
-- **Pausa — persistência através de reconnect (nova)**: o `agent_pause` já é publicado e o
-  relatório/timeline já mostram a pausa, mas o estado de pausa **não sobrevive** a trocar de
-  tela: ao sair do Console, após o grace o `unregisterHumanAgent` deleta a instância (logout);
-  ao voltar, `registerHumanAgent` recria como `ready`. Fix proposto: estado durável por usuário
-  (`{tenant}:agent_paused:{userId}` com TTL), restaurado no login (sem `sadd(:instances)` nem
-  drain; re-publica `agent_pause`), cuidado para o `agent_heartbeat` não resetar o status, e a UI
-  ler esse estado ao montar (novo `GET /api/agent-state`) para o botão refletir a realidade.
-  Tocar no fluxo de registro humano exige cautela (recém-estabilizado) → tarefa isolada.
+- **Pausa — persistência através de reconnect ✅** (2026-06-02): key durável
+  `{tenant}:agent_paused:{instanceId}` (pause grava TTL 16h, resume deleta); `registerHumanAgent`
+  e o heartbeat passam a carregar `status=paused` quando a key existe → o routing mantém
+  `state=paused` (alocação exige `state=="ready"`, linha 161/652 do registry) → agente continua
+  excluído sem cirurgia em sets; novo `GET /api/agent-state` + a UI lê ao montar (botão reflete
+  a realidade). Edge case documentado: logout real enquanto pausado sem resume = pausa órfã
+  (a key Redis do intervalo de pausa tem TTL 24h; cleanup futuro). Ver `CHANGELOG.md`.
 - **Pausas — gestão de motivos (nova)**: hoje o backend grava reason_id/reason_label e o relatório
   já exibe donut, mas faltam (a) tela de Configuration para cadastrar/editar motivos +
   **associá-los a pools**, (b) seletor de motivo na UI do agente ao pausar. Config API já tem o

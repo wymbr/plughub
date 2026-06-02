@@ -12,18 +12,19 @@ interface PauseReason {
   id:            string;
   label:         string;
   requires_note: boolean;
+  max_minutes?:  number;
 }
 
 interface Props {
-  onConfirm: (reasonId: string, reasonLabel: string, note?: string) => void;
+  onConfirm: (reasonId: string, reasonLabel: string, note?: string, maxMinutes?: number) => void;
   onCancel:  () => void;
 }
 
 const DEFAULT_REASONS: PauseReason[] = [
-  { id: "intervalo",    label: "Intervalo",   requires_note: false },
-  { id: "almoco",       label: "Almoço",      requires_note: false },
-  { id: "treinamento",  label: "Treinamento", requires_note: false },
-  { id: "reuniao",      label: "Reunião",     requires_note: true  },
+  { id: "intervalo",    label: "Intervalo",   requires_note: false, max_minutes: 15 },
+  { id: "almoco",       label: "Almoço",      requires_note: false, max_minutes: 60 },
+  { id: "treinamento",  label: "Treinamento", requires_note: false, max_minutes: 120 },
+  { id: "reuniao",      label: "Reunião",     requires_note: true,  max_minutes: 60 },
   { id: "outro",        label: "Outro",       requires_note: true  },
 ];
 
@@ -57,7 +58,7 @@ export const PauseReasonModal: React.FC<Props> = ({ onConfirm, onCancel }) => {
 
   const handleConfirm = () => {
     if (!selected || !activeReason) return;
-    onConfirm(selected, activeReason.label, needsNote ? note.trim() : undefined);
+    onConfirm(selected, activeReason.label, needsNote ? note.trim() : undefined, activeReason.max_minutes);
   };
 
   // Close on Escape
