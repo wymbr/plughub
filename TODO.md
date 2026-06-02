@@ -58,9 +58,13 @@ Hoje o Analytics/Agents mistura agente×pool e não separa humano×IA.
     - **C1b-A ✅** (2026-06-01): Analytics/**Agents** — `_fetch_agent_performance` agrupa humano
       por `user_id` (display `user_login`), IA por `flow_id`; abas Human/AI com tabela de
       performance própria e KPIs filtrados. Ver `CHANGELOG.md`.
-    - **C1b-B** (pendente): MV `mv_agent_performance_daily` ainda keyed por `agent_type_id`
-      (daily trend colapsa humano) + dado de availability/pauses vazio no humano (Arc 8, revisar).
-      Parte do redesign de analytics (`docs/arcos/analytics-reports-redesign.md`).
+    - **C1b-B ✅** (2026-06-02): daily trend por identidade — `_fetch_agent_performance_daily`
+      reescrito para ler `segments` direto (humano por `user_id`, IA por `flow_id`), sem
+      depender da MV `mv_agent_performance_daily` (que colapsa humano por `agent_type_id`);
+      `AnaliseAgentesPage` filtra `tabDailyRows` por `agent_type` por aba. Fix colateral: stroke do
+      TrendChart usava `var(--color-*)` inexistente → linhas invisíveis (bug pré-existente mascarado
+      enquanto o endpoint daily não trazia dado) → trocado por hex dos tokens. Ver `CHANGELOG.md`.
+      Pendente derivado → **Fase 1b** (availability/pauses vazio no humano; outcome humano = 0%).
     - **C2/C3/C4 ✅** (2026-06-01): entidade `AgentType` **REMOVIDA** (tabelas `agent_types` +
       `agent_type_pools` dropadas via `prisma db push`). As UIs de CRUD eram código morto (não
       roteadas) → deletadas sem migração. mentionable-agents/delegation/agent_login repontados

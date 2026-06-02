@@ -1643,8 +1643,9 @@ def _fetch_agent_performance_daily(
 ) -> dict:
     conditions = [
         "tenant_id = {tenant_id:String}",
-        f"period_date >= toDate('{since_date}')",
-        f"period_date <= toDate('{until_date}')",
+        f"toDate(started_at) >= toDate('{since_date}')",
+        f"toDate(started_at) <= toDate('{until_date}')",
+        "ended_at IS NOT NULL",
     ]
     params: dict = {"tenant_id": tenant_id}
 
@@ -1659,20 +1660,45 @@ def _fetch_agent_performance_daily(
 
     where = " AND ".join(conditions)
 
+    # C1b-B — daily trend by identity (humans by user_id, AI by flow_id), computed
+    # straight from segments so the Human/AI tabs each see their own agents and
+    # `agent_type` is available for client-side filtering. The legacy
+    # mv_agent_performance_daily / v_agent_performance are keyed by the synthetic
+    # agent_type_id and collapse every human into human_agent_{pool}.
     result = client.query(f"""
         SELECT
-            agent_type_id,
+            agent_key,
+            any(agent_type_id)                                                 AS agent_type_id,
+            any(agent_type)                                                    AS agent_type,
+            anyIf(user_login, user_login != '')                                AS user_login,
+            anyIf(flow_id, flow_id != '')                                      AS flow_id,
             pool_id,
             period_date,
-            total_sessions,
-            avg_duration_ms,
-            round(resolution_rate, 4) AS resolution_rate,
-            round(escalation_rate, 4) AS escalation_rate,
-            round(transfer_rate,   4) AS transfer_rate,
-            round(human_rate,      4) AS human_rate
-        FROM {db}.v_agent_performance
-        WHERE {where}
-        ORDER BY period_date DESC, agent_type_id, pool_id
+            count()                                                            AS total_sessions,
+            round(avgOrNull(duration_ms), 0)                                   AS avg_duration_ms,
+            round(countIf(outcome = 'resolved')    / greatest(count(), 1), 4)  AS resolution_rate,
+            round(countIf(outcome = 'escalated')   / greatest(count(), 1), 4)  AS escalation_rate,
+            round(countIf(outcome = 'transferred') / greatest(count(), 1), 4)  AS transfer_rate,
+            round(countIf(is_human)                / greatest(count(), 1), 4)  AS human_rate
+        FROM (
+            SELECT
+                agent_type_id,
+                agent_type,
+                user_login,
+                flow_id,
+                pool_id,
+                duration_ms,
+                outcome,
+                toDate(started_at) AS period_date,
+                (agent_type = 'human') AS is_human,
+                if(agent_type = 'human',
+                   if(user_id != '', user_id, agent_type_id),
+                   if(flow_id != '', flow_id, agent_type_id))                  AS agent_key
+            FROM {db}.segments FINAL
+            WHERE {where}
+        )
+        GROUP BY agent_key, pool_id, period_date
+        ORDER BY period_date DESC, agent_key, pool_id
     """, parameters=params)
 
     rows = _rows_to_dicts(result)

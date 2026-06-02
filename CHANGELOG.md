@@ -2,6 +2,22 @@
 
 ---
 
+## C1b-B — Daily Trend por Identidade (2026-06-02)
+
+Analytics/**Agents** → "Daily Trend" agora reflete a identidade por aba (humano por `user_id`, IA por `flow_id`), em vez de colapsar todo humano em `human_agent_{pool}`.
+
+**Backend (`reports_query.py`):** `_fetch_agent_performance_daily` reescrito para ler `segments FINAL` direto (subquery computa `period_date`, `is_human` e `agent_key`), abandonando a MV `mv_agent_performance_daily` (keyed por `agent_type_id`, que colapsa humano). Subquery seleciona só as colunas necessárias (sem `SELECT *`) para reduzir I/O. Devolve `agent_type`/`user_login`/`flow_id` para filtragem client-side.
+
+**UI (`AnaliseAgentesPage.tsx`):** `PerformanceDailyRow` ganhou `agent_type?`; `tabDailyRows` filtra `dailyRows` por `agent_type` (`=== 'human'` na aba Human, `!== 'human'` na AI); `<TrendChart rows={tabDailyRows}>`.
+
+**Bug pré-existente corrigido (chart):** o `TrendChart` usava `stroke="var(--color-green|warning|border)"` — CSS custom properties **inexistentes** no projeto (cores são tokens Tailwind, não `--color-*`), então as linhas e o grid ficavam invisíveis (eixo e tooltip seguiam funcionando, o que mascarava o defeito). Estava oculto porque o endpoint daily antes não trazia dado. Trocado por hex dos tokens (`#059669`/`#D97706`/`#E5E7EB`), padrão já usado em `TimeseriesChart/constants.ts`. Validado: curva de Resolution desenha (65→47→62→37% em 05‑29→06‑01), Escalation em 0%.
+
+**Erros encontrados no caminho:** (1) `ILLEGAL_AGGREGATION` — alias `any(agent_type) AS agent_type` sombreava a coluna em `countIf(agent_type='human')`; resolvido computando `is_human` na subquery. (2) `date` não serializável em JSON — `period_date.isoformat()` no retorno.
+
+Pendente derivado → **Fase 1b**: humano vem com availability/pauses vazio e `outcome`/resolution = 0% (segments humanos não marcam `outcome='resolved'`) — revisão de semântica de outcome humano + `agent_login_intervals`.
+
+---
+
 ## Fase C/C2-C4 — Entidade `AgentType` REMOVIDA (2026-06-01)
 
 Remoção física completa da entidade `AgentType` — a IA já era deploy-driven (síntese via skill) e o humano login-driven, então o `AgentType` era vestigial. Descoberta-chave: as UIs de CRUD de AgentType (`AgentTypesPage`, `HumanAgentsPage`) eram **código morto** (não roteadas — `/monitor` redireciona para `/flow/monitor`), então não houve migração para o auth — só deleção.

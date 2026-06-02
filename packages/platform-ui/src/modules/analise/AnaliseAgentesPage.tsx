@@ -43,6 +43,7 @@ interface PerformanceRow {
 
 interface PerformanceDailyRow {
   agent_type_id:   string
+  agent_type?:     string   // "human" | "native" | ... — for per-tab filtering
   pool_id:         string
   period_date:     string
   total_sessions:  number
@@ -200,7 +201,7 @@ function TrendChart({
   return (
     <ResponsiveContainer width="100%" height={200}>
       <LineChart data={byDate} margin={{ top: 4, right: 16, left: 0, bottom: 0 }}>
-        <CartesianGrid strokeDasharray="3 3" stroke="var(--color-border)" />
+        <CartesianGrid strokeDasharray="3 3" stroke="#E5E7EB" />
         <XAxis dataKey="date" tick={{ fontSize: 11 }} tickFormatter={d => d.slice(5)} />
         <YAxis tick={{ fontSize: 11 }} tickFormatter={v => `${v}%`} domain={[0, 100]} />
         <Tooltip formatter={(v: number) => `${v}%`} />
@@ -208,12 +209,12 @@ function TrendChart({
         <Line
           type="monotone" dataKey="resolution"
           name={t('trend.resolution')}
-          stroke="var(--color-green)" strokeWidth={2} dot={false}
+          stroke="#059669" strokeWidth={2} dot={false}
         />
         <Line
           type="monotone" dataKey="escalation"
           name={t('trend.escalation')}
-          stroke="var(--color-warning)" strokeWidth={2} dot={false}
+          stroke="#D97706" strokeWidth={2} dot={false}
         />
       </LineChart>
     </ResponsiveContainer>
@@ -357,6 +358,11 @@ export default function AnaliseAgentesPage() {
   const tabRows   = pageTab === 'humans' ? humanRows : aiRows
   const kpiCards  = buildKpis(perfLoading ? [] : tabRows, t)
 
+  // C1b-B — daily trend is per-identity too: filter by agent_type so each tab's
+  // chart reflects only its own agents (humans no longer collapsed).
+  const tabDailyRows = dailyRows.filter(r =>
+    pageTab === 'humans' ? r.agent_type === 'human' : r.agent_type !== 'human')
+
   return (
     <div className="flex flex-col h-full overflow-hidden bg-surface-muted">
 
@@ -409,7 +415,7 @@ export default function AnaliseAgentesPage() {
           <p className="text-xs font-semibold text-muted uppercase tracking-wide mb-3">
             {t('trend.title')}
           </p>
-          <TrendChart rows={dailyRows} loading={dailyLoading} t={t} />
+          <TrendChart rows={tabDailyRows} loading={dailyLoading} t={t} />
         </div>
 
         {/* Humanos: performance por agente (por user_login) + availability & pause */}
