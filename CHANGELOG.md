@@ -2,6 +2,57 @@
 
 ---
 
+## Fix — Pausa de Agente Humano chegava ao Analytics (2026-06-02)
+
+A pausa pelo Console nunca registrava no analytics (relatórios de pausa/donut vazios). Dois bugs pré-existentes:
+
+1. **Auth**: o `fetch` de `/api/agent-pause` e `/api/agent-resume` (AgentAssistPage) não enviava `Authorization` — não há interceptor global, o access token vive no `AuthContext`. `requireJwtRole` → 401 silencioso. Corrigido enviando `Bearer ${session.accessToken}`.
+2. **Redis key/formato**: os endpoints liam a instância com `hget`/`hset` em `keys.agentInstance` (`${t}:agent:instance:…`, hash), mas o agente humano é gravado como **string JSON** em `${t}:instance:…` por `registerHumanAgent`. Lookup falhava (404 silencioso) → `agent_pause` nunca publicado. Reescritos pause/resume para ler/gravar a string JSON no key correto, manipular `poolInstances`/`poolAvailable`, e o **resume publicar `agent_ready` com identidade completa** (user_id/user_login/execution_model/pools) para não disparar o wipe da instância no routing.
+
+Também: availability e pauses agora incluem intervalos **em aberto** (login e pausa em andamento contam até `now()` via `toUnixTimestamp64Milli`), para visão ao vivo; e o limite superior de data usa `_ch_fmt(to_dt, upper=True)` (antes a meia-noite excluía o dia corrente).
+
+**Pendente** (tarefa isolada): preservar o estado de pausa através de reconnect do Console (o reconnect re-registra como `ready`). Ver `TODO.md`.
+
+---
+
+## Timeline do Agente — Presença por Pool (2026-06-02)
+
+Visualização em **swimlanes** por agente: faixa "Total" (tempo logado) + uma faixa por pool, no mesmo eixo de tempo, com blocos de presença e overlay de pausas. Resolve a pergunta "quanto tempo logado no total **e** quanto em cada pool" sem somar (as duas visões respondem perguntas diferentes; tempos por pool não são aditivos).
+
+**Decisão:** humano é uma instância (`human-{userId}`) com **um** relógio. Tempo logado = métrica da pessoa. Presença por pool é uma atribuição (replicada, não dividida) derivada do `pools[]` que viaja nos eventos `agent_ready`.
+
+**analytics-api:**
+- `clickhouse.py`: tabela `agent_pool_intervals` (entered_at/left_at/duration por pool, `login_interval_id` ligando ao intervalo de login) + `upsert_agent_pool_interval` + `_agent_pool_interval_row`.
+- `consumer.py`: `_handle_login_interval` ganhou diff de pools — a cada `agent_ready` com `pools[]` autoritativo (register/logout-parcial levam a lista completa; resume não leva → ignorado), abre sub-intervalo para pool que entrou e fecha o que saiu; `agent_logout` fecha todos. Estado `pools_open` no mesmo Redis key de login.
+- `reports_query.py` + `reports.py`: novo endpoint `GET /reports/agent-timeline?instance_id&from_dt&to_dt` → `{login_intervals, pause_intervals, pool_intervals}` (timestamps ISO, intervalos abertos com fim null). Pool scope aplicado às presenças.
+
+**platform-ui:**
+- `AgentTimeline.tsx`: modal de swimlanes (faixa Total + uma por pool; barras posicionadas por % no eixo de tempo; pausas overlaid em todas as faixas; legenda + eixo de horas).
+- `AgentsTab.tsx`: linhas da tabela de Disponibilidade viram clicáveis (drill-down) → abre a timeline do agente no período. i18n `timeline.*` em en + pt-BR.
+
+→ Ver `docs/arcos/arc8-agent-availability.md` § Timeline.
+
+---
+
+## Fase 1b — Tempo Logado / Disponibilidade (2026-06-02)
+
+Habilita rastreamento de **tempo logado** e **disponibilidade** do agente (antes só havia tempo de pausa). Nova tabela ClickHouse `agent_login_intervals` espelhando o padrão `agent_pause_intervals` (Arc 8).
+
+**Decisão de design (sem mudança no producer):** em vez de criar um novo evento de login (risco de o routing engine reconstruir a instância de forma incompleta — classe do bug de wipe), o consumer **reusa eventos existentes**: o primeiro `agent_ready` (humano — já carrega `user_id`/`user_login`) ou `agent_login` (nativo) **abre** o intervalo; `agent_logout` **fecha**. Zero mudança em mcp-server, schemas ou routing.
+
+**analytics-api:**
+- `clickhouse.py`: DDL `agent_login_intervals` (ReplacingMergeTree, ORDER BY tenant/instance/logged_in_at) com `user_id`/`user_login`; `upsert_agent_login_interval` + `_agent_login_interval_row` + cols; registrada na criação de tabelas.
+- `consumer.py`: máquina de estados de login independente do fluxo de parse/pause — `_handle_login_interval` com namespace Redis `{tenant}:login:{instance}` (separado de `:pause:`); abre só se não houver intervalo aberto (resume/pool-refresh apenas renova TTL 24h); `agent_logout` calcula `duration_ms`. Injetada antes do early-return do parser (que continua pulando login/logout).
+- `reports_query.py`: `_fetch_agent_availability` reescrito — agrupa por **instance_id** (por pessoa, deixa de colapsar humanos em `human_agent_{pool}`), faz merge de login + pause + reason_breakdown em Python; devolve `logged_ms`, `total_logins`, `available_ms = logged − pausas`, `user_login`/`user_id`/`instance_id`. Compatível: campos antigos (`agent_type_id`, `total_pause_ms`, `reason_breakdown`) preservados.
+
+**platform-ui (`AgentsTab.tsx`):** sub-aba Disponibilidade vira tabela por identidade (Agente=user_login | Pool | Logado | Pausado | Disponível | Disp.%) + **donut de motivos** (Recharts PieChart sobre `reason_breakdown`). Sub-aba Pausas rotula por `user_login`. i18n: chaves `logged`/`paused`/`available`/`availPct`/`reasonsTitle`/`noReasons` em en + pt-BR.
+
+**Limitações conhecidas:** intervalo de login com TTL 24h — turno >24h sem evento gera intervalo órfão (aceito). Ocupação (busy ÷ logado, a partir de segments) ficou para passo seguinte (decisão 2a).
+
+→ Ver `docs/arcos/arc8-agent-availability.md`.
+
+---
+
 ## C1b-B — Daily Trend por Identidade (2026-06-02)
 
 Analytics/**Agents** → "Daily Trend" agora reflete a identidade por aba (humano por `user_id`, IA por `flow_id`), em vez de colapsar todo humano em `human_agent_{pool}`.

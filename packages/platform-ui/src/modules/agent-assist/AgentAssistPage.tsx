@@ -307,11 +307,11 @@ export const AgentAssistPage: React.FC = () => {
     if (poolId) {
       fetch(`/api/agent-resume`, {
         method:  "PUT",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${session?.accessToken ?? ""}` },
         body:    JSON.stringify({ pool_id: poolId }),
       }).catch(() => { /* non-fatal */ });
     }
-  }, [activePools, addToast, t]);
+  }, [activePools, addToast, t, session]);
 
   const handlePauseRequest = useCallback(() => {
     setShowPauseModal(true);
@@ -326,11 +326,11 @@ export const AgentAssistPage: React.FC = () => {
       const poolId = activePools[0] ?? "";
       fetch(`/api/agent-pause`, {
         method:  "PUT",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${session?.accessToken ?? ""}` },
         body:    JSON.stringify({ pool_id: poolId, reason_id: reasonId, reason_label: reasonLabel, note }),
       }).catch(() => { /* non-fatal */ });
     },
-    [activePools, addToast, t]
+    [activePools, addToast, t, session]
   );
 
   // Arc 11 — terminate an AI segment via @mention

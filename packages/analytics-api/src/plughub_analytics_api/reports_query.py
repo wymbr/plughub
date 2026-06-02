@@ -1861,8 +1861,8 @@ async def query_agent_availability(
       meta: pagination info
     """
     page_size = min(page_size, _MAX_PAGE_SIZE_JSON)
-    since = from_dt or _default_from()
-    until = to_dt   or _default_to()
+    since = _ch_fmt(from_dt) if from_dt else _default_from()
+    until = _ch_fmt(to_dt, upper=True) if to_dt else _default_to()
     try:
         if accessible_pools is not None and len(accessible_pools) == 0:
             return {"data": [], "meta": _meta(page, page_size, 0, since, until)}
@@ -1894,84 +1894,252 @@ def _fetch_agent_availability(
     page_size:              int,
 ) -> dict:
     offset = (page - 1) * page_size
-    conditions = [
-        "tenant_id = {tenant_id:String}",
-        f"paused_at >= '{since}'",
-        f"paused_at <  '{until}'",
-    ]
-    params: dict = {"tenant_id": tenant_id}
 
+    # Fase 1b — group by instance_id (per person) instead of agent_type_id, which
+    # collapses every human into human_agent_{pool}. Merge logged time
+    # (agent_login_intervals) with pauses (agent_pause_intervals) so the tab shows
+    # logged / paused / available per identity. user_login comes from the login
+    # interval; pauses join on instance_id.
+    base_conditions = ["tenant_id = {tenant_id:String}"]
+    params: dict = {"tenant_id": tenant_id}
     if pool_id:
-        conditions.append("pool_id = {pool_id:String}")
+        base_conditions.append("pool_id = {pool_id:String}")
         params["pool_id"] = pool_id
     if agent_type_id:
-        conditions.append("agent_type_id = {agent_type_id:String}")
+        base_conditions.append("agent_type_id = {agent_type_id:String}")
         params["agent_type_id"] = agent_type_id
-    _apply_pool_scope(conditions, accessible_pools)
-    _apply_agent_scope(conditions, supervised_agent_types)
+    _apply_pool_scope(base_conditions, accessible_pools)
+    _apply_agent_scope(base_conditions, supervised_agent_types)
 
-    where = " AND ".join(conditions)
+    pause_where = " AND ".join(base_conditions + [f"paused_at >= '{since}'",    f"paused_at <  '{until}'"])
+    login_where = " AND ".join(base_conditions + [f"logged_in_at >= '{since}'", f"logged_in_at <  '{until}'"])
 
-    # distinct (agent_type_id, pool_id, date) combos — for count query
-    count_result = client.query(f"""
-        SELECT countDistinct((agent_type_id, pool_id, toDate(paused_at)))
-        FROM {db}.agent_pause_intervals FINAL
-        WHERE {where}
-    """, parameters=params)
-    total = count_result.result_rows[0][0] if count_result.result_rows else 0
+    def _dstr(v: Any) -> str:
+        return v.isoformat() if hasattr(v, "isoformat") else str(v)
 
-    # Aggregate per (agent_type_id, pool_id, date)
-    agg_result = client.query(f"""
+    # ── Logged time per (instance_id, pool_id, date) ──
+    # Includes still-open intervals (duration_ms NULL): count elapsed time up to
+    # now() so an agent currently logged in shows live logged time (otherwise the
+    # tab is empty until logout).
+    login_rows = _rows_to_dicts(client.query(f"""
         SELECT
-            agent_type_id,
+            instance_id,
             pool_id,
-            toDate(paused_at)                   AS period_date,
-            count()                              AS total_pauses,
-            sum(duration_ms)                     AS total_pause_ms
-        FROM {db}.agent_pause_intervals FINAL
-        WHERE {where} AND duration_ms IS NOT NULL
-        GROUP BY agent_type_id, pool_id, period_date
-        ORDER BY period_date DESC, agent_type_id, pool_id
-        LIMIT {page_size}
-        OFFSET {offset}
-    """, parameters=params)
+            toDate(logged_in_at)        AS period_date,
+            any(user_login)             AS user_login,
+            any(user_id)                AS user_id,
+            any(agent_type_id)          AS agent_type_id,
+            sum(if(duration_ms IS NOT NULL, duration_ms,
+                   toUnixTimestamp64Milli(now64(3)) - toUnixTimestamp64Milli(logged_in_at))) AS logged_ms,
+            count()                     AS total_logins
+        FROM {db}.agent_login_intervals FINAL
+        WHERE {login_where}
+        GROUP BY instance_id, pool_id, period_date
+    """, parameters=params))
 
-    agg_rows = _rows_to_dicts(agg_result)
-
-    # Fetch reason breakdown for the same filters
-    reason_result = client.query(f"""
+    # ── Pauses per (instance_id, pool_id, date) ──
+    # Includes still-open pauses (duration_ms NULL): count elapsed up to now() so a
+    # currently-paused agent shows live (same as the logged-time treatment).
+    pause_rows = _rows_to_dicts(client.query(f"""
         SELECT
-            agent_type_id,
+            instance_id,
             pool_id,
-            toDate(paused_at)   AS period_date,
+            toDate(paused_at)           AS period_date,
+            any(agent_type_id)          AS agent_type_id,
+            count()                     AS total_pauses,
+            sum(if(duration_ms IS NOT NULL, duration_ms,
+                   toUnixTimestamp64Milli(now64(3)) - toUnixTimestamp64Milli(paused_at))) AS total_pause_ms
+        FROM {db}.agent_pause_intervals FINAL
+        WHERE {pause_where}
+        GROUP BY instance_id, pool_id, period_date
+    """, parameters=params))
+
+    # ── Reason breakdown per (instance_id, pool_id, date) — for the donut ──
+    reason_rows = _rows_to_dicts(client.query(f"""
+        SELECT
+            instance_id,
+            pool_id,
+            toDate(paused_at)           AS period_date,
             reason_id,
             reason_label,
-            count()              AS cnt,
-            sum(duration_ms)     AS total_ms
+            count()                     AS cnt,
+            sum(if(duration_ms IS NOT NULL, duration_ms,
+                   toUnixTimestamp64Milli(now64(3)) - toUnixTimestamp64Milli(paused_at))) AS total_ms
         FROM {db}.agent_pause_intervals FINAL
-        WHERE {where} AND duration_ms IS NOT NULL
-        GROUP BY agent_type_id, pool_id, period_date, reason_id, reason_label
-    """, parameters=params)
+        WHERE {pause_where}
+        GROUP BY instance_id, pool_id, period_date, reason_id, reason_label
+    """, parameters=params))
 
-    # Index reason breakdown by (agent_type_id, pool_id, period_date)
+    merged: dict = {}
+
+    def _slot(inst: str, pool: str, period: str, atype: str) -> dict:
+        k = (inst, pool, period)
+        if k not in merged:
+            merged[k] = {
+                "instance_id":    inst,
+                "user_login":     "",
+                "user_id":        "",
+                "agent_type_id":  atype or "",
+                "pool_id":        pool,
+                "period_date":    period,
+                "logged_ms":      0,
+                "total_logins":   0,
+                "total_pauses":   0,
+                "total_pause_ms": 0,
+            }
+        return merged[k]
+
+    for r in login_rows:
+        m = _slot(r["instance_id"], r["pool_id"], _dstr(r["period_date"]), r.get("agent_type_id", ""))
+        m["logged_ms"]    = int(r.get("logged_ms") or 0)
+        m["total_logins"] = int(r.get("total_logins") or 0)
+        if r.get("user_login"):    m["user_login"]    = r["user_login"]
+        if r.get("user_id"):       m["user_id"]       = r["user_id"]
+        if r.get("agent_type_id"): m["agent_type_id"] = r["agent_type_id"]
+
+    for r in pause_rows:
+        m = _slot(r["instance_id"], r["pool_id"], _dstr(r["period_date"]), r.get("agent_type_id", ""))
+        m["total_pauses"]   = int(r.get("total_pauses") or 0)
+        m["total_pause_ms"] = int(r.get("total_pause_ms") or 0)
+        if not m["agent_type_id"] and r.get("agent_type_id"):
+            m["agent_type_id"] = r["agent_type_id"]
+
     breakdown: dict = {}
-    for r in _rows_to_dicts(reason_result):
-        key = (r["agent_type_id"], r["pool_id"], r["period_date"])
-        breakdown.setdefault(key, []).append({
+    for r in reason_rows:
+        k = (r["instance_id"], r["pool_id"], _dstr(r["period_date"]))
+        breakdown.setdefault(k, []).append({
             "reason_id":    r["reason_id"],
             "reason_label": r["reason_label"],
             "count":        r["cnt"],
             "total_ms":     r["total_ms"],
         })
 
-    for row in agg_rows:
-        key = (row["agent_type_id"], row["pool_id"], row["period_date"])
-        row["reason_breakdown"] = breakdown.get(key, [])
-        # convert date to string if needed
-        if hasattr(row.get("period_date"), "isoformat"):
-            row["period_date"] = row["period_date"].isoformat()
+    rows = []
+    for k, m in merged.items():
+        m["reason_breakdown"] = breakdown.get(k, [])
+        m["available_ms"]     = max((m["logged_ms"] or 0) - (m["total_pause_ms"] or 0), 0)
+        rows.append(m)
 
-    return {"data": agg_rows, "meta": _meta(page, page_size, total, since, until)}
+    # period_date DESC, identity ASC (two-pass stable sort)
+    rows.sort(key=lambda x: ((x.get("user_login") or x["agent_type_id"]), x["pool_id"]))
+    rows.sort(key=lambda x: x["period_date"], reverse=True)
+
+    total = len(rows)
+    paged = rows[offset:offset + page_size]
+    return {"data": paged, "meta": _meta(page, page_size, total, since, until)}
+
+
+# ─── /reports/agent-timeline (timeline swimlanes for one agent) ───────────────
+
+async def query_agent_timeline(
+    client:           Any,
+    database:         str,
+    tenant_id:        str,
+    instance_id:      str,
+    from_dt:          str | None = None,
+    to_dt:            str | None = None,
+    accessible_pools: list[str] | None = None,
+) -> dict:
+    """
+    Timeline for a single agent (instance_id) over [from_dt, to_dt]:
+      login_intervals — total logged-in bars (agent_login_intervals)
+      pause_intervals — pause blocks, with reason (agent_pause_intervals)
+      pool_intervals  — per-pool presence bars (agent_pool_intervals)
+    All timestamps are ISO strings; open intervals have a null end.
+    """
+    since = _ch_fmt(from_dt) if from_dt else _default_from()
+    until = _ch_fmt(to_dt, upper=True) if to_dt else _default_to()
+    if not instance_id:
+        return {"data": {}, "error": "instance_id_required"}
+    if accessible_pools is not None and len(accessible_pools) == 0:
+        return {"data": {"instance_id": instance_id, "login_intervals": [],
+                         "pause_intervals": [], "pool_intervals": []},
+                "meta": {"from_dt": since, "to_dt": until}}
+    try:
+        return await asyncio.to_thread(
+            _fetch_agent_timeline,
+            client, database, tenant_id, instance_id, since, until, accessible_pools,
+        )
+    except Exception as exc:
+        logger.warning("query_agent_timeline failed tenant=%s instance=%s: %s", tenant_id, instance_id, exc)
+        return {"data": {}, "error": "data_unavailable"}
+
+
+def _fetch_agent_timeline(
+    client:           Any,
+    db:               str,
+    tenant_id:        str,
+    instance_id:      str,
+    since:            str,
+    until:            str,
+    accessible_pools: list[str] | None,
+) -> dict:
+    params: dict = {"tenant_id": tenant_id, "instance_id": instance_id}
+
+    def _iso(v: Any) -> str | None:
+        if v is None:
+            return None
+        return v.isoformat() if hasattr(v, "isoformat") else str(v)
+
+    # Login intervals overlapping the window (open intervals have NULL end).
+    login_rows = _rows_to_dicts(client.query(f"""
+        SELECT interval_id, user_login, user_id, agent_type_id, pool_id,
+               logged_in_at, logged_out_at, duration_ms
+        FROM {db}.agent_login_intervals FINAL
+        WHERE tenant_id = {{tenant_id:String}} AND instance_id = {{instance_id:String}}
+          AND logged_in_at < '{until}'
+          AND (logged_out_at IS NULL OR logged_out_at >= '{since}')
+        ORDER BY logged_in_at
+    """, parameters=params))
+
+    # Pause intervals overlapping the window.
+    pause_rows = _rows_to_dicts(client.query(f"""
+        SELECT interval_id, pool_id, reason_id, reason_label,
+               paused_at, resumed_at, duration_ms
+        FROM {db}.agent_pause_intervals FINAL
+        WHERE tenant_id = {{tenant_id:String}} AND instance_id = {{instance_id:String}}
+          AND paused_at < '{until}'
+          AND (resumed_at IS NULL OR resumed_at >= '{since}')
+        ORDER BY paused_at
+    """, parameters=params))
+
+    # Per-pool presence intervals overlapping the window.
+    pool_conditions = [
+        "tenant_id = {tenant_id:String}",
+        "instance_id = {instance_id:String}",
+        f"entered_at < '{until}'",
+        f"(left_at IS NULL OR left_at >= '{since}')",
+    ]
+    _apply_pool_scope(pool_conditions, accessible_pools)
+    pool_rows = _rows_to_dicts(client.query(f"""
+        SELECT interval_id, pool_id, entered_at, left_at, duration_ms
+        FROM {db}.agent_pool_intervals FINAL
+        WHERE {" AND ".join(pool_conditions)}
+        ORDER BY pool_id, entered_at
+    """, parameters=params))
+
+    user_login = next((r.get("user_login") for r in login_rows if r.get("user_login")), "")
+
+    for r in login_rows:
+        r["logged_in_at"]  = _iso(r.get("logged_in_at"))
+        r["logged_out_at"] = _iso(r.get("logged_out_at"))
+    for r in pause_rows:
+        r["paused_at"]  = _iso(r.get("paused_at"))
+        r["resumed_at"] = _iso(r.get("resumed_at"))
+    for r in pool_rows:
+        r["entered_at"] = _iso(r.get("entered_at"))
+        r["left_at"]    = _iso(r.get("left_at"))
+
+    return {
+        "data": {
+            "instance_id":     instance_id,
+            "user_login":      user_login,
+            "login_intervals": login_rows,
+            "pause_intervals": pause_rows,
+            "pool_intervals":  pool_rows,
+        },
+        "meta": {"from_dt": since, "to_dt": until},
+    }
 
 
 # ─── /reports/events — unified event stream ───────────────────────────────────

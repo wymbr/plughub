@@ -38,8 +38,29 @@ Hoje o Analytics/Agents mistura agente×pool e não separa humano×IA.
 - **Fase 1 — relatório de agentes**: humano por usuário×pool (lookup login), IA por
   flow_id(skill)×pool; abas distintas; excluir webhook; daily trend de segments; link→Quality.
   (`reports_query` + `AnaliseAgentesPage`.) `flow_id` no segments ✅.
-- **Fase 1b — tempo logado/ocupação (dado novo)**: consumer descarta agent_login/logout
-  (models.py:392); criar `agent_login_intervals` + handler + endpoint. Habilita disponibilidade.
+- **Fase 1b — tempo logado/disponibilidade ✅** (2026-06-02): tabela `agent_login_intervals`
+  + máquina de estados no consumer (reusa agent_ready/agent_login → abre, agent_logout → fecha;
+  Redis `{tenant}:login:{instance}`); endpoint `agent-availability` reescrito por instance_id
+  (logged_ms/available_ms/user_login) + donut de motivos no `AgentsTab`. Ver `CHANGELOG.md`.
+  Derivados pendentes: **ocupação** (busy dos segments ÷ logado) e **gestão de motivos de pausa**
+  (abaixo).
+- **Timeline do agente — presença por pool ✅** (2026-06-02): tabela `agent_pool_intervals`
+  (diff de `pools[]` no consumer) + endpoint `/reports/agent-timeline` + componente
+  `AgentTimeline` (swimlanes: Total + faixa por pool, overlay de pausas) com drill-down da
+  tabela de Disponibilidade. Ver `CHANGELOG.md`. Precisão por pool é aproximada (atribui o
+  intervalo inteiro a cada pool tocado); sub-intervalos exatos por pool = refinamento futuro.
+- **Pausa — persistência através de reconnect (nova)**: o `agent_pause` já é publicado e o
+  relatório/timeline já mostram a pausa, mas o estado de pausa **não sobrevive** a trocar de
+  tela: ao sair do Console, após o grace o `unregisterHumanAgent` deleta a instância (logout);
+  ao voltar, `registerHumanAgent` recria como `ready`. Fix proposto: estado durável por usuário
+  (`{tenant}:agent_paused:{userId}` com TTL), restaurado no login (sem `sadd(:instances)` nem
+  drain; re-publica `agent_pause`), cuidado para o `agent_heartbeat` não resetar o status, e a UI
+  ler esse estado ao montar (novo `GET /api/agent-state`) para o botão refletir a realidade.
+  Tocar no fluxo de registro humano exige cautela (recém-estabilizado) → tarefa isolada.
+- **Pausas — gestão de motivos (nova)**: hoje o backend grava reason_id/reason_label e o relatório
+  já exibe donut, mas faltam (a) tela de Configuration para cadastrar/editar motivos +
+  **associá-los a pools**, (b) seletor de motivo na UI do agente ao pausar. Config API já tem o
+  namespace `agent_activity`/`pause_reasons` (semeável) — falta a UI de gestão + binding por pool.
 - **Fase 2 — relatório de Pools/Infra (novo)**: pool×canal×tempo — volumetria, tráfego no
   tempo, comportamento de fila (espera/tamanho/abandono/agentes disponíveis), concorrência
   vs capacidade (headroom), SLA. Fontes prontas (`queue_events`, `participation_intervals`,

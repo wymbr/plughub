@@ -46,6 +46,7 @@ from .reports_query import (
     query_quality_report,
     query_segments_report,
     query_agent_availability,
+    query_agent_timeline,
     query_events,
     query_session_complexity,
     query_sessions_report,
@@ -849,15 +850,20 @@ async def get_agent_availability(
     pool_principal: PoolPrincipal = Depends(optional_pool_principal),
 ) -> Response:
     """
-    Agent pause/availability report from the agent_pause_intervals table (Arc 8).
+    Agent availability report (Arc 8 pauses + Fase 1b logged time).
 
-    Aggregates completed pause intervals (duration_ms IS NOT NULL) per
-    (agent_type_id, pool_id, period_date).
+    Merges completed login intervals (agent_login_intervals) with completed
+    pause intervals (agent_pause_intervals) per (instance_id, pool_id,
+    period_date) — i.e. per identity, so humans are no longer collapsed into
+    human_agent_{pool}.
 
     Each row includes:
-      agent_type_id, pool_id, period_date,
+      instance_id, user_login, user_id, agent_type_id, pool_id, period_date,
+      logged_ms         — total logged-in time (ms),
+      total_logins      — number of completed login intervals,
       total_pauses      — number of completed pause intervals,
-      total_pause_ms    — sum of all durations in milliseconds,
+      total_pause_ms    — sum of all pause durations (ms),
+      available_ms      — logged_ms − total_pause_ms (clamped at 0),
       reason_breakdown  — list of {reason_id, reason_label, count, total_ms}
 
     Pool scoping (Arc 7c): if the caller JWT carries accessible_pools the
@@ -880,6 +886,37 @@ async def get_agent_availability(
         page_size              = ps,
     )
     return _respond(data, format, f"agent_availability_{_today_label()}.csv")
+
+
+@router.get("/agent-timeline")
+async def get_agent_timeline(
+    request:        Request,
+    tenant_id:      str           = Query(...,  description="Tenant identifier"),
+    instance_id:    str           = Query(...,  description="Agent instance_id (e.g. human-{userId})"),
+    from_dt:        Optional[str] = Query(None, description="ISO8601 start (default: 7d ago)"),
+    to_dt:          Optional[str] = Query(None, description="ISO8601 end (default: now)"),
+    pool_principal: PoolPrincipal = Depends(optional_pool_principal),
+) -> Response:
+    """
+    Timeline swimlanes for a single agent (Fase 1b / timeline).
+
+    Returns, for one instance_id over [from_dt, to_dt]:
+      login_intervals — total logged-in bars,
+      pause_intervals — pause blocks (agent-level, overlaid on every lane),
+      pool_intervals  — per-pool presence bars (one lane per pool).
+
+    Pool scoping (Arc 7c) restricts pool_intervals to the caller's accessible_pools.
+    """
+    data = await query_agent_timeline(
+        client           = request.app.state.store.new_client(),
+        database         = request.app.state.store._database,
+        tenant_id        = tenant_id,
+        instance_id      = instance_id,
+        from_dt          = from_dt,
+        to_dt            = to_dt,
+        accessible_pools = pool_principal.accessible_pools,
+    )
+    return _respond(data, "json", "agent_timeline.csv")
 
 
 # ─── /reports/events — unified event stream ───────────────────────────────────

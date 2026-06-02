@@ -1,17 +1,23 @@
 /**
- * AgentsTab.tsx — Arc 8
- * Agent availability & pause report, embedded as a tab in ContactsPage.
+ * AgentsTab.tsx — Arc 8 + Fase 1b
+ * Agent availability & pause report, embedded as a tab in ContactsPage and in
+ * Analytics/Agents (Human tab).
  *
- * Receives tenantId + filters (fromDt, toDt, poolId, agentId) from the
- * shared ContactsPage filter bar — no local filter duplication needed.
+ * Receives tenantId + filters (fromDt, toDt, poolId, agentId) from the shared
+ * filter bar — no local filter duplication needed.
  *
  * Two inner sub-tabs:
- *   availability — pivot table agent × date, total pause time heatmap
- *   pauses       — flat rows per (agent, pool, date, reason) with CSV export
+ *   availability — per-identity summary (logged / paused / available) + a
+ *                  pause-reason donut. Fase 1b adds logged time from
+ *                  agent_login_intervals; rows are keyed by instance_id, so
+ *                  humans are shown per person (user_login), not collapsed.
+ *   pauses       — flat rows per (identity, pool, date, reason) with CSV export.
  */
 import React, { useCallback, useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
+import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip, Legend } from 'recharts'
 import type { ContactFilters } from '../types'
+import { AgentTimeline } from './AgentTimeline'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -23,11 +29,17 @@ interface ReasonBreakdown {
 }
 
 interface AvailabilityRow {
+  instance_id:      string
+  user_login:       string
+  user_id:          string
   agent_type_id:    string
   pool_id:          string
   period_date:      string
+  logged_ms:        number
+  total_logins:     number
   total_pauses:     number
   total_pause_ms:   number
+  available_ms:     number
   reason_breakdown: ReasonBreakdown[]
 }
 
@@ -47,6 +59,7 @@ interface AvailabilityResponse {
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 function fmtDuration(ms: number): string {
+  if (!ms || ms < 1000) return '—'
   if (ms < 60_000) return `${Math.round(ms / 1000)}s`
   const m = Math.floor(ms / 60_000)
   const h = Math.floor(m / 60)
@@ -61,6 +74,17 @@ function shortAgent(id: string): string {
 function shortPool(id: string): string {
   return id.replace(/_/g, ' ').replace(/\s*(humano|ia|v\d+)$/i, '').trim() || id
 }
+
+/** Display label for an agent: human → login (email), AI/native → agent_type_id. */
+function identityLabel(row: { user_login: string; agent_type_id: string }): string {
+  return row.user_login || shortAgent(row.agent_type_id)
+}
+
+// Donut palette (design tokens — Recharts needs literal colours in SVG attrs)
+const REASON_COLORS = [
+  '#1B4F8A', '#2D9CDB', '#00B4D8', '#D97706', '#059669',
+  '#DC2626', '#7C3AED', '#0891B2', '#CA8A04', '#BE185D',
+]
 
 // ── Data hook ─────────────────────────────────────────────────────────────────
 
@@ -110,9 +134,57 @@ function useAvailability(params: {
   return { data, meta, loading, error }
 }
 
-// ── Availability sub-tab (pivot table) ───────────────────────────────────────
+// ── Reason donut ──────────────────────────────────────────────────────────────
 
-const AvailabilitySubTab: React.FC<{ rows: AvailabilityRow[] }> = ({ rows }) => {
+const ReasonsDonut: React.FC<{ rows: AvailabilityRow[] }> = ({ rows }) => {
+  const { t } = useTranslation('contacts')
+
+  const byReason = new Map<string, number>()
+  for (const r of rows) {
+    for (const rb of r.reason_breakdown) {
+      const label = rb.reason_label || rb.reason_id || '—'
+      byReason.set(label, (byReason.get(label) ?? 0) + rb.total_ms)
+    }
+  }
+  const data = [...byReason.entries()]
+    .map(([name, value]) => ({ name, value }))
+    .sort((a, b) => b.value - a.value)
+
+  return (
+    <div className="bg-white rounded-lg border border-border overflow-hidden">
+      <div className="px-4 py-2.5 border-b border-border bg-surface-muted">
+        <p className="text-xs font-semibold text-muted uppercase tracking-wide">
+          {t('agents.availability.reasonsTitle')}
+        </p>
+      </div>
+      {data.length === 0 ? (
+        <div className="h-48 flex items-center justify-center text-sm text-muted-light">
+          {t('agents.availability.noReasons')}
+        </div>
+      ) : (
+        <ResponsiveContainer width="100%" height={220}>
+          <PieChart>
+            <Pie data={data} dataKey="value" nameKey="name" cx="50%" cy="50%"
+                 innerRadius={50} outerRadius={80} paddingAngle={2}>
+              {data.map((_, i) => (
+                <Cell key={i} fill={REASON_COLORS[i % REASON_COLORS.length]} />
+              ))}
+            </Pie>
+            <Tooltip formatter={(v: number) => fmtDuration(v)} />
+            <Legend iconSize={10} wrapperStyle={{ fontSize: 12 }} />
+          </PieChart>
+        </ResponsiveContainer>
+      )}
+    </div>
+  )
+}
+
+// ── Availability sub-tab (per-identity summary + donut) ──────────────────────
+
+const AvailabilitySubTab: React.FC<{
+  rows:     AvailabilityRow[]
+  onSelect: (instanceId: string, label: string) => void
+}> = ({ rows, onSelect }) => {
   const { t } = useTranslation('contacts')
 
   if (rows.length === 0) {
@@ -123,72 +195,67 @@ const AvailabilitySubTab: React.FC<{ rows: AvailabilityRow[] }> = ({ rows }) => 
     )
   }
 
-  const dateSet = new Set(rows.map(r => r.period_date))
-  const dates   = [...dateSet].sort()
-
-  type Key = string
-  const groups = new Map<Key, { agent: string; pool: string; byDate: Map<string, AvailabilityRow> }>()
-  for (const row of rows) {
-    const key = `${row.agent_type_id}|${row.pool_id}`
-    if (!groups.has(key)) {
-      groups.set(key, { agent: row.agent_type_id, pool: row.pool_id, byDate: new Map() })
-    }
-    groups.get(key)!.byDate.set(row.period_date, row)
+  // Aggregate across the date range per identity (instance_id) + pool.
+  type Agg = {
+    instance: string; label: string; pool: string
+    logged: number; paused: number; available: number; pauses: number
   }
+  const groups = new Map<string, Agg>()
+  for (const r of rows) {
+    const key = `${r.instance_id || r.agent_type_id}|${r.pool_id}`
+    const g = groups.get(key) ?? {
+      instance: r.instance_id, label: identityLabel(r), pool: r.pool_id,
+      logged: 0, paused: 0, available: 0, pauses: 0,
+    }
+    g.logged    += r.logged_ms
+    g.paused    += r.total_pause_ms
+    g.available += r.available_ms
+    g.pauses    += r.total_pauses
+    if (!g.label || g.label === r.agent_type_id) g.label = identityLabel(r)
+    if (!g.instance && r.instance_id) g.instance = r.instance_id
+    groups.set(key, g)
+  }
+  const aggRows = [...groups.values()].sort((a, b) => b.logged - a.logged)
 
   return (
-    <div className="flex-1 overflow-auto">
-      <table className="min-w-full text-xs border-collapse">
-        <thead className="sticky top-0 bg-white z-10">
-          <tr className="border-b border-border">
-            <th className="text-left px-3 py-2 font-semibold text-muted whitespace-nowrap min-w-40">{t('agents.availability.columns.agent')}</th>
-            <th className="text-left px-3 py-2 font-semibold text-muted whitespace-nowrap min-w-[120px]">{t('agents.availability.columns.pool')}</th>
-            {dates.map(d => (
-              <th key={d} className="px-2 py-2 font-semibold text-muted text-center whitespace-nowrap min-w-20">
-                {d.slice(5)}
-              </th>
-            ))}
-            <th className="px-3 py-2 font-semibold text-muted text-right whitespace-nowrap">{t('agents.availability.columns.total')}</th>
-          </tr>
-        </thead>
-        <tbody>
-          {[...groups.entries()].map(([key, { agent, pool, byDate }]) => {
-            const totalMs = [...byDate.values()].reduce((s, r) => s + r.total_pause_ms, 0)
-            return (
-              <tr key={key} className="border-b border-border hover:bg-surface-muted transition-colors">
-                <td className="px-3 py-2 text-dark font-medium truncate max-w-[200px]" title={agent}>
-                  {shortAgent(agent)}
-                </td>
-                <td className="px-3 py-2 text-muted truncate max-w-[140px]" title={pool}>
-                  {shortPool(pool)}
-                </td>
-                {dates.map(d => {
-                  const row = byDate.get(d)
-                  if (!row) return <td key={d} className="px-2 py-2 text-center text-border">—</td>
-                  const pauseMs   = row.total_pause_ms
-                  const intensity = Math.min(pauseMs / (4 * 3_600_000), 1)
-                  const bg = pauseMs === 0
-                    ? 'bg-surface-muted text-border-strong'
-                    : intensity < 0.25
-                      ? 'bg-warning-light text-warning-text'
-                      : intensity < 0.5
-                        ? 'bg-warning-light text-warning-text'
-                        : 'bg-warning text-white'
-                  return (
-                    <td key={d} className={`px-2 py-2 text-center font-mono tabular-nums ${bg}`}
-                        title={t('agents.availability.pauseTooltip', { count: row.total_pauses, duration: fmtDuration(pauseMs) })}>
-                      {pauseMs > 0 ? fmtDuration(pauseMs) : '—'}
-                    </td>
-                  )
-                })}
-                <td className="px-3 py-2 text-right font-semibold text-dark tabular-nums">
-                  {totalMs > 0 ? fmtDuration(totalMs) : '—'}
-                </td>
-              </tr>
-            )
-          })}
-        </tbody>
-      </table>
+    <div className="flex-1 overflow-auto p-3 flex flex-col gap-3">
+      <div className="bg-white rounded-lg border border-border overflow-hidden">
+        <table className="min-w-full text-xs border-collapse">
+          <thead className="bg-surface-muted">
+            <tr className="border-b border-border">
+              <th className="text-left px-3 py-2 font-semibold text-muted whitespace-nowrap">{t('agents.availability.columns.agent')}</th>
+              <th className="text-left px-3 py-2 font-semibold text-muted whitespace-nowrap">{t('agents.availability.columns.pool')}</th>
+              <th className="text-right px-3 py-2 font-semibold text-muted whitespace-nowrap">{t('agents.availability.columns.logged')}</th>
+              <th className="text-right px-3 py-2 font-semibold text-muted whitespace-nowrap">{t('agents.availability.columns.paused')}</th>
+              <th className="text-right px-3 py-2 font-semibold text-muted whitespace-nowrap">{t('agents.availability.columns.available')}</th>
+              <th className="text-right px-3 py-2 font-semibold text-muted whitespace-nowrap">{t('agents.availability.columns.availPct')}</th>
+            </tr>
+          </thead>
+          <tbody>
+            {aggRows.map((g, i) => {
+              const pct = g.logged > 0 ? Math.round((g.available / g.logged) * 100) : null
+              const clickable = !!g.instance
+              return (
+                <tr key={i}
+                    onClick={clickable ? () => onSelect(g.instance, g.label) : undefined}
+                    className={`border-b border-border transition-colors ${clickable ? 'cursor-pointer hover:bg-surface-muted' : ''}`}
+                    title={clickable ? t('agents.availability.timeline.open') : undefined}>
+                  <td className="px-3 py-2 text-dark font-medium truncate max-w-[220px]" title={g.label}>
+                    {clickable && <span className="text-secondary mr-1">↳</span>}{g.label}
+                  </td>
+                  <td className="px-3 py-2 text-muted truncate max-w-[140px]" title={g.pool}>{shortPool(g.pool)}</td>
+                  <td className="px-3 py-2 text-right tabular-nums text-dark">{fmtDuration(g.logged)}</td>
+                  <td className="px-3 py-2 text-right tabular-nums text-warning-text">{fmtDuration(g.paused)}</td>
+                  <td className="px-3 py-2 text-right tabular-nums font-semibold text-dark">{fmtDuration(g.available)}</td>
+                  <td className="px-3 py-2 text-right tabular-nums text-muted">{pct === null ? '—' : `${pct}%`}</td>
+                </tr>
+              )
+            })}
+          </tbody>
+        </table>
+      </div>
+
+      <ReasonsDonut rows={rows} />
     </div>
   )
 }
@@ -210,12 +277,14 @@ const PausesSubTab: React.FC<{
   }> = []
 
   for (const r of rows) {
+    const agent = identityLabel(r)
     if (r.reason_breakdown.length === 0) {
-      flat.push({ date: r.period_date, agent: r.agent_type_id, pool: r.pool_id,
+      if (r.total_pauses === 0) continue
+      flat.push({ date: r.period_date, agent, pool: r.pool_id,
                   reason: '—', count: r.total_pauses, ms: r.total_pause_ms })
     } else {
       for (const rb of r.reason_breakdown) {
-        flat.push({ date: r.period_date, agent: r.agent_type_id, pool: r.pool_id,
+        flat.push({ date: r.period_date, agent, pool: r.pool_id,
                     reason: rb.reason_label || rb.reason_id, count: rb.count, ms: rb.total_ms })
       }
     }
@@ -260,7 +329,7 @@ const PausesSubTab: React.FC<{
               <tr key={i} className="border-b border-border hover:bg-surface-muted transition-colors">
                 <td className="px-3 py-2 text-muted whitespace-nowrap font-mono">{r.date}</td>
                 <td className="px-3 py-2 text-dark font-medium truncate max-w-[180px]" title={r.agent}>
-                  {shortAgent(r.agent)}
+                  {r.agent}
                 </td>
                 <td className="px-3 py-2 text-muted truncate max-w-[130px]" title={r.pool}>
                   {shortPool(r.pool)}
@@ -317,6 +386,7 @@ export function AgentsTab({ tenantId, filters }: Props) {
   const { t } = useTranslation('contacts')
   const [subTab, setSubTab] = useState<SubTab>('availability')
   const [page,   setPage]   = useState(1)
+  const [selected, setSelected] = useState<{ instanceId: string; label: string } | null>(null)
 
   // Reset page when filters change
   const resetPage = useCallback(() => setPage(1), [])
@@ -373,11 +443,22 @@ export function AgentsTab({ tenantId, filters }: Props) {
             {t('agents.availability.loadError', { error })}
           </div>
         ) : subTab === 'availability' ? (
-          <AvailabilitySubTab rows={data} />
+          <AvailabilitySubTab rows={data} onSelect={(instanceId, label) => setSelected({ instanceId, label })} />
         ) : (
           <PausesSubTab rows={data} meta={meta} page={page} onPage={setPage} csvUrl={csvUrl} />
         )}
       </div>
+
+      {selected && (
+        <AgentTimeline
+          tenantId={tenantId}
+          instanceId={selected.instanceId}
+          label={selected.label}
+          fromDt={filters.fromDt}
+          toDt={filters.toDt}
+          onClose={() => setSelected(null)}
+        />
+      )}
     </div>
   )
 }

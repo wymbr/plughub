@@ -160,6 +160,11 @@ _ENRICHED_TOPICS = frozenset({"sentiment.updated", "mcp.audit"})
 # Redis key TTL for open pause intervals (24 h — covers overnight shifts)
 _PAUSE_KEY_TTL = 86_400
 
+# Redis key TTL for open login intervals (Fase 1b). Refreshed on every
+# agent_ready while the interval stays open, so a long shift never expires
+# mid-session; a stale key (>24 h with no event) is treated as an orphan.
+_LOGIN_KEY_TTL = 86_400
+
 # ── Reliability ───────────────────────────────────────────────────────────────
 MAX_ATTEMPTS    = 3
 BACKOFF_BASE_MS = 500   # 500ms → 1 000ms between retries
@@ -338,6 +343,16 @@ async def _process_message(
     else:
         result = parser(raw)
 
+    # ── Fase 1b: login interval tracking (independent of the parse/pause flow) ──
+    # agent_ready (human, carries user_id/user_login) and agent_login (native) open
+    # a logged-in interval; agent_logout closes it. Runs before the None check so
+    # agent_login/agent_logout (which the parser skips) are still captured.
+    if topic == "agent.lifecycle" and redis is not None:
+        try:
+            await _handle_login_interval(raw, store, redis)
+        except Exception as exc:
+            logger.debug("login interval handling failed: %s", exc)
+
     if result is None:
         return  # skipped by parser (unknown event_type or missing fields)
 
@@ -473,6 +488,184 @@ async def _handle_pause_open(
     except Exception as exc:
         logger.debug("Pause Redis store failed instance=%s: %s", instance_id, exc)
     return row
+
+
+def _login_redis_key(tenant_id: str, instance_id: str) -> str:
+    """Redis key that stores the open login interval for an agent instance."""
+    return f"{tenant_id}:login:{instance_id}"
+
+
+def _iso_duration_ms(start_iso: str, end_iso: str) -> int | None:
+    from datetime import datetime as _dt
+    try:
+        s = _dt.fromisoformat((start_iso or "").replace("Z", "+00:00"))
+        e = _dt.fromisoformat((end_iso or "").replace("Z", "+00:00"))
+        return int((e - s).total_seconds() * 1000)
+    except Exception:
+        return None
+
+
+async def _apply_pool_diff(
+    state:       dict,
+    pools:       list,
+    ts:          str,
+    tenant_id:   str,
+    instance_id: str,
+    store:       object,
+) -> None:
+    """
+    Open/close per-pool presence sub-intervals so the timeline can draw a lane per
+    pool aligned to the agent's total lane. Mutates
+    ``state['pools_open'] = {pool_id: {interval_id, entered_at}}``.
+
+    Called only when the event carries an authoritative pools[] snapshot
+    (registerHumanAgent / partial logout publish the full list; resume does not).
+    """
+    import uuid as _uuid
+
+    pools_open: dict = state.setdefault("pools_open", {})
+    new_set = {p for p in pools if p}
+    cur_set = set(pools_open.keys())
+
+    base = {
+        "login_interval_id": state.get("interval_id", ""),
+        "tenant_id":         tenant_id,
+        "instance_id":       instance_id,
+        "user_id":           state.get("user_id", ""),
+        "user_login":        state.get("user_login", ""),
+        "agent_type_id":     state.get("agent_type_id", ""),
+    }
+
+    for pid in new_set - cur_set:                      # entered a pool → open
+        pid_interval = str(_uuid.uuid4())
+        pools_open[pid] = {"interval_id": pid_interval, "entered_at": ts}
+        await store.upsert_agent_pool_interval({       # type: ignore[attr-defined]
+            **base, "interval_id": pid_interval, "pool_id": pid,
+            "entered_at": ts, "left_at": None, "duration_ms": None,
+        })
+
+    for pid in cur_set - new_set:                      # left a pool → close
+        info = pools_open.pop(pid)
+        await store.upsert_agent_pool_interval({       # type: ignore[attr-defined]
+            **base, "interval_id": info.get("interval_id", ""), "pool_id": pid,
+            "entered_at": info.get("entered_at", ""), "left_at": ts,
+            "duration_ms": _iso_duration_ms(info.get("entered_at", ""), ts),
+        })
+
+
+async def _handle_login_interval(raw: dict, store: object, redis: object) -> None:
+    """
+    Fase 1b + timeline — logged-time + per-pool presence state machine, keyed on
+    {tenant_id}:login:{instance_id}.
+
+    agent_ready / agent_login:
+      • opens the login interval on the first event (writes the open row);
+      • whenever the event carries an authoritative pools[] snapshot, diffs it
+        against the open pools to open/close per-pool presence sub-intervals.
+    agent_logout:
+      • closes every open pool presence, then the login interval.
+    """
+    import json as _json
+    import uuid as _uuid
+
+    event       = raw.get("event")
+    tenant_id   = raw.get("tenant_id", "")
+    instance_id = raw.get("instance_id", "")
+    if not tenant_id or not instance_id:
+        return
+    ts  = raw.get("timestamp") or datetime.now(timezone.utc).isoformat()
+    key = _login_redis_key(tenant_id, instance_id)
+
+    if event in ("agent_ready", "agent_login"):
+        try:
+            existing = await redis.get(key)  # type: ignore[union-attr]
+        except Exception:
+            existing = None
+
+        if existing:
+            try:
+                state = _json.loads(existing)
+            except Exception:
+                return
+        else:
+            state = {
+                "interval_id":   str(_uuid.uuid4()),
+                "logged_in_at":  ts,
+                "user_id":       raw.get("user_id", "") or "",
+                "user_login":    raw.get("user_login", "") or "",
+                "agent_type_id": raw.get("agent_type_id", "") or "",
+                "pool_id":       raw.get("pool_id", "") or "",
+                "pools_open":    {},
+            }
+            await store.upsert_agent_login_interval({  # type: ignore[attr-defined]
+                "interval_id":   state["interval_id"],
+                "tenant_id":     tenant_id,
+                "instance_id":   instance_id,
+                "user_id":       state["user_id"],
+                "user_login":    state["user_login"],
+                "agent_type_id": state["agent_type_id"],
+                "pool_id":       state["pool_id"],
+                "logged_in_at":  ts,
+                "logged_out_at": None,
+                "duration_ms":   None,
+            })
+
+        # Per-pool presence diff — only when the event carries a pools snapshot.
+        pools = raw.get("pools")
+        if isinstance(pools, list) and pools:
+            try:
+                await _apply_pool_diff(state, pools, ts, tenant_id, instance_id, store)
+            except Exception as exc:
+                logger.debug("pool diff failed instance=%s: %s", instance_id, exc)
+
+        try:
+            await redis.set(key, _json.dumps(state), ex=_LOGIN_KEY_TTL)  # type: ignore[union-attr]
+        except Exception as exc:
+            logger.debug("Login Redis store failed instance=%s: %s", instance_id, exc)
+
+    elif event == "agent_logout":
+        try:
+            raw_state = await redis.get(key)  # type: ignore[union-attr]
+            if not raw_state:
+                return  # no open interval — nothing to close
+            state = _json.loads(raw_state)
+            await redis.delete(key)  # type: ignore[union-attr]
+        except Exception as exc:
+            logger.debug("Login Redis lookup failed instance=%s: %s", instance_id, exc)
+            return
+
+        # Close every open pool presence first.
+        base = {
+            "login_interval_id": state.get("interval_id", ""),
+            "tenant_id":         tenant_id,
+            "instance_id":       instance_id,
+            "user_id":           state.get("user_id", ""),
+            "user_login":        state.get("user_login", ""),
+            "agent_type_id":     state.get("agent_type_id", ""),
+        }
+        for pid, info in (state.get("pools_open") or {}).items():
+            try:
+                await store.upsert_agent_pool_interval({  # type: ignore[attr-defined]
+                    **base, "interval_id": info.get("interval_id", ""), "pool_id": pid,
+                    "entered_at": info.get("entered_at", ""), "left_at": ts,
+                    "duration_ms": _iso_duration_ms(info.get("entered_at", ""), ts),
+                })
+            except Exception as exc:
+                logger.debug("pool close failed instance=%s pool=%s: %s", instance_id, pid, exc)
+
+        # Close the login interval.
+        await store.upsert_agent_login_interval({  # type: ignore[attr-defined]
+            "interval_id":   state.get("interval_id", ""),
+            "tenant_id":     tenant_id,
+            "instance_id":   instance_id,
+            "user_id":       state.get("user_id", ""),
+            "user_login":    state.get("user_login", ""),
+            "agent_type_id": state.get("agent_type_id", ""),
+            "pool_id":       state.get("pool_id", ""),
+            "logged_in_at":  state.get("logged_in_at", ""),
+            "logged_out_at": ts,
+            "duration_ms":   _iso_duration_ms(state.get("logged_in_at", ""), ts),
+        })
 
 
 async def _parse_with_enrichment(

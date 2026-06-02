@@ -349,6 +349,8 @@
       "nextPage":   "Próx. →",
       "page":       "{{page}} / {{total}}",
       "pauseTooltip":"{{count}} pausa(s) · {{duration}}",
+      "reasonsTitle":"Pausas por motivo",
+      "noReasons":  "Sem pausas com motivo no período.",
       "columns": {
         "agent":    "Agente",
         "pool":     "Pool",
@@ -357,7 +359,22 @@
         "reason":   "Motivo",
         "count":    "Qtd",
         "duration": "Duração",
-        "avgPause": "Média/pausa"
+        "avgPause": "Média/pausa",
+        "logged":   "Logado",
+        "paused":   "Pausado",
+        "available":"Disponível",
+        "availPct": "Disp. %"
+      },
+      "timeline": {
+        "title":  "Linha do tempo do agente",
+        "open":   "Ver linha do tempo",
+        "close":  "Fechar",
+        "lane":   "Faixa",
+        "total":  "Total",
+        "logged": "Logado",
+        "pool":   "Pool",
+        "pause":  "Pausa",
+        "noData": "Sem eventos no período."
       }
     }
   },

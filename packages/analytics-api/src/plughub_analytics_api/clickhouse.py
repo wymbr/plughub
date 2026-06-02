@@ -539,6 +539,61 @@ PARTITION BY toYYYYMM(date)
 ORDER BY (tenant_id, instance_id, paused_at)
 """
 
+# ── Fase 1b: agent_login_intervals — one row per logged-in interval per agent.
+# Same open/close pattern as agent_pause_intervals: the open row (logged_out_at
+# NULL) is written on the first agent_ready/agent_login; the close row (with
+# logged_out_at + duration_ms) wins on merge via the later ingested_at.
+# Carries user_id/user_login so the availability report groups humans by identity
+# (consistent with C1/C1b) — empty for native AI agents.
+_DDL_AGENT_LOGIN_INTERVALS = """
+CREATE TABLE IF NOT EXISTS {db}.agent_login_intervals
+(
+    interval_id    String,
+    tenant_id      String,
+    instance_id    String,
+    user_id        String,
+    user_login     String,
+    agent_type_id  String,
+    pool_id        String,
+    logged_in_at   DateTime64(3, 'UTC'),
+    logged_out_at  Nullable(DateTime64(3, 'UTC')),
+    duration_ms    Nullable(Int64),
+    ingested_at    DateTime DEFAULT now(),
+    date           Date
+)
+ENGINE = ReplacingMergeTree(ingested_at)
+PARTITION BY toYYYYMM(date)
+ORDER BY (tenant_id, instance_id, logged_in_at)
+"""
+
+# ── Timeline: agent_pool_intervals — one row per (agent, pool) presence interval.
+# A human is logged in once (agent_login_intervals) but may serve several pools;
+# this table records when they entered/left EACH pool, so the timeline can draw a
+# lane per pool aligned to the agent's total lane. login_interval_id links each
+# pool presence to its parent login interval. Pauses are agent-level and overlaid
+# from agent_pause_intervals (a pause removes the agent from all pools at once).
+_DDL_AGENT_POOL_INTERVALS = """
+CREATE TABLE IF NOT EXISTS {db}.agent_pool_intervals
+(
+    interval_id       String,
+    login_interval_id String,
+    tenant_id         String,
+    instance_id       String,
+    user_id           String,
+    user_login        String,
+    agent_type_id     String,
+    pool_id           String,
+    entered_at        DateTime64(3, 'UTC'),
+    left_at           Nullable(DateTime64(3, 'UTC')),
+    duration_ms       Nullable(Int64),
+    ingested_at       DateTime DEFAULT now(),
+    date              Date
+)
+ENGINE = ReplacingMergeTree(ingested_at)
+PARTITION BY toYYYYMM(date)
+ORDER BY (tenant_id, instance_id, pool_id, entered_at)
+"""
+
 # ── Arc 5: mv_agent_performance_daily — AggregatingMergeTree MV over segments.
 # Captures a row per (tenant_id, agent_type_id, pool_id, period_date) on every INSERT.
 # Uses State/Merge aggregating functions so partial results compose correctly.
@@ -648,6 +703,8 @@ _ALL_DDL = [
     _DDL_EVALUATION_EVENTS,
     _DDL_CONTACT_INSIGHTS,
     _DDL_AGENT_PAUSE_INTERVALS,
+    _DDL_AGENT_LOGIN_INTERVALS,
+    _DDL_AGENT_POOL_INTERVALS,
     _DDL_AGENT_BUSINESS_EVENTS,
     _DDL_CALIBRATION_EVENTS,
     # Materialized views — must come AFTER the source tables they reference.
@@ -1035,6 +1092,54 @@ class AnalyticsStore:
             "agent_pause_intervals",
             [_agent_pause_interval_row(row)],
             self._AGENT_PAUSE_INTERVAL_COLS,
+        )
+
+    # agent_login_intervals (Fase 1b)
+
+    _AGENT_LOGIN_INTERVAL_COLS = [
+        "interval_id", "tenant_id", "instance_id", "user_id", "user_login",
+        "agent_type_id", "pool_id",
+        "logged_in_at", "logged_out_at", "duration_ms",
+        # ingested_at omitted — DEFAULT now()
+        "date",
+    ]
+
+    async def upsert_agent_login_interval(self, row: dict) -> None:
+        """Insert (open) or update (close) a login interval row.
+
+        Open row:  logged_out_at=None, duration_ms=None — written on first agent_ready/agent_login.
+        Close row: logged_out_at+duration_ms filled      — written on agent_logout.
+        ReplacingMergeTree(ingested_at) ensures the close row wins on merge.
+        """
+        await asyncio.to_thread(
+            self._insert,
+            "agent_login_intervals",
+            [_agent_login_interval_row(row)],
+            self._AGENT_LOGIN_INTERVAL_COLS,
+        )
+
+    # agent_pool_intervals (timeline — per-pool presence)
+
+    _AGENT_POOL_INTERVAL_COLS = [
+        "interval_id", "login_interval_id", "tenant_id", "instance_id",
+        "user_id", "user_login", "agent_type_id", "pool_id",
+        "entered_at", "left_at", "duration_ms",
+        # ingested_at omitted — DEFAULT now()
+        "date",
+    ]
+
+    async def upsert_agent_pool_interval(self, row: dict) -> None:
+        """Insert (open) or update (close) a per-pool presence interval row.
+
+        Open row:  left_at=None, duration_ms=None — written when the agent enters a pool.
+        Close row: left_at+duration_ms filled      — written when the agent leaves it.
+        ReplacingMergeTree(ingested_at) ensures the close row wins on merge.
+        """
+        await asyncio.to_thread(
+            self._insert,
+            "agent_pool_intervals",
+            [_agent_pool_interval_row(row)],
+            self._AGENT_POOL_INTERVAL_COLS,
         )
 
     # journey_events (Arc 10) — REMOVED (Arc 19 Fase F)
@@ -1500,6 +1605,59 @@ def _agent_pause_interval_row(d: dict) -> list:
         d.get("duration_ms") or None,
         # ingested_at — DEFAULT now(), omitted so ClickHouse fills it
         _today_utc(paused_ts),
+    ]
+
+
+def _agent_login_interval_row(d: dict) -> list:
+    """Row builder for agent_login_intervals table (Fase 1b).
+
+    An "open" row has logged_out_at=None and duration_ms=None.
+    A "close" row (written on agent_logout) has logged_out_at and duration_ms
+    filled in.  ReplacingMergeTree(ingested_at) ensures the close row wins.
+    """
+    in_ts   = d.get("logged_in_at")
+    out_ts  = d.get("logged_out_at")
+    in_dt   = _parse_dt(in_ts) if in_ts else datetime.utcnow()
+    out_dt  = _parse_dt(out_ts) if out_ts else None
+    return [
+        d.get("interval_id", ""),
+        d.get("tenant_id", ""),
+        d.get("instance_id", ""),
+        d.get("user_id", ""),
+        d.get("user_login", ""),
+        d.get("agent_type_id", ""),
+        d.get("pool_id", ""),
+        in_dt,
+        out_dt,
+        d.get("duration_ms") or None,
+        # ingested_at — DEFAULT now(), omitted so ClickHouse fills it
+        _today_utc(in_ts),
+    ]
+
+
+def _agent_pool_interval_row(d: dict) -> list:
+    """Row builder for agent_pool_intervals (timeline — per-pool presence).
+
+    Open row: left_at=None, duration_ms=None. Close row fills both.
+    """
+    in_ts  = d.get("entered_at")
+    out_ts = d.get("left_at")
+    in_dt  = _parse_dt(in_ts) if in_ts else datetime.utcnow()
+    out_dt = _parse_dt(out_ts) if out_ts else None
+    return [
+        d.get("interval_id", ""),
+        d.get("login_interval_id", ""),
+        d.get("tenant_id", ""),
+        d.get("instance_id", ""),
+        d.get("user_id", ""),
+        d.get("user_login", ""),
+        d.get("agent_type_id", ""),
+        d.get("pool_id", ""),
+        in_dt,
+        out_dt,
+        d.get("duration_ms") or None,
+        # ingested_at — DEFAULT now(), omitted so ClickHouse fills it
+        _today_utc(in_ts),
     ]
 
 

@@ -389,7 +389,9 @@ def parse_agent_lifecycle(payload: dict[str, Any]) -> dict | None:
             "resumed_at":   payload.get("timestamp") or _now(),
         }
 
-    # Untracked event (agent_login, agent_busy, agent_heartbeat, agent_logout) — skip.
+    # agent_login / agent_logout: handled out-of-band by the consumer's login
+    # interval state machine (_handle_login_interval) → agent_login_intervals,
+    # not via this parse→write flow. agent_busy / agent_heartbeat stay untracked.
     return None
 
 

@@ -1603,26 +1603,34 @@ export async function startServer(config: ServerConfig): Promise<void> {
       const tenantId   = process.env["PLUGHUB_TENANT_ID"] ?? "tenant_demo"
       const jwtUserId  = typeof payload["sub"] === "string" ? payload["sub"] : ""
       const instanceId = jwtUserId ? `human-${jwtUserId}` : `human-${poolId}`
-      const instanceKey = keys.agentInstance(tenantId, instanceId)
-
-      // Verify instance exists
-      const state = await redis.hget(instanceKey, "state")
-      if (!state) {
+      // Human instances are stored as a JSON string at ${tenant}:instance:${id}
+      // (registerHumanAgent), NOT as a hash under keys.agentInstance — read/write
+      // the string accordingly or the lookup silently 404s and never publishes.
+      const instanceKey = `${tenantId}:instance:${instanceId}`
+      const raw = await redis.get(instanceKey)
+      if (!raw) {
         res.status(404).json({ error: "instance_not_found", instance_id: instanceId })
         return
       }
-      if (state !== "ready" && state !== "busy") {
-        res.status(409).json({ error: "invalid_state", current_state: state })
+      let inst: Record<string, unknown>
+      try {
+        inst = JSON.parse(raw) as Record<string, unknown>
+      } catch {
+        res.status(500).json({ error: "instance_corrupt", instance_id: instanceId })
+        return
+      }
+      if ((inst["status"] as string | undefined) === "paused") {
+        // Idempotent — already paused.
+        res.json({ ok: true, instance_id: instanceId, state: "paused", timestamp: new Date().toISOString() })
         return
       }
 
-      // Mark as paused in Redis
-      await redis.hset(instanceKey, "state", "paused")
-
-      // Remove from all pool available sets — agent won't receive new contacts
-      const poolsRaw = await redis.hget(instanceKey, "pools")
-      const pools: string[] = poolsRaw ? (JSON.parse(poolsRaw) as string[]) : [poolId]
+      // Mark paused in the instance JSON and remove from every pool allocation set.
+      inst["status"] = "paused"
+      await redis.set(instanceKey, JSON.stringify(inst))
+      const pools: string[] = Array.isArray(inst["pools"]) ? (inst["pools"] as string[]) : [poolId]
       for (const pid of pools) {
+        await redis.srem(keys.poolInstances(tenantId, pid), instanceId)
         await redis.srem(keys.poolAvailable(tenantId, pid), instanceId)
       }
 
@@ -1661,36 +1669,46 @@ export async function startServer(config: ServerConfig): Promise<void> {
       const tenantId   = process.env["PLUGHUB_TENANT_ID"] ?? "tenant_demo"
       const jwtUserId2 = typeof payload["sub"] === "string" ? payload["sub"] : ""
       const instanceId = jwtUserId2 ? `human-${jwtUserId2}` : `human-${poolId}`
-      const instanceKey = keys.agentInstance(tenantId, instanceId)
-
-      // Verify instance exists and is paused
-      const state = await redis.hget(instanceKey, "state")
-      if (!state) {
+      // Human instance is a JSON string at ${tenant}:instance:${id} (see pause).
+      const instanceKey = `${tenantId}:instance:${instanceId}`
+      const raw = await redis.get(instanceKey)
+      if (!raw) {
         res.status(404).json({ error: "instance_not_found", instance_id: instanceId })
         return
       }
-      if (state !== "paused") {
-        res.status(409).json({ error: "invalid_state", current_state: state })
+      let inst: Record<string, unknown>
+      try {
+        inst = JSON.parse(raw) as Record<string, unknown>
+      } catch {
+        res.status(500).json({ error: "instance_corrupt", instance_id: instanceId })
         return
       }
 
-      // Mark as ready in Redis
-      await redis.hset(instanceKey, "state", "ready")
-
-      // Re-add to all pool available sets — agent is available again
-      const poolsRaw = await redis.hget(instanceKey, "pools")
-      const pools: string[] = poolsRaw ? (JSON.parse(poolsRaw) as string[]) : [poolId]
+      // Mark ready and re-add to every pool allocation set.
+      inst["status"] = "ready"
+      await redis.set(instanceKey, JSON.stringify(inst))
+      const pools: string[] = Array.isArray(inst["pools"]) ? (inst["pools"] as string[]) : [poolId]
       for (const pid of pools) {
-        await redis.sadd(keys.poolAvailable(tenantId, pid), instanceId)
+        await redis.sadd(keys.poolInstances(tenantId, pid), instanceId)
       }
 
-      // Publish agent_ready to agent.lifecycle
+      // Publish agent_ready carrying the FULL identity so the routing engine's
+      // _upsert_instance does not wipe user_id/user_login/execution_model/pools
+      // (it rebuilds the Redis instance from this event). This also closes the
+      // open pause interval in analytics via the agent_ready close-check.
       await kafka.publish("agent.lifecycle", {
-        event:       "agent_ready",
-        tenant_id:   tenantId,
-        instance_id: instanceId,
-        pool_id:     poolId,
-        timestamp:   new Date().toISOString(),
+        event:                   "agent_ready",
+        tenant_id:               tenantId,
+        instance_id:             instanceId,
+        agent_type_id:           (inst["agent_type_id"] as string) ?? `human_agent_${poolId}`,
+        user_id:                 (inst["user_id"] as string) ?? "",
+        user_login:              (inst["user_login"] as string) ?? "",
+        status:                  "ready",
+        execution_model:         "stateful",
+        current_sessions:        (inst["current_sessions"] as number) ?? 0,
+        pools:                   Array.isArray(inst["pools"]) ? inst["pools"] : [poolId],
+        max_concurrent_sessions: (inst["max_concurrent"] as number) ?? 1,
+        timestamp:               new Date().toISOString(),
       })
 
       res.json({ ok: true, instance_id: instanceId, state: "ready", timestamp: new Date().toISOString() })

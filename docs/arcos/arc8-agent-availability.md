@@ -147,3 +147,136 @@ Shows:
 - Time-series chart of availability ratio
 
 > **Pending**: `AgentsPage` Lista sub-tab requires `GET /reports/agent-performance/daily` from Arc 8 analytics — see TODO.md.
+
+---
+
+## Fase 1b — Logged Time & Availability (2026-06-02)
+
+Extends Arc 8 from "pause time only" to **logged time + availability**, via a new
+`agent_login_intervals` table that mirrors `agent_pause_intervals`.
+
+### Event reuse (no producer change)
+
+No new login event is emitted. The analytics consumer derives login intervals
+from events it already receives on `agent.lifecycle`:
+
+| Signal | Event | Identity source |
+|---|---|---|
+| Open interval | first `agent_ready` (human) / `agent_login` (native) | `user_id`/`user_login` ride the human `agent_ready` (C1) |
+| Keep open | subsequent `agent_ready` (resume-from-pause, pool refresh) | — (only refreshes TTL) |
+| Close interval | `agent_logout` | reads open state from Redis by `instance_id` |
+
+This avoids a new event that the routing engine could process into an incomplete
+`_upsert_instance` (the wipe-bug class). The pause state machine is untouched.
+
+### ClickHouse — `agent_login_intervals`
+
+```sql
+CREATE TABLE {db}.agent_login_intervals (
+    interval_id    String,
+    tenant_id      String,
+    instance_id    String,
+    user_id        String,
+    user_login     String,
+    agent_type_id  String,
+    pool_id        String,
+    logged_in_at   DateTime64(3, 'UTC'),
+    logged_out_at  Nullable(DateTime64(3, 'UTC')),
+    duration_ms    Nullable(Int64),
+    ingested_at    DateTime DEFAULT now(),
+    date           Date
+)
+ENGINE = ReplacingMergeTree(ingested_at)
+PARTITION BY toYYYYMM(date)
+ORDER BY (tenant_id, instance_id, logged_in_at)
+```
+
+Consumer (`consumer.py`): `_handle_login_interval` with Redis key
+`{tenant_id}:login:{instance_id}` (TTL 24h, refreshed on each `agent_ready` while
+open). Open writes a row with `logged_out_at`/`duration_ms` NULL; `agent_logout`
+writes the close row; ReplacingMergeTree keeps the close (later `ingested_at`).
+
+### Endpoint — `GET /reports/agent-availability` (reworked)
+
+`_fetch_agent_availability` now groups by **`instance_id`** (per person — humans
+are no longer collapsed into `human_agent_{pool}`) and merges login + pause +
+reason-breakdown in Python. New per-row fields: `instance_id`, `user_login`,
+`user_id`, `logged_ms`, `total_logins`, `available_ms` (= `logged_ms −
+total_pause_ms`, clamped at 0). Legacy fields (`agent_type_id`, `total_pause_ms`,
+`reason_breakdown`, `period_date`) are preserved — backward compatible.
+
+### Platform-UI — `AgentsTab.tsx`
+
+Embedded in Analytics/Agents (Human tab) and ContactsPage. The **Availability**
+sub-tab is a per-identity summary (Agent=`user_login` · Pool · Logged · Paused ·
+Available · Avail%) plus a **pause-reason donut** (Recharts `PieChart` over
+`reason_breakdown`). The **Pauses** sub-tab labels rows by `user_login`.
+
+### Known limitations / deferred
+
+- Login interval TTL 24h: a shift >24h with no event leaves an orphan open interval.
+- **Occupancy** (busy time from segments ÷ logged time) deferred to a later step.
+- **Pause-reason management UI** (Configuration CRUD + pool association + agent-side
+  reason picker) is a separate pending task — the data model already carries
+  `reason_id`/`reason_label` and the report shows the donut.
+
+---
+
+## Timeline — Per-Pool Presence (2026-06-02)
+
+Swimlane timeline per agent: a **Total** lane (logged time) plus one lane **per
+pool**, on a shared time axis, with pause blocks overlaid on every lane. Answers
+"how long logged in total **and** how long covering each pool" without summing —
+the two views are non-additive (a person has one clock; per-pool time is an
+attribution, not a partition).
+
+### ClickHouse — `agent_pool_intervals`
+
+```sql
+CREATE TABLE {db}.agent_pool_intervals (
+    interval_id       String,
+    login_interval_id String,        -- links to the parent login interval
+    tenant_id         String,
+    instance_id       String,
+    user_id           String,
+    user_login        String,
+    agent_type_id     String,
+    pool_id           String,
+    entered_at        DateTime64(3, 'UTC'),
+    left_at           Nullable(DateTime64(3, 'UTC')),
+    duration_ms       Nullable(Int64),
+    ingested_at       DateTime DEFAULT now(),
+    date              Date
+)
+ENGINE = ReplacingMergeTree(ingested_at)
+PARTITION BY toYYYYMM(date)
+ORDER BY (tenant_id, instance_id, pool_id, entered_at)
+```
+
+### Pool diff (consumer)
+
+`_handle_login_interval` keeps `pools_open = {pool_id: {interval_id, entered_at}}`
+in the `{tenant}:login:{instance}` Redis state. On each `agent_ready` carrying an
+**authoritative** `pools[]` snapshot (registerHumanAgent and partial-logout publish
+the full list; resume-from-pause does **not** — those are ignored), it diffs:
+entered pools → open a presence row; left pools → close one. `agent_logout` closes
+every open presence, then the login interval.
+
+### Endpoint — `GET /reports/agent-timeline`
+
+`?tenant_id&instance_id&from_dt&to_dt` → `{ login_intervals, pause_intervals,
+pool_intervals }` (ISO timestamps; open intervals have a null end). Pool scoping
+restricts `pool_intervals` to the caller's `accessible_pools`.
+
+### Platform-UI
+
+`AgentTimeline.tsx` renders the swimlanes as a modal opened by **drill-down**:
+clicking an agent row in the Availability sub-tab opens their timeline for the
+selected period. Bars are positioned by percentage over the data's time domain;
+pauses overlay every lane.
+
+### Known limitation
+
+Per-pool precision is approximate: the full presence interval is attributed to
+each pool the agent touched during it. Exact per-pool sub-intervals are a future
+refinement.
