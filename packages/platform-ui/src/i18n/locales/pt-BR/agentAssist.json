@@ -127,12 +127,26 @@
     "notIdentified": "Cliente não identificado"
   },
   "pause": {
-    "title":     "Selecionar Motivo de Pausa",
+    "title":          "Motivo da pausa",
+    "subtitle":       "Selecione o motivo antes de pausar o recebimento de novos contatos.",
+    "loading":        "Carregando motivos…",
+    "noteRequired":   "nota obrigatória",
+    "noteLabel":      "Observação",
+    "notePlaceholder":"Descreva brevemente o motivo…",
+    "noteMin":        "Mínimo de 3 caracteres.",
+    "confirmPause":   "Pausar",
     "reason":    "Motivo",
     "note":      "Observação (opcional)",
     "confirm":   "Confirmar",
     "cancel":    "Cancelar",
-    "required":  "Observação obrigatória para este motivo"
+    "required":  "Observação obrigatória para este motivo",
+    "reasons": {
+      "intervalo":   "Intervalo",
+      "almoco":      "Almoço",
+      "treinamento": "Treinamento",
+      "reuniao":     "Reunião",
+      "outro":       "Outro"
+    }
   },
   "substitution": {
     "toggle":      "🔄 Substituir",

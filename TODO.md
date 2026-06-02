@@ -57,10 +57,12 @@ Hoje o Analytics/Agents mistura agente×pool e não separa humano×IA.
   a realidade). TTL por motivo (`max_minutes`) + logout explícito limpa a key (`POST
   /api/agent-clear-pause`). Órfã resolvida: no `agent_logout` o analytics fecha a pausa aberta
   **só** quando a key durável está ausente (= logout explícito), distinguindo de navegação. Ver `CHANGELOG.md`.
-- **Pausas — gestão de motivos (nova)**: hoje o backend grava reason_id/reason_label e o relatório
-  já exibe donut, mas faltam (a) tela de Configuration para cadastrar/editar motivos +
-  **associá-los a pools**, (b) seletor de motivo na UI do agente ao pausar. Config API já tem o
-  namespace `agent_activity`/`pause_reasons` (semeável) — falta a UI de gestão + binding por pool.
+- **Pausas — gestão de motivos ✅/decidido** (2026-06-02): a pausa é do **agente** (remove de
+  todos os pools), então motivo **por pool é semanticamente errado** — lista global é o correto.
+  Config UI de cadastro descartada por overkill (Config API `pause_reasons` semeável + fallback de
+  defaults já cobre); seletor de motivo já existe (`PauseReasonModal`). Único ajuste feito:
+  **i18n** dos motivos default + textos do modal (seguiam fixos em pt-BR) → namespace `agentAssist`
+  seção `pause` (en + pt-BR). Labels do Config API permanecem como configurados pelo tenant.
 - **Fase 2 — relatório de Pools/Infra (novo)**: pool×canal×tempo — volumetria, tráfego no
   tempo, comportamento de fila (espera/tamanho/abandono/agentes disponíveis), concorrência
   vs capacidade (headroom), SLA. Fontes prontas (`queue_events`, `participation_intervals`,

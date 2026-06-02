@@ -127,12 +127,26 @@
     "notIdentified": "Customer not identified"
   },
   "pause": {
-    "title":     "Select Pause Reason",
+    "title":          "Pause reason",
+    "subtitle":       "Select a reason before pausing new contact intake.",
+    "loading":        "Loading reasons…",
+    "noteRequired":   "note required",
+    "noteLabel":      "Note",
+    "notePlaceholder":"Briefly describe the reason…",
+    "noteMin":        "Minimum of 3 characters.",
+    "confirmPause":   "Pause",
     "reason":    "Reason",
     "note":      "Note (optional)",
     "confirm":   "Confirm",
     "cancel":    "Cancel",
-    "required":  "Note required for this reason"
+    "required":  "Note required for this reason",
+    "reasons": {
+      "intervalo":   "Break",
+      "almoco":      "Lunch",
+      "treinamento": "Training",
+      "reuniao":     "Meeting",
+      "outro":       "Other"
+    }
   },
   "substitution": {
     "toggle":      "🔄 Replace",

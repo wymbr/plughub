@@ -1,11 +1,17 @@
 /**
  * PauseReasonModal
- * Shown when an agent clicks "Pausar" — requires selecting a reason before pausing.
- * Reasons are loaded from Config API (namespace: agent_activity, key: pause_reasons).
+ * Shown when an agent clicks "Pause" — requires selecting a reason before pausing.
+ * Reasons are loaded from Config API (namespace: agent_activity, key: pause_reasons);
+ * the tenant-configured labels are shown as-is. When the Config API has none, a
+ * built-in fallback list is used whose labels follow the UI language (i18n).
  * Reasons with `requires_note: true` show an additional free-text field.
+ *
+ * Pause reasons are agent-level (a pause removes the agent from ALL pools), so the
+ * list is global — there is no per-pool association.
  */
 
 import React, { useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { Pause } from "lucide-react";
 
 interface PauseReason {
@@ -20,21 +26,25 @@ interface Props {
   onCancel:  () => void;
 }
 
-const DEFAULT_REASONS: PauseReason[] = [
-  { id: "intervalo",    label: "Intervalo",   requires_note: false, max_minutes: 15 },
-  { id: "almoco",       label: "Almoço",      requires_note: false, max_minutes: 60 },
-  { id: "treinamento",  label: "Treinamento", requires_note: false, max_minutes: 120 },
-  { id: "reuniao",      label: "Reunião",     requires_note: true,  max_minutes: 60 },
-  { id: "outro",        label: "Outro",       requires_note: true  },
-];
-
 export const PauseReasonModal: React.FC<Props> = ({ onConfirm, onCancel }) => {
-  const [reasons,  setReasons]  = useState<PauseReason[]>(DEFAULT_REASONS);
+  const { t } = useTranslation("agentAssist");
+
+  // Built-in fallback list — labels translated so they follow the UI language.
+  // Used only when the Config API returns no pause_reasons.
+  const defaultReasons: PauseReason[] = [
+    { id: "intervalo",   label: t("pause.reasons.intervalo"),   requires_note: false, max_minutes: 15 },
+    { id: "almoco",      label: t("pause.reasons.almoco"),      requires_note: false, max_minutes: 60 },
+    { id: "treinamento", label: t("pause.reasons.treinamento"), requires_note: false, max_minutes: 120 },
+    { id: "reuniao",     label: t("pause.reasons.reuniao"),     requires_note: true,  max_minutes: 60 },
+    { id: "outro",       label: t("pause.reasons.outro"),       requires_note: true  },
+  ];
+
+  const [reasons,  setReasons]  = useState<PauseReason[]>(defaultReasons);
   const [selected, setSelected] = useState<string | null>(null);
   const [note,     setNote]     = useState("");
   const [loading,  setLoading]  = useState(true);
 
-  // Load pause reasons from Config API; fall back to defaults on any error
+  // Load pause reasons from Config API; fall back to (translated) defaults on any error
   useEffect(() => {
     let cancelled = false;
     fetch("/config/agent_activity/pause_reasons")
@@ -52,9 +62,9 @@ export const PauseReasonModal: React.FC<Props> = ({ onConfirm, onCancel }) => {
     return () => { cancelled = true; };
   }, []);
 
-  const activeReason   = reasons.find(r => r.id === selected);
-  const needsNote      = activeReason?.requires_note ?? false;
-  const canConfirm     = selected !== null && (!needsNote || note.trim().length >= 3);
+  const activeReason = reasons.find(r => r.id === selected);
+  const needsNote    = activeReason?.requires_note ?? false;
+  const canConfirm   = selected !== null && (!needsNote || note.trim().length >= 3);
 
   const handleConfirm = () => {
     if (!selected || !activeReason) return;
@@ -77,17 +87,15 @@ export const PauseReasonModal: React.FC<Props> = ({ onConfirm, onCancel }) => {
       <div className="bg-white rounded-xl shadow-2xl w-full max-w-sm mx-4 overflow-hidden">
         {/* Header */}
         <div className="px-5 py-4 border-b border-border">
-          <h2 className="text-base font-semibold text-dark">Motivo da pausa</h2>
-          <p className="text-xs text-muted mt-0.5">
-            Selecione o motivo antes de pausar o recebimento de novos contatos.
-          </p>
+          <h2 className="text-base font-semibold text-dark">{t("pause.title")}</h2>
+          <p className="text-xs text-muted mt-0.5">{t("pause.subtitle")}</p>
         </div>
 
         {/* Body */}
         <div className="px-5 py-4">
           {loading ? (
             <div className="flex items-center justify-center py-6">
-              <span className="text-sm text-muted-light animate-pulse">Carregando motivos…</span>
+              <span className="text-sm text-muted-light animate-pulse">{t("pause.loading")}</span>
             </div>
           ) : (
             <div className="flex flex-col gap-2">
@@ -111,7 +119,7 @@ export const PauseReasonModal: React.FC<Props> = ({ onConfirm, onCancel }) => {
                   />
                   <span className="text-sm text-dark font-medium">{r.label}</span>
                   {r.requires_note && (
-                    <span className="ml-auto text-2xs text-muted-light font-normal">nota obrigatória</span>
+                    <span className="ml-auto text-2xs text-muted-light font-normal">{t("pause.noteRequired")}</span>
                   )}
                 </label>
               ))}
@@ -122,20 +130,20 @@ export const PauseReasonModal: React.FC<Props> = ({ onConfirm, onCancel }) => {
           {needsNote && (
             <div className="mt-3">
               <label className="block text-xs font-medium text-muted mb-1">
-                Observação <span className="text-red">*</span>
+                {t("pause.noteLabel")} <span className="text-red">*</span>
               </label>
               <textarea
                 autoFocus
                 value={note}
                 onChange={e => setNote(e.target.value)}
-                placeholder="Descreva brevemente o motivo…"
+                placeholder={t("pause.notePlaceholder")}
                 rows={3}
                 className="w-full text-sm border border-border-strong rounded-lg px-3 py-2
                   focus:outline-none focus:ring-2 focus:ring-warning/40 focus:border-warning
                   resize-none placeholder-muted-light"
               />
               {note.trim().length > 0 && note.trim().length < 3 && (
-                <p className="text-xs text-red mt-1">Mínimo de 3 caracteres.</p>
+                <p className="text-xs text-red mt-1">{t("pause.noteMin")}</p>
               )}
             </div>
           )}
@@ -148,7 +156,7 @@ export const PauseReasonModal: React.FC<Props> = ({ onConfirm, onCancel }) => {
             className="px-4 py-1.5 rounded-lg text-sm font-medium text-muted
               border border-border hover:bg-surface-alt transition-colors"
           >
-            Cancelar
+            {t("pause.cancel")}
           </button>
           <button
             onClick={handleConfirm}
@@ -157,7 +165,7 @@ export const PauseReasonModal: React.FC<Props> = ({ onConfirm, onCancel }) => {
               bg-warning hover:bg-warning-text disabled:opacity-40 disabled:cursor-not-allowed
               transition-colors"
           >
-            <Pause className="w-3.5 h-3.5 inline mr-1" aria-hidden="true" />Pausar
+            <Pause className="w-3.5 h-3.5 inline mr-1" aria-hidden="true" />{t("pause.confirmPause")}
           </button>
         </div>
       </div>
