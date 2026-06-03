@@ -1367,18 +1367,65 @@ async def _close_contact_layer(
             pass
         _ended_at_close = _ended_at_close or datetime.now(timezone.utc).isoformat()
 
+        # ── Fase A (queue-attended-model): derive business close_reason + outcome ──
+        # Transport reasons (client_disconnect/timeout/agent_done/agent_closed) stay
+        # on the wire untouched; the ANALYTICS event maps them to the business
+        # close_reason domain. outcome = last primary segment outcome (marker written
+        # by process_routed for AI and by the contact_closed handler for humans).
+        _transport_reason = "agent_done"
+        try:
+            _raw_closed = await redis_client.get(f"session:{session_id}:closed")
+            if _raw_closed:
+                _transport_reason = (
+                    _raw_closed if isinstance(_raw_closed, str) else _raw_closed.decode()
+                ) or "agent_done"
+        except Exception:
+            pass
+
+        _last_outcome_val = ""
+        _last_agent_kind  = ""
+        try:
+            _raw_lo = await redis_client.get(f"session:{session_id}:last_outcome")
+            if _raw_lo:
+                _lo = json.loads(_raw_lo if isinstance(_raw_lo, str) else _raw_lo.decode())
+                _last_outcome_val = _lo.get("outcome", "") or ""
+                _last_agent_kind  = _lo.get("agent_kind", "") or ""
+        except Exception:
+            pass
+
+        if _transport_reason == "client_disconnect":
+            # Served at least once → customer_disconnect; never served → customer_abandon
+            _close_reason_biz = (
+                "customer_disconnect" if _last_outcome_val else "customer_abandon"
+            )
+            _last_outcome_val = _last_outcome_val or "abandoned"
+        elif _transport_reason in ("timeout", "session_timeout"):
+            _close_reason_biz = "session_timeout"
+            _last_outcome_val = _last_outcome_val or "abandoned"
+        elif _transport_reason == "agent_closed":
+            _close_reason_biz = "agent_hangup"
+        else:  # "agent_done" — platform closed after agent completion
+            _close_reason_biz = (
+                "agent_hangup" if _last_agent_kind == "human" else "flow_complete"
+            )
+
         await _kafka_producer.send_and_wait(
             TOPIC_EVENTS,
             json.dumps({
-                "event_type":  "contact_closed",
-                "session_id":  session_id,
-                "tenant_id":   tenant_id,
-                "reason":      "agent_done",
-                "pool_id":     _pool_id_close,
-                "started_at":  _started_at_close,
-                "ended_at":    _ended_at_close,
-                "customer_id": _customer_id_close,
-                "channel":     _channel_close,
+                "event_type":   "contact_closed",
+                "session_id":   session_id,
+                "tenant_id":    tenant_id,
+                # "reason" stays hard-coded: this event is re-consumed by the bridge
+                # itself (process_contact_event) and customer_side classification +
+                # the Arc 14 re-entry guard depend on "agent_done". Wire untouched.
+                "reason":       "agent_done",
+                "close_reason": _close_reason_biz,      # business domain (analytics)
+                "outcome":      _last_outcome_val or None,
+                "pool_id":      _pool_id_close,
+                "started_at":   _started_at_close,
+                "ended_at":     _ended_at_close,
+                "customer_id":  _customer_id_close,
+                "channel":      _channel_close,
             }).encode("utf-8"),
         )
         logger.info(
@@ -2552,6 +2599,19 @@ async def process_routed(
         _part_outcome = agent_result.get("outcome") if agent_result else None
         # flow_id = skill-flow deployado que o agente executou (avaliação IA por skill)
         _part_flow_id = (((agent_result or {}).get("pipeline_state")) or {}).get("flow_id", "") or ""
+        # ── Fase A (queue-attended-model): record last primary outcome ────────
+        # Single source of truth for outcome is the segment; the session-level
+        # outcome in contact_closed is DERIVED from the last primary segment.
+        # _close_contact_layer() reads this marker to populate the analytics event.
+        if _part_role == "primary" and _part_outcome:
+            try:
+                await redis_client.setex(
+                    f"session:{session_id}:last_outcome",
+                    604800,
+                    json.dumps({"outcome": _part_outcome, "agent_kind": "ai"}),
+                )
+            except Exception:
+                pass
         asyncio.create_task(_publish_participant_event(
             session_id=session_id,
             tenant_id=tenant_id,
@@ -3493,6 +3553,21 @@ async def process_contact_event(
     reason      = msg.get("reason", "client_disconnect")
     instance_id = msg.get("instance_id", "")
 
+    # ── Fase A (queue-attended-model): record last primary outcome (human) ────
+    # The Console sends outcome via /api/agent_done → mcp-server now includes it
+    # in this event. Stored so _close_contact_layer() can derive the session-level
+    # outcome from the last primary segment (single source of truth = segment).
+    _done_outcome = msg.get("outcome", "") or ""
+    if _done_outcome:
+        try:
+            await redis_client.setex(
+                f"session:{session_id}:last_outcome",
+                604800,
+                json.dumps({"outcome": _done_outcome, "agent_kind": "human"}),
+            )
+        except Exception:
+            pass
+
     # ── Classify the close origin ─────────────────────────────────────────────
     #
     # customer_side=True  → customer disconnected or timed out, or the platform
@@ -3776,7 +3851,29 @@ async def process_contact_event(
                         segment_id=_hm_seg_id,
                         joined_at=_hm_joined_iso,
                         duration_ms=_hm_dur,
+                        # Fase A: customer left while human agent active → abandoned
+                        outcome=(
+                            "abandoned"
+                            if reason in ("client_disconnect", "timeout", "session_timeout")
+                            else None
+                        ),
                     ))
+
+                    # Fase A: keep the last_outcome marker consistent with the
+                    # segment ledger — the human segment is the LAST primary one,
+                    # so an earlier AI outcome (e.g. escalated_human) must not
+                    # leak into the session-level outcome derived at close.
+                    if reason in ("client_disconnect", "timeout", "session_timeout"):
+                        try:
+                            await redis_client.setex(
+                                f"session:{session_id}:last_outcome",
+                                604800,
+                                json.dumps(
+                                    {"outcome": "abandoned", "agent_kind": "human"}
+                                ),
+                            )
+                        except Exception:
+                            pass
 
                     # ── Decrement pool active_count via routing engine ─────────
                     # The customer_side path calls _restore_all_instances() to
@@ -4109,6 +4206,8 @@ async def process_contact_event(
                     joined_at=_ha_joined_iso,
                     duration_ms=_ha_duration_ms,
                     user_login=_ha_user_login,
+                    # Fase A: human outcome from /api/agent_done (Console)
+                    outcome=_done_outcome or None,
                 ))
 
                 # ── Decrement human pool active_count via routing engine ──────

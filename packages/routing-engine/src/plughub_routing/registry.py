@@ -1197,6 +1197,20 @@ class PoolRegistry:
                 pools.append(config)
         return pools
 
+    async def list_pools(self, tenant_id: str) -> list[PoolConfig]:
+        """
+        Returns all cached pool configurations for the tenant.
+        Fase B (queue-attended-model): used by AdmissionController to compute
+        Σ session_reservation for the shared-bucket limit.
+        """
+        pool_ids = await self._redis.smembers(_pool_set_key(tenant_id))
+        pools: list[PoolConfig] = []
+        for pool_id in pool_ids or []:
+            config = await self._get_pool_config(tenant_id, pool_id)
+            if config:
+                pools.append(config)
+        return pools
+
     async def _get_pool_config(
         self, tenant_id: str, pool_id: str
     ) -> PoolConfig | None:

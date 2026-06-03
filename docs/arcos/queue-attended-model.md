@@ -114,11 +114,37 @@ o modelo híbrido (*trunk reservation*):
   bloqueia novas entradas até drenar (convergência preguiçosa).
 - **Transferência cross-pool** para pool reservado cheio → cadeia de fallback (abaixo),
   sem regra nova.
+- **Billing: só o `max_session_total` é billável.** Reserva é *carving* do total
+  (subtraída do shared), nunca um item de cobrança próprio.
+- **Sem regra de "primeira entrada"**: a admissão roda a cada routing request contra o
+  bucket do pool solicitado. Contadores são SETs de session_id → re-publish (drain,
+  crash-recovery) é idempotente por construção. Escalação cross-pool = **migração de
+  bucket** (SADD+check no destino; sucesso → SREM origem; destino cheio → cadeia de
+  fallback, sessão permanece no bucket de origem). Pool de entrada sem reserva consome
+  shared — um canal pode drenar o shared inteiro; quem quer proteção, reserva (by design).
+- **Outage sempre aponta o pool**: `reservation_full` → o próprio pool; `shared_full` →
+  pool solicitado na entrada (segmento sintético carrega `pool_id` + causa).
+- **Release**: reconciler periódico no Routing (SSCAN buckets × marcador
+  `session:{id}:closed`) — lag de ~60s aceitável para gauge de admissão; TTL backstop.
 - **Feedback loop**: relatório de Capacidade mostra utilização da reserva (ociosidade =
-  preço da garantia) e do shared — calibragem por dado. Pricing: reserva de sessão é o
-  objeto billável natural dos reserve pools.
+  preço da garantia) e do shared — calibragem por dado.
 - **v2 (deferred)**: flag `burstable` — reserva como piso com empréstimo do shared
   (contabilidade bidirecional, fora do MVP).
+
+### Relação com `max_concurrent_sessions` (decisão 2026-06-03)
+
+São dimensões distintas com ciclos de vida distintos: **reserva** = carving do contrato
+(comercial, opt-in, raramente muda); **`max_concurrent_sessions`** = capacidade/deploy
+(operacional). Não unificar: reserva precisa ser opt-in (se todo deploy reservasse, o
+shared morre e o modelo volta a ser estático); pool humano nem tem valor de deploy
+(capacidade emergente dos agentes logados). UX futura: checkbox "Reservar sessões do
+contrato" pode espelhar um número só nos dois campos + warning quando divergirem.
+
+**Webhook pools**: a capacidade `max_concurrent_sessions = 500` (default) é **fictícia** —
+nada é pré-instanciado; o recurso real é a admissão. Decisão: remover o default; o campo
+vira *throttle opcional de downstream* (backpressure). Registrado em `TODO.md` com
+ressalva de **re-validar a lógica ao retomar** (impactos Arc 19: alocação, Bootstrap,
+Monitor).
 
 ## Falta de recurso no meio do contato — cadeia de fallback
 
@@ -207,7 +233,7 @@ emissão do evento analítico:
   de transporte 100% intacto. Pendente desta fase: sessão só-fila (nunca roteada) sem
   `meta` → evento sem tenant → sem fechamento no ClickHouse (resolvido por B/E).
 - **B — Admissão híbrida + outage na porta** (reserva/shared no Routing + sessão sempre criada + render de rejeição + metering skip). Independente da fila atendida.
-- **C — Fila atendida** (pool_kind, alocação de fila no Routing, dispensa, ContextStore posição/eta).
+- **C — Fila atendida** (pool_kind, alocação de fila no Routing, dispensa, ContextStore posição/eta). **Nota (descoberta B0)**: o padrão Queue Agent JÁ existe — `pool.queue_config{agent_type_id, skill_id}` ativa agente nativo de fila no `conversations.queued` (bridge `process_queued`); drain sinaliza `__agent_available__` → skill-flow escala. Fase C vira formalização: skill-flow de fila configurável **por pool** com default de tenant (ex. `agente_fila_v1`), `pool_kind` p/ analytics, e segmento próprio pro agente de fila (hoje roda com `instance_id=""`, sem slot).
 - **D — Relatório de Fila/SLA sobre segments** + demanda reprimida no Volume.
 - **E — Fechar-sempre / cadeia de fallback** (catch → notify+close → max_wait).
 

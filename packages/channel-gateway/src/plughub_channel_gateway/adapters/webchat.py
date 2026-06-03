@@ -143,6 +143,12 @@ class WebchatAdapter:
         # Populated when interaction.request with masked_fields is delivered to the client.
         self._pending_masked_fields: dict[str, list[str]] = {}
 
+        # Fase A (queue-attended-model): _close idempotency. close_from_platform
+        # followed by the run-loop teardown used to publish contact_closed TWICE
+        # (agent_done then client_disconnect) — the second overwrote the bridge's
+        # enriched sessions row in ClickHouse. Only the first close publishes.
+        self._close_fired: bool = False
+
     # ── Lifecycle ──────────────────────────────────────────────────────────────
 
     async def handle(self) -> None:
@@ -865,6 +871,12 @@ class WebchatAdapter:
     # ── Close ──────────────────────────────────────────────────────────────────
 
     async def _close(self, reason: str) -> None:
+        # Idempotency: the run loop's finally-path calls _close after
+        # close_from_platform already did — publishing twice overwrites the
+        # bridge's authoritative sessions row in analytics. First close wins.
+        if self._close_fired:
+            return
+        self._close_fired = True
         # Remove the keepalive key immediately so the watchdog doesn't see this
         # session as orphaned in the interval between now and the Kafka event
         # being processed by the bridge.
@@ -873,15 +885,24 @@ class WebchatAdapter:
         except Exception:
             pass
         started_at = await self._registry.unregister(self._contact_id)
+        # Fase A (queue-attended-model): map transport reason → business
+        # close_reason domain for the analytics event. "agent_done" is left
+        # unmapped — the bridge derives flow_complete/agent_hangup with full
+        # context and its later event wins in ClickHouse.
+        _biz_close_reason = {
+            "client_disconnect": "customer_disconnect",
+            "timeout":           "session_timeout",
+        }.get(reason)
         await self._publish_event(
             ContactClosedEvent(
-                contact_id  = self._contact_id,
-                session_id  = self._session_id,
-                tenant_id   = self._tenant_id,
-                reason      = reason,  # type: ignore[arg-type]
-                started_at  = started_at or self._started_at,
-                pool_id     = self._pool_id or "",
-                customer_id = self._contact_id,
+                contact_id   = self._contact_id,
+                session_id   = self._session_id,
+                tenant_id    = self._tenant_id,
+                reason       = reason,  # type: ignore[arg-type]
+                started_at   = started_at or self._started_at,
+                pool_id      = self._pool_id or "",
+                customer_id  = self._contact_id,
+                close_reason = _biz_close_reason,
             ).model_dump()
         )
         logger.info("contact_closed contact_id=%s reason=%s pool=%s", self._contact_id, reason, self._pool_id)

@@ -184,6 +184,8 @@ class RegistryEventHandler:
                 # Arc 19: webhook pool endpoint skill and capacity ceiling
                 webhook_skill_id         = pool_data.get("webhook_skill_id") or None,
                 max_concurrent_sessions  = pool_data.get("max_concurrent_sessions") or None,
+                # Fase B: hybrid session admission reservation
+                session_reservation      = pool_data.get("session_reservation") or None,
             )
             await self._pools.save_pool_config(config)
             logger.info(

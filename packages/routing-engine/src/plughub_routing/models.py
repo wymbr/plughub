@@ -181,6 +181,12 @@ class PoolConfig(BaseModel):
     # Included in the pool snapshot so the Monitor can display configured capacity.
     max_concurrent_sessions: int | None = None
 
+    # Fase B (queue-attended-model): hybrid session admission.
+    # session_reservation: dedicated session slots for this pool (cap AND guarantee),
+    # carved out of the installation's max_session_total. None = the pool draws from
+    # the shared bucket (total − Σ reservations). Billing is on the total only.
+    session_reservation: int | None = None
+
 
 # ─────────────────────────────────────────────
 # Queue

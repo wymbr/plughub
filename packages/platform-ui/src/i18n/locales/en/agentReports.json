@@ -24,6 +24,19 @@
       "noData": "No occupancy data in the period.",
       "hint": "Per-minute peak concurrency vs provisioned capacity (instances × max).",
       "cols": { "pool": "Pool", "peak": "Peak", "capacity": "Capacity", "headroom": "Headroom", "util": "Utilization" }
+    },
+    "queue": {
+      "title": "Wait and available over time",
+      "tableTitle": "Queue by pool",
+      "noData": "No queue data in the period.",
+      "waitAvg": "Avg wait (s)",
+      "available": "Available",
+      "cols": { "pool": "Pool", "contacts": "Contacts", "queued": "Queued", "abandoned": "Abandoned", "abandonRate": "Aband. %", "avgWait": "Avg wait", "p95Wait": "p95" }
+    },
+    "sla": {
+      "title": "SLA attainment by pool",
+      "noData": "No SLA data in the period.",
+      "cols": { "pool": "Pool", "target": "Target", "within": "Within", "attainment": "Attainment" }
     }
   },
   "tabs": {

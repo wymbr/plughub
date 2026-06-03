@@ -249,6 +249,15 @@ class ContactClosedEvent(BaseModel):
     ended_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     pool_id: str = ""
     customer_id: str = ""
+    # Fase A (queue-attended-model): business close_reason for analytics.
+    # Maps the transport reason to the close_reason domain (CLAUDE.md). The
+    # gateway maps what it knows; the bridge (better informed — e.g. abandon
+    # vs disconnect) emits a later contact_closed that wins in ClickHouse.
+    close_reason: str | None = None
+    # Event source — lets the analytics parser apply writer precedence:
+    # when reason == "agent_done" (platform-initiated close) the bridge's
+    # enriched contact_closed is authoritative and the gateway's is skipped.
+    source: Literal["channel_gateway"] = "channel_gateway"
 
 
 # ── Platform — outbound event (consumed from conversations.outbound) ────────

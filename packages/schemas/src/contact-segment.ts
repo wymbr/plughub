@@ -10,12 +10,24 @@ import { z } from "zod"
 
 // ─── Outcome domain ──────────────────────────────────────────────────────────
 
+// Fase A (queue-attended-model): closed domain for the segment ledger —
+// the segment is the single source of truth for outcome. Includes both
+// agent-declared outcomes (resolved/escalated_*/transferred/callback/failed/
+// suspended) and platform-detected ones (abandoned/timeout/outage). The agent
+// contract (OutcomeSchema in context-package.ts) is intentionally narrower:
+// agents cannot declare platform-detected outcomes.
 export const SegmentOutcomeSchema = z.enum([
   "resolved",
-  "escalated",
+  "escalated",          // legacy generic escalation
+  "escalated_human",
+  "escalated_ai",
   "transferred",
-  "abandoned",
-  "timeout",
+  "callback",
+  "failed",
+  "suspended",          // Arc 19 webhook sessions
+  "abandoned",          // platform-detected: customer left
+  "timeout",            // platform-detected: max wait / session TTL
+  "outage",             // platform-detected: no contracted resource (synthetic segment)
 ])
 
 export type SegmentOutcome = z.infer<typeof SegmentOutcomeSchema>

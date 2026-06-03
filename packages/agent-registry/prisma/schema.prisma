@@ -29,6 +29,9 @@ model Pool {
   webhook_skill_id       String?  // Required when channel_types includes "webhook"
   // Arc 19: max concurrent sessions for webhook pools (capacity limit); informational for others
   max_concurrent_sessions Int?
+  // Fase B (queue-attended-model): dedicated session slots (cap+guarantee) carved
+  // from the installation total. NULL = pool draws from the shared bucket.
+  session_reservation     Int?
   max_reply_time_ms      Int?    // Maximum reply time per customer message (ms). Optional.
   routing_expression     Json?
   evaluation_template_id String?

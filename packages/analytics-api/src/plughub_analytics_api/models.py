@@ -228,6 +228,17 @@ def parse_conversations_event(payload: dict[str, Any]) -> list[dict] | None:
         ]
 
     if event_type == "contact_closed":
+        # Fase A (queue-attended-model): the BRIDGE is the sole sessions-close
+        # writer. The gateway's contact_closed is a transport signal (consumed
+        # by the bridge to detect disconnects) — using it to upsert sessions
+        # races the bridge's enriched event (close_reason + outcome) in
+        # ReplacingMergeTree and overwrites it with NULLs (the webchat UI tears
+        # down the WS right after platform close, so the gateway event is often
+        # consumed LAST). The bridge fires _close_contact_layer for every
+        # customer_side close — including sessions with no agents — so no
+        # coverage is lost by skipping gateway-sourced events entirely.
+        if payload.get("source") == "channel_gateway":
+            return None
         started_at = payload.get("started_at")
         ended_at   = payload.get("ended_at") or _now()
         # Compute handle_time_ms from timestamps when available
@@ -252,7 +263,9 @@ def parse_conversations_event(payload: dict[str, Any]) -> list[dict] | None:
                 "customer_id":    payload.get("customer_id") or payload.get("contact_id"),
                 "opened_at":      started_at or ended_at,
                 "closed_at":      ended_at,
-                "close_reason":   payload.get("reason") or payload.get("close_reason"),
+                # Fase A (queue-attended-model): business close_reason takes priority;
+                # transport "reason" is only a legacy fallback for old producers.
+                "close_reason":   payload.get("close_reason") or payload.get("reason"),
                 "outcome":        payload.get("outcome"),
                 "handle_time_ms": handle_time_ms,
                 "timestamp":      ended_at,

@@ -2,6 +2,24 @@
 
 ---
 
+## Queue-Attended-Model Fase A — Padronização outcome/close_reason (2026-06-03)
+
+Antes: `sessions.outcome` NULL em 100%; `close_reason` com valores de transporte fora do domínio (`client_disconnect` 71×, `agent_done` 43×). Causa: dois escritores do `contact_closed` vazando o contrato de transporte pro ClickHouse, e o outcome nunca propagado.
+
+**orchestrator-bridge:** marcador `session:{id}:last_outcome` ({outcome, agent_kind}) escrito no agent_done IA primary, no contact_closed humano (Console agora propaga) e no abandono por disconnect; `_close_contact_layer` deriva `close_reason` de negócio (tabela transporte→domínio) + `outcome` e os inclui no evento analítico — `reason` de transporte permanece intacto (re-entrada/`customer_side` dependem dele). `participant_left` humano ganha `outcome` (Console ou `abandoned`).
+
+**mcp-server-plughub:** `/api/agent_done` inclui `outcome` no `contact_closed`.
+
+**channel-gateway:** `_close` do webchat idempotente (publicava 2× no fechamento por plataforma); `ContactClosedEvent` ganha `close_reason` + `source: channel_gateway`.
+
+**analytics-api:** **bridge é o escritor único** da linha de fechamento — eventos `source=channel_gateway` não fazem upsert de sessions (eliminava corrida no ReplacingMergeTree: o teardown do WS pelo widget chegava depois do evento enriquecido e sobrescrevia com NULL); prioridade `close_reason` > `reason` no parse.
+
+**schemas:** `SegmentOutcomeSchema`/`SessionOutcomeSchema` estendidos pro domínio completo do ledger (incl. `escalated_human/ai`, `suspended`, `outage`); contrato do agente (`OutcomeSchema`) intencionalmente intocado — plataforma detecta `abandoned/timeout/outage`, agente não declara.
+
+Validado: `flow_complete+resolved` (IA), `agent_hangup+resolved` (humano), `customer_disconnect+abandoned` (F5). Spec: `docs/arcos/queue-attended-model.md`.
+
+---
+
 ## Ocupação do Agente (busy ÷ disponível) (2026-06-02)
 
 Fecha a visão de produtividade do agente no relatório de disponibilidade.

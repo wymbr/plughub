@@ -1418,6 +1418,9 @@ export async function startServer(config: ServerConfig): Promise<void> {
         session_id:  sessionId,
         instance_id: instanceId,
         reason:      "agent_closed",
+        // Fase A (queue-attended-model): propagate the human agent's outcome so the
+        // bridge can derive the session-level outcome from the last primary segment.
+        outcome,
       })
 
       // NOTE: conversations.outbound (session.closed → customer WS close) is now

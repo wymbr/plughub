@@ -55,11 +55,22 @@ export const CloseReasonSchema = z.enum([
 ])
 export type CloseReason = z.infer<typeof CloseReasonSchema>
 
+// Fase A (queue-attended-model): session outcome is DERIVED from the last
+// primary segment (argMax by sequence_index) — never written independently.
+// Domain mirrors SegmentOutcomeSchema (contact-segment.ts) + legacy "error".
 export const SessionOutcomeSchema = z.enum([
   "resolved",
+  "escalated",
+  "escalated_human",
+  "escalated_ai",
   "transferred",
+  "callback",
+  "failed",
+  "suspended",
   "abandoned",
-  "error",
+  "timeout",
+  "outage",
+  "error",               // legacy
 ])
 export type SessionOutcome = z.infer<typeof SessionOutcomeSchema>
 

@@ -15,6 +15,7 @@ import httpx
 from aiokafka import AIOKafkaConsumer, AIOKafkaProducer
 import redis.asyncio as aioredis
 
+from .admission import AdmissionController, AdmissionDecision
 from .config import get_settings
 from .crash_detector import CrashDetector
 from .evaluation_consumer import EvaluationConsumer, load_evaluation_flow
@@ -37,6 +38,8 @@ async def run() -> None:
     instance_registry = InstanceRegistry(redis_client)
     pool_registry     = PoolRegistry(redis_client)
     router            = Router(instance_registry, pool_registry)
+    # Fase B (queue-attended-model): hybrid session admission control
+    admission         = AdmissionController(redis_client, pool_registry)
 
     # Pre-load routing namespace from Config API so first routing call already
     # has up-to-date SLA/scoring values (performance_score_weight, etc.).
@@ -112,6 +115,12 @@ async def run() -> None:
         _occupancy_sampler(redis_client, producer, settings)
     )
 
+    # Fase B — admission reconciler: releases admission-bucket slots of sessions
+    # whose session:{id}:closed marker exists (~60s lag, self-healing gauge).
+    admission_reconcile_task = asyncio.create_task(
+        _admission_reconciler(admission)
+    )
+
     # Start evaluation consumer in background (triggers SkillFlowEngine for sampled contacts)
     evaluation_flow = await load_evaluation_flow(
         skill_flow_service_url = settings.skill_flow_service_url,
@@ -136,13 +145,14 @@ async def run() -> None:
         async for msg in consumer:
             asyncio.create_task(
                 _process_message(msg.value, router, producer, settings,
-                                 redis_client, instance_registry)
+                                 redis_client, instance_registry, admission)
             )
     finally:
         listener_task.cancel()
         crash_detector_task.cancel()
         periodic_drain_task.cancel()
         occupancy_task.cancel()
+        admission_reconcile_task.cancel()
         evaluation_task.cancel()
         await consumer.stop()
         await producer.stop()
@@ -157,6 +167,7 @@ async def _process_message(
     settings,
     redis_client:      aioredis.Redis,
     instance_registry: InstanceRegistry,
+    admission:         "AdmissionController | None" = None,
 ) -> None:
     from pydantic import ValidationError
 
@@ -211,6 +222,27 @@ async def _process_message(
             )
             return
 
+    # ── Fase B (queue-attended-model): hybrid session admission ───────────────
+    # Runs on every routing request against the requested pool's bucket.
+    # SET-based counters make re-publishes (drain, crash-recovery) idempotent;
+    # cross-pool escalation migrates the bucket. Conference events are agent
+    # invitations on an existing session — never re-admitted.
+    if admission is not None and not event.conference_id and event.pool_id:
+        try:
+            _adm_pool = await router._pools.get_pool(event.tenant_id, event.pool_id)
+            decision  = await admission.admit(
+                event.tenant_id, event.session_id, _adm_pool, event.pool_id
+            )
+        except Exception as exc:
+            logger.warning(
+                "admission check failed (fail-open): session=%s — %s",
+                event.session_id, exc,
+            )
+            decision = AdmissionDecision(admitted=True)
+        if not decision.admitted:
+            await _emit_outage(event, decision, producer, redis_client)
+            return
+
     try:
         result = await router.route(event)
 
@@ -254,6 +286,122 @@ async def _process_message(
 
     except Exception as exc:
         logger.error("Error routing session: %s — %s", payload.get("session_id"), exc)
+
+
+async def _emit_outage(
+    event:        ConversationInboundEvent,
+    decision:     "AdmissionDecision",
+    producer:     AIOKafkaProducer,
+    redis_client: aioredis.Redis,
+) -> None:
+    """
+    Fase B (queue-attended-model): admission rejected → record the contact as
+    OUTAGE (demanda reprimida) and close it gracefully.
+
+    Emits:
+      1. conversations.events contact_closed — close_reason=no_resource,
+         outcome=outage, outage_cause (routing is the authoritative sessions
+         writer here: the bridge never closes a never-routed session, and
+         gateway-sourced events are skipped by the analytics parser).
+      2. conversations.participants — synthetic zero-duration segment
+         (agent_type=system, outcome=outage) pointing at the pool that lacked
+         resources; close_reason carries the cause (reservation_full|shared_full).
+      3. conversations.outbound session.closed — channel-gateway closes the
+         customer connection (rejection render: spec § rejeição na porta).
+
+    Also sets session:{id}:closed + contact_close_fired markers so the bridge's
+    re-entry (triggered by the gateway's own contact_closed on WS teardown)
+    does NOT fire _close_contact_layer and overwrite the outage row.
+    """
+    now_iso    = datetime.now(timezone.utc).isoformat()
+    session_id = event.session_id
+    seg_id     = str(uuid.uuid4())
+
+    # Markers FIRST — block bridge re-close + mark session closed platform-wide.
+    try:
+        await redis_client.setex(f"session:{session_id}:closed", 604_800, "no_resource")
+        await redis_client.setex(
+            f"session:{session_id}:contact_close_fired", 604_800, "1"
+        )
+    except Exception as exc:
+        logger.warning("outage: could not set close markers session=%s — %s",
+                       session_id, exc)
+
+    # 1. Authoritative sessions close row.
+    try:
+        await producer.send("conversations.events", value={
+            "event_type":   "contact_closed",
+            "session_id":   session_id,
+            "tenant_id":    event.tenant_id,
+            "reason":       "no_resource",      # transport (bridge ignores: not customer_side)
+            "close_reason": "no_resource",      # business domain
+            "outcome":      "outage",
+            "outage_cause": decision.cause,
+            "pool_id":      event.pool_id or "",
+            "channel":      event.channel,
+            "customer_id":  event.customer_id,
+            "started_at":   event.started_at or now_iso,
+            "ended_at":     now_iso,
+            "source":       "routing_engine",
+        })
+    except Exception as exc:
+        logger.error("outage: failed to publish contact_closed session=%s — %s",
+                     session_id, exc)
+
+    # 2. Synthetic segment — WHICH pool lacked resources (ledger = segments).
+    try:
+        await producer.send("conversations.participants", value={
+            "event_id":       str(uuid.uuid4()),
+            "type":           "participant_left",
+            "session_id":     session_id,
+            "tenant_id":      event.tenant_id,
+            "segment_id":     seg_id,
+            "participant_id": "system-admission",
+            "pool_id":        decision.pool_id or event.pool_id or "",
+            "agent_type_id":  "system",
+            "agent_type":     "system",
+            "role":           "primary",
+            "sequence_index": 0,
+            "joined_at":      now_iso,
+            "timestamp":      now_iso,
+            "duration_ms":    0,
+            "outcome":        "outage",
+            "close_reason":   decision.cause,   # reservation_full | shared_full
+        })
+    except Exception as exc:
+        logger.error("outage: failed to publish synthetic segment session=%s — %s",
+                     session_id, exc)
+
+    # 3. Close the customer connection (gateway renders the rejection).
+    try:
+        await producer.send("conversations.outbound", value={
+            "type":       "session.closed",
+            "contact_id": event.customer_id,
+            "session_id": session_id,
+            "channel":    event.channel,
+            "reason":     "agent_done",   # gateway transport Literal — analytics skips it
+        })
+    except Exception as exc:
+        logger.error("outage: failed to publish outbound close session=%s — %s",
+                     session_id, exc)
+
+    logger.warning(
+        "OUTAGE: session=%s tenant=%s pool=%s channel=%s cause=%s current=%s limit=%s",
+        session_id, event.tenant_id, event.pool_id, event.channel,
+        decision.cause, decision.current, decision.limit,
+    )
+
+
+async def _admission_reconciler(admission: "AdmissionController") -> None:
+    """Periodic release of admission slots held by closed sessions (Fase B)."""
+    while True:
+        try:
+            await asyncio.sleep(60)
+            await admission.reconcile()
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.warning("admission reconciler error — %s", exc)
 
 
 async def _persist_queued_contact(

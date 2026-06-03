@@ -173,6 +173,14 @@ export const PoolRegistrationSchema = z.object({
    */
   max_concurrent_sessions: z.number().int().positive().optional(),
   /**
+   * Fase B (queue-attended-model) — admissão híbrida de sessões.
+   * Fatia dedicada de sessões simultâneas deste pool (teto E garantia),
+   * subtraída do max_session_total da instalação. Ausente = o pool consome
+   * o bucket compartilhado (total − Σ reservas). Billing é só sobre o total.
+   * Invariante: Σ session_reservation ≤ max_session_total.
+   */
+  session_reservation:    z.number().int().positive().optional(),
+  /**
    * Tempo máximo (ms) para o agente responder a cada mensagem do cliente.
    * Opcional — sem limite por mensagem quando ausente.
    * Independente do sla_target_ms (que mede o atendimento como um todo).

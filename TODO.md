@@ -4,6 +4,25 @@
 
 ---
 
+## Webhook pools — eliminar capacidade fictícia (default 500)
+
+Decisão 2026-06-03 (discussão da admissão híbrida, `docs/arcos/queue-attended-model.md`):
+pool webhook não pré-instancia nada (slots de skill-flow são lógicos, execução on-demand),
+então `max_concurrent_sessions = 500` é capacidade fictícia — o recurso real que limita
+sessões webhook é a **admissão** (reserva ou shared), igual a todo pool.
+
+- Remover o `default(500)` do schema de deploy webhook.
+- `max_concurrent_sessions` em webhook vira **throttle opcional de downstream**
+  (backpressure p/ sistemas frágeis, ex. ERP): `available = max − busy` só quando
+  configurado; ausente → admissão é o único teto.
+- Ajustar `registry.py` (routing) e Monitor (exibição de capacidade webhook).
+
+> **Ressalva**: re-validar esta lógica quando retomarmos — conferir impactos no Arc 19
+> (alocação webhook, Bootstrap, Monitor/Pools que exibe capacidade configurada) antes
+> de implementar. Mudança de comportamento; não misturar com o smoke da Fase B.
+
+---
+
 ## Delegate v2 — itens restantes (pós-correção do ciclo de portabilidade)
 
 Modelo corrigido e backend verde em [`docs/arcos/delegate-workflow-io.md`](docs/arcos/delegate-workflow-io.md)

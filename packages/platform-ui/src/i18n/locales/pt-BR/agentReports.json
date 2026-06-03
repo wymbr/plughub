@@ -24,6 +24,19 @@
       "noData": "Sem dados de ocupação no período.",
       "hint": "Pico de concorrência por minuto vs capacidade provisionada (instâncias × max).",
       "cols": { "pool": "Pool", "peak": "Pico", "capacity": "Capacidade", "headroom": "Headroom", "util": "Utilização" }
+    },
+    "queue": {
+      "title": "Espera e disponíveis no tempo",
+      "tableTitle": "Fila por pool",
+      "noData": "Sem dados de fila no período.",
+      "waitAvg": "Espera média (s)",
+      "available": "Disponíveis",
+      "cols": { "pool": "Pool", "contacts": "Contatos", "queued": "Em fila", "abandoned": "Abandono", "abandonRate": "Aband. %", "avgWait": "Espera méd", "p95Wait": "p95" }
+    },
+    "sla": {
+      "title": "Atingimento de SLA por pool",
+      "noData": "Sem dados de SLA no período.",
+      "cols": { "pool": "Pool", "target": "Alvo", "within": "Dentro", "attainment": "Atingimento" }
     }
   },
   "tabs": {

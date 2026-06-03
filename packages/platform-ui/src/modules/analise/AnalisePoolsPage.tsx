@@ -8,7 +8,7 @@
 import React, { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import {
-  AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
+  AreaChart, Area, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
   PieChart, Pie, Cell,
 } from 'recharts'
 import { useAuth } from '@/auth/useAuth'
@@ -24,10 +24,21 @@ interface OccPoolRow  { pool_id: string; peak_concurrency: number; capacity: num
 interface OccTotal    { peak_concurrency: number; capacity: number; headroom: number; utilization: number | null }
 interface OccData     { series: unknown[]; by_pool: OccPoolRow[]; total: OccTotal | null }
 
+interface QSeriesRow  { bucket: string; pool_id: string; avg_wait_ms: number; contacts: number; queued: number; abandoned: number; max_queue_len: number; available_agents: number }
+interface QPoolRow    { pool_id: string; contacts: number; queued: number; abandoned: number; abandon_rate: number; avg_wait_ms: number; p95_wait_ms: number; sla_target_ms: number; within_sla: number; sla_eligible: number; sla_attainment: number | null }
+interface QueueData   { series: QSeriesRow[]; by_pool: QPoolRow[] }
+
 const CHANNEL_COLORS = ['#1B4F8A', '#2D9CDB', '#00B4D8', '#059669', '#D97706', '#7C3AED', '#DC2626', '#0891B2']
 
 function fmtBucket(b: string): string {
   return b.slice(5, 16).replace('T', ' ')
+}
+
+function fmtMs(ms: number): string {
+  if (!ms || ms < 1000) return '—'
+  const s = Math.round(ms / 1000)
+  if (s < 60) return `${s}s`
+  return `${Math.floor(s / 60)}m ${s % 60}s`
 }
 
 function colorFor(i: number): string {
@@ -209,6 +220,137 @@ const CapacitySubTab: React.FC<{ data: OccData | null; loading: boolean }> = ({ 
   )
 }
 
+// ── Queue (Fila) sub-tab ─────────────────────────────────────────────────────
+
+const FilaSubTab: React.FC<{ data: QueueData | null; loading: boolean }> = ({ data, loading }) => {
+  const { t } = useTranslation('agentReports')
+  if (loading) return (
+    <div className="h-48 flex items-center justify-center text-sm text-muted-light animate-pulse">{t('pools.volume.loading')}</div>
+  )
+  const rows = data?.by_pool ?? []
+  if (rows.length === 0) return (
+    <div className="h-48 flex items-center justify-center text-sm text-muted-light">{t('pools.queue.noData')}</div>
+  )
+
+  const byBucket = new Map<string, { bucket: string; _w: number; _n: number; available: number }>()
+  for (const r of (data?.series ?? [])) {
+    const b = byBucket.get(r.bucket) ?? { bucket: r.bucket, _w: 0, _n: 0, available: 0 }
+    if (r.avg_wait_ms > 0) { b._w += r.avg_wait_ms; b._n += 1 }
+    b.available += r.available_agents
+    byBucket.set(r.bucket, b)
+  }
+  const chartData = [...byBucket.values()]
+    .sort((a, b) => a.bucket.localeCompare(b.bucket))
+    .map(b => ({ bucket: b.bucket, wait_s: b._n ? Math.round(b._w / b._n / 1000) : 0, available: b.available }))
+
+  return (
+    <div className="flex flex-col gap-4">
+      <div className="bg-white rounded-lg border border-border overflow-hidden">
+        <div className="px-4 py-2.5 border-b border-border bg-surface-muted">
+          <p className="text-xs font-semibold text-muted uppercase tracking-wide">{t('pools.queue.title')}</p>
+        </div>
+        <div className="p-3">
+          <ResponsiveContainer width="100%" height={200}>
+            <LineChart data={chartData} margin={{ top: 4, right: 16, left: 0, bottom: 0 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#E5E7EB" />
+              <XAxis dataKey="bucket" tick={{ fontSize: 11 }} tickFormatter={fmtBucket} />
+              <YAxis tick={{ fontSize: 11 }} allowDecimals={false} />
+              <Tooltip labelFormatter={fmtBucket} />
+              <Legend iconSize={10} wrapperStyle={{ fontSize: 12 }} />
+              <Line type="monotone" dataKey="wait_s" name={t('pools.queue.waitAvg')} stroke="#D97706" strokeWidth={2} dot={false} />
+              <Line type="monotone" dataKey="available" name={t('pools.queue.available')} stroke="#2D9CDB" strokeWidth={2} dot={false} />
+            </LineChart>
+          </ResponsiveContainer>
+        </div>
+      </div>
+
+      <div className="bg-white rounded-lg border border-border overflow-hidden">
+        <div className="px-4 py-2.5 border-b border-border bg-surface-muted">
+          <p className="text-xs font-semibold text-muted uppercase tracking-wide">{t('pools.queue.tableTitle')}</p>
+        </div>
+        <table className="min-w-full text-xs border-collapse">
+          <thead className="bg-surface-muted">
+            <tr className="border-b border-border text-2xs text-muted uppercase">
+              <th className="text-left px-3 py-2">{t('pools.queue.cols.pool')}</th>
+              <th className="text-right px-3 py-2">{t('pools.queue.cols.contacts')}</th>
+              <th className="text-right px-3 py-2">{t('pools.queue.cols.queued')}</th>
+              <th className="text-right px-3 py-2">{t('pools.queue.cols.abandoned')}</th>
+              <th className="text-right px-3 py-2">{t('pools.queue.cols.abandonRate')}</th>
+              <th className="text-right px-3 py-2">{t('pools.queue.cols.avgWait')}</th>
+              <th className="text-right px-3 py-2">{t('pools.queue.cols.p95Wait')}</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r, i) => (
+              <tr key={i} className="border-b border-border hover:bg-surface-muted">
+                <td className="px-3 py-2 text-dark">{r.pool_id || '—'}</td>
+                <td className="px-3 py-2 text-right tabular-nums text-dark">{r.contacts}</td>
+                <td className="px-3 py-2 text-right tabular-nums text-muted">{r.queued}</td>
+                <td className="px-3 py-2 text-right tabular-nums text-warning-text">{r.abandoned}</td>
+                <td className="px-3 py-2 text-right tabular-nums text-muted">{Math.round((r.abandon_rate ?? 0) * 100)}%</td>
+                <td className="px-3 py-2 text-right tabular-nums text-dark">{fmtMs(r.avg_wait_ms)}</td>
+                <td className="px-3 py-2 text-right tabular-nums text-muted">{fmtMs(r.p95_wait_ms)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  )
+}
+
+// ── SLA sub-tab ──────────────────────────────────────────────────────────────
+
+const SlaSubTab: React.FC<{ data: QueueData | null; loading: boolean }> = ({ data, loading }) => {
+  const { t } = useTranslation('agentReports')
+  if (loading) return (
+    <div className="h-48 flex items-center justify-center text-sm text-muted-light animate-pulse">{t('pools.volume.loading')}</div>
+  )
+  const rows = (data?.by_pool ?? []).filter(r => r.sla_eligible > 0)
+  if (rows.length === 0) return (
+    <div className="h-48 flex items-center justify-center text-sm text-muted-light">{t('pools.sla.noData')}</div>
+  )
+
+  return (
+    <div className="bg-white rounded-lg border border-border overflow-hidden">
+      <div className="px-4 py-2.5 border-b border-border bg-surface-muted">
+        <p className="text-xs font-semibold text-muted uppercase tracking-wide">{t('pools.sla.title')}</p>
+      </div>
+      <table className="min-w-full text-xs border-collapse">
+        <thead className="bg-surface-muted">
+          <tr className="border-b border-border text-2xs text-muted uppercase">
+            <th className="text-left px-3 py-2">{t('pools.sla.cols.pool')}</th>
+            <th className="text-right px-3 py-2">{t('pools.sla.cols.target')}</th>
+            <th className="text-right px-3 py-2">{t('pools.sla.cols.within')}</th>
+            <th className="px-3 py-2 w-[40%]">{t('pools.sla.cols.attainment')}</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((r, i) => {
+            const a = r.sla_attainment ?? 0
+            const c = a >= 0.9 ? '#059669' : a >= 0.75 ? '#D97706' : '#DC2626'
+            return (
+              <tr key={i} className="border-b border-border hover:bg-surface-muted">
+                <td className="px-3 py-2 text-dark">{r.pool_id || '—'}</td>
+                <td className="px-3 py-2 text-right tabular-nums text-muted">{fmtMs(r.sla_target_ms)}</td>
+                <td className="px-3 py-2 text-right tabular-nums text-dark">{r.within_sla}/{r.sla_eligible}</td>
+                <td className="px-3 py-2">
+                  <div className="flex items-center gap-2">
+                    <div className="flex-1 h-2.5 rounded bg-surface-muted overflow-hidden">
+                      <div className="h-full rounded" style={{ width: `${Math.round(a * 100)}%`, backgroundColor: c }} />
+                    </div>
+                    <span className="text-2xs tabular-nums w-9 text-right" style={{ color: c }}>{Math.round(a * 100)}%</span>
+                  </div>
+                </td>
+              </tr>
+            )
+          })}
+        </tbody>
+      </table>
+    </div>
+  )
+}
+
 // ── Page ───────────────────────────────────────────────────────────────────────
 
 export default function AnalisePoolsPage() {
@@ -227,6 +369,7 @@ export default function AnalisePoolsPage() {
 
   const [volume,  setVolume]  = useState<VolumeData | null>(null)
   const [occ,     setOcc]     = useState<OccData | null>(null)
+  const [queue,   setQueue]   = useState<QueueData | null>(null)
   const [loading, setLoading] = useState(false)
 
   useEffect(() => {
@@ -258,10 +401,24 @@ export default function AnalisePoolsPage() {
     return () => { cancelled = true }
   }, [tenantId, subTab, fromDt, toDt, poolId])
 
+  useEffect(() => {
+    if (!tenantId || (subTab !== 'queue' && subTab !== 'sla')) return
+    let cancelled = false
+    setLoading(true)
+    const p = new URLSearchParams({ tenant_id: tenantId, from_dt: fromDt, to_dt: toDt, bucket: 'day' })
+    if (poolId) p.set('pool_id', poolId)
+    fetch(`/reports/pools/queue?${p}`)
+      .then(r => r.ok ? r.json() : Promise.reject(r.status))
+      .then((d: { data: QueueData }) => { if (!cancelled) setQueue(d.data ?? null) })
+      .catch(() => { if (!cancelled) setQueue(null) })
+      .finally(() => { if (!cancelled) setLoading(false) })
+    return () => { cancelled = true }
+  }, [tenantId, subTab, fromDt, toDt, poolId])
+
   if (!tenantId) return null
 
   const subtabs: Array<{ id: SubTab; soon?: boolean }> = [
-    { id: 'volume' }, { id: 'queue', soon: true }, { id: 'capacity' }, { id: 'sla', soon: true },
+    { id: 'volume' }, { id: 'queue' }, { id: 'capacity' }, { id: 'sla' },
   ]
 
   return (
@@ -303,7 +460,9 @@ export default function AnalisePoolsPage() {
       {/* Conteúdo */}
       <div className="flex-1 overflow-auto p-4">
         {subTab === 'volume'   && <VolumeSubTab data={volume} loading={loading} />}
+        {subTab === 'queue'    && <FilaSubTab data={queue} loading={loading} />}
         {subTab === 'capacity' && <CapacitySubTab data={occ} loading={loading} />}
+        {subTab === 'sla'      && <SlaSubTab data={queue} loading={loading} />}
       </div>
     </div>
   )

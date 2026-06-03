@@ -1338,6 +1338,9 @@ def _fetch_agent_performance(
         "tenant_id = {tenant_id:String}",
         f"started_at >= '{since}'",
         f"started_at < '{until}'",
+        # Fase B (queue-attended-model): synthetic admission segments
+        # (outage, duration 0) never count as agent performance.
+        "agent_type != 'system'",
     ]
     params: dict = {"tenant_id": tenant_id}
 
@@ -2340,14 +2343,29 @@ def _fetch_pools_queue(
     def _iso(v: Any) -> str:
         return v.isoformat() if hasattr(v, "isoformat") else str(v)
 
+    # Wait time is NOT stored on the session (wait_time_ms is NULL) and there is no
+    # `dequeued` event — so derive it: first primary segment start − session opened_at
+    # = time the contact waited until an agent picked it up. `queued` = waited >1s.
+    _seg_join = (
+        f"LEFT JOIN (SELECT session_id, min(started_at) AS started FROM {db}.segments FINAL "
+        f"WHERE tenant_id = {{tenant_id:String}} AND role = 'primary' "
+        f"AND agent_type != 'system' GROUP BY session_id) seg "
+        f"ON ss.session_id = seg.session_id"
+    )
+    _wait_expr = "if(seg.started >= ss.opened_at, toUnixTimestamp64Milli(seg.started) - toUnixTimestamp64Milli(ss.opened_at), NULL) AS wait_ms"
+
     s_series = _rows_to_dicts(client.query(f"""
         SELECT {bucket_fn}(opened_at)                              AS bucket,
                pool_id,
-               round(avg(wait_time_ms), 0)                         AS avg_wait_ms,
+               round(avg(wait_ms), 0)                              AS avg_wait_ms,
                count()                                             AS contacts,
-               countIf(wait_time_ms > 0)                           AS queued,
+               countIf(wait_ms > 1000)                             AS queued,
                countIf(close_reason IN {_ABANDON})                 AS abandoned
-        FROM {db}.sessions FINAL WHERE {s_where}
+        FROM (
+            SELECT ss.pool_id AS pool_id, ss.opened_at AS opened_at, ss.close_reason AS close_reason, {_wait_expr}
+            FROM (SELECT session_id, pool_id, opened_at, close_reason FROM {db}.sessions FINAL WHERE {s_where}) ss
+            {_seg_join}
+        )
         GROUP BY bucket, pool_id
     """, parameters=params))
 
@@ -2379,16 +2397,20 @@ def _fetch_pools_queue(
     by_pool = _rows_to_dicts(client.query(f"""
         SELECT pool_id,
                count()                                             AS contacts,
-               countIf(wait_time_ms > 0)                           AS queued,
+               countIf(wait_ms > 1000)                             AS queued,
                countIf(close_reason IN {_ABANDON})                 AS abandoned,
                round(countIf(close_reason IN {_ABANDON}) / greatest(count(), 1), 4) AS abandon_rate,
-               round(avg(wait_time_ms), 0)                         AS avg_wait_ms,
-               round(quantile(0.95)(wait_time_ms), 0)              AS p95_wait_ms,
+               round(avg(wait_ms), 0)                              AS avg_wait_ms,
+               round(quantile(0.95)(wait_ms), 0)                   AS p95_wait_ms,
                max(sla_target_ms)                                  AS sla_target_max,
-               countIf(sla_target_ms > 0 AND wait_time_ms <= sla_target_ms) AS within_sla,
+               countIf(sla_target_ms > 0 AND wait_ms <= sla_target_ms) AS within_sla,
                countIf(sla_target_ms > 0)                          AS sla_eligible
-        FROM {db}.sessions FINAL WHERE {s_where}
-        GROUP BY pool_id ORDER BY queued DESC
+        FROM (
+            SELECT ss.pool_id AS pool_id, ss.close_reason AS close_reason, ss.sla_target_ms AS sla_target_ms, {_wait_expr}
+            FROM (SELECT session_id, pool_id, opened_at, close_reason, sla_target_ms FROM {db}.sessions FINAL WHERE {s_where}) ss
+            {_seg_join}
+        )
+        GROUP BY pool_id ORDER BY contacts DESC
     """, parameters=params))
     for r in by_pool:
         r["sla_target_ms"] = r.pop("sla_target_max", 0)
