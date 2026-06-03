@@ -594,6 +594,26 @@ PARTITION BY toYYYYMM(date)
 ORDER BY (tenant_id, instance_id, pool_id, entered_at)
 """
 
+# ── Fase 2: pool_occupancy_peaks — pico de concorrência por minuto por pool.
+# Producer: Routing Engine occupancy sampler → Kafka pool.occupancy. ReplacingMerge
+# Tree em (tenant, pool, minute) deduplica flushes de múltiplas instâncias de routing.
+# pool_id = '__total__' carrega o pico instantâneo do tenant (≠ soma dos picos por pool).
+_DDL_POOL_OCCUPANCY_PEAKS = """
+CREATE TABLE IF NOT EXISTS {db}.pool_occupancy_peaks
+(
+    tenant_id            String,
+    pool_id              String,
+    minute               DateTime64(3, 'UTC'),
+    peak_concurrency     Int32,
+    provisioned_capacity Int32,
+    ingested_at          DateTime DEFAULT now(),
+    date                 Date
+)
+ENGINE = ReplacingMergeTree(ingested_at)
+PARTITION BY toYYYYMM(date)
+ORDER BY (tenant_id, pool_id, minute)
+"""
+
 # ── Arc 5: mv_agent_performance_daily — AggregatingMergeTree MV over segments.
 # Captures a row per (tenant_id, agent_type_id, pool_id, period_date) on every INSERT.
 # Uses State/Merge aggregating functions so partial results compose correctly.
@@ -705,6 +725,7 @@ _ALL_DDL = [
     _DDL_AGENT_PAUSE_INTERVALS,
     _DDL_AGENT_LOGIN_INTERVALS,
     _DDL_AGENT_POOL_INTERVALS,
+    _DDL_POOL_OCCUPANCY_PEAKS,
     _DDL_AGENT_BUSINESS_EVENTS,
     _DDL_CALIBRATION_EVENTS,
     # Materialized views — must come AFTER the source tables they reference.
@@ -1140,6 +1161,23 @@ class AnalyticsStore:
             "agent_pool_intervals",
             [_agent_pool_interval_row(row)],
             self._AGENT_POOL_INTERVAL_COLS,
+        )
+
+    # pool_occupancy_peaks (Fase 2)
+
+    _POOL_OCCUPANCY_COLS = [
+        "tenant_id", "pool_id", "minute", "peak_concurrency", "provisioned_capacity",
+        # ingested_at omitted — DEFAULT now()
+        "date",
+    ]
+
+    async def upsert_pool_occupancy_peak(self, row: dict) -> None:
+        """Insert a per-minute occupancy peak (pool or '__total__')."""
+        await asyncio.to_thread(
+            self._insert,
+            "pool_occupancy_peaks",
+            [_pool_occupancy_row(row)],
+            self._POOL_OCCUPANCY_COLS,
         )
 
     # journey_events (Arc 10) — REMOVED (Arc 19 Fase F)
@@ -1658,6 +1696,21 @@ def _agent_pool_interval_row(d: dict) -> list:
         d.get("duration_ms") or None,
         # ingested_at — DEFAULT now(), omitted so ClickHouse fills it
         _today_utc(in_ts),
+    ]
+
+
+def _pool_occupancy_row(d: dict) -> list:
+    """Row builder for pool_occupancy_peaks (Fase 2)."""
+    minute_ts = d.get("minute")
+    minute_dt = _parse_dt(minute_ts) if minute_ts else datetime.utcnow()
+    return [
+        d.get("tenant_id", ""),
+        d.get("pool_id", ""),
+        minute_dt,
+        int(d.get("peak_concurrency") or 0),
+        int(d.get("provisioned_capacity") or 0),
+        # ingested_at — DEFAULT now()
+        _today_utc(minute_ts),
     ]
 
 

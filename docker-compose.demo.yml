@@ -526,6 +526,7 @@ services:
           journey.events
           agent.events
           calibration.events
+          pool.occupancy
         "
         for topic in $$TOPICS; do
           $$KAFKA --bootstrap-server $$BROKER --create --if-not-exists \

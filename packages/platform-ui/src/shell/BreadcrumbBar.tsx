@@ -55,6 +55,7 @@ const BREADCRUMBS: Record<string, BreadcrumbDef> = {
   // ── Analytics ──────────────────────────────────────────────────────────────
   '/analise/sessions':       { section: 'nav.analise', sectionHref: '/analise/sessions',  page: 'nav.analise.sessions' },
   '/analise/agents':         { section: 'nav.analise', sectionHref: '/analise/sessions',  page: 'nav.analise.agents' },
+  '/analise/pools':          { section: 'nav.analise', sectionHref: '/analise/sessions',  page: 'nav.analise.pools' },
   '/analise/events':         { section: 'nav.analise', sectionHref: '/analise/sessions',  page: 'nav.analise.events' },
   '/analise/processos':      { section: 'nav.analise', sectionHref: '/analise/sessions',  page: 'nav.analise.processes' },
   '/analise/quality':        { section: 'nav.analise', sectionHref: '/analise/sessions',  page: 'nav.analise.quality' },

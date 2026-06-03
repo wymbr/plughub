@@ -2177,6 +2177,328 @@ def _fetch_agent_timeline(
     }
 
 
+# ─── /reports/pools/volume (Fase 2 — volumetria por pool/canal/endpoint) ──────
+
+async def query_pools_volume(
+    client:           Any,
+    database:         str,
+    tenant_id:        str,
+    from_dt:          str | None = None,
+    to_dt:            str | None = None,
+    *,
+    pool_id:          str | None = None,
+    channel:          str | None = None,
+    bucket:           str | None = None,
+    accessible_pools: list[str] | None = None,
+) -> dict:
+    """
+    Volume de contatos por (bucket, pool, canal, endpoint=DNIS) a partir de `sessions`.
+    Retorna series (no tempo) + by_channel (donut) + by_endpoint (drill-down) + totals.
+    """
+    since = _ch_fmt(from_dt) if from_dt else _default_from()
+    until = _ch_fmt(to_dt, upper=True) if to_dt else _default_to()
+    bkt   = bucket if bucket in ("hour", "day") else "hour"
+    empty = {"series": [], "by_channel": [], "by_endpoint": [], "totals": {"contacts": 0}}
+    if accessible_pools is not None and len(accessible_pools) == 0:
+        return {"data": empty, "meta": {"from_dt": since, "to_dt": until, "bucket": bkt}}
+    try:
+        return await asyncio.to_thread(
+            _fetch_pools_volume, client, database, tenant_id, since, until, pool_id, channel, bkt, accessible_pools,
+        )
+    except Exception as exc:
+        logger.warning("query_pools_volume failed tenant=%s: %s", tenant_id, exc)
+        return {"data": empty, "error": "data_unavailable"}
+
+
+def _fetch_pools_volume(
+    client:           Any,
+    db:               str,
+    tenant_id:        str,
+    since:            str,
+    until:            str,
+    pool_id:          str | None,
+    channel:          str | None,
+    bucket:           str,
+    accessible_pools: list[str] | None,
+) -> dict:
+    bucket_fn = "toStartOfHour" if bucket == "hour" else "toStartOfDay"
+    conditions = [
+        "tenant_id = {tenant_id:String}",
+        f"opened_at >= '{since}'",
+        f"opened_at <  '{until}'",
+    ]
+    params: dict = {"tenant_id": tenant_id}
+    if pool_id:
+        conditions.append("pool_id = {pool_id:String}")
+        params["pool_id"] = pool_id
+    if channel:
+        conditions.append("channel = {channel:String}")
+        params["channel"] = channel
+    _apply_pool_scope(conditions, accessible_pools)
+    where = " AND ".join(conditions)
+
+    def _iso(v: Any) -> str:
+        return v.isoformat() if hasattr(v, "isoformat") else str(v)
+
+    series = _rows_to_dicts(client.query(f"""
+        SELECT {bucket_fn}(opened_at)   AS bucket,
+               pool_id, channel,
+               coalesce(dnis, '')       AS endpoint,
+               count()                  AS contacts
+        FROM {db}.sessions FINAL
+        WHERE {where}
+        GROUP BY bucket, pool_id, channel, endpoint
+        ORDER BY bucket
+    """, parameters=params))
+    for r in series:
+        r["bucket"] = _iso(r["bucket"])
+
+    by_channel = _rows_to_dicts(client.query(f"""
+        SELECT channel, count() AS contacts
+        FROM {db}.sessions FINAL WHERE {where}
+        GROUP BY channel ORDER BY contacts DESC
+    """, parameters=params))
+
+    by_endpoint = _rows_to_dicts(client.query(f"""
+        SELECT channel, coalesce(dnis, '') AS endpoint, count() AS contacts
+        FROM {db}.sessions FINAL WHERE {where}
+        GROUP BY channel, endpoint ORDER BY contacts DESC
+    """, parameters=params))
+
+    total_res = client.query(f"SELECT count() FROM {db}.sessions FINAL WHERE {where}", parameters=params)
+    total = total_res.result_rows[0][0] if total_res.result_rows else 0
+
+    return {
+        "data": {"series": series, "by_channel": by_channel, "by_endpoint": by_endpoint, "totals": {"contacts": total}},
+        "meta": {"from_dt": since, "to_dt": until, "bucket": bucket},
+    }
+
+
+# ─── /reports/pools/queue (Fase 2 — fila + SLA por pool) ─────────────────────
+
+async def query_pools_queue(
+    client:           Any,
+    database:         str,
+    tenant_id:        str,
+    from_dt:          str | None = None,
+    to_dt:            str | None = None,
+    *,
+    pool_id:          str | None = None,
+    bucket:           str | None = None,
+    accessible_pools: list[str] | None = None,
+) -> dict:
+    """
+    Comportamento de fila por pool: espera real (`sessions.wait_time_ms`), abandono,
+    disponíveis (`queue_events.available_agents`), tamanho de fila, e SLA
+    (espera vs `sessions.sla_target_ms`). series (no tempo) + by_pool (agregado).
+    """
+    since = _ch_fmt(from_dt) if from_dt else _default_from()
+    until = _ch_fmt(to_dt, upper=True) if to_dt else _default_to()
+    bkt   = bucket if bucket in ("hour", "day") else "hour"
+    empty = {"series": [], "by_pool": []}
+    if accessible_pools is not None and len(accessible_pools) == 0:
+        return {"data": empty, "meta": {"from_dt": since, "to_dt": until, "bucket": bkt}}
+    try:
+        return await asyncio.to_thread(
+            _fetch_pools_queue, client, database, tenant_id, since, until, pool_id, bkt, accessible_pools,
+        )
+    except Exception as exc:
+        logger.warning("query_pools_queue failed tenant=%s: %s", tenant_id, exc)
+        return {"data": empty, "error": "data_unavailable"}
+
+
+def _fetch_pools_queue(
+    client:           Any,
+    db:               str,
+    tenant_id:        str,
+    since:            str,
+    until:            str,
+    pool_id:          str | None,
+    bucket:           str,
+    accessible_pools: list[str] | None,
+) -> dict:
+    bucket_fn = "toStartOfHour" if bucket == "hour" else "toStartOfDay"
+
+    # Sessions side (wait, abandono, SLA) — keyed on opened_at.
+    s_conditions = ["tenant_id = {tenant_id:String}", f"opened_at >= '{since}'", f"opened_at <  '{until}'"]
+    params: dict = {"tenant_id": tenant_id}
+    if pool_id:
+        s_conditions.append("pool_id = {pool_id:String}")
+        params["pool_id"] = pool_id
+    _apply_pool_scope(s_conditions, accessible_pools)
+    s_where = " AND ".join(s_conditions)
+
+    # Queue-events side (tamanho de fila, disponíveis) — keyed on timestamp.
+    q_conditions = ["tenant_id = {tenant_id:String}", f"timestamp >= '{since}'", f"timestamp <  '{until}'"]
+    if pool_id:
+        q_conditions.append("pool_id = {pool_id:String}")
+    _apply_pool_scope(q_conditions, accessible_pools)
+    q_where = " AND ".join(q_conditions)
+
+    _ABANDON = "('customer_abandon', 'max_wait_exceeded')"
+
+    def _iso(v: Any) -> str:
+        return v.isoformat() if hasattr(v, "isoformat") else str(v)
+
+    s_series = _rows_to_dicts(client.query(f"""
+        SELECT {bucket_fn}(opened_at)                              AS bucket,
+               pool_id,
+               round(avg(wait_time_ms), 0)                         AS avg_wait_ms,
+               count()                                             AS contacts,
+               countIf(wait_time_ms > 0)                           AS queued,
+               countIf(close_reason IN {_ABANDON})                 AS abandoned
+        FROM {db}.sessions FINAL WHERE {s_where}
+        GROUP BY bucket, pool_id
+    """, parameters=params))
+
+    q_series = _rows_to_dicts(client.query(f"""
+        SELECT {bucket_fn}(timestamp)                              AS bucket,
+               pool_id,
+               max(queue_position)                                 AS max_queue_len,
+               round(avg(available_agents), 1)                     AS available_agents
+        FROM {db}.queue_events FINAL WHERE {q_where}
+        GROUP BY bucket, pool_id
+    """, parameters=params))
+
+    merged: dict = {}
+    for r in s_series:
+        k = (r["pool_id"], _iso(r["bucket"]))
+        merged[k] = {"bucket": _iso(r["bucket"]), "pool_id": r["pool_id"],
+                     "avg_wait_ms": int(r.get("avg_wait_ms") or 0), "contacts": int(r.get("contacts") or 0),
+                     "queued": int(r.get("queued") or 0), "abandoned": int(r.get("abandoned") or 0),
+                     "max_queue_len": 0, "available_agents": 0}
+    for r in q_series:
+        k = (r["pool_id"], _iso(r["bucket"]))
+        m = merged.setdefault(k, {"bucket": _iso(r["bucket"]), "pool_id": r["pool_id"],
+                                  "avg_wait_ms": 0, "contacts": 0, "queued": 0, "abandoned": 0,
+                                  "max_queue_len": 0, "available_agents": 0})
+        m["max_queue_len"]    = int(r.get("max_queue_len") or 0)
+        m["available_agents"] = float(r.get("available_agents") or 0)
+    series = sorted(merged.values(), key=lambda x: (x["bucket"], x["pool_id"]))
+
+    by_pool = _rows_to_dicts(client.query(f"""
+        SELECT pool_id,
+               count()                                             AS contacts,
+               countIf(wait_time_ms > 0)                           AS queued,
+               countIf(close_reason IN {_ABANDON})                 AS abandoned,
+               round(countIf(close_reason IN {_ABANDON}) / greatest(count(), 1), 4) AS abandon_rate,
+               round(avg(wait_time_ms), 0)                         AS avg_wait_ms,
+               round(quantile(0.95)(wait_time_ms), 0)              AS p95_wait_ms,
+               max(sla_target_ms)                                  AS sla_target_max,
+               countIf(sla_target_ms > 0 AND wait_time_ms <= sla_target_ms) AS within_sla,
+               countIf(sla_target_ms > 0)                          AS sla_eligible
+        FROM {db}.sessions FINAL WHERE {s_where}
+        GROUP BY pool_id ORDER BY queued DESC
+    """, parameters=params))
+    for r in by_pool:
+        r["sla_target_ms"] = r.pop("sla_target_max", 0)
+        elig = int(r.get("sla_eligible") or 0)
+        r["sla_attainment"] = round(int(r.get("within_sla") or 0) / elig, 4) if elig else None
+
+    return {"data": {"series": series, "by_pool": by_pool},
+            "meta": {"from_dt": since, "to_dt": until, "bucket": bucket}}
+
+
+# ─── /reports/pools/occupancy (Fase 2 — concorrência vs capacidade) ───────────
+
+async def query_pools_occupancy(
+    client:           Any,
+    database:         str,
+    tenant_id:        str,
+    from_dt:          str | None = None,
+    to_dt:            str | None = None,
+    *,
+    pool_id:          str | None = None,
+    bucket:           str | None = None,
+    accessible_pools: list[str] | None = None,
+) -> dict:
+    """
+    Pico de concorrência vs capacidade provisionada, de `pool_occupancy_peaks`
+    (re-agrega o pico por minuto para hour/day via max). series + by_pool + total.
+    """
+    since = _ch_fmt(from_dt) if from_dt else _default_from()
+    until = _ch_fmt(to_dt, upper=True) if to_dt else _default_to()
+    bkt   = bucket if bucket in ("hour", "day") else "hour"
+    empty = {"series": [], "by_pool": [], "total": None}
+    if accessible_pools is not None and len(accessible_pools) == 0:
+        return {"data": empty, "meta": {"from_dt": since, "to_dt": until, "bucket": bkt}}
+    try:
+        return await asyncio.to_thread(
+            _fetch_pools_occupancy, client, database, tenant_id, since, until, pool_id, bkt, accessible_pools,
+        )
+    except Exception as exc:
+        logger.warning("query_pools_occupancy failed tenant=%s: %s", tenant_id, exc)
+        return {"data": empty, "error": "data_unavailable"}
+
+
+def _fetch_pools_occupancy(
+    client:           Any,
+    db:               str,
+    tenant_id:        str,
+    since:            str,
+    until:            str,
+    pool_id:          str | None,
+    bucket:           str,
+    accessible_pools: list[str] | None,
+) -> dict:
+    bucket_fn = "toStartOfHour" if bucket == "hour" else "toStartOfDay"
+    conditions = ["tenant_id = {tenant_id:String}", f"minute >= '{since}'", f"minute <  '{until}'",
+                  "pool_id != '__total__'"]
+    params: dict = {"tenant_id": tenant_id}
+    if pool_id:
+        conditions.append("pool_id = {pool_id:String}")
+        params["pool_id"] = pool_id
+    _apply_pool_scope(conditions, accessible_pools)
+    where = " AND ".join(conditions)
+
+    def _iso(v: Any) -> str:
+        return v.isoformat() if hasattr(v, "isoformat") else str(v)
+
+    series = _rows_to_dicts(client.query(f"""
+        SELECT {bucket_fn}(minute)        AS bucket,
+               pool_id,
+               max(peak_concurrency)      AS peak_concurrency,
+               max(provisioned_capacity)  AS capacity
+        FROM {db}.pool_occupancy_peaks FINAL
+        WHERE {where}
+        GROUP BY bucket, pool_id ORDER BY bucket
+    """, parameters=params))
+    for r in series:
+        r["bucket"] = _iso(r["bucket"])
+
+    by_pool = _rows_to_dicts(client.query(f"""
+        SELECT pool_id,
+               max(peak_concurrency)      AS peak_concurrency,
+               max(provisioned_capacity)  AS capacity
+        FROM {db}.pool_occupancy_peaks FINAL
+        WHERE {where}
+        GROUP BY pool_id ORDER BY peak_concurrency DESC
+    """, parameters=params))
+    for r in by_pool:
+        cap  = int(r.get("capacity") or 0)
+        peak = int(r.get("peak_concurrency") or 0)
+        r["headroom"]    = max(cap - peak, 0)
+        r["utilization"] = round(peak / cap, 4) if cap else None
+
+    # Total (tenant-wide) — only for unscoped callers; the row is pool_id='__total__'.
+    total = None
+    if accessible_pools is None:
+        tot = _rows_to_dicts(client.query(f"""
+            SELECT max(peak_concurrency) AS peak_concurrency, max(provisioned_capacity) AS capacity
+            FROM {db}.pool_occupancy_peaks FINAL
+            WHERE tenant_id = {{tenant_id:String}} AND minute >= '{since}' AND minute < '{until}'
+              AND pool_id = '__total__'
+        """, parameters={"tenant_id": tenant_id}))
+        if tot:
+            cap  = int(tot[0].get("capacity") or 0)
+            peak = int(tot[0].get("peak_concurrency") or 0)
+            total = {"peak_concurrency": peak, "capacity": cap,
+                     "headroom": max(cap - peak, 0), "utilization": round(peak / cap, 4) if cap else None}
+
+    return {"data": {"series": series, "by_pool": by_pool, "total": total},
+            "meta": {"from_dt": since, "to_dt": until, "bucket": bucket}}
+
+
 # ─── /reports/events — unified event stream ───────────────────────────────────
 #
 # UNION ALL across five source tables:

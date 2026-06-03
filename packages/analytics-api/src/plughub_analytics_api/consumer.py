@@ -66,6 +66,7 @@ from .models import (
     parse_mcp_audit_event,
     parse_agent_business_event,
     parse_calibration_event,
+    parse_pool_occupancy,
 )
 from .segment_enricher import SegmentEnricher
 
@@ -131,6 +132,7 @@ _TOPICS = [
     "mcp.audit",
     "agent.events",
     "calibration.events",
+    "pool.occupancy",
 ]
 
 # Maps topic → parser function.
@@ -152,6 +154,7 @@ _PARSERS = {
     "mcp.audit":                  parse_mcp_audit_event,
     "agent.events":               parse_agent_business_event,
     "calibration.events":         parse_calibration_event,
+    "pool.occupancy":             parse_pool_occupancy,
 }
 
 # Topics that require segment_id enrichment before being passed to the parser.
@@ -783,6 +786,8 @@ async def _write_row(
             await store.insert_agent_business_event(row)
         elif table == "calibration_events":
             await store.insert_calibration_event(row)
+        elif table == "pool_occupancy_peaks":
+            await store.upsert_pool_occupancy_peak(row)
         else:
             logger.warning("Unknown table=%s from topic=%s offset=%s", table, topic, offset)
     except Exception as exc:

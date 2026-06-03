@@ -1,5 +1,31 @@
 {
   "title": "Relatórios de Agentes",
+  "pools": {
+    "title": "Relatórios de Pools",
+    "subtabs": { "volume": "Volume", "queue": "Fila", "capacity": "Capacidade", "sla": "SLA" },
+    "soon": "Em breve",
+    "filter": { "from": "De", "to": "a", "pool": "Pool", "channel": "Canal", "allPools": "Todos os pools", "allChannels": "Todos os canais" },
+    "kpi": { "contacts": "Contatos" },
+    "volume": {
+      "title": "Volume no tempo",
+      "byChannel": "Por canal",
+      "byEndpoint": "Por endpoint",
+      "noData": "Sem dados no período.",
+      "loading": "Carregando…",
+      "noPool": "(sem pool)",
+      "cols": { "channel": "Canal", "endpoint": "Endpoint", "contacts": "Contatos" }
+    },
+    "capacity": {
+      "title": "Concorrência vs capacidade",
+      "totalPeak": "Pico total",
+      "totalCap": "Capacidade total",
+      "headroom": "Folga (headroom)",
+      "utilization": "Utilização",
+      "noData": "Sem dados de ocupação no período.",
+      "hint": "Pico de concorrência por minuto vs capacidade provisionada (instâncias × max).",
+      "cols": { "pool": "Pool", "peak": "Pico", "capacity": "Capacidade", "headroom": "Headroom", "util": "Utilização" }
+    }
+  },
   "tabs": {
     "humans":       "Agentes Humanos",
     "ai":           "Agentes IA",

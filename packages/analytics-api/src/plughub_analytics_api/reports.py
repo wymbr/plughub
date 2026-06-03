@@ -47,6 +47,9 @@ from .reports_query import (
     query_segments_report,
     query_agent_availability,
     query_agent_timeline,
+    query_pools_volume,
+    query_pools_queue,
+    query_pools_occupancy,
     query_events,
     query_session_complexity,
     query_sessions_report,
@@ -917,6 +920,89 @@ async def get_agent_timeline(
         accessible_pools = pool_principal.accessible_pools,
     )
     return _respond(data, "json", "agent_timeline.csv")
+
+
+@router.get("/pools/volume")
+async def get_pools_volume(
+    request:        Request,
+    tenant_id:      str           = Query(...,  description="Tenant identifier"),
+    from_dt:        Optional[str] = Query(None, description="ISO8601 start (default: 7d ago)"),
+    to_dt:          Optional[str] = Query(None, description="ISO8601 end (default: now)"),
+    pool_id:        Optional[str] = Query(None, description="Filter by pool_id"),
+    channel:        Optional[str] = Query(None, description="Filter by channel"),
+    bucket:         Optional[str] = Query(None, pattern="^(hour|day)$", description="Time bucket"),
+    pool_principal: PoolPrincipal = Depends(optional_pool_principal),
+) -> Response:
+    """
+    Fase 2 — volumetria de contatos por (bucket, pool, canal, endpoint=DNIS).
+    series (no tempo) + by_channel + by_endpoint + totals. Escopo por accessible_pools.
+    """
+    data = await query_pools_volume(
+        client           = request.app.state.store.new_client(),
+        database         = request.app.state.store._database,
+        tenant_id        = tenant_id,
+        from_dt          = from_dt,
+        to_dt            = to_dt,
+        pool_id          = pool_id,
+        channel          = channel,
+        bucket           = bucket,
+        accessible_pools = pool_principal.accessible_pools,
+    )
+    return _respond(data, "json", "pools_volume.csv")
+
+
+@router.get("/pools/queue")
+async def get_pools_queue(
+    request:        Request,
+    tenant_id:      str           = Query(...,  description="Tenant identifier"),
+    from_dt:        Optional[str] = Query(None, description="ISO8601 start (default: 7d ago)"),
+    to_dt:          Optional[str] = Query(None, description="ISO8601 end (default: now)"),
+    pool_id:        Optional[str] = Query(None, description="Filter by pool_id"),
+    bucket:         Optional[str] = Query(None, pattern="^(hour|day)$", description="Time bucket"),
+    pool_principal: PoolPrincipal = Depends(optional_pool_principal),
+) -> Response:
+    """
+    Fase 2 — fila + SLA por pool: espera real, abandono, disponíveis, tamanho de
+    fila (series) + abandono/p95/SLA (by_pool). Escopo por accessible_pools.
+    """
+    data = await query_pools_queue(
+        client           = request.app.state.store.new_client(),
+        database         = request.app.state.store._database,
+        tenant_id        = tenant_id,
+        from_dt          = from_dt,
+        to_dt            = to_dt,
+        pool_id          = pool_id,
+        bucket           = bucket,
+        accessible_pools = pool_principal.accessible_pools,
+    )
+    return _respond(data, "json", "pools_queue.csv")
+
+
+@router.get("/pools/occupancy")
+async def get_pools_occupancy(
+    request:        Request,
+    tenant_id:      str           = Query(...,  description="Tenant identifier"),
+    from_dt:        Optional[str] = Query(None, description="ISO8601 start (default: 7d ago)"),
+    to_dt:          Optional[str] = Query(None, description="ISO8601 end (default: now)"),
+    pool_id:        Optional[str] = Query(None, description="Filter by pool_id"),
+    bucket:         Optional[str] = Query(None, pattern="^(hour|day)$", description="Time bucket"),
+    pool_principal: PoolPrincipal = Depends(optional_pool_principal),
+) -> Response:
+    """
+    Fase 2 — pico de concorrência vs capacidade provisionada por pool (+ total do
+    tenant). series (no tempo) + by_pool (headroom/utilization) + total.
+    """
+    data = await query_pools_occupancy(
+        client           = request.app.state.store.new_client(),
+        database         = request.app.state.store._database,
+        tenant_id        = tenant_id,
+        from_dt          = from_dt,
+        to_dt            = to_dt,
+        pool_id          = pool_id,
+        bucket           = bucket,
+        accessible_pools = pool_principal.accessible_pools,
+    )
+    return _respond(data, "json", "pools_occupancy.csv")
 
 
 # ─── /reports/events — unified event stream ───────────────────────────────────

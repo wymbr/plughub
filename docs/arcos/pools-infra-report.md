@@ -99,19 +99,27 @@ A concorrência **não** é reconstruída por varredura de `participation_interv
 
 ### Persistência
 
-- Redis (corrente): `{tenant}:pool:{id}:concurrency`, `{tenant}:concurrency_total`, `{tenant}:pool:{id}:peak:{bucket}`, `{tenant}:peak_total:{bucket}`.
-- ClickHouse (histórico): nova tabela `pool_occupancy_peaks(tenant_id, pool_id, bucket, peak_concurrency, ingested_at, date)`; o total como `pool_id = '__total__'` (ou coluna dedicada). Kafka topic `pool.occupancy` (producer: Routing Engine; consumer: analytics-api).
+- Redis (corrente): concorrência por pool + total como **SET de `session_id`** (`SADD`/`SREM`; `SCARD` = concorrência) — **não** `INCR`/`DECR`, que deriva por decrementos perdidos (crash). O SET é auto-curável e **reconciliável** periodicamente contra as sessões ativas reais. Pico por bucket rastreado à parte (`{tenant}:pool:{id}:peak:{bucket}`, `{tenant}:peak_total:{bucket}`).
+- **Granularidade de persistência = 1 minuto**: o pico é gravado por minuto; o endpoint re-agrega (`max`) para hour/day. Fino o bastante para pico exato, barato.
+- ClickHouse (histórico): nova tabela `pool_occupancy_peaks(tenant_id, pool_id, minute, peak_concurrency, provisioned_capacity, ingested_at, date)`; o total como `pool_id = '__total__'`. Kafka topic `pool.occupancy` (producer: Routing Engine; consumer: analytics-api). `provisioned_capacity` flashada junto (instâncias × max_concurrent no momento).
+
+### Refinamentos da Fila/SLA
+
+- `queue_events.estimated_wait_ms` é estimativa; a **espera real** sai do intervalo `queued → served/abandoned` por `session_id`. SLA usa a espera real vs `sessions.sla_target_ms`.
+- `queue_events.available_agents` é histórico → alimenta "disponíveis × fila".
 
 ---
 
-## Fonte de capacidade (decisão)
+## Fonte de capacidade (decisão — 2026-06-03)
 
-Capacidade = **configurada no módulo de pricing** (capacidade contratada), **não** o snapshot de tempo real:
+Duas capacidades distintas, que respondem perguntas diferentes (não excludentes):
 
-- O **snapshot operacional** (`{tenant}:pool:{id}:snapshot`, disponíveis agora) é staffing instantâneo → fica na sub-aba **Fila** (disponíveis × fila), volátil, não é o teto.
-- A **capacidade do pricing** (base + reserve por pool; capacidade-base do tenant para o total) é o teto contratado → denominador de headroom e a ponte para o **custo**.
+- **Provisionada** = instâncias/agentes × `max_concurrent`, conhecida pelo Routing Engine em tempo real. Responde "meu deploy está saturado?" — visão **operacional**.
+- **Licenciada/contratada** = quantidade contratada, vinda de um **serviço central de billing/licenciamento** por instalação. Responde "estou perto do teto contratado?" — visão **comercial**.
 
-Par: por pool → `peak_concurrency` vs capacidade do pool; total → `peak_total` (instantâneo) vs capacidade-base do tenant. Headroom = teto − pico nos dois níveis.
+**Decisão: MVP usa a provisionada** (o Routing Engine flasha a capacidade provisionada junto com o pico → self-contained, zero dependência externa, headroom operacionalmente exato). A **licenciada é overlay v2**: linha adicional lida de um **entitlement cacheado localmente** (TTL longo / push on contract-change), que **degrada graciosamente** — se o serviço de licença estiver fora, usa o último cache ou omite a linha; nunca quebra a ocupação. O serviço central de licenciamento é um **subsistema à parte** (não faz parte deste relatório; o relatório só consome o valor cacheado).
+
+Par (MVP): por pool → `peak_concurrency` vs capacidade **provisionada** do pool; total → `peak_total` (instantâneo) vs soma da provisionada. Headroom = teto − pico.
 
 ---
 

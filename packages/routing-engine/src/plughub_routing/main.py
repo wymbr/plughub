@@ -105,6 +105,13 @@ async def run() -> None:
         _periodic_queue_drain(redis_client, producer, settings)
     )
 
+    # Fase 2 — occupancy sampler: samples per-pool concurrency (active_count) +
+    # tenant total every few seconds, tracks the per-minute peak, and flushes it
+    # to Kafka `pool.occupancy` for the capacity/headroom report.
+    occupancy_task = asyncio.create_task(
+        _occupancy_sampler(redis_client, producer, settings)
+    )
+
     # Start evaluation consumer in background (triggers SkillFlowEngine for sampled contacts)
     evaluation_flow = await load_evaluation_flow(
         skill_flow_service_url = settings.skill_flow_service_url,
@@ -135,6 +142,7 @@ async def run() -> None:
         listener_task.cancel()
         crash_detector_task.cancel()
         periodic_drain_task.cancel()
+        occupancy_task.cancel()
         evaluation_task.cancel()
         await consumer.stop()
         await producer.stop()
@@ -550,6 +558,120 @@ async def _periodic_queue_drain(
             return
         except Exception as exc:
             logger.warning("Periodic drain error: %s", exc)
+
+        await asyncio.sleep(interval)
+
+
+# ── Fase 2 — occupancy sampler (concurrency peak per minute → pool.occupancy) ──
+
+_OCCUPANCY_TOPIC = "pool.occupancy"
+
+
+async def _pool_capacity(redis_client: "aioredis.Redis", tenant_id: str, pool_id: str) -> int:
+    """Provisioned capacity = sum of max_concurrent across the pool's instances."""
+    try:
+        iids = await redis_client.sunion(
+            f"{tenant_id}:pool:{pool_id}:instances",
+            f"{tenant_id}:pool:{pool_id}:busy_instances",
+        )
+    except Exception:
+        return 0
+    cap = 0
+    for iid in iids:
+        raw = await redis_client.get(f"{tenant_id}:instance:{iid}")
+        if not raw:
+            continue
+        try:
+            d = json.loads(raw)
+            cap += int(d.get("max_concurrent") or d.get("max_concurrent_sessions") or 1)
+        except Exception:
+            cap += 1
+    return cap
+
+
+async def _flush_occupancy(
+    redis_client: "aioredis.Redis",
+    producer:     "AIOKafkaProducer",
+    minute,
+    peaks:        dict,
+    total_peaks:  dict,
+) -> None:
+    """Emit one pool.occupancy event per (tenant, pool) + a per-tenant total."""
+    minute_iso = minute.isoformat()
+    tenant_cap_total: dict = {}
+    for (tenant_id, pool_id), peak in peaks.items():
+        cap = await _pool_capacity(redis_client, tenant_id, pool_id)
+        tenant_cap_total[tenant_id] = tenant_cap_total.get(tenant_id, 0) + cap
+        await producer.send_and_wait(_OCCUPANCY_TOPIC, {
+            "tenant_id": tenant_id, "pool_id": pool_id, "minute": minute_iso,
+            "peak_concurrency": peak, "provisioned_capacity": cap,
+        })
+    for tenant_id, tot in total_peaks.items():
+        await producer.send_and_wait(_OCCUPANCY_TOPIC, {
+            "tenant_id": tenant_id, "pool_id": "__total__", "minute": minute_iso,
+            "peak_concurrency": tot, "provisioned_capacity": tenant_cap_total.get(tenant_id, 0),
+        })
+
+
+async def _occupancy_sampler(
+    redis_client: "aioredis.Redis",
+    producer:     "AIOKafkaProducer",
+    settings,
+) -> None:
+    """
+    Samples per-pool concurrency (the existing `active_count` counter) + the
+    per-tenant instantaneous total every few seconds, tracks the per-minute peak,
+    and flushes the completed minute to Kafka. The live counter is read each
+    sample, so the carry-over (sessions spanning minutes) is implicit and a minute
+    without events still records the steady-state concurrency.
+    """
+    interval = getattr(settings, "occupancy_sample_interval_s", 5)
+    if interval <= 0:
+        return
+    await asyncio.sleep(interval)  # let services start
+
+    cur_minute = None
+    peaks: dict = {}        # (tenant_id, pool_id) -> peak this minute
+    total_peaks: dict = {}  # tenant_id -> peak total this minute
+
+    while True:
+        try:
+            minute = datetime.now(timezone.utc).replace(second=0, microsecond=0)
+            if cur_minute is None:
+                cur_minute = minute
+            if minute != cur_minute:
+                await _flush_occupancy(redis_client, producer, cur_minute, peaks, total_peaks)
+                peaks, total_peaks = {}, {}
+                cur_minute = minute
+
+            cursor = 0
+            tenant_totals: dict = {}
+            seen: set = set()
+            while True:
+                cursor, keys = await redis_client.scan(cursor, match="*:pool:*:instances", count=50)
+                for key in keys:
+                    parts = key.split(":")
+                    if len(parts) < 4 or parts[-1] != "instances" or parts[-3] != "pool":
+                        continue
+                    tenant_id = parts[0]
+                    pool_id   = ":".join(parts[2:-1])
+                    if (tenant_id, pool_id) in seen:
+                        continue
+                    seen.add((tenant_id, pool_id))
+                    raw = await redis_client.get(f"{tenant_id}:pool:{pool_id}:active_count")
+                    c = max(0, int(raw)) if raw else 0
+                    pk = (tenant_id, pool_id)
+                    peaks[pk] = max(peaks.get(pk, 0), c)
+                    tenant_totals[tenant_id] = tenant_totals.get(tenant_id, 0) + c
+                if cursor == 0:
+                    break
+            for tenant_id, tot in tenant_totals.items():
+                total_peaks[tenant_id] = max(total_peaks.get(tenant_id, 0), tot)
+
+        except asyncio.CancelledError:
+            return
+        except Exception as exc:
+            logger.warning("Occupancy sampler error: %s", exc)
 
         await asyncio.sleep(interval)
 

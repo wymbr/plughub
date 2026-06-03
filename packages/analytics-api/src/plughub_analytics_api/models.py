@@ -417,6 +417,25 @@ def parse_usage_event(payload: dict[str, Any]) -> dict | None:
     }
 
 
+# ─── pool.occupancy (Fase 2 — pico de concorrência por minuto) ────────────────
+
+def parse_pool_occupancy(payload: dict[str, Any]) -> dict | None:
+    """Maps pool.occupancy (Routing Engine occupancy sampler) → pool_occupancy_peaks."""
+    tenant_id = payload.get("tenant_id")
+    pool_id   = payload.get("pool_id")
+    minute    = payload.get("minute")
+    if not tenant_id or not pool_id or not minute:
+        return None
+    return {
+        "table":                "pool_occupancy_peaks",
+        "tenant_id":            tenant_id,
+        "pool_id":              pool_id,
+        "minute":               minute,
+        "peak_concurrency":     int(payload.get("peak_concurrency", 0)),
+        "provisioned_capacity": int(payload.get("provisioned_capacity", 0)),
+    }
+
+
 # ─── sentiment.updated ────────────────────────────────────────────────────────
 
 def parse_sentiment_event(

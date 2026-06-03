@@ -1,5 +1,31 @@
 {
   "title": "Agent Reports",
+  "pools": {
+    "title": "Pool Reports",
+    "subtabs": { "volume": "Volume", "queue": "Queue", "capacity": "Capacity", "sla": "SLA" },
+    "soon": "Soon",
+    "filter": { "from": "From", "to": "to", "pool": "Pool", "channel": "Channel", "allPools": "All pools", "allChannels": "All channels" },
+    "kpi": { "contacts": "Contacts" },
+    "volume": {
+      "title": "Volume over time",
+      "byChannel": "By channel",
+      "byEndpoint": "By endpoint",
+      "noData": "No data in the period.",
+      "loading": "Loading…",
+      "noPool": "(no pool)",
+      "cols": { "channel": "Channel", "endpoint": "Endpoint", "contacts": "Contacts" }
+    },
+    "capacity": {
+      "title": "Concurrency vs capacity",
+      "totalPeak": "Total peak",
+      "totalCap": "Total capacity",
+      "headroom": "Headroom",
+      "utilization": "Utilization",
+      "noData": "No occupancy data in the period.",
+      "hint": "Per-minute peak concurrency vs provisioned capacity (instances × max).",
+      "cols": { "pool": "Pool", "peak": "Peak", "capacity": "Capacity", "headroom": "Headroom", "util": "Utilization" }
+    }
+  },
   "tabs": {
     "humans":       "Human Agents",
     "ai":           "AI Agents",
