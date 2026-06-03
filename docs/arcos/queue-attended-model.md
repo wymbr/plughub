@@ -80,8 +80,9 @@ endpoint, timestamps.
 
 - `close_reason = no_resource` (gatilho, na sessão) + **segmento sintético**
   `outcome = "outage"` (ver seção acima) apontando o pool que faltou.
-- `outage_cause: quota | pool_exhausted` (no segmento sintético, via tag/campo) — distingue
-  "comprar mais licença" de "provisionar mais agente".
+- `outage_cause: reservation_full | shared_full | quota` (no segmento sintético, via
+  tag/campo) — ver § Admissão híbrida. Distingue "aumentar reserva do pool" de "comprar
+  mais capacidade/licença".
 - **Metering**: sessão outage NÃO incrementa a dimensão `sessions` (guard SET NX no Core
   pula outage) — cliente não paga por contato rejeitado.
 - Channel Gateway renderiza a rejeição por canal (voz: anúncio/busy; webchat: mensagem) —
@@ -89,6 +90,35 @@ endpoint, timestamps.
 
 Vira métrica de primeira classe: **demanda reprimida** por canal/endpoint/tempo — base de
 redimensionamento e upsell.
+
+## Admissão híbrida — reserva por pool + shared dinâmico (decisão 2026-06-03)
+
+Modelo estático puro (todo pool com `max_session_pool`) bloqueia contato em pool no teto
+enquanto a instalação ainda tem capacidade livre — desperdício por configuração. Adota-se
+o modelo híbrido (*trunk reservation*):
+
+- **`max_session_pool` é opcional e vira reserva**: teto **e** garantia (fatia dedicada).
+  Pool reservado aloca até a reserva, nunca mais.
+- **Pools sem reserva disputam o shared** = `max_session_total − Σ reservas` (contador
+  compartilhado único).
+- **Invariante**: `Σ max_session_pool ≤ max_session_total` — validado na escrita da config
+  (Registry) e re-checado na reconciliação do Bootstrap (warning).
+- **Enforcement no Routing Engine** (árbitro único): INCR-check-rollback (padrão
+  `assertQuota`) sobre os contadores de sessões ativas já existentes (SET-based, Fase 2
+  ocupação) + `{t}:quota:concurrent_sessions`.
+- **`outage_cause` refinado**: `reservation_full` (pool reservado no teto) |
+  `shared_full` (capacidade comum esgotada) | `quota` (teto contratado). O segmento
+  sintético aponta o pool → demanda reprimida diz **qual ação tomar** (aumentar reserva
+  vs comprar capacidade).
+- **Mudança de reserva em runtime**: reduzir abaixo do uso corrente não derruba sessão —
+  bloqueia novas entradas até drenar (convergência preguiçosa).
+- **Transferência cross-pool** para pool reservado cheio → cadeia de fallback (abaixo),
+  sem regra nova.
+- **Feedback loop**: relatório de Capacidade mostra utilização da reserva (ociosidade =
+  preço da garantia) e do shared — calibragem por dado. Pricing: reserva de sessão é o
+  objeto billável natural dos reserve pools.
+- **v2 (deferred)**: flag `burstable` — reserva como piso com empréstimo do shared
+  (contabilidade bidirecional, fora do MVP).
 
 ## Falta de recurso no meio do contato — cadeia de fallback
 
@@ -153,9 +183,9 @@ emissão do evento analítico:
 
 | Componente | Mudança |
 |---|---|
-| **schemas** | enum `outcome`; `pool_kind` + `queue_pool_id` no PoolConfig; `outage_cause` |
+| **schemas** | enum `outcome`; `pool_kind` + `queue_pool_id` no PoolConfig; `max_session_pool` opcional (reserva); `outage_cause` |
 | **agent-registry** | CRUD/YAML dos novos campos de pool |
-| **routing-engine** | sem recurso → aloca pool de fila (mantém pedido pendente no alvo); no allocated → dispensa agente de fila; escreve `session.queue.position/eta` no ContextStore; sem pool de fila → caminho outage com **segmento sintético** (`agent_type=system`, `outcome=outage`) em `conversations.participants` |
+| **routing-engine** | **admissão híbrida** (reserva por pool + shared = total − Σ reservas, INCR-check-rollback); sem recurso → aloca pool de fila (mantém pedido pendente no alvo); no allocated → dispensa agente de fila; escreve `session.queue.position/eta` no ContextStore; sem pool de fila → caminho outage com **segmento sintético** (`agent_type=system`, `outcome=outage`, `outage_cause`) em `conversations.participants` |
 | **orchestrator-bridge** | sinal de dispensa ao skill-flow de fila; mapeamento outcome→close_reason auditado |
 | **Core** | sessão criada sempre (outage incluso); fechar-sempre no disconnect; metering pula outage |
 | **channel-gateway** | render de rejeição por canal; detecção de disconnect → close (caminho atendido já existe) |
@@ -164,8 +194,19 @@ emissão do evento analítico:
 
 ## Fases sugeridas
 
-- **A — Padronização outcome/close_reason** (auditoria + enum + correção de escrita). Pré-requisito de tudo.
-- **B — Outage na porta** (sessão sempre criada + render de rejeição + metering skip). Independente da fila atendida.
+- **A — Padronização outcome/close_reason** ✅ (2026-06-03) — implementada e validada:
+  `flow_complete+resolved` (IA), `agent_hangup+resolved` (humano via Console),
+  `customer_disconnect+abandoned` (F5). Decisões de implementação: (1) **bridge é o
+  escritor único** da linha de fechamento em `sessions` — o `contact_closed` do gateway
+  (agora com `source: channel_gateway`) é só sinal de transporte, descartado pelo parse
+  do analytics (eliminava corrida no ReplacingMergeTree); (2) `_close` do webchat adapter
+  idempotente (publicava 2×: agent_done + client_disconnect); (3) marcador Redis
+  `session:{id}:last_outcome` ({outcome, agent_kind}) escrito no agent_done IA primary,
+  no contact_closed humano e no abandono — `_close_contact_layer` deriva
+  close_reason+outcome dele + do marcador `session:{id}:closed` (transporte); (4) wire
+  de transporte 100% intacto. Pendente desta fase: sessão só-fila (nunca roteada) sem
+  `meta` → evento sem tenant → sem fechamento no ClickHouse (resolvido por B/E).
+- **B — Admissão híbrida + outage na porta** (reserva/shared no Routing + sessão sempre criada + render de rejeição + metering skip). Independente da fila atendida.
 - **C — Fila atendida** (pool_kind, alocação de fila no Routing, dispensa, ContextStore posição/eta).
 - **D — Relatório de Fila/SLA sobre segments** + demanda reprimida no Volume.
 - **E — Fechar-sempre / cadeia de fallback** (catch → notify+close → max_wait).
