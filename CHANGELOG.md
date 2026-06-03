@@ -2,6 +2,26 @@
 
 ---
 
+## Queue-Attended-Model Fase C — Fila Atendida com Segmento Próprio (2026-06-03)
+
+**Decisão**: segmento do agente de fila marcado com **`role: queue`** em vez de pool separado (`pool_kind`/`queue_pool_id` dispensados no MVP). O `queue_config` existente (descoberta B0) já ativa o agente de fila no próprio pool-alvo — segmento com `pool_id` = alvo é a dimensão exata do relatório Fila/SLA da Fase D, e as queries de agente (`primary`/`specialist`) excluem fila por construção. Invariante analítico: **"atendido" = primeiro segmento `primary`**.
+
+**schemas:** `queue` adicionado aos enums de role em `contact-segment.ts` (ContactSegmentSchema + ConversationParticipantEventSchema).
+
+**orchestrator-bridge:** `process_queued` emite `participant_joined` (role=queue, `participant_id=queue-{session_id}`, instance_id="") antes de ativar o agente de fila e `participant_left` (duration = janela de espera, outcome do flow — escalated_human/abandoned/timeout —, flow_id) na conclusão. Não toca `segment_seq`/`primary_segment` nem `session:{id}:last_outcome` (só primary dirige outcome de sessão). Fallback de tenant: pool sem `queue_config` usa `queue_default_agent_type_id`/`queue_default_skill_id` do namespace `session` (Config API); vazio = espera muda (comportamento original).
+
+**routing-engine:** `_write_queue_context` escreve `session.queue.position` (1-based, tamanho da fila pós-inserção) e `session.queue.eta_ms` (posição × sla_target_ms × 0.7, espelha `_publish_queue_position`) no ContextStore a cada tentativa de enqueue — drain re-attempts refrescam a posição. Skill-flow de fila pode referenciar `@ctx.session.queue.*`.
+
+**config-api:** seeds `session.queue_default_agent_type_id` / `session.queue_default_skill_id` (default ""); espelhados em `session_config.py` do bridge (hot-reload via `config.changed` namespace session já cobre).
+
+**analytics-api:** nenhuma mudança necessária — parser de participants é passthrough de role (coluna String); filtros existentes (`role IN ('primary','specialist')` na performance, `role='primary'` na espera interim) excluem queue automaticamente.
+
+**Fixes da validação:** (a) abort do agente de fila no disconnect — bridge soma 1 push de `session:closed` quando `queue:agent_active:{sid}` existe (agente de fila roda com `instance_id=""` → `menu.ts` não cria activity key → contagem genérica o ignorava → BLPOP eterno, segmento nunca fechava); (b) override de outcome no fechamento do segmento de fila: `session:{id}:closed` presente → `abandoned` (plataforma detecta; o complete do YAML reporta `escalated_human` mesmo via `on_disconnect`, e o contrato Fase A proíbe o flow de declarar abandono). `queue_config` adicionado ao `retencao_humano` em `infra/registry/tenant_demo.yaml` (agente_fila_v1/skill_fila_v1).
+
+Validado: handoff (`escalated_human`, 21s, primary humano `sequence_index=0` intacto, ContextStore position/eta_ms corretos) e abandono (`abandoned`, 5.6s). Pendente: timeout de fila (`max_wait_s` não enforced — Fase E); posição não re-escrita entre drains; `close_reason` NULL no segmento de fila; i18n do role `queue` na UI. Spec: `docs/arcos/queue-attended-model.md`.
+
+---
+
 ## Queue-Attended-Model Fase B — Admissão Híbrida + Outage na Porta (2026-06-03)
 
 Modelo *trunk reservation*: `session_reservation` (pool, opt-in) = fatia dedicada (teto+garantia) subtraída do total; pools sem reserva disputam o shared coletivo (`total − Σ reservas`). Billing só sobre o total. Rejeição na porta = **outage** registrado (demanda reprimida).

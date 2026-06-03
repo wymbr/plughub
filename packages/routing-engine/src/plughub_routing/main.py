@@ -453,6 +453,17 @@ async def _persist_queued_contact(
             "Failed to persist queued contact: session=%s — %s", event.session_id, exc
         )
 
+    # Fase C (queue-attended-model): write session.queue.* to ContextStore so
+    # the queue-treatment skill-flow can reference @ctx.session.queue.position /
+    # @ctx.session.queue.eta_ms. Runs on EVERY enqueue attempt (not just the
+    # first): drain re-attempts re-enter here and refresh the position.
+    asyncio.create_task(
+        _write_queue_context(
+            redis_client, event.tenant_id, event.session_id, pool_id,
+            instance_registry,
+        )
+    )
+
     # Notify customer via conversations.outbound so channel-gateway delivers
     # a "waiting" message to the customer WebSocket while they're in queue.
     # Only send on first enqueue — suppress on periodic drain re-attempts to
@@ -486,6 +497,68 @@ async def _persist_queued_contact(
         logger.warning(
             "Could not send waiting notification to customer: session=%s — %s",
             event.session_id, exc,
+        )
+
+
+async def _write_queue_context(
+    redis_client:      aioredis.Redis,
+    tenant_id:         str,
+    session_id:        str,
+    pool_id:           str,
+    instance_registry: InstanceRegistry,
+    ttl_seconds:       int = 86_400,
+) -> None:
+    """
+    Fase C (queue-attended-model): writes session.queue.position and
+    session.queue.eta_ms to the ContextStore hash while the contact waits.
+
+    position = queue length AFTER this contact was added (it enters at the
+    tail, so length == its 1-based position). eta_ms mirrors the estimate in
+    Router._publish_queue_position: position × (sla_target_ms × 0.7), with
+    sla_target_ms read from the routing engine's own pool_config cache.
+
+    Refreshed on every enqueue attempt (drain re-attempts included), so the
+    queue skill-flow always reads a current-ish position. Fire-and-forget.
+    """
+    try:
+        ctx_key = f"{tenant_id}:ctx:{session_id}"
+        now_str = datetime.now(timezone.utc).isoformat()
+
+        position = await instance_registry.get_queue_length(tenant_id, pool_id)
+        position = max(int(position or 0), 1)
+
+        sla_target_ms = 0
+        raw = await redis_client.get(f"{tenant_id}:pool_config:{pool_id}")
+        if raw:
+            sla_target_ms = int(json.loads(raw).get("sla_target_ms", 0) or 0)
+        avg_handle_ms = int(sla_target_ms * 0.7)
+
+        def _entry(value: object) -> str:
+            return json.dumps({
+                "value":      value,
+                "confidence": 1.0,
+                "source":     "routing_engine",
+                "visibility": "agents_only",
+                "updated_at": now_str,
+            })
+
+        mapping: dict[str, str] = {
+            "session.queue.position": _entry(position),
+        }
+        if avg_handle_ms > 0:
+            mapping["session.queue.eta_ms"] = _entry(position * avg_handle_ms)
+
+        await redis_client.hset(ctx_key, mapping=mapping)
+        await redis_client.expire(ctx_key, ttl_seconds, nx=True)
+
+        logger.debug(
+            "ContextStore queue context written: tenant=%s session=%s pool=%s position=%d",
+            tenant_id, session_id, pool_id, position,
+        )
+    except Exception as exc:
+        logger.warning(
+            "Failed to write queue context to ContextStore: session=%s — %s",
+            session_id, exc,
         )
 
 

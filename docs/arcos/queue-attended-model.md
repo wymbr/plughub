@@ -42,9 +42,15 @@ suplementar (posição histórica), não como fonte de verdade.
    *acompanha* a espera, não a substitui — FIFO, posição e SLA vivem no pedido. Quando o alvo
    libera, o Routing aloca (árbitro único) e dispara a **dispensa** do agente de fila
    (bridge sinaliza o skill-flow — mesmo padrão do terminate dos pool hooks).
-2. **Pools de fila são marcados**: `pool_kind: queue_treatment` no PoolConfig; o pool-alvo
+2. ~~**Pools de fila são marcados**: `pool_kind: queue_treatment` no PoolConfig; o pool-alvo
    aponta `queue_pool_id`. O agente de fila entra como `primary` normal; o invariante
-   analítico passa a ser: **"atendido" = primeiro segmento `primary` em pool não-fila**.
+   analítico passa a ser: **"atendido" = primeiro segmento `primary` em pool não-fila**.~~
+   **Superseded pela Fase C (2026-06-03)**: o agente de fila roda **no próprio pool-alvo**
+   (mecanismo `queue_config` existente, descoberta B0) e o segmento dele ganha
+   **`role: queue`** — `pool_id` do segmento permanece o pool-alvo (a dimensão certa do
+   relatório Fila/SLA). Invariante analítico: **"atendido" = primeiro segmento `primary`**.
+   Métricas de agente (filtros `primary`/`specialist`) excluem fila por construção.
+   `pool_kind`/`queue_pool_id` dispensados no MVP.
 3. **Canal é hard filter**: o pool de fila deve cobrir os `channel_types` do pool-alvo
    (voz exige capacidade de mídia — música de espera + anúncios são um skill-flow).
 4. **Custo controlável**: o skill-flow de fila pode ser mecânico (`notify` + `receive` +
@@ -248,7 +254,34 @@ emissão do evento analítico:
   (compensação na integração metering×pricing); widget webchat fecha sem mensagem de
   rejeição (render v2); invariante Σ reservas ≤ total ainda sem validação na escrita
   (Registry) — hoje só guard `max(0, shared)` no runtime.
-- **C — Fila atendida** (pool_kind, alocação de fila no Routing, dispensa, ContextStore posição/eta). **Nota (descoberta B0)**: o padrão Queue Agent JÁ existe — `pool.queue_config{agent_type_id, skill_id}` ativa agente nativo de fila no `conversations.queued` (bridge `process_queued`); drain sinaliza `__agent_available__` → skill-flow escala. Fase C vira formalização: skill-flow de fila configurável **por pool** com default de tenant (ex. `agente_fila_v1`), `pool_kind` p/ analytics, e segmento próprio pro agente de fila (hoje roda com `instance_id=""`, sem slot).
+- **C — Fila atendida** ✅ (2026-06-03) — validada nos dois desfechos: **handoff**
+  (`outcome=escalated_human`, espera 21s = gap exato até o primary; primary humano manteve
+  `sequence_index=0`; ContextStore `position=1`/`eta_ms=210000`) e **abandono**
+  (`outcome=abandoned`, 5.6s). Dois fixes da validação: (a) bridge no disconnect soma 1 push
+  de `session:closed` quando `queue:agent_active:{sid}` existe — o agente de fila roda com
+  `instance_id=""` e o `menu.ts` não cria activity key, então a contagem genérica o ignorava
+  e o BLPOP ficava eterno (segmento nunca fechava); (b) override de outcome no fechamento do
+  segmento de fila: `session:{id}:closed` presente → `abandoned` (abandono é detecção da
+  plataforma — o complete do YAML reporta `escalated_human` mesmo saindo via `on_disconnect`,
+  e o contrato Fase A proíbe o flow de declarar `abandoned`).
+  **Decisão central**: segmento do agente de fila marcado com **`role: queue`** em vez de
+  pool separado (`pool_kind`/`queue_pool_id` dispensados) — o `queue_config` existente já
+  ativa o agente de fila no pool-alvo, e o segmento com `pool_id` = alvo é exatamente a
+  dimensão do relatório da Fase D; queries de agente (primary/specialist) excluem fila sem
+  retrofit. Implementação: (1) `@plughub/schemas` contact-segment.ts — `queue` nos enums de
+  role (segment + participant event); (2) bridge `process_queued` — `participant_joined`
+  (role=queue, `participant_id=queue-{session_id}`, instance_id="") antes do
+  `activate_native_agent` e `participant_left` (duration, outcome do flow, flow_id) na
+  conclusão; **não** toca `segment_seq`/`primary_segment`/`last_outcome` (só primary dirige
+  outcome de sessão); (3) routing `_write_queue_context` — `session.queue.position` (tamanho
+  do bucket pós-SADD, 1-based) + `session.queue.eta_ms` (posição × sla_target_ms × 0.7) no
+  ContextStore a cada tentativa de enqueue (drain re-attempts refrescam posição); (4) default
+  de tenant — Config API namespace `session` keys `queue_default_agent_type_id`/
+  `queue_default_skill_id` (seed + `session_config.py`); pool sem `queue_config` cai no
+  default; vazio = comportamento original (espera muda). Pendências da fase: timeout de fila
+  (`queue_config.max_wait_s` não é enforced em lugar nenhum — cenário `max_wait_exceeded` é
+  da Fase E); posição não re-escrita entre drains (só on-enqueue); `close_reason` do segmento
+  de fila fica NULL (outcome basta pra Fase D); i18n do role `queue` no detalhe de sessão da UI.
 - **D — Relatório de Fila/SLA sobre segments** + demanda reprimida no Volume.
 - **E — Fechar-sempre / cadeia de fallback** (catch → notify+close → max_wait).
 

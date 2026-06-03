@@ -3152,8 +3152,23 @@ async def process_queued(
 
     queue_cfg = pool.get("queue_config")
     if not queue_cfg:
-        logger.debug("No queue_config for pool=%s — customer waits silently", pool_id)
-        return
+        # Fase C (queue-attended-model): tenant-wide default queue agent.
+        # Pool-level queue_config wins; the Config API session namespace
+        # provides the fallback (queue_default_agent_type_id / _skill_id).
+        # Empty default = original behaviour (customer waits silently).
+        _default_agent = session_config.get("queue_default_agent_type_id", "") or ""
+        if _default_agent:
+            queue_cfg = {"agent_type_id": _default_agent}
+            _default_skill = session_config.get("queue_default_skill_id", "") or ""
+            if _default_skill:
+                queue_cfg["skill_id"] = _default_skill
+            logger.info(
+                "No queue_config for pool=%s — using tenant default queue agent %s",
+                pool_id, _default_agent,
+            )
+        else:
+            logger.debug("No queue_config for pool=%s — customer waits silently", pool_id)
+            return
 
     agent_type_id = queue_cfg.get("agent_type_id", "")
     explicit_skill_id = queue_cfg.get("skill_id")   # optional — overrides agent's default skill
@@ -3211,20 +3226,78 @@ async def process_queued(
         session_id, pool_id, agent_type_id,
     )
 
+    # ── Fase C (queue-attended-model): queue segment — own ledger entry ───────
+    # role='queue' marks the wait window in analytics.segments. pool_id stays =
+    # the TARGET pool (the Fila/SLA reporting dimension — "where did the contact
+    # wait"). Queue segments never touch segment_seq nor primary_segment: the
+    # analytic invariant is "atendido" = first `primary` segment of the session,
+    # and agent metrics (primary/specialist filters) exclude queue by construction.
+    _q_seg_id      = str(uuid.uuid4())
+    _q_joined_at   = datetime.now(timezone.utc)
+    _q_joined_iso  = _q_joined_at.isoformat()
+    _q_participant = f"queue-{session_id}"   # instance_id="" — synthetic identity
+    asyncio.create_task(_publish_participant_event(
+        session_id=session_id,
+        tenant_id=tenant_id,
+        participant_id=_q_participant,
+        pool_id=pool_id,
+        agent_type_id=agent_type_id,
+        event_type="participant_joined",
+        agent_type="native",
+        role="queue",
+        segment_id=_q_seg_id,
+        joined_at=_q_joined_iso,
+    ))
+
     # Activate the queue agent — this call blocks for the entire wait duration
     # because the skill flow contains a menu step with timeout_s=0.
     # It returns only when the queue agent's skill flow completes (either via
     # '__agent_available__' signal or customer disconnect / max_wait_s timeout).
     # extra_context exposes pool_id and session_id so the YAML's invoke step can
     # dynamically call conversation_escalate with the correct target pool.
-    await activate_native_agent(
+    agent_result = await activate_native_agent(
         http=http, redis_client=redis_client,
         session_id=session_id, customer_id=customer_id,
         agent_type_id=agent_type_id, tenant_id=tenant_id,
         skills=skills,
         instance_id="",   # queue agents don't hold a routing slot
         extra_context={"pool_id": pool_id},
+        segment_id=_q_seg_id,
     )
+
+    # ── Fase C: close the queue segment (wait window) ─────────────────────────
+    # outcome from the queue skill-flow: escalated_human (handoff to target).
+    # ABANDONO é detectado pela plataforma, nunca declarado pelo flow (contrato
+    # Fase A): se a sessão fechou enquanto a fila rodava (session:{id}:closed),
+    # o flow saiu via on_disconnect — mas seu complete step ainda reporta
+    # escalated_human. Override aqui: segmento de fila vira "abandoned".
+    # Deliberately NOT written to session:{id}:last_outcome — only primary
+    # segments drive session outcome.
+    _q_duration_ms = int(
+        (datetime.now(timezone.utc) - _q_joined_at).total_seconds() * 1000
+    )
+    _q_outcome = (agent_result or {}).get("outcome") or None
+    try:
+        if await redis_client.exists(f"session:{session_id}:closed"):
+            _q_outcome = "abandoned"
+    except Exception:
+        pass
+    _q_flow_id = (((agent_result or {}).get("pipeline_state")) or {}).get("flow_id", "") or ""
+    asyncio.create_task(_publish_participant_event(
+        session_id=session_id,
+        tenant_id=tenant_id,
+        participant_id=_q_participant,
+        pool_id=pool_id,
+        agent_type_id=agent_type_id,
+        event_type="participant_left",
+        agent_type="native",
+        role="queue",
+        segment_id=_q_seg_id,
+        joined_at=_q_joined_iso,
+        duration_ms=_q_duration_ms,
+        outcome=_q_outcome,
+        flow_id=_q_flow_id,
+    ))
 
     # Clean up marker after the queue agent completes
     try:
@@ -3232,7 +3305,10 @@ async def process_queued(
     except Exception:
         pass
 
-    logger.info("Queue agent completed: session=%s pool=%s", session_id, pool_id)
+    logger.info(
+        "Queue agent completed: session=%s pool=%s outcome=%s wait_ms=%d",
+        session_id, pool_id, _q_outcome, _q_duration_ms,
+    )
 
 
 # ── Process conversations.events — notify human agent on contact_closed ───────
@@ -3695,6 +3771,21 @@ async def process_contact_event(
                 # Note: if menu:waiting has entries but ALL customer-facing agents
                 # already exited their BLPOPs, n_waiting stays 0.  Do NOT push —
                 # any push would be consumed by a hook agent starting later.
+                #
+                # Fase C (queue-attended-model): the queue agent runs with
+                # instance_id="" → menu.ts never sets its activity key, so the
+                # counting above always skips it and its BLPOP would hang forever
+                # on customer disconnect (queue segment never closed). If the
+                # queue-agent marker is present, add one push for it.
+                try:
+                    if await redis_client.exists(f"queue:agent_active:{session_id}"):
+                        n_waiting += 1
+                        logger.info(
+                            "Queue agent abort signal queued on disconnect: session=%s",
+                            session_id,
+                        )
+                except Exception:
+                    pass
                 if n_waiting > 0:
                     closed_key = f"session:closed:{session_id}"
                     for _ in range(n_waiting):

@@ -181,6 +181,21 @@ _SEED: list[tuple[str, str, object, str]] = [
         "5 minutes. Kept here (session namespace) alongside sentiment.live_ttl_s "
         "so orchestrator-bridge can read all TTLs from a single namespace."
     ),
+    (
+        "session", "queue_default_agent_type_id",
+        "",
+        "Fase C (queue-attended-model): tenant-wide default queue-treatment agent. "
+        "Used by orchestrator-bridge process_queued when the target pool has no "
+        "queue_config — empty string disables the fallback (contact waits silently). "
+        "Example: 'agente_fila_v1'."
+    ),
+    (
+        "session", "queue_default_skill_id",
+        "",
+        "Fase C (queue-attended-model): optional skill override paired with "
+        "queue_default_agent_type_id (same semantics as queue_config.skill_id). "
+        "Empty = use the agent's default skill."
+    ),
 
     # ── analytics_consumer ────────────────────────────────────────────────────
     # Source: analytics-api/config.py, consumer.py

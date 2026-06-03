@@ -28,6 +28,10 @@ _DEFAULTS: dict[str, Any] = {
     "replay_context_ttl_s":          3_600,   # 1h — ReplayContext key TTL
     "pool_config_ttl_s":             3_600,   # 1h — pool config cache TTL
     "sentiment_live_ttl_s":            300,   # 5m — live sentiment in Redis
+    # Fase C (queue-attended-model): tenant default queue-treatment agent —
+    # used by process_queued when the pool has no queue_config. "" = disabled.
+    "queue_default_agent_type_id":      "",
+    "queue_default_skill_id":           "",
 }
 
 

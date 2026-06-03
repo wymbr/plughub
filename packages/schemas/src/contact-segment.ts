@@ -55,7 +55,11 @@ export const ContactSegmentSchema = z.object({
   agent_type_id:     z.string(),
   instance_id:       z.string(),
   participant_id:    z.string(),
-  role:              z.enum(["primary", "specialist", "supervisor", "evaluator", "reviewer"]),
+  // Fase C (queue-attended-model): `queue` = queue-treatment agent segment.
+  // pool_id stays = target pool (the reporting dimension); queue segments are
+  // excluded from agent metrics by construction (they are not primary/specialist).
+  // Analytic invariant: "atendido" = first `primary` segment of the session.
+  role:              z.enum(["primary", "specialist", "supervisor", "evaluator", "reviewer", "queue"]),
   agent_type:        z.enum(["ai", "human"]).default("ai"),
   // Identity beyond the (deprecated) synthetic agent_type_id:
   //   flow_id — AI: the deployed skill the agent ran ("" for humans)
@@ -93,7 +97,7 @@ export const ConversationParticipantEventSchema = z.object({
   tenant_id:        z.string(),
   segment_id:       z.string().uuid(),
   participant_id:   z.string(),
-  participant_role: z.enum(["primary", "specialist", "supervisor", "evaluator", "reviewer"]),
+  participant_role: z.enum(["primary", "specialist", "supervisor", "evaluator", "reviewer", "queue"]),
   agent_type_id:    z.string().nullable().default(null),
   instance_id:      z.string().nullable().default(null),
   pool_id:          z.string().nullable().default(null),
