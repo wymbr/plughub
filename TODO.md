@@ -71,6 +71,15 @@ Hoje o Analytics/Agents mistura agente×pool e não separa humano×IA.
   configurada no pricing (snapshot reservado à Fila); (c) volume com dimensão `endpoint`=DNIS
   (Arc 19). Pendente: Routing Engine (contadores+flush), 3 endpoints `/reports/pools/*`,
   pricing expõe capacidade, aba `Analytics/Pools`.
+- **Reformulação Analytics/Agents — Bancada de comparação 360° (novo)**: reescreve a aba como
+  bancada de comparação (média dos agentes × indivíduos), unificando quantitativo + qualitativo
+  (Arc 6) + voz do cliente (NPS/pesquisa) + voz do agente (wrap-up) na mesma entidade `agent_key`.
+  **Spec/ADR** em [`docs/arcos/analytics-agents-workbench.md`](docs/arcos/analytics-agents-workbench.md)
+  — decisões fechadas: média aritmética rotulada "média dos agentes" + N; comparabilidade por
+  domínio de métrica (desabilita no seletor); camada `session_signal` (NPS/wrap-up/pesquisa via
+  Arc 12 + journey, `session_at`×`captured_at`, normalização por pool); detalhe type-aware;
+  cruzamento das vantagens (concordância/quadrante) + calibração do avaliador (Arc 13).
+  Pré-requisitos: outcome humano no segment; join avaliação→agente. Ordem em §12 do spec.
 - **Fase 3 — migrar provisionamento do demo para Config + Deploy** (elimina YAML/agent_type):
   - **3b / 3a / 3c / 3d-parcial — concluídas** — ver `CHANGELOG.md` (2026-05-31, 2026-06-01)
     e `docs/arcos/instance-bootstrap.md`. Pools IA migrados; `mention_commands` via embed no
