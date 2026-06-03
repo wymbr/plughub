@@ -5,7 +5,7 @@
     "subtabs": { "volume": "Volume", "queue": "Fila", "capacity": "Capacidade", "sla": "SLA" },
     "soon": "Em breve",
     "filter": { "from": "De", "to": "a", "pool": "Pool", "channel": "Canal", "allPools": "Todos os pools", "allChannels": "Todos os canais" },
-    "kpi": { "contacts": "Contatos" },
+    "kpi": { "contacts": "Contatos", "rejected": "Reprimida" },
     "volume": {
       "title": "Volume no tempo",
       "byChannel": "Por canal",
@@ -13,7 +13,16 @@
       "noData": "Sem dados no período.",
       "loading": "Carregando…",
       "noPool": "(sem pool)",
-      "cols": { "channel": "Canal", "endpoint": "Endpoint", "contacts": "Contatos" }
+      "cols": { "channel": "Canal", "endpoint": "Endpoint", "contacts": "Contatos" },
+      "rejected": {
+        "title": "Demanda reprimida",
+        "hint": "Contatos rejeitados na porta por falta de recurso (outcome outage). A causa aponta a ação: reserva do pool vs capacidade contratada.",
+        "total": "Rejeitados",
+        "share": "% da demanda",
+        "none": "Nenhum contato rejeitado no período.",
+        "cols": { "pool": "Pool", "cause": "Causa", "contacts": "Contatos" },
+        "cause": { "reservation_full": "Reserva do pool esgotada", "shared_full": "Capacidade compartilhada esgotada", "quota": "Teto contratado" }
+      }
     },
     "capacity": {
       "title": "Concorrência vs capacidade",
@@ -31,7 +40,8 @@
       "noData": "Sem dados de fila no período.",
       "waitAvg": "Espera média (s)",
       "available": "Disponíveis",
-      "cols": { "pool": "Pool", "contacts": "Contatos", "queued": "Em fila", "abandoned": "Abandono", "abandonRate": "Aband. %", "avgWait": "Espera méd", "p95Wait": "p95" }
+      "hint": "Espera = duração do segmento de fila (fila atendida). Abandono % sobre os enfileirados.",
+      "cols": { "pool": "Pool", "contacts": "Contatos", "queued": "Em fila", "handoff": "Pós-fila", "abandoned": "Abandono", "abandonRate": "Aband. %", "avgWait": "Espera méd", "p95Wait": "p95" }
     },
     "sla": {
       "title": "Atingimento de SLA por pool",

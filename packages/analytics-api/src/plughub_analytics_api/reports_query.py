@@ -2197,11 +2197,16 @@ async def query_pools_volume(
     """
     Volume de contatos por (bucket, pool, canal, endpoint=DNIS) a partir de `sessions`.
     Retorna series (no tempo) + by_channel (donut) + by_endpoint (drill-down) + totals.
+    Fase D (queue-attended-model): inclui `rejected` (demanda reprimida) — sessões
+    outage na porta, com causa (`reservation_full|shared_full|quota`) derivada dos
+    segmentos sintéticos `agent_type='system'` (Fase B). `totals.contacts` segue
+    sendo a demanda total (atendida + reprimida).
     """
     since = _ch_fmt(from_dt) if from_dt else _default_from()
     until = _ch_fmt(to_dt, upper=True) if to_dt else _default_to()
     bkt   = bucket if bucket in ("hour", "day") else "hour"
-    empty = {"series": [], "by_channel": [], "by_endpoint": [], "totals": {"contacts": 0}}
+    empty = {"series": [], "by_channel": [], "by_endpoint": [], "totals": {"contacts": 0, "rejected": 0},
+             "rejected": {"series": [], "by_cause": [], "total": 0}}
     if accessible_pools is not None and len(accessible_pools) == 0:
         return {"data": empty, "meta": {"from_dt": since, "to_dt": until, "bucket": bkt}}
     try:
@@ -2271,8 +2276,47 @@ def _fetch_pools_volume(
     total_res = client.query(f"SELECT count() FROM {db}.sessions FINAL WHERE {where}", parameters=params)
     total = total_res.result_rows[0][0] if total_res.result_rows else 0
 
+    # ── Demanda reprimida (Fase D) — rejeição na porta (outcome='outage') ──────
+    # Série por bucket/pool/canal vem das sessions (que têm canal); a causa vem
+    # dos segmentos sintéticos system/outage (close_reason = outage_cause), que
+    # apontam o pool que faltou → "qual ação tomar" (reserva vs capacidade).
+    rej_where = f"{where} AND coalesce(outcome, '') = 'outage'"
+
+    rejected_series = _rows_to_dicts(client.query(f"""
+        SELECT {bucket_fn}(opened_at)   AS bucket,
+               pool_id, channel,
+               count()                  AS contacts
+        FROM {db}.sessions FINAL
+        WHERE {rej_where}
+        GROUP BY bucket, pool_id, channel
+        ORDER BY bucket
+    """, parameters=params))
+    for r in rejected_series:
+        r["bucket"] = _iso(r["bucket"])
+
+    rejected_by_cause = _rows_to_dicts(client.query(f"""
+        SELECT seg.pool_id                        AS pool_id,
+               coalesce(seg.close_reason, '')     AS cause,
+               count()                            AS contacts
+        FROM {db}.segments AS seg FINAL
+        INNER JOIN (SELECT session_id FROM {db}.sessions FINAL WHERE {rej_where}) AS ss
+            ON seg.session_id = ss.session_id
+        WHERE seg.tenant_id = {{tenant_id:String}}
+          AND seg.agent_type = 'system' AND seg.outcome = 'outage'
+        GROUP BY pool_id, cause
+        ORDER BY contacts DESC
+    """, parameters=params))
+
+    rej_total_res = client.query(
+        f"SELECT count() FROM {db}.sessions FINAL WHERE {rej_where}", parameters=params)
+    rejected_total = rej_total_res.result_rows[0][0] if rej_total_res.result_rows else 0
+
     return {
-        "data": {"series": series, "by_channel": by_channel, "by_endpoint": by_endpoint, "totals": {"contacts": total}},
+        "data": {
+            "series": series, "by_channel": by_channel, "by_endpoint": by_endpoint,
+            "totals": {"contacts": total, "rejected": rejected_total},
+            "rejected": {"series": rejected_series, "by_cause": rejected_by_cause, "total": rejected_total},
+        },
         "meta": {"from_dt": since, "to_dt": until, "bucket": bucket},
     }
 
@@ -2291,9 +2335,13 @@ async def query_pools_queue(
     accessible_pools: list[str] | None = None,
 ) -> dict:
     """
-    Comportamento de fila por pool: espera real (`sessions.wait_time_ms`), abandono,
-    disponíveis (`queue_events.available_agents`), tamanho de fila, e SLA
-    (espera vs `sessions.sla_target_ms`). series (no tempo) + by_pool (agregado).
+    Fase D (queue-attended-model) — fila + SLA derivados dos `segments`:
+      espera   = duration_ms do segmento `role='queue'` (fila atendida, Fase C);
+      abandono = segmento de fila com outcome='abandoned';
+      handoff  = segmento de fila não-abandonado seguido de segmento primary real.
+    Sessões outage (rejeição na porta) ficam FORA deste relatório — são demanda
+    reprimida, reportada no Volume. `queue_events` permanece suplementar
+    (tamanho de fila / disponíveis). series (no tempo) + by_pool (agregado).
     """
     since = _ch_fmt(from_dt) if from_dt else _default_from()
     until = _ch_fmt(to_dt, upper=True) if to_dt else _default_to()
@@ -2322,8 +2370,10 @@ def _fetch_pools_queue(
 ) -> dict:
     bucket_fn = "toStartOfHour" if bucket == "hour" else "toStartOfDay"
 
-    # Sessions side (wait, abandono, SLA) — keyed on opened_at.
-    s_conditions = ["tenant_id = {tenant_id:String}", f"opened_at >= '{since}'", f"opened_at <  '{until}'"]
+    # Sessions side — keyed on opened_at. Outage (rejeição na porta) excluído:
+    # é demanda reprimida (Volume), não comportamento de fila.
+    s_conditions = ["tenant_id = {tenant_id:String}", f"opened_at >= '{since}'", f"opened_at <  '{until}'",
+                    "coalesce(outcome, '') != 'outage'"]
     params: dict = {"tenant_id": tenant_id}
     if pool_id:
         s_conditions.append("pool_id = {pool_id:String}")
@@ -2338,34 +2388,48 @@ def _fetch_pools_queue(
     _apply_pool_scope(q_conditions, accessible_pools)
     q_where = " AND ".join(q_conditions)
 
-    _ABANDON = "('customer_abandon', 'max_wait_exceeded')"
-
     def _iso(v: Any) -> str:
         return v.isoformat() if hasattr(v, "isoformat") else str(v)
 
-    # Wait time is NOT stored on the session (wait_time_ms is NULL) and there is no
-    # `dequeued` event — so derive it: first primary segment start − session opened_at
-    # = time the contact waited until an agent picked it up. `queued` = waited >1s.
-    _seg_join = (
-        f"LEFT JOIN (SELECT session_id, min(started_at) AS started FROM {db}.segments FINAL "
-        f"WHERE tenant_id = {{tenant_id:String}} AND role = 'primary' "
-        f"AND agent_type != 'system' GROUP BY session_id) seg "
-        f"ON ss.session_id = seg.session_id"
-    )
-    _wait_expr = "if(seg.started >= ss.opened_at, toUnixTimestamp64Milli(seg.started) - toUnixTimestamp64Milli(ss.opened_at), NULL) AS wait_ms"
+    # Fase D — o ledger de fila são os segments (role='queue', Fase C):
+    #   wait_ms  = duration_ms do segmento de fila (NULL p/ fila ao vivo → fora das stats);
+    #   q_pool   = pool_id do segmento de fila (= pool-alvo; cobre sessão nunca roteada);
+    #   answered = existe segmento primary real (agent_type != 'system').
+    # Segmentos começam no open da sessão → filtro started_at >= since é seguro.
+    _per_session = f"""
+        SELECT if(ss.pool_id != '', ss.pool_id, segs.q_pool) AS pool_id,
+               ss.opened_at                                  AS opened_at,
+               ss.sla_target_ms                              AS sla_target_ms,
+               segs.q_count                                  AS q_count,
+               segs.q_outcome                                AS q_outcome,
+               segs.q_wait_ms                                AS wait_ms,
+               segs.primary_count                            AS primary_count
+        FROM (SELECT session_id, pool_id, opened_at, sla_target_ms
+              FROM {db}.sessions FINAL WHERE {s_where}) ss
+        LEFT JOIN (
+            SELECT session_id,
+                   anyIf(pool_id, role = 'queue')                       AS q_pool,
+                   maxIf(duration_ms, role = 'queue')                   AS q_wait_ms,
+                   anyIf(outcome, role = 'queue')                       AS q_outcome,
+                   countIf(role = 'queue')                              AS q_count,
+                   countIf(role = 'primary' AND agent_type != 'system') AS primary_count
+            FROM {db}.segments FINAL
+            WHERE tenant_id = {{tenant_id:String}} AND started_at >= '{since}'
+            GROUP BY session_id
+        ) segs ON ss.session_id = segs.session_id
+    """
+    _queued    = "q_count > 0"
+    _abandoned = "coalesce(q_outcome, '') = 'abandoned'"
+    _handoff   = f"({_queued} AND coalesce(q_outcome, '') != 'abandoned' AND primary_count > 0)"
 
     s_series = _rows_to_dicts(client.query(f"""
         SELECT {bucket_fn}(opened_at)                              AS bucket,
                pool_id,
                round(avg(wait_ms), 0)                              AS avg_wait_ms,
                count()                                             AS contacts,
-               countIf(wait_ms > 1000)                             AS queued,
-               countIf(close_reason IN {_ABANDON})                 AS abandoned
-        FROM (
-            SELECT ss.pool_id AS pool_id, ss.opened_at AS opened_at, ss.close_reason AS close_reason, {_wait_expr}
-            FROM (SELECT session_id, pool_id, opened_at, close_reason FROM {db}.sessions FINAL WHERE {s_where}) ss
-            {_seg_join}
-        )
+               countIf({_queued})                                  AS queued,
+               countIf({_abandoned})                               AS abandoned
+        FROM ({_per_session})
         GROUP BY bucket, pool_id
     """, parameters=params))
 
@@ -2394,22 +2458,21 @@ def _fetch_pools_queue(
         m["available_agents"] = float(r.get("available_agents") or 0)
     series = sorted(merged.values(), key=lambda x: (x["bucket"], x["pool_id"]))
 
+    # SLA: contato não-enfileirado espera 0 (dentro do SLA por construção);
+    # enfileirado compara a duração do segmento de fila com o sla_target.
     by_pool = _rows_to_dicts(client.query(f"""
         SELECT pool_id,
                count()                                             AS contacts,
-               countIf(wait_ms > 1000)                             AS queued,
-               countIf(close_reason IN {_ABANDON})                 AS abandoned,
-               round(countIf(close_reason IN {_ABANDON}) / greatest(count(), 1), 4) AS abandon_rate,
+               countIf({_queued})                                  AS queued,
+               countIf({_abandoned})                               AS abandoned,
+               countIf({_handoff})                                 AS handoff,
+               round(countIf({_abandoned}) / greatest(countIf({_queued}), 1), 4) AS abandon_rate,
                round(avg(wait_ms), 0)                              AS avg_wait_ms,
                round(quantile(0.95)(wait_ms), 0)                   AS p95_wait_ms,
                max(sla_target_ms)                                  AS sla_target_max,
-               countIf(sla_target_ms > 0 AND wait_ms <= sla_target_ms) AS within_sla,
+               countIf(sla_target_ms > 0 AND coalesce(wait_ms, 0) <= sla_target_ms) AS within_sla,
                countIf(sla_target_ms > 0)                          AS sla_eligible
-        FROM (
-            SELECT ss.pool_id AS pool_id, ss.close_reason AS close_reason, ss.sla_target_ms AS sla_target_ms, {_wait_expr}
-            FROM (SELECT session_id, pool_id, opened_at, close_reason, sla_target_ms FROM {db}.sessions FINAL WHERE {s_where}) ss
-            {_seg_join}
-        )
+        FROM ({_per_session})
         GROUP BY pool_id ORDER BY contacts DESC
     """, parameters=params))
     for r in by_pool:

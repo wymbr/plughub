@@ -90,6 +90,11 @@ Hoje o Analytics/Agents mistura agente×pool e não separa humano×IA.
   configurada no pricing (snapshot reservado à Fila); (c) volume com dimensão `endpoint`=DNIS
   (Arc 19). Pendente: Routing Engine (contadores+flush), 3 endpoints `/reports/pools/*`,
   pricing expõe capacidade, aba `Analytics/Pools`.
+  **Atualização 2026-06-03**: Fila/SLA reescritos sobre segments `role='queue'` + demanda
+  reprimida no Volume (queue-attended-model Fase D ✅, ver `CHANGELOG.md`). Dívida que
+  permanece: **`sessions.sla_target_ms` NULL na origem** (routing não propaga o alvo ao
+  analytics) → aba SLA sem dado (`sla_eligible=0`); popular via `parse_routed`
+  (routing result) ou snapshot do pool.
 - **Reformulação Analytics/Agents — Bancada de comparação 360° (novo)**: reescreve a aba como
   bancada de comparação (média dos agentes × indivíduos), unificando quantitativo + qualitativo
   (Arc 6) + voz do cliente (NPS/pesquisa) + voz do agente (wrap-up) na mesma entidade `agent_key`.

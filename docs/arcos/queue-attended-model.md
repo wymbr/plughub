@@ -1,6 +1,7 @@
 # Fila Sempre Atendida — Modelo Unificado de Fila
 
-> Estado: **spec / ADR** (não implementado). Decisões fechadas em 2026-06-03.
+> Estado: **Fases A–D implementadas e validadas** (2026-06-03); resta a Fase E
+> (fechar-sempre / cadeia de fallback). Decisões fechadas em 2026-06-03.
 > Contexto: bugs de visibilidade de fila no relatório de Pools (Fase 2) revelaram que a fase
 > de fila do ciclo do contato é sub-registrada na origem. Ver `docs/arcos/pools-infra-report.md`.
 
@@ -282,12 +283,34 @@ emissão do evento analítico:
   (`queue_config.max_wait_s` não é enforced em lugar nenhum — cenário `max_wait_exceeded` é
   da Fase E); posição não re-escrita entre drains (só on-enqueue); `close_reason` do segmento
   de fila fica NULL (outcome basta pra Fase D); i18n do role `queue` no detalhe de sessão da UI.
-- **D — Relatório de Fila/SLA sobre segments** + demanda reprimida no Volume.
+- **D — Relatório de Fila/SLA sobre segments + demanda reprimida no Volume** ✅
+  (2026-06-03) — validada com os dados das Fases B/C: `retencao_humano` queued=3,
+  handoff=1 (espera média ~110s), abandoned=1 (rate 33%); Volume `rejected.total=2`
+  com `by_cause` apontando `sac_ia` × {`shared_full`, `reservation_full`}.
+  Implementação (analytics-api `reports_query.py` + platform-ui `AnalisePoolsPage`):
+  (1) `/reports/pools/queue` reescrito — por sessão (excluindo `outcome='outage'`),
+  LEFT JOIN com agregado de segments: `queued` = tem segmento `role='queue'`;
+  **espera = `duration_ms` do segmento de fila** (fila ao vivo, `ended_at` NULL,
+  fica fora das stats de espera mas conta em queued); `abandoned` =
+  `q_outcome='abandoned'`; novo `handoff` = fila não-abandonada + segmento primary
+  real (`agent_type != 'system'`). **`abandon_rate` = abandonados/enfileirados**
+  (antes era /contatos). SLA: não-enfileirado espera 0 (dentro por construção);
+  pool da sessão nunca roteada vem do `pool_id` do segmento de fila. O interim
+  (gap até o primeiro primary, `pools-infra-report.md`) foi removido.
+  (2) `/reports/pools/volume` ganhou bloco `rejected`: série bucket×pool×canal das
+  sessões outage + `by_cause` (pool × `reservation_full|shared_full|quota`, join
+  sessões outage × segmentos system) + `totals.rejected`; `totals.contacts` segue
+  sendo a demanda total. (3) UI: card "Demanda reprimida" no Volume (total, % da
+  demanda, tabela pool×causa) + KPI no header; coluna "Pós-fila" e hint de
+  semântica na aba Fila; i18n en+pt-BR. `queue_events` permanece suplementar
+  (max_queue_len/disponíveis na série). Pendências: `sessions.sla_target_ms`
+  NULL na origem (aba SLA sem dado — dívida do routing→analytics, ver
+  `pools-infra-report.md`); fila ao vivo conta como dentro do SLA até fechar.
 - **E — Fechar-sempre / cadeia de fallback** (catch → notify+close → max_wait).
 
 ## O que substitui no relatório atual
 
-A derivação de espera por `LEFT JOIN segments` implementada em 2026-06-03 no
+~~A derivação de espera por `LEFT JOIN segments` implementada em 2026-06-03 no
 `/reports/pools/queue` (ver `pools-infra-report.md` § dívida de origem) fica como **interim**
-até a Fase D — ela mede só contatos atendidos; abandono/fila incompleta permanecem
-conhecidamente errados até lá.
+até a Fase D.~~ **Substituído pela Fase D (2026-06-03)** — o relatório agora deriva
+espera/abandono/handoff diretamente dos segments `role='queue'`; o interim foi removido.

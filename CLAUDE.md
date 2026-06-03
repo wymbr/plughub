@@ -72,6 +72,8 @@ plughub/
       session-replayer.md     ← Session Replayer, Hydrator, ReplayContext
       session-conference-lifecycle.md ← modelo de 3 camadas, gaps conhecidos
       dashboard.md            ← Dashboard #35, DisplayTool registry, catalog
+      queue-attended-model.md ← fila sempre atendida: admissão híbrida, outage, role queue, relatório Fila/SLA (A–D ✅)
+      pools-infra-report.md   ← relatório Pools/Infra: volume, fila, capacidade, SLA
     guias/
       context-store.md        ← ContextStore, @ctx.*, segment-scoped
       masked-input.md         ← Masked Input, begin_transaction

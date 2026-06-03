@@ -1,9 +1,12 @@
 /**
  * AnalisePoolsPage — /analise/pools (Fase 2 — saúde operacional por pool/canal)
  *
- * Sub-abas: Volume (implementado) · Fila · Capacidade · SLA (em breve).
+ * Sub-abas: Volume · Fila · Capacidade · SLA.
  * Volume lê GET /reports/pools/volume → área de contatos no tempo (empilhada por
- * canal) + donut por canal + tabela por endpoint (DNIS).
+ * canal) + donut por canal + tabela por endpoint (DNIS) + demanda reprimida
+ * (Fase D queue-attended-model: sessões outage + causa dos segmentos system).
+ * Fila/SLA leem GET /reports/pools/queue — derivado dos segments role='queue'
+ * (espera = duration_ms; abandono = outcome='abandoned'; handoff = fila→primary).
  */
 import React, { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
@@ -18,14 +21,20 @@ type SubTab = 'volume' | 'queue' | 'capacity' | 'sla'
 interface VolumeRow   { bucket: string; pool_id: string; channel: string; endpoint: string; contacts: number }
 interface ChannelRow  { channel: string; contacts: number }
 interface EndpointRow { channel: string; endpoint: string; contacts: number }
-interface VolumeData  { series: VolumeRow[]; by_channel: ChannelRow[]; by_endpoint: EndpointRow[]; totals: { contacts: number } }
+interface RejectedCauseRow { pool_id: string; cause: string; contacts: number }
+interface RejectedData     { series: unknown[]; by_cause: RejectedCauseRow[]; total: number }
+interface VolumeData  {
+  series: VolumeRow[]; by_channel: ChannelRow[]; by_endpoint: EndpointRow[]
+  totals: { contacts: number; rejected?: number }
+  rejected?: RejectedData
+}
 
 interface OccPoolRow  { pool_id: string; peak_concurrency: number; capacity: number; headroom: number; utilization: number | null }
 interface OccTotal    { peak_concurrency: number; capacity: number; headroom: number; utilization: number | null }
 interface OccData     { series: unknown[]; by_pool: OccPoolRow[]; total: OccTotal | null }
 
 interface QSeriesRow  { bucket: string; pool_id: string; avg_wait_ms: number; contacts: number; queued: number; abandoned: number; max_queue_len: number; available_agents: number }
-interface QPoolRow    { pool_id: string; contacts: number; queued: number; abandoned: number; abandon_rate: number; avg_wait_ms: number; p95_wait_ms: number; sla_target_ms: number; within_sla: number; sla_eligible: number; sla_attainment: number | null }
+interface QPoolRow    { pool_id: string; contacts: number; queued: number; abandoned: number; handoff: number; abandon_rate: number; avg_wait_ms: number; p95_wait_ms: number; sla_target_ms: number; within_sla: number; sla_eligible: number; sla_attainment: number | null }
 interface QueueData   { series: QSeriesRow[]; by_pool: QPoolRow[] }
 
 const CHANNEL_COLORS = ['#1B4F8A', '#2D9CDB', '#00B4D8', '#059669', '#D97706', '#7C3AED', '#DC2626', '#0891B2']
@@ -142,6 +151,67 @@ const VolumeSubTab: React.FC<{ data: VolumeData | null; loading: boolean }> = ({
           </div>
         </div>
       </div>
+
+      {/* Demanda reprimida (Fase D — queue-attended-model) */}
+      <RejectedCard data={data} />
+    </div>
+  )
+}
+
+// ── Demanda reprimida card (Volume) ───────────────────────────────────────────
+
+const RejectedCard: React.FC<{ data: VolumeData | null }> = ({ data }) => {
+  const { t } = useTranslation('agentReports')
+  const rej   = data?.rejected
+  const total = rej?.total ?? 0
+  const all   = data?.totals?.contacts ?? 0
+  const share = all > 0 ? Math.round((total / all) * 100) : 0
+  const causeLabel = (c: string) =>
+    ['reservation_full', 'shared_full', 'quota'].includes(c)
+      ? t(`pools.volume.rejected.cause.${c}`) : (c || '—')
+
+  return (
+    <div className="bg-white rounded-lg border border-border overflow-hidden">
+      <div className="px-4 py-2.5 border-b border-border bg-surface-muted">
+        <p className="text-xs font-semibold text-muted uppercase tracking-wide">{t('pools.volume.rejected.title')}</p>
+        <p className="text-2xs text-muted-light mt-0.5">{t('pools.volume.rejected.hint')}</p>
+      </div>
+      {total === 0 ? (
+        <div className="px-4 py-6 text-sm text-muted-light">{t('pools.volume.rejected.none')}</div>
+      ) : (
+        <div className="flex flex-col md:flex-row">
+          <div className="flex gap-3 p-3 md:flex-col md:w-48 md:border-r border-border">
+            <div className="bg-surface-muted rounded-md p-3 flex-1">
+              <div className="text-xs text-muted">{t('pools.volume.rejected.total')}</div>
+              <div className="text-xl font-semibold text-red">{total}</div>
+            </div>
+            <div className="bg-surface-muted rounded-md p-3 flex-1">
+              <div className="text-xs text-muted">{t('pools.volume.rejected.share')}</div>
+              <div className="text-xl font-semibold text-dark">{share}%</div>
+            </div>
+          </div>
+          <div className="flex-1 overflow-auto max-h-[220px]">
+            <table className="min-w-full text-xs border-collapse">
+              <thead className="bg-surface-muted sticky top-0">
+                <tr className="border-b border-border text-2xs text-muted uppercase">
+                  <th className="text-left px-3 py-2">{t('pools.volume.rejected.cols.pool')}</th>
+                  <th className="text-left px-3 py-2">{t('pools.volume.rejected.cols.cause')}</th>
+                  <th className="text-right px-3 py-2">{t('pools.volume.rejected.cols.contacts')}</th>
+                </tr>
+              </thead>
+              <tbody>
+                {(rej?.by_cause ?? []).map((r, i) => (
+                  <tr key={i} className="border-b border-border hover:bg-surface-muted">
+                    <td className="px-3 py-2 text-dark">{r.pool_id || '—'}</td>
+                    <td className="px-3 py-2 text-muted">{causeLabel(r.cause)}</td>
+                    <td className="px-3 py-2 text-right tabular-nums text-red">{r.contacts}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
@@ -267,6 +337,7 @@ const FilaSubTab: React.FC<{ data: QueueData | null; loading: boolean }> = ({ da
       <div className="bg-white rounded-lg border border-border overflow-hidden">
         <div className="px-4 py-2.5 border-b border-border bg-surface-muted">
           <p className="text-xs font-semibold text-muted uppercase tracking-wide">{t('pools.queue.tableTitle')}</p>
+          <p className="text-2xs text-muted-light mt-0.5">{t('pools.queue.hint')}</p>
         </div>
         <table className="min-w-full text-xs border-collapse">
           <thead className="bg-surface-muted">
@@ -274,6 +345,7 @@ const FilaSubTab: React.FC<{ data: QueueData | null; loading: boolean }> = ({ da
               <th className="text-left px-3 py-2">{t('pools.queue.cols.pool')}</th>
               <th className="text-right px-3 py-2">{t('pools.queue.cols.contacts')}</th>
               <th className="text-right px-3 py-2">{t('pools.queue.cols.queued')}</th>
+              <th className="text-right px-3 py-2">{t('pools.queue.cols.handoff')}</th>
               <th className="text-right px-3 py-2">{t('pools.queue.cols.abandoned')}</th>
               <th className="text-right px-3 py-2">{t('pools.queue.cols.abandonRate')}</th>
               <th className="text-right px-3 py-2">{t('pools.queue.cols.avgWait')}</th>
@@ -286,6 +358,7 @@ const FilaSubTab: React.FC<{ data: QueueData | null; loading: boolean }> = ({ da
                 <td className="px-3 py-2 text-dark">{r.pool_id || '—'}</td>
                 <td className="px-3 py-2 text-right tabular-nums text-dark">{r.contacts}</td>
                 <td className="px-3 py-2 text-right tabular-nums text-muted">{r.queued}</td>
+                <td className="px-3 py-2 text-right tabular-nums text-green">{r.handoff ?? 0}</td>
                 <td className="px-3 py-2 text-right tabular-nums text-warning-text">{r.abandoned}</td>
                 <td className="px-3 py-2 text-right tabular-nums text-muted">{Math.round((r.abandon_rate ?? 0) * 100)}%</td>
                 <td className="px-3 py-2 text-right tabular-nums text-dark">{fmtMs(r.avg_wait_ms)}</td>
@@ -440,6 +513,9 @@ export default function AnalisePoolsPage() {
         {volume && (
           <span className="ml-auto text-sm text-muted">
             {t('pools.kpi.contacts')}: <strong className="text-dark">{volume.totals.contacts}</strong>
+            {(volume.totals.rejected ?? 0) > 0 && (
+              <> · {t('pools.kpi.rejected')}: <strong className="text-red">{volume.totals.rejected}</strong></>
+            )}
           </span>
         )}
       </div>

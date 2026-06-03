@@ -116,7 +116,7 @@ A concorrência **não** é reconstruída por varredura de `participation_interv
 - Popular `sessions.wait_time_ms` no atendimento (a sessão deveria conhecer a própria espera) — hoje derivado no relatório.
 - Popular `sessions.sla_target_ms` (ou expor `PoolConfig.sla_target` ao analytics) — **sem isso a aba SLA fica sem dado** (`sla_eligible = 0`). Fonte certa: snapshot/config do pool no Routing Engine.
 
-> **Superseded (2026-06-03)**: a derivação por segments e a contagem de fila atual são **interim**. O modelo definitivo de fila (fila sempre atendida, outage na porta, padronização de outcome) está em [`queue-attended-model.md`](queue-attended-model.md) — a Fase D de lá reescreve `/reports/pools/queue` sobre segments de pool de fila.
+> **Superseded (2026-06-03)**: a derivação acima (gap até o primeiro primary) era **interim** e foi removida. A Fase D do [`queue-attended-model.md`](queue-attended-model.md) (implementada e validada 2026-06-03) reescreveu `/reports/pools/queue` sobre os segments `role='queue'`: espera = `duration_ms` do segmento de fila; abandono = `outcome='abandoned'`; handoff = fila→primary. A dívida `sessions.sla_target_ms` **permanece** — aba SLA segue sem dado (`sla_eligible=0`) até o routing propagar o alvo ao analytics.
 
 ---
 

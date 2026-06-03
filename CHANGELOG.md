@@ -2,6 +2,18 @@
 
 ---
 
+## Queue-Attended-Model Fase D — Relatório de Fila/SLA sobre Segments + Demanda Reprimida (2026-06-03)
+
+O ledger de fila passa a ser consumido na ponta: `/reports/pools/queue` reescrito sobre os segments `role='queue'` (Fase C) e o Volume ganha o KPI de demanda reprimida (segmentos sintéticos da Fase B). O interim "gap até o primeiro primary" foi removido.
+
+**analytics-api (`reports_query.py`):** `_fetch_pools_queue` — por sessão (excluindo `outcome='outage'`), LEFT JOIN com agregado de segments: `queued` = tem segmento de fila; **espera = `duration_ms` do segmento de fila** (fila ao vivo fora das stats, dentro de queued); `abandoned` = `q_outcome='abandoned'`; novo campo `handoff` = fila não-abandonada + primary real. **`abandon_rate` agora é abandonados/enfileirados** (antes /contatos). SLA: não-enfileirado espera 0; pool de sessão nunca roteada vem do segmento de fila (cobre o gap "sessão sem meta" da Fase A). `queue_events` permanece suplementar (max_queue_len/disponíveis). `_fetch_pools_volume` — bloco `rejected`: série bucket×pool×canal das sessões outage, `by_cause` (pool × `reservation_full|shared_full|quota` via join com segmentos system) e `totals.rejected`; `totals.contacts` segue sendo demanda total.
+
+**platform-ui (`AnalisePoolsPage.tsx`):** card "Demanda reprimida" no Volume (total, % da demanda, tabela pool×causa) + KPI `rejected` no header; coluna "Pós-fila" (handoff) e hint de semântica na aba Fila. i18n en+pt-BR (`agentReports.json`).
+
+Validado com os dados das Fases B/C: `retencao_humano` queued=3/handoff=1/abandoned=1, espera média ~110s, p95 ~277s; `rejected.total=2` com causas `shared_full`+`reservation_full` no `sac_ia`; sessões outage ausentes da aba Fila. Pendências: `sessions.sla_target_ms` NULL na origem (aba SLA sem dado — dívida routing→analytics em `pools-infra-report.md`); fila ao vivo conta como dentro do SLA até fechar. Spec: `docs/arcos/queue-attended-model.md`.
+
+---
+
 ## Queue-Attended-Model Fase C — Fila Atendida com Segmento Próprio (2026-06-03)
 
 **Decisão**: segmento do agente de fila marcado com **`role: queue`** em vez de pool separado (`pool_kind`/`queue_pool_id` dispensados no MVP). O `queue_config` existente (descoberta B0) já ativa o agente de fila no próprio pool-alvo — segmento com `pool_id` = alvo é a dimensão exata do relatório Fila/SLA da Fase D, e as queries de agente (`primary`/`specialist`) excluem fila por construção. Invariante analítico: **"atendido" = primeiro segmento `primary`**.

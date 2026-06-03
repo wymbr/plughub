@@ -5,7 +5,7 @@
     "subtabs": { "volume": "Volume", "queue": "Queue", "capacity": "Capacity", "sla": "SLA" },
     "soon": "Soon",
     "filter": { "from": "From", "to": "to", "pool": "Pool", "channel": "Channel", "allPools": "All pools", "allChannels": "All channels" },
-    "kpi": { "contacts": "Contacts" },
+    "kpi": { "contacts": "Contacts", "rejected": "Unmet" },
     "volume": {
       "title": "Volume over time",
       "byChannel": "By channel",
@@ -13,7 +13,16 @@
       "noData": "No data in the period.",
       "loading": "Loading…",
       "noPool": "(no pool)",
-      "cols": { "channel": "Channel", "endpoint": "Endpoint", "contacts": "Contacts" }
+      "cols": { "channel": "Channel", "endpoint": "Endpoint", "contacts": "Contacts" },
+      "rejected": {
+        "title": "Unmet demand",
+        "hint": "Contacts rejected at the door for lack of resources (outage outcome). The cause points to the action: pool reservation vs contracted capacity.",
+        "total": "Rejected",
+        "share": "% of demand",
+        "none": "No rejected contacts in the period.",
+        "cols": { "pool": "Pool", "cause": "Cause", "contacts": "Contacts" },
+        "cause": { "reservation_full": "Pool reservation full", "shared_full": "Shared capacity full", "quota": "Contracted quota" }
+      }
     },
     "capacity": {
       "title": "Concurrency vs capacity",
@@ -31,7 +40,8 @@
       "noData": "No queue data in the period.",
       "waitAvg": "Avg wait (s)",
       "available": "Available",
-      "cols": { "pool": "Pool", "contacts": "Contacts", "queued": "Queued", "abandoned": "Abandoned", "abandonRate": "Aband. %", "avgWait": "Avg wait", "p95Wait": "p95" }
+      "hint": "Wait = duration of the queue segment (attended queue). Abandon % over queued contacts.",
+      "cols": { "pool": "Pool", "contacts": "Contacts", "queued": "Queued", "handoff": "Post-queue", "abandoned": "Abandoned", "abandonRate": "Aband. %", "avgWait": "Avg wait", "p95Wait": "p95" }
     },
     "sla": {
       "title": "SLA attainment by pool",

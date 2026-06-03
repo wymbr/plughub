@@ -935,7 +935,8 @@ async def get_pools_volume(
 ) -> Response:
     """
     Fase 2 — volumetria de contatos por (bucket, pool, canal, endpoint=DNIS).
-    series (no tempo) + by_channel + by_endpoint + totals. Escopo por accessible_pools.
+    series (no tempo) + by_channel + by_endpoint + totals + rejected (demanda
+    reprimida, Fase D queue-attended-model). Escopo por accessible_pools.
     """
     data = await query_pools_volume(
         client           = request.app.state.store.new_client(),
@@ -962,8 +963,10 @@ async def get_pools_queue(
     pool_principal: PoolPrincipal = Depends(optional_pool_principal),
 ) -> Response:
     """
-    Fase 2 — fila + SLA por pool: espera real, abandono, disponíveis, tamanho de
-    fila (series) + abandono/p95/SLA (by_pool). Escopo por accessible_pools.
+    Fase D (queue-attended-model) — fila + SLA por pool derivados dos segments
+    role='queue': espera = duration_ms do segmento de fila; abandono =
+    outcome='abandoned'; handoff = fila→primary. series + by_pool.
+    Escopo por accessible_pools.
     """
     data = await query_pools_queue(
         client           = request.app.state.store.new_client(),
