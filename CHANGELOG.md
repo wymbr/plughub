@@ -2,6 +2,20 @@
 
 ---
 
+## Queue-Attended-Model Fase B — Admissão Híbrida + Outage na Porta (2026-06-03)
+
+Modelo *trunk reservation*: `session_reservation` (pool, opt-in) = fatia dedicada (teto+garantia) subtraída do total; pools sem reserva disputam o shared coletivo (`total − Σ reservas`). Billing só sobre o total. Rejeição na porta = **outage** registrado (demanda reprimida).
+
+**routing-engine:** novo `admission.py` — buckets como SETs de session_id (idempotente em re-publish; escalação = migração de bucket; migração rejeitada = fail-open mantendo origem — fechar sessão viva é da cadeia de fallback Fase E); reconciler 60s libera slots de sessões com `session:{id}:closed`; check em `_process_message` antes do `route()` (conference events isentos); `_emit_outage` publica contact_closed autoritativo (`close_reason=no_resource`, `outcome=outage`, `outage_cause`) + segmento sintético (`agent_type=system`, duração 0, pool que faltou) + outbound close, com guards `closed`/`contact_close_fired` bloqueando re-close do bridge.
+
+**agent-registry/schemas:** `session_reservation` em `PoolRegistrationSchema`, coluna Prisma + migration, CRUD create/update; `_formatPool` e RegistrySyncer são passthrough → YAML e PUT propagam sem código extra.
+
+**analytics-api:** `agent_type != 'system'` na performance de agente e na derivação de espera (segmentos sintéticos nunca contam como atendimento).
+
+Validado: teto 2 + 3 webchats → 3º rejeitado `shared_full`; sessão `no_resource+outage`; segmento system com causa. Decisão registrada (TODO): webhook `max_concurrent_sessions` default 500 é capacidade fictícia → remover default, campo vira throttle opcional de downstream (re-validar ao retomar). Spec: `docs/arcos/queue-attended-model.md`.
+
+---
+
 ## Queue-Attended-Model Fase A — Padronização outcome/close_reason (2026-06-03)
 
 Antes: `sessions.outcome` NULL em 100%; `close_reason` com valores de transporte fora do domínio (`client_disconnect` 71×, `agent_done` 43×). Causa: dois escritores do `contact_closed` vazando o contrato de transporte pro ClickHouse, e o outcome nunca propagado.

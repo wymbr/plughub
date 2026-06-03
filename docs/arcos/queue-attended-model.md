@@ -232,7 +232,22 @@ emissão do evento analítico:
   close_reason+outcome dele + do marcador `session:{id}:closed` (transporte); (4) wire
   de transporte 100% intacto. Pendente desta fase: sessão só-fila (nunca roteada) sem
   `meta` → evento sem tenant → sem fechamento no ClickHouse (resolvido por B/E).
-- **B — Admissão híbrida + outage na porta** (reserva/shared no Routing + sessão sempre criada + render de rejeição + metering skip). Independente da fila atendida.
+- **B — Admissão híbrida + outage na porta** ✅ (2026-06-03) — validada nos dois cenários:
+  `shared_full` (teto 2, 3º contato rejeitado) e `reservation_full` (reserva 1 no sac_ia,
+  2º contato rejeitado; bucket com exatamente 1 membro, shared limpo pelo reconciler).
+  Sessão `no_resource`+`outage`, segmento sintético `system` com causa apontando o pool.
+  Nota operacional: release de admissão é assíncrono (~60s) — rejeições logo após um
+  fechamento são possíveis (trade-off do gauge auto-curável). Gap menor: PUT parcial não
+  limpa `session_reservation` (Zod não aceita null) — limpar via SQL + republish até
+  ajustar o schema. Implementação: `routing-engine/admission.py`
+  (buckets SET reserva/shared, migração com fail-open mid-session, reconciler 60s via
+  `session:{id}:closed`), `_emit_outage` (contact_closed autoritativo + segmento sintético
+  + outbound close + guards anti-reclose), `PoolConfig.session_reservation` (schemas +
+  Prisma + CRUD + YAML passthrough), filtro `agent_type != 'system'` no analytics.
+  **Pendente da fase**: metering ainda conta sessão outage na dimensão `sessions`
+  (compensação na integração metering×pricing); widget webchat fecha sem mensagem de
+  rejeição (render v2); invariante Σ reservas ≤ total ainda sem validação na escrita
+  (Registry) — hoje só guard `max(0, shared)` no runtime.
 - **C — Fila atendida** (pool_kind, alocação de fila no Routing, dispensa, ContextStore posição/eta). **Nota (descoberta B0)**: o padrão Queue Agent JÁ existe — `pool.queue_config{agent_type_id, skill_id}` ativa agente nativo de fila no `conversations.queued` (bridge `process_queued`); drain sinaliza `__agent_available__` → skill-flow escala. Fase C vira formalização: skill-flow de fila configurável **por pool** com default de tenant (ex. `agente_fila_v1`), `pool_kind` p/ analytics, e segmento próprio pro agente de fila (hoje roda com `instance_id=""`, sem slot).
 - **D — Relatório de Fila/SLA sobre segments** + demanda reprimida no Volume.
 - **E — Fechar-sempre / cadeia de fallback** (catch → notify+close → max_wait).
