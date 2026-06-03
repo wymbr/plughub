@@ -108,6 +108,16 @@ A concorrência **não** é reconstruída por varredura de `participation_interv
 - `queue_events.estimated_wait_ms` é estimativa; a **espera real** sai do intervalo `queued → served/abandoned` por `session_id`. SLA usa a espera real vs `sessions.sla_target_ms`.
 - `queue_events.available_agents` é histórico → alimenta "disponíveis × fila".
 
+### Implementação (2026-06-03) + dívida de origem
+
+**Espera derivada dos segments** (implementado): `sessions.wait_time_ms` está **NULL** (o Core/bridge não grava o tempo de espera na sessão ao atender) e `queue_events` só tem o evento `queued` (sem `dequeued`). Então o endpoint `/reports/pools/queue` **deriva** a espera = início do **primeiro segmento `role='primary'`** − `sessions.opened_at` (LEFT JOIN sessions×segments). `queued` = espera > 1s. Validado: contato humano que esperou na fila aparece com avg_wait ~1,6s e queued ≥ 1.
+
+**Dívida de origem (Core/bridge — pendente):**
+- Popular `sessions.wait_time_ms` no atendimento (a sessão deveria conhecer a própria espera) — hoje derivado no relatório.
+- Popular `sessions.sla_target_ms` (ou expor `PoolConfig.sla_target` ao analytics) — **sem isso a aba SLA fica sem dado** (`sla_eligible = 0`). Fonte certa: snapshot/config do pool no Routing Engine.
+
+> **Superseded (2026-06-03)**: a derivação por segments e a contagem de fila atual são **interim**. O modelo definitivo de fila (fila sempre atendida, outage na porta, padronização de outcome) está em [`queue-attended-model.md`](queue-attended-model.md) — a Fase D de lá reescreve `/reports/pools/queue` sobre segments de pool de fila.
+
 ---
 
 ## Fonte de capacidade (decisão — 2026-06-03)
