@@ -105,7 +105,9 @@ tentativa de confirmação (adiada) e fica suspenso aguardando inbound, até o r
    sempre com `tenant_id`. Não regravar `channel` no resume. Segmentos vêm dos eventos
    de participante (specialist → `parent_segment_id`).
 5. **platform-ui `ListaTab`**: classificar por `channel_type` real, não por presença de
-   step `delegate`/`suspend`. *(Fase C — pendente.)*
+   step `delegate`/`suspend`. *(Fase C ✅ — implementada: canal real decide
+   WorkflowTraceList vs SegmentList; badge "suspended" restrito a webhook, webchat em
+   delegate-wait lê live. Constatada em 2026-06-04 — marcador "pendente" estava stale.)*
 6. **YAML `agente_confirmacao` `verificar_canal`**: **default = `aguardar_inbound` (adiar)**.
    Só notifica proativamente quando `customer_present == "true"` (flag literal passado pelo
    reconnect de A-new) OU canal outbound explícito (`email`, etc.). Não usar
@@ -134,8 +136,9 @@ tentativa de confirmação (adiada) e fica suspenso aguardando inbound, até o r
   inbound_only marca B como `awaiting_customer_inbound`. Ganho visível: C some da lista.
 - **Fase B** — delegate-wait não-webhook: bridge não marca chamador webchat como
   suspended/webhook; resume preserva canal e fecha A-new no `finalizar`.
-- **Fase C** — UI: heurística de classificação por `channel_type` real; badge de status
-  derivado de participantes vivos (não do estado interno do fluxo).
+- **Fase C** ✅ — UI: classificação por `channel_type` real (ListaTab); badge
+  "suspended" restrito a webhook (proxy de "sem cliente vivo" — contador de
+  participantes vivos exigiria backend, registrado como refinamento futuro).
 - **Fase D** ✅ — Timeout scanner do delegate. Implementado em
   `channel-gateway/adapters/webhook.py` (`run_timeout_scanner`, background task no
   `lifespan`, intervalo 60s): varre `*:resume_tokens`, e para cada token com `expires_at`

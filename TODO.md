@@ -25,10 +25,11 @@ Modelo corrigido e backend verde em [`docs/arcos/delegate-workflow-io.md`](docs/
 (delegate sempre roda o alvo como segmento conference do chamador; A-new fecha como webchat;
 `context_set` registrado; specialist de B adia instantâneo). Restam:
 
-- **Fase C — heurística de canal na UI (`platform-ui` `ListaTab.tsx`)**: classificar a sessão
-  por `channel_type` real, não pela presença de step `delegate`/`suspend`. Hoje uma sessão
-  webchat que usa `delegate` é renderizada como workflow/webhook. Badge de status deve derivar
-  de participantes vivos (sessão com specialist ativo lê `active`, não `suspended`).
+- **Fase C — heurística de canal na UI ✅** (já implementada — TODO estava
+  desatualizado): `ListaTab.tsx` classifica pelo `channel_type` real (canal decide
+  WorkflowTraceList vs SegmentList) e o badge "suspended" é restrito a `channel ===
+  'webhook'` (webchat em delegate-wait lê live). Nota residual no código: contador
+  de participantes vivos exigiria suporte de backend — channel é o proxy aceito.
 - **Fase D — timeout scanner do delegate ✅** (já implementado — TODO estava
   desatualizado; ver `delegate-workflow-io.md` § Fase D): `run_timeout_scanner` em
   `channel-gateway/adapters/webhook.py` (lifespan, 60s) expira `resume_tokens`
@@ -184,7 +185,12 @@ A spec original em [`docs/arcos/arc18-workflow-execution-trace.md`](docs/arcos/a
 
 **O que sobrevive do conceito**: conforme documentado em `docs/arcos/arc19-unified-session-model.md` §Analytics/Sessions, a hierarquia correta é **lista de sessions → lista de segments → detalhe do segment**. Workflows webhook aparecem em Analytics/Sessions com `channel_type: webhook`; cada suspend/resume cria um segmento distinto; o padrão de navegação é idêntico ao de sessões normais (webchat, voice). Não há Trace tab separada — o usuário navega pelos segmentos da sessão webhook da mesma forma que navega pelos segmentos de qualquer outra sessão.
 
-**Pendência real (prioridade demo):** Analytics/Sessions → ao clicar em uma sessão webhook com múltiplos segmentos, a UI deve mostrar a **lista de segmentos** antes de ir para o detalhe, e cada segmento na lista deve indicar o contexto do ciclo (ex: "Execução 1 — suspenso" / "Execução 2 — concluído"). Verificar se a navegação atual pula a lista de segmentos para sessões com um único segmento (comportamento correto para sessões normais) e mostrar corretamente a lista quando há múltiplos segmentos (caso webhook com suspend/resume).
+**Pendência real ✅** (constatada já implementada em 2026-06-04 — Fase E do delegate
+entregou): `WorkflowTraceList` renderiza a lista ordenada de segmentos da sessão
+webhook com numeração de ciclo, badge de tipo (intake/execução/specialist), status
+por nó (live/outcome/closed), pool+timing e contadores de execuções/suspensões; a
+navegação por canal real (Fase C do delegate) garante que sessão webhook sempre
+passa pela lista antes do detalhe.
 
 ---
 
