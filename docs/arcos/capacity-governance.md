@@ -71,8 +71,8 @@ removida da visão do total no fechamento da Fase 2; aqui sai do modelo).
 ## Questões em aberto (resolver na implementação)
 
 - Mapeamento pool→`resource_type`: webhook pools contam como `ai_agent`?
-- Granularidade das chaves de quota (`max_session_ia`/`max_session_humano` vs
-  por `resource_type` genérico).
+- ~~Granularidade das chaves de quota~~ ✅ resolvida no item 1 (ver § Pendente):
+  uma chave por tenant agora; por `resource_type` junto com os gates por tipo.
 - Interação com reservas comerciais ativáveis (C muda ao ativar/desativar reserva
   → mesma revalidação do contract-change).
 
@@ -80,8 +80,15 @@ removida da visão do total no fechamento da Fase 2; aqui sai do modelo).
 
 ## Pendente (implementação)
 
-1. pricing-api: gravar quotas Redis no upsert/ativação de resources + corrigir
-   `pricing.md` (hoje descreve integração inexistente).
+1. ✅ (2026-06-04) pricing-api: **quota sync** (`quota_sync.py`) — toda mutação de
+   resources (upsert/delete/activate/deactivate) recalcula C (ai_agent +
+   human_agent, base + reservas ativas, todas as instalações) e grava
+   `{t}:quota:max_concurrent_sessions` (DEL quando C=0 → sem limite); `sync_all`
+   no boot (auto-cura pós flush); `PLUGHUB_PRICING_REDIS_URL` (vazia = off,
+   Redis fora = warning, billing nunca quebra). `pricing.md` § Quota Side Effects
+   corrigido. **Granularidade resolvida**: uma chave por tenant (a que tem
+   leitores — admissão híbrida + checkConcurrentSessions); chaves por
+   resource_type ficam para os gates por tipo (itens 2) quando existirem leitores.
 2. Gates de criação: instância IA (bootstrap/routing), login humano concorrente
    (auth/registry), admissão de sessão (`assertQuota` passa a ter chave).
 3. Validações de config: deploy (Σ ≤ C) e pool (Σ reservas ≤ C, shared ≥ 0);

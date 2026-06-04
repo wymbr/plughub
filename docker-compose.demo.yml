@@ -1001,10 +1001,13 @@ services:
       PLUGHUB_PRICING_DATABASE_URL:    postgresql://plughub:plughub@postgres:5432/plughub_demo
       PLUGHUB_PRICING_CONFIG_API_URL:  http://config-api:3600
       PLUGHUB_PRICING_ADMIN_TOKEN:     demo_pricing_admin_token
+      PLUGHUB_PRICING_REDIS_URL:       redis://redis:6379   # quota sync — {t}:quota:max_concurrent_sessions
     depends_on:
       postgres:
         condition: service_healthy
       config-api:
+        condition: service_healthy
+      redis:
         condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:3900/health', timeout=3)\" 2>/dev/null && echo ok || exit 1"]

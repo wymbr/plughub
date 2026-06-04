@@ -43,8 +43,11 @@ CREATE TABLE IF NOT EXISTS pricing.installation_resources (
     label           TEXT        NOT NULL DEFAULT '',
     created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    -- NULLS NOT DISTINCT (PG15+): reserve_pool_id é NULL nos recursos base; sem
+    -- isso, NULL ≠ NULL e o ON CONFLICT do upsert nunca dispara → cada POST
+    -- insere linha duplicada (bug descoberto 2026-06-04 no quota sync).
     CONSTRAINT uq_installation_resource
-        UNIQUE (tenant_id, installation_id, resource_type, reserve_pool_id)
+        UNIQUE NULLS NOT DISTINCT (tenant_id, installation_id, resource_type, reserve_pool_id)
 );
 
 CREATE INDEX IF NOT EXISTS idx_pricing_resources_tenant
@@ -71,7 +74,53 @@ async def ensure_schema(pool: asyncpg.Pool) -> None:
     async with pool.acquire() as conn:
         async with conn.transaction():
             await conn.execute(_DDL)
+            await _migrate_uq_nulls_not_distinct(conn)
     logger.info("pricing schema ensured")
+
+
+async def _migrate_uq_nulls_not_distinct(conn: asyncpg.Connection) -> None:
+    """
+    Migração (2026-06-04): bases criadas antes do NULLS NOT DISTINCT têm a
+    constraint antiga (NULL ≠ NULL → upsert duplicava recursos base). Detecta
+    pela pg_index, deduplica (mantém a linha mais recente por chave lógica —
+    a última escrita expressa a intenção atual do operador) e recria a constraint.
+    """
+    row = await conn.fetchrow(
+        """
+        SELECT i.indnullsnotdistinct AS nnd
+        FROM pg_index i
+        JOIN pg_class c ON c.oid = i.indexrelid
+        JOIN pg_namespace n ON n.oid = c.relnamespace
+        WHERE n.nspname = 'pricing' AND c.relname = 'uq_installation_resource'
+        """
+    )
+    if row is None or row["nnd"]:
+        return  # constraint não existe (tabela nova já correta) ou já migrada
+
+    deduped = await conn.execute(
+        """
+        DELETE FROM pricing.installation_resources a
+        USING pricing.installation_resources b
+        WHERE a.tenant_id = b.tenant_id
+          AND a.installation_id = b.installation_id
+          AND a.resource_type = b.resource_type
+          AND a.reserve_pool_id IS NOT DISTINCT FROM b.reserve_pool_id
+          AND a.id <> b.id
+          AND (a.updated_at < b.updated_at
+               OR (a.updated_at = b.updated_at AND a.id < b.id))
+        """
+    )
+    await conn.execute(
+        "ALTER TABLE pricing.installation_resources DROP CONSTRAINT uq_installation_resource"
+    )
+    await conn.execute(
+        """
+        ALTER TABLE pricing.installation_resources
+        ADD CONSTRAINT uq_installation_resource
+        UNIQUE NULLS NOT DISTINCT (tenant_id, installation_id, resource_type, reserve_pool_id)
+        """
+    )
+    logger.info("migrated uq_installation_resource to NULLS NOT DISTINCT (%s)", deduped)
 
 
 # ─── installation_resources ───────────────────────────────────────────────────
@@ -288,19 +337,22 @@ _AGENT_CAPACITY_TYPES = ("ai_agent", "human_agent")
 async def get_capacity(
     pool: asyncpg.Pool,
     tenant_id: str,
-    installation_id: str = "default",
+    installation_id: str | None = "default",
 ) -> dict:
+    """installation_id=None agrega todas as instalações do tenant (quota é por tenant)."""
+    where_inst = "AND installation_id = $2" if installation_id is not None else ""
+    args = [tenant_id] + ([installation_id] if installation_id is not None else [])
     rows = await pool.fetch(
-        """
+        f"""
         SELECT resource_type,
                SUM(quantity) FILTER (WHERE pool_type = 'base')                 AS base,
                SUM(quantity) FILTER (WHERE pool_type = 'reserve' AND active)   AS reserve_active
         FROM pricing.installation_resources
-        WHERE tenant_id = $1 AND installation_id = $2 AND active
+        WHERE tenant_id = $1 {where_inst} AND active
         GROUP BY resource_type
         ORDER BY resource_type
         """,
-        tenant_id, installation_id,
+        *args,
     )
     by_type = [
         {

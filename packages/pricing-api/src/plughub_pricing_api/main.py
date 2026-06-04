@@ -14,6 +14,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from .config import get_settings
 from .db import ensure_schema
+from .quota_sync import sync_all
 from .router import router
 
 logging.basicConfig(
@@ -48,11 +49,24 @@ async def startup() -> None:
         max_size = 10,
     )
     await ensure_schema(app.state.pg_pool)
+
+    # Quota sync (capacity-governance item 1) — produtor de
+    # {t}:quota:max_concurrent_sessions. Opcional: sem REDIS_URL, desabilitado.
+    app.state.redis = None
+    if settings.redis_url:
+        import redis.asyncio as aioredis
+        app.state.redis = aioredis.from_url(settings.redis_url, decode_responses=True)
+        await sync_all(app.state.redis, app.state.pg_pool)
+    else:
+        logger.info("Quota sync disabled (PLUGHUB_PRICING_REDIS_URL not set)")
+
     logger.info("Pricing API ready on port %d", settings.port)
 
 
 @app.on_event("shutdown")
 async def shutdown() -> None:
+    if getattr(app.state, "redis", None) is not None:
+        await app.state.redis.aclose()
     await app.state.pg_pool.close()
     logger.info("Pricing API shutdown")
 

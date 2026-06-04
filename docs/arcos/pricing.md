@@ -122,17 +122,34 @@ Deactivates a reserve pool. Records `deactivated_at` and computes `days_active`.
 
 ---
 
-## Quota Side Effects
+## Quota Side Effects (implementado 2026-06-04 — capacity-governance item 1)
 
-When `POST /v1/pricing/resources/{tenant_id}` is called, pricing-api writes quota limits directly to Redis:
+> Histórico: esta seção descrevia uma integração que **não existia** (descoberto na
+> validação da Fase 2 Pools, 2026-06-04 — pricing-api não tinha código Redis e as
+> chaves documentadas nem batiam com os leitores). Reescrita com o comportamento real.
+
+Toda mutação de resources — `POST /v1/pricing/resources` (upsert), `DELETE`
+(remoção), `activate`/`deactivate` de reserva — dispara o **quota sync**
+(`quota_sync.py`): recalcula **C** do tenant (capacidade contratada de agentes =
+`ai_agent` + `human_agent`, base + reservas comerciais ativas, todas as
+instalações) e grava:
 
 ```
-{tenant}:quota:limit:concurrent_sessions  — from human_agent_slot × sessions_per_agent
-{tenant}:quota:limit:messages             — from plan config
-{tenant}:quota:limit:llm_tokens_input     — from plan config
+{tenant}:quota:max_concurrent_sessions = C     (C > 0)
+                                          DEL  (C == 0 — sem resources → sem limite)
 ```
 
-These are the same keys read by `assertQuota()` in Core and Channel Gateway. The Config API seed does NOT write these — pricing-api owns them.
+Leitores: `AdmissionController._shared_limit` no routing-engine (admissão híbrida:
+`shared = C − Σ session_reservation`; rejeição vira outage `shared_full`) e
+`checkConcurrentSessions` no mcp-server. Recompute completo e idempotente; no boot
+o `sync_all` re-deriva a quota de todos os tenants com resources (auto-cura após
+flush do Redis). `PLUGHUB_PRICING_REDIS_URL` vazia → sync desabilitado; Redis fora
+→ loga warning e o billing segue (quota nunca quebra o pricing).
+
+As dimensões de **uso** (`{tenant}:quota:limit:{dimension}` — messages,
+llm_tokens, voice_minutes — lidas pelo `assertQuota()`) seguem **sem produtor**:
+fazem parte de plano/consumo, não de capacidade — fora do escopo do
+capacity-governance (ver TODO). O Config API seed não grava nenhuma dessas chaves.
 
 ---
 

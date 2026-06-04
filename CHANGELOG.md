@@ -2,6 +2,20 @@
 
 ---
 
+## Capacity-governance item 1 — quota sync: pricing arma o gate de admissão (2026-06-04)
+
+Primeiro item do arco [`capacity-governance.md`](docs/arcos/capacity-governance.md). O gate já existia dos dois lados — `AdmissionController._shared_limit` (routing, admissão híbrida: `shared = C − Σ session_reservation`) e `checkConcurrentSessions` (mcp-server) leem `{t}:quota:max_concurrent_sessions` — mas **ninguém gravava a chave** (a "integração" era só documentação).
+
+**pricing-api**: novo `quota_sync.py` — `sync_tenant` recalcula C (capacidade contratada de agentes: `ai_agent` + `human_agent`, base + reservas comerciais **ativas**, agregado de todas as instalações via `get_capacity(installation_id=None)`) e grava a chave (`DEL` quando C=0 → sem resources, sem limite — comportamento anterior preservado); `sync_all` no startup re-deriva todos os tenants com resources (auto-cura pós Redis flush). Hooks nas 4 mutações: upsert, delete, activate/deactivate de reserva (ativar reserva sobe C na hora; desativar reduz — redução sempre aceita, conforme modelo). `config.py` ganha `redis_url` (`PLUGHUB_PRICING_REDIS_URL`; vazia = sync off; Redis fora = warning, billing nunca quebra); dependência `redis[hiredis]`; compose com env + depends_on redis.
+
+**Granularidade decidida**: uma chave por tenant (a única com leitores hoje). Chaves por `resource_type` (gate de instância IA, login humano concorrente) entram com os respectivos gates (itens 2 do arco).
+
+**Bug pré-existente descoberto na validação** (a quota somou "errado" → 27): a constraint `uq_installation_resource` incluía `reserve_pool_id` **NULL** e em Postgres NULL ≠ NULL → o `ON CONFLICT` do upsert **nunca disparava para recursos base** — cada POST inseria linha duplicada (20+5+2=27). Fix: constraint recriada com `UNIQUE NULLS NOT DISTINCT` (PG15+; demo é pg16) + migração idempotente no `ensure_schema` (detecta via `pg_index.indnullsnotdistinct`, deduplica mantendo a linha mais recente por chave lógica — a última escrita do operador — e recria a constraint). O `sync_all` do boot roda após a migração → quota corrige sozinha no restart.
+
+**docs**: `pricing.md` § Quota Side Effects reescrito (descrevia chaves inexistentes que nem batiam com os leitores); spec do arco e TODO marcam item 1 ✅.
+
+---
+
 ## Relatórios Fase 2 — Pools/Infra: fechamento de capacidade (2026-06-04)
 
 Fecha o item "Pools/Infra restante" do TODO. Recon inicial confirmou (TODO atrás do código, 4ª vez na semana) que os itens 1, 2 e 4 do § Pendente do spec **já estavam implementados**: occupancy sampler no routing-engine (`_occupancy_sampler` — amostra `active_count` por pool a cada 5s + total instantâneo do tenant, pico/minuto, carry-over implícito → Kafka `pool.occupancy`), consumer + `pool_occupancy_peaks` + `/reports/pools/occupancy` no analytics-api, e a aba Analytics→Pools. Decisões de fechamento: **(a)** sampler basta — contadores event-driven (SET de session_id) descartados, ficam como evolução se deriva do `active_count` aparecer; **(b)** teto do **total** = capacidade **configurada no pricing**; per-pool segue a provisionada (pricing não tem granularidade por pool de routing); **(c)** time-series de capacidade na UI (Arc 19 "Pools (time-series capacity)").

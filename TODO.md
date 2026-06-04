@@ -166,6 +166,11 @@ negativo nunca); redução de C sempre aceita com revalidação + alerta de
 não-conformidade (nunca bloqueia); P (alocado) vira medidor de consumo do contrato
 (UI: C × alocado × saldo). Absorve a dívida pricing→quota Redis registrada na
 Fase 2. Pendente de implementação: ver § Pendente do spec.
+**Item 1 ✅** (2026-06-04, ver `CHANGELOG.md`): quota sync no pricing-api —
+mutações de resources gravam `{t}:quota:max_concurrent_sessions` (C = ai+human,
+base + reservas ativas); `sync_all` no boot; o gate já existente da admissão
+híbrida (`shared = C − Σ reservas`) passa a armar de verdade. `pricing.md`
+§ Quota Side Effects corrigido (descrevia integração inexistente).
 
 ---
 

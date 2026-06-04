@@ -28,6 +28,7 @@ from pydantic import BaseModel, Field
 from . import db as pricing_db
 from .calculator import PricingCalculator, invoice_to_xlsx, load_price_table
 from .config import Settings, get_settings
+from .quota_sync import sync_tenant
 
 logger = logging.getLogger("plughub.pricing.router")
 
@@ -38,6 +39,11 @@ router = APIRouter()
 
 def get_pool(request: Request) -> asyncpg.Pool:
     return request.app.state.pg_pool
+
+
+def get_redis(request: Request):
+    """Redis do quota sync (None quando PLUGHUB_PRICING_REDIS_URL não setada)."""
+    return getattr(request.app.state, "redis", None)
 
 
 def require_admin(
@@ -111,6 +117,7 @@ async def upsert_resource(
     tenant_id: str,
     body: UpsertResourceBody,
     pool: asyncpg.Pool = Depends(get_pool),
+    redis = Depends(get_redis),
 ):
     resource = await pricing_db.upsert_resource(
         pool,
@@ -123,6 +130,7 @@ async def upsert_resource(
         billing_unit    = body.billing_unit,
         label           = body.label,
     )
+    await sync_tenant(redis, pool, tenant_id)   # C mudou → re-grava quota de admissão
     return resource
 
 
@@ -134,10 +142,12 @@ async def delete_resource(
     tenant_id:   str,
     resource_id: str,
     pool: asyncpg.Pool = Depends(get_pool),
+    redis = Depends(get_redis),
 ):
     deleted = await pricing_db.delete_resource(pool, resource_id)
     if not deleted:
         raise HTTPException(status_code=404, detail="Resource not found")
+    await sync_tenant(redis, pool, tenant_id)   # C mudou → re-grava quota de admissão
     return {"deleted": True}
 
 
@@ -168,16 +178,19 @@ async def activate_reserve(
     pool_id:   str,
     activated_by: str = Query(default="operator"),
     pool: asyncpg.Pool = Depends(get_pool),
+    redis = Depends(get_redis),
 ):
     """
     Activates a reserve pool:
     1. Sets active=TRUE on all resources in the pool.
     2. Logs today as an activation date (full-day billing starts today).
+    3. Re-syncs the admission quota (C = base + active reserves).
     """
     updated = await pricing_db.set_reserve_active(pool, tenant_id, pool_id, active=True)
     if updated == 0:
         raise HTTPException(status_code=404, detail=f"Reserve pool '{pool_id}' not found for tenant")
     log = await pricing_db.record_activation(pool, tenant_id, pool_id, activated_by)
+    await sync_tenant(redis, pool, tenant_id)
     return {"activated": True, "pool_id": pool_id, "resources_updated": updated, "log": log}
 
 
@@ -189,17 +202,20 @@ async def deactivate_reserve(
     tenant_id: str,
     pool_id:   str,
     pool: asyncpg.Pool = Depends(get_pool),
+    redis = Depends(get_redis),
 ):
     """
     Deactivates a reserve pool:
     1. Sets active=FALSE on all resources in the pool.
     2. Closes open activation log records (deactivation_date = today).
     Today is still billable (full-day model).
+    3. Re-syncs the admission quota (C shrinks — reduction always accepted).
     """
     updated = await pricing_db.set_reserve_active(pool, tenant_id, pool_id, active=False)
     if updated == 0:
         raise HTTPException(status_code=404, detail=f"Reserve pool '{pool_id}' not found for tenant")
     await pricing_db.record_deactivation(pool, tenant_id, pool_id)
+    await sync_tenant(redis, pool, tenant_id)
     return {"deactivated": True, "pool_id": pool_id, "resources_updated": updated}
 
 

@@ -23,6 +23,13 @@ class Settings(BaseSettings):
     port:    int = 3900
     workers: int = 1
 
+    # ── Redis (quota sync — capacity-governance item 1) ────────────────────────
+    # Quando setado, toda mutação de resources recalcula C (base + reservas
+    # ativas, ai_agent + human_agent) e grava {t}:quota:max_concurrent_sessions
+    # (lida pela admissão híbrida do routing e pelo checkConcurrentSessions do
+    # mcp-server). Vazio = sync desabilitado (quota nunca gravada).
+    redis_url: str = ""
+
     # ── Admin auth (same pattern as config-api) ────────────────────────────────
     admin_token: str = ""
 
