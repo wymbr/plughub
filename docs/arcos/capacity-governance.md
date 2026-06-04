@@ -101,8 +101,16 @@ removida da visão do total no fechamento da Fase 2; aqui sai do modelo).
      `GET /v1/pools/capacity/conformance` (contracted/reserved_total/shared/conform
      /pools) — relê C a cada chamada, então mudança de contrato revalida
      implicitamente; alerta visual fica com o item 4.
-   - **3b** deploy: Σ declarada nos deploys ≤ C (validação no fluxo de deploy) —
-     pendente.
+   - **3b ✅** (2026-06-04) deploy: `Σ declarada nos deploys ≤ C` no agent-registry
+     (`lib/capacity.ts` compartilhado com 3a) — declarada por pool = slot `current`
+     × `config_json.max_concurrent_sessions` (default 1). Validado em **dois
+     pontos**: `PUT /slots/next` (feedback cedo, na declaração) e `POST /promote`
+     (momento em que vira efetiva — revalida contra o C vigente, que pode ter
+     mudado). Mesmas regras do 3a: sem C → fail-open; reduções/iguais sempre
+     passam (re-sync idempotente do RegistrySyncer não quebra o boot); só
+     aumentos que estourem C → 422 com detalhe. **Rollback é isento** (operação
+     de emergência nunca bloqueia). Nota: compara contra o C total do tenant
+     (chave única do item 1); refinamento por resource_type entra com o item 2.
 4. ✅ (2026-06-04) platform-ui: aba **Capacidade** na BillingPage — KPIs
    contratado (C, pricing `/capacity`) × alocado (provisionada corrente, último
    bucket do occupancy) × saldo (C − alocado, verde/vermelho) × reservado/shared

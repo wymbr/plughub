@@ -179,6 +179,9 @@ sempre passam; sem C → fail-open) + `GET /v1/pools/capacity/conformance`
 contratado × alocado × saldo + reservado/shared com alertas de não-conformidade
 (reservas > C; alocado > C). Restam: 3b (Σ dos deploys ≤ C), 2 (gates por
 tipo), 5 (aba Analytics contratado-cêntrica) e 6 (demo coerente).
+**Item 3b ✅** (2026-06-04, ver `CHANGELOG.md`): Σ declarada nos deploys ≤ C
+validada no PUT slots/next + promote (rollback isento; reduções passam;
+helper `lib/capacity.ts` compartilhado com 3a).
 **Item 7 (novo, 2026-06-04)** — revisão do "available" nos Monitores
 (Sessions/Pools/Agents + consumidores do snapshot): físico (slots livres) ≠
 admissível (reserva − uso, ou min(slots, shared restante)) — pool pode exibir

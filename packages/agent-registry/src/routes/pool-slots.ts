@@ -19,6 +19,7 @@
 import { Router, Request, Response, NextFunction } from "express"
 import { prisma, Prisma } from "../db"
 import { publishRegistryChanged } from "../infra/kafka"
+import { deployViolation, slotDeclared } from "../lib/capacity"
 
 export const poolSlotsRouter = Router({ mergeParams: true })
 
@@ -117,6 +118,13 @@ poolSlotsRouter.put("/slots/:slot", async (req: Request, res: Response, next: Ne
     })
     if (!skill) return res.status(404).json({ error: `Skill '${skill_id}' não encontrada` })
 
+    // Capacity-governance item 3b: Σ declarada nos deploys ≤ C.
+    // Feedback cedo, na declaração (re-checada no promote — C pode mudar entre
+    // os dois). Reduções/iguais sempre passam (re-sync idempotente do
+    // RegistrySyncer não quebra); sem C → fail-open.
+    const violation = await deployViolation(tenantId, poolId, slotDeclared(config_json))
+    if (violation) return res.status(422).json(violation)
+
     // Auto-fetch yaml_snapshot if not provided
     const snapshot = yaml_snapshot != null
       ? yaml_snapshot
@@ -173,6 +181,14 @@ poolSlotsRouter.post("/promote", async (req: Request, res: Response, next: NextF
     if (!nextSlot) {
       return res.status(409).json({ error: "Slot 'next' não está configurado — configure antes de promover" })
     }
+
+    // Capacity-governance item 3b: o promote é o momento em que a declaração
+    // vira efetiva (next → current) — revalida contra o C vigente.
+    // Rollback fica ISENTO (operação de emergência nunca bloqueia).
+    const violation = await deployViolation(
+      tenantId, poolId, slotDeclared(nextSlot["config_json"]),
+    )
+    if (violation) return res.status(422).json(violation)
 
     const now = new Date()
 

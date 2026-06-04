@@ -8,7 +8,7 @@ import { prisma, Prisma }    from "../db"
 import { CreatePoolSchema, UpdatePoolSchema } from "../validators/pool"
 import { ZodError }          from "zod"
 import { publishRegistryEvent } from "../infra/kafka"
-import { getRedis }          from "../infra/redis"
+import { contractedCapacity } from "../lib/capacity"
 
 export const poolsRouter = Router()
 
@@ -26,17 +26,6 @@ export const poolsRouter = Router()
 //   - AUMENTOS que façam Σ > C são rejeitados com 422 + detalhe.
 // Conformidade é derivável (não persistida): GET /v1/pools/capacity/conformance.
 // ─────────────────────────────────────────────
-
-async function _contractedCapacity(tenantId: string): Promise<number | null> {
-  try {
-    const raw = await getRedis().get(`${tenantId}:quota:max_concurrent_sessions`)
-    if (!raw) return null
-    const n = parseInt(raw, 10)
-    return Number.isFinite(n) && n > 0 ? n : null
-  } catch {
-    return null   // Redis fora → degrada para sem validação
-  }
-}
 
 async function _reservedTotal(tenantId: string, excludePoolId: string | null): Promise<number> {
   const agg = await prisma.pool.aggregate({
@@ -59,7 +48,7 @@ async function _reservationViolation(
 ): Promise<Record<string, unknown> | null> {
   if (newValue === undefined || newValue === null || newValue <= 0) return null
   if (currentValue !== null && newValue <= currentValue) return null   // redução/igual sempre passa
-  const contracted = await _contractedCapacity(tenantId)
+  const contracted = await contractedCapacity(tenantId)
   if (contracted === null) return null
   const reservedOthers = await _reservedTotal(tenantId, poolId)
   const reservedTotal  = reservedOthers + newValue
@@ -195,7 +184,7 @@ poolsRouter.get("/", async (req: Request, res: Response, next: NextFunction) => 
 poolsRouter.get("/capacity/conformance", async (req: Request, res: Response, next: NextFunction) => {
   try {
     const tenantId   = _getTenantId(req)
-    const contracted = await _contractedCapacity(tenantId)
+    const contracted = await contractedCapacity(tenantId)
     const pools = await prisma.pool.findMany({
       where:  { tenant_id: tenantId, status: "active" as never, session_reservation: { gt: 0 } },
       select: { pool_id: true, session_reservation: true },

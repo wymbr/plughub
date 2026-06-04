@@ -2,6 +2,14 @@
 
 ---
 
+## Capacity-governance item 3b — Σ declarada nos deploys ≤ C (2026-06-04)
+
+Fecha a validação de configuração do arco: depois das reservas (3a), a **declaração de deploy** também passa a respeitar o contratado.
+
+**agent-registry**: novo `lib/capacity.ts` (helpers compartilhados — `contractedCapacity` movida do pools.ts, `slotDeclared`, `declaredTotalOthers`, `deployViolation`); `routes/pools.ts` refatorado para o helper. `routes/pool-slots.ts` valida `Σ declarada ≤ C` em **dois pontos**: `PUT /v1/pools/:id/slots/next` (feedback na declaração) e `POST /promote` (quando vira efetiva — revalida contra o C vigente). Declarada por pool = `config_json.max_concurrent_sessions` do slot `current` (default 1; é o N de instâncias que o bootstrap provisiona). Regras idênticas ao 3a: sem C / Redis fora → fail-open; **reduções/iguais sempre passam** (re-sync idempotente do RegistrySyncer não quebra; demo legado com Σ≈245 > C=25 continua bootando — só não pode *aumentar*); aumentos que estourem C → **422** (`contracted`, `declared_others`, `requested`, `balance_would_be`). **Rollback é isento** — operação de emergência nunca bloqueia. Comparação contra o C total do tenant; por `resource_type` entra com os gates do item 2.
+
+---
+
 ## Capacity-governance item 4 — Billing/Capacidade: contratado × alocado × saldo (2026-06-04)
 
 Torna o modelo visível ao operador — é o que dá sentido ao "redução sempre aceita + alerta" (não-conformidade nunca é silenciosa).
