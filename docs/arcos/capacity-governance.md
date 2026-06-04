@@ -91,8 +91,18 @@ removida da visão do total no fechamento da Fase 2; aqui sai do modelo).
    resource_type ficam para os gates por tipo (itens 2) quando existirem leitores.
 2. Gates de criação: instância IA (bootstrap/routing), login humano concorrente
    (auth/registry), admissão de sessão (`assertQuota` passa a ter chave).
-3. Validações de config: deploy (Σ ≤ C) e pool (Σ reservas ≤ C, shared ≥ 0);
-   revalidação on contract-change + flag não-conforme + alerta.
+3. Validações de config:
+   - **3a ✅** (2026-06-04) pool: `Σ session_reservation ≤ C` / `shared ≥ 0` no
+     agent-registry (POST/PUT de pool) — C lido de `{t}:quota:max_concurrent_sessions`;
+     sem C ou Redis fora → fail-open (runtime segue protegido pela admissão);
+     **reduções sempre passam** (heal gradual de legado não-conforme; re-PUT do
+     RegistrySyncer com valor igual não quebra), só aumentos que estourem C → 422
+     com detalhe. Conformidade **derivada, não persistida**:
+     `GET /v1/pools/capacity/conformance` (contracted/reserved_total/shared/conform
+     /pools) — relê C a cada chamada, então mudança de contrato revalida
+     implicitamente; alerta visual fica com o item 4.
+   - **3b** deploy: Σ declarada nos deploys ≤ C (validação no fluxo de deploy) —
+     pendente.
 4. platform-ui: visão contratado × alocado × saldo (Billing/Capacidade) + alertas.
 5. analytics-api/UI: aba Capacidade contratado-cêntrica (teto único = C).
 6. Demo: recursos do pricing coerentes com os deploys.

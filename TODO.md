@@ -171,6 +171,11 @@ mutações de resources gravam `{t}:quota:max_concurrent_sessions` (C = ai+human
 base + reservas ativas); `sync_all` no boot; o gate já existente da admissão
 híbrida (`shared = C − Σ reservas`) passa a armar de verdade. `pricing.md`
 § Quota Side Effects corrigido (descrevia integração inexistente).
+**Item 3a ✅** (2026-06-04, ver `CHANGELOG.md`): agent-registry valida
+`Σ session_reservation ≤ C` no POST/PUT de pool (422 só em aumentos; reduções
+sempre passam; sem C → fail-open) + `GET /v1/pools/capacity/conformance`
+(conformidade derivada, revalidação implícita on contract-change). Restam:
+3b (Σ dos deploys ≤ C) e alerta visual (item 4).
 
 ---
 

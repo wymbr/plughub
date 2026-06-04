@@ -8,8 +8,73 @@ import { prisma, Prisma }    from "../db"
 import { CreatePoolSchema, UpdatePoolSchema } from "../validators/pool"
 import { ZodError }          from "zod"
 import { publishRegistryEvent } from "../infra/kafka"
+import { getRedis }          from "../infra/redis"
 
 export const poolsRouter = Router()
+
+// ─────────────────────────────────────────────
+// Capacity-governance item 3 — Σ session_reservation ≤ C (shared ≥ 0)
+//
+// C (capacidade contratada) = {t}:quota:max_concurrent_sessions, gravada pelo
+// quota sync do pricing-api. A admissão híbrida deriva shared = C − Σ reservas;
+// reserva acima de C tornaria o shared negativo (pool "rouba" capacidade que
+// não existe). Regras:
+//   - Sem C (pricing não configurado / Redis fora) → sem validação (fail-open;
+//     o runtime continua protegido pela própria admissão).
+//   - REDUÇÕES são sempre permitidas (heal gradual de estado legado
+//     não-conforme; re-PUT do RegistrySyncer com valor igual também passa).
+//   - AUMENTOS que façam Σ > C são rejeitados com 422 + detalhe.
+// Conformidade é derivável (não persistida): GET /v1/pools/capacity/conformance.
+// ─────────────────────────────────────────────
+
+async function _contractedCapacity(tenantId: string): Promise<number | null> {
+  try {
+    const raw = await getRedis().get(`${tenantId}:quota:max_concurrent_sessions`)
+    if (!raw) return null
+    const n = parseInt(raw, 10)
+    return Number.isFinite(n) && n > 0 ? n : null
+  } catch {
+    return null   // Redis fora → degrada para sem validação
+  }
+}
+
+async function _reservedTotal(tenantId: string, excludePoolId: string | null): Promise<number> {
+  const agg = await prisma.pool.aggregate({
+    _sum:  { session_reservation: true },
+    where: {
+      tenant_id: tenantId,
+      status:    "active" as never,
+      ...(excludePoolId ? { NOT: { pool_id: excludePoolId } } : {}),
+    },
+  })
+  return agg._sum.session_reservation ?? 0
+}
+
+/** Retorna o payload de erro 422, ou null quando a mutação é permitida. */
+async function _reservationViolation(
+  tenantId:      string,
+  poolId:        string,
+  newValue:      number | null | undefined,
+  currentValue:  number | null,
+): Promise<Record<string, unknown> | null> {
+  if (newValue === undefined || newValue === null || newValue <= 0) return null
+  if (currentValue !== null && newValue <= currentValue) return null   // redução/igual sempre passa
+  const contracted = await _contractedCapacity(tenantId)
+  if (contracted === null) return null
+  const reservedOthers = await _reservedTotal(tenantId, poolId)
+  const reservedTotal  = reservedOthers + newValue
+  if (reservedTotal <= contracted) return null
+  return {
+    error: "session_reservation excede a capacidade contratada (shared ficaria negativo)",
+    details: {
+      contracted,
+      reserved_others:    reservedOthers,
+      requested:          newValue,
+      reserved_total:     reservedTotal,
+      shared_would_be:    contracted - reservedTotal,
+    },
+  }
+}
 
 // ─────────────────────────────────────────────
 // POST /v1/pools
@@ -30,6 +95,12 @@ poolsRouter.post("/", async (req: Request, res: Response, next: NextFunction) =>
 
     // Validar evaluation_template_id se fornecido
     // TODO: consultar tabela evaluation_templates
+
+    // Capacity-governance item 3: Σ reservas ≤ C
+    const violation = await _reservationViolation(
+      tenantId, body.pool_id, body.session_reservation, null,
+    )
+    if (violation) return res.status(422).json(violation)
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const pool = await prisma.pool.create({
@@ -116,6 +187,34 @@ poolsRouter.get("/", async (req: Request, res: Response, next: NextFunction) => 
 })
 
 // ─────────────────────────────────────────────
+// GET /v1/pools/capacity/conformance
+// Conformidade derivada (não persistida) — capacity-governance item 3.
+// Reflete mudanças de contrato na hora (revalidação implícita: C é lido do
+// Redis a cada chamada). conform=false → alerta na UI (item 4 do arco).
+// ─────────────────────────────────────────────
+poolsRouter.get("/capacity/conformance", async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const tenantId   = _getTenantId(req)
+    const contracted = await _contractedCapacity(tenantId)
+    const pools = await prisma.pool.findMany({
+      where:  { tenant_id: tenantId, status: "active" as never, session_reservation: { gt: 0 } },
+      select: { pool_id: true, session_reservation: true },
+      orderBy: { session_reservation: "desc" },
+    })
+    const reservedTotal = pools.reduce((s, p) => s + (p.session_reservation ?? 0), 0)
+    return res.json({
+      contracted,                                            // null = sem pricing configurado
+      reserved_total: reservedTotal,
+      shared:         contracted === null ? null : contracted - reservedTotal,
+      conform:        contracted === null ? true : reservedTotal <= contracted,
+      pools,
+    })
+  } catch (err) {
+    return next(err)
+  }
+})
+
+// ─────────────────────────────────────────────
 // GET /v1/pools/:pool_id
 // ─────────────────────────────────────────────
 poolsRouter.get("/:pool_id", async (req: Request, res: Response, next: NextFunction) => {
@@ -144,6 +243,15 @@ poolsRouter.put("/:pool_id", async (req: Request, res: Response, next: NextFunct
       where: { pool_id_tenant_id: { pool_id: req.params["pool_id"]!, tenant_id: tenantId } },
     })
     if (!existing) return res.status(404).json({ error: "Pool não encontrado" })
+
+    // Capacity-governance item 3: Σ reservas ≤ C (só aumentos são bloqueados)
+    const violation = await _reservationViolation(
+      tenantId,
+      req.params["pool_id"]!,
+      body.session_reservation,
+      (existing as { session_reservation: number | null }).session_reservation,
+    )
+    if (violation) return res.status(422).json(violation)
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const updated = await prisma.pool.update({

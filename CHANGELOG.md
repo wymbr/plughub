@@ -2,6 +2,16 @@
 
 ---
 
+## Capacity-governance item 3a — Σ reservas ≤ C validado na config de pool (2026-06-04)
+
+Fecha o furo original do arco: a config aceitava `Σ session_reservation > C`, deixando o shared da admissão híbrida negativo (um pool podia "reservar" capacidade que o contrato não tem).
+
+**agent-registry** (`routes/pools.ts`): POST/PUT de pool validam `Σ session_reservation ≤ C` — C lido de `{t}:quota:max_concurrent_sessions` (produzida pelo quota sync do item 1, via Redis já existente no registry). Regras: sem C / Redis fora → **fail-open** (sem pricing configurado não há o que validar; runtime segue protegido pela admissão); **reduções e re-PUTs com valor igual sempre passam** (heal gradual de estado legado não-conforme — o RegistrySyncer não quebra no boot); só **aumentos** que estourem C retornam **422** com detalhe (`contracted`, `reserved_others`, `requested`, `shared_would_be`). Novo `GET /v1/pools/capacity/conformance`: conformidade **derivada** (não persistida — C relido a cada chamada, mudança de contrato revalida implicitamente) com `contracted/reserved_total/shared/conform/pools`; o alerta visual na UI fica com o item 4 do arco.
+
+Escopo: 3b (Σ declarada nos deploys ≤ C) permanece pendente no spec.
+
+---
+
 ## Capacity-governance item 1 — quota sync: pricing arma o gate de admissão (2026-06-04)
 
 Primeiro item do arco [`capacity-governance.md`](docs/arcos/capacity-governance.md). O gate já existia dos dois lados — `AdmissionController._shared_limit` (routing, admissão híbrida: `shared = C − Σ session_reservation`) e `checkConcurrentSessions` (mcp-server) leem `{t}:quota:max_concurrent_sessions` — mas **ninguém gravava a chave** (a "integração" era só documentação).
