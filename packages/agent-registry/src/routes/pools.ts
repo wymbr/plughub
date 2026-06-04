@@ -153,13 +153,15 @@ poolsRouter.put("/:pool_id", async (req: Request, res: Response, next: NextFunct
         ...(body.channel_types         !== undefined && { channel_types:         body.channel_types }),
         ...(body.sla_target_ms           !== undefined && { sla_target_ms:           body.sla_target_ms }),
         ...(body.webhook_skill_id        !== undefined && { webhook_skill_id:        body.webhook_skill_id }),
+        // Campos limpáveis via PUT null (schema .nullable()): escalares aceitam
+        // null direto no Prisma; JSONB exige Prisma.DbNull.
         ...(body.max_concurrent_sessions !== undefined && { max_concurrent_sessions: body.max_concurrent_sessions }),
         ...(body.session_reservation     !== undefined && { session_reservation:     body.session_reservation }),
         ...(body.max_reply_time_ms       !== undefined && { max_reply_time_ms:       body.max_reply_time_ms }),
         ...(body.routing_expression      !== undefined && { routing_expression:      body.routing_expression }),
         ...(body.evaluation_template_id !== undefined && { evaluation_template_id: body.evaluation_template_id }),
         ...(body.supervisor_config     !== undefined && { supervisor_config:     body.supervisor_config }),
-        ...(body.queue_config          !== undefined && { queue_config:          body.queue_config }),
+        ...(body.queue_config          !== undefined && { queue_config:          body.queue_config ?? Prisma.DbNull }),
         ...(body.mentionable_pools     !== undefined && { mentionable_pools:     body.mentionable_pools }),
         ...(body.agent_groups          !== undefined && { agent_groups:          body.agent_groups }),
         ...(body.hooks                 !== undefined && { hooks:                 body.hooks }),

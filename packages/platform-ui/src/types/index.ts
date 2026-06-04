@@ -117,22 +117,26 @@ export interface CreatePoolInput {
   description?: string
   channel_types: string[]
   sla_target_ms: number
-  calendar_id?: string
+  /** null aceito (registry trata como ausente) — o form compartilha o payload com o update. */
+  calendar_id?: string | null
   routing_skills?: string[]
   routing_expression?: RoutingExpression
   routing_weights?: RoutingWeights
-  queue_config?: QueueConfig
+  /** null aceito (registry trata como ausente) — o form compartilha o payload com o update. */
+  queue_config?: QueueConfig | null
 }
 
 export interface UpdatePoolInput {
   description?: string
   channel_types?: string[]
   sla_target_ms?: number
-  calendar_id?: string
+  /** null = limpar o calendário do pool. */
+  calendar_id?: string | null
   routing_skills?: string[]
   routing_expression?: RoutingExpression
   routing_weights?: RoutingWeights
-  queue_config?: QueueConfig
+  /** null = limpar o tratamento de fila do pool. */
+  queue_config?: QueueConfig | null
 }
 
 export interface AgentType {

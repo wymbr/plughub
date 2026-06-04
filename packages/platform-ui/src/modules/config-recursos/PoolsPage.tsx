@@ -493,21 +493,24 @@ const PoolsPage: React.FC = () => {
         channel_types:     formData.channel_types,
         sla_target_ms:     formData.sla_target_ms,
         ...(formData.max_reply_time_ms !== null && { max_reply_time_ms: formData.max_reply_time_ms }),
-        ...(formData.calendar_id ? { calendar_id: formData.calendar_id } : { calendar_id: undefined }),
+        // calendar_id: null limpa no registry (undefined era removido pelo
+        // JSON.stringify e o valor antigo persistia).
+        ...(formData.calendar_id
+          ? { calendar_id: formData.calendar_id }
+          : (editingPool?.calendar_id ? { calendar_id: null } : {})),
         ...(formData.context_visibility_ns.trim()
           ? { context_visibility: { operator_namespaces: formData.context_visibility_ns.split(',').map(s => s.trim()).filter(Boolean) } }
           : {}),
         ...(routing_skills.length ? { routing_skills } : {}),
         routing_weights: rw,
-        // Queue treatment (queue-attended-model, skill-first): only sent when
-        // a skill is selected — clearing requires SQL today (Zod rejects null,
-        // same gap as session_reservation Fase B).
+        // Queue treatment (queue-attended-model, skill-first). Desmarcar a
+        // skill num pool que tinha fila envia null → registry limpa (DbNull).
         ...(formData.queue_skill_id.trim() ? {
           queue_config: {
             skill_id: formData.queue_skill_id.trim(),
             ...(formData.queue_max_wait_s !== null ? { max_wait_s: formData.queue_max_wait_s } : {}),
           },
-        } : {}),
+        } : (editingPool?.queue_config ? { queue_config: null } : {})),
       }
       if (editingPool) {
         await registryApi.updatePool(editingPool.pool_id, payload, session.tenantId)

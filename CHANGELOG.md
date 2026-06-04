@@ -2,6 +2,20 @@
 
 ---
 
+## Registry: limpar campos de pool via PUT null (2026-06-04)
+
+Gap recorrente (mordeu 3× na semana do queue-attended-model): campos opcionais de pool não podiam ser limpos via PUT — Zod rejeitava `null` e a única via era SQL + republish. Resolvido:
+
+**schemas (`PoolRegistrationSchema`)**: `.nullable()` em `queue_config`, `session_reservation`, `max_concurrent_sessions`, `max_reply_time_ms`, `calendar_id` — PUT com `null` limpa o campo; ausente continua significando "não mexer" (RegistrySyncer/YAML sem o campo NÃO apaga config feita via UI).
+
+**agent-registry (`pools.ts`)**: update mapeia `queue_config: null → Prisma.DbNull` (JSONB); escalares aceitam null direto. Consumidores a jusante já tratavam (`or None` no kafka_listener; bridge trata queue_config null como ausente → default do tenant).
+
+**platform-ui**: desmarcar a skill de fila num pool que tinha `queue_config` envia `null` (limpa de verdade); fix colateral no clear de `calendar_id` (enviava `undefined`, que o `JSON.stringify` remove — nunca limpava); `CreatePoolInput`/`UpdatePoolInput` aceitam null.
+
+Validado: `session_reservation` 2→null e `queue_config`→null via curl, cache do routing acompanhando (`pool.updated`); restart do bridge restaura a fila do YAML. Resolve o residual (b) do queue-attended-model.
+
+---
+
 ## Webhook pools — capacidade fictícia eliminada (coerência) (2026-06-04)
 
 Re-validação do item do TODO (escrito na discussão da admissão híbrida): (1) o **default 500 já não existia** — `PoolRegistrationSchema.max_concurrent_sessions` é `.optional()` e o registry grava null; (2) a premissa "nada é pré-instanciado" ficou stale pós **Arc 19 Fase C** — webhook pools têm slots de instância criados pelo Bootstrap a partir do `deploy:`, e a capacidade real = slots + admissão híbrida (Fase B); (3) o campo pool-level era **display-only** no snapshot do Monitor (nunca gateia alocação) — essa era a capacidade fictícia restante.

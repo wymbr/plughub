@@ -96,7 +96,8 @@ Hoje o Analytics/Agents mistura agente×pool e não separa humano×IA.
   sistema via WS e `deliver_session_closed` renderiza `farewell_text` antes do close;
   validado no cenário outage (`reservation_full`). Canais voice/whatsapp ainda não
   renderizam `farewell_text` (voice = TTS futuro);
-  (b) limpar `queue_config`/`session_reservation` via PUT (Zod rejeita null — hoje SQL);
+  (b) ~~limpar `queue_config`/`session_reservation` via PUT~~ ✅ (2026-06-04, ver
+  `CHANGELOG.md` — `.nullable()` nos campos de pool + `DbNull` no registry + UI);
   (c) cenários fila muda e drop sem pool_id não exercitados em teste.
 - **Reformulação Analytics/Agents — Bancada de comparação 360° (novo)**: reescreve a aba como
   bancada de comparação (média dos agentes × indivíduos), unificando quantitativo + qualitativo

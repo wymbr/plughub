@@ -173,7 +173,8 @@ export const PoolRegistrationSchema = z.object({
    * (sistemas downstream frágeis, ex. ERP). Ausente (caso normal) = sem
    * throttle; admissão é o único teto. Enforcement no routing = deferred.
    */
-  max_concurrent_sessions: z.number().int().positive().optional(),
+  // .nullable(): PUT com null LIMPA o campo (antes só SQL — gap recorrente).
+  max_concurrent_sessions: z.number().int().positive().nullable().optional(),
   /**
    * Fase B (queue-attended-model) — admissão híbrida de sessões.
    * Fatia dedicada de sessões simultâneas deste pool (teto E garantia),
@@ -181,19 +182,19 @@ export const PoolRegistrationSchema = z.object({
    * o bucket compartilhado (total − Σ reservas). Billing é só sobre o total.
    * Invariante: Σ session_reservation ≤ max_session_total.
    */
-  session_reservation:    z.number().int().positive().optional(),
+  session_reservation:    z.number().int().positive().nullable().optional(),
   /**
    * Tempo máximo (ms) para o agente responder a cada mensagem do cliente.
    * Opcional — sem limite por mensagem quando ausente.
    * Independente do sla_target_ms (que mede o atendimento como um todo).
    */
-  max_reply_time_ms:      z.number().int().positive().optional(),
+  max_reply_time_ms:      z.number().int().positive().nullable().optional(),
   routing_expression:     RoutingExpressionSchema.optional(),
   evaluation:             PoolEvaluationConfigSchema.optional(),
   /** ID explícito do evaluation template (alternativa ao template resolvido por skill_id_template). */
   evaluation_template_id: z.string().optional(),
   supervisor_config:      SupervisorConfigSchema.optional(),
-  queue_config:           QueueConfigSchema.optional(),
+  queue_config:           QueueConfigSchema.nullable().optional(),
   /**
    * Mapa alias → pool_id dos agentes que podem ser endereçados via @mention
    * por participantes desta fila (role: primary ou human).
@@ -242,7 +243,7 @@ export const PoolRegistrationSchema = z.object({
    * Stored here as a display cache — the authoritative link lives in
    * calendar.calendar_associations. The UI keeps both in sync.
    */
-  calendar_id:            z.string().uuid().optional(),
+  calendar_id:            z.string().uuid().nullable().optional(),
   /**
    * ContextStore visibility configuration for the ContextoTab.
    * Controls which namespaces the operator role can see.
