@@ -80,6 +80,17 @@ export const ROUTING_WEIGHTS_DEFAULTS: RoutingWeights = {
   dinamicos: { sla: 9, wait: 7, tier: 5, churn: 8, business: 3 },
 }
 
+/** Queue treatment config (queue-attended-model). Skill-first: skill_id is
+ *  the field that matters; agent_type_id is legacy (agent types retired). */
+export interface QueueConfig {
+  /** LEGACY — kept for old YAML configs. */
+  agent_type_id?: string
+  /** Retention bound (s). 0/absent = platform default applies. */
+  max_wait_s?: number
+  /** Queue-treatment flow. */
+  skill_id?: string
+}
+
 export interface Pool {
   pool_id: string
   tenant_id: string
@@ -88,6 +99,8 @@ export interface Pool {
   sla_target_ms: number
   /** Maximum reply time per customer message (ms). Null = no per-message SLA. */
   max_reply_time_ms?: number | null
+  /** Queue agent + max_wait_s (queue-attended-model). Null = tenant default. */
+  queue_config?: QueueConfig | null
   calendar_id?: string
   /** ContextoTab namespace visibility config. Null = use platform default. */
   context_visibility?: { operator_namespaces: string[] } | null
@@ -108,6 +121,7 @@ export interface CreatePoolInput {
   routing_skills?: string[]
   routing_expression?: RoutingExpression
   routing_weights?: RoutingWeights
+  queue_config?: QueueConfig
 }
 
 export interface UpdatePoolInput {
@@ -118,6 +132,7 @@ export interface UpdatePoolInput {
   routing_skills?: string[]
   routing_expression?: RoutingExpression
   routing_weights?: RoutingWeights
+  queue_config?: QueueConfig
 }
 
 export interface AgentType {

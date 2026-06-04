@@ -95,6 +95,11 @@ Hoje o Analytics/Agents mistura agente×pool e não separa humano×IA.
   permanece: **`sessions.sla_target_ms` NULL na origem** (routing não propaga o alvo ao
   analytics) → aba SLA sem dado (`sla_eligible=0`); popular via `parse_routed`
   (routing result) ou snapshot do pool.
+- **Queue-attended-model — residuais pós Fase E** (2026-06-03, ver spec): (a) **render v2
+  webchat** para message.text de sistema — fila muda e rejeição outage fecham sem mensagem
+  (webchat não implementa `deliver_text`; caminho do flow cobre só fila atendida);
+  (b) limpar `queue_config`/`session_reservation` via PUT (Zod rejeita null — hoje SQL);
+  (c) cenários fila muda e drop sem pool_id não exercitados em teste.
 - **Reformulação Analytics/Agents — Bancada de comparação 360° (novo)**: reescreve a aba como
   bancada de comparação (média dos agentes × indivíduos), unificando quantitativo + qualitativo
   (Arc 6) + voz do cliente (NPS/pesquisa) + voz do agente (wrap-up) na mesma entidade `agent_key`.

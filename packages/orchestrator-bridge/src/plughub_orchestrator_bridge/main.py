@@ -1402,6 +1402,15 @@ async def _close_contact_layer(
         elif _transport_reason in ("timeout", "session_timeout"):
             _close_reason_biz = "session_timeout"
             _last_outcome_val = _last_outcome_val or "abandoned"
+        elif _transport_reason == "max_wait_exceeded":
+            # Fase E (queue-attended-model): retention bound. Normally the
+            # routing engine is the authoritative writer (contact_close_fired
+            # set before this runs) — defensive mapping for marker-write races.
+            _close_reason_biz = "max_wait_exceeded"
+            _last_outcome_val = _last_outcome_val or "abandoned"
+        elif _transport_reason == "no_resource":
+            _close_reason_biz = "no_resource"
+            _last_outcome_val = _last_outcome_val or "failed"
         elif _transport_reason == "agent_closed":
             _close_reason_biz = "agent_hangup"
         else:  # "agent_done" — platform closed after agent completion
@@ -3170,23 +3179,34 @@ async def process_queued(
             logger.debug("No queue_config for pool=%s — customer waits silently", pool_id)
             return
 
-    agent_type_id = queue_cfg.get("agent_type_id", "")
+    agent_type_id = queue_cfg.get("agent_type_id", "") or ""
     explicit_skill_id = queue_cfg.get("skill_id")   # optional — overrides agent's default skill
     if not agent_type_id:
-        logger.warning("queue_config.agent_type_id is empty for pool=%s", pool_id)
-        return
+        # Fase E (skill-first): agent_types aposentados — queue_config pode
+        # vir só com skill_id (UI do pool). A skill é a identidade do agente
+        # de fila (segmento role=queue) e resolve o flow direto no registry.
+        if explicit_skill_id:
+            agent_type_id = explicit_skill_id
+        else:
+            logger.warning(
+                "queue_config has neither agent_type_id nor skill_id for pool=%s",
+                pool_id,
+            )
+            return
 
     # Resolve agent type metadata (framework, skills list)
     agent_type = await get_agent_type(http, tenant_id, agent_type_id)
     if agent_type is None:
         # YAML fallback (dev environment without Agent Registry)
         flow = _load_yaml_fallback(agent_type_id)
-        if not flow:
+        if not flow and not explicit_skill_id:
             logger.error(
                 "Queue agent %s not found in Agent Registry and no YAML fallback in %s",
                 agent_type_id, SKILLS_DIR,
             )
             return
+        # explicit_skill_id present: resolve_flow_for_agent fetches the flow
+        # from the registry by skill_id — no agent type nor YAML required.
         skills: list[dict] = []
     else:
         skills = agent_type.get("skills", [])

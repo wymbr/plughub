@@ -59,6 +59,17 @@ class Settings(BaseSettings):
     # Set to 0 to disable. Default: 15s.
     queue_drain_interval_s: int = 5
 
+    # Fase E (queue-attended-model): retention bound for queued contacts.
+    # Used when the pool has no queue_config.max_wait_s (mute queues included).
+    # The periodic drain closes contacts waiting longer than this with
+    # close_reason=max_wait_exceeded. Set to 0 to disable the default bound
+    # (pool-level max_wait_s still applies where configured).
+    queue_max_wait_default_s: int = 1800
+
+    # Grace (s) between signalling __queue_timeout__ to the queue agent and
+    # closing the customer connection — gives the flow's notify time to render.
+    queue_timeout_close_grace_s: int = 4
+
     # Config API — used to fetch routing namespace settings on startup and reload
     config_api_url:               str = "http://localhost:3600"
     kafka_topic_config_changed:   str = "config.changed"

@@ -392,6 +392,287 @@ async def _emit_outage(
     )
 
 
+async def _emit_queue_timeout(
+    redis_client: aioredis.Redis,
+    producer:     AIOKafkaProducer,
+    settings,
+    tenant_id:    str,
+    pool_id:      str,
+    session_id:   str,
+    now_ms:       int,
+) -> None:
+    """
+    Fase E (queue-attended-model): retention bound exceeded — close the queued
+    contact gracefully with close_reason=max_wait_exceeded.
+
+    Mirrors _emit_outage: routing is the authoritative sessions writer for
+    never-routed sessions (the bridge cannot close them — Fase A gap).
+
+      1. Markers session:{id}:closed=max_wait_exceeded + contact_close_fired —
+         block the bridge re-close on the WS teardown that follows.
+      2. Queue agent active → LPUSH session:closed:{id}: its menu BLPOP exits
+         via on_disconnect and the bridge closes the REAL queue segment with
+         the Fase C abandoned override.
+      3. Mute queue (no queue agent) → synthetic role=queue segment so the
+         segments ledger still records the wait (Fila/SLA Fase D counts it).
+      4. Courtesy message + outbound session.closed (gateway closes the WS).
+      5. Authoritative contact_closed: close_reason=max_wait_exceeded,
+         outcome=abandoned.
+
+    Admission slots are released by the admission reconciler via the closed
+    marker (~60s lag, acceptable). Caller has already ZREM'd the queue entry.
+    """
+    now_iso = datetime.now(timezone.utc).isoformat()
+
+    # Contact data persisted at enqueue (full inbound event) — channel etc.
+    contact: dict = {}
+    try:
+        raw = await redis_client.get(f"{tenant_id}:queue_contact:{session_id}")
+        if raw:
+            contact = json.loads(raw)
+        await redis_client.delete(f"{tenant_id}:queue_contact:{session_id}")
+    except Exception:
+        pass
+    channel      = contact.get("channel") or "webchat"
+    customer_id  = contact.get("customer_id") or session_id
+    started_at   = contact.get("started_at") or now_iso
+    queued_at_ms = int(contact.get("queued_at_ms") or 0)
+    wait_ms      = max(now_ms - queued_at_ms, 0) if queued_at_ms else 0
+
+    # 1. Markers FIRST — bridge re-entry must not overwrite this close.
+    try:
+        await redis_client.setex(
+            f"session:{session_id}:closed", 604_800, "max_wait_exceeded"
+        )
+        await redis_client.setex(
+            f"session:{session_id}:contact_close_fired", 604_800, "1"
+        )
+    except Exception as exc:
+        logger.warning("queue timeout: could not set close markers session=%s — %s",
+                       session_id, exc)
+
+    # 2/3. Queue agent signal or synthetic ledger segment.
+    queue_agent_active = False
+    try:
+        queue_agent_active = bool(
+            await redis_client.exists(f"queue:agent_active:{session_id}")
+        )
+    except Exception:
+        pass
+    if queue_agent_active:
+        # "__queue_timeout__" via menu:result (mesmo padrão do
+        # "__agent_available__"): o flow de fila AVISA o cliente via notify
+        # (stream canônico — único caminho que renderiza no webchat, que não
+        # implementa deliver_text) e completa. O outcome do segmento vira
+        # "abandoned" pelo override do bridge (marcador closed já setado).
+        try:
+            result_key = f"menu:result:{session_id}"
+            await redis_client.lpush(result_key, "__queue_timeout__")
+            await redis_client.expire(result_key, 300)
+        except Exception as exc:
+            logger.warning("queue timeout: could not signal queue agent session=%s — %s",
+                           session_id, exc)
+    else:
+        # Mute queue — no real segment exists; emit a synthetic one so the
+        # contact ledger (segments) still records the wait window.
+        try:
+            joined_iso = (
+                datetime.fromtimestamp(queued_at_ms / 1000, tz=timezone.utc).isoformat()
+                if queued_at_ms else now_iso
+            )
+            await producer.send("conversations.participants", value={
+                "event_id":       str(uuid.uuid4()),
+                "type":           "participant_left",
+                "session_id":     session_id,
+                "tenant_id":      tenant_id,
+                "segment_id":     str(uuid.uuid4()),
+                "participant_id": f"queue-{session_id}",
+                "pool_id":        pool_id,
+                "agent_type_id":  "system",
+                "agent_type":     "system",
+                "role":           "queue",
+                "sequence_index": 0,
+                "joined_at":      joined_iso,
+                "timestamp":      now_iso,
+                "duration_ms":    wait_ms,
+                "outcome":        "abandoned",
+                "close_reason":   "max_wait_exceeded",
+            })
+        except Exception as exc:
+            logger.error("queue timeout: failed to publish synthetic queue segment "
+                         "session=%s — %s", session_id, exc)
+
+    # 4. Close the customer connection. Attended queue: o aviso vem do flow
+    # (notify → stream) — adia o session.closed por um grace para a mensagem
+    # renderizar antes do WS fechar. Mute queue: message.text best-effort
+    # (canais com deliver_text; webchat fica silencioso — gap do render v2,
+    # mesmo do outage Fase B) + close imediato.
+    try:
+        contact_id_raw = await redis_client.get(f"session:{session_id}:contact_id")
+        contact_id = contact_id_raw or customer_id
+
+        close_payload = {
+            "type":       "session.closed",
+            "contact_id": contact_id,
+            "session_id": session_id,
+            "channel":    channel,
+            "reason":     "agent_done",   # gateway transport Literal — analytics skips it
+        }
+
+        if queue_agent_active:
+            grace_s = getattr(settings, "queue_timeout_close_grace_s", 4)
+
+            async def _delayed_close() -> None:
+                try:
+                    await asyncio.sleep(grace_s)
+                    await producer.send(settings.kafka_topic_outbound, value=close_payload)
+                except Exception as exc:
+                    logger.warning(
+                        "queue timeout: delayed close failed session=%s — %s",
+                        session_id, exc,
+                    )
+
+            asyncio.create_task(_delayed_close())
+        else:
+            await producer.send(settings.kafka_topic_outbound, value={
+                "type":       "message.text",
+                "contact_id": contact_id,
+                "session_id": session_id,
+                "message_id": str(uuid.uuid4()),
+                "channel":    channel,
+                "direction":  "outbound",
+                "author":     {"type": "system", "id": "routing-engine"},
+                "content":    {
+                    "type": "text",
+                    "text": "Tempo máximo de espera atingido. Por favor, tente novamente mais tarde.",
+                },
+                "text":      "Tempo máximo de espera atingido. Por favor, tente novamente mais tarde.",
+                "timestamp": now_iso,
+            })
+            await producer.send(settings.kafka_topic_outbound, value=close_payload)
+    except Exception as exc:
+        logger.warning("queue timeout: failed to publish outbound close session=%s — %s",
+                       session_id, exc)
+
+    # 5. Authoritative sessions close row.
+    try:
+        await producer.send("conversations.events", value={
+            "event_type":   "contact_closed",
+            "session_id":   session_id,
+            "tenant_id":    tenant_id,
+            "reason":       "max_wait_exceeded",  # not customer_side → bridge ignores
+            "close_reason": "max_wait_exceeded",  # business domain
+            "outcome":      "abandoned",
+            "pool_id":      pool_id,
+            "channel":      channel,
+            "customer_id":  customer_id,
+            "started_at":   started_at,
+            "ended_at":     now_iso,
+            "source":       "routing_engine",
+        })
+    except Exception as exc:
+        logger.error("queue timeout: failed to publish contact_closed session=%s — %s",
+                     session_id, exc)
+
+    logger.warning(
+        "QUEUE TIMEOUT: session=%s tenant=%s pool=%s wait_ms=%d queue_agent=%s",
+        session_id, tenant_id, pool_id, wait_ms, queue_agent_active,
+    )
+
+
+async def _emit_no_resource_drop(
+    redis_client: aioredis.Redis,
+    producer:     AIOKafkaProducer,
+    settings,
+    event:        ConversationInboundEvent,
+) -> None:
+    """
+    Fase E (queue-attended-model): graceful drop — degenerate case where the
+    contact cannot even be enqueued (no pool_id). The fallback chain ends here:
+    notify the customer + close with close_reason=no_resource. Distinct from
+    the door outage (outcome=outage, admission rejection): this is a broken
+    journey — outcome derives from the last primary segment when one exists
+    (marker session:{id}:last_outcome), else "failed".
+    """
+    session_id = event.session_id
+    now_iso    = datetime.now(timezone.utc).isoformat()
+
+    # Markers — block bridge re-close (same pattern as _emit_outage).
+    try:
+        await redis_client.setex(f"session:{session_id}:closed", 604_800, "no_resource")
+        await redis_client.setex(
+            f"session:{session_id}:contact_close_fired", 604_800, "1"
+        )
+    except Exception as exc:
+        logger.warning("no-resource drop: could not set close markers session=%s — %s",
+                       session_id, exc)
+
+    # Outcome: respect the last primary segment when the session was served before.
+    outcome = "failed"
+    try:
+        raw_lo = await redis_client.get(f"session:{session_id}:last_outcome")
+        if raw_lo:
+            _lo = json.loads(raw_lo if isinstance(raw_lo, str) else raw_lo.decode())
+            outcome = _lo.get("outcome") or "failed"
+    except Exception:
+        pass
+
+    # Notify + close the customer connection.
+    try:
+        contact_id_raw = await redis_client.get(f"session:{session_id}:contact_id")
+        contact_id = contact_id_raw or event.customer_id or session_id
+        await producer.send(settings.kafka_topic_outbound, value={
+            "type":       "message.text",
+            "contact_id": contact_id,
+            "session_id": session_id,
+            "message_id": str(uuid.uuid4()),
+            "channel":    event.channel,
+            "direction":  "outbound",
+            "author":     {"type": "system", "id": "routing-engine"},
+            "content":    {
+                "type": "text",
+                "text": "Não há recurso disponível para continuar o atendimento. Por favor, tente novamente mais tarde.",
+            },
+            "text":      "Não há recurso disponível para continuar o atendimento. Por favor, tente novamente mais tarde.",
+            "timestamp": now_iso,
+        })
+        await producer.send(settings.kafka_topic_outbound, value={
+            "type":       "session.closed",
+            "contact_id": contact_id,
+            "session_id": session_id,
+            "channel":    event.channel,
+            "reason":     "agent_done",
+        })
+    except Exception as exc:
+        logger.warning("no-resource drop: failed to publish outbound session=%s — %s",
+                       session_id, exc)
+
+    # Authoritative sessions close row.
+    try:
+        await producer.send("conversations.events", value={
+            "event_type":   "contact_closed",
+            "session_id":   session_id,
+            "tenant_id":    event.tenant_id,
+            "reason":       "no_resource",   # not customer_side → bridge ignores
+            "close_reason": "no_resource",
+            "outcome":      outcome,
+            "pool_id":      "",
+            "channel":      event.channel,
+            "customer_id":  event.customer_id,
+            "started_at":   event.started_at or now_iso,
+            "ended_at":     now_iso,
+            "source":       "routing_engine",
+        })
+    except Exception as exc:
+        logger.error("no-resource drop: failed to publish contact_closed session=%s — %s",
+                     session_id, exc)
+
+    logger.warning(
+        "NO-RESOURCE DROP: session=%s tenant=%s channel=%s outcome=%s",
+        session_id, event.tenant_id, event.channel, outcome,
+    )
+
+
 async def _admission_reconciler(admission: "AdmissionController") -> None:
     """Periodic release of admission slots held by closed sessions (Fase B)."""
     while True:
@@ -419,9 +700,15 @@ async def _persist_queued_contact(
     """
     pool_id = event.pool_id or ""
     if not pool_id:
+        # Fase E (queue-attended-model): graceful drop — sem pool não há fila
+        # nem agente de fila possível. Drop é último recurso (cadeia de
+        # fallback): notify + close com close_reason=no_resource, em vez de
+        # deixar a sessão muda eterna (fechar-sempre).
         logger.warning(
-            "Cannot enqueue: no pool_id in event for session=%s", event.session_id
+            "Cannot enqueue: no pool_id in event for session=%s — graceful drop",
+            event.session_id,
         )
+        await _emit_no_resource_drop(redis_client, producer, settings, event)
         return
 
     # Store the full event dict + queue metadata so drain can re-publish it intact
@@ -684,6 +971,44 @@ async def _periodic_queue_drain(
                         continue
                     tenant_id = parts[0]
                     pool_id   = ":".join(parts[2:-1])   # handles pool ids without colons
+
+                    # ── Fase E: retention bound (max_wait_exceeded) ────────────
+                    # Pool-level queue_config.max_wait_s wins; fallback is the
+                    # platform default (bounds mute queues too). ZREM-first makes
+                    # the expiry race-safe against a concurrent drain.
+                    try:
+                        max_wait_s = 0
+                        raw_cfg = await redis_client.get(
+                            f"{tenant_id}:pool_config:{pool_id}"
+                        )
+                        if raw_cfg:
+                            _qc = (json.loads(raw_cfg) or {}).get("queue_config") or {}
+                            max_wait_s = int(_qc.get("max_wait_s") or 0)
+                        if max_wait_s <= 0:
+                            max_wait_s = getattr(
+                                settings, "queue_max_wait_default_s", 1800
+                            )
+                        if max_wait_s > 0:
+                            _now_ms = int(
+                                datetime.now(timezone.utc).timestamp() * 1000
+                            )
+                            cutoff  = _now_ms - max_wait_s * 1000
+                            expired = await redis_client.zrangebyscore(
+                                key, "-inf", cutoff
+                            )
+                            for exp_sid in expired:
+                                removed = await redis_client.zrem(key, exp_sid)
+                                if not removed:
+                                    continue   # drained concurrently — skip
+                                await _emit_queue_timeout(
+                                    redis_client, producer, settings,
+                                    tenant_id, pool_id, exp_sid, _now_ms,
+                                )
+                                drained += 1
+                    except Exception as exc:
+                        logger.warning(
+                            "Queue timeout sweep failed pool=%s — %s", pool_id, exc
+                        )
 
                     # Check if queue is non-empty
                     oldest = await redis_client.zrange(key, 0, 0, withscores=False)

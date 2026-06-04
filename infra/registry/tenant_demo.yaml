@@ -48,6 +48,9 @@ pools:
     queue_config:
       agent_type_id: agente_fila_v1
       skill_id: skill_fila_v1
+      # Fase E: teto de espera da fila (max_wait_exceeded). Validado com 30s
+      # em 2026-06-03; valor de produção:
+      max_wait_s: 1800
     # @mention routing: aliases disponíveis para agentes humanos desta fila
     # "@copilot" → convida/envia comando ao co-pilot SAC do pool copilot_sac
     mentionable_pools:

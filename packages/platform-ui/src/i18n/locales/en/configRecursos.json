@@ -41,6 +41,14 @@
       "add": "Add exception",
       "descPlaceholder": "Description (e.g. Maintenance)"
     },
+    "queueCfg": {
+      "label": "Queue Treatment",
+      "hint": "Skill-flow that attends the customer while waiting (attended queue). Empty = tenant default. Max wait closes the contact with max_wait_exceeded.",
+      "skillFlow": "Queue skill-flow",
+      "tenantDefault": "— Tenant default —",
+      "maxWaitS": "Max wait (s)",
+      "platformDefault": "default: 1800"
+    },
     "contextVisibility": {
       "label": "Context Store Visibility",
       "hint": "Namespaces visible to the operator in the Context tab. Separate with commas. Default: service, journey, session. PII namespaces (caller, account, history) appear masked when included."

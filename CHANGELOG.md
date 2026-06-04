@@ -2,6 +2,22 @@
 
 ---
 
+## Queue-Attended-Model Fase E — Fechar-Sempre / Cadeia de Fallback (2026-06-03)
+
+Fecha o modelo (A–E completas): nenhum contato fica em fila eterna. Cadeia: `catch` do flow → fila atendida → **`max_wait_exceeded`** como teto de retenção.
+
+**routing-engine:** sweep de timeout no `_periodic_queue_drain` — lê `queue_config.max_wait_s` do cache de pool (passthrough novo: `PoolConfig.queue_config` + kafka_listener) com fallback `queue_max_wait_default_s` (1800, limita filas mudas também); ZREM-first contra corrida. `_emit_queue_timeout` (espelho do `_emit_outage`; routing = escritor autoritativo de sessão nunca roteada, fecha o gap de tenant da Fase A): marcadores closed+close_fired → fila atendida: sinal `__queue_timeout__` via `menu:result` + `session.closed` adiado por `queue_timeout_close_grace_s` (4s); fila muda: segmento sintético `role=queue` (system, duration=espera, abandoned/max_wait_exceeded) + message.text best-effort → `contact_closed` autoritativo (`max_wait_exceeded`+`abandoned`). `_emit_no_resource_drop`: caminho sem pool_id fecha gracioso (`no_resource`) em vez de sessão muda eterna.
+
+**skill-flow (agente_fila_v1.yaml):** branch `__queue_timeout__` no `verificar_sinal` → `avisar_timeout` (notify via stream — webchat não implementa `deliver_text`, o flow é quem fala) → `finalizar_timeout` (outcome `failed`; plataforma sobrescreve para `abandoned`).
+
+**orchestrator-bridge:** cases defensivos `max_wait_exceeded`/`no_resource` no mapeamento de close_reason do `_close_contact_layer`.
+
+**platform-ui:** seção "Tratamento de Fila" no form de pool (`/config/resources`) — **skill-first**: dropdown do catálogo de skill-flows + espera máx (s); decisão: fila NÃO vai no Flow/Deploy (deploy = skill que atende o pool, com slots/instâncias; fila = política do pool, ativação por sessão sem slot). `QueueConfigSchema.agent_type_id` legado (default "") — bridge resolve o flow direto pela skill (`process_queued` aceita queue_config só com `skill_id`); `QueueConfig` em types; i18n configRecursos en+pt-BR. `tenant_demo.yaml`: `max_wait_s: 1800` no retencao_humano (validado com 30s — RegistrySyncer re-PUTa o YAML a cada start do bridge; curl/UI são sobrescritos, YAML é a fonte de verdade).
+
+Validado end-to-end (fila atendida): espera 30s → mensagem de timeout renderizada no widget → WS fechado ~4s → relatório Fila/SLA contabilizou abandono com espera coerente. Pendências: render v2 webchat para message.text de sistema (fila muda/outage silenciosos); cenários fila muda e drop sem pool não exercitados; limpar queue_config via UI (Zod null). Spec: `docs/arcos/queue-attended-model.md`.
+
+---
+
 ## Queue-Attended-Model Fase D — Relatório de Fila/SLA sobre Segments + Demanda Reprimida (2026-06-03)
 
 O ledger de fila passa a ser consumido na ponta: `/reports/pools/queue` reescrito sobre os segments `role='queue'` (Fase C) e o Volume ganha o KPI de demanda reprimida (segmentos sintéticos da Fase B). O interim "gap até o primeiro primary" foi removido.

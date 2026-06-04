@@ -273,6 +273,7 @@ const PoolsPage: React.FC = () => {
   ]
 
   const [pools,     setPools]     = useState<Pool[]>([])
+  const [skillFlows, setSkillFlows] = useState<Array<{ skill_id: string; name: string }>>([])
   const [calendars, setCalendars] = useState<CalendarOption[]>([])
   const [competencySkills, setCompetencySkills] = useState<CompetencySkill[]>([])
   const [isLoading, setIsLoading] = useState(true)
@@ -293,6 +294,9 @@ const PoolsPage: React.FC = () => {
     calendar_id:                 '',
     context_visibility_ns:       '' as string,   // comma-separated operator_namespaces
     routing_weights:             { ...ROUTING_WEIGHTS_DEFAULTS } as RoutingWeights,
+    // Queue treatment (queue-attended-model, skill-first): flow de fila + teto
+    queue_skill_id:              '',
+    queue_max_wait_s:            null as number | null,
   })
 
   // ── data loading ─────────────────────────────────────────────────────────────
@@ -365,11 +369,23 @@ const PoolsPage: React.FC = () => {
     }
   }, [session])
 
+  // Skill-flow catalog for the queue-treatment dropdown (skill-first).
+  const loadSkillFlows = useCallback(async () => {
+    if (!session) return
+    try {
+      const result = await registryApi.listSkills(session.tenantId)
+      setSkillFlows(
+        (result.items || []).map(s => ({ skill_id: s.skill_id, name: s.name || s.skill_id }))
+      )
+    } catch { /* stale ok */ }
+  }, [session])
+
   useEffect(() => {
     void loadPools()
     void loadCalendars()
     void loadCompetencySkills()
-  }, [loadPools, loadCalendars, loadCompetencySkills])
+    void loadSkillFlows()
+  }, [loadPools, loadCalendars, loadCompetencySkills, loadSkillFlows])
 
   // ── form helpers ──────────────────────────────────────────────────────────────
 
@@ -401,6 +417,7 @@ const PoolsPage: React.FC = () => {
       pool_id: '', description: '', channel_types: [], sla_target_ms: 30000,
       max_reply_time_ms: null, calendar_id: '', context_visibility_ns: '',
       routing_weights: { ...ROUTING_WEIGHTS_DEFAULTS },
+      queue_skill_id: '', queue_max_wait_s: null,
     })
     setCalExceptions([])
     setError('')
@@ -418,6 +435,8 @@ const PoolsPage: React.FC = () => {
       calendar_id:                 pool.calendar_id || '',
       context_visibility_ns:       (pool.context_visibility?.operator_namespaces ?? []).join(', '),
       routing_weights:             buildDefaultWeights(pool),
+      queue_skill_id:              pool.queue_config?.skill_id ?? '',
+      queue_max_wait_s:            pool.queue_config?.max_wait_s ?? null,
     })
     setCalExceptions([])  // will be loaded async below
     setError('')
@@ -480,6 +499,15 @@ const PoolsPage: React.FC = () => {
           : {}),
         ...(routing_skills.length ? { routing_skills } : {}),
         routing_weights: rw,
+        // Queue treatment (queue-attended-model, skill-first): only sent when
+        // a skill is selected — clearing requires SQL today (Zod rejects null,
+        // same gap as session_reservation Fase B).
+        ...(formData.queue_skill_id.trim() ? {
+          queue_config: {
+            skill_id: formData.queue_skill_id.trim(),
+            ...(formData.queue_max_wait_s !== null ? { max_wait_s: formData.queue_max_wait_s } : {}),
+          },
+        } : {}),
       }
       if (editingPool) {
         await registryApi.updatePool(editingPool.pool_id, payload, session.tenantId)
@@ -688,6 +716,37 @@ const PoolsPage: React.FC = () => {
                 }}
               />
               <p className="text-xs text-muted-light mt-0.5">{t('pools.fields.maxReplyHint')}</p>
+            </div>
+          </div>
+
+          {/* ── Queue treatment (queue-attended-model, skill-first) ──────────── */}
+          <div>
+            <p className="text-sm font-semibold text-dark">{t('pools.queueCfg.label')}</p>
+            <p className="text-xs text-gray mt-0.5 mb-2">{t('pools.queueCfg.hint')}</p>
+            <div className="flex gap-3">
+              <div className="flex-1">
+                <Select
+                  label={t('pools.queueCfg.skillFlow')}
+                  value={formData.queue_skill_id}
+                  onChange={e => setFormData({ ...formData, queue_skill_id: e.target.value })}
+                  options={[
+                    { value: '', label: t('pools.queueCfg.tenantDefault') },
+                    ...skillFlows.map(s => ({ value: s.skill_id, label: `${s.skill_id} — ${s.name}` })),
+                  ]}
+                />
+              </div>
+              <div className="w-36">
+                <Input
+                  label={t('pools.queueCfg.maxWaitS')}
+                  type="number"
+                  placeholder={t('pools.queueCfg.platformDefault')}
+                  value={formData.queue_max_wait_s ?? ''}
+                  onChange={e => {
+                    const v = e.target.value
+                    setFormData({ ...formData, queue_max_wait_s: v === '' ? null : parseInt(v) })
+                  }}
+                />
+              </div>
             </div>
           </div>
 

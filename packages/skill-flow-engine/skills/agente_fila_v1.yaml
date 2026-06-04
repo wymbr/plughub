@@ -63,7 +63,13 @@ steps:
     on_timeout: finalizar
     on_disconnect: finalizar
 
-  # ── Etapa 3: verificar se é sinal de disponibilidade ou mensagem real ─────
+  # ── Etapa 3: verificar se é sinal de disponibilidade/timeout ou mensagem ──
+  # "__queue_timeout__" — Fase E (queue-attended-model): o routing engine
+  # esgotou o max_wait_s e injeta o sinal via LPUSH menu:result; o flow avisa
+  # o cliente (notify → stream → renderiza em qualquer canal) e completa.
+  # O fechamento da sessão é do routing (contact_closed + session.closed com
+  # grace) — o flow só fala; o outcome do segmento vira "abandoned" pelo
+  # override da plataforma (contrato Fase A).
   - id: verificar_sinal
     type: choice
     conditions:
@@ -71,6 +77,10 @@ steps:
         operator: eq
         value: "__agent_available__"
         next: avisar_transferencia
+      - field: "$.pipeline_state.ultima_mensagem"
+        operator: eq
+        value: "__queue_timeout__"
+        next: avisar_timeout
     default: responder_cliente
 
   # ── Etapa 4: gerar resposta para a mensagem do cliente com IA ─────────────
@@ -118,7 +128,21 @@ steps:
     on_success: finalizar
     on_failure: finalizar
 
+  # ── Etapa 6b: avisar o cliente que o tempo máximo de espera foi atingido ──
+  - id: avisar_timeout
+    type: notify
+    message: "Tempo máximo de espera atingido. Infelizmente nenhum especialista ficou disponível. Por favor, tente novamente mais tarde."
+    channel: session
+    on_success: finalizar_timeout
+    on_failure: finalizar_timeout
+
   # ── Etapa 8: finalizar ────────────────────────────────────────────────────
   - id: finalizar
     type: complete
     outcome: escalated_human
+
+  # Plataforma sobrescreve para "abandoned" (session:{id}:closed presente) —
+  # o flow nunca declara abandono (contrato Fase A).
+  - id: finalizar_timeout
+    type: complete
+    outcome: failed

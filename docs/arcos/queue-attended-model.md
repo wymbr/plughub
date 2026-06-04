@@ -1,7 +1,7 @@
 # Fila Sempre Atendida — Modelo Unificado de Fila
 
-> Estado: **Fases A–D implementadas e validadas** (2026-06-03); resta a Fase E
-> (fechar-sempre / cadeia de fallback). Decisões fechadas em 2026-06-03.
+> Estado: **Fases A–E implementadas e validadas** (2026-06-03) — modelo completo.
+> Decisões fechadas em 2026-06-03. Pendências residuais registradas por fase.
 > Contexto: bugs de visibilidade de fila no relatório de Pools (Fase 2) revelaram que a fase
 > de fila do ciclo do contato é sub-registrada na origem. Ver `docs/arcos/pools-infra-report.md`.
 
@@ -306,7 +306,44 @@ emissão do evento analítico:
   (max_queue_len/disponíveis na série). Pendências: `sessions.sla_target_ms`
   NULL na origem (aba SLA sem dado — dívida do routing→analytics, ver
   `pools-infra-report.md`); fila ao vivo conta como dentro do SLA até fechar.
-- **E — Fechar-sempre / cadeia de fallback** (catch → notify+close → max_wait).
+- **E — Fechar-sempre / cadeia de fallback** ✅ (2026-06-03) — validada end-to-end no
+  cenário fila atendida: webchat → fila 30s → mensagem de timeout renderizada no
+  widget → WS fechado ~4s depois; relatório Fase D contabilizou os timeouts como
+  abandono com espera coerente. **max_wait_exceeded (timeout de fila)**: sweep no
+  `_periodic_queue_drain` (routing) lê `queue_config.max_wait_s` do cache de pool
+  (passthrough novo em `PoolConfig`/kafka_listener) com fallback
+  `queue_max_wait_default_s` (1800, env `PLUGHUB_QUEUE_MAX_WAIT_DEFAULT_S`) que
+  **limita também filas mudas**; ZREM-first contra corrida com drain. `_emit_queue_timeout`
+  espelha `_emit_outage` (routing = escritor autoritativo de sessão nunca roteada —
+  fecha o gap de tenant da Fase A): marcadores closed+close_fired primeiro, depois
+  (a) fila atendida → `__queue_timeout__` via `menu:result` (mesmo padrão do
+  `__agent_available__`) — o **flow avisa o cliente** (branch `avisar_timeout` novo no
+  `agente_fila_v1.yaml`, notify → stream canônico, único caminho que renderiza no
+  webchat, que não implementa `deliver_text`) e o `session.closed` é adiado por
+  `queue_timeout_close_grace_s` (4s) para a mensagem chegar; ou (b) fila muda →
+  **segmento sintético `role=queue`** (`agent_type=system`, duration = espera total,
+  `outcome=abandoned`, `close_reason=max_wait_exceeded`) mantendo o ledger universal +
+  message.text best-effort (canais com deliver_text). `contact_closed` autoritativo:
+  `close_reason=max_wait_exceeded`, `outcome=abandoned`. Segmento real de fila fecha
+  pelo override abandoned da Fase C. **Drop gracioso**: `_emit_no_resource_drop` no
+  caminho sem `pool_id` do `_persist_queued_contact` (antes deixava sessão muda
+  eterna) — notify + close `no_resource`, outcome respeita `last_outcome`. Bridge:
+  cases defensivos `max_wait_exceeded`/`no_resource` no mapeamento do
+  `_close_contact_layer`. UI: seção "Tratamento de Fila" no form de pool
+  (`/config/resources`, PoolsPage) — **skill-first**: dropdown do catálogo de
+  skill-flows (`/v1/skills`) + espera máx (s); decisão deliberada de NÃO colocar
+  no Flow/Deploy — deploy gerencia a skill que ATENDE o pool (slots, versões,
+  instâncias bootstrapped), fila é política do pool (ativação por sessão,
+  `instance_id=""`, sem slot). `QueueConfigSchema.agent_type_id` virou legado
+  (default "") — bridge resolve o flow direto pela `skill_id`; só envia
+  `queue_config` quando skill selecionada. `tenant_demo.yaml`: `max_wait_s: 1800`
+  no retencao_humano (validado com 30s; RegistrySyncer re-PUTa o YAML a cada start
+  do bridge — ajustes via curl/UI são sobrescritos, o YAML é a fonte de verdade).
+  Admissão liberada pelo reconciler (~60s) via marcador closed. Pendências:
+  webchat sem render para message.text de sistema (fila muda/outage silenciosos —
+  render v2, dívida da Fase B); cenários fila muda e drop sem pool não exercitados
+  em teste (código defensivo); limpar `queue_config` via UI (Zod rejeita null,
+  mesmo gap da `session_reservation`).
 
 ## O que substitui no relatório atual
 

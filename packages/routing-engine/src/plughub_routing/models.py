@@ -187,6 +187,13 @@ class PoolConfig(BaseModel):
     # the shared bucket (total − Σ reservations). Billing is on the total only.
     session_reservation: int | None = None
 
+    # Fase E (queue-attended-model): queue treatment config passthrough.
+    # {agent_type_id, max_wait_s?, skill_id?} — the bridge activates the queue
+    # agent; the routing engine reads max_wait_s here to enforce the retention
+    # bound (close_reason=max_wait_exceeded). None = no pool-level queue config;
+    # settings.queue_max_wait_default_s still bounds the wait (mute queues incl.).
+    queue_config: dict | None = None
+
 
 # ─────────────────────────────────────────────
 # Queue

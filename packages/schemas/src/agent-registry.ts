@@ -68,23 +68,23 @@ export type SupervisorConfig = z.infer<typeof SupervisorConfigSchema>
 
 export const QueueConfigSchema = z.object({
   /**
-   * agent_type_id of the native skill-flow agent that handles the customer
-   * while they wait in queue (Queue Agent Pattern).
-   * The agent must be registered in the same pool or a virtual "queue" pool.
+   * LEGACY — agent_type_id of the queue agent (agent types are retired).
+   * Default "": the bridge resolves the flow directly via skill_id
+   * (skill-first, Fase E). Kept for backward compat with old YAML configs.
    */
-  agent_type_id: z.string(),
+  agent_type_id: z.string().default(""),
 
   /**
-   * Maximum wait time in seconds before the queue agent gives up and sends
-   * a final apology / callback message. 0 = wait forever.
-   * Default: 1800 (30 minutes).
+   * Maximum wait time in seconds before the platform closes the contact with
+   * close_reason=max_wait_exceeded (Fase E retention bound, enforced by the
+   * routing engine's periodic drain). 0 = use the platform default
+   * (PLUGHUB_QUEUE_MAX_WAIT_DEFAULT_S). Default: 1800 (30 minutes).
    */
   max_wait_s: z.number().int().min(0).default(1800),
 
   /**
-   * Optional explicit skill_id to use when activating the queue agent.
-   * If omitted, the routing engine resolves the skill via the agent type's
-   * default skill.
+   * skill_id of the queue-treatment flow (the field that matters, skill-first).
+   * The bridge activates the queue agent resolving this flow in the registry.
    */
   skill_id: z.string().optional(),
 })
