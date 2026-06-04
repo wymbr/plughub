@@ -182,6 +182,10 @@ tipo), 5 (aba Analytics contratado-cêntrica) e 6 (demo coerente).
 **Item 3b ✅** (2026-06-04, ver `CHANGELOG.md`): Σ declarada nos deploys ≤ C
 validada no PUT slots/next + promote (rollback isento; reduções passam;
 helper `lib/capacity.ts` compartilhado com 3a).
+**Itens 5+6 ✅** (2026-06-04, ver `CHANGELOG.md`): aba Capacidade
+contratado-cêntrica (KPI Alocado como diagnóstico) + `pricing-seed` do demo
+(ai 300 + human 10 → C=310, não-destrutivo). Resta do arco: 2 (gates por
+tipo) e 7 (UX do available).
 **Item 7 (novo, 2026-06-04)** — revisão do "available" nos Monitores
 (Sessions/Pools/Agents + consumidores do snapshot): físico (slots livres) ≠
 admissível (reserva − uso, ou min(slots, shared restante)) — pool pode exibir

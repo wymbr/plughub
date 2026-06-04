@@ -2,6 +2,14 @@
 
 ---
 
+## Capacity-governance itens 6 + 5 — demo coerente + aba Capacidade contratado-cêntrica (2026-06-04)
+
+**Item 6 — `pricing-seed`** (`infra/seed/seed_pricing.py` + serviço no `docker-compose.demo.yml`): recursos contratados do demo coerentes com os deploys do `tenant_demo.yaml` — `ai_agent×300` (Σ declarada do YAML = 280 + margem p/ pools de teste) + `human_agent×10` → **C=310**; quota de admissão gravada pelo quota sync na subida. **Não-destrutivo**: se o tenant já tem qualquer resource, o seed pula (experimentos do operador — ex. testes de gate com C baixo — sobrevivem a re-`up`; para re-semear, delete os resources). Elimina o estado "295 provisionados vs 25 contratados" do demo fresco.
+
+**Item 5 — aba Capacidade (Analytics→Pools) contratado-cêntrica**: o teto único (gráfico/headroom/utilização = C) já valia desde o fechamento da Fase 2; agora o **Alocado (provisionada)** entra na tira de KPIs como diagnóstico — vermelho + "acima do contrato" quando > C — e os hints foram reescritos para fixar a semântica: valores por pool = alocação física (instâncias × max); teto do tenant = capacidade contratada. i18n en + pt-BR.
+
+---
+
 ## Capacity-governance item 3b — Σ declarada nos deploys ≤ C (2026-06-04)
 
 Fecha a validação de configuração do arco: depois das reservas (3a), a **declaração de deploy** também passa a respeitar o contratado.

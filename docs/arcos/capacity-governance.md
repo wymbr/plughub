@@ -118,8 +118,16 @@ removida da visão do total no fechamento da Fase 2; aqui sai do modelo).
    ativa) e pools com reserva; **alertas**: vermelho `conform=false` (reservas >
    C), âmbar alocado > C (deploy acima do contrato — admissão corta em C, custo
    ocioso), info sem contrato configurado. i18n en + pt-BR (`billing.capacity.*`).
-5. analytics-api/UI: aba Capacidade contratado-cêntrica (teto único = C).
-6. Demo: recursos do pricing coerentes com os deploys.
+5. ✅ (2026-06-04) analytics-api/UI: aba Capacidade contratado-cêntrica — teto
+   único do gráfico/headroom/utilização = C (desde o fechamento da Fase 2); KPI
+   **Alocado (provisionada)** entra como diagnóstico (vermelho + "acima do
+   contrato" quando > C); hints reescritos (valores por pool = alocação física;
+   teto do tenant = C).
+6. ✅ (2026-06-04) Demo: `pricing-seed` (`infra/seed/seed_pricing.py` + serviço
+   no compose) — ai_agent×300 + human_agent×10 → **C=310**, coerente com a Σ
+   declarada do YAML (280) + pools de teste/humanos. **Não-destrutivo**: pula se
+   o tenant já tiver resources (experimentos do operador sobrevivem ao
+   re-`up`); quota de admissão gravada pelo quota sync na primeira subida.
 7. **Revisão da exibição de "available" nos Monitores** (atividade registrada
    2026-06-04, pós item 4): com o modelo reserved+shared, o "available" exibido
    (slots físicos livres do snapshot) diverge do **admissível** — o que a

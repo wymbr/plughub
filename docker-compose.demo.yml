@@ -951,6 +951,26 @@ services:
       - plughub-demo
     restart: "no"
 
+  # Recursos contratados do demo (capacity-governance item 6) — coerentes com
+  # os deploys do tenant_demo.yaml: ai_agent×300 + human_agent×10 → C=310.
+  # Não-destrutivo: pula se o tenant já tiver resources (ajustes preservados).
+  pricing-seed:
+    image: python:3.11-slim
+    volumes:
+      - ./infra/seed:/seed:ro
+    environment:
+      PRICING_API_URL:     http://pricing-api:3900
+      PRICING_ADMIN_TOKEN: demo_pricing_admin_token
+      TENANT_ID:           tenant_demo
+      SEED_MAX_WAIT:       "120"
+    command: ["python", "/seed/seed_pricing.py"]
+    depends_on:
+      pricing-api:
+        condition: service_healthy
+    networks:
+      - plughub-demo
+    restart: "no"
+
   # Cria usuários demo no auth-api com module_config (ABAC).
   # supervisor@plughub.local — pode revisar avaliações + ver analytics
   # operator@plughub.local   — pode contestar avaliações + ver analytics

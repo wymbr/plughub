@@ -260,7 +260,7 @@ const CapacitySubTab: React.FC<{ data: OccData | null; loading: boolean }> = ({ 
   return (
     <div className="flex flex-col gap-4">
       {total && (
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
           <div className="bg-surface-muted rounded-md p-3"><div className="text-xs text-muted">{t('pools.capacity.totalPeak')}</div><div className="text-xl font-semibold">{total.peak_concurrency}</div></div>
           <div className="bg-surface-muted rounded-md p-3">
             <div className="text-xs text-muted">{t('pools.capacity.totalCap')}</div>
@@ -269,6 +269,20 @@ const CapacitySubTab: React.FC<{ data: OccData | null; loading: boolean }> = ({ 
           </div>
           <div className="bg-surface-muted rounded-md p-3"><div className="text-xs text-muted">{t('pools.capacity.headroom')}</div><div className="text-xl font-semibold">{total.headroom}</div></div>
           <div className="bg-surface-muted rounded-md p-3"><div className="text-xs text-muted">{t('pools.capacity.utilization')}</div><div className="text-xl font-semibold" style={{ color: utilColor(total.utilization) }}>{pct(total.utilization)}</div></div>
+          {/* Item 5 (capacity-governance): alocado como diagnóstico — vermelho
+              quando o deploy excede o contratado (teto único da aba = C). */}
+          {total.capacity_source === 'pricing' && total.provisioned_capacity !== undefined && (
+            <div className="bg-surface-muted rounded-md p-3">
+              <div className="text-xs text-muted">{t('pools.capacity.allocated')}</div>
+              <div className="text-xl font-semibold"
+                   style={total.provisioned_capacity > total.capacity ? { color: '#DC2626' } : undefined}>
+                {total.provisioned_capacity}
+              </div>
+              {total.provisioned_capacity > total.capacity && (
+                <div className="text-2xs" style={{ color: '#DC2626' }}>{t('pools.capacity.overAllocated')}</div>
+              )}
+            </div>
+          )}
         </div>
       )}
 
