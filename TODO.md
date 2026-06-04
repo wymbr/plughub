@@ -80,19 +80,29 @@ Hoje o Analytics/Agents mistura agente×pool e não separa humano×IA.
   defaults já cobre); seletor de motivo já existe (`PauseReasonModal`). Único ajuste feito:
   **i18n** dos motivos default + textos do modal (seguiam fixos em pt-BR) → namespace `agentAssist`
   seção `pause` (en + pt-BR). Labels do Config API permanecem como configurados pelo tenant.
-- **Fase 2 — relatório de Pools/Infra (novo)**: pool×canal×**endpoint**×tempo — volumetria,
-  fila (espera/tamanho/abandono/disponíveis), concorrência vs capacidade (headroom), SLA.
-  **Spec/ADR registrado** em [`docs/arcos/pools-infra-report.md`](docs/arcos/pools-infra-report.md)
-  — decisões fechadas: (a) concorrência via contadores no Routing Engine (pool + total, Redis,
-  carry-over no fechamento do bucket; `peak_total` ≠ soma dos max por pool); (b) capacidade =
-  configurada no pricing (snapshot reservado à Fila); (c) volume com dimensão `endpoint`=DNIS
-  (Arc 19). Pendente: Routing Engine (contadores+flush), 3 endpoints `/reports/pools/*`,
-  pricing expõe capacidade, aba `Analytics/Pools`.
+- **Fase 2 — relatório de Pools/Infra ✅ concluída** (2026-06-04): pool×canal×**endpoint**×tempo
+  — volumetria, fila (espera/tamanho/abandono/disponíveis), concorrência vs capacidade
+  (headroom), SLA. Spec/ADR em [`docs/arcos/pools-infra-report.md`](docs/arcos/pools-infra-report.md).
   **Atualização 2026-06-03**: Fila/SLA reescritos sobre segments `role='queue'` + demanda
   reprimida no Volume (queue-attended-model Fase D ✅, ver `CHANGELOG.md`).
   **Atualização 2026-06-04**: dívida `sessions.sla_target_ms` resolvida ✅ (ver
   `CHANGELOG.md`) — aba SLA popula a partir dos contatos novos; sessões históricas
   permanecem NULL (valor nunca foi persistido, irrecuperável).
+  **Fechamento 2026-06-04 ✅** (ver `CHANGELOG.md`): recon confirmou (TODO atrás do
+  código de novo) que sampler/consumer/endpoints/aba já existiam; decisões: (a)
+  occupancy **sampler** basta (carry-over implícito, `peak_total` instantâneo —
+  contadores event-driven descartados); (b) teto do **total** = configurada no pricing
+  (novo `GET /v1/pricing/capacity/{tenant_id}`, `capacity_source` no occupancy,
+  fallback gracioso), per-pool segue provisionada; (c) time-series de capacidade na
+  aba Capacidade ✅ (Arc 19). Residuais opcionais no spec (§ Pendente→Concluído):
+  sub-aba Visão geral, heatmap hora×dia, SETs de session_id, overlay licenciada v2.
+  **Dívida descoberta na validação (2026-06-04)**: a integração pricing→quota Redis
+  (`{t}:quota:*` lidas pelo `assertQuota`) está documentada em `docs/arcos/pricing.md`
+  e no CLAUDE.md mas **não existe no pricing-api** (zero código Redis; verificado:
+  `keys 'tenant_demo:quota:*'` vazio após POST de resources). O teto contratado hoje
+  é só analítico (denominador do occupancy); o gate de admissão por quota não arma.
+  Implementar a escrita das quotas no upsert de resources (ou na ativação de plano)
+  e corrigir `pricing.md` enquanto isso.
 - **Queue-attended-model — residuais pós Fase E** (2026-06-03, ver spec): (a) ~~render v2
   webchat~~ ✅ (2026-06-04, ver `CHANGELOG.md`) — `deliver_text` entrega mensagens de
   sistema via WS e `deliver_session_closed` renderiza `farewell_text` antes do close;
@@ -140,6 +150,22 @@ Hoje o Analytics/Agents mistura agente×pool e não separa humano×IA.
       (main.py, inalcançável); `AgentTypeSchema` (@plughub/schemas) + `validators/agent-type.ts`
       órfão. Testes do agent-registry que referenciavam agent_type foram deletados; revisar a
       suíte se reativar CI.
+
+---
+
+## Governança de Capacidade — contratado como fonte única *(novo, 2026-06-04)*
+
+Nasce da validação do fechamento Fase 2 Pools: contratado não governa config nem
+runtime (Σ reservas pode exceder C / shared negativo; quota Redis documentada mas
+inexistente; demo deploya 295 vs 25 contratados sem alerta). **Modelo fechado** em
+[`docs/arcos/capacity-governance.md`](docs/arcos/capacity-governance.md): C
+(pricing) é fonte única; **recursos criados no momento do uso** → gate primário na
+criação (instância IA on-demand, humano = concorrentes logados) contra o C vigente;
+declaração no flow/deploy validada no deploy; Σ reservas ≤ C e shared ≥ 0 (zero ok,
+negativo nunca); redução de C sempre aceita com revalidação + alerta de
+não-conformidade (nunca bloqueia); P (alocado) vira medidor de consumo do contrato
+(UI: C × alocado × saldo). Absorve a dívida pricing→quota Redis registrada na
+Fase 2. Pendente de implementação: ver § Pendente do spec.
 
 ---
 

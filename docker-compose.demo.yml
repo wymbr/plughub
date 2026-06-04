@@ -864,6 +864,7 @@ services:
       PLUGHUB_CLICKHOUSE_DATABASE: plughub_demo
       PLUGHUB_ADMIN_JWT_SECRET:    demo_analytics_admin_secret
       PLUGHUB_ANALYTICS_OPEN_ACCESS: "true"   # bypass JWT auth in demo — dashboard accessible without token
+      PLUGHUB_PRICING_API_URL:     http://pricing-api:3900   # Fase 2 Pools — teto configurado do total (fallback gracioso p/ provisionada)
     depends_on:
       redis:
         condition: service_healthy

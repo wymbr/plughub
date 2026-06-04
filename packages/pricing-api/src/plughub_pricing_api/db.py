@@ -275,6 +275,51 @@ async def list_activation_log(
     return [_log_row_to_dict(r) for r in rows]
 
 
+# ─── configured capacity (Fase 2 — Pools/Infra report) ───────────────────────
+#
+# Capacidade configurada (contratada) por tipo de recurso. Consumida pelo
+# analytics-api como denominador do TOTAL no /reports/pools/occupancy
+# (decisão 2026-06-04: per-pool continua provisionada; só o total usa pricing).
+# base = pool_type 'base' (sempre ativa); reserve_active = reservas ativas hoje.
+
+_AGENT_CAPACITY_TYPES = ("ai_agent", "human_agent")
+
+
+async def get_capacity(
+    pool: asyncpg.Pool,
+    tenant_id: str,
+    installation_id: str = "default",
+) -> dict:
+    rows = await pool.fetch(
+        """
+        SELECT resource_type,
+               SUM(quantity) FILTER (WHERE pool_type = 'base')                 AS base,
+               SUM(quantity) FILTER (WHERE pool_type = 'reserve' AND active)   AS reserve_active
+        FROM pricing.installation_resources
+        WHERE tenant_id = $1 AND installation_id = $2 AND active
+        GROUP BY resource_type
+        ORDER BY resource_type
+        """,
+        tenant_id, installation_id,
+    )
+    by_type = [
+        {
+            "resource_type":  r["resource_type"],
+            "base":           int(r["base"] or 0),
+            "reserve_active": int(r["reserve_active"] or 0),
+            "total":          int(r["base"] or 0) + int(r["reserve_active"] or 0),
+        }
+        for r in rows
+    ]
+    agent_total = sum(t["total"] for t in by_type if t["resource_type"] in _AGENT_CAPACITY_TYPES)
+    return {
+        "tenant_id":            tenant_id,
+        "installation_id":      installation_id,
+        "by_type":              by_type,
+        "agent_capacity_total": agent_total,
+    }
+
+
 # ─── helpers ──────────────────────────────────────────────────────────────────
 
 def _row_to_dict(r: asyncpg.Record) -> dict:

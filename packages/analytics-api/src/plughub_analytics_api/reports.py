@@ -31,7 +31,9 @@ from typing import Optional
 from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import JSONResponse, Response
 
+from .config import get_settings
 from .pool_auth import PoolPrincipal, optional_pool_principal
+from .pricing_client import get_configured_agent_capacity
 from .reports_query import (
     _clamp_page_size,
     _to_csv,
@@ -992,8 +994,11 @@ async def get_pools_occupancy(
     pool_principal: PoolPrincipal = Depends(optional_pool_principal),
 ) -> Response:
     """
-    Fase 2 — pico de concorrência vs capacidade provisionada por pool (+ total do
-    tenant). series (no tempo) + by_pool (headroom/utilization) + total.
+    Fase 2 — pico de concorrência vs capacidade por pool (+ total do tenant).
+    series/total_series (no tempo) + by_pool (headroom/utilization) + total.
+    Per-pool: capacidade provisionada (flashada pelo occupancy sampler).
+    Total: teto = capacidade configurada no pricing quando disponível
+    (decisão 2026-06-04); fallback gracioso para a provisionada.
     """
     data = await query_pools_occupancy(
         client           = request.app.state.store.new_client(),
@@ -1005,6 +1010,19 @@ async def get_pools_occupancy(
         bucket           = bucket,
         accessible_pools = pool_principal.accessible_pools,
     )
+
+    total = (data.get("data") or {}).get("total")
+    if total:
+        total["provisioned_capacity"] = total.get("capacity", 0)
+        total["capacity_source"]      = "provisioned"
+        configured = await get_configured_agent_capacity(get_settings().pricing_api_url, tenant_id)
+        if configured is not None:
+            peak = int(total.get("peak_concurrency") or 0)
+            total["capacity"]        = configured
+            total["headroom"]        = max(configured - peak, 0)
+            total["utilization"]     = round(peak / configured, 4) if configured else None
+            total["capacity_source"] = "pricing"
+
     return _respond(data, "json", "pools_occupancy.csv")
 
 

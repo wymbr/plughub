@@ -32,7 +32,13 @@
       "utilization": "Utilização",
       "noData": "Sem dados de ocupação no período.",
       "hint": "Pico de concorrência por minuto vs capacidade provisionada (instâncias × max).",
-      "cols": { "pool": "Pool", "peak": "Pico", "capacity": "Capacidade", "headroom": "Headroom", "util": "Utilização" }
+      "cols": { "pool": "Pool", "peak": "Pico", "capacity": "Capacidade", "headroom": "Headroom", "util": "Utilização" },
+      "seriesTitle": "Concorrência no tempo",
+      "seriesHint": "Pico de concorrência por bucket vs linha de teto. Teto por pool = provisionada; teto do total = configurada (pricing) quando disponível.",
+      "peakLine": "Pico de concorrência",
+      "provisionedLine": "Capacidade provisionada",
+      "configuredLine": "Capacidade configurada",
+      "source": { "pricing": "configurada (pricing)", "provisioned": "provisionada" }
     },
     "queue": {
       "title": "Espera e disponíveis no tempo",

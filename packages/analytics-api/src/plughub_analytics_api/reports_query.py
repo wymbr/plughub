@@ -2504,7 +2504,7 @@ async def query_pools_occupancy(
     since = _ch_fmt(from_dt) if from_dt else _default_from()
     until = _ch_fmt(to_dt, upper=True) if to_dt else _default_to()
     bkt   = bucket if bucket in ("hour", "day") else "hour"
-    empty = {"series": [], "by_pool": [], "total": None}
+    empty = {"series": [], "by_pool": [], "total": None, "total_series": []}
     if accessible_pools is not None and len(accessible_pools) == 0:
         return {"data": empty, "meta": {"from_dt": since, "to_dt": until, "bucket": bkt}}
     try:
@@ -2566,7 +2566,11 @@ def _fetch_pools_occupancy(
         r["utilization"] = round(peak / cap, 4) if cap else None
 
     # Total (tenant-wide) — only for unscoped callers; the row is pool_id='__total__'.
+    # total_series alimenta a time-series da aba Capacidade (peak_total no tempo;
+    # capacity aqui é a provisionada flashada — o teto configurado do pricing é
+    # aplicado sobre `total` pela rota, ver reports.get_pools_occupancy).
     total = None
+    total_series: list = []
     if accessible_pools is None:
         tot = _rows_to_dicts(client.query(f"""
             SELECT max(peak_concurrency) AS peak_concurrency, max(provisioned_capacity) AS capacity
@@ -2580,7 +2584,19 @@ def _fetch_pools_occupancy(
             total = {"peak_concurrency": peak, "capacity": cap,
                      "headroom": max(cap - peak, 0), "utilization": round(peak / cap, 4) if cap else None}
 
-    return {"data": {"series": series, "by_pool": by_pool, "total": total},
+        total_series = _rows_to_dicts(client.query(f"""
+            SELECT {bucket_fn}(minute)        AS bucket,
+                   max(peak_concurrency)      AS peak_concurrency,
+                   max(provisioned_capacity)  AS capacity
+            FROM {db}.pool_occupancy_peaks FINAL
+            WHERE tenant_id = {{tenant_id:String}} AND minute >= '{since}' AND minute < '{until}'
+              AND pool_id = '__total__'
+            GROUP BY bucket ORDER BY bucket
+        """, parameters={"tenant_id": tenant_id}))
+        for r in total_series:
+            r["bucket"] = _iso(r["bucket"])
+
+    return {"data": {"series": series, "by_pool": by_pool, "total": total, "total_series": total_series},
             "meta": {"from_dt": since, "to_dt": until, "bucket": bucket}}
 
 

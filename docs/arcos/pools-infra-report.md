@@ -1,6 +1,7 @@
 # Fase 2 — Relatório de Pools / Infraestrutura
 
-> Estado: **spec / ADR** (não implementado). Base para a implementação.
+> Estado: **implementado** (2026-06-04 — ver § Pendente→Concluído no fim).
+> Originalmente spec / ADR; mantido como referência das decisões.
 > Complementa a Fase 1 (Agentes): Fase 1 = produtividade por pessoa; Fase 2 = saúde operacional por pool/canal.
 > Ver também `docs/arcos/analytics-reports-redesign.md`.
 
@@ -69,13 +70,21 @@ Fonte: **picos persistidos** pelo Routing Engine (ver abaixo) + capacidade confi
 ```json
 {
   "data": {
-    "series":  [ { "bucket": "…", "pool_id": "retencao_humano", "peak_concurrency": 8, "capacity": 10 } ],
-    "by_pool": [ { "pool_id": "retencao_humano", "peak_concurrency": 8, "capacity": 10, "headroom": 2, "utilization": 0.80 } ],
-    "total":   { "peak_concurrency": 11, "capacity": 24, "headroom": 13, "utilization": 0.46 }
+    "series":       [ { "bucket": "…", "pool_id": "retencao_humano", "peak_concurrency": 8, "capacity": 10 } ],
+    "by_pool":      [ { "pool_id": "retencao_humano", "peak_concurrency": 8, "capacity": 10, "headroom": 2, "utilization": 0.80 } ],
+    "total":        { "peak_concurrency": 11, "capacity": 24, "headroom": 13, "utilization": 0.46,
+                      "provisioned_capacity": 20, "capacity_source": "pricing" },
+    "total_series": [ { "bucket": "…", "peak_concurrency": 11, "capacity": 20 } ]
   },
   "meta": { … }
 }
 ```
+
+(2026-06-04) `total_series` (linha do `__total__` no tempo, só para callers sem escopo
+de pools) alimenta a time-series da aba Capacidade. No `total`, `capacity` vem da
+**configurada no pricing** quando disponível (`capacity_source: "pricing"`;
+`provisioned_capacity` preservada ao lado); fallback gracioso → `"provisioned"`.
+Per-pool (`series`/`by_pool`) a capacidade segue a **provisionada** flashada pelo sampler.
 
 ---
 
@@ -102,6 +111,19 @@ A concorrência **não** é reconstruída por varredura de `participation_interv
 - Redis (corrente): concorrência por pool + total como **SET de `session_id`** (`SADD`/`SREM`; `SCARD` = concorrência) — **não** `INCR`/`DECR`, que deriva por decrementos perdidos (crash). O SET é auto-curável e **reconciliável** periodicamente contra as sessões ativas reais. Pico por bucket rastreado à parte (`{tenant}:pool:{id}:peak:{bucket}`, `{tenant}:peak_total:{bucket}`).
 - **Granularidade de persistência = 1 minuto**: o pico é gravado por minuto; o endpoint re-agrega (`max`) para hour/day. Fino o bastante para pico exato, barato.
 - ClickHouse (histórico): nova tabela `pool_occupancy_peaks(tenant_id, pool_id, minute, peak_concurrency, provisioned_capacity, ingested_at, date)`; o total como `pool_id = '__total__'`. Kafka topic `pool.occupancy` (producer: Routing Engine; consumer: analytics-api). `provisioned_capacity` flashada junto (instâncias × max_concurrent no momento).
+
+### Como foi implementado — occupancy sampler (decisão 2026-06-04)
+
+A implementação ficou no **occupancy sampler** (`routing-engine/main.py::_occupancy_sampler`),
+não nos contadores event-driven acima: amostra o `active_count` existente (INCR/DECR
+atômico do registry, com guards extensos contra deriva) por pool a cada **5s**
+(`occupancy_sample_interval_s`), soma os pools **no mesmo instante** para o total
+(preserva `peak_total` instantâneo ≠ soma dos máximos), rastreia o pico do minuto e
+flasha o minuto fechado → Kafka `pool.occupancy`. O **carry-over é implícito** — o
+contador vivo é lido a cada amostra, então minuto sem evento registra o steady-state
+corretamente. Trade-off aceito: pico mais curto que o intervalo de amostragem entre
+duas amostras pode escapar; os SETs de `session_id` ficam como evolução opcional se a
+deriva do `active_count` se manifestar na prática.
 
 ### Refinamentos da Fila/SLA
 
@@ -139,6 +161,17 @@ Duas capacidades distintas, que respondem perguntas diferentes (não excludentes
 
 Par (MVP): por pool → `peak_concurrency` vs capacidade **provisionada** do pool; total → `peak_total` (instantâneo) vs soma da provisionada. Headroom = teto − pico.
 
+**Refinamento (decisão 2026-06-04)**: o teto do **total** passa a vir da capacidade
+**configurada no pricing** quando disponível — novo `GET /v1/pricing/capacity/{tenant_id}`
+(agrega `installation_resources` ativos: base + reservas ativas por `resource_type`;
+`agent_capacity_total` = ai_agent + human_agent). O analytics-api consome com cache
+TTL 60s (`pricing_client.py`, env `PLUGHUB_PRICING_API_URL`) e **degrada graciosamente**
+para a provisionada (`capacity_source` no payload explicita a fonte). **Per-pool
+permanece provisionada** — o pricing não tem granularidade por pool de routing (só
+reservas têm `reserve_pool_id`); o snapshot provisionado segue alimentando a Fila
+(disponíveis × fila). Isso realiza o overlay "licenciada" previsto acima como v2,
+usando o pricing-api local como fonte do entitlement.
+
 ---
 
 ## Fontes de dados (já coletadas)
@@ -151,9 +184,14 @@ Par (MVP): por pool → `peak_concurrency` vs capacidade **provisionada** do poo
 
 ---
 
-## Pendente (implementação)
+## Pendente → Concluído (2026-06-04)
 
-1. Routing Engine: contadores de concorrência (pool + total) no Redis + flush de pico por bucket → Kafka `pool.occupancy`.
-2. analytics-api: consumer `pool.occupancy` → `pool_occupancy_peaks`; três endpoints `/reports/pools/{volume,queue,occupancy}`.
-3. pricing-api: expor capacidade configurada por pool + capacidade-base do tenant (para o denominador).
-4. platform-ui: aba `Analytics/Pools` (Visão geral + Volume + Fila + Capacidade + SLA), i18n en + pt-BR.
+1. ✅ Routing Engine: **occupancy sampler** (pool + `__total__`, pico/minuto, carry-over implícito) → Kafka `pool.occupancy` — ver § Como foi implementado.
+2. ✅ analytics-api: consumer `pool.occupancy` → `pool_occupancy_peaks`; três endpoints `/reports/pools/{volume,queue,occupancy}` (occupancy com `total_series` + teto do pricing, 2026-06-04).
+3. ✅ pricing-api: `GET /v1/pricing/capacity/{tenant_id}` — capacidade configurada por `resource_type` (base + reservas ativas) + `agent_capacity_total` (denominador do total).
+4. ✅ platform-ui: aba `Analytics/Pools` (Volume + Fila + Capacidade + SLA, i18n en + pt-BR); time-series de capacidade na aba Capacidade (2026-06-04 — Arc 19 "Pools (time-series capacity)").
+
+**Residuais (opcionais, fora do fechamento)**: sub-aba "Visão geral" (tira de KPIs +
+tabela saúde dos pools com drill-down), heatmap hora×dia no Volume, SETs de
+`session_id` no lugar do `active_count` se deriva aparecer, overlay de capacidade
+licenciada por serviço central (v2 — o pricing local já cobre o caso single-install).

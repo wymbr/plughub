@@ -5,6 +5,7 @@ REST endpoints for the Pricing API.
 Endpoints:
   GET  /v1/pricing/invoice/{tenant_id}                  — invoice for current or given cycle
   GET  /v1/pricing/invoice/{tenant_id}?format=xlsx      — XLSX export
+  GET  /v1/pricing/capacity/{tenant_id}                 — configured capacity by resource_type
   GET  /v1/pricing/resources/{tenant_id}                — list installation resources
   POST /v1/pricing/resources/{tenant_id}                — upsert resource
   DELETE /v1/pricing/resources/{tenant_id}/{resource_id} — remove resource
@@ -138,6 +139,22 @@ async def delete_resource(
     if not deleted:
         raise HTTPException(status_code=404, detail="Resource not found")
     return {"deleted": True}
+
+
+# ─── Configured capacity (Fase 2 — Pools/Infra report) ───────────────────────
+
+@router.get("/v1/pricing/capacity/{tenant_id}")
+async def get_capacity(
+    tenant_id:       str,
+    installation_id: str = Query(default="default"),
+    pool: asyncpg.Pool   = Depends(get_pool),
+):
+    """
+    Capacidade configurada (contratada) por resource_type: base + reservas ativas.
+    `agent_capacity_total` (ai_agent + human_agent) é o denominador do total na
+    aba Capacidade do Analytics/Pools (per-pool segue a capacidade provisionada).
+    """
+    return await pricing_db.get_capacity(pool, tenant_id, installation_id)
 
 
 # ─── Reserve pool activation / deactivation ───────────────────────────────────

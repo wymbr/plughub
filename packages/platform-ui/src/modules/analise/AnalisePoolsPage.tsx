@@ -7,11 +7,15 @@
  * (Fase D queue-attended-model: sessões outage + causa dos segmentos system).
  * Fila/SLA leem GET /reports/pools/queue — derivado dos segments role='queue'
  * (espera = duration_ms; abandono = outcome='abandoned'; handoff = fila→primary).
+ * Capacidade lê GET /reports/pools/occupancy — KPIs + tabela por pool + time-series
+ * (pico de concorrência vs teto: per-pool = provisionada flashada pelo occupancy
+ * sampler; total = configurada no pricing quando disponível, capacity_source).
  */
 import React, { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import {
-  AreaChart, Area, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
+  AreaChart, Area, LineChart, Line, ComposedChart, ReferenceLine,
+  XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
   PieChart, Pie, Cell,
 } from 'recharts'
 import { useAuth } from '@/auth/useAuth'
@@ -29,9 +33,14 @@ interface VolumeData  {
   rejected?: RejectedData
 }
 
-interface OccPoolRow  { pool_id: string; peak_concurrency: number; capacity: number; headroom: number; utilization: number | null }
-interface OccTotal    { peak_concurrency: number; capacity: number; headroom: number; utilization: number | null }
-interface OccData     { series: unknown[]; by_pool: OccPoolRow[]; total: OccTotal | null }
+interface OccPoolRow   { pool_id: string; peak_concurrency: number; capacity: number; headroom: number; utilization: number | null }
+interface OccTotal     {
+  peak_concurrency: number; capacity: number; headroom: number; utilization: number | null
+  provisioned_capacity?: number; capacity_source?: 'pricing' | 'provisioned'
+}
+interface OccSeriesRow { bucket: string; pool_id: string; peak_concurrency: number; capacity: number }
+interface OccTotalRow  { bucket: string; peak_concurrency: number; capacity: number }
+interface OccData      { series: OccSeriesRow[]; by_pool: OccPoolRow[]; total: OccTotal | null; total_series?: OccTotalRow[] }
 
 interface QSeriesRow  { bucket: string; pool_id: string; avg_wait_ms: number; contacts: number; queued: number; abandoned: number; max_queue_len: number; available_agents: number }
 interface QPoolRow    { pool_id: string; contacts: number; queued: number; abandoned: number; handoff: number; abandon_rate: number; avg_wait_ms: number; p95_wait_ms: number; sla_target_ms: number; within_sla: number; sla_eligible: number; sla_attainment: number | null }
@@ -237,14 +246,65 @@ const CapacitySubTab: React.FC<{ data: OccData | null; loading: boolean }> = ({ 
   const total = data?.total
   const pct = (u: number | null) => u === null ? '—' : `${Math.round(u * 100)}%`
 
+  // Time-series: com filtro de pool a série tem 1 pool (teto = provisionada do
+  // pool); sem filtro usa o total do tenant (peak_total instantâneo ≠ soma dos
+  // máximos por pool) com teto provisionado por bucket + linha da configurada.
+  const poolIds    = [...new Set((data?.series ?? []).map(r => r.pool_id))]
+  const singlePool = poolIds.length === 1 ? poolIds[0] : null
+  const tsSource   = singlePool ? (data?.series ?? []) : (data?.total_series ?? [])
+  const tsData     = tsSource
+    .map(r => ({ bucket: r.bucket, peak: r.peak_concurrency, capacity: r.capacity }))
+    .sort((a, b) => a.bucket.localeCompare(b.bucket))
+  const configured = !singlePool && total?.capacity_source === 'pricing' ? total.capacity : null
+
   return (
     <div className="flex flex-col gap-4">
       {total && (
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
           <div className="bg-surface-muted rounded-md p-3"><div className="text-xs text-muted">{t('pools.capacity.totalPeak')}</div><div className="text-xl font-semibold">{total.peak_concurrency}</div></div>
-          <div className="bg-surface-muted rounded-md p-3"><div className="text-xs text-muted">{t('pools.capacity.totalCap')}</div><div className="text-xl font-semibold">{total.capacity}</div></div>
+          <div className="bg-surface-muted rounded-md p-3">
+            <div className="text-xs text-muted">{t('pools.capacity.totalCap')}</div>
+            <div className="text-xl font-semibold">{total.capacity}</div>
+            {total.capacity_source && <div className="text-2xs text-muted-light">{t(`pools.capacity.source.${total.capacity_source}`)}</div>}
+          </div>
           <div className="bg-surface-muted rounded-md p-3"><div className="text-xs text-muted">{t('pools.capacity.headroom')}</div><div className="text-xl font-semibold">{total.headroom}</div></div>
           <div className="bg-surface-muted rounded-md p-3"><div className="text-xs text-muted">{t('pools.capacity.utilization')}</div><div className="text-xl font-semibold" style={{ color: utilColor(total.utilization) }}>{pct(total.utilization)}</div></div>
+        </div>
+      )}
+
+      {/* Time-series de capacidade (Arc 19 — "Pools (time-series capacity)") */}
+      {tsData.length > 0 && (
+        <div className="bg-white rounded-lg border border-border overflow-hidden">
+          <div className="px-4 py-2.5 border-b border-border bg-surface-muted">
+            <p className="text-xs font-semibold text-muted uppercase tracking-wide">
+              {t('pools.capacity.seriesTitle')}{singlePool ? ` — ${singlePool}` : ''}
+            </p>
+            <p className="text-2xs text-muted-light mt-0.5">{t('pools.capacity.seriesHint')}</p>
+          </div>
+          <div className="p-3">
+            <ResponsiveContainer width="100%" height={220}>
+              <ComposedChart data={tsData} margin={{ top: 8, right: 16, left: 0, bottom: 0 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#E5E7EB" />
+                <XAxis dataKey="bucket" tick={{ fontSize: 11 }} tickFormatter={fmtBucket} />
+                <YAxis tick={{ fontSize: 11 }} allowDecimals={false} />
+                <Tooltip labelFormatter={fmtBucket} />
+                <Legend iconSize={10} wrapperStyle={{ fontSize: 12 }} />
+                <Area type="monotone" dataKey="peak" name={t('pools.capacity.peakLine')}
+                      stroke="#1B4F8A" fill="#1B4F8A" fillOpacity={0.35} />
+                {/* Provisionada só quando ela é o teto da visão (per-pool / sem pricing):
+                    no total com pricing ela é ordens de grandeza maior (pools IA) e
+                    esmagaria o eixo — fica no KPI (provisioned_capacity) e na tabela. */}
+                {configured === null && (
+                  <Line type="stepAfter" dataKey="capacity" name={t('pools.capacity.provisionedLine')}
+                        stroke="#D97706" strokeWidth={2} strokeDasharray="6 3" dot={false} />
+                )}
+                {configured !== null && (
+                  <ReferenceLine y={configured} stroke="#DC2626" strokeDasharray="4 4" ifOverflow="extendDomain"
+                    label={{ value: t('pools.capacity.configuredLine'), fontSize: 11, fill: '#DC2626', position: 'insideTopRight' }} />
+                )}
+              </ComposedChart>
+            </ResponsiveContainer>
+          </div>
         </div>
       )}
 
@@ -464,7 +524,9 @@ export default function AnalisePoolsPage() {
     if (!tenantId || subTab !== 'capacity') return
     let cancelled = false
     setLoading(true)
-    const p = new URLSearchParams({ tenant_id: tenantId, from_dt: fromDt, to_dt: toDt, bucket: 'day' })
+    // Convenção do spec: bucket hour até 48h, senão day (série fica legível).
+    const spanDays = (new Date(toDt).getTime() - new Date(fromDt).getTime()) / 86400000
+    const p = new URLSearchParams({ tenant_id: tenantId, from_dt: fromDt, to_dt: toDt, bucket: spanDays <= 2 ? 'hour' : 'day' })
     if (poolId) p.set('pool_id', poolId)
     fetch(`/reports/pools/occupancy?${p}`)
       .then(r => r.ok ? r.json() : Promise.reject(r.status))

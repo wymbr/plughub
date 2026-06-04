@@ -46,6 +46,12 @@ class Settings(BaseSettings):
     # When empty, pool scoping is disabled (all pools visible — dev / open-access).
     auth_jwt_secret: str = ""
 
+    # ── Pricing API (Fase 2 — Pools/Infra: capacidade configurada) ────────────
+    # Quando setado, /reports/pools/occupancy usa a capacidade-base configurada
+    # no pricing como denominador do TOTAL (per-pool segue a provisionada).
+    # Vazio ou indisponível → degrada graciosamente para a provisionada.
+    pricing_api_url: str = ""
+
     # ── Open access (demo / dev) ──────────────────────────────────────────
     # When True, all protected endpoints return an admin principal without
     # requiring a Bearer token. NEVER enable in production.

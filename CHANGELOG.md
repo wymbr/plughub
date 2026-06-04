@@ -2,6 +2,24 @@
 
 ---
 
+## Relatórios Fase 2 — Pools/Infra: fechamento de capacidade (2026-06-04)
+
+Fecha o item "Pools/Infra restante" do TODO. Recon inicial confirmou (TODO atrás do código, 4ª vez na semana) que os itens 1, 2 e 4 do § Pendente do spec **já estavam implementados**: occupancy sampler no routing-engine (`_occupancy_sampler` — amostra `active_count` por pool a cada 5s + total instantâneo do tenant, pico/minuto, carry-over implícito → Kafka `pool.occupancy`), consumer + `pool_occupancy_peaks` + `/reports/pools/occupancy` no analytics-api, e a aba Analytics→Pools. Decisões de fechamento: **(a)** sampler basta — contadores event-driven (SET de session_id) descartados, ficam como evolução se deriva do `active_count` aparecer; **(b)** teto do **total** = capacidade **configurada no pricing**; per-pool segue a provisionada (pricing não tem granularidade por pool de routing); **(c)** time-series de capacidade na UI (Arc 19 "Pools (time-series capacity)").
+
+**pricing-api** (`db.py`, `router.py`): novo `GET /v1/pricing/capacity/{tenant_id}` — agrega `installation_resources` ativos (base + reservas ativas) por `resource_type`; `agent_capacity_total` = ai_agent + human_agent (denominador do total).
+
+**analytics-api**: novo `pricing_client.py` (httpx, cache TTL 60s, degradação graciosa — pricing fora/sem recurso → mantém provisionada); `config.py` ganha `pricing_api_url` (`PLUGHUB_PRICING_API_URL`); `_fetch_pools_occupancy` retorna `total_series` (linha `__total__` por bucket, só p/ callers sem escopo); a rota `/reports/pools/occupancy` sobrescreve `total.capacity` com a configurada quando disponível (recalcula headroom/utilização) e expõe `capacity_source` (`pricing`|`provisioned`) + `provisioned_capacity` preservada.
+
+**platform-ui** (`AnalisePoolsPage`): aba Capacidade ganha gráfico **Concorrência no tempo** — área = pico de concorrência (total do tenant, ou o pool quando filtrado), linha tracejada = capacidade provisionada por bucket, `ReferenceLine` = capacidade configurada (quando `capacity_source=pricing`); KPI "Capacidade total" indica a fonte; bucket hour ≤48h senão day (convenção do spec). i18n en + pt-BR (`pools.capacity.*`).
+
+**docker-compose.demo.yml**: `PLUGHUB_PRICING_API_URL: http://pricing-api:3900` no analytics-api.
+
+Spec atualizado (`docs/arcos/pools-infra-report.md`): estado → implementado; § "Como foi implementado — occupancy sampler"; § Fonte de capacidade com o refinamento 2026-06-04; § Pendente→Concluído com residuais opcionais (sub-aba Visão geral, heatmap hora×dia, SETs de session_id, overlay licenciada v2).
+
+Validação (usuário, demo): `GET /v1/pricing/capacity/tenant_demo` → 25 (5 human + 20 ai); occupancy `total.capacity=25 / capacity_source="pricing" / provisioned_capacity=298` preservada; UI com KPIs + fonte + gráfico. Ajuste pós-validação: na visão do **total** com teto do pricing, a linha da provisionada sai do gráfico (provisionada ~295 — Σ instâncias×max_concurrent, igual ao Total do Monitor — esmagava o eixo contra pico 5 / teto 25; `ReferenceLine` com `ifOverflow="extendDomain"`). **Dívida descoberta**: integração pricing→quota Redis (`{t}:quota:*` / `assertQuota`) documentada em `pricing.md`/CLAUDE.md mas inexistente no pricing-api — teto contratado é só analítico; gate de admissão não arma (registrada no TODO).
+
+---
+
 ## validateFlow — adjacência fechada + política de guarda de ciclo (2026-06-04)
 
 Ponto cego descoberto no fix do copilot: `_getSuccessors` (engine.ts) não percorria `conditions[].next`/`default` do choice (formato real dos YAMLs), `strategies[]` do catch (lia o singular legado), nem campos-objeto `{next}` de collect/suspend (`on_response`/`on_resume`/`on_reject`/`on_timeout`) — ciclos por esses caminhos escapavam da validação (ex.: loop do `agente_fila_v1` nunca foi detectado).

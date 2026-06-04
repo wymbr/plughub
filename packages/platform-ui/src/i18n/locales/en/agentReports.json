@@ -32,7 +32,13 @@
       "utilization": "Utilization",
       "noData": "No occupancy data in the period.",
       "hint": "Per-minute peak concurrency vs provisioned capacity (instances × max).",
-      "cols": { "pool": "Pool", "peak": "Peak", "capacity": "Capacity", "headroom": "Headroom", "util": "Utilization" }
+      "cols": { "pool": "Pool", "peak": "Peak", "capacity": "Capacity", "headroom": "Headroom", "util": "Utilization" },
+      "seriesTitle": "Concurrency over time",
+      "seriesHint": "Peak concurrency per bucket vs capacity ceiling. Per-pool ceiling = provisioned; total ceiling = configured (pricing) when available.",
+      "peakLine": "Peak concurrency",
+      "provisionedLine": "Provisioned capacity",
+      "configuredLine": "Configured capacity",
+      "source": { "pricing": "configured (pricing)", "provisioned": "provisioned" }
     },
     "queue": {
       "title": "Wait and available over time",
