@@ -174,8 +174,11 @@ híbrida (`shared = C − Σ reservas`) passa a armar de verdade. `pricing.md`
 **Item 3a ✅** (2026-06-04, ver `CHANGELOG.md`): agent-registry valida
 `Σ session_reservation ≤ C` no POST/PUT de pool (422 só em aumentos; reduções
 sempre passam; sem C → fail-open) + `GET /v1/pools/capacity/conformance`
-(conformidade derivada, revalidação implícita on contract-change). Restam:
-3b (Σ dos deploys ≤ C) e alerta visual (item 4).
+(conformidade derivada, revalidação implícita on contract-change).
+**Item 4 ✅** (2026-06-04, ver `CHANGELOG.md`): aba Capacidade na BillingPage —
+contratado × alocado × saldo + reservado/shared com alertas de não-conformidade
+(reservas > C; alocado > C). Restam: 3b (Σ dos deploys ≤ C), 2 (gates por
+tipo), 5 (aba Analytics contratado-cêntrica) e 6 (demo coerente).
 
 ---
 

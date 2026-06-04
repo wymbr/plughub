@@ -3,7 +3,28 @@
   "pageSubtitle": "Visualize faturas e dados de consumo",
   "tabs": {
     "invoice":     "Fatura",
-    "consumption": "Consumo"
+    "consumption": "Consumo",
+    "capacity":    "Capacidade"
+  },
+  "capacity": {
+    "title": "Capacidade contratada",
+    "subtitle": "O contratado é o teto governante: alocação e reservas devem caber nele.",
+    "contracted": "Contratado (C)",
+    "contractedHint": "agentes (IA + humano), base + reservas ativas",
+    "allocated": "Alocado (provisionado)",
+    "allocatedHint": "slots deployados × concorrência, agora",
+    "balance": "Saldo (C − alocado)",
+    "balanceHint": "contratado e ainda não utilizado",
+    "reserved": "Reservado (Σ pools)",
+    "shared": "Shared (C − reservado)",
+    "alertNonConform": "Reservas de pool excedem a capacidade contratada — o shared ficaria negativo. Reduza reservas ou aumente o contrato.",
+    "alertOverAllocated": "Capacidade provisionada excede o contrato. A admissão corta no contratado; o deploy excedente é custo ocioso.",
+    "noContract": "Sem capacidade contratada configurada (resources do pricing vazios) — nenhum teto se aplica.",
+    "byType": "Por tipo de recurso",
+    "cols": { "type": "Recurso", "base": "Base", "reserve": "Reserva ativa", "total": "Total" },
+    "reservedPools": "Pools com reserva",
+    "poolCols": { "pool": "Pool", "reservation": "Reserva" },
+    "noReservations": "Nenhuma reserva de pool configurada."
   },
   "invoice": {
     "title":        "Fatura",

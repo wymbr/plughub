@@ -103,6 +103,12 @@ removida da visão do total no fechamento da Fase 2; aqui sai do modelo).
      implicitamente; alerta visual fica com o item 4.
    - **3b** deploy: Σ declarada nos deploys ≤ C (validação no fluxo de deploy) —
      pendente.
-4. platform-ui: visão contratado × alocado × saldo (Billing/Capacidade) + alertas.
+4. ✅ (2026-06-04) platform-ui: aba **Capacidade** na BillingPage — KPIs
+   contratado (C, pricing `/capacity`) × alocado (provisionada corrente, último
+   bucket do occupancy) × saldo (C − alocado, verde/vermelho) × reservado/shared
+   (registry `/capacity/conformance`); tabela por resource_type (base + reserva
+   ativa) e pools com reserva; **alertas**: vermelho `conform=false` (reservas >
+   C), âmbar alocado > C (deploy acima do contrato — admissão corta em C, custo
+   ocioso), info sem contrato configurado. i18n en + pt-BR (`billing.capacity.*`).
 5. analytics-api/UI: aba Capacidade contratado-cêntrica (teto único = C).
 6. Demo: recursos do pricing coerentes com os deploys.

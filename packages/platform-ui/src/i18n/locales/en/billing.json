@@ -3,7 +3,28 @@
   "pageSubtitle": "View invoices and consumption data",
   "tabs": {
     "invoice":     "Invoice",
-    "consumption": "Consumption"
+    "consumption": "Consumption",
+    "capacity":    "Capacity"
+  },
+  "capacity": {
+    "title": "Contracted capacity",
+    "subtitle": "Contracted is the governing ceiling: allocation and reservations must fit within it.",
+    "contracted": "Contracted (C)",
+    "contractedHint": "agents (AI + human), base + active reserves",
+    "allocated": "Allocated (provisioned)",
+    "allocatedHint": "deployed slots × concurrency, right now",
+    "balance": "Balance (C − allocated)",
+    "balanceHint": "contracted and not yet used",
+    "reserved": "Reserved (Σ pools)",
+    "shared": "Shared (C − reserved)",
+    "alertNonConform": "Pool reservations exceed the contracted capacity — shared would be negative. Reduce reservations or increase the contract.",
+    "alertOverAllocated": "Provisioned capacity exceeds the contract. Admission caps at the contracted value; excess deploy is idle cost.",
+    "noContract": "No contracted capacity configured (pricing resources empty) — no ceiling applies.",
+    "byType": "By resource type",
+    "cols": { "type": "Resource", "base": "Base", "reserve": "Active reserve", "total": "Total" },
+    "reservedPools": "Pools with reservation",
+    "poolCols": { "pool": "Pool", "reservation": "Reservation" },
+    "noReservations": "No pool reservations configured."
   },
   "invoice": {
     "title":        "Invoice",

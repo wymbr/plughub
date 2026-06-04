@@ -2,6 +2,14 @@
 
 ---
 
+## Capacity-governance item 4 — Billing/Capacidade: contratado × alocado × saldo (2026-06-04)
+
+Torna o modelo visível ao operador — é o que dá sentido ao "redução sempre aceita + alerta" (não-conformidade nunca é silenciosa).
+
+**platform-ui** (`BillingPage`): terceira aba **Capacidade** (`/config/billing`) — KPIs: **Contratado (C)** do `GET /v1/pricing/capacity` (agentes IA+humano, base + reservas ativas), **Alocado** = provisionada corrente (último bucket de `total_series` do `/reports/pools/occupancy`; fallback agregado), **Saldo (C − alocado)** verde/vermelho ("contratado e ainda não utilizado" — o papel do provisionado no modelo), **Reservado (Σ pools)** e **Shared (C − reservado)** do `GET /v1/pools/capacity/conformance` (item 3a). Alertas: 🔴 `conform=false` (reservas excedem C — shared negativo), 🟠 alocado > C (deploy acima do contrato: admissão corta em C, excedente é custo ocioso), ℹ️ sem contrato configurado (sem teto). Tabelas: capacidade por `resource_type` (base/reserva ativa/total) e pools com reserva. i18n en + pt-BR (`billing.capacity.*`). Fontes via proxies já existentes (`/v1/pricing` → 3900, `/v1` → registry 3300 com `x-tenant-id`, `/reports` → analytics 3500).
+
+---
+
 ## Capacity-governance item 3a — Σ reservas ≤ C validado na config de pool (2026-06-04)
 
 Fecha o furo original do arco: a config aceitava `Σ session_reservation > C`, deixando o shared da admissão híbrida negativo (um pool podia "reservar" capacidade que o contrato não tem).

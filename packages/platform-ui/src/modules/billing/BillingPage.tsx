@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Receipt, BarChart2, AlertTriangle, Bot, User, Globe } from 'lucide-react'
+import { Receipt, BarChart2, AlertTriangle, Bot, User, Globe, Gauge } from 'lucide-react'
 import { useAuth } from '@/auth/useAuth'
 import Spinner from '@/components/ui/Spinner'
 import Badge from '@/components/ui/Badge'
@@ -110,6 +110,185 @@ function useUsage(tenantId: string) {
 
   useEffect(() => { void refresh() }, [refresh])
   return { rows, loading }
+}
+
+// ── Capacity (capacity-governance item 4) ──────────────────────────────────────
+// Contratado (pricing /v1/pricing/capacity) × alocado (provisionada do occupancy)
+// × saldo, + reservas/shared/conformidade (registry /v1/pools/capacity/conformance).
+
+interface CapacityByType { resource_type: string; base: number; reserve_active: number; total: number }
+interface Conformance {
+  contracted: number | null; reserved_total: number; shared: number | null; conform: boolean
+  pools: Array<{ pool_id: string; session_reservation: number | null }>
+}
+
+function useCapacityGov(tenantId: string) {
+  const [byType,      setByType]      = useState<CapacityByType[]>([])
+  const [contracted,  setContracted]  = useState<number>(0)
+  const [allocated,   setAllocated]   = useState<number | null>(null)
+  const [conformance, setConformance] = useState<Conformance | null>(null)
+  const [loading,     setLoading]     = useState(true)
+
+  useEffect(() => {
+    if (!tenantId) return
+    let cancelled = false
+    setLoading(true)
+    const enc = encodeURIComponent(tenantId)
+    const since = new Date(Date.now() - 86400000).toISOString().slice(0, 10)
+
+    void Promise.allSettled([
+      fetch(`/v1/pricing/capacity/${enc}`).then(r => r.ok ? r.json() : null),
+      fetch('/v1/pools/capacity/conformance', { headers: { 'x-tenant-id': tenantId } })
+        .then(r => r.ok ? r.json() : null),
+      fetch(`/reports/pools/occupancy?tenant_id=${enc}&from_dt=${since}&bucket=hour`)
+        .then(r => r.ok ? r.json() : null),
+    ]).then(([cap, conf, occ]) => {
+      if (cancelled) return
+      if (cap.status === 'fulfilled' && cap.value) {
+        setByType((cap.value.by_type ?? []) as CapacityByType[])
+        setContracted(Number(cap.value.agent_capacity_total ?? 0))
+      }
+      if (conf.status === 'fulfilled' && conf.value) setConformance(conf.value as Conformance)
+      if (occ.status === 'fulfilled' && occ.value) {
+        // Alocado agora = provisionada do último bucket do total (fallback: agregado do período)
+        const d = occ.value.data ?? {}
+        const last = Array.isArray(d.total_series) && d.total_series.length > 0
+          ? d.total_series[d.total_series.length - 1] : null
+        setAllocated(last ? Number(last.capacity ?? 0)
+          : d.total ? Number(d.total.provisioned_capacity ?? d.total.capacity ?? 0) : null)
+      }
+      setLoading(false)
+    })
+    return () => { cancelled = true }
+  }, [tenantId])
+
+  return { byType, contracted, allocated, conformance, loading }
+}
+
+function CapacityTab({ tenantId }: { tenantId: string }) {
+  const { t } = useTranslation('billing')
+  const { byType, contracted, allocated, conformance, loading } = useCapacityGov(tenantId)
+
+  if (loading) return <div className="flex justify-center items-center py-16 flex-1"><Spinner /></div>
+
+  const hasContract   = contracted > 0
+  const balance       = hasContract && allocated !== null ? contracted - allocated : null
+  const overAllocated = balance !== null && balance < 0
+  const nonConform    = conformance !== null && !conformance.conform
+
+  const kpi = (label: string, value: React.ReactNode, hint: string, color?: string) => (
+    <div className="rounded-lg border border-lightGray bg-white p-4">
+      <p className="text-xs font-semibold text-gray uppercase tracking-wide">{label}</p>
+      <p className="text-2xl font-bold font-mono mt-1" style={color ? { color } : undefined}>{value}</p>
+      <p className="text-xs text-gray/60 mt-0.5">{hint}</p>
+    </div>
+  )
+
+  return (
+    <div className="flex-1 overflow-y-auto p-6 space-y-5">
+      <div>
+        <h3 className="text-base font-semibold text-dark">{t('capacity.title')}</h3>
+        <p className="text-xs text-gray mt-0.5">{t('capacity.subtitle')}</p>
+      </div>
+
+      {/* Alertas de não-conformidade */}
+      {nonConform && (
+        <div className="flex items-start gap-2 bg-red/10 border border-red/30 rounded-lg px-4 py-3 text-xs text-red">
+          <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" aria-hidden="true" />
+          <span>
+            {t('capacity.alertNonConform')}{' '}
+            <span className="font-mono">
+              (C={conformance?.contracted ?? '—'} · Σ={conformance?.reserved_total} · shared={conformance?.shared})
+            </span>
+          </span>
+        </div>
+      )}
+      {overAllocated && (
+        <div className="flex items-start gap-2 bg-warning-light border border-warning/40 rounded-lg px-4 py-3 text-xs text-warning-text">
+          <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" aria-hidden="true" />
+          <span>
+            {t('capacity.alertOverAllocated')}{' '}
+            <span className="font-mono">(C={contracted} · alocado={allocated})</span>
+          </span>
+        </div>
+      )}
+      {!hasContract && (
+        <div className="flex items-start gap-2 bg-info-light border border-info/30 rounded-lg px-4 py-3 text-xs text-info-text">
+          <span className="text-base shrink-0">ℹ️</span>
+          <span>{t('capacity.noContract')}</span>
+        </div>
+      )}
+
+      {/* KPIs */}
+      <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
+        {kpi(t('capacity.contracted'), hasContract ? contracted : '—', t('capacity.contractedHint'))}
+        {kpi(t('capacity.allocated'), allocated ?? '—', t('capacity.allocatedHint'))}
+        {kpi(t('capacity.balance'), balance ?? '—', t('capacity.balanceHint'),
+             balance === null ? undefined : balance < 0 ? '#DC2626' : '#059669')}
+        {kpi(t('capacity.reserved'), conformance?.reserved_total ?? '—', '')}
+        {kpi(t('capacity.shared'), conformance?.shared ?? '—', '',
+             nonConform ? '#DC2626' : undefined)}
+      </div>
+
+      {/* Por tipo de recurso */}
+      {byType.length > 0 && (
+        <section>
+          <h4 className="text-sm font-semibold text-dark mb-2">{t('capacity.byType')}</h4>
+          <div className="rounded-lg border border-lightGray overflow-hidden">
+            <table className="w-full text-xs">
+              <thead className="bg-surface-muted">
+                <tr>
+                  <th className="px-4 py-2.5 text-left font-semibold text-gray">{t('capacity.cols.type')}</th>
+                  <th className="px-4 py-2.5 text-right font-semibold text-gray">{t('capacity.cols.base')}</th>
+                  <th className="px-4 py-2.5 text-right font-semibold text-gray">{t('capacity.cols.reserve')}</th>
+                  <th className="px-4 py-2.5 text-right font-semibold text-gray">{t('capacity.cols.total')}</th>
+                </tr>
+              </thead>
+              <tbody>
+                {byType.map((r, i) => (
+                  <tr key={r.resource_type} className={i % 2 === 1 ? 'bg-tableAlt' : 'bg-white'}>
+                    <td className="px-4 py-2 text-dark">
+                      <ResourceIcon type={r.resource_type} /> {r.resource_type}
+                    </td>
+                    <td className="px-4 py-2 text-right font-mono text-dark">{r.base}</td>
+                    <td className="px-4 py-2 text-right font-mono text-gray">{r.reserve_active}</td>
+                    <td className="px-4 py-2 text-right font-mono font-semibold text-dark">{r.total}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      )}
+
+      {/* Pools com reserva */}
+      <section>
+        <h4 className="text-sm font-semibold text-dark mb-2">{t('capacity.reservedPools')}</h4>
+        {(conformance?.pools ?? []).length === 0 ? (
+          <p className="text-xs text-gray/60">{t('capacity.noReservations')}</p>
+        ) : (
+          <div className="rounded-lg border border-lightGray overflow-hidden">
+            <table className="w-full text-xs">
+              <thead className="bg-surface-muted">
+                <tr>
+                  <th className="px-4 py-2.5 text-left font-semibold text-gray">{t('capacity.poolCols.pool')}</th>
+                  <th className="px-4 py-2.5 text-right font-semibold text-gray">{t('capacity.poolCols.reservation')}</th>
+                </tr>
+              </thead>
+              <tbody>
+                {(conformance?.pools ?? []).map((p, i) => (
+                  <tr key={p.pool_id} className={i % 2 === 1 ? 'bg-tableAlt' : 'bg-white'}>
+                    <td className="px-4 py-2 text-dark">{p.pool_id}</td>
+                    <td className="px-4 py-2 text-right font-mono text-dark">{p.session_reservation}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </section>
+    </div>
+  )
 }
 
 // ── ResourceSidebar ────────────────────────────────────────────────────────────
@@ -482,7 +661,7 @@ function ConsumptionTab({ tenantId }: { tenantId: string }) {
 
 // ── BillingPage ────────────────────────────────────────────────────────────────
 
-type BillingTab = 'invoice' | 'consumption'
+type BillingTab = 'invoice' | 'consumption' | 'capacity'
 
 const BillingPage: React.FC = () => {
   const { t } = useTranslation('billing')
@@ -518,7 +697,7 @@ const BillingPage: React.FC = () => {
         <div className="flex flex-col flex-1 overflow-hidden">
           {/* Tab bar */}
           <div className="flex border-b border-lightGray bg-white px-4 shrink-0">
-            {(['invoice', 'consumption'] as BillingTab[]).map(tab => (
+            {(['invoice', 'consumption', 'capacity'] as BillingTab[]).map(tab => (
               <button
                 key={tab}
                 onClick={() => setActiveTab(tab)}
@@ -530,7 +709,9 @@ const BillingPage: React.FC = () => {
               >
                 <>{tab === 'invoice'
                   ? <><Receipt className="w-3.5 h-3.5 inline mr-1.5" aria-hidden="true" />{t('tabs.invoice')}</>
-                  : <><BarChart2 className="w-3.5 h-3.5 inline mr-1.5" aria-hidden="true" />{t('tabs.consumption')}</>
+                  : tab === 'consumption'
+                  ? <><BarChart2 className="w-3.5 h-3.5 inline mr-1.5" aria-hidden="true" />{t('tabs.consumption')}</>
+                  : <><Gauge className="w-3.5 h-3.5 inline mr-1.5" aria-hidden="true" />{t('tabs.capacity')}</>
                 }</>
 
               </button>
@@ -548,8 +729,10 @@ const BillingPage: React.FC = () => {
                 adminToken={adminToken}
                 onRefresh={refreshInvoice}
               />
-            ) : (
+            ) : activeTab === 'consumption' ? (
               <ConsumptionTab tenantId={tenantId} />
+            ) : (
+              <CapacityTab tenantId={tenantId} />
             )}
           </div>
         </div>
