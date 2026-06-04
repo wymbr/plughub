@@ -215,11 +215,12 @@ Mecânica do fix (duas pontas):
    (`aguardar → analisar → sugerir → aguardar`) era rejeitado pelo
    `validateFlow` ("unguarded cycles") e o flow morria na entrada — segmento
    0s, sem anúncio, re-convite por mention (este era o killer imediato do
-   sintoma). Menu `standby: true` agora conta como guarda de ciclo (avança só
-   por interrupt externo — sem runaway, equivalente a `receive` com
-   `max_iterations`). Nota: o validador não percorre `conditions[].next` de
-   choice (ponto cego — ciclos via choice escapam, ex. agente de fila);
-   registrado em TODO.
+   sintoma). Política consolidada (2026-06-04): guarda de ciclo = step
+   **bloqueante** — `receive` com `max_iterations`, qualquer `menu` (inclui o
+   standby), `suspend` ou `collect`. A adjacência foi fechada na mesma data
+   (`conditions[].next`/`default` do choice, `strategies[]` do catch, campos
+   `{next}` de suspend/collect) — auditoria confirmou que os 6 ciclos dos
+   YAMLs existentes passam por guarda bloqueante.
 
 ---
 

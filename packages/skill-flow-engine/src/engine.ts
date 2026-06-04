@@ -145,27 +145,49 @@ function _getSuccessors(step: SkillFlow["steps"][number]): string[] {
   const s = step as Record<string, unknown>
   const targets: string[] = []
 
-  // Standard fields present across most step types
+  // Standard fields present across most step types. Fields like on_timeout /
+  // on_resume / on_reject / on_response are STRINGS in some step types and
+  // OBJECTS `{ next }` in others (collect/suspend) — both shapes handled.
   for (const field of [
     "next", "on_success", "on_failure",
-    // receive step
     "on_message", "on_timeout", "on_disconnect", "on_max_iterations",
+    "on_exhausted", "on_invite", "on_escalate",
+    "on_response", "on_resume", "on_reject",
+    // choice step — default branch (2026-06-04: era ponto cego, ciclos via
+    // choice escapavam da validação)
+    "default",
   ]) {
-    if (typeof s[field] === "string") targets.push(s[field] as string)
+    const v = s[field]
+    if (typeof v === "string") targets.push(v)
+    else if (v && typeof v === "object" && typeof (v as Record<string, unknown>)["next"] === "string") {
+      targets.push((v as Record<string, unknown>)["next"] as string)
+    }
   }
 
-  // choice step — branches[].next
+  // choice step — conditions[].next (formato real dos YAMLs; 2026-06-04: era
+  // ponto cego junto com `default`)
+  if (Array.isArray(s["conditions"])) {
+    for (const cond of s["conditions"] as Array<Record<string, unknown>>) {
+      if (typeof cond["next"] === "string") targets.push(cond["next"] as string)
+    }
+  }
+
+  // choice step — branches[].next (formato legado)
   if (Array.isArray(s["branches"])) {
     for (const branch of s["branches"] as Array<Record<string, unknown>>) {
       if (typeof branch["next"] === "string") targets.push(branch["next"] as string)
     }
   }
 
-  // catch step — strategy may carry its own on_success / on_failure
+  // catch step — strategies[] (array real) e strategy (legado singular)
   if (s["type"] === "catch") {
-    const strategy = s["strategy"] as Record<string, unknown> | undefined
-    if (strategy) {
-      for (const field of ["on_success", "on_failure"]) {
+    const strategyList = Array.isArray(s["strategies"])
+      ? (s["strategies"] as Array<Record<string, unknown>>)
+      : []
+    const legacy = s["strategy"] as Record<string, unknown> | undefined
+    if (legacy) strategyList.push(legacy)
+    for (const strategy of strategyList) {
+      for (const field of ["on_success", "on_failure", "on_exhausted"]) {
         if (typeof strategy[field] === "string") targets.push(strategy[field] as string)
       }
     }
@@ -186,13 +208,13 @@ function _getSuccessors(step: SkillFlow["steps"][number]): string[] {
  * validateFlow
  *
  * Validates that every cycle in the flow step graph is controlled:
- * a cycle is valid if every cycle path contains a `receive` step with
- * `max_iterations` explicitly defined, OR a `menu` step with `standby: true`
- * (mention-protocol standby — advances only via explicit external interrupt,
- * human-triggered by construction).
+ * a cycle is valid if it passes through a BLOCKING guard step — `receive`
+ * with `max_iterations`, any `menu` (blocks on external I/O; includes the
+ * mention-protocol standby), `suspend` or `collect` (block on external
+ * signals, bounded by the gateway timeout scanner).
  *
- * Uncontrolled cycles (no guard step) would run indefinitely, consuming
- * Redis BLPOP slots without a natural exit.
+ * Uncontrolled cycles (reason/notify/invoke/choice only) would run
+ * indefinitely, burning LLM calls with no natural exit.
  *
  * Algorithm: DFS with three-colour marking (white → gray → black).
  * When a back-edge is found (gray → gray), the cycle is extracted from
@@ -221,20 +243,28 @@ export function validateFlow(flow: SkillFlow): void {
       // Back-edge: extract cycle and check for guard
       const cycleStart = path.indexOf(id)
       const cycleNodes = path.slice(cycleStart)
+      // Guarda de ciclo (política 2026-06-04): um ciclo é controlado quando
+      // passa por um step que BLOQUEIA aguardando o mundo externo — cada
+      // iteração exige input humano/externo, então não há runaway (loops de
+      // reason/notify/invoke queimando LLM sem freio):
+      //   receive + max_iterations — freio explícito por contagem;
+      //   menu                     — bloqueia em I/O do cliente/agente
+      //                              (inclui standby de @mention, timeout 0/-1);
+      //   suspend / collect        — bloqueiam aguardando sinal externo
+      //                              (timeout scanner do gateway é o teto).
+      // Auditoria 2026-06-04: todos os 6 ciclos dos YAMLs existentes passam
+      // por uma dessas guardas — fechamento da adjacência não quebra nada.
       const guarded = cycleNodes.some(nodeId => {
         const s = stepMap.get(nodeId) as Record<string, unknown> | undefined
-        if (s?.["type"] === "receive" && s["max_iterations"] !== undefined) return true
-        // Mention-protocol standby menu (standby: true): blocks indefinitely
-        // and only advances via an explicit external interrupt
-        // (mention_command_dispatch) or session close — every cycle iteration
-        // is human-triggered, so there is no runaway. Equivalent safety to a
-        // guarded receive. Ex.: co-pilot aguardar → analisar → sugerir → aguardar.
-        if (s?.["type"] === "menu" && s["standby"] === true) return true
+        const t = s?.["type"]
+        if (t === "receive" && s!["max_iterations"] !== undefined) return true
+        if (t === "menu") return true
+        if (t === "suspend" || t === "collect") return true
         return false
       })
       if (!guarded) {
         violations.push(
-          cycleNodes.join(" → ") + ` → ${id}  (no guarded receive step)`
+          cycleNodes.join(" → ") + ` → ${id}  (no blocking guard step)`
         )
       }
       return

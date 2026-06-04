@@ -29,10 +29,11 @@ Modelo corrigido e backend verde em [`docs/arcos/delegate-workflow-io.md`](docs/
   por `channel_type` real, não pela presença de step `delegate`/`suspend`. Hoje uma sessão
   webchat que usa `delegate` é renderizada como workflow/webhook. Badge de status deve derivar
   de participantes vivos (sessão com specialist ativo lê `active`, não `suspended`).
-- **Fase D — timeout scanner do delegate**: quando B fica `suspended`
-  (`awaiting_customer_inbound`) e o cliente nunca reconecta, a `pending_workflow` key fica
-  pendente para sempre. Implementar scanner que, ao estourar o timeout final, dispara
-  `workflow_resume` com `decision=timeout` → B `on_timeout` → fecha como failed/timeout.
+- **Fase D — timeout scanner do delegate ✅** (já implementado — TODO estava
+  desatualizado; ver `delegate-workflow-io.md` § Fase D): `run_timeout_scanner` em
+  `channel-gateway/adapters/webhook.py` (lifespan, 60s) expira `resume_tokens`
+  vencidos via `handle_resume(decision="timeout")` → `on_timeout` do step; cobre
+  suspend e delegate; `pending_workflow` stale auto-limpa no próximo reconnect.
 - **Fase E — Workflow Execution Trace (step-level)** ✅ (E.1/E.2/E.3 + transcript):
   step timeline já renderiza; `step_io` com `decision`/`payload`/`child_session_id` por step
   (E.1); `resumed_by` por step (E.3); duration webhook = tempo decorrido total (E.2);
@@ -138,19 +139,6 @@ Hoje o Analytics/Agents mistura agente×pool e não separa humano×IA.
       (main.py, inalcançável); `AgentTypeSchema` (@plughub/schemas) + `validators/agent-type.ts`
       órfão. Testes do agent-registry que referenciavam agent_type foram deletados; revisar a
       suíte se reativar CI.
-
----
-
-## validateFlow — ponto cego: choice `conditions[].next` fora da adjacência
-
-`_getSuccessors` (engine.ts) cobre `branches[].next` mas NÃO `conditions[].next`/
-`default` — o formato que os YAMLs reais usam. Ciclos que passam por um choice
-escapam do validador (ex.: `agente_fila_v1` aguardar_mensagem → verificar_sinal →
-responder → aguardar_mensagem roda há fases sem ser detectado). Corrigir a
-adjacência exigiria política para ciclos via menu bloqueante (timeout_s 0) — hoje
-o flow da fila DEPENDE da lacuna. Decidir: menu infinito como guarda válida de
-ciclo (mesmo racional do standby) e aí fechar a adjacência. Descoberto no fix do
-copilot standby (2026-06-04).
 
 ---
 

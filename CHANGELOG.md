@@ -2,6 +2,18 @@
 
 ---
 
+## validateFlow — adjacência fechada + política de guarda de ciclo (2026-06-04)
+
+Ponto cego descoberto no fix do copilot: `_getSuccessors` (engine.ts) não percorria `conditions[].next`/`default` do choice (formato real dos YAMLs), `strategies[]` do catch (lia o singular legado), nem campos-objeto `{next}` de collect/suspend (`on_response`/`on_resume`/`on_reject`/`on_timeout`) — ciclos por esses caminhos escapavam da validação (ex.: loop do `agente_fila_v1` nunca foi detectado).
+
+**Política de guarda consolidada**: ciclo é controlado quando passa por step **bloqueante** — `receive` com `max_iterations` (freio por contagem), qualquer `menu` (bloqueia em I/O externo; inclui standby de @mention), `suspend`/`collect` (bloqueiam por sinal externo; teto = timeout scanner do gateway). Runaway real = ciclos só de reason/notify/invoke/choice (queimam LLM sem freio) — esses continuam rejeitados.
+
+Auditoria pré-mudança dos 23 YAMLs: 6 flows com ciclo (auth_ia, echo, revisao_treplica, reembolso_demo, fila, copilot) — **todos** passam por guarda bloqueante; fechamento da adjacência não quebra nenhum flow existente.
+
+TODO correlato: Fase D do delegate (timeout scanner) constatada **já implementada** (`run_timeout_scanner` no gateway, `delegate-workflow-io.md` § Fase D ✅) — entrada do TODO estava desatualizada.
+
+---
+
 ## Registry: limpar campos de pool via PUT null (2026-06-04)
 
 Gap recorrente (mordeu 3× na semana do queue-attended-model): campos opcionais de pool não podiam ser limpos via PUT — Zod rejeitava `null` e a única via era SQL + republish. Resolvido:
