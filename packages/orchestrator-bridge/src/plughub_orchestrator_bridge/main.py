@@ -4706,18 +4706,24 @@ async def dispatch_mention_command(
     tenant_id:     str,
     command_name:  str,
     command_def:   dict,
+    instance_id:   str = "",
 ) -> None:
     """
     Execute a mention_command action for an already-active specialist.
 
     Actions (exactly one per command, Zod union):
       trigger_step: <step_id>    → LPUSH { _mention_trigger_step: step_id }
-                                    to menu:result:{session_id} so the specialist's
-                                    blocked menu BLPOP wakes up and jumps to step_id.
+                                    to the specialist's BLPOP key so the blocked
+                                    menu wakes up and jumps to step_id.
       terminate_self: true       → LPUSH { _mention_terminate: true } so the
                                     specialist's menu step returns on_failure.
       set_context: { key: val }  → HSET {tenant}:ctx:{session_id} with ContextEntry
                                     (source="mention_command", confidence=1.0).
+
+    instance_id: o menu step BLPOPa em menu:result:{sid}:{iid} quando o agente
+    roda com instance_id (specialists SEMPRE têm) — o interrupt DEVE mirar a
+    chave instance-scoped, senão nunca chega (bug do standby do copilot).
+    Fallback session-scoped só para agentes legados sem instance_id.
 
     If acknowledge: true, also publishes mention_command.ack to agent:events:{session_id}
     so the Agent Assist UI can display a confirmation badge.
@@ -4729,13 +4735,18 @@ async def dispatch_mention_command(
     terminate    = action.get("terminate_self", False)
     set_ctx      = action.get("set_context", {})
 
+    result_key = (
+        f"menu:result:{session_id}:{instance_id}" if instance_id
+        else f"menu:result:{session_id}"
+    )
+
     if trigger_step:
         payload = json.dumps({"_mention_trigger_step": trigger_step})
         try:
-            await redis_client.lpush(f"menu:result:{session_id}", payload)
+            await redis_client.lpush(result_key, payload)
             logger.info(
-                "mention_command dispatch: trigger_step=%s session=%s",
-                trigger_step, session_id,
+                "mention_command dispatch: trigger_step=%s session=%s key=%s",
+                trigger_step, session_id, result_key,
             )
         except Exception as exc:
             logger.error(
@@ -4746,9 +4757,10 @@ async def dispatch_mention_command(
     elif terminate:
         payload = json.dumps({"_mention_terminate": True})
         try:
-            await redis_client.lpush(f"menu:result:{session_id}", payload)
+            await redis_client.lpush(result_key, payload)
             logger.info(
-                "mention_command dispatch: terminate session=%s", session_id,
+                "mention_command dispatch: terminate session=%s key=%s",
+                session_id, result_key,
             )
         except Exception as exc:
             logger.error(
@@ -4919,6 +4931,9 @@ async def process_mention_routing(
         tenant_id=tenant_id,
         command_name=command_name,
         command_def=command_def,
+        # Specialist BLPOPa em menu:result:{sid}:{iid} — interrupt mira a
+        # chave instance-scoped (fix do standby do copilot).
+        instance_id=specialist.get("instance_id", "") or "",
     )
 
 

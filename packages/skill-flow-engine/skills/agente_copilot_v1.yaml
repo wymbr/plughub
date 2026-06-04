@@ -83,13 +83,16 @@ steps:
     # ── Standby — aguarda trigger via @mention command ─────────────────────────
     # timeout_s: -1 = bloqueante indefinidamente.
     # visibility: agents_only — o prompt interno de standby não chega ao cliente.
-    # A mention_command_dispatch LPUSH no menu:result interrompe o BLPOP:
-    #   { "_mention_trigger_step": "analisar_sessao" }  → on_success
+    # standby: true — wake-on-interrupt-only: os roteadores de mensagem comum
+    # (texto do humano, menu_submit) PULAM este menu; só o dispatch_mention_command
+    # acorda o BLPOP, na chave instance-scoped (menu:result:{sid}:{iid}):
+    #   { "_mention_trigger_step": "analisar_sessao" }  → pula para o step
     #   { "_mention_terminate": true }                  → on_failure (→ encerrar)
     - id: aguardar
       type: menu
       visibility: agents_only
       interaction: text
+      standby: true
       prompt: "(co-pilot em standby — aguardando @copilot ativa)"
       timeout_s: -1
       on_success: analisar_sessao

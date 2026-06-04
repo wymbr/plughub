@@ -144,37 +144,16 @@ Hoje o Analytics/Agents mistura agente×pool e não separa humano×IA.
 
 ---
 
-## Copilot @mention standby — corrida na chave `menu:result` session-scoped
+## validateFlow — ponto cego: choice `conditions[].next` fora da adjacência
 
-**Bug pré-existente, independente do deploy-driven** (descoberto ao migrar `copilot_sac`,
-mas reproduz igual no caminho legado por `agent_type`). O step `aguardar` do
-`skill_copilot_sac_v1` é um `menu` `agents_only` com `timeout_s: -1` (standby até receber
-`@copilot ativa`). O engine suporta `-1` (`menu.ts` linha 84 → BLPOP timeout 0 = infinito),
-mas o BLPOP observa chaves **session-scoped** (`menu:result:{sessionId}` e
-`session:closed:{sessionId}`, `menu.ts` linhas 172-173). Num conference com agente humano
-*primary* ativo, cada mensagem do humano (incluindo o próprio texto `@copilot ...`) cai em
-`menu:result:{sessionId}` e estoura o standby do copilot na entrada → segmento de **0s** →
-`agent_done` apaga o `specialist_key` → a próxima mention cai em "specialist not active →
-new invite" (re-convite em loop, nunca despacha o comando).
-
-Sintoma confirmado: segmentos `skill copilot sac` de 0s em Analytics/Sessions; log do bridge
-repetindo `mention_routing: specialist pool=copilot_sac not active ... new invite`.
-
-A migração deploy-driven do copilot está OK (provisionamento, síntese, `specialist_key` com
-`skill=skill_copilot_sac_v1`, e `mention_commands` round-trip pela agent-registry — todos
-validados). O que falta é o standby segurar.
-
-Opções de fix (a decidir):
-- **Chave de standby instance-scoped para specialist**: o `aguardar` do copilot deveria
-  bloquear numa chave `menu:result:{sessionId}:{instanceId}` (ou dedicada ao specialist),
-  isolando-o do tráfego do *primary*. O `dispatch_mention_command` LPUSH já mira
-  `menu:result:{sessionId}` — precisaria mirar a chave instance-scoped do specialist ativo.
-- **Trocar o standby de `menu` por `receive`**: o step `receive` já bloqueia em chave própria
-  (`receive:result:{sid}:{iid}`) e suporta `-1` nativo; reescrever o `aguardar` como `receive`
-  + adaptar o dispatch. Mais alinhado ao propósito (escutar sinal, não renderizar menu).
-
-Não bloqueia a migração IA — `nps`/`wrapup` (menu com timeout positivo, visibility do humano)
-e `echo` (step `receive`) não sofrem a corrida.
+`_getSuccessors` (engine.ts) cobre `branches[].next` mas NÃO `conditions[].next`/
+`default` — o formato que os YAMLs reais usam. Ciclos que passam por um choice
+escapam do validador (ex.: `agente_fila_v1` aguardar_mensagem → verificar_sinal →
+responder → aguardar_mensagem roda há fases sem ser detectado). Corrigir a
+adjacência exigiria política para ciclos via menu bloqueante (timeout_s 0) — hoje
+o flow da fila DEPENDE da lacuna. Decidir: menu infinito como guarda válida de
+ciclo (mesmo racional do standby) e aí fechar a adjacência. Descoberto no fix do
+copilot standby (2026-06-04).
 
 ---
 

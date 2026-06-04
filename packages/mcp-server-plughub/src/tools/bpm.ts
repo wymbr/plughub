@@ -1005,7 +1005,12 @@ export function registerBpmTools(server: McpServer, deps?: BpmDeps): void {
       const parsed    = MentionCommandDispatchInputSchema.parse(input)
       const redis     = deps?.redis
       const now       = new Date().toISOString()
-      const resultKey = `menu:result:${parsed.session_id}`
+      // Specialists run with instance_id → their menu BLPOP key is
+      // instance-scoped (menu:result:{sid}:{iid}). Interrupts MUST target it;
+      // session-scoped is only a fallback for legacy agents without instance.
+      const resultKey = parsed.instance_id
+        ? `menu:result:${parsed.session_id}:${parsed.instance_id}`
+        : `menu:result:${parsed.session_id}`
 
       // ── 1. Load skill definition from Redis ──────────────────────────────
       let mentionCommands: NonNullable<Skill["mention_commands"]> = {}

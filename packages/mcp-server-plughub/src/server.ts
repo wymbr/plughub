@@ -1493,6 +1493,8 @@ export async function startServer(config: ServerConfig): Promise<void> {
           for (const [agentKey, metaJson] of Object.entries(waitingHash)) {
             try {
               const meta = JSON.parse(metaJson as string)
+              // Mention-protocol standby: wake-on-interrupt-only — skip.
+              if (meta.standby === true) continue
               const vis = meta.visibility
               if (vis === "agents_only") {
                 targetVisibility = vis
@@ -2439,6 +2441,11 @@ export async function startServer(config: ServerConfig): Promise<void> {
             for (const [aKey, metaJson] of Object.entries(waitingHash)) {
               try {
                 const meta = JSON.parse(metaJson as string)
+                // Mention-protocol standby (ex.: co-pilot aguardando @mention):
+                // NUNCA recebe mensagens comuns — só interrupts do dispatch.
+                // Sem este skip, qualquer texto do humano (inclusive o próprio
+                // "@copilot ...") estourava o BLPOP do standby → segmento 0s.
+                if (meta.standby === true) continue
                 const vis = meta.visibility
                 if (vis === "agents_only") {
                   targetAgentKey   = aKey

@@ -191,6 +191,36 @@ Comandos não reconhecidos são ignorados silenciosamente. O texto do comando po
 | `trigger_step: <step_id>` | Salta para o step declarado no skill flow |
 | `terminate_self: true` | Agente sai da conferência via `agent_done` |
 
+### Standby do especialista — `standby: true` no menu (fix 2026-06-04)
+
+O step de espera do especialista (`menu` `agents_only`, `timeout_s: -1`) deve
+declarar **`standby: true`**. Sem a flag, os roteadores de mensagem comum
+(handler de texto do humano e `menu_submit` no mcp-server, regra "agents_only
+recebe qualquer mensagem de agente") entregavam **todo texto do primary** —
+inclusive o próprio `@copilot ...` — ao BLPOP do standby, estourando-o na
+entrada (segmento 0s, `specialist_key` apagado, re-convite em loop).
+
+Mecânica do fix (duas pontas):
+
+1. **`standby: true`** (`MenuStepSchema`) → `menu.ts` grava `standby` no hash
+   `menu:waiting:{sid}`; os dois roteadores do mcp-server **pulam** entradas
+   standby ao rotear mensagens comuns. O standby acorda exclusivamente por
+   interrupts do dispatch e por `session:closed` (disconnect).
+2. **Dispatch instance-scoped**: o specialist roda com `instance_id` → seu
+   BLPOP é em `menu:result:{sid}:{iid}`. O `dispatch_mention_command` (bridge)
+   e a tool `mention_command_dispatch` (bpm.ts) agora miram a chave
+   instance-scoped (lendo `instance_id` do `specialist_key`); antes empurravam
+   para a session-scoped e o interrupt nunca chegava.
+3. **Validador de ciclos do engine**: o ciclo do copilot
+   (`aguardar → analisar → sugerir → aguardar`) era rejeitado pelo
+   `validateFlow` ("unguarded cycles") e o flow morria na entrada — segmento
+   0s, sem anúncio, re-convite por mention (este era o killer imediato do
+   sintoma). Menu `standby: true` agora conta como guarda de ciclo (avança só
+   por interrupt externo — sem runaway, equivalente a `receive` com
+   `max_iterations`). Nota: o validador não percorre `conditions[].next` de
+   choice (ponto cego — ciclos via choice escapam, ex. agente de fila);
+   registrado em TODO.
+
 ---
 
 ## Alias não resolvido — comportamento
@@ -240,3 +270,5 @@ O auto-invite é equivalente a um `task` step `mode: assist` executado manualmen
 - A mensagem original é sempre entregue a todos os participantes `agents_only`, independente do roteamento
 - Aliases não resolvidos nunca geram erro — são texto inerte
 - Agentes IA nunca emitem mentions — usam `task` step para coordenação
+- Menus `standby: true` nunca recebem mensagens comuns — acordam só por
+  interrupt do dispatch (chave instance-scoped) ou `session:closed`

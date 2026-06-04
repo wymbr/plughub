@@ -186,11 +186,13 @@ function _getSuccessors(step: SkillFlow["steps"][number]): string[] {
  * validateFlow
  *
  * Validates that every cycle in the flow step graph is controlled:
- * a cycle is valid if and only if every cycle path contains a `receive`
- * step with `max_iterations` explicitly defined.
+ * a cycle is valid if every cycle path contains a `receive` step with
+ * `max_iterations` explicitly defined, OR a `menu` step with `standby: true`
+ * (mention-protocol standby — advances only via explicit external interrupt,
+ * human-triggered by construction).
  *
- * Uncontrolled cycles (no receive step with max_iterations) would run
- * indefinitely, consuming Redis BLPOP slots without a natural exit.
+ * Uncontrolled cycles (no guard step) would run indefinitely, consuming
+ * Redis BLPOP slots without a natural exit.
  *
  * Algorithm: DFS with three-colour marking (white → gray → black).
  * When a back-edge is found (gray → gray), the cycle is extracted from
@@ -221,7 +223,14 @@ export function validateFlow(flow: SkillFlow): void {
       const cycleNodes = path.slice(cycleStart)
       const guarded = cycleNodes.some(nodeId => {
         const s = stepMap.get(nodeId) as Record<string, unknown> | undefined
-        return s?.["type"] === "receive" && s["max_iterations"] !== undefined
+        if (s?.["type"] === "receive" && s["max_iterations"] !== undefined) return true
+        // Mention-protocol standby menu (standby: true): blocks indefinitely
+        // and only advances via an explicit external interrupt
+        // (mention_command_dispatch) or session close — every cycle iteration
+        // is human-triggered, so there is no runaway. Equivalent safety to a
+        // guarded receive. Ex.: co-pilot aguardar → analisar → sugerir → aguardar.
+        if (s?.["type"] === "menu" && s["standby"] === true) return true
+        return false
       })
       if (!guarded) {
         violations.push(

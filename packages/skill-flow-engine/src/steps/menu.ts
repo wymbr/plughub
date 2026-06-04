@@ -101,6 +101,9 @@ export async function executeMenu(
     // redact individual form fields (e.g. senha, codigo_2fa) without suppressing
     // the entire submission when only some fields are masked.
     masked_fields: maskedFieldIds.length > 0 ? maskedFieldIds : [],
+    // Mention-protocol standby: routers must NOT feed plain messages to this
+    // BLPOP — it wakes only via mention_command_dispatch interrupts.
+    standby:       step.standby === true,
   })
   try {
     // HSET + EXPIRE: cada agente registra sua entrada no hash.

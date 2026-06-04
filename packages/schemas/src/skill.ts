@@ -313,6 +313,15 @@ export const MenuStepSchema = z.object({
    * Valores mascarados nunca entram no stream, pipeline_state ou logs.
    */
   masked: z.boolean().optional(),
+  /**
+   * Standby de @mention (mention-protocol): quando true, este menu NÃO recebe
+   * mensagens comuns dos roteadores (texto do agente humano / menu_submit) —
+   * acorda exclusivamente pelos interrupts do mention_command_dispatch
+   * (_mention_trigger_step / _mention_terminate) e por session:closed.
+   * Usado pelo step de espera de especialistas controlados por @mention
+   * (ex.: co-pilot), que sem a flag acordava com qualquer mensagem do primary.
+   */
+  standby: z.boolean().optional(),
   /** Campos de formulário (form) */
   fields: z.array(z.object({
     id:       z.string(),

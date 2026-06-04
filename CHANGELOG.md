@@ -2,6 +2,18 @@
 
 ---
 
+## Copilot @mention standby — três causas, fix completo (2026-06-04)
+
+Sintoma: copilot morria na entrada (segmento 0s, sem anúncio), re-convite a cada @mention, comando nunca despachado. **Três causas empilhadas**:
+
+1. **Validador de ciclos do engine (killer imediato)**: `validateFlow` rejeitava o ciclo `aguardar → analisar → sugerir → aguardar` ("unguarded cycles") e o `/execute` falhava antes do primeiro step. Fix: menu com **`standby: true`** conta como guarda de ciclo — avança só por interrupt externo (humano), sem runaway; equivalente a `receive` com `max_iterations`.
+2. **Roteadores entregavam mensagem comum ao standby**: handler WS de texto + `menu_submit` (mcp-server) roteiam mensagem de agente para qualquer waiter `agents_only` — o texto do humano (inclusive o próprio `@copilot ...`) estourava o BLPOP. Fix: campo `standby` no `MenuStepSchema` → `menu.ts` grava no hash `menu:waiting` → roteadores pulam entradas standby.
+3. **Dispatch na chave errada**: `dispatch_mention_command` (bridge) e `mention_command_dispatch` (bpm.ts) empurravam interrupts para `menu:result:{sid}` session-scoped, mas o specialist BLPOPa na instance-scoped (`{sid}:{iid}`) — o comando nunca chegava. Fix: ambos miram a chave instance-scoped (instance_id do `specialist_key`).
+
+Validado: anúncio + standby armado, `@copilot ativa`/`pausa` (ack)/`para`, re-invite via @mention e via botão Trigger, mensagens humano↔cliente fluindo sem acordar o standby. Descoberto e registrado em TODO: ponto cego do `validateFlow` (`conditions[].next` de choice fora da adjacência — ciclo do agente de fila escapa por acidente). Guia: `docs/guias/mention-protocol.md` § Standby.
+
+---
+
 ## Render v2 — Mensagens de Sistema no WebChat (2026-06-04)
 
 Webchat entregava mensagens só pelo stream canônico — mensagens de sistema do routing (`message.text` via outbound) eram no-op: rejeição outage, timeout de fila muda e aviso de espera fechavam o WS em silêncio (pendência da Fase B do queue-attended-model).
