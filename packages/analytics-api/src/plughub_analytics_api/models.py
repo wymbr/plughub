@@ -270,6 +270,10 @@ def parse_conversations_event(payload: dict[str, Any]) -> list[dict] | None:
                 "handle_time_ms": handle_time_ms,
                 "timestamp":      ended_at,
                 "status":         "closed",
+                # SLA do pool repetido no close: a linha de fechamento é a que
+                # sobrevive no ReplacingMergeTree — sem isso o valor gravado
+                # pelo parse_routed é substituído por NULL.
+                "sla_target_ms":  payload.get("sla_target_ms"),
             }
         ]
 

@@ -1354,6 +1354,20 @@ async def _close_contact_layer(
         _customer_id_close = meta.get("customer_id", "") if meta else ""
         _channel_close     = meta.get("channel", "webchat") if meta else "webchat"
 
+        # SLA do pool no fechamento: a linha de close é a que sobrevive no
+        # ReplacingMergeTree do analytics — repetir o sla_target_ms aqui evita
+        # que o valor do parse_routed seja substituído por NULL.
+        _sla_close = None
+        try:
+            if tenant_id and _pool_id_close:
+                _raw_pc = await redis_client.get(
+                    f"{tenant_id}:pool_config:{_pool_id_close}"
+                )
+                if _raw_pc:
+                    _sla_close = (json.loads(_raw_pc) or {}).get("sla_target_ms")
+        except Exception:
+            pass
+
         # G1 fix: read the true contact end time recorded by _mark_contact_ended().
         # Falls back to now() only when the key is absent (crash recovery path).
         _ended_at_close = ""
@@ -1435,6 +1449,7 @@ async def _close_contact_layer(
                 "ended_at":     _ended_at_close,
                 "customer_id":  _customer_id_close,
                 "channel":      _channel_close,
+                "sla_target_ms": _sla_close,
             }).encode("utf-8"),
         )
         logger.info(

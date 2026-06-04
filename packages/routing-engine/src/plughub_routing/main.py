@@ -288,6 +288,23 @@ async def _process_message(
         logger.error("Error routing session: %s — %s", payload.get("session_id"), exc)
 
 
+async def _pool_sla_target(
+    redis_client: aioredis.Redis, tenant_id: str, pool_id: str
+) -> int | None:
+    """SLA (ms) do pool a partir do cache de pool_config — para denormalizar
+    nos contact_closed autoritativos do routing (a linha de close é a que
+    sobrevive no ReplacingMergeTree do analytics)."""
+    if not tenant_id or not pool_id:
+        return None
+    try:
+        raw = await redis_client.get(f"{tenant_id}:pool_config:{pool_id}")
+        if raw:
+            return (json.loads(raw) or {}).get("sla_target_ms")
+    except Exception:
+        pass
+    return None
+
+
 async def _emit_outage(
     event:        ConversationInboundEvent,
     decision:     "AdmissionDecision",
@@ -316,6 +333,9 @@ async def _emit_outage(
     now_iso    = datetime.now(timezone.utc).isoformat()
     session_id = event.session_id
     seg_id     = str(uuid.uuid4())
+    sla_target = await _pool_sla_target(
+        redis_client, event.tenant_id, decision.pool_id or event.pool_id or ""
+    )
 
     # Markers FIRST — block bridge re-close + mark session closed platform-wide.
     try:
@@ -342,6 +362,7 @@ async def _emit_outage(
             "customer_id":  event.customer_id,
             "started_at":   event.started_at or now_iso,
             "ended_at":     now_iso,
+            "sla_target_ms": sla_target,
             "source":       "routing_engine",
         })
     except Exception as exc:
@@ -438,6 +459,7 @@ async def _emit_queue_timeout(
     started_at   = contact.get("started_at") or now_iso
     queued_at_ms = int(contact.get("queued_at_ms") or 0)
     wait_ms      = max(now_ms - queued_at_ms, 0) if queued_at_ms else 0
+    sla_target   = await _pool_sla_target(redis_client, tenant_id, pool_id)
 
     # 1. Markers FIRST — bridge re-entry must not overwrite this close.
     try:
@@ -568,6 +590,7 @@ async def _emit_queue_timeout(
             "customer_id":  customer_id,
             "started_at":   started_at,
             "ended_at":     now_iso,
+            "sla_target_ms": sla_target,
             "source":       "routing_engine",
         })
     except Exception as exc:

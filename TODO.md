@@ -91,10 +91,10 @@ Hoje o Analytics/Agents mistura agente×pool e não separa humano×IA.
   (Arc 19). Pendente: Routing Engine (contadores+flush), 3 endpoints `/reports/pools/*`,
   pricing expõe capacidade, aba `Analytics/Pools`.
   **Atualização 2026-06-03**: Fila/SLA reescritos sobre segments `role='queue'` + demanda
-  reprimida no Volume (queue-attended-model Fase D ✅, ver `CHANGELOG.md`). Dívida que
-  permanece: **`sessions.sla_target_ms` NULL na origem** (routing não propaga o alvo ao
-  analytics) → aba SLA sem dado (`sla_eligible=0`); popular via `parse_routed`
-  (routing result) ou snapshot do pool.
+  reprimida no Volume (queue-attended-model Fase D ✅, ver `CHANGELOG.md`).
+  **Atualização 2026-06-04**: dívida `sessions.sla_target_ms` resolvida ✅ (ver
+  `CHANGELOG.md`) — aba SLA popula a partir dos contatos novos; sessões históricas
+  permanecem NULL (valor nunca foi persistido, irrecuperável).
 - **Queue-attended-model — residuais pós Fase E** (2026-06-03, ver spec): (a) **render v2
   webchat** para message.text de sistema — fila muda e rejeição outage fecham sem mensagem
   (webchat não implementa `deliver_text`; caminho do flow cobre só fila atendida);

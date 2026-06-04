@@ -2,6 +2,16 @@
 
 ---
 
+## sessions.sla_target_ms — dívida de origem resolvida (2026-06-04)
+
+Aba SLA de Analytics/Pools estava sem dado (`sla_eligible=0`) porque `sla_target_ms` nunca chegava ao ClickHouse. **Causa raiz dupla**: (1) `_SESSION_COLS`/`_session_row` (clickhouse.py) nunca incluíram a coluna — o INSERT descartava a chave que o `parse_routed` já mandava desde sempre; (2) mesmo persistindo, a linha de close substituiria com NULL (ReplacingMergeTree: última escrita vence a linha inteira — mesma classe do problema documentado do `channel=""`).
+
+**Fix nas três pontas**: analytics-api — `sla_target_ms` em `_SESSION_COLS`/`_session_row` e na linha de close do `parse_contact_closed`; orchestrator-bridge — `_close_contact_layer` lê `{t}:pool_config:{p}` do Redis e denormaliza `sla_target_ms` no `contact_closed`; routing-engine — helper `_pool_sla_target` + campo nos closes autoritativos (`_emit_outage`, `_emit_queue_timeout`).
+
+Validado: sessão nova no sac_ia gravou 480000 → relatório Fila/SLA com `sla_eligible=1`, `sla_attainment=1.0`. Histórico permanece NULL (valor nunca foi persistido). Dívida correlata `sessions.wait_time_ms` dispensada — segments `role='queue'` são a fonte de espera desde a Fase D.
+
+---
+
 ## Queue-Attended-Model Fase E — Fechar-Sempre / Cadeia de Fallback (2026-06-03)
 
 Fecha o modelo (A–E completas): nenhum contato fica em fila eterna. Cadeia: `catch` do flow → fila atendida → **`max_wait_exceeded`** como teto de retenção.

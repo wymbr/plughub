@@ -112,9 +112,17 @@ A concorrência **não** é reconstruída por varredura de `participation_interv
 
 **Espera derivada dos segments** (implementado): `sessions.wait_time_ms` está **NULL** (o Core/bridge não grava o tempo de espera na sessão ao atender) e `queue_events` só tem o evento `queued` (sem `dequeued`). Então o endpoint `/reports/pools/queue` **deriva** a espera = início do **primeiro segmento `role='primary'`** − `sessions.opened_at` (LEFT JOIN sessions×segments). `queued` = espera > 1s. Validado: contato humano que esperou na fila aparece com avg_wait ~1,6s e queued ≥ 1.
 
-**Dívida de origem (Core/bridge — pendente):**
-- Popular `sessions.wait_time_ms` no atendimento (a sessão deveria conhecer a própria espera) — hoje derivado no relatório.
-- Popular `sessions.sla_target_ms` (ou expor `PoolConfig.sla_target` ao analytics) — **sem isso a aba SLA fica sem dado** (`sla_eligible = 0`). Fonte certa: snapshot/config do pool no Routing Engine.
+**Dívida de origem (Core/bridge):**
+- Popular `sessions.wait_time_ms` no atendimento — **dispensado**: a Fase D do
+  queue-attended-model tornou os segments `role='queue'` a fonte de espera.
+- ~~Popular `sessions.sla_target_ms`~~ ✅ (2026-06-04): causa raiz era dupla —
+  `_SESSION_COLS`/`_session_row` nunca incluíram a coluna (INSERT descartava a chave
+  que o `parse_routed` mandava) e a linha de close substituía com NULL
+  (ReplacingMergeTree, última escrita vence a linha inteira). Fix: coluna no writer;
+  `contact_closed` carrega `sla_target_ms` (bridge lê `{t}:pool_config:{p}`;
+  routing denormaliza nos closes autoritativos via `_pool_sla_target`);
+  `parse_contact_closed` repete o valor na linha de close. Validado: sessão nova
+  com 480000 → `sla_eligible=1` no relatório. Histórico permanece NULL.
 
 > **Superseded (2026-06-03)**: a derivação acima (gap até o primeiro primary) era **interim** e foi removida. A Fase D do [`queue-attended-model.md`](queue-attended-model.md) (implementada e validada 2026-06-03) reescreveu `/reports/pools/queue` sobre os segments `role='queue'`: espera = `duration_ms` do segmento de fila; abandono = `outcome='abandoned'`; handoff = fila→primary. A dívida `sessions.sla_target_ms` **permanece** — aba SLA segue sem dado (`sla_eligible=0`) até o routing propagar o alvo ao analytics.
 

@@ -833,6 +833,9 @@ class AnalyticsStore:
         "opened_at", "closed_at", "close_reason", "outcome",
         "wait_time_ms", "handle_time_ms", "date",
         "ani", "dnis", "status",
+        # SLA do pool no momento do atendimento — a coluna existia (migration)
+        # mas nunca entrava no INSERT (chave descartada pelo _session_row).
+        "sla_target_ms",
     ]
 
     async def upsert_session(self, row: dict) -> None:
@@ -1332,6 +1335,10 @@ def _session_row(d: dict) -> list:
         d.get("dnis") or d.get("dialed_number") or d.get("to") or None,
         # Arc 19: session status — 'active', 'suspended', or 'closed'. None = pre-Arc-19.
         d.get("status") or None,
+        # SLA do pool (ms) — vem do parse_routed (routing result) e do
+        # parse_contact_closed (close row precisa repetir o valor: no
+        # ReplacingMergeTree a última escrita substitui a linha inteira).
+        d.get("sla_target_ms"),
     ]
 
 
