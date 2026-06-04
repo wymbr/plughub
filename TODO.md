@@ -179,6 +179,12 @@ sempre passam; sem C → fail-open) + `GET /v1/pools/capacity/conformance`
 contratado × alocado × saldo + reservado/shared com alertas de não-conformidade
 (reservas > C; alocado > C). Restam: 3b (Σ dos deploys ≤ C), 2 (gates por
 tipo), 5 (aba Analytics contratado-cêntrica) e 6 (demo coerente).
+**Item 7 (novo, 2026-06-04)** — revisão do "available" nos Monitores
+(Sessions/Pools/Agents + consumidores do snapshot): físico (slots livres) ≠
+admissível (reserva − uso, ou min(slots, shared restante)) — pool pode exibir
+20 e rejeitar por shared_full. Definir UX (um número ou dois; como exibir o
+shared; snapshot enriquecido com `admissible`) antes de implementar — ver § 7
+do spec.
 
 ---
 

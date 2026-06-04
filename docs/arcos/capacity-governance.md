@@ -112,3 +112,18 @@ removida da visão do total no fechamento da Fase 2; aqui sai do modelo).
    ocioso), info sem contrato configurado. i18n en + pt-BR (`billing.capacity.*`).
 5. analytics-api/UI: aba Capacidade contratado-cêntrica (teto único = C).
 6. Demo: recursos do pricing coerentes com os deploys.
+7. **Revisão da exibição de "available" nos Monitores** (atividade registrada
+   2026-06-04, pós item 4): com o modelo reserved+shared, o "available" exibido
+   (slots físicos livres do snapshot) diverge do **admissível** — o que a
+   admissão de fato deixa entrar: pool com reserva → `reserva − uso do bucket
+   reservado`; pool sem reserva → `min(slots livres, shared restante = C −
+   Σ reservas − uso do shared)`. Um pool pode exibir 20 e rejeitar por
+   `shared_full`. Telas a revisar: **Monitor/Sessions** (KPI Available/Online +
+   coluna Available), **Monitor/Pools** (KPI "Available agents" + coluna
+   Available), **Monitor/Agents**, e demais consumidores do snapshot
+   (`available` escrito pelo `write_pool_snapshot` do routing — PresenceSidebar
+   /Console, dashboard cards `pool_status`). **A definir**: exibir um número só
+   (admissível, o que importa operacionalmente) ou os dois (físico × admissível);
+   como representar o shared (bucket comum não é "do pool" — linha própria?);
+   fonte (routing já conhece os buckets de admissão → enriquecer o snapshot com
+   `admissible`/`bucket`). Decisão de UX antes de implementar.
