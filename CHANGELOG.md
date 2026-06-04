@@ -2,6 +2,16 @@
 
 ---
 
+## Webhook pools — capacidade fictícia eliminada (coerência) (2026-06-04)
+
+Re-validação do item do TODO (escrito na discussão da admissão híbrida): (1) o **default 500 já não existia** — `PoolRegistrationSchema.max_concurrent_sessions` é `.optional()` e o registry grava null; (2) a premissa "nada é pré-instanciado" ficou stale pós **Arc 19 Fase C** — webhook pools têm slots de instância criados pelo Bootstrap a partir do `deploy:`, e a capacidade real = slots + admissão híbrida (Fase B); (3) o campo pool-level era **display-only** no snapshot do Monitor (nunca gateia alocação) — essa era a capacidade fictícia restante.
+
+Aplicado (escopo coerência, sem mudança de comportamento de alocação): `max_concurrent_sessions: 20` pool-level removido do webhook pool do demo (`tenant_demo.yaml` — o `deploy:` mantém a concorrência real); comments revisados em `agent-registry.ts` (schema) e `registry.py` (snapshot) — campo redefinido como **throttle opcional de downstream** (backpressure p/ sistemas frágeis; Monitor exibe `max − busy` quando setado; ausente = capacidade real por instâncias). Enforcement do throttle no routing = deferred (TODO).
+
+Nota operacional: limpar o valor no Postgres exige SQL (PUT parcial não aceita null — mesmo gap da `session_reservation`).
+
+---
+
 ## Copilot @mention standby — três causas, fix completo (2026-06-04)
 
 Sintoma: copilot morria na entrada (segmento 0s, sem anúncio), re-convite a cada @mention, comando nunca despachado. **Três causas empilhadas**:

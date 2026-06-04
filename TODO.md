@@ -4,22 +4,18 @@
 
 ---
 
-## Webhook pools — eliminar capacidade fictícia (default 500)
+## Webhook pools — throttle de downstream: enforcement no routing *(deferred)*
 
-Decisão 2026-06-03 (discussão da admissão híbrida, `docs/arcos/queue-attended-model.md`):
-pool webhook não pré-instancia nada (slots de skill-flow são lógicos, execução on-demand),
-então `max_concurrent_sessions = 500` é capacidade fictícia — o recurso real que limita
-sessões webhook é a **admissão** (reserva ou shared), igual a todo pool.
+Re-validação 2026-06-04 (ver `CHANGELOG.md`): o default 500 **já não existia** no código
+(schema `.optional()`, registry grava null); a premissa "nada é pré-instanciado" ficou
+stale pós Arc 19 Fase C — capacidade real de webhook = slots de instância do deploy
+(Bootstrap) + admissão híbrida. O `max_concurrent_sessions` pool-level era display-only
+no Monitor (capacidade fictícia) — coerência aplicada: removido do YAML demo, comments
+schema/registry revisados ("throttle opcional de downstream").
 
-- Remover o `default(500)` do schema de deploy webhook.
-- `max_concurrent_sessions` em webhook vira **throttle opcional de downstream**
-  (backpressure p/ sistemas frágeis, ex. ERP): `available = max − busy` só quando
-  configurado; ausente → admissão é o único teto.
-- Ajustar `registry.py` (routing) e Monitor (exibição de capacidade webhook).
-
-> **Ressalva**: re-validar esta lógica quando retomarmos — conferir impactos no Arc 19
-> (alocação webhook, Bootstrap, Monitor/Pools que exibe capacidade configurada) antes
-> de implementar. Mudança de comportamento; não misturar com o smoke da Fase B.
+**Deferred**: enforcement real do throttle no routing quando configurado
+(`active_count ≥ max` → enfileira; backpressure p/ downstream frágil, ex. ERP).
+Implementar quando houver caso de uso real.
 
 ---
 

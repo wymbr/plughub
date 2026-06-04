@@ -108,10 +108,13 @@ pools:
     # Arc 19: pool webhook para o processo assíncrono de portabilidade.
     # Disparado pelo intake via workflow_trigger MCP tool.
     # Executa skill_portabilidade_demo_v1: suspend 48h → collect → complete.
+    # Capacidade real = slots do deploy (Bootstrap) + admissão (Fase B).
+    # max_concurrent_sessions pool-level REMOVIDO (2026-06-04): era capacidade
+    # fictícia exibida no Monitor — o campo é throttle opcional de downstream,
+    # só setar quando o sistema downstream (ex. ERP) exigir backpressure.
     description: "Pool webhook — processo assíncrono de portabilidade (Arc 19)"
     channel_types: [webhook]
     skill_id: skill_portabilidade_demo_v1
-    max_concurrent_sessions: 20
     sla_target_ms: 172800000  # 48h em ms
 
   - pool_id: portabilidade_confirmacao

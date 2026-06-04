@@ -166,10 +166,12 @@ export const PoolRegistrationSchema = z.object({
    */
   webhook_skill_id:       z.string().optional(),
   /**
-   * Arc 19 — Pool webhook: número máximo de sessões simultâneas.
-   * Para pools webhook, substitui o controle por agentes logados.
-   * Para pools humanos/AI, é informativo (UI e Monitor).
-   * Default: sem limite (ilimitado).
+   * Arc 19 (revisado 2026-06-04) — throttle OPCIONAL de downstream.
+   * NÃO é capacidade: alocação real é capada pelos slots de instância do
+   * deploy (Bootstrap) + admissão híbrida. Quando setado num pool webhook,
+   * o Monitor exibe `available = max − busy` como teto de backpressure
+   * (sistemas downstream frágeis, ex. ERP). Ausente (caso normal) = sem
+   * throttle; admissão é o único teto. Enforcement no routing = deferred.
    */
   max_concurrent_sessions: z.number().int().positive().optional(),
   /**

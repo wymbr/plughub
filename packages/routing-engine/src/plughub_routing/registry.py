@@ -1017,14 +1017,15 @@ class InstanceRegistry:
         total_instances = total_capacity
         queue_length     = await self.get_queue_length(tenant_id, pool_id)
 
-        # Arc 19: for webhook pools, capacity is controlled by max_concurrent_sessions
-        # (not by logged-in agent instances).  When max_concurrent_sessions is set and
-        # the pool is a webhook pool, override available/total with the configured limit
-        # so the Monitor snapshot reflects configured capacity, not instance-based capacity.
-        # Fase C (orchestrator-bridge) will wire up actual instance tracking for webhook pools.
+        # Arc 19 (revisado 2026-06-04): max_concurrent_sessions pool-level é um
+        # THROTTLE OPCIONAL de downstream (backpressure p/ sistemas frágeis) —
+        # display-only no snapshot; NÃO gateia alocação. Capacidade real de
+        # webhook pool = slots de instância do deploy (Bootstrap, Fase C) +
+        # admissão híbrida (Fase B). Ausente (caso normal) → o snapshot reflete
+        # a capacidade real por instâncias, como qualquer pool.
         is_webhook_pool = "webhook" in channel_types
         if is_webhook_pool and max_concurrent_sessions is not None:
-            # Configured capacity ceiling — actual allocation tracked by active_count
+            # Throttle configurado — Monitor exibe o teto de backpressure
             available       = max(0, max_concurrent_sessions - busy)
             total_instances = max_concurrent_sessions
 

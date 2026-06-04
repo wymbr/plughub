@@ -147,11 +147,11 @@ shared morre e o modelo volta a ser estático); pool humano nem tem valor de dep
 (capacidade emergente dos agentes logados). UX futura: checkbox "Reservar sessões do
 contrato" pode espelhar um número só nos dois campos + warning quando divergirem.
 
-**Webhook pools**: a capacidade `max_concurrent_sessions = 500` (default) é **fictícia** —
-nada é pré-instanciado; o recurso real é a admissão. Decisão: remover o default; o campo
-vira *throttle opcional de downstream* (backpressure). Registrado em `TODO.md` com
-ressalva de **re-validar a lógica ao retomar** (impactos Arc 19: alocação, Bootstrap,
-Monitor).
+**Webhook pools** *(re-validado e aplicado 2026-06-04)*: o default 500 já não existia
+no código; pós Arc 19 Fase C a capacidade real = slots de instância do deploy
+(Bootstrap) + admissão. O `max_concurrent_sessions` pool-level era display-only no
+Monitor (fictício) — removido do YAML demo; campo redefinido como *throttle opcional
+de downstream* (backpressure; enforcement no routing deferred, ver `TODO.md`).
 
 ## Falta de recurso no meio do contato — cadeia de fallback
 
