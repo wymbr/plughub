@@ -121,6 +121,33 @@ _SEED: list[tuple[str, str, object, str]] = [
         "production). Read from env PLUGHUB_PERFORMANCE_SCORE_WEIGHT or this Config API "
         "key. Source: routing-engine/config.py, routing-engine/scorer.py"
     ),
+    # Render v2 (queue-attended-model) — mensagens de sistema viradas ao cliente.
+    # O tenant edita aqui no idioma desejado; hot-reload via config.changed.
+    # As mensagens da fila ATENDIDA (saudação, timeout) são do skill-flow YAML.
+    (
+        "routing", "msg_queue_waiting",
+        "Aguardando agente disponível. Por favor, aguarde...",
+        "Mensagem ao cliente ao entrar em fila MUDA (pool sem queue_config). "
+        "Source: routing-engine/main.py _persist_queued_contact"
+    ),
+    (
+        "routing", "msg_outage_rejection",
+        "Não há atendentes disponíveis no momento. Por favor, tente novamente mais tarde.",
+        "Mensagem de rejeição na porta (outage: reservation_full/shared_full/quota), "
+        "entregue como farewell_text no session.closed. Source: routing-engine/main.py _emit_outage"
+    ),
+    (
+        "routing", "msg_queue_timeout",
+        "Tempo máximo de espera atingido. Por favor, tente novamente mais tarde.",
+        "Mensagem de timeout de fila MUDA (max_wait_exceeded), farewell_text no close. "
+        "Fila atendida usa o notify do skill-flow. Source: routing-engine/main.py _emit_queue_timeout"
+    ),
+    (
+        "routing", "msg_no_resource",
+        "Não há recurso disponível para continuar o atendimento. Por favor, tente novamente mais tarde.",
+        "Mensagem do drop gracioso (sem pool/recurso, close_reason=no_resource), "
+        "farewell_text no close. Source: routing-engine/main.py _emit_no_resource_drop"
+    ),
 
     # ── session ───────────────────────────────────────────────────────────────
     # Central TTL registry for all components that manage session-scoped Redis keys.

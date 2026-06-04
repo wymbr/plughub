@@ -34,6 +34,13 @@ _DEFAULTS: dict[str, Any] = {
         "skills":     0.2,
         "load":       0.1,
     },
+    # Mensagens de sistema viradas ao cliente (render v2, queue-attended-model).
+    # Tenant sobrescreve via Config API namespace `routing` no idioma desejado;
+    # defaults em pt-BR. As mensagens da fila ATENDIDA são do skill-flow (YAML).
+    "msg_queue_waiting":    "Aguardando agente disponível. Por favor, aguarde...",
+    "msg_outage_rejection": "Não há atendentes disponíveis no momento. Por favor, tente novamente mais tarde.",
+    "msg_queue_timeout":    "Tempo máximo de espera atingido. Por favor, tente novamente mais tarde.",
+    "msg_no_resource":      "Não há recurso disponível para continuar o atendimento. Por favor, tente novamente mais tarde.",
 }
 
 
