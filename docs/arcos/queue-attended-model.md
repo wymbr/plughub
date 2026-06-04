@@ -252,9 +252,10 @@ emissão do evento analítico:
   + outbound close + guards anti-reclose), `PoolConfig.session_reservation` (schemas +
   Prisma + CRUD + YAML passthrough), filtro `agent_type != 'system'` no analytics.
   **Pendente da fase**: metering ainda conta sessão outage na dimensão `sessions`
-  (compensação na integração metering×pricing); widget webchat fecha sem mensagem de
-  rejeição (render v2); invariante Σ reservas ≤ total ainda sem validação na escrita
-  (Registry) — hoje só guard `max(0, shared)` no runtime.
+  (compensação na integração metering×pricing); ~~widget webchat fecha sem mensagem de
+  rejeição (render v2)~~ ✅ resolvido 2026-06-04 (ver § Render v2 abaixo); invariante
+  Σ reservas ≤ total ainda sem validação na escrita (Registry) — hoje só guard
+  `max(0, shared)` no runtime.
 - **C — Fila atendida** ✅ (2026-06-03) — validada nos dois desfechos: **handoff**
   (`outcome=escalated_human`, espera 21s = gap exato até o primary; primary humano manteve
   `sequence_index=0`; ContextStore `position=1`/`eta_ms=210000`) e **abandono**
@@ -344,6 +345,39 @@ emissão do evento analítico:
   render v2, dívida da Fase B); cenários fila muda e drop sem pool não exercitados
   em teste (código defensivo); limpar `queue_config` via UI (Zod rejeita null,
   mesmo gap da `session_reservation`).
+
+## Render v2 — mensagens de sistema no webchat ✅ (2026-06-04)
+
+O webchat entrega mensagens ao cliente exclusivamente pelo stream canônico (modelo
+híbrido) — mensagens de sistema do routing (`conversations.outbound` `message.text`)
+nunca entram no stream e eram no-op. Dois mecanismos no `WebchatChannelAdapter`:
+
+- **`deliver_text`**: `author.type == "system"` → frame `msg.text` direto via WS
+  (registry), com `author.name: "Sistema"`. Sem risco de duplicação — mensagens de
+  sistema não têm contraparte no stream. Cobre o aviso de espera da fila muda.
+- **`deliver_session_closed` + `farewell_text`**: mensagens acopladas ao fechamento
+  (rejeição outage, timeout de fila muda, no-resource drop) viajam **no próprio**
+  `session.closed` — o adapter renderiza o frame antes do close. Corrida
+  message×close eliminada por construção (payload único, sends ordenados).
+
+Producers ajustados: `_emit_outage` ganhou a mensagem de rejeição (pendência Fase B);
+timeout fila muda e `_emit_no_resource_drop` trocaram message.text+close por
+close+farewell; aviso "Aguardando agente..." **suprimido quando o pool tem
+`queue_config`** (fila atendida — a saudação do flow cobre; pool no default do
+tenant ainda duplicaria — configurar queue_config no pool). Fila atendida segue
+com o aviso pelo flow (`__queue_timeout__` → notify → stream).
+
+Validado: rejeição `reservation_full` no webchat renderiza "Não há atendentes
+disponíveis..." com label Sistema antes do encerramento. Pendência: voice/whatsapp
+não renderizam `farewell_text` (voice = anúncio TTS futuro; whatsapp quando o
+adapter for validado — hoje seguem só com `deliver_text` próprio).
+
+**Idioma/configurabilidade**: as 4 mensagens de sistema são chaves do Config API
+namespace `routing` (`msg_queue_waiting`, `msg_outage_rejection`,
+`msg_queue_timeout`, `msg_no_resource`) — tenant edita no idioma desejado,
+hot-reload via `config.changed` (RoutingConfigCache); defaults pt-BR em código
+(`routing_config.py`). Mensagens da fila atendida são do skill-flow YAML
+(conteúdo do tenant por natureza).
 
 ## O que substitui no relatório atual
 

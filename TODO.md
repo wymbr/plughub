@@ -95,9 +95,11 @@ Hoje o Analytics/Agents mistura agente×pool e não separa humano×IA.
   **Atualização 2026-06-04**: dívida `sessions.sla_target_ms` resolvida ✅ (ver
   `CHANGELOG.md`) — aba SLA popula a partir dos contatos novos; sessões históricas
   permanecem NULL (valor nunca foi persistido, irrecuperável).
-- **Queue-attended-model — residuais pós Fase E** (2026-06-03, ver spec): (a) **render v2
-  webchat** para message.text de sistema — fila muda e rejeição outage fecham sem mensagem
-  (webchat não implementa `deliver_text`; caminho do flow cobre só fila atendida);
+- **Queue-attended-model — residuais pós Fase E** (2026-06-03, ver spec): (a) ~~render v2
+  webchat~~ ✅ (2026-06-04, ver `CHANGELOG.md`) — `deliver_text` entrega mensagens de
+  sistema via WS e `deliver_session_closed` renderiza `farewell_text` antes do close;
+  validado no cenário outage (`reservation_full`). Canais voice/whatsapp ainda não
+  renderizam `farewell_text` (voice = TTS futuro);
   (b) limpar `queue_config`/`session_reservation` via PUT (Zod rejeita null — hoje SQL);
   (c) cenários fila muda e drop sem pool_id não exercitados em teste.
 - **Reformulação Analytics/Agents — Bancada de comparação 360° (novo)**: reescreve a aba como

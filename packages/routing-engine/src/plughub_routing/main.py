@@ -394,6 +394,8 @@ async def _emit_outage(
                      session_id, exc)
 
     # 3. Close the customer connection (gateway renders the rejection).
+    # Render v2: farewell_text no próprio session.closed — o adapter renderiza
+    # a mensagem ANTES do frame de close (sem corrida message×close).
     try:
         await producer.send("conversations.outbound", value={
             "type":       "session.closed",
@@ -401,6 +403,7 @@ async def _emit_outage(
             "session_id": session_id,
             "channel":    event.channel,
             "reason":     "agent_done",   # gateway transport Literal — analytics skips it
+            "farewell_text": routing_config.get("msg_outage_rejection"),
         })
     except Exception as exc:
         logger.error("outage: failed to publish outbound close session=%s — %s",
@@ -526,9 +529,8 @@ async def _emit_queue_timeout(
 
     # 4. Close the customer connection. Attended queue: o aviso vem do flow
     # (notify → stream) — adia o session.closed por um grace para a mensagem
-    # renderizar antes do WS fechar. Mute queue: message.text best-effort
-    # (canais com deliver_text; webchat fica silencioso — gap do render v2,
-    # mesmo do outage Fase B) + close imediato.
+    # renderizar antes do WS fechar. Mute queue: render v2 — farewell_text no
+    # próprio session.closed (adapter renderiza antes do close, sem corrida).
     try:
         contact_id_raw = await redis_client.get(f"session:{session_id}:contact_id")
         contact_id = contact_id_raw or customer_id
@@ -556,21 +558,7 @@ async def _emit_queue_timeout(
 
             asyncio.create_task(_delayed_close())
         else:
-            await producer.send(settings.kafka_topic_outbound, value={
-                "type":       "message.text",
-                "contact_id": contact_id,
-                "session_id": session_id,
-                "message_id": str(uuid.uuid4()),
-                "channel":    channel,
-                "direction":  "outbound",
-                "author":     {"type": "system", "id": "routing-engine"},
-                "content":    {
-                    "type": "text",
-                    "text": "Tempo máximo de espera atingido. Por favor, tente novamente mais tarde.",
-                },
-                "text":      "Tempo máximo de espera atingido. Por favor, tente novamente mais tarde.",
-                "timestamp": now_iso,
-            })
+            close_payload["farewell_text"] = routing_config.get("msg_queue_timeout")
             await producer.send(settings.kafka_topic_outbound, value=close_payload)
     except Exception as exc:
         logger.warning("queue timeout: failed to publish outbound close session=%s — %s",
@@ -640,31 +628,17 @@ async def _emit_no_resource_drop(
     except Exception:
         pass
 
-    # Notify + close the customer connection.
+    # Notify + close the customer connection (render v2: farewell no close).
     try:
         contact_id_raw = await redis_client.get(f"session:{session_id}:contact_id")
         contact_id = contact_id_raw or event.customer_id or session_id
-        await producer.send(settings.kafka_topic_outbound, value={
-            "type":       "message.text",
-            "contact_id": contact_id,
-            "session_id": session_id,
-            "message_id": str(uuid.uuid4()),
-            "channel":    event.channel,
-            "direction":  "outbound",
-            "author":     {"type": "system", "id": "routing-engine"},
-            "content":    {
-                "type": "text",
-                "text": "Não há recurso disponível para continuar o atendimento. Por favor, tente novamente mais tarde.",
-            },
-            "text":      "Não há recurso disponível para continuar o atendimento. Por favor, tente novamente mais tarde.",
-            "timestamp": now_iso,
-        })
         await producer.send(settings.kafka_topic_outbound, value={
             "type":       "session.closed",
             "contact_id": contact_id,
             "session_id": session_id,
             "channel":    event.channel,
             "reason":     "agent_done",
+            "farewell_text": routing_config.get("msg_no_resource"),
         })
     except Exception as exc:
         logger.warning("no-resource drop: failed to publish outbound session=%s — %s",
@@ -780,6 +754,22 @@ async def _persist_queued_contact(
     # avoid spamming the customer with repeated "waiting" messages.
     if not newly_added:
         return
+    # Render v2 (queue-attended-model): com o webchat entregando mensagens de
+    # sistema via WS, o aviso de espera duplicaria a saudação do agente de fila.
+    # Suprimir quando o pool tem queue_config (fila atendida — o flow fala);
+    # fila muda mantém o aviso (única resposta que o cliente recebe).
+    # Nota: pool sem queue_config que cai no default do tenant ainda duplica —
+    # o routing não enxerga o Config API; aceito (configurar queue_config no pool).
+    try:
+        raw_cfg = await redis_client.get(f"{event.tenant_id}:pool_config:{pool_id}")
+        if raw_cfg and (json.loads(raw_cfg) or {}).get("queue_config"):
+            logger.debug(
+                "waiting message suppressed (attended queue): session=%s pool=%s",
+                event.session_id, pool_id,
+            )
+            return
+    except Exception:
+        pass
     try:
         contact_id_raw = await redis_client.get(
             f"session:{event.session_id}:contact_id"
@@ -797,9 +787,9 @@ async def _persist_queued_contact(
                 "author":     {"type": "system", "id": "routing-engine"},
                 "content":    {
                     "type": "text",
-                    "text": "Aguardando agente disponível. Por favor, aguarde...",
+                    "text": routing_config.get("msg_queue_waiting"),
                 },
-                "text":      "Aguardando agente disponível. Por favor, aguarde...",
+                "text":      routing_config.get("msg_queue_waiting"),
                 "timestamp": datetime.now(timezone.utc).isoformat(),
             },
         )

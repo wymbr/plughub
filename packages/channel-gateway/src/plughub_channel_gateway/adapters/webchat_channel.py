@@ -48,8 +48,13 @@ class WebchatChannelAdapter(ChannelAdapter):
         """
         Persist the outbound text to conversation history.
 
-        Webchat clients receive the message directly via their stream XREAD
-        subscription (hybrid stream model), so no WebSocket send is needed here.
+        Webchat clients receive *agent* messages via their stream XREAD
+        subscription (hybrid stream model), so no WebSocket send for those.
+
+        Render v2 (queue-attended-model): SYSTEM messages (author.type ==
+        "system" — routing engine: aviso de espera em fila muda e afins) never
+        enter the canonical stream, so they are delivered directly via WS here.
+        No duplication risk: system messages have no stream counterpart.
         """
         session_id  = payload.get("session_id", "")
         text        = payload.get("text", "")
@@ -64,6 +69,27 @@ class WebchatChannelAdapter(ChannelAdapter):
                 text       = text,
                 timestamp  = timestamp,
             )
+        if author_type == "system" and text:
+            contact_id = payload.get("contact_id", "")
+            try:
+                await self._registry.send(contact_id, {
+                    "type":       "msg.text",
+                    "message_id": message_id,
+                    "author":     {"type": "system", "role": "system",
+                                   "name": "Sistema", "participant_id": "",
+                                   "instance_id": ""},
+                    "timestamp":  timestamp,
+                    "text":       text,
+                })
+                logger.info(
+                    "system text delivered via WS: contact_id=%s session=%s",
+                    contact_id, session_id,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "could not deliver system text: contact_id=%s — %s",
+                    contact_id, exc,
+                )
 
     async def deliver_menu(self, payload: dict) -> None:
         """
@@ -108,8 +134,31 @@ class WebchatChannelAdapter(ChannelAdapter):
         await self._registry.send(contact_id, ws_msg.model_dump())
 
     async def deliver_session_closed(self, payload: dict) -> None:
-        """Send conn.session_ended and close the WebSocket."""
+        """
+        Send conn.session_ended and close the WebSocket.
+
+        Render v2 (queue-attended-model): when the payload carries
+        `farewell_text` (rejeição outage, timeout de fila muda, no-resource
+        drop), render it as a message BEFORE the close frame — same WS
+        delivery, race-free by construction (single payload, ordered sends).
+        """
         contact_id = payload.get("contact_id", "")
+        farewell   = payload.get("farewell_text") or ""
+        if farewell:
+            try:
+                await self._registry.send(contact_id, {
+                    "type":       "msg.text",
+                    "message_id": "",
+                    "author":     {"type": "system", "role": "system",
+                                   "name": "Sistema", "participant_id": "",
+                                   "instance_id": ""},
+                    "timestamp":  "",
+                    "text":       farewell,
+                })
+            except Exception as exc:
+                logger.warning(
+                    "could not deliver farewell: contact_id=%s — %s", contact_id, exc,
+                )
         await self._registry.send(
             contact_id,
             WsSessionClosed(reason=payload.get("reason", "agent_done")).model_dump(),

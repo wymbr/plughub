@@ -2,6 +2,20 @@
 
 ---
 
+## Render v2 — Mensagens de Sistema no WebChat (2026-06-04)
+
+Webchat entregava mensagens só pelo stream canônico — mensagens de sistema do routing (`message.text` via outbound) eram no-op: rejeição outage, timeout de fila muda e aviso de espera fechavam o WS em silêncio (pendência da Fase B do queue-attended-model).
+
+**channel-gateway (`webchat_channel.py`):** `deliver_text` com `author.type=system` → frame `msg.text` direto via WS (label "Sistema"; sem duplicação — sistema não tem contraparte no stream); `deliver_session_closed` renderiza novo campo `farewell_text` antes do frame de close — mensagens acopladas ao fechamento viajam no próprio `session.closed`, eliminando a corrida message×close por construção.
+
+**routing-engine:** `_emit_outage` ganhou a mensagem de rejeição via `farewell_text`; timeout de fila muda e `_emit_no_resource_drop` migrados de message.text+close para close+farewell; aviso "Aguardando agente disponível..." suprimido quando o pool tem `queue_config` (fila atendida — saudação do flow cobre).
+
+**Configurabilidade/idioma**: as 4 mensagens de sistema viraram chaves do Config API namespace `routing` (`msg_queue_waiting`, `msg_outage_rejection`, `msg_queue_timeout`, `msg_no_resource`) — tenant edita no idioma desejado, hot-reload via `config.changed` já existente (`RoutingConfigCache`); defaults pt-BR em `routing_config.py`; seeds com descrição no config-api. Mensagens da fila atendida seguem no skill-flow YAML (conteúdo do tenant).
+
+Validado: 2ª sessão rejeitada por `reservation_full` no sac_ia renderizou "Não há atendentes disponíveis no momento..." (label Sistema) antes do "Atendimento encerrado". Aprendizado operacional do teste: PUT de `session_reservation` leva segundos até o cache do routing (`pool.updated`) — sessões abertas na janela caem no bucket vigente. Pendência: voice/whatsapp não renderizam `farewell_text` (voice = TTS futuro). Spec: `docs/arcos/queue-attended-model.md` § Render v2.
+
+---
+
 ## sessions.sla_target_ms — dívida de origem resolvida (2026-06-04)
 
 Aba SLA de Analytics/Pools estava sem dado (`sla_eligible=0`) porque `sla_target_ms` nunca chegava ao ClickHouse. **Causa raiz dupla**: (1) `_SESSION_COLS`/`_session_row` (clickhouse.py) nunca incluíram a coluna — o INSERT descartava a chave que o `parse_routed` já mandava desde sempre; (2) mesmo persistindo, a linha de close substituiria com NULL (ReplacingMergeTree: última escrita vence a linha inteira — mesma classe do problema documentado do `channel=""`).
