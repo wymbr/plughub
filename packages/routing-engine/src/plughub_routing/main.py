@@ -24,6 +24,7 @@ from .registry import InstanceRegistry, PoolRegistry
 from .router import Router
 from .kafka_listener import run_listeners
 from .routing_config import routing_config
+from . import mute_queue
 
 logger = logging.getLogger("plughub.routing")
 
@@ -88,6 +89,8 @@ async def run() -> None:
             http_client                = http_client,
             # Session close events — remove orphan queue entries on client disconnect
             kafka_topic_events         = settings.kafka_topic_events,
+            # Fila de sistema (Fase A): drain só re-publica unadmitted com headroom
+            admission                  = admission,
         )
     )
 
@@ -105,7 +108,7 @@ async def run() -> None:
     # Every QUEUE_DRAIN_INTERVAL_S seconds, scan all pools with queued contacts
     # and re-publish any contact whose pool has a ready instance available.
     periodic_drain_task = asyncio.create_task(
-        _periodic_queue_drain(redis_client, producer, settings)
+        _periodic_queue_drain(redis_client, producer, settings, admission)
     )
 
     # Fase 2 — occupancy sampler: samples per-pool concurrency (active_count) +
@@ -238,10 +241,36 @@ async def _process_message(
                 "admission check failed (fail-open): session=%s — %s",
                 event.session_id, exc,
             )
-            decision = AdmissionDecision(admitted=True)
+            _adm_pool = None
+            decision  = AdmissionDecision(admitted=True)
         if not decision.admitted:
-            await _emit_outage(event, decision, producer, redis_client)
+            # ── Fila de sistema (system-queue.md 2b): OVERFLOW ────────────────
+            # C esgotado em pool humano não rejeita na porta — cai na fila muda
+            # gratuita (isenta por construção: nunca foi admitida) até o teto
+            # total do buffer; o drain re-publica e re-admite quando C liberar.
+            # Rejeita só com fila cheia (queue_full) ou canal sem fila muda.
+            overflowed = await _try_overflow_enqueue(
+                event, decision, producer, redis_client,
+                instance_registry, settings, _adm_pool,
+            )
+            if not overflowed:
+                await _emit_outage(event, decision, producer, redis_client)
             return
+        # ── Fila de sistema: transição unadmitted→admitted ────────────────────
+        # Sessão que esperava em fila muda acabou de ser admitida — fecha a
+        # passagem pela fila com segmento sintético role=queue outcome=handoff
+        # (mesma fonte que o /reports/pools/queue Fase D já lê). No-op barato
+        # (um SREM) para sessões que nunca enfileiraram.
+        try:
+            await mute_queue.resolve_mute_exit(
+                redis_client, producer, event.tenant_id,
+                event.pool_id or "", event.session_id, "handoff",
+            )
+        except Exception as exc:
+            logger.warning(
+                "mute queue handoff resolve failed session=%s — %s",
+                event.session_id, exc,
+            )
 
     try:
         result = await router.route(event)
@@ -281,7 +310,8 @@ async def _process_message(
             # Persist contact to queue for drain-on-agent-ready
             now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
             await _persist_queued_contact(
-                event, producer, redis_client, instance_registry, now_ms, settings
+                event, producer, redis_client, instance_registry, now_ms, settings,
+                admission=admission,
             )
 
     except Exception as exc:
@@ -303,6 +333,49 @@ async def _pool_sla_target(
     except Exception:
         pass
     return None
+
+
+async def _try_overflow_enqueue(
+    event:             ConversationInboundEvent,
+    decision:          "AdmissionDecision",
+    producer:          AIOKafkaProducer,
+    redis_client:      aioredis.Redis,
+    instance_registry: InstanceRegistry,
+    settings,
+    pool,              # PoolConfig | None
+) -> bool:
+    """
+    Fila de sistema (system-queue.md 2b) — overflow da admissão.
+    Retorna True se o contato foi acomodado na fila muda gratuita; False para
+    o caller emitir o outage (com a causa ajustada quando a fila está cheia).
+
+    Condições: pool humano (agent_kind=human — IA rejeita normal: capacidade IA
+    libera em segundos e espera por IA não faz sentido), canal aceita fila muda
+    (max_wait_by_channel > 0) e buffer total com vaga (SCARD < queue_max_total).
+    """
+    if pool is None or getattr(pool, "agent_kind", None) != "human":
+        return False
+    if mute_queue.channel_max_wait_s(settings, event.channel) <= 0:
+        return False   # canal sem fila muda (ex. voice) → outage com a causa original
+    usage = await mute_queue.buffer_usage(redis_client, event.tenant_id)
+    if usage >= mute_queue.max_queue_total():
+        decision.cause = "queue_full"   # demanda reprimida distingue fila lotada
+        logger.warning(
+            "overflow rejected (queue_full): session=%s tenant=%s usage=%d limit=%d",
+            event.session_id, event.tenant_id, usage, mute_queue.max_queue_total(),
+        )
+        return False
+    now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+    await _persist_queued_contact(
+        event, producer, redis_client, instance_registry, now_ms, settings,
+        admission=None, force_mute=True,
+    )
+    logger.info(
+        "overflow → mute queue: session=%s pool=%s cause=%s buffer=%d/%d",
+        event.session_id, event.pool_id, decision.cause,
+        usage + 1, mute_queue.max_queue_total(),
+    )
+    return True
 
 
 async def _emit_outage(
@@ -403,7 +476,11 @@ async def _emit_outage(
             "session_id": session_id,
             "channel":    event.channel,
             "reason":     "agent_done",   # gateway transport Literal — analytics skips it
-            "farewell_text": routing_config.get("msg_outage_rejection"),
+            # Fila de sistema: causa queue_full tem mensagem própria (fila cheia
+            # ≠ sem atendentes — orienta o cliente a re-tentar mais tarde).
+            "farewell_text": routing_config.get(
+                "msg_queue_full" if decision.cause == "queue_full" else "msg_outage_rejection"
+            ),
         })
     except Exception as exc:
         logger.error("outage: failed to publish outbound close session=%s — %s",
@@ -463,6 +540,16 @@ async def _emit_queue_timeout(
     queued_at_ms = int(contact.get("queued_at_ms") or 0)
     wait_ms      = max(now_ms - queued_at_ms, 0) if queued_at_ms else 0
     sla_target   = await _pool_sla_target(redis_client, tenant_id, pool_id)
+
+    # Fila de sistema (Fase A): limpa o estado de fila muda SEM emitir segmento
+    # — este caminho já emite o seu próprio segmento sintético (passo 3).
+    try:
+        await mute_queue.resolve_mute_exit(
+            redis_client, producer, tenant_id, pool_id, session_id,
+            "abandoned", emit_segment=False,
+        )
+    except Exception:
+        pass
 
     # 1. Markers FIRST — bridge re-entry must not overwrite this close.
     try:
@@ -689,11 +776,18 @@ async def _persist_queued_contact(
     instance_registry: InstanceRegistry,
     now_ms:            int,
     settings,
+    admission:         "AdmissionController | None" = None,
+    force_mute:        bool = False,
 ) -> None:
     """
     Stores contact in the pool queue sorted set and notifies the customer.
     Full original event is preserved so it can be re-published verbatim when
     an agent becomes available (drain-on-ready).
+
+    Fila de sistema (system-queue.md Fase A): quando a fila é MUDA (pool sem
+    queue_config, ou `force_mute` no overflow da admissão), a sessão é isenta
+    de C (admission.release) e marcada em {t}:queue:unadmitted; a espera real
+    é preservada através de re-enfileiramentos (first_queued NX vira o score).
     """
     pool_id = event.pool_id or ""
     if not pool_id:
@@ -707,6 +801,48 @@ async def _persist_queued_contact(
         )
         await _emit_no_resource_drop(redis_client, producer, settings, event)
         return
+
+    # Tier da fila: atendida (queue_config no pool) × muda (sem, ou overflow).
+    attended     = False
+    mute_requeue = False
+    if not force_mute:
+        try:
+            raw_cfg = await redis_client.get(f"{event.tenant_id}:pool_config:{pool_id}")
+            if raw_cfg and (json.loads(raw_cfg) or {}).get("queue_config"):
+                attended = True
+        except Exception:
+            pass
+
+    if not attended:
+        # Canal não aceita fila muda (max_wait 0, ex. voice) → encerra gracioso
+        # imediatamente (max_wait_exceeded com espera zero), nunca dead air.
+        if mute_queue.channel_max_wait_s(settings, event.channel) <= 0:
+            logger.warning(
+                "mute queue not allowed for channel=%s — immediate graceful close "
+                "session=%s pool=%s", event.channel, event.session_id, pool_id,
+            )
+            await _emit_queue_timeout(
+                redis_client, producer, settings,
+                event.tenant_id, pool_id, event.session_id, now_ms,
+            )
+            return
+        # Isenção de C (tier gratuito): libera os slots de admissão (no-op no
+        # overflow — nunca foi admitida) e marca no buffer total. O score do
+        # ZSET preserva o PRIMEIRO enqueue: re-enfileiramentos (re-admissão
+        # negada no drain) não resetam posição nem relógio de espera.
+        if admission is not None:
+            try:
+                await admission.release(event.tenant_id, event.session_id)
+            except Exception as exc:
+                logger.warning(
+                    "mute queue: admission release failed session=%s — %s",
+                    event.session_id, exc,
+                )
+        first_ms = await mute_queue.mark_mute_queued(
+            redis_client, event.tenant_id, event.session_id, now_ms
+        )
+        mute_requeue = first_ms < now_ms   # re-enfileiramento: não re-avisa o cliente
+        now_ms = first_ms
 
     # Store the full event dict + queue metadata so drain can re-publish it intact
     contact_data = event.model_dump()
@@ -754,22 +890,21 @@ async def _persist_queued_contact(
     # avoid spamming the customer with repeated "waiting" messages.
     if not newly_added:
         return
+    # Fila de sistema (Fase A): re-enfileiramento (re-admissão negada no drain)
+    # re-entra no ZSET como "novo", mas o cliente JÁ recebeu o aviso na primeira
+    # espera — não spamar (dedupe pela chave first_queued).
+    if mute_requeue:
+        return
     # Render v2 (queue-attended-model): com o webchat entregando mensagens de
     # sistema via WS, o aviso de espera duplicaria a saudação do agente de fila.
-    # Suprimir quando o pool tem queue_config (fila atendida — o flow fala);
-    # fila muda mantém o aviso (única resposta que o cliente recebe).
-    # Nota: pool sem queue_config que cai no default do tenant ainda duplica —
-    # o routing não enxerga o Config API; aceito (configurar queue_config no pool).
-    try:
-        raw_cfg = await redis_client.get(f"{event.tenant_id}:pool_config:{pool_id}")
-        if raw_cfg and (json.loads(raw_cfg) or {}).get("queue_config"):
-            logger.debug(
-                "waiting message suppressed (attended queue): session=%s pool=%s",
-                event.session_id, pool_id,
-            )
-            return
-    except Exception:
-        pass
+    # Suprimir quando a fila é atendida (o flow fala); fila muda — inclusive
+    # overflow — mantém o aviso (única resposta que o cliente recebe).
+    if attended:
+        logger.debug(
+            "waiting message suppressed (attended queue): session=%s pool=%s",
+            event.session_id, pool_id,
+        )
+        return
     try:
         contact_id_raw = await redis_client.get(
             f"session:{event.session_id}:contact_id"
@@ -944,6 +1079,7 @@ async def _periodic_queue_drain(
     redis_client: aioredis.Redis,
     producer:     "AIOKafkaProducer",
     settings,
+    admission:    "AdmissionController | None" = None,
 ) -> None:
     """
     Periodic fallback queue drain — runs every QUEUE_DRAIN_INTERVAL_S seconds.
@@ -989,23 +1125,22 @@ async def _periodic_queue_drain(
                     # Pool-level queue_config.max_wait_s wins; fallback is the
                     # platform default (bounds mute queues too). ZREM-first makes
                     # the expiry race-safe against a concurrent drain.
+                    _pool_cfg: dict = {}
                     try:
-                        max_wait_s = 0
+                        attended_wait_s = 0
                         raw_cfg = await redis_client.get(
                             f"{tenant_id}:pool_config:{pool_id}"
                         )
                         if raw_cfg:
-                            _qc = (json.loads(raw_cfg) or {}).get("queue_config") or {}
-                            max_wait_s = int(_qc.get("max_wait_s") or 0)
-                        if max_wait_s <= 0:
-                            max_wait_s = getattr(
-                                settings, "queue_max_wait_default_s", 1800
-                            )
-                        if max_wait_s > 0:
-                            _now_ms = int(
-                                datetime.now(timezone.utc).timestamp() * 1000
-                            )
-                            cutoff  = _now_ms - max_wait_s * 1000
+                            _pool_cfg = json.loads(raw_cfg) or {}
+                            _qc = _pool_cfg.get("queue_config") or {}
+                            attended_wait_s = int(_qc.get("max_wait_s") or 0)
+                        _now_ms = int(
+                            datetime.now(timezone.utc).timestamp() * 1000
+                        )
+                        if attended_wait_s > 0:
+                            # Fila ATENDIDA: teto único do pool (comportamento Fase E).
+                            cutoff  = _now_ms - attended_wait_s * 1000
                             expired = await redis_client.zrangebyscore(
                                 key, "-inf", cutoff
                             )
@@ -1013,6 +1148,40 @@ async def _periodic_queue_drain(
                                 removed = await redis_client.zrem(key, exp_sid)
                                 if not removed:
                                     continue   # drained concurrently — skip
+                                await _emit_queue_timeout(
+                                    redis_client, producer, settings,
+                                    tenant_id, pool_id, exp_sid, _now_ms,
+                                )
+                                drained += 1
+                        else:
+                            # Fila MUDA (system-queue.md): teto POR CANAL.
+                            # Varre candidatos acima do menor teto configurado e
+                            # refina por entrada (canal está no contact JSON).
+                            default_s = int(getattr(settings, "queue_max_wait_default_s", 1800))
+                            by_ch     = routing_config.get("queue_max_wait_by_channel") or {}
+                            positive  = [int(v) for v in by_ch.values()
+                                         if isinstance(v, (int, float)) and int(v) > 0]
+                            min_wait  = min(positive + [default_s])
+                            cutoff    = _now_ms - min_wait * 1000
+                            for exp_sid in await redis_client.zrangebyscore(key, "-inf", cutoff):
+                                score = await redis_client.zscore(key, exp_sid)
+                                if score is None:
+                                    continue   # drained concurrently
+                                channel = ""
+                                raw_c = await redis_client.get(
+                                    f"{tenant_id}:queue_contact:{exp_sid}"
+                                )
+                                if raw_c:
+                                    try:
+                                        channel = (json.loads(raw_c) or {}).get("channel") or ""
+                                    except Exception:
+                                        pass
+                                limit_s = mute_queue.channel_max_wait_s(settings, channel)
+                                if limit_s > 0 and (_now_ms - int(score)) < limit_s * 1000:
+                                    continue   # dentro do teto do canal
+                                removed = await redis_client.zrem(key, exp_sid)
+                                if not removed:
+                                    continue
                                 await _emit_queue_timeout(
                                     redis_client, producer, settings,
                                     tenant_id, pool_id, exp_sid, _now_ms,
@@ -1058,12 +1227,40 @@ async def _periodic_queue_drain(
                     if closed_marker:
                         await redis_client.zrem(key, session_id)
                         await redis_client.delete(f"{tenant_id}:queue_contact:{session_id}")
+                        # Fila de sistema: cliente desistiu esperando em fila
+                        # muda → segmento sintético de abandono (ledger Fase D).
+                        try:
+                            await mute_queue.resolve_mute_exit(
+                                redis_client, producer, tenant_id, pool_id,
+                                session_id, "abandoned",
+                            )
+                        except Exception:
+                            pass
                         logger.info(
                             "Periodic drain: skipped closed session=%s pool=%s reason=%s",
                             session_id, pool_id,
                             closed_marker if isinstance(closed_marker, str) else closed_marker.decode(),
                         )
                         continue
+
+                    # Fila de sistema (Fase A): sessão NÃO-ADMITIDA (fila muda/
+                    # overflow) só é re-publicada com vaga no CONTRATO — sem
+                    # isso o ciclo rejeita→re-enfileira a cada 5s (churn) e o
+                    # cliente recebe avisos repetidos. Agente pronto + contrato
+                    # cheio = continua esperando.
+                    if admission is not None:
+                        try:
+                            unadm = await redis_client.sismember(
+                                mute_queue.unadmitted_key(tenant_id), session_id
+                            )
+                            if unadm and not await admission.has_headroom(
+                                tenant_id, pool_id,
+                                session_reservation=_pool_cfg.get("session_reservation"),
+                                agent_kind=_pool_cfg.get("agent_kind"),
+                            ):
+                                continue
+                        except Exception:
+                            pass   # fail-open: segue o fluxo normal
 
                     contact_key = f"{tenant_id}:queue_contact:{session_id}"
                     raw_contact = await redis_client.get(contact_key)

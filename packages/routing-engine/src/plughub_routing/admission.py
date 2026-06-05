@@ -195,6 +195,62 @@ class AdmissionController:
         if prev_kind == "ai" and kind != "ai":
             await self._redis.srem(kind_set, session_id)
 
+    async def has_headroom(
+        self,
+        tenant_id:           str,
+        pool_id:             str,
+        session_reservation: int | None = None,
+        agent_kind:          str | None = None,
+    ) -> bool:
+        """
+        Checagem READ-ONLY de vaga na admissão (fila de sistema, Fase A):
+        os drains só re-publicam sessão NÃO-ADMITIDA (fila muda/overflow)
+        quando há vaga no contrato — sem isso, re-publicar com C cheio vira
+        churn rejeita→re-enfileira a cada ciclo. Espelha a lógica do admit().
+        """
+        try:
+            if session_reservation:
+                count = await self._redis.scard(
+                    f"{tenant_id}:admission:reserved:{pool_id}"
+                )
+                if count >= session_reservation:
+                    return False
+            else:
+                limit = await self._shared_limit(tenant_id)
+                if limit is not None:
+                    count = await self._redis.scard(f"{tenant_id}:admission:shared")
+                    if count >= limit:
+                        return False
+            if agent_kind == "ai":
+                c_ai = await self._type_limit(tenant_id, "ai_agent")
+                if c_ai is not None:
+                    kcount = await self._redis.scard(f"{tenant_id}:admission:kind:ai")
+                    if kcount >= c_ai:
+                        return False
+            return True
+        except Exception as exc:
+            logger.warning("has_headroom failed (fail-open) tenant=%s — %s", tenant_id, exc)
+            return True
+
+    async def release(self, tenant_id: str, session_id: str) -> None:
+        """
+        Fila de sistema (system-queue.md Fase A): libera os slots de admissão de
+        uma sessão que entrou em fila MUDA — ela deixa de debitar C enquanto
+        espera (isenção do tier gratuito). A re-admissão acontece naturalmente
+        quando o drain re-publica o contato (admit roda em todo inbound).
+        """
+        member_key = f"{tenant_id}:admission:member:{session_id}"
+        prev = _decode(await self._redis.get(member_key))
+        if prev:
+            await self._redis.srem(prev, session_id)
+            await self._redis.delete(member_key)
+        kind_member = f"{tenant_id}:admission:kind_member:{session_id}"
+        prev_kind = _decode(await self._redis.get(kind_member))
+        if prev_kind:
+            if prev_kind == "ai":
+                await self._redis.srem(f"{tenant_id}:admission:kind:ai", session_id)
+            await self._redis.delete(kind_member)
+
     async def _type_limit(self, tenant_id: str, resource_type: str) -> int | None:
         """C por tipo ({t}:quota:capacity:{type}, pricing quota sync). None = sem gate."""
         raw = _decode(await self._redis.get(f"{tenant_id}:quota:capacity:{resource_type}"))
@@ -252,6 +308,17 @@ class AdmissionController:
             # Item 2: type-gate sets follow the same closed-session release.
             async for key in self._redis.scan_iter(match="*:admission:kind:ai", count=200):
                 buckets.append(_decode(key))
+            # Fila de sistema (Fase A): backstop do buffer grátis — remove
+            # sessões fechadas que os drains não limparam (segmento sintético
+            # de abandono é emitido pelos drains; aqui é só higiene).
+            async for key in self._redis.scan_iter(match="*:queue:unadmitted", count=200):
+                tenant_id = _decode(key).split(":queue:", 1)[0]
+                async for member in self._redis.sscan_iter(_decode(key), count=200):
+                    sid = _decode(member)
+                    if await self._redis.exists(f"session:{sid}:closed"):
+                        await self._redis.srem(_decode(key), sid)
+                        await self._redis.delete(f"{tenant_id}:queue:first_queued:{sid}")
+                        released += 1
 
             for bucket in buckets:
                 tenant_id = bucket.split(":admission:", 1)[0]

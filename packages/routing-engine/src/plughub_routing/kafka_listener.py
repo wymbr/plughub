@@ -38,6 +38,7 @@ from .models import AgentInstance, PoolConfig, RoutingExpression
 from .registry import InstanceRegistry, PoolRegistry
 from .config import get_settings
 from .routing_config import routing_config
+from . import mute_queue
 
 if TYPE_CHECKING:
     import httpx
@@ -101,8 +102,9 @@ class SessionClosedEventHandler:
 
     _CLOSED_TTL_S = 7 * 24 * 3600  # 7 days — same as drain_queue comment
 
-    def __init__(self, instance_registry: InstanceRegistry) -> None:
+    def __init__(self, instance_registry: InstanceRegistry, admission=None) -> None:
         self._instances = instance_registry
+        self._admission = admission
 
     async def handle(self, event: dict) -> None:
         if event.get("event_type") != "contact_closed":
@@ -121,6 +123,20 @@ class SessionClosedEventHandler:
             reason,
             ex=self._CLOSED_TTL_S,
         )
+
+        # Fila de sistema (Fase A): libera o slot de admissão IMEDIATAMENTE no
+        # fechamento (event-driven). Antes a liberação era só do reconciler
+        # (~60s) — aceitável quando a admissão era apenas gauge, mas o drain da
+        # fila muda depende do headroom: cliente esperava até 60s por uma vaga
+        # já livre. Reconciler permanece como backstop (crash/evento perdido).
+        if self._admission is not None:
+            try:
+                await self._admission.release(tenant_id, session_id)
+            except Exception as exc:
+                logger.warning(
+                    "admission eager release failed session=%s — %s (reconciler cobre)",
+                    session_id, exc,
+                )
 
         # 2. Remove from queue if still present.
         #    The stored contact JSON ({tenant}:queue_contact:{session_id}) carries
@@ -221,12 +237,14 @@ class LifecycleEventHandler:
         producer:           "AIOKafkaProducer | None" = None,
         pool_registry:      PoolRegistry | None     = None,
         kafka_topic_inbound: str                    = "conversations.inbound",
+        admission           = None,   # AdmissionController | None (fila de sistema)
     ) -> None:
         self._instances      = instance_registry
         self._router         = router
         self._producer       = producer
         self._pools          = pool_registry
         self._topic_inbound  = kafka_topic_inbound
+        self._admission      = admission
 
     async def handle(self, event: dict) -> None:
         event_type = event.get("event", "")
@@ -389,7 +407,34 @@ class LifecycleEventHandler:
                 await self._instances.remove_queued_contact(
                     tenant_id, pool_id, contact.session_id
                 )
+                # Fila de sistema (Fase A): desistência em fila muda → segmento
+                # sintético de abandono (ledger Fase D).
+                try:
+                    if self._producer is not None:
+                        await mute_queue.resolve_mute_exit(
+                            self._instances._redis, self._producer,
+                            tenant_id, pool_id, contact.session_id, "abandoned",
+                        )
+                except Exception:
+                    pass
                 continue
+
+            # Fila de sistema (Fase A): sessão NÃO-ADMITIDA só é re-publicada
+            # com vaga no CONTRATO — agente pronto + C cheio = segue esperando
+            # (sem churn rejeita→re-enfileira e sem avisos repetidos).
+            if self._admission is not None:
+                try:
+                    unadm = await self._instances._redis.sismember(
+                        mute_queue.unadmitted_key(tenant_id), contact.session_id
+                    )
+                    if unadm and not await self._admission.has_headroom(
+                        tenant_id, pool_id,
+                        session_reservation = pool.session_reservation,
+                        agent_kind          = pool.agent_kind,
+                    ):
+                        continue
+                except Exception:
+                    pass   # fail-open
 
             # Retrieve the full event dict that was stored when the contact was queued
             full_data = await self._instances.get_full_queued_contact(
@@ -619,6 +664,8 @@ async def run_listeners(
     http_client:               "httpx.AsyncClient | None" = None,
     # Optional: channel gateway session close events — cleans up orphan queue entries
     kafka_topic_events:        str | None               = None,
+    # Optional: AdmissionController — fila de sistema (drain só com headroom de contrato)
+    admission                  = None,
 ) -> None:
     """
     Starts Kafka consumers for agent.lifecycle, agent.registry.events,
@@ -646,6 +693,7 @@ async def run_listeners(
         producer            = kafka_producer,
         pool_registry       = pool_registry,
         kafka_topic_inbound = kafka_topic_inbound,
+        admission           = admission,
     )
 
     _http_client = http_client or _httpx.AsyncClient()
@@ -654,7 +702,7 @@ async def run_listeners(
         http_client    = _http_client,
     )
 
-    session_closed_handler = SessionClosedEventHandler(instance_registry)
+    session_closed_handler = SessionClosedEventHandler(instance_registry, admission=admission)
 
     topics = [kafka_topic_lifecycle, kafka_topic_registry]
     if kafka_topic_config_changed:

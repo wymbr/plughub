@@ -149,6 +149,32 @@ _SEED: list[tuple[str, str, object, str]] = [
         "farewell_text no close. Source: routing-engine/main.py _emit_no_resource_drop"
     ),
 
+    # ── routing: fila de sistema (system-queue.md, Fase A) ────────────────────
+    (
+        "routing", "queue_max_total",
+        100,
+        "Teto TOTAL do buffer de fila muda/gratuita (sessões isentas de C, "
+        "SCARD de {t}:queue:unadmitted). Hard limit: Config API fora ⇒ default "
+        "100 no código, nunca ilimitado. Estouro ⇒ outage causa queue_full. "
+        "Source: routing-engine/mute_queue.py"
+    ),
+    (
+        "routing", "queue_max_wait_by_channel",
+        {"voice": 300, "webrtc": 300, "webchat": 1800, "whatsapp": 14_400},
+        "Teto de espera em fila MUDA por canal (segundos). 0 = canal não aceita "
+        "fila muda (vai direto a outage — recomendado p/ voz: espera muda em voz "
+        "é dead air segurando trunk). Canais ausentes usam o default global "
+        "(1800s). Fila ATENDIDA usa queue_config.max_wait_s do pool. "
+        "Source: routing-engine/mute_queue.py + _periodic_queue_drain"
+    ),
+    (
+        "routing", "msg_queue_full",
+        "Nossa fila de espera está cheia no momento. Por favor, tente novamente mais tarde.",
+        "Mensagem de rejeição quando o buffer de fila gratuita está cheio "
+        "(outage causa queue_full), farewell_text no close. "
+        "Source: routing-engine/main.py (overflow da admissão)"
+    ),
+
     # ── session ───────────────────────────────────────────────────────────────
     # Central TTL registry for all components that manage session-scoped Redis keys.
     # Consumers: ai-gateway, channel-gateway, orchestrator-bridge, conversation-writer,

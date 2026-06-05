@@ -41,6 +41,20 @@ _DEFAULTS: dict[str, Any] = {
     "msg_outage_rejection": "Não há atendentes disponíveis no momento. Por favor, tente novamente mais tarde.",
     "msg_queue_timeout":    "Tempo máximo de espera atingido. Por favor, tente novamente mais tarde.",
     "msg_no_resource":      "Não há recurso disponível para continuar o atendimento. Por favor, tente novamente mais tarde.",
+    # Fila de sistema (system-queue.md, Fase A) — proteções operacionais.
+    # queue_max_total: teto TOTAL do buffer grátis (sessões em fila muda,
+    #   isentas de C). Hard limit: Config fora ⇒ este default, nunca ilimitado.
+    # queue_max_wait_by_channel: teto de espera muda por canal (s); 0 = canal
+    #   não aceita fila muda (vai direto a outage — recomendado p/ voz: dead
+    #   air segura trunk). Canais ausentes ⇒ queue_max_wait_default_s (1800).
+    "queue_max_total": 100,
+    "queue_max_wait_by_channel": {
+        "voice":    300,
+        "webrtc":   300,
+        "webchat":  1800,
+        "whatsapp": 14_400,
+    },
+    "msg_queue_full": "Nossa fila de espera está cheia no momento. Por favor, tente novamente mais tarde.",
 }
 
 
