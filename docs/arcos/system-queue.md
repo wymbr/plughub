@@ -1,6 +1,6 @@
 # Fila de Sistema — tier gratuito
 
-> Estado: **esboço em discussão** (2026-06-05). Origem: decisão comercial da
+> Estado: **implementado** (Fases A+B, 2026-06-05). Origem: decisão comercial da
 > tipagem de pool (capacity-governance § Tipagem) — fila inteligente é agente IA
 > licenciado; o tier gratuito é a fila de sistema (sem agente, sem interação).
 > Pré-requisito do item 7 do capacity-governance (UX do available nos Monitores):
@@ -79,13 +79,17 @@ ao enqueue em si. A atendida tem teto natural (slots do pool de fila + admissão
    fila cheia (`queue_full`). Padrão de mercado: rejeita quando a FILA lota,
    não quando os atendentes lotam; demanda reprimida vira espera maior
    (visível no SLA) em vez de contato perdido.
-3. **`dequeued`/`abandoned` na fila muda**: routing emite `queue.dequeued` no
-   drain bem-sucedido e `queue.abandoned` no max_wait/disconnect → analytics
-   deriva espera real `queued→dequeued/abandoned` (a derivação interim removida
-   na Fase D volta, agora com evento correto, só para filas mudas).
-4. **Relatório**: `/reports/pools/queue` dual-source — segments (atendida) ∪
-   queue_events (muda); por pool, marcar o tier da fila (atendida/sistema/sem
-   fila) para o operador saber o que está comparando.
+3. **~~Eventos `dequeued`/`abandoned`~~ → SEGMENTOS SINTÉTICOS ✅ (superada na
+   implementação, 2026-06-05)**: descoberto no recon que o `_emit_queue_timeout`
+   JÁ emitia segmento sintético `role=queue` para fila muda no max_wait. A
+   Fase A generaliza: toda saída de fila muda emite o segmento sintético
+   (`handoff` na transição unadmitted→admitida; `abandoned` na desistência
+   detectada pelos drains) com a espera real (`first_queued` preservado através
+   de re-enfileiramentos). **Zero tópicos Kafka novos e zero dual-source**: o
+   `/reports/pools/queue` (Fase D, segments) passa a contar a fila muda sem
+   nenhuma mudança no analytics.
+4. **Relatório**: dual-source DESNECESSÁRIO (decisão 3); resta só marcar o
+   tier da fila por pool (atendida/sistema/sem fila) — Fase B.
 5. **Feedback ao cliente**: aviso inicial já existe (webchat); updates
    periódicos de posição via `deliver_text` = v2 opcional (não bloqueia o arco).
 
@@ -109,27 +113,63 @@ Isenção de C remove o limite comercial → os limites técnicos são explícit
    teto total; TTL nas chaves de espera; reconciler limpa `{t}:queue:unadmitted`
    e ZSETs de sessões fechadas.
 
-## Pendente (implementação)
+## Pendente → Fase A ✅ (2026-06-05, routing)
 
-**Fase A (routing)**:
-1. Isenção de C no enqueue mudo (condicionada à ausência de `queue_config`):
-   SREM dos buckets de admissão + kind set + member keys; SADD em
-   `{t}:queue:unadmitted`; re-admissão natural no drain.
-2. Overflow: admissão rejeitada (shared_full/quota/reservation_full) em pool
-   humano → enqueue mudo em vez de outage, enquanto SCARD(unadmitted) <
-   `max_queue_total`; estouro → outage `queue_full`. Canal com
-   `max_wait_by_channel = 0` (ex. voice) não entra em fila muda → outage direto.
-3. Config: `max_queue_total` + `queue_max_wait_by_channel` (Config API, com
-   defaults hard-coded — nunca ilimitado com Config fora).
-4. Eventos `queue.dequeued` (drain ok) e `queue.abandoned` (max_wait/disconnect).
-5. Reconciler: limpar `{t}:queue:unadmitted` de sessões fechadas; TTL backstop
-   nas chaves de espera.
-6. Drain com orçamento (re-publica ≤ headroom por ciclo).
+1. ✅ Isenção de C no enqueue mudo (`_persist_queued_contact`): condicionada à
+   ausência de `queue_config` (ou `force_mute` no overflow) — `admission.release`
+   (SREM buckets + kind + member keys) + SADD `{t}:queue:unadmitted` +
+   `first_queued` NX (score do ZSET = primeiro enqueue: re-enfileiramentos não
+   resetam posição nem relógio). Re-admissão natural no drain.
+2. ✅ Overflow (`_try_overflow_enqueue`): admissão rejeitada em pool
+   `agent_kind=human` com canal aceitando fila muda e buffer com vaga →
+   enqueue mudo (sempre mudo — tratamento atendido só após re-admissão);
+   buffer cheio → outage causa `queue_full` com `msg_queue_full`; canal 0 ou
+   pool IA → outage com a causa original.
+3. ✅ Config: `queue_max_total` (100) + `queue_max_wait_by_channel`
+   (voice/webrtc 300, webchat 1800, whatsapp 14400; 0 = sem fila muda) +
+   `msg_queue_full` — namespace `routing` (Config API seed + defaults
+   hard-coded no `routing_config`, nunca ilimitado com Config fora). Sweep de
+   timeout channel-aware p/ filas mudas (atendida mantém max_wait_s do pool);
+   canal 0 no enqueue mudo → close gracioso imediato (nunca dead air).
+4. ✅ Segmentos sintéticos (`mute_queue.resolve_mute_exit`): `handoff` na
+   transição unadmitted→admitida; `abandoned` nos drains (desistência) e
+   limpeza-sem-segmento no caminho de max_wait (que já emite o dele).
+5. ✅ Reconciler da admissão limpa `{t}:queue:unadmitted` de sessões fechadas
+   (backstop; TTL 7d nas chaves `first_queued`).
+6. ✅ Drain com orçamento — **corrigido na validação** (2026-06-05): a checagem
+   estrutural (1/pool/ciclo + capacidade de instância) NÃO bastava para
+   entradas não-admitidas — agente pronto + contrato cheio gerava churn
+   rejeita→re-enfileira a cada 5s com aviso repetido ao cliente. Fix: ambos os
+   drains (periódico + agent-ready) só re-publicam sessão `unadmitted` com
+   **headroom de admissão** (`AdmissionController.has_headroom`, read-only,
+   espelha o admit; fail-open); e o aviso de espera é deduplicado pela chave
+   `first_queued` (re-enfileiramento não re-avisa).
+7. ✅ Release imediato da admissão no `contact_closed` — **corrigido na
+   validação** (2026-06-05): a liberação era só do reconciler (~60s), e o
+   drain da fila muda depende do headroom → handoff pós-fechamento esperava
+   até 60s por vaga já livre. Event-driven agora (`SessionClosedEventHandler`
+   → `admission.release`); reconciler vira backstop. Latência do handoff:
+   ≤ ciclo do drain periódico (5s).
 
-**Fase B (analytics + UI)**:
-6. Consumer dos novos eventos → `queue_events`; dual-source no
-   `/reports/pools/queue` (segments=atendida ∪ events=muda) + tier da fila por
-   pool.
-7. platform-ui: label da causa `queue_full` na demanda reprimida (i18n);
-   relatório de fila com tier.
-8. Item 7 do capacity-governance destravado (admissível considera a isenção).
+## Nota de comportamento (validação 2026-06-05 — esperado, registrado)
+
+A vaga contratada (C) só libera no `contact_closed` real — que dispara APÓS os
+hooks de pós-atendimento (NPS/wrap-up). Cliente respondendo NPS = sessão ativa
+atendida por IA licenciada ⇒ **debita C até o fim** (coerente com o modelo;
+F5/disconnect encurta porque derruba o cliente e o NPS não segura). Já a
+capacidade do AGENTE humano libera no `agent_done` (Arc 14: wrap-up em hook
+agents não prende o humano) — por isso o Console pode mostrar a sessão antiga
+em wrap-up + uma nova. Trade-off com C apertado: NPS lento segura vaga e
+atrasa a fila — alavancas do operador: timeout dos hooks e dimensionamento de
+C. Isentar pós-atendimento furaria o modelo (IA atendendo sem debitar).
+
+## Fase B ✅ (2026-06-05 — analytics intocado, só UI)
+
+7. ✅ Causa `queue_full` na demanda reprimida ("Fila de espera cheia",
+   en + pt-BR).
+8. ✅ Tier da fila por pool na aba Fila (Analytics→Pools): badge
+   Atendida (IA) / Sistema (grátis) / — , derivado da config do registry
+   (`queue_config` ⇒ atendida; humano sem ⇒ sistema; IA ⇒ sem fila) — zero
+   mudança no analytics.
+9. **Arco concluído.** Item 7 do capacity-governance destravado (admissível
+   considera a isenção do unadmitted).

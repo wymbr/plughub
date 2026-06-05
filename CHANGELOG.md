@@ -2,6 +2,32 @@
 
 ---
 
+## Fila de sistema — Fase B: UI (arco concluído) (2026-06-05)
+
+Fase B enxuta (a decisão dos segmentos sintéticos eliminou qualquer mudança no analytics): **causa `queue_full`** na demanda reprimida ("Fila de espera cheia" / "Waiting queue full") e **tier da fila por pool** na aba Fila do Analytics→Pools — badge Atendida (IA) / Sistema (grátis) / "—", derivado da config do registry no client (`queue_config` ⇒ atendida; pool humano sem ⇒ sistema; pool IA ⇒ sem fila). i18n en + pt-BR. **Arco system-queue concluído** (spec → implementado); item 7 do capacity-governance destravado.
+
+---
+
+## Fila de sistema (tier gratuito) — Fase A: routing (2026-06-05)
+
+Implementa o tier gratuito de fila ([`system-queue.md`](docs/arcos/system-queue.md)): espera muda não consome capacidade contratada; rejeição na porta só quando a FILA lota, não quando os atendentes lotam.
+
+**Isenção de C** (`_persist_queued_contact` + novo `mute_queue.py`): enqueue em fila MUDA (pool sem `queue_config`, ou overflow) libera os slots de admissão (`AdmissionController.release` — buckets + kind + member keys) e marca em `{t}:queue:unadmitted` (SCARD = ocupação do buffer grátis). `first_queued` NX vira o score do ZSET: re-enfileiramentos (re-admissão negada no drain) não resetam posição nem relógio de espera. Fila ATENDIDA segue debitando C (é IA licenciada).
+
+**Overflow** (`_try_overflow_enqueue`): admissão rejeitada (shared_full/quota/reservation_full) em pool `agent_kind=human` → contato cai na fila muda gratuita (sempre muda; tratamento atendido só após re-admissão pelo drain) enquanto o buffer tiver vaga; buffer cheio → outage causa NOVA **`queue_full`** com `msg_queue_full`; canal sem fila muda ou pool IA → outage com a causa original.
+
+**Proteções operacionais** (Config API namespace `routing` + defaults hard-coded no `routing_config` — nunca ilimitado com Config fora): `queue_max_total` (100), `queue_max_wait_by_channel` (voice/webrtc 300s, webchat 1800s, whatsapp 4h; **0 = canal não aceita fila muda** → close gracioso imediato, nunca dead air). Sweep de timeout do drain periódico agora é **channel-aware** para filas mudas (atendida mantém `queue_config.max_wait_s`). Drain com orçamento confirmado estrutural no recon (1 contato/pool/ciclo + checagem de capacidade) — sem mudança.
+
+**Ledger analítico SEM tópicos novos** (decisão 3 do spec superada na implementação): toda saída de fila muda emite **segmento sintético `role=queue`** (`mute_queue.resolve_mute_exit`) — `handoff` na transição unadmitted→admitida (hook no consume loop, no-op barato para quem nunca enfileirou), `abandoned` na desistência detectada pelos drains; o caminho de max_wait mantém o segmento que já emitia (só limpa estado). O `/reports/pools/queue` (Fase D, segments) passa a contar fila muda com **zero mudança no analytics** — a Fase B encolhe para i18n da causa `queue_full` + tier da fila por pool.
+
+Reconciler da admissão ganha backstop do `unadmitted` (sessões fechadas; TTL 7d nas chaves).
+
+**Fix da validação (handoff lento pós-fechamento)**: o slot de admissão era liberado só pelo reconciler (~60s — aceitável quando admissão era gauge), mas o drain da fila muda depende do headroom → cliente esperava até 60s por vaga já livre. Agora o `SessionClosedEventHandler` (contact_closed) faz **release imediato** da admissão (event-driven); reconciler vira backstop. Latência do handoff pós-fechamento: ≤ ciclo do drain periódico (5s).
+
+**Fixes da validação (churn de drain + spam de aviso)**: com agente pronto e contrato cheio, os drains re-publicavam a sessão não-admitida a cada ciclo (5s) → admissão rejeitava → overflow re-enfileirava → novo aviso "Aguardando..." ao cliente (loop). (1) Novo `AdmissionController.has_headroom` (read-only, espelha o admit, fail-open): ambos os drains (periódico e agent-ready) só re-publicam sessão `unadmitted` com vaga no contrato — sem vaga, segue esperando em silêncio; (2) aviso de espera deduplicado pela chave `first_queued` — re-enfileiramento nunca re-avisa. Validado: overflow funcionando (`overflow → mute queue`, isenção + espera real preservada), fila muda com handoff de 17min medido no segmento sintético.
+
+---
+
 ## Capacity-governance item 2 / Etapa 2 — gates por tipo armados (2026-06-05)
 
 Fecha o item 2 do arco: C_ai e C_human deixam de ser display e passam a **negar criação de recurso**.

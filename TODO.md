@@ -224,11 +224,16 @@ natural no drain; C cheio → re-enfileira); (2 revisada) teto TOTAL do tenant �
 sem teto por pool; vizinho barulhento = refinamento futuro), estouro = outage
 causa NOVA `queue_full`; (2b) **overflow**: C esgotado em pool humano cai na
 fila muda gratuita em vez de rejeitar na porta (rejeita só com fila cheia);
-(3) routing emite `queue.dequeued`/`queue.abandoned` p/ derivar espera real da
-fila muda; (4) relatório dual-source (segments ∪ events) com tier da fila por
-pool; (5) updates de posição = v2 opcional. Fases A (routing) e B
-(analytics+UI) no § Pendente do spec. Pré-requisito do item 7 do
-capacity-governance.
+(3 superada na implementação) saídas da fila muda viram SEGMENTOS SINTÉTICOS
+`role=queue` (handoff/abandoned) — zero tópicos novos, zero dual-source, o
+relatório Fase D conta fila muda sem mudar; (4) resta só tier da fila por pool;
+(5) updates de posição = v2 opcional.
+**Fase A ✅** (2026-06-05, ver `CHANGELOG.md`): isenção de C + overflow +
+proteções (queue_max_total, max_wait por canal, queue_full) + segmentos
+sintéticos + backstops + fixes da validação (headroom nos drains, dedupe do
+aviso, release imediato no contact_closed). **Fase B ✅** (2026-06-05): causa
+queue_full na demanda reprimida + tier da fila (Atendida/Sistema) na aba Fila.
+**ARCO CONCLUÍDO** — item 7 do capacity-governance destravado.
 
 ---
 

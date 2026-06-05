@@ -176,7 +176,7 @@ const RejectedCard: React.FC<{ data: VolumeData | null }> = ({ data }) => {
   const all   = data?.totals?.contacts ?? 0
   const share = all > 0 ? Math.round((total / all) * 100) : 0
   const causeLabel = (c: string) =>
-    ['reservation_full', 'shared_full', 'quota'].includes(c)
+    ['reservation_full', 'shared_full', 'quota', 'queue_full'].includes(c)
       ? t(`pools.volume.rejected.cause.${c}`) : (c || '—')
 
   return (
@@ -366,7 +366,10 @@ const CapacitySubTab: React.FC<{ data: OccData | null; loading: boolean }> = ({ 
 
 // ── Queue (Fila) sub-tab ─────────────────────────────────────────────────────
 
-const FilaSubTab: React.FC<{ data: QueueData | null; loading: boolean }> = ({ data, loading }) => {
+const FilaSubTab: React.FC<{
+  data: QueueData | null; loading: boolean
+  queueTiers: Record<string, 'attended' | 'system' | 'none'>
+}> = ({ data, loading, queueTiers }) => {
   const { t } = useTranslation('agentReports')
   if (loading) return (
     <div className="h-48 flex items-center justify-center text-sm text-muted-light animate-pulse">{t('pools.volume.loading')}</div>
@@ -417,6 +420,7 @@ const FilaSubTab: React.FC<{ data: QueueData | null; loading: boolean }> = ({ da
           <thead className="bg-surface-muted">
             <tr className="border-b border-border text-2xs text-muted uppercase">
               <th className="text-left px-3 py-2">{t('pools.queue.cols.pool')}</th>
+              <th className="text-left px-3 py-2">{t('pools.queue.cols.tier')}</th>
               <th className="text-right px-3 py-2">{t('pools.queue.cols.contacts')}</th>
               <th className="text-right px-3 py-2">{t('pools.queue.cols.queued')}</th>
               <th className="text-right px-3 py-2">{t('pools.queue.cols.handoff')}</th>
@@ -430,6 +434,17 @@ const FilaSubTab: React.FC<{ data: QueueData | null; loading: boolean }> = ({ da
             {rows.map((r, i) => (
               <tr key={i} className="border-b border-border hover:bg-surface-muted">
                 <td className="px-3 py-2 text-dark">{r.pool_id || '—'}</td>
+                {/* Tier da fila (system-queue.md Fase B): atendida = IA licenciada;
+                    sistema = gratuita (espera muda, isenta de C). */}
+                <td className="px-3 py-2">
+                  {(() => {
+                    const tier = queueTiers[r.pool_id] ?? 'none'
+                    const cls = tier === 'attended'
+                      ? 'bg-blue-50 text-blue-700'
+                      : tier === 'system' ? 'bg-gray-100 text-gray-600' : 'text-muted-light'
+                    return <span className={`text-2xs px-1.5 py-0.5 rounded ${cls}`}>{t(`pools.queue.tier.${tier}`)}</span>
+                  })()}
+                </td>
                 <td className="px-3 py-2 text-right tabular-nums text-dark">{r.contacts}</td>
                 <td className="px-3 py-2 text-right tabular-nums text-muted">{r.queued}</td>
                 <td className="px-3 py-2 text-right tabular-nums text-green">{r.handoff ?? 0}</td>
@@ -518,6 +533,28 @@ export default function AnalisePoolsPage() {
   const [occ,     setOcc]     = useState<OccData | null>(null)
   const [queue,   setQueue]   = useState<QueueData | null>(null)
   const [loading, setLoading] = useState(false)
+
+  // Tier da fila por pool (system-queue.md Fase B): derivado da config do
+  // registry (sem mudar o analytics) — queue_config ⇒ atendida (IA licenciada);
+  // pool humano sem ⇒ fila de sistema (gratuita); pool IA ⇒ sem fila.
+  const [queueTiers, setQueueTiers] = useState<Record<string, 'attended' | 'system' | 'none'>>({})
+  useEffect(() => {
+    if (!tenantId) return
+    let cancelled = false
+    fetch('/v1/pools', { headers: { 'x-tenant-id': tenantId } })
+      .then(r => r.ok ? r.json() : Promise.reject(r.status))
+      .then((d: { pools?: Array<{ pool_id: string; queue_config?: unknown; agent_kind?: string }> }) => {
+        if (cancelled) return
+        const map: Record<string, 'attended' | 'system' | 'none'> = {}
+        for (const p of d.pools ?? []) {
+          map[p.pool_id] = p.queue_config ? 'attended'
+            : p.agent_kind === 'human' ? 'system' : 'none'
+        }
+        setQueueTiers(map)
+      })
+      .catch(() => { /* coluna mostra '—' */ })
+    return () => { cancelled = true }
+  }, [tenantId])
 
   useEffect(() => {
     if (!tenantId || subTab !== 'volume') return
@@ -612,7 +649,7 @@ export default function AnalisePoolsPage() {
       {/* Conteúdo */}
       <div className="flex-1 overflow-auto p-4">
         {subTab === 'volume'   && <VolumeSubTab data={volume} loading={loading} />}
-        {subTab === 'queue'    && <FilaSubTab data={queue} loading={loading} />}
+        {subTab === 'queue'    && <FilaSubTab data={queue} loading={loading} queueTiers={queueTiers} />}
         {subTab === 'capacity' && <CapacitySubTab data={occ} loading={loading} />}
         {subTab === 'sla'      && <SlaSubTab data={queue} loading={loading} />}
       </div>

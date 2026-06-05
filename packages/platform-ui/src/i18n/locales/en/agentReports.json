@@ -21,7 +21,7 @@
         "share": "% of demand",
         "none": "No rejected contacts in the period.",
         "cols": { "pool": "Pool", "cause": "Cause", "contacts": "Contacts" },
-        "cause": { "reservation_full": "Pool reservation full", "shared_full": "Shared capacity full", "quota": "Contracted quota" }
+        "cause": { "reservation_full": "Pool reservation full", "shared_full": "Shared capacity full", "quota": "Contracted quota", "queue_full": "Waiting queue full" }
       }
     },
     "capacity": {
@@ -49,7 +49,8 @@
       "waitAvg": "Avg wait (s)",
       "available": "Available",
       "hint": "Wait = duration of the queue segment (attended queue). Abandon % over queued contacts.",
-      "cols": { "pool": "Pool", "contacts": "Contacts", "queued": "Queued", "handoff": "Post-queue", "abandoned": "Abandoned", "abandonRate": "Aband. %", "avgWait": "Avg wait", "p95Wait": "p95" }
+      "cols": { "pool": "Pool", "tier": "Queue", "contacts": "Contacts", "queued": "Queued", "handoff": "Post-queue", "abandoned": "Abandoned", "abandonRate": "Aband. %", "avgWait": "Avg wait", "p95Wait": "p95" },
+      "tier": { "attended": "Attended (AI)", "system": "System (free)", "none": "—" }
     },
     "sla": {
       "title": "SLA attainment by pool",
