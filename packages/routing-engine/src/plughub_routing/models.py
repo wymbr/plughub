@@ -194,6 +194,11 @@ class PoolConfig(BaseModel):
     # settings.queue_max_wait_default_s still bounds the wait (mute queues incl.).
     queue_config: dict | None = None
 
+    # Capacity-governance item 2 (2026-06-05): tipagem do pool — "human" | "ai".
+    # Backfilled pelo registry (deploy slot ⇒ ai; senão human). Base do gate por
+    # tipo na admissão (sessões em pools 'ai' ≤ C_ai) — Etapa 2 do item 2.
+    agent_kind: str | None = None
+
 
 # ─────────────────────────────────────────────
 # Queue

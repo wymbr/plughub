@@ -91,11 +91,21 @@ poolsRouter.post("/", async (req: Request, res: Response, next: NextFunction) =>
     )
     if (violation) return res.status(422).json(violation)
 
+    // Capacity-governance item 2: queue_config ⇒ agent_kind 'human' (fila
+    // atendida só para recurso escasso/lento; para IA o slot da fila
+    // instanciaria o próprio agente solicitado).
+    if (body.queue_config && body.agent_kind === "ai") {
+      return res.status(422).json({
+        error: "queue_config exige agent_kind 'human' — pool IA não tem fila atendida",
+      })
+    }
+
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const pool = await prisma.pool.create({
       data: {
         pool_id:               body.pool_id,
         tenant_id:             tenantId,
+        agent_kind:            body.agent_kind ?? null,   // null → backfill infere no boot
         description:           body.description ?? null,
         channel_types:         body.channel_types,
         sla_target_ms:           body.sla_target_ms,
@@ -242,10 +252,22 @@ poolsRouter.put("/:pool_id", async (req: Request, res: Response, next: NextFunct
     )
     if (violation) return res.status(422).json(violation)
 
+    // Capacity-governance item 2: queue_config ⇒ agent_kind 'human' — valida o
+    // ESTADO RESULTANTE (campo novo ou existente, fila nova ou existente).
+    const ex = existing as { agent_kind: string | null; queue_config: unknown }
+    const resultingKind  = body.agent_kind !== undefined ? body.agent_kind : ex.agent_kind
+    const resultingQueue = body.queue_config !== undefined ? body.queue_config : ex.queue_config
+    if (resultingQueue != null && resultingKind === "ai") {
+      return res.status(422).json({
+        error: "queue_config exige agent_kind 'human' — pool IA não tem fila atendida",
+      })
+    }
+
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const updated = await prisma.pool.update({
       where: { id: existing.id },
       data: {
+        ...(body.agent_kind            !== undefined && { agent_kind:            body.agent_kind }),
         ...(body.description           !== undefined && { description:           body.description }),
         ...(body.channel_types         !== undefined && { channel_types:         body.channel_types }),
         ...(body.sla_target_ms           !== undefined && { sla_target_ms:           body.sla_target_ms }),

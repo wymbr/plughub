@@ -20,24 +20,30 @@ tenant_id: tenant_demo
 pools:
 
   - pool_id: demo_ia
+    agent_kind: ai
     deploy: { skill_id: skill_triagem_v2, max_concurrent_sessions: 10 }
     description: "Pool IA — entry point do fluxo IVR com botões (agente_demo_ia_v1)"
     channel_types: [webchat, whatsapp]
     sla_target_ms: 480000
 
   - pool_id: sac_ia
+    agent_kind: ai
     deploy: { skill_id: skill_atendimento_sac_v1, max_concurrent_sessions: 10 }
     description: "Pool IA — atendimento SAC via LLM (Claude)"
     channel_types: [webchat, whatsapp]
     sla_target_ms: 480000
 
   - pool_id: fila_humano
+    agent_kind: ai
     deploy: { skill_id: skill_fila_v1, max_concurrent_sessions: 50 }
     description: "Pool intermediário — fila para agente humano"
     channel_types: [webchat, whatsapp]
     sla_target_ms: 300000
 
   - pool_id: retencao_humano
+    # Capacity-governance item 2: tipagem explícita — pool humano (queue_config
+    # exige human; logins contam contra C_human). Pools IA declaram agent_kind: ai.
+    agent_kind: human
     description: "Pool de agentes humanos — retenção e suporte especializado"
     channel_types: [webchat, whatsapp]
     sla_target_ms: 300000
@@ -76,6 +82,7 @@ pools:
       post_human: []
 
   - pool_id: avaliacao_ia
+    agent_kind: ai
     deploy: { skill_id: skill_avaliacao_v1, max_concurrent_sessions: 20 }
     # IMPORTANTE: este pool NÃO deve estar na cadeia de roteamento ao vivo.
     # Apenas agentes de avaliação pós-sessão devem ser registrados aqui.
@@ -84,6 +91,7 @@ pools:
     sla_target_ms: 600000
 
   - pool_id: contexto_ia
+    agent_kind: ai
     deploy: { skill_id: skill_contexto_ia_v1, max_concurrent_sessions: 20 }
     # IMPORTANTE: pool de agentes especialistas em acumulação de contexto.
     # Invocados via task step (mode: assist) — sem tráfego direto de clientes.
@@ -94,6 +102,7 @@ pools:
     sla_target_ms: 30000
 
   - pool_id: portabilidade_ia
+    agent_kind: ai
     deploy: { skill_id: skill_portabilidade_intake_v1, max_concurrent_sessions: 10 }
     # Pool do agente de intake de portabilidade.
     # Coleta número atual + operadora destino e persiste no ContextStore.
@@ -104,6 +113,7 @@ pools:
     sla_target_ms: 300000
 
   - pool_id: portabilidade_processo_ia
+    agent_kind: ai
     deploy: { skill_id: skill_portabilidade_demo_v1, max_concurrent_sessions: 20 }
     # Arc 19: pool webhook para o processo assíncrono de portabilidade.
     # Disparado pelo intake via workflow_trigger MCP tool.
@@ -118,6 +128,7 @@ pools:
     sla_target_ms: 172800000  # 48h em ms
 
   - pool_id: portabilidade_confirmacao
+    agent_kind: ai
     deploy: { skill_id: skill_agente_confirmacao_portabilidade_v1, max_concurrent_sessions: 10 }
     # Arc 19 delegate pattern: pool do agente de I/O de confirmação de portabilidade.
     # Acionado pelo delegate() step em skill_portabilidade_demo_v1 após aprovação
@@ -128,6 +139,7 @@ pools:
     sla_target_ms: 86400000  # 24h em ms
 
   - pool_id: reembolso_ia
+    agent_kind: ai
     deploy: { skill_id: skill_reembolso_intake_v1, max_concurrent_sessions: 10 }
     # Pool do agente de intake de reembolso.
     # Coleta número do pedido + motivo e persiste no ContextStore.
@@ -138,6 +150,7 @@ pools:
     sla_target_ms: 300000
 
   - pool_id: auth_sac_ia
+    agent_kind: ai
     deploy: { skill_id: skill_atendimento_auth_v1, max_concurrent_sessions: 10 }
     # Pool da composição Auth → SAC (Tier 2 — Sprint 1D).
     # Verifica identidade do cliente antes de rotear para sac_ia.
@@ -149,6 +162,7 @@ pools:
     sla_target_ms: 180000
 
   - pool_id: copilot_sac
+    agent_kind: ai
     deploy: { skill_id: skill_copilot_sac_v1, max_concurrent_sessions: 10 }
     # Pool do co-pilot especialista SAC.
     # Ativado via @mention pelo agente humano de retenção (@copilot).
@@ -158,6 +172,7 @@ pools:
     sla_target_ms: 15000
 
   - pool_id: auth_ia
+    agent_kind: ai
     deploy: { skill_id: skill_auth_ia_v1, max_concurrent_sessions: 20 }
     # Pool do agente de autenticação segura.
     # Executa o fluxo masked begin_transaction → coletar_pin → validar_pin → end_transaction.
@@ -167,6 +182,7 @@ pools:
     sla_target_ms: 60000
 
   - pool_id: auth_form_ia
+    agent_kind: ai
     deploy: { skill_id: skill_auth_form_v1, max_concurrent_sessions: 20 }
     # Pool do agente de autenticação via formulário.
     # Demonstra field-level masking: email (plain) + senha + codigo_2fa (masked).
@@ -176,6 +192,7 @@ pools:
     sla_target_ms: 60000
 
   - pool_id: wrapup_ia
+    agent_kind: ai
     deploy: { skill_id: skill_wrapup_v1, max_concurrent_sessions: 20 }
     # Pool do agente de wrap-up pós-atendimento.
     # Acionado via pool hook on_human_end — obrigatório quando configurado.
@@ -186,6 +203,7 @@ pools:
     sla_target_ms: 180000
 
   - pool_id: nps_ia
+    agent_kind: ai
     deploy: { skill_id: skill_nps_v1, max_concurrent_sessions: 20 }
     # Pool do agente NPS pós-atendimento.
     # Acionado via pool hook on_human_end, em paralelo com wrapup_ia.
@@ -196,6 +214,7 @@ pools:
     sla_target_ms: 120000
 
   - pool_id: evaluador_echo_ia
+    agent_kind: ai
     deploy: { skill_id: skill_evaluador_echo_v1, max_concurrent_sessions: 20 }
     # Pool do avaliador echo — teste do receive step em tempo real.
     # Acionado via pool hook on_human_start do pool retencao_humano.

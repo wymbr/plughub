@@ -186,12 +186,36 @@ helper `lib/capacity.ts` compartilhado com 3a).
 contratado-cêntrica (KPI Alocado como diagnóstico) + `pricing-seed` do demo
 (ai 300 + human 10 → C=310, não-destrutivo). Resta do arco: 2 (gates por
 tipo) e 7 (UX do available).
+**Item 2 / Etapa 1 ✅** (2026-06-05, ver `CHANGELOG.md`): `agent_kind` ponta a
+ponta (schemas+Prisma+backfill+rotas+routing+YAML) + quotas por tipo
+(`{t}:quota:capacity:{ai_agent|human_agent}`) + decisões de tipagem fechadas
+no spec (queue_config⇒human; fila atendida=ai cobrável; tier grátis = fila de
+sistema, arco futuro). Etapa 2 pendente: gates (login humano ≤ C_human;
+sessões IA ≤ C_ai na admissão; validação recurso×kind no registro).
 **Item 7 (novo, 2026-06-04)** — revisão do "available" nos Monitores
 (Sessions/Pools/Agents + consumidores do snapshot): físico (slots livres) ≠
 admissível (reserva − uso, ou min(slots, shared restante)) — pool pode exibir
 20 e rejeitar por shared_full. Definir UX (um número ou dois; como exibir o
 shared; snapshot enriquecido com `admissible`) antes de implementar — ver § 7
 do spec.
+
+---
+
+## Fila de sistema — tier gratuito *(arco futuro, registrado 2026-06-05)*
+
+Ressuscitar o tratamento de fila pelo sistema (sem agente) convivendo com a fila
+atendida, completando o modelo comercial da tipagem de pool (ver
+`capacity-governance.md` § Tipagem de pool): **fila de sistema = grátis, sem
+licença e sem debitar C** (ninguém atende — exige teto próprio `max_queue_length`
+p/ não virar buffer infinito); **fila atendida = agente IA licenciado** (upsell).
+`queue_config` null → fila de sistema; apontando skill → atendida. Sem isso, o
+tenant que não paga fila inteligente tem rejeição na porta (sem downgrade).
+Esboço de esforço (ordem de uma Fase D): routing reativa hold/dequeue no ledger
+ZSET + emite `dequeued` (dívida conhecida do queue_events); analytics dual-source
+no `/reports/pools/queue` (segments p/ atendida ∪ `queued→dequeued/abandoned` p/
+sistema — a derivação interim removida na Fase D volta, agora com evento correto);
+canais com feedback mínimo nativo (webchat "posição N" via deliver_text; voice
+hold futuro); decisão de contabilização na admissão (isenção de C + teto próprio).
 
 ---
 

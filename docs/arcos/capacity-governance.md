@@ -68,9 +68,33 @@ removida da visão do total no fechamento da Fase 2; aqui sai do modelo).
 
 ---
 
+## Tipagem de pool — decisões fechadas (2026-06-05, pré item 2)
+
+- **`agent_kind: "human" | "ai"` no pool** (Prisma + `PoolRegistrationSchema` +
+  YAML + UI). Canal NUNCA é associado a tipo — canal aponta para pool; o pool
+  declara o tipo. A pergunta "webhook conta como ai_agent?" se dissolve: webhook
+  pools declaram `ai`.
+- **Backfill por inferência, uma vez**: pool existente sem o campo → deploy slot
+  ⇒ `ai`, senão `human`; daí em diante declaração explícita (RegistrySyncer não
+  quebra).
+- **Validação no registro de recurso** ("login no pool"): bootstrap/bridge
+  registra instância IA, `registerHumanAgent` registra humano — ambos checam
+  `tipo do recurso == agent_kind do pool`. Pool misto proibido.
+- **`queue_config` ⇒ `agent_kind: human`** (422): fila atendida só faz sentido
+  para recurso escasso/lento (humano) — para IA, o slot da fila instanciaria o
+  próprio agente solicitado; para máquina-a-máquina, backpressure ≠ fila.
+- **Fila atendida é `ai` e cobrável** (opção "2" — sem terceiro kind): racional
+  comercial — fila inteligente É um agente IA licenciado; o tier gratuito é a
+  **fila de sistema** (sem agente), arco futuro registrado no TODO. Isolamento
+  operacional da fila via `session_reservation` no pool de fila; segmentar fila
+  nos relatórios via vínculo estrutural (`queue_config`) para não poluir o
+  sinal de dimensionamento de C_ai.
+- **Gates por tipo** (item 2) contam contra `C_ai`/`C_human` pelo `agent_kind`
+  do pool da sessão/login.
+
 ## Questões em aberto (resolver na implementação)
 
-- Mapeamento pool→`resource_type`: webhook pools contam como `ai_agent`?
+- ~~Mapeamento pool→`resource_type`~~ ✅ resolvida acima (`agent_kind` no pool).
 - ~~Granularidade das chaves de quota~~ ✅ resolvida no item 1 (ver § Pendente):
   uma chave por tenant agora; por `resource_type` junto com os gates por tipo.
 - Interação com reservas comerciais ativáveis (C muda ao ativar/desativar reserva
@@ -89,8 +113,18 @@ removida da visão do total no fechamento da Fase 2; aqui sai do modelo).
    corrigido. **Granularidade resolvida**: uma chave por tenant (a que tem
    leitores — admissão híbrida + checkConcurrentSessions); chaves por
    resource_type ficam para os gates por tipo (itens 2) quando existirem leitores.
-2. Gates de criação: instância IA (bootstrap/routing), login humano concorrente
-   (auth/registry), admissão de sessão (`assertQuota` passa a ter chave).
+2. Gates de criação — **Etapa 1 ✅** (2026-06-05, fundação): `agent_kind` ponta a
+   ponta — `PoolRegistrationSchema` (@plughub/schemas), Prisma + **backfill por
+   inferência no boot** do registry (deploy slot ⇒ ai; senão human), persistência
+   e validação `queue_config ⇒ human` (422, estado resultante) no POST/PUT de
+   pool, propagação ao routing (`PoolConfig.agent_kind` via pool.registered/
+   updated), `tenant_demo.yaml` com declaração explícita (16 ai + retencao
+   human), e quotas por tipo no pricing (`{t}:quota:capacity:ai_agent` /
+   `:human_agent`, mesmo recompute/DEL do quota sync).
+   **Etapa 2 (pendente)**: os gates em si — login humano concorrente ≤ C_human
+   no `registerHumanAgent` (mcp-server, com erro claro no Console) e sessões em
+   pools `ai` ≤ C_ai na admissão (routing, causa `quota` → demanda reprimida);
+   validação de registro de recurso (tipo do recurso == agent_kind do pool).
 3. Validações de config:
    - **3a ✅** (2026-06-04) pool: `Σ session_reservation ≤ C` / `shared ≥ 0` no
      agent-registry (POST/PUT de pool) — C lido de `{t}:quota:max_concurrent_sessions`;

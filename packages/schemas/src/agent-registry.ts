@@ -155,6 +155,16 @@ export type PoolHooks = z.infer<typeof PoolHooksSchema>
 
 export const PoolRegistrationSchema = z.object({
   pool_id:                z.string().regex(/^[a-z0-9_]+$/),
+  /**
+   * Tipagem do pool (capacity-governance item 2, 2026-06-05).
+   * Canal NUNCA é associado a tipo — canal aponta para pool; o pool declara.
+   * Governa: gates por tipo (C_ai/C_human), validação de registro de recurso
+   * (instância IA × login humano — pool misto proibido) e a regra
+   * queue_config ⇒ human (fila atendida só para recurso escasso/lento).
+   * Opcional: pools legados são backfilled por inferência no boot do registry
+   * (deploy slot ⇒ "ai"; senão "human").
+   */
+  agent_kind:             z.enum(["human", "ai"]).optional(),
   description:            z.string().optional(),
   channel_types:          z.array(ChannelSchema).min(1),
   sla_target_ms:          z.number().int().positive(),

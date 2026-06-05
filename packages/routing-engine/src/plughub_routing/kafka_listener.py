@@ -188,6 +188,8 @@ class RegistryEventHandler:
                 session_reservation      = pool_data.get("session_reservation") or None,
                 # Fase E: queue treatment passthrough (max_wait_s enforcement)
                 queue_config             = pool_data.get("queue_config") or None,
+                # Capacity-governance item 2: tipagem do pool (gate por tipo)
+                agent_kind               = pool_data.get("agent_kind") or None,
             )
             await self._pools.save_pool_config(config)
             logger.info(

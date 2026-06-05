@@ -34,6 +34,11 @@ from . import db as pricing_db
 logger = logging.getLogger("plughub.pricing.quota_sync")
 
 _QUOTA_KEY = "{tenant_id}:quota:max_concurrent_sessions"
+# Item 2 (2026-06-05) — quotas por tipo, base dos gates de criação:
+#   capacity:ai_agent    → gate de sessões em pools agent_kind='ai' (admissão)
+#   capacity:human_agent → gate de logins humanos concorrentes (registerHumanAgent)
+_QUOTA_TYPE_KEY = "{tenant_id}:quota:capacity:{resource_type}"
+_AGENT_TYPES    = ("ai_agent", "human_agent")
 
 
 async def sync_tenant(
@@ -41,7 +46,7 @@ async def sync_tenant(
     pg_pool:      asyncpg.Pool,
     tenant_id:    str,
 ) -> int | None:
-    """Recalcula C do tenant e grava/remove a quota. Retorna C (None se sync off/erro)."""
+    """Recalcula C do tenant e grava/remove as quotas (total + por tipo)."""
     if redis_client is None:
         return None
     try:
@@ -54,6 +59,17 @@ async def sync_tenant(
         else:
             await redis_client.delete(key)
             logger.info("quota sync: %s removed (no configured agent capacity)", key)
+
+        # Por tipo (item 2): C_ai / C_human — mesmo recompute, mesma semântica DEL.
+        by_type = {t["resource_type"]: int(t["total"] or 0) for t in cap.get("by_type", [])}
+        for rtype in _AGENT_TYPES:
+            tkey = _QUOTA_TYPE_KEY.format(tenant_id=tenant_id, resource_type=rtype)
+            tval = by_type.get(rtype, 0)
+            if tval > 0:
+                await redis_client.set(tkey, str(tval))
+                logger.info("quota sync: %s = %d", tkey, tval)
+            else:
+                await redis_client.delete(tkey)
         return total
     except Exception as exc:
         logger.warning("quota sync failed tenant=%s — %s", tenant_id, exc)

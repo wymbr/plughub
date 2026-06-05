@@ -22,6 +22,9 @@ model Pool {
   tenant_id String
   status    PoolStatus @default(active)
 
+  // Capacity-governance item 2 (2026-06-05): tipagem do pool — "human" | "ai".
+  // Nullable: backfill por inferência no boot (deploy slot ⇒ ai; senão human).
+  agent_kind             String?
   description            String?
   channel_types          String[]
   sla_target_ms          Int

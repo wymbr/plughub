@@ -2,6 +2,16 @@
 
 ---
 
+## Capacity-governance item 2 / Etapa 1 — agent_kind no pool + quotas por tipo (2026-06-05)
+
+Fundação dos gates por tipo. Decisões fechadas com o usuário (registradas no spec § Tipagem de pool): canal nunca é tipado — o **pool declara** `agent_kind: human|ai`; `queue_config ⇒ human` (fila atendida só para recurso escasso/lento — para IA, o slot da fila instanciaria o próprio agente); fila atendida é `ai` **cobrável** (o tier gratuito é a fila de sistema — arco futuro registrado no TODO); pool misto proibido (validação de registro na Etapa 2).
+
+**@plughub/schemas**: `PoolRegistrationSchema.agent_kind` (`enum human|ai`, opcional). **agent-registry**: coluna `Pool.agent_kind` (nullable) + **backfill por inferência no boot** (deploy slot `current` ⇒ `ai`; senão `human` — roda uma vez por pool, declaração explícita daí em diante); POST/PUT persistem o campo; validação `queue_config ⇒ human` por **estado resultante** (422). **routing-engine**: `PoolConfig.agent_kind` populado via `pool.registered/updated` (base do gate de admissão da Etapa 2). **pricing-api** (`quota_sync.py`): além do total, grava `{t}:quota:capacity:ai_agent` e `{t}:quota:capacity:human_agent` (C_ai/C_human, mesmo recompute idempotente, DEL quando 0). **tenant_demo.yaml**: `agent_kind` explícito nos 17 pools (16 `ai` + `retencao_humano` `human`).
+
+Etapa 2 (pendente): gate de login humano concorrente (`registerHumanAgent` ≤ C_human, erro claro no Console), gate de sessões IA na admissão (≤ C_ai, causa `quota`), validação tipo-do-recurso × kind-do-pool no registro.
+
+---
+
 ## Capacity-governance itens 6 + 5 — demo coerente + aba Capacidade contratado-cêntrica (2026-06-04)
 
 **Item 6 — `pricing-seed`** (`infra/seed/seed_pricing.py` + serviço no `docker-compose.demo.yml`): recursos contratados do demo coerentes com os deploys do `tenant_demo.yaml` — `ai_agent×300` (Σ declarada do YAML = 280 + margem p/ pools de teste) + `human_agent×10` → **C=310**; quota de admissão gravada pelo quota sync na subida. **Não-destrutivo**: se o tenant já tem qualquer resource, o seed pula (experimentos do operador — ex. testes de gate com C baixo — sobrevivem a re-`up`; para re-semear, delete os resources). Elimina o estado "295 provisionados vs 25 contratados" do demo fresco.
