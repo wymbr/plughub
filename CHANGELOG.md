@@ -2,6 +2,18 @@
 
 ---
 
+## Capacity-governance item 7a — Monitor com físico × admissível, regimes e donuts (2026-06-05)
+
+Fecha a parte tempo-real do item 7: o Monitor passa a contar a verdade da admissão (reserved × shared × fila gratuita), não só a física.
+
+**routing-engine** (`admission.py`): novo HASH `{t}:admission:shared_pools` {sid→pool} — **atribuição exata** do consumo do shared por pool (o SET continua sendo O limite; HSET/HDEL nos mesmos pontos do member key: admit/idempotente/migração/release/reconciler) + higiene no reconciler (entradas órfãs ⇒ HDEL; Σ fatias == SCARD por construção).
+
+**agent-registry** (`operational.ts`): `GET /v1/operational/pools` enriquecido — por pool: `admission_scope` (reserved/shared), `reservation`, `admitted` (debitando C), `active_sessions`, `queue_mute`/`queue_attended` (split via `unadmitted`), `queue_tier`, **`admissible`** (fatia restante, ou shared restante, e pools IA limitados também por C_ai; `admissible_shared` marca o ⊕) — tudo read-only do Redis, sem tocar o hot path. Novo bloco `summary`: C/admitted/headroom, em atendimento, fila at/muda, `shared.by_pool` (fatias exatas do HASH), reservas usadas, buffer usado/teto (teto via Config API `queue_max_total`, cache 60s, default 100). Env `CONFIG_API_URL` no compose.
+
+**platform-ui**: **Monitor/Pools** reorganizado — tiles do pipeline (Contratado usado/C + folga · Em atendimento · Em fila at/grátis · Sala de espera gratuita usado/teto); **donuts** "total e como está sendo consumido" (Compartilhado com fatias por pool + disponível; mini-donuts por pool reservado; Sala de espera gratuita); tabela em **seções por regime** (Reservados = fatia própria / Compartilhado = sem teto por pool) com colunas novas: Atend., Fila (at/grátis), **Disp (fís/adm⊕)** — dois números, vermelho quando admissível 0 (agente livre + contrato cheio fica visível). **Monitor/Sessions** ganha os tiles Contratado e Sala de espera (mesmo summary). i18n en + pt-BR (`pools.admission.*`).
+
+---
+
 ## Fila de sistema — Fase B: UI (arco concluído) (2026-06-05)
 
 Fase B enxuta (a decisão dos segmentos sintéticos eliminou qualquer mudança no analytics): **causa `queue_full`** na demanda reprimida ("Fila de espera cheia" / "Waiting queue full") e **tier da fila por pool** na aba Fila do Analytics→Pools — badge Atendida (IA) / Sistema (grátis) / "—", derivado da config do registry no client (`queue_config` ⇒ atendida; pool humano sem ⇒ sistema; pool IA ⇒ sem fila). i18n en + pt-BR. **Arco system-queue concluído** (spec → implementado); item 7 do capacity-governance destravado.

@@ -17,6 +17,7 @@
  */
 import React, { useCallback, useEffect, useState } from 'react'
 import { ChevronDown, ChevronRight, Server } from 'lucide-react'
+import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer } from 'recharts'
 import { useTranslation } from 'react-i18next'
 import { useAuth } from '@/auth/useAuth'
 import Spinner from '@/components/ui/Spinner'
@@ -29,6 +30,7 @@ interface PoolOp {
   sla_target_ms:       number
   channel_types:       string[]
   pool_status:         string
+  agent_kind:          string | null
   op_status:           'available' | 'queued' | 'empty' | 'unknown'
   available:           number
   queue_length:        number
@@ -36,6 +38,30 @@ interface PoolOp {
   snapshot_age_ms:     number | null
   snapshot_updated_at: string | null
   has_snapshot:        boolean
+  // Item 7a (capacity-governance) — admissão por regime
+  admission_scope:     'reserved' | 'shared'
+  reservation:         number | null
+  admitted:            number
+  active_sessions:     number
+  queue_mute:          number
+  queue_attended:      number
+  queue_tier:          'attended' | 'system' | 'none'
+  admissible:          number | null
+  admissible_shared:   boolean
+}
+
+interface OpSummary {
+  contracted:     number | null
+  admitted_total: number
+  headroom:       number | null
+  in_service:     number
+  queue_total:    number
+  queue_attended: number
+  queue_mute:     number
+  shared:   { used: number; limit: number | null; by_pool: Record<string, number> }
+  reserved: Array<{ pool_id: string; reservation: number; used: number }>
+  buffer:   { used: number; limit: number }
+  ai:       { cap: number | null; used: number }
 }
 
 interface QueueEntry {
@@ -79,13 +105,13 @@ function statusConfig(op: PoolOp['op_status']) {
 
 // ── API ────────────────────────────────────────────────────────────────────────
 
-async function fetchPools(tenantId: string): Promise<PoolOp[]> {
+async function fetchPools(tenantId: string): Promise<{ items: PoolOp[]; summary: OpSummary | null }> {
   const res = await fetch('/v1/operational/pools', {
     headers: { 'x-tenant-id': tenantId },
   })
   if (!res.ok) throw new Error(`HTTP ${res.status}`)
   const body = await res.json()
-  return body.items ?? []
+  return { items: body.items ?? [], summary: body.summary ?? null }
 }
 
 async function fetchQueue(tenantId: string, poolId: string): Promise<QueueEntry[]> {
@@ -95,6 +121,67 @@ async function fetchQueue(tenantId: string, poolId: string): Promise<QueueEntry[
   if (!res.ok) return []
   const body = await res.json()
   return body.queue ?? []
+}
+
+// ── Item 7a — donuts "total e como está sendo consumido" ──────────────────────
+
+const DONUT_COLORS = ['#1B4F8A', '#2D9CDB', '#00B4D8', '#059669', '#D97706', '#7C3AED', '#DC2626', '#0891B2', '#EAB308', '#64748B']
+const FREE_COLOR   = '#E5E7EB'
+
+function ConsumptionDonut({
+  title, subtitle, slices, free, freeLabel, height = 150,
+}: {
+  title: string; subtitle?: string
+  slices: Array<{ name: string; value: number }>
+  free: number | null; freeLabel: string; height?: number
+}) {
+  const data = [
+    ...slices.filter(s => s.value > 0),
+    ...(free !== null && free > 0 ? [{ name: freeLabel, value: free, _free: true }] : []),
+  ]
+  const total = data.reduce((s, d) => s + d.value, 0)
+  return (
+    <div className="rounded-xl bg-white border border-border p-3 flex-1 min-w-[220px]">
+      <div className="text-xs font-semibold text-dark">{title}</div>
+      {subtitle && <div className="text-2xs text-muted">{subtitle}</div>}
+      {total === 0 ? (
+        <div className="flex items-center justify-center text-2xs text-muted-light" style={{ height }}>—</div>
+      ) : (
+        <ResponsiveContainer width="100%" height={height}>
+          <PieChart>
+            <Pie data={data} dataKey="value" nameKey="name" cx="50%" cy="50%"
+                 innerRadius={36} outerRadius={56} paddingAngle={1}>
+              {data.map((d, i) => (
+                <Cell key={i} fill={(d as { _free?: boolean })._free ? FREE_COLOR : DONUT_COLORS[i % DONUT_COLORS.length]} />
+              ))}
+            </Pie>
+            <Tooltip />
+          </PieChart>
+        </ResponsiveContainer>
+      )}
+    </div>
+  )
+}
+
+function MiniDonut({ label, used, total }: { label: string; used: number; total: number }) {
+  const data = [
+    { name: 'used', value: used },
+    { name: 'free', value: Math.max(0, total - used) },
+  ]
+  return (
+    <div className="flex flex-col items-center px-2">
+      <ResponsiveContainer width={72} height={72}>
+        <PieChart>
+          <Pie data={data} dataKey="value" cx="50%" cy="50%" innerRadius={20} outerRadius={32}>
+            <Cell fill={used >= total ? '#DC2626' : '#1B4F8A'} />
+            <Cell fill={FREE_COLOR} />
+          </Pie>
+        </PieChart>
+      </ResponsiveContainer>
+      <span className="text-2xs text-dark font-medium truncate max-w-[90px]">{label}</span>
+      <span className="text-2xs text-muted tabular-nums">{used}/{total}</span>
+    </div>
+  )
 }
 
 // ── PoolStatusCard — reusable for dashboard (Task #35) ─────────────────────────
@@ -230,6 +317,7 @@ export default function PoolsPage() {
   const { t, i18n } = useTranslation('contacts')
 
   const [pools,        setPools]        = useState<PoolOp[]>([])
+  const [summary,      setSummary]      = useState<OpSummary | null>(null)
   const [loading,      setLoading]      = useState(false)
   const [error,        setError]        = useState<string | null>(null)
   const [lastRefresh,  setLastRefresh]  = useState<Date | null>(null)
@@ -242,7 +330,8 @@ export default function PoolsPage() {
     setLoading(true); setError(null)
     try {
       const data = await fetchPools(tenantId)
-      setPools(data)
+      setPools(data.items)
+      setSummary(data.summary)
       setLastRefresh(new Date())
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
@@ -296,13 +385,59 @@ export default function PoolsPage() {
           </div>
         </div>
 
-        {/* Summary pills */}
-        <div className="flex gap-3 mb-3">
+        {/* Item 7a — tiles do pipeline de contatos (contrato → atendimento → filas) */}
+        <div className="flex gap-3 mb-3 flex-wrap">
+          {summary && (
+            <>
+              <SummaryPill
+                label={`${t('pools.admission.contracted')}${summary.headroom !== null ? ` · ${t('pools.admission.headroom')} ${summary.headroom}` : ''}`}
+                value={summary.contracted !== null ? `${summary.admitted_total}/${summary.contracted}` : summary.admitted_total}
+                color={summary.headroom !== null && summary.headroom <= 0 ? '#DC2626' : '#1B4F8A'} />
+              <SummaryPill label={t('pools.admission.inService')} value={summary.in_service} color="#059669" />
+              <SummaryPill
+                label={`${t('pools.admission.inQueue')} (${summary.queue_attended} ${t('pools.admission.att')} / ${summary.queue_mute} ${t('pools.admission.mute')})`}
+                value={summary.queue_total}
+                color={summary.queue_total > 0 ? '#eab308' : '#6b7280'} />
+              <SummaryPill
+                label={t('pools.admission.freeBuffer')}
+                value={`${summary.buffer.used}/${summary.buffer.limit}`}
+                color={summary.buffer.used >= summary.buffer.limit ? '#DC2626' : '#7C3AED'} />
+            </>
+          )}
           <SummaryPill label={t('pools.summary.available')} value={totalAvailable} color="#22c55e" />
           <SummaryPill label={t('pools.summary.queued')}    value={totalQueued}    color={totalQueued > 0 ? '#eab308' : '#6b7280'} />
           <SummaryPill label={t('pools.summary.withQueue')} value={poolsWithQueue} color={poolsWithQueue > 0 ? '#f97316' : '#6b7280'} />
           <SummaryPill label={t('pools.summary.total')}     value={pools.length}   color="#1B4F8A" />
         </div>
+
+        {/* Item 7a — donuts: total e como está sendo consumido */}
+        {summary && (
+          <div className="flex gap-3 mb-3 flex-wrap items-stretch">
+            <ConsumptionDonut
+              title={t('pools.admission.sharedDonut')}
+              subtitle={summary.shared.limit !== null
+                ? `${summary.shared.used}/${summary.shared.limit}` : `${summary.shared.used}`}
+              slices={Object.entries(summary.shared.by_pool).map(([name, value]) => ({ name, value }))}
+              free={summary.shared.limit !== null ? Math.max(0, summary.shared.limit - summary.shared.used) : null}
+              freeLabel={t('pools.admission.free')} />
+            {summary.reserved.length > 0 && (
+              <div className="rounded-xl bg-white border border-border p-3 min-w-[220px]">
+                <div className="text-xs font-semibold text-dark mb-1">{t('pools.admission.reservedDonut')}</div>
+                <div className="flex flex-wrap items-center" style={{ minHeight: 130 }}>
+                  {summary.reserved.map(r => (
+                    <MiniDonut key={r.pool_id} label={r.pool_id} used={r.used} total={r.reservation} />
+                  ))}
+                </div>
+              </div>
+            )}
+            <ConsumptionDonut
+              title={t('pools.admission.bufferDonut')}
+              subtitle={`${summary.buffer.used}/${summary.buffer.limit}`}
+              slices={pools.filter(p => p.queue_mute > 0).map(p => ({ name: p.pool_id, value: p.queue_mute }))}
+              free={Math.max(0, summary.buffer.limit - summary.buffer.used)}
+              freeLabel={t('pools.admission.free')} />
+          </div>
+        )}
 
         {/* Filters */}
         <div className="flex items-center gap-3">
@@ -350,8 +485,9 @@ export default function PoolsPage() {
             <tr className="text-muted text-xs border-b border-border">
               <th className="text-left px-5 py-3 font-medium">{t('pools.columns.pool')}</th>
               <th className="text-center px-3 py-3 font-medium w-28">{t('pools.columns.status')}</th>
-              <th className="text-center px-3 py-3 font-medium w-24">{t('pools.columns.available')}</th>
-              <th className="text-center px-3 py-3 font-medium w-20">{t('pools.columns.queue')}</th>
+              <th className="text-center px-3 py-3 font-medium w-24">{t('pools.admission.cols.inService')}</th>
+              <th className="text-center px-3 py-3 font-medium w-28" title={t('pools.admission.cols.queueHint')}>{t('pools.admission.cols.queue')}</th>
+              <th className="text-center px-3 py-3 font-medium w-28" title={t('pools.admission.cols.availHint')}>{t('pools.admission.cols.avail')}</th>
               <th className="text-center px-3 py-3 font-medium w-28">{t('pools.columns.estWait')}</th>
               <th className="text-center px-3 py-3 font-medium w-20">{t('pools.columns.sla')}</th>
               <th className="text-left px-3 py-3 font-medium">{t('pools.columns.channels')}</th>
@@ -359,7 +495,19 @@ export default function PoolsPage() {
             </tr>
           </thead>
           <tbody>
-            {filtered.map(pool => {
+            {[
+              { key: 'reserved', label: t('pools.admission.sectionReserved'),
+                rows: filtered.filter(p => p.admission_scope === 'reserved') },
+              { key: 'shared',   label: t('pools.admission.sectionShared'),
+                rows: filtered.filter(p => p.admission_scope !== 'reserved') },
+            ].filter(s => s.rows.length > 0).map(section => (
+            <React.Fragment key={section.key}>
+            <tr className="bg-surface-muted border-b border-border">
+              <td colSpan={9} className="px-5 py-1.5 text-2xs font-semibold text-muted uppercase tracking-wider">
+                {section.label}
+              </td>
+            </tr>
+            {section.rows.map(pool => {
               const st      = statusConfig(pool.op_status)
               const expanded = expandedPool === pool.pool_id
               return (
@@ -395,21 +543,37 @@ export default function PoolsPage() {
                       </span>
                     </td>
 
-                    {/* Available */}
+                    {/* Em atendimento (item 7a) */}
                     <td className="px-3 py-3 text-center">
-                      {pool.has_snapshot
-                        ? <span className="text-sm font-bold" style={{ color: pool.available > 0 ? '#22c55e' : '#6b7280' }}>{pool.available}</span>
-                        : <span className="text-xs text-warning" title="Snapshot Redis expirado — aguardando próximo evento de roteamento">{t('pools.noSnapshot')}</span>
+                      <span className="text-sm font-bold" style={{ color: pool.active_sessions > 0 ? '#059669' : '#6b7280' }}>
+                        {pool.active_sessions}
+                      </span>
+                    </td>
+
+                    {/* Fila atendida/muda (item 7a) */}
+                    <td className="px-3 py-3 text-center">
+                      {pool.queue_length > 0
+                        ? <span className="text-sm font-bold text-warning tabular-nums">
+                            {pool.queue_attended}<span className="text-2xs text-muted"> at</span>
+                            {' / '}{pool.queue_mute}<span className="text-2xs text-muted"> mu</span>
+                          </span>
+                        : <span className="text-xs text-muted-light">0</span>
                       }
                     </td>
 
-                    {/* Queue */}
+                    {/* Disponível: físico / admissível (item 7a — dois números) */}
                     <td className="px-3 py-3 text-center">
-                      {!pool.has_snapshot
-                        ? <span className="text-xs text-muted-light">—</span>
-                        : pool.queue_length > 0
-                          ? <span className="text-sm font-bold text-warning">{pool.queue_length}</span>
-                          : <span className="text-xs text-muted-light">0</span>
+                      {pool.has_snapshot
+                        ? <span className="text-sm tabular-nums">
+                            <span className="font-bold" style={{ color: pool.available > 0 ? '#22c55e' : '#6b7280' }}>{pool.available}</span>
+                            <span className="text-muted-light"> / </span>
+                            <span className="font-bold" style={{
+                              color: pool.admissible === null ? '#6b7280'
+                                : pool.admissible > 0 ? '#1B4F8A' : '#DC2626' }}>
+                              {pool.admissible === null ? '∞' : pool.admissible}{pool.admissible_shared ? '⊕' : ''}
+                            </span>
+                          </span>
+                        : <span className="text-xs text-warning" title="Snapshot Redis expirado — aguardando próximo evento de roteamento">{t('pools.noSnapshot')}</span>
                       }
                     </td>
 
@@ -448,7 +612,7 @@ export default function PoolsPage() {
                   {/* Queue drill-down row */}
                   {expanded && (
                     <tr key={`${pool.pool_id}-queue`} className="border-b border-border">
-                      <td colSpan={8} className="p-0 bg-surface-muted">
+                      <td colSpan={9} className="p-0 bg-surface-muted">
                         <div className="pl-8 border-l-2 border-primary/30 ml-5 my-1">
                           <div className="px-4 pt-2 pb-1 text-xs font-semibold text-muted uppercase tracking-wider">
                             {t('pools.queueOf', { pool: pool.pool_id })}
@@ -465,6 +629,8 @@ export default function PoolsPage() {
                 </React.Fragment>
               )
             })}
+            </React.Fragment>
+            ))}
           </tbody>
         </table>
       </div>
@@ -474,7 +640,7 @@ export default function PoolsPage() {
 
 // ── SummaryPill ────────────────────────────────────────────────────────────────
 
-function SummaryPill({ label, value, color }: { label: string; value: number; color: string }) {
+function SummaryPill({ label, value, color }: { label: string; value: number | string; color: string }) {
   return (
     <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg border border-border bg-white">
       <span className="text-base font-bold" style={{ color }}>{value}</span>

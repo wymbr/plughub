@@ -15,6 +15,7 @@
  */
 import React, { useState, useMemo, useCallback, useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
+import { useAuth } from '@/auth/useAuth'
 import { Radio, Settings, ClipboardList, X, Clock, AlertTriangle, BarChart2 } from 'lucide-react'
 import type { ContactFilters } from '../types'
 import { usePoolViews } from '@/modules/service/api/hooks'
@@ -373,6 +374,7 @@ function PoolsOverview({ pools, metrics, selectedPool, onPoolClick, isStale, las
   lastUpdated:  number | null
 }) {
   const { t } = useTranslation('contacts')
+  const { tenantId } = useAuth()
 
   const totalBusy      = pools.reduce((s, p) => s + p.busy, 0)
   // Online = sum of total_instances per pool (distinct registered agents).
@@ -380,6 +382,26 @@ function PoolsOverview({ pools, metrics, selectedPool, onPoolClick, isStale, las
   // Available = sum of pool.available (already = total_capacity − active_count).
   const totalAvailable = pools.reduce((s, p) => s + p.available, 0)
   const totalQueue     = pools.reduce((s, p) => s + p.queue_length, 0)
+
+  // Item 7a (capacity-governance): tiles de contrato e sala de espera gratuita —
+  // mesmos agregados do Monitor/Pools (summary do /v1/operational/pools).
+  const [adm, setAdm] = useState<{
+    contracted: number | null; admitted_total: number; headroom: number | null
+    buffer: { used: number; limit: number }
+  } | null>(null)
+  useEffect(() => {
+    if (!tenantId) return
+    let cancelled = false
+    const load = () => {
+      fetch('/v1/operational/pools', { headers: { 'x-tenant-id': tenantId } })
+        .then(r => r.ok ? r.json() : Promise.reject(r.status))
+        .then((d: { summary?: typeof adm }) => { if (!cancelled && d.summary) setAdm(d.summary) })
+        .catch(() => { /* tiles ficam ocultos */ })
+    }
+    load()
+    const id = setInterval(load, 15_000)
+    return () => { cancelled = true; clearInterval(id) }
+  }, [tenantId])
 
   // Sort by busy descending, then alphabetical
   const sorted = useMemo(() =>
@@ -426,6 +448,19 @@ function PoolsOverview({ pools, metrics, selectedPool, onPoolClick, isStale, las
         <KpiCard label={t('monitor.kpi.available')} value={totalAvailable} color="#059669" />
         <KpiCard label={t('monitor.kpi.online')}    value={totalOnline}    color="#7C3AED" />
         <KpiCard label={t('monitor.kpi.queue')}     value={totalQueue}     color="#d97706" />
+        {/* Item 7a — contrato e sala de espera gratuita */}
+        {adm && adm.contracted !== null && (
+          <KpiCard
+            label={`${t('pools.admission.contracted')} · ${t('pools.admission.headroom')} ${adm.headroom ?? '—'}`}
+            value={`${adm.admitted_total}/${adm.contracted}` as unknown as number}
+            color={adm.headroom !== null && adm.headroom <= 0 ? '#DC2626' : '#1B4F8A'} />
+        )}
+        {adm && (
+          <KpiCard
+            label={t('pools.admission.freeBuffer')}
+            value={`${adm.buffer.used}/${adm.buffer.limit}` as unknown as number}
+            color={adm.buffer.used >= adm.buffer.limit ? '#DC2626' : '#7C3AED'} />
+        )}
       </div>
 
       {/* Main content: donuts + table */}

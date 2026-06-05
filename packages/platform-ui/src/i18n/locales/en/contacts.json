@@ -246,6 +246,28 @@
       "withQueue": "Pools with queue",
       "total":     "Total pools"
     },
+    "admission": {
+      "contracted":      "Contracted (C)",
+      "headroom":        "headroom",
+      "inService":       "In service",
+      "inQueue":         "In queue",
+      "att":             "att.",
+      "mute":            "free",
+      "freeBuffer":      "Free waiting room",
+      "sharedDonut":     "Shared capacity",
+      "reservedDonut":   "Reserved pools",
+      "bufferDonut":     "Free waiting room",
+      "free":            "available",
+      "sectionReserved": "Reserved pools (own slice of C)",
+      "sectionShared":   "Shared capacity (no per-pool ceiling)",
+      "cols": {
+        "inService": "In service",
+        "queue":     "Queue (att/free)",
+        "queueHint": "Attended queue (licensed AI, debits C) / free system queue (exempt from C)",
+        "avail":     "Avail (phys/adm)",
+        "availHint": "Physical (free agent slots) / admissible (what admission allows in; ⊕ = shared across pools)"
+      }
+    },
     "status": {
       "available": "Available",
       "queued":    "In queue",

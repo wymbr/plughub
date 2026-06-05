@@ -246,6 +246,28 @@
       "withQueue": "Pools com fila",
       "total":     "Total de pools"
     },
+    "admission": {
+      "contracted":      "Contratado (C)",
+      "headroom":        "folga",
+      "inService":       "Em atendimento",
+      "inQueue":         "Em fila",
+      "att":             "atend.",
+      "mute":            "grátis",
+      "freeBuffer":      "Sala de espera gratuita",
+      "sharedDonut":     "Capacidade compartilhada",
+      "reservedDonut":   "Pools reservados",
+      "bufferDonut":     "Sala de espera gratuita",
+      "free":            "disponível",
+      "sectionReserved": "Pools reservados (fatia própria de C)",
+      "sectionShared":   "Capacidade compartilhada (sem teto por pool)",
+      "cols": {
+        "inService": "Atend.",
+        "queue":     "Fila (at/grátis)",
+        "queueHint": "Fila atendida (IA licenciada, debita C) / fila de sistema gratuita (isenta de C)",
+        "avail":     "Disp (fís/adm)",
+        "availHint": "Físico (slots de agente livres) / admissível (o que a admissão deixa entrar; ⊕ = compartilhado entre os pools)"
+      }
+    },
     "status": {
       "available": "Disponível",
       "queued":    "Em fila",

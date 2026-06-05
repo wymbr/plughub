@@ -174,18 +174,33 @@ removida da visão do total no fechamento da Fase 2; aqui sai do modelo).
    declarada do YAML (280) + pools de teste/humanos. **Não-destrutivo**: pula se
    o tenant já tiver resources (experimentos do operador sobrevivem ao
    re-`up`); quota de admissão gravada pelo quota sync na primeira subida.
-7. **Revisão da exibição de "available" nos Monitores** (atividade registrada
-   2026-06-04, pós item 4): com o modelo reserved+shared, o "available" exibido
-   (slots físicos livres do snapshot) diverge do **admissível** — o que a
-   admissão de fato deixa entrar: pool com reserva → `reserva − uso do bucket
-   reservado`; pool sem reserva → `min(slots livres, shared restante = C −
-   Σ reservas − uso do shared)`. Um pool pode exibir 20 e rejeitar por
-   `shared_full`. Telas a revisar: **Monitor/Sessions** (KPI Available/Online +
-   coluna Available), **Monitor/Pools** (KPI "Available agents" + coluna
-   Available), **Monitor/Agents**, e demais consumidores do snapshot
-   (`available` escrito pelo `write_pool_snapshot` do routing — PresenceSidebar
-   /Console, dashboard cards `pool_status`). **A definir**: exibir um número só
-   (admissível, o que importa operacionalmente) ou os dois (físico × admissível);
-   como representar o shared (bucket comum não é "do pool" — linha própria?);
-   fonte (routing já conhece os buckets de admissão → enriquecer o snapshot com
-   `admissible`/`bucket`). Decisão de UX antes de implementar.
+7. **Revisão do "available" — design fechado 2026-06-05** (pós system-queue;
+   decisões com o usuário):
+   - **Problema**: físico (slots livres) ≠ admissível (`reserva − uso` ou
+     `shared restante`, e IA também `C_ai − uso`); pool pode exibir 20 e negar.
+     Pools no shared NÃO têm teto individual (só físico + throttle webhook
+     display-only) — um pool pode consumir o shared inteiro.
+   - **Exibição**: **dois números** (físico / admissível, ⊕ nos compartilhados);
+     organização por regime — seções **Reservados × Compartilhado** + **Fila
+     gratuita**; **donuts** "total e como está sendo consumido": Compartilhado
+     (fatias por pool + disponível), mini-donuts por pool reservado
+     (ocupado+disponível), Fila gratuita (mudos por pool + livre, vs teto);
+     **tiles** do pipeline: Contratado usado/C + folga, Em atendimento, Em fila
+     (atendida/muda), Fila gratuita usado/teto. Tabelas por seção continuam
+     para diagnóstico (atend., fila at/muda, disp fís/adm).
+   - **Atribuição exata do shared**: novo HASH `{t}:admission:shared_pools`
+     {sid→pool} ao lado do SET (SET continua sendo o limite; HASH é índice;
+     HSET/HDEL no admit/migração/release; higiene no reconciler). Elimina o
+     proxy — fatias somam SCARD por construção.
+   - **Execução em duas etapas**: **7a — tempo real**: HASH + agregador no
+     endpoint operacional (Redis read-only, sem tocar hot path) + Monitor/Pools
+     reorganizado (donuts/tiles/seções; Sessions só ganha tiles). **7b —
+     histórico (Analytics espelha o Monitor)**: occupancy sampler amostra
+     também reserva usada/pool, shared usado/pool (via HASH), buffer
+     usado/teto → colunas novas em `pool_occupancy_peaks` + linhas `__shared__`
+     /`__buffer__` (padrão `__total__`) → `/reports/pools/occupancy` estendido
+     → Analytics/Pools com área empilhada (Σ reservas + shared + folga = C no
+     tempo; linha buffer vs teto). Donut = foto; área empilhada = filme.
+   - Verificações na validação: render do segmento sintético `system-queue` no
+     detalhe de Sessions; nenhum `system` vazando em Analytics/Agents.
+     Refinamentos futuros registrados: SLA por tier de fila.

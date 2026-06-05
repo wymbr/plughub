@@ -111,6 +111,14 @@ Hoje o Analytics/Agents mistura agente×pool e não separa humano×IA.
   (b) ~~limpar `queue_config`/`session_reservation` via PUT~~ ✅ (2026-06-04, ver
   `CHANGELOG.md` — `.nullable()` nos campos de pool + `DbNull` no registry + UI);
   (c) cenários fila muda e drop sem pool_id não exercitados em teste.
+- **Investigar — sessões sem `pool_id` no relatório de fila** (2026-06-05,
+  observado na validação da Fase B do system-queue): a tabela "Queue by pool"
+  (Analytics→Pools→Fila) mostra uma linha com pool "—" (20 contatos) — sessões
+  agregadas sem `pool_id`. Origem a confirmar: artefato de testes antigos,
+  segmentos de hook (wrapup/NPS) sem pool, ou enqueue/segment emitido antes da
+  resolução do pool. Conferir nos `segments` (role='queue' com pool_id vazio?)
+  e em `sessions` qual caminho grava sem pool; corrigir na origem ou filtrar
+  no relatório com justificativa.
 - **Ajuste menor UI — i18n quebrado no dropdown de pools do Console** (2026-06-05,
   observado na validação do item 2): o cabeçalho do PoolCombo exibe o literal
   `POOLS ({{POOLS}})` — interpolação i18n não resolvida (chave `header.pools` ou
@@ -202,12 +210,17 @@ gate humano (logins concorrentes ≤ C_human + kind do pool no registerHumanAgen
 admissão, cause `quota` → demanda reprimida), recurso×kind (deploy em pool
 human → 422; login humano em pool ai → negado). **Resta do arco: só o item 7**
 (UX do available físico × admissível).
-**Item 7 (novo, 2026-06-04)** — revisão do "available" nos Monitores
-(Sessions/Pools/Agents + consumidores do snapshot): físico (slots livres) ≠
-admissível (reserva − uso, ou min(slots, shared restante)) — pool pode exibir
-20 e rejeitar por shared_full. Definir UX (um número ou dois; como exibir o
-shared; snapshot enriquecido com `admissible`) antes de implementar — ver § 7
-do spec.
+**Item 7 — design fechado 2026-06-05** (ver § 7 do spec): dois números
+(físico/admissível ⊕), organização Reservados × Compartilhado × Fila gratuita
+com donuts ("total e como está sendo consumido") + tiles do pipeline; HASH
+`{t}:admission:shared_pools` para atribuição exata do shared. Execução:
+**7a ✅** (2026-06-05, ver `CHANGELOG.md`): HASH shared_pools (atribuição exata)
++ agregador no /v1/operational/pools (admissible, regimes, tiers, summary) +
+Monitor/Pools com tiles/donuts/seções + tiles no Monitor/Sessions.
+**7b pendente** (histórico): sampler amostra reserva/shared/buffer →
+pool_occupancy_peaks → Analytics espelha o Monitor em área empilhada.
+Verificações junto ao 7b: segmento sintético no detalhe de Sessions; nenhum
+`system` em Analytics/Agents.
 
 ---
 

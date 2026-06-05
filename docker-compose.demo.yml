@@ -552,6 +552,7 @@ services:
       JWT_SECRET:     demo_plughub_secret_32chars__
       KAFKA_BROKERS:  kafka:29092
       REDIS_URL:      redis://redis:6379
+      CONFIG_API_URL: http://config-api:3600   # item 7a — teto do buffer (queue_max_total)
     depends_on:
       postgres:
         condition: service_healthy

@@ -25,6 +25,12 @@ Keys:
   {t}:admission:member:{session_id}  STRING — current bucket key (TTL 7d)
   {t}:quota:max_concurrent_sessions  STRING — installation total (operator/pricing)
 
+Capacity-governance item 7a (2026-06-05) — atribuição do shared por pool:
+  {t}:admission:shared_pools  HASH {session_id → pool_id} — índice de atribuição
+  das sessões no bucket compartilhado (o SET continua sendo O limite; o HASH
+  alimenta Monitor/Analytics com fatias exatas por pool). HSET/HDEL nos mesmos
+  pontos do member key; higiene no reconciler (auto-curável).
+
 Capacity-governance item 2 / Etapa 2 (2026-06-05) — gate por tipo:
   {t}:admission:kind:ai                  SET — sessions em pools agent_kind='ai'
   {t}:admission:kind_member:{session_id} STRING — "ai"|"human" (TTL 7d)
@@ -141,6 +147,7 @@ class AdmissionController:
         if prev == bucket:
             # Already admitted here — commit kind tracking (idempotent re-publish).
             await self._commit_kind(tenant_id, session_id, kind, prev_kind, kind_member, kind_set)
+            await self._commit_shared_attribution(tenant_id, session_id, bucket, pool_id)
             return AdmissionDecision(admitted=True)
 
         added = await self._redis.sadd(bucket, session_id)
@@ -177,7 +184,24 @@ class AdmissionController:
             # Migration: session moved pools — release the origin bucket slot.
             await self._redis.srem(prev, session_id)
         await self._commit_kind(tenant_id, session_id, kind, prev_kind, kind_member, kind_set)
+        await self._commit_shared_attribution(tenant_id, session_id, bucket, pool_id)
         return AdmissionDecision(admitted=True)
+
+    async def _commit_shared_attribution(
+        self, tenant_id: str, session_id: str, bucket: str, pool_id: str
+    ) -> None:
+        """Item 7a: mantém o HASH {sid→pool} espelhando a permanência no shared."""
+        try:
+            hash_key = f"{tenant_id}:admission:shared_pools"
+            if bucket.endswith(":admission:shared"):
+                await self._redis.hset(hash_key, session_id, pool_id)
+            else:
+                await self._redis.hdel(hash_key, session_id)   # reserved/migrou p/ fora
+        except Exception as exc:
+            logger.warning(
+                "shared attribution failed (reconciler heals) session=%s — %s",
+                session_id, exc,
+            )
 
     async def _commit_kind(
         self,
@@ -250,6 +274,8 @@ class AdmissionController:
             if prev_kind == "ai":
                 await self._redis.srem(f"{tenant_id}:admission:kind:ai", session_id)
             await self._redis.delete(kind_member)
+        # Item 7a: atribuição do shared sai junto.
+        await self._redis.hdel(f"{tenant_id}:admission:shared_pools", session_id)
 
     async def _type_limit(self, tenant_id: str, resource_type: str) -> int | None:
         """C por tipo ({t}:quota:capacity:{type}, pricing quota sync). None = sem gate."""
@@ -323,6 +349,7 @@ class AdmissionController:
             for bucket in buckets:
                 tenant_id = bucket.split(":admission:", 1)[0]
                 is_kind   = ":admission:kind:" in bucket
+                is_shared = bucket.endswith(":admission:shared")
                 async for member in self._redis.sscan_iter(bucket, count=200):
                     session_id = _decode(member)
                     closed = await self._redis.exists(f"session:{session_id}:closed")
@@ -333,7 +360,23 @@ class AdmissionController:
                             if is_kind else
                             f"{tenant_id}:admission:member:{session_id}"
                         )
+                        if is_shared:
+                            await self._redis.hdel(
+                                f"{tenant_id}:admission:shared_pools", session_id
+                            )
                         released += 1
+                # Item 7a — higiene do HASH de atribuição: entradas cujo sid já
+                # não está no SET (crash entre os dois writes) são removidas,
+                # garantindo Σ fatias == SCARD(shared).
+                if is_shared:
+                    try:
+                        hash_key = f"{tenant_id}:admission:shared_pools"
+                        for sid_raw in await self._redis.hkeys(hash_key):
+                            sid = _decode(sid_raw)
+                            if not await self._redis.sismember(bucket, sid):
+                                await self._redis.hdel(hash_key, sid)
+                    except Exception:
+                        pass
         except Exception as exc:
             logger.warning("admission reconcile failed — %s", exc)
         if released:

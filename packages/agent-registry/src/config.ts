@@ -16,4 +16,6 @@ export const config = {
   // External service URLs for proxy endpoints
   analytics_api_url: process.env["ANALYTICS_API_URL"] ?? "http://localhost:3500",
   workflow_api_url:  process.env["WORKFLOW_API_URL"]   ?? "http://localhost:3800",
+  // Config API — item 7a: teto do buffer da fila gratuita (queue_max_total)
+  config_api_url:    process.env["CONFIG_API_URL"]     ?? "http://localhost:3600",
 } as const
