@@ -220,6 +220,9 @@ export const AgentAssistProvider: React.FC<{ children: React.ReactNode }> = ({ c
     setToasts(prev => prev.filter(t => t.id !== id));
   }, []);
 
+  // Item 2 (capacity-governance): toast de login negado por pool — dedupe.
+  const loginDeniedToasts = useRef<Map<string, string>>(new Map());
+
   // ── AI typing ─────────────────────────────────────────────────────────────
   const aiTypingTimers = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
   const [aiTypingSessions, setAiTypingSessions] = useState<Set<string>>(new Set());
@@ -365,6 +368,26 @@ export const AgentAssistProvider: React.FC<{ children: React.ReactNode }> = ({ c
         if (timer) { clearTimeout(timer); aiTypingTimers.current.delete(sid); }
         setAiTypingSessions(prev => { const s = new Set(prev); s.delete(sid); return s; });
       }
+      return;
+    }
+
+    // ── Login negado (capacity-governance item 2 — gates por tipo) ────────
+    // O mcp-server envia `login_denied` e fecha o WS quando o gate recusa:
+    // C_human esgotado (logins concorrentes) ou pool de agentes IA.
+    // Dedupe: UM toast por pool (substitui o anterior em vez de empilhar —
+    // o hook já suprime o reconnect, isto cobre re-tentativas manuais).
+    if ((event as unknown as Record<string, unknown>)["type"] === "login_denied") {
+      const e = event as unknown as Record<string, unknown>;
+      const poolKey = String(e["_pool_id"] ?? e["pool_id"] ?? "");
+      const msg =
+        e["reason"] === "human_capacity_exhausted"
+          ? `Login negado: limite contratado de agentes humanos concorrentes atingido (${e["current"]}/${e["limit"]}). Aguarde um colega sair ou contate o administrador.`
+          : e["reason"] === "pool_kind_mismatch"
+          ? `Login negado: o pool "${e["pool_id"]}" é de agentes IA — login humano não é permitido.`
+          : "Login negado pela governança de capacidade.";
+      const prevId = loginDeniedToasts.current.get(poolKey);
+      if (prevId) dismissToast(prevId);
+      loginDeniedToasts.current.set(poolKey, addToast(msg, "error", /* persistent */ true));
       return;
     }
 

@@ -33,6 +33,13 @@ interface PoolState {
   heartbeatTimer?: ReturnType<typeof setInterval>;
   disconnectDebounce?: ReturnType<typeof setTimeout>;
   intentionalClose: boolean;
+  /**
+   * Capacity-governance item 2: o servidor negou o login (gate por tipo —
+   * C_human esgotado ou pool IA) e vai fechar o WS. NÃO reconectar: cada
+   * retry seria negado de novo (loop de toasts). O usuário re-tenta
+   * desmarcando/marcando o pool (ou recarregando) quando vagar um assento.
+   */
+  loginDenied: boolean;
 }
 
 /**
@@ -81,6 +88,7 @@ function openConnection(
   const state: PoolState = {
     ws,
     intentionalClose: false,
+    loginDenied:      false,
   };
   poolStateRef.current.set(poolId, state);
 
@@ -106,6 +114,11 @@ function openConnection(
   ws.onmessage = (ev) => {
     try {
       const data = JSON.parse(ev.data) as WsServerEvent;
+      // Item 2: login negado pelo gate — suprime o reconnect deste pool.
+      if ((data as unknown as Record<string, unknown>)["type"] === "login_denied") {
+        const s = poolStateRef.current.get(poolId);
+        if (s) s.loginDenied = true;
+      }
       setLastEvent({ ...data, _pool_id: poolId } as TaggedWsEvent);
     } catch {
       // ignore malformed messages
@@ -125,7 +138,12 @@ function openConnection(
       s.heartbeatTimer = undefined;
     }
 
-    if (!s.intentionalClose) {
+    if (s.loginDenied) {
+      // Item 2: negado pelo gate — sem reconnect (cada retry seria negado e
+      // empilharia toasts). Status fica "disconnected"; remarcar o pool re-tenta.
+      setStatuses(prev => new Map(prev).set(poolId, "disconnected"));
+      poolStateRef.current.delete(poolId);
+    } else if (!s.intentionalClose) {
       // Debounce the disconnected status to hide brief reconnects
       s.disconnectDebounce = setTimeout(() => {
         setStatuses(prev => new Map(prev).set(poolId, "disconnected"));

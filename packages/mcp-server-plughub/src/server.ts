@@ -269,6 +269,19 @@ async function refreshPoolInstances(
 //   LifecycleEventHandler.handle() picks this up and calls _drain_queue_for_agent,
 //   which re-publishes any already-queued contacts back to conversations.inbound.
 //
+/**
+ * Capacity-governance item 2 / Etapa 2 — login humano negado pelos gates:
+ *   pool_kind_mismatch       — pool é agent_kind 'ai' (pool misto proibido)
+ *   human_capacity_exhausted — logins concorrentes ≥ C_human (contratado)
+ * O caller (WS handler) envia `login_denied` ao Console e fecha a conexão.
+ */
+class HumanLoginDenied extends Error {
+  constructor(
+    public reason:  string,
+    public details: Record<string, unknown> = {},
+  ) { super(reason) }
+}
+
 async function registerHumanAgent(
   poolId:               string,
   userId:               string,
@@ -282,6 +295,42 @@ async function registerHumanAgent(
   // Per-user instance key — falls back to per-pool for old clients without user_id
   const instanceId      = userId ? `human-${userId}` : `human-${poolId}`
   const now             = new Date().toISOString()
+
+  // ── Capacity-governance item 2 / Etapa 2 — gates de login humano ────────────
+  // (a) Kind do pool: humano só loga em pool agent_kind='human' (pool misto
+  //     proibido). Lê o pool_config cacheado pelo routing; ausente → fail-open.
+  try {
+    const cfgRaw = await redis.get(`${tenantId}:pool_config:${poolId}`)
+    if (cfgRaw) {
+      const kind = (JSON.parse(cfgRaw) as Record<string, unknown>)["agent_kind"]
+      if (kind === "ai") {
+        throw new HumanLoginDenied("pool_kind_mismatch", { pool_id: poolId })
+      }
+    }
+  } catch (err) {
+    if (err instanceof HumanLoginDenied) throw err
+    // parse/Redis error → fail-open
+  }
+  // (b) C_human: logins concorrentes (instâncias human-*) ≤ quota contratada.
+  //     Re-login do MESMO usuário (instância existente) nunca é bloqueado.
+  try {
+    const already = await redis.exists(`${tenantId}:instance:${instanceId}`)
+    if (!already) {
+      const limitRaw = await redis.get(`${tenantId}:quota:capacity:human_agent`)
+      const limit    = limitRaw ? parseInt(limitRaw, 10) : NaN
+      if (Number.isFinite(limit) && limit > 0) {
+        const logged = await redis.keys(`${tenantId}:instance:human-*`)
+        if (logged.length >= limit) {
+          throw new HumanLoginDenied("human_capacity_exhausted", {
+            limit, current: logged.length,
+          })
+        }
+      }
+    }
+  } catch (err) {
+    if (err instanceof HumanLoginDenied) throw err
+    // Redis error → fail-open (gate nunca derruba o login por falha de infra)
+  }
 
   // ── Step 0: ensure pool exists in Agent Registry (PostgreSQL) ──────────────
   //
@@ -298,6 +347,7 @@ async function registerHumanAgent(
   try {
     const poolPayload = {
       pool_id:       poolId,
+      agent_kind:    "human",   // item 2: pool auto-criado em login humano é humano por definição
       description:   `Human agent pool — ${poolId} (auto-registered on agent login)`,
       channel_types: ["webchat", "whatsapp"],
       sla_target_ms: 300_000,   // 5 minutes
@@ -2120,9 +2170,21 @@ export async function startServer(config: ServerConfig): Promise<void> {
         pendingUnregister.delete(poolId)
         console.log(`[agent-ws] Cancelled pending unregister (StrictMode reconnect) pool=${poolId}`)
       }
-      registerHumanAgent(poolId, userId, userLogin, maxConcurrentSessions, redis, kafka).catch((err) =>
+      registerHumanAgent(poolId, userId, userLogin, maxConcurrentSessions, redis, kafka).catch((err) => {
+        // Item 2 / Etapa 2: gate de login negou — informa o Console e encerra.
+        if (err instanceof HumanLoginDenied) {
+          console.warn(
+            `[agent-ws] login denied pool=${poolId} user=${userId} reason=${err.reason}`,
+            err.details,
+          )
+          try {
+            ws.send(JSON.stringify({ type: "login_denied", reason: err.reason, ...err.details }))
+          } catch { /* ws já fechado */ }
+          try { ws.close() } catch { /* idem */ }
+          return
+        }
         console.error(`[agent-ws] registerHumanAgent pool=${poolId} user=${userId}:`, err)
-      )
+      })
     }
 
     subscriber.on("message", (channel: string, message: string) => {

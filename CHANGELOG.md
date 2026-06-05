@@ -2,6 +2,22 @@
 
 ---
 
+## Capacity-governance item 2 / Etapa 2 — gates por tipo armados (2026-06-05)
+
+Fecha o item 2 do arco: C_ai e C_human deixam de ser display e passam a **negar criação de recurso**.
+
+**Gate humano** (`mcp-server/server.ts::registerHumanAgent`): dois checks antes do registro — (a) **kind do pool**: login humano só em `agent_kind: human` (lê `{t}:pool_config:{pool}` cacheado pelo routing; ausente → fail-open); (b) **logins concorrentes** ≤ C_human (`{t}:quota:capacity:human_agent` vs contagem de `{t}:instance:human-*`; re-login do mesmo usuário nunca bloqueia — instância existente é merge). Recusa lança `HumanLoginDenied` → o WS handler envia `{type:"login_denied", reason, limit, current}` e fecha a conexão; **Console** (`AgentAssistContext`) exibe toast persistente de erro com a causa. Pool auto-criado no login agora declara `agent_kind: "human"`. Qualquer falha de Redis → fail-open (gate nunca derruba login por infra).
+
+**Gate IA** (`routing-engine/admission.py`): sessões entrando em pool `agent_kind: ai` respeitam C_ai (`{t}:quota:capacity:ai_agent`) — novo SET `{t}:admission:kind:ai` + `{t}:admission:kind_member:{sid}` com a mesma mecânica idempotente dos buckets da Fase B: SADD/SCARD com rollback, re-publish idempotente, migração ai↔human atualiza o tracking, **mid-session fail-open** mantém a atribuição de origem (nunca derruba sessão ativa), reconciler libera membros fechados (sets de kind incluídos no scan). Rejeição na porta → outage **cause `quota`**, que a demanda reprimida já renderiza como "Teto contratado" (zero front novo).
+
+**Recurso × kind** (pool misto proibido): deploy de skill em pool `human` → 422 no `PUT slots/next` (pool-slots.ts); login humano em pool `ai` → `login_denied`.
+
+**Ajuste pós-validação (loop de toasts)**: o auto-reconnect do WS re-tentava o login negado a cada 3s, empilhando um toast persistente por tentativa. Fix em duas camadas: `useMultiPoolWebSocket` marca `loginDenied` na conexão ao receber o evento e **suprime o reconnect** daquele pool (status "disconnected"; desmarcar/marcar o pool re-tenta quando vagar assento); `AgentAssistContext` deduplica o toast por pool (substitui em vez de empilhar). Validado: 2º usuário com C_human=1 → um único toast, sem loop.
+
+**Ajuste pós-validação (header mentia "Connected/Ready")**: o socket abre antes do gate negar (deny+close vem ms depois), e o header tratava socket-aberto como logado — exibia "Connected", "Ready in 1 pool" e Pause habilitado durante o ciclo de retry. Fix (`Header.tsx`): o subtítulo "Ready in N pool" conta **conexões aceitas** (`status === "connected"` por pool ativo), não pools selecionados — login negado mostra "Offline"; botão Pause desabilitado (`disabled` + opacity) quando nenhum pool conectado. Resta um flash de "Connected" de <1s entre o open e o deny — cosmético, aceito.
+
+---
+
 ## Capacity-governance item 2 / Etapa 1 — agent_kind no pool + quotas por tipo (2026-06-05)
 
 Fundação dos gates por tipo. Decisões fechadas com o usuário (registradas no spec § Tipagem de pool): canal nunca é tipado — o **pool declara** `agent_kind: human|ai`; `queue_config ⇒ human` (fila atendida só para recurso escasso/lento — para IA, o slot da fila instanciaria o próprio agente); fila atendida é `ai` **cobrável** (o tier gratuito é a fila de sistema — arco futuro registrado no TODO); pool misto proibido (validação de registro na Etapa 2).

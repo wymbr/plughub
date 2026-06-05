@@ -224,6 +224,10 @@ export const Header: React.FC<HeaderProps> = ({
 }) => {
   const { t } = useTranslation('agentAssist');
   const activeCount = activePools.length;
+  // Item 2 (capacity-governance): "Ready in N pool" deve refletir conexões
+  // ACEITAS, não pools selecionados — login negado pelo gate fica disconnected
+  // e não conta (antes exibia "Ready/Connected" com o login recusado).
+  const connectedCount = activePools.filter(p => poolStatuses.get(p) === "connected").length;
 
   return (
     // Primary brand colour (#1B4F8A) so the header is visually distinct from the
@@ -243,10 +247,10 @@ export const Header: React.FC<HeaderProps> = ({
               {agentName}
             </p>
             <p className="text-xs leading-tight">
-              {activeCount === 0
+              {connectedCount === 0
                 ? <span className="text-blue-300 italic">{t('header.offline')}</span>
                 : <span className="text-green-300 font-medium">
-                    {t(activeCount > 1 ? 'header.readyIn_plural' : 'header.readyIn', { count: activeCount })}
+                    {t(connectedCount > 1 ? 'header.readyIn_plural' : 'header.readyIn', { count: connectedCount })}
                   </span>
               }
             </p>
@@ -268,9 +272,10 @@ export const Header: React.FC<HeaderProps> = ({
           {(onTogglePause || onPauseRequest) && (
             <button
               onClick={isPaused ? onTogglePause : onPauseRequest ?? onTogglePause}
-              title={isPaused ? t('header.resumeTitle') : t('header.pauseTitle')}
+              disabled={connectedCount === 0}
+              title={connectedCount === 0 ? t('header.offline') : isPaused ? t('header.resumeTitle') : t('header.pauseTitle')}
               className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full border text-xs font-medium
-                transition-colors whitespace-nowrap ${
+                transition-colors whitespace-nowrap disabled:opacity-40 disabled:cursor-not-allowed ${
                 isPaused
                   ? "bg-amber-400/20 border-amber-300 text-amber-200 hover:bg-amber-400/30"
                   : "bg-white/10 border-white/25 text-blue-100 hover:bg-white/20"

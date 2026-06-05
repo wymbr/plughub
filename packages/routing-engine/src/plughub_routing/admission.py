@@ -24,6 +24,15 @@ Keys:
   {t}:admission:shared               SET — sessions admitted into the shared bucket
   {t}:admission:member:{session_id}  STRING — current bucket key (TTL 7d)
   {t}:quota:max_concurrent_sessions  STRING — installation total (operator/pricing)
+
+Capacity-governance item 2 / Etapa 2 (2026-06-05) — gate por tipo:
+  {t}:admission:kind:ai                  SET — sessions em pools agent_kind='ai'
+  {t}:admission:kind_member:{session_id} STRING — "ai"|"human" (TTL 7d)
+  {t}:quota:capacity:ai_agent            STRING — C_ai (pricing quota sync)
+Sessões entrando em pool 'ai' respeitam C_ai (rejeição cause="quota" → outage,
+visível na demanda reprimida como "Teto contratado"). Humano NÃO é gateado por
+sessão — o gate humano é por logins concorrentes (registerHumanAgent ≤ C_human).
+Fail-open: pool sem agent_kind ou chave C_ai ausente → sem gate por tipo.
 """
 
 from __future__ import annotations
@@ -90,14 +99,57 @@ class AdmissionController:
 
         member_key = f"{tenant_id}:admission:member:{session_id}"
         prev = _decode(await self._redis.get(member_key))
+
+        # ── Gate por tipo (item 2 / Etapa 2): sessões em pools 'ai' ≤ C_ai ──────
+        kind        = (pool.agent_kind if pool else None) or None
+        kind_member = f"{tenant_id}:admission:kind_member:{session_id}"
+        prev_kind   = _decode(await self._redis.get(kind_member))
+        kind_added  = False
+        kind_set    = f"{tenant_id}:admission:kind:ai"
+        if kind == "ai" and prev_kind != "ai":
+            c_ai = await self._type_limit(tenant_id, "ai_agent")
+            if c_ai is not None:
+                kind_added = bool(await self._redis.sadd(kind_set, session_id))
+                kcount = await self._redis.scard(kind_set)
+                if kcount > c_ai:
+                    if kind_added:
+                        await self._redis.srem(kind_set, session_id)
+                        kind_added = False
+                    if not prev:
+                        # Door-entry beyond contracted AI capacity → outage "quota"
+                        logger.warning(
+                            "admission rejected (type gate): tenant=%s session=%s pool=%s "
+                            "kind=ai current=%d limit=%d",
+                            tenant_id, session_id, pool_id, kcount, c_ai,
+                        )
+                        return AdmissionDecision(
+                            admitted=False, cause="quota", pool_id=pool_id,
+                            limit=c_ai, current=kcount,
+                        )
+                    # Mid-session migration into saturated AI capacity: fail-open
+                    # (same rule as bucket migration — never outage an active session).
+                    # Keep the ORIGIN kind attribution (no half-state in tracking).
+                    logger.warning(
+                        "admission type-gate migration fail-open: tenant=%s session=%s "
+                        "pool=%s current=%d limit=%d", tenant_id, session_id, pool_id, kcount, c_ai,
+                    )
+                    kind = prev_kind or None
+            else:
+                # Sem C_ai configurado → sem gate, mas mantém o tracking de kind.
+                kind_added = bool(await self._redis.sadd(kind_set, session_id))
+
         if prev == bucket:
-            return AdmissionDecision(admitted=True)   # already admitted here
+            # Already admitted here — commit kind tracking (idempotent re-publish).
+            await self._commit_kind(tenant_id, session_id, kind, prev_kind, kind_member, kind_set)
+            return AdmissionDecision(admitted=True)
 
         added = await self._redis.sadd(bucket, session_id)
         count = await self._redis.scard(bucket)
         if limit is not None and count > limit:
             if added:
                 await self._redis.srem(bucket, session_id)   # rollback
+            if kind_added:
+                await self._redis.srem(kind_set, session_id)  # rollback type tracking
             if prev:
                 # Mid-session migration (escalation/transfer) into a full bucket:
                 # NEVER outage-close an active session — keep the origin bucket
@@ -124,7 +176,35 @@ class AdmissionController:
         if prev and prev != bucket:
             # Migration: session moved pools — release the origin bucket slot.
             await self._redis.srem(prev, session_id)
+        await self._commit_kind(tenant_id, session_id, kind, prev_kind, kind_member, kind_set)
         return AdmissionDecision(admitted=True)
+
+    async def _commit_kind(
+        self,
+        tenant_id:   str,
+        session_id:  str,
+        kind:        str | None,
+        prev_kind:   str,
+        kind_member: str,
+        kind_set:    str,
+    ) -> None:
+        """Atualiza o tracking de kind após admissão bem-sucedida (item 2)."""
+        if kind is None:
+            return  # pool sem tipagem → não mexe no tracking (conservador)
+        await self._redis.set(kind_member, kind, ex=_MEMBER_TTL_S)
+        if prev_kind == "ai" and kind != "ai":
+            await self._redis.srem(kind_set, session_id)
+
+    async def _type_limit(self, tenant_id: str, resource_type: str) -> int | None:
+        """C por tipo ({t}:quota:capacity:{type}, pricing quota sync). None = sem gate."""
+        raw = _decode(await self._redis.get(f"{tenant_id}:quota:capacity:{resource_type}"))
+        if not raw:
+            return None
+        try:
+            v = int(float(raw))
+        except ValueError:
+            return None
+        return v if v > 0 else None
 
     async def _shared_limit(self, tenant_id: str) -> int | None:
         """shared = total − Σ reservations. None = unlimited (no total configured)."""
@@ -169,15 +249,21 @@ class AdmissionController:
                 buckets.append(_decode(key))
             async for key in self._redis.scan_iter(match="*:admission:shared", count=200):
                 buckets.append(_decode(key))
+            # Item 2: type-gate sets follow the same closed-session release.
+            async for key in self._redis.scan_iter(match="*:admission:kind:ai", count=200):
+                buckets.append(_decode(key))
 
             for bucket in buckets:
                 tenant_id = bucket.split(":admission:", 1)[0]
+                is_kind   = ":admission:kind:" in bucket
                 async for member in self._redis.sscan_iter(bucket, count=200):
                     session_id = _decode(member)
                     closed = await self._redis.exists(f"session:{session_id}:closed")
                     if closed:
                         await self._redis.srem(bucket, session_id)
                         await self._redis.delete(
+                            f"{tenant_id}:admission:kind_member:{session_id}"
+                            if is_kind else
                             f"{tenant_id}:admission:member:{session_id}"
                         )
                         released += 1

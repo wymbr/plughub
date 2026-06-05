@@ -121,10 +121,22 @@ removida da visão do total no fechamento da Fase 2; aqui sai do modelo).
    updated), `tenant_demo.yaml` com declaração explícita (16 ai + retencao
    human), e quotas por tipo no pricing (`{t}:quota:capacity:ai_agent` /
    `:human_agent`, mesmo recompute/DEL do quota sync).
-   **Etapa 2 (pendente)**: os gates em si — login humano concorrente ≤ C_human
-   no `registerHumanAgent` (mcp-server, com erro claro no Console) e sessões em
-   pools `ai` ≤ C_ai na admissão (routing, causa `quota` → demanda reprimida);
-   validação de registro de recurso (tipo do recurso == agent_kind do pool).
+   **Etapa 2 ✅** (2026-06-05) — os gates:
+   - **Humano** (`registerHumanAgent`, mcp-server): (a) kind do pool — login só
+     em `agent_kind: human` (lê o pool_config cacheado; fail-open se ausente);
+     (b) logins concorrentes (`{t}:instance:human-*`) ≤ C_human — re-login do
+     mesmo usuário nunca bloqueia; recusa → `login_denied` no WS + toast
+     persistente de erro no Console (`AgentAssistContext`); pool auto-criado no
+     login declara `agent_kind: human`. Falha de Redis → fail-open (gate nunca
+     derruba login por infra).
+   - **IA** (`AdmissionController`, routing): sessões entrando em pool
+     `agent_kind: ai` ≤ C_ai — SET `{t}:admission:kind:ai` + member key, mesma
+     mecânica idempotente dos buckets (rollback em rejeição, migração ai↔human
+     atualiza tracking, mid-session fail-open mantém atribuição de origem,
+     reconciler libera via session:closed). Rejeição na porta → outage
+     **cause `quota`** (visível na demanda reprimida como "Teto contratado").
+   - **Recurso × kind**: deploy de skill em pool `human` → 422 (pool-slots);
+     login humano em pool `ai` → `login_denied` (acima).
 3. Validações de config:
    - **3a ✅** (2026-06-04) pool: `Σ session_reservation ≤ C` / `shared ≥ 0` no
      agent-registry (POST/PUT de pool) — C lido de `{t}:quota:max_concurrent_sessions`;

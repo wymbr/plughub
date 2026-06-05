@@ -111,6 +111,11 @@ Hoje o Analytics/Agents mistura agente×pool e não separa humano×IA.
   (b) ~~limpar `queue_config`/`session_reservation` via PUT~~ ✅ (2026-06-04, ver
   `CHANGELOG.md` — `.nullable()` nos campos de pool + `DbNull` no registry + UI);
   (c) cenários fila muda e drop sem pool_id não exercitados em teste.
+- **Ajuste menor UI — i18n quebrado no dropdown de pools do Console** (2026-06-05,
+  observado na validação do item 2): o cabeçalho do PoolCombo exibe o literal
+  `POOLS ({{POOLS}})` — interpolação i18n não resolvida (chave `header.pools` ou
+  similar com placeholder errado/faltando no namespace `agentAssist`, en e/ou
+  pt-BR). Conferir `Header.tsx`/`PoolCombo` + locales.
 - **Reformulação Analytics/Agents — Bancada de comparação 360° (novo)**: reescreve a aba como
   bancada de comparação (média dos agentes × indivíduos), unificando quantitativo + qualitativo
   (Arc 6) + voz do cliente (NPS/pesquisa) + voz do agente (wrap-up) na mesma entidade `agent_key`.
@@ -190,8 +195,13 @@ tipo) e 7 (UX do available).
 ponta (schemas+Prisma+backfill+rotas+routing+YAML) + quotas por tipo
 (`{t}:quota:capacity:{ai_agent|human_agent}`) + decisões de tipagem fechadas
 no spec (queue_config⇒human; fila atendida=ai cobrável; tier grátis = fila de
-sistema, arco futuro). Etapa 2 pendente: gates (login humano ≤ C_human;
-sessões IA ≤ C_ai na admissão; validação recurso×kind no registro).
+sistema, arco futuro).
+**Item 2 / Etapa 2 ✅** (2026-06-05, ver `CHANGELOG.md`) — **item 2 completo**:
+gate humano (logins concorrentes ≤ C_human + kind do pool no registerHumanAgent,
+`login_denied` com toast no Console), gate IA (sessões em pools ai ≤ C_ai na
+admissão, cause `quota` → demanda reprimida), recurso×kind (deploy em pool
+human → 422; login humano em pool ai → negado). **Resta do arco: só o item 7**
+(UX do available físico × admissível).
 **Item 7 (novo, 2026-06-04)** — revisão do "available" nos Monitores
 (Sessions/Pools/Agents + consumidores do snapshot): físico (slots livres) ≠
 admissível (reserva − uso, ou min(slots, shared restante)) — pool pode exibir

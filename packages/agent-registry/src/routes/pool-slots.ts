@@ -118,6 +118,14 @@ poolSlotsRouter.put("/slots/:slot", async (req: Request, res: Response, next: Ne
     })
     if (!skill) return res.status(404).json({ error: `Skill '${skill_id}' não encontrada` })
 
+    // Capacity-governance item 2: deploy de skill só em pool 'ai' — pool humano
+    // não pré-instancia agentes (a fila atendida vive no pool de fila, IA).
+    if ((pool as { agent_kind?: string | null }).agent_kind === "human") {
+      return res.status(422).json({
+        error: "pool agent_kind 'human' não recebe deploy de skill — deploys são para pools IA",
+      })
+    }
+
     // Capacity-governance item 3b: Σ declarada nos deploys ≤ C.
     // Feedback cedo, na declaração (re-checada no promote — C pode mudar entre
     // os dois). Reduções/iguais sempre passam (re-sync idempotente do
