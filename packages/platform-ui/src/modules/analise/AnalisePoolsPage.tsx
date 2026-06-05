@@ -38,9 +38,13 @@ interface OccTotal     {
   peak_concurrency: number; capacity: number; headroom: number; utilization: number | null
   provisioned_capacity?: number; capacity_source?: 'pricing' | 'provisioned'
 }
-interface OccSeriesRow { bucket: string; pool_id: string; peak_concurrency: number; capacity: number }
+interface OccSeriesRow { bucket: string; pool_id: string; peak_concurrency: number; capacity: number; admitted?: number }
 interface OccTotalRow  { bucket: string; peak_concurrency: number; capacity: number }
-interface OccData      { series: OccSeriesRow[]; by_pool: OccPoolRow[]; total: OccTotal | null; total_series?: OccTotalRow[] }
+interface AdmSeriesRow { bucket: string; used: number; limit: number }
+interface OccData      {
+  series: OccSeriesRow[]; by_pool: OccPoolRow[]; total: OccTotal | null; total_series?: OccTotalRow[]
+  admission?: { reserved_series: AdmSeriesRow[]; shared_series: AdmSeriesRow[]; buffer_series: AdmSeriesRow[] }
+}
 
 interface QSeriesRow  { bucket: string; pool_id: string; avg_wait_ms: number; contacts: number; queued: number; abandoned: number; max_queue_len: number; available_agents: number }
 interface QPoolRow    { pool_id: string; contacts: number; queued: number; abandoned: number; handoff: number; abandon_rate: number; avg_wait_ms: number; p95_wait_ms: number; sla_target_ms: number; within_sla: number; sla_eligible: number; sla_attainment: number | null }
@@ -285,6 +289,78 @@ const CapacitySubTab: React.FC<{ data: OccData | null; loading: boolean }> = ({ 
           )}
         </div>
       )}
+
+      {/* Item 7b — Admissão no tempo: histórico do Monitor (reservado ×
+          compartilhado empilhados vs C; sala de espera gratuita vs teto) */}
+      {(() => {
+        const adm = data?.admission
+        if (!adm || (adm.reserved_series.length === 0 && adm.shared_series.length === 0)) return null
+        const byBucket = new Map<string, { bucket: string; reserved: number; shared: number }>()
+        for (const r of adm.reserved_series) {
+          byBucket.set(r.bucket, { bucket: r.bucket, reserved: r.used, shared: 0 })
+        }
+        for (const r of adm.shared_series) {
+          const row = byBucket.get(r.bucket) ?? { bucket: r.bucket, reserved: 0, shared: 0 }
+          row.shared = r.used
+          byBucket.set(r.bucket, row)
+        }
+        const admData = [...byBucket.values()].sort((a, b) => a.bucket.localeCompare(b.bucket))
+        const cLine = total?.capacity_source === 'pricing' ? total.capacity : null
+        const buf = adm.buffer_series
+        const bufLimit = buf.length > 0 ? Math.max(...buf.map(b => b.limit)) : null
+        return (
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+            <div className="bg-white rounded-lg border border-border overflow-hidden">
+              <div className="px-4 py-2.5 border-b border-border bg-surface-muted">
+                <p className="text-xs font-semibold text-muted uppercase tracking-wide">{t('pools.capacity.admissionTitle')}</p>
+                <p className="text-2xs text-muted-light mt-0.5">{t('pools.capacity.admissionHint')}</p>
+              </div>
+              <div className="p-3">
+                <ResponsiveContainer width="100%" height={200}>
+                  <ComposedChart data={admData} margin={{ top: 8, right: 16, left: 0, bottom: 0 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#E5E7EB" />
+                    <XAxis dataKey="bucket" tick={{ fontSize: 11 }} tickFormatter={fmtBucket} />
+                    <YAxis tick={{ fontSize: 11 }} allowDecimals={false} />
+                    <Tooltip labelFormatter={fmtBucket} />
+                    <Legend iconSize={10} wrapperStyle={{ fontSize: 12 }} />
+                    <Area type="monotone" dataKey="reserved" stackId="adm" name={t('pools.capacity.reservedArea')}
+                          stroke="#059669" fill="#059669" fillOpacity={0.45} />
+                    <Area type="monotone" dataKey="shared" stackId="adm" name={t('pools.capacity.sharedArea')}
+                          stroke="#1B4F8A" fill="#1B4F8A" fillOpacity={0.4} />
+                    {cLine !== null && (
+                      <ReferenceLine y={cLine} stroke="#DC2626" strokeDasharray="4 4" ifOverflow="extendDomain"
+                        label={{ value: t('pools.capacity.configuredLine'), fontSize: 11, fill: '#DC2626', position: 'insideTopRight' }} />
+                    )}
+                  </ComposedChart>
+                </ResponsiveContainer>
+              </div>
+            </div>
+            <div className="bg-white rounded-lg border border-border overflow-hidden">
+              <div className="px-4 py-2.5 border-b border-border bg-surface-muted">
+                <p className="text-xs font-semibold text-muted uppercase tracking-wide">{t('pools.capacity.bufferTitle')}</p>
+                <p className="text-2xs text-muted-light mt-0.5">{t('pools.capacity.bufferHint')}</p>
+              </div>
+              <div className="p-3">
+                <ResponsiveContainer width="100%" height={200}>
+                  <ComposedChart data={buf} margin={{ top: 8, right: 16, left: 0, bottom: 0 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#E5E7EB" />
+                    <XAxis dataKey="bucket" tick={{ fontSize: 11 }} tickFormatter={fmtBucket} />
+                    <YAxis tick={{ fontSize: 11 }} allowDecimals={false} />
+                    <Tooltip labelFormatter={fmtBucket} />
+                    <Legend iconSize={10} wrapperStyle={{ fontSize: 12 }} />
+                    <Area type="monotone" dataKey="used" name={t('pools.capacity.bufferUsed')}
+                          stroke="#7C3AED" fill="#7C3AED" fillOpacity={0.4} />
+                    {bufLimit !== null && bufLimit > 0 && (
+                      <ReferenceLine y={bufLimit} stroke="#DC2626" strokeDasharray="4 4" ifOverflow="extendDomain"
+                        label={{ value: t('pools.capacity.bufferLimit'), fontSize: 11, fill: '#DC2626', position: 'insideTopRight' }} />
+                    )}
+                  </ComposedChart>
+                </ResponsiveContainer>
+              </div>
+            </div>
+          </div>
+        )
+      })()}
 
       {/* Time-series de capacidade (Arc 19 — "Pools (time-series capacity)") */}
       {tsData.length > 0 && (

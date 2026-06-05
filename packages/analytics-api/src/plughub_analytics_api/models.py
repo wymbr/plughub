@@ -450,6 +450,9 @@ def parse_pool_occupancy(payload: dict[str, Any]) -> dict | None:
         "minute":               minute,
         "peak_concurrency":     int(payload.get("peak_concurrency", 0)),
         "provisioned_capacity": int(payload.get("provisioned_capacity", 0)),
+        # Item 7b — sessões debitando C atribuídas ao pool (reserva + shared HASH);
+        # nas linhas agregadas __reserved__/__shared__/__buffer__, espelha o peak.
+        "admitted_peak":        int(payload.get("admitted_peak", 0)),
     }
 
 

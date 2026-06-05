@@ -217,10 +217,12 @@ com donuts ("total e como está sendo consumido") + tiles do pipeline; HASH
 **7a ✅** (2026-06-05, ver `CHANGELOG.md`): HASH shared_pools (atribuição exata)
 + agregador no /v1/operational/pools (admissible, regimes, tiers, summary) +
 Monitor/Pools com tiles/donuts/seções + tiles no Monitor/Sessions.
-**7b pendente** (histórico): sampler amostra reserva/shared/buffer →
-pool_occupancy_peaks → Analytics espelha o Monitor em área empilhada.
-Verificações junto ao 7b: segmento sintético no detalhe de Sessions; nenhum
-`system` em Analytics/Agents.
+**7b ✅** (2026-06-05, ver `CHANGELOG.md`): sampler amostra admissão →
+admitted_peak + linhas __reserved__/__shared__/__buffer__ → bloco admission
+no occupancy → aba Capacidade com "Admissão no tempo" e "Sala de espera
+gratuita no tempo". **ITEM 7 COMPLETO — ARCO CONCLUÍDO.** Verificações na
+validação do 7b: segmento sintético no detalhe de Sessions; nenhum `system`
+em Analytics/Agents.
 
 ---
 

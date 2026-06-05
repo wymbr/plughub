@@ -606,12 +606,22 @@ CREATE TABLE IF NOT EXISTS {db}.pool_occupancy_peaks
     minute               DateTime64(3, 'UTC'),
     peak_concurrency     Int32,
     provisioned_capacity Int32,
+    admitted_peak        Int32 DEFAULT 0,
     ingested_at          DateTime DEFAULT now(),
     date                 Date
 )
 ENGINE = ReplacingMergeTree(ingested_at)
 PARTITION BY toYYYYMM(date)
 ORDER BY (tenant_id, pool_id, minute)
+"""
+
+# Item 7b — migração de bases existentes (ADD COLUMN é idempotente no ClickHouse).
+# admitted_peak = sessões debitando C atribuídas ao pool no minuto (reserva +
+# atribuição do shared via HASH do 7a). Linhas agregadas novas no mesmo padrão
+# do __total__: __reserved__ / __shared__ / __buffer__ (peak vs capacity=limite).
+_ALTER_POOL_OCCUPANCY_ADMITTED = """
+ALTER TABLE {db}.pool_occupancy_peaks
+    ADD COLUMN IF NOT EXISTS admitted_peak Int32 DEFAULT 0 AFTER provisioned_capacity
 """
 
 # ── Arc 5: mv_agent_performance_daily — AggregatingMergeTree MV over segments.
@@ -726,6 +736,7 @@ _ALL_DDL = [
     _DDL_AGENT_LOGIN_INTERVALS,
     _DDL_AGENT_POOL_INTERVALS,
     _DDL_POOL_OCCUPANCY_PEAKS,
+    _ALTER_POOL_OCCUPANCY_ADMITTED,   # item 7b — migração idempotente
     _DDL_AGENT_BUSINESS_EVENTS,
     _DDL_CALIBRATION_EVENTS,
     # Materialized views — must come AFTER the source tables they reference.
@@ -1170,6 +1181,7 @@ class AnalyticsStore:
 
     _POOL_OCCUPANCY_COLS = [
         "tenant_id", "pool_id", "minute", "peak_concurrency", "provisioned_capacity",
+        "admitted_peak",   # item 7b
         # ingested_at omitted — DEFAULT now()
         "date",
     ]
@@ -1707,7 +1719,7 @@ def _agent_pool_interval_row(d: dict) -> list:
 
 
 def _pool_occupancy_row(d: dict) -> list:
-    """Row builder for pool_occupancy_peaks (Fase 2)."""
+    """Row builder for pool_occupancy_peaks (Fase 2; item 7b: admitted_peak)."""
     minute_ts = d.get("minute")
     minute_dt = _parse_dt(minute_ts) if minute_ts else datetime.utcnow()
     return [
@@ -1716,6 +1728,7 @@ def _pool_occupancy_row(d: dict) -> list:
         minute_dt,
         int(d.get("peak_concurrency") or 0),
         int(d.get("provisioned_capacity") or 0),
+        int(d.get("admitted_peak") or 0),
         # ingested_at — DEFAULT now()
         _today_utc(minute_ts),
     ]

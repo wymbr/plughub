@@ -2,6 +2,20 @@
 
 ---
 
+## Capacity-governance item 7b — Analytics espelha o Monitor (ARCO CONCLUÍDO) (2026-06-05)
+
+Fecha o item 7 e o arco: a organização reservado × compartilhado × fila gratuita que o Monitor mostra ao vivo (7a) ganha histórico no Analytics — donut = foto, área empilhada = filme.
+
+**routing-engine** (occupancy sampler): cada tick (5s) amostra também a admissão **nas mesmas chaves que o Monitor lê** — reservas usadas por pool (`SCARD reserved:*`), shared por pool (HASH `shared_pools` do 7a), buffer (`SCARD unadmitted`) — e rastreia picos por minuto. O flush emite: `admitted_peak` em toda linha por pool (sessões debitando C atribuídas ao pool) e três linhas agregadas no padrão do `__total__`: `__reserved__` (Σ usadas vs Σ reservas configuradas), `__shared__` (usado vs limite = C − Σ reservas), `__buffer__` (fila gratuita vs `queue_max_total`).
+
+**analytics-api**: coluna `admitted_peak` no `pool_occupancy_peaks` (ALTER ... IF NOT EXISTS idempotente no boot) + parser/row builder; `/reports/pools/occupancy` exclui as linhas agregadas das séries por pool e devolve o bloco **`admission`** (`reserved_series`/`shared_series`/`buffer_series`, used vs limit por bucket; só p/ callers sem escopo).
+
+**platform-ui** (aba Capacidade): dois gráficos novos — **"Admissão no tempo"** (áreas empilhadas Reservado+Compartilhado vs linha vermelha do C contratado, `extendDomain`) e **"Sala de espera gratuita no tempo"** (área de espera muda — isenta de C — vs teto do buffer). i18n en + pt-BR.
+
+**ARCO CAPACITY-GOVERNANCE CONCLUÍDO**: contratado como fonte única governando configuração (3a/3b), criação (gates item 2), runtime (quota item 1), visibilidade comercial (Billing item 4), demo (item 6) e operação tempo-real + histórica (item 7), com a fila de sistema (arco system-queue) integrada ao modelo.
+
+---
+
 ## Capacity-governance item 7a — Monitor com físico × admissível, regimes e donuts (2026-06-05)
 
 Fecha a parte tempo-real do item 7: o Monitor passa a contar a verdade da admissão (reserved × shared × fila gratuita), não só a física.

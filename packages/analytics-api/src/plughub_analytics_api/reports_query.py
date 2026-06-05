@@ -2504,7 +2504,8 @@ async def query_pools_occupancy(
     since = _ch_fmt(from_dt) if from_dt else _default_from()
     until = _ch_fmt(to_dt, upper=True) if to_dt else _default_to()
     bkt   = bucket if bucket in ("hour", "day") else "hour"
-    empty = {"series": [], "by_pool": [], "total": None, "total_series": []}
+    empty = {"series": [], "by_pool": [], "total": None, "total_series": [],
+             "admission": {"reserved_series": [], "shared_series": [], "buffer_series": []}}
     if accessible_pools is not None and len(accessible_pools) == 0:
         return {"data": empty, "meta": {"from_dt": since, "to_dt": until, "bucket": bkt}}
     try:
@@ -2528,7 +2529,7 @@ def _fetch_pools_occupancy(
 ) -> dict:
     bucket_fn = "toStartOfHour" if bucket == "hour" else "toStartOfDay"
     conditions = ["tenant_id = {tenant_id:String}", f"minute >= '{since}'", f"minute <  '{until}'",
-                  "pool_id != '__total__'"]
+                  "pool_id NOT IN ('__total__','__reserved__','__shared__','__buffer__')"]
     params: dict = {"tenant_id": tenant_id}
     if pool_id:
         conditions.append("pool_id = {pool_id:String}")
@@ -2543,7 +2544,8 @@ def _fetch_pools_occupancy(
         SELECT {bucket_fn}(minute)        AS bucket,
                pool_id,
                max(peak_concurrency)      AS peak_concurrency,
-               max(provisioned_capacity)  AS capacity
+               max(provisioned_capacity)  AS capacity,
+               max(admitted_peak)         AS admitted
         FROM {db}.pool_occupancy_peaks FINAL
         WHERE {where}
         GROUP BY bucket, pool_id ORDER BY bucket
@@ -2596,7 +2598,31 @@ def _fetch_pools_occupancy(
         for r in total_series:
             r["bucket"] = _iso(r["bucket"])
 
-    return {"data": {"series": series, "by_pool": by_pool, "total": total, "total_series": total_series},
+    # ── Item 7b — séries de admissão (histórico do Monitor: reservado ×
+    # compartilhado × fila gratuita, peak usado vs limite por bucket) ──────────
+    admission: dict = {"reserved_series": [], "shared_series": [], "buffer_series": []}
+    if accessible_pools is None:
+        adm_rows = _rows_to_dicts(client.query(f"""
+            SELECT {bucket_fn}(minute)        AS bucket,
+                   pool_id,
+                   max(peak_concurrency)      AS used,
+                   max(provisioned_capacity)  AS cap
+            FROM {db}.pool_occupancy_peaks FINAL
+            WHERE tenant_id = {{tenant_id:String}} AND minute >= '{since}' AND minute < '{until}'
+              AND pool_id IN ('__reserved__','__shared__','__buffer__')
+            GROUP BY bucket, pool_id ORDER BY bucket
+        """, parameters={"tenant_id": tenant_id}))
+        key_map = {"__reserved__": "reserved_series", "__shared__": "shared_series",
+                   "__buffer__": "buffer_series"}
+        for r in adm_rows:
+            admission[key_map[r["pool_id"]]].append({
+                "bucket": _iso(r["bucket"]),
+                "used":   int(r.get("used") or 0),
+                "limit":  int(r.get("cap") or 0),
+            })
+
+    return {"data": {"series": series, "by_pool": by_pool, "total": total,
+                     "total_series": total_series, "admission": admission},
             "meta": {"from_dt": since, "to_dt": until, "bucket": bucket}}
 
 

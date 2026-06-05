@@ -192,15 +192,19 @@ removida da visão do total no fechamento da Fase 2; aqui sai do modelo).
      {sid→pool} ao lado do SET (SET continua sendo o limite; HASH é índice;
      HSET/HDEL no admit/migração/release; higiene no reconciler). Elimina o
      proxy — fatias somam SCARD por construção.
-   - **Execução em duas etapas**: **7a — tempo real**: HASH + agregador no
-     endpoint operacional (Redis read-only, sem tocar hot path) + Monitor/Pools
-     reorganizado (donuts/tiles/seções; Sessions só ganha tiles). **7b —
-     histórico (Analytics espelha o Monitor)**: occupancy sampler amostra
-     também reserva usada/pool, shared usado/pool (via HASH), buffer
-     usado/teto → colunas novas em `pool_occupancy_peaks` + linhas `__shared__`
-     /`__buffer__` (padrão `__total__`) → `/reports/pools/occupancy` estendido
-     → Analytics/Pools com área empilhada (Σ reservas + shared + folga = C no
-     tempo; linha buffer vs teto). Donut = foto; área empilhada = filme.
+   - **7a ✅** (2026-06-05, ver CHANGELOG): HASH `shared_pools` + agregador no
+     `/v1/operational/pools` + Monitor/Pools com tiles/donuts/seções + tiles no
+     Monitor/Sessions. Validado com o cenário-prova (agente livre + contrato
+     cheio → `Disp 20/0⊕` vermelho).
+   - **7b ✅** (2026-06-05, ver CHANGELOG): occupancy sampler amostra a admissão
+     (reservas usadas por pool, shared por pool via HASH, buffer) nas mesmas
+     chaves que o Monitor lê → coluna `admitted_peak` + linhas agregadas
+     `__reserved__`/`__shared__`/`__buffer__` em `pool_occupancy_peaks`
+     (ALTER idempotente) → `/reports/pools/occupancy` com bloco `admission`
+     (used vs limit por bucket) → aba Capacidade com **"Admissão no tempo"**
+     (reservado+compartilhado empilhados vs linha C) e **"Sala de espera
+     gratuita no tempo"** (uso vs teto). Donut = foto; área empilhada = filme.
+     **ITEM 7 COMPLETO — ARCO CAPACITY-GOVERNANCE CONCLUÍDO.**
    - Verificações na validação: render do segmento sintético `system-queue` no
      detalhe de Sessions; nenhum `system` vazando em Analytics/Agents.
      Refinamentos futuros registrados: SLA por tier de fila.

@@ -1351,22 +1351,82 @@ async def _flush_occupancy(
     minute,
     peaks:        dict,
     total_peaks:  dict,
+    adm_pool_peaks:     dict | None = None,   # (tenant, pool) -> peak admitted
+    adm_reserved_peaks: dict | None = None,   # tenant -> peak Σ reservas usadas
+    adm_shared_peaks:   dict | None = None,   # tenant -> peak shared usado
+    buffer_peaks:       dict | None = None,   # tenant -> peak fila gratuita
 ) -> None:
-    """Emit one pool.occupancy event per (tenant, pool) + a per-tenant total."""
+    """
+    Emit one pool.occupancy event per (tenant, pool) + per-tenant aggregates.
+    Item 7b: cada linha por pool ganha `admitted_peak` (sessões debitando C
+    atribuídas ao pool — reserva + atribuição do shared via HASH), e três
+    linhas agregadas espelham o Monitor no histórico:
+      __reserved__  peak = Σ reservas usadas    | capacity = Σ reservas configuradas
+      __shared__    peak = shared usado         | capacity = shared limit (C − Σ res)
+      __buffer__    peak = fila gratuita usada  | capacity = queue_max_total
+    """
+    adm_pool_peaks     = adm_pool_peaks or {}
+    adm_reserved_peaks = adm_reserved_peaks or {}
+    adm_shared_peaks   = adm_shared_peaks or {}
+    buffer_peaks       = buffer_peaks or {}
     minute_iso = minute.isoformat()
     tenant_cap_total: dict = {}
+    tenants: set = set()
     for (tenant_id, pool_id), peak in peaks.items():
+        tenants.add(tenant_id)
         cap = await _pool_capacity(redis_client, tenant_id, pool_id)
         tenant_cap_total[tenant_id] = tenant_cap_total.get(tenant_id, 0) + cap
         await producer.send_and_wait(_OCCUPANCY_TOPIC, {
             "tenant_id": tenant_id, "pool_id": pool_id, "minute": minute_iso,
             "peak_concurrency": peak, "provisioned_capacity": cap,
+            "admitted_peak": adm_pool_peaks.get((tenant_id, pool_id), 0),
         })
     for tenant_id, tot in total_peaks.items():
+        tenants.add(tenant_id)
         await producer.send_and_wait(_OCCUPANCY_TOPIC, {
             "tenant_id": tenant_id, "pool_id": "__total__", "minute": minute_iso,
             "peak_concurrency": tot, "provisioned_capacity": tenant_cap_total.get(tenant_id, 0),
+            "admitted_peak": adm_reserved_peaks.get(tenant_id, 0) + adm_shared_peaks.get(tenant_id, 0),
         })
+
+    # ── Item 7b — agregados de admissão (histórico do Monitor) ────────────────
+    for tenant_id in tenants:
+        # Σ reservas configuradas + C → limites das linhas agregadas.
+        sum_reservations = 0
+        try:
+            async for rk in redis_client.scan_iter(
+                match=f"{tenant_id}:admission:reserved:*", count=100
+            ):
+                rk_s = rk.decode() if isinstance(rk, bytes) else str(rk)
+                r_pool = rk_s.rsplit(":", 1)[-1]
+                raw_cfg = await redis_client.get(f"{tenant_id}:pool_config:{r_pool}")
+                if raw_cfg:
+                    sum_reservations += int(
+                        (json.loads(raw_cfg) or {}).get("session_reservation") or 0
+                    )
+        except Exception:
+            pass
+        contracted = 0
+        try:
+            raw_c = await redis_client.get(f"{tenant_id}:quota:max_concurrent_sessions")
+            if raw_c:
+                contracted = max(0, int(float(
+                    raw_c.decode() if isinstance(raw_c, bytes) else raw_c
+                )))
+        except Exception:
+            pass
+        shared_limit = max(0, contracted - sum_reservations) if contracted else 0
+
+        for pool_marker, peak_v, cap_v in (
+            ("__reserved__", adm_reserved_peaks.get(tenant_id, 0), sum_reservations),
+            ("__shared__",   adm_shared_peaks.get(tenant_id, 0),   shared_limit),
+            ("__buffer__",   buffer_peaks.get(tenant_id, 0),       mute_queue.max_queue_total()),
+        ):
+            await producer.send_and_wait(_OCCUPANCY_TOPIC, {
+                "tenant_id": tenant_id, "pool_id": pool_marker, "minute": minute_iso,
+                "peak_concurrency": peak_v, "provisioned_capacity": cap_v,
+                "admitted_peak": peak_v,
+            })
 
 
 async def _occupancy_sampler(
@@ -1387,8 +1447,12 @@ async def _occupancy_sampler(
     await asyncio.sleep(interval)  # let services start
 
     cur_minute = None
-    peaks: dict = {}        # (tenant_id, pool_id) -> peak this minute
-    total_peaks: dict = {}  # tenant_id -> peak total this minute
+    peaks: dict = {}              # (tenant_id, pool_id) -> peak active this minute
+    total_peaks: dict = {}        # tenant_id -> peak total this minute
+    adm_pool_peaks: dict = {}     # (tenant_id, pool_id) -> peak admitted (item 7b)
+    adm_reserved_peaks: dict = {} # tenant_id -> peak Σ reservas usadas
+    adm_shared_peaks: dict = {}   # tenant_id -> peak shared usado
+    buffer_peaks: dict = {}       # tenant_id -> peak fila gratuita
 
     while True:
         try:
@@ -1396,13 +1460,19 @@ async def _occupancy_sampler(
             if cur_minute is None:
                 cur_minute = minute
             if minute != cur_minute:
-                await _flush_occupancy(redis_client, producer, cur_minute, peaks, total_peaks)
+                await _flush_occupancy(
+                    redis_client, producer, cur_minute, peaks, total_peaks,
+                    adm_pool_peaks, adm_reserved_peaks, adm_shared_peaks, buffer_peaks,
+                )
                 peaks, total_peaks = {}, {}
+                adm_pool_peaks, adm_reserved_peaks = {}, {}
+                adm_shared_peaks, buffer_peaks = {}, {}
                 cur_minute = minute
 
             cursor = 0
             tenant_totals: dict = {}
             seen: set = set()
+            tenants_seen: set = set()
             while True:
                 cursor, keys = await redis_client.scan(cursor, match="*:pool:*:instances", count=50)
                 for key in keys:
@@ -1414,6 +1484,7 @@ async def _occupancy_sampler(
                     if (tenant_id, pool_id) in seen:
                         continue
                     seen.add((tenant_id, pool_id))
+                    tenants_seen.add(tenant_id)
                     raw = await redis_client.get(f"{tenant_id}:pool:{pool_id}:active_count")
                     c = max(0, int(raw)) if raw else 0
                     pk = (tenant_id, pool_id)
@@ -1423,6 +1494,48 @@ async def _occupancy_sampler(
                     break
             for tenant_id, tot in tenant_totals.items():
                 total_peaks[tenant_id] = max(total_peaks.get(tenant_id, 0), tot)
+
+            # ── Item 7b — amostra a admissão (reserved/shared/buffer) ─────────
+            # Mesmas chaves que o Monitor lê (HASH de atribuição do 7a) — o
+            # histórico espelha o tempo real por construção.
+            for tenant_id in tenants_seen:
+                try:
+                    shared_hash = await redis_client.hgetall(
+                        f"{tenant_id}:admission:shared_pools"
+                    )
+                    shared_by_pool: dict = {}
+                    for p_raw in shared_hash.values():
+                        p = p_raw.decode() if isinstance(p_raw, bytes) else str(p_raw)
+                        shared_by_pool[p] = shared_by_pool.get(p, 0) + 1
+                    shared_used = await redis_client.scard(
+                        f"{tenant_id}:admission:shared"
+                    )
+                    reserved_sum = 0
+                    reserved_by_pool: dict = {}
+                    async for rk in redis_client.scan_iter(
+                        match=f"{tenant_id}:admission:reserved:*", count=100
+                    ):
+                        rk_s = rk.decode() if isinstance(rk, bytes) else str(rk)
+                        r_pool = rk_s.rsplit(":", 1)[-1]
+                        used = await redis_client.scard(rk_s)
+                        reserved_by_pool[r_pool] = used
+                        reserved_sum += used
+                    buffer_used = await redis_client.scard(
+                        f"{tenant_id}:queue:unadmitted"
+                    )
+
+                    for p in set(list(shared_by_pool) + list(reserved_by_pool)):
+                        admitted = reserved_by_pool.get(p, 0) + shared_by_pool.get(p, 0)
+                        apk = (tenant_id, p)
+                        adm_pool_peaks[apk] = max(adm_pool_peaks.get(apk, 0), admitted)
+                    adm_reserved_peaks[tenant_id] = max(
+                        adm_reserved_peaks.get(tenant_id, 0), reserved_sum)
+                    adm_shared_peaks[tenant_id] = max(
+                        adm_shared_peaks.get(tenant_id, 0), int(shared_used))
+                    buffer_peaks[tenant_id] = max(
+                        buffer_peaks.get(tenant_id, 0), int(buffer_used))
+                except Exception:
+                    pass   # amostra perdida — próximo tick cobre
 
         except asyncio.CancelledError:
             return
