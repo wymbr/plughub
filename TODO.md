@@ -211,21 +211,24 @@ do spec.
 
 ---
 
-## Fila de sistema — tier gratuito *(arco futuro, registrado 2026-06-05)*
+## Fila de sistema — tier gratuito *(arco ATIVO — spec em discussão→fechada 2026-06-05)*
 
-Ressuscitar o tratamento de fila pelo sistema (sem agente) convivendo com a fila
-atendida, completando o modelo comercial da tipagem de pool (ver
-`capacity-governance.md` § Tipagem de pool): **fila de sistema = grátis, sem
-licença e sem debitar C** (ninguém atende — exige teto próprio `max_queue_length`
-p/ não virar buffer infinito); **fila atendida = agente IA licenciado** (upsell).
-`queue_config` null → fila de sistema; apontando skill → atendida. Sem isso, o
-tenant que não paga fila inteligente tem rejeição na porta (sem downgrade).
-Esboço de esforço (ordem de uma Fase D): routing reativa hold/dequeue no ledger
-ZSET + emite `dequeued` (dívida conhecida do queue_events); analytics dual-source
-no `/reports/pools/queue` (segments p/ atendida ∪ `queued→dequeued/abandoned` p/
-sistema — a derivação interim removida na Fase D volta, agora com evento correto);
-canais com feedback mínimo nativo (webchat "posição N" via deliver_text; voice
-hold futuro); decisão de contabilização na admissão (isenção de C + teto próprio).
+**Spec/ADR**: [`docs/arcos/system-queue.md`](docs/arcos/system-queue.md).
+Recon 2026-06-05 (a armadilha de sempre, na direção boa): a fila muda está
+**majoritariamente viva** — ledger ZSET, aviso de espera ao cliente (mantido no
+render v2), drain-on-ready, `queue_max_wait_default_s`, evento `queued` →
+analytics. O arco real é bem menor que o esboço supunha. **Decisões fechadas**:
+(1) isenção de C libera os buckets de admissão no enqueue mudo (re-admissão
+natural no drain; C cheio → re-enfileira); (2 revisada) teto TOTAL do tenant —
+`max_queue_total` no Config API + SET `{t}:queue:unadmitted` (SCARD = ocupação;
+sem teto por pool; vizinho barulhento = refinamento futuro), estouro = outage
+causa NOVA `queue_full`; (2b) **overflow**: C esgotado em pool humano cai na
+fila muda gratuita em vez de rejeitar na porta (rejeita só com fila cheia);
+(3) routing emite `queue.dequeued`/`queue.abandoned` p/ derivar espera real da
+fila muda; (4) relatório dual-source (segments ∪ events) com tier da fila por
+pool; (5) updates de posição = v2 opcional. Fases A (routing) e B
+(analytics+UI) no § Pendente do spec. Pré-requisito do item 7 do
+capacity-governance.
 
 ---
 
