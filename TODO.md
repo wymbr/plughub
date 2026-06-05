@@ -111,19 +111,21 @@ Hoje o Analytics/Agents mistura agente×pool e não separa humano×IA.
   (b) ~~limpar `queue_config`/`session_reservation` via PUT~~ ✅ (2026-06-04, ver
   `CHANGELOG.md` — `.nullable()` nos campos de pool + `DbNull` no registry + UI);
   (c) cenários fila muda e drop sem pool_id não exercitados em teste.
-- **Investigar — sessões sem `pool_id` no relatório de fila** (2026-06-05,
-  observado na validação da Fase B do system-queue): a tabela "Queue by pool"
-  (Analytics→Pools→Fila) mostra uma linha com pool "—" (20 contatos) — sessões
-  agregadas sem `pool_id`. Origem a confirmar: artefato de testes antigos,
-  segmentos de hook (wrapup/NPS) sem pool, ou enqueue/segment emitido antes da
-  resolução do pool. Conferir nos `segments` (role='queue' com pool_id vazio?)
-  e em `sessions` qual caminho grava sem pool; corrigir na origem ou filtrar
-  no relatório com justificativa.
-- **Ajuste menor UI — i18n quebrado no dropdown de pools do Console** (2026-06-05,
-  observado na validação do item 2): o cabeçalho do PoolCombo exibe o literal
-  `POOLS ({{POOLS}})` — interpolação i18n não resolvida (chave `header.pools` ou
-  similar com placeholder errado/faltando no namespace `agentAssist`, en e/ou
-  pt-BR). Conferir `Header.tsx`/`PoolCombo` + locales.
+- ~~**Sessões sem `pool_id` no relatório de fila**~~ ✅ (2026-06-05): origem
+  identificada — sessões nunca roteadas nem enfileiradas (pool vazio E sem
+  segmento de fila; ex. webchat que conecta e não engaja). Sem semântica de
+  fila → filtradas do `/reports/pools/queue` (`WHERE pool_id != ''` no
+  per-session, com justificativa em comentário); o volume delas segue no
+  Volume report.
+- ~~**i18n quebrado no dropdown de pools do Console**~~ ✅ (2026-06-05): a chave
+  `header.comboPools` interpola `{{pools}}` mas o cabeçalho do dropdown passava
+  `{ count }` → literal `POOLS ({{POOLS}})`. Fix no `Header.tsx` (passa
+  `pools: "ativo/total"`, mesmo formato do botão).
+- ~~**Env do Config API no routing**~~ ✅ (2026-06-05): faltava
+  `PLUGHUB_CONFIG_API_URL` no compose — o RoutingConfigCache tentava
+  `localhost:3600` no boot e caía nos defaults hard-coded (custom de
+  mensagens/limites do tenant não chegava até um config.changed). Adicionado
+  `http://config-api:3600`.
 - **Reformulação Analytics/Agents — Bancada de comparação 360° (novo)**: reescreve a aba como
   bancada de comparação (média dos agentes × indivíduos), unificando quantitativo + qualitativo
   (Arc 6) + voz do cliente (NPS/pesquisa) + voz do agente (wrap-up) na mesma entidade `agent_key`.

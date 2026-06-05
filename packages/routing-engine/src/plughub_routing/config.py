@@ -73,6 +73,9 @@ class Settings(BaseSettings):
     # Config API — used to fetch routing namespace settings on startup and reload
     config_api_url:               str = "http://localhost:3600"
     kafka_topic_config_changed:   str = "config.changed"
+    # Tenant usado na resolução do namespace routing (o GET exige ?tenant_id=).
+    # "__global__" = defaults da instalação; o demo seta tenant_demo via env.
+    tenant_id:                    str = "__global__"
 
     # Evaluation consumer — evaluation.requested → SkillFlowEngine
     kafka_topic_evaluation:  str = "evaluation.events"

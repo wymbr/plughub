@@ -2422,6 +2422,12 @@ def _fetch_pools_queue(
     _abandoned = "coalesce(q_outcome, '') = 'abandoned'"
     _handoff   = f"({_queued} AND coalesce(q_outcome, '') != 'abandoned' AND primary_count > 0)"
 
+    # Sessões sem pool resolvido E sem segmento de fila (nunca roteadas nem
+    # enfileiradas — ex. webchat que conecta e não engaja) ficam FORA do
+    # relatório de fila: não têm comportamento de fila a reportar (a linha
+    # "—" que apareciam criava ruído). O volume delas segue no Volume report.
+    _has_pool = "pool_id != ''"
+
     s_series = _rows_to_dicts(client.query(f"""
         SELECT {bucket_fn}(opened_at)                              AS bucket,
                pool_id,
@@ -2430,6 +2436,7 @@ def _fetch_pools_queue(
                countIf({_queued})                                  AS queued,
                countIf({_abandoned})                               AS abandoned
         FROM ({_per_session})
+        WHERE {_has_pool}
         GROUP BY bucket, pool_id
     """, parameters=params))
 
@@ -2473,6 +2480,7 @@ def _fetch_pools_queue(
                countIf(sla_target_ms > 0 AND coalesce(wait_ms, 0) <= sla_target_ms) AS within_sla,
                countIf(sla_target_ms > 0)                          AS sla_eligible
         FROM ({_per_session})
+        WHERE {_has_pool}
         GROUP BY pool_id ORDER BY contacts DESC
     """, parameters=params))
     for r in by_pool:

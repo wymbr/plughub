@@ -2,6 +2,17 @@
 
 ---
 
+## Limpeza de ajustes menores (2026-06-05)
+
+Três itens registrados nas validações da semana:
+
+1. **i18n do PoolCombo (Console)**: cabeçalho do dropdown exibia o literal `POOLS ({{POOLS}})` — a chave `header.comboPools` interpola `{{pools}}` mas o call site passava `{ count }`. Fix em `Header.tsx`: passa `pools: "ativo/total"` (mesmo formato do botão do combo).
+2. **`PLUGHUB_CONFIG_API_URL` do routing no compose**: faltava — o `RoutingConfigCache` tentava `localhost:3600` e operava só com defaults. **E o fix expôs um bug mais antigo**: o `GET /config/{namespace}` exige `?tenant_id=` (422 sem ele) — o reload do cache **nunca funcionou** (sempre mascarado pelo erro de conexão). Fix: `routing_config` ganha `configure_tenant` (settings `tenant_id`, default `__global__` = defaults da instalação; demo usa `tenant_demo` via env) e envia o query param; o mesmo bug existia no `_maxQueueTotal` do agent-registry (item 7a — caía silenciosamente no default 100) → corrigido com tenant_id + cache por tenant + parse do shape flat de `entries`.
+   **Descobertas em cascata na validação**: (a) a tabela `platform_config` havia sumido e o health check do config-api a recriou **vazia** (500 transiente; defaults hard-coded seguraram tudo — a disciplina de nunca depender só do Config API pagou); (b) re-seed revelou que a **imagem do `config-seed` estava stale** — o serviço builda imagem própria do mesmo Dockerfile do config-api, e os rebuilds de config-api não a atualizam. **Lição operacional: rebuild de config-api deve sempre incluir config-seed** (`up -d --build config-api config-seed`). Após rebuild+re-seed: namespace routing completo (13 chaves) e ciclo Config API → routing saudável pela primeira vez.
+3. **Linha "—" no relatório de fila**: sessões com pool vazio E sem segmento de fila (nunca roteadas nem enfileiradas — webchat que conecta e não engaja, artefatos de teste) não têm comportamento de fila a reportar → filtradas do `/reports/pools/queue` (`WHERE pool_id != ''` sobre o per-session, justificado em comentário). O volume delas permanece visível no Volume report.
+
+---
+
 ## Capacity-governance item 7b — Analytics espelha o Monitor (ARCO CONCLUÍDO) (2026-06-05)
 
 Fecha o item 7 e o arco: a organização reservado × compartilhado × fila gratuita que o Monitor mostra ao vivo (7a) ganha histórico no Analytics — donut = foto, área empilhada = filme.

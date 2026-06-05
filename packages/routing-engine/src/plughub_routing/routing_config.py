@@ -76,6 +76,15 @@ class RoutingConfigCache:
         self._data: dict[str, Any] = {}
         self._loaded_at: float = 0.0
         self._invalidated: bool = True   # start invalid — forces first reload
+        # Fix (2026-06-05): GET /config/{namespace} EXIGE ?tenant_id= — sem ele
+        # o Config API responde 422 e o reload nunca funcionou (mascarado pelo
+        # erro de conexão enquanto o env apontava p/ localhost). "__global__"
+        # resolve os defaults da instalação; main.py configura o tenant real.
+        self._tenant_id: str = "__global__"
+
+    def configure_tenant(self, tenant_id: str) -> None:
+        if tenant_id:
+            self._tenant_id = tenant_id
 
     # ------------------------------------------------------------------
     # Public API
@@ -116,7 +125,9 @@ class RoutingConfigCache:
         """
         url = f"{config_api_url.rstrip('/')}/config/routing"
         try:
-            resp = await http_client.get(url, timeout=5.0)
+            resp = await http_client.get(
+                url, params={"tenant_id": self._tenant_id}, timeout=5.0
+            )
             resp.raise_for_status()
             body = resp.json()
             # Config API returns { "entries": { key: { "value": ..., ... } } }

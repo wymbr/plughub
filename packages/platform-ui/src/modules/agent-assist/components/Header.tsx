@@ -132,7 +132,9 @@ const PoolCombo: React.FC<PoolComboProps> = ({
           {/* Header */}
           <div className="px-3 py-1.5 border-b border-border">
             <span className="text-xs font-semibold text-muted uppercase tracking-wide">
-              {t('header.comboPools', { count: totalCount })}
+              {/* Fix i18n: a chave interpola {{pools}}, não {{count}} —
+                  exibia o literal "POOLS ({{POOLS}})" no cabeçalho. */}
+              {t('header.comboPools', { pools: `${activeCount}/${totalCount}` })}
             </span>
           </div>
 

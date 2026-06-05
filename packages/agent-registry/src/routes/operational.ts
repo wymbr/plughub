@@ -36,21 +36,30 @@ async function _intOrNull(raw: string | null): Promise<number | null> {
   return Number.isFinite(n) && n > 0 ? n : null
 }
 
-/** Teto do buffer da fila gratuita (Config API routing.queue_max_total; cache 60s). */
-let _maxQueueCache: { at: number; value: number } | null = null
-async function _maxQueueTotal(): Promise<number> {
-  if (_maxQueueCache && Date.now() - _maxQueueCache.at < 60_000) return _maxQueueCache.value
+/** Teto do buffer da fila gratuita (Config API routing.queue_max_total; cache 60s).
+ *  Fix 2026-06-05: o GET /config/{ns} EXIGE ?tenant_id= (422 sem ele) — o fetch
+ *  caía silenciosamente no default. Cache por tenant. Nota: list_namespace
+ *  devolve entries {key: valor_resolvido} (flat), não envelopes {value}. */
+const _maxQueueCache = new Map<string, { at: number; value: number }>()
+async function _maxQueueTotal(tenantId: string): Promise<number> {
+  const hit = _maxQueueCache.get(tenantId)
+  if (hit && Date.now() - hit.at < 60_000) return hit.value
   let value = 100   // default hard-coded (espelha routing_config)
   try {
-    const resp = await fetch(`${config.config_api_url}/config/routing`)
+    const resp = await fetch(
+      `${config.config_api_url}/config/routing?tenant_id=${encodeURIComponent(tenantId)}`
+    )
     if (resp.ok) {
-      const body = await resp.json() as { entries?: Record<string, { value?: unknown }> }
+      const body = await resp.json() as { entries?: Record<string, unknown> }
       const raw  = body.entries?.["queue_max_total"]
-      const v    = typeof raw?.value === "number" ? raw.value : parseInt(String(raw?.value ?? ""), 10)
+      const v    = typeof raw === "number" ? raw
+        : typeof (raw as { value?: unknown })?.value === "number"
+          ? (raw as { value: number }).value
+          : parseInt(String(raw ?? ""), 10)
       if (Number.isFinite(v) && v > 0) value = v
     }
   } catch { /* default */ }
-  _maxQueueCache = { at: Date.now(), value }
+  _maxQueueCache.set(tenantId, { at: Date.now(), value })
   return value
 }
 
@@ -99,7 +108,7 @@ async function _admissionState(
     sharedByPool,
     reservedUsed,
     bufferUsed:  bufferMembers.length,
-    bufferLimit: await _maxQueueTotal(),
+    bufferLimit: await _maxQueueTotal(tenantId),
     unadmitted:  new Set(bufferMembers),
   }
 }

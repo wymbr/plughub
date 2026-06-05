@@ -45,6 +45,7 @@ async def run() -> None:
     # Pre-load routing namespace from Config API so first routing call already
     # has up-to-date SLA/scoring values (performance_score_weight, etc.).
     # Failure is non-fatal — RoutingConfigCache falls back to built-in defaults.
+    routing_config.configure_tenant(settings.tenant_id)
     await routing_config.reload(settings.config_api_url, http_client)
     logger.info("Routing config cache pre-loaded from %s", settings.config_api_url)
 
