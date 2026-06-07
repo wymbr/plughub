@@ -304,12 +304,14 @@ GET /reports/agents/compare
 - **Domínio (modelo do produto: `pending ≡ suspended`, `transfer ≡ escalate`)** — **nenhum valor
   novo**. Mapa de normalização do wrap-up: `resolvido→resolved`, `escalado→escalated`,
   `cancelado→abandoned`, `pendente→suspended`. O rótulo cru pool-scoped vai para `issue_status`.
-- **Reconciliação de enums** — `SegmentOutcomeSchema` é o cânone (ledger = fonte da verdade). O enum
-  declarável pelo agente (`OutcomeSchema`/`CompleteStepSchema`) vira **subset estrito e consistente**
-  dele: inclui `escalated`, `suspended`, `abandoned`; corrige `transferred_agent → transferred`. A
-  família `{escalated_human, escalated_ai, transferred}` permanece aceita como **alias legado** que a
-  bancada **dobra → `escalated`** na leitura (o alvo humano-vs-IA é recuperável pela topologia do
-  segmento seguinte). Sem migração destrutiva.
+- **Reconciliação de enums** — `SegmentOutcomeSchema` é o cânone (ledger = fonte da verdade).
+  `CompleteStepSchema.outcome` é ampliado para incluir `escalated`, `suspended`, `abandoned` (valores
+  já válidos no cânone) — o subset declarável do wrap-up. **`transferred_agent` NÃO é renomeado**
+  (recon F1.1: é valor de contrato load-bearing — SDK certify/adapter, e2e, mcp-client; há adapter
+  que mapeia `transferred`↔`transferred_agent`). A divergência `transferred_agent`↔`transferred` e o
+  folding da família `{escalated, escalated_human, escalated_ai, transferred}` → `escalated` são
+  tratados **na leitura** (F3); o alvo humano-vs-IA é recuperável pela topologia do segmento seguinte.
+  Sem migração destrutiva, sem mexer no `OutcomeSchema` (contrato v1) nesta fase.
 - **`pending` = rótulo terminal** — `pendente→suspended` é **disposição terminal** (o contato fecha);
   **não** dispara suspend de sessão real (isso seria arco separado, fora desta bancada). **Check de
   implementação**: garantir que nenhum consumidor leia `segment.outcome=suspended` como "a sessão vai

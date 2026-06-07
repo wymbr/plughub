@@ -416,10 +416,22 @@ describe("CompleteStepSchema", () => {
   it("rejeita outcome inválido", () => {
     expect(() =>
       CompleteStepSchema.parse({
-        id: "fin", type: "complete" as const, outcome: "abandoned",
+        id: "fin", type: "complete" as const, outcome: "nao_existe",
       })
     ).toThrow()
   })
+
+  // F1.1 (bancada de agentes): subset declarável ampliado p/ o mapa do wrap-up.
+  it.each(["resolved", "escalated", "suspended", "abandoned"])(
+    "aceita outcome normalizado '%s'",
+    (outcome) => {
+      expect(() =>
+        CompleteStepSchema.parse({
+          id: "fin", type: "complete" as const, outcome,
+        })
+      ).not.toThrow()
+    }
+  )
 })
 
 describe("EscalateStepSchema", () => {

@@ -185,7 +185,27 @@ export const EscalateStepSchema = z.object({
 export const CompleteStepSchema = z.object({
   id:      z.string(),
   type:    z.literal("complete"),
-  outcome: z.enum(["resolved", "escalated_human", "transferred_agent", "callback", "failed"]),
+  // F1.1 (bancada de agentes): subset declarável do SegmentOutcomeSchema (cânone).
+  // Adicionados escalated/suspended/abandoned (mapa do wrap-up: resolvido→resolved,
+  // escalado→escalated, cancelado→abandoned, pendente→suspended). transferred_agent
+  // permanece (valor de contrato, load-bearing no SDK/adapter); a divergência
+  // transferred_agent↔transferred e o folding da família escalate são tratados na
+  // leitura (F3), não por rename aqui.
+  outcome: z.enum([
+    "resolved",
+    "escalated",
+    "escalated_human",
+    "transferred_agent",
+    "callback",
+    "failed",
+    "suspended",
+    "abandoned",
+  ]),
+  // F1.2 (bancada de agentes): outcome dinâmico. Quando presente, o engine resolve
+  // o valor desta chave em pipeline_state (ex. `output_as` de um menu), valida contra
+  // SegmentOutcomeSchema e usa-o; se ausente/inválido, cai no `outcome` literal acima
+  // (fallback obrigatório). Ex.: wrap-up usa `outcome_from: wrapup_classificacao`.
+  outcome_from: z.string().optional(),
 })
 
 export const InvokeStepSchema = z.object({
