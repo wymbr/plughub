@@ -320,6 +320,8 @@ GET /reports/agents/compare
     pelo bridge; **passar a fiar no evento do segmento**. Distingue "abandono do cliente" de
     "encerrado pelo agente" sem inchar o `outcome`.
   - `handoff_reason` — *texto livre*, motivo da escalação (obrigatório quando `outcome != resolved`).
+    Fica texto livre, exibido **só no detalhe** por ora; a versão normalizada/agregável (taxonomia +
+    lente) é a **F7 (futura)**. `close_reason` (enum) já é normalizado — nada a fazer além de fiá-lo.
   - `issue_status` — rótulo curto pool-scoped (a `classificacao` crua do wrap-up).
   - **Texto livre rico** (`resumo`/`proximos_passos`) → **detalhe sob demanda** da origem
     (ContextStore/stream), com controle de acesso. **Não** vai em massa para o ledger (LGPD).
@@ -351,6 +353,11 @@ de 3-5": espinha → qualidade → endpoint → UI → sinais → cruzamentos.
 | **F4 — UI da bancada** | lista (pools→agentes, checkbox/chevron/detalhe) + seletor de lente + gráfico + média de referência; detalhe type-aware; cor estável; ABAC; URL/localStorage; export CSV; i18n en+pt-BR | bancada quanti+quali funcional |
 | **F5 — Camada `session_signal`** | tabela + consumer normalizando `agent_event`; hooks NPS/wrap-up emitem `agent_event` (convenção de categoria); normalização NPS; bucketização por `session_at`; lentes NPS/wrap-up | voz do cliente (NPS) na bancada + cobertura/N |
 | **F6 — Cruzamentos (§8)** | concordância das vantagens; quadrante (volume/resolução × qualidade); calibração do avaliador (Arc 13, IA×NPS) | visões de divergência/payoff de gestão |
+| **F7 — (opcional/futuro) Motivo de escalação normalizado** | taxonomia pool-scoped configurável (espelha `pause_reasons`/Arc 8) + menu no `agente_wrapup_v1` p/ caso `escalado` + código normalizado no segmento (`handoff_reason` livre vira nota) | lente "motivo de escalação" empilhada (à la pause-motivo) |
+
+> **`reason` — normalização**: `close_reason` é *enum* fechado e derivado pela plataforma → já
+> normalizado (só fiar no segmento). `handoff_reason`/`error_reason` são *texto livre* por contrato →
+> ficam detalhe-only em F1; a dimensão agregável de "motivo de escalação" é a **F7**, opcional/futura.
 
 **Pontos deixados explícitos para a fase respectiva** (não travados agora): mecanismo da propagação
 wrap-up→primary (bridge write-back vs join na leitura) — F1; mecanismo do join de qualidade

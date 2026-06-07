@@ -142,7 +142,9 @@ Hoje o Analytics/Agents mistura agente×pool e não separa humano×IA.
   · domínio `pending≡suspended`, `transfer≡escalate` (sem valor novo) — mapa wrap-up: resolvido→resolved, escalado→escalated, cancelado→abandoned, pendente→suspended;
   · contrato do segmento (lido igual humano/IA): `outcome` + `close_reason` (enum, iniciativa) + `handoff_reason` (livre, escalação) + `issue_status` (rótulo curto); texto livre rico no detalhe sob demanda (LGPD).
   **Fases**: F1 espinha (outcome real) → F2 join qualidade → F3 endpoint `/reports/agents/compare`
-  → F4 UI bancada → F5 `session_signal` (NPS+wrap-up) → F6 cruzamentos. Detalhe em §13 do spec.
+  → F4 UI bancada → F5 `session_signal` (NPS+wrap-up) → F6 cruzamentos; **F7 opcional/futura**:
+  motivo de escalação normalizado (taxonomia pool-scoped à la `pause_reasons` + lente). `close_reason`
+  já é enum normalizado; `handoff_reason` fica texto livre (detalhe) até F7. Detalhe em §13 do spec.
 - **Fase 3 — migrar provisionamento do demo para Config + Deploy** (elimina YAML/agent_type):
   - **3b / 3a / 3c / 3d-parcial — concluídas** — ver `CHANGELOG.md` (2026-05-31, 2026-06-01)
     e `docs/arcos/instance-bootstrap.md`. Pools IA migrados; `mention_commands` via embed no
