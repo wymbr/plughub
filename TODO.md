@@ -134,7 +134,15 @@ Hoje o Analytics/Agents mistura agente×pool e não separa humano×IA.
   domínio de métrica (desabilita no seletor); camada `session_signal` (NPS/wrap-up/pesquisa via
   Arc 12 + journey, `session_at`×`captured_at`, normalização por pool); detalhe type-aware;
   cruzamento das vantagens (concordância/quadrante) + calibração do avaliador (Arc 13).
-  Pré-requisitos: outcome humano no segment; join avaliação→agente. Ordem em §12 do spec.
+  **Recon 2026-06-07 (§13 do spec)** — premissas validadas no código + decisões travadas:
+  · `evaluation_results` **sem** atribuição a agente → exige join `→ segments` por `session_id` (F2);
+  · hooks NPS/wrap-up **não** emitem `agent_event` (dado preso no ContextStore); `session_signal` inexistente (F5);
+  · outcome humano é **placeholder** (não 0%) — fonte real = `session.wrapup.classificacao`;
+  · **decisão**: `complete` de todo agente devolve outcome **dinâmico**; `primary` humano **propaga** o do wrap-up;
+  · domínio `pending≡suspended`, `transfer≡escalate` (sem valor novo) — mapa wrap-up: resolvido→resolved, escalado→escalated, cancelado→abandoned, pendente→suspended;
+  · contrato do segmento (lido igual humano/IA): `outcome` + `close_reason` (enum, iniciativa) + `handoff_reason` (livre, escalação) + `issue_status` (rótulo curto); texto livre rico no detalhe sob demanda (LGPD).
+  **Fases**: F1 espinha (outcome real) → F2 join qualidade → F3 endpoint `/reports/agents/compare`
+  → F4 UI bancada → F5 `session_signal` (NPS+wrap-up) → F6 cruzamentos. Detalhe em §13 do spec.
 - **Fase 3 — migrar provisionamento do demo para Config + Deploy** (elimina YAML/agent_type):
   - **3b / 3a / 3c / 3d-parcial — concluídas** — ver `CHANGELOG.md` (2026-05-31, 2026-06-01)
     e `docs/arcos/instance-bootstrap.md`. Pools IA migrados; `mention_commands` via embed no
@@ -155,7 +163,11 @@ Hoje o Analytics/Agents mistura agente×pool e não separa humano×IA.
       `AnaliseAgentesPage` filtra `tabDailyRows` por `agent_type` por aba. Fix colateral: stroke do
       TrendChart usava `var(--color-*)` inexistente → linhas invisíveis (bug pré-existente mascarado
       enquanto o endpoint daily não trazia dado) → trocado por hex dos tokens. Ver `CHANGELOG.md`.
-      Pendente derivado → **Fase 1b** (availability/pauses vazio no humano; outcome humano = 0%).
+      Pendente derivado → **Fase 1b** (availability/pauses vazio no humano). **Correção 2026-06-07**:
+      "outcome humano = 0%" era premissa errada — o segmento humano **grava** outcome, mas é
+      **placeholder** (Console hardcoda `resolved`/`abandoned`; ClickHouse: 24 resolved / 12 abandoned
+      / 19 NULL em 55 segs, `issue_status` 0/55). Disposição real em `session.wrapup.classificacao`
+      (ContextStore). Tratamento → Fase F1 da bancada (`docs/arcos/analytics-agents-workbench.md` §13).
     - **C2/C3/C4 ✅** (2026-06-01): entidade `AgentType` **REMOVIDA** (tabelas `agent_types` +
       `agent_type_pools` dropadas via `prisma db push`). As UIs de CRUD eram código morto (não
       roteadas) → deletadas sem migração. mentionable-agents/delegation/agent_login repontados
