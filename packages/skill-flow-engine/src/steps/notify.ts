@@ -16,9 +16,10 @@
  *   - sem sentinel: primeira execução normal.
  */
 
-import type { NotifyStep } from "@plughub/schemas"
+import type { NotifyStep, ContextTagEntry } from "@plughub/schemas"
 import type { StepContext, StepResult } from "../executor"
 import { interpolate, resolveVisibility } from "../interpolate"
+import { extractOutputsToCtx } from "../context-accumulator-util"
 
 export async function executeNotify(
   step: NotifyStep,
@@ -60,6 +61,28 @@ export async function executeNotify(
       results: { ...ctx.state.results, [sentinelKey]: "completed" },
     }
     await ctx.saveState(ctx.state)
+
+    // ── context_tags.outputs: escrever valores do pipeline_state no ContextStore ──
+    // F1.4b (bancada de agentes): o notify NUNCA implementou context_tags — os
+    // YAMLs (agente_wrapup_v1, agente_nps_v1) declaravam e o engine ignorava em
+    // silêncio. Semântica: o dotPath resolve sobre pipeline_state.results (ex.:
+    // o `output_as` de um menu anterior), espelhando o uso documentado nos YAMLs
+    // ("dotPath key deve coincidir com output_as do menu anterior").
+    // Fire-and-forget — não bloqueia a transição do step (mesmo padrão do invoke).
+    if (step.context_tags?.outputs && ctx.contextStore) {
+      extractOutputsToCtx(
+        ctx.contextStore,
+        ctx.sessionId,
+        ctx.customerId,
+        step.context_tags.outputs as Record<string, ContextTagEntry>,
+        ctx.state.results,
+        `notify:${step.id}`,
+        ctx.segmentId,
+        ctx.journeyId,
+      ).catch(err => {
+        console.error("[notify] CTX_OUTPUT_EXTRACTION_FAILED", String(err))
+      })
+    }
 
     return {
       next_step_id:      step.on_success,

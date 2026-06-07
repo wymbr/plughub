@@ -671,5 +671,51 @@ forward(channel, message)
 
 ---
 
+### Mudança 5 — outcome real do segmento primário humano via wrap-up (F1.4 bancada de agentes, 2026-06-07)
+
+**Contexto:** o `participant_left` do primário humano é publicado no `agent_done` com outcome
+**placeholder** (a Console hardcoda `resolved`/`abandoned` — não há coleta de outcome na UI). A
+disposição real (`resolvido/pendente/escalado/cancelado`) é coletada pelo `agente_wrapup_v1` (hook
+`on_human_end`, side=agent) que grava `session.wrapup.classificacao` (cru) + `session.wrapup.resumo`
+no ContextStore com **scope: session** (mudado de `segment` para o Bridge ler sem conhecer o
+segment-id do wrap-up).
+
+**Mecanismo (B1′ — re-publish, idempotente):**
+1. No primeiro `participant_left` do primário humano, o Bridge grava
+   `session:{id}:primary_human_segment` (JSON: segment_id, instance_id, pool, agent_type_id,
+   user_login, joined_at, duration_ms, sequence_index, tenant — TTL 7d).
+2. `_finalize_human_outcome_from_wrapup()` lê a classificação CRUA, normaliza pelo
+   `_WRAPUP_OUTCOME_MAP` (`resolvido→resolved, pendente→suspended, escalado→escalated,
+   cancelado→abandoned` — decisão §13.2 do analytics-agents-workbench), atualiza
+   `session:{id}:last_outcome` e re-publica o `participant_left` com o **MESMO segment_id**
+   (ReplacingMergeTree substitui a linha) + `issue_status`=cru + `handoff_reason`=resumo (quando
+   outcome≠resolved) + `close_reason` derivado do transporte.
+3. **Dois gatilhos** (NX `session:{id}:primary_outcome_republished` garante um único re-publish):
+   conclusão do hook side=agent em `process_routed` (caminho normal — `_close_contact_layer` já
+   disparou na conclusão do NPS ou imediatamente sem hooks de cliente, ANTES do wrap-up terminar);
+   e `_close_contact_layer` (cobre wrap-up terminando antes do fechamento — corrige também o
+   outcome de SESSÃO via `last_outcome`).
+4. **`close_reason` pela INICIATIVA**: fonte preferida é `session.close_origin` (ContextStore,
+   gravado PRE-hook, congelado no instante do fim do contato). O marcador `session:{id}:closed` é
+   sobrescrito pelo teardown do WS do cliente pós-NPS (`client_disconnect`) e corrompia a
+   iniciativa (Encerrar do agente virava `customer_disconnect`). Fallback no marcador só quando
+   `close_origin` ausente.
+
+**Causa-raiz descoberta na validação (F1.4b)**: o `executeNotify` **nunca implementou
+`context_tags`** (extração existia só em invoke/reason) e o schema inline do notify descartava
+`scope`. Wrap-up e NPS gravavam no vácuo — nem `session.wrapup.*` nem `session.nps_score` chegavam
+ao ContextStore. Corrigido no engine (extração com outputObj = `pipeline_state.results`) + `scope`
+no `NotifyStepSchema.context_tags` (default `session`).
+
+**Limitações conhecidas:** (a) quando o fechamento precede o wrap-up, a linha de SESSÃO mantém o
+outcome placeholder — o **segmento** é a fonte da verdade para relatórios; (b) pools sem hook de
+wrap-up (ou wrap-up com timeout/pulado) mantêm o placeholder — resolution por agente humano só é
+fiel onde há wrap-up; nunca se inventa `resolved`.
+
+**Keys novas:** `session:{id}:primary_human_segment` (TTL 7d) ·
+`session:{id}:primary_outcome_republished` (NX, TTL 7d).
+
+---
+
 *Este documento é a referência canônica para o mecanismo de conferência do PlugHub.*
 *Qualquer mudança no funcionamento deve ser registrada neste arquivo antes de ir para CHANGELOG.md.*

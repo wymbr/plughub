@@ -61,7 +61,9 @@ steps:
           tag: session.wrapup.resumo
           confidence: 1.0
           merge: overwrite
-          scope: segment
+          # F1.3 (bancada): session scope para o bridge ler no fechamento
+          # (origem do handoff_reason quando outcome != resolved).
+          scope: session
     on_success: solicitar_classificacao
     on_failure: solicitar_classificacao
 
@@ -100,7 +102,11 @@ steps:
           tag: session.wrapup.classificacao
           confidence: 1.0
           merge: overwrite
-          scope: segment
+          # F1.3 (bancada): session scope para o bridge ler no fechamento.
+          # Valor CRU (resolvido/pendente/escalado/cancelado) — o bridge (F1.4)
+          # normaliza p/ outcome (resolved/suspended/escalated/abandoned) e grava
+          # o cru em issue_status. Ids do menu permanecem na taxonomia do pool.
+          scope: session
     on_success: solicitar_proximos_passos
     on_failure: solicitar_proximos_passos
 

@@ -1396,6 +1396,16 @@ async def _close_contact_layer(
         except Exception:
             pass
 
+        # ── F1.4 (bancada de agentes): disposição real do wrap-up ─────────────
+        # Quando o wrap-up JÁ completou (terminou antes deste fechamento — ex.
+        # NPS demorou mais), o finalize atualiza last_outcome (lido logo abaixo,
+        # corrigindo também o outcome de SESSÃO) e re-publica o segmento primário
+        # humano (B1′, NX-guarded). Quando o wrap-up ainda está rodando, este call
+        # é no-op — o gatilho da conclusão do hook (process_routed) fará o
+        # re-publish do segmento; nesse ordenamento o outcome de sessão mantém o
+        # placeholder (limitação conhecida; o SEGMENTO é a fonte da verdade).
+        await _finalize_human_outcome_from_wrapup(redis_client, session_id, tenant_id)
+
         _last_outcome_val = ""
         _last_agent_kind  = ""
         try:
@@ -1669,6 +1679,218 @@ async def _publish_participant_event(
         )
     except Exception as exc:
         logger.debug("Could not publish participant event: %s — %s", event_type, exc)
+
+
+# ── F1.4 (bancada de agentes): outcome real do humano via wrap-up ─────────────
+# Mapa de normalização da taxonomia CRUA do wrap-up (pool-scoped) para o domínio
+# canônico SegmentOutcomeSchema. Decisões §13.2 do analytics-agents-workbench.md:
+# pending ≡ suspended, transfer ≡ escalate. Identidade defensiva para pools cujo
+# YAML já use valores normalizados. Valor desconhecido → sem re-publish (mantém
+# o placeholder; nunca inventa "resolved").
+_WRAPUP_OUTCOME_MAP: dict[str, str] = {
+    "resolvido": "resolved",
+    "pendente":  "suspended",
+    "escalado":  "escalated",
+    "cancelado": "abandoned",
+    "resolved":  "resolved",
+    "suspended": "suspended",
+    "escalated": "escalated",
+    "abandoned": "abandoned",
+}
+
+
+async def _republish_human_primary_segment(
+    redis_client:   aioredis.Redis,
+    session_id:     str,
+    tenant_id:      str,
+    outcome:        str,
+    issue_status:   str,
+    handoff_reason: str | None,
+    close_reason:   str | None,
+) -> None:
+    """
+    F1.4 — B1′ (docs/arcos/analytics-agents-workbench.md §13): re-publica o
+    participant_left do segmento PRIMÁRIO HUMANO com a disposição real do wrap-up.
+
+    O primeiro participant_left (no agent_done) sai com outcome placeholder porque
+    o wrap-up (hook on_human_end) ainda não rodou. Este re-publish usa o MESMO
+    segment_id — o ReplacingMergeTree de analytics.segments (ORDER BY tenant/
+    session/segment) mantém a última versão da linha.
+
+    Contrato: outcome = normalizado; issue_status = classificação CRUA do pool;
+    handoff_reason = resumo do wrap-up quando outcome != resolved.
+    Idempotente via session:{id}:primary_outcome_republished (SET NX).
+    Nunca levanta exceção — falhas são logadas e o fechamento segue.
+    """
+    try:
+        acquired = await redis_client.set(
+            f"session:{session_id}:primary_outcome_republished",
+            "1", nx=True, ex=604800,
+        )
+        if not acquired:
+            return
+        raw_seg = await redis_client.get(f"session:{session_id}:primary_human_segment")
+        if not raw_seg:
+            return
+        seg = json.loads(raw_seg if isinstance(raw_seg, str) else raw_seg.decode())
+        # Sem segment_id real NÃO re-publica: o fallback de uuid aleatório em
+        # _publish_participant_event criaria um segmento NOVO em vez de substituir.
+        if not seg.get("segment_id"):
+            return
+        await _publish_participant_event(
+            session_id=session_id,
+            tenant_id=tenant_id or seg.get("tenant_id", ""),
+            participant_id=seg.get("instance_id", ""),
+            pool_id=seg.get("pool_id", ""),
+            agent_type_id=seg.get("agent_type_id", ""),
+            event_type="participant_left",
+            agent_type="human",
+            role="primary",
+            segment_id=seg.get("segment_id", ""),
+            sequence_index=int(seg.get("sequence_index", 0) or 0),
+            joined_at=seg.get("joined_at", "") or "",
+            duration_ms=seg.get("duration_ms"),
+            user_login=seg.get("user_login", "") or "",
+            outcome=outcome,
+            issue_status=issue_status or None,
+            handoff_reason=handoff_reason,
+            close_reason=close_reason,
+        )
+        logger.info(
+            "F1.4: human primary segment re-published with wrap-up outcome: "
+            "session=%s segment=%s outcome=%s issue_status=%s",
+            session_id, seg.get("segment_id", ""), outcome, issue_status,
+        )
+    except Exception as exc:
+        logger.warning(
+            "F1.4: could not re-publish human primary segment: session=%s — %s",
+            session_id, exc,
+        )
+
+
+async def _finalize_human_outcome_from_wrapup(
+    redis_client: aioredis.Redis,
+    session_id:   str,
+    tenant_id:    str = "",
+) -> None:
+    """
+    F1.4 — lê a disposição CRUA do wrap-up no ContextStore, normaliza
+    (_WRAPUP_OUTCOME_MAP), atualiza session:{id}:last_outcome e re-publica o
+    segmento primário humano (B1′ via _republish_human_primary_segment).
+
+    Chamado de DOIS pontos (idempotente — NX em primary_outcome_republished):
+      1. Conclusão do hook on_human_end side=agent em process_routed — caminho
+         normal: o wrap-up acabou de gravar a classificação no ContextStore.
+      2. _close_contact_layer — cobre o ordenamento em que o wrap-up termina
+         ANTES do fechamento (ex.: NPS demora mais); nesse caso corrige também
+         o outcome de SESSÃO (last_outcome é lido logo depois).
+
+    Sem classificação (pool sem wrap-up / timeout / pulado) → no-op: o
+    placeholder permanece e nada é re-publicado (nunca inventa "resolved").
+    Nunca levanta exceção.
+    """
+    try:
+        if not tenant_id:
+            try:
+                raw_meta = await redis_client.get(f"session:{session_id}:meta")
+                if raw_meta:
+                    _m = json.loads(raw_meta)
+                    tenant_id = _m.get("tenant_id", "") or _m.get("tenant", "")
+            except Exception:
+                pass
+        if not tenant_id:
+            return
+
+        wrapup_raw    = ""
+        wrapup_resumo = ""
+        try:
+            _ctx_key = f"{tenant_id}:ctx:{session_id}"
+            raw_cls = await redis_client.hget(_ctx_key, "session.wrapup.classificacao")
+            if raw_cls:
+                _cls = json.loads(raw_cls if isinstance(raw_cls, str) else raw_cls.decode())
+                wrapup_raw = str((_cls or {}).get("value", "") or "")
+            raw_res = await redis_client.hget(_ctx_key, "session.wrapup.resumo")
+            if raw_res:
+                _res = json.loads(raw_res if isinstance(raw_res, str) else raw_res.decode())
+                wrapup_resumo = str((_res or {}).get("value", "") or "")
+        except Exception as exc:
+            logger.debug(
+                "F1.4: could not read wrap-up ctx tags: session=%s — %s",
+                session_id, exc,
+            )
+            return
+        if not wrapup_raw:
+            return
+
+        outcome = _WRAPUP_OUTCOME_MAP.get(wrapup_raw, "")
+        if not outcome:
+            logger.warning(
+                "F1.4: unknown wrap-up classification %r — keeping placeholder: session=%s",
+                wrapup_raw, session_id,
+            )
+            return
+
+        # Outcome de sessão: marcador lido por _close_contact_layer.
+        try:
+            await redis_client.setex(
+                f"session:{session_id}:last_outcome",
+                604800,
+                json.dumps({"outcome": outcome, "agent_kind": "human"}),
+            )
+        except Exception:
+            pass
+
+        # close_reason de negócio a partir da INICIATIVA do fechamento.
+        # Fonte preferida: session.close_origin no ContextStore — gravada pelo
+        # bridge PRE-hook, congelada no instante em que o contato terminou.
+        # O marcador session:{id}:closed guarda o ÚLTIMO transporte e é
+        # sobrescrito pelo teardown do WS do cliente pós-NPS (client_disconnect),
+        # corrompendo a iniciativa (ex.: Encerrar do agente viraria
+        # customer_disconnect). Fallback no marcador apenas se close_origin
+        # estiver ausente. Humano foi atendido ⇒ customer_abandon não se aplica.
+        _TRANSPORT_TO_CLOSE_REASON = {
+            "agent_closed":      "agent_hangup",
+            "client_disconnect": "customer_disconnect",
+            "timeout":           "session_timeout",
+            "session_timeout":   "session_timeout",
+            "max_wait_exceeded": "max_wait_exceeded",
+            "no_resource":       "no_resource",
+        }
+        close_reason = "agent_hangup"
+        transport = ""
+        try:
+            raw_origin = await redis_client.hget(
+                f"{tenant_id}:ctx:{session_id}", "session.close_origin"
+            )
+            if raw_origin:
+                _org = json.loads(
+                    raw_origin if isinstance(raw_origin, str) else raw_origin.decode()
+                )
+                transport = str((_org or {}).get("value", "") or "")
+        except Exception:
+            pass
+        if not transport:
+            try:
+                raw_closed = await redis_client.get(f"session:{session_id}:closed")
+                transport = (
+                    raw_closed if isinstance(raw_closed, str)
+                    else (raw_closed.decode() if raw_closed else "")
+                ) or ""
+            except Exception:
+                pass
+        close_reason = _TRANSPORT_TO_CLOSE_REASON.get(transport, "agent_hangup")
+
+        await _republish_human_primary_segment(
+            redis_client, session_id, tenant_id,
+            outcome=outcome,
+            issue_status=wrapup_raw,
+            handoff_reason=(wrapup_resumo or None) if outcome != "resolved" else None,
+            close_reason=close_reason,
+        )
+    except Exception as exc:
+        logger.warning(
+            "F1.4: finalize_human_outcome failed: session=%s — %s", session_id, exc,
+        )
 
 
 # ── external-mcp activation: LPUSH context_package → agent:queue ─────────────
@@ -2876,6 +3098,17 @@ async def process_routed(
                                 "Could not clear wrap_up_pending: session=%s — %s",
                                 session_id, _wup_exc,
                             )
+
+                        # ── F1.4 (bancada): o wrap-up acabou de completar ──────
+                        # Suas tags já estão no ContextStore — normaliza a
+                        # classificação e re-publica o segmento primário humano
+                        # com a disposição real (B1′). Caminho normal quando o
+                        # fechamento (_close_contact_layer) disparou ANTES do
+                        # wrap-up terminar. Idempotente (NX) com o call gêmeo
+                        # em _close_contact_layer.
+                        asyncio.create_task(_finalize_human_outcome_from_wrapup(
+                            redis_client, session_id, tenant_id,
+                        ))
 
                     # Arc 14 Fase E: when a customer-side hook (NPS) completes,
                     # DECR posatt:customer_active and close the customer WS when
@@ -4318,6 +4551,33 @@ async def process_contact_event(
                         )
                 except Exception:
                     pass
+                # ── F1.4 (bancada): preserva os dados do segmento primário humano ──
+                # O participant_left abaixo sai com outcome placeholder (a Console
+                # hardcoda resolved/abandoned). Após os hooks on_human_end, o
+                # _close_contact_layer lê session.wrapup.classificacao e re-publica
+                # este MESMO segmento com a disposição real via
+                # _republish_human_primary_segment (B1′). TTL 7d, mesmo padrão dos
+                # demais marcadores de fechamento.
+                if _ha_seg_id:
+                    try:
+                        await redis_client.setex(
+                            f"session:{session_id}:primary_human_segment",
+                            604800,
+                            json.dumps({
+                                "segment_id":     _ha_seg_id,
+                                "instance_id":    instance_id,
+                                "pool_id":        _ha_pool,
+                                "agent_type_id":  _ha_agent_type_id,
+                                "user_login":     _ha_user_login,
+                                "joined_at":      _ha_joined_iso,
+                                "duration_ms":    _ha_duration_ms,
+                                "sequence_index": _ha_seq_idx,
+                                "tenant_id":      _ha_tenant,
+                            }),
+                        )
+                    except Exception:
+                        pass
+
                 asyncio.create_task(_publish_participant_event(
                     session_id=session_id,
                     tenant_id=_ha_tenant,

@@ -9,7 +9,7 @@
  */
 
 import { z } from "zod"
-import { ToolContextTagsSchema, ReasonStepContextTagsSchema, SkillRequiredContextSchema } from "./context-store"
+import { ToolContextTagsSchema, ReasonStepContextTagsSchema, SkillRequiredContextSchema, ContextTagScopeSchema } from "./context-store"
 
 // ─────────────────────────────────────────────
 // Classificação da skill
@@ -294,6 +294,10 @@ export const NotifyStepSchema = z.object({
       tag:        z.string(),
       confidence: z.number().min(0).max(1).default(1.0),
       merge:      z.enum(["overwrite", "append"]).default("overwrite"),
+      // F1.4b (bancada de agentes): o scope era declarado nos YAMLs (wrap-up/NPS)
+      // mas descartado pelo Zod (campo ausente neste schema inline). Default
+      // "session" — o desejado para fatos de sessão como a disposição do wrap-up.
+      scope:      ContextTagScopeSchema.default("session"),
     })),
   }).optional(),
   on_success: z.string(),

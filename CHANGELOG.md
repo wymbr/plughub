@@ -2,6 +2,47 @@
 
 ---
 
+## Bancada de agentes F1 — outcome real do segmento primário humano (2026-06-07)
+
+Espinha da reformulação Analytics/Agents (`docs/arcos/analytics-agents-workbench.md` §13): o segmento
+`human/primary` deixa de carregar outcome placeholder (Console hardcodava `resolved`/`abandoned`) e
+passa a receber a **disposição real do wrap-up**, normalizada — resolution/escalation por agente
+humano passa a ter sentido.
+
+1. **schemas**: `CompleteStepSchema.outcome` ampliado p/ subset consistente do cânone
+   `SegmentOutcomeSchema` (+`escalated`/`suspended`/`abandoned`; `transferred_agent` mantido — é
+   load-bearing no SDK/adapter; folding na leitura/F3); `outcome_from` p/ outcome dinâmico do
+   `pipeline_state` (F1.2); `scope` no `context_tags` do notify — era declarado nos YAMLs e
+   **descartado pelo Zod** (schema inline sem o campo).
+2. **skill-flow-engine**: `complete` resolve `outcome_from` (síncrono, valida contra o cânone,
+   fallback no literal). **Causa-raiz da validação**: `executeNotify` **nunca implementou
+   `context_tags`** — wrap-up E NPS gravavam no vácuo (nem `session.wrapup.*` nem `session.nps_score`
+   chegavam ao ContextStore). Extração implementada (outputObj = `pipeline_state.results`,
+   fire-and-forget, espelha o invoke) — destrava também o NPS p/ a F5. Testes: `complete.test.ts` (8),
+   `notify.test.ts` (4).
+3. **agente_wrapup_v1.yaml**: `classificacao`/`resumo` com `scope: session` (bridge lê sem conhecer o
+   segment do wrap-up); **ids crus mantidos** (taxonomia do pool → `issue_status`).
+4. **orchestrator-bridge (B1′)**: registro `session:{id}:primary_human_segment` no primeiro
+   `participant_left`; `_finalize_human_outcome_from_wrapup` com **2 gatilhos idempotentes** (NX) —
+   conclusão do hook `on_human_end` side=agent (caminho normal; `_close_contact_layer` dispara ANTES
+   do wrap-up terminar) e `_close_contact_layer` (wrap-up termina antes → corrige também o outcome de
+   sessão via `last_outcome`). Normaliza cru→outcome (`resolvido→resolved, pendente→suspended,
+   escalado→escalated, cancelado→abandoned` — decisão `pending≡suspended`/`transfer≡escalate`),
+   re-publica o segmento (mesmo `segment_id`, ReplacingMergeTree dedupica) com `issue_status`=cru,
+   `handoff_reason`=resumo (quando ≠resolved) e `close_reason` da **iniciativa** via
+   `session.close_origin` (pre-hook) — o marcador `:closed` é sobrescrito pelo teardown do WS do
+   cliente pós-NPS e corrompia a iniciativa.
+5. **Validado E2E** (tenant_demo): `escalated·escalado·<resumo>` e `resolved·resolvido·agent_hangup·NULL`.
+   Limitações documentadas: pool sem wrap-up / timeout / pulado → placeholder permanece (nunca inventa
+   `resolved`); fechamento antes do wrap-up → outcome de SESSÃO mantém placeholder (o **segmento** é a
+   fonte da verdade). Check de segurança: nenhum consumidor lê `segments.outcome='suspended'` como
+   "vai resumir" (semântica de resume keia em session status / agent_result).
+
+Docs: `conference-mechanics.md` § Mudança 5 · spec §13 (F1 ✅). Próxima fase: F2 (join
+`evaluation_results → segments`).
+
+---
+
 ## Limpeza de ajustes menores (2026-06-05)
 
 Três itens registrados nas validações da semana:
