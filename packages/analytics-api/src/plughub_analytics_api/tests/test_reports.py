@@ -25,6 +25,7 @@ from ..reports_query import (
     query_agent_performance_report,
     query_agents_report,
     query_contact_insights_report,
+    query_agents_compare,
     query_evaluations_report,
     query_evaluations_summary,
     query_participation_report,
@@ -736,6 +737,98 @@ class TestQueryEvaluationsSummary:
         result = await query_evaluations_summary(client, DB, TENANT)
         assert result["data"] == []
         assert result.get("error") == "data_unavailable"
+
+
+# ─── query_agents_compare — F3 bancada de agentes ────────────────────────────
+
+@pytest.mark.asyncio
+class TestQueryAgentsCompare:
+    _SEG_COLS = [
+        "agent_key", "agent_type", "label", "bucket",
+        "sessions", "resolved", "escalated", "aht_ms",
+    ]
+
+    async def test_invalid_lens_rejected(self):
+        client = MagicMock()
+        result = await query_agents_compare(client, DB, TENANT, lens="banana")
+        assert result["error"] == "invalid_lens"
+        assert "resolution" in result["allowed_lenses"]
+        client.query.assert_not_called()
+
+    async def test_pending_lens_flagged(self):
+        client = MagicMock()
+        result = await query_agents_compare(client, DB, TENANT, lens="nps")
+        assert result["error"] == "lens_not_available"
+        assert "nps" in result["pending_lenses"]
+
+    async def test_resolution_average_is_arithmetic_with_gaps(self):
+        # Dia 1: A=2/2 (1.0), B=1/2 (0.5) → média 0.75 (n=2)
+        # Dia 2: só A=0/1 (0.0)           → média 0.0  (n=1 — B é GAP, não zero)
+        client = _make_client(_ch_result(self._SEG_COLS, [
+            ["A", "human",  "a@x", "2026-06-01", 2, 2, 0, 1000.0],
+            ["A", "human",  "a@x", "2026-06-02", 1, 0, 1, 2000.0],
+            ["B", "native", "B",   "2026-06-01", 2, 1, 1, 500.0],
+        ]))
+        result = await query_agents_compare(
+            client, DB, TENANT, lens="resolution", entities=["A"],
+        )
+        avg = result["data"]["average"]
+        assert avg["label"] == "média dos agentes"
+        assert avg["n"] == 2
+        d1 = next(p for p in avg["series"] if p["date"] == "2026-06-01")
+        d2 = next(p for p in avg["series"] if p["date"] == "2026-06-02")
+        assert d1["resolution_rate"] == pytest.approx(0.75)
+        assert d1["n"] == 2
+        assert d2["resolution_rate"] == pytest.approx(0.0)
+        assert d2["n"] == 1   # gap do B — fora do denominador
+
+        # Entidade selecionada
+        assert len(result["data"]["entities"]) == 1
+        ent = result["data"]["entities"][0]
+        assert ent["agent_key"] == "A"
+        assert ent["agent_type"] == "human"
+        assert ent["summary"]["sessions"] == 3
+        assert ent["summary"]["resolution_rate"] == pytest.approx(2 / 3, abs=1e-3)
+
+    async def test_escalate_family_folded_in_sql(self):
+        client = _make_client(_ch_result(self._SEG_COLS, []))
+        await query_agents_compare(client, DB, TENANT, lens="resolution")
+        sql = client.query.call_args_list[-1][0][0]
+        for value in ("'escalated'", "'escalated_human'", "'escalated_ai'", "'transferred'"):
+            assert value in sql
+        assert "agent_type != 'system'" in sql
+        assert "role = 'primary'" in sql
+
+    async def test_entities_missing_key_marked(self):
+        client = _make_client(_ch_result(self._SEG_COLS, []))
+        result = await query_agents_compare(
+            client, DB, TENANT, lens="sessions_aht", entities=["nao_existe"],
+        )
+        ent = result["data"]["entities"][0]
+        assert ent["missing"] is True
+        assert ent["series"] == []
+
+    async def test_quality_buckets_by_session_started_at(self):
+        cols = ["agent_key", "agent_type", "label", "bucket", "n", "avg_score"]
+        client = _make_client(_ch_result(cols, [
+            ["A", "human", "a@x", "2026-06-01", 3, 0.8],
+        ]))
+        result = await query_agents_compare(
+            client, DB, TENANT, lens="quality", entities=["A"],
+        )
+        sql = client.query.call_args_list[-1][0][0]
+        assert "session_started_at" in sql            # regra de ouro §7
+        assert "JOIN" in sql
+        ent = result["data"]["entities"][0]
+        assert ent["summary"]["n_evaluations"] == 3   # N visível (amostral)
+        assert ent["summary"]["avg_score"] == pytest.approx(0.8)
+
+    async def test_error_returns_empty_with_error_key(self):
+        client = MagicMock()
+        client.query = MagicMock(side_effect=Exception("ch down"))
+        result = await query_agents_compare(client, DB, TENANT, lens="resolution")
+        assert result["error"] == "data_unavailable"
+        assert result["data"]["entities"] == []
 
 
 # ── Arc 7c — pool-scoped visibility ───────────────────────────────────────────

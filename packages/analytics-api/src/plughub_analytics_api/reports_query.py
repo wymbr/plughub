@@ -1463,7 +1463,8 @@ def _session_agent_attribution_sql(db: str) -> str:
             argMax(sak,  sequence_index) AS agent_key,
             argMax(sat,  sequence_index) AS agent_type,
             argMax(spid, sequence_index) AS pool_id,
-            argMax(sul,  sequence_index) AS user_login
+            argMax(sul,  sequence_index) AS user_login,
+            argMax(ssta, sequence_index) AS session_started_at
         FROM (
             SELECT
                 session_id,
@@ -1473,6 +1474,7 @@ def _session_agent_attribution_sql(db: str) -> str:
                 agent_type  AS sat,
                 pool_id     AS spid,
                 user_login  AS sul,
+                started_at  AS ssta,
                 sequence_index
             FROM {db}.segments FINAL
             WHERE tenant_id = {{tenant_id:String}}
@@ -1659,6 +1661,444 @@ def _fetch_evaluations_summary(
         "group_by": group_by,
         "meta":     {"total": len(rows), "from_dt": since, "to_dt": until},
     }
+
+
+# ─── /reports/agents/compare — F3 bancada de agentes ─────────────────────────
+# Spec: docs/arcos/analytics-agents-workbench.md §11 (contrato) + §10 (regras) +
+# §13 (decisões). Multi-entidade × lente; bucket diário por session_at; média =
+# ARITMÉTICA dos agentes por bucket ("média dos agentes", N visível; agente sem
+# dado no bucket = gap, fora do denominador — nunca zero). Filtros sintéticos
+# (agent_type != 'system', role='primary') herdados da atribuição.
+
+_COMPARE_LENSES = {"resolution", "sessions_aht", "availability", "pause_reason", "quality"}
+# Lentes do spec ainda sem fonte no ClickHouse:
+#   nps / wrapup     → F5 (camada session_signal)
+#   quality_criteria → critérios por item não chegam ao CH (só overall_score)
+_COMPARE_LENSES_PENDING = {"nps", "wrapup", "quality_criteria"}
+
+# Folding da família escalate (§13.2): o alvo humano-vs-IA é recuperável pela
+# topologia do segmento seguinte; a bancada compara o CONCEITO escalação.
+_ESCALATE_FAMILY_SQL = "('escalated', 'escalated_human', 'escalated_ai', 'transferred')"
+
+
+async def query_agents_compare(
+    client:    Any,
+    database:  str,
+    tenant_id: str,
+    from_dt:   str | None = None,
+    to_dt:     str | None = None,
+    *,
+    lens:            str = "resolution",
+    pool_id:         str | None = None,
+    entities:        list[str] | None = None,
+    include_average: bool = True,
+    accessible_pools:       list[str] | None = None,
+    supervised_agent_types: list[str] | None = None,
+) -> dict:
+    """
+    Bancada de comparação (F3): devolve séries por entidade (agent_key) + a
+    "média dos agentes" de referência, para a lente pedida, numa chamada só.
+
+    entities vazio → só a média (default da bancada: média do(s) pool(s)).
+    A média é SEMPRE computada sobre todos os agentes do escopo (pool/ABAC),
+    independentemente da seleção — é a referência de comparação.
+    """
+    since = _ch_fmt(from_dt) if from_dt else _default_from()
+    until = _ch_fmt(to_dt, upper=True) if to_dt else _default_to()
+
+    if lens not in _COMPARE_LENSES:
+        pending = lens in _COMPARE_LENSES_PENDING
+        return {
+            "data":  {"average": None, "entities": []},
+            "meta":  {"lens": lens, "bucket": "day", "from_dt": since, "to_dt": until},
+            "error": "lens_not_available" if pending else "invalid_lens",
+            "allowed_lenses": sorted(_COMPARE_LENSES),
+            **({"pending_lenses": sorted(_COMPARE_LENSES_PENDING)} if pending else {}),
+        }
+
+    try:
+        return await asyncio.to_thread(
+            _fetch_agents_compare, client, database, tenant_id, since, until,
+            lens, pool_id, entities or [], include_average,
+            accessible_pools, supervised_agent_types,
+        )
+    except Exception as exc:
+        logger.warning("query_agents_compare failed tenant=%s lens=%s: %s", tenant_id, lens, exc)
+        return {
+            "data": {"average": None, "entities": []},
+            "meta": {"lens": lens, "bucket": "day", "from_dt": since, "to_dt": until},
+            "error": "data_unavailable",
+        }
+
+
+def _fetch_agents_compare(
+    client: Any, db: str, tenant_id: str,
+    since: str, until: str,
+    lens: str, pool_id: str | None, entities: list[str], include_average: bool,
+    accessible_pools: list[str] | None, supervised_agent_types: list[str] | None,
+) -> dict:
+    # per_agent[agent_key] = {"agent_type":…, "label":…, "buckets": {date: point},
+    #                         "summary": {…}}
+    if lens in ("resolution", "sessions_aht"):
+        per_agent = _compare_segments_lens(
+            client, db, tenant_id, since, until, lens, pool_id,
+            accessible_pools, supervised_agent_types,
+        )
+        metric_keys = (
+            ["resolution_rate", "escalation_rate"] if lens == "resolution"
+            else ["sessions", "aht_ms"]
+        )
+    elif lens in ("availability", "pause_reason"):
+        per_agent = _compare_availability_lens(
+            client, db, tenant_id, since, until, lens, pool_id,
+            accessible_pools, supervised_agent_types,
+        )
+        metric_keys = (
+            ["logged_ms", "available_ms", "paused_ms", "busy_ms",
+             "occupancy_pct", "pause_pct"] if lens == "availability" else []
+        )
+    else:  # quality
+        per_agent = _compare_quality_lens(
+            client, db, tenant_id, since, until, pool_id,
+            accessible_pools, supervised_agent_types,
+        )
+        metric_keys = ["avg_score"]
+
+    # ── Média dos agentes (aritmética por bucket; gap ≠ zero) ────────────────
+    average = None
+    if include_average and per_agent:
+        buckets = sorted({b for a in per_agent.values() for b in a["buckets"]})
+        avg_series: list[dict] = []
+        for b in buckets:
+            present = [a["buckets"][b] for a in per_agent.values() if b in a["buckets"]]
+            if not present:
+                continue
+            point: dict = {"date": b, "n": len(present)}
+            for mk in metric_keys:
+                vals = [p[mk] for p in present if p.get(mk) is not None]
+                point[mk] = round(sum(vals) / len(vals), 4) if vals else None
+            avg_series.append(point)
+        average = {
+            "label":  "média dos agentes",
+            "n":      len(per_agent),
+            "series": avg_series,
+        }
+
+    # ── Entidades selecionadas (vazio → só a média) ──────────────────────────
+    out_entities: list[dict] = []
+    for ak in entities:
+        a = per_agent.get(ak)
+        if a is None:
+            out_entities.append({
+                "agent_key": ak, "label": ak, "agent_type": None,
+                "series": [], "summary": {}, "missing": True,
+            })
+            continue
+        out_entities.append({
+            "agent_key":  ak,
+            "label":      a["label"],
+            "agent_type": a["agent_type"],
+            "series":     [a["buckets"][b] for b in sorted(a["buckets"])],
+            "summary":    a["summary"],
+        })
+
+    return {
+        "data": {"average": average, "entities": out_entities},
+        "meta": {
+            "lens": lens, "bucket": "day",
+            "from_dt": since, "to_dt": until,
+            "agents_in_scope": len(per_agent),
+        },
+    }
+
+
+def _compare_segments_lens(
+    client: Any, db: str, tenant_id: str, since: str, until: str,
+    lens: str, pool_id: str | None,
+    accessible_pools: list[str] | None, supervised_agent_types: list[str] | None,
+) -> dict:
+    """resolution + sessions_aht — fonte: segments (primary, não-sintético)."""
+    conditions = [
+        "tenant_id = {tenant_id:String}",
+        f"started_at >= '{since}'",
+        f"started_at <  '{until}'",
+        "role = 'primary'",
+        "agent_type != 'system'",
+    ]
+    params: dict = {"tenant_id": tenant_id}
+    if pool_id:
+        conditions.append("pool_id = {pool_id:String}")
+        params["pool_id"] = pool_id
+    _apply_pool_scope(conditions, accessible_pools)
+    _apply_agent_scope(conditions, supervised_agent_types)
+
+    rows = _rows_to_dicts(client.query(f"""
+        SELECT
+            ak                              AS agent_key,
+            any(at)                         AS agent_type,
+            any(lbl)                        AS label,
+            toString(bucket)                AS bucket,
+            count()                         AS sessions,
+            countIf(outc = 'resolved')      AS resolved,
+            countIf(outc IN {_ESCALATE_FAMILY_SQL}) AS escalated,
+            avg(dur)                        AS aht_ms
+        FROM (
+            SELECT
+                if(agent_type = 'human',
+                   if(user_id != '', user_id, agent_type_id),
+                   if(flow_id != '', flow_id, agent_type_id))      AS ak,
+                agent_type                                          AS at,
+                if(agent_type = 'human',
+                   if(user_login != '', user_login, user_id),
+                   if(flow_id != '', flow_id, agent_type_id))       AS lbl,
+                toDate(started_at)                                  AS bucket,
+                outcome                                             AS outc,
+                duration_ms                                         AS dur
+            FROM {db}.segments FINAL
+            WHERE {" AND ".join(conditions)}
+        )
+        GROUP BY ak, bucket
+        ORDER BY ak, bucket
+    """, parameters=params))
+
+    per_agent: dict = {}
+    for r in rows:
+        a = per_agent.setdefault(r["agent_key"], {
+            "agent_type": r["agent_type"], "label": r["label"],
+            "buckets": {}, "_tot": {"sessions": 0, "resolved": 0, "escalated": 0, "dur_sum": 0.0},
+        })
+        sessions = int(r["sessions"] or 0)
+        resolved = int(r["resolved"] or 0)
+        escalated = int(r["escalated"] or 0)
+        aht = float(r["aht_ms"]) if r["aht_ms"] is not None else None
+        point: dict = {"date": r["bucket"], "sessions": sessions}
+        if lens == "resolution":
+            point["resolution_rate"] = round(resolved / sessions, 4) if sessions else None
+            point["escalation_rate"] = round(escalated / sessions, 4) if sessions else None
+        else:
+            point["aht_ms"] = round(aht, 1) if aht is not None else None
+        a["buckets"][r["bucket"]] = point
+        t = a["_tot"]
+        t["sessions"] += sessions
+        t["resolved"] += resolved
+        t["escalated"] += escalated
+        if aht is not None:
+            t["dur_sum"] += aht * sessions
+
+    for a in per_agent.values():
+        t = a.pop("_tot")
+        s = t["sessions"]
+        a["summary"] = {
+            "sessions":        s,
+            "resolution_rate": round(t["resolved"] / s, 4) if s else None,
+            "escalation_rate": round(t["escalated"] / s, 4) if s else None,
+            "aht_ms":          round(t["dur_sum"] / s, 1) if s else None,
+        }
+    return per_agent
+
+
+def _compare_availability_lens(
+    client: Any, db: str, tenant_id: str, since: str, until: str,
+    lens: str, pool_id: str | None,
+    accessible_pools: list[str] | None, supervised_agent_types: list[str] | None,
+) -> dict:
+    """
+    availability + pause_reason — fonte: agent_login_intervals + agent_pause_intervals
+    (+ busy de segments). Domínio HUMANO (§4 do spec): instance LIKE 'human-%'.
+    agent_key = user_id. Denominadores fixos (§5): pause% = paused/logged;
+    available% implícito; occupancy% = busy/(logged − paused).
+    """
+    base = ["tenant_id = {tenant_id:String}", "instance_id LIKE 'human-%'"]
+    params: dict = {"tenant_id": tenant_id}
+    if pool_id:
+        base.append("pool_id = {pool_id:String}")
+        params["pool_id"] = pool_id
+    _apply_pool_scope(base, accessible_pools)
+    _apply_agent_scope(base, supervised_agent_types)
+
+    login_rows = _rows_to_dicts(client.query(f"""
+        SELECT
+            any(user_id)            AS user_id,
+            instance_id,
+            any(user_login)         AS user_login,
+            toString(toDate(logged_in_at)) AS bucket,
+            sum(if(duration_ms IS NOT NULL, duration_ms,
+                   toUnixTimestamp64Milli(now64(3)) - toUnixTimestamp64Milli(logged_in_at))) AS logged_ms
+        FROM {db}.agent_login_intervals FINAL
+        WHERE {" AND ".join(base + [f"logged_in_at >= '{since}'", f"logged_in_at < '{until}'"])}
+        GROUP BY instance_id, toDate(logged_in_at)
+    """, parameters=params))
+
+    pause_rows = _rows_to_dicts(client.query(f"""
+        SELECT
+            instance_id,
+            toString(toDate(paused_at)) AS bucket,
+            sum(if(duration_ms IS NOT NULL, duration_ms,
+                   toUnixTimestamp64Milli(now64(3)) - toUnixTimestamp64Milli(paused_at))) AS paused_ms
+        FROM {db}.agent_pause_intervals FINAL
+        WHERE {" AND ".join(base + [f"paused_at >= '{since}'", f"paused_at < '{until}'"])}
+        GROUP BY instance_id, toDate(paused_at)
+    """, parameters=params))
+
+    reason_rows = _rows_to_dicts(client.query(f"""
+        SELECT
+            instance_id, reason_id, any(reason_label) AS reason_label,
+            count() AS cnt,
+            sum(if(duration_ms IS NOT NULL, duration_ms,
+                   toUnixTimestamp64Milli(now64(3)) - toUnixTimestamp64Milli(paused_at))) AS total_ms
+        FROM {db}.agent_pause_intervals FINAL
+        WHERE {" AND ".join(base + [f"paused_at >= '{since}'", f"paused_at < '{until}'"])}
+        GROUP BY instance_id, reason_id
+    """, parameters=params)) if lens == "pause_reason" else []
+
+    busy_conditions = [
+        "tenant_id = {tenant_id:String}",
+        f"started_at >= '{since}'", f"started_at <  '{until}'",
+        "agent_type = 'human'", "user_id != ''",
+        "role IN ('primary', 'specialist')",
+    ]
+    if pool_id:
+        busy_conditions.append("pool_id = {pool_id:String}")
+    _apply_pool_scope(busy_conditions, accessible_pools)
+    busy_rows = _rows_to_dicts(client.query(f"""
+        SELECT
+            concat('human-', user_id)      AS instance_id,
+            toString(toDate(started_at))   AS bucket,
+            sum(duration_ms)               AS busy_ms
+        FROM {db}.segments FINAL
+        WHERE {" AND ".join(busy_conditions)}
+        GROUP BY user_id, toDate(started_at)
+    """, parameters=params)) if lens == "availability" else []
+
+    per_agent: dict = {}
+
+    def _agent(instance_id: str, user_login: str = "", user_id: str = "") -> dict:
+        ak = user_id or instance_id.removeprefix("human-")
+        return per_agent.setdefault(ak, {
+            "agent_type": "human",
+            "label":      user_login or ak,
+            "buckets":    {},
+            "summary":    {"logged_ms": 0, "paused_ms": 0, "busy_ms": 0},
+        })
+
+    for r in login_rows:
+        a = _agent(r["instance_id"], r.get("user_login") or "", r.get("user_id") or "")
+        p = a["buckets"].setdefault(r["bucket"], {"date": r["bucket"]})
+        p["logged_ms"] = int(r["logged_ms"] or 0)
+        a["summary"]["logged_ms"] += int(r["logged_ms"] or 0)
+    for r in pause_rows:
+        a = _agent(r["instance_id"])
+        p = a["buckets"].setdefault(r["bucket"], {"date": r["bucket"]})
+        p["paused_ms"] = int(r["paused_ms"] or 0)
+        a["summary"]["paused_ms"] += int(r["paused_ms"] or 0)
+    for r in busy_rows:
+        a = _agent(r["instance_id"])
+        p = a["buckets"].setdefault(r["bucket"], {"date": r["bucket"]})
+        p["busy_ms"] = int(r["busy_ms"] or 0)
+        a["summary"]["busy_ms"] += int(r["busy_ms"] or 0)
+
+    # Derivados por bucket + summary (denominadores fixos §5)
+    for a in per_agent.values():
+        for p in a["buckets"].values():
+            logged = p.get("logged_ms", 0)
+            paused = p.get("paused_ms", 0)
+            busy   = p.get("busy_ms", 0)
+            avail  = max(logged - paused, 0)
+            p.setdefault("logged_ms", 0)
+            p.setdefault("paused_ms", 0)
+            p.setdefault("busy_ms", 0)
+            p["available_ms"]  = avail
+            p["pause_pct"]     = round(paused / logged, 4) if logged else None
+            p["occupancy_pct"] = round(busy / avail, 4) if avail else None
+        s = a["summary"]
+        logged, paused, busy = s["logged_ms"], s["paused_ms"], s["busy_ms"]
+        avail = max(logged - paused, 0)
+        s["available_ms"]  = avail
+        s["pause_pct"]     = round(paused / logged, 4) if logged else None
+        s["occupancy_pct"] = round(busy / avail, 4) if avail else None
+
+    if lens == "pause_reason":
+        for r in reason_rows:
+            a = _agent(r["instance_id"])
+            a["summary"].setdefault("reasons", []).append({
+                "reason_id":    r["reason_id"],
+                "reason_label": r["reason_label"],
+                "count":        int(r["cnt"] or 0),
+                "total_ms":     int(r["total_ms"] or 0),
+            })
+
+    return per_agent
+
+
+def _compare_quality_lens(
+    client: Any, db: str, tenant_id: str, since: str, until: str,
+    pool_id: str | None,
+    accessible_pools: list[str] | None, supervised_agent_types: list[str] | None,
+) -> dict:
+    """
+    quality — fonte: evaluation_results × atribuição (F2). Bucketiza pela data da
+    SESSÃO avaliada (session_started_at — regra de ouro §7), não da avaliação.
+    Amostral: N (n_evaluations) sempre presente no ponto e no summary.
+    """
+    er_conditions = [
+        "tenant_id = {tenant_id:String}",
+        f"timestamp >= '{since}'",
+        f"timestamp <  '{until}'",
+    ]
+    params: dict = {"tenant_id": tenant_id}
+    outer = ["1 = 1"]
+    if pool_id:
+        outer.append("attr.pool_id = {pool_id:String}")
+        params["pool_id"] = pool_id
+    if accessible_pools is not None:
+        scope: list[str] = []
+        if _apply_pool_scope(scope, accessible_pools):
+            outer += [s.replace("pool_id", "attr.pool_id") for s in scope]
+        else:
+            return {}
+    attr_sql = _session_agent_attribution_sql(db)
+
+    rows = _rows_to_dicts(client.query(f"""
+        SELECT
+            attr.agent_key                       AS agent_key,
+            any(attr.agent_type)                 AS agent_type,
+            any(if(attr.agent_type = 'human',
+                   attr.user_login, attr.agent_key)) AS label,
+            toString(toDate(attr.session_started_at)) AS bucket,
+            count()                              AS n,
+            avg(er.overall_score)                AS avg_score
+        FROM (
+            SELECT * FROM {db}.evaluation_results FINAL
+            WHERE {" AND ".join(er_conditions)}
+        ) AS er
+        JOIN ({attr_sql}) AS attr ON er.session_id = attr.session_id
+        WHERE {" AND ".join(outer)}
+        GROUP BY attr.agent_key, toDate(attr.session_started_at)
+        ORDER BY agent_key, bucket
+    """, parameters=params))
+
+    per_agent: dict = {}
+    for r in rows:
+        a = per_agent.setdefault(r["agent_key"], {
+            "agent_type": r["agent_type"], "label": r["label"],
+            "buckets": {}, "_n": 0, "_score_sum": 0.0,
+        })
+        n = int(r["n"] or 0)
+        score = float(r["avg_score"]) if r["avg_score"] is not None else None
+        a["buckets"][r["bucket"]] = {
+            "date": r["bucket"], "avg_score": round(score, 4) if score is not None else None, "n": n,
+        }
+        a["_n"] += n
+        if score is not None:
+            a["_score_sum"] += score * n
+    for a in per_agent.values():
+        n = a.pop("_n")
+        ssum = a.pop("_score_sum")
+        a["summary"] = {
+            "n_evaluations": n,
+            "avg_score":     round(ssum / n, 4) if n else None,
+        }
+    return per_agent
 
 
 # ─── /reports/agent-performance/daily (Arc 5 MV — v_agent_performance) ──────

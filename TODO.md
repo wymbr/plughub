@@ -145,7 +145,8 @@ Hoje o Analytics/Agents mistura agente×pool e não separa humano×IA.
   causa-raiz: notify nunca implementara `context_tags`, destravando também o NPS) → **F2 join
   qualidade ✅ 2026-06-07** (atribuição validada E2E; pipeline de avaliação religado — ver
   CHANGELOG; pendências test-grade: ReplayContext sem session_meta e sem associação campanha/form
-  → arco da visão final) → **F3 endpoint `/reports/agents/compare` (próxima)** → F4 UI bancada → F5 `session_signal`
+  → arco da visão final) → **F3 endpoint `/reports/agents/compare` ✅ 2026-06-07** (5 lentes v1;
+  média aritmética c/ gap; validado com dado real — ver CHANGELOG) → **F4 UI bancada (próxima)** → F5 `session_signal`
   (NPS+wrap-up) → F6 cruzamentos; **F7 opcional/futura**: motivo de escalação normalizado (taxonomia
   pool-scoped à la `pause_reasons` + lente). `close_reason` já é enum normalizado; `handoff_reason`
   fica texto livre (detalhe) até F7. Detalhe em §13 do spec. Débito pré-existente notado na F1:

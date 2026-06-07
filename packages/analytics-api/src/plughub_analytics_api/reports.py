@@ -42,6 +42,7 @@ from .reports_query import (
     query_agents_report,
     query_campaigns_report,
     query_contact_insights_report,
+    query_agents_compare,
     query_evaluations_report,
     query_evaluations_summary,
     query_participation_report,
@@ -625,6 +626,49 @@ async def get_evaluations_summary(
         group_by   = group_by,
     )
     return _respond(data, format, f"evaluations_summary_{_today_label()}.csv")
+
+
+# ─── GET /reports/agents/compare — F3 bancada de agentes ─────────────────────
+
+@router.get("/agents/compare")
+async def get_agents_compare(
+    request:         Request,
+    tenant_id:       str            = Query(...),
+    from_dt:         Optional[str]  = Query(None),
+    to_dt:           Optional[str]  = Query(None),
+    lens:            str            = Query("resolution",
+                                            description="resolution | sessions_aht | availability | pause_reason | quality"),
+    pool_id:         Optional[str]  = Query(None),
+    entities:        Optional[str]  = Query(None,
+                                            description="agent_keys separados por vírgula (vazio = só a média do escopo)"),
+    include_average: bool           = Query(True),
+    pool_principal:  PoolPrincipal  = Depends(optional_pool_principal),
+) -> Response:
+    """
+    Bancada de comparação de agentes (analytics-agents-workbench §11).
+
+    Devolve, numa chamada, as séries diárias de todas as entidades pedidas +
+    a "média dos agentes" de referência (aritmética por bucket, N visível,
+    gap quando o agente não tem dado no dia). agent_key: user_id (humano) /
+    flow_id (IA). Lentes pendentes (nps/wrapup → F5; quality_criteria) retornam
+    error=lens_not_available.
+    """
+    entity_list = [e.strip() for e in entities.split(",") if e.strip()] if entities else []
+    data = await query_agents_compare(
+        client     = request.app.state.store.new_client(),
+        database   = request.app.state.store._database,
+        tenant_id  = tenant_id,
+        from_dt    = from_dt,
+        to_dt      = to_dt,
+        lens       = lens,
+        pool_id    = pool_id,
+        entities   = entity_list,
+        include_average = include_average,
+        accessible_pools       = pool_principal.accessible_pools,
+        supervised_agent_types = pool_principal.supervised_agent_types,
+    )
+    status = 400 if data.get("error") in ("invalid_lens", "lens_not_available") else 200
+    return JSONResponse(content=data, status_code=status)
 
 
 # ─── GET /reports/timeseries/volume ──────────────────────────────────────────

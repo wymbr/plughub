@@ -2,6 +2,35 @@
 
 ---
 
+## Bancada de agentes F3 — endpoint `/reports/agents/compare` (2026-06-07)
+
+Backend da bancada de comparação (`analytics-agents-workbench.md` §11): uma chamada devolve as
+séries diárias de todas as entidades pedidas + a referência **"média dos agentes"**.
+
+**analytics-api**: `query_agents_compare` + rota `GET /reports/agents/compare`
+(`?lens&pool_id&entities=k1,k2&include_average`). Semânticas do §10: média = **aritmética dos
+agentes por bucket** (N visível por ponto; agente sem dado no dia = **gap**, fora do denominador —
+nunca zero); `entities` vazio = só a média do escopo; média sempre computada sobre TODOS os agentes
+do escopo (é a referência), independente da seleção. **Lentes v1**: `resolution`
+(resolution+escalation de segments, com folding `{escalated, escalated_human, escalated_ai,
+transferred}→escalated` na leitura), `sessions_aht`, `availability`/`pause_reason` (domínio humano —
+intervals Arc 8 + busy de segments; denominadores fixos §5: pause%=paused/logged,
+occupancy%=busy/(logged−paused)), `quality` (join de atribuição F2, **bucketizada por
+`session_started_at`** — regra de ouro §7: a nota cai na data da SESSÃO avaliada; N amostral em
+cada ponto e no summary). **Pendentes** (400 + `pending_lenses`): `nps`/`wrapup` (F5 —
+session_signal) e `quality_criteria` (critérios por item não chegam ao ClickHouse). Filtros
+sintéticos (`agent_type != 'system'`, `role='primary'`); ABAC via
+`accessible_pools`/`supervised_agent_types`; atribuição F2 estendida com `session_started_at`
+(aditivo). 7 testes novos (média aritmética com gap, folding, lente pendente, quality por
+session_at, entidade ausente).
+
+**Validado com dado real** (tenant_demo): n=8 agentes em escopo (humano + flows IA); a série do
+humano mostra o efeito F1 (rates 0.0 nos dias pré-F1 com placeholder NULL → 0.5/0.8/0.76 pós-F1,
+escalation 0.0588 do teste "Escalado"); quality n=5; availability com gaps honestos
+(occupancy=null onde logged=0).
+
+---
+
 ## Bancada de agentes F2 — qualidade atribuída ao agente avaliado + religação do pipeline de avaliação (2026-06-07)
 
 A nota de qualidade (Arc 6) passa a ser atribuível ao **agente avaliado** (`agent_key`+`pool_id`),
