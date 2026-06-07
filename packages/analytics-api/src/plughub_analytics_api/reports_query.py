@@ -1442,6 +1442,47 @@ async def query_evaluations_report(
         return {"data": [], "meta": _meta(page, page_size, 0, since, until), "error": "data_unavailable"}
 
 
+def _session_agent_attribution_sql(db: str) -> str:
+    """
+    F2 (bancada de agentes — analytics-agents-workbench.md §13): atribuição de
+    sessão → agente avaliado. Último segmento PRIMARY não-sintético da sessão
+    (argMax por sequence_index — consistente com a Fase A: outcome de sessão =
+    último primary). agent_key = user_id (humano) / flow_id (IA), fallback
+    agent_type_id — mesmo padrão de query_agent_performance_report. Segmentos
+    sintéticos excluídos (agent_type='system'; 'queue' já cai no role='primary').
+    O parâmetro {tenant_id:String} é fornecido pela query externa.
+    """
+    # Nota CH (ILLEGAL_AGGREGATION): alias de SELECT é visível no WHERE no
+    # ClickHouse — aliasar argMax(...) AS agent_type no MESMO escopo do
+    # WHERE agent_type != 'system' faz o filtro resolver para o agregado.
+    # Por isso o filtro vive num subquery interno (só colunas reais) e a
+    # agregação usa nomes internos não-colidentes (sak/sat/spid/sul).
+    return f"""
+        SELECT
+            session_id,
+            argMax(sak,  sequence_index) AS agent_key,
+            argMax(sat,  sequence_index) AS agent_type,
+            argMax(spid, sequence_index) AS pool_id,
+            argMax(sul,  sequence_index) AS user_login
+        FROM (
+            SELECT
+                session_id,
+                if(agent_type = 'human',
+                   if(user_id != '', user_id, agent_type_id),
+                   if(flow_id != '', flow_id, agent_type_id)) AS sak,
+                agent_type  AS sat,
+                pool_id     AS spid,
+                user_login  AS sul,
+                sequence_index
+            FROM {db}.segments FINAL
+            WHERE tenant_id = {{tenant_id:String}}
+              AND role = 'primary'
+              AND agent_type != 'system'
+        )
+        GROUP BY session_id
+    """
+
+
 def _fetch_evaluations(
     client: Any, db: str, tenant_id: str,
     since: str, until: str,
@@ -1478,15 +1519,25 @@ def _fetch_evaluations(
         params,
     )
 
+    # F2 (bancada de agentes): LEFT JOIN com a atribuição por sessão — cada
+    # avaliação ganha o agente AVALIADO (agent_key/agent_type/pool_id/user_login),
+    # retroativo a todas as linhas (join em query-time; sem mudança de ingest).
+    attr_sql = _session_agent_attribution_sql(db)
     result = client.query(f"""
         SELECT
-            result_id, instance_id, session_id, tenant_id,
-            evaluator_id, form_id, campaign_id,
-            overall_score, eval_status, locked,
-            compliance_flags, timestamp
-        FROM {db}.evaluation_results FINAL
-        WHERE {where}
-        ORDER BY timestamp DESC
+            er.result_id, er.instance_id, er.session_id, er.tenant_id,
+            er.evaluator_id, er.form_id, er.campaign_id,
+            er.overall_score, er.eval_status, er.locked,
+            er.compliance_flags, er.timestamp,
+            attr.agent_key  AS agent_key,
+            attr.agent_type AS agent_type,
+            attr.pool_id    AS pool_id,
+            attr.user_login AS user_login
+        FROM (
+            SELECT * FROM {db}.evaluation_results FINAL WHERE {where}
+        ) AS er
+        LEFT JOIN ({attr_sql}) AS attr ON er.session_id = attr.session_id
+        ORDER BY er.timestamp DESC
         LIMIT {page_size} OFFSET {offset}
     """, parameters=params)
 
@@ -1504,16 +1555,19 @@ async def query_evaluations_summary(
     *,
     campaign_id: str | None = None,
     form_id:     str | None = None,
-    group_by:    str = "campaign_id",   # campaign_id | evaluator_id | form_id | date
+    group_by:    str = "campaign_id",   # campaign_id | evaluator_id | form_id | date | agent_key | pool_id
 ) -> dict:
     """
     Aggregated evaluation summary: avg score, score distribution, count by status.
     group_by controls the breakdown dimension.
+
+    F2 (bancada de agentes): group_by agent_key | pool_id agrupa pelo agente
+    AVALIADO (join com segments — último primary não-sintético da sessão).
     """
     since = _ch_fmt(from_dt) if from_dt else _default_from()
     until = _ch_fmt(to_dt, upper=True) if to_dt else _default_to()
     # Whitelist grouping dimensions
-    allowed_groups = {"campaign_id", "evaluator_id", "form_id", "date"}
+    allowed_groups = {"campaign_id", "evaluator_id", "form_id", "date", "agent_key", "pool_id"}
     if group_by not in allowed_groups:
         group_by = "campaign_id"
     try:
@@ -1548,12 +1602,36 @@ def _fetch_evaluations_summary(
 
     where = " AND ".join(conditions)
 
-    # Resolve the GROUP BY expression
-    group_col = "toDate(timestamp)" if group_by == "date" else group_by
+    # Resolve FROM + GROUP BY.
+    # F2 (bancada de agentes): agrupamentos por agente AVALIADO (agent_key /
+    # pool_id) exigem o join com a atribuição por sessão (segments). Os filtros
+    # de evaluation_results são aplicados no subquery interno; avaliações sem
+    # segmento primary correspondente caem em group_key '' (não-atribuídas).
+    if group_by in ("agent_key", "pool_id"):
+        attr_sql    = _session_agent_attribution_sql(db)
+        group_col   = f"attr.{group_by}"
+        from_clause = (
+            f"(SELECT * FROM {db}.evaluation_results FINAL WHERE {where}) AS er "
+            f"LEFT JOIN ({attr_sql}) AS attr ON er.session_id = attr.session_id"
+        )
+        extra_select = (
+            """
+            any(attr.agent_type)                         AS agent_type,
+            any(attr.pool_id)                            AS pool_id,
+            any(attr.user_login)                         AS user_login,"""
+            if group_by == "agent_key" else ""
+        )
+    else:
+        group_col    = "toDate(timestamp)" if group_by == "date" else group_by
+        from_clause  = f"{db}.evaluation_results FINAL"
+        extra_select = ""
+
+    # No caminho com join os filtros já foram aplicados no subquery interno.
+    where_clause = "1 = 1" if group_by in ("agent_key", "pool_id") else where
 
     result = client.query(f"""
         SELECT
-            {group_col}                                  AS group_key,
+            {group_col}                                  AS group_key,{extra_select}
             count()                                      AS total_evaluated,
             countIf(eval_status = 'submitted')           AS count_submitted,
             countIf(eval_status = 'approved')            AS count_approved,
@@ -1569,10 +1647,10 @@ def _fetch_evaluations_summary(
             countIf(overall_score >= 0.5 AND overall_score < 0.7) AS score_fair,
             countIf(overall_score < 0.5)                 AS score_poor,
             countIf(length(compliance_flags) > 0)        AS with_compliance_flags
-        FROM {db}.evaluation_results FINAL
-        WHERE {where}
+        FROM {from_clause}
+        WHERE {where_clause}
         GROUP BY {group_col}
-        ORDER BY {group_col} ASC
+        ORDER BY group_key ASC
     """, parameters=params)
 
     rows = _rows_to_dicts(result)

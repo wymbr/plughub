@@ -594,6 +594,27 @@ class TestQueryEvaluationsReport:
         assert row["overall_score"] == pytest.approx(0.87)
         assert row["locked"]        == 0
 
+    # ── F2 (bancada de agentes): linhas carregam o agente AVALIADO ───────────
+    async def test_rows_include_evaluated_agent_attribution(self):
+        cols = self._COLS + ["agent_key", "agent_type", "pool_id", "user_login"]
+        client = _make_client(
+            self._count_result(1),
+            _ch_result(cols, [[
+                "res-001", "inst-001", "sess-001", TENANT,
+                "agente_avaliacao_v1-001", "form-sac-v1", "camp-q1-2026",
+                0.87, "approved", 0, [], "2026-04-01T10:00:00",
+                "user-123", "human", "retencao_humano", "admin@plughub.local",
+            ]]),
+        )
+        result = await query_evaluations_report(client, DB, TENANT)
+        row = result["data"][0]
+        assert row["agent_key"]  == "user-123"
+        assert row["agent_type"] == "human"
+        assert row["pool_id"]    == "retencao_humano"
+        sql = client.query.call_args_list[-1][0][0]
+        assert "LEFT JOIN" in sql
+        assert "agent_type != 'system'" in sql
+
     async def test_filters_do_not_crash(self):
         client = _make_client(
             self._count_result(0),
@@ -672,6 +693,42 @@ class TestQueryEvaluationsSummary:
         client = _make_client(_ch_result(self._COLS, []))
         result = await query_evaluations_summary(client, DB, TENANT, group_by="injection; DROP")
         assert result["group_by"] == "campaign_id"
+
+    # ── F2 (bancada de agentes): agrupamento pelo agente AVALIADO ────────────
+    _AGENT_COLS = [
+        "group_key", "agent_type", "pool_id", "user_login",
+        "total_evaluated",
+        "count_submitted", "count_approved", "count_rejected",
+        "count_contested", "count_locked", "count_locked_flag",
+        "avg_score", "min_score", "max_score",
+        "score_excellent", "score_good", "score_fair", "score_poor",
+        "with_compliance_flags",
+    ]
+
+    async def test_group_by_agent_key_joins_segments(self):
+        client = _make_client(_ch_result(self._AGENT_COLS, [[
+            "bef14526-b2be-4261-b115-2a765d2da381", "human", "retencao_humano",
+            "admin@plughub.local",
+            5, 1, 4, 0, 0, 0, 0, 0.85, 0.70, 0.95, 2, 2, 1, 0, 0,
+        ]]))
+        result = await query_evaluations_summary(client, DB, TENANT, group_by="agent_key")
+        assert result["group_by"] == "agent_key"
+        row = result["data"][0]
+        assert row["agent_type"] == "human"
+        assert row["pool_id"]    == "retencao_humano"
+        # SQL gerado deve conter o join de atribuição com segments
+        sql = client.query.call_args_list[-1][0][0]
+        assert "LEFT JOIN" in sql
+        assert "attr.agent_key" in sql
+        assert "agent_type != 'system'" in sql
+        assert "role = 'primary'" in sql
+
+    async def test_group_by_pool_id_accepted(self):
+        client = _make_client(_ch_result(self._COLS, []))
+        result = await query_evaluations_summary(client, DB, TENANT, group_by="pool_id")
+        assert result["group_by"] == "pool_id"
+        sql = client.query.call_args_list[-1][0][0]
+        assert "LEFT JOIN" in sql
 
     async def test_error_returns_empty_with_error_key(self):
         client = MagicMock()

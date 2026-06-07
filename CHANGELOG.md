@@ -2,6 +2,60 @@
 
 ---
 
+## Bancada de agentes F2 — qualidade atribuída ao agente avaliado + religação do pipeline de avaliação (2026-06-07)
+
+A nota de qualidade (Arc 6) passa a ser atribuível ao **agente avaliado** (`agent_key`+`pool_id`),
+e o pipeline de avaliação Arc 3/6 — que estava **inteiramente dormente** (`evaluation_results`
+vazio desde sempre) — foi religado elo a elo durante a validação.
+
+**analytics-api (a F2 propriamente)**: helper `_session_agent_attribution_sql` (atribuição por
+sessão = último segmento `primary` não-sintético, `argMax` por `sequence_index` — mesmo padrão do
+agent_performance); `/reports/evaluations` devolve cada avaliação com
+`agent_key`/`agent_type`/`pool_id`/`user_login` (LEFT JOIN em query-time — retroativo, sem mudança
+de ingest); `/reports/evaluations/summary` ganha `group_by=agent_key|pool_id`. Pegadinha CH
+corrigida: alias de SELECT é visível no WHERE (ILLEGAL_AGGREGATION) → filtro em subquery interno.
+Testes novos em `test_reports.py`.
+
+**Pipeline religado — 7 elos (todos descobertos porque a validação exigiu dado real):**
+1. **bridge** publica `conversations.session_closed` no `_close_contact_layer` — o tópico NUNCA teve
+   produtor (a doc atribuía ao "Core", que não existe como serviço); sem ele o Persister jamais roda.
+2. **session-replayer**: `ensure_schema()` self-healing antes de cada persist (reset de banco com o
+   serviço de pé deixava `session_stream_events` inexistente até o próximo restart).
+3. **compose**: `EVALUATOR_POOL` corrigido `avaliador_qualidade`→`avaliacao_ia` (pool inexistente).
+4. **routing-engine** `EvaluationConsumer`: filtrava `payload.event`, mas o produtor publica
+   `event_type` → 100% das mensagens descartadas em silêncio. Aceita ambos.
+5. **compose**: `PLUGHUB_SKILL_FLOW_SERVICE_URL` faltava (default `localhost:3400` quebrava o load
+   do flow e o `POST /execute` — mesmo padrão do bug do CONFIG_API_URL de 2026-06-05).
+6. **compose**: mount ro de `packages/skill-flow-engine/skills` no routing-engine (o load primário
+   do flow é de disco e a imagem só copia o próprio pacote).
+7. **analytics parser** aceita `evaluation.completed` publicado DIRETO pelo avaliador
+   (`result_id:=evaluation_id`, `overall_score:=composite_score/10`) — o caminho desenhado no Arc 13
+   (`eval.instance.submitted` → ingest na evaluation-api → re-publish com `result_id`) tem o
+   consumer **inexistente** na evaluation-api.
+
+**agente_avaliacao_v1 (opção A test-grade)**: o avaliador rodava **sem identidade** (o YAML esperava
+`session_token`/`participant_id` "injetados pelo orchestrator" — mecanismo nunca implementado).
+Ganhou step inicial `agent_login` (contrato Spec 4.5): token próprio; `participant_id`=`evaluation_id`
+(UUID); `agent_type_id`=`skill_avaliacao_v1` (pós-C2 a identidade é o skill deployado).
+
+**Validado E2E** (tenant_demo): 5 avaliações no ClickHouse, todas com `agent_key`/`agent_type=human`/
+`pool_id=retencao_humano`/`user_login` corretos; summary agrupado por agente.
+
+**Limitações conhecidas (test-grade — pertencem ao arco da visão final registrada no TODO:
+avaliador disparado pelo calendário da campanha, recebendo session_id):** o ReplayContext não
+popula `session_meta` (outcome/close_reason/duration/participants vazios → LLM devolve score 0 com
+compliance_flags justas) e não associa campanha/form (`campaign=none` — o Replayer não consulta
+campanhas; `form_id` vazio nos resultados). O gatilho atual é incondicional por sessão fechada
+(sem amostragem da campanha).
+
+**Incidente operacional durante a validação**: recriações de containers (postgres −3h,
+agent-registry −54min, hot path −1h) deixaram o **agent-registry vazio** (recriado DEPOIS do
+RegistrySyncer do boot do bridge) e o operador deslogado → webchat sem roteamento. Recuperação:
+`restart orchestrator-bridge` (re-sync do registry) + re-login no Console. Lição: o RegistrySyncer
+só roda no boot do bridge — se o registry for recriado depois, restart no bridge restaura.
+
+---
+
 ## Bancada de agentes F1 — outcome real do segmento primário humano (2026-06-07)
 
 Espinha da reformulação Analytics/Agents (`docs/arcos/analytics-agents-workbench.md` §13): o segmento

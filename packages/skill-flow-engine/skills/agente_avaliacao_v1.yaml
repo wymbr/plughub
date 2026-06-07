@@ -97,18 +97,42 @@ classification:
   type: orchestrator
   domain: quality
 
-entry: get_context
+entry: login
 
 steps:
+
+  # ── Step 0 (F2 bancada de agentes): login do avaliador ────────────────────────
+  # O despacho do routing-engine (EvaluationConsumer) não injeta identidade — o
+  # YAML original esperava session_token/participant_id "injetados pelo
+  # orchestrator", mecanismo que nunca foi implementado (avaliador rodava sem
+  # token e morria no evaluation_context_get). Solução test-grade (opção A):
+  # o agente loga a si mesmo via agent_login (contrato Spec 4.5) e usa o token
+  # emitido. participant_id = evaluation_id (UUID; o gate de role tolera
+  # instância desconhecida). agent_type_id = skill_id (pós-C2, a identidade do
+  # agente É o skill deployado — getAgentType resolve via GET /v1/skills/{id}).
+  #
+  # VISÃO FINAL (registrada no TODO): o avaliador será disparado pelo CALENDÁRIO
+  # na data/hora da agenda da campanha (módulo quality, campo schedule já existe
+  # em evaluation.campaigns), recebendo o session_id a avaliar como parâmetro.
+  - id:   login
+    type: invoke
+    tool:  agent_login
+    input:
+      tenant_id:     "$.session.tenant_id"
+      agent_type_id: "skill_avaliacao_v1"
+      instance_id:   "$.session.evaluation_id"
+    output_as:  login
+    on_success: get_context
+    on_failure: complete_error
 
   # ── Step 1: buscar contexto completo (ReplayContext + form + snippets) ────────
   - id:   get_context
     type: invoke
     tool:  evaluation_context_get
     input:
-      session_token:  "$.session.session_token"
+      session_token:  "$.pipeline_state.login.session_token"
       session_id:     "$.session.session_id"
-      participant_id: "$.session.participant_id"
+      participant_id: "$.session.evaluation_id"
     output_as:  eval_context
     on_success: check_rag_needed
     on_failure: complete_error   # sem ReplayContext não há como avaliar
@@ -323,9 +347,9 @@ steps:
     type: invoke
     tool:  evaluation_submit
     input:
-      session_token:        "$.session.session_token"
+      session_token:        "$.pipeline_state.login.session_token"
       session_id:           "$.session.session_id"
-      participant_id:       "$.session.participant_id"
+      participant_id:       "$.session.evaluation_id"
       evaluation_id:        "$.session.evaluation_id"
       # Scores e narrativas
       composite_score:      "$.pipeline_state.llm_result.overall_score"

@@ -157,6 +157,11 @@ class SessionReplayerConsumer:
 
         persister = StreamPersister(self._redis, self._pg_pool)
         try:
+            # Self-healing (F2 bancada): garante a tabela antes de cada persist.
+            # O boot já chama ensure_schema(), mas um reset de volume/banco com o
+            # serviço de pé deixava o persist quebrando com "relation does not
+            # exist" até o próximo restart. CREATE TABLE IF NOT EXISTS é barato.
+            await persister.ensure_schema()
             count = await persister.persist(event.session_id, event.tenant_id)
             logger.info("Persister: %d events persisted for session %s", count, event.session_id)
         except Exception as exc:

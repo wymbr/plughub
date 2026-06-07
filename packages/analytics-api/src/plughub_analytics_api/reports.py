@@ -606,7 +606,10 @@ async def get_evaluations_summary(
     """
     Aggregated evaluation summary: avg score, score distribution, status counts.
 
-    group_by: campaign_id | evaluator_id | form_id | date
+    group_by: campaign_id | evaluator_id | form_id | date | agent_key | pool_id
+    F2 (bancada de agentes): agent_key/pool_id agrupam pelo agente AVALIADO —
+    join com segments (último primary não-sintético da sessão); group_key '' =
+    avaliação sem segmento atribuível.
     Includes per-group breakdowns: score_excellent (≥0.9), score_good (0.7-0.9),
     score_fair (0.5-0.7), score_poor (<0.5), with_compliance_flags count.
     format: json | csv

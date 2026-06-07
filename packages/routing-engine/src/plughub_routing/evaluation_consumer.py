@@ -83,7 +83,10 @@ class EvaluationConsumer:
             await consumer.stop()
 
     async def _dispatch(self, payload: dict) -> None:
-        event_type = payload.get("event", "")
+        # F2 (bancada de agentes): o produtor (session-replayer Persister) publica
+        # o campo `event_type` (EvaluationRequest model) — este consumer filtrava
+        # apenas `event`, descartando TODA mensagem em silêncio. Aceita ambos.
+        event_type = payload.get("event") or payload.get("event_type") or ""
         if event_type != "evaluation.requested":
             return
 

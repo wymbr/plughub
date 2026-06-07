@@ -1467,6 +1467,34 @@ async def _close_contact_layer(
             "session=%s pool=%s ended_at=%s",
             session_id, _pool_id_close, _ended_at_close,
         )
+
+        # ── F2 (bancada de agentes): trigger do pipeline de avaliação ─────────
+        # conversations.session_closed NUNCA teve produtor no codebase (a doc o
+        # atribuía ao "Core", que não existe como serviço no demo). O Persister
+        # do session-replayer consome este tópico, persiste o stream e publica
+        # evaluation.requested — sem este publish, o pipeline de avaliação
+        # (Arc 3/6) fica dormente e evaluation_results permanece vazio.
+        # Payload = SessionClosedEvent (session-replayer/models.py).
+        try:
+            await _kafka_producer.send_and_wait(
+                "conversations.session_closed",
+                json.dumps({
+                    "session_id":   session_id,
+                    "tenant_id":    tenant_id,
+                    "outcome":      _last_outcome_val or None,
+                    "close_reason": _close_reason_biz,
+                    "closed_at":    _ended_at_close,
+                }).encode("utf-8"),
+            )
+            logger.info(
+                "_close_contact_layer: published conversations.session_closed: session=%s",
+                session_id,
+            )
+        except Exception as _sc_exc:
+            logger.warning(
+                "_close_contact_layer: failed to publish session_closed: session=%s — %s",
+                session_id, _sc_exc,
+            )
     except Exception as exc:
         logger.error(
             "_close_contact_layer: failed to publish contact_closed: session=%s — %s",

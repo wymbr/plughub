@@ -619,6 +619,16 @@ services:
       # via Config API não chegavam ao routing até um config.changed bem-sucedido).
       PLUGHUB_CONFIG_API_URL: http://config-api:3600
       PLUGHUB_TENANT_ID: tenant_demo   # GET /config/{ns} exige ?tenant_id=
+      # F2 (bancada): faltava — o EvaluationConsumer usava o default
+      # localhost:3400 tanto no fallback de load quanto no POST /execute do
+      # despacho do avaliador (mesmo padrão do bug do CONFIG_API_URL, 2026-06-05).
+      PLUGHUB_SKILL_FLOW_SERVICE_URL: http://skill-flow-service:3460
+    volumes:
+      # F2 (bancada): o load primário do flow de avaliação é de DISCO
+      # (packages/skill-flow-engine/skills/{skill}.yaml) e a imagem só copia o
+      # próprio pacote. Mount ro no path que _skills_dir() resolve em /app —
+      # mesmo padrão do skill-flow-service (YAML atualiza sem rebuild).
+      - ./packages/skill-flow-engine/skills:/app/packages/skill-flow-engine/skills:ro
     depends_on:
       redis:
         condition: service_healthy
@@ -751,7 +761,9 @@ services:
       KAFKA_BROKERS:   kafka:29092
       REDIS_URL:       redis://redis:6379
       DATABASE_URL:    postgresql://plughub:plughub@postgres:5432/plughub_demo
-      EVALUATOR_POOL:  avaliador_qualidade
+      # F2 (bancada): era avaliador_qualidade — pool inexistente no registry do
+      # demo; o pool de avaliação pós-sessão é avaliacao_ia (skill_avaliacao_v1).
+      EVALUATOR_POOL:  avaliacao_ia
       REPLAY_SPEED_FACTOR: "10.0"
     depends_on:
       kafka:

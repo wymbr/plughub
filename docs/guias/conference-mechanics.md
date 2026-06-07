@@ -717,5 +717,20 @@ fiel onde há wrap-up; nunca se inventa `resolved`.
 
 ---
 
+### Mudança 6 — `conversations.session_closed` publicado no fechamento (F2 bancada, 2026-06-07)
+
+**Contexto:** o tópico `conversations.session_closed` (gatilho do pipeline de avaliação Arc 3/6 —
+Persister do session-replayer) **nunca teve produtor**: a doc atribuía ao "Core", que não existe
+como serviço no demo. O pipeline de avaliação ficou dormente desde a criação.
+
+**Mudança:** `_close_contact_layer()` passa a publicar `conversations.session_closed`
+(payload `SessionClosedEvent`: session_id, tenant_id, outcome, close_reason, closed_at) logo após
+o `contact_closed` de analytics. Dispara uma vez por contato (guard `contact_close_fired` NX).
+Consumidor único hoje: Persister do session-replayer (persiste o stream e publica
+`evaluation.requested`). Gatilho é incondicional por fechamento — a amostragem por campanha é
+da visão final (avaliador via calendário; ver TODO).
+
+---
+
 *Este documento é a referência canônica para o mecanismo de conferência do PlugHub.*
 *Qualquer mudança no funcionamento deve ser registrada neste arquivo antes de ir para CHANGELOG.md.*

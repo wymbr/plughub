@@ -143,11 +143,24 @@ Hoje o Analytics/Agents mistura agente×pool e não separa humano×IA.
   · contrato do segmento (lido igual humano/IA): `outcome` + `close_reason` (enum, iniciativa) + `handoff_reason` (livre, escalação) + `issue_status` (rótulo curto); texto livre rico no detalhe sob demanda (LGPD).
   **Fases**: **F1 espinha (outcome real) ✅ 2026-06-07** (ver `CHANGELOG.md` — inclui correção da
   causa-raiz: notify nunca implementara `context_tags`, destravando também o NPS) → **F2 join
-  qualidade (próxima)** → F3 endpoint `/reports/agents/compare` → F4 UI bancada → F5 `session_signal`
+  qualidade ✅ 2026-06-07** (atribuição validada E2E; pipeline de avaliação religado — ver
+  CHANGELOG; pendências test-grade: ReplayContext sem session_meta e sem associação campanha/form
+  → arco da visão final) → **F3 endpoint `/reports/agents/compare` (próxima)** → F4 UI bancada → F5 `session_signal`
   (NPS+wrap-up) → F6 cruzamentos; **F7 opcional/futura**: motivo de escalação normalizado (taxonomia
   pool-scoped à la `pause_reasons` + lente). `close_reason` já é enum normalizado; `handoff_reason`
   fica texto livre (detalhe) até F7. Detalhe em §13 do spec. Débito pré-existente notado na F1:
   3 falhas em `resolve.test.ts` (BLPOP/mention mocks — não relacionadas).
+  **Pipeline de avaliação (descoberto na F2, 2026-06-07)**: a cadeia Arc 3/6 estava DORMENTE —
+  `conversations.session_closed` sem produtor (adicionado ao bridge), persister sem self-healing de
+  schema, `EVALUATOR_POOL` apontando p/ pool inexistente, consumer do routing filtrando `event` em
+  vez de `event_type`, `SKILL_FLOW_SERVICE_URL` ausente no compose, flow do avaliador sem mount no
+  container, e **avaliador sem identidade** (session_token/participant_id nunca injetados).
+  Test-grade: `agente_avaliacao_v1` ganhou step `agent_login` inicial (opção A — token próprio).
+  **Visão final (decisão 2026-06-07)**: o avaliador deve poder rodar a qualquer momento; na versão
+  definitiva é disparado pelo **calendário** na data/hora da agenda da campanha do módulo quality
+  (campo `schedule` JSONB já existe em `evaluation.campaigns`), recebendo como parâmetro o
+  `session_id` a avaliar — substituindo o gatilho incondicional do Persister por
+  agendamento+amostragem da campanha. Vira arco próprio quando priorizado.
 - **Fase 3 — migrar provisionamento do demo para Config + Deploy** (elimina YAML/agent_type):
   - **3b / 3a / 3c / 3d-parcial — concluídas** — ver `CHANGELOG.md` (2026-05-31, 2026-06-01)
     e `docs/arcos/instance-bootstrap.md`. Pools IA migrados; `mention_commands` via embed no

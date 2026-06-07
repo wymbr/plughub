@@ -757,14 +757,30 @@ def parse_evaluation_event(payload: dict[str, Any]) -> list[dict] | None:
     tenant_id  = payload.get("tenant_id")
     result_id  = payload.get("result_id")
 
+    # F2 (bancada de agentes): aceita o evento publicado DIRETO pelo avaliador
+    # (evaluation_submit → event_type "evaluation.completed", com evaluation_id e
+    # composite_score 0–10). O caminho desenhado no Arc 13 (eval.instance.submitted
+    # → ingest na evaluation-api → re-publish "evaluation.submitted" com result_id)
+    # está inacabado — o consumer não existe na evaluation-api — então sem este
+    # mapeamento o resultado do avaliador nunca chega ao ClickHouse.
+    # result_id := evaluation_id; overall_score := composite_score/10 (escala 0–1
+    # dos buckets do relatório). timestamp := evaluated_at quando presente.
+    if event_type == "evaluation.completed" and not result_id:
+        result_id = payload.get("evaluation_id")
+
     if not event_type or not tenant_id or not result_id:
         return None
 
-    ts         = payload.get("timestamp") or _now()
+    ts         = payload.get("timestamp") or payload.get("evaluated_at") or _now()
     session_id = payload.get("session_id") or ""
     instance_id = payload.get("instance_id") or ""
     campaign_id = payload.get("campaign_id") or None
     overall_score = payload.get("overall_score")
+    if overall_score is None and payload.get("composite_score") is not None:
+        try:
+            overall_score = float(payload["composite_score"]) / 10.0
+        except (TypeError, ValueError):
+            overall_score = None
     eval_status = payload.get("eval_status") or _EVAL_EVENT_STATUS_MAP.get(event_type, event_type)
     locked = 1 if payload.get("locked") or event_type == "evaluation.locked" else 0
     compliance_flags = payload.get("compliance_flags") or []
