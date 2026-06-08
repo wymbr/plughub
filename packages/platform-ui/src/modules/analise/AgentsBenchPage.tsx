@@ -17,7 +17,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useAuth } from '@/auth/useAuth'
 import {
-  LineChart, Line, BarChart, Bar,
+  LineChart, Line, BarChart, Bar, PieChart, Pie, Cell,
   XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
 } from 'recharts'
 import { DEFAULT_FILTERS } from '@/modules/contacts/types'
@@ -357,30 +357,51 @@ export default function AgentsBenchPage() {
   const [poolId, setPoolId] = useState('')
   const [lens,   setLens]   = useState<LensId>('resolution')
   const [selected, setSelected] = useState<string[]>([])
+  const [expanded, setExpanded] = useState<Set<string>>(new Set())
+  const [detail, setDetail] = useState<{ key: string; label: string; type: string } | null>(null)
 
   const lensDef = LENSES.find(l => l.id === lens)!
   const { rows: perfRows, loading: listLoading } = usePerformanceList(tenantId ?? '', fromDt, toDt, poolId)
   const { resp, loading: chartLoading } = useCompare(tenantId ?? '', fromDt, toDt, poolId, lens, selected)
 
-  // Lista de agentes (flat na F4.1; agrupada por pool na F4.3).
-  const agents = useMemo(() => {
-    const seen = new Map<string, { key: string; label: string; type: string; pool: string; sessions: number }>()
+  // F4.3 — árvore pools → agentes. Um agente pode aparecer em mais de um pool;
+  // a seleção é por agent_key (global, como no compare). sessions/resolved
+  // somados por (pool, agent_key) para as colunas essenciais.
+  interface AgentItem { key: string; label: string; type: string; sessions: number; resolved: number }
+  const poolGroups = useMemo(() => {
+    const pools = new Map<string, Map<string, AgentItem>>()
     for (const r of perfRows) {
       const key = agentKeyOf(r)
-      const ex = seen.get(key)
-      if (ex) { ex.sessions += r.total_sessions; continue }
-      seen.set(key, {
+      const pm = pools.get(r.pool_id) ?? new Map<string, AgentItem>()
+      pools.set(r.pool_id, pm)
+      const ex = pm.get(key)
+      if (ex) { ex.sessions += r.total_sessions; ex.resolved += r.resolved_count }
+      else pm.set(key, {
         key, label: labelOf(r), type: r.agent_type ?? 'native',
-        pool: r.pool_id, sessions: r.total_sessions,
+        sessions: r.total_sessions, resolved: r.resolved_count,
       })
     }
-    return [...seen.values()].sort((a, b) => a.label.localeCompare(b.label))
+    return [...pools.entries()]
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([pool, m]) => ({ pool, agents: [...m.values()].sort((a, b) => a.label.localeCompare(b.label)) }))
   }, [perfRows])
+
+  const isDisabled = (type: string) => lensDef.domain === 'human' && type !== 'human'
 
   const toggle = (key: string, disabled: boolean) => {
     if (disabled) return
     setSelected(s => s.includes(key) ? s.filter(k => k !== key) : [...s, key])
   }
+  // Checkbox do pool = bulk dos agentes elegíveis do pool (média do pool como
+  // série agregada única é refinamento futuro — exigiria pseudo-entidade no
+  // endpoint compare; ver F4.5/§2 do spec).
+  const poolToggle = (agents: AgentItem[]) => {
+    const keys = agents.filter(a => !isDisabled(a.type)).map(a => a.key)
+    const allOn = keys.length > 0 && keys.every(k => selected.includes(k))
+    setSelected(s => allOn ? s.filter(k => !keys.includes(k)) : [...new Set([...s, ...keys])])
+  }
+  const toggleExpand = (pool: string) =>
+    setExpanded(s => { const n = new Set(s); n.has(pool) ? n.delete(pool) : n.add(pool); return n })
 
   if (!tenantId) return (
     <div className="flex items-center justify-center h-full text-muted-light text-sm">
@@ -410,26 +431,56 @@ export default function AgentsBenchPage() {
           </div>
           {listLoading ? (
             <div className="p-4 text-sm text-muted-light animate-pulse">{t('bench.list.loading')}</div>
-          ) : agents.length === 0 ? (
+          ) : poolGroups.length === 0 ? (
             <div className="p-4 text-sm text-muted-light">{t('bench.list.noData')}</div>
           ) : (
             <ul className="divide-y divide-border">
-              {agents.map(a => {
-                const disabled = lensDef.domain === 'human' && a.type !== 'human'
-                const checked = selected.includes(a.key)
+              {poolGroups.map(({ pool, agents }) => {
+                const open = expanded.has(pool)
+                const eligible = agents.filter(a => !isDisabled(a.type)).map(a => a.key)
+                const allOn = eligible.length > 0 && eligible.every(k => selected.includes(k))
+                const someOn = eligible.some(k => selected.includes(k))
                 return (
-                  <li key={a.key}
-                    className={`px-3 py-2 flex items-center gap-2 ${disabled ? 'opacity-40' : 'hover:bg-surface-muted'}`}>
-                    <input type="checkbox" checked={checked} disabled={disabled}
-                      onChange={() => toggle(a.key, disabled)}
-                      className="accent-primary" style={{ accentColor: checked ? colorFor(a.key) : undefined }} />
-                    <span className="flex-1 min-w-0">
-                      <span className="block text-xs font-medium text-dark truncate">{a.label}</span>
-                      <span className="block text-2xs text-muted-light font-mono truncate">
-                        {a.type === 'human' ? '👤' : '🤖'} {a.pool}
-                      </span>
-                    </span>
-                    <span className="text-2xs text-muted tabular-nums">{a.sessions}</span>
+                  <li key={pool}>
+                    {/* Linha do pool */}
+                    <div className="px-2 py-2 flex items-center gap-1.5 bg-surface-muted/40">
+                      <button onClick={() => toggleExpand(pool)}
+                        className="w-4 h-4 flex items-center justify-center text-muted hover:text-dark"
+                        aria-label={t(open ? 'bench.list.collapse' : 'bench.list.expand')}>
+                        <span className={`transition-transform ${open ? 'rotate-90' : ''}`}>▸</span>
+                      </button>
+                      <input type="checkbox" checked={allOn}
+                        ref={el => { if (el) el.indeterminate = !allOn && someOn }}
+                        disabled={eligible.length === 0}
+                        onChange={() => poolToggle(agents)} className="accent-primary" />
+                      <span className="flex-1 min-w-0 text-xs font-semibold text-dark font-mono truncate">{pool}</span>
+                      <span className="text-2xs text-muted-light">{agents.length}</span>
+                    </div>
+                    {/* Agentes do pool */}
+                    {open && (
+                      <ul>
+                        {agents.map(a => {
+                          const disabled = isDisabled(a.type)
+                          const checked = selected.includes(a.key)
+                          const resPct = a.sessions ? a.resolved / a.sessions : null
+                          return (
+                            <li key={`${pool}:${a.key}`}
+                              className={`pl-8 pr-3 py-1.5 flex items-center gap-2 ${disabled ? 'opacity-40' : 'hover:bg-surface-muted'}`}>
+                              <input type="checkbox" checked={checked} disabled={disabled}
+                                onChange={() => toggle(a.key, disabled)}
+                                className="accent-primary" style={{ accentColor: checked ? colorFor(a.key) : undefined }} />
+                              <button onClick={() => setDetail({ key: a.key, label: a.label, type: a.type })}
+                                className="flex-1 min-w-0 text-left">
+                                <span className="block text-xs font-medium text-dark truncate hover:text-primary">{a.label}</span>
+                                <span className="block text-2xs text-muted-light truncate">
+                                  {a.type === 'human' ? '👤' : '🤖'} {a.sessions} · {resPct == null ? '—' : `${(resPct * 100).toFixed(0)}%`}
+                                </span>
+                              </button>
+                            </li>
+                          )
+                        })}
+                      </ul>
+                    )}
                   </li>
                 )
               })}
@@ -475,6 +526,27 @@ export default function AgentsBenchPage() {
 
         </div>
       </div>
+
+      {/* Detalhe (stub F4.3 → type-aware na F4.4) */}
+      {detail && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30"
+          onClick={() => setDetail(null)}>
+          <div className="bg-white rounded-xl shadow-xl border border-border w-[28rem] max-w-[90vw] p-5"
+            onClick={e => e.stopPropagation()}>
+            <div className="flex items-start justify-between mb-3">
+              <div>
+                <p className="text-sm font-bold text-dark">{detail.label}</p>
+                <p className="text-2xs text-muted-light">
+                  {detail.type === 'human' ? '👤' : '🤖'} {t(`bench.detail.type.${detail.type === 'human' ? 'human' : 'ai'}`)}
+                </p>
+              </div>
+              <button onClick={() => setDetail(null)}
+                className="text-muted hover:text-dark text-lg leading-none">×</button>
+            </div>
+            <p className="text-sm text-muted-light py-6 text-center">{t('bench.detail.soon')}</p>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
