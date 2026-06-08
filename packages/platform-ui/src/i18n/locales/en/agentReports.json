@@ -153,7 +153,10 @@
     },
     "detail": {
       "soon": "Full agent detail arrives in the next step.",
-      "type": { "human": "Human agent", "ai": "AI agent" }
+      "type": { "human": "Human agent", "ai": "AI agent" },
+      "available": "Available",
+      "timeShare": "Time split (available × pause)",
+      "evals": "{{n}} evals"
     },
     "chart": {
       "loading": "Loading…",

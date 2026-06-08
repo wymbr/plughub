@@ -346,6 +346,90 @@ function LensChart({
   return <StackedReasonBars resp={resp} selected={selected} labelMap={labelMap} t={t} />
 }
 
+// ── Detalhe type-aware (F4.4) — consolidado das lentes por agente ─────────────
+
+function KpiTile({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="bg-surface-muted rounded-lg px-3 py-2 flex flex-col gap-0.5">
+      <span className="text-2xs font-semibold text-muted uppercase tracking-wide">{label}</span>
+      <span className="text-base font-bold text-dark tabular-nums">{value}</span>
+    </div>
+  )
+}
+
+function AgentDetail({
+  tenantId, fromDt, toDt, agentKey, isHuman, t,
+}: {
+  tenantId: string; fromDt: string; toDt: string; agentKey: string; isHuman: boolean
+  t: (k: string, o?: Record<string, unknown>) => string
+}) {
+  const [byLens, setByLens] = useState<Partial<Record<LensId, CompareEntity | null>>>({})
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    setLoading(true)
+    const lenses: LensId[] = isHuman
+      ? ['resolution', 'quality', 'availability']
+      : ['resolution', 'quality']
+    Promise.all(lenses.map(l => {
+      const p = new URLSearchParams({
+        tenant_id: tenantId, from_dt: fromDt, to_dt: toDt,
+        lens: l, entities: agentKey, include_average: 'false',
+      })
+      return fetch(`/reports/agents/compare?${p}`)
+        .then(r => r.json())
+        .then((d: CompareResp) => [l, d.data?.entities?.[0] ?? null] as [LensId, CompareEntity | null])
+        .catch(() => [l, null] as [LensId, CompareEntity | null])
+    })).then(entries => setByLens(Object.fromEntries(entries)))
+      .finally(() => setLoading(false))
+  }, [tenantId, fromDt, toDt, agentKey, isHuman])
+
+  if (loading) return <p className="text-sm text-muted-light py-6 text-center animate-pulse">{t('bench.chart.loading')}</p>
+
+  const res  = byLens.resolution?.summary ?? {}
+  const qual = byLens.quality?.summary ?? {}
+  const av   = byLens.availability?.summary ?? {}
+  const num = (v: number | null | undefined) => (typeof v === 'number' ? v : null)
+
+  const tiles: { label: string; value: string }[] = [
+    { label: t('bench.metric.sessions'),   value: num(res.sessions) != null ? `${res.sessions}` : '—' },
+    { label: t('bench.metric.resolution'), value: fmtVal(num(res.resolution_rate), 'pct') },
+    { label: t('bench.metric.escalation'), value: fmtVal(num(res.escalation_rate), 'pct') },
+    { label: t('bench.metric.aht'),        value: fmtVal(num(res.aht_ms), 'time') },
+    { label: t('bench.metric.quality'),    value: num(qual.avg_score) != null ? `${fmtVal(num(qual.avg_score), 'score')} (${t('bench.detail.evals', { n: qual.n_evaluations ?? 0 })})` : '—' },
+  ]
+  if (isHuman) tiles.push({ label: t('bench.metric.occupancy'), value: fmtVal(num(av.occupancy_pct), 'pct') })
+
+  const availMs = num(av.available_ms) ?? 0
+  const pausedMs = num(av.paused_ms) ?? 0
+  const donut = [
+    { name: t('bench.detail.available'), value: availMs, fill: '#059669' },
+    { name: t('bench.metric.pause'),     value: pausedMs, fill: '#D97706' },
+  ].filter(d => d.value > 0)
+
+  return (
+    <div className="space-y-4">
+      <div className="grid grid-cols-3 gap-2">
+        {tiles.map(t_ => <KpiTile key={t_.label} label={t_.label} value={t_.value} />)}
+      </div>
+      {isHuman && donut.length > 0 && (
+        <div>
+          <p className="text-2xs font-semibold text-muted uppercase tracking-wide mb-1">{t('bench.detail.timeShare')}</p>
+          <ResponsiveContainer width="100%" height={160}>
+            <PieChart>
+              <Pie data={donut} dataKey="value" nameKey="name" innerRadius={40} outerRadius={64} paddingAngle={2}>
+                {donut.map((d, i) => <Cell key={i} fill={d.fill} />)}
+              </Pie>
+              <Tooltip formatter={(v: number) => fmtMsShort(v)} />
+              <Legend iconSize={10} wrapperStyle={{ fontSize: 12 }} />
+            </PieChart>
+          </ResponsiveContainer>
+        </div>
+      )}
+    </div>
+  )
+}
+
 // ── Página ──────────────────────────────────────────────────────────────────
 
 export default function AgentsBenchPage() {
@@ -531,7 +615,7 @@ export default function AgentsBenchPage() {
       {detail && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30"
           onClick={() => setDetail(null)}>
-          <div className="bg-white rounded-xl shadow-xl border border-border w-[28rem] max-w-[90vw] p-5"
+          <div className="bg-white rounded-xl shadow-xl border border-border w-[34rem] max-w-[92vw] p-5"
             onClick={e => e.stopPropagation()}>
             <div className="flex items-start justify-between mb-3">
               <div>
@@ -543,7 +627,8 @@ export default function AgentsBenchPage() {
               <button onClick={() => setDetail(null)}
                 className="text-muted hover:text-dark text-lg leading-none">×</button>
             </div>
-            <p className="text-sm text-muted-light py-6 text-center">{t('bench.detail.soon')}</p>
+            <AgentDetail tenantId={tenantId} fromDt={fromDt} toDt={toDt}
+              agentKey={detail.key} isHuman={detail.type === 'human'} t={t} />
           </div>
         </div>
       )}

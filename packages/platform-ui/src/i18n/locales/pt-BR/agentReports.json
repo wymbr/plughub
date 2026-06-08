@@ -153,7 +153,10 @@
     },
     "detail": {
       "soon": "O detalhe completo do agente chega no próximo passo.",
-      "type": { "human": "Agente humano", "ai": "Agente IA" }
+      "type": { "human": "Agente humano", "ai": "Agente IA" },
+      "available": "Disponível",
+      "timeShare": "Distribuição de tempo (disponível × pausa)",
+      "evals": "{{n}} aval."
     },
     "chart": {
       "loading": "Carregando…",
