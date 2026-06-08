@@ -127,6 +127,34 @@
     "count":     "Count",
     "exportCsv": "Export CSV"
   },
+  "bench": {
+    "title": "Agent Bench — 360° Comparison",
+    "average": "Agent average",
+    "n": "n={{n}}",
+    "filters": { "from": "From", "to": "To", "poolPlaceholder": "all pools" },
+    "lens": {
+      "label": "Lens:",
+      "resolution": "Resolution / Escalation",
+      "sessions_aht": "Sessions / AHT",
+      "availability": "Availability / Occupancy",
+      "pause_reason": "Pause reason",
+      "quality": "Quality score"
+    },
+    "domain": {
+      "universal": "Compares human and AI agents.",
+      "human": "Human agents only — AI rows are disabled in this lens."
+    },
+    "list": {
+      "title": "Pools & Agents",
+      "loading": "Loading agents…",
+      "noData": "No agents in scope for the period."
+    },
+    "chart": {
+      "loading": "Loading…",
+      "noData": "No data for this lens in the period.",
+      "pendingViz": "This lens's chart arrives in the next step."
+    }
+  },
   "breadcrumbs": {
     "config": "Configuration"
   },

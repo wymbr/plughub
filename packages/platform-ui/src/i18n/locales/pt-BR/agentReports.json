@@ -127,6 +127,34 @@
     "count":     "Quantidade",
     "exportCsv": "Exportar CSV"
   },
+  "bench": {
+    "title": "Bancada de Agentes — Comparação 360°",
+    "average": "Média dos agentes",
+    "n": "n={{n}}",
+    "filters": { "from": "De", "to": "Até", "poolPlaceholder": "todos os pools" },
+    "lens": {
+      "label": "Lente:",
+      "resolution": "Resolução / Escalação",
+      "sessions_aht": "Sessões / TMA",
+      "availability": "Disponibilidade / Ocupação",
+      "pause_reason": "Motivo de pausa",
+      "quality": "Nota de qualidade"
+    },
+    "domain": {
+      "universal": "Compara agentes humanos e IA.",
+      "human": "Apenas agentes humanos — linhas de IA ficam desabilitadas nesta lente."
+    },
+    "list": {
+      "title": "Pools e Agentes",
+      "loading": "Carregando agentes…",
+      "noData": "Nenhum agente no escopo do período."
+    },
+    "chart": {
+      "loading": "Carregando…",
+      "noData": "Sem dados para esta lente no período.",
+      "pendingViz": "O gráfico desta lente chega no próximo passo."
+    }
+  },
   "breadcrumbs": {
     "config": "Configuração"
   },

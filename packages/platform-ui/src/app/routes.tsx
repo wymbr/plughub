@@ -35,6 +35,7 @@ import EventsPage   from '@/modules/contacts/EventsPage'
 // Análise
 import AnaliseContatosPage  from '@/modules/analise/AnaliseContatosPage'
 import AnaliseAgentesPage   from '@/modules/analise/AnaliseAgentesPage'
+import AgentsBenchPage      from '@/modules/analise/AgentsBenchPage'
 import AnalisePoolsPage     from '@/modules/analise/AnalisePoolsPage'
 import AnaliseProcessosPage from '@/modules/analise/AnaliseProcessosPage'
 import AnaliseQualidadePage from '@/modules/analise/AnaliseQualidadePage'
@@ -92,7 +93,8 @@ export const routes: RouteObject[] = [
 
       // ── Analytics (historical views) ──────────────────────────────
       { path: 'analise/sessions',  element: <SessionsPage       /> },
-      { path: 'analise/agents',    element: <AnaliseAgentesPage /> },
+      { path: 'analise/agents',    element: <AgentsBenchPage    /> },
+      { path: 'analise/agents-legacy', element: <AnaliseAgentesPage /> },
       { path: 'analise/pools',     element: <AnalisePoolsPage   /> },
       { path: 'analise/events',    element: <EventsPage         /> },
       // Analytics/Processes → Workflow Instances list (drill-down to sessions)
