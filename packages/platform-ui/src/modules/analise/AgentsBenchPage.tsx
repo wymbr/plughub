@@ -17,7 +17,8 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useAuth } from '@/auth/useAuth'
 import {
-  LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
+  LineChart, Line, BarChart, Bar,
+  XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
 } from 'recharts'
 import { DEFAULT_FILTERS } from '@/modules/contacts/types'
 
@@ -126,61 +127,223 @@ function useCompare(
   return { resp, loading }
 }
 
-// ── Gráfico mínimo (F4.1) — plota a métrica primária da lente ─────────────────
+// ── Gráfico por lente (F4.2) ──────────────────────────────────────────────────
 
-function MiniChart({
-  resp, lensDef, selected, t,
+type Fmt = 'pct' | 'time' | 'count' | 'score'
+
+function fmtMsShort(ms: number): string {
+  if (ms == null) return '—'
+  const s = Math.round(ms / 1000)
+  if (s < 60) return `${s}s`
+  const m = Math.floor(s / 60)
+  if (m < 60) return `${m}m`
+  return `${Math.floor(m / 60)}h${m % 60 ? ` ${m % 60}m` : ''}`
+}
+function fmtVal(v: number | null | undefined, fmt: Fmt): string {
+  if (v == null) return '—'
+  if (fmt === 'pct')   return `${(v * 100).toFixed(1)}%`
+  if (fmt === 'time')  return fmtMsShort(v)
+  if (fmt === 'score') return v.toFixed(2)
+  return `${Math.round(v)}`
+}
+
+// key → rótulo legível (entidades trazem label; média = "média dos agentes").
+function labelMapOf(resp: CompareResp | null, t: (k: string) => string): Record<string, string> {
+  const m: Record<string, string> = { __avg__: t('bench.average') }
+  for (const e of resp?.data.entities ?? []) m[e.agent_key] = e.label || e.agent_key
+  return m
+}
+
+// Linhas temporais (avg + entidades) para uma métrica. Gap (null) = quebra.
+function MetricLine({
+  resp, metricKey, fmt, selected, title, labelMap,
 }: {
-  resp: CompareResp | null; lensDef: LensDef; selected: string[]
-  t: (k: string, o?: Record<string, unknown>) => string
+  resp: CompareResp; metricKey: string; fmt: Fmt; selected: string[]
+  title: string; labelMap: Record<string, string>
 }) {
-  const key = lensDef.primaryKey
+  const scale = fmt === 'pct' ? 100 : 1
   const rows = useMemo(() => {
-    if (!resp || !key) return []
     const byDate = new Map<string, Record<string, number | string | null>>()
     const put = (series: SeriesPoint[], col: string) => {
       for (const pt of series) {
         const d = String(pt.date)
         if (!byDate.has(d)) byDate.set(d, { date: d })
-        const v = pt[key]
-        byDate.get(d)![col] = (typeof v === 'number') ? (lensDef.pct ? v * 100 : v) : null
+        const v = pt[metricKey]
+        byDate.get(d)![col] = (typeof v === 'number') ? v * scale : null
       }
     }
     if (resp.data.average) put(resp.data.average.series, '__avg__')
     for (const e of resp.data.entities) put(e.series, e.agent_key)
     return [...byDate.values()].sort((a, b) => String(a.date).localeCompare(String(b.date)))
-  }, [resp, key, lensDef.pct])
+  }, [resp, metricKey, scale])
 
-  if (!key) return (
-    <div className="h-52 flex items-center justify-center text-sm text-muted-light">
-      {t('bench.chart.pendingViz')}
-    </div>
-  )
-  if (rows.length === 0) return (
-    <div className="h-52 flex items-center justify-center text-sm text-muted-light">
-      {t('bench.chart.noData')}
-    </div>
-  )
-
+  const yFmt = (v: number) => fmt === 'pct' ? `${v}%` : fmt === 'time' ? fmtMsShort(v) : `${v}`
   return (
-    <ResponsiveContainer width="100%" height={220}>
-      <LineChart data={rows} margin={{ top: 4, right: 16, left: 0, bottom: 0 }}>
+    <div>
+      <p className="text-2xs font-semibold text-muted uppercase tracking-wide mb-1">{title}</p>
+      <ResponsiveContainer width="100%" height={190}>
+        <LineChart data={rows} margin={{ top: 4, right: 16, left: 0, bottom: 0 }}>
+          <CartesianGrid strokeDasharray="3 3" stroke="#E5E7EB" />
+          <XAxis dataKey="date" tick={{ fontSize: 11 }} tickFormatter={(d: string) => d.slice(5)} />
+          <YAxis tick={{ fontSize: 11 }} tickFormatter={yFmt}
+            domain={fmt === 'pct' ? [0, 100] : ['auto', 'auto']} />
+          <Tooltip formatter={(v: number) => fmt === 'pct' ? `${v?.toFixed?.(1)}%` : fmt === 'time' ? fmtMsShort(v) : v} />
+          <Legend iconSize={10} wrapperStyle={{ fontSize: 12 }} />
+          <Line type="monotone" dataKey="__avg__" name={labelMap.__avg__}
+            stroke="#111827" strokeWidth={2.5} strokeDasharray="6 4" dot={false} connectNulls={false} />
+          {selected.map(k => (
+            <Line key={k} type="monotone" dataKey={k} name={labelMap[k] ?? k}
+              stroke={colorFor(k)} strokeWidth={2} dot={false} connectNulls={false} />
+          ))}
+        </LineChart>
+      </ResponsiveContainer>
+    </div>
+  )
+}
+
+// Barras agrupadas por entidade (availability) — usa o summary do período.
+// Valor da média = média (sobre buckets) da série de referência.
+function GroupedBars({
+  resp, selected, labelMap, metrics, t,
+}: {
+  resp: CompareResp; selected: string[]; labelMap: Record<string, string>
+  metrics: { key: string; name: string }[]
+  t: (k: string, o?: Record<string, unknown>) => string
+}) {
+  const avgFromSeries = (key: string): number | null => {
+    const s = resp.data.average?.series ?? []
+    const vals = s.map(p => p[key]).filter((v): v is number => typeof v === 'number')
+    return vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : null
+  }
+  const rows: Record<string, number | string | null>[] = []
+  if (resp.data.average) {
+    const row: Record<string, number | string | null> = { name: labelMap.__avg__ }
+    for (const m of metrics) { const v = avgFromSeries(m.key); row[m.key] = v == null ? null : v * 100 }
+    rows.push(row)
+  }
+  for (const k of selected) {
+    const e = resp.data.entities.find(x => x.agent_key === k)
+    if (!e) continue
+    const row: Record<string, number | string | null> = { name: labelMap[k] ?? k }
+    for (const m of metrics) { const v = e.summary[m.key]; row[m.key] = v == null ? null : v * 100 }
+    rows.push(row)
+  }
+  if (rows.length === 0) return (
+    <div className="h-52 flex items-center justify-center text-sm text-muted-light">{t('bench.chart.noData')}</div>
+  )
+  const barColors = ['#2D9CDB', '#D97706', '#059669']
+  return (
+    <ResponsiveContainer width="100%" height={240}>
+      <BarChart data={rows} margin={{ top: 4, right: 16, left: 0, bottom: 0 }}>
         <CartesianGrid strokeDasharray="3 3" stroke="#E5E7EB" />
-        <XAxis dataKey="date" tick={{ fontSize: 11 }} tickFormatter={(d: string) => d.slice(5)} />
-        <YAxis tick={{ fontSize: 11 }} tickFormatter={(v: number) => lensDef.pct ? `${v}%` : `${v}`}
-          domain={lensDef.pct ? [0, 100] : ['auto', 'auto']} />
-        <Tooltip formatter={(v: number) => lensDef.pct ? `${v?.toFixed?.(1)}%` : v} />
+        <XAxis dataKey="name" tick={{ fontSize: 11 }} />
+        <YAxis tick={{ fontSize: 11 }} tickFormatter={(v: number) => `${v}%`} domain={[0, 100]} />
+        <Tooltip formatter={(v: number) => `${v?.toFixed?.(1)}%`} />
         <Legend iconSize={10} wrapperStyle={{ fontSize: 12 }} />
-        {/* Média de referência — linha grossa tracejada (estilo definitivo na F4.2) */}
-        <Line type="monotone" dataKey="__avg__" name={t('bench.average')}
-          stroke="#111827" strokeWidth={2.5} strokeDasharray="6 4" dot={false} connectNulls={false} />
-        {selected.map(k => (
-          <Line key={k} type="monotone" dataKey={k} name={k} stroke={colorFor(k)}
-            strokeWidth={2} dot={false} connectNulls={false} />
+        {metrics.map((m, i) => (
+          <Bar key={m.key} dataKey={m.key} name={m.name} fill={barColors[i % barColors.length]} radius={[2, 2, 0, 0]} />
         ))}
-      </LineChart>
+      </BarChart>
     </ResponsiveContainer>
   )
+}
+
+// Barra empilhada por entidade, segmentada por motivo de pausa (pause_reason).
+function StackedReasonBars({
+  resp, selected, labelMap, t,
+}: {
+  resp: CompareResp; selected: string[]; labelMap: Record<string, string>
+  t: (k: string, o?: Record<string, unknown>) => string
+}) {
+  const ents = selected
+    .map(k => resp.data.entities.find(e => e.agent_key === k))
+    .filter((e): e is CompareEntity => !!e)
+  if (ents.length === 0) return (
+    <div className="h-52 flex items-center justify-center text-sm text-muted-light text-center px-6">
+      {t('bench.chart.selectForPause')}
+    </div>
+  )
+  // Conjunto de motivos presente nas entidades selecionadas.
+  const reasons = new Map<string, string>()
+  for (const e of ents) {
+    for (const r of ((e.summary.reasons as unknown as { reason_id: string; reason_label: string }[]) ?? [])) {
+      reasons.set(r.reason_id, r.reason_label || r.reason_id)
+    }
+  }
+  const reasonIds = [...reasons.keys()]
+  const rows = ents.map(e => {
+    const row: Record<string, number | string> = { name: labelMap[e.agent_key] ?? e.agent_key }
+    const rs = (e.summary.reasons as unknown as { reason_id: string; total_ms: number }[]) ?? []
+    for (const rid of reasonIds) {
+      const found = rs.find(x => x.reason_id === rid)
+      row[rid] = found ? Math.round(found.total_ms / 60000) : 0   // minutos
+    }
+    return row
+  })
+  const palette = ['#1B4F8A', '#D97706', '#059669', '#7C3AED', '#DC2626', '#0891B2']
+  return (
+    <ResponsiveContainer width="100%" height={240}>
+      <BarChart data={rows} margin={{ top: 4, right: 16, left: 0, bottom: 0 }}>
+        <CartesianGrid strokeDasharray="3 3" stroke="#E5E7EB" />
+        <XAxis dataKey="name" tick={{ fontSize: 11 }} />
+        <YAxis tick={{ fontSize: 11 }} tickFormatter={(v: number) => `${v}m`} />
+        <Tooltip formatter={(v: number) => `${v} min`} />
+        <Legend iconSize={10} wrapperStyle={{ fontSize: 12 }} />
+        {reasonIds.map((rid, i) => (
+          <Bar key={rid} dataKey={rid} name={reasons.get(rid)} stackId="pause"
+            fill={palette[i % palette.length]} />
+        ))}
+      </BarChart>
+    </ResponsiveContainer>
+  )
+}
+
+function LensChart({
+  lens, resp, selected, t,
+}: {
+  lens: LensId; resp: CompareResp | null; selected: string[]
+  t: (k: string, o?: Record<string, unknown>) => string
+}) {
+  if (!resp || resp.error) return (
+    <div className="h-52 flex items-center justify-center text-sm text-muted-light">{t('bench.chart.noData')}</div>
+  )
+  const labelMap = labelMapOf(resp, t as (k: string) => string)
+  const hasData = (resp.data.average && resp.data.average.series.length > 0) ||
+    resp.data.entities.some(e => e.series.length > 0 ||
+      ((e.summary.reasons as unknown as unknown[] | undefined)?.length ?? 0) > 0)
+  if (!hasData && lens !== 'pause_reason') return (
+    <div className="h-52 flex items-center justify-center text-sm text-muted-light">{t('bench.chart.noData')}</div>
+  )
+
+  if (lens === 'resolution') return (
+    <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+      <MetricLine resp={resp} metricKey="resolution_rate" fmt="pct" selected={selected}
+        title={t('bench.metric.resolution')} labelMap={labelMap} />
+      <MetricLine resp={resp} metricKey="escalation_rate" fmt="pct" selected={selected}
+        title={t('bench.metric.escalation')} labelMap={labelMap} />
+    </div>
+  )
+  if (lens === 'sessions_aht') return (
+    <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+      <MetricLine resp={resp} metricKey="sessions" fmt="count" selected={selected}
+        title={t('bench.metric.sessions')} labelMap={labelMap} />
+      <MetricLine resp={resp} metricKey="aht_ms" fmt="time" selected={selected}
+        title={t('bench.metric.aht')} labelMap={labelMap} />
+    </div>
+  )
+  if (lens === 'quality') return (
+    <MetricLine resp={resp} metricKey="avg_score" fmt="score" selected={selected}
+      title={t('bench.metric.quality')} labelMap={labelMap} />
+  )
+  if (lens === 'availability') return (
+    <GroupedBars resp={resp} selected={selected} labelMap={labelMap} t={t}
+      metrics={[
+        { key: 'occupancy_pct', name: t('bench.metric.occupancy') },
+        { key: 'pause_pct',     name: t('bench.metric.pause') },
+      ]} />
+  )
+  // pause_reason
+  return <StackedReasonBars resp={resp} selected={selected} labelMap={labelMap} t={t} />
 }
 
 // ── Página ──────────────────────────────────────────────────────────────────
@@ -307,7 +470,7 @@ export default function AgentsBenchPage() {
             </div>
             {chartLoading
               ? <div className="h-52 flex items-center justify-center text-sm text-muted-light animate-pulse">{t('bench.chart.loading')}</div>
-              : <MiniChart resp={resp} lensDef={lensDef} selected={selected} t={t} />}
+              : <LensChart lens={lens} resp={resp} selected={selected} t={t} />}
           </div>
 
         </div>

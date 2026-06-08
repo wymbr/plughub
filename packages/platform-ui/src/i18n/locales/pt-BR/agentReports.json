@@ -152,7 +152,17 @@
     "chart": {
       "loading": "Carregando…",
       "noData": "Sem dados para esta lente no período.",
-      "pendingViz": "O gráfico desta lente chega no próximo passo."
+      "pendingViz": "O gráfico desta lente chega no próximo passo.",
+      "selectForPause": "Selecione um ou mais agentes na lista para comparar motivos de pausa."
+    },
+    "metric": {
+      "resolution": "Taxa de resolução",
+      "escalation": "Taxa de escalação",
+      "sessions":   "Sessões",
+      "aht":        "Tempo médio de atendimento",
+      "quality":    "Nota de qualidade",
+      "occupancy":  "Ocupação",
+      "pause":      "Pausa"
     }
   },
   "breadcrumbs": {

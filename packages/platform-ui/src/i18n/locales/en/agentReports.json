@@ -152,7 +152,17 @@
     "chart": {
       "loading": "Loading…",
       "noData": "No data for this lens in the period.",
-      "pendingViz": "This lens's chart arrives in the next step."
+      "pendingViz": "This lens's chart arrives in the next step.",
+      "selectForPause": "Select one or more agents in the list to compare pause reasons."
+    },
+    "metric": {
+      "resolution": "Resolution rate",
+      "escalation": "Escalation rate",
+      "sessions":   "Sessions",
+      "aht":        "Average handle time",
+      "quality":    "Quality score",
+      "occupancy":  "Occupancy",
+      "pause":      "Pause"
     }
   },
   "breadcrumbs": {
