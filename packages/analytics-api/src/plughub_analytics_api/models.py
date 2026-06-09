@@ -825,13 +825,26 @@ def parse_evaluation_event(payload: dict[str, Any]) -> list[dict] | None:
 
     rows = [result_row, event_row]
 
-    # F8 (bancada): nota por dimensão → evaluation_dimension_scores. O evento
-    # evaluation.completed carrega dimensions[] (dimension_id, name, score 0–10,
-    # weight) — decompõe o overall_score. Atribuição ao agente avaliado é
-    # query-time (via session_id, como a lente quality). Só emite quando há dimensões.
-    dimensions = payload.get("dimensions")
-    if isinstance(dimensions, list):
-        for dim in dimensions:
+    # F8 (bancada): nota por dimensão → evaluation_dimension_scores. Decompõe o
+    # overall_score. Atribuição ao agente avaliado é query-time (via session_id,
+    # como a lente quality). Duas fontes possíveis no evento evaluation.completed:
+    #   - dimensions[]        (Arc 6): {dimension_id, name, score 0–10, weight}
+    #   - dimension_threads[] (Arc 13, caminho do agente_avaliacao_v1 no demo):
+    #                         {dimension_id, score, justification, evidence_entries}
+    # Preferimos dimensions[] (tem name/weight); senão derivamos dos threads
+    # (name := dimension_id; o label legível vem do form na consulta da F8.2).
+    dims_src = payload.get("dimensions")
+    if not (isinstance(dims_src, list) and dims_src):
+        threads = payload.get("dimension_threads")
+        if isinstance(threads, list):
+            dims_src = [
+                {"dimension_id": th.get("dimension_id"),
+                 "name": th.get("dimension_id"),
+                 "score": th.get("score"), "weight": None}
+                for th in threads if isinstance(th, dict)
+            ]
+    if isinstance(dims_src, list):
+        for dim in dims_src:
             if not isinstance(dim, dict):
                 continue
             did = dim.get("dimension_id")

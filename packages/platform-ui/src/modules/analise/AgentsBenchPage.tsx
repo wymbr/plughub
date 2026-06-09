@@ -20,6 +20,7 @@ import { useAuth } from '@/auth/useAuth'
 import {
   LineChart, Line, BarChart, Bar, PieChart, Pie, Cell,
   ScatterChart, Scatter, ZAxis, ReferenceLine,
+  RadarChart, Radar, PolarGrid, PolarAngleAxis, PolarRadiusAxis,
   XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
 } from 'recharts'
 import { DEFAULT_FILTERS } from '@/modules/contacts/types'
@@ -28,20 +29,35 @@ import { DEFAULT_FILTERS } from '@/modules/contacts/types'
 // domain: 'universal' (humano + IA) | 'human' (IA desabilitada na lista).
 // primaryKey: métrica plotada no gráfico mínimo da F4.1 (F4.2 enriquece a viz).
 
-type LensId = 'resolution' | 'sessions_aht' | 'availability' | 'pause_reason' | 'quality' | 'nps' | 'wrapup'
+type LensId = 'resolution' | 'sessions_aht' | 'availability' | 'pause_reason' | 'quality' | 'quality_criteria' | 'nps' | 'wrapup'
 type Domain = 'universal' | 'human'
 
 interface LensDef { id: LensId; domain: Domain; primaryKey: string | null; pct: boolean }
 
 const LENSES: LensDef[] = [
-  { id: 'resolution',   domain: 'universal', primaryKey: 'resolution_rate', pct: true  },
-  { id: 'sessions_aht', domain: 'universal', primaryKey: 'sessions',        pct: false },
-  { id: 'quality',      domain: 'universal', primaryKey: 'avg_score',       pct: false },
-  { id: 'nps',          domain: 'universal', primaryKey: 'nps',             pct: false },
-  { id: 'wrapup',       domain: 'universal', primaryKey: null,              pct: false },
-  { id: 'availability', domain: 'human',     primaryKey: 'occupancy_pct',   pct: true  },
-  { id: 'pause_reason', domain: 'human',     primaryKey: null,              pct: false },
+  { id: 'resolution',      domain: 'universal', primaryKey: 'resolution_rate', pct: true  },
+  { id: 'sessions_aht',    domain: 'universal', primaryKey: 'sessions',        pct: false },
+  { id: 'quality',         domain: 'universal', primaryKey: 'avg_score',       pct: false },
+  { id: 'quality_criteria', domain: 'universal', primaryKey: null,             pct: false },
+  { id: 'nps',             domain: 'universal', primaryKey: 'nps',             pct: false },
+  { id: 'wrapup',          domain: 'universal', primaryKey: null,              pct: false },
+  { id: 'availability',    domain: 'human',     primaryKey: 'occupancy_pct',   pct: true  },
+  { id: 'pause_reason',    domain: 'human',     primaryKey: null,              pct: false },
 ]
+
+// Cor da célula por nota 0–10 (vermelho → âmbar → verde). Reusada no heatmap (F8.3)
+// e no radar do detalhe (F8.4).
+const SCORE_STOPS: [number, number, number][] = [
+  [252, 235, 235], [250, 238, 218], [234, 243, 222], [192, 221, 151], [99, 153, 34],
+]
+function scoreColor(v: number | null | undefined): string {
+  if (v == null) return 'transparent'
+  const t = Math.max(0, Math.min(1, v / 10)) * (SCORE_STOPS.length - 1)
+  const i = Math.floor(t), f = t - i
+  const a = SCORE_STOPS[i], b = SCORE_STOPS[Math.min(i + 1, SCORE_STOPS.length - 1)]
+  const c = a.map((x, k) => Math.round(x + (b[k] - x) * f))
+  return `rgb(${c.join(',')})`
+}
 
 // ── Tipos das respostas ─────────────────────────────────────────────────────
 
@@ -409,6 +425,99 @@ function StackedDispositionBars({
   )
 }
 
+// Heatmap agente × dimensão (quality_criteria, F8.3). Lê summary.dimensions[].
+// Comparável só dentro do mesmo formulário → avisa quando os selecionados misturam forms.
+function QualityCriteriaHeatmap({
+  resp, selected, labelMap, t,
+}: {
+  resp: CompareResp; selected: string[]; labelMap: Record<string, string>
+  t: (k: string, o?: Record<string, unknown>) => string
+}) {
+  type DimEntry = { dimension_id: string; dimension_label: string; avg_score: number | null; n: number }
+  const ents = selected
+    .map(k => resp.data.entities.find(e => e.agent_key === k))
+    .filter((e): e is CompareEntity => !!e && !e.missing)
+  if (ents.length === 0) return (
+    <div className="h-52 flex items-center justify-center text-sm text-muted-light text-center px-6">
+      {t('bench.chart.selectForQuality')}
+    </div>
+  )
+  // Guard de comparabilidade: form único entre os selecionados (com dado).
+  const forms = [...new Set(ents
+    .map(e => (e.summary.form_id as unknown as string) || '')
+    .filter(Boolean))]
+  if (forms.length > 1) return (
+    <div className="h-52 flex flex-col items-center justify-center text-sm text-muted-light text-center px-6 gap-1">
+      <span className="text-warning font-medium">{t('bench.criteria.multiForm')}</span>
+      <span className="text-2xs">{t('bench.criteria.multiFormHint', { forms: forms.join(', ') })}</span>
+    </div>
+  )
+  // União das dimensões presentes (id → label).
+  const dimMap = new Map<string, string>()
+  for (const e of ents)
+    for (const d of ((e.summary.dimensions as unknown as DimEntry[]) ?? []))
+      dimMap.set(d.dimension_id, d.dimension_label || d.dimension_id)
+  const dimIds = [...dimMap.keys()]
+  const rows = ents.map(e => {
+    const scores: Record<string, number | null> = {}
+    let n = 0
+    for (const d of ((e.summary.dimensions as unknown as DimEntry[]) ?? [])) {
+      scores[d.dimension_id] = d.avg_score
+      n = Math.max(n, d.n)
+    }
+    return { key: e.agent_key, label: labelMap[e.agent_key] ?? e.label ?? e.agent_key, scores, n }
+  })
+
+  return (
+    <div className="space-y-2">
+      {forms[0] && <p className="text-2xs text-muted-light">{t('bench.criteria.form', { form: forms[0] })}</p>}
+      <div className="overflow-x-auto">
+        <table className="w-full text-xs border-separate" style={{ borderSpacing: '3px' }}>
+          <thead>
+            <tr>
+              <th className="text-left font-semibold text-muted px-2 py-1"></th>
+              {dimIds.map(id => (
+                <th key={id} className="font-semibold text-muted px-2 py-1 text-center">{dimMap.get(id)}</th>
+              ))}
+              <th className="font-semibold text-muted-light px-2 py-1 text-center text-2xs">n</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map(r => (
+              <tr key={r.key}>
+                <td className="pr-2 py-1 max-w-[10rem]">
+                  <span className="flex items-center gap-1.5 min-w-0">
+                    <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ background: colorFor(r.key) }} />
+                    <span className="font-medium text-dark truncate">{r.label}</span>
+                  </span>
+                </td>
+                {dimIds.map(id => {
+                  const v = r.scores[id]
+                  return (
+                    <td key={id} className="text-center px-0.5 py-0.5">
+                      <span className="block rounded py-1.5 font-medium tabular-nums"
+                        style={{ background: scoreColor(v), color: v == null ? 'var(--color-muted-light)' : '#173404' }}>
+                        {v == null ? '—' : v.toFixed(1)}
+                      </span>
+                    </td>
+                  )
+                })}
+                <td className="text-center text-2xs text-muted-light tabular-nums">{r.n}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <div className="flex items-center gap-2 text-2xs text-muted-light pt-1">
+        <span>0</span>
+        <span className="inline-block h-2 w-24 rounded"
+          style={{ background: 'linear-gradient(90deg,#FCEBEB,#FAEEDA,#EAF3DE,#C0DD97,#639922)' }} />
+        <span>10</span>
+      </div>
+    </div>
+  )
+}
+
 function LensChart({
   lens, resp, selected, t,
 }: {
@@ -422,7 +531,7 @@ function LensChart({
   const hasData = (resp.data.average && resp.data.average.series.length > 0) ||
     resp.data.entities.some(e => e.series.length > 0 ||
       ((e.summary.reasons as unknown as unknown[] | undefined)?.length ?? 0) > 0)
-  if (!hasData && lens !== 'pause_reason' && lens !== 'wrapup') return (
+  if (!hasData && lens !== 'pause_reason' && lens !== 'wrapup' && lens !== 'quality_criteria') return (
     <div className="h-52 flex items-center justify-center text-sm text-muted-light">{t('bench.chart.noData')}</div>
   )
 
@@ -456,6 +565,9 @@ function LensChart({
   )
   if (lens === 'wrapup') return (
     <StackedDispositionBars resp={resp} selected={selected} labelMap={labelMap} t={t} />
+  )
+  if (lens === 'quality_criteria') return (
+    <QualityCriteriaHeatmap resp={resp} selected={selected} labelMap={labelMap} t={t} />
   )
   if (lens === 'availability') return (
     <GroupedBars resp={resp} selected={selected} labelMap={labelMap} t={t}
@@ -491,8 +603,8 @@ function AgentDetail({
   useEffect(() => {
     setLoading(true)
     const lenses: LensId[] = isHuman
-      ? ['resolution', 'quality', 'availability']
-      : ['resolution', 'quality']
+      ? ['resolution', 'quality', 'quality_criteria', 'availability']
+      : ['resolution', 'quality', 'quality_criteria']
     Promise.all(lenses.map(l => {
       const p = new URLSearchParams({
         tenant_id: tenantId, from_dt: fromDt, to_dt: toDt,
@@ -512,6 +624,13 @@ function AgentDetail({
   const qual = byLens.quality?.summary ?? {}
   const av   = byLens.availability?.summary ?? {}
   const num = (v: number | null | undefined) => (typeof v === 'number' ? v : null)
+
+  // F8.4 — radar das dimensões (perfil de qualidade do agente).
+  type DimEntry = { dimension_id: string; dimension_label: string; avg_score: number | null }
+  const dims = (byLens.quality_criteria?.summary.dimensions as unknown as DimEntry[]) ?? []
+  const radar = dims
+    .filter(d => d.avg_score != null)
+    .map(d => ({ dimension: d.dimension_label || d.dimension_id, score: d.avg_score as number }))
 
   const tiles: { label: string; value: string }[] = [
     { label: t('bench.metric.sessions'),   value: num(res.sessions) != null ? `${res.sessions}` : '—' },
@@ -534,6 +653,20 @@ function AgentDetail({
       <div className="grid grid-cols-3 gap-2">
         {tiles.map(t_ => <KpiTile key={t_.label} label={t_.label} value={t_.value} />)}
       </div>
+      {radar.length >= 3 && (
+        <div>
+          <p className="text-2xs font-semibold text-muted uppercase tracking-wide mb-1">{t('bench.detail.qualityProfile')}</p>
+          <ResponsiveContainer width="100%" height={220}>
+            <RadarChart data={radar} outerRadius="70%">
+              <PolarGrid stroke="#E5E7EB" />
+              <PolarAngleAxis dataKey="dimension" tick={{ fontSize: 11 }} />
+              <PolarRadiusAxis domain={[0, 10]} tick={{ fontSize: 10 }} angle={90} />
+              <Radar dataKey="score" stroke={colorFor(agentKey)} fill={colorFor(agentKey)} fillOpacity={0.3} />
+              <Tooltip formatter={(v: number) => v?.toFixed?.(1)} />
+            </RadarChart>
+          </ResponsiveContainer>
+        </div>
+      )}
       {isHuman && donut.length > 0 && (
         <div>
           <p className="text-2xs font-semibold text-muted uppercase tracking-wide mb-1">{t('bench.detail.timeShare')}</p>

@@ -159,8 +159,14 @@
       "availability": "Disponibilidade / Ocupação",
       "pause_reason": "Motivo de pausa",
       "quality": "Nota de qualidade",
+      "quality_criteria": "Qualidade por dimensão",
       "nps": "NPS",
       "wrapup": "Disposição do wrap-up"
+    },
+    "criteria": {
+      "form": "Formulário: {{form}}",
+      "multiForm": "Agentes avaliados por formulários diferentes",
+      "multiFormHint": "Comparação por dimensão só dentro do mesmo formulário. Formulários: {{forms}}"
     },
     "domain": {
       "universal": "Compara agentes humanos e IA.",
@@ -179,14 +185,16 @@
       "type": { "human": "Agente humano", "ai": "Agente IA" },
       "available": "Disponível",
       "timeShare": "Distribuição de tempo (disponível × pausa)",
-      "evals": "{{n}} aval."
+      "evals": "{{n}} aval.",
+      "qualityProfile": "Perfil de qualidade por dimensão"
     },
     "chart": {
       "loading": "Carregando…",
       "noData": "Sem dados para esta lente no período.",
       "pendingViz": "O gráfico desta lente chega no próximo passo.",
       "selectForPause": "Selecione um ou mais agentes na lista para comparar motivos de pausa.",
-      "selectForWrapup": "Selecione um ou mais agentes na lista para comparar disposições do wrap-up."
+      "selectForWrapup": "Selecione um ou mais agentes na lista para comparar disposições do wrap-up.",
+      "selectForQuality": "Selecione um ou mais agentes na lista para comparar a qualidade por dimensão."
     },
     "metric": {
       "resolution": "Taxa de resolução",

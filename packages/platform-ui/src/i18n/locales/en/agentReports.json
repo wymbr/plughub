@@ -159,8 +159,14 @@
       "availability": "Availability / Occupancy",
       "pause_reason": "Pause reason",
       "quality": "Quality score",
+      "quality_criteria": "Quality by dimension",
       "nps": "NPS",
       "wrapup": "Wrap-up disposition"
+    },
+    "criteria": {
+      "form": "Form: {{form}}",
+      "multiForm": "Agents evaluated under different forms",
+      "multiFormHint": "Per-dimension comparison only within the same form. Forms: {{forms}}"
     },
     "domain": {
       "universal": "Compares human and AI agents.",
@@ -179,14 +185,16 @@
       "type": { "human": "Human agent", "ai": "AI agent" },
       "available": "Available",
       "timeShare": "Time split (available × pause)",
-      "evals": "{{n}} evals"
+      "evals": "{{n}} evals",
+      "qualityProfile": "Quality profile by dimension"
     },
     "chart": {
       "loading": "Loading…",
       "noData": "No data for this lens in the period.",
       "pendingViz": "This lens's chart arrives in the next step.",
       "selectForPause": "Select one or more agents in the list to compare pause reasons.",
-      "selectForWrapup": "Select one or more agents in the list to compare wrap-up dispositions."
+      "selectForWrapup": "Select one or more agents in the list to compare wrap-up dispositions.",
+      "selectForQuality": "Select one or more agents in the list to compare quality by dimension."
     },
     "metric": {
       "resolution": "Resolution rate",

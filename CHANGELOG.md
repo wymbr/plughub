@@ -2,6 +2,37 @@
 
 ---
 
+## Bancada de agentes F8 — lente quality_criteria (qualidade por dimensão) (2026-06-09)
+
+Decompõe a nota de qualidade em **dimensões** do `EvaluationForm` — heatmap agente×dimensão na
+bancada + radar de perfil no detalhe. Decisões: eixo = **dimensão** (critério cru vira drill-down);
+comparável **só dentro do mesmo formulário** (guard na UI).
+
+**F8.1 — ingest** (`clickhouse.py`, `models.py`, `consumer.py`): nova tabela
+`analytics.evaluation_dimension_scores` (ReplacingMergeTree(ingested_at), ORDER BY
+tenant/result/dimension). `parse_evaluation_event` emite 1 linha por dimensão a partir de
+`dimensions[]` (Arc 6) **ou**, como fallback, de `dimension_threads[]` (caminho real do
+`agente_avaliacao_v1`/Arc 13 — {dimension_id, score}). Atribuição ao agente AVALIADO é query-time
+via `session_id` (como a lente quality, F2). Dispatch + 5 testes de parser/dispatch.
+
+**F8.2 — query** (`reports_query.py`): `_compare_quality_criteria_lens` — nota média por
+(agente, dimensão) via join de atribuição, grão snapshot do período em `summary.dimensions[]`
+(como wrapup em `summary.dispositions[]`) + `summary.form_id` para o guard. `quality_criteria`
+sai de `_COMPARE_LENSES_PENDING`. Teste `test_quality_criteria_lens_dimensions_in_summary`.
+
+**F8.3 + F8.4 — UI** (`AgentsBenchPage.tsx`): lente "Qualidade por dimensão" (universal);
+**heatmap** agente(linhas)×dimensão(colunas), célula colorida 0–10 (`scoreColor`), coluna n,
+legenda, "Form: …" e **guard de comparabilidade** (avisa quando os selecionados misturam forms);
+**radar** das dimensões no detalhe do agente (cor estável). i18n en+pt-BR (`bench.lens.quality_criteria`,
+`bench.criteria.*`, `bench.chart.selectForQuality`, `bench.detail.qualityProfile`).
+
+**Validação**: 47 testes (Evaluation/Dimension/Compare/Cross). E2E com **fixture** (`evaluation_dimension_scores`
+semeada dos `evaluation_results` reais — o demo não tem pipeline de formulário/avaliador): heatmap
+admin(n=6)×sac_ia(n=1) + radares por tipo. Em produção o `agente_avaliacao_v1` popula via
+`dimension_threads`. **Bancada Arc workbench: F1–F6, F8, F9 completas.**
+
+---
+
 ## Bancada de agentes F9 — pool-average como pseudo-entidade `pool:` (2026-06-09)
 
 Refinamento: permite **fixar a média de um pool** como linha no gráfico da bancada e comparar

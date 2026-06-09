@@ -1670,11 +1670,12 @@ def _fetch_evaluations_summary(
 # dado no bucket = gap, fora do denominador — nunca zero). Filtros sintéticos
 # (agent_type != 'system', role='primary') herdados da atribuição.
 
-_COMPARE_LENSES = {"resolution", "sessions_aht", "availability", "pause_reason", "quality", "nps", "wrapup"}
-# Lentes do spec ainda sem fonte no ClickHouse:
-#   quality_criteria → critérios por item não chegam ao CH (só overall_score)
+_COMPARE_LENSES = {"resolution", "sessions_aht", "availability", "pause_reason",
+                   "quality", "nps", "wrapup", "quality_criteria"}
 # nps/wrapup (F5): lêem de segments (nps_score / outcome+issue_status) — grão segmento.
-_COMPARE_LENSES_PENDING = {"quality_criteria"}
+# quality_criteria (F8): lê de evaluation_dimension_scores (nota por dimensão) via
+# atribuição por session_id; comparável só dentro do mesmo form (guard na UI).
+_COMPARE_LENSES_PENDING: set[str] = set()
 
 # Folding da família escalate (§13.2): o alvo humano-vs-IA é recuperável pela
 # topologia do segmento seguinte; a bancada compara o CONCEITO escalação.
@@ -1775,6 +1776,12 @@ def _per_agent_for_lens(
             accessible_pools, supervised_agent_types,
         )
         metric_keys = []  # distribuição por disposição vive no summary (como pause_reason)
+    elif lens == "quality_criteria":
+        per_agent = _compare_quality_criteria_lens(
+            client, db, tenant_id, since, until, pool_id,
+            accessible_pools, supervised_agent_types,
+        )
+        metric_keys = []  # nota por dimensão vive no summary.dimensions[] (como wrapup)
     else:  # quality
         per_agent = _compare_quality_lens(
             client, db, tenant_id, since, until, pool_id,
@@ -2343,6 +2350,76 @@ def _compare_quality_lens(
             "n_evaluations": n,
             "avg_score":     round(ssum / n, 4) if n else None,
         }
+    return per_agent
+
+
+def _compare_quality_criteria_lens(
+    client: Any, db: str, tenant_id: str, since: str, until: str,
+    pool_id: str | None,
+    accessible_pools: list[str] | None, supervised_agent_types: list[str] | None,
+) -> dict:
+    """
+    quality_criteria (F8) — fonte: evaluation_dimension_scores × atribuição (F2).
+    Nota média por (agente, dimensão), grão snapshot do período (sem buckets) — vive
+    em summary.dimensions[] (como wrapup vive em summary.dispositions[]). A
+    comparabilidade é POR FORMULÁRIO: summary.form_id carrega o form do agente; a
+    bancada (UI) desabilita/avisa quando as entidades selecionadas misturam forms.
+    """
+    ds_conditions = [
+        "tenant_id = {tenant_id:String}",
+        f"timestamp >= '{since}'",
+        f"timestamp <  '{until}'",
+    ]
+    params: dict = {"tenant_id": tenant_id}
+    outer = ["1 = 1"]
+    if pool_id:
+        outer.append("attr.pool_id = {pool_id:String}")
+        params["pool_id"] = pool_id
+    if accessible_pools is not None:
+        scope: list[str] = []
+        if _apply_pool_scope(scope, accessible_pools):
+            outer += [s.replace("pool_id", "attr.pool_id") for s in scope]
+        else:
+            return {}
+    attr_sql = _session_agent_attribution_sql(db)
+
+    rows = _rows_to_dicts(client.query(f"""
+        SELECT
+            attr.agent_key                       AS agent_key,
+            any(attr.agent_type)                 AS agent_type,
+            any(if(attr.agent_type = 'human',
+                   attr.user_login, attr.agent_key)) AS label,
+            ds.dimension_id                      AS dimension_id,
+            any(ds.dimension_name)               AS dimension_name,
+            any(ds.form_id)                      AS form_id,
+            count()                              AS n,
+            avg(ds.score)                        AS avg_score
+        FROM (
+            SELECT * FROM {db}.evaluation_dimension_scores FINAL
+            WHERE {" AND ".join(ds_conditions)}
+        ) AS ds
+        JOIN ({attr_sql}) AS attr ON ds.session_id = attr.session_id
+        WHERE {" AND ".join(outer)}
+        GROUP BY attr.agent_key, ds.dimension_id
+        ORDER BY agent_key, dimension_id
+    """, parameters=params))
+
+    per_agent: dict = {}
+    for r in rows:
+        a = per_agent.setdefault(r["agent_key"], {
+            "agent_type": r["agent_type"], "label": r["label"],
+            "buckets": {}, "summary": {"form_id": r.get("form_id") or "", "dimensions": []},
+        })
+        score = float(r["avg_score"]) if r["avg_score"] is not None else None
+        a["summary"]["dimensions"].append({
+            "dimension_id":    r["dimension_id"],
+            "dimension_label": r["dimension_name"] or r["dimension_id"],
+            "avg_score":       round(score, 4) if score is not None else None,
+            "n":               int(r["n"] or 0),
+        })
+    for a in per_agent.values():
+        dims = a["summary"]["dimensions"]
+        a["summary"]["n_evaluations"] = max((d["n"] for d in dims), default=0)
     return per_agent
 
 

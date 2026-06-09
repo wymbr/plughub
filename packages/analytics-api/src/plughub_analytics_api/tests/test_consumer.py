@@ -660,6 +660,40 @@ class TestParseEvaluationEvent:
         dim_rows = [r for r in rows if r["table"] == "evaluation_dimension_scores"]
         assert len(dim_rows) == 2  # a dimensão sem dimension_id é ignorada
 
+    def test_dimension_threads_fallback_when_no_dimensions(self):
+        # Caminho Arc 13 (demo): sem dimensions[], usa dimension_threads[].
+        payload = {
+            "event_type":    "evaluation.completed",
+            "tenant_id":     TENANT,
+            "evaluation_id": self.RESULT_ID,
+            "session_id":    self.SESSION_ID,
+            "evaluator_id":  self.EVALUATOR,
+            "form_id":       "form-sac-v1",
+            "composite_score": 8.0,
+            "dimension_threads": [
+                {"dimension_id": "empatia",      "score": 9.0,
+                 "justification": "x" * 12, "evidence_entries": [{}]},
+                {"dimension_id": "conformidade", "score": 7.0,
+                 "justification": "y" * 12, "evidence_entries": [{}]},
+            ],
+        }
+        rows = parse_evaluation_event(payload)
+        dim_rows = {r["dimension_id"]: r for r in rows if r["table"] == "evaluation_dimension_scores"}
+        assert set(dim_rows) == {"empatia", "conformidade"}
+        assert dim_rows["empatia"]["score"] == pytest.approx(9.0)
+        # sem name/weight nos threads → name cai pro dimension_id; weight 0 no row builder
+        assert dim_rows["empatia"]["dimension_name"] == "empatia"
+
+    def test_dimensions_preferred_over_threads(self):
+        payload = self._completed_with_dimensions()
+        payload["dimension_threads"] = [
+            {"dimension_id": "outra", "score": 1.0,
+             "justification": "z" * 12, "evidence_entries": [{}]},
+        ]
+        rows = parse_evaluation_event(payload)
+        dim_ids = {r["dimension_id"] for r in rows if r["table"] == "evaluation_dimension_scores"}
+        assert dim_ids == {"empatia", "conformidade"}  # dimensions[] vence; threads ignorado
+
 
 # ── _write_row dispatch — evaluation tables ───────────────────────────────────
 

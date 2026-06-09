@@ -756,11 +756,28 @@ class TestQueryAgentsCompare:
         assert "resolution" in result["allowed_lenses"]
         client.query.assert_not_called()
 
-    async def test_pending_lens_flagged(self):
-        client = MagicMock()
-        result = await query_agents_compare(client, DB, TENANT, lens="quality_criteria")
-        assert result["error"] == "lens_not_available"
-        assert "quality_criteria" in result["pending_lenses"]
+    async def test_quality_criteria_lens_dimensions_in_summary(self):
+        # F8: nota por dimensão em summary.dimensions[], comparável por form.
+        cols = ["agent_key", "agent_type", "label", "dimension_id",
+                "dimension_name", "form_id", "n", "avg_score"]
+        client = _make_client(_ch_result(cols, [
+            ["A", "human", "a@x", "empatia",      "Empatia",      "form1", 3, 9.0],
+            ["A", "human", "a@x", "conformidade", "Conformidade", "form1", 3, 7.0],
+        ]))
+        result = await query_agents_compare(
+            client, DB, TENANT, lens="quality_criteria", entities=["A"],
+        )
+        assert result["meta"]["lens"] == "quality_criteria"
+        assert "error" not in result
+        sql = client.query.call_args_list[-1][0][0]
+        assert "evaluation_dimension_scores" in sql
+        ent = result["data"]["entities"][0]
+        assert ent["summary"]["form_id"] == "form1"
+        assert ent["summary"]["n_evaluations"] == 3
+        dims = {d["dimension_id"]: d for d in ent["summary"]["dimensions"]}
+        assert dims["empatia"]["avg_score"] == pytest.approx(9.0)
+        assert dims["empatia"]["dimension_label"] == "Empatia"
+        assert dims["conformidade"]["avg_score"] == pytest.approx(7.0)
 
     async def test_nps_lens_reads_segments(self):
         cols = ["agent_key", "agent_type", "label", "bucket",
