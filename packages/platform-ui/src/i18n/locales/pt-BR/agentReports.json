@@ -161,7 +161,8 @@
       "quality": "Nota de qualidade",
       "quality_criteria": "Qualidade por dimensão",
       "nps": "NPS",
-      "wrapup": "Disposição do wrap-up"
+      "wrapup": "Disposição do wrap-up",
+      "escalation_reason": "Motivo de escalação"
     },
     "criteria": {
       "form": "Formulário: {{form}}",
@@ -194,7 +195,8 @@
       "pendingViz": "O gráfico desta lente chega no próximo passo.",
       "selectForPause": "Selecione um ou mais agentes na lista para comparar motivos de pausa.",
       "selectForWrapup": "Selecione um ou mais agentes na lista para comparar disposições do wrap-up.",
-      "selectForQuality": "Selecione um ou mais agentes na lista para comparar a qualidade por dimensão."
+      "selectForQuality": "Selecione um ou mais agentes na lista para comparar a qualidade por dimensão.",
+      "selectForEscalation": "Selecione um ou mais agentes na lista para comparar motivos de escalação."
     },
     "metric": {
       "resolution": "Taxa de resolução",

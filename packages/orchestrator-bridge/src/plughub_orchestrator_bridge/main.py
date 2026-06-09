@@ -1669,6 +1669,7 @@ async def _publish_participant_event(
     handoff_reason: str | None = None,
     issue_status:   str | None = None,
     nps_score:      int | None = None,
+    escalation_reason: str | None = None,
 ) -> None:
     """
     Fire-and-forget publish to conversations.participants Kafka topic.
@@ -1723,6 +1724,8 @@ async def _publish_participant_event(
         event["issue_status"] = issue_status
     if nps_score is not None:
         event["nps_score"] = nps_score
+    if escalation_reason is not None:
+        event["escalation_reason"] = escalation_reason
     try:
         await _kafka_producer.send_and_wait(
             TOPIC_PARTICIPANTS,
@@ -1849,6 +1852,7 @@ async def _republish_segment_from_signal(
             handoff_reason=g("handoff_reason"),
             close_reason=g("close_reason"),
             nps_score=int(nps_raw) if nps_raw not in (None, "") else None,
+            escalation_reason=g("escalation_reason"),
         )
         logger.info(
             "F5: segment re-published from signal: session=%s segment=%s outcome=%s nps=%s",
@@ -1864,10 +1868,12 @@ async def _apply_wrapup_to_segment(
     segment_id:   str,
     wrapup_raw:   str,
     wrapup_resumo: str,
+    escalation_reason: str = "",
 ) -> None:
     """Conclusão do hook wrap-up (on_human_end side=agent): normaliza a
     disposição CRUA → outcome, acumula no segmento e re-publica. Atualiza também
-    o last_outcome de sessão (último primary humano)."""
+    o last_outcome de sessão (último primary humano). F7: grava o
+    escalation_reason normalizado quando o outcome é da família escalate."""
     outcome = _WRAPUP_OUTCOME_MAP.get(wrapup_raw, "")
     if not outcome:
         logger.warning(
@@ -1880,6 +1886,9 @@ async def _apply_wrapup_to_segment(
         mapping = {"outcome": outcome, "issue_status": wrapup_raw}
         if outcome != "resolved" and wrapup_resumo:
             mapping["handoff_reason"] = wrapup_resumo
+        # F7: só faz sentido para escalações (escalado → outcome escalated).
+        if outcome == "escalated" and escalation_reason:
+            mapping["escalation_reason"] = escalation_reason
         await redis_client.hset(key, mapping=mapping)
         await redis_client.expire(key, 604800)
         await redis_client.setex(
@@ -2861,6 +2870,10 @@ async def process_routed(
         _part_outcome = agent_result.get("outcome") if agent_result else None
         # flow_id = skill-flow deployado que o agente executou (avaliação IA por skill)
         _part_flow_id = (((agent_result or {}).get("pipeline_state")) or {}).get("flow_id", "") or ""
+        # F7: motivo de escalação normalizado declarado pelo escalate step (IA),
+        # persistido em pipeline_state.results.escalation_reason via output_as.
+        _part_results = (((agent_result or {}).get("pipeline_state")) or {}).get("results") or {}
+        _part_esc = str(_part_results.get("escalation_reason", "") or "") or None
         # ── Fase A (queue-attended-model): record last primary outcome ────────
         # Single source of truth for outcome is the segment; the session-level
         # outcome in contact_closed is DERIVED from the last primary segment.
@@ -2891,6 +2904,7 @@ async def process_routed(
             duration_ms=_part_duration_ms,
             outcome=_part_outcome,
             flow_id=_part_flow_id,
+            escalation_reason=_part_esc,
         ))
         # G5 dedup guard: conference_agent_completed checks this key before emitting
         # participant_left for external conference specialists.  Native bridge agents
@@ -3126,9 +3140,11 @@ async def process_routed(
                             _wp_results = (((agent_result or {}).get("pipeline_state")) or {}).get("results") or {}
                             _wp_cls = str(_wp_results.get("wrapup_classificacao", "") or "")
                             _wp_res = str(_wp_results.get("wrapup_resumo", "") or "")
+                            # F7: motivo de escalação normalizado (só presente quando escalado).
+                            _wp_esc = str(_wp_results.get("wrapup_escalation_reason", "") or "")
                             if _wp_cls:
                                 asyncio.create_task(_apply_wrapup_to_segment(
-                                    redis_client, session_id, _hook_human_seg, _wp_cls, _wp_res,
+                                    redis_client, session_id, _hook_human_seg, _wp_cls, _wp_res, _wp_esc,
                                 ))
 
                     # Arc 14 Fase E: when a customer-side hook (NPS) completes,

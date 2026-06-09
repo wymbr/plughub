@@ -29,7 +29,7 @@ import { DEFAULT_FILTERS } from '@/modules/contacts/types'
 // domain: 'universal' (humano + IA) | 'human' (IA desabilitada na lista).
 // primaryKey: métrica plotada no gráfico mínimo da F4.1 (F4.2 enriquece a viz).
 
-type LensId = 'resolution' | 'sessions_aht' | 'availability' | 'pause_reason' | 'quality' | 'quality_criteria' | 'nps' | 'wrapup'
+type LensId = 'resolution' | 'sessions_aht' | 'availability' | 'pause_reason' | 'quality' | 'quality_criteria' | 'nps' | 'wrapup' | 'escalation_reason'
 type Domain = 'universal' | 'human'
 
 interface LensDef { id: LensId; domain: Domain; primaryKey: string | null; pct: boolean }
@@ -41,6 +41,7 @@ const LENSES: LensDef[] = [
   { id: 'quality_criteria', domain: 'universal', primaryKey: null,             pct: false },
   { id: 'nps',             domain: 'universal', primaryKey: 'nps',             pct: false },
   { id: 'wrapup',          domain: 'universal', primaryKey: null,              pct: false },
+  { id: 'escalation_reason', domain: 'universal', primaryKey: null,            pct: false },
   { id: 'availability',    domain: 'human',     primaryKey: 'occupancy_pct',   pct: true  },
   { id: 'pause_reason',    domain: 'human',     primaryKey: null,              pct: false },
 ]
@@ -147,6 +148,23 @@ function useCompare(
   }, [tenantId, fromDt, toDt, poolId, lens, entityCsv])
   useEffect(() => { fetch_() }, [fetch_])
   return { resp, loading }
+}
+
+// F7 — mapa id→label dos motivos de escalação (config agent_activity/escalation_reasons).
+// O label é dado configurável do tenant; a bancada o usa só para exibição na lente.
+function useEscalationLabels(tenantId: string): Record<string, string> {
+  const [labels, setLabels] = useState<Record<string, string>>({})
+  useEffect(() => {
+    if (!tenantId) return
+    fetch(`/config/agent_activity?tenant_id=${encodeURIComponent(tenantId)}`)
+      .then(r => r.ok ? r.json() : Promise.reject(r.status))
+      .then((d: { entries?: { escalation_reasons?: { id: string; label: string }[] } }) => {
+        const list = d.entries?.escalation_reasons ?? []
+        setLabels(Object.fromEntries(list.map(x => [x.id, x.label])))
+      })
+      .catch(() => setLabels({}))
+  }, [tenantId])
+  return labels
 }
 
 // ── Cruzamento (F6) — 3 vantagens lado a lado por agente ──────────────────────
@@ -319,49 +337,58 @@ function GroupedBars({
   )
 }
 
-// Barra empilhada por entidade, segmentada por motivo de pausa (pause_reason).
+// Barra empilhada por entidade, segmentada por motivo (pause_reason: minutos;
+// escalation_reason: contagem). reasonLabels remapeia id→label (ex.: config).
 function StackedReasonBars({
   resp, selected, labelMap, t,
+  valueMode = 'minutes', reasonLabels, emptyKey = 'bench.chart.selectForPause',
 }: {
   resp: CompareResp; selected: string[]; labelMap: Record<string, string>
   t: (k: string, o?: Record<string, unknown>) => string
+  valueMode?: 'minutes' | 'count'
+  reasonLabels?: Record<string, string>
+  emptyKey?: string
 }) {
   const ents = selected
     .map(k => resp.data.entities.find(e => e.agent_key === k))
     .filter((e): e is CompareEntity => !!e)
   if (ents.length === 0) return (
     <div className="h-52 flex items-center justify-center text-sm text-muted-light text-center px-6">
-      {t('bench.chart.selectForPause')}
+      {t(emptyKey)}
     </div>
   )
   // Conjunto de motivos presente nas entidades selecionadas.
   const reasons = new Map<string, string>()
   for (const e of ents) {
     for (const r of ((e.summary.reasons as unknown as { reason_id: string; reason_label: string }[]) ?? [])) {
-      reasons.set(r.reason_id, r.reason_label || r.reason_id)
+      reasons.set(r.reason_id, reasonLabels?.[r.reason_id] || r.reason_label || r.reason_id)
     }
   }
   const reasonIds = [...reasons.keys()]
   const rows = ents.map(e => {
     const row: Record<string, number | string> = { name: labelMap[e.agent_key] ?? e.agent_key }
-    const rs = (e.summary.reasons as unknown as { reason_id: string; total_ms: number }[]) ?? []
+    const rs = (e.summary.reasons as unknown as { reason_id: string; total_ms: number; count: number }[]) ?? []
     for (const rid of reasonIds) {
       const found = rs.find(x => x.reason_id === rid)
-      row[rid] = found ? Math.round(found.total_ms / 60000) : 0   // minutos
+      row[rid] = !found ? 0
+        : valueMode === 'count' ? (found.count || 0)
+        : Math.round(found.total_ms / 60000)   // minutos
     }
     return row
   })
-  const palette = ['#1B4F8A', '#D97706', '#059669', '#7C3AED', '#DC2626', '#0891B2']
+  const palette = ['#1B4F8A', '#D97706', '#059669', '#7C3AED', '#DC2626', '#0891B2', '#DB2777', '#65A30D']
+  const yFmt = valueMode === 'count' ? (v: number) => `${v}` : (v: number) => `${v}m`
+  const tipFmt = valueMode === 'count' ? (v: number) => `${v}` : (v: number) => `${v} min`
   return (
     <ResponsiveContainer width="100%" height={240}>
       <BarChart data={rows} margin={{ top: 4, right: 16, left: 0, bottom: 0 }}>
         <CartesianGrid strokeDasharray="3 3" stroke="#E5E7EB" />
         <XAxis dataKey="name" tick={{ fontSize: 11 }} />
-        <YAxis tick={{ fontSize: 11 }} tickFormatter={(v: number) => `${v}m`} />
-        <Tooltip formatter={(v: number) => `${v} min`} />
+        <YAxis tick={{ fontSize: 11 }} allowDecimals={false} tickFormatter={yFmt} />
+        <Tooltip formatter={tipFmt} />
         <Legend iconSize={10} wrapperStyle={{ fontSize: 12 }} />
         {reasonIds.map((rid, i) => (
-          <Bar key={rid} dataKey={rid} name={reasons.get(rid)} stackId="pause"
+          <Bar key={rid} dataKey={rid} name={reasons.get(rid)} stackId="reason"
             fill={palette[i % palette.length]} />
         ))}
       </BarChart>
@@ -519,10 +546,11 @@ function QualityCriteriaHeatmap({
 }
 
 function LensChart({
-  lens, resp, selected, t,
+  lens, resp, selected, t, escalationLabels,
 }: {
   lens: LensId; resp: CompareResp | null; selected: string[]
   t: (k: string, o?: Record<string, unknown>) => string
+  escalationLabels?: Record<string, string>
 }) {
   if (!resp || resp.error) return (
     <div className="h-52 flex items-center justify-center text-sm text-muted-light">{t('bench.chart.noData')}</div>
@@ -531,7 +559,7 @@ function LensChart({
   const hasData = (resp.data.average && resp.data.average.series.length > 0) ||
     resp.data.entities.some(e => e.series.length > 0 ||
       ((e.summary.reasons as unknown as unknown[] | undefined)?.length ?? 0) > 0)
-  if (!hasData && lens !== 'pause_reason' && lens !== 'wrapup' && lens !== 'quality_criteria') return (
+  if (!hasData && lens !== 'pause_reason' && lens !== 'wrapup' && lens !== 'quality_criteria' && lens !== 'escalation_reason') return (
     <div className="h-52 flex items-center justify-center text-sm text-muted-light">{t('bench.chart.noData')}</div>
   )
 
@@ -568,6 +596,10 @@ function LensChart({
   )
   if (lens === 'quality_criteria') return (
     <QualityCriteriaHeatmap resp={resp} selected={selected} labelMap={labelMap} t={t} />
+  )
+  if (lens === 'escalation_reason') return (
+    <StackedReasonBars resp={resp} selected={selected} labelMap={labelMap} t={t}
+      valueMode="count" reasonLabels={escalationLabels} emptyKey="bench.chart.selectForEscalation" />
   )
   if (lens === 'availability') return (
     <GroupedBars resp={resp} selected={selected} labelMap={labelMap} t={t}
@@ -875,6 +907,7 @@ export default function AgentsBenchPage() {
   const { rows: perfRows, loading: listLoading } = usePerformanceList(tenantId ?? '', fromDt, toDt)
   const { resp, loading: chartLoading } = useCompare(tenantId ?? '', fromDt, toDt, poolId, lens, selected)
   const { resp: crossResp, loading: crossLoading } = useCross(tenantId ?? '', fromDt, toDt, poolId, view === 'cross')
+  const escalationLabels = useEscalationLabels(tenantId ?? '')
 
   // F4.3 — árvore pools → agentes. Um agente pode aparecer em mais de um pool;
   // a seleção é por agent_key (global, como no compare). sessions/resolved
@@ -1130,7 +1163,7 @@ export default function AgentsBenchPage() {
                 </div>
                 {chartLoading
                   ? <div className="h-52 flex items-center justify-center text-sm text-muted-light animate-pulse">{t('bench.chart.loading')}</div>
-                  : <LensChart lens={lens} resp={resp} selected={selected} t={t} />}
+                  : <LensChart lens={lens} resp={resp} selected={selected} t={t} escalationLabels={escalationLabels} />}
               </div>
             </>
           ) : (

@@ -2,6 +2,41 @@
 
 ---
 
+## Bancada de agentes F7 — motivo de escalação normalizado (2026-06-09)
+
+Taxonomia configurável de motivos de escalação + lente na bancada. Captura **humano + IA**,
+decisão de seed de 8 motivos. `handoff_reason` segue como nota livre; o motivo normalizado é
+uma dimensão agregável nova.
+
+**F7.1 fundação**: config `agent_activity/escalation_reasons` (8 itens `{id,label,requires_note}`,
+espelha `pause_reasons`, override por pool via `escalation_reasons:{pool_id}`). `ContactSegment`/
+`ConversationParticipantEvent` + `escalation_reason`; `EscalateStep` + `reason`. ClickHouse
+`segments.escalation_reason Nullable(String)` (migração idempotente) + cols/row + parser.
+
+**F7.2 captura humano**: `agente_wrapup_v1` ganha menu de motivo (interaction list, 8 opções) via um
+`choice` que dispara só quando `wrapup_classificacao == escalado`. Bridge: `_apply_wrapup_to_segment`
+grava `escalation_reason` no acumulador `seg_signal` (só p/ outcome `escalated`); `_publish_participant_event`
++ `_republish_segment_from_signal` propagam o campo.
+
+**F7.3 captura IA**: `escalate` step `reason` → `executeEscalate` persiste via `output_as` em
+`pipeline_state.results.escalation_reason`; bridge lê na conclusão do agente IA (`participant_left`
+nativo) e estampa no segmento. `conversation_escalate` repassa ao Rules Engine (`process_context`).
+
+**F7.4 lente**: `_compare_escalation_reason_lens` — distribuição por agente (`summary.reasons[]`, só
+família escalate com motivo), espelha `pause_reason`. Sai de pending. Teste.
+
+**F7.5 UI**: lente "Motivo de escalação" (universal) reusa `StackedReasonBars` parametrizado
+(`valueMode='count'` + `reasonLabels`); hook `useEscalationLabels` busca o config e remapeia
+id→label (PT). i18n en+pt-BR.
+
+**Validação**: testes parser + lente; E2E com fixture (`segments.escalation_reason` semeado via
+`ALTER UPDATE` em 55 segmentos escalados — demo sem fluxo de escalação humana E2E), legenda com
+labels do config. **Bancada Arc workbench: F1–F9 completas.**
+
+→ Ver `docs/guias/conference-mechanics.md` § Histórico (escalation_reason no acumulador).
+
+---
+
 ## Bancada de agentes F8 — lente quality_criteria (qualidade por dimensão) (2026-06-09)
 
 Decompõe a nota de qualidade em **dimensões** do `EvaluationForm` — heatmap agente×dimensão na

@@ -725,6 +725,7 @@ def parse_participant_event(payload: dict[str, Any]) -> list[dict] | None:
         "handoff_reason":    payload.get("handoff_reason") or None,
         "issue_status":      payload.get("issue_status") or None,
         "nps_score":         payload.get("nps_score") if payload.get("nps_score") is not None else None,
+        "escalation_reason": payload.get("escalation_reason") or None,
         "timestamp":         payload.get("timestamp") or _now(),
     }
 

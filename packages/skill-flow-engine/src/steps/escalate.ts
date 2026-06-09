@@ -22,6 +22,8 @@ export async function executeEscalate(
       target_pool:    step.target.pool,
       pipeline_state: ctx.state,
       error_reason:   step.error_reason,
+      // F7: motivo de escalação normalizado declarado pelo agente IA.
+      escalation_reason: step.reason,
     })
   } catch (err) {
     // Graceful degradation — same pattern as notify/invoke steps.
@@ -50,8 +52,11 @@ export async function executeEscalate(
   // O Rules Engine atualiza o pipeline_state quando o agente do pool
   // sinaliza agent_done. O engine detecta isso via polling do pipeline_state.
   // Quando retornar, o step escalate terá seu resultado em state.results.
+  // F7: persiste o motivo normalizado em results.escalation_reason — o bridge
+  // o lê ao fechar o segmento do agente IA que escalou.
   return {
     next_step_id:      "__awaiting_escalation__",
     transition_reason: "on_success",
+    ...(step.reason ? { output_as: "escalation_reason", output_value: step.reason } : {}),
   }
 }

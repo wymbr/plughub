@@ -78,6 +78,9 @@ export const ContactSegmentSchema = z.object({
   close_reason:      z.string().nullable().default(null),
   handoff_reason:    z.string().nullable().default(null),
   issue_status:      z.string().nullable().default(null),
+  // F7: normalized escalation reason (id from config escalation_reasons). Set when
+  // outcome is an escalate-family value. handoff_reason stays as the free-text note.
+  escalation_reason: z.string().nullable().default(null),
 })
 
 export type ContactSegment = z.infer<typeof ContactSegmentSchema>
@@ -117,6 +120,7 @@ export const ConversationParticipantEventSchema = z.object({
   handoff_reason:   z.string().nullable().optional(),
   issue_status:     z.string().nullable().optional(),
   close_reason:     z.string().nullable().optional(),
+  escalation_reason: z.string().nullable().optional(),   // F7
 })
 
 export type ConversationParticipantEvent = z.infer<typeof ConversationParticipantEventSchema>

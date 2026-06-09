@@ -771,5 +771,29 @@ re-publish carrega o estado completo → a última versão (maior `ingested_at`)
 
 ---
 
+### Mudança 8 — motivo de escalação normalizado no segmento (F7 bancada, 2026-06-09)
+
+**Contexto:** escalações não tinham um "porquê" estruturado — só o `handoff_reason` em texto livre.
+A F7 adiciona uma taxonomia configurável (`agent_activity/escalation_reasons`) e grava o id
+normalizado em `segments.escalation_reason`, mantendo `handoff_reason` como nota livre.
+
+**Mecanismo (dois caminhos):**
+1. **Humano**: o `agente_wrapup_v1` pergunta o motivo (menu `list`) só quando classificação=escalado
+   (step `choice`). Na conclusão do hook, o bridge lê `pipeline_state.results.wrapup_escalation_reason`
+   e `_apply_wrapup_to_segment` grava `escalation_reason` no acumulador `seg_signal` — **somente
+   quando o outcome normalizado é `escalated`**.
+2. **IA**: o step `escalate` ganha `reason`; `executeEscalate` persiste via `output_as` em
+   `pipeline_state.results.escalation_reason`. No `participant_left` do agente nativo, o bridge lê esse
+   campo e passa a `_publish_participant_event`.
+
+`_publish_participant_event` e `_republish_segment_from_signal` propagam o novo campo;
+`conversation_escalate` repassa o motivo ao Rules Engine via `process_context`.
+
+**Schema:** `analytics.segments.escalation_reason Nullable(String)` (migração idempotente);
+`ContactSegment`/`ConversationParticipantEvent`/`EscalateStep` ganham o campo. **Sem keys Redis novas**
+(reusa o acumulador `seg_signal` da Mudança 7). O label legível vem do config (remapeado na UI).
+
+---
+
 *Este documento é a referência canônica para o mecanismo de conferência do PlugHub.*
 *Qualquer mudança no funcionamento deve ser registrada neste arquivo antes de ir para CHANGELOG.md.*

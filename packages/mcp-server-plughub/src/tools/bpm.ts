@@ -160,6 +160,8 @@ const ConversationEscalateInputSchema = z.object({
   pipeline_state: z.record(z.unknown()).optional(),
   /** Razão da escalada (para auditoria) */
   error_reason:   z.string().optional(),
+  /** F7: motivo de escalação normalizado (id do config escalation_reasons). */
+  escalation_reason: z.string().optional(),
 })
 
 const MentionCommandDispatchInputSchema = z.object({
@@ -969,6 +971,7 @@ export function registerBpmTools(server: McpServer, deps?: BpmDeps): void {
         process_context: {
           escalated_from: "skill_flow",
           error_reason:   parsed.error_reason,
+          escalation_reason: parsed.escalation_reason,
           pipeline_state: parsed.pipeline_state,
         },
       }

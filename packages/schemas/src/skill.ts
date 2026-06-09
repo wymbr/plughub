@@ -180,6 +180,9 @@ export const EscalateStepSchema = z.object({
   error_reason: z.string().optional(),
   on_failure:   z.string().optional(),
   handoff_reason: z.string().optional(),
+  // F7: normalized escalation reason id (from config escalation_reasons). Lets an
+  // AI agent declare WHY it escalated; the bridge stamps it on the AI segment.
+  reason:       z.string().optional(),
 })
 
 export const CompleteStepSchema = z.object({

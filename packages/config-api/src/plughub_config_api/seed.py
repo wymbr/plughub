@@ -560,6 +560,31 @@ _SEED: list[tuple[str, str, object, str]] = [
         "orchestrator-bridge agent_pause Kafka event."
     ),
 
+    # ── agent_activity / escalation_reasons (F7) ────────────────────────────────
+    # Normalized escalation reason taxonomy (mirrors pause_reasons). Used by:
+    #   - agente_wrapup_v1 menu (human, when classification=escalado)
+    #   - escalate step reason field (AI agent)
+    #   - bancada "escalation_reason" lens (label source) + segments.escalation_reason
+    # Pool-level overrides via key escalation_reasons:{pool_id}.
+    (
+        "agent_activity", "escalation_reasons",
+        [
+            {"id": "customer_request",    "label": "Solicitação do cliente", "requires_note": False},
+            {"id": "out_of_scope",        "label": "Fora do escopo",         "requires_note": False},
+            {"id": "needs_authorization", "label": "Falta de alçada",        "requires_note": False},
+            {"id": "technical_issue",     "label": "Problema técnico",       "requires_note": True},
+            {"id": "specialist_needed",   "label": "Requer especialista",    "requires_note": False},
+            {"id": "retention",           "label": "Retenção / insatisfação", "requires_note": False},
+            {"id": "policy_exception",    "label": "Exceção de política",    "requires_note": True},
+            {"id": "other",               "label": "Outro",                  "requires_note": True},
+        ],
+        "List of escalation reason objects { id, label, requires_note } used when an "
+        "interaction is escalated. Source for the agente_wrapup_v1 escalation menu (human), "
+        "the escalate step reason field (AI), and the bancada escalation_reason lens label "
+        "map. Normalized id is persisted to segments.escalation_reason; handoff_reason stays "
+        "the free-text note. Pool-level overrides via key escalation_reasons:{pool_id}."
+    ),
+
     # ── dashboards ────────────────────────────────────────────────────────────
     # Source: platform-ui DashboardsPage — dashboard template management.
     # Templates are stored as JSON values with key pattern template:{uuid}.

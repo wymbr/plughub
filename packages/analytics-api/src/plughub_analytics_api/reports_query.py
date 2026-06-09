@@ -1671,7 +1671,7 @@ def _fetch_evaluations_summary(
 # (agent_type != 'system', role='primary') herdados da atribuição.
 
 _COMPARE_LENSES = {"resolution", "sessions_aht", "availability", "pause_reason",
-                   "quality", "nps", "wrapup", "quality_criteria"}
+                   "quality", "nps", "wrapup", "quality_criteria", "escalation_reason"}
 # nps/wrapup (F5): lêem de segments (nps_score / outcome+issue_status) — grão segmento.
 # quality_criteria (F8): lê de evaluation_dimension_scores (nota por dimensão) via
 # atribuição por session_id; comparável só dentro do mesmo form (guard na UI).
@@ -1782,6 +1782,12 @@ def _per_agent_for_lens(
             accessible_pools, supervised_agent_types,
         )
         metric_keys = []  # nota por dimensão vive no summary.dimensions[] (como wrapup)
+    elif lens == "escalation_reason":
+        per_agent = _compare_escalation_reason_lens(
+            client, db, tenant_id, since, until, pool_id,
+            accessible_pools, supervised_agent_types,
+        )
+        metric_keys = []  # distribuição por motivo vive no summary.reasons[] (como pause_reason)
     else:  # quality
         per_agent = _compare_quality_lens(
             client, db, tenant_id, since, until, pool_id,
@@ -2144,6 +2150,77 @@ def _compare_wrapup_lens(
             "outcome":      r["outcome"] or "",
             "issue_status": r["issue_status"] or "",
             "count":        cnt,
+        })
+        a["summary"]["total"] += cnt
+    return per_agent
+
+
+def _compare_escalation_reason_lens(
+    client: Any, db: str, tenant_id: str, since: str, until: str,
+    pool_id: str | None,
+    accessible_pools: list[str] | None, supervised_agent_types: list[str] | None,
+) -> dict:
+    """
+    escalation_reason (F7) — fonte: segments.escalation_reason (id normalizado).
+    Distribuição por agente dos motivos de escalação (barras empilhadas, como
+    pause_reason — vive em summary.reasons[]). Só segmentos da família escalate
+    com motivo preenchido. O label legível vem do config escalation_reasons (mapeado
+    na UI); aqui reason_label = reason_id como fallback.
+    """
+    conditions = [
+        "tenant_id = {tenant_id:String}",
+        f"started_at >= '{since}'",
+        f"started_at <  '{until}'",
+        "role = 'primary'",
+        "agent_type != 'system'",
+        f"outcome IN {_ESCALATE_FAMILY_SQL}",
+        "escalation_reason != ''",
+        "escalation_reason IS NOT NULL",
+    ]
+    params: dict = {"tenant_id": tenant_id}
+    if pool_id:
+        conditions.append("pool_id = {pool_id:String}")
+        params["pool_id"] = pool_id
+    _apply_pool_scope(conditions, accessible_pools)
+    _apply_agent_scope(conditions, supervised_agent_types)
+
+    rows = _rows_to_dicts(client.query(f"""
+        SELECT
+            ak                          AS agent_key,
+            any(at)                     AS agent_type,
+            any(lbl)                    AS label,
+            esc                         AS reason_id,
+            count()                     AS cnt
+        FROM (
+            SELECT
+                if(agent_type = 'human',
+                   if(user_id != '', user_id, agent_type_id),
+                   if(flow_id != '', flow_id, agent_type_id))  AS ak,
+                agent_type                                      AS at,
+                if(agent_type = 'human',
+                   if(user_login != '', user_login, user_id),
+                   if(flow_id != '', flow_id, agent_type_id))   AS lbl,
+                escalation_reason                               AS esc
+            FROM {db}.segments FINAL
+            WHERE {" AND ".join(conditions)}
+        )
+        GROUP BY ak, esc
+        ORDER BY ak, cnt DESC
+    """, parameters=params))
+
+    per_agent: dict = {}
+    for r in rows:
+        a = per_agent.setdefault(r["agent_key"], {
+            "agent_type": r["agent_type"], "label": r["label"],
+            "buckets": {}, "summary": {"total": 0, "reasons": []},
+        })
+        cnt = int(r["cnt"] or 0)
+        rid = r["reason_id"] or ""
+        a["summary"]["reasons"].append({
+            "reason_id":    rid,
+            "reason_label": rid,   # UI remapeia pelo config escalation_reasons
+            "count":        cnt,
+            "total_ms":     0,     # compat com StackedReasonBars (usa count p/ escalação)
         })
         a["summary"]["total"] += cnt
     return per_agent

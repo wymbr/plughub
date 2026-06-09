@@ -455,6 +455,21 @@ class TestParseParticipantEvent:
         assert rows[0]["type"] == "participant_left"
         assert rows[0]["duration_ms"] == 180000
 
+    def test_escalation_reason_mapped_to_segment(self):
+        payload = self._left_payload()
+        payload["outcome"] = "escalated"
+        payload["escalation_reason"] = "needs_authorization"
+        payload["handoff_reason"] = "cliente pediu desconto acima do limite"
+        rows = parse_participant_event(payload)
+        seg = next(r for r in rows if r["table"] == "segments")
+        assert seg["escalation_reason"] == "needs_authorization"
+        assert seg["handoff_reason"] == "cliente pediu desconto acima do limite"
+
+    def test_escalation_reason_absent_is_none(self):
+        rows = parse_participant_event(self._left_payload())
+        seg = next(r for r in rows if r["table"] == "segments")
+        assert seg.get("escalation_reason") is None
+
     def test_conference_id_propagated(self):
         rows = parse_participant_event(self._joined_payload(conference_id="conf-abc"))
         assert rows is not None

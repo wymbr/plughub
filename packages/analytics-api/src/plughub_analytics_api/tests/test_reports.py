@@ -836,6 +836,26 @@ class TestQueryAgentsCompare:
         assert ent["summary"]["resolution_rate"] == pytest.approx(0.75)
         assert ent["summary"]["sessions"]        == pytest.approx(2.0)
 
+    async def test_escalation_reason_lens_distribution_in_summary(self):
+        # F7: distribuição de motivos de escalação em summary.reasons[].
+        cols = ["agent_key", "agent_type", "label", "reason_id", "cnt"]
+        client = _make_client(_ch_result(cols, [
+            ["A", "human", "a@x", "needs_authorization", 4],
+            ["A", "human", "a@x", "out_of_scope",        2],
+        ]))
+        result = await query_agents_compare(
+            client, DB, TENANT, lens="escalation_reason", entities=["A"],
+        )
+        assert result["meta"]["lens"] == "escalation_reason"
+        assert "error" not in result
+        sql = client.query.call_args_list[-1][0][0]
+        assert "escalation_reason" in sql
+        assert "outcome IN" in sql
+        ent = result["data"]["entities"][0]
+        assert ent["summary"]["total"] == 6
+        reasons = {r["reason_id"]: r["count"] for r in ent["summary"]["reasons"]}
+        assert reasons == {"needs_authorization": 4, "out_of_scope": 2}
+
     async def test_resolution_average_is_arithmetic_with_gaps(self):
         # Dia 1: A=2/2 (1.0), B=1/2 (0.5) → média 0.75 (n=2)
         # Dia 2: só A=0/1 (0.0)           → média 0.0  (n=1 — B é GAP, não zero)

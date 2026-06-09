@@ -331,6 +331,7 @@ CREATE TABLE IF NOT EXISTS {db}.segments
     handoff_reason     Nullable(String),
     issue_status       Nullable(String),
     nps_score          Nullable(Int32),
+    escalation_reason  Nullable(String),
     conference_id      Nullable(String),
     ingested_at        DateTime DEFAULT now(),
     date               Date
@@ -364,6 +365,13 @@ _DDL_SEGMENTS_MIGRATE_USER_LOGIN = (
 # atribuído ao segmento humano que o hook serviu. Nullable: nem todo segmento tem NPS.
 _DDL_SEGMENTS_MIGRATE_NPS = (
     "ALTER TABLE {db}.segments ADD COLUMN IF NOT EXISTS nps_score Nullable(Int32)"
+)
+
+# F7: escalation_reason normalizado por segmento (id do config escalation_reasons).
+# Escrito pelo bridge quando outcome é da família escalate (humano via wrap-up, IA via
+# escalate step). Nullable: só segmentos escalados têm. handoff_reason segue como nota livre.
+_DDL_SEGMENTS_MIGRATE_ESCALATION = (
+    "ALTER TABLE {db}.segments ADD COLUMN IF NOT EXISTS escalation_reason Nullable(String)"
 )
 
 # ── Arc 5: session_timeline — time-series events tied to segments.
@@ -798,6 +806,7 @@ _MIGRATIONS = [
     _DDL_SEGMENTS_MIGRATE_USER,           # C1: user_id (login) — identidade do agente humano
     _DDL_SEGMENTS_MIGRATE_USER_LOGIN,     # C1: user_login (email) — exibição legível
     _DDL_SEGMENTS_MIGRATE_NPS,            # F5: nps_score por segmento (grão segmento)
+    _DDL_SEGMENTS_MIGRATE_ESCALATION,     # F7: escalation_reason normalizado por segmento
 ]
 
 
@@ -1062,7 +1071,7 @@ class AnalyticsStore:
         "parent_segment_id", "sequence_index",
         "started_at", "ended_at", "duration_ms",
         "outcome", "close_reason", "handoff_reason", "issue_status", "nps_score",
-        "conference_id", "date",
+        "escalation_reason", "conference_id", "date",
     ]
 
     async def upsert_segment(self, row: dict) -> None:
@@ -1594,6 +1603,7 @@ def _segment_row(d: dict) -> list:
         d.get("handoff_reason") or None,
         d.get("issue_status") or None,
         d.get("nps_score") if d.get("nps_score") is not None else None,
+        d.get("escalation_reason") or None,
         d.get("conference_id") or None,
         _today_utc(ts),
     ]

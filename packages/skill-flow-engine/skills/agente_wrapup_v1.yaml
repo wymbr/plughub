@@ -107,6 +107,64 @@ steps:
           # do hook na conclusão (não desta tag), normaliza p/ outcome e grava o
           # cru em issue_status — atribuído ao SEGMENTO humano que o hook serviu.
           scope: segment
+    # F7: se escalado, pergunta o MOTIVO normalizado antes dos próximos passos.
+    on_success: verificar_escalacao
+    on_failure: verificar_escalacao
+
+  # ── F7: motivo de escalação (só quando classificação = escalado) ────────────
+  - id: verificar_escalacao
+    type: choice
+    conditions:
+      - field: "$.pipeline_state.wrapup_classificacao"
+        operator: eq
+        value: "escalado"
+        next: solicitar_motivo_escalacao
+    default: solicitar_proximos_passos
+
+  # Opções espelham o seed config agent_activity/escalation_reasons (F7). Manter
+  # em sincronia; o label exibido na bancada vem do config, não daqui.
+  - id: solicitar_motivo_escalacao
+    type: menu
+    interaction: list
+    prompt: "Qual o motivo da escalação?"
+    visibility:
+      - "@ctx.session.human_agent_participant_id"
+    timeout_s: 30
+    options:
+      - id: customer_request
+        label: "Solicitação do cliente"
+      - id: out_of_scope
+        label: "Fora do escopo"
+      - id: needs_authorization
+        label: "Falta de alçada"
+      - id: technical_issue
+        label: "Problema técnico"
+      - id: specialist_needed
+        label: "Requer especialista"
+      - id: retention
+        label: "Retenção / insatisfação"
+      - id: policy_exception
+        label: "Exceção de política"
+      - id: other
+        label: "Outro"
+    output_as: wrapup_escalation_reason
+    on_success: registrar_motivo_escalacao
+    on_failure: solicitar_proximos_passos
+    on_timeout: solicitar_proximos_passos
+
+  - id: registrar_motivo_escalacao
+    type: notify
+    message: "✅ Motivo registrado."
+    visibility:
+      - "@ctx.session.human_agent_participant_id"
+    context_tags:
+      outputs:
+        wrapup_escalation_reason:
+          tag: session.wrapup.escalation_reason
+          confidence: 1.0
+          merge: overwrite
+          # scope segment — o bridge lê do pipeline_state.results na conclusão.
+          scope: segment
     on_success: solicitar_proximos_passos
     on_failure: solicitar_proximos_passos
 

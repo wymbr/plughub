@@ -161,7 +161,8 @@
       "quality": "Quality score",
       "quality_criteria": "Quality by dimension",
       "nps": "NPS",
-      "wrapup": "Wrap-up disposition"
+      "wrapup": "Wrap-up disposition",
+      "escalation_reason": "Escalation reason"
     },
     "criteria": {
       "form": "Form: {{form}}",
@@ -194,7 +195,8 @@
       "pendingViz": "This lens's chart arrives in the next step.",
       "selectForPause": "Select one or more agents in the list to compare pause reasons.",
       "selectForWrapup": "Select one or more agents in the list to compare wrap-up dispositions.",
-      "selectForQuality": "Select one or more agents in the list to compare quality by dimension."
+      "selectForQuality": "Select one or more agents in the list to compare quality by dimension.",
+      "selectForEscalation": "Select one or more agents in the list to compare escalation reasons."
     },
     "metric": {
       "resolution": "Resolution rate",
