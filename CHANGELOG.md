@@ -2,6 +2,40 @@
 
 ---
 
+## Bancada de agentes F6 — Cruzamentos das vantagens (§8) (2026-06-09)
+
+Fecha a bancada (Arc workbench): a view **Cross-cut** põe as 3 vantagens (resolução, qualidade, NPS)
+lado a lado por agente e destaca **onde elas discordam** — o payoff de gestão do §8.
+
+**Endpoint** `GET /reports/agents/cross` (`query_agents_cross`/`_fetch_agents_cross` em
+`reports_query.py`; rota em `reports.py`): `seg_agg` (sessions, resolved, escalated, NPS n/sum,
+promotores/detratores por `agent_key` — segments primary não-sintético) **`LEFT JOIN`** `eval_agg`
+(n_evals, avg_score via `_session_agent_attribution_sql` filtrado por `attr.session_started_at` no
+período) on `agent_key`. Retorna por agente: `sessions`, `resolution_rate`, `escalation_rate`,
+`quality_score`(0–1)/`quality_n`, `nps`(−100..100)/`avg_nps`/`nps_n`. Agente sem avaliação/NPS →
+campos null (não zero). Testes `TestQueryAgentsCross` em `test_reports.py`.
+
+**platform-ui** (`AgentsBenchPage`): toggle **Lentes ↔ Cross-cut** (persistido na URL `view=cross`).
+View Cross-cut = tabela de concordância (linha por agente, ordenada por sessões; "sem aval."/"sem NPS"
+quando null) + **3 flags de divergência** (decisão F6.1: só flag, sem score combinado): ★ destaque
+(entrega+qualidade+NPS altos), ⚠ lacuna de percepção (entrega alta, NPS baixo), ◑ divergência de
+disposição (marca resolvido, avaliação baixa). Quadrante resolução(X)×qualidade(Y), bolha=sessões,
+cor=NPS, linhas-guia 70/70 (plota só quem tem qualidade avaliada). Linha clicável reusa o detalhe
+type-aware (F4.4). **Export CSV sensível à view**: Cross-cut → `bancada_cruzamento_*.csv` (uma linha
+por agente + coluna `signals`); Lentes → série da lente como antes. i18n en+pt-BR (`bench.view.*`,
+`bench.cross.*`).
+
+**Validado E2E** (tenant_demo, 7 agentes): humano `res 0.64 · qual 0 (n=6) · NPS 100 (n=2)`;
+`skill_atendimento_sac_v1` `res 0.14 · esc 0.35` (candidato a coaching); 2 estrelas (`skill_triagem_v2`
+res 0.72, `skill_atendimento_auth_v1` res 1.0 — sem qualidade/NPS que contradiga). Quadrante mostra
+humano + sac_ia no piso (qual 0).
+
+→ **Bancada completa (F1–F6).** Calibração do avaliador (Arc 13, IA×NPS) fica para o Calibration
+Dashboard; refinamentos abertos: pool-average agregado, `session_signal` (grãos contato/jornada),
+F7 (motivo de escalação normalizado).
+
+---
+
 ## Bancada de agentes F5 — NPS + wrap-up por segmento (grão segmento) (2026-06-09)
 
 Liga as lentes **NPS** e **Wrap-up disposition** da bancada, atribuindo os sinais ao **segmento

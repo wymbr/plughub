@@ -132,6 +132,26 @@
     "average": "Agent average",
     "n": "n={{n}}",
     "filters": { "from": "From", "to": "To", "poolPlaceholder": "all pools", "allPools": "All pools", "exportCsv": "Export CSV" },
+    "view": { "lenses": "Lenses", "cross": "Cross-cut" },
+    "cross": {
+      "tableTitle": "Per-agent advantage agreement",
+      "agent": "Agent",
+      "resolution": "Resolution",
+      "escalation": "Escalation",
+      "quality": "Quality",
+      "nps": "NPS",
+      "signals": "Signals",
+      "naQuality": "no eval",
+      "naNps": "no NPS",
+      "quadrant": "Quadrant: resolution × quality",
+      "quadrantHint": "X = resolution, Y = evaluated quality, size = sessions, color = NPS (green ≥50, blue ≥0, red <0).",
+      "quadrantEmpty": "No agent with evaluated quality in the period.",
+      "flag": {
+        "star": "Standout (high delivery, quality and NPS)",
+        "perception": "Perception gap (high delivery, low NPS)",
+        "disposition": "Disposition mismatch (marked resolved, low evaluation)"
+      }
+    },
     "lens": {
       "label": "Lens:",
       "resolution": "Resolution / Escalation",

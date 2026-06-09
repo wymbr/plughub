@@ -132,6 +132,26 @@
     "average": "Média dos agentes",
     "n": "n={{n}}",
     "filters": { "from": "De", "to": "Até", "poolPlaceholder": "todos os pools", "allPools": "Todos os pools", "exportCsv": "Exportar CSV" },
+    "view": { "lenses": "Lentes", "cross": "Cruzamento" },
+    "cross": {
+      "tableTitle": "Concordância das vantagens por agente",
+      "agent": "Agente",
+      "resolution": "Resolução",
+      "escalation": "Escalação",
+      "quality": "Qualidade",
+      "nps": "NPS",
+      "signals": "Sinais",
+      "naQuality": "sem aval.",
+      "naNps": "sem NPS",
+      "quadrant": "Quadrante: resolução × qualidade",
+      "quadrantHint": "Eixo X = resolução, Y = qualidade avaliada, tamanho = sessões, cor = NPS (verde ≥50, azul ≥0, vermelho <0).",
+      "quadrantEmpty": "Nenhum agente com qualidade avaliada no período.",
+      "flag": {
+        "star": "Destaque (entrega, qualidade e NPS altos)",
+        "perception": "Lacuna de percepção (entrega alta, NPS baixo)",
+        "disposition": "Divergência de disposição (diz resolvido, avaliação baixa)"
+      }
+    },
     "lens": {
       "label": "Lente:",
       "resolution": "Resolução / Escalação",

@@ -19,6 +19,7 @@ import { useTranslation } from 'react-i18next'
 import { useAuth } from '@/auth/useAuth'
 import {
   LineChart, Line, BarChart, Bar, PieChart, Pie, Cell,
+  ScatterChart, Scatter, ZAxis, ReferenceLine,
   XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
 } from 'recharts'
 import { DEFAULT_FILTERS } from '@/modules/contacts/types'
@@ -130,6 +131,54 @@ function useCompare(
   }, [tenantId, fromDt, toDt, poolId, lens, entityCsv])
   useEffect(() => { fetch_() }, [fetch_])
   return { resp, loading }
+}
+
+// ── Cruzamento (F6) — 3 vantagens lado a lado por agente ──────────────────────
+
+interface CrossRow {
+  agent_key: string; agent_type: string; label: string
+  sessions: number
+  resolution_rate: number | null
+  escalation_rate: number | null
+  quality_score: number | null   // 0–1
+  quality_n: number
+  nps: number | null              // -100..100
+  avg_nps: number | null
+  nps_n: number
+}
+interface CrossResp { data: CrossRow[]; meta: Record<string, unknown>; error?: string }
+
+function useCross(tenantId: string, fromDt: string, toDt: string, poolId: string, enabled: boolean) {
+  const [resp, setResp] = useState<CrossResp | null>(null)
+  const [loading, setLoading] = useState(false)
+  useEffect(() => {
+    if (!enabled) return
+    setLoading(true)
+    const p = new URLSearchParams({ tenant_id: tenantId, from_dt: fromDt, to_dt: toDt })
+    if (poolId) p.set('pool_id', poolId)
+    fetch(`/reports/agents/cross?${p}`)
+      .then(r => r.json())
+      .then((d: CrossResp) => setResp(d))
+      .catch(() => setResp(null))
+      .finally(() => setLoading(false))
+  }, [tenantId, fromDt, toDt, poolId, enabled])
+  return { resp, loading }
+}
+
+// Sinais de divergência (só flag — F6.1). Limiares fixos, conservadores.
+type CrossFlag = 'star' | 'perception' | 'disposition'
+function crossFlags(r: CrossRow): CrossFlag[] {
+  const res = r.resolution_rate, q = r.quality_score, nps = r.nps
+  const highRes = res != null && res >= 0.7
+  const highQ   = q != null && q >= 0.7
+  const lowQ    = q != null && q < 0.5
+  const badNps  = nps != null && nps < 0
+  const goodNps = nps != null && nps >= 50
+  const flags: CrossFlag[] = []
+  if (highRes && (q == null || highQ) && (nps == null || goodNps)) flags.push('star')
+  if ((highRes || highQ) && badNps) flags.push('perception')
+  if (highRes && lowQ) flags.push('disposition')
+  return flags
 }
 
 // ── Gráfico por lente (F4.2) ──────────────────────────────────────────────────
@@ -502,6 +551,159 @@ function AgentDetail({
   )
 }
 
+// ── View Cruzamento (F6.3) — tabela de concordância + quadrante ───────────────
+
+const FLAG_META: Record<CrossFlag, { icon: string; color: string }> = {
+  star:        { icon: '★', color: '#059669' },
+  perception:  { icon: '⚠', color: '#D97706' },
+  disposition: { icon: '◑', color: '#DC2626' },
+}
+
+function CrossView({
+  resp, loading, onPick, t,
+}: {
+  resp: CrossResp | null; loading: boolean
+  onPick: (r: CrossRow) => void
+  t: (k: string, o?: Record<string, unknown>) => string
+}) {
+  if (loading) return (
+    <div className="h-52 flex items-center justify-center text-sm text-muted-light animate-pulse">{t('bench.chart.loading')}</div>
+  )
+  if (!resp || resp.error || resp.data.length === 0) return (
+    <div className="h-52 flex items-center justify-center text-sm text-muted-light">{t('bench.chart.noData')}</div>
+  )
+  const rows = [...resp.data].sort((a, b) => b.sessions - a.sessions)
+
+  // Quadrante: só agentes com qualidade avaliada (eixo Y = qualidade).
+  const scatter = rows
+    .filter(r => r.quality_score != null && r.resolution_rate != null)
+    .map(r => ({
+      x: (r.resolution_rate as number) * 100,
+      y: (r.quality_score as number) * 100,
+      z: Math.max(r.sessions, 1),
+      label: r.label,
+      nps: r.nps,
+      fill: r.nps == null ? '#94A3B8' : r.nps >= 50 ? '#059669' : r.nps >= 0 ? '#2D9CDB' : '#DC2626',
+    }))
+
+  const pctOrDash = (v: number | null) => v == null ? '—' : `${(v * 100).toFixed(1)}%`
+
+  return (
+    <div className="space-y-4">
+      {/* Tabela de concordância */}
+      <div className="bg-white rounded-lg border border-border overflow-hidden">
+        <div className="px-4 py-2.5 border-b border-border flex items-center justify-between">
+          <p className="text-xs font-semibold text-muted uppercase tracking-wide">{t('bench.cross.tableTitle')}</p>
+          <div className="flex items-center gap-3 text-2xs text-muted-light">
+            {(Object.keys(FLAG_META) as CrossFlag[]).map(f => (
+              <span key={f} className="flex items-center gap-1">
+                <span style={{ color: FLAG_META[f].color }}>{FLAG_META[f].icon}</span>
+                {t(`bench.cross.flag.${f}`)}
+              </span>
+            ))}
+          </div>
+        </div>
+        <div className="overflow-x-auto">
+          <table className="w-full text-xs">
+            <thead>
+              <tr className="text-2xs text-muted uppercase tracking-wide bg-surface-muted/50">
+                <th className="text-left font-semibold px-4 py-2">{t('bench.cross.agent')}</th>
+                <th className="text-right font-semibold px-3 py-2">{t('bench.metric.sessions')}</th>
+                <th className="text-right font-semibold px-3 py-2">{t('bench.cross.resolution')}</th>
+                <th className="text-right font-semibold px-3 py-2">{t('bench.cross.escalation')}</th>
+                <th className="text-right font-semibold px-3 py-2">{t('bench.cross.quality')}</th>
+                <th className="text-right font-semibold px-3 py-2">{t('bench.cross.nps')}</th>
+                <th className="text-center font-semibold px-3 py-2">{t('bench.cross.signals')}</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-border">
+              {rows.map(r => {
+                const flags = crossFlags(r)
+                return (
+                  <tr key={r.agent_key} className="hover:bg-surface-muted cursor-pointer"
+                    onClick={() => onPick(r)}>
+                    <td className="px-4 py-2">
+                      <span className="flex items-center gap-1.5 min-w-0">
+                        <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ background: colorFor(r.agent_key) }} />
+                        <span className="font-medium text-dark truncate">{r.label}</span>
+                        <span className="text-muted-light flex-shrink-0">{r.agent_type === 'human' ? '👤' : '🤖'}</span>
+                      </span>
+                    </td>
+                    <td className="px-3 py-2 text-right tabular-nums text-dark">{r.sessions}</td>
+                    <td className="px-3 py-2 text-right tabular-nums">{pctOrDash(r.resolution_rate)}</td>
+                    <td className="px-3 py-2 text-right tabular-nums">{pctOrDash(r.escalation_rate)}</td>
+                    <td className="px-3 py-2 text-right tabular-nums">
+                      {r.quality_score == null
+                        ? <span className="text-muted-light">{t('bench.cross.naQuality')}</span>
+                        : <span>{(r.quality_score * 100).toFixed(0)}<span className="text-muted-light text-2xs"> ({r.quality_n})</span></span>}
+                    </td>
+                    <td className="px-3 py-2 text-right tabular-nums">
+                      {r.nps == null
+                        ? <span className="text-muted-light">{t('bench.cross.naNps')}</span>
+                        : <span>{Math.round(r.nps)}<span className="text-muted-light text-2xs"> ({r.nps_n})</span></span>}
+                    </td>
+                    <td className="px-3 py-2 text-center whitespace-nowrap">
+                      {flags.length === 0
+                        ? <span className="text-muted-light">·</span>
+                        : flags.map(f => (
+                            <span key={f} title={t(`bench.cross.flag.${f}`)}
+                              style={{ color: FLAG_META[f].color }} className="text-sm mx-0.5">{FLAG_META[f].icon}</span>
+                          ))}
+                    </td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {/* Quadrante resolução × qualidade */}
+      <div className="bg-white rounded-lg border border-border px-4 pt-3 pb-2">
+        <p className="text-xs font-semibold text-muted uppercase tracking-wide mb-1">{t('bench.cross.quadrant')}</p>
+        <p className="text-2xs text-muted-light mb-2">{t('bench.cross.quadrantHint')}</p>
+        {scatter.length === 0 ? (
+          <div className="h-52 flex items-center justify-center text-sm text-muted-light text-center px-6">
+            {t('bench.cross.quadrantEmpty')}
+          </div>
+        ) : (
+          <ResponsiveContainer width="100%" height={300}>
+            <ScatterChart margin={{ top: 8, right: 24, left: 0, bottom: 16 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#E5E7EB" />
+              <XAxis type="number" dataKey="x" name={t('bench.cross.resolution')} domain={[0, 100]}
+                tick={{ fontSize: 11 }} tickFormatter={(v: number) => `${v}%`}
+                label={{ value: t('bench.cross.resolution'), position: 'insideBottom', offset: -8, fontSize: 11 }} />
+              <YAxis type="number" dataKey="y" name={t('bench.cross.quality')} domain={[0, 100]}
+                tick={{ fontSize: 11 }}
+                label={{ value: t('bench.cross.quality'), angle: -90, position: 'insideLeft', fontSize: 11 }} />
+              <ZAxis type="number" dataKey="z" range={[60, 600]} name={t('bench.metric.sessions')} />
+              <ReferenceLine x={70} stroke="#CBD5E1" strokeDasharray="4 4" />
+              <ReferenceLine y={70} stroke="#CBD5E1" strokeDasharray="4 4" />
+              <Tooltip cursor={{ strokeDasharray: '3 3' }}
+                content={({ payload }) => {
+                  const p = payload?.[0]?.payload as { label: string; x: number; y: number; z: number; nps: number | null } | undefined
+                  if (!p) return null
+                  return (
+                    <div className="bg-white border border-border rounded-lg shadow-sm px-3 py-2 text-xs">
+                      <p className="font-semibold text-dark mb-0.5">{p.label}</p>
+                      <p className="text-muted">{t('bench.cross.resolution')}: {p.x.toFixed(0)}%</p>
+                      <p className="text-muted">{t('bench.cross.quality')}: {p.y.toFixed(0)}</p>
+                      <p className="text-muted">{t('bench.metric.sessions')}: {p.z}</p>
+                      <p className="text-muted">{t('bench.cross.nps')}: {p.nps == null ? '—' : Math.round(p.nps)}</p>
+                    </div>
+                  )
+                }} />
+              <Scatter data={scatter}>
+                {scatter.map((d, i) => <Cell key={i} fill={d.fill} fillOpacity={0.75} />)}
+              </Scatter>
+            </ScatterChart>
+          </ResponsiveContainer>
+        )}
+      </div>
+    </div>
+  )
+}
+
 // ── Página ──────────────────────────────────────────────────────────────────
 
 export default function AgentsBenchPage() {
@@ -518,6 +720,7 @@ export default function AgentsBenchPage() {
     (LENSES.some(l => l.id === sp.get('lens')) ? sp.get('lens') : 'resolution') as LensId)
   const [selected, setSelected] = useState<string[]>(
     (sp.get('sel') || '').split(',').filter(Boolean))
+  const [view, setView] = useState<'lenses' | 'cross'>(sp.get('view') === 'cross' ? 'cross' : 'lenses')
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
   const [detail, setDetail] = useState<{ key: string; label: string; type: string } | null>(null)
 
@@ -529,13 +732,15 @@ export default function AgentsBenchPage() {
     if (poolId) next.set('pool', poolId)
     if (lens !== 'resolution') next.set('lens', lens)
     if (selected.length) next.set('sel', selected.join(','))
+    if (view === 'cross') next.set('view', view)
     setSp(next, { replace: true })
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [fromDt, toDt, poolId, lens, selected])
+  }, [fromDt, toDt, poolId, lens, selected, view])
 
   const lensDef = LENSES.find(l => l.id === lens)!
   const { rows: perfRows, loading: listLoading } = usePerformanceList(tenantId ?? '', fromDt, toDt)
   const { resp, loading: chartLoading } = useCompare(tenantId ?? '', fromDt, toDt, poolId, lens, selected)
+  const { resp: crossResp, loading: crossLoading } = useCross(tenantId ?? '', fromDt, toDt, poolId, view === 'cross')
 
   // F4.3 — árvore pools → agentes. Um agente pode aparecer em mais de um pool;
   // a seleção é por agent_key (global, como no compare). sessions/resolved
@@ -581,9 +786,41 @@ export default function AgentsBenchPage() {
   const toggleExpand = (pool: string) =>
     setExpanded(s => { const n = new Set(s); n.has(pool) ? n.delete(pool) : n.add(pool); return n })
 
+  const esc = (v: unknown) => {
+    const s = v == null ? '' : String(v)
+    return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s
+  }
+  const downloadCsv = (lines: string[], suffix: string) => {
+    const blob = new Blob([lines.join('\n')], { type: 'text/csv;charset=utf-8' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `bancada_${suffix}_${fromDt}_${toDt}.csv`
+    a.click()
+    URL.revokeObjectURL(url)
+  }
+
+  // F6.3 — no Cross-cut, exporta a tabela de cruzamento (uma linha por agente).
+  const exportCrossCsv = () => {
+    if (!crossResp?.data.length) return
+    const header = ['agent_key', 'label', 'agent_type', 'sessions', 'resolution_rate',
+      'escalation_rate', 'quality_score', 'quality_n', 'nps', 'avg_nps', 'nps_n', 'signals']
+    const lines = [header.join(',')]
+    for (const r of crossResp.data) {
+      lines.push([
+        esc(r.agent_key), esc(r.label), esc(r.agent_type), r.sessions,
+        esc(r.resolution_rate ?? ''), esc(r.escalation_rate ?? ''),
+        esc(r.quality_score ?? ''), r.quality_n,
+        esc(r.nps ?? ''), esc(r.avg_nps ?? ''), r.nps_n,
+        esc(crossFlags(r).join('|')),
+      ].join(','))
+    }
+    downloadCsv(lines, 'cruzamento')
+  }
+
   // F4.5 — export CSV do conjunto comparado (média + entidades) da lente atual.
   // Formato longo: entity,date,<métricas numéricas presentes na série>.
-  const exportCsv = () => {
+  const exportLensCsv = () => {
     if (!resp) return
     const lm = labelMapOf(resp, t)
     const series: { label: string; points: SeriesPoint[] }[] = []
@@ -591,23 +828,17 @@ export default function AgentsBenchPage() {
     for (const e of resp.data.entities) series.push({ label: e.label || e.agent_key, points: e.series })
     const keys = [...new Set(series.flatMap(s => s.points.flatMap(p =>
       Object.keys(p).filter(k => k !== 'date' && typeof p[k] === 'number'))))]
-    const esc = (v: unknown) => {
-      const s = v == null ? '' : String(v)
-      return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s
-    }
     const header = ['entity', 'date', ...keys]
     const lines = [header.join(',')]
     for (const s of series)
       for (const p of s.points)
         lines.push([esc(s.label), esc(p.date), ...keys.map(k => esc(p[k] ?? ''))].join(','))
-    const blob = new Blob([lines.join('\n')], { type: 'text/csv;charset=utf-8' })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = `bancada_${lens}_${fromDt}_${toDt}.csv`
-    a.click()
-    URL.revokeObjectURL(url)
+    downloadCsv(lines, lens)
   }
+
+  // Roteia o export conforme a view ativa.
+  const exportCsv = () => view === 'cross' ? exportCrossCsv() : exportLensCsv()
+  const exportDisabled = view === 'cross' ? !crossResp?.data.length : !resp
 
   if (!tenantId) return (
     <div className="flex items-center justify-center h-full text-muted-light text-sm">
@@ -629,7 +860,7 @@ export default function AgentsBenchPage() {
           {poolOptions.map(p => <option key={p} value={p}>{p}</option>)}
         </select>
         <div className="flex-1" />
-        <button onClick={exportCsv} disabled={!resp}
+        <button onClick={exportCsv} disabled={exportDisabled}
           className={`${inp} flex items-center gap-1 disabled:opacity-40 hover:border-border-strong`}>
           ⬇ {t('bench.filters.exportCsv')}
         </button>
@@ -701,41 +932,60 @@ export default function AgentsBenchPage() {
           )}
         </div>
 
-        {/* Coluna direita: lente + gráfico */}
+        {/* Coluna direita: toggle de view + conteúdo */}
         <div className="flex-1 overflow-y-auto p-4 space-y-4">
 
-          {/* Seletor de lente */}
-          <div className="bg-white rounded-lg border border-border p-3">
-            <div className="flex items-center gap-2 flex-wrap">
-              <span className="text-xs text-muted mr-1">{t('bench.lens.label')}</span>
-              {LENSES.map(l => (
-                <button key={l.id} onClick={() => setLens(l.id)}
-                  className={`px-3 py-1.5 text-xs font-medium rounded-lg border transition-colors ${
-                    lens === l.id
-                      ? 'border-primary bg-primary text-white'
-                      : 'border-border text-muted hover:text-dark hover:border-border-strong'
-                  }`}>
-                  {t(`bench.lens.${l.id}`)}
-                </button>
-              ))}
-            </div>
-            <p className="text-2xs text-muted-light mt-2">{t(`bench.domain.${lensDef.domain}`)}</p>
+          {/* Toggle Lentes ↔ Cruzamento */}
+          <div className="inline-flex rounded-lg border border-border overflow-hidden bg-white">
+            {(['lenses', 'cross'] as const).map(v => (
+              <button key={v} onClick={() => setView(v)}
+                className={`px-4 py-1.5 text-xs font-medium transition-colors ${
+                  view === v ? 'bg-primary text-white' : 'text-muted hover:text-dark hover:bg-surface-muted'
+                }`}>
+                {t(`bench.view.${v}`)}
+              </button>
+            ))}
           </div>
 
-          {/* Gráfico de comparação */}
-          <div className="bg-white rounded-lg border border-border px-4 pt-3 pb-2">
-            <div className="flex items-center justify-between mb-2">
-              <p className="text-xs font-semibold text-muted uppercase tracking-wide">
-                {t(`bench.lens.${lens}`)}
-              </p>
-              {resp?.data.average && (
-                <span className="text-2xs text-muted-light">{t('bench.n', { n: resp.data.average.n })}</span>
-              )}
-            </div>
-            {chartLoading
-              ? <div className="h-52 flex items-center justify-center text-sm text-muted-light animate-pulse">{t('bench.chart.loading')}</div>
-              : <LensChart lens={lens} resp={resp} selected={selected} t={t} />}
-          </div>
+          {view === 'lenses' ? (
+            <>
+              {/* Seletor de lente */}
+              <div className="bg-white rounded-lg border border-border p-3">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="text-xs text-muted mr-1">{t('bench.lens.label')}</span>
+                  {LENSES.map(l => (
+                    <button key={l.id} onClick={() => setLens(l.id)}
+                      className={`px-3 py-1.5 text-xs font-medium rounded-lg border transition-colors ${
+                        lens === l.id
+                          ? 'border-primary bg-primary text-white'
+                          : 'border-border text-muted hover:text-dark hover:border-border-strong'
+                      }`}>
+                      {t(`bench.lens.${l.id}`)}
+                    </button>
+                  ))}
+                </div>
+                <p className="text-2xs text-muted-light mt-2">{t(`bench.domain.${lensDef.domain}`)}</p>
+              </div>
+
+              {/* Gráfico de comparação */}
+              <div className="bg-white rounded-lg border border-border px-4 pt-3 pb-2">
+                <div className="flex items-center justify-between mb-2">
+                  <p className="text-xs font-semibold text-muted uppercase tracking-wide">
+                    {t(`bench.lens.${lens}`)}
+                  </p>
+                  {resp?.data.average && (
+                    <span className="text-2xs text-muted-light">{t('bench.n', { n: resp.data.average.n })}</span>
+                  )}
+                </div>
+                {chartLoading
+                  ? <div className="h-52 flex items-center justify-center text-sm text-muted-light animate-pulse">{t('bench.chart.loading')}</div>
+                  : <LensChart lens={lens} resp={resp} selected={selected} t={t} />}
+              </div>
+            </>
+          ) : (
+            <CrossView resp={crossResp} loading={crossLoading} t={t}
+              onPick={r => setDetail({ key: r.agent_key, label: r.label, type: r.agent_type })} />
+          )}
 
         </div>
       </div>

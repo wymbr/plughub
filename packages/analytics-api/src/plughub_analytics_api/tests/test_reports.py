@@ -26,6 +26,7 @@ from ..reports_query import (
     query_agents_report,
     query_contact_insights_report,
     query_agents_compare,
+    query_agents_cross,
     query_evaluations_report,
     query_evaluations_summary,
     query_participation_report,
@@ -860,6 +861,59 @@ class TestQueryAgentsCompare:
         result = await query_agents_compare(client, DB, TENANT, lens="resolution")
         assert result["error"] == "data_unavailable"
         assert result["data"]["entities"] == []
+
+
+# ─── query_agents_cross — F6 cruzamentos ─────────────────────────────────────
+
+@pytest.mark.asyncio
+class TestQueryAgentsCross:
+    _SEG_COLS = ["agent_key", "agent_type", "label", "sessions", "resolved",
+                 "escalated", "nps_n", "nps_sum", "promoters", "detractors"]
+    _EVAL_COLS = ["agent_key", "n_evals", "avg_score"]
+
+    async def test_combines_segments_and_eval_per_agent(self):
+        client = _make_client(
+            _ch_result(self._SEG_COLS, [
+                ["A", "human", "a@x", 10, 7, 2, 4, 32.0, 2, 1],
+            ]),
+            _ch_result(self._EVAL_COLS, [
+                ["A", 3, 0.82],
+            ]),
+        )
+        result = await query_agents_cross(client, DB, TENANT)
+        assert "data" in result
+        row = result["data"][0]
+        assert row["agent_key"] == "A"
+        assert row["sessions"] == 10
+        assert row["resolution_rate"] == pytest.approx(0.7)
+        assert row["escalation_rate"] == pytest.approx(0.2)
+        assert row["quality_score"] == pytest.approx(0.82)
+        assert row["quality_n"] == 3
+        # NPS = (2-1)/4*100 = 25.0 ; avg = 32/4 = 8.0
+        assert row["nps"] == pytest.approx(25.0)
+        assert row["avg_nps"] == pytest.approx(8.0)
+        assert row["nps_n"] == 4
+
+    async def test_agent_without_eval_has_null_quality(self):
+        client = _make_client(
+            _ch_result(self._SEG_COLS, [
+                ["B", "native", "skill_x", 5, 5, 0, 0, 0.0, 0, 0],
+            ]),
+            _ch_result(self._EVAL_COLS, []),
+        )
+        result = await query_agents_cross(client, DB, TENANT)
+        row = result["data"][0]
+        assert row["quality_score"] is None
+        assert row["quality_n"] == 0
+        assert row["nps"] is None       # nps_n = 0
+        assert row["resolution_rate"] == pytest.approx(1.0)
+
+    async def test_error_returns_empty(self):
+        client = MagicMock()
+        client.query = MagicMock(side_effect=Exception("ch down"))
+        result = await query_agents_cross(client, DB, TENANT)
+        assert result["data"] == []
+        assert result.get("error") == "data_unavailable"
 
 
 # ── Arc 7c — pool-scoped visibility ───────────────────────────────────────────

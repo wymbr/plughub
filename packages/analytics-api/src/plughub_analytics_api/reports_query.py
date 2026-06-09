@@ -2260,6 +2260,139 @@ def _compare_quality_lens(
     return per_agent
 
 
+# ─── /reports/agents/cross — F6 cruzamentos (§8) ─────────────────────────────
+# As 3 vantagens lado a lado por agente: resolução (segments) × qualidade
+# (evaluation_results via atribuição) × NPS (segments.nps_score). Devolve as
+# métricas cruas por agente; o REALCE de divergência (perception gap, acurácia
+# de disposição, estrela) e o quadrante são presentation-layer na UI.
+
+async def query_agents_cross(
+    client:    Any,
+    database:  str,
+    tenant_id: str,
+    from_dt:   str | None = None,
+    to_dt:     str | None = None,
+    *,
+    pool_id:                str | None       = None,
+    accessible_pools:       list[str] | None = None,
+    supervised_agent_types: list[str] | None = None,
+) -> dict:
+    since = _ch_fmt(from_dt) if from_dt else _default_from()
+    until = _ch_fmt(to_dt, upper=True) if to_dt else _default_to()
+    try:
+        return await asyncio.to_thread(
+            _fetch_agents_cross, client, database, tenant_id, since, until,
+            pool_id, accessible_pools, supervised_agent_types,
+        )
+    except Exception as exc:
+        logger.warning("query_agents_cross failed tenant=%s: %s", tenant_id, exc)
+        return {"data": [], "meta": {"from_dt": since, "to_dt": until}, "error": "data_unavailable"}
+
+
+def _fetch_agents_cross(
+    client: Any, db: str, tenant_id: str, since: str, until: str,
+    pool_id: str | None,
+    accessible_pools: list[str] | None, supervised_agent_types: list[str] | None,
+) -> dict:
+    # ── Agregado de segments por agente (resolução, escalação, NPS) ──────────
+    seg_conditions = [
+        "tenant_id = {tenant_id:String}",
+        f"started_at >= '{since}'",
+        f"started_at <  '{until}'",
+        "role = 'primary'",
+        "agent_type != 'system'",
+    ]
+    params: dict = {"tenant_id": tenant_id}
+    if pool_id:
+        seg_conditions.append("pool_id = {pool_id:String}")
+        params["pool_id"] = pool_id
+    _apply_pool_scope(seg_conditions, accessible_pools)
+    _apply_agent_scope(seg_conditions, supervised_agent_types)
+
+    seg_rows = _rows_to_dicts(client.query(f"""
+        SELECT
+            ak                                  AS agent_key,
+            any(at)                             AS agent_type,
+            any(lbl)                            AS label,
+            count()                             AS sessions,
+            countIf(outc = 'resolved')          AS resolved,
+            countIf(outc IN {_ESCALATE_FAMILY_SQL}) AS escalated,
+            countIf(nps IS NOT NULL)            AS nps_n,
+            sumIf(nps, nps IS NOT NULL)         AS nps_sum,
+            countIf(nps >= 9)                   AS promoters,
+            countIf(nps <= 6)                   AS detractors
+        FROM (
+            SELECT
+                if(agent_type = 'human',
+                   if(user_id != '', user_id, agent_type_id),
+                   if(flow_id != '', flow_id, agent_type_id))  AS ak,
+                agent_type                                      AS at,
+                if(agent_type = 'human',
+                   if(user_login != '', user_login, user_id),
+                   if(flow_id != '', flow_id, agent_type_id))   AS lbl,
+                outcome                                         AS outc,
+                nps_score                                       AS nps
+            FROM {db}.segments FINAL
+            WHERE {" AND ".join(seg_conditions)}
+        )
+        GROUP BY ak
+    """, parameters=params))
+
+    # ── Agregado de qualidade por agente (via atribuição, por session_at) ────
+    attr_sql = _session_agent_attribution_sql(db)
+    eval_outer = ["1 = 1", f"attr.session_started_at >= '{since}'", f"attr.session_started_at < '{until}'"]
+    if pool_id:
+        eval_outer.append("attr.pool_id = {pool_id:String}")
+    if accessible_pools is not None:
+        scope: list[str] = []
+        if _apply_pool_scope(scope, accessible_pools):
+            eval_outer += [s.replace("pool_id", "attr.pool_id") for s in scope]
+        # lista vazia (sem pools acessíveis) → eval_agg vazio; o LEFT JOIN no Python ignora
+    eval_rows = _rows_to_dicts(client.query(f"""
+        SELECT
+            attr.agent_key          AS agent_key,
+            count()                 AS n_evals,
+            avg(er.overall_score)   AS avg_score
+        FROM ( SELECT * FROM {db}.evaluation_results FINAL ) AS er
+        JOIN ({attr_sql}) AS attr ON er.session_id = attr.session_id
+        WHERE {" AND ".join(eval_outer)}
+        GROUP BY attr.agent_key
+    """, parameters=params))
+
+    eval_by_key = {
+        r["agent_key"]: r for r in eval_rows if r.get("agent_key")
+    }
+
+    out: list[dict] = []
+    for r in seg_rows:
+        ak = r["agent_key"]
+        sessions = int(r["sessions"] or 0)
+        resolved = int(r["resolved"] or 0)
+        escalated = int(r["escalated"] or 0)
+        nps_n = int(r["nps_n"] or 0)
+        nps_sum = float(r["nps_sum"] or 0)
+        prom = int(r["promoters"] or 0)
+        det = int(r["detractors"] or 0)
+        ev = eval_by_key.get(ak) or {}
+        n_evals = int(ev.get("n_evals") or 0)
+        avg_score = float(ev["avg_score"]) if ev.get("avg_score") is not None else None
+        out.append({
+            "agent_key":       ak,
+            "agent_type":      r["agent_type"],
+            "label":           r["label"],
+            "sessions":        sessions,
+            "resolution_rate": round(resolved / sessions, 4) if sessions else None,
+            "escalation_rate": round(escalated / sessions, 4) if sessions else None,
+            "quality_score":   round(avg_score, 4) if avg_score is not None else None,
+            "quality_n":       n_evals,
+            "nps":             round((prom - det) / nps_n * 100, 1) if nps_n else None,
+            "avg_nps":         round(nps_sum / nps_n, 2) if nps_n else None,
+            "nps_n":           nps_n,
+        })
+    out.sort(key=lambda x: (x["label"] or "").lower())
+    return {"data": out, "meta": {"from_dt": since, "to_dt": until, "agents": len(out)}}
+
+
 # ─── /reports/agent-performance/daily (Arc 5 MV — v_agent_performance) ──────
 
 async def query_agent_performance_daily(

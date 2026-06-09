@@ -43,6 +43,7 @@ from .reports_query import (
     query_campaigns_report,
     query_contact_insights_report,
     query_agents_compare,
+    query_agents_cross,
     query_evaluations_report,
     query_evaluations_summary,
     query_participation_report,
@@ -669,6 +670,35 @@ async def get_agents_compare(
     )
     status = 400 if data.get("error") in ("invalid_lens", "lens_not_available") else 200
     return JSONResponse(content=data, status_code=status)
+
+
+# ─── GET /reports/agents/cross — F6 cruzamentos (§8) ─────────────────────────
+
+@router.get("/agents/cross")
+async def get_agents_cross(
+    request:        Request,
+    tenant_id:      str            = Query(...),
+    from_dt:        Optional[str]  = Query(None),
+    to_dt:          Optional[str]  = Query(None),
+    pool_id:        Optional[str]  = Query(None),
+    pool_principal: PoolPrincipal  = Depends(optional_pool_principal),
+) -> Response:
+    """
+    Cruzamento das 3 vantagens por agente (§8): resolução × qualidade × NPS +
+    sessões. Uma linha por agent_key. O realce de divergência (perception gap,
+    acurácia de disposição, estrela) e o quadrante são da camada de apresentação.
+    """
+    data = await query_agents_cross(
+        client     = request.app.state.store.new_client(),
+        database   = request.app.state.store._database,
+        tenant_id  = tenant_id,
+        from_dt    = from_dt,
+        to_dt      = to_dt,
+        pool_id    = pool_id,
+        accessible_pools       = pool_principal.accessible_pools,
+        supervised_agent_types = pool_principal.supervised_agent_types,
+    )
+    return JSONResponse(content=data)
 
 
 # ─── GET /reports/timeseries/volume ──────────────────────────────────────────
