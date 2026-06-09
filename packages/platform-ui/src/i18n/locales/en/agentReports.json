@@ -138,7 +138,9 @@
       "sessions_aht": "Sessions / AHT",
       "availability": "Availability / Occupancy",
       "pause_reason": "Pause reason",
-      "quality": "Quality score"
+      "quality": "Quality score",
+      "nps": "NPS",
+      "wrapup": "Wrap-up disposition"
     },
     "domain": {
       "universal": "Compares human and AI agents.",
@@ -162,7 +164,8 @@
       "loading": "Loading…",
       "noData": "No data for this lens in the period.",
       "pendingViz": "This lens's chart arrives in the next step.",
-      "selectForPause": "Select one or more agents in the list to compare pause reasons."
+      "selectForPause": "Select one or more agents in the list to compare pause reasons.",
+      "selectForWrapup": "Select one or more agents in the list to compare wrap-up dispositions."
     },
     "metric": {
       "resolution": "Resolution rate",
@@ -171,7 +174,9 @@
       "aht":        "Average handle time",
       "quality":    "Quality score",
       "occupancy":  "Occupancy",
-      "pause":      "Pause"
+      "pause":      "Pause",
+      "npsIndex":   "NPS index (−100 to 100)",
+      "npsAvg":     "Average score (0–10)"
     }
   },
   "breadcrumbs": {

@@ -732,5 +732,44 @@ da visão final (avaliador via calendário; ver TODO).
 
 ---
 
+### Mudança 7 — atribuição per-segmento de wrap-up + NPS (F5 bancada, 2026-06-09)
+
+**Contexto:** a F1.4 atribuía a disposição do wrap-up ao "último segmento primário humano"
+(`primary_human_segment`, chave única por sessão) e lia a classificação do ContextStore
+(`scope: session`). Isso é simplificação de demo: um contato pode passar por **vários humanos**
+(handoff sequencial), cada pool com seu `on_human_end` — e dois wrap-ups colidiriam.
+
+**Modelo per-segmento (F5):** cada `on_human_end` serve um **segmento humano específico**
+(o do pool que disparou). A disposição (wrap-up) e o NPS são atribuídos a **esse** segmento
+(`session_id`+`segment_id`), suportando N humanos/pools por contato.
+
+**Mecanismo:**
+1. No `participant_left` do humano: grava `session:{id}:human_seg:{pool}` (registro do segmento)
+   e semeia o acumulador `session:{id}:seg_signal:{segment_id}` com o registro + `outcome`
+   placeholder (do `agent_done`).
+2. `fire_pool_hooks` (recebe o `pool_id` do humano): lê `human_seg:{pool}`, deriva `close_reason`
+   da iniciativa (`session.close_origin`), e **carimba o `segment_id` no `hook_conf`** (5º campo:
+   `{hook}:{target}:{side}:{origin}:{segment_id}`).
+3. Na conclusão de cada hook (`process_routed`): a disposição/NPS vêm do
+   **`agent_result.pipeline_state.results`** do próprio agente (`wrapup_classificacao`/`wrapup_resumo`
+   no side=agent; `nps_resposta` no side=customer) — **não do ContextStore**. São acumulados no
+   `seg_signal:{segment_id}` e o segmento é re-publicado com o estado COMPLETO (acumulador evita que
+   wrap-up e NPS se anulem no `ReplacingMergeTree(ingested_at)`).
+
+**Por que acumulador:** wrap-up e NPS completam em conferências/momentos distintos; um re-publish
+parcial sobrescreveria o anterior. O hash `seg_signal` mantém todos os campos conhecidos; cada
+re-publish carrega o estado completo → a última versão (maior `ingested_at`) tem tudo.
+
+**Removido:** `_republish_human_primary_segment`/`_finalize_human_outcome_from_wrapup`/
+`primary_human_segment`/`primary_outcome_republished` (F1.4). Tags `session.wrapup.*` voltaram a
+`scope: segment` (não são mais lidas pelo bridge; persistem para o detalhe sob demanda).
+
+**Keys novas:** `session:{id}:human_seg:{pool}` (TTL 7d) · `session:{id}:seg_signal:{segment_id}`
+(hash, TTL 7d). **Schema:** `analytics.segments.nps_score Nullable(Int32)`.
+
+**Limitação:** o demo só tem um pool humano → multi-humano fica correto por construção, sem E2E.
+
+---
+
 *Este documento é a referência canônica para o mecanismo de conferência do PlugHub.*
 *Qualquer mudança no funcionamento deve ser registrada neste arquivo antes de ir para CHANGELOG.md.*

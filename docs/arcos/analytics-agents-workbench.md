@@ -154,6 +154,26 @@ novo — convenção de categoria + normalização.
   **campo de topo padronizado** (resolvido/não-resolvido) entre pools. O `pool_id` no sinal informa
   quando agrupar dentro do pool vs cross-pool.
 
+### Grão do sinal (decisão 2026-06-09) — segmento × contato × jornada
+
+NPS/wrap-up têm **grão**, e o grão decide onde o sinal mora e como a bancada o trata:
+
+- **Grão segmento** (F5 implementado): NPS/wrap-up configurados no `on_human_end` de um pool →
+  atribuídos ao **segmento humano específico** que encerrou (chave `session_id`+`segment_id`,
+  carimbada no `hook_conf` do disparo à conclusão). Moram em `segments` (`nps_score`, `outcome`,
+  `issue_status`). Comparáveis **por agente** na bancada. Suportam N humanos por contato (handoff
+  sequencial: cada participação tem seu sinal).
+- **Grão contato**: NPS/CSAT perguntado **uma vez no fim do contato** (hook de fechamento de contato,
+  não `on_human_end` de pool) — sobre a experiência geral, **não atribuível a um agente**. Não cabe
+  em `segments`. Vai para `session_signal` (`grain=contact`); na bancada é métrica de **contexto do
+  contato**, não linha de comparação por agente.
+- **Grão jornada**: pesquisa **diferida** (collect/workflow dias depois), religada por
+  `journey_id`/`origin_session_id` — `captured_at ≠ session_at`. `session_signal` (`grain=journey`).
+
+A tabela `session_signal` (§7) é justificada pelos grãos **contato/jornada** (futuro); o grão
+**segmento** dispensa-a (mora no próprio `segments`). Campo `grain` (segment|contact|journey) +
+`journey_id` na `session_signal` quando ela for criada.
+
 ### No ato × diferida (antecipar agora)
 - Hoje NPS é síncrono (`session_at ≈ captured_at`).
 - Pesquisa pós-atendimento = um `collect`/workflow que sai por outro canal (e-mail/WhatsApp) dias
@@ -353,7 +373,7 @@ de 3-5": espinha → qualidade → endpoint → UI → sinais → cruzamentos.
 | **F2 — Atribuição da qualidade** ✅ (2026-06-07) | join em query-time (`_session_agent_attribution_sql`: último primary não-sintético, argMax) — retroativo, sem mudança de ingest; `/reports/evaluations` com agente avaliado + `summary group_by=agent_key\|pool_id`. De brinde: **pipeline de avaliação Arc 3/6 religado** (7 elos dormentes — ver CHANGELOG) + `agent_login` no avaliador (test-grade) | ✅ validado E2E: 5 avaliações atribuídas (agent_key/user_login/pool). Limitações test-grade no CHANGELOG (ReplayContext sem session_meta; sem associação campanha/form) |
 | **F3 — Endpoint `/reports/agents/compare`** ✅ (2026-06-07) | `query_agents_compare`: lentes v1 resolution (folding escalate-family), sessions_aht, availability/pause_reason (humano, denominadores §5), quality (por `session_started_at`, N amostral); média aritmética por bucket c/ gap ≠ zero; pendentes 400+lista (nps/wrapup→F5, quality_criteria); ABAC + filtros sintéticos | ✅ validado com dado real (n=8 em escopo; série reflete efeito F1; quality n=5). Ver CHANGELOG |
 | **F4 — UI da bancada** ✅ (2026-06-09) | `AgentsBenchPage` em `/analise/agents` (legado→`/analise/agents-legacy`): árvore pools→agentes (chevron/checkbox/detalhe), seletor de 5 lentes c/ domínio, gráfico por lente + média de referência, detalhe type-aware (donut humano), combo de pool, persistência na URL, export CSV, cor estável, i18n en+pt-BR. **Subfases F4.1–F4.5 — ver CHANGELOG 2026-06-09.** Pendentes na UI: nps/wrapup (F5), quality_criteria; refinamento: pool-average como série agregada (pseudo-entidade `pool:`) | ✅ validado E2E (série reflete F1; n=8; quality n=5) |
-| **F5 — Camada `session_signal`** | tabela + consumer normalizando `agent_event`; hooks NPS/wrap-up emitem `agent_event` (convenção de categoria); normalização NPS; bucketização por `session_at`; lentes NPS/wrap-up | voz do cliente (NPS) na bancada + cobertura/N |
+| **F5 — NPS + wrap-up (grão segmento)** ✅ (2026-06-09) | **decisão**: derivar de `segments` (não `session_signal`) — grão segmento. `segments.nps_score`; refator per-segmento no bridge (NPS/wrap-up atribuídos ao segmento do pool que disparou o hook, via `hook_conf` 5º campo + acumulador `seg_signal`; corrige single-segment da F1.4). Lentes nps/wrapup no compare + UI (7 lentes). `session_signal` (grãos contato/jornada) e session_at×captured_at (surveys diferidas) → futuro | ✅ validado E2E single-humano (nps=9 + escalado no mesmo segmento); multi-humano correto por construção. Ver CHANGELOG + conference-mechanics §Mudança 7 |
 | **F6 — Cruzamentos (§8)** | concordância das vantagens; quadrante (volume/resolução × qualidade); calibração do avaliador (Arc 13, IA×NPS) | visões de divergência/payoff de gestão |
 | **F7 — (opcional/futuro) Motivo de escalação normalizado** | taxonomia pool-scoped configurável (espelha `pause_reasons`/Arc 8) + menu no `agente_wrapup_v1` p/ caso `escalado` + código normalizado no segmento (`handoff_reason` livre vira nota) | lente "motivo de escalação" empilhada (à la pause-motivo) |
 

@@ -330,6 +330,7 @@ CREATE TABLE IF NOT EXISTS {db}.segments
     close_reason       Nullable(String),
     handoff_reason     Nullable(String),
     issue_status       Nullable(String),
+    nps_score          Nullable(Int32),
     conference_id      Nullable(String),
     ingested_at        DateTime DEFAULT now(),
     date               Date
@@ -356,6 +357,13 @@ _DDL_SEGMENTS_MIGRATE_USER = (
 # ("quem atendeu" legível, em vez do UUID user_id ou do placeholder agent_type_id).
 _DDL_SEGMENTS_MIGRATE_USER_LOGIN = (
     "ALTER TABLE {db}.segments ADD COLUMN IF NOT EXISTS user_login String DEFAULT ''"
+)
+
+# F5 (bancada — grão segmento): NPS do atendimento daquele segmento humano.
+# Escrito pelo bridge na conclusão do hook NPS (on_human_end side=customer),
+# atribuído ao segmento humano que o hook serviu. Nullable: nem todo segmento tem NPS.
+_DDL_SEGMENTS_MIGRATE_NPS = (
+    "ALTER TABLE {db}.segments ADD COLUMN IF NOT EXISTS nps_score Nullable(Int32)"
 )
 
 # ── Arc 5: session_timeline — time-series events tied to segments.
@@ -760,6 +768,7 @@ _MIGRATIONS = [
     _DDL_SEGMENTS_MIGRATE_FLOW,           # Relatórios: flow_id (skill deployado) por segmento
     _DDL_SEGMENTS_MIGRATE_USER,           # C1: user_id (login) — identidade do agente humano
     _DDL_SEGMENTS_MIGRATE_USER_LOGIN,     # C1: user_login (email) — exibição legível
+    _DDL_SEGMENTS_MIGRATE_NPS,            # F5: nps_score por segmento (grão segmento)
 ]
 
 
@@ -1023,7 +1032,7 @@ class AnalyticsStore:
         "pool_id", "agent_type_id", "flow_id", "user_id", "user_login", "instance_id", "role", "agent_type",
         "parent_segment_id", "sequence_index",
         "started_at", "ended_at", "duration_ms",
-        "outcome", "close_reason", "handoff_reason", "issue_status",
+        "outcome", "close_reason", "handoff_reason", "issue_status", "nps_score",
         "conference_id", "date",
     ]
 
@@ -1537,6 +1546,7 @@ def _segment_row(d: dict) -> list:
         d.get("close_reason") or None,
         d.get("handoff_reason") or None,
         d.get("issue_status") or None,
+        d.get("nps_score") if d.get("nps_score") is not None else None,
         d.get("conference_id") or None,
         _today_utc(ts),
     ]

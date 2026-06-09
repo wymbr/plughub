@@ -757,9 +757,40 @@ class TestQueryAgentsCompare:
 
     async def test_pending_lens_flagged(self):
         client = MagicMock()
-        result = await query_agents_compare(client, DB, TENANT, lens="nps")
+        result = await query_agents_compare(client, DB, TENANT, lens="quality_criteria")
         assert result["error"] == "lens_not_available"
-        assert "nps" in result["pending_lenses"]
+        assert "quality_criteria" in result["pending_lenses"]
+
+    async def test_nps_lens_reads_segments(self):
+        cols = ["agent_key", "agent_type", "label", "bucket",
+                "n", "avg_nps", "promoters", "detractors"]
+        client = _make_client(_ch_result(cols, [
+            ["A", "human", "a@x", "2026-06-07", 4, 8.0, 2, 1],
+        ]))
+        result = await query_agents_compare(client, DB, TENANT, lens="nps", entities=["A"])
+        assert result["meta"]["lens"] == "nps"
+        sql = client.query.call_args_list[-1][0][0]
+        assert "nps_score IS NOT NULL" in sql
+        ent = result["data"]["entities"][0]
+        assert ent["summary"]["n_responses"] == 4
+        assert ent["summary"]["avg_nps"] == pytest.approx(8.0)
+        # NPS = (promoters - detractors)/n * 100 = (2-1)/4*100 = 25.0
+        assert ent["summary"]["nps"] == pytest.approx(25.0)
+
+    async def test_wrapup_lens_distribution_in_summary(self):
+        cols = ["agent_key", "agent_type", "label", "outcome", "issue_status", "cnt"]
+        client = _make_client(_ch_result(cols, [
+            ["A", "human", "a@x", "resolved",  "resolvido", 5],
+            ["A", "human", "a@x", "escalated", "escalado",  2],
+        ]))
+        result = await query_agents_compare(client, DB, TENANT, lens="wrapup", entities=["A"])
+        assert result["meta"]["lens"] == "wrapup"
+        sql = client.query.call_args_list[-1][0][0]
+        assert "issue_status != ''" in sql
+        ent = result["data"]["entities"][0]
+        assert ent["summary"]["total"] == 7
+        disps = {d["issue_status"]: d["count"] for d in ent["summary"]["dispositions"]}
+        assert disps == {"resolvido": 5, "escalado": 2}
 
     async def test_resolution_average_is_arithmetic_with_gaps(self):
         # Dia 1: A=2/2 (1.0), B=1/2 (0.5) → média 0.75 (n=2)

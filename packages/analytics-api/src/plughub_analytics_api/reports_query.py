@@ -1670,11 +1670,11 @@ def _fetch_evaluations_summary(
 # dado no bucket = gap, fora do denominador — nunca zero). Filtros sintéticos
 # (agent_type != 'system', role='primary') herdados da atribuição.
 
-_COMPARE_LENSES = {"resolution", "sessions_aht", "availability", "pause_reason", "quality"}
+_COMPARE_LENSES = {"resolution", "sessions_aht", "availability", "pause_reason", "quality", "nps", "wrapup"}
 # Lentes do spec ainda sem fonte no ClickHouse:
-#   nps / wrapup     → F5 (camada session_signal)
 #   quality_criteria → critérios por item não chegam ao CH (só overall_score)
-_COMPARE_LENSES_PENDING = {"nps", "wrapup", "quality_criteria"}
+# nps/wrapup (F5): lêem de segments (nps_score / outcome+issue_status) — grão segmento.
+_COMPARE_LENSES_PENDING = {"quality_criteria"}
 
 # Folding da família escalate (§13.2): o alvo humano-vs-IA é recuperável pela
 # topologia do segmento seguinte; a bancada compara o CONCEITO escalação.
@@ -1757,6 +1757,18 @@ def _fetch_agents_compare(
             ["logged_ms", "available_ms", "paused_ms", "busy_ms",
              "occupancy_pct", "pause_pct"] if lens == "availability" else []
         )
+    elif lens == "nps":
+        per_agent = _compare_nps_lens(
+            client, db, tenant_id, since, until, pool_id,
+            accessible_pools, supervised_agent_types,
+        )
+        metric_keys = ["avg_nps", "nps"]
+    elif lens == "wrapup":
+        per_agent = _compare_wrapup_lens(
+            client, db, tenant_id, since, until, pool_id,
+            accessible_pools, supervised_agent_types,
+        )
+        metric_keys = []  # distribuição por disposição vive no summary (como pause_reason)
     else:  # quality
         per_agent = _compare_quality_lens(
             client, db, tenant_id, since, until, pool_id,
@@ -1894,6 +1906,153 @@ def _compare_segments_lens(
             "escalation_rate": round(t["escalated"] / s, 4) if s else None,
             "aht_ms":          round(t["dur_sum"] / s, 1) if s else None,
         }
+    return per_agent
+
+
+def _compare_nps_lens(
+    client: Any, db: str, tenant_id: str, since: str, until: str,
+    pool_id: str | None,
+    accessible_pools: list[str] | None, supervised_agent_types: list[str] | None,
+) -> dict:
+    """
+    nps — fonte: segments.nps_score (F5, grão segmento). Amostral: só segmentos
+    com NPS respondido. Por bucket: avg_nps + n + NPS = (%promotores − %detratores)
+    (promotor ≥9, detrator ≤6, escala 0–10). Bucketiza por started_at do segmento.
+    """
+    conditions = [
+        "tenant_id = {tenant_id:String}",
+        f"started_at >= '{since}'",
+        f"started_at <  '{until}'",
+        "role = 'primary'",
+        "agent_type != 'system'",
+        "nps_score IS NOT NULL",
+    ]
+    params: dict = {"tenant_id": tenant_id}
+    if pool_id:
+        conditions.append("pool_id = {pool_id:String}")
+        params["pool_id"] = pool_id
+    _apply_pool_scope(conditions, accessible_pools)
+    _apply_agent_scope(conditions, supervised_agent_types)
+
+    rows = _rows_to_dicts(client.query(f"""
+        SELECT
+            ak                          AS agent_key,
+            any(at)                     AS agent_type,
+            any(lbl)                    AS label,
+            toString(bucket)            AS bucket,
+            count()                     AS n,
+            avg(nps)                    AS avg_nps,
+            countIf(nps >= 9)           AS promoters,
+            countIf(nps <= 6)           AS detractors
+        FROM (
+            SELECT
+                if(agent_type = 'human',
+                   if(user_id != '', user_id, agent_type_id),
+                   if(flow_id != '', flow_id, agent_type_id))  AS ak,
+                agent_type                                      AS at,
+                if(agent_type = 'human',
+                   if(user_login != '', user_login, user_id),
+                   if(flow_id != '', flow_id, agent_type_id))   AS lbl,
+                toDate(started_at)                              AS bucket,
+                nps_score                                       AS nps
+            FROM {db}.segments FINAL
+            WHERE {" AND ".join(conditions)}
+        )
+        GROUP BY ak, bucket
+        ORDER BY ak, bucket
+    """, parameters=params))
+
+    per_agent: dict = {}
+    for r in rows:
+        a = per_agent.setdefault(r["agent_key"], {
+            "agent_type": r["agent_type"], "label": r["label"],
+            "buckets": {}, "_n": 0, "_sum": 0.0, "_prom": 0, "_det": 0,
+        })
+        n = int(r["n"] or 0)
+        avg_nps = float(r["avg_nps"]) if r["avg_nps"] is not None else None
+        prom = int(r["promoters"] or 0)
+        det = int(r["detractors"] or 0)
+        a["buckets"][r["bucket"]] = {
+            "date": r["bucket"], "n": n,
+            "avg_nps": round(avg_nps, 2) if avg_nps is not None else None,
+            "nps": round((prom - det) / n * 100, 1) if n else None,
+        }
+        a["_n"] += n; a["_sum"] += (avg_nps or 0) * n; a["_prom"] += prom; a["_det"] += det
+    for a in per_agent.values():
+        n = a.pop("_n"); s = a.pop("_sum"); prom = a.pop("_prom"); det = a.pop("_det")
+        a["summary"] = {
+            "n_responses": n,
+            "avg_nps":     round(s / n, 2) if n else None,
+            "nps":         round((prom - det) / n * 100, 1) if n else None,
+        }
+    return per_agent
+
+
+def _compare_wrapup_lens(
+    client: Any, db: str, tenant_id: str, since: str, until: str,
+    pool_id: str | None,
+    accessible_pools: list[str] | None, supervised_agent_types: list[str] | None,
+) -> dict:
+    """
+    wrapup — fonte: segments (outcome normalizado + issue_status cru, F1/F5).
+    Distribuição de disposições por agente (barras empilhadas, como pause_reason
+    — vive em summary.dispositions[]). Só segmentos com issue_status preenchido.
+    """
+    conditions = [
+        "tenant_id = {tenant_id:String}",
+        f"started_at >= '{since}'",
+        f"started_at <  '{until}'",
+        "role = 'primary'",
+        "agent_type != 'system'",
+        "issue_status != ''",
+        "issue_status IS NOT NULL",
+    ]
+    params: dict = {"tenant_id": tenant_id}
+    if pool_id:
+        conditions.append("pool_id = {pool_id:String}")
+        params["pool_id"] = pool_id
+    _apply_pool_scope(conditions, accessible_pools)
+    _apply_agent_scope(conditions, supervised_agent_types)
+
+    rows = _rows_to_dicts(client.query(f"""
+        SELECT
+            ak                          AS agent_key,
+            any(at)                     AS agent_type,
+            any(lbl)                    AS label,
+            outc                        AS outcome,
+            iss                         AS issue_status,
+            count()                     AS cnt
+        FROM (
+            SELECT
+                if(agent_type = 'human',
+                   if(user_id != '', user_id, agent_type_id),
+                   if(flow_id != '', flow_id, agent_type_id))  AS ak,
+                agent_type                                      AS at,
+                if(agent_type = 'human',
+                   if(user_login != '', user_login, user_id),
+                   if(flow_id != '', flow_id, agent_type_id))   AS lbl,
+                coalesce(outcome, '')                           AS outc,
+                issue_status                                    AS iss
+            FROM {db}.segments FINAL
+            WHERE {" AND ".join(conditions)}
+        )
+        GROUP BY ak, outc, iss
+        ORDER BY ak, cnt DESC
+    """, parameters=params))
+
+    per_agent: dict = {}
+    for r in rows:
+        a = per_agent.setdefault(r["agent_key"], {
+            "agent_type": r["agent_type"], "label": r["label"],
+            "buckets": {}, "summary": {"total": 0, "dispositions": []},
+        })
+        cnt = int(r["cnt"] or 0)
+        a["summary"]["dispositions"].append({
+            "outcome":      r["outcome"] or "",
+            "issue_status": r["issue_status"] or "",
+            "count":        cnt,
+        })
+        a["summary"]["total"] += cnt
     return per_agent
 
 

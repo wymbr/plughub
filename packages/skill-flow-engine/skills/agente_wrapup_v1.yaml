@@ -61,9 +61,10 @@ steps:
           tag: session.wrapup.resumo
           confidence: 1.0
           merge: overwrite
-          # F1.3 (bancada): session scope para o bridge ler no fechamento
-          # (origem do handoff_reason quando outcome != resolved).
-          scope: session
+          # F5: scope segment (isola entre múltiplos wrap-ups num contato). O bridge
+          # NÃO lê mais esta tag — a fonte é o pipeline_state.results do hook na
+          # conclusão. A tag persiste para o detalhe sob demanda (§9).
+          scope: segment
     on_success: solicitar_classificacao
     on_failure: solicitar_classificacao
 
@@ -102,11 +103,10 @@ steps:
           tag: session.wrapup.classificacao
           confidence: 1.0
           merge: overwrite
-          # F1.3 (bancada): session scope para o bridge ler no fechamento.
-          # Valor CRU (resolvido/pendente/escalado/cancelado) — o bridge (F1.4)
-          # normaliza p/ outcome (resolved/suspended/escalated/abandoned) e grava
-          # o cru em issue_status. Ids do menu permanecem na taxonomia do pool.
-          scope: session
+          # F5: scope segment. O bridge lê a disposição do pipeline_state.results
+          # do hook na conclusão (não desta tag), normaliza p/ outcome e grava o
+          # cru em issue_status — atribuído ao SEGMENTO humano que o hook serviu.
+          scope: segment
     on_success: solicitar_proximos_passos
     on_failure: solicitar_proximos_passos
 

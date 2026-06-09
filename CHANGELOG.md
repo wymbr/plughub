@@ -2,6 +2,43 @@
 
 ---
 
+## Bancada de agentes F5 — NPS + wrap-up por segmento (grão segmento) (2026-06-09)
+
+Liga as lentes **NPS** e **Wrap-up disposition** da bancada, atribuindo os sinais ao **segmento
+humano correto** (o do pool cujo `on_human_end` os disparou) — suportando N humanos/pools por
+contato (handoff sequencial). Decisão de grão (§7 do spec): grão **segmento** mora em `segments`;
+grãos **contato/jornada** ficam para a `session_signal` futura.
+
+**Refator per-segmento (corrige simplificações de demo da F1.3/F1.4):**
+- `analytics.segments` ganha `nps_score Nullable(Int32)` (DDL + migração idempotente; parser +
+  `_SEGMENT_COLS`/`_segment_row`). `_publish_participant_event` aceita `nps_score`.
+- **bridge**: no `participant_left`, grava `session:{id}:human_seg:{pool}` (registro do segmento) e
+  semeia o acumulador `seg_signal:{segment_id}` com o outcome placeholder. `fire_pool_hooks` (recebe
+  o pool do humano) lê o registro, deriva `close_reason` da iniciativa e **carimba o `segment_id` no
+  `hook_conf`** (5º campo). Na conclusão de cada hook (`process_routed`), a disposição/NPS vêm do
+  **`agent_result.pipeline_state.results`** do próprio agente (`wrapup_classificacao`/`wrapup_resumo`;
+  `nps_resposta`) — não do ContextStore — e são **acumulados** no `seg_signal` e re-publicados no
+  segmento (acumulador evita que wrap-up e NPS se anulem no `ReplacingMergeTree`).
+- Removidos `_republish_human_primary_segment`/`_finalize_human_outcome_from_wrapup`/
+  `primary_human_segment` (F1.4, single-segment). Tags `session.wrapup.*` voltaram a `scope: segment`.
+  Doc: `conference-mechanics.md` § Mudança 7.
+
+**compare**: lentes `nps` (segments.nps_score → avg + índice NPS = %promotores−%detratores por
+agente/tempo, N visível) e `wrapup` (distribuição de `outcome`/`issue_status` por agente, em
+`summary.dispositions`) saem de `_COMPARE_LENSES_PENDING`. Testes em `test_reports.py`.
+
+**platform-ui**: 7 lentes (add NPS = índice −100..100 + nota média 0–10; Wrap-up disposition =
+barras empilhadas por disposição com cores semânticas). i18n en+pt-BR.
+
+**Validado E2E** (tenant_demo, single-humano): wrap-up "Escalado" + NPS 9 no MESMO segmento humano
+(`escalated·escalado·nps=9`); lente NPS índice 100 / nota 9.0; wrap-up resolvido 11 · escalado 2.
+**Multi-humano: correto por construção, sem E2E** (demo tem só um pool humano).
+
+→ **Bancada F1–F5 completas.** Resta F6 (cruzamentos §8) + refinamentos (pool-average agregado,
+session_signal contato/jornada, F7 motivo de escalação).
+
+---
+
 ## Bancada de agentes F4 — UI da bancada de comparação 360° (2026-06-09)
 
 Reescreve a aba Analytics/Agents como **bancada de comparação** (lista pools→agentes +

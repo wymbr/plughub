@@ -138,7 +138,9 @@
       "sessions_aht": "Sessões / TMA",
       "availability": "Disponibilidade / Ocupação",
       "pause_reason": "Motivo de pausa",
-      "quality": "Nota de qualidade"
+      "quality": "Nota de qualidade",
+      "nps": "NPS",
+      "wrapup": "Disposição do wrap-up"
     },
     "domain": {
       "universal": "Compara agentes humanos e IA.",
@@ -162,7 +164,8 @@
       "loading": "Carregando…",
       "noData": "Sem dados para esta lente no período.",
       "pendingViz": "O gráfico desta lente chega no próximo passo.",
-      "selectForPause": "Selecione um ou mais agentes na lista para comparar motivos de pausa."
+      "selectForPause": "Selecione um ou mais agentes na lista para comparar motivos de pausa.",
+      "selectForWrapup": "Selecione um ou mais agentes na lista para comparar disposições do wrap-up."
     },
     "metric": {
       "resolution": "Taxa de resolução",
@@ -171,7 +174,9 @@
       "aht":        "Tempo médio de atendimento",
       "quality":    "Nota de qualidade",
       "occupancy":  "Ocupação",
-      "pause":      "Pausa"
+      "pause":      "Pausa",
+      "npsIndex":   "Índice NPS (−100 a 100)",
+      "npsAvg":     "Nota média (0–10)"
     }
   },
   "breadcrumbs": {

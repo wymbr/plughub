@@ -148,8 +148,10 @@ Hoje o Analytics/Agents mistura agente×pool e não separa humano×IA.
   → arco da visão final) → **F3 endpoint `/reports/agents/compare` ✅ 2026-06-07** (5 lentes v1;
   média aritmética c/ gap; validado com dado real — ver CHANGELOG) → **F4 UI bancada ✅ 2026-06-09**
   (AgentsBenchPage; subfases F4.1–F4.5 no CHANGELOG; pendentes na UI: nps/wrapup→F5, quality_criteria;
-  refinamento: pool-average agregado via pseudo-entidade `pool:`) → **F5 `session_signal` (próxima)**
-  (NPS+wrap-up) → F6 cruzamentos; **F7 opcional/futura**: motivo de escalação normalizado (taxonomia
+  refinamento: pool-average agregado via pseudo-entidade `pool:`) → **F5 NPS+wrap-up (grão segmento)
+  ✅ 2026-06-09** (derivado de segments, NÃO session_signal; refator per-segmento no bridge — ver
+  CHANGELOG + conference-mechanics §Mudança 7; session_signal p/ grãos contato/jornada fica futuro)
+  → **F6 cruzamentos (próxima)**; **F7 opcional/futura**: motivo de escalação normalizado (taxonomia
   pool-scoped à la `pause_reasons` + lente). `close_reason` já é enum normalizado; `handoff_reason`
   fica texto livre (detalhe) até F7. Detalhe em §13 do spec. Débito pré-existente notado na F1:
   3 falhas em `resolve.test.ts` (BLPOP/mention mocks — não relacionadas).

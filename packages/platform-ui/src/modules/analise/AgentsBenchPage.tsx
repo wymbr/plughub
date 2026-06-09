@@ -27,7 +27,7 @@ import { DEFAULT_FILTERS } from '@/modules/contacts/types'
 // domain: 'universal' (humano + IA) | 'human' (IA desabilitada na lista).
 // primaryKey: métrica plotada no gráfico mínimo da F4.1 (F4.2 enriquece a viz).
 
-type LensId = 'resolution' | 'sessions_aht' | 'availability' | 'pause_reason' | 'quality'
+type LensId = 'resolution' | 'sessions_aht' | 'availability' | 'pause_reason' | 'quality' | 'nps' | 'wrapup'
 type Domain = 'universal' | 'human'
 
 interface LensDef { id: LensId; domain: Domain; primaryKey: string | null; pct: boolean }
@@ -35,9 +35,11 @@ interface LensDef { id: LensId; domain: Domain; primaryKey: string | null; pct: 
 const LENSES: LensDef[] = [
   { id: 'resolution',   domain: 'universal', primaryKey: 'resolution_rate', pct: true  },
   { id: 'sessions_aht', domain: 'universal', primaryKey: 'sessions',        pct: false },
+  { id: 'quality',      domain: 'universal', primaryKey: 'avg_score',       pct: false },
+  { id: 'nps',          domain: 'universal', primaryKey: 'nps',             pct: false },
+  { id: 'wrapup',       domain: 'universal', primaryKey: null,              pct: false },
   { id: 'availability', domain: 'human',     primaryKey: 'occupancy_pct',   pct: true  },
   { id: 'pause_reason', domain: 'human',     primaryKey: null,              pct: false },
-  { id: 'quality',      domain: 'universal', primaryKey: 'avg_score',       pct: false },
 ]
 
 // ── Tipos das respostas ─────────────────────────────────────────────────────
@@ -301,6 +303,62 @@ function StackedReasonBars({
   )
 }
 
+// Barras empilhadas por entidade, segmentadas por DISPOSIÇÃO do wrap-up.
+// Lê summary.dispositions[] (como StackedReasonBars lê summary.reasons).
+function StackedDispositionBars({
+  resp, selected, labelMap, t,
+}: {
+  resp: CompareResp; selected: string[]; labelMap: Record<string, string>
+  t: (k: string, o?: Record<string, unknown>) => string
+}) {
+  const ents = selected
+    .map(k => resp.data.entities.find(e => e.agent_key === k))
+    .filter((e): e is CompareEntity => !!e)
+  if (ents.length === 0) return (
+    <div className="h-52 flex items-center justify-center text-sm text-muted-light text-center px-6">
+      {t('bench.chart.selectForWrapup')}
+    </div>
+  )
+  // Disposições normalizadas presentes (chave = outcome; rótulo = issue_status cru).
+  const dispKeys = new Map<string, string>()
+  for (const e of ents) {
+    for (const d of ((e.summary.dispositions as unknown as { outcome: string; issue_status: string }[]) ?? [])) {
+      dispKeys.set(d.outcome || d.issue_status, d.issue_status || d.outcome)
+    }
+  }
+  const keys = [...dispKeys.keys()]
+  const rows = ents.map(e => {
+    const row: Record<string, number | string> = { name: labelMap[e.agent_key] ?? e.agent_key }
+    const ds = (e.summary.dispositions as unknown as { outcome: string; issue_status: string; count: number }[]) ?? []
+    for (const k of keys) {
+      const found = ds.find(x => (x.outcome || x.issue_status) === k)
+      row[k] = found ? found.count : 0
+    }
+    return row
+  })
+  // Cores semânticas por outcome normalizado (verde resolved, laranja escalated, …).
+  const OUTCOME_COLOR: Record<string, string> = {
+    resolved: '#059669', escalated: '#D97706', suspended: '#7C3AED',
+    abandoned: '#DC2626', failed: '#6B7280', transferred: '#0891B2',
+  }
+  const palette = ['#1B4F8A', '#D97706', '#059669', '#7C3AED', '#DC2626', '#0891B2']
+  return (
+    <ResponsiveContainer width="100%" height={240}>
+      <BarChart data={rows} margin={{ top: 4, right: 16, left: 0, bottom: 0 }}>
+        <CartesianGrid strokeDasharray="3 3" stroke="#E5E7EB" />
+        <XAxis dataKey="name" tick={{ fontSize: 11 }} />
+        <YAxis tick={{ fontSize: 11 }} allowDecimals={false} />
+        <Tooltip />
+        <Legend iconSize={10} wrapperStyle={{ fontSize: 12 }} />
+        {keys.map((k, i) => (
+          <Bar key={k} dataKey={k} name={dispKeys.get(k)} stackId="disp"
+            fill={OUTCOME_COLOR[k] ?? palette[i % palette.length]} />
+        ))}
+      </BarChart>
+    </ResponsiveContainer>
+  )
+}
+
 function LensChart({
   lens, resp, selected, t,
 }: {
@@ -314,7 +372,7 @@ function LensChart({
   const hasData = (resp.data.average && resp.data.average.series.length > 0) ||
     resp.data.entities.some(e => e.series.length > 0 ||
       ((e.summary.reasons as unknown as unknown[] | undefined)?.length ?? 0) > 0)
-  if (!hasData && lens !== 'pause_reason') return (
+  if (!hasData && lens !== 'pause_reason' && lens !== 'wrapup') return (
     <div className="h-52 flex items-center justify-center text-sm text-muted-light">{t('bench.chart.noData')}</div>
   )
 
@@ -337,6 +395,17 @@ function LensChart({
   if (lens === 'quality') return (
     <MetricLine resp={resp} metricKey="avg_score" fmt="score" selected={selected}
       title={t('bench.metric.quality')} labelMap={labelMap} />
+  )
+  if (lens === 'nps') return (
+    <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+      <MetricLine resp={resp} metricKey="nps" fmt="count" selected={selected}
+        title={t('bench.metric.npsIndex')} labelMap={labelMap} />
+      <MetricLine resp={resp} metricKey="avg_nps" fmt="score" selected={selected}
+        title={t('bench.metric.npsAvg')} labelMap={labelMap} />
+    </div>
+  )
+  if (lens === 'wrapup') return (
+    <StackedDispositionBars resp={resp} selected={selected} labelMap={labelMap} t={t} />
   )
   if (lens === 'availability') return (
     <GroupedBars resp={resp} selected={selected} labelMap={labelMap} t={t}
