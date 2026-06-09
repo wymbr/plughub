@@ -2,6 +2,43 @@
 
 ---
 
+## Bancada de agentes F4 — UI da bancada de comparação 360° (2026-06-09)
+
+Reescreve a aba Analytics/Agents como **bancada de comparação** (lista pools→agentes +
+seletor de lente + gráfico com a "média dos agentes" + detalhe type-aware). Novo
+`AgentsBenchPage.tsx` na rota `/analise/agents`; o `AnaliseAgentesPage` antigo fica acessível em
+`/analise/agents-legacy` (fallback temporário). Fontes: `/reports/agents/performance` (lista) +
+`/reports/agents/compare` (séries por lente, F3).
+
+- **F4.1** — shell: filtro período + seletor de 5 lentes (com caption de domínio; IA desabilitada
+  nas lentes humanas) + lista + wiring dos dois fetches.
+- **F4.2** — gráfico por lente: resolution/escalation = dois mini-gráficos %; sessions_aht = contagem
+  × tempo (unidades distintas); availability = barras agrupadas (ocupação/pausa); pause_reason =
+  barra empilhada por motivo; quality = curva da nota. Legenda por `label`, média = linha preta
+  tracejada, cor estável por entidade (hash determinístico do agent_key), gap (null) = quebra.
+- **F4.3** — lista interativa: árvore pools→agentes (chevron), checkbox do pool faz **bulk** dos
+  agentes elegíveis (estado indeterminado p/ parcial), checkbox por agente, clique no nome abre
+  detalhe. Domínio respeitado no agente e no bulk.
+- **F4.4** — detalhe type-aware (pop-up): consolidado das lentes por agente (busca o compare
+  individual, `include_average=false`) — humano: sessões/resolução/escalação/TMA/qualidade +
+  ocupação + donut disponível×pausa; IA: tiles aplicáveis sem ocupação/donut.
+- **F4.5** — polish: combo de pool (populado pelos pools do período; lista sempre busca todos e o
+  filtro é client-side p/ a árvore + server-side p/ o compare); persistência de lente/pool/período/
+  seleção na **URL** (`?from&to&pool&lens&sel`, replace — link compartilhável); **export CSV** do
+  conjunto comparado (formato longo entity,date,métricas). i18n en+pt-BR em todas as etapas.
+
+**Lentes pendentes na UI** (já tratadas como 400 no backend): nps/wrap-up (F5 — `session_signal`) e
+quality_criteria (critérios por item não chegam ao CH). **Refinamentos anotados**: "média do pool"
+como série agregada única exigiria pseudo-entidade `pool:` no endpoint compare (hoje o checkbox do
+pool faz bulk dos agentes); pause-reason multilíngue seria taxonomia i18n por tenant (rótulos hoje
+são dado do tenant). **Validado com dado real** (tenant_demo): série do humano reflete o efeito F1
+(resolução 0→0.8), n=8 agentes em escopo, quality n=5, donut e barras coerentes.
+
+→ Próxima fase: **F5 — camada `session_signal`** (NPS obrigatório + wrap-up), que habilita as lentes
+nps/wrap-up e os cruzamentos do §8.
+
+---
+
 ## Bancada de agentes F3 — endpoint `/reports/agents/compare` (2026-06-07)
 
 Backend da bancada de comparação (`analytics-agents-workbench.md` §11): uma chamada devolve as

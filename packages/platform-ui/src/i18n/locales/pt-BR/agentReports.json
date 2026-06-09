@@ -131,7 +131,7 @@
     "title": "Bancada de Agentes — Comparação 360°",
     "average": "Média dos agentes",
     "n": "n={{n}}",
-    "filters": { "from": "De", "to": "Até", "poolPlaceholder": "todos os pools" },
+    "filters": { "from": "De", "to": "Até", "poolPlaceholder": "todos os pools", "allPools": "Todos os pools", "exportCsv": "Exportar CSV" },
     "lens": {
       "label": "Lente:",
       "resolution": "Resolução / Escalação",

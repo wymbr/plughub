@@ -131,7 +131,7 @@
     "title": "Agent Bench — 360° Comparison",
     "average": "Agent average",
     "n": "n={{n}}",
-    "filters": { "from": "From", "to": "To", "poolPlaceholder": "all pools" },
+    "filters": { "from": "From", "to": "To", "poolPlaceholder": "all pools", "allPools": "All pools", "exportCsv": "Export CSV" },
     "lens": {
       "label": "Lens:",
       "resolution": "Resolution / Escalation",

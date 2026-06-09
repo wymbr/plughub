@@ -14,6 +14,7 @@
  * F4.2 enriquece o gráfico; F4.3 a lista interativa; F4.4 o detalhe; F4.5 polish.
  */
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import { useAuth } from '@/auth/useAuth'
 import {
@@ -89,19 +90,21 @@ const inp = 'text-xs border border-border-strong rounded-lg px-2.5 py-1.5 focus:
 
 // ── Hooks de dados ──────────────────────────────────────────────────────────
 
-function usePerformanceList(tenantId: string, fromDt: string, toDt: string, poolId: string) {
+// F4.5: lista SEM filtro de pool no servidor — sempre todos os pools do período,
+// para popular o combo e a árvore completos. O pool é aplicado no cliente (qual
+// grupo exibir) e no compare (escopo da média/gráfico).
+function usePerformanceList(tenantId: string, fromDt: string, toDt: string) {
   const [rows, setRows] = useState<PerfRow[]>([])
   const [loading, setLoading] = useState(false)
   useEffect(() => {
     setLoading(true)
     const p = new URLSearchParams({ tenant_id: tenantId, from_dt: fromDt, to_dt: toDt })
-    if (poolId) p.set('pool_id', poolId)
     fetch(`/reports/agents/performance?${p}`)
       .then(r => r.ok ? r.json() : Promise.reject(r.status))
       .then((d: { data: PerfRow[] }) => setRows(d.data ?? []))
       .catch(() => setRows([]))
       .finally(() => setLoading(false))
-  }, [tenantId, fromDt, toDt, poolId])
+  }, [tenantId, fromDt, toDt])
   return { rows, loading }
 }
 
@@ -436,16 +439,33 @@ export default function AgentsBenchPage() {
   const { t } = useTranslation('agentReports')
   const { tenantId } = useAuth()
 
-  const [fromDt, setFromDt] = useState(DEFAULT_FILTERS.fromDt)
-  const [toDt,   setToDt]   = useState(DEFAULT_FILTERS.toDt)
-  const [poolId, setPoolId] = useState('')
-  const [lens,   setLens]   = useState<LensId>('resolution')
-  const [selected, setSelected] = useState<string[]>([])
+  // F4.5 — estado inicial vem da URL (lente/pool/período/seleção sobrevivem a
+  // reload e navegação; link compartilhável).
+  const [sp, setSp] = useSearchParams()
+  const [fromDt, setFromDt] = useState(sp.get('from') || DEFAULT_FILTERS.fromDt)
+  const [toDt,   setToDt]   = useState(sp.get('to')   || DEFAULT_FILTERS.toDt)
+  const [poolId, setPoolId] = useState(sp.get('pool') || '')
+  const [lens,   setLens]   = useState<LensId>(
+    (LENSES.some(l => l.id === sp.get('lens')) ? sp.get('lens') : 'resolution') as LensId)
+  const [selected, setSelected] = useState<string[]>(
+    (sp.get('sel') || '').split(',').filter(Boolean))
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
   const [detail, setDetail] = useState<{ key: string; label: string; type: string } | null>(null)
 
+  // Sincroniza estado → URL (replace, sem empilhar histórico).
+  useEffect(() => {
+    const next = new URLSearchParams()
+    if (fromDt) next.set('from', fromDt)
+    if (toDt)   next.set('to', toDt)
+    if (poolId) next.set('pool', poolId)
+    if (lens !== 'resolution') next.set('lens', lens)
+    if (selected.length) next.set('sel', selected.join(','))
+    setSp(next, { replace: true })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fromDt, toDt, poolId, lens, selected])
+
   const lensDef = LENSES.find(l => l.id === lens)!
-  const { rows: perfRows, loading: listLoading } = usePerformanceList(tenantId ?? '', fromDt, toDt, poolId)
+  const { rows: perfRows, loading: listLoading } = usePerformanceList(tenantId ?? '', fromDt, toDt)
   const { resp, loading: chartLoading } = useCompare(tenantId ?? '', fromDt, toDt, poolId, lens, selected)
 
   // F4.3 — árvore pools → agentes. Um agente pode aparecer em mais de um pool;
@@ -470,6 +490,11 @@ export default function AgentsBenchPage() {
       .map(([pool, m]) => ({ pool, agents: [...m.values()].sort((a, b) => a.label.localeCompare(b.label)) }))
   }, [perfRows])
 
+  // F4.5 — combo de pool populado pela árvore completa; árvore exibida filtrada
+  // no cliente (o servidor já escopa a média/gráfico via poolId no compare).
+  const poolOptions = useMemo(() => poolGroups.map(g => g.pool), [poolGroups])
+  const shownGroups = poolId ? poolGroups.filter(g => g.pool === poolId) : poolGroups
+
   const isDisabled = (type: string) => lensDef.domain === 'human' && type !== 'human'
 
   const toggle = (key: string, disabled: boolean) => {
@@ -487,6 +512,34 @@ export default function AgentsBenchPage() {
   const toggleExpand = (pool: string) =>
     setExpanded(s => { const n = new Set(s); n.has(pool) ? n.delete(pool) : n.add(pool); return n })
 
+  // F4.5 — export CSV do conjunto comparado (média + entidades) da lente atual.
+  // Formato longo: entity,date,<métricas numéricas presentes na série>.
+  const exportCsv = () => {
+    if (!resp) return
+    const lm = labelMapOf(resp, t)
+    const series: { label: string; points: SeriesPoint[] }[] = []
+    if (resp.data.average) series.push({ label: lm.__avg__ ?? 'average', points: resp.data.average.series })
+    for (const e of resp.data.entities) series.push({ label: e.label || e.agent_key, points: e.series })
+    const keys = [...new Set(series.flatMap(s => s.points.flatMap(p =>
+      Object.keys(p).filter(k => k !== 'date' && typeof p[k] === 'number'))))]
+    const esc = (v: unknown) => {
+      const s = v == null ? '' : String(v)
+      return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s
+    }
+    const header = ['entity', 'date', ...keys]
+    const lines = [header.join(',')]
+    for (const s of series)
+      for (const p of s.points)
+        lines.push([esc(s.label), esc(p.date), ...keys.map(k => esc(p[k] ?? ''))].join(','))
+    const blob = new Blob([lines.join('\n')], { type: 'text/csv;charset=utf-8' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `bancada_${lens}_${fromDt}_${toDt}.csv`
+    a.click()
+    URL.revokeObjectURL(url)
+  }
+
   if (!tenantId) return (
     <div className="flex items-center justify-center h-full text-muted-light text-sm">
       {t('error.loading')}
@@ -502,8 +555,15 @@ export default function AgentsBenchPage() {
         <input type="date" value={fromDt} onChange={e => setFromDt(e.target.value)} className={inp} />
         <span className="text-xs text-muted">{t('bench.filters.to')}</span>
         <input type="date" value={toDt} onChange={e => setToDt(e.target.value)} className={inp} />
-        <input type="text" value={poolId} onChange={e => setPoolId(e.target.value)}
-          placeholder={t('bench.filters.poolPlaceholder')} className={`${inp} w-40`} />
+        <select value={poolId} onChange={e => setPoolId(e.target.value)} className={`${inp} w-48`}>
+          <option value="">{t('bench.filters.allPools')}</option>
+          {poolOptions.map(p => <option key={p} value={p}>{p}</option>)}
+        </select>
+        <div className="flex-1" />
+        <button onClick={exportCsv} disabled={!resp}
+          className={`${inp} flex items-center gap-1 disabled:opacity-40 hover:border-border-strong`}>
+          ⬇ {t('bench.filters.exportCsv')}
+        </button>
       </div>
 
       <div className="flex-1 overflow-hidden flex">
@@ -519,7 +579,7 @@ export default function AgentsBenchPage() {
             <div className="p-4 text-sm text-muted-light">{t('bench.list.noData')}</div>
           ) : (
             <ul className="divide-y divide-border">
-              {poolGroups.map(({ pool, agents }) => {
+              {shownGroups.map(({ pool, agents }) => {
                 const open = expanded.has(pool)
                 const eligible = agents.filter(a => !isDisabled(a.type)).map(a => a.key)
                 const allOn = eligible.length > 0 && eligible.every(k => selected.includes(k))
