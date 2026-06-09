@@ -823,7 +823,38 @@ def parse_evaluation_event(payload: dict[str, Any]) -> list[dict] | None:
         "timestamp":     ts,
     }
 
-    return [result_row, event_row]
+    rows = [result_row, event_row]
+
+    # F8 (bancada): nota por dimensão → evaluation_dimension_scores. O evento
+    # evaluation.completed carrega dimensions[] (dimension_id, name, score 0–10,
+    # weight) — decompõe o overall_score. Atribuição ao agente avaliado é
+    # query-time (via session_id, como a lente quality). Só emite quando há dimensões.
+    dimensions = payload.get("dimensions")
+    if isinstance(dimensions, list):
+        for dim in dimensions:
+            if not isinstance(dim, dict):
+                continue
+            did = dim.get("dimension_id")
+            if not did:
+                continue
+            rows.append({
+                "table":          "evaluation_dimension_scores",
+                "result_id":      result_id,
+                "instance_id":    instance_id,
+                "session_id":     session_id,
+                "tenant_id":      tenant_id,
+                "evaluator_id":   payload.get("evaluator_id") or "",
+                "form_id":        payload.get("form_id") or "",
+                "campaign_id":    campaign_id,
+                "dimension_id":   did,
+                "dimension_name": dim.get("name") or did,
+                "score":          dim.get("score"),
+                "weight":         dim.get("weight"),
+                "eval_status":    eval_status or "submitted",
+                "timestamp":      ts,
+            })
+
+    return rows
 
 
 # journey.events (Arc 10) — REMOVED (Arc 19 Fase F)

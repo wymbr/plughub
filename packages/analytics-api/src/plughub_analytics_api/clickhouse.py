@@ -439,6 +439,34 @@ PARTITION BY toYYYYMM(date)
 ORDER BY (tenant_id, event_id)
 """
 
+# ── F8 (bancada): evaluation_dimension_scores — uma linha por (result_id, dimension_id).
+# Decompõe o overall_score em dimensões do EvaluationForm. A atribuição ao agente
+# AVALIADO é feita em query-time via session_id (join em segments), como a lente
+# quality (F2). ReplacingMergeTree(ingested_at): revisão que reescreve o resultado vence.
+_DDL_EVALUATION_DIMENSION_SCORES = """
+CREATE TABLE IF NOT EXISTS {db}.evaluation_dimension_scores
+(
+    result_id       String,
+    instance_id     String,
+    session_id      String,
+    tenant_id       String,
+    evaluator_id    String,
+    form_id         String,
+    campaign_id     Nullable(String),
+    dimension_id    String,
+    dimension_name  String,
+    score           Float32,
+    weight          Float32,
+    eval_status     String,
+    ingested_at     DateTime DEFAULT now(),
+    timestamp       DateTime64(3, 'UTC'),
+    date            Date
+)
+ENGINE = ReplacingMergeTree(ingested_at)
+PARTITION BY toYYYYMM(date)
+ORDER BY (tenant_id, result_id, dimension_id)
+"""
+
 # ── contact_insights — business events published via insight_register MCP tool.
 # Each row represents a domain event emitted by an agent flow (e.g. "cancelamento",
 # "erro_consulta_saldo"). Consumed from conversations.events Kafka topic where
@@ -739,6 +767,7 @@ _ALL_DDL = [
     _DDL_SESSION_TIMELINE,
     _DDL_EVALUATION_RESULTS,
     _DDL_EVALUATION_EVENTS,
+    _DDL_EVALUATION_DIMENSION_SCORES,
     _DDL_CONTACT_INSIGHTS,
     _DDL_AGENT_PAUSE_INTERVALS,
     _DDL_AGENT_LOGIN_INTERVALS,
@@ -1095,6 +1124,24 @@ class AnalyticsStore:
             "evaluation_events",
             [_eval_event_row(row)],
             self._EVAL_EVENT_COLS,
+        )
+
+    # evaluation_dimension_scores (F8 — nota por dimensão)
+
+    _EVAL_DIMENSION_COLS = [
+        "result_id", "instance_id", "session_id", "tenant_id",
+        "evaluator_id", "form_id", "campaign_id",
+        "dimension_id", "dimension_name", "score", "weight",
+        "eval_status", "timestamp", "date",
+    ]
+
+    async def insert_evaluation_dimension_score(self, row: dict) -> None:
+        """Insert one per-dimension score row (F8 — fonte da lente quality_criteria)."""
+        await asyncio.to_thread(
+            self._insert,
+            "evaluation_dimension_scores",
+            [_eval_dimension_row(row)],
+            self._EVAL_DIMENSION_COLS,
         )
 
     # contact_insights
@@ -1616,6 +1663,27 @@ def _eval_event_row(d: dict) -> list:
         d.get("eval_status") or None,
         float(score) if score is not None else None,
         d.get("actor_id") or None,
+        _parse_dt(ts) or datetime.utcnow(),
+        _today_utc(ts),
+    ]
+
+
+def _eval_dimension_row(d: dict) -> list:
+    """Row builder for evaluation_dimension_scores table (F8)."""
+    ts = d.get("timestamp") or d.get("created_at")
+    return [
+        d.get("result_id", "") or "",
+        d.get("instance_id", "") or "",
+        d.get("session_id", "") or "",
+        d.get("tenant_id", ""),
+        d.get("evaluator_id", "") or "",
+        d.get("form_id", "") or "",
+        d.get("campaign_id") or None,
+        d.get("dimension_id", "") or "",
+        d.get("dimension_name", "") or "",
+        float(d.get("score", 0.0) or 0.0),
+        float(d.get("weight", 0.0) or 0.0),
+        d.get("eval_status", "submitted") or "submitted",
         _parse_dt(ts) or datetime.utcnow(),
         _today_utc(ts),
     ]

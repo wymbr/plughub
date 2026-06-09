@@ -43,6 +43,7 @@ def make_store() -> MagicMock:
     s.insert_timeline_event        = AsyncMock()
     s.upsert_evaluation_result     = AsyncMock()
     s.insert_evaluation_event      = AsyncMock()
+    s.insert_evaluation_dimension_score = AsyncMock()
     s.insert_contact_insight       = AsyncMock()
     return s
 
@@ -614,6 +615,51 @@ class TestParseEvaluationEvent:
         assert rows[0]["overall_score"] == pytest.approx(0.0)
         assert rows[1]["overall_score"] is None
 
+    # ── F8 — per-dimension rows ───────────────────────────────────────────────
+    def _completed_with_dimensions(self) -> dict:
+        return {
+            "event_type":   "evaluation.completed",
+            "tenant_id":    TENANT,
+            "evaluation_id": self.RESULT_ID,   # F2: completed usa evaluation_id
+            "session_id":   self.SESSION_ID,
+            "evaluator_id": self.EVALUATOR,
+            "form_id":      "form-sac-v1",
+            "composite_score": 8.0,
+            "evaluated_at": "2026-04-01T10:00:00+00:00",
+            "dimensions": [
+                {"dimension_id": "empatia",      "name": "Empatia",      "score": 9.0, "weight": 0.5},
+                {"dimension_id": "conformidade", "name": "Conformidade", "score": 7.0, "weight": 0.5},
+            ],
+        }
+
+    def test_dimensions_emit_extra_rows(self):
+        rows = parse_evaluation_event(self._completed_with_dimensions())
+        assert rows is not None
+        dim_rows = [r for r in rows if r["table"] == "evaluation_dimension_scores"]
+        assert len(dim_rows) == 2
+
+    def test_dimension_row_fields(self):
+        rows = parse_evaluation_event(self._completed_with_dimensions())
+        dim_rows = {r["dimension_id"]: r for r in rows if r["table"] == "evaluation_dimension_scores"}
+        emp = dim_rows["empatia"]
+        assert emp["result_id"]      == self.RESULT_ID
+        assert emp["session_id"]     == self.SESSION_ID
+        assert emp["form_id"]        == "form-sac-v1"
+        assert emp["dimension_name"] == "Empatia"
+        assert emp["score"]          == pytest.approx(9.0)
+        assert emp["weight"]         == pytest.approx(0.5)
+
+    def test_no_dimensions_no_extra_rows(self):
+        rows = parse_evaluation_event(self._submitted_payload())
+        assert all(r["table"] != "evaluation_dimension_scores" for r in rows)
+
+    def test_dimension_without_id_skipped(self):
+        payload = self._completed_with_dimensions()
+        payload["dimensions"].append({"name": "Sem id", "score": 5.0})
+        rows = parse_evaluation_event(payload)
+        dim_rows = [r for r in rows if r["table"] == "evaluation_dimension_scores"]
+        assert len(dim_rows) == 2  # a dimensão sem dimension_id é ignorada
+
 
 # ── _write_row dispatch — evaluation tables ───────────────────────────────────
 
@@ -632,6 +678,15 @@ class TestWriteRowDispatchEvaluation:
         row = {"table": "evaluation_events", "event_id": "e1", "tenant_id": TENANT}
         await _write_row(store, row, "evaluation.events", 1)
         store.insert_evaluation_event.assert_awaited_once_with(row)
+        store.upsert_evaluation_result.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_evaluation_dimension_scores_dispatched(self):
+        store = make_store()
+        row = {"table": "evaluation_dimension_scores", "result_id": "r1",
+               "dimension_id": "empatia", "tenant_id": TENANT}
+        await _write_row(store, row, "evaluation.events", 2)
+        store.insert_evaluation_dimension_score.assert_awaited_once_with(row)
         store.upsert_evaluation_result.assert_not_awaited()
 
 

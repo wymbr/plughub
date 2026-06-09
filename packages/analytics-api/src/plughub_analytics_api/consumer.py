@@ -778,6 +778,8 @@ async def _write_row(
             await store.upsert_evaluation_result(row)
         elif table == "evaluation_events":
             await store.insert_evaluation_event(row)
+        elif table == "evaluation_dimension_scores":
+            await store.insert_evaluation_dimension_score(row)
         elif table == "contact_insights":
             await store.insert_contact_insight(row)
         elif table == "agent_pause_intervals":
