@@ -1731,14 +1731,20 @@ async def query_agents_compare(
         }
 
 
-def _fetch_agents_compare(
-    client: Any, db: str, tenant_id: str,
-    since: str, until: str,
-    lens: str, pool_id: str | None, entities: list[str], include_average: bool,
+# Prefixo de pseudo-entidade "média do pool" (F9). entity = "pool:<pool_id>".
+_POOL_ENTITY_PREFIX = "pool:"
+
+
+def _per_agent_for_lens(
+    client: Any, db: str, tenant_id: str, since: str, until: str,
+    lens: str, pool_id: str | None,
     accessible_pools: list[str] | None, supervised_agent_types: list[str] | None,
-) -> dict:
-    # per_agent[agent_key] = {"agent_type":…, "label":…, "buckets": {date: point},
-    #                         "summary": {…}}
+) -> tuple[dict, list[str]]:
+    """Computa per_agent + metric_keys para a lente/escopo dados.
+
+    per_agent[agent_key] = {"agent_type", "label", "buckets": {date: point}, "summary"}.
+    Fatorado da F3 para ser reusado pela pseudo-entidade de média do pool (F9).
+    """
     if lens in ("resolution", "sessions_aht"):
         per_agent = _compare_segments_lens(
             client, db, tenant_id, since, until, lens, pool_id,
@@ -1775,30 +1781,110 @@ def _fetch_agents_compare(
             accessible_pools, supervised_agent_types,
         )
         metric_keys = ["avg_score"]
+    return per_agent, metric_keys
+
+
+def _mean_series(per_agent: dict, metric_keys: list[str]) -> list[dict]:
+    """Média aritmética por bucket sobre os agentes (gap ≠ zero: agente ausente
+    no bucket sai do denominador, não conta como 0). Decisão fechada da F3."""
+    buckets = sorted({b for a in per_agent.values() for b in a["buckets"]})
+    series: list[dict] = []
+    for b in buckets:
+        present = [a["buckets"][b] for a in per_agent.values() if b in a["buckets"]]
+        if not present:
+            continue
+        point: dict = {"date": b, "n": len(present)}
+        for mk in metric_keys:
+            vals = [p[mk] for p in present if p.get(mk) is not None]
+            point[mk] = round(sum(vals) / len(vals), 4) if vals else None
+        series.append(point)
+    return series
+
+
+def _aggregate_pool_summary(per_agent: dict) -> dict:
+    """Summary agregado de um pool (F9): escalares numéricos → média aritmética;
+    arrays aninhados (reasons/dispositions) → soma por id; `total` → soma.
+    Espelha o que cada viz lê (GroupedBars=escalar, Stacked*=array)."""
+    summary: dict = {}
+    scalar: dict[str, list[float]] = {}
+    reasons: dict[str, dict] = {}
+    disps: dict[tuple, dict] = {}
+    total = 0
+    has_total = False
+    for a in per_agent.values():
+        s = a.get("summary", {})
+        for k, v in s.items():
+            if k == "total":
+                total += int(v or 0); has_total = True
+            elif k == "reasons" and isinstance(v, list):
+                for r in v:
+                    rid = r.get("reason_id", "")
+                    agg = reasons.setdefault(rid, {"reason_id": rid,
+                        "reason_label": r.get("reason_label", rid), "total_ms": 0, "count": 0})
+                    agg["total_ms"] += int(r.get("total_ms", 0) or 0)
+                    agg["count"]    += int(r.get("count", 0) or 0)
+            elif k == "dispositions" and isinstance(v, list):
+                for d in v:
+                    key = (d.get("outcome", ""), d.get("issue_status", ""))
+                    agg = disps.setdefault(key, {"outcome": key[0], "issue_status": key[1], "count": 0})
+                    agg["count"] += int(d.get("count", 0) or 0)
+            elif isinstance(v, (int, float)):
+                scalar.setdefault(k, []).append(float(v))
+    for k, vals in scalar.items():
+        summary[k] = round(sum(vals) / len(vals), 4) if vals else None
+    if reasons:
+        summary["reasons"] = list(reasons.values())
+    if disps:
+        summary["dispositions"] = list(disps.values())
+    if has_total:
+        summary["total"] = total
+    return summary
+
+
+def _fetch_agents_compare(
+    client: Any, db: str, tenant_id: str,
+    since: str, until: str,
+    lens: str, pool_id: str | None, entities: list[str], include_average: bool,
+    accessible_pools: list[str] | None, supervised_agent_types: list[str] | None,
+) -> dict:
+    per_agent, metric_keys = _per_agent_for_lens(
+        client, db, tenant_id, since, until, lens, pool_id,
+        accessible_pools, supervised_agent_types,
+    )
 
     # ── Média dos agentes (aritmética por bucket; gap ≠ zero) ────────────────
     average = None
     if include_average and per_agent:
-        buckets = sorted({b for a in per_agent.values() for b in a["buckets"]})
-        avg_series: list[dict] = []
-        for b in buckets:
-            present = [a["buckets"][b] for a in per_agent.values() if b in a["buckets"]]
-            if not present:
-                continue
-            point: dict = {"date": b, "n": len(present)}
-            for mk in metric_keys:
-                vals = [p[mk] for p in present if p.get(mk) is not None]
-                point[mk] = round(sum(vals) / len(vals), 4) if vals else None
-            avg_series.append(point)
         average = {
             "label":  "média dos agentes",
             "n":      len(per_agent),
-            "series": avg_series,
+            "series": _mean_series(per_agent, metric_keys),
         }
 
-    # ── Entidades selecionadas (vazio → só a média) ──────────────────────────
+    # ── Entidades selecionadas — agentes reais + pseudo-pools `pool:<id>` (F9) ─
     out_entities: list[dict] = []
+    pool_cache: dict[str, dict] = {}
     for ak in entities:
+        # Pseudo-entidade: média do pool como série agregada selecionável.
+        if ak.startswith(_POOL_ENTITY_PREFIX):
+            pid = ak[len(_POOL_ENTITY_PREFIX):]
+            if pid not in pool_cache:
+                pool_cache[pid], _ = _per_agent_for_lens(
+                    client, db, tenant_id, since, until, lens, pid,
+                    accessible_pools, supervised_agent_types,
+                )
+            pa = pool_cache[pid]
+            out_entities.append({
+                "agent_key":  ak,
+                "label":      f"média · {pid}",
+                "agent_type": "__pool__",
+                "pool_id":    pid,
+                "n":          len(pa),
+                "series":     _mean_series(pa, metric_keys),
+                "summary":    _aggregate_pool_summary(pa),
+                **({"missing": True} if not pa else {}),
+            })
+            continue
         a = per_agent.get(ak)
         if a is None:
             out_entities.append({

@@ -247,7 +247,8 @@ function MetricLine({
             stroke="#111827" strokeWidth={2.5} strokeDasharray="6 4" dot={false} connectNulls={false} />
           {selected.map(k => (
             <Line key={k} type="monotone" dataKey={k} name={labelMap[k] ?? k}
-              stroke={colorFor(k)} strokeWidth={2} dot={false} connectNulls={false} />
+              stroke={colorFor(k)} strokeWidth={2} dot={false} connectNulls={false}
+              strokeDasharray={k.startsWith('pool:') ? '5 3' : undefined} />
           ))}
         </LineChart>
       </ResponsiveContainer>
@@ -786,6 +787,13 @@ export default function AgentsBenchPage() {
   const toggleExpand = (pool: string) =>
     setExpanded(s => { const n = new Set(s); n.has(pool) ? n.delete(pool) : n.add(pool); return n })
 
+  // F9 — fixar a média do pool como série selecionável (pseudo-entidade `pool:<id>`).
+  const poolPinKey = (pool: string) => `pool:${pool}`
+  const togglePoolPin = (pool: string) => {
+    const k = poolPinKey(pool)
+    setSelected(s => s.includes(k) ? s.filter(x => x !== k) : [...s, k])
+  }
+
   const esc = (v: unknown) => {
     const s = v == null ? '' : String(v)
     return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s
@@ -898,6 +906,16 @@ export default function AgentsBenchPage() {
                         disabled={eligible.length === 0}
                         onChange={() => poolToggle(agents)} className="accent-primary" />
                       <span className="flex-1 min-w-0 text-xs font-semibold text-dark font-mono truncate">{pool}</span>
+                      <button onClick={() => togglePoolPin(pool)}
+                        title={t('bench.list.pinPoolAvg')} aria-label={t('bench.list.pinPoolAvg')}
+                        className={`text-2xs font-bold px-1.5 py-0.5 rounded border transition-colors ${
+                          selected.includes(poolPinKey(pool))
+                            ? 'border-transparent text-white'
+                            : 'border-border text-muted-light hover:text-dark hover:border-border-strong'
+                        }`}
+                        style={{ background: selected.includes(poolPinKey(pool)) ? colorFor(poolPinKey(pool)) : undefined }}>
+                        μ
+                      </button>
                       <span className="text-2xs text-muted-light">{agents.length}</span>
                     </div>
                     {/* Agentes do pool */}

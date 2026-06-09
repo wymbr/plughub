@@ -793,6 +793,32 @@ class TestQueryAgentsCompare:
         disps = {d["issue_status"]: d["count"] for d in ent["summary"]["dispositions"]}
         assert disps == {"resolvido": 5, "escalado": 2}
 
+    async def test_pool_pseudo_entity_aggregates_pool_average(self):
+        # F9: entity "pool:<id>" → série de média aritmética escopada ao pool.
+        # 1ª query = escopo principal (per_agent/average); 2ª = escopo do pool.
+        main = _ch_result(self._SEG_COLS, [
+            ["A", "human", "a@x", "2026-06-01", 2, 2, 0, 1000.0],
+        ])
+        pool = _ch_result(self._SEG_COLS, [
+            ["A", "human",  "a@x", "2026-06-01", 2, 2, 0, 1000.0],   # res 1.0
+            ["B", "native", "B",   "2026-06-01", 2, 1, 1, 500.0],    # res 0.5
+        ])
+        client = _make_client(main, pool)
+        result = await query_agents_compare(
+            client, DB, TENANT, lens="resolution", entities=["pool:retencao_humano"],
+        )
+        ent = result["data"]["entities"][0]
+        assert ent["agent_key"]  == "pool:retencao_humano"
+        assert ent["agent_type"] == "__pool__"
+        assert ent["pool_id"]    == "retencao_humano"
+        assert ent["n"] == 2
+        d1 = next(p for p in ent["series"] if p["date"] == "2026-06-01")
+        assert d1["resolution_rate"] == pytest.approx(0.75)   # (1.0 + 0.5) / 2
+        assert d1["n"] == 2
+        # summary escalar = média aritmética dos summaries dos agentes do pool
+        assert ent["summary"]["resolution_rate"] == pytest.approx(0.75)
+        assert ent["summary"]["sessions"]        == pytest.approx(2.0)
+
     async def test_resolution_average_is_arithmetic_with_gaps(self):
         # Dia 1: A=2/2 (1.0), B=1/2 (0.5) → média 0.75 (n=2)
         # Dia 2: só A=0/1 (0.0)           → média 0.0  (n=1 — B é GAP, não zero)

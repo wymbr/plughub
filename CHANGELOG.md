@@ -2,6 +2,28 @@
 
 ---
 
+## Bancada de agentes F9 — pool-average como pseudo-entidade `pool:` (2026-06-09)
+
+Refinamento: permite **fixar a média de um pool** como linha no gráfico da bancada e comparar
+médias de 2+ pools lado a lado — sem dependência de ingest (só query + UI).
+
+**compare** (`reports_query.py`): `entities` aceita `pool:<pool_id>`. Helpers fatorados da F3 —
+`_per_agent_for_lens` (computa per_agent+metric_keys p/ lente/escopo), `_mean_series` (média
+aritmética por bucket, gap≠0 — decisão fechada), `_aggregate_pool_summary` (escalares→média,
+`reasons`/`dispositions`→soma por id, `total`→soma). Para cada `pool:<id>` o per_agent é recomputado
+escopado ao pool e devolvido como entidade `{agent_key:"pool:<id>", agent_type:"__pool__",
+label:"média · <id>", pool_id, n, series, summary}` (mesma semântica da média global). Teste
+`test_pool_pseudo_entity_aggregates_pool_average`.
+
+**platform-ui** (`AgentsBenchPage`): botão **μ** no cabeçalho de cada pool fixa/desafixa
+`pool:<id>` em `selected` (cor estável via `colorFor`, persiste em `sel=pool:`); no `MetricLine` a
+linha do pool sai **tracejada** (`strokeDasharray`) para distinguir de agentes. i18n `bench.list.pinPoolAvg`.
+
+**Validado**: 13 testes (Compare+Cross); curl `entities=pool:sac_ia` → série de média escopada +
+`summary` 57 sess / res 0.14 / esc 0.35 (consistente com o endpoint cross).
+
+---
+
 ## Bancada de agentes F6 — Cruzamentos das vantagens (§8) (2026-06-09)
 
 Fecha a bancada (Arc workbench): a view **Cross-cut** põe as 3 vantagens (resolução, qualidade, NPS)

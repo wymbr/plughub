@@ -171,7 +171,8 @@
       "loading": "Loading agents…",
       "noData": "No agents in scope for the period.",
       "expand": "Expand pool",
-      "collapse": "Collapse pool"
+      "collapse": "Collapse pool",
+      "pinPoolAvg": "Pin pool average on the chart"
     },
     "detail": {
       "soon": "Full agent detail arrives in the next step.",

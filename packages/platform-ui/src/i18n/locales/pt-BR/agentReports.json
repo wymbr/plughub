@@ -171,7 +171,8 @@
       "loading": "Carregando agentes…",
       "noData": "Nenhum agente no escopo do período.",
       "expand": "Expandir pool",
-      "collapse": "Recolher pool"
+      "collapse": "Recolher pool",
+      "pinPoolAvg": "Fixar a média do pool no gráfico"
     },
     "detail": {
       "soon": "O detalhe completo do agente chega no próximo passo.",
