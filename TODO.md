@@ -165,8 +165,10 @@ Hoje o Analytics/Agents mistura agente×pool e não separa humano×IA.
   **Destravou 4 fixes de plataforma**: input array no `StepInputValueSchema`; resolução webhook
   `skill_id`→pool no routing — nunca existira, funcionava por acaso com 1 pool webhook —
   via `webhook_skill_id`; `skill_id` no `ConversationInboundEvent`; demo exige `INCRBY` na quota
-  `max_concurrent_sessions`. Ver CHANGELOG) → **F10.2b.2 I/O real do cliente** (`skill_survey_v1` usa
-  `collect` para coletar NPS real; substitui valor semeado) → **F10.3 endpoint + bancada +
+  `max_concurrent_sessions`. Ver CHANGELOG) → **F10.2b.2 coleta real de NPS via delegate (inbound_only)
+  ✅ 2026-06-10** (skills `agente_survey_nps_v1`+`agente_survey_reconnect_v1`; pools `survey_collector_ia`+
+  `survey_reconnect_ia`; reconexão webchat via `pending_workflow_get`; fix de plataforma: recursão de
+  arrays no `interpolate.ts`; validado E2E real com NPS=8 — ver CHANGELOG) → **F10.3 endpoint + bancada +
   cutover F5** (bancada lê NPS/CSAT de `session_signal` p/ todos os grãos; hook de NPS de segmento passa
   a chamar `survey_record` com `segment_id`/`agent_key` via `@ctx`; aposenta `seg_signal`/`segments.nps_score`
   — resolve a duplicação de plumbing entre `segments` e `session_signal`). **F11 futura**: survey

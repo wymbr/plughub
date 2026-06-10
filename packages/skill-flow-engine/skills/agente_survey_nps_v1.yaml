@@ -1,0 +1,119 @@
+id: skill_survey_nps_v1
+name: "Survey NPS Collector v1"
+version: "1.0"
+description: |
+  Agente coletor de NPS (perfil agent, channel-aware) — F10.2b.2.
+  Acionado pelo step delegate em skill_survey_v1 (pool survey_collector_ia).
+  Faz I/O com o cliente: agradece, coleta NPS 0–10 e devolve a nota ao survey
+  workflow via workflow_resume (payload {nps}). O survey workflow retoma e grava
+  o sinal via survey_record com o valor real.
+
+  Recebe via ContextStore (escrito pelo delegate step):
+    session.workflow_resume_token  — token para retomar o survey workflow
+    session.origin_session_id      — a sessão original pesquisada
+    session.customer_present       — "true" quando o cliente está conectado (demo)
+
+  Reach pós-contato: se o cliente não está conectado (customer_present != true) e
+  não há canal outbound, adia (aguardar_inbound) — a coleta real exige reconexão
+  (padrão inbound_only) ou adapter outbound (produção). No demo validamos com
+  customer_present=true (webchat conectado ao pool coletor).
+classification:
+  type: vertical
+  domain: quality
+
+entry: verificar_canal
+
+steps:
+  # ── Só faz I/O proativo quando há cliente conectado (ou canal outbound) ───────
+  - id: verificar_canal
+    type: choice
+    conditions:
+      - field:    "@ctx.session.customer_present"
+        operator: eq
+        value:    "true"
+        next:     agradecer
+    default: aguardar_inbound
+
+  # Sem cliente vivo: adia. A sessão-filho encerra; a coleta real fica para a
+  # reconexão (inbound_only) ou outbound — fora do escopo do demo.
+  - id: aguardar_inbound
+    type: complete
+    outcome: resolved
+
+  # ── Agradecimento ────────────────────────────────────────────────────────────
+  - id: agradecer
+    type: notify
+    message: "Obrigado pelo seu contato! Gostaríamos de saber como foi sua experiência."
+    on_success: solicitar_nps
+    on_failure: solicitar_nps
+
+  # ── Pesquisa NPS (0–10) ──────────────────────────────────────────────────────
+  - id: solicitar_nps
+    type: menu
+    interaction: button
+    prompt: "Em uma escala de 0 a 10, qual a probabilidade de você recomendar nosso atendimento?"
+    options:
+      - { id: "0",  label: "0" }
+      - { id: "1",  label: "1" }
+      - { id: "2",  label: "2" }
+      - { id: "3",  label: "3" }
+      - { id: "4",  label: "4" }
+      - { id: "5",  label: "5" }
+      - { id: "6",  label: "6" }
+      - { id: "7",  label: "7" }
+      - { id: "8",  label: "8" }
+      - { id: "9",  label: "9" }
+      - { id: "10", label: "10" }
+    output_as: nps_resposta
+    timeout_s: 600
+    on_success: retornar_nps
+    on_failure: retornar_timeout
+    on_timeout: retornar_timeout
+    on_disconnect: retornar_timeout
+
+  # ── Devolve a nota ao survey workflow (resume da pesquisa) ───────────────────
+  # workflow_resume_token = token do delegate da SURVEY (via pendencia no reconnect,
+  # ou via delegate direto). Retoma o survey workflow → gravar_pesquisa.
+  - id: retornar_nps
+    type: invoke
+    tool: workflow_resume
+    input:
+      resume_token: "@ctx.session.workflow_resume_token"
+      decision: "input"
+      payload:
+        nps: "$.pipeline_state.nps_resposta"
+    on_success: agradecer_final
+    on_failure: retornar_sessao_pai
+
+  # ── Timeout sem resposta — devolve timeout ───────────────────────────────────
+  - id: retornar_timeout
+    type: invoke
+    tool: workflow_resume
+    input:
+      resume_token: "@ctx.session.workflow_resume_token"
+      decision: "timeout"
+    on_success: retornar_sessao_pai
+    on_failure: retornar_sessao_pai
+
+  - id: agradecer_final
+    type: notify
+    message: "Agradecemos sua avaliação! 🙏"
+    on_success: retornar_sessao_pai
+    on_failure: retornar_sessao_pai
+
+  # ── Retoma o delegate do INTAKE de reconexão (Session A-new) ─────────────────
+  # delegate_resume_token existe quando o coletor roda como specialist do intake
+  # de reconexão; null no delegate direto da survey → invoke falha silenciosamente
+  # (on_failure: finalizar). Correto para os dois casos.
+  - id: retornar_sessao_pai
+    type: invoke
+    tool: workflow_resume
+    input:
+      resume_token: "@ctx.session.delegate_resume_token"
+      decision: "input"
+    on_success: finalizar
+    on_failure: finalizar
+
+  - id: finalizar
+    type: complete
+    outcome: resolved

@@ -2,6 +2,36 @@
 
 ---
 
+## Bancada de agentes F10.2b.2 — coleta real de NPS via delegate (inbound_only) (2026-06-10)
+
+Fecha a F10.2b: a survey de sessão coleta o **NPS real do cliente** (não mais valor semeado) e grava o
+sinal contra a sessão original. Mecanismo = **`delegate`** (proven Arc 19; `collect` é legado Arc 4).
+
+**Fluxo (inbound_only, espelha portabilidade)**: `skill_survey_v1` ganha step `delegate →
+survey_collector_ia` passando `contact_identifier` (sem `customer_present`) — `handle_delegate` grava
+`pending_workflow:{contact}=resume_token` e o coletor vai a `aguardar_inbound` (survey fica pendente).
+O cliente **reconecta via webchat** no pool de entrada `survey_reconnect_ia` (`agente_survey_reconnect_v1`):
+informa o `contact_identifier`, `pending_workflow_get` acha a pendência e delega ao coletor
+(`agente_survey_nps_v1`) com `customer_present=true` + o `resume_token` da survey. O coletor faz
+notify + menu NPS 0–10 → `workflow_resume(payload={nps})` → a survey retoma o `delegate`
+(`pipeline_state.coletar_nps.nps`) → `survey_record(grain=session, value=<nps real>)` → `session_signal`.
+
+**Novos componentes**: skills `agente_survey_nps_v1` (coletor) + `agente_survey_reconnect_v1` (intake de
+reconexão); pools `survey_collector_ia` + `survey_reconnect_ia`; `survey_reconnect_ia` no dropdown do
+`webchat-test.html`.
+
+**Fix de plataforma — recursão de arrays no `interpolate.ts`**: `resolveInputValue` recursava só objetos
+planos, **não arrays** — refs dentro de arrays (ex.: `signals: [{value: "$.pipeline_state.coletar_nps.nps"}]`)
+ficavam como string literal e nunca resolviam (o `survey_record` não recebia o valor). Agora recursa
+arrays também. Geral: qualquer `invoke` com refs dentro de arrays resolve (complementa o fix do schema
+de array da F10.2b.1).
+
+**Validação E2E real**: trigger → survey pendente → reconexão webchat (`11888888888`) → cliente responde
+NPS=8 no menu → `survey_record invoked value:8` + `published` → `session_signal(grain=session, nps=8,
+neutro, origin=sess-real-2)`. **Toda a fatia F10.2 (session_signal grão session/workflow/journey) completa.**
+
+---
+
 ## Bancada de agentes F10.2b.1 — survey disparada por workflow + 4 fixes de plataforma (2026-06-10)
 
 Esqueleto trigger→record da pesquisa de sessão: o **passo final do fluxo primário** delega a um

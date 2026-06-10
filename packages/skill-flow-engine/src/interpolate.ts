@@ -132,10 +132,16 @@ export async function resolveInputValue(
     }
     return value
   }
+  // Recursively resolve nested ARRAYS so that invoke step inputs like
+  //   signals: [{ metric: "nps", value: "$.pipeline_state.coletar_nps.nps" }]
+  // have refs inside array elements resolved (not left as literal strings).
+  if (Array.isArray(value)) {
+    return Promise.all(value.map(v => resolveInputValue(v, ctx, contextStore)))
+  }
   // Recursively resolve nested plain objects so that invoke step inputs like
   //   context: { "session.foo": "$.pipeline_state.foo" }
   // have their values resolved just like top-level string inputs.
-  if (value !== null && typeof value === "object" && !Array.isArray(value)) {
+  if (value !== null && typeof value === "object") {
     return resolveInputMap(value as Record<string, unknown>, ctx, contextStore)
   }
   return value

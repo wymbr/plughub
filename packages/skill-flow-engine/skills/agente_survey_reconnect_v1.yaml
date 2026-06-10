@@ -1,0 +1,82 @@
+id: skill_survey_reconnect_v1
+name: "Survey Reconnect Intake v1"
+version: "1.0"
+description: |
+  Intake de reconexão para a pesquisa de sessão (padrão inbound_only — F10.2b.2).
+  O cliente reconecta por aqui (webchat) e informa o contact_identifier usado no
+  atendimento. pending_workflow_get verifica se há uma survey pendente; se houver,
+  delega ao coletor (agente_survey_nps_v1) com customer_present=true + o resume_token
+  da survey — o coletor faz o NPS e retoma a survey via workflow_resume.
+
+  Espelha o agente_portabilidade_intake_v1 (verificar_pendencia → delegate).
+classification:
+  type: orchestrator
+  domain: quality
+
+entry: saudacao
+
+steps:
+  - id: saudacao
+    type: notify
+    message: "Olá! Se você tem uma pesquisa de atendimento pendente, posso retomá-la agora."
+    on_success: coletar_contato
+    on_failure: coletar_contato
+
+  # ── Coleta o contato usado no atendimento (chave do pending_workflow) ─────────
+  - id: coletar_contato
+    type: menu
+    prompt: "Para localizar sua pesquisa, informe o telefone ou e-mail usado no atendimento (ex: 11999999999):"
+    interaction: text
+    output_as: contact_identifier
+    timeout_s: 180
+    on_success: verificar_pendencia
+    on_failure: finalizar
+    on_timeout: finalizar
+    on_disconnect: finalizar
+
+  # ── Verifica pendência ───────────────────────────────────────────────────────
+  - id: verificar_pendencia
+    type: invoke
+    tool: pending_workflow_get
+    input:
+      contact_identifier: "$.pipeline_state.contact_identifier"
+      tenant_id:          "$.tenant_id"
+    output_as: pendencia
+    on_success: avaliar_pendencia
+    on_failure: sem_pendencia
+
+  - id: avaliar_pendencia
+    type: choice
+    conditions:
+      - field:    "$.pipeline_state.pendencia.found"
+        operator: eq
+        value:    true
+        next:     retomar_survey
+    default: sem_pendencia
+
+  # ── Retoma a survey: delega ao coletor com o resume_token da pendência ───────
+  # workflow_resume_token = pendencia.resume_token (token do delegate da survey).
+  # customer_present=true → o coletor faz o I/O de NPS nesta sessão reconectada.
+  - id: retomar_survey
+    type: delegate
+    pool: survey_collector_ia
+    context:
+      workflow_resume_token: "$.pipeline_state.pendencia.resume_token"
+      customer_present:      "true"
+    timeout_hours: 1
+    on_resume:
+      next: finalizar
+    on_reject:
+      next: finalizar
+    on_timeout:
+      next: finalizar
+
+  - id: sem_pendencia
+    type: notify
+    message: "Não encontramos nenhuma pesquisa pendente para esse contato. Obrigado!"
+    on_success: finalizar
+    on_failure: finalizar
+
+  - id: finalizar
+    type: complete
+    outcome: resolved

@@ -159,6 +159,27 @@ pools:
     webhook_skill_id: skill_survey_v1
     sla_target_ms: 3600000  # 1h em ms
 
+  - pool_id: survey_collector_ia
+    agent_kind: ai
+    deploy: { skill_id: skill_survey_nps_v1, max_concurrent_sessions: 5 }
+    # F10.2b.2: pool coletor de NPS (channel-aware). Acionado pelo step delegate em
+    # skill_survey_v1; o agente faz I/O com o cliente (notify+menu NPS) e devolve a
+    # nota via workflow_resume. NÃO é webhook (delegate cria sessão-filho com pool
+    # direto). Consome quota — INCRBY na quota se C estiver cheio.
+    description: "Pool coletor de NPS do survey (delegate I/O channel-aware)"
+    channel_types: [webchat, whatsapp]
+    sla_target_ms: 600000  # 10 min
+
+  - pool_id: survey_reconnect_ia
+    agent_kind: ai
+    deploy: { skill_id: skill_survey_reconnect_v1, max_concurrent_sessions: 5 }
+    # F10.2b.2 (inbound_only): pool de ENTRADA onde o cliente reconecta para
+    # retomar uma pesquisa pendente. Faz pending_workflow_get e delega ao coletor.
+    # Conecte o webchat de teste a este pool para responder o NPS real.
+    description: "Pool de reconexão do survey (inbound_only) — cliente retoma pesquisa pendente"
+    channel_types: [webchat]
+    sla_target_ms: 300000  # 5 min
+
   - pool_id: reembolso_ia
     agent_kind: ai
     deploy: { skill_id: skill_reembolso_intake_v1, max_concurrent_sessions: 10 }
