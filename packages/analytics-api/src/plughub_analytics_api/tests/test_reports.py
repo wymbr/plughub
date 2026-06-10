@@ -779,7 +779,9 @@ class TestQueryAgentsCompare:
         assert dims["empatia"]["dimension_label"] == "Empatia"
         assert dims["conformidade"]["avg_score"] == pytest.approx(7.0)
 
-    async def test_nps_lens_reads_segments(self):
+    async def test_nps_lens_reads_session_signal(self):
+        # F10.3b: a lente nps (grão segmento) lê de session_signal (grain=segment),
+        # join a segments por segment_id p/ agent_type/label. Cutover unificado.
         cols = ["agent_key", "agent_type", "label", "bucket",
                 "n", "avg_nps", "promoters", "detractors"]
         client = _make_client(_ch_result(cols, [
@@ -788,7 +790,9 @@ class TestQueryAgentsCompare:
         result = await query_agents_compare(client, DB, TENANT, lens="nps", entities=["A"])
         assert result["meta"]["lens"] == "nps"
         sql = client.query.call_args_list[-1][0][0]
-        assert "nps_score IS NOT NULL" in sql
+        assert "session_signal" in sql
+        assert "grain = 'segment'" in sql
+        assert "nps_score" not in sql
         ent = result["data"]["entities"][0]
         assert ent["summary"]["n_responses"] == 4
         assert ent["summary"]["avg_nps"] == pytest.approx(8.0)

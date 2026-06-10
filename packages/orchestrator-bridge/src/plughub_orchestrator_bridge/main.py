@@ -974,6 +974,32 @@ async def fire_pool_hooks(
                         pass
                     _hs_close_reason = _TRANSPORT_TO_CLOSE_REASON.get(_hs_transport, "agent_hangup")
                     await _seed_segment_signal(redis_client, session_id, _hs_rec, _hs_close_reason)
+                    # F10.3b (cutover unificado): expõe a atribuição do segmento humano
+                    # ao agente de NPS (on_human_end side=customer) via @ctx, para ele
+                    # gravar via survey_record(grain=segment) — mesmo fluxo dos demais
+                    # grãos. agent_key = user_id (deriva de instance_id 'human-{userId}').
+                    try:
+                        _inst = _hs_rec.get("instance_id", "") or ""
+                        _surveyed_agent_key = (
+                            _inst[len("human-"):] if _inst.startswith("human-")
+                            else (_hs_rec.get("user_login", "") or _inst)
+                        )
+                        _sv_now = datetime.now(timezone.utc).isoformat()
+                        await redis_client.hset(f"{tenant_id}:ctx:{session_id}", mapping={
+                            "session.surveyed_segment_id": json.dumps({
+                                "value": _hook_human_seg_id, "confidence": 1.0,
+                                "source": "on_human_end_hook", "visibility": "agents_only",
+                                "updated_at": _sv_now,
+                            }),
+                            "session.surveyed_agent_key": json.dumps({
+                                "value": _surveyed_agent_key, "confidence": 1.0,
+                                "source": "on_human_end_hook", "visibility": "agents_only",
+                                "updated_at": _sv_now,
+                            }),
+                        })
+                    except Exception as _sv_exc:
+                        logger.debug("F10.3b: surveyed_* ctx write failed: session=%s — %s",
+                                     session_id, _sv_exc)
         except Exception as _hs_exc:
             logger.debug("F5: could not load human_seg for hooks: session=%s — %s", session_id, _hs_exc)
 

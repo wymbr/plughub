@@ -172,10 +172,12 @@ Hoje o Analytics/Agents mistura agente×pool e não separa humano×IA.
   de sessão na bancada ✅ 2026-06-10** (lente `session_nps`: `session_signal` grain=session ⋈ atribuição
   por session_id → NPS de sessão dos contatos do agente, cruzamento §8; seção "Voz do cliente" no
   detalhe type-aware: NPS agente × NPS sessão; i18n; teste passa; endpoint 200 — ver CHANGELOG. Não toca
-  F5) → **F10.3b cutover F5 (futura)**: hook de NPS de segmento chama `survey_record(grain=segment,
-  segment_id, agent_key)` (expor `$.segment_id` no `interpolate.ts` + bridge escreve `session.surveyed_*`
-  via `@ctx`); `_compare_nps_lens` migra para `session_signal`; aposenta `seg_signal`/`segments.nps_score`
-  — resolve a duplicação NPS/CSAT entre `segments` e `session_signal`. **F11 futura**: survey
+  F5) → **F10.3b cutover F5 ✅ 2026-06-10** (caminho B unificado: `agente_nps_v1` chama
+  `survey_record(grain=segment)`; bridge escreve `session.surveyed_segment_id`/`agent_key` via `@ctx`;
+  `_compare_nps_lens` migra para `session_signal` (join segments p/ metadata) → lentes `nps`+`session_nps`
+  leem a mesma tabela, **acaba a duplicação**. Transicional: `segments.nps_score` ainda escrito (rollback)
+  mas não lido. Validado: testes + seed E2E (lente lê session_signal). **Pendente**: E2E do hook real via
+  fluxo humano; **follow-up**: remover write `segments.nps_score` + coluna. Ver CHANGELOG). **F11 futura**: survey
   **diferida** (`captured_at ≠ session_at`, `session_at` da origem via enrichment) + grão **journey**
   ponta-a-ponta. Vocabulário: `journey`=grão (relacionamento multi-sessão), não a entidade eliminada.
   Detalhe em §13/§14 do spec. Débito pré-existente notado na F1:

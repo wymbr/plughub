@@ -2023,51 +2023,63 @@ def _compare_nps_lens(
     accessible_pools: list[str] | None, supervised_agent_types: list[str] | None,
 ) -> dict:
     """
-    nps — fonte: segments.nps_score (F5, grão segmento). Amostral: só segmentos
-    com NPS respondido. Por bucket: avg_nps + n + NPS = (%promotores − %detratores)
-    (promotor ≥9, detrator ≤6, escala 0–10). Bucketiza por started_at do segmento.
+    nps (F10.3b cutover) — fonte: session_signal (grain='segment', metric='nps'),
+    gravado via survey_record pelo hook de NPS de segmento. agent_key/segment_id já
+    na linha; agent_type/label vêm de segments por segment_id (ledger do segmento).
+    Bucketiza por session_at (regra de ouro §7). NPS = (%promotores − %detratores),
+    promotor ≥9, detrator ≤6. **Transicional**: segments.nps_score ainda é escrito
+    pelo bridge (rollback), mas NÃO é lido — a fonte única de leitura é session_signal.
     """
-    conditions = [
+    ss_conditions = [
         "tenant_id = {tenant_id:String}",
-        f"started_at >= '{since}'",
-        f"started_at <  '{until}'",
+        f"session_at >= '{since}'",
+        f"session_at <  '{until}'",
+        "grain = 'segment'",
+        "metric = 'nps'",
+        "value_num IS NOT NULL",
+    ]
+    seg_conditions = [
+        "tenant_id = {tenant_id:String}",
         "role = 'primary'",
         "agent_type != 'system'",
-        "nps_score IS NOT NULL",
     ]
     params: dict = {"tenant_id": tenant_id}
     if pool_id:
-        conditions.append("pool_id = {pool_id:String}")
+        seg_conditions.append("pool_id = {pool_id:String}")
         params["pool_id"] = pool_id
-    _apply_pool_scope(conditions, accessible_pools)
-    _apply_agent_scope(conditions, supervised_agent_types)
+    _apply_pool_scope(seg_conditions, accessible_pools)
+    _apply_agent_scope(seg_conditions, supervised_agent_types)
 
     rows = _rows_to_dicts(client.query(f"""
         SELECT
-            ak                          AS agent_key,
-            any(at)                     AS agent_type,
-            any(lbl)                    AS label,
-            toString(bucket)            AS bucket,
+            seg.agent_key               AS agent_key,
+            any(seg.agent_type)         AS agent_type,
+            any(seg.label)              AS label,
+            toString(toDate(ss.session_at)) AS bucket,
             count()                     AS n,
-            avg(nps)                    AS avg_nps,
-            countIf(nps >= 9)           AS promoters,
-            countIf(nps <= 6)           AS detractors
+            avg(ss.nps)                 AS avg_nps,
+            countIf(ss.nps >= 9)        AS promoters,
+            countIf(ss.nps <= 6)        AS detractors
         FROM (
+            SELECT segment_id, value_num AS nps, session_at
+            FROM {db}.session_signal FINAL
+            WHERE {" AND ".join(ss_conditions)}
+        ) AS ss
+        INNER JOIN (
             SELECT
+                segment_id,
                 if(agent_type = 'human',
                    if(user_id != '', user_id, agent_type_id),
-                   if(flow_id != '', flow_id, agent_type_id))  AS ak,
-                agent_type                                      AS at,
+                   if(flow_id != '', flow_id, agent_type_id))  AS agent_key,
+                agent_type,
                 if(agent_type = 'human',
                    if(user_login != '', user_login, user_id),
-                   if(flow_id != '', flow_id, agent_type_id))   AS lbl,
-                toDate(started_at)                              AS bucket,
-                nps_score                                       AS nps
+                   if(flow_id != '', flow_id, agent_type_id))   AS label
             FROM {db}.segments FINAL
-            WHERE {" AND ".join(conditions)}
-        )
-        GROUP BY ak, bucket
-        ORDER BY ak, bucket
+            WHERE {" AND ".join(seg_conditions)}
+        ) AS seg ON ss.segment_id = seg.segment_id
+        GROUP BY seg.agent_key, toDate(ss.session_at)
+        ORDER BY agent_key, bucket
     """, parameters=params))
 
     per_agent: dict = {}

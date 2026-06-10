@@ -2,6 +2,35 @@
 
 ---
 
+## Bancada de agentes F10.3b — cutover F5: NPS de segmento unificado em session_signal (2026-06-10)
+
+Unifica o NPS por agente (grão segmento) no mesmo store/fluxo dos demais grãos (Opção 2): **um caminho
+de escrita** (`survey_record`) + tratamento diferente por grão **na leitura** da bancada. Decisão do
+usuário: evitar os dois fluxos de NPS que a alternativa "bridge emite" traria.
+
+**Write (caminho B, unificado)**: o `agente_nps_v1` (hook `on_human_end` side=customer) passa a chamar
+`survey_record(grain=segment, segment_id, agent_key, signals=[{nps}])` — mesmo fluxo de session/journey.
+A atribuição vem do `@ctx`: o **bridge** (`fire_pool_hooks`, on_human_end) escreve
+`session.surveyed_segment_id` + `session.surveyed_agent_key` (segment_id do humano via `hook_conf`;
+agent_key = user_id derivado do `instance_id` do `human_seg`). `survey_record` é tenant-explícito
+(sem token), então o hook chama direto.
+
+**Read (lente migrada)**: `_compare_nps_lens` lê `session_signal` (grain='segment', metric='nps'),
+`INNER JOIN segments` por `segment_id` para `agent_type`/`label` (ledger do segmento). As lentes `nps`
+(por agente) e `session_nps` (contexto) passam a ler **a mesma tabela** — **acaba a duplicação** de
+plumbing NPS/CSAT entre `segments` e `session_signal`.
+
+**Transicional (rollback)**: o bridge **ainda escreve** `segments.nps_score` (`_apply_nps_to_segment`),
+mas ele **não é mais lido**; um follow-up remove o write + a coluna após validação E2E do hook.
+
+**Validação**: testes `test_nps_lens_reads_session_signal` (lê session_signal, grain=segment, sem
+`nps_score`) + `session_nps` passam. Seed E2E: `session.signals(grain=segment)` → lente `nps` mostra o
+agente com `avg_nps=9/nps=100` lendo de `session_signal`. **Pendente**: E2E do hook real
+(`on_human_end → survey_record grain:segment`) via fluxo humano (Agent Assist / e2e-runner). **Fatia F10
+completa** (F10.3b era a última peça do cutover; resta só a remoção final do legado + F11).
+
+---
+
 ## Bancada de agentes F10.3a — exposição do NPS de sessão na bancada (2026-06-10)
 
 Lente `session_nps` no `/reports/agents/compare`: `session_signal` (grain='session', metric='nps') ⋈
