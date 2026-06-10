@@ -169,6 +169,21 @@ Hoje o Analytics/Agents mistura agente×pool e não separa humano×IA.
   ponta-a-ponta. Vocabulário: `journey`=grão (relacionamento multi-sessão), não a entidade eliminada.
   Detalhe em §13/§14 do spec. Débito pré-existente notado na F1:
   3 falhas em `resolve.test.ts` (BLPOP/mention mocks — não relacionadas).
+  **Nota técnica F10.3 — contexto de atribuição para `survey_record(grain=segment)` (recon 2026-06-10):**
+  o que o skill já tem vs. o que falta para chamar `survey_record` com atribuição:
+  · `session_id` — **disponível** à YAML como built-in `$.session_id` (`interpolate.ts` `resolveJsonPathRef`,
+  junto de `tenant_id`/`customer_id`/`instance_id`). Logo `grain=session|workflow|journey` é direto.
+  · `segment_id` do PRÓPRIO agente — o bridge **já passa** no `/execute` (`activate_native_agent`
+  `payload["segment_id"]`, main.py ~465) → `StepContext.segmentId`; usado em `@segment.*` e escritas
+  `scope: segment`. **MAS não está exposto como built-in `$.segment_id`** — falta 1 linha em
+  `resolveJsonPathRef` (`segment_id: ctx.segmentId` no evalContext) para o skill lê-lo e passar à tool.
+  · segmento de OUTRO agente (caso NPS-sobre-o-humano no `on_human_end`): o `segment_id`/`agent_key` do
+  ALVO vivem no `hook_conf` (5º campo) — no **bridge**, não no ctx do agente de pesquisa. Cutover precisa
+  o bridge **injetar no ctx** (ex.: `session.surveyed_segment_id` + `session.surveyed_agent_key`) antes
+  de disparar a pesquisa, OU passar via metadata do trigger. Esse é o real trabalho de atribuição do
+  cutover; sinal de segmento "sobre si mesmo" só precisa do `$.segment_id` exposto.
+  ContextStore NÃO guarda registro dos segment_ids do contato — só namespace por segmento
+  `segment.{segmentId}.*` (precisa saber o id) e `session.*_participant_id` (participant, não segment).
   **Pipeline de avaliação (descoberto na F2, 2026-06-07)**: a cadeia Arc 3/6 estava DORMENTE —
   `conversations.session_closed` sem produtor (adicionado ao bridge), persister sem self-healing de
   schema, `EVALUATOR_POOL` apontando p/ pool inexistente, consumer do routing filtrando `event` em
