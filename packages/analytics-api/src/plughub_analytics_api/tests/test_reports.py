@@ -795,6 +795,27 @@ class TestQueryAgentsCompare:
         # NPS = (promoters - detractors)/n * 100 = (2-1)/4*100 = 25.0
         assert ent["summary"]["nps"] == pytest.approx(25.0)
 
+    async def test_session_nps_lens_reads_session_signal(self):
+        # F10.3a: NPS de sessão (grão session) cruzado ao agente via atribuição.
+        cols = ["agent_key", "agent_type", "label", "bucket",
+                "n", "avg_nps", "promoters", "detractors"]
+        client = _make_client(_ch_result(cols, [
+            ["A", "human", "a@x", "2026-06-10", 5, 9.0, 3, 1],
+        ]))
+        result = await query_agents_compare(
+            client, DB, TENANT, lens="session_nps", entities=["A"],
+        )
+        assert result["meta"]["lens"] == "session_nps"
+        assert "error" not in result
+        sql = client.query.call_args_list[-1][0][0]
+        assert "session_signal" in sql
+        assert "grain = 'session'" in sql
+        ent = result["data"]["entities"][0]
+        assert ent["summary"]["n_responses"] == 5
+        assert ent["summary"]["avg_nps"] == pytest.approx(9.0)
+        # NPS = (3-1)/5*100 = 40.0
+        assert ent["summary"]["nps"] == pytest.approx(40.0)
+
     async def test_wrapup_lens_distribution_in_summary(self):
         cols = ["agent_key", "agent_type", "label", "outcome", "issue_status", "cnt"]
         client = _make_client(_ch_result(cols, [

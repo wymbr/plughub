@@ -187,7 +187,11 @@
       "available": "Available",
       "timeShare": "Time split (available × pause)",
       "evals": "{{n}} evals",
-      "qualityProfile": "Quality profile by dimension"
+      "qualityProfile": "Quality profile by dimension",
+      "customerVoice": "Customer voice",
+      "npsAgent": "NPS · agent (segment)",
+      "npsSession": "NPS · session (context)",
+      "responses": "{{n}} responses"
     },
     "chart": {
       "loading": "Loading…",

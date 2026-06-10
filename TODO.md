@@ -168,14 +168,20 @@ Hoje o Analytics/Agents mistura agente×pool e não separa humano×IA.
   `max_concurrent_sessions`. Ver CHANGELOG) → **F10.2b.2 coleta real de NPS via delegate (inbound_only)
   ✅ 2026-06-10** (skills `agente_survey_nps_v1`+`agente_survey_reconnect_v1`; pools `survey_collector_ia`+
   `survey_reconnect_ia`; reconexão webchat via `pending_workflow_get`; fix de plataforma: recursão de
-  arrays no `interpolate.ts`; validado E2E real com NPS=8 — ver CHANGELOG) → **F10.3 endpoint + bancada +
-  cutover F5** (bancada lê NPS/CSAT de `session_signal` p/ todos os grãos; hook de NPS de segmento passa
-  a chamar `survey_record` com `segment_id`/`agent_key` via `@ctx`; aposenta `seg_signal`/`segments.nps_score`
-  — resolve a duplicação de plumbing entre `segments` e `session_signal`). **F11 futura**: survey
+  arrays no `interpolate.ts`; validado E2E real com NPS=8 — ver CHANGELOG) → **F10.3a exposição do NPS
+  de sessão na bancada ✅ 2026-06-10** (lente `session_nps`: `session_signal` grain=session ⋈ atribuição
+  por session_id → NPS de sessão dos contatos do agente, cruzamento §8; seção "Voz do cliente" no
+  detalhe type-aware: NPS agente × NPS sessão; i18n; teste passa; endpoint 200 — ver CHANGELOG. Não toca
+  F5) → **F10.3b cutover F5 (futura)**: hook de NPS de segmento chama `survey_record(grain=segment,
+  segment_id, agent_key)` (expor `$.segment_id` no `interpolate.ts` + bridge escreve `session.surveyed_*`
+  via `@ctx`); `_compare_nps_lens` migra para `session_signal`; aposenta `seg_signal`/`segments.nps_score`
+  — resolve a duplicação NPS/CSAT entre `segments` e `session_signal`. **F11 futura**: survey
   **diferida** (`captured_at ≠ session_at`, `session_at` da origem via enrichment) + grão **journey**
   ponta-a-ponta. Vocabulário: `journey`=grão (relacionamento multi-sessão), não a entidade eliminada.
   Detalhe em §13/§14 do spec. Débito pré-existente notado na F1:
-  3 falhas em `resolve.test.ts` (BLPOP/mention mocks — não relacionadas).
+  3 falhas em `resolve.test.ts` (BLPOP/mention mocks — não relacionadas). Débito notado na F10.3a:
+  6 falhas em `test_reports.py::TestQueryAgentAvailabilityReport` (`query_agent_availability() missing
+  positional arg 'tenant_id'` — descasamento assinatura×teste, pré-existente, não relacionado à bancada).
   **Nota técnica F10.3 — contexto de atribuição para `survey_record(grain=segment)` (recon 2026-06-10):**
   o que o skill já tem vs. o que falta para chamar `survey_record` com atribuição:
   · `session_id` — **disponível** à YAML como built-in `$.session_id` (`interpolate.ts` `resolveJsonPathRef`,

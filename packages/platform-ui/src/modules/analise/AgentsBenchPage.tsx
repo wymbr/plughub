@@ -29,7 +29,7 @@ import { DEFAULT_FILTERS } from '@/modules/contacts/types'
 // domain: 'universal' (humano + IA) | 'human' (IA desabilitada na lista).
 // primaryKey: métrica plotada no gráfico mínimo da F4.1 (F4.2 enriquece a viz).
 
-type LensId = 'resolution' | 'sessions_aht' | 'availability' | 'pause_reason' | 'quality' | 'quality_criteria' | 'nps' | 'wrapup' | 'escalation_reason'
+type LensId = 'resolution' | 'sessions_aht' | 'availability' | 'pause_reason' | 'quality' | 'quality_criteria' | 'nps' | 'session_nps' | 'wrapup' | 'escalation_reason'
 type Domain = 'universal' | 'human'
 
 interface LensDef { id: LensId; domain: Domain; primaryKey: string | null; pct: boolean }
@@ -635,8 +635,8 @@ function AgentDetail({
   useEffect(() => {
     setLoading(true)
     const lenses: LensId[] = isHuman
-      ? ['resolution', 'quality', 'quality_criteria', 'availability']
-      : ['resolution', 'quality', 'quality_criteria']
+      ? ['resolution', 'quality', 'quality_criteria', 'availability', 'nps', 'session_nps']
+      : ['resolution', 'quality', 'quality_criteria', 'nps', 'session_nps']
     Promise.all(lenses.map(l => {
       const p = new URLSearchParams({
         tenant_id: tenantId, from_dt: fromDt, to_dt: toDt,
@@ -655,6 +655,8 @@ function AgentDetail({
   const res  = byLens.resolution?.summary ?? {}
   const qual = byLens.quality?.summary ?? {}
   const av   = byLens.availability?.summary ?? {}
+  const anps = byLens.nps?.summary ?? {}          // NPS do agente (grão segmento, F5)
+  const snps = byLens.session_nps?.summary ?? {}  // NPS da sessão (grão session, F10.3a)
   const num = (v: number | null | undefined) => (typeof v === 'number' ? v : null)
 
   // F8.4 — radar das dimensões (perfil de qualidade do agente).
@@ -685,6 +687,19 @@ function AgentDetail({
       <div className="grid grid-cols-3 gap-2">
         {tiles.map(t_ => <KpiTile key={t_.label} label={t_.label} value={t_.value} />)}
       </div>
+      {/* F10.3a — Voz do cliente: NPS do agente (grão segmento) × NPS da sessão
+          (grão session, contexto dos contatos atendidos). Cruzamento §8. */}
+      {(num(anps.avg_nps) != null || num(snps.avg_nps) != null) && (
+        <div>
+          <p className="text-2xs font-semibold text-muted uppercase tracking-wide mb-1">{t('bench.detail.customerVoice')}</p>
+          <div className="grid grid-cols-2 gap-2">
+            <KpiTile label={t('bench.detail.npsAgent')}
+              value={num(anps.avg_nps) != null ? `${anps.avg_nps} (${t('bench.detail.responses', { n: (anps.n_responses as number) ?? 0 })})` : '—'} />
+            <KpiTile label={t('bench.detail.npsSession')}
+              value={num(snps.avg_nps) != null ? `${snps.avg_nps} (${t('bench.detail.responses', { n: (snps.n_responses as number) ?? 0 })})` : '—'} />
+          </div>
+        </div>
+      )}
       {radar.length >= 3 && (
         <div>
           <p className="text-2xs font-semibold text-muted uppercase tracking-wide mb-1">{t('bench.detail.qualityProfile')}</p>

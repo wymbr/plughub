@@ -1671,7 +1671,10 @@ def _fetch_evaluations_summary(
 # (agent_type != 'system', role='primary') herdados da atribuição.
 
 _COMPARE_LENSES = {"resolution", "sessions_aht", "availability", "pause_reason",
-                   "quality", "nps", "wrapup", "quality_criteria", "escalation_reason"}
+                   "quality", "nps", "session_nps", "wrapup", "quality_criteria",
+                   "escalation_reason"}
+# session_nps (F10.3a): lê de session_signal (grain=session, metric=nps) via atribuição
+# por session_id — voz do cliente no grão sessão, cruzada ao agente (contexto/§8).
 # nps/wrapup (F5): lêem de segments (nps_score / outcome+issue_status) — grão segmento.
 # quality_criteria (F8): lê de evaluation_dimension_scores (nota por dimensão) via
 # atribuição por session_id; comparável só dentro do mesmo form (guard na UI).
@@ -1766,6 +1769,12 @@ def _per_agent_for_lens(
         )
     elif lens == "nps":
         per_agent = _compare_nps_lens(
+            client, db, tenant_id, since, until, pool_id,
+            accessible_pools, supervised_agent_types,
+        )
+        metric_keys = ["avg_nps", "nps"]
+    elif lens == "session_nps":
+        per_agent = _compare_session_nps_lens(
             client, db, tenant_id, since, until, pool_id,
             accessible_pools, supervised_agent_types,
         )
@@ -2059,6 +2068,87 @@ def _compare_nps_lens(
         )
         GROUP BY ak, bucket
         ORDER BY ak, bucket
+    """, parameters=params))
+
+    per_agent: dict = {}
+    for r in rows:
+        a = per_agent.setdefault(r["agent_key"], {
+            "agent_type": r["agent_type"], "label": r["label"],
+            "buckets": {}, "_n": 0, "_sum": 0.0, "_prom": 0, "_det": 0,
+        })
+        n = int(r["n"] or 0)
+        avg_nps = float(r["avg_nps"]) if r["avg_nps"] is not None else None
+        prom = int(r["promoters"] or 0)
+        det = int(r["detractors"] or 0)
+        a["buckets"][r["bucket"]] = {
+            "date": r["bucket"], "n": n,
+            "avg_nps": round(avg_nps, 2) if avg_nps is not None else None,
+            "nps": round((prom - det) / n * 100, 1) if n else None,
+        }
+        a["_n"] += n; a["_sum"] += (avg_nps or 0) * n; a["_prom"] += prom; a["_det"] += det
+    for a in per_agent.values():
+        n = a.pop("_n"); s = a.pop("_sum"); prom = a.pop("_prom"); det = a.pop("_det")
+        a["summary"] = {
+            "n_responses": n,
+            "avg_nps":     round(s / n, 2) if n else None,
+            "nps":         round((prom - det) / n * 100, 1) if n else None,
+        }
+    return per_agent
+
+
+def _compare_session_nps_lens(
+    client: Any, db: str, tenant_id: str, since: str, until: str,
+    pool_id: str | None,
+    accessible_pools: list[str] | None, supervised_agent_types: list[str] | None,
+) -> dict:
+    """
+    session_nps (F10.3a) — voz do cliente no grão SESSION, cruzada ao agente que
+    atendeu o contato. Fonte: session_signal (grain='session', metric='nps') ⋈
+    atribuição por session_id (último primary não-sintético, F2). O sinal de sessão
+    NÃO é atribuível a um agente (agent_key vazio na tabela); aqui o agente vem da
+    sessão atendida — é o cruzamento §8 (NPS do agente × NPS da sessão), exibido no
+    detalhe. Bucketiza por session_at (regra de ouro §7). N sempre visível.
+    """
+    ss_conditions = [
+        "tenant_id = {tenant_id:String}",
+        f"session_at >= '{since}'",
+        f"session_at <  '{until}'",
+        "grain = 'session'",
+        "metric = 'nps'",
+    ]
+    params: dict = {"tenant_id": tenant_id}
+    outer = ["1 = 1"]
+    if pool_id:
+        outer.append("attr.pool_id = {pool_id:String}")
+        params["pool_id"] = pool_id
+    if accessible_pools is not None:
+        scope: list[str] = []
+        if _apply_pool_scope(scope, accessible_pools):
+            outer += [s.replace("pool_id", "attr.pool_id") for s in scope]
+        else:
+            return {}
+    attr_sql = _session_agent_attribution_sql(db)
+
+    rows = _rows_to_dicts(client.query(f"""
+        SELECT
+            attr.agent_key                       AS agent_key,
+            any(attr.agent_type)                 AS agent_type,
+            any(if(attr.agent_type = 'human',
+                   attr.user_login, attr.agent_key)) AS label,
+            toString(toDate(ss.session_at))      AS bucket,
+            count()                              AS n,
+            avg(ss.value_num)                    AS avg_nps,
+            countIf(ss.value_num >= 9)           AS promoters,
+            countIf(ss.value_num <= 6)           AS detractors
+        FROM (
+            SELECT session_id, value_num, session_at
+            FROM {db}.session_signal FINAL
+            WHERE {" AND ".join(ss_conditions)}
+        ) AS ss
+        JOIN ({attr_sql}) AS attr ON ss.session_id = attr.session_id
+        WHERE {" AND ".join(outer)}
+        GROUP BY attr.agent_key, toDate(ss.session_at)
+        ORDER BY agent_key, bucket
     """, parameters=params))
 
     per_agent: dict = {}

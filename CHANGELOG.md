@@ -2,6 +2,29 @@
 
 ---
 
+## Bancada de agentes F10.3a — exposição do NPS de sessão na bancada (2026-06-10)
+
+Lente `session_nps` no `/reports/agents/compare`: `session_signal` (grain='session', metric='nps') ⋈
+atribuição por `session_id` (último primary não-sintético, F2) → NPS de **sessão** dos contatos que o
+agente atendeu. É o cruzamento §8 (NPS do agente × NPS da sessão) — **contexto não-atribuível** a um
+agente (o sinal de sessão não tem agente; aqui o agente vem da sessão atendida). Bucketiza por
+`session_at` (regra de ouro §7); N sempre visível.
+
+**UI**: seção "Voz do cliente" no detalhe type-aware (`AgentDetail`) com 2 tiles — **NPS · agente
+(segmento, F5)** × **NPS · sessão (contexto, F10.3a)** —, cada um com N. i18n en+pt-BR.
+`session_nps` adicionada a `_COMPARE_LENSES` + `LensId`.
+
+**Validação**: teste `test_session_nps_lens_reads_session_signal` (lê session_signal, grain='session',
+avg/NPS corretos) — passa. Endpoint vivo: `lens=session_nps` → 200 (`entities:[]` quando não há sinal
+de sessão atribuível; popula ao chavear sinal a contato real com segmento).
+
+**Não toca a F5**: o NPS por agente (grão segmento) segue lendo `segments.nps_score`. A unificação
+total (Opção 2) — segment NPS via `survey_record`, lente migra para `session_signal`, aposenta
+`segments.nps_score` — é a **F10.3b (futura)**, onde a duplicação NPS/CSAT entre `segments` e
+`session_signal` some de vez.
+
+---
+
 ## Bancada de agentes F10.2b.2 — coleta real de NPS via delegate (inbound_only) (2026-06-10)
 
 Fecha a F10.2b: a survey de sessão coleta o **NPS real do cliente** (não mais valor semeado) e grava o

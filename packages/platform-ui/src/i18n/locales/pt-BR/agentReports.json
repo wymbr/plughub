@@ -187,7 +187,11 @@
       "available": "Disponível",
       "timeShare": "Distribuição de tempo (disponível × pausa)",
       "evals": "{{n}} aval.",
-      "qualityProfile": "Perfil de qualidade por dimensão"
+      "qualityProfile": "Perfil de qualidade por dimensão",
+      "customerVoice": "Voz do cliente",
+      "npsAgent": "NPS · agente (segmento)",
+      "npsSession": "NPS · sessão (contexto)",
+      "responses": "{{n}} respostas"
     },
     "chart": {
       "loading": "Carregando…",
