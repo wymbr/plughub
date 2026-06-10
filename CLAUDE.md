@@ -794,3 +794,12 @@ Elimina a dualidade contact/workflow tratando workflows como canal `webhook` na 
 - **Fase 4** *(deferred)*: SAR/erasure pipeline — pseudonimização `sessions_stream` + anonimização ClickHouse.
 - **Fase 5** *(deferred)*: `config_snapshot` — read-only do namespace `masking` do Config API para DPO.
 
+### Business in Any Media — processo channel-abstract + framework de loja *(proposta)*
+- Reposicionamento process-centric + comércio conversacional sobre o modelo de 3 níveis (a/b/c). Specs em `docs/product/`: arquitetura-alvo (3 níveis), resolvedor de identidade/cadastro (nível b, generaliza `pending_workflow`), contrato delegate-por-pool, commerce-cards (nível c), fluxo de intake. Detalhe e fases em `TODO.md`. Base existe (workflow+canais+suspend/resume+masking); falta cadastro de identidade completo, commerce-cards e o nível (b) de primeira classe.
+
+### Fila de trabalho humano / dispatch pull + inbox no Console *(proposta)*
+- Modo `dispatch_mode: pull` genérico no Routing Engine (claim atômico via `ZREM`, lease+auto-release, ordenação por peso) + inbox no Console + fila de aprovação como especialização (decisão pelo retorno do delegate, sem schema novo). Specs em `docs/product/` (routing-pull-dispatch, human-work-queue-aprovacao, pull-inbox-console-ui). Liga ao gate de promoção homologação→produção. Detalhe em `TODO.md`.
+
+### Record/Replay Harness *(proposta)*
+- Generaliza o Session Replayer num harness de gravação/replay em todas as costuras (driver/mock por seam) p/ regressão determinística e gate de promoção via `ComparisonReport`. Falta captura full-fidelity MCP/AI Gateway, clock/seed injetável, gravação seletiva. Spec em `docs/product/record-replay-harness-spec.md`. Detalhe em `TODO.md`.
+

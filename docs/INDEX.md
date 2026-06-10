@@ -48,6 +48,21 @@ Documentação voltada ao público comercial, de gestão e a novos usuários.
 | [product/target-audience.md](product/target-audience.md) | Perfis de público-alvo: gestores, supervisores, integradores, desenvolvedores |
 | [product/value-proposition.md](product/value-proposition.md) | Diferenciais por papel, benefícios mensuráveis, casos de uso |
 | [product/competitive-analysis.md](product/competitive-analysis.md) | Comparação com Gemini Enterprise, Agentforce, Genesys, NICE/Cognigy, Five9, Talkdesk, LangGraph, CrewAI, n8n |
+| [product/plughub-descritivo-tecnico-funcional.md](product/plughub-descritivo-tecnico-funcional.md) | Descritivo técnico-funcional consolidado p/ avaliador técnico (+ `.html` print-ready). Inclui roadmap §20 |
+
+### Propostas / roadmap em `product/` *(não implementado — ver `TODO.md`)*
+
+| Arquivo | Conteúdo |
+|---|---|
+| [product/business-in-any-media-arquitetura-alvo.md](product/business-in-any-media-arquitetura-alvo.md) | Modelo de 3 níveis (a/b/c) + framework de loja (+ diagrama `business-in-any-media-3-niveis.svg`) |
+| [product/identity-resolver-nivel-b-spec.md](product/identity-resolver-nivel-b-spec.md) | Resolvedor de identidade + cadastro de cliente (nível b) (+ `identity-resolver-sequencia.mermaid`) |
+| [product/delegate-contrato-por-pool-spec.md](product/delegate-contrato-por-pool-spec.md) | Contrato de delegação por pool (a→b) |
+| [product/commerce-cards-nivel-c-spec.md](product/commerce-cards-nivel-c-spec.md) | Vocabulário de commerce-cards renderizado por canal (nível c) |
+| [product/intake-flow-nivel-c-spec.md](product/intake-flow-nivel-c-spec.md) | Fluxo de intake (nível c) |
+| [product/routing-pull-dispatch-spec.md](product/routing-pull-dispatch-spec.md) | Dispatch pull genérico no Routing Engine |
+| [product/human-work-queue-aprovacao-spec.md](product/human-work-queue-aprovacao-spec.md) | Fila de trabalho humano / aprovação no Console |
+| [product/pull-inbox-console-ui-spec.md](product/pull-inbox-console-ui-spec.md) | UI da inbox de pull no Console |
+| [product/record-replay-harness-spec.md](product/record-replay-harness-spec.md) | Record/Replay Harness (regressão determinística + gate de promoção) |
 
 ---
 

@@ -1,0 +1,42 @@
+sequenceDiagram
+    autonumber
+    actor C as Cliente (qualquer canal)
+    participant IO as (c) Agente I/O + Adapter
+    participant B as (b) Resolver / acesso a canais
+    participant RG as Retaguarda do contratante (MCP)
+    participant A as (a) Fluxo negocial
+    participant ST as Identidade + Pendências (Redis/PG)
+
+    Note over C,ST: Fase 1 — contato no WhatsApp (deixa o checkout em aberto)
+    C->>IO: mensagem (WhatsApp)
+    IO->>B: inbound — novo contato no canal
+    B->>ST: Lookup 1 — resolve por telefone
+    ST-->>B: miss → provisiona prospect efêmero (Redis), customer_id nativo
+    B->>A: abre sessão do fluxo negocial (session_id)
+    A->>B: delegate (collect, customer_resumable) — reter p/ retomar
+    Note over B,IO: gate de identificação (identidade fraca)
+    B->>IO: pede uma âncora durável
+    IO->>C: "quer que eu guarde? me confirma seu CPF/WhatsApp"
+    C-->>IO: fornece CPF
+    IO-->>B: CPF capturado (mascarado)
+    B->>RG: identity_verify(captured) — repassa, não decide
+    RG-->>B: ok + external_id + confidence
+    B->>ST: promove ao PG — upsert secondary_keys + external_refs (id estável)
+    B->>ST: grava PendingEntry em pending_by_customer (resume_token)
+    C-->>IO: sai sem concluir → sessão suspended
+
+    Note over C,ST: Fase 2 — volta dias depois, agora no Webchat
+    C->>IO: mensagem (Webchat) — outro canal
+    IO->>B: inbound — novo contato no canal
+    B->>ST: Lookup 1 — resolve identidade
+    ST-->>B: customer_id (Redis; miss → PG + re-hidrata)
+    B->>ST: Lookup 2 — pending_by_customer
+    ST-->>B: PendingEntry (resume_token válido)
+    B->>IO: oferta (policy = offer)
+    IO->>C: "vi seu checkout em aberto — continuar?"
+    C-->>IO: sim
+    IO-->>B: confirma
+    Note over A: (a) é channel-abstract — não sabe que o canal mudou
+    B->>A: workflow_resume(resume_token) — suspended→active, novo segment no MESMO session_id
+    A-->>C: continua o checkout de onde parou → conclui
+    B->>ST: consume_pending (remove a entrada)

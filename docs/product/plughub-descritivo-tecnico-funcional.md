@@ -1,0 +1,535 @@
+# PlugHub — Descritivo Técnico-Funcional
+
+> **Público:** avaliador técnico de um cliente prospectivo (CTO, Head de IA, arquiteto de soluções, CISO/DPO, Head de Contact Center).
+> **Base:** última versão de implementação consolidada em `CLAUDE.md`, `CHANGELOG.md` (até 2026-06-09), `docs/arcos/` e código-fonte do monorepo `packages/`.
+> **Ângulo:** técnico, com enquadramento competitivo contra plataformas CCaaS (Genesys, NICE/Cognigy, Five9, Talkdesk), hyperscalers agentic (Gemini Enterprise, Salesforce Agentforce) e orquestradores dev-first (LangGraph, CrewAI, n8n).
+> **Data:** Junho 2026.
+
+Este documento descreve **o que está implementado hoje**. As notas de compatibilidade (§19) registram, com honestidade de engenharia, onde a narrativa de produto antecede a implementação. Sugestões e funcionalidades ainda inexistentes ficam isoladas em uma seção de roadmap (§20), sem se misturar ao que é real.
+
+---
+
+## 1. Sumário executivo — a virada de categoria
+
+O mercado de agentes de IA para atendimento e automação convergiu, em 2025–2026, em torno de três arquétipos, cada um com um buraco estrutural:
+
+- **Hyperscalers agentic** (Gemini Enterprise, Salesforce Agentforce): vendem "agentic everything" com lock-in (Gemini exige GCP; Agentforce exige Enterprise Edition) e pricing multidimensional impossível de estimar.
+- **CCaaS com IA** (Genesys, NICE/Cognigy, Five9, Talkdesk): maduros em telefonia e omnichannel, mas a camada agentic é evolução de NLU legado, com flexibilidade de framework limitada. Apenas Talkdesk declara MCP nativo.
+- **Orquestradores dev-first** (LangGraph, CrewAI, n8n): excelentes como primitivas, mas não são CCaaS — faltam console de operação, session replay, sentimento, roteamento skill-based e o conceito de agente humano como participante de primeira classe.
+
+Todos competem dentro de dois modelos mentais históricos: o CCaaS é **interaction-centric** (a unidade é a interação — chamada, chat, ticket); o CRM é **record-centric** (a unidade é o registro — case, account). O PlugHub propõe um terceiro modelo: **process-centric** — a unidade de gestão é o **processo de negócio do cliente**, modelado como um **workflow channel-abstract** que atravessa múltiplos contatos, canais, dias e participantes (humanos e IA), com SLA, roteamento e analytics medidos no nível do processo (via *session trace* do modelo unificado) e drilláveis até o turno individual. O processo nasce, dorme (`suspend`), troca de canal e se completa onde o cliente estiver — **Business in Any Media: nunca se perde um negócio por causa de canal.** (Não há entidade "Journey" separada: ela foi eliminada no Arc 19 por ser redundante — um workflow Tier-1 + o session trace dão a hierarquia sem entidade própria.)
+
+Os cinco diferenciais que sustentam essa posição e que um avaliador técnico deve verificar primeiro:
+
+1. **Sala de conferência unificada** — humano e IA são participantes simétricos da mesma sessão. Não há "handoff" visível ao cliente; há entrada e saída de participantes na mesma sala.
+2. **MCP como protocolo único de integração, com interception guard como invariante arquitetural** — nenhuma chamada a sistema de negócio escapa de validação de permissão, guarda anti-injeção e auditoria. Compliance não é plugin; é primitiva.
+3. **AI Gateway agnóstico e multi-conta** — troca de LLM e de provedor sem tocar o agente; rotação e fallback de contas administrados centralmente.
+4. **Motor único de fluxo (Skill Flow)** para inbound, outbound e automação de processos — o mesmo artefato declarativo serve atendimento e workflow, com discador interno.
+5. **Billing por capacidade** — você paga pela capacidade configurada (instâncias simultâneas, humanas + IA), não por turno, ação ou token. O custo é previsível do mês 1 ao mês 13.
+
+---
+
+## 2. Arquitetura da plataforma
+
+### 2.1 Event-driven, stateless, estado externalizado
+
+O backbone é **Kafka** (barramento de eventos) com componentes **stateless por padrão**. O estado de tempo real vive no **Redis**, não nos processos: `pipeline_state`, filas, heartbeats, ContextStore e o *canonical stream* da sessão. Isso é a base da escala horizontal e da degradação graciosa — qualquer instância de qualquer componente pode cair e ser substituída sem perda de estado de sessão, porque o estado não está nela.
+
+Agentes que precisam manter estado entre turnos declaram `execution_model: stateful` e o Routing Engine garante **afinidade de sessão**. O AI Gateway é estritamente stateless: processa um turno por chamada LLM, sem estado entre turnos (invariante).
+
+> **Vs. concorrência:** CCaaS tradicionais carregam estado em componentes proprietários acoplados; hyperscalers escondem o modelo de estado atrás de serviços gerenciados. O PlugHub expõe um modelo explícito (estado em Redis/Kafka) que o time de arquitetura do cliente pode auditar e dimensionar.
+
+### 2.2 Topologia de persistência
+
+| Banco | Uso principal |
+|---|---|
+| **Redis Cluster** | Estado de conversa em tempo real, `pipeline_state`, filas, heartbeats, ContextStore, canonical stream |
+| **PostgreSQL + pgvector** | Agent Registry, schemas `auth`/`workflow`/`evaluation`, histórico de conversas, base de conhecimento vetorial (RAG) |
+| **ClickHouse** | Analytics operacional, audit log, métricas de qualidade — consolidação de alto volume |
+| **Object Storage** | Áudio de ligações, anexos, gravações WebRTC, datasets |
+
+### 2.3 Alta disponibilidade e alto volume
+
+A arquitetura event-driven sobre Kafka, com componentes stateless e estado externalizado em Redis, **sustenta escala horizontal e degradação graciosa**. Consumers Kafka críticos têm **retry + dead-letter queue** (`events.dead_letter`). A reconciliação de instâncias é estilo Kubernetes: um controlador compara o estado desejado (Agent Registry) com o estado real (Redis) e aplica o diff mínimo, com heartbeat de 15s e reconciliação periódica.
+
+> **Nota de honestidade (ver §19):** "totalmente tolerante a falha" é uma **propriedade-alvo da arquitetura**, condicionada a um deployment correto (Redis Cluster, partições Kafka replicadas, múltiplas réplicas stateless). Não é uma garantia absoluta intrínseca — como em qualquer plataforma, depende da topologia de produção.
+
+### 2.4 Multi-tenant
+
+O isolamento por `tenant_id` é **pervasivo em todo o stack**: chaves Redis (`{tenantId}:...`), tópicos e schemas Kafka, schemas PostgreSQL, `accessible_pools[]` e `module_config` no JWT, e segredos por tenant (ex.: `{tenant_id}:config:webchat:jwt_secret`, credenciais de canal por tenant). A Config API tem namespaces por tenant para override de praticamente todos os parâmetros operacionais.
+
+> **Nota de honestidade (ver §19):** o **isolamento operacional multi-tenant completo** está em maturação — a fundação (tenant_id em todo lugar) existe, mas há trabalho de hardening em andamento. Para SaaS multi-tenant em produção, este é o ponto a validar em prova de conceito.
+
+### 2.5 Stack por pacote (monorepo)
+
+Monorepo em `packages/`, cada pacote com responsabilidade única e dependências explícitas (sem ciclos; `schemas` não depende de ninguém; pacotes TypeScript nunca dependem do `ai-gateway` Python).
+
+| Pacote | Runtime | Responsabilidade |
+|---|---|---|
+| `schemas` | Node 20+ (Zod) | Contratos canônicos compartilhados |
+| `sdk` | Node + Python | Contrato de execução de agente (TS e Python) |
+| `mcp-server-plughub` | Node 20+ | Runtime de agente e ferramentas BPM (MCP) |
+| `skill-flow-engine` | Node 20+ | Interpretador do grafo de fluxo |
+| `ai-gateway` | Python 3.11+ | Inferência LLM, multi-conta, extração de contexto |
+| `agent-registry` | Node 20+ | CRUD de AgentType/Pool/Skill, deploy lifecycle, hot-reload |
+| `routing-engine` | Python 3.11+ | Alocação de agente, filas, scoring, close_reason |
+| `rules-engine` | Python 3.11+ | Avaliação de eventos pós-roteamento |
+| `channel-gateway` | Python 3.11+ | Adapters de canal, normalização inbound, render outbound |
+| `calendar-api` | Python 3.11+ (3700) | Motor de calendário (horários, feriados, timezone) |
+| `auth-api` | Python 3.11+ (3200) | Auth, JWT, RBAC+ABAC, grupos/escopo de supervisor |
+| `evaluation-api` | Python 3.11+ (3400) | Plataforma de qualidade (forms, campanhas, contestação) |
+| `pricing-api` | Python 3.11+ (3900) | Billing por capacidade, invoice |
+| `mcp-server-knowledge` | Node 20+ (3401) | Base de conhecimento vetorial (RAG) |
+| `analytics-api` | Python 3.11+ | Consolidação ClickHouse e relatórios |
+| `platform-ui` | React 18 / Vite | Toda a UI de operação |
+
+---
+
+## 3. Modelo de sessão unificado — a "sala de conferência"
+
+Este é o diferencial estrutural mais importante e o mais difícil de copiar.
+
+**Todo contato é uma sala de conferência.** O Core cria a sessão em todo novo contato; agentes entram na sala com seus papéis e recebem mensagens segundo regras de visibilidade. O Redis stream `session:{id}:stream` é a **fonte única de verdade** de todos os eventos da sessão (toda escrita passa por `writeStreamEntry()`, com validação Zod e `event_id` garantido).
+
+**Papéis de participante:** `primary` (orquestrador principal), `specialist` (especialista convidado), `supervisor` (monitoramento), `evaluator` (avaliação de qualidade), `reviewer` (revisão da avaliação).
+
+**Visibilidade de mensagem por destinatário:**
+
+| Visibilidade | Destinatários | Uso típico |
+|---|---|---|
+| `all` | Todos, incluindo o cliente | Mensagem normal de atendimento |
+| `agents_only` | Todos os agentes, sem o cliente | Nota interna, sugestão de copiloto/especialista |
+| `["part_abc", ...]` | Apenas participant_ids listados | Supervisor → agente específico; NPS só para o cliente |
+
+A consequência competitiva: **humano e IA são simétricos**. Um especialista de IA pode entrar numa sessão de voz conduzida por um humano e sugerir respostas que só o agente vê (`agents_only`); um supervisor pode injetar uma mensagem privada para um único participante; um agente de IA pode conduzir e transferir para humano sem o cliente perceber a transição. Nos concorrentes, IA→humano e humano→IA são **handoffs** — transferências com contexto perdido e scripts diferentes. Aqui, é entrada e saída de participantes na mesma sala, com o mesmo stream e o mesmo contexto.
+
+**Status de sessão:** `active`, `closed`, `abandoned` e — desde o Arc 19 — `suspended` (workflow suspenso aguardando sinal externo, com TTL estendido no Redis). **Domínio de `close_reason`** normalizado (`no_resource`, `max_wait_exceeded`, `customer_disconnect`, `customer_hangup`, `customer_abandon`, `flow_complete`, `agent_transfer`, `agent_hangup`, `session_timeout`, `system_error`) — base para relatórios consistentes de desfecho.
+
+### 3.1 Modelo de três camadas do ciclo de vida
+
+A plataforma distingue explicitamente três camadas que a maioria das soluções colapsa em uma só:
+
+1. **Ciclo do contato** (perspectiva do cliente — estatísticas congelam na saída do cliente);
+2. **Ciclo do segmento do agente** (janela de cada participante; o recurso do pool é liberado em `agent_done`);
+3. **Infraestrutura de conferência** (a sala; destruída só quando todos saem).
+
+Essa separação é o que permite, por exemplo, pós-atendimento (NPS, wrap-up) rodar como segmentos independentes sem inflar o AHT do agente, e supervisores/especialistas entrarem e saírem sem encerrar a sala.
+
+---
+
+## 4. Business in Any Media — o processo de negócio como workflow channel-abstract
+
+O PlugHub não orquestra um atendimento; orquestra **o processo de negócio inteiro do cliente** — descoberta, atendimento, aprovação, pagamento, entrega, retomada — independentemente do canal. Desde o Arc 19, a entidade `Journey` foi **eliminada** por redundância: o processo é simplesmente um **workflow Tier-1** (skill-flow num pool `webhook`) e a hierarquia multi-etapa é dada pelo **session trace** do modelo unificado, sem entidade separada.
+
+Os três elementos do modelo:
+
+- **Workflow (processo)** — channel-abstract; orquestra agentes e sub-fluxos via `task`/`collect`/`delegate`; persiste por `suspend`/`resume`. O `session_id` é o identificador único por toda a execução, inclusive através de múltiplos ciclos suspend/resume.
+- **Contact** — cada episódio de contato dentro do processo.
+- **Segments** — os atendimentos por cada agente dentro de um contato (`ContactSegment`: `parent_segment_id`, `sequence_index`, `outcome`, `close_reason`, `duration_ms`, identidade do agente humano ou tipo de agente IA). Base do analytics drillável (processo → contato → segmento).
+
+Capacidades-chave (implementadas):
+
+- **Preservação de contexto entre quedas e esperas.** Em desconexão ou espera, todo o contexto é preservado (ContextStore + canonical stream + Redis com TTL calibrado ao `timeout_hours`) até a resolução ou o próximo contato. Um workflow suspenso retoma com novo segmento via `resume_token` (hash Redis `{tenant}:resume_tokens → session_id`), no **mesmo `session_id`**.
+- **Troca de canal em qualquer etapa.** A negociação de capacidade de canal (Arc 16) permite oferecer/realizar troca de mídia (ex.: de webchat para voz) preservando o processo.
+- **Retomada por reaparecimento do cliente.** Um processo suspenso aguardando o cliente é detectável quando ele volta: o fluxo de entrada coleta um identificador e consulta as pendências (`pending_workflow_get` → `workflow_resume`), oferecendo continuar de onde parou. Já em produção no demo de portabilidade.
+- **Modelo de três níveis (arquitetura).** O processo channel-abstract (a) delega a interação a um fluxo de acesso a canais (b), que aciona o agente de I/O do canal (c). A segregação por perfil (`workflow` × `agent`, Arc 19) **força** que o processo nunca toque canal — é o que garante o "any media".
+
+> **Vs. concorrência:** Salesforce tem `case` (record-centric, lado CRM); Genesys/Pointillist oferece analytics de jornada **sem amarração ao roteador**; LangGraph tem `thread` (técnico, não de negócio). O PlugHub trata o **processo multi-etapa/multi-contato como workflow + trace unificado, agnóstico de canal e amarrado ao roteador** — tornando o CRM redundante onde o registro central é o processo (cobrança, onboarding, retenção, comércio conversacional, suporte recorrente) e comoditizando a interação no CCaaS. O aprofundamento (cadastro de identidade cross-canal, framework de loja) está no roadmap (§20).
+
+---
+
+## 5. Canais — omnichannel real, com voz e WebRTC nativos
+
+O modelo "todo contato é conferência" se aplica **sem mudança** a todos os canais. O que varia por canal é apenas como o cliente entra na sala e como mensagens entram e saem. Para canais de texto há um único plano (controle = Redis stream + Kafka); para voz emerge um segundo plano (mídia = conference room do CPaaS), e o `VoiceAdapter` é a única ponte entre eles.
+
+**Premissa central:** agentes de IA são **sempre texto**. Em voz, STT converte fala→texto na entrada e TTS converte texto→áudio na saída; o pipeline central (AI Gateway, ContextStore, Skill Flow, qualidade) opera sempre em texto e não muda por canal.
+
+### 5.1 Canais implementados
+
+| Canal | Transporte | Provedores / mecanismo | Observações |
+|---|---|---|---|
+| **Webchat** | WebSocket persistente | Próprio | Upload 2-stage, typing, masked fields, reconexão por cursor (zero perda) |
+| **WhatsApp** | Webhook HTTP | Meta Cloud API (BSPs Twilio/Infobip/360dialog via `IWhatsAppProvider`) | Botões (≤3), list (4–10), fallback de coleta sequencial; mídia via AttachmentStore |
+| **SMS** | Webhook HTTP | Twilio (extensível: Telnyx, Vonage, SNS via `ISMSProvider`) | Concatenação de longos, coleta sequencial, segmentação outbound |
+| **Email** | Webhook HTTP | Mailgun (extensível: SES, SendGrid, Graph, Gmail) | Correlação por Reply-To → In-Reply-To → endereço; strip de quoted text; thread estruturado via `email_get_thread` |
+| **Voz / PSTN** | Webhook + WS de mídia | Twilio (tronco PSTN) + Deepgram (STT) + ElevenLabs/Deepgram Aura/Twilio Say (TTS) | Bot leg na conference; DTMF e STT por step (`input_mode`); STT do agente humano "ligável"; outbound via `collect` |
+| **WebRTC** | Signaling WS + SFU | LiveKit self-hosted (egress de gravação, supervisão hidden subscriber) | Negociação de mídia **vídeo → voz → texto**; tokens emitidos só pelo Channel Gateway |
+| **Webhook (workflow)** | HTTP | Próprio | Workflows como canal `webhook` (Arc 19); cada skill registrada num pool webhook é um "endpoint" |
+
+### 5.2 Abstração de providers
+
+Toda integração externa fica atrás de um `Protocol` (provider): trocar Twilio por Telnyx em SMS, ou Mailgun por SES em email, ou adicionar um BSP de WhatsApp, **não toca o adapter**. Em voz, três interfaces independentes (`IVoiceProvider`, `ISTTProvider`, `ITTSProvider`) com encadeamento de fallback (ex.: ElevenLabs → Twilio Say como último recurso que nunca falha; Deepgram → Mock que mantém a chamada viva).
+
+### 5.3 Web-site como front dos canais web
+
+O site do cliente usa agentes e workflows como backend, integrando os canais web (webchat e WebRTC). O mesmo motor de fluxo e os mesmos agentes especialistas atendem o widget web.
+
+> **Vs. concorrência:** voz com stack interno (gravação + transcrição + STT/TTS) e WebRTC nativo com negociação de mídia é território de CCaaS maduro (Genesys, NICE, Five9). Hyperscalers e dev-first dependem de parceiros (Vonage, AWS) ou não têm voz. O diferencial do PlugHub é ter **SIP/PSTN + WebRTC nativos** mantendo o pipeline de IA agnóstico e o Twilio restrito ao papel de tronco (nunca produz o TTS no plano de dados).
+
+---
+
+## 6. Skill Flow — motor único de fluxo (atendimento + workflow)
+
+O Skill Flow é a **ferramenta única de design de fluxos e workflows**. Um interpretador de grafo de estados que persiste `pipeline_state` no Redis a cada transição de step (invariante: nunca só em memória).
+
+### 6.1 Tipos de step (treze+)
+
+| Tipo | Faz | Interage com |
+|---|---|---|
+| `task` | Delega a um agente via A2A (`assist`/`transfer`) | Routing Engine |
+| `choice` | Ramificação condicional (JSONPath) | pipeline_state |
+| `catch` | Retry e fallback antes de escalar | pipeline_state |
+| `escalate` | Roteia para um pool (com `reason` normalizado) | Rules Engine |
+| `complete` | Encerra com outcome definido | agent_done |
+| `invoke` | Chama ferramenta MCP diretamente | MCP Server |
+| `reason` | Invoca o AI Gateway com `output_schema` | AI Gateway |
+| `notify` | Mensagem unidirecional ao cliente | Core → Channel Gateway |
+| `menu` | Captura input do cliente, suspende até resposta | Core → Channel Gateway |
+| `suspend` | Suspende até sinal externo (aprovação/input/webhook/timer) | workflow / Redis TTL |
+| `collect` | Contata alvo via canal e aguarda resposta (outbound) | Channel Gateway |
+| `resolve` | Acumulação inline de contexto (pipeline de 5 fases) | ContextStore + AI Gateway |
+| `receive` | Suspende aguardando próxima mensagem de qualquer participante | Redis BLPOP |
+| `begin/end_transaction` | Bloco atômico de input mascarado | in-memory only |
+
+**Segregação por perfil (Arc 19):** o perfil `workflow` (canal webhook) permite `task/choice/catch/escalate/complete/invoke/reason/suspend/collect/receive` e proíbe `menu/notify/begin/end_transaction`; o perfil `agent` (demais canais) permite os de interação com cliente e proíbe `suspend/collect`. Validado no parse do YAML e por guarda no engine.
+
+**Modos de `menu`:** `text`, `button` (≤3 no WhatsApp), `list`, `checklist`, `form` — com fallback por canal resolvido no adapter, nunca no fluxo.
+
+**Validação de fluxo (`validateFlow`):** adjacência fechada (todo destino existe) + política de guarda de ciclo — o YAML é validado antes de publicar.
+
+### 6.2 Outbound baseado em workflow, com discador interno
+
+O mesmo motor faz outbound. O step `collect` contata o cliente via canal (voz, WhatsApp, SMS) e suspende até resposta ou timeout, compartilhando **todas as ferramentas e agentes especialistas** do ambiente. Para voz, o `VoiceAdapter` consome `collect.events` e executa a discagem (pacing) com o tronco PSTN.
+
+- **Canais com outbound** (voz, WhatsApp, SMS): tentativa de contato + execução do fluxo definido; usados pelo workflow para a função de retorno assíncrono.
+- **Canais sem outbound:** o fluxo pode tentar outros canais com outbound, ou ficar **pendente e disponível para retomada** no primeiro inbound do cliente em qualquer canal suportado.
+
+> **Vs. concorrência:** nos incumbentes, inbound e outbound são módulos separados (Genesys Outbound, NICE Outbound, etc.), e os agentes/ferramentas de IA não atravessam essa fronteira. Aqui é **o mesmo motor declarativo** com dialer interno — inbound, outbound e automação de processo na mesma definição.
+
+### 6.3 Deploy lifecycle — hot deploy, agendamento, rollback, graceful shutdown
+
+Implementado no Agent Registry + página `/agent-flow/deploy`:
+
+- **Dois estágios:** `PUT /v1/skills/:id` sempre grava `deploy_status = draft` (save); `POST /v1/skills/:id/deploy` publica (`published`) para pools específicos.
+- **Hot deployment (hot-reload de 3 elos):** publicação → evento `registry.changed` no Kafka → invalidação de cache de skill no engine → efeito imediato **sem restart**.
+- **Graceful shutdown de atendimento em andamento:** monitor de handoff (`GET /v1/skills/:id/handoff-status`) mostra sessões ainda na versão anterior com barra de convergência; a versão nova só assume novos contatos, drenando os em andamento.
+- **Rollback:** botão de rollback restaura o `yaml_snapshot` do deploy anterior e re-deploya nos mesmos pools (com confirmação; badge "rollback" no histórico).
+- **Deploy agendado:** seletor de data/hora cria uma instância do workflow `skill_scheduled_deploy_v1`; lista de deploys pendentes com cancelamento.
+
+> **Nota (ver §19):** o "ambiente de homologação apartado, promovido para produção" se realiza por **segregação de pool**: um **pool de homologação dedicado** (com entrypoint de tráfego de teste e wiring de MCP próprios, apontando para backends de sandbox) roda a versão candidata **totalmente isolada** dos pools de produção — porque o deploy é **por pool** e cada pool roda a sua própria skill publicada (1 por vez). Compartilha o **Core único** (canais, modelo de sessão). A **promoção** é o **deploy (agendável) da skill+config validada para o pool de produção** (`skill_scheduled_deploy_v1`), somado a **Session Replayer** + `validateFlow` para validar antes de promover. O que ainda não é de primeira classe é o **gate gerenciado de promoção** (aprovação + replay como critério + assinatura) — ver §20.1.
+
+---
+
+## 7. Routing Engine — alocação multicritério e fila sempre atendida
+
+O Routing Engine é o **único árbitro de alocação** (invariante: nenhuma conversa é roteada sem passar por ele).
+
+**Critérios e regras:**
+
+- **Channel é filtro rígido** (agente que não suporta o canal do contato é proibido) — distinto de **medium** (`voice/video/message/email`), que é fator de score.
+- **Pausa do agente** é filtro rígido; **heartbeat de gateway** com TTL (>90s expira) é filtro rígido.
+- **SLA-based:** avaliação preguiçosa na cabeça da fila — `min(wait_time / sla_target, max_score)`.
+- **Skill-based:** competência do agente para a skill.
+- **Usage/Availability-based:** carga e disponibilidade entram no scoring; desempate por menor fila.
+- **Performance routing (Arc 7d):** `performance_score = resolution_rate × (1 − escalation_rate)`, misturado à competência com peso configurável (`(1-w)×competência + w×performance`), atualizado em batch (lookback 7 dias, mínimo de sessões para significância).
+- **Detecção de `close_reason`:** `no_resource` quando não há fila; `max_wait_exceeded` pela avaliação preguiçosa.
+
+**Fila sempre atendida + capacity governance** (CHANGELOG recente): admissão híbrida, tratamento de outage "na porta", fila com segmento próprio, relatório de Fila/SLA sobre segments com demanda reprimida, e **governança de capacidade** — quotas por tipo de agente (`agent_kind`), Σ de reservas ≤ capacidade contratada validada na config de pool, gate de admissão armado pelo pricing (contratado × alocado × saldo). Tier gratuito tem fila de sistema dedicada.
+
+**Fila atendida (Queue-Attended-Model):** o campo `queue_config` no pool liga um **agente de fila** — um skill-flow de IA (segmento `role: queue`) que entretém o cliente na espera (posição/ETA via `session.queue.*`, oferta de outro canal com menor espera, etc.). Sem `queue_config` → "espera muda". O agente de fila consome licença (capacity-governance).
+
+**Visibilidade operacional (Seção 3.3c):** o Routing Engine escreve snapshot de pool no Redis após cada evento (`available`, `queue_length`, `sla_target_ms`, `channel_types`, TTL 120s) e publica `queue.position_updated`. Três ferramentas MCP do grupo `operational`: `queue_context_get`, `pool_status_get`, `system_availability_check`.
+
+**Enriquecimento de contexto de pool:** após cada alocação bem-sucedida, grava no ContextStore `session.pool.id`, `session.pool.channels` e `mentionable_pools` (para o protocolo @mention).
+
+---
+
+## 8. AI Gateway — agnóstico, multi-conta, com fallback e guarda de injeção
+
+O AI Gateway administra o **compartilhamento de todas as contas de API de IA do ambiente** e é o **único ponto de troca de LLM** (BYO LLM real).
+
+- **Multi-conta:** administra diversas contas (`PLUGHUB_ANTHROPIC_API_KEYS`, `PLUGHUB_OPENAI_API_KEYS`, etc.) com limites distintos por conta (RPM, TPM).
+- **Designação e fallback pelo chamador:** o `AccountSelector` (Redis-backed, stateless por chamada) escolhe a conta de menor score de carga (`rpm_used/rpm_limit × 0.7 + tpm_used/tpm_limit × 0.3`); em 429/529 marca a conta como throttled, faz fallback para a próxima conta e, se necessário, **cross-provider** (`FallbackConfig`).
+- **Perfis de modelo:** `realtime` (Sonnet → gpt-4o), `balanced` (Haiku → gpt-4o-mini), `evaluation` (Haiku, **isolado** do realtime para não competir por quota com a operação).
+- **Controle de consumo de IA:** cada chamador (step `reason`) designa contas e fallbacks; limites por tempo/token administrados por conta. Combinado com a lógica determinística do Skill Flow, isso dá **comportamento previsível e custo de IA controlado**.
+- **Filtros de segurança:** filtragem de ferramentas por `permissions[]` do JWT (nunca envia ao LLM ferramenta fora da permissão) e **injection guard** (13+ padrões heurísticos) aplicado em `notification_send` e `conversation_escalate`.
+
+> **Vs. concorrência:** Gemini trata o Gemini como first-class e outros LLMs como second-class; Agentforce limita a 4 provedores; CCaaS expõem "BYO LLM" mas com NLU proprietário por baixo. O AI Gateway do PlugHub é **agnóstico de verdade** e centraliza rotação/fallback de múltiplas contas — recurso raro mesmo entre dev-first.
+
+---
+
+## 9. MCP-first + interception guard — integração e segurança como invariante
+
+**MCP é o único protocolo de integração** entre componentes (invariante: nada de REST direto entre componentes internos). Agentes nunca acessam sistemas de negócio diretamente — só via MCP Servers autorizados.
+
+**Todas as chamadas MCP de domínio são interceptadas** por um modelo híbrido de proxy:
+
+| Tipo de agente | Mecanismo | Hop de rede |
+|---|---|---|
+| Agente nativo (SDK) | `McpInterceptor` in-process (`@plughub/sdk`) | Nenhum |
+| Agente externo (LangGraph, CrewAI) | `plughub-sdk proxy` sidecar em localhost:7422 | Loopback |
+
+Verificações por chamada (<1ms): validação de permissão (decode local de JWT) → guarda de injeção → registro de auditoria (`mcp.audit`, fire-and-forget). A **política de auditoria é definida por ferramenta, não por chamada** — o chamador não pode opt-out (exigência LGPD). O `AuditRecord` inclui `server_name`, `tool_name`, `allowed`, `injection_detected`, `duration_ms`, `source`.
+
+> **Vs. concorrência:** apenas Talkdesk declara MCP nativo entre os CCaaS, e Agentforce usa MCP como pilar — mas **nenhum** trata o interception guard obrigatório como invariante arquitetural por chamada. Este é o argumento técnico decisivo para CISO/DPO: a auditoria e a guarda não são um plugin que se pode desligar; são a única forma de uma chamada chegar a um sistema de negócio.
+
+---
+
+## 10. Masking — LGPD secure by design
+
+Mascaramento nativo, não um add-on:
+
+- **Por categoria de dado:** tokens no stream no formato `[{category}:{token_id}:{display_partial}]` (ex.: `[cpf:tk_b7d2:***-00]`). O stream guarda `content` (mascarado) e `original_content` (não mascarado).
+- **Por perfil e por papel no contato:** acesso ao `original_content` restrito a `authorized_roles` (padrão `evaluator`, `reviewer`); o Channel Gateway reduz ao `display_partial` antes de entregar ao cliente. Visibilidade granular **por participante + por campo + por role**.
+- **Na base histórica:** o módulo de Auditoria LGPD dá ao DPO acesso escalonado e **auditado** ao histórico.
+- **Masked Input (transação atômica):** `begin_transaction`/`end_transaction` envolve coleta-validação-ação de PINs/senhas; o namespace `@masked.*` é **in-memory** e nunca escrito em Redis, `pipeline_state`, stream ou logs; retry sempre recoleta (nunca reusa valor mascarado).
+- **Mascaramento dinâmico de contexto:** regras `ContextMaskingRule` aplicadas ao ContextStore (PII por role), configuráveis em runtime.
+- **Delegação de dado sensível com supervisão:** um humano pode supervisionar um passo sem ver o dado sensível — recurso ausente em todos os concorrentes da matriz.
+
+> **Vs. concorrência:** Gemini (Model Armor) e Agentforce (Einstein Trust Layer) mascaram **pré-LLM**, no nível do prompt. O PlugHub mascara **no nível do stream e do participante**, com tokenização reversível por role e auditoria — granularidade por campo e por papel que as Trust Layers não oferecem.
+
+---
+
+## 11. Perfis de usuário e permissões — RBAC + ABAC + Pool + Grupo
+
+Controle de acesso em quatro mecanismos combinados:
+
+- **RBAC:** papéis `operator`, `supervisor`, `admin`, `developer`, `business`.
+- **ABAC:** `module_config` no JWT, 9 módulos (`evaluation`, `contacts`, `billing`, `config`, `skill_flows`, `workflows`, `agent_assist`, `campaigns`, `audit`); cada campo tem `access` (`none|read_only|write_only|read_write`) + `scope[]`; `PermissionChecker.can(module, field)` valida no frontend **e** no backend. Degradação graciosa para contas legadas sem `module_config`.
+- **Pool:** acesso a dados limitado por `accessible_pools[]` no JWT (filtro row-level na analytics-api).
+- **Grupo:** `AgentGroup` é a entidade de organização de pessoas (org chart, ortogonal a Pool). O escopo do supervisor é resolvido por turno na emissão do JWT e denormalizado (`supervised_groups[]`, `supervised_agent_types[]`, `supervised_user_ids[]`), com sentinela para "sem turno ativo" que evita interpretar lista vazia como acesso irrestrito.
+- **Visibilidade de dados:** controlada pelo masking (§10).
+
+> **Vs. concorrência:** escopo de supervisor granular (grupo + turno + módulo) resolvido nativamente no JWT é, na matriz competitiva, "custom" em todos os CCaaS e "parcial" nos hyperscalers. Aqui é nativo e auditável.
+
+---
+
+## 12. Quality — avaliação, contestação, calibração e bancada comparativa
+
+A qualidade roda sobre os dados que a própria plataforma produz, desde o primeiro dia.
+
+**Avaliação baseada em formulários** com critérios configuráveis, aplicada por **campanhas** que definem: qual formulário usar; avaliação continuada ou de período definido de um pool; percentual de contatos avaliados por agente; períodos de avaliação; e agendamento do horário de processamento. O motor de amostragem cria instâncias de avaliação automaticamente em `session_closed`.
+
+**Avaliação por IA e por humano:**
+
+- **IA:** `agente_avaliacao_v1` carrega formulário + snippets de conhecimento (RAG via `mcp-server-knowledge`/pgvector) e pontua cada critério com evidência (`evaluation_context_get` → `evaluation_submit`).
+- **Humano + Módulo de Contestação e Revisão (Arc 13):** dois fluxos por tipo de agente avaliado. Para **agente humano**: revisor de IA pré-publicação (gate de qualidade configurável por campanha) → contestação por dimensão → revisor humano com **decisão final sempre humana** (`ContestationThread` append-only, imutável; `max_rounds` configurável). Para **agente de IA**: finalização imediata + curadoria amostral por regras (`score_extremes`, `deploy_baseline`, `score_outlier`, `na_excess`, `random_baseline`, `reviewer_signal`), gerando `calibration_signal` → nota de calibração publicada no knowledge namespace → feedback ao avaliador via RAG (**loop de evolução contínua do próprio avaliador**).
+
+**Índices de qualidade:** objetivos (tempos, resolução) e subjetivos (comportamento, conhecimento, agilidade, suporte à resolução, aderência), decompostos por **dimensão** do formulário.
+
+**Avaliação comparativa — a "Bancada de Agentes" (workbench, fechada em 2026-06):**
+
+- **Comparação entre versões de agentes de IA**, correlacionando KPIs × dados de monitoria operacional com os **deploys de versão** — o Arc 6 Fase 2 usa eventos de deploy como **âncoras temporais ("deploy epochs")**, eliminando datas arbitrárias e medindo performance antes/depois de cada deploy, com aviso de significância estatística quando N é baixo.
+- **Comparação humano × IA e humano × humano**, lado a lado.
+- **Lentes** por dimensão (heatmap agente × dimensão, radar de perfil), por motivo de escalação normalizado, por NPS e wrap-up por segmento.
+- **View Cross-cut:** põe resolução, qualidade e NPS lado a lado por agente e **destaca onde discordam** (★ destaque, ⚠ lacuna de percepção, ◑ divergência de disposição) — o payoff de gestão: achar o agente que "marca resolvido" mas tem avaliação baixa, ou entrega alto mas NPS baixo.
+- **Pseudo-entidade `pool:`** para fixar a média de um pool como linha de comparação. Export CSV sensível à view.
+
+> **Vs. concorrência:** QM (Quality Management) existe em todos os CCaaS, mas correlacionar qualidade com **deploys de versão de agente de IA** e gerar feedback de calibração para o próprio avaliador de IA é um diferencial de plataforma nativa de IA — não há equivalente direto na matriz.
+
+---
+
+## 13. Monitoria, relatórios e auditoria
+
+### 13.1 Monitoria e relatórios
+
+- **Subjetivos — sentimento em tempo real:** captura de sentimento do cliente ao longo do tempo (score-only no Redis durante a sessão; labels calculados em leitura por faixas configuráveis por tenant; persistido em `sentiment_timeline JSONB` no fechamento). Heatmap de sentimento na operação.
+- **Objetivos — tempos e volumes ao longo do tempo:** contatos, atendimentos, recursos e filas, consolidados no ClickHouse (`analytics.segments`, `session_timeline`, materialized views de performance) e expostos por `/reports/*`.
+- **Operacionais — deploys ao longo do tempo:** linha do tempo de deploys como âncoras (Arc 6 Fase 2).
+- **Negociais — eventos de negócio (Arc 12):** ferramenta MCP `agent_event(category, value, tags?)` para agentes (IA e humanos) publicarem KPIs estruturados durante a sessão (categoria hierárquica `pool_id.skill_id.metric_key`, com governança: namespace isolado por pool, bloqueio de PII em tags, rate limit). Time-series com marcadores de deploy.
+- **Monitor e Analytics unificados (Arc 19):** quatro abas cada (Sessions, Pools, Agents, Events), com filtro por `channel_type`, badge `suspended`, métricas Resolved/Escalated/Failure/Timeout/Cancelled/TMA. Para webhook, TMA = soma das durações dos segments (não wall-clock).
+- **Análise cruzada e exportação:** o ClickHouse é o destino analítico (também `agent_pause_intervals`, `evaluation_results/events`, `mcp_audit_log`, `audit_access_log`, `deploy_events`, `calibration_events`), suportando análise cruzada e exportação.
+
+### 13.2 Auditoria — quatro eixos
+
+- **Atendimento:** o canonical stream é a fonte imutável de todos os eventos de sessão.
+- **Transações:** toda chamada MCP de domínio gera `AuditRecord` em `mcp.audit`.
+- **Consumo de recursos:** usage metering por dimensão (`sessions`, `messages`, `llm_tokens_input/output`, `webchat_attachments`, …) em `usage.events`, com quotas em Redis e `assertQuota`.
+- **Linhas de raciocínio:** steps `reason` e decisões de agente registrados no stream e em `agent.events`.
+
+**Módulo Auditoria LGPD (ABAC `audit`):** acesso escalonado e auditado ao DPO/compliance. `GET /v1/audit/sessions/{id}/messages` (escreve linha imutável em `audit_access_log`) e `GET /v1/audit/mcp-calls`, com isolamento de tenant obrigatório. ClickHouse `mcp_audit_log` (idempotente) + `audit_access_log` (nunca deduplicado, por design LGPD).
+
+---
+
+## 14. Console de agentes humanos — superfície de orquestração
+
+O Console (Arc 11) eleva o atendimento humano de "interface de atendimento" para **superfície de orquestração**: o operador humano dirige, delega e monitora agentes de IA como coparticipantes de primeira classe.
+
+- **Recursos por pool de entrada:** acesso a recursos distintos conforme o pool do contato (escopado por `accessible_pools`).
+- **Histórico completo dos processos/contatos:** incluindo não finalizados; busca de qualquer sessão no histórico.
+- **Oferta de retomada** de qualquer processo suspenso em aberto e **início de novos processos**.
+- **Cartões de participantes de IA em tempo real** com step/status do Skill Flow.
+- **"Adicionar Especialista":** lista agentes de `mentionable_pools` e os invoca via A2A `assist`.
+- **"Delegar Tarefa":** menu de contexto sobre mensagens → drawer com instrução + visibilidade → card de resultado quando `agent_done` chega.
+- **Aba de Orquestração (supervisor):** grafo/lista de steps do Skill Flow ativo com intervenção (injetar contexto, pular step, force-complete), sob role `supervisor` com escopo ABAC.
+- **Protocolo @mention:** só `role: primary` ou `role: human` pode emitir menções (agentes de IA nunca emitem `@mention`); domínio fechado por `mentionable_pools`; ações declaradas em `mention_commands` (`set_context`, `trigger_step`, `terminate_self`).
+
+> **Vs. concorrência:** Enlighten Copilot (NICE) e copilotos de agente existem, mas o conceito de **humano orquestrando agentes de IA como participantes simétricos**, com delegação de tarefa e intervenção em fluxo ao vivo, decorre do modelo de conferência unificado — não é replicável por quem trata IA como bot externo.
+
+---
+
+## 15. Billing por capacidade
+
+`pricing-api` (porta 3900): faturamento pela **capacidade configurada, não pelo consumo**. Dois componentes: **capacidade base** (mensal pró-rata por `billing_days`) + **pools de reserva** (faturamento por dia de ativação, com `reserve_markup_pct`). Invoice em JSON ou XLSX (`GET /v1/pricing/invoice/{tenant_id}`); ativação/desativação de reserva por pool. Quota sincronizada com o gate de admissão do Routing Engine (capacity governance: contratado × alocado × saldo). Metering (`usage.events`) é estritamente **medição**, separado de pricing.
+
+> **Vs. concorrência:** Agentforce cobra por ação (Flex Credits) ou ~USD 550/user/mês + implementação por agente; Gemini é multidimensional (user + GB-hora + eventos + tokens + indexação); LangGraph/n8n cobram por execução de nó. O PlugHub vende **licenças simultâneas (humanos + IA)** — TCO previsível, sem "bill shock" por volume.
+
+---
+
+## 16. SDK, portabilidade e anti-lock-in (integradores)
+
+O PlugHub é **anti-lock-in por quatro vias que não dependem de "rodar qualquer framework de agente"**:
+
+1. **BYO-LLM (AI Gateway)** — troca de modelo/provedor sem tocar o agente; multi-conta + fallback. É o agnosticismo central, de uso diário.
+2. **MCP como única integração** — sem conectores proprietários; integração portável.
+3. **Lógica como artefato declarativo** — o skill-flow é YAML versionável e portável (não código preso ao fornecedor); `plughub-sdk certify`/`verify-portability` atestam.
+4. **Sem lock-in de dados** — export ClickHouse/PostgreSQL.
+
+**`@plughub/sdk` (TypeScript + Python)** com contrato de execução formal: `agent_login → agent_ready → agent_busy → agent_done` (invariantes: `agent_done` exige `handoff_reason` quando `outcome !== "resolved"`; `issue_status` sempre obrigatório). **CLI:** `certify`, `verify-portability`, `regenerate` (regenera agente externo como nativo), `skill-extract`, `proxy`. **MCP Servers customizados por domínio**; Config API com namespaces por tenant.
+
+**BYO framework — rampa de adoção, não destino.** Um agente externo (LangGraph, CrewAI, Python genérico) pluga via **proxy sidecar** (localhost:7422) e entra como **participante de primeira classe** da sessão — conferência + interceptação MCP + auditoria — sem alterar código. Mas as capacidades **diferenciadas** (modelo de 3 camadas, suspend/resume cross-canal, delegate, commerce-cards, transações mascaradas) são do **skill-flow nativo**: o agente externo **participa**, não **orquestra**. O caminho previsto é **adotar trazendo o agente → migrar para nativo** via `plughub-sdk regenerate`. Ou seja, BYO-framework é on-ramp + seguro anti-lock-in; o valor pleno está no nativo.
+
+> **Vs. concorrência:** LangGraph/CrewAI são **frameworks de agente**; o PlugHub é a **camada de orquestração + canais + compliance** que os **hospeda na adoção** (como participante) ou os **substitui no nativo**. Não competimos no eixo "framework" — oferecemos o que falta a eles (console, canais, conferência, compliance, billing) e anti-lock-in real pelas quatro vias acima.
+
+---
+
+## 17. Matriz competitiva consolidada
+
+| Capacidade | Gemini | Agentforce | Genesys | NICE | Five9 | Talkdesk | LangGraph | CrewAI | n8n | **PlugHub** |
+|---|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
+| MCP nativo | Parcial | Sim | Não | Não | Não | Sim | Via ext. | Custom | Sim | **Sim** |
+| Interception guard obrigatório | Plugin | Trust Layer | Não | Não | Parcial | Não | Custom | Custom | Custom | **Invariante** |
+| BYO LLM | Parcial | 4 provedores | Sim | Sim | Sim | Bedrock | Agnóstico | Agnóstico | Agnóstico | **Agnóstico** |
+| BYO framework | LangChain+ | Apex/DX | AI Studio | Cognigy | Templates | CXA | Nativo | Nativo | 70+ nodes | **Como participante (on-ramp → nativo)** |
+| Humano + IA mesma sessão | Handoff | Handoff | Handoff | Handoff | Handoff | Handoff | N/A | N/A | N/A | **Conference** |
+| Session Replay | CCAI | Test Center | QM | QM | QM | QM | Tracing | Tracing | Logs | **+ Diff** |
+| Billing previsível | Não | Não | Parcial | Sim | Parcial | Parcial | Parcial | Não | Parcial | **Capacidade** |
+| Supervisão em tempo real | Sim | Sim | Sim | Sim | Sim | Sim | Não | Não | Não | **Sim** |
+| Escopo de supervisor (grupo+turno+módulo) | Parcial | Parcial | Custom | Custom | Custom | Custom | N/A | N/A | N/A | **Nativo (JWT)** |
+| Voz com stack interno (gravação+STT/TTS) | Parcial | Parceiro | Sim | Sim | Sim | Parceiro | N/A | N/A | N/A | **SIP+WebRTC** |
+| Motor único p/ todos os fluxos | Múltiplos | Múltiplos | Múltiplos | Múltiplos | Parcial | Múltiplos | Só IA | Só IA | Só workflow | **Skill Flow** |
+| Visibilidade por participante (campo×role) | Não | Parcial | Não | Não | Não | Não | N/A | N/A | N/A | **Sim** |
+| Outbound unificado (mesmo motor) | Não | Não | Módulo sep. | Módulo sep. | Config sep. | Módulo sep. | N/A | N/A | Custom | **Mesmo motor + dialer** |
+| Processo multi-etapa/multi-contato, agnóstico de canal (workflow + trace + roteamento) | Não | Case (CRM) | Analytics-only | Parcial | Não | Não | Thread | Não | Não | **Workflow + trace unificado** |
+| Continuidade cross-canal do processo ("business in any media") | Não | Não | Parcial | Parcial | Não | Não | N/A | N/A | N/A | **✅ suspend/resume + retomada por reaparecimento** |
+
+---
+
+## 18. Invariantes arquiteturais (o que o avaliador pode confiar que nunca quebra)
+
+Estes são contratos garantidos pela arquitetura, não convenções:
+
+- AI Gateway é stateless (um turno por chamada LLM).
+- Routing Engine é o único árbitro de roteamento.
+- MCP é o único protocolo de integração entre componentes.
+- `pipeline_state` persiste no Redis a cada transição de step (nunca só em memória).
+- Toda chamada MCP de domínio é interceptada (permissão + injeção + auditoria); o chamador não pode opt-out da auditoria.
+- Agentes nunca acessam sistemas de negócio diretamente.
+- `original_content` mascarado nunca é exposto a roles não autorizados.
+- Valores de input mascarado nunca são escritos em Redis, pipeline_state, stream ou logs.
+- Agentes de IA nunca emitem `@mention`.
+- `insight.historico.*` persiste via Kafka, nunca por escrita direta no PostgreSQL.
+- Identificadores técnicos sempre em inglês; português só em strings de exibição (i18n) e IDs de entidade de negócio.
+
+---
+
+## 19. Notas de compatibilidade e limitações (honestidade de engenharia)
+
+Esta seção registra, para um avaliador criterioso, onde vale calibrar expectativas. São pontos de prova de conceito, não impeditivos.
+
+1. **"Totalmente tolerante a falha"** → é uma **propriedade-alvo** da arquitetura (stateless + Kafka + Redis Cluster + retry/DLQ), condicionada a um deployment correto. Não é uma garantia intrínseca independente da topologia. Recomenda-se validar com teste de caos no ambiente do cliente.
+
+2. **Multi-tenant** → a **fundação** (isolamento por `tenant_id` em Redis, Kafka, schemas, JWT, segredos por tenant) é pervasiva, mas o **isolamento operacional multi-tenant completo está em maturação** (registrado como "roadmap próximo" na visão geral interna). Para SaaS multi-tenant em produção, este é o item nº 1 a validar.
+
+3. **Ambiente de homologação apartado + promoção** → **suportado hoje por segregação de pool** (não por cluster separado): um pool de homologação dedicado (entrypoint de teste + MCP apontando para sandbox) isola a versão candidata dos pools de produção — deploy é por pool e cada pool roda 1 skill publicada; a promoção é o deploy **agendável** da skill+config validada ao pool de produção (`skill_scheduled_deploy_v1`). O **acesso a homologação vs. produção é controlado por ABAC** (`accessible_pools` para operar/ver; campos `skill_flows`/`config` para publicar/promover). **Não é um gap — é um padrão de configuração.** Resta de roadmap só o **gate gerenciado de promoção** (§20.1). Ressalvas: o isolamento de dados depende de apontar a homologação para MCP/credenciais de sandbox (disciplina de config), e direcionar tráfego de teste exige um entrypoint dedicado → pool de homologação.
+
+4. **Calendário unificado** → o `calendar-api` é um **motor puro** (`is_open`, `next_open_slot`, `add_business_duration`, status open/closed/holiday, feriados recorrentes `MM-DD`, timezone por tenant). Atende plenamente **horários de funcionamento, feriados e a retomada de workflow em horário útil** (steps `suspend`/`collect` com `business_hours`). Já o **"horário de deploy"** é, na prática, **agendamento por data/hora** (workflow `skill_scheduled_deploy_v1`), não uma janela de calendário de negócio. Unificar deploy ao mesmo calendário de feriados/funcionamento é uma extensão natural (§20.2).
+
+5. **Usage metering — adapters de canal** → as dimensões `whatsapp_conversations`, `voice_minutes`, `sms_segments`, `email_messages` têm as funções de emissão prontas, mas **os adapters ainda não as acionam** (pendente declarado). O metering de `sessions`, `messages` e `llm_tokens_*` está ativo.
+
+6. **Integração metering × pricing** → o módulo que aplica planos e escreve `{tenant}:quota:limit:*` automaticamente está pendente; hoje as quotas são armadas na ativação de plano/capacity governance.
+
+7. **Auditoria LGPD — fases pendentes** → `original_content` desmascarado em batch (requer endpoint no Core), logs de `user_access`, pipeline de SAR/erasure (pseudonimização/anonimização) e `config_snapshot` para o DPO estão em fases futuras. Os eixos de sessão e de chamadas MCP estão ativos.
+
+8. **Áudio inbound de WhatsApp** → hoje armazenado como documento; STT de áudio de WhatsApp é fase futura (STT está pleno no canal de voz).
+
+9. **Gaps conhecidos do ciclo de conferência** (registrados internamente): AHT pode ser inflado por wrap-up em alguns caminhos; algumas contagens de "remaining" não consideram todos os especialistas de IA; supervisor sem heartbeat de cleanup em certos cenários. Correções incrementais em andamento; relevante para operações de altíssimo volume.
+
+10. **Framework Business in Any Media** → a base existe (workflow + canais + suspend/resume + retomada por reaparecimento via `pending_workflow` + masking). O **aprofundamento** — cadastro de identidade cross-canal completo (`customer_id` nativo, dois andares, multi-âncora), commerce-cards e o framework de loja — é **roadmap especificado** (§20.7), ainda não implementado.
+
+11. **BYO framework é participante, não orquestrador** → um agente externo (via proxy sidecar) conversa na sessão e chama MCP com interceptação/auditoria, mas **não** acessa as capacidades nativas (3 camadas, suspend/resume cross-canal, delegate, commerce-cards, transações mascaradas) — essas exigem skill-flow nativo. O caminho é `regenerate`→nativo (§16). A linha "BYO framework" da matriz (§17) deve ser lida com essa fronteira. (BYO-**LLM**, via AI Gateway, é diferente e permanece diferencial pleno.)
+
+---
+
+## 20. Roadmap e sugestões (NÃO implementado — claramente apartado)
+
+> Tudo nesta seção é **proposta**, para diferenciar do que já existe. Nenhum item aqui deve ser apresentado a um cliente como funcionalidade atual.
+
+### 20.1 Gate gerenciado de promoção homologação → produção
+A separação de ambientes já existe por **segregação de pool** + ABAC (§19.3); o que falta é o **invólucro de governança**: uma promoção de primeira classe com **gate de aprovação humana** (instância direta do módulo de fila de aprovação — promoção vira um workflow com passo de aprovação), **suíte de replay/avaliação como critério automático** de promoção, **assinatura** de quem promoveu e trilha de auditoria. Transforma "agendar um deploy no pool de produção" em "promover com aprovação e evidência".
+
+### 20.2 Calendário unificado incluindo janelas de deploy
+Estender o `calendar-api` para ser a fonte única de **todas** as janelas temporais de negócio — funcionamento, feriados, retomada de workflow **e janelas de deploy** ("nunca deployar sexta após 16h", "freeze de fim de ano"). Hoje deploy agendado é data/hora avulsa.
+
+### 20.3 Certificações de compliance como produto
+SOC 2 Tipo II e relatório de aderência LGPD empacotados (com o `audit_access_log` e o `mcp.audit` como evidência técnica). Mitiga o risco de hyperscalers copiarem o interception guard — transforma a primitiva técnica em selo verificável.
+
+### 20.4 Camada de orquestração "por cima" do CCaaS existente
+Conector que pluga o PlugHub via MCP num Genesys/NICE existente, posicionando-o como **camada de orquestração** em vez de rip-and-replace. Endereça a objeção mais comum do comprador enterprise ("troco tudo ou ponho por cima?").
+
+### 20.5 Observabilidade de custo de IA por processo
+Painel que atribui custo de tokens (via metering `llm_tokens_*`) ao nível de **processo (workflow)** e de versão de agente — fechando o ciclo "deploy epoch × qualidade × custo" e dando ao CFO o custo unitário por processo resolvido.
+
+### 20.6 Marketplace de skills e MCP Servers verticais
+Pacotes pré-prontos por vertical (cobrança financeira, portabilidade telco, triagem em saúde) acelerando time-to-value e criando efeito de rede para integradores.
+
+### 20.7 Business in Any Media — cadastro de identidade cross-canal + framework de loja
+Generalizar o mecanismo já existente de retomada (`pending_workflow`) num **resolvedor de identidade** completo: cadastro de cliente nativo (`customer_id` canônico, dois andares — prospect efêmero no Redis + durável no PG por gatilho concreto), índice de resolução multi-âncora hasheado, e retomada cross-canal por reaparecimento (começa no WhatsApp, paga no site, recebe status no SMS — mesmo `session_id`). Sobre isso, um **framework de loja** (comércio conversacional): vocabulário de *commerce-cards* (product card, carrossel, cesta, checkout, status de pedido) definido uma vez e renderizado no formato nativo mais rico de cada canal; checkout com input mascarado + repasse ao PSP (a plataforma nunca guarda pagamento). Princípios de governança: a plataforma **não é autoridade de identidade nem de pagamento** (captura e repassa à retaguarda do contratante; guarda só chaves mascaradas e o veredito); identificação é função do fluxo de entrada; channel-gateway permanece genérico. Especificação detalhada em `docs/product/` (business-in-any-media, identity-resolver, delegate-contrato-por-pool, commerce-cards, intake-flow).
+
+---
+
+## 21. Perfil de cliente competitivo (segundo a versão atual)
+
+Com base no estado atual de implementação, o PlugHub é **competitivo** — e em vários eixos superior — para os perfis abaixo. A ordem reflete o fit hoje, considerando as notas da §19.
+
+### 21.1 Onde o PlugHub vence hoje
+
+**Contact Center Enterprise que quer adicionar IA sem rip-and-replace nem lock-in** (50+ agentes; SAC, retenção, cobrança, suporte técnico).
+Por quê: conference room unificado (humano + IA sem handoff visível), billing por capacidade (TCO previsível vs. consumo dos incumbentes), masking + interception guard nativos (argumento CISO/DPO), BYO LLM agnóstico. **Verticais de melhor fit: financeiro (bancos, fintechs, seguros) e telecom** — alto volume regulado, mascaramento de CPF/conta/dados de rede, e os casos (retenção, cobrança, portabilidade, onboarding) batem com o modelo de processo channel-abstract.
+
+**Automação de processos com aprovação humana e coleta assíncrona** (qualquer setor).
+Por quê: `suspend` com timers em horário útil, `collect` outbound multicanal, motor único inbound+outbound+workflow, webhook como canal. Supera BPMs rígidos (Camunda/Pega) em inteligência adaptativa e frameworks dev-first (LangGraph/CrewAI) em canais nativos com o cliente. Casos: cobrança outbound, onboarding com aprovação de crédito, NPS pós-atendimento, aprovação de pedidos/contratos.
+
+### 21.2 Onde o PlugHub é competitivo com ressalvas
+
+**Integradores e parceiros tecnológicos (SIs)** que constroem soluções sobre infraestrutura de orquestração.
+Por quê: SDK com contrato estável, proxy sidecar para agentes externos, ABAC granular, MCP Servers customizáveis, CLI de portabilidade. **Ressalva:** o isolamento multi-tenant operacional completo está em maturação (§19.2) — para o SI que precisa de N clientes em forte isolamento desde o dia 1, este é o ponto a validar em PoC. Onde o isolamento por tenant já existente (chaves/schemas/JWT) é suficiente, o fit é alto.
+
+**Operações de altíssimo volume (milhões de contatos/dia)** com requisito de SLA de disponibilidade contratual rígido.
+Por quê: arquitetura preparada para escala horizontal e degradação graciosa. **Ressalva:** "tolerância total a falha" depende de topologia de deployment e merece teste de caos (§19.1); alguns gaps do ciclo de conferência (§19.9) são mais sensíveis nesse regime.
+
+**Comércio conversacional / mesa de vendas operada por IA** (varejo/D2C, distribuição B2B, food/farmácia, produto financeiro — sobretudo via WhatsApp no Brasil/LatAm).
+Por quê: comprador diferente do CCaaS (Head de Digital Commerce / Growth, métrica conversão/GMV/custo-por-pedido), nicho onde a substituição de vendedor humano por IA fecha a conta. Diferencia dos bot-builders de mensageria (Blip/Yalo/Zenvia) por: humano + IA na mesma sessão no ponto de decisão; prova empírica da substituição (Bancada humano × IA + deploy epochs → conversão × qualidade); pagamento/venda regulada com compliance nativo; processo (cesta→pagar→entregar→trocar) como máquina de estado com canal, não bot de interação. **Ressalva (importante):** a base existe (motor único, canais, suspend/resume, retomada por reaparecimento, masking), mas o **framework de loja completo — commerce-cards, cadastro de identidade cross-canal — é roadmap (§20.7)**. Hoje é viável uma versão fundacional; a experiência rica plena depende dessa entrega.
+
+### 21.3 Onde concorrentes ainda levam vantagem (seja honesto na avaliação)
+
+- **Maturidade de telefonia pura/discador em escala industrial:** Genesys/NICE/Five9 têm décadas de hardening em PSTN, WFM (workforce management) completo e certificações. O PlugHub tem voz nativa, mas WFM (escala/previsão de força de trabalho) não é foco atual.
+- **Ecossistema CRM/dados:** quem já vive dentro de Salesforce/ServiceNow ganha integração de dados out-of-the-box que aqui exigiria MCP Servers customizados.
+- **Selos de compliance prontos (SOC 2 etc.):** ainda no roadmap (§20.3) — embora a arquitetura de auditoria já produza a evidência técnica.
+
+### 21.4 Posicionamento de uma linha por persona
+
+| Persona | Mensagem central |
+|---|---|
+| Head de Contact Center | "Os CCaaS te dão roteamento maduro mas agente de IA engessado. PlugHub acopla motor de fluxo declarativo a roteador multicritério, com heatmap de sentimento, session replay e humano+IA na mesma sala." |
+| CTO / Head de IA | "Traga qualquer LLM — troca de modelo/provedor sem tocar o agente. Sua lógica vira artefato declarativo portável (skill-flow YAML), integração só por MCP e dados exportáveis: anti-lock-in real. Já tem agentes (LangGraph/CrewAI)? Entram como participantes e migram para nativo (`regenerate`)." |
+| CFO | "Agentforce e Gemini vendem seat + consumo + tokens + storage + implementação. PlugHub vende capacidade. Você sabe no mês 1 o que vai pagar no mês 13." |
+| CISO / DPO | "Mascaramento tokenizado reversível por role, interception guard em todas as chamadas MCP, audit trail LGPD nativo. Compliance é primitiva arquitetural, não plugin." |
+| Integrador / SI | "SDK com contrato estável, proxy sidecar para agentes externos, MCP Servers customizáveis por domínio. Construa uma vez, entregue para N clientes." |
+| Head de Digital Commerce / Growth | "Sua loja mora na conversa e é operada por IA — descoberta a pós-venda, em qualquer canal, com humano só na exceção e ganho de conversão comprovável. Não é mais um bot de WhatsApp; é a mesa de comércio com estado, compliance e prova de qualidade." |
+
+---
+
+## Apêndice — Fontes internas
+
+Este descritivo foi consolidado a partir de: `CLAUDE.md`, `CHANGELOG.md` (até 2026-06-09), `docs/visao-geral.md`, `docs/product/target-audience.md`, `docs/product/competitive-analysis.md`, `docs/arcos/` (channel-gateway-multi-channel, arc4-workflow, arc6-evaluation, arc6-phase2-observability, arc7-auth, arc9-agent-groups, arc11-console-orchestration, arc12-agent-business-events, arc13-review-contestation, arc15-webrtc, arc16-flow-orchestration, arc19-unified-session-model — note que Arc 10/16/17 Journey foram aposentados, ai-gateway, audit-lgpd, usage-metering, queue-attended-model, capacity-governance, session-replayer, session-conference-lifecycle), `docs/modulos/agentflow.md`, os contratos em `packages/schemas`, e as specs do framework Business in Any Media em `docs/product/` (business-in-any-media-arquitetura-alvo, identity-resolver-nivel-b-spec, delegate-contrato-por-pool-spec, commerce-cards-nivel-c-spec, intake-flow-nivel-c-spec).
