@@ -878,95 +878,13 @@ def parse_evaluation_event(payload: dict[str, Any]) -> list[dict] | None:
 
 # ─── agent.events (Arc 12) ────────────────────────────────────────────────────
 
-# F10 (bancada): convenção de sinal de contato/jornada sobre Arc 12 agent_event.
-# A presença de uma entrada para o leaf (último segmento da category) é o que faz
-# parse_agent_business_event fazer dual-write de uma linha normalizada em
-# session_signal além do business event cru. Mapa: leaf → (grain, source, metric).
-# Grão segmento NÃO entra aqui (vive em segments, F5).
-_SIGNAL_METRIC_MAP: dict[str, tuple[str, str, str]] = {
-    "nps_contact":  ("contact", "customer_nps",    "nps"),
-    "csat_contact": ("contact", "customer_csat",   "csat"),
-    # grão jornada — pesquisa diferida religada por origin_session_id (F11)
-    "nps_journey":  ("journey", "customer_survey", "nps"),
-    "csat_journey": ("journey", "customer_survey", "csat"),
-}
-
-
-def _normalize_signal_value(metric: str, value: float) -> tuple[float, str | None]:
-    """Normaliza o valor cru do sinal para escala comum + label categórico.
-
-    NPS 0–10 → promotor (≥9) / neutro (7–8) / detrator (≤6).
-    CSAT 1–5 → satisfeito (≥4) / neutro (3) / insatisfeito (≤2).
-    Métricas desconhecidas: passa o valor, label None.
-    """
-    if metric == "nps":
-        if value >= 9:
-            return value, "promotor"
-        if value >= 7:
-            return value, "neutro"
-        return value, "detrator"
-    if metric == "csat":
-        if value >= 4:
-            return value, "satisfeito"
-        if value >= 3:
-            return value, "neutro"
-        return value, "insatisfeito"
-    return value, None
-
-
-def _maybe_session_signal(payload: dict[str, Any], business_row: dict) -> dict | None:
-    """Se a category casa a convenção de sinal, devolve a linha session_signal.
-
-    Sinais de grão contato não são atribuíveis a um agente → agent_key fica vazio
-    (pool_id guardado só como contexto). session_at ≈ captured_at no caso síncrono
-    (NPS no ato); a religação diferida (origin_session_id, session_at da sessão
-    original) é F11. journey_id mantido por compat, populado com a chave canônica.
-    """
-    category = business_row.get("category") or ""
-    parts = category.split(".")
-    leaf = parts[-1] if parts else ""
-    descriptor = _SIGNAL_METRIC_MAP.get(leaf)
-    if descriptor is None:
-        return None
-
-    grain, source, metric = descriptor
-    value_num, value_label = _normalize_signal_value(metric, float(business_row["value"]))
-
-    ts = business_row.get("emitted_at") or _now()
-    # origin_session_id religa a survey à sessão original (grão jornada/diferido).
-    # No grão contato síncrono é a própria sessão → mantém None (sem religação).
-    origin = payload.get("origin_session_id") or None
-
-    return {
-        "table":             "session_signal",
-        "signal_id":         payload.get("event_id") or _gen_id(),
-        "tenant_id":         business_row["tenant_id"],
-        "session_id":        business_row["session_id"],
-        "grain":             grain,
-        "agent_key":         "",  # grão contato/jornada — não atribuível a um agente
-        "pool_id":           business_row.get("pool_id") or "",  # contexto, não atribuição
-        "source":            source,
-        "metric":            metric,
-        "value_num":         value_num,
-        "value_label":       value_label,
-        "session_at":        ts,   # síncrono: ≈ captured_at; diferido resolve da sessão original (F11)
-        "captured_at":       ts,
-        "origin_session_id": origin,
-        "journey_id":        payload.get("journey_id") or origin,
-    }
-
-
-def parse_agent_business_event(payload: dict[str, Any]) -> dict | list[dict] | None:
+def parse_agent_business_event(payload: dict[str, Any]) -> dict | None:
     """
     Maps agent.events topic → agent_business_events table.
 
     The mcp-server pre-decomposes category into category_l1..l4 at publish time,
     so the consumer simply passes them through.  If a level is absent it defaults
     to an empty string.
-
-    F10 (bancada): when the category leaf matches the signal convention
-    (_SIGNAL_METRIC_MAP, e.g. *.nps_contact) the parser ALSO emits a normalized
-    session_signal row (dual-write) — returning a list [business_event, signal].
     """
     tenant_id  = payload.get("tenant_id")
     session_id = payload.get("session_id")
@@ -996,7 +914,7 @@ def parse_agent_business_event(payload: dict[str, Any]) -> dict | list[dict] | N
     if not isinstance(tags, dict):
         tags = {}
 
-    business_row = {
+    return {
         "table":          "agent_business_events",
         "event_id":       payload.get("event_id") or _gen_id(),
         "tenant_id":      tenant_id,
@@ -1015,12 +933,134 @@ def parse_agent_business_event(payload: dict[str, Any]) -> dict | list[dict] | N
         "emitted_at":     payload.get("emitted_at") or _now(),
     }
 
-    # F10: dual-write a normalized session_signal when the category matches the
-    # signal convention (contact/journey grain). Otherwise just the business row.
-    signal_row = _maybe_session_signal(payload, business_row)
-    if signal_row is not None:
-        return [business_row, signal_row]
-    return business_row
+
+# ─── session.signals (F10 — voz do cliente/agente grão session/workflow) ──────
+#
+# Produzido pela tool MCP dedicada `survey_record`: uma pesquisa outbound (sessão
+# própria) que religa à sessão original via origin_session_id e grava o resultado
+# contra ela. Vantagem sobre reusar agent_event: origin_session_id, grain e as
+# métricas são parâmetros estruturados de 1ª classe — sem a checagem de namespace
+# (category[0]==pool) nem convenção de sufixo. Grão segmento (por agente) NÃO entra
+# aqui (vive em segments, F5). Grão = O QUE a pesquisa cobre (session|workflow); o
+# timing (no ato × diferido) é captured_at × session_at, não um grão.
+
+
+# Grãos que a tabela session_signal possui — TODOS (gravação explícita via
+# survey_record). Espelha SESSION_SIGNAL_GRAINS de @plughub/schemas. `segment`
+# carrega segment_id + agent_key (atribuição); os demais não são atribuíveis.
+# segments.nps_score (F5) é legado, aposentado no cutover da bancada (F10.3).
+_SESSION_SIGNAL_GRAINS = ("segment", "session", "workflow", "journey")
+
+
+def _signal_source_for_metric(metric: str) -> str:
+    """Fonte normalizada a partir da métrica do sinal."""
+    if metric == "nps":
+        return "customer_nps"
+    if metric == "csat":
+        return "customer_csat"
+    return "customer_survey"
+
+
+def _normalize_signal_value(metric: str, value: float) -> tuple[float, str | None]:
+    """Normaliza o valor cru do sinal para escala comum + label categórico.
+
+    NPS 0–10 → promotor (≥9) / neutro (7–8) / detrator (≤6).
+    CSAT 1–5 → satisfeito (≥4) / neutro (3) / insatisfeito (≤2).
+    Métricas customizadas (pesquisa extra): passa o valor, label None.
+    """
+    if metric == "nps":
+        if value >= 9:
+            return value, "promotor"
+        if value >= 7:
+            return value, "neutro"
+        return value, "detrator"
+    if metric == "csat":
+        if value >= 4:
+            return value, "satisfeito"
+        if value >= 3:
+            return value, "neutro"
+        return value, "insatisfeito"
+    return value, None
+
+
+def parse_session_signal_event(payload: dict[str, Any]) -> list[dict] | None:
+    """
+    Maps session.signals topic → session_signal table (one row per metric).
+
+    Event (publicado por survey_record):
+      { event_id, tenant_id, origin_session_id, grain (segment|session|workflow|journey),
+        segment_id?, agent_key?, survey_session_id?, pool_id?, captured_at,
+        signals: [{ metric, value, value_label? }, ...] }
+
+    O sinal é chaveado ao origin_session_id (a sessão pesquisada). Para grão
+    `segment` o evento carrega segment_id (obrigatório) + agent_key (atribuição ao
+    agente); demais grãos têm agent_key vazio (não atribuíveis). Normalização
+    nps/csat aplicada quando value_label não vem explícito. session_at = captured_at
+    no caso no-ato (mesmo dia); para surveys DIFERIDAS (captured_at ≠ session_at), a
+    resolução precisa de session_at da sessão original é F11 (enrichment).
+    value_label explícito do produtor prevalece. O timing (no ato × diferido) é
+    captured_at × session_at, não um grão.
+    """
+    tenant_id  = payload.get("tenant_id")
+    origin_id  = payload.get("origin_session_id")
+    grain      = payload.get("grain")
+    signals    = payload.get("signals")
+
+    if not tenant_id or not origin_id or not grain:
+        return None
+    if grain not in _SESSION_SIGNAL_GRAINS:
+        return None
+    if not isinstance(signals, list) or not signals:
+        return None
+
+    segment_id = payload.get("segment_id") or ""
+    agent_key  = payload.get("agent_key") or ""
+    # grão segment exige atribuição (segment_id) — sem ele a linha não é comparável
+    # por agente nem dedup-safe (segment_id entra na chave do ReplacingMergeTree).
+    if grain == "segment" and not segment_id:
+        return None
+
+    captured_at = payload.get("captured_at") or _now()
+    base_event  = payload.get("event_id") or _gen_id()
+    pool_ctx    = payload.get("pool_id") or ""
+
+    rows: list[dict] = []
+    for idx, sig in enumerate(signals):
+        if not isinstance(sig, dict):
+            continue
+        metric = sig.get("metric")
+        raw_value = sig.get("value")
+        if not metric or raw_value is None:
+            continue
+        try:
+            value_num = float(raw_value)
+        except (TypeError, ValueError):
+            continue
+
+        norm_value, norm_label = _normalize_signal_value(metric, value_num)
+        # value_label explícito do produtor prevalece sobre a normalização.
+        value_label = sig.get("value_label") or norm_label
+
+        rows.append({
+            "table":             "session_signal",
+            "signal_id":         f"{base_event}:{idx}",
+            "tenant_id":         tenant_id,
+            "session_id":        origin_id,   # chaveado à sessão original
+            "grain":             grain,
+            "segment_id":        segment_id,  # set p/ grão segment; '' nos demais
+            "agent_key":         agent_key,   # atribuição p/ segment; '' nos demais
+            "pool_id":           pool_ctx,    # contexto, não atribuição
+            "source":            _signal_source_for_metric(metric),
+            "metric":            metric,
+            "value_num":         norm_value,
+            "value_label":       value_label,
+            "session_at":        captured_at,  # no-ato: mesmo dia; diferido (≠) → F11 enrichment
+            "captured_at":       captured_at,
+            "origin_session_id": origin_id,
+            "journey_id":        origin_id,    # compat (coluna legada)
+        })
+
+    return rows or None
 
 
 # ─── calibration.events (Arc 13) ─────────────────────────────────────────────

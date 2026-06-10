@@ -378,6 +378,7 @@ Consumes: `conversations.routed`, `conversations.queued`, `conversations.abandon
 | `evaluation.events` | evaluation-api | analytics-api → ClickHouse |
 | `workflow.events` | workflow-api | skill-flow-worker |
 | `collect.events` | workflow-api | analytics-api |
+| `session.signals` | mcp-server-plughub (`survey_record`) | analytics-api → ClickHouse |
 | `usage.events` | Core, AI Gateway, Channel Gateway | usage-aggregator |
 | `events.dead_letter` | skill-flow-worker, analytics-api, orchestrator-bridge | ops/monitoring |
 
@@ -400,6 +401,7 @@ All cross-package Kafka events have Zod schemas in `@plughub/schemas`:
 | `conversations.participants` | `ConversationParticipantEventSchema` | `contact-segment.ts` |
 | `mcp.audit` | `AuditRecordSchema` | `audit.ts` |
 | `evaluation.events` | `EvaluationEventSchema` | `evaluation.ts` |
+| `session.signals` | `SessionSignalEventSchema` | `survey.ts` |
 
 ---
 

@@ -390,11 +390,17 @@ wrap-up→primary (bridge write-back vs join na leitura) — F1; mecanismo do jo
 
 ---
 
-## 14. `session_signal` — grão contato/jornada (F10)
+## 14. `session_signal` — grão session/workflow (F10)
 
 > Recon 2026-06-10 (ETAPA 0) validada no código. Implementa o item **deferred** mais estrutural
-> do §7: NPS/CSAT/pesquisa no grão **contato** (atendimento inteiro) e **jornada** (multi-sessão),
-> não atrelados a um segmento. O grão **segmento** já mora em `segments` (F5) e não usa esta tabela.
+> do §7: NPS/CSAT/pesquisa no grão **session** (a sessão/contato inteiro) e **workflow** (uma
+> execução de workflow), não atrelados a um segmento. O grão **segmento** já mora em `segments`
+> (F5) e não usa esta tabela.
+>
+> **Vocabulário (2026-06-10)**: o §7 original falava em "contato/jornada"; o termo **journey foi
+> abandonado** (entidade eliminada no Arc 19 — confunde com docs desatualizados). O grão descreve
+> **o quê** a pesquisa cobre — `session` (≈ "contato" do §7) ou `workflow`; o **timing** (no ato ×
+> diferido) é `captured_at` × `session_at`, **não** um grão.
 
 ### 14.1 Achados da recon (estado atual ≠ premissas do §7 original)
 
@@ -407,39 +413,64 @@ wrap-up→primary (bridge write-back vs join na leitura) — F1; mecanismo do jo
 - **Captura de NPS hoje**: grão segmento (F5) via hook `on_human_end` → acumulador `seg_signal` →
   `segments.nps_score`. O pipeline `agent_event`→`agent_business_events` (Arc 12) funciona, mas os
   hooks NPS/wrap-up **não** emitem `agent_event` (gravam ContextStore + `seg_signal`).
-- **Falta p/ grão contato**: um hook que dispare **uma vez** no fechamento do contato (candidato
-  natural: slot `post_human`, Fase C dos hooks, hoje pendente), sem segmento-alvo → `session_signal`.
+- **Falta p/ grão session/workflow**: a pesquisa é uma **survey outbound** — sessão própria que
+  religa à sessão original e grava o sinal contra ela (não um hook inline na mesma conferência).
 
 ### 14.2 Decisões travadas (2026-06-10)
 
-- **Veículo de captura**: reusar **Arc 12 `agent_event`** + normalizador (sem pipeline novo). O hook
-  emite `agent_event(category=…​nps_contact, value)`; o parser de `agent.events` faz **dual-write** em
-  `session_signal` quando o *leaf* da category casa a convenção (`_SIGNAL_METRIC_MAP`).
-- **Religação**: **`origin_session_id`** (canônico Arc 19). Coluna `journey_id` mantida por compat,
-  populada com a chave canônica.
-- **Escopo F10**: infra + grão **contato** E2E. Survey diferida (grão **jornada**: `captured_at ≠
-  session_at`, resolução de `session_at` da sessão original via `origin_session_id`) = **F11** futura.
-- **Atribuição**: grão contato/jornada **não** é atribuível a um agente → `agent_key=''`; `pool_id`
-  guardado só como contexto. Na bancada é **contexto do contato**, não linha de comparação por agente
-  (a lente `nps` por agente segue lendo `segments`, grão segmento, F5).
+- **Modelo (decisão do produto)**: a pesquisa roda numa **survey OUTBOUND** — sessão própria, outro
+  pool/canal. **Quem dispara é o fluxo primário que descreve o processo, no seu passo final** (ele
+  conhece a semântica do "processo terminou"), delegando a um sub-workflow de pesquisa ao qual passa o
+  `session_id` atual como `origin`. Especialmente útil em fluxos que orquestram **múltiplos agentes
+  humanos**: uma pesquisa de `session` no fim, em vez de N de segmento. Um hook de fechamento de pool é
+  **fallback** para pools puramente humanos sem fluxo orquestrador. Os dois caem no mesmo substrato.
+- **Veículo de captura (revisado)**: **tool MCP dedicada `survey_record`** (não reuso de `agent_event`).
+  `origin_session_id`, `grain` e a lista de `signals[{metric,value,value_label?}]` são parâmetros
+  estruturados de 1ª classe → sem a checagem de namespace `category[0]==pool` do Arc 12 nem convenção
+  de sufixo. Publica em tópico novo `session.signals` → parser `parse_session_signal_event` → 1 linha
+  por métrica. *(O dual-write sobre `agent_event` da F10.1 foi retirado — ver F10.2a.)*
+- **Religação**: o sinal é **chaveado pelo `origin_session_id`** (`session_signal.session_id = origin`).
+  Coluna `journey_id` mantida por compat, populada com a chave canônica.
+- **Grão (taxonomia canônica)**: `{segment, session, workflow, journey}` (`SignalGrainSchema`).
+  **Armazenamento unificado (decisão 2026-06-10, opção 2)**: TODOS os grãos moram em `session_signal`,
+  gravados **explicitamente** via `survey_record` (um `invoke` no skill-flow de pesquisa) — sem
+  mecanismo de eventos/derivação. `segment` carrega `segment_id` + `agent_key` (atribuição ao agente);
+  os demais não são atribuíveis (`agent_key=''`). `journey` é rótulo de grão (relacionamento
+  multi-sessão), **não** a entidade Journey eliminada. Timing (no ato × diferido) = `captured_at` ×
+  `session_at`, não grão. Dedup `(tenant, session, grain, segment_id, metric)` — `segment_id` na chave
+  evita colidir N segmentos da mesma sessão. **`segments.nps_score` (F5) vira legado**, aposentado no
+  cutover da bancada (F10.3). Motivo: sem unificar, a bancada duplicaria o plumbing de NPS/CSAT entre
+  duas tabelas; e `segments` só tem `nps_score` (1 métrica) — `session_signal` é genérico (N métricas).
+- **Extensibilidade**: skill-flows de pesquisa são customizáveis → `survey_record` aceita **N métricas**
+  numa chamada; `nps`/`csat` normalizam escala+label, métricas extras passam o valor cru (label None).
+- **Escopo F10**: infra + grão **session** E2E. Survey diferida (`captured_at ≠ session_at`; `session_at`
+  da sessão original via enrichment) e grão **journey** ponta-a-ponta = **F11** futura.
+- **Atribuição**: grãos session/workflow/journey **não** são atribuíveis a um agente → `agent_key=''`,
+  `pool_id` só como contexto (na bancada = contexto da sessão). Grão **segment** É atribuível
+  (`segment_id` + `agent_key`) → será a fonte da lente `nps`/`csat` por agente após o cutover (F10.3),
+  substituindo `segments.nps_score`.
 - **Bucketização**: sempre por **`session_at`** (regra de ouro §7).
 
-### 14.3 Tabela
+### 14.3 Tabela e ingest
 
-`analytics.session_signal` (ReplacingMergeTree, dedup por `(tenant, session, grain, metric)`, TTL 2a
-em `session_at`): `signal_id, tenant_id, session_id, grain(contact|journey), agent_key, pool_id,
-source(customer_nps|customer_csat|customer_survey|agent_wrapup), metric, value_num, value_label,
-session_at, captured_at, origin_session_id, journey_id, date`.
+`analytics.session_signal` (ReplacingMergeTree, dedup por `(tenant, session, grain, segment_id, metric)`,
+TTL 2a em `session_at`): `signal_id, tenant_id, session_id, grain(segment|session|workflow|journey),
+segment_id, agent_key, pool_id, source(customer_nps|customer_csat|customer_survey), metric, value_num,
+value_label, session_at, captured_at, origin_session_id, journey_id, date`.
 
+Ingest: `survey_record` (mcp-server) → Kafka `session.signals` → `parse_session_signal_event`
+(analytics-api) → 1 linha/métrica, `session_id = origin_session_id`. `segment` exige `segment_id`.
 Normalização: NPS 0–10 → promotor(≥9)/neutro(7–8)/detrator(≤6); CSAT 1–5 → satisfeito/neutro/insatisfeito.
 
 ### 14.4 Sub-fases
 
 | Sub-fase | Escopo | Entrega validável |
 |---|---|---|
-| **F10.1 — Camada de dados** | DDL `session_signal`+migração; `insert_session_signal`; `parse_agent_business_event` **dual-write** (leaf casa `_SIGNAL_METRIC_MAP`→ linha normalizada); `_normalize_signal_value`; testes parser/normalização. **Não toca conferência.** | seed `agent.events` NPS-contato → linha em `session_signal` via curl/ClickHouse |
-| **F10.2 — Captura de produção** | slot `post_human` (Fase C hooks) dispara 1× no fechamento; skill `agente_nps_contato_v1` emite `agent_event(…nps_contact)`; wiring no bridge. Atualiza `conference-mechanics.md` (nova Mudança) + `pool-hooks.md`. | E2E no demo: contato fecha → 1 NPS grão contato |
-| **F10.3 — Endpoint + bancada** | endpoint de leitura (contexto do contato, não linha por agente); exibição mínima na bancada/detalhe; i18n en+pt-BR | série/contexto visível na UI |
+| **F10.1 — Camada de dados** ✅ (2026-06-10) | DDL `session_signal`+migração; `insert_session_signal` + dispatch. *(Ingest inicial via dual-write sobre `agent_event` — substituído na F10.2a.)* | seed → linha em `session_signal` |
+| **F10.2a — Tool `survey_record` + tópico `session.signals` (store unificado)** ✅ (2026-06-10) | tool MCP dedicada (`@plughub/schemas` `SurveyRecordInputSchema`/`SessionSignalEventSchema`/`SignalGrainSchema`); `parse_session_signal_event` (1 linha/métrica, chaveado por `origin_session_id`, N métricas, normalização nps/csat); **gravação explícita de TODOS os grãos** incl. `segment` (com `segment_id`+`agent_key`); `segment_id` na chave de dedup. Dual-write de `agent_event` retirado. Testes. **Não toca conferência.** | seed `session.signals` → linhas chaveadas à sessão original; grão segment com atribuição |
+| **F10.2b — Survey disparada pelo fluxo primário** | o **passo final do fluxo primário** delega a um sub-workflow de pesquisa passando o `session_id` atual como `origin`; o sub-workflow (perfil workflow, outbound) contata o cliente e chama `survey_record`. Hook de fechamento de pool = fallback. Atualiza `conference-mechanics.md` + `pool-hooks.md`. | E2E no demo |
+| **F10.3 — Endpoint + bancada + cutover F5** | endpoint de leitura; bancada lê NPS/CSAT de `session_signal` para **todos** os grãos; **cutover**: o hook de NPS de segmento passa a chamar `survey_record` (com `segment_id`/`agent_key` expostos via `@ctx`), aposenta-se o `seg_signal`/`segments.nps_score`. i18n en+pt-BR. | bancada lê tudo de `session_signal`; F5 retirada |
 
-> **F11 (futura)** — survey diferida grão jornada: `collect`/workflow religado por `origin_session_id`,
-> `session_at` resolvido da sessão original, `captured_at`=chegada. Schema já comporta (sem migração).
+> **F11 (futura)** — survey **diferida** e grão **journey** ponta-a-ponta: workflow agendado dispara
+> `survey_record` dias depois; `session_at` resolvido da sessão original via enrichment no consumer
+> (`captured_at`=chegada). Schema/tool já comportam (sem migração).

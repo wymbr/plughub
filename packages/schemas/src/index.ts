@@ -664,6 +664,22 @@ export type {
   AgentEventInput,
 } from "./agent-events"
 
+// ── Session Signals — survey grão session/workflow/journey (F10) ──────────────
+export {
+  SignalGrainSchema,
+  SESSION_SIGNAL_GRAINS,
+  SurveySignalSchema,
+  SurveyRecordInputSchema,
+  SessionSignalEventSchema,
+} from "./survey"
+
+export type {
+  SignalGrain,
+  SurveySignal,
+  SurveyRecordInput,
+  SessionSignalEvent,
+} from "./survey"
+
 // ── ContextStore — unified contact context store ──────────────────────────────
 export {
   ContextVisibilitySchema,

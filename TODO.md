@@ -155,11 +155,19 @@ Hoje o Analytics/Agents mistura agente×pool e não separa humano×IA.
   + quadrante) → **F8 quality_criteria ✅ 2026-06-09** (lente por dimensão + heatmap + radar) →
   **F9 pool-average `pool:` ✅ 2026-06-09** (pseudo-entidade) → **F7 motivo de escalação ✅ 2026-06-09**
   (taxonomia configurável + lente empilhada) → **F10 `session_signal` (grão contato/jornada — em curso)**:
-  **F10.1 camada de dados ✅ 2026-06-10** (tabela + dual-write via Arc 12 `agent_event` + normalizador;
-  recon ETAPA 0 + decisões em `docs/arcos/analytics-agents-workbench.md` §14; validado E2E — ver CHANGELOG)
-  → **F10.2 captura de produção** (`post_human` Fase C + `agente_nps_contato_v1`; toca conferência) →
-  **F10.3 endpoint + bancada**. **F11 futura**: survey diferida grão jornada (`captured_at ≠ session_at`,
-  religação por `origin_session_id`). Detalhe em §13/§14 do spec. Débito pré-existente notado na F1:
+  **F10.1 camada de dados ✅ 2026-06-10** (tabela `session_signal`; ingest inicial via dual-write de
+  `agent_event` — substituído na F10.2a) → **F10.2a tool `survey_record` + tópico `session.signals` ✅
+  2026-06-10** (store unificado: TODOS os grãos `segment|session|workflow|journey` gravados
+  explicitamente via tool MCP dedicada; `segment` com `segment_id`+`agent_key`; dual-write de
+  `agent_event` retirado, contrato Arc 12 intacto; validado E2E — ver CHANGELOG) → **F10.2b survey
+  disparada pelo fluxo primário** (passo final do fluxo delega a sub-workflow de pesquisa passando
+  `origin_session_id`; hook de pool = fallback; toca conferência) → **F10.3 endpoint + bancada +
+  cutover F5** (bancada lê NPS/CSAT de `session_signal` p/ todos os grãos; hook de NPS de segmento passa
+  a chamar `survey_record` com `segment_id`/`agent_key` via `@ctx`; aposenta `seg_signal`/`segments.nps_score`
+  — resolve a duplicação de plumbing entre `segments` e `session_signal`). **F11 futura**: survey
+  **diferida** (`captured_at ≠ session_at`, `session_at` da origem via enrichment) + grão **journey**
+  ponta-a-ponta. Vocabulário: `journey`=grão (relacionamento multi-sessão), não a entidade eliminada.
+  Detalhe em §13/§14 do spec. Débito pré-existente notado na F1:
   3 falhas em `resolve.test.ts` (BLPOP/mention mocks — não relacionadas).
   **Pipeline de avaliação (descoberto na F2, 2026-06-07)**: a cadeia Arc 3/6 estava DORMENTE —
   `conversations.session_closed` sem produtor (adicionado ao bridge), persister sem self-healing de

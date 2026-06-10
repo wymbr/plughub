@@ -34,6 +34,8 @@ import { registerCalendarTools }    from "./tools/calendar"
 import type { CalendarDeps }        from "./tools/calendar"
 import { registerAgentEventTools }  from "./tools/agent-events"
 import type { AgentEventDeps }      from "./tools/agent-events"
+import { registerSurveyTools }      from "./tools/survey"
+import type { SurveyDeps }          from "./tools/survey"
 import { registerWorkflowTools }    from "./tools/workflow"
 import type { WorkflowDeps }        from "./tools/workflow"
 import jwt                         from "jsonwebtoken"
@@ -111,6 +113,8 @@ export function createServer(allDeps?: AllDeps): McpServer {
 
   const agentEventDeps: AgentEventDeps = { redis, kafka }
 
+  const surveyDeps: SurveyDeps = { kafka }
+
   const workflowDeps: WorkflowDeps = {
     channelGatewayUrl: process.env["CHANNEL_GATEWAY_HTTP_URL"] ?? "http://localhost:8010",
     tenantId:          process.env["PLUGHUB_TENANT_ID"] ?? process.env["TENANT_ID"] ?? "tenant_demo",
@@ -128,6 +132,7 @@ export function createServer(allDeps?: AllDeps): McpServer {
   registerDeployTools(server, deployDeps)
   registerCalendarTools(server, calendarDeps)
   registerAgentEventTools(server, agentEventDeps)
+  registerSurveyTools(server, surveyDeps)
   registerWorkflowTools(server, workflowDeps)
 
   return server
@@ -933,6 +938,7 @@ export async function startServer(config: ServerConfig): Promise<void> {
       tenantId:       process.env["PLUGHUB_TENANT_ID"] ?? process.env["TENANT_ID"] ?? "tenant_demo",
     })
     registerAgentEventTools(mcpServer, { redis, kafka })
+    registerSurveyTools(mcpServer, { kafka })
     registerWorkflowTools(mcpServer, {
       channelGatewayUrl: process.env["CHANNEL_GATEWAY_URL"] ?? "http://channel-gateway:8010",
       tenantId:          process.env["PLUGHUB_TENANT_ID"] ?? process.env["TENANT_ID"] ?? "tenant_demo",

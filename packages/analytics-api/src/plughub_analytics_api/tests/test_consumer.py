@@ -24,7 +24,7 @@ from ..models import (
     parse_queue_position,
     parse_participant_event,
     parse_evaluation_event,
-    parse_agent_business_event,
+    parse_session_signal_event,
     _normalize_signal_value,
 )
 from ..consumer import _write_row
@@ -1033,7 +1033,7 @@ class TestWriteRowDispatchPauseIntervals:
         store.insert_evaluation_event.assert_not_awaited()
 
 
-# ── F10: session_signal dual-write (parse_agent_business_event) ────────────────
+# ── F10: session.signals → session_signal (parse_session_signal_event) ─────────
 
 class TestSessionSignalNormalization:
     def test_nps_promoter(self):
@@ -1057,73 +1057,127 @@ class TestSessionSignalNormalization:
         assert _normalize_signal_value("valor_contrato", 299.0) == (299.0, None)
 
 
-class TestParseAgentBusinessEventSignal:
-    def _payload(self, category: str, value=9, **extra):
+class TestParseSessionSignalEvent:
+    def _payload(self, signals, **extra):
         p = {
-            "event_id":   "evt-001",
-            "tenant_id":  TENANT,
-            "session_id": SESSION,
-            "pool_id":    POOL,
-            "category":   category,
-            "value":      value,
-            "emitted_at": "2026-06-09T12:00:00+00:00",
+            "event_id":          "evt-survey-001",
+            "tenant_id":         TENANT,
+            "origin_session_id": "sess-original-007",
+            "grain":             "session",
+            "survey_session_id": "sess-survey-999",
+            "pool_id":           POOL,
+            "captured_at":       "2026-06-10T15:00:00+00:00",
+            "signals":           signals,
         }
         p.update(extra)
         return p
 
-    def test_non_signal_returns_single_dict(self):
-        # A plain business KPI (no signal convention) stays a single row.
-        result = parse_agent_business_event(
-            self._payload(f"{POOL}.skill_x_v1.valor_contrato", value=299.9)
+    def test_nps_contact_keys_to_origin(self):
+        rows = parse_session_signal_event(
+            self._payload([{"metric": "nps", "value": 9}])
         )
-        assert isinstance(result, dict)
-        assert result["table"] == "agent_business_events"
-
-    def test_nps_contact_dual_writes(self):
-        result = parse_agent_business_event(
-            self._payload(f"{POOL}.skill_finalizacao_v1.nps_contact", value=9)
-        )
-        assert isinstance(result, list)
-        assert len(result) == 2
-        biz, sig = result
-        assert biz["table"] == "agent_business_events"
+        assert isinstance(rows, list)
+        assert len(rows) == 1
+        sig = rows[0]
         assert sig["table"] == "session_signal"
-        assert sig["grain"] == "contact"
+        assert sig["grain"] == "session"
         assert sig["source"] == "customer_nps"
         assert sig["metric"] == "nps"
         assert sig["value_num"] == 9.0
         assert sig["value_label"] == "promotor"
-        # grão contato não é atribuível a um agente
-        assert sig["agent_key"] == ""
-        assert sig["session_id"] == SESSION
-        # síncrono: sem religação diferida
-        assert sig["origin_session_id"] is None
-        # bucketização por session_at ≈ captured_at no caso síncrono
-        assert sig["session_at"] == sig["captured_at"] == "2026-06-09T12:00:00+00:00"
+        assert sig["agent_key"] == ""                       # não atribuível
+        assert sig["session_id"] == "sess-original-007"     # chaveado ao original
+        assert sig["origin_session_id"] == "sess-original-007"
+        assert sig["session_at"] == sig["captured_at"] == "2026-06-10T15:00:00+00:00"
 
-    def test_journey_grain_carries_origin(self):
-        result = parse_agent_business_event(
+    def test_value_coerces_from_string(self):
+        # menu output_as devolve string "3" — o parser coage.
+        rows = parse_session_signal_event(
+            self._payload([{"metric": "nps", "value": "3"}])
+        )
+        assert rows[0]["value_num"] == 3.0
+        assert rows[0]["value_label"] == "detrator"
+
+    def test_multiple_metrics_one_row_each(self):
+        # Pesquisa pode agregar várias métricas numa só chamada.
+        rows = parse_session_signal_event(
+            self._payload([
+                {"metric": "nps",  "value": 8},
+                {"metric": "csat", "value": 5},
+                {"metric": "ces",  "value": 2},   # métrica extra customizada
+            ])
+        )
+        assert len(rows) == 3
+        by_metric = {r["metric"]: r for r in rows}
+        assert by_metric["nps"]["value_label"] == "neutro"
+        assert by_metric["csat"]["source"] == "customer_csat"
+        assert by_metric["csat"]["value_label"] == "satisfeito"
+        assert by_metric["ces"]["source"] == "customer_survey"
+        assert by_metric["ces"]["value_label"] is None       # métrica custom, sem label
+        # signal_id único por métrica
+        assert len({r["signal_id"] for r in rows}) == 3
+
+    def test_workflow_grain(self):
+        rows = parse_session_signal_event(
+            self._payload([{"metric": "csat", "value": 1}], grain="workflow")
+        )
+        assert rows[0]["grain"] == "workflow"
+        assert rows[0]["value_label"] == "insatisfeito"
+
+    def test_journey_grain(self):
+        rows = parse_session_signal_event(
+            self._payload([{"metric": "nps", "value": 10}], grain="journey")
+        )
+        assert rows[0]["grain"] == "journey"
+        assert rows[0]["value_label"] == "promotor"
+
+    def test_segment_grain_with_attribution(self):
+        # grão segment é aceito com segment_id + agent_key (atribuição ao agente).
+        rows = parse_session_signal_event(
             self._payload(
-                f"{POOL}.skill_pesquisa_v1.nps_journey",
-                value=3,
-                origin_session_id="sess-original-042",
+                [{"metric": "nps", "value": 9}],
+                grain="segment",
+                segment_id="seg-abc",
+                agent_key="user_42",
             )
         )
-        assert isinstance(result, list)
-        sig = result[1]
-        assert sig["grain"] == "journey"
-        assert sig["source"] == "customer_survey"
-        assert sig["value_label"] == "detrator"
-        assert sig["origin_session_id"] == "sess-original-042"
-        assert sig["journey_id"] == "sess-original-042"
+        sig = rows[0]
+        assert sig["grain"] == "segment"
+        assert sig["segment_id"] == "seg-abc"
+        assert sig["agent_key"] == "user_42"
+        assert sig["session_id"] == "sess-original-007"
+
+    def test_segment_grain_without_segment_id_rejected(self):
+        # grão segment exige segment_id (atribuição + dedup-safe).
+        assert parse_session_signal_event(
+            self._payload([{"metric": "nps", "value": 9}], grain="segment")
+        ) is None
+
+    def test_explicit_label_wins(self):
+        rows = parse_session_signal_event(
+            self._payload([{"metric": "nps", "value": 6, "value_label": "custom"}])
+        )
+        assert rows[0]["value_label"] == "custom"
+
+    def test_missing_origin_returns_none(self):
+        p = self._payload([{"metric": "nps", "value": 9}])
+        del p["origin_session_id"]
+        assert parse_session_signal_event(p) is None
+
+    def test_bad_grain_returns_none(self):
+        assert parse_session_signal_event(
+            self._payload([{"metric": "nps", "value": 9}], grain="bogus")
+        ) is None
+
+    def test_empty_signals_returns_none(self):
+        assert parse_session_signal_event(self._payload([])) is None
 
     @pytest.mark.asyncio
-    async def test_dispatch_routes_both_rows(self):
+    async def test_dispatch_routes_to_session_signal(self):
         store = make_store()
-        result = parse_agent_business_event(
-            self._payload(f"{POOL}.skill_finalizacao_v1.nps_contact", value=10)
+        rows = parse_session_signal_event(
+            self._payload([{"metric": "nps", "value": 10}])
         )
-        for row in result:
-            await _write_row(store, row, "agent.events", 0)
-        store.insert_agent_business_event.assert_awaited_once()
+        for row in rows:
+            await _write_row(store, row, "session.signals", 0)
         store.insert_session_signal.assert_awaited_once()

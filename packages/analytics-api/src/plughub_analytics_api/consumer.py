@@ -22,6 +22,7 @@ Topics → tables mapping:
   evaluation.events          → evaluation_results + evaluation_events (Arc 6)
   mcp.audit                  → session_timeline   (segment_id enriched via SegmentEnricher)
   agent.events               → agent_business_events (Arc 12)
+  session.signals            → session_signal (F10 — survey grão contato/jornada)
   calibration.events         → calibration_events (Arc 13)
 
 Batch strategy:
@@ -65,6 +66,7 @@ from .models import (
     parse_evaluation_event,
     parse_mcp_audit_event,
     parse_agent_business_event,
+    parse_session_signal_event,
     parse_calibration_event,
     parse_pool_occupancy,
 )
@@ -131,6 +133,7 @@ _TOPICS = [
     "evaluation.events",
     "mcp.audit",
     "agent.events",
+    "session.signals",
     "calibration.events",
     "pool.occupancy",
 ]
@@ -153,6 +156,7 @@ _PARSERS = {
     "evaluation.events":          parse_evaluation_event,
     "mcp.audit":                  parse_mcp_audit_event,
     "agent.events":               parse_agent_business_event,
+    "session.signals":            parse_session_signal_event,
     "calibration.events":         parse_calibration_event,
     "pool.occupancy":             parse_pool_occupancy,
 }

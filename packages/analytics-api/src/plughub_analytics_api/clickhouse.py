@@ -557,15 +557,18 @@ ORDER BY (tenant_id, category_l1, category_l2, category_l3, emitted_at)
 TTL toDateTime(emitted_at) + INTERVAL 2 YEAR
 """
 
-# ── F10 (bancada): session_signal — voz do cliente/agente no grão CONTATO ou JORNADA.
-# Grão segmento NÃO mora aqui (vive em segments.nps_score etc., F5). Esta tabela é
-# justificada pelos sinais não atribuíveis a um único agente: NPS/CSAT perguntado uma
-# vez no fim do contato (grain='contact') e pesquisa diferida religada por
-# origin_session_id (grain='journey', captured_at ≠ session_at — F11).
-# Normalizada por um consumer: o parser de agent.events faz dual-write quando a
-# categoria casa a convenção de sinal (leaf nps_contact/csat_contact/…).
-# Bucketização sempre por session_at (regra de ouro §7). ReplacingMergeTree dedup
-# por (tenant, session, grain, metric) — um sinal por contato/jornada por métrica.
+# ── F10 (bancada): session_signal — voz do cliente/agente, store ÚNICO de sinais.
+# Cobre TODOS os grãos (segment|session|workflow|journey), gravados explicitamente
+# via a tool MCP survey_record (um invoke no skill-flow de pesquisa) — sem mecanismo
+# de eventos/derivação. grain = O QUE a pesquisa cobre: segment (1 agente; carrega
+# segment_id + agent_key p/ atribuição), session (a sessão inteira), workflow (uma
+# execução de workflow), journey (relacionamento multi-sessão). Survey OUTBOUND
+# religa à sessão original por origin_session_id. Timing (no ato × diferido) =
+# captured_at × session_at, não um grão. segments.nps_score (F5) é legado, aposentado
+# no cutover da bancada (F10.3). Ingest: survey_record → Kafka session.signals →
+# parse_session_signal_event. Bucketização sempre por session_at (regra de ouro §7).
+# ReplacingMergeTree dedup por (tenant, session, grain, segment_id, metric) —
+# segment_id na chave evita colidir N segmentos da mesma sessão no grão segment.
 _DDL_SESSION_SIGNAL = """
 CREATE TABLE IF NOT EXISTS {db}.session_signal
 (
@@ -573,6 +576,7 @@ CREATE TABLE IF NOT EXISTS {db}.session_signal
     tenant_id          String,
     session_id         String,
     grain              String,
+    segment_id         String DEFAULT '',
     agent_key          String DEFAULT '',
     pool_id            String DEFAULT '',
     source             String,
@@ -587,7 +591,7 @@ CREATE TABLE IF NOT EXISTS {db}.session_signal
 )
 ENGINE = ReplacingMergeTree()
 PARTITION BY toYYYYMM(date)
-ORDER BY (tenant_id, session_id, grain, metric)
+ORDER BY (tenant_id, session_id, grain, segment_id, metric)
 TTL toDateTime(session_at) + INTERVAL 2 YEAR
 """
 
@@ -1318,8 +1322,8 @@ class AnalyticsStore:
     # session_signal (F10 bancada — voz do cliente/agente grão contato/jornada)
 
     _SESSION_SIGNAL_COLS = [
-        "signal_id", "tenant_id", "session_id", "grain", "agent_key", "pool_id",
-        "source", "metric", "value_num", "value_label",
+        "signal_id", "tenant_id", "session_id", "grain", "segment_id", "agent_key",
+        "pool_id", "source", "metric", "value_num", "value_label",
         "session_at", "captured_at", "origin_session_id", "journey_id", "date",
     ]
 
@@ -1932,6 +1936,7 @@ def _session_signal_row(d: dict) -> list:
         d.get("tenant_id", "") or "",
         d.get("session_id", "") or "",
         d.get("grain", "") or "",
+        d.get("segment_id", "") or "",
         d.get("agent_key", "") or "",
         d.get("pool_id", "") or "",
         d.get("source", "") or "",

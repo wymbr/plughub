@@ -525,6 +525,7 @@ services:
           collect.events
           journey.events
           agent.events
+          session.signals
           calibration.events
           pool.occupancy
         "

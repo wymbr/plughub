@@ -2,6 +2,44 @@
 
 ---
 
+## Bancada de agentes F10.2a — `survey_record` + `session.signals` (store unificado) (2026-06-10)
+
+Pivota o ingest da `session_signal` do dual-write sobre `agent_event` (F10.1) para uma **tool MCP
+dedicada `survey_record`** + tópico `session.signals`. Decisão: a gravação de pesquisa é explícita
+(um `invoke` no skill-flow), não um efeito colateral de `agent_event` — `origin_session_id`, `grain`
+e as métricas são parâmetros estruturados de 1ª classe, sem a checagem de namespace `category[0]==pool`
+do Arc 12 nem convenção de sufixo.
+
+**Modelo (decisões 2026-06-10)**: a pesquisa de contato/processo roda numa **survey OUTBOUND** (sessão
+própria) que religa à sessão original e grava o sinal **contra ela** (`session_signal.session_id =
+origin_session_id`). O **disparo** é responsabilidade do **fluxo primário no passo final** (delega a um
+sub-workflow de pesquisa passando o `session_id`) — hook de fechamento de pool fica como fallback;
+mecânica fica para a F10.2b. **Store unificado (opção 2)**: TODOS os grãos
+(`segment|session|workflow|journey`) moram em `session_signal`, gravados explicitamente; `segment`
+carrega `segment_id`+`agent_key` (atribuição). Vocabulário: `journey` é rótulo de grão (relacionamento
+multi-sessão), **não** a entidade Journey eliminada; timing (no ato × diferido) = `captured_at` ×
+`session_at`, não grão.
+
+**Implementação**: `@plughub/schemas` `survey.ts` (`SignalGrainSchema` 4 grãos, `SESSION_SIGNAL_GRAINS`,
+`SurveySignalSchema`, `SurveyRecordInputSchema`, `SessionSignalEventSchema`). mcp-server `tools/survey.ts`
+(`survey_record` → Kafka `session.signals`), registrada no `server.ts`. analytics-api:
+`parse_session_signal_event` (1 linha/métrica, chaveado por `origin_session_id`, N métricas,
+normalização nps/csat, `segment` exige `segment_id`); `session_signal` ganha `segment_id` (na chave de
+dedup `(tenant, session, grain, segment_id, metric)`) + `agent_key`. Tópico `session.signals` no compose
++ tabelas Kafka/Zod no CLAUDE.md. **Revertidas** as edições transitórias no `agent_event` (contrato
+Arc 12 intacto). Dual-write da F10.1 removido.
+
+**Validação E2E**: 118 testes. Smoke real no demo — `session.signals` (grãos session + segment) →
+linhas chaveadas à sessão original; `segment` com `segment_id`/`agent_key`; coerção `"9"→9`;
+normalização promotor/satisfeito/neutro.
+
+**Pendente (F10.3, cutover F5)**: a `segments.nps_score` (F5) segue como fonte da lente por agente até a
+bancada migrar para ler tudo de `session_signal`; nesse cutover o hook de NPS de segmento passa a chamar
+`survey_record` (com `segment_id`/`agent_key` via `@ctx`) e o `seg_signal`/`nps_score` é aposentado.
+Resolve de uma vez a duplicação de plumbing NPS/CSAT entre `segments` e `session_signal`.
+
+---
+
 ## Bancada de agentes F10.1 — camada de dados `session_signal` (2026-06-10)
 
 Primeira sub-fase da F10 (item deferred mais estrutural do §7): voz do cliente/agente no grão
