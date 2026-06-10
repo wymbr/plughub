@@ -67,6 +67,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
 }) => {
   const { t } = useTranslation('agentAssist');
   const bottomRef    = useRef<HTMLDivElement | null>(null);
+  const scrollRef    = useRef<HTMLDivElement | null>(null);
   const maskingRules = useMaskingDisplayRules();
 
   const sentimentLabel = (score: number): string => {
@@ -77,8 +78,12 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
     return t('estado.sentimentLabel.veryNegative');
   };
 
+  // Auto-scroll rolando APENAS o container de mensagens (scrollRef) — nunca a
+  // window. scrollIntoView rolava todos os ancestrais roláveis (incl. a página),
+  // deslocando o layout da Console ao atribuir um contato / chegar mensagem.
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+    const c = scrollRef.current;
+    if (c) c.scrollTo({ top: c.scrollHeight, behavior: "smooth" });
   }, [messages, aiTyping]);
 
   const hasLiveData = liveState && (
@@ -170,6 +175,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
       <div
         role="log"
         aria-label={t('chatArea.conversationAria')}
+        ref={scrollRef}
         aria-live="polite"
         aria-relevant="additions"
         className="flex-1 overflow-y-auto px-4 py-3 flex flex-col gap-3 bg-surface-muted"

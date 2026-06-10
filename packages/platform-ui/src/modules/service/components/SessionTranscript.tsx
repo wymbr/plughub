@@ -230,17 +230,22 @@ export function SessionTranscript({ tenantId, sessionId, onBack, canJoin = true,
   const { insights }                               = useSessionInsights(tenantId, sessionId)
   const bottomRef   = useRef<HTMLDivElement>(null)
   const duringRef   = useRef<HTMLDivElement>(null)
+  const streamRef   = useRef<HTMLDivElement>(null)
 
   const [showBefore, setShowBefore] = useState(false)
   const [showAfter,  setShowAfter]  = useState(false)
   const [showEvents, setShowEvents] = useState(true)
 
+  // Auto-scroll rolando APENAS o container de mensagens (s.stream) — nunca a
+  // window. scrollIntoView rola todos os ancestrais roláveis (incl. a página),
+  // o que deslocava o layout da Console ao carregar um contato. Calcula o offset
+  // do alvo relativo ao scroll atual do container e usa scrollTo nele.
   useEffect(() => {
-    if (segment) {
-      duringRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
-    } else {
-      bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
-    }
+    const c = streamRef.current
+    const target = segment ? duringRef.current : bottomRef.current
+    if (!c || !target) return
+    const top = c.scrollTop + (target.getBoundingClientRect().top - c.getBoundingClientRect().top)
+    c.scrollTo({ top, behavior: 'smooth' })
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [entries.length])
 
@@ -329,7 +334,7 @@ export function SessionTranscript({ tenantId, sessionId, onBack, canJoin = true,
         )}
       </div>
 
-      <div style={s.stream}>
+      <div ref={streamRef} style={s.stream}>
         {/* ── Before segment ── */}
         {segment && before.length > 0 && (
           <div style={{ marginBottom: 8 }}>

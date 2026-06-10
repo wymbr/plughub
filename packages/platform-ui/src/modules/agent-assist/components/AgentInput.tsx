@@ -37,7 +37,7 @@ export const AgentInput: React.FC<AgentInputProps> = ({
   // Re-focus textarea when palette closes
   const closePalette = useCallback(() => {
     setShowPalette(false);
-    requestAnimationFrame(() => textareaRef.current?.focus());
+    requestAnimationFrame(() => textareaRef.current?.focus({ preventScroll: true }));
   }, []);
 
   // Insert phrase or @mention from palette
