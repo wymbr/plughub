@@ -20,14 +20,16 @@ agent_key = user_id derivado do `instance_id` do `human_seg`). `survey_record` �
 (por agente) e `session_nps` (contexto) passam a ler **a mesma tabela** — **acaba a duplicação** de
 plumbing NPS/CSAT entre `segments` e `session_signal`.
 
-**Transicional (rollback)**: o bridge **ainda escreve** `segments.nps_score` (`_apply_nps_to_segment`),
-mas ele **não é mais lido**; um follow-up remove o write + a coluna após validação E2E do hook.
+**Legado removido (cutover final)**: validado o write do hook real, o bridge **deixou de escrever**
+`segments.nps_score` — `_apply_nps_to_segment` + a leitura de `nps_resposta` no `process_routed` foram
+removidos. A coluna `segments.nps_score` fica **vestigial** (histórico congelado, sem write nem read);
+um `DROP COLUMN` é polish opcional.
 
-**Validação**: testes `test_nps_lens_reads_session_signal` (lê session_signal, grain=segment, sem
-`nps_score`) + `session_nps` passam. Seed E2E: `session.signals(grain=segment)` → lente `nps` mostra o
-agente com `avg_nps=9/nps=100` lendo de `session_signal`. **Pendente**: E2E do hook real
-(`on_human_end → survey_record grain:segment`) via fluxo humano (Agent Assist / e2e-runner). **Fatia F10
-completa** (F10.3b era a última peça do cutover; resta só a remoção final do legado + F11).
+**Validação E2E**: (1) testes `test_nps_lens_reads_session_signal` + `session_nps` passam; (2) seed →
+lente `nps` lê de `session_signal`; (3) **fluxo humano real** (sac → escala `retencao_humano` → humano
+resolve → cliente responde NPS) → `[survey_record] invoked grain:segment, segment_id, agent_key, nps=8`
++ `published`. **Cutover F5 completo e finalizado.** **Fatia F10 inteira concluída** (resta só F11:
+survey diferida + grão journey ponta-a-ponta, arco futuro).
 
 ---
 

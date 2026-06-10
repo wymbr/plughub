@@ -175,9 +175,10 @@ Hoje o Analytics/Agents mistura agente×pool e não separa humano×IA.
   F5) → **F10.3b cutover F5 ✅ 2026-06-10** (caminho B unificado: `agente_nps_v1` chama
   `survey_record(grain=segment)`; bridge escreve `session.surveyed_segment_id`/`agent_key` via `@ctx`;
   `_compare_nps_lens` migra para `session_signal` (join segments p/ metadata) → lentes `nps`+`session_nps`
-  leem a mesma tabela, **acaba a duplicação**. Transicional: `segments.nps_score` ainda escrito (rollback)
-  mas não lido. Validado: testes + seed E2E (lente lê session_signal). **Pendente**: E2E do hook real via
-  fluxo humano; **follow-up**: remover write `segments.nps_score` + coluna. Ver CHANGELOG). **F11 futura**: survey
+  leem a mesma tabela, **acaba a duplicação**. **Cutover final**: validado E2E o write do hook (fluxo
+  humano real → `survey_record grain:segment, nps=8`); legado removido (bridge não escreve mais
+  `segments.nps_score`; `_apply_nps_to_segment` deletado). Coluna `nps_score` vestigial (DROP opcional).
+  **Fatia F10 concluída.** Ver CHANGELOG). **F11 futura**: survey
   **diferida** (`captured_at ≠ session_at`, `session_at` da origem via enrichment) + grão **journey**
   ponta-a-ponta. Vocabulário: `journey`=grão (relacionamento multi-sessão), não a entidade eliminada.
   Detalhe em §13/§14 do spec. Débito pré-existente notado na F1:

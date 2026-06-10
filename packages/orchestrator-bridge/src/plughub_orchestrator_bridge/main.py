@@ -1927,21 +1927,9 @@ async def _apply_wrapup_to_segment(
     await _republish_segment_from_signal(redis_client, session_id, segment_id)
 
 
-async def _apply_nps_to_segment(
-    redis_client: aioredis.Redis,
-    session_id:   str,
-    segment_id:   str,
-    nps_value:    int,
-) -> None:
-    """Conclusão do hook NPS (on_human_end side=customer): acumula nps_score no
-    segmento e re-publica."""
-    try:
-        await redis_client.hset(_seg_signal_key(session_id, segment_id),
-                                mapping={"nps_score": str(int(nps_value))})
-        await redis_client.expire(_seg_signal_key(session_id, segment_id), 604800)
-    except Exception as exc:
-        logger.debug("F5: apply_nps hset failed: session=%s — %s", session_id, exc)
-    await _republish_segment_from_signal(redis_client, session_id, segment_id)
+# _apply_nps_to_segment — REMOVIDO (F10.3b cutover). O NPS de segmento é gravado
+# pelo agente de NPS via survey_record(grain=segment) → session_signal. A lente
+# `nps` lê de session_signal; segments.nps_score não é mais escrito nem lido.
 
 
 # ── external-mcp activation: LPUSH context_package → agent:queue ─────────────
@@ -3179,22 +3167,10 @@ async def process_routed(
                     # In the no-customer-hook path, _close_contact_layer() fires
                     # immediately in the agent_done handler above.
                     if _hook_side == "customer":
-                        # ── F5 (grão segmento): NPS completou ──────────────────
-                        # A nota está no pipeline_state do agente NPS
-                        # (results.nps_resposta, 0–10). Atribui ao segmento humano
-                        # que ESTE on_human_end serviu.
-                        if _hook_human_seg and completed_hook_type == "on_human_end":
-                            _nps_results = (((agent_result or {}).get("pipeline_state")) or {}).get("results") or {}
-                            _nps_raw = _nps_results.get("nps_resposta")
-                            if _nps_raw not in (None, ""):
-                                try:
-                                    _nps_val = int(str(_nps_raw).strip())
-                                    asyncio.create_task(_apply_nps_to_segment(
-                                        redis_client, session_id, _hook_human_seg, _nps_val,
-                                    ))
-                                except (ValueError, TypeError):
-                                    logger.debug("F5: nps_resposta não numérico: session=%s val=%r",
-                                                 session_id, _nps_raw)
+                        # F10.3b: o NPS de segmento é gravado pelo PRÓPRIO agente de
+                        # NPS via survey_record(grain=segment) — caminho unificado em
+                        # session_signal. O bridge não deriva mais nps_score aqui
+                        # (legado _apply_nps_to_segment/segments.nps_score removido).
                         try:
                             _cust_remaining = await redis_client.decr(
                                 f"session:{session_id}:posatt:customer_active"
