@@ -387,3 +387,59 @@ de 3-5": espinha → qualidade → endpoint → UI → sinais → cruzamentos.
 wrap-up→primary (bridge write-back vs join na leitura) — F1; mecanismo do join de qualidade
 (query-time vs desnormalização no ingest) — F2; campo de origem do `handoff_reason` no wrap-up
 (reusar `resumo`/`proximos_passos` vs menu próprio) — F1.
+
+---
+
+## 14. `session_signal` — grão contato/jornada (F10)
+
+> Recon 2026-06-10 (ETAPA 0) validada no código. Implementa o item **deferred** mais estrutural
+> do §7: NPS/CSAT/pesquisa no grão **contato** (atendimento inteiro) e **jornada** (multi-sessão),
+> não atrelados a um segmento. O grão **segmento** já mora em `segments` (F5) e não usa esta tabela.
+
+### 14.1 Achados da recon (estado atual ≠ premissas do §7 original)
+
+- **Journey foi eliminada** (Arc 19 Fase F). Não há tabela `contacts`/`journeys`; o "contato" **é** a
+  `session_id`. A rastreabilidade multi-sessão é o par **`origin_session_id`** (materializado em
+  `analytics.sessions`) — `parent_session_id` foi planejado mas **não materializado** no DDL.
+- **`journey_id` é vestigial** — sobrevive como coluna `Nullable` em `agent_business_events`, resolvido
+  pelo McpInterceptor de `session:{id}:meta`, mas quase sempre `null` pós-Arc 19. **Não é mais a chave
+  de religação** — o §7 foi escrito antes da eliminação. O link canônico é `origin_session_id`.
+- **Captura de NPS hoje**: grão segmento (F5) via hook `on_human_end` → acumulador `seg_signal` →
+  `segments.nps_score`. O pipeline `agent_event`→`agent_business_events` (Arc 12) funciona, mas os
+  hooks NPS/wrap-up **não** emitem `agent_event` (gravam ContextStore + `seg_signal`).
+- **Falta p/ grão contato**: um hook que dispare **uma vez** no fechamento do contato (candidato
+  natural: slot `post_human`, Fase C dos hooks, hoje pendente), sem segmento-alvo → `session_signal`.
+
+### 14.2 Decisões travadas (2026-06-10)
+
+- **Veículo de captura**: reusar **Arc 12 `agent_event`** + normalizador (sem pipeline novo). O hook
+  emite `agent_event(category=…​nps_contact, value)`; o parser de `agent.events` faz **dual-write** em
+  `session_signal` quando o *leaf* da category casa a convenção (`_SIGNAL_METRIC_MAP`).
+- **Religação**: **`origin_session_id`** (canônico Arc 19). Coluna `journey_id` mantida por compat,
+  populada com a chave canônica.
+- **Escopo F10**: infra + grão **contato** E2E. Survey diferida (grão **jornada**: `captured_at ≠
+  session_at`, resolução de `session_at` da sessão original via `origin_session_id`) = **F11** futura.
+- **Atribuição**: grão contato/jornada **não** é atribuível a um agente → `agent_key=''`; `pool_id`
+  guardado só como contexto. Na bancada é **contexto do contato**, não linha de comparação por agente
+  (a lente `nps` por agente segue lendo `segments`, grão segmento, F5).
+- **Bucketização**: sempre por **`session_at`** (regra de ouro §7).
+
+### 14.3 Tabela
+
+`analytics.session_signal` (ReplacingMergeTree, dedup por `(tenant, session, grain, metric)`, TTL 2a
+em `session_at`): `signal_id, tenant_id, session_id, grain(contact|journey), agent_key, pool_id,
+source(customer_nps|customer_csat|customer_survey|agent_wrapup), metric, value_num, value_label,
+session_at, captured_at, origin_session_id, journey_id, date`.
+
+Normalização: NPS 0–10 → promotor(≥9)/neutro(7–8)/detrator(≤6); CSAT 1–5 → satisfeito/neutro/insatisfeito.
+
+### 14.4 Sub-fases
+
+| Sub-fase | Escopo | Entrega validável |
+|---|---|---|
+| **F10.1 — Camada de dados** | DDL `session_signal`+migração; `insert_session_signal`; `parse_agent_business_event` **dual-write** (leaf casa `_SIGNAL_METRIC_MAP`→ linha normalizada); `_normalize_signal_value`; testes parser/normalização. **Não toca conferência.** | seed `agent.events` NPS-contato → linha em `session_signal` via curl/ClickHouse |
+| **F10.2 — Captura de produção** | slot `post_human` (Fase C hooks) dispara 1× no fechamento; skill `agente_nps_contato_v1` emite `agent_event(…nps_contact)`; wiring no bridge. Atualiza `conference-mechanics.md` (nova Mudança) + `pool-hooks.md`. | E2E no demo: contato fecha → 1 NPS grão contato |
+| **F10.3 — Endpoint + bancada** | endpoint de leitura (contexto do contato, não linha por agente); exibição mínima na bancada/detalhe; i18n en+pt-BR | série/contexto visível na UI |
+
+> **F11 (futura)** — survey diferida grão jornada: `collect`/workflow religado por `origin_session_id`,
+> `session_at` resolvido da sessão original, `captured_at`=chegada. Schema já comporta (sem migração).

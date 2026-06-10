@@ -151,9 +151,15 @@ Hoje o Analytics/Agents mistura agente×pool e não separa humano×IA.
   refinamento: pool-average agregado via pseudo-entidade `pool:`) → **F5 NPS+wrap-up (grão segmento)
   ✅ 2026-06-09** (derivado de segments, NÃO session_signal; refator per-segmento no bridge — ver
   CHANGELOG + conference-mechanics §Mudança 7; session_signal p/ grãos contato/jornada fica futuro)
-  → **F6 cruzamentos (próxima)**; **F7 opcional/futura**: motivo de escalação normalizado (taxonomia
-  pool-scoped à la `pause_reasons` + lente). `close_reason` já é enum normalizado; `handoff_reason`
-  fica texto livre (detalhe) até F7. Detalhe em §13 do spec. Débito pré-existente notado na F1:
+  → **F6 cruzamentos ✅ 2026-06-09** (endpoint `/reports/agents/cross` + view Cross-cut: concordância
+  + quadrante) → **F8 quality_criteria ✅ 2026-06-09** (lente por dimensão + heatmap + radar) →
+  **F9 pool-average `pool:` ✅ 2026-06-09** (pseudo-entidade) → **F7 motivo de escalação ✅ 2026-06-09**
+  (taxonomia configurável + lente empilhada) → **F10 `session_signal` (grão contato/jornada — em curso)**:
+  **F10.1 camada de dados ✅ 2026-06-10** (tabela + dual-write via Arc 12 `agent_event` + normalizador;
+  recon ETAPA 0 + decisões em `docs/arcos/analytics-agents-workbench.md` §14; validado E2E — ver CHANGELOG)
+  → **F10.2 captura de produção** (`post_human` Fase C + `agente_nps_contato_v1`; toca conferência) →
+  **F10.3 endpoint + bancada**. **F11 futura**: survey diferida grão jornada (`captured_at ≠ session_at`,
+  religação por `origin_session_id`). Detalhe em §13/§14 do spec. Débito pré-existente notado na F1:
   3 falhas em `resolve.test.ts` (BLPOP/mention mocks — não relacionadas).
   **Pipeline de avaliação (descoberto na F2, 2026-06-07)**: a cadeia Arc 3/6 estava DORMENTE —
   `conversations.session_closed` sem produtor (adicionado ao bridge), persister sem self-healing de
@@ -396,6 +402,42 @@ Fase 1 concluída — ver CHANGELOG 2026-05-14 e `docs/arcos/audit-lgpd.md`.
 - **Fase 3** — `user_access` logs: topic Kafka `user_access.events` em auth-api + tabela ClickHouse + tab ativo em AuditPage.
 - **Fase 4** — SAR/Erasure pipeline: CRUD de Subject Access Requests + pseudonimização em `sessions_stream` + anonimização ClickHouse (TTL/partition replacement).
 - **Fase 5** — `config_snapshot`: leitura read-only do namespace `masking` do Config API para verificação DPO.
+
+---
+
+## Business in Any Media — processo channel-abstract + framework de loja *(proposta — não implementado)*
+
+Reposicionamento process-centric ("nunca perca um negócio por causa de canal") + framework de comércio conversacional sobre o modelo de 3 níveis (a = fluxo negocial channel-abstract; b = acesso a canais; c = agente de I/O). Especificações em `docs/product/`:
+
+- **Arquitetura-alvo (3 níveis)** — [`docs/product/business-in-any-media-arquitetura-alvo.md`](docs/product/business-in-any-media-arquitetura-alvo.md) + diagrama `business-in-any-media-3-niveis.svg`. Define as 3 camadas, contratos, e o que falta construir no nível (b).
+- **Resolvedor de identidade + cadastro (nível b)** — [`docs/product/identity-resolver-nivel-b-spec.md`](docs/product/identity-resolver-nivel-b-spec.md) + sequência `identity-resolver-sequencia.mermaid`. Generaliza o `pending_workflow` existente: cadastro nativo (`customer_id` canônico, dois andares Redis/PG), índice multi-âncora hasheado, retomada cross-canal. Governança: plataforma não é autoridade de identidade/pagamento; só chaves mascaradas; uso interno.
+- **Contrato delegate por pool (a→b)** — [`docs/product/delegate-contrato-por-pool-spec.md`](docs/product/delegate-contrato-por-pool-spec.md). Delegação por pool (não skill); decidido alinhar `task.target` a pool; 1 skill publicada por pool; gate de identificação como lógica de fluxo (não campo de schema).
+- **Commerce-cards (nível c)** — [`docs/product/commerce-cards-nivel-c-spec.md`](docs/product/commerce-cards-nivel-c-spec.md). `component` tipado em `notify`/`menu` (product_card/carousel/cart/checkout/order_status), render nativo por canal; checkout com masked input + repasse ao PSP; novas ChannelCapability `rich_card`/`carousel`.
+- **Fluxo de intake (nível c)** — [`docs/product/intake-flow-nivel-c-spec.md`](docs/product/intake-flow-nivel-c-spec.md). Generaliza o `agente_portabilidade_intake_v1`: resolve identidade (origem do canal) → checa pendência → oferta de retomada → roteia intenção; gate de identificação flow-wired.
+
+Descritivo técnico-funcional consolidado (com a seção de roadmap §20.7): [`docs/product/plughub-descritivo-tecnico-funcional.md`](docs/product/plughub-descritivo-tecnico-funcional.md) (+ `.html` print-ready) — **manter atualizado conforme cada item for implementado**.
+
+**Base que já existe** (não confundir com o gap): workflow + canais + suspend/resume + retomada via `pending_workflow` + masking. **A construir**: cadastro de identidade completo, commerce-cards, gate, e o nível (b) como camada de primeira classe.
+
+---
+
+## Fila de trabalho humano / dispatch pull + inbox no Console *(proposta — não implementado)*
+
+Modo de despacho **pull** genérico no Routing Engine (operador puxa da fila) + inbox no Console, tendo a **fila de aprovação** como primeira especialização (revisão de processo montado por IA num passo anterior). Especificações em `docs/product/`:
+
+- **Dispatch pull genérico** — [`docs/product/routing-pull-dispatch-spec.md`](docs/product/routing-pull-dispatch-spec.md). `dispatch_mode: push|pull` no `PoolConfig` (único toque de schema); reusa o sorted set de fila; claim atômico via `ZREM` (alocação concedida pelo routing — invariante preservada); lease TTL + auto-release event-driven (crash_detector); release re-enfileira pelos critérios do routing; ordenação por peso da fila + tags `session.queue.*` no ContextStore; respeita `max_concurrent_sessions`.
+- **Fila de aprovação (especialização)** — [`docs/product/human-work-queue-aprovacao-spec.md`](docs/product/human-work-queue-aprovacao-spec.md). Item = sessão de workflow suspensa (delegate ao pool pull); pacote (form padrão + extensão + `decisions`); decisão volta pelo **retorno do delegate** (`output_as: step.id` já existe — sem schema novo); workflow principal roteia (`choice`); edição auditada.
+- **Inbox no Console (UI)** — [`docs/product/pull-inbox-console-ui-spec.md`](docs/product/pull-inbox-console-ui-spec.md). Integrada ao atendimento (rail de filas piscando → lista → preview no centro → "Pull" na action bar); cor por SLA (verde/amarelo/vermelho); notificação via ciclo do heartbeat; gating de capacidade.
+
+Liga com o **gate de promoção** homologação→produção (descritivo §20.1): promover vira um workflow com passo de aprovação.
+
+---
+
+## Record/Replay Harness — gravação/replay em todas as costuras *(proposta — não implementado)*
+
+Visão + spec em [`docs/product/record-replay-harness-spec.md`](docs/product/record-replay-harness-spec.md). Generaliza o Session Replayer (que hoje replaya só o stream da sessão, para avaliação) num harness "VCR" em todas as costuras (channel-gateway, AI Gateway, MCP, Kafka) — cada costura como **driver** (injeta inputs gravados) ou **mock** (devolve outputs gravados), com timings.
+
+**Base que já existe**: `session-replayer` (persister/hydrator/replayer/comparator), `ComparisonReport` (Jaccard + deltas), `delta_ms`/`speed_factor`, Kafka como log, harness `e2e-tests`. **A construir**: captura full-fidelity de payload em MCP/AI Gateway (hoje `mcp.audit` é só metadado), clock/seed injetável (determinismo), harness multi-costura, gravação seletiva (golden/amostrada/on-demand) com masking, e o **gate de promoção** consumindo o `ComparisonReport` como critério objetivo. Aplicações: regressão determinística, repro de bug, simulação de carga, datasets de avaliação.
 
 ---
 

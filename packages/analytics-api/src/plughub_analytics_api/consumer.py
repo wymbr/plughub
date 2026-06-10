@@ -786,6 +786,8 @@ async def _write_row(
             await store.upsert_agent_pause_interval(row)
         elif table == "agent_business_events":
             await store.insert_agent_business_event(row)
+        elif table == "session_signal":
+            await store.insert_session_signal(row)
         elif table == "calibration_events":
             await store.insert_calibration_event(row)
         elif table == "pool_occupancy_peaks":

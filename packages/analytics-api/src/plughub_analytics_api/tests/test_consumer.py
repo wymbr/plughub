@@ -24,6 +24,8 @@ from ..models import (
     parse_queue_position,
     parse_participant_event,
     parse_evaluation_event,
+    parse_agent_business_event,
+    _normalize_signal_value,
 )
 from ..consumer import _write_row
 
@@ -45,6 +47,8 @@ def make_store() -> MagicMock:
     s.insert_evaluation_event      = AsyncMock()
     s.insert_evaluation_dimension_score = AsyncMock()
     s.insert_contact_insight       = AsyncMock()
+    s.insert_agent_business_event  = AsyncMock()
+    s.insert_session_signal        = AsyncMock()
     return s
 
 
@@ -1027,3 +1031,99 @@ class TestWriteRowDispatchPauseIntervals:
         store.upsert_session.assert_not_awaited()
         store.insert_agent_event.assert_not_awaited()
         store.insert_evaluation_event.assert_not_awaited()
+
+
+# ── F10: session_signal dual-write (parse_agent_business_event) ────────────────
+
+class TestSessionSignalNormalization:
+    def test_nps_promoter(self):
+        assert _normalize_signal_value("nps", 10.0) == (10.0, "promotor")
+        assert _normalize_signal_value("nps", 9.0) == (9.0, "promotor")
+
+    def test_nps_neutral(self):
+        assert _normalize_signal_value("nps", 8.0) == (8.0, "neutro")
+        assert _normalize_signal_value("nps", 7.0) == (7.0, "neutro")
+
+    def test_nps_detractor(self):
+        assert _normalize_signal_value("nps", 6.0) == (6.0, "detrator")
+        assert _normalize_signal_value("nps", 0.0) == (0.0, "detrator")
+
+    def test_csat_buckets(self):
+        assert _normalize_signal_value("csat", 5.0) == (5.0, "satisfeito")
+        assert _normalize_signal_value("csat", 3.0) == (3.0, "neutro")
+        assert _normalize_signal_value("csat", 1.0) == (1.0, "insatisfeito")
+
+    def test_unknown_metric_no_label(self):
+        assert _normalize_signal_value("valor_contrato", 299.0) == (299.0, None)
+
+
+class TestParseAgentBusinessEventSignal:
+    def _payload(self, category: str, value=9, **extra):
+        p = {
+            "event_id":   "evt-001",
+            "tenant_id":  TENANT,
+            "session_id": SESSION,
+            "pool_id":    POOL,
+            "category":   category,
+            "value":      value,
+            "emitted_at": "2026-06-09T12:00:00+00:00",
+        }
+        p.update(extra)
+        return p
+
+    def test_non_signal_returns_single_dict(self):
+        # A plain business KPI (no signal convention) stays a single row.
+        result = parse_agent_business_event(
+            self._payload(f"{POOL}.skill_x_v1.valor_contrato", value=299.9)
+        )
+        assert isinstance(result, dict)
+        assert result["table"] == "agent_business_events"
+
+    def test_nps_contact_dual_writes(self):
+        result = parse_agent_business_event(
+            self._payload(f"{POOL}.skill_finalizacao_v1.nps_contact", value=9)
+        )
+        assert isinstance(result, list)
+        assert len(result) == 2
+        biz, sig = result
+        assert biz["table"] == "agent_business_events"
+        assert sig["table"] == "session_signal"
+        assert sig["grain"] == "contact"
+        assert sig["source"] == "customer_nps"
+        assert sig["metric"] == "nps"
+        assert sig["value_num"] == 9.0
+        assert sig["value_label"] == "promotor"
+        # grão contato não é atribuível a um agente
+        assert sig["agent_key"] == ""
+        assert sig["session_id"] == SESSION
+        # síncrono: sem religação diferida
+        assert sig["origin_session_id"] is None
+        # bucketização por session_at ≈ captured_at no caso síncrono
+        assert sig["session_at"] == sig["captured_at"] == "2026-06-09T12:00:00+00:00"
+
+    def test_journey_grain_carries_origin(self):
+        result = parse_agent_business_event(
+            self._payload(
+                f"{POOL}.skill_pesquisa_v1.nps_journey",
+                value=3,
+                origin_session_id="sess-original-042",
+            )
+        )
+        assert isinstance(result, list)
+        sig = result[1]
+        assert sig["grain"] == "journey"
+        assert sig["source"] == "customer_survey"
+        assert sig["value_label"] == "detrator"
+        assert sig["origin_session_id"] == "sess-original-042"
+        assert sig["journey_id"] == "sess-original-042"
+
+    @pytest.mark.asyncio
+    async def test_dispatch_routes_both_rows(self):
+        store = make_store()
+        result = parse_agent_business_event(
+            self._payload(f"{POOL}.skill_finalizacao_v1.nps_contact", value=10)
+        )
+        for row in result:
+            await _write_row(store, row, "agent.events", 0)
+        store.insert_agent_business_event.assert_awaited_once()
+        store.insert_session_signal.assert_awaited_once()

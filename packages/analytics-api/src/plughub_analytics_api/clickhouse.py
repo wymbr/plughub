@@ -557,6 +557,40 @@ ORDER BY (tenant_id, category_l1, category_l2, category_l3, emitted_at)
 TTL toDateTime(emitted_at) + INTERVAL 2 YEAR
 """
 
+# ── F10 (bancada): session_signal — voz do cliente/agente no grão CONTATO ou JORNADA.
+# Grão segmento NÃO mora aqui (vive em segments.nps_score etc., F5). Esta tabela é
+# justificada pelos sinais não atribuíveis a um único agente: NPS/CSAT perguntado uma
+# vez no fim do contato (grain='contact') e pesquisa diferida religada por
+# origin_session_id (grain='journey', captured_at ≠ session_at — F11).
+# Normalizada por um consumer: o parser de agent.events faz dual-write quando a
+# categoria casa a convenção de sinal (leaf nps_contact/csat_contact/…).
+# Bucketização sempre por session_at (regra de ouro §7). ReplacingMergeTree dedup
+# por (tenant, session, grain, metric) — um sinal por contato/jornada por métrica.
+_DDL_SESSION_SIGNAL = """
+CREATE TABLE IF NOT EXISTS {db}.session_signal
+(
+    signal_id          String,
+    tenant_id          String,
+    session_id         String,
+    grain              String,
+    agent_key          String DEFAULT '',
+    pool_id            String DEFAULT '',
+    source             String,
+    metric             String,
+    value_num          Nullable(Float64),
+    value_label        Nullable(String),
+    session_at         DateTime64(3, 'UTC'),
+    captured_at        DateTime64(3, 'UTC'),
+    origin_session_id  Nullable(String),
+    journey_id         Nullable(String),
+    date               Date
+)
+ENGINE = ReplacingMergeTree()
+PARTITION BY toYYYYMM(date)
+ORDER BY (tenant_id, session_id, grain, metric)
+TTL toDateTime(session_at) + INTERVAL 2 YEAR
+"""
+
 # ── Arc 8: agent_pause_intervals — one row per pause interval per human agent.
 # ReplacingMergeTree on (tenant_id, instance_id, paused_at): the close row
 # (with resumed_at + duration_ms) wins over the open row on background merge
@@ -783,6 +817,7 @@ _ALL_DDL = [
     _DDL_POOL_OCCUPANCY_PEAKS,
     _ALTER_POOL_OCCUPANCY_ADMITTED,   # item 7b — migração idempotente
     _DDL_AGENT_BUSINESS_EVENTS,
+    _DDL_SESSION_SIGNAL,
     _DDL_CALIBRATION_EVENTS,
     # Materialized views — must come AFTER the source tables they reference.
     # AggregatingMergeTree with POPULATE backfills existing data on first creation.
@@ -1278,6 +1313,23 @@ class AnalyticsStore:
             "agent_business_events",
             [_agent_business_event_row(row)],
             self._AGENT_BUSINESS_EVENT_COLS,
+        )
+
+    # session_signal (F10 bancada — voz do cliente/agente grão contato/jornada)
+
+    _SESSION_SIGNAL_COLS = [
+        "signal_id", "tenant_id", "session_id", "grain", "agent_key", "pool_id",
+        "source", "metric", "value_num", "value_label",
+        "session_at", "captured_at", "origin_session_id", "journey_id", "date",
+    ]
+
+    async def insert_session_signal(self, row: dict) -> None:
+        """Insert a normalized contact/journey-grain signal (F10 bancada)."""
+        await asyncio.to_thread(
+            self._insert,
+            "session_signal",
+            [_session_signal_row(row)],
+            self._SESSION_SIGNAL_COLS,
         )
 
     # calibration_events (Arc 13)
@@ -1862,6 +1914,35 @@ def _agent_business_event_row(d: dict) -> list:
         tags,
         _parse_dt(ts) or datetime.utcnow(),
         _today_utc(ts),
+    ]
+
+
+def _session_signal_row(d: dict) -> list:
+    """Row builder for session_signal table (F10 bancada).
+
+    Voz do cliente/agente no grão contato/jornada. session_at é a base de
+    bucketização (data da sessão original); captured_at é quando o sinal chegou
+    (≠ session_at em pesquisa diferida). date (partição) deriva de session_at.
+    """
+    session_at  = d.get("session_at") or d.get("captured_at") or d.get("timestamp")
+    captured_at = d.get("captured_at") or session_at
+    value_num   = d.get("value_num")
+    return [
+        d.get("signal_id", "") or "",
+        d.get("tenant_id", "") or "",
+        d.get("session_id", "") or "",
+        d.get("grain", "") or "",
+        d.get("agent_key", "") or "",
+        d.get("pool_id", "") or "",
+        d.get("source", "") or "",
+        d.get("metric", "") or "",
+        float(value_num) if value_num is not None else None,
+        d.get("value_label") or None,
+        _parse_dt(session_at) or datetime.utcnow(),
+        _parse_dt(captured_at) or datetime.utcnow(),
+        d.get("origin_session_id") or None,
+        d.get("journey_id") or None,
+        _today_utc(session_at),
     ]
 
 

@@ -2,6 +2,35 @@
 
 ---
 
+## Bancada de agentes F10.1 — camada de dados `session_signal` (2026-06-10)
+
+Primeira sub-fase da F10 (item deferred mais estrutural do §7): voz do cliente/agente no grão
+**contato/jornada**, não atrelado a um segmento. **Não toca o mecanismo de conferência.**
+
+**Recon (ETAPA 0)** validada no código: Journey eliminada (Arc 19 Fase F) → "contato" **é** a
+`session_id`; religação multi-sessão via `origin_session_id` (não `journey_id`, vestigial). Hooks
+NPS/wrap-up não emitem `agent_event` hoje (gravam ContextStore + `seg_signal`). Decisões travadas:
+captura via **Arc 12 `agent_event` + normalizador** (sem pipeline novo); religação por
+**`origin_session_id`** (coluna `journey_id` mantida por compat); grão contato/jornada **não**
+atribuível a agente (`agent_key=''`). Desenho completo em `docs/arcos/analytics-agents-workbench.md` §14.
+
+**Implementação** (`packages/analytics-api`): tabela `analytics.session_signal` (ReplacingMergeTree,
+dedup por `tenant+session+grain+metric`, TTL 2a em `session_at`); `_session_signal_row` +
+`_SESSION_SIGNAL_COLS` + `insert_session_signal`; dispatch no `_write_row`. Parser
+`parse_agent_business_event` agora faz **dual-write**: quando o *leaf* da category casa
+`_SIGNAL_METRIC_MAP` (`nps_contact`/`csat_contact`/`*_journey`), retorna `[business_event, session_signal]`.
+Normalização `_normalize_signal_value`: NPS 0–10 → promotor(≥9)/neutro(7–8)/detrator(≤6); CSAT 1–5 →
+satisfeito/neutro/insatisfeito. Bucketização por `session_at` (regra de ouro §7).
+
+**Validação E2E**: 110 testes (10 novos: normalização + dual-write + grão jornada + dispatch). Smoke
+real no demo — `agent.events` NPS-contato → 1 linha em `session_signal` (`grain=contact`,
+`value_label=promotor`, `agent_key` vazio) + cru preservado em `agent_business_events`.
+
+**Próximo**: F10.2 (captura de produção via `post_human` + `agente_nps_contato_v1` — toca conferência);
+F10.3 (endpoint + bancada). F11 (futura): survey diferida grão jornada (`captured_at ≠ session_at`).
+
+---
+
 ## Bancada de agentes F7 — motivo de escalação normalizado (2026-06-09)
 
 Taxonomia configurável de motivos de escalação + lente na bancada. Captura **humano + IA**,
