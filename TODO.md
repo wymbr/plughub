@@ -185,6 +185,23 @@ Hoje o Analytics/Agents mistura agente×pool e não separa humano×IA.
   3 falhas em `resolve.test.ts` (BLPOP/mention mocks — não relacionadas). Débito notado na F10.3a:
   6 falhas em `test_reports.py::TestQueryAgentAvailabilityReport` (`query_agent_availability() missing
   positional arg 'tenant_id'` — descasamento assinatura×teste, pré-existente, não relacionado à bancada).
+  **▶ PRÓXIMA SESSÃO (planejada 2026-06-10) — FECHAR A BANCADA (follow-ups A), ordem sugerida:**
+  1. **`$.segment_id` no `interpolate.ts`** (1 linha em `resolveJsonPathRef`: `segment_id: ctx.segmentId`
+     no evalContext) — quick win; destrava sinal de segmento "sobre si mesmo" genérico via skill.
+  2. **F11 — survey diferida + grão journey E2E**: resolver `session_at` da sessão original via
+     **enrichment no consumer** (`parse_session_signal_event` quando `captured_at ≠ session_at`, lookup
+     `analytics.sessions.opened_at` por `origin_session_id`); workflow agendado disparando `survey_record`
+     dias depois; grão `journey` ponta-a-ponta. Schema/tool já comportam (sem migração).
+  3. **`quality_criteria` cross-form**: alinhar dimensões equivalentes entre formulários (por
+     `dimension_id`/label) — hoje compara só dentro do mesmo form (guard na UI).
+  4. **Validações E2E reais F5/F7 + limpeza de fixtures sintéticos**: agora que há fluxos reais
+     (NPS humano via Agent Assist, survey via webchat), substituir os fixtures de
+     `evaluation_dimension_scores` (F8) e `segments.escalation_reason` (F7) por dado E2E; rodar F5/F7
+     ponta-a-ponta (multi-humano / escalação real).
+  5. **DROP da coluna `segments.nps_score`** (polish): após confirmar `session_signal` como fonte única
+     — `ALTER TABLE segments DROP COLUMN nps_score` + remover do DDL/cols/row-builder/parser.
+  6. **Débitos de teste pré-existentes**: corrigir as 6 falhas `TestQueryAgentAvailabilityReport`
+     (assinatura `query_agent_availability`) e as 3 de `resolve.test.ts` (BLPOP/mention mocks).
   **Nota técnica F10.3 — contexto de atribuição para `survey_record(grain=segment)` (recon 2026-06-10):**
   o que o skill já tem vs. o que falta para chamar `survey_record` com atribuição:
   · `session_id` — **disponível** à YAML como built-in `$.session_id` (`interpolate.ts` `resolveJsonPathRef`,
