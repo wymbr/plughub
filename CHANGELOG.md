@@ -2,6 +2,49 @@
 
 ---
 
+## Bancada de agentes F10.2b.1 — survey disparada por workflow + 4 fixes de plataforma (2026-06-10)
+
+Esqueleto trigger→record da pesquisa de sessão: o **passo final do fluxo primário** delega a um
+sub-workflow de pesquisa (perfil webhook) que religa à sessão original e grava o sinal via
+`survey_record`. Validado E2E (trigger direto da survey → `session_signal(grain=session)` chaveado ao
+`origin_session_id`). A fatia expôs e corrigiu **4 bugs de plataforma**:
+
+**Implementação F10.2b.1**: `survey_record` passa a aceitar **`tenant_id` explícito** (como
+`workflow_trigger`/`context_set` — workflows não têm `session_token`); + logging. `skill_survey_v1`
+(perfil workflow, pool webhook `survey_processo_ia`) lê `@ctx.session.origin_session_id` e chama
+`survey_record(grain=session, signals=[{nps}])`. `skill_atendimento_sac_v1` ganha step `disparar_survey`
+(`invoke workflow_trigger`, `origin_session_id=$.session_id`) no caminho resolvido.
+
+**Fix 1 — input array no schema de skill** (`@plughub/schemas` `skill.ts`): `StepInputValueSchema` era
+`string|number|boolean|record(escalares)` — rejeitava **arrays e objetos aninhados** (422 no upsert da
+skill). Ampliado para JSON recursivo (arrays + objetos). Geral: qualquer `invoke` agora passa
+parâmetros estruturados a tools (ex.: `signals: [{...}]`). O engine já resolvia arrays em runtime.
+
+**Fix 2 — resolução webhook `skill_id`→pool** (`routing-engine`): a resolução **nunca existira** —
+`get_candidate_pools` filtra só por canal; `webhook_skill_id` era armazenado mas **nunca casado**.
+Funcionava por acaso com 1 pool webhook (único candidato). Com o 2º pool (survey), triggers caíam no
+fallback (portabilidade). `router.route()` agora resolve por `webhook_skill_id == event.skill_id`
+quando `pool_id` é None + canal webhook (fallback ao scan p/ retrocompat). `webhook_skill_id` setado
+nos YAMLs dos 2 pools webhook (o campo não era derivado do `skill_id` do topo, que o zod stripa).
+
+**Fix 3 — `skill_id` no evento inbound** (`routing-engine` `models.py`): `ConversationInboundEvent`
+**não declarava `skill_id`** — o pydantic descartava o campo do evento webhook. Adicionado
+(`skill_id: str = ""`), sem o qual o Fix 2 não tinha como casar.
+
+**Fix 4 — auth da tool** (já em Implementação): `survey_record` tenant-explícito remove o atrito de
+`session_token` em workflows.
+
+**Infra demo**: a governança de capacidade (`Σ deploys ≤ C`) exige teto; o pool de survey precisou
+`INCRBY tenant_demo:quota:max_concurrent_sessions` (C estava cheio com os 16 pools). Documentado no YAML.
+
+**Validação E2E**: trigger → `pool=survey_processo_ia` → `survey_record invoked/published` →
+`session_signal(grain=session, nps=9, promotor, origin=sess-test-8)`.
+
+**Pendente**: F10.2b.2 (I/O real do cliente via `collect`, substitui o valor semeado). A fiação
+`sac → workflow_trigger` está in-place; valida-se rodando um contato sac que resolve.
+
+---
+
 ## Bancada de agentes F10.2a — `survey_record` + `session.signals` (store unificado) (2026-06-10)
 
 Pivota o ingest da `session_signal` do dual-write sobre `agent_event` (F10.1) para uma **tool MCP

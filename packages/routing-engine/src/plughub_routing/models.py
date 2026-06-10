@@ -52,6 +52,12 @@ class ConversationInboundEvent(BaseModel):
     # When absent, the router searches all candidate pools for the channel (legacy fallback).
     pool_id:      str | None = None
 
+    # Arc 19: webhook channel endpoint (DNIS). The webhook adapter publishes
+    # pool_id=None + skill_id=<endpoint>; the router resolves the pool by matching
+    # this against each webhook pool's webhook_skill_id (router.route fallback).
+    # Declared here so it survives model_validate (Pydantic drops undeclared fields).
+    skill_id:     str = ""
+
     # Optional enrichment — populated later by AI Gateway (step reason) or inferred upstream.
     # Never used for initial routing; the entry point pool_id is the sole routing signal.
     intent:       str | None = None

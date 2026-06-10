@@ -88,17 +88,30 @@ const InvokeTargetSchema = z.object({
 const EscalateTargetSchema = z.object({ pool: z.string() })
 
 /**
- * Input de steps invoke e reason — literais, JSONPath ou objetos aninhados.
- * Objetos aninhados são necessários para campos como template_vars que agrupam
- * múltiplos parâmetros relacionados em um único input de MCP tool.
+ * Input de steps invoke e reason — literais, JSONPath, objetos OU arrays aninhados.
+ * Aceita JSON arbitrário (recursivo) porque tools MCP podem receber parâmetros
+ * estruturados: objetos aninhados (ex.: template_vars) E arrays de objetos
+ * (ex.: survey_record `signals: [{metric, value}]`). O engine (resolveInputValue)
+ * resolve refs em objetos/arrays e mantém literais — o schema só precisa permitir
+ * a forma. Valores nulos são aceitos (campos opcionais).
  */
-type StepInputValue = string | number | boolean | Record<string, string | number | boolean>
-const StepInputValueSchema: z.ZodType<StepInputValue> = z.union([
-  z.string(),
-  z.number(),
-  z.boolean(),
-  z.record(z.union([z.string(), z.number(), z.boolean()])),
-])
+type StepInputValue =
+  | string
+  | number
+  | boolean
+  | null
+  | StepInputValue[]
+  | { [key: string]: StepInputValue }
+const StepInputValueSchema: z.ZodType<StepInputValue> = z.lazy(() =>
+  z.union([
+    z.string(),
+    z.number(),
+    z.boolean(),
+    z.null(),
+    z.array(StepInputValueSchema),
+    z.record(StepInputValueSchema),
+  ]),
+)
 const StepInputSchema = z.record(StepInputValueSchema)
 
 /** Condição para step choice */

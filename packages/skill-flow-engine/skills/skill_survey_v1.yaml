@@ -1,0 +1,39 @@
+id: skill_survey_v1
+name: "Survey de Sessão v1 — pesquisa grão session (F10.2b)"
+version: "1.0"
+description: |
+  Workflow de pesquisa (perfil webhook — registrado no pool survey_processo_ia).
+  Disparado pelo PASSO FINAL do fluxo primário via workflow_trigger, que passa o
+  session_id do contato como origin_session_id (gravado em session.origin_session_id
+  no ContextStore desta sessão de survey). Grava o sinal CONTRA a sessão original
+  via survey_record (grain=session).
+
+  F10.2b.1 (esqueleto): sem I/O com o cliente — valor semeado (literal). A religação
+  (origin) + a gravação chaveada são o que se valida aqui.
+  F10.2b.2: troca o valor literal pela resposta coletada do cliente via collect.
+classification:
+  type: vertical
+
+entry: gravar_pesquisa
+
+steps:
+  # ── Grava o sinal contra a sessão original ───────────────────────────────────
+  # tenant_id/origin_session_id explícitos (workflow não tem session_token).
+  # origin vem de @ctx.session.origin_session_id (escrito pelo workflow_trigger).
+  - id: gravar_pesquisa
+    type: invoke
+    tool: survey_record
+    input:
+      tenant_id:         "$.tenant_id"
+      origin_session_id: "@ctx.session.origin_session_id"
+      grain:             "session"
+      survey_session_id: "$.session_id"
+      signals:
+        - metric: "nps"
+          value: 9
+    on_success: encerrar
+    on_failure: encerrar
+
+  - id: encerrar
+    type: complete
+    outcome: resolved

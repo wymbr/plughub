@@ -53,8 +53,10 @@ export type SurveySignal = z.infer<typeof SurveySignalSchema>
 
 /**
  * Input da tool MCP `survey_record`.
- *  - session_token   — JWT da sessão de survey (resolve tenant). Auth + audit.
- *  - origin_session_id — OBRIGATÓRIO: a sessão pesquisada (chave do sinal).
+ *  - tenant_id       — tenant da sessão. Em skill-flow YAML use $.tenant_id
+ *                      (built-in). Explícito (como workflow_trigger/context_set) —
+ *                      workflows não têm session_token; auditoria via McpInterceptor.
+ *  - origin_session_id — OBRIGATÓRIO: a sessão pesquisada (chave do sinal). Use $.session_id.
  *  - grain           — segment | session | workflow | journey.
  *  - signals         — ≥1 métrica; várias numa só chamada.
  *  - segment_id      — OBRIGATÓRIO quando grain='segment' (qual segmento/agente).
@@ -63,7 +65,7 @@ export type SurveySignal = z.infer<typeof SurveySignalSchema>
  *  - pool_id         — opcional: pool da sessão original (só contexto).
  */
 export const SurveyRecordInputSchema = z.object({
-  session_token: z.string().min(1),
+  tenant_id: z.string().min(1),
   origin_session_id: z.string().min(1),
   grain: SignalGrainSchema,
   signals: z.array(SurveySignalSchema).min(1).max(20),

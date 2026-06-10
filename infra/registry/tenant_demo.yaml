@@ -125,6 +125,9 @@ pools:
     description: "Pool webhook — processo assíncrono de portabilidade (Arc 19)"
     channel_types: [webhook]
     skill_id: skill_portabilidade_demo_v1
+    # webhook_skill_id = endpoint (DNIS) — resolução determinística por skill_id
+    # agora que há >1 pool webhook (survey_processo_ia foi adicionado na F10.2b).
+    webhook_skill_id: skill_portabilidade_demo_v1
     sla_target_ms: 172800000  # 48h em ms
 
   - pool_id: portabilidade_confirmacao
@@ -137,6 +140,24 @@ pools:
     description: "Pool de confirmação de portabilidade com o cliente (delegate I/O)"
     channel_types: [webchat, whatsapp]
     sla_target_ms: 86400000  # 24h em ms
+
+  - pool_id: survey_processo_ia
+    agent_kind: ai
+    # max_concurrent baixo: survey é rápido/fire-and-forget. A governança de
+    # capacidade exige Σ deploys ≤ C ({tenant}:quota:max_concurrent_sessions);
+    # se C estiver cheio, suba o teto (ver passo de validação F10.2b).
+    deploy: { skill_id: skill_survey_v1, max_concurrent_sessions: 5 }
+    # F10.2b: pool webhook do workflow de pesquisa de sessão. Disparado pelo passo
+    # final do fluxo primário via workflow_trigger (origin_session_id = a sessão
+    # pesquisada). Executa skill_survey_v1: grava o sinal via survey_record contra
+    # a sessão original. F10.2b.1 esqueleto (valor semeado); F10.2b.2 coleta via collect.
+    description: "Pool webhook — survey de pesquisa grão session (F10.2b)"
+    channel_types: [webhook]
+    skill_id: skill_survey_v1
+    # webhook_skill_id = endpoint (DNIS) que o routing usa para resolver pool por
+    # skill_id. Necessário quando há >1 pool webhook (senão o trigger cai no scan).
+    webhook_skill_id: skill_survey_v1
+    sla_target_ms: 3600000  # 1h em ms
 
   - pool_id: reembolso_ia
     agent_kind: ai

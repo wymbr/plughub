@@ -79,6 +79,19 @@ class Router:
             # Only reached if the event was published without pool_id
             # (e.g. manual test events, external integrations not yet updated).
             pools = await self._pools.get_candidate_pools(event.tenant_id, event.channel)
+            # Arc 19: webhook sessions carry no pool_id — the skill_id is the
+            # endpoint (DNIS). Resolve deterministically by matching it against
+            # each pool's webhook_skill_id, so multiple webhook pools route
+            # correctly (not just the first/scored candidate). Falls back to the
+            # unfiltered scan when no pool declares webhook_skill_id (backward-compat
+            # with a single webhook pool).
+            if event.channel == "webhook" and event.skill_id:
+                matched = [
+                    p for p in pools
+                    if getattr(p, "webhook_skill_id", None) == event.skill_id
+                ]
+                if matched:
+                    pools = matched
 
         if not pools:
             return self._build_queued_result(event, now)

@@ -159,9 +159,14 @@ Hoje o Analytics/Agents mistura agente×pool e não separa humano×IA.
   `agent_event` — substituído na F10.2a) → **F10.2a tool `survey_record` + tópico `session.signals` ✅
   2026-06-10** (store unificado: TODOS os grãos `segment|session|workflow|journey` gravados
   explicitamente via tool MCP dedicada; `segment` com `segment_id`+`agent_key`; dual-write de
-  `agent_event` retirado, contrato Arc 12 intacto; validado E2E — ver CHANGELOG) → **F10.2b survey
-  disparada pelo fluxo primário** (passo final do fluxo delega a sub-workflow de pesquisa passando
-  `origin_session_id`; hook de pool = fallback; toca conferência) → **F10.3 endpoint + bancada +
+  `agent_event` retirado, contrato Arc 12 intacto; validado E2E — ver CHANGELOG) → **F10.2b.1 esqueleto
+  trigger→record ✅ 2026-06-10** (fluxo primário dispara sub-workflow `skill_survey_v1` via
+  `workflow_trigger` passando `origin_session_id`; `survey_record` tenant-explícito; validado E2E.
+  **Destravou 4 fixes de plataforma**: input array no `StepInputValueSchema`; resolução webhook
+  `skill_id`→pool no routing — nunca existira, funcionava por acaso com 1 pool webhook —
+  via `webhook_skill_id`; `skill_id` no `ConversationInboundEvent`; demo exige `INCRBY` na quota
+  `max_concurrent_sessions`. Ver CHANGELOG) → **F10.2b.2 I/O real do cliente** (`skill_survey_v1` usa
+  `collect` para coletar NPS real; substitui valor semeado) → **F10.3 endpoint + bancada +
   cutover F5** (bancada lê NPS/CSAT de `session_signal` p/ todos os grãos; hook de NPS de segmento passa
   a chamar `survey_record` com `segment_id`/`agent_key` via `@ctx`; aposenta `seg_signal`/`segments.nps_score`
   — resolve a duplicação de plumbing entre `segments` e `session_signal`). **F11 futura**: survey

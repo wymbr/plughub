@@ -8,9 +8,10 @@
  * (origin_session_id, grain, signals) são estruturados de 1ª classe — sem a
  * checagem de namespace do Arc 12 `agent_event` nem convenção de category.
  *
- * Input (do agente de pesquisa):
- *   session_token     — JWT da sessão de survey (resolve tenant_id). Auth + audit.
- *   origin_session_id — sessão pesquisada (chave do sinal).
+ * Input (do skill-flow de pesquisa):
+ *   tenant_id         — tenant (explícito, como workflow_trigger/context_set; em
+ *                       YAML use $.tenant_id). Sem session_token — workflows não têm.
+ *   origin_session_id — sessão pesquisada (chave do sinal; em YAML use $.session_id).
  *   grain             — segment | session | workflow | journey
  *   signals           — [{ metric, value, value_label? }, …] (≥1)
  *   segment_id        — obrigatório quando grain='segment' (qual segmento/agente)
@@ -26,10 +27,6 @@ import { z }             from "zod"
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 import { SurveyRecordInputSchema } from "@plughub/schemas"
 import type { KafkaProducer } from "../infra/kafka"
-import {
-  verifySessionToken,
-  InvalidTokenError,
-} from "../infra/jwt"
 
 // ─── Dependências injetadas ───────────────────────────────────────────────────
 
@@ -73,10 +70,11 @@ export function registerSurveyTools(
     "one or more signals. F10.",
     SurveyRecordInputSchema.shape as any,
     async (input: Record<string, unknown>) => {
+      console.log("[survey_record] invoked input=%j", input)
       try {
         const parsed = SurveyRecordInputSchema.parse(input)
         const {
-          session_token,
+          tenant_id,
           origin_session_id,
           grain,
           signals,
@@ -92,17 +90,6 @@ export function registerSurveyTools(
             "validation_error",
             "segment_id is required when grain='segment'",
           )
-        }
-
-        // ── Decode JWT (resolve tenant) ─────────────────────────────────────
-        let tenant_id: string
-        try {
-          tenant_id = verifySessionToken(session_token).tenant_id
-        } catch (e) {
-          if (e instanceof InvalidTokenError) {
-            return mcpError("invalid_token", "session_token is invalid or expired")
-          }
-          throw e
         }
 
         const event_id    = crypto.randomUUID()
@@ -123,7 +110,12 @@ export function registerSurveyTools(
 
         try {
           await kafka.publish("session.signals", event)
+          console.log(
+            "[survey_record] published session.signals event_id=%s origin=%s grain=%s signals=%d",
+            event_id, origin_session_id, grain, signals.length,
+          )
         } catch (kafkaErr) {
+          console.error("[survey_record] publish failed: %s", String(kafkaErr))
           return mcpError(
             "publish_failed",
             `Failed to publish to session.signals: ${String(kafkaErr)}`,
@@ -139,11 +131,10 @@ export function registerSurveyTools(
         })
       } catch (e) {
         if (e instanceof z.ZodError) {
+          console.error("[survey_record] validation_error: %s", e.errors.map(er => er.message).join("; "))
           return mcpError("validation_error", e.errors.map(er => er.message).join("; "))
         }
-        if (e instanceof InvalidTokenError) {
-          return mcpError("invalid_token", "session_token is invalid or expired")
-        }
+        console.error("[survey_record] internal_error: %s", String(e))
         return mcpError("internal_error", String(e))
       }
     },
