@@ -125,7 +125,7 @@ steps:
   # Caminho único de escrita (mesmo dos grãos session/journey). A atribuição
   # (segment_id/agent_key do humano avaliado) vem do @ctx escrito pelo bridge no
   # disparo do on_human_end. origin = a própria sessão (o segmento mora nela).
-  # Transicional: o bridge ainda escreve segments.nps_score em paralelo (rollback).
+  # Fonte ÚNICA: segments.nps_score foi dropada (item 5) — só session_signal grava NPS.
   - id: gravar_sinal
     type: invoke
     tool: survey_record

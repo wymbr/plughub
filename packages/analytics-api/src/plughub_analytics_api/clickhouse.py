@@ -330,7 +330,6 @@ CREATE TABLE IF NOT EXISTS {db}.segments
     close_reason       Nullable(String),
     handoff_reason     Nullable(String),
     issue_status       Nullable(String),
-    nps_score          Nullable(Int32),
     escalation_reason  Nullable(String),
     conference_id      Nullable(String),
     ingested_at        DateTime DEFAULT now(),
@@ -360,11 +359,11 @@ _DDL_SEGMENTS_MIGRATE_USER_LOGIN = (
     "ALTER TABLE {db}.segments ADD COLUMN IF NOT EXISTS user_login String DEFAULT ''"
 )
 
-# F5 (bancada — grão segmento): NPS do atendimento daquele segmento humano.
-# Escrito pelo bridge na conclusão do hook NPS (on_human_end side=customer),
-# atribuído ao segmento humano que o hook serviu. Nullable: nem todo segmento tem NPS.
-_DDL_SEGMENTS_MIGRATE_NPS = (
-    "ALTER TABLE {db}.segments ADD COLUMN IF NOT EXISTS nps_score Nullable(Int32)"
+# F5 → item 5: a coluna segments.nps_score foi APOSENTADA. NPS de segmento vive em
+# session_signal (grain=segment, metric=nps), gravado via survey_record (cutover F10.3b).
+# Migração de DROP idempotente — remove a coluna vestigial em instalações existentes.
+_DDL_SEGMENTS_DROP_NPS = (
+    "ALTER TABLE {db}.segments DROP COLUMN IF EXISTS nps_score"
 )
 
 # F7: escalation_reason normalizado por segmento (id do config escalation_reasons).
@@ -564,8 +563,8 @@ TTL toDateTime(emitted_at) + INTERVAL 2 YEAR
 # segment_id + agent_key p/ atribuição), session (a sessão inteira), workflow (uma
 # execução de workflow), journey (relacionamento multi-sessão). Survey OUTBOUND
 # religa à sessão original por origin_session_id. Timing (no ato × diferido) =
-# captured_at × session_at, não um grão. segments.nps_score (F5) é legado, aposentado
-# no cutover da bancada (F10.3). Ingest: survey_record → Kafka session.signals →
+# captured_at × session_at, não um grão. segments.nps_score (F5) foi DROPADA (item 5):
+# NPS de segmento vive só aqui agora. Ingest: survey_record → Kafka session.signals →
 # parse_session_signal_event. Bucketização sempre por session_at (regra de ouro §7).
 # ReplacingMergeTree dedup por (tenant, session, grain, segment_id, metric) —
 # segment_id na chave evita colidir N segmentos da mesma sessão no grão segment.
@@ -844,7 +843,7 @@ _MIGRATIONS = [
     _DDL_SEGMENTS_MIGRATE_FLOW,           # Relatórios: flow_id (skill deployado) por segmento
     _DDL_SEGMENTS_MIGRATE_USER,           # C1: user_id (login) — identidade do agente humano
     _DDL_SEGMENTS_MIGRATE_USER_LOGIN,     # C1: user_login (email) — exibição legível
-    _DDL_SEGMENTS_MIGRATE_NPS,            # F5: nps_score por segmento (grão segmento)
+    _DDL_SEGMENTS_DROP_NPS,               # item 5: DROP nps_score (vestigial → session_signal)
     _DDL_SEGMENTS_MIGRATE_ESCALATION,     # F7: escalation_reason normalizado por segmento
 ]
 
@@ -1109,7 +1108,7 @@ class AnalyticsStore:
         "pool_id", "agent_type_id", "flow_id", "user_id", "user_login", "instance_id", "role", "agent_type",
         "parent_segment_id", "sequence_index",
         "started_at", "ended_at", "duration_ms",
-        "outcome", "close_reason", "handoff_reason", "issue_status", "nps_score",
+        "outcome", "close_reason", "handoff_reason", "issue_status",
         "escalation_reason", "conference_id", "date",
     ]
 
@@ -1704,7 +1703,6 @@ def _segment_row(d: dict) -> list:
         d.get("close_reason") or None,
         d.get("handoff_reason") or None,
         d.get("issue_status") or None,
-        d.get("nps_score") if d.get("nps_score") is not None else None,
         d.get("escalation_reason") or None,
         d.get("conference_id") or None,
         _today_utc(ts),

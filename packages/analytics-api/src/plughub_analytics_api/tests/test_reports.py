@@ -971,14 +971,19 @@ class TestQueryAgentsCompare:
 
 @pytest.mark.asyncio
 class TestQueryAgentsCross:
-    _SEG_COLS = ["agent_key", "agent_type", "label", "sessions", "resolved",
-                 "escalated", "nps_n", "nps_sum", "promoters", "detractors"]
+    # item 5: NPS sai de segments.nps_score e passa a vir de session_signal —
+    # query separada (seg → nps → eval). seg não traz mais colunas de NPS.
+    _SEG_COLS = ["agent_key", "agent_type", "label", "sessions", "resolved", "escalated"]
+    _NPS_COLS = ["agent_key", "nps_n", "nps_sum", "promoters", "detractors"]
     _EVAL_COLS = ["agent_key", "n_evals", "avg_score"]
 
     async def test_combines_segments_and_eval_per_agent(self):
         client = _make_client(
             _ch_result(self._SEG_COLS, [
-                ["A", "human", "a@x", 10, 7, 2, 4, 32.0, 2, 1],
+                ["A", "human", "a@x", 10, 7, 2],
+            ]),
+            _ch_result(self._NPS_COLS, [
+                ["A", 4, 32.0, 2, 1],
             ]),
             _ch_result(self._EVAL_COLS, [
                 ["A", 3, 0.82],
@@ -986,6 +991,9 @@ class TestQueryAgentsCross:
         )
         result = await query_agents_cross(client, DB, TENANT)
         assert "data" in result
+        # o NPS lê de session_signal, não de segments.nps_score
+        nps_sql = client.query.call_args_list[1][0][0]
+        assert "session_signal" in nps_sql and "nps_score" not in nps_sql
         row = result["data"][0]
         assert row["agent_key"] == "A"
         assert row["sessions"] == 10
@@ -1001,8 +1009,9 @@ class TestQueryAgentsCross:
     async def test_agent_without_eval_has_null_quality(self):
         client = _make_client(
             _ch_result(self._SEG_COLS, [
-                ["B", "native", "skill_x", 5, 5, 0, 0, 0.0, 0, 0],
+                ["B", "native", "skill_x", 5, 5, 0],
             ]),
+            _ch_result(self._NPS_COLS, []),
             _ch_result(self._EVAL_COLS, []),
         )
         result = await query_agents_cross(client, DB, TENANT)

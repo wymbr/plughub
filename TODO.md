@@ -211,8 +211,11 @@ Hoje o Analytics/Agents mistura agente×pool e não separa humano×IA.
      - **F8** ⏸ **ADIADO**: `evaluation_dimension_scores` segue com fixture (seed de `evaluation_results`).
        O avaliador `agente_avaliacao_v1` não roda no demo (test-grade, sem associação form/campanha) —
        consertar o pipeline de avaliação é **arco próprio**. Fixture documentado até lá.
-  5. **DROP da coluna `segments.nps_score`** (polish): após confirmar `session_signal` como fonte única
-     — `ALTER TABLE segments DROP COLUMN nps_score` + remover do DDL/cols/row-builder/parser.
+  5. ✅ (2026-06-11) **DROP `segments.nps_score`**: leitor esquecido no `query_agents_cross` (F6)
+     migrado p/ `session_signal` (grain=segment); removido de DDL/cols/row-builder/parser (analytics) e
+     do bridge (`_publish_participant_event`/republish, vestigial). DROP idempotente
+     (`_DDL_SEGMENTS_DROP_NPS`) auto-aplica no startup do analytics-api — sem passo manual. Testes do
+     cross atualizados (seg→nps→eval). Ver CHANGELOG.
   6. **Débitos de teste pré-existentes**: corrigir as 6 falhas `TestQueryAgentAvailabilityReport`
      (assinatura `query_agent_availability`) e as 3 de `resolve.test.ts` (BLPOP/mention mocks).
 

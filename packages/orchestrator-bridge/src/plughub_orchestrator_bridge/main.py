@@ -1694,7 +1694,6 @@ async def _publish_participant_event(
     close_reason:   str | None = None,
     handoff_reason: str | None = None,
     issue_status:   str | None = None,
-    nps_score:      int | None = None,
     escalation_reason: str | None = None,
 ) -> None:
     """
@@ -1748,8 +1747,6 @@ async def _publish_participant_event(
         event["handoff_reason"] = handoff_reason
     if issue_status is not None:
         event["issue_status"] = issue_status
-    if nps_score is not None:
-        event["nps_score"] = nps_score
     if escalation_reason is not None:
         event["escalation_reason"] = escalation_reason
     try:
@@ -1857,7 +1854,6 @@ async def _republish_segment_from_signal(
         seg_id = g("segment_id")
         if not seg_id:
             return
-        nps_raw = g("nps_score")
         dur_raw = g("duration_ms")
         await _publish_participant_event(
             session_id=session_id,
@@ -1877,12 +1873,11 @@ async def _republish_segment_from_signal(
             issue_status=g("issue_status"),
             handoff_reason=g("handoff_reason"),
             close_reason=g("close_reason"),
-            nps_score=int(nps_raw) if nps_raw not in (None, "") else None,
             escalation_reason=g("escalation_reason"),
         )
         logger.info(
-            "F5: segment re-published from signal: session=%s segment=%s outcome=%s nps=%s",
-            session_id, seg_id, g("outcome"), nps_raw,
+            "F5: segment re-published from signal: session=%s segment=%s outcome=%s",
+            session_id, seg_id, g("outcome"),
         )
     except Exception as exc:
         logger.warning("F5: republish_segment_from_signal failed: session=%s — %s", session_id, exc)

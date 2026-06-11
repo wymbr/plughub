@@ -1675,7 +1675,8 @@ _COMPARE_LENSES = {"resolution", "sessions_aht", "availability", "pause_reason",
                    "escalation_reason"}
 # session_nps (F10.3a): lê de session_signal (grain=session, metric=nps) via atribuição
 # por session_id — voz do cliente no grão sessão, cruzada ao agente (contexto/§8).
-# nps/wrapup (F5): lêem de segments (nps_score / outcome+issue_status) — grão segmento.
+# nps (F10.3b): lê de session_signal (grain=segment, metric=nps). wrapup (F5): lê de
+# segments (outcome+issue_status) — grão segmento. segments.nps_score dropada (item 5).
 # quality_criteria (F8): lê de evaluation_dimension_scores (nota por dimensão) via
 # atribuição por session_id; comparável só dentro do mesmo form (guard na UI).
 _COMPARE_LENSES_PENDING: set[str] = set()
@@ -2027,8 +2028,8 @@ def _compare_nps_lens(
     gravado via survey_record pelo hook de NPS de segmento. agent_key/segment_id já
     na linha; agent_type/label vêm de segments por segment_id (ledger do segmento).
     Bucketiza por session_at (regra de ouro §7). NPS = (%promotores − %detratores),
-    promotor ≥9, detrator ≤6. **Transicional**: segments.nps_score ainda é escrito
-    pelo bridge (rollback), mas NÃO é lido — a fonte única de leitura é session_signal.
+    promotor ≥9, detrator ≤6. session_signal é a fonte ÚNICA — segments.nps_score
+    foi dropada (item 5); nem escrita nem lida.
     """
     ss_conditions = [
         "tenant_id = {tenant_id:String}",
@@ -2612,7 +2613,7 @@ def _compare_quality_criteria_lens(
 
 # ─── /reports/agents/cross — F6 cruzamentos (§8) ─────────────────────────────
 # As 3 vantagens lado a lado por agente: resolução (segments) × qualidade
-# (evaluation_results via atribuição) × NPS (segments.nps_score). Devolve as
+# (evaluation_results via atribuição) × NPS (session_signal grain=segment). Devolve as
 # métricas cruas por agente; o REALCE de divergência (perception gap, acurácia
 # de disposição, estrela) e o quadrante são presentation-layer na UI.
 
@@ -2666,11 +2667,7 @@ def _fetch_agents_cross(
             any(lbl)                            AS label,
             count()                             AS sessions,
             countIf(outc = 'resolved')          AS resolved,
-            countIf(outc IN {_ESCALATE_FAMILY_SQL}) AS escalated,
-            countIf(nps IS NOT NULL)            AS nps_n,
-            sumIf(nps, nps IS NOT NULL)         AS nps_sum,
-            countIf(nps >= 9)                   AS promoters,
-            countIf(nps <= 6)                   AS detractors
+            countIf(outc IN {_ESCALATE_FAMILY_SQL}) AS escalated
         FROM (
             SELECT
                 if(agent_type = 'human',
@@ -2680,13 +2677,50 @@ def _fetch_agents_cross(
                 if(agent_type = 'human',
                    if(user_login != '', user_login, user_id),
                    if(flow_id != '', flow_id, agent_type_id))   AS lbl,
-                outcome                                         AS outc,
-                nps_score                                       AS nps
+                outcome                                         AS outc
             FROM {db}.segments FINAL
             WHERE {" AND ".join(seg_conditions)}
         )
         GROUP BY ak
     """, parameters=params))
+
+    # ── NPS por agente — fonte: session_signal (item 5 / cutover F10.3b) ──────
+    # segments.nps_score NÃO é mais lido (coluna dropada). NPS de segmento vive em
+    # session_signal (grain=segment, metric=nps), atribuído ao agente via segment_id
+    # (INNER JOIN segments). Bucketização por session_at (regra de ouro §7). Mesclado
+    # por agent_key no Python, como o agregado de qualidade.
+    ss_conditions = [
+        "tenant_id = {tenant_id:String}",
+        f"session_at >= '{since}'",
+        f"session_at <  '{until}'",
+        "grain = 'segment'",
+        "metric = 'nps'",
+        "value_num IS NOT NULL",
+    ]
+    nps_rows = _rows_to_dicts(client.query(f"""
+        SELECT
+            seg.agent_key               AS agent_key,
+            count()                     AS nps_n,
+            sum(ss.nps)                 AS nps_sum,
+            countIf(ss.nps >= 9)        AS promoters,
+            countIf(ss.nps <= 6)        AS detractors
+        FROM (
+            SELECT segment_id, value_num AS nps
+            FROM {db}.session_signal FINAL
+            WHERE {" AND ".join(ss_conditions)}
+        ) AS ss
+        INNER JOIN (
+            SELECT
+                segment_id,
+                if(agent_type = 'human',
+                   if(user_id != '', user_id, agent_type_id),
+                   if(flow_id != '', flow_id, agent_type_id))  AS agent_key
+            FROM {db}.segments FINAL
+            WHERE {" AND ".join(seg_conditions)}
+        ) AS seg ON ss.segment_id = seg.segment_id
+        GROUP BY seg.agent_key
+    """, parameters=params))
+    nps_by_key = {r["agent_key"]: r for r in nps_rows if r.get("agent_key")}
 
     # ── Agregado de qualidade por agente (via atribuição, por session_at) ────
     attr_sql = _session_agent_attribution_sql(db)
@@ -2719,10 +2753,11 @@ def _fetch_agents_cross(
         sessions = int(r["sessions"] or 0)
         resolved = int(r["resolved"] or 0)
         escalated = int(r["escalated"] or 0)
-        nps_n = int(r["nps_n"] or 0)
-        nps_sum = float(r["nps_sum"] or 0)
-        prom = int(r["promoters"] or 0)
-        det = int(r["detractors"] or 0)
+        npr = nps_by_key.get(ak) or {}
+        nps_n = int(npr.get("nps_n") or 0)
+        nps_sum = float(npr.get("nps_sum") or 0)
+        prom = int(npr.get("promoters") or 0)
+        det = int(npr.get("detractors") or 0)
         ev = eval_by_key.get(ak) or {}
         n_evals = int(ev.get("n_evals") or 0)
         avg_score = float(ev["avg_score"]) if ev.get("avg_score") is not None else None

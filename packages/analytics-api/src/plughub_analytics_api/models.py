@@ -724,7 +724,6 @@ def parse_participant_event(payload: dict[str, Any]) -> list[dict] | None:
         "close_reason":      payload.get("close_reason") or None,
         "handoff_reason":    payload.get("handoff_reason") or None,
         "issue_status":      payload.get("issue_status") or None,
-        "nps_score":         payload.get("nps_score") if payload.get("nps_score") is not None else None,
         "escalation_reason": payload.get("escalation_reason") or None,
         "timestamp":         payload.get("timestamp") or _now(),
     }
@@ -948,7 +947,7 @@ def parse_agent_business_event(payload: dict[str, Any]) -> dict | None:
 # Grãos que a tabela session_signal possui — TODOS (gravação explícita via
 # survey_record). Espelha SESSION_SIGNAL_GRAINS de @plughub/schemas. `segment`
 # carrega segment_id + agent_key (atribuição); os demais não são atribuíveis.
-# segments.nps_score (F5) é legado, aposentado no cutover da bancada (F10.3).
+# segments.nps_score (F5) foi DROPADA (item 5): NPS de segmento vive só aqui.
 _SESSION_SIGNAL_GRAINS = ("segment", "session", "workflow", "journey")
 
 

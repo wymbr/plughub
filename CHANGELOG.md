@@ -2,6 +2,37 @@
 
 ---
 
+## Bancada — item 5: DROP `segments.nps_score` (session_signal como fonte única) (2026-06-11)
+
+Aposenta a coluna vestigial `segments.nps_score`. Desde o cutover F10.3b, o NPS de segmento é
+gravado/lido via `session_signal` (grain=segment, metric=nps); a coluna seguia no schema sem ser
+escrita. **Havia um leitor vivo esquecido**: `query_agents_cross` (F6) ainda lia `segments.nps_score`
+— migrado também.
+
+**5a — leitor migrado** (`reports_query.py`): `query_agents_cross` deixa de ler `segments.nps_score`;
+o NPS por agente passa a vir de `session_signal` (grain=segment, metric=nps) ⋈ `segments` por
+`segment_id`, agregado por `agent_key` e mesclado no Python (como o agregado de qualidade). Espelha o
+`_compare_nps_lens`. Depois disto, **nada** lê a coluna.
+
+**5b — ingest + bridge limpos**: removida `nps_score` do CREATE TABLE `segments`, da migração ADD
+(substituída por `_DDL_SEGMENTS_DROP_NPS` — `DROP COLUMN IF EXISTS` idempotente na lista de
+migrações), do `_SEGMENT_COLS`, do `_segment_row` e do `parse_participant_event` (analytics). No
+bridge (`orchestrator-bridge`), removido o param `nps_score` de `_publish_participant_event` e a
+leitura vestigial no `_republish_segment_from_signal` (o acumulador `seg_signal` já não populava NPS
+desde a F10.3b). `ConversationParticipantEventSchema` nunca declarou o campo — remoção limpa.
+
+**5c — DROP automático**: a migração `_DDL_SEGMENTS_DROP_NPS` roda no startup do `analytics-api`
+(idempotente) — sem passo manual; instalações existentes têm a coluna removida no próximo boot.
+
+**Testes**: `TestQueryAgentsCross` atualizado (query passa de 2→3: seg → nps → eval; valida que o NPS
+lê `session_signal`, não `nps_score`). Comentários stale atualizados (`survey.ts`, `agente_nps_v1.yaml`,
+`reports_query.py`, `clickhouse.py`, `models.py`).
+
+Build: `analytics-api` + `orchestrator-bridge` (Python). `@plughub/schemas` rebuild (comentários).
+`agente_nps_v1.yaml` é mount → restart orchestrator-bridge.
+
+---
+
 ## Bancada — item 4 (F7): escalação real destravada + F8 adiado (2026-06-11)
 
 Item 4 dos follow-ups A — substituir fixtures sintéticos por dado E2E real. **F7 primeiro**; **F8

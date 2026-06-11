@@ -10,7 +10,8 @@
  * 1ª classe — sem checagem de namespace nem convenção de category.
  *
  * Tópico Kafka: session.signals  → analytics.session_signal (ClickHouse).
- * Grão segmento NÃO usa esta tool (vive em segments.nps_score, F5).
+ * TODOS os grãos (incl. segment) usam esta tool (cutover F10.3b); segments.nps_score
+ * foi dropada (item 5).
  */
 
 import { z } from "zod"
@@ -27,8 +28,8 @@ import { z } from "zod"
  * Armazenamento (alvo): TODOS os grãos moram em `session_signal`, gravados
  * explicitamente via a tool `survey_record` (um invoke no skill-flow de pesquisa)
  * — sem mecanismo de eventos/derivação. Para `segment`, o skill informa
- * `segment_id` + `agent_key` (atribuição). `segments.nps_score` (F5) é legado, a
- * ser aposentado no cutover da bancada (F10.3).
+ * `segment_id` + `agent_key` (atribuição). `segments.nps_score` (F5) foi dropada
+ * (item 5) — session_signal é a fonte única de NPS de segmento.
  */
 export const SignalGrainSchema = z.enum(["segment", "session", "workflow", "journey"])
 export type SignalGrain = z.infer<typeof SignalGrainSchema>
