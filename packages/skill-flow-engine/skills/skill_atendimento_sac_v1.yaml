@@ -221,6 +221,11 @@ steps:
       pool: retencao_humano
     context: pipeline_state
     error_reason: escalated_to_human
+    # F7: motivo de escalação normalizado declarado pelo agente IA. Phase-1 escala
+    # sempre p/ especialista humano → reason estático. executeEscalate persiste em
+    # pipeline_state.results.escalation_reason; o bridge grava no segmento da IA na
+    # conclusão (lente escalation_reason). Ids espelham agent_activity/escalation_reasons.
+    reason: specialist_needed
     on_failure: encerrar_fallback
 
   # ── Fallback de escalação ─────────────────────────────────────────────────────

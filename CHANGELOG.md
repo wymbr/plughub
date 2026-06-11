@@ -2,6 +2,35 @@
 
 ---
 
+## Bancada — item 4 (F7): escalação real destravada + F8 adiado (2026-06-11)
+
+Item 4 dos follow-ups A — substituir fixtures sintéticos por dado E2E real. **F7 primeiro**; **F8
+adiado** (decisão: o pipeline de avaliação `agente_avaliacao_v1` não roda no demo — test-grade, sem
+associação form/campanha; consertá-lo é arco próprio, não cabe nesta bancada).
+
+**Gap F7 corrigido (YAML)**: o `escalate` do `skill_atendimento_sac_v1` não declarava `reason` — só
+`error_reason` (que é a causa de erro do close, não o motivo de escalação F7). Sem `reason`, o
+`executeEscalate` não persiste `pipeline_state.results.escalation_reason` e o segmento da IA fica sem
+motivo. Adicionado `reason: specialist_needed` (estático — Phase-1 sempre escala p/ especialista
+humano; ids espelham `agent_activity/escalation_reasons`). Skills são mount → **restart do
+orchestrator-bridge re-sincroniza**, sem rebuild.
+
+Com isso, um único fluxo real (webchat → `sac_ia` escala → `retencao_humano` humano → wrap-up) produz
+**ambos** os motivos reais: segmento IA (`specialist_needed`, do `escalate`) e segmento humano (motivo
+escolhido no menu do `agente_wrapup_v1` quando classifica "escalado"). Substitui o fixture sintético
+(`segments.escalation_reason` via `ALTER UPDATE` em 55 segmentos — F7 original).
+
+**Caminho humano** já estava cabeado (`agente_wrapup_v1`: choice `escalado` → menu de 8 motivos →
+`seg_signal` → bridge). Nada a mudar ali.
+
+**Validação E2E + limpeza de fixture** (rodadas do usuário): (1) limpar o sintético —
+`ALTER TABLE segments UPDATE escalation_reason='' WHERE escalation_reason!=''` (hoje tudo é sintético);
+(2) rodar o fluxo real; (3) conferir `segments.escalation_reason` com 1 linha IA + 1 humana reais.
+F5 multi-humano (NPS por 2 handoffs sequenciais) valida na sequência. **F8 permanece com fixture
+documentado** até o arco do avaliador.
+
+---
+
 ## Bancada — item 3: regra de comparabilidade por formulário (qualidade) (2026-06-11)
 
 Fecha o item 3 dos follow-ups A **redefinindo o escopo** após discussão de validade metodológica. A

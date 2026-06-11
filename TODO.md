@@ -200,14 +200,38 @@ Hoje o Analytics/Agents mistura agente×pool e não separa humano×IA.
      cross-form só p/ um único agente. `_compare_quality_lens` expõe `summary.form_ids`; UI da lente
      `quality` faz guard/ressalva. `quality_criteria` segue same-form. **Futuro**: catálogo canônico de
      dimensões (única base rigorosa p/ comparar dimensões entre forms) → arco próprio. Ver CHANGELOG.
-  4. **Validações E2E reais F5/F7 + limpeza de fixtures sintéticos**: agora que há fluxos reais
-     (NPS humano via Agent Assist, survey via webchat), substituir os fixtures de
-     `evaluation_dimension_scores` (F8) e `segments.escalation_reason` (F7) por dado E2E; rodar F5/F7
-     ponta-a-ponta (multi-humano / escalação real).
+  4. **Validações E2E reais F5/F7 + limpeza de fixtures** — EM ANDAMENTO (2026-06-11):
+     - **F7** ✅ código destravado: `escalate` do `skill_atendimento_sac_v1` ganhou `reason: specialist_needed`
+       (gap — sem isso a IA não grava `escalation_reason`). Humano já cabeado (`agente_wrapup_v1`).
+       Falta a **rodada E2E do usuário**: limpar sintético (`ALTER TABLE segments UPDATE escalation_reason=''
+       WHERE escalation_reason!=''`) → rodar fluxo real (sac→escala→humano wrap-up escalado+motivo) →
+       conferir 1 linha IA + 1 humana reais. Restart orchestrator-bridge (mount, sem rebuild).
+     - **F5** multi-humano: rodar contato com 2 handoffs humanos sequenciais → 2 sinais de segmento
+       (`survey_record grain=segment`), 1 por agente. Valida atribuição per-segmento real.
+     - **F8** ⏸ **ADIADO**: `evaluation_dimension_scores` segue com fixture (seed de `evaluation_results`).
+       O avaliador `agente_avaliacao_v1` não roda no demo (test-grade, sem associação form/campanha) —
+       consertar o pipeline de avaliação é **arco próprio**. Fixture documentado até lá.
   5. **DROP da coluna `segments.nps_score`** (polish): após confirmar `session_signal` como fonte única
      — `ALTER TABLE segments DROP COLUMN nps_score` + remover do DDL/cols/row-builder/parser.
   6. **Débitos de teste pré-existentes**: corrigir as 6 falhas `TestQueryAgentAvailabilityReport`
      (assinatura `query_agent_availability`) e as 3 de `resolve.test.ts` (BLPOP/mention mocks).
+
+  **🐞 BUG conhecido (registrado 2026-06-11) — contato vaza p/ todos os agentes do mesmo pool no Console:**
+  Dois humanos logados no mesmo pool (ex.: admin + operator em `retencao_humano`) veem o **mesmo**
+  contato; um contato alocado a um agente aparece no Console do outro. **Causa-raiz** (validada no
+  código): o modelo por-usuário existe (`registerHumanAgent` → `instanceId="human-{userId}"`,
+  `server.ts:301`) e a Routing Engine aloca a UMA instância, publicando `conversation.assigned` com o
+  `instance_id` alvo. **Mas** toda conexão WS assina o canal do POOL `pool:events:{poolId}`
+  (`server.ts:2115`) e o `forward()` aceita QUALQUER `conversation.assigned` daquele canal **sem
+  filtrar pelo `instance_id`** → fan-out pro pool inteiro. Idem na reentrega de
+  `pool:pending_assignment:{poolId}` (`server.ts:2130`). Regressão: o canal por pool é legado (1 humano
+  por pool); o modelo por-usuário (C1) entrou sem filtrar o fan-out. **Fix proposto** (contido,
+  backward-compat): a conexão já tem `userId` → `expectedInstanceId="human-${userId}"`; aceitar
+  `conversation.assigned` só quando `event.instance_id===expectedInstanceId` (userId vazio → legado, sem
+  filtro); mesmo filtro no pending. ~10 linhas no ramo `conversation.assigned` do WS handler (sem tocar
+  no teardown posatt/StrictMode). Rebuild `mcp-server-plughub`. Relaciona à fila pull/inbox (proposta).
+  Também observado: **Transfer "No destinations available"** no Console — bloqueia o handoff humano→humano
+  (parte do porquê F5 multi-humano não roda hoje); investigar junto.
   **Nota técnica F10.3 — contexto de atribuição para `survey_record(grain=segment)` (recon 2026-06-10):**
   o que o skill já tem vs. o que falta para chamar `survey_record` com atribuição:
   · `session_id` — **disponível** à YAML como built-in `$.session_id` (`interpolate.ts` `resolveJsonPathRef`,
