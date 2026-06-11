@@ -793,6 +793,27 @@ normalizado em `segments.escalation_reason`, mantendo `handoff_reason` como nota
 `ContactSegment`/`ConversationParticipantEvent`/`EscalateStep` ganham o campo. **Sem keys Redis novas**
 (reusa o acumulador `seg_signal` da Mudança 7). O label legível vem do config (remapeado na UI).
 
+### Mudança 8 — filtro de `conversation.assigned` por instância (bug multi-agente, 2026-06-11)
+
+**Problema**: `conversation.assigned` é publicado no canal **do pool** `pool:events:{poolId}` (bridge
+`_notify_human_agent_assigned`), e o WS handler do mcp-server aceitava QUALQUER assignment daquele canal
+sem checar o alvo. Com dois humanos no mesmo pool (ex.: admin + operator em `retencao_humano`), um
+contato roteado a UM agente aparecia no Console de AMBOS. Regressão: o canal por pool é legado (1 humano
+por pool); o modelo de identidade por usuário (`registerHumanAgent` → `instance_id="human-{userId}"`, C1)
+entrou sem filtrar o fan-out.
+
+**Correção**: a conexão WS calcula `expectedInstanceId="human-${userId}"` no connect e **descarta**
+`conversation.assigned` cujo `instance_id` aponta para outro agente — nos dois caminhos de entrega: o
+pub/sub ao vivo (`subscriber.on("message")`, ANTES do `forward()` que faz `ws.send`) e a reentrega do
+`pool:pending_assignment:{poolId}` na reconexão. Lógica pura em `lib/assignment-filter.ts`
+(`shouldDropAssignment`). Backward-compatible: `userId` vazio (legado) ou `instance_id` vazio no evento →
+não filtra. **A Routing Engine continua alocando a uma única instância** — só a entrega ao Console passou
+a respeitar o alvo. Efeito colateral positivo: `agentInstanceId` da conexão passa a ser sempre a própria
+instância (antes podia ser capturado do assignment de outro agente).
+
+**Limitação aberta**: `pool:pending_assignment:{poolId}` é uma chave única por pool (last-write wins) —
+chave por-instância fica como melhoria futura (liga à proposta de fila pull/inbox).
+
 ---
 
 *Este documento é a referência canônica para o mecanismo de conferência do PlugHub.*

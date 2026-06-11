@@ -45,6 +45,7 @@ import { createRegistryClient }    from "./infra/registry-client"
 import { createPostgresClient }    from "./infra/postgres"
 import { parseMentions }           from "./lib/mention-parser"
 import { writeStreamEntry }        from "./lib/write-stream-entry"
+import { shouldDropAssignment }    from "./lib/assignment-filter"
 import { MaskingService }          from "./lib/masking"
 import type { ContextMaskingConfig } from "@plughub/schemas"
 
@@ -1953,6 +1954,14 @@ export async function startServer(config: ServerConfig): Promise<void> {
     // Per-user identity — sent by platform-ui from the JWT sub claim.
     // Falls back to poolId-based key for old clients that do not send user_id.
     const userId              = url.searchParams.get("user_id") ?? ""
+    // Expected instance for THIS connection — matches registerHumanAgent's
+    // instanceId format ("human-{userId}"). conversation.assigned is published to
+    // the pool-wide channel pool:events:{poolId}, so without this filter EVERY
+    // agent in the pool would receive (and display) a contact routed to ONE of
+    // them. We accept an assignment only when its instance_id targets this user.
+    // Empty userId (legacy client) → no filter, preserving old single-human-per-pool
+    // behaviour. Empty event.instance_id → accept (defensive; never over-filter).
+    const expectedInstanceId  = userId ? `human-${userId}` : ""
     // C1 — human login (email) for analytics identity, denormalized onto the segment.
     const userLogin           = url.searchParams.get("user_login") ?? ""
     const maxConcurrentSessions = Math.max(1, parseInt(url.searchParams.get("max_concurrent") ?? "3", 10))
@@ -2149,6 +2158,18 @@ export async function startServer(config: ServerConfig): Promise<void> {
             // On error, fall through and deliver — better to deliver a possibly stale
             // assignment than to silently drop a live one.
           }
+          // Targeted-assignment filter (same as the live pub/sub path): a pool has
+          // a single pending_assignment key, so a reconnecting agent must not pick
+          // up an assignment routed to a DIFFERENT user in the same pool.
+          let pendingTarget = ""
+          try { pendingTarget = String(JSON.parse(pendingRaw)?.instance_id ?? "") } catch { /* ignore */ }
+          if (shouldDropAssignment("conversation.assigned", pendingTarget, expectedInstanceId)) {
+            console.log(
+              `[agent-ws] Skipped pending assignment for another agent: ` +
+              `pool=${poolId} target=${pendingTarget} expected=${expectedInstanceId}`
+            )
+            return
+          }
           console.log(`[agent-ws] Delivering pending assignment to reconnecting agent pool=${poolId}`)
           forward(`pool:events:${poolId}`, pendingRaw)
         }
@@ -2219,6 +2240,17 @@ export async function startServer(config: ServerConfig): Promise<void> {
             )
             return
           }
+        }
+        // ── Targeted-assignment filter ────────────────────────────────────────
+        // conversation.assigned is published to the pool-wide channel; only the
+        // agent the contact was routed to should receive it. Drop assignments
+        // whose instance_id targets a DIFFERENT user in the same pool — otherwise
+        // two agents (e.g. admin + operator) would both see the same contact.
+        if (shouldDropAssignment(_ev["type"], _ev["instance_id"], expectedInstanceId)) {
+          console.log(
+            `[agent-ws] conversation.assigned filtered (target=${_ev["instance_id"]} != expected=${expectedInstanceId}) — not forwarded`
+          )
+          return
         }
       } catch { /* ignore parse errors — fall through to forward */ }
 
