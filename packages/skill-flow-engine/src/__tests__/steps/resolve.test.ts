@@ -288,7 +288,8 @@ describe("executeResolve", () => {
       del:   vi.fn().mockResolvedValue(1),
       expire: vi.fn().mockResolvedValue(1),
       blpop: vi.fn().mockResolvedValue([
-        "menu:result:s1",
+        // key multi-instância: menu:result:{sessionId}:{instanceId} (redisKeys.menuResult)
+        "menu:result:s1:agente_sac_v1-001",
         JSON.stringify({ _mention_trigger_step: "step_escalada" }),
       ]),
     }
@@ -308,7 +309,8 @@ describe("executeResolve", () => {
       del:   vi.fn().mockResolvedValue(1),
       expire: vi.fn().mockResolvedValue(1),
       blpop: vi.fn().mockResolvedValue([
-        "menu:result:s1",
+        // key multi-instância: menu:result:{sessionId}:{instanceId} (redisKeys.menuResult)
+        "menu:result:s1:agente_sac_v1-001",
         JSON.stringify({ _mention_terminate: true }),
       ]),
     }
@@ -391,14 +393,17 @@ describe("executeResolve", () => {
     const redisMock = {
       set:   vi.fn().mockResolvedValue("OK"),
       del:   vi.fn().mockResolvedValue(1),
+      hdel:  vi.fn().mockResolvedValue(1),
       expire: vi.fn().mockResolvedValue(1),
       blpop: vi.fn().mockResolvedValue(null),
     }
     const ctx = makeCtx({ redis: redisMock as any })
     await executeResolve(makeStep(), ctx)
 
-    const delCalls: string[][] = redisMock.del.mock.calls
-    const deletedKeys = delCalls.map((c: string[]) => c[0]).filter((k): k is string => k !== undefined)
+    // waitingKey é um HASH multi-instância → limpeza via HDEL(menu:waiting:{sid}, field),
+    // não DEL (modelo antigo de chave plana).
+    const hdelCalls: string[][] = redisMock.hdel.mock.calls
+    const deletedKeys = hdelCalls.map((c: string[]) => c[0]).filter((k): k is string => k !== undefined)
     expect(deletedKeys.some((k: string) => k.startsWith("menu:waiting:"))).toBe(true)
   })
 

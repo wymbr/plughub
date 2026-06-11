@@ -216,8 +216,13 @@ Hoje o Analytics/Agents mistura agente×pool e não separa humano×IA.
      do bridge (`_publish_participant_event`/republish, vestigial). DROP idempotente
      (`_DDL_SEGMENTS_DROP_NPS`) auto-aplica no startup do analytics-api — sem passo manual. Testes do
      cross atualizados (seg→nps→eval). Ver CHANGELOG.
-  6. **Débitos de teste pré-existentes**: corrigir as 6 falhas `TestQueryAgentAvailabilityReport`
-     (assinatura `query_agent_availability`) e as 3 de `resolve.test.ts` (BLPOP/mention mocks).
+  6. ✅ (2026-06-11) **Débitos de teste pré-existentes**: ambos eram drift teste×impl (produção OK).
+     `TestQueryAgentAvailabilityReport` (6) — além da assinatura `(client, database, tenant_id, …)`, o
+     mock estava obsoleto: a fn foi reescrita na Fase 1b (4 queries login/pause/reason/busy, não 3); o
+     mock com 3 resultados esgotava o `side_effect` → `StopIteration` no `to_thread` **travava o pytest**.
+     Testes reescritos pro modelo novo. `resolve.test.ts` (3) — modelo multi-instância: result key com
+     `instanceId` + `hdel` no hash `menu:waiting` (testes usavam key plana + `del`). Só testes. Ver
+     CHANGELOG. **Follow-ups A (1–6) COMPLETOS.**
 
   **🐞 BUG conhecido (registrado 2026-06-11) — contato vaza p/ todos os agentes do mesmo pool no Console:**
   Dois humanos logados no mesmo pool (ex.: admin + operator em `retencao_humano`) veem o **mesmo**

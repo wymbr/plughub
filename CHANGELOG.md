@@ -2,6 +2,33 @@
 
 ---
 
+## Bancada — item 6: débitos de teste pré-existentes corrigidos (2026-06-11)
+
+Fecha os follow-ups A. Ambos os débitos eram **drift teste×implementação** (a impl evoluiu, os testes
+ficaram no contrato antigo) — a produção estava correta; só os testes desatualizados.
+
+**6a — `TestQueryAgentAvailabilityReport` (6 falhas)**: dois níveis de drift. (1) Assinatura:
+`query_agent_availability` virou `(client, database, tenant_id, ...)` — a produção (`reports.py`) já
+chamava assim, mas o teste passava `(store, tenant_id)` → `TypeError`. (2) **Modelo de mock obsoleto**:
+`_fetch_agent_availability` foi reescrita na Fase 1b — agora faz **4 queries** (login_intervals,
+pause_intervals, reason breakdown, segments busy) agrupadas por `instance_id`, não o antigo
+`count/agg/reason` (3 queries). O mock fornecia só 3 resultados → na 4ª chamada o `side_effect`
+esgotava e o `StopIteration` dentro do `asyncio.to_thread` **travava o pytest** (não falhava — pendurava).
+Tests reescritos: helper fornece os 4 resultados com as colunas novas; happy-path valida o merge
+(logged/paused/busy/available + reason_breakdown por identidade); `call_count == 4`; IN clause nas 4.
+
+**6b — `resolve.test.ts` (3 falhas)**: o `resolve` migrou para o modelo **multi-instância** (igual ao
+menu): result key `menu:result:{sid}:{instanceId}` e flag de espera como HASH (`hdel(menu:waiting:{sid},
+field)`), mas os testes usavam o modelo antigo de chave plana. Corrigidos: (1)+(2) os mocks de `blpop`
+dos interrupts `@mention` (`_mention_trigger_step`/`_mention_terminate`) passam a devolver a key com
+`instanceId` (senão o branch de mention não casa e cai em on_success); (3) o teste de limpeza do
+`waitingKey` passa a checar `hdel` (não `del`).
+
+Nenhuma mudança de código de produção — só testes. Build: `analytics-api` e `skill-flow-service`
+(os testes são assados na imagem; rebuild p/ rodar a versão nova). **Follow-ups A (itens 1–6) completos.**
+
+---
+
 ## Bancada — item 5: DROP `segments.nps_score` (session_signal como fonte única) (2026-06-11)
 
 Aposenta a coluna vestigial `segments.nps_score`. Desde o cutover F10.3b, o NPS de segmento é

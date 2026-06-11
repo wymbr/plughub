@@ -1442,59 +1442,69 @@ class TestQuerySessionComplexity:
 
 @pytest.mark.asyncio
 class TestQueryAgentAvailabilityReport:
-    """Unit tests for Arc 8 agent availability / pause interval report."""
+    """Unit tests for Arc 8 agent availability report (Fase 1b — login/pause model)."""
 
-    # Column names returned by the aggregate query
-    _AGG_COLS    = ["agent_type_id", "pool_id", "period_date", "total_pauses", "total_pause_ms"]
-    _REASON_COLS = ["agent_type_id", "pool_id", "period_date", "reason_id", "reason_label", "cnt", "total_ms"]
+    # _fetch_agent_availability (Fase 1b) faz 4 queries, nesta ordem, agrupadas por
+    # instance_id (identidade humana). Colunas de cada uma:
+    _LOGIN_COLS  = ["instance_id", "pool_id", "period_date", "user_login", "user_id",
+                    "agent_type_id", "logged_ms", "total_logins"]
+    _PAUSE_COLS  = ["instance_id", "pool_id", "period_date", "agent_type_id",
+                    "total_pauses", "total_pause_ms"]
+    _REASON_COLS = ["instance_id", "pool_id", "period_date", "reason_id", "reason_label",
+                    "cnt", "total_ms"]
+    _BUSY_COLS   = ["instance_id", "pool_id", "period_date", "busy_ms"]
 
-    def _make_client_availability(self, agg_rows=None, reason_rows=None, total=0):
+    def _make_client_availability(self, login_rows=None, pause_rows=None,
+                                  reason_rows=None, busy_rows=None):
         """
-        _fetch_agent_availability makes 3 ClickHouse queries:
-          1. countDistinct  → total
-          2. aggregate      → agg_rows
-          3. reason breakdown → reason_rows
-
-        query_agent_availability receives a *store* object (store.client + store.database),
-        not a raw client — so we wrap the prepared client in a MagicMock store.
+        query_agent_availability takes (client, database, tenant_id, ...).
+        _fetch_agent_availability faz 4 queries em ordem: login → pause → reason → busy
+        (login_intervals, pause_intervals, pause reason breakdown, segments busy).
+        Fornecer os 4 resultados — senão o side_effect esgota e o asyncio.to_thread trava.
         """
-        count_result  = _ch_result(["countDistinct((agent_type_id, pool_id, toDate(paused_at)))"], [[total]])
-        agg_result    = _ch_result(self._AGG_COLS,    agg_rows    or [])
-        reason_result = _ch_result(self._REASON_COLS, reason_rows or [])
-        client = _make_client(count_result, agg_result, reason_result)
-        store = MagicMock()
-        store.client   = client
-        store.database = DB
-        return store
+        return _make_client(
+            _ch_result(self._LOGIN_COLS,  login_rows  or []),
+            _ch_result(self._PAUSE_COLS,  pause_rows  or []),
+            _ch_result(self._REASON_COLS, reason_rows or []),
+            _ch_result(self._BUSY_COLS,   busy_rows   or []),
+        )
 
     async def test_returns_data_and_meta(self):
         """Successful call returns data list and meta dict."""
-        store  = self._make_client_availability()
-        result = await query_agent_availability(store, TENANT)
+        client = self._make_client_availability()
+        result = await query_agent_availability(client, DB, TENANT)
         assert "data" in result
         assert "meta" in result
         assert result["data"] == []
         assert result["meta"]["total"] == 0
 
-    async def test_agg_row_mapped_with_reason_breakdown(self):
-        """An aggregated row is returned with reason_breakdown attached."""
+    async def test_row_merged_with_reason_breakdown(self):
+        """login + pause + busy merge into one row per identity; reasons attached."""
         from datetime import date
         period = date(2026, 5, 1)
-        store  = self._make_client_availability(
-            agg_rows=[["agente_retencao_v1", "retencao_humano", period, 3, 5400000]],
+        client = self._make_client_availability(
+            login_rows=[["human-u1", "retencao_humano", period, "ana@x", "u1",
+                         "human_agent_retencao_humano", 5400000, 2]],
+            pause_rows=[["human-u1", "retencao_humano", period,
+                         "human_agent_retencao_humano", 3, 1800000]],
             reason_rows=[
-                ["agente_retencao_v1", "retencao_humano", period, "intervalo", "Intervalo", 2, 3600000],
-                ["agente_retencao_v1", "retencao_humano", period, "almoco",    "Almoço",    1, 1800000],
+                ["human-u1", "retencao_humano", period, "intervalo", "Intervalo", 2, 1200000],
+                ["human-u1", "retencao_humano", period, "almoco",    "Almoço",    1,  600000],
             ],
-            total=1,
+            busy_rows=[["human-u1", "retencao_humano", period, 2400000]],
         )
-        result = await query_agent_availability(store, TENANT)
+        result = await query_agent_availability(client, DB, TENANT)
         assert result["meta"]["total"] == 1
         row = result["data"][0]
-        assert row["agent_type_id"]  == "agente_retencao_v1"
+        assert row["instance_id"]    == "human-u1"
+        assert row["user_login"]     == "ana@x"
         assert row["pool_id"]        == "retencao_humano"
+        assert row["logged_ms"]      == 5400000
         assert row["total_pauses"]   == 3
-        assert row["total_pause_ms"] == 5400000
+        assert row["total_pause_ms"] == 1800000
+        assert row["busy_ms"]        == 2400000
+        # available = logged − paused (clamped at 0)
+        assert row["available_ms"]   == 5400000 - 1800000
         breakdown = row["reason_breakdown"]
         assert len(breakdown) == 2
         reasons = {r["reason_id"] for r in breakdown}
@@ -1503,38 +1513,38 @@ class TestQueryAgentAvailabilityReport:
 
     async def test_empty_accessible_pools_short_circuits(self):
         """accessible_pools=[] returns empty immediately without hitting ClickHouse."""
-        store = MagicMock()
+        client = MagicMock()
         result = await query_agent_availability(
-            store, TENANT, accessible_pools=[]
+            client, DB, TENANT, accessible_pools=[]
         )
         assert result["data"] == []
         assert result["meta"]["total"] == 0
-        # short-circuit: store.client.query must never be called
-        store.client.query.assert_not_called()
+        # short-circuit: client.query must never be called
+        client.query.assert_not_called()
 
     async def test_none_accessible_pools_calls_ch(self):
         """accessible_pools=None (unrestricted) — ClickHouse is queried normally."""
-        store  = self._make_client_availability(total=0)
+        client = self._make_client_availability()
         result = await query_agent_availability(
-            store, TENANT, accessible_pools=None
+            client, DB, TENANT, accessible_pools=None
         )
-        assert store.client.query.call_count == 3  # count + agg + reason breakdown
+        assert client.query.call_count == 4  # login + pause + reason + busy
         assert result["data"] == []
 
     async def test_pool_filter_injects_in_clause(self):
         """accessible_pools=['retencao_humano'] → IN clause in all queries."""
-        store = self._make_client_availability(total=0)
+        client = self._make_client_availability()
         await query_agent_availability(
-            store, TENANT, accessible_pools=["retencao_humano"]
+            client, DB, TENANT, accessible_pools=["retencao_humano"]
         )
-        for call in store.client.query.call_args_list:
+        for call in client.query.call_args_list:
             sql = call[0][0]
             assert "pool_id IN ('retencao_humano')" in sql
 
     async def test_error_returns_empty_with_error_key(self):
         """ClickHouse error returns graceful fallback with error key."""
-        store = MagicMock()
-        store.client.query = MagicMock(side_effect=Exception("CH timeout"))
-        result = await query_agent_availability(store, TENANT)
+        client = MagicMock()
+        client.query = MagicMock(side_effect=Exception("CH timeout"))
+        result = await query_agent_availability(client, DB, TENANT)
         assert result["data"] == []
         assert result.get("error") == "data_unavailable"
