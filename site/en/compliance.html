@@ -103,7 +103,7 @@
       <p class="crumb"><a href="index.html">Home</a> › Compliance &amp; Security</p>
       <p class="eyebrow">Compliance &amp; Security</p>
       <h1>Compliance is a primitive — not a plugin.</h1>
-      <p class="sub">Masking, audit and human oversight are part of the <strong>architecture</strong>, not an optional module. You can't turn off what protects the data — and that's a design decision. Built for sensitive data and regulated sectors, in Brazil and Europe.</p>
+      <p class="sub">Masking, audit, and human oversight live in the <strong>architecture</strong> — not in an optional module. You can't switch off what protects the data; that's by design. Built for sensitive data and regulated sectors, in Brazil and Europe.</p>
     </div>
   </section>
 
@@ -112,17 +112,17 @@
     <div class="wrap">
       <div class="sec-head">
         <p class="eyebrow">The pillars</p>
-        <h2>Protection, traceability and control — by construction.</h2>
+        <h2>Protection, traceability, and control — by design.</h2>
       </div>
       <div class="grid g3">
-        <div class="card"><h3>Role-based masking</h3><p>PII tokenized in the flow (e.g., <em>[id:***-00]</em>); the original value is visible only to authorized roles, and the customer receives only the partial. PIN/password capture in an atomic block — never persisted to log, queue or history.</p></div>
-        <div class="card"><h3>Audit on every call</h3><p>Each call to a business system (MCP) produces an immutable record — who, what, when, allowed, injection detected. Policy is defined per tool; the caller <strong>cannot turn off</strong> the audit.</p></div>
-        <div class="card"><h3>Native human oversight</h3><p>Supervisors and reviewers are session participants, with authority to intervene. It's the "human oversight" required by AI regulation for high risk — embedded, not bolted on.</p></div>
-        <div class="card"><h3>Access control (RBAC + ABAC)</h3><p>Roles + attributes per module and field + scope per pool and per group/shift. Validated on the front and back end, with graceful degradation for legacy accounts.</p></div>
-        <div class="card"><h3>Per-participant visibility</h3><p>By field and by role: a supervisor can follow an interaction without seeing the sensitive data. Sensitive-data delegation with oversight.</p></div>
-        <div class="card"><h3>No lock-in / sovereignty</h3><p>BYO LLM + integration only via MCP + logic in versionable YAML = real portability. Configurable data residency — meets vendor substitution and sovereignty.</p></div>
+        <div class="card"><h3>Role-based masking</h3><p>PII is tokenized in the flow (e.g., <em>[id:***-00]</em>); only authorized roles see the original value, and the customer sees just the partial. PIN/password capture happens in an atomic block — never written to a log, queue, or history.</p></div>
+        <div class="card"><h3>Audit on every call</h3><p>Every call to a business system (MCP) leaves an immutable record — who, what, when, allowed, injection detected. Policy is per tool, and the caller <strong>can't switch it off</strong>.</p></div>
+        <div class="card"><h3>Native human oversight</h3><p>Supervisors and reviewers are session participants with the authority to step in. The "human oversight" AI regulation requires for high risk — embedded, not bolted on.</p></div>
+        <div class="card"><h3>Access control (RBAC + ABAC)</h3><p>Roles + attributes per module and field + scope per pool and per group/shift. Enforced front and back, with graceful degradation for legacy accounts.</p></div>
+        <div class="card"><h3>Per-participant visibility</h3><p>By field and by role: a supervisor can follow an interaction without ever seeing the sensitive data. Delegate sensitive data, with oversight.</p></div>
+        <div class="card"><h3>No lock-in / sovereignty</h3><p>BYO LLM + MCP-only integration + versioned YAML logic adds up to real portability. Configurable data residency — covers vendor substitution and sovereignty.</p></div>
       </div>
-      <p class="note">🔒 How it works underneath: tokens in the session stream keep the masked value and the original separated; the original is released only to authorized roles. Every domain call passes through <strong>permission validation → injection guard → audit</strong> before reaching any system. RBAC/ABAC travel in the access token.</p>
+      <p class="note">🔒 Under the hood: tokens in the session stream keep the masked value and the original apart; the original is released only to authorized roles. Every domain call clears <strong>permission validation → injection guard → audit</strong> before it reaches any system. RBAC/ABAC ride in the access token.</p>
     </div>
   </section>
 
@@ -132,7 +132,7 @@
       <div class="sec-head">
         <p class="eyebrow">Regulatory adherence · Brazil</p>
         <h2>Ready for the Brazilian regulated environment.</h2>
-        <p>The architecture responds directly to the requirements of LGPD and the sector regulators.</p>
+        <p>The architecture maps straight onto what LGPD and the sector regulators ask for.</p>
       </div>
       <div class="reg">
         <div class="row"><b>LGPD / ANPD</b><span>PII minimization and masking, role-based visibility and an audited access trail — aligned with the ANPD's priorities (minimization and transparency of automated decisions).</span></div>
@@ -150,7 +150,7 @@
       <div class="sec-head">
         <p class="eyebrow">Regulatory adherence · Europe</p>
         <h2>Designed for the European regulatory cycle.</h2>
-        <p>For EU operations, the positioning (oversight + audit + no lock-in + sovereignty) is aligned with what the regulation now requires.</p>
+        <p>For EU operations, the stance — oversight + audit + no lock-in + sovereignty — lines up with what the regulation now demands.</p>
       </div>
       <div class="reg">
         <div class="row"><b>GDPR + EU↔Brazil adequacy</b><span>The mutual adequacy (Jan 2026) allows EU↔Brazil flows without extra mechanisms. Masking and minimization meet data-protection principles.</span></div>
@@ -158,7 +158,7 @@
         <div class="row"><b>DORA</b><span>Applies to IT suppliers serving financial firms: audit rights, exit strategy and concentration management — native audit + BYO LLM + sovereignty match directly.</span></div>
         <div class="row"><b>Data sovereignty</b><span>BYO LLM and agnostic integration allow hosting and inference in an EU sovereign cloud, without a US provider by default.</span></div>
       </div>
-      <p class="note warn">⚠️ A deliberate design detail: sentiment reading <strong>targets the customer, not the worker</strong> — the EU AI Act prohibits inferring employee emotion in the workplace. A boundary we respect by design.</p>
+      <p class="note warn">⚠️ A deliberate design choice: sentiment reading <strong>targets the customer, not the worker</strong> — the EU AI Act prohibits inferring employee emotion in the workplace. A line we hold by design.</p>
     </div>
   </section>
 
@@ -178,7 +178,7 @@
         <li>A masked input value (PIN/password) never enters a queue, stream or log.</li>
         <li>The DPO's access to sessions and calls is recorded in an immutable log.</li>
       </ul>
-      <p class="note">📋 <strong>Certifications:</strong> SOC 2 and ISO 27001 are on the roadmap. The architecture already produces the technical evidence that underpins them — audit trails, masking and access control — so certification formalizes what the product already does.</p>
+      <p class="note">📋 <strong>Certifications:</strong> SOC 2 and ISO 27001 are on the roadmap. The architecture already produces the technical evidence behind them — audit trails, masking, and access control — so certification just formalizes what the product already does.</p>
     </div>
   </section>
 
@@ -187,7 +187,7 @@
     <div class="wrap">
       <div class="cta">
         <h2>Compliance you can audit.</h2>
-        <p>The documentation details masking, the audit model, RBAC/ABAC and the data-protection Audit module for the DPO.</p>
+        <p>The docs cover masking, the audit model, RBAC/ABAC, and the data-protection Audit module for the DPO.</p>
         <div class="cta-row">
           <a class="btn btn-light" href="/docs">See documentation →</a>
           <a class="btn btn-outline-light" href="index.html#try">Start testing</a>

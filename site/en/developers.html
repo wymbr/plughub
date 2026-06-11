@@ -102,8 +102,8 @@
     <div class="wrap">
       <p class="crumb"><a href="index.html">Home</a> › For developers</p>
       <p class="eyebrow">For developers</p>
-      <h1>Build once. Without getting locked in.</h1>
-      <p class="sub">Model your logic in a <strong>declarative flow</strong>, integrate everything via <strong>MCP</strong> with audit, <strong>bring your own LLM</strong> and your agents — and take them with you whenever you want. SDK in TypeScript and Python, with a CLI that proves your portability.</p>
+      <h1>Build once. Never get locked in.</h1>
+      <p class="sub">Model your logic as a <strong>declarative flow</strong>, run every integration through <strong>MCP</strong> with audit, <strong>bring your own LLM</strong> and your agents — and take it all with you when you go. SDK in TypeScript and Python, with a CLI that proves it.</p>
       <div style="margin-top:26px;display:flex;gap:12px;flex-wrap:wrap">
         <a class="btn btn-primary" href="/docs">Go to the documentation →</a>
         <a class="btn btn-ghost" href="index.html#try">Start testing</a>
@@ -116,13 +116,13 @@
     <div class="wrap">
       <div class="sec-head">
         <p class="eyebrow">Concepts in one minute</p>
-        <h2>Four ideas and you already get the platform.</h2>
+        <h2>Four ideas and you've got the whole platform.</h2>
       </div>
       <div class="grid g2">
-        <div class="card"><h3>Session = conference room</h3><p>Every contact is a session where participants (human and AI) join with roles. The session stream is the single source of truth for events.</p></div>
+        <div class="card"><h3>Session = conference room</h3><p>Every contact is a session that participants — human and AI — join in defined roles. The session stream is the single source of truth for every event.</p></div>
         <div class="card"><h3>Agents follow a contract</h3><p><span style="font-family:monospace">agent_login → agent_ready → agent_busy → agent_done</span>. Same contract for native (SDK) and external (sidecar) agents.</p></div>
-        <div class="card"><h3>Skill Flow is declarative</h3><p>Logic lives in versionable YAML — not in code tied to the vendor. Inbound, outbound and automation in the same engine.</p></div>
-        <div class="card"><h3>MCP is the only integration</h3><p>Everything touching a business system goes through MCP, with permission, an injection guard and audit. No proprietary connectors.</p></div>
+        <div class="card"><h3>Skill Flow is declarative</h3><p>Your logic lives in versioned YAML — not vendor-locked code. Inbound, outbound, automation: one engine.</p></div>
+        <div class="card"><h3>MCP is the only way in</h3><p>Anything that touches a business system goes through MCP — permission, injection guard, audit. No proprietary connectors.</p></div>
       </div>
     </div>
   </section>
@@ -132,8 +132,8 @@
     <div class="wrap">
       <div class="sec-head">
         <p class="eyebrow">Skill Flow</p>
-        <h2>Your logic as an artifact — versionable and portable.</h2>
-        <p>A state-graph interpreter with 13+ step types. State is persisted on every transition, and the flow is validated before publishing.</p>
+        <h2>Your logic as an artifact — versioned and portable.</h2>
+        <p>A state-graph interpreter with 13+ step types. State persists on every transition, and the flow is validated before it ships.</p>
       </div>
       <div class="dev">
         <div class="code"><span class="c"># skill_support_v1.yaml</span><br>
@@ -156,7 +156,7 @@
           <div class="steps">
             <span>task</span><span>choice</span><span>catch</span><span>escalate</span><span>complete</span><span>invoke</span><span>reason</span><span>notify</span><span>menu</span><span>suspend</span><span>collect</span><span>resolve</span><span>receive</span><span>begin/end_transaction</span>
           </div>
-          <p class="note" style="margin-top:18px"><strong>Deploy lifecycle:</strong> saving creates a <em>draft</em>; publishing (<em>published</em>) applies per pool with <strong>hot deploy</strong> (no restart), <strong>rollback</strong> and <strong>scheduled deploy</strong> — draining in-flight contacts (graceful).</p>
+          <p class="note" style="margin-top:18px"><strong>Deploy lifecycle:</strong> saving creates a <em>draft</em>; publishing rolls out per pool with <strong>hot deploy</strong> (no restart), <strong>rollback</strong>, and <strong>scheduled deploys</strong> — draining in-flight contacts gracefully.</p>
         </div>
       </div>
     </div>
@@ -167,15 +167,15 @@
     <div class="wrap">
       <div class="sec-head">
         <p class="eyebrow">MCP + interception guard</p>
-        <h2>One integration — and audited by construction.</h2>
-        <p>Agents never touch a business system directly; only via authorized MCP Servers. Every call passes three checks, in under 1ms.</p>
+        <h2>One integration — audited by design.</h2>
+        <p>Agents never touch a business system directly — only through authorized MCP Servers. Every call clears three checks in under a millisecond.</p>
       </div>
       <div class="grid g3">
-        <div class="card"><h3>① Permission</h3><p>Permission validation by local token decode — the tool runs only if the role is allowed.</p></div>
-        <div class="card"><h3>② Injection guard</h3><p>Heuristic patterns block prompt injection before the call leaves.</p></div>
-        <div class="card"><h3>③ Audit</h3><p>Immutable record (server, tool, allowed, injection, duration). Policy per tool — no opt-out.</p></div>
+        <div class="card"><h3>① Permission</h3><p>The token is decoded locally — the tool runs only if the role is allowed.</p></div>
+        <div class="card"><h3>② Injection guard</h3><p>Heuristic patterns catch prompt injection before the call ever leaves.</p></div>
+        <div class="card"><h3>③ Audit</h3><p>An immutable record — server, tool, allowed, injection, duration. Policy is per tool. No opt-out.</p></div>
       </div>
-      <p class="note">🔌 Two mechanisms, one contract: a <strong>native</strong> agent (in-process interceptor via <code>@plughub/sdk</code>) and an <strong>external</strong> agent (proxy sidecar on localhost) — LangGraph, CrewAI or plain Python plug in without code changes.</p>
+      <p class="note">🔌 Two mechanisms, one contract: <strong>native</strong> agents use an in-process interceptor (<code>@plughub/sdk</code>); <strong>external</strong> agents use a proxy sidecar on localhost. LangGraph, CrewAI, plain Python — they plug in with no code changes.</p>
     </div>
   </section>
 
@@ -187,11 +187,11 @@
         <h2>Bring your own model. Swap it without touching the agent.</h2>
       </div>
       <div class="grid g3">
-        <div class="card"><h3>Multi-account</h3><p>Manage several accounts/keys (Anthropic, OpenAI, Google…) with their own RPM/TPM limits.</p></div>
-        <div class="card"><h3>Fallback &amp; rotation</h3><p>On throttle (429/529), the Gateway switches account and, if needed, provider — without the agent noticing.</p></div>
-        <div class="card"><h3>Model profiles</h3><p><em>realtime</em>, <em>balanced</em> and <em>evaluation</em> (isolated) — you pick the model per task, not per product.</p></div>
+        <div class="card"><h3>Multi-account</h3><p>Run several accounts and keys (Anthropic, OpenAI, Google…), each with its own RPM/TPM limits.</p></div>
+        <div class="card"><h3>Fallback &amp; rotation</h3><p>When a key throttles (429/529), the Gateway switches accounts — and providers if it has to — without the agent noticing.</p></div>
+        <div class="card"><h3>Model profiles</h3><p><em>realtime</em>, <em>balanced</em>, <em>evaluation</em> (isolated) — pick the model per task, not per product.</p></div>
       </div>
-      <p class="note">⚙️ Combined with the deterministic logic of Skill Flow, this gives <strong>predictable behavior and controlled AI cost</strong> — the agent designates accounts and fallbacks; limits are managed per account.</p>
+      <p class="note">⚙️ Paired with Skill Flow's deterministic logic, you get <strong>predictable behavior and AI costs you can control</strong> — the agent names its accounts and fallbacks; limits are managed per account.</p>
     </div>
   </section>
 
@@ -200,16 +200,16 @@
     <div class="wrap">
       <div class="sec-head">
         <p class="eyebrow">SDK &amp; portability</p>
-        <h2>Get in easily. Leave whenever you want.</h2>
+        <h2>Easy to get in. Free to get out.</h2>
       </div>
       <div class="dev">
         <div>
           <ul class="checks">
             <li><b>SDK in TypeScript and Python</b>, with a stable execution contract.</li>
-            <li><b>Bring your own agent</b> (LangGraph, CrewAI, Python) as a <strong>participant</strong> in the session — adopt without rewriting.</li>
-            <li><b>Migrate to native</b> with <code>regenerate</code> when you want to unlock everything (3 levels, suspend/resume, delegate).</li>
-            <li><b>Anti-lock-in in 4 ways:</b> BYO LLM · integration only via MCP · logic in portable YAML · data export.</li>
-            <li><b><code>verify-portability</code></b> and <code>certify</code> prove you're not locked in.</li>
+            <li><b>Bring your own agent</b> (LangGraph, CrewAI, Python) as a <strong>participant</strong> — no rewrite to adopt it.</li>
+            <li><b>Move it to native</b> with <code>regenerate</code> when you want the full toolkit (3 levels, suspend/resume, delegate).</li>
+            <li><b>Anti-lock-in, four ways:</b> BYO LLM · MCP-only integration · portable YAML logic · data export.</li>
+            <li><b><code>verify-portability</code></b> and <code>certify</code> prove you're free to leave.</li>
           </ul>
           <a class="btn btn-primary" href="/docs" style="margin-top:22px">Go to the documentation →</a>
         </div>
@@ -223,7 +223,7 @@ $ plughub-sdk <span class="s">proxy</span>              <span class="c"># sideca
 <span class="c"># result</span><br>
 ✓ contract ok &nbsp;✓ dependencies isolated &nbsp;✓ portable</div>
       </div>
-      <p class="note">↪ <strong>Important (no false promise):</strong> an external agent joins as a <em>participant</em> (conference + MCP + audit). The differentiated capabilities — the 3-level model, cross-channel suspend/resume, delegate, commerce-cards — belong to the <strong>native Skill Flow</strong>. That's why the path is bring-and-migrate: <code>regenerate</code> → native.</p>
+      <p class="note">↪ <strong>Important — and we won't oversell it:</strong> an external agent joins as a <em>participant</em> (conference + MCP + audit). The standout capabilities — the 3-level model, cross-channel suspend/resume, delegate, commerce-cards — live in the <strong>native Skill Flow</strong>. So the path is simple: bring it in, then migrate. <code>regenerate</code> → native.</p>
     </div>
   </section>
 
@@ -232,7 +232,7 @@ $ plughub-sdk <span class="s">proxy</span>              <span class="c"># sideca
     <div class="wrap">
       <div class="cta">
         <h2>Start with the documentation.</h2>
-        <p>Concepts, the execution contract, Skill Flow step types, MCP and the CLI — with examples. Then request a test environment.</p>
+        <p>Concepts, the execution contract, Skill Flow step types, MCP, and the CLI — with examples. Then request a test environment.</p>
         <div class="cta-row">
           <a class="btn btn-light" href="/docs">See documentation →</a>
           <a class="btn btn-outline-light" href="index.html#try">Request test access</a>
