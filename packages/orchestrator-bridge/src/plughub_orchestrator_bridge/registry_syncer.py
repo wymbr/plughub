@@ -202,6 +202,10 @@ class RegistrySyncer:
         for pool in cfg.get("pools", []):
             await self._sync_pool(http, headers, pool, report)
 
+        # ── Sync channel endpoints (referenciam pools) — config-consolidation F1.1b ──
+        # Migrados do antigo infra/seed/seed.py (aposentado). Fonte única = YAML.
+        await self._sync_channel_endpoints(http, headers, cfg, report)
+
         # AgentType entity retired (Fase 3d/C): no agent_types are synced or
         # pruned. AI provisioning comes from each pool's `deploy:` block (below);
         # human agents are login-driven (no registry agent_type).
@@ -549,6 +553,44 @@ class RegistrySyncer:
             msg = f"pool {pid}: PUT exception — {exc}"
             logger.warning("  %s", msg)
             report.pools_skipped += 1  # non-fatal
+
+    # ── Channel endpoint sync (config-consolidation F1.1b) ────────────────────
+
+    async def _sync_channel_endpoints(
+        self,
+        http:    aiohttp.ClientSession,
+        headers: dict,
+        cfg:     dict,
+        report:  SyncReport,
+    ) -> None:
+        """
+        Registra channel endpoints (identificador de canal → pool) via
+        POST /v1/channel-endpoints. Idempotente: 409 = já existe (skip).
+        Fonte única: o YAML (migrado do seed.py aposentado). Campo `display_name`
+        é o exigido pela rota (o seed antigo mandava `label` — POST falhava 400).
+        """
+        url = f"{self._registry_url}/v1/channel-endpoints"
+        for ep in cfg.get("channel_endpoints", []):
+            cid = f"{ep.get('channel', '?')}/{ep.get('identifier', '?')}"
+            body = {
+                "channel":      ep.get("channel"),
+                "identifier":   ep.get("identifier"),
+                "pool_id":      ep.get("pool_id"),
+                "display_name": ep.get("display_name") or ep.get("identifier"),
+                "active":       ep.get("active", True),
+            }
+            try:
+                async with http.post(url, headers=headers, json=body,
+                                     timeout=aiohttp.ClientTimeout(total=15)) as resp:
+                    if resp.status == 201:
+                        logger.info("  channel_endpoint %s → %s created", cid, ep.get("pool_id"))
+                    elif resp.status == 409:
+                        logger.debug("  channel_endpoint %s already exists", cid)
+                    else:
+                        b = await _safe_json(resp)
+                        logger.warning("  channel_endpoint %s: POST %d — %s", cid, resp.status, b)
+            except Exception as exc:
+                logger.warning("  channel_endpoint %s: POST exception — %s", cid, exc)
 
     # ── Agent type sync ───────────────────────────────────────────────────────
 

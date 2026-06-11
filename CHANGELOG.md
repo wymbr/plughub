@@ -2,6 +2,34 @@
 
 ---
 
+## Config Consolidation — F1.1b: seed.py aposentado, pools com fonte única (2026-06-11)
+
+Fecha a Fase 1 da consolidação. O `infra/seed/seed.py` (serviço `demo-seed`) ainda definia pools (lista
+hardcoded duplicando o YAML), agent_types e channel_endpoints — a violação `pools_double_source`.
+
+**Achados**: (1) os `agent_types` do seed são **mortos** — a entidade AgentType foi removida (Fase 3
+C2/C3/C4); não há rota `/v1/agent-types` na registry. (2) Os `channel_endpoints` do seed **já falhavam**:
+mandavam `label`, mas a rota `POST /v1/channel-endpoints` exige `display_name` (400). (3) Pools e Redis já
+têm fonte única (RegistrySyncer + routing-engine, F1.1a).
+
+**Mudança**:
+- **channel_endpoints migrados** para `infra/registry/tenant_demo.yaml` (`channel_endpoints:`, com
+  `display_name` correto) + `RegistrySyncer._sync_channel_endpoints` (POST idempotente, após os pools).
+  Fonte única = YAML; e corrige o bug do `label`→`display_name`.
+- **seed.py aposentado** (stub de migração; pode ser `git rm`) e **serviço `demo-seed` removido** do
+  compose. Nada dependia dele.
+- Guard: `pools_double_source` sai do allowlist → **`KNOWN` vazio**. Qualquer violação futura é NOVA
+  (exit 1).
+
+**Fase 1 da config-consolidation COMPLETA** (F0 contrato+guard · F1.1a Redis · F1.2 env×config · F1.1b
+pools/seed). Guard: **0 violações conhecidas**. Provisionamento do demo agora sai 100% da config
+(RegistrySyncer ← YAML; config-api; auth/eval/pricing seeds via API). Build: `orchestrator-bridge`
+(RegistrySyncer). **Validação (usuário)**: restart bridge → `GET /v1/channel-endpoints` lista os 3;
+guard 0/0; demo sobe sem `demo-seed`. **Próximo (Fase 2)**: expor campos de pool na UI
+(`pool-config-surface.md`); migrar os demais seeds para bootstrap idempotente (Fase 3).
+
+---
+
 ## Config Consolidation — F1.2: precedência env×config (config-api vence) (2026-06-11)
 
 Triagem do perigo "config de negócio em env duplicando o config-api" (invariante "env only for

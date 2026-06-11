@@ -258,9 +258,10 @@ Hoje o Analytics/Agents mistura agente×pool e não separa humano×IA.
   - [x] **F1.1a** ✅ (2026-06-11) `seed.py` não escreve mais Redis: removidos `seed_redis()` + helper
         `RedisConn` (redundante — routing-engine popula `pool_config:{id}` e `{tenant}:pools` via
         `registry.changed`→`save_pool_config`). Guard: `seed_redis_write` saiu do allowlist.
-  - [ ] **F1.1b** Aposentar as DEFINIÇÕES de pool do `seed.py` (lista hardcoded duplica o YAML): migrar
-        `channel_endpoints` (e agent_types únicos) p/ YAML + RegistrySyncer; deletar `seed.py` + serviço
-        `demo-seed`. Limpa `pools_double_source`. (RegistrySyncer já é fonte única de pools.)
+  - [x] **F1.1b** ✅ (2026-06-11) `seed.py` aposentado: `channel_endpoints` migrados p/ YAML +
+        `RegistrySyncer._sync_channel_endpoints` (corrige `label`→`display_name`); agent_types eram mortos
+        (entidade removida); serviço `demo-seed` removido do compose; seed.py vira stub. Guard zerado
+        (`pools_double_source` resolvido). **FASE 1 COMPLETA — guard 0/0.** Ver CHANGELOG.
   - [x] **F1.2** ✅ (2026-06-11) Precedência env×config (rigoroso, config-api vence):
         `attachment_expiry` — channel-gateway lê `{tenant}:config:webchat:attachment_expiry_days` do
         config-api (helper `resolve_attachment_expiry_days`, 4 adapters) + env removido + teste.

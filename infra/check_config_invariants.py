@@ -27,10 +27,12 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 # Violações conhecidas (allowlist de burn-down). Remover a entrada quando o item
 # correspondente do escopo (F1.x) for concluído — o guard avisa quando isso ocorrer.
 KNOWN: dict[str, str] = {
-    # seed_redis_write          — RESOLVIDO em F1.1a (2026-06-11): seed.py não escreve mais Redis.
-    # env_dup_instance_ttl      — RESOLVIDO em F1.2 (2026-06-11): env removido (instance_ttl = default spec).
-    # env_dup_attachment_expiry — RESOLVIDO em F1.2 (2026-06-11): channel-gateway lê do config-api.
-    "pools_double_source":       "pools definidos em tenant_demo.yaml E seed.py (F1.1b)",
+    # Burn-down COMPLETO (Fase 1 da config-consolidation) — allowlist vazio:
+    #   seed_redis_write          — RESOLVIDO F1.1a: seed.py não escreve mais Redis.
+    #   env_dup_instance_ttl      — RESOLVIDO F1.2:  env removido (instance_ttl = default spec).
+    #   env_dup_attachment_expiry — RESOLVIDO F1.2:  channel-gateway lê do config-api.
+    #   pools_double_source       — RESOLVIDO F1.1b: seed.py aposentado; pools só no YAML/RegistrySyncer.
+    # Qualquer violação detectada daqui pra frente é NOVA → o guard falha (exit 1).
 }
 
 

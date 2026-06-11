@@ -14,6 +14,26 @@
 tenant_id: tenant_demo
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Channel endpoints — identificador de canal → pool (slug webchat, DIN, número WA…).
+# Migrados do antigo infra/seed/seed.py (config-consolidation F1.1b); sincronizados
+# pelo RegistrySyncer via POST /v1/channel-endpoints (idempotente, 409 = já existe).
+# ─────────────────────────────────────────────────────────────────────────────
+
+channel_endpoints:
+  - channel: webchat
+    identifier: demo
+    pool_id: demo_ia
+    display_name: "WebChat Demo IA"
+  - channel: webchat
+    identifier: sac
+    pool_id: sac_ia
+    display_name: "WebChat SAC IA"
+  - channel: webhook
+    identifier: crm-callback
+    pool_id: retencao_humano
+    display_name: "CRM Callback"
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Pools
 # ─────────────────────────────────────────────────────────────────────────────
 

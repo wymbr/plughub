@@ -950,27 +950,10 @@ services:
       - plughub-demo
     restart: "no"
 
-  # Registra pools e agent types no agent-registry e escreve pool_configs no Redis.
-  # Roda uma vez na inicialização; idempotente — 409 → PUT para atualizar configuração.
-  demo-seed:
-    image: python:3.11-slim
-    volumes:
-      - ./infra/seed:/seed:ro
-    environment:
-      AGENT_REGISTRY_URL: http://agent-registry:3300
-      REDIS_URL:          redis://redis:6379
-      TENANT_ID:          tenant_demo
-    command: ["python", "/seed/seed.py"]
-    depends_on:
-      agent-registry:
-        condition: service_healthy
-      config-seed:
-        condition: service_completed_successfully
-      auth-seed:
-        condition: service_completed_successfully
-    networks:
-      - plughub-demo
-    restart: "no"
+  # demo-seed REMOVIDO (config-consolidation F1.1b, 2026-06-11): provisionamento de
+  # pools/channel_endpoints é via RegistrySyncer (orchestrator-bridge) a partir de
+  # infra/registry/tenant_demo.yaml. agent_types entidade aposentada; Redis derivado
+  # do routing-engine via registry.changed. Ver docs/arcos/config-consolidation.md.
 
   # Recursos contratados do demo (capacity-governance item 6) — coerentes com
   # os deploys do tenant_demo.yaml: ai_agent×300 + human_agent×10 → C=310.
