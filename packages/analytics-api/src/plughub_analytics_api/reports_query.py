@@ -2497,7 +2497,8 @@ def _compare_quality_lens(
                    attr.user_login, attr.agent_key)) AS label,
             toString(toDate(attr.session_started_at)) AS bucket,
             count()                              AS n,
-            avg(er.overall_score)                AS avg_score
+            avg(er.overall_score)                AS avg_score,
+            groupUniqArray(er.form_id)           AS form_ids
         FROM (
             SELECT * FROM {db}.evaluation_results FINAL
             WHERE {" AND ".join(er_conditions)}
@@ -2512,7 +2513,7 @@ def _compare_quality_lens(
     for r in rows:
         a = per_agent.setdefault(r["agent_key"], {
             "agent_type": r["agent_type"], "label": r["label"],
-            "buckets": {}, "_n": 0, "_score_sum": 0.0,
+            "buckets": {}, "_n": 0, "_score_sum": 0.0, "_forms": set(),
         })
         n = int(r["n"] or 0)
         score = float(r["avg_score"]) if r["avg_score"] is not None else None
@@ -2522,12 +2523,19 @@ def _compare_quality_lens(
         a["_n"] += n
         if score is not None:
             a["_score_sum"] += score * n
+        # form_ids: união dos formulários que avaliaram este agente no período.
+        # Habilita a regra de comparabilidade (item 3 follow-ups A): comparação
+        # entre agentes exige mesmo form; entre forms só p/ um único agente.
+        for f in (r.get("form_ids") or []):
+            if f:
+                a["_forms"].add(f)
     for a in per_agent.values():
         n = a.pop("_n")
         ssum = a.pop("_score_sum")
         a["summary"] = {
             "n_evaluations": n,
             "avg_score":     round(ssum / n, 4) if n else None,
+            "form_ids":      sorted(a.pop("_forms")),
         }
     return per_agent
 

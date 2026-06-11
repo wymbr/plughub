@@ -943,6 +943,22 @@ class TestQueryAgentsCompare:
         assert ent["summary"]["n_evaluations"] == 3   # N visível (amostral)
         assert ent["summary"]["avg_score"] == pytest.approx(0.8)
 
+    async def test_quality_exposes_form_ids_union(self):
+        # item 3 (follow-ups A): a lente quality expõe os form_ids distintos por
+        # agente (regra de comparabilidade: cross-agente exige mesmo form;
+        # cross-form só p/ um único agente — guard/ressalva na UI).
+        cols = ["agent_key", "agent_type", "label", "bucket", "n", "avg_score", "form_ids"]
+        client = _make_client(_ch_result(cols, [
+            ["A", "human", "a@x", "2026-06-01", 2, 0.8, ["form_sac"]],
+            ["A", "human", "a@x", "2026-06-02", 1, 0.6, ["form_sac", "form_qa"]],
+        ]))
+        result = await query_agents_compare(
+            client, DB, TENANT, lens="quality", entities=["A"],
+        )
+        assert "groupUniqArray(er.form_id)" in client.query.call_args_list[-1][0][0]
+        ent = result["data"]["entities"][0]
+        assert ent["summary"]["form_ids"] == ["form_qa", "form_sac"]   # união ordenada
+
     async def test_error_returns_empty_with_error_key(self):
         client = MagicMock()
         client.query = MagicMock(side_effect=Exception("ch down"))

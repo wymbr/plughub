@@ -579,10 +579,36 @@ function LensChart({
         title={t('bench.metric.aht')} labelMap={labelMap} />
     </div>
   )
-  if (lens === 'quality') return (
-    <MetricLine resp={resp} metricKey="avg_score" fmt="score" selected={selected}
-      title={t('bench.metric.quality')} labelMap={labelMap} />
-  )
+  if (lens === 'quality') {
+    // Regra de comparabilidade (item 3 follow-ups A): comparar a média de
+    // qualidade entre AGENTES exige o mesmo formulário; comparar entre
+    // FORMULÁRIOS só é válido para um único agente (a régua/campanha é o eixo,
+    // não um disfarce). Lê summary.form_ids (exposto pela lente quality).
+    const qEnts = selected
+      .map(k => resp.data.entities.find(e => e.agent_key === k))
+      .filter((e): e is CompareEntity => !!e && !e.missing)
+    const qForms = [...new Set(qEnts
+      .flatMap(e => (e.summary.form_ids as unknown as string[] | undefined) ?? [])
+      .filter(Boolean))]
+    const multiAgent = qEnts.length > 1
+    if (qForms.length > 1 && multiAgent) return (
+      <div className="h-52 flex flex-col items-center justify-center text-sm text-muted-light text-center px-6 gap-1">
+        <span className="text-warning font-medium">{t('bench.quality.crossFormGuard')}</span>
+        <span className="text-2xs">{t('bench.quality.crossFormGuardHint', { forms: qForms.join(', ') })}</span>
+      </div>
+    )
+    return (
+      <div className="space-y-2">
+        {qForms.length > 1 && !multiAgent && (
+          <p className="text-2xs text-warning px-1">
+            {t('bench.quality.sameAgentForms', { forms: qForms.join(', ') })}
+          </p>
+        )}
+        <MetricLine resp={resp} metricKey="avg_score" fmt="score" selected={selected}
+          title={t('bench.metric.quality')} labelMap={labelMap} />
+      </div>
+    )
+  }
   if (lens === 'nps') return (
     <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
       <MetricLine resp={resp} metricKey="nps" fmt="count" selected={selected}

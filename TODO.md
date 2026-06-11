@@ -195,8 +195,11 @@ Hoje o Analytics/Agents mistura agente×pool e não separa humano×IA.
      Grão `journey` já aceito. **F11.2 (validação)**: diferido **simulado via curl/seed** (decisão do
      usuário) — publicar `session.signals`/`survey_record` com origem de `opened_at` anterior + grão journey,
      conferir `session_at = opened_at`. Workflow agendado real (dias depois) fica futuro. Ver CHANGELOG.
-  3. **`quality_criteria` cross-form**: alinhar dimensões equivalentes entre formulários (por
-     `dimension_id`/label) — hoje compara só dentro do mesmo form (guard na UI).
+  3. ✅ (2026-06-11) **quality cross-form — re-escopado**: merge de dimensões cross-form **descartado**
+     (inventa equivalência inexistente). Regra de comparabilidade: cross-agente exige mesmo form;
+     cross-form só p/ um único agente. `_compare_quality_lens` expõe `summary.form_ids`; UI da lente
+     `quality` faz guard/ressalva. `quality_criteria` segue same-form. **Futuro**: catálogo canônico de
+     dimensões (única base rigorosa p/ comparar dimensões entre forms) → arco próprio. Ver CHANGELOG.
   4. **Validações E2E reais F5/F7 + limpeza de fixtures sintéticos**: agora que há fluxos reais
      (NPS humano via Agent Assist, survey via webchat), substituir os fixtures de
      `evaluation_dimension_scores` (F8) e `segments.escalation_reason` (F7) por dado E2E; rodar F5/F7

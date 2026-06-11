@@ -169,6 +169,11 @@
       "multiForm": "Agents evaluated under different forms",
       "multiFormHint": "Per-dimension comparison only within the same form. Forms: {{forms}}"
     },
+    "quality": {
+      "crossFormGuard": "Comparing across agents requires the same form",
+      "crossFormGuardHint": "These agents were evaluated under different forms ({{forms}}). Select agents from the same form — or a single agent to compare across forms.",
+      "sameAgentForms": "Averages from different forms/campaigns of the same agent ({{forms}}) — comparable as context, not as a single yardstick."
+    },
     "domain": {
       "universal": "Compares human and AI agents.",
       "human": "Human agents only — AI rows are disabled in this lens."

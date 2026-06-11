@@ -2,6 +2,36 @@
 
 ---
 
+## Bancada — item 3: regra de comparabilidade por formulário (qualidade) (2026-06-11)
+
+Fecha o item 3 dos follow-ups A **redefinindo o escopo** após discussão de validade metodológica. A
+proposta original ("alinhar dimensões equivalentes entre formulários por dimension_id/label") foi
+**descartada**: fundir dimensões de forms diferentes inventa uma equivalência que não existe (rubricas,
+pesos, escala e calibração diferem por form) — produziria um heatmap que *parece* comparável e não é.
+
+**Decisão (regra de comparabilidade)**: a validade depende do que se mantém constante. Comparar
+**entre agentes** exige o **mesmo formulário**; comparar **entre formulários** só é legítimo para um
+**único agente** (a campanha/régua é o eixo da comparação, não um disfarce). Foi descoberto que a lente
+`quality` (média final) **já comparava cross-agente + cross-form silenciosamente** (`avg(overall_score)`
+por agente+data, sem olhar `form_id`) — aplicar a regra **corrige** esse ponto cego.
+
+**Backend** (`_compare_quality_lens`): a lente passa a expor `summary.form_ids` (união distinta dos
+formulários que avaliaram o agente no período) via `groupUniqArray(er.form_id)`. Sem mudança de grão,
+média ou atribuição.
+
+**UI** (`AgentsBenchPage`, render da lente `quality`): banner de comparabilidade —
+(a) multi-agente **e** forms misturados → **guard** (bloqueia o gráfico, "comparação entre agentes
+exige o mesmo formulário" + lista os forms); (b) **um único agente** em vários forms → gráfico + **ressalva**
+("médias de formulários/campanhas diferentes do mesmo agente — contexto, não régua única"); (c) mesmo
+form / sem seleção → inalterado. A lente `quality_criteria` (dimensões) mantém o guard same-form atual —
+**não se mexeu no mérito das dimensões** (escolha do usuário: só a média final).
+
+**Testes**: `test_reports.py::test_quality_exposes_form_ids_union`. i18n `bench.quality.*` (en + pt-BR).
+
+Build: `analytics-api` (Python) + `platform-ui` (rebuild). Sem migração.
+
+---
+
 ## Bancada F11.1 — enrichment de `session_at` para surveys diferidas (2026-06-11)
 
 Implementa a espinha da F11 (item 2 dos follow-ups A): **bucketização correta de sinais de survey

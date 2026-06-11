@@ -169,6 +169,11 @@
       "multiForm": "Agentes avaliados por formulários diferentes",
       "multiFormHint": "Comparação por dimensão só dentro do mesmo formulário. Formulários: {{forms}}"
     },
+    "quality": {
+      "crossFormGuard": "Comparação entre agentes exige o mesmo formulário",
+      "crossFormGuardHint": "Estes agentes foram avaliados por formulários diferentes ({{forms}}). Selecione agentes do mesmo formulário — ou um único agente para comparar entre formulários.",
+      "sameAgentForms": "Médias de formulários/campanhas diferentes do mesmo agente ({{forms}}) — comparáveis como contexto, não como uma régua única."
+    },
     "domain": {
       "universal": "Compara agentes humanos e IA.",
       "human": "Apenas agentes humanos — linhas de IA ficam desabilitadas nesta lente."
