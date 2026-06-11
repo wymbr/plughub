@@ -235,11 +235,12 @@ Hoje o Analytics/Agents mistura agente×pool e não separa humano×IA.
   **Pendências relacionadas (abertas)**: (a) `pool:pending_assignment:{poolId}` é UMA chave por pool
   (last-write wins) → chave por-instância é melhoria futura (liga à fila pull/inbox).
 
-  **🔧 Transfer "No destinations available" + Pool Config Surface (2026-06-11):**
-  Causa do Transfer: `supervisor_capabilities` lê `pool.supervisor_config.escalation_pools` da registry,
-  mas (1) o `SupervisorConfigSchema` não declarava o campo → Zod descartava no write; (2) nenhum pool
-  semeava. **Feito (8.1/8.2)**: campo no schema + teste; seed em `retencao_humano` no YAML. Falta build
-  (`@plughub/schemas`+`agent-registry`) + restart bridge + validar combo.
+  **✅ Transfer "No destinations available" RESOLVIDO (2026-06-11) — eram 3 camadas:**
+  (8.1) contrato — `escalation_pools` no `SupervisorConfigSchema` (registry parava de descartar no write);
+  (8.2) config — seed do campo no `retencao_humano` (YAML→registry); (8.3) **endpoint** — a rota REST
+  `GET /api/supervisor_capabilities/:sessionId` (server.ts) era um **stub vazio**; passou a resolver
+  pool do session meta e ler `escalation_pools` da registry. **Validado E2E**: combo lista sac/reembolso/
+  portabilidade. Ver CHANGELOG. **Pool Config Surface** (editar esses campos na UI) segue como F2-pools.
   **Iniciativa maior (decidida pelo usuário)**: o YAML é seed-a-eliminar; TODO config de pool deve ser
   editável na tela `config/resources/pool` (registry-backed), pra provisionamento sair 100% da config.
   **Inventário-fonte + plano**: `docs/arcos/pool-config-surface.md`. Gap principal (não na UI hoje):
