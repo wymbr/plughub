@@ -1,0 +1,435 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PlugHub — Orquestração de agentes humanos e IA para atendimento e automação</title>
+<meta name="description" content="Plataforma de orquestração de agentes (humanos + IA) com compliance e portabilidade by design. MCP-first, BYO LLM, billing por capacidade, omnichannel com voz e WebRTC nativos.">
+<meta property="og:title" content="PlugHub — Orquestre humanos e IA na mesma conversa">
+<meta property="og:description" content="Plataforma de orquestração de agentes para atendimento e automação. Compliance e portabilidade by design.">
+<meta property="og:type" content="website">
+<link rel="alternate" hreflang="pt-BR" href="index.html">
+<link rel="alternate" hreflang="en" href="en/index.html">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --primary:#1B4F8A; --primary-d:#15406e; --secondary:#2D9CDB; --accent:#00B4D8;
+    --green:#059669; --warning:#D97706; --ink:#16242f; --muted:#56697a;
+    --line:#e3e8ee; --bg:#ffffff; --soft:#f5f8fb; --soft2:#eef4fa; --dark:#0f2336;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html{scroll-behavior:smooth}
+  body{font-family:Inter,system-ui,sans-serif;color:var(--ink);background:var(--bg);line-height:1.6;-webkit-font-smoothing:antialiased}
+  a{color:inherit;text-decoration:none}
+  .wrap{max-width:1080px;margin:0 auto;padding:0 24px}
+  section{scroll-margin-top:72px}
+  h1,h2,h3{line-height:1.2;letter-spacing:-.01em}
+  .eyebrow{font-size:13px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:var(--secondary)}
+  .btn{display:inline-flex;align-items:center;gap:8px;font-weight:600;font-size:15px;padding:12px 22px;border-radius:9px;border:1.5px solid transparent;cursor:pointer;transition:.15s}
+  .btn-primary{background:var(--primary);color:#fff}
+  .btn-primary:hover{background:var(--primary-d)}
+  .btn-ghost{background:transparent;color:var(--primary);border-color:var(--line)}
+  .btn-ghost:hover{border-color:var(--secondary);background:var(--soft)}
+  .btn-light{background:#fff;color:var(--primary)}
+  .btn-outline-light{background:transparent;color:#fff;border-color:rgba(255,255,255,.4)}
+  .btn-outline-light:hover{border-color:#fff;background:rgba(255,255,255,.1)}
+
+  /* Header */
+  header{position:sticky;top:0;z-index:50;background:rgba(255,255,255,.92);backdrop-filter:blur(8px);border-bottom:1px solid var(--line)}
+  .nav{display:flex;align-items:center;justify-content:space-between;height:64px}
+  .brand{display:flex;align-items:center;gap:10px;font-weight:700;font-size:19px;color:var(--primary)}
+  .brand .dot{width:22px;height:22px;border-radius:6px;background:var(--primary);position:relative}
+  .brand .dot::after{content:"";position:absolute;inset:6px;border-radius:3px;background:var(--accent)}
+  .nav-links{display:flex;align-items:center;gap:26px}
+  .nav-links a.lnk{font-size:14.5px;font-weight:500;color:var(--muted)}
+  .nav-links a.lnk:hover{color:var(--primary)}
+  .nav-cta{display:flex;align-items:center;gap:10px}
+  .nav-cta .btn{padding:9px 16px;font-size:14px}
+  .menu-btn{display:none;background:none;border:0;font-size:24px;color:var(--primary);cursor:pointer}
+  .lang{font-size:12.5px;font-weight:700;color:var(--muted);border:1px solid var(--line);border-radius:7px;padding:7px 10px;letter-spacing:.02em}
+  .lang:hover{color:var(--primary);border-color:var(--secondary)}
+
+  /* Hero */
+  .hero{background:linear-gradient(180deg,var(--soft2),#fff);padding:84px 0 64px;border-bottom:1px solid var(--line)}
+  .hero h1{font-size:46px;font-weight:700;max-width:780px}
+  .hero .sub{font-size:19px;color:var(--muted);max-width:680px;margin-top:18px}
+  .chips{display:flex;flex-wrap:wrap;gap:9px;margin-top:26px}
+  .chip{font-size:13px;font-weight:600;color:var(--primary);background:#fff;border:1px solid var(--line);border-radius:999px;padding:6px 13px}
+  .hero-cta{display:flex;flex-wrap:wrap;gap:12px;margin-top:32px}
+
+  /* Sections */
+  .sec{padding:72px 0}
+  .sec.alt{background:var(--soft)}
+  .sec-head{max-width:720px;margin-bottom:40px}
+  .sec-head h2{font-size:32px;font-weight:700;margin-top:8px}
+  .sec-head p{color:var(--muted);font-size:17px;margin-top:12px}
+
+  .grid{display:grid;gap:18px}
+  .g3{grid-template-columns:repeat(3,1fr)}
+  .g2{grid-template-columns:repeat(2,1fr)}
+  .card{background:#fff;border:1px solid var(--line);border-radius:14px;padding:24px}
+  .card h3{font-size:18px;font-weight:600;color:var(--primary);margin-bottom:8px}
+  .card p{color:var(--muted);font-size:15px}
+  .card .num{font-size:13px;font-weight:700;color:var(--accent);letter-spacing:.05em}
+  .tag{display:inline-block;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--warning);background:#fdf3e3;border-radius:6px;padding:2px 8px;margin-left:8px}
+
+  /* 3-level diagram */
+  .levels{display:flex;flex-direction:column;gap:10px;max-width:760px;margin:0 auto}
+  .level{border:1px solid var(--line);border-radius:12px;padding:16px 20px;background:#fff;display:flex;align-items:center;gap:16px}
+  .level .badge{flex-shrink:0;width:34px;height:34px;border-radius:9px;background:var(--soft2);color:var(--primary);display:flex;align-items:center;justify-content:center;font-weight:700}
+  .level h4{font-size:16px;font-weight:600;color:var(--ink)}
+  .level p{font-size:14px;color:var(--muted)}
+  .level.a{border-left:4px solid var(--primary)}
+  .level.b{border-left:4px solid var(--secondary)}
+  .level.c{border-left:4px solid var(--accent)}
+  .arrow{text-align:center;color:var(--line);font-size:18px;line-height:1}
+
+  /* channels */
+  .chan{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}
+  .chan .ch{background:#fff;border:1px solid var(--line);border-radius:11px;padding:16px;text-align:center;font-weight:600;font-size:14.5px;color:var(--ink)}
+  .chan .ch small{display:block;font-weight:400;color:var(--muted);font-size:12.5px;margin-top:3px}
+
+  /* dev block */
+  .dev{display:grid;grid-template-columns:1.1fr 1fr;gap:32px;align-items:center}
+  .code{background:var(--dark);border-radius:14px;padding:22px;color:#cfe3f5;font-family:"SF Mono",Menlo,Consolas,monospace;font-size:13px;line-height:1.7;overflow:auto}
+  .code .k{color:#7fd1ff}.code .s{color:#9ae6b4}.code .c{color:#6b8299}
+  ul.checks{list-style:none;display:flex;flex-direction:column;gap:12px}
+  ul.checks li{display:flex;gap:10px;font-size:15.5px;color:var(--ink)}
+  ul.checks li b{color:var(--primary)}
+  ul.checks li::before{content:"→";color:var(--accent);font-weight:700}
+
+  /* CTA */
+  .cta{background:var(--dark);color:#fff;border-radius:20px;padding:54px 40px;text-align:center}
+  .cta h2{font-size:30px;font-weight:700}
+  .cta p{color:#a9c2d8;font-size:17px;margin:14px auto 26px;max-width:560px}
+  .cta-row{display:flex;gap:12px;justify-content:center;flex-wrap:wrap}
+
+  /* footer */
+  footer{border-top:1px solid var(--line);padding:48px 0 32px;background:var(--soft);font-size:14px;color:var(--muted)}
+  .fcols{display:grid;grid-template-columns:1.4fr 1fr 1fr 1fr;gap:24px;margin-bottom:28px}
+  footer h5{font-size:13px;font-weight:700;color:var(--ink);text-transform:uppercase;letter-spacing:.05em;margin-bottom:12px}
+  footer a{display:block;color:var(--muted);margin-bottom:7px}
+  footer a:hover{color:var(--primary)}
+  .fbottom{border-top:1px solid var(--line);padding-top:18px;display:flex;justify-content:space-between;flex-wrap:wrap;gap:10px;font-size:13px}
+  .note{font-size:12.5px;color:var(--muted);background:var(--soft2);border:1px solid var(--line);border-radius:8px;padding:10px 14px;margin-top:18px}
+
+  @media (max-width:860px){
+    .nav-links{display:none}.menu-btn{display:block}
+    .nav-links.open{display:flex;position:absolute;top:64px;left:0;right:0;background:#fff;flex-direction:column;align-items:flex-start;gap:14px;padding:20px 24px;border-bottom:1px solid var(--line)}
+    .hero h1{font-size:34px}.hero .sub{font-size:17px}
+    .g3,.g2,.dev{grid-template-columns:1fr}.chan{grid-template-columns:repeat(2,1fr)}
+    .sec-head h2{font-size:26px}
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="wrap nav">
+    <a href="#top" class="brand"><span class="dot"></span>PlugHub</a>
+    <nav class="nav-links" id="navlinks">
+      <a class="lnk" href="#como-funciona">Como funciona</a>
+      <a class="lnk" href="#canais">Canais</a>
+      <a class="lnk" href="#solucoes">Soluções</a>
+      <a class="lnk" href="desenvolvedores.html">Desenvolvedores</a>
+      <a class="lnk" href="qualidade.html">Qualidade</a>
+      <a class="lnk" href="compliance.html">Compliance</a>
+    </nav>
+    <div class="nav-cta">
+      <a class="lang" href="en/index.html" hreflang="en" aria-label="English version">EN</a>
+      <a class="btn btn-ghost" href="/docs">Documentação</a>
+      <a class="btn btn-primary" href="#testar">Começar a testar</a>
+    </div>
+    <button class="menu-btn" onclick="document.getElementById('navlinks').classList.toggle('open')" aria-label="Menu">≡</button>
+  </div>
+</header>
+
+<main id="top">
+
+  <!-- HERO -->
+  <section class="hero">
+    <div class="wrap">
+      <p class="eyebrow">Orquestração de agentes · humanos + IA</p>
+      <h1>Orquestre humanos e IA na mesma conversa.</h1>
+      <p class="sub">Plataforma de orquestração de agentes para atendimento e automação — com <strong>compliance e portabilidade by design</strong>. Sem handoff visível, sem lock-in, sem custo imprevisível.</p>
+      <div class="chips">
+        <span class="chip">MCP-first</span>
+        <span class="chip">BYO LLM</span>
+        <span class="chip">Humano + IA na mesma sessão</span>
+        <span class="chip">LGPD by design</span>
+        <span class="chip">Billing por capacidade</span>
+        <span class="chip">Voz &amp; WebRTC nativos</span>
+      </div>
+      <div class="hero-cta">
+        <a class="btn btn-primary" href="/docs">Ver documentação →</a>
+        <a class="btn btn-ghost" href="#como-funciona">Como funciona</a>
+      </div>
+    </div>
+  </section>
+
+  <!-- A VIRADA -->
+  <section class="sec">
+    <div class="wrap sec-head">
+      <p class="eyebrow">A virada de categoria</p>
+      <h2>Agente de IA não é um bot preso num silo.</h2>
+      <p>Nas soluções tradicionais, a IA atende num canto e o humano em outro — o handoff perde contexto e o cliente sente a troca. E você fica preso a um provedor de LLM e a um fornecedor. O PlugHub trata <strong>humano e IA como participantes iguais da mesma sessão</strong>, integra tudo por um protocolo único auditável, e te deixa trocar de LLM, de framework ou de nuvem quando quiser.</p>
+    </div>
+  </section>
+
+  <!-- DIFERENCIAIS -->
+  <section class="sec alt">
+    <div class="wrap">
+      <div class="sec-head">
+        <p class="eyebrow">Diferenciais</p>
+        <h2>Sete coisas que nenhum incumbente entrega junto.</h2>
+      </div>
+      <div class="grid g3">
+        <div class="card"><p class="num">01</p><h3>Sala de conferência unificada</h3><p>Humano e IA entram e saem da mesma sessão com papéis (primary, especialista, supervisor). Não há "transferência" — há participação. O cliente nunca percebe a troca.</p></div>
+        <div class="card"><p class="num">02</p><h3>MCP + interception guard</h3><p>MCP é o único protocolo de integração, e toda chamada a sistema de negócio passa por validação de permissão, guarda anti-injeção e auditoria. Compliance é primitiva, não plugin.</p></div>
+        <div class="card"><p class="num">03</p><h3>AI Gateway agnóstico</h3><p>Traga seu LLM. Multi-conta, fallback automático e rotação entre provedores — troca de modelo sem tocar o agente. Sem lock-in de IA.</p></div>
+        <div class="card"><p class="num">04</p><h3>Motor único de fluxo</h3><p>Um Skill Flow declarativo serve inbound, outbound e automação de processos — com discador interno. Um artefato, não três produtos.</p></div>
+        <div class="card"><p class="num">05</p><h3>Billing por capacidade</h3><p>Você paga pela capacidade configurada (instâncias simultâneas, humanas + IA), não por turno, ação ou token. Custo previsível do mês 1 ao mês 13.</p></div>
+        <div class="card"><p class="num">06</p><h3>Qualidade que evolui os agentes</h3><p>Avaliação não é só relatório: é um motor de <strong>melhoria contínua</strong> de agentes de IA e humanos. A Bancada compara por deploy e o avaliador de IA se calibra sozinho com o tempo. <a href="qualidade.html" style="color:var(--secondary)">Ver o módulo →</a></p></div>
+        <div class="card"><p class="num">07</p><h3>Atendimentos interligados por construção</h3><p>O processo do cliente é um fio só: contatos, canais e dias já nascem ligados pelo mesmo identificador e pelo trace de segmentos. <strong>Nunca mais caçar e correlacionar atendimentos</strong> — o histórico já vem montado.</p></div>
+        <div class="card" style="background:var(--soft2);border-color:var(--soft2)"><p class="num">+</p><h3>Omnichannel real</h3><p>Voz/PSTN e WebRTC nativos, WhatsApp, webchat, SMS, e-mail e webhook — o mesmo motor e os mesmos agentes em todos.</p></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- COMO FUNCIONA -->
+  <section class="sec" id="como-funciona">
+    <div class="wrap">
+      <div class="sec-head">
+        <p class="eyebrow">Como funciona</p>
+        <h2>Todo contato é uma sala de conferência — com um orquestrador no controle.</h2>
+        <p>Cada sessão tem um <strong>orquestrador (IA ou humano)</strong> conduzindo, e especialistas e supervisores entram e saem conforme a necessidade — todos como participantes iguais. O processo de negócio é channel-abstract; os canais entram por baixo. Um modelo em três níveis mantém a lógica independente de onde o cliente fala — começar num canal e continuar em outro, preservando o contexto.</p>
+      </div>
+      <div class="levels">
+        <div class="level a"><span class="badge">a</span><div><h4>Fluxo de negócio (channel-abstract)</h4><p>Orquestra agentes e sub-fluxos, persiste por suspend/resume. Nunca toca o canal.</p></div></div>
+        <div class="arrow">↕</div>
+        <div class="level b"><span class="badge">b</span><div><h4>Acesso aos canais</h4><p>Concilia a troca de canal e conduz cada episódio de interação.</p></div></div>
+        <div class="arrow">↕</div>
+        <div class="level c"><span class="badge">c</span><div><h4>Agente de I/O no canal</h4><p>Renderiza no formato nativo de cada canal (botões, voz/DTMF, cards). Humano ou IA.</p></div></div>
+      </div>
+      <p class="note">⚙️ Sob o capô: um interpretador de fluxo declarativo (Skill Flow) com 13+ tipos de passo, estado persistido a cada transição, e o Routing Engine como árbitro único de alocação (SLA, skill, disponibilidade e performance).</p>
+      <div class="card" style="margin-top:20px;background:var(--soft2);border-color:var(--soft2)">
+        <h3>O fio nunca se perde — atendimentos interligados por construção</h3>
+        <p>O processo do cliente é o mesmo do começo ao fim — através de quedas, esperas e troca de canal. Os atendimentos nascem ligados pelo <strong>mesmo identificador de processo</strong> e pelo trace de segmentos, então você <strong>nunca mais precisa caçar e correlacionar contatos</strong>: o histórico do processo já vem montado, do primeiro toque ao desfecho. É o que a antiga "Journey" prometia — agora é por construção, não um módulo à parte.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ROTEAMENTO -->
+  <section class="sec alt" id="roteamento">
+    <div class="wrap">
+      <div class="sec-head">
+        <p class="eyebrow">Roteamento inteligente</p>
+        <h2>O orquestrador decide quem atende o quê — por perfil e por SLA.</h2>
+        <p>O Routing Engine é o árbitro único de alocação. Cada contato vai ao recurso certo combinando vários critérios — e a fila é avaliada pelo <strong>tempo de espera contra o SLA</strong>, não por ordem cega de chegada.</p>
+      </div>
+      <div class="grid g3">
+        <div class="card"><h3>Por perfil — do agente <em>e</em> do cliente</h3><p>Competência do agente para a skill <strong>e</strong> o perfil do cliente (prioritário, gold, VIP) entram no peso da fila. O canal é filtro rígido; a mídia (voz/vídeo/texto) afina o score.</p></div>
+        <div class="card"><h3>Por SLA (tempo de espera)</h3><p>A urgência cresce conforme a espera se aproxima do alvo de SLA — o contato sobe na fila antes de estourar.</p></div>
+        <div class="card"><h3>Por disponibilidade e performance</h3><p>Carga e disponibilidade entram no score; opcionalmente, a performance histórica (mais resolução, menos escalação) pondera a escolha.</p></div>
+      </div>
+      <p class="note">⚙️ Pausa do agente e queda de gateway são filtros rígidos; desempate por menor fila. E a fila pode ser <strong>atendida</strong> — um agente de IA acompanha a espera, informa posição e tempo, e oferece outro canal — não apenas uma sala de espera muda.</p>
+    </div>
+  </section>
+
+  <!-- CANAIS -->
+  <section class="sec alt" id="canais">
+    <div class="wrap">
+      <div class="sec-head">
+        <p class="eyebrow">Canais</p>
+        <h2>Omnichannel de verdade — inclusive voz.</h2>
+        <p>O modelo de conferência se aplica sem mudança a todos os canais. Agentes de IA operam sempre em texto; em voz, STT/TTS fazem a ponte. Voz e WebRTC são nativos (não terceirizados).</p>
+      </div>
+      <div class="chan">
+        <div class="ch">WhatsApp<small>botões, listas, mídia</small></div>
+        <div class="ch">Webchat<small>WS, upload, masked input</small></div>
+        <div class="ch">Voz / PSTN<small>STT/TTS, DTMF</small></div>
+        <div class="ch">WebRTC<small>vídeo → voz → texto</small></div>
+        <div class="ch">SMS<small>coleta sequencial</small></div>
+        <div class="ch">E-mail<small>thread estruturado</small></div>
+        <div class="ch">Webhook<small>workflows como canal</small></div>
+        <div class="ch">+ extensível<small>via adapters</small></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- LADO DO CLIENTE -->
+  <section class="sec" id="cliente">
+    <div class="wrap">
+      <div class="sec-head">
+        <p class="eyebrow">Do lado do cliente · Business in Any Media</p>
+        <h2>Comece num canal. Continue em outro. Acompanhe em qualquer um.</h2>
+        <p>Para o seu cliente não existem "canais separados" — existe um processo só. Ele inicia no WhatsApp, recebe a atualização por e-mail, conclui pela voz — sem repetir o contexto e retomando de onde parou. E pode <strong>acompanhar o andamento</strong> do processo quando quiser, pelo canal que já usa.</p>
+      </div>
+      <div class="grid g3">
+        <div class="card"><h3>Troca de canal sem recomeçar</h3><p>O processo é channel-abstract e persiste (suspend/resume): mudar de canal não zera contexto nem histórico.</p></div>
+        <div class="card"><h3>Retoma de onde parou</h3><p>Caiu a conexão, ficou pendente uma resposta, voltou dias depois? O processo continua no ponto exato — nada se perde.</p></div>
+        <div class="card"><h3>Acompanhar em qualquer canal</h3><p>"Cadê meu pedido/processo?" tem resposta no canal que o cliente prefere — sem app novo, sem protocolo decorado.</p></div>
+      </div>
+      <p class="note">🧭 <strong>Business in Any Media — nunca perca um negócio por causa de canal.</strong> A continuidade do processo já é por construção (modelo channel-abstract + suspend/resume). O reconhecimento automático do cliente em qualquer canal, sem ele se identificar de novo, está em evolução no roadmap.</p>
+    </div>
+  </section>
+
+  <!-- SOLUÇÕES -->
+  <section class="sec" id="solucoes">
+    <div class="wrap">
+      <div class="sec-head">
+        <p class="eyebrow">Soluções</p>
+        <h2>Um motor, vários processos de negócio.</h2>
+      </div>
+      <div class="grid g3">
+        <div class="card"><h3>Atendimento (CX)</h3><p>Humano + IA na mesma sessão, omnichannel, roteamento multicritério, sentimento em tempo real e qualidade mensurável. A IA assume o repetitivo e aprende com o humano nas exceções.</p></div>
+        <div class="card"><h3>Automação de processos</h3><p>Workflows com aprovação humana, coleta assíncrona e esperas longas (suspend/resume). Aprovação, onboarding, cobrança, pós-venda — com sistemas legados via MCP.</p></div>
+        <div class="card"><h3>Comércio conversacional <span class="tag">visão</span></h3><p>A loja que mora na conversa: descoberta a pós-venda, em qualquer canal, com humano só na exceção. Em evolução no roadmap do produto.</p></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- DEVS -->
+  <section class="sec alt" id="devs">
+    <div class="wrap">
+      <div class="sec-head">
+        <p class="eyebrow">Para desenvolvedores</p>
+        <h2>Construa uma vez. Sem ficar preso.</h2>
+      </div>
+      <div class="dev">
+        <div class="code"><span class="c"># fluxo declarativo (Skill Flow, YAML)</span><br>
+<span class="k">id</span>: skill_atendimento_v1<br>
+<span class="k">entry</span>: triagem<br>
+<span class="k">steps</span>:<br>
+&nbsp;&nbsp;- <span class="k">id</span>: triagem<br>
+&nbsp;&nbsp;&nbsp;&nbsp;<span class="k">type</span>: <span class="s">reason</span>      <span class="c"># chama o LLM (BYO)</span><br>
+&nbsp;&nbsp;&nbsp;&nbsp;<span class="k">on_success</span>: rotear<br>
+&nbsp;&nbsp;- <span class="k">id</span>: rotear<br>
+&nbsp;&nbsp;&nbsp;&nbsp;<span class="k">type</span>: <span class="s">task</span>        <span class="c"># delega a um pool (humano ou IA)</span><br>
+&nbsp;&nbsp;&nbsp;&nbsp;<span class="k">pool</span>: suporte_n2<br>
+<br>
+<span class="c"># integração só por MCP, com guarda + auditoria</span><br>
+<span class="c"># troca de LLM sem mudar o agente</span><br>
+$ plughub-sdk <span class="s">verify-portability</span>  ✓</div>
+        <div>
+          <ul class="checks">
+            <li><b>SDK</b> em TypeScript e Python, contrato de execução estável.</li>
+            <li><b>MCP como única integração</b> — sem conectores proprietários; tudo auditado.</li>
+            <li><b>BYO LLM</b> — Anthropic, OpenAI, Google ou o seu; fallback e rotação.</li>
+            <li><b>Skill Flow em YAML</b> versionável — sua lógica é artefato portável, não código preso.</li>
+            <li><b>Traga seu agente</b> (LangGraph, CrewAI, Python) como participante — e migre para nativo quando quiser.</li>
+            <li><b><code>verify-portability</code></b> e <code>certify</code> atestam que você não está aprisionado.</li>
+          </ul>
+          <div style="margin-top:22px;display:flex;gap:10px;flex-wrap:wrap">
+            <a class="btn btn-primary" href="desenvolvedores.html">Para desenvolvedores →</a>
+            <a class="btn btn-ghost" href="/docs">Documentação</a>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- COMPLIANCE -->
+  <section class="sec" id="compliance">
+    <div class="wrap">
+      <div class="sec-head">
+        <p class="eyebrow">Compliance &amp; segurança</p>
+        <h2>Feito para dados sensíveis e setores regulados.</h2>
+        <p>Mascaramento, auditoria e supervisão humana são parte da arquitetura — não um módulo opcional. Aderente a LGPD, e desenhado para os requisitos de auditoria de bancos (BACEN) e do mercado europeu (EU AI Act / DORA).</p>
+      </div>
+      <div class="grid g2">
+        <div class="card"><h3>Mascaramento por papel</h3><p>PII tokenizada no fluxo; o dado original só é visível a papéis autorizados, e o cliente recebe apenas o parcial. Captura de PIN/senha em bloco atômico, nunca persistido.</p></div>
+        <div class="card"><h3>Auditoria em toda chamada</h3><p>Cada chamada a sistema de negócio gera registro imutável (quem, o quê, quando, permitido). Trilha de auditoria nativa — o chamador não pode desligar.</p></div>
+        <div class="card"><h3>Supervisão humana nativa</h3><p>Supervisores e revisores são participantes da sessão, com autoridade para intervir — exatamente o "human oversight" que a regulação de IA exige em alto risco.</p></div>
+        <div class="card"><h3>Sem lock-in / soberania</h3><p>BYO LLM + integração por MCP + lógica em YAML = portabilidade real. Atende ao requisito de substituição de fornecedor e residência de dados.</p></div>
+      </div>
+      <div style="margin-top:26px">
+        <a class="btn btn-primary" href="compliance.html">Conheça compliance &amp; segurança →</a>
+      </div>
+    </div>
+  </section>
+
+  <!-- QUALIDADE -->
+  <section class="sec alt" id="qualidade">
+    <div class="wrap">
+      <div class="sec-head">
+        <p class="eyebrow">Qualidade &amp; avaliação</p>
+        <h2>Deixe a sua IA aprender e evoluir com o humano.</h2>
+        <p>IA boa não nasce pronta — ela <strong>aprende com o time humano</strong> e melhora a cada ciclo. O PlugHub avalia cada atendimento, compara versões de agentes (e humanos) e amarra a qualidade a cada deploy, num <strong>loop de melhoria contínua</strong> — sobre os dados que a própria operação produz, com Console de orquestração e sentimento em tempo real.</p>
+      </div>
+      <div class="grid g2">
+        <div class="card"><h3>Avaliação contínua por campanhas</h3><p>Formulários com critérios objetivos e subjetivos; o avaliador de IA pontua com evidência (RAG) e o time humano revisa — na mesma base.</p></div>
+        <div class="card"><h3>Contestação &amp; revisão</h3><p>Gate de IA pré-publicação → contestação por dimensão → decisão final sempre humana. Trilha append-only para auditoria.</p></div>
+        <div class="card"><h3>Bancada de comparação 360°</h3><p>Humano × IA e versão × versão, com deploy epochs e cross-cut (resolução × qualidade × NPS). Acha quem "marca resolvido" mas tem nota baixa.</p></div>
+        <div class="card"><h3>Session replay + diff</h3><p>Reveja qualquer sessão e compare versões antes de promover — base para regressão e calibração contínua.</p></div>
+      </div>
+      <div style="margin-top:26px">
+        <a class="btn btn-primary" href="qualidade.html">Conheça o módulo de Qualidade →</a>
+      </div>
+    </div>
+  </section>
+
+  <!-- CTA -->
+  <section class="sec" id="testar">
+    <div class="wrap">
+      <div class="cta">
+        <h2>Comece pela documentação.</h2>
+        <p>Explore a arquitetura, o SDK e os tipos de passo do Skill Flow — e solicite um ambiente de teste para colocar a mão na massa.</p>
+        <div class="cta-row">
+          <a class="btn btn-light" href="/docs">Ver documentação →</a>
+          <a class="btn btn-outline-light" href="mailto:contato@opuscom.com.br?subject=PlugHub%20-%20acesso%20de%20teste">Solicitar acesso de teste</a>
+        </div>
+      </div>
+    </div>
+  </section>
+
+</main>
+
+<footer>
+  <div class="wrap">
+    <div class="fcols">
+      <div>
+        <div class="brand" style="margin-bottom:10px"><span class="dot"></span>PlugHub</div>
+        <p style="max-width:260px">Orquestração de agentes humanos e IA para atendimento e automação. Compliance e portabilidade by design.</p>
+      </div>
+      <div>
+        <h5>Produto</h5>
+        <a href="#como-funciona">Como funciona</a>
+        <a href="#roteamento">Roteamento</a>
+        <a href="#canais">Canais</a>
+        <a href="#cliente">Experiência do cliente</a>
+        <a href="#solucoes">Soluções</a>
+        <a href="qualidade.html">Qualidade &amp; avaliação</a>
+        <a href="compliance.html">Compliance</a>
+      </div>
+      <div>
+        <h5>Desenvolvedores</h5>
+        <a href="desenvolvedores.html">Visão geral</a>
+        <a href="/docs">Documentação</a>
+        <a href="desenvolvedores.html">SDK &amp; MCP</a>
+        <a href="desenvolvedores.html">BYO LLM</a>
+        <a href="desenvolvedores.html">Portabilidade</a>
+      </div>
+      <div>
+        <h5>Empresa</h5>
+        <a href="mailto:contato@opuscom.com.br">Contato</a>
+        <a href="#testar">Acesso de teste</a>
+        <a href="/privacidade">Privacidade / LGPD</a>
+      </div>
+    </div>
+    <div class="fbottom">
+      <span>© 2026 PlugHub. Todos os direitos reservados.</span>
+      <span>MCP-first · BYO LLM · LGPD by design</span>
+    </div>
+  </div>
+</footer>
+
+<script>
+  document.querySelectorAll('#navlinks a').forEach(function(a){
+    a.addEventListener('click',function(){document.getElementById('navlinks').classList.remove('open')});
+  });
+</script>
+</body>
+</html>

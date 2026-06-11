@@ -1,0 +1,435 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PlugHub — Orchestrate human and AI agents for support and automation</title>
+<meta name="description" content="Agent orchestration platform (human + AI) with compliance and portability by design. MCP-first, BYO LLM, capacity-based billing, omnichannel with native voice and WebRTC.">
+<meta property="og:title" content="PlugHub — Orchestrate humans and AI in the same conversation">
+<meta property="og:description" content="Agent orchestration platform for support and automation. Compliance and portability by design.">
+<meta property="og:type" content="website">
+<link rel="alternate" hreflang="pt-BR" href="../index.html">
+<link rel="alternate" hreflang="en" href="index.html">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --primary:#1B4F8A; --primary-d:#15406e; --secondary:#2D9CDB; --accent:#00B4D8;
+    --green:#059669; --warning:#D97706; --ink:#16242f; --muted:#56697a;
+    --line:#e3e8ee; --bg:#ffffff; --soft:#f5f8fb; --soft2:#eef4fa; --dark:#0f2336;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html{scroll-behavior:smooth}
+  body{font-family:Inter,system-ui,sans-serif;color:var(--ink);background:var(--bg);line-height:1.6;-webkit-font-smoothing:antialiased}
+  a{color:inherit;text-decoration:none}
+  .wrap{max-width:1080px;margin:0 auto;padding:0 24px}
+  section{scroll-margin-top:72px}
+  h1,h2,h3{line-height:1.2;letter-spacing:-.01em}
+  .eyebrow{font-size:13px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:var(--secondary)}
+  .btn{display:inline-flex;align-items:center;gap:8px;font-weight:600;font-size:15px;padding:12px 22px;border-radius:9px;border:1.5px solid transparent;cursor:pointer;transition:.15s}
+  .btn-primary{background:var(--primary);color:#fff}
+  .btn-primary:hover{background:var(--primary-d)}
+  .btn-ghost{background:transparent;color:var(--primary);border-color:var(--line)}
+  .btn-ghost:hover{border-color:var(--secondary);background:var(--soft)}
+  .btn-light{background:#fff;color:var(--primary)}
+  .btn-outline-light{background:transparent;color:#fff;border-color:rgba(255,255,255,.4)}
+  .btn-outline-light:hover{border-color:#fff;background:rgba(255,255,255,.1)}
+
+  /* Header */
+  header{position:sticky;top:0;z-index:50;background:rgba(255,255,255,.92);backdrop-filter:blur(8px);border-bottom:1px solid var(--line)}
+  .nav{display:flex;align-items:center;justify-content:space-between;height:64px}
+  .brand{display:flex;align-items:center;gap:10px;font-weight:700;font-size:19px;color:var(--primary)}
+  .brand .dot{width:22px;height:22px;border-radius:6px;background:var(--primary);position:relative}
+  .brand .dot::after{content:"";position:absolute;inset:6px;border-radius:3px;background:var(--accent)}
+  .nav-links{display:flex;align-items:center;gap:26px}
+  .nav-links a.lnk{font-size:14.5px;font-weight:500;color:var(--muted)}
+  .nav-links a.lnk:hover{color:var(--primary)}
+  .nav-cta{display:flex;align-items:center;gap:10px}
+  .nav-cta .btn{padding:9px 16px;font-size:14px}
+  .menu-btn{display:none;background:none;border:0;font-size:24px;color:var(--primary);cursor:pointer}
+  .lang{font-size:12.5px;font-weight:700;color:var(--muted);border:1px solid var(--line);border-radius:7px;padding:7px 10px;letter-spacing:.02em}
+  .lang:hover{color:var(--primary);border-color:var(--secondary)}
+
+  /* Hero */
+  .hero{background:linear-gradient(180deg,var(--soft2),#fff);padding:84px 0 64px;border-bottom:1px solid var(--line)}
+  .hero h1{font-size:46px;font-weight:700;max-width:780px}
+  .hero .sub{font-size:19px;color:var(--muted);max-width:680px;margin-top:18px}
+  .chips{display:flex;flex-wrap:wrap;gap:9px;margin-top:26px}
+  .chip{font-size:13px;font-weight:600;color:var(--primary);background:#fff;border:1px solid var(--line);border-radius:999px;padding:6px 13px}
+  .hero-cta{display:flex;flex-wrap:wrap;gap:12px;margin-top:32px}
+
+  /* Sections */
+  .sec{padding:72px 0}
+  .sec.alt{background:var(--soft)}
+  .sec-head{max-width:720px;margin-bottom:40px}
+  .sec-head h2{font-size:32px;font-weight:700;margin-top:8px}
+  .sec-head p{color:var(--muted);font-size:17px;margin-top:12px}
+
+  .grid{display:grid;gap:18px}
+  .g3{grid-template-columns:repeat(3,1fr)}
+  .g2{grid-template-columns:repeat(2,1fr)}
+  .card{background:#fff;border:1px solid var(--line);border-radius:14px;padding:24px}
+  .card h3{font-size:18px;font-weight:600;color:var(--primary);margin-bottom:8px}
+  .card p{color:var(--muted);font-size:15px}
+  .card .num{font-size:13px;font-weight:700;color:var(--accent);letter-spacing:.05em}
+  .tag{display:inline-block;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--warning);background:#fdf3e3;border-radius:6px;padding:2px 8px;margin-left:8px}
+
+  /* 3-level diagram */
+  .levels{display:flex;flex-direction:column;gap:10px;max-width:760px;margin:0 auto}
+  .level{border:1px solid var(--line);border-radius:12px;padding:16px 20px;background:#fff;display:flex;align-items:center;gap:16px}
+  .level .badge{flex-shrink:0;width:34px;height:34px;border-radius:9px;background:var(--soft2);color:var(--primary);display:flex;align-items:center;justify-content:center;font-weight:700}
+  .level h4{font-size:16px;font-weight:600;color:var(--ink)}
+  .level p{font-size:14px;color:var(--muted)}
+  .level.a{border-left:4px solid var(--primary)}
+  .level.b{border-left:4px solid var(--secondary)}
+  .level.c{border-left:4px solid var(--accent)}
+  .arrow{text-align:center;color:var(--line);font-size:18px;line-height:1}
+
+  /* channels */
+  .chan{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}
+  .chan .ch{background:#fff;border:1px solid var(--line);border-radius:11px;padding:16px;text-align:center;font-weight:600;font-size:14.5px;color:var(--ink)}
+  .chan .ch small{display:block;font-weight:400;color:var(--muted);font-size:12.5px;margin-top:3px}
+
+  /* dev block */
+  .dev{display:grid;grid-template-columns:1.1fr 1fr;gap:32px;align-items:center}
+  .code{background:var(--dark);border-radius:14px;padding:22px;color:#cfe3f5;font-family:"SF Mono",Menlo,Consolas,monospace;font-size:13px;line-height:1.7;overflow:auto}
+  .code .k{color:#7fd1ff}.code .s{color:#9ae6b4}.code .c{color:#6b8299}
+  ul.checks{list-style:none;display:flex;flex-direction:column;gap:12px}
+  ul.checks li{display:flex;gap:10px;font-size:15.5px;color:var(--ink)}
+  ul.checks li b{color:var(--primary)}
+  ul.checks li::before{content:"→";color:var(--accent);font-weight:700}
+
+  /* CTA */
+  .cta{background:var(--dark);color:#fff;border-radius:20px;padding:54px 40px;text-align:center}
+  .cta h2{font-size:30px;font-weight:700}
+  .cta p{color:#a9c2d8;font-size:17px;margin:14px auto 26px;max-width:560px}
+  .cta-row{display:flex;gap:12px;justify-content:center;flex-wrap:wrap}
+
+  /* footer */
+  footer{border-top:1px solid var(--line);padding:48px 0 32px;background:var(--soft);font-size:14px;color:var(--muted)}
+  .fcols{display:grid;grid-template-columns:1.4fr 1fr 1fr 1fr;gap:24px;margin-bottom:28px}
+  footer h5{font-size:13px;font-weight:700;color:var(--ink);text-transform:uppercase;letter-spacing:.05em;margin-bottom:12px}
+  footer a{display:block;color:var(--muted);margin-bottom:7px}
+  footer a:hover{color:var(--primary)}
+  .fbottom{border-top:1px solid var(--line);padding-top:18px;display:flex;justify-content:space-between;flex-wrap:wrap;gap:10px;font-size:13px}
+  .note{font-size:12.5px;color:var(--muted);background:var(--soft2);border:1px solid var(--line);border-radius:8px;padding:10px 14px;margin-top:18px}
+
+  @media (max-width:860px){
+    .nav-links{display:none}.menu-btn{display:block}
+    .nav-links.open{display:flex;position:absolute;top:64px;left:0;right:0;background:#fff;flex-direction:column;align-items:flex-start;gap:14px;padding:20px 24px;border-bottom:1px solid var(--line)}
+    .hero h1{font-size:34px}.hero .sub{font-size:17px}
+    .g3,.g2,.dev{grid-template-columns:1fr}.chan{grid-template-columns:repeat(2,1fr)}
+    .sec-head h2{font-size:26px}
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="wrap nav">
+    <a href="#top" class="brand"><span class="dot"></span>PlugHub</a>
+    <nav class="nav-links" id="navlinks">
+      <a class="lnk" href="#how-it-works">How it works</a>
+      <a class="lnk" href="#channels">Channels</a>
+      <a class="lnk" href="#solutions">Solutions</a>
+      <a class="lnk" href="developers.html">Developers</a>
+      <a class="lnk" href="quality.html">Quality</a>
+      <a class="lnk" href="compliance.html">Compliance</a>
+    </nav>
+    <div class="nav-cta">
+      <a class="lang" href="../index.html" hreflang="pt-BR" aria-label="Versão em português">PT</a>
+      <a class="btn btn-ghost" href="/docs">Documentation</a>
+      <a class="btn btn-primary" href="#try">Start testing</a>
+    </div>
+    <button class="menu-btn" onclick="document.getElementById('navlinks').classList.toggle('open')" aria-label="Menu">≡</button>
+  </div>
+</header>
+
+<main id="top">
+
+  <!-- HERO -->
+  <section class="hero">
+    <div class="wrap">
+      <p class="eyebrow">Agent orchestration · humans + AI</p>
+      <h1>Orchestrate humans and AI in the same conversation.</h1>
+      <p class="sub">An agent orchestration platform for support and automation — with <strong>compliance and portability by design</strong>. No visible handoff, no lock-in, no unpredictable cost.</p>
+      <div class="chips">
+        <span class="chip">MCP-first</span>
+        <span class="chip">BYO LLM</span>
+        <span class="chip">Human + AI in one session</span>
+        <span class="chip">Privacy by design</span>
+        <span class="chip">Capacity-based billing</span>
+        <span class="chip">Native voice &amp; WebRTC</span>
+      </div>
+      <div class="hero-cta">
+        <a class="btn btn-primary" href="/docs">See documentation →</a>
+        <a class="btn btn-ghost" href="#how-it-works">How it works</a>
+      </div>
+    </div>
+  </section>
+
+  <!-- THE SHIFT -->
+  <section class="sec">
+    <div class="wrap sec-head">
+      <p class="eyebrow">A category shift</p>
+      <h2>An AI agent isn't a bot trapped in a silo.</h2>
+      <p>In traditional solutions, AI works in one corner and humans in another — the handoff loses context and the customer feels the switch. And you're locked to one LLM provider and one vendor. PlugHub treats <strong>humans and AI as equal participants in the same session</strong>, integrates everything through a single auditable protocol, and lets you swap LLM, framework or cloud whenever you want.</p>
+    </div>
+  </section>
+
+  <!-- DIFFERENTIATORS -->
+  <section class="sec alt">
+    <div class="wrap">
+      <div class="sec-head">
+        <p class="eyebrow">Differentiators</p>
+        <h2>Seven things no incumbent delivers together.</h2>
+      </div>
+      <div class="grid g3">
+        <div class="card"><p class="num">01</p><h3>Unified conference room</h3><p>Humans and AI join and leave the same session with roles (primary, specialist, supervisor). There's no "transfer" — there's participation. The customer never feels the switch.</p></div>
+        <div class="card"><p class="num">02</p><h3>MCP + interception guard</h3><p>MCP is the only integration protocol, and every call to a business system passes permission validation, an injection guard and an audit record. Compliance is a primitive, not a plugin.</p></div>
+        <div class="card"><p class="num">03</p><h3>LLM-agnostic AI Gateway</h3><p>Bring your own LLM. Multi-account, automatic fallback and cross-provider rotation — swap models without touching the agent. No AI lock-in.</p></div>
+        <div class="card"><p class="num">04</p><h3>One flow engine</h3><p>A single declarative Skill Flow serves inbound, outbound and process automation — with an internal dialer. One artifact, not three products.</p></div>
+        <div class="card"><p class="num">05</p><h3>Capacity-based billing</h3><p>You pay for configured capacity (concurrent instances, human + AI), not per shift, action or token. Predictable cost from month 1 to month 13.</p></div>
+        <div class="card"><p class="num">06</p><h3>Quality that evolves your agents</h3><p>Evaluation isn't just a report: it's a <strong>continuous-improvement engine</strong> for AI and human agents. The Workbench compares by deploy and the AI evaluator calibrates itself over time. <a href="quality.html" style="color:var(--secondary)">See the module →</a></p></div>
+        <div class="card"><p class="num">07</p><h3>Interactions linked by construction</h3><p>The customer's process is a single thread: contacts, channels and days are born linked by the same identifier and the segment trace. <strong>Never hunt for and correlate interactions again</strong> — the history comes pre-assembled.</p></div>
+        <div class="card" style="background:var(--soft2);border-color:var(--soft2)"><p class="num">+</p><h3>Real omnichannel</h3><p>Native voice/PSTN and WebRTC, WhatsApp, webchat, SMS, email and webhook — the same engine and the same agents across all of them.</p></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- HOW IT WORKS -->
+  <section class="sec" id="how-it-works">
+    <div class="wrap">
+      <div class="sec-head">
+        <p class="eyebrow">How it works</p>
+        <h2>Every contact is a conference room — with an orchestrator in control.</h2>
+        <p>Each session has an <strong>orchestrator (AI or human)</strong> leading it, and specialists and supervisors join and leave as needed — all as equal participants. The business process is channel-abstract; channels plug in underneath. A three-level model keeps the logic independent of where the customer talks — start on one channel and continue on another, preserving context.</p>
+      </div>
+      <div class="levels">
+        <div class="level a"><span class="badge">a</span><div><h4>Business flow (channel-abstract)</h4><p>Orchestrates agents and sub-flows, persists via suspend/resume. Never touches the channel.</p></div></div>
+        <div class="arrow">↕</div>
+        <div class="level b"><span class="badge">b</span><div><h4>Channel access</h4><p>Reconciles channel switching and runs each interaction episode.</p></div></div>
+        <div class="arrow">↕</div>
+        <div class="level c"><span class="badge">c</span><div><h4>I/O agent on the channel</h4><p>Renders in each channel's native format (buttons, voice/DTMF, cards). Human or AI.</p></div></div>
+      </div>
+      <p class="note">⚙️ Under the hood: a declarative flow interpreter (Skill Flow) with 13+ step types, state persisted on every transition, and the Routing Engine as the sole arbiter of allocation (SLA, skill, availability and performance).</p>
+      <div class="card" style="margin-top:20px;background:var(--soft2);border-color:var(--soft2)">
+        <h3>The thread is never lost — interactions linked by construction</h3>
+        <p>The customer's process is the same from start to finish — through drops, waits and channel switches. Interactions are born linked by the <strong>same process identifier</strong> and the segment trace, so you <strong>never have to hunt for and correlate contacts again</strong>: the process history comes pre-assembled, from first touch to outcome. It's what the old "Journey" promised — now by construction, not a separate module.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ROUTING -->
+  <section class="sec alt" id="routing">
+    <div class="wrap">
+      <div class="sec-head">
+        <p class="eyebrow">Smart routing</p>
+        <h2>The orchestrator decides who handles what — by profile and by SLA.</h2>
+        <p>The Routing Engine is the sole arbiter of allocation. Each contact goes to the right resource by combining several criteria — and the queue is evaluated by <strong>wait time against the SLA</strong>, not by blind arrival order.</p>
+      </div>
+      <div class="grid g3">
+        <div class="card"><h3>By profile — of the agent <em>and</em> the customer</h3><p>The agent's competency for the skill <strong>and</strong> the customer's profile (priority, gold, VIP) feed the queue weight. Channel is a hard filter; medium (voice/video/text) fine-tunes the score.</p></div>
+        <div class="card"><h3>By SLA (wait time)</h3><p>Urgency grows as the wait approaches the SLA target — the contact rises in the queue before it breaches.</p></div>
+        <div class="card"><h3>By availability and performance</h3><p>Load and availability feed the score; optionally, historical performance (more resolution, less escalation) weights the choice.</p></div>
+      </div>
+      <p class="note">⚙️ Agent pause and gateway outage are hard filters; ties broken by shortest queue. And the queue can be <strong>attended</strong> — an AI agent tracks the wait, reports position and time, and offers another channel — not just a silent waiting room.</p>
+    </div>
+  </section>
+
+  <!-- CHANNELS -->
+  <section class="sec alt" id="channels">
+    <div class="wrap">
+      <div class="sec-head">
+        <p class="eyebrow">Channels</p>
+        <h2>True omnichannel — voice included.</h2>
+        <p>The conference model applies unchanged to every channel. AI agents always operate in text; on voice, STT/TTS bridge the gap. Voice and WebRTC are native (not outsourced).</p>
+      </div>
+      <div class="chan">
+        <div class="ch">WhatsApp<small>buttons, lists, media</small></div>
+        <div class="ch">Webchat<small>WS, upload, masked input</small></div>
+        <div class="ch">Voice / PSTN<small>STT/TTS, DTMF</small></div>
+        <div class="ch">WebRTC<small>video → voice → text</small></div>
+        <div class="ch">SMS<small>sequential collection</small></div>
+        <div class="ch">Email<small>structured thread</small></div>
+        <div class="ch">Webhook<small>workflows as a channel</small></div>
+        <div class="ch">+ extensible<small>via adapters</small></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- CUSTOMER SIDE -->
+  <section class="sec" id="customer">
+    <div class="wrap">
+      <div class="sec-head">
+        <p class="eyebrow">On the customer's side · Business in Any Media</p>
+        <h2>Start on one channel. Continue on another. Track from any.</h2>
+        <p>For your customer there are no "separate channels" — there's a single process. They start on WhatsApp, get the update by email, finish by voice — without repeating context and picking up where they left off. And they can <strong>track progress</strong> whenever they want, on the channel they already use.</p>
+      </div>
+      <div class="grid g3">
+        <div class="card"><h3>Switch channels without restarting</h3><p>The process is channel-abstract and persists (suspend/resume): changing channel doesn't reset context or history.</p></div>
+        <div class="card"><h3>Resume where it stopped</h3><p>Connection dropped, a reply pending, came back days later? The process continues at the exact point — nothing is lost.</p></div>
+        <div class="card"><h3>Track on any channel</h3><p>"Where's my order/process?" has an answer on the channel the customer prefers — no new app, no memorized ticket number.</p></div>
+      </div>
+      <p class="note">🧭 <strong>Business in Any Media — never lose a deal because of a channel.</strong> Process continuity is already by construction (channel-abstract model + suspend/resume). Automatic recognition of the customer on any channel, without re-identifying, is evolving on the roadmap.</p>
+    </div>
+  </section>
+
+  <!-- SOLUTIONS -->
+  <section class="sec" id="solutions">
+    <div class="wrap">
+      <div class="sec-head">
+        <p class="eyebrow">Solutions</p>
+        <h2>One engine, many business processes.</h2>
+      </div>
+      <div class="grid g3">
+        <div class="card"><h3>Customer experience (CX)</h3><p>Human + AI in the same session, omnichannel, multi-criteria routing, real-time sentiment and measurable quality. AI takes the repetitive work and learns from humans on the exceptions.</p></div>
+        <div class="card"><h3>Process automation</h3><p>Workflows with human approval, asynchronous collection and long waits (suspend/resume). Approval, onboarding, billing, after-sales — with legacy systems via MCP.</p></div>
+        <div class="card"><h3>Conversational commerce <span class="tag">vision</span></h3><p>The store that lives in the conversation: from discovery to after-sales, on any channel, with a human only on the exception. Evolving on the product roadmap.</p></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- DEVS -->
+  <section class="sec alt" id="devs">
+    <div class="wrap">
+      <div class="sec-head">
+        <p class="eyebrow">For developers</p>
+        <h2>Build once. Without getting locked in.</h2>
+      </div>
+      <div class="dev">
+        <div class="code"><span class="c"># declarative flow (Skill Flow, YAML)</span><br>
+<span class="k">id</span>: skill_support_v1<br>
+<span class="k">entry</span>: triage<br>
+<span class="k">steps</span>:<br>
+&nbsp;&nbsp;- <span class="k">id</span>: triage<br>
+&nbsp;&nbsp;&nbsp;&nbsp;<span class="k">type</span>: <span class="s">reason</span>      <span class="c"># calls the LLM (BYO)</span><br>
+&nbsp;&nbsp;&nbsp;&nbsp;<span class="k">on_success</span>: route<br>
+&nbsp;&nbsp;- <span class="k">id</span>: route<br>
+&nbsp;&nbsp;&nbsp;&nbsp;<span class="k">type</span>: <span class="s">task</span>        <span class="c"># delegates to a pool (human or AI)</span><br>
+&nbsp;&nbsp;&nbsp;&nbsp;<span class="k">pool</span>: support_l2<br>
+<br>
+<span class="c"># integration only via MCP, with guard + audit</span><br>
+<span class="c"># swap LLM without changing the agent</span><br>
+$ plughub-sdk <span class="s">verify-portability</span>  ✓</div>
+        <div>
+          <ul class="checks">
+            <li><b>SDK</b> in TypeScript and Python, stable execution contract.</li>
+            <li><b>MCP as the only integration</b> — no proprietary connectors; everything audited.</li>
+            <li><b>BYO LLM</b> — Anthropic, OpenAI, Google or your own; fallback and rotation.</li>
+            <li><b>Skill Flow in YAML</b>, versionable — your logic is a portable artifact, not trapped code.</li>
+            <li><b>Bring your own agent</b> (LangGraph, CrewAI, Python) as a participant — and migrate to native whenever you want.</li>
+            <li><b><code>verify-portability</code></b> and <code>certify</code> prove you're not locked in.</li>
+          </ul>
+          <div style="margin-top:22px;display:flex;gap:10px;flex-wrap:wrap">
+            <a class="btn btn-primary" href="developers.html">For developers →</a>
+            <a class="btn btn-ghost" href="/docs">Documentation</a>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- COMPLIANCE -->
+  <section class="sec" id="compliance">
+    <div class="wrap">
+      <div class="sec-head">
+        <p class="eyebrow">Compliance &amp; security</p>
+        <h2>Built for sensitive data and regulated sectors.</h2>
+        <p>Masking, audit and human oversight are part of the architecture — not an optional module. Compliant with data-protection law, and designed for the audit requirements of banks (BACEN) and the European market (EU AI Act / DORA).</p>
+      </div>
+      <div class="grid g2">
+        <div class="card"><h3>Role-based masking</h3><p>PII tokenized in the flow; the original value is visible only to authorized roles, and the customer receives only the partial. PIN/password capture in an atomic block, never persisted.</p></div>
+        <div class="card"><h3>Audit on every call</h3><p>Every call to a business system produces an immutable record (who, what, when, allowed). Native audit trail — the caller cannot turn it off.</p></div>
+        <div class="card"><h3>Native human oversight</h3><p>Supervisors and reviewers are session participants, with authority to intervene — exactly the "human oversight" that AI regulation requires for high risk.</p></div>
+        <div class="card"><h3>No lock-in / sovereignty</h3><p>BYO LLM + MCP integration + logic in YAML = real portability. Meets vendor-substitution and data-residency requirements.</p></div>
+      </div>
+      <div style="margin-top:26px">
+        <a class="btn btn-primary" href="compliance.html">Explore compliance &amp; security →</a>
+      </div>
+    </div>
+  </section>
+
+  <!-- QUALITY -->
+  <section class="sec alt" id="quality">
+    <div class="wrap">
+      <div class="sec-head">
+        <p class="eyebrow">Quality &amp; evaluation</p>
+        <h2>Let your AI learn and evolve with humans.</h2>
+        <p>Good AI doesn't arrive finished — it <strong>learns from the human team</strong> and improves every cycle. PlugHub evaluates each interaction, compares versions of agents (and humans) and ties quality to each deploy, in a <strong>continuous-improvement loop</strong> — over the data your own operation produces, with an orchestration Console and real-time sentiment.</p>
+      </div>
+      <div class="grid g2">
+        <div class="card"><h3>Continuous evaluation by campaigns</h3><p>Forms with objective and subjective criteria; the AI evaluator scores with evidence (RAG) and the human team reviews — on the same dataset.</p></div>
+        <div class="card"><h3>Contestation &amp; review</h3><p>AI gate before publishing → contestation by dimension → final decision always human. Append-only trail for audit.</p></div>
+        <div class="card"><h3>360° comparison workbench</h3><p>Human × AI and version × version, with deploy epochs and cross-cut (resolution × quality × NPS). Finds who "marks resolved" but scores low.</p></div>
+        <div class="card"><h3>Session replay + diff</h3><p>Review any session and compare versions before promoting — the basis for regression and continuous calibration.</p></div>
+      </div>
+      <div style="margin-top:26px">
+        <a class="btn btn-primary" href="quality.html">Explore the Quality module →</a>
+      </div>
+    </div>
+  </section>
+
+  <!-- CTA -->
+  <section class="sec" id="try">
+    <div class="wrap">
+      <div class="cta">
+        <h2>Start with the documentation.</h2>
+        <p>Explore the architecture, the SDK and the Skill Flow step types — and request a test environment to get hands-on.</p>
+        <div class="cta-row">
+          <a class="btn btn-light" href="/docs">See documentation →</a>
+          <a class="btn btn-outline-light" href="mailto:contato@opuscom.com.br?subject=PlugHub%20-%20test%20access">Request test access</a>
+        </div>
+      </div>
+    </div>
+  </section>
+
+</main>
+
+<footer>
+  <div class="wrap">
+    <div class="fcols">
+      <div>
+        <div class="brand" style="margin-bottom:10px"><span class="dot"></span>PlugHub</div>
+        <p style="max-width:260px">Orchestration of human and AI agents for support and automation. Compliance and portability by design.</p>
+      </div>
+      <div>
+        <h5>Product</h5>
+        <a href="#how-it-works">How it works</a>
+        <a href="#routing">Routing</a>
+        <a href="#channels">Channels</a>
+        <a href="#customer">Customer experience</a>
+        <a href="#solutions">Solutions</a>
+        <a href="quality.html">Quality &amp; evaluation</a>
+        <a href="compliance.html">Compliance</a>
+      </div>
+      <div>
+        <h5>Developers</h5>
+        <a href="developers.html">Overview</a>
+        <a href="/docs">Documentation</a>
+        <a href="developers.html">SDK &amp; MCP</a>
+        <a href="developers.html">BYO LLM</a>
+        <a href="developers.html">Portability</a>
+      </div>
+      <div>
+        <h5>Company</h5>
+        <a href="mailto:contato@opuscom.com.br">Contact</a>
+        <a href="#try">Test access</a>
+        <a href="/privacy">Privacy</a>
+      </div>
+    </div>
+    <div class="fbottom">
+      <span>© 2026 PlugHub. All rights reserved.</span>
+      <span>MCP-first · BYO LLM · privacy by design</span>
+    </div>
+  </div>
+</footer>
+
+<script>
+  document.querySelectorAll('#navlinks a').forEach(function(a){
+    a.addEventListener('click',function(){document.getElementById('navlinks').classList.remove('open')});
+  });
+</script>
+</body>
+</html>

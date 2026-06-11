@@ -1,0 +1,257 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PlugHub — Para desenvolvedores: SDK, MCP, BYO LLM e Skill Flow</title>
+<meta name="description" content="Construa com um fluxo declarativo (Skill Flow), integre só por MCP com auditoria, traga seu LLM e seus agentes, e leve embora quando quiser. SDK em TypeScript e Python, CLI de portabilidade.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --primary:#1B4F8A; --primary-d:#15406e; --secondary:#2D9CDB; --accent:#00B4D8;
+    --green:#059669; --warning:#D97706; --ink:#16242f; --muted:#56697a;
+    --line:#e3e8ee; --bg:#ffffff; --soft:#f5f8fb; --soft2:#eef4fa; --dark:#0f2336;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html{scroll-behavior:smooth}
+  body{font-family:Inter,system-ui,sans-serif;color:var(--ink);background:var(--bg);line-height:1.6;-webkit-font-smoothing:antialiased}
+  a{color:inherit;text-decoration:none}
+  .wrap{max-width:1080px;margin:0 auto;padding:0 24px}
+  section{scroll-margin-top:72px}
+  h1,h2,h3{line-height:1.2;letter-spacing:-.01em}
+  .eyebrow{font-size:13px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:var(--secondary)}
+  .btn{display:inline-flex;align-items:center;gap:8px;font-weight:600;font-size:15px;padding:12px 22px;border-radius:9px;border:1.5px solid transparent;cursor:pointer;transition:.15s}
+  .btn-primary{background:var(--primary);color:#fff}.btn-primary:hover{background:var(--primary-d)}
+  .btn-ghost{background:transparent;color:var(--primary);border-color:var(--line)}.btn-ghost:hover{border-color:var(--secondary);background:var(--soft)}
+  .btn-light{background:#fff;color:var(--primary)}
+  .btn-outline-light{background:transparent;color:#fff;border-color:rgba(255,255,255,.4)}.btn-outline-light:hover{border-color:#fff;background:rgba(255,255,255,.1)}
+  header{position:sticky;top:0;z-index:50;background:rgba(255,255,255,.92);backdrop-filter:blur(8px);border-bottom:1px solid var(--line)}
+  .nav{display:flex;align-items:center;justify-content:space-between;height:64px}
+  .brand{display:flex;align-items:center;gap:10px;font-weight:700;font-size:19px;color:var(--primary)}
+  .brand .dot{width:22px;height:22px;border-radius:6px;background:var(--primary);position:relative}
+  .brand .dot::after{content:"";position:absolute;inset:6px;border-radius:3px;background:var(--accent)}
+  .nav-links{display:flex;align-items:center;gap:26px}
+  .nav-links a.lnk{font-size:14.5px;font-weight:500;color:var(--muted)}.nav-links a.lnk:hover{color:var(--primary)}
+  .nav-cta{display:flex;align-items:center;gap:10px}.nav-cta .btn{padding:9px 16px;font-size:14px}
+  .menu-btn{display:none;background:none;border:0;font-size:24px;color:var(--primary);cursor:pointer}
+  .lang{font-size:12.5px;font-weight:700;color:var(--muted);border:1px solid var(--line);border-radius:7px;padding:7px 10px;letter-spacing:.02em}
+  .lang:hover{color:var(--primary);border-color:var(--secondary)}
+  .hero{background:linear-gradient(180deg,var(--soft2),#fff);padding:72px 0 56px;border-bottom:1px solid var(--line)}
+  .hero h1{font-size:42px;font-weight:700;max-width:780px}
+  .hero .sub{font-size:19px;color:var(--muted);max-width:720px;margin-top:18px}
+  .crumb{font-size:13px;color:var(--muted);margin-bottom:14px}.crumb a{color:var(--secondary)}
+  .sec{padding:60px 0}.sec.alt{background:var(--soft)}
+  .sec-head{max-width:760px;margin-bottom:32px}
+  .sec-head h2{font-size:30px;font-weight:700;margin-top:8px}
+  .sec-head p{color:var(--muted);font-size:17px;margin-top:12px}
+  .grid{display:grid;gap:18px}.g3{grid-template-columns:repeat(3,1fr)}.g2{grid-template-columns:repeat(2,1fr)}
+  .card{background:#fff;border:1px solid var(--line);border-radius:14px;padding:24px}
+  .card h3{font-size:18px;font-weight:600;color:var(--primary);margin-bottom:8px}
+  .card p{color:var(--muted);font-size:15px}
+  .code{background:var(--dark);border-radius:14px;padding:22px;color:#cfe3f5;font-family:"SF Mono",Menlo,Consolas,monospace;font-size:13px;line-height:1.7;overflow:auto}
+  .code .k{color:#7fd1ff}.code .s{color:#9ae6b4}.code .c{color:#6b8299}.code .p{color:#e3b3ff}
+  .dev{display:grid;grid-template-columns:1.05fr 1fr;gap:32px;align-items:center}
+  ul.checks{list-style:none;display:flex;flex-direction:column;gap:11px}
+  ul.checks li{display:flex;gap:10px;font-size:15px;color:var(--ink)}
+  ul.checks li b{color:var(--primary)}
+  ul.checks li::before{content:"→";color:var(--accent);font-weight:700}
+  .steps{display:flex;flex-wrap:wrap;gap:8px}
+  .steps span{font-size:12.5px;font-weight:600;color:var(--primary);background:var(--soft2);border-radius:8px;padding:6px 11px;font-family:"SF Mono",Menlo,Consolas,monospace}
+  .note{font-size:13px;color:var(--muted);background:var(--soft2);border:1px solid var(--line);border-radius:8px;padding:12px 16px;margin-top:18px}
+  .cta{background:var(--dark);color:#fff;border-radius:20px;padding:48px 40px;text-align:center}
+  .cta h2{font-size:28px;font-weight:700}.cta p{color:#a9c2d8;font-size:16px;margin:12px auto 24px;max-width:560px}
+  .cta-row{display:flex;gap:12px;justify-content:center;flex-wrap:wrap}
+  footer{border-top:1px solid var(--line);padding:36px 0;background:var(--soft);font-size:13px;color:var(--muted)}
+  .fbottom{display:flex;justify-content:space-between;flex-wrap:wrap;gap:10px}
+  @media (max-width:860px){
+    .nav-links{display:none}.menu-btn{display:block}
+    .nav-links.open{display:flex;position:absolute;top:64px;left:0;right:0;background:#fff;flex-direction:column;align-items:flex-start;gap:14px;padding:20px 24px;border-bottom:1px solid var(--line)}
+    .hero h1{font-size:32px}.g3,.g2,.dev{grid-template-columns:1fr}.sec-head h2{font-size:24px}
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="wrap nav">
+    <a href="index.html" class="brand"><span class="dot"></span>PlugHub</a>
+    <nav class="nav-links" id="navlinks">
+      <a class="lnk" href="index.html#como-funciona">Como funciona</a>
+      <a class="lnk" href="index.html#canais">Canais</a>
+      <a class="lnk" href="index.html#solucoes">Soluções</a>
+      <a class="lnk" href="desenvolvedores.html" style="color:var(--primary)">Desenvolvedores</a>
+      <a class="lnk" href="qualidade.html">Qualidade</a>
+      <a class="lnk" href="compliance.html">Compliance</a>
+    </nav>
+    <div class="nav-cta">
+      <a class="lang" href="en/developers.html" hreflang="en" aria-label="English version">EN</a>
+      <a class="btn btn-ghost" href="/docs">Documentação</a>
+      <a class="btn btn-primary" href="index.html#testar">Começar a testar</a>
+    </div>
+    <button class="menu-btn" onclick="document.getElementById('navlinks').classList.toggle('open')" aria-label="Menu">≡</button>
+  </div>
+</header>
+
+<main>
+
+  <section class="hero">
+    <div class="wrap">
+      <p class="crumb"><a href="index.html">Início</a> › Para desenvolvedores</p>
+      <p class="eyebrow">Para desenvolvedores</p>
+      <h1>Construa uma vez. Sem ficar preso.</h1>
+      <p class="sub">Modele a lógica num <strong>fluxo declarativo</strong>, integre tudo por <strong>MCP</strong> com auditoria, <strong>traga o seu LLM</strong> e os seus agentes — e leve embora quando quiser. SDK em TypeScript e Python, com CLI que atesta a sua portabilidade.</p>
+      <div style="margin-top:26px;display:flex;gap:12px;flex-wrap:wrap">
+        <a class="btn btn-primary" href="/docs">Ir para a documentação →</a>
+        <a class="btn btn-ghost" href="index.html#testar">Começar a testar</a>
+      </div>
+    </div>
+  </section>
+
+  <!-- CONCEITOS -->
+  <section class="sec">
+    <div class="wrap">
+      <div class="sec-head">
+        <p class="eyebrow">Conceitos em um minuto</p>
+        <h2>Quatro ideias e você já entende a plataforma.</h2>
+      </div>
+      <div class="grid g2">
+        <div class="card"><h3>Sessão = sala de conferência</h3><p>Todo contato é uma sessão onde participantes (humanos e IA) entram com papéis. O stream da sessão é a fonte única de verdade dos eventos.</p></div>
+        <div class="card"><h3>Agente segue um contrato</h3><p><span style="font-family:monospace">agent_login → agent_ready → agent_busy → agent_done</span>. Mesmo contrato para agente nativo (SDK) e externo (sidecar).</p></div>
+        <div class="card"><h3>Skill Flow é declarativo</h3><p>A lógica vive em YAML versionável — não em código preso ao fornecedor. Inbound, outbound e automação no mesmo motor.</p></div>
+        <div class="card"><h3>MCP é a única integração</h3><p>Tudo que toca sistema de negócio passa por MCP, com permissão, guarda anti-injeção e auditoria. Sem conectores proprietários.</p></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- SKILL FLOW -->
+  <section class="sec alt">
+    <div class="wrap">
+      <div class="sec-head">
+        <p class="eyebrow">Skill Flow</p>
+        <h2>Sua lógica como artefato — versionável e portável.</h2>
+        <p>Um interpretador de grafo de estados com 13+ tipos de passo. O estado é persistido a cada transição, e o fluxo é validado antes de publicar.</p>
+      </div>
+      <div class="dev">
+        <div class="code"><span class="c"># skill_atendimento_v1.yaml</span><br>
+<span class="k">entry</span>: triagem<br>
+<span class="k">steps</span>:<br>
+&nbsp;&nbsp;- <span class="k">id</span>: triagem<br>
+&nbsp;&nbsp;&nbsp;&nbsp;<span class="k">type</span>: <span class="s">reason</span>          <span class="c"># chama o LLM (BYO)</span><br>
+&nbsp;&nbsp;&nbsp;&nbsp;<span class="k">output_schema</span>: { intencao: string }<br>
+&nbsp;&nbsp;&nbsp;&nbsp;<span class="k">on_success</span>: decidir<br>
+&nbsp;&nbsp;- <span class="k">id</span>: decidir<br>
+&nbsp;&nbsp;&nbsp;&nbsp;<span class="k">type</span>: <span class="s">choice</span>          <span class="c"># ramifica por JSONPath</span><br>
+&nbsp;&nbsp;&nbsp;&nbsp;<span class="k">conditions</span>:<br>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;- { field: <span class="p">"@ctx.intencao"</span>, eq: cobranca, next: cobranca }<br>
+&nbsp;&nbsp;&nbsp;&nbsp;<span class="k">default</span>: humano<br>
+&nbsp;&nbsp;- <span class="k">id</span>: humano<br>
+&nbsp;&nbsp;&nbsp;&nbsp;<span class="k">type</span>: <span class="s">task</span>            <span class="c"># delega a um pool (humano ou IA)</span><br>
+&nbsp;&nbsp;&nbsp;&nbsp;<span class="k">pool</span>: suporte_n2</div>
+        <div>
+          <p style="color:var(--muted);font-size:15px;margin-bottom:14px">Os tipos de passo:</p>
+          <div class="steps">
+            <span>task</span><span>choice</span><span>catch</span><span>escalate</span><span>complete</span><span>invoke</span><span>reason</span><span>notify</span><span>menu</span><span>suspend</span><span>collect</span><span>resolve</span><span>receive</span><span>begin/end_transaction</span>
+          </div>
+          <p class="note" style="margin-top:18px"><strong>Deploy lifecycle:</strong> salvar cria <em>draft</em>; publicar (<em>published</em>) aplica por pool com <strong>hot deploy</strong> (sem restart), <strong>rollback</strong> e <strong>deploy agendado</strong> — drenando contatos em andamento (graceful).</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- MCP -->
+  <section class="sec">
+    <div class="wrap">
+      <div class="sec-head">
+        <p class="eyebrow">MCP + interception guard</p>
+        <h2>Uma integração só — e auditada por construção.</h2>
+        <p>Agentes nunca tocam um sistema de negócio diretamente; só via MCP Servers autorizados. Toda chamada passa por três checagens, em menos de 1ms.</p>
+      </div>
+      <div class="grid g3">
+        <div class="card"><h3>① Permissão</h3><p>Validação de permissão por decode local do token — a ferramenta só roda se o papel pode.</p></div>
+        <div class="card"><h3>② Guarda anti-injeção</h3><p>Padrões heurísticos bloqueiam prompt injection antes de a chamada sair.</p></div>
+        <div class="card"><h3>③ Auditoria</h3><p>Registro imutável (server, tool, permitido, injeção, duração). Política por ferramenta — sem opt-out.</p></div>
+      </div>
+      <p class="note">🔌 Dois mecanismos, mesmo contrato: agente <strong>nativo</strong> (interceptor in-process via <code>@plughub/sdk</code>) e agente <strong>externo</strong> (proxy sidecar em localhost) — LangGraph, CrewAI ou Python genérico entram sem alterar código.</p>
+    </div>
+  </section>
+
+  <!-- BYO LLM -->
+  <section class="sec alt">
+    <div class="wrap">
+      <div class="sec-head">
+        <p class="eyebrow">BYO LLM · AI Gateway</p>
+        <h2>Traga o seu modelo. Troque sem tocar o agente.</h2>
+      </div>
+      <div class="grid g3">
+        <div class="card"><h3>Multi-conta</h3><p>Administre várias contas/chaves (Anthropic, OpenAI, Google…) com limites próprios de RPM/TPM.</p></div>
+        <div class="card"><h3>Fallback &amp; rotação</h3><p>Em throttle (429/529), o Gateway troca de conta e, se preciso, de provedor — sem o agente perceber.</p></div>
+        <div class="card"><h3>Perfis de modelo</h3><p><em>realtime</em>, <em>balanced</em> e <em>evaluation</em> (isolado) — você escolhe o modelo por tarefa, não por produto.</p></div>
+      </div>
+      <p class="note">⚙️ Combinado com a lógica determinística do Skill Flow, isso dá <strong>comportamento previsível e custo de IA controlado</strong> — o agente designa contas e fallbacks; os limites são administrados por conta.</p>
+    </div>
+  </section>
+
+  <!-- PORTABILIDADE -->
+  <section class="sec">
+    <div class="wrap">
+      <div class="sec-head">
+        <p class="eyebrow">SDK &amp; portabilidade</p>
+        <h2>Entre fácil. Saia quando quiser.</h2>
+      </div>
+      <div class="dev">
+        <div>
+          <ul class="checks">
+            <li><b>SDK em TypeScript e Python</b>, com contrato de execução estável.</li>
+            <li><b>Traga seu agente</b> (LangGraph, CrewAI, Python) como <strong>participante</strong> da sessão — adoção sem reescrever.</li>
+            <li><b>Migre para nativo</b> com <code>regenerate</code> quando quiser destravar tudo (3 níveis, suspend/resume, delegate).</li>
+            <li><b>Anti-lock-in por 4 vias:</b> BYO LLM · integração só por MCP · lógica em YAML portável · export de dados.</li>
+            <li><b><code>verify-portability</code></b> e <code>certify</code> atestam que você não está aprisionado.</li>
+          </ul>
+          <a class="btn btn-primary" href="/docs" style="margin-top:22px">Ir para a documentação →</a>
+        </div>
+        <div class="code"><span class="c"># CLI do SDK</span><br>
+$ plughub-sdk <span class="s">certify</span>            <span class="c"># valida o contrato de execução</span><br>
+$ plughub-sdk <span class="s">verify-portability</span>   <span class="c"># checa isolamento de dependências</span><br>
+$ plughub-sdk <span class="s">regenerate</span>         <span class="c"># agente externo → nativo</span><br>
+$ plughub-sdk <span class="s">skill-extract</span>      <span class="c"># extrai skill de um agente</span><br>
+$ plughub-sdk <span class="s">proxy</span>              <span class="c"># sidecar p/ agente externo</span><br>
+<br>
+<span class="c"># resultado</span><br>
+✓ contrato ok &nbsp;✓ dependências isoladas &nbsp;✓ portável</div>
+      </div>
+      <p class="note">↪ <strong>Importante (sem promessa falsa):</strong> um agente externo entra como <em>participante</em> (conferência + MCP + auditoria). As capacidades diferenciadas — modelo de 3 níveis, suspend/resume cross-canal, delegate, commerce-cards — são do <strong>Skill Flow nativo</strong>. Por isso o caminho é trazer e migrar: <code>regenerate</code> → nativo.</p>
+    </div>
+  </section>
+
+  <!-- CTA -->
+  <section class="sec alt">
+    <div class="wrap">
+      <div class="cta">
+        <h2>Comece pela documentação.</h2>
+        <p>Conceitos, contrato de execução, tipos de passo do Skill Flow, MCP e o CLI — com exemplos. Depois, peça um ambiente de teste.</p>
+        <div class="cta-row">
+          <a class="btn btn-light" href="/docs">Ver documentação →</a>
+          <a class="btn btn-outline-light" href="index.html#testar">Solicitar acesso de teste</a>
+        </div>
+      </div>
+    </div>
+  </section>
+
+</main>
+
+<footer>
+  <div class="wrap fbottom">
+    <span>© 2026 PlugHub · <a href="index.html" style="color:var(--secondary)">voltar ao início</a></span>
+    <span>SDK · MCP-first · BYO LLM · portabilidade</span>
+  </div>
+</footer>
+
+<script>
+  document.querySelectorAll('#navlinks a').forEach(function(a){
+    a.addEventListener('click',function(){document.getElementById('navlinks').classList.remove('open')});
+  });
+</script>
+</body>
+</html>

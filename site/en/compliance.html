@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PlugHub — Compliance &amp; Security: privacy, audit and human oversight by design</title>
+<meta name="description" content="Role-based masking, audit on every call, native human oversight and no lock-in. Privacy-compliant and designed for BACEN, EU AI Act and DORA. Compliance is a primitive, not a plugin.">
+<link rel="alternate" hreflang="pt-BR" href="../compliance.html">
+<link rel="alternate" hreflang="en" href="compliance.html">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --primary:#1B4F8A; --primary-d:#15406e; --secondary:#2D9CDB; --accent:#00B4D8;
+    --green:#059669; --warning:#D97706; --red:#DC2626; --ink:#16242f; --muted:#56697a;
+    --line:#e3e8ee; --bg:#ffffff; --soft:#f5f8fb; --soft2:#eef4fa; --dark:#0f2336;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html{scroll-behavior:smooth}
+  body{font-family:Inter,system-ui,sans-serif;color:var(--ink);background:var(--bg);line-height:1.6;-webkit-font-smoothing:antialiased}
+  a{color:inherit;text-decoration:none}
+  .wrap{max-width:1080px;margin:0 auto;padding:0 24px}
+  section{scroll-margin-top:72px}
+  h1,h2,h3{line-height:1.2;letter-spacing:-.01em}
+  .eyebrow{font-size:13px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:var(--secondary)}
+  .btn{display:inline-flex;align-items:center;gap:8px;font-weight:600;font-size:15px;padding:12px 22px;border-radius:9px;border:1.5px solid transparent;cursor:pointer;transition:.15s}
+  .btn-primary{background:var(--primary);color:#fff}.btn-primary:hover{background:var(--primary-d)}
+  .btn-ghost{background:transparent;color:var(--primary);border-color:var(--line)}.btn-ghost:hover{border-color:var(--secondary);background:var(--soft)}
+  .btn-light{background:#fff;color:var(--primary)}
+  .btn-outline-light{background:transparent;color:#fff;border-color:rgba(255,255,255,.4)}.btn-outline-light:hover{border-color:#fff;background:rgba(255,255,255,.1)}
+  header{position:sticky;top:0;z-index:50;background:rgba(255,255,255,.92);backdrop-filter:blur(8px);border-bottom:1px solid var(--line)}
+  .nav{display:flex;align-items:center;justify-content:space-between;height:64px}
+  .brand{display:flex;align-items:center;gap:10px;font-weight:700;font-size:19px;color:var(--primary)}
+  .brand .dot{width:22px;height:22px;border-radius:6px;background:var(--primary);position:relative}
+  .brand .dot::after{content:"";position:absolute;inset:6px;border-radius:3px;background:var(--accent)}
+  .nav-links{display:flex;align-items:center;gap:26px}
+  .nav-links a.lnk{font-size:14.5px;font-weight:500;color:var(--muted)}.nav-links a.lnk:hover{color:var(--primary)}
+  .nav-cta{display:flex;align-items:center;gap:10px}.nav-cta .btn{padding:9px 16px;font-size:14px}
+  .menu-btn{display:none;background:none;border:0;font-size:24px;color:var(--primary);cursor:pointer}
+  .lang{font-size:12.5px;font-weight:700;color:var(--muted);border:1px solid var(--line);border-radius:7px;padding:7px 10px;letter-spacing:.02em}
+  .lang:hover{color:var(--primary);border-color:var(--secondary)}
+  .hero{background:linear-gradient(180deg,var(--soft2),#fff);padding:72px 0 56px;border-bottom:1px solid var(--line)}
+  .hero h1{font-size:42px;font-weight:700;max-width:780px}
+  .hero .sub{font-size:19px;color:var(--muted);max-width:720px;margin-top:18px}
+  .crumb{font-size:13px;color:var(--muted);margin-bottom:14px}.crumb a{color:var(--secondary)}
+  .sec{padding:64px 0}.sec.alt{background:var(--soft)}
+  .sec-head{max-width:760px;margin-bottom:36px}
+  .sec-head h2{font-size:30px;font-weight:700;margin-top:8px}
+  .sec-head p{color:var(--muted);font-size:17px;margin-top:12px}
+  .grid{display:grid;gap:18px}.g3{grid-template-columns:repeat(3,1fr)}.g2{grid-template-columns:repeat(2,1fr)}
+  .card{background:#fff;border:1px solid var(--line);border-radius:14px;padding:24px}
+  .card h3{font-size:18px;font-weight:600;color:var(--primary);margin-bottom:8px}
+  .card p{color:var(--muted);font-size:15px}
+  .reg{display:flex;flex-direction:column;gap:10px}
+  .reg .row{display:grid;grid-template-columns:170px 1fr;gap:16px;background:#fff;border:1px solid var(--line);border-radius:12px;padding:16px 18px}
+  .reg .row b{color:var(--primary);font-size:15px}
+  .reg .row span{color:var(--muted);font-size:14.5px}
+  ul.inv{list-style:none;display:grid;grid-template-columns:1fr 1fr;gap:10px 24px}
+  ul.inv li{display:flex;gap:10px;font-size:14.5px;color:var(--ink)}
+  ul.inv li::before{content:"✓";color:var(--green);font-weight:700}
+  .note{font-size:13px;color:var(--muted);background:var(--soft2);border:1px solid var(--line);border-radius:8px;padding:12px 16px;margin-top:18px}
+  .note.warn{background:#fdf3e3;border-color:#f3dcb0}
+  .cta{background:var(--dark);color:#fff;border-radius:20px;padding:48px 40px;text-align:center}
+  .cta h2{font-size:28px;font-weight:700}.cta p{color:#a9c2d8;font-size:16px;margin:12px auto 24px;max-width:560px}
+  .cta-row{display:flex;gap:12px;justify-content:center;flex-wrap:wrap}
+  footer{border-top:1px solid var(--line);padding:36px 0;background:var(--soft);font-size:13px;color:var(--muted)}
+  .fbottom{display:flex;justify-content:space-between;flex-wrap:wrap;gap:10px}
+  @media (max-width:860px){
+    .nav-links{display:none}.menu-btn{display:block}
+    .nav-links.open{display:flex;position:absolute;top:64px;left:0;right:0;background:#fff;flex-direction:column;align-items:flex-start;gap:14px;padding:20px 24px;border-bottom:1px solid var(--line)}
+    .hero h1{font-size:32px}.g3,.g2{grid-template-columns:1fr}.sec-head h2{font-size:24px}
+    .reg .row{grid-template-columns:1fr}ul.inv{grid-template-columns:1fr}
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="wrap nav">
+    <a href="index.html" class="brand"><span class="dot"></span>PlugHub</a>
+    <nav class="nav-links" id="navlinks">
+      <a class="lnk" href="index.html#how-it-works">How it works</a>
+      <a class="lnk" href="index.html#channels">Channels</a>
+      <a class="lnk" href="index.html#solutions">Solutions</a>
+      <a class="lnk" href="developers.html">Developers</a>
+      <a class="lnk" href="quality.html">Quality</a>
+      <a class="lnk" href="compliance.html" style="color:var(--primary)">Compliance</a>
+    </nav>
+    <div class="nav-cta">
+      <a class="lang" href="../compliance.html" hreflang="pt-BR" aria-label="Versão em português">PT</a>
+      <a class="btn btn-ghost" href="/docs">Documentation</a>
+      <a class="btn btn-primary" href="index.html#try">Start testing</a>
+    </div>
+    <button class="menu-btn" onclick="document.getElementById('navlinks').classList.toggle('open')" aria-label="Menu">≡</button>
+  </div>
+</header>
+
+<main>
+
+  <section class="hero">
+    <div class="wrap">
+      <p class="crumb"><a href="index.html">Home</a> › Compliance &amp; Security</p>
+      <p class="eyebrow">Compliance &amp; Security</p>
+      <h1>Compliance is a primitive — not a plugin.</h1>
+      <p class="sub">Masking, audit and human oversight are part of the <strong>architecture</strong>, not an optional module. You can't turn off what protects the data — and that's a design decision. Built for sensitive data and regulated sectors, in Brazil and Europe.</p>
+    </div>
+  </section>
+
+  <!-- PILLARS -->
+  <section class="sec">
+    <div class="wrap">
+      <div class="sec-head">
+        <p class="eyebrow">The pillars</p>
+        <h2>Protection, traceability and control — by construction.</h2>
+      </div>
+      <div class="grid g3">
+        <div class="card"><h3>Role-based masking</h3><p>PII tokenized in the flow (e.g., <em>[id:***-00]</em>); the original value is visible only to authorized roles, and the customer receives only the partial. PIN/password capture in an atomic block — never persisted to log, queue or history.</p></div>
+        <div class="card"><h3>Audit on every call</h3><p>Each call to a business system (MCP) produces an immutable record — who, what, when, allowed, injection detected. Policy is defined per tool; the caller <strong>cannot turn off</strong> the audit.</p></div>
+        <div class="card"><h3>Native human oversight</h3><p>Supervisors and reviewers are session participants, with authority to intervene. It's the "human oversight" required by AI regulation for high risk — embedded, not bolted on.</p></div>
+        <div class="card"><h3>Access control (RBAC + ABAC)</h3><p>Roles + attributes per module and field + scope per pool and per group/shift. Validated on the front and back end, with graceful degradation for legacy accounts.</p></div>
+        <div class="card"><h3>Per-participant visibility</h3><p>By field and by role: a supervisor can follow an interaction without seeing the sensitive data. Sensitive-data delegation with oversight.</p></div>
+        <div class="card"><h3>No lock-in / sovereignty</h3><p>BYO LLM + integration only via MCP + logic in versionable YAML = real portability. Configurable data residency — meets vendor substitution and sovereignty.</p></div>
+      </div>
+      <p class="note">🔒 How it works underneath: tokens in the session stream keep the masked value and the original separated; the original is released only to authorized roles. Every domain call passes through <strong>permission validation → injection guard → audit</strong> before reaching any system. RBAC/ABAC travel in the access token.</p>
+    </div>
+  </section>
+
+  <!-- BRAZIL -->
+  <section class="sec alt">
+    <div class="wrap">
+      <div class="sec-head">
+        <p class="eyebrow">Regulatory adherence · Brazil</p>
+        <h2>Ready for the Brazilian regulated environment.</h2>
+        <p>The architecture responds directly to the requirements of LGPD and the sector regulators.</p>
+      </div>
+      <div class="reg">
+        <div class="row"><b>LGPD / ANPD</b><span>PII minimization and masking, role-based visibility and an audited access trail — aligned with the ANPD's priorities (minimization and transparency of automated decisions).</span></div>
+        <div class="row"><b>BACEN Res. 4.893</b><span>The "Brazilian DORA": requires banks' IT suppliers to provide audit and a substitution plan. Native audit + portability (no lock-in) help the institution comply.</span></div>
+        <div class="row"><b>ANS RN 623</b><span>Per-interaction ticket, access to recordings and traceability — covered by the session trace, audit and quality evaluation.</span></div>
+        <div class="row"><b>ANATEL (RGC)</b><span>Humanized service, deadlines and ombudsman — native human oversight and traceability of the process history.</span></div>
+        <div class="row"><b>PL 2338 (AI Framework)</b><span>Risk-based, with mandatory human oversight for high risk. The orchestration Console anticipates the requirement. <em>(In progress — preparation, not yet an obligation.)</em></span></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- EUROPE -->
+  <section class="sec">
+    <div class="wrap">
+      <div class="sec-head">
+        <p class="eyebrow">Regulatory adherence · Europe</p>
+        <h2>Designed for the European regulatory cycle.</h2>
+        <p>For EU operations, the positioning (oversight + audit + no lock-in + sovereignty) is aligned with what the regulation now requires.</p>
+      </div>
+      <div class="reg">
+        <div class="row"><b>GDPR + EU↔Brazil adequacy</b><span>The mutual adequacy (Jan 2026) allows EU↔Brazil flows without extra mechanisms. Masking and minimization meet data-protection principles.</span></div>
+        <div class="row"><b>EU AI Act</b><span>Transparency (declaring it's AI), human oversight and recording/logging of interactions — backed by the session model, the trace and the audit.</span></div>
+        <div class="row"><b>DORA</b><span>Applies to IT suppliers serving financial firms: audit rights, exit strategy and concentration management — native audit + BYO LLM + sovereignty match directly.</span></div>
+        <div class="row"><b>Data sovereignty</b><span>BYO LLM and agnostic integration allow hosting and inference in an EU sovereign cloud, without a US provider by default.</span></div>
+      </div>
+      <p class="note warn">⚠️ A deliberate design detail: sentiment reading <strong>targets the customer, not the worker</strong> — the EU AI Act prohibits inferring employee emotion in the workplace. A boundary we respect by design.</p>
+    </div>
+  </section>
+
+  <!-- INVARIANTS -->
+  <section class="sec alt">
+    <div class="wrap">
+      <div class="sec-head">
+        <p class="eyebrow">Invariants</p>
+        <h2>Guarantees the architecture never breaks.</h2>
+        <p>They're not conventions — they're contracts guaranteed by the platform.</p>
+      </div>
+      <ul class="inv">
+        <li>Every domain call is intercepted (permission + injection + audit).</li>
+        <li>Audit is defined per tool — the caller cannot opt out.</li>
+        <li>Agents never access business systems directly, only via authorized MCP.</li>
+        <li>The masked original value is never exposed to unauthorized roles.</li>
+        <li>A masked input value (PIN/password) never enters a queue, stream or log.</li>
+        <li>The DPO's access to sessions and calls is recorded in an immutable log.</li>
+      </ul>
+      <p class="note">📋 <strong>Certifications:</strong> SOC 2 and ISO 27001 are on the roadmap. The architecture already produces the technical evidence that underpins them — audit trails, masking and access control — so certification formalizes what the product already does.</p>
+    </div>
+  </section>
+
+  <!-- CTA -->
+  <section class="sec">
+    <div class="wrap">
+      <div class="cta">
+        <h2>Compliance you can audit.</h2>
+        <p>The documentation details masking, the audit model, RBAC/ABAC and the data-protection Audit module for the DPO.</p>
+        <div class="cta-row">
+          <a class="btn btn-light" href="/docs">See documentation →</a>
+          <a class="btn btn-outline-light" href="index.html#try">Start testing</a>
+        </div>
+      </div>
+    </div>
+  </section>
+
+</main>
+
+<footer>
+  <div class="wrap fbottom">
+    <span>© 2026 PlugHub · <a href="index.html" style="color:var(--secondary)">back to home</a></span>
+    <span>privacy by design · audit · human oversight · no lock-in</span>
+  </div>
+</footer>
+
+<script>
+  document.querySelectorAll('#navlinks a').forEach(function(a){
+    a.addEventListener('click',function(){document.getElementById('navlinks').classList.remove('open')});
+  });
+</script>
+</body>
+</html>

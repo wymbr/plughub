@@ -1,0 +1,212 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PlugHub — Compliance &amp; Segurança: LGPD, auditoria e supervisão humana by design</title>
+<meta name="description" content="Mascaramento por papel, auditoria em toda chamada, supervisão humana nativa e sem lock-in. Aderente a LGPD e desenhado para BACEN, ANS, EU AI Act e DORA. Compliance é primitiva, não plugin.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --primary:#1B4F8A; --primary-d:#15406e; --secondary:#2D9CDB; --accent:#00B4D8;
+    --green:#059669; --warning:#D97706; --red:#DC2626; --ink:#16242f; --muted:#56697a;
+    --line:#e3e8ee; --bg:#ffffff; --soft:#f5f8fb; --soft2:#eef4fa; --dark:#0f2336;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html{scroll-behavior:smooth}
+  body{font-family:Inter,system-ui,sans-serif;color:var(--ink);background:var(--bg);line-height:1.6;-webkit-font-smoothing:antialiased}
+  a{color:inherit;text-decoration:none}
+  .wrap{max-width:1080px;margin:0 auto;padding:0 24px}
+  section{scroll-margin-top:72px}
+  h1,h2,h3{line-height:1.2;letter-spacing:-.01em}
+  .eyebrow{font-size:13px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:var(--secondary)}
+  .btn{display:inline-flex;align-items:center;gap:8px;font-weight:600;font-size:15px;padding:12px 22px;border-radius:9px;border:1.5px solid transparent;cursor:pointer;transition:.15s}
+  .btn-primary{background:var(--primary);color:#fff}.btn-primary:hover{background:var(--primary-d)}
+  .btn-ghost{background:transparent;color:var(--primary);border-color:var(--line)}.btn-ghost:hover{border-color:var(--secondary);background:var(--soft)}
+  .btn-light{background:#fff;color:var(--primary)}
+  .btn-outline-light{background:transparent;color:#fff;border-color:rgba(255,255,255,.4)}.btn-outline-light:hover{border-color:#fff;background:rgba(255,255,255,.1)}
+  header{position:sticky;top:0;z-index:50;background:rgba(255,255,255,.92);backdrop-filter:blur(8px);border-bottom:1px solid var(--line)}
+  .nav{display:flex;align-items:center;justify-content:space-between;height:64px}
+  .brand{display:flex;align-items:center;gap:10px;font-weight:700;font-size:19px;color:var(--primary)}
+  .brand .dot{width:22px;height:22px;border-radius:6px;background:var(--primary);position:relative}
+  .brand .dot::after{content:"";position:absolute;inset:6px;border-radius:3px;background:var(--accent)}
+  .nav-links{display:flex;align-items:center;gap:26px}
+  .nav-links a.lnk{font-size:14.5px;font-weight:500;color:var(--muted)}.nav-links a.lnk:hover{color:var(--primary)}
+  .nav-cta{display:flex;align-items:center;gap:10px}.nav-cta .btn{padding:9px 16px;font-size:14px}
+  .menu-btn{display:none;background:none;border:0;font-size:24px;color:var(--primary);cursor:pointer}
+  .lang{font-size:12.5px;font-weight:700;color:var(--muted);border:1px solid var(--line);border-radius:7px;padding:7px 10px;letter-spacing:.02em}
+  .lang:hover{color:var(--primary);border-color:var(--secondary)}
+  .hero{background:linear-gradient(180deg,var(--soft2),#fff);padding:72px 0 56px;border-bottom:1px solid var(--line)}
+  .hero h1{font-size:42px;font-weight:700;max-width:780px}
+  .hero .sub{font-size:19px;color:var(--muted);max-width:720px;margin-top:18px}
+  .crumb{font-size:13px;color:var(--muted);margin-bottom:14px}.crumb a{color:var(--secondary)}
+  .sec{padding:64px 0}.sec.alt{background:var(--soft)}
+  .sec-head{max-width:760px;margin-bottom:36px}
+  .sec-head h2{font-size:30px;font-weight:700;margin-top:8px}
+  .sec-head p{color:var(--muted);font-size:17px;margin-top:12px}
+  .grid{display:grid;gap:18px}.g3{grid-template-columns:repeat(3,1fr)}.g2{grid-template-columns:repeat(2,1fr)}
+  .card{background:#fff;border:1px solid var(--line);border-radius:14px;padding:24px}
+  .card h3{font-size:18px;font-weight:600;color:var(--primary);margin-bottom:8px}
+  .card p{color:var(--muted);font-size:15px}
+  .reg{display:flex;flex-direction:column;gap:10px}
+  .reg .row{display:grid;grid-template-columns:170px 1fr;gap:16px;background:#fff;border:1px solid var(--line);border-radius:12px;padding:16px 18px}
+  .reg .row b{color:var(--primary);font-size:15px}
+  .reg .row span{color:var(--muted);font-size:14.5px}
+  ul.inv{list-style:none;display:grid;grid-template-columns:1fr 1fr;gap:10px 24px}
+  ul.inv li{display:flex;gap:10px;font-size:14.5px;color:var(--ink)}
+  ul.inv li::before{content:"✓";color:var(--green);font-weight:700}
+  .note{font-size:13px;color:var(--muted);background:var(--soft2);border:1px solid var(--line);border-radius:8px;padding:12px 16px;margin-top:18px}
+  .note.warn{background:#fdf3e3;border-color:#f3dcb0}
+  .cta{background:var(--dark);color:#fff;border-radius:20px;padding:48px 40px;text-align:center}
+  .cta h2{font-size:28px;font-weight:700}.cta p{color:#a9c2d8;font-size:16px;margin:12px auto 24px;max-width:560px}
+  .cta-row{display:flex;gap:12px;justify-content:center;flex-wrap:wrap}
+  footer{border-top:1px solid var(--line);padding:36px 0;background:var(--soft);font-size:13px;color:var(--muted)}
+  .fbottom{display:flex;justify-content:space-between;flex-wrap:wrap;gap:10px}
+  @media (max-width:860px){
+    .nav-links{display:none}.menu-btn{display:block}
+    .nav-links.open{display:flex;position:absolute;top:64px;left:0;right:0;background:#fff;flex-direction:column;align-items:flex-start;gap:14px;padding:20px 24px;border-bottom:1px solid var(--line)}
+    .hero h1{font-size:32px}.g3,.g2{grid-template-columns:1fr}.sec-head h2{font-size:24px}
+    .reg .row{grid-template-columns:1fr}ul.inv{grid-template-columns:1fr}
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="wrap nav">
+    <a href="index.html" class="brand"><span class="dot"></span>PlugHub</a>
+    <nav class="nav-links" id="navlinks">
+      <a class="lnk" href="index.html#como-funciona">Como funciona</a>
+      <a class="lnk" href="index.html#canais">Canais</a>
+      <a class="lnk" href="index.html#solucoes">Soluções</a>
+      <a class="lnk" href="desenvolvedores.html">Desenvolvedores</a>
+      <a class="lnk" href="qualidade.html">Qualidade</a>
+      <a class="lnk" href="compliance.html" style="color:var(--primary)">Compliance</a>
+    </nav>
+    <div class="nav-cta">
+      <a class="lang" href="en/compliance.html" hreflang="en" aria-label="English version">EN</a>
+      <a class="btn btn-ghost" href="/docs">Documentação</a>
+      <a class="btn btn-primary" href="index.html#testar">Começar a testar</a>
+    </div>
+    <button class="menu-btn" onclick="document.getElementById('navlinks').classList.toggle('open')" aria-label="Menu">≡</button>
+  </div>
+</header>
+
+<main>
+
+  <section class="hero">
+    <div class="wrap">
+      <p class="crumb"><a href="index.html">Início</a> › Compliance &amp; Segurança</p>
+      <p class="eyebrow">Compliance &amp; Segurança</p>
+      <h1>Compliance é primitiva — não um plugin.</h1>
+      <p class="sub">Mascaramento, auditoria e supervisão humana fazem parte da <strong>arquitetura</strong>, não de um módulo opcional. Você não pode desligar o que protege os dados — e isso é uma decisão de projeto. Feito para dados sensíveis e setores regulados, no Brasil e na Europa.</p>
+    </div>
+  </section>
+
+  <!-- PILARES -->
+  <section class="sec">
+    <div class="wrap">
+      <div class="sec-head">
+        <p class="eyebrow">Os pilares</p>
+        <h2>Proteção, rastreabilidade e controle — por construção.</h2>
+      </div>
+      <div class="grid g3">
+        <div class="card"><h3>Mascaramento por papel</h3><p>PII tokenizada no fluxo (ex.: <em>[cpf:***-00]</em>); o dado original só é visível a papéis autorizados, e o cliente recebe apenas o parcial. Captura de PIN/senha em bloco atômico — nunca persistido em log, fila ou histórico.</p></div>
+        <div class="card"><h3>Auditoria em toda chamada</h3><p>Cada chamada a sistema de negócio (MCP) gera registro imutável — quem, o quê, quando, permitido, injeção detectada. A política é definida por ferramenta; o chamador <strong>não pode desligar</strong> a auditoria.</p></div>
+        <div class="card"><h3>Supervisão humana nativa</h3><p>Supervisores e revisores são participantes da sessão, com autoridade para intervir. É o "human oversight" exigido pela regulação de IA em alto risco — embutido, não acoplado.</p></div>
+        <div class="card"><h3>Controle de acesso (RBAC + ABAC)</h3><p>Papéis + atributos por módulo e campo + escopo por pool e por grupo/turno. Validado no front e no back, com degradação graciosa para contas legadas.</p></div>
+        <div class="card"><h3>Visibilidade por participante</h3><p>Por campo e por papel: um supervisor pode acompanhar uma interação sem ver o dado sensível. Delegação de dado sensível com supervisão.</p></div>
+        <div class="card"><h3>Sem lock-in / soberania</h3><p>BYO LLM + integração só por MCP + lógica em YAML versionável = portabilidade real. Residência de dados configurável — atende substituição de fornecedor e soberania.</p></div>
+      </div>
+      <p class="note">🔒 Como funciona por baixo: tokens no stream da sessão guardam o valor mascarado e o original separados; o original só sai para papéis autorizados. Toda chamada de domínio passa por <strong>validação de permissão → guarda anti-injeção → auditoria</strong> antes de chegar a qualquer sistema. RBAC/ABAC viajam no token de acesso.</p>
+    </div>
+  </section>
+
+  <!-- BRASIL -->
+  <section class="sec alt">
+    <div class="wrap">
+      <div class="sec-head">
+        <p class="eyebrow">Aderência regulatória · Brasil</p>
+        <h2>Pronto para o ambiente regulado brasileiro.</h2>
+        <p>A arquitetura responde diretamente às exigências de LGPD e dos reguladores setoriais.</p>
+      </div>
+      <div class="reg">
+        <div class="row"><b>LGPD / ANPD</b><span>Minimização e mascaramento de PII, visibilidade por papel e trilha de acesso auditada — alinhado às prioridades da ANPD (minimização e transparência de decisões automatizadas).</span></div>
+        <div class="row"><b>BACEN Res. 4.893</b><span>O "DORA brasileiro": exige de fornecedores de TI dos bancos auditoria e plano de substituição. Auditoria nativa + portabilidade (sem lock-in) ajudam a instituição a cumprir.</span></div>
+        <div class="row"><b>ANS RN 623</b><span>Protocolo por interação, acesso a gravações e rastreabilidade — atendidos pelo trace da sessão, auditoria e avaliação de qualidade.</span></div>
+        <div class="row"><b>ANATEL (RGC)</b><span>Atendimento humanizado, prazos e ouvidoria — supervisão humana nativa e rastreabilidade do histórico do processo.</span></div>
+        <div class="row"><b>PL 2338 (Marco da IA)</b><span>Baseado em risco, com supervisão humana obrigatória em alto risco. O Console de orquestração antecipa o requisito. <em>(Em tramitação — preparação, não obrigação ainda.)</em></span></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- EUROPA -->
+  <section class="sec">
+    <div class="wrap">
+      <div class="sec-head">
+        <p class="eyebrow">Aderência regulatória · Europa</p>
+        <h2>Desenhado para o ciclo regulatório europeu.</h2>
+        <p>Para operações na UE, o posicionamento (oversight + auditoria + sem lock-in + soberania) está alinhado ao que a regulação passou a exigir.</p>
+      </div>
+      <div class="reg">
+        <div class="row"><b>GDPR + adequação UE↔Brasil</b><span>A adequação mútua (jan/2026) permite fluxos UE↔Brasil sem mecanismos extras. Mascaramento e minimização atendem aos princípios de proteção de dados.</span></div>
+        <div class="row"><b>EU AI Act</b><span>Transparência (declarar que é IA), supervisão humana e registro/logging das interações — sustentados pelo modelo de sessão, pelo trace e pela auditoria.</span></div>
+        <div class="row"><b>DORA</b><span>Vale para fornecedores de TI que servem financeiras: direitos de auditoria, estratégia de saída e gestão de concentração — auditoria nativa + BYO LLM + soberania casam diretamente.</span></div>
+        <div class="row"><b>Soberania de dados</b><span>BYO LLM e integração agnóstica permitem hospedar e inferir em nuvem soberana da UE, sem provedor americano por padrão.</span></div>
+      </div>
+      <p class="note warn">⚠️ Detalhe de projeto consciente: a leitura de <strong>sentimento mira o cliente, não o trabalhador</strong> — o EU AI Act proíbe inferência de emoção de funcionários no ambiente de trabalho. Uma fronteira que respeitamos por desenho.</p>
+    </div>
+  </section>
+
+  <!-- INVARIANTES -->
+  <section class="sec alt">
+    <div class="wrap">
+      <div class="sec-head">
+        <p class="eyebrow">Invariantes</p>
+        <h2>Garantias que a arquitetura nunca quebra.</h2>
+        <p>Não são convenções — são contratos garantidos pela plataforma.</p>
+      </div>
+      <ul class="inv">
+        <li>Toda chamada de domínio é interceptada (permissão + injeção + auditoria).</li>
+        <li>A auditoria é definida por ferramenta — o chamador não pode opt-out.</li>
+        <li>Agentes nunca acessam sistemas de negócio diretamente, só via MCP autorizado.</li>
+        <li>O dado original mascarado nunca é exposto a papéis não autorizados.</li>
+        <li>Valor de input mascarado (PIN/senha) nunca entra em fila, stream ou log.</li>
+        <li>O acesso do DPO a sessões e a chamadas é registrado em log imutável.</li>
+      </ul>
+      <p class="note">📋 <strong>Certificações:</strong> SOC 2 e ISO 27001 estão no roadmap. A arquitetura já produz a evidência técnica que as sustenta — trilhas de auditoria, mascaramento e controle de acesso — então a certificação formaliza o que o produto já faz.</p>
+    </div>
+  </section>
+
+  <!-- CTA -->
+  <section class="sec">
+    <div class="wrap">
+      <div class="cta">
+        <h2>Compliance que você pode auditar.</h2>
+        <p>A documentação detalha o mascaramento, o modelo de auditoria, RBAC/ABAC e o módulo de Auditoria LGPD para o DPO.</p>
+        <div class="cta-row">
+          <a class="btn btn-light" href="/docs">Ver documentação →</a>
+          <a class="btn btn-outline-light" href="index.html#testar">Começar a testar</a>
+        </div>
+      </div>
+    </div>
+  </section>
+
+</main>
+
+<footer>
+  <div class="wrap fbottom">
+    <span>© 2026 PlugHub · <a href="index.html" style="color:var(--secondary)">voltar ao início</a></span>
+    <span>LGPD by design · auditoria · supervisão humana · sem lock-in</span>
+  </div>
+</footer>
+
+<script>
+  document.querySelectorAll('#navlinks a').forEach(function(a){
+    a.addEventListener('click',function(){document.getElementById('navlinks').classList.remove('open')});
+  });
+</script>
+</body>
+</html>
